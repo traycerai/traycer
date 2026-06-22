@@ -1,0 +1,68 @@
+/**
+ * Platform helpers for keybinding labels AND the dictation shortcut's
+ * platform-primary modifier match. Most runtime matching uses
+ * `event.metaKey || event.ctrlKey` via `chord.ts`, but the dictation hotkey and
+ * all display strings need to know the real OS.
+ */
+
+// UA Client Hints - the modern platform signal, not yet in TS's lib.dom (5.9).
+// Typed here via declaration merging so `navigator.userAgentData` is available
+// without a cast.
+declare global {
+  interface Navigator {
+    readonly userAgentData?: { readonly platform: string };
+  }
+}
+
+// Detect macOS via `navigator.userAgentData.platform` ("macOS"), the modern
+// standard signal. It is NOT affected by the desktop app's custom User-Agent
+// (see desktop `configureUserAgent`): `setUserAgent` overrides the UA
+// string/header, but UA Client Hints come from separate metadata the app never
+// sets - so it reports "macOS" where a UA-string check would miss it. Fall back
+// to the UA string for engines without UA-CH (Safari/Firefox), whose UA strings
+// do contain the OS token.
+function detectMac(): boolean {
+  if (typeof navigator === "undefined") return false;
+  const uaPlatform = navigator.userAgentData?.platform;
+  // Treat an empty platform (some engines report "") like undefined and fall
+  // through to the UA string, rather than concluding "not mac".
+  if (uaPlatform !== undefined && uaPlatform !== "") {
+    return uaPlatform.toLowerCase().includes("mac");
+  }
+  return navigator.userAgent.toLowerCase().includes("mac");
+}
+
+const IS_MAC = detectMac();
+
+export function isMac(): boolean {
+  return IS_MAC;
+}
+
+export function modLabel(): string {
+  return isMac() ? "⌘" : "Ctrl";
+}
+
+// The Control key specifically (⌃ on macOS, where it's distinct from ⌘). Used by
+// chords that bind to Control rather than the platform-primary `mod`.
+export function ctrlLabel(): string {
+  return isMac() ? "⌃" : "Ctrl";
+}
+
+export function altLabel(): string {
+  return isMac() ? "⌥" : "Alt";
+}
+
+export function shiftLabel(): string {
+  return isMac() ? "⇧" : "Shift";
+}
+
+/**
+ * Compact glyph for the leader modifier used in digit badges - always a
+ * single character so the badge width stays stable when Alt (⌥) is the
+ * leader. Non-Mac `mod` falls back to `⌃` (Control) rather than the
+ * 4-letter "Ctrl" that `modLabel()` returns.
+ */
+export function leaderGlyph(modifier: "mod" | "alt"): string {
+  if (modifier === "alt") return "⌥";
+  return isMac() ? "⌘" : "⌃";
+}

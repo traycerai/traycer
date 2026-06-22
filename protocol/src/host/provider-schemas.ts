@@ -1,0 +1,409 @@
+/**
+ * Schemas for the `providers.*` host RPC surface. Manages the CLI binary
+ * Traycer runs for each provider (Codex / Claude Code / OpenCode).
+ *
+ * Each provider exposes a set of candidates - the host-bundled binary, the
+ * binary auto-discovered on PATH (resolved to its real absolute path), and
+ * any custom paths the user added. The user selects one via a radio in
+ * Settings → Providers; the selection + custom paths + enabled flag persist
+ * per-device (== per-host) in
+ * `~/.traycer/host/config/provider-overrides.json`.
+ */
+import { z } from "zod";
+import type { TuiHarnessId } from "@traycer/protocol/host/agent/shared";
+
+export const providerIdSchema = z.enum([
+  "claude-code",
+  "codex",
+  "opencode",
+  "cursor",
+  "traycer",
+]);
+export type ProviderId = z.infer<typeof providerIdSchema>;
+
+/** Human-readable provider names, shared by the host and the GUI. */
+export const PROVIDER_DISPLAY_NAMES: Record<ProviderId, string> = {
+  "claude-code": "Claude Code",
+  codex: "Codex",
+  opencode: "OpenCode",
+  cursor: "Cursor",
+  traycer: "Traycer",
+};
+
+/**
+ * Canonical TUI-harness-id → provider-overrides-id map. The harness layer uses
+ * `claude`; the provider-CLI config (Settings, `provider-overrides.json`) uses
+ * `claude-code`. Single source of truth shared by the host's
+ * `harnessIdToProviderId` and the GUI launch picker's args pre-fill, so the
+ * two can't drift.
+ */
+export const TUI_HARNESS_ID_TO_PROVIDER_ID: Record<TuiHarnessId, ProviderId> = {
+  claude: "claude-code",
+  codex: "codex",
+  opencode: "opencode",
+  cursor: "cursor",
+};
+
+export const providerSelectionSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("bundled") }),
+  z.object({ kind: z.literal("path") }),
+  z.object({ kind: z.literal("custom"), path: z.string() }),
+]);
+export type ProviderSelection = z.infer<typeof providerSelectionSchema>;
+
+export const providerCliCandidateSchema = z.object({
+  kind: z.enum(["bundled", "path", "custom"]),
+  // bundled: resolved bundled path or "" when not installed.
+  // path/custom: absolute path to the binary.
+  path: z.string(),
+  version: z.string().nullable(),
+  available: z.boolean(),
+  // True while the version is still being probed in the background; the
+  // client re-fetches until it flips false.
+  versionPending: z.boolean(),
+});
+export type ProviderCliCandidate = z.infer<typeof providerCliCandidateSchema>;
+
+export const PROVIDER_AUTH_STATUS_SCHEMA = z.enum([
+  "authenticated",
+  "unauthenticated",
+  "unknown",
+]);
+export type ProviderAuthStatus = z.infer<typeof PROVIDER_AUTH_STATUS_SCHEMA>;
+
+export const PROVIDER_AUTH_SCHEMA = z.object({
+  status: PROVIDER_AUTH_STATUS_SCHEMA,
+  badgeText: z.string().nullable(),
+  label: z.string().nullable(),
+  detail: z.string().nullable(),
+});
+export type ProviderAuth = z.infer<typeof PROVIDER_AUTH_SCHEMA>;
+
+export const UNKNOWN_PROVIDER_AUTH: ProviderAuth = {
+  status: "unknown",
+  badgeText: null,
+  label: null,
+  detail: null,
+};
+
+/**
+ * Definitive signed-out verdict. Written by the host's auth poison and the
+ * probe-less `providers.list` path the instant a credential failure is detected,
+ * so the re-auth gate flips without waiting out the cache TTL.
+ */
+export const UNAUTHENTICATED_PROVIDER_AUTH: ProviderAuth = {
+  status: "unauthenticated",
+  badgeText: null,
+  label: null,
+  detail: null,
+};
+
+/**
+ * Who turned a provider off, and when. Recorded on disable, cleared (null) on
+ * enable. The host is single-user today, so this is currently always the
+ * local user - captured now for the future cross-user host.
+ */
+export const providerDisabledBySchema = z.object({
+  userId: z.string(),
+  handle: z.string().nullable(),
+  at: z.number(),
+});
+export type ProviderDisabledBy = z.infer<typeof providerDisabledBySchema>;
+
+/**
+ * API-key state for a provider. Only providers authenticated by an API key
+ * (Cursor, whose `@cursor/sdk` runtime needs `CURSOR_API_KEY`) set
+ * `supported: true`; the CLI-login providers leave it false and the GUI hides
+ * the key field. The raw key is NEVER returned over RPC - only whether one is
+ * resolvable and where it came from (`stored` = saved in Settings, `env` =
+ * the user's login-shell `CURSOR_API_KEY`).
+ */
+export const providerApiKeyStateSchema = z.object({
+  supported: z.boolean(),
+  configured: z.boolean(),
+  source: z.enum(["stored", "env"]).nullable(),
+});
+export type ProviderApiKeyState = z.infer<typeof providerApiKeyStateSchema>;
+
+/**
+ * A single environment-variable override applied when the host spawns this
+ * provider's harness. `value: null` is an explicit *unset* (drop a variable the
+ * spawned process would otherwise inherit from the user's shell); a string sets
+ * it. Persisted per-provider (== per-host) in `provider-overrides.json`.
+ */
+export const providerEnvOverrideSchema = z.object({
+  key: z.string(),
+  value: z.string().nullable(),
+});
+export type ProviderEnvOverride = z.infer<typeof providerEnvOverrideSchema>;
+
+/**
+ * Describes how a user can re-authenticate a provider CLI from the in-chat
+ * re-auth banner. The banner only appears for providers that have a web login
+ * (so a sign-out is genuinely recoverable in-app); for those it offers a
+ * browser-OAuth login (`oauthArgs`) AND/OR pasting a fresh credential into one
+ * of `token.vars` (an API key / OAuth token, written as a per-provider env
+ * override). API-key-only providers with no web login (Cursor) have no banner at
+ * all - their capability is null and a bad key surfaces as a generic error row.
+ *
+ * Note this is distinct from how a *rejected* credential surfaces: a key/token
+ * the host can't verify renders a generic error row (see the harness
+ * adapters), not this reconnect affordance.
+ */
+export const providerLoginCapabilitySchema = z.object({
+  /** Args to pass to the provider binary for browser-OAuth login, or null if unsupported. */
+  oauthArgs: z.array(z.string()).nullable(),
+  /**
+   * Credential env vars the user can paste a key/token into (e.g.
+   * `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`), written via
+   * `providers.setEnvOverride`. Null when paste-to-reconnect is unsupported.
+   */
+  token: z.object({ vars: z.array(z.string()) }).nullable(),
+});
+export type ProviderLoginCapability = z.infer<typeof providerLoginCapabilitySchema>;
+
+export const providerCliStateSchema = z.object({
+  providerId: providerIdSchema,
+  enabled: z.boolean(),
+  disabledBy: providerDisabledBySchema.nullable(),
+  selected: providerSelectionSchema,
+  candidates: z.array(providerCliCandidateSchema),
+  auth: PROVIDER_AUTH_SCHEMA,
+  authPending: z.boolean(),
+  checkedAt: z.number().nullable(),
+  apiKey: providerApiKeyStateSchema,
+  // Extra CLI arguments the user wants appended when launching this provider
+  // as a terminal agent (the host tokenizes and appends them to the spawned
+  // argv). Only meaningful for terminal-agent-capable providers; "" when unset.
+  terminalAgentArgs: z.string().catch(""),
+  // Per-provider environment overrides applied when the host spawns this
+  // provider's harness. Sorted by key for stable rendering; `[]` when unset.
+  envOverrides: z.array(providerEnvOverrideSchema).catch([]),
+  // Login/re-auth options for this provider. Null for providers that have no
+  // supported login flow (cursor, traycer) or where login capability is not
+  // yet modelled. `.catch(null)` tolerates old host builds that omit the field.
+  loginCapability: providerLoginCapabilitySchema.nullable().catch(null),
+});
+export type ProviderCliState = z.infer<typeof providerCliStateSchema>;
+
+export const providersListRequestSchema = z.object({
+  forceAuthRefresh: z.boolean().optional(),
+});
+export type ProvidersListRequest = z.infer<typeof providersListRequestSchema>;
+
+export const providersListResponseSchema = z.object({
+  providers: z.array(providerCliStateSchema),
+});
+export type ProvidersListResponse = z.infer<typeof providersListResponseSchema>;
+
+export const providersSetSelectionRequestSchema = z.object({
+  providerId: providerIdSchema,
+  selection: providerSelectionSchema,
+});
+export type ProvidersSetSelectionRequest = z.infer<
+  typeof providersSetSelectionRequestSchema
+>;
+
+export const providersSetSelectionResponseSchema = z.object({
+  state: providerCliStateSchema,
+});
+export type ProvidersSetSelectionResponse = z.infer<
+  typeof providersSetSelectionResponseSchema
+>;
+
+export const providersAddCustomPathRequestSchema = z.object({
+  providerId: providerIdSchema,
+  path: z.string().min(1),
+});
+export type ProvidersAddCustomPathRequest = z.infer<
+  typeof providersAddCustomPathRequestSchema
+>;
+
+export const providersAddCustomPathResponseSchema = z.object({
+  state: providerCliStateSchema,
+});
+export type ProvidersAddCustomPathResponse = z.infer<
+  typeof providersAddCustomPathResponseSchema
+>;
+
+export const providersRemoveCustomPathRequestSchema = z.object({
+  providerId: providerIdSchema,
+  path: z.string().min(1),
+});
+export type ProvidersRemoveCustomPathRequest = z.infer<
+  typeof providersRemoveCustomPathRequestSchema
+>;
+
+export const providersRemoveCustomPathResponseSchema = z.object({
+  state: providerCliStateSchema,
+});
+export type ProvidersRemoveCustomPathResponse = z.infer<
+  typeof providersRemoveCustomPathResponseSchema
+>;
+
+export const providersSetEnabledRequestSchema = z.object({
+  providerId: providerIdSchema,
+  enabled: z.boolean(),
+});
+export type ProvidersSetEnabledRequest = z.infer<
+  typeof providersSetEnabledRequestSchema
+>;
+
+export const providersSetEnabledResponseSchema = z.object({
+  state: providerCliStateSchema,
+});
+export type ProvidersSetEnabledResponse = z.infer<
+  typeof providersSetEnabledResponseSchema
+>;
+
+export const providersSetApiKeyRequestSchema = z.object({
+  providerId: providerIdSchema,
+  apiKey: z.string().min(1),
+});
+export type ProvidersSetApiKeyRequest = z.infer<
+  typeof providersSetApiKeyRequestSchema
+>;
+
+export const providersSetApiKeyResponseSchema = z.object({
+  state: providerCliStateSchema,
+});
+export type ProvidersSetApiKeyResponse = z.infer<
+  typeof providersSetApiKeyResponseSchema
+>;
+
+export const providersClearApiKeyRequestSchema = z.object({
+  providerId: providerIdSchema,
+});
+export type ProvidersClearApiKeyRequest = z.infer<
+  typeof providersClearApiKeyRequestSchema
+>;
+
+export const providersClearApiKeyResponseSchema = z.object({
+  state: providerCliStateSchema,
+});
+export type ProvidersClearApiKeyResponse = z.infer<
+  typeof providersClearApiKeyResponseSchema
+>;
+
+export const providersSetTerminalAgentArgsRequestSchema = z.object({
+  providerId: providerIdSchema,
+  // Empty string clears the saved override.
+  terminalAgentArgs: z.string(),
+});
+export type ProvidersSetTerminalAgentArgsRequest = z.infer<
+  typeof providersSetTerminalAgentArgsRequestSchema
+>;
+
+export const providersSetTerminalAgentArgsResponseSchema = z.object({
+  state: providerCliStateSchema,
+});
+export type ProvidersSetTerminalAgentArgsResponse = z.infer<
+  typeof providersSetTerminalAgentArgsResponseSchema
+>;
+
+export const providersSetEnvOverrideRequestSchema = z.object({
+  providerId: providerIdSchema,
+  key: z.string().min(1),
+  // null = explicit unset; a string sets the value.
+  value: z.string().nullable(),
+});
+export type ProvidersSetEnvOverrideRequest = z.infer<
+  typeof providersSetEnvOverrideRequestSchema
+>;
+
+export const providersSetEnvOverrideResponseSchema = z.object({
+  state: providerCliStateSchema,
+});
+export type ProvidersSetEnvOverrideResponse = z.infer<
+  typeof providersSetEnvOverrideResponseSchema
+>;
+
+export const providersDeleteEnvOverrideRequestSchema = z.object({
+  providerId: providerIdSchema,
+  key: z.string().min(1),
+});
+export type ProvidersDeleteEnvOverrideRequest = z.infer<
+  typeof providersDeleteEnvOverrideRequestSchema
+>;
+
+export const providersDeleteEnvOverrideResponseSchema = z.object({
+  state: providerCliStateSchema,
+});
+export type ProvidersDeleteEnvOverrideResponse = z.infer<
+  typeof providersDeleteEnvOverrideResponseSchema
+>;
+
+export const providersDetectVersionRequestSchema = z.object({
+  candidatePath: z.string().min(1),
+});
+export type ProvidersDetectVersionRequest = z.infer<
+  typeof providersDetectVersionRequestSchema
+>;
+
+export const providersDetectVersionResponseSchema = z.object({
+  executable: z.boolean(),
+  version: z.string().nullable(),
+});
+export type ProvidersDetectVersionResponse = z.infer<
+  typeof providersDetectVersionResponseSchema
+>;
+
+/**
+ * Spawn the provider CLI's browser-OAuth login flow (e.g. `claude auth login`).
+ * The CLI opens the browser itself and self-completes via a localhost loopback,
+ * so the host only spawns it and reports back. `url` is any sign-in URL
+ * scraped from the CLI's stdout/stderr (a manual fallback if the auto-open
+ * fails), `started` is whether the child process actually spawned. Completion
+ * is observed by the client polling `providers.list` for `auth.status`.
+ */
+export const providersStartLoginRequestSchema = z.object({
+  providerId: providerIdSchema,
+});
+export type ProvidersStartLoginRequest = z.infer<
+  typeof providersStartLoginRequestSchema
+>;
+
+export const providersStartLoginResponseSchema = z.object({
+  url: z.string().nullable(),
+  started: z.boolean(),
+});
+export type ProvidersStartLoginResponse = z.infer<
+  typeof providersStartLoginResponseSchema
+>;
+
+/**
+ * Block until an in-flight `providers.startLogin` child finishes (the browser
+ * loopback completes or the CLI exits), then return the freshly re-probed state.
+ * This is the honest "did the reconnect work?" signal - the host owns the
+ * login child's exit, so the GUI awaits this instead of polling auth status.
+ */
+export const providersAwaitLoginRequestSchema = z.object({
+  providerId: providerIdSchema,
+});
+export type ProvidersAwaitLoginRequest = z.infer<
+  typeof providersAwaitLoginRequestSchema
+>;
+
+export const providersAwaitLoginResponseSchema = z.object({
+  // The provider's state after the login child closed and auth was re-probed.
+  // Null when no login was in flight for this provider (nothing to await).
+  state: providerCliStateSchema.nullable(),
+});
+export type ProvidersAwaitLoginResponse = z.infer<
+  typeof providersAwaitLoginResponseSchema
+>;
+
+/** Kill an in-flight `providers.startLogin` child for this provider. */
+export const providersCancelLoginRequestSchema = z.object({
+  providerId: providerIdSchema,
+});
+export type ProvidersCancelLoginRequest = z.infer<
+  typeof providersCancelLoginRequestSchema
+>;
+
+export const providersCancelLoginResponseSchema = z.object({
+  cancelled: z.boolean(),
+});
+export type ProvidersCancelLoginResponse = z.infer<
+  typeof providersCancelLoginResponseSchema
+>;

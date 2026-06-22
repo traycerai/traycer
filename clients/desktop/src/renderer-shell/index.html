@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!--
+      The Content-Security-Policy <meta> is injected here at build time by
+      vite.renderer.config.ts from the single shared directive list in
+      src/shared/content-security-policy.ts, so it stays byte-identical to the
+      response-header CSP in electron-main/app/security.ts and the two layers
+      can never drift.
+    -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Traycer</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./main.tsx"></script>
+  </body>
+</html>

@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions & discussions
+    url: https://github.com/traycerai/traycer/discussions
+    about: Ask questions and share ideas here.
+  - name: Report a security vulnerability
+    url: https://github.com/traycerai/traycer/security/advisories/new
+    about: Please report security issues privately — not as public issues.
+  - name: Traycer product & account help
+    url: https://traycer.ai
+    about: Help with the hosted product and your account.

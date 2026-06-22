@@ -1,0 +1,33 @@
+import { keepPreviousData, type UseQueryResult } from "@tanstack/react-query";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type {
+  HostRpcError,
+  ResponseOfMethod,
+} from "@traycer-clients/shared/host-transport/host-messenger";
+import type { HostRpcRegistry } from "@/lib/host";
+import { useHostQuery } from "@/hooks/host/use-host-query";
+
+export function useWorktreeListByWorkspacePathsForClient(
+  client: HostClient<HostRpcRegistry> | null,
+  args: {
+    readonly workspacePaths: ReadonlyArray<string>;
+    readonly enabled: boolean;
+  },
+): UseQueryResult<
+  ResponseOfMethod<HostRpcRegistry, "worktree.listByWorkspacePaths">,
+  HostRpcError
+> {
+  return useHostQuery<HostRpcRegistry, "worktree.listByWorkspacePaths">({
+    client,
+    method: "worktree.listByWorkspacePaths",
+    params: { workspacePaths: [...args.workspacePaths] },
+    options: {
+      enabled: args.enabled && args.workspacePaths.length > 0,
+      // The path set is part of the query key, so adding/removing a folder
+      // lands on a fresh cache entry. Retain the prior result while the new set
+      // refetches so the surviving rows keep their resolved metadata instead of
+      // every row flashing "Loading folder metadata…" on each edit.
+      placeholderData: keepPreviousData,
+    },
+  });
+}

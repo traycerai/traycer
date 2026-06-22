@@ -1,0 +1,68 @@
+import {
+  GIT_DIFF_TILE_DND_TYPE,
+  getGitDiffTileDragId,
+  type EpicCanvasGitDiffTileDragData,
+} from "@/components/epic-canvas/dnd/dnd";
+import { Button } from "@/components/ui/button";
+import {
+  gitBundleGroupLabel,
+  makeGitBundleDiffTile,
+} from "@/lib/git/git-diff-tile";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import type { GitDiffBundleGroup } from "@/stores/epics/canvas/types";
+import { useDraggable } from "@dnd-kit/core";
+import { FileDiff } from "lucide-react";
+import type { ReactNode } from "react";
+import { useMemo } from "react";
+
+export interface BundleOpenButtonProps {
+  readonly epicId: string;
+  readonly viewTabId: string;
+  readonly hostId: string;
+  readonly runningDir: string;
+  readonly group: GitDiffBundleGroup;
+  readonly disabled: boolean;
+}
+
+export function BundleOpenButton(props: BundleOpenButtonProps): ReactNode {
+  const openTileInTab = useEpicCanvasStore((s) => s.openTileInTab);
+  const tile = useMemo(
+    () =>
+      makeGitBundleDiffTile({
+        hostId: props.hostId,
+        runningDir: props.runningDir,
+        bundleGroup: props.group,
+      }),
+    [props.hostId, props.group, props.runningDir],
+  );
+  const dragData = useMemo<EpicCanvasGitDiffTileDragData>(
+    () => ({
+      kind: GIT_DIFF_TILE_DND_TYPE,
+      epicId: props.epicId,
+      viewTabId: props.viewTabId,
+      tile,
+    }),
+    [props.epicId, props.viewTabId, tile],
+  );
+  const { listeners, setNodeRef: dragRef } = useDraggable({
+    id: getGitDiffTileDragId(tile.id),
+    data: dragData,
+    disabled: props.disabled,
+  });
+
+  return (
+    <Button
+      ref={dragRef}
+      {...listeners}
+      type="button"
+      variant="ghost"
+      size="icon-sm"
+      aria-label={`Open ${gitBundleGroupLabel(props.group)}`}
+      disabled={props.disabled}
+      onClick={() => openTileInTab(props.viewTabId, tile)}
+      className="text-muted-foreground hover:text-foreground"
+    >
+      <FileDiff className="size-4" />
+    </Button>
+  );
+}

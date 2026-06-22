@@ -1,0 +1,321 @@
+import {
+  altLabel,
+  ctrlLabel,
+  isMac,
+  modLabel,
+  shiftLabel,
+} from "@/lib/keybindings/platform";
+
+/**
+ * Canonical chord string: `mod+ctrl+shift+alt+key` where modifiers appear in
+ * this fixed order and only when active. `mod` is the platform-primary
+ * modifier (Meta on Mac, Control elsewhere); `ctrl` is the Control key
+ * SPECIFICALLY (distinct from `mod` on macOS, where Control ≠ Command). `key`
+ * is the normalized physical key identifier (see `normalizeCode`).
+ *
+ * Examples: `mod+1`, `mod+shift+h`, `mod+alt+arrowleft`, `mod+,`, `ctrl+shift+m`.
+ *
+ * Note: `chordFromEvent` never emits `ctrl` (events still collapse Meta/Control
+ * into `mod` for the shared lenient matching). `ctrl` chords are matched by
+ * consumers that need a Control-specific binding (e.g. the dictation hotkey).
+ */
+export type ChordString = string;
+
+export type ChordKey = string;
+
+export interface ChordParts {
+  readonly mod: boolean;
+  readonly ctrl: boolean;
+  readonly shift: boolean;
+  readonly alt: boolean;
+  readonly key: ChordKey;
+}
+
+/** Physical keys we never want to treat as a primary chord key. */
+const BARE_MODIFIER_CODES = new Set<string>([
+  "MetaLeft",
+  "MetaRight",
+  "ControlLeft",
+  "ControlRight",
+  "ShiftLeft",
+  "ShiftRight",
+  "AltLeft",
+  "AltRight",
+  "OSLeft",
+  "OSRight",
+]);
+
+const CODE_TO_KEY: Readonly<Record<string, string>> = {
+  Comma: ",",
+  Period: ".",
+  Slash: "/",
+  Semicolon: ";",
+  Quote: "'",
+  Backquote: "`",
+  Minus: "-",
+  Equal: "=",
+  BracketLeft: "[",
+  BracketRight: "]",
+  Backslash: "\\",
+  Space: "space",
+  Enter: "enter",
+  Escape: "escape",
+  Tab: "tab",
+  Backspace: "backspace",
+  Delete: "delete",
+  ArrowUp: "arrowup",
+  ArrowDown: "arrowdown",
+  ArrowLeft: "arrowleft",
+  ArrowRight: "arrowright",
+  Home: "home",
+  End: "end",
+  PageUp: "pageup",
+  PageDown: "pagedown",
+};
+
+/** Normalize `KeyboardEvent.code` to our canonical key token. */
+export function normalizeCode(code: string): ChordKey | null {
+  if (BARE_MODIFIER_CODES.has(code)) return null;
+  if (code.startsWith("Key") && code.length === 4) {
+    return code.slice(3).toLowerCase();
+  }
+  if (code.startsWith("Digit") && code.length === 6) {
+    return code.slice(5);
+  }
+  if (code.startsWith("Numpad") && code.length === 7) {
+    const tail = code.slice(6);
+    if (/^\d$/.test(tail)) return tail;
+  }
+  if (Object.hasOwn(CODE_TO_KEY, code)) return CODE_TO_KEY[code];
+  if (/^F\d{1,2}$/.test(code)) return code.toLowerCase();
+  return null;
+}
+
+/** Detect whether a keydown is bare modifier (no other key). */
+export function isBareModifierEvent(event: KeyboardEvent): boolean {
+  return BARE_MODIFIER_CODES.has(event.code);
+}
+
+export function parseChordFromEvent(event: KeyboardEvent): ChordParts | null {
+  if (isBareModifierEvent(event)) return null;
+  const key = normalizeCode(event.code);
+  if (key === null) return null;
+  // Events collapse Meta/Control into `mod` for the shared lenient matching;
+  // `ctrl` is never emitted from an event (only authored in stored chords).
+  const mod = event.metaKey || event.ctrlKey;
+  const shift = event.shiftKey;
+  const alt = event.altKey;
+  return { mod, ctrl: false, shift, alt, key };
+}
+
+export function formatChord(parts: ChordParts): ChordString {
+  const pieces: Array<string> = [];
+  if (parts.mod) pieces.push("mod");
+  if (parts.ctrl) pieces.push("ctrl");
+  if (parts.shift) pieces.push("shift");
+  if (parts.alt) pieces.push("alt");
+  pieces.push(parts.key);
+  return pieces.join("+");
+}
+
+export function parseChordString(chord: ChordString): ChordParts | null {
+  if (chord.length === 0) return null;
+  const tokens = chord.split("+");
+  if (tokens.length === 0) return null;
+  let mod = false;
+  let ctrl = false;
+  let shift = false;
+  let alt = false;
+  let key: ChordKey | null = null;
+  for (let i = 0; i < tokens.length; i += 1) {
+    const t = tokens[i];
+    if (i < tokens.length - 1) {
+      if (t === "mod") mod = true;
+      else if (t === "ctrl") ctrl = true;
+      else if (t === "shift") shift = true;
+      else if (t === "alt") alt = true;
+      else return null;
+    } else {
+      key = t;
+    }
+  }
+  if (key === null || key.length === 0) return null;
+  return { mod, ctrl, shift, alt, key };
+}
+
+/**
+ * Returns the canonical chord string if `event` encodes a complete chord
+ * (not a bare modifier), otherwise null.
+ */
+export function chordFromEvent(event: KeyboardEvent): ChordString | null {
+  const parts = parseChordFromEvent(event);
+  if (parts === null) return null;
+  return formatChord(parts);
+}
+
+/**
+ * Like `parseChordFromEvent` but distinguishes the Control key from the
+ * platform-primary modifier on macOS (where ⌃ ≠ ⌘): Command → `mod`,
+ * Control → `ctrl`. Non-mac is unchanged (Control IS the primary, captured as
+ * `mod`). Used by the chord-capture UI and the provider so a Control-specific
+ * binding (e.g. dictation) can be authored and matched - Control is also the
+ * only modifier macOS lets us detect on key-release, which push-to-talk needs.
+ */
+export function parseChordFromEventCtrlAware(
+  event: KeyboardEvent,
+): ChordParts | null {
+  if (isBareModifierEvent(event)) return null;
+  const key = normalizeCode(event.code);
+  if (key === null) return null;
+  const mac = isMac();
+  const mod = mac ? event.metaKey : event.metaKey || event.ctrlKey;
+  const ctrl = mac && event.ctrlKey;
+  const shift = event.shiftKey;
+  const alt = event.altKey;
+  return { mod, ctrl, shift, alt, key };
+}
+
+export function chordFromEventCtrlAware(
+  event: KeyboardEvent,
+): ChordString | null {
+  const parts = parseChordFromEventCtrlAware(event);
+  if (parts === null) return null;
+  return formatChord(parts);
+}
+
+/** Does the event match the stored chord string exactly? */
+export function chordMatchesEvent(
+  chord: ChordString,
+  event: KeyboardEvent,
+): boolean {
+  const eventChord = chordFromEvent(event);
+  return eventChord === chord;
+}
+
+/** Human-friendly display label e.g. `⌘⇧H` / `Ctrl+Shift+H`. */
+export function formatChordForDisplay(chord: ChordString): string {
+  const parts = parseChordString(chord);
+  if (parts === null) return chord;
+  const segs: Array<string> = [];
+  if (parts.mod) segs.push(modLabel());
+  if (parts.ctrl) segs.push(ctrlLabel());
+  if (parts.shift) segs.push(shiftLabel());
+  if (parts.alt) segs.push(altLabel());
+  segs.push(formatKeyForDisplay(parts.key));
+  return isMac() ? segs.join("") : segs.join("+");
+}
+
+// ---------------------------------------------------------------------------
+// Modifier-only chords - used by "digit" actions whose effective key is one
+// of 0..9 at runtime (e.g. `epic.switch.byDigit` can compose multi-digit tab
+// numbers from those keys). Stored as `mod`, `alt`, `mod+alt`, etc. (no key
+// token).
+//
+// These intentionally support only `mod`/`shift`/`alt` - NOT the Control-
+// specific `ctrl` token. Digit/leader actions are not rebindable to a chord in
+// the Settings UI (they render read-only), so a `ctrl` leader can't be authored;
+// `parseModifierChord` returning null for a `ctrl` token is the correct
+// "unsupported" outcome rather than a gap.
+// ---------------------------------------------------------------------------
+
+export interface ModifierMask {
+  readonly mod: boolean;
+  readonly shift: boolean;
+  readonly alt: boolean;
+}
+
+export function modifierMaskFromEvent(event: KeyboardEvent): ModifierMask {
+  return {
+    mod: event.metaKey || event.ctrlKey,
+    shift: event.shiftKey,
+    alt: event.altKey,
+  };
+}
+
+export function parseModifierChord(chord: ChordString): ModifierMask | null {
+  if (chord.length === 0) return null;
+  const tokens = chord.split("+");
+  let mod = false;
+  let shift = false;
+  let alt = false;
+  for (const t of tokens) {
+    if (t === "mod") mod = true;
+    else if (t === "shift") shift = true;
+    else if (t === "alt") alt = true;
+    else return null;
+  }
+  if (!mod && !shift && !alt) return null;
+  return { mod, shift, alt };
+}
+
+export function modifierMaskMatches(
+  chord: ChordString,
+  mask: ModifierMask,
+): boolean {
+  const parsed = parseModifierChord(chord);
+  if (parsed === null) return false;
+  return (
+    parsed.mod === mask.mod &&
+    parsed.shift === mask.shift &&
+    parsed.alt === mask.alt
+  );
+}
+
+/**
+ * Human label for a modifier-only chord with a specific digit suffix -
+ * e.g. `formatModifierChordForDisplay("mod", "1")` → `⌘1`.
+ */
+export function formatModifierChordForDisplay(
+  chord: ChordString,
+  suffix: string,
+): string {
+  const parsed = parseModifierChord(chord);
+  if (parsed === null) return `${chord}+${suffix}`;
+  const segs: Array<string> = [];
+  if (parsed.mod) segs.push(modLabel());
+  if (parsed.shift) segs.push(shiftLabel());
+  if (parsed.alt) segs.push(altLabel());
+  segs.push(suffix);
+  return isMac() ? segs.join("") : segs.join("+");
+}
+
+/** Extract a 0..9 digit from `KeyboardEvent.code`, or null. */
+export function digitFromCode(code: string): number | null {
+  if (code.startsWith("Digit") && code.length === 6) {
+    const d = code.slice(5);
+    if (/^\d$/.test(d)) return Number.parseInt(d, 10);
+  }
+  if (code.startsWith("Numpad") && code.length === 7) {
+    const d = code.slice(6);
+    if (/^\d$/.test(d)) return Number.parseInt(d, 10);
+  }
+  return null;
+}
+
+function formatKeyForDisplay(key: ChordKey): string {
+  switch (key) {
+    case "arrowup":
+      return "↑";
+    case "arrowdown":
+      return "↓";
+    case "arrowleft":
+      return "←";
+    case "arrowright":
+      return "→";
+    case "enter":
+      return "Enter";
+    case "escape":
+      return "Esc";
+    case "space":
+      return "Space";
+    case "tab":
+      return "Tab";
+    case "backspace":
+      return "⌫";
+    case "delete":
+      return "Del";
+    default:
+      if (key.length === 1) return key.toUpperCase();
+      return key;
+  }
+}

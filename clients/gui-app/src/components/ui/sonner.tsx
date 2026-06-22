@@ -1,0 +1,81 @@
+import { useTheme } from "next-themes";
+import { Toaster as Sonner, type ToasterProps } from "sonner";
+import { DismissableLayer } from "radix-ui/internal";
+import {
+  CircleCheckIcon,
+  InfoIcon,
+  TriangleAlertIcon,
+  OctagonXIcon,
+} from "lucide-react";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { cn } from "@/lib/utils";
+
+const TOAST_CLASS_NAME = cn("cn-toast", "group/toast");
+const TOAST_CLOSE_BUTTON_CLASS_NAME = cn(
+  "pointer-events-none",
+  "opacity-0",
+  "group-hover/toast:pointer-events-auto",
+  "group-hover/toast:opacity-100",
+  "group-focus-within/toast:pointer-events-auto",
+  "group-focus-within/toast:opacity-100",
+  "focus-visible:pointer-events-auto",
+  "focus-visible:opacity-100",
+);
+
+const Toaster = ({ ...props }: ToasterProps) => {
+  const { theme = "system" } = useTheme();
+  const toasterTheme = normalizeToasterTheme(theme);
+
+  return (
+    <DismissableLayer.Branch data-slot="toaster-branch">
+      <Sonner
+        theme={toasterTheme}
+        className="toaster group"
+        icons={{
+          success: <CircleCheckIcon className="size-4" />,
+          info: <InfoIcon className="size-4" />,
+          warning: <TriangleAlertIcon className="size-4" />,
+          error: <OctagonXIcon className="size-4" />,
+          loading: (
+            <AgentSpinningDots
+              testId={undefined}
+              variant="orbit"
+              className="size-4 text-current"
+            />
+          ),
+        }}
+        style={
+          {
+            "--normal-bg": "var(--popover)",
+            "--normal-text": "var(--popover-foreground)",
+            "--normal-border": "var(--border)",
+            "--border-radius": "var(--radius)",
+          } as React.CSSProperties
+        }
+        toastOptions={{
+          classNames: {
+            toast: TOAST_CLASS_NAME,
+            closeButton: TOAST_CLOSE_BUTTON_CLASS_NAME,
+          },
+        }}
+        {...props}
+        closeButton={props.closeButton ?? true}
+      />
+    </DismissableLayer.Branch>
+  );
+};
+
+function normalizeToasterTheme(
+  theme: string | undefined,
+): ToasterProps["theme"] {
+  if (isValidToasterTheme(theme)) return theme;
+  return "system";
+}
+
+function isValidToasterTheme(
+  theme: string | undefined,
+): theme is "light" | "dark" | "system" {
+  return theme === "light" || theme === "dark" || theme === "system";
+}
+
+export { Toaster };

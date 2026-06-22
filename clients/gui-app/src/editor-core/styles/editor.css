@@ -1,0 +1,602 @@
+/*
+ * Artifact editor chrome + prose tweaks.
+ *
+ * The editor renders as an in-flow part of the page - no border, no card
+ * background, no focus ring - so the artifact tile reads like a Notion
+ * document rather than a form field. The toolbar sticks to the top of the
+ * tile's scroll container as the reader scrolls.
+ *
+ * Class vocabulary:
+ *   .tc-editor-surface        outer wrapper around toolbar + content
+ *   .tc-editor-toolbar        sticky formatting bar
+ *   .tc-editor-toolbar-group  visually grouped run of buttons
+ *   .tc-editor-toolbar-button individual formatting button
+ *   .tc-editor-toolbar-separator vertical hairline between groups
+ *   .tc-editor-toolbar-spacer  flexible gap that pushes trailing groups right
+ *   .tc-editor-prose          ProseMirror root (prose overrides)
+ */
+
+.tc-editor-surface {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: transparent;
+  /*
+   * Must stay `visible` so `position: sticky` on the inner toolbar resolves
+   * against the outer tile scroll container rather than the surface itself.
+   * Any non-visible overflow here would trap the sticky toolbar inside a
+   * zero-height scroll context and make it scroll away with the content.
+   */
+  overflow: visible;
+}
+
+/*
+ * Bubble menu popover. Positioned by Tiptap's `BubbleMenu` via Floating UI,
+ * so this class only supplies the card chrome (shadow, radius, background).
+ * Shows above the current selection; hides when the selection collapses.
+ */
+.tc-editor-bubble-menu {
+  display: inline-flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 0.125rem;
+  padding: 0.25rem;
+  background: var(--color-popover, var(--color-background, hsl(0 0% 100%)));
+  color: var(
+    --color-popover-foreground,
+    var(--color-foreground, hsl(0 0% 10%))
+  );
+  border: 1px solid var(--color-border, hsl(0 0% 88%));
+  border-radius: var(--radius-md, 0.5rem);
+  box-shadow:
+    0 10px 24px -12px rgba(0, 0, 0, 0.35),
+    0 4px 8px -4px rgba(0, 0, 0, 0.2);
+  z-index: 40;
+}
+
+.tc-editor-toolbar-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.125rem;
+}
+
+.tc-editor-toolbar-separator {
+  width: 1px;
+  align-self: stretch;
+  margin: 0.25rem 0.375rem;
+  background: color-mix(
+    in oklab,
+    var(--color-border, hsl(0 0% 88%)) 60%,
+    transparent
+  );
+}
+
+.tc-editor-toolbar-spacer {
+  flex: 1 1 auto;
+}
+
+.tc-editor-toolbar-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 1.75rem;
+  min-width: 1.75rem;
+  padding: 0 0.25rem;
+  border-radius: var(--radius-sm, 0.375rem);
+  color: var(--color-muted-foreground, hsl(0 0% 40%));
+  background: transparent;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition:
+    background-color 100ms ease,
+    color 100ms ease;
+}
+
+.tc-editor-toolbar-button:hover:not([disabled]) {
+  background: var(--color-accent, hsl(0 0% 96%));
+  color: var(--color-foreground, hsl(0 0% 10%));
+}
+
+.tc-editor-toolbar-button:focus-visible {
+  outline: none;
+  border-color: var(--color-ring, hsl(222 47% 40%));
+}
+
+.tc-editor-toolbar-button[data-active="true"] {
+  background: var(--color-accent, hsl(0 0% 96%));
+  color: var(--color-foreground, hsl(0 0% 10%));
+}
+
+.tc-editor-toolbar-button[disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/*
+ * Editor body sits below the sticky toolbar. Top padding reserves clearance
+ * for CollaborationCaret labels, which render absolute-positioned above the
+ * caret span - without the padding, a remote caret on the first line would
+ * clip into the toolbar gap or the tile header.
+ */
+.tc-editor-surface > .tc-editor-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding-top: 1.25rem;
+}
+
+/*
+ * `.tc-editor-prose` covers TipTap-only extras (taskList, ProseMirror
+ * caret/empty hint, NodeView chrome). Base typography (h1–h6, p, ul/ol,
+ * li, strong, em, a, blockquote, hr) lives in `.md-prose` in the global
+ * stylesheet - both editor and chat share it. Apply both:
+ *   `class="prose prose-sm sm:prose-base dark:prose-invert md-prose tc-editor-prose"`.
+ */
+
+.tc-editor-prose ul[data-type="taskList"] {
+  list-style: none;
+  padding-left: 0;
+}
+
+.tc-editor-prose ul[data-type="taskList"] li {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin: 0.25rem 0;
+}
+
+.tc-editor-prose ul[data-type="taskList"] li > label {
+  flex: 0 0 auto;
+  margin-top: 0.35rem;
+  user-select: none;
+}
+
+.tc-editor-prose ul[data-type="taskList"] li > div {
+  flex: 1 1 auto;
+}
+
+.tc-editor-prose ul[data-type="taskList"] li > div > p {
+  margin: 0;
+}
+
+.tc-editor-prose table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 0.75rem 0;
+}
+
+.tc-editor-prose table th,
+.tc-editor-prose table td {
+  border: 1px solid var(--color-border, hsl(0 0% 88%));
+  padding: 0.375rem 0.5rem;
+  vertical-align: top;
+}
+
+.tc-editor-prose table th {
+  background: color-mix(
+    in oklab,
+    var(--color-muted, hsl(0 0% 96%)) 70%,
+    transparent
+  );
+  font-weight: 600;
+  text-align: left;
+}
+
+.tc-editor-prose table tr:nth-child(even) td {
+  background: color-mix(
+    in oklab,
+    var(--color-muted, hsl(0 0% 96%)) 40%,
+    transparent
+  );
+}
+
+.tc-editor-prose pre {
+  background: color-mix(
+    in oklab,
+    var(--color-muted, hsl(0 0% 96%)) 80%,
+    transparent
+  );
+  color: var(--color-foreground, hsl(0 0% 10%));
+  border-radius: var(--radius-sm, 0.375rem);
+  padding: 0.75rem 0.875rem;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.8125rem;
+  overflow-x: auto;
+  margin: 0.75em 0;
+}
+
+.tc-editor-prose pre code {
+  background: transparent;
+  padding: 0;
+  font-size: inherit;
+}
+
+/*
+ * CollaborationCaret decorations. Tiptap renders a `.collaboration-carets__caret`
+ * span with inline color; the label floats above the caret via absolute
+ * positioning on the relatively-positioned caret span. The body reserves
+ * `padding-top` above for the label; `z-index` keeps it above surrounding
+ * prose so a same-line collision never occludes it.
+ */
+.collaboration-carets__caret {
+  position: relative;
+  margin-left: -1px;
+  margin-right: -1px;
+  border-left: 1px solid;
+  border-right: 1px solid;
+  word-break: normal;
+  pointer-events: none;
+}
+
+/*
+ * Atom block NodeViews - mermaid + wireframe.
+ *
+ * Both blocks share the same outer chrome (rounded border, soft accent
+ * background, margin) but diverge in preview handling: mermaid gets a
+ * horizontally-scrolling SVG container, wireframe embeds a sandboxed
+ * iframe that measures itself from the parent.
+ *
+ * The floating toolbar is CSS-positioned rather than Floating-UI anchored
+ * because the NodeView root is always its target - absolute positioning
+ * is sufficient, bundle stays smaller, and there's no caret to follow.
+ */
+.tc-node-mermaid,
+.tc-node-wireframe {
+  position: relative;
+  margin: 1rem 0;
+  padding: 0.5rem;
+  border: 1px solid
+    color-mix(in oklab, var(--color-border, hsl(0 0% 88%)) 70%, transparent);
+  border-radius: var(--radius-md, 0.5rem);
+  background: color-mix(
+    in oklab,
+    var(--color-muted, hsl(0 0% 96%)) 30%,
+    transparent
+  );
+}
+
+.tc-node-mermaid__preview {
+  position: relative;
+  overflow-x: auto;
+  min-height: 3rem;
+  padding: 0.5rem;
+}
+
+.tc-node-mermaid__svg {
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+}
+
+.tc-node-mermaid__svg svg {
+  max-width: none;
+}
+
+.tc-node-mermaid__editor {
+  margin-top: 0.5rem;
+  border-top: 1px solid
+    color-mix(in oklab, var(--color-border, hsl(0 0% 88%)) 60%, transparent);
+  padding-top: 0.5rem;
+}
+
+.tc-node-mermaid__codemirror {
+  min-height: 8rem;
+  max-height: 20rem;
+  overflow: auto;
+  border-radius: var(--radius-sm, 0.375rem);
+  background: var(--color-background, hsl(0 0% 100%));
+  border: 1px solid var(--color-border, hsl(0 0% 88%));
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.8125rem;
+}
+
+.tc-node-wireframe__preview {
+  position: relative;
+  border-radius: var(--radius-sm, 0.375rem);
+  overflow: hidden;
+  background: var(--color-background, hsl(0 0% 100%));
+  border: 1px solid
+    color-mix(in oklab, var(--color-border, hsl(0 0% 88%)) 50%, transparent);
+}
+
+.tc-node-wireframe__iframe {
+  display: block;
+  border: none;
+  background: var(--color-background, hsl(0 0% 100%));
+}
+
+.tc-node-wireframe__iframe--fullscreen {
+  width: 100%;
+  height: 100%;
+}
+
+/*
+ * Selection ring - applied via `is-selected` on the NodeViewWrapper.
+ * ProseMirror also sets `.ProseMirror-selectednode` for keyboard/arrow
+ * selection; we style both so the two paths converge visually.
+ */
+.tc-node-mermaid.is-selected,
+.tc-node-wireframe.is-selected,
+.tc-node-mermaid.ProseMirror-selectednode,
+.tc-node-wireframe.ProseMirror-selectednode {
+  outline: 2px solid var(--color-ring, hsl(222 47% 40%));
+  outline-offset: 2px;
+}
+
+/*
+ * Block floating toolbar. Hidden by default; shown when the NodeView is
+ * hovered, focused (`focus-within`), or selected. Kept above the content
+ * with `z-index: 2` so it doesn't fall behind overlapping SVG in mermaid.
+ */
+.tc-node-block-toolbar {
+  position: absolute;
+  top: 0.25rem;
+  right: 0.25rem;
+  z-index: 2;
+  display: inline-flex;
+  gap: 0.125rem;
+  padding: 0.25rem;
+  border-radius: var(--radius-md, 0.5rem);
+  border: 1px solid var(--color-border, hsl(0 0% 88%));
+  background: var(--color-popover, var(--color-background, hsl(0 0% 100%)));
+  box-shadow:
+    0 8px 20px -12px rgba(0, 0, 0, 0.35),
+    0 2px 4px -2px rgba(0, 0, 0, 0.2);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.tc-node-mermaid:hover > .tc-node-block-toolbar,
+.tc-node-wireframe:hover > .tc-node-block-toolbar,
+.tc-node-mermaid:focus-within > .tc-node-block-toolbar,
+.tc-node-wireframe:focus-within > .tc-node-block-toolbar,
+.tc-node-mermaid.is-selected > .tc-node-block-toolbar,
+.tc-node-wireframe.is-selected > .tc-node-block-toolbar,
+.tc-node-mermaid.ProseMirror-selectednode > .tc-node-block-toolbar,
+.tc-node-wireframe.ProseMirror-selectednode > .tc-node-block-toolbar {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.tc-node-block__skeleton {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 6rem;
+  color: var(--color-muted-foreground, hsl(0 0% 45%));
+}
+
+.tc-node-block__empty {
+  padding: 0.75rem;
+  color: var(--color-muted-foreground, hsl(0 0% 45%));
+  font-size: 0.8125rem;
+  text-align: center;
+}
+
+.tc-node-block__error {
+  padding: 0.75rem;
+  border-radius: var(--radius-sm, 0.375rem);
+  background: color-mix(
+    in oklab,
+    var(--color-destructive, hsl(0 70% 50%)) 8%,
+    transparent
+  );
+  color: var(--color-destructive, hsl(0 70% 50%));
+  font-size: 0.8125rem;
+}
+
+.tc-node-block__error-title {
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+}
+
+.tc-node-block__error-detail {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.75rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.tc-node-block__error-actions {
+  display: flex;
+  gap: 0.375rem;
+  margin-top: 0.5rem;
+}
+
+.collaboration-carets__label {
+  position: absolute;
+  /*
+   * Pin to the caret's top so the pill floats directly above the line the
+   * caret sits on, independent of line-height or font-size of the line.
+   * `translateY(-100%)` lifts by the pill's own height plus the small gap.
+   */
+  top: 0;
+  left: -1px;
+  transform: translateY(calc(-100% - 2px));
+  font-size: 0.6875rem;
+  font-weight: 600;
+  line-height: 1;
+  color: #fff;
+  padding: 0.125rem 0.35rem;
+  border-radius: 0.25rem 0.25rem 0.25rem 0;
+  white-space: nowrap;
+  user-select: none;
+  pointer-events: none;
+  z-index: 20;
+}
+
+/*
+ * Thread-anchor highlight tokens.
+ *
+ * The mark itself is rendered by `ThreadAnchor` as
+ * `<span class="thread-anchor" data-thread-id="…">`. Inline state is layered
+ * by `CommentDecorationsExtension` via `data-active`, `data-hover`,
+ * `data-flash`, and `data-resolved` attrs - those attrs come from a
+ * ProseMirror decoration set, NOT from mark attrs, so the persisted Y.Doc
+ * never carries presentation state. Resolved threads keep the stored anchor
+ * for round-trip parity, but disappear from the editor interaction surface.
+ */
+.thread-anchor {
+  cursor: pointer;
+}
+
+.thread-anchor:has([data-resolved="true"]) {
+  cursor: inherit;
+}
+
+[data-comment-anchor="true"] {
+  /*
+   * This should read as a document annotation, not selected text. Keep the
+   * persistent state quiet: a thin ink line plus a shallow lower-half wash.
+   * Use `--color-ring` instead of `--accent` because many themes make accent
+   * a near-background hover color.
+   */
+  --tc-thread-anchor-fill: color-mix(
+    in oklab,
+    var(--color-ring, hsl(46 70% 74%)) 13%,
+    transparent
+  );
+  --tc-thread-anchor-line: color-mix(
+    in oklab,
+    var(--color-ring, hsl(46 70% 74%)) 52%,
+    transparent
+  );
+
+  background:
+    linear-gradient(
+      to top,
+      var(--tc-thread-anchor-line) 0 0.055em,
+      transparent 0.055em
+    ),
+    linear-gradient(
+      to top,
+      transparent 0 0.18em,
+      var(--tc-thread-anchor-fill) 0.18em 62%,
+      transparent 62%
+    );
+  background-repeat: no-repeat;
+  cursor: pointer;
+  transition:
+    background 120ms ease,
+    text-decoration-color 120ms ease;
+}
+
+[data-comment-anchor="true"][data-hover="true"],
+.thread-anchor:hover [data-comment-anchor="true"] {
+  --tc-thread-anchor-fill: color-mix(
+    in oklab,
+    var(--color-ring, hsl(46 70% 74%)) 18%,
+    transparent
+  );
+  --tc-thread-anchor-line: color-mix(
+    in oklab,
+    var(--color-ring, hsl(46 70% 74%)) 66%,
+    transparent
+  );
+}
+
+[data-comment-anchor="true"][data-active="true"] {
+  --tc-thread-anchor-fill: color-mix(
+    in oklab,
+    var(--color-ring, hsl(46 70% 74%)) 22%,
+    transparent
+  );
+  --tc-thread-anchor-line: color-mix(
+    in oklab,
+    var(--color-ring, hsl(46 70% 74%)) 78%,
+    transparent
+  );
+}
+
+[data-comment-anchor="true"][data-flash="true"] {
+  --tc-thread-anchor-fill: color-mix(
+    in oklab,
+    var(--color-ring, hsl(46 70% 74%)) 28%,
+    transparent
+  );
+  --tc-thread-anchor-line: color-mix(
+    in oklab,
+    var(--color-ring, hsl(46 70% 74%)) 88%,
+    transparent
+  );
+
+  animation: tc-thread-anchor-flash 1s ease-out;
+}
+
+[data-resolved="true"] {
+  --tc-thread-anchor-fill: transparent;
+  --tc-thread-anchor-line: transparent;
+
+  background: none;
+  box-shadow: none;
+  color: inherit;
+  cursor: inherit;
+  pointer-events: none;
+  animation: none;
+}
+
+.thread-anchor-draft {
+  background:
+    linear-gradient(
+      to top,
+      color-mix(in oklab, var(--color-ring, hsl(46 70% 74%)) 76%, transparent) 0
+        0.06em,
+      transparent 0.06em
+    ),
+    linear-gradient(
+      to top,
+      transparent 0 0.18em,
+      color-mix(in oklab, var(--color-ring, hsl(46 70% 74%)) 18%, transparent)
+        0.18em 62%,
+      transparent 62%
+    );
+  background-repeat: no-repeat;
+}
+
+@keyframes tc-thread-anchor-flash {
+  0% {
+    box-shadow: inset 0 -1.25em 0
+      color-mix(in oklab, var(--color-ring, hsl(46 70% 74%)) 24%, transparent);
+  }
+
+  100% {
+    box-shadow: inset 0 -1.25em 0 transparent;
+  }
+}
+
+/*
+ * Composer placeholder. Tiptap's `Placeholder` extension (from
+ * `@tiptap/extensions`) flags the empty editor with `.is-editor-empty` and
+ * writes the configured string into `data-placeholder`. We render it via
+ * `::before` so the placeholder never enters the doc - `editor.isEmpty`
+ * stays accurate and Submit's disabled-state never debounces against
+ * placeholder text.
+ */
+.tc-editor-prose .is-editor-empty:first-child::before,
+[data-composer-editor].is-editor-empty::before,
+[data-composer-editor] .is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  color: var(--color-muted-foreground, hsl(0 0% 45%));
+  opacity: 0.6;
+  pointer-events: none;
+  height: 0;
+  float: left;
+}
+
+/*
+ * `@user` mention chip rendered by `@tiptap/extension-mention`. We wrap the
+ * default span in muted-on-accent pill styling matching the rest of the
+ * Traycer chip vocabulary so a mention reads as a named entity rather than
+ * inline prose.
+ */
+.comment-mention {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.125rem;
+  padding: 0 0.25rem;
+  border-radius: 0.25rem;
+  background: color-mix(in oklab, var(--accent) 18%, transparent);
+  color: var(--accent-foreground);
+  font-weight: 500;
+  white-space: nowrap;
+}

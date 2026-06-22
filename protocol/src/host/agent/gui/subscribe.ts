@@ -1,0 +1,639 @@
+/**
+ * `chat.subscribe@1.0` - versioned streaming-RPC contract for a single
+ * host-owned GUI chat session.
+ *
+ * This stream is intentionally text-frame-only. The existing `epic.subscribe`
+ * stream remains responsible for Y.Doc binary updates; chat execution frames
+ * carry typed snapshots, action acknowledgements, live turn deltas, queue
+ * state, approval state, durable event appends, and concise error notices.
+ */
+import { commonRecordRegistry } from "@traycer/protocol/common/registry";
+import { getRecordSchema } from "@traycer/protocol/framework/index";
+import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
+import {
+  chatEventSchema,
+  chatRunSettingsSchema,
+  chatSchema,
+  userMessagePayloadSchema,
+  userMessageSchema,
+  userMessageSenderSchema,
+  type ChatRunSettings,
+} from "@traycer/protocol/persistence/epic/schemas";
+import {
+  agentModeSchema,
+  permissionModeSchema,
+} from "@traycer/protocol/persistence/epic/foundation";
+import {
+  DEFAULT_ACCOUNT_CONTEXT,
+  accountContextSchema,
+} from "@traycer/protocol/common/schemas";
+import {
+  checkpointArtifactTagSchema,
+  checkpointFileOperationSchema,
+  restoreResultEntrySchema,
+  restoreStartedManifestSchema,
+} from "@traycer/protocol/persistence/epic/checkpoint-manifests";
+import {
+  diffSourceSchema,
+  fileEditReasonSchema,
+} from "@traycer/protocol/persistence/epic/content-blocks";
+import {
+  chatQueueSteerModeSchema,
+  runtimeApprovalDecisionSchema,
+  runtimeEventSchema,
+  runtimeInterviewAnswerSchema,
+  runtimePlanActionSchema,
+} from "@traycer/protocol/host/agent/gui/agent-runtime";
+
+export {
+  chatQueueSteerModeSchema,
+  type ChatQueueSteerMode,
+} from "@traycer/protocol/host/agent/gui/agent-runtime";
+import { z } from "zod";
+import { guiHarnessIdSchema } from "@traycer/protocol/host/agent/shared";
+import {
+  worktreeBindingSchema,
+  worktreeIntentSchema,
+} from "@traycer/protocol/host/worktree-schemas";
+
+const jsonContentSchema = getRecordSchema(
+  commonRecordRegistry,
+  "json-content",
+  "latest",
+);
+
+const textFrameFields = {
+  hasBinaryPayload: z.literal(false),
+} as const;
+
+const chatReferenceFields = {
+  epicId: z.string(),
+  chatId: z.string(),
+} as const;
+
+const ownerActionFrameFields = {
+  ...textFrameFields,
+  ...chatReferenceFields,
+  clientActionId: z.string(),
+} as const;
+
+export const chatSubscribeOpenRequestSchema = z.object({
+  epicId: z.string(),
+  chatId: z.string(),
+});
+export type ChatSubscribeOpenRequest = z.infer<
+  typeof chatSubscribeOpenRequestSchema
+>;
+
+export const chatActionSchema = z.enum([
+  "send",
+  "deleteMessageSuffix",
+  "editUserMessage",
+  "stop",
+  "resumeQueue",
+  "queueEdit",
+  "queueCancel",
+  "queueReorder",
+  "queueSteerNow",
+  "queueAbortSteer",
+  "queueSettingsUpdate",
+  "queueSettingsRestamp",
+  "activePermissionModeUpdate",
+  "approvalDecision",
+  "fileEditApprovalDecision",
+  "interviewAnswer",
+  "interviewError",
+  "restoreCheckpoint",
+  "revertFileChanges",
+]);
+export type ChatAction = z.infer<typeof chatActionSchema>;
+
+/**
+ * One file in the chat-level **accumulated changes** view (the pinned panel
+ * above the composer). Mirrors the `file_change` content block so the
+ * renderer can reuse its diff components, but the `before`/`after` here are
+ * cumulative: `beforeContent` is the snapshot captured the *first* time the
+ * file was edited in the chat, `afterContent` is the file's *current* on-disk
+ * content. Files whose current content equals their first snapshot are omitted
+ * (already reverted / unchanged). `undoable` reflects whether that first
+ * snapshot can be restored.
+ */
+export const chatAccumulatedFileChangeSchema = z.object({
+  filePath: z.string(),
+  operation: checkpointFileOperationSchema,
+  diffSource: diffSourceSchema,
+  beforeContent: z.string().nullable(),
+  afterContent: z.string().nullable(),
+  reason: fileEditReasonSchema,
+  undoable: z.boolean(),
+  // Present + non-null ⇒ this accumulated change is a Traycer artifact
+  // `index.md`. The panel renders it as a titled artifact row (click → diff,
+  // per-row undo) rather than a raw file path. Carried through from the manifest
+  // entry's tag. Optional for the same reasons as the manifest entry's tag.
+  artifact: checkpointArtifactTagSchema.nullish(),
+});
+export type ChatAccumulatedFileChange = z.infer<
+  typeof chatAccumulatedFileChangeSchema
+>;
+
+export const chatActionAckStatusSchema = z.enum(["accepted", "rejected"]);
+export type ChatActionAckStatus = z.infer<typeof chatActionAckStatusSchema>;
+
+export { chatRunSettingsSchema };
+export type { ChatRunSettings };
+
+export const chatQueueDeliveryPolicySchema = z.enum([
+  "auto",
+  "after_safe_point",
+  "after_turn",
+]);
+export type ChatQueueDeliveryPolicy = z.infer<
+  typeof chatQueueDeliveryPolicySchema
+>;
+
+export const chatQueueItemDeliverySchema = z.enum(["same_turn", "next_turn"]);
+export type ChatQueueItemDelivery = z.infer<typeof chatQueueItemDeliverySchema>;
+
+export const chatQueueItemStatusSchema = z.enum([
+  "pending",
+  "steer_requested",
+  "steering",
+  "injected",
+  "fallback",
+  "paused",
+]);
+export type ChatQueueItemStatus = z.infer<typeof chatQueueItemStatusSchema>;
+
+export const chatQueueSteerRequestSchema = z.object({
+  mode: chatQueueSteerModeSchema,
+  targetTurnId: z.string(),
+  requestedAt: z.number(),
+});
+export type ChatQueueSteerRequest = z.infer<typeof chatQueueSteerRequestSchema>;
+
+export const chatQueuedItemSchema = z.object({
+  queueItemId: z.string(),
+  messageId: z.string(),
+  message: userMessagePayloadSchema,
+  sender: userMessageSenderSchema,
+  settings: chatRunSettingsSchema,
+  // Billing/account context the queued turn runs under. Global app-wide
+  // selection (not per-chat), captured from the send frame at queue time.
+  // Defaulted PERSONAL so older queued items still parse.
+  accountContext: accountContextSchema.default(DEFAULT_ACCOUNT_CONTEXT),
+  delivery: chatQueueItemDeliverySchema.default("next_turn"),
+  status: chatQueueItemStatusSchema.default("pending"),
+  targetTurnId: z.string().nullable().default(null),
+  steerRequest: chatQueueSteerRequestSchema.nullable().default(null),
+  fallbackReason: z.string().nullable().default(null),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+});
+export type ChatQueuedItem = z.infer<typeof chatQueuedItemSchema>;
+
+export const chatQueueStateSchema = z.object({
+  status: z.enum(["idle", "running", "paused"]),
+  items: z.array(chatQueuedItemSchema),
+});
+export type ChatQueueState = z.infer<typeof chatQueueStateSchema>;
+
+/**
+ * Authoritative chat-level run state, owned by the host and the single source
+ * the GUI reads for the in-progress indicator (assistant response row, composer
+ * stop affordance, sidebar/tab marker). Unlike the per-turn `activeTurn` - which
+ * is null between turns and only set once a turn is built - `runStatus` flips to
+ * `running` the instant a turn is requested (before harness/worktree setup) and
+ * to `stopping` the instant stop is pressed, so the UI always reflects what the
+ * chat is actually doing across the first turn and every multi-turn send.
+ */
+export const chatRunStatusSchema = z.enum(["idle", "running", "stopping"]);
+export type ChatRunStatus = z.infer<typeof chatRunStatusSchema>;
+
+export const chatActiveTurnSchema = z.object({
+  turnId: z.string(),
+  status: z.enum([
+    "starting",
+    "running",
+    "stopping",
+    "completed",
+    "stopped",
+    "interrupted",
+    "errored",
+  ]),
+  harnessId: guiHarnessIdSchema,
+  model: z.string().min(1),
+  // Reasoning effort + service tier the active turn is running with, mirrored
+  // from its `ChatRunSettings` so the GUI can surface them per turn. `null`
+  // when the harness/model exposes no such control (or uses the default tier).
+  reasoningEffort: z.string().nullable().default(null),
+  serviceTier: z.string().nullable().default(null),
+  // agentMode the turn started under, mirrored from its `ChatRunSettings` so the
+  // GUI can detect an epic<->regular change against the live toolbar. Defaults to
+  // "regular" so turns persisted before this field was added still parse.
+  agentMode: agentModeSchema.default("regular"),
+  userMessageId: z.string().nullable(),
+  startedAt: z.number(),
+  updatedAt: z.number(),
+});
+export type ChatActiveTurn = z.infer<typeof chatActiveTurnSchema>;
+
+export const chatApprovalStateSchema = z.object({
+  approvalId: z.string(),
+  toolName: z.string(),
+  description: z.string(),
+  input: z.unknown().nullable(),
+  requestedAt: z.number(),
+  kind: z.enum(["tool", "plan"]).default("tool"),
+  planId: z.string().nullable().default(null),
+  actions: z.array(runtimePlanActionSchema).default([]),
+});
+export type ChatApprovalState = z.infer<typeof chatApprovalStateSchema>;
+
+export const chatFileEditApprovalStateSchema = z.object({
+  approvalId: z.string(),
+  toolName: z.string(),
+  description: z.string(),
+  paths: z.array(z.string()),
+  operation: checkpointFileOperationSchema,
+  input: z.unknown().nullable(),
+  requestedAt: z.number(),
+});
+export type ChatFileEditApprovalState = z.infer<
+  typeof chatFileEditApprovalStateSchema
+>;
+
+export const chatPendingInterviewStateSchema = z.object({
+  blockId: z.string(),
+  requestedAt: z.number(),
+});
+export type ChatPendingInterviewState = z.infer<
+  typeof chatPendingInterviewStateSchema
+>;
+
+export const chatAccessSchema = z.object({
+  role: z.enum(["owner", "viewer"]),
+  ownerUserId: z.string(),
+  canAct: z.boolean(),
+});
+export type ChatAccess = z.infer<typeof chatAccessSchema>;
+
+export const chatSnapshotSchema = z.object({
+  chat: chatSchema,
+  access: chatAccessSchema,
+  queue: chatQueueStateSchema,
+  // Authoritative in-progress state (see `chatRunStatusSchema`). The GUI's
+  // in-progress indicators read this, not `activeTurn`.
+  runStatus: chatRunStatusSchema,
+  activeTurn: chatActiveTurnSchema.nullable(),
+  pendingApprovals: z.array(chatApprovalStateSchema),
+  pendingInterviews: z.array(chatPendingInterviewStateSchema),
+  // Local-only worktree binding projected from host SQLite at subscribe
+  // time. `null` means the binding has not been decided for this owner yet.
+  // Not part of the cloud-synced chat record - see worktree-schemas.ts.
+  worktreeBinding: worktreeBindingSchema.nullable(),
+  // Computed, ephemeral disk-truth: the `workspacePath` of every binding entry
+  // whose effective directory (`worktreePath ?? workspacePath`) is missing on
+  // disk, recomputed host-side whenever the binding changes. Drives the
+  // composer's missing-worktree error + send gate. `[]` when the binding is null
+  // or every bound directory exists. Never persisted - see worktree-schemas.ts.
+  missingWorktreePaths: z.array(z.string()),
+  pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchema),
+  // Cumulative file changes for the whole chat (first-snapshot → current),
+  // computed host-side from checkpoint manifests + current disk content.
+  // Drives the pinned accumulated-changes panel above the composer.
+  accumulatedFileChanges: z.array(chatAccumulatedFileChangeSchema),
+});
+export type ChatSnapshot = z.infer<typeof chatSnapshotSchema>;
+
+export const chatErrorNoticeSchema = z.object({
+  code: z.string(),
+  message: z.string(),
+  severity: z.enum(["info", "warning", "error"]),
+  clientActionId: z.string().nullable(),
+});
+export type ChatErrorNotice = z.infer<typeof chatErrorNoticeSchema>;
+
+export const chatSubscribeServerFrameSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("snapshot"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    snapshot: chatSnapshotSchema,
+  }),
+  z.object({
+    kind: z.literal("actionAck"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    clientActionId: z.string(),
+    action: chatActionSchema,
+    status: chatActionAckStatusSchema,
+    reason: z.string().nullable(),
+    code: z.string().nullable(),
+  }),
+  z.object({
+    kind: z.literal("messageAccepted"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    message: userMessageSchema,
+  }),
+  z.object({
+    kind: z.literal("queueChanged"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    queue: chatQueueStateSchema,
+  }),
+  z.object({
+    kind: z.literal("turnStateChanged"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    // `runStatus` rides every turn-state broadcast so the GUI's in-progress
+    // indicator updates the instant a turn is requested, stops, or completes -
+    // including the request→activeTurn window where `activeTurn` is still null.
+    runStatus: chatRunStatusSchema,
+    activeTurn: chatActiveTurnSchema.nullable(),
+  }),
+  z.object({
+    kind: z.literal("blockDelta"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    event: runtimeEventSchema,
+  }),
+  z.object({
+    kind: z.literal("approvalRequested"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    approval: chatApprovalStateSchema,
+  }),
+  z.object({
+    kind: z.literal("approvalResolved"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    approvalId: z.string(),
+    decision: runtimeApprovalDecisionSchema,
+    resolvedAt: z.number(),
+  }),
+  z.object({
+    kind: z.literal("fileEditApprovalRequested"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    approval: chatFileEditApprovalStateSchema,
+  }),
+  z.object({
+    kind: z.literal("fileEditApprovalResolved"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    approvalId: z.string(),
+    decision: runtimeApprovalDecisionSchema,
+    resolvedAt: z.number(),
+  }),
+  z.object({
+    kind: z.literal("interviewRequested"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    blockId: z.string(),
+    requestedAt: z.number(),
+  }),
+  z.object({
+    kind: z.literal("interviewAnswered"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    blockId: z.string(),
+    answers: z.array(runtimeInterviewAnswerSchema),
+    resolvedAt: z.number(),
+  }),
+  z.object({
+    kind: z.literal("interviewErrored"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    blockId: z.string(),
+    reason: z.string(),
+    resolvedAt: z.number(),
+  }),
+  z.object({
+    kind: z.literal("eventAppended"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    event: chatEventSchema,
+  }),
+  z.object({
+    kind: z.literal("restoreStarted"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    ...restoreStartedManifestSchema.shape,
+  }),
+  z.object({
+    kind: z.literal("restoreProgress"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    checkpointId: z.string(),
+    processedCount: z.number(),
+    totalCount: z.number(),
+  }),
+  z.object({
+    kind: z.literal("restoreCompleted"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    checkpointId: z.string(),
+    finishedAt: z.number(),
+    results: z.array(restoreResultEntrySchema),
+  }),
+  z.object({
+    kind: z.literal("errorNotice"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    notice: chatErrorNoticeSchema,
+  }),
+  z.object({
+    kind: z.literal("worktreeStateChanged"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    worktreeBinding: worktreeBindingSchema.nullable(),
+    // Recomputed alongside `worktreeBinding` (see chatSnapshotSchema) so the
+    // composer's missing-worktree gate updates reactively on every binding edit.
+    missingWorktreePaths: z.array(z.string()),
+  }),
+  z.object({
+    kind: z.literal("pong"),
+    ...textFrameFields,
+  }),
+]);
+export type ChatSubscribeServerFrame = z.infer<
+  typeof chatSubscribeServerFrameSchema
+>;
+
+export const chatSubscribeClientFrameSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("send"),
+    ...ownerActionFrameFields,
+    messageId: z.string(),
+    content: jsonContentSchema,
+    sender: userMessageSenderSchema,
+    settings: chatRunSettingsSchema,
+    // Billing/account context the turn runs under (Personal vs a specific
+    // Team). Global app-wide selection (not per-chat), stamped onto the frame
+    // at send time.
+    accountContext: accountContextSchema,
+    deliveryPolicy: chatQueueDeliveryPolicySchema.default("auto"),
+    // A worktree staged in the composer (mid-chat "Create new worktree")
+    // rides with the send so the host creates it at turn-start before
+    // gating on setup - mirroring how the landing page bundles the intent
+    // with `epic.create`. `null` for an ordinary send.
+    worktreeIntent: worktreeIntentSchema.nullable().default(null),
+  }),
+  z.object({
+    kind: z.literal("deleteMessageSuffix"),
+    ...ownerActionFrameFields,
+    fromMessageId: z.string(),
+  }),
+  z.object({
+    kind: z.literal("editUserMessage"),
+    ...ownerActionFrameFields,
+    targetMessageId: z.string(),
+    messageId: z.string(),
+    content: jsonContentSchema,
+    sender: userMessageSenderSchema,
+    settings: chatRunSettingsSchema,
+    // Billing/account context the turn runs under. Global app-wide selection
+    // (not per-chat), stamped onto the frame at send time.
+    accountContext: accountContextSchema,
+    // When true, revert all file changes made by the edited message's turn
+    // and every turn after it (cumulative, to the state before this message)
+    // before trimming history and starting the new turn. Set by the
+    // "Submit from a previous message?" modal's Revert action.
+    revertFileChanges: z.boolean(),
+    // When reverting (above), also revert the artifact changes in scope. The
+    // revert dialog's checked-by-default "Also revert N artifacts" checkbox
+    // sets this; unchecking leaves artifacts untouched. Defaulted true so
+    // pre-existing clients keep reverting artifacts alongside files.
+    revertArtifacts: z.boolean().default(true),
+  }),
+  z.object({
+    kind: z.literal("stop"),
+    ...ownerActionFrameFields,
+    turnId: z.string().nullable(),
+  }),
+  z.object({
+    kind: z.literal("resumeQueue"),
+    ...ownerActionFrameFields,
+  }),
+  z.object({
+    kind: z.literal("queueEdit"),
+    ...ownerActionFrameFields,
+    queueItemId: z.string(),
+    content: jsonContentSchema,
+  }),
+  z.object({
+    kind: z.literal("queueCancel"),
+    ...ownerActionFrameFields,
+    queueItemId: z.string(),
+  }),
+  z.object({
+    kind: z.literal("queueReorder"),
+    ...ownerActionFrameFields,
+    queueItemId: z.string(),
+    beforeQueueItemId: z.string().nullable(),
+  }),
+  z.object({
+    kind: z.literal("queueSteerNow"),
+    ...ownerActionFrameFields,
+    queueItemId: z.string(),
+    // Settings to apply when steering forces an interrupt_restart (the live
+    // toolbar differs from the running turn on a turn-start-baked setting:
+    // model / reasoningEffort / serviceTier / agentMode). null = no override:
+    // a silent safe_point inject that keeps the running turn's settings.
+    newSettings: chatRunSettingsSchema.nullable().default(null),
+  }),
+  z.object({
+    // Abort a steer that is still `steer_requested` (the harness has not begun
+    // folding it into the running turn): the item reverts to a plain pending
+    // queue item. Rejected once the steer advances to `steering`/`injected`.
+    kind: z.literal("queueAbortSteer"),
+    ...ownerActionFrameFields,
+    queueItemId: z.string(),
+  }),
+  z.object({
+    kind: z.literal("queueSettingsUpdate"),
+    ...ownerActionFrameFields,
+    queueItemId: z.string(),
+    settings: chatRunSettingsSchema,
+    // Billing/account context the turn runs under. Global app-wide selection
+    // (not per-chat), stamped onto the frame at send time.
+    accountContext: accountContextSchema,
+  }),
+  z.object({
+    kind: z.literal("queueSettingsRestamp"),
+    ...ownerActionFrameFields,
+    settings: chatRunSettingsSchema,
+    // Billing/account context the turn runs under. Global app-wide selection
+    // (not per-chat), stamped onto the frame at send time.
+    accountContext: accountContextSchema,
+    excludeQueueItemId: z.string().nullable(),
+  }),
+  z.object({
+    kind: z.literal("activePermissionModeUpdate"),
+    ...ownerActionFrameFields,
+    permissionMode: permissionModeSchema,
+  }),
+  z.object({
+    kind: z.literal("approvalDecision"),
+    ...ownerActionFrameFields,
+    approvalId: z.string(),
+    decision: runtimeApprovalDecisionSchema,
+  }),
+  z.object({
+    kind: z.literal("fileEditApprovalDecision"),
+    ...ownerActionFrameFields,
+    approvalId: z.string(),
+    decision: runtimeApprovalDecisionSchema,
+  }),
+  z.object({
+    kind: z.literal("interviewAnswer"),
+    ...ownerActionFrameFields,
+    blockId: z.string(),
+    answers: z.array(runtimeInterviewAnswerSchema),
+  }),
+  z.object({
+    kind: z.literal("interviewError"),
+    ...ownerActionFrameFields,
+    blockId: z.string(),
+    reason: z.string(),
+  }),
+  z.object({
+    kind: z.literal("restoreCheckpoint"),
+    ...ownerActionFrameFields,
+    checkpointId: z.string(),
+    // When false, the turn's artifact changes are excluded from the restore
+    // (the "Also revert N artifacts" opt-out, checked by default). Defaulted
+    // true so pre-existing clients keep restoring artifacts with the turn.
+    revertArtifacts: z.boolean().default(true),
+  }),
+  z.object({
+    kind: z.literal("revertFileChanges"),
+    ...ownerActionFrameFields,
+    // null = revert from the start of the chat (whole-chat scope). Otherwise
+    // revert the turn triggered by this message and every turn after it.
+    fromMessageId: z.string().nullable(),
+    // null = every file in scope. Otherwise restrict the revert to these
+    // paths (used by the panel's per-file Undo).
+    filePaths: z.array(z.string()).nullable(),
+    // When false, artifact changes are excluded from the revert (the bulk
+    // "Also revert N artifacts" opt-out). A per-row artifact Undo passes the
+    // artifact path in `filePaths` with this true. Defaulted true.
+    revertArtifacts: z.boolean().default(true),
+  }),
+  z.object({
+    kind: z.literal("ping"),
+    ...textFrameFields,
+  }),
+]);
+export type ChatSubscribeClientFrame = z.infer<
+  typeof chatSubscribeClientFrameSchema
+>;
+
+export const chatSubscribeV10 = defineStreamRpcContract({
+  method: "chat.subscribe",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  openRequestSchema: chatSubscribeOpenRequestSchema,
+  serverFrameSchema: chatSubscribeServerFrameSchema,
+  clientFrameSchema: chatSubscribeClientFrameSchema,
+});

@@ -1,0 +1,228 @@
+import { ipcRenderer, type IpcRendererEvent } from "electron";
+import {
+  RunnerHostEvent,
+  RunnerHostInvoke,
+} from "../ipc-contracts/ipc-channels";
+import type {
+  CliInstallManifestSnapshot,
+  HostAvailableSnapshot,
+  HostAvailableVersionsInput,
+  HostDoctorReport,
+  HostEnsureResult,
+  HostInstallResult,
+  HostInstalledRecord,
+  HostLogsTailResult,
+  HostNameSettings,
+  HostProgressEvent,
+  HostRegistryUpdateState,
+  HostTrayCommand,
+  HostUninstallResult,
+  FreePortAndRestartInput,
+} from "../ipc-contracts/host-management-types";
+
+/**
+ * Browser-safe surface for Settings → Host and the Doctor failure card.
+ * Each method either resolves once with the CLI's final NDJSON `result`
+ * data payload (query commands), or - for long-running operations - accepts
+ * a synchronous `onProgress` callback that fires for every NDJSON
+ * `progress` event the CLI emits along the way.
+ *
+ * The renderer never spawns the CLI directly; this bridge is the only seam.
+ */
+export interface HostManagementBridgeSurface {
+  installHost(input: {
+    readonly version: string | null;
+    readonly onProgress: ((event: HostProgressEvent) => void) | null;
+  }): Promise<HostInstallResult>;
+  updateHost(input: {
+    readonly onProgress: ((event: HostProgressEvent) => void) | null;
+  }): Promise<HostInstallResult>;
+  uninstallHost(input: { readonly all: boolean }): Promise<HostUninstallResult>;
+  restartHost(): Promise<void>;
+  getHostLogs(input: {
+    readonly tailLines: number;
+  }): Promise<HostLogsTailResult>;
+  runDoctor(): Promise<HostDoctorReport>;
+  availableVersions(
+    input: HostAvailableVersionsInput,
+  ): Promise<HostAvailableSnapshot>;
+  installedRecord(): Promise<HostInstalledRecord | null>;
+  registerService(input: {
+    readonly onProgress: ((event: HostProgressEvent) => void) | null;
+  }): Promise<void>;
+  ensureHost(input: {
+    readonly onProgress: ((event: HostProgressEvent) => void) | null;
+    readonly force: boolean;
+  }): Promise<HostEnsureResult>;
+  deregisterService(): Promise<void>;
+  registryCheck(input: {
+    readonly force: boolean;
+  }): Promise<HostRegistryUpdateState>;
+  freePortAndRestart(
+    input: FreePortAndRestartInput,
+  ): Promise<FreePortAndRestartInput>;
+  cliManifest(): Promise<CliInstallManifestSnapshot | null>;
+  getHostName(): Promise<HostNameSettings>;
+  setHostName(input: {
+    readonly customName: string | null;
+  }): Promise<HostNameSettings>;
+}
+
+function withOperationListener<T>(
+  channel: string,
+  payload: Record<string, unknown> | null,
+  onProgress: ((event: HostProgressEvent) => void) | null,
+): Promise<T> {
+  const operationId =
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const args = { ...(payload ?? {}), operationId };
+  const listener =
+    onProgress === null
+      ? null
+      : (_event: IpcRendererEvent, rawPayload: unknown): void => {
+          if (rawPayload === null || typeof rawPayload !== "object") return;
+          const event = rawPayload as HostProgressEvent;
+          if (event.operationId !== operationId) return;
+          onProgress(event);
+        };
+  if (listener !== null) {
+    ipcRenderer.on(RunnerHostEvent.cliOperationProgress, listener);
+  }
+  const settle = (): void => {
+    if (listener !== null) {
+      ipcRenderer.removeListener(
+        RunnerHostEvent.cliOperationProgress,
+        listener,
+      );
+    }
+  };
+  return (ipcRenderer.invoke(channel, args) as Promise<T>).then(
+    (value) => {
+      settle();
+      return value;
+    },
+    (err) => {
+      settle();
+      throw err;
+    },
+  );
+}
+
+export function buildHostManagementBridge(): HostManagementBridgeSurface {
+  return {
+    installHost: ({ version, onProgress }) =>
+      withOperationListener<HostInstallResult>(
+        RunnerHostInvoke.traycerHostInstall,
+        { version },
+        onProgress,
+      ),
+    updateHost: ({ onProgress }) =>
+      withOperationListener<HostInstallResult>(
+        RunnerHostInvoke.traycerHostUpdate,
+        null,
+        onProgress,
+      ),
+    uninstallHost: ({ all }) =>
+      ipcRenderer.invoke(RunnerHostInvoke.traycerHostUninstall, {
+        all,
+      }) as Promise<HostUninstallResult>,
+    restartHost: () =>
+      ipcRenderer.invoke(RunnerHostInvoke.traycerHostRestart) as Promise<void>,
+    getHostLogs: ({ tailLines }) =>
+      ipcRenderer.invoke(RunnerHostInvoke.traycerHostLogs, {
+        tailLines,
+      }) as Promise<HostLogsTailResult>,
+    runDoctor: () =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.traycerHostDoctor,
+      ) as Promise<HostDoctorReport>,
+    availableVersions: ({ includePreReleases }) =>
+      ipcRenderer.invoke(RunnerHostInvoke.traycerHostAvailable, {
+        includePreReleases,
+      }) as Promise<HostAvailableSnapshot>,
+    installedRecord: () =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.traycerHostInstalled,
+      ) as Promise<HostInstalledRecord | null>,
+    registerService: ({ onProgress }) =>
+      withOperationListener<void>(
+        RunnerHostInvoke.traycerServiceRegister,
+        null,
+        onProgress,
+      ),
+    ensureHost: ({ onProgress, force }) =>
+      withOperationListener<HostEnsureResult>(
+        RunnerHostInvoke.traycerHostEnsure,
+        { force },
+        onProgress,
+      ),
+    deregisterService: () =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.traycerServiceDeregister,
+      ) as Promise<void>,
+    registryCheck: ({ force }) =>
+      ipcRenderer.invoke(RunnerHostInvoke.traycerRegistryCheck, {
+        force,
+      }) as Promise<HostRegistryUpdateState>,
+    freePortAndRestart: (input) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.traycerFreePortAndRestart,
+        input,
+      ) as Promise<FreePortAndRestartInput>,
+    cliManifest: () =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.traycerCliManifestRead,
+      ) as Promise<CliInstallManifestSnapshot | null>,
+    getHostName: () =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.traycerHostNameGet,
+      ) as Promise<HostNameSettings>,
+    setHostName: ({ customName }) =>
+      ipcRenderer.invoke(RunnerHostInvoke.traycerHostNameSet, {
+        customName,
+      }) as Promise<HostNameSettings>,
+  };
+}
+
+/**
+ * Subscribes to tray-side host commands forwarded from main.
+ * Renderer wires this to the Doctor / Settings router so a tray click
+ * deep-links into the right surface.
+ */
+export interface HostTrayBridgeSurface {
+  onCommand(handler: (command: HostTrayCommand) => void): {
+    dispose: () => void;
+  };
+}
+
+export function buildHostTrayCommandSubscriber(): HostTrayBridgeSurface {
+  return {
+    onCommand(handler: (command: HostTrayCommand) => void): {
+      dispose: () => void;
+    } {
+      const listener = (_event: IpcRendererEvent, payload: unknown): void => {
+        if (!isHostTrayCommand(payload)) return;
+        handler(payload);
+      };
+      ipcRenderer.on(RunnerHostEvent.hostTrayCommand, listener);
+      return {
+        dispose: () =>
+          ipcRenderer.removeListener(RunnerHostEvent.hostTrayCommand, listener),
+      };
+    },
+  };
+}
+
+function isHostTrayCommand(value: unknown): value is HostTrayCommand {
+  if (value === null || typeof value !== "object") return false;
+  const kind = (value as { kind?: unknown }).kind;
+  if (kind === "openSettingsHost") return true;
+  if (kind === "restartHost") return true;
+  if (kind === "openLogs") return true;
+  if (kind === "installUpdate") {
+    return typeof (value as { version?: unknown }).version === "string";
+  }
+  return false;
+}

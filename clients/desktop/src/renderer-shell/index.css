@@ -1,0 +1,14 @@
+/*
+ * Desktop renderer Tailwind entrypoint.
+ *
+ * Re-imports the canonical gui-app stylesheet so Electron ships the same
+ * theme tokens, fonts, and shadcn primitives. The extra `@source`
+ * directives teach Tailwind v4 to scan both the shared gui-app source tree
+ * and this renderer workspace, which prevents the partial-CSS regression
+ * where Electron only emitted utilities referenced under `desktop/src`.
+ */
+
+@import "../../../gui-app/src/index.css";
+
+@source "../../../gui-app/src";
+@source ".";

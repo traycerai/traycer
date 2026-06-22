@@ -1,0 +1,15 @@
+{
+  "name": "@traycer-clients/shared",
+  "license": "Apache-2.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "lint": "eslint . --cache --fix --max-warnings 0",
+    "format": "bun x prettier --write ."
+  },
+  "devDependencies": {
+    "@typescript-eslint/eslint-plugin": "catalog:",
+    "@typescript-eslint/parser": "catalog:",
+    "eslint": "catalog:"
+  }
+}

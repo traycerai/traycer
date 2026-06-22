@@ -1,0 +1,15 @@
+export const providersMutationKeys = {
+  setSelection: () => ["providers.setSelection"] as const,
+  addCustomPath: () => ["providers.addCustomPath"] as const,
+  removeCustomPath: () => ["providers.removeCustomPath"] as const,
+  setEnabled: () => ["providers.setEnabled"] as const,
+  setApiKey: () => ["providers.setApiKey"] as const,
+  clearApiKey: () => ["providers.clearApiKey"] as const,
+  setTerminalAgentArgs: () => ["providers.setTerminalAgentArgs"] as const,
+  setEnvOverride: () => ["providers.setEnvOverride"] as const,
+  deleteEnvOverride: () => ["providers.deleteEnvOverride"] as const,
+  startLogin: () => ["providers.startLogin"] as const,
+  awaitLogin: () => ["providers.awaitLogin"] as const,
+  cancelLogin: () => ["providers.cancelLogin"] as const,
+  refresh: () => ["providers.refresh"] as const,
+};
