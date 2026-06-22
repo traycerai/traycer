@@ -1,0 +1,4 @@
+export const CURRENT_EPIC_VERSION = "2.0.0";
+export const CURRENT_EPIC_VERSION_NUMBER = 200;
+export const CURRENT_PHASE_VERSION = "1.0.0";
+export const CURRENT_PHASE_VERSION_NUMBER = 100;

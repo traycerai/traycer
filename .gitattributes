@@ -1,0 +1,17 @@
+# Normalize line endings to LF on checkin/checkout.
+* text=auto eol=lf
+
+# Binary assets (never normalize / diff as text).
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.mp4  binary
+*.webm binary
+*.woff  binary
+*.woff2 binary
+
+# Generated files — collapse in PR diffs and exclude from language stats.
+*.gen.ts  linguist-generated=true
+bun.lock  linguist-generated=true

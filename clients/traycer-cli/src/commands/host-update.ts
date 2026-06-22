@@ -1,0 +1,78 @@
+import { installHost } from "../installer";
+import { CLI_ERROR_CODES, cliError } from "../runner/errors";
+import type { CommandFn, CommandResult } from "../runner/runner";
+import { formatServiceLifecycleWarning } from "../service";
+import { createServiceInstallLifecycle } from "../service/install-lifecycle";
+import { withCliLock } from "../store/cli-lock";
+
+// `traycer host update` - convenience over `host install latest`
+// that surfaces an explicit error when no host is installed yet
+// (Tech Plan: discovery via CLI is explicit, no ambient updates).
+//
+// Uses the same stop-before-swap / start-after-swap lifecycle as
+// `host install` so an in-place update doesn't leave the OS service
+// pointed at a half-replaced install dir (especially relevant on
+// Windows where executable locks block the rename otherwise).
+export const hostUpdateCommand: CommandFn = async (ctx): Promise<CommandResult> => {
+  return withCliLock(
+    {
+      environment: ctx.runtime.environment,
+      reason: "host-update",
+      waitMs: 30_000,
+      pollIntervalMs: 100,
+    },
+    async () => {
+      const { readHostInstallRecord } = await import(
+        "../manifest/host-install"
+      );
+      const previous = await readHostInstallRecord(ctx.runtime.environment);
+      if (previous === null) {
+        throw cliError({
+          code: CLI_ERROR_CODES.HOST_NOT_INSTALLED,
+          message: `host update: no host installed for environment=${ctx.runtime.environment}; run 'traycer host install latest' first`,
+          details: { environment: ctx.runtime.environment },
+          exitCode: 1,
+        });
+      }
+      // `host update` assumes the service is already registered; if it
+      // isn't, leave registration to the operator (`traycer host service
+      // install`) rather than silently bootstrapping on an update path.
+      const handle = createServiceInstallLifecycle({
+        environment: ctx.runtime.environment,
+        bootstrap: null,
+      });
+      const result = await installHost({
+        environment: ctx.runtime.environment,
+        source: { kind: "registry", versionRequest: "latest" },
+        onProgress: (info) => ctx.progress(info),
+        lifecycle: handle.lifecycle,
+        // Registry update records the registry version; nothing to override.
+        recordVersionOverride: null,
+      });
+      const lifecycleData = {
+        priorServiceState: handle.state.priorState,
+        stoppedBeforeSwap: handle.state.stoppedBeforeSwap,
+        postSwapAction: handle.state.postSwapAction,
+        postSwapError: handle.state.postSwapError,
+      };
+      const baseHuman =
+        previous.version === result.record.version
+          ? `host already at ${result.record.version} (no-op)`
+          : `updated host ${previous.version} → ${result.record.version}`;
+      return {
+        data: {
+          version: result.record.version,
+          previousVersion: previous.version,
+          installedAt: result.record.installedAt,
+          source: result.record.source,
+          serviceLifecycle: lifecycleData,
+        },
+        human:
+          handle.state.postSwapError !== null
+            ? `${baseHuman}; ${formatServiceLifecycleWarning(handle.state.postSwapAction, handle.state.postSwapError)}`
+            : baseHuman,
+        exitCode: 0,
+      };
+    },
+  );
+};

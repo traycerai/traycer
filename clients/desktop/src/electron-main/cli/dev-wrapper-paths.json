@@ -1,0 +1,6 @@
+{
+  "comment": "Single source of truth for the dev CLI wrapper layout staged by `make dev-desktop` (scripts/dev-desktop.js) and consumed by the desktop's CLI discovery + host-management IPC when running unpackaged (the dev slot). Both sides read this JSON so the wrapper path stays in lockstep - moving the wrapper means updating one file. Paths are joined relative to the user's $HOME so the layout matches the environment-scoped CLI tree (`~/.traycer/cli/dev/bin/`).",
+  "segments": [".traycer", "cli", "dev", "bin"],
+  "filenamePosix": "traycer",
+  "filenameWin32": "traycer.cmd"
+}

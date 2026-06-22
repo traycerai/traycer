@@ -1,0 +1,123 @@
+{
+  "name": "@traycer/protocol",
+  "license": "Apache-2.0",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./agent/*": "./src/agent/*.ts",
+    "./auth": "./src/auth/index.ts",
+    "./auth/*": "./src/auth/*.ts",
+    "./comments/*": "./src/comments/*.ts",
+    "./common/*": "./src/common/*.ts",
+    "./config": "./src/config/index.ts",
+    "./config/*": "./src/config/*.ts",
+    "./host": "./src/host/index.ts",
+    "./host/*": "./src/host/*.ts",
+    "./framework": "./src/framework/index.ts",
+    "./framework/*": "./src/framework/*.ts",
+    "./notifications/*": "./src/notifications/*.ts",
+    "./persistence/*": "./src/persistence/*.ts",
+    "./utils/yjs-utils": "./utils/yjs-utils/index.ts",
+    "./utils/yjs-utils/*": "./utils/yjs-utils/*.ts",
+    "./utils/text/*": "./utils/text/*.ts"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "types": "./dist/src/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/src/index.d.ts",
+        "import": "./dist/src/index.js"
+      },
+      "./agent/*": {
+        "types": "./dist/src/agent/*.d.ts",
+        "import": "./dist/src/agent/*.js"
+      },
+      "./auth": {
+        "types": "./dist/src/auth/index.d.ts",
+        "import": "./dist/src/auth/index.js"
+      },
+      "./auth/*": {
+        "types": "./dist/src/auth/*.d.ts",
+        "import": "./dist/src/auth/*.js"
+      },
+      "./comments/*": {
+        "types": "./dist/src/comments/*.d.ts",
+        "import": "./dist/src/comments/*.js"
+      },
+      "./common/*": {
+        "types": "./dist/src/common/*.d.ts",
+        "import": "./dist/src/common/*.js"
+      },
+      "./config": {
+        "types": "./dist/src/config/index.d.ts",
+        "import": "./dist/src/config/index.js"
+      },
+      "./config/*": {
+        "types": "./dist/src/config/*.d.ts",
+        "import": "./dist/src/config/*.js"
+      },
+      "./host": {
+        "types": "./dist/src/host/index.d.ts",
+        "import": "./dist/src/host/index.js"
+      },
+      "./host/*": {
+        "types": "./dist/src/host/*.d.ts",
+        "import": "./dist/src/host/*.js"
+      },
+      "./framework": {
+        "types": "./dist/src/framework/index.d.ts",
+        "import": "./dist/src/framework/index.js"
+      },
+      "./framework/*": {
+        "types": "./dist/src/framework/*.d.ts",
+        "import": "./dist/src/framework/*.js"
+      },
+      "./notifications/*": {
+        "types": "./dist/src/notifications/*.d.ts",
+        "import": "./dist/src/notifications/*.js"
+      },
+      "./persistence/*": {
+        "types": "./dist/src/persistence/*.d.ts",
+        "import": "./dist/src/persistence/*.js"
+      },
+      "./utils/yjs-utils": {
+        "types": "./dist/utils/yjs-utils/index.d.ts",
+        "import": "./dist/utils/yjs-utils/index.js"
+      },
+      "./utils/yjs-utils/*": {
+        "types": "./dist/utils/yjs-utils/*.d.ts",
+        "import": "./dist/utils/yjs-utils/*.js"
+      },
+      "./utils/text/*": {
+        "types": "./dist/utils/text/*.d.ts",
+        "import": "./dist/utils/text/*.js"
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json && node scripts/patch-dist-esm-imports.cjs",
+    "compile": "tsc --noEmit",
+    "prepack": "bun run build",
+    "test": "vitest run",
+    "lint": "eslint . --cache --fix --max-warnings 0"
+  },
+  "dependencies": {
+    "y-utility": "^0.1.4",
+    "yjs": "^13.6.31",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "@typescript-eslint/eslint-plugin": "catalog:",
+    "@typescript-eslint/parser": "catalog:",
+    "eslint": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

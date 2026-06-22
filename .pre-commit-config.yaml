@@ -1,0 +1,53 @@
+# Pre-commit hooks. https://pre-commit.com
+# Install once:  pipx install pre-commit && pre-commit install
+# Run on demand: pre-commit run --all-files
+default_stages: [pre-commit]
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: \.gen\.(ts|tsx)$
+      - id: end-of-file-fixer
+        exclude: \.gen\.(ts|tsx)$
+      - id: check-added-large-files
+        args: ["--maxkb=5000"]
+      - id: check-executables-have-shebangs
+      - id: check-shebang-scripts-are-executable
+      - id: detect-private-key
+      - id: mixed-line-ending
+      - id: check-yaml
+      - id: check-json
+      - id: check-merge-conflict
+
+  - repo: https://github.com/gruntwork-io/pre-commit
+    rev: v0.1.20
+    hooks:
+      - id: shellcheck
+
+  - repo: meta
+    hooks:
+      - id: check-hooks-apply
+
+  # Project checks — build / compile / lint / format (nx affected for speed).
+  # Tests run in their own workflow (.github/workflows/test.yml).
+  - repo: local
+    hooks:
+      - id: workspace-checks
+        name: build · compile · lint · format (nx affected)
+        entry: scripts/pre_commit_workspace_checks.sh
+        language: script
+        pass_filenames: false
+        files: >-
+          (?x)^(
+            bun\.lock|
+            bunfig\.toml|
+            nx\.json|
+            package\.json|
+            \.pre-commit-config\.yaml|
+            tsconfig.*\.json|
+            eslint/.*|
+            protocol/.*|
+            clients/.*|
+            scripts/.*
+          )$

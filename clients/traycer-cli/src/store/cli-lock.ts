@@ -1,0 +1,290 @@
+import { execFileSync } from "node:child_process";
+import { open, readFile, stat, unlink } from "node:fs/promises";
+import type { FileHandle } from "node:fs/promises";
+import { hostname as osHostname } from "node:os";
+import type { Environment } from "../runner/environment";
+import { CLI_ERROR_CODES, cliError, isErrnoException } from "../runner/errors";
+import { cliLockPath, ensureCliHomeDir } from "./paths";
+
+// Cross-platform process-liveness probe. POSIX uses `process.kill(pid, 0)`;
+// Windows uses `tasklist /FI "PID eq <pid>" /NH /FO CSV` and asserts the
+// CSV body is non-empty. Exported so service controllers + doctor +
+// installer all share one implementation.
+export function isProcessAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  if (process.platform === "win32") {
+    let stdout: string;
+    try {
+      stdout = execFileSync(
+        "tasklist",
+        ["/FI", `PID eq ${pid}`, "/NH", "/FO", "CSV"],
+        { encoding: "utf8", windowsHide: true, timeout: 3000 },
+      );
+    } catch {
+      // tasklist missing or refused - be conservative and treat the
+      // PID as still held so we never break a lock we can't probe.
+      return true;
+    }
+    // tasklist prints an `INFO: No tasks are running which match...`
+    // line on stderr when nothing matches; stdout is empty. When a
+    // match exists, stdout contains a CSV row with the binary name
+    // and the same PID we asked about.
+    const trimmed = stdout.trim();
+    if (trimmed.length === 0) return false;
+    return trimmed.includes(`"${pid}"`);
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    const code = isErrnoException(err) ? err.code : null;
+    if (code === "EPERM") return true;
+    if (code === "ESRCH") return false;
+    return false;
+  }
+}
+
+// Cross-process lock for CLI mutations (host install/update/uninstall
+// in NP-2+, CLI self-upgrade promotion, manifest mutations).
+//
+// Mechanism: open the lock file with O_CREAT | O_EXCL (Node `wx` flag).
+// On EEXIST, parse the existing file's pid; if the pid is gone the
+// holder crashed and we steal the lock. The poll loop is small and the
+// lock file lives in the user's home so contention is naturally limited.
+//
+// Lock files are per-environment - there is no reason a dev-slot and a
+// prod-slot CLI mutation should serialise against each other, since they
+// touch disjoint directories.
+
+export interface CliLockMetadata {
+  readonly pid: number;
+  readonly reason: string;
+  readonly startedAt: string;
+  readonly hostname: string | null;
+}
+
+export interface CliLockHandle {
+  readonly path: string;
+  readonly metadata: CliLockMetadata;
+  release(): Promise<void>;
+}
+
+export interface AcquireCliLockOptions {
+  readonly environment: Environment;
+  // What this lock holder is doing - written into the lock file for
+  // observability ("install-host", "uninstall-host", etc.).
+  readonly reason: string;
+  // Max time to wait for the lock to free up. 0 → fail immediately on
+  // contention. Defaults are *not* used here per project style; callers
+  // must decide.
+  readonly waitMs: number;
+  // Poll interval while waiting. The runtime clamps below to a sane min.
+  readonly pollIntervalMs: number;
+}
+
+const MIN_POLL_MS = 25;
+
+// An empty or corrupt lock file means the holder created it with O_EXCL
+// but died before writing its metadata - UNLESS a live holder is still
+// mid-creation and simply hasn't written yet. Legitimate metadata writes
+// land within milliseconds of the open(), so any empty lock file older
+// than this grace window has no live owner and is safe to break.
+const EMPTY_LOCK_GRACE_MS = 5000;
+
+function nowIso(): string {
+  return new Date().toISOString();
+}
+
+function hostnameSafe(): string | null {
+  try {
+    return osHostname();
+  } catch {
+    return null;
+  }
+}
+
+function errorCode(err: unknown): string | null {
+  if (isErrnoException(err)) {
+    return typeof err.code === "string" ? err.code : null;
+  }
+  return null;
+}
+
+async function readLockMetadata(path: string): Promise<CliLockMetadata | null> {
+  let raw: string;
+  try {
+    raw = await readFile(path, "utf8");
+  } catch {
+    return null;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return null;
+  }
+  const obj = parsed as Record<string, unknown>;
+  if (
+    typeof obj.pid !== "number" ||
+    typeof obj.reason !== "string" ||
+    typeof obj.startedAt !== "string"
+  ) {
+    return null;
+  }
+  return {
+    pid: obj.pid,
+    reason: obj.reason,
+    startedAt: obj.startedAt,
+    hostname: typeof obj.hostname === "string" ? obj.hostname : null,
+  };
+}
+
+// Returns true if the holder process is alive. Delegates to the shared
+// `isProcessAlive` helper so the POSIX `process.kill(pid, 0)` path and
+// the Windows `tasklist` path stay in lock-step with the service
+// controllers + doctor checks.
+function holderAlive(pid: number): boolean {
+  if (pid === process.pid) return true;
+  return isProcessAlive(pid);
+}
+
+// Age of the lock file in milliseconds, or null if it can no longer be
+// stat'd (already swept by another process). Used only to decide whether
+// an empty/corrupt lock file is a crashed holder vs. one mid-creation.
+async function lockFileAgeMs(path: string): Promise<number | null> {
+  try {
+    const st = await stat(path);
+    return Date.now() - st.mtimeMs;
+  } catch {
+    return null;
+  }
+}
+
+async function breakStaleLock(path: string): Promise<boolean> {
+  try {
+    await unlink(path);
+    return true;
+  } catch (err) {
+    return errorCode(err) === "ENOENT";
+  }
+}
+
+async function tryAcquireOnce(
+  path: string,
+  meta: CliLockMetadata,
+): Promise<CliLockHandle | "held"> {
+  let handle: FileHandle;
+  try {
+    handle = await open(path, "wx", 0o600);
+  } catch (err) {
+    if (errorCode(err) === "EEXIST") return "held";
+    throw err;
+  }
+  try {
+    await handle.writeFile(JSON.stringify(meta, null, 2));
+  } catch (err) {
+    try {
+      await handle.close();
+    } catch {
+      // Best effort - we're already on the error path.
+    }
+    try {
+      await unlink(path);
+    } catch {
+      // Best effort.
+    }
+    throw err;
+  }
+  let released = false;
+  return {
+    path,
+    metadata: meta,
+    release: async () => {
+      if (released) return;
+      released = true;
+      try {
+        await handle.close();
+      } catch {
+        // Closing twice is a no-op for callers; ignore.
+      }
+      try {
+        await unlink(path);
+      } catch {
+        // If the file already vanished (e.g. swept by another tool), that's fine.
+      }
+    },
+  };
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export async function acquireCliLock(
+  opts: AcquireCliLockOptions,
+): Promise<CliLockHandle> {
+  await ensureCliHomeDir(opts.environment);
+  const path = cliLockPath(opts.environment);
+  const meta: CliLockMetadata = {
+    pid: process.pid,
+    reason: opts.reason,
+    startedAt: nowIso(),
+    hostname: hostnameSafe(),
+  };
+  const pollMs = Math.max(MIN_POLL_MS, opts.pollIntervalMs);
+  const deadline = Date.now() + Math.max(0, opts.waitMs);
+  while (true) {
+    const attempt = await tryAcquireOnce(path, meta);
+    if (attempt !== "held") return attempt;
+    const holder = await readLockMetadata(path);
+    if (holder !== null) {
+      if (!holderAlive(holder.pid)) {
+        await breakStaleLock(path);
+        continue;
+      }
+    } else {
+      // Empty or corrupt lock file - no PID to probe. A crashed holder
+      // that died between open() and writeFile() leaves exactly this, and
+      // it can never self-recover via the PID path above. Break it once it
+      // has aged past the grace window, so we don't steal a lock from a
+      // live holder still in the open()->writeFile() gap.
+      const ageMs = await lockFileAgeMs(path);
+      if (ageMs === null || ageMs >= EMPTY_LOCK_GRACE_MS) {
+        await breakStaleLock(path);
+        continue;
+      }
+    }
+    if (Date.now() >= deadline) {
+      throw cliError({
+        code: CLI_ERROR_CODES.CLI_LOCK_BUSY,
+        message:
+          holder === null
+            ? `another traycer CLI mutation is in progress (lock=${path})`
+            : `another traycer CLI mutation is in progress (lock=${path}, holder.pid=${holder.pid}, reason=${holder.reason}, since=${holder.startedAt})`,
+        details: {
+          lockPath: path,
+          holder,
+        },
+        exitCode: 75, // EX_TEMPFAIL - caller may retry
+      });
+    }
+    await sleep(pollMs);
+  }
+}
+
+// `withCliLock(opts, fn)` - acquire, run fn, release in finally. Catches
+// nothing on the inner function; the lock is released either way.
+export async function withCliLock<T>(
+  opts: AcquireCliLockOptions,
+  fn: (handle: CliLockHandle) => Promise<T>,
+): Promise<T> {
+  const handle = await acquireCliLock(opts);
+  try {
+    return await fn(handle);
+  } finally {
+    await handle.release();
+  }
+}

@@ -1,0 +1,839 @@
+import type { Disposable } from "./uri-callback";
+import type { AuthIdentityValidationResult } from "../auth/auth-validation-types";
+
+/**
+ * Composite runner-host surface consumed by `gui-app` on standalone desktop
+ * and mobile shells.
+ *
+ * `IRunnerHost` intentionally stays platform-agnostic: the shared module must
+ * not import Electron or Capacitor types. Concrete implementations live under
+ * `clients/desktop/` (Electron preload bridge - `contextBridge` +
+ * `ipcRenderer.invoke`) and `clients/mobile/`
+ * (`Capacitor.Plugins.RunnerHost.get()`).
+ *
+ * Methods that may cross a process boundary are promise-returning so the
+ * Electron preload can implement them via `ipcRenderer.invoke` without
+ * needing a synchronous shim. Subscriptions return a synchronous
+ * `Disposable` because the underlying `ipcRenderer.on` registration is
+ * synchronous in the renderer.
+ *
+ * Capability semantics:
+ * - `tray`, `notifications`, and `workspaceFolders` are always present.
+ *   Shells without a native capability install a no-op implementation whose
+ *   event emitters never fire or whose picker returns an empty selection.
+ *   Callers never branch on `null`.
+ * - `onLocalHostChange(handler)` is the only way to observe the bundled
+ *   local host. The handler is invoked synchronously on subscribe with
+ *   the current snapshot (or `null` when no host is running), and again
+ *   on every subsequent transition. There is no separate `getLocalHost()`.
+ * - `hostPicker` lets `gui-app` request shell-owned picker UX
+ *   (e.g. a menu-bar popover on desktop, a sheet on mobile) without the
+ *   shell leaking implementation details.
+ * - `workspaceFolders` lets `gui-app` ask the shell for native folder-picker
+ *   UX. Shells without native folder access return an empty selection.
+ *
+ * The concrete `IRunnerHost` is constructed by each shell at bootstrap and
+ * passed explicitly into `<TraycerApp />`. Shared code does not resolve or
+ * register it through module-level globals.
+ */
+export interface IRunnerHost {
+  /**
+   * Browser-safe sign-in URL the shell wants `gui-app` to open when the
+   * user initiates auth. Shells embed their own callback scheme (custom
+   * protocol on desktop, universal link on mobile), so the URL is
+   * shell-owned and read-only here.
+   */
+  readonly signInUrl: string;
+
+  /**
+   * Browser-safe base URL for the AuthnV3 service. Parity with `signInUrl`:
+   * shell-owned, browser-safe, read-only. Used both for sign-in URL
+   * composition and by host-side token validation against
+   * `${authnBaseUrl}/api/v3/user`.
+   */
+  readonly authnBaseUrl: string;
+
+  /**
+   * Validates a Traycer bearer token against the shell-owned AuthnV3 base URL
+   * and projects the minimum profile shape the GUI needs for signed-in state.
+   * If the user lookup fails but the bundled refresh token is still accepted,
+   * implementations return a valid result with `refreshedToken`.
+   *
+   * Desktop shells perform this in Electron main so renderer-origin CORS does
+   * not decide auth success. Browser-only test/dev shells may satisfy the same
+   * contract with a direct HTTP fetch.
+   */
+  validateAuthToken(
+    token: string,
+    refreshToken: string,
+  ): Promise<AuthTokenValidationResult>;
+
+  /**
+   * Validates a Traycer bearer token and returns the full AuthnV3 identity
+   * shape required to mint a client `RequestContext`. Desktop shells perform
+   * this in Electron main so renderer CSP/CORS cannot turn a valid OAuth
+   * callback into a false invalid-token result. Browser-only test/dev shells
+   * may call the shared HTTP helper directly.
+   */
+  validateAuthTokenIdentity(
+    token: string,
+    refreshToken: string,
+  ): Promise<AuthIdentityValidationResult>;
+
+  /**
+   * Exchanges a one-time PKCE `code` (from the sign-in callback) + the
+   * `codeVerifier` the renderer generated at sign-in start for the real token
+   * pair. Like `validateAuthToken`, desktop shells perform this in Electron
+   * main so renderer-origin CORS does not block the authn call; browser-only
+   * shells may call the shared `exchangeCodeForTokens` helper directly.
+   * Returns `null` when the exchange fails (bad/expired/used code, PKCE
+   * mismatch, or a transport error).
+   */
+  exchangeAuthCode(
+    code: string,
+    codeVerifier: string,
+  ): Promise<StoredAuthTokens | null>;
+
+  openExternalLink(url: string): Promise<void>;
+
+  /**
+   * Given a set of bare URL-scheme names (e.g. `"vscode"`, `"cursor"`), returns
+   * the subset that has a registered handler on THIS machine - the same OS
+   * scheme-handler registry the shell consults when launching `scheme://…`
+   * (LaunchServices on macOS, the registry on Windows, xdg on Linux). The query
+   * is by scheme only: it never matches an application name or bundle path, so a
+   * renamed or relocated install is still detected as long as it still registers
+   * its scheme. Used to hide "Open in <editor>" options that would fail to
+   * launch. Shells with no native scheme registry (mobile, web, tests) resolve
+   * an empty list; callers treat that as "offer nothing native".
+   */
+  getRegisteredUrlSchemes(
+    schemes: readonly string[],
+  ): Promise<readonly string[]>;
+
+  /**
+   * Ensures OS microphone access before voice capture. On macOS this triggers
+   * the native permission prompt when the status is undetermined, and returns
+   * the existing decision otherwise (macOS never re-prompts a denied app - the
+   * caller then routes to `openMicrophoneSettings`). Shells without a native
+   * gate resolve `"granted"` and let `getUserMedia` drive the prompt.
+   */
+  requestMicrophoneAccess(): Promise<MicrophoneAccessStatus>;
+
+  /**
+   * Opens the OS Privacy → Microphone settings pane so the user can re-grant
+   * mic access (used by the voice-input "denied" affordance). Desktop opens the
+   * native pane; shells without a settings deep link (mobile/web/tests)
+   * implement this as a resolved no-op.
+   */
+  openMicrophoneSettings(): Promise<void>;
+
+  /**
+   * Called by the GUI auth controller immediately before
+   * `openExternalLink(...)`.
+   * Implementations close the previous attempt window (so any callback URL
+   * still pending from the previous attempt is treated as stale) and start a
+   * fresh attempt window. After this signal, every subsequent `appUrlOpen`
+   * (or equivalent shell-delivered callback event) is unambiguously part of
+   * the new attempt. Shells whose callback delivery does not require URL
+   * dedupe MAY implement this as a no-op.
+   */
+  beginAuthAttempt(): void;
+
+  /**
+   * Subscribes to auth-callback results delivered by the shell. The handler
+   * receives a discriminated union so `gui-app` can treat success and
+   * error uniformly without parsing URIs.
+   */
+  onAuthCallback(handler: (result: AuthCallbackResult) => void): Disposable;
+
+  readonly secureStorage: ISecureStorage;
+  readonly notifications: INotificationHost;
+  readonly tray: ITrayState;
+  readonly hostPicker: IHostPicker;
+  readonly workspaceFolders: IWorkspaceFoldersHost;
+  readonly fileDrops: IFileDropHost;
+
+  /**
+   * Typed token-storage capability shared across shells. Always present -
+   * same convention as `tray` and `notifications`. Callers never branch on
+   * `null`. Desktop backs this with the OS keychain via the Electron
+   * preload bridge; mobile backs it with the native secure store; in-memory
+   * implementations (dev runner, tests) keep a single round-trippable entry.
+   */
+  readonly tokenStore: ITokenStore;
+
+  /**
+   * Declares whether this shell actually exposes a local-host stream.
+   *
+   * `true` on shells that bundle and spawn a local host (desktop). `false`
+   * on shells that have no local-host concept at all (mobile, web). The
+   * LocalHostGate keys off this so the signed-in host-wait UX only drives
+   * on shells that actually have a local host to wait for; shells that
+   * set this to `false` pass through to shell-specific UX
+   * (e.g. `<MobileHostGate />`) without seeing the desktop "Retry" card.
+   *
+   * Shells that set this to `false` MUST still honour the
+   * `onLocalHostChange(...)` contract - the handler is invoked synchronously
+   * on subscribe with `null` - so downstream consumers that do observe the
+   * stream are not exposed to a branch on capability.
+   */
+  readonly hasLocalHost: boolean;
+
+  /**
+   * Subscribes to local-host snapshot changes. The handler fires
+   * synchronously on subscribe with the current snapshot (or `null`), then
+   * again whenever the snapshot transitions. Mobile shells emit a single
+   * `null` snapshot on subscribe and never transition.
+   */
+  onLocalHostChange(
+    handler: (snapshot: LocalHostSnapshot | null) => void,
+  ): Disposable;
+
+  /**
+   * Subscribes to OS wake events (device resume / screen unlock). The handler
+   * fires shortly after the machine wakes from sleep - the signal `gui-app`
+   * uses to force-reconnect its host streams so an open epic recovers from
+   * offline within seconds instead of waiting out the stream heartbeat.
+   *
+   * Desktop bridges Electron `powerMonitor` `resume`/`unlock-screen` through
+   * the preload IPC bridge. Shells with no OS wake signal (mobile, web, tests)
+   * install a no-op whose handler never fires; consumers still pair this with
+   * the cross-platform `window` `online` event, so wake recovery degrades
+   * gracefully where no native signal exists.
+   */
+  onSystemResumed(handler: () => void): Disposable;
+
+  /**
+   * Asks the shell to re-spawn its detached local host. Desktop delegates
+   * to `HostLifecycle.respawn()` via the preload IPC bridge; mobile shells
+   * (and any shell without a local host) implement this as a resolved
+   * no-op. `gui-app` drives this from the host-Retry UX so the renderer
+   * never touches the lifecycle process directly.
+   */
+  requestHostRespawn(): Promise<void>;
+
+  /**
+   * OS-service control surface used by the Service Health settings pane.
+   * Present on shells that manage the host as a system service
+   * (LaunchAgent / systemd-user / Scheduled Task on desktop) and `null`
+   * everywhere else. Callers branch once on `null` to gate the UI.
+   */
+  readonly service: IServiceHost | null;
+
+  /**
+   * Surface to the local `traycer` CLI subprocess. Used by the renderer
+   * for two host-independent concerns:
+   *   1. Reading bootstrap status (pid metadata + recent bootstrap.log
+   *      markers) when the host is unreachable, so the failure card
+   *      can show what was attempted and why.
+   *   2. Editing bootstrap config (shell path/args + env overrides) the
+   *      host's launchd wrapper consumes on next start.
+   *
+   * Present on shells where the CLI ships (desktop) and `null` everywhere
+   * else (mobile, web, in-browser dev). Each call corresponds to a single
+   * `traycer` subcommand invocation; failures bubble as rejected promises
+   * with the CLI's stderr in the message.
+   */
+  readonly traycerCli: ITraycerCli | null;
+
+  /**
+   * Cross-window migration-run channel. Used by the migration controller to
+   * announce running state transitions so every other Electron window mounts
+   * the blocking modal in lockstep. Present on shells that support multiple
+   * windows (desktop) and `null` everywhere else (mobile, web).
+   */
+  readonly migration: IMigrationHost | null;
+
+  /**
+   * Host-management surface for the local Traycer host. Backed by NDJSON
+   * subcommand invocations against the `traycer` CLI subprocess on desktop;
+   * `null` on shells that don't ship the CLI (mobile, web). Settings → Host
+   * and the Doctor failure card consume this surface; long-running operations
+   * (install / update / register-service) call `onProgress` for every NDJSON
+   * `progress` event while the terminal `result.data` resolves the promise.
+   */
+  readonly hostManagement: IHostManagement | null;
+
+  /**
+   * Tray-side host command channel forwarded from the shell tray to the
+   * renderer. Present on shells that surface a native tray (desktop) and
+   * `null` everywhere else. The renderer keeps a subscription mounted so
+   * `openSettingsHost` / `restartHost` / `openLogs` / `installUpdate`
+   * tray clicks route through the same host-management surface as Settings.
+   */
+  readonly hostTray: IHostTray | null;
+}
+
+/** Outcome of `IRunnerHost.requestMicrophoneAccess()`. */
+export type MicrophoneAccessStatus = "granted" | "denied";
+
+export interface IFileDropHost {
+  resolveDroppedFilePaths(files: readonly File[]): Promise<readonly string[]>;
+  /**
+   * Copy dropped source paths into a stable, app-managed temp file and return
+   * the copied paths. Used for drops that expose only a `file://` URL with no
+   * `File` object (e.g. the macOS screenshot thumbnail), whose source file is
+   * ephemeral - the OS may reclaim it before the terminal program reads the
+   * pasted path. Copying at drop time, while the source still exists, yields a
+   * durable path. Implementations that cannot copy (or whose source is gone)
+   * return the original path so the caller is never worse off.
+   */
+  copyDroppedFilePaths(paths: readonly string[]): Promise<readonly string[]>;
+}
+
+export interface MigrationRunningSnapshot {
+  readonly running: boolean;
+  readonly originWindowId: string | null;
+}
+
+export interface IMigrationHost {
+  announceRunning(snapshot: MigrationRunningSnapshot): Promise<void>;
+  getSnapshot(): Promise<MigrationRunningSnapshot>;
+  onChange(handler: (snapshot: MigrationRunningSnapshot) => void): Disposable;
+}
+
+/**
+ * Renderer-facing view of `traycer host status` output. Mirrors the JSON
+ * the CLI prints on stdout. Field semantics:
+ *   - `running`: `true` iff `~/.traycer/host.pid.json` exists and parsed.
+ *     A stale PID file (process gone, file not yet cleaned up) still reads
+ *     as `running: true` here - the renderer pairs this with its own
+ *     `LocalHostSnapshot` stream to reconcile.
+ *   - `pidMetadata`: same shape the host writes; mirrored locally so
+ *     `gui-app` does not import from `traycer-host` directly.
+ *   - `bootstrapMarkers`: most-recent N entries from `~/.traycer/bootstrap.log`,
+ *     newest last. Lines that aren't structured markers (raw host stdout
+ *     captured into the same file) are filtered out by the CLI.
+ *   - `bootstrapLogPath`: absolute path the user can `tail` to debug.
+ */
+export interface TraycerHostStatusSnapshot {
+  readonly running: boolean;
+  readonly pidMetadata: TraycerPidMetadata | null;
+  readonly bootstrapMarkers: readonly BootstrapMarkerEntry[];
+  readonly bootstrapLogPath: string;
+  /**
+   * Last ~80 lines of `~/.traycer/bootstrap.log` verbatim - includes both
+   * structured markers and raw shell stdout/stderr captured into the same
+   * file. The loading card renders this live so users see what their shell
+   * is doing during a slow init (sourcing zshrc, fzf prompts, asdf shim
+   * resolution, …).
+   */
+  readonly bootstrapLogTail: string;
+}
+
+export interface TraycerPidMetadata {
+  readonly pid: number;
+  readonly hostId: string;
+  readonly version: string;
+  readonly websocketUrl: string;
+  readonly startedAt: string;
+}
+
+export type BootstrapPhase =
+  | "starting"
+  | "exited"
+  | "crashed"
+  | "killed"
+  | "failed-to-spawn";
+
+export interface BootstrapMarkerEntry {
+  readonly timestamp: string;
+  readonly phase: BootstrapPhase;
+  readonly fields: Readonly<Partial<Record<string, string>>>;
+}
+
+/**
+ * Effective shell config consumed by both host bootstrap and terminal
+ * sessions. `synthesised: true` means no row exists in SQLite and the
+ * defaults were filled in by the CLI - the settings UI surfaces this as
+ * "(default - not stored)".
+ */
+export interface TraycerShellConfig {
+  readonly path: string;
+  readonly args: readonly string[];
+  readonly synthesised: boolean;
+}
+
+/**
+ * A shell binary detected on the machine, offered as a quick-pick in the
+ * Settings → Shell combobox. `path` is absolute (except an OS default that may
+ * be a bare command name, e.g. Windows `powershell.exe`); `isDefault` marks
+ * the OS-default shell.
+ */
+export interface TraycerDetectedShell {
+  readonly name: string;
+  readonly path: string;
+  readonly isDefault: boolean;
+}
+
+// Host-process env overrides (Settings → Shell), applied to the local host
+// at its next start. Per-harness env overrides live per-provider in the
+// host's provider-overrides (Settings → Providers), set over the
+// `providers.*` RPC - not through this CLI bridge.
+export interface TraycerEnvOverride {
+  readonly key: string;
+  readonly value: string | null;
+}
+
+export interface TraycerShellConfigSetInput {
+  /** New shell path; null preserves the stored value (or default). */
+  readonly path: string | null;
+  /**
+   * Ordered shell flags. `null` preserves the stored value (or falls back to
+   * the synthesised default); `[]` writes an explicit empty list - passed
+   * straight through as a native `string[]` rather than JSON-encoded text.
+   */
+  readonly args: readonly string[] | null;
+}
+
+export interface ITraycerCli {
+  hostStatus(): Promise<TraycerHostStatusSnapshot>;
+  shellConfigGet(): Promise<TraycerShellConfig>;
+  shellConfigSet(input: TraycerShellConfigSetInput): Promise<void>;
+  shellConfigReset(): Promise<void>;
+  shellListDetected(): Promise<readonly TraycerDetectedShell[]>;
+  envOverrideList(): Promise<readonly TraycerEnvOverride[]>;
+  envOverrideSet(input: {
+    readonly key: string;
+    readonly value: string | null;
+  }): Promise<void>;
+  envOverrideDelete(input: { readonly key: string }): Promise<void>;
+  /**
+   * Seeds the CLI's stored credentials from a captured bearer + refresh token so
+   * the CLI keeps using them for host comms (and can self-refresh on a 401).
+   * The host pipes a JSON `{ token, refreshToken }` payload to the CLI over
+   * stdin (never argv) to keep the secrets out of the process list. Resolves
+   * once the credentials file has been written; rejects if the token was
+   * rejected by the authn service.
+   */
+  cliLogin(token: string, refreshToken: string): Promise<void>;
+  /**
+   * Deletes the machine-local CLI credentials so the host's owner-binding
+   * gate falls back to deny-by-default. Mirrors `cliLogin`: invoked at sign-out
+   * to deprovision the host on this machine.
+   */
+  cliLogout(): Promise<void>;
+}
+
+/**
+ * Snapshot of the OS-managed host service, mirrored from the shell's
+ * `ServiceController.status()` call. Field semantics:
+ *   - `state`: `running` when the service is registered AND its PID
+ *     metadata describes a live process; `stopped` when registered but the
+ *     PID is missing or stale; `not-installed` when the manifest is absent.
+ *   - `version`: value the running host wrote into PID metadata.
+ *   - `listenUrl`: WS URL the renderer should connect to.
+ *   - `pid`: OS process id, useful for log tail correlation.
+ */
+export interface ServiceStatusSnapshot {
+  readonly state: "running" | "stopped" | "not-installed";
+  readonly version: string | null;
+  readonly listenUrl: string | null;
+  readonly pid: number | null;
+}
+
+export interface IServiceHost {
+  status(): Promise<ServiceStatusSnapshot>;
+  install(): Promise<void>;
+  uninstall(purge: boolean): Promise<void>;
+  start(): Promise<void>;
+  stop(): Promise<void>;
+  restart(): Promise<void>;
+  upgrade(): Promise<void>;
+  /**
+   * Linux-only. Calls `loginctl enable-linger $USER` so the systemd-user
+   * instance starts before any interactive login. Throws on non-Linux.
+   */
+  enableLinger(): Promise<void>;
+  /**
+   * Reads the last `maxLines` lines of the host's log file. Returns
+   * `null` when the log file is missing or unreadable.
+   */
+  getLogTail(maxLines: number): Promise<string | null>;
+}
+
+/**
+ * Discriminated result delivered by `onAuthCallback`. Success carries the
+ * one-time PKCE `code` from the redirect; the shell exchanges it (with the
+ * `code_verifier` it kept in-memory from sign-in start) for the token pair via
+ * `exchangeCodeForTokens`. Tokens no longer travel in the callback URL. Failure
+ * carries a shell-provided error string so `gui-app` can render a stable
+ * message.
+ */
+export type AuthCallbackResult =
+  | { readonly code: string }
+  | { readonly error: string };
+
+export interface AuthValidationProfile {
+  readonly userId: string;
+  readonly userName: string;
+  readonly email: string;
+}
+
+export type AuthTokenValidResult =
+  | {
+      readonly kind: "valid";
+      readonly profile: AuthValidationProfile;
+    }
+  | {
+      readonly kind: "valid";
+      readonly profile: AuthValidationProfile;
+      // A refresh rotates BOTH the bearer (`refreshedToken`) and the refresh
+      // token (`refreshedRefreshToken`); callers must persist both.
+      readonly refreshedToken: string;
+      readonly refreshedRefreshToken: string;
+    };
+
+export type AuthTokenValidationResult =
+  | AuthTokenValidResult
+  | { readonly kind: "rejected" }
+  | { readonly kind: "network-error" };
+
+export interface ISecureStorage {
+  get(key: string): Promise<string | null>;
+  set(key: string, value: string): Promise<void>;
+  delete(key: string): Promise<void>;
+}
+
+/**
+ * The auth credential persisted per shell: the JWS bearer (`token`) plus the
+ * separately-delivered `refreshToken`. Post raw-JWS cutover these are two
+ * distinct strings (no AES "combined token"); both must be stored so refresh
+ * (`POST /api/v3/auth/refresh`, which requires `refreshToken` in the body) works.
+ */
+export interface StoredAuthTokens {
+  readonly token: string;
+  readonly refreshToken: string;
+}
+
+/**
+ * Typed credential store owned by the shell. Narrower than `ISecureStorage` on
+ * purpose: there is a single logical entry per shell, so callers never pick a
+ * key. Desktop and mobile implementations back this with their native keychain;
+ * in-memory implementations keep a single slot that round-trips through
+ * `set` / `get` / `delete`.
+ */
+export interface ITokenStore {
+  get(): Promise<StoredAuthTokens | null>;
+  set(tokens: StoredAuthTokens): Promise<void>;
+  delete(): Promise<void>;
+}
+
+export interface INotificationHost {
+  show(title: string, body: string, payload: unknown): Promise<void>;
+  onClick(handler: (payload: unknown) => void): Disposable;
+}
+
+export interface ITrayState {
+  setEpics(epics: readonly TrayEpic[]): Promise<void>;
+  setIndicator(state: TrayIndicatorState): Promise<void>;
+  /**
+   * Subscribes to tray epic-click events. Shells without a tray install
+   * a no-op implementation whose handler never fires.
+   */
+  onEpicSelected(handler: (epicId: string) => void): Disposable;
+}
+
+export type TrayIndicatorState = "idle" | "active" | "attention";
+
+/**
+ * A recent epic projected into the native tray menu. Sourced from the same
+ * history store that backs the in-app epic list, so the tray mirrors the most
+ * recent epics. `subtitle` carries the relative recency label ("2 hours ago")
+ * rendered as the menu item's secondary line.
+ */
+export interface TrayEpic {
+  readonly epicId: string;
+  readonly title: string;
+  readonly subtitle: string;
+}
+
+/**
+ * Shell-owned host-picker UX controller. `gui-app` asks the shell to open
+ * or close the picker and observes the resulting open/closed transitions;
+ * the shell owns layout and dismissal affordances.
+ */
+export interface IHostPicker {
+  readonly isOpen: boolean;
+  requestOpen(): void;
+  requestClose(): void;
+  onChange(handler: (isOpen: boolean) => void): Disposable;
+}
+
+export interface IWorkspaceFoldersHost {
+  pickFolders(): Promise<readonly string[]>;
+}
+
+/**
+ * Metadata the desktop runner publishes once the bundled host is running.
+ *
+ * `websocketUrl` is the browser-consumable localhost URL that binds to
+ * `127.0.0.1` only. After the T4 WS-only cutover the host no longer
+ * exposes an HTTP endpoint - `WsRpcClient` dials `websocketUrl` directly
+ * for every request.
+ */
+export interface LocalHostSnapshot {
+  readonly hostId: string;
+  readonly websocketUrl: string;
+  readonly version: string;
+  readonly pid: number;
+  readonly systemHostName: string;
+  readonly displayName: string;
+}
+
+/**
+ * Host-management types crossing the shell↔renderer boundary.
+ *
+ * Mirrors the NDJSON `result.data` payloads emitted by the `traycer host …`
+ * subcommands. Renderer-facing copy of `clients/desktop/src/
+ * ipc-contracts/host-management-types.ts` so `gui-app` can import the
+ * shapes from the platform contract instead of reaching across into the
+ * desktop workspace.
+ */
+export interface HostProgressEvent {
+  readonly operationId: string;
+  readonly stage: string;
+  readonly percent: number | null;
+  readonly bytes: number | null;
+  readonly totalBytes: number | null;
+  readonly message: string | null;
+}
+
+export interface HostInstallSourceTag {
+  readonly kind: "registry" | "local-file";
+  readonly value: string;
+}
+
+export interface HostInstallResult {
+  readonly version: string;
+  readonly installedAt: string;
+  readonly executablePath: string;
+  readonly source: HostInstallSourceTag;
+  readonly archiveSha256: string;
+  readonly signatureKeyId: string;
+  readonly sizeBytes: number;
+  readonly previousVersion: string | null;
+  readonly serviceLifecycle: {
+    readonly priorServiceState: "running" | "stopped" | "not-installed";
+    readonly stoppedBeforeSwap: boolean;
+    readonly postSwapAction: "install" | "restart" | "start" | "none";
+    readonly postSwapError: string | null;
+  };
+}
+
+// Result of the post-auth `ensureHost` provisioning call. `already-ready`
+// means the persistent host was already reachable (fast no-op);
+// `provisioned` means the CLI installed/registered/started it and it became
+// reachable; `host-busy` means the running host had work in progress, so
+// the CLI did not restart it and the desktop surfaced it for the renderer's
+// compat probe (continue if compatible, else prompt Retry/Force restart).
+export interface HostEnsureResult {
+  readonly action: "already-ready" | "provisioned" | "host-busy";
+  readonly running: boolean;
+  readonly version: string | null;
+}
+
+export interface HostInstalledRecord {
+  readonly version: string;
+  readonly installedAt: string;
+  readonly executablePath: string;
+  readonly source: HostInstallSourceTag;
+  readonly archiveSha256: string;
+  readonly signatureKeyId: string;
+  readonly sizeBytes: number;
+  readonly signatureVerifiedAt: string | null;
+  readonly platform: "darwin" | "win32" | "linux";
+  readonly arch: "arm64" | "x64";
+}
+
+export interface HostAvailableVersionAsset {
+  readonly available: boolean;
+  readonly unavailableReason: string | null;
+  readonly url: string;
+  readonly sizeBytes: number;
+  readonly sha256: string;
+  readonly signatureUrl: string;
+  readonly publicKeyId: string;
+}
+
+export interface HostAvailableVersionEntry {
+  readonly version: string;
+  readonly releasedAt: string;
+  readonly releaseNotesUrl: string;
+  readonly yanked: boolean;
+  readonly deprecationReason: string | null;
+  readonly platformAsset: HostAvailableVersionAsset | null;
+}
+
+export interface HostAvailableSnapshot {
+  readonly generatedAt: string;
+  readonly latest: string;
+  readonly platformKey: string;
+  readonly manifestUrl: string;
+  readonly versions: readonly HostAvailableVersionEntry[];
+}
+
+export interface HostAvailableVersionsInput {
+  readonly includePreReleases: boolean;
+}
+
+export type HostDoctorSeverity = "info" | "warning" | "error" | "fatal";
+
+export interface HostDoctorIssue {
+  readonly code: string;
+  readonly severity: HostDoctorSeverity;
+  readonly title: string;
+  readonly message: string;
+  readonly fixAction: string | null;
+  readonly terminalCommand: string | null;
+  readonly details: Record<string, unknown> | null;
+}
+
+export interface HostDoctorReport {
+  readonly issues: readonly HostDoctorIssue[];
+  readonly ranAt: string;
+}
+
+export interface HostRegistryUpdateState {
+  readonly checkedAt: string | null;
+  readonly latestVersion: string | null;
+  readonly installedVersion: string | null;
+  readonly updateAvailable: boolean;
+  readonly reachable: boolean;
+  readonly errorMessage: string | null;
+}
+
+export interface HostUninstallResult {
+  readonly removedInstallDir: boolean;
+  readonly deregisteredService: boolean;
+}
+
+export interface HostLogsTailResult {
+  readonly path: string | null;
+  readonly tail: string;
+}
+
+export interface HostNameSettings {
+  readonly systemName: string;
+  readonly customName: string | null;
+  readonly effectiveName: string;
+}
+
+export interface FreePortAndRestartInput {
+  readonly port: number;
+  readonly pid: number | null;
+  readonly processName: string | null;
+}
+
+export type HostTrayCommand =
+  | { readonly kind: "openSettingsHost" }
+  | { readonly kind: "restartHost" }
+  | { readonly kind: "openLogs" }
+  | { readonly kind: "installUpdate"; readonly version: string };
+
+/**
+ * Snapshot of the CLI install manifest exposed to the renderer. Used by the
+ * Settings → Host and Doctor panels to surface the staged-but-not-applied
+ * `pendingUpgrade` state recorded by `traycer cli upgrade` when the live
+ * binary was locked at upgrade time, plus the Desktop-driven launch-time
+ * reconciliation hint for package-manager-owned installs that are older than
+ * the bundled CLI. `null` when no manifest or reconciliation hint exists yet.
+ */
+export interface CliInstallManifestSnapshot {
+  readonly version: string;
+  readonly installedAt: string;
+  readonly binaryPath: string;
+  readonly source:
+    | "desktop"
+    | "homebrew"
+    | "npm"
+    | "winget"
+    | "scoop"
+    | "apt"
+    | "rpm"
+    | "manual";
+  readonly pendingUpgrade: {
+    readonly version: string;
+    readonly stagedBinaryPath: string;
+    readonly stagedAt: string;
+    readonly reason: "binary-locked" | "awaiting-service-restart";
+  } | null;
+  /**
+   * Set by Desktop's launch-time CLI reconciliation when an installed
+   * package-manager CLI is older than the bundled CLI: we never overwrite a
+   * package-manager-owned binary; instead we surface the source-specific
+   * upgrade command for Settings/Doctor to render. Cleared once the user
+   * upgrades (the next reconcile observes the new version and drops the
+   * hint). `null` when no hint applies.
+   */
+  readonly packageManagerUpgrade: {
+    readonly source: "homebrew" | "npm" | "winget" | "scoop" | "apt" | "rpm";
+    readonly installedVersion: string;
+    readonly bundledVersion: string;
+    readonly upgradeCommand: string;
+    readonly recordedAt: string;
+  } | null;
+}
+
+/**
+ * Renderer-facing host management surface. Each method either resolves
+ * with the CLI's final NDJSON `result.data` payload (query commands), or -
+ * for long-running operations - accepts an `onProgress` callback that fires
+ * for every NDJSON `progress` event the CLI emits along the way.
+ */
+export interface IHostManagement {
+  readonly installHost: (input: {
+    readonly version: string | null;
+    readonly onProgress: ((event: HostProgressEvent) => void) | null;
+  }) => Promise<HostInstallResult>;
+  readonly updateHost: (input: {
+    readonly onProgress: ((event: HostProgressEvent) => void) | null;
+  }) => Promise<HostInstallResult>;
+  readonly uninstallHost: (input: {
+    readonly all: boolean;
+  }) => Promise<HostUninstallResult>;
+  readonly restartHost: () => Promise<void>;
+  readonly getHostLogs: (input: {
+    readonly tailLines: number;
+  }) => Promise<HostLogsTailResult>;
+  readonly runDoctor: () => Promise<HostDoctorReport>;
+  readonly availableVersions: (
+    input: HostAvailableVersionsInput,
+  ) => Promise<HostAvailableSnapshot>;
+  readonly installedRecord: () => Promise<HostInstalledRecord | null>;
+  readonly registerService: (input: {
+    readonly onProgress: ((event: HostProgressEvent) => void) | null;
+  }) => Promise<void>;
+  // Post-auth provisioning: idempotently ensure the host is installed,
+  // registered, and running. The desktop delegates the whole lifecycle to
+  // the CLI (`traycer host ensure`) and streams progress; a fast no-op
+  // when the persistent host is already reachable.
+  readonly ensureHost: (input: {
+    readonly onProgress: ((event: HostProgressEvent) => void) | null;
+    // `true` = the desktop "Force restart" (skip the busy check and restart a
+    // running host unconditionally). Normal/Retry ensures pass `false`.
+    readonly force: boolean;
+  }) => Promise<HostEnsureResult>;
+  readonly deregisterService: () => Promise<void>;
+  readonly registryCheck: (input: {
+    readonly force: boolean;
+  }) => Promise<HostRegistryUpdateState>;
+  readonly freePortAndRestart: (
+    input: FreePortAndRestartInput,
+  ) => Promise<FreePortAndRestartInput>;
+  readonly cliManifest: () => Promise<CliInstallManifestSnapshot | null>;
+  readonly getHostName: () => Promise<HostNameSettings>;
+  readonly setHostName: (input: {
+    readonly customName: string | null;
+  }) => Promise<HostNameSettings>;
+}
+
+/**
+ * Tray-side host command channel. Shells that surface a native tray
+ * forward `HostTrayCommand` payloads through `onCommand`; the renderer
+ * routes each one through `IHostManagement` or via navigation.
+ */
+export interface IHostTray {
+  onCommand(handler: (command: HostTrayCommand) => void): Disposable;
+}

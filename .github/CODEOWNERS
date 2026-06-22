@@ -1,0 +1,11 @@
+# Code owners — review routing. Replace @traycerai/maintainers with the real team(s).
+# Docs: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+*                                 @traycerai/maintainers
+
+/protocol/                        @traycerai/maintainers
+/clients/traycer-cli/     @traycerai/maintainers
+/clients/shared/          @traycerai/maintainers
+/clients/gui-app/         @traycerai/maintainers
+/clients/desktop/         @traycerai/maintainers
+/.github/                         @traycerai/maintainers

@@ -1,0 +1,38 @@
+{
+  "name": "traycer-clients-gui-app",
+  "namedInputs": {
+    "default": ["{projectRoot}/**/*"]
+  },
+  "targets": {
+    "test": {
+      "inputs": ["{projectRoot}/**/*", "sharedGlobals"]
+    },
+    "build": {
+      "inputs": ["{projectRoot}/**/*", "sharedGlobals"]
+    },
+    "compile": {
+      "inputs": ["{projectRoot}/**/*", "sharedGlobals"]
+    },
+    "lint": {
+      "inputs": [
+        "{projectRoot}/**/*.ts",
+        "{projectRoot}/**/*.tsx",
+        "{projectRoot}/**/*.js",
+        "{projectRoot}/**/*.jsx",
+        "{projectRoot}/.eslintrc*",
+        "{projectRoot}/eslint.config.*",
+        "sharedGlobals"
+      ]
+    },
+    "format": {
+      "inputs": [
+        "{projectRoot}/**/*.ts",
+        "{projectRoot}/**/*.tsx",
+        "{projectRoot}/**/*.js",
+        "{projectRoot}/**/*.jsx",
+        "{projectRoot}/**/*.json",
+        "sharedGlobals"
+      ]
+    }
+  }
+}

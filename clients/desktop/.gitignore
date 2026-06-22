@@ -1,0 +1,12 @@
+dist/
+release/
+node_modules/
+.DS_Store
+*.log
+# Bundled CLI SEA staging - release workflows write the signed/staged
+# binary into a per-arch directory such as
+# `resources/cli/darwin-arm64/`. These directories contain a large
+# signed binary plus a `version.json` and must not be committed. We
+# match arch directories specifically so the explanatory placeholders
+# in `resources/cli/` itself (`.gitkeep`, `README.md`) stay tracked.
+resources/cli/*/

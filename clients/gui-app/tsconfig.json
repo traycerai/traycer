@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "ignoreDeprecations": "6.0",
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"],
+      "@traycer-clients/shared/*": ["../shared/*"],
+      "@traycer/protocol/utils/*": ["../../protocol/utils/*"],
+      "@traycer/protocol/*": ["../../protocol/src/*"]
+    }
+  },
+  "files": [],
+  "references": [
+    { "path": "./tsconfig.app.json" },
+    { "path": "./tsconfig.node.json" }
+  ]
+}
