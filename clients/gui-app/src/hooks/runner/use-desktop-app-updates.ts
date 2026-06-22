@@ -1,0 +1,143 @@
+import { use, useCallback, useSyncExternalStore } from "react";
+import { resolveDesktopAppUpdatesBridge } from "@/lib/windows/desktop-capabilities";
+import type {
+  DesktopAppUpdateSnapshot,
+  DesktopAppUpdatesBridge,
+} from "@/lib/windows/types";
+import { RunnerHostContext } from "@/providers/runner-host-context";
+
+const DESKTOP_APP_UPDATE_IDLE_SNAPSHOT: DesktopAppUpdateSnapshot = {
+  sequence: 0,
+  status: "idle",
+  currentVersion: "",
+  latestVersion: null,
+  downloadProgress: null,
+  errorMessage: null,
+  lastCheckedAt: null,
+  lastCheckIntent: null,
+};
+
+export interface DesktopAppUpdatesState {
+  readonly bridge: DesktopAppUpdatesBridge | null;
+  readonly snapshot: DesktopAppUpdateSnapshot;
+}
+
+type AppUpdateStoreListener = () => void;
+
+const stores = new WeakMap<DesktopAppUpdatesBridge, DesktopAppUpdateStore>();
+
+export function useDesktopAppUpdates(): DesktopAppUpdatesState {
+  const runnerHost = use(RunnerHostContext);
+  const bridge =
+    runnerHost === null ? null : resolveDesktopAppUpdatesBridge(runnerHost);
+  const store = bridge === null ? null : getDesktopAppUpdateStore(bridge);
+  const subscribe = useCallback(
+    (listener: AppUpdateStoreListener) => {
+      if (store === null) return () => undefined;
+      return store.subscribe(listener);
+    },
+    [store],
+  );
+  const getSnapshot = useCallback(
+    () =>
+      store === null ? DESKTOP_APP_UPDATE_IDLE_SNAPSHOT : store.getSnapshot(),
+    [store],
+  );
+  const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+
+  return { bridge, snapshot };
+}
+
+function getDesktopAppUpdateStore(
+  bridge: DesktopAppUpdatesBridge,
+): DesktopAppUpdateStore {
+  const existing = stores.get(bridge);
+  if (existing !== undefined) {
+    return existing;
+  }
+  const store = new DesktopAppUpdateStore(bridge);
+  stores.set(bridge, store);
+  return store;
+}
+
+class DesktopAppUpdateStore {
+  private snapshot = DESKTOP_APP_UPDATE_IDLE_SNAPSHOT;
+  private readonly listeners = new Set<AppUpdateStoreListener>();
+  private subscription: { dispose(): void } | null = null;
+  private snapshotLoadInFlight = false;
+
+  constructor(private readonly bridge: DesktopAppUpdatesBridge) {}
+
+  getSnapshot(): DesktopAppUpdateSnapshot {
+    return this.snapshot;
+  }
+
+  subscribe(listener: AppUpdateStoreListener): () => void {
+    this.listeners.add(listener);
+    this.activate();
+    return () => {
+      this.listeners.delete(listener);
+      if (this.listeners.size === 0) {
+        this.deactivate();
+      }
+    };
+  }
+
+  private activate(): void {
+    if (this.subscription === null) {
+      this.subscription = this.bridge.onChange((next) => {
+        this.accept(next);
+      });
+    }
+    if (this.snapshotLoadInFlight) {
+      return;
+    }
+    this.snapshotLoadInFlight = true;
+    void this.bridge
+      .getSnapshot()
+      .then((next) => {
+        this.accept(next);
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        this.snapshotLoadInFlight = false;
+      });
+  }
+
+  private deactivate(): void {
+    this.subscription?.dispose();
+    this.subscription = null;
+  }
+
+  private accept(next: DesktopAppUpdateSnapshot): void {
+    if (next.sequence < this.snapshot.sequence) {
+      return;
+    }
+    if (
+      next.sequence === this.snapshot.sequence &&
+      sameSnapshot(next, this.snapshot)
+    ) {
+      return;
+    }
+    this.snapshot = next;
+    for (const listener of this.listeners) {
+      listener();
+    }
+  }
+}
+
+function sameSnapshot(
+  left: DesktopAppUpdateSnapshot,
+  right: DesktopAppUpdateSnapshot,
+): boolean {
+  return (
+    left.sequence === right.sequence &&
+    left.status === right.status &&
+    left.currentVersion === right.currentVersion &&
+    left.latestVersion === right.latestVersion &&
+    left.downloadProgress === right.downloadProgress &&
+    left.errorMessage === right.errorMessage &&
+    left.lastCheckedAt === right.lastCheckedAt &&
+    left.lastCheckIntent === right.lastCheckIntent
+  );
+}

@@ -1,0 +1,49 @@
+{
+  "name": "@traycer-clients/traycer-cli",
+  "version": "0.1.0",
+  "description": "Traycer CLI - host supervisor, auth, and config surface",
+  "type": "module",
+  "private": true,
+  "bin": {
+    "traycer": "./src/index.ts"
+  },
+  "engines": {
+    "node": ">=20.18.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/traycerai/traycer.git",
+    "directory": "clients/traycer-cli"
+  },
+  "license": "Apache-2.0",
+  "scripts": {
+    "traycer": "bun run src/index.ts",
+    "compile": "tsc --noEmit",
+    "lint": "eslint . --cache --fix --max-warnings 0",
+    "test": "vitest run --config vitest.config.ts",
+    "build": "node scripts/build-cli-npm.cjs",
+    "prepack": "bun run build",
+    "build:sea": "node scripts/build-cli-sea.cjs",
+    "smoke:sea": "node scripts/smoke-cli-sea.cjs",
+    "smoke:ndjson": "node scripts/smoke-cli-ndjson.cjs"
+  },
+  "dependencies": {
+    "@sentry/node": "catalog:",
+    "commander": "catalog:",
+    "node-stream-zip": "catalog:",
+    "tar": "^7.5.16",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@sentry/esbuild-plugin": "catalog:",
+    "@traycer/protocol": "workspace:*",
+    "@traycer-clients/shared": "workspace:*",
+    "@types/node": "catalog:",
+    "@typescript-eslint/eslint-plugin": "catalog:",
+    "@typescript-eslint/parser": "catalog:",
+    "esbuild": "catalog:",
+    "eslint": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

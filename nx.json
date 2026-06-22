@@ -1,0 +1,62 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nrwl/nx/master/packages/nx/schemas/nx-schema.json",
+  "targetDefaults": {
+    "build": {
+      "dependsOn": ["^build"],
+      "cache": true,
+      "inputs": ["default", "sharedGlobals", { "env": "SENTRY_AUTH_TOKEN" }]
+    },
+    "compile": {
+      "dependsOn": ["^compile"],
+      "cache": true,
+      "inputs": ["default", "sharedGlobals"]
+    },
+    "lint": {
+      "cache": true,
+      "inputs": [
+        "{projectRoot}/**/*.ts",
+        "{projectRoot}/**/*.tsx",
+        "{projectRoot}/**/*.js",
+        "{projectRoot}/**/*.jsx",
+        "{projectRoot}/.eslintrc*",
+        "{projectRoot}/eslint.config.*"
+      ]
+    },
+    "test": {
+      "cache": true,
+      "inputs": [
+        "{projectRoot}/**/*.ts",
+        "{projectRoot}/**/*.tsx",
+        "{projectRoot}/**/*.js",
+        "{projectRoot}/**/*.jsx",
+        "{projectRoot}/vitest.config.*",
+        "{projectRoot}/jest.config.*"
+      ]
+    },
+    "format": {
+      "cache": true,
+      "inputs": [
+        "{projectRoot}/**/*.ts",
+        "{projectRoot}/**/*.tsx",
+        "{projectRoot}/**/*.js",
+        "{projectRoot}/**/*.jsx",
+        "{projectRoot}/**/*.json",
+        "{projectRoot}/.prettierrc",
+        "{projectRoot}/.prettierrc.*",
+        "{projectRoot}/.prettierignore"
+      ]
+    }
+  },
+  "defaultBase": "main",
+  "parallel": 8,
+  "namedInputs": {
+    "default": ["{projectRoot}/**/*"],
+    "production": [
+      "default",
+      "!{projectRoot}/**/*.spec.ts",
+      "!{projectRoot}/**/*.test.ts"
+    ],
+    "sharedGlobals": []
+  },
+  "analytics": false
+}

@@ -1,0 +1,17 @@
+# Gitleaks configuration — Traycer open-source repo.
+#
+# Extends the upstream default ruleset and suppresses known-safe false
+# positives. Every entry here is a PUBLIC test fixture, never a real
+# credential. Keep this list tight and document why each item is safe.
+
+title = "Traycer gitleaks config"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Virtuoso message-list testing license key — a public dummy key (its payload decodes to 'TEST;ex9999999999999'), used only to satisfy @virtuoso.dev/message-list in gui-app unit tests."
+regexTarget = "secret"
+regexes = [
+  '''eff2c8c42294f62b09cebd99d82c8c93b25URVNUO2V4OTk5OTk5OTk5OTk5OQ==''',
+]

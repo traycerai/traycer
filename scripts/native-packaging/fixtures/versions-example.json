@@ -1,0 +1,127 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-05-15T12:00:00Z",
+  "latest": "1.5.0",
+  "versions": [
+    {
+      "version": "1.5.0",
+      "releasedAt": "2026-05-15T12:00:00Z",
+      "releaseNotesUrl": "https://github.com/traycerai/traycer/releases/tag/host-v1.5.0",
+      "yanked": false,
+      "deprecationReason": null,
+      "requiredCliVersion": null,
+      "platforms": {
+        "darwin-arm64": {
+          "available": true,
+          "unavailableReason": null,
+          "url": "https://releases.traycer.ai/host/1.5.0/host-runtime-darwin-arm64.tar.gz",
+          "sizeBytes": 38000000,
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "signatureUrl": "https://releases.traycer.ai/host/1.5.0/host-runtime-darwin-arm64.tar.gz.minisig",
+          "signatureAlgorithm": "minisign",
+          "publicKeyId": "0123456789abcdef"
+        },
+        "darwin-x64": {
+          "available": true,
+          "unavailableReason": null,
+          "url": "https://releases.traycer.ai/host/1.5.0/host-runtime-darwin-x64.tar.gz",
+          "sizeBytes": 38500000,
+          "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "signatureUrl": "https://releases.traycer.ai/host/1.5.0/host-runtime-darwin-x64.tar.gz.minisig",
+          "signatureAlgorithm": "minisign",
+          "publicKeyId": "0123456789abcdef"
+        },
+        "linux-x64": {
+          "available": true,
+          "unavailableReason": null,
+          "url": "https://releases.traycer.ai/host/1.5.0/host-runtime-linux-x64.tar.gz",
+          "sizeBytes": 36500000,
+          "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "signatureUrl": "https://releases.traycer.ai/host/1.5.0/host-runtime-linux-x64.tar.gz.minisig",
+          "signatureAlgorithm": "minisign",
+          "publicKeyId": "0123456789abcdef"
+        },
+        "linux-arm64": {
+          "available": false,
+          "unavailableReason": "not built for 1.5.0",
+          "url": "",
+          "sizeBytes": 0,
+          "sha256": "",
+          "signatureUrl": "",
+          "signatureAlgorithm": "minisign",
+          "publicKeyId": ""
+        },
+        "win32-x64": {
+          "available": true,
+          "unavailableReason": null,
+          "url": "https://releases.traycer.ai/host/1.5.0/host-runtime-win32-x64.zip",
+          "sizeBytes": 39000000,
+          "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "signatureUrl": "https://releases.traycer.ai/host/1.5.0/host-runtime-win32-x64.zip.minisig",
+          "signatureAlgorithm": "minisign",
+          "publicKeyId": "0123456789abcdef"
+        }
+      }
+    },
+    {
+      "version": "1.4.2",
+      "releasedAt": "2026-04-28T10:00:00Z",
+      "releaseNotesUrl": "https://github.com/traycerai/traycer/releases/tag/host-v1.4.2",
+      "yanked": false,
+      "deprecationReason": null,
+      "requiredCliVersion": null,
+      "platforms": {
+        "darwin-arm64": {
+          "available": true,
+          "unavailableReason": null,
+          "url": "https://releases.traycer.ai/host/1.4.2/host-runtime-darwin-arm64.tar.gz",
+          "sizeBytes": 37800000,
+          "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+          "signatureUrl": "https://releases.traycer.ai/host/1.4.2/host-runtime-darwin-arm64.tar.gz.minisig",
+          "signatureAlgorithm": "minisign",
+          "publicKeyId": "0123456789abcdef"
+        },
+        "linux-x64": {
+          "available": true,
+          "unavailableReason": null,
+          "url": "https://releases.traycer.ai/host/1.4.2/host-runtime-linux-x64.tar.gz",
+          "sizeBytes": 36000000,
+          "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+          "signatureUrl": "https://releases.traycer.ai/host/1.4.2/host-runtime-linux-x64.tar.gz.minisig",
+          "signatureAlgorithm": "minisign",
+          "publicKeyId": "0123456789abcdef"
+        },
+        "win32-x64": {
+          "available": true,
+          "unavailableReason": null,
+          "url": "https://releases.traycer.ai/host/1.4.2/host-runtime-win32-x64.zip",
+          "sizeBytes": 38800000,
+          "sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+          "signatureUrl": "https://releases.traycer.ai/host/1.4.2/host-runtime-win32-x64.zip.minisig",
+          "signatureAlgorithm": "minisign",
+          "publicKeyId": "0123456789abcdef"
+        }
+      }
+    },
+    {
+      "version": "1.4.1",
+      "releasedAt": "2026-04-21T10:00:00Z",
+      "releaseNotesUrl": "https://github.com/traycerai/traycer/releases/tag/host-v1.4.1",
+      "yanked": true,
+      "deprecationReason": "regression in PTY resize handling - install 1.4.2 instead",
+      "requiredCliVersion": null,
+      "platforms": {
+        "darwin-arm64": {
+          "available": false,
+          "unavailableReason": "yanked",
+          "url": "",
+          "sizeBytes": 0,
+          "sha256": "",
+          "signatureUrl": "",
+          "signatureAlgorithm": "minisign",
+          "publicKeyId": ""
+        }
+      }
+    }
+  ]
+}

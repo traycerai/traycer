@@ -1,0 +1,68 @@
+import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
+import type {
+  DesktopAppUpdatesBridge,
+  DesktopMenuBridge,
+  DesktopPowerBridge,
+  DesktopSupportBridge,
+} from "@/lib/windows/types";
+
+export function resolveDesktopMenuBridge(
+  runnerHost: IRunnerHost,
+): DesktopMenuBridge | null {
+  const value: unknown = Reflect.get(runnerHost, "menu");
+  return isDesktopMenuBridge(value) ? value : null;
+}
+
+export function resolveDesktopSupportBridge(
+  runnerHost: IRunnerHost,
+): DesktopSupportBridge | null {
+  const value: unknown = Reflect.get(runnerHost, "support");
+  return isDesktopSupportBridge(value) ? value : null;
+}
+
+export function resolveDesktopAppUpdatesBridge(
+  runnerHost: IRunnerHost,
+): DesktopAppUpdatesBridge | null {
+  const value: unknown = Reflect.get(runnerHost, "appUpdates");
+  return isDesktopAppUpdatesBridge(value) ? value : null;
+}
+
+export function resolveDesktopPowerBridge(
+  runnerHost: IRunnerHost,
+): DesktopPowerBridge | null {
+  const value: unknown = Reflect.get(runnerHost, "power");
+  return isDesktopPowerBridge(value) ? value : null;
+}
+function isDesktopMenuBridge(value: unknown): value is DesktopMenuBridge {
+  return isRecord(value) && typeof value.onCommand === "function";
+}
+
+function isDesktopSupportBridge(value: unknown): value is DesktopSupportBridge {
+  return (
+    isRecord(value) &&
+    typeof value.getSnapshot === "function" &&
+    typeof value.revealLog === "function" &&
+    typeof value.submitReport === "function"
+  );
+}
+
+function isDesktopAppUpdatesBridge(
+  value: unknown,
+): value is DesktopAppUpdatesBridge {
+  return (
+    isRecord(value) &&
+    typeof value.getSnapshot === "function" &&
+    typeof value.checkForUpdates === "function" &&
+    typeof value.downloadUpdate === "function" &&
+    typeof value.installUpdate === "function" &&
+    typeof value.onChange === "function"
+  );
+}
+
+function isDesktopPowerBridge(value: unknown): value is DesktopPowerBridge {
+  return isRecord(value) && typeof value.setSleepBlocked === "function";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}

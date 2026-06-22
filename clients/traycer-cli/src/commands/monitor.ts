@@ -1,0 +1,434 @@
+import { formatAgentMessage } from "@traycer/protocol/agent/a2a-message-format";
+import {
+  hostStreamRpcRegistry,
+  type HostStreamRpcRegistry,
+} from "@traycer/protocol/host/registry";
+import {
+  agentInboxSubscribeServerFrameSchema,
+  type AgentInboxMessage,
+  type AgentInboxNotice,
+} from "@traycer/protocol/host/agent/inbox";
+import { MutableBearerLease } from "../../../shared/auth/bearer-source";
+import {
+  createBearerRevalidator,
+  type RevalidateOutcome,
+} from "../../../shared/auth/bearer-revalidator";
+import { createWhatwgStreamWebSocketFactory } from "../../../shared/host-transport/whatwg-stream-ws-factory";
+import type {
+  IStreamSession,
+  StreamCloseReason,
+  StreamConnectionStatus,
+  StreamFrameEnvelope,
+} from "../../../shared/host-transport/i-stream-session";
+import type { HostTransportEndpoint } from "../../../shared/host-transport/ws-rpc-client";
+import { WsStreamClient } from "../../../shared/host-transport/ws-stream-client";
+import { DEFAULT_DIAL_TIMEOUT_MS } from "../../../shared/host-transport/transport-config";
+import { config } from "../config";
+import {
+  isValidLocalHostWebsocketUrl,
+  readHostPidMetadata,
+} from "../host/pid-metadata";
+import { cliBearerStore, resolveHostAuth } from "../internal/host-auth";
+
+/**
+ * `traycer monitor` — long-running background command spawned inside a Claude
+ * Code TUI session by the Traycer plugin. It subscribes to the host's
+ * `agent.inbox.subscribe` stream for one agent id and prints every inbound
+ * inter-agent message to stdout, where Claude Code's background-command surface
+ * shows it to the agent.
+ *
+ * The transport is the shared `WsStreamClient` (the same client the Desktop
+ * renderer uses for its streams): it owns dial / handshake / ping-pong /
+ * reconnect-with-backoff. This command only layers on the inbox-frame printing
+ * and the refresh-on-`UNAUTHORIZED` recovery.
+ *
+ * stdout carries inbox messages only; all connection/diagnostic noise goes to
+ * stderr so it never pollutes the agent-facing stream.
+ */
+const SUBSCRIBE_METHOD = "agent.inbox.subscribe" as const;
+const OPEN_ACK_TIMEOUT_MS = 10_000;
+const PING_INTERVAL_MS = 25_000;
+const PONG_TIMEOUT_MS = 60_000;
+const INITIAL_BACKOFF_MS = 500;
+const MAX_BACKOFF_MS = 30_000;
+/** Re-read the host pid metadata so reconnects pick up a restarted host's port. */
+const ENDPOINT_POLL_MS = 2_000;
+/**
+ * Once a connection has stayed open this long without a fatal close, treat the
+ * subscription as accepted and reset the auth-refresh spin counter. `open` alone
+ * isn't proof — `WsStreamClient` emits it right after sending the subscribe
+ * frame, before the host accepts it — so a host that rejects at the
+ * subscribe stage must not be allowed to reset the counter every cycle.
+ */
+const HEALTHY_OPEN_MS = 10_000;
+/** Backoff before re-subscribing after a transient (network-error) auth refresh. */
+const AUTH_RETRY_DELAY_MS = 5_000;
+/**
+ * Consecutive bearer refreshes (each rotating to a genuinely new token) without
+ * the subscription ever becoming healthy, before we give up — bounds a
+ * refresh/reject spin when a freshly-refreshed bearer is still rejected
+ * (cloud/host desync).
+ */
+const MAX_CONSECUTIVE_AUTH_REFRESHES = 3;
+
+export type MonitorArgs = {
+  readonly agentId: string | null;
+  readonly epicId: string | null;
+};
+
+export async function runMonitor(args: MonitorArgs): Promise<void> {
+  const agentId = args.agentId ?? process.env.TRAYCER_AGENT_ID ?? null;
+  const epicId = args.epicId ?? process.env.TRAYCER_EPIC_ID ?? null;
+
+  if (agentId === null || agentId.length === 0) {
+    throw new Error(
+      "traycer monitor: agent id required — pass --agent-id or set TRAYCER_AGENT_ID.",
+    );
+  }
+  if (epicId === null || epicId.length === 0) {
+    throw new Error(
+      "traycer monitor: epic id required — pass --epic-id or set TRAYCER_EPIC_ID.",
+    );
+  }
+  const auth = await resolveHostAuth();
+  if (auth === null) {
+    throw new Error(
+      "traycer monitor: not signed in — run `traycer login` to authenticate.",
+    );
+  }
+
+  const lease = new MutableBearerLease(auth.token, auth.userId);
+  const revalidator = createBearerRevalidator({
+    authnBaseUrl: auth.authnBaseUrl,
+    lease,
+    store: cliBearerStore,
+    clearOnReject: false,
+  });
+
+  // The shared client reads `endpoint()` on every (re)connect, so a poller that
+  // refreshes the cached endpoint is the CLI's equivalent of the renderer's
+  // host directory — reconnects survive a host restart on a new port. Polls
+  // are serialized (no out-of-order clobber) and a good endpoint is never
+  // overwritten with `null` (a momentarily-absent pid file keeps the last-known
+  // URL; dials simply retry until a fresh one appears).
+  let endpoint = await tryResolveStreamEndpoint();
+  let pollInFlight = false;
+  const poll = setInterval(() => {
+    if (pollInFlight) {
+      return;
+    }
+    pollInFlight = true;
+    void tryResolveStreamEndpoint()
+      .then((next) => {
+        if (next !== null) {
+          endpoint = next;
+        }
+      })
+      .finally(() => {
+        pollInFlight = false;
+      });
+  }, ENDPOINT_POLL_MS);
+
+  const client = new WsStreamClient<HostStreamRpcRegistry>({
+    registry: hostStreamRpcRegistry,
+    endpoint: () => endpoint,
+    bearer: () => lease,
+    // `auth: null` opts out of the WsStreamClient's built-in stream-auth
+    // recovery: the monitor runs its OWN refresh-on-UNAUTHORIZED loop in
+    // `runInboxSubscription` (revalidate, then re-subscribe on `rotated` /
+    // back off and re-subscribe on `network-error`), so wiring the client
+    // handler too would double up. Non-UNAUTHORIZED fatals stay terminal there.
+    auth: null,
+    webSocketFactory: createWhatwgStreamWebSocketFactory(),
+    dialTimeoutMs: DEFAULT_DIAL_TIMEOUT_MS,
+    openAckTimeoutMs: OPEN_ACK_TIMEOUT_MS,
+    pingIntervalMs: PING_INTERVAL_MS,
+    pongTimeoutMs: PONG_TIMEOUT_MS,
+    initialBackoffMs: INITIAL_BACKOFF_MS,
+    maxBackoffMs: MAX_BACKOFF_MS,
+  });
+
+  diag(`inbox monitor starting — agent=${agentId} epic=${epicId}`);
+  try {
+    await runInboxSubscription(client, revalidator, { agentId, epicId });
+  } finally {
+    clearInterval(poll);
+  }
+}
+
+type InboxTarget = { readonly agentId: string; readonly epicId: string };
+
+type InboxRevalidator = {
+  revalidateCurrentContext(): Promise<RevalidateOutcome>;
+};
+
+/**
+ * Drives the inbox subscription until a terminal failure. Resolves never on a
+ * healthy stream (the command runs forever); rejects on a non-recoverable close
+ * so `traycer monitor` exits non-zero.
+ *
+ * Recovery on a host `UNAUTHORIZED` fatal switches on the refresh OUTCOME:
+ *   - `rotated`       → re-subscribe immediately (bounded by the spin guard);
+ *   - `network-error` → transient; keep the bearer and re-subscribe after a
+ *                       delay (don't kill a long-running monitor on a flaky link);
+ *   - `rejected`      → terminal (the host re-spawns monitor after re-auth).
+ * Any non-`UNAUTHORIZED` fatal (e.g. `INCOMPATIBLE`) is terminal.
+ */
+function runInboxSubscription(
+  client: WsStreamClient<HostStreamRpcRegistry>,
+  revalidator: InboxRevalidator,
+  target: InboxTarget,
+): Promise<never> {
+  return new Promise<never>((_resolve, reject) => {
+    let session: IStreamSession | null = null;
+    let authRefreshCount = 0;
+    let healthTimer: NodeJS.Timeout | null = null;
+    let retryTimer: NodeJS.Timeout | null = null;
+    let settled = false;
+
+    const clearHealthTimer = (): void => {
+      if (healthTimer !== null) {
+        clearTimeout(healthTimer);
+        healthTimer = null;
+      }
+    };
+    const clearRetryTimer = (): void => {
+      if (retryTimer !== null) {
+        clearTimeout(retryTimer);
+        retryTimer = null;
+      }
+    };
+
+    const fail = (error: Error): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearHealthTimer();
+      clearRetryTimer();
+      session?.close();
+      reject(error);
+    };
+
+    // The subscription is demonstrably accepted — reset the auth-spin guard.
+    const markHealthy = (): void => {
+      authRefreshCount = 0;
+    };
+
+    const subscribe = (): void => {
+      clearRetryTimer();
+      session?.close();
+      const next = client.subscribe(SUBSCRIBE_METHOD, target);
+      session = next;
+      next.onServerFrame((envelope) => {
+        markHealthy();
+        handleServerFrame(envelope);
+      });
+      next.onStatusChange((status, reason) => {
+        void onStatusChange(status, reason);
+      });
+    };
+
+    const onStatusChange = async (
+      status: StreamConnectionStatus,
+      reason: StreamCloseReason | null,
+    ): Promise<void> => {
+      if (settled) {
+        return;
+      }
+      diag(`stream ${status}`);
+      clearHealthTimer();
+      if (status === "open") {
+        // Sustained openness (past the subscribe-accept window) is health.
+        healthTimer = setTimeout(markHealthy, HEALTHY_OPEN_MS);
+        return;
+      }
+      if (
+        status !== "closed" ||
+        reason === null ||
+        reason.kind !== "fatalError"
+      ) {
+        return;
+      }
+      if (reason.details.code !== "UNAUTHORIZED") {
+        fail(
+          new Error(
+            `traycer monitor: host closed the stream: ${reason.details.reason}`,
+          ),
+        );
+        return;
+      }
+      // The revalidator never throws (it maps failures to an outcome), so this
+      // await can't reject the swallowed handler promise into a hang.
+      const outcome = await revalidator.revalidateCurrentContext();
+      if (settled) {
+        return;
+      }
+      if (outcome === "rotated") {
+        authRefreshCount += 1;
+        if (authRefreshCount > MAX_CONSECUTIVE_AUTH_REFRESHES) {
+          // The bearer genuinely rotated on every attempt yet the host
+          // still rejected the freshly-minted token. The `/stream` fatal
+          // frame only carries `UNAUTHORIZED` / `INCOMPATIBLE` (see
+          // `FatalErrorDetails` in ws-protocol), so it can't tell us
+          // whether this is an auth failure or an authz one. A new token
+          // being rejected points at authz, not a stale token — surface
+          // that the agent/epic may be invalid or inaccessible instead of
+          // blaming the bearer.
+          fail(
+            new Error(
+              `traycer monitor: session rejected after ${authRefreshCount} refreshes — the agent/epic may be invalid or inaccessible (check --agent-id/--epic-id).`,
+            ),
+          );
+          return;
+        }
+        diag("bearer refreshed after auth rejection — re-subscribing");
+        subscribe();
+        return;
+      }
+      if (outcome === "network-error") {
+        diag(`auth refresh unavailable — retrying in ${AUTH_RETRY_DELAY_MS}ms`);
+        retryTimer = setTimeout(subscribe, AUTH_RETRY_DELAY_MS);
+        return;
+      }
+      fail(new Error("traycer monitor: session expired — re-authenticate."));
+    };
+
+    subscribe();
+  });
+}
+
+function handleServerFrame(envelope: StreamFrameEnvelope): void {
+  const parsed = agentInboxSubscribeServerFrameSchema.safeParse(envelope);
+  if (!parsed.success) {
+    diag(`dropping unrecognized frame kind=${String(envelope.kind)}`);
+    return;
+  }
+  if (parsed.data.kind === "message") {
+    printInboxMessage(parsed.data.item);
+    return;
+  }
+  if (parsed.data.kind === "notice") {
+    printInboxNotice(parsed.data.notice);
+  }
+}
+
+async function tryResolveStreamEndpoint(): Promise<HostTransportEndpoint | null> {
+  const metadata = await readHostPidMetadata(config.environment);
+  if (metadata === null) {
+    return null;
+  }
+  if (!isValidLocalHostWebsocketUrl(metadata.websocketUrl)) {
+    return null;
+  }
+  // `WsStreamClient` maps the `/rpc` URL to `/stream` itself.
+  return { hostId: metadata.hostId, websocketUrl: metadata.websocketUrl };
+}
+
+function printInboxMessage(item: AgentInboxMessage): void {
+  const output = formatAgentMessage({
+    receiverChannel: "cli",
+    sender: {
+      agentId: item.fromAgentId,
+      title: item.senderTitle,
+      harnessId: item.senderHarnessId,
+    },
+    reply: item.reply,
+    body: item.prompt,
+  });
+  process.stdout.write(`${output}\n`);
+}
+
+/**
+ * Reason-specific lead line for an inactivity notice. The wording tells
+ * the sender how much to trust the signal - `quiet` is advisory (the
+ * receiver may still be working), the others are definitive for this run.
+ */
+function inactivityHeadline(
+  notice: AgentInboxNotice,
+  receiverLabel: string,
+): string {
+  const detail = notice.detail?.trim();
+  switch (notice.reason) {
+    case "exited":
+      return `${receiverLabel} exited without replying`;
+    case "quiet":
+      return `${receiverLabel} has been quiet for a while without replying — it may still be working`;
+    case "turn-ended":
+      return `${receiverLabel} finished its turn without replying`;
+    case "user-stopped":
+      return `${receiverLabel} was stopped by the user before it could reply`;
+    case "errored":
+      return detail !== undefined && detail.length > 0
+        ? `${receiverLabel} ran into an error before replying: ${detail}`
+        : `${receiverLabel} ran into an error before replying`;
+    case "awaiting-input":
+      return detail !== undefined && detail.length > 0
+        ? `${receiverLabel} is blocked waiting on a human — it ${detail} — and will not reply until someone responds`
+        : `${receiverLabel} is blocked waiting on a human and will not reply until someone responds`;
+    case "receiver-cancelled":
+      return `${receiverLabel} was stopped by the user — your message could not be delivered and this request is now closed`;
+  }
+}
+
+function printInboxNotice(notice: AgentInboxNotice): void {
+  const receiverLabel =
+    notice.receiverTitle !== null
+      ? `${notice.receiverTitle} (agent ${notice.receiverAgentId})`
+      : `agent ${notice.receiverAgentId}`;
+  const harnessSuffix =
+    notice.receiverHarnessId !== null ? ` [${notice.receiverHarnessId}]` : "";
+  if (notice.reason === "receiver-cancelled") {
+    printReceiverCancelledNotice(notice, receiverLabel, harnessSuffix);
+    return;
+  }
+  const lines = [
+    "",
+    `[traycer inbox] inactivity notice — ${inactivityHeadline(notice, receiverLabel)}${harnessSuffix} (responseId ${notice.responseId})`,
+    `[traycer inbox] check what it is doing: traycer agent transcript --agent-id ${notice.receiverAgentId}`,
+    `[traycer inbox] the request is still open; a follow-up on the same thread can be sent with: traycer agent send --to ${notice.receiverAgentId} --response-id ${notice.responseId} --message "<follow-up>"`,
+    `[traycer inbox] based on your judgment decide how to proceed — read transcript, follow up, launch a new agent, etc.`,
+    "",
+  ];
+  process.stdout.write(`${lines.join("\n")}\n`);
+}
+
+/**
+ * Renders a `receiver-cancelled` notice. Lists every dropped thread when the
+ * sender lost more than one in the same stop; otherwise uses the
+ * single-thread headline. The guidance is identical either way: do not
+ * retry, wait on the user or escalate to the agent you work for.
+ */
+function printReceiverCancelledNotice(
+  notice: AgentInboxNotice,
+  receiverLabel: string,
+  harnessSuffix: string,
+): void {
+  const dropped = notice.droppedReceivers ?? [
+    { receiverAgentId: notice.receiverAgentId, responseId: notice.responseId },
+  ];
+  const plural = dropped.length > 1;
+  const headlineLines = plural
+    ? [
+        `[traycer inbox] inactivity notice — ${dropped.length} messages you sent could not be delivered; the user stopped the agents you were waiting on:`,
+        ...dropped.map(
+          (thread) =>
+            `[traycer inbox]   · agent ${thread.receiverAgentId} (responseId ${thread.responseId})`,
+        ),
+      ]
+    : [
+        `[traycer inbox] inactivity notice — ${inactivityHeadline(notice, receiverLabel)}${harnessSuffix} (responseId ${notice.responseId})`,
+      ];
+  const lines = [
+    "",
+    ...headlineLines,
+    `[traycer inbox] this is informational only — do NOT re-send ${plural ? "them" : "the message"} or launch ${plural ? "new agents" : "a new agent"} to take their place`,
+    `[traycer inbox] if you are working on the user's behalf, wait for their next instruction; if you are working on behalf of another agent, let that agent know`,
+    "",
+  ];
+  process.stdout.write(`${lines.join("\n")}\n`);
+}
+
+function diag(message: string): void {
+  process.stderr.write(`[traycer monitor] ${message}\n`);
+}

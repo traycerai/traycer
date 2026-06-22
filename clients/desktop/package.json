@@ -1,0 +1,219 @@
+{
+  "name": "@traycer-clients/desktop",
+  "productName": "Traycer",
+  "version": "0.0.0",
+  "description": "Traycer standalone desktop shell (Electron) hosting the gui-app renderer; host lifecycle is delegated to the Traycer CLI.",
+  "homepage": "https://traycer.ai",
+  "private": true,
+  "main": "dist/main/index.js",
+  "scripts": {
+    "clean": "rimraf dist",
+    "clean:main": "rimraf dist/main dist/packages dist/protocol dist/clients",
+    "compile": "tsc --noEmit -p tsconfig.json",
+    "build:main": "bun run clean:main && bun scripts/build-main-bundle.cjs",
+    "build:renderer": "vite build --config vite.renderer.config.ts",
+    "build:app": "bun run clean && bun run build:main && bun run build:renderer",
+    "prepack:check-cli": "bun scripts/prepack/check-cli-resource.cjs",
+    "prepack:check-tray": "bun scripts/prepack/check-tray-assets.cjs",
+    "build": "bun run build:app",
+    "package": "bun run build:app && bun run prepack:check-cli && bun run prepack:check-tray && bun x electron-builder --publish never",
+    "package:dir": "bun run build:app && bun run prepack:check-cli && bun run prepack:check-tray && bun x electron-builder --dir --publish never",
+    "dev:renderer": "vite --config vite.renderer.config.ts",
+    "dev:main": "bun run build:main && bun scripts/dev/dev-main.cjs",
+    "dev": "bun x concurrently -k -n renderer,main -c blue,magenta \"bun run dev:renderer\" \"bun x wait-on tcp:5173 && TRAYCER_DESKTOP_DEV=1 TRAYCER_DESKTOP_DEV_URL=http://localhost:5173 bun run dev:main\"",
+    "lint": "eslint . --cache --fix --max-warnings 0",
+    "format": "bun x prettier --write .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@sentry/browser": "catalog:",
+    "@sentry/electron": "catalog:",
+    "electron-log": "catalog:",
+    "electron-updater": "^6.8.9",
+    "encrypt-storage": "catalog:",
+    "react": "catalog:",
+    "react-dom": "catalog:"
+  },
+  "devDependencies": {
+    "@sentry/esbuild-plugin": "catalog:",
+    "@sentry/vite-plugin": "catalog:",
+    "@rolldown/plugin-babel": "catalog:",
+    "@tailwindcss/vite": "catalog:",
+    "@tanstack/router-plugin": "catalog:",
+    "@types/node": "catalog:",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "@typescript-eslint/eslint-plugin": "catalog:",
+    "@typescript-eslint/parser": "catalog:",
+    "@vitejs/plugin-react": "catalog:",
+    "babel-plugin-react-compiler": "catalog:",
+    "electron": "catalog:",
+    "electron-builder": "catalog:",
+    "esbuild": "catalog:",
+    "eslint": "catalog:",
+    "prettier": "catalog:",
+    "rimraf": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vitest": "catalog:"
+  },
+  "build": {
+    "appId": "ai.traycer.desktop",
+    "productName": "Traycer",
+    "artifactName": "traycer-desktop-${arch}.${ext}",
+    "asar": true,
+    "electronFuses": {
+      "runAsNode": false,
+      "enableCookieEncryption": false,
+      "enableEmbeddedAsarIntegrityValidation": true,
+      "onlyLoadAppFromAsar": true,
+      "enableNodeOptionsEnvironmentVariable": false,
+      "enableNodeCliInspectArguments": false
+    },
+    "directories": {
+      "buildResources": "resources/bundle",
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "package.json",
+      "!**/*.map"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/app",
+        "to": "app",
+        "filter": [
+          "**/*.png"
+        ]
+      },
+      {
+        "from": "dist/renderer",
+        "to": "renderer",
+        "filter": [
+          "**/*",
+          "!**/*.map"
+        ]
+      },
+      {
+        "from": "resources/host",
+        "to": "host",
+        "filter": [
+          "README.md",
+          ".gitkeep"
+        ]
+      },
+      {
+        "from": "resources/cli",
+        "to": "cli",
+        "filter": [
+          "**/*",
+          "!README.md"
+        ]
+      },
+      {
+        "from": "resources/tray",
+        "to": "tray",
+        "filter": [
+          "**/*.png"
+        ]
+      }
+    ],
+    "protocols": [
+      {
+        "name": "Traycer",
+        "schemes": [
+          "traycer"
+        ]
+      }
+    ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "traycerai",
+        "repo": "traycer"
+      }
+    ],
+    "mac": {
+      "artifactName": "traycer-desktop-macos-${arch}.${ext}",
+      "category": "public.app-category.developer-tools",
+      "minimumSystemVersion": "12.0",
+      "entitlements": "resources/bundle/entitlements.mac.plist",
+      "entitlementsInherit": "resources/bundle/entitlements.mac.plist",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Traycer uses the microphone for voice dictation in the composer."
+      },
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false
+    },
+    "win": {
+      "artifactName": "traycer-desktop-windows-${arch}.${ext}",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "msi",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "linux": {
+      "artifactName": "traycer-desktop-linux-${arch}.${ext}",
+      "executableName": "traycer-desktop",
+      "maintainer": "Traycer AI <support@traycer.ai>",
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "rpm",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "category": "Development"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  },
+  "author": {
+    "name": "Traycer AI",
+    "email": "support@traycer.ai"
+  },
+  "license": "Apache-2.0"
+}

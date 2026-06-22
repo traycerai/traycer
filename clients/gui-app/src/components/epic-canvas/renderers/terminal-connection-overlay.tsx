@@ -1,0 +1,74 @@
+import type { ReactNode } from "react";
+import { Button } from "@/components/ui/button";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import type { TerminalConnectionOverlayState } from "./terminal-connection-overlay-state";
+
+/**
+ * Overlay surfaced over a terminal/TUI tile whose live stream is no longer
+ * connected. Without it a dropped session reads as a live terminal - the stale
+ * frame stays painted and xterm's local cursor keeps blinking, so the user types
+ * into a dead PTY with no feedback. The overlay covers the grid (so input lands
+ * on it, not the dead terminal) and names the state.
+ *
+ * - `reconnecting` - the transport dropped and is re-dialing; transient, the
+ *   session is expected back on its own.
+ * - `recovering` - the session was found gone and is being respawned-and-resumed
+ *   automatically (see `useTerminalSessionRecovery`).
+ * - `lost` - automatic recovery gave up (the respawn kept failing); offer a
+ *   manual retry.
+ *
+ * Keystrokes are already blocked from the dead PTY at the store
+ * (`writeInput` returns null while `status === "lost"` or the connection is not
+ * open), so the overlay does not steal focus; it covers the grid and announces
+ * the state as a live region.
+ */
+export interface TerminalConnectionOverlayProps {
+  readonly state: TerminalConnectionOverlayState;
+  readonly onReconnect: () => void;
+  readonly testId: string;
+}
+
+export function TerminalConnectionOverlay(
+  props: TerminalConnectionOverlayProps,
+): ReactNode {
+  const isLost = props.state === "lost";
+  return (
+    <div
+      className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-canvas/85 px-6 text-center text-ui-sm text-muted-foreground"
+      data-testid={props.testId}
+      role={isLost ? "alert" : "status"}
+      aria-live={isLost ? "assertive" : "polite"}
+      aria-busy={!isLost}
+    >
+      {isLost ? (
+        <>
+          <p className="max-w-md">
+            This session disconnected and could not be restarted. It may have
+            ended while the app was asleep.
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={props.onReconnect}
+          >
+            Reconnect
+          </Button>
+        </>
+      ) : (
+        <div className="flex items-center gap-2">
+          <AgentSpinningDots
+            className={undefined}
+            testId={undefined}
+            variant={undefined}
+          />
+          <span>
+            {props.state === "recovering"
+              ? "Reconnecting and resuming the session…"
+              : "Reconnecting…"}
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}

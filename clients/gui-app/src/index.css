@@ -1,0 +1,1163 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/figtree";
+@import "@fontsource-variable/geist";
+@import "./editor-core/styles/editor.css";
+@import "./styles/terminal-themes.css";
+
+@custom-variant dark (&:is(.dark *));
+/* Window Controls Overlay: active only when Chromium reports the
+   native title-bar controls are visible (toggled by
+   `syncDocumentWindowControlsOverlayClass`). Mac fullscreen autohide
+   and browser shells both leave this class off. */
+@custom-variant wco (&:is(.wco, .wco *));
+@plugin "tailwindcss-animate";
+@plugin "@tailwindcss/typography";
+
+/* In-progress "thinking" indicator. Plain CSS (no motion runtime) so it
+   animates reliably regardless of the LazyMotion provider: a foreground
+   highlight sweeps across the muted verb text, alongside a 3-dot typing
+   loader. */
+@keyframes working-text-shimmer {
+  from {
+    background-position: 150% center;
+  }
+  to {
+    background-position: -50% center;
+  }
+}
+
+@keyframes working-dot {
+  0%,
+  80%,
+  100% {
+    opacity: 0.3;
+    transform: translateY(0);
+  }
+  40% {
+    opacity: 1;
+    transform: translateY(-1px);
+  }
+}
+
+.working-text-shimmer {
+  background-image: linear-gradient(
+    90deg,
+    var(--color-muted-foreground) 0%,
+    var(--color-muted-foreground) 35%,
+    var(--color-foreground) 50%,
+    var(--color-muted-foreground) 65%,
+    var(--color-muted-foreground) 100%
+  );
+  background-size: 200% auto;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  animation: working-text-shimmer 2.2s linear infinite;
+}
+
+.working-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 2.5px;
+}
+
+.working-dots > span {
+  width: 0.1875rem;
+  height: 0.1875rem;
+  border-radius: 9999px;
+  background-color: currentColor;
+  animation: working-dot 1.4s ease-in-out infinite;
+}
+
+.working-dots > span:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.working-dots > span:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .working-text-shimmer {
+    animation: none;
+    background: none;
+    background-clip: initial;
+    -webkit-background-clip: initial;
+    color: var(--color-muted-foreground);
+  }
+
+  .working-dots > span {
+    animation: none;
+    opacity: 0.6;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  html {
+    min-height: 100%;
+    background: var(--background);
+    @apply font-sans;
+  }
+
+  body {
+    min-height: 100vh;
+    @apply bg-background text-foreground font-sans text-ui antialiased;
+  }
+
+  /*
+   * Canvas subtree remaps base shadcn surface tokens so shared child
+   * components using bg-background/border-border inherit the canvas palette.
+   * Use --app-background inside this scope when a child needs the outer app
+   * surface instead of the remapped canvas surface.
+   */
+  .canvas-token-scope {
+    --background: var(--canvas);
+    --foreground: var(--canvas-foreground);
+    --border: var(--canvas-border);
+  }
+
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6,
+  label,
+  [data-slot="label"] {
+    @apply font-heading;
+  }
+
+  #root {
+    min-height: 100vh;
+  }
+
+  ::selection {
+    background: color-mix(in oklch, var(--primary) 35%, transparent);
+  }
+
+  .pointer-cursors button:not(:disabled):not([aria-disabled="true"]),
+  .pointer-cursors
+    [role="button"]:not([aria-disabled="true"]):not([data-disabled]),
+  .pointer-cursors a {
+    cursor: pointer;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    ::before,
+    ::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      scroll-behavior: auto !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+
+  code,
+  pre,
+  kbd,
+  samp {
+    font-family: var(--font-mono);
+    font-size: var(--code-font-size, 0.8rem);
+  }
+
+  /*
+   * CSS vars consumed by Shiki-rendered fenced code blocks
+   * (`markdown/components/code-block.tsx#FencedCodeBlock`) and the markdown
+   * table wrapper (`markdown/components/table-wrapper.tsx`). Inline code
+   * styling lives in `.md-prose` below - it derives from `currentColor` so
+   * every preset gets correct contrast without per-preset overrides.
+   */
+  :root {
+    --traycer-code-bg: var(--color-muted);
+    --traycer-code-fg: var(--color-foreground);
+    --traycer-code-border: var(--color-border);
+    --traycer-code-header-bg: var(--color-card);
+    --traycer-code-muted-fg: var(--color-muted-foreground);
+    --traycer-code-hover-bg: var(--color-accent);
+    --traycer-code-font: var(--font-mono);
+  }
+
+  /*
+   * Shared `.md-prose` selector. Layered ON TOP of Tailwind Typography's
+   * `prose` class - binds the plugin's `--tw-prose-*` color tokens to our
+   * shadcn theme tokens so every preset (dracula, traycer-green,
+   * catppuccin, etc.) gets correctly themed markdown without per-preset
+   * overrides. Apply with a typography size:
+   * `class="prose prose-base md-prose max-w-none"` for narrative text or
+   * `class="prose prose-sm md-prose max-w-none"` for compact surfaces.
+   *
+   * Consumed by the chat (`TraycerMarkdown` from `@/markdown`) and the
+   * artifact editor (`tc-editor-prose` adds TipTap-specific extras on top).
+   */
+  .md-prose {
+    --tw-prose-body: var(--color-foreground);
+    --tw-prose-headings: var(--color-foreground);
+    --tw-prose-lead: var(--color-muted-foreground);
+    --tw-prose-links: var(--color-primary);
+    --tw-prose-bold: var(--color-foreground);
+    --tw-prose-counters: var(--color-muted-foreground);
+    --tw-prose-bullets: var(--color-muted-foreground);
+    --tw-prose-hr: var(--color-border);
+    --tw-prose-quotes: var(--color-muted-foreground);
+    --tw-prose-quote-borders: var(--color-border);
+    --tw-prose-captions: var(--color-muted-foreground);
+    --tw-prose-code: var(--color-foreground);
+    --tw-prose-pre-code: var(--color-foreground);
+    --tw-prose-pre-bg: var(--color-muted);
+    --tw-prose-th-borders: var(--color-border);
+    --tw-prose-td-borders: var(--color-border);
+
+    --tw-prose-invert-body: var(--color-foreground);
+    --tw-prose-invert-headings: var(--color-foreground);
+    --tw-prose-invert-lead: var(--color-muted-foreground);
+    --tw-prose-invert-links: var(--color-primary);
+    --tw-prose-invert-bold: var(--color-foreground);
+    --tw-prose-invert-counters: var(--color-muted-foreground);
+    --tw-prose-invert-bullets: var(--color-muted-foreground);
+    --tw-prose-invert-hr: var(--color-border);
+    --tw-prose-invert-quotes: var(--color-muted-foreground);
+    --tw-prose-invert-quote-borders: var(--color-border);
+    --tw-prose-invert-captions: var(--color-muted-foreground);
+    --tw-prose-invert-code: var(--color-foreground);
+    --tw-prose-invert-pre-code: var(--color-foreground);
+    --tw-prose-invert-pre-bg: var(--color-muted);
+    --tw-prose-invert-th-borders: var(--color-border);
+    --tw-prose-invert-td-borders: var(--color-border);
+
+    word-break: break-word;
+  }
+
+  /*
+   * Shiki injects its own background, padding, and margin on the `<pre>` it
+   * generates (via inline `style="..."`). Our `FencedCodeBlock` already owns
+   * that chrome - neutralise Shiki's so we don't get double padding +
+   * conflicting backgrounds. Foreground colour stays (token highlights
+   * use `style="color: ..."` on inner spans, not the pre).
+   */
+  .traycer-md-shiki > pre,
+  .traycer-md-shiki pre.shiki {
+    background: transparent !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+  }
+}
+
+/*
+ * Inline `<code>` styling lives OUTSIDE `@layer base` on purpose.
+ *
+ * `@tailwindcss/typography` (loaded via `@plugin` above) registers its prose
+ * styles in the `components` layer, which the cascade ranks ABOVE `base`. Its
+ * `:where(code)::before / ::after { content: "`" }` rule therefore beat an
+ * equal-specificity reset placed in `base`, leaving literal backticks around
+ * every inline code span (and around Shiki output) - the half-styled "pill
+ * with stray backticks" look. Unlayered declarations outrank every `@layer`,
+ * so keeping these rules unlayered guarantees the reset + pill win regardless
+ * of plugin source order.
+ */
+
+/* Strip the backtick quotes Tailwind Typography adds via ::before / ::after. */
+.md-prose :where(code)::before,
+.md-prose :where(code)::after {
+  content: none;
+}
+
+/*
+ * Inline `<code>` (anything not nested inside a `<pre>`). Themed pill styling
+ * derived from `currentColor` so every preset (dracula, traycer-green,
+ * etc.) gets a correct contrast ratio without per-preset tweaks.
+ * `code-block.tsx#InlineCode` defers to this rule rather than shipping its own
+ * inline styles.
+ */
+.md-prose :where(:not(pre) > code) {
+  background: color-mix(in oklch, currentColor 10%, transparent);
+  border: 1px solid color-mix(in oklch, currentColor 16%, transparent);
+  border-radius: 0.25rem;
+  padding: 0.1em 0.3em;
+  font-family: var(--font-mono);
+  font-size: 0.875em;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+/*
+ * Table cells must NOT inherit `.md-prose { word-break: break-word }`.
+ *
+ * `word-break: break-word` is a legacy keyword defined as `word-break: normal`
+ * + `overflow-wrap: anywhere`. The `anywhere` half folds the soft-wrap
+ * opportunities into min-content sizing, collapsing every cell's intrinsic
+ * min-width to ~1 character. Under the default `table-layout: auto`, the column
+ * algorithm then squeezes low-content columns down to a single glyph and wraps
+ * their text vertically (one character per line). `overflow-wrap: break-word`
+ * keeps long-string wrapping but does NOT touch min-content, so columns size to
+ * their content again. Unlayered (like the code rule above) so it outranks both
+ * the base-layer `.md-prose` rule and Tailwind Typography's prose table styles.
+ */
+.md-prose :where(th, td) {
+  word-break: normal;
+  overflow-wrap: break-word;
+}
+
+:root {
+  --traycer-font-ui:
+    "Figtree Variable", "Figtree", ui-sans-serif, system-ui, -apple-system,
+    BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --traycer-font-heading: "Geist Variable", "Geist", var(--traycer-font-ui);
+  --traycer-font-pixel:
+    "Geist Pixel Square", "Geist Mono", var(--traycer-font-heading);
+  --traycer-font-mono:
+    "SFMono-Regular", "SF Mono", "Cascadia Code", "Roboto Mono", ui-monospace,
+    monospace;
+
+  --app-background: var(--background);
+  --background: oklch(0.985 0 0);
+  --foreground: oklch(0.145 0 0);
+  --canvas: oklch(1 0 0);
+  --canvas-foreground: oklch(0.145 0 0);
+  --canvas-border: oklch(0.922 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --success: oklch(0.58 0.13 142);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
+  --chart-1: oklch(0.87 0 0);
+  --chart-2: oklch(0.556 0 0);
+  --chart-3: oklch(0.439 0 0);
+  --chart-4: oklch(0.371 0 0);
+  --chart-5: oklch(0.269 0 0);
+  --radius: 0.375rem;
+}
+
+.dark {
+  --background: oklch(0.205 0 0);
+  --foreground: oklch(0.985 0 0);
+  --canvas: oklch(0.145 0 0);
+  --canvas-foreground: oklch(0.985 0 0);
+  --canvas-border: oklch(1 0 0 / 10%);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.922 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --success: oklch(0.72 0.14 142);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.556 0 0);
+  --chart-1: oklch(0.87 0 0);
+  --chart-2: oklch(0.556 0 0);
+  --chart-3: oklch(0.439 0 0);
+  --chart-4: oklch(0.371 0 0);
+  --chart-5: oklch(0.269 0 0);
+}
+
+/* Accent-only presets: override --primary on top of base light/dark palette. */
+[data-theme="rose"],
+.dark[data-theme="rose"] {
+  --primary: oklch(0.645 0.246 16.439);
+  --primary-foreground: oklch(0.969 0.015 12.422);
+  --ring: oklch(0.645 0.246 16.439);
+}
+
+[data-theme="blue"],
+.dark[data-theme="blue"] {
+  --primary: oklch(0.546 0.245 262.881);
+  --primary-foreground: oklch(0.97 0.014 254.604);
+  --ring: oklch(0.546 0.245 262.881);
+}
+
+[data-theme="violet"],
+.dark[data-theme="violet"] {
+  --primary: oklch(0.606 0.25 292.717);
+  --primary-foreground: oklch(0.969 0.016 293.756);
+  --ring: oklch(0.606 0.25 292.717);
+}
+
+[data-theme="green"],
+.dark[data-theme="green"] {
+  --primary: oklch(0.648 0.15 160.19);
+  --primary-foreground: oklch(0.982 0.018 155.826);
+  --ring: oklch(0.648 0.15 160.19);
+}
+
+[data-theme="orange"],
+.dark[data-theme="orange"] {
+  --primary: oklch(0.705 0.213 47.604);
+  --primary-foreground: oklch(0.98 0.016 73.684);
+  --ring: oklch(0.705 0.213 47.604);
+}
+
+[data-theme="pink"],
+.dark[data-theme="pink"] {
+  --primary: oklch(0.656 0.241 354.308);
+  --primary-foreground: oklch(0.971 0.014 343.198);
+  --ring: oklch(0.656 0.241 354.308);
+}
+
+/* Full-palette presets: override the whole surface in both light and dark. */
+[data-theme="amoled"] {
+  --background: #fafafa;
+  --foreground: #171717;
+  --canvas: #ffffff;
+  --canvas-foreground: #171717;
+  --canvas-border: #ebebeb;
+  --card: #ffffff;
+  --card-foreground: #171717;
+  --popover: #ffffff;
+  --popover-foreground: #171717;
+  --primary: #171717;
+  --primary-foreground: #ffffff;
+  --secondary: #f2f2f2;
+  --secondary-foreground: #171717;
+  --muted: #f2f2f2;
+  --muted-foreground: #7d7d7d;
+  --accent: #ebebeb;
+  --accent-foreground: #171717;
+  --border: #e6e6e6;
+  --input: #ebebeb;
+  --ring: #006bff;
+  --success: #28a948;
+}
+.dark[data-theme="amoled"] {
+  --background: #000000;
+  --foreground: #ededed;
+  --canvas: #000000;
+  --canvas-foreground: #ededed;
+  --canvas-border: #292929;
+  --card: #1a1a1a;
+  --card-foreground: #ededed;
+  --popover: #1a1a1a;
+  --popover-foreground: #ededed;
+  --primary: #ededed;
+  --primary-foreground: #000000;
+  --secondary: #1a1a1a;
+  --secondary-foreground: #ededed;
+  --muted: #1a1a1a;
+  --muted-foreground: #a0a0a0;
+  --accent: #1f1f1f;
+  --accent-foreground: #ededed;
+  --border: #292929;
+  --input: #2e2e2e;
+  --ring: #006efe;
+  --success: #00ac3a;
+}
+
+/*
+ * Traycer Green brand preset.
+ * Palette - Primary: Onyx #0F0F0F, White #FFFFFF, Traycer Blue #0059FF, Traycer Light #7FBDCC.
+ * Secondary: Dark Green #1A2421, Dark Grey #666666, Green White #EAEAEA, Traycer Sky #00CDFF, Traycer Green #257174.
+ */
+[data-theme="traycer-green"] {
+  --brand-onyx: #0f0f0f;
+  --brand-white: #ffffff;
+  --brand-blue: #0059ff;
+  --brand-light: #7fbdcc;
+  --brand-sky: #00cdff;
+  --brand-green: #257174;
+  --brand-dark-green: #1a2421;
+  --brand-dark-grey: #666666;
+  --brand-green-white: #eaeaea;
+  --background: #f6f9f8;
+  --foreground: #0f0f0f;
+  --canvas: #ffffff;
+  --canvas-foreground: #0f0f0f;
+  --canvas-border: #eaeaea;
+  --card: #ffffff;
+  --card-foreground: #0f0f0f;
+  --popover: #ffffff;
+  --popover-foreground: #0f0f0f;
+  --primary: #257174;
+  --primary-foreground: #ffffff;
+  --secondary: #eaeaea;
+  --secondary-foreground: #0f0f0f;
+  --muted: #eaeaea;
+  --muted-foreground: #666666;
+  --accent: #eaeaea;
+  --accent-foreground: #0f0f0f;
+  --border: #dce7e4;
+  --input: #eaeaea;
+  --ring: #257174;
+  --success: oklch(0.58 0.13 142);
+  --brand-gradient: linear-gradient(180deg, #1a2421 0%, #257174 100%);
+}
+.dark[data-theme="traycer-green"] {
+  --background: #121715;
+  --foreground: #ffffff;
+  --canvas: #0f0f0f;
+  --canvas-foreground: #ffffff;
+  --canvas-border: #33433d;
+  --card: #1a2421;
+  --card-foreground: #ffffff;
+  --popover: #1a2421;
+  --popover-foreground: #ffffff;
+  --primary: #257174;
+  --primary-foreground: #ffffff;
+  --secondary: #1a2421;
+  --secondary-foreground: #ffffff;
+  --muted: #1a2421;
+  --muted-foreground: #a8a8a8;
+  --accent: #257174;
+  --accent-foreground: #ffffff;
+  --border: #33433d;
+  --input: #33433d;
+  --ring: #257174;
+  --success: oklch(0.72 0.14 142);
+  --brand-gradient: linear-gradient(180deg, #1a2421 0%, #257174 100%);
+}
+
+[data-theme="dracula"] {
+  --background: #efefef;
+  --foreground: #282a36;
+  --canvas: #f8f8f2;
+  --canvas-foreground: #282a36;
+  --canvas-border: #d8d8de;
+  --card: #ffffff;
+  --card-foreground: #282a36;
+  --popover: #ffffff;
+  --popover-foreground: #282a36;
+  --primary: #6272a4;
+  --primary-foreground: #ffffff;
+  --secondary: #eaeaee;
+  --secondary-foreground: #282a36;
+  --muted: #f0f0f4;
+  --muted-foreground: #4f5d86;
+  --accent: #eaeaee;
+  --accent-foreground: #282a36;
+  --border: #d8d8de;
+  --input: #d8d8de;
+  --ring: #6272a4;
+  --success: oklch(0.74 0.15 145);
+}
+.dark[data-theme="dracula"] {
+  --background: #21222c;
+  --foreground: #f8f8f2;
+  --canvas: #282a36;
+  --canvas-foreground: #f8f8f2;
+  --canvas-border: #44475a;
+  --card: #343746;
+  --card-foreground: #f8f8f2;
+  --popover: #343746;
+  --popover-foreground: #f8f8f2;
+  --primary: #bd93f9;
+  --primary-foreground: #282a36;
+  --secondary: #44475a;
+  --secondary-foreground: #f8f8f2;
+  --muted: #343746;
+  --muted-foreground: #a1a8c3;
+  --accent: #44475a;
+  --accent-foreground: #f8f8f2;
+  --border: #44475a;
+  --input: #44475a;
+  --ring: #bd93f9;
+  --success: oklch(0.8 0.17 145);
+}
+
+[data-theme="catppuccin"] {
+  --background: #e6e9ef;
+  --foreground: #4c4f69;
+  --canvas: #eff1f5;
+  --canvas-foreground: #4c4f69;
+  --canvas-border: #bcc0cc;
+  --card: #e6e9ef;
+  --card-foreground: #4c4f69;
+  --popover: #e6e9ef;
+  --popover-foreground: #4c4f69;
+  --primary: #8839ef;
+  --primary-foreground: #ffffff;
+  --secondary: #ccd0da;
+  --secondary-foreground: #4c4f69;
+  --muted: #dce0e8;
+  --muted-foreground: #5c6074;
+  --accent: #ccd0da;
+  --accent-foreground: #4c4f69;
+  --border: #bcc0cc;
+  --input: #bcc0cc;
+  --ring: #8839ef;
+  --success: oklch(0.7 0.13 145);
+}
+.dark[data-theme="catppuccin"] {
+  --background: #181825;
+  --foreground: #cdd6f4;
+  --canvas: #1e1e2e;
+  --canvas-foreground: #cdd6f4;
+  --canvas-border: #45475a;
+  --card: #313244;
+  --card-foreground: #cdd6f4;
+  --popover: #313244;
+  --popover-foreground: #cdd6f4;
+  --primary: #cba6f7;
+  --primary-foreground: #1e1e2e;
+  --secondary: #45475a;
+  --secondary-foreground: #cdd6f4;
+  --muted: #313244;
+  --muted-foreground: #a6adc8;
+  --accent: #45475a;
+  --accent-foreground: #cdd6f4;
+  --border: #45475a;
+  --input: #45475a;
+  --ring: #cba6f7;
+  --success: oklch(0.79 0.15 145);
+}
+
+[data-theme="github"] {
+  --background: #f6f8fa;
+  --foreground: #24292f;
+  --canvas: #ffffff;
+  --canvas-foreground: #24292f;
+  --canvas-border: #d0d7de;
+  --card: #f6f8fa;
+  --card-foreground: #24292f;
+  --popover: #ffffff;
+  --popover-foreground: #24292f;
+  --primary: #0969da;
+  --primary-foreground: #ffffff;
+  --secondary: #eaeef2;
+  --secondary-foreground: #24292f;
+  --muted: #f6f8fa;
+  --muted-foreground: #656d76;
+  --accent: #eaeef2;
+  --accent-foreground: #24292f;
+  --border: #d0d7de;
+  --input: #d0d7de;
+  --ring: #0969da;
+  --success: oklch(0.55 0.14 145);
+}
+.dark[data-theme="github"] {
+  --background: #010409;
+  --foreground: #c9d1d9;
+  --canvas: #0d1117;
+  --canvas-foreground: #c9d1d9;
+  --canvas-border: #30363d;
+  --card: #161b22;
+  --card-foreground: #c9d1d9;
+  --popover: #161b22;
+  --popover-foreground: #c9d1d9;
+  --primary: #58a6ff;
+  --primary-foreground: #0d1117;
+  --secondary: #21262d;
+  --secondary-foreground: #c9d1d9;
+  --muted: #161b22;
+  --muted-foreground: #8b949e;
+  --accent: #21262d;
+  --accent-foreground: #c9d1d9;
+  --border: #30363d;
+  --input: #30363d;
+  --ring: #58a6ff;
+  --success: oklch(0.7 0.15 145);
+}
+
+[data-theme="gruvbox"] {
+  --background: #f2e5bc;
+  --foreground: #3c3836;
+  --canvas: #fbf1c7;
+  --canvas-foreground: #3c3836;
+  --canvas-border: #d5c4a1;
+  --card: #f2e5bc;
+  --card-foreground: #3c3836;
+  --popover: #f2e5bc;
+  --popover-foreground: #3c3836;
+  --primary: #8f5902;
+  --primary-foreground: #fbf1c7;
+  --secondary: #ebdbb2;
+  --secondary-foreground: #3c3836;
+  --muted: #f2e5bc;
+  --muted-foreground: #665c54;
+  --accent: #ebdbb2;
+  --accent-foreground: #3c3836;
+  --border: #d5c4a1;
+  --input: #d5c4a1;
+  --ring: #8f5902;
+  --success: oklch(0.6 0.13 130);
+}
+.dark[data-theme="gruvbox"] {
+  --background: #1d2021;
+  --foreground: #ebdbb2;
+  --canvas: #282828;
+  --canvas-foreground: #ebdbb2;
+  --canvas-border: #504945;
+  --card: #32302f;
+  --card-foreground: #ebdbb2;
+  --popover: #32302f;
+  --popover-foreground: #ebdbb2;
+  --primary: #fabd2f;
+  --primary-foreground: #282828;
+  --secondary: #3c3836;
+  --secondary-foreground: #ebdbb2;
+  --muted: #32302f;
+  --muted-foreground: #a89984;
+  --accent: #3c3836;
+  --accent-foreground: #ebdbb2;
+  --border: #504945;
+  --input: #504945;
+  --ring: #fabd2f;
+  --success: oklch(0.74 0.14 130);
+}
+
+[data-theme="tokyo-night"] {
+  --background: #d0d5e3;
+  --foreground: #233f8e;
+  --canvas: #e1e2e7;
+  --canvas-foreground: #233f8e;
+  --canvas-border: #a8aecb;
+  --card: #d0d5e3;
+  --card-foreground: #233f8e;
+  --popover: #d0d5e3;
+  --popover-foreground: #233f8e;
+  --primary: #256bd4;
+  --primary-foreground: #ffffff;
+  --secondary: #b7c1e3;
+  --secondary-foreground: #233f8e;
+  --muted: #d0d5e3;
+  --muted-foreground: #3f528f;
+  --accent: #b7c1e3;
+  --accent-foreground: #233f8e;
+  --border: #a8aecb;
+  --input: #a8aecb;
+  --ring: #256bd4;
+  --success: oklch(0.71 0.13 152);
+}
+.dark[data-theme="tokyo-night"] {
+  --background: #16161e;
+  --foreground: #c0caf5;
+  --canvas: #1a1b26;
+  --canvas-foreground: #c0caf5;
+  --canvas-border: #3b4261;
+  --card: #24283b;
+  --card-foreground: #c0caf5;
+  --popover: #24283b;
+  --popover-foreground: #c0caf5;
+  --primary: #7aa2f7;
+  --primary-foreground: #1a1b26;
+  --secondary: #2a2e41;
+  --secondary-foreground: #c0caf5;
+  --muted: #24283b;
+  --muted-foreground: #9aa5ce;
+  --accent: #2a2e41;
+  --accent-foreground: #c0caf5;
+  --border: #3b4261;
+  --input: #3b4261;
+  --ring: #7aa2f7;
+  --success: oklch(0.77 0.14 152);
+}
+
+[data-theme="nord"] {
+  --background: #e5e9f0;
+  --foreground: #2e3440;
+  --canvas: #eceff4;
+  --canvas-foreground: #2e3440;
+  --canvas-border: #c0c5cf;
+  --card: #e5e9f0;
+  --card-foreground: #2e3440;
+  --popover: #e5e9f0;
+  --popover-foreground: #2e3440;
+  --primary: #52739b;
+  --primary-foreground: #ffffff;
+  --secondary: #d8dee9;
+  --secondary-foreground: #2e3440;
+  --muted: #e5e9f0;
+  --muted-foreground: #4c566a;
+  --accent: #d8dee9;
+  --accent-foreground: #2e3440;
+  --border: #c0c5cf;
+  --input: #c0c5cf;
+  --ring: #52739b;
+  --success: oklch(0.74 0.1 150);
+}
+.dark[data-theme="nord"] {
+  --background: #242933;
+  --foreground: #eceff4;
+  --canvas: #2e3440;
+  --canvas-foreground: #eceff4;
+  --canvas-border: #4c566a;
+  --card: #3b4252;
+  --card-foreground: #eceff4;
+  --popover: #3b4252;
+  --popover-foreground: #eceff4;
+  --primary: #88c0d0;
+  --primary-foreground: #2e3440;
+  --secondary: #434c5e;
+  --secondary-foreground: #eceff4;
+  --muted: #3b4252;
+  --muted-foreground: #d8dee9;
+  --accent: #434c5e;
+  --accent-foreground: #eceff4;
+  --border: #4c566a;
+  --input: #4c566a;
+  --ring: #88c0d0;
+  --success: oklch(0.8 0.11 150);
+}
+
+[data-theme="ayu"] {
+  --background: #f8f9fa;
+  --foreground: #5c6166;
+  --canvas: #fcfcfc;
+  --canvas-foreground: #5c6166;
+  --canvas-border: #e7eaed;
+  --card: #f8f9fa;
+  --card-foreground: #5c6166;
+  --popover: #f8f9fa;
+  --popover-foreground: #5c6166;
+  --primary: #ff9940;
+  --primary-foreground: #0b0e14;
+  --secondary: #eef0f3;
+  --secondary-foreground: #5c6166;
+  --muted: #f0f1f3;
+  --muted-foreground: #626a73;
+  --accent: #eef0f3;
+  --accent-foreground: #5c6166;
+  --border: #e7eaed;
+  --input: #e7eaed;
+  --ring: #ff9940;
+  --success: oklch(0.72 0.16 140);
+}
+.dark[data-theme="ayu"] {
+  --background: #080b10;
+  --foreground: #bfbdb6;
+  --canvas: #0b0e14;
+  --canvas-foreground: #bfbdb6;
+  --canvas-border: #1c222b;
+  --card: #11151c;
+  --card-foreground: #bfbdb6;
+  --popover: #11151c;
+  --popover-foreground: #bfbdb6;
+  --primary: #e6b450;
+  --primary-foreground: #0b0e14;
+  --secondary: #1c222b;
+  --secondary-foreground: #bfbdb6;
+  --muted: #11151c;
+  --muted-foreground: #828890;
+  --accent: #1c222b;
+  --accent-foreground: #bfbdb6;
+  --border: #1c222b;
+  --input: #1c222b;
+  --ring: #e6b450;
+  --success: oklch(0.78 0.17 140);
+}
+
+[data-theme="everforest"] {
+  --background: #f4f0d9;
+  --foreground: #5c6a72;
+  --canvas: #fdf6e3;
+  --canvas-foreground: #5c6a72;
+  --canvas-border: #e0dcc7;
+  --card: #f4f0d9;
+  --card-foreground: #5c6a72;
+  --popover: #f4f0d9;
+  --popover-foreground: #5c6a72;
+  --primary: #8da101;
+  --primary-foreground: #232a2e;
+  --secondary: #efebd4;
+  --secondary-foreground: #5c6a72;
+  --muted: #f4f0d9;
+  --muted-foreground: #5f6b62;
+  --accent: #efebd4;
+  --accent-foreground: #5c6a72;
+  --border: #e0dcc7;
+  --input: #e0dcc7;
+  --ring: #8da101;
+  --success: oklch(0.68 0.11 135);
+}
+.dark[data-theme="everforest"] {
+  --background: #232a2e;
+  --foreground: #d3c6aa;
+  --canvas: #2d353b;
+  --canvas-foreground: #d3c6aa;
+  --canvas-border: #475258;
+  --card: #343f44;
+  --card-foreground: #d3c6aa;
+  --popover: #343f44;
+  --popover-foreground: #d3c6aa;
+  --primary: #a7c080;
+  --primary-foreground: #2d353b;
+  --secondary: #3d484d;
+  --secondary-foreground: #d3c6aa;
+  --muted: #343f44;
+  --muted-foreground: #a4afa7;
+  --accent: #3d484d;
+  --accent-foreground: #d3c6aa;
+  --border: #475258;
+  --input: #475258;
+  --ring: #a7c080;
+  --success: oklch(0.76 0.12 135);
+}
+
+@theme inline {
+  --font-sans: var(--traycer-font-ui);
+  --font-heading: var(--traycer-font-heading);
+  --font-pixel: var(--traycer-font-pixel);
+  --font-mono: var(--traycer-font-mono);
+  --ease-spring: cubic-bezier(0.32, 0.72, 0, 1);
+
+  --text-micro: 0.625rem;
+  --text-micro--line-height: 0.875rem;
+  --text-micro--letter-spacing: 0;
+  --text-micro--font-weight: 500;
+
+  --text-overline: 0.6875rem;
+  --text-overline--line-height: 0.875rem;
+  --text-overline--letter-spacing: 0;
+  --text-overline--font-weight: 600;
+
+  --text-badge: 0.6875rem;
+  --text-badge--line-height: 1rem;
+  --text-badge--letter-spacing: 0;
+  --text-badge--font-weight: 600;
+
+  --text-ui-xs: 0.75rem;
+  --text-ui-xs--line-height: 1rem;
+  --text-ui-xs--letter-spacing: 0;
+
+  --text-ui-sm: 0.875rem;
+  --text-ui-sm--line-height: 1.25rem;
+  --text-ui-sm--letter-spacing: 0;
+
+  --text-ui: 1rem;
+  --text-ui--line-height: 1.5rem;
+  --text-ui--letter-spacing: 0;
+
+  --text-title-xs: 0.875rem;
+  --text-title-xs--line-height: 1.125rem;
+  --text-title-xs--letter-spacing: 0;
+  --text-title-xs--font-weight: 600;
+
+  --text-title-sm: 1rem;
+  --text-title-sm--line-height: 1.25rem;
+  --text-title-sm--letter-spacing: 0;
+  --text-title-sm--font-weight: 600;
+
+  --text-title-md: 1.25rem;
+  --text-title-md--line-height: 1.625rem;
+  --text-title-md--letter-spacing: 0;
+  --text-title-md--font-weight: 600;
+
+  --text-title-lg: 1.875rem;
+  --text-title-lg--line-height: 2.25rem;
+  --text-title-lg--letter-spacing: 0;
+  --text-title-lg--font-weight: 600;
+
+  --text-display: 2.5rem;
+  --text-display--line-height: 2.75rem;
+  --text-display--letter-spacing: 0;
+  --text-display--font-weight: 500;
+
+  --text-code-xs: calc(var(--code-font-size, 12px) * 0.9167);
+  --text-code-xs--line-height: 1rem;
+  --text-code-xs--letter-spacing: 0;
+
+  --text-code-sm: var(--code-font-size, 12px);
+  --text-code-sm--line-height: 1.375rem;
+  --text-code-sm--letter-spacing: 0;
+
+  --text-code: calc(var(--code-font-size, 12px) * 1.0833);
+  --text-code--line-height: 1.55;
+  --text-code--letter-spacing: 0;
+
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-canvas: var(--canvas);
+  --color-canvas-foreground: var(--canvas-foreground);
+  --color-canvas-border: var(--canvas-border);
+  --color-background: var(--background);
+  --radius-xs: calc(var(--radius) * 0.5);
+  --radius-sm: calc(var(--radius) * 0.6667);
+  --radius-md: var(--radius);
+  --radius-lg: calc(var(--radius) * 1.3333);
+  --radius-xl: calc(var(--radius) * 1.6667);
+  --radius-2xl: calc(var(--radius) * 2);
+  --radius-3xl: calc(var(--radius) * 2.3333);
+  --radius-4xl: calc(var(--radius) * 2.6667);
+}
+
+@utility no-scrollbar {
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@layer base {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(
+        in oklch,
+        var(--muted-foreground) 40%,
+        transparent
+      )
+      transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 4px !important;
+    height: 4px !important;
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: color-mix(in oklch, var(--muted-foreground) 35%, transparent);
+    border-radius: var(--radius-sm);
+    border: 0;
+    min-height: 24px;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background: color-mix(in oklch, var(--muted-foreground) 60%, transparent);
+  }
+  *::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  .chat-scrollbar-native-thin {
+    scrollbar-width: auto;
+    scrollbar-color: auto;
+  }
+
+  .chat-scrollbar-native-thin::-webkit-scrollbar {
+    width: 2px !important;
+    height: 2px !important;
+  }
+
+  /* `@pierre/trees` scroll surface. The global `*::-webkit-scrollbar`
+     rule above is `!important`, so Pierre's own non-important
+     `width: var(--trees-scrollbar-gutter)` loses and the bar renders at
+     the 4px app default. Re-thin it by out-specifying that rule against
+     Pierre's stable data attributes (works regardless of DOM nesting).
+     `scrollbar-measure` is Pierre's hidden width-probe element - match
+     it too so the reserved gutter equals the real bar. */
+  [data-file-tree-virtualized-scroll]::-webkit-scrollbar,
+  [data-file-tree-scrollbar-measure]::-webkit-scrollbar {
+    width: 2px !important;
+    height: 2px !important;
+  }
+  [data-file-tree-virtualized-scroll]::-webkit-scrollbar-thumb {
+    border: 0 !important;
+    background-clip: padding-box !important;
+  }
+}
+
+/*
+ * Composer editor restores Tailwind v4 preflight resets for list/marks/code
+ * inside the chat composer. Preflight zeroes list-style/padding on ol/ul and
+ * strips browser defaults on inline marks; this scope re-applies them only
+ * for the composer's contenteditable root.
+ */
+@layer components {
+  [data-composer-editor] ul {
+    list-style: disc;
+    padding-left: 1.5rem;
+    margin: 0.25rem 0;
+  }
+  [data-composer-editor] ol {
+    list-style: decimal;
+    padding-left: 1.5rem;
+    margin: 0.25rem 0;
+  }
+  [data-composer-editor] li {
+    display: list-item;
+  }
+  [data-composer-editor] li > p {
+    margin: 0;
+  }
+  [data-composer-editor] strong,
+  [data-composer-editor] b {
+    font-weight: 600;
+  }
+  [data-composer-editor] em,
+  [data-composer-editor] i {
+    font-style: italic;
+  }
+  [data-composer-editor] s {
+    text-decoration: line-through;
+  }
+  [data-composer-editor] :where(:not(pre) > code) {
+    background: color-mix(in oklch, currentColor 10%, transparent);
+    border: 1px solid color-mix(in oklch, currentColor 16%, transparent);
+    border-radius: 0.25rem;
+    padding: 0.1em 0.3em;
+    font-family: var(--font-mono);
+    font-size: 0.875em;
+    font-weight: 500;
+    overflow-wrap: anywhere;
+  }
+  [data-composer-editor] pre {
+    font-family: var(--font-mono);
+    font-size: var(--text-code-sm);
+    padding: 0.75rem 1rem;
+    border-radius: var(--radius-lg);
+    background: var(--traycer-code-bg, var(--muted));
+    color: var(--traycer-code-fg, var(--foreground));
+    border: 1px solid var(--traycer-code-border, var(--border));
+    margin: 0.5rem 0;
+    white-space: pre;
+    overflow-x: auto;
+  }
+  [data-composer-editor] pre code {
+    background: transparent;
+    border: 0;
+    padding: 0;
+    font-weight: 400;
+  }
+  [data-composer-editor] a {
+    color: var(--primary);
+    text-decoration: underline;
+  }
+}
+
+/*
+ * Find-in-page highlight paints (`lib/find-engine/find-engine.ts`).
+ * Uses the CSS Custom Highlight API so painting never touches
+ * `window.getSelection()` - contenteditable editors don't see a
+ * selection change and don't grab focus away from the find input.
+ */
+::highlight(traycer-find-match) {
+  background-color: color-mix(in srgb, var(--primary) 35%, transparent);
+  color: inherit;
+}
+::highlight(traycer-find-match-active) {
+  background-color: color-mix(in srgb, var(--primary) 75%, transparent);
+  color: var(--primary-foreground);
+}

@@ -1,0 +1,335 @@
+import type { ChordString } from "@/lib/keybindings/chord";
+
+/**
+ * Stable identifiers for every keyboard-bindable action in the app. Adding
+ * a new action: append to `ACTION_IDS`, define metadata in
+ * `ACTION_META`, and wire the handler in `dispatch.ts` (or register at
+ * runtime via `registerDynamicActionHandler` from a context-aware bridge).
+ *
+ * Action `kind`:
+ *  - `"chord"`: bound to a full chord like `mod+shift+h`. One binding
+ *    triggers one handler.
+ *  - `"digit"`: bound to a modifier-only chord like `mod`. At runtime the
+ *    dispatcher pairs the held modifier with a concurrently-pressed digit
+ *    (0..9) and calls a single handler that receives the digit. Used by
+ *    `epic.switch.byDigit` (multi-digit header tab numbers) and scoped
+ *    single-digit actions such as `tab.switch.byDigit`.
+ */
+export const ACTION_IDS = [
+  "epic.switch.byDigit",
+  "tab.switch.byDigit",
+  "epic.new",
+  "epic.duplicate-tab",
+  "epic.next",
+  "epic.prev",
+  "epic.close",
+  "tab.new",
+  "tab.close",
+  "tab.close-others",
+  "tab.close-right",
+  "tab.close-all",
+  "tab.next",
+  "tab.prev",
+  "group.split.horizontal",
+  "group.split.vertical",
+  "group.split-right",
+  "group.focus.up",
+  "group.focus.down",
+  "group.focus.left",
+  "group.focus.right",
+  "group.focus-editor",
+  "app.sidebar.toggle",
+  "app.history.open",
+  "app.settings.open",
+  "app.settings.section.byDigit",
+  "app.palette.open",
+  "composer.dictation.toggle",
+  "model.provider.byDigit",
+  "model.reasoning.byDigit",
+] as const;
+
+export type ActionId = (typeof ACTION_IDS)[number];
+
+export type ActionCategory = "epics" | "tabs" | "groups" | "app";
+
+export type ActionKind = "chord" | "digit";
+
+export interface ActionMeta {
+  readonly id: ActionId;
+  readonly label: string;
+  readonly description: string;
+  readonly category: ActionCategory;
+  readonly kind: ActionKind;
+  readonly defaultChord: ChordString | null;
+}
+
+export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
+  "epic.switch.byDigit": {
+    id: "epic.switch.byDigit",
+    label: "Switch epic by number",
+    description:
+      "Hold Option/Alt and type a tab number to jump to that Epic-level tab.",
+    category: "epics",
+    kind: "digit",
+    defaultChord: "alt",
+  },
+  "tab.switch.byDigit": {
+    id: "tab.switch.byDigit",
+    label: "Switch tab by number",
+    description:
+      "Hold the primary leader modifier and press 1-9 to jump to that tab in the active Epic group.",
+    category: "tabs",
+    kind: "digit",
+    defaultChord: "mod",
+  },
+  "epic.new": {
+    id: "epic.new",
+    label: "New task",
+    description: "Open the landing page to start a new task.",
+    category: "epics",
+    kind: "chord",
+    defaultChord: "mod+n",
+  },
+  "epic.duplicate-tab": {
+    id: "epic.duplicate-tab",
+    label: "Duplicate tab",
+    description: "Duplicate the active Epic tab and its current tiling layout.",
+    category: "epics",
+    kind: "chord",
+    defaultChord: "mod+shift+k",
+  },
+  "epic.next": {
+    id: "epic.next",
+    label: "Next Epic tab",
+    description: "Activate the next Epic-level tab in the header strip.",
+    category: "epics",
+    kind: "chord",
+    defaultChord: "mod+shift+]",
+  },
+  "epic.prev": {
+    id: "epic.prev",
+    label: "Previous Epic tab",
+    description: "Activate the previous Epic-level tab in the header strip.",
+    category: "epics",
+    kind: "chord",
+    defaultChord: "mod+shift+[",
+  },
+  "epic.close": {
+    id: "epic.close",
+    label: "Close active tab",
+    description:
+      "Close the active strip tab regardless of kind - epic, draft, history, or settings.",
+    category: "epics",
+    kind: "chord",
+    defaultChord: "mod+shift+w",
+  },
+  "tab.new": {
+    id: "tab.new",
+    label: "New tab",
+    description:
+      "Open a new blank tab in the active group; the inline opener is focused so you can pick what to open.",
+    category: "tabs",
+    kind: "chord",
+    defaultChord: "mod+t",
+  },
+  "tab.close": {
+    id: "tab.close",
+    label: "Close tab",
+    description:
+      "Close the active tab. On the last tab in a non-root group, the group collapses and the sibling absorbs.",
+    category: "tabs",
+    kind: "chord",
+    defaultChord: "mod+w",
+  },
+  "tab.close-others": {
+    id: "tab.close-others",
+    label: "Close other tabs",
+    description: "Close every tab in the focused group except the active one.",
+    category: "tabs",
+    kind: "chord",
+    // ⌘⌥W - matches Safari's "Close Other Tabs".
+    defaultChord: "mod+alt+w",
+  },
+  "tab.close-right": {
+    id: "tab.close-right",
+    label: "Close tabs to the right",
+    description:
+      "Close every tab to the right of the active tab in the focused group.",
+    category: "tabs",
+    kind: "chord",
+    // ⌘⇧⌥] - the `]` echoes "Next tab" (⌘⇧]); ⌥ marks the destructive variant.
+    defaultChord: "mod+shift+alt+]",
+  },
+  "tab.close-all": {
+    id: "tab.close-all",
+    label: "Close all tabs in group",
+    description:
+      "Close every tab in the focused group. Non-root groups collapse afterwards.",
+    category: "tabs",
+    kind: "chord",
+    // ⌘⇧⌥W - the "close" W family; all three modifiers signal the widest scope.
+    defaultChord: "mod+shift+alt+w",
+  },
+  "tab.next": {
+    id: "tab.next",
+    label: "Next tab",
+    description: "Activate the next tab in the focused group.",
+    category: "tabs",
+    kind: "chord",
+    defaultChord: "mod+]",
+  },
+  "tab.prev": {
+    id: "tab.prev",
+    label: "Previous tab",
+    description: "Activate the previous tab in the focused group.",
+    category: "tabs",
+    kind: "chord",
+    defaultChord: "mod+[",
+  },
+  "group.split.horizontal": {
+    id: "group.split.horizontal",
+    label: "Split group horizontally",
+    description:
+      "Split the focused group horizontally with an empty placeholder group on the right.",
+    category: "groups",
+    kind: "chord",
+    defaultChord: "mod+d",
+  },
+  "group.split.vertical": {
+    id: "group.split.vertical",
+    label: "Split group vertically",
+    description:
+      "Split the focused group vertically with an empty placeholder group on the bottom.",
+    category: "groups",
+    kind: "chord",
+    defaultChord: "mod+shift+d",
+  },
+  "group.split-right": {
+    id: "group.split-right",
+    label: "Split group to the right",
+    description:
+      "Create an empty new group on the right of the focused group; the new group becomes active.",
+    category: "groups",
+    kind: "chord",
+    defaultChord: "mod+\\",
+  },
+  "group.focus.up": {
+    id: "group.focus.up",
+    label: "Focus group above",
+    description: "Move group focus to the nearest group above.",
+    category: "groups",
+    kind: "chord",
+    defaultChord: "mod+alt+arrowup",
+  },
+  "group.focus.down": {
+    id: "group.focus.down",
+    label: "Focus group below",
+    description: "Move group focus to the nearest group below.",
+    category: "groups",
+    kind: "chord",
+    defaultChord: "mod+alt+arrowdown",
+  },
+  "group.focus.left": {
+    id: "group.focus.left",
+    label: "Focus group left",
+    description: "Move group focus to the nearest group on the left.",
+    category: "groups",
+    kind: "chord",
+    defaultChord: "mod+alt+arrowleft",
+  },
+  "group.focus.right": {
+    id: "group.focus.right",
+    label: "Focus group right",
+    description: "Move group focus to the nearest group on the right.",
+    category: "groups",
+    kind: "chord",
+    defaultChord: "mod+alt+arrowright",
+  },
+  "group.focus-editor": {
+    id: "group.focus-editor",
+    label: "Focus active tab editor",
+    description:
+      "Place cursor in the editor of the active tab in the focused group.",
+    category: "groups",
+    kind: "chord",
+    defaultChord: "mod+l",
+  },
+  "app.sidebar.toggle": {
+    id: "app.sidebar.toggle",
+    label: "Toggle left panel",
+    description: "Show or hide the Epic left panel; the rail stays visible.",
+    category: "app",
+    kind: "chord",
+    defaultChord: "mod+b",
+  },
+  "app.history.open": {
+    id: "app.history.open",
+    label: "Open history",
+    description: "Open the Epic history, or focus the History tab if present.",
+    category: "app",
+    kind: "chord",
+    defaultChord: "mod+y",
+  },
+  "app.settings.open": {
+    id: "app.settings.open",
+    label: "Open settings",
+    description: "Navigate to the settings screen.",
+    category: "app",
+    kind: "chord",
+    defaultChord: "mod+,",
+  },
+  "app.settings.section.byDigit": {
+    id: "app.settings.section.byDigit",
+    label: "Switch settings section by number",
+    description:
+      "While on the settings screen, hold Option/Alt and press a digit to jump to that section. Settings takes precedence over the header tab strip while frontmost.",
+    category: "app",
+    kind: "digit",
+    defaultChord: "alt",
+  },
+  "app.palette.open": {
+    id: "app.palette.open",
+    label: "Open command palette",
+    description:
+      "Open the command palette to search commands, navigation targets, and recent actions.",
+    category: "app",
+    kind: "chord",
+    defaultChord: "mod+k",
+  },
+  "composer.dictation.toggle": {
+    id: "composer.dictation.toggle",
+    label: "Voice input",
+    description:
+      "Dictate into the composer. Tap to start, tap again to stop; or hold to talk and release to stop. Speech is transcribed on-device.",
+    category: "app",
+    kind: "chord",
+    // Control+Shift+M - uses the Control key specifically (the separate ⌃ key on
+    // macOS), avoiding the Command-based conflicts: ⌘Space (Spotlight),
+    // ⌘⇧Space (window summon), ⌘⇧V (split group vertically).
+    defaultChord: "ctrl+shift+m",
+  },
+  "model.provider.byDigit": {
+    id: "model.provider.byDigit",
+    label: "Switch model provider by number",
+    description:
+      "While the model picker is open, hold the leader modifier and press a digit to switch the browsed provider rail. Suppresses epic-tab switching for as long as the picker is open.",
+    category: "app",
+    kind: "digit",
+    defaultChord: "mod",
+  },
+  "model.reasoning.byDigit": {
+    id: "model.reasoning.byDigit",
+    label: "Switch thinking level by number",
+    description:
+      "While the model picker is open and the selected model exposes thinking levels, hold Option/Alt and press a digit to set that level.",
+    category: "app",
+    kind: "digit",
+    defaultChord: "alt",
+  },
+};
+export function getDefaultBindings(): Readonly<
+  Record<ActionId, ChordString | null>
+> {
+  const entries = ACTION_IDS.map((id) => [id, ACTION_META[id].defaultChord]);
+  return Object.fromEntries(entries) as Record<ActionId, ChordString | null>;
+}

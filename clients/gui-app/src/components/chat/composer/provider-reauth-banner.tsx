@@ -1,0 +1,484 @@
+import { AlertTriangle } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
+import { type ReactNode, useId, useMemo, useState } from "react";
+import {
+  PROVIDER_DISPLAY_NAMES,
+  type ProviderCliState,
+  type ProviderLoginCapability,
+  type ProviderId,
+} from "@traycer/protocol/host/provider-schemas";
+import { providerSignedOutMessage } from "@traycer/protocol/host/provider-display";
+import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { HostRpcRegistry } from "@/lib/host";
+import { hostQueryKeys } from "@/lib/query-keys";
+import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
+import { RefreshIconButton } from "@/components/refresh-icon-button";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
+import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
+import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
+import { useProvidersCancelLogin } from "@/hooks/providers/use-providers-cancel-login-mutation";
+import { useProvidersSetEnvOverride } from "@/hooks/providers/use-providers-set-env-override-mutation";
+import { useProvidersStartLogin } from "@/hooks/providers/use-providers-start-login-mutation";
+import { useProvidersAwaitLogin } from "@/hooks/providers/use-providers-await-login-mutation";
+import { useTabRefreshProviders } from "@/hooks/providers/use-tab-refresh-providers";
+import { HostRuntimeContext, useHostBinding } from "@/lib/host/runtime";
+import { useRunnerHost } from "@/providers/use-runner-host";
+
+// Static destructive icon shared by every banner state. Hoisted to module scope
+// so it isn't rebuilt on each render.
+const BANNER_HEADER_ICON = (
+  <AlertTriangle
+    className="mt-0.5 size-3.5 shrink-0 text-destructive"
+    aria-hidden
+  />
+);
+
+interface ProviderReauthBannerProps {
+  readonly providerId: ProviderId;
+  /**
+   * Live provider state from the composer's tab-scoped re-auth gate
+   * (`useProviderReauthGate`). The banner reads its reconnect capability from
+   * here rather than owning a second subscription; the gate unmounts the banner
+   * the instant the provider flips back to `authenticated`.
+   */
+  readonly state: ProviderCliState | null;
+}
+
+// Destructive chrome shared by every banner state, mirroring the inline
+// `ErrorSegment` frame so a signed-out provider keeps a familiar weight above
+// the composer whether or not the tab's host is reachable. The status line
+// rides above the box in every state, so it lives here rather than at each call.
+// `action` is a top-right slot for the manual Refresh control; the unreachable
+// state passes `null` (no tab client to re-probe with).
+function ReauthBannerShell({
+  icon,
+  action,
+  children,
+}: {
+  readonly icon: ReactNode;
+  readonly action: ReactNode;
+  readonly children: ReactNode;
+}) {
+  return (
+    <div className="mb-3 flex w-full flex-col gap-1.5">
+      <div className="flex w-full flex-col gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-ui-sm">
+        <div className="flex items-start gap-2">
+          {icon}
+          <div className="flex min-w-0 flex-1 flex-col gap-2">{children}</div>
+          {action}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Manual re-check: the gate no longer auto-force-refreshes on activate (that
+// re-ran the flaky standalone probe and flickered the banner). This hands the
+// user an explicit "I reconnected - check again" affordance. Uses the
+// tab-scoped refresh (same hook the token form uses) so it targets the host
+// that ran (and will re-run) the turn explicitly, not via the context override.
+function BannerRefreshButton() {
+  const refreshProviders = useTabRefreshProviders();
+  return (
+    <RefreshIconButton
+      onRefresh={refreshProviders}
+      label="Check sign-in status"
+      className="-my-1 -mr-1"
+    />
+  );
+}
+
+// The reconnect methods to offer a signed-out (web-login) provider. `canOauth`
+// requires a local host (the `<cli> auth login` loopback runs on the host's
+// machine) plus advertised OAuth args; `envVars` are the credential vars the
+// paste form can write (an API key / OAuth token) via `providers.setEnvOverride`,
+// which works on any host. Both are reconnect affordances - distinct from a
+// *rejected* credential, which never reaches here (it surfaces as a generic error
+// row; API-key-only providers like Cursor have no capability and no banner).
+function deriveLoginOptions(
+  state: ProviderCliState | null,
+  isLocalHost: boolean,
+): {
+  readonly envVars: ReadonlyArray<string>;
+  readonly canOauth: boolean;
+} {
+  const loginCapability: ProviderLoginCapability | null =
+    state !== null ? state.loginCapability : null;
+  const envVars: ReadonlyArray<string> =
+    loginCapability !== null && loginCapability.token !== null
+      ? loginCapability.token.vars
+      : [];
+  const oauthArgs = loginCapability !== null ? loginCapability.oauthArgs : null;
+  const canOauth = isLocalHost && oauthArgs !== null && oauthArgs.length > 0;
+  return { envVars, canOauth };
+}
+
+/**
+ * Composer-level re-authentication banner for a provider whose CLI is signed
+ * out on the tab's host. Rendered (and unmounted) by `useProviderReauthGate`
+ * purely from live auth state - there is no "reconnected" success state here,
+ * because reconnecting simply clears the gate and removes the banner.
+ *
+ * The banner addresses the tab's host, not the app-wide active host: it
+ * re-provides `HostRuntimeContext` bound to the tab client so the `providers.*`
+ * login/refresh mutations target the host that ran (and will re-run) the turn.
+ */
+export function ProviderReauthBanner({
+  providerId,
+  state,
+}: ProviderReauthBannerProps) {
+  const tabHostId = useTabHostId();
+  const directory = useHostDirectoryList();
+  const tabClient = useTabHostClient();
+  const realBinding = useHostBinding();
+
+  const tabEntry = useMemo(
+    () =>
+      (directory.data ?? []).find((entry) => entry.hostId === tabHostId) ??
+      null,
+    [directory.data, tabHostId],
+  );
+  // OAuth runs a localhost loopback on the host's machine, so the reconnect
+  // button is only offered when the tab's host is local; remote hosts fall
+  // through to the "reconnect from the CLI" stub.
+  const isLocalHost = tabEntry?.kind === "local";
+  const scopedBinding = useMemo(
+    () =>
+      tabClient !== null && realBinding !== null
+        ? { ...realBinding, hostClient: tabClient }
+        : null,
+    [tabClient, realBinding],
+  );
+
+  const message = providerSignedOutMessage(providerId);
+
+  // The tab's host is momentarily unreachable (directory/client still
+  // resolving, or genuinely offline): re-auth can't be driven from here.
+  if (scopedBinding === null) {
+    return (
+      <ReauthBannerShell icon={BANNER_HEADER_ICON} action={null}>
+        <span className="text-foreground/90">{message}</span>
+        <span className="text-ui-xs text-muted-foreground">
+          This chat&apos;s machine is unavailable. Reconnect once it&apos;s back
+          online.
+        </span>
+      </ReauthBannerShell>
+    );
+  }
+
+  return (
+    <HostRuntimeContext.Provider value={scopedBinding}>
+      <ReauthBannerInner
+        providerId={providerId}
+        state={state}
+        isLocalHost={isLocalHost}
+        message={message}
+      />
+    </HostRuntimeContext.Provider>
+  );
+}
+
+function ReauthBannerInner({
+  providerId,
+  state,
+  isLocalHost,
+  message,
+}: {
+  readonly providerId: ProviderId;
+  readonly state: ProviderCliState | null;
+  readonly isLocalHost: boolean;
+  readonly message: string;
+}) {
+  const providerLabel = PROVIDER_DISPLAY_NAMES[providerId];
+  const { envVars, canOauth } = deriveLoginOptions(state, isLocalHost);
+
+  // No reconnect method available from here: a provider with no web login, or an
+  // OAuth-only provider on a remote host (loopback unreachable) with no paste
+  // vars. Direct the user to the CLI.
+  if (!canOauth && envVars.length === 0) {
+    return (
+      <ReauthBannerShell
+        icon={BANNER_HEADER_ICON}
+        action={<BannerRefreshButton />}
+      >
+        <span className="text-foreground/90">{message}</span>
+        <span className="text-ui-xs text-muted-foreground">
+          Reconnect {providerLabel} from its CLI to continue.
+        </span>
+      </ReauthBannerShell>
+    );
+  }
+
+  return (
+    <ReauthBannerShell
+      icon={BANNER_HEADER_ICON}
+      action={<BannerRefreshButton />}
+    >
+      <span className="text-foreground/90">{message}</span>
+      {canOauth ? (
+        <OAuthReauthForm
+          providerId={providerId}
+          providerLabel={providerLabel}
+        />
+      ) : null}
+      {envVars.length > 0 ? (
+        <TokenReauthForm
+          providerId={providerId}
+          envVars={envVars}
+          secondary={canOauth}
+        />
+      ) : null}
+    </ReauthBannerShell>
+  );
+}
+
+function OAuthReauthForm({
+  providerId,
+  providerLabel,
+}: {
+  readonly providerId: ProviderId;
+  readonly providerLabel: string;
+}) {
+  const startLogin = useProvidersStartLogin();
+  const awaitLogin = useProvidersAwaitLogin();
+  const cancelLogin = useProvidersCancelLogin();
+  const runnerHost = useRunnerHost();
+  const [awaiting, setAwaiting] = useState(false);
+  const [loginUrl, setLoginUrl] = useState<string | null>(null);
+
+  // No polling: the host blocks `awaitLogin` until the login child closes,
+  // then re-probes and writes the fresh state into the gate's cache. So a
+  // successful sign-in flips the gate (unmounting this banner) the moment the
+  // browser flow finishes; a still-signed-out result drops `awaiting` back to
+  // the Authenticate button. The login child outlives a banner remount on its
+  // own (the loopback lives inside it); only explicit Cancel kills it.
+  const { mutate: cancelLoginMutate } = cancelLogin;
+  const { mutate: awaitLoginMutate } = awaitLogin;
+
+  const onCancel = (): void => {
+    cancelLoginMutate({ providerId });
+    setAwaiting(false);
+  };
+
+  const onAuthenticate = (): void => {
+    if (startLogin.isPending || awaiting) return;
+    startLogin.mutate(
+      { providerId },
+      {
+        onSuccess: (data) => {
+          setLoginUrl(data.url);
+          setAwaiting(true);
+          // Wait on the honest completion edge instead of polling. `onSettled`
+          // drops the spinner whether it resolved authenticated (gate unmounts
+          // us) or still signed-out (back to the Authenticate button).
+          awaitLoginMutate(
+            { providerId },
+            { onSettled: () => setAwaiting(false) },
+          );
+        },
+      },
+    );
+  };
+
+  if (awaiting) {
+    return (
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center gap-2 text-ui-sm text-foreground">
+          <MutedAgentSpinner />
+          <span>Waiting for browser sign-in…</span>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {loginUrl !== null ? (
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => void runnerHost.openExternalLink(loginUrl)}
+            >
+              Open sign-in page
+            </Button>
+          ) : null}
+          <Button size="sm" variant="ghost" onClick={onCancel}>
+            Cancel
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div>
+        <Button
+          size="sm"
+          variant="secondary"
+          onClick={onAuthenticate}
+          disabled={startLogin.isPending}
+        >
+          {startLogin.isPending ? <MutedAgentSpinner /> : null}
+          Authenticate {providerLabel}
+        </Button>
+      </div>
+      <p className="text-ui-xs text-muted-foreground">
+        Opens your browser to sign in to {providerLabel}.
+      </p>
+    </div>
+  );
+}
+
+// Paste a fresh credential (API key / OAuth token) into one of the provider's
+// supported env vars, written via `providers.setEnvOverride` on the tab host,
+// then immediately force-probes auth. If the probe returns authenticated the gate
+// unmounts this banner; if still unauthenticated (bad token) we stay mounted and
+// show an inline error so the user can try again without a page reload.
+function TokenReauthForm({
+  providerId,
+  envVars,
+  secondary,
+}: {
+  readonly providerId: ProviderId;
+  readonly envVars: ReadonlyArray<string>;
+  // True when rendered beneath the OAuth button as the fallback option.
+  readonly secondary: boolean;
+}) {
+  const inputId = useId();
+  const [draft, setDraft] = useState("");
+  const [pickedVar, setPickedVar] = useState("");
+  const [probing, setProbing] = useState(false);
+  const [tokenError, setTokenError] = useState<string | null>(null);
+  const setEnvOverride = useProvidersSetEnvOverride();
+  const refreshProviders = useTabRefreshProviders();
+  const queryClient = useQueryClient();
+  const tabHostId = useTabHostId();
+
+  // Derive the active variable instead of syncing state via an effect: keep the
+  // user's pick while it's still offered, else default to the first var.
+  const activeVar =
+    pickedVar !== "" && envVars.includes(pickedVar)
+      ? pickedVar
+      : (envVars[0] ?? "");
+
+  const busy = setEnvOverride.isPending || probing;
+
+  const onSave = (): void => {
+    const trimmed = draft.trim();
+    if (trimmed.length === 0 || activeVar === "" || busy) return;
+    setTokenError(null);
+    setEnvOverride.mutate(
+      { providerId, key: activeVar, value: trimmed },
+      {
+        onSuccess: () => {
+          setDraft("");
+          setProbing(true);
+          // Force-probe after the override is written. `useTabRefreshProviders`
+          // writes the fresh probe result into the query cache synchronously in
+          // its `onSuccess` before `mutateAsync` resolves, so by the time the
+          // `.then()` runs below the cache already holds the updated auth status.
+          // Read it directly rather than using `finally` (which fires on both
+          // success and failure, causing a false "not accepted" flash when the
+          // token is valid and the gate is about to unmount this component).
+          void refreshProviders()
+            .then(() => {
+              setProbing(false);
+              const data = queryClient.getQueryData<
+                ResponseOfMethod<HostRpcRegistry, "providers.list">
+              >(
+                hostQueryKeys.method<HostRpcRegistry, "providers.list">(
+                  tabHostId,
+                  "providers.list",
+                  {},
+                ),
+              );
+              const providerState = data?.providers.find(
+                (p) => p.providerId === providerId,
+              );
+              if (providerState?.auth.status === "unauthenticated") {
+                setTokenError(
+                  "Token not accepted — double-check and try again.",
+                );
+              }
+              // If authenticated, the gate reads the updated cache and unmounts
+              // this banner. No action needed here.
+            })
+            .catch(() => {
+              setProbing(false);
+              setTokenError("Couldn't verify token — please try again.");
+            });
+        },
+      },
+    );
+  };
+
+  return (
+    <div className="flex flex-col gap-2">
+      <label
+        htmlFor={inputId}
+        className="text-ui-xs font-medium text-foreground"
+      >
+        {secondary
+          ? "Or paste an API key or token"
+          : "Reconnect with an API key or token"}
+      </label>
+      <div className="flex flex-wrap items-center gap-2">
+        {envVars.length > 1 ? (
+          <Select value={activeVar} onValueChange={setPickedVar}>
+            <SelectTrigger
+              size="sm"
+              aria-label="Credential type"
+              className="w-[min(60vw,16rem)] font-mono text-ui-xs"
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {envVars.map((envVar) => (
+                <SelectItem
+                  key={envVar}
+                  value={envVar}
+                  className="font-mono text-ui-xs"
+                >
+                  {envVar}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        ) : null}
+        <Input
+          id={inputId}
+          type="password"
+          autoComplete="off"
+          className="min-w-0 flex-1 font-mono text-ui-sm"
+          placeholder={`Paste your ${activeVar}`}
+          value={draft}
+          onChange={(e) => {
+            setDraft(e.target.value);
+            if (tokenError !== null) setTokenError(null);
+          }}
+          disabled={busy}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") onSave();
+          }}
+        />
+        <Button
+          size="sm"
+          variant="secondary"
+          onClick={onSave}
+          disabled={busy || draft.trim().length === 0}
+        >
+          {busy ? <MutedAgentSpinner /> : null}
+          {probing ? "Checking…" : "Save"}
+        </Button>
+      </div>
+      {tokenError !== null ? (
+        <p className="text-ui-xs text-destructive">{tokenError}</p>
+      ) : null}
+    </div>
+  );
+}

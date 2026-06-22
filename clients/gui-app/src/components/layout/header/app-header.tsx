@@ -1,0 +1,115 @@
+import { type CSSProperties, type ReactNode } from "react";
+import { UserMenu } from "@/components/auth/user-menu";
+import { TabStrip } from "@/components/layout/tabs/tab-strip";
+import { AppUpdateHeaderButton } from "@/components/layout/header/app-update-button";
+import { HistoryButton } from "@/components/layout/header/history-button";
+import { SignInButton } from "@/components/layout/header/sign-in-button";
+import { NotificationsBell } from "@/components/notifications/notifications-bell";
+import { cn } from "@/lib/utils";
+import { useAuthStore } from "@/stores/auth/auth-store";
+
+// Frameless-desktop detection: Electron's preload bridge exposes
+// `window.runnerHost` via `contextBridge.exposeInMainWorld`. Browser
+// shells never see it. Reliable in Electron 42 with sandbox + app://
+// scheme + Chromium UA reduction (UA sniffing is not).
+const IS_FRAMELESS_DESKTOP =
+  typeof window !== "undefined" &&
+  Object.prototype.hasOwnProperty.call(window, "runnerHost");
+
+// `-webkit-app-region` isn't in the standard CSSProperties typings.
+const DRAG_STYLE = { WebkitAppRegion: "drag" } as CSSProperties;
+const NO_DRAG_STYLE = { WebkitAppRegion: "no-drag" } as CSSProperties;
+
+export type AppHeaderVariant = "app" | "host-loading";
+
+export interface AppHeaderProps {
+  readonly variant: AppHeaderVariant;
+}
+
+/**
+ * App navigation chrome. Frameless desktop shells use this row as the native
+ * title bar: tabs and controls stay interactive, while the empty spacer before
+ * the right-side controls remains available for window dragging.
+ */
+export function AppHeader(props: AppHeaderProps): ReactNode {
+  const { variant } = props;
+  const showTabStrip = variant === "app";
+  // Host-loading renders above the router and above the
+  // notifications provider: nav links would crash, and the bell would
+  // throw when its hooks can't find the stream context.
+  const navDisabled = variant === "host-loading";
+  const showBell = variant !== "host-loading";
+
+  return (
+    <header
+      data-testid="app-header"
+      data-variant={variant}
+      className={cn(
+        "relative z-20 flex h-10 shrink-0 items-center bg-canvas text-canvas-foreground after:absolute after:inset-x-0 after:bottom-0 after:z-1 after:h-px after:bg-border/90 after:content-['']",
+        IS_FRAMELESS_DESKTOP
+          ? cn(
+              "pl-3 pr-3",
+              "wco:pl-[env(titlebar-area-x,82px)]",
+              "wco:pr-[max(12px,calc(100vw-env(titlebar-area-x,82px)-env(titlebar-area-width,100vw)+12px))]",
+            )
+          : "px-3",
+      )}
+    >
+      <div className="relative z-10 flex min-w-0 flex-1 items-center">
+        {showTabStrip ? <TabStrip /> : null}
+      </div>
+      {showTabStrip ? (
+        <div
+          aria-hidden
+          className="relative z-10 hidden h-full shrink-0 basis-[clamp(4rem,12vw,12rem)] md:block"
+          style={IS_FRAMELESS_DESKTOP ? DRAG_STYLE : undefined}
+        />
+      ) : (
+        <div
+          aria-hidden
+          className="relative z-10 h-full min-w-0 flex-1"
+          style={IS_FRAMELESS_DESKTOP ? DRAG_STYLE : undefined}
+        />
+      )}
+      <div
+        className="relative z-10 flex shrink-0 items-center gap-2"
+        style={IS_FRAMELESS_DESKTOP ? NO_DRAG_STYLE : undefined}
+      >
+        {!navDisabled ? <AppUpdateHeaderButton /> : null}
+        {!navDisabled ? <HistoryButton /> : null}
+        {showBell ? <HeaderNotificationsBell /> : null}
+        <HeaderIdentity showAppSettings={!navDisabled} />
+      </div>
+    </header>
+  );
+}
+
+// Hiding the bell when signed-out keeps the notifications-store +
+// runner-host subscriptions from mounting for a signed-out session.
+export function HeaderNotificationsBell() {
+  const isSignedIn = useAuthStore((state) => state.status === "signed-in");
+  if (!isSignedIn) {
+    return null;
+  }
+  return <NotificationsBell />;
+}
+
+interface HeaderIdentityProps {
+  readonly showAppSettings: boolean;
+}
+
+function HeaderIdentity(props: HeaderIdentityProps) {
+  const profile = useAuthStore((state) => state.profile);
+  const isSignedIn = useAuthStore((state) => state.status === "signed-in");
+  if (isSignedIn && profile !== null) {
+    return (
+      <UserMenu
+        userName={profile.userName}
+        email={profile.email}
+        avatarUrl={profile.avatarUrl ?? null}
+        showAppSettings={props.showAppSettings}
+      />
+    );
+  }
+  return <SignInButton layout="compact" />;
+}

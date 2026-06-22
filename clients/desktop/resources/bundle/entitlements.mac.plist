@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+      Mirrors electron-builder's default hardened-runtime entitlements (JIT /
+      unsigned executable memory / dyld env) so existing native modules
+      (node-pty, better-sqlite3, the claude-agent-sdk binary) keep loading,
+      and adds microphone access for on-device voice dictation. Library
+      validation is disabled so the sherpa-onnx dylibs (bundled, separately
+      signed) can load into the renderer/host process under hardened runtime.
+    -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+    <true/>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+</dict>
+</plist>

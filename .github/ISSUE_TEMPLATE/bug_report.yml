@@ -1,0 +1,55 @@
+name: Bug report
+description: Report a problem with the CLI, desktop/mobile app, or protocol
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for filing a bug! Please search existing issues first.
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - CLI (@traycerai/cli)
+        - Desktop app
+        - Protocol (@traycer/protocol)
+        - Other / not sure
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: "Output of `traycer --version` (or the app version)"
+      placeholder: "e.g. 1.2.3"
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS / platform
+      placeholder: "e.g. macOS 15 (arm64), Windows 11, Ubuntu 24.04"
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect, and what actually happened?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Run `traycer ...`
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / output
+      description: Relevant logs or error output. Please redact any secrets.
+      render: shell

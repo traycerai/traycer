@@ -1,0 +1,464 @@
+/*
+ * Per-preset xterm.js ANSI palettes.
+ *
+ * The 16 ANSI colors live as CSS custom properties so the cascade does the
+ * preset/light-dark switching for us; `useTerminalTheme()` reads them via
+ * getComputedStyle at theme-build time. Cursor, link, and selection colors
+ * reuse existing semantic tokens (`--foreground`, `--primary`, `--accent`)
+ * and live in the build helper, not here.
+ *
+ * `:root` and `.dark` provide the neutral defaults that the "neutral" preset
+ * and the six accent-only presets (rose/blue/violet/green/orange/pink) use.
+ * Full-palette presets override every slot using the canonical palette
+ * published by the theme's authors. Presets that publish only 8 colors leave
+ * `--term-ansi-bright-*` unset and let the build helper L-shift normals.
+ */
+
+:root {
+  --term-ansi-black: #18181b;
+  --term-ansi-red: #b91c1c;
+  --term-ansi-green: #166534;
+  --term-ansi-yellow: #854d0e;
+  --term-ansi-blue: #1d4ed8;
+  --term-ansi-magenta: #7e22ce;
+  --term-ansi-cyan: #0e7490;
+  --term-ansi-white: #71717a;
+  --term-ansi-bright-black: #52525b;
+  --term-ansi-bright-red: #991b1b;
+  --term-ansi-bright-green: #15803d;
+  --term-ansi-bright-yellow: #a16207;
+  --term-ansi-bright-blue: #1e40af;
+  --term-ansi-bright-magenta: #6b21a8;
+  --term-ansi-bright-cyan: #155e75;
+  --term-ansi-bright-white: #18181b;
+}
+
+.dark {
+  --term-ansi-black: #18181b;
+  --term-ansi-red: #ef4444;
+  --term-ansi-green: #22c55e;
+  --term-ansi-yellow: #eab308;
+  --term-ansi-blue: #3b82f6;
+  --term-ansi-magenta: #a855f7;
+  --term-ansi-cyan: #06b6d4;
+  --term-ansi-white: #d4d4d8;
+  --term-ansi-bright-black: #52525b;
+  --term-ansi-bright-red: #f87171;
+  --term-ansi-bright-green: #4ade80;
+  --term-ansi-bright-yellow: #facc15;
+  --term-ansi-bright-blue: #60a5fa;
+  --term-ansi-bright-magenta: #c084fc;
+  --term-ansi-bright-cyan: #22d3ee;
+  --term-ansi-bright-white: #fafafa;
+}
+
+/* Accent-only presets: blue slot follows --primary so the accent shines. */
+[data-theme="rose"],
+[data-theme="blue"],
+[data-theme="violet"],
+[data-theme="green"],
+[data-theme="orange"],
+[data-theme="pink"] {
+  --term-ansi-blue: var(--primary);
+  --term-ansi-bright-blue: var(--primary);
+}
+
+.dark[data-theme="rose"],
+.dark[data-theme="blue"],
+.dark[data-theme="violet"],
+.dark[data-theme="green"],
+.dark[data-theme="orange"],
+.dark[data-theme="pink"] {
+  --term-ansi-blue: var(--primary);
+  --term-ansi-bright-blue: var(--primary);
+}
+
+/* Traycer Green */
+[data-theme="traycer-green"] {
+  --term-ansi-black: #1a2421;
+  --term-ansi-red: #c92a2a;
+  --term-ansi-green: #2b8a3e;
+  --term-ansi-yellow: #b08800;
+  --term-ansi-blue: #1971c2;
+  --term-ansi-magenta: #862e9c;
+  --term-ansi-cyan: #0c8599;
+  --term-ansi-white: #495057;
+  --term-ansi-bright-black: #495057;
+  --term-ansi-bright-red: #a51b1b;
+  --term-ansi-bright-green: #2f9e44;
+  --term-ansi-bright-yellow: #905e00;
+  --term-ansi-bright-blue: #1864ab;
+  --term-ansi-bright-magenta: #6741d9;
+  --term-ansi-bright-cyan: #0b7285;
+  --term-ansi-bright-white: #1a2421;
+}
+
+.dark[data-theme="traycer-green"] {
+  --term-ansi-black: #1a2421;
+  --term-ansi-red: #ff6b6b;
+  --term-ansi-green: #51cf66;
+  --term-ansi-yellow: #fab005;
+  --term-ansi-blue: #4dabf7;
+  --term-ansi-magenta: #cc5de8;
+  --term-ansi-cyan: #22b8cf;
+  --term-ansi-white: #dee2e6;
+  --term-ansi-bright-black: #495057;
+  --term-ansi-bright-red: #ff8787;
+  --term-ansi-bright-green: #69db7c;
+  --term-ansi-bright-yellow: #ffd43b;
+  --term-ansi-bright-blue: #74c0fc;
+  --term-ansi-bright-magenta: #da77f2;
+  --term-ansi-bright-cyan: #3bc9db;
+  --term-ansi-bright-white: #f8f9fa;
+}
+
+/* Amoled */
+[data-theme="amoled"] {
+  --term-ansi-black: #171717;
+  --term-ansi-red: #d8001b;
+  --term-ansi-green: #107d32;
+  --term-ansi-yellow: #aa4d00;
+  --term-ansi-blue: #005ff2;
+  --term-ansi-magenta: #7d00cc;
+  --term-ansi-cyan: #007f70;
+  --term-ansi-white: #7d7d7d;
+  --term-ansi-bright-black: #4d4d4d;
+  --term-ansi-bright-red: #ea001d;
+  --term-ansi-bright-green: #279141;
+  --term-ansi-bright-yellow: #ff9300;
+  --term-ansi-bright-blue: #006bff;
+  --term-ansi-bright-magenta: #a000f8;
+  --term-ansi-bright-cyan: #00ac96;
+  --term-ansi-bright-white: #171717;
+}
+
+.dark[data-theme="amoled"] {
+  --term-ansi-black: #1a1a1a;
+  --term-ansi-red: #f13242;
+  --term-ansi-green: #00ac3a;
+  --term-ansi-yellow: #ff9300;
+  --term-ansi-blue: #006efe;
+  --term-ansi-magenta: #9440d5;
+  --term-ansi-cyan: #00aa95;
+  --term-ansi-white: #a0a0a0;
+  --term-ansi-bright-black: #454545;
+  --term-ansi-bright-red: #ff565f;
+  --term-ansi-bright-green: #00ca50;
+  --term-ansi-bright-yellow: #ffae00;
+  --term-ansi-bright-blue: #47a8ff;
+  --term-ansi-bright-magenta: #c472fb;
+  --term-ansi-bright-cyan: #00cfb7;
+  --term-ansi-bright-white: #ededed;
+}
+
+/* Dracula */
+[data-theme="dracula"] {
+  --term-ansi-black: #21222c;
+  --term-ansi-red: #ff5555;
+  --term-ansi-green: #50fa7b;
+  --term-ansi-yellow: #f1fa8c;
+  --term-ansi-blue: #bd93f9;
+  --term-ansi-magenta: #ff79c6;
+  --term-ansi-cyan: #8be9fd;
+  --term-ansi-white: #f8f8f2;
+  --term-ansi-bright-black: #6272a4;
+  --term-ansi-bright-red: #ff6e6e;
+  --term-ansi-bright-green: #69ff94;
+  --term-ansi-bright-yellow: #ffffa5;
+  --term-ansi-bright-blue: #d6acff;
+  --term-ansi-bright-magenta: #ff92df;
+  --term-ansi-bright-cyan: #a4ffff;
+  --term-ansi-bright-white: #ffffff;
+}
+
+.dark[data-theme="dracula"] {
+  --term-ansi-black: #21222c;
+  --term-ansi-red: #ff5555;
+  --term-ansi-green: #50fa7b;
+  --term-ansi-yellow: #f1fa8c;
+  --term-ansi-blue: #bd93f9;
+  --term-ansi-magenta: #ff79c6;
+  --term-ansi-cyan: #8be9fd;
+  --term-ansi-white: #f8f8f2;
+  --term-ansi-bright-black: #6272a4;
+  --term-ansi-bright-red: #ff6e6e;
+  --term-ansi-bright-green: #69ff94;
+  --term-ansi-bright-yellow: #ffffa5;
+  --term-ansi-bright-blue: #d6acff;
+  --term-ansi-bright-magenta: #ff92df;
+  --term-ansi-bright-cyan: #a4ffff;
+  --term-ansi-bright-white: #ffffff;
+}
+
+/* Catppuccin (Latte light, Mocha dark) */
+[data-theme="catppuccin"] {
+  --term-ansi-black: #5c5f77;
+  --term-ansi-red: #d20f39;
+  --term-ansi-green: #40a02b;
+  --term-ansi-yellow: #df8e1d;
+  --term-ansi-blue: #1e66f5;
+  --term-ansi-magenta: #ea76cb;
+  --term-ansi-cyan: #179299;
+  --term-ansi-white: #acb0be;
+  --term-ansi-bright-black: #6c6f85;
+  --term-ansi-bright-red: #d20f39;
+  --term-ansi-bright-green: #40a02b;
+  --term-ansi-bright-yellow: #df8e1d;
+  --term-ansi-bright-blue: #1e66f5;
+  --term-ansi-bright-magenta: #ea76cb;
+  --term-ansi-bright-cyan: #179299;
+  --term-ansi-bright-white: #bcc0cc;
+}
+
+.dark[data-theme="catppuccin"] {
+  --term-ansi-black: #45475a;
+  --term-ansi-red: #f38ba8;
+  --term-ansi-green: #a6e3a1;
+  --term-ansi-yellow: #f9e2af;
+  --term-ansi-blue: #89b4fa;
+  --term-ansi-magenta: #f5c2e7;
+  --term-ansi-cyan: #94e2d5;
+  --term-ansi-white: #bac2de;
+  --term-ansi-bright-black: #585b70;
+  --term-ansi-bright-red: #f38ba8;
+  --term-ansi-bright-green: #a6e3a1;
+  --term-ansi-bright-yellow: #f9e2af;
+  --term-ansi-bright-blue: #89b4fa;
+  --term-ansi-bright-magenta: #f5c2e7;
+  --term-ansi-bright-cyan: #94e2d5;
+  --term-ansi-bright-white: #a6adc8;
+}
+
+/* GitHub */
+[data-theme="github"] {
+  --term-ansi-black: #24292f;
+  --term-ansi-red: #cf222e;
+  --term-ansi-green: #116329;
+  --term-ansi-yellow: #4d2d00;
+  --term-ansi-blue: #0969da;
+  --term-ansi-magenta: #8250df;
+  --term-ansi-cyan: #1b7c83;
+  --term-ansi-white: #6e7781;
+  --term-ansi-bright-black: #57606a;
+  --term-ansi-bright-red: #a40e26;
+  --term-ansi-bright-green: #1a7f37;
+  --term-ansi-bright-yellow: #633c01;
+  --term-ansi-bright-blue: #218bff;
+  --term-ansi-bright-magenta: #a475f9;
+  --term-ansi-bright-cyan: #3192aa;
+  --term-ansi-bright-white: #8c959f;
+}
+
+.dark[data-theme="github"] {
+  --term-ansi-black: #484f58;
+  --term-ansi-red: #ff7b72;
+  --term-ansi-green: #3fb950;
+  --term-ansi-yellow: #d29922;
+  --term-ansi-blue: #58a6ff;
+  --term-ansi-magenta: #bc8cff;
+  --term-ansi-cyan: #39c5cf;
+  --term-ansi-white: #b1bac4;
+  --term-ansi-bright-black: #6e7681;
+  --term-ansi-bright-red: #ffa198;
+  --term-ansi-bright-green: #56d364;
+  --term-ansi-bright-yellow: #e3b341;
+  --term-ansi-bright-blue: #79c0ff;
+  --term-ansi-bright-magenta: #d2a8ff;
+  --term-ansi-bright-cyan: #56d4dd;
+  --term-ansi-bright-white: #f0f6fc;
+}
+
+/* Gruvbox */
+[data-theme="gruvbox"] {
+  --term-ansi-black: #fbf1c7;
+  --term-ansi-red: #cc241d;
+  --term-ansi-green: #98971a;
+  --term-ansi-yellow: #d79921;
+  --term-ansi-blue: #458588;
+  --term-ansi-magenta: #b16286;
+  --term-ansi-cyan: #689d6a;
+  --term-ansi-white: #7c6f64;
+  --term-ansi-bright-black: #928374;
+  --term-ansi-bright-red: #9d0006;
+  --term-ansi-bright-green: #79740e;
+  --term-ansi-bright-yellow: #b57614;
+  --term-ansi-bright-blue: #076678;
+  --term-ansi-bright-magenta: #8f3f71;
+  --term-ansi-bright-cyan: #427b58;
+  --term-ansi-bright-white: #3c3836;
+}
+
+.dark[data-theme="gruvbox"] {
+  --term-ansi-black: #282828;
+  --term-ansi-red: #cc241d;
+  --term-ansi-green: #98971a;
+  --term-ansi-yellow: #d79921;
+  --term-ansi-blue: #458588;
+  --term-ansi-magenta: #b16286;
+  --term-ansi-cyan: #689d6a;
+  --term-ansi-white: #a89984;
+  --term-ansi-bright-black: #928374;
+  --term-ansi-bright-red: #fb4934;
+  --term-ansi-bright-green: #b8bb26;
+  --term-ansi-bright-yellow: #fabd2f;
+  --term-ansi-bright-blue: #83a598;
+  --term-ansi-bright-magenta: #d3869b;
+  --term-ansi-bright-cyan: #8ec07c;
+  --term-ansi-bright-white: #ebdbb2;
+}
+
+/* Tokyo Night (Day light, Storm dark) */
+[data-theme="tokyo-night"] {
+  --term-ansi-black: #b4b5b9;
+  --term-ansi-red: #f52a65;
+  --term-ansi-green: #587539;
+  --term-ansi-yellow: #8c6c3e;
+  --term-ansi-blue: #2e7de9;
+  --term-ansi-magenta: #9854f1;
+  --term-ansi-cyan: #007197;
+  --term-ansi-white: #6172b0;
+  --term-ansi-bright-black: #a1a6c5;
+  --term-ansi-bright-red: #f52a65;
+  --term-ansi-bright-green: #587539;
+  --term-ansi-bright-yellow: #8c6c3e;
+  --term-ansi-bright-blue: #2e7de9;
+  --term-ansi-bright-magenta: #9854f1;
+  --term-ansi-bright-cyan: #007197;
+  --term-ansi-bright-white: #3760bf;
+}
+
+.dark[data-theme="tokyo-night"] {
+  --term-ansi-black: #32344a;
+  --term-ansi-red: #f7768e;
+  --term-ansi-green: #9ece6a;
+  --term-ansi-yellow: #e0af68;
+  --term-ansi-blue: #7aa2f7;
+  --term-ansi-magenta: #ad8ee6;
+  --term-ansi-cyan: #449dab;
+  --term-ansi-white: #9699a8;
+  --term-ansi-bright-black: #444b6a;
+  --term-ansi-bright-red: #ff7a93;
+  --term-ansi-bright-green: #b9f27c;
+  --term-ansi-bright-yellow: #ff9e64;
+  --term-ansi-bright-blue: #7da6ff;
+  --term-ansi-bright-magenta: #bb9af7;
+  --term-ansi-bright-cyan: #0db9d7;
+  --term-ansi-bright-white: #acb0d0;
+}
+
+/* Nord */
+[data-theme="nord"] {
+  --term-ansi-black: #3b4252;
+  --term-ansi-red: #bf616a;
+  --term-ansi-green: #a3be8c;
+  --term-ansi-yellow: #ebcb8b;
+  --term-ansi-blue: #5e81ac;
+  --term-ansi-magenta: #b48ead;
+  --term-ansi-cyan: #88c0d0;
+  --term-ansi-white: #e5e9f0;
+  --term-ansi-bright-black: #4c566a;
+  --term-ansi-bright-red: #bf616a;
+  --term-ansi-bright-green: #a3be8c;
+  --term-ansi-bright-yellow: #ebcb8b;
+  --term-ansi-bright-blue: #81a1c1;
+  --term-ansi-bright-magenta: #b48ead;
+  --term-ansi-bright-cyan: #8fbcbb;
+  --term-ansi-bright-white: #eceff4;
+}
+
+.dark[data-theme="nord"] {
+  --term-ansi-black: #3b4252;
+  --term-ansi-red: #bf616a;
+  --term-ansi-green: #a3be8c;
+  --term-ansi-yellow: #ebcb8b;
+  --term-ansi-blue: #81a1c1;
+  --term-ansi-magenta: #b48ead;
+  --term-ansi-cyan: #88c0d0;
+  --term-ansi-white: #e5e9f0;
+  --term-ansi-bright-black: #4c566a;
+  --term-ansi-bright-red: #bf616a;
+  --term-ansi-bright-green: #a3be8c;
+  --term-ansi-bright-yellow: #ebcb8b;
+  --term-ansi-bright-blue: #81a1c1;
+  --term-ansi-bright-magenta: #b48ead;
+  --term-ansi-bright-cyan: #8fbcbb;
+  --term-ansi-bright-white: #eceff4;
+}
+
+/* Ayu */
+[data-theme="ayu"] {
+  --term-ansi-black: #000000;
+  --term-ansi-red: #ff3333;
+  --term-ansi-green: #86b300;
+  --term-ansi-yellow: #f29718;
+  --term-ansi-blue: #41a6d9;
+  --term-ansi-magenta: #f07178;
+  --term-ansi-cyan: #4dbf99;
+  --term-ansi-white: #5c6166;
+  --term-ansi-bright-black: #323232;
+  --term-ansi-bright-red: #ff6565;
+  --term-ansi-bright-green: #b8e532;
+  --term-ansi-bright-yellow: #ffc94a;
+  --term-ansi-bright-blue: #73d8ff;
+  --term-ansi-bright-magenta: #ffa3aa;
+  --term-ansi-bright-cyan: #7ff1cb;
+  --term-ansi-bright-white: #1a1f29;
+}
+
+.dark[data-theme="ayu"] {
+  --term-ansi-black: #11151c;
+  --term-ansi-red: #ea6c73;
+  --term-ansi-green: #91b362;
+  --term-ansi-yellow: #f9af4f;
+  --term-ansi-blue: #53bdfa;
+  --term-ansi-magenta: #fae994;
+  --term-ansi-cyan: #90e1c6;
+  --term-ansi-white: #c7c7c7;
+  --term-ansi-bright-black: #686868;
+  --term-ansi-bright-red: #f07178;
+  --term-ansi-bright-green: #c2d94c;
+  --term-ansi-bright-yellow: #ffb454;
+  --term-ansi-bright-blue: #59c2ff;
+  --term-ansi-bright-magenta: #ffee99;
+  --term-ansi-bright-cyan: #95e6cb;
+  --term-ansi-bright-white: #ffffff;
+}
+
+/* Everforest */
+[data-theme="everforest"] {
+  --term-ansi-black: #5c6a72;
+  --term-ansi-red: #f85552;
+  --term-ansi-green: #8da101;
+  --term-ansi-yellow: #dfa000;
+  --term-ansi-blue: #3a94c5;
+  --term-ansi-magenta: #df69ba;
+  --term-ansi-cyan: #35a77c;
+  --term-ansi-white: #939f91;
+  --term-ansi-bright-black: #939f91;
+  --term-ansi-bright-red: #f85552;
+  --term-ansi-bright-green: #8da101;
+  --term-ansi-bright-yellow: #dfa000;
+  --term-ansi-bright-blue: #3a94c5;
+  --term-ansi-bright-magenta: #df69ba;
+  --term-ansi-bright-cyan: #35a77c;
+  --term-ansi-bright-white: #5c6a72;
+}
+
+.dark[data-theme="everforest"] {
+  --term-ansi-black: #4b565c;
+  --term-ansi-red: #e67e80;
+  --term-ansi-green: #a7c080;
+  --term-ansi-yellow: #dbbc7f;
+  --term-ansi-blue: #7fbbb3;
+  --term-ansi-magenta: #d699b6;
+  --term-ansi-cyan: #83c092;
+  --term-ansi-white: #d3c6aa;
+  --term-ansi-bright-black: #525c62;
+  --term-ansi-bright-red: #e67e80;
+  --term-ansi-bright-green: #a7c080;
+  --term-ansi-bright-yellow: #dbbc7f;
+  --term-ansi-bright-blue: #7fbbb3;
+  --term-ansi-bright-magenta: #d699b6;
+  --term-ansi-bright-cyan: #83c092;
+  --term-ansi-bright-white: #d3c6aa;
+}

@@ -1,0 +1,115 @@
+import { defineRpcContract } from "@traycer/protocol/framework/index";
+import {
+  createAgentRequestSchema,
+  createAgentResponseSchema,
+  agentSelectionGuideRequestSchema,
+  agentSelectionGuideResponseSchema,
+  agentSelectionGuideGlobalGetRequestSchema,
+  agentSelectionGuideGlobalGetResponseSchema,
+  agentSelectionGuideGlobalOnboardingDraftGetRequestSchema,
+  agentSelectionGuideGlobalOnboardingDraftGetResponseSchema,
+  agentSelectionGuideGlobalResetRequestSchema,
+  agentSelectionGuideGlobalResetResponseSchema,
+  agentSelectionGuideGlobalSetRequestSchema,
+  agentSelectionGuideGlobalSetResponseSchema,
+  getAgentTranscriptRequestSchema,
+  getAgentTranscriptResponseSchema,
+  listHarnessModelsRequestSchema,
+  listHarnessModelsResponseSchema,
+  listAgentsRequestSchema,
+  listAgentsResponseSchema,
+  sendAgentMessageRequestSchema,
+  sendAgentMessageResponseSchema,
+  stopAgentRequestSchema,
+  stopAgentResponseSchema,
+} from "@traycer/protocol/host/agent/shared";
+
+// ─── Agent-to-agent unary surface ─────────────────────────────────────────
+//
+// `agent.create` mints a child agent (gui chat or tui agent) on behalf of
+// the sender; `agent.list` enumerates every agent record this host's epic
+// Y.Doc can see (cross-host entries included as read-only rows);
+// `agent.sendMessage` is the fire-and-forget hand-off path (no streaming -
+// any reply travels back as a separate `agent.sendMessage`);
+// `agent.getTranscript` flattens an agent's conversation into XML-tagged
+// text; and `agent.stop` halts an agent (and optionally its delegated
+// subtree). Schema docs in `agent/shared.ts` are the authority on the field
+// semantics.
+
+export const agentCreateV10 = defineRpcContract({
+  method: "agent.create",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: createAgentRequestSchema,
+  responseSchema: createAgentResponseSchema,
+});
+
+export const agentSelectionGuideV10 = defineRpcContract({
+  method: "agent.selectionGuide",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: agentSelectionGuideRequestSchema,
+  responseSchema: agentSelectionGuideResponseSchema,
+});
+
+export const agentSelectionGuideGlobalGetV10 = defineRpcContract({
+  method: "agent.selectionGuide.getGlobal",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: agentSelectionGuideGlobalGetRequestSchema,
+  responseSchema: agentSelectionGuideGlobalGetResponseSchema,
+});
+
+export const agentSelectionGuideGlobalOnboardingDraftGetV10 =
+  defineRpcContract({
+    method: "agent.selectionGuide.getGlobalOnboardingDraft",
+    schemaVersion: { major: 1, minor: 0 } as const,
+    requestSchema: agentSelectionGuideGlobalOnboardingDraftGetRequestSchema,
+    responseSchema: agentSelectionGuideGlobalOnboardingDraftGetResponseSchema,
+  });
+
+export const agentSelectionGuideGlobalSetV10 = defineRpcContract({
+  method: "agent.selectionGuide.setGlobal",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: agentSelectionGuideGlobalSetRequestSchema,
+  responseSchema: agentSelectionGuideGlobalSetResponseSchema,
+});
+
+export const agentSelectionGuideGlobalResetV10 = defineRpcContract({
+  method: "agent.selectionGuide.resetGlobalToDefault",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: agentSelectionGuideGlobalResetRequestSchema,
+  responseSchema: agentSelectionGuideGlobalResetResponseSchema,
+});
+
+export const agentListHarnessModelsV10 = defineRpcContract({
+  method: "agent.listHarnessModels",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: listHarnessModelsRequestSchema,
+  responseSchema: listHarnessModelsResponseSchema,
+});
+
+export const agentListV10 = defineRpcContract({
+  method: "agent.list",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: listAgentsRequestSchema,
+  responseSchema: listAgentsResponseSchema,
+});
+
+export const agentSendMessageV10 = defineRpcContract({
+  method: "agent.sendMessage",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: sendAgentMessageRequestSchema,
+  responseSchema: sendAgentMessageResponseSchema,
+});
+
+export const agentGetTranscriptV10 = defineRpcContract({
+  method: "agent.getTranscript",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: getAgentTranscriptRequestSchema,
+  responseSchema: getAgentTranscriptResponseSchema,
+});
+
+export const agentStopV10 = defineRpcContract({
+  method: "agent.stop",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: stopAgentRequestSchema,
+  responseSchema: stopAgentResponseSchema,
+});

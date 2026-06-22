@@ -1,0 +1,179 @@
+import "../../../../../__tests__/test-browser-apis";
+import type { ReactNode } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, render, waitFor } from "@testing-library/react";
+import { create } from "zustand";
+import type { StoreApi, UseBoundStore } from "zustand";
+import type { ChatAccumulatedFileChange } from "@traycer/protocol/host/agent/gui/subscribe";
+import { makeSnapshotCumulativeDiffTile } from "@/lib/chat/snapshot-diff-tile";
+import {
+  DEFAULT_DIFF_VIEWER_PREFERENCES,
+  type DiffViewerPreferences,
+} from "@/lib/diff/diff-viewer-preferences";
+import { useSettingsStore } from "@/stores/settings/settings-store";
+import { TabHostProvider } from "../../tab-host-provider";
+
+interface SnapshotTestStore {
+  readonly snapshotLoaded: boolean;
+  readonly messages: [];
+  readonly liveAssistantMessage: null;
+  readonly accumulatedFileChanges: ReadonlyArray<ChatAccumulatedFileChange>;
+}
+
+interface DiffPrimitiveCall {
+  readonly patch: string;
+  readonly mode: DiffViewerPreferences["mode"];
+  readonly wordWrap: boolean;
+  readonly backgrounds: boolean;
+  readonly lineNumbers: boolean;
+  readonly indicatorStyle: DiffViewerPreferences["indicatorStyle"];
+}
+
+const state = vi.hoisted(() => ({
+  handle: null as {
+    readonly store: UseBoundStore<StoreApi<SnapshotTestStore>>;
+  } | null,
+  buildPatch: vi.fn(),
+  diffPrimitiveCalls: [] as DiffPrimitiveCall[],
+}));
+
+vi.mock("@/lib/registries/chat-session-registry", () => ({
+  useChatSessionHandle: () => state.handle,
+}));
+
+vi.mock("@/hooks/snapshots/use-snapshot-diff-query", () => ({
+  useSnapshotDiffQuery: () => ({
+    data: undefined,
+    isLoading: false,
+  }),
+}));
+
+vi.mock("@/lib/diff/snapshot-diff-patch", () => ({
+  buildSnapshotUnifiedPatchBundle: state.buildPatch,
+}));
+
+vi.mock("@/components/diff/diff-content-primitive", () => ({
+  DiffContentFrame: (props: { readonly children: ReactNode }) => (
+    <div data-testid="snapshot-diff-frame">{props.children}</div>
+  ),
+  DiffContentPrimitive: (props: DiffPrimitiveCall) => {
+    state.diffPrimitiveCalls.push(props);
+    return <div data-testid="snapshot-diff-primitive" />;
+  },
+}));
+
+import { SnapshotDiffTileBody } from "../snapshot-diff-tile-body";
+
+function cumulativeChange(
+  filePath: string,
+  beforeContent: string,
+  afterContent: string,
+): ChatAccumulatedFileChange {
+  return {
+    filePath,
+    operation: "edit",
+    diffSource: "snapshot",
+    beforeContent,
+    afterContent,
+    reason: "snapshot",
+    undoable: true,
+  };
+}
+
+function renderSnapshotTile(): void {
+  const node = makeSnapshotCumulativeDiffTile({
+    hostId: "host-1",
+    chatId: "chat-1",
+    filePath: "src/a.ts",
+  });
+
+  render(
+    <TabHostProvider hostId="host-1">
+      <SnapshotDiffTileBody node={node} viewTabId="view-1" />
+    </TabHostProvider>,
+  );
+}
+
+describe("<SnapshotDiffTileBody />", () => {
+  beforeEach(() => {
+    state.diffPrimitiveCalls = [];
+    state.buildPatch.mockReset();
+    state.buildPatch.mockImplementation(
+      (args: { readonly ignoreWhitespace: boolean }) =>
+        args.ignoreWhitespace ? "patch:ignore" : "patch:include",
+    );
+    state.handle = {
+      store: create<SnapshotTestStore>(() => ({
+        snapshotLoaded: true,
+        messages: [],
+        liveAssistantMessage: null,
+        accumulatedFileChanges: [
+          cumulativeChange("src/a.ts", "const a = 1;\n", "const a = 2;\n"),
+        ],
+      })),
+    };
+    useSettingsStore.setState({
+      diffViewerPreferences: DEFAULT_DIFF_VIEWER_PREFERENCES,
+    });
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  it("rerenders mounted snapshot diffs from global preferences", async () => {
+    renderSnapshotTile();
+
+    expect(state.diffPrimitiveCalls.at(-1)).toMatchObject({
+      patch: "patch:include",
+      mode: "split",
+      wordWrap: false,
+      backgrounds: true,
+      lineNumbers: true,
+      indicatorStyle: "bars",
+    });
+    expect(state.buildPatch).toHaveBeenLastCalledWith({
+      entries: [
+        {
+          filePath: "src/a.ts",
+          beforeContent: "const a = 1;\n",
+          afterContent: "const a = 2;\n",
+        },
+      ],
+      ignoreWhitespace: false,
+    });
+
+    act(() => {
+      useSettingsStore.getState().setDiffViewerPreferences({
+        mode: "unified",
+        wordWrap: true,
+        ignoreWhitespace: true,
+        backgrounds: false,
+        lineNumbers: false,
+        indicatorStyle: "none",
+      });
+    });
+
+    await waitFor(() => {
+      expect(state.diffPrimitiveCalls.at(-1)).toMatchObject({
+        patch: "patch:ignore",
+        mode: "unified",
+        wordWrap: true,
+        backgrounds: false,
+        lineNumbers: false,
+        indicatorStyle: "none",
+      });
+    });
+    expect(state.buildPatch).toHaveBeenLastCalledWith({
+      entries: [
+        {
+          filePath: "src/a.ts",
+          beforeContent: "const a = 1;\n",
+          afterContent: "const a = 2;\n",
+        },
+      ],
+      ignoreWhitespace: true,
+    });
+  });
+});

@@ -1,0 +1,73 @@
+import "../../../../__tests__/test-browser-apis";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, render, screen } from "@testing-library/react";
+import { useAuthStore } from "@/stores/auth/auth-store";
+
+vi.mock("@/components/layout/tabs/tab-strip", () => ({
+  TabStrip: () => <div data-testid="tab-strip" />,
+}));
+
+vi.mock("@/components/layout/header/history-button", () => ({
+  HistoryButton: () => <button type="button">History</button>,
+}));
+
+vi.mock("@/components/layout/header/sign-in-button", () => ({
+  SignInButton: () => <button type="button">Sign in</button>,
+}));
+
+vi.mock("@/components/open-folder-dialog", () => ({
+  OpenFolderDialog: () => <div data-testid="open-folder-dialog" />,
+}));
+
+vi.mock("@/components/layout/bridges/quit-intercept-bridge", () => ({
+  QuitInterceptBridge: () => <div data-testid="quit-intercept-bridge" />,
+}));
+
+vi.mock("@/components/migration/migration-run-controller", () => ({
+  MigrationRunController: () => null,
+}));
+
+vi.mock("@/components/layout/dialogs/migration-blocking-modal-host", () => ({
+  MigrationBlockingModalHost: () => null,
+}));
+
+vi.mock("@/components/notifications/notifications-bell", () => ({
+  NotificationsBell: () => <div data-testid="notifications-bell" />,
+}));
+
+vi.mock("@/components/auth/user-menu", () => ({
+  UserMenu: () => <div data-testid="user-menu" />,
+}));
+
+import { AppShell } from "@/components/layout/app-shell";
+
+describe("<AppShell />", () => {
+  beforeEach(() => {
+    useAuthStore
+      .getState()
+      .setSignedIn(
+        { userId: "user-1", userName: "Test User", email: "test@example.com" },
+        { userId: "user-1", username: "test-user" },
+        [],
+      );
+  });
+
+  afterEach(() => {
+    cleanup();
+    useAuthStore.getState().setSignedOut();
+  });
+
+  it("renders the signed-in app shell around routed children", () => {
+    render(
+      <AppShell>
+        <div data-testid="app-shell-child" />
+      </AppShell>,
+    );
+
+    expect(screen.getByTestId("user-menu")).not.toBeNull();
+    expect(screen.getByTestId("app-shell-child")).not.toBeNull();
+    // Host status footer was removed; the combined chip on the
+    // composer is now the host-state surface.
+    expect(screen.queryByTestId("host-status-footer")).toBeNull();
+  });
+});

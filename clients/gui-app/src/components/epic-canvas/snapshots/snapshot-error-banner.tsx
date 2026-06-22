@@ -1,0 +1,44 @@
+import { AlertTriangle } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { useEpicRequestFreshSnapshot } from "@/lib/epic-selectors";
+import { cn } from "@/lib/utils";
+import type { SnapshotFetchError } from "@/stores/epics/open-epic/store";
+
+interface SnapshotErrorBannerProps {
+  readonly error: SnapshotFetchError;
+  readonly className: string | undefined;
+}
+
+export function SnapshotErrorBanner(props: SnapshotErrorBannerProps) {
+  const requestFreshSnapshot = useEpicRequestFreshSnapshot();
+  return (
+    <div
+      className={cn(
+        "flex h-full min-h-0 w-full items-center justify-center p-4",
+        props.className,
+      )}
+    >
+      <div
+        role="alert"
+        data-testid="snapshot-error-banner"
+        data-error-code={props.error.code}
+        className="flex max-w-sm flex-col items-center gap-2 text-center text-ui-sm"
+      >
+        <AlertTriangle className="size-6 text-destructive" aria-hidden />
+        <p className="font-medium text-destructive">Failed to load epic</p>
+        <p className="text-ui-xs text-muted-foreground">
+          {props.error.message}
+        </p>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          data-testid="snapshot-error-retry"
+          onClick={() => requestFreshSnapshot()}
+        >
+          Retry
+        </Button>
+      </div>
+    </div>
+  );
+}

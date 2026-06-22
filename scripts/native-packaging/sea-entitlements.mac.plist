@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+      Hardened-runtime entitlements for the SEA Mach-O (traycer CLI /
+      traycer-host). V8 JIT-compiles into executable memory at isolate
+      init, so under hardened runtime the binary MUST carry the JIT /
+      unsigned-executable-memory entitlements or it dies before any JS
+      runs with "Fatal process out of memory: Failed to reserve virtual
+      memory for CodeRange". Library validation is disabled so the
+      bundled native addons (node-pty, better-sqlite3, sherpa-onnx) -
+      signed under a different identity - can be dlopen'd into the
+      hardened process. dyld env vars are allowed for the same addon
+      load paths. Mirrors the desktop shell's entitlements.mac.plist,
+      minus the renderer-only microphone grant the CLI/host don't need.
+    -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+    <true/>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+</dict>
+</plist>

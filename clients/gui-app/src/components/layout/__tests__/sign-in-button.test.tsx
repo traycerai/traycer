@@ -1,0 +1,355 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import {
+  MockRunnerHost,
+  MockTraycerCli,
+} from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import type { IHostMessenger } from "@traycer-clients/shared/host-transport/host-messenger";
+import { useEffect } from "react";
+
+vi.mock("sonner", () => ({
+  toast: {
+    error: vi.fn(),
+  },
+}));
+
+import { toast } from "sonner";
+import { SignInButton } from "@/components/layout/header/sign-in-button";
+import {
+  hostRpcRegistry,
+  HostRuntimeProvider,
+  useAuthService,
+  type HostRpcRegistry,
+} from "@/lib/host";
+import type { AuthService } from "@/lib/auth/auth-service";
+import { AuthSessionExpiredToastBridge } from "@/providers/auth-session-expired-toast-bridge";
+import { RunnerHostProvider } from "@/providers/runner-host-provider";
+import { useAuthStore } from "@/stores/auth/auth-store";
+
+function buildHost(): MockRunnerHost {
+  return new MockRunnerHost({
+    signInUrl: "https://auth.traycer.invalid/sign-in",
+    authnBaseUrl: "http://localhost:5005",
+    localHost: null,
+    hosts: [],
+    workspaceFolderPickerPaths: undefined,
+    hasLocalHost: undefined,
+    traycerCli: undefined,
+  });
+}
+
+function buildHostWithCli(cli: MockTraycerCli): MockRunnerHost {
+  return new MockRunnerHost({
+    signInUrl: "https://auth.traycer.invalid/sign-in",
+    authnBaseUrl: "http://localhost:5005",
+    localHost: null,
+    hosts: [],
+    workspaceFolderPickerPaths: undefined,
+    hasLocalHost: undefined,
+    traycerCli: cli,
+  });
+}
+
+function makeMessengerFactory(): (args: {
+  registry: HostRpcRegistry;
+}) => IHostMessenger<HostRpcRegistry> {
+  return (args) =>
+    new MockHostMessenger<HostRpcRegistry>({
+      registry: args.registry,
+      requestId: () => "req-1",
+      handlers: {
+        "host.status": () =>
+          Promise.resolve({
+            ready: true,
+            hostVersion: "1.2.3",
+            protocolVersion: { major: 1, minor: 0 },
+          }),
+      },
+    });
+}
+
+function installFetch(handler: (url: string) => Promise<Response>): () => void {
+  const originalFetch: unknown = (globalThis as { fetch?: unknown }).fetch;
+  Object.defineProperty(globalThis, "fetch", {
+    configurable: true,
+    writable: true,
+    value: (input: unknown): Promise<Response> =>
+      handler(typeof input === "string" ? input : String(input)),
+  });
+  return () => {
+    Object.defineProperty(globalThis, "fetch", {
+      configurable: true,
+      writable: true,
+      value: originalFetch,
+    });
+  };
+}
+
+function okWithProfile(): Promise<Response> {
+  return Promise.resolve(
+    new Response(
+      JSON.stringify({
+        user: {
+          id: "user-1",
+          name: "Test User",
+          providerId: "gh-1",
+          providerHandle: "test-user",
+          providerType: "GITHUB",
+          email: "test@example.com",
+          avatarUrl: null,
+          activatedAt: null,
+          createdAt: "2024-01-01T00:00:00.000Z",
+          updatedAt: "2024-01-01T00:00:00.000Z",
+          lastSeenAt: null,
+          privacyMode: false,
+          isLearningEnabled: true,
+        },
+        userSubscription: {
+          id: "sub-1",
+          userID: "user-1",
+          orgID: null,
+          teamID: null,
+          customerId: "cus-1",
+          createdAt: "2024-01-01T00:00:00.000Z",
+          updatedAt: "2024-01-01T00:00:00.000Z",
+          subscriptionExpiry: null,
+          trialEndsAt: null,
+          subscriptionStatus: "FREE",
+          hasPaymentMethod: false,
+          isInTrial: false,
+          rechargeRateSeconds: 0,
+        },
+        teamSubscriptions: [],
+        payAsYouGoUsage: { allowPayAsYouGo: false },
+      }),
+      {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      },
+    ),
+  );
+}
+
+interface MountResult {
+  readonly host: MockRunnerHost;
+  readonly cleanupClient: () => void;
+  readonly getAuthService: () => AuthService;
+}
+
+function mountSignInButton(host: MockRunnerHost): MountResult {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  let authService: AuthService | null = null;
+
+  render(
+    <RunnerHostProvider runnerHost={host}>
+      <QueryClientProvider client={queryClient}>
+        <HostRuntimeProvider
+          registry={hostRpcRegistry}
+          messengerFactory={makeMessengerFactory()}
+          invalidator={null}
+          requestId={null}
+          remoteFetcher={() => Promise.resolve([])}
+          fallback={<div data-testid="runtime-fallback">…</div>}
+        >
+          <AuthSessionExpiredToastBridge />
+          <CaptureAuthService
+            onCapture={(auth) => {
+              authService = auth;
+            }}
+          />
+          <SignInButton layout="compact" />
+        </HostRuntimeProvider>
+      </QueryClientProvider>
+    </RunnerHostProvider>,
+  );
+
+  return {
+    host,
+    cleanupClient: () => {
+      queryClient.clear();
+    },
+    getAuthService: () => {
+      if (authService === null) {
+        throw new Error("AuthService was not captured");
+      }
+      return authService;
+    },
+  };
+}
+
+function CaptureAuthService(props: {
+  readonly onCapture: (auth: AuthService) => void;
+}): null {
+  const auth = useAuthService();
+  const { onCapture } = props;
+  useEffect(() => {
+    onCapture(auth);
+  }, [auth, onCapture]);
+  return null;
+}
+
+describe("<SignInButton />", () => {
+  let restoreFetch: () => void = () => undefined;
+
+  beforeEach(() => {
+    useAuthStore.getState().setSignedOut();
+    vi.clearAllMocks();
+    // Default profile fetch is unused by these tests; install a benign 401
+    // so any stray call does not accidentally sign the user in.
+    restoreFetch = installFetch(() =>
+      Promise.resolve(new Response(null, { status: 401 })),
+    );
+  });
+
+  afterEach(() => {
+    cleanup();
+    useAuthStore.getState().setSignedOut();
+    restoreFetch();
+  });
+
+  it("renders 'Sign-in failed - please try again.' when lastError is sign-in-failed", async () => {
+    const result = mountSignInButton(buildHost());
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("runtime-fallback")).toBeNull();
+    });
+
+    // Emit an OAuth callback with a token; the pre-installed 401 fetch makes
+    // AuthnV3 reject it, which must surface AUTH_ERROR_SIGN_IN_FAILED on the
+    // header sign-in surface via the new copy.
+    result.host.emitAuthCallback({ code: "rejected-callback-token" });
+
+    await waitFor(() => {
+      const error = screen.queryByTestId("signin-error");
+      expect(error).not.toBeNull();
+      expect(error?.textContent ?? "").toContain(
+        "Sign-in failed - please try again.",
+      );
+    });
+    const detail = screen.getByTestId("signin-error-detail");
+    expect(detail.textContent).toBe("sign-in-failed");
+    result.cleanupClient();
+  });
+
+  it("offers a Retry affordance during signing-in that re-triggers the browser sign-in", async () => {
+    const result = mountSignInButton(buildHost());
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("runtime-fallback")).toBeNull();
+    });
+
+    // Idle (signed-out): no retry affordance - the primary button is the CTA.
+    expect(screen.queryByTestId("signin-retry-link")).toBeNull();
+
+    act(() => {
+      useAuthStore.getState().setSigningIn();
+    });
+
+    const retry = await screen.findByTestId("signin-retry-link");
+    fireEvent.click(retry);
+
+    // `signIn()` re-opens the shell's external sign-in surface, so a stalled
+    // attempt has an immediate escape hatch instead of waiting for the timeout.
+    await waitFor(() => {
+      // signIn appends the PKCE challenge, so match the base URL by prefix.
+      expect(
+        result.host.openedExternalLinks.some((url) =>
+          url.startsWith("https://auth.traycer.invalid/sign-in"),
+        ),
+      ).toBe(true);
+    });
+
+    result.cleanupClient();
+  });
+
+  it("toasts and clears session-expired instead of rendering persistent inline copy", async () => {
+    const host = buildHost();
+    await host.tokenStore.set({
+      token: "revoked-stored-token",
+      refreshToken: "revoked-stored-token-refresh",
+    });
+    const result = mountSignInButton(host);
+
+    // The HostRuntimeProvider auto-starts the AuthService, which calls
+    // validateToken() against the pre-installed 401 fetch; the stored-token
+    // rehydration path must surface AUTH_ERROR_SESSION_EXPIRED as a toast
+    // rather than keeping a persistent inline error beside the sign-in CTA.
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith(
+        "Session expired - sign in again.",
+        { id: "auth-session:expired" },
+      );
+    });
+    expect(screen.queryByTestId("signin-error")).toBeNull();
+    result.cleanupClient();
+  });
+
+  it("clears local CLI credentials when a stored session is rejected", async () => {
+    const cli = new MockTraycerCli();
+    await cli.cliLogin("stale-cli-token", "stale-cli-refresh");
+    const host = buildHostWithCli(cli);
+    await host.tokenStore.set({
+      token: "revoked-stored-token",
+      refreshToken: "revoked-stored-token-refresh",
+    });
+    const result = mountSignInButton(host);
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith(
+        "Session expired - sign in again.",
+        { id: "auth-session:expired" },
+      );
+    });
+    expect(await host.tokenStore.get()).toBeNull();
+    expect(cli.lastLoginToken).toBeNull();
+    expect(cli.lastLoginRefreshToken).toBeNull();
+    result.cleanupClient();
+  });
+
+  it("toasts and clears session-expired after active-session revalidation rejects", async () => {
+    restoreFetch();
+    restoreFetch = installFetch(() => okWithProfile());
+    const result = mountSignInButton(buildHost());
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("runtime-fallback")).toBeNull();
+    });
+
+    await result.getAuthService().signIn();
+    result.host.emitAuthCallback({ code: "valid-token" });
+    await waitFor(() => {
+      expect(useAuthStore.getState().status).toBe("signed-in");
+    });
+    vi.clearAllMocks();
+
+    restoreFetch();
+    restoreFetch = installFetch(() =>
+      Promise.resolve(new Response(null, { status: 401 })),
+    );
+
+    const outcome = await result.getAuthService().revalidateCurrentContext();
+
+    expect(outcome?.kind).toBe("rejected");
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith(
+        "Session expired - sign in again.",
+        { id: "auth-session:expired" },
+      );
+    });
+    expect(useAuthStore.getState().status).toBe("signed-out");
+    expect(result.getAuthService().getLastError()).toBeNull();
+    expect(screen.queryByTestId("signin-error")).toBeNull();
+    result.cleanupClient();
+  });
+});
