@@ -630,7 +630,7 @@ export async function refreshRegistryUpdateState(opts: {
   readonly force: boolean;
 }): Promise<HostRegistryUpdateState> {
   const cache = await readRegistryCache();
-  if (!opts.force && cache !== null) {
+  if (!opts.force && cache !== null && cache.reachable) {
     const ageMs = Date.now() - Date.parse(cache.checkedAt);
     if (Number.isFinite(ageMs) && ageMs >= 0 && ageMs < REGISTRY_CACHE_TTL_MS) {
       return buildUpdateState(cache);

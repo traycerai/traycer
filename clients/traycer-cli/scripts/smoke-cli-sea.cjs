@@ -52,10 +52,7 @@ function main() {
   delete cleanEnv.NODE;
   delete cleanEnv.BUN_INSTALL;
 
-  const result = spawnSync(binaryPath, ["--version"], {
-    env: cleanEnv,
-    encoding: "utf8",
-  });
+  const result = runVersionProbe(cleanEnv);
   if (result.error) {
     fail(
       `Failed to spawn ${binaryPath}: ${result.error.message || result.error}`,
@@ -88,10 +85,35 @@ function main() {
       `\`traycer --version\` reported '${out}' but the test harness expected '${expected}' (TRAYCER_CLI_VERSION_EXPECT)`,
     );
   }
+  if (typeof expected === "string" && expected.length > 0) {
+    const hostileEnv = {
+      ...cleanEnv,
+      TRAYCER_CLI_VERSION: "0.0.0-local",
+    };
+    const hostileResult = runVersionProbe(hostileEnv);
+    if (hostileResult.status !== 0) {
+      fail(
+        `hostile-env \`traycer --version\` exited with status=${hostileResult.status}, stderr=${hostileResult.stderr}`,
+      );
+    }
+    const hostileOut = (hostileResult.stdout || "").trim();
+    if (hostileOut !== expected) {
+      fail(
+        `hostile-env \`traycer --version\` reported '${hostileOut}' but expected baked version '${expected}'`,
+      );
+    }
+  }
 
   console.log(
     `[cli smoke] OK platform=${process.platform} arch=${process.arch} version="${out}" path-isolation=${JSON.stringify(cleanEnv.PATH)}`,
   );
+}
+
+function runVersionProbe(env) {
+  return spawnSync(binaryPath, ["--version"], {
+    env,
+    encoding: "utf8",
+  });
 }
 
 main();

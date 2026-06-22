@@ -3,6 +3,7 @@ import {
   compareSemver,
   discoverCli,
   installBundledCli,
+  probeCliVersion,
   readBundledCliVersion,
   readCliManifest,
   resolveBundledCliPath,
@@ -144,6 +145,7 @@ export interface ReconcileCliDeps {
   readonly resolveBundledCliPath: () => Promise<string | null>;
   readonly readBundledCliVersion: () => Promise<string>;
   readonly discoverCli: () => Promise<CliDiscoveryResult>;
+  readonly probeCliVersion: (binaryPath: string) => Promise<string | null>;
   readonly installBundledCli: (opts: {
     readonly bundledCliPath: string;
     readonly version: string;
@@ -178,6 +180,7 @@ export function defaultReconcileCliDeps(): ReconcileCliDeps {
     resolveBundledCliPath,
     readBundledCliVersion,
     discoverCli,
+    probeCliVersion,
     installBundledCli,
     stableCliBinaryPath,
     stageBundledCliForUpgrade,
@@ -309,14 +312,31 @@ export async function reconcileCli(
     };
   }
 
+  const probedManifestVersion =
+    manifest.source === "desktop"
+      ? await deps.probeCliVersion(manifest.binaryPath)
+      : null;
+  const installedVersion = probedManifestVersion ?? manifest.version;
+
+  if (
+    probedManifestVersion !== null &&
+    probedManifestVersion !== manifest.version
+  ) {
+    deps.logger.warn("[cli-reconcile] manifest version disagrees with binary", {
+      manifestVersion: manifest.version,
+      binaryVersion: probedManifestVersion,
+      binaryPath: manifest.binaryPath,
+    });
+  }
+
   // Case 2: manifest present. Compare versions.
-  const cmp = compareSemver(manifest.version, bundledVersion);
+  const cmp = compareSemver(installedVersion, bundledVersion);
   if (cmp >= 0) {
     await clearPackageManagerHint(deps);
     return {
       kind: "trusted-equal",
       source: "manifest",
-      installedVersion: manifest.version,
+      installedVersion,
       bundledVersion,
       binaryPath: manifest.binaryPath,
     };
@@ -326,14 +346,14 @@ export async function reconcileCli(
   if (isPackageManagerSource(manifest.source)) {
     const upgradeHint = await persistPackageManagerUpgradeHint(deps, {
       source: manifest.source,
-      installedVersion: manifest.version,
+      installedVersion,
       bundledVersion,
     });
     deps.logger.info(
       "[cli-reconcile] package-manager-owned CLI is older than bundled",
       {
         source: manifest.source,
-        installed: manifest.version,
+        installed: installedVersion,
         bundled: bundledVersion,
         upgradeHint,
       },
@@ -341,7 +361,7 @@ export async function reconcileCli(
     return {
       kind: "package-manager-older",
       source: manifest.source,
-      installedVersion: manifest.version,
+      installedVersion,
       bundledVersion,
       upgradeHint,
     };
@@ -357,13 +377,13 @@ export async function reconcileCli(
     // the caller route to support/diagnostic state.
     deps.logger.warn(
       "[cli-reconcile] desktop-owned CLI is older than bundled but no bundled binary is reachable - skipping pendingUpgrade",
-      { installed: manifest.version, bundled: bundledVersion },
+      { installed: installedVersion, bundled: bundledVersion },
     );
     return {
       kind: "upgrade-blocked",
       reason: "manifest-rewrite-failed",
       stagedVersion: bundledVersion,
-      installedVersion: manifest.version,
+      installedVersion,
       errorMessage:
         "bundled CLI binary is not reachable from process.resourcesPath",
     };
@@ -376,13 +396,13 @@ export async function reconcileCli(
       source: manifest.source === "desktop" ? "desktop" : manifest.source,
     });
     deps.logger.info("[cli-reconcile] upgraded desktop-owned CLI", {
-      from: manifest.version,
+      from: installedVersion,
       to: bundledVersion,
       path: installedPath,
     });
     return {
       kind: "upgraded",
-      previousVersion: manifest.version,
+      previousVersion: installedVersion,
       newVersion: bundledVersion,
       binaryPath: installedPath,
     };
@@ -446,7 +466,7 @@ export async function reconcileCli(
       kind: "upgrade-blocked",
       reason,
       stagedVersion: bundledVersion,
-      installedVersion: manifest.version,
+      installedVersion,
       errorMessage,
     };
   }

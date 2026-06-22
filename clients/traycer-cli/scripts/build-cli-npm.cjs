@@ -118,13 +118,13 @@ function main() {
   // `readonlyEnv()` (which returns process.env), so the esbuild
   // build-time `--define` above cannot bake it through that indirection
   // (verified: esbuild substitutes only direct `process.env.X` accesses,
-  // not aliased reads). Default the env var to the built version before
-  // any CLI logic runs so the published bin reports the real version with
-  // no user setup; a user-provided value still wins.
+  // not aliased reads). Set the env var to the built version before any CLI
+  // logic runs so ambient shell state cannot make the published bin report a
+  // local/dev version.
   let code = fs.readFileSync(outputBundle, "utf8");
   code = code.replace(/^#![^\n]*\n/, "");
-  const versionShim = `if(!process.env.TRAYCER_CLI_VERSION)process.env.TRAYCER_CLI_VERSION=${JSON.stringify(cliVersion)};`;
-  const distributionShim = `if(!process.env.TRAYCER_CLI_DISTRIBUTION)process.env.TRAYCER_CLI_DISTRIBUTION="npm";`;
+  const versionShim = `process.env.TRAYCER_CLI_VERSION=${JSON.stringify(cliVersion)};`;
+  const distributionShim = `process.env.TRAYCER_CLI_DISTRIBUTION="npm";`;
   code = `#!/usr/bin/env node\n"use strict";${versionShim}${distributionShim}\n${code}`;
   fs.writeFileSync(outputBundle, code);
 

@@ -64,6 +64,38 @@ describe("resolveCliVersion", () => {
     );
     expect(buildScript).toContain(`"${LOCAL_CLI_VERSION}"`);
   });
+
+  it("SEA release builds overwrite ambient TRAYCER_CLI_VERSION with the baked version", () => {
+    const buildScript = readFileSync(
+      join(__dirname, "..", "..", "scripts", "build-cli-sea.cjs"),
+      "utf8",
+    );
+    expect(buildScript).toContain(
+      "process.env.TRAYCER_CLI_VERSION=${JSON.stringify(cliVersion)}",
+    );
+    expect(buildScript).not.toContain(
+      "if(!process.env.TRAYCER_CLI_VERSION)process.env.TRAYCER_CLI_VERSION=",
+    );
+  });
+
+  it("npm release builds overwrite ambient CLI version/distribution env with baked package values", () => {
+    const buildScript = readFileSync(
+      join(__dirname, "..", "..", "scripts", "build-cli-npm.cjs"),
+      "utf8",
+    );
+    expect(buildScript).toContain(
+      "process.env.TRAYCER_CLI_VERSION=${JSON.stringify(cliVersion)}",
+    );
+    expect(buildScript).toContain(
+      'process.env.TRAYCER_CLI_DISTRIBUTION="npm"',
+    );
+    expect(buildScript).not.toContain(
+      "if(!process.env.TRAYCER_CLI_VERSION)process.env.TRAYCER_CLI_VERSION=",
+    );
+    expect(buildScript).not.toContain(
+      "if(!process.env.TRAYCER_CLI_DISTRIBUTION)process.env.TRAYCER_CLI_DISTRIBUTION=",
+    );
+  });
 });
 
 describe("buildProgram() Commander version registration", () => {

@@ -14,8 +14,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // probe (Flow 6). It owns the 24h cache the tray + Settings + banner
 // all read from. Behaviour we pin here:
 //
-//   - Fresh cache (< 24h) short-circuits without hitting the CLI.
+//   - Fresh successful cache (< 24h) short-circuits without hitting the CLI.
 //   - Stale cache (>= 24h) re-probes through the CLI.
+//   - Failed cache entries re-probe on the next launch so repo/tag migrations
+//     don't leave Settings showing stale 404s for the full TTL.
 //   - `force: true` always re-probes.
 //   - Registry failures are non-blocking: the cache file still
 //     gets written with `reachable: false` so Settings can render the
@@ -218,9 +220,18 @@ describe("refreshRegistryUpdateState - launch-time probe", () => {
     expect(state.updateAvailable).toBe(false);
   });
 
-  it("derives updateAvailable=false when reachable is false (no false positives on cached error states)", async () => {
+  it("re-probes a fresh failed cache instead of replaying a stale error", async () => {
+    const probeSpy = vi.fn().mockResolvedValue({
+      manifest: {
+        generatedAt: "2026-05-15T00:00:00Z",
+        latest: "1.4.3",
+        versions: [],
+      },
+      platformKey: "darwin-arm64",
+      manifestUrl: "https://example.invalid/versions.json",
+    });
     vi.doMock("../../cli/traycer-cli", () => ({
-      runTraycerCliJson: vi.fn(),
+      runTraycerCliJson: probeSpy,
       streamTraycerCliJson: vi.fn(),
       TraycerCliError: class extends Error {},
     }));
@@ -234,8 +245,10 @@ describe("refreshRegistryUpdateState - launch-time probe", () => {
     const { refreshRegistryUpdateState } =
       await import("../host-management-ipc");
     const state = await refreshRegistryUpdateState({ force: false });
-    expect(state.updateAvailable).toBe(false);
-    expect(state.errorMessage).toBe("offline");
+    expect(probeSpy).toHaveBeenCalledOnce();
+    expect(state.reachable).toBe(true);
+    expect(state.latestVersion).toBe("1.4.3");
+    expect(state.errorMessage).toBeNull();
   });
 });
 

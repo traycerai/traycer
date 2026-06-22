@@ -111,14 +111,12 @@ async function main() {
 
   // Runtime version shim (see the cliVersion comment above for why the esbuild
   // `define` is dead through the `readonlyEnv()` indirection). Strip any
-  // hashbang esbuild preserved from the entry and prepend a default that
-  // populates `process.env.TRAYCER_CLI_VERSION` before any CLI logic runs, so
-  // `traycer --version` reports the real release version on a bare SEA invoke
-  // (no runtime env var). A user-provided value still wins. Mirrors
-  // build-cli-npm.cjs.
+  // hashbang esbuild preserved from the entry and prepend the baked build
+  // version before any CLI logic runs, so ambient shell state cannot make a
+  // released binary report a local/dev version. Mirrors build-cli-npm.cjs.
   let seaBundle = fs.readFileSync(bundleFile, "utf8");
   seaBundle = seaBundle.replace(/^#![^\n]*\n/, "");
-  const versionShim = `if(!process.env.TRAYCER_CLI_VERSION)process.env.TRAYCER_CLI_VERSION=${JSON.stringify(cliVersion)};`;
+  const versionShim = `process.env.TRAYCER_CLI_VERSION=${JSON.stringify(cliVersion)};`;
   seaBundle = `"use strict";${versionShim}\n${seaBundle}`;
   fs.writeFileSync(bundleFile, seaBundle);
 

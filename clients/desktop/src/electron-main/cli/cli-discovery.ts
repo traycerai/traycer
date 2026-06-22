@@ -417,7 +417,9 @@ async function inferNpmPathSource(
   }
 }
 
-async function probeCliVersion(binaryPath: string): Promise<string | null> {
+export async function probeCliVersion(
+  binaryPath: string,
+): Promise<string | null> {
   return new Promise((resolve) => {
     execFile(
       binaryPath,

@@ -16,6 +16,7 @@ function makeDeps(overrides: {
   bundledPath?: string | null;
   bundledVersion?: string;
   discovery?: CliDiscoveryResult;
+  probeCliVersion?: (binaryPath: string) => string | null;
   installBundledCli?: (opts: {
     bundledCliPath: string;
     version: string;
@@ -68,6 +69,8 @@ function makeDeps(overrides: {
       readBundledCliVersion: async () => overrides.bundledVersion ?? "1.0.0",
       discoverCli: async () =>
         overrides.discovery ?? ({ kind: "none" } as const),
+      probeCliVersion: async (binaryPath: string) =>
+        overrides.probeCliVersion?.(binaryPath) ?? null,
       installBundledCli: (async (opts: {
         bundledCliPath: string;
         version: string;
@@ -119,6 +122,33 @@ describe("reconcileCli - newest-wins", () => {
     });
     if (result.kind === "upgraded") {
       expect(result.previousVersion).toBe("1.0.0");
+      expect(result.newVersion).toBe("1.4.2");
+    }
+  });
+
+  it("uses the actual desktop-owned binary version when the manifest is stale", async () => {
+    const { deps, install } = makeDeps({
+      manifest: {
+        version: "1.4.2",
+        installedAt: "2026-04-01T00:00:00Z",
+        binaryPath: "/stable/traycer",
+        source: "desktop",
+        pendingUpgrade: null,
+      },
+      bundledPath: "/bundled/traycer",
+      bundledVersion: "1.4.2",
+      probeCliVersion: (binaryPath: string) =>
+        binaryPath === "/stable/traycer" ? "0.0.0-local" : null,
+    });
+    const result = await reconcileCli(deps);
+    expect(install).toHaveBeenCalledWith({
+      bundledCliPath: "/bundled/traycer",
+      version: "1.4.2",
+      source: "desktop",
+    });
+    expect(result.kind).toBe("upgraded");
+    if (result.kind === "upgraded") {
+      expect(result.previousVersion).toBe("0.0.0-local");
       expect(result.newVersion).toBe("1.4.2");
     }
   });
@@ -760,6 +790,7 @@ describe("runLaunchTimeCliReconciliation - dev isolation", () => {
       resolveBundledCliPath: resolveBundled as never,
       readBundledCliVersion: readBundledVersion as never,
       discoverCli: discover as never,
+      probeCliVersion: vi.fn() as never,
       installBundledCli: install as never,
       stableCliBinaryPath: stableBin as never,
       stageBundledCliForUpgrade: stage as never,
@@ -852,6 +883,7 @@ describe("runLaunchTimeCliReconciliation - dev isolation", () => {
       resolveBundledCliPath: vi.fn() as never,
       readBundledCliVersion: vi.fn() as never,
       discoverCli: vi.fn() as never,
+      probeCliVersion: vi.fn() as never,
       installBundledCli: vi.fn() as never,
       stableCliBinaryPath: vi.fn() as never,
       stageBundledCliForUpgrade: vi.fn() as never,
