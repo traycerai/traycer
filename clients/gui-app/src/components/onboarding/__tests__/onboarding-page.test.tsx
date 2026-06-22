@@ -256,6 +256,43 @@ describe("OnboardingPage", () => {
     );
   });
 
+  it("falls back to browser navigation when the runner host cannot open a footer link", async () => {
+    const host = createRunnerHost();
+    const openExternalLinkMock = vi
+      .spyOn(host, "openExternalLink")
+      .mockRejectedValue(new Error("host unavailable"));
+    const windowOpenMock = vi
+      .spyOn(window, "open")
+      .mockImplementation(() => null);
+
+    render(
+      <RunnerHostContext.Provider value={host}>
+        <LazyMotion features={domAnimation}>
+          <OnboardingPage replay={false} />
+        </LazyMotion>
+      </RunnerHostContext.Provider>,
+    );
+
+    fireEvent.click(
+      screen.getByRole<HTMLAnchorElement>("link", {
+        name: "Support",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(windowOpenMock).toHaveBeenCalledWith(
+        traycerInfo.mainWebsiteContactUs,
+        "_blank",
+        "noopener,noreferrer",
+      );
+    });
+    expect(openExternalLinkMock).toHaveBeenCalledWith(
+      traycerInfo.mainWebsiteContactUs,
+    );
+
+    windowOpenMock.mockRestore();
+  });
+
   it("advances through all five acts while keeping the Figma continue label", async () => {
     renderPage({ replay: false });
 

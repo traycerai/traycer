@@ -743,16 +743,22 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
 function OnboardingFooterLinks() {
   const runnerHost = use(RunnerHostContext);
 
+  const openInBrowser = useCallback((url: string) => {
+    window.open(url, "_blank", "noopener,noreferrer");
+  }, []);
+
   const openFooterLink = useCallback(
     (event: MouseEvent<HTMLAnchorElement>, url: string) => {
       event.preventDefault();
       if (runnerHost !== null) {
-        void runnerHost.openExternalLink(url);
+        void runnerHost.openExternalLink(url).catch(() => {
+          openInBrowser(url);
+        });
         return;
       }
-      window.open(url, "_blank", "noopener,noreferrer");
+      openInBrowser(url);
     },
-    [runnerHost],
+    [openInBrowser, runnerHost],
   );
 
   return (
