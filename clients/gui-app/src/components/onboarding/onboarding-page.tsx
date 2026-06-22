@@ -1,5 +1,7 @@
 import {
+  type MouseEvent,
   type ReactNode,
+  use,
   useCallback,
   useEffect,
   useEffectEvent,
@@ -9,6 +11,7 @@ import {
 } from "react";
 import { useNavigate, useRouter } from "@tanstack/react-router";
 import { AnimatePresence, m } from "motion/react";
+import { traycerInfo } from "@traycer-clients/shared/platform/traycer-info";
 import packageJson from "../../../package.json";
 import geistPixelSquareUrl from "@/assets/fonts/GeistPixel-Square.woff2?url";
 import onboardingBackdropUrl from "@/assets/brand/gradient-bg.jpg?url";
@@ -25,6 +28,7 @@ import {
 import { OnboardingThemePicker } from "@/components/onboarding/onboarding-theme-picker";
 import { useAgentSelectionGuideGlobalOnboardingDraftQuery } from "@/hooks/agent/use-agent-selection-guide-global-onboarding-draft-query";
 import { useAgentSelectionGuideSetGlobalMutation } from "@/hooks/agent/use-agent-selection-guide-set-global-mutation";
+import { RunnerHostContext } from "@/providers/runner-host-context";
 import {
   selectIsLastStep,
   selectStep,
@@ -33,6 +37,11 @@ import {
 import { cn } from "@/lib/utils";
 
 const ACT_EASE = [0.32, 0.72, 0, 1] as const;
+const ONBOARDING_FOOTER_LINKS = [
+  { label: "Features", url: traycerInfo.mainWebsiteFeatures },
+  { label: "Enterprise", url: traycerInfo.mainWebsiteEnterprise },
+  { label: "Support", url: traycerInfo.mainWebsiteContactUs },
+] as const;
 const ONBOARDING_STYLE = `
 @font-face {
   font-family: "Geist Pixel Square";
@@ -724,22 +733,45 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
 
         <footer className="flex items-center justify-between gap-4 px-10 font-heading text-[0.75rem] leading-none text-white/75 [@media(min-height:920px)]:text-[0.8125rem] max-sm:px-5">
           <span>{resolveAppVersionLabel()}</span>
-          <nav aria-label="Traycer footer links" className="hidden sm:block">
-            <ul className="flex items-center gap-8">
-              {["Features", "Enterprise", "Support"].map((label) => (
-                <li key={label}>
-                  <button
-                    type="button"
-                    className="transition-colors hover:text-white/80"
-                  >
-                    {label}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </nav>
+          <OnboardingFooterLinks />
         </footer>
       </div>
     </main>
+  );
+}
+
+function OnboardingFooterLinks() {
+  const runnerHost = use(RunnerHostContext);
+
+  const openFooterLink = useCallback(
+    (event: MouseEvent<HTMLAnchorElement>, url: string) => {
+      event.preventDefault();
+      if (runnerHost !== null) {
+        void runnerHost.openExternalLink(url);
+        return;
+      }
+      window.open(url, "_blank", "noopener,noreferrer");
+    },
+    [runnerHost],
+  );
+
+  return (
+    <nav aria-label="Traycer footer links" className="hidden sm:block">
+      <ul className="flex items-center gap-8">
+        {ONBOARDING_FOOTER_LINKS.map((link) => (
+          <li key={link.label}>
+            <a
+              href={link.url}
+              target="_blank"
+              rel="noreferrer"
+              onClick={(event) => openFooterLink(event, link.url)}
+              className="transition-colors hover:text-white/80"
+            >
+              {link.label}
+            </a>
+          </li>
+        ))}
+      </ul>
+    </nav>
   );
 }

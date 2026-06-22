@@ -8,9 +8,12 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { LazyMotion, domAnimation } from "motion/react";
+import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import { traycerInfo } from "@traycer-clients/shared/platform/traycer-info";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import { ONBOARDING_ACTS } from "@/components/onboarding/onboarding-acts";
 import type { OnboardingAgentGuideState } from "@/components/onboarding/onboarding-diorama";
+import { RunnerHostContext } from "@/providers/runner-host-context";
 
 type GuideQueryState = {
   readonly data:
@@ -130,6 +133,18 @@ function renderPage(args: { readonly replay: boolean }) {
   );
 }
 
+function createRunnerHost() {
+  return new MockRunnerHost({
+    signInUrl: "https://auth.traycer.test/sign-in",
+    authnBaseUrl: "https://auth.traycer.test",
+    localHost: null,
+    hosts: [],
+    workspaceFolderPickerPaths: undefined,
+    hasLocalHost: undefined,
+    traycerCli: undefined,
+  });
+}
+
 async function advanceToStage(stage: number): Promise<void> {
   const current = Number(
     screen.getByTestId("onboarding-diorama-stub").getAttribute("data-stage"),
@@ -210,6 +225,35 @@ describe("OnboardingPage", () => {
     renderPage({ replay: false });
 
     expect(screen.getByText("v0.0.0")).not.toBeNull();
+  });
+
+  it("wires onboarding footer links to the website destinations", () => {
+    const host = createRunnerHost();
+    render(
+      <RunnerHostContext.Provider value={host}>
+        <LazyMotion features={domAnimation}>
+          <OnboardingPage replay={false} />
+        </LazyMotion>
+      </RunnerHostContext.Provider>,
+    );
+
+    const expectedLinks = [
+      ["Features", traycerInfo.mainWebsiteFeatures],
+      ["Enterprise", traycerInfo.mainWebsiteEnterprise],
+      ["Support", traycerInfo.mainWebsiteContactUs],
+    ] as const;
+
+    expectedLinks.forEach(([label, url]) => {
+      const link = screen.getByRole<HTMLAnchorElement>("link", {
+        name: label,
+      });
+      expect(link.href).toBe(url);
+      fireEvent.click(link);
+    });
+
+    expect(host.openedExternalLinks).toEqual(
+      expectedLinks.map(([, url]) => url),
+    );
   });
 
   it("advances through all five acts while keeping the Figma continue label", async () => {
