@@ -1,7 +1,5 @@
-import { useState } from "react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
-import { PasteTokenSheet } from "@/components/auth/paste-token-sheet";
 import { useAuthService } from "@/lib/host";
 import { useAuthServiceError } from "@/hooks/auth/use-auth-service-error";
 import {
@@ -23,12 +21,8 @@ export interface SignInButtonProps {
  * sign-in flow uses the runner-host browser bridge - never a direct
  * `runnerHost.openExternalLink` call from UI code.
  *
- * The signed-out surface keeps the primary "Sign in" affordance
- * and an always-visible "Paste token instead" link that opens the manual
- * `PasteTokenSheet`. Both paths funnel into `AuthService` so AuthnV3
- * validation runs once. The paste path stays available even during an in-flight
- * browser auth attempt because `AuthService.applyPastedToken()` invalidates the
- * earlier OAuth epoch before validating the pasted token.
+ * The signed-out surface presents the primary "Sign in" affordance, which
+ * funnels into `AuthService` so AuthnV3 validation runs once.
  *
  * Interactive sign-in failures render a visible failure message next to the
  * button so the user has a stable retry CTA. Stored-session expiry is handled
@@ -39,7 +33,6 @@ export function SignInButton(props: SignInButtonProps) {
   const auth = useAuthService();
   const status = useAuthStore((state) => state.status);
   const lastError = useAuthServiceError(auth);
-  const [pasteOpen, setPasteOpen] = useState<boolean>(false);
 
   if (status === "signed-in") {
     return null;
@@ -70,18 +63,6 @@ export function SignInButton(props: SignInButtonProps) {
         auth={auth}
         isHero={isHero}
         isSigningIn={isSigningIn}
-      />
-      <PasteTokenButton
-        isHero={isHero}
-        onOpen={() => {
-          setPasteOpen(true);
-        }}
-      />
-      <PasteTokenSheet
-        open={pasteOpen}
-        onOpenChange={(next) => {
-          setPasteOpen(next);
-        }}
       />
     </div>
   );
@@ -173,26 +154,6 @@ function RetrySignInButton(props: {
       )}
     >
       Taking too long? Retry
-    </Button>
-  );
-}
-
-function PasteTokenButton(props: {
-  readonly isHero: boolean;
-  readonly onOpen: () => void;
-}) {
-  return (
-    <Button
-      type="button"
-      size={props.isHero ? "default" : "sm"}
-      variant="link"
-      data-testid="paste-token-link"
-      onClick={props.onOpen}
-      className={cn(
-        props.isHero ? "h-auto justify-center px-0 py-0 text-ui-sm" : null,
-      )}
-    >
-      Paste token instead
     </Button>
   );
 }

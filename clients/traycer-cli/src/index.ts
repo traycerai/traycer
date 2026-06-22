@@ -274,7 +274,7 @@ function registerAuthCommands(program: Command): void {
       .description("Sign in to Traycer via your browser")
       .option(
         "--token <token>",
-        "Seed credentials from an existing bearer token instead of opening a browser. Use '-' to read the token from stdin.",
+        "Internal: seed credentials from a JSON `{ token, refreshToken }` payload piped on stdin (pass '-'). Used by the desktop app after sign-in; not for interactive use.",
       ),
     (opts) =>
       buildLoginCommand({

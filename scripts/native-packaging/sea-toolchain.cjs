@@ -404,6 +404,21 @@ function injectSeaBlob({ binary, blob }) {
 // past the signing certificate's expiry. Ad-hoc signing (`-`) cannot
 // be notarized and does not benefit from these flags, so we omit them
 // in that path to keep local builds fast and offline.
+//
+// Hardened runtime ALSO requires JIT entitlements for any V8 binary:
+// the isolate JIT-compiles into executable memory at startup, and
+// without `com.apple.security.cs.allow-jit` /
+// `allow-unsigned-executable-memory` the process dies before running
+// any JS with "Failed to reserve virtual memory for CodeRange".
+// notarytool does NOT check these, so a binary can notarize cleanly
+// yet be unlaunchable - which is exactly how an entitlement-less host
+// shipped. We therefore attach the entitlements plist whenever we
+// harden, and hard-fail if it's missing so the regression can't recur.
+const SEA_ENTITLEMENTS_PLIST = path.join(
+  __dirname,
+  "sea-entitlements.mac.plist",
+);
+
 function macosSignAdHoc(target) {
   if (process.platform !== "darwin") return;
   const identity = process.env.TRAYCER_MACOS_SIGN_IDENTITY || "-";
@@ -411,6 +426,18 @@ function macosSignAdHoc(target) {
   if (identity !== "-") {
     // hardened runtime required for Apple notarization
     args.push("--options", "runtime", "--timestamp");
+    // JIT entitlements required for the hardened V8 binary to launch.
+    const entitlements =
+      process.env.TRAYCER_MACOS_ENTITLEMENTS || SEA_ENTITLEMENTS_PLIST;
+    if (!fs.existsSync(entitlements)) {
+      throw new Error(
+        `Hardened-runtime SEA sign requires an entitlements plist, but none ` +
+          `was found at '${entitlements}'. A hardened V8 binary without ` +
+          `com.apple.security.cs.allow-jit crashes at startup with "Failed ` +
+          `to reserve virtual memory for CodeRange".`,
+      );
+    }
+    args.push("--entitlements", entitlements);
   }
   args.push(target);
   const res = spawnSync("codesign", args, {

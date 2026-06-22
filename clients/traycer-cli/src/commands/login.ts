@@ -59,10 +59,14 @@ export const loginCommand: CommandFn = async (ctx): Promise<CommandResult> => {
 
 // Resolves the right `login` behaviour from the parsed `--token` flag.
 //   - no `--token` → the interactive browser sign-in (`loginCommand`).
-//   - `--token <value>` / `--token -` → the non-interactive credential-seeding
-//     path the Desktop drives after sign-in: validate the captured bearer and
-//     persist it to `~/.traycer/cli/credentials` so the CLI keeps using it. No
-//     browser, no host auto-bootstrap (the Desktop owns provisioning).
+//   - `--token -` → the non-interactive credential-seeding path the Desktop
+//     drives after sign-in: read a JSON `{ token, refreshToken }` payload from
+//     stdin, validate the captured bearer, and persist it to
+//     `~/.traycer/cli/credentials` so the CLI keeps using it. No browser, no
+//     host auto-bootstrap (the Desktop owns provisioning).
+//
+// `--token` only accepts `-`; passing a literal bearer on argv is rejected so
+// secrets never land in the process list.
 export function buildLoginCommand(opts: {
   readonly token: string | null;
 }): CommandFn {
@@ -72,17 +76,22 @@ export function buildLoginCommand(opts: {
 
 function loginWithToken(rawToken: string): CommandFn {
   return async (ctx): Promise<CommandResult> => {
-    const { token, refreshToken } =
-      rawToken === "-"
-        ? parseStdinCredentials(await readTokenFromStdin())
-        : { token: rawToken.trim(), refreshToken: "" };
-    if (token.length === 0) {
+    if (rawToken !== "-") {
       throw cliError({
         code: CLI_ERROR_CODES.INVALID_ARGUMENT,
         message:
-          rawToken === "-"
-            ? "login: --token - received no token on stdin."
-            : "login: --token was empty.",
+          "login: --token only accepts '-'; pipe a JSON { token, refreshToken } payload on stdin.",
+        details: null,
+        exitCode: 1,
+      });
+    }
+    const { token, refreshToken } = parseStdinCredentials(
+      await readTokenFromStdin(),
+    );
+    if (token.length === 0) {
+      throw cliError({
+        code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+        message: "login: --token - received no token on stdin.",
         details: null,
         exitCode: 1,
       });
@@ -128,15 +137,12 @@ function loginWithToken(rawToken: string): CommandFn {
       "refreshedRefreshToken" in validation
         ? validation.refreshedRefreshToken
         : "";
-    const shouldReusePersistedRefresh = rawToken === "-";
     const finalRefreshToken =
       rotatedRefreshToken.length > 0
         ? rotatedRefreshToken
         : refreshToken.length > 0
           ? refreshToken
-          : shouldReusePersistedRefresh
-            ? ((await readCredentials())?.refreshToken ?? "")
-            : "";
+          : ((await readCredentials())?.refreshToken ?? "");
     const user = {
       id: validation.profile.userId,
       email: validation.profile.email,

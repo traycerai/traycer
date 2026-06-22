@@ -1,6 +1,5 @@
 /**
- * Query-key builders for non-Traycer Host `AuthService` reads. (Auth mutation keys
- * live in `auth-mutation-keys.ts`.)
+ * Query-key builders for non-Traycer Host `AuthService` reads.
  */
 export const authQueryKeys = {
   // `authService: object` keys the query to the live AuthService instance,

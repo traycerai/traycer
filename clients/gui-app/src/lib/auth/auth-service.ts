@@ -145,13 +145,12 @@ type ValidationOutcome = AuthIdentityValidationResult;
  *     pair has been retired in favour of `RequestContext` snapshots.
  *
  * Every token that lands in the GUI - rehydrated from the token store at
- * `start()`, delivered via `onAuthCallback`, or pasted into the manual
- * sign-in sheet - is validated against AuthnV3 before being projected as
- * `signed-in`. The validation/refresh helper returns the FULL
- * `AuthenticatedUser` so the minted `RequestContext` carries the same
- * identity shape that host-minted contexts already carry.
+ * `start()` or delivered via `onAuthCallback` - is validated against AuthnV3
+ * before being projected as `signed-in`. The validation/refresh helper
+ * returns the FULL `AuthenticatedUser` so the minted `RequestContext`
+ * carries the same identity shape that host-minted contexts already carry.
  *
- * Three distinct failure paths drive distinct `lastError` codes so the UI
+ * Two distinct failure paths drive distinct `lastError` codes so the UI
  * copy can match the flow the user was actually in:
  *
  *   1. `start()`-time stored-token rehydration failure →
@@ -159,15 +158,10 @@ type ValidationOutcome = AuthIdentityValidationResult;
  *      The validation helper has already attempted refresh before
  *      returning a terminal failure, so startup clears the stored token
  *      and asks the user to sign in again.
- *   2. `applyOAuthCallbackToken(token)` - invoked by `handleCallback` when
- *      the shell delivers an OAuth success result. A `rejected` or
- *      `network-error` validation outcome surfaces
- *      `AUTH_ERROR_SIGN_IN_FAILED` ("Sign-in failed - please try again") and
- *      clears any persisted token.
- *   3. `applyPastedToken(token)` - invoked by the paste-token sheet. A
- *      `rejected` or `network-error` outcome returns `false` WITHOUT
- *      mutating `lastError`; the sheet owns its own inline error surface so
- *      paste-only failures never pollute the global signed-out auth surface.
+ *   2. The OAuth callback path - invoked by `handleCallback` when the shell
+ *      delivers an OAuth success result. A `rejected` or `network-error`
+ *      validation outcome surfaces `AUTH_ERROR_SIGN_IN_FAILED` ("Sign-in
+ *      failed - please try again") and clears any persisted token.
  */
 export class AuthService {
   private readonly runnerHost: IRunnerHost;
@@ -209,9 +203,7 @@ export class AuthService {
   // Identifier of the currently in-flight OAuth attempt. Set by `signIn()`
   // before the shell is asked to launch the browser, cleared by:
   //   - a matching `handleCallback` once it has fully projected the outcome,
-  //   - `applyPastedToken` so a late browser-delivered callback cannot
-  //     overwrite a successfully pasted session (the paste path supersedes
-  //     any in-flight OAuth attempt before validation runs), and
+  //     and
   //   - `handleSignInTimeout` / launch-failure so the same attempt cannot
   //     be resurrected by a stale replay after it has been terminated.
   private activeOAuthEpoch: number | null = null;
@@ -725,8 +717,8 @@ export class AuthService {
    *
    * The callback is only applied if the OAuth attempt it belongs to is still
    * the active one. A callback captured for epoch `E` is dropped silently if
-   * `activeOAuthEpoch` has been advanced by a new `signIn()` or cleared by a
-   * superseding `applyPastedToken()` between dispatch and final projection.
+   * `activeOAuthEpoch` has been advanced by a new `signIn()` between dispatch
+   * and final projection.
    */
   /**
    * Exchanges the one-time PKCE `code` from the sign-in callback for the token
@@ -776,59 +768,28 @@ export class AuthService {
     await this.applyTokenInternal(
       tokens.token,
       tokens.refreshToken,
-      "callback",
       expectedEpoch,
     );
-  }
-
-  /**
-   * Paste-sheet entrypoint. A `rejected` or `network-error` outcome returns
-   * `false` WITHOUT mutating `lastError` - the sheet owns its own inline
-   * error surface so paste-only failures do not pollute the global
-   * signed-out auth surface.
-   *
-   * Supersedes any in-flight OAuth attempt BEFORE validation runs so a late
-   * browser-delivered `{ token }` or `{ error }` callback cannot overwrite
-   * (or sign the user out of) the pasted session. Once superseded, the
-   * OAuth attempt can only be revived by a fresh `signIn()` that mints a
-   * new epoch.
-   */
-  applyPastedToken(token: string): Promise<boolean> {
-    if (this.disposed) {
-      return Promise.resolve(false);
-    }
-    this.activeOAuthEpoch = null;
-    // A pasted bearer has no paired refresh token; refresh is unavailable for
-    // paste-only sessions (a dev fallback), so they re-auth at TTL.
-    return this.applyTokenInternal(token, "", "paste", null);
   }
 
   private async applyTokenInternal(
     token: string,
     refreshToken: string,
-    source: "callback" | "paste",
     expectedOAuthEpoch: number | null,
   ): Promise<boolean> {
     if (this.disposed) {
       return false;
     }
     if (token.length === 0) {
-      if (source === "callback") {
-        if (!this.isOAuthEpochCurrent(expectedOAuthEpoch)) {
-          return false;
-        }
+      if (!this.isOAuthEpochCurrent(expectedOAuthEpoch)) {
+        return false;
       }
       this.clearPendingTimeout();
-      if (source === "callback") {
-        this.activeOAuthEpoch = null;
-        await this.applyFailure(AUTH_ERROR_SIGN_IN_FAILED);
-      }
+      this.activeOAuthEpoch = null;
+      await this.applyFailure(AUTH_ERROR_SIGN_IN_FAILED);
       return false;
     }
-    if (
-      source === "callback" &&
-      !this.isOAuthEpochCurrent(expectedOAuthEpoch)
-    ) {
+    if (!this.isOAuthEpochCurrent(expectedOAuthEpoch)) {
       return false;
     }
     this.clearPendingTimeout();
@@ -838,23 +799,16 @@ export class AuthService {
     }
 
     // After the async validation, the state machine may have moved on: a
-    // superseding `applyPastedToken()` could have cleared the OAuth epoch
-    // and projected its own session, or a fresh `signIn()` could have
-    // minted a new epoch. In either case this callback is stale and must
-    // not mutate state.
-    if (
-      source === "callback" &&
-      !this.isOAuthEpochCurrent(expectedOAuthEpoch)
-    ) {
+    // fresh `signIn()` could have minted a new epoch. In that case this
+    // callback is stale and must not mutate state.
+    if (!this.isOAuthEpochCurrent(expectedOAuthEpoch)) {
       return false;
     }
     if (outcome.kind === "valid") {
-      if (source === "callback") {
-        // Consume the epoch so a subsequent cached replay (e.g. desktop
-        // preload re-emitting `cachedAuthCallback` on re-subscribe) cannot
-        // re-apply the same callback.
-        this.activeOAuthEpoch = null;
-      }
+      // Consume the epoch so a subsequent cached replay (e.g. desktop
+      // preload re-emitting `cachedAuthCallback` on re-subscribe) cannot
+      // re-apply the same callback.
+      this.activeOAuthEpoch = null;
       const accepted = this.acceptedToken(outcome, { token, refreshToken });
       await this.tokenStore.save(accepted);
       if (this.isDisposed()) {
@@ -877,13 +831,10 @@ export class AuthService {
       this.applySignedIn(accepted.token, outcome.user, undefined);
       return true;
     }
-    // Validation `rejected` OR `network-error`: do not persist. Callback
-    // failures surface `sign-in-failed`; paste failures stay silent so the
-    // sheet's inline error span is the only UI surface that reacts.
-    if (source === "callback") {
-      this.activeOAuthEpoch = null;
-      await this.applyFailure(AUTH_ERROR_SIGN_IN_FAILED);
-    }
+    // Validation `rejected` OR `network-error`: do not persist. Surface
+    // `sign-in-failed` so the header sign-in surface renders a retry CTA.
+    this.activeOAuthEpoch = null;
+    await this.applyFailure(AUTH_ERROR_SIGN_IN_FAILED);
     return false;
   }
 
@@ -1038,10 +989,10 @@ export class AuthService {
     }
     // Capture the epoch the callback will be attributed to. If at least one
     // OAuth attempt has been initiated locally (`nextEpoch > 0`) but the
-    // active epoch is null, the attempt has already been superseded by
-    // `applyPastedToken()`, consumed by a prior matching callback, or
-    // terminated by timeout/launch failure - any such callback (success or
-    // error) is stale and must not mutate state. Callbacks delivered before
+    // active epoch is null, the attempt has already been consumed by a prior
+    // matching callback, or terminated by timeout/launch failure - any such
+    // callback (success or error) is stale and must not mutate state.
+    // Callbacks delivered before
     // any `signIn()` was invoked (cold-start replay through the shell's
     // cached-result channel) still flow through the legacy path so an
     // already-completed OAuth handshake from a prior process lifetime can

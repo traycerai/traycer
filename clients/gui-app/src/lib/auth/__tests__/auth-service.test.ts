@@ -4,7 +4,6 @@ import {
   MockTraycerCli,
 } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import type { StoredAuthTokens } from "@traycer-clients/shared/platform/runner-host";
-import { createAuthenticatedUserFixture } from "@traycer-clients/shared/test-fixtures/authenticated-user";
 import {
   AuthService,
   AUTH_CALLBACK_TIMEOUT_MS,
@@ -237,28 +236,6 @@ describe("AuthService", () => {
     expect(service.getCurrentSessionSnapshot().token).toBe("persisted-token");
     expect(useAuthStore.getState().contextMetadata?.userId).toBe("user-1");
     expect(seenAuthHeaders).toContain("Bearer persisted-token");
-  });
-
-  it("validates through the runner-host identity boundary instead of renderer fetch", async () => {
-    const { service, host } = makeService();
-    const seenTokens: string[] = [];
-    host.validateAuthTokenIdentity = (token) => {
-      seenTokens.push(token);
-      return Promise.resolve({
-        kind: "valid",
-        user: createAuthenticatedUserFixture(undefined),
-      });
-    };
-    restoreFetch();
-    restoreFetch = installFetch(() =>
-      Promise.reject(new Error("renderer fetch should not run")),
-    );
-
-    const applied = await service.applyPastedToken("host-token");
-
-    expect(applied).toBe(true);
-    expect(seenTokens).toEqual(["host-token"]);
-    expect(service.getCurrentSessionSnapshot().token).toBe("host-token");
   });
 
   it("does not drive auth transitions when disposed during startup validation", async () => {
@@ -513,20 +490,6 @@ describe("AuthService", () => {
     expect(await host.tokenStore.get()).toBeNull();
   });
 
-  it("treats a 200 response with no usable profile as a silent reject on applyPastedToken() - lastError stays null", async () => {
-    const { service, host } = makeService();
-    await service.start();
-    restoreFetch();
-    restoreFetch = installFetch(() => ok());
-
-    const applied = await service.applyPastedToken("some-token");
-
-    expect(applied).toBe(false);
-    expect(useAuthStore.getState().status).toBe("signed-out");
-    expect(service.getLastError()).toBeNull();
-    expect(await host.tokenStore.get()).toBeNull();
-  });
-
   it("treats a 200 response with no usable profile as sign-in-failed on the OAuth callback path", async () => {
     const { service, host } = makeService();
     await service.start();
@@ -679,56 +642,6 @@ describe("AuthService", () => {
     });
     expect(useAuthStore.getState().status).toBe("signed-out");
     expect(service.getCurrentSessionSnapshot().token).toBeNull();
-    expect(await host.tokenStore.get()).toBeNull();
-  });
-
-  it("validates and persists a pasted token via applyPastedToken() (same AuthnV3 path as OAuth)", async () => {
-    const { service, host } = makeService();
-    await service.start();
-    restoreFetch();
-    const validationCalls: string[] = [];
-    restoreFetch = installFetch((input) => {
-      validationCalls.push(typeof input === "string" ? input : String(input));
-      return okWithProfile();
-    });
-
-    const applied = await service.applyPastedToken("pasted-token");
-
-    expect(applied).toBe(true);
-    expect(useAuthStore.getState().status).toBe("signed-in");
-    expect(service.getCurrentSessionSnapshot().token).toBe("pasted-token");
-    expect(await host.tokenStore.get()).toEqual({
-      token: "pasted-token",
-      refreshToken: "",
-    });
-    expect(service.getLastError()).toBeNull();
-    expect(validationCalls).toContain(VALIDATION_URL);
-  });
-
-  it("rejects a pasted token when AuthnV3 returns 401 WITHOUT mutating lastError (sheet owns inline error)", async () => {
-    const { service, host } = makeService();
-    await service.start();
-    restoreFetch();
-    restoreFetch = installFetch(() => status(401));
-
-    const applied = await service.applyPastedToken("bad-token");
-
-    expect(applied).toBe(false);
-    expect(useAuthStore.getState().status).toBe("signed-out");
-    expect(service.getLastError()).toBeNull();
-    expect(await host.tokenStore.get()).toBeNull();
-  });
-
-  it("rejects a pasted token on a network error WITHOUT mutating lastError", async () => {
-    const { service, host } = makeService();
-    await service.start();
-    restoreFetch();
-    restoreFetch = installFetch(() => Promise.reject(new Error("offline")));
-
-    const applied = await service.applyPastedToken("offline-token");
-
-    expect(applied).toBe(false);
-    expect(service.getLastError()).toBeNull();
     expect(await host.tokenStore.get()).toBeNull();
   });
 
@@ -1067,77 +980,6 @@ describe("AuthService", () => {
     expect(useAuthStore.getState().status).toBe("signed-out");
   });
 
-  it("race: signIn() → applyPastedToken() succeeds → late { token } callback is ignored (paste session survives)", async () => {
-    const { service, host } = makeService();
-    await service.start();
-
-    await service.signIn();
-    expect(useAuthStore.getState().status).toBe("signing-in");
-
-    const applied = await service.applyPastedToken("pasted-token");
-    expect(applied).toBe(true);
-    expect(useAuthStore.getState().status).toBe("signed-in");
-    expect(service.getCurrentSessionSnapshot().token).toBe("pasted-token");
-
-    host.emitAuthCallback({ code: "oauth-token" });
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(useAuthStore.getState().status).toBe("signed-in");
-    expect(service.getCurrentSessionSnapshot().token).toBe("pasted-token");
-    expect(await host.tokenStore.get()).toEqual({
-      token: "pasted-token",
-      refreshToken: "",
-    });
-    expect(service.getLastError()).toBeNull();
-  });
-
-  it("race: signIn() → applyPastedToken() succeeds → late { error } callback is ignored (no sign-out regression)", async () => {
-    const { service, host } = makeService();
-    await service.start();
-
-    await service.signIn();
-    const applied = await service.applyPastedToken("pasted-token");
-    expect(applied).toBe(true);
-
-    host.emitAuthCallback({ error: "user_cancelled" });
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(useAuthStore.getState().status).toBe("signed-in");
-    expect(service.getCurrentSessionSnapshot().token).toBe("pasted-token");
-    expect(await host.tokenStore.get()).toEqual({
-      token: "pasted-token",
-      refreshToken: "",
-    });
-    expect(service.getLastError()).toBeNull();
-  });
-
-  it("race: signIn() → applyPastedToken() fails → late OAuth { token } callback is ignored (paste-submit supersedes OAuth before validation)", async () => {
-    const { service, host } = makeService();
-    await service.start();
-
-    await service.signIn();
-
-    restoreFetch();
-    restoreFetch = installFetch(() => status(401));
-    const pasteApplied = await service.applyPastedToken("bad-pasted-token");
-    expect(pasteApplied).toBe(false);
-    expect(service.getLastError()).toBeNull();
-
-    restoreFetch();
-    restoreFetch = installFetch(() => okWithProfile());
-
-    host.emitAuthCallback({ code: "oauth-token" });
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(service.getCurrentSessionSnapshot().token).not.toBe("oauth-token");
-    expect(await host.tokenStore.get()).not.toBe("oauth-token");
-    expect(service.getLastError()).toBeNull();
-  });
-
   it("race: handleCallback ignores a replayed OAuth token after the attempt has been consumed by a prior matching callback", async () => {
     const { service, host } = makeService();
     await service.start();
@@ -1312,69 +1154,6 @@ describe("AuthService", () => {
   });
 
   describe("local CLI provisioning (host owner gate)", () => {
-    it("seeds the CLI credentials with the accepted bearer BEFORE flipping to signed-in", async () => {
-      const cli = new MockTraycerCli();
-      let serviceRef: AuthService | null = null;
-      const statusAtSeed: string[] = [];
-      vi.spyOn(cli, "cliLogin").mockImplementation((token: string) => {
-        // The host denies every connection until this file exists, so the
-        // seed MUST land before the session is signed-in (which enables RPCs).
-        statusAtSeed.push(serviceRef?.getStatus() ?? "unknown");
-        cli.lastLoginToken = token;
-        return Promise.resolve();
-      });
-      const host = new MockRunnerHost({
-        signInUrl:
-          "https://auth.traycer.ai/sign-in?redirect_uri=traycer%3A%2F%2Fauth",
-        authnBaseUrl: "http://localhost:5005",
-        localHost: null,
-        hosts: [],
-        workspaceFolderPickerPaths: undefined,
-        hasLocalHost: undefined,
-        traycerCli: cli,
-      });
-      const service = trackService(new AuthService({ runnerHost: host }));
-      serviceRef = service;
-      await service.start();
-      restoreFetch();
-      restoreFetch = installFetch(() => okWithProfile());
-
-      const applied = await service.applyPastedToken("pasted-token");
-
-      expect(applied).toBe(true);
-      expect(useAuthStore.getState().status).toBe("signed-in");
-      expect(cli.lastLoginToken).toBe("pasted-token");
-      expect(statusAtSeed).toHaveLength(1);
-      expect(statusAtSeed[0]).not.toBe("signed-in");
-    });
-
-    it("clears CLI credentials on sign-out", async () => {
-      const cli = new MockTraycerCli();
-      const host = new MockRunnerHost({
-        signInUrl:
-          "https://auth.traycer.ai/sign-in?redirect_uri=traycer%3A%2F%2Fauth",
-        authnBaseUrl: "http://localhost:5005",
-        localHost: null,
-        hosts: [],
-        workspaceFolderPickerPaths: undefined,
-        hasLocalHost: undefined,
-        traycerCli: cli,
-      });
-      const service = trackService(new AuthService({ runnerHost: host }));
-      await service.start();
-      restoreFetch();
-      restoreFetch = installFetch(() => okWithProfile());
-
-      const applied = await service.applyPastedToken("pasted-token");
-      expect(applied).toBe(true);
-      expect(cli.lastLoginToken).toBe("pasted-token");
-
-      await service.signOut();
-
-      expect(cli.lastLoginToken).toBeNull();
-      expect(cli.lastLoginRefreshToken).toBeNull();
-    });
-
     it("preserves callback-provisioned CLI credentials when stale startup cleanup races with auth replay", async () => {
       const cli = new MockTraycerCli();
       const host = new MockRunnerHost({
@@ -1416,34 +1195,6 @@ describe("AuthService", () => {
       expect(service.getCurrentSessionSnapshot().token).toBe("fresh-token");
       expect(cli.lastLoginToken).toBe("fresh-token");
       expect(cli.lastLoginRefreshToken).toBe("fresh-token-refresh");
-    });
-
-    it("still signs in when CLI provisioning fails (best-effort, no wedge)", async () => {
-      const cli = new MockTraycerCli();
-      const cliLoginSpy = vi
-        .spyOn(cli, "cliLogin")
-        .mockRejectedValue(new Error("spawn failed"));
-      const host = new MockRunnerHost({
-        signInUrl:
-          "https://auth.traycer.ai/sign-in?redirect_uri=traycer%3A%2F%2Fauth",
-        authnBaseUrl: "http://localhost:5005",
-        localHost: null,
-        hosts: [],
-        workspaceFolderPickerPaths: undefined,
-        hasLocalHost: undefined,
-        traycerCli: cli,
-      });
-      const service = trackService(new AuthService({ runnerHost: host }));
-      await service.start();
-      restoreFetch();
-      restoreFetch = installFetch(() => okWithProfile());
-
-      const applied = await service.applyPastedToken("pasted-token");
-
-      expect(applied).toBe(true);
-      expect(useAuthStore.getState().status).toBe("signed-in");
-      // Retried the configured number of times before giving up.
-      expect(cliLoginSpy).toHaveBeenCalledTimes(3);
     });
   });
 });

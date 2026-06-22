@@ -115,7 +115,7 @@ backend calls, no ad-hoc try/catch + `toast.error` orchestration in components.
   `src/hooks/<namespace>/use-<verb>-<noun>-mutation.ts` (or `-query.ts`);
   namespaces: `epic`, `workspace`, `agent`, `auth`, `runner`. Hook name pattern:
   `use<Namespace><Verb><Noun>` - e.g. `useEpicCreate`,
-  `useAuthApplyPastedToken`, `useRunnerRequestHostRespawn`.
+  `useRunnerCliLogin`, `useRunnerRequestHostRespawn`.
 - Cache: `invalidateQueries` in `onSuccess` is the default. Optimistic
   `setQueryData` is reserved for response-equals-state cases and must be
   justified explicitly; new mutations should not introduce optimistic writes
@@ -126,8 +126,8 @@ backend calls, no ad-hoc try/catch + `toast.error` orchestration in components.
 - Error mapping: each source has one helper in `src/lib/`:
   `toastFromHostError`, `toastFromAuthError`, `toastFromRunnerError`. Mutation
   hooks call the matching helper from `onError`. The exception is surfaces that
-  must stay inline-only (`paste-token-sheet`): the hook omits `onError` and the
-  component renders `mutation.error?.message` directly.
+  must stay inline-only: the hook omits `onError` and the component renders
+  `mutation.error?.message` directly.
 - Pending UX recipe: `disabled={mutation.isPending}` + keep the button label
   unchanged + render `AgentSpinningDots` inline next to the label. Do not swap
   labels (no "Submitting…", no "Retrying…").

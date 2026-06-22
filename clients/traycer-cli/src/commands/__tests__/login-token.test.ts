@@ -78,9 +78,13 @@ afterEach(() => {
 });
 
 describe("buildLoginCommand with --token", () => {
-  it("validates the value, writes credentials, and reports the user", async () => {
+  it("validates the piped token, writes credentials, and reports the user", async () => {
     validateMock.mockResolvedValue(validProfile);
-    const fn = buildLoginCommand({ token: "captured-bearer" });
+    stubStdin({
+      isTTY: false,
+      chunks: [JSON.stringify({ token: "captured-bearer", refreshToken: "" })],
+    });
+    const fn = buildLoginCommand({ token: "-" });
     const result = await fn(makeCtx(makeRuntime({})));
 
     expect(validateMock).toHaveBeenCalledWith(expect.any(String), "captured-bearer", "");
@@ -103,7 +107,11 @@ describe("buildLoginCommand with --token", () => {
       ...validProfile,
       refreshedToken: "rotated-bearer",
     });
-    const fn = buildLoginCommand({ token: "stale-bearer" });
+    stubStdin({
+      isTTY: false,
+      chunks: [JSON.stringify({ token: "stale-bearer", refreshToken: "" })],
+    });
+    const fn = buildLoginCommand({ token: "-" });
     await fn(makeCtx(makeRuntime({})));
     expect(writeMock.mock.calls[0][0].token).toBe("rotated-bearer");
   });
@@ -147,26 +155,23 @@ describe("buildLoginCommand with --token", () => {
     expect(writeMock.mock.calls[0][0].refreshToken).toBe("persisted-refresh");
   });
 
-  it("does not reuse the on-disk refresh token for a literal --token value", async () => {
-    validateMock.mockResolvedValue(validProfile);
-    readMock.mockResolvedValue({
-      token: "old-bearer",
-      refreshToken: "persisted-refresh",
-      authnBaseUrl: "https://authn.example",
-      savedAt: "2026-01-01T00:00:00.000Z",
-      user: { id: "u1", email: "ada@traycer.ai", name: "Ada" },
-    });
-    const fn = buildLoginCommand({ token: "new-bearer" });
-    await fn(makeCtx(makeRuntime({})));
-
-    expect(readMock).not.toHaveBeenCalled();
-    expect(writeMock.mock.calls[0][0].token).toBe("new-bearer");
-    expect(writeMock.mock.calls[0][0].refreshToken).toBe("");
+  it("rejects a literal --token value without reading stdin or validating (INVALID_ARGUMENT)", async () => {
+    const fn = buildLoginCommand({ token: "captured-bearer" });
+    const err = await fn(makeCtx(makeRuntime({}))).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(CliError);
+    expect((err as CliError).code).toBe(CLI_ERROR_CODES.INVALID_ARGUMENT);
+    expect((err as CliError).exitCode).toBe(1);
+    expect(validateMock).not.toHaveBeenCalled();
+    expect(writeMock).not.toHaveBeenCalled();
   });
 
   it("rejects a token the authn service refuses (AUTH_REJECTED, exit 1)", async () => {
     validateMock.mockResolvedValue({ kind: "rejected" });
-    const fn = buildLoginCommand({ token: "bad" });
+    stubStdin({
+      isTTY: false,
+      chunks: [JSON.stringify({ token: "bad", refreshToken: "" })],
+    });
+    const fn = buildLoginCommand({ token: "-" });
     const err = await fn(makeCtx(makeRuntime({}))).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(CliError);
     expect((err as CliError).code).toBe(CLI_ERROR_CODES.AUTH_REJECTED);
@@ -176,7 +181,11 @@ describe("buildLoginCommand with --token", () => {
 
   it("maps an unreachable authn service to AUTH_NETWORK (exit 2)", async () => {
     validateMock.mockResolvedValue({ kind: "network-error" });
-    const fn = buildLoginCommand({ token: "x" });
+    stubStdin({
+      isTTY: false,
+      chunks: [JSON.stringify({ token: "x", refreshToken: "" })],
+    });
+    const fn = buildLoginCommand({ token: "-" });
     const err = await fn(makeCtx(makeRuntime({}))).catch((e: unknown) => e);
     expect((err as CliError).code).toBe(CLI_ERROR_CODES.AUTH_NETWORK);
     expect((err as CliError).exitCode).toBe(2);

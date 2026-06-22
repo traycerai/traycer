@@ -30,7 +30,7 @@ export function AuthLandingPage() {
           <div
             className={cn(
               MONO_SCOPE,
-              "pt-[clamp(0.35rem,1.2vh,0.8rem)] [&_[data-testid=paste-token-link]]:text-white/52 [&_[data-testid=paste-token-link]]:hover:text-white [&_[data-testid=signin-button]]:h-[clamp(2.5rem,5.2vh,3rem)] [&_[data-testid=signin-button]]:text-ui-sm [&_[data-testid=signin-button]]:transition-colors [&_[data-testid=signin-button]]:duration-200 [&_[data-testid=signin-button]]:hover:bg-transparent [&_[data-testid=signin-button]]:hover:text-white [&_[data-testid=signin-button]]:hover:border-white/60 [&_[data-testid=signin-controls]]:gap-3",
+              "pt-[clamp(0.35rem,1.2vh,0.8rem)] [&_[data-testid=signin-button]]:h-[clamp(2.5rem,5.2vh,3rem)] [&_[data-testid=signin-button]]:text-ui-sm [&_[data-testid=signin-button]]:transition-colors [&_[data-testid=signin-button]]:duration-200 [&_[data-testid=signin-button]]:hover:bg-transparent [&_[data-testid=signin-button]]:hover:text-white [&_[data-testid=signin-button]]:hover:border-white/60 [&_[data-testid=signin-controls]]:gap-3",
             )}
           >
             <SignInButton layout="hero" />

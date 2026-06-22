@@ -139,14 +139,6 @@ function okWithProfile(): Promise<Response> {
   );
 }
 
-function getButtonByTestId(testId: string): HTMLButtonElement {
-  const element = screen.getByTestId(testId);
-  if (element instanceof HTMLButtonElement) {
-    return element;
-  }
-  throw new Error(`Expected ${testId} to resolve to an HTMLButtonElement`);
-}
-
 interface MountResult {
   readonly host: MockRunnerHost;
   readonly cleanupClient: () => void;
@@ -247,34 +239,6 @@ describe("<SignInButton />", () => {
     });
     const detail = screen.getByTestId("signin-error-detail");
     expect(detail.textContent).toBe("sign-in-failed");
-    result.cleanupClient();
-  });
-
-  it("keeps the 'Paste token instead' link available during signing-in so manual token entry can supersede browser auth", async () => {
-    const result = mountSignInButton(buildHost());
-
-    await waitFor(() => {
-      expect(screen.queryByTestId("runtime-fallback")).toBeNull();
-    });
-
-    // Baseline: paste-token link is enabled in the signed-out idle state.
-    expect(getButtonByTestId("paste-token-link").disabled).toBe(false);
-
-    // Flip to signing-in via the store (simulates `AuthService.signIn()` in
-    // flight without actually touching the runner host's external-link path).
-    act(() => {
-      useAuthStore.getState().setSigningIn();
-    });
-
-    await waitFor(() => {
-      expect(getButtonByTestId("signin-button").disabled).toBe(true);
-    });
-    expect(getButtonByTestId("paste-token-link").disabled).toBe(false);
-
-    fireEvent.click(getButtonByTestId("paste-token-link"));
-
-    expect(await screen.findByTestId("paste-token-sheet")).not.toBeNull();
-
     result.cleanupClient();
   });
 
