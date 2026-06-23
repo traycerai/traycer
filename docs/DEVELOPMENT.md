@@ -16,7 +16,7 @@ bunx nx run @traycer/protocol:build   # a single package
 
 ## Pre-commit hooks
 
-Install the hygiene hooks once with `pipx install pre-commit && pre-commit install`; they then run on every commit (`pre-commit run --all-files` to run manually). Lint and format are enforced in CI.
+Install the hygiene hooks once with `pipx install pre-commit && pre-commit install --hook-type pre-commit --hook-type commit-msg`; they then run on every commit (`pre-commit run --all-files` to run manually). The `commit-msg` hook type is required for DCO sign-off enforcement. Lint and format are enforced in CI.
 
 ## Workspace layout
 

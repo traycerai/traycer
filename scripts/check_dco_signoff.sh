@@ -12,9 +12,11 @@ if [ -f "$(git rev-parse --git-dir)/MERGE_HEAD" ]; then
   exit 0
 fi
 
-# The committer is the author of a fresh commit; match the DCO trailer to them.
-name="$(git config user.name)"
-email="$(git config user.email)"
+# Match the DCO trailer to the commit's actual author. Git exports GIT_AUTHOR_*
+# into the commit-msg hook environment, so these reflect a `--author` override;
+# fall back to git config when they're unset.
+name="${GIT_AUTHOR_NAME:-$(git config user.name)}"
+email="${GIT_AUTHOR_EMAIL:-$(git config user.email)}"
 expected="Signed-off-by: ${name} <${email}>"
 
 if grep -qixF "$expected" "$msg_file"; then
