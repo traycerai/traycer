@@ -601,7 +601,9 @@ function serializeTable(node: JsonContent, ctx: SerializerContext): string {
           isHeader = true;
         }
         const cellContent = serializeChildren(cell.content, ctx);
-        cells.push(cellContent.replace(/\|/g, "\\|"));
+        // Escape backslashes before pipes so a literal trailing `\` in a cell
+        // can't escape the `\|` we add and merge two cells together.
+        cells.push(cellContent.replace(/\\/g, "\\\\").replace(/\|/g, "\\|"));
       }
     }
 

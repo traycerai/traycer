@@ -1,4 +1,4 @@
-import { rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readHostPidMetadata } from "../../host/pid-metadata";
@@ -41,7 +41,12 @@ export function createWindowsController(
 
 async function installService(options: InstallServiceOptions): Promise<void> {
   const taskName = windowsTaskName(options.label);
-  const xmlPath = join(tmpdir(), `${sanitize(options.label.id)}.task.xml`);
+  // schtasks /Create /XML reads the task definition from disk. Stage it inside a
+  // private per-invocation directory (mkdtemp ⇒ mode 0700 with an unguessable
+  // suffix) rather than a predictable name in the shared tmpdir, so a local
+  // attacker can't pre-create or symlink the path we're about to write.
+  const tmpDir = await mkdtemp(join(tmpdir(), "traycer-task-"));
+  const xmlPath = join(tmpDir, "task.xml");
   // schtasks /Create /XML requires UTF-16 LE with BOM. Anything else
   // fails with "The specified file is not a valid XML file". Node's
   // built-in `utf16le` encoder paired with a leading U+FEFF BOM
@@ -68,7 +73,7 @@ async function installService(options: InstallServiceOptions): Promise<void> {
       exitCode: 1,
     });
   } finally {
-    await rm(xmlPath, { force: true });
+    await rm(tmpDir, { recursive: true, force: true });
   }
   // Kick the task immediately so the host comes up without waiting
   // for the next logon.
@@ -194,10 +199,6 @@ function describeCause(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
 }
 
-function sanitize(value: string): string {
-  return value.replace(/[^A-Za-z0-9._-]/g, "_");
-}
-
 interface BuildTaskXmlOptions {
   readonly label: ServiceLabel;
   readonly cli: CliInvocation;
@@ -212,7 +213,11 @@ function buildTaskXml(options: BuildTaskXmlOptions): string {
     "host",
     "start",
   ];
-  const argumentsLine = argv.map((arg) => `"${arg.replace(/"/g, '\\"')}"`).join(" ");
+  // Escape backslashes before quotes: otherwise an arg ending in `\` would let
+  // its trailing backslash escape our closing quote and break out of the token.
+  const argumentsLine = argv
+    .map((arg) => `"${arg.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`)
+    .join(" ");
   const userId = resolveTaskUserId();
   return `<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">

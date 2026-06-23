@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join, resolve as resolvePath } from "node:path";
 import type { DesktopTrayEpic } from "../../../ipc-contracts/host-types";
 import type { TrayManagedWindow } from "../tray";
@@ -198,10 +198,15 @@ describe("resolveTrayIconPath", () => {
       expect(existsSync(asset.path), `expected ${asset.path} to exist`).toBe(
         true,
       );
-      const info = statSync(asset.path);
-      expect(info.isFile()).toBe(true);
-      expect(info.size).toBeGreaterThan(0);
-      const head = readFileSync(asset.path).subarray(0, 8);
+      // Read once and assert against the buffer — reading a directory would
+      // throw, so this also covers the "is a regular file" expectation without
+      // a separate stat() that could race the read.
+      const contents = readFileSync(asset.path);
+      expect(
+        contents.length,
+        `expected ${asset.path} to be non-empty`,
+      ).toBeGreaterThan(0);
+      const head = contents.subarray(0, 8);
       expect(
         head.equals(PNG_SIGNATURE),
         `expected ${asset.path} to start with the PNG signature`,
