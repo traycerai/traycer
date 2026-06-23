@@ -11,7 +11,7 @@ describe("analytics", () => {
     const { Analytics, AnalyticsEvent } = await import("@/lib/analytics");
     const analytics = Analytics.getInstance();
 
-    analytics.identify("user-1");
+    analytics.identify("user-1", null);
     analytics.track(AnalyticsEvent.TaskCreated, null);
 
     expect(initSpy).not.toHaveBeenCalled();

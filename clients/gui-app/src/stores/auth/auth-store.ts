@@ -104,7 +104,10 @@ export const useAuthStore = create<AuthState>()((set) => ({
     shareableTeams: ReadonlyArray<EpicShareableTeam>,
   ) => {
     set({ status: "signed-in", profile, contextMetadata, shareableTeams });
-    Analytics.getInstance().identify(contextMetadata.userId);
+    Analytics.getInstance().identify(contextMetadata.userId, {
+      name: profile.userName,
+      email: profile.email,
+    });
   },
   setSubscriptionStatus: (status: SubscriptionStatus | null) => {
     set({ subscriptionStatus: status });
@@ -117,5 +120,6 @@ export const useAuthStore = create<AuthState>()((set) => ({
       shareableTeams: [],
       subscriptionStatus: null,
     });
+    Analytics.getInstance().reset();
   },
 }));

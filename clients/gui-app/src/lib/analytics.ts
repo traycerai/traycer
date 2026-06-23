@@ -36,9 +36,14 @@ export class Analytics {
     return Analytics.instance;
   }
 
-  identify(userId: string): void {
+  identify(userId: string, properties: EventProperties): void {
     if (!this.enabled) return;
-    posthog.identify(userId);
+    posthog.identify(userId, properties ?? undefined);
+  }
+
+  reset(): void {
+    if (!this.enabled) return;
+    posthog.reset();
   }
 
   track(event: AnalyticsEvent, properties: EventProperties): void {
