@@ -41,10 +41,11 @@ afterEach(() => {
 });
 
 describe("composer list input", () => {
-  it("turns '- ' after a visual line break into a bullet list", () => {
+  it("turns '- ' on a second paragraph into a bullet list", () => {
     const { editor } = makeFixture();
     editor.commands.insertContent("Intro");
-    editor.commands.setHardBreak();
+    // Shift+Enter now splits into a real paragraph (no hardBreak).
+    expect(editor.commands.keyboardShortcut("Shift-Enter")).toBe(true);
 
     typeText(editor, "- ");
     typeText(editor, "item");
@@ -59,10 +60,10 @@ describe("composer list input", () => {
     expect(editor.state.doc.lastChild?.textContent).toBe("");
   });
 
-  it("turns '1. ' after a visual line break into an ordered list", () => {
+  it("turns '1. ' on a second paragraph into an ordered list", () => {
     const { editor } = makeFixture();
     editor.commands.insertContent("Intro");
-    editor.commands.setHardBreak();
+    expect(editor.commands.keyboardShortcut("Shift-Enter")).toBe(true);
 
     typeText(editor, "3. ");
     typeText(editor, "step");
@@ -78,10 +79,30 @@ describe("composer list input", () => {
     expect(editor.state.doc.lastChild?.textContent).toBe("");
   });
 
+  it("wraps existing text when a marker is typed before it (regression)", () => {
+    const { editor } = makeFixture();
+    editor.commands.insertContent("hello");
+    expect(editor.commands.keyboardShortcut("Shift-Enter")).toBe(true);
+    typeText(editor, "abc");
+    // Caret to the start of the second paragraph, before "abc".
+    let beforeAbc = -1;
+    editor.state.doc.descendants((node, pos) => {
+      if (node.isText && node.text === "abc") beforeAbc = pos;
+      return true;
+    });
+    editor.commands.setTextSelection(beforeAbc);
+
+    typeText(editor, "1. ");
+
+    expect(editor.state.doc.firstChild?.textContent).toBe("hello");
+    expect(textOfFirstNode(editor, "listItem")).toBe("abc");
+    expect(firstNodeOfType(editor, "orderedList")).not.toBeNull();
+  });
+
   it("submits with Enter even when the caret is inside a list item", () => {
     const { editor, submitCalls } = makeFixture();
     editor.commands.insertContent("Intro");
-    editor.commands.setHardBreak();
+    expect(editor.commands.keyboardShortcut("Shift-Enter")).toBe(true);
     typeText(editor, "- ");
     typeText(editor, "item");
 
@@ -94,7 +115,7 @@ describe("composer list input", () => {
   it("continues the current list with Shift+Enter", () => {
     const { editor, submitCalls } = makeFixture();
     editor.commands.insertContent("Intro");
-    editor.commands.setHardBreak();
+    expect(editor.commands.keyboardShortcut("Shift-Enter")).toBe(true);
     typeText(editor, "1. ");
     typeText(editor, "first");
 

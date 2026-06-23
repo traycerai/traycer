@@ -10,6 +10,7 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 
 import { readComposerContentFromClipboardData } from "@/lib/composer/composer-clipboard";
 import { sanitizeMarkdownHtml } from "@/lib/composer/markdown-paste";
+import { normalizeSliceSoftBreaks } from "@/lib/composer/normalize-soft-breaks";
 import {
   parseLeadingSlashCommand,
   slashCommandParagraph,
@@ -49,7 +50,9 @@ export function createChatPasteHandler(deps: ChatPasteHandlerDeps) {
                   composerContent,
                 );
                 if (slice === null) return false;
-                const tr = view.state.tr.replaceSelection(slice);
+                const tr = view.state.tr.replaceSelection(
+                  normalizeSliceSoftBreaks(slice, view.state.schema),
+                );
                 view.dispatch(tr.scrollIntoView());
                 return true;
               }
@@ -65,7 +68,9 @@ export function createChatPasteHandler(deps: ChatPasteHandlerDeps) {
                 const slice = parser.parseSlice(sanitized, {
                   preserveWhitespace: false,
                 });
-                const tr = view.state.tr.replaceSelection(slice);
+                const tr = view.state.tr.replaceSelection(
+                  normalizeSliceSoftBreaks(slice, view.state.schema),
+                );
                 view.dispatch(tr.scrollIntoView());
                 return true;
               }
@@ -95,7 +100,9 @@ export function createChatPasteHandler(deps: ChatPasteHandlerDeps) {
                 editor.markdown.parse(text),
               );
               if (slice === null) return false;
-              const tr = view.state.tr.replaceSelection(slice);
+              const tr = view.state.tr.replaceSelection(
+                normalizeSliceSoftBreaks(slice, view.state.schema),
+              );
               view.dispatch(tr.scrollIntoView());
               return true;
             },
