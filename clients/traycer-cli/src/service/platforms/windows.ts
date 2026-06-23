@@ -204,6 +204,18 @@ interface BuildTaskXmlOptions {
   readonly cli: CliInvocation;
 }
 
+// Quote a single token for a Windows command line the way CommandLineToArgvW
+// parses it: a backslash is literal unless it runs up to a `"`. So we double
+// only the backslashes immediately before a quote (escaping the quote with one
+// extra) and those before the closing quote we append, leaving interior path
+// separators like the ones in `C:\Users\foo` untouched.
+function quoteWindowsArg(arg: string): string {
+  const escaped = arg
+    .replace(/(\\*)"/g, '$1$1\\"')
+    .replace(/(\\+)$/, "$1$1");
+  return `"${escaped}"`;
+}
+
 function buildTaskXml(options: BuildTaskXmlOptions): string {
   // <Command> takes a single executable; <Arguments> takes the rest as
   // a single string. schtasks parses the latter with shell rules, so
@@ -213,11 +225,7 @@ function buildTaskXml(options: BuildTaskXmlOptions): string {
     "host",
     "start",
   ];
-  // Escape backslashes before quotes: otherwise an arg ending in `\` would let
-  // its trailing backslash escape our closing quote and break out of the token.
-  const argumentsLine = argv
-    .map((arg) => `"${arg.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`)
-    .join(" ");
+  const argumentsLine = argv.map(quoteWindowsArg).join(" ");
   const userId = resolveTaskUserId();
   return `<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
