@@ -1,5 +1,5 @@
 # Pre-commit hooks. https://pre-commit.com
-# Install once:  pipx install pre-commit && pre-commit install
+# Install once:  pipx install pre-commit && pre-commit install --hook-type pre-commit --hook-type commit-msg
 # Run on demand: pre-commit run --all-files
 default_stages: [pre-commit]
 repos:
@@ -28,6 +28,16 @@ repos:
   - repo: meta
     hooks:
       - id: check-hooks-apply
+
+  # DCO sign-off enforcement, mirroring .github/workflows/dco.yml. Runs at the
+  # commit-msg stage because the `Signed-off-by:` trailer is part of the message.
+  - repo: local
+    hooks:
+      - id: dco-signoff
+        name: DCO sign-off (git commit -s)
+        entry: scripts/check_dco_signoff.sh
+        language: script
+        stages: [commit-msg]
 
   # Project checks — build / compile / lint / format (nx affected for speed).
   # Tests run in their own workflow (.github/workflows/test.yml).

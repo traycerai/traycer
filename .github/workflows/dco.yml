@@ -1,0 +1,54 @@
+name: DCO
+
+# Enforces the Developer Certificate of Origin on every pull request: each
+# commit must carry a `Signed-off-by:` trailer (see CONTRIBUTING.md). We verify
+# in plain git instead of a third-party action so there's no external dependency
+# to pin or license — matching the secret-scan workflow's approach.
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  dco:
+    name: Signed-off-by
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0 # full history so we can enumerate every PR commit
+
+      - name: Check sign-off on all PR commits
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          missing=0
+          for sha in $(git rev-list "$BASE_SHA".."$HEAD_SHA"); do
+            # Merge commits are exempt — they carry no contributed authorship.
+            if [ "$(git rev-list --parents -n1 "$sha" | wc -w)" -gt 2 ]; then
+              continue
+            fi
+            author="$(git show -s --format='%an <%ae>' "$sha")"
+            if ! git show -s --format='%(trailers:key=Signed-off-by,valueonly)' "$sha" \
+                | grep -qxF "$author"; then
+              if [ "$missing" -eq 0 ]; then
+                echo "Commits missing a matching 'Signed-off-by: $author' trailer:"
+                echo
+              fi
+              echo "  $sha $(git show -s --format='%s' "$sha")"
+              missing=1
+            fi
+          done
+
+          if [ "$missing" -ne 0 ]; then
+            echo
+            echo "Each commit must be signed off by its author per the DCO."
+            echo "Amend with: git commit --amend -s   (or: git rebase --signoff $BASE_SHA)"
+            echo "See CONTRIBUTING.md#developer-certificate-of-origin-dco"
+            exit 1
+          fi
+
+          echo "All PR commits are signed off."
