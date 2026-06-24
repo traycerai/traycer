@@ -304,10 +304,10 @@ describe("GeneralSettingsPanel", () => {
     ).toBeTruthy();
   });
 
-  it("renders local snapshot storage size from the host query", () => {
+  it("renders file edit snapshot storage size from the host query", () => {
     renderPanel();
 
-    expect(screen.getByText("Local snapshots")).toBeTruthy();
+    expect(screen.getByText("File Edit Snapshots")).toBeTruthy();
     expect(
       screen.getByTestId("settings-local-snapshots-size").textContent,
     ).toBe("432 MB");
@@ -316,15 +316,15 @@ describe("GeneralSettingsPanel", () => {
     );
   });
 
-  it("opens confirmation and clears local snapshots through the mutation", () => {
+  it("opens confirmation and clears file edit snapshots through the mutation", () => {
     renderPanel();
 
-    fireEvent.click(screen.getByTestId("settings-clear-local-snapshots"));
+    fireEvent.click(screen.getByTestId("settings-clear-file-edit-snapshots"));
 
-    expect(screen.getByText("Clear local snapshots?")).toBeTruthy();
+    expect(screen.getByText("Clear file edit snapshots?")).toBeTruthy();
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Clear snapshots",
+        name: "Clear file edit snapshots",
       }),
     );
 
@@ -334,7 +334,7 @@ describe("GeneralSettingsPanel", () => {
     );
   });
 
-  it("invalidates size and shows a toast after clearing local snapshots", () => {
+  it("invalidates size and shows a toast after clearing file edit snapshots", () => {
     const queryClient = renderPanel();
     const invalidateQueries = vi.spyOn(queryClient, "invalidateQueries");
     const now = vi.spyOn(Date, "now").mockReturnValue(9000);
@@ -353,7 +353,7 @@ describe("GeneralSettingsPanel", () => {
     expect(invalidateQueries).toHaveBeenCalledWith({
       queryKey: ["host", "host-test", "snapshots.getLocalStorageSize", {}],
     });
-    expect(toast.success).toHaveBeenCalledWith("Cleared local snapshots", {
+    expect(toast.success).toHaveBeenCalledWith("Cleared file edit snapshots", {
       description: "1 KB removed.",
     });
     expect(
@@ -364,25 +364,25 @@ describe("GeneralSettingsPanel", () => {
     now.mockRestore();
   });
 
-  it("renders the Clear all local data action distinct from snapshots", () => {
+  it("renders the local app state action distinct from snapshots", () => {
     renderPanel();
 
-    const button = screen.getByTestId("settings-clear-all-local-data");
+    const button = screen.getByTestId("settings-clear-local-app-state");
     expect(button).toBeTruthy();
-    expect(button.textContent).toContain("Clear all local data");
+    expect(button.textContent).toContain("Clear local app state");
     // Distinct control from the host-side snapshot clear.
-    expect(screen.getByTestId("settings-clear-local-snapshots")).not.toBe(
+    expect(screen.getByTestId("settings-clear-file-edit-snapshots")).not.toBe(
       button,
     );
   });
 
-  it("opens the confirm dialog when clicking Clear all local data", () => {
+  it("opens the confirm dialog when clicking Clear local app state", () => {
     renderPanel();
 
     expect(clearAllPersistedStoresMock).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByTestId("settings-clear-all-local-data"));
+    fireEvent.click(screen.getByTestId("settings-clear-local-app-state"));
 
-    expect(screen.getByText("Clear all local data?")).toBeTruthy();
+    expect(screen.getByText("Clear local app state?")).toBeTruthy();
     // Opening the dialog must not trigger the wipe.
     expect(clearAllPersistedStoresMock).not.toHaveBeenCalled();
   });
@@ -390,7 +390,7 @@ describe("GeneralSettingsPanel", () => {
   it("does nothing when the confirm dialog is cancelled", () => {
     renderPanel();
 
-    fireEvent.click(screen.getByTestId("settings-clear-all-local-data"));
+    fireEvent.click(screen.getByTestId("settings-clear-local-app-state"));
     fireEvent.click(screen.getByTestId("confirm-cancel"));
 
     expect(clearAllPersistedStoresMock).not.toHaveBeenCalled();
@@ -402,7 +402,7 @@ describe("GeneralSettingsPanel", () => {
 
     renderPanel();
 
-    fireEvent.click(screen.getByTestId("settings-clear-all-local-data"));
+    fireEvent.click(screen.getByTestId("settings-clear-local-app-state"));
     fireEvent.click(screen.getByTestId("confirm-action"));
 
     await waitFor(() => {
@@ -430,7 +430,7 @@ describe("GeneralSettingsPanel", () => {
 
     renderPanel();
 
-    fireEvent.click(screen.getByTestId("settings-clear-all-local-data"));
+    fireEvent.click(screen.getByTestId("settings-clear-local-app-state"));
     fireEvent.click(screen.getByTestId("confirm-action"));
 
     await waitFor(() => {
@@ -460,7 +460,7 @@ describe("GeneralSettingsPanel", () => {
 
     renderPanel();
 
-    fireEvent.click(screen.getByTestId("settings-clear-all-local-data"));
+    fireEvent.click(screen.getByTestId("settings-clear-local-app-state"));
     fireEvent.click(screen.getByTestId("confirm-action"));
 
     await waitFor(() => {
@@ -471,10 +471,12 @@ describe("GeneralSettingsPanel", () => {
     });
   });
 
-  it("hides the Danger Zone when host management is unavailable", () => {
+  it("keeps local destructive actions visible when host management is unavailable", () => {
     runnerHostMock.current = { hostManagement: null };
     renderPanel();
-    expect(screen.queryByTestId("settings-danger-zone")).toBeNull();
+    expect(screen.getByTestId("settings-danger-zone")).toBeTruthy();
+    expect(screen.getByText("File Edit Snapshots")).toBeTruthy();
+    expect(screen.getByText("Local app state")).toBeTruthy();
     expect(screen.queryByTestId("settings-remove-traycer")).toBeNull();
   });
 
@@ -496,8 +498,8 @@ describe("GeneralSettingsPanel", () => {
     await waitFor(() => {
       expect(uninstallTraycer).toHaveBeenCalledTimes(1);
     });
-    // The card switches to the success/quit state.
-    await screen.findByTestId("settings-danger-zone-removed");
+    // The remove row switches to the success/quit state.
+    await screen.findByText("Traycer removed");
     expect(screen.getByTestId("settings-quit-after-uninstall")).toBeTruthy();
   });
 });
