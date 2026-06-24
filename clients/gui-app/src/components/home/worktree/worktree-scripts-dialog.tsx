@@ -133,6 +133,10 @@ function WorktreeScriptsDialogBody(props: {
     sourceRef === null ||
     branchScriptsQuery.isSuccess ||
     branchScriptsQuery.isError;
+  // A FAILED source-branch read is distinct from "no committed scripts": it must
+  // NOT silently seed the primary checkout (the stale value this whole flow
+  // avoids). Surface it and start the editor blank instead.
+  const branchReadFailed = sourceRef !== null && branchScriptsQuery.isError;
   const stagedScripts =
     stagedEntry !== null && stagedEntry.kind === "worktree"
       ? stagedEntry.scripts
@@ -147,6 +151,7 @@ function WorktreeScriptsDialogBody(props: {
     stagedEntry,
     worktreeOwnScripts,
     branchScripts,
+    branchReadFailed,
   });
   const descriptor = describeTarget({ resolved, workspacePath });
 
@@ -193,6 +198,11 @@ function WorktreeScriptsDialogBody(props: {
       pathValue={descriptor.pathValue}
       scriptSeed={scriptSeed}
       seedPending={seedPending}
+      errorNote={
+        branchReadFailed
+          ? "Couldn't read this branch's committed scripts — starting blank. Saving will set new scripts for the worktree."
+          : null
+      }
       inUseNote={null}
       onSave={handleSave}
       onOpenChange={props.onOpenChange}
@@ -301,9 +311,16 @@ function resolveScriptSeed(input: {
   readonly stagedEntry: WorktreeFolderIntent | null;
   readonly worktreeOwnScripts: RepoScriptsSeed | null;
   readonly branchScripts: RepoScriptsSeed | null;
+  readonly branchReadFailed: boolean;
 }): RepoScriptsSeed | null {
-  const { resolved, summary, stagedEntry, worktreeOwnScripts, branchScripts } =
-    input;
+  const {
+    resolved,
+    summary,
+    stagedEntry,
+    worktreeOwnScripts,
+    branchScripts,
+    branchReadFailed,
+  } = input;
   if (resolved.kind === "existing-worktree") {
     // The worktree's own env, falling back to the repo's scripts if it isn't in
     // the host worktrees list (e.g. an externally-created worktree).
@@ -317,10 +334,14 @@ function resolveScriptSeed(input: {
       stagedEntry !== null && stagedEntry.kind === "worktree"
         ? stagedEntry.scripts
         : null;
-    // A prior edit (staged) wins; otherwise preview the SOURCE branch's
-    // committed scripts - the file the new worktree actually inherits - and
-    // fall back to the primary checkout only when the ref carries none.
-    return staged ?? branchScripts ?? summary.scripts;
+    if (staged !== null) return staged;
+    // A failed source-branch read must NOT seed the primary checkout (the stale
+    // value this flow avoids); start blank and surface the error to the user.
+    if (branchReadFailed) return null;
+    // Otherwise preview the SOURCE branch's committed scripts - the file the new
+    // worktree actually inherits - falling back to the primary checkout only
+    // when the ref carries none.
+    return branchScripts ?? summary.scripts;
   }
   return summary.scripts;
 }

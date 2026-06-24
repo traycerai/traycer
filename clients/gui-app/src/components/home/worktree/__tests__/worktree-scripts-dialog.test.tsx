@@ -418,6 +418,33 @@ describe("<WorktreeScriptsDialog />", () => {
     ).toBeTruthy();
   });
 
+  it("on a failed source-branch read, starts blank with an error note (never the primary checkout)", () => {
+    useWorktreeIntentStagingStore
+      .getState()
+      .setIntent(STAGING_KEY, stagedWorktreeIntent(null));
+    mocks.readScriptsAtRef.mockReturnValue({
+      data: undefined,
+      isSuccess: false,
+      isError: true,
+    });
+
+    // summary.scripts is the stale primary-checkout value — it must NOT be
+    // seeded when the source-branch read fails.
+    renderDialog(
+      PRE_CREATE_CONTEXT,
+      summaryWith({
+        setup: osScript("echo primary"),
+        teardown: osScript(""),
+        updatedAt: 0,
+      }),
+    );
+
+    expect(setupDefaultField().value).toBe("");
+    expect(
+      screen.getByTestId("worktree-scripts-dialog-error-note"),
+    ).toBeTruthy();
+  });
+
   it("prefills from the worktree's own env for an existing worktree", () => {
     mocks.listAllForHost.mockReturnValue({
       data: {

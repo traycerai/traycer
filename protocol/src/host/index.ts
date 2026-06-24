@@ -70,6 +70,8 @@ export {
   worktreeListBindingsForEpicResponseSchema,
   worktreeListByWorkspacePathsRequestSchema,
   worktreeListByWorkspacePathsResponseSchema,
+  worktreeReadScriptsAtRefRequestSchema,
+  worktreeReadScriptsAtRefResponseSchema,
   worktreeBindingSelectorDisabledReasonSchema,
   worktreeBindingSelectorRowSchema,
   worktreeBindingSelectorSourceSchema,
