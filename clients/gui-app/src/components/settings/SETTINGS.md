@@ -25,6 +25,7 @@ SettingsLayout
         ├── GeneralSettingsPanel
         ├── AppearanceSettingsPanel
         ├── ProvidersSettingsPanel
+        ├── AgentsSettingsPanel
         ├── KeybindingsSettingsPanel
         ├── ShellSettingsPanel
         ├── WorktreesSettingsPanel
@@ -51,37 +52,19 @@ must be added in BOTH places - the route file under `src/routes/` AND the modal
   local snapshot storage management, and data migration.
 - `Appearance` Theme, global artifact icon color mode, type-color customization,
   and typography controls.
-- `Providers` Host-level agent guidance plus per-provider CLI binary
-  selection (Codex / Claude Code / OpenCode / Traycer / Cursor). The top
-  section edits the **global** agent selection guide
-  (`~/.traycer/agent-selection-guide.md`) - the instructions Traycer agents
-  read to decide which child agents to spawn (harness / model / reasoning
-  effort) for a task. A monospace `Textarea` debounce-auto-saves (and flushes on
-  blur) via `agent.selectionGuide.setGlobal`; a quiet "Saving… / Saved" status
-  sits in the footer, no Save button. A **Revert to default** button (disabled
-  while the content already equals the provider-based default) calls
-  `agent.selectionGuide.resetGlobalToDefault` behind a
-  `ConfirmDestructiveDialog`. The section is scoped by the Providers host
-  picker; it remounts for the selected host so one device's guide edits never
-  carry into another. Backed by `agent.selectionGuide.getGlobal` (returns
-  `{ content, generatedDefaultContent }`), `agent.selectionGuide.setGlobal`, and
-  `agent.selectionGuide.resetGlobalToDefault` through the agent selection guide
-  hooks. Settings provider changes only refresh the generated default used by
-  Revert; they do not auto-write the guide. Settings only edits the global
-  scope; the panel hint points users at per-workspace
-  `.traycer/agent-selection-guide.md` files, which layer on top of the global
-  guide (see the agent selection guide hierarchy in the host).
-
-  Below the guide, the Agent providers section owns per-provider CLI binary
-  selection. Left rail picks the provider (brand icons via
+- `Providers` Per-provider CLI binary selection (Codex / Claude Code / OpenCode
+  / Traycer / Cursor). Left rail picks the provider (brand icons via
   `HarnessIcon`); the
   right pane shows an enable/disable `Switch` and a radio table of CLI
   candidates - the host-bundled binary, the binary auto-detected on PATH
   (shown by its real absolute path), and any custom paths the user added
   (deletable). The radio picks the active binary; "Add custom path" reveals an
-  inline input with a live `--version` probe. The Providers page uses the
-  settings panel's single vertical scroll so the guide and provider settings
-  move together. The header also shows
+  inline input with a live `--version` probe. The rail + config area fills the
+  settings scroll container's height (via the shell's `fillHeight`, capped by
+  `bodyClassName` max-height) so switching providers never resizes it; the
+  config pane - not the outer overlay - owns the scroll, and the height follows
+  the viewport so a tall provider config never overflows the modal. The header
+  also shows
   host-reported account metadata when the selected provider can expose it (for
   example Codex/Claude email and subscription label). Backed by the host
   `providers.*` RPC (`providers.list` / `providers.setSelection` /
@@ -180,7 +163,21 @@ must be added in BOTH places - the route file under `src/routes/` AND the modal
     Traycer has no API key field. The enable toggle remains a real gate:
     disabling it hides the Traycer harness from the new-chat picker and blocks
     runs like any other provider.
-
+- `Agents` Editor for the **global** agent selection guide
+  (`~/.traycer/agent-selection-guide.md`) - the instructions Traycer agents read
+  to decide which child agents to spawn (harness / model / reasoning effort) for
+  a task. A monospace `Textarea` debounce-auto-saves (and flushes on blur) via
+  `agent.selectionGuide.setGlobal`; a quiet "Saving… / Saved" status sits in the
+  footer, no Save button. A **Revert to default** button (disabled while the
+  content already equals the provider-based default) calls
+  `agent.selectionGuide.resetGlobalToDefault` behind a `ConfirmDestructiveDialog`.
+  Default-host scope: the editor remounts (keyed on the active host id) so a host
+  swap reseeds from that device's file. Backed by `agent.selectionGuide.getGlobal`
+  (returns `{ content, generatedDefaultContent }`), `agent.selectionGuide.setGlobal`,
+  and `agent.selectionGuide.resetGlobalToDefault` through the agent selection
+  guide hooks. Settings only edits the global scope; the panel hint points users
+  at per-workspace `.traycer/agent-selection-guide.md` files, which layer on top
+  of the global guide (see the agent selection guide hierarchy in the host).
 - `Keybindings` Keyboard shortcut customization.
 - `Shell` Shell binary + args used for every terminal PTY
   (`TerminalSessionManager` reads the effective config per spawn, file-watched,
