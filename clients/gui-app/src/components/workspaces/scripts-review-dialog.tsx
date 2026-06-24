@@ -45,6 +45,11 @@ export function ScriptsReviewDialog(props: {
   readonly pathLabel: string;
   readonly pathValue: string;
   readonly scriptSeed: RepoScriptsSeed | null;
+  // `true` while the seed is still being fetched (e.g. reading a source branch's
+  // committed scripts). The fields are replaced by a spinner so the editor never
+  // flashes a stale seed before the real one resolves; the caller remounts (via
+  // `key`) with the resolved seed once it lands.
+  readonly seedPending: boolean;
   readonly inUseNote: string | null;
   readonly testId: string;
   // Returns a promise that resolves when the save actually succeeded and rejects
@@ -137,7 +142,20 @@ export function ScriptsReviewDialog(props: {
               {props.pathValue}
             </code>
           </div>
-          <RepoScriptsFields value={scripts} onChange={setScripts} />
+          {props.seedPending ? (
+            <div
+              className="flex min-h-[8rem] items-center justify-center"
+              data-testid={`${props.testId}-seed-loading`}
+            >
+              <AgentSpinningDots
+                className="text-muted-foreground"
+                testId={`${props.testId}-seed-spinner`}
+                variant={undefined}
+              />
+            </div>
+          ) : (
+            <RepoScriptsFields value={scripts} onChange={setScripts} />
+          )}
           {props.inUseNote !== null ? (
             <p className="text-ui-xs text-muted-foreground">
               {props.inUseNote}
@@ -158,7 +176,7 @@ export function ScriptsReviewDialog(props: {
             type="button"
             variant="default"
             size="sm"
-            disabled={saveBusy || !scriptsChanged}
+            disabled={saveBusy || props.seedPending || !scriptsChanged}
             aria-live="polite"
             onClick={handleSave}
           >

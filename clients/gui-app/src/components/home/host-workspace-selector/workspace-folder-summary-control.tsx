@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   HoverCard,
   HoverCardContent,
@@ -51,6 +51,10 @@ export function WorkspaceFolderSummaryControl(props: {
     workspacePopoverOpen: false,
     summaryHoverOpen: false,
   });
+  // The popover's own content node, so an outside-click can tell a nested
+  // overlay (stacked above) from the host dialog (an ancestor) - see
+  // preserveWhenNestedOverlay.
+  const contentRef = useRef<HTMLDivElement>(null);
 
   const handleExternalAddFolder = async (): Promise<boolean> => {
     setOverlayState({
@@ -155,12 +159,15 @@ export function WorkspaceFolderSummaryControl(props: {
     >
       {popoverTrigger}
       <PopoverContent
+        ref={contentRef}
         side={props.popoverSide}
         align="start"
         collisionPadding={12}
         className="w-fit max-w-[min(92vw,40rem)] max-h-[min(var(--radix-popover-content-available-height),32rem)] gap-0 overflow-y-auto p-3"
         data-testid={props.popoverTestId}
-        onInteractOutside={preserveWhenNestedOverlay}
+        onInteractOutside={(event) =>
+          preserveWhenNestedOverlay(event, contentRef.current)
+        }
       >
         <WorkspaceFolderRows
           items={props.items}

@@ -33,6 +33,10 @@ export function FolderBranchControl(props: {
 }) {
   const { item } = props;
   const [open, setOpen] = useState(false);
+  // The popover's own content node, used to tell a nested overlay (stacked
+  // above) from the host dialog (an ancestor) on outside-click - see
+  // preserveWhenNestedOverlay.
+  const contentRef = useRef<HTMLDivElement>(null);
   // Committing (Select/Enter) closes the popover, which would restore focus to
   // the chip — and the chip is also the branch tooltip's trigger, so the tooltip
   // would auto-open with the cursor away. Suppress the focus restoration on a
@@ -82,6 +86,7 @@ export function FolderBranchControl(props: {
           </PopoverTrigger>
         </TooltipWrapper>
         <PopoverContent
+          ref={contentRef}
           side="bottom"
           align="start"
           collisionPadding={12}
@@ -89,7 +94,9 @@ export function FolderBranchControl(props: {
           collisionBoundary={props.boundaryEl ?? undefined}
           className="w-[min(92vw,22rem)] gap-0 p-2.5"
           data-testid="folder-branch-popover"
-          onInteractOutside={preserveWhenNestedOverlay}
+          onInteractOutside={(event) =>
+            preserveWhenNestedOverlay(event, contentRef.current)
+          }
         >
           <ImportedWorktreeBranchForm
             sourceBranch={details.sourceBranch}
@@ -167,6 +174,7 @@ export function FolderBranchControl(props: {
         <PopoverTrigger asChild>{chip}</PopoverTrigger>
       </TooltipWrapper>
       <PopoverContent
+        ref={contentRef}
         side="bottom"
         align="start"
         collisionPadding={12}
@@ -174,7 +182,9 @@ export function FolderBranchControl(props: {
         collisionBoundary={props.boundaryEl ?? undefined}
         className="w-[min(92vw,22rem)] gap-0 p-2.5"
         data-testid="folder-branch-popover"
-        onInteractOutside={preserveWhenNestedOverlay}
+        onInteractOutside={(event) =>
+          preserveWhenNestedOverlay(event, contentRef.current)
+        }
         onCloseAutoFocus={(event) => {
           if (!suppressChipFocusRef.current) return;
           suppressChipFocusRef.current = false;

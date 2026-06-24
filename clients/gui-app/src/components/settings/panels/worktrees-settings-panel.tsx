@@ -994,6 +994,7 @@ function WorktreeScriptReviewDialog(props: {
       pathLabel="Worktree path"
       pathValue={target.worktreePath}
       scriptSeed={props.scriptSeed}
+      seedPending={false}
       inUseNote={
         target.inUse
           ? "This worktree is in use by an active chat or agent."

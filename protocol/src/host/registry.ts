@@ -130,6 +130,8 @@ import {
   worktreeListBranchesResponseSchema,
   worktreeListByWorkspacePathsRequestSchema,
   worktreeListByWorkspacePathsResponseSchema,
+  worktreeReadScriptsAtRefRequestSchema,
+  worktreeReadScriptsAtRefResponseSchema,
   worktreeListBindingsForEpicRequestSchema,
   worktreeListBindingsForEpicResponseSchema,
   worktreeRetrySetupRequestSchema,
@@ -247,6 +249,13 @@ export const worktreeListBranchesV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: worktreeListBranchesRequestSchema,
   responseSchema: worktreeListBranchesResponseSchema,
+});
+
+export const worktreeReadScriptsAtRefV10 = defineRpcContract({
+  method: "worktree.readScriptsAtRef",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: worktreeReadScriptsAtRefRequestSchema,
+  responseSchema: worktreeReadScriptsAtRefResponseSchema,
 });
 
 export const worktreeCreateV10 = defineRpcContract({
@@ -1470,6 +1479,18 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
       versions: {
         0: {
           contract: worktreeListBranchesV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "worktree.readScriptsAtRef": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: worktreeReadScriptsAtRefV10,
           upgradeFromPreviousVersion: null,
         },
       },

@@ -111,6 +111,34 @@ function WorktreeScriptsDialogBody(props: {
     return match?.scripts ?? null;
   }, [hostWorktreesQuery.data, resolved]);
 
+  // A new/checkout worktree forks from a SOURCE ref, so it inherits that ref's
+  // committed `.traycer/environment.json` - NOT the primary checkout's on-disk
+  // file (`summary.scripts`). Preview the source branch's scripts by reading
+  // them at the ref. `null` for non-worktree targets disables the read.
+  const sourceRef = sourceRefForStagedEntry(stagedEntry);
+  const branchScriptsQuery = useHostQuery<
+    HostRpcRegistry,
+    "worktree.readScriptsAtRef"
+  >({
+    client: context.hostClient,
+    method: "worktree.readScriptsAtRef",
+    params: { workspacePath, ref: sourceRef ?? "" },
+    options: { enabled: sourceRef !== null },
+  });
+  const branchScripts = branchScriptsQuery.data?.scripts ?? null;
+  // The source-branch read is "settled" once it succeeds or errors; until then
+  // (and only when no staged edit already supplies the seed) the dialog shows a
+  // spinner instead of flashing the primary checkout's scripts.
+  const branchReadSettled =
+    sourceRef === null ||
+    branchScriptsQuery.isSuccess ||
+    branchScriptsQuery.isError;
+  const stagedScripts =
+    stagedEntry !== null && stagedEntry.kind === "worktree"
+      ? stagedEntry.scripts
+      : null;
+  const seedPending = !branchReadSettled && stagedScripts === null;
+
   const saveMutation = useWorktreeSetRepoScriptsFor(context.hostClient);
 
   const scriptSeed = resolveScriptSeed({
@@ -118,6 +146,7 @@ function WorktreeScriptsDialogBody(props: {
     summary,
     stagedEntry,
     worktreeOwnScripts,
+    branchScripts,
   });
   const descriptor = describeTarget({ resolved, workspacePath });
 
@@ -144,12 +173,15 @@ function WorktreeScriptsDialogBody(props: {
     });
   };
 
-  // Re-seed once an existing worktree's own scripts resolve (cold cache only;
-  // the picker usually warms this query before the footer is clicked).
-  const seedKey =
-    resolved.kind === "existing-worktree"
-      ? `existing:${resolved.worktreePath}:${hostWorktreesQuery.isSuccess ? "1" : "0"}`
-      : `${resolved.kind}:${workspacePath}`;
+  // Re-seed when the async source for this target resolves (cold cache only;
+  // the picker usually warms these queries before the footer is clicked).
+  const seedKey = resolveSeedKey({
+    resolved,
+    workspacePath,
+    sourceRef,
+    worktreeScriptsResolved: hostWorktreesQuery.isSuccess,
+    branchScriptsResolved: branchReadSettled,
+  });
 
   return (
     <ScriptsReviewDialog
@@ -160,6 +192,7 @@ function WorktreeScriptsDialogBody(props: {
       pathLabel={descriptor.pathLabel}
       pathValue={descriptor.pathValue}
       scriptSeed={scriptSeed}
+      seedPending={seedPending}
       inUseNote={null}
       onSave={handleSave}
       onOpenChange={props.onOpenChange}
@@ -215,13 +248,62 @@ function resolveScriptsTarget(input: {
   return { kind: "local" };
 }
 
+/**
+ * The git ref a new/checkout worktree forks from - the source whose committed
+ * `.traycer/environment.json` the worktree inherits. `new` forks from
+ * `branch.source`; `existing` checks out `branch.name`. `null` for non-worktree
+ * targets (local / import), which have no fork source to read.
+ */
+function sourceRefForStagedEntry(
+  stagedEntry: WorktreeFolderIntent | null,
+): string | null {
+  if (stagedEntry === null || stagedEntry.kind !== "worktree") return null;
+  return stagedEntry.branch.type === "new"
+    ? stagedEntry.branch.source
+    : stagedEntry.branch.name;
+}
+
+/**
+ * React `key` for the seeded form, bumped when the async seed source for this
+ * target resolves so the form re-seeds on a cold cache. A staged edit still
+ * wins in `resolveScriptSeed`, so a remount is a no-op re-seed to the same
+ * value.
+ */
+function resolveSeedKey(input: {
+  readonly resolved: ResolvedScriptsTarget;
+  readonly workspacePath: string;
+  readonly sourceRef: string | null;
+  readonly worktreeScriptsResolved: boolean;
+  readonly branchScriptsResolved: boolean;
+}): string {
+  const {
+    resolved,
+    workspacePath,
+    sourceRef,
+    worktreeScriptsResolved,
+    branchScriptsResolved,
+  } = input;
+  if (resolved.kind === "existing-worktree") {
+    return `existing:${resolved.worktreePath}:${worktreeScriptsResolved ? "1" : "0"}`;
+  }
+  if (
+    resolved.kind === "new-branch-worktree" ||
+    resolved.kind === "checkout-branch-worktree"
+  ) {
+    return `${resolved.kind}:${workspacePath}:${sourceRef ?? ""}:${branchScriptsResolved ? "1" : "0"}`;
+  }
+  return `${resolved.kind}:${workspacePath}`;
+}
+
 function resolveScriptSeed(input: {
   readonly resolved: ResolvedScriptsTarget;
   readonly summary: WorktreeWorkspaceSummary;
   readonly stagedEntry: WorktreeFolderIntent | null;
   readonly worktreeOwnScripts: RepoScriptsSeed | null;
+  readonly branchScripts: RepoScriptsSeed | null;
 }): RepoScriptsSeed | null {
-  const { resolved, summary, stagedEntry, worktreeOwnScripts } = input;
+  const { resolved, summary, stagedEntry, worktreeOwnScripts, branchScripts } =
+    input;
   if (resolved.kind === "existing-worktree") {
     // The worktree's own env, falling back to the repo's scripts if it isn't in
     // the host worktrees list (e.g. an externally-created worktree).
@@ -235,7 +317,10 @@ function resolveScriptSeed(input: {
       stagedEntry !== null && stagedEntry.kind === "worktree"
         ? stagedEntry.scripts
         : null;
-    return staged ?? summary.scripts;
+    // A prior edit (staged) wins; otherwise preview the SOURCE branch's
+    // committed scripts - the file the new worktree actually inherits - and
+    // fall back to the primary checkout only when the ref carries none.
+    return staged ?? branchScripts ?? summary.scripts;
   }
   return summary.scripts;
 }

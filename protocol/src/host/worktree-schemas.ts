@@ -238,6 +238,32 @@ export type WorktreeListByWorkspacePathsResponse = z.infer<
   typeof worktreeListByWorkspacePathsResponseSchema
 >;
 
+/**
+ * Reads the committed `<repoRoot>/.traycer/environment.json` from an arbitrary
+ * git ref (`git show <ref>:.traycer/environment.json`) without checking it out.
+ * Lets the create-worktree Environment editor preview the SOURCE branch's
+ * scripts - the exact file a fresh worktree forked from that ref inherits -
+ * instead of the primary checkout's on-disk value. `ref` is a branch name (the
+ * fork `source` for a new branch, or the branch `name` for an existing-branch
+ * checkout).
+ */
+export const worktreeReadScriptsAtRefRequestSchema = z.object({
+  workspacePath: z.string(),
+  ref: z.string().min(1),
+});
+export type WorktreeReadScriptsAtRefRequest = z.infer<
+  typeof worktreeReadScriptsAtRefRequestSchema
+>;
+
+export const worktreeReadScriptsAtRefResponseSchema = z.object({
+  // `null` when the ref carries no committed `environment.json` (or the file
+  // fails schema validation), so the renderer falls back to its prior seed.
+  scripts: workspaceScriptsSchema.nullable(),
+});
+export type WorktreeReadScriptsAtRefResponse = z.infer<
+  typeof worktreeReadScriptsAtRefResponseSchema
+>;
+
 export const worktreeBranchSchema = z.object({
   name: z.string(),
   isCurrent: z.boolean(),

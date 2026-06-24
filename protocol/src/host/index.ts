@@ -117,6 +117,8 @@ export {
   type WorktreeListBindingsForEpicResponse,
   type WorktreeListByWorkspacePathsRequest,
   type WorktreeListByWorkspacePathsResponse,
+  type WorktreeReadScriptsAtRefRequest,
+  type WorktreeReadScriptsAtRefResponse,
   type WorktreeBindingSelectorDisabledReason,
   type WorktreeBindingSelectorRow,
   type WorktreeBindingSelectorSource,

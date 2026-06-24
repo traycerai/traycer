@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -133,6 +134,10 @@ export function AddNodeDropdown(props: AddArtifactDropdownProps) {
     disabledTypes,
     excludeTypes,
   } = props;
+  // The Terminal Agent submenu's own content node, so an outside-click can tell
+  // a nested overlay (host Select / folder picker, stacked above) from an
+  // ancestor surface - see preserveWhenNestedOverlay.
+  const terminalAgentSubRef = useRef<HTMLDivElement>(null);
   const visibleTypes =
     excludeTypes === undefined || excludeTypes.length === 0
       ? ADDABLE_TYPES
@@ -222,12 +227,15 @@ export function AddNodeDropdown(props: AddArtifactDropdownProps) {
               Terminal Agent
             </DropdownMenuSubTrigger>
             <DropdownMenuSubContent
+              ref={terminalAgentSubRef}
               className="flex w-[min(92vw,32rem)] flex-col gap-3 p-2"
               data-testid={`${menuTestId}-terminal-agent-sub`}
               // The host Select + folder picker open portaled overlays; treat
-              // clicks inside them as inside the submenu so picking a host /
-              // branch doesn't dismiss the launcher.
-              onInteractOutside={preserveWhenNestedOverlay}
+              // clicks inside them (stacked above this submenu) as inside it so
+              // picking a host / branch doesn't dismiss the launcher.
+              onInteractOutside={(event) =>
+                preserveWhenNestedOverlay(event, terminalAgentSubRef.current)
+              }
             >
               <TerminalAgentSubMenuContent
                 epicId={epicId}
