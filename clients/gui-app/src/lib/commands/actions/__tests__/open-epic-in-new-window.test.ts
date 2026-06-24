@@ -108,6 +108,28 @@ describe("openEpicInNewWindow", () => {
     expect(calls.newRoutes).toEqual(["/epics/epic-new/epic-new"]);
   });
 
+  it("ignores the current window's own ownership entry and opens a new window", async () => {
+    // A phase that resolved in-place is mounted in THIS window and so holds an
+    // ownership entry keyed by its epicId. Phase rows always route here (never
+    // through the move flow), so the scan must exclude the current window or it
+    // would self-focus instead of opening a new window.
+    const { bridge, calls } = makeBridge({
+      windowId: "window-a",
+      owned: [{ tabId: "tab-self", epicId: "phase-self", windowId: "window-a" }],
+    });
+
+    await openEpicInNewWindow(bridge, {
+      epicId: "phase-self",
+      tabId: "phase-self",
+      isPhase: true,
+    });
+
+    expect(calls.focusedWindows).toEqual([]);
+    expect(calls.newRoutes).toEqual([
+      "/epics/phase-self/phase-self?migrationSource=phase",
+    ]);
+  });
+
   it("carries migrationSource=phase in the new-window route for phase rows", async () => {
     const { bridge, calls } = makeBridge({ windowId: "window-a", owned: [] });
 

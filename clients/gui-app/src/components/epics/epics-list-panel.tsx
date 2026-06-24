@@ -840,7 +840,7 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
   const navigate = useNavigate();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const linkTabId = useEpicCanvasStore(
-    (s) => s.firstTabIdForEpic(item.epicId) ?? item.epicId,
+    (s) => s.resolveTabIdForEpic(item.epicId) ?? item.epicId,
   );
   const openInBackground = useCallback(() => {
     openEpicInBackground(item.epicId, item.title);
@@ -1003,6 +1003,69 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
       onBlockUnavailableDelete={blockUnavailableDeleteAction}
     />
   );
+  const rowCard = (
+    <div
+      data-testid="epics-list-row-card"
+      data-selection-disabled={selectionDisabled ? "true" : undefined}
+      className={historyRowCardClassName({
+        selectionDisabled,
+        selectedForDelete: historySelectedForDelete({
+          selectionMode,
+          isSelected,
+          canDeleteItem,
+        }),
+      })}
+    >
+      {rowInteractionLayer}
+      <div className="pointer-events-none relative z-10 flex items-center justify-between gap-3 p-3 pr-12 text-ui-sm">
+        <span className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
+          <HistoryRowLeadingIcon item={item} />
+          {isRenaming ? (
+            <input
+              {...renameInputProps}
+              type="text"
+              aria-label={`Rename ${displayTitle}`}
+              data-testid="epics-list-row-title-input"
+              className="pointer-events-auto w-full min-w-0 flex-1 rounded border border-input bg-background/90 px-1.5 py-0.5 font-medium text-foreground outline-none focus:border-ring/70 focus-visible:ring-0"
+            />
+          ) : (
+            <span className="flex min-w-0 items-center gap-1.5 overflow-hidden">
+              <span className="truncate font-medium text-foreground">
+                {displayTitle}
+              </span>
+              {titleEditControl}
+            </span>
+          )}
+        </span>
+        <span className="shrink-0 text-ui-xs text-muted-foreground">
+          updated {item.updatedLabel}
+        </span>
+      </div>
+      {deleteControl}
+    </div>
+  );
+  // Phases have no background-open: a phase only opens through its migration
+  // route (migrationSource=phase), which a plain canvas tab can't carry, so it
+  // would activate into the wrong (non-migration) surface. New Window stays
+  // available - it goes through the route.
+  const backgroundMenuItem = isPhase ? null : (
+    <ContextMenuItem
+      onSelect={openInBackground}
+      data-testid="epics-list-row-open-background"
+    >
+      <ArrowDownToLine />
+      Open in Background
+    </ContextMenuItem>
+  );
+  const newWindowMenuItem = openInNewWindowAvailable ? (
+    <ContextMenuItem
+      onSelect={openInNewWindow}
+      data-testid="epics-list-row-open-new-window"
+    >
+      <ExternalLink />
+      Open in New Window
+    </ContextMenuItem>
+  ) : null;
   return (
     <li
       data-testid="epics-list-row"
@@ -1011,75 +1074,22 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
       <div className="flex w-5 shrink-0 items-center justify-center">
         {selectionControl}
       </div>
-      <ContextMenu>
-        <ContextMenuTrigger asChild>
-          <div
-            data-testid="epics-list-row-card"
-            data-selection-disabled={selectionDisabled ? "true" : undefined}
-            className={historyRowCardClassName({
-              selectionDisabled,
-              selectedForDelete: historySelectedForDelete({
-                selectionMode,
-                isSelected,
-                canDeleteItem,
-              }),
-            })}
+      {/* Skip the context menu entirely when no action qualifies (e.g. a phase
+          row in the browser build with no windows bridge) so right-click never
+          opens an empty popover. */}
+      {backgroundMenuItem === null && newWindowMenuItem === null ? (
+        rowCard
+      ) : (
+        <ContextMenu>
+          <ContextMenuTrigger asChild>{rowCard}</ContextMenuTrigger>
+          <ContextMenuContent
+            onCloseAutoFocus={(event) => event.preventDefault()}
           >
-            {rowInteractionLayer}
-            <div className="pointer-events-none relative z-10 flex items-center justify-between gap-3 p-3 pr-12 text-ui-sm">
-              <span className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
-                <HistoryRowLeadingIcon item={item} />
-                {isRenaming ? (
-                  <input
-                    {...renameInputProps}
-                    type="text"
-                    aria-label={`Rename ${displayTitle}`}
-                    data-testid="epics-list-row-title-input"
-                    className="pointer-events-auto w-full min-w-0 flex-1 rounded border border-input bg-background/90 px-1.5 py-0.5 font-medium text-foreground outline-none focus:border-ring/70 focus-visible:ring-0"
-                  />
-                ) : (
-                  <span className="flex min-w-0 items-center gap-1.5 overflow-hidden">
-                    <span className="truncate font-medium text-foreground">
-                      {displayTitle}
-                    </span>
-                    {titleEditControl}
-                  </span>
-                )}
-              </span>
-              <span className="shrink-0 text-ui-xs text-muted-foreground">
-                updated {item.updatedLabel}
-              </span>
-            </div>
-            {deleteControl}
-          </div>
-        </ContextMenuTrigger>
-        <ContextMenuContent
-          onCloseAutoFocus={(event) => event.preventDefault()}
-        >
-          {/* Phases have no background-open: a phase only opens through its
-              migration route (migrationSource=phase), which a plain canvas tab
-              can't carry, so it would activate into the wrong (non-migration)
-              surface. New Window stays available - it goes through the route. */}
-          {isPhase ? null : (
-            <ContextMenuItem
-              onSelect={openInBackground}
-              data-testid="epics-list-row-open-background"
-            >
-              <ArrowDownToLine />
-              Open in Background
-            </ContextMenuItem>
-          )}
-          {openInNewWindowAvailable ? (
-            <ContextMenuItem
-              onSelect={openInNewWindow}
-              data-testid="epics-list-row-open-new-window"
-            >
-              <ExternalLink />
-              Open in New Window
-            </ContextMenuItem>
-          ) : null}
-        </ContextMenuContent>
-      </ContextMenu>
+            {backgroundMenuItem}
+            {newWindowMenuItem}
+          </ContextMenuContent>
+        </ContextMenu>
+      )}
     </li>
   );
 });

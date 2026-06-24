@@ -276,7 +276,7 @@ describe("<EpicsListPanel />", () => {
     await waitFor(() => {
       const tabId = useEpicCanvasStore
         .getState()
-        .firstTabIdForEpic("epic-from-history");
+        .resolveTabIdForEpic("epic-from-history");
       expect(tabId).not.toBeNull();
       expect(router.state.location.pathname).toBe(
         `/epics/epic-from-history/${tabId}`,
@@ -320,6 +320,28 @@ describe("<EpicsListPanel />", () => {
       await screen.findByTestId("epics-list-row-open-new-window"),
     ).toBeDefined();
     expect(screen.queryByTestId("epics-list-row-open-background")).toBeNull();
+  });
+
+  it("mounts no context menu for a phase row in browser mode (no windows bridge)", async () => {
+    // Browser build: no windows bridge, so Open in New Window is unavailable and
+    // the phase row already suppresses Open in Background. With no action left,
+    // the row must not wrap itself in a context menu - right-click must never
+    // pop an empty menu.
+    testState.items = [
+      historyItem({
+        id: "history-phase-web",
+        epicId: "phase-web",
+        taskType: "phase",
+        title: "Phase in browser",
+      }),
+    ];
+    renderPanel("embedded", "/");
+
+    fireEvent.contextMenu(await screen.findByTestId("epics-list-row-card"));
+
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(screen.queryByTestId("epics-list-row-open-background")).toBeNull();
+    expect(screen.queryByTestId("epics-list-row-open-new-window")).toBeNull();
   });
 
   it("shows the running activity status on history rows", async () => {

@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import {
   useEpicOpenInNewWindowFlow,
   type EpicNewWindowFlow,
@@ -42,7 +42,7 @@ export function useHistoryOpenInNewWindowFlow(): HistoryNewWindowFlow {
       if (item.taskType !== "phase") {
         const localTabId = useEpicCanvasStore
           .getState()
-          .firstTabIdForEpic(item.epicId);
+          .resolveTabIdForEpic(item.epicId);
         if (localTabId !== null) {
           requestEpicMove({
             epicId: item.epicId,
@@ -61,9 +61,15 @@ export function useHistoryOpenInNewWindowFlow(): HistoryNewWindowFlow {
     [bridge, requestEpicMove],
   );
 
-  return {
-    isAvailable: bridge !== null && epicFlow.isAvailable,
-    requestOpen,
-    epicFlow,
-  };
+  // Keep a stable identity (see `useEpicOpenInNewWindowFlow`): `epicFlow` is
+  // already memoized upstream, so this object only changes when availability,
+  // `requestOpen`, or the underlying flow actually changes.
+  return useMemo(
+    () => ({
+      isAvailable: bridge !== null && epicFlow.isAvailable,
+      requestOpen,
+      epicFlow,
+    }),
+    [bridge, epicFlow, requestOpen],
+  );
 }

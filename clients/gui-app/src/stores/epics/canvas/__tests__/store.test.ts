@@ -224,7 +224,7 @@ describe("epic canvas store header tabs", () => {
     const state = useEpicCanvasStore.getState();
     expect(state.tabsById["tab-hidden"]?.epicId).toBe("epic-hidden");
     expect(state.openTabOrder).toEqual([]);
-    expect(state.firstTabIdForEpic("epic-hidden")).toBe("tab-hidden");
+    expect(state.resolveTabIdForEpic("epic-hidden")).toBe("tab-hidden");
   });
 
   it("keeps legacy persisted tabs regardless of a now-removed lastSeenAt", async () => {

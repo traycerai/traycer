@@ -24,7 +24,11 @@ export interface OpenEpicInNewWindowInput {
  * confirm dialog). This helper only covers the remaining cases:
  *
  *  1. `ownership.snapshot()` catches the epic when it's the live/mounted tab in
- *     another window; we focus that window.
+ *     ANOTHER window; we focus that window. The current window is excluded from
+ *     the scan: phases resolve in-place under `epicId === phaseId` and so the
+ *     current window can hold an ownership entry for `input.epicId` (phase rows
+ *     always route here, never through the move flow). Matching it would refocus
+ *     this window instead of opening a new one - the silent self-focus bug.
  *  2. Otherwise open a fresh window at the epic route. Resolving here (rather
  *     than letting the new window's claim-on-mount bounce back to `/epics`)
  *     keeps the focus path flash-free.
@@ -40,7 +44,10 @@ export async function openEpicInNewWindow(
 ): Promise<void> {
   Analytics.getInstance().track(AnalyticsEvent.TaskOpened, null);
   const owned = await bridge.ownership.snapshot();
-  const existing = owned.find((entry) => entry.epicId === input.epicId);
+  const existing = owned.find(
+    (entry) =>
+      entry.epicId === input.epicId && entry.windowId !== bridge.windowId,
+  );
   if (existing !== undefined) {
     await bridge.requestFocus(existing.windowId);
     return;

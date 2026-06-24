@@ -212,7 +212,7 @@ export interface EpicCanvasStore {
    * Return the best existing tab id for an epic using the same active/recent
    * preference as reopen, without creating a new tab.
    */
-  firstTabIdForEpic: (epicId: string) => string | null;
+  resolveTabIdForEpic: (epicId: string) => string | null;
 
   /**
    * Open a tile in `tabId`'s canvas as a permanent tab (dedup-aware: focuses
@@ -670,14 +670,14 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
         const existing = resolveTabIdForEpic(get(), epicId);
         if (existing !== null) {
           // Reveal a preserved-but-hidden tab in the strip without activating
-          // it; an already-visible tab is left exactly where it is.
-          if (!get().openTabOrder.includes(existing)) {
-            set((current) =>
-              current.openTabOrder.includes(existing)
-                ? current
-                : { openTabOrder: [...current.openTabOrder, existing] },
-            );
-          }
+          // it; an already-visible tab is left exactly where it is. The
+          // functional updater is the single guard - it no-ops (returns the
+          // same state, which Zustand bails on) when the tab is already shown.
+          set((current) =>
+            current.openTabOrder.includes(existing)
+              ? current
+              : { openTabOrder: [...current.openTabOrder, existing] },
+          );
           return existing;
         }
         const tab = createEpicViewTab(epicId, name);
@@ -1004,7 +1004,7 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
         return state.openEpicTab(epicId, name ?? UNTITLED_EPIC_TITLE);
       },
 
-      firstTabIdForEpic: (epicId) => resolveTabIdForEpic(get(), epicId),
+      resolveTabIdForEpic: (epicId) => resolveTabIdForEpic(get(), epicId),
 
       openTileInTab: (tabId, node) => {
         set((state) =>
