@@ -1,0 +1,161 @@
+name: publish-desktop-cask
+
+# Homebrew desktop-cask publisher (runs in the PUBLIC OSS repo).
+#
+# Auto-triggers when a stable desktop-v<version> GitHub Release is published
+# here (release: released never fires for prereleases, so RC tags are excluded).
+# Also dispatchable by tag for manual re-runs.
+#
+# The cask is published via a PULL REQUEST against the tap's protected main
+# branch; merging that PR is the human gate before the cask goes live.
+
+on:
+  release:
+    types: [released]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Desktop release tag to publish (e.g. desktop-v1.6.0)"
+        required: true
+        type: string
+      dry_run:
+        description: "Render the cask only; skip the tap PR push."
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  render-and-pr:
+    name: Render + PR traycer-desktop cask
+    # Skip non-desktop release events (cli-v*/host-v* also fire `released`).
+    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'desktop-v') }}
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+    concurrency:
+      group: homebrew-tap-publish
+      cancel-in-progress: false
+    env:
+      RELEASE_REPO: ${{ github.repository }}
+    steps:
+      - name: Parse tag into version
+        id: resolve
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            tag="$INPUT_TAG"
+          else
+            tag="$RELEASE_TAG"
+          fi
+          if [[ "$tag" != desktop-v* ]]; then
+            echo "::error::Tag '$tag' must be a desktop release tag of the form desktop-v<semver> (e.g. desktop-v1.6.0)."
+            exit 1
+          fi
+          version="${tag#desktop-v}"
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Invalid version '$version' parsed from tag '$tag'. Expected semver (e.g. 1.5.0)."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Check tap repo secrets
+        if: ${{ inputs.dry_run != true }}
+        env:
+          HOMEBREW_TAP_REPO: ${{ secrets.TRAYCER_HOMEBREW_TAP_REPO }}
+          TAP_PUSH_TOKEN: ${{ secrets.TRAYCER_TAP_PUSH_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "$HOMEBREW_TAP_REPO" || -z "$TAP_PUSH_TOKEN" ]]; then
+            echo "::error::TRAYCER_HOMEBREW_TAP_REPO and TRAYCER_TAP_PUSH_TOKEN must be set to open the cask PR (or run with dry_run=true)."
+            exit 1
+          fi
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "24.15.0"
+      - name: Download macOS DMGs from desktop release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.resolve.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! gh release view "desktop-v${VERSION}" --repo "$RELEASE_REPO" >/dev/null 2>&1; then
+            echo "::error::Release 'desktop-v${VERSION}' does not exist on ${RELEASE_REPO}."
+            exit 1
+          fi
+          mkdir -p dmg
+          for asset in \
+            "traycer-desktop-macos-arm64.dmg" \
+            "traycer-desktop-macos-x64.dmg"; do
+            gh release download "desktop-v${VERSION}" \
+              --repo "$RELEASE_REPO" \
+              --pattern "$asset" \
+              --dir dmg \
+              --clobber
+            test -f "dmg/$asset"
+          done
+      - name: Render cask
+        env:
+          VERSION: ${{ steps.resolve.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          base_url="https://github.com/${RELEASE_REPO}/releases/download/desktop-v${VERSION}"
+          arm_sha="$(shasum -a 256 dmg/traycer-desktop-macos-arm64.dmg | awk '{print $1}')"
+          x64_sha="$(shasum -a 256 dmg/traycer-desktop-macos-x64.dmg | awk '{print $1}')"
+          node scripts/native-packaging/publish-cli-package-managers.cjs \
+            --desktop-cask \
+            --version "$VERSION" \
+            --staging staging \
+            --mac-arm-url "${base_url}/traycer-desktop-macos-arm64.dmg" \
+            --mac-arm-sha256 "$arm_sha" \
+            --mac-x64-url "${base_url}/traycer-desktop-macos-x64.dmg" \
+            --mac-x64-sha256 "$x64_sha"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-cask
+          path: staging/homebrew/Casks/traycer-desktop.rb
+      - name: Open desktop cask PR
+        if: ${{ inputs.dry_run != true }}
+        env:
+          GH_TOKEN: ${{ secrets.TRAYCER_TAP_PUSH_TOKEN }}
+          TAP_REPO: ${{ secrets.TRAYCER_HOMEBREW_TAP_REPO }}
+          VERSION: ${{ steps.resolve.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/${TAP_REPO}.git" tap
+          cd tap
+          git config user.name "traycer-release-bot"
+          git config user.email "release@traycer.ai"
+          branch="traycer-desktop-${VERSION}"
+          git checkout -B "$branch"
+          mkdir -p Casks
+          cp ../staging/homebrew/Casks/traycer-desktop.rb Casks/traycer-desktop.rb
+          git add Casks/traycer-desktop.rb
+          if git diff --cached --quiet; then
+            echo "::notice::Cask already up to date for ${VERSION}; nothing to PR."
+            exit 0
+          fi
+          git commit -m "traycer-desktop ${VERSION}"
+          git push --force origin "$branch"
+          existing="$(gh pr list --repo "$TAP_REPO" --head "$branch" --state open --json number --jq '.[0].number // empty')"
+          if [ -n "$existing" ]; then
+            echo "::notice::PR #${existing} already open for ${branch}; updated its branch."
+          else
+            gh pr create --repo "$TAP_REPO" --base main --head "$branch" \
+              --title "traycer-desktop ${VERSION}" \
+              --body "Automated Homebrew cask update for Traycer Desktop ${VERSION}. Generated by publish-desktop-cask.yml. Review and merge to publish."
+          fi

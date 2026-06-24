@@ -1,0 +1,316 @@
+name: publish-cli-package-managers
+
+# External CLI package-manager publisher (runs in the PUBLIC OSS repo): npm +
+# Homebrew formula.
+#
+# Auto-triggers when a stable cli-v<version> GitHub Release is published here
+# (release: released fires only for full releases, never prereleases, so RC tags
+# are excluded automatically). Also dispatchable by tag for manual re-runs.
+#
+# This lives in the OSS repo (not the private build repo) for one reason: npm
+# provenance (--provenance) is only accepted when the publishing workflow runs
+# in a PUBLIC source repository. Building + publishing here lets the package
+# carry a verifiable SLSA provenance attestation. The CLI source is checked out
+# at the exact commit recorded in the release's release-provenance.json.
+#
+# Homebrew is published via a PULL REQUEST against the tap's protected main
+# branch; merging that PR is the human gate before the formula goes live. npm
+# publishes directly (no review gate) - gate it with the `release` environment's
+# required reviewers and a scoped, expiring NPM_TOKEN.
+
+on:
+  release:
+    types: [released]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "CLI release tag to publish (e.g. cli-v1.6.0)"
+        required: true
+        type: string
+      dry_run:
+        description: "Validate only: npm publish --dry-run and skip the Homebrew PR push."
+        required: false
+        type: boolean
+        default: false
+      supported_host_version:
+        description: "Override the host version the npm CLI pins. Empty = read it from the release's provenance."
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  resolve:
+    name: Resolve release coordinates
+    # Skip non-CLI release events (host-v*/desktop-v* also fire `released`).
+    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'cli-v') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.compute.outputs.version }}
+      dist_tag: ${{ steps.compute.outputs.dist_tag }}
+      oss_ref: ${{ steps.provenance.outputs.oss_ref }}
+      supported_host_version: ${{ steps.provenance.outputs.supported_host_version }}
+    env:
+      RELEASE_REPO: ${{ github.repository }}
+    steps:
+      - name: Parse tag into version + npm dist-tag
+        id: compute
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            tag="$INPUT_TAG"
+          else
+            tag="$RELEASE_TAG"
+          fi
+          if [[ "$tag" != cli-v* ]]; then
+            echo "::error::Tag '$tag' must be a CLI release tag of the form cli-v<semver> (e.g. cli-v1.6.0)."
+            exit 1
+          fi
+          version="${tag#cli-v}"
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Invalid version '$version' parsed from tag '$tag'. Expected semver (e.g. 1.5.0)."
+            exit 1
+          fi
+          dist_tag="latest"
+          if [[ "$version" == *-* ]]; then
+            prerelease="${version#*-}"
+            dist_tag="${prerelease%%.*}"
+            if ! [[ "$dist_tag" =~ ^[0-9A-Za-z][0-9A-Za-z._-]*$ ]]; then
+              echo "::error::Invalid npm dist-tag derived from prerelease '$version': '$dist_tag'."
+              exit 1
+            fi
+          fi
+          {
+            echo "tag=$tag"
+            echo "version=$version"
+            echo "dist_tag=$dist_tag"
+          } >> "$GITHUB_OUTPUT"
+          echo "Resolved tag=$tag version=$version dist_tag=$dist_tag"
+      - name: Verify release + read provenance
+        id: provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.compute.outputs.tag }}
+          SUPPORTED_HOST_OVERRIDE: ${{ inputs.supported_host_version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! gh release view "$TAG" --repo "$RELEASE_REPO" >/dev/null 2>&1; then
+            echo "::error::Release '$TAG' does not exist on ${RELEASE_REPO}."
+            exit 1
+          fi
+          tmp="$(mktemp -d)"
+          if ! gh release download "$TAG" --repo "$RELEASE_REPO" --pattern release-provenance.json --dir "$tmp" >/dev/null 2>&1; then
+            echo "::error::release-provenance.json is missing from '$TAG'; cannot resolve the OSS source commit to build npm from."
+            exit 1
+          fi
+          oss_ref="$(jq -r '.ossRef // empty' "$tmp/release-provenance.json")"
+          if [ -z "$oss_ref" ]; then
+            echo "::error::release-provenance.json for '$TAG' has no ossRef; cannot build npm from a known source commit."
+            exit 1
+          fi
+          supported_host_version="$SUPPORTED_HOST_OVERRIDE"
+          if [ -z "$supported_host_version" ]; then
+            supported_host_version="$(jq -r '.supportedHostVersion // empty' "$tmp/release-provenance.json")"
+          fi
+          if [ -z "$supported_host_version" ]; then
+            echo "::error::No supported host version available: release-provenance.json for '$TAG' predates the supportedHostVersion field. Re-run with the supported_host_version input set."
+            exit 1
+          fi
+          echo "oss_ref=$oss_ref" >> "$GITHUB_OUTPUT"
+          echo "supported_host_version=$supported_host_version" >> "$GITHUB_OUTPUT"
+          echo "OSS source ref: $oss_ref ; supported host version: $supported_host_version"
+
+  publish-npm:
+    name: Publish @traycerai/cli to npm
+    needs: resolve
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      VERSION: ${{ needs.resolve.outputs.version }}
+      DIST_TAG: ${{ needs.resolve.outputs.dist_tag }}
+      RELEASE_REPO: ${{ github.repository }}
+    steps:
+      - name: Determine publish mode
+        id: gate
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            echo "mode=dry-run" >> "$GITHUB_OUTPUT"
+          elif [ -z "$NPM_TOKEN" ]; then
+            echo "::error::NPM_TOKEN is unset; cannot publish to npm. Set the secret or run with dry_run=true."
+            exit 1
+          else
+            echo "mode=publish" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Check out CLI source at the built commit
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ needs.resolve.outputs.oss_ref }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.3.12"
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "24.15.0"
+          registry-url: "https://registry.npmjs.org"
+      - name: Install workspace dependencies
+        run: bun install --frozen-lockfile
+      - name: Stamp CLI production deploy target
+        env:
+          TRAYCER_SUPPORTED_HOST_VERSION: ${{ needs.resolve.outputs.supported_host_version }}
+          TRAYCER_RELEASE_REPO: ${{ env.RELEASE_REPO }}
+        run: bun clients/traycer-cli/scripts/set-deploy-target.cjs --target=production
+      - name: Build npm package
+        env:
+          TRAYCER_CLI_SENTRY_DSN: ${{ secrets.TRAYCER_CLI_SENTRY_DSN }}
+          TRAYCER_CLI_VERSION: ${{ needs.resolve.outputs.version }}
+        run: bun run --cwd clients/traycer-cli build
+      - name: Restore CLI deploy target to local
+        if: always()
+        run: bun clients/traycer-cli/scripts/set-deploy-target.cjs --restore
+      - name: Skip existing npm version
+        if: steps.gate.outputs.mode == 'publish'
+        id: existing
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if npm view "@traycerai/cli@${VERSION}" version >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "@traycerai/cli@${VERSION} already exists; skipping publish."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Publish npm package (with provenance)
+        if: steps.gate.outputs.mode == 'publish' && steps.existing.outputs.exists != 'true'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish clients/traycer-cli/dist-npm --provenance --access public --tag "$DIST_TAG"
+      - name: npm dry run
+        if: steps.gate.outputs.mode == 'dry-run'
+        run: npm publish clients/traycer-cli/dist-npm --access public --tag "$DIST_TAG" --dry-run
+
+  publish-homebrew-formula:
+    name: Open Homebrew formula PR
+    needs: resolve
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+    concurrency:
+      group: homebrew-tap-publish
+      cancel-in-progress: false
+    env:
+      VERSION: ${{ needs.resolve.outputs.version }}
+      RELEASE_REPO: ${{ github.repository }}
+    steps:
+      - name: Check tap repo secrets
+        if: ${{ inputs.dry_run != true }}
+        env:
+          HOMEBREW_TAP_REPO: ${{ secrets.TRAYCER_HOMEBREW_TAP_REPO }}
+          TAP_PUSH_TOKEN: ${{ secrets.TRAYCER_TAP_PUSH_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "$HOMEBREW_TAP_REPO" || -z "$TAP_PUSH_TOKEN" ]]; then
+            echo "::error::TRAYCER_HOMEBREW_TAP_REPO and TRAYCER_TAP_PUSH_TOKEN must be set to open the Homebrew formula PR (or run with dry_run=true)."
+            exit 1
+          fi
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "24.15.0"
+      - name: Download CLI descriptors for the formula
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p descriptors
+          # The formula needs both macOS descriptors (required) and the Linux
+          # descriptors (optional - Linuxbrew). Download whichever exist.
+          for platform_key in darwin-arm64 darwin-x64 linux-arm64 linux-x64; do
+            if gh release view "cli-v${VERSION}" --repo "$RELEASE_REPO" --json assets \
+              --jq ".assets[] | select(.name == \"cli-descriptor-${platform_key}.json\") | .url" | grep -q .; then
+              gh release download "cli-v${VERSION}" --repo "$RELEASE_REPO" \
+                --pattern "cli-descriptor-${platform_key}.json" \
+                --dir descriptors --clobber
+            fi
+          done
+          for required in darwin-arm64 darwin-x64; do
+            if [ ! -f "descriptors/cli-descriptor-${required}.json" ]; then
+              echo "::error::Required macOS descriptor cli-descriptor-${required}.json is missing from cli-v${VERSION}."
+              exit 1
+            fi
+          done
+          ls -la descriptors/
+      - name: Render Homebrew formula
+        shell: bash
+        run: |
+          set -euo pipefail
+          DESCRIPTOR_ARGS=()
+          for f in descriptors/cli-descriptor-*.json; do
+            [ -f "$f" ] || continue
+            DESCRIPTOR_ARGS+=(--descriptor "$f")
+          done
+          node scripts/native-packaging/publish-cli-package-managers.cjs \
+            --version "$VERSION" \
+            --staging staging \
+            --release-repo "$RELEASE_REPO" \
+            --managers homebrew \
+            "${DESCRIPTOR_ARGS[@]}"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: homebrew-formula
+          path: staging/homebrew/Formula/traycer.rb
+      - name: Open Homebrew formula PR
+        if: ${{ inputs.dry_run != true }}
+        env:
+          GH_TOKEN: ${{ secrets.TRAYCER_TAP_PUSH_TOKEN }}
+          TAP_REPO: ${{ secrets.TRAYCER_HOMEBREW_TAP_REPO }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/${TAP_REPO}.git" tap
+          cd tap
+          git config user.name "traycer-release-bot"
+          git config user.email "release@traycer.ai"
+          branch="traycer-formula-${VERSION}"
+          git checkout -B "$branch"
+          mkdir -p Formula
+          cp ../staging/homebrew/Formula/traycer.rb Formula/traycer.rb
+          git add Formula/traycer.rb
+          if git diff --cached --quiet; then
+            echo "::notice::Formula already up to date for ${VERSION}; nothing to PR."
+            exit 0
+          fi
+          git commit -m "traycer ${VERSION}"
+          git push --force origin "$branch"
+          existing="$(gh pr list --repo "$TAP_REPO" --head "$branch" --state open --json number --jq '.[0].number // empty')"
+          if [ -n "$existing" ]; then
+            echo "::notice::PR #${existing} already open for ${branch}; updated its branch."
+          else
+            gh pr create --repo "$TAP_REPO" --base main --head "$branch" \
+              --title "traycer ${VERSION}" \
+              --body "Automated Homebrew formula update for Traycer CLI ${VERSION}. Generated by publish-cli-package-managers.yml. Review and merge to publish."
+          fi
