@@ -67,12 +67,19 @@ function normalize(value: string): string {
   return value.trim().replace(/\s+/g, " ");
 }
 
+// Escape a value for inclusion inside a double-quoted token: backslashes first
+// (so the escapes we add for quotes aren't themselves re-interpreted), then the
+// quotes.
+function escapeDoubleQuoted(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
 // Quote a token for a reconstructed command line only when it isn't already a
 // bare shell-safe word, so simple values stay unquoted while paths/queries with
 // spaces or specials read correctly.
 function quoteArg(value: string): string {
   if (/^[\w./@:=+-]+$/.test(value)) return value;
-  return `"${value.replace(/"/g, '\\"')}"`;
+  return `"${escapeDoubleQuoted(value)}"`;
 }
 
 // `-C N`, or `-B N -A N`, from either the flag keys or the spelled-out aliases.
@@ -112,7 +119,7 @@ function reconstructGrep(record: Record<string, unknown>): string | null {
     ...grepContextArgs(record),
     ...(type !== null ? [`--type ${quoteArg(type)}`] : []),
     ...(glob !== null ? [`--glob ${quoteArg(glob)}`] : []),
-    `"${pattern.replace(/"/g, '\\"')}"`,
+    `"${escapeDoubleQuoted(pattern)}"`,
     ...(path !== null ? [quoteArg(path)] : []),
   ].join(" ");
 }

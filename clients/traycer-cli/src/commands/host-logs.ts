@@ -123,16 +123,20 @@ async function followLog(path: string, quiet: boolean): Promise<void> {
     const tick = async (): Promise<void> => {
       if (stopped) return;
       try {
-        const stats = await stat(path);
-        missingRetries = 0;
-        if (stats.size < offset) {
-          // Truncated / rotated: re-read from the top.
-          offset = 0;
-        }
-        if (stats.size > offset) {
-          const length = stats.size - offset;
-          const fh = await open(path, "r");
-          try {
+        // Open first, then size and read through the same handle, so the size
+        // we act on is the file we read rather than re-resolving the path twice
+        // (a TOCTOU window). Re-opening each tick also transparently follows a
+        // rotation: the next open lands on whatever file now holds the path.
+        const fh = await open(path, "r");
+        try {
+          const stats = await fh.stat();
+          missingRetries = 0;
+          if (stats.size < offset) {
+            // Truncated / rotated: re-read from the top.
+            offset = 0;
+          }
+          if (stats.size > offset) {
+            const length = stats.size - offset;
             const buf = Buffer.alloc(length);
             const { bytesRead } = await fh.read(buf, 0, length, offset);
             if (bytesRead > 0) {
@@ -144,9 +148,9 @@ async function followLog(path: string, quiet: boolean): Promise<void> {
               }
               offset += bytesRead;
             }
-          } finally {
-            await fh.close();
           }
+        } finally {
+          await fh.close();
         }
       } catch {
         // ENOENT or transient: bounded retry then give up. Restart of

@@ -14,7 +14,7 @@
  * rename or delete. Fail loudly with a regeneration hint.
  */
 
-const { existsSync, statSync } = require("node:fs");
+const { openSync, fstatSync, readSync, closeSync } = require("node:fs");
 const { resolve } = require("node:path");
 
 const trayDir = resolve(__dirname, "..", "..", "resources", "tray");
@@ -37,24 +37,29 @@ const problems = [];
 
 for (const name of required) {
   const path = resolve(trayDir, name);
-  if (!existsSync(path)) {
+  // Open once and inspect through the descriptor (fstat + read), so the file we
+  // size-check is the same one we read — no stat-then-open TOCTOU. A failed
+  // open (ENOENT) is the "missing" case.
+  let fd;
+  try {
+    fd = openSync(path, "r");
+  } catch {
     problems.push(`missing: ${name}`);
     continue;
   }
-  const info = statSync(path);
-  if (!info.isFile() || info.size === 0) {
-    problems.push(`empty or non-file: ${name}`);
-    continue;
-  }
-  const fd = require("node:fs").openSync(path, "r");
-  const head = Buffer.alloc(8);
   try {
-    require("node:fs").readSync(fd, head, 0, 8, 0);
+    const info = fstatSync(fd);
+    if (!info.isFile() || info.size === 0) {
+      problems.push(`empty or non-file: ${name}`);
+      continue;
+    }
+    const head = Buffer.alloc(8);
+    readSync(fd, head, 0, 8, 0);
+    if (!head.equals(PNG_SIGNATURE)) {
+      problems.push(`not a valid PNG (bad signature): ${name}`);
+    }
   } finally {
-    require("node:fs").closeSync(fd);
-  }
-  if (!head.equals(PNG_SIGNATURE)) {
-    problems.push(`not a valid PNG (bad signature): ${name}`);
+    closeSync(fd);
   }
 }
 
