@@ -33,10 +33,7 @@ import {
 } from "@/lib/composer/workspace-composer-availability";
 import type { ChatSessionState } from "@/stores/chats/chat-session-store";
 import { cn } from "@/lib/utils";
-import type {
-  ChatRuntimeAvailability,
-  PendingInterviewView,
-} from "./chat-tile-types";
+import type { PendingInterviewView } from "./chat-tile-types";
 import {
   composerHasBlockingApprovals,
   visibleComposerApprovals,
@@ -59,7 +56,6 @@ export interface ChatLowerInteractionSurfacesProps {
 }
 
 export interface ChatLowerRuntimeState {
-  readonly availability: ChatRuntimeAvailability;
   readonly snapshotLoaded: boolean;
 }
 
@@ -196,7 +192,6 @@ export function ChatLowerInteractionSurfaces(
   // received A2A responses alike (the latter render read-only).
   const queueVisible = props.queue.value.items.length > 0;
   const approvalVisible = approvalSurfaceVisible(
-    props.runtime.availability,
     props.runtime.snapshotLoaded,
     props.access.isViewer,
     pendingApprovalCount,
@@ -314,17 +309,11 @@ export function ChatLowerInteractionSurfaces(
 }
 
 function approvalSurfaceVisible(
-  runtimeAvailability: ChatRuntimeAvailability,
   snapshotLoaded: boolean,
   isViewer: boolean,
   pendingApprovalCount: number,
 ): boolean {
-  return (
-    runtimeAvailability.kind === "available" &&
-    snapshotLoaded &&
-    !isViewer &&
-    pendingApprovalCount > 0
-  );
+  return snapshotLoaded && !isViewer && pendingApprovalCount > 0;
 }
 
 function RuntimeGatedApprovalSurface(props: {
@@ -332,7 +321,6 @@ function RuntimeGatedApprovalSurface(props: {
   readonly layout: ComposerSurfaceLayout;
 }): ReactNode {
   const { model, layout } = props;
-  if (model.runtime.availability.kind !== "available") return null;
   if (
     !model.runtime.snapshotLoaded ||
     model.access.isViewer ||
@@ -361,18 +349,6 @@ const ChatComposerRegion = memo(function ChatComposerRegion(props: {
   readonly layout: ComposerSurfaceLayout;
 }): ReactNode {
   const { model, layout } = props;
-  if (model.runtime.availability.kind !== "available") {
-    return (
-      <InertChatComposer
-        taskId={model.composer.nodeId}
-        isActive={model.composer.isActive}
-        mentionRoots={model.composer.mentionRoots}
-        currentEpicId={model.composer.currentEpicId}
-        workspaceControls={model.composer.workspaceControls}
-        topSpacing={layout.topSpacing}
-      />
-    );
-  }
   return <ComposerSurface model={model} layout={layout} />;
 });
 

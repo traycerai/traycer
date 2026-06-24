@@ -34,8 +34,6 @@ const VIRTUOSO_TEST_CONTEXT = {
   itemHeight: 100,
   viewportHeight: 500,
 };
-const TEST_VIRTUOSO_LICENSE_KEY =
-  "eff2c8c42294f62b09cebd99d82c8c93b25URVNUO2V4OTk5OTk5OTk5OTk5OQ==";
 let scrollStateKeySequence = 0;
 
 function minimapItemsFor(
@@ -62,7 +60,6 @@ function chatMessagesJsx(
     <VirtuosoMessageListTestingContext.Provider value={VIRTUOSO_TEST_CONTEXT}>
       <ChatMessages
         taskTitle="Transcript"
-        licenseKey={TEST_VIRTUOSO_LICENSE_KEY}
         messages={messages}
         minimapItems={opts.minimapItems}
         scrollStateKey={opts.scrollStateKey}

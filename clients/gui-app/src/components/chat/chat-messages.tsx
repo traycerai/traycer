@@ -29,6 +29,7 @@ import { ScrollToBottomChip } from "@/components/chat/scroll-to-bottom-chip";
 import type { NextStepActionHandler } from "@/components/chat/segments/next-steps-action-group";
 import { useAnimationFrameThrottle } from "@/hooks/use-animation-frame-throttle";
 import { cn } from "@/lib/utils";
+import { VIRTUOSO_MESSAGE_LIST_LICENSE_KEY } from "@/lib/virtuoso-license";
 import type { ScrollRestorationAdapter } from "@/hooks/scroll/scroll-restoration-adapter";
 import { useScrollRestoration } from "@/hooks/scroll/use-scroll-restoration";
 import { ActivityGroupOpenStoreProvider } from "@/stores/chats/activity-group-open-store";
@@ -56,7 +57,6 @@ import {
 
 interface ChatMessagesProps {
   taskTitle: string;
-  licenseKey: string;
   /** The full derived, pinned-todo-stripped row history to hand to Virtuoso. */
   messages: ReadonlyArray<ChatMessageModel>;
   /** User rows for the minimap rail, derived from the same rendered rows. */
@@ -164,7 +164,6 @@ export function ChatMessages(props: ChatMessagesProps) {
   const {
     getMessageActions,
     instanceId,
-    licenseKey,
     messages,
     minimapItems,
     nextStepActions,
@@ -574,7 +573,9 @@ export function ChatMessages(props: ChatMessagesProps) {
           {...chatMinimapClipRegionProps}
           className="relative flex-1 overflow-hidden"
         >
-          <VirtuosoMessageListLicense licenseKey={licenseKey}>
+          <VirtuosoMessageListLicense
+            licenseKey={VIRTUOSO_MESSAGE_LIST_LICENSE_KEY}
+          >
             <VirtuosoMessageList<ChatVirtuosoItem, ChatListContext>
               ref={virtuosoRef}
               data={listData}
