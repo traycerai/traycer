@@ -81,7 +81,7 @@ For setup, configuration, agent integrations, and provider-specific behavior, he
 
 We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) to get started and our [Code of Conduct](CODE_OF_CONDUCT.md). Commits must be signed off under the [Developer Certificate of Origin (DCO)](CONTRIBUTING.md#developer-certificate-of-origin-dco). You can also [open an issue](https://github.com/traycerai/traycer/issues) for bugs and feature requests.
 
-> **Security:** Please don't report security vulnerabilities through public GitHub issues. Report them privately via GitHub's [Report a vulnerability](../../security/advisories/new) flow or email **support@traycer.ai**. See the [Security Policy](SECURITY.md) for details.
+> **Security:** Please don't report security vulnerabilities through public GitHub issues. Report them privately via the email **support@traycer.ai**. See the [Security Policy](SECURITY.md) for details.
 
 <a href="https://github.com/traycerai/traycer/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=traycerai/traycer" />
@@ -93,7 +93,7 @@ Join the Traycer community to get help, share feedback, and connect with other u
 
 - **[Discord](https://traycer.ai/discord)** — Chat with the team and community
 - **[X / Twitter](https://x.com/traycerai)** — Follow for updates and announcements
-- **[GitHub Issues](https://github.com/traycerai/traycer/issues)** — Report bugs and request features
+- **[YouTube](https://www.youtube.com/@TraycerAI)** — Subscribe for walkthroughs and other Traycer videos.
 
 ## License
 
