@@ -4,10 +4,7 @@
 
 **Please do not report security issues through public GitHub issues.**
 
-Report privately through either:
-
-- GitHub's **[Report a vulnerability](../../security/advisories/new)** (the repo's Security → Advisories tab), or
-- email **[support@traycer.ai](mailto:support@traycer.ai)**
+Report privately through the email **[support@traycer.ai](mailto:support@traycer.ai).**
 
 Please include a description, reproduction steps, the affected component and version, and the potential impact. We aim to acknowledge reports within **3 business days** and will keep you updated as we investigate and ship a fix.
 
