@@ -54,7 +54,6 @@ import type { PinnedTodoSnapshot } from "@/components/chat/chat-pinned-todos";
 
 // ── Stable composer-relevant props (built once, never re-identified) ──────────
 const RUNTIME: ChatLowerRuntimeState = {
-  availability: { kind: "available", licenseKey: "lk" },
   snapshotLoaded: true,
 };
 const ACCESS: ChatLowerAccessState = { isViewer: false, canAct: true };

@@ -141,7 +141,6 @@ import {
   ChatLowerInteractionSurfaces,
   InertChatComposer,
 } from "./chat-tile-lower-surfaces";
-import type { ChatRuntimeAvailability } from "./chat-tile-types";
 import {
   chatTileUiReducer,
   createInitialChatTileUiState,
@@ -155,12 +154,7 @@ import {
   chatTileCanAct,
   findPendingInterview,
 } from "./chat-tile-session-state";
-import { useChatRuntimeGate } from "./use-chat-runtime-gate";
-import {
-  ChatTileLoading,
-  ChatTileError,
-  ChatRuntimeConfigurationBlock,
-} from "./chat-tile-runtime-gate";
+import { ChatTileLoading, ChatTileError } from "./chat-tile-runtime-gate";
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
 
 const EMPTY_MENTION_ROOTS: ReadonlyArray<string> = [];
@@ -496,9 +490,6 @@ function ChatTileSessionView(props: ChatTileSessionViewProps) {
           getMessageActions={view.getMessageActions}
           nextStepActions={view.nextStepActions}
           planActions={view.planActions}
-          runtimeAvailability={view.runtimeGate.availability}
-          runtimeRetrying={view.runtimeGate.retrying}
-          onRuntimeRetry={view.runtimeGate.retry}
         />
         <ChatTileErrorNoticeToasts handle={view.handle} />
         {/*
@@ -615,7 +606,6 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     ],
   );
   const profile = useAuthStore((state) => state.profile);
-  const runtimeGate = useChatRuntimeGate();
   const activeHostId = useTabHostId();
   const currentUserId = profile?.userId ?? null;
   const localSnapshotClearMarker = useLocalSnapshotClearStore((store) =>
@@ -1236,10 +1226,9 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
 
   const lowerRuntime = useMemo(
     () => ({
-      availability: runtimeGate.availability,
       snapshotLoaded: state.snapshotLoaded,
     }),
-    [runtimeGate.availability, state.snapshotLoaded],
+    [state.snapshotLoaded],
   );
 
   const lowerAccess = useMemo(
@@ -1356,7 +1345,6 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     getMessageActions: messageActionsFor,
     nextStepActions,
     planActions,
-    runtimeGate,
     lower: {
       runtime: lowerRuntime,
       access: lowerAccess,
@@ -1395,9 +1383,6 @@ interface ChatSessionMessagesSurfaceProps {
   ) => ChatMessageActions | null;
   readonly nextStepActions: NextStepActionHandler;
   readonly planActions: ChatPlanActionsContextValue;
-  readonly runtimeAvailability: ChatRuntimeAvailability;
-  readonly runtimeRetrying: boolean;
-  readonly onRuntimeRetry: () => Promise<unknown>;
 }
 
 /**
@@ -1446,15 +1431,6 @@ function ChatSessionMessagesSurface(
   // (~0.5s - the host is local-first). The snapshot then renders the user
   // message + real turn state in one transition; there is no optimistic seed.
   if (!props.snapshotLoaded) return <ChatTileLoading />;
-  if (props.runtimeAvailability.kind !== "available") {
-    return (
-      <ChatRuntimeConfigurationBlock
-        availability={props.runtimeAvailability}
-        retrying={props.runtimeRetrying}
-        onRetry={props.onRuntimeRetry}
-      />
-    );
-  }
   // Pick the in-progress "thinking" verb once per turn, seeded on the chat plus
   // its completed-turn count - NOT the indicator row id, which flips from
   // `assistant:live` to `assistant:<turnId>` mid-turn and would otherwise
@@ -1475,7 +1451,6 @@ function ChatSessionMessagesSurface(
           >
             <ChatMessages
               taskTitle={props.node.name}
-              licenseKey={props.runtimeAvailability.licenseKey}
               messages={props.messages}
               minimapItems={props.minimapItems}
               scrollStateKey={props.node.instanceId}
