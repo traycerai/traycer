@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo } from "react";
 import { useQuery, type UseQueryResult } from "@tanstack/react-query";
 import type {
   ListTasksResponse,
@@ -7,6 +7,7 @@ import type {
 import { useHostClient } from "@/lib/host";
 import { useAuthStore, type AuthStatus } from "@/stores/auth/auth-store";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
+import { useCloudEpicTasksPagesStore } from "@/stores/epics/cloud-epic-tasks-pages-store";
 import {
   LIST_CLOUD_TASKS_REQUEST,
   cloudEpicTasksFirstPageQueryOptions,
@@ -20,11 +21,6 @@ import { uiQueryKeys } from "@/lib/query-keys";
 const EMPTY_TASKS: readonly TaskLight[] = [];
 const EMPTY_PAGES: readonly ListTasksResponse[] = [];
 const EMPTY_FIRST_PAGE: ListTasksResponse = { tasks: [], hasMore: false };
-
-interface ExtraPagesState {
-  readonly identity: string;
-  readonly pages: readonly ListTasksResponse[];
-}
 
 export interface CloudEpicTasksQueryResult {
   readonly hostId: string | null;
@@ -84,24 +80,23 @@ export function useCloudEpicTasksQuery(
   const queryRefetch = query.refetch;
   const isPlaceholderData = query.isPlaceholderData;
 
-  // Pages are reset and stale cursor responses dropped when this identity
-  // flips (host, user, or request scope change).
+  // Identity (host | user | request scope) keys the accumulated "Show more"
+  // pages in the ambient store. Holding them there (instead of this hook's own
+  // state) lets loaded pages survive the host surface unmounting/remounting -
+  // e.g. closing and reopening the History overlay - and a scope change simply
+  // selects that scope's own pages rather than discarding them.
   const identity = `${hostId ?? ""}|${userId ?? ""}|${JSON.stringify(effectiveRequest)}`;
-  const [extraPagesState, setExtraPagesState] = useState<ExtraPagesState>(
-    () => ({
-      identity,
-      pages: [],
-    }),
+  const extraPages = useCloudEpicTasksPagesStore(
+    (state) => state.pagesByIdentity[identity] ?? EMPTY_PAGES,
   );
-  const extraPages =
-    extraPagesState.identity === identity ? extraPagesState.pages : EMPTY_PAGES;
-  if (extraPagesState.identity !== identity) {
-    setExtraPagesState({ identity, pages: [] });
-  }
-  const [fetchingNextPageIdentity, setFetchingNextPageIdentity] = useState<
-    string | null
-  >(null);
-  const isFetchingNextPage = fetchingNextPageIdentity === identity;
+  const isFetchingNextPage = useCloudEpicTasksPagesStore(
+    (state) => identity in state.fetchingByIdentity,
+  );
+  const appendPage = useCloudEpicTasksPagesStore((state) => state.appendPage);
+  const setFetching = useCloudEpicTasksPagesStore((state) => state.setFetching);
+  const resetIdentity = useCloudEpicTasksPagesStore(
+    (state) => state.resetIdentity,
+  );
 
   const tasks = useMemo<readonly TaskLight[]>(() => {
     if (queryData === undefined) return EMPTY_TASKS;
@@ -125,32 +120,30 @@ export function useCloudEpicTasksQuery(
 
   const fetchNextPage = useCallback(() => {
     if (lastNextCursor === null || isFetchingNextPage) return;
-    setFetchingNextPageIdentity(identity);
+    setFetching(identity, true);
     void fetchCloudEpicTasksPage(client, effectiveRequest, lastNextCursor).then(
       (page) => {
-        setExtraPagesState((prev) =>
-          prev.identity === identity
-            ? { identity: prev.identity, pages: [...prev.pages, page] }
-            : prev,
-        );
-        setFetchingNextPageIdentity((current) =>
-          current === identity ? null : current,
-        );
+        appendPage(identity, page);
+        setFetching(identity, false);
       },
       () => {
-        setFetchingNextPageIdentity((current) =>
-          current === identity ? null : current,
-        );
+        setFetching(identity, false);
       },
     );
-  }, [client, effectiveRequest, identity, lastNextCursor, isFetchingNextPage]);
+  }, [
+    client,
+    effectiveRequest,
+    identity,
+    lastNextCursor,
+    isFetchingNextPage,
+    appendPage,
+    setFetching,
+  ]);
 
   const refetch = useCallback(() => {
-    setExtraPagesState((prev) =>
-      prev.pages.length === 0 ? prev : { identity: prev.identity, pages: [] },
-    );
+    resetIdentity(identity);
     void queryRefetch();
-  }, [queryRefetch]);
+  }, [identity, resetIdentity, queryRefetch]);
 
   return {
     hostId,

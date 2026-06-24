@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useRouter, useRouterState } from "@tanstack/react-router";
 import { useTabsStore } from "@/stores/tabs/store";
-import { useHistorySearchStore } from "@/stores/home/history-search-store";
 import { useSettingsSectionStore } from "@/stores/tabs/settings-section-store";
 import {
   ensureHistoryTab,
@@ -107,13 +106,9 @@ export function useSystemTabModalActions(): SystemTabModalActions {
   }, [navigateToTabClearingOverlay, router]);
 
   const close = useCallback(() => {
-    // History search/filter now lives in the ambient store, not the URL, so
-    // dismissing the modal clears it there (matching the prior "fresh on
-    // reopen" behavior). The URL clear still runs to sweep any stale params.
-    const overlay = parseSystemTabOverlayView(router.state.location.search);
-    if (overlay.historyOverlay) {
-      useHistorySearchStore.getState().clear();
-    }
+    // History search/filter/sort lives in the ambient store and must persist for
+    // the whole app session, so dismissing the modal only sweeps the URL overlay
+    // flag - reopening restores exactly where the user left off.
     void router.navigate({
       to: ".",
       search: (prev) => withOverlayCleared(prev),
@@ -316,9 +311,8 @@ export function useSystemTabModalRefreshGuard(): void {
       return;
     }
     if (pathname !== lastPathnameRef.current) {
-      if (overlay.historyOverlay) {
-        useHistorySearchStore.getState().clear();
-      }
+      // Auto-close on path change drops only the overlay flag; the ambient
+      // history search/filter/sort is preserved for the session.
       void router.navigate({
         to: ".",
         search: (prev) => withOverlayCleared(prev),

@@ -32,6 +32,7 @@ import {
 import { getHostBindingSnapshot } from "@/lib/host/runtime";
 import { EpicsList } from "@/components/epics/epics-list";
 import { useHistorySearchStore } from "@/stores/home/history-search-store";
+import { useCloudEpicTasksPagesStore } from "@/stores/epics/cloud-epic-tasks-pages-store";
 import { DEFAULT_HISTORY_SEARCH } from "@/lib/history-search";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useAuthStore, type AuthStatus } from "@/stores/auth/auth-store";
@@ -285,6 +286,10 @@ describe("<EpicsList />", () => {
     useAuthStore.getState().setSignedOut();
     window.localStorage.clear();
     useHistorySearchStore.setState({ search: DEFAULT_HISTORY_SEARCH });
+    useCloudEpicTasksPagesStore.setState({
+      pagesByIdentity: {},
+      fetchingByIdentity: {},
+    });
     restoreFetch = installAuthFetch();
   });
 
@@ -292,6 +297,10 @@ describe("<EpicsList />", () => {
     cleanup();
     useAuthStore.getState().setSignedOut();
     useHistorySearchStore.setState({ search: DEFAULT_HISTORY_SEARCH });
+    useCloudEpicTasksPagesStore.setState({
+      pagesByIdentity: {},
+      fetchingByIdentity: {},
+    });
     vi.restoreAllMocks();
     restoreFetch();
   });
