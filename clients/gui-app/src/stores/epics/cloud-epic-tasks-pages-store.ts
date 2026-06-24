@@ -17,23 +17,38 @@ import type { ListTasksResponse } from "@traycer/protocol/host/epic/unary-schema
  * In-memory only: a full reload starts a fresh list (cursors and page snapshots
  * are not worth persisting across reloads); search/filter/sort persistence is
  * owned separately by `useHistorySearchStore`.
+ *
+ * Each identity also carries a monotonic generation. `resetIdentity` (called on
+ * refresh/refetch) bumps it; `appendPage` ignores any page tagged with an older
+ * generation. That guards the cursor race where a "Show more" fetch resolves
+ * *after* a refresh reset the list - without it, the in-flight response would
+ * re-create `pagesByIdentity[identity]` with stale rows on top of the refreshed
+ * first page. The next-page fetch (a TanStack `useHostMutation`) captures the
+ * generation when it starts and hands it back here on success.
  */
 interface CloudEpicTasksPagesStoreState {
   readonly pagesByIdentity: Readonly<
     Record<string, readonly ListTasksResponse[]>
   >;
-  readonly fetchingByIdentity: Readonly<Record<string, true>>;
-  readonly appendPage: (identity: string, page: ListTasksResponse) => void;
+  readonly generationByIdentity: Readonly<Record<string, number>>;
+  readonly appendPage: (
+    identity: string,
+    generation: number,
+    page: ListTasksResponse,
+  ) => void;
   readonly resetIdentity: (identity: string) => void;
-  readonly setFetching: (identity: string, fetching: boolean) => void;
 }
 
 export const useCloudEpicTasksPagesStore =
   create<CloudEpicTasksPagesStoreState>()((set) => ({
     pagesByIdentity: {},
-    fetchingByIdentity: {},
-    appendPage: (identity, page) => {
+    generationByIdentity: {},
+    appendPage: (identity, generation, page) => {
       set((state) => {
+        // A response tagged with a superseded generation belongs to a list
+        // that was reset (e.g. by a refresh) after the fetch started - drop it
+        // so late results can't revive a cleared identity.
+        if (generation !== currentGeneration(state, identity)) return state;
         const current = state.pagesByIdentity[identity] ?? [];
         return {
           pagesByIdentity: {
@@ -45,27 +60,32 @@ export const useCloudEpicTasksPagesStore =
     },
     resetIdentity: (identity) => {
       set((state) => {
-        if (!(identity in state.pagesByIdentity)) return state;
-        const next = { ...state.pagesByIdentity };
-        delete next[identity];
-        return { pagesByIdentity: next };
-      });
-    },
-    setFetching: (identity, fetching) => {
-      set((state) => {
-        const isFetching = identity in state.fetchingByIdentity;
-        if (fetching === isFetching) return state;
-        if (fetching) {
-          return {
-            fetchingByIdentity: {
-              ...state.fetchingByIdentity,
-              [identity]: true,
-            },
-          };
+        const generationByIdentity = {
+          ...state.generationByIdentity,
+          [identity]: currentGeneration(state, identity) + 1,
+        };
+        if (!(identity in state.pagesByIdentity)) {
+          return { generationByIdentity };
         }
-        const next = { ...state.fetchingByIdentity };
-        delete next[identity];
-        return { fetchingByIdentity: next };
+        const pagesByIdentity = { ...state.pagesByIdentity };
+        delete pagesByIdentity[identity];
+        return { pagesByIdentity, generationByIdentity };
       });
     },
   }));
+
+function currentGeneration(
+  state: Pick<CloudEpicTasksPagesStoreState, "generationByIdentity">,
+  identity: string,
+): number {
+  return state.generationByIdentity[identity] ?? 0;
+}
+
+/**
+ * Current generation for an identity, read imperatively so the next-page fetch
+ * can tag its request and `appendPage` can reject responses from before the
+ * latest reset.
+ */
+export function cloudEpicTasksPageGeneration(identity: string): number {
+  return currentGeneration(useCloudEpicTasksPagesStore.getState(), identity);
+}

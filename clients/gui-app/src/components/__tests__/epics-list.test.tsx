@@ -288,7 +288,7 @@ describe("<EpicsList />", () => {
     useHistorySearchStore.setState({ search: DEFAULT_HISTORY_SEARCH });
     useCloudEpicTasksPagesStore.setState({
       pagesByIdentity: {},
-      fetchingByIdentity: {},
+      generationByIdentity: {},
     });
     restoreFetch = installAuthFetch();
   });
@@ -299,7 +299,7 @@ describe("<EpicsList />", () => {
     useHistorySearchStore.setState({ search: DEFAULT_HISTORY_SEARCH });
     useCloudEpicTasksPagesStore.setState({
       pagesByIdentity: {},
-      fetchingByIdentity: {},
+      generationByIdentity: {},
     });
     vi.restoreAllMocks();
     restoreFetch();

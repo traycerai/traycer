@@ -4,19 +4,34 @@ import type {
   ListTasksResponse,
   TaskLight,
 } from "@traycer/protocol/host/epic/unary-schemas";
-import { useHostClient } from "@/lib/host";
+import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { useAuthStore, type AuthStatus } from "@/stores/auth/auth-store";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
-import { useCloudEpicTasksPagesStore } from "@/stores/epics/cloud-epic-tasks-pages-store";
+import { useHostMutation } from "@/hooks/host/use-host-query";
+import {
+  useCloudEpicTasksPagesStore,
+  cloudEpicTasksPageGeneration,
+} from "@/stores/epics/cloud-epic-tasks-pages-store";
 import {
   LIST_CLOUD_TASKS_REQUEST,
   cloudEpicTasksFirstPageQueryOptions,
   cloudEpicTasksQueryKey,
-  fetchCloudEpicTasksPage,
   registerCloudEpicTasksClient,
   type ListCloudTasksRequest,
 } from "@/lib/cloud-epic-tasks-query";
 import { uiQueryKeys } from "@/lib/query-keys";
+
+/**
+ * Variables for the next-page mutation. `identity`/`generation` are captured
+ * when the fetch starts so the store can drop the response if a refresh reset
+ * the identity meanwhile; `request`/`cursor` build the `epic.listTasks` body.
+ */
+interface NextPageVariables {
+  readonly identity: string;
+  readonly generation: number;
+  readonly request: ListCloudTasksRequest;
+  readonly cursor: string;
+}
 
 const EMPTY_TASKS: readonly TaskLight[] = [];
 const EMPTY_PAGES: readonly ListTasksResponse[] = [];
@@ -89,14 +104,36 @@ export function useCloudEpicTasksQuery(
   const extraPages = useCloudEpicTasksPagesStore(
     (state) => state.pagesByIdentity[identity] ?? EMPTY_PAGES,
   );
-  const isFetchingNextPage = useCloudEpicTasksPagesStore(
-    (state) => identity in state.fetchingByIdentity,
-  );
   const appendPage = useCloudEpicTasksPagesStore((state) => state.appendPage);
-  const setFetching = useCloudEpicTasksPagesStore((state) => state.setFetching);
   const resetIdentity = useCloudEpicTasksPagesStore(
     (state) => state.resetIdentity,
   );
+
+  // Next-page fetching flows through TanStack Query (host RPC must, per
+  // gui-app/AGENTS.md) so retries/errors are handled by Query rather than a
+  // hand-rolled promise + Zustand loading flag. `onSuccess` tags the page with
+  // the generation captured at mutate time; the store rejects it if a refresh
+  // bumped the generation in between.
+  const nextPageMutation = useHostMutation<
+    HostRpcRegistry,
+    "epic.listTasks",
+    unknown,
+    NextPageVariables
+  >({
+    client,
+    method: "epic.listTasks",
+    mapVariables: (variables) => ({
+      ...variables.request,
+      cursor: variables.cursor,
+    }),
+    options: {
+      onSuccess: (page, variables) => {
+        appendPage(variables.identity, variables.generation, page);
+      },
+    },
+  });
+  const isFetchingNextPage = nextPageMutation.isPending;
+  const mutateNextPage = nextPageMutation.mutate;
 
   const tasks = useMemo<readonly TaskLight[]>(() => {
     if (queryData === undefined) return EMPTY_TASKS;
@@ -120,24 +157,18 @@ export function useCloudEpicTasksQuery(
 
   const fetchNextPage = useCallback(() => {
     if (lastNextCursor === null || isFetchingNextPage) return;
-    setFetching(identity, true);
-    void fetchCloudEpicTasksPage(client, effectiveRequest, lastNextCursor).then(
-      (page) => {
-        appendPage(identity, page);
-        setFetching(identity, false);
-      },
-      () => {
-        setFetching(identity, false);
-      },
-    );
+    mutateNextPage({
+      identity,
+      generation: cloudEpicTasksPageGeneration(identity),
+      request: effectiveRequest,
+      cursor: lastNextCursor,
+    });
   }, [
-    client,
     effectiveRequest,
     identity,
     lastNextCursor,
     isFetchingNextPage,
-    appendPage,
-    setFetching,
+    mutateNextPage,
   ]);
 
   const refetch = useCallback(() => {
