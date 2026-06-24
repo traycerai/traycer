@@ -8,13 +8,6 @@ import { SettingsRow } from "@/components/settings/settings-row";
 import { VoiceSettingsSection } from "@/components/settings/voice-settings-section";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { Switch } from "@/components/ui/switch";
 import { useRunnerHost } from "@/providers/use-runner-host";
@@ -117,8 +110,6 @@ export function GeneralSettingsPanel() {
         }
       />
       <VoiceSettingsSection />
-      <SettingsLocalSnapshotsSection />
-      <SettingsClearAllLocalDataSection />
       <SettingsRow
         label="Data migration"
         description={
@@ -173,39 +164,66 @@ export function GeneralSettingsPanel() {
   );
 }
 
-// GitHub-style "Danger Zone" - the in-app uninstall. Removes Traycer's
-// background components (host service + install + macOS login item) while
-// preserving all `~/.traycer` user data, and marks the device removed-by-user
-// so the host is not silently reinstalled when it goes unreachable. Hidden on
-// shells without host management (web / mobile).
+// Destructive local actions live inline so the settings panel keeps one
+// rounded outer border while each action still reads as its own row.
 function DangerZoneSection() {
   const { hostManagement } = useRunnerHost();
   const [confirmOpen, setConfirmOpen] = useState(false);
   const uninstall = useRunnerUninstallTraycer();
 
-  if (hostManagement === null) {
-    return null;
-  }
+  return (
+    <>
+      <section className="bg-destructive/5" data-testid="settings-danger-zone">
+        <div className="border-b border-border/40 px-5 py-4">
+          <h2 className="text-ui font-semibold text-foreground">Danger Zone</h2>
+        </div>
+        <SettingsFileEditSnapshotsSection />
+        <SettingsLocalAppStateSection />
+        {hostManagement === null ? null : (
+          <RemoveTraycerDangerRow
+            isPending={uninstall.isPending}
+            isSuccess={uninstall.isSuccess}
+            onRemove={() => {
+              setConfirmOpen(true);
+            }}
+          />
+        )}
+      </section>
+      {hostManagement === null ? null : (
+        <ConfirmDestructiveDialog
+          open={confirmOpen}
+          onOpenChange={setConfirmOpen}
+          title="Remove Traycer from this device?"
+          description="This stops and removes Traycer's background host and services and won't reinstall them automatically. Your chats, history, and credentials stay on this device - you can reinstall anytime from Settings."
+          cascadeSummary={null}
+          actionLabel="Remove Traycer"
+          isPending={uninstall.isPending}
+          onConfirm={() => {
+            uninstall.mutate(undefined, {
+              onSuccess: () => {
+                setConfirmOpen(false);
+              },
+            });
+          }}
+        />
+      )}
+    </>
+  );
+}
 
-  if (uninstall.isSuccess) {
+function RemoveTraycerDangerRow(props: {
+  readonly isPending: boolean;
+  readonly isSuccess: boolean;
+  readonly onRemove: () => void;
+}) {
+  const { isPending, isSuccess, onRemove } = props;
+
+  if (isSuccess) {
     return (
-      <Card
-        className="border-destructive/30 bg-destructive/5"
-        data-testid="settings-danger-zone-removed"
-      >
-        <CardHeader>
-          <CardTitle className="text-ui font-semibold">
-            Traycer removed
-          </CardTitle>
-          <CardDescription>
-            Background components were removed. Your chats, history, and
-            credentials are preserved on this device.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-col items-start gap-3 text-ui-sm text-muted-foreground">
-          <p>
-            To finish, quit Traycer and drag it from Applications to the Trash.
-          </p>
+      <SettingsRow
+        label="Traycer removed"
+        description="Background components were removed. Your chats, history, and credentials are preserved on this device. To finish, quit Traycer and drag it from Applications to the Trash."
+        control={
           <Button
             type="button"
             variant="destructive"
@@ -217,69 +235,39 @@ function DangerZoneSection() {
           >
             Quit Traycer
           </Button>
-        </CardContent>
-      </Card>
+        }
+      />
     );
   }
 
   return (
-    <>
-      <Card
-        className="border-destructive/30 bg-destructive/5"
-        data-testid="settings-danger-zone"
-      >
-        <CardHeader>
-          <CardTitle className="text-ui font-semibold">Danger Zone</CardTitle>
-        </CardHeader>
-        <CardContent className="p-0">
-          <SettingsRow
-            label="Remove Traycer"
-            description="Stops the background host and services and removes the installed components from this device. Your chats and history are preserved, and the host won't reinstall itself."
-            control={
-              <Button
-                type="button"
-                variant="destructive"
-                size="sm"
-                disabled={uninstall.isPending}
-                data-testid="settings-remove-traycer"
-                onClick={() => {
-                  setConfirmOpen(true);
-                }}
-              >
-                {uninstall.isPending ? (
-                  <AgentSpinningDots
-                    className={undefined}
-                    testId="settings-remove-traycer-spinner"
-                    variant={undefined}
-                  />
-                ) : null}
-                Remove Traycer
-              </Button>
-            }
-          />
-        </CardContent>
-      </Card>
-      <ConfirmDestructiveDialog
-        open={confirmOpen}
-        onOpenChange={setConfirmOpen}
-        title="Remove Traycer from this device?"
-        description="This stops and removes Traycer's background host and services and won't reinstall them automatically. Your chats, history, and credentials stay on this device - you can reinstall anytime from Settings."
-        cascadeSummary={null}
-        actionLabel="Remove Traycer"
-        isPending={uninstall.isPending}
-        onConfirm={() => {
-          uninstall.mutate(undefined, {
-            onSuccess: () => {
-              setConfirmOpen(false);
-            },
-          });
-        }}
-      />
-    </>
+    <SettingsRow
+      label="Remove Traycer"
+      description="Stops the background host and services and removes the installed components from this device. Your chats and history are preserved, and the host won't reinstall itself."
+      control={
+        <Button
+          type="button"
+          variant="destructive"
+          size="sm"
+          disabled={isPending}
+          data-testid="settings-remove-traycer"
+          onClick={onRemove}
+        >
+          {isPending ? (
+            <AgentSpinningDots
+              className={undefined}
+              testId="settings-remove-traycer-spinner"
+              variant={undefined}
+            />
+          ) : null}
+          Remove Traycer
+        </Button>
+      }
+    />
   );
 }
 
-function SettingsLocalSnapshotsSection() {
+function SettingsFileEditSnapshotsSection() {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const client = useHostClient();
   const queryClient = useQueryClient();
@@ -328,19 +316,19 @@ function SettingsLocalSnapshotsSection() {
             .markCleared(context.userId, context.hostId, Date.now());
         }
         setConfirmOpen(false);
-        toast.success("Cleared local snapshots", {
+        toast.success("Cleared file edit snapshots", {
           description: `${formatSnapshotBytes(result.clearedBytes)} removed.`,
         });
       },
       onError: (error) =>
-        toastFromHostError(error, "Couldn't clear local snapshots."),
+        toastFromHostError(error, "Couldn't clear file edit snapshots."),
     },
   });
 
   return (
     <>
       <SettingsRow
-        label="Local snapshots"
+        label="File Edit Snapshots"
         description="Pre-edit file snapshots for Undo and cached long plan content on this device. This data stays local and is not synced."
         control={
           <div className="flex flex-col items-end gap-2">
@@ -355,7 +343,7 @@ function SettingsLocalSnapshotsSection() {
               variant="destructive"
               size="sm"
               disabled={clearSnapshotsMutation.isPending}
-              data-testid="settings-clear-local-snapshots"
+              data-testid="settings-clear-file-edit-snapshots"
               onClick={() => {
                 setConfirmOpen(true);
               }}
@@ -363,11 +351,11 @@ function SettingsLocalSnapshotsSection() {
               {clearSnapshotsMutation.isPending ? (
                 <AgentSpinningDots
                   className={undefined}
-                  testId="settings-clear-local-snapshots-spinner"
+                  testId="settings-clear-file-edit-snapshots-spinner"
                   variant={undefined}
                 />
               ) : null}
-              Clear local snapshots
+              Clear file edit snapshots
             </Button>
           </div>
         }
@@ -375,10 +363,10 @@ function SettingsLocalSnapshotsSection() {
       <ConfirmDestructiveDialog
         open={confirmOpen}
         onOpenChange={setConfirmOpen}
-        title="Clear local snapshots?"
+        title="Clear file edit snapshots?"
         description="Cleared snapshots cannot be restored. Existing chat history and checkpoint records remain visible, but Undo will be disabled for your past turns on this device."
         cascadeSummary={null}
-        actionLabel="Clear snapshots"
+        actionLabel="Clear file edit snapshots"
         isPending={clearSnapshotsMutation.isPending}
         onConfirm={() => {
           clearSnapshotsMutation.mutate(SNAPSHOTS_LOCAL_STORAGE_PARAMS);
@@ -388,7 +376,7 @@ function SettingsLocalSnapshotsSection() {
   );
 }
 
-// Resolve the host-side per-window clear for "Clear all local data":
+// Resolve the host-side per-window clear for "Clear local app state":
 //   - desktop bridge with the `clear` RPC: use it directly (authoritative).
 //   - desktop bridge WITHOUT `clear` (older preload): degrade through the
 //     always-present `get` + `update` RPCs. Wiping browser storage alone leaves
@@ -422,7 +410,7 @@ function resolvePerWindowHostClear(
   };
 }
 
-function SettingsClearAllLocalDataSection() {
+function SettingsLocalAppStateSection() {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const bridge = useWindowsBridge();
 
@@ -430,7 +418,7 @@ function SettingsClearAllLocalDataSection() {
   // `isPending` drives the UI and `onError` resets the dialog + toasts, so a
   // failed host `clear` RPC can't leave the dialog stuck. The windows bridge is
   // `IRunnerHost`, so this uses a bare mutation + `toastFromRunnerError`.
-  const clearAllLocalDataMutation = useMutation({
+  const clearLocalAppStateMutation = useMutation({
     mutationKey: runnerMutationKeys.clearAllLocalData(),
     mutationFn: () =>
       clearAllPersistedStores({ hostClear: resolvePerWindowHostClear(bridge) }),
@@ -439,47 +427,47 @@ function SettingsClearAllLocalDataSection() {
     // so the user isn't stuck on a spinning confirm.
     onError: (error) => {
       setConfirmOpen(false);
-      toastFromRunnerError(error, "Couldn't clear local data.");
+      toastFromRunnerError(error, "Couldn't clear local app state.");
     },
   });
 
   return (
     <>
       <SettingsRow
-        label="Clear all local data"
-        description="Reset this device's local app state - open tabs, layout, drafts, settings, and view preferences - then reload. You stay signed in. Local snapshots are cleared separately above."
+        label="Local app state"
+        description="Reset this device's app state - open tabs, layout, drafts, settings, and view preferences - then reload. You stay signed in. File edit snapshots are cleared separately above."
         control={
           <Button
             type="button"
             variant="destructive"
             size="sm"
-            disabled={clearAllLocalDataMutation.isPending}
-            data-testid="settings-clear-all-local-data"
+            disabled={clearLocalAppStateMutation.isPending}
+            data-testid="settings-clear-local-app-state"
             onClick={() => {
               setConfirmOpen(true);
             }}
           >
-            {clearAllLocalDataMutation.isPending ? (
+            {clearLocalAppStateMutation.isPending ? (
               <AgentSpinningDots
                 className={undefined}
-                testId="settings-clear-all-local-data-spinner"
+                testId="settings-clear-local-app-state-spinner"
                 variant={undefined}
               />
             ) : null}
-            Clear all local data
+            Clear local app state
           </Button>
         }
       />
       <ConfirmDestructiveDialog
         open={confirmOpen}
         onOpenChange={setConfirmOpen}
-        title="Clear all local data?"
-        description="This resets local app state on this device - open tabs, layout, drafts, settings, and view preferences - then reloads. It can't be undone. You'll stay signed in."
+        title="Clear local app state?"
+        description="This resets app state on this device - open tabs, layout, drafts, settings, and view preferences - then reloads. It can't be undone. You'll stay signed in."
         cascadeSummary={null}
-        actionLabel="Clear all local data"
-        isPending={clearAllLocalDataMutation.isPending}
+        actionLabel="Clear local app state"
+        isPending={clearLocalAppStateMutation.isPending}
         onConfirm={() => {
-          clearAllLocalDataMutation.mutate();
+          clearLocalAppStateMutation.mutate();
         }}
       />
     </>
