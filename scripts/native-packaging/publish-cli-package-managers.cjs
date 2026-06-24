@@ -236,13 +236,16 @@ class Traycer < Formula
   def install
     bin.install Dir["traycer*"].first => "traycer"
     # Mark this install as homebrew-owned so 'traycer cli upgrade' guides
-    # the user to 'brew upgrade traycer' instead of self-replacing.
-    system bin/"traycer", "cli", "mark-source", "--source", "homebrew",
-           "--binary-path", bin/"traycer", "--installed-version", version
-  rescue
-    # 'mark-source' is best-effort: it writes the CLI install manifest if
-    # the user's home is writable. Brew install must not fail because of it.
-    nil
+    # the user to 'brew upgrade traycer' instead of self-replacing. Only the
+    # mark-source call is best-effort (it writes the CLI install manifest if
+    # the user's home is writable) - a failed bin.install above must still
+    # fail the formula rather than be swallowed.
+    begin
+      system bin/"traycer", "cli", "mark-source", "--source", "homebrew",
+             "--binary-path", bin/"traycer", "--installed-version", version
+    rescue
+      nil
+    end
   end
 
   test do
