@@ -4,6 +4,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -304,10 +305,10 @@ describe("GeneralSettingsPanel", () => {
     ).toBeTruthy();
   });
 
-  it("renders local snapshot storage size from the host query", () => {
+  it("renders file edit snapshot storage size from the host query", () => {
     renderPanel();
 
-    expect(screen.getByText("Local snapshots")).toBeTruthy();
+    expect(screen.getByText("File Edit Snapshots")).toBeTruthy();
     expect(
       screen.getByTestId("settings-local-snapshots-size").textContent,
     ).toBe("432 MB");
@@ -316,17 +317,15 @@ describe("GeneralSettingsPanel", () => {
     );
   });
 
-  it("opens confirmation and clears local snapshots through the mutation", () => {
+  it("opens confirmation and clears file edit snapshots through the mutation", () => {
     renderPanel();
 
-    fireEvent.click(screen.getByTestId("settings-clear-local-snapshots"));
-
-    expect(screen.getByText("Clear local snapshots?")).toBeTruthy();
     fireEvent.click(
-      screen.getByRole("button", {
-        name: "Clear snapshots",
-      }),
+      screen.getByRole("button", { name: "Clear file edit snapshots" }),
     );
+
+    expect(screen.getByText("Clear file edit snapshots?")).toBeTruthy();
+    fireEvent.click(getDialogButton("Clear file edit snapshots"));
 
     expect(hostQueryMocks.mutationResult.mutate).toHaveBeenCalledWith({});
     expect(hostQueryMocks.capturedMutationArgs?.method).toBe(
@@ -334,7 +333,7 @@ describe("GeneralSettingsPanel", () => {
     );
   });
 
-  it("invalidates size and shows a toast after clearing local snapshots", () => {
+  it("invalidates size and shows a toast after clearing file edit snapshots", () => {
     const queryClient = renderPanel();
     const invalidateQueries = vi.spyOn(queryClient, "invalidateQueries");
     const now = vi.spyOn(Date, "now").mockReturnValue(9000);
@@ -353,7 +352,7 @@ describe("GeneralSettingsPanel", () => {
     expect(invalidateQueries).toHaveBeenCalledWith({
       queryKey: ["host", "host-test", "snapshots.getLocalStorageSize", {}],
     });
-    expect(toast.success).toHaveBeenCalledWith("Cleared local snapshots", {
+    expect(toast.success).toHaveBeenCalledWith("Cleared file edit snapshots", {
       description: "1 KB removed.",
     });
     expect(
@@ -364,25 +363,28 @@ describe("GeneralSettingsPanel", () => {
     now.mockRestore();
   });
 
-  it("renders the Clear all local data action distinct from snapshots", () => {
+  it("renders the local app state action distinct from snapshots", () => {
     renderPanel();
 
-    const button = screen.getByTestId("settings-clear-all-local-data");
+    const button = screen.getByRole("button", {
+      name: "Clear local app state",
+    });
     expect(button).toBeTruthy();
-    expect(button.textContent).toContain("Clear all local data");
     // Distinct control from the host-side snapshot clear.
-    expect(screen.getByTestId("settings-clear-local-snapshots")).not.toBe(
-      button,
-    );
+    expect(
+      screen.getByRole("button", { name: "Clear file edit snapshots" }),
+    ).not.toBe(button);
   });
 
-  it("opens the confirm dialog when clicking Clear all local data", () => {
+  it("opens the confirm dialog when clicking Clear local app state", () => {
     renderPanel();
 
     expect(clearAllPersistedStoresMock).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByTestId("settings-clear-all-local-data"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Clear local app state" }),
+    );
 
-    expect(screen.getByText("Clear all local data?")).toBeTruthy();
+    expect(screen.getByText("Clear local app state?")).toBeTruthy();
     // Opening the dialog must not trigger the wipe.
     expect(clearAllPersistedStoresMock).not.toHaveBeenCalled();
   });
@@ -390,8 +392,10 @@ describe("GeneralSettingsPanel", () => {
   it("does nothing when the confirm dialog is cancelled", () => {
     renderPanel();
 
-    fireEvent.click(screen.getByTestId("settings-clear-all-local-data"));
-    fireEvent.click(screen.getByTestId("confirm-cancel"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Clear local app state" }),
+    );
+    fireEvent.click(getDialogButton("Cancel"));
 
     expect(clearAllPersistedStoresMock).not.toHaveBeenCalled();
   });
@@ -402,8 +406,10 @@ describe("GeneralSettingsPanel", () => {
 
     renderPanel();
 
-    fireEvent.click(screen.getByTestId("settings-clear-all-local-data"));
-    fireEvent.click(screen.getByTestId("confirm-action"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Clear local app state" }),
+    );
+    fireEvent.click(getDialogButton("Clear local app state"));
 
     await waitFor(() => {
       expect(clearAllPersistedStoresMock).toHaveBeenCalledTimes(1);
@@ -430,8 +436,10 @@ describe("GeneralSettingsPanel", () => {
 
     renderPanel();
 
-    fireEvent.click(screen.getByTestId("settings-clear-all-local-data"));
-    fireEvent.click(screen.getByTestId("confirm-action"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Clear local app state" }),
+    );
+    fireEvent.click(getDialogButton("Clear local app state"));
 
     await waitFor(() => {
       expect(clearAllPersistedStoresMock).toHaveBeenCalledTimes(1);
@@ -460,8 +468,10 @@ describe("GeneralSettingsPanel", () => {
 
     renderPanel();
 
-    fireEvent.click(screen.getByTestId("settings-clear-all-local-data"));
-    fireEvent.click(screen.getByTestId("confirm-action"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Clear local app state" }),
+    );
+    fireEvent.click(getDialogButton("Clear local app state"));
 
     await waitFor(() => {
       expect(clearAllPersistedStoresMock).toHaveBeenCalledTimes(1);
@@ -471,11 +481,13 @@ describe("GeneralSettingsPanel", () => {
     });
   });
 
-  it("hides the Danger Zone when host management is unavailable", () => {
+  it("keeps local destructive actions visible when host management is unavailable", () => {
     runnerHostMock.current = { hostManagement: null };
     renderPanel();
-    expect(screen.queryByTestId("settings-danger-zone")).toBeNull();
-    expect(screen.queryByTestId("settings-remove-traycer")).toBeNull();
+    expect(screen.getByTestId("settings-danger-zone")).toBeTruthy();
+    expect(screen.getByText("File Edit Snapshots")).toBeTruthy();
+    expect(screen.getByText("Local app state")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Remove Traycer" })).toBeNull();
   });
 
   it("removes Traycer from the Danger Zone after confirmation", async () => {
@@ -489,18 +501,21 @@ describe("GeneralSettingsPanel", () => {
     runnerHostMock.current = { hostManagement: { uninstallTraycer } };
     renderPanel();
 
-    fireEvent.click(screen.getByTestId("settings-remove-traycer"));
-    // Confirm in the destructive dialog (its action button is `confirm-action`).
-    fireEvent.click(await screen.findByTestId("confirm-action"));
+    fireEvent.click(screen.getByRole("button", { name: "Remove Traycer" }));
+    fireEvent.click(getDialogButton("Remove Traycer"));
 
     await waitFor(() => {
       expect(uninstallTraycer).toHaveBeenCalledTimes(1);
     });
-    // The card switches to the success/quit state.
-    await screen.findByTestId("settings-danger-zone-removed");
-    expect(screen.getByTestId("settings-quit-after-uninstall")).toBeTruthy();
+    // The remove row switches to the success/quit state.
+    await screen.findByText("Traycer removed");
+    expect(screen.getByRole("button", { name: "Quit Traycer" })).toBeTruthy();
   });
 });
+
+function getDialogButton(name: string): HTMLElement {
+  return within(screen.getByRole("dialog")).getByRole("button", { name });
+}
 
 function renderPanel(): QueryClient {
   const queryClient = new QueryClient({
