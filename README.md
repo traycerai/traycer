@@ -21,11 +21,11 @@ Traycer is an open-source AI orchestration app for advanced agent orchestration.
 
 Switch models instantly within the same chat, orchestrate agent-to-agent communication, and collaborate in real time.
 
-[![Traycer Demo Video](https://img.youtube.com/vi/doh2yz3ZFvU/maxresdefault.jpg)](https://youtu.be/doh2yz3ZFvU)
+[![Traycer Demo Video](https://github.com/user-attachments/assets/a5efda0c-16f2-453b-9f8d-50d09df25aa4)](https://youtu.be/doh2yz3ZFvU)
 
 ## Features
 
-- **Bring Your Own Subscriptions (BYOS):** Connect your existing subscriptions without paying twice, or use Traycer's own inference subscription.
+- **Bring Your Own Agent (BYOA):** Connect your existing agents without paying twice, or use Traycer's own inference subscription.
 - **Unified Context:** Instantly switch to another model in the same chat. The context window is seamlessly shared across all providers.
 - **Agent-to-Agent Communication:** Create automated loops where agents talk among themselves to debate architecture or peer-review code.
 - **Regular and Epic Modes:** Run quick, one-off tasks in regular mode, or use Epic mode for structured, multi-step coding workflows.
@@ -36,9 +36,9 @@ Switch models instantly within the same chat, orchestrate agent-to-agent communi
 
 | Platform    | Install                                                                                        |
 | ----------- | ---------------------------------------------------------------------------------------------- |
-| macOS       | `brew install traycerai/traycer/traycer`                                                       |
-| Desktop app | `brew install --cask traycerai/traycer/traycer-desktop`                                        |
-| Linux       | Download a signed binary from [Releases](https://github.com/traycerai/traycer/releases/latest) |
+| macOS       | [Download .dmg](https://github.com/traycerai/traycer/releases/latest/download/traycer-desktop-macos-arm64.dmg)                                                  |
+| Windows | Coming soon                                        |
+| Linux       | Coming soon |
 
 See the [latest release](https://github.com/traycerai/traycer/releases/latest) for all available builds.
 
