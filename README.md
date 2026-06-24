@@ -38,8 +38,10 @@ Switch models instantly within the same chat, orchestrate agent-to-agent communi
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | macOS (Apple Silicon)   | [Download .dmg (arm64)](https://github.com/traycerai/traycer/releases/latest/download/traycer-desktop-macos-arm64.dmg)                                 |
 | macOS (Intel)           | [Download .dmg (x64)](https://github.com/traycerai/traycer/releases/latest/download/traycer-desktop-macos-x64.dmg)                                     |
+| Linux (AppImage)        | [Download .AppImage](https://github.com/traycerai/traycer/releases/latest/download/traycer-desktop-linux-x86_64.AppImage)                              |
+| Linux (Debian/Ubuntu)   | [Download .deb](https://github.com/traycerai/traycer/releases/latest/download/traycer-desktop-linux-amd64.deb)                                         |
+| Linux (Fedora/RHEL)     | [Download .rpm](https://github.com/traycerai/traycer/releases/latest/download/traycer-desktop-linux-x86_64.rpm)                                        |
 | Windows                 | Coming soon                                                                                                                                            |
-| Linux (amd64)           | [Download AppImage (amd64)](https://github.com/traycerai/traycer/releases/download/desktop-v1.0.0/traycer-desktop-linux-x86_64.AppImage)               |
 
 See the [latest release](https://github.com/traycerai/traycer/releases/latest) for all available builds.
 
