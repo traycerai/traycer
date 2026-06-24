@@ -15,8 +15,8 @@ name: publish-cli-package-managers
 #
 # Homebrew is published via a PULL REQUEST against the tap's protected main
 # branch; merging that PR is the human gate before the formula goes live. npm
-# publishes directly (no review gate) - gate it with the `release` environment's
-# required reviewers and a scoped, expiring NPM_TOKEN.
+# publishes directly through npm Trusted Publishing (GitHub OIDC) - gate it with
+# the `release` environment's required reviewers instead of a long-lived token.
 
 on:
   release:
@@ -152,16 +152,11 @@ jobs:
     steps:
       - name: Determine publish mode
         id: gate
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
           if [ "${{ inputs.dry_run }}" = "true" ]; then
             echo "mode=dry-run" >> "$GITHUB_OUTPUT"
-          elif [ -z "$NPM_TOKEN" ]; then
-            echo "::error::NPM_TOKEN is unset; cannot publish to npm. Set the secret or run with dry_run=true."
-            exit 1
           else
             echo "mode=publish" >> "$GITHUB_OUTPUT"
           fi
@@ -179,7 +174,6 @@ jobs:
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: "24.15.0"
-          registry-url: "https://registry.npmjs.org"
       - name: Install workspace dependencies
         run: bun install --frozen-lockfile
       - name: Stamp CLI production deploy target
@@ -198,12 +192,10 @@ jobs:
       - name: Skip existing npm version
         if: steps.gate.outputs.mode == 'publish'
         id: existing
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
-          if npm view "@traycerai/cli@${VERSION}" version >/dev/null 2>&1; then
+          if npm view "@traycerai/cli@${VERSION}" version --registry "https://registry.npmjs.org" >/dev/null 2>&1; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
             echo "@traycerai/cli@${VERSION} already exists; skipping publish."
           else
@@ -211,12 +203,10 @@ jobs:
           fi
       - name: Publish npm package (with provenance)
         if: steps.gate.outputs.mode == 'publish' && steps.existing.outputs.exists != 'true'
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish clients/traycer-cli/dist-npm --provenance --access public --tag "$DIST_TAG"
+        run: npm publish clients/traycer-cli/dist-npm --provenance --access public --tag "$DIST_TAG" --registry "https://registry.npmjs.org"
       - name: npm dry run
         if: steps.gate.outputs.mode == 'dry-run'
-        run: npm publish clients/traycer-cli/dist-npm --access public --tag "$DIST_TAG" --dry-run
+        run: npm publish clients/traycer-cli/dist-npm --access public --tag "$DIST_TAG" --registry "https://registry.npmjs.org" --dry-run
 
   publish-homebrew-formula:
     name: Open Homebrew formula PR
