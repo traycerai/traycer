@@ -63,10 +63,11 @@ import { tabResolveIntent } from "@/stores/tabs/registry";
 import type { HeaderTabKind } from "@/stores/tabs/registry";
 import type { HeaderTab, TabIcon } from "@/stores/tabs/types";
 import { navigateToTabIntent } from "@/lib/tab-navigation";
+import { EpicActivityStatusIcon } from "@/components/epics/epic-activity-status-icon";
 import {
-  useEpicHeaderTabActivity,
-  type EpicHeaderTabActivityStatus,
-} from "@/components/layout/tabs/use-epic-header-tab-activity";
+  useEpicActivityStatus,
+  type EpicActivityStatus,
+} from "@/hooks/epic/use-epic-activity-status";
 
 const TAB_CLASS_BASE =
   "group/tab relative flex h-10 w-full min-w-0 items-center gap-2 pl-6 pr-4 text-ui-sm transition-[color,transform] duration-300 ease-spring";
@@ -136,7 +137,7 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
   const titleGenerationPending = useRegisteredEpicTitleGenerating(
     tab.kind === "epic" ? tab.epicId : null,
   );
-  const activityStatus = useEpicHeaderTabActivity(
+  const activityStatus = useEpicActivityStatus(
     tab.kind === "epic" ? tab.epicId : null,
   );
   const permissionRole = useRegisteredEpicPermissionRole(
@@ -432,7 +433,7 @@ function HeaderTabDropIndicator(props: {
 function TabLeadingIcon(props: {
   readonly icon: TabIcon | null;
   readonly titleGenerationPending: boolean;
-  readonly activityStatus: EpicHeaderTabActivityStatus;
+  readonly activityStatus: EpicActivityStatus;
   readonly tabId: string;
 }) {
   if (props.titleGenerationPending) {
@@ -444,32 +445,14 @@ function TabLeadingIcon(props: {
       />
     );
   }
-  if (props.activityStatus === "waiting") {
+  if (props.activityStatus !== "idle") {
     return (
-      <span
-        className="inline-flex size-3.5 shrink-0 items-center justify-center text-muted-foreground"
-        title="Task waiting for your approval"
-      >
-        <AgentSpinningDots
-          className="text-red-500"
-          testId={`header-tab-waiting-${props.tabId}`}
-          variant="waiting"
-        />
-      </span>
-    );
-  }
-  if (props.activityStatus === "running") {
-    return (
-      <span
-        className="inline-flex size-3.5 shrink-0 items-center justify-center text-muted-foreground"
-        title="Task activity in progress"
-      >
-        <AgentSpinningDots
-          className="text-current"
-          testId={`header-tab-activity-${props.tabId}`}
-          variant={undefined}
-        />
-      </span>
+      <EpicActivityStatusIcon
+        status={props.activityStatus}
+        subjectId={props.tabId}
+        testIdPrefix="header-tab"
+        className="text-muted-foreground"
+      />
     );
   }
   if (props.icon === null) return null;

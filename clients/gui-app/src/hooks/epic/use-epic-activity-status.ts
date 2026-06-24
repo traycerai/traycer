@@ -10,11 +10,11 @@ import {
 
 const CHAT_REGISTRY = getChatSessionRegistry();
 
-export type EpicHeaderTabActivityStatus = "idle" | "running" | "waiting";
+export type EpicActivityStatus = "idle" | "running" | "waiting";
 
-export function useEpicHeaderTabActivity(
+export function useEpicActivityStatus(
   epicId: string | null,
-): EpicHeaderTabActivityStatus {
+): EpicActivityStatus {
   const activeAgentIds = useRegisteredEpicActiveAgentIds(epicId);
   const subscribeLocalChatActivity = useCallback(
     (onChange: () => void) =>
@@ -36,9 +36,7 @@ export function useEpicHeaderTabActivity(
     : "idle";
 }
 
-function getEpicChatSessionActivity(
-  epicId: string | null,
-): EpicHeaderTabActivityStatus {
+function getEpicChatSessionActivity(epicId: string | null): EpicActivityStatus {
   if (epicId === null) return "idle";
   let hasRunningChat = false;
   for (const handle of CHAT_REGISTRY.listHandles()) {
@@ -84,9 +82,7 @@ function subscribeEpicChatSessionActivity(
   };
 }
 
-function chatSessionActivity(
-  state: ChatSessionState,
-): EpicHeaderTabActivityStatus {
+function chatSessionActivity(state: ChatSessionState): EpicActivityStatus {
   if (
     state.pendingApprovals.length > 0 ||
     state.pendingFileEditApprovals.length > 0 ||

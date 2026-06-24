@@ -47,6 +47,7 @@ const testState = vi.hoisted(() => ({
   items: [] as HistoryItem[],
   availableRepos: [] as string[],
   availableWorkspaces: [] as HistoryItem["linkedWorkspaces"],
+  activityByEpicId: new Map<string, "idle" | "running" | "waiting">(),
   facets: {
     repos: [] as HistoryFacets["repos"],
     workspaces: [] as HistoryFacets["workspaces"],
@@ -97,6 +98,13 @@ vi.mock("@/hooks/epic/use-epic-title-mutation", () => ({
     isPending: false,
     mutate: testState.renameMutate,
   }),
+}));
+
+vi.mock("@/hooks/epic/use-epic-activity-status", () => ({
+  useEpicActivityStatus: (epicId: string | null) =>
+    epicId === null
+      ? "idle"
+      : (testState.activityByEpicId.get(epicId) ?? "idle"),
 }));
 
 function historyItem(overrides: Partial<HistoryItem>): HistoryItem {
@@ -176,6 +184,7 @@ describe("<EpicsListPanel />", () => {
     testState.renameMutate.mockReset();
     testState.refetch.mockReset();
     testState.fetchNextPage.mockReset();
+    testState.activityByEpicId.clear();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useHistorySearchStore.setState({ search: DEFAULT_HISTORY_SEARCH });
   });
@@ -203,6 +212,28 @@ describe("<EpicsListPanel />", () => {
       );
     });
     expect(screen.queryByTestId("old-epic-route")).toBeNull();
+  });
+
+  it("shows the running activity status on history rows", async () => {
+    testState.activityByEpicId.set("epic-from-history", "running");
+    renderPanel("embedded", "/");
+
+    expect(
+      await screen.findByTestId("epics-list-row-activity-epic-from-history"),
+    ).toBeDefined();
+    expect(screen.queryByTitle("Task activity in progress")).not.toBeNull();
+  });
+
+  it("shows the waiting activity status on history rows", async () => {
+    testState.activityByEpicId.set("epic-from-history", "waiting");
+    renderPanel("embedded", "/");
+
+    expect(
+      await screen.findByTestId("epics-list-row-waiting-epic-from-history"),
+    ).toBeDefined();
+    expect(
+      screen.queryByTitle("Task waiting for your approval"),
+    ).not.toBeNull();
   });
 
   it("selects a history row from the outside checkbox without opening the epic", async () => {

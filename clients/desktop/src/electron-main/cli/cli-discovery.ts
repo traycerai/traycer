@@ -678,3 +678,76 @@ export function compareSemver(a: string, b: string): number {
   }
   return 0;
 }
+
+/**
+ * Full SemVer precedence comparison (spec §11), pre-release included: returns
+ * 1 if `a` > `b`, -1 if `a` < `b`, 0 if equal or unparseable. Build metadata
+ * (`+...`) is ignored.
+ *
+ * This is the host "update available?" comparator. It deliberately does NOT
+ * share {@link compareSemver}'s pre-release strip: that strip serves the CLI
+ * bundled-vs-PATH trust decision where channel is out of scope, but the host
+ * update check needs `1.0.0-rc.1 < 1.0.0` so a release-candidate host upgrades
+ * to its GA instead of reading "up to date" forever. An unparseable core
+ * triplet yields 0 so we never advertise an update we can't justify.
+ */
+export function compareHostVersions(a: string, b: string): number {
+  const parse = (v: string): { core: number[]; pre: string[] } | null => {
+    // Reject anything that isn't a full SemVer triplet up front: lenient
+    // Number.parseInt would otherwise smuggle malformed input through (e.g.
+    // "1.2.3abc" → [1,2,3]) and skew the comparison, breaking the documented
+    // "unparseable => 0" contract.
+    const semver =
+      /^\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+    if (!semver.test(v)) return null;
+    const withoutBuild = v.split("+")[0];
+    const dash = withoutBuild.indexOf("-");
+    const core = (dash === -1 ? withoutBuild : withoutBuild.slice(0, dash))
+      .split(".")
+      .map((p) => Number.parseInt(p, 10));
+    const preRaw = dash === -1 ? "" : withoutBuild.slice(dash + 1);
+    return { core, pre: preRaw === "" ? [] : preRaw.split(".") };
+  };
+  const ap = parse(a);
+  const bp = parse(b);
+  if (ap === null || bp === null) return 0;
+  for (let i = 0; i < 3; i++) {
+    if (ap.core[i] !== bp.core[i]) return ap.core[i] > bp.core[i] ? 1 : -1;
+  }
+  // Equal core triplet: a version carrying a pre-release ranks below the same
+  // version without one (1.0.0-rc.1 < 1.0.0).
+  if (ap.pre.length === 0 && bp.pre.length === 0) return 0;
+  if (ap.pre.length === 0) return 1;
+  if (bp.pre.length === 0) return -1;
+  return comparePreRelease(ap.pre, bp.pre);
+}
+
+/**
+ * Compares two non-empty dot-separated pre-release identifier lists per SemVer
+ * §11: numeric identifiers compare numerically and rank below alphanumeric
+ * ones, alphanumeric identifiers compare in ASCII order, and a longer list
+ * outranks a shorter one when all preceding identifiers are equal.
+ */
+function comparePreRelease(a: string[], b: string[]): number {
+  const len = Math.max(a.length, b.length);
+  for (let i = 0; i < len; i++) {
+    if (i >= a.length) return -1;
+    if (i >= b.length) return 1;
+    const ai = a[i];
+    const bi = b[i];
+    const aNumeric = /^\d+$/.test(ai);
+    const bNumeric = /^\d+$/.test(bi);
+    if (aNumeric && bNumeric) {
+      const an = Number.parseInt(ai, 10);
+      const bn = Number.parseInt(bi, 10);
+      if (an !== bn) return an > bn ? 1 : -1;
+    } else if (aNumeric) {
+      return -1;
+    } else if (bNumeric) {
+      return 1;
+    } else if (ai !== bi) {
+      return ai > bi ? 1 : -1;
+    }
+  }
+  return 0;
+}

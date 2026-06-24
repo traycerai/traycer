@@ -53,10 +53,12 @@ import {
 } from "@/components/home/data/home-page.data";
 import { EpicsFilterPopover } from "@/components/epics/epics-filter-popover";
 import { EpicsSortMenu } from "@/components/epics/epics-sort-menu";
+import { EpicActivityStatusIcon } from "@/components/epics/epic-activity-status-icon";
 import {
   useHistoryQuery,
   type HistoryFacets,
 } from "@/hooks/home/use-history-query";
+import { useEpicActivityStatus } from "@/hooks/epic/use-epic-activity-status";
 import {
   useAmbientHistorySearchState,
   useRouteHistorySearchState,
@@ -990,7 +992,7 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
         {rowInteractionLayer}
         <div className="pointer-events-none relative z-10 flex items-center justify-between gap-3 p-3 pr-12 text-ui-sm">
           <span className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
-            <Layers className="size-4 shrink-0 text-muted-foreground group-hover:text-foreground" />
+            <HistoryRowLeadingIcon item={item} />
             {isRenaming ? (
               <input
                 {...renameInputProps}
@@ -1017,6 +1019,25 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
     </li>
   );
 });
+
+function HistoryRowLeadingIcon(props: { readonly item: HistoryItem }) {
+  const activityStatus = useEpicActivityStatus(
+    props.item.taskType === "epic" ? props.item.epicId : null,
+  );
+  if (activityStatus !== "idle") {
+    return (
+      <EpicActivityStatusIcon
+        status={activityStatus}
+        subjectId={props.item.epicId}
+        testIdPrefix="epics-list-row"
+        className="text-muted-foreground group-hover/list-row:text-foreground"
+      />
+    );
+  }
+  return (
+    <Layers className="size-4 shrink-0 text-muted-foreground group-hover/list-row:text-foreground" />
+  );
+}
 
 function historySelectionDisabled(
   selectionMode: boolean,
