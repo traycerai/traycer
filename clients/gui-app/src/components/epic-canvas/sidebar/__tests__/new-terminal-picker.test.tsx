@@ -127,7 +127,9 @@ describe("<NewTerminalPicker />", () => {
     expect(primaryOption.className).toContain("cursor-pointer");
     expect(screen.getByRole("option", { name: /feature-x/i })).toBeDefined();
     expect(screen.getByText("/work/traycer-wt/feature-x")).toBeDefined();
-    // Create-new flow has no persistent selection to check-mark.
+    expect(
+      screen.getByRole("button", { name: "Launch" }).hasAttribute("disabled"),
+    ).toBe(true);
     expect(
       screen
         .getAllByRole("option")
@@ -135,10 +137,30 @@ describe("<NewTerminalPicker />", () => {
     ).toBe(true);
   });
 
-  it("creates a terminal bound to the row's host and cwd on a single click", () => {
+  it("selects a workspace without creating a terminal on a single click", () => {
     const tabId = openPicker();
 
     fireEvent.click(screen.getByRole("option", { name: /feature-x/i }));
+
+    const tiles = tabTiles(tabId);
+    expect(tiles.filter((tile) => tile.type === "terminal")).toHaveLength(0);
+    expect(screen.queryByTestId("new-terminal-picker-popover")).not.toBeNull();
+    const worktreeOption = screen.getByRole("option", { name: /feature-x/i });
+    const primaryOption = screen.getByRole("option", {
+      name: /traycer.*main/i,
+    });
+    expect(worktreeOption.dataset.checked).toBe("true");
+    expect(primaryOption.dataset.checked).toBeUndefined();
+    expect(
+      screen.getByRole("button", { name: "Launch" }).hasAttribute("disabled"),
+    ).toBe(false);
+  });
+
+  it("launches a terminal bound to the selected row's host and cwd", () => {
+    const tabId = openPicker();
+
+    fireEvent.click(screen.getByRole("option", { name: /feature-x/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Launch" }));
 
     const tiles = tabTiles(tabId);
     const terminals = tiles.filter((tile) => tile.type === "terminal");

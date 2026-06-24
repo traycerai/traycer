@@ -20,7 +20,7 @@ concurrency:
 jobs:
   test:
     name: test (${{ matrix.project }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.project == 'traycer-clients-gui-app' && 'ubuntu-latest-8-cores' || 'ubuntu-latest' }}
     strategy:
       # Run every project even if one fails, so a single red project doesn't
       # mask the others.
