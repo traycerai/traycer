@@ -521,16 +521,25 @@ export async function discoverCli(): Promise<CliDiscoveryResult> {
     }
     return { kind: "none" };
   }
-  const pathCli = await findCliOnPath();
-  if (pathCli !== null) {
-    const source = await inferNpmPathSource(pathCli);
-    const version = source === "npm" ? await probeCliVersion(pathCli) : null;
-    return {
-      kind: "path",
-      binaryPath: pathCli,
-      version,
-      ...(source !== undefined ? { source } : {}),
-    };
+  // PATH trust is production-only. A `traycer` on PATH carries its OWN baked
+  // deploy slot (`config.environment`), so adopting a PATH binary for a
+  // non-production build lets a released/prod CLI on the user's PATH (Homebrew,
+  // `~/.traycer/cli/bin`) hijack a staging install onto the PRODUCTION host slot
+  // (prod cloud, `~/.traycer/host/install`, `ai.traycer.host`). Non-production
+  // non-dev slots (e.g. internal `staging`) use their bundled/slot CLI - the
+  // same reason the dev slot skips PATH above.
+  if (config.environment === "production") {
+    const pathCli = await findCliOnPath();
+    if (pathCli !== null) {
+      const source = await inferNpmPathSource(pathCli);
+      const version = source === "npm" ? await probeCliVersion(pathCli) : null;
+      return {
+        kind: "path",
+        binaryPath: pathCli,
+        version,
+        ...(source !== undefined ? { source } : {}),
+      };
+    }
   }
   const bundled = await resolveBundledCliPath();
   if (bundled !== null) {
