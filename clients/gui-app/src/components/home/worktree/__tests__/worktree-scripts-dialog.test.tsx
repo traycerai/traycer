@@ -440,9 +440,7 @@ describe("<WorktreeScriptsDialog />", () => {
     );
 
     expect(setupDefaultField().value).toBe("");
-    expect(
-      screen.getByTestId("worktree-scripts-dialog-error-note"),
-    ).toBeTruthy();
+    expect(screen.getByRole("alert")).toBeTruthy();
   });
 
   it("prefills from the worktree's own env for an existing worktree", () => {
