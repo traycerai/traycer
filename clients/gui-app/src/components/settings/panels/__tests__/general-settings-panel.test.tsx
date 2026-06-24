@@ -4,6 +4,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -319,14 +320,12 @@ describe("GeneralSettingsPanel", () => {
   it("opens confirmation and clears file edit snapshots through the mutation", () => {
     renderPanel();
 
-    fireEvent.click(screen.getByTestId("settings-clear-file-edit-snapshots"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Clear file edit snapshots" }),
+    );
 
     expect(screen.getByText("Clear file edit snapshots?")).toBeTruthy();
-    fireEvent.click(
-      screen.getByRole("button", {
-        name: "Clear file edit snapshots",
-      }),
-    );
+    fireEvent.click(getDialogButton("Clear file edit snapshots"));
 
     expect(hostQueryMocks.mutationResult.mutate).toHaveBeenCalledWith({});
     expect(hostQueryMocks.capturedMutationArgs?.method).toBe(
@@ -367,20 +366,23 @@ describe("GeneralSettingsPanel", () => {
   it("renders the local app state action distinct from snapshots", () => {
     renderPanel();
 
-    const button = screen.getByTestId("settings-clear-local-app-state");
+    const button = screen.getByRole("button", {
+      name: "Clear local app state",
+    });
     expect(button).toBeTruthy();
-    expect(button.textContent).toContain("Clear local app state");
     // Distinct control from the host-side snapshot clear.
-    expect(screen.getByTestId("settings-clear-file-edit-snapshots")).not.toBe(
-      button,
-    );
+    expect(
+      screen.getByRole("button", { name: "Clear file edit snapshots" }),
+    ).not.toBe(button);
   });
 
   it("opens the confirm dialog when clicking Clear local app state", () => {
     renderPanel();
 
     expect(clearAllPersistedStoresMock).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByTestId("settings-clear-local-app-state"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Clear local app state" }),
+    );
 
     expect(screen.getByText("Clear local app state?")).toBeTruthy();
     // Opening the dialog must not trigger the wipe.
@@ -390,8 +392,10 @@ describe("GeneralSettingsPanel", () => {
   it("does nothing when the confirm dialog is cancelled", () => {
     renderPanel();
 
-    fireEvent.click(screen.getByTestId("settings-clear-local-app-state"));
-    fireEvent.click(screen.getByTestId("confirm-cancel"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Clear local app state" }),
+    );
+    fireEvent.click(getDialogButton("Cancel"));
 
     expect(clearAllPersistedStoresMock).not.toHaveBeenCalled();
   });
@@ -402,8 +406,10 @@ describe("GeneralSettingsPanel", () => {
 
     renderPanel();
 
-    fireEvent.click(screen.getByTestId("settings-clear-local-app-state"));
-    fireEvent.click(screen.getByTestId("confirm-action"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Clear local app state" }),
+    );
+    fireEvent.click(getDialogButton("Clear local app state"));
 
     await waitFor(() => {
       expect(clearAllPersistedStoresMock).toHaveBeenCalledTimes(1);
@@ -430,8 +436,10 @@ describe("GeneralSettingsPanel", () => {
 
     renderPanel();
 
-    fireEvent.click(screen.getByTestId("settings-clear-local-app-state"));
-    fireEvent.click(screen.getByTestId("confirm-action"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Clear local app state" }),
+    );
+    fireEvent.click(getDialogButton("Clear local app state"));
 
     await waitFor(() => {
       expect(clearAllPersistedStoresMock).toHaveBeenCalledTimes(1);
@@ -460,8 +468,10 @@ describe("GeneralSettingsPanel", () => {
 
     renderPanel();
 
-    fireEvent.click(screen.getByTestId("settings-clear-local-app-state"));
-    fireEvent.click(screen.getByTestId("confirm-action"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Clear local app state" }),
+    );
+    fireEvent.click(getDialogButton("Clear local app state"));
 
     await waitFor(() => {
       expect(clearAllPersistedStoresMock).toHaveBeenCalledTimes(1);
@@ -477,7 +487,7 @@ describe("GeneralSettingsPanel", () => {
     expect(screen.getByTestId("settings-danger-zone")).toBeTruthy();
     expect(screen.getByText("File Edit Snapshots")).toBeTruthy();
     expect(screen.getByText("Local app state")).toBeTruthy();
-    expect(screen.queryByTestId("settings-remove-traycer")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Remove Traycer" })).toBeNull();
   });
 
   it("removes Traycer from the Danger Zone after confirmation", async () => {
@@ -491,18 +501,21 @@ describe("GeneralSettingsPanel", () => {
     runnerHostMock.current = { hostManagement: { uninstallTraycer } };
     renderPanel();
 
-    fireEvent.click(screen.getByTestId("settings-remove-traycer"));
-    // Confirm in the destructive dialog (its action button is `confirm-action`).
-    fireEvent.click(await screen.findByTestId("confirm-action"));
+    fireEvent.click(screen.getByRole("button", { name: "Remove Traycer" }));
+    fireEvent.click(getDialogButton("Remove Traycer"));
 
     await waitFor(() => {
       expect(uninstallTraycer).toHaveBeenCalledTimes(1);
     });
     // The remove row switches to the success/quit state.
     await screen.findByText("Traycer removed");
-    expect(screen.getByTestId("settings-quit-after-uninstall")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Quit Traycer" })).toBeTruthy();
   });
 });
+
+function getDialogButton(name: string): HTMLElement {
+  return within(screen.getByRole("dialog")).getByRole("button", { name });
+}
 
 function renderPanel(): QueryClient {
   const queryClient = new QueryClient({
