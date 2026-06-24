@@ -1,17 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import type { ComponentProps } from "react";
 import type { WorktreeBindingSelectorRow } from "@traycer/protocol/host";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { paneTabRefs } from "@/stores/epics/canvas/actions";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 
-// A double-click on a folder row fires the row's `onSelect` twice before the
-// popover's `setIsOpen(false)` (a state update) can unmount the list. Each call
-// mints a fresh `term-${uuidv4()}` id, so without a guard two terminals open.
-// The folder list is mocked to a button that fires onSelect twice in one click
-// handler - the exact synchronous double-fire - so the latch is what collapses
-// it to a single terminal.
+// A double-click can fire two handlers before React flushes the state update
+// that closes the popover. Row selection must not launch anything; the launch
+// latch is what collapses a double-fired Launch action to a single terminal.
 
 const ROW: WorktreeBindingSelectorRow = {
   hostId: "host-1",
@@ -66,6 +64,32 @@ vi.mock("@/components/worktree/worktree-folder-list-body", () => ({
   ),
 }));
 
+vi.mock("@/components/ui/button", () => ({
+  Button: ({
+    variant: _variant,
+    size: _size,
+    asChild: _asChild,
+    className: _className,
+    children,
+    onClick,
+    ...props
+  }: ComponentProps<"button"> & {
+    readonly variant?: string | undefined;
+    readonly size?: string | undefined;
+    readonly asChild?: boolean | undefined;
+  }) => (
+    <button
+      {...props}
+      onClick={(event) => {
+        onClick?.(event);
+        if (children === "Launch") onClick?.(event);
+      }}
+    >
+      {children}
+    </button>
+  ),
+}));
+
 import { NewTerminalPicker } from "../new-terminal-picker";
 
 function resetCanvas(): void {
@@ -78,18 +102,24 @@ function tabTiles(tabId: string): ReadonlyArray<EpicCanvasTileRef> {
   return collectPanes(canvas.root).flatMap((pane) => paneTabRefs(canvas, pane));
 }
 
-describe("<NewTerminalPicker /> double-pick guard", () => {
+describe("<NewTerminalPicker /> double-launch guard", () => {
   beforeEach(() => {
     cleanup();
     resetCanvas();
   });
 
-  it("opens a single terminal when a folder row is picked twice in one burst", () => {
+  it("opens a single terminal when Launch fires twice after row selection", () => {
     const tabId = useEpicCanvasStore.getState().openEpicTab("epic-1", "Epic");
     render(<NewTerminalPicker epicId="epic-1" tabId={tabId} />);
     fireEvent.click(screen.getByTestId("epic-terminals-panel-add"));
 
     fireEvent.click(screen.getByTestId("double-pick-row"));
+    expect(tabTiles(tabId).filter((t) => t.type === "terminal")).toHaveLength(
+      0,
+    );
+    const launchButton = screen.getByRole("button", { name: "Launch" });
+    expect(launchButton.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(launchButton);
 
     const terminals = tabTiles(tabId).filter((t) => t.type === "terminal");
     expect(terminals).toHaveLength(1);
