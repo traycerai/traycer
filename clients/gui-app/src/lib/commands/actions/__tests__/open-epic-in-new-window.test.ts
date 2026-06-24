@@ -115,7 +115,9 @@ describe("openEpicInNewWindow", () => {
     // would self-focus instead of opening a new window.
     const { bridge, calls } = makeBridge({
       windowId: "window-a",
-      owned: [{ tabId: "tab-self", epicId: "phase-self", windowId: "window-a" }],
+      owned: [
+        { tabId: "tab-self", epicId: "phase-self", windowId: "window-a" },
+      ],
     });
 
     await openEpicInNewWindow(bridge, {
