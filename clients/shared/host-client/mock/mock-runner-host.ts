@@ -1,6 +1,7 @@
 import type { Disposable } from "../../platform/uri-callback";
 import type {
   AuthCallbackResult,
+  AuthTokenRefreshResult,
   AuthTokenValidationResult,
   IHostPicker,
   IHostManagement,
@@ -22,6 +23,7 @@ import type {
   TrayIndicatorState,
 } from "../../platform/runner-host";
 import {
+  refreshAuthTokenViaHttp,
   validateAuthTokenIdentityViaHttp,
   validateAuthTokenViaHttp,
 } from "../../auth/auth-validation";
@@ -167,6 +169,13 @@ export class MockRunnerHost implements IRunnerHost {
       token,
       refreshToken,
     );
+  }
+
+  refreshAuthToken(
+    token: string,
+    refreshToken: string,
+  ): Promise<AuthTokenRefreshResult> {
+    return refreshAuthTokenViaHttp(this.authnBaseUrl, token, refreshToken);
   }
 
   /** Last (code, verifier) passed to exchangeAuthCode, for test assertions. */

@@ -4,6 +4,7 @@ import {
   RunnerHostInvoke,
 } from "../ipc-contracts/ipc-channels";
 import type {
+  AuthTokenRefreshResult,
   AuthTokenValidationResult,
   StoredAuthTokens,
 } from "@traycer-clients/shared/platform/runner-host";
@@ -58,6 +59,10 @@ export interface AuthBridgeSurface {
     token: string,
     refreshToken: string,
   ): Promise<AuthIdentityValidationResult>;
+  refreshAuthToken(
+    token: string,
+    refreshToken: string,
+  ): Promise<AuthTokenRefreshResult>;
   exchangeAuthCode(
     code: string,
     codeVerifier: string,
@@ -81,6 +86,13 @@ export function buildAuthBridge(): AuthBridgeSurface {
         token,
         refreshToken,
       ) as Promise<AuthIdentityValidationResult>,
+
+    refreshAuthToken: (token, refreshToken) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.refreshAuthToken,
+        token,
+        refreshToken,
+      ) as Promise<AuthTokenRefreshResult>,
 
     exchangeAuthCode: (code, codeVerifier) =>
       ipcRenderer.invoke(

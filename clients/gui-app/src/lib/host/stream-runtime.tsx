@@ -87,6 +87,20 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
     transportKey,
   );
 
+  // On an in-place bearer rotation (token refresh), push the fresh credential
+  // onto the app-wide stream client's open sessions so the host updates each
+  // connection's lease without a reconnect.
+  const wsStreamClient = value?.wsStreamClient ?? null;
+  const hostClient = binding?.hostClient ?? null;
+  useEffect(() => {
+    if (wsStreamClient === null || hostClient === null) {
+      return;
+    }
+    return hostClient.onBearerRotated(() => {
+      wsStreamClient.notifyBearerRotated();
+    });
+  }, [wsStreamClient, hostClient]);
+
   return (
     <StreamRuntimeContext.Provider value={value}>
       {props.children}
