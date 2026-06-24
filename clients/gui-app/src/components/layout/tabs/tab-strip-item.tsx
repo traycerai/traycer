@@ -445,17 +445,7 @@ function TabLeadingIcon(props: {
       />
     );
   }
-  if (props.activityStatus === "waiting") {
-    return (
-      <EpicActivityStatusIcon
-        status={props.activityStatus}
-        subjectId={props.tabId}
-        testIdPrefix="header-tab"
-        className="text-muted-foreground"
-      />
-    );
-  }
-  if (props.activityStatus === "running") {
+  if (props.activityStatus !== "idle") {
     return (
       <EpicActivityStatusIcon
         status={props.activityStatus}
