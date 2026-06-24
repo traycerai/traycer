@@ -26,6 +26,65 @@ import type { HistoryFacets } from "@/hooks/home/use-history-query";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useHistorySearchStore } from "@/stores/home/history-search-store";
 import { DEFAULT_HISTORY_SEARCH } from "@/lib/history-search";
+import { WindowsBridgeContext } from "@/providers/windows-bridge-context";
+import { setDesktopEpicOwnershipBridge } from "@/lib/windows/desktop-epic-ownership";
+import type { DesktopWindowsBridge } from "@/lib/windows/types";
+
+/**
+ * Light up the desktop "Open in New Window" path: both the renderer context
+ * bridge (gates the menu item via `useWindowsBridge`) and the module-level
+ * ownership bridge (gates `useEpicOpenInNewWindowFlow.isAvailable`) must be set.
+ */
+function enableDesktopBridge(): void {
+  const bridge = stubWindowsBridge();
+  testState.bridge = bridge;
+  setDesktopEpicOwnershipBridge(bridge);
+}
+
+function stubWindowsBridge(): DesktopWindowsBridge {
+  const disposable = { dispose: vi.fn() };
+  return {
+    windowId: "window-test",
+    list: vi.fn(() => Promise.resolve([])),
+    onChange: vi.fn(() => disposable),
+    requestNew: vi.fn(() => Promise.resolve()),
+    requestFocus: vi.fn(() => Promise.resolve()),
+    requestClose: vi.fn(() => Promise.resolve()),
+    requestOpenEpicInNewWindow: vi.fn(() =>
+      Promise.resolve({ result: "focused", windowId: "window-test" } as const),
+    ),
+    ownership: {
+      snapshot: vi.fn(() => Promise.resolve([])),
+      claim: vi.fn(() => Promise.resolve({ ok: true } as const)),
+      release: vi.fn(() => Promise.resolve()),
+      onChange: vi.fn(() => disposable),
+    },
+    perWindowState: {
+      get: vi.fn(() =>
+        Promise.resolve({
+          epicTabs: [],
+          activeTabId: null,
+          canvasByTabId: {},
+          landingDrafts: [],
+          activeLandingDraftId: null,
+        }),
+      ),
+      update: vi.fn(() => Promise.resolve()),
+      onChange: vi.fn(() => disposable),
+    },
+    authSession: {
+      get: vi.fn(() =>
+        Promise.resolve({
+          status: "signed-out",
+          token: null,
+          profile: null,
+        } as const),
+      ),
+      set: vi.fn(() => Promise.resolve()),
+      onChange: vi.fn(() => disposable),
+    },
+  };
+}
 
 interface RenameEpicTitleVariables {
   readonly epicDelta: {
@@ -54,6 +113,7 @@ const testState = vi.hoisted(() => ({
     ownershipScopes: [] as HistoryFacets["ownershipScopes"],
   },
   isFetching: false,
+  bridge: null as DesktopWindowsBridge | null,
   mutate:
     vi.fn<
       (
@@ -161,10 +221,18 @@ function renderPanel(variant: EpicsListPanelVariant, initialEntry: string) {
 }
 
 function RootOutlet(): ReactNode {
-  return (
+  const content = (
     <TooltipProvider>
       <Outlet />
     </TooltipProvider>
+  );
+  if (testState.bridge === null) return content;
+  return (
+    <WindowsBridgeContext.Provider
+      value={{ bridge: testState.bridge, hasHydrated: true }}
+    >
+      {content}
+    </WindowsBridgeContext.Provider>
   );
 }
 
@@ -180,6 +248,8 @@ describe("<EpicsListPanel />", () => {
       ownershipScopes: [],
     };
     testState.isFetching = false;
+    testState.bridge = null;
+    setDesktopEpicOwnershipBridge(null);
     testState.mutate.mockReset();
     testState.renameMutate.mockReset();
     testState.refetch.mockReset();
@@ -191,6 +261,7 @@ describe("<EpicsListPanel />", () => {
 
   afterEach(() => {
     cleanup();
+    setDesktopEpicOwnershipBridge(null);
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useHistorySearchStore.setState({ search: DEFAULT_HISTORY_SEARCH });
   });
@@ -212,6 +283,43 @@ describe("<EpicsListPanel />", () => {
       );
     });
     expect(screen.queryByTestId("old-epic-route")).toBeNull();
+  });
+
+  it("offers both context-menu actions for an epic row", async () => {
+    enableDesktopBridge();
+    renderPanel("embedded", "/");
+
+    fireEvent.contextMenu(await screen.findByTestId("epics-list-row-card"));
+
+    expect(
+      await screen.findByTestId("epics-list-row-open-background"),
+    ).toBeDefined();
+    expect(
+      screen.queryByTestId("epics-list-row-open-new-window"),
+    ).not.toBeNull();
+  });
+
+  it("hides Open in Background for phase rows, keeping Open in New Window", async () => {
+    // A phase only opens through its migration route (migrationSource=phase),
+    // which a plain background canvas tab can't carry - so background-open is
+    // suppressed while the route-based New Window action stays available.
+    enableDesktopBridge();
+    testState.items = [
+      historyItem({
+        id: "history-phase-1",
+        epicId: "phase-1",
+        taskType: "phase",
+        title: "Phase from history",
+      }),
+    ];
+    renderPanel("embedded", "/");
+
+    fireEvent.contextMenu(await screen.findByTestId("epics-list-row-card"));
+
+    expect(
+      await screen.findByTestId("epics-list-row-open-new-window"),
+    ).toBeDefined();
+    expect(screen.queryByTestId("epics-list-row-open-background")).toBeNull();
   });
 
   it("shows the running activity status on history rows", async () => {

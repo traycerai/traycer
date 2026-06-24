@@ -294,6 +294,40 @@ describe("epic canvas store header tabs", () => {
     expect(persisted.state).not.toHaveProperty("pendingChatTitles");
   });
 
+  it("opens an epic in a background tab without changing the active tab", () => {
+    const store = useEpicCanvasStore.getState();
+    const activeTabId = store.openEpicTab("epic-active", "Active");
+    expect(useEpicCanvasStore.getState().activeTabId).toBe(activeTabId);
+
+    const backgroundTabId = store.openEpicTabInBackground(
+      "epic-background",
+      "Background",
+    );
+
+    const state = useEpicCanvasStore.getState();
+    expect(state.activeTabId).toBe(activeTabId);
+    expect(state.openTabOrder).toContain(backgroundTabId);
+    expect(state.tabsById[backgroundTabId]?.epicId).toBe("epic-background");
+  });
+
+  it("reuses the existing tab when opening an already-open epic in background", () => {
+    const store = useEpicCanvasStore.getState();
+    const existingTabId = store.openEpicTab("epic-reuse", "Reuse");
+    const otherTabId = store.openEpicTab("epic-other", "Other");
+    expect(useEpicCanvasStore.getState().activeTabId).toBe(otherTabId);
+
+    const resolved = store.openEpicTabInBackground("epic-reuse", "Reuse");
+
+    const state = useEpicCanvasStore.getState();
+    expect(resolved).toBe(existingTabId);
+    expect(state.activeTabId).toBe(otherTabId);
+    expect(
+      state.openTabOrder.filter(
+        (id) => state.tabsById[id]?.epicId === "epic-reuse",
+      ),
+    ).toEqual([existingTabId]);
+  });
+
   it("hides a closed tab while preserving its canvas for reopen", () => {
     const store = useEpicCanvasStore.getState();
     const tabId = store.openEpicTab("epic-restore", "Restore Me");
