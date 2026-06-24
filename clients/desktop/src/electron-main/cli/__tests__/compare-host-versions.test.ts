@@ -66,5 +66,10 @@ describe("compareHostVersions", () => {
     expect(compareHostVersions("not-a-version", "1.0.0")).toBe(0);
     expect(compareHostVersions("1.0.0", "")).toBe(0);
     expect(compareHostVersions("1.0", "1.0.0")).toBe(0);
+    // Malformed input is rejected rather than smuggled through by a lenient
+    // Number.parseInt ("1.2.3abc" → [1,2,3]); accepting the trailing garbage
+    // would make these compare as -1 and wrongly advertise an update.
+    expect(compareHostVersions("1.2.3abc", "1.2.4")).toBe(0);
+    expect(compareHostVersions("1.0.0 ", "1.0.1")).toBe(0);
   });
 });

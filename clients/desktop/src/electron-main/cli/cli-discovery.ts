@@ -693,15 +693,20 @@ export function compareSemver(a: string, b: string): number {
  */
 export function compareHostVersions(a: string, b: string): number {
   const parse = (v: string): { core: number[]; pre: string[] } | null => {
+    // Reject anything that isn't a full SemVer triplet up front: lenient
+    // Number.parseInt would otherwise smuggle malformed input through (e.g.
+    // "1.2.3abc" → [1,2,3]) and skew the comparison, breaking the documented
+    // "unparseable => 0" contract.
+    const semver =
+      /^\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+    if (!semver.test(v)) return null;
     const withoutBuild = v.split("+")[0];
     const dash = withoutBuild.indexOf("-");
-    const core = dash === -1 ? withoutBuild : withoutBuild.slice(0, dash);
+    const core = (dash === -1 ? withoutBuild : withoutBuild.slice(0, dash))
+      .split(".")
+      .map((p) => Number.parseInt(p, 10));
     const preRaw = dash === -1 ? "" : withoutBuild.slice(dash + 1);
-    const parts = core.split(".").map((p) => Number.parseInt(p, 10));
-    if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) {
-      return null;
-    }
-    return { core: parts, pre: preRaw === "" ? [] : preRaw.split(".") };
+    return { core, pre: preRaw === "" ? [] : preRaw.split(".") };
   };
   const ap = parse(a);
   const bp = parse(b);
