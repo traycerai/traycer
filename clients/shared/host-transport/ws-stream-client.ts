@@ -92,6 +92,20 @@ export interface WsStreamClientOptions<
  * preceding text envelope whose `hasBinaryPayload` flag is `true`. WS
  * in-order delivery is the correlation; no sequence id is added.
  */
+
+/**
+ * Shared inert `IStreamSession` returned when `subscribe()` is called on a
+ * closed client. Stateless "no live transport": it drops outbound frames,
+ * emits nothing, and its `close()` is a no-op - so a stale late subscribe
+ * degrades quietly instead of throwing. One instance is safe to share.
+ */
+const INERT_STREAM_SESSION: IStreamSession = {
+  sendClientFrame: () => undefined,
+  onServerFrame: () => undefined,
+  onStatusChange: () => undefined,
+  close: () => undefined,
+};
+
 export class WsStreamClient<Registry extends VersionedStreamRpcRegistry> {
   private readonly options: WsStreamClientOptions<Registry>;
   private readonly ownedSessions = new Set<StreamSession<Registry>>();
@@ -113,7 +127,19 @@ export class WsStreamClient<Registry extends VersionedStreamRpcRegistry> {
     params: ParamsOf<Registry, Method>,
   ): IStreamSession {
     if (this.closed) {
-      throw new Error("Cannot subscribe with a closed WsStreamClient.");
+      // Defense-in-depth (tech-plan D4): a subscribe on an already-closed
+      // client is a stale call from a torn-down consumer. The live model
+      // rebuilds the client and re-subscribes, so this is unreachable by
+      // design - but degrading to an inert "no live transport" session, rather
+      // than throwing, keeps a stray late subscribe from tearing the renderer
+      // down through its error boundary (the crash class this rework removed).
+      // The companion `isClosed()` accessor lets callers detect this up front.
+      console.warn(
+        `[stream] subscribe on a closed WsStreamClient ignored (method=${String(
+          method,
+        )})`,
+      );
+      return INERT_STREAM_SESSION;
     }
     let removeSession = (): void => undefined;
     const session = new StreamSession<Registry>({
@@ -148,6 +174,16 @@ export class WsStreamClient<Registry extends VersionedStreamRpcRegistry> {
       session.close();
     }
     this.ownedSessions.clear();
+  }
+
+  /**
+   * True once `close()` has run. Lets a long-lived consumer that may outlive
+   * the client - mirroring the codebase's `isReleased` / `isDisposed` guards -
+   * detect a torn-down transport and degrade up front, rather than leaning on
+   * the inert-session fallback inside `subscribe()`.
+   */
+  isClosed(): boolean {
+    return this.closed;
   }
 
   /**

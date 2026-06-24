@@ -12,6 +12,7 @@ import { hostQueryKeys } from "@/lib/query-keys";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { authenticatedHostStreamKey } from "@/hooks/host/use-host-stream-client-for";
 import { useDurableStreamTransportFactory } from "@/lib/host/use-durable-stream-transport";
+import { openOwnedDurableStreamClient } from "@/lib/host/owned-durable-stream-client";
 import { useOpenEpicId } from "@/lib/epic-selectors";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
@@ -164,28 +165,25 @@ export function useChatSessionHandle(
           callbacks,
         );
       }
-      const transport = openTransport(hostId);
-      try {
-        const chatStreamClient = new ChatStreamClient({
-          wsStreamClient: transport.wsStreamClient,
-          epicId: factoryEpicId,
-          chatId: factoryChatId,
-          callbacks,
-        });
-        return {
-          sendAction: (frame) => chatStreamClient.sendAction(frame),
-          close: () => {
-            chatStreamClient.close();
-            transport.close();
-          },
-        };
-      } catch (cause) {
-        // `new ChatStreamClient` subscribes on the socket and can throw
-        // synchronously (bad endpoint / bearer). Close the half-built transport
-        // so its socket and wake listeners never leak.
-        transport.close();
-        throw cause;
-      }
+      // `openOwnedDurableStreamClient` owns the transport for the typed
+      // client's lifetime: `result.close` tears down both, and a synchronous
+      // throw in `new ChatStreamClient` (it subscribes on the socket) closes
+      // the half-built transport so its socket and wake listeners never leak.
+      const result = openOwnedDurableStreamClient(
+        openTransport,
+        hostId,
+        (ws) =>
+          new ChatStreamClient({
+            wsStreamClient: ws,
+            epicId: factoryEpicId,
+            chatId: factoryChatId,
+            callbacks,
+          }),
+      );
+      return {
+        sendAction: (frame) => result.client.sendAction(frame),
+        close: result.close,
+      };
     };
 
     const onAuthError = (): void => {

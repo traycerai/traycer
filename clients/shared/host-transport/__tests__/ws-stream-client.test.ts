@@ -810,7 +810,9 @@ describe("WsStreamClient", () => {
     completeHandshake(sockets[0].socket);
     completeHandshake(sockets[1].socket);
 
+    expect(client.isClosed()).toBe(false);
     client.close();
+    expect(client.isClosed()).toBe(true);
 
     expect(sockets[0].socket.closed).toEqual({
       code: 1000,
@@ -820,9 +822,22 @@ describe("WsStreamClient", () => {
       code: 1000,
       reason: "closed-by-caller",
     });
-    expect(() =>
-      client.subscribe("epic.subscribe", { epicId: "epic-2" }),
-    ).toThrow("Cannot subscribe with a closed WsStreamClient.");
+    // Defense-in-depth: a stale subscribe on a closed client degrades to an
+    // inert no-op session instead of throwing into the renderer error boundary.
+    // No new socket is dialed, and the returned session is safe to drive.
+    const warnSpy = vi
+      .spyOn(console, "warn")
+      .mockImplementation(() => undefined);
+    const inert = client.subscribe("epic.subscribe", { epicId: "epic-2" });
+    expect(sockets).toHaveLength(2);
+    expect(() => {
+      inert.onServerFrame(() => undefined);
+      inert.onStatusChange(() => undefined);
+      inert.sendClientFrame({ kind: "noop", hasBinaryPayload: false }, null);
+      inert.close();
+    }).not.toThrow();
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    warnSpy.mockRestore();
   });
 
   it("rewrites a directory entry's '/rpc' suffix to '/stream' on first dial", async () => {

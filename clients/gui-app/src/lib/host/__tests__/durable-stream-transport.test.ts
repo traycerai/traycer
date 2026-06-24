@@ -42,6 +42,7 @@ function buildParams(closeWs: () => void) {
       order.push("ws");
       closeWs();
     }),
+    reconnectAll: vi.fn(),
   };
   mocks.buildHostStreamClient.mockReturnValue(fakeWs);
   return {
@@ -52,6 +53,8 @@ function buildParams(closeWs: () => void) {
       bearer: () => null,
       auth: AUTH,
       runnerHost: RUNNER_HOST,
+      // No endpoint ever moves in these assembly tests; return a no-op disposer.
+      subscribeEndpointChange: () => () => undefined,
     },
   };
 }
@@ -102,5 +105,50 @@ describe("openDurableStreamTransport", () => {
     // half-registered listener leaks for the lifetime of the window.
     expect(fakeWs.close).toHaveBeenCalledTimes(1);
     expect(closeWs).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-dials at once when the host's dialable endpoint moves, not on benign re-emits", () => {
+    const reconnectAll = vi.fn();
+    const fakeWs = { close: vi.fn(), reconnectAll };
+    mocks.buildHostStreamClient.mockReturnValue(fakeWs);
+    mocks.subscribeStreamWakeReconnect.mockReturnValue(() => undefined);
+
+    let websocketUrl: string | null = "ws://host-a/rpc";
+    let fireDirectoryChange: () => void = () => undefined;
+    const params = {
+      endpoint: () =>
+        websocketUrl === null ? null : { hostId: "host-a", websocketUrl },
+      bearer: () => null,
+      auth: AUTH,
+      runnerHost: RUNNER_HOST,
+      subscribeEndpointChange: (onChange: () => void) => {
+        fireDirectoryChange = onChange;
+        return () => undefined;
+      },
+    };
+
+    const transport = openDurableStreamTransport(params);
+
+    // A benign re-emit with the SAME url (every `onLocalHostChange` rebuilds the
+    // entry) must NOT churn the socket.
+    fireDirectoryChange();
+    expect(reconnectAll).not.toHaveBeenCalled();
+
+    // Host restart / re-provision moves to a new `websocketUrl`: re-dial at once
+    // rather than waiting out the pong timeout on a half-open socket.
+    websocketUrl = "ws://host-a/rpc-2";
+    fireDirectoryChange();
+    expect(reconnectAll).toHaveBeenCalledTimes(1);
+    expect(reconnectAll).toHaveBeenCalledWith("host-endpoint-change");
+
+    // Endpoint goes away (host down), then returns on a new url: re-dial again -
+    // a null gap is recorded but not nudged, the next non-null move fires it.
+    websocketUrl = null;
+    fireDirectoryChange();
+    websocketUrl = "ws://host-a/rpc-3";
+    fireDirectoryChange();
+    expect(reconnectAll).toHaveBeenCalledTimes(2);
+
+    transport.close();
   });
 });

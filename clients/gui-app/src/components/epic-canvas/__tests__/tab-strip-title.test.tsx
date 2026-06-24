@@ -27,6 +27,17 @@ vi.mock("@/lib/host", () => ({
   }),
 }));
 
+// `EpicSessionProvider` opens its own durable transport via this factory, but
+// the test installs an `__setEpicStreamClientFactoryForTests` override that
+// short-circuits before `openTransport` runs - so a stable stub opener that is
+// never invoked lets the provider mount without the full host runtime.
+const openTransportStub = vi.hoisted(() => () => {
+  throw new Error("openTransport must not be called in this test");
+});
+vi.mock("@/lib/host/use-durable-stream-transport", () => ({
+  useDurableStreamTransportFactory: () => openTransportStub,
+}));
+
 vi.mock("@/lib/host/stream-runtime-context", () => ({
   useWsStreamClient: () => null,
 }));

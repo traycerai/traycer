@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, renderHook, act } from "@testing-library/react";
-import type { ReactNode } from "react";
+import { StrictMode, type ReactNode } from "react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
@@ -100,7 +100,8 @@ describe("HostStreamProvider", () => {
     expect(reconnectSpy).toHaveBeenCalledWith("wake-resume");
   });
 
-  it("drops and rebuilds the stream client on same-host transport changes", async () => {
+  it("keeps the SAME client across a same-host endpoint change and nudges an immediate re-dial", () => {
+    const reconnectSpy = vi.spyOn(WsStreamClient.prototype, "reconnectAll");
     const closeSpy = vi.spyOn(WsStreamClient.prototype, "close");
     const hostClient = buildClient();
     bindingRef.value = { hostClient };
@@ -112,15 +113,77 @@ describe("HostStreamProvider", () => {
     const first = result.current;
     expect(first).toBeInstanceOf(WsStreamClient);
 
+    // A host restart keeps the same hostId but moves to a new websocketUrl. The
+    // client is keyed on host IDENTITY, so the same instance survives - it is
+    // neither rebuilt nor closed - and the live `endpoint()` re-dials the new
+    // address. The endpoint move nudges an immediate re-dial instead of waiting
+    // out the reconnect backoff.
     act(() => {
       hostClient.bind({
         ...mockLocalHostEntry,
-        status: "unavailable",
+        websocketUrl: "ws://127.0.0.1:4918/rpc",
+        status: "available",
       });
     });
-    expect(result.current).toBeNull();
+
+    expect(result.current).toBe(first);
+    expect(closeSpy).not.toHaveBeenCalled();
+    expect(reconnectSpy).toHaveBeenCalledWith("host-endpoint-change");
+  });
+
+  it("rebuilds and closes the client only on a host identity change", () => {
+    const closeSpy = vi.spyOn(WsStreamClient.prototype, "close");
+    const hostClient = buildClient();
+    bindingRef.value = { hostClient };
+    act(() => {
+      hostClient.bind(mockLocalHostEntry);
+    });
+
+    const { result } = renderHook(() => useWsStreamClient(), { wrapper });
+    const first = result.current;
+    expect(first).toBeInstanceOf(WsStreamClient);
+
+    // A DIFFERENT hostId is a genuine identity change (host swap): the old
+    // client is replaced and closed, a fresh one built for the new host.
+    act(() => {
+      hostClient.bind({
+        ...mockLocalHostEntry,
+        hostId: "host-other",
+        websocketUrl: "ws://127.0.0.1:4918/rpc",
+      });
+    });
+
+    expect(result.current).toBeInstanceOf(WsStreamClient);
+    expect(result.current).not.toBe(first);
     expect(closeSpy).toHaveBeenCalledTimes(1);
     expect(closeSpy.mock.contexts[0]).toBe(first);
+  });
+
+  it("nudges a re-dial exactly once under a StrictMode double-invoke", () => {
+    const reconnectSpy = vi.spyOn(WsStreamClient.prototype, "reconnectAll");
+    const hostClient = buildClient();
+    bindingRef.value = { hostClient };
+    act(() => {
+      hostClient.bind(mockLocalHostEntry);
+    });
+
+    // StrictMode runs each effect setup -> cleanup -> setup on mount. The
+    // ref-based dedup in `useReconnectStreamOnEndpointChange` must absorb the
+    // double-invoke: a stable mount fires NO nudge, and a later same-host
+    // endpoint change fires EXACTLY one - never a spurious or doubled re-dial.
+    const strictWrapper = (props: {
+      readonly children: ReactNode;
+    }): ReactNode => (
+      <StrictMode>
+        <HostStreamProvider>{props.children}</HostStreamProvider>
+      </StrictMode>
+    );
+    const { result } = renderHook(() => useWsStreamClient(), {
+      wrapper: strictWrapper,
+    });
+    const first = result.current;
+    expect(first).toBeInstanceOf(WsStreamClient);
+    expect(reconnectSpy).not.toHaveBeenCalled();
 
     act(() => {
       hostClient.bind({
@@ -130,12 +193,8 @@ describe("HostStreamProvider", () => {
       });
     });
 
-    expect(result.current).toBeInstanceOf(WsStreamClient);
-    expect(result.current).not.toBe(first);
-    const second = result.current;
-    cleanup();
-    await Promise.resolve();
-    expect(closeSpy).toHaveBeenCalledTimes(2);
-    expect(closeSpy.mock.contexts[1]).toBe(second);
+    expect(result.current).toBe(first);
+    expect(reconnectSpy).toHaveBeenCalledTimes(1);
+    expect(reconnectSpy).toHaveBeenCalledWith("host-endpoint-change");
   });
 });

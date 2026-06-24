@@ -40,6 +40,14 @@ export function useDurableStreamTransportFactory(): (
           liveRef.current.globalClient.getRequestContext()?.credentials ?? null,
         auth: liveRef.current.auth,
         runnerHost: liveRef.current.runnerHost,
+        // Fires on any directory change; `openDurableStreamTransport` filters it
+        // down to a genuine endpoint MOVE for THIS `hostId` before re-dialing,
+        // so a host restart / re-provision reconnects the session at once
+        // instead of waiting out the pong timeout on a half-open socket.
+        subscribeEndpointChange: (onChange) => {
+          const subscription = liveRef.current.directory.onChange(onChange);
+          return () => subscription.dispose();
+        },
       }),
     [],
   );
