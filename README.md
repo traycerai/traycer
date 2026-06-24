@@ -21,11 +21,11 @@ Traycer is an open-source AI orchestration app for advanced agent orchestration.
 
 Switch models instantly within the same chat, orchestrate agent-to-agent communication, and collaborate in real time.
 
-[![Traycer Demo Video](https://img.youtube.com/vi/doh2yz3ZFvU/maxresdefault.jpg)](https://youtu.be/doh2yz3ZFvU)
+[![Traycer Demo Video](https://github.com/user-attachments/assets/a5efda0c-16f2-453b-9f8d-50d09df25aa4)](https://youtu.be/doh2yz3ZFvU)
 
 ## Features
 
-- **Bring Your Own Subscriptions (BYOS):** Connect your existing subscriptions without paying twice, or use Traycer's own inference subscription.
+- **Bring Your Own Agent (BYOA):** Connect your existing agents without paying twice, or use Traycer's own inference subscription.
 - **Unified Context:** Instantly switch to another model in the same chat. The context window is seamlessly shared across all providers.
 - **Agent-to-Agent Communication:** Create automated loops where agents talk among themselves to debate architecture or peer-review code.
 - **Regular and Epic Modes:** Run quick, one-off tasks in regular mode, or use Epic mode for structured, multi-step coding workflows.
@@ -34,11 +34,14 @@ Switch models instantly within the same chat, orchestrate agent-to-agent communi
 
 ## Installation
 
-| Platform    | Install                                                                                        |
-| ----------- | ---------------------------------------------------------------------------------------------- |
-| macOS       | `brew install traycerai/traycer/traycer`                                                       |
-| Desktop app | `brew install --cask traycerai/traycer/traycer-desktop`                                        |
-| Linux       | Download a signed binary from [Releases](https://github.com/traycerai/traycer/releases/latest) |
+| Platform                | Install                                                                                                                                                |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| macOS (Apple Silicon)   | [Download .dmg (arm64)](https://github.com/traycerai/traycer/releases/latest/download/traycer-desktop-macos-arm64.dmg)                                 |
+| macOS (Intel)           | [Download .dmg (x64)](https://github.com/traycerai/traycer/releases/latest/download/traycer-desktop-macos-x64.dmg)                                     |
+| Linux (AppImage)        | [Download .AppImage](https://github.com/traycerai/traycer/releases/latest/download/traycer-desktop-linux-x86_64.AppImage)                              |
+| Linux (Debian/Ubuntu)   | [Download .deb](https://github.com/traycerai/traycer/releases/latest/download/traycer-desktop-linux-amd64.deb)                                         |
+| Linux (Fedora/RHEL)     | [Download .rpm](https://github.com/traycerai/traycer/releases/latest/download/traycer-desktop-linux-x86_64.rpm)                                        |
+| Windows                 | Coming soon                                                                                                                                            |
 
 See the [latest release](https://github.com/traycerai/traycer/releases/latest) for all available builds.
 
@@ -78,7 +81,7 @@ For setup, configuration, agent integrations, and provider-specific behavior, he
 
 We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) to get started and our [Code of Conduct](CODE_OF_CONDUCT.md). Commits must be signed off under the [Developer Certificate of Origin (DCO)](CONTRIBUTING.md#developer-certificate-of-origin-dco). You can also [open an issue](https://github.com/traycerai/traycer/issues) for bugs and feature requests.
 
-> **Security:** Please don't report security vulnerabilities through public GitHub issues. Report them privately via GitHub's [Report a vulnerability](../../security/advisories/new) flow or email **support@traycer.ai**. See the [Security Policy](SECURITY.md) for details.
+> **Security:** Please don't report security vulnerabilities through public GitHub issues. Report them privately via the email **support@traycer.ai**. See the [Security Policy](SECURITY.md) for details.
 
 <a href="https://github.com/traycerai/traycer/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=traycerai/traycer" />
@@ -90,7 +93,7 @@ Join the Traycer community to get help, share feedback, and connect with other u
 
 - **[Discord](https://traycer.ai/discord)** — Chat with the team and community
 - **[X / Twitter](https://x.com/traycerai)** — Follow for updates and announcements
-- **[GitHub Issues](https://github.com/traycerai/traycer/issues)** — Report bugs and request features
+- **[YouTube](https://www.youtube.com/@TraycerAI)** — Subscribe for walkthroughs and other Traycer videos.
 
 ## License
 

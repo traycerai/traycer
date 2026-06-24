@@ -176,9 +176,9 @@ async function stageDevCliWrapper() {
 
 function ensureHostLog() {
   fs.mkdirSync(path.dirname(DEV_HOST_LOG), { recursive: true });
-  if (!fs.existsSync(DEV_HOST_LOG)) {
-    fs.closeSync(fs.openSync(DEV_HOST_LOG, "a"));
-  }
+  // Opening in append mode creates the file if it's absent and is a no-op
+  // otherwise, so there's no need (and no safe way) to existsSync-then-create.
+  fs.closeSync(fs.openSync(DEV_HOST_LOG, "a"));
 }
 
 // `--release <version>` pins a specific host release; omitted ⇒ the CLI

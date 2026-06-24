@@ -1,4 +1,4 @@
-import { readFile, stat } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { watch, type FSWatcher } from "node:fs";
 import { EventEmitter } from "node:events";
 import { createConnection } from "node:net";
@@ -619,11 +619,10 @@ async function safeReadLogTail(
   path: string,
   maxLines: number,
 ): Promise<string | null> {
+  // Read directly and let the single catch handle every failure mode — a
+  // missing file (ENOENT) and a path that's a directory (EISDIR) both land
+  // here. A prior stat()/isFile() check would only add a TOCTOU window.
   try {
-    const info = await stat(path);
-    if (!info.isFile()) {
-      return null;
-    }
     const raw = await readFile(path, "utf8");
     const lines = raw.split(/\r?\n/);
     return lines.slice(-maxLines).join("\n");
