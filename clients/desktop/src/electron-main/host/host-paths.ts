@@ -32,10 +32,27 @@ export const DEV_LABEL: ServiceLabel = {
   appSupportDirName: "Traycer-Dev",
 };
 
-// The label for an environment/slot. Mirrors the CLI's `serviceLabelFor`.
+// The label for an environment/slot. Mirrors the CLI's `serviceLabelFor`:
+// production keeps the bare `ai.traycer.host`; every other slot nests under its
+// own name (`ai.traycer.host.<environment>`) so a staging/dev install owns an
+// isolated LaunchAgent + app-support dir and never collides with prod. A
+// hardcoded dev-only fallback silently mapped internal `staging` builds onto the
+// dev slot (`ai.traycer.host.dev`), mismatching the `ai.traycer.host.staging`
+// plist the installer ships - derive from `environment` so new slots can't drift.
 export function labelForEnvironment(environment: Environment): ServiceLabel {
   if (environment === "production") return PRODUCTION_LABEL;
-  return DEV_LABEL;
+  if (environment === "dev") return DEV_LABEL;
+  const titled = capitalizeEnvironment(environment);
+  return {
+    id: `ai.traycer.host.${environment}`,
+    displayName: `Traycer Host (${titled})`,
+    appSupportDirName: `Traycer-${titled}`,
+  };
+}
+
+function capitalizeEnvironment(environment: Environment): string {
+  if (environment.length === 0) return environment;
+  return environment.charAt(0).toUpperCase() + environment.slice(1);
 }
 
 /**

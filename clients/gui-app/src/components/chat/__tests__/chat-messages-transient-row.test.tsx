@@ -89,7 +89,6 @@ describe("ChatMessages transient Virtuoso rows", () => {
     render(
       <ChatMessages
         taskTitle="Transcript"
-        licenseKey="test-license"
         messages={[message]}
         minimapItems={minimapItemsFor([message])}
         scrollStateKey="transient-row-test"

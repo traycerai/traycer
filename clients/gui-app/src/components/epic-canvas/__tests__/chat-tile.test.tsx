@@ -1,14 +1,6 @@
 import "../../../../__tests__/test-browser-apis";
 import { TestRouterProvider } from "@/__tests__/with-test-router";
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  vi,
-  type Mock,
-} from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
   cleanup,
@@ -82,53 +74,6 @@ vi.mock("@/lib/host/stream-runtime-context", () => ({
 
 vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
   useReactiveActiveHostId: () => "host-test",
-}));
-
-type TestRuntimeCapabilitiesData = {
-  readonly chatMessageList:
-    | {
-        readonly status: "available";
-        readonly provider: "virtuoso-message-list";
-        readonly licenseMode: "licensed" | "development-trial";
-        readonly licenseKey: string;
-      }
-    | {
-        readonly status: "unavailable";
-        readonly provider: "virtuoso-message-list";
-        readonly reason: "license-key-unavailable";
-      };
-};
-
-const runtimeCapabilitiesMock = vi.hoisted<{
-  readonly query: {
-    data: TestRuntimeCapabilitiesData | null;
-    error: Error | null;
-    fetchStatus: "fetching" | "idle" | "paused";
-    isPending: boolean;
-    isFetching: boolean;
-    refetch: Mock<() => void>;
-  };
-}>(() => ({
-  query: {
-    data: {
-      chatMessageList: {
-        status: "available" as const,
-        provider: "virtuoso-message-list" as const,
-        licenseMode: "licensed" as const,
-        licenseKey:
-          "eff2c8c42294f62b09cebd99d82c8c93b25URVNUO2V4OTk5OTk5OTk5OTk5OQ==",
-      },
-    },
-    error: null as Error | null,
-    fetchStatus: "idle",
-    isPending: false,
-    isFetching: false,
-    refetch: vi.fn(),
-  },
-}));
-
-vi.mock("@/hooks/host/use-host-runtime-capabilities-query", () => ({
-  useHostRuntimeCapabilitiesQuery: () => runtimeCapabilitiesMock.query,
 }));
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -658,20 +603,6 @@ describe("<ChatTile />", () => {
     chatHarness.install("owner", []);
     useInitialChatHandoffStore.getState().resetForTests();
     resetFocusedComposerControlsForTests();
-    runtimeCapabilitiesMock.query.data = {
-      chatMessageList: {
-        status: "available",
-        provider: "virtuoso-message-list",
-        licenseMode: "licensed",
-        licenseKey:
-          "eff2c8c42294f62b09cebd99d82c8c93b25URVNUO2V4OTk5OTk5OTk5OTk5OQ==",
-      },
-    };
-    runtimeCapabilitiesMock.query.error = null;
-    runtimeCapabilitiesMock.query.fetchStatus = "idle";
-    runtimeCapabilitiesMock.query.isPending = false;
-    runtimeCapabilitiesMock.query.isFetching = false;
-    runtimeCapabilitiesMock.query.refetch.mockClear();
   });
 
   afterEach(() => {
@@ -751,53 +682,6 @@ describe("<ChatTile />", () => {
       throw new Error("expected messages array");
     }
     expect(messages.length).toBe(1);
-  });
-
-  it("blocks chat messages and retries when runtime configuration is unavailable", async () => {
-    runtimeCapabilitiesMock.query.data = {
-      chatMessageList: {
-        status: "unavailable",
-        provider: "virtuoso-message-list",
-        reason: "license-key-unavailable",
-      },
-    };
-
-    renderChatTile();
-
-    const retryButton = await screen.findByRole(
-      "button",
-      { name: "Retry" },
-      { timeout: 5_000 },
-    );
-
-    expect(screen.getByText("Chat could not be loaded.")).not.toBeNull();
-    expect(screen.queryByText("Host chat content")).toBeNull();
-
-    fireEvent.click(retryButton);
-
-    expect(runtimeCapabilitiesMock.query.refetch).toHaveBeenCalledTimes(1);
-  });
-
-  it("shows retry when runtime configuration query is disabled", async () => {
-    runtimeCapabilitiesMock.query.data = null;
-    runtimeCapabilitiesMock.query.error = null;
-    runtimeCapabilitiesMock.query.fetchStatus = "idle";
-    runtimeCapabilitiesMock.query.isPending = true;
-    runtimeCapabilitiesMock.query.isFetching = false;
-
-    renderChatTile();
-
-    const retryButton = await screen.findByRole(
-      "button",
-      { name: "Retry" },
-      { timeout: 5_000 },
-    );
-
-    expect(screen.queryByText("Loading chat")).toBeNull();
-
-    fireEvent.click(retryButton);
-
-    expect(runtimeCapabilitiesMock.query.refetch).toHaveBeenCalledTimes(1);
   });
 
   it("uses the composer send button as the running turn stop control", async () => {

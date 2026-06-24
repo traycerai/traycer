@@ -25,8 +25,8 @@ describe("settings tab kind - host section", () => {
     expect(settingsSectionFromPath("/settings/service")).toBe("host");
   });
 
-  it("settingsSectionFromPath maps the retired /settings/agents path to Providers", () => {
-    expect(settingsSectionFromPath("/settings/agents")).toBe("providers");
+  it("settingsSectionFromPath maps the /settings/agents path to the Agents section", () => {
+    expect(settingsSectionFromPath("/settings/agents")).toBe("agents");
   });
 
   it("settingsSectionPath builds /settings/host for the host section", () => {

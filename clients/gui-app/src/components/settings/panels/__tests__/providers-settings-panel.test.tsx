@@ -25,12 +25,6 @@ const providerMocks = vi.hoisted(() => ({
   deleteEnvOverrideMutate: vi.fn(),
   refreshProviders: vi.fn(() => Promise.resolve()),
   openExternalLink: vi.fn(),
-  guideQueryData: {
-    content: "`claude` guide",
-    generatedDefaultContent: "`claude` guide",
-  },
-  setGuideMutateAsync: vi.fn(),
-  resetGuideMutateAsync: vi.fn(),
 }));
 
 vi.mock("@/hooks/providers/use-providers-list-query", () => ({
@@ -119,28 +113,6 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
 vi.mock("@/hooks/providers/use-refresh-providers", () => ({
   useRefreshProviders: () => providerMocks.refreshProviders,
 }));
-
-vi.mock("@/hooks/agent/use-agent-selection-guide-global-query", () => ({
-  useAgentSelectionGuideGlobalQuery: () => ({
-    data: providerMocks.guideQueryData,
-    isError: false,
-  }),
-}));
-
-vi.mock("@/hooks/agent/use-agent-selection-guide-set-global-mutation", () => ({
-  useAgentSelectionGuideSetGlobalMutation: () => ({
-    mutateAsync: providerMocks.setGuideMutateAsync,
-  }),
-}));
-
-vi.mock(
-  "@/hooks/agent/use-agent-selection-guide-reset-global-mutation",
-  () => ({
-    useAgentSelectionGuideResetGlobalMutation: () => ({
-      mutateAsync: providerMocks.resetGuideMutateAsync,
-    }),
-  }),
-);
 
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({
@@ -268,20 +240,6 @@ describe("<ProvidersSettingsPanel />", () => {
     providerMocks.setEnabledMutate.mockClear();
     providerMocks.setEnvOverrideMutate.mockClear();
     providerMocks.deleteEnvOverrideMutate.mockClear();
-    providerMocks.guideQueryData = {
-      content: "`claude` guide",
-      generatedDefaultContent: "`claude` guide",
-    };
-    providerMocks.setGuideMutateAsync.mockReset();
-    providerMocks.setGuideMutateAsync.mockResolvedValue({
-      content: "`claude` guide",
-      generatedDefaultContent: "`claude` guide",
-    });
-    providerMocks.resetGuideMutateAsync.mockReset();
-    providerMocks.resetGuideMutateAsync.mockResolvedValue({
-      content: "`codex` guide",
-      generatedDefaultContent: "`codex` guide",
-    });
   });
 
   afterEach(() => {
@@ -309,18 +267,6 @@ describe("<ProvidersSettingsPanel />", () => {
       providerId: "traycer",
       selection: { kind: "path" },
     });
-  });
-
-  it("renders the global agent selection guide above provider settings", () => {
-    render(
-      <TooltipProvider>
-        <ProvidersSettingsPanel />
-      </TooltipProvider>,
-    );
-
-    expect(screen.getByText("Agent selection guide")).toBeDefined();
-    expect(screen.getByTestId("agents-selection-guide-input")).toBeDefined();
-    expect(screen.getByRole("button", { name: /OpenCode/i })).toBeDefined();
   });
 
   it("shows provider-scoped environment controls from provider state", () => {

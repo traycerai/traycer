@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { readFile, stat, mkdir, writeFile } from "node:fs/promises";
 import { isAbsolute, join, normalize, relative } from "node:path";
 import { log } from "../app/logger";
-import { compareSemver } from "../cli/cli-discovery";
+import { compareHostVersions } from "../cli/cli-discovery";
 import rawDevWrapperPaths from "../cli/dev-wrapper-paths.json";
 import {
   runTraycerCliJson,
@@ -537,16 +537,18 @@ function buildUpdateState(
   cache: RegistryUpdateCacheFile,
 ): HostRegistryUpdateState {
   // An update is only available when the installed host is *older* than the
-  // registry's latest. A plain `!==` flags a host that is newer than the
-  // registry pointer (a local/staging build ahead of GA, or a stale cache that
-  // never re-read the post-update install record) as an "update", surfacing a
-  // phantom downgrade in the Updates row and banner. Compare by semver so
-  // installed >= latest reads as "up to date".
+  // registry's latest. `compareHostVersions` orders by full SemVer precedence,
+  // including pre-releases: `1.0.0-rc.1 < 1.0.0`, so a release-candidate host
+  // upgrades to its GA (a plain `!==` or a pre-release-stripping compare reads
+  // rc and GA as equal and leaves the host stranded on the rc). It also keeps a
+  // host *newer* than the registry pointer (a local/staging build ahead of GA,
+  // or a stale cache that never re-read the post-update install record) reading
+  // as "up to date" rather than advertising a phantom downgrade.
   const updateAvailable =
     cache.reachable &&
     cache.installedVersion !== null &&
     cache.latestVersion !== null &&
-    compareSemver(cache.installedVersion, cache.latestVersion) < 0;
+    compareHostVersions(cache.installedVersion, cache.latestVersion) < 0;
   return {
     checkedAt: cache.checkedAt,
     latestVersion: cache.latestVersion,

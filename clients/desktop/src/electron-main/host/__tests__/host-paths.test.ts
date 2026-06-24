@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { getHostFsLayout } from "../host-paths";
+import { getHostFsLayout, labelForEnvironment } from "../host-paths";
 
 /**
  * Pin the cross-workspace contract: the desktop runner MUST look for the
@@ -73,5 +73,34 @@ describe("getHostFsLayout", () => {
     expect(layout.installRecordFile).toBe(
       join(homedir(), ".traycer", "host", "dev", "install", "install.json"),
     );
+  });
+});
+
+/**
+ * The service label namespaces the host's LaunchAgent / SMAppService
+ * registration per slot. It MUST agree with the in-bundle plist the installer
+ * ships (`scripts/desktop-install-cloud.js` `hostAgentLabel`) and the CLI's
+ * `serviceLabelFor`: production keeps the bare `ai.traycer.host`; every other
+ * slot nests under its own name. A dev-only fallback that mapped internal
+ * `staging` builds onto `ai.traycer.host.dev` broke staging host bring-up.
+ */
+describe("labelForEnvironment", () => {
+  it("keeps the bare ai.traycer.host id for production", () => {
+    const label = labelForEnvironment("production");
+    expect(label.id).toBe("ai.traycer.host");
+    expect(label.appSupportDirName).toBe("Traycer");
+  });
+
+  it("nests the dev slot under ai.traycer.host.dev", () => {
+    const label = labelForEnvironment("dev");
+    expect(label.id).toBe("ai.traycer.host.dev");
+    expect(label.appSupportDirName).toBe("Traycer-Dev");
+  });
+
+  it("gives the internal staging slot its OWN ai.traycer.host.staging id (never the dev slot's)", () => {
+    const label = labelForEnvironment("staging");
+    expect(label.id).toBe("ai.traycer.host.staging");
+    expect(label.displayName).toBe("Traycer Host (Staging)");
+    expect(label.appSupportDirName).toBe("Traycer-Staging");
   });
 });

@@ -1,7 +1,6 @@
-import { createFileRoute, redirect } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
+import { AgentsSettingsPanel } from "@/components/settings/panels/agents-settings-panel";
 
 export const Route = createFileRoute("/settings/agents")({
-  beforeLoad: () => {
-    redirect({ throw: true, to: "/settings/providers", replace: true });
-  },
+  component: AgentsSettingsPanel,
 });

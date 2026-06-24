@@ -67,7 +67,17 @@ export function ModelRowsState(props: ModelRowsStateProps): ReactNode | null {
   }
 
   if (activeProvider !== null && activeProvider.modelsError !== null) {
-    return <PickerStateRow label="Couldn't load models" icon={undefined} />;
+    // Surface the host's specific reason - the cursor adapter classifies a
+    // rejected key ("Cursor rejected the API key…") or an un-shipped SDK
+    // ("Cursor isn't available in this host build…") into clear copy - instead
+    // of a generic catch-all. Fall back when the message is empty.
+    const reason = activeProvider.modelsError.message.trim();
+    return (
+      <PickerStateRow
+        label={reason.length > 0 ? reason : "Couldn't load models"}
+        icon={undefined}
+      />
+    );
   }
 
   if (rowsCount === 0) {

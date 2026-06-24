@@ -245,6 +245,52 @@ describe("refreshRegistryUpdateState - launch-time probe", () => {
     expect(state.updateAvailable).toBe(false);
   });
 
+  it("derives updateAvailable=true when a release-candidate host has a GA available", async () => {
+    // The reported bug: host installed from 1.0.0-rc.1, registry latest 1.0.0.
+    // The pre-release must sort below its GA so both the manual "Check for
+    // updates" and the launch auto-update see the upgrade.
+    const probeSpy = vi.fn();
+    vi.doMock("../../cli/traycer-cli", () => ({
+      runTraycerCliJson: probeSpy,
+      streamTraycerCliJson: vi.fn(),
+      TraycerCliError: class extends Error {},
+    }));
+    writeCache({
+      checkedAt: new Date().toISOString(),
+      latestVersion: "1.0.0",
+      installedVersion: "1.0.0-rc.1",
+      reachable: true,
+      errorMessage: null,
+    });
+    const { refreshRegistryUpdateState } =
+      await import("../host-management-ipc");
+    const state = await refreshRegistryUpdateState({ force: false });
+    expect(probeSpy).not.toHaveBeenCalled();
+    expect(state.updateAvailable).toBe(true);
+  });
+
+  it("derives updateAvailable=false when a GA host sees an older pre-release as latest", async () => {
+    // Don't advertise a downgrade from GA back to a release candidate.
+    const probeSpy = vi.fn();
+    vi.doMock("../../cli/traycer-cli", () => ({
+      runTraycerCliJson: probeSpy,
+      streamTraycerCliJson: vi.fn(),
+      TraycerCliError: class extends Error {},
+    }));
+    writeCache({
+      checkedAt: new Date().toISOString(),
+      latestVersion: "1.0.0-rc.1",
+      installedVersion: "1.0.0",
+      reachable: true,
+      errorMessage: null,
+    });
+    const { refreshRegistryUpdateState } =
+      await import("../host-management-ipc");
+    const state = await refreshRegistryUpdateState({ force: false });
+    expect(probeSpy).not.toHaveBeenCalled();
+    expect(state.updateAvailable).toBe(false);
+  });
+
   it("re-probes a fresh failed cache instead of replaying a stale error", async () => {
     const probeSpy = vi.fn().mockResolvedValue({
       manifest: {
