@@ -33,7 +33,7 @@ export const runnerMutationKeys = {
   // "Check now" / "Retry" buttons so stale cached failures don't survive
   // a fix or a transient outage.
   hostRegistryCheck: () => ["runner.host.registryCheck"] as const,
-  // "Clear all local data" wipe (Settings → General). Awaits the windows
+  // "Clear local app state" wipe (Settings → General). Awaits the windows
   // bridge (IRunnerHost) per-window `clear` RPC, sweeps localStorage, then
   // reloads. Keyed so the destructive action dedups and shows in devtools.
   clearAllLocalData: () => ["runner.clearAllLocalData"] as const,
