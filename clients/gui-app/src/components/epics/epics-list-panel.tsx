@@ -9,7 +9,9 @@ import {
 } from "react";
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import {
+  ArrowDownToLine,
   Check,
+  ExternalLink,
   Layers,
   ListChecks,
   Pencil,
@@ -19,6 +21,18 @@ import {
   X,
 } from "lucide-react";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
+import { openEpicInBackground } from "@/lib/commands/actions/open-epic-in-background";
+import {
+  useHistoryOpenInNewWindowFlow,
+  type HistoryNewWindowFlow,
+} from "@/components/epics/use-history-open-in-new-window";
+import { UnsyncedEpicMoveDialog } from "@/components/layout/dialogs/unsynced-epic-move-dialog";
 import { Button } from "@/components/ui/button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
@@ -208,6 +222,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   // PanelChromeBar / PanelSearchInput / EpicsSortMenu bail unless their own
   // data actually changes.
   const { search, update: updateSearch, clear: clearSearch } = historySearch;
+  const openInNewWindowFlow = useHistoryOpenInNewWindowFlow();
 
   const {
     data,
@@ -392,6 +407,8 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
             isFetchingNextPage={isFetchingNextPage}
             onLoadMore={fetchNextPage}
             onSelectEpic={onSelectEpic}
+            onOpenInNewWindow={openInNewWindowFlow.requestOpen}
+            openInNewWindowAvailable={openInNewWindowFlow.isAvailable}
           />
         </div>
       </section>
@@ -407,6 +424,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
         isPending={deleteMutation.isPending}
         onConfirm={handleConfirmDelete}
       />
+      <UnsyncedEpicMoveDialog flow={openInNewWindowFlow.epicFlow} />
     </TooltipProvider>
   );
 }
@@ -672,6 +690,8 @@ interface EpicsListBodyProps {
   readonly isFetchingNextPage: boolean;
   readonly onLoadMore: () => void;
   readonly onSelectEpic: ((epicId: string) => void) | null;
+  readonly onOpenInNewWindow: HistoryNewWindowFlow["requestOpen"];
+  readonly openInNewWindowAvailable: boolean;
 }
 
 function EpicsListBody(props: EpicsListBodyProps): ReactNode {
@@ -690,6 +710,8 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
     isFetchingNextPage,
     onLoadMore,
     onSelectEpic,
+    onOpenInNewWindow,
+    openInNewWindowAvailable,
   } = props;
 
   if (error !== null) {
@@ -724,6 +746,8 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
               onToggleSelection={onToggleSelection}
               onRequestDelete={onRequestDelete}
               onSelectEpic={onSelectEpic}
+              onOpenInNewWindow={onOpenInNewWindow}
+              openInNewWindowAvailable={openInNewWindowAvailable}
             />
           ))}
         </ul>
@@ -787,6 +811,8 @@ interface EpicsListRowProps {
   readonly onToggleSelection: (id: string) => void;
   readonly onRequestDelete: (ids: ReadonlyArray<string>) => void;
   readonly onSelectEpic: ((epicId: string) => void) | null;
+  readonly onOpenInNewWindow: HistoryNewWindowFlow["requestOpen"];
+  readonly openInNewWindowAvailable: boolean;
 }
 
 const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
@@ -797,6 +823,8 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
     onToggleSelection,
     onRequestDelete,
     onSelectEpic,
+    onOpenInNewWindow,
+    openInNewWindowAvailable,
   } = props;
   const isPhase = item.taskType === "phase";
   const displayTitle = historyItemDisplayTitle(item);
@@ -812,8 +840,14 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
   const navigate = useNavigate();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const linkTabId = useEpicCanvasStore(
-    (s) => s.firstTabIdForEpic(item.epicId) ?? item.epicId,
+    (s) => s.resolveTabIdForEpic(item.epicId) ?? item.epicId,
   );
+  const openInBackground = useCallback(() => {
+    openEpicInBackground(item.epicId, item.title);
+  }, [item.epicId, item.title]);
+  const openInNewWindow = useCallback(() => {
+    onOpenInNewWindow(item);
+  }, [onOpenInNewWindow, item]);
   const commitEpicTitle = useCallback(
     (nextTitle: string) => {
       if (isPhase) return;
@@ -969,6 +1003,69 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
       onBlockUnavailableDelete={blockUnavailableDeleteAction}
     />
   );
+  const rowCard = (
+    <div
+      data-testid="epics-list-row-card"
+      data-selection-disabled={selectionDisabled ? "true" : undefined}
+      className={historyRowCardClassName({
+        selectionDisabled,
+        selectedForDelete: historySelectedForDelete({
+          selectionMode,
+          isSelected,
+          canDeleteItem,
+        }),
+      })}
+    >
+      {rowInteractionLayer}
+      <div className="pointer-events-none relative z-10 flex items-center justify-between gap-3 p-3 pr-12 text-ui-sm">
+        <span className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
+          <HistoryRowLeadingIcon item={item} />
+          {isRenaming ? (
+            <input
+              {...renameInputProps}
+              type="text"
+              aria-label={`Rename ${displayTitle}`}
+              data-testid="epics-list-row-title-input"
+              className="pointer-events-auto w-full min-w-0 flex-1 rounded border border-input bg-background/90 px-1.5 py-0.5 font-medium text-foreground outline-none focus:border-ring/70 focus-visible:ring-0"
+            />
+          ) : (
+            <span className="flex min-w-0 items-center gap-1.5 overflow-hidden">
+              <span className="truncate font-medium text-foreground">
+                {displayTitle}
+              </span>
+              {titleEditControl}
+            </span>
+          )}
+        </span>
+        <span className="shrink-0 text-ui-xs text-muted-foreground">
+          updated {item.updatedLabel}
+        </span>
+      </div>
+      {deleteControl}
+    </div>
+  );
+  // Phases have no background-open: a phase only opens through its migration
+  // route (migrationSource=phase), which a plain canvas tab can't carry, so it
+  // would activate into the wrong (non-migration) surface. New Window stays
+  // available - it goes through the route.
+  const backgroundMenuItem = isPhase ? null : (
+    <ContextMenuItem
+      onSelect={openInBackground}
+      data-testid="epics-list-row-open-background"
+    >
+      <ArrowDownToLine />
+      Open in Background
+    </ContextMenuItem>
+  );
+  const newWindowMenuItem = openInNewWindowAvailable ? (
+    <ContextMenuItem
+      onSelect={openInNewWindow}
+      data-testid="epics-list-row-open-new-window"
+    >
+      <ExternalLink />
+      Open in New Window
+    </ContextMenuItem>
+  ) : null;
   return (
     <li
       data-testid="epics-list-row"
@@ -977,45 +1074,22 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
       <div className="flex w-5 shrink-0 items-center justify-center">
         {selectionControl}
       </div>
-      <div
-        data-testid="epics-list-row-card"
-        data-selection-disabled={selectionDisabled ? "true" : undefined}
-        className={historyRowCardClassName({
-          selectionDisabled,
-          selectedForDelete: historySelectedForDelete({
-            selectionMode,
-            isSelected,
-            canDeleteItem,
-          }),
-        })}
-      >
-        {rowInteractionLayer}
-        <div className="pointer-events-none relative z-10 flex items-center justify-between gap-3 p-3 pr-12 text-ui-sm">
-          <span className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
-            <HistoryRowLeadingIcon item={item} />
-            {isRenaming ? (
-              <input
-                {...renameInputProps}
-                type="text"
-                aria-label={`Rename ${displayTitle}`}
-                data-testid="epics-list-row-title-input"
-                className="pointer-events-auto w-full min-w-0 flex-1 rounded border border-input bg-background/90 px-1.5 py-0.5 font-medium text-foreground outline-none focus:border-ring/70 focus-visible:ring-0"
-              />
-            ) : (
-              <span className="flex min-w-0 items-center gap-1.5 overflow-hidden">
-                <span className="truncate font-medium text-foreground">
-                  {displayTitle}
-                </span>
-                {titleEditControl}
-              </span>
-            )}
-          </span>
-          <span className="shrink-0 text-ui-xs text-muted-foreground">
-            updated {item.updatedLabel}
-          </span>
-        </div>
-        {deleteControl}
-      </div>
+      {/* Skip the context menu entirely when no action qualifies (e.g. a phase
+          row in the browser build with no windows bridge) so right-click never
+          opens an empty popover. */}
+      {backgroundMenuItem === null && newWindowMenuItem === null ? (
+        rowCard
+      ) : (
+        <ContextMenu>
+          <ContextMenuTrigger asChild>{rowCard}</ContextMenuTrigger>
+          <ContextMenuContent
+            onCloseAutoFocus={(event) => event.preventDefault()}
+          >
+            {backgroundMenuItem}
+            {newWindowMenuItem}
+          </ContextMenuContent>
+        </ContextMenu>
+      )}
     </li>
   );
 });

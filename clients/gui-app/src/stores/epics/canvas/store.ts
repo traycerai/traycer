@@ -148,6 +148,14 @@ export interface EpicCanvasStore {
 
   openEpicTab: (epicId: string, name: string | undefined) => string;
   /**
+   * Open an epic tab in the header strip WITHOUT activating it - the active
+   * tab and current route are left untouched. Reuses an existing tab for the
+   * epic when one is already open (returns its id, makes no change). Used by
+   * the history "Open in Background" action so a row can be opened behind the
+   * current surface (e.g. without dismissing the History overlay).
+   */
+  openEpicTabInBackground: (epicId: string, name: string | undefined) => string;
+  /**
    * Close the tab as a user-visible header action: remove it from
    * `openTabOrder`, update active/recent pointers, and keep `tabsById[tabId]`
    * available for reopen. Use `discardTabState` when the tab record must be
@@ -204,7 +212,7 @@ export interface EpicCanvasStore {
    * Return the best existing tab id for an epic using the same active/recent
    * preference as reopen, without creating a new tab.
    */
-  firstTabIdForEpic: (epicId: string) => string | null;
+  resolveTabIdForEpic: (epicId: string) => string | null;
 
   /**
    * Open a tile in `tabId`'s canvas as a permanent tab (dedup-aware: focuses
@@ -427,6 +435,37 @@ export function resolveTabIdForEpic(
   return firstTabIdForEpicInState(state, epicId);
 }
 
+function createEpicViewTab(
+  epicId: string,
+  name: string | undefined,
+): EpicViewTab {
+  return { tabId: uuidv4(), epicId, name: name ?? UNTITLED_EPIC_TITLE };
+}
+
+/**
+ * Shared `set()` payload for appending a freshly-created epic tab to the strip:
+ * registers the tab + an empty canvas, pushes it onto `openTabOrder`, points
+ * the epic's most-recent pointer at it, and seeds an empty artifact tree if the
+ * epic has none. Activation is layered on by the caller (`openEpicTab` makes it
+ * active; `openEpicTabInBackground` leaves `activeTabId` untouched).
+ */
+function appendedEpicTabState(state: EpicCanvasStore, tab: EpicViewTab) {
+  const { tabId, epicId } = tab;
+  return {
+    tabsById: { ...state.tabsById, [tabId]: tab },
+    canvasByTabId: { ...state.canvasByTabId, [tabId]: createEmptyCanvas() },
+    openTabOrder: [...state.openTabOrder, tabId],
+    mostRecentTabIdByEpicId: {
+      ...state.mostRecentTabIdByEpicId,
+      [epicId]: tabId,
+    },
+    artifactTreeByEpicId:
+      epicId in state.artifactTreeByEpicId
+        ? state.artifactTreeByEpicId
+        : { ...state.artifactTreeByEpicId, [epicId]: [] },
+  };
+}
+
 function epicTabNames(
   tabsById: Readonly<Record<string, EpicViewTab | undefined>>,
   epicId: string,
@@ -619,30 +658,33 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
       pendingChatTitles: {},
 
       openEpicTab: (epicId, name) => {
-        const tabId = uuidv4();
-        const tab: EpicViewTab = {
-          tabId,
-          epicId,
-          name: name ?? UNTITLED_EPIC_TITLE,
-        };
+        const tab = createEpicViewTab(epicId, name);
         set((state) => ({
-          tabsById: { ...state.tabsById, [tabId]: tab },
-          canvasByTabId: {
-            ...state.canvasByTabId,
-            [tabId]: createEmptyCanvas(),
-          },
-          openTabOrder: [...state.openTabOrder, tabId],
-          activeTabId: tabId,
-          mostRecentTabIdByEpicId: {
-            ...state.mostRecentTabIdByEpicId,
-            [epicId]: tabId,
-          },
-          artifactTreeByEpicId:
-            epicId in state.artifactTreeByEpicId
-              ? state.artifactTreeByEpicId
-              : { ...state.artifactTreeByEpicId, [epicId]: [] },
+          ...appendedEpicTabState(state, tab),
+          activeTabId: tab.tabId,
         }));
-        return tabId;
+        return tab.tabId;
+      },
+
+      openEpicTabInBackground: (epicId, name) => {
+        const existing = resolveTabIdForEpic(get(), epicId);
+        if (existing !== null) {
+          // Reveal a preserved-but-hidden tab in the strip without activating
+          // it; an already-visible tab is left exactly where it is. The
+          // functional updater is the single guard - it no-ops (returns the
+          // same state, which Zustand bails on) when the tab is already shown.
+          set((current) =>
+            current.openTabOrder.includes(existing)
+              ? current
+              : { openTabOrder: [...current.openTabOrder, existing] },
+          );
+          return existing;
+        }
+        const tab = createEpicViewTab(epicId, name);
+        // activeTabId is intentionally left untouched - the tab opens behind
+        // the current surface and never steals focus.
+        set((current) => appendedEpicTabState(current, tab));
+        return tab.tabId;
       },
 
       closeTab: (tabId) => {
@@ -962,7 +1004,7 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
         return state.openEpicTab(epicId, name ?? UNTITLED_EPIC_TITLE);
       },
 
-      firstTabIdForEpic: (epicId) => resolveTabIdForEpic(get(), epicId),
+      resolveTabIdForEpic: (epicId) => resolveTabIdForEpic(get(), epicId),
 
       openTileInTab: (tabId, node) => {
         set((state) =>
