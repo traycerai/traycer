@@ -73,7 +73,10 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
   }, [binding, auth, identityKey]);
   useCloseWsStreamClientOnReplace(value?.wsStreamClient ?? null);
   useStreamWakeReconnect(value?.wsStreamClient ?? null);
-  useReconnectStreamOnEndpointChange(value?.wsStreamClient ?? null, transportKey);
+  useReconnectStreamOnEndpointChange(
+    value?.wsStreamClient ?? null,
+    transportKey,
+  );
 
   return (
     <StreamRuntimeContext.Provider value={value}>
