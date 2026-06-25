@@ -118,6 +118,15 @@ export interface HostLifecycleOptions {
    * surfaces `HOST_NOT_READY` without blocking the suite.
    */
   readonly readyTimeoutMs: number | undefined;
+  /**
+   * Override for the websocket-reachability probe. Production passes
+   * `undefined` and uses the real TCP connect (`canReachHostWebsocketUrl`);
+   * tests inject a deterministic stub so reachability transitions don't depend
+   * on binding/rebinding real sockets (a CI-flaky timing dependency).
+   */
+  readonly reachabilityProbe:
+    | ((websocketUrl: string) => Promise<boolean>)
+    | undefined;
 }
 
 /**
@@ -427,7 +436,8 @@ export class HostLifecycle extends EventEmitter {
     if (!isCurrentHostWebsocketUrl(raw.websocketUrl)) {
       return null;
     }
-    if (!(await canReachHostWebsocketUrl(raw.websocketUrl))) {
+    const probe = this.options.reachabilityProbe ?? canReachHostWebsocketUrl;
+    if (!(await probe(raw.websocketUrl))) {
       return null;
     }
     return withConfiguredHostName(this.options.layout, raw);

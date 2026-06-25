@@ -26,6 +26,7 @@ function makeDeps(focused: boolean) {
   return {
     isAnyWindowFocused: () => focused,
     focusPrimaryWindow: vi.fn(),
+    installBlockedReason: () => null,
   };
 }
 
@@ -33,6 +34,15 @@ const originalResourcesPathDescriptor = Object.getOwnPropertyDescriptor(
   process,
   "resourcesPath",
 );
+const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(
+  process,
+  "platform",
+);
+
+function setPlatform(value: string): void {
+  Object.defineProperty(process, "platform", { configurable: true, value });
+}
+
 const originalPrivateUpdateRepo = process.env.VITE_TRAYCER_DESKTOP_UPDATE_REPO;
 const originalPrivateUpdateToken =
   process.env.VITE_TRAYCER_DESKTOP_UPDATE_TOKEN;
@@ -45,6 +55,9 @@ beforeEach(() => {
     value: "/tmp/traycer-test-resources",
     writable: true,
   });
+  // Default to macOS so the read-only-volume message mapping is exercised;
+  // platform-specific tests override this.
+  setPlatform("darwin");
 });
 
 afterEach(() => {
@@ -56,6 +69,9 @@ afterEach(() => {
       "resourcesPath",
       originalResourcesPathDescriptor,
     );
+  }
+  if (originalPlatformDescriptor !== undefined) {
+    Object.defineProperty(process, "platform", originalPlatformDescriptor);
   }
   vi.resetModules();
   vi.restoreAllMocks();
@@ -217,6 +233,56 @@ describe("desktop app updater", () => {
 
     expect(autoUpdater.quitAndInstall).toHaveBeenCalledWith(false, true);
     expect(updater.isInstallingUpdate()).toBe(true);
+  });
+
+  it("surfaces an install failure that arrives after the user chose Restart", async () => {
+    const { autoUpdater, updater } = await loadUpdater();
+    autoUpdater.checkForUpdates.mockImplementation(() => {
+      autoUpdater.emit("update-available", { version: "2.0.0" });
+      return Promise.resolve(null);
+    });
+    await updater.installAutoUpdater(true, makeDeps(true));
+    await updater.checkForUpdatesNow(false, "automatic");
+    autoUpdater.emit("update-downloaded", { version: "2.0.0" });
+    updater.installDownloadedUpdate();
+    expect(updater.isInstallingUpdate()).toBe(true);
+
+    // quitAndInstall fails asynchronously (e.g. macOS read-only volume). This
+    // must NOT be swallowed by the "ready" guard - the user needs feedback and
+    // a chance to retry.
+    autoUpdater.emit(
+      "error",
+      new Error("Cannot update while running on a read-only volume."),
+    );
+
+    expect(updater.getAppUpdateSnapshot()).toMatchObject({
+      status: "error",
+      errorMessage:
+        "Move Traycer to your Applications folder to install updates.",
+    });
+    expect(updater.isInstallingUpdate()).toBe(false);
+  });
+
+  it("does not show the macOS 'move to Applications' message off macOS", async () => {
+    setPlatform("win32");
+    const { autoUpdater, updater } = await loadUpdater();
+    autoUpdater.checkForUpdates.mockImplementation(() => {
+      autoUpdater.emit("update-available", { version: "2.0.0" });
+      return Promise.resolve(null);
+    });
+    await updater.installAutoUpdater(true, makeDeps(true));
+    await updater.checkForUpdatesNow(false, "automatic");
+    autoUpdater.emit("update-downloaded", { version: "2.0.0" });
+    updater.installDownloadedUpdate();
+
+    autoUpdater.emit(
+      "error",
+      new Error("Cannot update while running on a read-only volume."),
+    );
+
+    const message = updater.getAppUpdateSnapshot().errorMessage ?? "";
+    expect(message).not.toContain("Applications folder");
+    expect(updater.getAppUpdateSnapshot().status).toBe("error");
   });
 
   it("does not flag an install when no update is ready to restart", async () => {
@@ -401,6 +467,29 @@ describe("desktop app updater", () => {
       latestVersion: "2.0.0",
       downloadProgress: null,
     });
+  });
+
+  it("blocks downloads and surfaces the reason when the location is read-only", async () => {
+    const { autoUpdater, updater } = await loadUpdater();
+    autoUpdater.checkForUpdates.mockImplementation(() => {
+      autoUpdater.emit("update-available", { version: "2.0.0" });
+      return Promise.resolve(null);
+    });
+    await updater.installAutoUpdater(true, {
+      isAnyWindowFocused: () => true,
+      focusPrimaryWindow: vi.fn(),
+      installBlockedReason: () => "Move Traycer to your Applications folder.",
+    });
+    await updater.checkForUpdatesNow(false, "automatic");
+    expect(updater.getAppUpdateSnapshot()).toMatchObject({
+      status: "available",
+      installBlockedReason: "Move Traycer to your Applications folder.",
+    });
+
+    updater.startUpdateDownload();
+
+    expect(autoUpdater.downloadUpdate).not.toHaveBeenCalled();
+    expect(updater.getAppUpdateSnapshot().status).toBe("available");
   });
 
   it("downloads only on user request and tracks whole-percent progress", async () => {

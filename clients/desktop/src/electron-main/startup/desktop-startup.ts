@@ -40,6 +40,11 @@ import {
   installAutoUpdater,
   isInstallingUpdate,
 } from "../app/updater";
+import {
+  isUpdateBlockedByLocation,
+  maybePromptRelocateToApplications,
+  UPDATE_BLOCKED_LOCATION_REASON,
+} from "../app/relocate-to-applications";
 import { WindowRegistry } from "../windows/window-registry";
 import {
   DesktopStateStore,
@@ -319,6 +324,7 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
     bundledBinaryPath: null,
     label: hostLabel,
     readyTimeoutMs: undefined,
+    reachabilityProbe: undefined,
   });
   const support = new DesktopSupportService({
     appName: APP_DISPLAY_NAME,
@@ -484,7 +490,17 @@ function runDeferred(state: BootState, services: AppServices): void {
       focusPrimaryWindow: () => {
         services.windowRegistry.focusMru();
       },
+      // Updates can't apply from a read-only location: tell the renderer so it
+      // disables the download affordance with an explanation. Derived lazily so
+      // it reflects the live location (e.g. after the relocation prompt) rather
+      // than a value frozen at install time.
+      installBlockedReason: () =>
+        isUpdateBlockedByLocation() ? UPDATE_BLOCKED_LOCATION_REASON : null,
     }),
+  );
+
+  void timed("deferred", "relocate-prompt", () =>
+    maybePromptRelocateToApplications(),
   );
 
   void timed("deferred", "global-shortcuts", () =>
@@ -609,6 +625,16 @@ function wireAppLifecycle(state: BootState, services: LifecycleServices): void {
           log.warn("[host-auto-update] quit reconcile threw", err),
         )
         .finally(() => {
+          // If `quitAndInstall` failed in the meantime (e.g. read-only volume),
+          // `isInstallingUpdate()` is now false and the failure was surfaced as
+          // an error - don't quit out from under the user; let them read it and
+          // retry. Only the still-pending install proceeds to quit.
+          if (!isInstallingUpdate()) {
+            log.info(
+              "[desktop] before-quit - install failed during reconcile, staying open",
+            );
+            return;
+          }
           quitAuthorized = true;
           app.quit();
         });
