@@ -1,4 +1,11 @@
-import { useEffect, useState, type ReactNode } from "react";
+import {
+  cloneElement,
+  useEffect,
+  useId,
+  useState,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 import { Bug } from "lucide-react";
 import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -234,11 +241,17 @@ function Field({
 }: {
   label: string;
   required?: boolean;
-  children: ReactNode;
+  children: ReactElement<{ id?: string }>;
 }): ReactNode {
+  // Associate the visible label with its control so screen readers announce a
+  // name and clicking the label focuses the input. The control is passed as a
+  // single element child, so thread a generated id onto it and the label's
+  // htmlFor rather than asking every call site to wire its own.
+  const id = useId();
   return (
     <div className="grid gap-1.5">
       <Label
+        htmlFor={id}
         className={cn(
           "text-ui-sm",
           required && "after:ml-0.5 after:text-destructive after:content-['*']",
@@ -246,7 +259,7 @@ function Field({
       >
         {label}
       </Label>
-      {children}
+      {cloneElement(children, { id })}
     </div>
   );
 }
