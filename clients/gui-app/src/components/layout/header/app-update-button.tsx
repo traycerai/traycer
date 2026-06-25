@@ -23,19 +23,28 @@ export function AppUpdateHeaderButton() {
   }
 
   if (snapshot.status === "available") {
-    const label =
+    // Updates can't be installed from a read-only location (macOS app outside
+    // /Applications): keep the affordance visible but disabled, with the reason
+    // as the tooltip, instead of letting a click fail at install time.
+    const blockedReason = snapshot.installBlockedReason;
+    const versionLabel =
       snapshot.latestVersion === null
         ? "Download update"
         : `Download update v${snapshot.latestVersion}`;
+    const label = blockedReason === null ? versionLabel : blockedReason;
     return (
       <TooltipWrapper label={label} side="top" sideOffset={6} align={undefined}>
         <Button
           type="button"
           variant="ghost"
           size="icon-sm"
+          disabled={blockedReason !== null}
           aria-label={label}
           data-testid="app-update-header-button"
-          className="rounded-full bg-sky-500 text-white hover:bg-sky-600 hover:text-white"
+          className={cn(
+            "rounded-full bg-sky-500 text-white hover:bg-sky-600 hover:text-white",
+            blockedReason !== null && "disabled:opacity-60",
+          )}
           onClick={() => {
             void bridge.downloadUpdate();
           }}
@@ -71,19 +80,28 @@ export function AppUpdateHeaderButton() {
     return null;
   }
 
-  const label =
+  // Defensive: a "ready" snapshot shouldn't co-occur with a blocked location
+  // (the download is gated), but if it ever does, never offer a restart that
+  // can't install - explain instead.
+  const readyBlockedReason = snapshot.installBlockedReason;
+  const restartLabel =
     snapshot.latestVersion === null
       ? "Restart to update"
       : `Restart to update to v${snapshot.latestVersion}`;
+  const label = readyBlockedReason ?? restartLabel;
   return (
     <TooltipWrapper label={label} side="top" sideOffset={6} align={undefined}>
       <Button
         type="button"
         variant="ghost"
         size="icon-sm"
+        disabled={readyBlockedReason !== null}
         aria-label={label}
         data-testid="app-update-header-button"
-        className="rounded-full bg-emerald-500 text-white hover:bg-emerald-600 hover:text-white"
+        className={cn(
+          "rounded-full bg-emerald-500 text-white hover:bg-emerald-600 hover:text-white",
+          readyBlockedReason !== null && "disabled:opacity-60",
+        )}
         onClick={openConfirmRestartUpdate}
       >
         <Check className="size-4" aria-hidden />

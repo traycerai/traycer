@@ -66,6 +66,7 @@ const IDLE_SNAPSHOT: DesktopAppUpdateSnapshot = {
   currentVersion: "1.0.0",
   latestVersion: null,
   downloadProgress: null,
+  installBlockedReason: null,
   errorMessage: null,
   lastCheckedAt: null,
   lastCheckIntent: null,
@@ -144,6 +145,7 @@ function readySnapshot(sequence: number): DesktopAppUpdateSnapshot {
     currentVersion: "1.0.0",
     latestVersion: "1.2.3",
     downloadProgress: null,
+    installBlockedReason: null,
     errorMessage: null,
     lastCheckedAt: "2026-06-15T00:00:00.000Z",
     lastCheckIntent: "automatic",
@@ -247,6 +249,40 @@ describe("desktop app update UI", () => {
     renderWithHost(<AppUpdateHeaderButton />, bridge);
 
     await screen.findByRole("button", { name: /Downloading 42%/i });
+  });
+
+  it("disables the download button with a reason when updates are blocked", async () => {
+    const bridge = new FakeAppUpdatesBridge({
+      ...availableSnapshot(1),
+      installBlockedReason:
+        "Move Traycer to your Applications folder to install updates.",
+    });
+    renderWithHost(<AppUpdateHeaderButton />, bridge);
+
+    const button = await screen.findByRole("button", {
+      name: /Move Traycer to your Applications folder/i,
+    });
+    expect(button.hasAttribute("disabled")).toBe(true);
+
+    fireEvent.click(button);
+    expect(bridge.downloadUpdate).not.toHaveBeenCalled();
+  });
+
+  it("disables the restart tick (no confirm modal) when a ready update is blocked", async () => {
+    const bridge = new FakeAppUpdatesBridge({
+      ...readySnapshot(1),
+      installBlockedReason:
+        "Move Traycer to your Applications folder to install updates.",
+    });
+    renderWithHost(<AppUpdateHeaderButton />, bridge);
+
+    const button = await screen.findByRole("button", {
+      name: /Move Traycer to your Applications folder/i,
+    });
+    expect(button.hasAttribute("disabled")).toBe(true);
+
+    fireEvent.click(button);
+    expect(useDesktopDialogStore.getState().activeDialog).toBeNull();
   });
 
   it("opens the restart-confirmation modal when the ready tick is clicked", async () => {
@@ -371,6 +407,36 @@ describe("desktop app update UI", () => {
     }
     download();
     expect(bridge.downloadUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it("explains why a blocked update can't be installed instead of offering Download", async () => {
+    const bridge = new FakeAppUpdatesBridge(IDLE_SNAPSHOT);
+    renderWithHost(<AppUpdateToastController />, bridge);
+    await waitFor(() => {
+      expect(bridge.subscriptionCount()).toBe(1);
+    });
+
+    act(() => {
+      bridge.emit({
+        ...availableSnapshot(1),
+        installBlockedReason:
+          "Move Traycer to your Applications folder to install updates.",
+      });
+    });
+    await waitFor(() => {
+      expect(toastMock).toHaveBeenCalledWith(
+        "Update available",
+        expect.objectContaining({
+          id: "traycer-app-update",
+          description:
+            "Move Traycer to your Applications folder to install updates.",
+        }),
+      );
+    });
+
+    // No actionable Download was offered.
+    expect(toastMock.actions.action).toBeNull();
+    expect(bridge.downloadUpdate).not.toHaveBeenCalled();
   });
 
   it("shows download progress in a loading toast", async () => {

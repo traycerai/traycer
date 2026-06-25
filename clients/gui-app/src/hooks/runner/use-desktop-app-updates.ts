@@ -12,6 +12,7 @@ const DESKTOP_APP_UPDATE_IDLE_SNAPSHOT: DesktopAppUpdateSnapshot = {
   currentVersion: "",
   latestVersion: null,
   downloadProgress: null,
+  installBlockedReason: null,
   errorMessage: null,
   lastCheckedAt: null,
   lastCheckIntent: null,
@@ -136,6 +137,7 @@ function sameSnapshot(
     left.currentVersion === right.currentVersion &&
     left.latestVersion === right.latestVersion &&
     left.downloadProgress === right.downloadProgress &&
+    left.installBlockedReason === right.installBlockedReason &&
     left.errorMessage === right.errorMessage &&
     left.lastCheckedAt === right.lastCheckedAt &&
     left.lastCheckIntent === right.lastCheckIntent

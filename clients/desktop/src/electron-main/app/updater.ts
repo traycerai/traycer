@@ -3,6 +3,7 @@ import { autoUpdater } from "electron-updater";
 import { access } from "node:fs/promises";
 import { join } from "node:path";
 import { log } from "./logger";
+import { UPDATE_BLOCKED_LOCATION_REASON } from "./relocate-to-applications";
 import { showSimpleNotification } from "../notifications";
 import type {
   DesktopAppUpdateCheckIntent,
@@ -39,6 +40,10 @@ interface AppUpdateSnapshotPatch {
 export interface AppUpdaterDeps {
   readonly isAnyWindowFocused: () => boolean;
   readonly focusPrimaryWindow: () => void;
+  // Returns the user-facing reason when this install can't apply updates from
+  // its current location (macOS app outside /Applications), else null. Evaluated
+  // on each snapshot so it tracks the live location rather than a frozen value.
+  readonly installBlockedReason: () => string | null;
 }
 
 const AUTOMATIC_RESUME_CHECK_DEBOUNCE_MS = 30_000;
@@ -74,11 +79,21 @@ let currentSnapshot: DesktopAppUpdateSnapshot = {
   currentVersion: CURRENT_VERSION,
   latestVersion: null,
   downloadProgress: null,
+  installBlockedReason: null,
   errorMessage: null,
   lastCheckedAt: null,
   lastCheckIntent: null,
 };
+// Resolver for the install-blocked reason, injected at `installAutoUpdater` and
+// evaluated fresh for each snapshot (so it tracks the live location).
+let resolveInstallBlockedReason: (() => string | null) | null = null;
 let updaterDeps: AppUpdaterDeps | null = null;
+
+function currentInstallBlockedReason(): string | null {
+  return resolveInstallBlockedReason === null
+    ? null
+    : resolveInstallBlockedReason();
+}
 let installed = false;
 let checkInFlight = false;
 let checkIntent: DesktopAppUpdateCheckIntent | null = null;
@@ -111,6 +126,11 @@ export async function installAutoUpdater(
   }
   installed = true;
   updaterDeps = deps;
+  resolveInstallBlockedReason = deps.installBlockedReason;
+  currentSnapshot = {
+    ...currentSnapshot,
+    installBlockedReason: currentInstallBlockedReason(),
+  };
   autoUpdater.logger = log;
   // Never download on our own - the user starts the download from the header
   // button (see `startUpdateDownload`). We only check + surface availability.
@@ -308,6 +328,12 @@ export function checkForUpdatesAfterResume(isDev: boolean): void {
  * second call while already downloading is a no-op (re-asserts the state).
  */
 export function startUpdateDownload(): DesktopAppUpdateSnapshot {
+  // Updates can't be installed from this location (read-only volume), so never
+  // start a download that would fail at install time. The renderer also
+  // disables the trigger, but guard here too.
+  if (currentInstallBlockedReason() !== null) {
+    return currentSnapshot;
+  }
   if (currentSnapshot.status === "downloading" || downloadInProgress) {
     return currentSnapshot;
   }
@@ -435,9 +461,12 @@ function notifyUpdateWhenUnfocused(
   const focus = updaterDeps.focusPrimaryWindow;
   const versionLabel = version === null ? "" : ` v${version}`;
   if (kind === "available") {
+    // When updates can't be installed from this location, point at the fix
+    // instead of telling the user to download something they can't apply.
     showSimpleNotification(
       "Traycer update available",
-      `Open Traycer to download${versionLabel}.`,
+      currentInstallBlockedReason() ??
+        `Open Traycer to download${versionLabel}.`,
       focus,
     );
     return;
@@ -462,6 +491,7 @@ function emitSnapshot(patch: AppUpdateSnapshotPatch): DesktopAppUpdateSnapshot {
     ...currentSnapshot,
     sequence,
     status: patch.status ?? currentSnapshot.status,
+    installBlockedReason: currentInstallBlockedReason(),
     latestVersion:
       patch.latestVersion === undefined
         ? currentSnapshot.latestVersion
@@ -536,6 +566,21 @@ function handledNoStableReleaseForPrerelease(error: unknown): boolean {
 }
 
 function handleUpdaterError(error: unknown): void {
+  // An error after the user chose "Restart" (quitAndInstall) must NOT be
+  // swallowed by the "ready" guard below: the install failed, the app won't
+  // relaunch, and the user is left staring at a confirmation that did nothing
+  // (e.g. macOS "read-only volume" / App Translocation). Surface it and clear
+  // the install flag so they can retry once the cause is fixed.
+  if (installingUpdate) {
+    installingUpdate = false;
+    emitSnapshot({
+      status: "error",
+      errorMessage: readErrorMessage(error),
+      lastCheckedAt: new Date().toISOString(),
+      lastCheckIntent: "manual",
+    });
+    return;
+  }
   if (currentSnapshot.status === "ready") {
     return;
   }
@@ -597,6 +642,17 @@ function readErrorMessage(error: unknown): string {
 // below only pick which reassuring message to show, not whether to sanitize.
 function formatUserVisibleUpdateError(rawMessage: string): string {
   const message = rawMessage.toLowerCase();
+  // macOS-only: App Translocation / read-only volume - the user is running from
+  // a read-only path so the installer can't replace the app. The remedy ("move
+  // to Applications") is macOS-specific, so only map it on darwin; on
+  // Windows/Linux a read-only/permission failure falls through to the generic
+  // install message below.
+  if (
+    process.platform === "darwin" &&
+    includesAny(message, READ_ONLY_VOLUME_ERROR_HINTS)
+  ) {
+    return UPDATE_BLOCKED_LOCATION_REASON;
+  }
   if (includesAny(message, CONNECTIVITY_ERROR_HINTS)) {
     return UPDATE_ERROR_OFFLINE_MESSAGE;
   }
@@ -612,6 +668,19 @@ function formatUserVisibleUpdateError(rawMessage: string): string {
 function includesAny(message: string, hints: readonly string[]): boolean {
   return hints.some((hint) => message.includes(hint));
 }
+
+// macOS Squirrel.Mac refuses to apply an update when the running app sits on a
+// read-only volume - typically Gatekeeper App Translocation running a
+// quarantined copy from a randomized read-only mount. User-fixable by moving
+// the app to /Applications and reopening it.
+const READ_ONLY_VOLUME_ERROR_HINTS: readonly string[] = [
+  "read-only volume",
+  "read only volume",
+  "move the application",
+  "translocat",
+  "app translocation",
+  "downloads directory",
+];
 
 // Socket/DNS/proxy level failures the user can usually fix themselves (Wi-Fi,
 // VPN, captive portal). Covers Chromium `net::ERR_*`, Node errno codes, and

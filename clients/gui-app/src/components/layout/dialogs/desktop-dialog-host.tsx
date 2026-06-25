@@ -1,4 +1,4 @@
-import { useMemo, type ReactNode } from "react";
+import { useEffect, useMemo, type ReactNode } from "react";
 import { resolveDesktopSupportBridge } from "@/lib/windows/desktop-capabilities";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
@@ -22,6 +22,19 @@ export function DesktopDialogHost(): ReactNode {
   const activeDialog = useDesktopDialogStore((state) => state.activeDialog);
   const close = useDesktopDialogStore((state) => state.close);
   const openEpicInNewWindowFlow = useEpicOpenInNewWindowFlow();
+
+  // The restart-confirm modal only makes sense while an update is "ready". If
+  // the install fails (status flips away from "ready"), clear the dialog from
+  // the store - otherwise the stale `activeDialog` would silently reopen the
+  // modal the next time a download settles back to "ready".
+  useEffect(() => {
+    if (
+      activeDialog === "confirm-restart-update" &&
+      appUpdateSnapshot.status !== "ready"
+    ) {
+      close();
+    }
+  }, [activeDialog, appUpdateSnapshot.status, close]);
 
   return (
     <>
@@ -60,7 +73,11 @@ export function DesktopDialogHost(): ReactNode {
         />
       ) : null}
       {activeDialog === "confirm-restart-update" &&
-      appUpdatesBridge !== null ? (
+      appUpdatesBridge !== null &&
+      appUpdateSnapshot.status === "ready" ? (
+        // Gated on "ready" so a failed install (status flips to "error", e.g.
+        // macOS read-only volume) auto-dismisses the modal and reveals the
+        // error toast instead of leaving a confirmation that did nothing.
         <RestartUpdateDialog
           open
           onOpenChange={(open) => {
