@@ -16,6 +16,7 @@ import { AttachmentGroupNode } from "./extensions/attachment-group-extension";
 import { ImageAttachmentNode } from "./extensions/image-attachment-extension";
 import { ChatListKeymap } from "./extensions/chat-list-keymap";
 import { createChatPasteHandler } from "./extensions/chat-paste-handler";
+import { ChatCopySerializer } from "./extensions/chat-copy-serializer";
 
 export interface BuildComposerExtensionsArgs {
   readonly pickerStore: ComposerPickerStore;
@@ -57,5 +58,8 @@ export function buildComposerExtensions(
       pickerStore: args.pickerStore,
     }),
     createChatPasteHandler({ pickerStore: args.pickerStore }),
+    // Cmd+C / Cmd+X -> structured plain text (list markers, mentions, slash
+    // commands) instead of ProseMirror's default blank-line-joined textContent.
+    ChatCopySerializer,
   ];
 }
