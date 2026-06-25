@@ -547,6 +547,7 @@ export function createOpenEpicStore(
   type AttachmentReadWaiter = {
     readonly hash: string;
     readonly onChange: () => void;
+    readonly settle: (bytes: Uint8Array | null) => void;
     observedMap: Y.Map<unknown> | null;
   };
   const attachmentReadWaiters = new Set<AttachmentReadWaiter>();
@@ -1874,6 +1875,13 @@ export function createOpenEpicStore(
           dispose: () => {
             if (disposed) return;
             disposed = true;
+            // Settle any in-flight attachment reads (resolve null) so their
+            // observers unbind from the live doc and their promises don't
+            // dangle forever - the caller's abort signal isn't guaranteed to
+            // fire when a session is disposed by the registry's MRU prune.
+            // Must run before destroyReplica so the unobserve targets a live
+            // doc.
+            [...attachmentReadWaiters].forEach((waiter) => waiter.settle(null));
             unsubscribeAuthUserId?.();
             unsubscribeAuthUserId = null;
             projector.detach();
@@ -1904,17 +1912,17 @@ export function createOpenEpicStore(
                 observedMap: null,
                 onChange: () => {
                   const bytes = waiter.observedMap?.get(hash);
-                  if (bytes instanceof Uint8Array) settle(bytes);
+                  if (bytes instanceof Uint8Array) waiter.settle(bytes);
+                },
+                settle: (bytes: Uint8Array | null): void => {
+                  if (!attachmentReadWaiters.has(waiter)) return;
+                  attachmentReadWaiters.delete(waiter);
+                  waiter.observedMap?.unobserve(waiter.onChange);
+                  signal.removeEventListener("abort", onAbort);
+                  resolve(bytes);
                 },
               };
-              const settle = (bytes: Uint8Array | null): void => {
-                if (!attachmentReadWaiters.has(waiter)) return;
-                attachmentReadWaiters.delete(waiter);
-                waiter.observedMap?.unobserve(waiter.onChange);
-                signal.removeEventListener("abort", onAbort);
-                resolve(bytes);
-              };
-              const onAbort = (): void => settle(null);
+              const onAbort = (): void => waiter.settle(null);
               signal.addEventListener("abort", onAbort);
               attachmentReadWaiters.add(waiter);
               bindAttachmentWaiter(waiter);

@@ -2281,4 +2281,37 @@ describe("createOpenEpicStore", () => {
       opened.dispose();
     });
   });
+
+  it("settles an in-flight attachment read when disposed without an abort", async () => {
+    const { factory } = fakeFactory();
+    const opened = createOpenEpicStore({
+      epicId: "epic-a",
+      streamClientFactory: factory,
+      userId: null,
+      onAuthError: null,
+    });
+
+    // Park a waiter on a hash that has not synced in yet, then dispose the
+    // session without firing the caller's abort signal - the path the
+    // registry's MRU prune takes. The promise must still resolve (null) and
+    // the waiter's observer must unbind, rather than dangling on the
+    // destroyed doc forever.
+    const controller = new AbortController();
+    let settled = false;
+    const pending = opened.store
+      .getState()
+      .readAttachmentBytes("missing-hash", controller.signal)
+      .then((bytes) => {
+        settled = true;
+        return bytes;
+      });
+
+    opened.dispose();
+
+    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(settled).toBe(true);
+    expect(await pending).toBeNull();
+  });
 });
