@@ -1,8 +1,6 @@
-import type { RateLimitUsageRequest } from "@traycer/protocol/host";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
-
-const RATE_LIMIT_USAGE_REQUEST: RateLimitUsageRequest = {};
+import { useAccountContextStore } from "@/stores/auth/account-context-store";
 
 /**
  * Live artifact rate-limit usage for the default host. Default-host scoped, like
@@ -13,10 +11,11 @@ const RATE_LIMIT_USAGE_REQUEST: RateLimitUsageRequest = {};
  */
 export function useHostRateLimitUsageQuery() {
   const client = useHostClient();
+  const accountContext = useAccountContextStore((s) => s.accountContext);
   return useHostQuery<HostRpcRegistry, "host.getRateLimitUsage">({
     client,
     method: "host.getRateLimitUsage",
-    params: RATE_LIMIT_USAGE_REQUEST,
+    params: { accountContext },
     options: {
       retry: false,
     },
