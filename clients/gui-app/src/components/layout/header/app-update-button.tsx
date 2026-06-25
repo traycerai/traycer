@@ -34,23 +34,28 @@ export function AppUpdateHeaderButton() {
     const label = blockedReason === null ? versionLabel : blockedReason;
     return (
       <TooltipWrapper label={label} side="top" sideOffset={6} align={undefined}>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          disabled={blockedReason !== null}
-          aria-label={label}
-          data-testid="app-update-header-button"
-          className={cn(
-            "rounded-full bg-sky-500 text-white hover:bg-sky-600 hover:text-white",
-            blockedReason !== null && "disabled:opacity-60",
-          )}
-          onClick={() => {
-            void bridge.downloadUpdate();
-          }}
-        >
-          <Download className="size-4" aria-hidden />
-        </Button>
+        {/* Trigger off the span, not the Button: a disabled Button has
+            `pointer-events-none`, so it would never fire the hover that opens
+            the (block-reason) tooltip. */}
+        <span className="inline-flex">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            disabled={blockedReason !== null}
+            aria-label={label}
+            data-testid="app-update-header-button"
+            className={cn(
+              "rounded-full bg-sky-500 text-white hover:bg-sky-600 hover:text-white",
+              blockedReason !== null && "disabled:opacity-60",
+            )}
+            onClick={() => {
+              void bridge.downloadUpdate();
+            }}
+          >
+            <Download className="size-4" aria-hidden />
+          </Button>
+        </span>
       </TooltipWrapper>
     );
   }
@@ -61,17 +66,21 @@ export function AppUpdateHeaderButton() {
       progress === null ? "Downloading update" : `Downloading ${progress}%`;
     return (
       <TooltipWrapper label={label} side="top" sideOffset={6} align={undefined}>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          disabled
-          aria-label={label}
-          data-testid="app-update-header-button"
-          className="rounded-full text-sky-600 opacity-100 disabled:opacity-100 dark:text-sky-300"
-        >
-          <DownloadProgressRing progress={progress} />
-        </Button>
+        {/* Span trigger: the Button is always disabled here, so the tooltip
+            (download %) must hang off an element that still receives hover. */}
+        <span className="inline-flex">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            disabled
+            aria-label={label}
+            data-testid="app-update-header-button"
+            className="rounded-full text-sky-600 opacity-100 disabled:opacity-100 dark:text-sky-300"
+          >
+            <DownloadProgressRing progress={progress} />
+          </Button>
+        </span>
       </TooltipWrapper>
     );
   }
@@ -91,21 +100,25 @@ export function AppUpdateHeaderButton() {
   const label = readyBlockedReason ?? restartLabel;
   return (
     <TooltipWrapper label={label} side="top" sideOffset={6} align={undefined}>
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon-sm"
-        disabled={readyBlockedReason !== null}
-        aria-label={label}
-        data-testid="app-update-header-button"
-        className={cn(
-          "rounded-full bg-emerald-500 text-white hover:bg-emerald-600 hover:text-white",
-          readyBlockedReason !== null && "disabled:opacity-60",
-        )}
-        onClick={openConfirmRestartUpdate}
-      >
-        <Check className="size-4" aria-hidden />
-      </Button>
+      {/* Span trigger so the block-reason tooltip still opens when the Button
+          is disabled (disabled Buttons have `pointer-events-none`). */}
+      <span className="inline-flex">
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          disabled={readyBlockedReason !== null}
+          aria-label={label}
+          data-testid="app-update-header-button"
+          className={cn(
+            "rounded-full bg-emerald-500 text-white hover:bg-emerald-600 hover:text-white",
+            readyBlockedReason !== null && "disabled:opacity-60",
+          )}
+          onClick={openConfirmRestartUpdate}
+        >
+          <Check className="size-4" aria-hidden />
+        </Button>
+      </span>
     </TooltipWrapper>
   );
 }

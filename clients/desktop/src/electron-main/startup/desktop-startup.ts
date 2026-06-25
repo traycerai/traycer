@@ -324,6 +324,7 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
     bundledBinaryPath: null,
     label: hostLabel,
     readyTimeoutMs: undefined,
+    reachabilityProbe: undefined,
   });
   const support = new DesktopSupportService({
     appName: APP_DISPLAY_NAME,

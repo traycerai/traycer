@@ -330,9 +330,11 @@ export function checkForUpdatesAfterResume(isDev: boolean): void {
 export function startUpdateDownload(): DesktopAppUpdateSnapshot {
   // Updates can't be installed from this location (read-only volume), so never
   // start a download that would fail at install time. The renderer also
-  // disables the trigger, but guard here too.
+  // disables the trigger, but guard here too. Re-emit so the live blocked
+  // reason (resolved lazily) reaches the renderer instead of returning a
+  // snapshot frozen at the last emit.
   if (currentInstallBlockedReason() !== null) {
-    return currentSnapshot;
+    return emitSnapshot({});
   }
   if (currentSnapshot.status === "downloading" || downloadInProgress) {
     return currentSnapshot;

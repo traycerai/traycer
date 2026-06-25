@@ -19,28 +19,6 @@ function listenOnEphemeralPort(): Promise<{ server: Server; port: number }> {
   });
 }
 
-function listenOnPort(port: number): Promise<Server> {
-  return new Promise((resolve, reject) => {
-    const server = createServer();
-    server.once("error", reject);
-    server.listen(port, "127.0.0.1", () => {
-      resolve(server);
-    });
-  });
-}
-
-function closeServer(server: Server): Promise<void> {
-  return new Promise((resolve, reject) => {
-    server.close((error) => {
-      if (error !== undefined) {
-        reject(error);
-        return;
-      }
-      resolve();
-    });
-  });
-}
-
 vi.mock("electron", () => ({
   app: { isPackaged: false, getAppPath: (): string => "/fake/app/path" },
 }));
@@ -157,6 +135,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       bundledBinaryPath: null,
       label: PRODUCTION_LABEL,
       readyTimeoutMs: 5_000,
+      reachabilityProbe: undefined,
     });
     const errors: { code: string }[] = [];
     lifecycle.on("error", (err) => errors.push({ code: err.code }));
@@ -193,6 +172,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       bundledBinaryPath: null,
       label: PRODUCTION_LABEL,
       readyTimeoutMs: 300,
+      reachabilityProbe: undefined,
     });
     const errors: { code: string; message: string }[] = [];
     lifecycle.on("error", (err) =>
@@ -245,6 +225,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       bundledBinaryPath: null,
       label: DEV_LABEL,
       readyTimeoutMs: 300,
+      reachabilityProbe: undefined,
     });
     const errors: { code: string }[] = [];
     lifecycle.on("error", (err) => errors.push({ code: err.code }));
@@ -296,6 +277,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       bundledBinaryPath: null,
       label: PRODUCTION_LABEL,
       readyTimeoutMs: 5_000,
+      reachabilityProbe: undefined,
     });
     const errors: { code: string }[] = [];
     lifecycle.on("error", (err) => errors.push({ code: err.code }));
@@ -339,6 +321,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       bundledBinaryPath: null,
       label: DEV_LABEL,
       readyTimeoutMs: 5_000,
+      reachabilityProbe: undefined,
     });
     const errors: { code: string }[] = [];
     lifecycle.on("error", (err) => errors.push({ code: err.code }));
@@ -383,6 +366,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       bundledBinaryPath: null,
       label: PRODUCTION_LABEL,
       readyTimeoutMs: 500,
+      reachabilityProbe: undefined,
     });
     const errors: { code: string }[] = [];
     lifecycle.on("error", (err) => errors.push({ code: err.code }));
@@ -427,6 +411,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       bundledBinaryPath: null,
       label: PRODUCTION_LABEL,
       readyTimeoutMs: 500,
+      reachabilityProbe: undefined,
     });
     const errors: { code: string }[] = [];
     lifecycle.on("error", (err) => errors.push({ code: err.code }));
@@ -455,22 +440,28 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       installRecordFile: join(dir, "install", "install.json"),
       environment: "production" as const,
     };
-    const initialListener = await listenOnEphemeralPort();
+    const websocketUrl = "ws://127.0.0.1:54321/rpc";
     await writeFile(
       layout.pidMetadataFile,
       JSON.stringify({
         hostId: "same-host",
-        websocketUrl: `ws://127.0.0.1:${initialListener.port}/rpc`,
+        websocketUrl,
         version: config.version,
         pid: 12345,
       }),
       "utf8",
     );
+    // Inject reachability so the reachable -> unreachable -> reachable
+    // transitions are deterministic rather than racing real socket
+    // bind/close/rebind on the same port (the CI flake).
+    let reachable = true;
     const lifecycle = new HostLifecycle({
       layout,
       bundledBinaryPath: null,
       label: PRODUCTION_LABEL,
       readyTimeoutMs: 5_000,
+      reachabilityProbe: (url) =>
+        Promise.resolve(url === websocketUrl && reachable),
     });
     const changes: Array<string | null> = [];
     lifecycle.on("change", (snapshot) => {
@@ -481,22 +472,16 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       expect(lifecycle.getSnapshot()?.hostId).toBe("same-host");
       expect(changes).toEqual(["same-host"]);
 
-      await closeServer(initialListener.server);
+      reachable = false;
       await lifecycle.reloadSnapshotFromDisk();
       expect(lifecycle.getSnapshot()).toBeNull();
       expect(changes).toEqual(["same-host", null]);
 
-      const restartedListener = await listenOnPort(initialListener.port);
-      try {
-        await lifecycle.reloadSnapshotFromDisk();
-        expect(lifecycle.getSnapshot()?.hostId).toBe("same-host");
-        expect(lifecycle.getSnapshot()?.websocketUrl).toBe(
-          `ws://127.0.0.1:${initialListener.port}/rpc`,
-        );
-        expect(changes).toEqual(["same-host", null, "same-host"]);
-      } finally {
-        await closeServer(restartedListener);
-      }
+      reachable = true;
+      await lifecycle.reloadSnapshotFromDisk();
+      expect(lifecycle.getSnapshot()?.hostId).toBe("same-host");
+      expect(lifecycle.getSnapshot()?.websocketUrl).toBe(websocketUrl);
+      expect(changes).toEqual(["same-host", null, "same-host"]);
     } finally {
       lifecycle.dispose();
       await rm(dir, { recursive: true, force: true });
@@ -530,6 +515,7 @@ describe("HostLifecycle.getServiceStatus", () => {
       bundledBinaryPath: null,
       label: PRODUCTION_LABEL,
       readyTimeoutMs: 5_000,
+      reachabilityProbe: undefined,
     });
     try {
       const status = await lifecycle.getServiceStatus();
@@ -567,6 +553,7 @@ describe("HostLifecycle.respawn (CLI subprocess)", () => {
         // Short timeout - `respawn` calls `waitForReady` after the CLI
         // step and we don't want the test to block waiting for pid.json.
         readyTimeoutMs: 50,
+        reachabilityProbe: undefined,
       }),
       cleanup: async () => {
         await tmp.then((d) => rm(d, { recursive: true, force: true }));
