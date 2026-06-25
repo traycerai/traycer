@@ -45,6 +45,7 @@ vi.mock("../../cli/traycer-cli", () => ({
 }));
 
 import {
+  canReachHostWebsocketUrl,
   HostLifecycle,
   isCurrentHostWebsocketUrl,
   PRODUCTION_LABEL,
@@ -100,6 +101,33 @@ describe("readPidMetadata", () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+// Directly exercises the real TCP probe that `HostLifecycle` uses by default
+// (`reachabilityProbe: undefined`). Deterministic - a single listener for the
+// reachable case, an immediate ECONNREFUSED on a freed port for the
+// unreachable case - without the close/rebind-same-port race that made the
+// orchestration test flaky.
+describe("canReachHostWebsocketUrl", () => {
+  it("returns true when something is accepting connections on the port", async () => {
+    const { server, port } = await listenOnEphemeralPort();
+    try {
+      expect(await canReachHostWebsocketUrl(`ws://127.0.0.1:${port}/rpc`)).toBe(
+        true,
+      );
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it("returns false when nothing is listening on the port", async () => {
+    // Bind to get an OS-assigned port, then free it so the connect is refused.
+    const { server, port } = await listenOnEphemeralPort();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    expect(await canReachHostWebsocketUrl(`ws://127.0.0.1:${port}/rpc`)).toBe(
+      false,
+    );
   });
 });
 
