@@ -27,7 +27,9 @@ describe("useCloudEpicTasksPagesStore", () => {
     const generation = cloudEpicTasksPageGeneration(IDENTITY);
     const first = page("a");
 
-    useCloudEpicTasksPagesStore.getState().appendPage(IDENTITY, generation, first);
+    useCloudEpicTasksPagesStore
+      .getState()
+      .appendPage(IDENTITY, generation, first);
 
     expect(pagesFor(IDENTITY)).toEqual([first]);
   });
@@ -66,6 +68,8 @@ describe("useCloudEpicTasksPagesStore", () => {
 
     useCloudEpicTasksPagesStore.getState().resetIdentity(IDENTITY);
 
-    expect(cloudEpicTasksPageGeneration("other-identity")).toBe(otherGeneration);
+    expect(cloudEpicTasksPageGeneration("other-identity")).toBe(
+      otherGeneration,
+    );
   });
 });

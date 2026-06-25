@@ -44,6 +44,15 @@ import {
   CURRENT_EPIC_VERSION,
   CURRENT_PHASE_VERSION,
 } from "@traycer-clients/shared/epic/epic-version";
+import { toast } from "sonner";
+
+vi.mock("sonner", () => ({
+  toast: {
+    success: vi.fn(),
+    error: vi.fn(),
+    message: vi.fn(),
+  },
+}));
 
 const localSnapshot: LocalHostSnapshot = {
   hostId: "desktop-pid-1",
@@ -301,6 +310,7 @@ describe("<EpicsList />", () => {
       pagesByIdentity: {},
       generationByIdentity: {},
     });
+    vi.mocked(toast.error).mockClear();
     vi.restoreAllMocks();
     restoreFetch();
   });
@@ -439,6 +449,64 @@ describe("<EpicsList />", () => {
       expectedDefaultHistoryRequest(undefined),
       expectedDefaultHistoryRequest("cursor-2"),
     ]);
+    result.cleanupOnly();
+  });
+
+  it("toasts and keeps the Show more button when the next-page fetch fails", async () => {
+    const result = mountSignedInEpicsList((params) => {
+      if (params.cursor === undefined) {
+        return {
+          tasks: [
+            {
+              epic: {
+                light: {
+                  id: "epic-p1",
+                  title: "Page One Epic",
+                  initialUserPrompt: "p",
+                  ticketCount: 0,
+                  specCount: 0,
+                  storyCount: 0,
+                  reviewCount: 0,
+                  status: "draft" as const,
+                  createdAt: Date.parse("2026-04-22T11:58:00.000Z"),
+                  updatedAt: Date.parse("2026-04-22T11:58:00.000Z"),
+                  createdBy: "u",
+                  version: "1",
+                },
+                permission: null,
+                repos: [],
+                workspaces: [],
+                roomInfo: null,
+              },
+            },
+          ],
+          hasMore: true,
+          nextCursor: "cursor-2",
+        };
+      }
+      // The "Show more" (next-page) request fails.
+      throw new HostRpcError({
+        code: "RPC_ERROR",
+        message: "next page unavailable",
+        method: "epic.listTasks",
+        requestId: "req-next",
+        fatalDetails: null,
+      });
+    });
+
+    await screen.findByText("Page One Epic");
+    const showMore = await screen.findByTestId("epics-list-show-more");
+    fireEvent.click(showMore);
+
+    // The failure is surfaced via toast (the hook only returns pagination
+    // state, so mutation.error never reaches the caller otherwise)...
+    await waitFor(() => {
+      expect(vi.mocked(toast.error)).toHaveBeenCalledTimes(1);
+    });
+    // ...and the list is unchanged - no stale page appended, button still there
+    // to retry (isFetchingNextPage cleared once the mutation settled).
+    expect(screen.getAllByTestId("epics-list-row")).toHaveLength(1);
+    expect(screen.getByTestId("epics-list-show-more")).not.toBeNull();
     result.cleanupOnly();
   });
 

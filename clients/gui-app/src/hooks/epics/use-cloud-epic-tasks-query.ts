@@ -8,6 +8,7 @@ import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { useAuthStore, type AuthStatus } from "@/stores/auth/auth-store";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { useHostMutation } from "@/hooks/host/use-host-query";
+import { toastFromHostError } from "@/lib/host-error-toast";
 import {
   useCloudEpicTasksPagesStore,
   cloudEpicTasksPageGeneration,
@@ -130,9 +131,18 @@ export function useCloudEpicTasksQuery(
       onSuccess: (page, variables) => {
         appendPage(variables.identity, variables.generation, page);
       },
+      onError: (error) => {
+        toastFromHostError(error, "Couldn't load more tasks.");
+      },
     },
   });
-  const isFetchingNextPage = nextPageMutation.isPending;
+  // Scope the in-flight flag to THIS identity: the mutation is hook-wide, so a
+  // "Show more" still resolving for a previous host/user/request scope must not
+  // block pagination once the scope changes (the late response still appends to
+  // its own identity's bucket via onSuccess).
+  const isFetchingNextPage =
+    nextPageMutation.isPending &&
+    nextPageMutation.variables.identity === identity;
   const mutateNextPage = nextPageMutation.mutate;
 
   const tasks = useMemo<readonly TaskLight[]>(() => {
