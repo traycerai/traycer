@@ -2168,6 +2168,51 @@ describe("useRenderedMessages", () => {
     expect(group.hasLaterOverlappingChanges).toBe(true);
   });
 
+  it("detects a later overlapping change across an intervening unrelated turn", () => {
+    // turn-1 edits app.ts, turn-2 edits an unrelated file, turn-3 edits app.ts
+    // again. The overlap for turn-1 is non-adjacent (it is separated from the
+    // later touch by turn-2), so the warning must still surface.
+    const manifest = checkpointManifest("turn-1", "/repo/src/app.ts");
+    const unrelatedManifest = checkpointManifest(
+      "turn-2",
+      "/repo/src/other.ts",
+    );
+    const laterManifest = checkpointManifest("turn-3", "/repo/src/app.ts");
+    const assistant: Message = {
+      ...assistantMessage("turn-1", 2000),
+      blocks: [fileChangeBlock("/repo/src/app.ts")],
+    };
+
+    const { result } = renderHook(() =>
+      useRenderedMessages(
+        {
+          messages: [assistant],
+          events: [
+            checkpointEvent(manifest),
+            checkpointEvent(unrelatedManifest),
+            checkpointEvent(laterManifest),
+          ],
+          pendingUserMessages: [],
+          liveAssistantMessage: null,
+          activeTurn: null,
+          runStatus: "idle",
+          ...BINDING,
+        },
+        displayContext,
+      ),
+    );
+
+    const segments = result.current[0]?.segments ?? [];
+    const group = segments[segments.length - 1];
+
+    expect(group.kind).toBe("file_change_group");
+    if (group.kind !== "file_change_group") {
+      throw new Error("expected file change group");
+    }
+    expect(group.checkpointManifest?.checkpointId).toBe("turn-1");
+    expect(group.hasLaterOverlappingChanges).toBe(true);
+  });
+
   it("holds back the file change group until the assistant turn completes", () => {
     const manifest = checkpointManifest("turn-1", "/repo/src/app.ts");
     const assistant: Message = {

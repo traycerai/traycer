@@ -2370,24 +2370,30 @@ function isParsedCheckpointManifest(
 function overlappingCheckpointIdsFor(
   checkpoints: ReadonlyArray<ParsedCheckpointManifest>,
 ): ReadonlySet<string> {
+  // Only real changes drive the "modified again in later turns" note:
+  // a no-op entry isn't part of this turn's change set and isn't restored,
+  // so an overlap with one would make the cumulative warning misleading.
+  //
+  // Record, per file path, the index of the last checkpoint that touches it.
+  // A checkpoint then overlaps iff any path it touches is touched again by a
+  // later checkpoint - i.e. that path's last-touch index is past this one.
+  // One forward pass plus one scan keeps this O(checkpoints * entries) instead
+  // of the quadratic pairwise comparison this hook reran on every event.
+  const lastTouchIndexByPath = new Map<string, number>();
+  checkpoints.forEach((checkpoint, index) => {
+    checkpoint.manifest.entries
+      .filter((entry) => !isNoOpCheckpointEntry(entry))
+      .forEach((entry) => {
+        lastTouchIndexByPath.set(entry.filePath, index);
+      });
+  });
   return new Set(
     checkpoints.flatMap((checkpoint, index) => {
-      // Only real changes drive the "modified again in later turns" note:
-      // a no-op entry isn't part of this turn's change set and isn't restored,
-      // so an overlap with one would make the cumulative warning misleading.
-      const filePaths = new Set(
-        checkpoint.manifest.entries
-          .filter((entry) => !isNoOpCheckpointEntry(entry))
-          .map((entry) => entry.filePath),
+      const touchedLater = checkpoint.manifest.entries.some(
+        (entry) =>
+          !isNoOpCheckpointEntry(entry) &&
+          (lastTouchIndexByPath.get(entry.filePath) ?? index) > index,
       );
-      const touchedLater = checkpoints
-        .slice(index + 1)
-        .some((later) =>
-          later.manifest.entries.some(
-            (entry) =>
-              !isNoOpCheckpointEntry(entry) && filePaths.has(entry.filePath),
-          ),
-        );
       return touchedLater ? [checkpoint.manifest.checkpointId] : [];
     }),
   );

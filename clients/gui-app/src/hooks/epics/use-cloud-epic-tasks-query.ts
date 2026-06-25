@@ -1,30 +1,42 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo } from "react";
 import { useQuery, type UseQueryResult } from "@tanstack/react-query";
 import type {
   ListTasksResponse,
   TaskLight,
 } from "@traycer/protocol/host/epic/unary-schemas";
-import { useHostClient } from "@/lib/host";
+import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { useAuthStore, type AuthStatus } from "@/stores/auth/auth-store";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
+import { useHostMutation } from "@/hooks/host/use-host-query";
+import { toastFromHostError } from "@/lib/host-error-toast";
+import {
+  useCloudEpicTasksPagesStore,
+  cloudEpicTasksPageGeneration,
+} from "@/stores/epics/cloud-epic-tasks-pages-store";
 import {
   LIST_CLOUD_TASKS_REQUEST,
   cloudEpicTasksFirstPageQueryOptions,
   cloudEpicTasksQueryKey,
-  fetchCloudEpicTasksPage,
   registerCloudEpicTasksClient,
   type ListCloudTasksRequest,
 } from "@/lib/cloud-epic-tasks-query";
 import { uiQueryKeys } from "@/lib/query-keys";
 
+/**
+ * Variables for the next-page mutation. `identity`/`generation` are captured
+ * when the fetch starts so the store can drop the response if a refresh reset
+ * the identity meanwhile; `request`/`cursor` build the `epic.listTasks` body.
+ */
+interface NextPageVariables {
+  readonly identity: string;
+  readonly generation: number;
+  readonly request: ListCloudTasksRequest;
+  readonly cursor: string;
+}
+
 const EMPTY_TASKS: readonly TaskLight[] = [];
 const EMPTY_PAGES: readonly ListTasksResponse[] = [];
 const EMPTY_FIRST_PAGE: ListTasksResponse = { tasks: [], hasMore: false };
-
-interface ExtraPagesState {
-  readonly identity: string;
-  readonly pages: readonly ListTasksResponse[];
-}
 
 export interface CloudEpicTasksQueryResult {
   readonly hostId: string | null;
@@ -84,24 +96,54 @@ export function useCloudEpicTasksQuery(
   const queryRefetch = query.refetch;
   const isPlaceholderData = query.isPlaceholderData;
 
-  // Pages are reset and stale cursor responses dropped when this identity
-  // flips (host, user, or request scope change).
+  // Identity (host | user | request scope) keys the accumulated "Show more"
+  // pages in the ambient store. Holding them there (instead of this hook's own
+  // state) lets loaded pages survive the host surface unmounting/remounting -
+  // e.g. closing and reopening the History overlay - and a scope change simply
+  // selects that scope's own pages rather than discarding them.
   const identity = `${hostId ?? ""}|${userId ?? ""}|${JSON.stringify(effectiveRequest)}`;
-  const [extraPagesState, setExtraPagesState] = useState<ExtraPagesState>(
-    () => ({
-      identity,
-      pages: [],
-    }),
+  const extraPages = useCloudEpicTasksPagesStore(
+    (state) => state.pagesByIdentity[identity] ?? EMPTY_PAGES,
   );
-  const extraPages =
-    extraPagesState.identity === identity ? extraPagesState.pages : EMPTY_PAGES;
-  if (extraPagesState.identity !== identity) {
-    setExtraPagesState({ identity, pages: [] });
-  }
-  const [fetchingNextPageIdentity, setFetchingNextPageIdentity] = useState<
-    string | null
-  >(null);
-  const isFetchingNextPage = fetchingNextPageIdentity === identity;
+  const appendPage = useCloudEpicTasksPagesStore((state) => state.appendPage);
+  const resetIdentity = useCloudEpicTasksPagesStore(
+    (state) => state.resetIdentity,
+  );
+
+  // Next-page fetching flows through TanStack Query (host RPC must, per
+  // gui-app/AGENTS.md) so retries/errors are handled by Query rather than a
+  // hand-rolled promise + Zustand loading flag. `onSuccess` tags the page with
+  // the generation captured at mutate time; the store rejects it if a refresh
+  // bumped the generation in between.
+  const nextPageMutation = useHostMutation<
+    HostRpcRegistry,
+    "epic.listTasks",
+    unknown,
+    NextPageVariables
+  >({
+    client,
+    method: "epic.listTasks",
+    mapVariables: (variables) => ({
+      ...variables.request,
+      cursor: variables.cursor,
+    }),
+    options: {
+      onSuccess: (page, variables) => {
+        appendPage(variables.identity, variables.generation, page);
+      },
+      onError: (error) => {
+        toastFromHostError(error, "Couldn't load more tasks.");
+      },
+    },
+  });
+  // Scope the in-flight flag to THIS identity: the mutation is hook-wide, so a
+  // "Show more" still resolving for a previous host/user/request scope must not
+  // block pagination once the scope changes (the late response still appends to
+  // its own identity's bucket via onSuccess).
+  const isFetchingNextPage =
+    nextPageMutation.isPending &&
+    nextPageMutation.variables.identity === identity;
+  const mutateNextPage = nextPageMutation.mutate;
 
   const tasks = useMemo<readonly TaskLight[]>(() => {
     if (queryData === undefined) return EMPTY_TASKS;
@@ -125,32 +167,24 @@ export function useCloudEpicTasksQuery(
 
   const fetchNextPage = useCallback(() => {
     if (lastNextCursor === null || isFetchingNextPage) return;
-    setFetchingNextPageIdentity(identity);
-    void fetchCloudEpicTasksPage(client, effectiveRequest, lastNextCursor).then(
-      (page) => {
-        setExtraPagesState((prev) =>
-          prev.identity === identity
-            ? { identity: prev.identity, pages: [...prev.pages, page] }
-            : prev,
-        );
-        setFetchingNextPageIdentity((current) =>
-          current === identity ? null : current,
-        );
-      },
-      () => {
-        setFetchingNextPageIdentity((current) =>
-          current === identity ? null : current,
-        );
-      },
-    );
-  }, [client, effectiveRequest, identity, lastNextCursor, isFetchingNextPage]);
+    mutateNextPage({
+      identity,
+      generation: cloudEpicTasksPageGeneration(identity),
+      request: effectiveRequest,
+      cursor: lastNextCursor,
+    });
+  }, [
+    effectiveRequest,
+    identity,
+    lastNextCursor,
+    isFetchingNextPage,
+    mutateNextPage,
+  ]);
 
   const refetch = useCallback(() => {
-    setExtraPagesState((prev) =>
-      prev.pages.length === 0 ? prev : { identity: prev.identity, pages: [] },
-    );
+    resetIdentity(identity);
     void queryRefetch();
-  }, [queryRefetch]);
+  }, [identity, resetIdentity, queryRefetch]);
 
   return {
     hostId,
