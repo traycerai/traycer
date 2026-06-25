@@ -23,7 +23,7 @@ vi.mock("../segments/setup-card-segment", () => ({
 
 vi.mock("../segments/forked-chat-link-segment", () => ({
   ForkedChatLinkSegment: (props: {
-    epicId: string;
+    viewTabId: string;
     sourceChatId: string;
     sourceChatTitle: string;
     sourceHostId: string;
@@ -31,7 +31,7 @@ vi.mock("../segments/forked-chat-link-segment", () => ({
     <button
       type="button"
       aria-label={`Open source conversation ${props.sourceChatTitle}`}
-      data-epic-id={props.epicId}
+      data-view-tab={props.viewTabId}
       data-source-chat={props.sourceChatId}
       data-source-title={props.sourceChatTitle}
       data-source-host={props.sourceHostId}
@@ -102,7 +102,7 @@ function forkedChatLinkRow(): ChatMessageModel {
       {
         id: "forked-chat-link:event-1:link",
         kind: "forked-chat-link",
-        epicId: "epic-1",
+        viewTabId: "tab-1",
         sourceChatId: "source-chat-1",
         sourceChatTitle: "Original chat",
         sourceHostId: "source-host-1",
@@ -158,7 +158,7 @@ describe("<ChatMessage /> setup-card routing", () => {
     const link = screen.getByRole("button", {
       name: "Open source conversation Original chat",
     });
-    expect(link.getAttribute("data-epic-id")).toBe("epic-1");
+    expect(link.getAttribute("data-view-tab")).toBe("tab-1");
     expect(link.getAttribute("data-source-chat")).toBe("source-chat-1");
     expect(link.getAttribute("data-source-title")).toBe("Original chat");
     expect(link.getAttribute("data-source-host")).toBe("source-host-1");

@@ -1,0 +1,15 @@
+{
+  "setup": {
+    "default": "make build\npre-commit install\npre-commit install-hooks\npre-commit install --hook-type pre-commit --hook-type commit-msg",
+    "macos": null,
+    "windows": null,
+    "linux": null
+  },
+  "teardown": {
+    "default": "",
+    "macos": null,
+    "windows": null,
+    "linux": null
+  },
+  "updatedAt": 1782327514294
+}

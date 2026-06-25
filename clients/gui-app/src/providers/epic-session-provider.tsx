@@ -2,9 +2,12 @@ import { useEffect, useEffectEvent, useState, type ReactNode } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import {
   createOpenEpicStore,
+  type EpicStreamClientFactory,
   type OpenEpicStoreHandle,
 } from "@/stores/epics/open-epic/store";
-import { useWsStreamClient } from "@/lib/host/stream-runtime-context";
+import { EpicStreamClient } from "@traycer-clients/shared/host-transport/epic-stream-client";
+import { useDurableStreamTransportFactory } from "@/lib/host/use-durable-stream-transport";
+import { openOwnedDurableStreamClient } from "@/lib/host/owned-durable-stream-client";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useAuthService } from "@/lib/host";
@@ -15,11 +18,10 @@ import {
   releaseDesktopEpicOwnership,
 } from "@/lib/windows/desktop-epic-ownership";
 import {
-  createDefaultEpicStreamClient,
   EpicSessionContext,
+  getEpicStreamClientFactoryOverride,
   getOpenEpicRegistry,
   handleHostIds,
-  handleStreamClients,
 } from "@/lib/registries/epic-session-registry";
 
 export interface EpicSessionProviderProps {
@@ -37,11 +39,12 @@ export function EpicSessionProvider(
   props: EpicSessionProviderProps,
 ): ReactNode {
   const { epicId, tabId, children } = props;
-  // Used only to detect a transport swap (host restart) and re-open the reused
-  // session on the new client. The factory itself resolves the live transport
-  // from a module snapshot, not from this React value - see
-  // `createDefaultEpicStreamClient`.
-  const wsStreamClient = useWsStreamClient();
+  // The session OWNS its durable transport: the factory built in the acquire
+  // effect opens it (socket + auth + wake) and the returned handle's `close()`
+  // tears it down on dispose. A host restart under a STABLE `hostId` is healed
+  // by the durable transport itself (live endpoint + wake re-dial), not by a
+  // provider-driven re-subscribe; a `hostId` CHANGE releases the session below.
+  const openTransport = useDurableStreamTransportFactory();
   const activeHostId = useReactiveActiveHostId();
   const authService = useAuthService();
   const navigate = useNavigate();
@@ -116,6 +119,17 @@ export function EpicSessionProvider(
 
   useEffect(() => {
     if (!ownershipClaimed) return;
+    // A null active host means the directory has not bound a default host yet
+    // (initial hydration race, or a transient gap while a host restarts /
+    // re-provisions). The session factory needs a concrete `hostId` to open its
+    // durable transport, so defer acquisition until the host binds: bail WITHOUT
+    // touching the registry (a transient null must not tear down a healthy warm
+    // session), and let the effect re-run when `activeHostId` becomes non-null
+    // (it is a dependency below) to acquire the real session. Without this gate
+    // the factory throws synchronously inside `createOpenEpicStore`, and the
+    // throw escapes this effect to the root error boundary - tearing down the
+    // whole app, the exact failure class this stream rework set out to remove.
+    if (activeHostId === null) return;
     const lifecycle = { cancelled: false };
     const registry = getOpenEpicRegistry();
     const existing = registry.get(epicId);
@@ -128,29 +142,56 @@ export function EpicSessionProvider(
     const handleSessionAuthError = (): void => {
       onAuthError();
     };
+    // The session OWNS its transport: the factory opens it (socket + auth +
+    // wake) and the returned handle's `close()` tears it all down on dispose.
+    // The registry only closes the handle when it DISPOSES the session, so the
+    // socket survives across the MRU warm window and a revived session is never
+    // handed a dead transport; the durable transport's live endpoint + wake
+    // re-dial heal a host restart under a stable `hostId` on their own. Tests
+    // drive the stream through the override seam and never open a real socket.
+    const streamClientFactory: EpicStreamClientFactory = (
+      factoryEpicId,
+      callbacks,
+    ) => {
+      const override = getEpicStreamClientFactoryOverride();
+      if (override !== null) {
+        return override(factoryEpicId, callbacks);
+      }
+      // `activeHostId` is non-null here: the acquire effect gates on it above,
+      // and it is a `const`, so that narrowing flows into this factory closure.
+      // Removing the gate would surface a compile error at this call (which
+      // requires a concrete `hostId`), not a runtime throw - the type system is
+      // the invariant.
+      const result = openOwnedDurableStreamClient(
+        openTransport,
+        activeHostId,
+        (ws) =>
+          new EpicStreamClient({
+            wsStreamClient: ws,
+            epicId: factoryEpicId,
+            callbacks,
+          }),
+      );
+      return {
+        applyUpdate: (updateBytes) => result.client.applyUpdate(updateBytes),
+        awareness: (awarenessBytes) => result.client.awareness(awarenessBytes),
+        applyArtifactRoomUpdate: (artifactRoomId, updateBytes) =>
+          result.client.applyArtifactRoomUpdate(artifactRoomId, updateBytes),
+        artifactRoomAwareness: (artifactRoomId, awarenessBytes) =>
+          result.client.artifactRoomAwareness(artifactRoomId, awarenessBytes),
+        retryMigration: () => result.client.retryMigration(),
+        close: result.close,
+      };
+    };
     const nextHandle = registry.acquireMounted(epicId, (id) =>
       createOpenEpicStore({
         epicId: id,
-        streamClientFactory: createDefaultEpicStreamClient,
+        streamClientFactory,
         userId,
         onAuthError: handleSessionAuthError,
       }),
     );
     handleHostIds.set(nextHandle, activeHostId);
-    // Reconcile the (possibly reused) session's transport with the current live
-    // client. The factory always subscribes on the live client - or an inert
-    // pending stream when none is live yet - so a freshly created handle
-    // (no record) is already on the right transport and we only record it. A
-    // REUSED handle whose recorded transport differs from the current one (a
-    // host restart, or recovery from a pending no-transport window) is re-opened
-    // on the current client; the dead/pending stream never recovers on its own.
-    const recordedClient = handleStreamClients.get(nextHandle);
-    if (recordedClient === undefined) {
-      handleStreamClients.set(nextHandle, wsStreamClient);
-    } else if (recordedClient !== wsStreamClient) {
-      nextHandle.requestFreshSnapshot();
-      handleStreamClients.set(nextHandle, wsStreamClient);
-    }
     queueMicrotask(() => {
       if (lifecycle.cancelled) return;
       setSession({ key: sessionKey, handle: nextHandle });
@@ -163,10 +204,10 @@ export function EpicSessionProvider(
   }, [
     activeHostId,
     epicId,
+    openTransport,
     ownershipClaimed,
     sessionKey,
     userId,
-    wsStreamClient,
   ]);
 
   const handle =

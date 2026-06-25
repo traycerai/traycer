@@ -90,7 +90,7 @@ function renderSingleSpecialSegment(
   if (segment.kind === "forked-chat-link") {
     return (
       <ForkedChatLinkSegment
-        epicId={segment.epicId}
+        viewTabId={segment.viewTabId}
         sourceChatId={segment.sourceChatId}
         sourceChatTitle={segment.sourceChatTitle}
         sourceHostId={segment.sourceHostId}

@@ -422,12 +422,12 @@ describe("EpicTabHost keep-alive", () => {
 
     await waitFor(() => {
       expect(
-        useEpicCanvasStore.getState().firstTabIdForEpic("epic-a"),
+        useEpicCanvasStore.getState().resolveTabIdForEpic("epic-a"),
       ).not.toBeNull();
     });
     const firstCreatedTabId = useEpicCanvasStore
       .getState()
-      .firstTabIdForEpic("epic-a");
+      .resolveTabIdForEpic("epic-a");
     if (firstCreatedTabId === null) {
       throw new Error("expected first created tab");
     }
@@ -445,12 +445,12 @@ describe("EpicTabHost keep-alive", () => {
 
     await waitFor(() => {
       expect(
-        useEpicCanvasStore.getState().firstTabIdForEpic("epic-b"),
+        useEpicCanvasStore.getState().resolveTabIdForEpic("epic-b"),
       ).not.toBeNull();
     });
     const secondCreatedTabId = useEpicCanvasStore
       .getState()
-      .firstTabIdForEpic("epic-b");
+      .resolveTabIdForEpic("epic-b");
     if (secondCreatedTabId === null) {
       throw new Error("expected second created tab");
     }
@@ -468,12 +468,12 @@ describe("EpicTabHost keep-alive", () => {
 
     await waitFor(() => {
       expect(
-        useEpicCanvasStore.getState().firstTabIdForEpic("epic-a"),
+        useEpicCanvasStore.getState().resolveTabIdForEpic("epic-a"),
       ).not.toBeNull();
     });
     const firstCreatedTabId = useEpicCanvasStore
       .getState()
-      .firstTabIdForEpic("epic-a");
+      .resolveTabIdForEpic("epic-a");
     if (firstCreatedTabId === null) {
       throw new Error("expected first created tab");
     }
@@ -481,7 +481,7 @@ describe("EpicTabHost keep-alive", () => {
     act(() => {
       useEpicCanvasStore.getState().closeTab(firstCreatedTabId);
     });
-    expect(useEpicCanvasStore.getState().firstTabIdForEpic("epic-a")).toBe(
+    expect(useEpicCanvasStore.getState().resolveTabIdForEpic("epic-a")).toBe(
       firstCreatedTabId,
     );
     expect(useEpicCanvasStore.getState().openTabOrder).toEqual([]);
@@ -491,12 +491,12 @@ describe("EpicTabHost keep-alive", () => {
 
     await waitFor(() => {
       expect(
-        useEpicCanvasStore.getState().firstTabIdForEpic("epic-a"),
+        useEpicCanvasStore.getState().resolveTabIdForEpic("epic-a"),
       ).not.toBeNull();
     });
     const secondCreatedTabId = useEpicCanvasStore
       .getState()
-      .firstTabIdForEpic("epic-a");
+      .resolveTabIdForEpic("epic-a");
     expect(secondCreatedTabId).toBe(firstCreatedTabId);
     expect(useEpicCanvasStore.getState().openTabOrder).toEqual([
       firstCreatedTabId,

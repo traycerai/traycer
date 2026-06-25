@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import {
   LANDING_ROUTE,
@@ -167,12 +167,26 @@ export function useEpicOpenInNewWindowFlow(): EpicNewWindowFlow {
     };
   }, [executeMove, queuedMove]);
 
-  return {
-    isAvailable,
-    pendingMove,
-    requestOpenInNewWindow,
-    waitForSync,
-    cancelMove,
-    discardAndMove,
-  };
+  // Memoize so the returned flow keeps a stable identity across renders where
+  // nothing it carries changed. Consumers thread it into effect deps (e.g.
+  // `UnsyncedEpicMoveDialog`'s registry subscription); a fresh object each
+  // render would churn those subscriptions on every unrelated re-render.
+  return useMemo(
+    () => ({
+      isAvailable,
+      pendingMove,
+      requestOpenInNewWindow,
+      waitForSync,
+      cancelMove,
+      discardAndMove,
+    }),
+    [
+      isAvailable,
+      pendingMove,
+      requestOpenInNewWindow,
+      waitForSync,
+      cancelMove,
+      discardAndMove,
+    ],
+  );
 }

@@ -3,14 +3,25 @@ import { useEffect } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 
-const hostState = vi.hoisted(() => ({ id: "host-a" }));
+const hostState = vi.hoisted((): { id: string | null } => ({ id: "host-a" }));
 const authServiceStub = vi.hoisted(() => ({
   revalidateCurrentContext: () => Promise.resolve({ kind: "valid" as const }),
 }));
 const navigateMock = vi.hoisted(() => vi.fn());
 
-vi.mock("@/lib/host/stream-runtime-context", () => ({
-  useWsStreamClient: () => null,
+// The provider now opens its own durable transport via this factory, but every
+// test installs an `__setEpicStreamClientFactoryForTests` override that
+// short-circuits before `openTransport` is ever called - so a stub factory that
+// is never invoked is all the provider needs to render in jsdom. The real hook
+// returns a referentially-STABLE opener; the stub mirrors that with a single
+// hoisted instance so the acquire effect's `openTransport` dep never churns.
+const openTransportStub = vi.hoisted(() => () => {
+  throw new Error(
+    "openTransport must not be called when the factory is overridden",
+  );
+});
+vi.mock("@/lib/host/use-durable-stream-transport", () => ({
+  useDurableStreamTransportFactory: () => openTransportStub,
 }));
 
 vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
@@ -318,6 +329,71 @@ describe("<EpicSessionProvider />", () => {
 
     expect(streams).toHaveLength(2);
     expect(streams[0].closeCount).toBe(1);
+    expect(__getOpenEpicRegistryForTests().size()).toBe(1);
+  });
+
+  it("defers acquisition without crashing while the active host is null, then acquires when it binds", async () => {
+    const streams: ControlledStream[] = [];
+    const seenHandles: OpenEpicStoreHandle[] = [];
+    __setEpicStreamClientFactoryForTests((_epicId, _callbacks) => {
+      const stream: ControlledStream = { closeCount: 0 };
+      streams.push(stream);
+      return {
+        applyUpdate: () => undefined,
+        awareness: () => undefined,
+        applyArtifactRoomUpdate: () => undefined,
+        artifactRoomAwareness: () => undefined,
+        retryMigration: () => undefined,
+        close: () => {
+          stream.closeCount += 1;
+        },
+      };
+    });
+
+    // The directory has not bound a default host yet: the factory would throw
+    // "without an active host id" - escaping the acquire effect to the root
+    // error boundary - if the effect did not gate on a non-null host. Mounting
+    // must NOT crash and must NOT create a session.
+    hostState.id = null;
+    const view = render(
+      <EpicSessionProvider epicId="epic-session-test" tabId="epic-session-test">
+        <HandleProbe
+          onHandle={(handle) => {
+            seenHandles.push(handle);
+          }}
+        />
+      </EpicSessionProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("handle-probe").dataset.ready).toBe("false");
+    });
+    expect(seenHandles).toEqual([]);
+    expect(streams).toHaveLength(0);
+    expect(__getOpenEpicRegistryForTests().size()).toBe(0);
+
+    // The host binds: the effect re-runs (activeHostId is a dependency) and the
+    // real session is acquired - no provider-driven retry needed.
+    act(() => {
+      hostState.id = "host-a";
+      view.rerender(
+        <EpicSessionProvider
+          epicId="epic-session-test"
+          tabId="epic-session-test"
+        >
+          <HandleProbe
+            onHandle={(handle) => {
+              seenHandles.push(handle);
+            }}
+          />
+        </EpicSessionProvider>,
+      );
+    });
+
+    await waitFor(() => {
+      expect(seenHandles).toHaveLength(1);
+    });
+    expect(streams).toHaveLength(1);
     expect(__getOpenEpicRegistryForTests().size()).toBe(1);
   });
 

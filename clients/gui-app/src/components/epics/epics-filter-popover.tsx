@@ -78,7 +78,7 @@ export function EpicsFilterPopover(props: EpicsFilterPopoverProps): ReactNode {
       </PopoverTrigger>
       <PopoverContent
         align="end"
-        className="w-[min(90vw,24rem)] gap-3"
+        className="max-h-[min(var(--radix-popover-content-available-height,70vh),32rem)] w-[min(90vw,24rem)] gap-3 overflow-y-auto"
         data-testid="epics-filter-popover"
       >
         <FilterSection label="Ownership" trailing={null}>

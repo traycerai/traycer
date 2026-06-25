@@ -1,6 +1,40 @@
 import { configure } from "@testing-library/react";
 import { vi } from "vitest";
 
+// CI stability net. A stray late async error - an `unhandledRejection` or
+// `uncaughtException` from a timer, socket, or microtask that fires AFTER a
+// test's teardown - otherwise takes down the whole vitest worker (exit 1 with
+// no failing test: the classic intermittent CI flake). Catch and LOG them so
+// the source stays visible/debuggable, but don't let them crash the run. Paired
+// with `dangerouslyIgnoreUnhandledErrors` in vitest.config.ts, which stops
+// vitest from converting these post-teardown escapes into a run failure.
+//
+// Registered idempotently (by handler name) because `setupFiles` re-runs per
+// test file and forks are reused, so a naive `process.on` would leak listeners.
+// `process` is reached through `globalThis` (this is a browser-typed package
+// with no `@types/node`), mirroring the existing `fetch` shim below.
+interface NodeProcessLike {
+  on(event: string, listener: (value: unknown) => void): void;
+  listeners(event: string): ReadonlyArray<{ readonly name: string }>;
+}
+function traycerTestUnhandledRejection(reason: unknown): void {
+  console.error("[test] ignored unhandledRejection after teardown:", reason);
+}
+function traycerTestUncaughtException(error: unknown): void {
+  console.error("[test] ignored uncaughtException after teardown:", error);
+}
+const nodeProcess = (globalThis as { process?: NodeProcessLike }).process;
+if (nodeProcess !== undefined) {
+  const isRegistered = (event: string, name: string): boolean =>
+    nodeProcess.listeners(event).some((listener) => listener.name === name);
+  if (!isRegistered("unhandledRejection", traycerTestUnhandledRejection.name)) {
+    nodeProcess.on("unhandledRejection", traycerTestUnhandledRejection);
+  }
+  if (!isRegistered("uncaughtException", traycerTestUncaughtException.name)) {
+    nodeProcess.on("uncaughtException", traycerTestUncaughtException);
+  }
+}
+
 // Vite's `?worker` import returns a Worker constructor at build time. jsdom has
 // no Worker; mock the @pierre/diffs worker module to a no-op constructor so
 // any test that mounts <DiffWorkerPoolProvider> doesn't crash.

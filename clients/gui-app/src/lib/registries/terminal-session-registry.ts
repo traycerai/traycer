@@ -5,6 +5,7 @@ import { useHostClient } from "@/lib/host";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { authenticatedHostStreamKey } from "@/hooks/host/use-host-stream-client-for";
 import { useDurableStreamTransportFactory } from "@/lib/host/use-durable-stream-transport";
+import { openOwnedDurableStreamClient } from "@/lib/host/owned-durable-stream-client";
 import { hostQueryKeys } from "@/lib/query-keys";
 import {
   createTerminalSessionStore,
@@ -140,30 +141,26 @@ export function useTerminalSessionHandle(
       }
       // The session OWNS this transport (built here, torn down by `close()`), so
       // it survives tile unmount for warm terminal-agent sessions instead of
-      // being closed with the tile.
-      const transport = openTransport(args.hostId);
-      try {
-        const terminalStreamClient = new TerminalStreamClient({
-          wsStreamClient: transport.wsStreamClient,
-          sessionId,
-          cols,
-          rows,
-          callbacks,
-        });
-        return {
-          sendAction: (frame) => terminalStreamClient.sendAction(frame),
-          close: () => {
-            terminalStreamClient.close();
-            transport.close();
-          },
-        };
-      } catch (cause) {
-        // `new TerminalStreamClient` subscribes on the socket and can throw
-        // synchronously (bad endpoint / bearer). Close the half-built transport
-        // so its socket and wake listeners never leak.
-        transport.close();
-        throw cause;
-      }
+      // being closed with the tile. `openOwnedDurableStreamClient` composes the
+      // close and closes the half-built transport if `new TerminalStreamClient`
+      // (it subscribes on the socket) throws synchronously, so no socket or wake
+      // listener leaks.
+      const result = openOwnedDurableStreamClient(
+        openTransport,
+        args.hostId,
+        (ws) =>
+          new TerminalStreamClient({
+            wsStreamClient: ws,
+            sessionId,
+            cols,
+            rows,
+            callbacks,
+          }),
+      );
+      return {
+        sendAction: (frame) => result.client.sendAction(frame),
+        close: result.close,
+      };
     };
 
     const next = registry.acquire(args.instanceId, () => {

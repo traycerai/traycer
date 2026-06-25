@@ -74,6 +74,17 @@ function showAppUpdateToast(
       }
       return;
     case "available":
+      // Updates blocked by the install location (read-only volume): a brief,
+      // self-dismissing heads-up explaining why it can't be installed - the
+      // disabled header button + tooltip is the persistent reminder, so this
+      // toast doesn't linger or stack into a nag.
+      if (snapshot.installBlockedReason !== null) {
+        toast("Update available", {
+          id: APP_UPDATE_TOAST_ID,
+          description: snapshot.installBlockedReason,
+        });
+        return;
+      }
       // A quiet, dismissible heads-up - the header button is the persistent
       // fallback once it's dismissed.
       toast("Update available", {
@@ -172,12 +183,15 @@ function isManualReplayFromBeforeMount(
 }
 
 function isManualFeedbackSnapshot(snapshot: DesktopAppUpdateSnapshot): boolean {
+  // Errors are deliberately excluded: a failed download/install (e.g. the
+  // read-only-volume install error) is a live, important event, so it surfaces
+  // even in a window mounted right after - we only suppress stale, low-stakes
+  // manual-check chatter ("checking" / "up to date" / "unavailable").
   return (
     snapshot.lastCheckIntent === "manual" &&
     (snapshot.status === "checking" ||
       snapshot.status === "up-to-date" ||
-      snapshot.status === "unavailable" ||
-      snapshot.status === "error")
+      snapshot.status === "unavailable")
   );
 }
 

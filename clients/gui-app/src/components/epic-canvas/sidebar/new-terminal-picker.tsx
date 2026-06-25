@@ -1,9 +1,9 @@
 /**
  * Picker popover behind the Terminals panel "+" action. Top section picks
  * the host (machine); below it the shared worktree folder list shows
- * everything already bound to the epic. Selecting a folder immediately
- * opens a raw terminal tab bound to that row's host, with the row's
- * `runningDir` persisted as the PTY working directory.
+ * everything already bound to the epic. Selecting a folder stages it; the
+ * footer launch action opens a raw terminal tab bound to that row's host, with
+ * the row's `runningDir` persisted as the PTY working directory.
  *
  * The folder query and epic-artifact subscription live in
  * `NewTerminalFolders`, mounted inside the popover content so a closed
@@ -32,35 +32,41 @@ interface NewTerminalPickerProps {
 
 export function NewTerminalPicker(props: NewTerminalPickerProps) {
   const [isOpen, setIsOpen] = useState(false);
+  const [selectedRow, setSelectedRow] =
+    useState<WorktreeBindingSelectorRow | null>(null);
   const openTileInTab = useEpicCanvasStore((s) => s.openTileInTab);
 
-  // A double-click on a folder row fires `onSelect` twice before
-  // `setIsOpen(false)` (a state update) can unmount the list, so each click
-  // would mint a fresh `term-${uuidv4()}` id and open a second terminal. This
-  // synchronous latch collapses one open→pick session to a single terminal;
-  // it is reset when the popover (re)opens.
-  const hasPickedRef = useRef(false);
+  // A double-click on the launch action fires twice before `setIsOpen(false)`
+  // can unmount the popover, so each click would mint a fresh terminal id. This
+  // synchronous latch collapses one open->launch session to a single terminal.
+  const hasLaunchedRef = useRef(false);
   const handleOpenChange = useCallback((open: boolean) => {
-    if (open) hasPickedRef.current = false;
+    if (open) {
+      hasLaunchedRef.current = false;
+      setSelectedRow(null);
+    }
     setIsOpen(open);
   }, []);
 
-  const handleSelectRow = useCallback(
-    (row: WorktreeBindingSelectorRow) => {
-      if (hasPickedRef.current) return;
-      hasPickedRef.current = true;
-      openTileInTab(props.tabId, {
-        id: `term-${uuidv4()}`,
-        instanceId: uuidv4(),
-        type: "terminal",
-        name: DEFAULT_TERMINAL_TITLE,
-        hostId: row.hostId,
-        cwd: row.runningDir,
-      });
-      setIsOpen(false);
-    },
-    [openTileInTab, props.tabId],
-  );
+  const handleLaunch = useCallback(() => {
+    if (hasLaunchedRef.current || selectedRow === null) return;
+    hasLaunchedRef.current = true;
+    openTileInTab(props.tabId, {
+      id: `term-${uuidv4()}`,
+      instanceId: uuidv4(),
+      type: "terminal",
+      name: DEFAULT_TERMINAL_TITLE,
+      hostId: selectedRow.hostId,
+      cwd: selectedRow.runningDir,
+    });
+    setIsOpen(false);
+  }, [openTileInTab, props.tabId, selectedRow]);
+
+  const handleSelectRow = useCallback((row: WorktreeBindingSelectorRow) => {
+    setSelectedRow(row);
+  }, []);
+
+  const launchDisabled = selectedRow === null;
 
   return (
     <Popover open={isOpen} onOpenChange={handleOpenChange}>
@@ -82,7 +88,21 @@ export function NewTerminalPicker(props: NewTerminalPickerProps) {
         data-testid="new-terminal-picker-popover"
       >
         <WorktreePickerHostSection />
-        <NewTerminalFolders epicId={props.epicId} onSelect={handleSelectRow} />
+        <NewTerminalFolders
+          epicId={props.epicId}
+          selectedRow={selectedRow}
+          onSelect={handleSelectRow}
+        />
+        <div className="flex justify-end border-t border-border/60 bg-muted/20 px-2.5 py-2.5">
+          <Button
+            type="button"
+            size="sm"
+            disabled={launchDisabled}
+            onClick={handleLaunch}
+          >
+            Launch
+          </Button>
+        </div>
       </PopoverContent>
     </Popover>
   );
@@ -94,6 +114,7 @@ export function NewTerminalPicker(props: NewTerminalPickerProps) {
  */
 function NewTerminalFolders(props: {
   readonly epicId: string;
+  readonly selectedRow: WorktreeBindingSelectorRow | null;
   readonly onSelect: (row: WorktreeBindingSelectorRow) => void;
 }) {
   const bindingsQuery = useWorktreeListBindingsForEpic({
@@ -110,7 +131,7 @@ function NewTerminalFolders(props: {
       isPending={bindingsQuery.isPending}
       isError={bindingsQuery.isError}
       rows={rows}
-      selectedRow={null}
+      selectedRow={props.selectedRow}
       secondaryLabel={(row) => row.runningDir}
       onSelect={props.onSelect}
     />

@@ -18,7 +18,7 @@ export const Route = createFileRoute("/epics/$epicId/$tabId")({
     const state = useEpicCanvasStore.getState();
     const tab = state.tabsById[params.tabId];
     if (tab?.epicId === params.epicId) return;
-    const fallback = state.firstTabIdForEpic(params.epicId);
+    const fallback = state.resolveTabIdForEpic(params.epicId);
     if (fallback === null) return;
     redirect({
       to: "/epics/$epicId/$tabId",

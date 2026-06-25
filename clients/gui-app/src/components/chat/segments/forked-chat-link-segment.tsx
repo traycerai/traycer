@@ -3,30 +3,24 @@ import { v4 as uuidv4 } from "uuid";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 
 interface ForkedChatLinkSegmentProps {
-  readonly epicId: string;
+  readonly viewTabId: string;
   readonly sourceChatId: string;
   readonly sourceChatTitle: string;
   readonly sourceHostId: string;
 }
 
 export function ForkedChatLinkSegment(props: ForkedChatLinkSegmentProps) {
-  const { epicId, sourceChatId, sourceChatTitle, sourceHostId } = props;
-  const openTileInNewTab = useEpicCanvasStore(
-    (state) => state.openTileInNewTab,
-  );
+  const { viewTabId, sourceChatId, sourceChatTitle, sourceHostId } = props;
+  const openTileInTab = useEpicCanvasStore((state) => state.openTileInTab);
 
   const openSourceConversation = (): void => {
-    openTileInNewTab(
-      epicId,
-      {
-        id: sourceChatId,
-        instanceId: uuidv4(),
-        type: "chat",
-        name: sourceChatTitle,
-        hostId: sourceHostId,
-      },
-      null,
-    );
+    openTileInTab(viewTabId, {
+      id: sourceChatId,
+      instanceId: uuidv4(),
+      type: "chat",
+      name: sourceChatTitle,
+      hostId: sourceHostId,
+    });
   };
 
   return (
