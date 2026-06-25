@@ -54,6 +54,10 @@ const mocks = vi.hoisted(() => ({
       readonly isError: boolean;
     }
   >(() => ({ data: { scripts: null }, isSuccess: true, isError: false })),
+  // Captures the git ref the dialog requests for worktree.readScriptsAtRef, so
+  // tests can pin that the SOURCE branch (new) / checkout branch is read - not
+  // just that the method fired.
+  lastReadScriptsRef: { current: "" },
 }));
 
 vi.mock("@/hooks/worktree/use-worktree-set-repo-scripts-mutation", () => ({
@@ -71,10 +75,16 @@ vi.mock("@/hooks/worktree/use-worktree-set-repo-scripts-mutation", () => ({
   }),
 }));
 vi.mock("@/hooks/host/use-host-query", () => ({
-  useHostQuery: (opts: { readonly method: string }) =>
-    opts.method === "worktree.readScriptsAtRef"
-      ? mocks.readScriptsAtRef()
-      : mocks.listAllForHost(),
+  useHostQuery: (opts: {
+    readonly method: string;
+    readonly params: { readonly ref: string };
+  }) => {
+    if (opts.method === "worktree.readScriptsAtRef") {
+      mocks.lastReadScriptsRef.current = opts.params.ref;
+      return mocks.readScriptsAtRef();
+    }
+    return mocks.listAllForHost();
+  },
 }));
 
 interface Shell {
@@ -251,6 +261,7 @@ describe("<WorktreeScriptsDialog />", () => {
       isSuccess: true,
       isError: false,
     });
+    mocks.lastReadScriptsRef.current = "";
   });
   afterEach(() => {
     cleanup();
@@ -262,6 +273,9 @@ describe("<WorktreeScriptsDialog />", () => {
       .setIntent(STAGING_KEY, stagedWorktreeIntent(null));
 
     renderDialog(PRE_CREATE_CONTEXT, summaryWith(null));
+
+    // A new worktree reads scripts at its fork SOURCE, not the new branch name.
+    expect(mocks.lastReadScriptsRef.current).toBe("main");
 
     fireEvent.change(setupDefaultField(), { target: { value: "bun install" } });
     fireEvent.click(saveButton());
@@ -288,6 +302,8 @@ describe("<WorktreeScriptsDialog />", () => {
     // path yet, so it reads "Existing branch · <branch>", not a worktree path.
     expect(screen.getByText("Existing branch")).toBeTruthy();
     expect(screen.getByText("release/2.0")).toBeTruthy();
+    // A checked-out branch reads scripts at that branch's committed ref.
+    expect(mocks.lastReadScriptsRef.current).toBe("release/2.0");
 
     fireEvent.change(setupDefaultField(), { target: { value: "echo co" } });
     fireEvent.click(saveButton());
@@ -396,6 +412,7 @@ describe("<WorktreeScriptsDialog />", () => {
     );
 
     expect(setupDefaultField().value).toBe("echo branch");
+    expect(mocks.lastReadScriptsRef.current).toBe("main");
   });
 
   it("shows a spinner (no fields) until the source branch read settles", () => {
