@@ -301,7 +301,7 @@ export type MessageSegment =
   | {
       id: string;
       kind: "forked-chat-link";
-      epicId: string;
+      viewTabId: string;
       sourceChatId: string;
       sourceChatTitle: string;
       sourceHostId: string;

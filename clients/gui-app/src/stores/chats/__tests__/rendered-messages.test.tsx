@@ -2595,7 +2595,7 @@ describe("useRenderedMessages fork link integration", () => {
     expect(segment.sourceChatId).toBe("source-chat-1");
     expect(segment.sourceChatTitle).toBe("Original chat");
     expect(segment.sourceHostId).toBe("source-host-1");
-    expect(segment.epicId).toBe("epic-1");
+    expect(segment.viewTabId).toBe("tab-1");
   });
 
   it("skips malformed chat.forked metadata", () => {
