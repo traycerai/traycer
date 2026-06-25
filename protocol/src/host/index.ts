@@ -29,6 +29,7 @@ export {
   worktreeListBranchesV10,
   worktreeListBindingsForEpicV10,
   worktreeListByWorkspacePathsV10,
+  worktreeReadScriptsAtRefV10,
   worktreeRetrySetupV10,
   workspaceBindingRemoveEntryV10,
   worktreeSetEntryModeV10,

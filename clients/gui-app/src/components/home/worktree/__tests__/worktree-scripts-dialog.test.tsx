@@ -413,9 +413,7 @@ describe("<WorktreeScriptsDialog />", () => {
     // No flash of the primary checkout: the editable field is withheld behind a
     // spinner until the source-branch read resolves.
     expect(screen.queryByLabelText("Setup script (Default)")).toBeNull();
-    expect(
-      screen.getByTestId("worktree-scripts-dialog-seed-loading"),
-    ).toBeTruthy();
+    expect(screen.getByRole("status")).toBeTruthy();
   });
 
   it("on a failed source-branch read, starts blank with an error note (never the primary checkout)", () => {
