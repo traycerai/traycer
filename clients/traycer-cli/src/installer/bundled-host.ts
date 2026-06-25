@@ -17,12 +17,15 @@ import { dirname, join } from "node:path";
 // staged CLI binary. In those cases callers fall back to the registry
 // (or an explicit `--from`).
 //
-// The filename mirrors the build output in
-// scripts/desktop-install-cloud.js (`hostArchivePath`):
-// `host-runtime-<process.platform>-<process.arch>.tar.gz`.
+// The filenames mirror host release packaging: macOS/Linux use tarballs,
+// while Windows uses a zip. Windows arm64 resolves to the x64 host runtime
+// because there is no native Windows arm64 host.
 export async function resolveBundledHostArchive(): Promise<string | null> {
-  const fileName = `host-runtime-${osPlatform()}-${osArch()}.tar.gz`;
-  const candidate = join(dirname(process.execPath), fileName);
+  const platform = osPlatform();
+  const arch = platform === "win32" && osArch() === "arm64" ? "x64" : osArch();
+  const baseName = `host-runtime-${platform}-${arch}`;
+  const extension = platform === "win32" ? ".zip" : ".tar.gz";
+  const candidate = join(dirname(process.execPath), `${baseName}${extension}`);
   try {
     await access(candidate, constants.R_OK);
     return candidate;
