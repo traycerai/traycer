@@ -80,6 +80,12 @@ export interface DisplayTopology {
   readonly primaryId: number;
 }
 
+export interface FileSaveInput {
+  readonly name: string;
+  readonly type: string;
+  readonly bytes: ArrayBuffer;
+}
+
 export type FindInPageStopAction =
   | "clearSelection"
   | "keepSelection"

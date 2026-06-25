@@ -47,6 +47,7 @@ import type {
   BackgroundMaterial,
   DisplaySnapshot,
   DisplayTopology,
+  FileSaveInput,
   FindResultSnapshot,
   PendingCertificateError,
   ProcessMetricsSnapshot,
@@ -185,11 +186,7 @@ export interface DesktopFileDropsBridge {
     readonly bytes: ArrayBuffer;
   }): Promise<string>;
   copyTemporaryFiles(paths: readonly string[]): Promise<readonly string[]>;
-  saveFile(input: {
-    readonly name: string;
-    readonly type: string;
-    readonly bytes: ArrayBuffer;
-  }): Promise<string | null>;
+  saveFile(input: FileSaveInput): Promise<string | null>;
 }
 
 /**

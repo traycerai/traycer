@@ -53,6 +53,7 @@ import {
   RunnerHostEvent,
   RunnerHostInvoke,
 } from "../../ipc-contracts/ipc-channels";
+import type { FileSaveInput } from "../../ipc-contracts/platform-types";
 import { app, BrowserWindow, dialog, type ProxyConfig } from "electron";
 import { randomUUID } from "node:crypto";
 import { copyFile, mkdir, writeFile } from "node:fs/promises";
@@ -386,12 +387,6 @@ export function registerPlatformIpc(bridge: RunnerIpcBridge): void {
 }
 
 interface TemporaryDroppedFileInput {
-  readonly name: string;
-  readonly type: string;
-  readonly bytes: ArrayBuffer;
-}
-
-interface FileSaveInput {
   readonly name: string;
   readonly type: string;
   readonly bytes: ArrayBuffer;

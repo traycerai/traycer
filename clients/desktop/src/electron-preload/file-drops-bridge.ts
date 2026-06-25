@@ -1,13 +1,8 @@
 import { ipcRenderer, webUtils } from "electron";
 import { RunnerHostInvoke } from "../ipc-contracts/ipc-channels";
+import type { FileSaveInput } from "../ipc-contracts/platform-types";
 
 export interface FileDropWriteTemporaryInput {
-  readonly name: string;
-  readonly type: string;
-  readonly bytes: ArrayBuffer;
-}
-
-export interface FileSaveInput {
   readonly name: string;
   readonly type: string;
   readonly bytes: ArrayBuffer;

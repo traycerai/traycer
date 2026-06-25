@@ -37,6 +37,7 @@ export const runnerMutationKeys = {
   // bridge (IRunnerHost) per-window `clear` RPC, sweeps localStorage, then
   // reloads. Keyed so the destructive action dedups and shows in devtools.
   clearAllLocalData: () => ["runner.clearAllLocalData"] as const,
+  mermaidPngDownload: () => ["runner.mermaidPngDownload"] as const,
 };
 
 export const runnerQueryKeys = {

@@ -6,6 +6,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Editor } from "@tiptap/core";
 import { EditorContent, EditorContext } from "@tiptap/react";
 import * as Y from "yjs";
@@ -94,6 +95,27 @@ function mountMermaidEditor(opts: {
   return editor;
 }
 
+function makeQueryClient() {
+  return new QueryClient({
+    defaultOptions: {
+      mutations: { retry: false },
+      queries: { retry: false },
+    },
+  });
+}
+
+function renderMermaidEditor(editor: Editor) {
+  const queryClient = makeQueryClient();
+  render(
+    <QueryClientProvider client={queryClient}>
+      <EditorContext.Provider value={{ editor }}>
+        <EditorContent editor={editor} />
+      </EditorContext.Provider>
+    </QueryClientProvider>,
+  );
+  return queryClient;
+}
+
 afterEach(() => {
   cleanup();
 });
@@ -115,11 +137,7 @@ describe("MermaidNodeView", () => {
       code: "graph TD\n  A --> B",
       editable: true,
     });
-    render(
-      <EditorContext.Provider value={{ editor }}>
-        <EditorContent editor={editor} />
-      </EditorContext.Provider>,
-    );
+    renderMermaidEditor(editor);
     const region = await screen.findByRole("img", { name: /graph TD/ });
     await waitFor(() => {
       expect(region.querySelector("svg")).not.toBeNull();
@@ -132,11 +150,7 @@ describe("MermaidNodeView", () => {
       code: "graph TD\n  A --> B",
       editable: true,
     });
-    render(
-      <EditorContext.Provider value={{ editor }}>
-        <EditorContent editor={editor} />
-      </EditorContext.Provider>,
-    );
+    renderMermaidEditor(editor);
     expect(
       await screen.findByRole("button", { name: /copy code/i }),
     ).toBeTruthy();
@@ -154,11 +168,7 @@ describe("MermaidNodeView", () => {
       code: "graph TD\n  A --> B",
       editable: false,
     });
-    render(
-      <EditorContext.Provider value={{ editor }}>
-        <EditorContent editor={editor} />
-      </EditorContext.Provider>,
-    );
+    renderMermaidEditor(editor);
     expect(
       await screen.findByRole("button", { name: /copy code/i }),
     ).toBeTruthy();
@@ -178,11 +188,7 @@ describe("MermaidNodeView", () => {
     });
     const code = "graph TD\n  A --> B";
     const editor = mountMermaidEditor({ code, editable: true });
-    render(
-      <EditorContext.Provider value={{ editor }}>
-        <EditorContent editor={editor} />
-      </EditorContext.Provider>,
-    );
+    renderMermaidEditor(editor);
     const copy = await screen.findByRole("button", { name: /copy code/i });
     fireEvent.click(copy);
     expect(writeText).toHaveBeenCalledWith(code);
@@ -201,11 +207,7 @@ describe("MermaidNodeView", () => {
       code: "graph TD\n  A --> B",
       editable: true,
     });
-    render(
-      <EditorContext.Provider value={{ editor }}>
-        <EditorContent editor={editor} />
-      </EditorContext.Provider>,
-    );
+    renderMermaidEditor(editor);
     const download = await screen.findByRole("button", {
       name: /download png/i,
     });
@@ -216,22 +218,22 @@ describe("MermaidNodeView", () => {
     });
 
     fireEvent.click(download);
-    fireEvent.click(download);
-
     await waitFor(() => {
       expect(saveBlobToDiskMock).toHaveBeenCalledTimes(1);
+      expect((download as HTMLButtonElement).disabled).toBe(true);
     });
+    fireEvent.click(download);
+    expect(saveBlobToDiskMock).toHaveBeenCalledTimes(1);
     resolveSave("mermaid-diagram.png");
+    await waitFor(() => {
+      expect((download as HTMLButtonElement).disabled).toBe(false);
+    });
     editor.destroy();
   });
 
   it("renders an error panel when mermaid parse fails", async () => {
     const editor = mountMermaidEditor({ code: "!!!", editable: true });
-    render(
-      <EditorContext.Provider value={{ editor }}>
-        <EditorContent editor={editor} />
-      </EditorContext.Provider>,
-    );
+    renderMermaidEditor(editor);
     const alert = await screen.findByRole("alert", undefined, {
       timeout: 2000,
     });
