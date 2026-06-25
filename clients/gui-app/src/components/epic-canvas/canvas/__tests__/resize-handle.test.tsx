@@ -419,4 +419,17 @@ describe("<SplitResizeHandle />", () => {
     expect(handle.getAttribute("aria-valuemax")).toBe("100");
     expect(handle.tabIndex).toBe(0);
   });
+
+  it("tags its group id on data-resize-group-id, never data-group-id", () => {
+    const onCommitSizes =
+      vi.fn<(groupId: string, sizes: ReadonlyArray<number>) => void>();
+    const { handle } = renderHandle([0.5, 0.5], onCommitSizes);
+
+    // The handle carries the split GROUP id, but NOT under `data-group-id` -
+    // that attribute marks tab-group panes and is collected by the canvas
+    // focus-navigation `readTileRects`. A handle on `data-group-id` would win
+    // the spatial neighbour search and break cross-split focus navigation.
+    expect(handle.getAttribute("data-resize-group-id")).toBe(GROUP_ID);
+    expect(handle.hasAttribute("data-group-id")).toBe(false);
+  });
 });

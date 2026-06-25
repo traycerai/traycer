@@ -161,7 +161,13 @@ export function SplitResizeHandle(props: SplitResizeHandleProps) {
       aria-valuemax={100}
       aria-label="Resize pane"
       data-testid="split-resize-handle"
-      data-group-id={groupId}
+      // NOT `data-group-id`: that attribute marks tab-group panes, and the
+      // canvas focus-navigation `readTileRects` collects every `[data-group-id]`
+      // as a focus target. A handle sits exactly on the seam between two panes,
+      // so it would win the spatial neighbour search - but its id is a split
+      // GROUP id, not a pane id, so the focus update would silently no-op.
+      // Keep handles on their own attribute so focus nav never sees them.
+      data-resize-group-id={groupId}
       data-handle-index={index}
       className={cn(
         "relative z-10 shrink-0 bg-border ring-offset-background focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-hidden",
