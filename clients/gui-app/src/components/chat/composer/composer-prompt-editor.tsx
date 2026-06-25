@@ -20,6 +20,8 @@ import { cn } from "@/lib/utils";
 import { registerComposerFocus } from "@/lib/composer/composer-focus-registry";
 
 import { buildComposerExtensions } from "./editor/editor-config";
+import { mentionSuggestionPluginKey } from "./editor/extensions/mention-extension";
+import { slashSuggestionPluginKey } from "./editor/extensions/slash-command-extension";
 import { insertImageAttachmentsCommand } from "@/hooks/composer/use-composer-paste";
 import type { ImageAttachmentAttrs } from "./editor/extensions/image-attachment-extension";
 import type { ComposerPickerStore } from "./picker/composer-picker-store";
@@ -45,6 +47,14 @@ export interface ComposerPromptEditorHandle {
    * sequential segments append cleanly.
    */
   readonly insertDictatedText: (text: string) => void;
+  /**
+   * Fully exit whichever `@`/`/` suggestion picker is currently open (clearing
+   * the plugin's active range/decoration and closing the picker menu), and
+   * report whether one was open. Lets a surrounding surface (e.g. a dialog)
+   * treat Escape as "close the picker" without the editor's own keydown - see
+   * the New Conversation modal, where Radix would otherwise swallow the Escape.
+   */
+  readonly dismissActiveSuggestion: () => boolean;
 }
 
 export interface ComposerPromptEditorProps {
@@ -281,6 +291,22 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
     [editor],
   );
 
+  const dismissActiveSuggestion = useCallback((): boolean => {
+    if (editor === null) return false;
+    // The store's `open` flips with the suggestion plugin's active state (the
+    // render's onStart/onExit drive it), so this gates on a picker actually
+    // showing. Dispatch the suggestion-exit meta to both plugin keys; the
+    // active one transitions to "stopped" - clearing its range/decoration and
+    // firing onExit, which closes the menu - and the inactive one ignores it.
+    if (!pickerStore.getState().open) return false;
+    editor.view.dispatch(
+      editor.state.tr
+        .setMeta(mentionSuggestionPluginKey, { exit: true })
+        .setMeta(slashSuggestionPluginKey, { exit: true }),
+    );
+    return true;
+  }, [editor, pickerStore]);
+
   useImperativeHandle(
     ref,
     () => ({
@@ -293,9 +319,11 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
       insertImageAttachments,
       removeImageAttachmentById,
       insertDictatedText,
+      dismissActiveSuggestion,
     }),
     [
       clear,
+      dismissActiveSuggestion,
       focus,
       focusAtEnd,
       getJSON,
