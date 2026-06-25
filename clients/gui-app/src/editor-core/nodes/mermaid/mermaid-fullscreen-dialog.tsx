@@ -19,6 +19,7 @@ export interface MermaidFullscreenDialogProps {
   readonly title: string;
   readonly onCopyCode: () => void;
   readonly onDownloadPng: () => void;
+  readonly downloadDisabled: boolean;
 }
 
 /**
@@ -27,8 +28,16 @@ export interface MermaidFullscreenDialogProps {
  * `PanZoomSvgViewer` for read-only pan, zoom, fit, and keyboard control.
  */
 export function MermaidFullscreenDialog(props: MermaidFullscreenDialogProps) {
-  const { open, onOpenChange, svg, code, title, onCopyCode, onDownloadPng } =
-    props;
+  const {
+    open,
+    onOpenChange,
+    svg,
+    code,
+    title,
+    onCopyCode,
+    onDownloadPng,
+    downloadDisabled,
+  } = props;
   const ariaLabel =
     code.split("\n").find((l) => l.trim().length > 0) ?? "Mermaid diagram";
 
@@ -69,7 +78,7 @@ export function MermaidFullscreenDialog(props: MermaidFullscreenDialogProps) {
                 size="icon-sm"
                 onClick={onDownloadPng}
                 aria-label="Download PNG"
-                disabled={svg.length === 0}
+                disabled={downloadDisabled}
               >
                 <Download className="size-4" aria-hidden="true" />
               </Button>

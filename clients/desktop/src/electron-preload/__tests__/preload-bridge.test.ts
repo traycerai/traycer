@@ -148,6 +148,7 @@ interface PreloadBridge {
     getPathForFile(file: File): string;
     writeTemporaryFile(input: unknown): Promise<string>;
     copyTemporaryFiles(paths: readonly string[]): Promise<readonly string[]>;
+    saveFile(input: unknown): Promise<string | null>;
   };
   requestHostRespawn(): Promise<void>;
   menu: {
@@ -458,6 +459,19 @@ describe("preload new-capability wiring", () => {
         bytes,
       },
     );
+
+    await expect(
+      bridge.fileDrops.saveFile({
+        name: "diagram.png",
+        type: "image/png",
+        bytes,
+      }),
+    ).resolves.toBe("/tmp/materialized-drop.png");
+    expect(invokeFn).toHaveBeenCalledWith(RunnerHostInvoke.fileSave, {
+      name: "diagram.png",
+      type: "image/png",
+      bytes,
+    });
   });
 
   it("exposes menu-command and support bridges", async () => {

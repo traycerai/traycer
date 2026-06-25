@@ -53,7 +53,7 @@ import {
   RunnerHostEvent,
   RunnerHostInvoke,
 } from "../../ipc-contracts/ipc-channels";
-import { app, BrowserWindow, type ProxyConfig } from "electron";
+import { app, BrowserWindow, dialog, type ProxyConfig } from "electron";
 import { randomUUID } from "node:crypto";
 import { copyFile, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -102,6 +102,26 @@ export function registerPlatformIpc(bridge: RunnerIpcBridge): void {
           copyDroppedFileToTemp(sourcePath, directory),
         ),
       );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.fileSave,
+    async (event, input: unknown): Promise<string | null> => {
+      const file = parseFileSaveInput(input);
+      const defaultPath = path.basename(file.name) || "download";
+      const options = {
+        defaultPath,
+        filters: buildSaveFileFilters(file.name, file.type),
+      };
+      const window = BrowserWindow.fromWebContents(event.sender);
+      const result =
+        window === null || window.isDestroyed()
+          ? await dialog.showSaveDialog(options)
+          : await dialog.showSaveDialog(window, options);
+      if (result.canceled || !result.filePath) return null;
+      await writeFile(result.filePath, Buffer.from(new Uint8Array(file.bytes)));
+      return path.basename(result.filePath);
     },
   );
 
@@ -371,6 +391,12 @@ interface TemporaryDroppedFileInput {
   readonly bytes: ArrayBuffer;
 }
 
+interface FileSaveInput {
+  readonly name: string;
+  readonly type: string;
+  readonly bytes: ArrayBuffer;
+}
+
 function parseTemporaryDroppedFileInput(
   input: unknown,
 ): TemporaryDroppedFileInput {
@@ -388,6 +414,25 @@ function parseTemporaryDroppedFileInput(
   const bytes = input.bytes;
   if (!(bytes instanceof ArrayBuffer)) {
     throw new Error("fileDrops.writeTemporary requires ArrayBuffer bytes");
+  }
+  return { name, type, bytes };
+}
+
+function parseFileSaveInput(input: unknown): FileSaveInput {
+  if (!isRecord(input)) {
+    throw new Error("file.save requires an object payload");
+  }
+  const name = input.name;
+  if (typeof name !== "string") {
+    throw new Error("file.save requires a string name");
+  }
+  const type = input.type;
+  if (typeof type !== "string") {
+    throw new Error("file.save requires a string type");
+  }
+  const bytes = input.bytes;
+  if (!(bytes instanceof ArrayBuffer)) {
+    throw new Error("file.save requires ArrayBuffer bytes");
   }
   return { name, type, bytes };
 }
@@ -443,6 +488,23 @@ function droppedFileExtension(name: string, type: string): string {
   if (type === "application/pdf") return ".pdf";
   if (type === "text/plain") return ".txt";
   return ".bin";
+}
+
+function buildSaveFileFilters(
+  name: string,
+  type: string,
+): Electron.FileFilter[] {
+  const extension = droppedFileExtension(name, type).replace(/^\./, "");
+  if (type === "image/png" || extension === "png") {
+    return [{ name: "PNG image", extensions: ["png"] }];
+  }
+  if (type === "image/jpeg" || extension === "jpg" || extension === "jpeg") {
+    return [{ name: "JPEG image", extensions: ["jpg", "jpeg"] }];
+  }
+  if (extension.length === 0) {
+    return [{ name: "All Files", extensions: ["*"] }];
+  }
+  return [{ name: "File", extensions: [extension] }];
 }
 
 function sanitizedDroppedFileBase(value: string): string {

@@ -152,6 +152,10 @@ function buildFakeBridge(
       },
       copyTemporaryFiles: async (paths) =>
         paths.map((path) => `/tmp/copied/${path.split("/").pop() ?? ""}`),
+      saveFile: async (input) => {
+        temporaryWrites.push(input);
+        return input.name;
+      },
     },
     menu: {
       onCommand: (_handler) => ({ dispose: () => undefined }),

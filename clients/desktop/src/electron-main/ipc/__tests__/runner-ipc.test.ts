@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import log from "electron-log";
@@ -81,6 +81,10 @@ vi.mock("electron", () => ({
   },
   dialog: {
     showOpenDialog: vi.fn(async () => ({ canceled: true, filePaths: [] })),
+    showSaveDialog: vi.fn(async () => ({ canceled: true })),
+  },
+  BrowserWindow: {
+    fromWebContents: vi.fn(() => null),
   },
   Notification: {
     isSupported: (): boolean => false,
@@ -583,6 +587,7 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.displayList,
         RunnerHostInvoke.fileDropWriteTemporary,
         RunnerHostInvoke.fileDropCopyTemporary,
+        RunnerHostInvoke.fileSave,
         RunnerHostInvoke.gpuAccelerationGet,
         RunnerHostInvoke.gpuAccelerationSet,
       ].sort(),
@@ -660,6 +665,75 @@ describe("RunnerIpcBridge", () => {
     expect(showOpenDialog).toHaveBeenCalledWith({
       properties: ["openDirectory", "multiSelections", "createDirectory"],
     });
+    bridge.dispose();
+  });
+
+  it("saves renderer-provided bytes through the native save dialog", async () => {
+    const mod = await import("../register-runner-ipc");
+    const electron = await import("electron");
+    const dir = await mkdtemp(join(tmpdir(), "traycer-file-save-"));
+    const target = join(dir, "diagram.png");
+    const showSaveDialog = vi.mocked(electron.dialog.showSaveDialog);
+    showSaveDialog.mockResolvedValue({
+      canceled: false,
+      filePath: target,
+    });
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      window: buildWindow(),
+    });
+    bridge.install();
+
+    const handler = ipcMainState.handlers.get(RunnerHostInvoke.fileSave);
+    if (handler === undefined) {
+      throw new Error("file save handler missing");
+    }
+
+    await expect(
+      handler(bareEvent(), {
+        name: "mermaid-diagram.png",
+        type: "image/png",
+        bytes: new Uint8Array([1, 2, 3]).buffer,
+      }),
+    ).resolves.toBe("diagram.png");
+    expect(showSaveDialog).toHaveBeenCalledWith({
+      defaultPath: "mermaid-diagram.png",
+      filters: [{ name: "PNG image", extensions: ["png"] }],
+    });
+    await expect(readFile(target)).resolves.toEqual(Buffer.from([1, 2, 3]));
+    await rm(dir, { recursive: true, force: true });
+    bridge.dispose();
+  });
+
+  it("returns null when the native save dialog is cancelled", async () => {
+    const mod = await import("../register-runner-ipc");
+    const electron = await import("electron");
+    const showSaveDialog = vi.mocked(electron.dialog.showSaveDialog);
+    showSaveDialog.mockResolvedValue({ canceled: true, filePath: "" });
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      window: buildWindow(),
+    });
+    bridge.install();
+
+    const handler = ipcMainState.handlers.get(RunnerHostInvoke.fileSave);
+    if (handler === undefined) {
+      throw new Error("file save handler missing");
+    }
+
+    await expect(
+      handler(bareEvent(), {
+        name: "mermaid-diagram.png",
+        type: "image/png",
+        bytes: new Uint8Array([1, 2, 3]).buffer,
+      }),
+    ).resolves.toBeNull();
     bridge.dispose();
   });
 

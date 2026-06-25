@@ -185,6 +185,11 @@ export interface DesktopFileDropsBridge {
     readonly bytes: ArrayBuffer;
   }): Promise<string>;
   copyTemporaryFiles(paths: readonly string[]): Promise<readonly string[]>;
+  saveFile(input: {
+    readonly name: string;
+    readonly type: string;
+    readonly bytes: ArrayBuffer;
+  }): Promise<string | null>;
 }
 
 /**

@@ -21,11 +21,9 @@ import {
   ensureMermaidReady,
   parseMermaid,
   renderMermaidSvg,
-  saveBlobToDisk,
   subscribeMermaidTheme,
-  svgToPngBlob,
 } from "./mermaid-service";
-import { readMermaidPalette } from "./mermaid-theme";
+import { useMermaidPngDownload } from "./use-mermaid-png-download";
 
 /**
  * Code editor is loaded on first open - CodeMirror adds ~150 kB gzip so
@@ -162,25 +160,10 @@ export function MermaidNodeView(props: NodeViewProps) {
     });
   }, [activeCode]);
 
-  const handleDownload = useCallback(() => {
-    if (render.status !== "ready" || render.svg.length === 0) return;
-    void (async (): Promise<void> => {
-      try {
-        const palette = readMermaidPalette(document);
-        const blob = await svgToPngBlob({
-          svg: render.svg,
-          backgroundColor: palette.background,
-        });
-        const saved = await saveBlobToDisk(blob, "mermaid-diagram.png");
-        if (saved !== null) {
-          toast.success(`Saved ${saved}`);
-        }
-      } catch (err) {
-        console.error("[mermaid] download failed", err);
-        toast.error("Failed to download diagram");
-      }
-    })();
-  }, [render]);
+  const { downloadMermaidPng, isDownloading } = useMermaidPngDownload({
+    svg: render.svg,
+    enabled: render.status === "ready",
+  });
 
   const handleToggleEdit = useCallback(() => {
     setEditing((prev) => {
@@ -224,9 +207,9 @@ export function MermaidNodeView(props: NodeViewProps) {
           editable={editable}
           onToggleEdit={handleToggleEdit}
           onCopyCode={handleCopy}
-          onDownloadPng={handleDownload}
+          onDownloadPng={downloadMermaidPng}
           onOpenFullscreen={() => setFullscreenOpen(true)}
-          downloadDisabled={render.status !== "ready"}
+          downloadDisabled={render.status !== "ready" || isDownloading}
           fullscreenDisabled={render.status !== "ready"}
         />
 
@@ -267,7 +250,8 @@ export function MermaidNodeView(props: NodeViewProps) {
           code={activeCode}
           title={ariaLabel}
           onCopyCode={handleCopy}
-          onDownloadPng={handleDownload}
+          onDownloadPng={downloadMermaidPng}
+          downloadDisabled={render.status !== "ready" || isDownloading}
         />
 
         {editing && editable ? (

@@ -11,6 +11,12 @@ import { EditorContent, EditorContext } from "@tiptap/react";
 import * as Y from "yjs";
 import { Awareness } from "y-protocols/awareness";
 import { buildArtifactExtensions, deriveCollabUser } from "@/editor-core";
+import { saveBlobToDisk } from "@/lib/files/save-blob-to-disk";
+
+// The download path lives in a shared lib module; mock it on its own.
+vi.mock("@/lib/files/save-blob-to-disk", () => ({
+  saveBlobToDisk: vi.fn().mockResolvedValue("mermaid-diagram.png"),
+}));
 
 // Mocks must be declared before the editor imports the service.
 vi.mock("@/editor-core/nodes/mermaid/mermaid-service", () => {
@@ -28,7 +34,6 @@ vi.mock("@/editor-core/nodes/mermaid/mermaid-service", () => {
     svgToPngBlob: vi
       .fn()
       .mockResolvedValue(new Blob(["mock-png"], { type: "image/png" })),
-    saveBlobToDisk: vi.fn().mockResolvedValue("mermaid-diagram.png"),
     subscribeMermaidTheme: vi.fn().mockReturnValue(() => undefined),
     getMermaidThemeVersion: vi.fn().mockReturnValue(0),
     deriveMermaidAriaLabel: (code: string): string => {
@@ -94,6 +99,8 @@ afterEach(() => {
 });
 
 beforeEach(() => {
+  vi.mocked(saveBlobToDisk).mockReset();
+  vi.mocked(saveBlobToDisk).mockResolvedValue("mermaid-diagram.png");
   // jsdom does not implement clipboard.writeText; install a stub.
   Object.defineProperty(navigator, "clipboard", {
     configurable: true,
@@ -179,6 +186,42 @@ describe("MermaidNodeView", () => {
     const copy = await screen.findByRole("button", { name: /copy code/i });
     fireEvent.click(copy);
     expect(writeText).toHaveBeenCalledWith(code);
+    editor.destroy();
+  });
+
+  it("ignores overlapping download clicks while the save picker is open", async () => {
+    const saveBlobToDiskMock = vi.mocked(saveBlobToDisk);
+    let resolveSave = (_value: string | null): void => undefined;
+    const pendingSave = new Promise<string | null>((resolve) => {
+      resolveSave = resolve;
+    });
+    saveBlobToDiskMock.mockReturnValueOnce(pendingSave);
+
+    const editor = mountMermaidEditor({
+      code: "graph TD\n  A --> B",
+      editable: true,
+    });
+    render(
+      <EditorContext.Provider value={{ editor }}>
+        <EditorContent editor={editor} />
+      </EditorContext.Provider>,
+    );
+    const download = await screen.findByRole("button", {
+      name: /download png/i,
+    });
+    const region = await screen.findByRole("img", { name: /graph TD/ });
+    await waitFor(() => {
+      expect(region.querySelector("svg")).not.toBeNull();
+      expect((download as HTMLButtonElement).disabled).toBe(false);
+    });
+
+    fireEvent.click(download);
+    fireEvent.click(download);
+
+    await waitFor(() => {
+      expect(saveBlobToDiskMock).toHaveBeenCalledTimes(1);
+    });
+    resolveSave("mermaid-diagram.png");
     editor.destroy();
   });
 

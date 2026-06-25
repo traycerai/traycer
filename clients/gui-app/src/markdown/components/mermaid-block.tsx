@@ -7,10 +7,8 @@ import {
   ensureMermaidReady,
   parseMermaid,
   renderMermaidSvg,
-  saveBlobToDisk,
-  svgToPngBlob,
 } from "@/editor-core/nodes/mermaid/mermaid-service";
-import { readMermaidPalette } from "@/editor-core/nodes/mermaid/mermaid-theme";
+import { useMermaidPngDownload } from "@/editor-core/nodes/mermaid/use-mermaid-png-download";
 import { useMermaidThemeKey } from "@/editor-core/nodes/mermaid/use-mermaid-theme-key";
 import { useDebouncedValue } from "@/hooks/ui/use-debounced-value";
 import { trustedMarkupToReactNodes } from "@/lib/trusted-markup";
@@ -137,27 +135,12 @@ function MermaidRenderSession(props: {
     });
   }, [sourceCode]);
 
-  const handleDownload = useCallback(() => {
-    if (render.status !== "ready" || render.svg.length === 0) return;
-    void (async (): Promise<void> => {
-      try {
-        const palette = readMermaidPalette(document);
-        const blob = await svgToPngBlob({
-          svg: render.svg,
-          backgroundColor: palette.background,
-        });
-        const saved = await saveBlobToDisk(blob, "mermaid-diagram.png");
-        if (saved !== null) {
-          toast.success(`Saved ${saved}`);
-        }
-      } catch (err) {
-        console.error("[mermaid] download failed", err);
-        toast.error("Failed to download diagram");
-      }
-    })();
-  }, [render]);
+  const { downloadMermaidPng, isDownloading } = useMermaidPngDownload({
+    svg: render.svg,
+    enabled: render.status === "ready",
+  });
 
-  const downloadDisabled = render.status !== "ready";
+  const downloadDisabled = render.status !== "ready" || isDownloading;
   const fullscreenDisabled = render.status !== "ready";
   const renderedSvg = useMemo(
     () =>
@@ -174,7 +157,7 @@ function MermaidRenderSession(props: {
         editable={false}
         onToggleEdit={noop}
         onCopyCode={handleCopy}
-        onDownloadPng={handleDownload}
+        onDownloadPng={downloadMermaidPng}
         onOpenFullscreen={() => onFullscreenOpenChange(true)}
         downloadDisabled={downloadDisabled}
         fullscreenDisabled={fullscreenDisabled}
@@ -214,7 +197,8 @@ function MermaidRenderSession(props: {
         code={sourceCode}
         title={ariaLabel}
         onCopyCode={handleCopy}
-        onDownloadPng={handleDownload}
+        onDownloadPng={downloadMermaidPng}
+        downloadDisabled={downloadDisabled}
       />
     </div>
   );
