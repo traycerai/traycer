@@ -727,8 +727,8 @@ export function useRenderedMessages(
     [setupCardRows, ownerId, viewTabId],
   );
   const forkedChatLinkMessages = useMemo(
-    () => buildForkedChatLinkMessages(input.events, epicId),
-    [input.events, epicId],
+    () => buildForkedChatLinkMessages(input.events, viewTabId),
+    [input.events, viewTabId],
   );
 
   // The live row's blocks merge INTO a persisted turn only when a persisted
@@ -1106,7 +1106,7 @@ function buildSetupCardMessage(
 
 function buildForkedChatLinkMessages(
   events: ReadonlyArray<ChatEvent>,
-  epicId: string,
+  viewTabId: string,
 ): ReadonlyArray<ChatMessageModel> {
   return events.flatMap((event) => {
     if (event.type !== "chat.forked") return [];
@@ -1129,7 +1129,7 @@ function buildForkedChatLinkMessages(
           {
             id: `${id}:link`,
             kind: "forked-chat-link",
-            epicId,
+            viewTabId,
             sourceChatId,
             sourceChatTitle,
             sourceHostId,
