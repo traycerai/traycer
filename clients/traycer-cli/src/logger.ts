@@ -1,6 +1,7 @@
 import { appendFileSync, chmodSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import type { Environment } from "./runner/environment";
+import { CliError } from "./runner/errors";
 import { cliLogPath } from "./store/paths";
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
@@ -90,16 +91,15 @@ export function errorFromUnknown(value: unknown): Error {
 
 function serializeError(error: Error): {
   readonly name: string;
-  readonly message: string;
-  readonly stack: string | null;
+  readonly code: string | null;
+  readonly hasMessage: boolean;
+  readonly hasStack: boolean;
 } {
   return {
     name: error.name,
-    message: sanitizeText(error.message),
-    stack:
-      typeof error.stack === "string"
-        ? sanitizeText(error.stack)
-        : null,
+    code: error instanceof CliError ? error.code : null,
+    hasMessage: error.message.length > 0,
+    hasStack: typeof error.stack === "string" && error.stack.length > 0,
   };
 }
 
@@ -116,14 +116,20 @@ function sanitizeLogValueInner(
   if (
     key !== null &&
     SENSITIVE_FIELD_PATTERN.test(key) &&
-    (typeof value === "string" || Array.isArray(value) || typeof value === "object")
+    (typeof value === "string" ||
+      Array.isArray(value) ||
+      typeof value === "object")
   ) {
     return "[redacted]";
   }
   if (typeof value === "string") {
     return sanitizeText(value);
   }
-  if (typeof value === "number" || typeof value === "boolean" || value === null) {
+  if (
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    value === null
+  ) {
     return value;
   }
   if (depth >= MAX_LOG_DEPTH) {

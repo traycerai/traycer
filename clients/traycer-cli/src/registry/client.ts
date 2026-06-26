@@ -104,7 +104,10 @@ export async function createRegistryClient(
         "host registry: no trusted signing keys are configured for this build, " +
         "so host versions cannot be verified. This is expected for local/dev " +
         "builds; install from a local archive with 'traycer host install --from <path>'.",
-      details: { sources: trustedKeySet.sources, environment: opts.environment },
+      details: {
+        sources: trustedKeySet.sources,
+        environment: opts.environment,
+      },
       exitCode: 1,
     });
   }
@@ -151,7 +154,7 @@ export async function createRegistryClient(
       cachedManifest = manifest;
       logger.info("Registry manifest parsed", {
         environment: opts.environment,
-        latest: manifest.latest,
+        hasLatest: manifest.latest.length > 0,
         versionCount: manifest.versions.length,
       });
       return manifest;
@@ -164,21 +167,24 @@ export async function createRegistryClient(
       readonly entry: HostVersionEntry;
       readonly asset: HostPlatformAsset;
     }> {
-      const manifest = cachedManifest ?? (await (this as RegistryClient).fetchManifest());
-      const resolvedVersion =
-        versionRequest === "latest" ? manifest.latest : versionRequest;
+      const manifest =
+        cachedManifest ?? (await (this as RegistryClient).fetchManifest());
+      const requestedLatest = versionRequest === "latest";
+      const resolvedVersion = requestedLatest
+        ? manifest.latest
+        : versionRequest;
       logger.info("Registry asset resolution started", {
         environment: opts.environment,
-        versionRequest,
-        resolvedVersion,
+        requestedLatest,
         platformKey,
       });
-      const entry = manifest.versions.find((v) => v.version === resolvedVersion);
+      const entry = manifest.versions.find(
+        (v) => v.version === resolvedVersion,
+      );
       if (entry === undefined) {
         logger.warn("Registry version not found", {
           environment: opts.environment,
-          versionRequest,
-          resolvedVersion,
+          requestedLatest,
           availableVersionCount: manifest.versions.length,
         });
         throw cliError({
@@ -195,7 +201,7 @@ export async function createRegistryClient(
       if (entry.yanked) {
         logger.warn("Registry refused yanked version", {
           environment: opts.environment,
-          resolvedVersion,
+          requestedLatest,
           hasDeprecationReason: entry.deprecationReason !== null,
         });
         // Yanked versions are refused for install. The Tech Plan reserves
@@ -213,10 +219,11 @@ export async function createRegistryClient(
       }
       const asset = entry.platforms[platformKey];
       if (asset === undefined || !asset.available) {
-        const reason = asset?.unavailableReason ?? "no asset published for this platform";
+        const reason =
+          asset?.unavailableReason ?? "no asset published for this platform";
         logger.warn("Registry asset unavailable for platform", {
           environment: opts.environment,
-          resolvedVersion,
+          requestedLatest,
           platformKey,
           hasUnavailableReason:
             asset !== undefined && asset.unavailableReason !== null,
@@ -234,9 +241,8 @@ export async function createRegistryClient(
       }
       logger.info("Registry asset resolved", {
         environment: opts.environment,
-        resolvedVersion,
+        requestedLatest,
         platformKey,
-        sizeBytes: asset.sizeBytes,
       });
       return { entry, asset };
     },
@@ -244,7 +250,10 @@ export async function createRegistryClient(
     async downloadAndVerify(
       entry: HostVersionEntry,
       asset: HostPlatformAsset,
-      onProgress: (progress: { downloadedBytes: number; totalBytes: number }) => void,
+      onProgress: (progress: {
+        downloadedBytes: number;
+        totalBytes: number;
+      }) => void,
     ): Promise<{
       readonly archivePath: string;
       readonly archiveSha256: string;
@@ -254,21 +263,21 @@ export async function createRegistryClient(
       if (!asset.available) {
         logger.warn("Registry download refused unavailable asset", {
           environment: opts.environment,
-          version: entry.version,
           hasUnavailableReason: asset.unavailableReason !== null,
         });
         throw cliError({
           code: CLI_ERROR_CODES.REGISTRY_VERSION_NOT_FOUND,
           message: `host registry: asset for version '${entry.version}' is marked unavailable`,
-          details: { version: entry.version, unavailableReason: asset.unavailableReason },
+          details: {
+            version: entry.version,
+            unavailableReason: asset.unavailableReason,
+          },
           exitCode: 1,
         });
       }
       const tmpDir = await mkdtemp(join(tmpdir(), "traycer-host-dl-"));
       logger.info("Registry download started", {
         environment: opts.environment,
-        version: entry.version,
-        sizeBytes: asset.sizeBytes,
       });
       // Track whether we succeeded so the `finally` block can clean up
       // the tmpdir on failure. On success the caller (installer) is
@@ -298,7 +307,6 @@ export async function createRegistryClient(
             "Registry signature key mismatch",
             {
               environment: opts.environment,
-              version: entry.version,
             },
             null,
           );
@@ -315,8 +323,7 @@ export async function createRegistryClient(
         succeeded = true;
         logger.info("Registry download and verification completed", {
           environment: opts.environment,
-          version: entry.version,
-          downloadedBytes: download.downloadedBytes,
+          downloadedExpectedBytes: download.downloadedBytes === asset.sizeBytes,
         });
         return {
           archivePath,
@@ -333,16 +340,16 @@ export async function createRegistryClient(
         // empty dir behind, which the OS cleans up on reboot anyway.
         if (!succeeded) {
           await rm(tmpDir, { recursive: true, force: true }).catch((err) => {
-            logger.warn("Registry failed to clean temporary download directory", {
-              environment: opts.environment,
-              version: entry.version,
-              errorName: errorFromUnknown(err).name,
-              errorMessage: errorFromUnknown(err).message,
-            });
+            logger.warn(
+              "Registry failed to clean temporary download directory",
+              {
+                environment: opts.environment,
+                errorName: errorFromUnknown(err).name,
+              },
+            );
           });
           logger.warn("Registry cleaned failed download attempt", {
             environment: opts.environment,
-            version: entry.version,
           });
         }
       }

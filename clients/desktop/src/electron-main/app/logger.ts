@@ -61,7 +61,9 @@ export function redactLogText(value: string): string {
     : redacted;
 }
 
-export function sanitizeLogFields(fields: Record<string, unknown>): SafeLogFields {
+export function sanitizeLogFields(
+  fields: Record<string, unknown>,
+): SafeLogFields {
   return sanitizeLogRecord(fields, 0);
 }
 
