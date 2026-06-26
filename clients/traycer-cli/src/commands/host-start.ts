@@ -297,7 +297,7 @@ export async function runHostStart(
 
   for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"] as const) {
     process.on(sig, () => {
-      logger.warn("Host supervisor forwarding signal to child", {
+      logger.debug("Host supervisor forwarding signal to child", {
         environment: opts.environment,
         signal: sig,
         childPidKnown: child.pid !== undefined,

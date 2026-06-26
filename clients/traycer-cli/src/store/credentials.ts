@@ -29,10 +29,12 @@ export async function readCredentials(): Promise<StoredCredentials | null> {
   try {
     raw = await readFile(cliCredentialsPath(config.environment), "utf8");
   } catch (err) {
+    if (readErrorCode(err) !== "ENOENT") {
+      throw err;
+    }
     logger.debug("Credentials read returned absent", {
       environment: config.environment,
       errorName: errorFromUnknown(err).name,
-      errorMessage: errorFromUnknown(err).message,
     });
     return null;
   }
@@ -134,7 +136,7 @@ export async function deleteCredentials(): Promise<boolean> {
   const logger = createCliLogger(config.environment);
   try {
     await unlink(cliCredentialsPath(config.environment));
-    logger.warn("Credentials deleted", {
+    logger.info("Credentials deleted", {
       environment: config.environment,
       deleted: true,
     });
@@ -148,4 +150,10 @@ export async function deleteCredentials(): Promise<boolean> {
     });
     return false;
   }
+}
+
+function readErrorCode(error: unknown): string | null {
+  if (error === null || typeof error !== "object") return null;
+  const code = Reflect.get(error, "code");
+  return typeof code === "string" ? code : null;
 }

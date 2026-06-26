@@ -69,11 +69,18 @@ function buildConsumedInitialRouteKey(
 function loadPersistedState(windowId: string | null): PersistedState {
   if (typeof window === "undefined") return { entries: ["/"], index: 0 };
   if (windowId === null) return { entries: ["/"], index: 0 };
+  const storageKey = buildStorageKey(windowId);
   try {
-    const raw = window.localStorage.getItem(buildStorageKey(windowId));
+    const raw = window.localStorage.getItem(storageKey);
     if (raw === null) return { entries: ["/"], index: 0 };
     const parsed: unknown = JSON.parse(raw);
-    if (!isPersistedState(parsed)) return { entries: ["/"], index: 0 };
+    if (!isPersistedState(parsed)) {
+      appLogger.warn("[history] persisted route state rejected", {
+        windowId,
+      });
+      removePersistedState(storageKey);
+      return { entries: ["/"], index: 0 };
+    }
     const safeIndex = Math.min(
       Math.max(parsed.index, 0),
       parsed.entries.length - 1,
@@ -84,7 +91,16 @@ function loadPersistedState(windowId: string | null): PersistedState {
       windowId,
       error: describeLogError(error),
     });
+    removePersistedState(storageKey);
     return { entries: ["/"], index: 0 };
+  }
+}
+
+function removePersistedState(storageKey: string): void {
+  try {
+    window.localStorage.removeItem(storageKey);
+  } catch {
+    // Keep route recovery best-effort; the load failure was already logged.
   }
 }
 

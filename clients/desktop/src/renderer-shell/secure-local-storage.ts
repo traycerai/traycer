@@ -101,10 +101,9 @@ export function removeEncryptedItem(key: string): void {
 
 function describeStorageError(error: unknown): {
   readonly name: string;
-  readonly message: string;
 } {
   if (error instanceof Error) {
-    return { name: error.name, message: error.message };
+    return { name: error.name };
   }
-  return { name: typeof error, message: String(error) };
+  return { name: typeof error };
 }

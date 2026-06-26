@@ -77,6 +77,10 @@ export type MonitorArgs = {
   readonly epicId: string | null;
 };
 
+type EndpointResolutionLogState = {
+  value: string | null;
+};
+
 export async function runMonitor(args: MonitorArgs): Promise<void> {
   const logger = createCliLogger(config.environment);
   const agentId = args.agentId ?? process.env.TRAYCER_AGENT_ID ?? null;
@@ -137,7 +141,11 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
   // are serialized (no out-of-order clobber) and a good endpoint is never
   // overwritten with `null` (a momentarily-absent pid file keeps the last-known
   // URL; dials simply retry until a fresh one appears).
-  let endpoint = await tryResolveStreamEndpoint(logger);
+  const endpointResolutionLogState: EndpointResolutionLogState = { value: null };
+  let endpoint = await tryResolveStreamEndpoint(
+    logger,
+    endpointResolutionLogState,
+  );
   logger.info("Monitor initial endpoint resolution completed", {
     environment: config.environment,
     hasEndpoint: endpoint !== null,
@@ -150,9 +158,9 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
       return;
     }
     pollInFlight = true;
-    void tryResolveStreamEndpoint(logger)
+    void tryResolveStreamEndpoint(logger, endpointResolutionLogState)
       .then((next) => {
-        if (next !== null) {
+        if (next !== null && !sameEndpoint(endpoint, next)) {
           endpoint = next;
           logger.debug("Monitor endpoint refreshed", {
             environment: config.environment,
@@ -433,23 +441,50 @@ function handleServerFrame(
 
 async function tryResolveStreamEndpoint(
   logger: ILogger,
+  logState: EndpointResolutionLogState,
 ): Promise<HostTransportEndpoint | null> {
   const metadata = await readHostPidMetadata(config.environment);
   if (metadata === null) {
-    logger.debug("Monitor endpoint metadata missing", {
-      environment: config.environment,
+    logEndpointResolution(logState, "missing", () => {
+      logger.debug("Monitor endpoint metadata missing", {
+        environment: config.environment,
+      });
     });
     return null;
   }
   if (!isValidLocalHostWebsocketUrl(metadata.websocketUrl)) {
-    logger.warn("Monitor endpoint metadata advertised invalid websocket URL", {
-      environment: config.environment,
-      hostId: metadata.hostId,
+    logEndpointResolution(logState, `invalid:${metadata.hostId}`, () => {
+      logger.warn("Monitor endpoint metadata advertised invalid websocket URL", {
+        environment: config.environment,
+        hostId: metadata.hostId,
+      });
     });
     return null;
   }
   // `WsStreamClient` maps the `/rpc` URL to `/stream` itself.
+  logState.value = `ready:${metadata.hostId}:${metadata.websocketUrl}`;
   return { hostId: metadata.hostId, websocketUrl: metadata.websocketUrl };
+}
+
+function sameEndpoint(
+  current: HostTransportEndpoint | null,
+  next: HostTransportEndpoint,
+): boolean {
+  return (
+    current !== null &&
+    current.hostId === next.hostId &&
+    current.websocketUrl === next.websocketUrl
+  );
+}
+
+function logEndpointResolution(
+  state: EndpointResolutionLogState,
+  key: string,
+  write: () => void,
+): void {
+  if (state.value === key) return;
+  state.value = key;
+  write();
 }
 
 function printInboxMessage(item: AgentInboxMessage): void {

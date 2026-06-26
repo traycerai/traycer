@@ -1,7 +1,6 @@
 import { config } from "../config";
 import type { InstallSourceArg } from "../installer";
 import { resolveBundledHostArchive } from "../installer/bundled-host";
-import type { LogFields } from "../logger";
 import type { ProgressInfo } from "../runner/output";
 import type { RuntimeContext } from "../runner/runtime";
 import {
@@ -9,6 +8,7 @@ import {
   type HostProvisionResult,
 } from "./provision";
 import { defaultRegistryHostVersionRequest } from "./supported-host-version";
+import { installSourceLogFields } from "./install-source-log-fields";
 
 // `host ensure` - the desktop's post-auth provisioning call. A thin
 // source-resolving wrapper over the shared `provisionHost` core
@@ -120,15 +120,5 @@ async function resolveEnsureSource(
   return {
     kind: "registry",
     versionRequest: defaultRegistryHostVersionRequest(),
-  };
-}
-
-function installSourceLogFields(source: InstallSourceArg): LogFields {
-  if (source.kind === "local-file") {
-    return { sourceKind: "local-file" };
-  }
-  return {
-    sourceKind: "registry",
-    versionRequest: source.versionRequest,
   };
 }

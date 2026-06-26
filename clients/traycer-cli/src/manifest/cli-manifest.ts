@@ -1,5 +1,5 @@
 import { readFile, rename, writeFile } from "node:fs/promises";
-import { createCliLogger, errorFromUnknown } from "../logger";
+import { createCliLogger } from "../logger";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type { Environment } from "../runner/environment";
 import { cliManifestPath, ensureCliHomeDir } from "../store/paths";
@@ -295,11 +295,6 @@ export async function readCliManifest(
     // Only a missing file means "no manifest"; a real fault (EACCES/EIO)
     // must surface rather than be misread as an absent install.
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-      logger.warn("CLI manifest read failed", {
-        environment,
-        errorName: errorFromUnknown(err).name,
-        errorMessage: errorFromUnknown(err).message,
-      });
       throw err;
     }
     const distributionSource = readDistributionInstallSourceFromEnv();
@@ -339,7 +334,7 @@ export async function readCliManifest(
     logger.info("CLI manifest synthesized from system source marker", {
       environment,
       source: systemMarker.source,
-      version: systemMarker.version,
+      hasVersion: systemMarker.version.length > 0,
     });
     return {
       version: systemMarker.version,
@@ -352,14 +347,7 @@ export async function readCliManifest(
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
-  } catch (err) {
-    logger.error(
-      "CLI manifest JSON parse failed",
-      {
-        environment,
-      },
-      errorFromUnknown(err),
-    );
+  } catch {
     throw cliError({
       code: CLI_ERROR_CODES.CLI_MANIFEST_INVALID,
       message: `CLI manifest ${path} is not valid JSON; refusing to overwrite`,
@@ -417,7 +405,7 @@ export async function readCliManifest(
   };
   logger.info("CLI manifest read completed", {
     environment,
-    version: manifest.version,
+    hasVersion: manifest.version.length > 0,
     source: manifest.source,
     hasPendingUpgrade: manifest.pendingUpgrade !== null,
   });
@@ -433,7 +421,7 @@ export async function writeCliManifest(
   const logger = createCliLogger(environment);
   logger.info("CLI manifest write started", {
     environment,
-    version: manifest.version,
+    hasVersion: manifest.version.length > 0,
     source: manifest.source,
     hasPendingUpgrade: manifest.pendingUpgrade !== null,
   });
@@ -447,7 +435,7 @@ export async function writeCliManifest(
   await rename(tmp, target);
   logger.info("CLI manifest write completed", {
     environment,
-    version: manifest.version,
+    hasVersion: manifest.version.length > 0,
     source: manifest.source,
     hasPendingUpgrade: manifest.pendingUpgrade !== null,
   });
@@ -499,7 +487,7 @@ export async function updateCliManifest(
   await writeCliManifest(environment, next);
   logger.info("CLI manifest update completed", {
     environment,
-    version: next.version,
+    hasVersion: next.version.length > 0,
     source: next.source,
     hasPendingUpgrade: next.pendingUpgrade !== null,
   });
@@ -519,7 +507,8 @@ export async function clearPendingUpgrade(
   createCliLogger(environment).info("CLI manifest clearing pending upgrade", {
     environment,
     promoted: promotedInstall !== null,
-    promotedVersion: promotedInstall?.version ?? null,
+    hasPromotedVersion:
+      promotedInstall !== null && promotedInstall.version.length > 0,
   });
   if (promotedInstall === null) {
     return updateCliManifest(environment, { pendingUpgrade: null });

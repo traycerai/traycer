@@ -14,6 +14,7 @@ import { useSyncExternalStore } from "react";
  * regardless of the cap.
  */
 export const DEFAULT_MAX_LIVE_EPICS = 5;
+const loggedLiveTitleReadFailures = new Set<string>();
 
 export interface OpenEpicSessionRegistryOptions {
   readonly maxLive: number;
@@ -304,11 +305,14 @@ function readLiveTitle(handle: OpenEpicStoreHandle, epicId: string): string {
     const title = epicMap.get("title");
     return typeof title === "string" ? title : "";
   } catch (error) {
-    appLogger.error(
-      "[open-epic-session-registry] failed to read live title",
-      { epicId },
-      error,
-    );
+    if (!loggedLiveTitleReadFailures.has(epicId)) {
+      loggedLiveTitleReadFailures.add(epicId);
+      appLogger.error(
+        "[open-epic-session-registry] failed to read live title",
+        { epicId },
+        error,
+      );
+    }
     return "";
   }
 }

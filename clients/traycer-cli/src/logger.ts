@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync } from "node:fs";
+import { appendFileSync, chmodSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import type { Environment } from "./runner/environment";
 import { cliLogPath } from "./store/paths";
@@ -23,8 +23,9 @@ export interface ILogger {
 }
 
 const MAX_LOG_STRING_LENGTH = 1_000;
+const MAX_LOG_DEPTH = 4;
 const SENSITIVE_FIELD_PATTERN =
-  /token|secret|password|authorization|bearer|credential|refresh|cookie|verifier/i;
+  /token|secret|password|authorization|bearer|credential|refresh|cookie|verifier|api[_-]?key/i;
 const SENSITIVE_TEXT_PATTERNS: ReadonlyArray<{
   readonly pattern: RegExp;
   readonly replacement: string;
@@ -35,7 +36,7 @@ const SENSITIVE_TEXT_PATTERNS: ReadonlyArray<{
   },
   {
     pattern:
-      /((?:access[_-]?token|accessToken|refresh[_-]?token|refreshToken|token|authorization|password|secret|cookie|code[_-]?verifier|codeVerifier)\s*[:=]\s*)("[^"]*"|'[^']*'|[^&\s,}]+)/gi,
+      /((?:access[_-]?token|accessToken|refresh[_-]?token|refreshToken|token|authorization|password|secret|cookie|code[_-]?verifier|codeVerifier|api[_-]?key|apiKey)\s*[:=]\s*)("[^"]*"|'[^']*'|[^&\s,}]+)/gi,
     replacement: "$1[redacted]",
   },
 ];
@@ -68,6 +69,7 @@ export function createCliLogger(environment: Environment): ILogger {
         })}\n`,
         { mode: 0o600 },
       );
+      chmodSync(path, 0o600);
     } catch {
       // Logging must never change CLI behavior.
     }
@@ -102,6 +104,15 @@ function serializeError(error: Error): {
 }
 
 function sanitizeLogValue(value: LogValue, key: string | null): LogValue {
+  return sanitizeLogValueInner(value, key, 0, new WeakSet<object>());
+}
+
+function sanitizeLogValueInner(
+  value: LogValue,
+  key: string | null,
+  depth: number,
+  seen: WeakSet<object>,
+): LogValue {
   if (
     key !== null &&
     SENSITIVE_FIELD_PATTERN.test(key) &&
@@ -115,13 +126,22 @@ function sanitizeLogValue(value: LogValue, key: string | null): LogValue {
   if (typeof value === "number" || typeof value === "boolean" || value === null) {
     return value;
   }
+  if (depth >= MAX_LOG_DEPTH) {
+    return "[max-depth]";
+  }
+  if (seen.has(value)) {
+    return "[circular]";
+  }
+  seen.add(value);
   if (Array.isArray(value)) {
-    return value.map((entry) => sanitizeLogValue(entry, null));
+    return value.map((entry) =>
+      sanitizeLogValueInner(entry, null, depth + 1, seen),
+    );
   }
   return Object.fromEntries(
     Object.entries(value).map(([entryKey, entryValue]) => [
       entryKey,
-      sanitizeLogValue(entryValue, entryKey),
+      sanitizeLogValueInner(entryValue, entryKey, depth + 1, seen),
     ]),
   );
 }

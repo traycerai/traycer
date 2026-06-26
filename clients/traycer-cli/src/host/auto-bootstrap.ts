@@ -1,7 +1,7 @@
 import { config } from "../config";
 import type { InstallSourceArg } from "../installer";
 import { resolveBundledHostArchive } from "../installer/bundled-host";
-import { errorFromUnknown, type LogFields } from "../logger";
+import { errorFromUnknown } from "../logger";
 import { readHostInstallRecord } from "../manifest/host-install";
 import { CliError } from "../runner/errors";
 import type { ProgressInfo } from "../runner/output";
@@ -9,6 +9,7 @@ import type { RuntimeContext } from "../runner/runtime";
 import { createServiceController, serviceLabelFor } from "../service";
 import { provisionHost, type HostProvisionResult } from "./provision";
 import { defaultRegistryHostVersionRequest } from "./supported-host-version";
+import { installSourceLogFields } from "./install-source-log-fields";
 
 // Centralized auto-bootstrap for the standalone CLI. Per Core Flow 7
 // (Standalone CLI First-Run), commands like `traycer login` and any
@@ -315,16 +316,6 @@ export async function maybeAutoBootstrap(
       error,
     };
   }
-}
-
-function installSourceLogFields(source: InstallSourceArg): LogFields {
-  if (source.kind === "local-file") {
-    return { sourceKind: "local-file" };
-  }
-  return {
-    sourceKind: "registry",
-    versionRequest: source.versionRequest,
-  };
 }
 
 function projectProvisionResult(

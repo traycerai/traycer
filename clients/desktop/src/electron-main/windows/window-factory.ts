@@ -8,9 +8,8 @@ import { createInitialRouteArg } from "../../ipc-contracts/window-bootstrap";
 import {
   log,
   redactLogText,
-  sanitizeLogValue,
+  sanitizeLogFields,
   type SafeLogFields,
-  type SafeLogValue,
 } from "../app/logger";
 import { safelyOpenExternal, installNavigationGuard } from "../app/security";
 import { installContextMenu } from "../app/spell-check";
@@ -238,11 +237,7 @@ function parseStructuredRendererLog(
 function sanitizeRendererFields(
   fields: Record<string, unknown>,
 ): SafeLogFields {
-  const sanitized: Record<string, SafeLogValue> = {};
-  for (const [key, value] of Object.entries(fields)) {
-    sanitized[key] = sanitizeLogValue(value, 0);
-  }
-  return sanitized;
+  return sanitizeLogFields(fields);
 }
 
 function logStructuredRendererEntry(

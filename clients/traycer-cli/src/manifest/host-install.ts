@@ -102,10 +102,12 @@ export async function readHostInstallRecord(
   try {
     raw = await readFile(path, "utf8");
   } catch (err) {
+    if (readErrorCode(err) !== "ENOENT") {
+      throw err;
+    }
     logger.debug("Host install record read returned absent", {
       environment,
       errorName: errorFromUnknown(err).name,
-      errorMessage: errorFromUnknown(err).message,
     });
     return null;
   }
@@ -235,6 +237,12 @@ export async function readHostInstallRecord(
     hasArchiveSha256: record.archiveSha256 !== null,
   });
   return record;
+}
+
+function readErrorCode(error: unknown): string | null {
+  if (error === null || typeof error !== "object") return null;
+  const code = Reflect.get(error, "code");
+  return typeof code === "string" ? code : null;
 }
 
 export async function writeHostInstallRecord(

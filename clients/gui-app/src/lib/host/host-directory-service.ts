@@ -9,7 +9,7 @@ import type {
   LocalHostSnapshot,
 } from "@traycer-clients/shared/platform/runner-host";
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
-import { appLogger, describeLogError } from "@/lib/logger";
+import { appLogger } from "@/lib/logger";
 
 export interface HostDirectoryServiceOptions {
   readonly runnerHost: IRunnerHost;
@@ -90,7 +90,7 @@ export class HostDirectoryService implements IHostDirectoryService {
       this.localEntry = toLocalEntry(snapshot);
       appLogger.info("[host-directory] local host snapshot changed", {
         hostId: snapshot?.hostId ?? null,
-        hasWebsocketUrl: snapshot !== null && snapshot.websocketUrl !== null,
+        hasWebsocketUrl: snapshot !== null,
         status: snapshot === null ? "missing" : "available",
         version: snapshot?.version ?? null,
       });
@@ -105,14 +105,7 @@ export class HostDirectoryService implements IHostDirectoryService {
   }
 
   async refresh(): Promise<readonly HostDirectoryEntry[]> {
-    try {
-      this.remoteEntries = await this.remoteFetcher();
-    } catch (error) {
-      appLogger.warn("[host-directory] remote refresh failed", {
-        error: describeLogError(error),
-      });
-      throw error;
-    }
+    this.remoteEntries = await this.remoteFetcher();
     this.reconcileSelection();
     this.emit();
     appLogger.info("[host-directory] refresh complete", {

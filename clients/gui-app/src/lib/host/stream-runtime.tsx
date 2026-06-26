@@ -76,9 +76,10 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
     if (value === null) return;
     appLogger.info("[stream] app stream client created", {
       hostId: readiness.hostId,
-      hasTransport: transportKey !== null,
+      hasTransport:
+        binding !== null && binding.hostClient.getActiveHost() !== null,
     });
-  }, [value, readiness.hostId, transportKey]);
+  }, [binding, readiness.hostId, value]);
   useCloseWsStreamClientOnReplace(value?.wsStreamClient ?? null);
   useStreamWakeReconnect(value?.wsStreamClient ?? null);
   useReconnectStreamOnEndpointChange(

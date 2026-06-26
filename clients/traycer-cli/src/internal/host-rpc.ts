@@ -225,16 +225,14 @@ async function requestAtEndpoint<
     });
     return response;
   } catch (err) {
-    logger.error(
-      "Host RPC failed",
-      {
-        environment: config.environment,
-        method,
-        retryPolicy: retryPolicyLabel(retryPolicy),
-        hostId: endpoint.hostId,
-      },
-      errorFromUnknown(err),
-    );
+    const error = errorFromUnknown(err);
+    logger.debug("Host RPC failed; propagating to command boundary", {
+      environment: config.environment,
+      method,
+      retryPolicy: retryPolicyLabel(retryPolicy),
+      hostId: endpoint.hostId,
+      errorName: error.name,
+    });
     throw err;
   }
 }

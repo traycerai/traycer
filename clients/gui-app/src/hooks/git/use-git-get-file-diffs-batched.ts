@@ -165,7 +165,7 @@ async function fetchPage(options: {
       });
     }
   } catch (error) {
-    if (error instanceof Error && error.name !== "AbortError") {
+    if (!(error instanceof Error && error.name === "AbortError")) {
       appLogger.warn("[git] failed to fetch batched file diffs", {
         hostId: options.hostId,
         fileCount: options.files.length,

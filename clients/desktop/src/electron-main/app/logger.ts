@@ -22,6 +22,8 @@ const SENSITIVE_KEY_PATTERN =
 const SENSITIVE_QUERY_PARAM_PATTERN =
   /([?&](?:access_token|refresh_token|id_token|token|code|code_verifier|password|secret|client_secret|api_key|authorization)=)([^&#\s]+)/gi;
 const BEARER_PATTERN = /\bBearer\s+[A-Za-z0-9._~+/=-]+/gi;
+const SENSITIVE_INLINE_VALUE_PATTERN =
+  /(\b(?:access[_-]?token|refresh[_-]?token|id[_-]?token|token|code[_-]?verifier|password|secret|client[_-]?secret|api[_-]?key|authorization|cookie|credential)\b\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;}&]+)/gi;
 
 /**
  * Configures `electron-log` so the desktop shell, the renderer, and any
@@ -52,10 +54,15 @@ export function resolveDesktopLogPath(): string {
 export function redactLogText(value: string): string {
   const redacted = value
     .replace(SENSITIVE_QUERY_PARAM_PATTERN, "$1<redacted>")
-    .replace(BEARER_PATTERN, "Bearer <redacted>");
+    .replace(BEARER_PATTERN, "Bearer <redacted>")
+    .replace(SENSITIVE_INLINE_VALUE_PATTERN, "$1<redacted>");
   return redacted.length > MAX_LOG_STRING_LENGTH
     ? `${redacted.slice(0, MAX_LOG_STRING_LENGTH)}...<truncated>`
     : redacted;
+}
+
+export function sanitizeLogFields(fields: Record<string, unknown>): SafeLogFields {
+  return sanitizeLogRecord(fields, 0);
 }
 
 export function sanitizeLogValue(value: unknown, depth: number): SafeLogValue {
@@ -73,16 +80,7 @@ export function sanitizeLogValue(value: unknown, depth: number): SafeLogValue {
     return describeLogError(value);
   }
   if (isRecord(value)) {
-    const sanitized: Record<string, SafeLogValue> = {};
-    for (const [key, entry] of Object.entries(value).slice(
-      0,
-      MAX_LOG_OBJECT_KEYS,
-    )) {
-      sanitized[key] = SENSITIVE_KEY_PATTERN.test(key)
-        ? "<redacted>"
-        : sanitizeLogValue(entry, depth + 1);
-    }
-    return sanitized;
+    return sanitizeLogRecord(value, depth);
   }
   if (typeof value === "undefined") return "<undefined>";
   return redactLogText(String(value));
@@ -106,6 +104,22 @@ export function describeLogError(error: unknown): SafeLogFields {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function sanitizeLogRecord(
+  value: Record<string, unknown>,
+  depth: number,
+): Record<string, SafeLogValue> {
+  const sanitized: Record<string, SafeLogValue> = {};
+  for (const [key, entry] of Object.entries(value).slice(
+    0,
+    MAX_LOG_OBJECT_KEYS,
+  )) {
+    sanitized[key] = SENSITIVE_KEY_PATTERN.test(key)
+      ? "<redacted>"
+      : sanitizeLogValue(entry, depth + 1);
+  }
+  return sanitized;
 }
 
 export { log };

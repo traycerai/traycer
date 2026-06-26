@@ -20,6 +20,9 @@ const SENSITIVE_KEY_PATTERN =
 const SENSITIVE_QUERY_PARAM_PATTERN =
   /([?&](?:access_token|refresh_token|id_token|token|code|code_verifier|password|secret|client_secret|api_key|authorization)=)([^&#\s]+)/gi;
 const BEARER_PATTERN = /\bBearer\s+[A-Za-z0-9._~+/=-]+/gi;
+const SENSITIVE_INLINE_VALUE_PATTERN =
+  /(\b(?:access[_-]?token|refresh[_-]?token|id[_-]?token|token|code[_-]?verifier|password|secret|client[_-]?secret|api[_-]?key|authorization|cookie|credential)\b\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;}&]+)/gi;
+const NOT_SCALAR_LOG_VALUE = Symbol("not-scalar-log-value");
 
 export const appLogger = {
   debug(message: string, fields: AppLogFields): void {
@@ -49,17 +52,16 @@ export const appLogger = {
 export function redactLogText(value: string): string {
   const redacted = value
     .replace(SENSITIVE_QUERY_PARAM_PATTERN, "$1<redacted>")
-    .replace(BEARER_PATTERN, "Bearer <redacted>");
+    .replace(BEARER_PATTERN, "Bearer <redacted>")
+    .replace(SENSITIVE_INLINE_VALUE_PATTERN, "$1<redacted>");
   return redacted.length > MAX_LOG_STRING_LENGTH
     ? `${redacted.slice(0, MAX_LOG_STRING_LENGTH)}...<truncated>`
     : redacted;
 }
 
 export function sanitizeLogValue(value: unknown, depth: number): AppLogValue {
-  if (value === null) return null;
-  if (typeof value === "string") return redactLogText(value);
-  if (typeof value === "number" || typeof value === "boolean") return value;
-  if (typeof value === "bigint") return value.toString();
+  const scalar = sanitizeScalarLogValue(value);
+  if (scalar !== NOT_SCALAR_LOG_VALUE) return scalar;
   if (depth >= MAX_LOG_DEPTH) return "<max-depth>";
   if (Array.isArray(value)) {
     return value
@@ -81,8 +83,7 @@ export function sanitizeLogValue(value: unknown, depth: number): AppLogValue {
     }
     return sanitized;
   }
-  if (typeof value === "undefined") return "<undefined>";
-  return redactLogText(String(value));
+  return safeLogTextFromUnknown(value);
 }
 
 export function describeLogError(error: unknown): AppLogFields {
@@ -96,7 +97,7 @@ export function describeLogError(error: unknown): AppLogFields {
   }
   return {
     name: typeof error,
-    message: redactLogText(String(error)),
+    message: safeLogTextFromUnknown(error),
     stack: null,
   };
 }
@@ -140,4 +141,32 @@ function emitLog(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function sanitizeScalarLogValue(
+  value: unknown,
+): AppLogValue | typeof NOT_SCALAR_LOG_VALUE {
+  if (value === null) return null;
+  if (typeof value === "string") return redactLogText(value);
+  if (typeof value === "number" || typeof value === "boolean") return value;
+  if (typeof value === "bigint") return value.toString();
+  if (typeof value === "undefined") return "<undefined>";
+  if (typeof value === "function") return "<function>";
+  if (typeof value === "symbol") return value.description ?? "<symbol>";
+  return NOT_SCALAR_LOG_VALUE;
+}
+
+function safeLogTextFromUnknown(value: unknown): string {
+  if (typeof value === "string") return redactLogText(value);
+  if (typeof value === "symbol") {
+    return redactLogText(value.description ?? "<symbol>");
+  }
+  if (typeof value === "function") return "<function>";
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (typeof value === "bigint") return value.toString();
+  if (typeof value === "undefined") return "<undefined>";
+  if (typeof value === "object") return Object.prototype.toString.call(value);
+  return "<unknown>";
 }

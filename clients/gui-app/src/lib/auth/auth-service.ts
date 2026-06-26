@@ -122,6 +122,18 @@ export const AUTH_ERROR_SESSION_EXPIRED = "session-expired";
  */
 export const AUTH_ERROR_SIGN_IN_FAILED = "sign-in-failed";
 
+function classifyAuthFailureForLog(error: string): string {
+  if (
+    error === AUTH_ERROR_TIMEOUT ||
+    error === AUTH_ERROR_LAUNCH_FAILED ||
+    error === AUTH_ERROR_SESSION_EXPIRED ||
+    error === AUTH_ERROR_SIGN_IN_FAILED
+  ) {
+    return error;
+  }
+  return "external-callback-error";
+}
+
 /**
  * Secure-storage key holding the in-flight PKCE `code_verifier`. Persisted at
  * `signIn()` and consumed at the callback exchange so a cold-start callback
@@ -1050,6 +1062,14 @@ export class AuthService {
     if ("code" in result) {
       if (result.code.length === 0) {
         appLogger.warn("[auth] OAuth callback delivered an empty code", {});
+        this.clearPendingTimeout();
+        if (this.starting) {
+          this.authResolvedDuringStart = true;
+        }
+        void this.applyOAuthCallbackError(
+          AUTH_ERROR_SIGN_IN_FAILED,
+          callbackEpoch,
+        );
         return;
       }
       this.clearPendingTimeout();
@@ -1218,7 +1238,9 @@ export class AuthService {
     if (this.disposed) {
       return;
     }
-    appLogger.warn("[auth] applying auth failure", { errorCode: error });
+    appLogger.warn("[auth] applying auth failure", {
+      errorCode: classifyAuthFailureForLog(error),
+    });
     this.setLastError(error);
     this.applySignedOut();
     await this.clearStoredAuth();

@@ -20,16 +20,19 @@ export interface HostPidMetadata {
 export async function readHostPidMetadata(
   environment: Environment | undefined,
 ): Promise<HostPidMetadata | null> {
-  const logger = createCliLogger(environment ?? config.environment);
+  const logEnvironment = environment ?? config.environment;
+  const logger = createCliLogger(logEnvironment);
   let raw: string;
   try {
     raw = await readFile(hostPidMetadataPath(environment), "utf8");
   } catch (err) {
-    logger.debug("Host pid metadata read returned absent", {
-      environment: environment ?? "production",
-      errorName: errorFromUnknown(err).name,
-      errorMessage: errorFromUnknown(err).message,
-    });
+    if (readErrorCode(err) !== "ENOENT") {
+      logger.debug("Host pid metadata read failed", {
+        environment: logEnvironment,
+        errorName: errorFromUnknown(err).name,
+        errorCode: readErrorCode(err),
+      });
+    }
     return null;
   }
   let parsed: unknown;
@@ -37,7 +40,7 @@ export async function readHostPidMetadata(
     parsed = JSON.parse(raw);
   } catch (err) {
     logger.warn("Host pid metadata JSON parse failed", {
-      environment: environment ?? "production",
+      environment: logEnvironment,
       errorName: errorFromUnknown(err).name,
       errorMessage: errorFromUnknown(err).message,
     });
@@ -45,7 +48,7 @@ export async function readHostPidMetadata(
   }
   if (parsed === null || typeof parsed !== "object") {
     logger.warn("Host pid metadata rejected non-object payload", {
-      environment: environment ?? "production",
+      environment: logEnvironment,
     });
     return null;
   }
@@ -58,7 +61,7 @@ export async function readHostPidMetadata(
     typeof obj.startedAt !== "string"
   ) {
     logger.warn("Host pid metadata rejected malformed payload", {
-      environment: environment ?? "production",
+      environment: logEnvironment,
       hasPid: typeof obj.pid === "number",
       hasHostId: typeof obj.hostId === "string",
       hasVersion: typeof obj.version === "string",
@@ -68,7 +71,7 @@ export async function readHostPidMetadata(
     return null;
   }
   logger.debug("Host pid metadata read completed", {
-    environment: environment ?? "production",
+    environment: logEnvironment,
     hostId: obj.hostId,
     pid: obj.pid,
     version: obj.version,
@@ -107,4 +110,10 @@ export function isValidLocalHostWebsocketUrl(websocketUrl: string): boolean {
   }
   const port = Number.parseInt(parsed.port, 10);
   return Number.isInteger(port) && port >= 1 && port <= 65_535;
+}
+
+function readErrorCode(error: unknown): string | null {
+  if (error === null || typeof error !== "object") return null;
+  const code = Reflect.get(error, "code");
+  return typeof code === "string" ? code : null;
 }
