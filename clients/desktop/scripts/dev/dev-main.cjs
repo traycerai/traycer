@@ -55,6 +55,14 @@ const electronBin = prepareElectronBinary(require("electron"));
 const childEnv = {
   ...process.env,
   TRAYCER_DESKTOP_DEV_APP_PATH: workspaceRoot,
+  // This is the dev runner, so it always loads the renderer from the Vite dev
+  // server. Default these here rather than via an inline `VAR=1 ... bun run`
+  // prefix in the package.json `dev` script - that POSIX shell syntax isn't
+  // understood by cmd.exe, so on Windows it failed with "'TRAYCER_DESKTOP_DEV'
+  // is not recognized". Any caller-provided value still wins.
+  TRAYCER_DESKTOP_DEV: process.env.TRAYCER_DESKTOP_DEV ?? "1",
+  TRAYCER_DESKTOP_DEV_URL:
+    process.env.TRAYCER_DESKTOP_DEV_URL ?? "http://localhost:5173",
 };
 
 delete childEnv.ELECTRON_RUN_AS_NODE;
