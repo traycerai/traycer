@@ -24,13 +24,12 @@ export interface WorktreeDeleteProgressModalProps {
 }
 
 /**
- * Progress card for a worktree delete, shown inside a section-scoped modal that
- * covers only the Worktrees settings window (never the whole screen). It shows
- * a phased step indicator (teardown → remove) and, when a teardown script runs,
- * a collapsible pane streaming its stdout/stderr. While the delete is running
- * the action reads "Run in background", which dismisses the modal and lets the
- * worktree's row carry the in-progress state; once terminal it offers an
- * explicit Close.
+ * Progress card for a worktree delete, shown inside the viewport-anchored
+ * Worktrees delete overlay. It shows a phased step indicator (teardown →
+ * remove) and, when a teardown script runs, a collapsible pane streaming its
+ * stdout/stderr. While the delete is running the action reads
+ * "Run in background", which dismisses the modal and lets the worktree's row
+ * carry the in-progress state; once terminal it offers an explicit Close.
  */
 export function WorktreeDeleteProgressModal(
   props: WorktreeDeleteProgressModalProps,
