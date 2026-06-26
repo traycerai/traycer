@@ -34,9 +34,16 @@ function requireStringOrNull(
   if (!isPlainObject(raw)) {
     throw new Error(`${channel}: missing object payload`);
   }
+  if (!hasOwnField(raw, key)) {
+    throw new Error(`${channel}: missing '${key}'`);
+  }
   const value = raw[key];
   if (typeof value === "string" || value === null) return value;
   throw new Error(`${channel}: '${key}' must be a string or null`);
+}
+
+function hasOwnField(raw: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(raw, key);
 }
 
 function optionalString(raw: unknown, key: string): string | null {
@@ -50,7 +57,7 @@ function optionalDiagnosticLevel(
   key: string,
   channel: string,
 ): DiagnosticLogLevel | null {
-  const value = optionalString(raw, key);
+  const value = requireStringOrNull(raw, key, channel);
   if (value === null) return null;
   if (isDiagnosticLogLevel(value)) return value;
   throw new Error(`${channel}: '${key}' must be a diagnostic log level`);
@@ -61,16 +68,22 @@ function optionalHostDiagnosticLevel(
   key: string,
   channel: string,
 ): HostDiagnosticLogLevel | null {
-  const value = optionalString(raw, key);
+  const value = requireStringOrNull(raw, key, channel);
   if (value === null) return null;
   if (isHostDiagnosticLogLevel(value)) return value;
   throw new Error(`${channel}: '${key}' must be a host diagnostic log level`);
 }
 
 function optionalTemporaryScope(raw: unknown): DiagnosticsTemporaryScope {
-  if (!isPlainObject(raw)) return "all";
+  if (!isPlainObject(raw)) {
+    throw new Error(
+      "traycerConfigDiagnosticsClearTemporary: missing object payload",
+    );
+  }
+  if (!hasOwnField(raw, "scope")) {
+    throw new Error("traycerConfigDiagnosticsClearTemporary: missing 'scope'");
+  }
   const value = raw.scope;
-  if (value === undefined || value === null) return "all";
   if (value === "general" || value === "host" || value === "all") {
     return value;
   }

@@ -1419,7 +1419,7 @@ if (isTraycerCliEntrypoint(entryArgv)) {
     environment: config.environment,
     argvLength: process.argv.length,
   });
-  program.parseAsync(process.argv).catch((err) => {
+  program.parseAsync(process.argv).catch(async (err) => {
     if (err instanceof CommanderError) {
       const jsonMode = argvRequestsJson(program);
       // Help (`--help`) and version (`--version`) flow through exitOverride
@@ -1494,6 +1494,13 @@ if (isTraycerCliEntrypoint(entryArgv)) {
       process.stderr.write(
         `error: unexpected CLI failure [code=${CLI_ERROR_CODES.UNEXPECTED}]\n`,
       );
+    }
+    try {
+      await Sentry.flush(2000);
+    } catch (flushErr) {
+      entryLogger.warn("Sentry flush failed after CLI entrypoint failure", {
+        error: errorFromUnknown(flushErr).message,
+      });
     }
     process.exit(1);
   });

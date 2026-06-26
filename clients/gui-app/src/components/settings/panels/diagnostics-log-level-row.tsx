@@ -1,4 +1,6 @@
 import {
+  DIAGNOSTIC_LOG_LEVELS,
+  HOST_DIAGNOSTIC_LOG_LEVELS,
   isDiagnosticLogLevel,
   isHostDiagnosticLogLevel,
   type DiagnosticLogLevel,
@@ -21,20 +23,6 @@ import { useRunnerTraycerDiagnosticsConfigSetMutation } from "@/hooks/runner/use
 import { useRunnerTraycerDiagnosticsConfigTemporaryMutation } from "@/hooks/runner/use-runner-traycer-diagnostics-config-temporary-mutation";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { isHostDiagnosticsApplied } from "@/lib/diagnostics-applied";
-
-const DIAGNOSTIC_LEVELS: readonly DiagnosticLogLevel[] = [
-  "trace",
-  "debug",
-  "info",
-  "warn",
-  "error",
-  "off",
-];
-
-const HOST_DIAGNOSTIC_LEVELS: readonly HostDiagnosticLogLevel[] = [
-  "inherit",
-  ...DIAGNOSTIC_LEVELS,
-];
 
 const UNSUPPORTED_SELECT_VALUE = "unsupported-configured-value";
 
@@ -75,7 +63,7 @@ export function GeneralDiagnosticsLogLevelRow() {
       control={
         <LogLevelControls
           value={permanentLevel}
-          levels={DIAGNOSTIC_LEVELS}
+          levels={DIAGNOSTIC_LOG_LEVELS}
           pending={pending}
           debugPending={temporaryMutation.isPending}
           clearPending={clearTemporaryMutation.isPending}
@@ -83,19 +71,7 @@ export function GeneralDiagnosticsLogLevelRow() {
           ariaLabel="Diagnostic log level"
           onChange={(level) => {
             if (!isDiagnosticLogLevel(level)) return;
-            setMutation.mutate(
-              { level, hostLevel: null },
-              {
-                onSuccess: () => {
-                  // A deliberately chosen permanent level should take effect
-                  // now, so clear any active temporary override that would
-                  // otherwise keep winning until it expires.
-                  if (hasTemporaryField(snapshot?.raw.raw.temporaryLogLevel)) {
-                    clearTemporaryMutation.mutate("general");
-                  }
-                },
-              },
-            );
+            setMutation.mutate({ level, hostLevel: null });
           }}
           onDebug={() => {
             temporaryMutation.mutate({
@@ -146,7 +122,7 @@ export function HostDiagnosticsLogLevelRow() {
       control={
         <LogLevelControls
           value={hostLevel}
-          levels={HOST_DIAGNOSTIC_LEVELS}
+          levels={HOST_DIAGNOSTIC_LOG_LEVELS}
           pending={pending}
           debugPending={temporaryMutation.isPending}
           clearPending={clearTemporaryMutation.isPending}
@@ -154,21 +130,7 @@ export function HostDiagnosticsLogLevelRow() {
           ariaLabel="Host log level"
           onChange={(level) => {
             if (!isHostDiagnosticLogLevel(level)) return;
-            setMutation.mutate(
-              { level: null, hostLevel: level },
-              {
-                onSuccess: () => {
-                  // A deliberately chosen permanent host level should take
-                  // effect now, so clear any active host temporary override
-                  // that would otherwise keep winning until it expires.
-                  if (
-                    hasTemporaryField(snapshot?.raw.raw.temporaryHostLogLevel)
-                  ) {
-                    clearTemporaryMutation.mutate("host");
-                  }
-                },
-              },
-            );
+            setMutation.mutate({ level: null, hostLevel: level });
           }}
           onDebug={() => {
             temporaryMutation.mutate({

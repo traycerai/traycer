@@ -421,50 +421,30 @@ export class MockTraycerCli implements ITraycerCli {
   async diagnosticsConfigSet(
     input: TraycerDiagnosticsConfigSetInput,
   ): Promise<TraycerDiagnosticsConfigSnapshot> {
-    const generalLevel =
-      input.level ?? this.diagnosticsConfig.effective.general.level;
-    const hostSetting =
-      input.hostLevel ??
-      currentMockHostSetting(this.diagnosticsConfig.effective.rawHostSetting);
-    const hostLevel = hostSetting === "inherit" ? generalLevel : hostSetting;
-    this.diagnosticsConfig = {
-      ...this.diagnosticsConfig,
-      raw: {
-        ...this.diagnosticsConfig.raw,
-        readStatus: "ok",
-        raw: {
-          ...this.diagnosticsConfig.raw.raw,
-          ...(input.level !== null ? { logLevel: input.level } : {}),
-          ...(input.hostLevel !== null
-            ? { hostLogLevel: input.hostLevel }
-            : {}),
-        },
-      },
-      effective: {
-        general: {
-          level: generalLevel,
-          source: "permanent",
-          expiresAt: null,
-          configuredValue: generalLevel,
-        },
-        host: {
-          level: hostLevel,
-          source:
-            hostSetting === "inherit" ? "permanent-inherited" : "permanent",
-          expiresAt: null,
-          configuredValue: hostSetting,
-        },
-        rawHostSetting: hostSetting,
-      },
+    const raw = {
+      ...this.diagnosticsConfig.raw.raw,
     };
+    if (input.level !== null) {
+      raw.logLevel = input.level;
+      delete raw.temporaryLogLevel;
+    }
+    if (input.hostLevel !== null) {
+      raw.hostLogLevel = input.hostLevel;
+      delete raw.temporaryHostLogLevel;
+    }
+    this.diagnosticsConfig = updateMockDiagnosticsConfig(
+      this.diagnosticsConfig,
+      raw,
+    );
     return this.diagnosticsConfig;
   }
 
   async diagnosticsConfigTemporary(
     input: TraycerDiagnosticsConfigTemporaryInput,
   ): Promise<TraycerDiagnosticsConfigSnapshot> {
-    const expiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString();
-    void input.duration;
+    const expiresAt = new Date(
+      Date.now() + parseMockDiagnosticsDurationMs(input.duration),
+    ).toISOString();
     const raw = {
       ...this.diagnosticsConfig.raw.raw,
     };
@@ -743,6 +723,15 @@ function readActiveMockTemporary<TLevel extends string>(
   return { level, expiresAt };
 }
 
+function parseMockDiagnosticsDurationMs(value: string): number {
+  const match = /^([1-9][0-9]*)(m|h)$/.exec(value);
+  if (match === null) {
+    throw new Error("mock diagnostics duration must use minutes or hours");
+  }
+  const amount = Number(match[1]);
+  return amount * (match[2] === "h" ? 60 * 60 * 1000 : 60 * 1000);
+}
+
 function currentMockHostSettingFromRaw(
   value: unknown,
 ): TraycerDiagnosticsConfigSnapshot["effective"]["rawHostSetting"] {
@@ -756,15 +745,6 @@ function currentMockHostSettingFromRaw(
 
 function isMockRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function currentMockHostSetting(
-  value: TraycerDiagnosticsConfigSnapshot["effective"]["rawHostSetting"],
-): HostDiagnosticLogLevel {
-  if (value === "unsupported" || value === "invalid") {
-    return "inherit";
-  }
-  return value;
 }
 
 /**

@@ -1,12 +1,14 @@
 import { ipcRenderer } from "electron";
 import { RunnerHostInvoke } from "../ipc-contracts/ipc-channels";
 import type {
-  TraycerHostStatusSnapshot,
-  TraycerDetectedShell,
   TraycerDiagnosticsConfigClearTemporaryInput,
   TraycerDiagnosticsConfigSetInput,
   TraycerDiagnosticsConfigSnapshot,
   TraycerDiagnosticsConfigTemporaryInput,
+} from "../ipc-contracts/window-types";
+import type {
+  TraycerHostStatusSnapshot,
+  TraycerDetectedShell,
   TraycerEnvOverride,
   TraycerShellConfig,
   TraycerShellConfigSetInput,

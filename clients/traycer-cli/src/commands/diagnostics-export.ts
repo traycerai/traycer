@@ -8,6 +8,7 @@ import {
 } from "@traycer/protocol/config";
 import type { CommandFn, CommandResult } from "../runner/runner";
 import type { Environment } from "../runner/environment";
+import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import { cliHomeDir, cliLogPath, hostLogPath } from "../store/paths";
 import {
   readDiagnosticsConfigSnapshot,
@@ -155,8 +156,24 @@ export function buildDiagnosticsExportCommand(
 
 export function parseDiagnosticsExportTailBytes(value: string | null): number {
   if (value === null) return DEFAULT_TAIL_BYTES;
-  const parsed = Number.parseInt(value, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_TAIL_BYTES;
+  if (!/^[1-9][0-9]*$/.test(value)) {
+    throw cliError({
+      code: CLI_ERROR_CODES.CONFIG_INVALID_VALUE,
+      message: "diagnostics export: --tail-bytes must be a positive integer.",
+      details: { value },
+      exitCode: 1,
+    });
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed)) {
+    throw cliError({
+      code: CLI_ERROR_CODES.CONFIG_INVALID_VALUE,
+      message: "diagnostics export: --tail-bytes is too large.",
+      details: { value },
+      exitCode: 1,
+    });
+  }
+  return parsed;
 }
 
 function clampTailBytes(value: number): number {

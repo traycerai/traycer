@@ -10,6 +10,7 @@ import type {
 import { useOptionalRunnerHost } from "@/providers/use-runner-host";
 import { runnerQueryKeys } from "@/lib/query-keys";
 import { isHostDiagnosticsApplied } from "@/lib/diagnostics-applied";
+import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 
 // Floor for the expiry-triggered refetch. The snapshot's expiry is evaluated
 // against the host/CLI clock, so a renderer clock that leads the host would
@@ -18,12 +19,12 @@ import { isHostDiagnosticsApplied } from "@/lib/diagnostics-applied";
 // turns that into a slow poll bounded by the skew.
 const MIN_EXPIRY_REFRESH_MS = 1_000;
 
-function traycerDiagnosticsConfigQueryOptions(traycerCli: ITraycerCli | null) {
+function traycerDiagnosticsConfigQueryOptions(
+  traycerCli: ITraycerCli | null,
+  hostId: string | null,
+) {
   return queryOptions<TraycerDiagnosticsConfigSnapshot>({
-    queryKey:
-      traycerCli !== null
-        ? runnerQueryKeys.traycerDiagnosticsConfig(traycerCli)
-        : ["runner.traycer.diagnosticsConfig", "disabled"],
+    queryKey: runnerQueryKeys.traycerDiagnosticsConfig(hostId, traycerCli),
     queryFn: () => {
       if (traycerCli === null) {
         throw new Error("traycerCli unavailable on this runner host");
@@ -41,8 +42,10 @@ function traycerDiagnosticsConfigQueryOptions(traycerCli: ITraycerCli | null) {
 
 export function useRunnerTraycerDiagnosticsConfigQuery(): UseQueryResult<TraycerDiagnosticsConfigSnapshot> {
   const runnerHost = useOptionalRunnerHost();
+  const traycerCli = runnerHost?.traycerCli ?? null;
+  const activeHostId = useReactiveActiveHostId();
   return useQuery(
-    traycerDiagnosticsConfigQueryOptions(runnerHost?.traycerCli ?? null),
+    traycerDiagnosticsConfigQueryOptions(traycerCli, activeHostId),
   );
 }
 

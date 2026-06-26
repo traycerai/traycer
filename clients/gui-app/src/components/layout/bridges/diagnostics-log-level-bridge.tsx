@@ -7,8 +7,7 @@ export function DiagnosticsLogLevelBridge() {
   const level = diagnosticsQuery.data?.effective.general.level;
 
   useEffect(() => {
-    if (level === undefined) return;
-    setAppLogLevel(level);
+    setAppLogLevel(level ?? "info");
   }, [level]);
 
   return null;

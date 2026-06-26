@@ -84,4 +84,20 @@ describe("redactDiagnosticsLogTail", () => {
   it("yields no orphaned content when a truncated tail has no newline", () => {
     expect(redactDiagnosticsLogTail("Basic dXNlcjpwYXNz", true)).toBe("");
   });
+
+  it("redacts a truncated tail that starts inside a private key body", () => {
+    const tail = [
+      "partial-base64-line-from-before-window",
+      "still-secret-private-key-body",
+      "-----END PRIVATE KEY-----",
+      "info: ready",
+    ].join("\n");
+
+    const redacted = redactDiagnosticsLogTail(tail, true);
+
+    expect(redacted).toContain("<redacted-private-key>");
+    expect(redacted).toContain("info: ready");
+    expect(redacted).not.toContain("still-secret-private-key-body");
+    expect(redacted).not.toContain("-----END PRIVATE KEY-----");
+  });
 });

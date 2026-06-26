@@ -365,6 +365,25 @@ describe("diagnostics config store", () => {
     });
   });
 
+  it("serializes concurrent patches so independent changes are merged", async () => {
+    await Promise.all([
+      patchDiagnosticsConfig({
+        ...EMPTY_DIAGNOSTICS_PATCH,
+        logLevel: "debug",
+      }),
+      patchDiagnosticsConfig({
+        ...EMPTY_DIAGNOSTICS_PATCH,
+        hostLogLevel: "warn",
+      }),
+    ]);
+
+    expect(await readDiagnosticsJson()).toMatchObject({
+      version: 1,
+      logLevel: "debug",
+      hostLogLevel: "warn",
+    });
+  });
+
   it("treats corrupt diagnostics JSON as defaults without touching shell config", async () => {
     await mkdir(dirname(cliConfigPath()), { recursive: true });
     await writeFile(

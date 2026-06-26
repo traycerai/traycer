@@ -77,6 +77,8 @@ export function buildConfigDiagnosticsSetCommand(
       ...EMPTY_DIAGNOSTICS_PATCH,
       logLevel: level ?? undefined,
       hostLogLevel: hostLevel ?? undefined,
+      temporaryLogLevel: level === null ? undefined : null,
+      temporaryHostLogLevel: hostLevel === null ? undefined : null,
     });
     const snapshot = await readDiagnosticsConfigSnapshot(
       ctx.runtime.environment,

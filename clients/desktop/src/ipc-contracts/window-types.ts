@@ -9,6 +9,12 @@ import type {
   DiagnosticsRawConfig,
   DiagnosticsStatus,
 } from "@traycer/protocol/config/diagnostics-schema";
+import type {
+  TraycerDiagnosticsConfigClearTemporaryInput as SharedTraycerDiagnosticsConfigClearTemporaryInput,
+  TraycerDiagnosticsConfigSetInput as SharedTraycerDiagnosticsConfigSetInput,
+  TraycerDiagnosticsConfigSnapshot as SharedTraycerDiagnosticsConfigSnapshot,
+  TraycerDiagnosticsConfigTemporaryInput as SharedTraycerDiagnosticsConfigTemporaryInput,
+} from "@traycer-clients/shared/platform/runner-host";
 
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue =
@@ -166,6 +172,15 @@ export interface SupportDiagnosticsSnapshot {
   readonly hostStatus: DiagnosticsStatus;
   readonly cliVersion: string | null;
 }
+
+export type TraycerDiagnosticsConfigSnapshot =
+  SharedTraycerDiagnosticsConfigSnapshot;
+export type TraycerDiagnosticsConfigSetInput =
+  SharedTraycerDiagnosticsConfigSetInput;
+export type TraycerDiagnosticsConfigTemporaryInput =
+  SharedTraycerDiagnosticsConfigTemporaryInput;
+export type TraycerDiagnosticsConfigClearTemporaryInput =
+  SharedTraycerDiagnosticsConfigClearTemporaryInput;
 
 export interface SupportSnapshot {
   readonly appName: string;

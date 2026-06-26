@@ -191,13 +191,11 @@ export class DesktopSupportService {
       diagnosticsSnapshot,
       hostLogPath,
     });
-    const [desktopLog, hostLog, diagnosticsExport] = await Promise.all([
+    const [desktopLog, hostLog] = await Promise.all([
       readSupportLogAttachment("desktop", resolveDesktopLogPath()),
       readSupportLogAttachment("host", hostLogPath),
-      readDiagnosticsExportAttachment(),
     ]);
-    const cappedAttachments = capSupportAttachments({
-      diagnosticsExport,
+    const cappedAttachments = await capSupportAttachments({
       desktopLog,
       hostLog,
     });
@@ -546,15 +544,14 @@ async function readFileRange(
   }
 }
 
-function capSupportAttachments(args: {
+async function capSupportAttachments(args: {
+  readonly desktopLog: SupportLogAttachment;
+  readonly hostLog: SupportLogAttachment;
+}): Promise<{
   readonly diagnosticsExport: SupportLogAttachment;
   readonly desktopLog: SupportLogAttachment;
   readonly hostLog: SupportLogAttachment;
-}): {
-  readonly diagnosticsExport: SupportLogAttachment;
-  readonly desktopLog: SupportLogAttachment;
-  readonly hostLog: SupportLogAttachment;
-} {
+}> {
   // The standalone desktop + host logs are what a triager opens first, and the
   // diagnostics-export bundle already embeds tails of them, so grant the raw
   // logs the budget first and let the (redundant) export bundle take the
@@ -567,9 +564,21 @@ function capSupportAttachments(args: {
     SUPPORT_TOTAL_ATTACHMENT_BYTES - attachmentBytes(desktopLog);
   const hostLog = fitSupportAttachment(args.hostLog, remainingAfterDesktop);
   const remainingAfterHost = remainingAfterDesktop - attachmentBytes(hostLog);
+  if (remainingAfterHost <= 0) {
+    return {
+      diagnosticsExport: omittedLogAttachment(
+        "diagnostics-export",
+        "",
+        "support-attachment-size-limit",
+      ),
+      desktopLog,
+      hostLog,
+    };
+  }
+  const diagnosticsExport = await readDiagnosticsExportAttachment();
   return {
     diagnosticsExport: fitSupportAttachment(
-      args.diagnosticsExport,
+      diagnosticsExport,
       remainingAfterHost,
     ),
     desktopLog,
@@ -601,6 +610,26 @@ function attachmentBytes(attachment: SupportLogAttachment): number {
   return attachment.content === null
     ? 0
     : Buffer.byteLength(attachment.content, "utf8");
+}
+
+function omittedLogAttachment(
+  target: SupportAttachmentTarget,
+  path: string,
+  reason: string,
+): SupportLogAttachment {
+  return {
+    manifest: {
+      target,
+      path,
+      status: "omitted",
+      originalBytes: null,
+      includedBytes: 0,
+      truncated: false,
+      redacted: false,
+      reason,
+    },
+    content: null,
+  };
 }
 
 function unavailableLogManifest(

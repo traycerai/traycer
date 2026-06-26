@@ -23,6 +23,9 @@ import {
 
 const GENERAL_DEFAULT_LEVEL: DiagnosticLogLevel = "info";
 const HOST_DEFAULT_LEVEL: HostDiagnosticLogLevel = "inherit";
+const DIAGNOSTICS_LOCK_RETRY_MS = 25;
+const DIAGNOSTICS_LOCK_TIMEOUT_MS = 5_000;
+const DIAGNOSTICS_LOCK_STALE_MS = 30_000;
 
 export async function readDiagnosticsRaw(): Promise<DiagnosticsRawConfig> {
   const path = cliDiagnosticsConfigPath();
@@ -158,48 +161,50 @@ export function resolveDiagnosticsEffective(
 export async function patchDiagnosticsConfig(
   patch: DiagnosticsPatch,
 ): Promise<DiagnosticsWriteResult> {
-  const current = await readDiagnosticsRaw();
-  const next: Record<string, unknown> = {
-    ...(current.readStatus === "ok" ? current.raw : {}),
-    version: preserveConfigVersion(current),
-  };
+  return await withDiagnosticsConfigLock(async () => {
+    const current = await readDiagnosticsRaw();
+    const next: Record<string, unknown> = {
+      ...(current.readStatus === "ok" ? current.raw : {}),
+      version: preserveConfigVersion(current),
+    };
 
-  if (patch.resetGeneral) {
-    delete next.logLevel;
-    delete next.temporaryLogLevel;
-  }
-  if (patch.resetHost) {
-    delete next.hostLogLevel;
-    delete next.temporaryHostLogLevel;
-  }
-  if (patch.logLevel !== undefined) {
-    next.logLevel = patch.logLevel;
-  }
-  if (patch.hostLogLevel !== undefined) {
-    next.hostLogLevel = patch.hostLogLevel;
-  }
-  if (patch.temporaryLogLevel !== undefined) {
-    if (patch.temporaryLogLevel === null) {
+    if (patch.resetGeneral) {
+      delete next.logLevel;
       delete next.temporaryLogLevel;
-    } else {
-      next.temporaryLogLevel = serializeTemporary(
-        patch.temporaryLogLevel,
-        next.temporaryLogLevel,
-      );
     }
-  }
-  if (patch.temporaryHostLogLevel !== undefined) {
-    if (patch.temporaryHostLogLevel === null) {
+    if (patch.resetHost) {
+      delete next.hostLogLevel;
       delete next.temporaryHostLogLevel;
-    } else {
-      next.temporaryHostLogLevel = serializeTemporary(
-        patch.temporaryHostLogLevel,
-        next.temporaryHostLogLevel,
-      );
     }
-  }
+    if (patch.logLevel !== undefined) {
+      next.logLevel = patch.logLevel;
+    }
+    if (patch.hostLogLevel !== undefined) {
+      next.hostLogLevel = patch.hostLogLevel;
+    }
+    if (patch.temporaryLogLevel !== undefined) {
+      if (patch.temporaryLogLevel === null) {
+        delete next.temporaryLogLevel;
+      } else {
+        next.temporaryLogLevel = serializeTemporary(
+          patch.temporaryLogLevel,
+          next.temporaryLogLevel,
+        );
+      }
+    }
+    if (patch.temporaryHostLogLevel !== undefined) {
+      if (patch.temporaryHostLogLevel === null) {
+        delete next.temporaryHostLogLevel;
+      } else {
+        next.temporaryHostLogLevel = serializeTemporary(
+          patch.temporaryHostLogLevel,
+          next.temporaryHostLogLevel,
+        );
+      }
+    }
 
-  return await writeDiagnosticsRaw(next);
+    return await writeDiagnosticsRaw(next);
+  });
 }
 
 export async function setDiagnosticsLogLevel(
@@ -302,6 +307,59 @@ async function writeDiagnosticsRaw(
     mtimeMs: (await readMtimeMs(path)) ?? Date.now(),
     rawPreserved: true,
   };
+}
+
+async function withDiagnosticsConfigLock<T>(
+  operation: () => Promise<T>,
+): Promise<T> {
+  const path = cliDiagnosticsConfigPath();
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+  const lockPath = `${path}.lock`;
+  await acquireDiagnosticsConfigLock(lockPath, Date.now());
+  try {
+    return await operation();
+  } finally {
+    await rm(lockPath, { force: true, recursive: true });
+  }
+}
+
+async function acquireDiagnosticsConfigLock(
+  lockPath: string,
+  startedAtMs: number,
+): Promise<void> {
+  while (true) {
+    try {
+      await mkdir(lockPath, { mode: 0o700 });
+      return;
+    } catch (err) {
+      if (!isNodeErrorCode(err, "EEXIST")) throw err;
+      await removeStaleDiagnosticsConfigLock(lockPath, Date.now());
+      if (Date.now() - startedAtMs > DIAGNOSTICS_LOCK_TIMEOUT_MS) {
+        throw err;
+      }
+      await sleep(DIAGNOSTICS_LOCK_RETRY_MS);
+    }
+  }
+}
+
+async function removeStaleDiagnosticsConfigLock(
+  lockPath: string,
+  nowMs: number,
+): Promise<void> {
+  try {
+    const lockStat = await stat(lockPath);
+    if (nowMs - lockStat.mtimeMs > DIAGNOSTICS_LOCK_STALE_MS) {
+      await rm(lockPath, { force: true, recursive: true });
+    }
+  } catch (err) {
+    if (!isNodeErrorCode(err, "ENOENT")) throw err;
+  }
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise<void>((resolveSleep) => {
+    setTimeout(resolveSleep, ms);
+  });
 }
 
 function resolveGeneralScope(

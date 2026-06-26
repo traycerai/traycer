@@ -30,7 +30,9 @@ export function redactDiagnosticsLogTail(
   truncated: boolean,
 ): string {
   const wholeLines = truncated ? dropPartialFirstLine(rawTail) : rawTail;
-  return redactDiagnosticsText(wholeLines);
+  return redactDiagnosticsText(
+    truncated ? redactLeadingPartialPrivateKeyBlock(wholeLines) : wholeLines,
+  );
 }
 
 function dropPartialFirstLine(value: string): string {
@@ -140,6 +142,39 @@ function redactPrivateKeyBlocks(value: string): string {
   }
 
   return redacted;
+}
+
+function redactLeadingPartialPrivateKeyBlock(value: string): string {
+  const firstBeginIndex = value.indexOf(PRIVATE_KEY_BEGIN_PREFIX);
+  const firstEndMarker = findPrivateKeyEndMarker(value, 0);
+  if (firstEndMarker === null) return value;
+  if (firstBeginIndex !== -1 && firstBeginIndex < firstEndMarker.start) {
+    return value;
+  }
+  return `<redacted-private-key>${value.slice(firstEndMarker.end)}`;
+}
+
+function findPrivateKeyEndMarker(
+  value: string,
+  startIndex: number,
+): { readonly start: number; readonly end: number } | null {
+  let cursor = startIndex;
+  while (cursor < value.length) {
+    const markerStart = value.indexOf(PRIVATE_KEY_END_PREFIX, cursor);
+    if (markerStart === -1) return null;
+
+    const typeStart = markerStart + PRIVATE_KEY_END_PREFIX.length;
+    const markerEnd = value.indexOf(PRIVATE_KEY_SUFFIX, typeStart);
+    if (markerEnd === -1) return null;
+
+    const keyType = value.slice(typeStart, markerEnd);
+    const end = markerEnd + PRIVATE_KEY_SUFFIX.length;
+    if (isPrivateKeyType(keyType)) {
+      return { start: markerStart, end };
+    }
+    cursor = typeStart;
+  }
+  return null;
 }
 
 function isPrivateKeyType(value: string): boolean {

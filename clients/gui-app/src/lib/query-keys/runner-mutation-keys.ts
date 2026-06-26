@@ -51,16 +51,25 @@ export const runnerQueryKeys = {
     ["runner.serviceStatus", service] as const,
   serviceLogTail: (service: object, maxLines: number) =>
     ["runner.serviceLogTail", service, maxLines] as const,
-  // `traycerCli: object` keys these queries to a specific runner-host
-  // instance so a host swap (test setups, hot reload) invalidates the
-  // cache cleanly. Identity comparison only - the object is never
-  // serialised.
+  // Most runner-owned config queries are keyed to a specific runner-host
+  // instance so a shell swap (test setups, hot reload) invalidates the cache.
+  // Diagnostics config is host-scoped user-visible state, so the canonical
+  // active host id is the second-level primitive scope. The traycerCli object
+  // is appended only as fetcher identity for TanStack Query dependency hygiene.
   traycerHostStatus: (traycerCli: object) =>
     ["runner.traycer.hostStatus", traycerCli] as const,
   traycerShellConfig: (traycerCli: object) =>
     ["runner.traycer.shellConfig", traycerCli] as const,
-  traycerDiagnosticsConfig: (traycerCli: object) =>
-    ["runner.traycer.diagnosticsConfig", traycerCli] as const,
+  traycerDiagnosticsConfigScope: (hostId: string | null) =>
+    ["runner.traycer.diagnosticsConfig", hostId] as const,
+  traycerDiagnosticsConfig: (
+    hostId: string | null,
+    traycerCli: object | null,
+  ) =>
+    [
+      ...runnerQueryKeys.traycerDiagnosticsConfigScope(hostId),
+      traycerCli,
+    ] as const,
   traycerShellList: (traycerCli: object) =>
     ["runner.traycer.shellList", traycerCli] as const,
   traycerEnvOverrideList: (traycerCli: object) =>
