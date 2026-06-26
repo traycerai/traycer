@@ -410,6 +410,32 @@ async function stageRegistry(
   };
 }
 
+// Windows releases a terminated process's directory/file handles
+// asynchronously, so a rename issued right after the OS service stop
+// (which force-kills the host tree) can still observe EBUSY/EPERM for a
+// brief window even though the host is already dead. Retry a few times with
+// a short backoff (~2.5s total). POSIX renames don't raise these codes, so
+// this is a no-op there.
+const RENAME_RETRY_CODES = new Set(["EBUSY", "EPERM", "EACCES", "ENOTEMPTY"]);
+async function renameWithRetry(from: string, to: string): Promise<void> {
+  const delaysMs = [50, 100, 200, 400, 800, 1000];
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await rename(from, to);
+      return;
+    } catch (cause) {
+      const code =
+        cause && typeof cause === "object" && "code" in cause
+          ? String((cause as { code?: unknown }).code)
+          : "";
+      if (attempt >= delaysMs.length || !RENAME_RETRY_CODES.has(code)) {
+        throw cause;
+      }
+      await new Promise((resolve) => setTimeout(resolve, delaysMs[attempt]));
+    }
+  }
+}
+
 interface AtomicSwapOptions {
   readonly environment: Environment;
   readonly stagingDir: string;
@@ -435,10 +461,10 @@ async function atomicSwap(opts: AtomicSwapOptions): Promise<void> {
     // so the rename target is empty. We delete the trash copy after
     // the new install is in place - there is no rollback cache by
     // design.
-    await rename(target, trash);
+    await renameWithRetry(target, trash);
   }
   try {
-    await rename(opts.stagingDir, target);
+    await renameWithRetry(opts.stagingDir, target);
   } catch (cause) {
     // Restore the previous install if the rename of the new one fails.
     if (targetExists) {
