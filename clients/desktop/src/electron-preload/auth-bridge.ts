@@ -4,11 +4,11 @@ import {
   RunnerHostInvoke,
 } from "../ipc-contracts/ipc-channels";
 import type {
-  AuthTokenRefreshResult,
   AuthTokenValidationResult,
   StoredAuthTokens,
 } from "@traycer-clients/shared/platform/runner-host";
 import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/auth-validation-types";
+import type { AuthTokenRefreshResult } from "../ipc-contracts/auth-types";
 import type { DesktopAuthSessionSnapshot } from "../ipc-contracts/window-types";
 import { subscribe, type Disposable, type Listener } from "./subscribe";
 

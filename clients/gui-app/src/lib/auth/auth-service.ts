@@ -487,6 +487,11 @@ export class AuthService {
     if (this.disposed) {
       return;
     }
+    // Stop the proactive refresh timer up front: `clearStoredAuth()` below is
+    // awaited (storage clear + CLI deprovision), and a timer firing during that
+    // window would race a `forceRefresh` against the credential removal.
+    // `applySignedOut()` stops it again, idempotently.
+    this.refreshScheduler.stop();
     this.clearPendingTimeout();
     this.clearPendingCodeVerifier();
     await this.clearStoredAuth();

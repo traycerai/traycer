@@ -233,4 +233,33 @@ describe("createProactiveRefreshScheduler", () => {
     await clock.advance(8 * HOUR_MS);
     expect(revalidate).not.toHaveBeenCalled();
   });
+
+  it("clamps a far-future exp so the timer can't overflow and fire immediately", async () => {
+    const clock = makeFakeClock();
+    // exp 100 days out → the raw delay far exceeds the 32-bit timer ceiling,
+    // which would overflow and fire near-instantly without the clamp.
+    const token: string = tokenExpiringAtMs(100 * 24 * HOUR_MS);
+    const revalidate = vi.fn(async () => {});
+
+    const scheduler = createProactiveRefreshScheduler<number>({
+      getToken: () => token,
+      revalidate,
+      now: clock.now,
+      setTimer: clock.setTimer,
+      clearTimer: clock.clearTimer,
+      leadMs: DEFAULT_REFRESH_LEAD_MS,
+      minDelayMs: DEFAULT_REFRESH_MIN_DELAY_MS,
+      onDiagnostic: null,
+    });
+
+    scheduler.start();
+    // A timer is armed (not fired synchronously) and stays pending well past the
+    // floor - it must NOT have collapsed into an immediate fire.
+    expect(clock.pendingCount()).toBe(1);
+    await clock.advance(DEFAULT_REFRESH_MIN_DELAY_MS * 1000);
+    expect(revalidate).not.toHaveBeenCalled();
+    expect(clock.pendingCount()).toBe(1);
+
+    scheduler.stop();
+  });
 });

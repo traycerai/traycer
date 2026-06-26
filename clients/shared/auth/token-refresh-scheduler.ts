@@ -32,6 +32,15 @@ export const DEFAULT_REFRESH_LEAD_MS = 10 * 60_000;
  */
 export const DEFAULT_REFRESH_MIN_DELAY_MS = 60_000;
 
+/**
+ * Cap for a scheduled delay. `setTimeout`/`setInterval` coerce the delay to a
+ * 32-bit signed int; anything above 2^31-1 ms (~24.8 days) overflows and the
+ * timer fires almost immediately. A far-future (or malformed-but-huge) `exp`
+ * could produce such a delay, so we clamp: the timer fires at the cap, re-arms,
+ * and converges once the token is actually inside the lead window.
+ */
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
 export interface ProactiveRefreshScheduler {
   /** (Re-)arm off the current token. Idempotent; safe to call on every rotation. */
   start(): void;
@@ -87,9 +96,9 @@ export function createProactiveRefreshScheduler<THandle>(
       );
       return;
     }
-    const delay = Math.max(
-      expMs - options.leadMs - options.now(),
-      options.minDelayMs,
+    const delay = Math.min(
+      Math.max(expMs - options.leadMs - options.now(), options.minDelayMs),
+      MAX_TIMER_DELAY_MS,
     );
     handle = options.setTimer(() => {
       void onFire();

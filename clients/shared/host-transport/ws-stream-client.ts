@@ -724,6 +724,18 @@ class StreamSession<
     this.lastPongAt = Date.now();
     this.startHeartbeat();
     this.transitionTo("open", null);
+    // If the bearer rotated DURING the handshake - after the open frame was sent
+    // but before we became `subscribed` - that rotation's `notifyBearerRotated`
+    // was dropped (we weren't subscribed yet) and the open frame carried the now
+    // stale token. Reconcile once here so the host still gets the fresh bearer in
+    // place. No-op on the common path where the bearer is unchanged.
+    if (
+      this.supportsCredentialUpdate &&
+      this.openFrameToken !== null &&
+      this.currentBearerToken() !== this.openFrameToken
+    ) {
+      this.pushCredentialUpdate();
+    }
   }
 
   private handleFatalErrorFrame(parsed: object): void {
