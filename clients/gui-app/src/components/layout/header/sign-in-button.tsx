@@ -2,12 +2,16 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { useAuthService } from "@/lib/host";
 import { useAuthServiceError } from "@/hooks/auth/use-auth-service-error";
+import { useAuthDeviceProgress } from "@/hooks/auth/use-auth-device-progress";
 import {
+  AUTH_ERROR_DEVICE_DENIED,
+  AUTH_ERROR_DEVICE_EXPIRED,
   AUTH_ERROR_LAUNCH_FAILED,
   AUTH_ERROR_SESSION_EXPIRED,
   AUTH_ERROR_SIGN_IN_FAILED,
   AUTH_ERROR_TIMEOUT,
   type AuthService,
+  type DeviceFlowProgress,
 } from "@/lib/auth/auth-service";
 import { useAuthStore, type AuthStatus } from "@/stores/auth/auth-store";
 import { cn } from "@/lib/utils";
@@ -33,6 +37,7 @@ export function SignInButton(props: SignInButtonProps) {
   const auth = useAuthService();
   const status = useAuthStore((state) => state.status);
   const lastError = useAuthServiceError(auth);
+  const deviceProgress = useAuthDeviceProgress(auth);
 
   if (status === "signed-in") {
     return null;
@@ -54,6 +59,7 @@ export function SignInButton(props: SignInButtonProps) {
         lastError={lastError}
         isHero={isHero}
       />
+      <DeviceCodeProgress progress={deviceProgress} isHero={isHero} />
       <PrimarySignInButton
         auth={auth}
         isHero={isHero}
@@ -64,6 +70,105 @@ export function SignInButton(props: SignInButtonProps) {
         isHero={isHero}
         isSigningIn={isSigningIn}
       />
+      <DeviceCodeFallback
+        auth={auth}
+        status={status}
+        lastError={lastError}
+        isSigningIn={isSigningIn}
+        hasDeviceProgress={deviceProgress !== null}
+        isHero={isHero}
+      />
+    </div>
+  );
+}
+
+/**
+ * Device-flow fallback affordance. Unobtrusive while a redirect attempt is
+ * mid-flight ("Having trouble?"), and promoted to a prominent CTA when the
+ * redirect could not launch / timed out - the two cases where the seamless
+ * browser path is known to be unavailable. Hidden once a device attempt is
+ * itself in flight (its progress panel takes over), and on an idle signed-out
+ * surface where the primary "Sign in" button is the CTA.
+ */
+function DeviceCodeFallback(props: {
+  readonly auth: AuthService;
+  readonly status: AuthStatus;
+  readonly lastError: string | null;
+  readonly isSigningIn: boolean;
+  readonly hasDeviceProgress: boolean;
+  readonly isHero: boolean;
+}) {
+  if (props.hasDeviceProgress) {
+    return null;
+  }
+  const isLaunchBlocked =
+    props.status === "signed-out" &&
+    (props.lastError === AUTH_ERROR_LAUNCH_FAILED ||
+      props.lastError === AUTH_ERROR_TIMEOUT);
+  if (!props.isSigningIn && !isLaunchBlocked) {
+    return null;
+  }
+  return (
+    <Button
+      type="button"
+      size={props.isHero ? "default" : "sm"}
+      variant={isLaunchBlocked ? "outline" : "link"}
+      data-testid="signin-device-code-link"
+      onClick={() => {
+        void props.auth.signInWithDeviceCode();
+      }}
+      className={cn(
+        "cursor-pointer",
+        props.isHero && !isLaunchBlocked
+          ? "h-auto justify-center px-0 py-0 text-ui-sm"
+          : null,
+      )}
+    >
+      {isLaunchBlocked
+        ? "Use a sign-in code instead"
+        : "Having trouble? Use a code instead"}
+    </Button>
+  );
+}
+
+/**
+ * Active device-flow progress: the human-handled code + where to enter it, so
+ * the device fallback is never a silent spinner. Rendered only while a device
+ * attempt is in flight.
+ */
+function DeviceCodeProgress(props: {
+  readonly progress: DeviceFlowProgress | null;
+  readonly isHero: boolean;
+}) {
+  const progress = props.progress;
+  if (progress === null) {
+    return null;
+  }
+  return (
+    <div
+      className={cn(
+        "flex flex-col gap-1 rounded-md border border-border bg-muted/40 p-3",
+        props.isHero ? "w-full text-ui-sm" : "text-ui-xs",
+      )}
+      data-testid="signin-device-progress"
+    >
+      <span className="text-muted-foreground">
+        Enter this code at {progress.verificationUri}
+      </span>
+      <span
+        className="font-mono text-base font-semibold tracking-widest"
+        data-testid="signin-device-code"
+      >
+        {progress.userCode}
+      </span>
+      <span className="flex items-center gap-1.5 text-muted-foreground">
+        Waiting for approval in your browser
+        <AgentSpinningDots
+          variant="dots"
+          className="ml-0.5"
+          testId="signin-device-spinner"
+        />
+      </span>
     </div>
   );
 }
@@ -170,6 +275,12 @@ function messageForError(error: string): string {
   }
   if (error === AUTH_ERROR_SIGN_IN_FAILED) {
     return "Sign-in failed - please try again.";
+  }
+  if (error === AUTH_ERROR_DEVICE_DENIED) {
+    return "Request denied - sign in again.";
+  }
+  if (error === AUTH_ERROR_DEVICE_EXPIRED) {
+    return "The code expired - start again.";
   }
   return "Sign in failed. Please try again.";
 }

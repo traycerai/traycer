@@ -2,6 +2,8 @@ import type {
   AuthCallbackResult,
   AuthTokenValidationResult,
   CliInstallManifestSnapshot,
+  DeviceFlowSession,
+  IDeviceFlowHost,
   HostAvailableSnapshot,
   HostAvailableVersionsInput,
   HostDoctorReport,
@@ -139,6 +141,9 @@ export interface DesktopPreloadBridge {
   beginAuthAttempt(): void;
   onAuthCallback(handler: (result: AuthCallbackResult) => void): {
     dispose: () => void;
+  };
+  deviceFlow: {
+    start(): Promise<DeviceFlowSession | null>;
   };
   notifications: {
     show(title: string, body: string, payload: unknown): Promise<void>;
@@ -493,6 +498,7 @@ export class DesktopRunnerHost implements IRunnerHost {
   readonly power: DesktopPowerBridge;
   readonly hostManagement: IHostManagement;
   readonly hostTray: IHostTray;
+  readonly deviceFlow: IDeviceFlowHost;
 
   private readonly bridge: DesktopPreloadBridge;
   private cachedLocalHost: LocalHostSnapshot | null = null;
@@ -644,6 +650,12 @@ export class DesktopRunnerHost implements IRunnerHost {
     this.hostTray = {
       onCommand: (handler) =>
         toDisposable(this.bridge.hostTray.onCommand(handler)),
+    };
+    // The preload bridge already returns a `DeviceFlowSession`-shaped handle
+    // (authorize result + per-attempt `onResult` + `cancel`), so this forwards
+    // straight through - the CORS-safe authorize + poll loop lives in main.
+    this.deviceFlow = {
+      start: () => this.bridge.deviceFlow.start(),
     };
   }
 

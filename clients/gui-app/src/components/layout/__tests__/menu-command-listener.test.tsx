@@ -138,6 +138,7 @@ function createRunnerHost(menu: FakeDesktopMenu): FakeRunnerHost {
       openMicrophoneSettings: () => Promise.resolve(),
       beginAuthAttempt: () => undefined,
       onAuthCallback: () => ({ dispose: () => undefined }),
+      deviceFlow: { start: () => Promise.resolve(null) },
       secureStorage: {
         get: () => Promise.resolve(null),
         set: () => Promise.resolve(),

@@ -44,6 +44,7 @@ import {
   uniquePerWindowTabs,
 } from "./landing-draft-helpers";
 import { registerAuthIpc } from "./auth-ipc";
+import { registerDeviceFlowIpc } from "./device-flow-ipc";
 import { registerTrayIpc } from "./tray-ipc";
 import { registerWindowsIpc } from "./windows-ipc";
 import { registerOwnershipIpc } from "./ownership-ipc";
@@ -309,6 +310,7 @@ export class RunnerIpcBridge {
 
   install(): void {
     registerAuthIpc(this);
+    registerDeviceFlowIpc(this);
     registerTrayIpc(this);
     registerLifecycleIpc(this);
     registerWindowsIpc(this);

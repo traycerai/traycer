@@ -3,6 +3,7 @@ import { RunnerHostSync } from "../ipc-contracts/ipc-channels";
 import { config } from "../config";
 import { readInitialRouteArg } from "../ipc-contracts/window-bootstrap";
 import { buildAuthBridge, type AuthCallbackBridgeResult } from "./auth-bridge";
+import { buildDeviceFlowBridge } from "./device-flow-bridge";
 import { buildHostBridge } from "./host-bridge";
 import {
   buildHostManagementBridge,
@@ -52,6 +53,7 @@ contextBridge.exposeInMainWorld("runnerHost", {
   initialRoute,
   sentryRendererDsn,
   ...buildAuthBridge(),
+  deviceFlow: buildDeviceFlowBridge(),
   ...buildHostBridge(),
   ...buildTrayBridge(),
   ...buildWindowsBridge(windowId),

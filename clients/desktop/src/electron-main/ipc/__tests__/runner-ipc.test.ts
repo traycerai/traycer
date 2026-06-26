@@ -474,6 +474,8 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.validateAuthToken,
         RunnerHostInvoke.validateAuthTokenIdentity,
         RunnerHostInvoke.exchangeAuthCode,
+        RunnerHostInvoke.deviceFlowStart,
+        RunnerHostInvoke.deviceFlowCancel,
         RunnerHostInvoke.notificationShow,
         RunnerHostInvoke.openExternalLink,
         RunnerHostInvoke.getRegisteredUrlSchemes,

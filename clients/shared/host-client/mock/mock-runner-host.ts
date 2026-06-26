@@ -2,6 +2,10 @@ import type { Disposable } from "../../platform/uri-callback";
 import type {
   AuthCallbackResult,
   AuthTokenValidationResult,
+  DeviceFlowAuthorization,
+  DeviceFlowResult,
+  DeviceFlowSession,
+  IDeviceFlowHost,
   IHostPicker,
   IHostManagement,
   INotificationHost,
@@ -115,6 +119,7 @@ export class MockRunnerHost implements IRunnerHost {
   readonly migration: null = null;
   readonly hostManagement: IHostManagement | null;
   readonly hostTray: null = null;
+  readonly deviceFlow: MockDeviceFlowHost = new MockDeviceFlowHost();
 
   /**
    * Test/dev counter - how many times `beginAuthAttempt()` has been invoked.
@@ -445,6 +450,94 @@ export class MockTraycerCli implements ITraycerCli {
   async cliLogout(): Promise<void> {
     this.lastLoginToken = null;
     this.lastLoginRefreshToken = null;
+  }
+}
+
+/**
+ * Default `/device/authorize` response handed back by `MockDeviceFlowHost`.
+ * `user_code` is the plan's grouped Crockford shape; the URIs/timings are
+ * representative so progress/expiry UI and timeout scoping can be exercised.
+ */
+const MOCK_DEVICE_AUTHORIZATION: DeviceFlowAuthorization = {
+  userCode: "ABCDE-FGHIJ",
+  verificationUri: "https://app.traycer.ai/device",
+  verificationUriComplete: "https://app.traycer.ai/device?user_code=ABCDE-FGHIJ",
+  expiresInSeconds: 600,
+  intervalSeconds: 5,
+};
+
+/**
+ * In-memory `IDeviceFlowHost`. `start()` hands back a `MockDeviceFlowSession`
+ * carrying `nextAuthorization`; set `nextAuthorization = null` to simulate an
+ * authorize failure (the real shell returns `null` on network/5xx). Tests drive
+ * the terminal outcome with `emitResult(...)` and assert supersede behaviour via
+ * `lastSession.cancelled`.
+ */
+export class MockDeviceFlowHost implements IDeviceFlowHost {
+  startCalls = 0;
+  nextAuthorization: DeviceFlowAuthorization | null = MOCK_DEVICE_AUTHORIZATION;
+  readonly sessions: MockDeviceFlowSession[] = [];
+
+  async start(): Promise<DeviceFlowSession | null> {
+    this.startCalls += 1;
+    if (this.nextAuthorization === null) {
+      return null;
+    }
+    const session = new MockDeviceFlowSession(this.nextAuthorization);
+    this.sessions.push(session);
+    return session;
+  }
+
+  get lastSession(): MockDeviceFlowSession | null {
+    return this.sessions.length === 0
+      ? null
+      : this.sessions[this.sessions.length - 1];
+  }
+
+  /** Test helper: emit the terminal result to the most recent session. */
+  emitResult(result: DeviceFlowResult): void {
+    this.lastSession?.emit(result);
+  }
+}
+
+export class MockDeviceFlowSession implements DeviceFlowSession {
+  readonly authorization: DeviceFlowAuthorization;
+  cancelled = false;
+  private pendingResult: DeviceFlowResult | null = null;
+  private handler: ((result: DeviceFlowResult) => void) | null = null;
+
+  constructor(authorization: DeviceFlowAuthorization) {
+    this.authorization = authorization;
+  }
+
+  onResult(handler: (result: DeviceFlowResult) => void): Disposable {
+    this.handler = handler;
+    // Replay a result that settled before this subscription (mirrors the
+    // desktop preload's per-attempt result cache).
+    if (this.pendingResult !== null) {
+      const result = this.pendingResult;
+      this.pendingResult = null;
+      handler(result);
+    }
+    return {
+      dispose: () => {
+        if (this.handler === handler) {
+          this.handler = null;
+        }
+      },
+    };
+  }
+
+  cancel(): void {
+    this.cancelled = true;
+  }
+
+  emit(result: DeviceFlowResult): void {
+    if (this.handler !== null) {
+      this.handler(result);
+      return;
+    }
+    this.pendingResult = result;
   }
 }
 

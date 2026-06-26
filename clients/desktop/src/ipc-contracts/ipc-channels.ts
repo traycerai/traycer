@@ -12,6 +12,12 @@ export const RunnerHostInvoke = {
   validateAuthToken: "runnerHost:auth:validateToken",
   validateAuthTokenIdentity: "runnerHost:auth:validateTokenIdentity",
   exchangeAuthCode: "runnerHost:auth:exchangeAuthCode",
+  // Device Authorization Grant (RFC 8628). `start` runs `/device/authorize` +
+  // the `/device/token` poll loop in main (CORS-safe, survives window
+  // close/sleep) and returns the authorization; the terminal outcome is pushed
+  // on `deviceFlowResult`. `cancel` aborts the named attempt's loop.
+  deviceFlowStart: "runnerHost:auth:deviceFlowStart",
+  deviceFlowCancel: "runnerHost:auth:deviceFlowCancel",
   openExternalLink: "runnerHost:openExternalLink",
   getRegisteredUrlSchemes: "runnerHost:getRegisteredUrlSchemes",
   requestMicrophoneAccess: "runnerHost:requestMicrophoneAccess",
@@ -163,6 +169,9 @@ export const RunnerHostInvoke = {
 
 export const RunnerHostEvent = {
   authCallback: "runnerHost:event:authCallback",
+  // Terminal outcome of a device-flow attempt, keyed by `attemptId` so a
+  // superseded attempt's late result can't be mistaken for the live one.
+  deviceFlowResult: "runnerHost:event:deviceFlowResult",
   localHostChange: "runnerHost:event:localHostChange",
   // OS wake pulse (powerMonitor `resume` / `unlock-screen`) bridged to the
   // renderer so it force-reconnects its host streams - re-registering the

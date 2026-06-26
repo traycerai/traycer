@@ -147,6 +147,17 @@ export interface IRunnerHost {
    */
   onAuthCallback(handler: (result: AuthCallbackResult) => void): Disposable;
 
+  /**
+   * OAuth 2.0 Device Authorization Grant (RFC 8628) controller, owned by the
+   * shell's privileged process. On desktop the authorize call AND the
+   * `/device/token` poll loop run in Electron main so they are CORS-safe (like
+   * `exchangeAuthCode`) and survive renderer window close / sleep - the
+   * renderer only observes the terminal outcome. Shells with no device-flow
+   * backend (mobile, web, in-browser dev) install a no-op whose `start()`
+   * resolves `null`. Always present; callers never branch on `null`.
+   */
+  readonly deviceFlow: IDeviceFlowHost;
+
   readonly secureStorage: ISecureStorage;
   readonly notifications: INotificationHost;
   readonly tray: ITrayState;
@@ -464,6 +475,69 @@ export interface IServiceHost {
 export type AuthCallbackResult =
   | { readonly code: string }
   | { readonly error: string };
+
+/**
+ * Authorization details returned by `/device/authorize`, surfaced to the GUI so
+ * it can display the human-handled `userCode` + `verificationUri` (or rely on
+ * the shell opening `verificationUriComplete`) and show poll progress / expiry.
+ * `expiresInSeconds` is the device_code TTL; the GUI scopes its device-attempt
+ * timeout to it.
+ */
+export interface DeviceFlowAuthorization {
+  readonly userCode: string;
+  readonly verificationUri: string;
+  readonly verificationUriComplete: string;
+  readonly expiresInSeconds: number;
+  readonly intervalSeconds: number;
+}
+
+/**
+ * Terminal outcome of a device-flow attempt, emitted once by the shell's
+ * controller after its poll loop settles:
+ *   - `authorized` carries the minted `{ token, refreshToken }` pair.
+ *   - `denied`     the user denied the request in the browser.
+ *   - `expired`    the device_code TTL elapsed before approval.
+ *   - `error`      a terminal/unrecoverable failure (invalid grant, or the
+ *                  loop gave up after persistent network/5xx failures).
+ * Non-terminal poll states (`authorization-pending` / `slow-down`) are handled
+ * entirely inside the controller and never surface here.
+ */
+export type DeviceFlowResult =
+  | {
+      readonly kind: "authorized";
+      readonly token: string;
+      readonly refreshToken: string;
+    }
+  | { readonly kind: "denied" }
+  | { readonly kind: "expired" }
+  | { readonly kind: "error" };
+
+/**
+ * Handle to a single in-flight device-flow attempt. `authorization` is the
+ * `/device/authorize` response (already resolved by the time the session
+ * exists). `onResult` fires exactly once with the terminal `DeviceFlowResult`;
+ * implementations replay a result that settled before the subscription so a
+ * fast poll can't be missed. `cancel()` stops the shell-side poll loop and
+ * frees its resources - the GUI calls it when the attempt is superseded
+ * (redirect won, retry), on sign-out, and on dispose.
+ */
+export interface DeviceFlowSession {
+  readonly authorization: DeviceFlowAuthorization;
+  onResult(handler: (result: DeviceFlowResult) => void): Disposable;
+  cancel(): void;
+}
+
+export interface IDeviceFlowHost {
+  /**
+   * Starts a device-authorization attempt: the shell runs `/device/authorize`
+   * and immediately begins the `/device/token` poll loop in its privileged
+   * process. Resolves with a `DeviceFlowSession` once authorization succeeds,
+   * or `null` when authorization itself fails (network/5xx) or the shell has no
+   * device-flow backend - the caller surfaces a launch-style failure and may
+   * retry. The shell supplies its own `client_id` (`"desktop"`) and host label.
+   */
+  start(): Promise<DeviceFlowSession | null>;
+}
 
 export interface AuthValidationProfile {
   readonly userId: string;

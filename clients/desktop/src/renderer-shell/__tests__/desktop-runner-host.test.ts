@@ -91,6 +91,9 @@ function buildFakeBridge(
     onAuthCallback: (_handler: (result: AuthCallbackResult) => void) => ({
       dispose: () => undefined,
     }),
+    deviceFlow: {
+      start: async () => null,
+    },
     notifications: {
       show: async () => undefined,
       onClick: (_handler: (payload: unknown) => void) => ({

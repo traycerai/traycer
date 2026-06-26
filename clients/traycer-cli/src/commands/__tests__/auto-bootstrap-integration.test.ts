@@ -25,7 +25,7 @@ vi.mock("../../host/auto-bootstrap", () => {
 });
 
 vi.mock("../../auth/login-flow", () => ({
-  runLoginFlow: vi.fn(),
+  runDeviceAuthFlow: vi.fn(),
 }));
 
 vi.mock("../../host/pid-metadata", () => ({
@@ -124,7 +124,7 @@ describe("loginCommand", () => {
     const autoBootstrap = await import("../../host/auto-bootstrap");
     const loginFlow = await import("../../auth/login-flow");
 
-    (loginFlow.runLoginFlow as Mock).mockResolvedValue({
+    (loginFlow.runDeviceAuthFlow as Mock).mockResolvedValue({
       token: "t",
       user: { id: "u", email: "a@b", name: "A" },
       authnBaseUrl: "https://authn",
@@ -136,7 +136,7 @@ describe("loginCommand", () => {
 
     // Sign-in must NOT trigger a host download/install as a side effect.
     expect(autoBootstrap.maybeAutoBootstrap).not.toHaveBeenCalled();
-    expect(loginFlow.runLoginFlow).toHaveBeenCalled();
+    expect(loginFlow.runDeviceAuthFlow).toHaveBeenCalled();
     const data = result.data as { bootstrap: null; user: { id: string } };
     expect(data.bootstrap).toBeNull();
     expect(data.user.id).toBe("u");
@@ -146,7 +146,7 @@ describe("loginCommand", () => {
   it("reports the signed-in user in human mode", async () => {
     const loginFlow = await import("../../auth/login-flow");
 
-    (loginFlow.runLoginFlow as Mock).mockResolvedValue({
+    (loginFlow.runDeviceAuthFlow as Mock).mockResolvedValue({
       token: "t",
       user: { id: "u", email: "a@b", name: "A" },
       authnBaseUrl: "https://authn",

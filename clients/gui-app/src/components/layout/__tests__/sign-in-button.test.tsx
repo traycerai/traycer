@@ -352,4 +352,31 @@ describe("<SignInButton />", () => {
     expect(screen.queryByTestId("signin-error")).toBeNull();
     result.cleanupClient();
   });
+
+  it("offers a device-code fallback while signing-in that starts the device flow and surfaces the code", async () => {
+    restoreFetch();
+    restoreFetch = installFetch(() => okWithProfile());
+    const result = mountSignInButton(buildHost());
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("runtime-fallback")).toBeNull();
+    });
+
+    // A redirect attempt is in flight: the unobtrusive "use a code" link shows.
+    await result.getAuthService().signIn();
+    const link = await screen.findByTestId("signin-device-code-link");
+
+    fireEvent.click(link);
+
+    // Clicking starts the main-process device flow and shows the user code
+    // (no silent spinner) instead of leaving the user on a bare redirect.
+    await waitFor(() => {
+      expect(result.host.deviceFlow.startCalls).toBe(1);
+    });
+    const code = await screen.findByTestId("signin-device-code");
+    expect(code.textContent).toBe("ABCDE-FGHIJ");
+    // The fallback link is replaced by the progress panel.
+    expect(screen.queryByTestId("signin-device-code-link")).toBeNull();
+    result.cleanupClient();
+  });
 });

@@ -160,6 +160,7 @@ function makeHost(tray: IHostTray, management: IHostManagement): IRunnerHost {
     openMicrophoneSettings: () => Promise.resolve(),
     beginAuthAttempt: () => undefined,
     onAuthCallback: () => ({ dispose: () => undefined }),
+    deviceFlow: { start: () => Promise.resolve(null) },
     secureStorage: {
       get: () => Promise.resolve(null),
       set: () => Promise.resolve(),

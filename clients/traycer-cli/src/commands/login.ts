@@ -1,5 +1,5 @@
 import { validateAuthTokenViaHttp } from "../../../shared/auth/auth-validation";
-import { runLoginFlow } from "../auth/login-flow";
+import { runDeviceAuthFlow } from "../auth/login-flow";
 import { config } from "../config";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type { CommandFn, CommandResult } from "../runner/runner";
@@ -11,7 +11,7 @@ import { readCredentials, writeCredentials } from "../store/credentials";
 // subcommands (`host ensure` / `host install`). A user signing in should
 // never trigger a host download as a side effect.
 export const loginCommand: CommandFn = async (ctx): Promise<CommandResult> => {
-  const result = await runLoginFlow();
+  const result = await runDeviceAuthFlow(ctx);
 
   const humanSignedIn = `Signed in as ${result.user.email || result.user.name || result.user.id}.`;
   const data = {

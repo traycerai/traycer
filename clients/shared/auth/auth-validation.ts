@@ -364,7 +364,14 @@ function projectProfile(body: unknown): AuthValidationProfile | null {
   };
 }
 
-async function readRotatedTokens(
+/**
+ * Parses the rotated `{ token, refreshToken }` pair from a 2xx token-mint
+ * response body. Exported so the device-flow client (`device-auth.ts`) can
+ * reuse the exact same 200-body shape that `exchange-code` / `refresh` use,
+ * without duplicating the field validation. Returns `null` when the body is
+ * missing either non-empty string field.
+ */
+export async function readRotatedTokens(
   response: Response,
 ): Promise<{ readonly token: string; readonly refreshToken: string } | null> {
   try {
