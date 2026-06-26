@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type RefObject,
+} from "react";
 import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import { v4 as uuidv4 } from "uuid";
@@ -95,16 +102,6 @@ import {
   worktreeStagingKeyString,
 } from "@/stores/worktree/worktree-intent-staging-store";
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
-
-/**
- * Compact, bounded editor sizing for the dialog. The base composer editor grows
- * unbounded (see `COMPOSER_EDITOR_CLASSNAME`); the modal caps it so a long
- * prompt scrolls inside the dialog rather than stretching it.
- */
-const NEW_CONVERSATION_EDITOR_CLASSNAME = cn(
-  COMPOSER_EDITOR_CLASSNAME,
-  "max-h-[4.5rem]",
-);
 
 /**
  * Isolated subscriber for the live draft content. The editor rewrites content
@@ -248,12 +245,27 @@ function NewConversationModalDialog(props: {
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
 }) {
+  // The composer's @/slash picker (see `ComposerMenu`) is a plain portalled
+  // floating menu, not a Radix dismissable layer, so Radix can't coordinate
+  // Escape with it. Radix's escape listener runs first (document, capture) and
+  // dismisses the dialog; preventing that needs `preventDefault`, but that also
+  // suppresses ProseMirror's keydown (it ignores defaultPrevented events), so
+  // the picker's own Escape-close never fires. The body publishes an imperative
+  // dismiss here: while a picker is open we close it ourselves and preventDefault
+  // (first Escape closes only the picker); once it's closed the call returns
+  // false and Escape falls through to dismiss the dialog (second Escape).
+  const dismissPickerRef = useRef<(() => boolean) | null>(null);
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
       <DialogContent
         className="w-[min(92vw,48rem)] max-w-[min(92vw,48rem)] gap-3 p-4 sm:max-w-[min(92vw,48rem)]"
         data-testid="epic-sidebar-new-conversation-modal"
         showCloseButton={false}
+        onEscapeKeyDown={(event) => {
+          if (dismissPickerRef.current?.() === true) {
+            event.preventDefault();
+          }
+        }}
       >
         <DialogClose asChild>
           <Button
@@ -275,6 +287,7 @@ function NewConversationModalDialog(props: {
               epicId={props.epicId}
               tabId={props.tabId}
               placement={props.placement}
+              dismissPickerRef={dismissPickerRef}
               onSubmitted={() => props.onOpenChange(false)}
             />
           </SurfaceActivityProvider>
@@ -288,15 +301,27 @@ function NewConversationModalBody(props: {
   readonly epicId: string;
   readonly tabId: string;
   readonly placement: ConversationTilePlacement;
+  readonly dismissPickerRef: RefObject<(() => boolean) | null>;
   readonly onSubmitted: () => void;
 }) {
-  const { epicId, tabId, placement, onSubmitted } = props;
+  const { epicId, tabId, placement, dismissPickerRef, onSubmitted } = props;
   const permissionRole = useEpicPermissionRole();
   const connectionStatus = useEpicConnectionStatus();
   const isDisconnected = connectionStatus === "closed";
   const canMutate = isEditableRole(permissionRole) && !isDisconnected;
   const editorRef = useRef<ComposerPromptEditorHandle | null>(null);
   const [pickerStore] = useState(() => createComposerPickerStore());
+  // Bridge the editor's imperative picker dismiss up to the dialog's Escape
+  // handler (see `NewConversationModalDialog`). Returns true when a picker was
+  // open and got closed, so the dialog keeps itself open for that Escape.
+  // Cleared on unmount so a stale closure can never block dismissing the dialog.
+  useEffect(() => {
+    dismissPickerRef.current = () =>
+      editorRef.current?.dismissActiveSuggestion() ?? false;
+    return () => {
+      dismissPickerRef.current = null;
+    };
+  }, [dismissPickerRef]);
   const latestWorkspaceSeed = useLatestConversationWorkspaceSeed(epicId);
   const seed = useNewConversationModalSeed(epicId, latestWorkspaceSeed);
   // Subscribe to the NON-content draft fields only. `content` is rewritten on
@@ -647,7 +672,7 @@ function NewConversationModalBody(props: {
       toolbarStore={toolbarStore}
       composerMode={draftComposerMode}
       chatEditorIsActive={chatComposerActive}
-      editorClassName={NEW_CONVERSATION_EDITOR_CLASSNAME}
+      editorClassName={COMPOSER_EDITOR_CLASSNAME}
       initialContent={initialContent}
       initialSelection={null}
       canSubmit={canSubmit}

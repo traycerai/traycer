@@ -1,3 +1,4 @@
+import type { Slice } from "@tiptap/pm/model";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
 import {
@@ -5,6 +6,11 @@ import {
   numberValue,
   slashCommandPlainTextFromAttrs,
 } from "@/lib/composer/tiptap-json-content";
+import {
+  isJsonContent,
+  isRecord,
+  sliceToDocJson,
+} from "@/lib/editor/prosemirror-json";
 
 const CLIPBOARD_SCHEMA = "traycer.composer-content";
 const CLIPBOARD_VERSION = 1;
@@ -57,6 +63,19 @@ export function composerClipboardPlainText(content: JsonContent): string {
   return normalizeClipboardText(
     composerClipboardPlainTextFromNode(content, { listDepth: 0 }),
   );
+}
+
+/**
+ * `clipboardTextSerializer` for the chat composer editor. ProseMirror's default
+ * serializer emits node `textContent` joined by blank lines, which drops list
+ * markers and double-spaces every block. Routing the copied slice through the
+ * composer's structured plain-text serializer instead keeps `-` / `1.` markers,
+ * mentions, and slash commands intact on Cmd+C / Cmd+X.
+ */
+export function composerClipboardTextSerializer(slice: Slice): string {
+  const doc = sliceToDocJson(slice);
+  if (doc === null) return "";
+  return composerClipboardPlainText(doc);
 }
 
 export function buildComposerClipboardHtml(
@@ -257,41 +276,4 @@ function escapeHtmlText(value: string): string {
 
 function escapeHtmlAttr(value: string): string {
   return escapeHtmlText(value).replace(/"/g, "&quot;").replace(/'/g, "&#39;");
-}
-
-function isJsonContent(value: unknown, depth: number): value is JsonContent {
-  if (depth > 100) return false;
-  if (!isRecord(value)) return false;
-  if (!isStringOrUndefined(value.type)) return false;
-  if (!isStringOrUndefined(value.text)) return false;
-  if (!isAttrsOrUndefined(value.attrs)) return false;
-  if (!isMarksOrUndefined(value.marks)) return false;
-  const content = value.content;
-  if (content === undefined) return true;
-  return (
-    Array.isArray(content) &&
-    content.every((child) => isJsonContent(child, depth + 1))
-  );
-}
-
-function isStringOrUndefined(value: unknown): boolean {
-  return value === undefined || typeof value === "string";
-}
-
-function isAttrsOrUndefined(value: unknown): boolean {
-  return value === undefined || isRecord(value);
-}
-
-function isMarksOrUndefined(value: unknown): boolean {
-  if (value === undefined) return true;
-  if (!Array.isArray(value)) return false;
-  return value.every((mark) => {
-    if (!isRecord(mark)) return false;
-    if (typeof mark.type !== "string") return false;
-    return isAttrsOrUndefined(mark.attrs);
-  });
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

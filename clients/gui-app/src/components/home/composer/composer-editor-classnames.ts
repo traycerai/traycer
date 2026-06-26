@@ -2,9 +2,11 @@ import { cn } from "@/lib/utils";
 
 /**
  * Base editor sizing shared by every composer surface. It intentionally has NO
- * max-height so the landing composer keeps growing with content; surfaces that
- * need a compact, bounded editor (e.g. the New Conversation modal) compose this
- * with their own `max-h-*` and pass it via `editorClassName`.
+ * max-height of its own, so the editor element's baked-in
+ * `max-h-[min(50vh,15rem)]` (see `composer-prompt-editor.tsx`) governs the grow
+ * ceiling: the editor grows with content up to that bound, then scrolls
+ * internally. Surfaces that need a tighter, compact editor can compose this with
+ * their own `max-h-*` and pass it via `editorClassName`.
  *
  * Kept in its own leaf module (not `composer-body.tsx`) so the component file
  * exports only components - a non-component export there would defeat Fast
