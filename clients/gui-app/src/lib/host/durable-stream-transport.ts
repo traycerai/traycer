@@ -6,6 +6,7 @@ import type { StreamAuthRevalidator } from "@traycer-clients/shared/auth/bearer-
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import { buildHostStreamClient } from "@/hooks/host/use-host-stream-client-for";
 import { subscribeStreamWakeReconnect } from "@/lib/host/stream-wake-reconnect";
+import { appLogger } from "@/lib/logger";
 
 export interface DurableStreamTransport {
   readonly wsStreamClient: WsStreamClient<HostStreamRpcRegistry>;
@@ -61,6 +62,9 @@ export function openDurableStreamTransport(params: {
     bearer: params.bearer,
     auth: params.auth,
   });
+  appLogger.info("[stream] durable transport opened", {
+    hasEndpoint: params.endpoint() !== null,
+  });
   const disposers: Array<() => void> = [];
   try {
     disposers.push(
@@ -74,6 +78,7 @@ export function openDurableStreamTransport(params: {
       ),
     );
   } catch (cause) {
+    appLogger.error("[stream] durable transport wiring failed", {}, cause);
     // Roll back every subscription wired so far, then close the socket, so a
     // throw mid-wiring leaves nothing dangling.
     disposers.forEach((dispose) => dispose());
@@ -118,6 +123,7 @@ function subscribeEndpointRedial(
     }
     lastWebsocketUrl = nextWebsocketUrl;
     if (nextWebsocketUrl !== null) {
+      appLogger.info("[stream] durable endpoint changed - reconnecting", {});
       client.reconnectAll("host-endpoint-change");
     }
   });

@@ -10,6 +10,9 @@ import { withCliLock } from "../store/cli-lock";
 // cleanly. Does NOT remove the host install dir; that's
 // `host uninstall --all`.
 export const serviceUninstallCommand: CommandFn = async (ctx): Promise<CommandResult> => {
+  ctx.runtime.logger.info("Service uninstall command started", {
+    environment: ctx.runtime.environment,
+  });
   return withCliLock(
     {
       environment: ctx.runtime.environment,
@@ -19,6 +22,10 @@ export const serviceUninstallCommand: CommandFn = async (ctx): Promise<CommandRe
     },
     async () => {
       const label = serviceLabelFor(ctx.runtime.environment);
+      ctx.runtime.logger.debug("Service uninstall label resolved", {
+        environment: ctx.runtime.environment,
+        label: label.id,
+      });
       ctx.progress({
         stage: "deregister",
         message: `deregistering service '${label.id}'`,
@@ -27,6 +34,10 @@ export const serviceUninstallCommand: CommandFn = async (ctx): Promise<CommandRe
         totalBytes: null,
       });
       await createServiceController().uninstall({ label });
+      ctx.runtime.logger.info("Service uninstall command completed", {
+        environment: ctx.runtime.environment,
+        label: label.id,
+      });
       return {
         data: { label: label.id, environment: label.environment },
         human: `service '${label.id}' deregistered`,

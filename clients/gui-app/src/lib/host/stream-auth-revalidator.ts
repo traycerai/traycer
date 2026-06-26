@@ -4,6 +4,7 @@ import type {
   StreamAuthRevalidator,
 } from "@traycer-clients/shared/auth/bearer-revalidator";
 import { useAuthService } from "@/lib/host";
+import { appLogger } from "@/lib/logger";
 
 /**
  * Stream-side auth recovery shared by every LONG-LIVED host stream: the
@@ -30,18 +31,31 @@ export function useStreamAuthRevalidator(): StreamAuthRevalidator {
           // No live signed-in context to revalidate (signed out / provider
           // torn down). Re-dialing without a credential is futile, and the
           // provider rebuilds dependent clients on sign-out anyway.
+          appLogger.warn("[stream-auth] reconnect revalidation rejected", {
+            reason: "no-context",
+          });
           return "rejected";
         }
         if (outcome.kind === "valid") {
           // AuthnV3 accepts the credential (it may have rotated the bearer in
           // place). Re-dial; the open frame reads the live, possibly-fresh
           // bearer.
+          appLogger.info("[stream-auth] reconnect revalidation accepted", {
+            outcome: "valid",
+          });
           return "rotated";
         }
         if (outcome.kind === "network-error") {
+          appLogger.warn(
+            "[stream-auth] reconnect revalidation network error",
+            {},
+          );
           return "network-error";
         }
         // outcome.kind === "rejected": revalidate has already signed out.
+        appLogger.warn("[stream-auth] reconnect revalidation rejected", {
+          reason: "auth-rejected",
+        });
         return "rejected";
       },
     }),

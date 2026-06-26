@@ -11,7 +11,15 @@ import { readCredentials, writeCredentials } from "../store/credentials";
 // subcommands (`host ensure` / `host install`). A user signing in should
 // never trigger a host download as a side effect.
 export const loginCommand: CommandFn = async (ctx): Promise<CommandResult> => {
+  ctx.runtime.logger.info("Interactive login command started", {
+    environment: ctx.runtime.environment,
+  });
   const result = await runLoginFlow();
+  ctx.runtime.logger.info("Interactive login command completed", {
+    environment: ctx.runtime.environment,
+    hasUserId: result.user.id.length > 0,
+    hasEmail: result.user.email.length > 0,
+  });
 
   const humanSignedIn = `Signed in as ${result.user.email || result.user.name || result.user.id}.`;
   const data = {
@@ -44,7 +52,14 @@ export function buildLoginCommand(opts: {
 
 function loginWithToken(rawToken: string): CommandFn {
   return async (ctx): Promise<CommandResult> => {
+    ctx.runtime.logger.info("Token login command started", {
+      environment: ctx.runtime.environment,
+      tokenFlagUsesStdin: rawToken === "-",
+    });
     if (rawToken !== "-") {
+      ctx.runtime.logger.warn("Token login rejected literal token argument", {
+        environment: ctx.runtime.environment,
+      });
       throw cliError({
         code: CLI_ERROR_CODES.INVALID_ARGUMENT,
         message:
@@ -56,7 +71,15 @@ function loginWithToken(rawToken: string): CommandFn {
     const { token, refreshToken } = parseStdinCredentials(
       await readTokenFromStdin(),
     );
+    ctx.runtime.logger.info("Token login stdin payload parsed", {
+      environment: ctx.runtime.environment,
+      hasToken: token.length > 0,
+      hasRefreshToken: refreshToken.length > 0,
+    });
     if (token.length === 0) {
+      ctx.runtime.logger.warn("Token login rejected empty token payload", {
+        environment: ctx.runtime.environment,
+      });
       throw cliError({
         code: CLI_ERROR_CODES.INVALID_ARGUMENT,
         message: "login: --token - received no token on stdin.",
@@ -76,6 +99,9 @@ function loginWithToken(rawToken: string): CommandFn {
       refreshToken,
     );
     if (validation.kind === "network-error") {
+      ctx.runtime.logger.warn("Token login validation hit network error", {
+        environment: ctx.runtime.environment,
+      });
       throw cliError({
         code: CLI_ERROR_CODES.AUTH_NETWORK,
         message: "Could not reach the authn service; check your network.",
@@ -84,6 +110,10 @@ function loginWithToken(rawToken: string): CommandFn {
       });
     }
     if (validation.kind !== "valid") {
+      ctx.runtime.logger.warn("Token login validation rejected token", {
+        environment: ctx.runtime.environment,
+        outcome: validation.kind,
+      });
       throw cliError({
         code: CLI_ERROR_CODES.AUTH_REJECTED,
         message: "The provided token was rejected by the authn service.",
@@ -122,6 +152,13 @@ function loginWithToken(rawToken: string): CommandFn {
       authnBaseUrl,
       savedAt: new Date().toISOString(),
       user,
+    });
+    ctx.runtime.logger.info("Token login credentials persisted", {
+      environment: ctx.runtime.environment,
+      tokenRotatedDuringValidation: finalToken !== token,
+      refreshTokenFromStdin: refreshToken.length > 0,
+      refreshTokenRotatedDuringValidation: rotatedRefreshToken.length > 0,
+      hasFinalRefreshToken: finalRefreshToken.length > 0,
     });
     return {
       data: { user, bootstrap: null },

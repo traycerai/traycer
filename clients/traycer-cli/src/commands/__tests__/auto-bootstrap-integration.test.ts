@@ -9,6 +9,7 @@ import {
 } from "vitest";
 import type { CommandContext } from "../../runner/runner";
 import type { RuntimeContext } from "../../runner/runtime";
+import { noopLogger } from "../../logger";
 import type { AutoBootstrapDecision } from "../../host/auto-bootstrap";
 
 // Pin Core Flow 7 wiring: `traycer login` and `traycer host status`
@@ -49,6 +50,7 @@ function makeRuntime(overrides: Partial<RuntimeContext>): RuntimeContext {
     noBootstrap: false,
     nonInteractive: false,
     environment: "production",
+    logger: noopLogger,
     ...overrides,
   };
 }

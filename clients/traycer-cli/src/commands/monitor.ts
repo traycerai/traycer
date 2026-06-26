@@ -24,6 +24,7 @@ import type { HostTransportEndpoint } from "../../../shared/host-transport/ws-rp
 import { WsStreamClient } from "../../../shared/host-transport/ws-stream-client";
 import { DEFAULT_DIAL_TIMEOUT_MS } from "../../../shared/host-transport/transport-config";
 import { config } from "../config";
+import { createCliLogger, type ILogger } from "../logger";
 import {
   isValidLocalHostWebsocketUrl,
   readHostPidMetadata,
@@ -76,26 +77,55 @@ export type MonitorArgs = {
   readonly epicId: string | null;
 };
 
+type EndpointResolutionLogState = {
+  value: string | null;
+};
+
 export async function runMonitor(args: MonitorArgs): Promise<void> {
+  const logger = createCliLogger(config.environment);
   const agentId = args.agentId ?? process.env.TRAYCER_AGENT_ID ?? null;
   const epicId = args.epicId ?? process.env.TRAYCER_EPIC_ID ?? null;
 
+  logger.info("Monitor resolving target", {
+    environment: config.environment,
+    agentIdPresent: agentId !== null && agentId.length > 0,
+    epicIdPresent: epicId !== null && epicId.length > 0,
+    agentIdFromArg: args.agentId !== null,
+    epicIdFromArg: args.epicId !== null,
+  });
+
   if (agentId === null || agentId.length === 0) {
+    logger.warn("Monitor missing agent id", {
+      environment: config.environment,
+    });
     throw new Error(
       "traycer monitor: agent id required — pass --agent-id or set TRAYCER_AGENT_ID.",
     );
   }
   if (epicId === null || epicId.length === 0) {
+    logger.warn("Monitor missing epic id", {
+      environment: config.environment,
+    });
     throw new Error(
       "traycer monitor: epic id required — pass --epic-id or set TRAYCER_EPIC_ID.",
     );
   }
   const auth = await resolveHostAuth();
   if (auth === null) {
+    logger.warn("Monitor cannot start without credentials", {
+      environment: config.environment,
+      agentId,
+      epicId,
+    });
     throw new Error(
       "traycer monitor: not signed in — run `traycer login` to authenticate.",
     );
   }
+  logger.info("Monitor credentials resolved", {
+    environment: config.environment,
+    agentId,
+    epicId,
+  });
 
   const lease = new MutableBearerLease(auth.token, auth.userId);
   const revalidator = createBearerRevalidator({
@@ -111,17 +141,31 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
   // are serialized (no out-of-order clobber) and a good endpoint is never
   // overwritten with `null` (a momentarily-absent pid file keeps the last-known
   // URL; dials simply retry until a fresh one appears).
-  let endpoint = await tryResolveStreamEndpoint();
+  const endpointResolutionLogState: EndpointResolutionLogState = { value: null };
+  let endpoint = await tryResolveStreamEndpoint(
+    logger,
+    endpointResolutionLogState,
+  );
+  logger.info("Monitor initial endpoint resolution completed", {
+    environment: config.environment,
+    hasEndpoint: endpoint !== null,
+    agentId,
+    epicId,
+  });
   let pollInFlight = false;
   const poll = setInterval(() => {
     if (pollInFlight) {
       return;
     }
     pollInFlight = true;
-    void tryResolveStreamEndpoint()
+    void tryResolveStreamEndpoint(logger, endpointResolutionLogState)
       .then((next) => {
-        if (next !== null) {
+        if (next !== null && !sameEndpoint(endpoint, next)) {
           endpoint = next;
+          logger.debug("Monitor endpoint refreshed", {
+            environment: config.environment,
+            hostId: next.hostId,
+          });
         }
       })
       .finally(() => {
@@ -149,10 +193,20 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
   });
 
   diag(`inbox monitor starting — agent=${agentId} epic=${epicId}`);
+  logger.info("Monitor subscription loop starting", {
+    environment: config.environment,
+    agentId,
+    epicId,
+  });
   try {
-    await runInboxSubscription(client, revalidator, { agentId, epicId });
+    await runInboxSubscription(client, revalidator, { agentId, epicId }, logger);
   } finally {
     clearInterval(poll);
+    logger.info("Monitor subscription loop stopped", {
+      environment: config.environment,
+      agentId,
+      epicId,
+    });
   }
 }
 
@@ -178,6 +232,7 @@ function runInboxSubscription(
   client: WsStreamClient<HostStreamRpcRegistry>,
   revalidator: InboxRevalidator,
   target: InboxTarget,
+  logger: ILogger,
 ): Promise<never> {
   return new Promise<never>((_resolve, reject) => {
     let session: IStreamSession | null = null;
@@ -204,6 +259,15 @@ function runInboxSubscription(
         return;
       }
       settled = true;
+      logger.error(
+        "Monitor subscription failed",
+        {
+          environment: config.environment,
+          agentId: target.agentId,
+          epicId: target.epicId,
+        },
+        error,
+      );
       clearHealthTimer();
       clearRetryTimer();
       session?.close();
@@ -218,11 +282,17 @@ function runInboxSubscription(
     const subscribe = (): void => {
       clearRetryTimer();
       session?.close();
+      logger.info("Monitor subscribing to inbox stream", {
+        environment: config.environment,
+        method: SUBSCRIBE_METHOD,
+        agentId: target.agentId,
+        epicId: target.epicId,
+      });
       const next = client.subscribe(SUBSCRIBE_METHOD, target);
       session = next;
       next.onServerFrame((envelope) => {
         markHealthy();
-        handleServerFrame(envelope);
+        handleServerFrame(envelope, target, logger);
       });
       next.onStatusChange((status, reason) => {
         void onStatusChange(status, reason);
@@ -239,6 +309,11 @@ function runInboxSubscription(
       diag(`stream ${status}`);
       clearHealthTimer();
       if (status === "open") {
+        logger.info("Monitor stream opened", {
+          environment: config.environment,
+          agentId: target.agentId,
+          epicId: target.epicId,
+        });
         // Sustained openness (past the subscribe-accept window) is health.
         healthTimer = setTimeout(markHealthy, HEALTHY_OPEN_MS);
         return;
@@ -251,6 +326,12 @@ function runInboxSubscription(
         return;
       }
       if (reason.details.code !== "UNAUTHORIZED") {
+        logger.warn("Monitor stream closed with non-auth fatal error", {
+          environment: config.environment,
+          code: reason.details.code,
+          agentId: target.agentId,
+          epicId: target.epicId,
+        });
         fail(
           new Error(
             `traycer monitor: host closed the stream: ${reason.details.reason}`,
@@ -264,6 +345,13 @@ function runInboxSubscription(
       if (settled) {
         return;
       }
+      logger.info("Monitor auth revalidation completed", {
+        environment: config.environment,
+        outcome,
+        authRefreshCount,
+        agentId: target.agentId,
+        epicId: target.epicId,
+      });
       if (outcome === "rotated") {
         authRefreshCount += 1;
         if (authRefreshCount > MAX_CONSECUTIVE_AUTH_REFRESHES) {
@@ -283,11 +371,23 @@ function runInboxSubscription(
           return;
         }
         diag("bearer refreshed after auth rejection — re-subscribing");
+        logger.info("Monitor bearer refreshed after auth rejection", {
+          environment: config.environment,
+          authRefreshCount,
+          agentId: target.agentId,
+          epicId: target.epicId,
+        });
         subscribe();
         return;
       }
       if (outcome === "network-error") {
         diag(`auth refresh unavailable — retrying in ${AUTH_RETRY_DELAY_MS}ms`);
+        logger.warn("Monitor auth refresh unavailable; retry scheduled", {
+          environment: config.environment,
+          retryDelayMs: AUTH_RETRY_DELAY_MS,
+          agentId: target.agentId,
+          epicId: target.epicId,
+        });
         retryTimer = setTimeout(subscribe, AUTH_RETRY_DELAY_MS);
         return;
       }
@@ -298,31 +398,93 @@ function runInboxSubscription(
   });
 }
 
-function handleServerFrame(envelope: StreamFrameEnvelope): void {
+function handleServerFrame(
+  envelope: StreamFrameEnvelope,
+  target: InboxTarget,
+  logger: ILogger,
+): void {
   const parsed = agentInboxSubscribeServerFrameSchema.safeParse(envelope);
   if (!parsed.success) {
     diag(`dropping unrecognized frame kind=${String(envelope.kind)}`);
+    logger.warn("Monitor dropped unrecognized inbox frame", {
+      environment: config.environment,
+      frameKind: String(envelope.kind),
+      issueCount: parsed.error.issues.length,
+      agentId: target.agentId,
+      epicId: target.epicId,
+    });
     return;
   }
   if (parsed.data.kind === "message") {
+    logger.info("Monitor received inbox message frame", {
+      environment: config.environment,
+      agentId: target.agentId,
+      epicId: target.epicId,
+      fromAgentId: parsed.data.item.fromAgentId,
+      hasReply: parsed.data.item.reply !== null,
+    });
     printInboxMessage(parsed.data.item);
     return;
   }
   if (parsed.data.kind === "notice") {
+    logger.info("Monitor received inbox notice frame", {
+      environment: config.environment,
+      agentId: target.agentId,
+      epicId: target.epicId,
+      receiverAgentId: parsed.data.notice.receiverAgentId,
+      reason: parsed.data.notice.reason,
+      droppedReceiverCount: parsed.data.notice.droppedReceivers?.length ?? 0,
+    });
     printInboxNotice(parsed.data.notice);
   }
 }
 
-async function tryResolveStreamEndpoint(): Promise<HostTransportEndpoint | null> {
+async function tryResolveStreamEndpoint(
+  logger: ILogger,
+  logState: EndpointResolutionLogState,
+): Promise<HostTransportEndpoint | null> {
   const metadata = await readHostPidMetadata(config.environment);
   if (metadata === null) {
+    logEndpointResolution(logState, "missing", () => {
+      logger.debug("Monitor endpoint metadata missing", {
+        environment: config.environment,
+      });
+    });
     return null;
   }
   if (!isValidLocalHostWebsocketUrl(metadata.websocketUrl)) {
+    logEndpointResolution(logState, `invalid:${metadata.hostId}`, () => {
+      logger.warn("Monitor endpoint metadata advertised invalid websocket URL", {
+        environment: config.environment,
+        hostId: metadata.hostId,
+      });
+    });
     return null;
   }
   // `WsStreamClient` maps the `/rpc` URL to `/stream` itself.
+  logState.value = `ready:${metadata.hostId}:${metadata.websocketUrl}`;
   return { hostId: metadata.hostId, websocketUrl: metadata.websocketUrl };
+}
+
+function sameEndpoint(
+  current: HostTransportEndpoint | null,
+  next: HostTransportEndpoint,
+): boolean {
+  return (
+    current !== null &&
+    current.hostId === next.hostId &&
+    current.websocketUrl === next.websocketUrl
+  );
+}
+
+function logEndpointResolution(
+  state: EndpointResolutionLogState,
+  key: string,
+  write: () => void,
+): void {
+  if (state.value === key) return;
+  state.value = key;
+  write();
 }
 
 function printInboxMessage(item: AgentInboxMessage): void {

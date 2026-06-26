@@ -28,6 +28,7 @@ import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
 import { AuthService } from "@/lib/auth/auth-service";
 import { HostDirectoryService } from "@/lib/host/host-directory-service";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import { appLogger } from "@/lib/logger";
 import { useRunnerHost } from "@/providers/use-runner-host";
 
 export interface HostRuntimeBinding<Registry extends VersionedRpcRegistry> {
@@ -222,29 +223,52 @@ export function createHostRuntime<
 
       const activeRuntime = runtime;
       void (async () => {
-        await auth.start();
-        if (isDisposed()) {
+        let phase = "auth.start";
+        try {
+          appLogger.info("[host-runtime] startup begin", {
+            hasCustomMessenger: messengerFactory !== null,
+            hasRemoteFetcher: remoteFetcher !== null,
+          });
+          await auth.start();
+          if (isDisposed()) {
+            auth.dispose();
+            activeRuntime.dispose();
+            directory.dispose();
+            return;
+          }
+          phase = "directory.start";
+          await directory.start();
+          if (isDisposed()) {
+            auth.dispose();
+            activeRuntime.dispose();
+            directory.dispose();
+            return;
+          }
+          phase = "runtime.start";
+          activeRuntime.start();
+          const nextBinding = {
+            runtime: activeRuntime,
+            hostClient: activeRuntime.hostClient,
+            directory,
+            auth,
+          };
+          setLatestBindingSnapshot(nextBinding);
+          setBinding(nextBinding);
+          appLogger.info("[host-runtime] startup complete", {
+            hostCardinality: directory.getCardinality(),
+            hasLocalHost: directory.getLocalEntry() !== null,
+          });
+        } catch (error) {
+          appLogger.error("[host-runtime] startup failed", { phase }, error);
           auth.dispose();
           activeRuntime.dispose();
           directory.dispose();
+          if (!isDisposed()) {
+            setLatestBindingSnapshot(null);
+            setBinding(null);
+          }
           return;
         }
-        await directory.start();
-        if (isDisposed()) {
-          auth.dispose();
-          activeRuntime.dispose();
-          directory.dispose();
-          return;
-        }
-        activeRuntime.start();
-        const nextBinding = {
-          runtime: activeRuntime,
-          hostClient: activeRuntime.hostClient,
-          directory,
-          auth,
-        };
-        setLatestBindingSnapshot(nextBinding);
-        setBinding(nextBinding);
       })();
 
       return () => {

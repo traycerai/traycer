@@ -1,6 +1,7 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
 import type { AppRouter } from "@/router";
 import { AppErrorScreen } from "@/components/errors/app-error-screen";
+import { appLogger } from "@/lib/logger";
 
 interface RootErrorBoundaryProps {
   /** Router instance used to navigate home from outside `RouterProvider`. */
@@ -35,14 +36,10 @@ export class RootErrorBoundary extends Component<
   }
 
   override componentDidCatch(error: unknown, info: ErrorInfo): void {
-    // Boundary-level trace: an uncaught renderer error that escaped every
-    // route-level handler. Logged at the boundary (the error + component stack,
-    // never user content) so the desktop console bridge captures fatal crashes.
-    // eslint-disable-next-line no-console
-    console.error(
+    appLogger.errorSummary(
       "[renderer] uncaught error reached RootErrorBoundary",
+      { componentStack: info.componentStack ?? null },
       error,
-      info.componentStack,
     );
   }
 

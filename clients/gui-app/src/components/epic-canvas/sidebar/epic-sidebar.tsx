@@ -685,7 +685,7 @@ function GroupedPanelBody(props: {
 /**
  * Synthetic group id for the section run's resize handles; the commit
  * callback maps fractions straight back to panel weights, so the id is only
- * surfaced on the handle's `data-group-id` for tests.
+ * surfaced on the handle's `data-resize-group-id` for tests.
  */
 const SECTION_RUN_GROUP_ID = "epic-left-panel-sections";
 /** Old `minSize="2rem"` floor, now enforced by the custom handle. */

@@ -19,6 +19,7 @@ import { StreamRuntimeContext } from "@/lib/host/stream-runtime-context";
 import type { StreamRuntimeBinding } from "@/lib/host/stream-runtime-context";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { useStreamWakeReconnect } from "@/lib/host/stream-wake-reconnect";
+import { appLogger } from "@/lib/logger";
 
 export interface HostStreamProviderProps {
   readonly children: ReactNode;
@@ -71,6 +72,14 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
     });
     return { wsStreamClient };
   }, [binding, auth, identityKey]);
+  useEffect(() => {
+    if (value === null) return;
+    appLogger.info("[stream] app stream client created", {
+      hostId: readiness.hostId,
+      hasTransport:
+        binding !== null && binding.hostClient.getActiveHost() !== null,
+    });
+  }, [binding, readiness.hostId, value]);
   useCloseWsStreamClientOnReplace(value?.wsStreamClient ?? null);
   useStreamWakeReconnect(value?.wsStreamClient ?? null);
   useReconnectStreamOnEndpointChange(
@@ -112,6 +121,7 @@ function useReconnectStreamOnEndpointChange(
       transportKey !== null &&
       prev.transportKey !== transportKey
     ) {
+      appLogger.info("[stream] app stream endpoint changed - reconnecting", {});
       client.reconnectAll("host-endpoint-change");
     }
   }, [client, transportKey]);

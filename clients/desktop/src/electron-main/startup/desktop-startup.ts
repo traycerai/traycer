@@ -168,6 +168,10 @@ function deliverAuthCallback(
     state.bridge.deliverAuthCallback(result);
   } else {
     state.pendingDeepLinks.push(result);
+    log.info("[auth] callback queued before IPC bridge was ready", {
+      resultKind: "code" in result ? "code" : "error",
+      pendingCount: state.pendingDeepLinks.length,
+    });
   }
 }
 
@@ -379,11 +383,22 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
   // first startup renderer has installed its listeners.
   if (state.pendingDeepLinks.length > 0) {
     const deepLinkTarget = windowRegistry.records()[0];
-    deepLinkTarget?.window.webContents.once("did-finish-load", () => {
-      for (const result of state.pendingDeepLinks.splice(0)) {
-        bridge.deliverAuthCallback(result);
-      }
-    });
+    if (deepLinkTarget === undefined) {
+      log.warn("[auth] startup callbacks pending with no renderer window", {
+        pendingCount: state.pendingDeepLinks.length,
+      });
+    } else {
+      deepLinkTarget.window.webContents.once("did-finish-load", () => {
+        const pendingCount = state.pendingDeepLinks.length;
+        for (const result of state.pendingDeepLinks.splice(0)) {
+          bridge.deliverAuthCallback(result);
+        }
+        log.info("[auth] startup callbacks drained after first renderer load", {
+          pendingCount,
+          windowId: deepLinkTarget.windowId,
+        });
+      });
+    }
   }
 
   for (const record of windowRegistry.records()) {

@@ -4,6 +4,7 @@ import type {
   DesktopAppUpdateSnapshot,
   DesktopAppUpdatesBridge,
 } from "@/lib/windows/types";
+import { appLogger } from "@/lib/logger";
 import { RunnerHostContext } from "@/providers/runner-host-context";
 
 const DESKTOP_APP_UPDATE_IDLE_SNAPSHOT: DesktopAppUpdateSnapshot = {
@@ -99,7 +100,9 @@ class DesktopAppUpdateStore {
       .then((next) => {
         this.accept(next);
       })
-      .catch(() => undefined)
+      .catch((error: unknown) => {
+        appLogger.error("[app-update] snapshot load failed", {}, error);
+      })
       .finally(() => {
         this.snapshotLoadInFlight = false;
       });
