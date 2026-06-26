@@ -1834,8 +1834,6 @@ function MarkAllArtifactsReadButton(props: {
     });
   }, [markRead, props.epicId, unreadArtifacts]);
 
-  if (unreadArtifacts.length === 0) return null;
-
   return (
     <Button
       type="button"
@@ -1845,7 +1843,7 @@ function MarkAllArtifactsReadButton(props: {
       aria-label="Mark all unread artifacts as read"
       title="Mark all unread artifacts as read"
       data-testid="epic-sidebar-mark-all-artifacts-read"
-      disabled={props.collapsed}
+      disabled={props.collapsed || unreadArtifacts.length === 0}
       className={cn(
         "text-muted-foreground hover:text-foreground",
         PANEL_HEADER_ACTION_REVEAL_CLASS,
