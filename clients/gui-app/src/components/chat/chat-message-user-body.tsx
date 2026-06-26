@@ -70,7 +70,9 @@ const NOOP: () => void = () => undefined;
 const NOOP_CLIPBOARD: ClipboardEventHandler<HTMLElement> = () => undefined;
 const NOOP_DRAG: DragEventHandler<HTMLElement> = () => undefined;
 
-const DISPLAY_MAX_HEIGHT_PX = 300;
+// Keep long prompts compact: ~3-4 lines (leading-7 ≈ 28px/line) stay visible
+// before the bubble clamps and fades, with "Show more" revealing the rest.
+const DISPLAY_MAX_HEIGHT_PX = 120;
 
 const COPIED_RESET_MS = 1600;
 
@@ -340,7 +342,7 @@ function UserMessageDisplayView({
               "min-w-0",
               clamped && [
                 "overflow-hidden",
-                "[mask-image:linear-gradient(to_bottom,black_calc(100%-4rem),transparent)]",
+                "[mask-image:linear-gradient(to_bottom,black_calc(100%-3rem),transparent)]",
               ],
             )}
           >

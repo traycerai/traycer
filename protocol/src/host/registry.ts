@@ -1,10 +1,17 @@
-import { defineVersionedRpcRegistry } from "@traycer/protocol/framework/index";
+import {
+  defineDowngradePath,
+  defineUpgradePath,
+  defineVersionedRpcRegistry,
+} from "@traycer/protocol/framework/index";
 import { defineVersionedStreamRpcRegistry } from "@traycer/protocol/framework/versioned-stream-rpc";
 import {
   agentCreateV10,
   agentGetTranscriptV10,
   agentListHarnessModelsV10,
+  agentListDowngradeV2ToV1,
+  agentListUpgradeV1ToV2,
   agentListV10,
+  agentListV20,
   agentSelectionGuideV10,
   agentSelectionGuideGlobalGetV10,
   agentSelectionGuideGlobalOnboardingDraftGetV10,
@@ -20,7 +27,10 @@ import {
 import {
   agentGuiGetPlanV10,
   agentGuiListCommandsV10,
+  agentGuiListHarnessesDowngradeV2ToV1,
+  agentGuiListHarnessesUpgradeV1ToV2,
   agentGuiListHarnessesV10,
+  agentGuiListHarnessesV20,
   agentGuiListModelsV10,
   chatSubscribeV10,
 } from "@traycer/protocol/host/agent/gui/contracts";
@@ -170,6 +180,7 @@ import {
   providersStartLoginResponseSchema,
   providersListRequestSchema,
   providersListResponseSchema,
+  providersListResponseSchemaV10,
   providersRemoveCustomPathRequestSchema,
   providersRemoveCustomPathResponseSchema,
   providersSetApiKeyRequestSchema,
@@ -344,11 +355,47 @@ export const worktreeGetBindingV10 = defineRpcContract({
 // provider's resolved binary path + version, lets the user override the
 // binary per provider, and previews a candidate-path version without
 // committing it. Schemas live in `protocol/host/provider-schemas.ts`.
+// `providers.list` always returns every provider (incl. grok); v1.0 is frozen
+// grok-less, v2.0 carries grok, and the v2→v1 bridge drops grok for v1.0 clients.
 export const providersListV10 = defineRpcContract({
   method: "providers.list",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: providersListRequestSchema,
+  responseSchema: providersListResponseSchemaV10,
+});
+
+export const providersListV20 = defineRpcContract({
+  method: "providers.list",
+  schemaVersion: { major: 2, minor: 0 } as const,
+  requestSchema: providersListRequestSchema,
   responseSchema: providersListResponseSchema,
+});
+
+export const providersListUpgradeV1ToV2 = defineUpgradePath<
+  typeof providersListV10,
+  typeof providersListV20
+>({
+  from: { major: 1, minor: 0 },
+  to: { major: 2, minor: 0 },
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const providersListDowngradeV2ToV1 = defineDowngradePath<
+  typeof providersListV20,
+  typeof providersListV10
+>({
+  from: { major: 2, minor: 0 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV10.parse({
+      providers: response.providers.filter(
+        (provider) => provider.providerId !== "grok",
+      ),
+    }),
+  }),
 });
 
 export const providersSetSelectionV10 = defineRpcContract({
@@ -560,6 +607,16 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
       },
       downgradePathsFromLatest: {},
     },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentGuiListHarnessesV20,
+          upgradeFromPreviousVersion: agentGuiListHarnessesUpgradeV1ToV2,
+        },
+      },
+      downgradePathsFromLatest: { 1: agentGuiListHarnessesDowngradeV2ToV1 },
+    },
   },
   "agent.gui.listModels": {
     1: {
@@ -751,6 +808,16 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
         },
       },
       downgradePathsFromLatest: {},
+    },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentListV20,
+          upgradeFromPreviousVersion: agentListUpgradeV1ToV2,
+        },
+      },
+      downgradePathsFromLatest: { 1: agentListDowngradeV2ToV1 },
     },
   },
   "agent.sendMessage": {
@@ -1628,7 +1695,18 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
       },
       downgradePathsFromLatest: {},
     },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersListV20,
+          upgradeFromPreviousVersion: providersListUpgradeV1ToV2,
+        },
+      },
+      downgradePathsFromLatest: { 1: providersListDowngradeV2ToV1 },
+    },
   },
+
   "providers.setSelection": {
     1: {
       latestMinor: 0,
