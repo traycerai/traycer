@@ -22,10 +22,8 @@ import {
 } from "lucide-react";
 import type { WorktreeHostEntry } from "@traycer/protocol/host/index";
 import type { WorktreeEntryScripts } from "@traycer/protocol/host/worktree-schemas";
-import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
-import type { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import { cn } from "@/lib/utils";
 import {
   withMemberAdded,
@@ -55,13 +53,19 @@ import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-i
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { useHostClientFor } from "@/hooks/host/use-host-client-for";
-import { useHostStreamClientFor } from "@/hooks/host/use-host-stream-client-for";
 import { useHostQuery } from "@/hooks/host/use-host-query";
+import { useWorktreeDeleteStreamTransportFactory } from "@/lib/host/use-worktree-delete-stream-transport";
+import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
 import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
 import { WORKTREE_BINDING_INVALIDATIONS } from "@/hooks/worktree/invalidations";
 import {
+  backgroundForegroundWorktreeDeleteForHost,
+  clearSettledWorktreeDeleteSuccessesForHostIfQuiescent,
+  summarizeWorktreeDeleteRuns,
   useWorktreeDeleteRun,
+  worktreeDeleteProgressDetail,
   type WorktreeDeleteRunState,
+  type WorktreeDeleteProgressSummary,
 } from "@/components/settings/panels/use-worktree-delete-run";
 import { WorktreeDeleteProgressModal } from "@/components/settings/panels/worktree-delete-progress-modal";
 
@@ -95,9 +99,12 @@ export function WorktreesSettingsPanel(): ReactNode {
     [hosts, effectiveId],
   );
   const client = useHostClientFor(selectedEntry);
-  // One-shot `worktree.deleteByPath` stream: no auth revalidator, a terminal
-  // auth rejection surfaces the failure rather than silently reconnecting.
-  const streamClient = useHostStreamClientFor(selectedEntry, null);
+  // One-shot `worktree.deleteByPath` stream transport: it survives the panel
+  // unmounting (a backgrounded delete keeps its socket) but wires no proactive
+  // reconnect and no auth revalidation, so an OS wake / host respawn does not
+  // silently re-subscribe and re-run the delete pipeline. A dropped socket
+  // surfaces the failure instead.
+  const openStreamTransport = useWorktreeDeleteStreamTransportFactory();
 
   return (
     <SettingsPanelShell
@@ -107,7 +114,7 @@ export function WorktreesSettingsPanel(): ReactNode {
     >
       <WorktreesBody
         client={client}
-        streamClient={streamClient}
+        openStreamTransport={openStreamTransport}
         hostId={effectiveId}
         hosts={hosts}
         value={effectiveId}
@@ -193,13 +200,13 @@ function HostSelect(props: {
 
 function WorktreesBody(props: {
   readonly client: HostClient<HostRpcRegistry> | null;
-  readonly streamClient: WsStreamClient<HostStreamRpcRegistry> | null;
+  readonly openStreamTransport: (hostId: string) => DurableStreamTransport;
   readonly hostId: string | null;
   readonly hosts: readonly HostDirectoryEntry[];
   readonly value: string | null;
   readonly onChange: (hostId: string) => void;
 }): ReactNode {
-  const { client, streamClient, hostId, hosts, value, onChange } = props;
+  const { client, openStreamTransport, hostId, hosts, value, onChange } = props;
   const reachability = useHostReachability(hostId ?? "");
   const reachable = hostId !== null && reachability.status === "reachable";
   const listQuery = useHostQuery({
@@ -267,7 +274,7 @@ function WorktreesBody(props: {
     listOwnsToolbar = true;
     content = (
       <WorktreesList
-        streamClient={streamClient}
+        openStreamTransport={openStreamTransport}
         hostId={hostId}
         worktrees={listQuery.data.worktrees}
         toolbarProps={toolbarProps}
@@ -291,7 +298,7 @@ function WorktreesBody(props: {
 // actions); branches are independent, not reducible nesting.
 // eslint-disable-next-line complexity
 export function WorktreesList(props: {
-  readonly streamClient: WsStreamClient<HostStreamRpcRegistry> | null;
+  readonly openStreamTransport: (hostId: string) => DurableStreamTransport;
   readonly hostId: string;
   readonly worktrees: readonly WorktreeHostEntry[];
   readonly toolbarProps: {
@@ -303,7 +310,7 @@ export function WorktreesList(props: {
     readonly canRefresh: boolean;
   };
 }): ReactNode {
-  const { hostId, worktrees, streamClient } = props;
+  const { hostId, worktrees, openStreamTransport } = props;
   const queryClient = useQueryClient();
 
   // Refresh the host-wide list plus the shared worktree/binding caches the
@@ -319,11 +326,12 @@ export function WorktreesList(props: {
     backgrounded,
     runs,
     start,
-    startBackgrounded,
+    startBatchBackgrounded,
     clearCompletedDeletedMissingFromList,
     background,
     close,
-  } = useWorktreeDeleteRun(hostId, streamClient, invalidate);
+    dismissTerminalBackgrounded,
+  } = useWorktreeDeleteRun(hostId, openStreamTransport, invalidate);
   const [selectedPaths, setSelectedPaths] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
@@ -407,6 +415,22 @@ export function WorktreesList(props: {
     pendingDeleteTargets === null
       ? null
       : deleteDialogCopyForTargets(pendingDeleteTargets);
+  const progressSummary = useMemo(
+    () => summarizeWorktreeDeleteRuns(runs),
+    [runs],
+  );
+  useEffect(
+    () => () => {
+      // The Worktrees view is going away (Settings closed, section switched, or
+      // host swapped). Keep an in-progress foreground delete alive in the
+      // background (the store no-ops if it is already terminal), and drop this
+      // host's settled successes the now-unmounted list can no longer prune -
+      // otherwise they linger in the app-wide progress toast.
+      backgroundForegroundWorktreeDeleteForHost(hostId);
+      clearSettledWorktreeDeleteSuccessesForHostIfQuiescent(hostId);
+    },
+    [hostId],
+  );
 
   const toggleSelection = useCallback(
     (worktreePath: string) => {
@@ -466,12 +490,7 @@ export function WorktreesList(props: {
         reviewedScriptsByPath.get(targets[0].worktreePath) ?? null,
       );
     } else {
-      targets.forEach((target) => {
-        startBackgrounded(
-          target,
-          reviewedScriptsByPath.get(target.worktreePath) ?? null,
-        );
-      });
+      startBatchBackgrounded(targets, reviewedScriptsByPath);
     }
     setSelectedPaths((prev) => removeSelectedWorktrees(prev, targets));
     setSelectionMode(false);
@@ -479,9 +498,13 @@ export function WorktreesList(props: {
   };
 
   const handleCloseModal = (): void => {
-    // While running, the action backgrounds the delete: keep the stream alive
-    // and let the row carry progress. Once terminal, it closes for good.
-    if (run !== null && worktreeRowDeleteStatus(run) !== null) {
+    // While the delete is still running, "Run in background" keeps the stream
+    // alive and lets the row carry progress. Once terminal - success OR failure
+    // - "Close" tears it down for good. Gate on the live run status, NOT
+    // `worktreeRowDeleteStatus` (which reports a just-deleted complete run as
+    // still "deleting"): otherwise clicking "Close" on a finished delete would
+    // background it and fire a spurious progress toast instead of dismissing.
+    if (run !== null && (run.status === "queued" || run.status === "running")) {
       background();
       return;
     }
@@ -502,12 +525,12 @@ export function WorktreesList(props: {
   return (
     <div className="flex flex-col">
       {confirmed !== null && run !== null ? (
-        <div className="absolute inset-0 z-20 flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div
             aria-hidden
             className="absolute inset-0 bg-background/80 backdrop-blur-sm"
           />
-          <div className="relative z-10 max-h-full w-[min(100%,32rem)] overflow-y-auto rounded-lg border border-border/60 bg-card shadow-lg">
+          <div className="relative z-10 max-h-[min(80vh,40rem)] w-[min(92vw,32rem)] overflow-y-auto rounded-lg border border-border/60 bg-card shadow-lg">
             <WorktreeDeleteProgressModal
               target={confirmed}
               run={run}
@@ -539,6 +562,10 @@ export function WorktreesList(props: {
           </>
         }
       />
+      <WorktreeDeleteProgressStrip
+        summary={progressSummary}
+        onDismiss={dismissTerminalBackgrounded}
+      />
 
       {groups.map((group) => {
         const collapsed = collapsedRepoKeys.has(group.key);
@@ -557,8 +584,8 @@ export function WorktreesList(props: {
               <div className="flex flex-col divide-y divide-border/30">
                 {group.items.map((entry) => {
                   // The row carries the in-progress treatment only once the delete
-                  // is sent to the background; while the scoped modal is up
-                  // (foreground) the modal alone shows progress - no duplication.
+                  // is sent to the background; while the foreground modal is up
+                  // the modal alone shows progress - no duplication.
                   const deleteStatus =
                     backgroundedDeleteStatusByPath.get(entry.worktreePath) ??
                     null;
@@ -613,6 +640,49 @@ export function WorktreesList(props: {
       />
     </div>
   );
+}
+
+function WorktreeDeleteProgressStrip(props: {
+  readonly summary: WorktreeDeleteProgressSummary;
+  readonly onDismiss: () => void;
+}): ReactNode {
+  if (props.summary.total === 0) return null;
+  // Once nothing is in flight, a batch that ended with failures stays put so the
+  // user notices; offer an explicit Dismiss to clear it (and the app-wide toast)
+  // rather than leaving it stuck forever.
+  const showDismiss = props.summary.active === 0 && props.summary.failed > 0;
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/40 bg-muted/20 px-5 py-2">
+      <span className="text-ui-sm font-medium text-foreground">
+        {worktreeDeleteProgressTitle(props.summary)}
+      </span>
+      <div className="flex items-center gap-3">
+        <span className="text-ui-xs text-muted-foreground">
+          {worktreeDeleteProgressDetail(props.summary)}
+        </span>
+        {showDismiss ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={props.onDismiss}
+            data-testid="worktree-delete-progress-dismiss"
+          >
+            Dismiss
+          </Button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function worktreeDeleteProgressTitle(
+  summary: WorktreeDeleteProgressSummary,
+): string {
+  if (summary.active > 0) return "Deleting worktrees";
+  if (summary.failed === 0) return "Worktrees deleted";
+  if (summary.deleted === 0) return "Couldn't delete worktrees";
+  return "Some worktrees couldn't be deleted";
 }
 
 type WorktreeScriptReviewDraft = {
