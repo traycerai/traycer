@@ -18,8 +18,24 @@ export const providerIdSchema = z.enum([
   "opencode",
   "cursor",
   "traycer",
+  "grok",
 ]);
 export type ProviderId = z.infer<typeof providerIdSchema>;
+
+/**
+ * Frozen grok-less provider id set as shipped in protocol v1.0. Used only by the
+ * frozen v1.0 `providers.list` response so a v1.0 client never receives the grok
+ * provider; the v2.0 line adds it with a v2→v1 downgrade bridge. Do not add new
+ * providers here.
+ */
+export const providerIdSchemaV10 = z.enum([
+  "claude-code",
+  "codex",
+  "opencode",
+  "cursor",
+  "traycer",
+]);
+export type ProviderIdV10 = z.infer<typeof providerIdSchemaV10>;
 
 /** Human-readable provider names, shared by the host and the GUI. */
 export const PROVIDER_DISPLAY_NAMES: Record<ProviderId, string> = {
@@ -28,6 +44,7 @@ export const PROVIDER_DISPLAY_NAMES: Record<ProviderId, string> = {
   opencode: "OpenCode",
   cursor: "Cursor",
   traycer: "Traycer",
+  grok: "Grok",
 };
 
 /**
@@ -195,6 +212,16 @@ export const providersListResponseSchema = z.object({
   providers: z.array(providerCliStateSchema),
 });
 export type ProvidersListResponse = z.infer<typeof providersListResponseSchema>;
+
+// Frozen protocol-v1.0 (grok-less) provider state + list response. The v2.0 line
+// of `providers.list` adds grok; the v2→v1 bridge filters it for v1.0 callers.
+export const providerCliStateSchemaV10 = providerCliStateSchema.extend({
+  providerId: providerIdSchemaV10,
+});
+export const providersListResponseSchemaV10 = z.object({
+  providers: z.array(providerCliStateSchemaV10),
+});
+export type ProvidersListResponseV10 = z.infer<typeof providersListResponseSchemaV10>;
 
 export const providersSetSelectionRequestSchema = z.object({
   providerId: providerIdSchema,

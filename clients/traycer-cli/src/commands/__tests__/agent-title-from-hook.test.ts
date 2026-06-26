@@ -10,6 +10,7 @@ import {
 import { buildAgentTitleFromHookCommand } from "../agent-title-from-hook";
 import type { CommandContext } from "../../runner/runner";
 import type { RuntimeContext } from "../../runner/runtime";
+import { noopLogger } from "../../logger";
 import { callHostRpcFastFail } from "../../internal/host-rpc";
 import { cliError, CLI_ERROR_CODES } from "../../runner/errors";
 
@@ -33,6 +34,7 @@ function makeRuntime(): RuntimeContext {
     noBootstrap: false,
     nonInteractive: false,
     environment: "production",
+    logger: noopLogger,
   };
 }
 

@@ -81,6 +81,20 @@ export interface IRunnerHost {
   ): Promise<AuthIdentityValidationResult>;
 
   /**
+   * Force-refreshes the access token against authn's `POST /api/v3/auth/refresh`
+   * WITHOUT a prior `/api/v3/user` validation, rotating both the bearer and the
+   * refresh token. The proactive refresh scheduler calls this shortly before the
+   * ~4h TTL so a long-open session never carries a dead bearer into a live host
+   * call. Desktop shells run this in Electron main so renderer-origin CORS does
+   * not block the authn request; browser/test shells may call the shared
+   * `refreshAuthTokenViaHttp` helper directly.
+   */
+  refreshAuthToken(
+    token: string,
+    refreshToken: string,
+  ): Promise<AuthTokenRefreshResult>;
+
+  /**
    * Exchanges a one-time PKCE `code` (from the sign-in callback) + the
    * `codeVerifier` the renderer generated at sign-in start for the real token
    * pair. Like `validateAuthToken`, desktop shells perform this in Electron
@@ -487,6 +501,22 @@ export type AuthTokenValidResult =
 
 export type AuthTokenValidationResult =
   | AuthTokenValidResult
+  | { readonly kind: "rejected" }
+  | { readonly kind: "network-error" };
+
+/**
+ * Outcome of a forced access-token refresh (`POST /api/v3/auth/refresh`),
+ * independent of any `/api/v3/user` validation. `refreshed` rotates BOTH the
+ * bearer and the refresh token; `rejected` means the refresh credential is dead
+ * (revoked / expired) and the session must sign out; `network-error` is
+ * transient and leaves the current credential untouched so a retry can follow.
+ */
+export type AuthTokenRefreshResult =
+  | {
+      readonly kind: "refreshed";
+      readonly token: string;
+      readonly refreshToken: string;
+    }
   | { readonly kind: "rejected" }
   | { readonly kind: "network-error" };
 

@@ -133,9 +133,20 @@ function normalizeReasoningEffort(
 }
 
 function agentProviderLabel(provider: GuiHarnessId): string {
-  if (provider === "claude") return "Claude Code";
-  if (provider === "opencode") return "OpenCode";
-  if (provider === "traycer") return "Traycer";
-  if (provider === "cursor") return "Cursor";
-  return "Codex";
+  // Exhaustive switch over GuiHarnessId: a new harness id makes this fail to
+  // compile (no return on the new path) instead of silently mislabeling.
+  switch (provider) {
+    case "claude":
+      return "Claude Code";
+    case "codex":
+      return "Codex";
+    case "opencode":
+      return "OpenCode";
+    case "traycer":
+      return "Traycer";
+    case "cursor":
+      return "Cursor";
+    case "grok":
+      return "Grok";
+  }
 }

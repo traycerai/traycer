@@ -680,6 +680,7 @@ function editorHandleForPrompt(prompt: string): ComposerPromptEditorHandle {
     insertImageAttachments: () => undefined,
     removeImageAttachmentById: () => undefined,
     insertDictatedText: () => undefined,
+    dismissActiveSuggestion: () => false,
   };
 }
 

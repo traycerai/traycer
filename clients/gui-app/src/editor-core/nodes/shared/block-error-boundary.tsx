@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
+import { appLogger } from "@/lib/logger";
 
 interface BlockErrorBoundaryProps {
   /** Headline shown in the fallback panel. */
@@ -40,12 +41,13 @@ export class BlockErrorBoundary extends Component<
   }
 
   override componentDidCatch(error: Error, info: ErrorInfo): void {
-    // Keep a dev-visible trace without spamming production logs - the
-    // fallback UI already communicates the failure to the user.
-    if (import.meta.env.DEV) {
-      // eslint-disable-next-line no-console
-      console.error("[artifact-editor] block NodeView crashed", error, info);
-    }
+    appLogger.errorSummary(
+      "[artifact-editor] block NodeView crashed",
+      {
+        componentStack: info.componentStack ?? null,
+      },
+      error,
+    );
   }
 
   private reset = (): void => {

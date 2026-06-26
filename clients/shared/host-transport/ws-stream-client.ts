@@ -18,9 +18,11 @@ import {
   hostStreamOpenAckFrameSchema,
   hostStreamFatalErrorFrameSchema,
   streamMethodFrameEnvelopeSchema,
+  STREAM_CAPABILITY_CREDENTIAL_UPDATE,
   type ClientStreamOpenFrame,
   type ClientStreamSubscribeFrame,
   type ClientStreamFatalErrorFrame,
+  type ClientStreamCredentialUpdateFrame,
 } from "@traycer/protocol/framework/stream-ws-protocol";
 import type {
   IStreamSession,
@@ -195,6 +197,23 @@ export class WsStreamClient<Registry extends VersionedStreamRpcRegistry> {
    * host re-run its subscribe handler (re-registering the live request
    * context) within seconds of wake. No-op on a closed client.
    */
+  /**
+   * Pushes the freshly-rotated bearer onto every open session so each host
+   * connection updates its credential lease IN PLACE, with no reconnect. Called
+   * by the owner right after a proactive (or reactive) token refresh rotates the
+   * lease. Sessions that are mid-reconnect - or whose host did not advertise
+   * `credentialUpdate` support - simply skip; their next open frame already
+   * carries the fresh bearer. No-op on a closed client.
+   */
+  notifyBearerRotated(): void {
+    if (this.closed) {
+      return;
+    }
+    for (const session of Array.from(this.ownedSessions)) {
+      session.pushCredentialUpdate();
+    }
+  }
+
   reconnectAll(reason: string): void {
     if (this.closed) {
       return;
@@ -297,6 +316,10 @@ class StreamSession<
 
   private activeSocket: StreamWebSocketLike | null = null;
   private openFrameToken: string | null = null;
+  // Whether the host advertised `credentialUpdate` support in the current
+  // connection's openAck. Gates `pushCredentialUpdate`; reset on every
+  // reconnect and re-read from the next openAck.
+  private supportsCredentialUpdate = false;
   private phase: SessionPhase = "idle";
   private pendingBinaryEnvelope: StreamFrameEnvelope | null = null;
   private dialTimer: TimerHandle | null = null;
@@ -369,6 +392,37 @@ class StreamSession<
     this.reconnectAttempt = 0;
     this.slowClientReconnectStreak = 0;
     this.onTransportDrop();
+  }
+
+  /**
+   * Pushes the current bearer onto this open connection so the host rotates its
+   * credential lease in place - no reconnect. No-op unless the session is fully
+   * `subscribed` AND the host advertised `credentialUpdate` support in its
+   * openAck; a mid-reconnect session just carries the fresh bearer in its next
+   * open frame. Called by `WsStreamClient.notifyBearerRotated`.
+   */
+  pushCredentialUpdate(): void {
+    if (this.disposed) {
+      return;
+    }
+    if (this.phase !== "subscribed" || !this.supportsCredentialUpdate) {
+      return;
+    }
+    const socket = this.activeSocket;
+    if (socket === null) {
+      return;
+    }
+    const token = this.currentBearerToken();
+    if (token === null) {
+      return;
+    }
+    const frame: ClientStreamCredentialUpdateFrame = {
+      kind: "credentialUpdate",
+      token,
+    };
+    if (!this.sendControlText(socket, frame)) {
+      this.onSendFailure(socket);
+    }
   }
 
   // ---- Internal wiring -------------------------------------------------- //
@@ -619,6 +673,9 @@ class StreamSession<
       clearTimeout(this.openAckTimer);
       this.openAckTimer = null;
     }
+    this.supportsCredentialUpdate = ackParse.data.capabilities.includes(
+      STREAM_CAPABILITY_CREDENTIAL_UPDATE,
+    );
 
     const myManifest = buildStreamManifest(this.config.registry);
     const compat = checkStreamCompatibility(
@@ -667,6 +724,18 @@ class StreamSession<
     this.lastPongAt = Date.now();
     this.startHeartbeat();
     this.transitionTo("open", null);
+    // If the bearer rotated DURING the handshake - after the open frame was sent
+    // but before we became `subscribed` - that rotation's `notifyBearerRotated`
+    // was dropped (we weren't subscribed yet) and the open frame carried the now
+    // stale token. Reconcile once here so the host still gets the fresh bearer in
+    // place. No-op on the common path where the bearer is unchanged.
+    if (
+      this.supportsCredentialUpdate &&
+      this.openFrameToken !== null &&
+      this.currentBearerToken() !== this.openFrameToken
+    ) {
+      this.pushCredentialUpdate();
+    }
   }
 
   private handleFatalErrorFrame(parsed: object): void {
@@ -926,6 +995,7 @@ class StreamSession<
     }
     this.activeSocket = null;
     this.openFrameToken = null;
+    this.supportsCredentialUpdate = false;
     this.phase = "idle";
     this.pendingBinaryEnvelope = null;
     this.transitionTo("reconnecting", null);
@@ -996,7 +1066,8 @@ class StreamSession<
     frame:
       | ClientStreamOpenFrame
       | ClientStreamSubscribeFrame
-      | ClientStreamFatalErrorFrame,
+      | ClientStreamFatalErrorFrame
+      | ClientStreamCredentialUpdateFrame,
   ): boolean {
     try {
       socket.send(JSON.stringify(frame));

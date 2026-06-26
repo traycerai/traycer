@@ -14,6 +14,7 @@ import {
   type QueuedInvite,
 } from "@/lib/epic-invites";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
+import { appLogger } from "@/lib/logger";
 import { hostQueryKeys, epicMutationKeys } from "@/lib/query-keys";
 
 export interface SendQueuedInvitesArgs {
@@ -106,7 +107,15 @@ export function useEpicSendQueuedInvites(): UseMutationResult<
               succeededReInvites.push(item.invite);
             }
           });
-        } catch {
+        } catch (error) {
+          appLogger.errorSummary(
+            "[epic-invites] queued re-invite batch failed",
+            {
+              epicId,
+              inviteCount: inviteBatches.reInvites.length,
+            },
+            error,
+          );
           // Underlying hook owns the generic error toast.
         }
       }
@@ -138,7 +147,15 @@ export function useEpicSendQueuedInvites(): UseMutationResult<
               succeededNewInvites.push(invite);
             }
           });
-        } catch {
+        } catch (error) {
+          appLogger.errorSummary(
+            "[epic-invites] queued new-invite batch failed",
+            {
+              epicId,
+              inviteCount: inviteBatches.newInvites.length,
+            },
+            error,
+          );
           // Underlying hook owns the generic error toast.
         }
       }

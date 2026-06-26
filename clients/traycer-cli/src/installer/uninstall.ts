@@ -5,6 +5,7 @@ import {
   type HostInstallRecord,
 } from "../manifest/host-install";
 import type { Environment } from "../runner/environment";
+import { createCliLogger, errorFromUnknown } from "../logger";
 import {
   hostInstallDir,
   hostLogPath,
@@ -33,15 +34,33 @@ export interface UninstallHostResult {
 export async function uninstallHost(
   opts: UninstallHostOptions,
 ): Promise<UninstallHostResult> {
+  const logger = createCliLogger(opts.environment);
+  logger.info("Host uninstall started", {
+    environment: opts.environment,
+    purgeChannelRuntime: opts.purgeChannelRuntime,
+  });
   const previous = await readHostInstallRecord(opts.environment);
+  logger.debug("Host uninstall read install record", {
+    environment: opts.environment,
+    hadInstallRecord: previous !== null,
+  });
   let removedInstallDir = false;
   try {
     await rm(hostInstallDir(opts.environment), { recursive: true, force: true });
     removedInstallDir = true;
-  } catch {
+  } catch (err) {
+    logger.warn("Host uninstall failed to remove install directory", {
+      environment: opts.environment,
+      errorName: errorFromUnknown(err).name,
+      errorMessage: errorFromUnknown(err).message,
+    });
     removedInstallDir = false;
   }
   await deleteHostInstallRecord(opts.environment);
+  logger.info("Host uninstall deleted install record", {
+    environment: opts.environment,
+    removedInstallDir,
+  });
   // Sweep any stale `<installDir>.old-*` siblings the atomic swap left
   // behind after a crash. Best-effort; never blocks the uninstall.
   await sweepOldTrash(hostInstallDir(opts.environment));
@@ -54,8 +73,17 @@ export async function uninstallHost(
     await rm(hostPidMetadataPath(opts.environment), { force: true });
     await rm(hostLogPath(opts.environment), { force: true });
     purgedRuntime = true;
+    logger.warn("Host uninstall purged runtime files", {
+      environment: opts.environment,
+    });
   }
 
+  logger.info("Host uninstall completed", {
+    environment: opts.environment,
+    removedInstallDir,
+    purgedRuntime,
+    hadInstallRecord: previous !== null,
+  });
   return {
     removedRecord: previous,
     removedInstallDir,

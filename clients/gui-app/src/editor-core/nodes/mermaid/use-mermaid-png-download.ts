@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { svgToPngBlob } from "@/editor-core/nodes/mermaid/mermaid-service";
 import { readMermaidPalette } from "@/editor-core/nodes/mermaid/mermaid-theme";
 import { saveBlobToDisk } from "@/lib/files/save-blob-to-disk";
+import { appLogger } from "@/lib/logger";
 import { runnerMutationKeys } from "@/lib/query-keys";
 
 export interface UseMermaidPngDownloadParams {
@@ -44,7 +45,7 @@ export function useMermaidPngDownload(
       }
     },
     onError: (err) => {
-      console.error("[mermaid] download failed", err);
+      appLogger.errorSummary("[mermaid] download failed", {}, err);
       toast.error("Failed to download diagram");
     },
   });

@@ -150,6 +150,7 @@ function createBaseRunnerHost(): IRunnerHost {
     validateAuthToken: () => Promise.resolve({ kind: "rejected" as const }),
     validateAuthTokenIdentity: () =>
       Promise.resolve({ kind: "rejected" as const }),
+    refreshAuthToken: () => Promise.resolve({ kind: "network-error" as const }),
     exchangeAuthCode: () => Promise.resolve(null),
     openExternalLink: () => Promise.resolve(),
     getRegisteredUrlSchemes: () => Promise.resolve([]),

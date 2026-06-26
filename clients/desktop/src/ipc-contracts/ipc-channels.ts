@@ -11,6 +11,7 @@
 export const RunnerHostInvoke = {
   validateAuthToken: "runnerHost:auth:validateToken",
   validateAuthTokenIdentity: "runnerHost:auth:validateTokenIdentity",
+  refreshAuthToken: "runnerHost:auth:refreshToken",
   exchangeAuthCode: "runnerHost:auth:exchangeAuthCode",
   openExternalLink: "runnerHost:openExternalLink",
   getRegisteredUrlSchemes: "runnerHost:getRegisteredUrlSchemes",

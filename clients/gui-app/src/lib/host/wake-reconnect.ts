@@ -1,3 +1,5 @@
+import { appLogger } from "@/lib/logger";
+
 /**
  * Renderer wake / reconnect signal.
  *
@@ -37,7 +39,8 @@ function notifyWake(): void {
     for (const listener of Array.from(listeners)) {
       try {
         listener();
-      } catch {
+      } catch (error) {
+        appLogger.error("[wake-reconnect] listener failed", {}, error);
         // A failing subscriber must not block the others.
       }
     }

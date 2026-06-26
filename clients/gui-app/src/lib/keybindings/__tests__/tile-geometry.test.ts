@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { findNeighbor, type TileRect } from "@/lib/keybindings/tile-geometry";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  findNeighbor,
+  readTileRects,
+  type TileRect,
+} from "@/lib/keybindings/tile-geometry";
 
 function rect(id: string, box: [number, number, number, number]): TileRect {
   const [x, y, width, height] = box;
@@ -68,5 +72,64 @@ describe("findNeighbor", () => {
     expect(findNeighbor(topR, tiles, "left")).toBe("topL");
     expect(findNeighbor(topL, tiles, "down")).toBe("bottom");
     expect(findNeighbor(topR, tiles, "down")).toBe("bottom");
+  });
+});
+
+// Regression: a split resize handle sits on the seam between two panes, so it
+// scores better than the true neighbour pane in `findNeighbor` (primaryGap 0
+// vs ~handle-width). It must therefore NOT be a focus target. The handle is
+// kept off `data-group-id` (it uses `data-resize-group-id`), so `readTileRects`
+// excludes it and downstream navigation lands on the neighbour pane - never on
+// the handle's split-group id, which no pane matches (a silent no-op).
+describe("readTileRects excludes split resize handles", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+    vi.restoreAllMocks();
+  });
+
+  function appendBox(
+    parent: HTMLElement,
+    attr: "data-group-id" | "data-resize-group-id",
+    id: string,
+    box: [number, number, number, number],
+  ): HTMLElement {
+    const [x, y, width, height] = box;
+    const el = document.createElement("div");
+    el.setAttribute(attr, id);
+    parent.append(el);
+    vi.spyOn(el, "getBoundingClientRect").mockReturnValue(
+      new DOMRect(x, y, width, height),
+    );
+    return el;
+  }
+
+  it("collects panes only, so cross-split focus lands on the neighbour pane", () => {
+    // Real horizontal-split geometry (split-container.tsx, flex-row):
+    //   [ pane-A (grow) ][ handle w-px ][ pane-B (grow) ]
+    // The 1px handle sits exactly on the seam at x=499.5.
+    const container = document.createElement("div");
+    document.body.append(container);
+    appendBox(container, "data-group-id", "pane-A", [0, 0, 499.5, 600]);
+    appendBox(
+      container,
+      "data-resize-group-id",
+      "group-root",
+      [499.5, 0, 1, 600],
+    );
+    appendBox(container, "data-group-id", "pane-B", [500.5, 0, 499.5, 600]);
+
+    const rects = readTileRects(container);
+
+    // The handle's split-group id must be absent entirely.
+    expect([...rects.map((r) => r.id)].sort()).toEqual(["pane-A", "pane-B"]);
+    expect(rects.some((r) => r.id === "group-root")).toBe(false);
+
+    const paneA = rects.find((r) => r.id === "pane-A");
+    const paneB = rects.find((r) => r.id === "pane-B");
+    if (paneA === undefined || paneB === undefined) {
+      throw new Error("expected both pane rects to be collected");
+    }
+    expect(findNeighbor(paneA, rects, "right")).toBe("pane-B");
+    expect(findNeighbor(paneB, rects, "left")).toBe("pane-A");
   });
 });

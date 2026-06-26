@@ -1,4 +1,6 @@
 import { validateAuthTokenViaHttp } from "../../../shared/auth/auth-validation";
+import { config } from "../config";
+import { createCliLogger } from "../logger";
 import {
   readCredentials,
   writeCredentials,
@@ -17,16 +19,37 @@ export type ValidationOutcome =
  * returning so a follow-up call uses the new bearer.
  */
 export async function validateStoredCredentials(): Promise<ValidationOutcome> {
+  const logger = createCliLogger(config.environment);
   const stored = await readCredentials();
-  if (stored === null) return { kind: "no-credentials" };
+  if (stored === null) {
+    logger.info("Stored credential validation skipped; no credentials", {
+      environment: config.environment,
+    });
+    return { kind: "no-credentials" };
+  }
 
+  logger.info("Stored credential validation started", {
+    environment: config.environment,
+    hasToken: stored.token.length > 0,
+    hasRefreshToken: stored.refreshToken.length > 0,
+  });
   const result = await validateAuthTokenViaHttp(
     stored.authnBaseUrl,
     stored.token,
     stored.refreshToken,
   );
-  if (result.kind === "rejected") return { kind: "rejected" };
-  if (result.kind === "network-error") return { kind: "network-error" };
+  if (result.kind === "rejected") {
+    logger.warn("Stored credential validation rejected", {
+      environment: config.environment,
+    });
+    return { kind: "rejected" };
+  }
+  if (result.kind === "network-error") {
+    logger.warn("Stored credential validation hit network error", {
+      environment: config.environment,
+    });
+    return { kind: "network-error" };
+  }
 
   const nextToken =
     "refreshedToken" in result ? result.refreshedToken : stored.token;
@@ -55,5 +78,11 @@ export async function validateStoredCredentials(): Promise<ValidationOutcome> {
       }
     : stored;
   if (refreshed !== stored) await writeCredentials(refreshed);
+  logger.info("Stored credential validation succeeded", {
+    environment: config.environment,
+    tokenChanged,
+    userChanged,
+    credentialsPersisted: refreshed !== stored,
+  });
   return { kind: "valid", credentials: refreshed };
 }

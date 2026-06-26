@@ -1,10 +1,17 @@
-import { defineVersionedRpcRegistry } from "@traycer/protocol/framework/index";
+import {
+  defineDowngradePath,
+  defineUpgradePath,
+  defineVersionedRpcRegistry,
+} from "@traycer/protocol/framework/index";
 import { defineVersionedStreamRpcRegistry } from "@traycer/protocol/framework/versioned-stream-rpc";
 import {
   agentCreateV10,
   agentGetTranscriptV10,
   agentListHarnessModelsV10,
+  agentListDowngradeV2ToV1,
+  agentListUpgradeV1ToV2,
   agentListV10,
+  agentListV20,
   agentSelectionGuideV10,
   agentSelectionGuideGlobalGetV10,
   agentSelectionGuideGlobalOnboardingDraftGetV10,
@@ -20,7 +27,10 @@ import {
 import {
   agentGuiGetPlanV10,
   agentGuiListCommandsV10,
+  agentGuiListHarnessesDowngradeV2ToV1,
+  agentGuiListHarnessesUpgradeV1ToV2,
   agentGuiListHarnessesV10,
+  agentGuiListHarnessesV20,
   agentGuiListModelsV10,
   chatSubscribeV10,
 } from "@traycer/protocol/host/agent/gui/contracts";
@@ -37,7 +47,11 @@ import {
 } from "@traycer/protocol/host/comments/contracts";
 import { hostStatusV10 } from "@traycer/protocol/host/status/contracts";
 import { hostGetRuntimeCapabilitiesV10 } from "@traycer/protocol/host/runtime-capabilities/contracts";
-import { hostGetRateLimitUsageV10 } from "@traycer/protocol/host/rate-limit/contracts";
+import {
+  hostGetRateLimitUsageV10,
+  hostGetRateLimitUsageV11,
+  hostGetRateLimitUsageUpgradeV10ToV11,
+} from "@traycer/protocol/host/rate-limit/contracts";
 import {
   epicBatchDeleteV10,
   epicBatchUpdateRolesV10,
@@ -130,8 +144,8 @@ import {
   worktreeListBranchesResponseSchema,
   worktreeListByWorkspacePathsRequestSchema,
   worktreeListByWorkspacePathsResponseSchema,
-  worktreeReadScriptsAtRefRequestSchema,
-  worktreeReadScriptsAtRefResponseSchema,
+  worktreeListByWorkspacePathsRequestSchemaV11,
+  worktreeListByWorkspacePathsResponseSchemaV11,
   worktreeListBindingsForEpicRequestSchema,
   worktreeListBindingsForEpicResponseSchema,
   worktreeRetrySetupRequestSchema,
@@ -170,6 +184,7 @@ import {
   providersStartLoginResponseSchema,
   providersListRequestSchema,
   providersListResponseSchema,
+  providersListResponseSchemaV10,
   providersRemoveCustomPathRequestSchema,
   providersRemoveCustomPathResponseSchema,
   providersSetApiKeyRequestSchema,
@@ -244,18 +259,43 @@ export const worktreeListByWorkspacePathsV10 = defineRpcContract({
   responseSchema: worktreeListByWorkspacePathsResponseSchema,
 });
 
+// v1.1 adds the per-ref committed-scripts preview (`scriptRefs` ->
+// `scriptsAtRefs`) the create-worktree Environment editor uses. Folded onto this
+// existing method instead of a standalone `worktree.readScriptsAtRef` so the wire
+// method-set stays identical to v1.0.0 - a new method name fatally fails the
+// equal-set handshake against an already-shipped host. See the RPC backward-compat
+// decision log.
+export const worktreeListByWorkspacePathsV11 = defineRpcContract({
+  method: "worktree.listByWorkspacePaths",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: worktreeListByWorkspacePathsRequestSchemaV11,
+  responseSchema: worktreeListByWorkspacePathsResponseSchemaV11,
+});
+
+// Additive upgrade from v1.0: an older peer carries no ref-scripts, so the new
+// fields default to empty. The newer side runs this when bridging a v1.0 peer up
+// to canonical (host: inbound v1.0 request; client: inbound v1.0 response).
+export const worktreeListByWorkspacePathsUpgradeV10ToV11 = defineUpgradePath<
+  typeof worktreeListByWorkspacePathsV10,
+  typeof worktreeListByWorkspacePathsV11
+>({
+  from: worktreeListByWorkspacePathsV10.schemaVersion,
+  to: worktreeListByWorkspacePathsV11.schemaVersion,
+  upgradeRequest: (request) => ({
+    workspacePaths: request.workspacePaths,
+    scriptRefs: [],
+  }),
+  upgradeResponse: (response) => ({
+    workspaces: response.workspaces,
+    scriptsAtRefs: [],
+  }),
+});
+
 export const worktreeListBranchesV10 = defineRpcContract({
   method: "worktree.listBranches",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: worktreeListBranchesRequestSchema,
   responseSchema: worktreeListBranchesResponseSchema,
-});
-
-export const worktreeReadScriptsAtRefV10 = defineRpcContract({
-  method: "worktree.readScriptsAtRef",
-  schemaVersion: { major: 1, minor: 0 } as const,
-  requestSchema: worktreeReadScriptsAtRefRequestSchema,
-  responseSchema: worktreeReadScriptsAtRefResponseSchema,
 });
 
 export const worktreeCreateV10 = defineRpcContract({
@@ -344,11 +384,47 @@ export const worktreeGetBindingV10 = defineRpcContract({
 // provider's resolved binary path + version, lets the user override the
 // binary per provider, and previews a candidate-path version without
 // committing it. Schemas live in `protocol/host/provider-schemas.ts`.
+// `providers.list` always returns every provider (incl. grok); v1.0 is frozen
+// grok-less, v2.0 carries grok, and the v2→v1 bridge drops grok for v1.0 clients.
 export const providersListV10 = defineRpcContract({
   method: "providers.list",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: providersListRequestSchema,
+  responseSchema: providersListResponseSchemaV10,
+});
+
+export const providersListV20 = defineRpcContract({
+  method: "providers.list",
+  schemaVersion: { major: 2, minor: 0 } as const,
+  requestSchema: providersListRequestSchema,
   responseSchema: providersListResponseSchema,
+});
+
+export const providersListUpgradeV1ToV2 = defineUpgradePath<
+  typeof providersListV10,
+  typeof providersListV20
+>({
+  from: { major: 1, minor: 0 },
+  to: { major: 2, minor: 0 },
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const providersListDowngradeV2ToV1 = defineDowngradePath<
+  typeof providersListV20,
+  typeof providersListV10
+>({
+  from: { major: 2, minor: 0 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV10.parse({
+      providers: response.providers.filter(
+        (provider) => provider.providerId !== "grok",
+      ),
+    }),
+  }),
 });
 
 export const providersSetSelectionV10 = defineRpcContract({
@@ -479,11 +555,15 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
   },
   "host.getRateLimitUsage": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: hostGetRateLimitUsageV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: hostGetRateLimitUsageV11,
+          upgradeFromPreviousVersion: hostGetRateLimitUsageUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -559,6 +639,16 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
         },
       },
       downgradePathsFromLatest: {},
+    },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentGuiListHarnessesV20,
+          upgradeFromPreviousVersion: agentGuiListHarnessesUpgradeV1ToV2,
+        },
+      },
+      downgradePathsFromLatest: { 1: agentGuiListHarnessesDowngradeV2ToV1 },
     },
   },
   "agent.gui.listModels": {
@@ -751,6 +841,16 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
         },
       },
       downgradePathsFromLatest: {},
+    },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentListV20,
+          upgradeFromPreviousVersion: agentListUpgradeV1ToV2,
+        },
+      },
+      downgradePathsFromLatest: { 1: agentListDowngradeV2ToV1 },
     },
   },
   "agent.sendMessage": {
@@ -1463,11 +1563,16 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
   },
   "worktree.listByWorkspacePaths": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: worktreeListByWorkspacePathsV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: worktreeListByWorkspacePathsV11,
+          upgradeFromPreviousVersion:
+            worktreeListByWorkspacePathsUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -1479,18 +1584,6 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
       versions: {
         0: {
           contract: worktreeListBranchesV10,
-          upgradeFromPreviousVersion: null,
-        },
-      },
-      downgradePathsFromLatest: {},
-    },
-  },
-  "worktree.readScriptsAtRef": {
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: worktreeReadScriptsAtRefV10,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -1628,7 +1721,18 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
       },
       downgradePathsFromLatest: {},
     },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersListV20,
+          upgradeFromPreviousVersion: providersListUpgradeV1ToV2,
+        },
+      },
+      downgradePathsFromLatest: { 1: providersListDowngradeV2ToV1 },
+    },
   },
+
   "providers.setSelection": {
     1: {
       latestMinor: 0,

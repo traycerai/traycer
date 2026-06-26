@@ -1,5 +1,6 @@
 #!/usr/bin/env -S bun
 import "./sentry";
+import * as Sentry from "@sentry/node";
 import { Command, CommanderError, type Command as CommanderCommand } from "commander";
 import { config } from "./config";
 import { buildCliMarkSourceCommand } from "./commands/cli-mark-source";
@@ -50,6 +51,11 @@ import { serviceStatusCommand } from "./commands/service-status";
 import { serviceUninstallCommand } from "./commands/service-uninstall";
 import { whoamiCommand } from "./commands/whoami";
 import { CLI_ERROR_CODES, cliError } from "./runner/errors";
+import {
+  createCliLogger,
+  errorFromUnknown,
+  type ILogger,
+} from "./logger";
 import {
   addRunnerFlags,
   extractRunnerFlags,
@@ -313,6 +319,11 @@ addRunnerFlags(
       "Working directory for the host (defaults to the install directory)",
     ),
 ).action(async (opts) => {
+  const logger = createCliLogger(config.environment);
+  logger.info("Host supervisor command invoked", {
+    environment: config.environment,
+    hasCwdOverride: typeof opts.cwd === "string",
+  });
   await runHostStart(
     {
       environment: config.environment,
@@ -1222,12 +1233,25 @@ function registerMonitorCommand(program: Command): void {
       )
       .option("--epic-id <id>", "Epic (defaults to $TRAYCER_EPIC_ID)"),
   ).action(async (opts: Record<string, unknown>) => {
+    const logger = createCliLogger(config.environment);
+    logger.info("Monitor command invoked", {
+      environment: config.environment,
+      hasAgentIdArg: typeof opts.agentId === "string",
+      hasEpicIdArg: typeof opts.epicId === "string",
+      hasAgentIdEnv: typeof process.env.TRAYCER_AGENT_ID === "string",
+      hasEpicIdEnv: typeof process.env.TRAYCER_EPIC_ID === "string",
+    });
     try {
       await runMonitor({
         agentId: typeof opts.agentId === "string" ? opts.agentId : null,
         epicId: typeof opts.epicId === "string" ? opts.epicId : null,
       });
     } catch (err) {
+      logger.error(
+        "Monitor command failed",
+        { exitCode: 1 },
+        errorFromUnknown(err),
+      );
       process.stderr.write(
         `[traycer monitor] fatal: ${
           err instanceof Error ? err.message : String(err)
@@ -1247,7 +1271,13 @@ function registerMonitorCommand(program: Command): void {
 // suffix produced by `bun build --compile --target=bun-windows-x64`.
 const entryArgv = typeof process !== "undefined" ? process.argv[1] : undefined;
 if (isTraycerCliEntrypoint(entryArgv)) {
+  const entryLogger = createCliLogger(config.environment);
+  installProcessFailureHandlers(entryLogger);
   const program = buildProgram();
+  entryLogger.info("CLI entrypoint parsing argv", {
+    environment: config.environment,
+    argvLength: process.argv.length,
+  });
   program
     .parseAsync(process.argv)
     .catch((err) => {
@@ -1259,6 +1289,11 @@ if (isTraycerCliEntrypoint(entryArgv)) {
         // override) so we wrap it in a single `result/ok` envelope rather than
         // leaking raw prose onto an NDJSON stream.
         if (err.exitCode === 0) {
+          entryLogger.info("Commander handled informational exit", {
+            json: jsonMode,
+            commanderCode: err.code,
+            exitCode: err.exitCode,
+          });
           if (jsonMode) {
             const event = {
               type: "result",
@@ -1274,6 +1309,11 @@ if (isTraycerCliEntrypoint(entryArgv)) {
         // envelope so downstream consumers see a coded `result/error`;
         // in human mode commander already wrote the message to stderr
         // (via the configureOutput passthrough above).
+        entryLogger.warn("Commander parse failed", {
+          json: jsonMode,
+          commanderCode: err.code,
+          exitCode: err.exitCode || 1,
+        });
         if (jsonMode) {
           const event = {
             type: "result",
@@ -1292,7 +1332,68 @@ if (isTraycerCliEntrypoint(entryArgv)) {
         }
         process.exit(err.exitCode || 1);
       }
-      console.error(err instanceof Error ? err.stack ?? err.message : String(err));
+      const error = errorFromUnknown(err);
+      entryLogger.error(
+        "CLI entrypoint failed outside Commander",
+        { exitCode: 1 },
+        error,
+      );
+      Sentry.captureException(err);
+      if (argvRequestsJson(program)) {
+        const event = {
+          type: "result",
+          status: "error",
+          error: {
+            code: CLI_ERROR_CODES.UNEXPECTED,
+            message: "Unexpected CLI failure. See the CLI log for details.",
+            details: null,
+          },
+          timestamp: new Date().toISOString(),
+        };
+        process.stdout.write(`${JSON.stringify(event)}\n`);
+      } else {
+        process.stderr.write(
+          `error: unexpected CLI failure [code=${CLI_ERROR_CODES.UNEXPECTED}]\n`,
+        );
+      }
+      process.exit(1);
+    });
+}
+
+let fatalExitInProgress = false;
+
+function installProcessFailureHandlers(logger: ILogger): void {
+  process.on("unhandledRejection", (reason) => {
+    exitAfterUnhandledFailure(logger, "Unhandled CLI promise rejection", reason);
+  });
+  process.on("uncaughtException", (err) => {
+    exitAfterUnhandledFailure(logger, "Uncaught CLI exception", err);
+  });
+}
+
+function exitAfterUnhandledFailure(
+  logger: ILogger,
+  message: string,
+  cause: unknown,
+): void {
+  if (fatalExitInProgress) {
+    return;
+  }
+  fatalExitInProgress = true;
+  const error = errorFromUnknown(cause);
+  logger.error(message, { exitCode: 1 }, error);
+  Sentry.captureException(cause);
+  process.stderr.write(
+    `error: unexpected CLI failure [code=${CLI_ERROR_CODES.UNEXPECTED}]\n`,
+  );
+  void Sentry.flush(2000)
+    .catch((flushErr) => {
+      logger.warn("Sentry flush failed after process-level failure", {
+        errorName: errorFromUnknown(flushErr).name,
+        errorMessage: errorFromUnknown(flushErr).message,
+      });
+    })
+    .finally(() => {
       process.exit(1);
     });
 }

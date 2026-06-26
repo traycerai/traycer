@@ -9,6 +9,7 @@ import {
 import { useHostClient } from "@/lib/host";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { writeBatchedDiffResponses } from "@/lib/git/write-batched-diff-responses";
+import { appLogger, describeLogErrorSummary } from "@/lib/logger";
 
 const MAX_FILES_PER_PAGE = 10;
 
@@ -164,8 +165,14 @@ async function fetchPage(options: {
       });
     }
   } catch (error) {
-    if (error instanceof Error && error.name !== "AbortError") {
-      console.error("Failed to fetch page of diffs:", error);
+    if (!(error instanceof Error && error.name === "AbortError")) {
+      appLogger.warn("[git] failed to fetch batched file diffs", {
+        hostId: options.hostId,
+        fileCount: options.files.length,
+        ignoreWhitespace: options.ignoreWhitespace,
+        aborted: options.signal.aborted,
+        error: describeLogErrorSummary(error),
+      });
     }
   }
 }

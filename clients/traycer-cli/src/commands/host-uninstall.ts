@@ -19,6 +19,10 @@ export function buildHostUninstallCommand(
   args: HostUninstallArgs,
 ): CommandFn {
   return async (ctx): Promise<CommandResult> => {
+    ctx.runtime.logger.info("Host uninstall command started", {
+      environment: ctx.runtime.environment,
+      all: args.all,
+    });
     return withCliLock(
       {
         environment: ctx.runtime.environment,
@@ -29,6 +33,9 @@ export function buildHostUninstallCommand(
       async () => {
         let serviceUninstalled = false;
         if (args.all) {
+          ctx.runtime.logger.warn("Host uninstall command will deregister service and purge runtime", {
+            environment: ctx.runtime.environment,
+          });
           ctx.progress({
             stage: "service-stop",
             message: `stopping service for ${ctx.runtime.environment} environment`,
@@ -43,11 +50,20 @@ export function buildHostUninstallCommand(
           // forces removal regardless.
           try {
             await controller.stop(label);
-          } catch {
+          } catch (err) {
+            ctx.runtime.logger.warn("Host uninstall service stop failed; continuing", {
+              environment: ctx.runtime.environment,
+              errorName: err instanceof Error ? err.name : "Error",
+              errorMessage: err instanceof Error ? err.message : String(err),
+            });
             // Service may not be running; proceed.
           }
           await controller.uninstall({ label });
           serviceUninstalled = true;
+          ctx.runtime.logger.info("Host uninstall service deregistered", {
+            environment: ctx.runtime.environment,
+            label: label.id,
+          });
         }
         ctx.progress({
           stage: "uninstall",
@@ -61,6 +77,13 @@ export function buildHostUninstallCommand(
           // --all also clears environment runtime state (pid metadata,
           // log) - the host is gone, those are just stale files.
           purgeChannelRuntime: args.all,
+        });
+        ctx.runtime.logger.info("Host uninstall command completed", {
+          environment: ctx.runtime.environment,
+          serviceUninstalled,
+          removedInstallDir: result.removedInstallDir,
+          purgedRuntime: result.purgedRuntime,
+          hadInstallRecord: result.removedRecord !== null,
         });
         return {
           data: {

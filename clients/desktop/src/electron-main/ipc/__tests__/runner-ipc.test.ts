@@ -473,6 +473,7 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.workspaceFoldersPick,
         RunnerHostInvoke.validateAuthToken,
         RunnerHostInvoke.validateAuthTokenIdentity,
+        RunnerHostInvoke.refreshAuthToken,
         RunnerHostInvoke.exchangeAuthCode,
         RunnerHostInvoke.notificationShow,
         RunnerHostInvoke.openExternalLink,

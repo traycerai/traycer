@@ -1,4 +1,8 @@
-import { defineRpcContract } from "@traycer/protocol/framework/index";
+import {
+  defineDowngradePath,
+  defineRpcContract,
+  defineUpgradePath,
+} from "@traycer/protocol/framework/index";
 import {
   createAgentRequestSchema,
   createAgentResponseSchema,
@@ -18,6 +22,7 @@ import {
   listHarnessModelsResponseSchema,
   listAgentsRequestSchema,
   listAgentsResponseSchema,
+  listAgentsResponseSchemaV10,
   sendAgentMessageRequestSchema,
   sendAgentMessageResponseSchema,
   stopAgentRequestSchema,
@@ -90,7 +95,44 @@ export const agentListV10 = defineRpcContract({
   method: "agent.list",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: listAgentsRequestSchema,
+  responseSchema: listAgentsResponseSchemaV10,
+});
+
+export const agentListV20 = defineRpcContract({
+  method: "agent.list",
+  schemaVersion: { major: 2, minor: 0 } as const,
+  requestSchema: listAgentsRequestSchema,
   responseSchema: listAgentsResponseSchema,
+});
+
+export const agentListUpgradeV1ToV2 = defineUpgradePath<
+  typeof agentListV10,
+  typeof agentListV20
+>({
+  from: { major: 1, minor: 0 },
+  to: { major: 2, minor: 0 },
+  // A grok-less v1.0 response is a valid v2.0 response (grok is purely
+  // additive), and the request shape is identical — both upgrades are identity.
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const agentListDowngradeV2ToV1 = defineDowngradePath<
+  typeof agentListV20,
+  typeof agentListV10
+>({
+  from: { major: 2, minor: 0 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  // Drop grok agents so a v1.0 client's strict (grok-less) decode never sees
+  // one. The re-parse yields the precise v1.0 type without an assertion.
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: listAgentsResponseSchemaV10.parse({
+      ...response,
+      agents: response.agents.filter((agent) => agent.harnessId !== "grok"),
+    }),
+  }),
 });
 
 export const agentSendMessageV10 = defineRpcContract({
