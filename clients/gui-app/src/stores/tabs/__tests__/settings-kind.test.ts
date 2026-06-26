@@ -5,7 +5,9 @@
  * id → route options. The legacy `/settings/service` path is preserved
  * as a section-level alias to the Host section so a remembered tab
  * path from before the rename still lands on the current native-
- * packaging surface (the route itself redirects).
+ * packaging surface (the route itself redirects). The legacy
+ * `/settings/agents` path is preserved as a section-level alias to
+ * Providers now that the agent selection guide lives there.
  */
 import { describe, expect, it } from "vitest";
 import {
@@ -25,8 +27,8 @@ describe("settings tab kind - host section", () => {
     expect(settingsSectionFromPath("/settings/service")).toBe("host");
   });
 
-  it("settingsSectionFromPath maps the /settings/agents path to the Agents section", () => {
-    expect(settingsSectionFromPath("/settings/agents")).toBe("agents");
+  it("settingsSectionFromPath aliases the legacy /settings/agents path to Providers", () => {
+    expect(settingsSectionFromPath("/settings/agents")).toBe("providers");
   });
 
   it("settingsSectionPath builds /settings/host for the host section", () => {
@@ -57,6 +59,20 @@ describe("settings tab kind - host section", () => {
       canOpenInNewWindow: false,
     });
     expect(intent).toEqual(settingsTabIntent("host"));
+  });
+
+  it("settingsTabDescriptor.resolveIntent returns the Providers intent for a remembered legacy /settings/agents path", () => {
+    const intent = settingsTabDescriptor.resolveIntent({
+      kind: "settings",
+      id: "settings",
+      name: "Settings",
+      lastPath: "/settings/agents",
+      route: "/settings/agents",
+      icon: null,
+      canDuplicate: false,
+      canOpenInNewWindow: false,
+    });
+    expect(intent).toEqual(settingsTabIntent("providers"));
   });
 
   it("settings default path is unchanged", () => {

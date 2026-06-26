@@ -62,6 +62,7 @@ import { cn } from "@/lib/utils";
 import { ProviderAuthBadge, ProviderAuthLine } from "./provider-auth-display";
 import { EnvOverrideEditor } from "./env-override-editor";
 import { TraycerSubscriptionSection } from "./traycer-subscription-section";
+import { AgentSelectionGuideSection } from "./agent-selection-guide-section";
 
 type ProviderId = ProviderCliState["providerId"];
 type ProvidersListQuery = UseQueryResult<
@@ -301,9 +302,7 @@ function ProvidersSettingsPanelInner({
   return (
     <SettingsPanelShell
       title="Providers"
-      description="Choose the CLI binary Traycer runs for each agent. Pick the bundled binary, one found on your PATH, or a custom install. Disable a provider to hide it from new chats."
-      fillHeight
-      bodyClassName="max-h-[min(85vh,52rem)]"
+      description="Configure host-level agent guidance and the providers Traycer can use on this device."
       headerAction={
         <div className="flex items-center gap-2">
           <ProviderLastChecked
@@ -319,7 +318,26 @@ function ProvidersSettingsPanelInner({
         </div>
       }
     >
-      <ProvidersPanelBody query={query} />
+      <AgentSelectionGuideSection />
+      <section
+        aria-labelledby="agent-providers-heading"
+        className="flex flex-col border-t border-border/60"
+      >
+        <div className="px-5 py-4">
+          <h2
+            id="agent-providers-heading"
+            className="text-ui-md font-semibold text-foreground"
+          >
+            Agent providers
+          </h2>
+          <p className="mt-1 text-ui-xs text-muted-foreground">
+            Choose the CLI binary Traycer runs for each agent. Pick the bundled
+            binary, one found on your PATH, or a custom install. Disable a
+            provider to hide it from new chats.
+          </p>
+        </div>
+        <ProvidersPanelBody query={query} />
+      </section>
     </SettingsPanelShell>
   );
 }
@@ -372,12 +390,7 @@ function ProvidersRailLayout({
     providers.find((p) => p.providerId === activeId) ?? providers[0];
 
   return (
-    // Fill the panel body (the shell stretches it to the settings scroll
-    // container and caps it via `bodyClassName` max-height), so switching
-    // providers never resizes the box and the detail pane - not the outer
-    // overlay - owns the scroll. Height follows the viewport: on shorter
-    // screens it shrinks to fit the modal instead of overflowing it.
-    <div className="flex h-full">
+    <div className="flex">
       <nav className="flex w-[clamp(10rem,22vw,14rem)] shrink-0 flex-col gap-1 overflow-y-auto border-r border-border/60 p-2">
         {providers.map((state) => {
           const selected = state.providerId === active.providerId;

@@ -21,6 +21,7 @@ type GuideQueryState = {
         readonly content: string | null;
         readonly generatedDefaultContent: string;
         readonly providersSettled: boolean;
+        readonly recognizedDefaultContents: readonly string[];
       }
     | undefined;
   readonly isError: boolean;
@@ -80,6 +81,7 @@ let guideQueryState: GuideQueryState = {
     content: "saved guide",
     generatedDefaultContent: "claude guide",
     providersSettled: true,
+    recognizedDefaultContents: ["claude guide"],
   },
   isError: false,
 };
@@ -95,7 +97,9 @@ const resetSetGlobalGuideMock = vi.fn();
 vi.mock(
   "@/hooks/agent/use-agent-selection-guide-global-onboarding-draft-query",
   () => ({
-    useAgentSelectionGuideGlobalOnboardingDraftQuery: () => guideQueryState,
+    useAgentSelectionGuideGlobalOnboardingDraftQuery: () => ({
+      ...guideQueryState,
+    }),
   }),
 );
 
@@ -174,6 +178,7 @@ describe("OnboardingPage", () => {
         content: "saved guide",
         generatedDefaultContent: "claude guide",
         providersSettled: true,
+        recognizedDefaultContents: ["claude guide"],
       },
       isError: false,
     };
@@ -347,6 +352,7 @@ describe("OnboardingPage", () => {
         content: null,
         generatedDefaultContent: "claude guide",
         providersSettled: true,
+        recognizedDefaultContents: ["claude guide"],
       },
       isError: false,
     };
@@ -386,6 +392,7 @@ describe("OnboardingPage", () => {
         content: null,
         generatedDefaultContent: "traycer guide",
         providersSettled: false,
+        recognizedDefaultContents: ["traycer guide"],
       },
       isError: false,
     };
@@ -436,6 +443,7 @@ describe("OnboardingPage", () => {
         content: null,
         generatedDefaultContent: "claude guide",
         providersSettled: true,
+        recognizedDefaultContents: ["claude guide"],
       },
       isError: false,
     };
@@ -453,6 +461,7 @@ describe("OnboardingPage", () => {
         content: null,
         generatedDefaultContent: "codex guide",
         providersSettled: true,
+        recognizedDefaultContents: ["codex guide", "claude guide"],
       },
       isError: false,
     };
@@ -479,6 +488,7 @@ describe("OnboardingPage", () => {
         content: null,
         generatedDefaultContent: "opencode guide",
         providersSettled: true,
+        recognizedDefaultContents: ["opencode guide", "codex guide"],
       },
       isError: false,
     };
@@ -504,6 +514,7 @@ describe("OnboardingPage", () => {
         content: null,
         generatedDefaultContent: "claude guide",
         providersSettled: true,
+        recognizedDefaultContents: ["claude guide"],
       },
       isError: false,
     };
@@ -520,6 +531,7 @@ describe("OnboardingPage", () => {
         content: "saved disk guide",
         generatedDefaultContent: "codex guide",
         providersSettled: true,
+        recognizedDefaultContents: ["codex guide", "claude guide"],
       },
       isError: false,
     };
@@ -551,6 +563,7 @@ describe("OnboardingPage", () => {
         content: "saved guide",
         generatedDefaultContent: "codex guide",
         providersSettled: true,
+        recognizedDefaultContents: ["codex guide"],
       },
       isError: false,
     };
@@ -576,6 +589,7 @@ describe("OnboardingPage", () => {
         content: "saved guide",
         generatedDefaultContent: "opencode guide",
         providersSettled: true,
+        recognizedDefaultContents: ["opencode guide", "codex guide"],
       },
       isError: false,
     };
@@ -615,6 +629,7 @@ describe("OnboardingPage", () => {
         content: null,
         generatedDefaultContent: "claude guide",
         providersSettled: true,
+        recognizedDefaultContents: ["claude guide"],
       },
       isError: false,
     };

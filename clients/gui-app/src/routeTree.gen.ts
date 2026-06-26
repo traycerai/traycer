@@ -23,7 +23,6 @@ import { Route as SettingsKeybindingsRouteImport } from "./routes/settings.keybi
 import { Route as SettingsHostRouteImport } from "./routes/settings.host";
 import { Route as SettingsGeneralRouteImport } from "./routes/settings.general";
 import { Route as SettingsAppearanceRouteImport } from "./routes/settings.appearance";
-import { Route as SettingsAgentsRouteImport } from "./routes/settings.agents";
 import { Route as DraftNewRouteImport } from "./routes/draft.new";
 import { Route as DraftDraftIdRouteImport } from "./routes/draft.$draftId";
 import { Route as EpicsEpicIdTabIdRouteImport } from "./routes/epics.$epicId.$tabId";
@@ -98,11 +97,6 @@ const SettingsAppearanceRoute = SettingsAppearanceRouteImport.update({
   path: "/appearance",
   getParentRoute: () => SettingsRoute,
 } as any);
-const SettingsAgentsRoute = SettingsAgentsRouteImport.update({
-  id: "/agents",
-  path: "/agents",
-  getParentRoute: () => SettingsRoute,
-} as any);
 const DraftNewRoute = DraftNewRouteImport.update({
   id: "/draft/new",
   path: "/draft/new",
@@ -126,7 +120,6 @@ export interface FileRoutesByFullPath {
   "/settings": typeof SettingsRouteWithChildren;
   "/draft/$draftId": typeof DraftDraftIdRoute;
   "/draft/new": typeof DraftNewRoute;
-  "/settings/agents": typeof SettingsAgentsRoute;
   "/settings/appearance": typeof SettingsAppearanceRoute;
   "/settings/general": typeof SettingsGeneralRoute;
   "/settings/host": typeof SettingsHostRoute;
@@ -144,7 +137,6 @@ export interface FileRoutesByTo {
   "/onboarding": typeof OnboardingRoute;
   "/draft/$draftId": typeof DraftDraftIdRoute;
   "/draft/new": typeof DraftNewRoute;
-  "/settings/agents": typeof SettingsAgentsRoute;
   "/settings/appearance": typeof SettingsAppearanceRoute;
   "/settings/general": typeof SettingsGeneralRoute;
   "/settings/host": typeof SettingsHostRoute;
@@ -165,7 +157,6 @@ export interface FileRoutesById {
   "/settings": typeof SettingsRouteWithChildren;
   "/draft/$draftId": typeof DraftDraftIdRoute;
   "/draft/new": typeof DraftNewRoute;
-  "/settings/agents": typeof SettingsAgentsRoute;
   "/settings/appearance": typeof SettingsAppearanceRoute;
   "/settings/general": typeof SettingsGeneralRoute;
   "/settings/host": typeof SettingsHostRoute;
@@ -187,7 +178,6 @@ export interface FileRouteTypes {
     | "/settings"
     | "/draft/$draftId"
     | "/draft/new"
-    | "/settings/agents"
     | "/settings/appearance"
     | "/settings/general"
     | "/settings/host"
@@ -205,7 +195,6 @@ export interface FileRouteTypes {
     | "/onboarding"
     | "/draft/$draftId"
     | "/draft/new"
-    | "/settings/agents"
     | "/settings/appearance"
     | "/settings/general"
     | "/settings/host"
@@ -225,7 +214,6 @@ export interface FileRouteTypes {
     | "/settings"
     | "/draft/$draftId"
     | "/draft/new"
-    | "/settings/agents"
     | "/settings/appearance"
     | "/settings/general"
     | "/settings/host"
@@ -348,13 +336,6 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof SettingsAppearanceRouteImport;
       parentRoute: typeof SettingsRoute;
     };
-    "/settings/agents": {
-      id: "/settings/agents";
-      path: "/agents";
-      fullPath: "/settings/agents";
-      preLoaderRoute: typeof SettingsAgentsRouteImport;
-      parentRoute: typeof SettingsRoute;
-    };
     "/draft/new": {
       id: "/draft/new";
       path: "/draft/new";
@@ -392,7 +373,6 @@ const EpicsRouteChildren: EpicsRouteChildren = {
 const EpicsRouteWithChildren = EpicsRoute._addFileChildren(EpicsRouteChildren);
 
 interface SettingsRouteChildren {
-  SettingsAgentsRoute: typeof SettingsAgentsRoute;
   SettingsAppearanceRoute: typeof SettingsAppearanceRoute;
   SettingsGeneralRoute: typeof SettingsGeneralRoute;
   SettingsHostRoute: typeof SettingsHostRoute;
@@ -405,7 +385,6 @@ interface SettingsRouteChildren {
 }
 
 const SettingsRouteChildren: SettingsRouteChildren = {
-  SettingsAgentsRoute: SettingsAgentsRoute,
   SettingsAppearanceRoute: SettingsAppearanceRoute,
   SettingsGeneralRoute: SettingsGeneralRoute,
   SettingsHostRoute: SettingsHostRoute,

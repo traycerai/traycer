@@ -15,6 +15,13 @@ type ResetGlobalContext = {
   readonly hostId: string | null;
 };
 
+function recognizedDefaultsWithGeneratedDefault(
+  previous: readonly string[] | undefined,
+  generatedDefaultContent: string,
+): string[] {
+  return [...new Set([...(previous ?? []), generatedDefaultContent])];
+}
+
 export function useAgentSelectionGuideResetGlobalMutation(): UseMutationResult<
   AgentSelectionGuideGlobalResetResponse,
   HostRpcError,
@@ -43,7 +50,15 @@ export function useAgentSelectionGuideResetGlobalMutation(): UseMutationResult<
               "agent.selectionGuide.getGlobal",
             ),
           },
-          data,
+          (previous) => ({
+            content: data.content,
+            generatedDefaultContent: data.generatedDefaultContent,
+            providersSettled: previous?.providersSettled ?? true,
+            recognizedDefaultContents: recognizedDefaultsWithGeneratedDefault(
+              previous?.recognizedDefaultContents,
+              data.generatedDefaultContent,
+            ),
+          }),
         );
         queryClient.setQueriesData<AgentSelectionGuideGlobalOnboardingDraftGetResponse>(
           {
@@ -52,10 +67,15 @@ export function useAgentSelectionGuideResetGlobalMutation(): UseMutationResult<
               "agent.selectionGuide.getGlobalOnboardingDraft",
             ),
           },
-          {
-            ...data,
-            providersSettled: true,
-          },
+          (previous) => ({
+            content: data.content,
+            generatedDefaultContent: data.generatedDefaultContent,
+            providersSettled: previous?.providersSettled ?? true,
+            recognizedDefaultContents: recognizedDefaultsWithGeneratedDefault(
+              previous?.recognizedDefaultContents,
+              data.generatedDefaultContent,
+            ),
+          }),
         );
       },
       onError: (error) =>

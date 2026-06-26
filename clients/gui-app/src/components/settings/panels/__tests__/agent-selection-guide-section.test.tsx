@@ -8,6 +8,7 @@ import {
 } from "@testing-library/react";
 import { StrictMode, act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { TooltipProvider } from "@/components/ui/tooltip";
 
 type Deferred<T> = {
   readonly promise: Promise<T>;
@@ -19,6 +20,8 @@ const guideMocks = vi.hoisted(() => ({
   queryData: {
     content: "claude guide",
     generatedDefaultContent: "claude guide",
+    providersSettled: true,
+    recognizedDefaultContents: ["claude guide"],
   },
   setGlobalMutateAsync: vi.fn(),
   resetGlobalMutateAsync: vi.fn(),
@@ -53,17 +56,15 @@ vi.mock(
 import { AgentSelectionGuideSection } from "@/components/settings/panels/agent-selection-guide-section";
 
 function renderPanel() {
-  return render(
-    <StrictMode>
-      <AgentSelectionGuideSection />
-    </StrictMode>,
-  );
+  return render(strictPanel());
 }
 
 function strictPanel() {
   return (
     <StrictMode>
-      <AgentSelectionGuideSection />
+      <TooltipProvider>
+        <AgentSelectionGuideSection />
+      </TooltipProvider>
     </StrictMode>
   );
 }
@@ -73,6 +74,8 @@ describe("AgentSelectionGuideSection", () => {
     guideMocks.queryData = {
       content: "claude guide",
       generatedDefaultContent: "claude guide",
+      providersSettled: true,
+      recognizedDefaultContents: ["claude guide"],
     };
     guideMocks.setGlobalMutateAsync.mockReset();
     guideMocks.setGlobalMutateAsync.mockResolvedValue({
@@ -92,12 +95,12 @@ describe("AgentSelectionGuideSection", () => {
 
   it("updates generated defaults without clobbering the active editor draft", async () => {
     const { rerender } = renderPanel();
-    const editor = screen.getByTestId<HTMLTextAreaElement>(
-      "agents-selection-guide-input",
-    );
-    const revert = screen.getByTestId<HTMLButtonElement>(
-      "agents-selection-guide-revert",
-    );
+    const editor = screen.getByRole<HTMLTextAreaElement>("textbox", {
+      name: "Global agent selection instructions",
+    });
+    const revert = screen.getByRole<HTMLButtonElement>("button", {
+      name: "Restore",
+    });
 
     expect(editor.value).toBe("claude guide");
     expect(revert.disabled).toBe(true);
@@ -105,12 +108,17 @@ describe("AgentSelectionGuideSection", () => {
     guideMocks.queryData = {
       content: "claude guide",
       generatedDefaultContent: "codex guide",
+      providersSettled: true,
+      recognizedDefaultContents: ["codex guide", "claude guide"],
     };
     rerender(strictPanel());
 
     await waitFor(() => {
       expect(editor.value).toBe("claude guide");
-      expect(revert.disabled).toBe(false);
+      expect(
+        screen.getByRole<HTMLButtonElement>("button", { name: "Update" })
+          .disabled,
+      ).toBe(false);
     });
     expect(guideMocks.setGlobalMutateAsync).not.toHaveBeenCalled();
     expect(guideMocks.resetGlobalMutateAsync).not.toHaveBeenCalled();
@@ -120,20 +128,61 @@ describe("AgentSelectionGuideSection", () => {
     guideMocks.queryData = {
       content: "claude guide",
       generatedDefaultContent: "codex guide",
+      providersSettled: true,
+      recognizedDefaultContents: ["codex guide", "claude guide"],
     };
     renderPanel();
 
-    fireEvent.click(screen.getByTestId("agents-selection-guide-revert"));
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", { name: "Update" })
+        .disabled,
+    ).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Update" }));
     fireEvent.click(screen.getByTestId("confirm-action"));
 
     await waitFor(() => {
       expect(
-        screen.getByTestId<HTMLTextAreaElement>("agents-selection-guide-input")
-          .value,
+        screen.getByRole<HTMLTextAreaElement>("textbox", {
+          name: "Global agent selection instructions",
+        }).value,
       ).toBe("codex guide");
     });
     expect(guideMocks.resetGlobalMutateAsync).toHaveBeenCalledWith({});
     expect(guideMocks.setGlobalMutateAsync).not.toHaveBeenCalled();
+  });
+
+  it("keeps the editor mounted but gates revert while providers settle", () => {
+    guideMocks.queryData = {
+      content: "claude guide",
+      generatedDefaultContent: "codex guide",
+      providersSettled: false,
+      recognizedDefaultContents: ["codex guide", "claude guide"],
+    };
+    renderPanel();
+
+    const editor = screen.getByRole<HTMLTextAreaElement>("textbox", {
+      name: "Global agent selection instructions",
+    });
+    const revert = screen.getByRole<HTMLButtonElement>("button", {
+      name: "Checking",
+    });
+    expect(editor.value).toBe("claude guide");
+    expect(revert.disabled).toBe(true);
+    expect(screen.getByText("Checking providers")).toBeTruthy();
+  });
+
+  it("shows restore after a manual custom edit", () => {
+    renderPanel();
+    const editor = screen.getByRole<HTMLTextAreaElement>("textbox", {
+      name: "Global agent selection instructions",
+    });
+
+    fireEvent.change(editor, { target: { value: "custom guide" } });
+
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", { name: "Restore" })
+        .disabled,
+    ).toBe(false);
   });
 
   it("serializes saves so a later edit waits for an earlier write to settle", async () => {

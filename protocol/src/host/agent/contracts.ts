@@ -9,9 +9,11 @@ import {
   agentSelectionGuideRequestSchema,
   agentSelectionGuideResponseSchema,
   agentSelectionGuideGlobalGetRequestSchema,
-  agentSelectionGuideGlobalGetResponseSchema,
+  agentSelectionGuideGlobalGetResponseSchemaV11,
+  agentSelectionGuideGlobalGetResponseSchemaV10,
   agentSelectionGuideGlobalOnboardingDraftGetRequestSchema,
-  agentSelectionGuideGlobalOnboardingDraftGetResponseSchema,
+  agentSelectionGuideGlobalOnboardingDraftGetResponseSchemaV11,
+  agentSelectionGuideGlobalOnboardingDraftGetResponseSchemaV10,
   agentSelectionGuideGlobalResetRequestSchema,
   agentSelectionGuideGlobalResetResponseSchema,
   agentSelectionGuideGlobalSetRequestSchema,
@@ -59,15 +61,62 @@ export const agentSelectionGuideGlobalGetV10 = defineRpcContract({
   method: "agent.selectionGuide.getGlobal",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: agentSelectionGuideGlobalGetRequestSchema,
-  responseSchema: agentSelectionGuideGlobalGetResponseSchema,
+  responseSchema: agentSelectionGuideGlobalGetResponseSchemaV10,
 });
 
-export const agentSelectionGuideGlobalOnboardingDraftGetV10 =
-  defineRpcContract({
+export const agentSelectionGuideGlobalGetV11 = defineRpcContract({
+  method: "agent.selectionGuide.getGlobal",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: agentSelectionGuideGlobalGetRequestSchema,
+  responseSchema: agentSelectionGuideGlobalGetResponseSchemaV11,
+});
+
+export const upgradeAgentSelectionGuideGlobalGetV10ToV11 = defineUpgradePath<
+  typeof agentSelectionGuideGlobalGetV10,
+  typeof agentSelectionGuideGlobalGetV11
+>({
+  from: agentSelectionGuideGlobalGetV10.schemaVersion,
+  to: agentSelectionGuideGlobalGetV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({
+    ...response,
+    providersSettled: true,
+    recognizedDefaultContents: [response.generatedDefaultContent],
+  }),
+});
+
+export const agentSelectionGuideGlobalOnboardingDraftGetV10 = defineRpcContract(
+  {
     method: "agent.selectionGuide.getGlobalOnboardingDraft",
     schemaVersion: { major: 1, minor: 0 } as const,
     requestSchema: agentSelectionGuideGlobalOnboardingDraftGetRequestSchema,
-    responseSchema: agentSelectionGuideGlobalOnboardingDraftGetResponseSchema,
+    responseSchema:
+      agentSelectionGuideGlobalOnboardingDraftGetResponseSchemaV10,
+  },
+);
+
+export const agentSelectionGuideGlobalOnboardingDraftGetV11 = defineRpcContract(
+  {
+    method: "agent.selectionGuide.getGlobalOnboardingDraft",
+    schemaVersion: { major: 1, minor: 1 } as const,
+    requestSchema: agentSelectionGuideGlobalOnboardingDraftGetRequestSchema,
+    responseSchema:
+      agentSelectionGuideGlobalOnboardingDraftGetResponseSchemaV11,
+  },
+);
+
+export const upgradeAgentSelectionGuideGlobalOnboardingDraftGetV10ToV11 =
+  defineUpgradePath<
+    typeof agentSelectionGuideGlobalOnboardingDraftGetV10,
+    typeof agentSelectionGuideGlobalOnboardingDraftGetV11
+  >({
+    from: agentSelectionGuideGlobalOnboardingDraftGetV10.schemaVersion,
+    to: agentSelectionGuideGlobalOnboardingDraftGetV11.schemaVersion,
+    upgradeRequest: (request) => request,
+    upgradeResponse: (response) => ({
+      ...response,
+      recognizedDefaultContents: [response.generatedDefaultContent],
+    }),
   });
 
 export const agentSelectionGuideGlobalSetV10 = defineRpcContract({

@@ -14,11 +14,15 @@ import {
   agentListV20,
   agentSelectionGuideV10,
   agentSelectionGuideGlobalGetV10,
+  agentSelectionGuideGlobalGetV11,
   agentSelectionGuideGlobalOnboardingDraftGetV10,
+  agentSelectionGuideGlobalOnboardingDraftGetV11,
   agentSelectionGuideGlobalResetV10,
   agentSelectionGuideGlobalSetV10,
   agentSendMessageV10,
   agentStopV10,
+  upgradeAgentSelectionGuideGlobalGetV10ToV11,
+  upgradeAgentSelectionGuideGlobalOnboardingDraftGetV10ToV11,
 } from "@traycer/protocol/host/agent/contracts";
 import {
   agentInboxReadV10,
@@ -740,11 +744,16 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
   },
   "agent.selectionGuide.getGlobal": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: agentSelectionGuideGlobalGetV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: agentSelectionGuideGlobalGetV11,
+          upgradeFromPreviousVersion:
+            upgradeAgentSelectionGuideGlobalGetV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -752,11 +761,16 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
   },
   "agent.selectionGuide.getGlobalOnboardingDraft": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: agentSelectionGuideGlobalOnboardingDraftGetV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: agentSelectionGuideGlobalOnboardingDraftGetV11,
+          upgradeFromPreviousVersion:
+            upgradeAgentSelectionGuideGlobalOnboardingDraftGetV10ToV11,
         },
       },
       downgradePathsFromLatest: {},

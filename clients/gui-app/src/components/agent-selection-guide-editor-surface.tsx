@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { cn } from "@/lib/utils";
 
 export const AGENT_SELECTION_GUIDE_TITLE = "Agent selection guide";
@@ -19,6 +20,9 @@ type AgentSelectionGuideEditorSurfaceProps = {
   readonly textareaClassName: string;
   readonly className: string;
   readonly revertDisabled: boolean;
+  readonly revertLabel: string;
+  readonly revertIcon: ReactNode;
+  readonly revertTooltip: string | null;
   readonly onRevert: () => void;
   readonly revertTestId: string | undefined;
   readonly status: ReactNode;
@@ -27,6 +31,16 @@ type AgentSelectionGuideEditorSurfaceProps = {
 export function AgentSelectionGuideEditorSurface(
   props: AgentSelectionGuideEditorSurfaceProps,
 ) {
+  const revertButton = (
+    <RevertButton
+      disabled={props.revertDisabled}
+      icon={props.revertIcon}
+      label={props.revertLabel}
+      onClick={props.onRevert}
+      testId={props.revertTestId}
+      tooltip={props.revertTooltip}
+    />
+  );
   return (
     <section
       aria-labelledby={props.titleId}
@@ -42,6 +56,7 @@ export function AgentSelectionGuideEditorSurface(
         <p className="mt-1 text-ui-xs text-muted-foreground">
           {AGENT_SELECTION_GUIDE_DESCRIPTION}
         </p>
+        <WorkspaceGuideHint className="mt-2" />
       </div>
 
       <Textarea
@@ -60,28 +75,56 @@ export function AgentSelectionGuideEditorSurface(
       />
 
       <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
-        <p className="min-w-[min(100%,18rem)] flex-1 text-ui-xs text-muted-foreground">
-          For workspace-specific instructions, add a{" "}
-          <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.95em]">
-            .traycer/agent-selection-guide.md
-          </code>{" "}
-          file in a workspace. It layers on top of these global instructions.
-        </p>
-        <div className="flex shrink-0 items-center gap-3">
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            disabled={props.revertDisabled}
-            onClick={props.onRevert}
-            data-testid={props.revertTestId}
-            className="h-7 px-2"
-          >
-            Revert to default
-          </Button>
-          {props.status}
+        <div className="flex min-w-0 flex-1 items-center justify-start">
+          {revertButton}
         </div>
+        <div className="flex shrink-0 items-center gap-3">{props.status}</div>
       </div>
     </section>
+  );
+}
+
+function WorkspaceGuideHint(props: { readonly className: string }) {
+  return (
+    <p className={cn("text-ui-xs text-muted-foreground", props.className)}>
+      For workspace-specific instructions, add a{" "}
+      <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.95em]">
+        .traycer/agent-selection-guide.md
+      </code>{" "}
+      file in a workspace. It layers on top of these global instructions.
+    </p>
+  );
+}
+
+function RevertButton(props: {
+  readonly disabled: boolean;
+  readonly icon: ReactNode;
+  readonly label: string;
+  readonly onClick: () => void;
+  readonly testId: string | undefined;
+  readonly tooltip: string | null;
+}) {
+  return (
+    <TooltipWrapper
+      label={props.tooltip}
+      side="top"
+      sideOffset={6}
+      align="start"
+    >
+      <span className="inline-flex">
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          disabled={props.disabled}
+          onClick={props.onClick}
+          data-testid={props.testId}
+          className="h-7 px-2"
+        >
+          {props.icon}
+          {props.label}
+        </Button>
+      </span>
+    </TooltipWrapper>
   );
 }

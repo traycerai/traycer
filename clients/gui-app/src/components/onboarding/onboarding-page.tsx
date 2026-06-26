@@ -11,6 +11,7 @@ import {
 } from "react";
 import { useNavigate, useRouter } from "@tanstack/react-router";
 import { AnimatePresence, m } from "motion/react";
+import type { AgentSelectionGuideGlobalOnboardingDraftGetResponse } from "@traycer/protocol/host/agent/shared";
 import { traycerInfo } from "@traycer-clients/shared/platform/traycer-info";
 import packageJson from "../../../package.json";
 import geistPixelSquareUrl from "@/assets/fonts/GeistPixel-Square.woff2?url";
@@ -293,6 +294,35 @@ const ONBOARDING_STYLE = `
   }
 }`;
 
+function onboardingAgentGuideLoading(
+  data: AgentSelectionGuideGlobalOnboardingDraftGetResponse | undefined,
+): boolean {
+  if (data === undefined) return true;
+  return data.content === null && !data.providersSettled;
+}
+
+function onboardingAgentGuideRecognizedDefaultContents(
+  data: AgentSelectionGuideGlobalOnboardingDraftGetResponse | undefined,
+  generatedDefaultContent: string,
+): readonly string[] {
+  if (data === undefined) return [generatedDefaultContent];
+  return data.recognizedDefaultContents;
+}
+
+function onboardingAgentGuideProvidersSettled(
+  data: AgentSelectionGuideGlobalOnboardingDraftGetResponse | undefined,
+): boolean {
+  if (data === undefined) return false;
+  return data.providersSettled;
+}
+
+function onboardingAgentGuideFileExists(
+  data: AgentSelectionGuideGlobalOnboardingDraftGetResponse | undefined,
+): boolean {
+  if (data === undefined) return false;
+  return data.content !== null;
+}
+
 function resolveAppVersionLabel(): string {
   const envVersion = import.meta.env.VITE_APP_VERSION;
   const raw =
@@ -411,7 +441,6 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
   const agentGuideDirtyRef = useRef(false);
   const agentGuideInitializedRef = useRef(false);
   const agentGuideAutoDefaultRef = useRef(false);
-  const agentGuideLastDefaultRef = useRef("");
   const navigate = useNavigate();
   const router = useRouter();
   const { replay } = props;
@@ -433,12 +462,7 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
   const act = ONBOARDING_ACTS[step];
   const isAgentGuideAct = act.id === "agent-guide";
   const agentGuideQueryData = agentGuideQuery.data;
-  const agentGuideWaitingForProviderSettlement =
-    agentGuideQueryData !== undefined &&
-    agentGuideQueryData.content === null &&
-    !agentGuideQueryData.providersSettled;
-  const agentGuideLoading =
-    agentGuideQueryData === undefined || agentGuideWaitingForProviderSettlement;
+  const agentGuideLoading = onboardingAgentGuideLoading(agentGuideQueryData);
   // The guide editor keeps spinning while the read is pending or has failed (it
   // never resolves to a usable guide on error). Navigation, however, must never
   // be trapped by the optional guide: a failed read leaves Skip/Advance enabled
@@ -455,8 +479,12 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
     if (data === undefined) return;
     const nextDefault = data.generatedDefaultContent;
     const current = agentGuideDraftRef.current;
-    const previousDefault = agentGuideLastDefaultRef.current;
-    const wasUntouchedDefault = current === previousDefault;
+    const currentIsRecognizedDefault =
+      current !== null && data.recognizedDefaultContents.includes(current);
+    const shouldFollowGeneratedDefault =
+      agentGuideAutoDefaultRef.current &&
+      !agentGuideDirtyRef.current &&
+      (current === null || currentIsRecognizedDefault);
     let nextDraft: string;
     let clearDirty = false;
 
@@ -464,15 +492,11 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
       agentGuideAutoDefaultRef.current = data.content === null;
       nextDraft = data.content ?? nextDefault;
       clearDirty = true;
-    } else if (
-      data.content !== null &&
-      agentGuideAutoDefaultRef.current &&
-      wasUntouchedDefault
-    ) {
+    } else if (data.content !== null && shouldFollowGeneratedDefault) {
       agentGuideAutoDefaultRef.current = false;
       nextDraft = data.content;
       clearDirty = true;
-    } else if (agentGuideAutoDefaultRef.current && wasUntouchedDefault) {
+    } else if (data.content === null && shouldFollowGeneratedDefault) {
       nextDraft = nextDefault;
       clearDirty = true;
     } else if (current !== null) {
@@ -483,7 +507,6 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
     }
 
     agentGuideInitializedRef.current = true;
-    agentGuideLastDefaultRef.current = nextDefault;
     agentGuideDraftRef.current = nextDraft;
     if (clearDirty) agentGuideDirtyRef.current = false;
     setAgentGuide({ draft: nextDraft, default: nextDefault });
@@ -538,6 +561,12 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
   const agentGuideState: OnboardingAgentGuideState = {
     value: agentGuideDraft ?? agentGuideDefault,
     generatedDefaultContent: agentGuideDefault,
+    recognizedDefaultContents: onboardingAgentGuideRecognizedDefaultContents(
+      agentGuideQueryData,
+      agentGuideDefault,
+    ),
+    providersSettled: onboardingAgentGuideProvidersSettled(agentGuideQueryData),
+    guideFileExists: onboardingAgentGuideFileExists(agentGuideQueryData),
     loading: agentGuideLoading,
     saving: agentGuideSaving,
     error: agentGuideSaveError || agentGuideQuery.isError,

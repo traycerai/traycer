@@ -12,6 +12,7 @@ const SETTINGS_TAB_LABEL = "Settings";
 const SETTINGS_PATH_PREFIX = "/settings";
 const SETTINGS_DEFAULT_PATH = "/settings/general";
 const LEGACY_SERVICE_PATH = "/settings/service";
+const LEGACY_AGENTS_PATH = "/settings/agents";
 
 function settingsRouteOptions(section: SettingsSectionId) {
   switch (section) {
@@ -21,8 +22,6 @@ function settingsRouteOptions(section: SettingsSectionId) {
       return { to: "/settings/appearance" } as const;
     case "providers":
       return { to: "/settings/providers" } as const;
-    case "agents":
-      return { to: "/settings/agents" } as const;
     case "keybindings":
       return { to: "/settings/keybindings" } as const;
     case "shell":
@@ -106,6 +105,9 @@ export function settingsSectionFromPath(
   // remembered tab path from before the rename still lands on the
   // current native-packaging surface (the route itself redirects).
   if (pathname === LEGACY_SERVICE_PATH) return "host";
+  // The standalone Agents settings section was folded into Providers. Keep
+  // remembered tab state pointed at the section that now owns the guide.
+  if (pathname === LEGACY_AGENTS_PATH) return "providers";
   const match = SETTINGS_SECTIONS.find(
     (section) => settingsSectionPath(section.id) === pathname,
   );

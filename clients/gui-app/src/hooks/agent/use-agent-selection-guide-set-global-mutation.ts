@@ -15,6 +15,13 @@ type SetGlobalContext = {
   readonly hostId: string | null;
 };
 
+function recognizedDefaultsWithGeneratedDefault(
+  previous: readonly string[] | undefined,
+  generatedDefaultContent: string,
+): string[] {
+  return [...new Set([...(previous ?? []), generatedDefaultContent])];
+}
+
 /**
  * Writes the global agent selection guide for the active host. Backs both the
  * debounced auto-save and explicit user edits. The read query is updated
@@ -48,7 +55,15 @@ export function useAgentSelectionGuideSetGlobalMutation(): UseMutationResult<
               "agent.selectionGuide.getGlobal",
             ),
           },
-          data,
+          (previous) => ({
+            content: data.content,
+            generatedDefaultContent: data.generatedDefaultContent,
+            providersSettled: previous?.providersSettled ?? true,
+            recognizedDefaultContents: recognizedDefaultsWithGeneratedDefault(
+              previous?.recognizedDefaultContents,
+              data.generatedDefaultContent,
+            ),
+          }),
         );
         queryClient.setQueriesData<AgentSelectionGuideGlobalOnboardingDraftGetResponse>(
           {
@@ -57,10 +72,15 @@ export function useAgentSelectionGuideSetGlobalMutation(): UseMutationResult<
               "agent.selectionGuide.getGlobalOnboardingDraft",
             ),
           },
-          {
-            ...data,
-            providersSettled: true,
-          },
+          (previous) => ({
+            content: data.content,
+            generatedDefaultContent: data.generatedDefaultContent,
+            providersSettled: previous?.providersSettled ?? true,
+            recognizedDefaultContents: recognizedDefaultsWithGeneratedDefault(
+              previous?.recognizedDefaultContents,
+              data.generatedDefaultContent,
+            ),
+          }),
         );
       },
       onError: (error) =>

@@ -8,7 +8,6 @@ import { ShellSettingsPanel } from "@/components/settings/panels/shell-settings-
 import { WorktreesSettingsPanel } from "@/components/settings/panels/worktrees-settings-panel";
 import { HostSettingsPanel } from "@/components/settings/panels/host-settings-panel";
 import { ProvidersSettingsPanel } from "@/components/settings/panels/providers-settings-panel";
-import { AgentsSettingsPanel } from "@/components/settings/panels/agents-settings-panel";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 
 export interface SettingsModalContentProps {
@@ -51,8 +50,6 @@ function SettingsPanelForSection(props: {
       return <AppearanceSettingsPanel />;
     case "providers":
       return <ProvidersSettingsPanel />;
-    case "agents":
-      return <AgentsSettingsPanel />;
     case "keybindings":
       return <KeybindingsSettingsPanel />;
     case "shell":

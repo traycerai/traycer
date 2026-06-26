@@ -120,6 +120,12 @@ vi.mock("@/providers/use-runner-host", () => ({
   }),
 }));
 
+vi.mock("@/components/settings/panels/agent-selection-guide-section", () => ({
+  AgentSelectionGuideSection: () => (
+    <section data-testid="agent-selection-guide-section" />
+  ),
+}));
+
 // The Traycer provider mounts the subscription card; stub its credits query so
 // the real AuthService (which needs a host-runtime provider) isn't invoked.
 vi.mock("@/hooks/auth/use-auth-user-query", () => ({

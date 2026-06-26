@@ -252,12 +252,28 @@ export type AgentSelectionGuideGlobalGetRequest = z.infer<
   typeof agentSelectionGuideGlobalGetRequestSchema
 >;
 
-export const agentSelectionGuideGlobalGetResponseSchema = z.object({
+export const agentSelectionGuideGlobalGetResponseSchemaV10 = z.object({
   content: z.string(),
   generatedDefaultContent: z.string(),
 });
+
+export const agentSelectionGuideGlobalGetResponseSchemaV11 =
+  agentSelectionGuideGlobalGetResponseSchemaV10
+    .extend({
+      providersSettled: z.boolean(),
+      recognizedDefaultContents: z.array(z.string()),
+    })
+    .refine(
+      (value) =>
+        value.recognizedDefaultContents.includes(value.generatedDefaultContent),
+      {
+        path: ["recognizedDefaultContents"],
+        message:
+          "recognizedDefaultContents must include generatedDefaultContent",
+      },
+    );
 export type AgentSelectionGuideGlobalGetResponse = z.infer<
-  typeof agentSelectionGuideGlobalGetResponseSchema
+  typeof agentSelectionGuideGlobalGetResponseSchemaV11
 >;
 
 export const agentSelectionGuideGlobalOnboardingDraftGetRequestSchema =
@@ -266,14 +282,29 @@ export type AgentSelectionGuideGlobalOnboardingDraftGetRequest = z.infer<
   typeof agentSelectionGuideGlobalOnboardingDraftGetRequestSchema
 >;
 
-export const agentSelectionGuideGlobalOnboardingDraftGetResponseSchema =
+export const agentSelectionGuideGlobalOnboardingDraftGetResponseSchemaV10 =
   z.object({
     content: z.string().nullable(),
     generatedDefaultContent: z.string(),
     providersSettled: z.boolean(),
   });
+
+export const agentSelectionGuideGlobalOnboardingDraftGetResponseSchemaV11 =
+  agentSelectionGuideGlobalOnboardingDraftGetResponseSchemaV10
+    .extend({
+      recognizedDefaultContents: z.array(z.string()),
+    })
+    .refine(
+      (value) =>
+        value.recognizedDefaultContents.includes(value.generatedDefaultContent),
+      {
+        path: ["recognizedDefaultContents"],
+        message:
+          "recognizedDefaultContents must include generatedDefaultContent",
+      },
+    );
 export type AgentSelectionGuideGlobalOnboardingDraftGetResponse = z.infer<
-  typeof agentSelectionGuideGlobalOnboardingDraftGetResponseSchema
+  typeof agentSelectionGuideGlobalOnboardingDraftGetResponseSchemaV11
 >;
 
 export const agentSelectionGuideGlobalSetRequestSchema = z.object({

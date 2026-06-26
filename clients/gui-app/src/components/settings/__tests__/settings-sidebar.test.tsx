@@ -77,11 +77,11 @@ describe("<SettingsSidebar /> leader hints", () => {
     expect(ids).not.toContain("service");
   });
 
-  it("SETTINGS_SECTIONS includes the Agents section", () => {
+  it("SETTINGS_SECTIONS does not contain the removed Agents section", () => {
     const ids = SETTINGS_SECTIONS.map((section) => section.id);
     const labels = SETTINGS_SECTIONS.map((section) => section.label);
-    expect(ids).toContain("agents");
-    expect(labels).toContain("Agents");
+    expect(ids).not.toContain("agents");
+    expect(labels).not.toContain("Agents");
   });
 
   it("delays sub-leader digit badges in settings navigation", async () => {

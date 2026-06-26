@@ -1,6 +1,5 @@
 import type { LucideIcon } from "lucide-react";
 import {
-  Bot,
   Boxes,
   GitBranch,
   Keyboard,
@@ -14,7 +13,6 @@ export type SettingsSectionId =
   | "general"
   | "appearance"
   | "providers"
-  | "agents"
   | "keybindings"
   | "shell"
   | "worktrees"
@@ -30,7 +28,6 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
   { id: "general", label: "General", icon: SettingsIcon },
   { id: "appearance", label: "Appearance", icon: Palette },
   { id: "providers", label: "Providers", icon: Boxes },
-  { id: "agents", label: "Agents", icon: Bot },
   { id: "keybindings", label: "Keybindings", icon: Keyboard },
   { id: "shell", label: "Shell", icon: TerminalSquare },
   { id: "worktrees", label: "Worktrees", icon: GitBranch },

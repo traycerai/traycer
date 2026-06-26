@@ -31,6 +31,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { AgentSelectionGuideEditorSurface } from "@/components/agent-selection-guide-editor-surface";
+import { resolveAgentSelectionGuideDefaultAction } from "@/components/agent-selection-guide-default-action";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { OnboardingClaudeTui } from "@/components/onboarding/onboarding-claude-tui";
 import { OnboardingOpencodeTui } from "@/components/onboarding/onboarding-opencode-tui";
@@ -46,6 +47,9 @@ interface OnboardingDioramaProps {
 export interface OnboardingAgentGuideState {
   readonly value: string;
   readonly generatedDefaultContent: string;
+  readonly recognizedDefaultContents: readonly string[];
+  readonly providersSettled: boolean;
+  readonly guideFileExists: boolean;
   readonly loading: boolean;
   readonly saving: boolean;
   readonly error: boolean;
@@ -1567,7 +1571,16 @@ function AgentGuidePane(props: {
   readonly agentGuide: OnboardingAgentGuideState;
 }) {
   const { agentGuide } = props;
-  const isAtDefault = agentGuide.value === agentGuide.generatedDefaultContent;
+  const defaultAction = resolveAgentSelectionGuideDefaultAction({
+    value: agentGuide.value,
+    generatedDefaultContent: agentGuide.generatedDefaultContent,
+    recognizedDefaultContents: agentGuide.recognizedDefaultContents,
+    providersSettled: agentGuide.providersSettled,
+    mode: agentGuide.guideFileExists ? "saved-guide" : "missing-guide-draft",
+  });
+  const defaultActionDisabled =
+    defaultAction.kind === "checking" ||
+    defaultAction.kind === "current-default";
   return (
     <AgentSelectionGuideEditorSurface
       titleId="onboarding-agent-selection-guide-heading"
@@ -1580,7 +1593,12 @@ function AgentGuidePane(props: {
       testId="onboarding-agent-guide-input"
       textareaClassName="flex-1 resize-none"
       className="size-full overflow-hidden rounded-lg border border-border bg-card p-4 shadow-2xl"
-      revertDisabled={agentGuide.loading || agentGuide.saving || isAtDefault}
+      revertDisabled={
+        agentGuide.loading || agentGuide.saving || defaultActionDisabled
+      }
+      revertLabel={defaultAction.buttonLabel}
+      revertIcon={defaultAction.buttonIcon}
+      revertTooltip={defaultAction.buttonTooltip}
       onRevert={agentGuide.onRevertToDefault}
       revertTestId={undefined}
       status={<OnboardingAgentGuideStatus agentGuide={agentGuide} />}
@@ -1603,6 +1621,18 @@ function OnboardingAgentGuideStatus(props: {
           variant={undefined}
         />
         Saving
+      </span>
+    );
+  }
+  if (!props.agentGuide.providersSettled) {
+    return (
+      <span className="flex items-center gap-1 text-code-xs text-muted-foreground">
+        <AgentSpinningDots
+          className="text-muted-foreground"
+          testId={undefined}
+          variant={undefined}
+        />
+        Checking providers
       </span>
     );
   }

@@ -117,7 +117,7 @@ export const useTabsStore = create<TabsStoreState>()(
           // Skip the set + persist write when the singleton tab is
           // already open with identical name and remembered path.
           // Without this, every navigation inside the tab’s sub-routes
-          // (e.g. `/settings/general` → `/settings/agents`) would fire
+          // (e.g. `/settings/general` → `/settings/providers`) would fire
           // a no-op rewrite because callers route through here on each
           // pathname change.
           if (

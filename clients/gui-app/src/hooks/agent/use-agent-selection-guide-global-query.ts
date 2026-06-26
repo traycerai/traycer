@@ -7,6 +7,7 @@ import { useHostQuery } from "@/hooks/host/use-host-query";
 // Stable params identity so the host-scoped query key stays referentially
 // constant across renders.
 const GLOBAL_GUIDE_PARAMS = {};
+const GLOBAL_GUIDE_PROVIDER_SETTLE_POLL_MS = 750;
 
 /**
  * Reads the global agent selection guide and the current provider-based
@@ -22,6 +23,16 @@ export function useAgentSelectionGuideGlobalQuery(): UseQueryResult<
     client,
     method: "agent.selectionGuide.getGlobal",
     params: GLOBAL_GUIDE_PARAMS,
-    options: { refetchOnWindowFocus: false },
+    options: {
+      refetchInterval: (query) => {
+        const data = query.state.data;
+        if (data !== undefined && !data.providersSettled) {
+          return GLOBAL_GUIDE_PROVIDER_SETTLE_POLL_MS;
+        }
+        return false;
+      },
+      refetchIntervalInBackground: false,
+      refetchOnWindowFocus: false,
+    },
   });
 }

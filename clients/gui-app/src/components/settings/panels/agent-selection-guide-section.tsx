@@ -5,6 +5,7 @@
 import type { ReactNode } from "react";
 import { useEffect, useReducer, useRef } from "react";
 import { Check, TriangleAlert } from "lucide-react";
+import { resolveAgentSelectionGuideDefaultAction } from "@/components/agent-selection-guide-default-action";
 import {
   AGENT_SELECTION_GUIDE_DESCRIPTION,
   AGENT_SELECTION_GUIDE_TITLE,
@@ -121,6 +122,8 @@ export function AgentSelectionGuideSection() {
         key={hostId}
         initialContent={query.data.content}
         generatedDefaultContent={query.data.generatedDefaultContent}
+        recognizedDefaultContents={query.data.recognizedDefaultContents}
+        providersSettled={query.data.providersSettled}
       />
     );
   }
@@ -153,8 +156,15 @@ function AgentSelectionGuideMessage(props: { readonly children: ReactNode }) {
 function AgentsGuideEditor(props: {
   readonly initialContent: string;
   readonly generatedDefaultContent: string;
+  readonly recognizedDefaultContents: readonly string[];
+  readonly providersSettled: boolean;
 }) {
-  const { initialContent, generatedDefaultContent } = props;
+  const {
+    initialContent,
+    generatedDefaultContent,
+    recognizedDefaultContents,
+    providersSettled,
+  } = props;
   const setMutation = useAgentSelectionGuideSetGlobalMutation();
   const resetMutation = useAgentSelectionGuideResetGlobalMutation();
   const [state, dispatch] = useReducer(
@@ -275,12 +285,23 @@ function AgentsGuideEditor(props: {
   };
 
   const onRevert = (): void => {
+    if (!providersSettled) {
+      dispatch({ type: "confirm-open-changed", open: false });
+      return;
+    }
     clearPendingDebounce();
     runReset();
     dispatch({ type: "confirm-open-changed", open: false });
   };
 
   const isAtDefault = state.value === generatedDefaultContent;
+  const defaultAction = resolveAgentSelectionGuideDefaultAction({
+    value: state.value,
+    generatedDefaultContent,
+    recognizedDefaultContents,
+    providersSettled,
+    mode: "saved-guide",
+  });
   const isDirty = state.value !== state.savedContent;
   // A failed save/reset leaves the editor dirty; surface that as an error
   // rather than a spinner that would otherwise run forever.
@@ -303,21 +324,33 @@ function AgentsGuideEditor(props: {
         textareaClassName="max-h-[min(32vh,16rem)] min-h-[min(20vh,10rem)]"
         className=""
         revertDisabled={
-          isAtDefault || state.saveInFlight || state.resetInFlight
+          !providersSettled ||
+          isAtDefault ||
+          state.saveInFlight ||
+          state.resetInFlight
         }
+        revertLabel={defaultAction.buttonLabel}
+        revertIcon={defaultAction.buttonIcon}
+        revertTooltip={defaultAction.buttonTooltip}
         onRevert={() => dispatch({ type: "confirm-open-changed", open: true })}
         revertTestId="agents-selection-guide-revert"
-        status={<SaveStatus saving={isSaving} error={hasError} />}
+        status={
+          <SaveStatus
+            saving={isSaving}
+            error={hasError}
+            checkingProviders={!providersSettled}
+          />
+        }
       />
       <ConfirmDestructiveDialog
         open={state.confirmOpen}
         onOpenChange={(open) =>
           dispatch({ type: "confirm-open-changed", open })
         }
-        title="Revert to default instructions?"
-        description="This replaces your global agent selection instructions with defaults based on the providers currently available on this device. Your custom instructions will be lost. Workspace-level files are not affected."
+        title={defaultAction.confirmationTitle}
+        description={defaultAction.confirmationDescription}
         cascadeSummary={null}
-        actionLabel="Revert to default"
+        actionLabel={defaultAction.confirmationActionLabel}
         isPending={state.resetInFlight}
         onConfirm={onRevert}
       />
@@ -328,6 +361,7 @@ function AgentsGuideEditor(props: {
 function SaveStatus(props: {
   readonly saving: boolean;
   readonly error: boolean;
+  readonly checkingProviders: boolean;
 }) {
   if (props.error) {
     return (
@@ -346,6 +380,18 @@ function SaveStatus(props: {
           variant={undefined}
         />
         Saving…
+      </span>
+    );
+  }
+  if (props.checkingProviders) {
+    return (
+      <span className="inline-flex items-center gap-1.5 text-ui-xs text-muted-foreground">
+        <AgentSpinningDots
+          className="text-muted-foreground"
+          testId="agents-selection-guide-provider-checking-spinner"
+          variant={undefined}
+        />
+        Checking providers
       </span>
     );
   }
