@@ -78,8 +78,12 @@ vi.mock("@/hooks/worktree/use-worktree-set-repo-scripts-mutation", () => ({
 vi.mock("@/hooks/host/use-host-query", () => ({
   useHostQuery: (opts: {
     readonly method: string;
+    // `scriptRefs` is required: the v1.1 request always carries it (empty when
+    // there is no source ref). Reading it without optional chaining below makes a
+    // regression where the dialog stops sending the field fail loudly instead of
+    // silently degrading to an empty request.
     readonly params: {
-      readonly scriptRefs?: ReadonlyArray<{
+      readonly scriptRefs: ReadonlyArray<{
         readonly workspacePath: string;
         readonly ref: string;
       }>;
@@ -90,7 +94,9 @@ vi.mock("@/hooks/host/use-host-query", () => ({
     // Adapt the single-ref `readScriptsAtRef` fixture into that response shape so
     // the existing per-test fixtures keep working unchanged.
     if (opts.method === "worktree.listByWorkspacePaths") {
-      const entry = opts.params.scriptRefs?.[0];
+      // `.at(0)` (not `[0]`) so an empty `scriptRefs` yields `undefined` while a
+      // missing `scriptRefs` field still throws - the required-field assertion.
+      const entry = opts.params.scriptRefs.at(0);
       mocks.lastReadScriptsRef.current = entry?.ref ?? "";
       const result = mocks.readScriptsAtRef();
       if (result.data === undefined) {

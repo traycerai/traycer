@@ -34,13 +34,31 @@ import { releasedSurfaceBaseline } from "./__fixtures__/released-surface.baselin
  */
 
 type SurfaceLeaf = { readonly request: unknown; readonly response: unknown };
-type Surface = Record<
-  string,
-  Record<string, Record<string, SurfaceLeaf>>
->;
+type Surface = Record<string, Record<string, Record<string, SurfaceLeaf>>>;
 
 const current = toJsonSchemas(hostRpcRegistry);
 const baseline: Surface = releasedSurfaceBaseline;
+
+/**
+ * Order-independent serialization: sorts object keys and array elements before
+ * stringifying. A fingerprint's `properties` key order - and the order of its
+ * `required` / enum-`values` / union-`variants` arrays - follows Zod
+ * field-declaration order, none of which affects the wire shape. Comparing
+ * canonical forms makes the guard flag a real add / remove / change while
+ * ignoring a benign field reorder of a shipped schema.
+ */
+function canonicalize(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalize).sort().join(",")}]`;
+  }
+  if (value !== null && typeof value === "object") {
+    return `{${Object.entries(value)
+      .map(([key, child]) => `${JSON.stringify(key)}:${canonicalize(child)}`)
+      .sort()
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
 
 describe("released wire-surface compatibility (host-v1.0.0)", () => {
   it("keeps the shipped method-name set frozen", () => {
@@ -72,13 +90,11 @@ describe("released wire-surface compatibility (host-v1.0.0)", () => {
             drift.push(`${method}@${major}.${minor}: shipped version dropped`);
             continue;
           }
-          if (
-            JSON.stringify(actual.request) !== JSON.stringify(expected.request)
-          ) {
+          if (canonicalize(actual.request) !== canonicalize(expected.request)) {
             drift.push(`${method}@${major}.${minor}: request schema changed`);
           }
           if (
-            JSON.stringify(actual.response) !== JSON.stringify(expected.response)
+            canonicalize(actual.response) !== canonicalize(expected.response)
           ) {
             drift.push(`${method}@${major}.${minor}: response schema changed`);
           }
