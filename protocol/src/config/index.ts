@@ -8,5 +8,8 @@
  * resolving filesystem APIs.
  */
 export * from "./schema";
+export * from "./diagnostics-schema";
+export * from "./diagnostics-redaction";
 export * from "./paths";
 export * from "./store";
+export * from "./diagnostics-store";

@@ -11,3 +11,7 @@ export function useRunnerHost(): IRunnerHost {
   }
   return value;
 }
+
+export function useOptionalRunnerHost(): IRunnerHost | null {
+  return use(RunnerHostContext);
+}

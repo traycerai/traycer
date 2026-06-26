@@ -4,6 +4,12 @@
  * renderers feature-detect `window.runnerHost.windows` before using them.
  */
 
+import type {
+  DiagnosticsEffectiveConfig,
+  DiagnosticsRawConfig,
+  DiagnosticsStatus,
+} from "@traycer/protocol/config/diagnostics-schema";
+
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue =
   | JsonPrimitive
@@ -154,6 +160,13 @@ export interface SupportUserSnapshot {
   readonly email: string | null;
 }
 
+export interface SupportDiagnosticsSnapshot {
+  readonly raw: DiagnosticsRawConfig;
+  readonly effective: DiagnosticsEffectiveConfig;
+  readonly hostStatus: DiagnosticsStatus;
+  readonly cliVersion: string | null;
+}
+
 export interface SupportSnapshot {
   readonly appName: string;
   readonly appVersion: string;
@@ -162,6 +175,7 @@ export interface SupportSnapshot {
   readonly user: SupportUserSnapshot;
   readonly versions: SupportRuntimeVersions;
   readonly host: SupportHostSnapshot;
+  readonly diagnostics: SupportDiagnosticsSnapshot | null;
   readonly logs: readonly SupportLogDescriptor[];
   readonly links: readonly SupportLinkDescriptor[];
   readonly supportEmail: string;

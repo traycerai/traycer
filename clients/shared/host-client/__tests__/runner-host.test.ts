@@ -4,7 +4,7 @@ import type {
   LocalHostSnapshot,
 } from "../../platform/runner-host";
 import { mockLocalHostEntry } from "../mock/mock-host-directory";
-import { MockRunnerHost } from "../mock/mock-runner-host";
+import { MockRunnerHost, MockTraycerCli } from "../mock/mock-runner-host";
 
 function makeSnapshot(hostId: string): LocalHostSnapshot {
   return {
@@ -354,6 +354,72 @@ describe("MockRunnerHost - IRunnerHost contract", () => {
     });
 
     expect(host.authnBaseUrl).toBe("https://authn.traycer.invalid");
+  });
+
+  it("persists temporary diagnostics raw fields in the mock CLI snapshot", async () => {
+    const cli = new MockTraycerCli();
+
+    await cli.diagnosticsConfigTemporary({
+      level: "debug",
+      hostLevel: null,
+      duration: "30m",
+    });
+    const hostSnapshot = await cli.diagnosticsConfigTemporary({
+      level: null,
+      hostLevel: "warn",
+      duration: "30m",
+    });
+
+    expect(hostSnapshot.raw.raw.temporaryLogLevel).toMatchObject({
+      level: "debug",
+    });
+    expect(hostSnapshot.raw.raw.temporaryHostLogLevel).toMatchObject({
+      level: "warn",
+    });
+    expect(hostSnapshot.effective.general).toMatchObject({
+      level: "debug",
+      source: "temporary",
+    });
+    expect(hostSnapshot.effective.host).toMatchObject({
+      level: "warn",
+      source: "temporary",
+    });
+  });
+
+  it("recomputes diagnostics effective levels after scoped temporary clears", async () => {
+    const cli = new MockTraycerCli();
+
+    await cli.diagnosticsConfigSet({ level: "error", hostLevel: "inherit" });
+    await cli.diagnosticsConfigTemporary({
+      level: "debug",
+      hostLevel: "warn",
+      duration: "30m",
+    });
+
+    const clearedHost = await cli.diagnosticsConfigClearTemporary({
+      scope: "host",
+    });
+    expect(clearedHost.raw.raw.temporaryLogLevel).toMatchObject({
+      level: "debug",
+    });
+    expect(clearedHost.raw.raw.temporaryHostLogLevel).toBeUndefined();
+    expect(clearedHost.effective.host).toMatchObject({
+      level: "debug",
+      source: "permanent-inherited",
+    });
+
+    const clearedAll = await cli.diagnosticsConfigClearTemporary({
+      scope: "all",
+    });
+    expect(clearedAll.raw.raw.temporaryLogLevel).toBeUndefined();
+    expect(clearedAll.effective.general).toMatchObject({
+      level: "error",
+      source: "permanent",
+    });
+    expect(clearedAll.effective.host).toMatchObject({
+      level: "error",
+      source: "permanent-inherited",
+    });
   });
 });
 

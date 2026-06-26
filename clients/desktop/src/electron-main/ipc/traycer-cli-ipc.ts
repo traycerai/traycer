@@ -1,5 +1,14 @@
 import { RunnerHostInvoke } from "../../ipc-contracts/ipc-channels";
 import {
+  isDiagnosticLogLevel,
+  isHostDiagnosticLogLevel,
+  type DiagnosticLogLevel,
+  type DiagnosticsTemporaryScope,
+  type HostDiagnosticLogLevel,
+} from "@traycer/protocol/config/diagnostics-schema";
+import type { TraycerDiagnosticsConfigSnapshot } from "@traycer-clients/shared/platform/runner-host";
+import { refreshDesktopDiagnosticsLogLevel } from "../app/logger";
+import {
   runTraycerCli,
   runTraycerCliJson,
   runTraycerCliWithStdin,
@@ -34,6 +43,52 @@ function optionalString(raw: unknown, key: string): string | null {
   if (!isPlainObject(raw)) return null;
   const value = raw[key];
   return typeof value === "string" ? value : null;
+}
+
+function optionalDiagnosticLevel(
+  raw: unknown,
+  key: string,
+  channel: string,
+): DiagnosticLogLevel | null {
+  const value = optionalString(raw, key);
+  if (value === null) return null;
+  if (isDiagnosticLogLevel(value)) return value;
+  throw new Error(`${channel}: '${key}' must be a diagnostic log level`);
+}
+
+function optionalHostDiagnosticLevel(
+  raw: unknown,
+  key: string,
+  channel: string,
+): HostDiagnosticLogLevel | null {
+  const value = optionalString(raw, key);
+  if (value === null) return null;
+  if (isHostDiagnosticLogLevel(value)) return value;
+  throw new Error(`${channel}: '${key}' must be a host diagnostic log level`);
+}
+
+function optionalTemporaryScope(raw: unknown): DiagnosticsTemporaryScope {
+  if (!isPlainObject(raw)) return "all";
+  const value = raw.scope;
+  if (value === undefined || value === null) return "all";
+  if (value === "general" || value === "host" || value === "all") {
+    return value;
+  }
+  throw new Error(
+    "traycerConfigDiagnosticsClearTemporary: 'scope' must be general, host, or all",
+  );
+}
+
+function diagnosticsConfigOptionArgs(
+  raw: unknown,
+  channel: string,
+): readonly string[] {
+  const level = optionalDiagnosticLevel(raw, "level", channel);
+  const hostLevel = optionalHostDiagnosticLevel(raw, "hostLevel", channel);
+  const args = [] as string[];
+  if (level !== null) args.push("--level", level);
+  if (hostLevel !== null) args.push("--host-level", hostLevel);
+  return args;
 }
 
 /**
@@ -83,6 +138,74 @@ export function registerTraycerCliIpc(bridge: RunnerIpcBridge): void {
   bridge.handleInvoke(RunnerHostInvoke.traycerHostStatus, async () => {
     return runTraycerCliJson(["host", "status", "--no-bootstrap"]);
   });
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.traycerConfigDiagnosticsGet,
+    async () => {
+      return runTraycerCliJson<TraycerDiagnosticsConfigSnapshot>([
+        "config",
+        "diagnostics",
+        "get",
+      ]);
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.traycerConfigDiagnosticsSet,
+    async (_event, raw: unknown) => {
+      const snapshot =
+        await runTraycerCliJson<TraycerDiagnosticsConfigSnapshot>([
+          "config",
+          "diagnostics",
+          "set",
+          ...diagnosticsConfigOptionArgs(raw, "traycerConfigDiagnosticsSet"),
+        ]);
+      refreshDesktopDiagnosticsLogLevel();
+      return snapshot;
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.traycerConfigDiagnosticsTemporary,
+    async (_event, raw: unknown) => {
+      const duration = requireString(
+        raw,
+        "duration",
+        "traycerConfigDiagnosticsTemporary",
+      );
+      const snapshot =
+        await runTraycerCliJson<TraycerDiagnosticsConfigSnapshot>([
+          "config",
+          "diagnostics",
+          "temporary",
+          ...diagnosticsConfigOptionArgs(
+            raw,
+            "traycerConfigDiagnosticsTemporary",
+          ),
+          "--duration",
+          duration,
+        ]);
+      refreshDesktopDiagnosticsLogLevel();
+      return snapshot;
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.traycerConfigDiagnosticsClearTemporary,
+    async (_event, raw: unknown) => {
+      const scope = optionalTemporaryScope(raw);
+      const snapshot =
+        await runTraycerCliJson<TraycerDiagnosticsConfigSnapshot>([
+          "config",
+          "diagnostics",
+          "clear-temporary",
+          "--scope",
+          scope,
+        ]);
+      refreshDesktopDiagnosticsLogLevel();
+      return snapshot;
+    },
+  );
 
   bridge.handleInvoke(RunnerHostInvoke.traycerConfigShellGet, async () => {
     // `config shell get` is now a runner-aware command (Native Packaging

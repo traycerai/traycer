@@ -25,6 +25,7 @@ import { InstallationDetailsDisclosure } from "@/components/settings/panels/host
 import { PackageManagerUpgradeHint } from "@/components/settings/panels/host-settings-package-manager-upgrade-hint";
 import { StatusRow } from "@/components/settings/panels/host-settings-status-row";
 import { UpdatesRow } from "@/components/settings/panels/host-settings-updates-row";
+import { HostDiagnosticsLogLevelRow } from "@/components/settings/panels/diagnostics-log-level-row";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { Button } from "@/components/ui/button";
@@ -403,6 +404,7 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
         }}
       />
       <StatusRow status={status} pending={statusPending} />
+      <HostDiagnosticsLogLevelRow />
       <ActionsRow
         status={status}
         pending={statusPending}

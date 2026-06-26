@@ -18,6 +18,10 @@ export function cliConfigPath(): string {
   return join(cliConfigDir(), "config.json");
 }
 
+export function cliDiagnosticsConfigPath(): string {
+  return join(cliConfigDir(), "diagnostics.json");
+}
+
 /**
  * Deploy slot label. A free string (not a closed union) so consumers can carry
  * slots this repo doesn't ship - e.g. the internal host/CLI `staging` - without

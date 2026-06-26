@@ -1,5 +1,10 @@
 import { appendFileSync, chmodSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import {
+  compareDiagnosticLogLevels,
+  type DiagnosticLogLevel,
+} from "@traycer/protocol/config/diagnostics-schema";
+import { loadEffectiveDiagnosticsConfigSync } from "@traycer/protocol/config/diagnostics-store";
 import type { Environment } from "./runner/environment";
 import { CliError } from "./runner/errors";
 import { cliLogPath } from "./store/paths";
@@ -57,6 +62,11 @@ export function createCliLogger(environment: Environment): ILogger {
     fields: LogFields,
     error: Error | null,
   ): void => {
+    const threshold = loadEffectiveDiagnosticsConfigSync(new Date()).general
+      .level;
+    if (!shouldWrite(level, threshold)) {
+      return;
+    }
     try {
       mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
       appendFileSync(
@@ -82,6 +92,26 @@ export function createCliLogger(environment: Environment): ILogger {
     warn: (message, fields) => write("warn", message, fields, null),
     error: (message, fields, error) => write("error", message, fields, error),
   };
+}
+
+function shouldWrite(level: LogLevel, threshold: DiagnosticLogLevel): boolean {
+  if (threshold === "off") return false;
+  return (
+    compareDiagnosticLogLevels(toDiagnosticLogLevel(level), threshold) >= 0
+  );
+}
+
+function toDiagnosticLogLevel(level: LogLevel): DiagnosticLogLevel {
+  switch (level) {
+    case "debug":
+      return "debug";
+    case "info":
+      return "info";
+    case "warn":
+      return "warn";
+    case "error":
+      return "error";
+  }
 }
 
 export function errorFromUnknown(value: unknown): Error {

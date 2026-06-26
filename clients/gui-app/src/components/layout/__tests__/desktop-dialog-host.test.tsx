@@ -78,6 +78,7 @@ const snapshot: DesktopSupportSnapshot = {
     pid: 1234,
     hostId: "host-1",
   },
+  diagnostics: null,
   logs: [
     {
       target: "desktop",

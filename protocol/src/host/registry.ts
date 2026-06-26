@@ -45,7 +45,11 @@ import {
   commentsListThreadsV10,
   commentsSetThreadStatusV10,
 } from "@traycer/protocol/host/comments/contracts";
-import { hostStatusV10 } from "@traycer/protocol/host/status/contracts";
+import {
+  hostStatusUpgradeV10ToV11,
+  hostStatusV10,
+  hostStatusV11,
+} from "@traycer/protocol/host/status/contracts";
 import { hostGetRuntimeCapabilitiesV10 } from "@traycer/protocol/host/runtime-capabilities/contracts";
 import {
   hostGetRateLimitUsageV10,
@@ -531,11 +535,15 @@ export const worktreeListBindingsForEpicV10 = defineRpcContract({
 export const hostRpcRegistry = defineVersionedRpcRegistry({
   "host.status": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: hostStatusV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: hostStatusV11,
+          upgradeFromPreviousVersion: hostStatusUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},

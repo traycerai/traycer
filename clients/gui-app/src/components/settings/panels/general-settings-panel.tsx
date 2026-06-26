@@ -6,6 +6,7 @@ import { useShallow } from "zustand/react/shallow";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { VoiceSettingsSection } from "@/components/settings/voice-settings-section";
+import { GeneralDiagnosticsLogLevelRow } from "@/components/settings/panels/diagnostics-log-level-row";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
@@ -109,6 +110,7 @@ export function GeneralSettingsPanel() {
           />
         }
       />
+      <GeneralDiagnosticsLogLevelRow />
       <VoiceSettingsSection />
       <SettingsRow
         label="Data migration"

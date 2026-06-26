@@ -1,3 +1,9 @@
+import type {
+  DiagnosticsEffectiveConfig,
+  DiagnosticsRawConfig,
+  DiagnosticsStatus,
+} from "@traycer/protocol/config/diagnostics-schema";
+
 export type DesktopJsonPrimitive = string | number | boolean | null;
 export type DesktopJsonValue =
   | DesktopJsonPrimitive
@@ -148,6 +154,7 @@ export interface DesktopSupportSnapshot {
     readonly pid: number | null;
     readonly hostId: string | null;
   };
+  readonly diagnostics: DesktopSupportDiagnosticsSnapshot | null;
   readonly logs: readonly DesktopSupportLogDescriptor[];
   readonly links: readonly DesktopSupportLinkDescriptor[];
   readonly supportEmail: string;
@@ -163,6 +170,13 @@ export interface DesktopSupportLogTailResult {
   readonly path: string;
   readonly lines: readonly string[];
   readonly truncated: boolean;
+}
+
+export interface DesktopSupportDiagnosticsSnapshot {
+  readonly raw: DiagnosticsRawConfig;
+  readonly effective: DiagnosticsEffectiveConfig;
+  readonly hostStatus: DiagnosticsStatus;
+  readonly cliVersion: string | null;
 }
 
 export interface DesktopMenuBridge {

@@ -1,3 +1,9 @@
+import {
+  compareDiagnosticLogLevels,
+  type DiagnosticLogLevel,
+} from "@traycer/protocol/config/diagnostics-schema";
+import { redactDiagnosticsText } from "@traycer/protocol/config/diagnostics-redaction";
+
 export type AppLogLevel = "debug" | "info" | "warn" | "error";
 
 export type AppLogValue =
@@ -17,16 +23,11 @@ const MAX_LOG_ARRAY_ITEMS = 20;
 const MAX_LOG_OBJECT_KEYS = 40;
 const SENSITIVE_KEY_PATTERN =
   /(?:token|secret|password|authorization|cookie|credential|verifier|refresh|bearer|api[_-]?key|client[_-]?secret)/i;
-const SENSITIVE_QUERY_PARAM_PATTERN =
-  /([?&](?:access_token|refresh_token|id_token|token|code|code_verifier|password|secret|client_secret|api_key|authorization)=)([^&#\s]+)/gi;
-const BEARER_PATTERN = /\bBearer\s+[A-Za-z0-9._~+/=-]+/gi;
-const SENSITIVE_INLINE_VALUE_PATTERN =
-  /(\b(?:access[_-]?token|refresh[_-]?token|id[_-]?token|token|code[_-]?verifier|password|secret|client[_-]?secret|api[_-]?key|authorization|cookie|credential)\b\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;}&]+)/gi;
 const NOT_SCALAR_LOG_VALUE = Symbol("not-scalar-log-value");
+let appLogLevel: DiagnosticLogLevel = "info";
 
 export const appLogger = {
   debug(message: string, fields: AppLogFields): void {
-    if (!import.meta.env.DEV) return;
     emitLog("debug", message, fields);
   },
   info(message: string, fields: AppLogFields): void {
@@ -49,11 +50,20 @@ export const appLogger = {
   },
 };
 
+export function setAppLogLevel(level: DiagnosticLogLevel): void {
+  appLogLevel = level;
+}
+
+export function getAppLogLevel(): DiagnosticLogLevel {
+  return appLogLevel;
+}
+
 export function redactLogText(value: string): string {
-  const redacted = value
-    .replace(SENSITIVE_QUERY_PARAM_PATTERN, "$1<redacted>")
-    .replace(BEARER_PATTERN, "Bearer <redacted>")
-    .replace(SENSITIVE_INLINE_VALUE_PATTERN, "$1<redacted>");
+  // Reuse the shared protocol redaction so renderer logs are scrubbed with the
+  // same policy as the host/CLI/desktop (private keys + Authorization/Cookie
+  // headers in addition to query params, bearer tokens, and inline secrets),
+  // then bound the string length.
+  const redacted = redactDiagnosticsText(value);
   return redacted.length > MAX_LOG_STRING_LENGTH
     ? `${redacted.slice(0, MAX_LOG_STRING_LENGTH)}...<truncated>`
     : redacted;
@@ -122,6 +132,9 @@ function emitLog(
   message: string,
   fields: AppLogFields,
 ): void {
+  if (!shouldEmitLog(level, appLogLevel)) {
+    return;
+  }
   const payload = {
     source: "gui-app",
     level,
@@ -137,6 +150,16 @@ function emitLog(
   // The structured payload preserves the logical level; desktop remaps it back
   // to info/warn/error when writing traycer-desktop.log.
   console.warn(line);
+}
+
+function shouldEmitLog(
+  level: AppLogLevel,
+  threshold: DiagnosticLogLevel,
+): boolean {
+  if (threshold === "off") {
+    return false;
+  }
+  return compareDiagnosticLogLevels(level, threshold) >= 0;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

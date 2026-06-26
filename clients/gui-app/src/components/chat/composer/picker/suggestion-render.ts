@@ -10,16 +10,16 @@ export interface ComposerSuggestionRenderArgs {
   readonly kind: ComposerPickerKind;
 }
 
-interface SuggestionRender<TItem extends ComposerPickerItem> {
-  onStart(props: SuggestionProps<unknown, TItem>): void;
-  onUpdate(props: SuggestionProps<unknown, TItem>): void;
+interface SuggestionRender {
+  onStart(props: SuggestionProps<unknown, ComposerPickerItem>): void;
+  onUpdate(props: SuggestionProps<unknown, ComposerPickerItem>): void;
   onExit(): void;
   onKeyDown(props: { event: KeyboardEvent }): boolean;
 }
 
-export function createComposerSuggestionRender<
-  TItem extends ComposerPickerItem,
->(args: ComposerSuggestionRenderArgs): () => SuggestionRender<TItem> {
+export function createComposerSuggestionRender(
+  args: ComposerSuggestionRenderArgs,
+): () => SuggestionRender {
   return () => {
     // Tiptap's suggestion plugin builds a fresh `props` object on every
     // view.update - including a `command` closure bound to the *current*
@@ -27,7 +27,7 @@ export function createComposerSuggestionRender<
     // range covering only the trigger char, so committing later would
     // leave the typed query in place. Track the latest props so commits
     // dispatch against the up-to-date range.
-    let latestProps: SuggestionProps<unknown, TItem> | null = null;
+    let latestProps: SuggestionProps<unknown, ComposerPickerItem> | null = null;
     return {
       onStart(props) {
         latestProps = props;
@@ -37,7 +37,7 @@ export function createComposerSuggestionRender<
           query: props.query,
           commit: (item) => {
             if (latestProps === null) return;
-            latestProps.command(item as TItem);
+            latestProps.command(item);
           },
           clientRect: props.clientRect ?? null,
         });

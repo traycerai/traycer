@@ -1076,6 +1076,7 @@ class NullSupportService implements IpcSupportService {
         pid: null,
         hostId: null,
       },
+      diagnostics: null,
       logs: [],
       links: [],
       supportEmail: "",

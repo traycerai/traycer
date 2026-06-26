@@ -7,6 +7,7 @@ import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/moc
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import { UNSUPPORTED_DIAGNOSTICS_STATUS } from "@/__tests__/diagnostics-status-fixtures";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { useHostMutation, useHostQuery } from "@/hooks/host/use-host-query";
@@ -142,7 +143,8 @@ function createHostQueryFixture(): {
           return {
             ready: true,
             hostVersion: "1.2.3",
-            protocolVersion: { major: 1, minor: 0 },
+            protocolVersion: { major: 1, minor: 1 },
+            diagnostics: UNSUPPORTED_DIAGNOSTICS_STATUS,
           };
         },
       },

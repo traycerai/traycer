@@ -1,4 +1,12 @@
 import type { Disposable } from "../../platform/uri-callback";
+import {
+  isDiagnosticLogLevel,
+  isHostDiagnosticLogLevel,
+  type DiagnosticLogLevel,
+  type DiagnosticsEffectiveConfig,
+  type DiagnosticsEffectiveSource,
+  type HostDiagnosticLogLevel,
+} from "@traycer/protocol/config/diagnostics-schema";
 import type {
   AuthCallbackResult,
   AuthTokenRefreshResult,
@@ -16,6 +24,10 @@ import type {
   StoredAuthTokens,
   TraycerHostStatusSnapshot,
   TraycerDetectedShell,
+  TraycerDiagnosticsConfigClearTemporaryInput,
+  TraycerDiagnosticsConfigSetInput,
+  TraycerDiagnosticsConfigSnapshot,
+  TraycerDiagnosticsConfigTemporaryInput,
   TraycerEnvOverride,
   TraycerShellConfig,
   TraycerShellConfigSetInput,
@@ -387,6 +399,8 @@ export class MockTraycerCli implements ITraycerCli {
     synthesised: true,
   };
   envOverrides: TraycerEnvOverride[] = [];
+  diagnosticsConfig: TraycerDiagnosticsConfigSnapshot =
+    createMockDiagnosticsConfig();
   detectedShells: readonly TraycerDetectedShell[] = [
     { name: "zsh", path: "/bin/zsh", isDefault: true },
     { name: "bash", path: "/bin/bash", isDefault: false },
@@ -398,6 +412,94 @@ export class MockTraycerCli implements ITraycerCli {
 
   async hostStatus(): Promise<TraycerHostStatusSnapshot> {
     return this.hostStatusSnapshot;
+  }
+
+  async diagnosticsConfigGet(): Promise<TraycerDiagnosticsConfigSnapshot> {
+    return this.diagnosticsConfig;
+  }
+
+  async diagnosticsConfigSet(
+    input: TraycerDiagnosticsConfigSetInput,
+  ): Promise<TraycerDiagnosticsConfigSnapshot> {
+    const generalLevel =
+      input.level ?? this.diagnosticsConfig.effective.general.level;
+    const hostSetting =
+      input.hostLevel ??
+      currentMockHostSetting(this.diagnosticsConfig.effective.rawHostSetting);
+    const hostLevel = hostSetting === "inherit" ? generalLevel : hostSetting;
+    this.diagnosticsConfig = {
+      ...this.diagnosticsConfig,
+      raw: {
+        ...this.diagnosticsConfig.raw,
+        readStatus: "ok",
+        raw: {
+          ...this.diagnosticsConfig.raw.raw,
+          ...(input.level !== null ? { logLevel: input.level } : {}),
+          ...(input.hostLevel !== null
+            ? { hostLogLevel: input.hostLevel }
+            : {}),
+        },
+      },
+      effective: {
+        general: {
+          level: generalLevel,
+          source: "permanent",
+          expiresAt: null,
+          configuredValue: generalLevel,
+        },
+        host: {
+          level: hostLevel,
+          source:
+            hostSetting === "inherit" ? "permanent-inherited" : "permanent",
+          expiresAt: null,
+          configuredValue: hostSetting,
+        },
+        rawHostSetting: hostSetting,
+      },
+    };
+    return this.diagnosticsConfig;
+  }
+
+  async diagnosticsConfigTemporary(
+    input: TraycerDiagnosticsConfigTemporaryInput,
+  ): Promise<TraycerDiagnosticsConfigSnapshot> {
+    const expiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+    void input.duration;
+    const raw = {
+      ...this.diagnosticsConfig.raw.raw,
+    };
+    if (input.level !== null) {
+      raw.temporaryLogLevel = { level: input.level, expiresAt };
+    }
+    if (input.hostLevel !== null) {
+      raw.temporaryHostLogLevel = { level: input.hostLevel, expiresAt };
+    }
+    this.diagnosticsConfig = updateMockDiagnosticsConfig(
+      this.diagnosticsConfig,
+      raw,
+    );
+    return this.diagnosticsConfig;
+  }
+
+  async diagnosticsConfigClearTemporary(
+    input: TraycerDiagnosticsConfigClearTemporaryInput,
+  ): Promise<TraycerDiagnosticsConfigSnapshot> {
+    const clearGeneral = input.scope === "general" || input.scope === "all";
+    const clearHost = input.scope === "host" || input.scope === "all";
+    const raw = {
+      ...this.diagnosticsConfig.raw.raw,
+    };
+    if (clearGeneral) {
+      delete raw.temporaryLogLevel;
+    }
+    if (clearHost) {
+      delete raw.temporaryHostLogLevel;
+    }
+    this.diagnosticsConfig = updateMockDiagnosticsConfig(
+      this.diagnosticsConfig,
+      raw,
+    );
+    return this.diagnosticsConfig;
   }
 
   async shellConfigGet(): Promise<TraycerShellConfig> {
@@ -455,6 +557,214 @@ export class MockTraycerCli implements ITraycerCli {
     this.lastLoginToken = null;
     this.lastLoginRefreshToken = null;
   }
+}
+
+function createMockDiagnosticsConfig(): TraycerDiagnosticsConfigSnapshot {
+  return {
+    raw: {
+      raw: {},
+      readStatus: "missing",
+      path: "/mock/diagnostics.json",
+      mtimeMs: null,
+    },
+    effective: {
+      general: {
+        level: "info",
+        source: "default",
+        expiresAt: null,
+        configuredValue: undefined,
+      },
+      host: {
+        level: "info",
+        source: "default",
+        expiresAt: null,
+        configuredValue: undefined,
+      },
+      rawHostSetting: "inherit",
+    },
+    hostStatus: {
+      supported: false,
+      configuredLevel: null,
+      effectiveLevel: null,
+      source: "unreachable",
+      readStatus: "missing",
+      configPath: "/mock/diagnostics.json",
+      configMtimeMs: null,
+      appliedConfigMtimeMs: null,
+      appliedAt: null,
+      expiresAt: null,
+      hostVersion: null,
+      activeSlot: "mock",
+      logPath: null,
+      restartRequired: false,
+    },
+    cliVersion: "mock",
+  };
+}
+
+function updateMockDiagnosticsConfig(
+  current: TraycerDiagnosticsConfigSnapshot,
+  raw: Record<string, unknown>,
+): TraycerDiagnosticsConfigSnapshot {
+  return {
+    ...current,
+    raw: {
+      ...current.raw,
+      raw,
+      readStatus: "ok",
+    },
+    effective: resolveMockDiagnosticsEffective(raw),
+  };
+}
+
+function resolveMockDiagnosticsEffective(
+  raw: Record<string, unknown>,
+): DiagnosticsEffectiveConfig {
+  const generalPermanent = isDiagnosticLogLevel(raw.logLevel)
+    ? raw.logLevel
+    : null;
+  const temporaryGeneral = readActiveMockTemporary(
+    raw.temporaryLogLevel,
+    isDiagnosticLogLevel,
+  );
+  const general = resolveMockGeneralScope(
+    raw.logLevel,
+    generalPermanent,
+    temporaryGeneral,
+  );
+
+  const hostPermanent = isHostDiagnosticLogLevel(raw.hostLogLevel)
+    ? raw.hostLogLevel
+    : null;
+  const temporaryHost = readActiveMockTemporary(
+    raw.temporaryHostLogLevel,
+    isHostDiagnosticLogLevel,
+  );
+  const hostSetting = temporaryHost?.level ?? hostPermanent ?? "inherit";
+  const hostLevel = hostSetting === "inherit" ? general.level : hostSetting;
+
+  return {
+    general,
+    host: {
+      level: hostLevel,
+      source: mockHostSource({
+        configuredValue: raw.hostLogLevel,
+        hostSetting,
+        permanent: hostPermanent,
+        temporary: temporaryHost,
+        generalSource: general.source,
+      }),
+      expiresAt: temporaryHost?.expiresAt ?? null,
+      configuredValue: temporaryHost?.level ?? raw.hostLogLevel,
+    },
+    rawHostSetting: currentMockHostSettingFromRaw(raw.hostLogLevel),
+  };
+}
+
+function resolveMockGeneralScope(
+  configuredValue: unknown,
+  permanent: DiagnosticLogLevel | null,
+  temporary: MockTemporary<DiagnosticLogLevel> | null,
+): DiagnosticsEffectiveConfig["general"] {
+  if (temporary !== null) {
+    return {
+      level: temporary.level,
+      source: "temporary",
+      expiresAt: temporary.expiresAt,
+      configuredValue: temporary.level,
+    };
+  }
+  if (permanent !== null) {
+    return {
+      level: permanent,
+      source: "permanent",
+      expiresAt: null,
+      configuredValue,
+    };
+  }
+  return {
+    level: "info",
+    source:
+      configuredValue === undefined
+        ? "default"
+        : typeof configuredValue === "string"
+          ? "unsupported-raw"
+          : "invalid-raw",
+    expiresAt: null,
+    configuredValue,
+  };
+}
+
+function mockHostSource(args: {
+  readonly configuredValue: unknown;
+  readonly hostSetting: HostDiagnosticLogLevel;
+  readonly permanent: HostDiagnosticLogLevel | null;
+  readonly temporary: MockTemporary<HostDiagnosticLogLevel> | null;
+  readonly generalSource: DiagnosticsEffectiveSource;
+}): DiagnosticsEffectiveSource {
+  if (args.temporary !== null) {
+    return args.hostSetting === "inherit" ? "temporary-inherited" : "temporary";
+  }
+  if (args.permanent !== null) {
+    return args.hostSetting === "inherit" ? "permanent-inherited" : "permanent";
+  }
+  if (args.configuredValue !== undefined) {
+    return typeof args.configuredValue === "string"
+      ? "unsupported-raw"
+      : "invalid-raw";
+  }
+  if (args.generalSource === "temporary") return "temporary-inherited";
+  if (args.generalSource === "default") return "default";
+  if (
+    args.generalSource === "unsupported-raw" ||
+    args.generalSource === "invalid-raw" ||
+    args.generalSource === "expired-ignored"
+  ) {
+    return args.generalSource;
+  }
+  return "permanent-inherited";
+}
+
+type MockTemporary<TLevel extends string> = {
+  readonly level: TLevel;
+  readonly expiresAt: string;
+};
+
+function readActiveMockTemporary<TLevel extends string>(
+  value: unknown,
+  isLevel: (value: unknown) => value is TLevel,
+): MockTemporary<TLevel> | null {
+  if (!isMockRecord(value)) return null;
+  const level = value.level;
+  const expiresAt = value.expiresAt;
+  if (!isLevel(level) || typeof expiresAt !== "string") return null;
+  const expiresAtMs = Date.parse(expiresAt);
+  if (!Number.isFinite(expiresAtMs) || expiresAtMs <= Date.now()) return null;
+  return { level, expiresAt };
+}
+
+function currentMockHostSettingFromRaw(
+  value: unknown,
+): TraycerDiagnosticsConfigSnapshot["effective"]["rawHostSetting"] {
+  if (value === undefined) return "inherit";
+  return isHostDiagnosticLogLevel(value)
+    ? value
+    : typeof value === "string"
+      ? "unsupported"
+      : "invalid";
+}
+
+function isMockRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function currentMockHostSetting(
+  value: TraycerDiagnosticsConfigSnapshot["effective"]["rawHostSetting"],
+): HostDiagnosticLogLevel {
+  if (value === "unsupported" || value === "invalid") {
+    return "inherit";
+  }
+  return value;
 }
 
 /**

@@ -39,6 +39,10 @@ import type {
   TrayIndicatorState,
   TraycerHostStatusSnapshot,
   TraycerDetectedShell,
+  TraycerDiagnosticsConfigClearTemporaryInput,
+  TraycerDiagnosticsConfigSetInput,
+  TraycerDiagnosticsConfigSnapshot,
+  TraycerDiagnosticsConfigTemporaryInput,
   TraycerEnvOverride,
   TraycerShellConfig,
   TraycerShellConfigSetInput,
@@ -361,6 +365,16 @@ export interface DesktopPowerBridge {
 
 export interface DesktopTraycerCliBridge {
   hostStatus(): Promise<TraycerHostStatusSnapshot>;
+  diagnosticsConfigGet(): Promise<TraycerDiagnosticsConfigSnapshot>;
+  diagnosticsConfigSet(
+    input: TraycerDiagnosticsConfigSetInput,
+  ): Promise<TraycerDiagnosticsConfigSnapshot>;
+  diagnosticsConfigTemporary(
+    input: TraycerDiagnosticsConfigTemporaryInput,
+  ): Promise<TraycerDiagnosticsConfigSnapshot>;
+  diagnosticsConfigClearTemporary(
+    input: TraycerDiagnosticsConfigClearTemporaryInput,
+  ): Promise<TraycerDiagnosticsConfigSnapshot>;
   shellConfigGet(): Promise<TraycerShellConfig>;
   shellConfigSet(input: TraycerShellConfigSetInput): Promise<void>;
   shellConfigReset(): Promise<void>;
@@ -605,6 +619,13 @@ export class DesktopRunnerHost implements IRunnerHost {
     };
     this.traycerCli = {
       hostStatus: () => this.bridge.traycerCli.hostStatus(),
+      diagnosticsConfigGet: () => this.bridge.traycerCli.diagnosticsConfigGet(),
+      diagnosticsConfigSet: (input) =>
+        this.bridge.traycerCli.diagnosticsConfigSet(input),
+      diagnosticsConfigTemporary: (input) =>
+        this.bridge.traycerCli.diagnosticsConfigTemporary(input),
+      diagnosticsConfigClearTemporary: (input) =>
+        this.bridge.traycerCli.diagnosticsConfigClearTemporary(input),
       shellConfigGet: () => this.bridge.traycerCli.shellConfigGet(),
       shellConfigSet: (input) => this.bridge.traycerCli.shellConfigSet(input),
       shellConfigReset: () => this.bridge.traycerCli.shellConfigReset(),

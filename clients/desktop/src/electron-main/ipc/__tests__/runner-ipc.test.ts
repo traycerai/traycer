@@ -515,6 +515,10 @@ describe("RunnerIpcBridge", () => {
         // in favor of the `traycer-cli`-driven host-management handlers
         // (`traycerHost*`). The bridge no longer registers them.
         RunnerHostInvoke.traycerHostStatus,
+        RunnerHostInvoke.traycerConfigDiagnosticsGet,
+        RunnerHostInvoke.traycerConfigDiagnosticsSet,
+        RunnerHostInvoke.traycerConfigDiagnosticsTemporary,
+        RunnerHostInvoke.traycerConfigDiagnosticsClearTemporary,
         RunnerHostInvoke.traycerConfigShellGet,
         RunnerHostInvoke.traycerConfigShellList,
         RunnerHostInvoke.traycerConfigShellSet,

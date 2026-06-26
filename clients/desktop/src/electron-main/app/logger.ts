@@ -1,7 +1,11 @@
 import log from "electron-log";
 import { app } from "electron";
 import { join } from "node:path";
-import { isDevBuild } from "../../config";
+import {
+  loadEffectiveDiagnosticsConfigSync,
+  redactDiagnosticsText,
+  type DiagnosticLogLevel,
+} from "@traycer/protocol/config";
 
 export type SafeLogValue =
   | string
@@ -19,11 +23,9 @@ const MAX_LOG_ARRAY_ITEMS = 20;
 const MAX_LOG_OBJECT_KEYS = 40;
 const SENSITIVE_KEY_PATTERN =
   /(?:token|secret|password|authorization|cookie|credential|verifier|refresh|bearer|api[_-]?key|client[_-]?secret)/i;
-const SENSITIVE_QUERY_PARAM_PATTERN =
-  /([?&](?:access_token|refresh_token|id_token|token|code|code_verifier|password|secret|client_secret|api_key|authorization)=)([^&#\s]+)/gi;
-const BEARER_PATTERN = /\bBearer\s+[A-Za-z0-9._~+/=-]+/gi;
-const SENSITIVE_INLINE_VALUE_PATTERN =
-  /(\b(?:access[_-]?token|refresh[_-]?token|id[_-]?token|token|code[_-]?verifier|password|secret|client[_-]?secret|api[_-]?key|authorization|cookie|credential)\b\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;}&]+)/gi;
+const EXPIRY_REFRESH_SLOP_MS = 250;
+
+let diagnosticsExpiryTimer: NodeJS.Timeout | null = null;
 
 /**
  * Configures `electron-log` so the desktop shell, the renderer, and any
@@ -38,13 +40,42 @@ const SENSITIVE_INLINE_VALUE_PATTERN =
 export function initLogger(): void {
   const logPath = resolveDesktopLogPath();
   log.transports.file.resolvePathFn = () => logPath;
-  log.transports.file.level = "info";
-  // Console transport is noisy by design (every IPC + lifecycle log).
-  // Shipped builds get the same `info` level the file transport does so
-  // electron-log's stdout/stderr capture doesn't leak debug payloads to a
-  // user's system console; the dev slot keeps `debug`.
-  log.transports.console.level = isDevBuild ? "debug" : "info";
-  log.info("[desktop] logger initialised", { logPath });
+  const diagnosticsLevel = refreshDesktopDiagnosticsLogLevel();
+  log.info("[desktop] logger initialised", { logPath, diagnosticsLevel });
+}
+
+export function refreshDesktopDiagnosticsLogLevel(): DiagnosticLogLevel {
+  const effective = loadEffectiveDiagnosticsConfigSync(new Date());
+  applyDesktopDiagnosticsLogLevel(effective.general.level);
+  scheduleDiagnosticsExpiryRefresh(effective.general.expiresAt);
+  return effective.general.level;
+}
+
+export function applyDesktopDiagnosticsLogLevel(
+  level: DiagnosticLogLevel,
+): void {
+  const electronLogLevel = electronLogLevelFor(level);
+  log.transports.file.level = electronLogLevel;
+  log.transports.console.level = electronLogLevel;
+}
+
+function scheduleDiagnosticsExpiryRefresh(expiresAt: string | null): void {
+  if (diagnosticsExpiryTimer !== null) {
+    clearTimeout(diagnosticsExpiryTimer);
+    diagnosticsExpiryTimer = null;
+  }
+  if (expiresAt === null) {
+    return;
+  }
+  const delayMs = Date.parse(expiresAt) - Date.now() + EXPIRY_REFRESH_SLOP_MS;
+  diagnosticsExpiryTimer = setTimeout(
+    () => {
+      diagnosticsExpiryTimer = null;
+      refreshDesktopDiagnosticsLogLevel();
+    },
+    Math.max(delayMs, 0),
+  );
+  diagnosticsExpiryTimer.unref();
 }
 
 export function resolveDesktopLogPath(): string {
@@ -52,10 +83,7 @@ export function resolveDesktopLogPath(): string {
 }
 
 export function redactLogText(value: string): string {
-  const redacted = value
-    .replace(SENSITIVE_QUERY_PARAM_PATTERN, "$1<redacted>")
-    .replace(BEARER_PATTERN, "Bearer <redacted>")
-    .replace(SENSITIVE_INLINE_VALUE_PATTERN, "$1<redacted>");
+  const redacted = redactDiagnosticsText(value);
   return redacted.length > MAX_LOG_STRING_LENGTH
     ? `${redacted.slice(0, MAX_LOG_STRING_LENGTH)}...<truncated>`
     : redacted;
@@ -106,6 +134,24 @@ export function describeLogError(error: unknown): SafeLogFields {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function electronLogLevelFor(
+  level: DiagnosticLogLevel,
+): "debug" | "info" | "warn" | "error" | false {
+  switch (level) {
+    case "trace":
+    case "debug":
+      return "debug";
+    case "info":
+      return "info";
+    case "warn":
+      return "warn";
+    case "error":
+      return "error";
+    case "off":
+      return false;
+  }
 }
 
 function sanitizeLogRecord(

@@ -3,6 +3,10 @@ import { RunnerHostInvoke } from "../ipc-contracts/ipc-channels";
 import type {
   TraycerHostStatusSnapshot,
   TraycerDetectedShell,
+  TraycerDiagnosticsConfigClearTemporaryInput,
+  TraycerDiagnosticsConfigSetInput,
+  TraycerDiagnosticsConfigSnapshot,
+  TraycerDiagnosticsConfigTemporaryInput,
   TraycerEnvOverride,
   TraycerShellConfig,
   TraycerShellConfigSetInput,
@@ -18,6 +22,16 @@ import type {
  */
 export interface TraycerCliBridgeSurface {
   hostStatus(): Promise<TraycerHostStatusSnapshot>;
+  diagnosticsConfigGet(): Promise<TraycerDiagnosticsConfigSnapshot>;
+  diagnosticsConfigSet(
+    input: TraycerDiagnosticsConfigSetInput,
+  ): Promise<TraycerDiagnosticsConfigSnapshot>;
+  diagnosticsConfigTemporary(
+    input: TraycerDiagnosticsConfigTemporaryInput,
+  ): Promise<TraycerDiagnosticsConfigSnapshot>;
+  diagnosticsConfigClearTemporary(
+    input: TraycerDiagnosticsConfigClearTemporaryInput,
+  ): Promise<TraycerDiagnosticsConfigSnapshot>;
   shellConfigGet(): Promise<TraycerShellConfig>;
   shellConfigSet(input: TraycerShellConfigSetInput): Promise<void>;
   shellConfigReset(): Promise<void>;
@@ -41,6 +55,25 @@ export function buildTraycerCliBridge(): TraycerCliBridgeSurface {
       ipcRenderer.invoke(
         RunnerHostInvoke.traycerHostStatus,
       ) as Promise<TraycerHostStatusSnapshot>,
+    diagnosticsConfigGet: () =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.traycerConfigDiagnosticsGet,
+      ) as Promise<TraycerDiagnosticsConfigSnapshot>,
+    diagnosticsConfigSet: (input) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.traycerConfigDiagnosticsSet,
+        input,
+      ) as Promise<TraycerDiagnosticsConfigSnapshot>,
+    diagnosticsConfigTemporary: (input) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.traycerConfigDiagnosticsTemporary,
+        input,
+      ) as Promise<TraycerDiagnosticsConfigSnapshot>,
+    diagnosticsConfigClearTemporary: (input) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.traycerConfigDiagnosticsClearTemporary,
+        input,
+      ) as Promise<TraycerDiagnosticsConfigSnapshot>,
     shellConfigGet: () =>
       ipcRenderer.invoke(
         RunnerHostInvoke.traycerConfigShellGet,

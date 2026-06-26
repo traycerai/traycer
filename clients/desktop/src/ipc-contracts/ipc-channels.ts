@@ -68,6 +68,12 @@ export const RunnerHostInvoke = {
   // config CRUD and host-status reads through these instead of hitting
   // SQLite or host RPC directly - single seam, host-down-tolerant.
   traycerHostStatus: "runnerHost:traycer:host:status",
+  traycerConfigDiagnosticsGet: "runnerHost:traycer:config:diagnostics:get",
+  traycerConfigDiagnosticsSet: "runnerHost:traycer:config:diagnostics:set",
+  traycerConfigDiagnosticsTemporary:
+    "runnerHost:traycer:config:diagnostics:temporary",
+  traycerConfigDiagnosticsClearTemporary:
+    "runnerHost:traycer:config:diagnostics:clearTemporary",
   traycerConfigShellGet: "runnerHost:traycer:config:shell:get",
   traycerConfigShellSet: "runnerHost:traycer:config:shell:set",
   traycerConfigShellReset: "runnerHost:traycer:config:shell:reset",

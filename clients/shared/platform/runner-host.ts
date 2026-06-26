@@ -1,5 +1,13 @@
 import type { Disposable } from "./uri-callback";
 import type { AuthIdentityValidationResult } from "../auth/auth-validation-types";
+import type {
+  DiagnosticLogLevel,
+  DiagnosticsEffectiveConfig,
+  DiagnosticsRawConfig,
+  DiagnosticsStatus,
+  DiagnosticsTemporaryScope,
+  HostDiagnosticLogLevel,
+} from "@traycer/protocol/config/diagnostics-schema";
 
 /**
  * Composite runner-host surface consumed by `gui-app` on standalone desktop
@@ -401,8 +409,40 @@ export interface TraycerShellConfigSetInput {
   readonly args: readonly string[] | null;
 }
 
+export interface TraycerDiagnosticsConfigSnapshot {
+  readonly raw: DiagnosticsRawConfig;
+  readonly effective: DiagnosticsEffectiveConfig;
+  readonly hostStatus: DiagnosticsStatus;
+  readonly cliVersion: string;
+}
+
+export interface TraycerDiagnosticsConfigSetInput {
+  readonly level: DiagnosticLogLevel | null;
+  readonly hostLevel: HostDiagnosticLogLevel | null;
+}
+
+export interface TraycerDiagnosticsConfigTemporaryInput {
+  readonly level: DiagnosticLogLevel | null;
+  readonly hostLevel: HostDiagnosticLogLevel | null;
+  readonly duration: string;
+}
+
+export interface TraycerDiagnosticsConfigClearTemporaryInput {
+  readonly scope: DiagnosticsTemporaryScope;
+}
+
 export interface ITraycerCli {
   hostStatus(): Promise<TraycerHostStatusSnapshot>;
+  diagnosticsConfigGet(): Promise<TraycerDiagnosticsConfigSnapshot>;
+  diagnosticsConfigSet(
+    input: TraycerDiagnosticsConfigSetInput,
+  ): Promise<TraycerDiagnosticsConfigSnapshot>;
+  diagnosticsConfigTemporary(
+    input: TraycerDiagnosticsConfigTemporaryInput,
+  ): Promise<TraycerDiagnosticsConfigSnapshot>;
+  diagnosticsConfigClearTemporary(
+    input: TraycerDiagnosticsConfigClearTemporaryInput,
+  ): Promise<TraycerDiagnosticsConfigSnapshot>;
   shellConfigGet(): Promise<TraycerShellConfig>;
   shellConfigSet(input: TraycerShellConfigSetInput): Promise<void>;
   shellConfigReset(): Promise<void>;

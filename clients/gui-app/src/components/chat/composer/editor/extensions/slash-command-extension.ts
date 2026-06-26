@@ -9,10 +9,7 @@ import { slashCommandPlainTextFromAttrs } from "@/lib/composer/tiptap-json-conte
 
 import { SlashCommandNodeView } from "../nodes/slash-command-node-view";
 import { createComposerSuggestionRender } from "../../picker/suggestion-render";
-import type {
-  ComposerPickerItem,
-  ComposerPickerStore,
-} from "../../picker/composer-picker-store";
+import type { ComposerPickerStore } from "../../picker/composer-picker-store";
 import {
   dataAttributeMap,
   SLASH_COMMAND_ATTRIBUTE_NAMES,
@@ -139,7 +136,7 @@ export function createSlashSuggestionExtension(
             kind: "slash",
           }),
           command: ({ editor, range, props }) => {
-            const item = props as ComposerPickerItem;
+            const item = props;
             if (item.kind !== "slash") return;
             commitSlashInsertion(editor, range, item.command.name);
           },

@@ -335,6 +335,7 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
     host,
     authSession,
     hostLayout,
+    hostEnvironment: config.environment,
   });
 
   const tray = await createTraySafe(createMruWindowProxy(windowRegistry));

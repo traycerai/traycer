@@ -30,7 +30,10 @@ function expectCommand(program: Command, path: readonly string[]): Command {
   let cursor: Command = program;
   for (const segment of path) {
     const next = findSubcommand(cursor, segment);
-    expect(next, `expected command '${path.join(" ")}' to be registered`).not.toBeNull();
+    expect(
+      next,
+      `expected command '${path.join(" ")}' to be registered`,
+    ).not.toBeNull();
     if (next === null) {
       throw new Error(`unreachable: command '${path.join(" ")}' not found`);
     }
@@ -40,12 +43,27 @@ function expectCommand(program: Command, path: readonly string[]): Command {
 }
 
 function expectRunnerFlags(cmd: Command, label: string): void {
-  const flags = cmd.options.map((o) => o.long);
+  const flags = commandOptions(cmd).map((option) => option.long);
   for (const expected of ["--json", "--no-progress"]) {
-    expect(flags, `'${label}' is missing the shared runner flag '${expected}'`).toContain(
-      expected,
-    );
+    expect(
+      flags,
+      `'${label}' is missing the shared runner flag '${expected}'`,
+    ).toContain(expected);
   }
+}
+
+interface RuntimeCommandOption {
+  readonly long: string | null;
+}
+
+function commandOptions(cmd: Command): readonly RuntimeCommandOption[] {
+  const rawOptions = "options" in cmd ? cmd.options : null;
+  if (!Array.isArray(rawOptions)) return [];
+  return rawOptions.flatMap((option) => {
+    if (option === null || typeof option !== "object") return [];
+    const long = "long" in option ? option.long : null;
+    return [{ long: typeof long === "string" ? long : null }];
+  });
 }
 
 describe("traycer CLI entrypoint registration", () => {
@@ -97,6 +115,7 @@ describe("traycer CLI entrypoint registration", () => {
       ["cli", "upgrade"],
       ["cli", "mark-source"],
       ["cli", "re-anchor"],
+      ["diagnostics", "export"],
       // Migrated legacy-JSON commands (Native Packaging follow-up):
       // whoami + config read/list now route through the shared runner
       // and inherit `--json` / `--environment` / `--no-progress` via
@@ -114,6 +133,11 @@ describe("traycer CLI entrypoint registration", () => {
       ["config", "env", "get"],
       ["config", "env", "set"],
       ["config", "env", "delete"],
+      ["config", "diagnostics", "get"],
+      ["config", "diagnostics", "set"],
+      ["config", "diagnostics", "temporary"],
+      ["config", "diagnostics", "clear-temporary"],
+      ["config", "diagnostics", "reset"],
     ];
     for (const path of runnerCommands) {
       const cmd = expectCommand(program, path);
@@ -124,14 +148,14 @@ describe("traycer CLI entrypoint registration", () => {
   it("login exposes --token so the Desktop can seed credentials post sign-in", () => {
     const program = buildProgram();
     const cmd = expectCommand(program, ["login"]);
-    const flags = cmd.options.map((o) => o.long);
+    const flags = commandOptions(cmd).map((option) => option.long);
     expect(flags).toContain("--token");
   });
 
   it("host install exposes --release, --from, and the bootstrap-flow options", () => {
     const program = buildProgram();
     const cmd = expectCommand(program, ["host", "install"]);
-    const flags = cmd.options.map((o) => o.long);
+    const flags = commandOptions(cmd).map((option) => option.long);
     expect(flags).toContain("--release");
     expect(flags).toContain("--from");
     expect(flags).toContain("--allow-self-invocation");
@@ -142,7 +166,7 @@ describe("traycer CLI entrypoint registration", () => {
   it("host ensure exposes --release, --from, and the bootstrap-flow options", () => {
     const program = buildProgram();
     const cmd = expectCommand(program, ["host", "ensure"]);
-    const flags = cmd.options.map((o) => o.long);
+    const flags = commandOptions(cmd).map((option) => option.long);
     expect(flags).toContain("--release");
     expect(flags).toContain("--from");
     expect(flags).toContain("--allow-self-invocation");
@@ -163,14 +187,14 @@ describe("traycer CLI entrypoint registration", () => {
   it("host available exposes --include-pre-releases for RC registry inspection", () => {
     const program = buildProgram();
     const cmd = expectCommand(program, ["host", "available"]);
-    const flags = cmd.options.map((o) => o.long);
+    const flags = commandOptions(cmd).map((option) => option.long);
     expect(flags).toContain("--include-pre-releases");
   });
 
   it("cli upgrade is reachable so host doctor's CLI_UPGRADE_PENDING issue card has a fix command", () => {
     const program = buildProgram();
     const cmd = expectCommand(program, ["cli", "upgrade"]);
-    const flags = cmd.options.map((o) => o.long);
+    const flags = commandOptions(cmd).map((option) => option.long);
     expect(flags).toContain("--dry-run");
     expect(flags).toContain("--target");
   });
@@ -214,7 +238,7 @@ describe("traycer CLI entrypoint registration", () => {
   it("host free-port-and-restart exposes --pid and --port so Doctor's free-port fix can be invoked", () => {
     const program = buildProgram();
     const cmd = expectCommand(program, ["host", "free-port-and-restart"]);
-    const flags = cmd.options.map((o) => o.long);
+    const flags = commandOptions(cmd).map((option) => option.long);
     expect(flags).toContain("--pid");
     expect(flags).toContain("--port");
   });
@@ -226,7 +250,7 @@ describe("traycer CLI entrypoint registration", () => {
   it("host start declares --cwd; --environment / --bundle / --node-bin are intentionally absent", () => {
     const program = buildProgram();
     const cmd = expectCommand(program, ["host", "start"]);
-    const flags = cmd.options.map((o) => o.long);
+    const flags = commandOptions(cmd).map((option) => option.long);
     expect(flags).toContain("--cwd");
     // No --environment: the host slot is config.environment, baked per build.
     // The dev-compat overrides (--bundle/--node-bin) were also retired; pin
@@ -253,10 +277,9 @@ describe("traycer CLI entrypoint registration", () => {
     });
     let thrown: unknown = null;
     try {
-      await program.parseAsync(
-        ["host", "start", "--bundle", "/tmp/main.mjs"],
-        { from: "user" },
-      );
+      await program.parseAsync(["host", "start", "--bundle", "/tmp/main.mjs"], {
+        from: "user",
+      });
     } catch (err) {
       thrown = err;
     }
@@ -273,10 +296,9 @@ describe("traycer CLI entrypoint registration", () => {
     });
     let thrown: unknown = null;
     try {
-      await program.parseAsync(
-        ["host", "start", "--environment", "dev"],
-        { from: "user" },
-      );
+      await program.parseAsync(["host", "start", "--environment", "dev"], {
+        from: "user",
+      });
     } catch (err) {
       thrown = err;
     }

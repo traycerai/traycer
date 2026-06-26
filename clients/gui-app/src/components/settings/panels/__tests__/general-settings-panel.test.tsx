@@ -188,6 +188,7 @@ vi.mock("@/providers/windows-bridge-context", () => ({
 
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => runnerHostMock.current,
+  useOptionalRunnerHost: () => runnerHostMock.current,
 }));
 
 vi.mock("@tanstack/react-router", async (importOriginal) => {

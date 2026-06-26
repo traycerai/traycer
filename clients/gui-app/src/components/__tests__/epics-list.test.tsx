@@ -45,6 +45,7 @@ import {
   CURRENT_PHASE_VERSION,
 } from "@traycer-clients/shared/epic/epic-version";
 import { toast } from "sonner";
+import { UNSUPPORTED_DIAGNOSTICS_STATUS } from "@/__tests__/diagnostics-status-fixtures";
 
 vi.mock("sonner", () => ({
   toast: {
@@ -100,7 +101,8 @@ function buildMessengerFactory(
           Promise.resolve({
             ready: true,
             hostVersion: "1.2.3",
-            protocolVersion: { major: 1, minor: 0 },
+            protocolVersion: { major: 1, minor: 1 },
+            diagnostics: UNSUPPORTED_DIAGNOSTICS_STATUS,
           }),
       },
     });

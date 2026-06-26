@@ -9,6 +9,12 @@ export const runnerMutationKeys = {
   serviceEnableLinger: () => ["runner.serviceEnableLinger"] as const,
   traycerShellConfigSet: () => ["runner.traycer.shellConfigSet"] as const,
   traycerShellConfigReset: () => ["runner.traycer.shellConfigReset"] as const,
+  traycerDiagnosticsConfigSet: () =>
+    ["runner.traycer.diagnosticsConfigSet"] as const,
+  traycerDiagnosticsConfigTemporary: () =>
+    ["runner.traycer.diagnosticsConfigTemporary"] as const,
+  traycerDiagnosticsConfigClearTemporary: () =>
+    ["runner.traycer.diagnosticsConfigClearTemporary"] as const,
   traycerEnvOverrideSet: () => ["runner.traycer.envOverrideSet"] as const,
   traycerEnvOverrideDelete: () => ["runner.traycer.envOverrideDelete"] as const,
   traycerCliLogin: () => ["runner.traycer.cliLogin"] as const,
@@ -53,6 +59,8 @@ export const runnerQueryKeys = {
     ["runner.traycer.hostStatus", traycerCli] as const,
   traycerShellConfig: (traycerCli: object) =>
     ["runner.traycer.shellConfig", traycerCli] as const,
+  traycerDiagnosticsConfig: (traycerCli: object) =>
+    ["runner.traycer.diagnosticsConfig", traycerCli] as const,
   traycerShellList: (traycerCli: object) =>
     ["runner.traycer.shellList", traycerCli] as const,
   traycerEnvOverrideList: (traycerCli: object) =>
