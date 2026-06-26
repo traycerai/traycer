@@ -26,6 +26,20 @@ const HOST_DEFAULT_LEVEL: HostDiagnosticLogLevel = "inherit";
 const DIAGNOSTICS_LOCK_RETRY_MS = 25;
 const DIAGNOSTICS_LOCK_TIMEOUT_MS = 5_000;
 const DIAGNOSTICS_LOCK_STALE_MS = 30_000;
+const DIAGNOSTICS_LOCK_OWNER_FILENAME = "owner";
+
+type DiagnosticsConfigLock = {
+  readonly lockPath: string;
+  readonly ownerPath: string;
+  readonly ownerToken: string;
+};
+
+class DiagnosticsConfigLockLostError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "DiagnosticsConfigLockLostError";
+  }
+}
 
 export async function readDiagnosticsRaw(): Promise<DiagnosticsRawConfig> {
   const path = cliDiagnosticsConfigPath();
@@ -163,50 +177,63 @@ export function resolveDiagnosticsEffective(
 export async function patchDiagnosticsConfig(
   patch: DiagnosticsPatch,
 ): Promise<DiagnosticsWriteResult> {
-  return await withDiagnosticsConfigLock(async () => {
-    const current = await readDiagnosticsRaw();
-    const next: Record<string, unknown> = {
-      ...(current.readStatus === "ok" ? current.raw : {}),
-      version: preserveConfigVersion(current),
-    };
+  const startedAtMs = Date.now();
+  while (true) {
+    try {
+      return await withDiagnosticsConfigLock(async (lock) => {
+        const current = await readDiagnosticsRaw();
+        const next: Record<string, unknown> = {
+          ...(current.readStatus === "ok" ? current.raw : {}),
+          version: preserveConfigVersion(current),
+        };
 
-    if (patch.resetGeneral) {
-      delete next.logLevel;
-      delete next.temporaryLogLevel;
-    }
-    if (patch.resetHost) {
-      delete next.hostLogLevel;
-      delete next.temporaryHostLogLevel;
-    }
-    if (patch.logLevel !== undefined) {
-      next.logLevel = patch.logLevel;
-    }
-    if (patch.hostLogLevel !== undefined) {
-      next.hostLogLevel = patch.hostLogLevel;
-    }
-    if (patch.temporaryLogLevel !== undefined) {
-      if (patch.temporaryLogLevel === null) {
-        delete next.temporaryLogLevel;
-      } else {
-        next.temporaryLogLevel = serializeTemporary(
-          patch.temporaryLogLevel,
-          next.temporaryLogLevel,
-        );
-      }
-    }
-    if (patch.temporaryHostLogLevel !== undefined) {
-      if (patch.temporaryHostLogLevel === null) {
-        delete next.temporaryHostLogLevel;
-      } else {
-        next.temporaryHostLogLevel = serializeTemporary(
-          patch.temporaryHostLogLevel,
-          next.temporaryHostLogLevel,
-        );
-      }
-    }
+        if (patch.resetGeneral) {
+          delete next.logLevel;
+          delete next.temporaryLogLevel;
+        }
+        if (patch.resetHost) {
+          delete next.hostLogLevel;
+          delete next.temporaryHostLogLevel;
+        }
+        if (patch.logLevel !== undefined) {
+          next.logLevel = patch.logLevel;
+        }
+        if (patch.hostLogLevel !== undefined) {
+          next.hostLogLevel = patch.hostLogLevel;
+        }
+        if (patch.temporaryLogLevel !== undefined) {
+          if (patch.temporaryLogLevel === null) {
+            delete next.temporaryLogLevel;
+          } else {
+            next.temporaryLogLevel = serializeTemporary(
+              patch.temporaryLogLevel,
+              next.temporaryLogLevel,
+            );
+          }
+        }
+        if (patch.temporaryHostLogLevel !== undefined) {
+          if (patch.temporaryHostLogLevel === null) {
+            delete next.temporaryHostLogLevel;
+          } else {
+            next.temporaryHostLogLevel = serializeTemporary(
+              patch.temporaryHostLogLevel,
+              next.temporaryHostLogLevel,
+            );
+          }
+        }
 
-    return await writeDiagnosticsRaw(next);
-  });
+        return await writeDiagnosticsRaw(next, lock);
+      });
+    } catch (err) {
+      if (
+        !(err instanceof DiagnosticsConfigLockLostError) ||
+        Date.now() - startedAtMs > DIAGNOSTICS_LOCK_TIMEOUT_MS
+      ) {
+        throw err;
+      }
+      await sleep(DIAGNOSTICS_LOCK_RETRY_MS);
+    }
+  }
 }
 
 export async function setDiagnosticsLogLevel(
@@ -290,15 +317,18 @@ function preserveConfigVersion(current: DiagnosticsRawConfig): number {
 
 async function writeDiagnosticsRaw(
   next: Record<string, unknown>,
+  lock: DiagnosticsConfigLock,
 ): Promise<DiagnosticsWriteResult> {
   const path = cliDiagnosticsConfigPath();
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   const tmp = `${path}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
   try {
+    await assertDiagnosticsConfigLockOwner(lock);
     await writeFile(tmp, JSON.stringify(next, null, 2) + "\n", {
       encoding: "utf8",
       mode: 0o600,
     });
+    await assertDiagnosticsConfigLockOwner(lock);
     await rename(tmp, path);
   } catch (err) {
     await rm(tmp, { force: true });
@@ -312,27 +342,43 @@ async function writeDiagnosticsRaw(
 }
 
 async function withDiagnosticsConfigLock<T>(
-  operation: () => Promise<T>,
+  operation: (lock: DiagnosticsConfigLock) => Promise<T>,
 ): Promise<T> {
   const path = cliDiagnosticsConfigPath();
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   const lockPath = `${path}.lock`;
-  await acquireDiagnosticsConfigLock(lockPath, Date.now());
+  const lock = await acquireDiagnosticsConfigLock(lockPath, Date.now());
   try {
-    return await operation();
+    await assertDiagnosticsConfigLockOwner(lock);
+    return await operation(lock);
   } finally {
-    await rm(lockPath, { force: true, recursive: true });
+    await releaseDiagnosticsConfigLock(lock);
   }
 }
 
 async function acquireDiagnosticsConfigLock(
   lockPath: string,
   startedAtMs: number,
-): Promise<void> {
+): Promise<DiagnosticsConfigLock> {
   while (true) {
+    const lock: DiagnosticsConfigLock = {
+      lockPath,
+      ownerPath: diagnosticsConfigLockOwnerPath(lockPath),
+      ownerToken: `${process.pid}:${randomBytes(16).toString("hex")}`,
+    };
     try {
       await mkdir(lockPath, { mode: 0o700 });
-      return;
+      try {
+        await writeFile(lock.ownerPath, lock.ownerToken, {
+          encoding: "utf8",
+          mode: 0o600,
+          flag: "wx",
+        });
+      } catch (err) {
+        await rm(lockPath, { force: true, recursive: true });
+        throw err;
+      }
+      return lock;
     } catch (err) {
       if (!isNodeErrorCode(err, "EEXIST")) throw err;
       await removeStaleDiagnosticsConfigLock(lockPath, Date.now());
@@ -344,12 +390,59 @@ async function acquireDiagnosticsConfigLock(
   }
 }
 
+function diagnosticsConfigLockOwnerPath(lockPath: string): string {
+  return `${lockPath}/${DIAGNOSTICS_LOCK_OWNER_FILENAME}`;
+}
+
+async function assertDiagnosticsConfigLockOwner(
+  lock: DiagnosticsConfigLock,
+): Promise<void> {
+  let ownerToken: string;
+  try {
+    ownerToken = await readFile(lock.ownerPath, "utf8");
+  } catch (err) {
+    if (isNodeErrorCode(err, "ENOENT")) {
+      throw new DiagnosticsConfigLockLostError(
+        "Diagnostics config lock was lost before write",
+      );
+    }
+    throw err;
+  }
+  if (ownerToken !== lock.ownerToken) {
+    throw new DiagnosticsConfigLockLostError(
+      "Diagnostics config lock ownership changed before write",
+    );
+  }
+  await writeFile(lock.ownerPath, lock.ownerToken, {
+    encoding: "utf8",
+    mode: 0o600,
+  });
+}
+
+async function releaseDiagnosticsConfigLock(
+  lock: DiagnosticsConfigLock,
+): Promise<void> {
+  let ownerToken: string;
+  try {
+    ownerToken = await readFile(lock.ownerPath, "utf8");
+  } catch (err) {
+    if (isNodeErrorCode(err, "ENOENT")) return;
+    throw err;
+  }
+  if (ownerToken !== lock.ownerToken) return;
+  await rm(lock.lockPath, { force: true, recursive: true });
+}
+
 async function removeStaleDiagnosticsConfigLock(
   lockPath: string,
   nowMs: number,
 ): Promise<void> {
   try {
-    const lockStat = await stat(lockPath);
+    const ownerPath = diagnosticsConfigLockOwnerPath(lockPath);
+    const lockStat = await stat(ownerPath).catch(async (err: unknown) => {
+      if (!isNodeErrorCode(err, "ENOENT")) throw err;
+      return await stat(lockPath);
+    });
     if (nowMs - lockStat.mtimeMs > DIAGNOSTICS_LOCK_STALE_MS) {
       await rm(lockPath, { force: true, recursive: true });
     }

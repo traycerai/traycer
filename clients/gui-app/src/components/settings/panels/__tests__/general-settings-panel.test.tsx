@@ -151,6 +151,12 @@ vi.mock("@/components/migration/migration-run-handle", () => ({
 }));
 
 vi.mock("@/lib/host", () => ({
+  useHostBinding: () => ({
+    hostClient: {
+      getActiveHostId: hostQueryMocks.getActiveHostId,
+      onChange: () => () => undefined,
+    },
+  }),
   useHostClient: () => ({
     getActiveHostId: hostQueryMocks.getActiveHostId,
   }),

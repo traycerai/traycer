@@ -8,6 +8,9 @@ export function DiagnosticsLogLevelBridge() {
 
   useEffect(() => {
     setAppLogLevel(level ?? "info");
+    return () => {
+      setAppLogLevel("info");
+    };
   }, [level]);
 
   return null;

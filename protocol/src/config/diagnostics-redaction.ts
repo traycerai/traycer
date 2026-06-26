@@ -30,9 +30,7 @@ export function redactDiagnosticsLogTail(
   truncated: boolean,
 ): string {
   const wholeLines = truncated ? dropPartialFirstLine(rawTail) : rawTail;
-  return redactDiagnosticsText(
-    truncated ? redactTruncatedPrivateKeyFragments(wholeLines) : wholeLines,
-  );
+  return redactDiagnosticsText(redactTruncatedPrivateKeyFragments(wholeLines));
 }
 
 function dropPartialFirstLine(value: string): string {

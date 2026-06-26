@@ -81,6 +81,18 @@ describe("redactDiagnosticsLogTail", () => {
     expect(redactDiagnosticsLogTail(whole, false)).toBe(whole);
   });
 
+  it("redacts a whole-file tail that ends inside a private key body", () => {
+    const privateKeyLabel = ["PRIVATE", "KEY"].join(" ");
+    const privateKeyBegin = ["-----BEGIN", `${privateKeyLabel}-----`].join(" ");
+    const tail = [privateKeyBegin, "still-secret-private-key-body"].join("\n");
+
+    const redacted = redactDiagnosticsLogTail(tail, false);
+
+    expect(redacted).toContain("<redacted-private-key>");
+    expect(redacted).not.toContain("still-secret-private-key-body");
+    expect(redacted).not.toContain(privateKeyBegin);
+  });
+
   it("yields no orphaned content when a truncated tail has no newline", () => {
     expect(redactDiagnosticsLogTail("Basic dXNlcjpwYXNz", true)).toBe("");
   });

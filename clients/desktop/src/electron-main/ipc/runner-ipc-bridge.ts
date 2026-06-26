@@ -53,6 +53,7 @@ import { registerHostManagementIpc } from "./host-management-ipc";
 import { registerHostEnsureIpc } from "./host-ensure-ipc";
 import { registerMigrationIpc } from "./migration-ipc";
 import { registerSupportIpc } from "./support-ipc";
+import { registerDiagnosticsConfigIpc } from "./diagnostics-config-ipc";
 import { registerTraycerCliIpc } from "./traycer-cli-ipc";
 import { registerPlatformIpc } from "./platform-ipc";
 import { registerPowerIpc } from "./power-ipc";
@@ -319,6 +320,7 @@ export class RunnerIpcBridge {
     registerHostManagementIpc(this);
     registerHostEnsureIpc(this);
     registerMigrationIpc(this);
+    registerDiagnosticsConfigIpc(this);
     registerTraycerCliIpc(this);
     // Platform IPC (recent docs, window effects, diagnostics, etc.) is wired
     // in here so `dispose()` also tears it down via the shared
