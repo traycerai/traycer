@@ -26,6 +26,7 @@
 import { authRecordRegistry } from "@traycer/protocol/auth/registry";
 import { getRecordSchema } from "@traycer/protocol/framework/index";
 import type {
+  AuthTokenRefreshResult,
   AuthTokenValidationResult,
   AuthValidationProfile,
 } from "../platform/runner-host";
@@ -35,21 +36,13 @@ export type {
   AuthIdentityValidationResult,
   AuthIdentityValidResult,
 } from "./auth-validation-types";
+export type { AuthTokenRefreshResult } from "../platform/runner-host";
 
 const authenticatedUserResponseSchema = getRecordSchema(
   authRecordRegistry,
   "authenticated-user-response",
   "latest",
 );
-
-export type AuthTokenRefreshResult =
-  | {
-      readonly kind: "refreshed";
-      readonly token: string;
-      readonly refreshToken: string;
-    }
-  | { readonly kind: "rejected" }
-  | { readonly kind: "network-error" };
 
 /**
  * Shared bearer-token validation helper used by runner-host implementations.

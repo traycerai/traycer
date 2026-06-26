@@ -8,11 +8,17 @@ import {
   type AgentInboxMessage,
   type AgentInboxNotice,
 } from "@traycer/protocol/host/agent/inbox";
+import { CredentialLeaseReleasedError } from "@traycer/protocol/auth/request-context";
 import { MutableBearerLease } from "../../../shared/auth/bearer-source";
 import {
   createBearerRevalidator,
   type RevalidateOutcome,
 } from "../../../shared/auth/bearer-revalidator";
+import {
+  createProactiveRefreshScheduler,
+  DEFAULT_REFRESH_LEAD_MS,
+  DEFAULT_REFRESH_MIN_DELAY_MS,
+} from "../../../shared/auth/token-refresh-scheduler";
 import { createWhatwgStreamWebSocketFactory } from "../../../shared/host-transport/whatwg-stream-ws-factory";
 import type {
   IStreamSession,
@@ -192,6 +198,34 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
     maxBackoffMs: MAX_BACKOFF_MS,
   });
 
+  // Proactively refresh the bearer shortly before its ~4h TTL so a long-running
+  // monitor never carries a dead token into a reconnect (or hands the host a
+  // stale credential it would 401 on). The reactive refresh-on-`UNAUTHORIZED`
+  // loop in `runInboxSubscription` stays as the safety net; this just rotates
+  // ahead of expiry. The scheduler shares the same single-flight `revalidator`,
+  // so a proactive and reactive refresh can't race into a double rotation.
+  const refreshScheduler = createProactiveRefreshScheduler<NodeJS.Timeout>({
+    getToken: () => readLeaseBearer(lease),
+    revalidate: async () => {
+      const outcome = await revalidator.revalidateCurrentContext();
+      if (outcome === "rotated") {
+        // Push the fresh bearer onto the open inbox stream so the host updates
+        // its captured credential in place - no reconnect. The reactive
+        // UNAUTHORIZED path already re-dials with the fresh token, so it needs
+        // no push.
+        client.notifyBearerRotated();
+      }
+      return outcome;
+    },
+    now: () => Date.now(),
+    setTimer: (handler, ms) => setTimeout(handler, ms),
+    clearTimer: (handle) => clearTimeout(handle),
+    leadMs: DEFAULT_REFRESH_LEAD_MS,
+    minDelayMs: DEFAULT_REFRESH_MIN_DELAY_MS,
+    onDiagnostic: (message) => diag(message),
+  });
+  refreshScheduler.start();
+
   diag(`inbox monitor starting — agent=${agentId} epic=${epicId}`);
   logger.info("Monitor subscription loop starting", {
     environment: config.environment,
@@ -201,12 +235,32 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
   try {
     await runInboxSubscription(client, revalidator, { agentId, epicId }, logger);
   } finally {
+    refreshScheduler.stop();
     clearInterval(poll);
     logger.info("Monitor subscription loop stopped", {
       environment: config.environment,
       agentId,
       epicId,
     });
+  }
+}
+
+/**
+ * Reads the lease's current bearer, mapping the "no bearer" throw
+ * (`CredentialLeaseReleasedError`, raised on an empty token) to `null` so the
+ * refresh scheduler treats it as "signed out, nothing to schedule".
+ */
+function readLeaseBearer(lease: MutableBearerLease): string | null {
+  try {
+    return lease.getBearerToken();
+  } catch (cause) {
+    // Only the "no bearer / signed out" signal maps to null. Any other lease
+    // failure is a real bug; rethrow it rather than silently disabling the
+    // refresh scheduler and masking it as a benign signed-out state.
+    if (cause instanceof CredentialLeaseReleasedError) {
+      return null;
+    }
+    throw cause;
   }
 }
 

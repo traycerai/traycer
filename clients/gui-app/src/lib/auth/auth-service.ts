@@ -15,6 +15,12 @@ import {
 } from "@traycer-clients/shared/auth/request-context-provider";
 import { rotateAndPersistBearer } from "@traycer-clients/shared/auth/bearer-revalidator";
 import {
+  createProactiveRefreshScheduler,
+  DEFAULT_REFRESH_LEAD_MS,
+  DEFAULT_REFRESH_MIN_DELAY_MS,
+  type ProactiveRefreshScheduler,
+} from "@traycer-clients/shared/auth/token-refresh-scheduler";
+import {
   CODE_CHALLENGE_METHOD,
   deriveCodeChallenge,
   generateCodeVerifier,
@@ -199,6 +205,13 @@ export class AuthService {
   private callbackDisposable: Disposable | null = null;
   private pendingTimeoutHandle: number | null = null;
   private currentRevalidation: Promise<ValidationOutcome | null> | null = null;
+  // Single-flight guard for the proactive force-refresh path so the refresh
+  // scheduler can't stack overlapping `/api/v3/auth/refresh` rotations.
+  private currentForceRefresh: Promise<void> | null = null;
+  // Proactively rotates the bearer shortly before its ~4h TTL so a long-open
+  // session never carries a dead token into a live host call. Constructed in the
+  // constructor; armed on every bearer (re)assignment, stopped on sign-out.
+  private readonly refreshScheduler: ProactiveRefreshScheduler;
   private disposed = false;
   // PKCE verifier generated at `signIn()` start, held in memory AND mirrored to
   // secure storage (`PKCE_VERIFIER_STORAGE_KEY`) until the matching callback
@@ -245,6 +258,16 @@ export class AuthService {
     this.tokenStore = new AuthTokenStore(options.runnerHost.tokenStore);
     this.contextProvider = new DefaultRequestContextProvider({
       origin: "renderer",
+    });
+    this.refreshScheduler = createProactiveRefreshScheduler<number>({
+      getToken: () => this.currentBearer,
+      revalidate: () => this.forceRefresh(),
+      now: () => Date.now(),
+      setTimer: (handler, ms) => AuthService.scheduleTimeout(handler, ms),
+      clearTimer: (handle) => AuthService.cancelTimeout(handle),
+      leadMs: DEFAULT_REFRESH_LEAD_MS,
+      minDelayMs: DEFAULT_REFRESH_MIN_DELAY_MS,
+      onDiagnostic: null,
     });
     const initialAuth = useAuthStore.getState();
     this.lastEmittedStatus = initialAuth.status;
@@ -464,6 +487,11 @@ export class AuthService {
     if (this.disposed) {
       return;
     }
+    // Stop the proactive refresh timer up front: `clearStoredAuth()` below is
+    // awaited (storage clear + CLI deprovision), and a timer firing during that
+    // window would race a `forceRefresh` against the credential removal.
+    // `applySignedOut()` stops it again, idempotently.
+    this.refreshScheduler.stop();
     this.clearPendingTimeout();
     this.clearPendingCodeVerifier();
     await this.clearStoredAuth();
@@ -571,6 +599,7 @@ export class AuthService {
           session.user.userSubscription.subscriptionStatus,
         );
       this.emitSessionSnapshot();
+      this.refreshScheduler.start();
       return;
     }
     this.applySignedIn(session.token, session.user, session.profile);
@@ -601,13 +630,34 @@ export class AuthService {
     if (this.currentRevalidation !== null) {
       return this.currentRevalidation;
     }
-    const revalidation = this.revalidateCurrentContextOnce().finally(() => {
-      if (this.currentRevalidation === revalidation) {
-        this.currentRevalidation = null;
-      }
-    });
+    const revalidation = this.revalidateAfterPendingForceRefresh().finally(
+      () => {
+        if (this.currentRevalidation === revalidation) {
+          this.currentRevalidation = null;
+        }
+      },
+    );
     this.currentRevalidation = revalidation;
     return revalidation;
+  }
+
+  /**
+   * Serializes against an in-flight proactive force-refresh before revalidating.
+   * Both paths spend the same single-use refresh token, so overlapping would
+   * double-spend it and sign the user out on the loser path. `forceRefreshOnce`
+   * awaits us in reverse, making the lock mutual. Deadlock-free: each path checks
+   * the other's flag once, synchronously, so only the later starter ever waits.
+   * Runs inside the `currentRevalidation` single-flight, so concurrent callers
+   * coalesce onto this one promise.
+   */
+  private async revalidateAfterPendingForceRefresh(): Promise<ValidationOutcome | null> {
+    if (this.currentForceRefresh !== null) {
+      await this.currentForceRefresh;
+      if (this.isDisposed()) {
+        return null;
+      }
+    }
+    return this.revalidateCurrentContextOnce();
   }
 
   /**
@@ -720,6 +770,7 @@ export class AuthService {
           );
         this.currentProfile = profile;
         this.emitSessionSnapshot();
+        this.refreshScheduler.start();
       }
       return outcome;
     }
@@ -736,6 +787,188 @@ export class AuthService {
       );
     }
     return outcome;
+  }
+
+  /**
+   * Proactively rotates the access token ahead of its TTL. Driven by the
+   * refresh scheduler shortly before `exp`.
+   *
+   * Unlike `revalidateCurrentContext` - which validates against `/api/v3/user`
+   * and only refreshes on a 401 - this ALWAYS force-refreshes against
+   * `/api/v3/auth/refresh`, so a still-valid-but-soon-to-expire bearer is
+   * renewed before the host's connection-captured copy can go stale (the
+   * overnight-session 401). Identity is unchanged on success, so it rotates the
+   * live lease in place (observably silent on the provider) and persists,
+   * without re-fetching the full user. Single-flight, and serialized against the
+   * reactive `revalidateCurrentContext` path so the two can't double-spend the
+   * single-use refresh token; a no-op when signed out or when no refresh
+   * credential is available.
+   */
+  private forceRefresh(): Promise<void> {
+    if (this.currentForceRefresh !== null) {
+      return this.currentForceRefresh;
+    }
+    const op = this.forceRefreshOnce().finally(() => {
+      if (this.currentForceRefresh === op) {
+        this.currentForceRefresh = null;
+      }
+    });
+    this.currentForceRefresh = op;
+    return op;
+  }
+
+  private async forceRefreshOnce(): Promise<void> {
+    if (this.isDisposed()) {
+      return;
+    }
+    // Defer to an in-flight reactive revalidation. Both paths draw on the same
+    // single-use refresh token, so running concurrently would double-spend it
+    // and leave whichever loses holding a dead credential (and, for this path,
+    // wrongly signing the user out). Awaiting here serializes the proactive and
+    // reactive refreshes within this window - the "shared lock" the two paths
+    // were missing. Cross-window siblings (separate `AuthService` instances)
+    // can't be awaited; the store re-reads below cover that race instead.
+    if (this.currentRevalidation !== null) {
+      await this.currentRevalidation;
+      if (this.isDisposed()) {
+        return;
+      }
+    }
+    const ctx = this.contextProvider.current();
+    if (ctx === null || this.currentBearer === null) {
+      return;
+    }
+    const userId = ctx.identity.userId;
+    const currentToken = this.currentBearer;
+    const stored = await this.tokenStore.load();
+    if (this.isDisposed()) {
+      return;
+    }
+    const refreshToken = stored?.refreshToken ?? "";
+    if (refreshToken.length === 0) {
+      // No refresh credential to rotate against - leave the bearer for the
+      // reactive 401 path to handle at actual expiry.
+      return;
+    }
+    // The persisted bearer already moved on from ours: a sibling window or the
+    // reactive 401 path rotated it. Do NOT adopt it here - the GUI's shell token
+    // slot is shared across windows and can hold a DIFFERENT user's bearer (a
+    // window that signed in before its session snapshot projected to us), so
+    // blind-rotating this context's lease to it under the current `userId` would
+    // bind a foreign identity. Leave reconciliation to the validated cross-window
+    // projection path (`ingestProjectedSessionSnapshot`), which confirms the
+    // token maps to the same user before applying it.
+    if (stored !== null && stored.token !== currentToken) {
+      return;
+    }
+    const result = await this.runnerHost.refreshAuthToken(
+      currentToken,
+      refreshToken,
+    );
+    if (this.isDisposed()) {
+      return;
+    }
+    if (result.kind === "network-error") {
+      // Transient; the scheduler retries on its floor delay.
+      return;
+    }
+    if (result.kind === "rejected") {
+      await this.signOutIfRefreshCredentialDead(currentToken);
+      return;
+    }
+    await this.applyProactiveRefresh(
+      userId,
+      currentToken,
+      result.token,
+      result.refreshToken,
+    );
+  }
+
+  /**
+   * Reject handler for the proactive refresh. Our single-use refresh token was
+   * rejected; sign out ONLY if this is a genuine expiry. If the persisted bearer
+   * has moved on from `refreshedAgainst`, a sibling (the reactive 401 path or
+   * another window) already rotated successfully and merely spent the refresh
+   * token first - the session is alive, so leave it intact and let the validated
+   * projection path adopt the winner's bearer. Only a store still holding our
+   * now-dead token is a real expiry that must sign out.
+   */
+  private async signOutIfRefreshCredentialDead(
+    refreshedAgainst: string,
+  ): Promise<void> {
+    const afterReject = await this.tokenStore.load();
+    if (this.isDisposed()) {
+      return;
+    }
+    if (
+      afterReject !== null &&
+      afterReject.token.length > 0 &&
+      afterReject.token !== refreshedAgainst
+    ) {
+      return;
+    }
+    await this.clearStoredAuth();
+    this.setLastError(AUTH_ERROR_SESSION_EXPIRED);
+    this.applySignedOut();
+  }
+
+  /**
+   * Success handler for the proactive refresh: persist + rotate to the freshly
+   * minted bearer, unless a concurrent winner intervened. A sign-out / cross-user
+   * transition during the round trip, or a sibling that rotated the shared store
+   * mid-refresh (a token differing from both `refreshedAgainst` and the one we
+   * just minted), both abort our write - we neither clobber the winner nor
+   * blind-adopt it (the shared shell slot can hold a different user); the
+   * validated projection path reconciles instead.
+   */
+  private async applyProactiveRefresh(
+    userId: string,
+    refreshedAgainst: string,
+    newToken: string,
+    newRefreshToken: string,
+  ): Promise<void> {
+    const live = this.contextProvider.current();
+    if (live === null || live.identity.userId !== userId) {
+      return;
+    }
+    const latest = await this.tokenStore.load();
+    if (this.isDisposed()) {
+      return;
+    }
+    if (
+      latest !== null &&
+      latest.token.length > 0 &&
+      latest.token !== refreshedAgainst &&
+      latest.token !== newToken
+    ) {
+      return;
+    }
+    await rotateAndPersistBearer({
+      newTokens: { token: newToken, refreshToken: newRefreshToken },
+      persist: (tokens) => this.tokenStore.save(tokens),
+      rotate: (token) => {
+        if (this.isDisposed()) {
+          return;
+        }
+        this.contextProvider.rotateCurrentBearer({
+          userId,
+          bearerToken: token,
+        });
+      },
+    });
+    if (this.isDisposed()) {
+      return;
+    }
+    this.currentBearer = newToken;
+    this.emitSessionSnapshot();
+    this.refreshScheduler.start();
+    // Propagate the rotated pair to the machine-local CLI/host credentials. On
+    // the proactive path the renderer is the SOLE refresher (the host hasn't
+    // 401'd, so its own revalidator hasn't run), so without this the local
+    // credential file keeps the now-spent token pair and later host/CLI flows
+    // fail to refresh. Best-effort, mirroring sign-in provisioning; a no-op on
+    // shells without a local CLI.
+    await this.ensureLocalProvisioning(newToken, newRefreshToken);
   }
 
   /**
@@ -1021,6 +1254,7 @@ export class AuthService {
       return;
     }
     this.disposed = true;
+    this.refreshScheduler.stop();
     this.clearPendingTimeout();
     if (this.callbackDisposable !== null) {
       this.callbackDisposable.dispose();
@@ -1210,6 +1444,7 @@ export class AuthService {
       .getState()
       .setSubscriptionStatus(user.userSubscription.subscriptionStatus);
     this.emitSessionSnapshot();
+    this.refreshScheduler.start();
   }
 
   /**
@@ -1221,6 +1456,7 @@ export class AuthService {
     if (this.disposed) {
       return;
     }
+    this.refreshScheduler.stop();
     this.contextProvider.signOut();
     this.currentBearer = null;
     this.currentProfile = null;

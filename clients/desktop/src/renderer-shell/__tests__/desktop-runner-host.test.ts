@@ -82,6 +82,7 @@ function buildFakeBridge(
       },
     }),
     validateAuthTokenIdentity: async () => ({ kind: "rejected" as const }),
+    refreshAuthToken: async () => ({ kind: "network-error" as const }),
     exchangeAuthCode: async () => null,
     openExternalLink: async () => undefined,
     getRegisteredUrlSchemes: async () => [],
