@@ -83,6 +83,7 @@ vi.mock("@/hooks/host/use-host-query", () => ({
     // regression where the dialog stops sending the field fail loudly instead of
     // silently degrading to an empty request.
     readonly params: {
+      readonly workspacePaths: ReadonlyArray<string>;
       readonly scriptRefs: ReadonlyArray<{
         readonly workspacePath: string;
         readonly ref: string;
@@ -94,6 +95,16 @@ vi.mock("@/hooks/host/use-host-query", () => ({
     // Adapt the single-ref `readScriptsAtRef` fixture into that response shape so
     // the existing per-test fixtures keep working unchanged.
     if (opts.method === "worktree.listByWorkspacePaths") {
+      // The preview is a pure point-read: it must list NO workspaces (empty
+      // `workspacePaths`) and carry the scripts read on `scriptRefs`. Fail loudly
+      // if the dialog ever regresses to a workspace-summary list.
+      if (opts.params.workspacePaths.length > 0) {
+        throw new Error(
+          `worktree.listByWorkspacePaths preview must send workspacePaths: [], got ${JSON.stringify(
+            opts.params.workspacePaths,
+          )}`,
+        );
+      }
       // `.at(0)` (not `[0]`) so an empty `scriptRefs` yields `undefined` while a
       // missing `scriptRefs` field still throws - the required-field assertion.
       const entry = opts.params.scriptRefs.at(0);

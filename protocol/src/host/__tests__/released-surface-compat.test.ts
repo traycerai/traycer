@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { toJsonSchemas } from "@traycer/protocol/framework/index";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import { releasedMethodNames } from "./__fixtures__/released-method-names";
 
@@ -30,7 +29,7 @@ import { releasedMethodNames } from "./__fixtures__/released-method-names";
  */
 describe("released method-name set (host-v1.0.0) is frozen", () => {
   it("advertises exactly the baselined method names", () => {
-    const current = Object.keys(toJsonSchemas(hostRpcRegistry)).sort();
+    const current = Object.keys(hostRpcRegistry).sort();
     expect(current).toEqual([...releasedMethodNames].sort());
   });
 });
