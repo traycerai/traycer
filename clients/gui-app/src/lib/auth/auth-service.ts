@@ -625,13 +625,34 @@ export class AuthService {
     if (this.currentRevalidation !== null) {
       return this.currentRevalidation;
     }
-    const revalidation = this.revalidateCurrentContextOnce().finally(() => {
-      if (this.currentRevalidation === revalidation) {
-        this.currentRevalidation = null;
-      }
-    });
+    const revalidation = this.revalidateAfterPendingForceRefresh().finally(
+      () => {
+        if (this.currentRevalidation === revalidation) {
+          this.currentRevalidation = null;
+        }
+      },
+    );
     this.currentRevalidation = revalidation;
     return revalidation;
+  }
+
+  /**
+   * Serializes against an in-flight proactive force-refresh before revalidating.
+   * Both paths spend the same single-use refresh token, so overlapping would
+   * double-spend it and sign the user out on the loser path. `forceRefreshOnce`
+   * awaits us in reverse, making the lock mutual. Deadlock-free: each path checks
+   * the other's flag once, synchronously, so only the later starter ever waits.
+   * Runs inside the `currentRevalidation` single-flight, so concurrent callers
+   * coalesce onto this one promise.
+   */
+  private async revalidateAfterPendingForceRefresh(): Promise<ValidationOutcome | null> {
+    if (this.currentForceRefresh !== null) {
+      await this.currentForceRefresh;
+      if (this.isDisposed()) {
+        return null;
+      }
+    }
+    return this.revalidateCurrentContextOnce();
   }
 
   /**
@@ -936,6 +957,13 @@ export class AuthService {
     this.currentBearer = newToken;
     this.emitSessionSnapshot();
     this.refreshScheduler.start();
+    // Propagate the rotated pair to the machine-local CLI/host credentials. On
+    // the proactive path the renderer is the SOLE refresher (the host hasn't
+    // 401'd, so its own revalidator hasn't run), so without this the local
+    // credential file keeps the now-spent token pair and later host/CLI flows
+    // fail to refresh. Best-effort, mirroring sign-in provisioning; a no-op on
+    // shells without a local CLI.
+    await this.ensureLocalProvisioning(newToken, newRefreshToken);
   }
 
   /**
