@@ -9,11 +9,14 @@ import type {
   DisplayTopology,
   FindInPageStopAction,
   FindResultSnapshot,
+  LogLevelScope,
+  LogLevelsSnapshot,
   PendingCertificateError,
   ProcessMetricsSnapshot,
   TrustedCertificateEntry,
   Vibrancy,
 } from "../ipc-contracts/platform-types";
+import type { LogLevel } from "@traycer/protocol/config/log-level";
 import { subscribe, type Disposable, type Listener } from "./subscribe";
 
 export type {
@@ -116,6 +119,10 @@ export interface PlatformBridgeSurface {
   gpu: {
     getAccelerationEnabled(): Promise<boolean>;
     setAccelerationEnabled(enabled: boolean): Promise<boolean>;
+  };
+  logLevels: {
+    get(): Promise<LogLevelsSnapshot>;
+    set(scope: LogLevelScope, level: LogLevel): Promise<LogLevelsSnapshot>;
   };
   windowEx: {
     setOverlayIcon(image: string | null, description: string): Promise<void>;
@@ -307,6 +314,17 @@ export function buildPlatformBridge(): PlatformBridgeSurface {
           RunnerHostInvoke.gpuAccelerationSet,
           enabled,
         ) as Promise<boolean>,
+    },
+    logLevels: {
+      get: () =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.logLevelsGet,
+        ) as Promise<LogLevelsSnapshot>,
+      set: (scope, level) =>
+        ipcRenderer.invoke(RunnerHostInvoke.logLevelsSet, {
+          scope,
+          level,
+        }) as Promise<LogLevelsSnapshot>,
     },
     windowEx: {
       setOverlayIcon: (image, description) =>

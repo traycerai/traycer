@@ -8,5 +8,6 @@
  * resolving filesystem APIs.
  */
 export * from "./schema";
+export * from "./log-level";
 export * from "./paths";
 export * from "./store";

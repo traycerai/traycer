@@ -59,6 +59,16 @@ import { randomUUID } from "node:crypto";
 import { copyFile, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { RunnerIpcBridge } from "./runner-ipc-bridge";
+import {
+  getDesktopLogLevel,
+  setDesktopLogLevel,
+} from "../app/desktop-log-level";
+import { readLogLevels, setLogLevels } from "@traycer/protocol/config/store";
+import { isLogLevel, type LogLevel } from "@traycer/protocol/config/log-level";
+import type {
+  LogLevelScope,
+  LogLevelsSnapshot,
+} from "../../ipc-contracts/platform-types";
 
 /**
  * Registers IPC handlers that expose platform-integration primitives to the
@@ -384,6 +394,58 @@ export function registerPlatformIpc(bridge: RunnerIpcBridge): void {
       return setHardwareAccelerationPreference(enabled !== false);
     },
   );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.logLevelsGet,
+    (): Promise<LogLevelsSnapshot> => readLogLevelsSnapshot(),
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.logLevelsSet,
+    async (_event, input: unknown): Promise<LogLevelsSnapshot> => {
+      const { scope, level } = parseLogLevelsSetInput(input);
+      if (scope === "desktop") {
+        await setDesktopLogLevel(level);
+      } else {
+        const levels = await readLogLevels();
+        await setLogLevels(
+          scope === "cli" ? level : levels.cliLogLevel,
+          scope === "host" ? level : levels.hostLogLevel,
+        );
+      }
+      return readLogLevelsSnapshot();
+    },
+  );
+}
+
+async function readLogLevelsSnapshot(): Promise<LogLevelsSnapshot> {
+  const [levels, desktopLogLevel] = await Promise.all([
+    readLogLevels(),
+    getDesktopLogLevel(),
+  ]);
+  return {
+    cliLogLevel: levels.cliLogLevel,
+    hostLogLevel: levels.hostLogLevel,
+    desktopLogLevel,
+  };
+}
+
+function parseLogLevelsSetInput(input: unknown): {
+  readonly scope: LogLevelScope;
+  readonly level: LogLevel;
+} {
+  if (!isRecord(input)) {
+    throw new Error("logLevels:set requires an object payload");
+  }
+  const scope = input.scope;
+  if (scope !== "cli" && scope !== "host" && scope !== "desktop") {
+    throw new Error("logLevels:set requires scope cli|host|desktop");
+  }
+  const level = input.level;
+  if (!isLogLevel(level)) {
+    throw new Error("logLevels:set requires a valid log level");
+  }
+  return { scope, level };
 }
 
 interface TemporaryDroppedFileInput {

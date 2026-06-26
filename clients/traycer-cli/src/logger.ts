@@ -3,6 +3,8 @@ import { dirname } from "node:path";
 import type { Environment } from "./runner/environment";
 import { CliError } from "./runner/errors";
 import { cliLogPath } from "./store/paths";
+import { logLevelAllows } from "@traycer/protocol/config/log-level";
+import { readLogLevelsSync } from "@traycer/protocol/config/store";
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
@@ -51,12 +53,17 @@ export const noopLogger: ILogger = {
 
 export function createCliLogger(environment: Environment): ILogger {
   const path = cliLogPath(environment);
+  // Resolve the client threshold once at construction — config.json is shared
+  // and rarely changes mid-process, and a fresh CLI invocation picks up the
+  // latest level. Defaults to `info`, so debug output is dropped unless raised.
+  const threshold = readLogLevelsSync().cliLogLevel;
   const write = (
     level: LogLevel,
     message: string,
     fields: LogFields,
     error: Error | null,
   ): void => {
+    if (!logLevelAllows(threshold, level)) return;
     try {
       mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
       appendFileSync(

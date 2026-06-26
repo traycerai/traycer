@@ -2,6 +2,10 @@ import log from "electron-log";
 import { app } from "electron";
 import { join } from "node:path";
 import { isDevBuild } from "../../config";
+import {
+  applyDesktopLogLevel,
+  readDesktopLogLevelSync,
+} from "./desktop-log-level";
 
 export type SafeLogValue =
   | string
@@ -38,7 +42,10 @@ const SENSITIVE_INLINE_VALUE_PATTERN =
 export function initLogger(): void {
   const logPath = resolveDesktopLogPath();
   log.transports.file.resolvePathFn = () => logPath;
-  log.transports.file.level = "info";
+  // The file transport — which persists both our own logs and the renderer's
+  // forwarded console logs — follows the configured desktop level (default
+  // info), so Settings → log level controls what lands in traycer-desktop.log.
+  applyDesktopLogLevel(readDesktopLogLevelSync());
   // Console transport is noisy by design (every IPC + lifecycle log).
   // Shipped builds get the same `info` level the file transport does so
   // electron-log's stdout/stderr capture doesn't leak debug payloads to a
