@@ -9,6 +9,7 @@ import type {
   DisplayTopology,
   FindInPageStopAction,
   FindResultSnapshot,
+  LogLevel,
   LogLevelScope,
   LogLevelsSnapshot,
   PendingCertificateError,
@@ -16,7 +17,6 @@ import type {
   TrustedCertificateEntry,
   Vibrancy,
 } from "../ipc-contracts/platform-types";
-import type { LogLevel } from "@traycer/protocol/config/log-level";
 import { subscribe, type Disposable, type Listener } from "./subscribe";
 
 export type {

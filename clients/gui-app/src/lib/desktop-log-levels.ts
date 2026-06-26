@@ -25,7 +25,7 @@ export interface LogLevelsBridge {
 }
 
 interface RunnerHostWindowShape {
-  readonly platform?: { readonly logLevels?: LogLevelsBridge };
+  readonly platform: { readonly logLevels?: LogLevelsBridge } | undefined;
 }
 
 export function getLogLevelsBridge(): LogLevelsBridge | null {

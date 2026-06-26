@@ -591,6 +591,8 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.fileSave,
         RunnerHostInvoke.gpuAccelerationGet,
         RunnerHostInvoke.gpuAccelerationSet,
+        RunnerHostInvoke.logLevelsGet,
+        RunnerHostInvoke.logLevelsSet,
       ].sort(),
     );
     bridge.dispose();
