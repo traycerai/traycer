@@ -95,6 +95,9 @@ async function uninstallService(
     timeoutMs: 30_000,
     tolerateNonZeroExit: true,
   });
+  // Reap the orphaned host tree so the host doesn't keep running (and serving
+  // its port) after the task is deleted.
+  await killHostProcessTree(options.label);
   await runCommand("schtasks", ["/Delete", "/TN", taskName, "/F"], {
     env: undefined,
     cwd: undefined,
@@ -143,6 +146,26 @@ async function stopService(label: ServiceLabel): Promise<void> {
     timeoutMs: 30_000,
     tolerateNonZeroExit: true,
   });
+  await killHostProcessTree(label);
+}
+
+// `schtasks /End` terminates the task's root process but can leave the host's
+// child `node` process orphaned - Task Scheduler does not job-object the tree,
+// so a wrapper -> node chain survives. A stale host keeps serving its port, and
+// (worse) its CWD stays open inside the install dir, so the next install-swap
+// rename fails with EBUSY. Force-kill the recorded host pid and its children
+// after ending the task. Best-effort: a missing/already-dead pid is a no-op.
+async function killHostProcessTree(label: ServiceLabel): Promise<void> {
+  const pidMetadata = await readHostPidMetadata(label.environment);
+  if (pidMetadata === null || !isProcessAlive(pidMetadata.pid)) {
+    return;
+  }
+  await runCommand("taskkill", ["/T", "/F", "/PID", String(pidMetadata.pid)], {
+    env: undefined,
+    cwd: undefined,
+    timeoutMs: 30_000,
+    tolerateNonZeroExit: true,
+  });
 }
 
 async function startService(label: ServiceLabel): Promise<void> {
@@ -171,6 +194,9 @@ async function restartService(label: ServiceLabel): Promise<void> {
     timeoutMs: 30_000,
     tolerateNonZeroExit: true,
   });
+  // Reap the orphaned host tree before re-running, otherwise the old node keeps
+  // its port + install dir and the fresh task races a stale host.
+  await killHostProcessTree(label);
   try {
     await runCommand("schtasks", ["/Run", "/TN", taskName], {
       env: undefined,
