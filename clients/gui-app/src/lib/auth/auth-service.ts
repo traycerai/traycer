@@ -28,6 +28,7 @@ import {
 } from "@/stores/auth/auth-store";
 import { normalizeAvatarUrl } from "@/lib/avatar-url";
 import { projectShareableTeams } from "@/hooks/epic/use-epic-shareable-teams";
+import { appLogger, describeLogError } from "@/lib/logger";
 import { AuthTokenStore } from "./auth-token-store";
 
 export interface AuthServiceOptions {
@@ -355,6 +356,9 @@ export class AuthService {
         this.applySignedIn(accepted.token, outcome.user, undefined);
         return;
       }
+      appLogger.warn("[auth] stored session validation failed during startup", {
+        outcome: outcome.kind,
+      });
       await this.clearStoredAuthForStart();
       if (this.shouldStopStartFlow()) {
         return;
@@ -409,7 +413,11 @@ export class AuthService {
     // callback, so we degrade rather than block sign-in.
     await this.runnerHost.secureStorage
       .set(PKCE_VERIFIER_STORAGE_KEY, verifier)
-      .catch(() => {});
+      .catch((error: unknown) => {
+        appLogger.warn("[auth] PKCE verifier persist failed", {
+          error: describeLogError(error),
+        });
+      });
     try {
       const signInUrl = new URL(this.runnerHost.signInUrl);
       signInUrl.searchParams.set(
@@ -421,7 +429,10 @@ export class AuthService {
         CODE_CHALLENGE_METHOD,
       );
       await this.runnerHost.openExternalLink(signInUrl.toString());
-    } catch {
+    } catch (error) {
+      appLogger.warn("[auth] external sign-in launch failed", {
+        error: describeLogError(error),
+      });
       // The shell could not open the external sign-in URL. No callback will
       // arrive, so cancel the pending callback timeout and fail immediately
       // through the same path shell-delivered failures use. This keeps the
@@ -701,9 +712,16 @@ export class AuthService {
       return outcome;
     }
     if (outcome.kind === "rejected") {
+      appLogger.warn("[auth] current session rejected during revalidation", {});
       await this.clearStoredAuth();
       this.setLastError(AUTH_ERROR_SESSION_EXPIRED);
       this.applySignedOut();
+    }
+    if (outcome.kind === "network-error") {
+      appLogger.warn(
+        "[auth] current session revalidation hit network error",
+        {},
+      );
     }
     return outcome;
   }
@@ -745,9 +763,10 @@ export class AuthService {
       // storage to recover - the code can't be exchanged. Warn so the failure
       // is visible in the shipped app log (renderer console is forwarded to the
       // file on warning/error) rather than only manifesting as "Sign-in failed".
-      console.warn(
-        "[auth] sign-in failed: PKCE code verifier missing (cold-start callback with no recoverable verifier)",
-      );
+      appLogger.warn("[auth] sign-in failed: PKCE verifier missing", {
+        callbackKind: "code",
+        expectedEpoch: expectedEpoch ?? "cold-start",
+      });
       await this.applyOAuthCallbackError(
         AUTH_ERROR_SIGN_IN_FAILED,
         expectedEpoch,
@@ -766,6 +785,7 @@ export class AuthService {
       return;
     }
     if (tokens === null) {
+      appLogger.warn("[auth] code exchange returned no tokens", {});
       await this.applyOAuthCallbackError(
         AUTH_ERROR_SIGN_IN_FAILED,
         expectedEpoch,
@@ -789,14 +809,21 @@ export class AuthService {
     }
     if (token.length === 0) {
       if (!this.isOAuthEpochCurrent(expectedOAuthEpoch)) {
+        appLogger.info("[auth] ignored empty token from stale OAuth callback", {
+          expectedEpoch: expectedOAuthEpoch ?? "cold-start",
+        });
         return false;
       }
+      appLogger.warn("[auth] OAuth callback delivered an empty token", {});
       this.clearPendingTimeout();
       this.activeOAuthEpoch = null;
       await this.applyFailure(AUTH_ERROR_SIGN_IN_FAILED);
       return false;
     }
     if (!this.isOAuthEpochCurrent(expectedOAuthEpoch)) {
+      appLogger.info("[auth] ignored stale OAuth callback before validation", {
+        expectedEpoch: expectedOAuthEpoch ?? "cold-start",
+      });
       return false;
     }
     this.clearPendingTimeout();
@@ -809,6 +836,9 @@ export class AuthService {
     // fresh `signIn()` could have minted a new epoch. In that case this
     // callback is stale and must not mutate state.
     if (!this.isOAuthEpochCurrent(expectedOAuthEpoch)) {
+      appLogger.info("[auth] ignored stale OAuth callback after validation", {
+        expectedEpoch: expectedOAuthEpoch ?? "cold-start",
+      });
       return false;
     }
     if (outcome.kind === "valid") {
@@ -840,6 +870,9 @@ export class AuthService {
     }
     // Validation `rejected` OR `network-error`: do not persist. Surface
     // `sign-in-failed` so the header sign-in surface renders a retry CTA.
+    appLogger.warn("[auth] OAuth token validation failed", {
+      outcome: outcome.kind,
+    });
     this.activeOAuthEpoch = null;
     await this.applyFailure(AUTH_ERROR_SIGN_IN_FAILED);
     return false;
@@ -924,7 +957,7 @@ export class AuthService {
     if (attempt === maxAttempts) {
       // Deliberately omit the raw rejection value: a CLI-spawn failure can
       // carry stderr / request context that may include auth material.
-      console.warn(warningMessage);
+      appLogger.warn(warningMessage, { attempts: maxAttempts });
       return;
     }
     await new Promise<void>((resolve) => setTimeout(resolve, attempt * 200));
@@ -1006,10 +1039,17 @@ export class AuthService {
     // hydrate the signed-in state on the next launch.
     const callbackEpoch = this.activeOAuthEpoch;
     if (this.nextEpoch > 0 && callbackEpoch === null) {
+      appLogger.info(
+        "[auth] ignored stale OAuth callback with no active epoch",
+        {
+          nextEpoch: this.nextEpoch,
+        },
+      );
       return;
     }
     if ("code" in result) {
       if (result.code.length === 0) {
+        appLogger.warn("[auth] OAuth callback delivered an empty code", {});
         return;
       }
       this.clearPendingTimeout();
@@ -1046,6 +1086,9 @@ export class AuthService {
       return;
     }
     if (!this.isOAuthEpochCurrent(expectedEpoch)) {
+      appLogger.info("[auth] ignored stale OAuth callback error", {
+        expectedEpoch: expectedEpoch ?? "cold-start",
+      });
       return;
     }
     this.activeOAuthEpoch = null;
@@ -1062,8 +1105,17 @@ export class AuthService {
     }
     this.pendingTimeoutHandle = null;
     if (useAuthStore.getState().status !== "signing-in") {
+      appLogger.info(
+        "[auth] sign-in timeout ignored outside signing-in state",
+        {
+          status: useAuthStore.getState().status,
+        },
+      );
       return;
     }
+    appLogger.warn("[auth] sign-in timed out waiting for callback", {
+      timeoutMs: AUTH_CALLBACK_TIMEOUT_MS,
+    });
     this.activeOAuthEpoch = null;
     this.clearPendingCodeVerifier();
     if (this.starting) {
@@ -1166,6 +1218,7 @@ export class AuthService {
     if (this.disposed) {
       return;
     }
+    appLogger.warn("[auth] applying auth failure", { errorCode: error });
     this.setLastError(error);
     this.applySignedOut();
     await this.clearStoredAuth();
@@ -1207,7 +1260,11 @@ export class AuthService {
     this.pendingCodeVerifier = null;
     void this.runnerHost.secureStorage
       .delete(PKCE_VERIFIER_STORAGE_KEY)
-      .catch(() => {});
+      .catch((error: unknown) => {
+        appLogger.warn("[auth] PKCE verifier delete failed", {
+          error: describeLogError(error),
+        });
+      });
   }
 
   private setLastError(next: string | null): void {

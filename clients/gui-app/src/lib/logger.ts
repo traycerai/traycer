@@ -1,18 +1,16 @@
-import log from "electron-log";
-import { app } from "electron";
-import { join } from "node:path";
-import { isDevBuild } from "../../config";
+export type AppLogLevel = "debug" | "info" | "warn" | "error";
 
-export type SafeLogValue =
+export type AppLogValue =
   | string
   | number
   | boolean
   | null
-  | readonly SafeLogValue[]
-  | { readonly [key: string]: SafeLogValue };
+  | readonly AppLogValue[]
+  | { readonly [key: string]: AppLogValue };
 
-export type SafeLogFields = Readonly<Record<string, SafeLogValue>>;
+export type AppLogFields = Readonly<Record<string, AppLogValue>>;
 
+const STRUCTURED_LOG_PREFIX = "[traycer-gui]";
 const MAX_LOG_STRING_LENGTH = 1_000;
 const MAX_LOG_DEPTH = 4;
 const MAX_LOG_ARRAY_ITEMS = 20;
@@ -23,31 +21,30 @@ const SENSITIVE_QUERY_PARAM_PATTERN =
   /([?&](?:access_token|refresh_token|id_token|token|code|code_verifier|password|secret|client_secret|api_key|authorization)=)([^&#\s]+)/gi;
 const BEARER_PATTERN = /\bBearer\s+[A-Za-z0-9._~+/=-]+/gi;
 
-/**
- * Configures `electron-log` so the desktop shell, the renderer, and any
- * spawned host-lifecycle diagnostics flow through a single sink.
- *
- * The host itself writes to `~/.traycer/host/host.log` in production and
- * `~/.traycer/host/dev/host.log` in dev - see `host-paths.ts`. Our own
- * main-process log is kept separate at
- * `userData/traycer-desktop.log` so the two are easy to differentiate in
- * support bundles.
- */
-export function initLogger(): void {
-  const logPath = resolveDesktopLogPath();
-  log.transports.file.resolvePathFn = () => logPath;
-  log.transports.file.level = "info";
-  // Console transport is noisy by design (every IPC + lifecycle log).
-  // Shipped builds get the same `info` level the file transport does so
-  // electron-log's stdout/stderr capture doesn't leak debug payloads to a
-  // user's system console; the dev slot keeps `debug`.
-  log.transports.console.level = isDevBuild ? "debug" : "info";
-  log.info("[desktop] logger initialised", { logPath });
-}
-
-export function resolveDesktopLogPath(): string {
-  return join(app.getPath("userData"), "traycer-desktop.log");
-}
+export const appLogger = {
+  debug(message: string, fields: AppLogFields): void {
+    if (!import.meta.env.DEV) return;
+    emitLog("debug", message, fields);
+  },
+  info(message: string, fields: AppLogFields): void {
+    emitLog("info", message, fields);
+  },
+  warn(message: string, fields: AppLogFields): void {
+    emitLog("warn", message, fields);
+  },
+  error(message: string, fields: AppLogFields, error: unknown): void {
+    emitLog("error", message, {
+      ...fields,
+      error: describeLogError(error),
+    });
+  },
+  errorSummary(message: string, fields: AppLogFields, error: unknown): void {
+    emitLog("error", message, {
+      ...fields,
+      error: describeLogErrorSummary(error),
+    });
+  },
+};
 
 export function redactLogText(value: string): string {
   const redacted = value
@@ -58,7 +55,7 @@ export function redactLogText(value: string): string {
     : redacted;
 }
 
-export function sanitizeLogValue(value: unknown, depth: number): SafeLogValue {
+export function sanitizeLogValue(value: unknown, depth: number): AppLogValue {
   if (value === null) return null;
   if (typeof value === "string") return redactLogText(value);
   if (typeof value === "number" || typeof value === "boolean") return value;
@@ -73,7 +70,7 @@ export function sanitizeLogValue(value: unknown, depth: number): SafeLogValue {
     return describeLogError(value);
   }
   if (isRecord(value)) {
-    const sanitized: Record<string, SafeLogValue> = {};
+    const sanitized: Record<string, AppLogValue> = {};
     for (const [key, entry] of Object.entries(value).slice(
       0,
       MAX_LOG_OBJECT_KEYS,
@@ -88,7 +85,7 @@ export function sanitizeLogValue(value: unknown, depth: number): SafeLogValue {
   return redactLogText(String(value));
 }
 
-export function describeLogError(error: unknown): SafeLogFields {
+export function describeLogError(error: unknown): AppLogFields {
   if (error instanceof Error) {
     return {
       name: error.name,
@@ -104,8 +101,43 @@ export function describeLogError(error: unknown): SafeLogFields {
   };
 }
 
+export function describeLogErrorSummary(error: unknown): AppLogFields {
+  if (error instanceof Error) {
+    return {
+      name: error.name,
+      messageLength: error.message.length,
+      stack: null,
+    };
+  }
+  return {
+    name: typeof error,
+    messageLength: String(error).length,
+    stack: null,
+  };
+}
+
+function emitLog(
+  level: AppLogLevel,
+  message: string,
+  fields: AppLogFields,
+): void {
+  const payload = {
+    source: "gui-app",
+    level,
+    message: redactLogText(message),
+    fields: sanitizeLogValue(fields, 0),
+  };
+  const line = `${STRUCTURED_LOG_PREFIX} ${JSON.stringify(payload)}`;
+  if (level === "error") {
+    console.error(line);
+    return;
+  }
+  // Desktop production forwards renderer warning/error console messages only.
+  // The structured payload preserves the logical level; desktop remaps it back
+  // to info/warn/error when writing traycer-desktop.log.
+  console.warn(line);
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
-
-export { log };

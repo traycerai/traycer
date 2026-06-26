@@ -9,6 +9,7 @@ import type {
   LocalHostSnapshot,
 } from "@traycer-clients/shared/platform/runner-host";
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
+import { appLogger, describeLogError } from "@/lib/logger";
 
 export interface HostDirectoryServiceOptions {
   readonly runnerHost: IRunnerHost;
@@ -87,6 +88,12 @@ export class HostDirectoryService implements IHostDirectoryService {
     this.started = true;
     this.localSubscription = this.runnerHost.onLocalHostChange((snapshot) => {
       this.localEntry = toLocalEntry(snapshot);
+      appLogger.info("[host-directory] local host snapshot changed", {
+        hostId: snapshot?.hostId ?? null,
+        hasWebsocketUrl: snapshot !== null && snapshot.websocketUrl !== null,
+        status: snapshot === null ? "missing" : "available",
+        version: snapshot?.version ?? null,
+      });
       this.reconcileSelection();
       this.emit();
     });
@@ -98,9 +105,21 @@ export class HostDirectoryService implements IHostDirectoryService {
   }
 
   async refresh(): Promise<readonly HostDirectoryEntry[]> {
-    this.remoteEntries = await this.remoteFetcher();
+    try {
+      this.remoteEntries = await this.remoteFetcher();
+    } catch (error) {
+      appLogger.warn("[host-directory] remote refresh failed", {
+        error: describeLogError(error),
+      });
+      throw error;
+    }
     this.reconcileSelection();
     this.emit();
+    appLogger.info("[host-directory] refresh complete", {
+      localCount: this.localEntry === null ? 0 : 1,
+      remoteCount: this.remoteEntries.length,
+      totalCount: this.snapshot().length,
+    });
     return this.snapshot();
   }
 
@@ -127,6 +146,10 @@ export class HostDirectoryService implements IHostDirectoryService {
   }
 
   selectById(hostId: string | null): void {
+    appLogger.info("[host-directory] explicit host selection requested", {
+      hostId,
+      clearingSelection: hostId === null,
+    });
     this.explicitSelection = { hostId };
     if (hostId === null) {
       this.setSelected(null);
@@ -226,6 +249,11 @@ export class HostDirectoryService implements IHostDirectoryService {
       return;
     }
     this.selected = entry;
+    appLogger.info("[host-directory] effective host selection changed", {
+      hostId: entry?.hostId ?? null,
+      kind: entry?.kind ?? null,
+      hasWebsocketUrl: entry !== null && entry.websocketUrl !== null,
+    });
     for (const handler of this.selectionListeners) {
       handler(entry);
     }
@@ -240,6 +268,11 @@ export class HostDirectoryService implements IHostDirectoryService {
       }
       if (fresh !== this.selected) {
         this.selected = fresh;
+        appLogger.info("[host-directory] effective host selection refreshed", {
+          hostId: fresh.hostId,
+          kind: fresh.kind,
+          hasWebsocketUrl: fresh.websocketUrl !== null,
+        });
         for (const handler of this.selectionListeners) {
           handler(fresh);
         }

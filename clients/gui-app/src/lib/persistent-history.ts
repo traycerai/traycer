@@ -4,6 +4,7 @@ import {
   type HistoryState,
   type RouterHistory,
 } from "@tanstack/react-router";
+import { appLogger, describeLogError } from "@/lib/logger";
 
 /**
  * `ParsedHistoryState` is not exported from `@tanstack/react-router`, so we
@@ -78,7 +79,11 @@ function loadPersistedState(windowId: string | null): PersistedState {
       parsed.entries.length - 1,
     );
     return { entries: parsed.entries, index: safeIndex };
-  } catch {
+  } catch (error) {
+    appLogger.warn("[history] persisted route state load failed", {
+      windowId,
+      error: describeLogError(error),
+    });
     return { entries: ["/"], index: 0 };
   }
 }
@@ -128,7 +133,12 @@ function persistState(
       buildStorageKey(windowId),
       JSON.stringify({ entries: capped, index: cappedIndex }),
     );
-  } catch {
+  } catch (error) {
+    appLogger.warn("[history] persisted route state write failed", {
+      windowId,
+      entryCount: entries.length,
+      error: describeLogError(error),
+    });
     // localStorage unavailable (private mode, quota, disabled) - fail silent.
   }
 }
@@ -138,7 +148,11 @@ function clearPersistedState(windowId: string | null): void {
   if (windowId === null) return;
   try {
     window.localStorage.removeItem(buildStorageKey(windowId));
-  } catch {
+  } catch (error) {
+    appLogger.warn("[history] persisted route state clear failed", {
+      windowId,
+      error: describeLogError(error),
+    });
     // localStorage unavailable (private mode, quota, disabled) - fail silent.
   }
 }
@@ -155,7 +169,11 @@ function consumeShellOverride(
     const key = buildConsumedInitialRouteKey(windowId, normalized);
     if (window.sessionStorage.getItem(key) === "true") return null;
     window.sessionStorage.setItem(key, "true");
-  } catch {
+  } catch (error) {
+    appLogger.warn("[history] initial route consume marker failed", {
+      windowId,
+      error: describeLogError(error),
+    });
     // sessionStorage unavailable - keep the explicit route so boot still works.
   }
   return normalized;

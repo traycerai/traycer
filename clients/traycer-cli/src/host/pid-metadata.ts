@@ -1,5 +1,7 @@
 import { readFile } from "node:fs/promises";
 import type { Environment } from "../runner/environment";
+import { config } from "../config";
+import { createCliLogger, errorFromUnknown } from "../logger";
 import { hostPidMetadataPath } from "../store/paths";
 
 // Mirror of the writer contract owned by the host (the external
@@ -18,19 +20,35 @@ export interface HostPidMetadata {
 export async function readHostPidMetadata(
   environment: Environment | undefined,
 ): Promise<HostPidMetadata | null> {
+  const logger = createCliLogger(environment ?? config.environment);
   let raw: string;
   try {
     raw = await readFile(hostPidMetadataPath(environment), "utf8");
-  } catch {
+  } catch (err) {
+    logger.debug("Host pid metadata read returned absent", {
+      environment: environment ?? "production",
+      errorName: errorFromUnknown(err).name,
+      errorMessage: errorFromUnknown(err).message,
+    });
     return null;
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
-  } catch {
+  } catch (err) {
+    logger.warn("Host pid metadata JSON parse failed", {
+      environment: environment ?? "production",
+      errorName: errorFromUnknown(err).name,
+      errorMessage: errorFromUnknown(err).message,
+    });
     return null;
   }
-  if (parsed === null || typeof parsed !== "object") return null;
+  if (parsed === null || typeof parsed !== "object") {
+    logger.warn("Host pid metadata rejected non-object payload", {
+      environment: environment ?? "production",
+    });
+    return null;
+  }
   const obj = parsed as Record<string, unknown>;
   if (
     typeof obj.pid !== "number" ||
@@ -39,8 +57,22 @@ export async function readHostPidMetadata(
     typeof obj.websocketUrl !== "string" ||
     typeof obj.startedAt !== "string"
   ) {
+    logger.warn("Host pid metadata rejected malformed payload", {
+      environment: environment ?? "production",
+      hasPid: typeof obj.pid === "number",
+      hasHostId: typeof obj.hostId === "string",
+      hasVersion: typeof obj.version === "string",
+      hasWebsocketUrl: typeof obj.websocketUrl === "string",
+      hasStartedAt: typeof obj.startedAt === "string",
+    });
     return null;
   }
+  logger.debug("Host pid metadata read completed", {
+    environment: environment ?? "production",
+    hostId: obj.hostId,
+    pid: obj.pid,
+    version: obj.version,
+  });
   return {
     pid: obj.pid,
     hostId: obj.hostId,

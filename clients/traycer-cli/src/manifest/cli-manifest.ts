@@ -1,4 +1,5 @@
 import { readFile, rename, writeFile } from "node:fs/promises";
+import { createCliLogger, errorFromUnknown } from "../logger";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type { Environment } from "../runner/environment";
 import { cliManifestPath, ensureCliHomeDir } from "../store/paths";
@@ -282,6 +283,10 @@ async function readSystemSourceMarker(): Promise<SystemSourceMarker | null> {
 export async function readCliManifest(
   environment: Environment,
 ): Promise<CliInstallManifest | null> {
+  const logger = createCliLogger(environment);
+  logger.debug("CLI manifest read started", {
+    environment,
+  });
   const path = cliManifestPath(environment);
   let raw: string;
   try {
@@ -289,9 +294,23 @@ export async function readCliManifest(
   } catch (err) {
     // Only a missing file means "no manifest"; a real fault (EACCES/EIO)
     // must surface rather than be misread as an absent install.
-    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      logger.warn("CLI manifest read failed", {
+        environment,
+        errorName: errorFromUnknown(err).name,
+        errorMessage: errorFromUnknown(err).message,
+      });
+      throw err;
+    }
     const distributionSource = readDistributionInstallSourceFromEnv();
     if (distributionSource !== null) {
+      logger.info("CLI manifest synthesized from distribution environment", {
+        environment,
+        source: distributionSource,
+        hasVersionEnv:
+          typeof process.env.TRAYCER_CLI_VERSION === "string" &&
+          process.env.TRAYCER_CLI_VERSION.length > 0,
+      });
       return {
         version:
           typeof process.env.TRAYCER_CLI_VERSION === "string" &&
@@ -304,9 +323,24 @@ export async function readCliManifest(
         pendingUpgrade: null,
       };
     }
-    if (environment !== "production") return null;
+    if (environment !== "production") {
+      logger.debug("CLI manifest missing for non-production environment", {
+        environment,
+      });
+      return null;
+    }
     const systemMarker = await readSystemSourceMarker();
-    if (systemMarker === null) return null;
+    if (systemMarker === null) {
+      logger.debug("CLI manifest missing and no system source marker found", {
+        environment,
+      });
+      return null;
+    }
+    logger.info("CLI manifest synthesized from system source marker", {
+      environment,
+      source: systemMarker.source,
+      version: systemMarker.version,
+    });
     return {
       version: systemMarker.version,
       installedAt: new Date(0).toISOString(),
@@ -318,7 +352,14 @@ export async function readCliManifest(
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
-  } catch {
+  } catch (err) {
+    logger.error(
+      "CLI manifest JSON parse failed",
+      {
+        environment,
+      },
+      errorFromUnknown(err),
+    );
     throw cliError({
       code: CLI_ERROR_CODES.CLI_MANIFEST_INVALID,
       message: `CLI manifest ${path} is not valid JSON; refusing to overwrite`,
@@ -367,13 +408,20 @@ export async function readCliManifest(
       exitCode: 1,
     });
   }
-  return {
+  const manifest = {
     version: obj.version,
     installedAt: obj.installedAt,
     binaryPath: obj.binaryPath,
     source: obj.source,
     pendingUpgrade: readPendingUpgrade(obj.pendingUpgrade, path),
   };
+  logger.info("CLI manifest read completed", {
+    environment,
+    version: manifest.version,
+    source: manifest.source,
+    hasPendingUpgrade: manifest.pendingUpgrade !== null,
+  });
+  return manifest;
 }
 
 // Write a complete manifest atomically. Callers must supply every
@@ -382,6 +430,13 @@ export async function writeCliManifest(
   environment: Environment,
   manifest: CliInstallManifest,
 ): Promise<void> {
+  const logger = createCliLogger(environment);
+  logger.info("CLI manifest write started", {
+    environment,
+    version: manifest.version,
+    source: manifest.source,
+    hasPendingUpgrade: manifest.pendingUpgrade !== null,
+  });
   await ensureCliHomeDir(environment);
   const target = cliManifestPath(environment);
   const tmp = `${target}.tmp`;
@@ -390,6 +445,12 @@ export async function writeCliManifest(
     mode: 0o600,
   });
   await rename(tmp, target);
+  logger.info("CLI manifest write completed", {
+    environment,
+    version: manifest.version,
+    source: manifest.source,
+    hasPendingUpgrade: manifest.pendingUpgrade !== null,
+  });
 }
 
 // Read-modify-write convenience. Requires an existing manifest -
@@ -403,8 +464,19 @@ export async function updateCliManifest(
   environment: Environment,
   patch: Partial<Omit<CliInstallManifest, never>>,
 ): Promise<CliInstallManifest> {
+  const logger = createCliLogger(environment);
+  logger.info("CLI manifest update started", {
+    environment,
+    patchesVersion: patch.version !== undefined,
+    patchesBinaryPath: patch.binaryPath !== undefined,
+    patchesSource: patch.source !== undefined,
+    patchesPendingUpgrade: patch.pendingUpgrade !== undefined,
+  });
   const current = await readCliManifest(environment);
   if (current === null) {
+    logger.warn("CLI manifest update refused missing manifest", {
+      environment,
+    });
     throw cliError({
       code: CLI_ERROR_CODES.CLI_MANIFEST_INVALID,
       message: `CLI manifest for environment=${environment} does not exist; cannot patch a missing install`,
@@ -425,6 +497,12 @@ export async function updateCliManifest(
         : patch.pendingUpgrade,
   };
   await writeCliManifest(environment, next);
+  logger.info("CLI manifest update completed", {
+    environment,
+    version: next.version,
+    source: next.source,
+    hasPendingUpgrade: next.pendingUpgrade !== null,
+  });
   return next;
 }
 
@@ -438,6 +516,11 @@ export async function clearPendingUpgrade(
     readonly installedAt: string;
   } | null,
 ): Promise<CliInstallManifest> {
+  createCliLogger(environment).info("CLI manifest clearing pending upgrade", {
+    environment,
+    promoted: promotedInstall !== null,
+    promotedVersion: promotedInstall?.version ?? null,
+  });
   if (promotedInstall === null) {
     return updateCliManifest(environment, { pendingUpgrade: null });
   }

@@ -5,7 +5,13 @@ import {
 } from "electron";
 import { canOpenDevTools, isDevBuild } from "../../config";
 import { createInitialRouteArg } from "../../ipc-contracts/window-bootstrap";
-import { log } from "../app/logger";
+import {
+  log,
+  redactLogText,
+  sanitizeLogValue,
+  type SafeLogFields,
+  type SafeLogValue,
+} from "../app/logger";
 import { safelyOpenExternal, installNavigationGuard } from "../app/security";
 import { installContextMenu } from "../app/spell-check";
 import { installResponsivenessListeners } from "../app/responsiveness";
@@ -14,6 +20,7 @@ import { installPerWindowPlatformHooks } from "../ipc/platform-ipc";
 
 // Vite dev server served by the `make dev-desktop` orchestrator.
 const DEV_RENDERER_URL = "http://localhost:5173";
+const STRUCTURED_RENDERER_LOG_PREFIX = "[traycer-gui]";
 
 export interface MainWindowOptions {
   readonly preloadPath: string;
@@ -134,11 +141,20 @@ export function createMainWindow(options: MainWindowOptions): BrowserWindow {
   window.webContents.on(
     "console-message",
     (details: Event<WebContentsConsoleMessageEventParams>) => {
+      const structured = parseStructuredRendererLog(details.message);
       const entry = {
-        message: details.message,
+        message:
+          structured === null
+            ? redactLogText(details.message)
+            : structured.message,
         line: details.lineNumber,
-        source: details.sourceId,
+        source: sanitizeRendererSource(details.sourceId),
+        ...(structured === null ? {} : { fields: structured.fields }),
       };
+      if (structured !== null) {
+        logStructuredRendererEntry(structured.level, entry);
+        return;
+      }
       if (canOpenDevTools) {
         log.info("[renderer]", { level: details.level, ...entry });
         return;
@@ -182,4 +198,94 @@ export async function loadMainWindow(
 
 export interface MainWindowLoadTarget {
   loadURL(url: string): Promise<void>;
+}
+
+type StructuredRendererLogLevel = "debug" | "info" | "warn" | "error";
+
+interface StructuredRendererLog {
+  readonly level: StructuredRendererLogLevel;
+  readonly message: string;
+  readonly fields: SafeLogFields;
+}
+
+function parseStructuredRendererLog(
+  message: string,
+): StructuredRendererLog | null {
+  if (!message.startsWith(STRUCTURED_RENDERER_LOG_PREFIX)) {
+    return null;
+  }
+  const rawJson = message.slice(STRUCTURED_RENDERER_LOG_PREFIX.length).trim();
+  try {
+    const parsed: unknown = JSON.parse(rawJson);
+    if (!isRecord(parsed)) return null;
+    const level = parsed.level;
+    const logMessage = parsed.message;
+    if (!isRendererLogLevel(level) || typeof logMessage !== "string") {
+      return null;
+    }
+    return {
+      level,
+      message: redactLogText(logMessage),
+      fields: isRecord(parsed.fields)
+        ? sanitizeRendererFields(parsed.fields)
+        : {},
+    };
+  } catch {
+    return null;
+  }
+}
+
+function sanitizeRendererFields(
+  fields: Record<string, unknown>,
+): SafeLogFields {
+  const sanitized: Record<string, SafeLogValue> = {};
+  for (const [key, value] of Object.entries(fields)) {
+    sanitized[key] = sanitizeLogValue(value, 0);
+  }
+  return sanitized;
+}
+
+function logStructuredRendererEntry(
+  level: StructuredRendererLogLevel,
+  entry: SafeLogFields,
+): void {
+  if (level === "error") {
+    log.error("[renderer]", entry);
+    return;
+  }
+  if (level === "warn") {
+    log.warn("[renderer]", entry);
+    return;
+  }
+  if (level === "info") {
+    log.info("[renderer]", entry);
+    return;
+  }
+  log.debug("[renderer]", entry);
+}
+
+function sanitizeRendererSource(sourceId: string): string {
+  try {
+    const url = new URL(sourceId);
+    url.search = "";
+    url.hash = "";
+    return redactLogText(url.toString());
+  } catch {
+    return redactLogText(sourceId);
+  }
+}
+
+function isRendererLogLevel(
+  value: unknown,
+): value is StructuredRendererLogLevel {
+  return (
+    value === "debug" ||
+    value === "info" ||
+    value === "warn" ||
+    value === "error"
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }

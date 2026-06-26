@@ -1,3 +1,5 @@
+import { appLogger, describeLogError } from "@/lib/logger";
+
 /**
  * Derives the "Manage subscription" platform URL from the runner host's
  * `authnBaseUrl`. The two URLs are siblings in the desktop `DEPLOY_URLS`
@@ -19,8 +21,12 @@ export function resolveManageSubscriptionUrl(authnBaseUrl: string): string {
       url.pathname = "/";
       return url.toString().replace(/\/$/, "");
     }
-  } catch {
+  } catch (error) {
+    appLogger.warn("[auth] manage subscription URL parse failed", {
+      error: describeLogError(error),
+    });
     // Falls through to the production default.
   }
+  appLogger.info("[auth] using default manage subscription URL", {});
   return "https://platform.traycer.ai";
 }

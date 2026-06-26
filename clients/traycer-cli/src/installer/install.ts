@@ -25,6 +25,7 @@ import {
 import type { ProgressInfo } from "../runner/output";
 import type { Environment } from "../runner/environment";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
+import { createCliLogger, errorFromUnknown } from "../logger";
 import {
   hostHomeDir,
   hostInstallDir,
@@ -113,9 +114,21 @@ export interface InstallHostResult {
 export async function installHost(
   opts: InstallHostOptions,
 ): Promise<InstallHostResult> {
+  const logger = createCliLogger(opts.environment);
   const platform = currentInstallPlatform();
   const arch = currentInstallArch();
   const previous = await readHostInstallRecord(opts.environment);
+  logger.info("Host install started", {
+    environment: opts.environment,
+    platform,
+    arch,
+    sourceKind: opts.source.kind,
+    versionRequest:
+      opts.source.kind === "registry" ? opts.source.versionRequest : "local-file",
+    hasPreviousInstall: previous !== null,
+    lifecycleEnabled: opts.lifecycle !== null,
+    recordVersionOverride: opts.recordVersionOverride !== null,
+  });
 
   await ensureHostHomeDir(opts.environment);
   await ensureHostStagingRoot(opts.environment);
@@ -125,6 +138,14 @@ export async function installHost(
     source: opts.source,
     onProgress: opts.onProgress,
     recordVersionOverride: opts.recordVersionOverride,
+  });
+  logger.info("Host install staging completed", {
+    environment: opts.environment,
+    sourceKind: opts.source.kind,
+    version: staging.version,
+    archiveIsTemporary: staging.archiveIsTemporary,
+    sizeBytes: staging.sizeBytes,
+    hasArchiveSha256: staging.archiveSha256 !== null,
   });
 
   // Track whether the staging dir has been renamed into the install
@@ -144,11 +165,19 @@ export async function installHost(
       source: staging.archivePath,
       targetDir: staging.stagingDir,
     });
+    logger.info("Host install archive extracted", {
+      environment: opts.environment,
+      version: staging.version,
+    });
 
     const executablePath = await resolveHostExecutable(
       staging.stagingDir,
       osPlatform(),
     );
+    logger.debug("Host install executable resolved", {
+      environment: opts.environment,
+      version: staging.version,
+    });
 
     // Stop the OS service immediately before the swap, never earlier:
     // verify-before-replace means we must not disturb the running
@@ -160,6 +189,10 @@ export async function installHost(
         percent: null,
         bytes: null,
         totalBytes: null,
+      });
+      logger.info("Host install running lifecycle before swap", {
+        environment: opts.environment,
+        version: staging.version,
       });
       await opts.lifecycle.beforeSwap();
     }
@@ -176,6 +209,11 @@ export async function installHost(
       stagingDir: staging.stagingDir,
     });
     swapped = true;
+    logger.info("Host install atomic swap completed", {
+      environment: opts.environment,
+      version: staging.version,
+      replacedPreviousInstall: previous !== null,
+    });
 
     const finalExecutablePath = executablePath.replace(
       staging.stagingDir,
@@ -195,6 +233,13 @@ export async function installHost(
       executablePath: finalExecutablePath,
     };
     await writeHostInstallRecord(opts.environment, record);
+    logger.info("Host install record written", {
+      environment: opts.environment,
+      version: record.version,
+      sourceKind: record.source.kind,
+      hasArchiveSha256: record.archiveSha256 !== null,
+      sizeBytes: record.sizeBytes,
+    });
 
     // Post-swap start/restart. Per the Tech Plan, failures here do
     // not roll back the install: the new host stays in place and
@@ -209,9 +254,18 @@ export async function installHost(
         bytes: null,
         totalBytes: null,
       });
+      logger.info("Host install running lifecycle after swap", {
+        environment: opts.environment,
+        version: record.version,
+      });
       await opts.lifecycle.afterSwap();
     }
 
+    logger.info("Host install completed", {
+      environment: opts.environment,
+      version: record.version,
+      previousVersion: previous?.version ?? null,
+    });
     return { record, previous };
   } finally {
     // Best-effort sweep of the per-attempt staging archive (if any). The
@@ -219,10 +273,28 @@ export async function installHost(
     // clean up the leftover archive copy and (on a thrown attempt) the
     // staging dir that never made it through `atomicSwap`.
     if (staging.archiveIsTemporary) {
-      await rm(staging.archivePath, { force: true });
+      await rm(staging.archivePath, { force: true }).catch((err) => {
+        logger.warn("Host install failed to remove temporary archive", {
+          environment: opts.environment,
+          errorName: errorFromUnknown(err).name,
+          errorMessage: errorFromUnknown(err).message,
+        });
+      });
     }
     if (!swapped) {
-      await rm(staging.stagingDir, { recursive: true, force: true });
+      await rm(staging.stagingDir, { recursive: true, force: true }).catch(
+        (err) => {
+          logger.warn("Host install failed to remove staging directory", {
+            environment: opts.environment,
+            errorName: errorFromUnknown(err).name,
+            errorMessage: errorFromUnknown(err).message,
+          });
+        },
+      );
+      logger.warn("Host install cleaned up unswapped staging attempt", {
+        environment: opts.environment,
+        version: staging.version,
+      });
     }
   }
 }
@@ -273,10 +345,16 @@ interface StageOptions {
 }
 
 async function stageInstall(opts: StageOptions): Promise<StageResult> {
+  const logger = createCliLogger(opts.environment);
   const stagingRoot = hostStagingRoot(opts.environment);
   const stagingDir = await mkdtemp(join(stagingRoot, "stage-"));
+  logger.debug("Host install staging directory created", {
+    environment: opts.environment,
+    sourceKind: opts.source.kind,
+  });
   if (opts.source.kind === "local-file") {
     return stageLocalFile({
+      environment: opts.environment,
       sourcePath: opts.source.path,
       stagingDir,
       onProgress: opts.onProgress,
@@ -297,6 +375,7 @@ async function stageInstall(opts: StageOptions): Promise<StageResult> {
 }
 
 interface StageLocalOptions {
+  readonly environment: Environment;
   readonly sourcePath: string;
   readonly stagingDir: string;
   readonly onProgress: (info: ProgressInfo) => void;
@@ -306,10 +385,16 @@ interface StageLocalOptions {
 }
 
 async function stageLocalFile(opts: StageLocalOptions): Promise<StageResult> {
+  const logger = createCliLogger(opts.environment);
   let sourceStat: Stats;
   try {
     sourceStat = await stat(opts.sourcePath);
-  } catch {
+  } catch (err) {
+    logger.warn("Host install local source missing", {
+      environment: opts.environment,
+      errorName: errorFromUnknown(err).name,
+      errorMessage: errorFromUnknown(err).message,
+    });
     throw cliError({
       code: CLI_ERROR_CODES.HOST_SOURCE_MISSING,
       message: `host install: source path does not exist: ${opts.sourcePath}`,
@@ -327,6 +412,10 @@ async function stageLocalFile(opts: StageLocalOptions): Promise<StageResult> {
   if (sourceStat.isDirectory()) {
     archiveSha256 = null;
     sizeBytes = 0;
+    logger.info("Host install staging local directory source", {
+      environment: opts.environment,
+      recordVersionOverride: opts.recordVersion !== null,
+    });
   } else {
     opts.onProgress({
       stage: "verify",
@@ -337,6 +426,11 @@ async function stageLocalFile(opts: StageLocalOptions): Promise<StageResult> {
     });
     archiveSha256 = await hashFileSha256(opts.sourcePath);
     sizeBytes = sourceStat.size;
+    logger.info("Host install hashed local archive source", {
+      environment: opts.environment,
+      sizeBytes,
+      recordVersionOverride: opts.recordVersion !== null,
+    });
   }
   const version = opts.recordVersion ?? deriveLocalVersion(opts.sourcePath);
   return {
@@ -364,8 +458,14 @@ interface StageRegistryOptions {
 async function stageRegistry(
   opts: StageRegistryOptions,
 ): Promise<StageResult> {
+  const logger = createCliLogger(opts.environment);
   const client = await createDefaultRegistryClient(opts.environment);
   const platformKey = currentHostPlatformKey();
+  logger.info("Host install resolving registry asset", {
+    environment: opts.environment,
+    versionRequest: opts.versionRequest,
+    platformKey,
+  });
   opts.onProgress({
     stage: "resolve",
     message: `resolving host ${opts.versionRequest} for ${platformKey}`,
@@ -377,6 +477,12 @@ async function stageRegistry(
     opts.versionRequest,
     platformKey,
   );
+  logger.info("Host install registry asset resolved", {
+    environment: opts.environment,
+    version: entry.version,
+    platformKey,
+    sizeBytes: asset.sizeBytes,
+  });
   opts.onProgress({
     stage: "download",
     message: `downloading host ${entry.version}`,
@@ -397,6 +503,11 @@ async function stageRegistry(
       totalBytes: progress.totalBytes,
     });
   });
+  logger.info("Host install registry archive verified", {
+    environment: opts.environment,
+    version: entry.version,
+    sizeBytes: asset.sizeBytes,
+  });
   return {
     archivePath: verified.archivePath,
     archiveIsTemporary: true,
@@ -416,6 +527,7 @@ interface AtomicSwapOptions {
 }
 
 async function atomicSwap(opts: AtomicSwapOptions): Promise<void> {
+  const logger = createCliLogger(opts.environment);
   const target = hostInstallDir(opts.environment);
   const trash = `${target}.old-${Date.now()}`;
   await mkdir(hostHomeDir(opts.environment), { recursive: true });
@@ -430,6 +542,10 @@ async function atomicSwap(opts: AtomicSwapOptions): Promise<void> {
     () => true,
     () => false,
   );
+  logger.info("Host install atomic swap starting", {
+    environment: opts.environment,
+    targetExists,
+  });
   if (targetExists) {
     // Move the existing install aside before renaming the new one in,
     // so the rename target is empty. We delete the trash copy after
@@ -440,6 +556,14 @@ async function atomicSwap(opts: AtomicSwapOptions): Promise<void> {
   try {
     await rename(opts.stagingDir, target);
   } catch (cause) {
+    logger.error(
+      "Host install atomic swap failed",
+      {
+        environment: opts.environment,
+        targetExists,
+      },
+      errorFromUnknown(cause),
+    );
     // Restore the previous install if the rename of the new one fails.
     if (targetExists) {
       await rename(trash, target).catch(() => undefined);

@@ -5,6 +5,7 @@ import {
   numberValue,
   slashCommandPlainTextFromAttrs,
 } from "@/lib/composer/tiptap-json-content";
+import { appLogger } from "@/lib/logger";
 
 const CLIPBOARD_SCHEMA = "traycer.composer-content";
 const CLIPBOARD_VERSION = 1;
@@ -45,7 +46,10 @@ export async function copyComposerContentToClipboard(
         }),
       ]);
       return;
-    } catch {
+    } catch (error) {
+      appLogger.warn("[composer-clipboard] rich clipboard write failed", {
+        error: error instanceof Error ? error.name : typeof error,
+      });
       await clipboard.writeText(args.plainText);
       return;
     }
@@ -126,7 +130,11 @@ export function parseComposerClipboardHtml(html: string): JsonContent | null {
 function getClipboardData(clipboardData: DataTransfer, type: string): string {
   try {
     return clipboardData.getData(type);
-  } catch {
+  } catch (error) {
+    appLogger.warn("[composer-clipboard] clipboard data read failed", {
+      type,
+      error: error instanceof Error ? error.name : typeof error,
+    });
     return "";
   }
 }

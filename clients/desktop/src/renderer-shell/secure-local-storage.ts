@@ -82,7 +82,11 @@ export function readEncryptedItem(key: string): string | null {
   try {
     const value = getEncryptStorage().getItem<string>(key);
     return typeof value === "string" && value.length > 0 ? value : null;
-  } catch {
+  } catch (error) {
+    console.warn("[secure-local-storage] encrypted item read failed", {
+      key,
+      error: describeStorageError(error),
+    });
     return null;
   }
 }
@@ -93,4 +97,14 @@ export function writeEncryptedItem(key: string, value: string): void {
 
 export function removeEncryptedItem(key: string): void {
   getEncryptStorage().removeItem(key);
+}
+
+function describeStorageError(error: unknown): {
+  readonly name: string;
+  readonly message: string;
+} {
+  if (error instanceof Error) {
+    return { name: error.name, message: error.message };
+  }
+  return { name: typeof error, message: String(error) };
 }

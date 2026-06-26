@@ -19,6 +19,7 @@ import {
 } from "../../../shared/auth/pkce";
 import { writeCredentials } from "../store/credentials";
 import { config } from "../config";
+import { createCliLogger, type ILogger } from "../logger";
 
 const CALLBACK_PATH = "/callback";
 const CODE_QUERY_PARAM = "code";
@@ -185,7 +186,12 @@ interface LoginSuccess {
 }
 
 export async function runLoginFlow(): Promise<LoginSuccess> {
+  const logger = createCliLogger(config.environment);
   const { authnBaseUrl, cloudUiBaseUrl } = config;
+  logger.info("Login flow started", {
+    environment: config.environment,
+    platform: osPlatform(),
+  });
   // PKCE (RFC 7636): the verifier stays in this process; only its S256
   // challenge goes to cloud-ui, which issues a one-time `code` (not tokens) in
   // the redirect. A sibling process that races the loopback callback gets a
@@ -194,7 +200,14 @@ export async function runLoginFlow(): Promise<LoginSuccess> {
   const state = randomUUID();
   const codeVerifier = generateCodeVerifier();
   const codeChallenge = await deriveCodeChallenge(codeVerifier);
-  const { port, server, waitForCallback } = await startCallbackServer(state);
+  const { port, server, waitForCallback } = await startCallbackServer(
+    state,
+    logger,
+  );
+  logger.info("Login callback server started", {
+    environment: config.environment,
+    port,
+  });
   // State has to live INSIDE the redirect_uri's query string, not as a
   // top-level param on the cloud-ui URL. The Traycer web UI's callback page
   // builds the final redirect via
@@ -222,8 +235,15 @@ export async function runLoginFlow(): Promise<LoginSuccess> {
   let code: string;
   try {
     ({ code } = await waitForCallback());
+    logger.info("Login callback received authorization code", {
+      environment: config.environment,
+      hasCode: code.length > 0,
+    });
   } finally {
     server.close();
+    logger.debug("Login callback server closed", {
+      environment: config.environment,
+    });
   }
 
   // Exchange the one-time code (+ our verifier) for the token pair.
@@ -233,12 +253,21 @@ export async function runLoginFlow(): Promise<LoginSuccess> {
     codeVerifier,
   );
   if (exchange.kind !== "exchanged") {
+    logger.warn("Login code exchange failed", {
+      environment: config.environment,
+      outcome: exchange.kind,
+    });
     throw new Error(
       exchange.kind === "rejected"
         ? "Sign-in succeeded but the authorization code could not be exchanged."
         : "Sign-in succeeded but the authn service is unreachable.",
     );
   }
+  logger.info("Login code exchange succeeded", {
+    environment: config.environment,
+    hasToken: exchange.token.length > 0,
+    hasRefreshToken: exchange.refreshToken.length > 0,
+  });
   const token = exchange.token;
   const refreshToken = exchange.refreshToken;
 
@@ -248,6 +277,10 @@ export async function runLoginFlow(): Promise<LoginSuccess> {
     refreshToken,
   );
   if (validation.kind !== "valid") {
+    logger.warn("Login token validation failed", {
+      environment: config.environment,
+      outcome: validation.kind,
+    });
     throw new Error(
       validation.kind === "rejected"
         ? "Sign-in succeeded but the token was rejected by the authn service."
@@ -280,6 +313,11 @@ export async function runLoginFlow(): Promise<LoginSuccess> {
     savedAt: new Date().toISOString(),
     user: creds.user,
   });
+  logger.info("Login credentials persisted", {
+    environment: config.environment,
+    tokenRotatedDuringValidation: finalToken !== token,
+    refreshTokenRotatedDuringValidation: finalRefreshToken !== refreshToken,
+  });
   return creds;
 }
 
@@ -293,7 +331,10 @@ interface CallbackServer {
   readonly waitForCallback: () => Promise<CallbackCode>;
 }
 
-async function startCallbackServer(expectedState: string): Promise<CallbackServer> {
+async function startCallbackServer(
+  expectedState: string,
+  logger: ILogger,
+): Promise<CallbackServer> {
   let resolveToken: (result: CallbackCode) => void = () => {};
   let rejectToken: (err: Error) => void = () => {};
   const tokenPromise = new Promise<CallbackCode>((resolve, reject) => {
@@ -304,12 +345,20 @@ async function startCallbackServer(expectedState: string): Promise<CallbackServe
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     const url = new URL(req.url ?? "/", `http://127.0.0.1`);
     if (url.pathname !== CALLBACK_PATH) {
+      logger.warn("Login callback rejected unexpected path", {
+        environment: config.environment,
+        path: url.pathname,
+      });
       res.writeHead(404, { "Content-Type": "text/plain" });
       res.end("not found");
       return;
     }
     const incomingState = url.searchParams.get(STATE_QUERY_PARAM);
     if (incomingState !== expectedState) {
+      logger.warn("Login callback rejected state mismatch", {
+        environment: config.environment,
+        hasState: incomingState !== null,
+      });
       res.writeHead(400, { "Content-Type": "text/html; charset=utf-8" });
       res.end(
         callbackHtml(
@@ -326,6 +375,11 @@ async function startCallbackServer(expectedState: string): Promise<CallbackServe
     const oauthError = url.searchParams.get("error");
     if (oauthError !== null && oauthError.length > 0) {
       const description = url.searchParams.get("error_description");
+      logger.warn("Login callback received OAuth error", {
+        environment: config.environment,
+        oauthError,
+        hasDescription: description !== null && description.length > 0,
+      });
       const detail =
         description !== null && description.length > 0
           ? `${oauthError}: ${description}`
@@ -342,6 +396,9 @@ async function startCallbackServer(expectedState: string): Promise<CallbackServe
     }
     const code = url.searchParams.get(CODE_QUERY_PARAM);
     if (code === null || code.length === 0) {
+      logger.warn("Login callback missing authorization code", {
+        environment: config.environment,
+      });
       res.writeHead(400, { "Content-Type": "text/html; charset=utf-8" });
       res.end(
         callbackHtml(
@@ -353,6 +410,10 @@ async function startCallbackServer(expectedState: string): Promise<CallbackServe
       return;
     }
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    logger.info("Login callback accepted", {
+      environment: config.environment,
+      hasCode: true,
+    });
     res.end(
       callbackHtml("success", "You can close this window and return to your terminal."),
     );

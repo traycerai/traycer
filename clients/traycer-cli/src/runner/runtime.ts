@@ -1,5 +1,6 @@
 import type { Environment } from "./environment";
 import { config } from "../config";
+import { createCliLogger, type ILogger } from "../logger";
 
 // Single centralised read of `process.env` typed as the readonly env map
 // every runner-aware code path consumes. Threading this through one
@@ -30,6 +31,7 @@ export interface RuntimeContext {
   readonly noBootstrap: boolean;
   readonly nonInteractive: boolean;
   readonly environment: Environment;
+  readonly logger: ILogger;
 }
 
 function envFlag(value: string | undefined): boolean {
@@ -58,5 +60,6 @@ export function resolveRuntimeContext(
     noBootstrap: flags.noBootstrap === true,
     nonInteractive,
     environment,
+    logger: createCliLogger(environment),
   };
 }

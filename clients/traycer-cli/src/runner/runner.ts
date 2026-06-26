@@ -1,4 +1,5 @@
 import * as Sentry from "@sentry/node";
+import { errorFromUnknown } from "../logger";
 import { toCliError } from "./errors";
 import { createOutput, type Output, type ProgressInfo } from "./output";
 import {
@@ -55,20 +56,46 @@ export async function runCommand(
     output,
     progress: (info) => output.progress(info),
   };
+  runtime.logger.info("CLI command started", {
+    environment: runtime.environment,
+    json: runtime.json,
+    quiet: runtime.quiet,
+    noProgress: runtime.noProgress,
+    noBootstrap: runtime.noBootstrap,
+    nonInteractive: runtime.nonInteractive,
+  });
   let result: CommandResult;
   try {
     result = await fn(ctx);
   } catch (err) {
     Sentry.captureException(err);
     const cliErr = toCliError(err);
+    runtime.logger.error(
+      "CLI command failed",
+      {
+        code: cliErr.code,
+        exitCode: cliErr.exitCode,
+        emittedAsJson: runtime.json,
+      },
+      errorFromUnknown(err),
+    );
     output.emitError(cliErr.code, cliErr.message, cliErr.details);
     try {
       await Sentry.flush(2000);
-    } catch {
+    } catch (flushErr) {
+      runtime.logger.warn("Sentry flush failed after command error", {
+        errorName: errorFromUnknown(flushErr).name,
+        errorMessage: errorFromUnknown(flushErr).message,
+      });
       // best-effort; do not let a flush failure prevent exit
     }
     process.exit(cliErr.exitCode);
   }
+  runtime.logger.info("CLI command completed", {
+    exitCode: result.exitCode,
+    emittedAsJson: runtime.json,
+    hasHumanOutput: result.human !== null,
+  });
   if (runtime.json) {
     output.emitResult(result.data);
   } else if (result.human !== null && !runtime.quiet) {
