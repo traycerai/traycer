@@ -37,7 +37,11 @@ import {
 } from "@traycer/protocol/host/comments/contracts";
 import { hostStatusV10 } from "@traycer/protocol/host/status/contracts";
 import { hostGetRuntimeCapabilitiesV10 } from "@traycer/protocol/host/runtime-capabilities/contracts";
-import { hostGetRateLimitUsageV10 } from "@traycer/protocol/host/rate-limit/contracts";
+import {
+  hostGetRateLimitUsageV10,
+  hostGetRateLimitUsageV11,
+  hostGetRateLimitUsageUpgradeV10ToV11,
+} from "@traycer/protocol/host/rate-limit/contracts";
 import {
   epicBatchDeleteV10,
   epicBatchUpdateRolesV10,
@@ -114,7 +118,10 @@ import {
   gitGetCapabilitiesV10,
   gitSubscribeStatusV10,
 } from "@traycer/protocol/host/git-contracts";
-import { defineRpcContract } from "@traycer/protocol/framework/index";
+import {
+  defineRpcContract,
+  defineUpgradePath,
+} from "@traycer/protocol/framework/index";
 import {
   worktreeCreateRequestSchema,
   worktreeCreateResponseSchema,
@@ -130,8 +137,8 @@ import {
   worktreeListBranchesResponseSchema,
   worktreeListByWorkspacePathsRequestSchema,
   worktreeListByWorkspacePathsResponseSchema,
-  worktreeReadScriptsAtRefRequestSchema,
-  worktreeReadScriptsAtRefResponseSchema,
+  worktreeListByWorkspacePathsRequestSchemaV11,
+  worktreeListByWorkspacePathsResponseSchemaV11,
   worktreeListBindingsForEpicRequestSchema,
   worktreeListBindingsForEpicResponseSchema,
   worktreeRetrySetupRequestSchema,
@@ -244,18 +251,43 @@ export const worktreeListByWorkspacePathsV10 = defineRpcContract({
   responseSchema: worktreeListByWorkspacePathsResponseSchema,
 });
 
+// v1.1 adds the per-ref committed-scripts preview (`scriptRefs` ->
+// `scriptsAtRefs`) the create-worktree Environment editor uses. Folded onto this
+// existing method instead of a standalone `worktree.readScriptsAtRef` so the wire
+// method-set stays identical to v1.0.0 - a new method name fatally fails the
+// equal-set handshake against an already-shipped host. See the RPC backward-compat
+// decision log.
+export const worktreeListByWorkspacePathsV11 = defineRpcContract({
+  method: "worktree.listByWorkspacePaths",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: worktreeListByWorkspacePathsRequestSchemaV11,
+  responseSchema: worktreeListByWorkspacePathsResponseSchemaV11,
+});
+
+// Additive upgrade from v1.0: an older peer carries no ref-scripts, so the new
+// fields default to empty. The newer side runs this when bridging a v1.0 peer up
+// to canonical (host: inbound v1.0 request; client: inbound v1.0 response).
+export const worktreeListByWorkspacePathsUpgradeV10ToV11 = defineUpgradePath<
+  typeof worktreeListByWorkspacePathsV10,
+  typeof worktreeListByWorkspacePathsV11
+>({
+  from: worktreeListByWorkspacePathsV10.schemaVersion,
+  to: worktreeListByWorkspacePathsV11.schemaVersion,
+  upgradeRequest: (request) => ({
+    workspacePaths: request.workspacePaths,
+    scriptRefs: [],
+  }),
+  upgradeResponse: (response) => ({
+    workspaces: response.workspaces,
+    scriptsAtRefs: [],
+  }),
+});
+
 export const worktreeListBranchesV10 = defineRpcContract({
   method: "worktree.listBranches",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: worktreeListBranchesRequestSchema,
   responseSchema: worktreeListBranchesResponseSchema,
-});
-
-export const worktreeReadScriptsAtRefV10 = defineRpcContract({
-  method: "worktree.readScriptsAtRef",
-  schemaVersion: { major: 1, minor: 0 } as const,
-  requestSchema: worktreeReadScriptsAtRefRequestSchema,
-  responseSchema: worktreeReadScriptsAtRefResponseSchema,
 });
 
 export const worktreeCreateV10 = defineRpcContract({
@@ -479,11 +511,15 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
   },
   "host.getRateLimitUsage": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: hostGetRateLimitUsageV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: hostGetRateLimitUsageV11,
+          upgradeFromPreviousVersion: hostGetRateLimitUsageUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -1463,11 +1499,16 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
   },
   "worktree.listByWorkspacePaths": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: worktreeListByWorkspacePathsV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: worktreeListByWorkspacePathsV11,
+          upgradeFromPreviousVersion:
+            worktreeListByWorkspacePathsUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -1479,18 +1520,6 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
       versions: {
         0: {
           contract: worktreeListBranchesV10,
-          upgradeFromPreviousVersion: null,
-        },
-      },
-      downgradePathsFromLatest: {},
-    },
-  },
-  "worktree.readScriptsAtRef": {
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: worktreeReadScriptsAtRefV10,
           upgradeFromPreviousVersion: null,
         },
       },

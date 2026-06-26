@@ -107,7 +107,14 @@ function createFixture(): {
     handlers: {
       "worktree.listByWorkspacePaths": async (params) => {
         if (gate !== null) await gate;
-        return { workspaces: params.workspacePaths.map(workspaceSummary) };
+        return {
+          workspaces: params.workspacePaths.map(workspaceSummary),
+          scriptsAtRefs: params.scriptRefs.map(({ workspacePath, ref }) => ({
+            workspacePath,
+            ref,
+            scripts: null,
+          })),
+        };
       },
     },
   });

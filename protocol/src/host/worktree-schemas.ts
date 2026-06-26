@@ -239,29 +239,61 @@ export type WorktreeListByWorkspacePathsResponse = z.infer<
 >;
 
 /**
- * Reads the committed `<repoRoot>/.traycer/environment.json` from an arbitrary
- * git ref (`git show <ref>:.traycer/environment.json`) without checking it out.
- * Lets the create-worktree Environment editor preview the SOURCE branch's
- * scripts - the exact file a fresh worktree forked from that ref inherits -
- * instead of the primary checkout's on-disk value. `ref` is a branch name (the
- * fork `source` for a new branch, or the branch `name` for an existing-branch
- * checkout).
+ * One committed-scripts-at-ref read request. `ref` is a branch name - the fork
+ * `source` for a new branch, or the branch `name` for an existing-branch
+ * checkout. The host reads the committed `<repoRoot>/.traycer/environment.json`
+ * at that ref (`git show <ref>:.traycer/environment.json`) without checking it
+ * out - exactly one `git show` per entry, never a walk of every branch.
  */
-export const worktreeReadScriptsAtRefRequestSchema = z.object({
+export const worktreeScriptRefSchema = z.object({
   workspacePath: z.string(),
   ref: z.string().min(1),
 });
-export type WorktreeReadScriptsAtRefRequest = z.infer<
-  typeof worktreeReadScriptsAtRefRequestSchema
->;
+export type WorktreeScriptRef = z.infer<typeof worktreeScriptRefSchema>;
 
-export const worktreeReadScriptsAtRefResponseSchema = z.object({
-  // `null` when the ref carries no committed `environment.json` (or the file
-  // fails schema validation), so the renderer falls back to its prior seed.
+/**
+ * The committed scripts resolved for one requested {@link WorktreeScriptRef}.
+ * `scripts` is `null` when the ref carries no committed `environment.json` (or
+ * the file fails schema validation), so the renderer falls back to its prior
+ * seed.
+ */
+export const worktreeScriptsAtRefSchema = z.object({
+  workspacePath: z.string(),
+  ref: z.string(),
   scripts: workspaceScriptsSchema.nullable(),
 });
-export type WorktreeReadScriptsAtRefResponse = z.infer<
-  typeof worktreeReadScriptsAtRefResponseSchema
+export type WorktreeScriptsAtRef = z.infer<typeof worktreeScriptsAtRefSchema>;
+
+/**
+ * `worktree.listByWorkspacePaths` v1.1 request. Adds `scriptRefs` - a batch of
+ * committed-scripts-at-ref reads - so the create-worktree Environment editor can
+ * preview a SOURCE branch's scripts WITHOUT a dedicated `worktree.readScriptsAtRef`
+ * method (the wire method-set must stay identical to v1.0.0; see the RPC
+ * backward-compat decision log). Reading is per-ref and lazy: one `git show` per
+ * entry. Pass `[]` to list workspaces only; pass `workspacePaths: []` with a
+ * single `scriptRefs` entry for a pure point-read (the create-worktree dialog's
+ * preview path).
+ */
+export const worktreeListByWorkspacePathsRequestSchemaV11 =
+  worktreeListByWorkspacePathsRequestSchema.extend({
+    scriptRefs: z.array(worktreeScriptRefSchema),
+  });
+export type WorktreeListByWorkspacePathsRequestV11 = z.infer<
+  typeof worktreeListByWorkspacePathsRequestSchemaV11
+>;
+
+/**
+ * `worktree.listByWorkspacePaths` v1.1 response. Adds `scriptsAtRefs`, one entry
+ * per request `scriptRefs` entry (order-aligned). Empty when no refs were
+ * requested, or `[]` after bridging down to a v1.0 host (the renderer then falls
+ * back to the primary checkout's on-disk scripts).
+ */
+export const worktreeListByWorkspacePathsResponseSchemaV11 =
+  worktreeListByWorkspacePathsResponseSchema.extend({
+    scriptsAtRefs: z.array(worktreeScriptsAtRefSchema),
+  });
+export type WorktreeListByWorkspacePathsResponseV11 = z.infer<
+  typeof worktreeListByWorkspacePathsResponseSchemaV11
 >;
 
 export const worktreeBranchSchema = z.object({

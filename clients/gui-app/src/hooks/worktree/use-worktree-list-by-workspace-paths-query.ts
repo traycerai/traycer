@@ -20,7 +20,9 @@ export function useWorktreeListByWorkspacePathsForClient(
   return useHostQuery<HostRpcRegistry, "worktree.listByWorkspacePaths">({
     client,
     method: "worktree.listByWorkspacePaths",
-    params: { workspacePaths: [...args.workspacePaths] },
+    // This summary-listing path never previews ref scripts; the per-ref read is a
+    // separate point-read (see worktree-scripts-dialog). v1.1 requires the field.
+    params: { workspacePaths: [...args.workspacePaths], scriptRefs: [] },
     options: {
       enabled: args.enabled && args.workspacePaths.length > 0,
       // The path set is part of the query key, so adding/removing a folder
