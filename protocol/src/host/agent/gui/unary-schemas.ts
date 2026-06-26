@@ -1,5 +1,8 @@
 import { z } from "zod";
-import { guiHarnessIdSchema } from "@traycer/protocol/host/agent/shared";
+import {
+  guiHarnessIdSchema,
+  guiHarnessIdSchemaV10,
+} from "@traycer/protocol/host/agent/shared";
 import {
   ALL_PERMISSION_MODES,
   permissionModeSchema,
@@ -122,6 +125,17 @@ export type ListGuiHarnessesRequest = z.infer<
 
 export const listGuiHarnessesResponseSchema = z.object({
   harnesses: z.array(guiHarnessOptionSchema),
+});
+
+// ── Frozen protocol-v1.0 (grok-less) catalog row + response ────────────────
+// A v1.0 client predates grok; the v2.0 line of `agent.gui.listHarnesses` adds
+// it, and the v2→v1 downgrade bridge filters grok out for v1.0 callers so their
+// strict (grok-less) decode never sees a value it can't parse.
+export const guiHarnessOptionSchemaV10 = guiHarnessOptionSchema.extend({
+  id: guiHarnessIdSchemaV10,
+});
+export const listGuiHarnessesResponseSchemaV10 = z.object({
+  harnesses: z.array(guiHarnessOptionSchemaV10),
 });
 export type ListGuiHarnessesResponse = z.infer<
   typeof listGuiHarnessesResponseSchema

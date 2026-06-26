@@ -48,4 +48,11 @@ export const epicArtifactKindSchema = z.enum([
   "review",
 ]);
 
-export const harnessIdSchema = z.enum(["claude", "codex", "opencode", "traycer", "cursor"]);
+export const harnessIdSchema = z.enum([
+  "claude",
+  "codex",
+  "opencode",
+  "traycer",
+  "cursor",
+  "grok",
+]);
