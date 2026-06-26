@@ -37,8 +37,8 @@ import {
   __resetNotificationsStoreForTests,
   useNotificationsStore,
 } from "@/stores/notifications/notifications-store";
+import { UNSUPPORTED_DIAGNOSTICS_STATUS } from "@/__tests__/diagnostics-status-fixtures";
 import type { ListTasksResponse } from "@traycer/protocol/host/epic/unary-schemas";
-import type { DiagnosticsStatus } from "@traycer/protocol/config/diagnostics-schema";
 import type {
   GuiHarnessId,
   GuiHarnessOption,
@@ -118,23 +118,6 @@ function guiHarness(id: GuiHarnessId, label: string): GuiHarnessOption {
     ],
   };
 }
-
-const UNSUPPORTED_DIAGNOSTICS_STATUS: DiagnosticsStatus = {
-  supported: false,
-  configuredLevel: null,
-  effectiveLevel: null,
-  source: "unsupported",
-  readStatus: null,
-  configPath: "",
-  configMtimeMs: null,
-  appliedConfigMtimeMs: null,
-  appliedAt: null,
-  expiresAt: null,
-  hostVersion: "1.2.3",
-  activeSlot: null,
-  logPath: null,
-  restartRequired: false,
-};
 
 function hostStatusResponse() {
   return {

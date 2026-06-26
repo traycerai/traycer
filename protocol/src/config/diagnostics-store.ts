@@ -103,6 +103,7 @@ export function resolveDiagnosticsEffective(
   const invalidTemporaryGeneralValue = invalidTemporaryValue(
     raw.raw.temporaryLogLevel,
     temporaryGeneral,
+    isDiagnosticLogLevel,
   );
   const activeTemporaryGeneral = readActiveTemporary(
     temporaryGeneral,
@@ -127,6 +128,7 @@ export function resolveDiagnosticsEffective(
   const invalidTemporaryHostValue = invalidTemporaryValue(
     raw.raw.temporaryHostLogLevel,
     temporaryHost,
+    isHostDiagnosticLogLevel,
   );
   const activeTemporaryHost = readActiveTemporary(
     temporaryHost,
@@ -570,12 +572,19 @@ function hasValidDate(value: string): boolean {
   return Number.isFinite(Date.parse(value));
 }
 
-function invalidTemporaryValue<TTemporary>(
+function invalidTemporaryValue<TLevel extends string, TTemporary>(
   value: unknown,
   temporary: TTemporary | null,
+  isLevel: (value: unknown) => value is TLevel,
 ): unknown {
   if (value === undefined || value === null || temporary !== null) {
     return undefined;
+  }
+  if (isRecord(value)) {
+    const level = value.level;
+    if (typeof level === "string" && !isLevel(level)) {
+      return level;
+    }
   }
   return value;
 }

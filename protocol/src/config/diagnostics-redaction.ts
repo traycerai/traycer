@@ -31,7 +31,7 @@ export function redactDiagnosticsLogTail(
 ): string {
   const wholeLines = truncated ? dropPartialFirstLine(rawTail) : rawTail;
   return redactDiagnosticsText(
-    truncated ? redactLeadingPartialPrivateKeyBlock(wholeLines) : wholeLines,
+    truncated ? redactTruncatedPrivateKeyFragments(wholeLines) : wholeLines,
   );
 }
 
@@ -144,6 +144,12 @@ function redactPrivateKeyBlocks(value: string): string {
   return redacted;
 }
 
+function redactTruncatedPrivateKeyFragments(value: string): string {
+  return redactTrailingPartialPrivateKeyBlock(
+    redactLeadingPartialPrivateKeyBlock(value),
+  );
+}
+
 function redactLeadingPartialPrivateKeyBlock(value: string): string {
   const firstBeginIndex = value.indexOf(PRIVATE_KEY_BEGIN_PREFIX);
   const firstEndMarker = findPrivateKeyEndMarker(value, 0);
@@ -152,6 +158,49 @@ function redactLeadingPartialPrivateKeyBlock(value: string): string {
     return value;
   }
   return `<redacted-private-key>${value.slice(firstEndMarker.end)}`;
+}
+
+function redactTrailingPartialPrivateKeyBlock(value: string): string {
+  let cursor = 0;
+  while (cursor < value.length) {
+    const beginMarker = findPrivateKeyBeginMarker(value, cursor);
+    if (beginMarker === null) return value;
+
+    const endMarker = `${PRIVATE_KEY_END_PREFIX}${beginMarker.keyType}${PRIVATE_KEY_SUFFIX}`;
+    const endIndex = value.indexOf(endMarker, beginMarker.end);
+    if (endIndex === -1) {
+      return `${value.slice(0, beginMarker.start)}<redacted-private-key>`;
+    }
+    cursor = endIndex + endMarker.length;
+  }
+  return value;
+}
+
+function findPrivateKeyBeginMarker(
+  value: string,
+  startIndex: number,
+): {
+  readonly start: number;
+  readonly end: number;
+  readonly keyType: string;
+} | null {
+  let cursor = startIndex;
+  while (cursor < value.length) {
+    const markerStart = value.indexOf(PRIVATE_KEY_BEGIN_PREFIX, cursor);
+    if (markerStart === -1) return null;
+
+    const typeStart = markerStart + PRIVATE_KEY_BEGIN_PREFIX.length;
+    const markerEnd = value.indexOf(PRIVATE_KEY_SUFFIX, typeStart);
+    if (markerEnd === -1) return null;
+
+    const keyType = value.slice(typeStart, markerEnd);
+    const end = markerEnd + PRIVATE_KEY_SUFFIX.length;
+    if (isPrivateKeyType(keyType)) {
+      return { start: markerStart, end, keyType };
+    }
+    cursor = typeStart;
+  }
+  return null;
 }
 
 function findPrivateKeyEndMarker(

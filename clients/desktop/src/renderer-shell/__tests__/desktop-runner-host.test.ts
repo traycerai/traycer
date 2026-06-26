@@ -3,6 +3,9 @@ import type {
   AuthCallbackResult,
   AuthTokenValidationResult,
   LocalHostSnapshot,
+  TraycerDiagnosticsConfigClearTemporaryInput,
+  TraycerDiagnosticsConfigSetInput,
+  TraycerDiagnosticsConfigTemporaryInput,
   TrayEpic,
   TrayIndicatorState,
 } from "@traycer-clients/shared/platform/runner-host";
@@ -46,6 +49,9 @@ interface FakeBridgeHandle {
     readonly type: string;
     readonly bytes: ArrayBuffer;
   }>;
+  readonly diagnosticsSetInputs: readonly TraycerDiagnosticsConfigSetInput[];
+  readonly diagnosticsTemporaryInputs: readonly TraycerDiagnosticsConfigTemporaryInput[];
+  readonly diagnosticsClearTemporaryInputs: readonly TraycerDiagnosticsConfigClearTemporaryInput[];
   emit(snapshot: LocalHostSnapshot | null): void;
 }
 
@@ -68,6 +74,11 @@ function buildFakeBridge(
     readonly type: string;
     readonly bytes: ArrayBuffer;
   }> = [];
+  const diagnosticsSetInputs: TraycerDiagnosticsConfigSetInput[] = [];
+  const diagnosticsTemporaryInputs: TraycerDiagnosticsConfigTemporaryInput[] =
+    [];
+  const diagnosticsClearTemporaryInputs: TraycerDiagnosticsConfigClearTemporaryInput[] =
+    [];
   const bridge: DesktopPreloadBridge = {
     authnBaseUrl: "http://localhost:5005",
     authRedirectUri: "",
@@ -347,126 +358,135 @@ function buildFakeBridge(
         },
         cliVersion: "mock",
       }),
-      diagnosticsConfigSet: async () => ({
-        raw: {
-          raw: { logLevel: "debug" },
-          readStatus: "ok",
-          path: "/mock/diagnostics.json",
-          mtimeMs: 1,
-        },
-        effective: {
-          general: {
-            level: "debug",
-            source: "permanent",
+      diagnosticsConfigSet: async (input) => {
+        diagnosticsSetInputs.push(input);
+        return {
+          raw: {
+            raw: { logLevel: "debug" },
+            readStatus: "ok",
+            path: "/mock/diagnostics.json",
+            mtimeMs: 1,
+          },
+          effective: {
+            general: {
+              level: "debug",
+              source: "permanent",
+              expiresAt: null,
+              configuredValue: "debug",
+            },
+            host: {
+              level: "debug",
+              source: "permanent-inherited",
+              expiresAt: null,
+              configuredValue: "inherit",
+            },
+            rawHostSetting: "inherit",
+          },
+          hostStatus: {
+            supported: false,
+            configuredLevel: null,
+            effectiveLevel: null,
+            source: "unreachable",
+            readStatus: "ok",
+            configPath: "/mock/diagnostics.json",
+            configMtimeMs: 1,
+            appliedConfigMtimeMs: null,
+            appliedAt: null,
             expiresAt: null,
-            configuredValue: "debug",
+            hostVersion: null,
+            activeSlot: "mock",
+            logPath: null,
+            restartRequired: false,
           },
-          host: {
-            level: "debug",
-            source: "permanent-inherited",
+          cliVersion: "mock",
+        };
+      },
+      diagnosticsConfigTemporary: async (input) => {
+        diagnosticsTemporaryInputs.push(input);
+        return {
+          raw: {
+            raw: {},
+            readStatus: "ok",
+            path: "/mock/diagnostics.json",
+            mtimeMs: 1,
+          },
+          effective: {
+            general: {
+              level: "debug",
+              source: "temporary",
+              expiresAt: "2030-01-01T00:00:00.000Z",
+              configuredValue: "debug",
+            },
+            host: {
+              level: "debug",
+              source: "temporary-inherited",
+              expiresAt: "2030-01-01T00:00:00.000Z",
+              configuredValue: "inherit",
+            },
+            rawHostSetting: "inherit",
+          },
+          hostStatus: {
+            supported: false,
+            configuredLevel: null,
+            effectiveLevel: null,
+            source: "unreachable",
+            readStatus: "ok",
+            configPath: "/mock/diagnostics.json",
+            configMtimeMs: 1,
+            appliedConfigMtimeMs: null,
+            appliedAt: null,
             expiresAt: null,
-            configuredValue: "inherit",
+            hostVersion: null,
+            activeSlot: "mock",
+            logPath: null,
+            restartRequired: false,
           },
-          rawHostSetting: "inherit",
-        },
-        hostStatus: {
-          supported: false,
-          configuredLevel: null,
-          effectiveLevel: null,
-          source: "unreachable",
-          readStatus: "ok",
-          configPath: "/mock/diagnostics.json",
-          configMtimeMs: 1,
-          appliedConfigMtimeMs: null,
-          appliedAt: null,
-          expiresAt: null,
-          hostVersion: null,
-          activeSlot: "mock",
-          logPath: null,
-          restartRequired: false,
-        },
-        cliVersion: "mock",
-      }),
-      diagnosticsConfigTemporary: async () => ({
-        raw: {
-          raw: {},
-          readStatus: "ok",
-          path: "/mock/diagnostics.json",
-          mtimeMs: 1,
-        },
-        effective: {
-          general: {
-            level: "debug",
-            source: "temporary",
-            expiresAt: "2030-01-01T00:00:00.000Z",
-            configuredValue: "debug",
+          cliVersion: "mock",
+        };
+      },
+      diagnosticsConfigClearTemporary: async (input) => {
+        diagnosticsClearTemporaryInputs.push(input);
+        return {
+          raw: {
+            raw: {},
+            readStatus: "missing",
+            path: "/mock/diagnostics.json",
+            mtimeMs: null,
           },
-          host: {
-            level: "debug",
-            source: "temporary-inherited",
-            expiresAt: "2030-01-01T00:00:00.000Z",
-            configuredValue: "inherit",
+          effective: {
+            general: {
+              level: "info",
+              source: "default",
+              expiresAt: null,
+              configuredValue: undefined,
+            },
+            host: {
+              level: "info",
+              source: "default",
+              expiresAt: null,
+              configuredValue: undefined,
+            },
+            rawHostSetting: "inherit",
           },
-          rawHostSetting: "inherit",
-        },
-        hostStatus: {
-          supported: false,
-          configuredLevel: null,
-          effectiveLevel: null,
-          source: "unreachable",
-          readStatus: "ok",
-          configPath: "/mock/diagnostics.json",
-          configMtimeMs: 1,
-          appliedConfigMtimeMs: null,
-          appliedAt: null,
-          expiresAt: null,
-          hostVersion: null,
-          activeSlot: "mock",
-          logPath: null,
-          restartRequired: false,
-        },
-        cliVersion: "mock",
-      }),
-      diagnosticsConfigClearTemporary: async (_input) => ({
-        raw: {
-          raw: {},
-          readStatus: "missing",
-          path: "/mock/diagnostics.json",
-          mtimeMs: null,
-        },
-        effective: {
-          general: {
-            level: "info",
-            source: "default",
+          hostStatus: {
+            supported: false,
+            configuredLevel: null,
+            effectiveLevel: null,
+            source: "unreachable",
+            readStatus: "missing",
+            configPath: "/mock/diagnostics.json",
+            configMtimeMs: null,
+            appliedConfigMtimeMs: null,
+            appliedAt: null,
             expiresAt: null,
-            configuredValue: undefined,
+            hostVersion: null,
+            activeSlot: "mock",
+            logPath: null,
+            restartRequired: false,
           },
-          host: {
-            level: "info",
-            source: "default",
-            expiresAt: null,
-            configuredValue: undefined,
-          },
-          rawHostSetting: "inherit",
-        },
-        hostStatus: {
-          supported: false,
-          configuredLevel: null,
-          effectiveLevel: null,
-          source: "unreachable",
-          readStatus: "missing",
-          configPath: "/mock/diagnostics.json",
-          configMtimeMs: null,
-          appliedConfigMtimeMs: null,
-          appliedAt: null,
-          expiresAt: null,
-          hostVersion: null,
-          activeSlot: "mock",
-          logPath: null,
-          restartRequired: false,
-        },
-        cliVersion: "mock",
-      }),
+          cliVersion: "mock",
+        };
+      },
       shellConfigGet: async () => ({
         path: "/bin/zsh",
         args: ["-i", "-l"],
@@ -622,6 +642,9 @@ function buildFakeBridge(
     ownershipClaims,
     ownershipReleases,
     temporaryWrites,
+    diagnosticsSetInputs,
+    diagnosticsTemporaryInputs,
+    diagnosticsClearTemporaryInputs,
     emit(snapshot: LocalHostSnapshot | null): void {
       lastEmitted = snapshot;
       for (const handler of handlers) {
@@ -843,6 +866,33 @@ describe("DesktopRunnerHost.onLocalHostChange", () => {
     // The fake bridge increments its internal counter - observable via a
     // subsequent respawn not throwing and the await resolving.
     expect(host.authnBaseUrl).toBe("http://localhost:5005");
+  });
+
+  it("forwards diagnostics config mutation payloads to the bridge", async () => {
+    const fake = buildFakeBridge(null);
+    const host = new DesktopRunnerHost({
+      bridge: fake.bridge,
+      signInUrl: "https://auth.example.invalid/sign-in",
+    });
+
+    await host.traycerCli.diagnosticsConfigSet({
+      level: "debug",
+      hostLevel: null,
+    });
+    await host.traycerCli.diagnosticsConfigTemporary({
+      level: null,
+      hostLevel: "trace",
+      duration: "10m",
+    });
+    await host.traycerCli.diagnosticsConfigClearTemporary({ scope: "host" });
+
+    expect(fake.diagnosticsSetInputs).toEqual([
+      { level: "debug", hostLevel: null },
+    ]);
+    expect(fake.diagnosticsTemporaryInputs).toEqual([
+      { level: null, hostLevel: "trace", duration: "10m" },
+    ]);
+    expect(fake.diagnosticsClearTemporaryInputs).toEqual([{ scope: "host" }]);
   });
 
   it("forwards workspace folder picking to the bridge", async () => {

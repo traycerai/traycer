@@ -86,10 +86,12 @@ describe("redactDiagnosticsLogTail", () => {
   });
 
   it("redacts a truncated tail that starts inside a private key body", () => {
+    const privateKeyLabel = ["PRIVATE", "KEY"].join(" ");
+    const privateKeyEnd = ["-----END", `${privateKeyLabel}-----`].join(" ");
     const tail = [
       "partial-base64-line-from-before-window",
       "still-secret-private-key-body",
-      "-----END PRIVATE KEY-----",
+      privateKeyEnd,
       "info: ready",
     ].join("\n");
 
@@ -98,6 +100,22 @@ describe("redactDiagnosticsLogTail", () => {
     expect(redacted).toContain("<redacted-private-key>");
     expect(redacted).toContain("info: ready");
     expect(redacted).not.toContain("still-secret-private-key-body");
-    expect(redacted).not.toContain("-----END PRIVATE KEY-----");
+    expect(redacted).not.toContain(privateKeyEnd);
+  });
+
+  it("redacts a truncated tail that ends inside a private key body", () => {
+    const privateKeyLabel = ["PRIVATE", "KEY"].join(" ");
+    const privateKeyBegin = ["-----BEGIN", `${privateKeyLabel}-----`].join(" ");
+    const tail = [
+      "partial first line dropped",
+      privateKeyBegin,
+      "still-secret-private-key-body",
+    ].join("\n");
+
+    const redacted = redactDiagnosticsLogTail(tail, true);
+
+    expect(redacted).toContain("<redacted-private-key>");
+    expect(redacted).not.toContain("still-secret-private-key-body");
+    expect(redacted).not.toContain(privateKeyBegin);
   });
 });

@@ -321,6 +321,40 @@ describe("diagnostics config store", () => {
     });
   });
 
+  it("classifies unknown nested temporary levels as unsupported raw values", async () => {
+    await setDiagnosticsLogLevel("warn");
+    await writeDiagnosticsRaw(
+      JSON.stringify({
+        version: 1,
+        logLevel: "warn",
+        temporaryLogLevel: {
+          level: "verbose",
+          expiresAt: "2026-01-01T00:30:00.000Z",
+        },
+        temporaryHostLogLevel: {
+          level: "chatty",
+          expiresAt: "2026-01-01T00:30:00.000Z",
+        },
+      }),
+    );
+
+    const effective = resolveDiagnosticsEffective(
+      await readDiagnosticsRaw(),
+      new Date("2026-01-01T00:00:00.000Z"),
+    );
+
+    expect(effective.general).toMatchObject({
+      level: "warn",
+      source: "unsupported-raw",
+      configuredValue: "verbose",
+    });
+    expect(effective.host).toMatchObject({
+      level: "warn",
+      source: "unsupported-raw",
+      configuredValue: "chatty",
+    });
+  });
+
   it("preserves invalid inherited general state on the host scope", async () => {
     await writeDiagnosticsRaw(
       JSON.stringify({

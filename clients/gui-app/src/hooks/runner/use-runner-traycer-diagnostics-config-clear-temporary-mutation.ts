@@ -37,6 +37,7 @@ export function useRunnerTraycerDiagnosticsConfigClearTemporaryMutation(): UseMu
     },
     onMutate: () => ({ hostId: activeHostId }),
     onSuccess: (snapshot, _scope, context) => {
+      if (context.hostId !== activeHostId) return;
       // The CLI write returns the authoritative post-write snapshot, so this is
       // a response-equals-state cache write, not a speculative optimistic
       // update. Consume the host id captured in onMutate so a host swap
