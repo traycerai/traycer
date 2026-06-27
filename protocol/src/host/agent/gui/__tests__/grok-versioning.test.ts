@@ -65,13 +65,14 @@ function providerState(providerId: string) {
   };
 }
 
-describe("ACP harness non-breaking v2→v1 downgrade bridges", () => {
-  it("drops grok and kimi from agent.gui.listHarnesses for v1.0 callers", () => {
+describe("post-v1.0 GUI harness non-breaking v2→v1 downgrade bridges", () => {
+  it("drops post-v1.0 harnesses from agent.gui.listHarnesses for v1.0 callers", () => {
     const v2Response = listGuiHarnessesResponseSchema.parse({
       harnesses: [
         harnessOption("claude"),
         harnessOption("grok"),
         harnessOption("kimi"),
+        harnessOption("droid"),
         harnessOption("cursor"),
       ],
     });
@@ -92,12 +93,13 @@ describe("ACP harness non-breaking v2→v1 downgrade bridges", () => {
     ).not.toThrow();
   });
 
-  it("drops grok and kimi from providers.list for v1.0 callers", () => {
+  it("drops post-v1.0 providers from providers.list for v1.0 callers", () => {
     const v2Response = providersListResponseSchema.parse({
       providers: [
         providerState("cursor"),
         providerState("grok"),
         providerState("kimi"),
+        providerState("droid"),
       ],
     });
 
@@ -113,7 +115,7 @@ describe("ACP harness non-breaking v2→v1 downgrade bridges", () => {
     ).not.toThrow();
   });
 
-  it("drops grok and kimi agents from agent.list for v1.0 callers", () => {
+  it("drops post-v1.0 agents from agent.list for v1.0 callers", () => {
     const v2Response = listAgentsResponseSchema.parse({
       caller: { agentId: "self", canSendMessages: true },
       scope: "all",
@@ -121,6 +123,7 @@ describe("ACP harness non-breaking v2→v1 downgrade bridges", () => {
         agentSummary("a-claude", "claude"),
         agentSummary("a-grok", "grok"),
         agentSummary("a-kimi", "kimi"),
+        agentSummary("a-droid", "droid"),
         agentSummary("a-null", null),
       ],
     });

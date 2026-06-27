@@ -16,6 +16,7 @@ import { useTabProvidersList } from "@/hooks/providers/use-tab-providers-list-qu
 function providerIdForHarness(harnessId: GuiHarnessId): ProviderId | null {
   if (harnessId === "traycer") return null;
   if (harnessId === "grok") return "grok";
+  if (harnessId === "droid") return "droid";
   if (harnessId === "kimi") return "kimi";
   return TUI_HARNESS_ID_TO_PROVIDER_ID[harnessId];
 }
