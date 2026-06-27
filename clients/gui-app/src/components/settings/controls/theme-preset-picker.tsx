@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { ChevronsUpDown } from "lucide-react";
 import {
   Command,
@@ -38,16 +38,47 @@ interface ThemePresetPickerProps {
  * The Popover panel already supplies the surface (bg + ring + radius), so the
  * Command is flattened to transparent/no-radius - otherwise it nests a second
  * rounded panel inside the first with a mismatched radius.
+ *
+ * When this picker lives inside the modal Settings dialog, the popover is
+ * portaled INTO the dialog content rather than the default `document.body`.
+ * A modal Radix dialog wraps its content in `react-remove-scroll` with the
+ * dialog content as the only allowed "shard", so wheel/touch scrolling is
+ * blocked everywhere else - including a body-portaled popover, leaving the
+ * preset list un-scrollable by mouse. Portaling into the dialog content puts
+ * the list inside that shard, and `collisionBoundary` keeps it positioned
+ * within the dialog bounds. Outside a dialog (Settings opened as a tab) there
+ * is no shard, so we fall back to the default body portal.
  */
 export function ThemePresetPicker(props: ThemePresetPickerProps) {
   const { value, onChange } = props;
   const [open, setOpen] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const [dialogContainer, setDialogContainer] = useState<HTMLElement | null>(
+    null,
+  );
   const active = findThemePreset(value);
+  // cmdk highlights the first item by default; drive its highlighted value so
+  // the active preset is the one selected on open. cmdk scrolls its selected
+  // item into view, which brings presets near the end of the list into view.
+  const [commandValue, setCommandValue] = useState(active.label);
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        if (next) {
+          setCommandValue(active.label);
+          const content = triggerRef.current?.closest<HTMLElement>(
+            '[data-slot="dialog-content"]',
+          );
+          setDialogContainer(content ?? null);
+        }
+        setOpen(next);
+      }}
+    >
       <PopoverTrigger asChild>
         <button
+          ref={triggerRef}
           type="button"
           className="inline-flex min-w-44 items-center justify-between gap-3 rounded-md border border-border bg-card px-2.5 py-1.5 text-ui-sm text-foreground transition-colors hover:bg-accent/50"
         >
@@ -60,9 +91,16 @@ export function ThemePresetPicker(props: ThemePresetPickerProps) {
       </PopoverTrigger>
       <PopoverContent
         align="end"
+        container={dialogContainer ?? undefined}
+        collisionBoundary={dialogContainer ?? undefined}
+        collisionPadding={8}
         className="w-[min(85vw,17rem)] overflow-hidden p-0"
       >
-        <Command className="rounded-none bg-transparent p-0">
+        <Command
+          value={commandValue}
+          onValueChange={setCommandValue}
+          className="rounded-none bg-transparent p-0"
+        >
           <CommandInput
             aria-label="Search theme presets"
             placeholder="Search presets…"
