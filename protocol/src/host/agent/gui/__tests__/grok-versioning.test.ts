@@ -65,13 +65,17 @@ function providerState(providerId: string) {
   };
 }
 
-describe("ACP harness non-breaking v2→v1 downgrade bridges", () => {
-  it("drops grok and kiro from agent.gui.listHarnesses for v1.0 callers", () => {
+describe("post-v1.0 GUI harness non-breaking v2→v1 downgrade bridges", () => {
+  it("drops post-v1.0 harnesses from agent.gui.listHarnesses for v1.0 callers", () => {
     const v2Response = listGuiHarnessesResponseSchema.parse({
       harnesses: [
         harnessOption("claude"),
         harnessOption("grok"),
         harnessOption("kiro"),
+        harnessOption("kimi"),
+        harnessOption("droid"),
+        harnessOption("copilot"),
+        harnessOption("kilocode"),
         harnessOption("cursor"),
       ],
     });
@@ -85,19 +89,23 @@ describe("ACP harness non-breaking v2→v1 downgrade bridges", () => {
       "claude",
       "cursor",
     ]);
-    // The downgraded value must satisfy the frozen v1.0 schema, so a real
+    // The downgraded value must satisfy the frozen v1.0 schema - i.e. a real
     // v1.0 client's strict decode would accept it.
     expect(() =>
       listGuiHarnessesResponseSchemaV10.parse(result.value),
     ).not.toThrow();
   });
 
-  it("drops grok and kiro from providers.list for v1.0 callers", () => {
+  it("drops post-v1.0 providers from providers.list for v1.0 callers", () => {
     const v2Response = providersListResponseSchema.parse({
       providers: [
         providerState("cursor"),
         providerState("grok"),
         providerState("kiro"),
+        providerState("kimi"),
+        providerState("droid"),
+        providerState("copilot"),
+        providerState("kilocode"),
       ],
     });
 
@@ -113,7 +121,7 @@ describe("ACP harness non-breaking v2→v1 downgrade bridges", () => {
     ).not.toThrow();
   });
 
-  it("drops grok and kiro agents from agent.list for v1.0 callers", () => {
+  it("drops post-v1.0 agents from agent.list for v1.0 callers", () => {
     const v2Response = listAgentsResponseSchema.parse({
       caller: { agentId: "self", canSendMessages: true },
       scope: "all",
@@ -121,6 +129,10 @@ describe("ACP harness non-breaking v2→v1 downgrade bridges", () => {
         agentSummary("a-claude", "claude"),
         agentSummary("a-grok", "grok"),
         agentSummary("a-kiro", "kiro"),
+        agentSummary("a-kilocode", "kilocode"),
+        agentSummary("a-kimi", "kimi"),
+        agentSummary("a-droid", "droid"),
+        agentSummary("a-copilot", "copilot"),
         agentSummary("a-null", null),
       ],
     });

@@ -15,13 +15,14 @@ import {
   listGuiHarnessesResponseSchemaV10,
 } from "@traycer/protocol/host/agent/gui/unary-schemas";
 import { chatSubscribeV10 } from "@traycer/protocol/host/agent/gui/subscribe";
+import { isPostV1GuiHarnessId } from "@traycer/protocol/host/agent/post-v1-gui-harnesses";
 
 // ─── GUI-surface catalog (`agent.gui.*`) ──────────────────────────────────
 
-// `agent.gui.listHarnesses` always returns the full catalog (incl. ACP
-// harnesses), so unguarded v2-only values would reach every caller. v1.0 is
-// frozen before these ACP providers; v2.0 carries them; the v2→v1 bridge drops
-// them for v1.0 clients.
+// `agent.gui.listHarnesses` always returns the full catalog, so unguarded ACP
+// GUI harness ids would reach every caller. v1.0 is frozen without these ids
+// (what shipped); v2.0 carries them; the v2→v1 bridge drops them for v1.0
+// clients.
 export const agentGuiListHarnessesV10 = defineRpcContract({
   method: "agent.gui.listHarnesses",
   schemaVersion: { major: 1, minor: 0 } as const,
@@ -42,8 +43,9 @@ export const agentGuiListHarnessesUpgradeV1ToV2 = defineUpgradePath<
 >({
   from: { major: 1, minor: 0 },
   to: { major: 2, minor: 0 },
-  // Request shape is identical; a v1.0 response is a valid v2.0 response (ACP
-  // providers are purely additive), so both upgrades are identity.
+  // Request shape is identical; a v1.0 response without ACP GUI harnesses is a
+  // valid v2.0 response (they are purely additive), so both upgrades are
+  // identity.
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
 });
@@ -55,13 +57,13 @@ export const agentGuiListHarnessesDowngradeV2ToV1 = defineDowngradePath<
   from: { major: 2, minor: 0 },
   to: { major: 1, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
-  // Drop v2-only ACP providers so a v1.0 client's strict decode never sees
+  // Drop post-v1.0 GUI harnesses so a v1.0 client's strict decode never sees
   // them. The re-parse also yields the precise v1.0 type without an assertion.
   downgradeResponse: (response) => ({
     ok: true,
     value: listGuiHarnessesResponseSchemaV10.parse({
       harnesses: response.harnesses.filter(
-        (harness) => harness.id !== "grok" && harness.id !== "kiro",
+        (harness) => !isPostV1GuiHarnessId(harness.id),
       ),
     }),
   }),

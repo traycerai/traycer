@@ -9,11 +9,13 @@ import {
   type DigitActionMatch,
   findActionForChord,
   isExternallyHandled,
+  isRepeatSensitiveAction,
   matchDigitAction,
   registerBaseLeaderScope,
   resolveLeaderOwner,
 } from "@/lib/keybindings/dispatch";
 import { subscribeLeaderScopes } from "@/lib/keybindings/leader-scope";
+import { getHistoryController } from "@/lib/history-navigation";
 import type { ActionId } from "@/lib/keybindings/actions";
 import {
   routerAdapterFor,
@@ -278,6 +280,15 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
       const actionId = resolveReservedAction(event);
       if (actionId === null) return;
 
+      // Toggles (e.g. the model picker) must act once per physical press. Still
+      // reserve the chord on OS key-repeat so the browser default can't run,
+      // but skip re-dispatch so a held chord doesn't flip the toggle rapidly.
+      if (event.repeat && isRepeatSensitiveAction(actionId)) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+
       // Reserve any chord bound to a centrally-handled action - even when
       // dispatch can't act (e.g. `group.focus.right` with no right neighbour).
       // This stops the browser from running its own default for the same chord
@@ -285,6 +296,24 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
       event.preventDefault();
       event.stopPropagation();
       dispatchAction(actionId, adapter);
+    };
+
+    // Mouse back/forward (buttons 3/4). Desktop-only: gated on the current
+    // router carrying a persistent-history controller, so the browser/web build
+    // never intercepts these. `preventDefault()` runs only when handled, so the
+    // shell's native back/forward stays intact off-desktop.
+    // NOTE: Windows may instead surface these as a main-process `app-command`
+    // (`browser-backward`/`browser-forward`); that path is a verify-and-extend
+    // follow-up tracked in the tech plan (§4.4).
+    const handleMouseNav = (event: MouseEvent) => {
+      if (getHistoryController(router.history) === null) return;
+      if (event.button === 3) {
+        event.preventDefault();
+        adapter.goBack();
+      } else if (event.button === 4) {
+        event.preventDefault();
+        adapter.goForward();
+      }
     };
 
     const handleKeyUp = (event: KeyboardEvent) => {
@@ -326,6 +355,9 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
     window.addEventListener("keydown", handleKeyDown, { capture: true });
     window.addEventListener("keyup", handleKeyUp, { capture: true });
     window.addEventListener("blur", handleBlur);
+    // Capture-phase to match keydown/keyup: app history nav should win before a
+    // descendant (editor, xterm) can swallow mouse buttons 3/4.
+    window.addEventListener("auxclick", handleMouseNav, { capture: true });
     const unsubscribeHistory = router.history.subscribe(handleRouteChange);
     return () => {
       clearHintTimer();
@@ -336,6 +368,7 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
       window.removeEventListener("keydown", handleKeyDown, { capture: true });
       window.removeEventListener("keyup", handleKeyUp, { capture: true });
       window.removeEventListener("blur", handleBlur);
+      window.removeEventListener("auxclick", handleMouseNav, { capture: true });
     };
   }, [router]);
 

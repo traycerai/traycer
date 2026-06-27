@@ -20,6 +20,7 @@ import {
   agentSendMessageV10,
   agentStopV10,
 } from "@traycer/protocol/host/agent/contracts";
+import { isPostV1GuiHarnessId } from "@traycer/protocol/host/agent/post-v1-gui-harnesses";
 import {
   agentInboxReadV10,
   agentInboxSubscribeV10,
@@ -384,8 +385,8 @@ export const worktreeGetBindingV10 = defineRpcContract({
 // provider's resolved binary path + version, lets the user override the
 // binary per provider, and previews a candidate-path version without
 // committing it. Schemas live in `protocol/host/provider-schemas.ts`.
-// `providers.list` always returns every provider (incl. ACP providers); v1.0 is
-// frozen pre-ACP, v2.0 carries ACP providers, and the v2→v1 bridge drops them
+// `providers.list` always returns every provider; v1.0 is frozen without the
+// ACP GUI harness providers, v2.0 carries them, and the v2→v1 bridge drops them
 // for v1.0 clients.
 export const providersListV10 = defineRpcContract({
   method: "providers.list",
@@ -422,8 +423,7 @@ export const providersListDowngradeV2ToV1 = defineDowngradePath<
     ok: true,
     value: providersListResponseSchemaV10.parse({
       providers: response.providers.filter(
-        (provider) =>
-          provider.providerId !== "grok" && provider.providerId !== "kiro",
+        (provider) => !isPostV1GuiHarnessId(provider.providerId),
       ),
     }),
   }),

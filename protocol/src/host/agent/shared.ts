@@ -52,16 +52,20 @@ export const guiHarnessIdSchema = harnessIdSchema.extract([
   "cursor",
   "grok",
   "kiro",
+  "droid",
+  "kimi",
+  "copilot",
+  "kilocode",
 ]);
 export type GuiHarnessId = z.infer<typeof guiHarnessIdSchema>;
 
 /**
- * Frozen pre-ACP harness id set as shipped in protocol v1.0. Used only by the
- * frozen v1.0 response schema of `agent.gui.listHarnesses` so a v1.0 client
- * negotiates a wire that can never carry new ACP providers; the v2.0 line adds
- * them and a v2→v1 downgrade bridge filters them for v1.0 callers. Do NOT add
- * new harnesses here — extend the latest `guiHarnessIdSchema` and bump the
- * method's major with a bridge instead.
+ * Frozen harness id set as shipped in protocol v1.0. Used only by the frozen
+ * v1.0 response schema of `agent.gui.listHarnesses` so a v1.0 client (which
+ * predates the ACP GUI harnesses) negotiates a wire that can never carry them;
+ * the v2.0 line adds them and a v2→v1 downgrade bridge filters them for v1.0
+ * callers. Do NOT add new harnesses here - extend the latest
+ * `guiHarnessIdSchema` and use the existing v2 bridge instead.
  */
 export const guiHarnessIdSchemaV10 = harnessIdSchema.extract([
   "claude",
@@ -125,6 +129,10 @@ export const agentFacingHarnessIdSchema = harnessIdSchema.extract([
   "cursor",
   "grok",
   "kiro",
+  "droid",
+  "kimi",
+  "copilot",
+  "kilocode",
 ]);
 export type AgentFacingHarnessId = z.infer<typeof agentFacingHarnessIdSchema>;
 
@@ -407,12 +415,12 @@ export const listAgentsResponseSchema = z.object({
 });
 export type ListAgentsResponse = z.infer<typeof listAgentsResponseSchema>;
 
-// ── Frozen protocol-v1.0 (pre-ACP) agent.list response ─────────────────────
-// `agent.list` enumerates every agent in the epic — including ACP chats a newer
-// client created — and the `traycer` CLI inlines the protocol at build time, so
-// an old CLI would hit a strict enum on those rows. v1.0 is frozen pre-ACP; the
-// v2.0 line carries ACP providers and a v2→v1 bridge drops those agents for v1.0
-// callers. Do not add new harnesses here — bump the major with a bridge.
+// ── Frozen protocol-v1.0 agent.list response ───────────────────────────────
+// `agent.list` enumerates every agent in the epic - including ACP GUI harness
+// chats a newer client created - and the `traycer` CLI inlines the protocol at
+// build time, so an old CLI would hit a strict enum on those rows. v1.0 is
+// frozen; the v2.0 line carries them and a v2→v1 bridge drops them for v1.0
+// callers. Do not add new harnesses here - use the existing v2 bridge.
 export const agentSummarySchemaV10 = agentSummarySchema.extend({
   harnessId: harnessIdSchema
     .extract(["claude", "codex", "opencode", "traycer", "cursor"])

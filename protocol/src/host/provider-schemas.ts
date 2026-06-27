@@ -20,14 +20,18 @@ export const providerIdSchema = z.enum([
   "traycer",
   "grok",
   "kiro",
+  "droid",
+  "kimi",
+  "copilot",
+  "kilocode",
 ]);
 export type ProviderId = z.infer<typeof providerIdSchema>;
 
 /**
- * Frozen pre-ACP provider id set as shipped in protocol v1.0. Used only by the
- * frozen v1.0 `providers.list` response so a v1.0 client never receives new ACP
- * providers; the v2.0 line adds them with a v2→v1 downgrade bridge. Do not add
- * new providers here.
+ * Frozen provider id set as shipped in protocol v1.0. Used only by the frozen
+ * v1.0 `providers.list` response so a v1.0 client never receives the ACP GUI
+ * harness providers; the v2.0 line adds them with a v2→v1 downgrade bridge. Do
+ * not add new providers here.
  */
 export const providerIdSchemaV10 = z.enum([
   "claude-code",
@@ -47,6 +51,10 @@ export const PROVIDER_DISPLAY_NAMES: Record<ProviderId, string> = {
   traycer: "Traycer",
   grok: "Grok",
   kiro: "Kiro",
+  droid: "Droid",
+  kimi: "Kimi",
+  copilot: "Copilot",
+  kilocode: "Kilo Code",
 };
 
 /**
@@ -217,9 +225,9 @@ export const providersListResponseSchema = z.object({
 });
 export type ProvidersListResponse = z.infer<typeof providersListResponseSchema>;
 
-// Frozen protocol-v1.0 (pre-ACP) provider state + list response. The v2.0 line
-// of `providers.list` adds ACP providers; the v2→v1 bridge filters them for
-// v1.0 callers.
+// Frozen protocol-v1.0 provider state + list response. The v2.0 line of
+// `providers.list` adds ACP GUI harness providers; the v2→v1 bridge filters
+// them for v1.0 callers.
 export const providerCliStateSchemaV10 = providerCliStateSchema.extend({
   providerId: providerIdSchemaV10,
 });

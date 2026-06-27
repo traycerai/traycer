@@ -127,8 +127,8 @@ export const listGuiHarnessesResponseSchema = z.object({
   harnesses: z.array(guiHarnessOptionSchema),
 });
 
-// ── Frozen protocol-v1.0 (pre-ACP) catalog row + response ──────────────────
-// A v1.0 client predates ACP providers; the v2.0 line of
+// ── Frozen protocol-v1.0 catalog row + response ────────────────────────────
+// A v1.0 client predates the ACP GUI harnesses; the v2.0 line of
 // `agent.gui.listHarnesses` adds them, and the v2→v1 downgrade bridge filters
 // them out for v1.0 callers so their strict decode never sees a value it can't
 // parse.

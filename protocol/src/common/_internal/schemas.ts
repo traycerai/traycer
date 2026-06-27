@@ -56,4 +56,8 @@ export const harnessIdSchema = z.enum([
   "cursor",
   "grok",
   "kiro",
+  "droid",
+  "kimi",
+  "copilot",
+  "kilocode",
 ]);
