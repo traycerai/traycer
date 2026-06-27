@@ -10,16 +10,27 @@
  * real view-model memoizes them; only `todo` / `restoreContext` change between
  * simulated tokens.
  */
-import { render } from "@testing-library/react";
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import {
+  act,
+  cleanup,
+  render as testingRender,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { domAnimation, LazyMotion } from "motion/react";
+import type { ReactElement } from "react";
+import { create } from "zustand";
 
 // Count every render of the composer subtree by stubbing the leaf `ChatComposer`.
 // `ChatComposerRegion` is the memo boundary, so a render here == a boundary render.
 let composerRenderCount = 0;
 vi.mock("@/components/chat/composer/chat-composer", () => ({
-  ChatComposer: () => {
+  ChatComposer: (props: {
+    readonly workspaceControls: import("react").ReactNode | null;
+  }) => {
     composerRenderCount += 1;
-    return <div data-testid="composer-stub" />;
+    return <div data-testid="composer-stub">{props.workspaceControls}</div>;
   },
 }));
 // The dock legitimately re-renders per token; stub it so the test isolates the
@@ -51,6 +62,64 @@ import {
 import { WORKSPACE_COMPOSER_READY } from "@/lib/composer/workspace-composer-availability";
 import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-context-core";
 import type { PinnedTodoSnapshot } from "@/components/chat/chat-pinned-todos";
+import { ContextUsageChip } from "@/components/chat/context-usage-chip";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { useSettingsStore } from "@/stores/settings/settings-store";
+import type { TokenUsage } from "@traycer/protocol/persistence/epic/foundation";
+
+const USAGE_PROBE_75: TokenUsage = {
+  inputTokens: 50_000,
+  outputTokens: 1_000,
+  totalTokens: 51_000,
+  contextTokens: 50_000,
+  contextWindow: 200_000,
+};
+
+const USAGE_PROBE_25: TokenUsage = {
+  inputTokens: 150_000,
+  outputTokens: 2_000,
+  totalTokens: 152_000,
+  contextTokens: 150_000,
+  contextWindow: 200_000,
+};
+
+interface UsageProbeState {
+  readonly usage: TokenUsage;
+  readonly setUsage: (usage: TokenUsage) => void;
+}
+
+const useUsageProbeStore = create<UsageProbeState>()((set) => ({
+  usage: USAGE_PROBE_75,
+  setUsage: (usage) => set({ usage }),
+}));
+
+function render(ui: ReactElement) {
+  const result = testingRender(
+    <TooltipProvider delayDuration={0}>
+      <LazyMotion features={domAnimation}>{ui}</LazyMotion>
+    </TooltipProvider>,
+  );
+  return {
+    ...result,
+    rerender: (nextUi: ReactElement) =>
+      result.rerender(
+        <TooltipProvider delayDuration={0}>
+          <LazyMotion features={domAnimation}>{nextUi}</LazyMotion>
+        </TooltipProvider>,
+      ),
+  };
+}
+
+function queryCompactContextTrigger() {
+  return screen.queryByRole("button", {
+    name: /open context usage breakdown/i,
+  });
+}
+
+function UsageLeafProbe() {
+  const usage = useUsageProbeStore((s) => s.usage);
+  return <ContextUsageChip usage={usage} />;
+}
 
 // ── Stable composer-relevant props (built once, never re-identified) ──────────
 const RUNTIME: ChatLowerRuntimeState = {
@@ -102,7 +171,7 @@ const COMPOSER: ChatLowerComposerState = {
   workspaceControls: (
     <>
       <span data-testid="worktree-chip" />
-      <span data-testid="usage-chip" />
+      <UsageLeafProbe />
     </>
   ),
   workspaceAvailability: WORKSPACE_COMPOSER_READY,
@@ -152,7 +221,11 @@ function props(
 describe("composer isolation from per-token dock churn", () => {
   beforeEach(() => {
     composerRenderCount = 0;
+    useUsageProbeStore.setState({ usage: USAGE_PROBE_75 });
+    useSettingsStore.setState({ pinContextUsageBreakdown: false });
   });
+
+  afterEach(cleanup);
 
   it("does not re-render the composer when only todo/restoreContext change", () => {
     const { rerender } = render(
@@ -180,5 +253,29 @@ describe("composer isolation from per-token dock churn", () => {
     // Run status flips idle -> running: a genuine composer input change.
     rerender(<ChatLowerInteractionSurfaces {...props(TURN_RUNNING, 1)} />);
     expect(composerRenderCount).toBe(2);
+  });
+
+  it("does not re-render the composer when the context usage leaf updates", async () => {
+    useSettingsStore.getState().setPinContextUsageBreakdown(true);
+    render(<ChatLowerInteractionSurfaces {...props(TURN_IDLE, 0)} />);
+    expect(composerRenderCount).toBe(1);
+    expect(queryCompactContextTrigger()).toBeNull();
+    expect(
+      screen.getByTestId("context-usage-pinned-percent-value").textContent,
+    ).toBe("75");
+    expect(screen.getByText("50K / 200K used")).toBeTruthy();
+
+    act(() => {
+      useUsageProbeStore.getState().setUsage(USAGE_PROBE_25);
+    });
+
+    expect(composerRenderCount).toBe(1);
+    expect(queryCompactContextTrigger()).toBeNull();
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("context-usage-pinned-percent-value").textContent,
+      ).toBe("25");
+    });
+    expect(screen.getByText("150K / 200K used")).toBeTruthy();
   });
 });
