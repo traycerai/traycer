@@ -124,8 +124,7 @@ function deriveLoginOptions(
   // inert because the host would spawn the bare binary under piped stdio, which
   // for an interactive-TUI CLI (e.g. droid) opens no browser and hangs the
   // banner on "Waiting for browser sign-in…".
-  const canOauth =
-    isLocalHost && oauthArgs !== null && oauthArgs.length > 0;
+  const canOauth = isLocalHost && oauthArgs !== null && oauthArgs.length > 0;
   return { envVars, canOauth };
 }
 

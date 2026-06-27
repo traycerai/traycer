@@ -199,9 +199,7 @@ describe("<ProviderReauthBanner />", () => {
 
     // Droid has no spawnable OAuth login, so no Authenticate button is offered -
     // it would only hang on "Waiting for browser sign-in…".
-    expect(
-      screen.queryByRole("button", { name: /Authenticate/ }),
-    ).toBeNull();
+    expect(screen.queryByRole("button", { name: /Authenticate/ })).toBeNull();
     // The FACTORY_API_KEY paste form is the reconnect path instead.
     expect(
       screen.getByPlaceholderText("Paste your FACTORY_API_KEY"),
