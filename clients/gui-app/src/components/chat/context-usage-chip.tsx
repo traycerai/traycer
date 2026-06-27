@@ -49,6 +49,8 @@ export function ContextUsageChip({ usage }: ContextUsageChipProps) {
   const preserveFocusOnOpenRef = useRef(false);
   const pinBreakdownActionRef = useRef<HTMLButtonElement>(null);
   const compactTriggerRef = useRef<HTMLButtonElement>(null);
+  const pinnedUnpinActionRef = useRef<HTMLButtonElement>(null);
+  const focusPinnedActionAfterPinRef = useRef(false);
   const focusCompactTriggerAfterUnpinRef = useRef(false);
   const pinContextUsageBreakdown = useSettingsStore(
     (s) => s.pinContextUsageBreakdown,
@@ -58,6 +60,11 @@ export function ContextUsageChip({ usage }: ContextUsageChipProps) {
   );
 
   useLayoutEffect(() => {
+    if (pinContextUsageBreakdown && focusPinnedActionAfterPinRef.current) {
+      focusPinnedActionAfterPinRef.current = false;
+      pinnedUnpinActionRef.current?.focus();
+      return;
+    }
     if (!pinContextUsageBreakdown && focusCompactTriggerAfterUnpinRef.current) {
       focusCompactTriggerAfterUnpinRef.current = false;
       compactTriggerRef.current?.focus();
@@ -90,9 +97,17 @@ export function ContextUsageChip({ usage }: ContextUsageChipProps) {
         rows={rows}
         effective={effective}
         onUnpin={unpinFromPinnedStrip}
+        actionRef={pinnedUnpinActionRef}
       />
     );
   }
+
+  const pinFromPopover = (value: boolean, restoreFocus: boolean) => {
+    if (value && restoreFocus) {
+      focusPinnedActionAfterPinRef.current = true;
+    }
+    setPinContextUsageBreakdown(value);
+  };
 
   return (
     <div className="min-w-0 justify-self-end">
@@ -149,7 +164,7 @@ export function ContextUsageChip({ usage }: ContextUsageChipProps) {
             rows={rows}
             effective={effective}
             pinned={pinContextUsageBreakdown}
-            onPinnedChange={setPinContextUsageBreakdown}
+            onPinnedChange={pinFromPopover}
             actionRef={pinBreakdownActionRef}
           />
         </PopoverContent>
@@ -162,7 +177,7 @@ interface ContextUsageBreakdownProps {
   readonly rows: readonly ContextUsageRow[];
   readonly effective: EffectiveContextUsage;
   readonly pinned: boolean;
-  readonly onPinnedChange: (value: boolean) => void;
+  readonly onPinnedChange: (value: boolean, restoreFocus: boolean) => void;
   readonly actionRef: Ref<HTMLButtonElement>;
 }
 
@@ -192,7 +207,12 @@ function ContextUsageBreakdown({
         variant="outline"
         size="sm"
         className="mt-1 w-full justify-center"
-        onClick={() => onPinnedChange(!pinned)}
+        onClick={(event) => {
+          onPinnedChange(
+            !pinned,
+            document.activeElement === event.currentTarget,
+          );
+        }}
       >
         {pinned ? (
           <PinOff className="size-3.5" aria-hidden />
@@ -209,12 +229,14 @@ interface ContextUsagePinnedStripProps {
   readonly rows: readonly ContextUsageRow[];
   readonly effective: EffectiveContextUsage;
   readonly onUnpin: (restoreFocus: boolean) => void;
+  readonly actionRef: Ref<HTMLButtonElement>;
 }
 
 function ContextUsagePinnedStrip({
   rows,
   effective,
   onUnpin,
+  actionRef,
 }: ContextUsagePinnedStripProps) {
   const usedSummary = `${formatContextWindowTokens(effective.used)} / ${formatContextWindowTokens(effective.window)} used`;
   return (
@@ -261,6 +283,7 @@ function ContextUsagePinnedStrip({
           align={undefined}
         >
           <Button
+            ref={actionRef}
             type="button"
             variant="ghost"
             size="icon-xs"

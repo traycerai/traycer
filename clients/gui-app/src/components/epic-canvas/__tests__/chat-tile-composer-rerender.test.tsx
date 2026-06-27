@@ -63,6 +63,7 @@ import { WORKSPACE_COMPOSER_READY } from "@/lib/composer/workspace-composer-avai
 import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-context-core";
 import type { PinnedTodoSnapshot } from "@/components/chat/chat-pinned-todos";
 import { ContextUsageChip } from "@/components/chat/context-usage-chip";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import type { TokenUsage } from "@traycer/protocol/persistence/epic/foundation";
 
@@ -94,15 +95,25 @@ const useUsageProbeStore = create<UsageProbeState>()((set) => ({
 
 function render(ui: ReactElement) {
   const result = testingRender(
-    <LazyMotion features={domAnimation}>{ui}</LazyMotion>,
+    <TooltipProvider delayDuration={0}>
+      <LazyMotion features={domAnimation}>{ui}</LazyMotion>
+    </TooltipProvider>,
   );
   return {
     ...result,
     rerender: (nextUi: ReactElement) =>
       result.rerender(
-        <LazyMotion features={domAnimation}>{nextUi}</LazyMotion>,
+        <TooltipProvider delayDuration={0}>
+          <LazyMotion features={domAnimation}>{nextUi}</LazyMotion>
+        </TooltipProvider>,
       ),
   };
+}
+
+function queryCompactContextTrigger() {
+  return screen.queryByRole("button", {
+    name: /open context usage breakdown/i,
+  });
 }
 
 function UsageLeafProbe() {
@@ -248,7 +259,7 @@ describe("composer isolation from per-token dock churn", () => {
     useSettingsStore.getState().setPinContextUsageBreakdown(true);
     render(<ChatLowerInteractionSurfaces {...props(TURN_IDLE, 0)} />);
     expect(composerRenderCount).toBe(1);
-    expect(screen.queryByTestId("context-usage-chip")).toBeNull();
+    expect(queryCompactContextTrigger()).toBeNull();
     expect(
       screen.getByTestId("context-usage-pinned-percent-value").textContent,
     ).toBe("75");
@@ -259,7 +270,7 @@ describe("composer isolation from per-token dock churn", () => {
     });
 
     expect(composerRenderCount).toBe(1);
-    expect(screen.queryByTestId("context-usage-chip")).toBeNull();
+    expect(queryCompactContextTrigger()).toBeNull();
     await waitFor(() => {
       expect(
         screen.getByTestId("context-usage-pinned-percent-value").textContent,

@@ -42,6 +42,12 @@ function percentLeft(usage: TokenUsage | null): number | null {
   return computeEffectiveContextUsage(usage)?.percentLeft ?? null;
 }
 
+function queryCompactContextTrigger() {
+  return screen.queryByRole("button", {
+    name: /open context usage breakdown/i,
+  });
+}
+
 function render(ui: ReactElement) {
   const result = testingRender(
     <TooltipProvider delayDuration={0}>
@@ -354,16 +360,18 @@ describe("ContextUsageChip", () => {
     const pinButton = await screen.findByRole("button", {
       name: "Pin breakdown",
     });
+    pinButton.focus();
     fireEvent.click(pinButton);
     expect(useSettingsStore.getState().pinContextUsageBreakdown).toBe(true);
-    expect(screen.queryByTestId("context-usage-chip")).toBeNull();
+    expect(queryCompactContextTrigger()).toBeNull();
     expect(screen.getByTestId("context-usage-pinned-strip")).toBeTruthy();
 
-    fireEvent.click(
-      screen.getByRole("button", {
-        name: "Unpin context usage breakdown",
-      }),
-    );
+    const unpinButton = screen.getByRole("button", {
+      name: "Unpin context usage breakdown",
+    });
+    expect(document.activeElement).toBe(unpinButton);
+
+    fireEvent.click(unpinButton);
     expect(useSettingsStore.getState().pinContextUsageBreakdown).toBe(false);
     expect(
       screen.getByRole("button", {
@@ -413,7 +421,7 @@ describe("ContextUsageChip", () => {
         name: /Context window 75% left/,
       }),
     ).toBeNull();
-    expect(screen.queryByTestId("context-usage-chip")).toBeNull();
+    expect(queryCompactContextTrigger()).toBeNull();
 
     const strip = screen.getByTestId("context-usage-pinned-strip");
     expect(
@@ -520,7 +528,7 @@ describe("ContextUsageChip", () => {
     useSettingsStore.getState().setPinContextUsageBreakdown(true);
     const { rerender } = render(<ContextUsageChip usage={RELIABLE_USAGE} />);
 
-    expect(screen.queryByTestId("context-usage-chip")).toBeNull();
+    expect(queryCompactContextTrigger()).toBeNull();
     expect(screen.getByText("50K / 200K used")).toBeTruthy();
 
     rerender(
@@ -535,7 +543,7 @@ describe("ContextUsageChip", () => {
       />,
     );
 
-    expect(screen.queryByTestId("context-usage-chip")).toBeNull();
+    expect(queryCompactContextTrigger()).toBeNull();
     await waitFor(() => {
       expect(
         screen.getByTestId("context-usage-pinned-percent-value").textContent,
