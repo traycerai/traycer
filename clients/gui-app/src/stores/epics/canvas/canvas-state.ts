@@ -14,6 +14,7 @@ import {
   pruneSizes,
   replacePane,
 } from "./tile-tree";
+import { pruneActivationHistory } from "./activation-history";
 
 export const EMPTY_CANVAS: EpicCanvasState = {
   root: null,
@@ -51,20 +52,6 @@ export function isTileInstanceLive(
   );
 }
 
-function prunePaneActivationHistory(
-  activationHistory: ReadonlyArray<string>,
-  tabInstanceIds: ReadonlyArray<string>,
-): ReadonlyArray<string> {
-  const live = new Set(tabInstanceIds);
-  const seen = new Set<string>();
-  return activationHistory.flatMap((instanceId) => {
-    if (!live.has(instanceId)) return [];
-    if (seen.has(instanceId)) return [];
-    seen.add(instanceId);
-    return [instanceId];
-  });
-}
-
 /**
  * Re-establish the tiles/tree invariant after parsing untrusted input:
  * drops payloads with no tree entry, drops tree tabs with no payload, and
@@ -90,7 +77,7 @@ export function reconcileCanvasInvariants(
     const kept = pane.tabInstanceIds.filter((id) =>
       Object.hasOwn(state.tilesByInstanceId, id),
     );
-    const activationHistory = prunePaneActivationHistory(
+    const activationHistory = pruneActivationHistory(
       pane.activationHistory,
       kept,
     );

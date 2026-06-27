@@ -31,6 +31,10 @@ import {
   isGitDiffTileRef,
   isSnapshotDiffTileRef,
 } from "./types";
+import {
+  activationHistoryEqual,
+  pruneActivationHistory,
+} from "./activation-history";
 import type {
   EdgeDropPosition,
   SplitDirection,
@@ -107,30 +111,6 @@ export function paneTabRefs(
   });
 }
 
-function pruneActivationHistory(
-  activationHistory: ReadonlyArray<string>,
-  tabInstanceIds: ReadonlyArray<string>,
-): ReadonlyArray<string> {
-  const live = new Set(tabInstanceIds);
-  const seen = new Set<string>();
-  return activationHistory.flatMap((instanceId) => {
-    if (!live.has(instanceId)) return [];
-    if (seen.has(instanceId)) return [];
-    seen.add(instanceId);
-    return [instanceId];
-  });
-}
-
-function orderedIdsEqual(
-  left: ReadonlyArray<string>,
-  right: ReadonlyArray<string>,
-): boolean {
-  return (
-    left.length === right.length &&
-    left.every((instanceId, index) => instanceId === right[index])
-  );
-}
-
 function prunePaneActivationHistory(
   pane: TilePane,
   tabInstanceIds: ReadonlyArray<string>,
@@ -139,7 +119,7 @@ function prunePaneActivationHistory(
     pane.activationHistory,
     tabInstanceIds,
   );
-  return orderedIdsEqual(pane.activationHistory, activationHistory)
+  return activationHistoryEqual(pane.activationHistory, activationHistory)
     ? pane
     : { ...pane, activationHistory };
 }
@@ -156,7 +136,7 @@ function recordPaneActivation(pane: TilePane, tabId: string): TilePane {
   ];
   if (
     pane.activeTabId === tabId &&
-    orderedIdsEqual(pane.activationHistory, activationHistory)
+    activationHistoryEqual(pane.activationHistory, activationHistory)
   ) {
     return pane;
   }
@@ -503,13 +483,6 @@ export function openTile(
         !preview && pane.previewTabId === existing.instanceId
           ? null
           : pane.previewTabId;
-      if (
-        pane.activeTabId === existing.instanceId &&
-        previewTabId === pane.previewTabId &&
-        state.activePaneId === existing.pane.id
-      ) {
-        return pane;
-      }
       const paneWithPreview =
         previewTabId === pane.previewTabId ? pane : { ...pane, previewTabId };
       return recordPaneActivation(paneWithPreview, existing.instanceId);

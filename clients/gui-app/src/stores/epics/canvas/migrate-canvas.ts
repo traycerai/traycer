@@ -68,9 +68,11 @@ function parsePane(
     typeof value.previewTabId === "string" && seen.has(value.previewTabId)
       ? value.previewTabId
       : null;
-  const activationHistory = Array.isArray(value.activationHistory)
-    ? parseActivationHistory(value.activationHistory, seen)
-    : seedActivationHistory(activeTabId);
+  const activationHistory = parsePaneActivationHistory(
+    value.activationHistory,
+    seen,
+    activeTabId,
+  );
   return {
     kind: "pane",
     id: value.id,
@@ -90,6 +92,17 @@ function seedActivationHistory(
   activeTabId: string | null,
 ): ReadonlyArray<string> {
   return activeTabId === null ? [] : [activeTabId];
+}
+
+function parsePaneActivationHistory(
+  value: unknown,
+  liveTabIds: ReadonlySet<string>,
+  activeTabId: string | null,
+): ReadonlyArray<string> {
+  if (!Array.isArray(value)) return seedActivationHistory(activeTabId);
+  const parsed = parseActivationHistory(value, liveTabIds);
+  if (parsed.length > 0 || value.length === 0) return parsed;
+  return seedActivationHistory(activeTabId);
 }
 
 function parseActivationHistory(

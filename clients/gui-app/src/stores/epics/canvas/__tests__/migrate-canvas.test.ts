@@ -247,6 +247,31 @@ describe("parseEpicCanvasState current N-ary round-trip", () => {
     expectCanvasInvariants(state);
   });
 
+  it("reseeds stale-only persisted activation history from the resolved active tab", () => {
+    const state = requireParse({
+      root: {
+        kind: "pane",
+        id: "pane-stale-only-history",
+        tabInstanceIds: [CHAT_A.instanceId, SPEC_B.instanceId],
+        activeTabId: SPEC_B.instanceId,
+        previewTabId: null,
+        activationHistory: ["stale-instance", 42],
+      },
+      activePaneId: "pane-stale-only-history",
+      tilesByInstanceId: {
+        [CHAT_A.instanceId]: ser(CHAT_A),
+        [SPEC_B.instanceId]: ser(SPEC_B),
+        "stale-instance": ser(TICKET_C),
+      },
+      sizesByGroupId: {},
+    });
+
+    expect(state.root?.kind).toBe("pane");
+    if (state.root?.kind !== "pane") throw new Error("expected pane");
+    expect(state.root.activationHistory).toEqual([SPEC_B.instanceId]);
+    expectCanvasInvariants(state);
+  });
+
   it("keeps an explicit empty persisted activation history empty", () => {
     const state = requireParse({
       root: {

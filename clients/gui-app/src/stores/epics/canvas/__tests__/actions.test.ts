@@ -163,6 +163,43 @@ describe("openTile (pinned open)", () => {
     expect(activationContentIds(next, sourcePane)).toEqual([SPEC_B.id]);
     expectCanvasInvariants(next);
   });
+
+  it("records a same-pane focus when the tab was only synthetically active", () => {
+    let state = openPinned(createEmptyCanvas(), SPEC_A);
+    const sourcePaneId = rootPane(state).id;
+    state = openTileInBackgroundTab(state, SPEC_B);
+    state = openTileInBackgroundTab(state, SPEC_C);
+    state = splitPaneAtEdge(state, sourcePaneId, "right", {
+      kind: "node",
+      node: CHAT_A,
+    });
+    const targetPaneId = state.activePaneId;
+    if (targetPaneId === null) throw new Error("expected target pane");
+    state = dropOnTabStrip(
+      state,
+      {
+        kind: "tab",
+        sourcePaneId,
+        tabId: SPEC_A.instanceId,
+        node: SPEC_A,
+      },
+      targetPaneId,
+      1,
+    );
+    state = setActivePane(state, sourcePaneId);
+    const beforeRoot = state.root;
+    expect(paneById(state, sourcePaneId).activeTabId).toBe(SPEC_B.instanceId);
+    expect(paneById(state, sourcePaneId).activationHistory).toEqual([]);
+
+    const next = openPinned(state, SPEC_B);
+    const sourcePane = paneById(next, sourcePaneId);
+
+    expect(next.root).not.toBe(beforeRoot);
+    expect(next.activePaneId).toBe(sourcePaneId);
+    expect(sourcePane.activeTabId).toBe(SPEC_B.instanceId);
+    expect(activationContentIds(next, sourcePane)).toEqual([SPEC_B.id]);
+    expectCanvasInvariants(next);
+  });
 });
 
 describe("openTileInBackgroundTab", () => {
