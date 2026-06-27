@@ -99,7 +99,9 @@ function BannerRefreshButton() {
 
 // The reconnect methods to offer a signed-out (web-login) provider. `canOauth`
 // requires a local host (the `<cli> auth login` loopback runs on the host's
-// machine) plus advertised OAuth args; `envVars` are the credential vars the
+// machine) plus a real (non-empty) OAuth login command (an empty `oauthArgs`
+// would spawn the bare binary, which can't browser-OAuth headlessly); `envVars`
+// are the credential vars the
 // paste form can write (an API key / OAuth token) via `providers.setEnvOverride`,
 // which works on any host. Both are reconnect affordances - distinct from a
 // *rejected* credential, which never reaches here (it surfaces as a generic error
@@ -118,6 +120,10 @@ function deriveLoginOptions(
       ? loginCapability.token.vars
       : [];
   const oauthArgs = loginCapability !== null ? loginCapability.oauthArgs : null;
+  // A real login needs a non-empty subcommand. `null` = no OAuth; `[]` is also
+  // inert because the host would spawn the bare binary under piped stdio, which
+  // for an interactive-TUI CLI (e.g. droid) opens no browser and hangs the
+  // banner on "Waiting for browser sign-in…".
   const canOauth = isLocalHost && oauthArgs !== null && oauthArgs.length > 0;
   return { envVars, canOauth };
 }

@@ -56,13 +56,16 @@ export const agentGuiListHarnessesDowngradeV2ToV1 = defineDowngradePath<
   from: { major: 2, minor: 0 },
   to: { major: 1, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
-  // Drop ACP GUI harnesses so a v1.0 client's strict decode never sees them.
-  // The re-parse also yields the precise v1.0 type without an assertion.
+  // Drop post-v1.0 GUI harnesses so a v1.0 client's strict decode never sees
+  // them. The re-parse also yields the precise v1.0 type without an assertion.
   downgradeResponse: (response) => ({
     ok: true,
     value: listGuiHarnessesResponseSchemaV10.parse({
       harnesses: response.harnesses.filter(
-        (harness) => harness.id !== "grok" && harness.id !== "kimi",
+        (harness) =>
+          harness.id !== "grok" &&
+          harness.id !== "kimi" &&
+          harness.id !== "droid",
       ),
     }),
   }),

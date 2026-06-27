@@ -90,6 +90,7 @@ function initialActiveProviderId(
 // the provider's dashboard.
 const API_KEY_DASHBOARD_URL: Partial<Record<ProviderId, string>> = {
   cursor: "https://cursor.com/dashboard/api?section=user-keys#user-api-keys",
+  droid: "https://app.factory.ai/settings/api-keys",
 };
 
 const PROVIDER_DESCRIPTIONS: Record<ProviderId, string> = {
@@ -100,6 +101,8 @@ const PROVIDER_DESCRIPTIONS: Record<ProviderId, string> = {
     "Cursor agent - SDK-driven chats authenticated with your Cursor API key.",
   traycer: "Traycer's managed harness uses the selected OpenCode CLI binary.",
   grok: "Grok agent - xAI's coding CLI via your SuperGrok / X subscription.",
+  droid:
+    "Droid agent - Factory's coding CLI via your Factory account or API key.",
   kimi: "Kimi agent - MoonshotAI's coding CLI via your Kimi account.",
 };
 
@@ -123,6 +126,7 @@ function terminalAgentArgsPlaceholder(providerId: ProviderId): string {
     case "cursor":
     case "traycer":
     case "grok":
+    case "droid":
     case "kimi":
       return "CLI arguments (optional)";
   }
@@ -135,6 +139,7 @@ const HARNESS_ICON_ID: Record<ProviderId, HarnessIconId> = {
   cursor: "cursor",
   traycer: "traycer",
   grok: "grok",
+  droid: "droid",
   kimi: "kimi",
 };
 
@@ -734,6 +739,8 @@ function envNamePlaceholder(providerId: ProviderId): string {
       return "CURSOR_API_KEY";
     case "grok":
       return "XAI_API_KEY";
+    case "droid":
+      return "FACTORY_API_KEY";
     case "kimi":
       return "KIMI_API_KEY";
   }
