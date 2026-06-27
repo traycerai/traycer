@@ -22,6 +22,7 @@ import { EpicCanvasPersistLifecycleBridge } from "@/providers/epic-canvas-persis
 import { EpicTabExistenceReconciler } from "@/providers/epic-tab-existence-reconciler";
 import { CliCredentialSeeder } from "@/providers/cli-credential-seeder";
 import { HarnessCatalogPrefetcher } from "@/providers/harness-catalog-prefetcher";
+import { HistoryPruneProvider } from "@/providers/history-prune-provider";
 import { KeybindingProvider } from "@/providers/keybinding-provider";
 import { NotificationsSessionProvider } from "@/providers/notifications-session-provider";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
@@ -188,6 +189,7 @@ function TraycerAppRuntimeSurface(props: TraycerAppRuntimeSurfaceProps) {
       <AppUpdateToastController />
       <CliCredentialSeeder />
       <HarnessCatalogPrefetcher />
+      <HistoryPruneProvider router={props.router} />
       <RouterProvider router={props.router} />
       <HostPicker />
       <Toaster />
