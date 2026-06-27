@@ -60,6 +60,7 @@ function createEmptyPane(): TilePane {
     tabInstanceIds: [],
     activeTabId: null,
     previewTabId: null,
+    activationHistory: [],
   };
 }
 
@@ -73,6 +74,7 @@ function createPaneWithTab(
     tabInstanceIds: [node.instanceId],
     activeTabId: node.instanceId,
     previewTabId: preview ? node.instanceId : null,
+    activationHistory: [node.instanceId],
   };
 }
 
@@ -103,6 +105,62 @@ export function paneTabRefs(
     const ref = state.tilesByInstanceId[instanceId];
     return ref === undefined ? [] : [ref];
   });
+}
+
+function pruneActivationHistory(
+  activationHistory: ReadonlyArray<string>,
+  tabInstanceIds: ReadonlyArray<string>,
+): ReadonlyArray<string> {
+  const live = new Set(tabInstanceIds);
+  const seen = new Set<string>();
+  return activationHistory.flatMap((instanceId) => {
+    if (!live.has(instanceId)) return [];
+    if (seen.has(instanceId)) return [];
+    seen.add(instanceId);
+    return [instanceId];
+  });
+}
+
+function orderedIdsEqual(
+  left: ReadonlyArray<string>,
+  right: ReadonlyArray<string>,
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every((instanceId, index) => instanceId === right[index])
+  );
+}
+
+function prunePaneActivationHistory(
+  pane: TilePane,
+  tabInstanceIds: ReadonlyArray<string>,
+): TilePane {
+  const activationHistory = pruneActivationHistory(
+    pane.activationHistory,
+    tabInstanceIds,
+  );
+  return orderedIdsEqual(pane.activationHistory, activationHistory)
+    ? pane
+    : { ...pane, activationHistory };
+}
+
+function recordPaneActivation(pane: TilePane, tabId: string): TilePane {
+  if (!pane.tabInstanceIds.includes(tabId)) return pane;
+  const pruned = pruneActivationHistory(
+    pane.activationHistory,
+    pane.tabInstanceIds,
+  );
+  const activationHistory = [
+    tabId,
+    ...pruned.filter((instanceId) => instanceId !== tabId),
+  ];
+  if (
+    pane.activeTabId === tabId &&
+    orderedIdsEqual(pane.activationHistory, activationHistory)
+  ) {
+    return pane;
+  }
+  return { ...pane, activeTabId: tabId, activationHistory };
 }
 
 // ---------------------------------------------------------------------------
@@ -224,22 +282,35 @@ function insertTabInstance(
     instanceId,
     ...withoutOldPreview.slice(insertAt),
   ];
+  const paneWithMembership = {
+    ...pane,
+    tabInstanceIds,
+    activeTabId: instanceId,
+    previewTabId: preview ? instanceId : pane.previewTabId,
+  };
   return {
-    pane: {
-      ...pane,
-      tabInstanceIds,
-      activeTabId: instanceId,
-      previewTabId: preview ? instanceId : pane.previewTabId,
-    },
+    pane: prunePaneActivationHistory(paneWithMembership, tabInstanceIds),
     removedPreviewInstanceId,
   };
 }
 
+function selectSyntheticFallback(
+  pane: TilePane,
+  removedIndex: number,
+): string | null {
+  if (pane.activationHistory.length > 0) return pane.activationHistory[0];
+  if (pane.tabInstanceIds.length === 0) return null;
+  return pane.tabInstanceIds[
+    Math.min(removedIndex, pane.tabInstanceIds.length - 1)
+  ];
+}
+
 /**
- * Remove the tab at `index`, picking a sensible new active tab. The pane may
- * come back empty - the caller decides whether to collapse it.
+ * Remove the tab at `index` and prune history only. If the removed tab was
+ * active, the active tab is cleared; callers that need source/close fallback
+ * must opt into `removeTabAtIndexWithSyntheticFallback`.
  */
-function removeTabAtIndex(
+function removeTabAtIndexPruneOnly(
   pane: TilePane,
   index: number,
 ): { readonly pane: TilePane; readonly removedInstanceId: string | null } {
@@ -251,15 +322,46 @@ function removeTabAtIndex(
     ...pane.tabInstanceIds.slice(0, index),
     ...pane.tabInstanceIds.slice(index + 1),
   ];
-  let activeTabId = pane.activeTabId;
-  if (activeTabId === removed) {
-    activeTabId =
-      tabInstanceIds[Math.min(index, tabInstanceIds.length - 1)] ?? null;
-  }
+  const activeTabId =
+    pane.activeTabId !== null && tabInstanceIds.includes(pane.activeTabId)
+      ? pane.activeTabId
+      : null;
   const previewTabId = pane.previewTabId === removed ? null : pane.previewTabId;
+  const paneWithMembership = {
+    ...pane,
+    tabInstanceIds,
+    activeTabId,
+    previewTabId,
+  };
   return {
-    pane: { ...pane, tabInstanceIds, activeTabId, previewTabId },
+    pane: prunePaneActivationHistory(paneWithMembership, tabInstanceIds),
     removedInstanceId: removed,
+  };
+}
+
+/**
+ * Remove the tab at `index` and, only when that tab was active, choose the
+ * replacement synthetically from pruned history first and position second.
+ * The fallback is not recorded as a committed activation.
+ */
+function removeTabAtIndexWithSyntheticFallback(
+  pane: TilePane,
+  index: number,
+): { readonly pane: TilePane; readonly removedInstanceId: string | null } {
+  const removed = removeTabAtIndexPruneOnly(pane, index);
+  if (
+    removed.removedInstanceId === null ||
+    pane.activeTabId !== removed.removedInstanceId
+  ) {
+    return removed;
+  }
+  const activeTabId = selectSyntheticFallback(removed.pane, index);
+  return {
+    ...removed,
+    pane:
+      removed.pane.activeTabId === activeTabId
+        ? removed.pane
+        : { ...removed.pane, activeTabId },
   };
 }
 
@@ -341,12 +443,17 @@ export function cloneEpicCanvasState(state: EpicCanvasState): EpicCanvasState {
     });
     const remap = (instanceId: string | null): string | null =>
       instanceId === null ? null : (instanceIdMap.get(instanceId) ?? null);
+    const activationHistory = node.activationHistory.flatMap((instanceId) => {
+      const nextInstanceId = instanceIdMap.get(instanceId);
+      return nextInstanceId === undefined ? [] : [nextInstanceId];
+    });
     return {
       kind: "pane",
       id: paneId,
       tabInstanceIds,
       activeTabId: remap(node.activeTabId),
       previewTabId: remap(node.previewTabId),
+      activationHistory,
     };
   }
 
@@ -398,11 +505,14 @@ export function openTile(
           : pane.previewTabId;
       if (
         pane.activeTabId === existing.instanceId &&
-        previewTabId === pane.previewTabId
+        previewTabId === pane.previewTabId &&
+        state.activePaneId === existing.pane.id
       ) {
         return pane;
       }
-      return { ...pane, activeTabId: existing.instanceId, previewTabId };
+      const paneWithPreview =
+        previewTabId === pane.previewTabId ? pane : { ...pane, previewTabId };
+      return recordPaneActivation(paneWithPreview, existing.instanceId);
     });
     if (root === state.root && state.activePaneId === existing.pane.id) {
       return state;
@@ -417,7 +527,9 @@ export function openTile(
     target.tabInstanceIds.length,
     preview,
   );
-  const root = replacePane(state.root, target.id, () => inserted.pane);
+  const root = replacePane(state.root, target.id, () =>
+    recordPaneActivation(inserted.pane, node.instanceId),
+  );
   const tilesWithNode = withTile(state.tilesByInstanceId, node);
   return {
     ...state,
@@ -489,16 +601,23 @@ export function openTileInPane(
       : (state.tilesByInstanceId[active.instanceId] ?? null);
 
   if (active !== null && activeRef !== null && isBlankTileRef(activeRef)) {
+    const tabInstanceIds = target.tabInstanceIds.map((id, index) =>
+      index === active.index ? node.instanceId : id,
+    );
     // Replace the blank in place; clear preview if it pointed at the blank.
-    const root = replacePane(state.root, paneId, (pane) => ({
-      ...pane,
-      tabInstanceIds: pane.tabInstanceIds.map((id, index) =>
-        index === active.index ? node.instanceId : id,
-      ),
-      activeTabId: node.instanceId,
-      previewTabId:
-        pane.previewTabId === active.instanceId ? null : pane.previewTabId,
-    }));
+    const root = replacePane(state.root, paneId, (pane) => {
+      const nextPane = prunePaneActivationHistory(
+        {
+          ...pane,
+          tabInstanceIds,
+          activeTabId: node.instanceId,
+          previewTabId:
+            pane.previewTabId === active.instanceId ? null : pane.previewTabId,
+        },
+        tabInstanceIds,
+      );
+      return recordPaneActivation(nextPane, node.instanceId);
+    });
     return {
       ...state,
       root,
@@ -516,7 +635,9 @@ export function openTileInPane(
     target.tabInstanceIds.length,
     false,
   );
-  const root = replacePane(state.root, paneId, () => inserted.pane);
+  const root = replacePane(state.root, paneId, () =>
+    recordPaneActivation(inserted.pane, node.instanceId),
+  );
   return {
     ...state,
     root,
@@ -546,8 +667,11 @@ export function openBlankTabInPane(
   if (active !== null && activeRef !== null && isBlankTileRef(activeRef)) {
     const root = replacePane(state.root, paneId, (pane) =>
       pane.activeTabId === active.instanceId
-        ? pane
-        : { ...pane, activeTabId: active.instanceId },
+        ? recordPaneActivation(pane, active.instanceId)
+        : recordPaneActivation(
+            { ...pane, activeTabId: active.instanceId },
+            active.instanceId,
+          ),
     );
     if (root === state.root && state.activePaneId === paneId) return state;
     return { ...state, root, activePaneId: paneId };
@@ -559,7 +683,9 @@ export function openBlankTabInPane(
     target.tabInstanceIds.length,
     false,
   );
-  const root = replacePane(state.root, paneId, () => inserted.pane);
+  const root = replacePane(state.root, paneId, () =>
+    recordPaneActivation(inserted.pane, node.instanceId),
+  );
   return {
     ...state,
     root,
@@ -602,9 +728,7 @@ export function setActiveTab(
     return state;
   }
   const root = replacePane(state.root, paneId, (current) =>
-    current.activeTabId === tabId
-      ? current
-      : { ...current, activeTabId: tabId },
+    recordPaneActivation(current, tabId),
   );
   return { ...state, root, activePaneId: paneId };
 }
@@ -640,7 +764,10 @@ export function closeTab(
   if (pane === null) return state;
   const index = pane.tabInstanceIds.indexOf(tabId);
   if (index === -1) return state;
-  const removed = removeTabAtIndex(pane, index);
+  const removed =
+    pane.activeTabId === tabId
+      ? removeTabAtIndexWithSyntheticFallback(pane, index)
+      : removeTabAtIndexPruneOnly(pane, index);
   if (removed.pane.tabInstanceIds.length > 0) {
     const root = replacePane(state.root, paneId, () => removed.pane);
     return {
@@ -664,12 +791,21 @@ export function closeOtherTabs(
   if (!pane.tabInstanceIds.includes(tabId)) return state;
   if (pane.tabInstanceIds.length === 1) return state;
   const removedIds = pane.tabInstanceIds.filter((id) => id !== tabId);
-  const root = replacePane(state.root, paneId, (current) => ({
-    ...current,
-    tabInstanceIds: [tabId],
-    activeTabId: tabId,
-    previewTabId: current.previewTabId === tabId ? current.previewTabId : null,
-  }));
+  const root = replacePane(state.root, paneId, (current) =>
+    recordPaneActivation(
+      prunePaneActivationHistory(
+        {
+          ...current,
+          tabInstanceIds: [tabId],
+          activeTabId: tabId,
+          previewTabId:
+            current.previewTabId === tabId ? current.previewTabId : null,
+        },
+        [tabId],
+      ),
+      tabId,
+    ),
+  );
   return {
     ...state,
     root,
@@ -698,12 +834,22 @@ export function closeRightTabs(
     pane.previewTabId !== null && kept.includes(pane.previewTabId)
       ? pane.previewTabId
       : null;
-  const root = replacePane(state.root, paneId, (current) => ({
-    ...current,
-    tabInstanceIds: kept,
-    activeTabId,
-    previewTabId,
-  }));
+  const shouldRecordTarget =
+    pane.activeTabId === null || removedIds.includes(pane.activeTabId);
+  const root = replacePane(state.root, paneId, (current) => {
+    const nextPane = prunePaneActivationHistory(
+      {
+        ...current,
+        tabInstanceIds: kept,
+        activeTabId,
+        previewTabId,
+      },
+      kept,
+    );
+    return shouldRecordTarget
+      ? recordPaneActivation(nextPane, tabId)
+      : nextPane;
+  });
   return {
     ...state,
     root,
@@ -801,13 +947,21 @@ function reorderTabInPane(
           );
     return { ...state, root, activePaneId: pane.id };
   }
-  const removed = removeTabAtIndex(pane, fromIndex);
-  const inserted = insertTabInstance(removed.pane, tabId, adjustedIndex, false);
-  const nextPane: TilePane = {
-    ...inserted.pane,
-    previewTabId:
-      inserted.pane.previewTabId === tabId ? null : inserted.pane.previewTabId,
-  };
+  const tabInstanceIds = [...pane.tabInstanceIds];
+  tabInstanceIds.splice(fromIndex, 1);
+  tabInstanceIds.splice(adjustedIndex, 0, tabId);
+  const nextPane = recordPaneActivation(
+    prunePaneActivationHistory(
+      {
+        ...pane,
+        tabInstanceIds,
+        activeTabId: tabId,
+        previewTabId: pane.previewTabId === tabId ? null : pane.previewTabId,
+      },
+      tabInstanceIds,
+    ),
+    tabId,
+  );
   const root =
     state.root === null
       ? null
@@ -830,7 +984,7 @@ function moveTabAcrossPanes(
   const fromIndex = sourcePane.tabInstanceIds.indexOf(args.tabId);
   if (fromIndex === -1) return state;
 
-  const removed = removeTabAtIndex(sourcePane, fromIndex);
+  const removed = removeTabAtIndexWithSyntheticFallback(sourcePane, fromIndex);
   let root = replacePane(state.root, args.sourcePaneId, () => removed.pane);
   const targetPane = findPaneById(root, args.targetPaneId);
   if (targetPane === null) return state;
@@ -840,7 +994,9 @@ function moveTabAcrossPanes(
     args.targetIndex,
     false,
   );
-  root = replacePane(root, args.targetPaneId, () => inserted.pane);
+  root = replacePane(root, args.targetPaneId, () =>
+    recordPaneActivation(inserted.pane, args.tabId),
+  );
 
   let next: EpicCanvasState = {
     ...state,
@@ -900,7 +1056,9 @@ export function dropOnTabStrip(
       targetIndex,
       false,
     );
-    const root = replacePane(state.root, targetPaneId, () => inserted.pane);
+    const root = replacePane(state.root, targetPaneId, () =>
+      recordPaneActivation(inserted.pane, source.node.instanceId),
+    );
     return {
       ...state,
       root,
@@ -960,7 +1118,7 @@ function resolveSplitSource(
   }
   const ref = state.tilesByInstanceId[source.tabId];
   if (ref === undefined) return null;
-  const removed = removeTabAtIndex(sourcePane, fromIndex);
+  const removed = removeTabAtIndexWithSyntheticFallback(sourcePane, fromIndex);
   const root = replacePane(state.root, source.sourcePaneId, () => removed.pane);
   return {
     state: { ...state, root },

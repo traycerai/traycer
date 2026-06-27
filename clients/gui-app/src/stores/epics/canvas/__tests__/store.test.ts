@@ -1,8 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { paneTabRefs, setActiveTab } from "@/stores/epics/canvas/actions";
 import { createEmptyCanvas } from "@/stores/epics/canvas/canvas-state";
-import { collectPanes, findPaneById } from "@/stores/epics/canvas/tile-tree";
-import { serializeEpicCanvasState } from "@/stores/epics/canvas/migrate-canvas";
+import {
+  collectPanes,
+  findPaneById,
+  replacePane,
+} from "@/stores/epics/canvas/tile-tree";
+import {
+  serializeCanvasByTabId,
+  serializeEpicCanvasState,
+} from "@/stores/epics/canvas/migrate-canvas";
 import {
   applyEpicCanvasDesktopProjection,
   makeSelectActiveEpicArtifactId,
@@ -57,6 +64,46 @@ function requireCanvas(tabId: string): EpicCanvasState {
   const canvas = useEpicCanvasStore.getState().canvasByTabId[tabId];
   if (canvas === undefined) throw new Error(`Expected canvas for ${tabId}`);
   return canvas;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function requirePane(canvas: EpicCanvasState, paneId: string): TilePane {
+  const pane = findPaneById(canvas.root, paneId);
+  if (pane === null) throw new Error(`Expected pane ${paneId}`);
+  return pane;
+}
+
+function requirePersistedCanvasByTabId(): Readonly<Record<string, unknown>> {
+  const raw = window.localStorage.getItem(epicCanvasKey(null));
+  if (raw === null) throw new Error("expected persisted canvas state");
+  const parsed: unknown = JSON.parse(raw);
+  if (!isRecord(parsed)) throw new Error("expected persisted record");
+  const state = parsed.state;
+  if (!isRecord(state)) throw new Error("expected persisted state record");
+  const canvasByTabId = state.canvasByTabId;
+  if (!isRecord(canvasByTabId)) {
+    throw new Error("expected persisted canvasByTabId record");
+  }
+  return canvasByTabId;
+}
+
+function canvasWithPaneActivationHistory(
+  canvas: EpicCanvasState,
+  paneId: string,
+  activationHistory: ReadonlyArray<string>,
+): EpicCanvasState {
+  if (canvas.root === null) throw new Error("expected canvas root");
+  requirePane(canvas, paneId);
+  return {
+    ...canvas,
+    root: replacePane(canvas.root, paneId, (pane) => ({
+      ...pane,
+      activationHistory,
+    })),
+  };
 }
 
 describe("epic canvas store header tabs", () => {
@@ -278,6 +325,38 @@ describe("epic canvas store header tabs", () => {
     expect(state.canvasByTabId["tab-invalid"]).toEqual(createEmptyCanvas());
   });
 
+  it("persists pane activation history through canvasByTabId local storage", async () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-history", "History");
+    store.openTileInTab(tabId, SPEC_A);
+    store.openTileInTab(tabId, SPEC_B);
+
+    const before = requireCanvas(tabId);
+    const paneId = before.activePaneId;
+    if (paneId === null) throw new Error("expected active pane");
+    expect(requirePane(before, paneId).activationHistory).toEqual([
+      SPEC_B.instanceId,
+      SPEC_A.instanceId,
+    ]);
+
+    const serialized = serializeCanvasByTabId({ [tabId]: before });
+    const persistedCanvasByTabId = requirePersistedCanvasByTabId();
+    expect(persistedCanvasByTabId[tabId]).toEqual(serialized[tabId]);
+
+    const raw = window.localStorage.getItem(epicCanvasKey(null));
+    if (raw === null) throw new Error("expected persisted canvas state");
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    window.localStorage.setItem(epicCanvasKey(null), raw);
+
+    await useEpicCanvasStore.persist.rehydrate();
+
+    const after = requireCanvas(tabId);
+    expect(requirePane(after, paneId).activationHistory).toEqual([
+      SPEC_B.instanceId,
+      SPEC_A.instanceId,
+    ]);
+  });
+
   it("does not persist title generation pending state", () => {
     const store = useEpicCanvasStore.getState();
     store.openEpicTab("epic-title", "Initial title");
@@ -454,6 +533,47 @@ describe("epic canvas store header tabs", () => {
     expect(after).not.toBe(before);
     const pane = findPaneById(after.root, rootPaneId);
     expect(pane?.activeTabId).toBe(SPEC_A.instanceId);
+  });
+
+  it("preserves same-history projection echoes and applies history-only changes", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-history", "Epic History");
+    store.openTileInTab(tabId, SPEC_A);
+    store.openTileInTab(tabId, SPEC_B);
+
+    const before = requireCanvas(tabId);
+    const paneId = before.activePaneId;
+    if (paneId === null) throw new Error("expected active pane");
+    const pane = requirePane(before, paneId);
+    expect(pane.activeTabId).toBe(SPEC_B.instanceId);
+    expect(pane.activationHistory).toEqual([
+      SPEC_B.instanceId,
+      SPEC_A.instanceId,
+    ]);
+
+    const echo: DesktopPerWindowSnapshot = {
+      epicTabs: [{ id: tabId, epicId: "epic-history", name: "Epic History" }],
+      activeTabId: tabId,
+      canvasByTabId: { [tabId]: serializeEpicCanvasState(before) },
+      landingDrafts: [],
+      activeLandingDraftId: null,
+    };
+    applyEpicCanvasDesktopProjection(echo);
+    expect(requireCanvas(tabId)).toBe(before);
+
+    const changed = canvasWithPaneActivationHistory(before, paneId, [
+      SPEC_B.instanceId,
+    ]);
+    applyEpicCanvasDesktopProjection({
+      ...echo,
+      canvasByTabId: { [tabId]: serializeEpicCanvasState(changed) },
+    });
+
+    const after = requireCanvas(tabId);
+    expect(after).not.toBe(before);
+    const afterPane = requirePane(after, paneId);
+    expect(afterPane.activeTabId).toBe(SPEC_B.instanceId);
+    expect(afterPane.activationHistory).toEqual([SPEC_B.instanceId]);
   });
 
   it("keeps a freshly-created untitled (empty-name) tab through a projection round-trip", () => {
@@ -711,6 +831,7 @@ function seedTwoGroupSplit(): void {
     tabInstanceIds: [SPEC_A.instanceId, SPEC_B.instanceId],
     activeTabId: SPEC_A.instanceId,
     previewTabId: SPEC_B.instanceId,
+    activationHistory: [SPEC_A.instanceId],
   };
   const rightPane: TilePane = {
     kind: "pane",
@@ -718,6 +839,7 @@ function seedTwoGroupSplit(): void {
     tabInstanceIds: [SPEC_C.instanceId],
     activeTabId: SPEC_C.instanceId,
     previewTabId: null,
+    activationHistory: [SPEC_C.instanceId],
   };
   const canvas: EpicCanvasState = {
     activePaneId: "group-left",

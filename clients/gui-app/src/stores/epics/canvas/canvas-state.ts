@@ -51,6 +51,20 @@ export function isTileInstanceLive(
   );
 }
 
+function prunePaneActivationHistory(
+  activationHistory: ReadonlyArray<string>,
+  tabInstanceIds: ReadonlyArray<string>,
+): ReadonlyArray<string> {
+  const live = new Set(tabInstanceIds);
+  const seen = new Set<string>();
+  return activationHistory.flatMap((instanceId) => {
+    if (!live.has(instanceId)) return [];
+    if (seen.has(instanceId)) return [];
+    seen.add(instanceId);
+    return [instanceId];
+  });
+}
+
 /**
  * Re-establish the tiles/tree invariant after parsing untrusted input:
  * drops payloads with no tree entry, drops tree tabs with no payload, and
@@ -76,7 +90,16 @@ export function reconcileCanvasInvariants(
     const kept = pane.tabInstanceIds.filter((id) =>
       Object.hasOwn(state.tilesByInstanceId, id),
     );
-    if (kept.length === pane.tabInstanceIds.length) continue;
+    const activationHistory = prunePaneActivationHistory(
+      pane.activationHistory,
+      kept,
+    );
+    if (
+      kept.length === pane.tabInstanceIds.length &&
+      activationHistory.length === pane.activationHistory.length
+    ) {
+      continue;
+    }
     root = replacePane(root, pane.id, (current) => ({
       ...current,
       tabInstanceIds: kept,
@@ -88,6 +111,7 @@ export function reconcileCanvasInvariants(
         current.previewTabId !== null && kept.includes(current.previewTabId)
           ? current.previewTabId
           : null,
+      activationHistory,
     }));
   }
 
