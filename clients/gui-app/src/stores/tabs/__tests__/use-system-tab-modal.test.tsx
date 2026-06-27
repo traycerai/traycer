@@ -11,11 +11,13 @@ import {
   createRouter,
 } from "@tanstack/react-router";
 import {
+  canPopOverlayEntry,
   useSystemTabModalActions,
   useSystemTabModalController,
   useSystemTabModalRefreshGuard,
   type SystemTabModalApi,
 } from "@/stores/tabs/use-system-tab-modal";
+import { createPersistentMemoryHistory } from "@/lib/persistent-history";
 import { useSettingsSectionStore } from "@/stores/tabs/settings-section-store";
 import { useTabsStore } from "@/stores/tabs/store";
 import { systemTabOverlaySearchSchema } from "@/lib/system-tab-overlay-search";
@@ -183,5 +185,52 @@ describe("useSystemTabModalRefreshGuard", () => {
     });
 
     expect(navigateSpy).toHaveBeenCalledOnce();
+  });
+});
+
+describe("canPopOverlayEntry", () => {
+  function seedHistory(
+    windowId: string,
+    entries: ReadonlyArray<string>,
+    index: number,
+  ) {
+    window.localStorage.setItem(
+      `traycer-gui-app:last-route:${windowId}`,
+      JSON.stringify({ entries, index }),
+    );
+    return createPersistentMemoryHistory(null, windowId);
+  }
+
+  it("pops back when the entry behind is the overlay-free underlying page", () => {
+    const history = seedHistory(
+      "pop-underlying",
+      ["/epics/e/t", "/epics/e/t?settingsOverlay=true"],
+      1,
+    );
+    expect(canPopOverlayEntry(history)).toBe(true);
+  });
+
+  it("refuses to pop into a previous overlay entry on the same path", () => {
+    // [page, settingsOverlay, historyOverlay] — closing history must NOT back()
+    // into the settings overlay, it must dismiss to the page via replace.
+    const history = seedHistory(
+      "pop-stacked",
+      [
+        "/epics/e/t",
+        "/epics/e/t?settingsOverlay=true",
+        "/epics/e/t?historyOverlay=true",
+      ],
+      2,
+    );
+    expect(canPopOverlayEntry(history)).toBe(false);
+  });
+
+  it("refuses when nothing sits behind the current entry", () => {
+    const history = seedHistory(
+      "pop-deeplink",
+      ["/epics/e/t?settingsOverlay=true"],
+      0,
+    );
+    expect(canPopOverlayEntry(history)).toBe(false);
   });
 });
