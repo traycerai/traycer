@@ -583,6 +583,25 @@
   float: left;
 }
 
+[data-composer-editor].is-editor-empty,
+[data-composer-editor] .is-editor-empty:first-child {
+  position: relative;
+}
+
+[data-composer-editor].is-editor-empty::before,
+[data-composer-editor] .is-editor-empty:first-child::before {
+  position: absolute;
+  inset-inline: 0;
+  top: 0;
+  display: block;
+  width: 100%;
+  height: auto;
+  float: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /*
  * `@user` mention chip rendered by `@tiptap/extension-mention`. We wrap the
  * default span in muted-on-accent pill styling matching the rest of the

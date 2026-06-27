@@ -23,6 +23,7 @@ import {
   listAgentsRequestSchema,
   listAgentsResponseSchema,
   listAgentsResponseSchemaV10,
+  agentSummarySchemaV10,
   sendAgentMessageRequestSchema,
   sendAgentMessageResponseSchema,
   stopAgentRequestSchema,
@@ -112,8 +113,9 @@ export const agentListUpgradeV1ToV2 = defineUpgradePath<
 >({
   from: { major: 1, minor: 0 },
   to: { major: 2, minor: 0 },
-  // A grok-less v1.0 response is a valid v2.0 response (grok is purely
-  // additive), and the request shape is identical — both upgrades are identity.
+  // A v1.0 response without ACP GUI harness agents is a valid v2.0 response
+  // (they are purely additive), and the request shape is identical - both
+  // upgrades are identity.
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
 });
@@ -125,14 +127,14 @@ export const agentListDowngradeV2ToV1 = defineDowngradePath<
   from: { major: 2, minor: 0 },
   to: { major: 1, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
-  // Drop grok agents so a v1.0 client's strict (grok-less) decode never sees
-  // one. The re-parse yields the precise v1.0 type without an assertion.
+  // Drop post-v1.0 GUI harness agents so a v1.0 client's strict decode never
+  // sees one. The re-parse yields the precise v1.0 type without an assertion.
   downgradeResponse: (response) => ({
     ok: true,
     value: listAgentsResponseSchemaV10.parse({
       ...response,
       agents: response.agents.filter(
-        (agent) => agent.harnessId !== "grok" && agent.harnessId !== "qwen",
+        (agent) => agentSummarySchemaV10.safeParse(agent).success,
       ),
     }),
   }),

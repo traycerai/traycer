@@ -48,7 +48,9 @@ must be added in BOTH places - the route file under `src/routes/` AND the modal
 
 ## Sections
 
-- `General` App-level preferences: prevent sleep while running, voice input,
+- `General` App-level preferences: chat turn-completion notifications, prevent
+  sleep while running, pin context usage breakdown (global toggle for the
+  always-visible chat context-window breakdown, default off), voice input,
   local snapshot storage management, and data migration.
 - `Appearance` Theme, global artifact icon color mode, type-color customization,
   and typography controls.

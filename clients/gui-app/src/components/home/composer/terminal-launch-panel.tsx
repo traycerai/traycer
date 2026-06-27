@@ -145,6 +145,7 @@ function TerminalLaunchPanelImpl(props: TerminalLaunchPanelProps) {
           tuiOnly
           lockedHarnessId={null}
           disabled={pending}
+          registerActivation
         />
         <Input
           aria-label="Terminal agent CLI arguments"
