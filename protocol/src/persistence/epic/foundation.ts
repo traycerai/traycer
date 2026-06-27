@@ -64,6 +64,7 @@ export const guiHarnessIdSchema = z.enum([
   "cursor",
   "grok",
   "droid",
+  "kimi",
 ]);
 export type GuiHarnessId = z.infer<typeof guiHarnessIdSchema>;
 

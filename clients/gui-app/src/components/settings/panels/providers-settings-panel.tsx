@@ -103,6 +103,7 @@ const PROVIDER_DESCRIPTIONS: Record<ProviderId, string> = {
   grok: "Grok agent - xAI's coding CLI via your SuperGrok / X subscription.",
   droid:
     "Droid agent - Factory's coding CLI via your Factory account or API key.",
+  kimi: "Kimi agent - MoonshotAI's coding CLI via your Kimi account.",
 };
 
 const TERMINAL_AGENT_ARGS_PLACEHOLDER: Record<
@@ -126,6 +127,7 @@ function terminalAgentArgsPlaceholder(providerId: ProviderId): string {
     case "traycer":
     case "grok":
     case "droid":
+    case "kimi":
       return "CLI arguments (optional)";
   }
 }
@@ -138,6 +140,7 @@ const HARNESS_ICON_ID: Record<ProviderId, HarnessIconId> = {
   traycer: "traycer",
   grok: "grok",
   droid: "droid",
+  kimi: "kimi",
 };
 
 // Grid keeps the columns aligned across header + rows; `minmax(0,1fr)` on
@@ -738,6 +741,8 @@ function envNamePlaceholder(providerId: ProviderId): string {
       return "XAI_API_KEY";
     case "droid":
       return "FACTORY_API_KEY";
+    case "kimi":
+      return "KIMI_API_KEY";
   }
 }
 

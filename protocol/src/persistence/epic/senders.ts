@@ -148,6 +148,18 @@ export type DroidChatSessionAnchor = z.infer<
   typeof droidChatSessionAnchorSchema
 >;
 
+// Kimi (ACP) resumes at session granularity only — `session/load` reloads the
+// whole ACP session, with no per-message truncation/fork point — so the anchor
+// carries just the ACP session id. `sessionId` is that ACP session id.
+export const kimiChatSessionAnchorSchema = z.object({
+  harnessId: z.literal("kimi"),
+  hostId: z.string(),
+  sessionId: z.string(),
+  sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
+  createdAt: z.number(),
+});
+export type KimiChatSessionAnchor = z.infer<typeof kimiChatSessionAnchorSchema>;
+
 export const chatSessionAnchorSchema = z.discriminatedUnion("harnessId", [
   claudeChatSessionAnchorSchema,
   codexChatSessionAnchorSchema,
@@ -156,5 +168,6 @@ export const chatSessionAnchorSchema = z.discriminatedUnion("harnessId", [
   traycerChatSessionAnchorSchema,
   grokChatSessionAnchorSchema,
   droidChatSessionAnchorSchema,
+  kimiChatSessionAnchorSchema,
 ]);
 export type ChatSessionAnchor = z.infer<typeof chatSessionAnchorSchema>;

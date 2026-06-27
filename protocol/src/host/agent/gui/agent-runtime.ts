@@ -684,6 +684,14 @@ export const droidUserMessageAnchorResolvedSchema = z.object({
   droidSessionId: z.string().nullable(),
 });
 
+export const kimiUserMessageAnchorResolvedSchema = z.object({
+  harnessId: z.literal("kimi"),
+  sessionId: z.string(),
+  // The ACP session id the `kimi acp` process assigned for this turn.
+  // Null until `session/new` resolves; used to resume the same ACP session.
+  kimiSessionId: z.string().nullable(),
+});
+
 export const userMessageAnchorResolvedEventSchema = z.object({
   ...baseRuntimeEventFields,
   type: z.literal("user_message.anchor_resolved"),
@@ -696,6 +704,7 @@ export const userMessageAnchorResolvedEventSchema = z.object({
     traycerUserMessageAnchorResolvedSchema,
     grokUserMessageAnchorResolvedSchema,
     droidUserMessageAnchorResolvedSchema,
+    kimiUserMessageAnchorResolvedSchema,
   ]),
 });
 export type UserMessageAnchorResolvedEvent = z.infer<

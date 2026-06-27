@@ -355,6 +355,12 @@ const PROVIDERS: ReadonlyArray<{
     status: "Factory account",
     capabilities: ["gui"],
   },
+  {
+    harnessId: "kimi",
+    label: "Kimi",
+    status: "Kimi account",
+    capabilities: ["gui"],
+  },
 ];
 
 const PALETTE_ROWS = [

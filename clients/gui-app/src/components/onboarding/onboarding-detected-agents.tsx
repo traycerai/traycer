@@ -21,6 +21,7 @@ const TOUR_PROVIDERS: ReadonlyArray<{
   { id: "cursor", harnessId: "cursor" },
   { id: "grok", harnessId: "grok" },
   { id: "droid", harnessId: "droid" },
+  { id: "kimi", harnessId: "kimi" },
 ];
 
 type InstallState = "detected" | "missing" | "pending";
