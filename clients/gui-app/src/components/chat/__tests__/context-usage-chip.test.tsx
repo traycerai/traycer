@@ -23,6 +23,7 @@ import {
   formatContextUsageRowValue,
 } from "@/components/chat/context-usage";
 import { ContextUsageChip } from "@/components/chat/context-usage-chip";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import type { TokenUsage } from "@traycer/protocol/persistence/epic/foundation";
 
@@ -43,13 +44,17 @@ function percentLeft(usage: TokenUsage | null): number | null {
 
 function render(ui: ReactElement) {
   const result = testingRender(
-    <LazyMotion features={domAnimation}>{ui}</LazyMotion>,
+    <TooltipProvider delayDuration={0}>
+      <LazyMotion features={domAnimation}>{ui}</LazyMotion>
+    </TooltipProvider>,
   );
   return {
     ...result,
     rerender: (nextUi: ReactElement) =>
       result.rerender(
-        <LazyMotion features={domAnimation}>{nextUi}</LazyMotion>,
+        <TooltipProvider delayDuration={0}>
+          <LazyMotion features={domAnimation}>{nextUi}</LazyMotion>
+        </TooltipProvider>,
       ),
   };
 }
@@ -420,6 +425,13 @@ describe("ContextUsageChip", () => {
     ).toBe("75");
     expect(within(strip).getByText("50K / 200K")).toBeTruthy();
     expect(within(strip).getByText("1.0k")).toBeTruthy();
+    expect(
+      within(strip)
+        .getByRole("button", {
+          name: "Unpin context usage breakdown",
+        })
+        .hasAttribute("title"),
+    ).toBe(false);
   });
 
   it("keeps detailed popover values on the static text path", async () => {

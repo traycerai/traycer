@@ -14,6 +14,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import {
   buildContextUsageRows,
   computeEffectiveContextUsage,
@@ -236,8 +237,7 @@ function ContextUsagePinnedStrip({
               testId="context-usage-pinned-percent-value"
               className="inline-block min-w-[3ch] text-right tabular-nums"
             />
-            %
-            <span className="@max-[34rem]:sr-only"> left</span>
+            %<span className="@max-[34rem]:sr-only"> left</span>
           </span>
           <span
             data-testid="context-usage-pinned-summary"
@@ -254,19 +254,25 @@ function ContextUsagePinnedStrip({
             ))}
           </div>
         </div>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-xs"
-          aria-label="Unpin context usage breakdown"
-          title="Unpin context usage breakdown"
-          className="text-muted-foreground hover:text-foreground"
-          onClick={(event) => {
-            onUnpin(document.activeElement === event.currentTarget);
-          }}
+        <TooltipWrapper
+          label="Unpin context usage breakdown"
+          side="top"
+          sideOffset={6}
+          align={undefined}
         >
-          <PinOff className="size-3.5" aria-hidden />
-        </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            aria-label="Unpin context usage breakdown"
+            className="text-muted-foreground hover:text-foreground"
+            onClick={(event) => {
+              onUnpin(document.activeElement === event.currentTarget);
+            }}
+          >
+            <PinOff className="size-3.5" aria-hidden />
+          </Button>
+        </TooltipWrapper>
       </div>
     </div>
   );
