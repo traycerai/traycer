@@ -20,6 +20,7 @@ const TOUR_PROVIDERS: ReadonlyArray<{
   { id: "opencode", harnessId: "opencode" },
   { id: "cursor", harnessId: "cursor" },
   { id: "grok", harnessId: "grok" },
+  { id: "kimi", harnessId: "kimi" },
 ];
 
 type InstallState = "detected" | "missing" | "pending";

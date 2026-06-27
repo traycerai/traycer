@@ -384,8 +384,9 @@ export const worktreeGetBindingV10 = defineRpcContract({
 // provider's resolved binary path + version, lets the user override the
 // binary per provider, and previews a candidate-path version without
 // committing it. Schemas live in `protocol/host/provider-schemas.ts`.
-// `providers.list` always returns every provider (incl. grok); v1.0 is frozen
-// grok-less, v2.0 carries grok, and the v2→v1 bridge drops grok for v1.0 clients.
+// `providers.list` always returns every provider; v1.0 is frozen without the
+// ACP GUI harness providers, v2.0 carries them, and the v2→v1 bridge drops them
+// for v1.0 clients.
 export const providersListV10 = defineRpcContract({
   method: "providers.list",
   schemaVersion: { major: 1, minor: 0 } as const,
@@ -421,7 +422,8 @@ export const providersListDowngradeV2ToV1 = defineDowngradePath<
     ok: true,
     value: providersListResponseSchemaV10.parse({
       providers: response.providers.filter(
-        (provider) => provider.providerId !== "grok",
+        (provider) =>
+          provider.providerId !== "grok" && provider.providerId !== "kimi",
       ),
     }),
   }),

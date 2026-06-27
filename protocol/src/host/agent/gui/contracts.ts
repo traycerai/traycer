@@ -18,9 +18,10 @@ import { chatSubscribeV10 } from "@traycer/protocol/host/agent/gui/subscribe";
 
 // ─── GUI-surface catalog (`agent.gui.*`) ──────────────────────────────────
 
-// `agent.gui.listHarnesses` always returns the full catalog (incl. grok), so an
-// unguarded grok value would reach every caller. v1.0 is frozen grok-less (what
-// shipped); v2.0 carries grok; the v2→v1 bridge drops grok for v1.0 clients.
+// `agent.gui.listHarnesses` always returns the full catalog, so unguarded ACP
+// GUI harness ids would reach every caller. v1.0 is frozen without these ids
+// (what shipped); v2.0 carries them; the v2→v1 bridge drops them for v1.0
+// clients.
 export const agentGuiListHarnessesV10 = defineRpcContract({
   method: "agent.gui.listHarnesses",
   schemaVersion: { major: 1, minor: 0 } as const,
@@ -41,8 +42,9 @@ export const agentGuiListHarnessesUpgradeV1ToV2 = defineUpgradePath<
 >({
   from: { major: 1, minor: 0 },
   to: { major: 2, minor: 0 },
-  // Request shape is identical; a grok-less v1.0 response is a valid v2.0
-  // response (grok is purely additive), so both upgrades are identity.
+  // Request shape is identical; a v1.0 response without ACP GUI harnesses is a
+  // valid v2.0 response (they are purely additive), so both upgrades are
+  // identity.
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
 });
@@ -54,12 +56,14 @@ export const agentGuiListHarnessesDowngradeV2ToV1 = defineDowngradePath<
   from: { major: 2, minor: 0 },
   to: { major: 1, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
-  // Drop grok so a v1.0 client's strict (grok-less) decode never sees it. The
-  // re-parse also yields the precise v1.0 type without an assertion.
+  // Drop ACP GUI harnesses so a v1.0 client's strict decode never sees them.
+  // The re-parse also yields the precise v1.0 type without an assertion.
   downgradeResponse: (response) => ({
     ok: true,
     value: listGuiHarnessesResponseSchemaV10.parse({
-      harnesses: response.harnesses.filter((harness) => harness.id !== "grok"),
+      harnesses: response.harnesses.filter(
+        (harness) => harness.id !== "grok" && harness.id !== "kimi",
+      ),
     }),
   }),
 });
