@@ -236,6 +236,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
                 tuiOnly={false}
                 lockedHarnessId={null}
                 disabled={createChat.isPending}
+                registerActivation={false}
               />
               <div className="shrink-0">
                 <AgentModeToggle
