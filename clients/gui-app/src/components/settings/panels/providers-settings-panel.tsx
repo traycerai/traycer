@@ -104,6 +104,9 @@ const PROVIDER_DESCRIPTIONS: Record<ProviderId, string> = {
   droid:
     "Droid agent - Factory's coding CLI via your Factory account or API key.",
   kimi: "Kimi agent - MoonshotAI's coding CLI via your Kimi account.",
+  copilot:
+    "GitHub Copilot CLI agent via your active Copilot subscription or policy.",
+  kilocode: "Kilo Code CLI agent via Kilo login or configured providers.",
 };
 
 const TERMINAL_AGENT_ARGS_PLACEHOLDER: Record<
@@ -126,8 +129,10 @@ function terminalAgentArgsPlaceholder(providerId: ProviderId): string {
     case "cursor":
     case "traycer":
     case "grok":
+    case "copilot":
     case "droid":
     case "kimi":
+    case "kilocode":
       return "CLI arguments (optional)";
   }
 }
@@ -141,6 +146,8 @@ const HARNESS_ICON_ID: Record<ProviderId, HarnessIconId> = {
   grok: "grok",
   droid: "droid",
   kimi: "kimi",
+  copilot: "copilot",
+  kilocode: "kilocode",
 };
 
 // Grid keeps the columns aligned across header + rows; `minmax(0,1fr)` on
@@ -743,6 +750,10 @@ function envNamePlaceholder(providerId: ProviderId): string {
       return "FACTORY_API_KEY";
     case "kimi":
       return "KIMI_API_KEY";
+    case "copilot":
+      return "COPILOT_GITHUB_TOKEN";
+    case "kilocode":
+      return "KILO_API_KEY";
   }
 }
 
