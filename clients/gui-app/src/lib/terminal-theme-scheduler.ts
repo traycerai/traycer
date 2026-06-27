@@ -1,4 +1,5 @@
 import type { Terminal } from "@xterm/xterm";
+import { appLogger } from "@/lib/logger";
 
 /**
  * Coalesce xterm.js texture-atlas clears across all mounted terminals into a
@@ -22,7 +23,10 @@ function flush(): void {
     if (addon === null) continue;
     try {
       addon.clearTextureAtlas();
-    } catch {
+    } catch (error) {
+      appLogger.warn("[terminal-theme] texture atlas clear failed", {
+        error: error instanceof Error ? error.name : typeof error,
+      });
       // Addon was disposed mid-frame; xterm's own renderer takes over.
     }
   }

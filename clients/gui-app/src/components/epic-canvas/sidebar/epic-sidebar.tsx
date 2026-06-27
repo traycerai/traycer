@@ -685,7 +685,7 @@ function GroupedPanelBody(props: {
 /**
  * Synthetic group id for the section run's resize handles; the commit
  * callback maps fractions straight back to panel weights, so the id is only
- * surfaced on the handle's `data-group-id` for tests.
+ * surfaced on the handle's `data-resize-group-id` for tests.
  */
 const SECTION_RUN_GROUP_ID = "epic-left-panel-sections";
 /** Old `minSize="2rem"` floor, now enforced by the custom handle. */
@@ -1834,8 +1834,6 @@ function MarkAllArtifactsReadButton(props: {
     });
   }, [markRead, props.epicId, unreadArtifacts]);
 
-  if (unreadArtifacts.length === 0) return null;
-
   return (
     <Button
       type="button"
@@ -1845,7 +1843,7 @@ function MarkAllArtifactsReadButton(props: {
       aria-label="Mark all unread artifacts as read"
       title="Mark all unread artifacts as read"
       data-testid="epic-sidebar-mark-all-artifacts-read"
-      disabled={props.collapsed}
+      disabled={props.collapsed || unreadArtifacts.length === 0}
       className={cn(
         "text-muted-foreground hover:text-foreground",
         PANEL_HEADER_ACTION_REVEAL_CLASS,

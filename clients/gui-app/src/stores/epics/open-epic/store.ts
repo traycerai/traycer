@@ -57,6 +57,7 @@ import {
 import { v4 as uuidv4 } from "uuid";
 import { createEpicProjector, type EpicProjector } from "./epic-projector";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { appLogger } from "@/lib/logger";
 
 /**
  * Factory contract for the stream-client layer. Production wires this to
@@ -1350,9 +1351,10 @@ export function createOpenEpicStore(
               // diagnose failed migrations from a renderer console dump even
               // when the host log is unavailable; the modal copy itself is
               // fixed and never displays this string.
-              console.warn(
-                `[epic-migration] host reported migrationFailed for epic=${epicId}: ${reason}`,
-              );
+              appLogger.warn("[epic-migration] host reported migrationFailed", {
+                epicId,
+                reason,
+              });
               set({
                 migration: ERROR_MIGRATION_SLICE,
               });
@@ -1384,9 +1386,9 @@ export function createOpenEpicStore(
                 // `hasConnectedOnce` keeps this to genuine RE-connections (wake)
                 // - not the first connect or a `requestFreshSnapshot` re-open,
                 // which would pollute the trace.
-                console.warn(
-                  `[epic-stream] cloud sync connected epic=${epicId}`,
-                );
+                appLogger.info("[epic-stream] cloud sync connected", {
+                  epicId,
+                });
               }
               // A genuine cloud "connected" frame is the ONLY thing that latches
               // "connected once" - never the optimistic default - so a new
@@ -1413,9 +1415,10 @@ export function createOpenEpicStore(
                 // `warn` is the only info-ish console level lint permits here.
                 // Gated on `hasConnectedOnce` so it marks only RE-connections
                 // (wake), not the initial connect or a fresh-snapshot re-open.
-                console.warn(
-                  `[epic-stream] transport open (context registered) epic=${epicId}`,
-                );
+                appLogger.info("[epic-stream] transport open", {
+                  epicId,
+                  contextRegistered: true,
+                });
               }
               const nextStatus = syncCurrentConnectionStatus();
               hasFreshRootSnapshotForOpenCycle = false;

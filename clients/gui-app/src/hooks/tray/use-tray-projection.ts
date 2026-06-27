@@ -3,6 +3,7 @@ import type {
   TrayEpic,
   TrayIndicatorState,
 } from "@traycer-clients/shared/platform/runner-host";
+import { appLogger } from "@/lib/logger";
 import { useRunnerHost } from "@/providers/use-runner-host";
 
 export interface TrayProjection {
@@ -24,12 +25,24 @@ export function useTrayProjection(projection: TrayProjection): void {
     // Fire-and-forget: the Electron preload bridges these calls across IPC,
     // so they return a promise. We do not block the render path on the round
     // trip - the next projection update will replace any in-flight value.
-    void runnerHost.tray.setEpics(projection.epics).catch(() => undefined);
+    void runnerHost.tray.setEpics(projection.epics).catch((error: unknown) => {
+      appLogger.error(
+        "[tray] failed to project epic list",
+        { epicCount: projection.epics.length },
+        error,
+      );
+    });
   }, [runnerHost, projection.epics]);
 
   useEffect(() => {
     void runnerHost.tray
       .setIndicator(projection.indicator)
-      .catch(() => undefined);
+      .catch((error: unknown) => {
+        appLogger.error(
+          "[tray] failed to project indicator state",
+          { indicator: projection.indicator },
+          error,
+        );
+      });
   }, [runnerHost, projection.indicator]);
 }

@@ -6,6 +6,7 @@ import type {
   HistoryWorkspaceRef,
 } from "@/components/home/data/home-page.data";
 import { dedupSortWorkspaces } from "@/components/home/data/home-page.data";
+import { appLogger, describeLogError } from "@/lib/logger";
 
 const historyMatchModeSchema = z.enum(["any", "all"]);
 const historyOwnershipSchema = z.enum(["mine", "shared"]);
@@ -215,7 +216,11 @@ function parseWorkspaceParam(value: string): HistoryWorkspaceRef[] {
     return hostId.length > 0 && workspacePath.length > 0
       ? [{ hostId, workspacePath }]
       : [];
-  } catch {
+  } catch (error) {
+    appLogger.warn("[history-search] workspace parameter parse failed", {
+      valueLength: value.length,
+      error: describeLogError(error),
+    });
     return [];
   }
 }

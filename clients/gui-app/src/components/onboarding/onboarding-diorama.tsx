@@ -343,6 +343,18 @@ const PROVIDERS: ReadonlyArray<{
     status: "API key set",
     capabilities: ["gui"],
   },
+  {
+    harnessId: "grok",
+    label: "Grok",
+    status: "SuperGrok / X",
+    capabilities: ["gui"],
+  },
+  {
+    harnessId: "kimi",
+    label: "Kimi",
+    status: "Kimi account",
+    capabilities: ["gui"],
+  },
 ];
 
 const PALETTE_ROWS = [

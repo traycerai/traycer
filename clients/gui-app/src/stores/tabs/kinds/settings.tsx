@@ -31,6 +31,8 @@ function settingsRouteOptions(section: SettingsSectionId) {
       return { to: "/settings/worktrees" } as const;
     case "host":
       return { to: "/settings/host" } as const;
+    case "diagnostics":
+      return { to: "/settings/diagnostics" } as const;
   }
 }
 

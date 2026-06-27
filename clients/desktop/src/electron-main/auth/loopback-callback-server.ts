@@ -48,6 +48,7 @@ export async function startLoopbackCallbackServer(
       try {
         url = new URL(req.url ?? "/", "http://127.0.0.1");
       } catch {
+        log.warn("[auth] dev loopback callback rejected malformed request");
         res.writeHead(400, { "Content-Type": "text/plain; charset=utf-8" });
         res.end("bad request");
         return;

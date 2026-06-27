@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildLoginCommand } from "../login";
 import type { CommandContext } from "../../runner/runner";
 import type { RuntimeContext } from "../../runner/runtime";
+import { noopLogger } from "../../logger";
 import { CLI_ERROR_CODES, CliError } from "../../runner/errors";
 import { validateAuthTokenViaHttp } from "../../../../shared/auth/auth-validation";
 import { readCredentials, writeCredentials } from "../../store/credentials";
@@ -27,6 +28,7 @@ function makeRuntime(overrides: Partial<RuntimeContext>): RuntimeContext {
     noBootstrap: false,
     nonInteractive: false,
     environment: "production",
+    logger: noopLogger,
     ...overrides,
   };
 }

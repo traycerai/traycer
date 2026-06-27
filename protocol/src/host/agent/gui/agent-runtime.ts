@@ -667,6 +667,22 @@ export const traycerUserMessageAnchorResolvedSchema = z.object({
   opencodeUserMessageId: z.string(),
 });
 
+export const grokUserMessageAnchorResolvedSchema = z.object({
+  harnessId: z.literal("grok"),
+  sessionId: z.string(),
+  // The ACP session id the `grok agent stdio` process assigned for this turn.
+  // Null until `session/new` resolves; used to resume the same ACP session.
+  grokSessionId: z.string().nullable(),
+});
+
+export const kimiUserMessageAnchorResolvedSchema = z.object({
+  harnessId: z.literal("kimi"),
+  sessionId: z.string(),
+  // The ACP session id the `kimi acp` process assigned for this turn.
+  // Null until `session/new` resolves; used to resume the same ACP session.
+  kimiSessionId: z.string().nullable(),
+});
+
 export const userMessageAnchorResolvedEventSchema = z.object({
   ...baseRuntimeEventFields,
   type: z.literal("user_message.anchor_resolved"),
@@ -677,6 +693,8 @@ export const userMessageAnchorResolvedEventSchema = z.object({
     openCodeUserMessageAnchorResolvedSchema,
     cursorUserMessageAnchorResolvedSchema,
     traycerUserMessageAnchorResolvedSchema,
+    grokUserMessageAnchorResolvedSchema,
+    kimiUserMessageAnchorResolvedSchema,
   ]),
 });
 export type UserMessageAnchorResolvedEvent = z.infer<

@@ -3,6 +3,8 @@ import { useNotificationClick } from "@/hooks/notifications/use-notifications";
 import { useTrayEpicsSource } from "@/hooks/tray/use-tray-epics-source";
 import { useTrayProjection } from "@/hooks/tray/use-tray-projection";
 import { useRunnerHost } from "@/providers/use-runner-host";
+import { useRunnerLogLevelsQuery } from "@/hooks/runner/use-runner-log-levels-query";
+import { setAppLogLevel } from "@/lib/logger";
 import { useNotificationEventsStore } from "@/stores/notifications/notification-events-store";
 import { useTrayProjectionStore } from "@/stores/tray/tray-projection-store";
 
@@ -54,6 +56,16 @@ export function RunnerHostBridges(): null {
       subscription.dispose();
     };
   }, [runnerHost, requestOpenEpic]);
+
+  // Keep the renderer's own log threshold in sync with the configured desktop
+  // level (no-op outside the desktop shell, where the query stays disabled).
+  const logLevels = useRunnerLogLevelsQuery();
+  const desktopLogLevel = logLevels.data?.desktopLogLevel;
+  useEffect(() => {
+    if (desktopLogLevel !== undefined) {
+      setAppLogLevel(desktopLogLevel);
+    }
+  }, [desktopLogLevel]);
 
   return null;
 }

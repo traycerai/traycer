@@ -16,6 +16,7 @@ import {
 } from "@/stores/epics/canvas/types";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import { appLogger } from "@/lib/logger";
 
 interface ArtifactChildIndexProps {
   readonly parentId: string;
@@ -93,9 +94,12 @@ function ChildIndexRow(props: {
     if (treeNode !== null && type !== null) {
       reason = `non-artifact node type=${type}`;
     }
-    console.warn(
-      `[artifact-child-index] skipping child row for child=${childId} viewTab=${viewTabId} host=${hostId}: ${reason}`,
-    );
+    appLogger.warn("[artifact-child-index] skipping child row", {
+      childId,
+      viewTabId,
+      hostId,
+      reason,
+    });
     return null;
   }
 

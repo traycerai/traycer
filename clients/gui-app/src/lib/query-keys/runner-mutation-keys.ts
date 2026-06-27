@@ -28,6 +28,8 @@ export const runnerMutationKeys = {
   uninstallTraycer: () => ["runner.host.uninstallTraycer"] as const,
   reinstallTraycer: () => ["runner.host.reinstallTraycer"] as const,
   supportSubmitReport: () => ["runner.support.submitReport"] as const,
+  // Reveal a log file in the OS file manager (Diagnostics → Logs).
+  revealLog: () => ["runner.support.revealLog"] as const,
   // Force-refresh the registry update probe (bypasses the desktop's 24h
   // on-disk cache). Used by the Settings → Host Updates row's
   // "Check now" / "Retry" buttons so stale cached failures don't survive
@@ -38,6 +40,9 @@ export const runnerMutationKeys = {
   // reloads. Keyed so the destructive action dedups and shows in devtools.
   clearAllLocalData: () => ["runner.clearAllLocalData"] as const,
   mermaidPngDownload: () => ["runner.mermaidPngDownload"] as const,
+  // Settings → log level (desktop/cli/host). Machine-local config, not
+  // host-scoped, so a single static key suffices.
+  logLevelsSet: () => ["runner.logLevels.set"] as const,
 };
 
 export const runnerQueryKeys = {
@@ -83,4 +88,14 @@ export const runnerQueryKeys = {
    * matching query stays `enabled: false`; no fetch ever runs.
    */
   hostStatusNoService: () => ["runner.host.status-no-service"] as const,
+  // The three configurable log thresholds, read together from the desktop
+  // platform bridge. Machine-local, so not host-scoped.
+  logLevels: () => ["runner.logLevels"] as const,
+  // Desktop support log viewer (Diagnostics → Logs). Scoped by the support
+  // bridge object identity so a host/shell swap invalidates cleanly, matching
+  // the other runner-host queries.
+  supportLogList: (support: object | null) =>
+    ["runner.support.logList", support] as const,
+  supportLogTail: (support: object | null, target: string) =>
+    ["runner.support.logTail", support, target] as const,
 };

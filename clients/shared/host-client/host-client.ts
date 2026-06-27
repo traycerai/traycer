@@ -83,6 +83,7 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
   private readonly changeHandlers = new Set<
     (event: HostClientChangeEvent) => void
   >();
+  private readonly bearerRotationHandlers = new Set<() => void>();
 
   constructor(options: HostClientOptions<Registry>) {
     this.registry = options.registry;
@@ -225,6 +226,29 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
     return () => {
       this.changeHandlers.delete(handler);
     };
+  }
+
+  /**
+   * Subscribes to in-place bearer rotations (same-user token refresh). Distinct
+   * from `onChange`, which only fires on identity transitions; rotation keeps
+   * the same context reference. Stream transports listen here to push the fresh
+   * credential onto open connections (`credentialUpdate`) without a reconnect.
+   */
+  onBearerRotated(handler: () => void): HostClientUnsubscribe {
+    this.bearerRotationHandlers.add(handler);
+    return () => {
+      this.bearerRotationHandlers.delete(handler);
+    };
+  }
+
+  /**
+   * Fires every `onBearerRotated` subscriber. Called by `HostRuntime` when the
+   * `RequestContextProvider` rotates the active context's bearer in place.
+   */
+  notifyBearerRotated(): void {
+    for (const handler of [...this.bearerRotationHandlers]) {
+      handler();
+    }
   }
 
   /**

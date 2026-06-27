@@ -473,6 +473,7 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.workspaceFoldersPick,
         RunnerHostInvoke.validateAuthToken,
         RunnerHostInvoke.validateAuthTokenIdentity,
+        RunnerHostInvoke.refreshAuthToken,
         RunnerHostInvoke.exchangeAuthCode,
         RunnerHostInvoke.notificationShow,
         RunnerHostInvoke.openExternalLink,
@@ -590,6 +591,8 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.fileSave,
         RunnerHostInvoke.gpuAccelerationGet,
         RunnerHostInvoke.gpuAccelerationSet,
+        RunnerHostInvoke.logLevelsGet,
+        RunnerHostInvoke.logLevelsSet,
       ].sort(),
     );
     bridge.dispose();

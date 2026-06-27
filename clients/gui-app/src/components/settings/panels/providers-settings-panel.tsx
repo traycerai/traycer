@@ -99,6 +99,8 @@ const PROVIDER_DESCRIPTIONS: Record<ProviderId, string> = {
   cursor:
     "Cursor agent - SDK-driven chats authenticated with your Cursor API key.",
   traycer: "Traycer's managed harness uses the selected OpenCode CLI binary.",
+  grok: "Grok agent - xAI's coding CLI via your SuperGrok / X subscription.",
+  kimi: "Kimi agent - MoonshotAI's coding CLI via your Kimi account.",
 };
 
 const TERMINAL_AGENT_ARGS_PLACEHOLDER: Record<
@@ -120,6 +122,8 @@ function terminalAgentArgsPlaceholder(providerId: ProviderId): string {
       return TERMINAL_AGENT_ARGS_PLACEHOLDER.opencode;
     case "cursor":
     case "traycer":
+    case "grok":
+    case "kimi":
       return "CLI arguments (optional)";
   }
 }
@@ -130,6 +134,8 @@ const HARNESS_ICON_ID: Record<ProviderId, HarnessIconId> = {
   opencode: "opencode",
   cursor: "cursor",
   traycer: "traycer",
+  grok: "grok",
+  kimi: "kimi",
 };
 
 // Grid keeps the columns aligned across header + rows; `minmax(0,1fr)` on
@@ -726,6 +732,10 @@ function envNamePlaceholder(providerId: ProviderId): string {
       return "ANTHROPIC_API_KEY";
     case "cursor":
       return "CURSOR_API_KEY";
+    case "grok":
+      return "XAI_API_KEY";
+    case "kimi":
+      return "KIMI_API_KEY";
   }
 }
 

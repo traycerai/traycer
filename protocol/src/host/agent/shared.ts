@@ -50,8 +50,27 @@ export const guiHarnessIdSchema = harnessIdSchema.extract([
   "opencode",
   "traycer",
   "cursor",
+  "grok",
+  "kimi",
 ]);
 export type GuiHarnessId = z.infer<typeof guiHarnessIdSchema>;
+
+/**
+ * Frozen harness id set as shipped in protocol v1.0. Used only by the frozen
+ * v1.0 response schema of `agent.gui.listHarnesses` so a v1.0 client (which
+ * predates the ACP GUI harnesses) negotiates a wire that can never carry them;
+ * the v2.0 line adds them and a v2→v1 downgrade bridge filters them for v1.0
+ * callers. Do NOT add new harnesses here - extend the latest
+ * `guiHarnessIdSchema` and use the existing v2 bridge instead.
+ */
+export const guiHarnessIdSchemaV10 = harnessIdSchema.extract([
+  "claude",
+  "codex",
+  "opencode",
+  "traycer",
+  "cursor",
+]);
+export type GuiHarnessIdV10 = z.infer<typeof guiHarnessIdSchemaV10>;
 
 export const tuiHarnessIdSchema = harnessIdSchema.extract([
   "claude",
@@ -104,6 +123,8 @@ export const agentFacingHarnessIdSchema = harnessIdSchema.extract([
   "opencode",
   "traycer",
   "cursor",
+  "grok",
+  "kimi",
 ]);
 export type AgentFacingHarnessId = z.infer<typeof agentFacingHarnessIdSchema>;
 
@@ -385,6 +406,22 @@ export const listAgentsResponseSchema = z.object({
   agents: z.array(agentSummarySchema),
 });
 export type ListAgentsResponse = z.infer<typeof listAgentsResponseSchema>;
+
+// ── Frozen protocol-v1.0 agent.list response ───────────────────────────────
+// `agent.list` enumerates every agent in the epic - including ACP GUI harness
+// chats a newer client created - and the `traycer` CLI inlines the protocol at
+// build time, so an old CLI would hit a strict enum on those rows. v1.0 is
+// frozen; the v2.0 line carries them and a v2→v1 bridge drops them for v1.0
+// callers. Do not add new harnesses here - use the existing v2 bridge.
+export const agentSummarySchemaV10 = agentSummarySchema.extend({
+  harnessId: harnessIdSchema
+    .extract(["claude", "codex", "opencode", "traycer", "cursor"])
+    .nullable(),
+});
+export const listAgentsResponseSchemaV10 = listAgentsResponseSchema.extend({
+  agents: z.array(agentSummarySchemaV10),
+});
+export type ListAgentsResponseV10 = z.infer<typeof listAgentsResponseSchemaV10>;
 
 /**
  * `agent.sendMessage@1.0` - fire-and-forget enqueue from one agent to
