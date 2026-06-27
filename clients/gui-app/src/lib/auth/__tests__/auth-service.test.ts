@@ -7,13 +7,11 @@ import type { StoredAuthTokens } from "@traycer-clients/shared/platform/runner-h
 import {
   AuthService,
   type AuthSessionSnapshot,
-  AUTH_CALLBACK_TIMEOUT_MS,
   AUTH_ERROR_DEVICE_DENIED,
   AUTH_ERROR_DEVICE_EXPIRED,
   AUTH_ERROR_LAUNCH_FAILED,
   AUTH_ERROR_SESSION_EXPIRED,
   AUTH_ERROR_SIGN_IN_FAILED,
-  AUTH_ERROR_TIMEOUT,
 } from "@/lib/auth/auth-service";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
@@ -36,10 +34,11 @@ interface DeferredResponse {
 const VALIDATION_URL = "http://localhost:5005/api/v3/user";
 const REFRESH_URL = "http://localhost:5005/api/v3/auth/refresh";
 
-// Mirrors the module-private `PKCE_VERIFIER_STORAGE_KEY` in `auth-service.ts`
-// (not exported). These characterization tests pin the current persisted-
-// verifier behavior, so they reference the literal key directly.
-const PKCE_VERIFIER_STORAGE_KEY = "traycer.auth.pkce-code-verifier";
+// The default `/device/authorize` user code the `MockDeviceFlowHost` hands back,
+// and the pre-filled verification URL the controller asks the shell to open.
+const MOCK_DEVICE_USER_CODE = "ABCDE-FGHIJ";
+const MOCK_DEVICE_VERIFICATION_URI_COMPLETE =
+  "https://app.traycer.ai/device?user_code=ABCDE-FGHIJ";
 
 const trackedServices: AuthService[] = [];
 
@@ -202,6 +201,27 @@ function status(code: number): Promise<Response> {
   return Promise.resolve(new Response(null, { status: code }));
 }
 
+/**
+ * Drives a full device-flow sign-in: start the attempt, then settle its poll on
+ * the `authorized` terminal and wait for the signed-in projection. The minted
+ * `token` validates through the installed fetch mock (default `okWithProfile`).
+ */
+async function deviceSignIn(
+  service: AuthService,
+  host: MockRunnerHost,
+  token: string,
+): Promise<void> {
+  await service.signIn();
+  host.deviceFlow.emitResult({
+    kind: "authorized",
+    token,
+    refreshToken: `${token}-refresh`,
+  });
+  await vi.waitFor(() => {
+    expect(service.getCurrentSessionSnapshot().token).toBe(token);
+  });
+}
+
 describe("AuthService", () => {
   let restoreFetch: () => void = () => undefined;
 
@@ -302,11 +322,7 @@ describe("AuthService", () => {
   it("rotates the active context's credential lease in place on same-user refresh (no provider re-emit)", async () => {
     const { service, host } = makeService();
     await service.start();
-    await service.signIn();
-    host.emitAuthCallback({ code: "old-token" });
-    await vi.waitFor(() => {
-      expect(useAuthStore.getState().status).toBe("signed-in");
-    });
+    await deviceSignIn(service, host, "old-token");
 
     const provider = service.getRequestContextProvider();
     const ctxBefore = provider.current();
@@ -352,11 +368,7 @@ describe("AuthService", () => {
   it("aborts the current context and emits null on cross-user revalidation", async () => {
     const { service, host } = makeService();
     await service.start();
-    await service.signIn();
-    host.emitAuthCallback({ code: "user-1-token" });
-    await vi.waitFor(() => {
-      expect(useAuthStore.getState().contextMetadata?.userId).toBe("user-1");
-    });
+    await deviceSignIn(service, host, "user-1-token");
 
     const provider = service.getRequestContextProvider();
     const ctxA = provider.current();
@@ -498,13 +510,18 @@ describe("AuthService", () => {
     expect(await host.tokenStore.get()).toBeNull();
   });
 
-  it("treats a 200 response with no usable profile as sign-in-failed on the OAuth callback path", async () => {
+  it("treats a 200 response with no usable profile as sign-in-failed on the device-poll path", async () => {
     const { service, host } = makeService();
     await service.start();
     restoreFetch();
     restoreFetch = installFetch(() => ok());
 
-    host.emitAuthCallback({ code: "callback-token" });
+    await service.signIn();
+    host.deviceFlow.emitResult({
+      kind: "authorized",
+      token: "callback-token",
+      refreshToken: "callback-token-refresh",
+    });
 
     await vi.waitFor(() => {
       expect(service.getLastError()).toBe(AUTH_ERROR_SIGN_IN_FAILED);
@@ -538,21 +555,22 @@ describe("AuthService", () => {
     expect(calls).toEqual([`GET ${VALIDATION_URL}`, `POST ${REFRESH_URL}`]);
   });
 
-  it("opens the runner-host signInUrl and flips to signing-in on signIn()", async () => {
+  it("opens the device verification page and flips to signing-in on signIn()", async () => {
     const { service, host } = makeService();
     await service.start();
 
     await service.signIn();
 
-    // signIn now appends the PKCE challenge to the signInUrl, preserving its
-    // existing query (redirect_uri) and adding the S256 code_challenge.
-    expect(host.openedExternalLinks).toHaveLength(1);
-    const opened = host.openedExternalLinks[0];
-    expect(opened.startsWith(host.signInUrl)).toBe(true);
-    const params = new URL(opened).searchParams;
-    expect((params.get("code_challenge") ?? "").length).toBeGreaterThan(0);
-    expect(params.get("code_challenge_method")).toBe("S256");
+    // signIn() now runs the device flow directly: it starts the main-process
+    // authorize+poll and opens the pre-filled verification page (not a redirect
+    // sign-in URL).
+    expect(host.deviceFlow.startCalls).toBe(1);
+    expect(host.openedExternalLinks).toEqual([
+      MOCK_DEVICE_VERIFICATION_URI_COMPLETE,
+    ]);
     expect(useAuthStore.getState().status).toBe("signing-in");
+    // Progress is surfaced (no silent spinner).
+    expect(service.getDeviceProgress()?.userCode).toBe(MOCK_DEVICE_USER_CODE);
   });
 
   it("calls runnerHost.beginAuthAttempt() exactly once before openExternalLink(...) on signIn()", async () => {
@@ -596,7 +614,7 @@ describe("AuthService", () => {
     expect(seenUrls).not.toContain("http://localhost:5005/api/user");
   });
 
-  it("validates and persists a token delivered via onAuthCallback success result", async () => {
+  it("validates and persists a token delivered by the device poll", async () => {
     const { service, host } = makeService();
     await service.start();
     await service.signIn();
@@ -607,7 +625,11 @@ describe("AuthService", () => {
       return okWithProfile();
     });
 
-    host.emitAuthCallback({ code: "new-token" });
+    host.deviceFlow.emitResult({
+      kind: "authorized",
+      token: "new-token",
+      refreshToken: "new-token-refresh",
+    });
 
     await vi.waitFor(() => {
       expect(service.getCurrentSessionSnapshot().token).toBe("new-token");
@@ -620,13 +642,18 @@ describe("AuthService", () => {
     expect(validationCalls).toContain(VALIDATION_URL);
   });
 
-  it("surfaces sign-in-failed (NOT session-expired) when an OAuth callback token is rejected by AuthnV3", async () => {
+  it("surfaces sign-in-failed (NOT session-expired) when a device-poll token is rejected by AuthnV3", async () => {
     const { service, host } = makeService();
     await service.start();
     restoreFetch();
     restoreFetch = installFetch(() => status(401));
 
-    host.emitAuthCallback({ code: "rejected-token" });
+    await service.signIn();
+    host.deviceFlow.emitResult({
+      kind: "authorized",
+      token: "rejected-token",
+      refreshToken: "rejected-token-refresh",
+    });
 
     await vi.waitFor(() => {
       expect(service.getLastError()).toBe(AUTH_ERROR_SIGN_IN_FAILED);
@@ -637,36 +664,24 @@ describe("AuthService", () => {
     expect(await host.tokenStore.get()).toBeNull();
   });
 
-  it("surfaces sign-in-failed when an OAuth callback token validation hits a network error", async () => {
+  it("surfaces sign-in-failed when a device-poll token validation hits a network error", async () => {
     const { service, host } = makeService();
     await service.start();
     restoreFetch();
     restoreFetch = installFetch(() => Promise.reject(new Error("offline")));
 
-    host.emitAuthCallback({ code: "net-fail-token" });
+    await service.signIn();
+    host.deviceFlow.emitResult({
+      kind: "authorized",
+      token: "net-fail-token",
+      refreshToken: "net-fail-token-refresh",
+    });
 
     await vi.waitFor(() => {
       expect(service.getLastError()).toBe(AUTH_ERROR_SIGN_IN_FAILED);
     });
     expect(useAuthStore.getState().status).toBe("signed-out");
     expect(service.getCurrentSessionSnapshot().token).toBeNull();
-    expect(await host.tokenStore.get()).toBeNull();
-  });
-
-  it("returns to signed-out with the shell error on an error callback", async () => {
-    const { service, host } = makeService();
-    await service.start();
-
-    await host.tokenStore.set({
-      token: "stale",
-      refreshToken: "stale-refresh",
-    });
-    host.emitAuthCallback({ error: "user_cancelled" });
-
-    await vi.waitFor(() => {
-      expect(useAuthStore.getState().status).toBe("signed-out");
-    });
-    expect(service.getLastError()).toBe("user_cancelled");
     expect(await host.tokenStore.get()).toBeNull();
   });
 
@@ -693,11 +708,7 @@ describe("AuthService", () => {
     });
 
     await service.start();
-    await service.signIn();
-    host.emitAuthCallback({ code: "tok" });
-    await vi.waitFor(() => {
-      expect(service.getCurrentSessionSnapshot().token).toBe("tok");
-    });
+    await deviceSignIn(service, host, "tok");
     await service.signOut();
 
     expect(events).toEqual(["signing-in", "signed-in", "signed-out"]);
@@ -711,57 +722,10 @@ describe("AuthService", () => {
     });
 
     await service.start();
-    await service.signIn();
-    host.emitAuthCallback({ code: "tok-a" });
-    await vi.waitFor(() => {
-      expect(tokens).toContain("tok-a");
-    });
+    await deviceSignIn(service, host, "tok-a");
 
     await service.signOut();
     expect(tokens[tokens.length - 1]).toBeNull();
-  });
-
-  it("returns to signed-out with auth-timeout when no callback arrives before the timeout", async () => {
-    vi.useFakeTimers();
-    const { service, host } = makeService();
-    await host.tokenStore.set({
-      token: "stale",
-      refreshToken: "stale-refresh",
-    });
-    const events: string[] = [];
-    service.onChange((statusValue) => {
-      events.push(statusValue);
-    });
-
-    await service.start();
-    await service.signIn();
-    expect(useAuthStore.getState().status).toBe("signing-in");
-
-    await vi.advanceTimersByTimeAsync(AUTH_CALLBACK_TIMEOUT_MS + 1);
-
-    expect(useAuthStore.getState().status).toBe("signed-out");
-    expect(service.getLastError()).toBe(AUTH_ERROR_TIMEOUT);
-    expect(await host.tokenStore.get()).toBeNull();
-    expect(events).toContain("signed-out");
-  });
-
-  it("cancels the pending timeout on a successful callback so no spurious timeout fires", async () => {
-    vi.useFakeTimers();
-    const { service, host } = makeService();
-
-    await service.start();
-    await service.signIn();
-    host.emitAuthCallback({ code: "good-token" });
-
-    await vi.waitFor(() => {
-      expect(useAuthStore.getState().status).toBe("signed-in");
-    });
-
-    await vi.advanceTimersByTimeAsync(AUTH_CALLBACK_TIMEOUT_MS + 1);
-
-    expect(useAuthStore.getState().status).toBe("signed-in");
-    expect(service.getCurrentSessionSnapshot().token).toBe("good-token");
-    expect(service.getLastError()).toBeNull();
   });
 
   it("installs the onAuthCallback subscription before awaiting tokenStore.load()", async () => {
@@ -798,150 +762,26 @@ describe("AuthService", () => {
     await startPromise;
   });
 
-  it("treats an early { error } callback as authoritative over a pending persisted-token load", async () => {
-    const host = new MockRunnerHost({
-      signInUrl: "https://auth.traycer.ai/sign-in",
-      authnBaseUrl: "http://localhost:5005",
-      localHost: null,
-      hosts: [],
-      workspaceFolderPickerPaths: undefined,
-      hasLocalHost: undefined,
-      traycerCli: undefined,
-    });
-    await host.tokenStore.set({
-      token: "stale-token",
-      refreshToken: "stale-token-refresh",
-    });
-
-    let resolveLoad: (value: StoredAuthTokens | null) => void = () => undefined;
-    const pendingLoad = new Promise<StoredAuthTokens | null>((resolve) => {
-      resolveLoad = resolve;
-    });
-    host.tokenStore.get = (): Promise<StoredAuthTokens | null> => pendingLoad;
-
-    const service = trackService(new AuthService({ runnerHost: host }));
-    const tokenEvents: Array<string | null> = [];
-    service.onSessionSnapshotChange((snapshot) => {
-      tokenEvents.push(snapshot.token);
-    });
-    const startPromise = service.start();
-
-    await Promise.resolve();
-
-    host.emitAuthCallback({ error: "user_cancelled" });
-
-    resolveLoad({ token: "stale-token", refreshToken: "stale-token-refresh" });
-    await startPromise;
-    await vi.waitFor(() => {
-      expect(host.tokenStoreEntries.size).toBe(0);
-    });
-
-    expect(useAuthStore.getState().status).toBe("signed-out");
-    expect(service.getCurrentSessionSnapshot().token).toBeNull();
-    expect(service.getLastError()).toBe("user_cancelled");
-    expect(tokenEvents).not.toContain("stale-token");
-  });
-
-  it("applies an early code callback delivered before the persisted-token load resolves", async () => {
-    const host = new MockRunnerHost({
-      signInUrl: "https://auth.traycer.ai/sign-in",
-      authnBaseUrl: "http://localhost:5005",
-      localHost: null,
-      hosts: [],
-      workspaceFolderPickerPaths: undefined,
-      hasLocalHost: undefined,
-      traycerCli: undefined,
-    });
-    await host.tokenStore.set({
-      token: "old-token",
-      refreshToken: "old-token-refresh",
-    });
-
-    let resolveLoad: (value: StoredAuthTokens | null) => void = () => undefined;
-    const pendingLoad = new Promise<StoredAuthTokens | null>((resolve) => {
-      resolveLoad = resolve;
-    });
-    host.tokenStore.get = (): Promise<StoredAuthTokens | null> => pendingLoad;
-
-    const service = trackService(new AuthService({ runnerHost: host }));
-    // Establish the PKCE verifier so the early code callback can be exchanged.
-    await service.signIn();
-    const startPromise = service.start();
-
-    await Promise.resolve();
-
-    host.emitAuthCallback({ code: "new-token" });
-
-    resolveLoad({ token: "old-token", refreshToken: "old-token-refresh" });
-    await startPromise;
-
-    await vi.waitFor(() => {
-      expect(service.getCurrentSessionSnapshot().token).toBe("new-token");
-    });
-    expect(useAuthStore.getState().status).toBe("signed-in");
-    expect(
-      Array.from(host.tokenStoreEntries.values()).map((t) => t.token),
-    ).toContain("new-token");
-  });
-
-  it("treats a sign-in timeout that fires during start() as authoritative over a pending persisted-token load", async () => {
-    vi.useFakeTimers();
-    const host = new MockRunnerHost({
-      signInUrl: "https://auth.traycer.ai/sign-in",
-      authnBaseUrl: "http://localhost:5005",
-      localHost: null,
-      hosts: [],
-      workspaceFolderPickerPaths: undefined,
-      hasLocalHost: undefined,
-      traycerCli: undefined,
-    });
-    await host.tokenStore.set({
-      token: "stale-token",
-      refreshToken: "stale-token-refresh",
-    });
-
-    let resolveLoad: (value: StoredAuthTokens | null) => void = () => undefined;
-    const pendingLoad = new Promise<StoredAuthTokens | null>((resolve) => {
-      resolveLoad = resolve;
-    });
-    host.tokenStore.get = (): Promise<StoredAuthTokens | null> => pendingLoad;
-
-    const service = trackService(new AuthService({ runnerHost: host }));
-    const startPromise = service.start();
-
-    await Promise.resolve();
-
-    await service.signIn();
-
-    await vi.advanceTimersByTimeAsync(AUTH_CALLBACK_TIMEOUT_MS + 1);
-
-    resolveLoad({ token: "stale-token", refreshToken: "stale-token-refresh" });
-    await startPromise;
-    await vi.waitFor(() => {
-      expect(host.tokenStoreEntries.size).toBe(0);
-    });
-
-    expect(useAuthStore.getState().status).toBe("signed-out");
-    expect(service.getCurrentSessionSnapshot().token).toBeNull();
-    expect(service.getLastError()).toBe(AUTH_ERROR_TIMEOUT);
-  });
-
   it("allows a successful retry after a failed sign-in attempt", async () => {
     const { service, host } = makeService();
     await service.start();
 
     await service.signIn();
-    host.emitAuthCallback({ error: "user_cancelled" });
+    host.deviceFlow.emitResult({ kind: "denied" });
     await vi.waitFor(() => {
       expect(useAuthStore.getState().status).toBe("signed-out");
     });
-    expect(service.getLastError()).toBe("user_cancelled");
+    expect(service.getLastError()).toBe(AUTH_ERROR_DEVICE_DENIED);
 
     await service.signIn();
     expect(service.getLastError()).toBeNull();
     expect(useAuthStore.getState().status).toBe("signing-in");
 
-    host.emitAuthCallback({ code: "retry-token" });
+    host.deviceFlow.emitResult({
+      kind: "authorized",
+      token: "retry-token",
+      refreshToken: "retry-token-refresh",
+    });
     await vi.waitFor(() => {
       expect(service.getCurrentSessionSnapshot().token).toBe("retry-token");
     });
@@ -953,16 +793,15 @@ describe("AuthService", () => {
     });
   });
 
-  it("fails immediately when runnerHost.openExternalLink rejects, clearing any persisted token", async () => {
+  it("fails like a launch failure and clears any persisted token when device authorization fails", async () => {
     const { service, host } = makeService();
     await host.tokenStore.set({
       token: "stale",
       refreshToken: "stale-refresh",
     });
-    host.openExternalLink = (): Promise<void> =>
-      Promise.reject(new Error("shell cannot open browser"));
+    // A null authorization models a network/5xx authorize failure.
+    host.deviceFlow.nextAuthorization = null;
 
-    await service.start();
     await service.signIn();
 
     expect(useAuthStore.getState().status).toBe("signed-out");
@@ -971,39 +810,54 @@ describe("AuthService", () => {
     expect(await host.tokenStore.get()).toBeNull();
   });
 
-  it("cancels the pending callback timeout when openExternalLink rejects so auth-timeout cannot fire later", async () => {
-    vi.useFakeTimers();
+  it("drops a device result whose epoch a newer signIn() superseded", async () => {
     const { service, host } = makeService();
-    host.openExternalLink = (): Promise<void> =>
-      Promise.reject(new Error("launch failed"));
-
     await service.start();
-    await service.signIn();
+    await service.signIn(); // epoch 1, session A
+    const sessionA = host.deviceFlow.lastSession;
 
-    expect(service.getLastError()).toBe(AUTH_ERROR_LAUNCH_FAILED);
+    await service.signIn(); // epoch 2 supersedes; session A is cancelled
+    expect(sessionA?.cancelled).toBe(true);
 
-    await vi.advanceTimersByTimeAsync(AUTH_CALLBACK_TIMEOUT_MS + 1);
+    // A late authorized result for the superseded session A is dropped by epoch.
+    sessionA?.emit({
+      kind: "authorized",
+      token: "superseded-token",
+      refreshToken: "superseded-token-refresh",
+    });
+    await Promise.resolve();
+    await Promise.resolve();
 
-    expect(service.getLastError()).toBe(AUTH_ERROR_LAUNCH_FAILED);
-    expect(useAuthStore.getState().status).toBe("signed-out");
+    expect(useAuthStore.getState().status).toBe("signing-in");
+    expect(service.getCurrentSessionSnapshot().token).toBeNull();
   });
 
-  it("race: handleCallback ignores a replayed OAuth token after the attempt has been consumed by a prior matching callback", async () => {
+  it("ignores a replayed device result after the attempt has already signed in", async () => {
     const { service, host } = makeService();
     await service.start();
     await service.signIn();
+    const session = host.deviceFlow.lastSession;
 
-    host.emitAuthCallback({ code: "oauth-token-1" });
+    session?.emit({
+      kind: "authorized",
+      token: "device-token-1",
+      refreshToken: "device-token-1-refresh",
+    });
     await vi.waitFor(() => {
       expect(useAuthStore.getState().status).toBe("signed-in");
     });
-    expect(service.getCurrentSessionSnapshot().token).toBe("oauth-token-1");
+    expect(service.getCurrentSessionSnapshot().token).toBe("device-token-1");
 
-    host.emitAuthCallback({ code: "oauth-token-2" });
+    // A replayed terminal for the now-consumed attempt must not re-apply.
+    session?.emit({
+      kind: "authorized",
+      token: "device-token-2",
+      refreshToken: "device-token-2-refresh",
+    });
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(service.getCurrentSessionSnapshot().token).toBe("oauth-token-1");
+    expect(service.getCurrentSessionSnapshot().token).toBe("device-token-1");
   });
 
   it("emits onErrorChange when lastError transitions null → non-null and back", async () => {
@@ -1014,14 +868,163 @@ describe("AuthService", () => {
     });
 
     await service.start();
-    host.emitAuthCallback({ error: "denied" });
+    await service.signIn();
+    host.deviceFlow.emitResult({ kind: "denied" });
     await vi.waitFor(() => {
-      expect(service.getLastError()).toBe("denied");
+      expect(service.getLastError()).toBe(AUTH_ERROR_DEVICE_DENIED);
     });
-    expect(errors).toContain("denied");
+    expect(errors).toContain(AUTH_ERROR_DEVICE_DENIED);
 
     await service.signIn();
     expect(errors[errors.length - 1]).toBeNull();
+  });
+
+  describe("device flow (RFC 8628) is the primary interactive login", () => {
+    it("signs in when the device poll resolves authorized (converges on the shared tail)", async () => {
+      const { service, host } = makeService();
+      await service.start();
+
+      await service.signIn();
+      expect(useAuthStore.getState().status).toBe("signing-in");
+      expect(host.deviceFlow.startCalls).toBe(1);
+      expect(service.getDeviceProgress()?.userCode).toBe(MOCK_DEVICE_USER_CODE);
+
+      host.deviceFlow.emitResult({
+        kind: "authorized",
+        token: "device-token",
+        refreshToken: "device-token-refresh",
+      });
+
+      await vi.waitFor(() => {
+        expect(useAuthStore.getState().status).toBe("signed-in");
+      });
+      expect(service.getCurrentSessionSnapshot().token).toBe("device-token");
+      expect(service.getDeviceProgress()).toBeNull();
+      expect(await host.tokenStore.get()).toEqual({
+        token: "device-token",
+        refreshToken: "device-token-refresh",
+      });
+    });
+
+    it("completes sign-in from the poll alone when the browser-return signal never fires", async () => {
+      const { service, host } = makeService();
+      await service.start();
+
+      // No `emitAuthCallback()` at all - login must still complete poll-only.
+      await service.signIn();
+      host.deviceFlow.emitResult({
+        kind: "authorized",
+        token: "poll-only-token",
+        refreshToken: "poll-only-token-refresh",
+      });
+
+      await vi.waitFor(() => {
+        expect(useAuthStore.getState().status).toBe("signed-in");
+      });
+      expect(service.getCurrentSessionSnapshot().token).toBe("poll-only-token");
+    });
+
+    it("the browser-return signal nudges the in-flight poll but never delivers a token", async () => {
+      const { service, host } = makeService();
+      await service.start();
+      await service.signIn();
+      const session = host.deviceFlow.lastSession;
+      expect(session?.pollNowCalls).toBe(0);
+
+      // The shell delivers the payload-free return signal.
+      host.emitAuthCallback();
+
+      // It only nudged the poll; no token landed and we are still signing-in.
+      expect(session?.pollNowCalls).toBe(1);
+      expect(useAuthStore.getState().status).toBe("signing-in");
+      expect(service.getCurrentSessionSnapshot().token).toBeNull();
+
+      // The poll still carries the token to completion.
+      host.deviceFlow.emitResult({
+        kind: "authorized",
+        token: "nudged-token",
+        refreshToken: "nudged-token-refresh",
+      });
+      await vi.waitFor(() => {
+        expect(useAuthStore.getState().status).toBe("signed-in");
+      });
+      expect(service.getCurrentSessionSnapshot().token).toBe("nudged-token");
+    });
+
+    it("is a no-op when the browser-return signal arrives with no active attempt", async () => {
+      const { service, host } = makeService();
+      await service.start();
+
+      host.emitAuthCallback();
+
+      expect(useAuthStore.getState().status).toBe("signed-out");
+      expect(service.getCurrentSessionSnapshot().token).toBeNull();
+    });
+
+    it("surfaces device-denied when the user denies the request", async () => {
+      const { service, host } = makeService();
+      await service.start();
+      await service.signIn();
+
+      host.deviceFlow.emitResult({ kind: "denied" });
+
+      await vi.waitFor(() => {
+        expect(service.getLastError()).toBe(AUTH_ERROR_DEVICE_DENIED);
+      });
+      expect(useAuthStore.getState().status).toBe("signed-out");
+      expect(service.getDeviceProgress()).toBeNull();
+    });
+
+    it("surfaces device-expired when the controller reports the code expired", async () => {
+      const { service, host } = makeService();
+      await service.start();
+      await service.signIn();
+
+      host.deviceFlow.emitResult({ kind: "expired" });
+
+      await vi.waitFor(() => {
+        expect(service.getLastError()).toBe(AUTH_ERROR_DEVICE_EXPIRED);
+      });
+      expect(useAuthStore.getState().status).toBe("signed-out");
+    });
+
+    it("surfaces device-expired and cancels the poll when the attempt times out at the device_code TTL", async () => {
+      vi.useFakeTimers();
+      const { service, host } = makeService();
+      await service.start();
+      await service.signIn();
+      const session = host.deviceFlow.lastSession;
+
+      // The mock authorization's `expiresInSeconds` is 600s; the epoch-scoped
+      // backstop timer fires at the TTL even if the controller never reports it.
+      await vi.advanceTimersByTimeAsync(600_000 + 1);
+
+      expect(useAuthStore.getState().status).toBe("signed-out");
+      expect(service.getLastError()).toBe(AUTH_ERROR_DEVICE_EXPIRED);
+      expect(session?.cancelled).toBe(true);
+    });
+
+    it("cancels the expiry backstop on a successful sign-in so no spurious expiry fires", async () => {
+      vi.useFakeTimers();
+      const { service, host } = makeService();
+      await service.start();
+      await service.signIn();
+
+      host.deviceFlow.emitResult({
+        kind: "authorized",
+        token: "good-token",
+        refreshToken: "good-token-refresh",
+      });
+      await vi.waitFor(() => {
+        expect(useAuthStore.getState().status).toBe("signed-in");
+      });
+
+      await vi.advanceTimersByTimeAsync(600_000 + 1);
+
+      expect(useAuthStore.getState().status).toBe("signed-in");
+      expect(service.getCurrentSessionSnapshot().token).toBe("good-token");
+      expect(service.getLastError()).toBeNull();
+    });
   });
 
   describe("revalidateCurrentContext", () => {
@@ -1035,11 +1038,7 @@ describe("AuthService", () => {
     it("leaves the user signed-in when AuthnV3 still accepts the token", async () => {
       const { service, host } = makeService();
       await service.start();
-      await service.signIn();
-      host.emitAuthCallback({ code: "good-token" });
-      await vi.waitFor(() => {
-        expect(useAuthStore.getState().status).toBe("signed-in");
-      });
+      await deviceSignIn(service, host, "good-token");
 
       const outcome = await service.revalidateCurrentContext();
       expect(outcome?.kind).toBe("valid");
@@ -1051,11 +1050,7 @@ describe("AuthService", () => {
     it("signs the user out and surfaces SESSION_EXPIRED on rejected", async () => {
       const { service, host } = makeService();
       await service.start();
-      await service.signIn();
-      host.emitAuthCallback({ code: "to-be-revoked" });
-      await vi.waitFor(() => {
-        expect(useAuthStore.getState().status).toBe("signed-in");
-      });
+      await deviceSignIn(service, host, "to-be-revoked");
 
       restoreFetch();
       restoreFetch = installFetch(() => status(401));
@@ -1070,11 +1065,7 @@ describe("AuthService", () => {
     it("preserves signed-in state on transient network-error", async () => {
       const { service, host } = makeService();
       await service.start();
-      await service.signIn();
-      host.emitAuthCallback({ code: "still-valid" });
-      await vi.waitFor(() => {
-        expect(useAuthStore.getState().status).toBe("signed-in");
-      });
+      await deviceSignIn(service, host, "still-valid");
 
       restoreFetch();
       restoreFetch = installFetch(() => status(503));
@@ -1088,11 +1079,7 @@ describe("AuthService", () => {
     it("coalesces concurrent refresh revalidations so a spent sibling refresh token does not sign out", async () => {
       const { service, host } = makeService();
       await service.start();
-      await service.signIn();
-      host.emitAuthCallback({ code: "old-token" });
-      await vi.waitFor(() => {
-        expect(useAuthStore.getState().status).toBe("signed-in");
-      });
+      await deviceSignIn(service, host, "old-token");
 
       const refreshResponse = createDeferredResponse();
       let refreshCalls = 0;
@@ -1162,56 +1149,13 @@ describe("AuthService", () => {
   });
 
   describe("local CLI provisioning (host owner gate)", () => {
-    it("preserves callback-provisioned CLI credentials when stale startup cleanup races with auth replay", async () => {
-      const cli = new MockTraycerCli();
-      const host = new MockRunnerHost({
-        signInUrl:
-          "https://auth.traycer.ai/sign-in?redirect_uri=traycer%3A%2F%2Fauth",
-        authnBaseUrl: "http://localhost:5005",
-        localHost: null,
-        hosts: [],
-        workspaceFolderPickerPaths: undefined,
-        hasLocalHost: undefined,
-        traycerCli: cli,
-      });
-      await host.tokenStore.set({
-        token: "stale-token",
-        refreshToken: "stale-token-refresh",
-      });
-      restoreFetch();
-      restoreFetch = installFetch((_input, init) => {
-        const authorization = init?.headers?.Authorization;
-        if (authorization === "Bearer fresh-token") {
-          return okWithProfile();
-        }
-        return status(401);
-      });
-      const service = trackService(new AuthService({ runnerHost: host }));
-      await service.signIn();
-
-      host.tokenStore.delete = async (): Promise<void> => {
-        host.tokenStoreEntries.clear();
-        host.emitAuthCallback({ code: "fresh-token" });
-        await vi.waitFor(() => {
-          expect(cli.lastLoginToken).toBe("fresh-token");
-        });
-      };
-
-      await service.start();
-
-      expect(useAuthStore.getState().status).toBe("signed-in");
-      expect(service.getCurrentSessionSnapshot().token).toBe("fresh-token");
-      expect(cli.lastLoginToken).toBe("fresh-token");
-      expect(cli.lastLoginRefreshToken).toBe("fresh-token-refresh");
-    });
-
-    it("provisions local CLI credentials BEFORE flipping to signed-in on the redirect happy path", async () => {
-      // Happy-path redirect sign-in characterization:
-      //   handleCallback → exchangeAndApplyCode → applyTokenInternal →
+    it("provisions local CLI credentials BEFORE flipping to signed-in on the device happy path", async () => {
+      // Device happy-path characterization:
+      //   signIn → device poll authorized → applyTokenInternal →
       //   ensureLocalProvisioning (cli.cliLogin) → applySignedIn.
       // Pins that provisioning runs while the store is still "signing-in"
       // (i.e. seeded BEFORE the signed-in projection enables host RPCs), and
-      // that the exchanged callback token/refresh pair is what gets seeded.
+      // that the minted token/refresh pair is what gets seeded.
       const cli = new MockTraycerCli();
       const host = new MockRunnerHost({
         signInUrl:
@@ -1236,14 +1180,16 @@ describe("AuthService", () => {
 
       await service.start();
       await service.signIn();
-      host.emitAuthCallback({ code: "happy-token" });
+      host.deviceFlow.emitResult({
+        kind: "authorized",
+        token: "happy-token",
+        refreshToken: "happy-token-refresh",
+      });
 
       await vi.waitFor(() => {
         expect(useAuthStore.getState().status).toBe("signed-in");
       });
-      // The one-time PKCE code was exchanged...
-      expect(host.lastExchange?.code).toBe("happy-token");
-      // ...provisioning seeded the exchanged token pair...
+      // Provisioning seeded the minted token pair...
       expect(cli.lastLoginToken).toBe("happy-token");
       expect(cli.lastLoginRefreshToken).toBe("happy-token-refresh");
       // ...and ran BEFORE the signed-in projection (store still "signing-in").
@@ -1252,151 +1198,17 @@ describe("AuthService", () => {
     });
   });
 
-  describe("epoch supersession (ticket 06 replaces the scalar epoch with a source-aware attempt object)", () => {
-    it("drops an in-flight redirect callback whose epoch a newer signIn() superseded", async () => {
-      const { service, host } = makeService();
-      // Park the first attempt's code exchange so a second signIn() can advance
-      // the epoch before `applyTokenInternal` runs its currency check.
-      let resolveExchange: (tokens: StoredAuthTokens) => void = () => undefined;
-      const exchangedCodes: string[] = [];
-      const exchangeGate = new Promise<StoredAuthTokens>((resolve) => {
-        resolveExchange = resolve;
-      });
-      host.exchangeAuthCode = (
-        code: string,
-      ): Promise<StoredAuthTokens | null> => {
-        exchangedCodes.push(code);
-        return exchangeGate;
-      };
-
-      await service.start();
-      await service.signIn(); // epoch 1
-      host.emitAuthCallback({ code: "superseded-token" }); // parks on exchange
-      await service.signIn(); // epoch 2 supersedes epoch 1
-
-      resolveExchange({
-        token: "superseded-token",
-        refreshToken: "superseded-token-refresh",
-      });
-      await Promise.resolve();
-      await Promise.resolve();
-
-      // The stale callback's exchange completed, but the epoch check dropped it:
-      // no sign-in landed, and the service is still mid-attempt on the newer
-      // epoch.
-      expect(exchangedCodes).toContain("superseded-token");
-      expect(useAuthStore.getState().status).toBe("signing-in");
-      expect(service.getCurrentSessionSnapshot().token).toBeNull();
-    });
-  });
-
-  describe("cold-start cached-callback replay (nextEpoch === 0 && activeOAuthEpoch === null)", () => {
-    it("replays a cached code callback with no prior signIn(), recovering the verifier from secure storage", async () => {
-      const { service, host } = makeService();
-      // A prior process persisted the PKCE verifier; this launch never calls
-      // signIn() (nextEpoch stays 0) yet the shell replays the cached callback.
-      host.secureStorageEntries.set(PKCE_VERIFIER_STORAGE_KEY, "cold-verifier");
-
-      await service.start();
-      host.emitAuthCallback({ code: "cold-token" });
-
-      await vi.waitFor(() => {
-        expect(useAuthStore.getState().status).toBe("signed-in");
-      });
-      // The exchange used the verifier recovered from secure storage (the
-      // in-memory copy is absent on a cold start with no signIn()).
-      expect(host.lastExchange?.codeVerifier).toBe("cold-verifier");
-      expect(service.getCurrentSessionSnapshot().token).toBe("cold-token");
-    });
-
-    it("surfaces sign-in-failed for a cold-start replay with no recoverable verifier", async () => {
-      const warn = vi
-        .spyOn(console, "warn")
-        .mockImplementation(() => undefined);
-      const { service, host } = makeService();
-
-      await service.start();
-      host.emitAuthCallback({ code: "orphan-token" });
-
-      await vi.waitFor(() => {
-        expect(service.getLastError()).toBe(AUTH_ERROR_SIGN_IN_FAILED);
-      });
-      expect(useAuthStore.getState().status).toBe("signed-out");
-      expect(warn).toHaveBeenCalled();
-      warn.mockRestore();
-    });
-  });
-
-  describe("PKCE verifier lifecycle", () => {
-    it("persists a verifier at signIn() and clears it from secure storage on a successful exchange", async () => {
-      const { service, host } = makeService();
-      await service.start();
-      await service.signIn();
-      expect(host.secureStorageEntries.has(PKCE_VERIFIER_STORAGE_KEY)).toBe(
-        true,
-      );
-
-      host.emitAuthCallback({ code: "tok" });
-      await vi.waitFor(() => {
-        expect(useAuthStore.getState().status).toBe("signed-in");
-      });
-
-      expect(host.secureStorageEntries.has(PKCE_VERIFIER_STORAGE_KEY)).toBe(
-        false,
-      );
-    });
-
-    it("clears the persisted verifier when the redirect sign-in attempt times out", async () => {
-      // Ticket 06: the timeout is now epoch+kind-scoped. The REDIRECT attempt
-      // still times out after `AUTH_CALLBACK_TIMEOUT_MS` (120s) - that constant
-      // is unchanged for redirect - so this characterization still holds; the
-      // device attempt's (longer, `expires_in`-scoped) timeout is covered by the
-      // dedicated device-flow tests below.
-      vi.useFakeTimers();
-      const { service, host } = makeService();
-      await service.start();
-      await service.signIn();
-      expect(host.secureStorageEntries.has(PKCE_VERIFIER_STORAGE_KEY)).toBe(
-        true,
-      );
-
-      await vi.advanceTimersByTimeAsync(AUTH_CALLBACK_TIMEOUT_MS + 1);
-
-      expect(service.getLastError()).toBe(AUTH_ERROR_TIMEOUT);
-      expect(host.secureStorageEntries.has(PKCE_VERIFIER_STORAGE_KEY)).toBe(
-        false,
-      );
-    });
-
-    it("supersedes the persisted verifier with a fresh one on a new signIn()", async () => {
-      const { service, host } = makeService();
-      await service.start();
-      await service.signIn();
-      const first = host.secureStorageEntries.get(PKCE_VERIFIER_STORAGE_KEY);
-      await service.signIn();
-      const second = host.secureStorageEntries.get(PKCE_VERIFIER_STORAGE_KEY);
-
-      expect(first).toBeDefined();
-      expect(second).toBeDefined();
-      expect(second).not.toBe(first);
-    });
-  });
-
   describe("multi-window session projection on sign-in", () => {
     it("emits a complete signed-in snapshot (token + profile + contextMetadata) for sibling windows", async () => {
       const { service, host } = makeService();
       await service.start();
-      await service.signIn();
 
       const snapshots: AuthSessionSnapshot[] = [];
       service.onSessionSnapshotChange((snapshot) => {
         snapshots.push(snapshot);
       });
 
-      host.emitAuthCallback({ code: "win-token" });
-      await vi.waitFor(() => {
-        expect(useAuthStore.getState().status).toBe("signed-in");
-      });
+      await deviceSignIn(service, host, "win-token");
 
       const signedIn = snapshots.find((s) => s.status === "signed-in");
       expect(signedIn?.token).toBe("win-token");
@@ -1404,14 +1216,10 @@ describe("AuthService", () => {
       expect(signedIn?.contextMetadata?.userId).toBe("user-1");
     });
 
-    it("resumes the same identity in a sibling window via ingestProjectedSessionSnapshot (no OAuth re-run)", async () => {
+    it("resumes the same identity in a sibling window via ingestProjectedSessionSnapshot (no device re-run)", async () => {
       const { service: windowA, host: hostA } = makeService();
       await windowA.start();
-      await windowA.signIn();
-      hostA.emitAuthCallback({ code: "shared-token" });
-      await vi.waitFor(() => {
-        expect(windowA.getCurrentSessionSnapshot().token).toBe("shared-token");
-      });
+      await deviceSignIn(windowA, hostA, "shared-token");
       const projected = windowA.getCurrentSessionSnapshot();
 
       const { service: windowB, host: hostB } = makeService();
@@ -1425,171 +1233,7 @@ describe("AuthService", () => {
       ).toBe("user-1");
       expect(hostB.beginAuthAttemptCalls).toBe(0);
       expect(hostB.openedExternalLinks).toHaveLength(0);
-    });
-  });
-
-  describe("device flow (ticket 06 - source-aware device attempt + epoch+kind timeout)", () => {
-    it("signs in when the device poll resolves authorized (converges on the shared tail)", async () => {
-      const { service, host } = makeService();
-      await service.start();
-
-      await service.signInWithDeviceCode();
-      expect(useAuthStore.getState().status).toBe("signing-in");
-      expect(host.deviceFlow.startCalls).toBe(1);
-      // Progress is surfaced for the UI (no silent spinner).
-      expect(service.getDeviceProgress()?.userCode).toBe("ABCDE-FGHIJ");
-
-      host.deviceFlow.emitResult({
-        kind: "authorized",
-        token: "device-token",
-        refreshToken: "device-token-refresh",
-      });
-
-      await vi.waitFor(() => {
-        expect(useAuthStore.getState().status).toBe("signed-in");
-      });
-      expect(service.getCurrentSessionSnapshot().token).toBe("device-token");
-      expect(service.getDeviceProgress()).toBeNull();
-      expect(await host.tokenStore.get()).toEqual({
-        token: "device-token",
-        refreshToken: "device-token-refresh",
-      });
-    });
-
-    it("surfaces device-denied when the user denies the request", async () => {
-      const { service, host } = makeService();
-      await service.start();
-      await service.signInWithDeviceCode();
-
-      host.deviceFlow.emitResult({ kind: "denied" });
-
-      await vi.waitFor(() => {
-        expect(service.getLastError()).toBe(AUTH_ERROR_DEVICE_DENIED);
-      });
-      expect(useAuthStore.getState().status).toBe("signed-out");
-      expect(service.getDeviceProgress()).toBeNull();
-    });
-
-    it("surfaces device-expired when the controller reports the code expired", async () => {
-      const { service, host } = makeService();
-      await service.start();
-      await service.signInWithDeviceCode();
-
-      host.deviceFlow.emitResult({ kind: "expired" });
-
-      await vi.waitFor(() => {
-        expect(service.getLastError()).toBe(AUTH_ERROR_DEVICE_EXPIRED);
-      });
-      expect(useAuthStore.getState().status).toBe("signed-out");
-    });
-
-    it("fails like a launch failure when /device/authorize fails", async () => {
-      const { service, host } = makeService();
-      await service.start();
-      // A null authorization models a network/5xx authorize failure.
-      host.deviceFlow.nextAuthorization = null;
-
-      await service.signInWithDeviceCode();
-
-      expect(useAuthStore.getState().status).toBe("signed-out");
-      expect(service.getLastError()).toBe(AUTH_ERROR_LAUNCH_FAILED);
-    });
-
-    it("F2: drops a stale redirect deep-link arriving during an active device attempt (by source)", async () => {
-      const { service, host } = makeService();
-      await service.start();
-      await service.signIn(); // redirect attempt
-      await service.signInWithDeviceCode(); // device attempt supersedes redirect
-
-      // A late redirect callback for the now-superseded redirect attempt lands.
-      host.lastExchange = null;
-      host.emitAuthCallback({ code: "stale-redirect-code" });
-      await Promise.resolve();
-      await Promise.resolve();
-
-      // Dropped by source: no exchange is attempted, and the device attempt is
-      // intact - neither hijacked nor signed out.
-      expect(host.lastExchange).toBeNull();
-      expect(useAuthStore.getState().status).toBe("signing-in");
-      expect(service.getCurrentSessionSnapshot().token).toBeNull();
-
-      // The device attempt still completes normally afterwards.
-      host.deviceFlow.emitResult({
-        kind: "authorized",
-        token: "device-token",
-        refreshToken: "device-token-refresh",
-      });
-      await vi.waitFor(() => {
-        expect(useAuthStore.getState().status).toBe("signed-in");
-      });
-      expect(service.getCurrentSessionSnapshot().token).toBe("device-token");
-    });
-
-    it("F2/F7/F9: drops a device poll that resolves after a redirect already won, and cancels the poll on supersede", async () => {
-      const { service, host } = makeService();
-      await service.start();
-      await service.signInWithDeviceCode(); // device attempt
-      const deviceSession = host.deviceFlow.lastSession;
-
-      // The user falls back to the redirect fast path, which wins.
-      await service.signIn(); // redirect attempt supersedes the device attempt
-      // Supersede cancels the main-process device poll (F7/F9: no leaked poll).
-      expect(deviceSession?.cancelled).toBe(true);
-
-      host.emitAuthCallback({ code: "redirect-token" });
-      await vi.waitFor(() => {
-        expect(service.getCurrentSessionSnapshot().token).toBe(
-          "redirect-token",
-        );
-      });
-
-      // The earlier in-flight device poll resolves late - dropped by
-      // source/epoch, the won redirect session is untouched.
-      host.deviceFlow.emitResult({
-        kind: "authorized",
-        token: "late-device-token",
-        refreshToken: "late-device-token-refresh",
-      });
-      await Promise.resolve();
-      await Promise.resolve();
-
-      expect(service.getCurrentSessionSnapshot().token).toBe("redirect-token");
-    });
-
-    it("F8: a redirect timeout scheduled before switching to device never kills the device attempt", async () => {
-      vi.useFakeTimers();
-      const { service } = makeService();
-      await service.start();
-      await service.signIn(); // schedules the 120s redirect timeout
-      await service.signInWithDeviceCode(); // device attempt; redirect timer must not fire against it
-
-      // Past the redirect timeout: the device attempt is untouched (its timer is
-      // the device `expires_in`, not the 120s redirect constant).
-      await vi.advanceTimersByTimeAsync(AUTH_CALLBACK_TIMEOUT_MS + 1);
-      expect(useAuthStore.getState().status).toBe("signing-in");
-      expect(service.getLastError()).toBeNull();
-
-      // The device attempt's own (expires_in-scoped) timeout still fires.
-      await vi.advanceTimersByTimeAsync(600_000);
-      expect(useAuthStore.getState().status).toBe("signed-out");
-      expect(service.getLastError()).toBe(AUTH_ERROR_DEVICE_EXPIRED);
-    });
-
-    it("F8: a device timeout scheduled before a redirect succeeds never signs the user back out", async () => {
-      vi.useFakeTimers();
-      const { service, host } = makeService();
-      await service.start();
-      await service.signInWithDeviceCode(); // schedules the ~600s device timeout
-      await service.signIn(); // redirect attempt supersedes; device timer must be cancelled
-      host.emitAuthCallback({ code: "redirect-token" });
-      await vi.waitFor(() => {
-        expect(useAuthStore.getState().status).toBe("signed-in");
-      });
-
-      // Past the device TTL: the stale device timer must not fire.
-      await vi.advanceTimersByTimeAsync(600_000 + 1);
-      expect(useAuthStore.getState().status).toBe("signed-in");
-      expect(service.getCurrentSessionSnapshot().token).toBe("redirect-token");
+      expect(hostB.deviceFlow.startCalls).toBe(0);
     });
   });
 });

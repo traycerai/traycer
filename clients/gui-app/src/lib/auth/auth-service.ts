@@ -1,6 +1,5 @@
 import type {
   IRunnerHost,
-  AuthCallbackResult,
   DeviceFlowResult,
   DeviceFlowSession,
   StoredAuthTokens,
@@ -16,11 +15,6 @@ import {
   type RequestContextProvider,
 } from "@traycer-clients/shared/auth/request-context-provider";
 import { rotateAndPersistBearer } from "@traycer-clients/shared/auth/bearer-revalidator";
-import {
-  CODE_CHALLENGE_METHOD,
-  deriveCodeChallenge,
-  generateCodeVerifier,
-} from "@traycer-clients/shared/auth/pkce";
 import { usernameFromAuthenticatedUser } from "@traycer/protocol/auth/request-context";
 import {
   useAuthStore,
@@ -84,24 +78,10 @@ export type ExternalSession =
   | { readonly status: "signed-out" };
 
 /**
- * Maximum time the GUI will wait for a shell-delivered auth callback after
- * `signIn()` before returning to signed-out with an `auth-timeout` error.
- * Exposed so tests can reference the same value and callers can reason about
- * expected behavior.
- */
-export const AUTH_CALLBACK_TIMEOUT_MS = 120_000;
-
-/**
- * Stable error identifier emitted when the shell never delivers a callback
- * before the client-side timeout fires.
- */
-export const AUTH_ERROR_TIMEOUT = "auth-timeout";
-
-/**
- * Stable error identifier emitted when the runner host rejects the attempt to
- * open the external sign-in URL (e.g. the shell cannot launch a browser).
- * This must fail the flow immediately rather than waiting for the callback
- * timeout, since no callback will ever arrive.
+ * Stable error identifier emitted when the device-authorization request itself
+ * fails (network/5xx, or the shell has no device-flow backend) so no poll loop
+ * ever starts. This must fail the flow immediately - there is no browser tab to
+ * wait on - so the UI shows a retry CTA.
  */
 export const AUTH_ERROR_LAUNCH_FAILED = "auth-launch-failed";
 
@@ -139,33 +119,18 @@ export const AUTH_ERROR_DEVICE_DENIED = "device-denied";
 export const AUTH_ERROR_DEVICE_EXPIRED = "device-expired";
 
 /**
- * Source/kind of an in-flight sign-in attempt. `redirect` is the desktop
- * browser-redirect fast path (completion arrives as a deep-link callback);
- * `device` is the RFC 8628 fallback (completion arrives from the shell's
- * main-process poll controller). The two are distinct completion channels with
- * distinct stale-result behaviour, so the attempt records which one is live.
- */
-export type AttemptKind = "redirect" | "device";
-
-/**
- * Source-aware record of the single in-flight sign-in attempt - replaces the
- * scalar `activeOAuthEpoch`. `epoch` is the monotonically-increasing attempt id
- * (so a stale finalizer can detect supersession); `kind` is the completion
- * channel that may finalize it; `abortController` is aborted on supersede so an
- * in-flight device poll/fetch can be discarded; `redirectVerifier` holds the
- * one-time PKCE verifier for a `redirect` attempt (cleared the moment it is
- * spent or the attempt is superseded); `deviceSession` is the main-process poll
- * handle for a `device` attempt (cancelled on supersede so no 10-minute poll
- * leaks). Because `epoch` is globally unique, it identifies the attempt's kind
- * on its own; the explicit `kind` check is what drops a callback/poll result
- * BY SOURCE (a redirect deep-link never finalizes a device attempt, and vice
- * versa).
+ * Record of the single in-flight sign-in attempt. Device flow is now the only
+ * interactive login, so there is one completion channel and one stale guard:
+ * the monotonically-increasing `epoch`. A finalizer (the device poll result, or
+ * the expiry timeout) only acts while `activeAttempt?.epoch` still matches the
+ * epoch it captured, so a superseded attempt's late result is dropped. The
+ * `abortController` is aborted on supersede/sign-out/dispose; `deviceSession` is
+ * the main-process poll handle, cancelled on supersede so no ~10-minute poll
+ * leaks and nudged (`pollNow`) on the browser-return signal.
  */
 interface Attempt {
   readonly epoch: number;
-  readonly kind: AttemptKind;
   readonly abortController: AbortController;
-  redirectVerifier: string | null;
   deviceSession: DeviceFlowSession | null;
 }
 
@@ -186,16 +151,6 @@ export type DeviceFlowProgressListener = (
   progress: DeviceFlowProgress | null,
 ) => void;
 
-/**
- * Secure-storage key holding the in-flight PKCE `code_verifier`. Persisted at
- * `signIn()` and consumed at the callback exchange so a cold-start callback
- * replay (e.g. mobile re-delivering `getLaunchUrl()` after a process restart
- * between `signIn()` and the redirect) can still redeem the one-time code. The
- * verifier is single-use: it is deleted the moment the code is exchanged, and
- * on timeout / sign-out so a stale secret never lingers in the keychain.
- */
-const PKCE_VERIFIER_STORAGE_KEY = "traycer.auth.pkce-code-verifier";
-
 type ValidationOutcome = AuthIdentityValidationResult;
 
 /**
@@ -215,6 +170,11 @@ type ValidationOutcome = AuthIdentityValidationResult;
  * returns the FULL `AuthenticatedUser` so the minted `RequestContext`
  * carries the same identity shape that host-minted contexts already carry.
  *
+ * Interactive sign-in is the OAuth 2.0 Device Authorization Grant (RFC 8628):
+ * `signIn()` opens the browser to the device-approval page and the shell's
+ * main-process controller polls `/device/token`; the terminal `authorized`
+ * result converges on the same `applyTokenInternal` tail as a rehydrated token.
+ *
  * Two distinct failure paths drive distinct `lastError` codes so the UI
  * copy can match the flow the user was actually in:
  *
@@ -223,9 +183,8 @@ type ValidationOutcome = AuthIdentityValidationResult;
  *      The validation helper has already attempted refresh before
  *      returning a terminal failure, so startup clears the stored token
  *      and asks the user to sign in again.
- *   2. The OAuth callback path - invoked by `handleCallback` when the shell
- *      delivers an OAuth success result. A `rejected` or `network-error`
- *      validation outcome surfaces `AUTH_ERROR_SIGN_IN_FAILED` ("Sign-in
+ *   2. The device-flow poll path - a minted token that AuthnV3 then `rejected`
+ *      (or a `network-error`) surfaces `AUTH_ERROR_SIGN_IN_FAILED` ("Sign-in
  *      failed - please try again") and clears any persisted token.
  */
 export class AuthService {
@@ -252,21 +211,15 @@ export class AuthService {
   private pendingTimeoutHandle: number | null = null;
   private currentRevalidation: Promise<ValidationOutcome | null> | null = null;
   private disposed = false;
-  // Monotonically increasing counter used to tag every sign-in attempt. A
-  // non-zero value means at least one `signIn()` / `signInWithDeviceCode()` has
-  // been invoked since this `AuthService` was constructed, which lets
-  // `handleCallback` distinguish a cold-start replay (no local attempt) from a
-  // stale callback that belongs to a superseded / already-consumed attempt.
+  // Monotonically increasing counter used to tag every sign-in attempt, so a
+  // finalizer (device poll result / expiry timeout) can detect that a newer
+  // `signIn()` has superseded the attempt it captured and drop its stale result.
   private nextEpoch: number = 0;
-  // The single in-flight sign-in attempt (redirect or device), or null when no
-  // attempt is live. Replaces the scalar `activeOAuthEpoch`: completion is now
-  // tracked BY SOURCE, so a redirect deep-link can only finalize a `redirect`
-  // attempt and a device poll result can only finalize a `device` attempt. The
-  // in-flight PKCE verifier (redirect) and main-process poll handle (device)
-  // live on the attempt so superseding it cleans both up. Set before the shell
-  // is asked to launch the browser / start the device poll; cleared by a
-  // matching finalizer, by `handleAttemptTimeout`, or by launch failure so the
-  // same attempt cannot be resurrected by a stale replay.
+  // The single in-flight sign-in attempt, or null when no attempt is live. Holds
+  // the main-process device poll handle so superseding the attempt cancels it.
+  // Set before the shell is asked to start the device poll; cleared by a
+  // matching finalizer, by `handleAttemptTimeout`, or by an authorize failure so
+  // the same attempt cannot be resurrected by a stale result.
   private activeAttempt: Attempt | null = null;
   // Projected device-flow progress (null unless a device attempt is in flight).
   private deviceProgress: DeviceFlowProgress | null = null;
@@ -280,16 +233,15 @@ export class AuthService {
 
   private static readonly cancelTimeout: (handle: number) => void = (handle) =>
     window.clearTimeout(handle);
-  // True while `start()` is awaiting `tokenStore.load()`. Any replayed auth
-  // callback or sign-in timeout that fires during this window must be treated
-  // as authoritative over the persisted-token rehydration that runs after the
-  // load resolves.
+  // True while `start()` is awaiting `tokenStore.load()`. A device-flow result
+  // or expiry that resolves during this window must be treated as authoritative
+  // over the persisted-token rehydration that runs after the load resolves.
   private starting: boolean = false;
-  // Set when a callback (`{ token }` or `{ error }`) or the sign-in timeout
-  // has deterministically decided the auth state during `start()`. When true,
-  // `start()` skips its "rehydrate persisted token" branch so a stale token
-  // cannot resurrect signed-in state after a failure has already projected
-  // signed-out.
+  // Set when a device-flow outcome (sign-in success or terminal failure) or the
+  // expiry timeout has deterministically decided the auth state during
+  // `start()`. When true, `start()` skips its "rehydrate persisted token" branch
+  // so a stale token cannot resurrect signed-in state after a failure has
+  // already projected signed-out.
   private authResolvedDuringStart: boolean = false;
 
   constructor(options: AuthServiceOptions) {
@@ -384,13 +336,13 @@ export class AuthService {
     }
     this.starting = true;
     this.authResolvedDuringStart = false;
-    // Subscribe to auth callbacks BEFORE awaiting the token load so a
-    // shell-delivered callback that arrives during the `tokenStore.load()`
-    // microtask is not missed. Replay-safe runner hosts (desktop preload,
-    // mobile app-url listener) will deliver the most recent cached result
-    // synchronously on subscribe.
-    this.callbackDisposable = this.runnerHost.onAuthCallback((result) => {
-      this.handleCallback(result);
+    // Subscribe to the browser-return signal BEFORE awaiting the token load so a
+    // shell-delivered nudge that arrives during the `tokenStore.load()` microtask
+    // is not missed. The signal is payload-free - it only pokes an in-flight
+    // device poll - so on a cold start with no live attempt it is a harmless
+    // no-op.
+    this.callbackDisposable = this.runnerHost.onAuthCallback(() => {
+      this.handleReturnSignal();
     });
 
     try {
@@ -439,85 +391,24 @@ export class AuthService {
     return this.disposed;
   }
 
+  /**
+   * Primary (and only) interactive sign-in: the OAuth 2.0 Device Authorization
+   * Grant (RFC 8628). `beginAttempt` first supersedes any in-flight attempt (a
+   * stalled retry the user is abandoning) - aborting it and cancelling its
+   * main-process device poll - so a stale poll resolving later is dropped by
+   * epoch. The shell's privileged process owns `/device/authorize` + the
+   * `/device/token` poll loop (CORS-safe, survives renderer close/sleep); the
+   * terminal `authorized` outcome arrives via `session.onResult` and converges
+   * on the SAME `applyTokenInternal` tail a rehydrated token uses. Sign-in
+   * completes from the poll alone - the browser-return deep link only nudges the
+   * poll to fire sooner (see `handleReturnSignal`) and never delivers a token.
+   */
   async signIn(): Promise<void> {
     if (this.disposed) {
       return;
     }
     this.setLastError(null);
-    // Begin a fresh `redirect` attempt. `beginAttempt` first supersedes any
-    // in-flight attempt (a stalled redirect retry, OR a device attempt the user
-    // is abandoning): it aborts that attempt, drops its persisted PKCE verifier,
-    // and cancels its main-process device poll. After this, any shell-delivered
-    // callback is unambiguously part of THIS attempt; a stale device poll
-    // resolving later is dropped by source/epoch.
-    const attempt = this.beginAttempt("redirect");
-    useAuthStore.getState().setSigningIn();
-    // Redirect timeout is the fixed `AUTH_CALLBACK_TIMEOUT_MS`; the handler is
-    // epoch+kind-scoped so a later device attempt's timer can't kill it (F8).
-    this.scheduleAttemptTimeout(
-      attempt.epoch,
-      "redirect",
-      AUTH_CALLBACK_TIMEOUT_MS,
-    );
-    // Close the previous attempt window before asking the shell to launch the
-    // external sign-in surface. After this call, any shell-delivered auth
-    // callback is unambiguously part of the new attempt, so the runner host
-    // can deterministically distinguish a stale OS-level replay of the
-    // previous attempt from a genuine retry callback without a timing window.
-    this.runnerHost.beginAuthAttempt();
-    // PKCE: generate a fresh verifier, keep it on the attempt for the callback
-    // exchange, and send only its S256 challenge in the sign-in URL so the
-    // redirect carries a code (not tokens) the interceptor can't redeem.
-    const verifier = generateCodeVerifier();
-    attempt.redirectVerifier = verifier;
-    // Mirror to secure storage before launching the browser so a callback that
-    // arrives after a process restart can still recover the verifier. Persist
-    // failures are non-fatal: the in-memory copy still serves the same-process
-    // callback, so we degrade rather than block sign-in.
-    await this.runnerHost.secureStorage
-      .set(PKCE_VERIFIER_STORAGE_KEY, verifier)
-      .catch(() => {});
-    try {
-      const signInUrl = new URL(this.runnerHost.signInUrl);
-      signInUrl.searchParams.set(
-        "code_challenge",
-        await deriveCodeChallenge(verifier),
-      );
-      signInUrl.searchParams.set(
-        "code_challenge_method",
-        CODE_CHALLENGE_METHOD,
-      );
-      await this.runnerHost.openExternalLink(signInUrl.toString());
-    } catch {
-      // The shell could not open the external sign-in URL. No callback will
-      // arrive, so cancel the pending callback timeout and fail immediately
-      // through the same path shell-delivered failures use. This keeps the
-      // UI's visible retry CTA consistent with every other failure mode.
-      this.clearPendingTimeout();
-      if (this.activeAttempt === attempt) {
-        this.activeAttempt = null;
-      }
-      if (this.starting) {
-        this.authResolvedDuringStart = true;
-      }
-      await this.applyFailure(AUTH_ERROR_LAUNCH_FAILED);
-    }
-  }
-
-  /**
-   * Device-flow fallback (RFC 8628). Supersedes any in-flight redirect attempt
-   * - aborting it and dropping its PKCE verifier, so a late redirect deep-link
-   * is dropped BY SOURCE - and starts a fresh `device` attempt whose
-   * authorize + poll loop runs in the shell's privileged process (CORS-safe,
-   * survives renderer close/sleep). The terminal outcome arrives via
-   * `session.onResult` and converges on the SAME `applyTokenInternal` tail.
-   */
-  async signInWithDeviceCode(): Promise<void> {
-    if (this.disposed) {
-      return;
-    }
-    this.setLastError(null);
-    const attempt = this.beginAttempt("device");
+    const attempt = this.beginAttempt();
     useAuthStore.getState().setSigningIn();
     this.runnerHost.beginAuthAttempt();
     const session = await this.runnerHost.deviceFlow.start();
@@ -549,12 +440,11 @@ export class AuthService {
       verificationUriComplete: authorization.verificationUriComplete,
       expiresAtMs: Date.now() + authorization.expiresInSeconds * 1000,
     });
-    // Device timeout is the `device_code` TTL; epoch+kind-scoped so a redirect
-    // attempt started afterwards is unaffected, and vice versa (F8). This is a
-    // backstop - the controller also emits a terminal `expired` at the TTL.
+    // The attempt times out at the `device_code` TTL (`expires_in`); the handler
+    // is epoch-scoped so a superseded attempt's timer can't kill a newer one.
+    // This is a backstop - the controller also emits a terminal `expired`.
     this.scheduleAttemptTimeout(
       attempt.epoch,
-      "device",
       authorization.expiresInSeconds * 1000,
     );
     // Best-effort: open the pre-filled verification page so the user does not
@@ -572,8 +462,8 @@ export class AuthService {
       return;
     }
     this.clearPendingTimeout();
-    // Tear down any in-flight attempt: abort it, drop its persisted verifier,
-    // and cancel its main-process device poll so no 10-minute poll leaks.
+    // Tear down any in-flight attempt: abort it and cancel its main-process
+    // device poll so no ~10-minute poll leaks.
     this.discardActiveAttempt();
     await this.clearStoredAuth();
     this.setLastError(null);
@@ -841,80 +731,17 @@ export class AuthService {
   }
 
   /**
-   * OAuth-callback entrypoint. Invoked from `handleCallback` when the shell
-   * delivers an `{ token }` result. A `rejected` or `network-error`
-   * validation outcome surfaces `AUTH_ERROR_SIGN_IN_FAILED` so the header
-   * sign-in surface renders "Sign-in failed - please try again" instead of
-   * the "Session expired" copy that belongs to the rehydration path.
+   * Shared token-application tail. Invoked by the device-flow finalizer with a
+   * minted `{ token, refreshToken }` pair. Validates against AuthnV3, then on
+   * `valid` persists, provisions the local CLI, and projects signed-in; a
+   * `rejected`/`network-error` outcome surfaces `AUTH_ERROR_SIGN_IN_FAILED` so
+   * the header sign-in surface renders "Sign-in failed - please try again"
+   * instead of the "Session expired" copy that belongs to the rehydration path.
    *
-   * The callback is only applied if the attempt it belongs to is still the
-   * active one. A callback captured for epoch `E` is dropped silently if the
-   * active attempt has been replaced by a new `signIn()` /
-   * `signInWithDeviceCode()` between dispatch and final projection.
+   * Only applied while the attempt it belongs to is still active: a pair
+   * captured for epoch `E` is dropped silently if a fresh `signIn()` replaced
+   * the active attempt between dispatch and final projection.
    */
-  /**
-   * Exchanges the one-time PKCE `code` from the sign-in callback for the token
-   * pair (via the runner-host boundary, so desktop renderer CORS is bypassed),
-   * then applies it like any other callback token. A missing verifier (a code
-   * with no matching in-process attempt, e.g. a cold-start replay) or a failed
-   * exchange surfaces `AUTH_ERROR_SIGN_IN_FAILED` through the same stale-epoch-
-   * safe error path callback tokens use.
-   */
-  private async exchangeAndApplyCode(
-    code: string,
-    verifier: string | null,
-    expectedEpoch: number | null,
-  ): Promise<void> {
-    // Same-process callbacks carry the verifier directly; a cold-start replay
-    // (no in-process attempt) recovers it from secure storage.
-    const resolvedVerifier =
-      verifier ??
-      (await this.runnerHost.secureStorage
-        .get(PKCE_VERIFIER_STORAGE_KEY)
-        .catch(() => null));
-    if (resolvedVerifier === null) {
-      // No in-process attempt (cold-start callback) and nothing in secure
-      // storage to recover - the code can't be exchanged. Warn so the failure
-      // is visible in the shipped app log (renderer console is forwarded to the
-      // file on warning/error) rather than only manifesting as "Sign-in failed".
-      console.warn(
-        "[auth] sign-in failed: PKCE code verifier missing (cold-start callback with no recoverable verifier)",
-      );
-      await this.applyOAuthCallbackError(
-        AUTH_ERROR_SIGN_IN_FAILED,
-        expectedEpoch,
-      );
-      return;
-    }
-    // The code is one-time and consumed atomically server-side, so the verifier
-    // is spent the moment we attempt the exchange - drop the persisted copy and
-    // clear it off the attempt up front so it can never be replayed, regardless
-    // of the exchange outcome.
-    this.dropPersistedVerifier();
-    if (this.activeAttempt?.epoch === expectedEpoch) {
-      this.activeAttempt.redirectVerifier = null;
-    }
-    const tokens = await this.runnerHost.exchangeAuthCode(
-      code,
-      resolvedVerifier,
-    );
-    if (this.isDisposed()) {
-      return;
-    }
-    if (tokens === null) {
-      await this.applyOAuthCallbackError(
-        AUTH_ERROR_SIGN_IN_FAILED,
-        expectedEpoch,
-      );
-      return;
-    }
-    await this.applyTokenInternal(
-      tokens.token,
-      tokens.refreshToken,
-      expectedEpoch,
-    );
-  }
-
   private async applyTokenInternal(
     token: string,
     refreshToken: string,
@@ -942,15 +769,14 @@ export class AuthService {
     }
 
     // After the async validation, the state machine may have moved on: a
-    // fresh `signIn()` / `signInWithDeviceCode()` could have minted a new
-    // attempt. In that case this callback is stale and must not mutate state.
+    // fresh `signIn()` could have minted a new attempt. In that case this
+    // result is stale and must not mutate state.
     if (!this.isAttemptCurrent(expectedOAuthEpoch)) {
       return false;
     }
     if (outcome.kind === "valid") {
-      // Consume the attempt so a subsequent cached replay (e.g. desktop
-      // preload re-emitting `cachedAuthCallback` on re-subscribe) cannot
-      // re-apply the same callback.
+      // Consume the attempt so a subsequent replayed device result cannot
+      // re-apply the same token.
       this.activeAttempt = null;
       const accepted = this.acceptedToken(outcome, { token, refreshToken });
       await this.tokenStore.save(accepted);
@@ -983,11 +809,10 @@ export class AuthService {
 
   /**
    * Device-flow terminal finalizer. Applies a device poll outcome ONLY if the
-   * live attempt is still the `device` attempt with this epoch - so a result
-   * for a superseded attempt, or one arriving after a redirect already won
-   * (active attempt is now `redirect`, or null), is dropped BY SOURCE. The
-   * `authorized` path converges on the SAME `applyTokenInternal` tail the
-   * redirect path uses; terminal failures surface a kind-specific error.
+   * live attempt is still the one with this epoch - so a result for a superseded
+   * attempt (a newer `signIn()` took over) is dropped. The `authorized` path
+   * converges on the shared `applyTokenInternal` tail; terminal failures surface
+   * a kind-specific error.
    */
   private async finalizeDeviceResult(
     result: DeviceFlowResult,
@@ -997,11 +822,7 @@ export class AuthService {
       return;
     }
     const attempt = this.activeAttempt;
-    if (
-      attempt === null ||
-      attempt.kind !== "device" ||
-      attempt.epoch !== expectedEpoch
-    ) {
+    if (attempt === null || attempt.epoch !== expectedEpoch) {
       return;
     }
     if (result.kind === "authorized") {
@@ -1109,12 +930,9 @@ export class AuthService {
 
   /**
    * Epoch-currency check used by async finalization paths. Returns true iff
-   * the captured epoch still matches the live attempt's epoch. Cold-start
-   * replay (no attempt ever started) captures `null` and expects `null`; an
-   * in-flight attempt captures a number and expects that same number. Because
-   * epochs are globally unique, matching the epoch also pins the attempt's
-   * kind, so callers that already gated on kind (the device finalizer) and
-   * callers that don't (the shared `applyTokenInternal` tail) are both safe.
+   * the captured epoch still matches the live attempt's epoch. A finalizer that
+   * captured epoch `E` no-ops once a newer `signIn()` has replaced the active
+   * attempt (or it was already consumed/torn down, leaving `null`).
    */
   private isAttemptCurrent(expectedEpoch: number | null): boolean {
     return (this.activeAttempt?.epoch ?? null) === expectedEpoch;
@@ -1122,9 +940,8 @@ export class AuthService {
 
   /**
    * Supersedes (or tears down) the live attempt: aborts its controller so an
-   * in-flight device poll/fetch is discarded, drops its persisted PKCE verifier
-   * so a stale redirect callback can't replay it, and cancels its main-process
-   * device poll so no 10-minute poll leaks. Leaves `activeAttempt === null`.
+   * in-flight device fetch is discarded, and cancels its main-process device
+   * poll so no ~10-minute poll leaks. Leaves `activeAttempt === null`.
    */
   private discardActiveAttempt(): void {
     const attempt = this.activeAttempt;
@@ -1132,28 +949,24 @@ export class AuthService {
       return;
     }
     attempt.abortController.abort();
-    attempt.redirectVerifier = null;
     if (attempt.deviceSession !== null) {
       attempt.deviceSession.cancel();
     }
-    this.dropPersistedVerifier();
     this.setDeviceProgress(null);
     this.activeAttempt = null;
   }
 
   /**
    * Discards the current attempt (see `discardActiveAttempt`) and starts a new
-   * one of the given kind with a fresh, globally-unique epoch.
+   * one with a fresh, globally-unique epoch.
    */
-  private beginAttempt(kind: AttemptKind): Attempt {
+  private beginAttempt(): Attempt {
     this.clearPendingTimeout();
     this.discardActiveAttempt();
     const epoch = ++this.nextEpoch;
     const attempt: Attempt = {
       epoch,
-      kind,
       abortController: new AbortController(),
-      redirectVerifier: null,
       deviceSession: null,
     };
     this.activeAttempt = attempt;
@@ -1217,93 +1030,36 @@ export class AuthService {
     this.deviceProgressListeners.clear();
   }
 
-  private handleCallback(result: AuthCallbackResult): void {
+  /**
+   * Browser-return signal handler. The shell delivers a payload-free nudge when
+   * the user comes back from the device-approval tab (the `traycer://` deep
+   * link). It carries no token or code: it only pokes the in-flight device poll
+   * to fire immediately so approval is picked up without waiting out the poll
+   * interval. With no live attempt (a cold-start replay, or one already
+   * settled) there is nothing to nudge, so it is a no-op. The token always
+   * arrives through `finalizeDeviceResult`, never here.
+   */
+  private handleReturnSignal(): void {
     if (this.disposed) {
       return;
     }
-    const attempt = this.activeAttempt;
-    // Source-aware gating (F2). A deep-link callback belongs to the REDIRECT
-    // completion channel:
-    //   - If an attempt has been started locally (`nextEpoch > 0`): honor the
-    //     callback only when the live attempt is a `redirect` attempt. A
-    //     `device` attempt (`kind !== "redirect"`), or an already-consumed /
-    //     terminated attempt (`attempt === null`), drops the callback BY SOURCE
-    //     - it neither hijacks nor signs out the device attempt.
-    //   - If no attempt was ever started (`nextEpoch === 0`): a cold-start
-    //     cached replay still flows through (`attempt === null`, expected epoch
-    //     `null`) so a completed handshake from a prior process can hydrate
-    //     signed-in state on the next launch.
-    if (
-      this.nextEpoch > 0 &&
-      (attempt === null || attempt.kind !== "redirect")
-    ) {
-      return;
-    }
-    const callbackEpoch = attempt?.epoch ?? null;
-    if ("code" in result) {
-      if (result.code.length === 0) {
-        return;
-      }
-      this.clearPendingTimeout();
-      if (this.starting) {
-        this.authResolvedDuringStart = true;
-      }
-      // Capture the verifier synchronously: a later retry would replace the
-      // active attempt, and this callback must exchange against the verifier
-      // from the attempt it belongs to.
-      const verifier = attempt?.redirectVerifier ?? null;
-      void this.exchangeAndApplyCode(result.code, verifier, callbackEpoch);
-      return;
-    }
-    // Error path: clear any persisted token and return to signed-out so
-    // the sign-in button can be pressed again. Shell-provided error
-    // message is retained for diagnostic surfaces.
-    this.clearPendingTimeout();
-    if (this.starting) {
-      this.authResolvedDuringStart = true;
-    }
-    void this.applyOAuthCallbackError(result.error, callbackEpoch);
+    this.activeAttempt?.deviceSession?.pollNow();
   }
 
   /**
-   * Error-callback finalizer. Separate from `applyFailure` so it can re-check
-   * the OAuth epoch after any awaited work and silently drop stale errors
-   * (e.g. a `user_cancelled` replay after a superseding pasted session).
+   * Epoch-scoped attempt timeout. Fires the expiry failure ONLY when the live
+   * attempt is still the exact attempt the timer was scheduled for, so a stray
+   * timer from a superseded attempt can never kill a newer one (e.g. a timer
+   * from an abandoned attempt firing after the user retried). The attempt times
+   * out at the `device_code` TTL (`expires_in`).
    */
-  private async applyOAuthCallbackError(
-    error: string,
-    expectedEpoch: number | null,
-  ): Promise<void> {
-    if (this.disposed) {
-      return;
-    }
-    if (!this.isAttemptCurrent(expectedEpoch)) {
-      return;
-    }
-    this.activeAttempt = null;
-    // The attempt is ending in failure; drop any persisted verifier so a later
-    // replay can't resurrect it. (Stale errors returned above, so this only
-    // fires for the attempt that genuinely owns the verifier.)
-    this.dropPersistedVerifier();
-    await this.applyFailure(error);
-  }
-
-  /**
-   * Epoch+kind-scoped attempt timeout (F8). Fires the failure ONLY when the
-   * live attempt is still the exact attempt the timer was scheduled for - same
-   * epoch AND same kind - so a stray timer from a superseded attempt can never
-   * kill a newer one (e.g. a redirect timer firing after the user switched to a
-   * device attempt, or a device timer firing after a redirect succeeded).
-   * Redirect attempts time out after `AUTH_CALLBACK_TIMEOUT_MS`; device
-   * attempts time out after the `device_code` TTL (`expires_in`).
-   */
-  private handleAttemptTimeout(epoch: number, kind: AttemptKind): void {
+  private handleAttemptTimeout(epoch: number): void {
     if (this.disposed) {
       return;
     }
     this.pendingTimeoutHandle = null;
     const attempt = this.activeAttempt;
-    if (attempt === null || attempt.epoch !== epoch || attempt.kind !== kind) {
+    if (attempt === null || attempt.epoch !== epoch) {
       return;
     }
     if (useAuthStore.getState().status !== "signing-in") {
@@ -1311,30 +1067,22 @@ export class AuthService {
     }
     attempt.deviceSession?.cancel();
     this.activeAttempt = null;
-    this.dropPersistedVerifier();
     this.setDeviceProgress(null);
     if (this.starting) {
       this.authResolvedDuringStart = true;
     }
-    void this.applyFailure(
-      kind === "device" ? AUTH_ERROR_DEVICE_EXPIRED : AUTH_ERROR_TIMEOUT,
-    );
+    void this.applyFailure(AUTH_ERROR_DEVICE_EXPIRED);
   }
 
   /**
    * Schedules the single in-flight attempt timer. Only one attempt is ever live
-   * at a time, so a single handle suffices; the captured `epoch`/`kind` make
-   * the handler a no-op if the attempt has been superseded by the time it
-   * fires.
+   * at a time, so a single handle suffices; the captured `epoch` makes the
+   * handler a no-op if the attempt has been superseded by the time it fires.
    */
-  private scheduleAttemptTimeout(
-    epoch: number,
-    kind: AttemptKind,
-    durationMs: number,
-  ): void {
+  private scheduleAttemptTimeout(epoch: number, durationMs: number): void {
     this.clearPendingTimeout();
     this.pendingTimeoutHandle = AuthService.scheduleTimeout(() => {
-      this.handleAttemptTimeout(epoch, kind);
+      this.handleAttemptTimeout(epoch);
     }, durationMs);
   }
 
@@ -1465,19 +1213,6 @@ export class AuthService {
   }
 
   /**
-   * Drops the persisted PKCE verifier from secure storage. Called when the
-   * verifier is consumed (code exchange) or its attempt ends (timeout, error,
-   * supersede, sign-out) so a spent/abandoned secret never lingers. The
-   * in-memory copy lives on the attempt (`redirectVerifier`) and is dropped
-   * with the attempt; this clears the cold-start-replay mirror. Best-effort.
-   */
-  private dropPersistedVerifier(): void {
-    void this.runnerHost.secureStorage
-      .delete(PKCE_VERIFIER_STORAGE_KEY)
-      .catch(() => {});
-  }
-
-  /**
    * Subscribes to device-flow progress transitions (user code / verification
    * URIs / expiry). Fires synchronously on subscribe with the current value,
    * then on every change. `null` whenever no device attempt is in flight.
@@ -1494,6 +1229,23 @@ export class AuthService {
 
   getDeviceProgress(): DeviceFlowProgress | null {
     return this.deviceProgress;
+  }
+
+  /**
+   * Re-opens the pre-filled approval page (`verification_uri_complete`, with the
+   * user code embedded) for the in-flight device attempt. Backs the sign-in
+   * surface's one-click "open approval page" affordance so the user never has to
+   * type the code if the initial auto-open was missed. Best-effort; no-op when
+   * no attempt is in flight.
+   */
+  openVerificationPage(): void {
+    const progress = this.deviceProgress;
+    if (progress === null) {
+      return;
+    }
+    void this.runnerHost
+      .openExternalLink(progress.verificationUriComplete)
+      .catch(() => {});
   }
 
   private setDeviceProgress(next: DeviceFlowProgress | null): void {

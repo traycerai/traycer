@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import type {
-  AuthCallbackResult,
   AuthTokenValidationResult,
   LocalHostSnapshot,
   TrayEpic,
@@ -82,13 +81,12 @@ function buildFakeBridge(
       },
     }),
     validateAuthTokenIdentity: async () => ({ kind: "rejected" as const }),
-    exchangeAuthCode: async () => null,
     openExternalLink: async () => undefined,
     getRegisteredUrlSchemes: async () => [],
     requestMicrophoneAccess: async () => "granted" as const,
     openMicrophoneSettings: async () => undefined,
     beginAuthAttempt: () => undefined,
-    onAuthCallback: (_handler: (result: AuthCallbackResult) => void) => ({
+    onAuthCallback: (_handler: () => void) => ({
       dispose: () => undefined,
     }),
     deviceFlow: {

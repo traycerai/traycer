@@ -3,14 +3,7 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { initLogger, log } from "../app/logger";
 import { configureNativeAboutPanel } from "../app/about";
-import {
-  registerDeepLinkHandling,
-  type AuthCallbackParseResult,
-} from "../auth/deep-link";
-import {
-  startLoopbackCallbackServer,
-  type LoopbackCallbackServer,
-} from "../auth/loopback-callback-server";
+import { registerDeepLinkHandling } from "../auth/deep-link";
 import { createMainWindow, loadMainWindow } from "../windows/window-factory";
 import {
   DesktopTrayController,
@@ -125,10 +118,8 @@ export async function runDesktopStartup(): Promise<void> {
 
   const state: BootState = {
     config,
-    pendingDeepLinks: [],
+    pendingAuthReturnSignal: false,
     bridge: null,
-    authRedirectUri: null,
-    loopbackServer: null,
   };
 
   runPreReady(state);
@@ -148,26 +139,21 @@ export async function runDesktopStartup(): Promise<void> {
 
 interface BootState {
   readonly config: DesktopConfig;
-  readonly pendingDeepLinks: AuthCallbackParseResult[];
+  // Set when a browser-return deep link arrives before the bridge is installed;
+  // drained once the window phase exposes a renderer. Coalesced - the signal is
+  // a payload-free nudge, so repeated cold-start arrivals collapse.
+  pendingAuthReturnSignal: boolean;
   bridge: RunnerIpcBridge | null;
-  // Dev-only: the loopback redirect_uri the renderer must use instead of the
-  // (unregistrable) `traycer-dev://` scheme. Null on staging/prod, where the
-  // custom-scheme deep link is the callback path.
-  authRedirectUri: string | null;
-  loopbackServer: LoopbackCallbackServer | null;
 }
 
-// Single delivery path for a parsed auth callback, shared by the custom-scheme
-// deep link and the dev loopback server: hand it to the bridge if the renderer
-// is ready, otherwise queue it for the window phase to drain.
-function deliverAuthCallback(
-  state: BootState,
-  result: AuthCallbackParseResult,
-): void {
+// Single delivery path for the browser-return signal: focus + nudge the
+// renderer's device poll if the bridge is ready, otherwise mark it pending for
+// the window phase to drain. Payload-free - the token arrives over the poll.
+function deliverAuthReturnSignal(state: BootState): void {
   if (state.bridge !== null) {
-    state.bridge.deliverAuthCallback(result);
+    state.bridge.deliverAuthReturnSignal();
   } else {
-    state.pendingDeepLinks.push(result);
+    state.pendingAuthReturnSignal = true;
   }
 }
 
@@ -212,7 +198,7 @@ function runPreReady(state: BootState): void {
   installGlobalErrorHandlers();
   installProcessGoneListeners();
 
-  registerDeepLinkHandling((result) => deliverAuthCallback(state, result));
+  registerDeepLinkHandling(() => deliverAuthReturnSignal(state));
 }
 
 // Post-ready configuration. These steps are independent of one another, so
@@ -222,20 +208,6 @@ async function runOnReady(state: BootState): Promise<void> {
   // host-management / ensure handlers) is installed in the window phase.
   // Synchronous and ordering-sensitive, so done first.
   setActiveEnvironment(state.config.environment);
-
-  // Dev builds can't receive a `traycer-dev://` deep link (unpackaged → no OS
-  // scheme registration), so stand up the loopback HTTP callback before the
-  // window/bridge so its redirect_uri is ready when preload snapshots it. The
-  // server is dev-only; staging/prod keep the custom-scheme deep link.
-  if (state.config.isDev) {
-    await timed("on-ready", "loopback-callback", async () => {
-      const server = await startLoopbackCallbackServer((result) =>
-        deliverAuthCallback(state, result),
-      );
-      state.loopbackServer = server;
-      state.authRedirectUri = server.redirectUri;
-    });
-  }
 
   await Promise.all([
     timed("on-ready", "app-protocol", () => installAppProtocolHandler()),
@@ -339,7 +311,10 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
   const bridge = new RunnerIpcBridge({
     host,
     authnBaseUrl: config.authnBaseUrl,
-    authRedirectUri: state.authRedirectUri,
+    // Device flow is the only login - there is no loopback redirect_uri to
+    // snapshot - so the renderer always falls back to the custom-scheme
+    // sign-in URL composition.
+    authRedirectUri: null,
     tray,
     windowRegistry,
     ownership,
@@ -375,14 +350,13 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
   });
   menu.install();
 
-  // Drain any deep links captured before the bridge was ready, once the
-  // first startup renderer has installed its listeners.
-  if (state.pendingDeepLinks.length > 0) {
+  // Drain a browser-return signal captured before the bridge was ready, once
+  // the first startup renderer has installed its listeners.
+  if (state.pendingAuthReturnSignal) {
+    state.pendingAuthReturnSignal = false;
     const deepLinkTarget = windowRegistry.records()[0];
     deepLinkTarget?.window.webContents.once("did-finish-load", () => {
-      for (const result of state.pendingDeepLinks.splice(0)) {
-        bridge.deliverAuthCallback(result);
-      }
+      bridge.deliverAuthReturnSignal();
     });
   }
 
@@ -565,7 +539,6 @@ function wireAppLifecycle(state: BootState, services: LifecycleServices): void {
     services.menu.dispose();
     services.bridge.dispose();
     services.tray?.dispose();
-    state.loopbackServer?.close();
     void services.desktopStateStore.flush().catch((err) => {
       log.warn("[desktop] desktop-state flush failed", err);
     });

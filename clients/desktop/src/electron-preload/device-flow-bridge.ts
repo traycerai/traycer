@@ -52,6 +52,7 @@ ipcRenderer.on(
 export interface DeviceFlowSessionBridge {
   readonly authorization: DeviceFlowAuthorization;
   onResult(handler: Listener<DeviceFlowResult>): Disposable;
+  pollNow(): void;
   cancel(): void;
 }
 
@@ -75,6 +76,12 @@ export function buildDeviceFlowBridge(): DeviceFlowBridgeSurface {
       const attemptId = response.attemptId;
       return {
         authorization: response.authorization,
+        pollNow: () => {
+          void ipcRenderer.invoke(
+            RunnerHostInvoke.deviceFlowPollNow,
+            attemptId,
+          );
+        },
         onResult: (handler) => {
           const cached = cachedResults.get(attemptId);
           if (cached !== undefined) {

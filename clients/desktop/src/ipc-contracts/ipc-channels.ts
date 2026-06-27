@@ -11,12 +11,14 @@
 export const RunnerHostInvoke = {
   validateAuthToken: "runnerHost:auth:validateToken",
   validateAuthTokenIdentity: "runnerHost:auth:validateTokenIdentity",
-  exchangeAuthCode: "runnerHost:auth:exchangeAuthCode",
-  // Device Authorization Grant (RFC 8628). `start` runs `/device/authorize` +
-  // the `/device/token` poll loop in main (CORS-safe, survives window
-  // close/sleep) and returns the authorization; the terminal outcome is pushed
-  // on `deviceFlowResult`. `cancel` aborts the named attempt's loop.
+  // Device Authorization Grant (RFC 8628) - the only interactive login. `start`
+  // runs `/device/authorize` + the `/device/token` poll loop in main (CORS-safe,
+  // survives window close/sleep) and returns the authorization; the terminal
+  // outcome is pushed on `deviceFlowResult`. `pollNow` nudges the named
+  // attempt's loop to poll immediately (the browser-return deep link uses it).
+  // `cancel` aborts the named attempt's loop.
   deviceFlowStart: "runnerHost:auth:deviceFlowStart",
+  deviceFlowPollNow: "runnerHost:auth:deviceFlowPollNow",
   deviceFlowCancel: "runnerHost:auth:deviceFlowCancel",
   openExternalLink: "runnerHost:openExternalLink",
   getRegisteredUrlSchemes: "runnerHost:getRegisteredUrlSchemes",

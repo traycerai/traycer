@@ -16,8 +16,8 @@ import { log } from "../app/logger";
  * attempt: it runs `/device/authorize` AND the `/device/token` poll loop here,
  * NOT in the renderer. Two reasons (Findings 7 & 9):
  *
- *   1. CORS-safe, exactly like `exchangeAuthCode` - the authn endpoints don't
- *      allow the renderer origin, and a renderer fetch would be blocked.
+ *   1. CORS-safe - the authn endpoints don't allow the renderer origin, so a
+ *      renderer fetch would be blocked; running in main sidesteps that.
  *   2. The loop survives renderer window close / sleep. The whole machine
  *      sleeping just pauses main with everything else; on resume the loop
  *      continues. A window that *closes* is handled by the IPC layer cancelling
@@ -74,8 +74,38 @@ export interface DeviceFlowStartHandlers {
   ) => void;
 }
 
+/**
+ * Per-attempt interrupt that lets `pollNow` cut short the loop's interval sleep
+ * so the next `/device/token` poll fires immediately. `arm` registers the
+ * current sleep's early-resolve; `wake` fires it (a no-op when nothing is armed,
+ * e.g. while a poll is already on the wire); `clear` disarms once the sleep
+ * settles for any reason.
+ */
+class PollWaker {
+  private resolve: (() => void) | null = null;
+
+  arm(resolve: () => void): void {
+    this.resolve = resolve;
+  }
+
+  clear(): void {
+    this.resolve = null;
+  }
+
+  wake(): void {
+    const resolve = this.resolve;
+    this.resolve = null;
+    resolve?.();
+  }
+}
+
+interface AttemptHandle {
+  readonly abortController: AbortController;
+  readonly waker: PollWaker;
+}
+
 export class DeviceFlowController {
-  private readonly attempts = new Map<string, AbortController>();
+  private readonly attempts = new Map<string, AttemptHandle>();
 
   constructor(private readonly authnBaseUrl: string) {}
 
@@ -97,16 +127,14 @@ export class DeviceFlowController {
       return { ok: false };
     }
     const attemptId = randomUUID();
-    const abortController = new AbortController();
-    this.attempts.set(attemptId, abortController);
+    const handle: AttemptHandle = {
+      abortController: new AbortController(),
+      waker: new PollWaker(),
+    };
+    this.attempts.set(attemptId, handle);
     // Run the loop detached from the invoke response so the renderer gets the
     // authorization immediately and can render progress.
-    void this.runAttempt(
-      attemptId,
-      authorization,
-      abortController.signal,
-      handlers,
-    );
+    void this.runAttempt(attemptId, authorization, handle, handlers);
     return {
       ok: true,
       attemptId,
@@ -120,20 +148,31 @@ export class DeviceFlowController {
     };
   }
 
+  /**
+   * Nudges the named attempt's loop to poll `/device/token` immediately,
+   * collapsing the remaining interval wait. Idempotent and best-effort: a no-op
+   * for an unknown/settled attempt, or when a poll is already on the wire (the
+   * next interval sleep is simply skipped). Driven by the browser-return deep
+   * link so an approval is picked up at once instead of waiting out `interval`.
+   */
+  pollNow(attemptId: string): void {
+    this.attempts.get(attemptId)?.waker.wake();
+  }
+
   /** Aborts the named attempt's poll loop (idempotent). */
   cancel(attemptId: string): void {
-    const abortController = this.attempts.get(attemptId);
-    if (abortController === undefined) {
+    const handle = this.attempts.get(attemptId);
+    if (handle === undefined) {
       return;
     }
-    abortController.abort();
+    handle.abortController.abort();
     this.attempts.delete(attemptId);
   }
 
   /** Aborts every in-flight attempt (bridge teardown). */
   disposeAll(): void {
-    for (const abortController of this.attempts.values()) {
-      abortController.abort();
+    for (const handle of this.attempts.values()) {
+      handle.abortController.abort();
     }
     this.attempts.clear();
   }
@@ -141,13 +180,14 @@ export class DeviceFlowController {
   private async runAttempt(
     attemptId: string,
     authorization: Extract<DeviceAuthorizationResult, { kind: "started" }>,
-    signal: AbortSignal,
+    handle: AttemptHandle,
     handlers: DeviceFlowStartHandlers,
   ): Promise<void> {
     const result = await runDevicePollLoop(
       this.authnBaseUrl,
       authorization,
-      signal,
+      handle.abortController.signal,
+      handle.waker,
     );
     this.attempts.delete(attemptId);
     // An aborted attempt (superseded / cancelled / window closed) delivers
@@ -169,6 +209,7 @@ async function runDevicePollLoop(
   authnBaseUrl: string,
   authorization: Extract<DeviceAuthorizationResult, { kind: "started" }>,
   signal: AbortSignal,
+  waker: PollWaker,
 ): Promise<DeviceFlowResultPayload | "aborted"> {
   let schedule: DevicePollSchedule = createPollSchedule({
     intervalSeconds: authorization.intervalSeconds,
@@ -216,7 +257,7 @@ async function runDevicePollLoop(
         break;
     }
 
-    const slept = await sleep(schedule.intervalMs, signal);
+    const slept = await sleep(schedule.intervalMs, signal, waker);
     if (!slept) {
       return "aborted";
     }
@@ -254,21 +295,31 @@ function raceAbort<T>(
   });
 }
 
-/** Abortable sleep. Resolves `true` when the delay elapses, `false` on abort. */
-function sleep(ms: number, signal: AbortSignal): Promise<boolean> {
+/**
+ * Abortable, wakeable sleep. Resolves `true` when the delay elapses OR the
+ * waker fires (`pollNow` - re-poll immediately), and `false` on abort. The
+ * waker is disarmed and the timer cleared on whichever fires first.
+ */
+function sleep(
+  ms: number,
+  signal: AbortSignal,
+  waker: PollWaker,
+): Promise<boolean> {
   if (signal.aborted) {
     return Promise.resolve(false);
   }
   return new Promise<boolean>((resolve) => {
-    const onAbort = (): void => {
+    const settle = (value: boolean): void => {
       clearTimeout(timer);
-      resolve(false);
-    };
-    const timer = setTimeout(() => {
       signal.removeEventListener("abort", onAbort);
-      resolve(true);
-    }, ms);
+      waker.clear();
+      resolve(value);
+    };
+    const onAbort = (): void => settle(false);
+    const timer = setTimeout(() => settle(true), ms);
     signal.addEventListener("abort", onAbort, { once: true });
+    // A browser-return nudge collapses the remaining wait into an immediate poll.
+    waker.arm(() => settle(true));
   });
 }
 

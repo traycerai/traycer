@@ -6,7 +6,6 @@ import {
   RunnerHostEvent,
   RunnerHostInvoke,
 } from "../../ipc-contracts/ipc-channels";
-import type { AuthCallbackParseResult } from "../auth/deep-link";
 import type { DesktopLocalHostSnapshot } from "../../ipc-contracts/host-types";
 import type {
   QuitDecision,
@@ -275,7 +274,10 @@ export class RunnerIpcBridge {
     listener: (event: IpcMainEvent, ...args: unknown[]) => void;
   }> = [];
   private hostPickerOpen = false;
-  readonly pendingAuthCallbacks: AuthCallbackParseResult[] = [];
+  // Set when a browser-return deep link arrives before any renderer window
+  // exists; drained to the MRU window once one registers. Coalesced to a single
+  // flag - the signal is a payload-free nudge, so repeated arrivals collapse.
+  pendingAuthReturnSignal = false;
   readonly appLifecycleReadyWindowIds = new Set<string>();
   readonly unsyncedEditsSnapshots = new Map<string, UnsyncedEditsSnapshot>();
   /**
@@ -342,21 +344,26 @@ export class RunnerIpcBridge {
   }
 
   /**
-   * Forwards a parsed auth-callback result to the renderer bridge. Delivery
-   * targets the MRU renderer because OAuth callbacks are process-global and
-   * not Epic-scoped. If no window exists, the result is queued until the next
-   * registry change exposes a target.
+   * Handles a browser-return deep link: focuses the MRU renderer (so the user
+   * lands back in the app) and forwards the payload-free return signal so the
+   * renderer nudges its in-flight device poll. Targets the MRU window because
+   * the signal is process-global, not Epic-scoped. If no window exists yet, the
+   * signal is coalesced into a pending flag and drained on the next registry
+   * change. It carries no token - that always arrives over the device poll.
    */
-  deliverAuthCallback(result: AuthCallbackParseResult): void {
+  deliverAuthReturnSignal(): void {
     const target = this.windowRegistry.getMruRecord();
     if (target === null) {
-      this.pendingAuthCallbacks.push(result);
+      this.pendingAuthReturnSignal = true;
       return;
+    }
+    if (!target.window.isFocused()) {
+      this.windowRegistry.focusById(target.windowId);
     }
     this.safeSendToWindow(
       target.windowId,
       RunnerHostEvent.authCallback,
-      result,
+      undefined,
     );
   }
 
@@ -679,21 +686,23 @@ export class RunnerIpcBridge {
     }
   }
 
-  flushPendingAuthCallbacks(): void {
-    if (this.pendingAuthCallbacks.length === 0) {
+  flushPendingAuthReturnSignal(): void {
+    if (!this.pendingAuthReturnSignal) {
       return;
     }
     const target = this.windowRegistry.getMruRecord();
     if (target === null) {
       return;
     }
-    for (const result of this.pendingAuthCallbacks.splice(0)) {
-      this.safeSendToWindow(
-        target.windowId,
-        RunnerHostEvent.authCallback,
-        result,
-      );
+    this.pendingAuthReturnSignal = false;
+    if (!target.window.isFocused()) {
+      this.windowRegistry.focusById(target.windowId);
     }
+    this.safeSendToWindow(
+      target.windowId,
+      RunnerHostEvent.authCallback,
+      undefined,
+    );
   }
 
   replayCurrentStateToWindow(windowId: string): void {

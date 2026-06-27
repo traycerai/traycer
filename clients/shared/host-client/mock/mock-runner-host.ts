@@ -1,6 +1,5 @@
 import type { Disposable } from "../../platform/uri-callback";
 import type {
-  AuthCallbackResult,
   AuthTokenValidationResult,
   DeviceFlowAuthorization,
   DeviceFlowResult,
@@ -82,9 +81,7 @@ export class MockRunnerHost implements IRunnerHost {
   workspaceFolderPickerPaths: readonly string[];
   hosts: readonly HostDirectoryEntry[];
 
-  private readonly authCallbackHandlers = new Set<
-    (result: AuthCallbackResult) => void
-  >();
+  private readonly authCallbackHandlers = new Set<() => void>();
   private readonly localHostHandlers = new Set<
     (snapshot: LocalHostSnapshot | null) => void
   >();
@@ -174,21 +171,6 @@ export class MockRunnerHost implements IRunnerHost {
     );
   }
 
-  /** Last (code, verifier) passed to exchangeAuthCode, for test assertions. */
-  lastExchange: { code: string; codeVerifier: string } | null = null;
-
-  async exchangeAuthCode(
-    code: string,
-    codeVerifier: string,
-  ): Promise<StoredAuthTokens | null> {
-    this.lastExchange = { code, codeVerifier };
-    // Deterministic test double: treat the code as the bearer so a test that
-    // emits `{ code: "X" }` ends up signed in with token "X" (the same shape
-    // the pre-PKCE `{ token: "X" }` callback produced). The real HTTP exchange
-    // is covered by the shared/authn tests.
-    return { token: code, refreshToken: `${code}-refresh` };
-  }
-
   async openExternalLink(url: string): Promise<void> {
     this.openedExternalLinks.push(url);
   }
@@ -208,7 +190,7 @@ export class MockRunnerHost implements IRunnerHost {
     // No-op: no OS settings pane in the in-memory host.
   }
 
-  onAuthCallback(handler: (result: AuthCallbackResult) => void): Disposable {
+  onAuthCallback(handler: () => void): Disposable {
     this.authCallbackHandlers.add(handler);
     return {
       dispose: () => {
@@ -288,11 +270,14 @@ export class MockRunnerHost implements IRunnerHost {
 
   // ---- Test/dev helpers (not part of IRunnerHost) ---------------------- //
 
-  // Test convenience: `refreshToken` defaults so existing `{ token }` call sites
-  // stay valid while the real `AuthCallbackResult` requires both fields.
-  emitAuthCallback(result: AuthCallbackResult): void {
+  /**
+   * Fires the payload-free browser-return signal to every `onAuthCallback`
+   * subscriber, modelling the shell delivering the `traycer://` deep link when
+   * the user comes back from the device-approval tab.
+   */
+  emitAuthCallback(): void {
     for (const handler of this.authCallbackHandlers) {
-      handler(result);
+      handler();
     }
   }
 
@@ -503,11 +488,17 @@ export class MockDeviceFlowHost implements IDeviceFlowHost {
 export class MockDeviceFlowSession implements DeviceFlowSession {
   readonly authorization: DeviceFlowAuthorization;
   cancelled = false;
+  /** Test counter: how many times the browser-return nudge poked this poll. */
+  pollNowCalls = 0;
   private pendingResult: DeviceFlowResult | null = null;
   private handler: ((result: DeviceFlowResult) => void) | null = null;
 
   constructor(authorization: DeviceFlowAuthorization) {
     this.authorization = authorization;
+  }
+
+  pollNow(): void {
+    this.pollNowCalls += 1;
   }
 
   onResult(handler: (result: DeviceFlowResult) => void): Disposable {

@@ -13,7 +13,9 @@ import {
  * Wires the renderer-facing device-flow IPC to the main-process
  * `DeviceFlowController`. `deviceFlowStart` authorizes + starts the poll loop
  * and returns the authorization; the terminal outcome is pushed on
- * `deviceFlowResult` keyed by `attemptId`. `deviceFlowCancel` aborts the loop.
+ * `deviceFlowResult` keyed by `attemptId`. `deviceFlowPollNow` nudges the loop
+ * to poll immediately (the browser-return deep link). `deviceFlowCancel` aborts
+ * the loop.
  *
  * The poll loop is owned by the window that started it: when that window's
  * `webContents` is destroyed we cancel the attempt, so closing a window mid
@@ -52,6 +54,14 @@ export function registerDeviceFlowIpc(bridge: RunnerIpcBridge): void {
     }
     return outcome;
   });
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.deviceFlowPollNow,
+    (_event, attemptId: unknown) => {
+      assertString(attemptId, "deviceFlowPollNow");
+      controller.pollNow(attemptId);
+    },
+  );
 
   bridge.handleInvoke(
     RunnerHostInvoke.deviceFlowCancel,

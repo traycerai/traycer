@@ -225,10 +225,15 @@ describe("<SignInButton />", () => {
       expect(screen.queryByTestId("runtime-fallback")).toBeNull();
     });
 
-    // Emit an OAuth callback with a token; the pre-installed 401 fetch makes
-    // AuthnV3 reject it, which must surface AUTH_ERROR_SIGN_IN_FAILED on the
+    // Drive a device sign-in whose minted token the pre-installed 401 fetch
+    // makes AuthnV3 reject, which must surface AUTH_ERROR_SIGN_IN_FAILED on the
     // header sign-in surface via the new copy.
-    result.host.emitAuthCallback({ code: "rejected-callback-token" });
+    await result.getAuthService().signIn();
+    result.host.deviceFlow.emitResult({
+      kind: "authorized",
+      token: "rejected-callback-token",
+      refreshToken: "rejected-callback-token-refresh",
+    });
 
     await waitFor(() => {
       const error = screen.queryByTestId("signin-error");
@@ -259,13 +264,13 @@ describe("<SignInButton />", () => {
     const retry = await screen.findByTestId("signin-retry-link");
     fireEvent.click(retry);
 
-    // `signIn()` re-opens the shell's external sign-in surface, so a stalled
-    // attempt has an immediate escape hatch instead of waiting for the timeout.
+    // `signIn()` restarts the device flow and re-opens the verification page, so
+    // a stalled attempt has an immediate escape hatch.
     await waitFor(() => {
-      // signIn appends the PKCE challenge, so match the base URL by prefix.
+      expect(result.host.deviceFlow.startCalls).toBeGreaterThanOrEqual(1);
       expect(
         result.host.openedExternalLinks.some((url) =>
-          url.startsWith("https://auth.traycer.invalid/sign-in"),
+          url.startsWith("https://app.traycer.ai/device"),
         ),
       ).toBe(true);
     });
@@ -327,7 +332,11 @@ describe("<SignInButton />", () => {
     });
 
     await result.getAuthService().signIn();
-    result.host.emitAuthCallback({ code: "valid-token" });
+    result.host.deviceFlow.emitResult({
+      kind: "authorized",
+      token: "valid-token",
+      refreshToken: "valid-token-refresh",
+    });
     await waitFor(() => {
       expect(useAuthStore.getState().status).toBe("signed-in");
     });
@@ -353,7 +362,7 @@ describe("<SignInButton />", () => {
     result.cleanupClient();
   });
 
-  it("offers a device-code fallback while signing-in that starts the device flow and surfaces the code", async () => {
+  it("starts the device flow and surfaces the user code on the single Sign in", async () => {
     restoreFetch();
     restoreFetch = installFetch(() => okWithProfile());
     const result = mountSignInButton(buildHost());
@@ -362,20 +371,16 @@ describe("<SignInButton />", () => {
       expect(screen.queryByTestId("runtime-fallback")).toBeNull();
     });
 
-    // A redirect attempt is in flight: the unobtrusive "use a code" link shows.
+    // The single "Sign in" runs the device flow directly - no separate "use a
+    // code" affordance.
     await result.getAuthService().signIn();
-    const link = await screen.findByTestId("signin-device-code-link");
 
-    fireEvent.click(link);
-
-    // Clicking starts the main-process device flow and shows the user code
-    // (no silent spinner) instead of leaving the user on a bare redirect.
     await waitFor(() => {
       expect(result.host.deviceFlow.startCalls).toBe(1);
     });
     const code = await screen.findByTestId("signin-device-code");
     expect(code.textContent).toBe("ABCDE-FGHIJ");
-    // The fallback link is replaced by the progress panel.
+    // There is no device-code fallback link anymore.
     expect(screen.queryByTestId("signin-device-code-link")).toBeNull();
     result.cleanupClient();
   });

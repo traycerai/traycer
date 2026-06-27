@@ -80,20 +80,6 @@ export interface IRunnerHost {
     refreshToken: string,
   ): Promise<AuthIdentityValidationResult>;
 
-  /**
-   * Exchanges a one-time PKCE `code` (from the sign-in callback) + the
-   * `codeVerifier` the renderer generated at sign-in start for the real token
-   * pair. Like `validateAuthToken`, desktop shells perform this in Electron
-   * main so renderer-origin CORS does not block the authn call; browser-only
-   * shells may call the shared `exchangeCodeForTokens` helper directly.
-   * Returns `null` when the exchange fails (bad/expired/used code, PKCE
-   * mismatch, or a transport error).
-   */
-  exchangeAuthCode(
-    code: string,
-    codeVerifier: string,
-  ): Promise<StoredAuthTokens | null>;
-
   openExternalLink(url: string): Promise<void>;
 
   /**
@@ -141,18 +127,24 @@ export interface IRunnerHost {
   beginAuthAttempt(): void;
 
   /**
-   * Subscribes to auth-callback results delivered by the shell. The handler
-   * receives a discriminated union so `gui-app` can treat success and
-   * error uniformly without parsing URIs.
+   * Subscribes to the browser-return signal the shell delivers when the user
+   * comes back from the device-approval browser tab (the `traycer://` deep
+   * link on desktop). The signal is **payload-free**: device flow is the only
+   * interactive login, so the shell carries no token or code here - it only
+   * tells the renderer "the browser returned" so the in-flight device poll can
+   * fire immediately instead of waiting out its interval. The token always
+   * arrives through the device-flow poll (`IDeviceFlowHost`), never here, and
+   * sign-in still completes poll-only if this never fires.
    */
-  onAuthCallback(handler: (result: AuthCallbackResult) => void): Disposable;
+  onAuthCallback(handler: () => void): Disposable;
 
   /**
    * OAuth 2.0 Device Authorization Grant (RFC 8628) controller, owned by the
    * shell's privileged process. On desktop the authorize call AND the
-   * `/device/token` poll loop run in Electron main so they are CORS-safe (like
-   * `exchangeAuthCode`) and survive renderer window close / sleep - the
-   * renderer only observes the terminal outcome. Shells with no device-flow
+   * `/device/token` poll loop run in Electron main so they are CORS-safe (the
+   * authn endpoints don't allow the renderer origin) and survive renderer
+   * window close / sleep - the renderer only observes the terminal outcome.
+   * Shells with no device-flow
    * backend (mobile, web, in-browser dev) install a no-op whose `start()`
    * resolves `null`. Always present; callers never branch on `null`.
    */
@@ -465,18 +457,6 @@ export interface IServiceHost {
 }
 
 /**
- * Discriminated result delivered by `onAuthCallback`. Success carries the
- * one-time PKCE `code` from the redirect; the shell exchanges it (with the
- * `code_verifier` it kept in-memory from sign-in start) for the token pair via
- * `exchangeCodeForTokens`. Tokens no longer travel in the callback URL. Failure
- * carries a shell-provided error string so `gui-app` can render a stable
- * message.
- */
-export type AuthCallbackResult =
-  | { readonly code: string }
-  | { readonly error: string };
-
-/**
  * Authorization details returned by `/device/authorize`, surfaced to the GUI so
  * it can display the human-handled `userCode` + `verificationUri` (or rely on
  * the shell opening `verificationUriComplete`) and show poll progress / expiry.
@@ -517,13 +497,23 @@ export type DeviceFlowResult =
  * `/device/authorize` response (already resolved by the time the session
  * exists). `onResult` fires exactly once with the terminal `DeviceFlowResult`;
  * implementations replay a result that settled before the subscription so a
- * fast poll can't be missed. `cancel()` stops the shell-side poll loop and
- * frees its resources - the GUI calls it when the attempt is superseded
- * (redirect won, retry), on sign-out, and on dispose.
+ * fast poll can't be missed. `pollNow()` nudges the shell-side loop to poll
+ * `/device/token` immediately rather than waiting out the current interval -
+ * the GUI calls it on the browser-return signal so approval is picked up at
+ * once. `cancel()` stops the shell-side poll loop and frees its resources - the
+ * GUI calls it when the attempt is superseded (retry), on sign-out, and on
+ * dispose.
  */
 export interface DeviceFlowSession {
   readonly authorization: DeviceFlowAuthorization;
   onResult(handler: (result: DeviceFlowResult) => void): Disposable;
+  /**
+   * Nudges the shell-side poll loop to dispatch a `/device/token` poll
+   * immediately (collapsing the remaining interval wait). Best-effort and
+   * idempotent: it never delivers a token itself - the result still arrives
+   * through `onResult` - and is a no-op once the attempt has settled.
+   */
+  pollNow(): void;
   cancel(): void;
 }
 

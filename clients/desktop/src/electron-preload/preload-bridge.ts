@@ -2,7 +2,7 @@ import { contextBridge } from "electron";
 import { RunnerHostSync } from "../ipc-contracts/ipc-channels";
 import { config } from "../config";
 import { readInitialRouteArg } from "../ipc-contracts/window-bootstrap";
-import { buildAuthBridge, type AuthCallbackBridgeResult } from "./auth-bridge";
+import { buildAuthBridge } from "./auth-bridge";
 import { buildDeviceFlowBridge } from "./device-flow-bridge";
 import { buildHostBridge } from "./host-bridge";
 import {
@@ -37,8 +37,6 @@ import { readSyncString } from "./sync-bootstrap";
  * subscriptions at module load. This entry only composes them into the final
  * `runnerHost` object.
  */
-
-export type { AuthCallbackBridgeResult };
 
 const windowId = readSyncString(RunnerHostSync.windowId, "primary");
 const sentryRendererDsn = readSyncString(RunnerHostSync.sentryRendererDsn, "");

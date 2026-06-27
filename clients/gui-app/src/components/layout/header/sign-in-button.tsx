@@ -9,7 +9,6 @@ import {
   AUTH_ERROR_LAUNCH_FAILED,
   AUTH_ERROR_SESSION_EXPIRED,
   AUTH_ERROR_SIGN_IN_FAILED,
-  AUTH_ERROR_TIMEOUT,
   type AuthService,
   type DeviceFlowProgress,
 } from "@/lib/auth/auth-service";
@@ -25,8 +24,10 @@ export interface SignInButtonProps {
  * sign-in flow uses the runner-host browser bridge - never a direct
  * `runnerHost.openExternalLink` call from UI code.
  *
- * The signed-out surface presents the primary "Sign in" affordance, which
- * funnels into `AuthService` so AuthnV3 validation runs once.
+ * The signed-out surface presents the single "Sign in" affordance, which
+ * funnels into `AuthService.signIn()` - the OAuth 2.0 Device Authorization
+ * Grant. The browser opens to the device-approval page and the in-flight code +
+ * "waiting for approval" progress render inline (never a silent spinner).
  *
  * Interactive sign-in failures render a visible failure message next to the
  * button so the user has a stable retry CTA. Stored-session expiry is handled
@@ -59,7 +60,7 @@ export function SignInButton(props: SignInButtonProps) {
         lastError={lastError}
         isHero={isHero}
       />
-      <DeviceCodeProgress progress={deviceProgress} isHero={isHero} />
+      <DeviceCodeProgress auth={auth} progress={deviceProgress} isHero={isHero} />
       <PrimarySignInButton
         auth={auth}
         isHero={isHero}
@@ -70,73 +71,20 @@ export function SignInButton(props: SignInButtonProps) {
         isHero={isHero}
         isSigningIn={isSigningIn}
       />
-      <DeviceCodeFallback
-        auth={auth}
-        status={status}
-        lastError={lastError}
-        isSigningIn={isSigningIn}
-        hasDeviceProgress={deviceProgress !== null}
-        isHero={isHero}
-      />
     </div>
   );
 }
 
 /**
- * Device-flow fallback affordance. Unobtrusive while a redirect attempt is
- * mid-flight ("Having trouble?"), and promoted to a prominent CTA when the
- * redirect could not launch / timed out - the two cases where the seamless
- * browser path is known to be unavailable. Hidden once a device attempt is
- * itself in flight (its progress panel takes over), and on an idle signed-out
- * surface where the primary "Sign in" button is the CTA.
- */
-function DeviceCodeFallback(props: {
-  readonly auth: AuthService;
-  readonly status: AuthStatus;
-  readonly lastError: string | null;
-  readonly isSigningIn: boolean;
-  readonly hasDeviceProgress: boolean;
-  readonly isHero: boolean;
-}) {
-  if (props.hasDeviceProgress) {
-    return null;
-  }
-  const isLaunchBlocked =
-    props.status === "signed-out" &&
-    (props.lastError === AUTH_ERROR_LAUNCH_FAILED ||
-      props.lastError === AUTH_ERROR_TIMEOUT);
-  if (!props.isSigningIn && !isLaunchBlocked) {
-    return null;
-  }
-  return (
-    <Button
-      type="button"
-      size={props.isHero ? "default" : "sm"}
-      variant={isLaunchBlocked ? "outline" : "link"}
-      data-testid="signin-device-code-link"
-      onClick={() => {
-        void props.auth.signInWithDeviceCode();
-      }}
-      className={cn(
-        "cursor-pointer",
-        props.isHero && !isLaunchBlocked
-          ? "h-auto justify-center px-0 py-0 text-ui-sm"
-          : null,
-      )}
-    >
-      {isLaunchBlocked
-        ? "Use a sign-in code instead"
-        : "Having trouble? Use a code instead"}
-    </Button>
-  );
-}
-
-/**
- * Active device-flow progress: the human-handled code + where to enter it, so
- * the device fallback is never a silent spinner. Rendered only while a device
- * attempt is in flight.
+ * Active device-flow progress. The app already auto-opens the pre-filled
+ * approval page; this surface leads with a one-click "open approval page"
+ * affordance (re-opening `verification_uri_complete`, code embedded) so the
+ * user only ever has to click Approve - never type the code. The code + bare
+ * URL remain as a manual fallback, and the spinner keeps it from being a silent
+ * wait. Rendered while a device attempt is in flight.
  */
 function DeviceCodeProgress(props: {
+  readonly auth: AuthService;
   readonly progress: DeviceFlowProgress | null;
   readonly isHero: boolean;
 }) {
@@ -147,27 +95,39 @@ function DeviceCodeProgress(props: {
   return (
     <div
       className={cn(
-        "flex flex-col gap-1 rounded-md border border-border bg-muted/40 p-3",
+        "flex flex-col gap-2 rounded-md border border-border bg-muted/40 p-3",
         props.isHero ? "w-full text-ui-sm" : "text-ui-xs",
       )}
       data-testid="signin-device-progress"
     >
       <span className="text-muted-foreground">
-        Enter this code at {progress.verificationUri}
+        Approve this sign-in in your browser.
       </span>
-      <span
-        className="font-mono text-base font-semibold tracking-widest"
-        data-testid="signin-device-code"
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={() => props.auth.openVerificationPage()}
+        data-testid="signin-open-approval"
       >
-        {progress.userCode}
-      </span>
+        Open the approval page
+      </Button>
       <span className="flex items-center gap-1.5 text-muted-foreground">
-        Waiting for approval in your browser
+        Waiting for approval
         <AgentSpinningDots
           variant="dots"
           className="ml-0.5"
           testId="signin-device-spinner"
         />
+      </span>
+      <span className="text-muted-foreground">
+        Or enter code{" "}
+        <span
+          className="font-mono font-semibold tracking-widest text-foreground"
+          data-testid="signin-device-code"
+        >
+          {progress.userCode}
+        </span>{" "}
+        at {progress.verificationUri}
       </span>
     </div>
   );
@@ -264,11 +224,8 @@ function RetrySignInButton(props: {
 }
 
 function messageForError(error: string): string {
-  if (error === AUTH_ERROR_TIMEOUT) {
-    return "Sign in timed out. Please try again.";
-  }
   if (error === AUTH_ERROR_LAUNCH_FAILED) {
-    return "Could not open browser. Please try again.";
+    return "Could not start sign-in. Please try again.";
   }
   if (error === AUTH_ERROR_SESSION_EXPIRED) {
     return "Session expired - sign in again.";

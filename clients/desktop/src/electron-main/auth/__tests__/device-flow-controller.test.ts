@@ -104,6 +104,76 @@ describe("DeviceFlowController", () => {
     ]);
   });
 
+  it("nudges an immediate re-poll on pollNow, collapsing the interval wait", async () => {
+    let tokenCalls = 0;
+    restoreFetch = installFetch((url) => {
+      if (url.endsWith("/device/authorize")) {
+        return authorizeOk();
+      }
+      if (url.endsWith("/device/token")) {
+        tokenCalls += 1;
+        return tokenCalls === 1
+          ? new Response(null, { status: 428 }) // authorization-pending
+          : tokenAuthorized();
+      }
+      return new Response(null, { status: 500 });
+    });
+
+    const results: Array<{ attemptId: string; result: DeviceFlowResultPayload }> =
+      [];
+    const controller = new DeviceFlowController(AUTHN);
+    const outcome = await controller.start({
+      onResult: (attemptId, result) => results.push({ attemptId, result }),
+    });
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) {
+      return;
+    }
+
+    // Let the first poll resolve (428) so the loop parks in its ~1s sleep.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(tokenCalls).toBe(1);
+    expect(results).toEqual([]);
+
+    // The browser-return nudge collapses the remaining interval into an
+    // immediate re-poll WITHOUT advancing the interval timer.
+    controller.pollNow(outcome.attemptId);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(tokenCalls).toBe(2);
+    expect(results).toEqual([
+      {
+        attemptId: outcome.attemptId,
+        result: {
+          kind: "authorized",
+          token: "tok",
+          refreshToken: "tok-refresh",
+        },
+      },
+    ]);
+  });
+
+  it("ignores pollNow for an unknown or settled attempt", async () => {
+    restoreFetch = installFetch((url) => {
+      if (url.endsWith("/device/authorize")) {
+        return authorizeOk();
+      }
+      return new Response(null, { status: 428 });
+    });
+
+    const controller = new DeviceFlowController(AUTHN);
+    const outcome = await controller.start({ onResult: () => undefined });
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) {
+      return;
+    }
+
+    // No throw for an unknown attempt id, and a known id is a safe no-op.
+    expect(() => controller.pollNow("does-not-exist")).not.toThrow();
+    expect(() => controller.pollNow(outcome.attemptId)).not.toThrow();
+    controller.cancel(outcome.attemptId);
+  });
+
   it("delivers nothing once the attempt is cancelled (no leaked poll)", async () => {
     restoreFetch = installFetch((url) => {
       if (url.endsWith("/device/authorize")) {

@@ -1,5 +1,4 @@
 import type {
-  AuthCallbackResult,
   AuthTokenValidationResult,
   CliInstallManifestSnapshot,
   DeviceFlowSession,
@@ -35,7 +34,6 @@ import type {
   LocalHostSnapshot,
   MigrationRunningSnapshot,
   ServiceStatusSnapshot,
-  StoredAuthTokens,
   TrayEpic,
   TrayIndicatorState,
   TraycerHostStatusSnapshot,
@@ -128,10 +126,6 @@ export interface DesktopPreloadBridge {
     token: string,
     refreshToken: string,
   ): Promise<AuthIdentityValidationResult>;
-  exchangeAuthCode(
-    code: string,
-    codeVerifier: string,
-  ): Promise<StoredAuthTokens | null>;
   openExternalLink(url: string): Promise<void>;
   getRegisteredUrlSchemes(
     schemes: readonly string[],
@@ -139,7 +133,7 @@ export interface DesktopPreloadBridge {
   requestMicrophoneAccess(): Promise<"granted" | "denied">;
   openMicrophoneSettings(): Promise<void>;
   beginAuthAttempt(): void;
-  onAuthCallback(handler: (result: AuthCallbackResult) => void): {
+  onAuthCallback(handler: () => void): {
     dispose: () => void;
   };
   deviceFlow: {
@@ -691,18 +685,11 @@ export class DesktopRunnerHost implements IRunnerHost {
     return this.bridge.validateAuthTokenIdentity(token, refreshToken);
   }
 
-  exchangeAuthCode(
-    code: string,
-    codeVerifier: string,
-  ): Promise<StoredAuthTokens | null> {
-    return this.bridge.exchangeAuthCode(code, codeVerifier);
-  }
-
   beginAuthAttempt(): void {
     this.bridge.beginAuthAttempt();
   }
 
-  onAuthCallback(handler: (result: AuthCallbackResult) => void): Disposable {
+  onAuthCallback(handler: () => void): Disposable {
     return toDisposable(this.bridge.onAuthCallback(handler));
   }
 
