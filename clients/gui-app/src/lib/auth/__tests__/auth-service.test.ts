@@ -194,6 +194,26 @@ function status(code: number): Promise<Response> {
   return Promise.resolve(new Response(null, { status: code }));
 }
 
+function base64url(value: string): string {
+  return btoa(value).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+/**
+ * A JWS-shaped access token whose payload carries a decodable `exp`, so the
+ * proactive refresh scheduler arms off it (the arbitrary opaque strings the
+ * other tests use carry no `exp` and leave the scheduler disabled).
+ */
+function jwtExpiringInMs(fromNowMs: number): string {
+  const header = base64url(JSON.stringify({ alg: "RS256", typ: "JWT" }));
+  const payload = base64url(
+    JSON.stringify({
+      id: "user-1",
+      exp: Math.trunc((Date.now() + fromNowMs) / 1000),
+    }),
+  );
+  return `${header}.${payload}.signature`;
+}
+
 describe("AuthService", () => {
   let restoreFetch: () => void = () => undefined;
 
@@ -339,6 +359,75 @@ describe("AuthService", () => {
     expect(ctxAfter?.credentials.getBearerToken()).toBe("rotated-token");
     expect(reemits).toEqual([]);
     expect(service.getCurrentSessionSnapshot().token).toBe("rotated-token");
+  });
+
+  it("proactively refreshes the bearer on OS resume when the token is inside the lead window", async () => {
+    const { service, host } = makeService();
+    // 5m of life left → inside the ~10m proactive lead window. During a sleep
+    // the scheduler's monotonic timer is frozen, so without a wake hook this
+    // bearer would rot; the OS resume signal must drive an immediate refresh.
+    const nearExpiry = jwtExpiringInMs(5 * 60_000);
+    await host.tokenStore.set({
+      token: nearExpiry,
+      refreshToken: `${nearExpiry}-refresh`,
+    });
+    await service.start();
+    expect(useAuthStore.getState().status).toBe("signed-in");
+    expect(service.getCurrentSessionSnapshot().token).toBe(nearExpiry);
+
+    const provider = service.getRequestContextProvider();
+    const ctxBefore = provider.current();
+    const rotated = jwtExpiringInMs(4 * 60 * 60_000);
+    const refreshAuth: string[] = [];
+    restoreFetch();
+    restoreFetch = installFetch((input, init) => {
+      const url = typeof input === "string" ? input : String(input);
+      if (url === REFRESH_URL) {
+        refreshAuth.push(String(init?.headers?.Authorization));
+        return okWithRefreshToken(rotated);
+      }
+      return okWithProfile();
+    });
+
+    // Electron powerMonitor resume bridged through the runner host.
+    host.emitSystemResumed();
+
+    await vi.waitFor(() => {
+      expect(service.getCurrentSessionSnapshot().token).toBe(rotated);
+    });
+    expect(refreshAuth).toEqual([`Bearer ${nearExpiry}`]);
+    // Same-user rotation mutates the existing context's lease in place.
+    expect(provider.current()).toBe(ctxBefore);
+    expect(provider.current()?.credentials.getBearerToken()).toBe(rotated);
+  });
+
+  it("does not refresh on OS resume when the bearer is still well within its TTL", async () => {
+    const { service, host } = makeService();
+    const farExpiry = jwtExpiringInMs(4 * 60 * 60_000);
+    await host.tokenStore.set({
+      token: farExpiry,
+      refreshToken: `${farExpiry}-refresh`,
+    });
+    await service.start();
+    expect(service.getCurrentSessionSnapshot().token).toBe(farExpiry);
+
+    let refreshed = false;
+    restoreFetch();
+    restoreFetch = installFetch((input) => {
+      const url = typeof input === "string" ? input : String(input);
+      if (url === REFRESH_URL) {
+        refreshed = true;
+        return okWithRefreshToken(jwtExpiringInMs(4 * 60 * 60_000));
+      }
+      return okWithProfile();
+    });
+
+    host.emitSystemResumed();
+    for (let i = 0; i < 8; i++) {
+      await Promise.resolve();
+    }
+    expect(refreshed).toBe(false);
+    expect(service.getCurrentSessionSnapshot().token).toBe(farExpiry);
   });
 
   it("aborts the current context and emits null on cross-user revalidation", async () => {

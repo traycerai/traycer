@@ -37,6 +37,12 @@ function makeFakeClock() {
       timers = timers.filter((t) => t.id !== id);
     },
     pendingCount: (): number => timers.length,
+    // Advance the wall clock WITHOUT firing any timer - models an OS suspend,
+    // where `Date.now()` keeps moving but the monotonic `setTimeout` countdown
+    // is frozen, so an armed timer does not fire while the device sleeps.
+    jump(ms: number): void {
+      now += ms;
+    },
     async advance(ms: number): Promise<void> {
       now += ms;
       const due = timers.filter((t) => t.at <= now).sort((a, b) => a.at - b.at);
@@ -232,6 +238,103 @@ describe("createProactiveRefreshScheduler", () => {
     expect(clock.pendingCount()).toBe(0);
     await clock.advance(8 * HOUR_MS);
     expect(revalidate).not.toHaveBeenCalled();
+  });
+
+  it("refreshes on notifyResumed when a sleep pushed the token into the lead window", async () => {
+    const clock = makeFakeClock();
+    let token: string | null = tokenExpiringAtMs(4 * HOUR_MS);
+    const revalidate = vi.fn(async () => {
+      token = tokenExpiringAtMs(clock.now() + 4 * HOUR_MS);
+    });
+
+    const scheduler = createProactiveRefreshScheduler<number>({
+      getToken: () => token,
+      revalidate,
+      now: clock.now,
+      setTimer: clock.setTimer,
+      clearTimer: clock.clearTimer,
+      leadMs: DEFAULT_REFRESH_LEAD_MS,
+      minDelayMs: DEFAULT_REFRESH_MIN_DELAY_MS,
+      onDiagnostic: null,
+    });
+
+    scheduler.start();
+    expect(clock.pendingCount()).toBe(1);
+
+    // The device sleeps until the token is inside the lead window. The armed
+    // timer's monotonic countdown is frozen, so it never fires - the bearer just
+    // rots in place (the overnight-session bug).
+    clock.jump(4 * HOUR_MS - DEFAULT_REFRESH_LEAD_MS + 60_000);
+    expect(revalidate).not.toHaveBeenCalled();
+
+    // Wake: re-evaluate against the wall clock → token inside the lead window →
+    // refresh now. The stale frozen timer is dropped and a fresh one armed off
+    // the rotated token (so the count stays at exactly one).
+    scheduler.notifyResumed();
+    for (let i = 0; i < 8; i++) {
+      await Promise.resolve();
+    }
+    expect(revalidate).toHaveBeenCalledTimes(1);
+    expect(clock.pendingCount()).toBe(1);
+
+    scheduler.stop();
+    expect(clock.pendingCount()).toBe(0);
+  });
+
+  it("re-arms without refreshing on notifyResumed when the token is still outside the lead window", async () => {
+    const clock = makeFakeClock();
+    const token: string = tokenExpiringAtMs(4 * HOUR_MS);
+    const revalidate = vi.fn(async () => {});
+
+    const scheduler = createProactiveRefreshScheduler<number>({
+      getToken: () => token,
+      revalidate,
+      now: clock.now,
+      setTimer: clock.setTimer,
+      clearTimer: clock.clearTimer,
+      leadMs: DEFAULT_REFRESH_LEAD_MS,
+      minDelayMs: DEFAULT_REFRESH_MIN_DELAY_MS,
+      onDiagnostic: null,
+    });
+
+    scheduler.start();
+    // A short nap that leaves the token well clear of the lead window.
+    clock.jump(60_000);
+
+    scheduler.notifyResumed();
+    for (let i = 0; i < 8; i++) {
+      await Promise.resolve();
+    }
+    expect(revalidate).not.toHaveBeenCalled();
+    // Still armed (off the same, still-valid token), so it keeps watching.
+    expect(clock.pendingCount()).toBe(1);
+
+    scheduler.stop();
+  });
+
+  it("notifyResumed is a no-op while stopped", async () => {
+    const clock = makeFakeClock();
+    const token: string = tokenExpiringAtMs(60_000);
+    const revalidate = vi.fn(async () => {});
+
+    const scheduler = createProactiveRefreshScheduler<number>({
+      getToken: () => token,
+      revalidate,
+      now: clock.now,
+      setTimer: clock.setTimer,
+      clearTimer: clock.clearTimer,
+      leadMs: DEFAULT_REFRESH_LEAD_MS,
+      minDelayMs: DEFAULT_REFRESH_MIN_DELAY_MS,
+      onDiagnostic: null,
+    });
+
+    // Never started (or already stopped): a wake signal must not refresh or arm.
+    scheduler.notifyResumed();
+    for (let i = 0; i < 8; i++) {
+      await Promise.resolve();
+    }
+    expect(revalidate).not.toHaveBeenCalled();
+    expect(clock.pendingCount()).toBe(0);
   });
 
   it("clamps a far-future exp so the timer can't overflow and fire immediately", async () => {
