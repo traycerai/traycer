@@ -65,12 +65,14 @@ function providerState(providerId: string) {
   };
 }
 
-describe("grok non-breaking v2→v1 downgrade bridges", () => {
-  it("drops v2-only harnesses from agent.gui.listHarnesses for v1.0 callers", () => {
+describe("post-v1.0 GUI harness non-breaking v2→v1 downgrade bridges", () => {
+  it("drops post-v1.0 harnesses from agent.gui.listHarnesses for v1.0 callers", () => {
     const v2Response = listGuiHarnessesResponseSchema.parse({
       harnesses: [
         harnessOption("claude"),
         harnessOption("grok"),
+        harnessOption("kimi"),
+        harnessOption("droid"),
         harnessOption("copilot"),
         harnessOption("cursor"),
       ],
@@ -85,18 +87,20 @@ describe("grok non-breaking v2→v1 downgrade bridges", () => {
       "claude",
       "cursor",
     ]);
-    // The downgraded value must satisfy the frozen grok-less v1.0 schema — i.e.
-    // a real v1.0 client's strict decode would accept it.
+    // The downgraded value must satisfy the frozen v1.0 schema - i.e. a real
+    // v1.0 client's strict decode would accept it.
     expect(() =>
       listGuiHarnessesResponseSchemaV10.parse(result.value),
     ).not.toThrow();
   });
 
-  it("drops v2-only providers from providers.list for v1.0 callers", () => {
+  it("drops post-v1.0 providers from providers.list for v1.0 callers", () => {
     const v2Response = providersListResponseSchema.parse({
       providers: [
         providerState("cursor"),
         providerState("grok"),
+        providerState("kimi"),
+        providerState("droid"),
         providerState("copilot"),
       ],
     });
@@ -113,13 +117,15 @@ describe("grok non-breaking v2→v1 downgrade bridges", () => {
     ).not.toThrow();
   });
 
-  it("drops v2-only agents from agent.list for v1.0 callers", () => {
+  it("drops post-v1.0 agents from agent.list for v1.0 callers", () => {
     const v2Response = listAgentsResponseSchema.parse({
       caller: { agentId: "self", canSendMessages: true },
       scope: "all",
       agents: [
         agentSummary("a-claude", "claude"),
         agentSummary("a-grok", "grok"),
+        agentSummary("a-kimi", "kimi"),
+        agentSummary("a-droid", "droid"),
         agentSummary("a-copilot", "copilot"),
         agentSummary("a-null", null),
       ],
@@ -133,7 +139,7 @@ describe("grok non-breaking v2→v1 downgrade bridges", () => {
       "a-claude",
       "a-null",
     ]);
-    // A real v1.0 client's strict (grok-less) decode must accept the result.
+    // A real v1.0 client's strict decode must accept the result.
     expect(() => listAgentsResponseSchemaV10.parse(result.value)).not.toThrow();
   });
 });

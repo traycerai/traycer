@@ -20,6 +20,8 @@ const TOUR_PROVIDERS: ReadonlyArray<{
   { id: "opencode", harnessId: "opencode" },
   { id: "cursor", harnessId: "cursor" },
   { id: "grok", harnessId: "grok" },
+  { id: "droid", harnessId: "droid" },
+  { id: "kimi", harnessId: "kimi" },
   { id: "copilot", harnessId: "copilot" },
 ];
 

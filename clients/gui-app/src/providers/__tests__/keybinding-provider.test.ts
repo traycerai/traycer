@@ -26,7 +26,7 @@ import type { SettingsSectionId } from "@/lib/settings-sections";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
 
 interface NavigateCall {
-  readonly kind: "home" | "settings" | "epic" | "section";
+  readonly kind: "home" | "settings" | "epic" | "section" | "back" | "forward";
   readonly epicId: string | null;
   readonly sectionId: SettingsSectionId | null;
 }
@@ -115,6 +115,15 @@ function buildRouter(initialPath: string): MockRouter {
         pathname = `/settings/${intent.section}`;
       }
     },
+    goBack: () => {
+      calls.push({ kind: "back", epicId: null, sectionId: null });
+    },
+    goForward: () => {
+      calls.push({ kind: "forward", epicId: null, sectionId: null });
+    },
+    isHistoryNavAvailable: () => false,
+    canGoBack: () => false,
+    canGoForward: () => false,
   };
   const setPath = (next: string) => {
     pathname = next;

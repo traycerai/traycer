@@ -350,6 +350,18 @@ const PROVIDERS: ReadonlyArray<{
     capabilities: ["gui"],
   },
   {
+    harnessId: "droid",
+    label: "Droid",
+    status: "Factory account",
+    capabilities: ["gui"],
+  },
+  {
+    harnessId: "kimi",
+    label: "Kimi",
+    status: "Kimi account",
+    capabilities: ["gui"],
+  },
+  {
     harnessId: "copilot",
     label: "Copilot",
     status: "GitHub Copilot",

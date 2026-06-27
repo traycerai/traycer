@@ -7,6 +7,13 @@ vi.mock("@/components/layout/tabs/tab-strip", () => ({
   TabStrip: () => <div data-testid="tab-strip" />,
 }));
 
+// Router-dependent like TabStrip: the app-variant header mounts these arrows
+// inside the router tree, but this AppShell unit test renders without a
+// RouterProvider, so stub them out the same way.
+vi.mock("@/components/layout/header/history-nav-buttons", () => ({
+  HistoryNavButtons: () => <div data-testid="history-nav-buttons" />,
+}));
+
 vi.mock("@/components/layout/header/history-button", () => ({
   HistoryButton: () => <button type="button">History</button>,
 }));

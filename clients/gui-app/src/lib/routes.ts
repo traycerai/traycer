@@ -4,6 +4,16 @@ import type { EpicViewTab } from "@/stores/epics/canvas/types";
 
 export const LANDING_ROUTE: NavigateOptions = { to: "/" };
 
+/**
+ * Pathname portion of an href - everything before `?` or `#`. Pure string work
+ * (no `URL`), so a relative href like `/epics/a/b?focus=x#h` parses without a
+ * base. The single shared stripper for history/liveness/overlay code.
+ */
+export function hrefPathname(href: string): string {
+  const boundary = href.search(/[?#]/);
+  return boundary === -1 ? href : href.slice(0, boundary);
+}
+
 export function draftRoute(draftId: string): NavigateOptions {
   return {
     to: "/draft/$draftId",

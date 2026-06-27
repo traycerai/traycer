@@ -326,6 +326,12 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     kind: "digit",
     defaultChord: "alt",
   },
+  // In-app back/forward (`nav.back` / `nav.forward`) intentionally has NO
+  // keyboard chord: `mod`/`alt`+Arrow both collide with native text-editing
+  // caret movement inside the always-focused chat composer. Back/forward are
+  // explicit affordances only — the header arrow buttons, the command palette
+  // ("Go back" / "Go forward"), and mouse buttons 3/4 — all routed through the
+  // shared `goBack`/`goForward` actions.
 };
 export function getDefaultBindings(): Readonly<
   Record<ActionId, ChordString | null>

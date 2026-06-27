@@ -63,6 +63,25 @@ export interface KeybindingRouter {
    * click - see `lib/tab-navigation.ts`.
    */
   readonly navigateToTabIntent: (intent: TabNavigationIntent) => void;
+  /**
+   * In-app history back/forward. Delegate to the shared
+   * `goBack`/`goForward` actions on the CURRENT router (the live
+   * instance in `<RouterProvider>`), so keybinding, mouse, header, and
+   * palette all walk the same persistent history. No-op when the current
+   * history carries no controller brand (browser/web build).
+   */
+  readonly goBack: () => void;
+  readonly goForward: () => void;
+  /**
+   * History-navigation availability + boundary state, read off the
+   * CURRENT router's persistent-history controller. The palette source
+   * gates on `isHistoryNavAvailable` (desktop-only feature signal) and
+   * reads through this seam instead of TanStack `useRouter()`, since the
+   * palette mounts ABOVE `<RouterProvider>` where router context is null.
+   */
+  readonly isHistoryNavAvailable: () => boolean;
+  readonly canGoBack: () => boolean;
+  readonly canGoForward: () => boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -311,6 +330,9 @@ const STATIC_HANDLERS: Readonly<Partial<Record<ActionId, StaticHandler>>> = {
     r.navigateSettings();
     return true;
   },
+  // No `nav.back` / `nav.forward` entries: in-app back/forward has no keyboard
+  // chord (see ACTION_META). The palette + header buttons call the shared
+  // `goBack`/`goForward` actions directly via the router seam.
 };
 
 export function dispatchAction(
