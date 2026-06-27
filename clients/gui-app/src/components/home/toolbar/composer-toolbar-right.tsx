@@ -59,6 +59,7 @@ function ComposerToolbarRightImpl(props: ComposerToolbarRightProps) {
         tuiOnly={false}
         lockedHarnessId={null}
         disabled={settingsLocked}
+        registerActivation
       />
       {dictation !== null ? <ComposerMicButton control={dictation} /> : null}
       {dictation === null && dictationPreparing !== null ? (

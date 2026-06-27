@@ -9,6 +9,7 @@ import {
   type DigitActionMatch,
   findActionForChord,
   isExternallyHandled,
+  isRepeatSensitiveAction,
   matchDigitAction,
   registerBaseLeaderScope,
   resolveLeaderOwner,
@@ -277,6 +278,15 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
 
       const actionId = resolveReservedAction(event);
       if (actionId === null) return;
+
+      // Toggles (e.g. the model picker) must act once per physical press. Still
+      // reserve the chord on OS key-repeat so the browser default can't run,
+      // but skip re-dispatch so a held chord doesn't flip the toggle rapidly.
+      if (event.repeat && isRepeatSensitiveAction(actionId)) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
 
       // Reserve any chord bound to a centrally-handled action - even when
       // dispatch can't act (e.g. `group.focus.right` with no right neighbour).
