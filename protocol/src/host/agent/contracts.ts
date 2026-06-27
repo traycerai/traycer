@@ -136,7 +136,8 @@ export const agentListDowngradeV2ToV1 = defineDowngradePath<
         (agent) =>
           agent.harnessId !== "grok" &&
           agent.harnessId !== "kimi" &&
-          agent.harnessId !== "droid",
+          agent.harnessId !== "droid" &&
+          agent.harnessId !== "copilot",
       ),
     }),
   }),

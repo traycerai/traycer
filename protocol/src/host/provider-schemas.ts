@@ -21,6 +21,7 @@ export const providerIdSchema = z.enum([
   "grok",
   "droid",
   "kimi",
+  "copilot",
 ]);
 export type ProviderId = z.infer<typeof providerIdSchema>;
 
@@ -49,6 +50,7 @@ export const PROVIDER_DISPLAY_NAMES: Record<ProviderId, string> = {
   grok: "Grok",
   droid: "Droid",
   kimi: "Kimi",
+  copilot: "Copilot",
 };
 
 /**

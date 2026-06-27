@@ -65,7 +65,8 @@ export const agentGuiListHarnessesDowngradeV2ToV1 = defineDowngradePath<
         (harness) =>
           harness.id !== "grok" &&
           harness.id !== "kimi" &&
-          harness.id !== "droid",
+          harness.id !== "droid" &&
+          harness.id !== "copilot",
       ),
     }),
   }),

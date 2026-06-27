@@ -53,6 +53,7 @@ export const guiHarnessIdSchema = harnessIdSchema.extract([
   "grok",
   "droid",
   "kimi",
+  "copilot",
 ]);
 export type GuiHarnessId = z.infer<typeof guiHarnessIdSchema>;
 
@@ -127,6 +128,7 @@ export const agentFacingHarnessIdSchema = harnessIdSchema.extract([
   "grok",
   "droid",
   "kimi",
+  "copilot",
 ]);
 export type AgentFacingHarnessId = z.infer<typeof agentFacingHarnessIdSchema>;
 

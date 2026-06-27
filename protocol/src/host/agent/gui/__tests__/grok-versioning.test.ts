@@ -73,6 +73,7 @@ describe("post-v1.0 GUI harness non-breaking v2→v1 downgrade bridges", () => {
         harnessOption("grok"),
         harnessOption("kimi"),
         harnessOption("droid"),
+        harnessOption("copilot"),
         harnessOption("cursor"),
       ],
     });
@@ -100,6 +101,7 @@ describe("post-v1.0 GUI harness non-breaking v2→v1 downgrade bridges", () => {
         providerState("grok"),
         providerState("kimi"),
         providerState("droid"),
+        providerState("copilot"),
       ],
     });
 
@@ -124,6 +126,7 @@ describe("post-v1.0 GUI harness non-breaking v2→v1 downgrade bridges", () => {
         agentSummary("a-grok", "grok"),
         agentSummary("a-kimi", "kimi"),
         agentSummary("a-droid", "droid"),
+        agentSummary("a-copilot", "copilot"),
         agentSummary("a-null", null),
       ],
     });

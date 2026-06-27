@@ -4,6 +4,7 @@ import ClaudeColor from "@lobehub/icons/es/Claude/components/Color";
 import OpenCodeMono from "@lobehub/icons/es/OpenCode/components/Mono";
 import CursorMono from "@lobehub/icons/es/Cursor/components/Mono";
 import GrokMono from "@lobehub/icons/es/Grok/components/Mono";
+import GithubCopilotMono from "@lobehub/icons/es/GithubCopilot/components/Mono";
 import { Bot } from "lucide-react";
 import KimiMono from "@lobehub/icons/es/Kimi/components/Mono";
 
@@ -21,6 +22,9 @@ export const ClaudeAIIcon: HarnessIcon = (props) => <ClaudeColor {...props} />;
 export const OpenCodeIcon: HarnessIcon = (props) => <OpenCodeMono {...props} />;
 export const CursorIcon: HarnessIcon = (props) => <CursorMono {...props} />;
 export const GrokIcon: HarnessIcon = (props) => <GrokMono {...props} />;
+export const CopilotIcon: HarnessIcon = (props) => (
+  <GithubCopilotMono {...props} />
+);
 export const DroidIcon: HarnessIcon = (props) => <Bot {...props} />;
 export const KimiIcon: HarnessIcon = (props) => <KimiMono {...props} />;
 

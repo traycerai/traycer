@@ -1,6 +1,7 @@
 import {
   ClaudeAIIcon,
   CodexIcon,
+  CopilotIcon,
   CursorIcon,
   DroidIcon,
   GrokIcon,
@@ -25,4 +26,5 @@ export const PROVIDER_ICON_CONFIG: Record<ProviderId, HarnessIconConfig> = {
   grok: { Icon: GrokIcon, className: "text-foreground" },
   droid: { Icon: DroidIcon, className: "text-foreground" },
   kimi: { Icon: KimiIcon, className: "text-foreground" },
+  copilot: { Icon: CopilotIcon, className: "text-foreground" },
 };

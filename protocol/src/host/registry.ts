@@ -425,7 +425,8 @@ export const providersListDowngradeV2ToV1 = defineDowngradePath<
         (provider) =>
           provider.providerId !== "grok" &&
           provider.providerId !== "kimi" &&
-          provider.providerId !== "droid",
+          provider.providerId !== "droid" &&
+          provider.providerId !== "copilot",
       ),
     }),
   }),

@@ -361,6 +361,12 @@ const PROVIDERS: ReadonlyArray<{
     status: "Kimi account",
     capabilities: ["gui"],
   },
+  {
+    harnessId: "copilot",
+    label: "Copilot",
+    status: "GitHub Copilot",
+    capabilities: ["gui"],
+  },
 ];
 
 const PALETTE_ROWS = [
