@@ -349,6 +349,12 @@ const PROVIDERS: ReadonlyArray<{
     status: "SuperGrok / X",
     capabilities: ["gui"],
   },
+  {
+    harnessId: "copilot",
+    label: "Copilot",
+    status: "GitHub Copilot",
+    capabilities: ["gui"],
+  },
 ];
 
 const PALETTE_ROWS = [

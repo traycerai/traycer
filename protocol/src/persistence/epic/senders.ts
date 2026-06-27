@@ -135,8 +135,20 @@ export const grokChatSessionAnchorSchema = z.object({
   sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
   createdAt: z.number(),
 });
-export type GrokChatSessionAnchor = z.infer<
-  typeof grokChatSessionAnchorSchema
+export type GrokChatSessionAnchor = z.infer<typeof grokChatSessionAnchorSchema>;
+
+// Copilot (ACP) resumes at session granularity only — `session/load` reloads
+// the whole ACP session, with no per-message truncation/fork point. `sessionId`
+// is the ACP session id.
+export const copilotChatSessionAnchorSchema = z.object({
+  harnessId: z.literal("copilot"),
+  hostId: z.string(),
+  sessionId: z.string(),
+  sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
+  createdAt: z.number(),
+});
+export type CopilotChatSessionAnchor = z.infer<
+  typeof copilotChatSessionAnchorSchema
 >;
 
 export const chatSessionAnchorSchema = z.discriminatedUnion("harnessId", [
@@ -146,5 +158,6 @@ export const chatSessionAnchorSchema = z.discriminatedUnion("harnessId", [
   cursorChatSessionAnchorSchema,
   traycerChatSessionAnchorSchema,
   grokChatSessionAnchorSchema,
+  copilotChatSessionAnchorSchema,
 ]);
 export type ChatSessionAnchor = z.infer<typeof chatSessionAnchorSchema>;

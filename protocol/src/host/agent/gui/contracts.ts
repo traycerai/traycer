@@ -54,12 +54,14 @@ export const agentGuiListHarnessesDowngradeV2ToV1 = defineDowngradePath<
   from: { major: 2, minor: 0 },
   to: { major: 1, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
-  // Drop grok so a v1.0 client's strict (grok-less) decode never sees it. The
+  // Drop v2-only harnesses so a v1.0 client's strict decode never sees them. The
   // re-parse also yields the precise v1.0 type without an assertion.
   downgradeResponse: (response) => ({
     ok: true,
     value: listGuiHarnessesResponseSchemaV10.parse({
-      harnesses: response.harnesses.filter((harness) => harness.id !== "grok"),
+      harnesses: response.harnesses.filter(
+        (harness) => harness.id !== "grok" && harness.id !== "copilot",
+      ),
     }),
   }),
 });

@@ -13,10 +13,12 @@ import { useTabProvidersList } from "@/hooks/providers/use-tab-providers-list-qu
 // `traycer`, which has no provider-CLI login). Only CLI harnesses gate. Grok is
 // GUI-only (not in the TUI map) but DOES gate — its `grok login` subscription /
 // XAI_API_KEY auth surfaces as a provider, mirroring the host's
-// `harnessIdToProviderId`.
+// `harnessIdToProviderId`. Copilot follows the same shape through
+// `copilot login` / COPILOT_GITHUB_TOKEN.
 function providerIdForHarness(harnessId: GuiHarnessId): ProviderId | null {
   if (harnessId === "traycer") return null;
   if (harnessId === "grok") return "grok";
+  if (harnessId === "copilot") return "copilot";
   return TUI_HARNESS_ID_TO_PROVIDER_ID[harnessId];
 }
 
