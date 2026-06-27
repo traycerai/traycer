@@ -15,6 +15,11 @@
  * refresh mechanics - only the timing - so the reactive paths and this proactive
  * one share one rotation primitive and can't drift.
  *
+ * The delay is measured from the wall-clock `exp`, but `setTimeout` counts down
+ * in MONOTONIC time, frozen while the OS sleeps - so a session that sleeps
+ * through the TTL wakes with a dead bearer and a stale timer. `notifyResumed()`
+ * is the wake hook: it re-evaluates against the wall clock at once.
+ *
  * The scheduler is timer- and clock-injected so it is environment-agnostic
  * (`window.setTimeout` in the renderer, `setTimeout` in the CLI) and
  * deterministically testable.
@@ -46,6 +51,12 @@ export interface ProactiveRefreshScheduler {
   start(): void;
   /** Cancel any pending refresh and stop re-arming. */
   stop(): void;
+  /**
+   * Re-evaluate now (drop the sleep-frozen timer, refresh if inside the lead
+   * window, else re-arm) - call on device wake. No-op while stopped, so it is
+   * safe to call on every wake regardless of auth state.
+   */
+  notifyResumed(): void;
 }
 
 export interface ProactiveRefreshSchedulerOptions<THandle> {
@@ -147,6 +158,15 @@ export function createProactiveRefreshScheduler<THandle>(
     stop(): void {
       stopped = true;
       clearScheduled();
+    },
+    notifyResumed(): void {
+      if (stopped) {
+        return;
+      }
+      // Drop the sleep-frozen timer and re-run the fire evaluation now; the
+      // single-flight `revalidate` coalesces with any concurrent reactive refresh.
+      clearScheduled();
+      void onFire();
     },
   };
 }
