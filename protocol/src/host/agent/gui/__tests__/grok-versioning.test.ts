@@ -65,42 +65,62 @@ function providerState(providerId: string) {
   };
 }
 
-describe("grok non-breaking v2→v1 downgrade bridges", () => {
-  it("drops grok from agent.gui.listHarnesses for v1.0 callers", () => {
+describe("ACP harness non-breaking v2→v1 downgrade bridges", () => {
+  it("drops grok and kimi from agent.gui.listHarnesses for v1.0 callers", () => {
     const v2Response = listGuiHarnessesResponseSchema.parse({
-      harnesses: [harnessOption("claude"), harnessOption("grok"), harnessOption("cursor")],
+      harnesses: [
+        harnessOption("claude"),
+        harnessOption("grok"),
+        harnessOption("kimi"),
+        harnessOption("cursor"),
+      ],
     });
 
-    const result = agentGuiListHarnessesDowngradeV2ToV1.downgradeResponse(v2Response);
+    const result =
+      agentGuiListHarnessesDowngradeV2ToV1.downgradeResponse(v2Response);
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.value.harnesses.map((harness) => harness.id)).toEqual(["claude", "cursor"]);
-    // The downgraded value must satisfy the frozen grok-less v1.0 schema — i.e.
-    // a real v1.0 client's strict decode would accept it.
-    expect(() => listGuiHarnessesResponseSchemaV10.parse(result.value)).not.toThrow();
+    expect(result.value.harnesses.map((harness) => harness.id)).toEqual([
+      "claude",
+      "cursor",
+    ]);
+    // The downgraded value must satisfy the frozen v1.0 schema - i.e. a real
+    // v1.0 client's strict decode would accept it.
+    expect(() =>
+      listGuiHarnessesResponseSchemaV10.parse(result.value),
+    ).not.toThrow();
   });
 
-  it("drops grok from providers.list for v1.0 callers", () => {
+  it("drops grok and kimi from providers.list for v1.0 callers", () => {
     const v2Response = providersListResponseSchema.parse({
-      providers: [providerState("cursor"), providerState("grok")],
+      providers: [
+        providerState("cursor"),
+        providerState("grok"),
+        providerState("kimi"),
+      ],
     });
 
     const result = providersListDowngradeV2ToV1.downgradeResponse(v2Response);
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.value.providers.map((provider) => provider.providerId)).toEqual(["cursor"]);
-    expect(() => providersListResponseSchemaV10.parse(result.value)).not.toThrow();
+    expect(
+      result.value.providers.map((provider) => provider.providerId),
+    ).toEqual(["cursor"]);
+    expect(() =>
+      providersListResponseSchemaV10.parse(result.value),
+    ).not.toThrow();
   });
 
-  it("drops grok agents from agent.list for v1.0 callers", () => {
+  it("drops grok and kimi agents from agent.list for v1.0 callers", () => {
     const v2Response = listAgentsResponseSchema.parse({
       caller: { agentId: "self", canSendMessages: true },
       scope: "all",
       agents: [
         agentSummary("a-claude", "claude"),
         agentSummary("a-grok", "grok"),
+        agentSummary("a-kimi", "kimi"),
         agentSummary("a-null", null),
       ],
     });
@@ -109,8 +129,11 @@ describe("grok non-breaking v2→v1 downgrade bridges", () => {
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.value.agents.map((agent) => agent.id)).toEqual(["a-claude", "a-null"]);
-    // A real v1.0 client's strict (grok-less) decode must accept the result.
+    expect(result.value.agents.map((agent) => agent.id)).toEqual([
+      "a-claude",
+      "a-null",
+    ]);
+    // A real v1.0 client's strict decode must accept the result.
     expect(() => listAgentsResponseSchemaV10.parse(result.value)).not.toThrow();
   });
 });

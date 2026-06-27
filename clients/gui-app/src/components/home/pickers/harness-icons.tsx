@@ -4,6 +4,7 @@ import ClaudeColor from "@lobehub/icons/es/Claude/components/Color";
 import OpenCodeMono from "@lobehub/icons/es/OpenCode/components/Mono";
 import CursorMono from "@lobehub/icons/es/Cursor/components/Mono";
 import GrokMono from "@lobehub/icons/es/Grok/components/Mono";
+import KimiMono from "@lobehub/icons/es/Kimi/components/Mono";
 
 export type HarnessIcon = (props: SVGProps<SVGSVGElement>) => ReactElement;
 
@@ -19,6 +20,7 @@ export const ClaudeAIIcon: HarnessIcon = (props) => <ClaudeColor {...props} />;
 export const OpenCodeIcon: HarnessIcon = (props) => <OpenCodeMono {...props} />;
 export const CursorIcon: HarnessIcon = (props) => <CursorMono {...props} />;
 export const GrokIcon: HarnessIcon = (props) => <GrokMono {...props} />;
+export const KimiIcon: HarnessIcon = (props) => <KimiMono {...props} />;
 
 // Traycer does not have a lobehub entry — hand-rolled from the brand mark.
 export const TraycerIcon: HarnessIcon = (props) => (
