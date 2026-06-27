@@ -10,8 +10,16 @@
  * real view-model memoizes them; only `todo` / `restoreContext` change between
  * simulated tokens.
  */
-import { act, cleanup, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  render as testingRender,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { domAnimation, LazyMotion } from "motion/react";
+import type { ReactElement } from "react";
 import { create } from "zustand";
 
 // Count every render of the composer subtree by stubbing the leaf `ChatComposer`.
@@ -83,6 +91,19 @@ const useUsageProbeStore = create<UsageProbeState>()((set) => ({
   usage: USAGE_PROBE_75,
   setUsage: (usage) => set({ usage }),
 }));
+
+function render(ui: ReactElement) {
+  const result = testingRender(
+    <LazyMotion features={domAnimation}>{ui}</LazyMotion>,
+  );
+  return {
+    ...result,
+    rerender: (nextUi: ReactElement) =>
+      result.rerender(
+        <LazyMotion features={domAnimation}>{nextUi}</LazyMotion>,
+      ),
+  };
+}
 
 function UsageLeafProbe() {
   const usage = useUsageProbeStore((s) => s.usage);
@@ -223,12 +244,14 @@ describe("composer isolation from per-token dock churn", () => {
     expect(composerRenderCount).toBe(2);
   });
 
-  it("does not re-render the composer when the context usage leaf updates", () => {
+  it("does not re-render the composer when the context usage leaf updates", async () => {
     useSettingsStore.getState().setPinContextUsageBreakdown(true);
     render(<ChatLowerInteractionSurfaces {...props(TURN_IDLE, 0)} />);
     expect(composerRenderCount).toBe(1);
     expect(screen.queryByTestId("context-usage-chip")).toBeNull();
-    expect(screen.getByText("Context 75%")).toBeTruthy();
+    expect(
+      screen.getByTestId("context-usage-pinned-percent-value").textContent,
+    ).toBe("75");
     expect(screen.getByText("50K / 200K used")).toBeTruthy();
 
     act(() => {
@@ -237,7 +260,11 @@ describe("composer isolation from per-token dock churn", () => {
 
     expect(composerRenderCount).toBe(1);
     expect(screen.queryByTestId("context-usage-chip")).toBeNull();
-    expect(screen.getByText("Context 25%")).toBeTruthy();
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("context-usage-pinned-percent-value").textContent,
+      ).toBe("25");
+    });
     expect(screen.getByText("150K / 200K used")).toBeTruthy();
   });
 });

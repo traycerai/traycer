@@ -3,11 +3,19 @@ import "../../../../__tests__/test-browser-apis";
 import {
   cleanup,
   fireEvent,
-  render,
+  render as testingRender,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  domAnimation,
+  hasReducedMotionListener,
+  LazyMotion,
+  prefersReducedMotion,
+} from "motion/react";
+import type { ReactElement } from "react";
 
 import {
   buildContextUsageRows,
@@ -26,13 +34,62 @@ const RELIABLE_USAGE: TokenUsage = {
   contextWindow: 200_000,
 };
 
+const REDUCED_MOTION_QUERY = "(prefers-reduced-motion)";
+const defaultMatchMedia = window.matchMedia;
+
 function percentLeft(usage: TokenUsage | null): number | null {
   return computeEffectiveContextUsage(usage)?.percentLeft ?? null;
+}
+
+function render(ui: ReactElement) {
+  const result = testingRender(
+    <LazyMotion features={domAnimation}>{ui}</LazyMotion>,
+  );
+  return {
+    ...result,
+    rerender: (nextUi: ReactElement) =>
+      result.rerender(
+        <LazyMotion features={domAnimation}>{nextUi}</LazyMotion>,
+      ),
+  };
+}
+
+function resetMotionReducedMotionPreference(): void {
+  prefersReducedMotion.current = null;
+  hasReducedMotionListener.current = false;
+}
+
+function restoreDefaultMatchMedia(): void {
+  Object.defineProperty(window, "matchMedia", {
+    configurable: true,
+    writable: true,
+    value: defaultMatchMedia,
+  });
+}
+
+function installReducedMotionPreference(matches: boolean): void {
+  Object.defineProperty(window, "matchMedia", {
+    configurable: true,
+    writable: true,
+    value: (query: string) => ({
+      matches: query === REDUCED_MOTION_QUERY ? matches : false,
+      media: query,
+      onchange: null,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+      addListener: () => undefined,
+      removeListener: () => undefined,
+      dispatchEvent: () => false,
+    }),
+  });
+  resetMotionReducedMotionPreference();
 }
 
 function resetContextUsageSettings(): void {
   window.localStorage.clear();
   useSettingsStore.setState({ pinContextUsageBreakdown: false });
+  restoreDefaultMatchMedia();
+  resetMotionReducedMotionPreference();
 }
 
 beforeEach(resetContextUsageSettings);
@@ -222,6 +279,9 @@ describe("ContextUsageChip", () => {
       name: /Context window 75% left/,
     });
     expect(button.textContent).toBe("75% context left");
+    expect(screen.queryByTestId("context-usage-pinned-percent-value")).toBe(
+      null,
+    );
     expect(
       screen
         .getByTestId("context-usage-meter")
@@ -351,9 +411,33 @@ describe("ContextUsageChip", () => {
     expect(screen.queryByTestId("context-usage-chip")).toBeNull();
 
     const strip = screen.getByTestId("context-usage-pinned-strip");
-    expect(within(strip).getByText("Context 75%")).toBeTruthy();
+    expect(
+      within(strip).getByTestId("context-usage-pinned-primary").textContent,
+    ).toMatch(/Context\s+75%/);
+    expect(
+      within(strip).getByTestId("context-usage-pinned-percent-value")
+        .textContent,
+    ).toBe("75");
     expect(within(strip).getByText("50K / 200K")).toBeTruthy();
     expect(within(strip).getByText("1.0k")).toBeTruthy();
+  });
+
+  it("keeps detailed popover values on the static text path", async () => {
+    render(<ContextUsageChip usage={RELIABLE_USAGE} />);
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: /Context window 75% left/,
+      }),
+    );
+
+    expect(await screen.findByText("Context window")).toBeTruthy();
+    expect(screen.getByText("75% left")).toBeTruthy();
+    expect(screen.getByText("50K / 200K")).toBeTruthy();
+    expect(screen.getByText("1.0k")).toBeTruthy();
+    expect(screen.queryByTestId("context-usage-pinned-percent-value")).toBe(
+      null,
+    );
   });
 
   it("keeps the pinned strip hidden when the setting is enabled without reliable usage", () => {
@@ -420,7 +504,7 @@ describe("ContextUsageChip", () => {
     expect(within(strip).getByText("Output")).toBeTruthy();
   });
 
-  it("updates the pinned strip from the same usage value", () => {
+  it("updates the pinned strip from the same usage value", async () => {
     useSettingsStore.getState().setPinContextUsageBreakdown(true);
     const { rerender } = render(<ContextUsageChip usage={RELIABLE_USAGE} />);
 
@@ -440,9 +524,39 @@ describe("ContextUsageChip", () => {
     );
 
     expect(screen.queryByTestId("context-usage-chip")).toBeNull();
-    expect(screen.getByText("Context 25%")).toBeTruthy();
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("context-usage-pinned-percent-value").textContent,
+      ).toBe("25");
+    });
     expect(screen.getByText("150K / 200K used")).toBeTruthy();
     expect(screen.queryByText("50K / 200K used")).toBeNull();
+  });
+
+  it("updates the pinned percent instantly when reduced motion is requested", () => {
+    installReducedMotionPreference(true);
+    useSettingsStore.getState().setPinContextUsageBreakdown(true);
+    const { rerender } = render(<ContextUsageChip usage={RELIABLE_USAGE} />);
+
+    expect(
+      screen.getByTestId("context-usage-pinned-percent-value").textContent,
+    ).toBe("75");
+
+    rerender(
+      <ContextUsageChip
+        usage={{
+          inputTokens: 150_000,
+          outputTokens: 2_000,
+          totalTokens: 152_000,
+          contextTokens: 150_000,
+          contextWindow: 200_000,
+        }}
+      />,
+    );
+
+    expect(
+      screen.getByTestId("context-usage-pinned-percent-value").textContent,
+    ).toBe("25");
   });
 
   it("marks the pinned strip summary and details with container-query collapse classes", () => {

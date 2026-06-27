@@ -1,5 +1,12 @@
 import { useLayoutEffect, useRef, type CSSProperties, type Ref } from "react";
 import { Pin, PinOff } from "lucide-react";
+import {
+  animate,
+  useMotionValue,
+  useReducedMotion,
+  useTransform,
+} from "motion/react";
+import * as m from "motion/react-m";
 import type { TokenUsage } from "@traycer/protocol/persistence/epic/foundation";
 import { Button } from "@/components/ui/button";
 import {
@@ -31,6 +38,11 @@ interface ContextUsageChipProps {
 type ContextUsageMeterStyle = CSSProperties & {
   readonly "--context-usage-percent": string;
 };
+
+const PINNED_NUMBER_TRANSITION = {
+  duration: 0.16,
+  ease: "easeOut",
+} as const;
 
 export function ContextUsageChip({ usage }: ContextUsageChipProps) {
   const preserveFocusOnOpenRef = useRef(false);
@@ -212,12 +224,19 @@ function ContextUsagePinnedStrip({
       <div className="flex min-w-0 items-center justify-between gap-2">
         <div className="flex min-w-0 flex-1 items-baseline gap-3">
           <span
+            data-testid="context-usage-pinned-primary"
             className={cn(
               "shrink-0 font-medium whitespace-nowrap",
               contextUsageTone(effective.percentLeft),
             )}
           >
-            Context {effective.percentLeft}%
+            Context{" "}
+            <AnimatedPinnedInteger
+              value={effective.percentLeft}
+              testId="context-usage-pinned-percent-value"
+              className="inline-block min-w-[3ch] text-right tabular-nums"
+            />
+            %
             <span className="@max-[34rem]:sr-only"> left</span>
           </span>
           <span
@@ -276,6 +295,48 @@ function PinnedUsageRow({ row }: UsageRowProps) {
         {formatContextUsageRowValue(row)}
       </span>
     </span>
+  );
+}
+
+interface AnimatedPinnedIntegerProps {
+  readonly value: number;
+  readonly testId: string;
+  readonly className: string;
+}
+
+function AnimatedPinnedInteger({
+  value,
+  testId,
+  className,
+}: AnimatedPinnedIntegerProps) {
+  const shouldReduceMotion = useReducedMotion() === true;
+  const animatedValue = useMotionValue(value);
+  const roundedValue = useTransform(animatedValue, (latest) =>
+    Math.round(latest).toString(),
+  );
+
+  useLayoutEffect(() => {
+    if (shouldReduceMotion) {
+      animatedValue.set(value);
+      return;
+    }
+
+    const controls = animate(animatedValue, value, PINNED_NUMBER_TRANSITION);
+    return () => controls.stop();
+  }, [animatedValue, shouldReduceMotion, value]);
+
+  if (shouldReduceMotion) {
+    return (
+      <span data-testid={testId} className={className}>
+        {value}
+      </span>
+    );
+  }
+
+  return (
+    <m.span data-testid={testId} className={className}>
+      {roundedValue}
+    </m.span>
   );
 }
 
