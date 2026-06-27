@@ -46,7 +46,6 @@ export function HarnessModelTrigger(props: HarnessModelTriggerProps) {
     <ToolbarPillButton
       ref={ref}
       aria-label={summary}
-      title={summary}
       disabled={disabled}
       className="max-w-[min(50cqw,18rem)] min-w-0 justify-start disabled:cursor-not-allowed disabled:opacity-50 @max-lg:size-8 @max-lg:justify-center @max-lg:px-0"
       {...rest}

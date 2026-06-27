@@ -451,6 +451,7 @@ function pickerHarness(input: RenderPickerInput | undefined): PickerHarness {
           tuiOnly={resolvedInput.tuiOnly ?? false}
           lockedHarnessId={resolvedInput.lockedHarnessId ?? null}
           disabled={disabled}
+          registerActivation={false}
         />
       </TooltipProvider>
     </SurfaceActivityProvider>

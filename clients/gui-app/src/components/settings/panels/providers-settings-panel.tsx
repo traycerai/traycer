@@ -90,6 +90,7 @@ function initialActiveProviderId(
 // the provider's dashboard.
 const API_KEY_DASHBOARD_URL: Partial<Record<ProviderId, string>> = {
   cursor: "https://cursor.com/dashboard/api?section=user-keys#user-api-keys",
+  droid: "https://app.factory.ai/settings/api-keys",
 };
 
 const PROVIDER_DESCRIPTIONS: Record<ProviderId, string> = {
@@ -100,6 +101,11 @@ const PROVIDER_DESCRIPTIONS: Record<ProviderId, string> = {
     "Cursor agent - SDK-driven chats authenticated with your Cursor API key.",
   traycer: "Traycer's managed harness uses the selected OpenCode CLI binary.",
   grok: "Grok agent - xAI's coding CLI via your SuperGrok / X subscription.",
+  droid:
+    "Droid agent - Factory's coding CLI via your Factory account or API key.",
+  kimi: "Kimi agent - MoonshotAI's coding CLI via your Kimi account.",
+  copilot:
+    "GitHub Copilot CLI agent via your active Copilot subscription or policy.",
   kilocode: "Kilo Code CLI agent via Kilo login or configured providers.",
 };
 
@@ -123,6 +129,9 @@ function terminalAgentArgsPlaceholder(providerId: ProviderId): string {
     case "cursor":
     case "traycer":
     case "grok":
+    case "copilot":
+    case "droid":
+    case "kimi":
     case "kilocode":
       return "CLI arguments (optional)";
   }
@@ -135,6 +144,9 @@ const HARNESS_ICON_ID: Record<ProviderId, HarnessIconId> = {
   cursor: "cursor",
   traycer: "traycer",
   grok: "grok",
+  droid: "droid",
+  kimi: "kimi",
+  copilot: "copilot",
   kilocode: "kilocode",
 };
 
@@ -734,6 +746,12 @@ function envNamePlaceholder(providerId: ProviderId): string {
       return "CURSOR_API_KEY";
     case "grok":
       return "XAI_API_KEY";
+    case "droid":
+      return "FACTORY_API_KEY";
+    case "kimi":
+      return "KIMI_API_KEY";
+    case "copilot":
+      return "COPILOT_GITHUB_TOKEN";
     case "kilocode":
       return "KILO_API_KEY";
   }
@@ -869,7 +887,7 @@ function ApiKeySection({ state }: { readonly state: ProviderCliState }) {
           placeholder={
             state.apiKey.source === "stored"
               ? "Replace stored key…"
-              : "Paste your Cursor API key"
+              : `Paste your ${PROVIDER_DISPLAY_NAMES[providerId]} API key`
           }
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
@@ -903,8 +921,8 @@ function ApiKeySection({ state }: { readonly state: ProviderCliState }) {
       </div>
       <p className="text-ui-xs text-muted-foreground">
         {state.apiKey.source === "env"
-          ? "Using CURSOR_API_KEY from your shell environment. Save a key here to override it."
-          : "Stored encrypted on this device. Falls back to CURSOR_API_KEY from your shell when unset."}
+          ? `Using ${envNamePlaceholder(providerId)} from your shell environment. Save a key here to override it.`
+          : `Stored encrypted on this device. Falls back to ${envNamePlaceholder(providerId)} from your shell when unset.`}
       </p>
     </div>
   );
