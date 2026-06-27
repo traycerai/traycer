@@ -32,6 +32,7 @@ import {
   type TuiAgentPlacement,
 } from "@/hooks/agent/use-create-tui-agent";
 import { useComposerDictation } from "@/hooks/composer/use-composer-dictation";
+import { useLeaderScopeAbsorber } from "@/hooks/keybindings/use-leader-scope-absorber";
 import { useComposerPaste } from "@/hooks/composer/use-composer-paste";
 import {
   mentionRootsFromWorktreeIntent,
@@ -46,6 +47,7 @@ import {
 } from "@/hooks/worktree/use-latest-conversation-workspace-seed";
 import { useEpicStore } from "@/hooks/use-epic-store";
 import { useHostClient } from "@/lib/host";
+import { LEADER_SCOPE_NEW_CONVERSATION_MODAL } from "@/lib/keybindings/leader-scope";
 import {
   useEpicConnectionStatus,
   useEpicPermissionRole,
@@ -248,11 +250,19 @@ function NewConversationModalDialog(props: {
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
 }) {
+  // Opt this modal out of the keybinding provider's dialog block so the nested
+  // model picker's ⌘/⌥ leader-digit shortcuts and hints fire while it's open
+  // (see `isAnyDialogOpen` in keybinding-provider.tsx). The modal owns no leader
+  // shortcuts itself, so an absorber scope claims both leaders while open -
+  // closed-picker leader digits are swallowed here instead of switching the
+  // tabs behind the modal, and the picker's own scope layers on top when open.
+  useLeaderScopeAbsorber(props.open, LEADER_SCOPE_NEW_CONVERSATION_MODAL);
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
       <DialogContent
         className="w-[min(92vw,48rem)] max-w-[min(92vw,48rem)] gap-3 p-4 sm:max-w-[min(92vw,48rem)]"
         data-testid="epic-sidebar-new-conversation-modal"
+        data-leader-scope={LEADER_SCOPE_NEW_CONVERSATION_MODAL}
         showCloseButton={false}
       >
         <DialogClose asChild>
