@@ -19,6 +19,7 @@ export const providerIdSchema = z.enum([
   "cursor",
   "traycer",
   "grok",
+  "qwen",
 ]);
 export type ProviderId = z.infer<typeof providerIdSchema>;
 
@@ -45,6 +46,7 @@ export const PROVIDER_DISPLAY_NAMES: Record<ProviderId, string> = {
   cursor: "Cursor",
   traycer: "Traycer",
   grok: "Grok",
+  qwen: "Qwen Code",
 };
 
 /**
@@ -177,7 +179,9 @@ export const providerLoginCapabilitySchema = z.object({
    */
   token: z.object({ vars: z.array(z.string()) }).nullable(),
 });
-export type ProviderLoginCapability = z.infer<typeof providerLoginCapabilitySchema>;
+export type ProviderLoginCapability = z.infer<
+  typeof providerLoginCapabilitySchema
+>;
 
 export const providerCliStateSchema = z.object({
   providerId: providerIdSchema,
@@ -221,7 +225,9 @@ export const providerCliStateSchemaV10 = providerCliStateSchema.extend({
 export const providersListResponseSchemaV10 = z.object({
   providers: z.array(providerCliStateSchemaV10),
 });
-export type ProvidersListResponseV10 = z.infer<typeof providersListResponseSchemaV10>;
+export type ProvidersListResponseV10 = z.infer<
+  typeof providersListResponseSchemaV10
+>;
 
 export const providersSetSelectionRequestSchema = z.object({
   providerId: providerIdSchema,
