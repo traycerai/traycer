@@ -20,7 +20,6 @@ import {
   agentSendMessageV10,
   agentStopV10,
 } from "@traycer/protocol/host/agent/contracts";
-import { isPostV1GuiHarnessId } from "@traycer/protocol/host/agent/post-v1-gui-harnesses";
 import {
   agentInboxReadV10,
   agentInboxSubscribeV10,
@@ -186,6 +185,7 @@ import {
   providersListRequestSchema,
   providersListResponseSchema,
   providersListResponseSchemaV10,
+  providerCliStateSchemaV10,
   providersRemoveCustomPathRequestSchema,
   providersRemoveCustomPathResponseSchema,
   providersSetApiKeyRequestSchema,
@@ -423,7 +423,7 @@ export const providersListDowngradeV2ToV1 = defineDowngradePath<
     ok: true,
     value: providersListResponseSchemaV10.parse({
       providers: response.providers.filter(
-        (provider) => !isPostV1GuiHarnessId(provider.providerId),
+        (provider) => providerCliStateSchemaV10.safeParse(provider).success,
       ),
     }),
   }),

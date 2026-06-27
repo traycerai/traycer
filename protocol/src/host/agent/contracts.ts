@@ -23,12 +23,12 @@ import {
   listAgentsRequestSchema,
   listAgentsResponseSchema,
   listAgentsResponseSchemaV10,
+  agentSummarySchemaV10,
   sendAgentMessageRequestSchema,
   sendAgentMessageResponseSchema,
   stopAgentRequestSchema,
   stopAgentResponseSchema,
 } from "@traycer/protocol/host/agent/shared";
-import { isPostV1GuiHarnessId } from "@traycer/protocol/host/agent/post-v1-gui-harnesses";
 
 // ─── Agent-to-agent unary surface ─────────────────────────────────────────
 //
@@ -134,7 +134,7 @@ export const agentListDowngradeV2ToV1 = defineDowngradePath<
     value: listAgentsResponseSchemaV10.parse({
       ...response,
       agents: response.agents.filter(
-        (agent) => !isPostV1GuiHarnessId(agent.harnessId),
+        (agent) => agentSummarySchemaV10.safeParse(agent).success,
       ),
     }),
   }),
