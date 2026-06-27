@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   interviewBlockId,
   isClaudeInterviewToolName,
+  isGeminiInterviewToolName,
   isKnownInterviewDisplayToolName,
   isKnownInterviewToolName,
   isOpenCodeInterviewToolName,
@@ -25,9 +26,21 @@ describe("interview tool helpers", () => {
     expect(isOpenCodeInterviewToolName("Question")).toBe(false);
     expect(isOpenCodeInterviewToolName("AskUserQuestion")).toBe(false);
 
+    expect(isGeminiInterviewToolName("mcp_traycer_interview_ask_user")).toBe(
+      true,
+    );
+    expect(isGeminiInterviewToolName("ask_user")).toBe(true);
+    expect(isGeminiInterviewToolName("Ask User")).toBe(false);
+
     expect(isKnownInterviewToolName("request_user_input")).toBe(true);
+    expect(isKnownInterviewToolName("mcp_traycer_interview_ask_user")).toBe(
+      true,
+    );
     expect(isKnownInterviewToolName("Question")).toBe(false);
     expect(isKnownInterviewDisplayToolName("Question")).toBe(true);
+    expect(
+      isKnownInterviewDisplayToolName("MCP Traycer Interview Ask User"),
+    ).toBe(true);
     expect(isKnownInterviewToolName("Read")).toBe(false);
   });
 });
