@@ -46,6 +46,9 @@ function isPaletteEligible(meta: ActionMeta): boolean {
   if (meta.id === "app.palette.open") return false;
   // No dispatchAction handler; handled by the capture-phase dictation hook.
   if (meta.id === "composer.dictation.toggle") return false;
+  // The composer source emits a context-gated "Change model…" entry (with the
+  // active model as its subtitle); a second generic row here would duplicate it.
+  if (meta.id === "composer.model-picker.toggle") return false;
   return true;
 }
 
