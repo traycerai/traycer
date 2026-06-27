@@ -15,6 +15,7 @@ import {
   listGuiHarnessesResponseSchemaV10,
 } from "@traycer/protocol/host/agent/gui/unary-schemas";
 import { chatSubscribeV10 } from "@traycer/protocol/host/agent/gui/subscribe";
+import { isPostV1GuiHarnessId } from "@traycer/protocol/host/agent/post-v1-gui-harnesses";
 
 // ─── GUI-surface catalog (`agent.gui.*`) ──────────────────────────────────
 
@@ -62,12 +63,7 @@ export const agentGuiListHarnessesDowngradeV2ToV1 = defineDowngradePath<
     ok: true,
     value: listGuiHarnessesResponseSchemaV10.parse({
       harnesses: response.harnesses.filter(
-        (harness) =>
-          harness.id !== "grok" &&
-          harness.id !== "kimi" &&
-          harness.id !== "droid" &&
-          harness.id !== "copilot" &&
-          harness.id !== "kilocode",
+        (harness) => !isPostV1GuiHarnessId(harness.id),
       ),
     }),
   }),
