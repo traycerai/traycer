@@ -68,5 +68,8 @@ export function toggleActiveModelPicker(): boolean {
  */
 export function resetActiveModelPickerForTests(): void {
   stack.length = 0;
-  notify();
+  // Wipe subscribers too, so a test that subscribed without disposing can't
+  // keep firing into the next test. Clearing the set makes `notify()` a no-op,
+  // so there is nothing left to notify.
+  listeners.clear();
 }

@@ -5,6 +5,10 @@ import {
   registerFocusedComposerControls,
   resetFocusedComposerControlsForTests,
 } from "@/lib/commands/composer-controls-registry";
+import {
+  registerActiveModelPicker,
+  resetActiveModelPickerForTests,
+} from "@/lib/commands/active-model-picker-registry";
 import { composerSource } from "@/lib/commands/sources/composer.source";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -148,6 +152,7 @@ describe("composerSource", () => {
     latestConversationWorkspaceSeedMock.seed = null;
     resetCanvasStore();
     resetFocusedComposerControlsForTests();
+    resetActiveModelPickerForTests();
     useNewConversationModalOpenStore.getState().close();
     useNewConversationModalStore.getState().resetForTests();
   });
@@ -158,6 +163,7 @@ describe("composerSource", () => {
     latestConversationWorkspaceSeedMock.seed = null;
     resetCanvasStore();
     resetFocusedComposerControlsForTests();
+    resetActiveModelPickerForTests();
     useNewConversationModalOpenStore.getState().close();
     useNewConversationModalStore.getState().resetForTests();
   });
@@ -181,6 +187,37 @@ describe("composerSource", () => {
     // entry was removed alongside the dormant DeviceStore.
     expect(ids).not.toContain("composer:select-pc");
     expect(ids).not.toContain("composer:new-chat:replace");
+  });
+
+  it("hides Change model… when no picker is registered", () => {
+    // A focused composer with no active picker (e.g. locked/pending) registers
+    // its controls but not a picker, so the toggle would no-op.
+    registerFocusedComposerControls("landing", {
+      setSelection: () => undefined,
+      setReasoning: () => undefined,
+      setServiceTier: () => undefined,
+      setPermission: () => undefined,
+    });
+    const ids = captureItems(null, "landing").map((i) => i.id);
+    expect(ids).not.toContain("composer:open-model-picker");
+  });
+
+  it("shows Change model… with the active selection when a picker is registered", () => {
+    registerFocusedComposerControls("landing", {
+      setSelection: () => undefined,
+      setReasoning: () => undefined,
+      setServiceTier: () => undefined,
+      setPermission: () => undefined,
+    });
+    registerActiveModelPicker({
+      toggle: () => undefined,
+      getSelectionSummary: () => "Claude Opus 4.8",
+    });
+    const item = captureItems(null, "landing").find(
+      (i) => i.id === "composer:open-model-picker",
+    );
+    expect(item).not.toBeUndefined();
+    expect(item?.description).toBe("Claude Opus 4.8");
   });
 
   it("chat-tile composer with an active epic shows the new-chat + terminal items; no Select PC", () => {

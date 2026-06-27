@@ -27,7 +27,10 @@ import {
 } from "@/components/home/data/landing-options";
 import { useGuiHarnessCatalog } from "@/hooks/harnesses/use-gui-harness-catalog";
 import { getFocusedComposerControls } from "@/lib/commands/composer-controls-registry";
-import { getActiveModelPicker } from "@/lib/commands/active-model-picker-registry";
+import {
+  getActiveModelPicker,
+  subscribeActiveModelPicker,
+} from "@/lib/commands/active-model-picker-registry";
 import type {
   CommandContext,
   CommandItem,
@@ -40,9 +43,13 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
-import { useMemo } from "react";
+import { useMemo, useSyncExternalStore } from "react";
 
 const NO_ITEMS: ReadonlyArray<CommandItem> = [];
+
+function getHasActiveModelPicker(): boolean {
+  return getActiveModelPicker() !== null;
+}
 
 function useComposerItems(ctx: CommandContext): ReadonlyArray<CommandItem> {
   const kind = ctx.focusedComposerKind;
@@ -51,6 +58,16 @@ function useComposerItems(ctx: CommandContext): ReadonlyArray<CommandItem> {
   const modelPickerShortcut = useKeybindingStore(
     (state) => state.bindings["composer.model-picker.toggle"],
   );
+  // Live read of whether a composer picker is actually registered. The
+  // "Change model…" row dispatches `composer.model-picker.toggle`, which no-ops
+  // on an empty stack - a locked/pending composer registers its focused-composer
+  // controls (so `kind` is set) but not a picker - so gate the row on a live
+  // registry read to keep a dead command out of the palette.
+  const hasActiveModelPicker = useSyncExternalStore(
+    subscribeActiveModelPicker,
+    getHasActiveModelPicker,
+    getHasActiveModelPicker,
+  );
 
   // Provider/model leaves fetch live host data only when their sub-pages
   // render, so opening the top-level palette does not eagerly hit SDKs.
@@ -58,7 +75,9 @@ function useComposerItems(ctx: CommandContext): ReadonlyArray<CommandItem> {
   return useMemo<ReadonlyArray<CommandItem>>(() => {
     if (kind === null) return NO_ITEMS;
     const items: Array<CommandItem> = [];
-    items.push(buildChangeModelItem(modelPickerShortcut ?? null));
+    if (hasActiveModelPicker) {
+      items.push(buildChangeModelItem(modelPickerShortcut ?? null));
+    }
     items.push(buildSwitchProviderItem());
     items.push(buildSwitchModelItem());
     if (
@@ -74,7 +93,13 @@ function useComposerItems(ctx: CommandContext): ReadonlyArray<CommandItem> {
       items.push(buildNewTerminalAgentItem({ epicId, tabId }));
     }
     return items;
-  }, [kind, ctx.activeEpicId, ctx.activeTabId, modelPickerShortcut]);
+  }, [
+    kind,
+    ctx.activeEpicId,
+    ctx.activeTabId,
+    modelPickerShortcut,
+    hasActiveModelPicker,
+  ]);
 }
 
 export const composerSource: ReactCommandSource = {

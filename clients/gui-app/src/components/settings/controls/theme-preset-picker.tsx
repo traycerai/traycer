@@ -63,7 +63,11 @@ export function ThemePresetPicker(props: ThemePresetPickerProps) {
         className="w-[min(85vw,17rem)] overflow-hidden p-0"
       >
         <Command className="rounded-none bg-transparent p-0">
-          <CommandInput placeholder="Search presets…" spellCheck={false} />
+          <CommandInput
+            aria-label="Search theme presets"
+            placeholder="Search presets…"
+            spellCheck={false}
+          />
           <CommandList className="max-h-[min(50vh,18rem)] p-1">
             <CommandEmpty>No matching presets.</CommandEmpty>
             {THEME_PRESETS.map((preset) => (

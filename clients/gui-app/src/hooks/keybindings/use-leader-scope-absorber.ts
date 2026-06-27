@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useLayoutEffect } from "react";
 import { registerLeaderScope } from "@/lib/keybindings/leader-scope";
 
 /**
@@ -15,7 +15,13 @@ import { registerLeaderScope } from "@/lib/keybindings/leader-scope";
  * sits ABOVE this absorber and reclaims the modifiers while it is open.
  */
 export function useLeaderScopeAbsorber(open: boolean, scopeId: string): void {
-  useEffect(() => {
+  // `useLayoutEffect`, not `useEffect`: the modal exposes `data-leader-scope`
+  // the moment it renders, which makes it transparent to `isAnyDialogOpen()`.
+  // Registering after paint would leave a frame on open where leader digits
+  // reach the base tab scopes behind the modal (and a matching frame on close
+  // where the absorber outlives the dialog). Installing the scope before paint
+  // closes both windows. gui-app is browser-only, so no SSR guard is needed.
+  useLayoutEffect(() => {
     if (!open) return;
     return registerLeaderScope({
       id: scopeId,
