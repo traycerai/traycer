@@ -1,6 +1,6 @@
 import "../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render } from "@testing-library/react";
+import { act, cleanup, render } from "@testing-library/react";
 import {
   registerFocusedComposerControls,
   resetFocusedComposerControlsForTests,
@@ -218,6 +218,39 @@ describe("composerSource", () => {
     );
     expect(item).not.toBeUndefined();
     expect(item?.description).toBe("Claude Opus 4.8");
+  });
+
+  it("refreshes the Change model… summary when the top picker is swapped", () => {
+    registerFocusedComposerControls("landing", {
+      setSelection: () => undefined,
+      setReasoning: () => undefined,
+      setServiceTier: () => undefined,
+      setPermission: () => undefined,
+    });
+    registerActiveModelPicker({
+      toggle: () => undefined,
+      getSelectionSummary: () => "base",
+    });
+
+    let captured: ReadonlyArray<CommandItem> = [];
+    function Probe() {
+      captured = composerSource.useItems(ctx(null, "landing"));
+      return null;
+    }
+    render(<Probe />);
+    const description = () =>
+      captured.find((i) => i.id === "composer:open-model-picker")?.description;
+    expect(description()).toBe("base");
+
+    // Push an overlay picker on top (non-empty -> non-empty): the snapshot is
+    // the controller itself, so the row re-renders and the summary follows.
+    act(() => {
+      registerActiveModelPicker({
+        toggle: () => undefined,
+        getSelectionSummary: () => "overlay",
+      });
+    });
+    expect(description()).toBe("overlay");
   });
 
   it("chat-tile composer with an active epic shows the new-chat + terminal items; no Select PC", () => {

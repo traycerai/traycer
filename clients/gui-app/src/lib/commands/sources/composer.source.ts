@@ -47,10 +47,6 @@ import { useMemo, useSyncExternalStore } from "react";
 
 const NO_ITEMS: ReadonlyArray<CommandItem> = [];
 
-function getHasActiveModelPicker(): boolean {
-  return getActiveModelPicker() !== null;
-}
-
 function useComposerItems(ctx: CommandContext): ReadonlyArray<CommandItem> {
   const kind = ctx.focusedComposerKind;
   // Live binding so rebinding ⌃⌥M / Alt+Shift+M updates the palette's shortcut
@@ -58,15 +54,20 @@ function useComposerItems(ctx: CommandContext): ReadonlyArray<CommandItem> {
   const modelPickerShortcut = useKeybindingStore(
     (state) => state.bindings["composer.model-picker.toggle"],
   );
-  // Live read of whether a composer picker is actually registered. The
-  // "Change model…" row dispatches `composer.model-picker.toggle`, which no-ops
-  // on an empty stack - a locked/pending composer registers its focused-composer
-  // controls (so `kind` is set) but not a picker - so gate the row on a live
-  // registry read to keep a dead command out of the palette.
-  const hasActiveModelPicker = useSyncExternalStore(
+  // Live snapshot of the active composer picker - the top-of-stack controller,
+  // or null. The "Change model…" row dispatches `composer.model-picker.toggle`,
+  // which no-ops on an empty stack (a locked/pending composer registers its
+  // focused-composer controls, so `kind` is set, but not a picker), so the row
+  // is gated on this being non-null. Snapshotting the controller itself rather
+  // than a collapsed boolean also re-renders when the top controller is swapped
+  // while the stack stays non-empty, keeping the row's selection summary fresh.
+  // The registered controller is ref-stable (parked behind a ref in
+  // `useRegisterActiveModelPicker`), so the snapshot stays referentially stable
+  // while the same picker is on top and `useSyncExternalStore` won't loop.
+  const activeModelPicker = useSyncExternalStore(
     subscribeActiveModelPicker,
-    getHasActiveModelPicker,
-    getHasActiveModelPicker,
+    getActiveModelPicker,
+    getActiveModelPicker,
   );
 
   // Provider/model leaves fetch live host data only when their sub-pages
@@ -75,8 +76,13 @@ function useComposerItems(ctx: CommandContext): ReadonlyArray<CommandItem> {
   return useMemo<ReadonlyArray<CommandItem>>(() => {
     if (kind === null) return NO_ITEMS;
     const items: Array<CommandItem> = [];
-    if (hasActiveModelPicker) {
-      items.push(buildChangeModelItem(modelPickerShortcut ?? null));
+    if (activeModelPicker !== null) {
+      items.push(
+        buildChangeModelItem(
+          modelPickerShortcut ?? null,
+          activeModelPicker.getSelectionSummary(),
+        ),
+      );
     }
     items.push(buildSwitchProviderItem());
     items.push(buildSwitchModelItem());
@@ -98,7 +104,7 @@ function useComposerItems(ctx: CommandContext): ReadonlyArray<CommandItem> {
     ctx.activeEpicId,
     ctx.activeTabId,
     modelPickerShortcut,
-    hasActiveModelPicker,
+    activeModelPicker,
   ]);
 }
 
@@ -114,12 +120,15 @@ export const composerSource: ReactCommandSource = {
 // Opens the picker popover via the centrally-dispatched
 // `composer.model-picker.toggle` action (so the palette and the shortcut stay in
 // lockstep). The subtitle reflects the active composer's current selection,
-// read once at build time from the active-picker registry.
-function buildChangeModelItem(shortcut: ChordString | null): CommandItem {
+// passed in from the snapshotted active picker so it tracks controller swaps.
+function buildChangeModelItem(
+  shortcut: ChordString | null,
+  description: string | null,
+): CommandItem {
   return {
     id: "composer:open-model-picker",
     label: "Change model…",
-    description: getActiveModelPicker()?.getSelectionSummary() ?? null,
+    description,
     keywords: ["model", "change", "picker", "harness", "provider", "reasoning"],
     group: "suggested",
     scope: "actions",
