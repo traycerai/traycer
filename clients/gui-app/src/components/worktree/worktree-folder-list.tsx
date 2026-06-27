@@ -28,10 +28,18 @@ export interface WorktreeFolderListProps {
   readonly secondaryLabel: (row: WorktreeBindingSelectorRow) => string;
   readonly disabledLabel: (row: WorktreeBindingSelectorRow) => string | null;
   readonly onSelect: (row: WorktreeBindingSelectorRow) => void;
+  /**
+   * Focus the search input when the list mounts. Because the list mounts only
+   * after the bindings query resolves, this grabs focus even when the list
+   * appears *after* the popover opens. cmdk then owns arrow-key navigation and
+   * Enter-to-select while focus stays in the input.
+   */
+  readonly autoFocusSearch: boolean;
 }
 
 export function WorktreeFolderList(props: WorktreeFolderListProps): ReactNode {
   const selectedRowContentRef = useRef<HTMLDivElement | null>(null);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
   const selectedRowKey =
     props.selectedRow === null ? null : worktreeRowKey(props.selectedRow);
 
@@ -43,6 +51,15 @@ export function WorktreeFolderList(props: WorktreeFolderListProps): ReactNode {
     });
   }, [selectedRowKey]);
 
+  // Imperative focus (not the `autoFocus` JSX prop, which jsx-a11y forbids) on
+  // mount. Since the list only mounts once bindings resolve, this also focuses
+  // the input when the list appears *after* the popover opens.
+  const { autoFocusSearch } = props;
+  useEffect(() => {
+    if (!autoFocusSearch) return;
+    searchInputRef.current?.focus();
+  }, [autoFocusSearch]);
+
   return (
     <section
       aria-label="Workspaces"
@@ -53,7 +70,10 @@ export function WorktreeFolderList(props: WorktreeFolderListProps): ReactNode {
         Workspaces
       </DropdownMenuLabel>
       <Command className="rounded-none bg-transparent p-0">
-        <CommandInput placeholder="Search repo, branch, or path…" />
+        <CommandInput
+          ref={searchInputRef}
+          placeholder="Search repo, branch, or path…"
+        />
         <CommandList>
           <CommandEmpty>No worktrees found.</CommandEmpty>
           <CommandGroup>

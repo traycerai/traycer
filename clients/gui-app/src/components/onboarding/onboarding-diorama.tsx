@@ -349,6 +349,18 @@ const PROVIDERS: ReadonlyArray<{
     status: "SuperGrok / X",
     capabilities: ["gui"],
   },
+  {
+    harnessId: "droid",
+    label: "Droid",
+    status: "Factory account",
+    capabilities: ["gui"],
+  },
+  {
+    harnessId: "kimi",
+    label: "Kimi",
+    status: "Kimi account",
+    capabilities: ["gui"],
+  },
 ];
 
 const PALETTE_ROWS = [

@@ -2,7 +2,9 @@ import {
   ClaudeAIIcon,
   CodexIcon,
   CursorIcon,
+  DroidIcon,
   GrokIcon,
+  KimiIcon,
   OpenCodeIcon,
   TraycerIcon,
   type HarnessIcon,
@@ -21,4 +23,6 @@ export const PROVIDER_ICON_CONFIG: Record<ProviderId, HarnessIconConfig> = {
   traycer: { Icon: TraycerIcon, className: "text-foreground" },
   cursor: { Icon: CursorIcon, className: "text-foreground" },
   grok: { Icon: GrokIcon, className: "text-foreground" },
+  droid: { Icon: DroidIcon, className: "text-foreground" },
+  kimi: { Icon: KimiIcon, className: "text-foreground" },
 };

@@ -79,6 +79,7 @@ export function FileTreeWorkspacePicker(props: FileTreeWorkspacePickerProps) {
           props.onSelectPath(row.runningDir);
           setOpen(false);
         }}
+        autoFocusSearch={false}
       />
     </CompactWorkspaceSwitcher>
   );
