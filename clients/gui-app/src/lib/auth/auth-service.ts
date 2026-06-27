@@ -34,6 +34,7 @@ import {
 } from "@/stores/auth/auth-store";
 import { normalizeAvatarUrl } from "@/lib/avatar-url";
 import { projectShareableTeams } from "@/hooks/epic/use-epic-shareable-teams";
+import { onWakeReconnect } from "@/lib/host/wake-reconnect";
 import { appLogger, describeLogError } from "@/lib/logger";
 import { AuthTokenStore } from "./auth-token-store";
 
@@ -212,6 +213,8 @@ export class AuthService {
   // session never carries a dead token into a live host call. Constructed in the
   // constructor; armed on every bearer (re)assignment, stopped on sign-out.
   private readonly refreshScheduler: ProactiveRefreshScheduler;
+  // Teardown hooks for the OS-wake refresh listeners, released in `dispose()`.
+  private readonly wakeDisposers: Array<() => void> = [];
   private disposed = false;
   // PKCE verifier generated at `signIn()` start, held in memory AND mirrored to
   // secure storage (`PKCE_VERIFIER_STORAGE_KEY`) until the matching callback
@@ -269,6 +272,7 @@ export class AuthService {
       minDelayMs: DEFAULT_REFRESH_MIN_DELAY_MS,
       onDiagnostic: null,
     });
+    this.installWakeRefreshListeners();
     const initialAuth = useAuthStore.getState();
     this.lastEmittedStatus = initialAuth.status;
     // Watch the public auth store ONLY to relay status transitions to
@@ -279,6 +283,32 @@ export class AuthService {
     this.authStoreUnsubscribe = useAuthStore.subscribe((state) => {
       this.emit(state.status);
     });
+  }
+
+  /**
+   * Refresh the bearer on device wake, since the scheduler's `setTimeout` is
+   * frozen during sleep and would otherwise rot the token past its TTL. Mirrors
+   * `subscribeStreamWakeReconnect`'s two triggers: `window 'online'` (network
+   * back) and `onSystemResumed` (Electron resume). `notifyResumed` is a no-op
+   * while signed out; the resume wiring is best-effort so it can't wedge
+   * construction, leaving the `online` listener as the fallback.
+   */
+  private installWakeRefreshListeners(): void {
+    this.wakeDisposers.push(
+      onWakeReconnect(() => {
+        this.refreshScheduler.notifyResumed();
+      }),
+    );
+    try {
+      const resume = this.runnerHost.onSystemResumed(() => {
+        this.refreshScheduler.notifyResumed();
+      });
+      this.wakeDisposers.push(() => resume.dispose());
+    } catch (error) {
+      appLogger.warn("[auth] OS-resume wake refresh unavailable", {
+        error: describeLogError(error),
+      });
+    }
   }
 
   /**
@@ -1255,6 +1285,10 @@ export class AuthService {
     }
     this.disposed = true;
     this.refreshScheduler.stop();
+    for (const disposeWake of this.wakeDisposers) {
+      disposeWake();
+    }
+    this.wakeDisposers.length = 0;
     this.clearPendingTimeout();
     if (this.callbackDisposable !== null) {
       this.callbackDisposable.dispose();
