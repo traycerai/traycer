@@ -6,6 +6,7 @@ import { getSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
 import { isSettingsPath } from "@/stores/tabs/kinds/settings";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { duplicateEpicTab, openNewEpic } from "@/lib/commands/actions";
+import { toggleActiveModelPicker } from "@/lib/commands/active-model-picker-registry";
 import { focusActiveComposer } from "@/lib/composer/composer-focus-registry";
 import { tabMatchesPath, tabResolveIntent } from "@/stores/tabs/registry";
 import type { TabNavigationIntent } from "@/lib/tab-navigation/intents";
@@ -330,6 +331,11 @@ const STATIC_HANDLERS: Readonly<Partial<Record<ActionId, StaticHandler>>> = {
     r.navigateSettings();
     return true;
   },
+  // Composer-scoped, but routed centrally (not externally-handled): the active
+  // composer's picker registers a controller; here we just toggle the top one.
+  // No-op (false) when no composer is active, matching the "hidden/disabled"
+  // surfaces.
+  "composer.model-picker.toggle": () => toggleActiveModelPicker(),
   // No `nav.back` / `nav.forward` entries: in-app back/forward has no keyboard
   // chord (see ACTION_META). The palette + header buttons call the shared
   // `goBack`/`goForward` actions directly via the router seam.
@@ -360,6 +366,18 @@ const EXTERNALLY_HANDLED_ACTIONS: ReadonlySet<ActionId> = new Set([
 
 export function isExternallyHandled(id: ActionId): boolean {
   return EXTERNALLY_HANDLED_ACTIONS.has(id);
+}
+
+// Actions whose chord must fire once per physical press, never on OS key-repeat.
+// A toggle (e.g. the model picker) would otherwise flip open/closed rapidly
+// while the chord is held. The provider still reserves the chord on repeat
+// (preventDefault) but skips re-dispatch.
+const REPEAT_SENSITIVE_ACTIONS: ReadonlySet<ActionId> = new Set([
+  "composer.model-picker.toggle",
+]);
+
+export function isRepeatSensitiveAction(id: ActionId): boolean {
+  return REPEAT_SENSITIVE_ACTIONS.has(id);
 }
 
 // ---------------------------------------------------------------------------

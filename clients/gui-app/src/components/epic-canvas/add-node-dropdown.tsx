@@ -382,6 +382,7 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
             tuiOnly
             lockedHarnessId={null}
             disabled={tuiAgentPending}
+            registerActivation={false}
           />
           <div className="shrink-0">
             <AgentModeToggle

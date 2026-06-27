@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import type { WorktreeBindingSelectorRow } from "@traycer/protocol/host";
+import type {
+  WorktreeBindingSelectorDisabledReason,
+  WorktreeBindingSelectorRow,
+} from "@traycer/protocol/host";
 import { NewTerminalPicker } from "../new-terminal-picker";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { paneTabRefs } from "@/stores/epics/canvas/actions";
@@ -27,8 +30,8 @@ function stubLoadedBindings(): void {
   bindingsQuery.current = {
     data: {
       rows: [
-        makeRow("host-1", "/work/traycer", "main"),
-        makeRow("host-2", "/work/traycer-wt/feature-x", "feature-x"),
+        makeRow("host-1", "/work/traycer", "main", null),
+        makeRow("host-2", "/work/traycer-wt/feature-x", "feature-x", null),
       ],
     },
     isPending: false,
@@ -63,6 +66,7 @@ function makeRow(
   hostId: string,
   runningDir: string,
   branch: string,
+  disabledReason: WorktreeBindingSelectorDisabledReason | null,
 ): WorktreeBindingSelectorRow {
   return {
     hostId,
@@ -76,7 +80,7 @@ function makeRow(
     isPrimary: runningDir.endsWith("traycer"),
     isImported: false,
     setupState: "not_required",
-    disabledReason: null,
+    disabledReason,
     sources: [],
   };
 }
@@ -127,13 +131,111 @@ describe("<NewTerminalPicker />", () => {
     expect(primaryOption.className).toContain("cursor-pointer");
     expect(screen.getByRole("option", { name: /feature-x/i })).toBeDefined();
     expect(screen.getByText("/work/traycer-wt/feature-x")).toBeDefined();
+    // The primary workspace is auto-selected on open, so Launch is ready.
     expect(
       screen.getByRole("button", { name: "Launch" }).hasAttribute("disabled"),
-    ).toBe(true);
+    ).toBe(false);
+    expect(primaryOption.dataset.checked).toBe("true");
+    expect(
+      screen.getByRole("option", { name: /feature-x/i }).dataset.checked,
+    ).toBeUndefined();
+  });
+
+  it("auto-selects the primary workspace even when it is not the first row", () => {
+    bindingsQuery.current = {
+      data: {
+        rows: [
+          makeRow("host-2", "/work/traycer-wt/feature-x", "feature-x", null),
+          makeRow("host-1", "/work/traycer", "main", null),
+        ],
+      },
+      isPending: false,
+      isError: false,
+    };
+    openPicker();
+
+    expect(
+      screen.getByRole("option", { name: /traycer.*main/i }).dataset.checked,
+    ).toBe("true");
+    expect(
+      screen.getByRole("option", { name: /feature-x/i }).dataset.checked,
+    ).toBeUndefined();
+    expect(
+      screen.getByRole("button", { name: "Launch" }).hasAttribute("disabled"),
+    ).toBe(false);
+  });
+
+  it("falls back to the first selectable row when the primary is disabled", () => {
+    bindingsQuery.current = {
+      data: {
+        rows: [
+          makeRow("host-1", "/work/traycer", "main", "missing_worktree_path"),
+          makeRow("host-2", "/work/traycer-wt/feature-x", "feature-x", null),
+        ],
+      },
+      isPending: false,
+      isError: false,
+    };
+    openPicker();
+
+    // The primary row is disabled ("missing"), so it cannot be selected; the
+    // next selectable row is auto-selected as the fallback.
+    expect(
+      screen.getByRole("option", { name: /feature-x/i }).dataset.checked,
+    ).toBe("true");
+    expect(
+      screen.getByRole("button", { name: "Launch" }).hasAttribute("disabled"),
+    ).toBe(false);
+  });
+
+  it("launches the fallback row when the primary is missing", () => {
+    bindingsQuery.current = {
+      data: {
+        rows: [
+          makeRow("host-1", "/work/traycer", "main", "missing_worktree_path"),
+          makeRow("host-2", "/work/traycer-wt/feature-x", "feature-x", null),
+        ],
+      },
+      isPending: false,
+      isError: false,
+    };
+    const tabId = openPicker();
+
+    fireEvent.click(screen.getByRole("button", { name: "Launch" }));
+
+    const terminals = tabTiles(tabId).filter(
+      (tile) => tile.type === "terminal",
+    );
+    expect(terminals).toHaveLength(1);
+    expect(terminals[0].hostId).toBe("host-2");
+    expect(terminals[0].cwd).toBe("/work/traycer-wt/feature-x");
+  });
+
+  it("selects nothing and keeps Launch disabled when every row is disabled", () => {
+    bindingsQuery.current = {
+      data: {
+        rows: [
+          makeRow("host-1", "/work/traycer", "main", "missing_worktree_path"),
+          makeRow(
+            "host-2",
+            "/work/traycer-wt/feature-x",
+            "feature-x",
+            "setup_failed",
+          ),
+        ],
+      },
+      isPending: false,
+      isError: false,
+    };
+    openPicker();
+
     expect(
       screen
         .getAllByRole("option")
         .every((option) => option.dataset.checked === undefined),
+    ).toBe(true);
+    expect(
+      screen.getByRole("button", { name: "Launch" }).hasAttribute("disabled"),
     ).toBe(true);
   });
 
@@ -195,5 +297,31 @@ describe("<NewTerminalPicker />", () => {
     expect(selectById).toHaveBeenCalledWith("host-1");
     const tiles = tabTiles(tabId);
     expect(tiles.filter((tile) => tile.type === "terminal")).toHaveLength(0);
+  });
+
+  it("focuses the workspace search input on open", () => {
+    openPicker();
+
+    expect(document.activeElement).toBe(screen.getByRole("combobox"));
+  });
+
+  it("navigates and selects rows with arrow keys without leaving the input", () => {
+    openPicker();
+
+    const input = screen.getByRole("combobox");
+    expect(document.activeElement).toBe(input);
+
+    // Arrow off the auto-selected primary onto the next row, then commit with
+    // Enter - all while focus stays in the search input (cmdk owns this).
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(
+      screen.getByRole("option", { name: /feature-x/i }).dataset.checked,
+    ).toBe("true");
+    expect(
+      screen.getByRole("option", { name: /traycer.*main/i }).dataset.checked,
+    ).toBeUndefined();
+    expect(document.activeElement).toBe(input);
   });
 });
