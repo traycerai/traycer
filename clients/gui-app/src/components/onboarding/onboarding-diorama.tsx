@@ -349,6 +349,12 @@ const PROVIDERS: ReadonlyArray<{
     status: "SuperGrok / X",
     capabilities: ["gui"],
   },
+  {
+    harnessId: "kiro",
+    label: "Kiro",
+    status: "Kiro login / API key",
+    capabilities: ["gui"],
+  },
 ];
 
 const PALETTE_ROWS = [

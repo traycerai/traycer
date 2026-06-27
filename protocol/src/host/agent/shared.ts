@@ -51,14 +51,15 @@ export const guiHarnessIdSchema = harnessIdSchema.extract([
   "traycer",
   "cursor",
   "grok",
+  "kiro",
 ]);
 export type GuiHarnessId = z.infer<typeof guiHarnessIdSchema>;
 
 /**
- * Frozen grok-less harness id set as shipped in protocol v1.0. Used only by the
+ * Frozen pre-ACP harness id set as shipped in protocol v1.0. Used only by the
  * frozen v1.0 response schema of `agent.gui.listHarnesses` so a v1.0 client
- * (which predates grok) negotiates a wire that can never carry it; the v2.0 line
- * adds grok and a v2→v1 downgrade bridge filters it for v1.0 callers. Do NOT add
+ * negotiates a wire that can never carry new ACP providers; the v2.0 line adds
+ * them and a v2→v1 downgrade bridge filters them for v1.0 callers. Do NOT add
  * new harnesses here — extend the latest `guiHarnessIdSchema` and bump the
  * method's major with a bridge instead.
  */
@@ -123,6 +124,7 @@ export const agentFacingHarnessIdSchema = harnessIdSchema.extract([
   "traycer",
   "cursor",
   "grok",
+  "kiro",
 ]);
 export type AgentFacingHarnessId = z.infer<typeof agentFacingHarnessIdSchema>;
 
@@ -405,12 +407,12 @@ export const listAgentsResponseSchema = z.object({
 });
 export type ListAgentsResponse = z.infer<typeof listAgentsResponseSchema>;
 
-// ── Frozen protocol-v1.0 (grok-less) agent.list response ───────────────────
-// `agent.list` enumerates every agent in the epic — including grok chats a newer
+// ── Frozen protocol-v1.0 (pre-ACP) agent.list response ─────────────────────
+// `agent.list` enumerates every agent in the epic — including ACP chats a newer
 // client created — and the `traycer` CLI inlines the protocol at build time, so
-// an old (grok-less) CLI would hit a strict enum on a grok row. v1.0 is frozen
-// grok-less; the v2.0 line carries grok and a v2→v1 bridge drops grok agents for
-// v1.0 callers. Do not add new harnesses here — bump the major with a bridge.
+// an old CLI would hit a strict enum on those rows. v1.0 is frozen pre-ACP; the
+// v2.0 line carries ACP providers and a v2→v1 bridge drops those agents for v1.0
+// callers. Do not add new harnesses here — bump the major with a bridge.
 export const agentSummarySchemaV10 = agentSummarySchema.extend({
   harnessId: harnessIdSchema
     .extract(["claude", "codex", "opencode", "traycer", "cursor"])
@@ -419,9 +421,7 @@ export const agentSummarySchemaV10 = agentSummarySchema.extend({
 export const listAgentsResponseSchemaV10 = listAgentsResponseSchema.extend({
   agents: z.array(agentSummarySchemaV10),
 });
-export type ListAgentsResponseV10 = z.infer<
-  typeof listAgentsResponseSchemaV10
->;
+export type ListAgentsResponseV10 = z.infer<typeof listAgentsResponseSchemaV10>;
 
 /**
  * `agent.sendMessage@1.0` - fire-and-forget enqueue from one agent to
