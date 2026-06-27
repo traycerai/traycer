@@ -33,24 +33,30 @@ export function HistoryNavButtons() {
   }
   return (
     <div className="flex shrink-0 items-center" style={NO_DRAG_STYLE}>
+      {/* Tooltip trigger is the wrapping <span>, not the Button: a disabled
+          Button receives no pointer events, so a tooltip attached directly to it
+          would vanish exactly when the arrow is disabled - the moment a user most
+          needs the label to know what the greyed control does. */}
       <TooltipWrapper
         label="Go back"
         side="top"
         sideOffset={6}
         align={undefined}
       >
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          aria-label="Go back"
-          data-testid="history-nav-back"
-          disabled={!canGoBack}
-          onClick={() => goBack(router)}
-          className="text-muted-foreground hover:text-foreground"
-        >
-          <ArrowLeft className="size-4" />
-        </Button>
+        <span className="inline-flex">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Go back"
+            data-testid="history-nav-back"
+            disabled={!canGoBack}
+            onClick={() => goBack(router)}
+            className="text-muted-foreground hover:text-foreground"
+          >
+            <ArrowLeft className="size-4" />
+          </Button>
+        </span>
       </TooltipWrapper>
       <TooltipWrapper
         label="Go forward"
@@ -58,18 +64,20 @@ export function HistoryNavButtons() {
         sideOffset={6}
         align={undefined}
       >
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          aria-label="Go forward"
-          data-testid="history-nav-forward"
-          disabled={!canGoForward}
-          onClick={() => goForward(router)}
-          className="text-muted-foreground hover:text-foreground"
-        >
-          <ArrowRight className="size-4" />
-        </Button>
+        <span className="inline-flex">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Go forward"
+            data-testid="history-nav-forward"
+            disabled={!canGoForward}
+            onClick={() => goForward(router)}
+            className="text-muted-foreground hover:text-foreground"
+          >
+            <ArrowRight className="size-4" />
+          </Button>
+        </span>
       </TooltipWrapper>
     </div>
   );

@@ -17,6 +17,7 @@ import { tabActivate, tabRouteOptions } from "@/stores/tabs/registry";
 import {
   parseSystemTabOverlayView,
   withOverlayCleared,
+  SYSTEM_OVERLAY_PARAM_KEYS,
   type SystemTabOverlayView,
 } from "@/lib/system-tab-overlay-search";
 import type { SettingsSectionId } from "@/lib/settings-sections";
@@ -252,15 +253,35 @@ function overlayPromotionIntent(
  * overlay over a different page. The caller then strips the flag in place with
  * `replace` instead.
  */
-function canPopOverlayEntry(history: RouterHistory): boolean {
+export function canPopOverlayEntry(history: RouterHistory): boolean {
   const controller = getHistoryController(history);
   if (controller === null) return false;
   const index = controller.getIndex();
   if (index <= 0) return false;
   const entries = controller.getEntries();
   // `index > 0` and the controller keeps `index` in range, so both reads are
-  // present.
-  return hrefPathname(entries[index]) === hrefPathname(entries[index - 1]);
+  // present. Pop ONLY when the entry behind us is the overlay-free underlying
+  // page: same pathname AND no overlay flag. Without the overlay-free check,
+  // opening one overlay while another overlay entry sits behind (same path,
+  // different flag) would `back()` into that other overlay instead of
+  // dismissing to the page.
+  return (
+    hrefPathname(entries[index]) === hrefPathname(entries[index - 1]) &&
+    !hrefHasActiveOverlay(entries[index - 1])
+  );
+}
+
+/** True when a stored href's search carries an active overlay flag. */
+function hrefHasActiveOverlay(href: string): boolean {
+  const queryStart = href.indexOf("?");
+  if (queryStart === -1) return false;
+  const hashStart = href.indexOf("#");
+  const search =
+    hashStart === -1
+      ? href.slice(queryStart + 1)
+      : href.slice(queryStart + 1, hashStart);
+  const params = new URLSearchParams(search);
+  return SYSTEM_OVERLAY_PARAM_KEYS.some((key) => params.has(key));
 }
 
 function activeFromOverlayFlags(
