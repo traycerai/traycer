@@ -3,6 +3,7 @@ import { UserMenu } from "@/components/auth/user-menu";
 import { TabStrip } from "@/components/layout/tabs/tab-strip";
 import { AppUpdateHeaderButton } from "@/components/layout/header/app-update-button";
 import { HistoryButton } from "@/components/layout/header/history-button";
+import { HistoryNavButtons } from "@/components/layout/header/history-nav-buttons";
 import { SignInButton } from "@/components/layout/header/sign-in-button";
 import { NotificationsBell } from "@/components/notifications/notifications-bell";
 import { cn } from "@/lib/utils";
@@ -55,13 +56,33 @@ export function AppHeader(props: AppHeaderProps): ReactNode {
           : "px-3",
       )}
     >
+      {showTabStrip ? <HistoryNavButtons /> : null}
+      {/* Left drag handle: breathing room beside the traffic lights +
+          back/forward arrows so the window can be grabbed from the left end
+          too. Desktop-only (the browser app has neither traffic lights nor
+          arrows, so a left gap there would be stray).
+
+          IMPORTANT: this must be a DIRECT child of <header> (a top-level
+          title-bar element), mirroring the right-side spacer below. An
+          otherwise-identical drag spacer nested inside the flex tab-strip
+          section was NOT honored as a draggable region (only the right
+          spacer, a direct header child, dragged). Electron registers
+          `-webkit-app-region: drag` reliably only on top-level title-bar
+          elements. */}
+      {showTabStrip && IS_FRAMELESS_DESKTOP ? (
+        <div
+          aria-hidden
+          className="relative z-10 hidden h-full shrink-0 basis-[clamp(2rem,6vw,6rem)] md:block"
+          style={DRAG_STYLE}
+        />
+      ) : null}
       <div className="relative z-10 flex min-w-0 flex-1 items-center">
         {showTabStrip ? <TabStrip /> : null}
       </div>
       {showTabStrip ? (
         <div
           aria-hidden
-          className="relative z-10 hidden h-full shrink-0 basis-[clamp(4rem,12vw,12rem)] md:block"
+          className="relative z-10 hidden h-full shrink-0 basis-[clamp(2rem,6vw,6rem)] md:block"
           style={IS_FRAMELESS_DESKTOP ? DRAG_STYLE : undefined}
         />
       ) : (

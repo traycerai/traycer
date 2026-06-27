@@ -28,6 +28,17 @@ export type SystemTabOverlaySearch = z.infer<
 
 type SystemOverlayParamKey = "settingsOverlay" | "historyOverlay";
 
+/**
+ * Root search keys that mark an overlay open. Presence of a key in a stored
+ * href's search ⟺ that overlay is active (the schema only ever sets a key to
+ * `true`, and `withOverlayCleared` removes it). Single source of truth for the
+ * overlay param names.
+ */
+export const SYSTEM_OVERLAY_PARAM_KEYS: ReadonlyArray<SystemOverlayParamKey> = [
+  "settingsOverlay",
+  "historyOverlay",
+];
+
 type OverlayCleared<TPrev> = Omit<TPrev, SystemOverlayParamKey>;
 
 /** Snapshot view used inside the React tree - defaults applied. */

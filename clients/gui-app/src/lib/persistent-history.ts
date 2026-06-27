@@ -21,6 +21,83 @@ type ParsedHistoryState = HistoryState & {
 };
 
 /**
+ * Branded controller attached to the Electron renderer's persistent history.
+ *
+ * It owns the persisted stack and exposes a **load-free** read/maintenance
+ * surface for in-app back/forward navigation:
+ *
+ * - `getEntries` / `getIndex` snapshot the current stack.
+ * - `canGoBack` / `canGoForward` derive navigability from `index` over the live
+ *   stack.
+ * - `prune` drops unreachable (non-current) entries WITHOUT touching the router.
+ * - `subscribe` is a tiny store that recomputes navigability after a prune AND
+ *   after every real navigation, without ever forcing `router.load()`.
+ *
+ * Real navigation still goes through `history.go/back/forward` (which notify the
+ * router); the controller never calls `history.notify()`.
+ */
+export interface PersistentHistoryController {
+  getEntries(): ReadonlyArray<string>;
+  getIndex(): number;
+  canGoBack(): boolean; // index > 0 over the live stack
+  canGoForward(): boolean; // index < entries.length - 1
+  /**
+   * Removes every NON-current entry for which `isDead(href)` is true, remaps the
+   * index to the surviving current entry, re-stamps `__TSR_index` contiguously,
+   * persists, and notifies CONTROLLER subscribers only. Returns whether the
+   * stack changed.
+   *
+   * Critically load-free: it never calls `history.notify()` and so never drives
+   * `router.load()`. The current entry is never pruned.
+   */
+  prune(isDead: (href: string) => boolean): boolean;
+  subscribe(cb: () => void): () => void;
+}
+
+/**
+ * Unique-symbol brand. Only `createPersistentMemoryHistory` stamps it, so a
+ * history that carries it is provably the Electron persistent history.
+ * `createBrowserHistory` / `createMemoryHistory` never carry it, which is the
+ * single signal that gates the in-app navigation feature.
+ */
+export const PERSISTENT_HISTORY_CONTROLLER: unique symbol = Symbol(
+  "traycer.persistentHistoryController",
+);
+
+/** The branded history returned by `createPersistentMemoryHistory`. */
+export type PersistentRouterHistory = RouterHistory & {
+  readonly [PERSISTENT_HISTORY_CONTROLLER]: PersistentHistoryController;
+};
+
+function isPersistentHistoryController(
+  value: unknown,
+): value is PersistentHistoryController {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.getEntries === "function" &&
+    typeof value.getIndex === "function" &&
+    typeof value.canGoBack === "function" &&
+    typeof value.canGoForward === "function" &&
+    typeof value.prune === "function" &&
+    typeof value.subscribe === "function"
+  );
+}
+
+/**
+ * Reads the controller back from the CURRENT router's history via the brand.
+ * Returns `null` for the browser/memory histories (no brand), keeping the in-app
+ * navigation feature inert outside Electron. Uses a runtime type guard so no
+ * unsafe cast is needed.
+ */
+export function getHistoryController(
+  history: RouterHistory,
+): PersistentHistoryController | null {
+  if (!(PERSISTENT_HISTORY_CONTROLLER in history)) return null;
+  const candidate: unknown = history[PERSISTENT_HISTORY_CONTROLLER];
+  return isPersistentHistoryController(candidate) ? candidate : null;
+}
+
+/**
  * URL persistence for the Electron renderer.
  *
  * The browser web app uses TanStack's default `createBrowserHistory`, which
@@ -137,17 +214,14 @@ function persistState(
   // to `/` instead of where the user actually was.
   if (entries[index] === "/") return;
   try {
-    const capped =
-      entries.length > MAX_ENTRIES
-        ? entries.slice(entries.length - MAX_ENTRIES)
-        : entries;
-    const cappedIndex =
-      entries.length > MAX_ENTRIES
-        ? Math.max(0, index - (entries.length - MAX_ENTRIES))
-        : index;
+    // The in-memory stack is already bounded to MAX_ENTRIES by `capStackInPlace`
+    // (applied at every push and at seed), so persistence mirrors it verbatim.
+    // Capping HERE instead would re-introduce a cursor/window mismatch: slicing
+    // from the tail while clamping the index independently can drop the current
+    // entry when the cursor sits outside the retained window.
     window.localStorage.setItem(
       buildStorageKey(windowId),
-      JSON.stringify({ entries: capped, index: cappedIndex }),
+      JSON.stringify({ entries, index }),
     );
   } catch (error) {
     appLogger.warn("[history] persisted route state write failed", {
@@ -242,6 +316,47 @@ function normalizeRoute(route: string | null): string {
 }
 
 /**
+ * Bounds the in-memory stack to `MAX_ENTRIES` IN PLACE, keeping a contiguous
+ * window that always contains the current entry, and re-stamps `__TSR_index` to
+ * match the new array positions. Returns the remapped index.
+ *
+ * This is the single place the stack is bounded. Capping at the point of growth
+ * (every `push`, where the cursor is always the tail) means the front-drop never
+ * removes the current entry. The window is anchored on `index` rather than on
+ * the tail, so seeding a legacy/oversized persisted stack while the cursor sits
+ * deep in the back history still retains the current entry instead of dropping
+ * it and restoring the wrong route on next launch.
+ */
+/**
+ * Re-stamp every entry's `__TSR_index` to its array position, so the stack stays
+ * contiguous after any structural mutation (push, cap, replace-collapse, prune).
+ * Keeps `getLocation`'s `state.__TSR_index` aligned with the cursor for the next
+ * real navigation. The single owner of the re-stamp invariant.
+ */
+function restampIndices(states: LocationState[]): void {
+  const restamped: LocationState[] = states.map((entryState, i) => ({
+    ...entryState,
+    __TSR_index: i,
+  }));
+  states.splice(0, states.length, ...restamped);
+}
+
+function capStackInPlace(
+  entries: string[],
+  states: LocationState[],
+  index: number,
+): number {
+  if (entries.length <= MAX_ENTRIES) return index;
+  const start = Math.max(0, Math.min(entries.length - MAX_ENTRIES, index));
+  entries.splice(0, start);
+  entries.splice(MAX_ENTRIES);
+  states.splice(0, start);
+  states.splice(MAX_ENTRIES);
+  restampIndices(states);
+  return index - start;
+}
+
+/**
  * Creates a router history seeded from the explicit `initialRoute` override,
  * or from this window's `localStorage` history when the shell provides no
  * route. Intended for the Electron renderer only - the browser web app should
@@ -250,7 +365,7 @@ function normalizeRoute(route: string | null): string {
 export function createPersistentMemoryHistory(
   initialRoute: string | null,
   windowId: string | null,
-): RouterHistory {
+): PersistentRouterHistory {
   const persisted = loadPersistedState(windowId);
   const shellOverride = consumeShellOverride(initialRoute, windowId);
   if (shellOverride === "/") {
@@ -263,10 +378,20 @@ export function createPersistentMemoryHistory(
     makeInitialState(i),
   );
   let index = shellOverride !== null ? 0 : persisted.index;
+  // Bound a legacy/oversized seed before anything reads the stack.
+  index = capStackInPlace(entries, states, index);
 
   let blockers: Parameters<
     NonNullable<Parameters<typeof createHistory>[0]["setBlockers"]>
   >[0] = [];
+
+  // Controller-only subscriber store. Poked by the navigation callbacks below
+  // and by `prune`, so navigability recomputes without ever calling
+  // `history.notify()` (which would drive `router.load()`).
+  const controllerSubscribers = new Set<() => void>();
+  const notifyController = () => {
+    controllerSubscribers.forEach((cb) => cb());
+  };
 
   persistState(windowId, entries, index);
 
@@ -285,24 +410,51 @@ export function createPersistentMemoryHistory(
       entries.push(path);
       states.push(state);
       index = entries.length - 1;
+      // Cap at the point of growth: the cursor is the tail here, so the
+      // front-drop can never remove the current entry.
+      index = capStackInPlace(entries, states, index);
+      // Re-stamp unconditionally: TanStack derives the pushed `__TSR_index` from
+      // its CACHED `location`, which a prior load-free `prune` (it never calls
+      // `history.notify()`) may have left stale. Re-stamping keeps the stack's
+      // `__TSR_index` contiguous regardless of that cache.
+      restampIndices(states);
       persistState(windowId, entries, index);
+      notifyController();
     },
     replaceState: (path: string, state: ParsedHistoryState) => {
       entries[index] = path;
       states[index] = state;
+      // Collapse an adjacent byte-identical entry created by an in-place
+      // replace. Two identical adjacent entries are always a dead back step
+      // (`go(-1)` moves the cursor but not the rendered href), so dropping the
+      // redundant current entry and stepping the cursor back onto its identical
+      // neighbour is correct for ANY replace - this is a general
+      // adjacent-duplicate guard, not overlay-specific. (Its common producer is
+      // the settings/history overlay, whose entry is pushed onto the same path
+      // and differs only by a search-param flag that this `replace` then clears.)
+      if (index > 0 && entries[index - 1] === path) {
+        entries.splice(index, 1);
+        states.splice(index, 1);
+        index -= 1;
+        restampIndices(states);
+      }
       persistState(windowId, entries, index);
+      notifyController();
     },
     back: () => {
       index = Math.max(index - 1, 0);
       persistState(windowId, entries, index);
+      notifyController();
     },
     forward: () => {
       index = Math.min(index + 1, entries.length - 1);
       persistState(windowId, entries, index);
+      notifyController();
     },
     go: (n) => {
       index = Math.min(Math.max(index + n, 0), entries.length - 1);
       persistState(windowId, entries, index);
+      notifyController();
     },
     createHref: (path) => path,
     getBlockers: () => blockers,
@@ -311,5 +463,60 @@ export function createPersistentMemoryHistory(
     },
   });
 
-  return history;
+  const controller: PersistentHistoryController = {
+    getEntries: () => [...entries],
+    getIndex: () => index,
+    canGoBack: () => index > 0,
+    canGoForward: () => index < entries.length - 1,
+    prune: (isDead) => {
+      // Keep the current entry unconditionally; drop any other entry the caller
+      // proves dead. `survivors` carries the original state + a current marker
+      // so the index can be remapped after filtering.
+      const survivors = entries
+        .map((href, i) => ({ href, state: states[i], wasCurrent: i === index }))
+        .filter((entry) => entry.wasCurrent || !isDead(entry.href));
+
+      // Current is never pruned, so a same-length result means nothing changed.
+      if (survivors.length === entries.length) return false;
+
+      const nextIndex = survivors.findIndex((entry) => entry.wasCurrent);
+      // Mutate the closed-over arrays in place so `getLocation` keeps reading the
+      // same references the history was created with, then re-stamp `__TSR_index`
+      // contiguously so the next real `go(n)` lands on a location whose `state`
+      // index matches its array position.
+      entries.splice(
+        0,
+        entries.length,
+        ...survivors.map((entry) => entry.href),
+      );
+      states.splice(0, states.length, ...survivors.map((entry) => entry.state));
+      restampIndices(states);
+      index = nextIndex;
+
+      persistState(windowId, entries, index);
+      notifyController();
+      return true;
+    },
+    subscribe: (cb) => {
+      controllerSubscribers.add(cb);
+      return () => {
+        controllerSubscribers.delete(cb);
+      };
+    },
+  };
+
+  const branded = Object.assign(history, {
+    [PERSISTENT_HISTORY_CONTROLLER]: controller,
+  });
+  // Make the brand non-enumerable / non-writable / non-configurable: a shallow
+  // clone (`{ ...history }`) must NOT copy it (a copy would carry a controller
+  // bound to THIS closure's `entries`/`states`, diverging from the clone's own
+  // navigation), and it can't be clobbered. `in` (used by `getHistoryController`)
+  // still finds non-enumerable keys, so the guard is unaffected.
+  Object.defineProperty(branded, PERSISTENT_HISTORY_CONTROLLER, {
+    enumerable: false,
+    writable: false,
+    configurable: false,
+  });
+  return branded;
 }

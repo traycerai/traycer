@@ -7,6 +7,7 @@
  */
 export { openNewEpic, openNewEpicDraft } from "./new-epic";
 export { duplicateEpicTab } from "./duplicate-tab";
+export { goBack, goForward, type HistoryNavRouter } from "./history-navigation";
 export {
   openCreatedChatWhenProjected,
   openNewChatInActiveTile,

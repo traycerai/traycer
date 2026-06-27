@@ -675,6 +675,23 @@ export const grokUserMessageAnchorResolvedSchema = z.object({
   grokSessionId: z.string().nullable(),
 });
 
+export const droidUserMessageAnchorResolvedSchema = z.object({
+  harnessId: z.literal("droid"),
+  sessionId: z.string(),
+  // The native Droid session id (`@factory/droid-sdk` exec session) assigned for
+  // this turn. Used to resume the same Droid session on a later turn via the
+  // SDK's `resumeSession`. Null only when the session id was not yet resolved.
+  droidSessionId: z.string().nullable(),
+});
+
+export const kimiUserMessageAnchorResolvedSchema = z.object({
+  harnessId: z.literal("kimi"),
+  sessionId: z.string(),
+  // The ACP session id the `kimi acp` process assigned for this turn.
+  // Null until `session/new` resolves; used to resume the same ACP session.
+  kimiSessionId: z.string().nullable(),
+});
+
 export const userMessageAnchorResolvedEventSchema = z.object({
   ...baseRuntimeEventFields,
   type: z.literal("user_message.anchor_resolved"),
@@ -686,6 +703,8 @@ export const userMessageAnchorResolvedEventSchema = z.object({
     cursorUserMessageAnchorResolvedSchema,
     traycerUserMessageAnchorResolvedSchema,
     grokUserMessageAnchorResolvedSchema,
+    droidUserMessageAnchorResolvedSchema,
+    kimiUserMessageAnchorResolvedSchema,
   ]),
 });
 export type UserMessageAnchorResolvedEvent = z.infer<
