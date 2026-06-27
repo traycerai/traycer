@@ -51,6 +51,7 @@ export const guiHarnessIdSchema = harnessIdSchema.extract([
   "traycer",
   "cursor",
   "grok",
+  "qwen",
 ]);
 export type GuiHarnessId = z.infer<typeof guiHarnessIdSchema>;
 
@@ -123,6 +124,7 @@ export const agentFacingHarnessIdSchema = harnessIdSchema.extract([
   "traycer",
   "cursor",
   "grok",
+  "qwen",
 ]);
 export type AgentFacingHarnessId = z.infer<typeof agentFacingHarnessIdSchema>;
 
@@ -419,9 +421,7 @@ export const agentSummarySchemaV10 = agentSummarySchema.extend({
 export const listAgentsResponseSchemaV10 = listAgentsResponseSchema.extend({
   agents: z.array(agentSummarySchemaV10),
 });
-export type ListAgentsResponseV10 = z.infer<
-  typeof listAgentsResponseSchemaV10
->;
+export type ListAgentsResponseV10 = z.infer<typeof listAgentsResponseSchemaV10>;
 
 /**
  * `agent.sendMessage@1.0` - fire-and-forget enqueue from one agent to

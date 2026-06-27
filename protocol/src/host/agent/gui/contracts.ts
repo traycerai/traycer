@@ -59,7 +59,9 @@ export const agentGuiListHarnessesDowngradeV2ToV1 = defineDowngradePath<
   downgradeResponse: (response) => ({
     ok: true,
     value: listGuiHarnessesResponseSchemaV10.parse({
-      harnesses: response.harnesses.filter((harness) => harness.id !== "grok"),
+      harnesses: response.harnesses.filter(
+        (harness) => harness.id !== "grok" && harness.id !== "qwen",
+      ),
     }),
   }),
 });

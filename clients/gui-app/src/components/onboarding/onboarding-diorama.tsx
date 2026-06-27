@@ -349,6 +349,12 @@ const PROVIDERS: ReadonlyArray<{
     status: "SuperGrok / X",
     capabilities: ["gui"],
   },
+  {
+    harnessId: "qwen",
+    label: "Qwen Code",
+    status: "API key / OAuth",
+    capabilities: ["gui"],
+  },
 ];
 
 const PALETTE_ROWS = [

@@ -62,13 +62,14 @@ export const agentSelectionGuideGlobalGetV10 = defineRpcContract({
   responseSchema: agentSelectionGuideGlobalGetResponseSchema,
 });
 
-export const agentSelectionGuideGlobalOnboardingDraftGetV10 =
-  defineRpcContract({
+export const agentSelectionGuideGlobalOnboardingDraftGetV10 = defineRpcContract(
+  {
     method: "agent.selectionGuide.getGlobalOnboardingDraft",
     schemaVersion: { major: 1, minor: 0 } as const,
     requestSchema: agentSelectionGuideGlobalOnboardingDraftGetRequestSchema,
     responseSchema: agentSelectionGuideGlobalOnboardingDraftGetResponseSchema,
-  });
+  },
+);
 
 export const agentSelectionGuideGlobalSetV10 = defineRpcContract({
   method: "agent.selectionGuide.setGlobal",
@@ -130,7 +131,9 @@ export const agentListDowngradeV2ToV1 = defineDowngradePath<
     ok: true,
     value: listAgentsResponseSchemaV10.parse({
       ...response,
-      agents: response.agents.filter((agent) => agent.harnessId !== "grok"),
+      agents: response.agents.filter(
+        (agent) => agent.harnessId !== "grok" && agent.harnessId !== "qwen",
+      ),
     }),
   }),
 });
