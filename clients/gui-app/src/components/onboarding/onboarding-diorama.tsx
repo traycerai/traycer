@@ -349,6 +349,12 @@ const PROVIDERS: ReadonlyArray<{
     status: "SuperGrok / X",
     capabilities: ["gui"],
   },
+  {
+    harnessId: "gemini",
+    label: "Gemini",
+    status: "Google OAuth / API key",
+    capabilities: ["gui"],
+  },
 ];
 
 const PALETTE_ROWS = [

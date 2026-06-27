@@ -675,6 +675,15 @@ export const grokUserMessageAnchorResolvedSchema = z.object({
   grokSessionId: z.string().nullable(),
 });
 
+export const geminiUserMessageAnchorResolvedSchema = z.object({
+  harnessId: z.literal("gemini"),
+  sessionId: z.string(),
+  // The ACP session id the `gemini --experimental-acp` process assigned for
+  // this turn. Null until `session/new` resolves; used to resume the same ACP
+  // session.
+  geminiSessionId: z.string().nullable(),
+});
+
 export const userMessageAnchorResolvedEventSchema = z.object({
   ...baseRuntimeEventFields,
   type: z.literal("user_message.anchor_resolved"),
@@ -686,6 +695,7 @@ export const userMessageAnchorResolvedEventSchema = z.object({
     cursorUserMessageAnchorResolvedSchema,
     traycerUserMessageAnchorResolvedSchema,
     grokUserMessageAnchorResolvedSchema,
+    geminiUserMessageAnchorResolvedSchema,
   ]),
 });
 export type UserMessageAnchorResolvedEvent = z.infer<

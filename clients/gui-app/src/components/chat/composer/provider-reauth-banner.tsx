@@ -98,8 +98,8 @@ function BannerRefreshButton() {
 }
 
 // The reconnect methods to offer a signed-out (web-login) provider. `canOauth`
-// requires a local host (the `<cli> auth login` loopback runs on the host's
-// machine) plus advertised OAuth args; `envVars` are the credential vars the
+// requires a local host (the CLI-owned loopback runs on the host's machine)
+// plus advertised OAuth support; `envVars` are the credential vars the
 // paste form can write (an API key / OAuth token) via `providers.setEnvOverride`,
 // which works on any host. Both are reconnect affordances - distinct from a
 // *rejected* credential, which never reaches here (it surfaces as a generic error
@@ -118,7 +118,7 @@ function deriveLoginOptions(
       ? loginCapability.token.vars
       : [];
   const oauthArgs = loginCapability !== null ? loginCapability.oauthArgs : null;
-  const canOauth = isLocalHost && oauthArgs !== null && oauthArgs.length > 0;
+  const canOauth = isLocalHost && oauthArgs !== null;
   return { envVars, canOauth };
 }
 

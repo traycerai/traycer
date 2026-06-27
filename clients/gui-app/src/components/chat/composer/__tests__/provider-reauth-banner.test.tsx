@@ -116,6 +116,16 @@ function claudeState(
   };
 }
 
+function geminiState(): ProviderCliState {
+  return {
+    ...claudeState({
+      oauthArgs: [],
+      token: { vars: ["GEMINI_API_KEY", "GOOGLE_API_KEY"] },
+    }),
+    providerId: "gemini",
+  };
+}
+
 function cursorState(): ProviderCliState {
   return {
     providerId: "cursor",
@@ -160,6 +170,12 @@ describe("<ProviderReauthBanner />", () => {
         state={claudeState(CLAUDE_CAP)}
       />,
     );
+
+    expect(screen.getByRole("button", { name: /Authenticate/ })).toBeDefined();
+  });
+
+  it("offers the OAuth button for bare-command login providers", () => {
+    render(<ProviderReauthBanner providerId="gemini" state={geminiState()} />);
 
     expect(screen.getByRole("button", { name: /Authenticate/ })).toBeDefined();
   });
