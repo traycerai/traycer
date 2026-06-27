@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeContext } from "../../runner/runtime";
+import { noopLogger } from "../../logger";
 
 // Pins the `host ensure` state machine: a lock-free fast no-op when the
 // host is already installed + registered + running, and the three
@@ -75,6 +76,7 @@ function makeRuntime(): RuntimeContext {
     noBootstrap: false,
     nonInteractive: false,
     environment: "production",
+    logger: noopLogger,
   };
 }
 

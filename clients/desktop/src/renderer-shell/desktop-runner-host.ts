@@ -1,5 +1,6 @@
 import type {
   AuthCallbackResult,
+  AuthTokenRefreshResult,
   AuthTokenValidationResult,
   CliInstallManifestSnapshot,
   HostAvailableSnapshot,
@@ -126,6 +127,10 @@ export interface DesktopPreloadBridge {
     token: string,
     refreshToken: string,
   ): Promise<AuthIdentityValidationResult>;
+  refreshAuthToken(
+    token: string,
+    refreshToken: string,
+  ): Promise<AuthTokenRefreshResult>;
   exchangeAuthCode(
     code: string,
     codeVerifier: string,
@@ -677,6 +682,13 @@ export class DesktopRunnerHost implements IRunnerHost {
     refreshToken: string,
   ): Promise<AuthIdentityValidationResult> {
     return this.bridge.validateAuthTokenIdentity(token, refreshToken);
+  }
+
+  refreshAuthToken(
+    token: string,
+    refreshToken: string,
+  ): Promise<AuthTokenRefreshResult> {
+    return this.bridge.refreshAuthToken(token, refreshToken);
   }
 
   exchangeAuthCode(

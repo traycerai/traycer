@@ -11,6 +11,7 @@
 export const RunnerHostInvoke = {
   validateAuthToken: "runnerHost:auth:validateToken",
   validateAuthTokenIdentity: "runnerHost:auth:validateTokenIdentity",
+  refreshAuthToken: "runnerHost:auth:refreshToken",
   exchangeAuthCode: "runnerHost:auth:exchangeAuthCode",
   openExternalLink: "runnerHost:openExternalLink",
   getRegisteredUrlSchemes: "runnerHost:getRegisteredUrlSchemes",
@@ -122,6 +123,8 @@ export const RunnerHostInvoke = {
   displayList: "runnerHost:display:list",
   gpuAccelerationGet: "runnerHost:gpu:get",
   gpuAccelerationSet: "runnerHost:gpu:set",
+  logLevelsGet: "runnerHost:logLevels:get",
+  logLevelsSet: "runnerHost:logLevels:set",
   // Renderer-driven sleep prevention. The renderer recomputes
   // `preventSleepWhileRunning && anyLocalAgentActive` and pushes the boolean
   // here; main holds a single `powerSaveBlocker` while any window wants it.

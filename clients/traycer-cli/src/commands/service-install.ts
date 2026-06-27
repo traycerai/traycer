@@ -20,6 +20,11 @@ export function buildServiceInstallCommand(
   args: ServiceInstallArgs,
 ): CommandFn {
   return async (ctx): Promise<CommandResult> => {
+    ctx.runtime.logger.info("Service install command started", {
+      environment: ctx.runtime.environment,
+      enableLinger: args.enableLinger,
+      allowSelfInvocation: args.allowSelfInvocation,
+    });
     return withCliLock(
       {
         environment: ctx.runtime.environment,
@@ -33,6 +38,11 @@ export function buildServiceInstallCommand(
           environment: ctx.runtime.environment,
           override: null,
           allowSelfInvocation: args.allowSelfInvocation,
+        });
+        ctx.runtime.logger.debug("Service install CLI invocation resolved", {
+          environment: ctx.runtime.environment,
+          label: label.id,
+          argCount: cli.args.length,
         });
         ctx.progress({
           stage: "register",
@@ -51,6 +61,12 @@ export function buildServiceInstallCommand(
           platform === "win32"
             ? windowsTaskName(label)
             : serviceManifestPath(label);
+        ctx.runtime.logger.info("Service install command completed", {
+          environment: ctx.runtime.environment,
+          label: label.id,
+          platform,
+          enableLinger: args.enableLinger,
+        });
         return {
           data: {
             label: label.id,

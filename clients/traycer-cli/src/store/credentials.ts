@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { chmod, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { config } from "../config";
+import { createCliLogger, errorFromUnknown } from "../logger";
 import { cliCredentialsPath, ensureCliHomeDir } from "./paths";
 
 // ~/.traycer/cli/credentials shape. Stored as JSON with mode 0600 so other
@@ -23,19 +24,37 @@ export interface StoredCredentials {
 }
 
 export async function readCredentials(): Promise<StoredCredentials | null> {
+  const logger = createCliLogger(config.environment);
   let raw: string;
   try {
     raw = await readFile(cliCredentialsPath(config.environment), "utf8");
-  } catch {
+  } catch (err) {
+    if (readErrorCode(err) !== "ENOENT") {
+      throw err;
+    }
+    logger.debug("Credentials read returned absent", {
+      environment: config.environment,
+      errorName: errorFromUnknown(err).name,
+    });
     return null;
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
-  } catch {
+  } catch (err) {
+    logger.warn("Credentials JSON parse failed", {
+      environment: config.environment,
+      errorName: errorFromUnknown(err).name,
+      errorMessage: errorFromUnknown(err).message,
+    });
     return null;
   }
-  if (parsed === null || typeof parsed !== "object") return null;
+  if (parsed === null || typeof parsed !== "object") {
+    logger.warn("Credentials rejected non-object payload", {
+      environment: config.environment,
+    });
+    return null;
+  }
   const obj = parsed as Record<string, unknown>;
   const user = obj.user;
   if (
@@ -46,6 +65,14 @@ export async function readCredentials(): Promise<StoredCredentials | null> {
     user === null ||
     typeof user !== "object"
   ) {
+    logger.warn("Credentials rejected malformed top-level payload", {
+      environment: config.environment,
+      hasToken: typeof obj.token === "string",
+      hasRefreshToken: typeof obj.refreshToken === "string",
+      hasAuthnBaseUrl: typeof obj.authnBaseUrl === "string",
+      hasSavedAt: typeof obj.savedAt === "string",
+      hasUser: user !== null && typeof user === "object",
+    });
     return null;
   }
   const userObj = user as Record<string, unknown>;
@@ -54,8 +81,19 @@ export async function readCredentials(): Promise<StoredCredentials | null> {
     typeof userObj.email !== "string" ||
     typeof userObj.name !== "string"
   ) {
+    logger.warn("Credentials rejected malformed user payload", {
+      environment: config.environment,
+      hasUserId: typeof userObj.id === "string",
+      hasUserEmail: typeof userObj.email === "string",
+      hasUserName: typeof userObj.name === "string",
+    });
     return null;
   }
+  logger.debug("Credentials read completed", {
+    environment: config.environment,
+    hasToken: obj.token.length > 0,
+    hasRefreshToken: obj.refreshToken.length > 0,
+  });
   return {
     token: obj.token,
     refreshToken: obj.refreshToken,
@@ -66,6 +104,12 @@ export async function readCredentials(): Promise<StoredCredentials | null> {
 }
 
 export async function writeCredentials(creds: StoredCredentials): Promise<void> {
+  const logger = createCliLogger(config.environment);
+  logger.info("Credentials write started", {
+    environment: config.environment,
+    hasToken: creds.token.length > 0,
+    hasRefreshToken: creds.refreshToken.length > 0,
+  });
   await ensureCliHomeDir(config.environment);
   const target = cliCredentialsPath(config.environment);
   // Unique temp name per write: the Desktop re-seeds via a spawned
@@ -83,13 +127,33 @@ export async function writeCredentials(creds: StoredCredentials): Promise<void> 
   // could have looser bits - re-chmod before the rename to be safe.
   await chmod(tmp, 0o600);
   await rename(tmp, target);
+  logger.info("Credentials write completed", {
+    environment: config.environment,
+  });
 }
 
 export async function deleteCredentials(): Promise<boolean> {
+  const logger = createCliLogger(config.environment);
   try {
     await unlink(cliCredentialsPath(config.environment));
+    logger.info("Credentials deleted", {
+      environment: config.environment,
+      deleted: true,
+    });
     return true;
-  } catch {
+  } catch (err) {
+    logger.debug("Credentials delete skipped or failed", {
+      environment: config.environment,
+      deleted: false,
+      errorName: errorFromUnknown(err).name,
+      errorMessage: errorFromUnknown(err).message,
+    });
     return false;
   }
+}
+
+function readErrorCode(error: unknown): string | null {
+  if (error === null || typeof error !== "object") return null;
+  const code = Reflect.get(error, "code");
+  return typeof code === "string" ? code : null;
 }

@@ -23,6 +23,7 @@ import { FencePromotionExtension } from "../nodes/shared/fence-promotion-extensi
 import { ThreadAnchor } from "./thread-anchor";
 import { CommentDecorationsExtension } from "./comment-decorations-extension";
 import { CommentShortcutExtension } from "./comment-shortcut-extension";
+import { MarkdownClipboard } from "./markdown-clipboard-extension";
 
 /**
  * `@tiptap/extension-collaboration-caret` only reads `provider.awareness` off
@@ -90,6 +91,11 @@ export function buildArtifactExtensions(
       codeBlock: false,
     }),
     Markdown,
+    // Cmd+C / Cmd+X -> Markdown (via the `Markdown` manager above) instead of
+    // ProseMirror's default textContent, which drops `#` / `-` / `1.` / fences
+    // and double-spaces every block. Registered right after `Markdown` so the
+    // manager its serializer reads is already in storage.
+    MarkdownClipboard,
     Collaboration.configure({ document: doc, fragment }),
     CollaborationCaret.configure({
       provider,

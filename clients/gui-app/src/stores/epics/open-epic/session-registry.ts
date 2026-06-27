@@ -1,4 +1,5 @@
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
+import { appLogger } from "@/lib/logger";
 import { useSyncExternalStore } from "react";
 
 /**
@@ -13,6 +14,7 @@ import { useSyncExternalStore } from "react";
  * regardless of the cap.
  */
 export const DEFAULT_MAX_LIVE_EPICS = 5;
+const loggedLiveTitleReadFailures = new Set<string>();
 
 export interface OpenEpicSessionRegistryOptions {
   readonly maxLive: number;
@@ -221,7 +223,7 @@ export class OpenEpicSessionRegistry {
       const state = entry.handle.store.getState();
       if (!state.isDirty) continue;
       const title = resolveUnsyncedTitle(
-        readLiveTitle(entry.handle),
+        readLiveTitle(entry.handle, entry.epicId),
         state.snapshotMeta?.epicLight?.title ?? "",
         entry.epicId,
       );
@@ -297,12 +299,20 @@ function resolveUnsyncedTitle(
   return epicId;
 }
 
-function readLiveTitle(handle: OpenEpicStoreHandle): string {
+function readLiveTitle(handle: OpenEpicStoreHandle, epicId: string): string {
   try {
     const epicMap = handle.doc.getMap("epic");
     const title = epicMap.get("title");
     return typeof title === "string" ? title : "";
-  } catch {
+  } catch (error) {
+    if (!loggedLiveTitleReadFailures.has(epicId)) {
+      loggedLiveTitleReadFailures.add(epicId);
+      appLogger.error(
+        "[open-epic-session-registry] failed to read live title",
+        { epicId },
+        error,
+      );
+    }
     return "";
   }
 }

@@ -8,6 +8,7 @@ import {
   type Mock,
 } from "vitest";
 import type { RuntimeContext } from "../../runner/runtime";
+import { noopLogger } from "../../logger";
 
 // Pin Ticket a440ec2d: auto-bootstrap must distinguish "host already
 // installed but service missing" (service-only repair) from "no host
@@ -59,6 +60,10 @@ vi.mock("../../store/cli-lock", () => ({
   withCliLock: mocks.withCliLockMock,
 }));
 
+vi.mock("../busy-check", () => ({
+  assertHostNotBusy: vi.fn(async () => undefined),
+}));
+
 const {
   installHostMock,
   resolveBundledHostArchiveMock,
@@ -84,6 +89,7 @@ function makeRuntime(overrides: Partial<RuntimeContext>): RuntimeContext {
     noBootstrap: false,
     nonInteractive: false,
     environment: "production",
+    logger: noopLogger,
     ...overrides,
   };
 }

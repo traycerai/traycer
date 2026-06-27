@@ -8,6 +8,7 @@ import type {
   StoredAuthTokens,
 } from "@traycer-clients/shared/platform/runner-host";
 import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/auth-validation-types";
+import type { AuthTokenRefreshResult } from "../ipc-contracts/auth-types";
 import type { DesktopAuthSessionSnapshot } from "../ipc-contracts/window-types";
 import { subscribe, type Disposable, type Listener } from "./subscribe";
 
@@ -58,6 +59,10 @@ export interface AuthBridgeSurface {
     token: string,
     refreshToken: string,
   ): Promise<AuthIdentityValidationResult>;
+  refreshAuthToken(
+    token: string,
+    refreshToken: string,
+  ): Promise<AuthTokenRefreshResult>;
   exchangeAuthCode(
     code: string,
     codeVerifier: string,
@@ -81,6 +86,13 @@ export function buildAuthBridge(): AuthBridgeSurface {
         token,
         refreshToken,
       ) as Promise<AuthIdentityValidationResult>,
+
+    refreshAuthToken: (token, refreshToken) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.refreshAuthToken,
+        token,
+        refreshToken,
+      ) as Promise<AuthTokenRefreshResult>,
 
     exchangeAuthCode: (code, codeVerifier) =>
       ipcRenderer.invoke(

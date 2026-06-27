@@ -1,3 +1,9 @@
+import type { LogLevel } from "@traycer/protocol/config/log-level";
+
+// Re-exported so the preload bridge (which must import only from
+// `src/ipc-contracts/`) can reach the protocol's `LogLevel` through this layer.
+export type { LogLevel };
+
 export interface AccessibilityThemeSnapshot {
   readonly prefersReducedTransparency: boolean;
   readonly shouldUseHighContrastColors: boolean;
@@ -97,4 +103,14 @@ export interface TrustedCertificateEntry {
   readonly subject: string;
   readonly issuer: string;
   readonly trustedAt: number;
+}
+
+/** Which logger a Settings change targets. */
+export type LogLevelScope = "cli" | "host" | "desktop";
+
+/** The three configurable thresholds, surfaced together to the renderer. */
+export interface LogLevelsSnapshot {
+  readonly cliLogLevel: LogLevel;
+  readonly hostLogLevel: LogLevel;
+  readonly desktopLogLevel: LogLevel;
 }

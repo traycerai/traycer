@@ -596,6 +596,9 @@ export async function streamTraycerCliJson<T>(
         } catch {
           // Not JSON - the CLI shouldn't emit non-JSON in `--json` mode
           // but be tolerant of stray output.
+          log.warn("[traycer-cli] ignored non-JSON stdout line", {
+            lineLength: line.length,
+          });
           continue;
         }
         const event = parseNdjsonEvent(parsed);
@@ -787,6 +790,9 @@ function extractTerminalEnvelope(
     try {
       parsed = JSON.parse(line);
     } catch {
+      log.warn("[traycer-cli] ignored non-JSON terminal stdout line", {
+        lineLength: line.length,
+      });
       continue;
     }
     const event = parseNdjsonEvent(parsed);

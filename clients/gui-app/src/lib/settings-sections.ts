@@ -1,5 +1,6 @@
 import type { LucideIcon } from "lucide-react";
 import {
+  Activity,
   Bot,
   Boxes,
   GitBranch,
@@ -18,7 +19,8 @@ export type SettingsSectionId =
   | "keybindings"
   | "shell"
   | "worktrees"
-  | "host";
+  | "host"
+  | "diagnostics";
 
 export interface SettingsSection {
   id: SettingsSectionId;
@@ -35,4 +37,5 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
   { id: "shell", label: "Shell", icon: TerminalSquare },
   { id: "worktrees", label: "Worktrees", icon: GitBranch },
   { id: "host", label: "Host", icon: Server },
+  { id: "diagnostics", label: "Diagnostics", icon: Activity },
 ];

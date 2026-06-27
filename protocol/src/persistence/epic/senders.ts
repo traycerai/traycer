@@ -124,11 +124,27 @@ export type TraycerChatSessionAnchor = z.infer<
   typeof traycerChatSessionAnchorSchema
 >;
 
+// Grok (ACP) resumes at session granularity only — `session/load` reloads the
+// whole ACP session, with no per-message truncation/fork point — so the anchor
+// carries just the ACP session id (no provider-native user-message id like the
+// others). `sessionId` is that ACP session id.
+export const grokChatSessionAnchorSchema = z.object({
+  harnessId: z.literal("grok"),
+  hostId: z.string(),
+  sessionId: z.string(),
+  sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
+  createdAt: z.number(),
+});
+export type GrokChatSessionAnchor = z.infer<
+  typeof grokChatSessionAnchorSchema
+>;
+
 export const chatSessionAnchorSchema = z.discriminatedUnion("harnessId", [
   claudeChatSessionAnchorSchema,
   codexChatSessionAnchorSchema,
   openCodeChatSessionAnchorSchema,
   cursorChatSessionAnchorSchema,
   traycerChatSessionAnchorSchema,
+  grokChatSessionAnchorSchema,
 ]);
 export type ChatSessionAnchor = z.infer<typeof chatSessionAnchorSchema>;

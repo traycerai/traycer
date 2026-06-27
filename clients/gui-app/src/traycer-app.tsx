@@ -1,6 +1,7 @@
 import { HostPicker } from "@/components/layout/header/host-picker";
 import { AppUpdateToastController } from "@/components/layout/bridges/app-update-toast-controller";
 import { RunnerHostBridges } from "@/components/layout/bridges/runner-host-bridges";
+import { WorktreeDeleteProgressToastBridge } from "@/components/layout/bridges/worktree-delete-progress-toast-bridge";
 import { CenteredCard } from "@/components/centered-card";
 import { RootErrorBoundary } from "@/components/errors/root-error-boundary";
 import { Toaster } from "@/components/ui/sonner";
@@ -187,6 +188,7 @@ function TraycerAppRuntimeSurface(props: TraycerAppRuntimeSurfaceProps) {
     <>
       <RunnerHostBridges />
       <AppUpdateToastController />
+      <WorktreeDeleteProgressToastBridge />
       <CliCredentialSeeder />
       <HarnessCatalogPrefetcher />
       <HistoryPruneProvider router={props.router} />

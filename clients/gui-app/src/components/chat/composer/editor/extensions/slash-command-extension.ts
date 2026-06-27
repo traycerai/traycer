@@ -59,6 +59,16 @@ export const ChatSlashCommandNode = TiptapNode.create({
 
 const slashLeadingGuardKey = new PluginKey("composer-slash-leading-guard");
 
+/**
+ * Stable key for the `/` command suggestion plugin. Exported (and pinned via the
+ * Suggestion config below) so code outside the editor can imperatively exit an
+ * open suggestion by dispatching `setMeta(slashSuggestionPluginKey, { exit: true })`
+ * - see the editor's `dismissActiveSuggestion` handle.
+ */
+export const slashSuggestionPluginKey = new PluginKey(
+  "composer-slash-suggestion",
+);
+
 function slashLeadingGuardPlugin(): Plugin {
   return new Plugin({
     key: slashLeadingGuardKey,
@@ -115,6 +125,7 @@ export function createSlashSuggestionExtension(
       return [
         Suggestion({
           editor: this.editor,
+          pluginKey: slashSuggestionPluginKey,
           char: "/",
           allowSpaces: false,
           startOfLine: true,
