@@ -119,7 +119,7 @@ function claudeState(
 function geminiState(): ProviderCliState {
   return {
     ...claudeState({
-      oauthArgs: [],
+      oauthArgs: ["--list-sessions"],
       token: { vars: ["GEMINI_API_KEY", "GOOGLE_API_KEY"] },
     }),
     providerId: "gemini",
@@ -174,7 +174,7 @@ describe("<ProviderReauthBanner />", () => {
     expect(screen.getByRole("button", { name: /Authenticate/ })).toBeDefined();
   });
 
-  it("offers the OAuth button for bare-command login providers", () => {
+  it("offers the OAuth button for Gemini's auth-trigger command", () => {
     render(<ProviderReauthBanner providerId="gemini" state={geminiState()} />);
 
     expect(screen.getByRole("button", { name: /Authenticate/ })).toBeDefined();
