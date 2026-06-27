@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => ({
   awaitLoginMutate: vi.fn(),
   cancelLoginMutate: vi.fn(),
   setEnvOverrideMutate: vi.fn(),
+  setApiKeyMutate: vi.fn(),
   refreshProviders: vi.fn(() => Promise.resolve()),
   openExternalLink: vi.fn(),
   hostKind: "local",
@@ -61,6 +62,12 @@ vi.mock("@/hooks/providers/use-providers-cancel-login-mutation", () => ({
 vi.mock("@/hooks/providers/use-providers-set-env-override-mutation", () => ({
   useProvidersSetEnvOverride: () => ({
     mutate: mocks.setEnvOverrideMutate,
+    isPending: false,
+  }),
+}));
+vi.mock("@/hooks/providers/use-providers-set-api-key-mutation", () => ({
+  useProvidersSetApiKey: () => ({
+    mutate: mocks.setApiKeyMutate,
     isPending: false,
   }),
 }));
@@ -162,7 +169,7 @@ function droidState(): ProviderCliState {
     },
     authPending: false,
     checkedAt: null,
-    apiKey: { supported: false, configured: false, source: null },
+    apiKey: { supported: true, configured: false, source: null },
     terminalAgentArgs: "",
     envOverrides: [],
     loginCapability: DROID_CAP,
@@ -175,6 +182,7 @@ describe("<ProviderReauthBanner />", () => {
     mocks.awaitLoginMutate.mockClear();
     mocks.cancelLoginMutate.mockClear();
     mocks.setEnvOverrideMutate.mockClear();
+    mocks.setApiKeyMutate.mockClear();
     mocks.refreshProviders.mockClear();
     mocks.hostKind = "local";
   });
@@ -206,6 +214,23 @@ describe("<ProviderReauthBanner />", () => {
     ).toBeDefined();
     expect(screen.getByRole("button", { name: "Save" })).toBeDefined();
     expect(mocks.startLoginMutate).not.toHaveBeenCalled();
+  });
+
+  it("stores a pasted Droid key as the encrypted API-key secret, not an env override", () => {
+    render(<ProviderReauthBanner providerId="droid" state={droidState()} />);
+
+    const input = screen.getByPlaceholderText("Paste your FACTORY_API_KEY");
+    fireEvent.change(input, { target: { value: "  fk-droid-123  " } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    // Droid has an encrypted host-side key store, so the banner persists the key
+    // as that secret (`providers.setApiKey`) — exactly like Settings > Providers —
+    // rather than a plaintext env override.
+    expect(mocks.setApiKeyMutate).toHaveBeenCalledWith(
+      { providerId: "droid", apiKey: "fk-droid-123" },
+      expect.anything(),
+    );
+    expect(mocks.setEnvOverrideMutate).not.toHaveBeenCalled();
   });
 
   it("re-checks sign-in status via the manual Refresh button", () => {

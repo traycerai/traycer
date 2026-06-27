@@ -876,7 +876,7 @@ function ApiKeySection({ state }: { readonly state: ProviderCliState }) {
           placeholder={
             state.apiKey.source === "stored"
               ? "Replace stored key…"
-              : "Paste your Cursor API key"
+              : `Paste your ${PROVIDER_DISPLAY_NAMES[providerId]} API key`
           }
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
@@ -910,8 +910,8 @@ function ApiKeySection({ state }: { readonly state: ProviderCliState }) {
       </div>
       <p className="text-ui-xs text-muted-foreground">
         {state.apiKey.source === "env"
-          ? "Using CURSOR_API_KEY from your shell environment. Save a key here to override it."
-          : "Stored encrypted on this device. Falls back to CURSOR_API_KEY from your shell when unset."}
+          ? `Using ${envNamePlaceholder(providerId)} from your shell environment. Save a key here to override it.`
+          : `Stored encrypted on this device. Falls back to ${envNamePlaceholder(providerId)} from your shell when unset.`}
       </p>
     </div>
   );
