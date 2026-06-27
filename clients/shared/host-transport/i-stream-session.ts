@@ -25,10 +25,7 @@ import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol"
  *   - `close()` is idempotent and stops further reconnect attempts.
  */
 export type StreamConnectionStatus =
-  | "connecting"
-  | "open"
-  | "reconnecting"
-  | "closed";
+  "connecting" | "open" | "reconnecting" | "closed";
 
 /**
  * Reason surfaced alongside `"closed"` transitions so the consumer can
