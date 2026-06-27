@@ -135,8 +135,20 @@ export const grokChatSessionAnchorSchema = z.object({
   sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
   createdAt: z.number(),
 });
-export type GrokChatSessionAnchor = z.infer<
-  typeof grokChatSessionAnchorSchema
+export type GrokChatSessionAnchor = z.infer<typeof grokChatSessionAnchorSchema>;
+
+// iFlow (ACP) resumes at session granularity only — `session/load` reloads the
+// whole ACP session, with no per-message truncation/fork point. `sessionId` is
+// that ACP session id.
+export const iflowChatSessionAnchorSchema = z.object({
+  harnessId: z.literal("iflow"),
+  hostId: z.string(),
+  sessionId: z.string(),
+  sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
+  createdAt: z.number(),
+});
+export type IflowChatSessionAnchor = z.infer<
+  typeof iflowChatSessionAnchorSchema
 >;
 
 export const chatSessionAnchorSchema = z.discriminatedUnion("harnessId", [
@@ -146,5 +158,6 @@ export const chatSessionAnchorSchema = z.discriminatedUnion("harnessId", [
   cursorChatSessionAnchorSchema,
   traycerChatSessionAnchorSchema,
   grokChatSessionAnchorSchema,
+  iflowChatSessionAnchorSchema,
 ]);
 export type ChatSessionAnchor = z.infer<typeof chatSessionAnchorSchema>;

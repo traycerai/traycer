@@ -100,6 +100,8 @@ const PROVIDER_DESCRIPTIONS: Record<ProviderId, string> = {
     "Cursor agent - SDK-driven chats authenticated with your Cursor API key.",
   traycer: "Traycer's managed harness uses the selected OpenCode CLI binary.",
   grok: "Grok agent - xAI's coding CLI via your SuperGrok / X subscription.",
+  iflow:
+    "iFlow agent - run the iFlow CLI manually for native login, or use IFLOW_API_KEY / OpenAI-compatible settings.",
 };
 
 const TERMINAL_AGENT_ARGS_PLACEHOLDER: Record<
@@ -122,6 +124,7 @@ function terminalAgentArgsPlaceholder(providerId: ProviderId): string {
     case "cursor":
     case "traycer":
     case "grok":
+    case "iflow":
       return "CLI arguments (optional)";
   }
 }
@@ -133,6 +136,7 @@ const HARNESS_ICON_ID: Record<ProviderId, HarnessIconId> = {
   cursor: "cursor",
   traycer: "traycer",
   grok: "grok",
+  iflow: "iflow",
 };
 
 // Grid keeps the columns aligned across header + rows; `minmax(0,1fr)` on
@@ -731,6 +735,8 @@ function envNamePlaceholder(providerId: ProviderId): string {
       return "CURSOR_API_KEY";
     case "grok":
       return "XAI_API_KEY";
+    case "iflow":
+      return "IFLOW_API_KEY";
   }
 }
 

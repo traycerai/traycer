@@ -20,6 +20,17 @@ export const OpenCodeIcon: HarnessIcon = (props) => <OpenCodeMono {...props} />;
 export const CursorIcon: HarnessIcon = (props) => <CursorMono {...props} />;
 export const GrokIcon: HarnessIcon = (props) => <GrokMono {...props} />;
 
+// iFlow does not have a lobehub entry; keep a simple mono wordmark rather than
+// substituting a different vendor's brand logo.
+export const IflowIcon: HarnessIcon = (props) => (
+  <svg {...props} viewBox="0 0 24 24" fill="none">
+    <path
+      d="M5.25 8.2H8.1v10.3H5.25V8.2Zm1.42-3.1c.95 0 1.58.58 1.58 1.42 0 .83-.63 1.42-1.58 1.42-.93 0-1.56-.59-1.56-1.42 0-.84.63-1.42 1.56-1.42ZM11.15 5.6h8.15v2.45h-5.22v2.95h4.62v2.4h-4.62v5.1h-2.93V5.6Z"
+      fill="currentColor"
+    />
+  </svg>
+);
+
 // Traycer does not have a lobehub entry — hand-rolled from the brand mark.
 export const TraycerIcon: HarnessIcon = (props) => (
   <svg {...props} viewBox="0 0 211 218" fill="currentColor">

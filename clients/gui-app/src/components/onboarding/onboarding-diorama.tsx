@@ -349,6 +349,12 @@ const PROVIDERS: ReadonlyArray<{
     status: "SuperGrok / X",
     capabilities: ["gui"],
   },
+  {
+    harnessId: "iflow",
+    label: "iFlow",
+    status: "CLI login or API key",
+    capabilities: ["gui"],
+  },
 ];
 
 const PALETTE_ROWS = [

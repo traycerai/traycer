@@ -675,6 +675,15 @@ export const grokUserMessageAnchorResolvedSchema = z.object({
   grokSessionId: z.string().nullable(),
 });
 
+export const iflowUserMessageAnchorResolvedSchema = z.object({
+  harnessId: z.literal("iflow"),
+  sessionId: z.string(),
+  // The ACP session id the `iflow --experimental-acp` process assigned for
+  // this turn. Null until `session/new` resolves; used to resume the same ACP
+  // session.
+  iflowSessionId: z.string().nullable(),
+});
+
 export const userMessageAnchorResolvedEventSchema = z.object({
   ...baseRuntimeEventFields,
   type: z.literal("user_message.anchor_resolved"),
@@ -686,6 +695,7 @@ export const userMessageAnchorResolvedEventSchema = z.object({
     cursorUserMessageAnchorResolvedSchema,
     traycerUserMessageAnchorResolvedSchema,
     grokUserMessageAnchorResolvedSchema,
+    iflowUserMessageAnchorResolvedSchema,
   ]),
 });
 export type UserMessageAnchorResolvedEvent = z.infer<
