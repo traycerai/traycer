@@ -3,6 +3,7 @@ import {
   CodexIcon,
   CursorIcon,
   GrokIcon,
+  KiloCodeIcon,
   OpenCodeIcon,
   TraycerIcon,
   type HarnessIcon,
@@ -21,4 +22,5 @@ export const PROVIDER_ICON_CONFIG: Record<ProviderId, HarnessIconConfig> = {
   traycer: { Icon: TraycerIcon, className: "text-foreground" },
   cursor: { Icon: CursorIcon, className: "text-foreground" },
   grok: { Icon: GrokIcon, className: "text-foreground" },
+  kilocode: { Icon: KiloCodeIcon, className: "text-foreground" },
 };

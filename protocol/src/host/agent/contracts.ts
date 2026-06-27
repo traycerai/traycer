@@ -130,7 +130,10 @@ export const agentListDowngradeV2ToV1 = defineDowngradePath<
     ok: true,
     value: listAgentsResponseSchemaV10.parse({
       ...response,
-      agents: response.agents.filter((agent) => agent.harnessId !== "grok"),
+      agents: response.agents.filter(
+        (agent) =>
+          agent.harnessId !== "grok" && agent.harnessId !== "kilocode",
+      ),
     }),
   }),
 });

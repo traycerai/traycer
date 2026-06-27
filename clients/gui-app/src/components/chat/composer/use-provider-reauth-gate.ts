@@ -12,11 +12,13 @@ import { useTabProvidersList } from "@/hooks/providers/use-tab-providers-list-qu
 // The harness id set is a superset of the provider-CLI id set (it also carries
 // `traycer`, which has no provider-CLI login). Only CLI harnesses gate. Grok is
 // GUI-only (not in the TUI map) but DOES gate — its `grok login` subscription /
-// XAI_API_KEY auth surfaces as a provider, mirroring the host's
+// XAI_API_KEY auth surfaces as a provider, and Kilo Code follows the same
+// GUI-only provider-login path, mirroring the host's
 // `harnessIdToProviderId`.
 function providerIdForHarness(harnessId: GuiHarnessId): ProviderId | null {
   if (harnessId === "traycer") return null;
   if (harnessId === "grok") return "grok";
+  if (harnessId === "kilocode") return "kilocode";
   return TUI_HARNESS_ID_TO_PROVIDER_ID[harnessId];
 }
 

@@ -349,6 +349,12 @@ const PROVIDERS: ReadonlyArray<{
     status: "SuperGrok / X",
     capabilities: ["gui"],
   },
+  {
+    harnessId: "kilocode",
+    label: "Kilo Code",
+    status: "Kilo login",
+    capabilities: ["gui"],
+  },
 ];
 
 const PALETTE_ROWS = [

@@ -675,6 +675,14 @@ export const grokUserMessageAnchorResolvedSchema = z.object({
   grokSessionId: z.string().nullable(),
 });
 
+export const kilocodeUserMessageAnchorResolvedSchema = z.object({
+  harnessId: z.literal("kilocode"),
+  sessionId: z.string(),
+  // The ACP session id the `kilo acp` process assigned for this turn.
+  // Null until `session/new` resolves; used to resume the same ACP session.
+  kilocodeSessionId: z.string().nullable(),
+});
+
 export const userMessageAnchorResolvedEventSchema = z.object({
   ...baseRuntimeEventFields,
   type: z.literal("user_message.anchor_resolved"),
@@ -686,6 +694,7 @@ export const userMessageAnchorResolvedEventSchema = z.object({
     cursorUserMessageAnchorResolvedSchema,
     traycerUserMessageAnchorResolvedSchema,
     grokUserMessageAnchorResolvedSchema,
+    kilocodeUserMessageAnchorResolvedSchema,
   ]),
 });
 export type UserMessageAnchorResolvedEvent = z.infer<
