@@ -345,11 +345,7 @@ export interface TraycerPidMetadata {
 }
 
 export type BootstrapPhase =
-  | "starting"
-  | "exited"
-  | "crashed"
-  | "killed"
-  | "failed-to-spawn";
+  "starting" | "exited" | "crashed" | "killed" | "failed-to-spawn";
 
 export interface BootstrapMarkerEntry {
   readonly timestamp: string;
@@ -476,8 +472,7 @@ export interface IServiceHost {
  * message.
  */
 export type AuthCallbackResult =
-  | { readonly code: string }
-  | { readonly error: string };
+  { readonly code: string } | { readonly error: string };
 
 export interface AuthValidationProfile {
   readonly userId: string;
