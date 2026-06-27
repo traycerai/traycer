@@ -71,7 +71,10 @@ export const useWorkspaceFoldersStore = create<WorkspaceFoldersStore>()(
 
 // Make this window's folder set per-window: stop persisting, then drop the set
 // hydrated from the shared key (disable first so the reset doesn't write back).
+// Idempotent — once isolated, a bridge teardown/re-install must not wipe the
+// folders the user has added in this window.
 export function isolateWorkspaceFoldersForDesktopWindow(): void {
+  if (!localPersistenceEnabled) return;
   localPersistenceEnabled = false;
   useWorkspaceFoldersStore.setState({
     folders: INITIAL_FOLDERS,
