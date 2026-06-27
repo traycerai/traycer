@@ -135,8 +135,17 @@ export const grokChatSessionAnchorSchema = z.object({
   sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
   createdAt: z.number(),
 });
-export type GrokChatSessionAnchor = z.infer<
-  typeof grokChatSessionAnchorSchema
+export type GrokChatSessionAnchor = z.infer<typeof grokChatSessionAnchorSchema>;
+
+export const droidChatSessionAnchorSchema = z.object({
+  harnessId: z.literal("droid"),
+  hostId: z.string(),
+  sessionId: z.string(),
+  sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
+  createdAt: z.number(),
+});
+export type DroidChatSessionAnchor = z.infer<
+  typeof droidChatSessionAnchorSchema
 >;
 
 export const chatSessionAnchorSchema = z.discriminatedUnion("harnessId", [
@@ -146,5 +155,6 @@ export const chatSessionAnchorSchema = z.discriminatedUnion("harnessId", [
   cursorChatSessionAnchorSchema,
   traycerChatSessionAnchorSchema,
   grokChatSessionAnchorSchema,
+  droidChatSessionAnchorSchema,
 ]);
 export type ChatSessionAnchor = z.infer<typeof chatSessionAnchorSchema>;

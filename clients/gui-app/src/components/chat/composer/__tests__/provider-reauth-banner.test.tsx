@@ -92,6 +92,14 @@ const CLAUDE_CAP: ProviderLoginCapability = {
   token: { vars: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"] },
 };
 
+// Droid has no headless login subcommand (bare `droid` is an interactive TUI
+// that can't browser-OAuth over piped stdio), so it advertises no OAuth args -
+// reauth is the FACTORY_API_KEY paste form only.
+const DROID_CAP: ProviderLoginCapability = {
+  oauthArgs: null,
+  token: { vars: ["FACTORY_API_KEY"] },
+};
+
 function claudeState(
   loginCapability: ProviderLoginCapability | null,
 ): ProviderCliState {
@@ -139,6 +147,28 @@ function cursorState(): ProviderCliState {
   };
 }
 
+function droidState(): ProviderCliState {
+  return {
+    providerId: "droid",
+    enabled: true,
+    disabledBy: null,
+    selected: { kind: "bundled" },
+    candidates: [],
+    auth: {
+      status: "unauthenticated",
+      badgeText: null,
+      label: null,
+      detail: null,
+    },
+    authPending: false,
+    checkedAt: null,
+    apiKey: { supported: false, configured: false, source: null },
+    terminalAgentArgs: "",
+    envOverrides: [],
+    loginCapability: DROID_CAP,
+  };
+}
+
 describe("<ProviderReauthBanner />", () => {
   beforeEach(() => {
     mocks.startLoginMutate.mockReset();
@@ -162,6 +192,22 @@ describe("<ProviderReauthBanner />", () => {
     );
 
     expect(screen.getByRole("button", { name: /Authenticate/ })).toBeDefined();
+  });
+
+  it("offers only the token paste form (no Authenticate) for a CLI with no headless login (Droid)", () => {
+    render(<ProviderReauthBanner providerId="droid" state={droidState()} />);
+
+    // Droid has no spawnable OAuth login, so no Authenticate button is offered -
+    // it would only hang on "Waiting for browser sign-in…".
+    expect(
+      screen.queryByRole("button", { name: /Authenticate/ }),
+    ).toBeNull();
+    // The FACTORY_API_KEY paste form is the reconnect path instead.
+    expect(
+      screen.getByPlaceholderText("Paste your FACTORY_API_KEY"),
+    ).toBeDefined();
+    expect(screen.getByRole("button", { name: "Save" })).toBeDefined();
+    expect(mocks.startLoginMutate).not.toHaveBeenCalled();
   });
 
   it("re-checks sign-in status via the manual Refresh button", () => {

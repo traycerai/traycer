@@ -421,7 +421,8 @@ export const providersListDowngradeV2ToV1 = defineDowngradePath<
     ok: true,
     value: providersListResponseSchemaV10.parse({
       providers: response.providers.filter(
-        (provider) => provider.providerId !== "grok",
+        (provider) =>
+          provider.providerId !== "grok" && provider.providerId !== "droid",
       ),
     }),
   }),

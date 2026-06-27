@@ -62,13 +62,14 @@ export const agentSelectionGuideGlobalGetV10 = defineRpcContract({
   responseSchema: agentSelectionGuideGlobalGetResponseSchema,
 });
 
-export const agentSelectionGuideGlobalOnboardingDraftGetV10 =
-  defineRpcContract({
+export const agentSelectionGuideGlobalOnboardingDraftGetV10 = defineRpcContract(
+  {
     method: "agent.selectionGuide.getGlobalOnboardingDraft",
     schemaVersion: { major: 1, minor: 0 } as const,
     requestSchema: agentSelectionGuideGlobalOnboardingDraftGetRequestSchema,
     responseSchema: agentSelectionGuideGlobalOnboardingDraftGetResponseSchema,
-  });
+  },
+);
 
 export const agentSelectionGuideGlobalSetV10 = defineRpcContract({
   method: "agent.selectionGuide.setGlobal",
@@ -124,13 +125,15 @@ export const agentListDowngradeV2ToV1 = defineDowngradePath<
   from: { major: 2, minor: 0 },
   to: { major: 1, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
-  // Drop grok agents so a v1.0 client's strict (grok-less) decode never sees
-  // one. The re-parse yields the precise v1.0 type without an assertion.
+  // Drop post-v1.0 agents so a v1.0 client's strict decode never sees one. The
+  // re-parse yields the precise v1.0 type without an assertion.
   downgradeResponse: (response) => ({
     ok: true,
     value: listAgentsResponseSchemaV10.parse({
       ...response,
-      agents: response.agents.filter((agent) => agent.harnessId !== "grok"),
+      agents: response.agents.filter(
+        (agent) => agent.harnessId !== "grok" && agent.harnessId !== "droid",
+      ),
     }),
   }),
 });
