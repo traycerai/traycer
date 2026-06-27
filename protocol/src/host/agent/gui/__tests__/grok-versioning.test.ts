@@ -66,9 +66,14 @@ function providerState(providerId: string) {
 }
 
 describe("grok non-breaking v2→v1 downgrade bridges", () => {
-  it("drops grok from agent.gui.listHarnesses for v1.0 callers", () => {
+  it("drops grok and kilocode from agent.gui.listHarnesses for v1.0 callers", () => {
     const v2Response = listGuiHarnessesResponseSchema.parse({
-      harnesses: [harnessOption("claude"), harnessOption("grok"), harnessOption("cursor")],
+      harnesses: [
+        harnessOption("claude"),
+        harnessOption("grok"),
+        harnessOption("kilocode"),
+        harnessOption("cursor"),
+      ],
     });
 
     const result = agentGuiListHarnessesDowngradeV2ToV1.downgradeResponse(v2Response);
@@ -81,9 +86,13 @@ describe("grok non-breaking v2→v1 downgrade bridges", () => {
     expect(() => listGuiHarnessesResponseSchemaV10.parse(result.value)).not.toThrow();
   });
 
-  it("drops grok from providers.list for v1.0 callers", () => {
+  it("drops grok and kilocode from providers.list for v1.0 callers", () => {
     const v2Response = providersListResponseSchema.parse({
-      providers: [providerState("cursor"), providerState("grok")],
+      providers: [
+        providerState("cursor"),
+        providerState("grok"),
+        providerState("kilocode"),
+      ],
     });
 
     const result = providersListDowngradeV2ToV1.downgradeResponse(v2Response);
@@ -94,13 +103,14 @@ describe("grok non-breaking v2→v1 downgrade bridges", () => {
     expect(() => providersListResponseSchemaV10.parse(result.value)).not.toThrow();
   });
 
-  it("drops grok agents from agent.list for v1.0 callers", () => {
+  it("drops grok and kilocode agents from agent.list for v1.0 callers", () => {
     const v2Response = listAgentsResponseSchema.parse({
       caller: { agentId: "self", canSendMessages: true },
       scope: "all",
       agents: [
         agentSummary("a-claude", "claude"),
         agentSummary("a-grok", "grok"),
+        agentSummary("a-kilocode", "kilocode"),
         agentSummary("a-null", null),
       ],
     });
