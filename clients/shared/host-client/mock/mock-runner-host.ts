@@ -1,5 +1,6 @@
 import type { Disposable } from "../../platform/uri-callback";
 import type {
+  AuthTokenRefreshResult,
   AuthTokenValidationResult,
   DeviceFlowAuthorization,
   DeviceFlowResult,
@@ -25,6 +26,7 @@ import type {
   TrayIndicatorState,
 } from "../../platform/runner-host";
 import {
+  refreshAuthTokenViaHttp,
   validateAuthTokenIdentityViaHttp,
   validateAuthTokenViaHttp,
 } from "../../auth/auth-validation";
@@ -169,6 +171,13 @@ export class MockRunnerHost implements IRunnerHost {
       token,
       refreshToken,
     );
+  }
+
+  refreshAuthToken(
+    token: string,
+    refreshToken: string,
+  ): Promise<AuthTokenRefreshResult> {
+    return refreshAuthTokenViaHttp(this.authnBaseUrl, token, refreshToken);
   }
 
   async openExternalLink(url: string): Promise<void> {

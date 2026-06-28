@@ -238,6 +238,7 @@ import {
   createComposerToolbarStore,
   type ComposerToolbarStore,
 } from "@/stores/composer/composer-toolbar-store";
+import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ALL_PERMISSION_MODES } from "@traycer/protocol/persistence/epic/foundation";
 
@@ -268,6 +269,16 @@ const OPENCODE_HARNESS: HarnessOption = {
   error: "OpenCode not configured",
   modes: ["gui", "tui"],
   requiresApiKey: false,
+  supportedPermissionModes: [...ALL_PERMISSION_MODES],
+};
+
+const OPENROUTER_HARNESS: HarnessOption = {
+  id: "openrouter",
+  label: "OpenRouter",
+  available: false,
+  error: "OpenRouter needs an API key",
+  modes: ["gui"],
+  requiresApiKey: true,
   supportedPermissionModes: [...ALL_PERMISSION_MODES],
 };
 
@@ -352,31 +363,45 @@ function defaultSelection(): HarnessModelSelection {
 function installCatalog(): void {
   const codex = codexModels();
   const claude = claudeModels();
-  queryMock.harnesses = [CODEX_HARNESS, CLAUDE_HARNESS, OPENCODE_HARNESS];
+  queryMock.harnesses = [
+    CODEX_HARNESS,
+    CLAUDE_HARNESS,
+    OPENCODE_HARNESS,
+    OPENROUTER_HARNESS,
+  ];
   queryMock.catalogHarnesses = [
     catalogHarness(CODEX_HARNESS, codex),
     catalogHarness(CLAUDE_HARNESS, claude),
     catalogHarness(OPENCODE_HARNESS, []),
+    catalogHarness(OPENROUTER_HARNESS, []),
   ];
   queryMock.selectedModelsByHarness = new Map([
     ["codex", codex],
     ["claude", claude],
     ["opencode", []],
+    ["openrouter", []],
   ]);
 }
 
 function installClaudeCatalog(models: ReadonlyArray<ModelOption>): void {
   const codex = codexModels();
-  queryMock.harnesses = [CODEX_HARNESS, CLAUDE_HARNESS, OPENCODE_HARNESS];
+  queryMock.harnesses = [
+    CODEX_HARNESS,
+    CLAUDE_HARNESS,
+    OPENCODE_HARNESS,
+    OPENROUTER_HARNESS,
+  ];
   queryMock.catalogHarnesses = [
     catalogHarness(CODEX_HARNESS, codex),
     catalogHarness(CLAUDE_HARNESS, models),
     catalogHarness(OPENCODE_HARNESS, []),
+    catalogHarness(OPENROUTER_HARNESS, []),
   ];
   queryMock.selectedModelsByHarness = new Map([
     ["codex", codex],
     ["claude", models],
     ["opencode", []],
+    ["openrouter", []],
   ]);
 }
 
@@ -451,6 +476,7 @@ function pickerHarness(input: RenderPickerInput | undefined): PickerHarness {
           tuiOnly={resolvedInput.tuiOnly ?? false}
           lockedHarnessId={resolvedInput.lockedHarnessId ?? null}
           disabled={disabled}
+          registerActivation={false}
         />
       </TooltipProvider>
     </SurfaceActivityProvider>
@@ -488,6 +514,8 @@ describe("<HarnessModelPicker />", () => {
     queryMock.calls.harnesses = [];
     queryMock.calls.catalog = [];
     queryMock.calls.models = [];
+    openSettingsMock.mockClear();
+    useProvidersFocusStore.getState().clearFocusHarnessId();
   });
 
   afterEach(() => {
@@ -685,6 +713,28 @@ describe("<HarnessModelPicker />", () => {
     // Available providers remain selectable.
     expect(screen.getByRole("tab", { name: "Codex" })).not.toBeNull();
     expect(screen.getByRole("tab", { name: "Claude" })).not.toBeNull();
+  });
+
+  it("keeps unavailable API-key providers visible with a settings CTA", async () => {
+    renderPicker(undefined);
+
+    await openPicker();
+    fireEvent.click(screen.getByRole("tab", { name: "OpenRouter" }));
+
+    expect(screen.getByText("Connect OpenRouter")).not.toBeNull();
+    expect(
+      screen.getByText(
+        "OpenRouter needs an API key to list models and start chats. Add yours in Provider settings to get started.",
+      ),
+    ).not.toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Add API key" }));
+
+    expect(useProvidersFocusStore.getState().focusHarnessId).toBe("openrouter");
+    expect(openSettingsMock).toHaveBeenCalledWith({
+      section: "providers",
+      resetToGeneral: false,
+    });
   });
 
   it("keeps the query when switching harness and re-scopes the results", async () => {

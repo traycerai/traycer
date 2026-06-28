@@ -3,6 +3,7 @@ import {
   RunnerHostInvoke,
 } from "../../ipc-contracts/ipc-channels";
 import {
+  refreshAuthTokenViaHttp,
   validateAuthTokenIdentityViaHttp,
   validateAuthTokenViaHttp,
 } from "@traycer-clients/shared/auth/auth-validation";
@@ -38,6 +39,20 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
       assertString(token, "validateAuthTokenIdentity");
       assertString(refreshToken, "validateAuthTokenIdentity.refreshToken");
       return validateAuthTokenIdentityViaHttp(
+        bridge.options.authnBaseUrl,
+        token,
+        refreshToken,
+      );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.refreshAuthToken,
+    async (_event, token: unknown, refreshToken: unknown) => {
+      assertString(token, "refreshAuthToken");
+      assertString(refreshToken, "refreshAuthToken.refreshToken");
+      // Run in main so renderer-origin CORS does not block the authn refresh.
+      return refreshAuthTokenViaHttp(
         bridge.options.authnBaseUrl,
         token,
         refreshToken,

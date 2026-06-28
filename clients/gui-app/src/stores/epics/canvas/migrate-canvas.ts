@@ -63,18 +63,60 @@ function parsePane(
   const activeTabId =
     typeof value.activeTabId === "string" && seen.has(value.activeTabId)
       ? value.activeTabId
-      : (tabInstanceIds[0] ?? null);
+      : firstTabId(tabInstanceIds);
   const previewTabId =
     typeof value.previewTabId === "string" && seen.has(value.previewTabId)
       ? value.previewTabId
       : null;
+  const activationHistory = parsePaneActivationHistory(
+    value.activationHistory,
+    seen,
+    activeTabId,
+  );
   return {
     kind: "pane",
     id: value.id,
     tabInstanceIds,
     activeTabId,
     previewTabId,
+    activationHistory,
   };
+}
+
+function firstTabId(tabInstanceIds: ReadonlyArray<string>): string | null {
+  if (tabInstanceIds.length === 0) return null;
+  return tabInstanceIds[0];
+}
+
+function seedActivationHistory(
+  activeTabId: string | null,
+): ReadonlyArray<string> {
+  return activeTabId === null ? [] : [activeTabId];
+}
+
+function parsePaneActivationHistory(
+  value: unknown,
+  liveTabIds: ReadonlySet<string>,
+  activeTabId: string | null,
+): ReadonlyArray<string> {
+  if (!Array.isArray(value)) return seedActivationHistory(activeTabId);
+  const parsed = parseActivationHistory(value, liveTabIds);
+  if (parsed.length > 0 || value.length === 0) return parsed;
+  return seedActivationHistory(activeTabId);
+}
+
+function parseActivationHistory(
+  value: ReadonlyArray<unknown>,
+  liveTabIds: ReadonlySet<string>,
+): ReadonlyArray<string> {
+  const seen = new Set<string>();
+  return value.flatMap((entry) => {
+    if (typeof entry !== "string") return [];
+    if (!liveTabIds.has(entry)) return [];
+    if (seen.has(entry)) return [];
+    seen.add(entry);
+    return [entry];
+  });
 }
 
 function parseGroup(
@@ -194,6 +236,7 @@ export function serializeTileNode(node: TileLayoutNode): DesktopJsonValue {
       tabInstanceIds: node.tabInstanceIds,
       activeTabId: node.activeTabId,
       previewTabId: node.previewTabId,
+      activationHistory: node.activationHistory,
     };
   }
   return {

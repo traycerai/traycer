@@ -1,5 +1,5 @@
-/* eslint-disable no-console -- console is the intended diagnostic sink for
-   this profiling-only probe; there is no telemetry pipeline in gui-app yet. */
+import { appLogger } from "@/lib/logger";
+
 /**
  * Renderer main-thread block probe.
  *
@@ -75,14 +75,19 @@ export function startMainThreadBlockProbe(): void {
       if (entry.duration < REPORT_THRESHOLD_MS) continue;
       const blockedMs = Math.round(entry.duration);
       const atMs = Math.round(entry.startTime);
-      console.warn(
-        `[main-thread-block] ${blockedMs}ms blocked at ${atMs}ms (${attributionLabel(entry)})`,
-      );
+      appLogger.warn("[main-thread-block] renderer main thread blocked", {
+        blockedMs,
+        atMs,
+        attribution: attributionLabel(entry),
+      });
     }
   });
   try {
     observer.observe({ entryTypes: ["longtask"] });
-  } catch {
+  } catch (error) {
+    appLogger.warn("[main-thread-block] observer start failed", {
+      error: error instanceof Error ? error.name : typeof error,
+    });
     // `longtask` not observable in this engine; leave the probe inert.
     started = false;
   }

@@ -40,6 +40,13 @@ export interface HostInstallArgs {
 
 export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
   return async (ctx): Promise<CommandResult> => {
+    ctx.runtime.logger.info("Host install command started", {
+      environment: ctx.runtime.environment,
+      sourceKind: args.fromPath !== null ? "local-file" : "registry",
+      versionRequest: args.fromPath !== null ? "local-file" : args.versionRequest,
+      enableLinger: args.enableLinger,
+      allowSelfInvocation: args.allowSelfInvocation,
+    });
     const source: InstallSourceArg =
       args.fromPath !== null
         ? { kind: "local-file", path: args.fromPath }
@@ -53,6 +60,9 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
         enableLinger: args.enableLinger,
         allowSelfInvocation: args.allowSelfInvocation,
       },
+    });
+    ctx.runtime.logger.debug("Host install command lifecycle created", {
+      environment: ctx.runtime.environment,
     });
     const result = await withCliLock(
       {
@@ -72,6 +82,13 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
           recordVersionOverride: null,
         }),
     );
+    ctx.runtime.logger.info("Host install command completed", {
+      environment: ctx.runtime.environment,
+      version: result.record.version,
+      previousVersion: result.previous?.version ?? null,
+      postSwapAction: handle.state.postSwapAction,
+      hasPostSwapError: handle.state.postSwapError !== null,
+    });
     const lifecycleData = {
       priorServiceState: handle.state.priorState,
       stoppedBeforeSwap: handle.state.stoppedBeforeSwap,

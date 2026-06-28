@@ -14,6 +14,9 @@ import { withCliLock } from "../store/cli-lock";
 // pointed at a half-replaced install dir (especially relevant on
 // Windows where executable locks block the rename otherwise).
 export const hostUpdateCommand: CommandFn = async (ctx): Promise<CommandResult> => {
+  ctx.runtime.logger.info("Host update command started", {
+    environment: ctx.runtime.environment,
+  });
   return withCliLock(
     {
       environment: ctx.runtime.environment,
@@ -27,6 +30,9 @@ export const hostUpdateCommand: CommandFn = async (ctx): Promise<CommandResult> 
       );
       const previous = await readHostInstallRecord(ctx.runtime.environment);
       if (previous === null) {
+        ctx.runtime.logger.warn("Host update refused because host is not installed", {
+          environment: ctx.runtime.environment,
+        });
         throw cliError({
           code: CLI_ERROR_CODES.HOST_NOT_INSTALLED,
           message: `host update: no host installed for environment=${ctx.runtime.environment}; run 'traycer host install latest' first`,
@@ -40,6 +46,10 @@ export const hostUpdateCommand: CommandFn = async (ctx): Promise<CommandResult> 
       const handle = createServiceInstallLifecycle({
         environment: ctx.runtime.environment,
         bootstrap: null,
+      });
+      ctx.runtime.logger.debug("Host update lifecycle created", {
+        environment: ctx.runtime.environment,
+        previousVersion: previous.version,
       });
       const result = await installHost({
         environment: ctx.runtime.environment,
@@ -59,6 +69,14 @@ export const hostUpdateCommand: CommandFn = async (ctx): Promise<CommandResult> 
         previous.version === result.record.version
           ? `host already at ${result.record.version} (no-op)`
           : `updated host ${previous.version} → ${result.record.version}`;
+      ctx.runtime.logger.info("Host update command completed", {
+        environment: ctx.runtime.environment,
+        previousVersion: previous.version,
+        version: result.record.version,
+        changed: previous.version !== result.record.version,
+        postSwapAction: handle.state.postSwapAction,
+        hasPostSwapError: handle.state.postSwapError !== null,
+      });
       return {
         data: {
           version: result.record.version,

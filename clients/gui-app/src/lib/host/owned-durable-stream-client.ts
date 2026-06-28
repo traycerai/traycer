@@ -1,6 +1,7 @@
 import type { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
+import { appLogger } from "@/lib/logger";
 
 /**
  * Owns a durable transport for the lifetime of one typed stream client — the
@@ -18,6 +19,7 @@ export function openOwnedDurableStreamClient<TClient extends { close(): void }>(
   const transport = openTransport(hostId);
   try {
     const client = build(transport.wsStreamClient);
+    appLogger.info("[stream] owned durable client opened", { hostId });
     return {
       client,
       close: () => {
@@ -26,6 +28,11 @@ export function openOwnedDurableStreamClient<TClient extends { close(): void }>(
       },
     };
   } catch (cause) {
+    appLogger.error(
+      "[stream] owned durable client build failed",
+      { hostId },
+      cause,
+    );
     transport.close();
     throw cause;
   }

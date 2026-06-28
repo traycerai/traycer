@@ -84,6 +84,12 @@ export function GeneralSettingsPanel() {
   const setNotifyOnChatTurnComplete = useSettingsStore(
     (s) => s.setNotifyOnChatTurnComplete,
   );
+  const pinContextUsageBreakdown = useSettingsStore(
+    (s) => s.pinContextUsageBreakdown,
+  );
+  const setPinContextUsageBreakdown = useSettingsStore(
+    (s) => s.setPinContextUsageBreakdown,
+  );
 
   return (
     <SettingsPanelShell title="General">
@@ -106,6 +112,17 @@ export function GeneralSettingsPanel() {
             checked={preventSleepWhileRunning}
             onCheckedChange={setPreventSleepWhileRunning}
             aria-label="Prevent sleep while running"
+          />
+        }
+      />
+      <SettingsRow
+        label="Pin context usage breakdown"
+        description="Keep the context window breakdown visible near the chat composer when usage data is available."
+        control={
+          <Switch
+            checked={pinContextUsageBreakdown}
+            onCheckedChange={setPinContextUsageBreakdown}
+            aria-label="Pin context usage breakdown"
           />
         }
       />

@@ -67,6 +67,15 @@ export type RequestContextListener = (ctx: RequestContext | null) => void;
 export interface RequestContextProvider {
   current(): RequestContext | null;
   onChange(listener: RequestContextListener): RequestContextSubscription;
+  /**
+   * Fires whenever the active context's bearer is rotated in place (same-user
+   * refresh) - the transition `onChange` is deliberately silent about, because
+   * the context reference is unchanged. Subscribers that must propagate a fresh
+   * bearer to already-open connections (the stream transport's in-place
+   * `credentialUpdate`) listen here; everything that keys on identity keeps
+   * using `onChange`. Carries no value: listeners re-read the live lease.
+   */
+  onBearerRotated(listener: () => void): RequestContextSubscription;
 }
 
 export interface MintRequestContextOptions {
@@ -136,6 +145,7 @@ export class DefaultRequestContextProvider implements RequestContextProvider {
   >;
   private currentContext: RequestContext | null = null;
   private readonly listeners = new Set<RequestContextListener>();
+  private readonly bearerRotationListeners = new Set<() => void>();
   private disposed = false;
 
   constructor(options: DefaultRequestContextProviderOptions) {
@@ -153,6 +163,16 @@ export class DefaultRequestContextProvider implements RequestContextProvider {
     this.listeners.add(listener);
     return () => {
       this.listeners.delete(listener);
+    };
+  }
+
+  onBearerRotated(listener: () => void): RequestContextSubscription {
+    if (this.disposed) {
+      return () => {};
+    }
+    this.bearerRotationListeners.add(listener);
+    return () => {
+      this.bearerRotationListeners.delete(listener);
     };
   }
 
@@ -205,6 +225,9 @@ export class DefaultRequestContextProvider implements RequestContextProvider {
       userId: options.userId,
       bearerToken: options.bearerToken,
     });
+    for (const listener of [...this.bearerRotationListeners]) {
+      listener();
+    }
   }
 
   /**
@@ -239,6 +262,7 @@ export class DefaultRequestContextProvider implements RequestContextProvider {
       previous.abort("request-context-provider-disposed");
     }
     this.listeners.clear();
+    this.bearerRotationListeners.clear();
   }
 
   private assertNotDisposed(): void {

@@ -81,6 +81,7 @@ function buildFakeBridge(
       },
     }),
     validateAuthTokenIdentity: async () => ({ kind: "rejected" as const }),
+    refreshAuthToken: async () => ({ kind: "network-error" as const }),
     openExternalLink: async () => undefined,
     getRegisteredUrlSchemes: async () => [],
     requestMicrophoneAccess: async () => "granted" as const,

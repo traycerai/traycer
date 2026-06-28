@@ -22,6 +22,11 @@ import {
   listEnvOverrides,
   type EnvOverrideValue,
 } from "../store/config-store";
+import {
+  createCliLogger,
+  errorFromUnknown,
+  type ILogger,
+} from "../logger";
 
 // `traycer host start` is the long-running supervisor invoked by the OS
 // service manager (launchd, systemd-user, or Windows Scheduled Task). The
@@ -151,6 +156,7 @@ export interface RunHostStartDeps extends ResolveHostStartTargetDeps {
   // not depend on the function returning.
   readonly exit: (code: number) => void;
   readonly onError: (message: string) => void;
+  readonly logger: ILogger | null;
 }
 
 const defaultRunDeps: RunHostStartDeps = {
@@ -165,6 +171,7 @@ const defaultRunDeps: RunHostStartDeps = {
   onError: (message) => {
     console.error(message);
   },
+  logger: null,
 };
 
 // Long-running entrypoint invoked by the OS service manager. Resolves
@@ -179,12 +186,23 @@ export async function runHostStart(
   injected: Partial<RunHostStartDeps>,
 ): Promise<void> {
   const deps: RunHostStartDeps = { ...defaultRunDeps, ...injected };
+  const logger = deps.logger ?? createCliLogger(opts.environment);
+
+  logger.info("Host supervisor starting", {
+    environment: opts.environment,
+    hasCwdOverride: opts.cwd !== null,
+  });
 
   let target: HostStartTarget;
   try {
     target = await resolveHostStartTarget(opts, deps);
   } catch (err) {
     if (err instanceof CliError) {
+      logger.warn("Host supervisor target resolution failed", {
+        environment: opts.environment,
+        code: err.code,
+        exitCode: err.exitCode,
+      });
       const detailLine = JSON.stringify({
         code: err.code,
         message: err.message,
@@ -202,10 +220,26 @@ export async function runHostStart(
       deps.onError(detailLine);
       return deps.exit(err.exitCode);
     }
+    logger.error(
+      "Host supervisor target resolution threw unexpectedly",
+      { environment: opts.environment, exitCode: 1 },
+      errorFromUnknown(err),
+    );
     throw err;
   }
 
+  logger.info("Host supervisor target resolved", {
+    environment: opts.environment,
+    version: target.record.version,
+    argCount: target.args.length,
+    hasCwdOverride: opts.cwd !== null,
+  });
+
   const envOverrides = await deps.readEnvOverrides();
+  logger.debug("Host supervisor loaded env overrides", {
+    environment: opts.environment,
+    overrideCount: Object.keys(envOverrides).length,
+  });
   const env: NodeJS.ProcessEnv = {
     ...applyEnvOverrides(process.env, envOverrides),
     TERM_PROGRAM: "traycer",
@@ -242,6 +276,11 @@ export async function runHostStart(
     });
   } catch (cause) {
     const message = cause instanceof Error ? cause.message : String(cause);
+    logger.error(
+      "Host supervisor spawn failed",
+      { environment: opts.environment, exitCode: 66 },
+      errorFromUnknown(cause),
+    );
     await deps.writeMarker(opts.environment, "failed-to-spawn", {
       shell: undefined,
       args: undefined,
@@ -258,10 +297,21 @@ export async function runHostStart(
 
   for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"] as const) {
     process.on(sig, () => {
+      logger.debug("Host supervisor forwarding signal to child", {
+        environment: opts.environment,
+        signal: sig,
+        childPidKnown: child.pid !== undefined,
+      });
       if (child.pid !== undefined) {
         try {
           child.kill(sig);
-        } catch {
+        } catch (cause) {
+          logger.warn("Host supervisor failed to forward signal", {
+            environment: opts.environment,
+            signal: sig,
+            errorName: errorFromUnknown(cause).name,
+            errorMessage: errorFromUnknown(cause).message,
+          });
           // Child may have already exited.
         }
       }
@@ -273,6 +323,11 @@ export async function runHostStart(
     // and the process is about to exit anyway; the OS flushes the log
     // append on close.
     if (signal !== null) {
+      logger.warn("Host child exited by signal", {
+        environment: opts.environment,
+        signal,
+        exitCode: 128 + signalNumber(signal),
+      });
       void deps.writeMarker(opts.environment, "killed", {
         shell: undefined,
         args: undefined,
@@ -284,6 +339,10 @@ export async function runHostStart(
       return deps.exit(128 + signalNumber(signal));
     }
     if (code === null || code === 0) {
+      logger.info("Host child exited cleanly", {
+        environment: opts.environment,
+        exitCode: code ?? 0,
+      });
       void deps.writeMarker(opts.environment, "exited", {
         shell: undefined,
         args: undefined,
@@ -294,6 +353,14 @@ export async function runHostStart(
       });
       return deps.exit(code ?? 0);
     }
+    logger.error(
+      "Host child exited with non-zero status",
+      {
+        environment: opts.environment,
+        exitCode: code,
+      },
+      null,
+    );
     void deps.writeMarker(opts.environment, "crashed", {
       shell: undefined,
       args: undefined,

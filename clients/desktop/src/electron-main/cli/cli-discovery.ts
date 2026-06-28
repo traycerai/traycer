@@ -233,6 +233,9 @@ export async function readCliManifest(): Promise<CliInstallManifest | null> {
   try {
     parsed = JSON.parse(raw);
   } catch {
+    log.warn("[cli] install manifest is not valid JSON", {
+      path: CLI_MANIFEST_PATH,
+    });
     return null;
   }
   if (parsed === null || typeof parsed !== "object") return null;
@@ -242,6 +245,9 @@ export async function readCliManifest(): Promise<CliInstallManifest | null> {
     typeof obj.binaryPath !== "string" ||
     typeof obj.installedAt !== "string"
   ) {
+    log.warn("[cli] install manifest has invalid shape", {
+      path: CLI_MANIFEST_PATH,
+    });
     return null;
   }
   const source = typeof obj.source === "string" ? obj.source : "manual";
@@ -332,6 +338,9 @@ export async function readDesktopReconcileState(): Promise<DesktopReconcileState
   try {
     parsed = JSON.parse(raw);
   } catch {
+    log.warn("[cli] desktop reconcile state is not valid JSON", {
+      path: DESKTOP_RECONCILE_STATE_PATH,
+    });
     return null;
   }
   if (parsed === null || typeof parsed !== "object") return null;

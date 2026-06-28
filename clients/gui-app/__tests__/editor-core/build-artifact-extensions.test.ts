@@ -130,6 +130,40 @@ describe("buildArtifactExtensions", () => {
     editor.destroy();
   });
 
+  it("serializes a copied selection to markdown via clipboardTextSerializer", () => {
+    const editor = createArtifactEditor();
+    const md = [
+      "# Title",
+      "",
+      "- one",
+      "- two",
+      "",
+      "1. first",
+      "2. second",
+      "",
+    ].join("\n");
+    editor.commands.setContent(md, {
+      contentType: "markdown",
+      parseOptions: { preserveWhitespace: false },
+    });
+
+    // A select-all copy goes through ProseMirror's clipboard pipeline, which
+    // reads the `clipboardTextSerializer` contributed by `MarkdownClipboard`.
+    const { doc } = editor.state;
+    const { text } = editor.view.serializeForClipboard(
+      doc.slice(0, doc.content.size),
+    );
+
+    // Markers survive (default textContent serialization would drop them) and
+    // list items are not blank-line separated.
+    expect(text).toContain("# Title");
+    expect(text).toContain("- one\n- two");
+    expect(text).toContain("1. first");
+    expect(text).toContain("2. second");
+    expect(text).not.toContain("- one\n\n- two");
+    editor.destroy();
+  });
+
   it("pairs the artifact-room doc fragment with artifactRoom awareness - Collaboration binds to the artifact-room doc and CollaborationCaret binds to the same artifactRoom awareness", () => {
     // Per ticket 4a598302-…/Fix: GUI artifact-room-doc awareness and reconnect-safe
     // body edits - when the body fragment lives in a artifact-room doc, the

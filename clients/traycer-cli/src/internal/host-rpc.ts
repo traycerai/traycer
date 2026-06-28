@@ -23,6 +23,7 @@ import type { HostTransportEndpoint } from "../../../shared/host-transport/ws-rp
 import { WsRpcClient } from "../../../shared/host-transport/ws-rpc-client";
 import { createWhatwgWebSocketFactory } from "../../../shared/host-transport/whatwg-ws-factory";
 import { config } from "../config";
+import { createCliLogger, errorFromUnknown } from "../logger";
 import {
   isValidLocalHostWebsocketUrl,
   readHostPidMetadata,
@@ -58,8 +59,18 @@ export async function callHostRpc<
   method: Method,
   params: RequestOfMethod<HostRpcRegistry, Method>,
 ): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
+  const logger = createCliLogger(config.environment);
+  logger.info("Host RPC requested", {
+    environment: config.environment,
+    method,
+    retryPolicy: "default",
+  });
   const auth = await resolveHostAuth();
   if (auth === null) {
+    logger.warn("Host RPC blocked by missing credentials", {
+      environment: config.environment,
+      method,
+    });
     throw cliError({
       code: CLI_ERROR_CODES.AUTH_NO_CREDENTIALS,
       message: "traycer: not signed in - run `traycer login` to authenticate.",
@@ -95,8 +106,18 @@ export async function callHostRpcFastFail<
   method: Method,
   params: RequestOfMethod<HostRpcRegistry, Method>,
 ): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
+  const logger = createCliLogger(config.environment);
+  logger.info("Host RPC requested", {
+    environment: config.environment,
+    method,
+    retryPolicy: "fast-fail",
+  });
   const auth = await resolveHostAuth();
   if (auth === null) {
+    logger.warn("Host RPC fast-fail call blocked by missing credentials", {
+      environment: config.environment,
+      method,
+    });
     throw cliError({
       code: CLI_ERROR_CODES.AUTH_NO_CREDENTIALS,
       message: "traycer: not signed in - run `traycer login` to authenticate.",
@@ -129,8 +150,20 @@ export async function callHostRpcAtEndpoint<
   params: RequestOfMethod<HostRpcRegistry, Method>,
   endpoint: HostTransportEndpoint,
 ): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
+  const logger = createCliLogger(config.environment);
+  logger.info("Host RPC requested at explicit endpoint", {
+    environment: config.environment,
+    method,
+    retryPolicy: "default",
+    hostId: endpoint.hostId,
+  });
   const auth = await resolveHostAuth();
   if (auth === null) {
+    logger.warn("Host RPC explicit-endpoint call blocked by missing credentials", {
+      environment: config.environment,
+      method,
+      hostId: endpoint.hostId,
+    });
     throw cliError({
       code: CLI_ERROR_CODES.AUTH_NO_CREDENTIALS,
       message: "traycer: not signed in - run `traycer login` to authenticate.",
@@ -156,6 +189,7 @@ async function requestAtEndpoint<
   auth: HostAuth,
   retryPolicy: TransportRetryPolicy,
 ): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
+  const logger = createCliLogger(config.environment);
   const lease = new MutableBearerLease(auth.token, auth.userId);
   const revalidator = createBearerRevalidator({
     authnBaseUrl: auth.authnBaseUrl,
@@ -181,7 +215,26 @@ async function requestAtEndpoint<
     retryPolicy,
   );
 
-  return messenger.request(method, params);
+  try {
+    const response = await messenger.request(method, params);
+    logger.info("Host RPC completed", {
+      environment: config.environment,
+      method,
+      retryPolicy: retryPolicyLabel(retryPolicy),
+      hostId: endpoint.hostId,
+    });
+    return response;
+  } catch (err) {
+    const error = errorFromUnknown(err);
+    logger.debug("Host RPC failed; propagating to command boundary", {
+      environment: config.environment,
+      method,
+      retryPolicy: retryPolicyLabel(retryPolicy),
+      hostId: endpoint.hostId,
+      errorName: error.name,
+    });
+    throw err;
+  }
 }
 
 /**
@@ -189,17 +242,17 @@ async function requestAtEndpoint<
  * pid file advertises the unary endpoint URL verbatim.
  */
 async function resolveEndpoint(): Promise<HostTransportEndpoint> {
+  const logger = createCliLogger(config.environment);
   const metadata = await readHostPidMetadata(config.environment);
   // Liveness check, not just presence: a stopped/crashed host can leave a
   // stale pid.json behind (the same reason `host status` checks
   // `isProcessAlive`). Catching a dead pid here is what lets `mapHostRpcError`
   // treat a transport `RPC_ERROR` as a genuine host error rather than
   // overloading it to mean "not running".
-  if (
-    metadata === null ||
-    !isProcessAlive(metadata.pid) ||
-    !isValidLocalHostWebsocketUrl(metadata.websocketUrl)
-  ) {
+  if (metadata === null) {
+    logger.warn("Host RPC endpoint resolution failed; metadata missing", {
+      environment: config.environment,
+    });
     throw cliError({
       code: CLI_ERROR_CODES.HOST_NOT_RUNNING,
       message:
@@ -208,6 +261,38 @@ async function resolveEndpoint(): Promise<HostTransportEndpoint> {
       exitCode: 1,
     });
   }
+  if (!isProcessAlive(metadata.pid)) {
+    logger.warn("Host RPC endpoint resolution failed; process is not alive", {
+      environment: config.environment,
+      hostId: metadata.hostId,
+      pid: metadata.pid,
+    });
+    throw cliError({
+      code: CLI_ERROR_CODES.HOST_NOT_RUNNING,
+      message:
+        "traycer: host not running - pid metadata is absent, malformed, advertises an invalid local WebSocket endpoint, or names a process that is no longer alive.",
+      details: null,
+      exitCode: 1,
+    });
+  }
+  if (!isValidLocalHostWebsocketUrl(metadata.websocketUrl)) {
+    logger.warn("Host RPC endpoint resolution failed; websocket URL invalid", {
+      environment: config.environment,
+      hostId: metadata.hostId,
+    });
+    throw cliError({
+      code: CLI_ERROR_CODES.HOST_NOT_RUNNING,
+      message:
+        "traycer: host not running - pid metadata is absent, malformed, advertises an invalid local WebSocket endpoint, or names a process that is no longer alive.",
+      details: null,
+      exitCode: 1,
+    });
+  }
+  logger.debug("Host RPC endpoint resolved", {
+    environment: config.environment,
+    hostId: metadata.hostId,
+    pid: metadata.pid,
+  });
   return { hostId: metadata.hostId, websocketUrl: metadata.websocketUrl };
 }
 
@@ -238,6 +323,10 @@ export async function toAgentCliError<T>(call: Promise<T>): Promise<T> {
 export function parseUserInput<T>(schema: ZodType<T>, value: unknown): T {
   const parsed = schema.safeParse(value);
   if (parsed.success) return parsed.data;
+  createCliLogger(config.environment).warn("CLI user input validation failed", {
+    environment: config.environment,
+    issueCount: parsed.error.issues.length,
+  });
   const detail = parsed.error.issues
     .map((issue) =>
       issue.path.length > 0
@@ -264,6 +353,10 @@ export function parseUserInput<T>(schema: ZodType<T>, value: unknown): T {
 export function parseHostResponse<T>(schema: ZodType<T>, value: unknown): T {
   const parsed = schema.safeParse(value);
   if (parsed.success) return parsed.data;
+  createCliLogger(config.environment).warn("Host RPC response validation failed", {
+    environment: config.environment,
+    issueCount: parsed.error.issues.length,
+  });
   throw cliError({
     code: CLI_ERROR_CODES.HOST_INCOMPATIBLE,
     message:
@@ -275,6 +368,10 @@ export function parseHostResponse<T>(schema: ZodType<T>, value: unknown): T {
 
 function hostRpcToCliError(err: unknown): unknown {
   if (!(err instanceof HostRpcError)) return err;
+  createCliLogger(config.environment).warn("Mapping host RPC wire error to CLI error", {
+    environment: config.environment,
+    hostRpcCode: err.code,
+  });
   return mapHostRpcError(err);
 }
 
@@ -350,4 +447,8 @@ function isAccessDenied(err: HostRpcError): boolean {
     err.code === "RPC_ERROR" &&
     /does not have (?:access|[\w ]*permission)/i.test(err.message)
   );
+}
+
+function retryPolicyLabel(policy: TransportRetryPolicy): "default" | "fast-fail" {
+  return policy === NO_RETRY_TRANSPORT_POLICY ? "fast-fail" : "default";
 }

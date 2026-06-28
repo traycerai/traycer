@@ -1,4 +1,6 @@
 import type { BearerStore } from "../../../shared/auth/bearer-revalidator";
+import { config } from "../config";
+import { createCliLogger } from "../logger";
 import {
   deleteCredentials,
   readCredentials,
@@ -32,10 +34,22 @@ export interface HostAuth {
  * host with an empty bearer.
  */
 export async function resolveHostAuth(): Promise<HostAuth | null> {
+  const logger = createCliLogger(config.environment);
   const stored = await readCredentials();
   if (stored === null || stored.token.length === 0) {
+    logger.info("Host auth credentials unavailable", {
+      environment: config.environment,
+      hasStoredCredentials: stored !== null,
+      hasToken: stored !== null && stored.token.length > 0,
+    });
     return null;
   }
+  logger.debug("Host auth credentials resolved", {
+    environment: config.environment,
+    hasStoredCredentials: true,
+    hasToken: true,
+    hasRefreshToken: stored.refreshToken.length > 0,
+  });
   return {
     token: stored.token,
     authnBaseUrl: stored.authnBaseUrl,
@@ -54,14 +68,27 @@ export async function resolveHostAuth(): Promise<HostAuth | null> {
  */
 export const cliBearerStore: BearerStore = {
   read: async () => {
+    const logger = createCliLogger(config.environment);
     const stored = await readCredentials();
+    logger.debug("Bearer store read completed", {
+      environment: config.environment,
+      hasStoredCredentials: stored !== null,
+      hasToken: stored !== null && stored.token.length > 0,
+      hasRefreshToken: stored !== null && stored.refreshToken.length > 0,
+    });
     return stored === null
       ? null
       : { token: stored.token, refreshToken: stored.refreshToken };
   },
   write: async (tokens) => {
+    const logger = createCliLogger(config.environment);
     const stored = await readCredentials();
     if (stored === null) {
+      logger.warn("Bearer store skipped token write because credentials disappeared", {
+        environment: config.environment,
+        receivedToken: tokens.token.length > 0,
+        receivedRefreshToken: tokens.refreshToken.length > 0,
+      });
       return;
     }
     await writeCredentials({
@@ -70,8 +97,17 @@ export const cliBearerStore: BearerStore = {
       refreshToken: tokens.refreshToken,
       savedAt: new Date().toISOString(),
     });
+    logger.info("Bearer store persisted rotated credentials", {
+      environment: config.environment,
+      receivedToken: tokens.token.length > 0,
+      receivedRefreshToken: tokens.refreshToken.length > 0,
+    });
   },
   clear: async () => {
+    const logger = createCliLogger(config.environment);
     await deleteCredentials();
+    logger.warn("Bearer store cleared credentials", {
+      environment: config.environment,
+    });
   },
 };

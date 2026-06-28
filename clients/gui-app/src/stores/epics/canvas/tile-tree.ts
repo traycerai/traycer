@@ -31,6 +31,7 @@ export interface TilePane {
   readonly tabInstanceIds: ReadonlyArray<string>;
   readonly activeTabId: string | null;
   readonly previewTabId: string | null;
+  readonly activationHistory: ReadonlyArray<string>;
 }
 
 /**

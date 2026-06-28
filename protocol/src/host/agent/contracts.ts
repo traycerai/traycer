@@ -1,4 +1,8 @@
-import { defineRpcContract } from "@traycer/protocol/framework/index";
+import {
+  defineDowngradePath,
+  defineRpcContract,
+  defineUpgradePath,
+} from "@traycer/protocol/framework/index";
 import {
   createAgentRequestSchema,
   createAgentResponseSchema,
@@ -18,6 +22,8 @@ import {
   listHarnessModelsResponseSchema,
   listAgentsRequestSchema,
   listAgentsResponseSchema,
+  listAgentsResponseSchemaV10,
+  agentSummarySchemaV10,
   sendAgentMessageRequestSchema,
   sendAgentMessageResponseSchema,
   stopAgentRequestSchema,
@@ -57,13 +63,14 @@ export const agentSelectionGuideGlobalGetV10 = defineRpcContract({
   responseSchema: agentSelectionGuideGlobalGetResponseSchema,
 });
 
-export const agentSelectionGuideGlobalOnboardingDraftGetV10 =
-  defineRpcContract({
+export const agentSelectionGuideGlobalOnboardingDraftGetV10 = defineRpcContract(
+  {
     method: "agent.selectionGuide.getGlobalOnboardingDraft",
     schemaVersion: { major: 1, minor: 0 } as const,
     requestSchema: agentSelectionGuideGlobalOnboardingDraftGetRequestSchema,
     responseSchema: agentSelectionGuideGlobalOnboardingDraftGetResponseSchema,
-  });
+  },
+);
 
 export const agentSelectionGuideGlobalSetV10 = defineRpcContract({
   method: "agent.selectionGuide.setGlobal",
@@ -90,7 +97,47 @@ export const agentListV10 = defineRpcContract({
   method: "agent.list",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: listAgentsRequestSchema,
+  responseSchema: listAgentsResponseSchemaV10,
+});
+
+export const agentListV20 = defineRpcContract({
+  method: "agent.list",
+  schemaVersion: { major: 2, minor: 0 } as const,
+  requestSchema: listAgentsRequestSchema,
   responseSchema: listAgentsResponseSchema,
+});
+
+export const agentListUpgradeV1ToV2 = defineUpgradePath<
+  typeof agentListV10,
+  typeof agentListV20
+>({
+  from: { major: 1, minor: 0 },
+  to: { major: 2, minor: 0 },
+  // A v1.0 response without ACP GUI harness agents is a valid v2.0 response
+  // (they are purely additive), and the request shape is identical - both
+  // upgrades are identity.
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const agentListDowngradeV2ToV1 = defineDowngradePath<
+  typeof agentListV20,
+  typeof agentListV10
+>({
+  from: { major: 2, minor: 0 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  // Drop post-v1.0 GUI harness agents so a v1.0 client's strict decode never
+  // sees one. The re-parse yields the precise v1.0 type without an assertion.
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: listAgentsResponseSchemaV10.parse({
+      ...response,
+      agents: response.agents.filter(
+        (agent) => agentSummarySchemaV10.safeParse(agent).success,
+      ),
+    }),
+  }),
 });
 
 export const agentSendMessageV10 = defineRpcContract({

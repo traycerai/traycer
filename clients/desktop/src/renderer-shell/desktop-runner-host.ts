@@ -1,4 +1,5 @@
 import type {
+  AuthTokenRefreshResult,
   AuthTokenValidationResult,
   CliInstallManifestSnapshot,
   DeviceFlowSession,
@@ -126,6 +127,10 @@ export interface DesktopPreloadBridge {
     token: string,
     refreshToken: string,
   ): Promise<AuthIdentityValidationResult>;
+  refreshAuthToken(
+    token: string,
+    refreshToken: string,
+  ): Promise<AuthTokenRefreshResult>;
   openExternalLink(url: string): Promise<void>;
   getRegisteredUrlSchemes(
     schemes: readonly string[],
@@ -683,6 +688,13 @@ export class DesktopRunnerHost implements IRunnerHost {
     refreshToken: string,
   ): Promise<AuthIdentityValidationResult> {
     return this.bridge.validateAuthTokenIdentity(token, refreshToken);
+  }
+
+  refreshAuthToken(
+    token: string,
+    refreshToken: string,
+  ): Promise<AuthTokenRefreshResult> {
+    return this.bridge.refreshAuthToken(token, refreshToken);
   }
 
   beginAuthAttempt(): void {

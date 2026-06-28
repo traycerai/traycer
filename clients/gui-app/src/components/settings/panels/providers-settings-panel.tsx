@@ -90,6 +90,8 @@ function initialActiveProviderId(
 // the provider's dashboard.
 const API_KEY_DASHBOARD_URL: Partial<Record<ProviderId, string>> = {
   cursor: "https://cursor.com/dashboard/api?section=user-keys#user-api-keys",
+  droid: "https://app.factory.ai/settings/api-keys",
+  openrouter: "https://openrouter.ai/settings/keys",
 };
 
 const PROVIDER_DESCRIPTIONS: Record<ProviderId, string> = {
@@ -99,6 +101,17 @@ const PROVIDER_DESCRIPTIONS: Record<ProviderId, string> = {
   cursor:
     "Cursor agent - SDK-driven chats authenticated with your Cursor API key.",
   traycer: "Traycer's managed harness uses the selected OpenCode CLI binary.",
+  openrouter:
+    "OpenRouter - OpenAI-compatible gateway authenticated with your OpenRouter API key.",
+  grok: "Grok agent - xAI's coding CLI via your SuperGrok / X subscription.",
+  qwen: "Qwen Code CLI agent.",
+  kiro: "Kiro agent - Kiro's coding CLI via login or KIRO_API_KEY.",
+  droid:
+    "Droid agent - Factory's coding CLI via your Factory account or API key.",
+  kimi: "Kimi agent - MoonshotAI's coding CLI via your Kimi account.",
+  copilot:
+    "GitHub Copilot CLI agent via your active Copilot subscription or policy.",
+  kilocode: "Kilo Code CLI agent via Kilo login or configured providers.",
 };
 
 const TERMINAL_AGENT_ARGS_PLACEHOLDER: Record<
@@ -120,6 +133,14 @@ function terminalAgentArgsPlaceholder(providerId: ProviderId): string {
       return TERMINAL_AGENT_ARGS_PLACEHOLDER.opencode;
     case "cursor":
     case "traycer":
+    case "openrouter":
+    case "grok":
+    case "qwen":
+    case "kiro":
+    case "copilot":
+    case "droid":
+    case "kimi":
+    case "kilocode":
       return "CLI arguments (optional)";
   }
 }
@@ -130,6 +151,14 @@ const HARNESS_ICON_ID: Record<ProviderId, HarnessIconId> = {
   opencode: "opencode",
   cursor: "cursor",
   traycer: "traycer",
+  openrouter: "openrouter",
+  grok: "grok",
+  qwen: "qwen",
+  kiro: "kiro",
+  droid: "droid",
+  kimi: "kimi",
+  copilot: "copilot",
+  kilocode: "kilocode",
 };
 
 // Grid keeps the columns aligned across header + rows; `minmax(0,1fr)` on
@@ -147,7 +176,9 @@ function candidateConfigForProvider(
   state: ProviderCliState,
   providers: readonly ProviderCliState[],
 ): ProviderCandidateConfig {
-  if (state.providerId !== "traycer" || state.candidates.length > 0) {
+  const usesOpenCodeCandidates =
+    state.providerId === "traycer" || state.providerId === "openrouter";
+  if (!usesOpenCodeCandidates || state.candidates.length > 0) {
     return { selected: state.selected, candidates: state.candidates };
   }
 
@@ -464,10 +495,10 @@ function ProviderDetail({
   const providerId = state.providerId;
   // Cursor's chat runs through the `@cursor/sdk` (no CLI binary) and its
   // terminal-agent surface is hidden for now, so there's no CLI path to pick -
-  // hide the candidates table and show only the API-key section. Traycer shares
-  // the OpenCode binary path set: its table shows the OpenCode candidates (or
-  // Traycer's own when present) while selection / custom-path mutations target
-  // the Traycer provider id.
+  // hide the candidates table and show only the API-key section.
+  // Traycer/OpenRouter share the OpenCode binary path set: their tables show
+  // the OpenCode candidates (or their own when present) while selection /
+  // custom-path mutations target the focused provider id.
   const cliConfig = candidateConfigForProvider(state, providers);
   const showCliCandidates = providerId !== "cursor";
   const radioName = useId();
@@ -724,8 +755,24 @@ function envNamePlaceholder(providerId: ProviderId): string {
     case "opencode":
     case "traycer":
       return "ANTHROPIC_API_KEY";
+    case "openrouter":
+      return "OPENROUTER_API_KEY";
     case "cursor":
       return "CURSOR_API_KEY";
+    case "grok":
+      return "XAI_API_KEY";
+    case "qwen":
+      return "OPENAI_API_KEY";
+    case "kiro":
+      return "KIRO_API_KEY";
+    case "droid":
+      return "FACTORY_API_KEY";
+    case "kimi":
+      return "KIMI_API_KEY";
+    case "copilot":
+      return "COPILOT_GITHUB_TOKEN";
+    case "kilocode":
+      return "KILO_API_KEY";
   }
 }
 
@@ -859,7 +906,7 @@ function ApiKeySection({ state }: { readonly state: ProviderCliState }) {
           placeholder={
             state.apiKey.source === "stored"
               ? "Replace stored key…"
-              : "Paste your Cursor API key"
+              : `Paste your ${PROVIDER_DISPLAY_NAMES[providerId]} API key`
           }
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
@@ -893,8 +940,8 @@ function ApiKeySection({ state }: { readonly state: ProviderCliState }) {
       </div>
       <p className="text-ui-xs text-muted-foreground">
         {state.apiKey.source === "env"
-          ? "Using CURSOR_API_KEY from your shell environment. Save a key here to override it."
-          : "Stored encrypted on this device. Falls back to CURSOR_API_KEY from your shell when unset."}
+          ? `Using ${envNamePlaceholder(providerId)} from your shell environment. Save a key here to override it.`
+          : `Stored encrypted on this device. Falls back to ${envNamePlaceholder(providerId)} from your shell when unset.`}
       </p>
     </div>
   );

@@ -243,6 +243,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
                 tuiOnly
                 lockedHarnessId={target?.sourceAgent.harnessId ?? null}
                 disabled={busy}
+                registerActivation={false}
               />
               <div className="shrink-0">
                 <AgentModeToggle

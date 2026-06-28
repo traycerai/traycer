@@ -11,16 +11,21 @@ import {
 } from "@/lib/keybindings/chord";
 import { isMac } from "@/lib/keybindings/platform";
 import { findConflict, type ConflictResult } from "@/lib/keybindings/conflicts";
-import { ACTION_META, type ActionId } from "@/lib/keybindings/actions";
+import {
+  ACTION_META,
+  resolveActionDefaultChord,
+  type ActionId,
+} from "@/lib/keybindings/actions";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 
-// An action is "Control-aware" when its default chord targets the Control key
-// specifically (today only the dictation toggle). Only these capture ⌃ vs ⌘
-// distinctly; every other action keeps the lenient capture (Control → `mod`) so
-// rebinding a normal action by pressing Control on macOS still produces a
-// binding that fires on ⌘ as before.
+// An action is "Control-aware" when its platform-effective default chord targets
+// the Control key specifically (e.g. the dictation toggle, and the model-picker
+// toggle's ⌃⌥M on macOS). Only these capture ⌃ vs ⌘ distinctly; every other
+// action keeps the lenient capture (Control → `mod`) so rebinding a normal
+// action by pressing Control on macOS still produces a binding that fires on ⌘
+// as before.
 function isControlAwareAction(actionId: ActionId): boolean {
-  const def = ACTION_META[actionId].defaultChord;
+  const def = resolveActionDefaultChord(ACTION_META[actionId]);
   return def !== null && parseChordString(def)?.ctrl === true;
 }
 

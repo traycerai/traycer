@@ -39,6 +39,7 @@ import {
   type LandingDraftTab,
 } from "@/stores/home/landing-draft-store";
 import { landingComposerLiveImageHashes } from "@/stores/composer/landing-composer-store";
+import { appLogger, describeLogError } from "@/lib/logger";
 
 /**
  * Per-partition byte budget for stored landing images. Flagged TUNABLE — shipped
@@ -80,7 +81,11 @@ export function markLandingDraftsReady(): void {
   // Fire-and-forget startup sweep — best-effort at this boundary. A failure (no
   // IndexedDB in the runtime, a transient DB error) just leaves orphans for the
   // next trigger to reclaim; it must never surface as an unhandled rejection.
-  void reconcile().catch(() => undefined);
+  void reconcile().catch((error: unknown) => {
+    appLogger.warn("[landing-image-gc] startup reconcile failed", {
+      error: describeLogError(error),
+    });
+  });
 }
 
 /** Whether the draft set is known and reconcile is allowed to delete. */

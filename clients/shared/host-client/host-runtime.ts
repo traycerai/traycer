@@ -70,6 +70,7 @@ export class HostRuntime<Registry extends VersionedRpcRegistry> {
   private disposed = false;
   private readonly disposables: Disposable[] = [];
   private contextUnsubscribe: (() => void) | null = null;
+  private bearerRotationUnsubscribe: (() => void) | null = null;
 
   constructor(options: HostRuntimeOptions<Registry>) {
     this.runnerHost = options.runnerHost;
@@ -104,6 +105,14 @@ export class HostRuntime<Registry extends VersionedRpcRegistry> {
       this.hostClient.setRequestContext(ctx);
     });
 
+    // Same-user token refresh rotates the lease in place (silent on `onChange`);
+    // forward it so stream transports can push the fresh credential onto open
+    // connections without a reconnect.
+    this.bearerRotationUnsubscribe =
+      this.requestContextProvider.onBearerRotated(() => {
+        this.hostClient.notifyBearerRotated();
+      });
+
     this.disposables.push(
       this.directory.onSelectionChange((entry) => {
         this.hostClient.bind(entry);
@@ -127,6 +136,10 @@ export class HostRuntime<Registry extends VersionedRpcRegistry> {
     if (this.contextUnsubscribe !== null) {
       this.contextUnsubscribe();
       this.contextUnsubscribe = null;
+    }
+    if (this.bearerRotationUnsubscribe !== null) {
+      this.bearerRotationUnsubscribe();
+      this.bearerRotationUnsubscribe = null;
     }
     for (const disposable of this.disposables) {
       disposable.dispose();

@@ -10,8 +10,13 @@
  * keybindings + palette commands without coupling those framework-free
  * call sites to React hooks.
  */
-import type { UseNavigateResult } from "@tanstack/react-router";
+import type { RouterHistory, UseNavigateResult } from "@tanstack/react-router";
 import type { KeybindingRouter } from "@/lib/keybindings/dispatch";
+import {
+  goBack as goBackAction,
+  goForward as goForwardAction,
+} from "@/lib/commands/actions";
+import { getHistoryController } from "@/lib/persistent-history";
 import { LANDING_ROUTE } from "@/lib/routes";
 import {
   existingEpicTabIntent,
@@ -24,7 +29,10 @@ import { routeIntentViaModalBridge } from "@/stores/tabs/system-overlay-registry
 
 export interface KeybindingRouterSource {
   readonly state: { readonly location: { readonly pathname: string } };
-  readonly history: { subscribe(callback: () => void): () => void };
+  // Full `RouterHistory` (not just `subscribe`): the history-navigation seam
+  // reads the persistent-history controller brand off it (`getHistoryController`)
+  // and walks it via the shared `goBack`/`goForward` actions.
+  readonly history: RouterHistory;
   readonly navigate: UseNavigateResult<string>;
 }
 
@@ -82,6 +90,22 @@ export function routerAdapterFor(
         return;
       }
       navigateToTabIntent(router.navigate, intent);
+    },
+    // Walk the CURRENT router's persistent history; the shared actions no-op
+    // when the history carries no controller brand (browser/web build).
+    goBack: () => goBackAction(router),
+    goForward: () => goForwardAction(router),
+    // History-navigation availability + boundary state off the live router's
+    // controller brand. The palette source reads these through `ctx.router`
+    // (it mounts above `<RouterProvider>`, where TanStack router context is null).
+    isHistoryNavAvailable: () => getHistoryController(router.history) !== null,
+    canGoBack: () => {
+      const controller = getHistoryController(router.history);
+      return controller !== null && controller.canGoBack();
+    },
+    canGoForward: () => {
+      const controller = getHistoryController(router.history);
+      return controller !== null && controller.canGoForward();
     },
   };
 }

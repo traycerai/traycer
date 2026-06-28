@@ -82,6 +82,13 @@ function stubStreamClient(): WsStreamClient<HostStreamRpcRegistry> {
   });
 }
 
+function stubOpenStreamTransport() {
+  return {
+    wsStreamClient: stubStreamClient(),
+    close: vi.fn(),
+  };
+}
+
 function entry(
   over: Partial<WorktreeHostEntry> & { worktreePath: string; branch: string },
 ): WorktreeHostEntry {
@@ -137,7 +144,7 @@ function renderList(args: {
   return render(
     <Wrapper>
       <WorktreesList
-        streamClient={stubStreamClient()}
+        openStreamTransport={() => stubOpenStreamTransport()}
         hostId={args.hostId}
         worktrees={args.worktrees}
         toolbarProps={testToolbarProps()}
@@ -436,6 +443,8 @@ describe("WorktreesList delete flow", () => {
     fireEvent.click(screen.getByTestId("confirm-action"));
 
     expect(streamMock.paths).toEqual(["/wt/clean", "/wt/dirty"]);
+    screen.getByText("Deleting worktrees");
+    screen.getByText("0/2 deleted");
     expect(screen.queryByTestId("worktree-delete-progress-modal")).toBeNull();
     expect(screen.getAllByTestId("worktree-row-deleting-spinner")).toHaveLength(
       2,
@@ -472,6 +481,7 @@ describe("WorktreesList delete flow", () => {
     fireEvent.click(screen.getByTestId("confirm-action"));
 
     expect(streamMock.paths).toEqual(["/wt/clean", "/wt/dirty"]);
+    screen.getByText("0/3 deleted");
     expect(screen.getAllByTestId("worktree-row-deleting-spinner")).toHaveLength(
       3,
     );
@@ -487,6 +497,7 @@ describe("WorktreesList delete flow", () => {
       callbacksFor("/wt/clean").onComplete(true);
     });
 
+    screen.getByText("1/3 deleted");
     expect(streamMock.paths).toEqual([
       "/wt/clean",
       "/wt/dirty",
@@ -500,6 +511,7 @@ describe("WorktreesList delete flow", () => {
     act(() => {
       callbacksFor("/wt/dirty").onComplete(true);
     });
+    screen.getByText("2/3 deleted");
     expect(screen.getAllByTestId("worktree-row-deleting-spinner")).toHaveLength(
       3,
     );
@@ -508,6 +520,7 @@ describe("WorktreesList delete flow", () => {
     act(() => {
       callbacksFor("/wt/api-clean").onComplete(true);
     });
+    screen.getByText("3/3 deleted");
     expect(invalidateSpy).toHaveBeenCalledTimes(
       WORKTREE_BINDING_INVALIDATIONS.length + 2,
     );
@@ -558,9 +571,11 @@ describe("WorktreesList delete flow", () => {
       "/wt/web-clean",
     ]);
     expect(callbacksFor("/wt/web-clean")).toBeDefined();
-    expect(screen.getByTestId("worktree-delete-error").textContent).toContain(
-      "cannot subscribe /wt/api-clean",
-    );
+    // A batch item failing to start is surfaced non-modally in the progress
+    // strip (1 deleted, 1 failed, 2 still running) - it must not pop a modal
+    // over the siblings that are still deleting.
+    expect(screen.queryByTestId("worktree-delete-progress-modal")).toBeNull();
+    screen.getByText("1/4 deleted, 1 failed");
   });
 
   it("shows a plain confirm for a clean worktree", () => {
@@ -663,7 +678,7 @@ describe("WorktreesList delete flow", () => {
       <QueryClientProvider client={queryClient}>
         <TooltipProvider>
           <WorktreesList
-            streamClient={stubStreamClient()}
+            openStreamTransport={() => stubOpenStreamTransport()}
             hostId="host-b"
             worktrees={WORKTREES}
             toolbarProps={testToolbarProps()}
@@ -709,7 +724,7 @@ describe("WorktreesList delete flow", () => {
     // The worktree's row carries the in-progress treatment and is no longer
     // selectable for deletion.
     expect(screen.getByTestId("worktree-row-deleting-spinner")).not.toBeNull();
-    screen.getByText(/Deleting/);
+    screen.getByText("Deleting…");
     expect(
       screen.queryByRole("button", { name: "Delete worktree feat-clean" }),
     ).toBeNull();
@@ -734,7 +749,32 @@ describe("WorktreesList delete flow", () => {
     renderDefault();
 
     expect(screen.getByTestId("worktree-row-deleting-spinner")).not.toBeNull();
-    screen.getByText(/Deleting/);
+    screen.getByText("Deleting…");
+    expect(
+      screen.queryByRole("button", { name: "Delete worktree feat-clean" }),
+    ).toBeNull();
+  });
+
+  it("backgrounds a foreground delete when the list unmounts", () => {
+    const rendered = renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees: WORKTREES,
+    });
+    confirmDelete("feat-clean");
+    act(() => {
+      callbacksFor("/wt/clean").onStarted(true);
+      callbacksFor("/wt/clean").onPhase("teardown");
+    });
+
+    rendered.unmount();
+    expect(streamMock.closeCount).toBe(0);
+
+    renderDefault();
+
+    expect(screen.queryByTestId("worktree-delete-progress-modal")).toBeNull();
+    screen.getByText("0/1 deleted");
+    expect(screen.getByTestId("worktree-row-deleting-spinner")).not.toBeNull();
     expect(
       screen.queryByRole("button", { name: "Delete worktree feat-clean" }),
     ).toBeNull();
@@ -816,7 +856,7 @@ describe("WorktreesList delete flow", () => {
       <QueryClientProvider client={queryClient}>
         <TooltipProvider>
           <WorktreesList
-            streamClient={stubStreamClient()}
+            openStreamTransport={() => stubOpenStreamTransport()}
             hostId="host-a"
             worktrees={WORKTREES.filter(
               (worktree) => worktree.worktreePath !== "/wt/clean",
@@ -849,5 +889,56 @@ describe("WorktreesList delete flow", () => {
     expect(screen.getByTestId("worktree-delete-error").textContent).toContain(
       "is busy",
     );
+  });
+
+  it("closes a completed foreground delete instead of backgrounding it", () => {
+    renderDefault();
+    confirmDelete("feat-clean");
+    act(() => {
+      streamMock.callbacks?.onStarted(true);
+      streamMock.callbacks?.onComplete(true);
+    });
+    // Terminal success: the modal now offers an explicit Close.
+    screen.getByText("Worktree deleted");
+
+    fireEvent.click(screen.getByTestId("worktree-delete-close-button"));
+
+    // Close fully dismisses the finished delete - it must NOT background it
+    // (which would leave a deleting row and fire a spurious progress strip).
+    expect(screen.queryByTestId("worktree-delete-progress-modal")).toBeNull();
+    expect(screen.queryByTestId("worktree-row-deleting-spinner")).toBeNull();
+    expect(screen.queryByText("1/1 deleted")).toBeNull();
+    screen.getByRole("button", { name: "Delete worktree feat-clean" });
+  });
+
+  it("surfaces a batch failure in the strip without a modal, and Dismiss clears it", () => {
+    renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees: WORKTREES,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Select worktrees" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+    fireEvent.click(screen.getByTestId("worktrees-list-delete-selected"));
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    // Two selectable worktrees go to the background (the in-use one cannot be
+    // selected); one succeeds and one fails.
+    expect(streamMock.paths).toEqual(["/wt/clean", "/wt/dirty"]);
+    act(() => {
+      callbacksFor("/wt/clean").onComplete(true);
+      callbacksFor("/wt/dirty").onFailed("Worktree /wt/dirty is busy");
+    });
+
+    // A batch failure must not pop a modal; it shows in the strip with a count.
+    expect(screen.queryByTestId("worktree-delete-progress-modal")).toBeNull();
+    screen.getByText("Some worktrees couldn't be deleted");
+    screen.getByText("1/2 deleted, 1 failed");
+
+    // The settled-with-failures strip offers an explicit Dismiss that clears it.
+    fireEvent.click(screen.getByTestId("worktree-delete-progress-dismiss"));
+    expect(screen.queryByText("1/2 deleted, 1 failed")).toBeNull();
+    expect(screen.queryByTestId("worktree-delete-progress-dismiss")).toBeNull();
   });
 });

@@ -5,6 +5,7 @@ import {
 } from "../ipc-contracts/ipc-channels";
 import type { AuthTokenValidationResult } from "@traycer-clients/shared/platform/runner-host";
 import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/auth-validation-types";
+import type { AuthTokenRefreshResult } from "../ipc-contracts/auth-types";
 import type { DesktopAuthSessionSnapshot } from "../ipc-contracts/window-types";
 import { subscribe, type Disposable, type Listener } from "./subscribe";
 
@@ -47,6 +48,10 @@ export interface AuthBridgeSurface {
     token: string,
     refreshToken: string,
   ): Promise<AuthIdentityValidationResult>;
+  refreshAuthToken(
+    token: string,
+    refreshToken: string,
+  ): Promise<AuthTokenRefreshResult>;
   beginAuthAttempt(): void;
   onAuthCallback(handler: Listener<void>): Disposable;
 }
@@ -66,6 +71,13 @@ export function buildAuthBridge(): AuthBridgeSurface {
         token,
         refreshToken,
       ) as Promise<AuthIdentityValidationResult>,
+
+    refreshAuthToken: (token, refreshToken) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.refreshAuthToken,
+        token,
+        refreshToken,
+      ) as Promise<AuthTokenRefreshResult>,
 
     // Desktop does not dedupe browser-return signals on URL identity, so the
     // attempt-boundary hook is a renderer-local no-op. It still exists to

@@ -166,6 +166,35 @@ function makeRequestContext(bearer: string): RequestContext {
   });
 }
 
+/**
+ * A client whose bearer can be rotated in place via the returned `ctx`, so
+ * `credentialUpdate` tests can refresh the credential and assert what the client
+ * pushes onto the open session.
+ */
+function makeRotatableClient(
+  factory: IStreamWebSocketFactory,
+  bearer: string,
+): {
+  readonly client: WsStreamClient<typeof hostStreamRpcRegistry>;
+  readonly ctx: RequestContext;
+} {
+  const ctx = makeRequestContext(bearer);
+  const client = new WsStreamClient({
+    registry: hostStreamRpcRegistry,
+    endpoint: () => mockLocalHostEntry,
+    bearer: () => ctx.credentials,
+    auth: null,
+    webSocketFactory: factory,
+    dialTimeoutMs: 1000,
+    openAckTimeoutMs: 1000,
+    pingIntervalMs: 25_000,
+    pongTimeoutMs: 50_000,
+    initialBackoffMs: 10,
+    maxBackoffMs: 1_000,
+  });
+  return { client, ctx };
+}
+
 async function flush(): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, 0));
 }
@@ -254,6 +283,99 @@ describe("WsStreamClient", () => {
     });
 
     expect(statuses).toContain("open");
+
+    session.close();
+  });
+
+  it("pushes a credentialUpdate frame on bearer rotation when the host advertises support", async () => {
+    const { factory, sockets } = makeFactory();
+    const { client, ctx } = makeRotatableClient(factory, "token-1");
+
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+    await flush();
+    const stub = sockets[0].socket;
+    stub.fireOpen();
+    stub.fireText({
+      kind: "openAck",
+      manifest: buildStreamManifest(hostStreamRpcRegistry),
+      capabilities: ["credentialUpdate"],
+    });
+    const sentBeforeRotation = stub.textSent.length;
+
+    ctx.credentials.rotateBearerToken({
+      userId: ctx.identity.userId,
+      bearerToken: "token-2",
+    });
+    client.notifyBearerRotated();
+
+    expect(stub.textSent).toHaveLength(sentBeforeRotation + 1);
+    expect(parseText(stub.textSent[sentBeforeRotation])).toEqual({
+      kind: "credentialUpdate",
+      token: "token-2",
+    });
+
+    session.close();
+  });
+
+  it("does not push a credentialUpdate frame when the host did not advertise support", async () => {
+    const { factory, sockets } = makeFactory();
+    const { client, ctx } = makeRotatableClient(factory, "token-1");
+
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+    await flush();
+    const stub = sockets[0].socket;
+    stub.fireOpen();
+    // Older host: openAck omits `capabilities` (schema defaults it to []).
+    stub.fireText({
+      kind: "openAck",
+      manifest: buildStreamManifest(hostStreamRpcRegistry),
+    });
+    const sentBeforeRotation = stub.textSent.length;
+
+    ctx.credentials.rotateBearerToken({
+      userId: ctx.identity.userId,
+      bearerToken: "token-2",
+    });
+    client.notifyBearerRotated();
+
+    expect(stub.textSent).toHaveLength(sentBeforeRotation);
+
+    session.close();
+  });
+
+  it("reconciles a bearer rotation that happened during the handshake (before openAck)", async () => {
+    const { factory, sockets } = makeFactory();
+    const { client, ctx } = makeRotatableClient(factory, "token-1");
+
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+    await flush();
+    const stub = sockets[0].socket;
+    stub.fireOpen();
+    // The open frame carried token-1. Rotate BEFORE the openAck arrives: the
+    // session isn't subscribed yet, so this push is dropped at the time.
+    ctx.credentials.rotateBearerToken({
+      userId: ctx.identity.userId,
+      bearerToken: "token-2",
+    });
+    client.notifyBearerRotated();
+    const credentialUpdatesBeforeAck = stub.textSent.filter(
+      (raw) => parseText(raw).kind === "credentialUpdate",
+    );
+    expect(credentialUpdatesBeforeAck).toHaveLength(0);
+
+    // openAck (capability-advertising) → on becoming subscribed the client
+    // reconciles the missed rotation and pushes exactly one credentialUpdate.
+    stub.fireText({
+      kind: "openAck",
+      manifest: buildStreamManifest(hostStreamRpcRegistry),
+      capabilities: ["credentialUpdate"],
+    });
+
+    const credentialUpdates = stub.textSent
+      .map((raw) => parseText(raw))
+      .filter((frame) => frame.kind === "credentialUpdate");
+    expect(credentialUpdates).toHaveLength(1);
+    expect(credentialUpdates[0].token).toBe("token-2");
 
     session.close();
   });

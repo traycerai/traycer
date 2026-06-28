@@ -18,8 +18,31 @@ export const providerIdSchema = z.enum([
   "opencode",
   "cursor",
   "traycer",
+  "grok",
+  "qwen",
+  "kiro",
+  "droid",
+  "kimi",
+  "copilot",
+  "kilocode",
+  "openrouter",
 ]);
 export type ProviderId = z.infer<typeof providerIdSchema>;
+
+/**
+ * Frozen provider id set as shipped in protocol v1.0. Used only by the frozen
+ * v1.0 `providers.list` response so a v1.0 client never receives the ACP GUI
+ * harness providers; the v2.0 line adds them with a v2→v1 downgrade bridge. Do
+ * not add new providers here.
+ */
+export const providerIdSchemaV10 = z.enum([
+  "claude-code",
+  "codex",
+  "opencode",
+  "cursor",
+  "traycer",
+]);
+export type ProviderIdV10 = z.infer<typeof providerIdSchemaV10>;
 
 /** Human-readable provider names, shared by the host and the GUI. */
 export const PROVIDER_DISPLAY_NAMES: Record<ProviderId, string> = {
@@ -28,6 +51,14 @@ export const PROVIDER_DISPLAY_NAMES: Record<ProviderId, string> = {
   opencode: "OpenCode",
   cursor: "Cursor",
   traycer: "Traycer",
+  grok: "Grok",
+  qwen: "Qwen Code",
+  kiro: "Kiro",
+  droid: "Droid",
+  kimi: "Kimi",
+  copilot: "Copilot",
+  kilocode: "Kilo Code",
+  openrouter: "OpenRouter",
 };
 
 /**
@@ -160,7 +191,9 @@ export const providerLoginCapabilitySchema = z.object({
    */
   token: z.object({ vars: z.array(z.string()) }).nullable(),
 });
-export type ProviderLoginCapability = z.infer<typeof providerLoginCapabilitySchema>;
+export type ProviderLoginCapability = z.infer<
+  typeof providerLoginCapabilitySchema
+>;
 
 export const providerCliStateSchema = z.object({
   providerId: providerIdSchema,
@@ -195,6 +228,19 @@ export const providersListResponseSchema = z.object({
   providers: z.array(providerCliStateSchema),
 });
 export type ProvidersListResponse = z.infer<typeof providersListResponseSchema>;
+
+// Frozen protocol-v1.0 provider state + list response. The v2.0 line of
+// `providers.list` adds ACP GUI harness providers; the v2→v1 bridge filters
+// them for v1.0 callers.
+export const providerCliStateSchemaV10 = providerCliStateSchema.extend({
+  providerId: providerIdSchemaV10,
+});
+export const providersListResponseSchemaV10 = z.object({
+  providers: z.array(providerCliStateSchemaV10),
+});
+export type ProvidersListResponseV10 = z.infer<
+  typeof providersListResponseSchemaV10
+>;
 
 export const providersSetSelectionRequestSchema = z.object({
   providerId: providerIdSchema,

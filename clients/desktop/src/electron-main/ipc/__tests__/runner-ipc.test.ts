@@ -476,6 +476,7 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.deviceFlowStart,
         RunnerHostInvoke.deviceFlowPollNow,
         RunnerHostInvoke.deviceFlowCancel,
+        RunnerHostInvoke.refreshAuthToken,
         RunnerHostInvoke.notificationShow,
         RunnerHostInvoke.openExternalLink,
         RunnerHostInvoke.getRegisteredUrlSchemes,
@@ -592,6 +593,8 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.fileSave,
         RunnerHostInvoke.gpuAccelerationGet,
         RunnerHostInvoke.gpuAccelerationSet,
+        RunnerHostInvoke.logLevelsGet,
+        RunnerHostInvoke.logLevelsSet,
       ].sort(),
     );
     bridge.dispose();

@@ -820,7 +820,7 @@ describe("epic sidebar selection mode", () => {
     ).not.toBeNull();
   });
 
-  it("shows mark-all-read only when artifacts are unread", () => {
+  it("keeps mark-all-read visible and disables it when no artifacts are unread", () => {
     seedArtifactTree();
     testState.activePanelId = "artifacts";
 
@@ -829,19 +829,34 @@ describe("epic sidebar selection mode", () => {
     );
 
     expect(
-      screen.queryByRole("button", {
-        name: "Mark all unread artifacts as read",
-      }),
-    ).toBeNull();
+      screen
+        .getByRole("button", {
+          name: "Mark all unread artifacts as read",
+        })
+        .matches(":disabled"),
+    ).toBe(true);
 
     testState.unreadArtifactIds = new Set(["ticket-child"]);
     rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
 
     expect(
-      screen.getByRole("button", {
-        name: "Mark all unread artifacts as read",
-      }),
-    ).not.toBeNull();
+      screen
+        .getByRole("button", {
+          name: "Mark all unread artifacts as read",
+        })
+        .matches(":disabled"),
+    ).toBe(false);
+
+    testState.unreadArtifactIds = new Set<string>();
+    rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    expect(
+      screen
+        .getByRole("button", {
+          name: "Mark all unread artifacts as read",
+        })
+        .matches(":disabled"),
+    ).toBe(true);
   });
 
   it("marks every unread artifact read from the artifact header action", () => {

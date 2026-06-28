@@ -20,6 +20,7 @@ export const RunnerHostInvoke = {
   deviceFlowStart: "runnerHost:auth:deviceFlowStart",
   deviceFlowPollNow: "runnerHost:auth:deviceFlowPollNow",
   deviceFlowCancel: "runnerHost:auth:deviceFlowCancel",
+  refreshAuthToken: "runnerHost:auth:refreshToken",
   openExternalLink: "runnerHost:openExternalLink",
   getRegisteredUrlSchemes: "runnerHost:getRegisteredUrlSchemes",
   requestMicrophoneAccess: "runnerHost:requestMicrophoneAccess",
@@ -130,6 +131,8 @@ export const RunnerHostInvoke = {
   displayList: "runnerHost:display:list",
   gpuAccelerationGet: "runnerHost:gpu:get",
   gpuAccelerationSet: "runnerHost:gpu:set",
+  logLevelsGet: "runnerHost:logLevels:get",
+  logLevelsSet: "runnerHost:logLevels:set",
   // Renderer-driven sleep prevention. The renderer recomputes
   // `preventSleepWhileRunning && anyLocalAgentActive` and pushes the boolean
   // here; main holds a single `powerSaveBlocker` while any window wants it.

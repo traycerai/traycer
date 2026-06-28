@@ -1,6 +1,6 @@
 import { ipcMain, type IpcMainEvent, type IpcMainInvokeEvent } from "electron";
 import { randomUUID } from "node:crypto";
-import { log } from "../app/logger";
+import { describeLogError, log } from "../app/logger";
 import type { DesktopTrayController } from "../tray/tray";
 import {
   RunnerHostEvent,
@@ -557,7 +557,23 @@ export class RunnerIpcBridge {
         });
         throw new Error(`IPC sender not trusted for channel ${channel}`);
       }
-      return handler(event, ...args);
+      try {
+        return Promise.resolve(handler(event, ...args)).catch(
+          (err: unknown) => {
+            log.warn("[runner-ipc] invoke handler failed", {
+              channel,
+              error: describeLogError(err),
+            });
+            throw err;
+          },
+        );
+      } catch (err) {
+        log.warn("[runner-ipc] invoke handler threw", {
+          channel,
+          error: describeLogError(err),
+        });
+        throw err;
+      }
     });
   }
 
@@ -629,6 +645,12 @@ export class RunnerIpcBridge {
         if (settled) return;
         settled = true;
         this.freshSnapshotWaiters.delete(requestId);
+        log.warn("[runner-ipc] fresh unsynced snapshot timed out", {
+          windowId: record.windowId,
+          timeoutMs,
+          fallbackCount:
+            this.unsyncedEditsSnapshots.get(record.windowId)?.length ?? 0,
+        });
         resolve(this.unsyncedEditsSnapshots.get(record.windowId) ?? []);
       }, timeoutMs);
       this.freshSnapshotWaiters.set(requestId, {
@@ -653,6 +675,11 @@ export class RunnerIpcBridge {
         settled = true;
         clearTimeout(timer);
         this.freshSnapshotWaiters.delete(requestId);
+        log.warn("[runner-ipc] fresh unsynced snapshot request not delivered", {
+          windowId: record.windowId,
+          fallbackCount:
+            this.unsyncedEditsSnapshots.get(record.windowId)?.length ?? 0,
+        });
         resolve(this.unsyncedEditsSnapshots.get(record.windowId) ?? []);
       }
     });
@@ -750,10 +777,20 @@ export class RunnerIpcBridge {
         ? this.windowRegistry.getMruRecord()
         : this.windowRegistry.getRecordById(ownerWindowId);
     if (target === null) {
+      log.warn("[runner-ipc] no renderer target for event", {
+        channel,
+        hasEpicId: epicId !== null,
+        ownerWindowId,
+      });
       return;
     }
     this.windowRegistry.focusById(target.windowId);
-    this.safeSendToWindow(target.windowId, channel, payload);
+    if (!this.safeSendToWindow(target.windowId, channel, payload)) {
+      log.warn("[runner-ipc] renderer event delivery failed", {
+        channel,
+        windowId: target.windowId,
+      });
+    }
   }
 
   private resolveRendererHostedCommandTarget(

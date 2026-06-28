@@ -487,8 +487,14 @@ async function readRegistryCache(): Promise<RegistryUpdateCacheFile | null> {
   }
   try {
     const parsed: unknown = JSON.parse(text);
-    if (!isPlainObject(parsed)) return null;
-    if (typeof parsed.checkedAt !== "string") return null;
+    if (!isPlainObject(parsed)) {
+      log.warn("[host-management] registry cache has invalid shape", { path });
+      return null;
+    }
+    if (typeof parsed.checkedAt !== "string") {
+      log.warn("[host-management] registry cache missing checkedAt", { path });
+      return null;
+    }
     // Defence-in-depth: even though the filename is environment-scoped, also
     // gate on the `environment` field embedded in the snapshot. If an older
     // build (or a manual edit) put the wrong environment in this file, treat
@@ -497,6 +503,14 @@ async function readRegistryCache(): Promise<RegistryUpdateCacheFile | null> {
       typeof parsed.environment === "string" &&
       parsed.environment !== activeEnvironment
     ) {
+      log.info(
+        "[host-management] ignored registry cache for other environment",
+        {
+          path,
+          cacheEnvironment: parsed.environment,
+          activeEnvironment,
+        },
+      );
       return null;
     }
     return {

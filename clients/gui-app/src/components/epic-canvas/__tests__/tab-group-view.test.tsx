@@ -124,6 +124,7 @@ function pane(
     tabInstanceIds: tabs.map((tab) => tab.instanceId),
     activeTabId,
     previewTabId: null,
+    activationHistory: [activeTabId],
   };
 }
 

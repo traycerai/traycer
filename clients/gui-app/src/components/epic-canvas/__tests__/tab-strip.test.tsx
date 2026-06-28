@@ -90,6 +90,7 @@ function seedActivePreviewTab(): void {
           tabInstanceIds: [TAB.instanceId],
           activeTabId: TAB.instanceId,
           previewTabId: TAB.instanceId,
+          activationHistory: [TAB.instanceId],
         },
         tilesByInstanceId: { [TAB.instanceId]: TAB },
         sizesByGroupId: {},

@@ -25,6 +25,7 @@ import {
 } from "@/stores/migration/migration-run-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 import {
   localSnapshotClearScopeKey,
   useLocalSnapshotClearStore,
@@ -249,6 +250,7 @@ describe("GeneralSettingsPanel", () => {
     });
     useLocalSnapshotClearStore.setState({ clearedAtByScope: {} });
     useOnboardingStore.setState({ completedAt: null, step: 0 });
+    useSettingsStore.setState({ pinContextUsageBreakdown: false });
   });
 
   afterEach(() => {
@@ -270,6 +272,19 @@ describe("GeneralSettingsPanel", () => {
     fireEvent.click(button);
 
     expect(migrationStart.fn).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders the pinned context usage breakdown row and toggles the setting", () => {
+    renderPanel();
+
+    expect(useSettingsStore.getState().pinContextUsageBreakdown).toBe(false);
+    const toggle = screen.getByRole("switch", {
+      name: "Pin context usage breakdown",
+    });
+
+    fireEvent.click(toggle);
+
+    expect(useSettingsStore.getState().pinContextUsageBreakdown).toBe(true);
   });
 
   it("navigates to replay onboarding without clearing first-run completion", () => {
