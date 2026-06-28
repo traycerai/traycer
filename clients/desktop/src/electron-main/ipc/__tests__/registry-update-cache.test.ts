@@ -36,11 +36,13 @@ vi.mock("electron", () => ({
 vi.mock("electron-log", () => ({
   default: {
     transports: { file: { level: "info", resolvePathFn: vi.fn() } },
+    debug: vi.fn(),
     info: vi.fn(),
     warn: vi.fn(),
     error: vi.fn(),
   },
   transports: { file: { level: "info", resolvePathFn: vi.fn() } },
+  debug: vi.fn(),
   info: vi.fn(),
   warn: vi.fn(),
   error: vi.fn(),
