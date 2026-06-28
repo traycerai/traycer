@@ -887,9 +887,10 @@ describe("<HarnessModelPicker />", () => {
     await openPicker();
     const claudeTab = screen.getByRole("tab", { name: "Claude" });
 
-    expect(
-      screen.getAllByRole("tab").map((tab) => tab.getAttribute("aria-label")),
-    ).toEqual(["Codex", "Claude"]);
+    expect(screen.getAllByRole("tab")).toEqual([
+      screen.getByRole("tab", { name: "Codex" }),
+      screen.getByRole("tab", { name: "Claude" }),
+    ]);
     expect(claudeTab.getAttribute("data-degraded")).toBe("true");
 
     fireEvent.click(claudeTab);

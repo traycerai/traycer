@@ -8,6 +8,7 @@ import type {
   HarnessOption,
   ProviderId,
 } from "@/components/home/data/landing-options";
+import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import type { GuiHarnessCatalogEntry } from "@/hooks/harnesses/use-gui-harness-catalog";
 import type { HarnessModelRow } from "@/components/home/data/harness-model-search";
 import type { VirtuosoHandle } from "react-virtuoso";
@@ -33,7 +34,7 @@ interface HarnessModelPickerPanelProps {
   readonly fallbackHarnesses: ReadonlyArray<HarnessOption>;
   readonly resolvedActiveProviderId: ProviderId;
   readonly lockedHarnessId: ProviderId | null;
-  readonly degradedProviderIds: ReadonlySet<ProviderId>;
+  readonly degradedHarnessIds: ReadonlySet<GuiHarnessId>;
   readonly catalogHarnessesLoading: boolean;
   readonly onProviderChange: (providerId: ProviderId) => void;
   readonly onRefreshCatalog: () => Promise<void>;
@@ -74,7 +75,7 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
     fallbackHarnesses,
     resolvedActiveProviderId,
     lockedHarnessId,
-    degradedProviderIds,
+    degradedHarnessIds,
     catalogHarnessesLoading,
     onProviderChange,
     onRefreshCatalog,
@@ -139,7 +140,7 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
           fallbackHarnesses={fallbackHarnesses}
           activeProviderId={resolvedActiveProviderId}
           lockedHarnessId={lockedHarnessId}
-          degradedProviderIds={degradedProviderIds}
+          degradedHarnessIds={degradedHarnessIds}
           pending={catalogHarnessesLoading}
           onProviderChange={onProviderChange}
           onRefresh={onRefreshCatalog}

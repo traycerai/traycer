@@ -7,6 +7,7 @@ import type {
   HarnessOption,
   ProviderId,
 } from "@/components/home/data/landing-options";
+import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import { usePickerProviderLeaderForIndex } from "@/providers/keybinding-context";
 import { leaderDigitFor } from "@/components/ui/leader-digit-shortcuts";
 import { PickerLeaderBadge } from "@/components/home/pickers/harness-model-picker-leader-badge";
@@ -25,7 +26,7 @@ interface ProviderRailProps {
   readonly fallbackHarnesses: ReadonlyArray<HarnessOption>;
   readonly activeProviderId: ProviderId;
   readonly lockedHarnessId: ProviderId | null;
-  readonly degradedProviderIds: ReadonlySet<ProviderId>;
+  readonly degradedHarnessIds: ReadonlySet<GuiHarnessId>;
   readonly pending: boolean;
   readonly onProviderChange: (providerId: ProviderId) => void;
   readonly onOpenProviderSettings: () => void;
@@ -38,7 +39,7 @@ export function ProviderRail(props: ProviderRailProps) {
     fallbackHarnesses,
     activeProviderId,
     lockedHarnessId,
-    degradedProviderIds,
+    degradedHarnessIds,
     pending,
     onProviderChange,
     onOpenProviderSettings,
@@ -47,7 +48,7 @@ export function ProviderRail(props: ProviderRailProps) {
   const visibleHarnesses = visibleRailHarnesses(
     harnesses,
     fallbackHarnesses,
-    degradedProviderIds,
+    degradedHarnessIds,
   );
 
   return (
@@ -70,7 +71,7 @@ export function ProviderRail(props: ProviderRailProps) {
             harness={harness}
             index={index}
             active={harness.id === activeProviderId}
-            degraded={railHarnessDegraded(harness, degradedProviderIds)}
+            degraded={railHarnessDegraded(harness, degradedHarnessIds)}
             disabled={
               lockedHarnessId !== null && harness.id !== lockedHarnessId
             }

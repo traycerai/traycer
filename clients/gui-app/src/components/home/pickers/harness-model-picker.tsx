@@ -56,6 +56,7 @@ import { useRegisterActiveModelPicker } from "@/hooks/command-palette/use-regist
 import { useBindingForAction } from "@/stores/settings/keybinding-store";
 import { formatChordForDisplay } from "@/lib/keybindings/chord";
 import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
+import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import {
   providerIdToGuiHarnessId,
@@ -65,7 +66,7 @@ import {
 export type { ReasoningFooterConfig, ServiceTierFooterConfig };
 
 const EMPTY_MODELS: ReadonlyArray<ModelOption> = [];
-const EMPTY_DEGRADED_PROVIDER_IDS: ReadonlySet<ProviderId> = new Set();
+const EMPTY_DEGRADED_HARNESS_IDS: ReadonlySet<GuiHarnessId> = new Set();
 
 interface HarnessModelPickerProps {
   /** Per-composer toolbar store; the picker subscribes to the selection /
@@ -183,11 +184,11 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     enabled: activityEnabled,
     subscribed: activityEnabled,
   });
-  const degradedProviderIds = useMemo(
+  const degradedHarnessIds = useMemo(
     () =>
       providersQuery.data === undefined
-        ? EMPTY_DEGRADED_PROVIDER_IDS
-        : degradedProviderIdsFromProviderStates(providersQuery.data.providers),
+        ? EMPTY_DEGRADED_HARNESS_IDS
+        : degradedHarnessIdsFromProviderStates(providersQuery.data.providers),
     [providersQuery.data],
   );
   const harnesses = useMemo(
@@ -195,10 +196,10 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
       activityEnabled && harnessesQuery.data !== undefined
         ? orderModelPickerHarnesses(
             restrictToTui(harnessesQuery.data.harnesses, tuiOnly),
-            degradedProviderIds,
+            degradedHarnessIds,
           )
         : [],
-    [activityEnabled, degradedProviderIds, harnessesQuery.data, tuiOnly],
+    [activityEnabled, degradedHarnessIds, harnessesQuery.data, tuiOnly],
   );
   const selectedHarness = harnesses.find(
     (harness) => harness.id === selection.harnessId,
@@ -223,9 +224,9 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     () =>
       orderModelPickerHarnesses(
         restrictToTui(catalog.harnesses, tuiOnly),
-        degradedProviderIds,
+        degradedHarnessIds,
       ),
-    [catalog.harnesses, degradedProviderIds, tuiOnly],
+    [catalog.harnesses, degradedHarnessIds, tuiOnly],
   );
   const refreshCatalog = useRefreshHarnessCatalog();
   const selectedModels = selectedModelsQuery.data?.models ?? EMPTY_MODELS;
@@ -261,12 +262,12 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         catalogHarnesses,
         activeProviderId,
         selection.harnessId,
-        degradedProviderIds,
+        degradedHarnessIds,
       ),
     [
       activeProviderId,
       catalogHarnesses,
-      degradedProviderIds,
+      degradedHarnessIds,
       lockedHarnessId,
       selection.harnessId,
     ],
@@ -384,9 +385,8 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   // the badges. Both handlers are pure state writes, so the search input keeps
   // focus and the user can keep typing after switching.
   const railHarnesses = useMemo(
-    () =>
-      visibleRailHarnesses(catalogHarnesses, harnesses, degradedProviderIds),
-    [catalogHarnesses, degradedProviderIds, harnesses],
+    () => visibleRailHarnesses(catalogHarnesses, harnesses, degradedHarnessIds),
+    [catalogHarnesses, degradedHarnessIds, harnesses],
   );
   // ⌥-reasoning is armed whenever the selected model exposes thinking levels.
   // The footer always reflects the selected model (not the browsed rail), so
@@ -470,7 +470,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         fallbackHarnesses={harnesses}
         resolvedActiveProviderId={resolvedActiveProviderId}
         lockedHarnessId={lockedHarnessId}
-        degradedProviderIds={degradedProviderIds}
+        degradedHarnessIds={degradedHarnessIds}
         catalogHarnessesLoading={catalog.harnessesLoading}
         onProviderChange={handleProviderChange}
         onRefreshCatalog={refreshCatalog}
@@ -528,18 +528,18 @@ function restrictToTui<T extends HarnessOption>(
 
 function orderModelPickerHarnesses<T extends HarnessOption>(
   harnesses: ReadonlyArray<T>,
-  degradedProviderIds: ReadonlySet<ProviderId>,
+  degradedHarnessIds: ReadonlySet<GuiHarnessId>,
 ): ReadonlyArray<T> {
   return sortGuiHarnessesByProviderOrder(harnesses).toSorted(
     (left, right) =>
-      Number(railHarnessDegraded(left, degradedProviderIds)) -
-      Number(railHarnessDegraded(right, degradedProviderIds)),
+      Number(railHarnessDegraded(left, degradedHarnessIds)) -
+      Number(railHarnessDegraded(right, degradedHarnessIds)),
   );
 }
 
-function degradedProviderIdsFromProviderStates(
+function degradedHarnessIdsFromProviderStates(
   providers: ReadonlyArray<ProviderCliState>,
-): ReadonlySet<ProviderId> {
+): ReadonlySet<GuiHarnessId> {
   return new Set(
     providers.flatMap((provider) =>
       providerNeedsPickerReauth(provider)
@@ -561,10 +561,10 @@ function resolveActiveProviderId(
   harnesses: ReadonlyArray<HarnessOption>,
   activeProviderId: ProviderId,
   selectedProviderId: ProviderId,
-  degradedProviderIds: ReadonlySet<ProviderId>,
+  degradedHarnessIds: ReadonlySet<GuiHarnessId>,
 ): ProviderId {
   const selectable = (harness: HarnessOption): boolean =>
-    harness.available || railHarnessDegraded(harness, degradedProviderIds);
+    harness.available || railHarnessDegraded(harness, degradedHarnessIds);
   if (
     harnesses.some(
       (harness) => harness.id === activeProviderId && selectable(harness),

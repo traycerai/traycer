@@ -1,7 +1,5 @@
-import type {
-  HarnessOption,
-  ProviderId,
-} from "@/components/home/data/landing-options";
+import type { HarnessOption } from "@/components/home/data/landing-options";
+import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import { sortGuiHarnessesByProviderOrder } from "@/lib/provider-ordering";
 
 /**
@@ -15,32 +13,32 @@ import { sortGuiHarnessesByProviderOrder } from "@/lib/provider-ordering";
 export function visibleRailHarnesses(
   harnesses: ReadonlyArray<HarnessOption>,
   fallbackHarnesses: ReadonlyArray<HarnessOption>,
-  degradedProviderIds: ReadonlySet<ProviderId>,
+  degradedHarnessIds: ReadonlySet<GuiHarnessId>,
 ): ReadonlyArray<HarnessOption> {
   const source = harnesses.length > 0 ? harnesses : fallbackHarnesses;
   const visible = source.filter((harness) =>
-    railHarnessVisible(harness, degradedProviderIds),
+    railHarnessVisible(harness, degradedHarnessIds),
   );
   return sortGuiHarnessesByProviderOrder(visible).toSorted(
     (left, right) =>
-      Number(railHarnessDegraded(left, degradedProviderIds)) -
-      Number(railHarnessDegraded(right, degradedProviderIds)),
+      Number(railHarnessDegraded(left, degradedHarnessIds)) -
+      Number(railHarnessDegraded(right, degradedHarnessIds)),
   );
 }
 
 export function railHarnessDegraded(
   harness: HarnessOption,
-  degradedProviderIds: ReadonlySet<ProviderId>,
+  degradedHarnessIds: ReadonlySet<GuiHarnessId>,
 ): boolean {
   return (
     !harness.available &&
-    (harness.requiresApiKey || degradedProviderIds.has(harness.id))
+    (harness.requiresApiKey || degradedHarnessIds.has(harness.id))
   );
 }
 
 function railHarnessVisible(
   harness: HarnessOption,
-  degradedProviderIds: ReadonlySet<ProviderId>,
+  degradedHarnessIds: ReadonlySet<GuiHarnessId>,
 ): boolean {
-  return harness.available || railHarnessDegraded(harness, degradedProviderIds);
+  return harness.available || railHarnessDegraded(harness, degradedHarnessIds);
 }
