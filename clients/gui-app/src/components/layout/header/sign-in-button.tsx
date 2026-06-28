@@ -95,17 +95,17 @@ function DeviceCodeProgress(props: {
   return (
     <div
       className={cn(
-        "flex flex-col gap-2 rounded-md border border-border bg-muted/40 p-3",
+        "flex flex-col gap-3 rounded-lg border border-border bg-card p-4 text-card-foreground shadow-sm",
         props.isHero ? "w-full text-ui-sm" : "text-ui-xs",
       )}
       data-testid="signin-device-progress"
     >
-      <span className="text-muted-foreground">
+      <span className="font-medium text-foreground">
         Approve this sign-in in your browser.
       </span>
       <Button
-        variant="outline"
-        size="sm"
+        size={props.isHero ? "default" : "sm"}
+        className="w-full"
         onClick={() => props.auth.openVerificationPage()}
         data-testid="signin-open-approval"
       >
@@ -119,15 +119,18 @@ function DeviceCodeProgress(props: {
           testId="signin-device-spinner"
         />
       </span>
-      <span className="text-muted-foreground">
-        Or enter code{" "}
-        <span
-          className="font-mono font-semibold tracking-widest text-foreground"
+      <span className="flex flex-wrap items-center gap-x-1.5 gap-y-1 border-t border-border pt-3 text-muted-foreground">
+        Or enter
+        <code
+          className="rounded-sm border border-border bg-muted px-1.5 py-0.5 font-mono font-semibold tracking-widest text-foreground"
           data-testid="signin-device-code"
         >
           {progress.userCode}
-        </span>{" "}
-        at {progress.verificationUri}
+        </code>
+        at
+        <span className="font-medium text-foreground">
+          {progress.verificationUri}
+        </span>
       </span>
     </div>
   );
