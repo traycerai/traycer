@@ -348,11 +348,7 @@ export interface TraycerPidMetadata {
 }
 
 export type BootstrapPhase =
-  | "starting"
-  | "exited"
-  | "crashed"
-  | "killed"
-  | "failed-to-spawn";
+  "starting" | "exited" | "crashed" | "killed" | "failed-to-spawn";
 
 export interface BootstrapMarkerEntry {
   readonly timestamp: string;
