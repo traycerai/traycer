@@ -53,7 +53,11 @@ export type DeviceAuthorizationResult =
  *   - `network-error`         transport failure or 5xx (transient; retryable)
  */
 export type DevicePollResult =
-  | { readonly kind: "authorized"; readonly token: string; readonly refreshToken: string }
+  | {
+      readonly kind: "authorized";
+      readonly token: string;
+      readonly refreshToken: string;
+    }
   | { readonly kind: "authorization-pending" }
   | { readonly kind: "slow-down"; readonly retryAfterSeconds: number | null }
   | { readonly kind: "access-denied" }
@@ -380,11 +384,7 @@ function pickPositiveInt(
   // Require a positive integer: flooring a fractional value would accept a
   // malformed `expires_in: 0.5` as `0` (instant expiry) instead of rejecting the
   // `/device/authorize` body as invalid.
-  if (
-    typeof value !== "number" ||
-    !Number.isInteger(value) ||
-    value <= 0
-  ) {
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
     return null;
   }
   return value;

@@ -67,7 +67,11 @@ export function SignInButton(props: SignInButtonProps) {
         lastError={lastError}
         isHero={isHero}
       />
-      <DeviceCodeProgress auth={auth} progress={deviceProgress} isHero={isHero} />
+      <DeviceCodeProgress
+        auth={auth}
+        progress={deviceProgress}
+        isHero={isHero}
+      />
       <PrimarySignInButton
         auth={auth}
         isHero={isHero}

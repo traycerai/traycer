@@ -220,11 +220,17 @@ function sleep(ms: number): Promise<void> {
 // the code + URL, so opening the browser is purely a convenience.
 function openInBrowser(url: string): void {
   const plat = osPlatform();
+  // None of these openers route the URL through a shell: `open` / `xdg-open`
+  // receive it as a plain argv entry, and on Windows `rundll32
+  // url.dll,FileProtocolHandler` hands the URL to the protocol handler directly.
+  // The earlier `cmd /c start <url>` form let `cmd.exe` re-parse the URL, so a
+  // server-supplied value containing shell metacharacters (`&`, `|`, `^`) was a
+  // command-injection sink even though the scheme is validated to http(s).
   const { cmd, args } =
     plat === "darwin"
       ? { cmd: "open", args: [url] }
       : plat === "win32"
-        ? { cmd: "cmd", args: ["/c", "start", "", url] }
+        ? { cmd: "rundll32", args: ["url.dll,FileProtocolHandler", url] }
         : { cmd: "xdg-open", args: [url] };
   try {
     const child = spawn(cmd, args, { stdio: "ignore", detached: true });

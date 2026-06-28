@@ -1,8 +1,5 @@
 import { useCallback, useSyncExternalStore } from "react";
-import type {
-  AuthService,
-  DeviceFlowProgress,
-} from "@/lib/auth/auth-service";
+import type { AuthService, DeviceFlowProgress } from "@/lib/auth/auth-service";
 
 /**
  * Subscribes the header sign-in surface to the active device-flow attempt's

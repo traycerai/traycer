@@ -21,7 +21,9 @@ function installFetch(handler: FetchHandler): () => void {
     configurable: true,
     writable: true,
     value: (input: unknown): Promise<Response> =>
-      Promise.resolve(handler(typeof input === "string" ? input : String(input))),
+      Promise.resolve(
+        handler(typeof input === "string" ? input : String(input)),
+      ),
   });
   return () => {
     Object.defineProperty(globalThis, "fetch", {
@@ -38,7 +40,8 @@ function authorizeOk(): Response {
       device_code: "device-code-123",
       user_code: "ABCDE-FGHIJ",
       verification_uri: "https://app.test/device",
-      verification_uri_complete: "https://app.test/device?user_code=ABCDE-FGHIJ",
+      verification_uri_complete:
+        "https://app.test/device?user_code=ABCDE-FGHIJ",
       expires_in: 600,
       interval: 1,
     }),
@@ -80,8 +83,10 @@ describe("DeviceFlowController", () => {
       return new Response(null, { status: 500 });
     });
 
-    const results: Array<{ attemptId: string; result: DeviceFlowResultPayload }> =
-      [];
+    const results: Array<{
+      attemptId: string;
+      result: DeviceFlowResultPayload;
+    }> = [];
     const controller = new DeviceFlowController(AUTHN);
     const outcome = await controller.start({
       onResult: (attemptId, result) => results.push({ attemptId, result }),
@@ -99,7 +104,11 @@ describe("DeviceFlowController", () => {
     expect(results).toEqual([
       {
         attemptId: outcome.attemptId,
-        result: { kind: "authorized", token: "tok", refreshToken: "tok-refresh" },
+        result: {
+          kind: "authorized",
+          token: "tok",
+          refreshToken: "tok-refresh",
+        },
       },
     ]);
   });
@@ -119,8 +128,10 @@ describe("DeviceFlowController", () => {
       return new Response(null, { status: 500 });
     });
 
-    const results: Array<{ attemptId: string; result: DeviceFlowResultPayload }> =
-      [];
+    const results: Array<{
+      attemptId: string;
+      result: DeviceFlowResultPayload;
+    }> = [];
     const controller = new DeviceFlowController(AUTHN);
     const outcome = await controller.start({
       onResult: (attemptId, result) => results.push({ attemptId, result }),

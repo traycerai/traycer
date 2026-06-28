@@ -455,7 +455,8 @@ export class MockTraycerCli implements ITraycerCli {
 const MOCK_DEVICE_AUTHORIZATION: DeviceFlowAuthorization = {
   userCode: "ABCDE-FGHIJ",
   verificationUri: "https://app.traycer.ai/device",
-  verificationUriComplete: "https://app.traycer.ai/device?user_code=ABCDE-FGHIJ",
+  verificationUriComplete:
+    "https://app.traycer.ai/device?user_code=ABCDE-FGHIJ",
   expiresInSeconds: 600,
   intervalSeconds: 5,
 };
