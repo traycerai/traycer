@@ -35,6 +35,18 @@ export interface BearerStore {
 export type RevalidateOutcome = "rotated" | "rejected" | "network-error";
 
 /**
+ * Reject re-read poll cadence. After a refresh is rejected we re-read the store
+ * a few times before treating the credential as dead: a sibling that won the
+ * same single-use rotation may have just persisted a fresh pair to the shared
+ * store. The reject's own round-trip usually already gives the winner enough
+ * time, so the first re-read typically suffices; these bound a slightly-delayed
+ * sibling write (~`POLL_INTERVAL_MS * (ATTEMPTS - 1)` worst case) without
+ * letting a genuine reject hang.
+ */
+export const REJECT_REREAD_POLL_INTERVAL_MS = 100;
+export const REJECT_REREAD_ATTEMPTS = 5;
+
+/**
  * Stream-side auth recovery hook the `/stream` transport invokes after the
  * host rejects an open frame with `UNAUTHORIZED`. Returns the normalized
  * outcome the transport acts on:
@@ -88,16 +100,31 @@ export async function rotateAndPersistBearer(args: {
  *      writing: if a sibling rotated *during* the round trip, adopt theirs
  *      rather than clobbering it; else persist our rotation.
  *   3. Rotate the active lease to whichever token we settled on.
+ *   4. If the refresh is *rejected*, re-read the store once more (a short bounded
+ *      poll). A sibling that won the same single-use rotation outside the
+ *      server's grace window - or while Redis was down / before that coordination
+ *      shipped - may have already persisted a fresh token. If the store now holds
+ *      a token different from `current`, adopt it and report `rotated` rather than
+ *      signing the user out. Only a store still pinned to `current` is a genuine
+ *      reject. (A store whose access token *equals* `current` but whose refresh
+ *      token is stale is a separate staleness case handled by full-pair
+ *      re-provision, not here.)
  *
  * `clearOnReject` controls whether a rejected refresh wipes the store: the
  * renderer signs the user out (true); the CLI leaves credentials in place so a
  * transient authn outage doesn't force a re-login (false).
+ *
+ * `delay` is the awaitable sleep between reject re-read polls, injected so the
+ * poll is deterministic in tests and environment-agnostic in production (mirrors
+ * the proactive scheduler's timer injection); real callers back it with
+ * `setTimeout`.
  */
 export function createBearerRevalidator(args: {
   readonly authnBaseUrl: string;
   readonly lease: BearerLease;
   readonly store: BearerStore;
   readonly clearOnReject: boolean;
+  readonly delay: (ms: number) => Promise<void>;
 }): AuthRevalidator & {
   revalidateCurrentContext(): Promise<RevalidateOutcome>;
 } {
@@ -140,6 +167,37 @@ export function createBearerRevalidator(args: {
           return "network-error";
         }
         if (result.kind === "rejected") {
+          // A loser of a concurrent rotation can be rejected even though the
+          // winner already persisted a fresh token to the shared store. Re-read
+          // before treating the credential as dead; a bounded poll covers a
+          // slightly-delayed sibling write. Adopt any non-empty token that
+          // differs from `current` (same shape as the pre-/post-refresh adopt
+          // branches) and never clear - clearing would clobber the winner's pair
+          // and sign the user out. This is a sequential read/wait loop, not an
+          // array transform, so an explicit bounded loop reads clearest.
+          let adopted: string | null = null;
+          for (
+            let attempt = 0;
+            attempt < REJECT_REREAD_ATTEMPTS;
+            attempt += 1
+          ) {
+            const persisted = await args.store.read();
+            if (
+              persisted !== null &&
+              persisted.token.length > 0 &&
+              persisted.token !== current
+            ) {
+              adopted = persisted.token;
+              break;
+            }
+            if (attempt < REJECT_REREAD_ATTEMPTS - 1) {
+              await args.delay(REJECT_REREAD_POLL_INTERVAL_MS);
+            }
+          }
+          if (adopted !== null) {
+            args.lease.rotate(adopted);
+            return "rotated";
+          }
           if (args.clearOnReject) {
             await args.store.clear();
           }

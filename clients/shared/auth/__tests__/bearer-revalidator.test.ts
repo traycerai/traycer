@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createBearerRevalidator,
+  REJECT_REREAD_ATTEMPTS,
   rotateAndPersistBearer,
   type BearerStore,
 } from "../bearer-revalidator";
@@ -86,6 +87,7 @@ describe("createBearerRevalidator", () => {
       lease,
       store,
       clearOnReject: false,
+      delay: async () => undefined,
     });
 
     const outcome = await revalidator.revalidateCurrentContext();
@@ -104,6 +106,7 @@ describe("createBearerRevalidator", () => {
       lease,
       store,
       clearOnReject: false,
+      delay: async () => undefined,
     });
 
     const outcome = await revalidator.revalidateCurrentContext();
@@ -137,6 +140,7 @@ describe("createBearerRevalidator", () => {
       lease,
       store,
       clearOnReject: false,
+      delay: async () => undefined,
     });
 
     const outcome = await revalidator.revalidateCurrentContext();
@@ -169,6 +173,7 @@ describe("createBearerRevalidator", () => {
       lease,
       store,
       clearOnReject: false,
+      delay: async () => undefined,
     });
 
     const outcome = await revalidator.revalidateCurrentContext();
@@ -200,6 +205,7 @@ describe("createBearerRevalidator", () => {
       lease,
       store,
       clearOnReject: false,
+      delay: async () => undefined,
     });
 
     const outcome = await revalidator.revalidateCurrentContext();
@@ -218,6 +224,7 @@ describe("createBearerRevalidator", () => {
       lease,
       store,
       clearOnReject: true,
+      delay: async () => undefined,
     });
 
     const outcome = await revalidator.revalidateCurrentContext();
@@ -236,6 +243,7 @@ describe("createBearerRevalidator", () => {
       lease,
       store,
       clearOnReject: false,
+      delay: async () => undefined,
     });
 
     const outcome = await revalidator.revalidateCurrentContext();
@@ -253,6 +261,7 @@ describe("createBearerRevalidator", () => {
       lease,
       store,
       clearOnReject: true,
+      delay: async () => undefined,
     });
 
     const outcome = await revalidator.revalidateCurrentContext();
@@ -261,5 +270,92 @@ describe("createBearerRevalidator", () => {
     expect(store.cleared).toBe(false);
     expect(store.writes).toEqual([]);
     expect(lease.getBearerToken()).toBe("stale");
+  });
+
+  it("adopts a sibling's freshly-persisted token on reject instead of signing out", async () => {
+    refreshMock.mockResolvedValue({ kind: "rejected" });
+    const lease = new MutableBearerLease("stale", "u1");
+    // read() #1 (pre-refresh) returns "stale" (== current → refresh); read() #2
+    // (reject re-read) finds the winner's freshly-persisted token.
+    let reads = 0;
+    const store: BearerStore = {
+      read: async () => {
+        reads += 1;
+        return reads === 1 ? tokens("stale") : tokens("winner");
+      },
+      write: vi.fn(async () => undefined),
+      clear: vi.fn(async () => undefined),
+    };
+    const revalidator = createBearerRevalidator({
+      authnBaseUrl: AUTHN,
+      lease,
+      store,
+      // Even with clearOnReject true (the GUI's sign-out posture), an adoptable
+      // sibling token must win over the clear.
+      clearOnReject: true,
+      delay: async () => undefined,
+    });
+
+    const outcome = await revalidator.revalidateCurrentContext();
+
+    expect(outcome).toBe("rotated");
+    expect(lease.getBearerToken()).toBe("winner");
+    // Adopt-only: never write (no double-write) and never clear.
+    expect(store.write).not.toHaveBeenCalled();
+    expect(store.clear).not.toHaveBeenCalled();
+  });
+
+  it("bounded poll on reject catches a slightly-delayed sibling write", async () => {
+    refreshMock.mockResolvedValue({ kind: "rejected" });
+    const lease = new MutableBearerLease("stale", "u1");
+    // The store stays pinned to "stale" until the first inter-poll delay fires,
+    // at which point the sibling has persisted "winner".
+    const state = { token: "stale" };
+    const store: BearerStore = {
+      read: async () => tokens(state.token),
+      write: vi.fn(async () => undefined),
+      clear: vi.fn(async () => undefined),
+    };
+    const delay = vi.fn(async () => {
+      state.token = "winner";
+    });
+    const revalidator = createBearerRevalidator({
+      authnBaseUrl: AUTHN,
+      lease,
+      store,
+      clearOnReject: true,
+      delay,
+    });
+
+    const outcome = await revalidator.revalidateCurrentContext();
+
+    expect(outcome).toBe("rotated");
+    expect(lease.getBearerToken()).toBe("winner");
+    // Pre-refresh read + first reject read both saw "stale"; one delay, then the
+    // second reject read adopted "winner".
+    expect(delay).toHaveBeenCalledTimes(1);
+    expect(store.clear).not.toHaveBeenCalled();
+  });
+
+  it("rejects (and clears when clearOnReject) when the store never holds a newer token", async () => {
+    refreshMock.mockResolvedValue({ kind: "rejected" });
+    const lease = new MutableBearerLease("stale", "u1");
+    const store = makeStore("stale");
+    const delay = vi.fn(async () => undefined);
+    const revalidator = createBearerRevalidator({
+      authnBaseUrl: AUTHN,
+      lease,
+      store,
+      clearOnReject: true,
+      delay,
+    });
+
+    const outcome = await revalidator.revalidateCurrentContext();
+
+    expect(outcome).toBe("rejected");
+    expect(store.cleared).toBe(true);
+    expect(store.writes).toEqual([]);
+    // Poll exhausted its budget: one delay per gap between the re-reads.
+    expect(delay).toHaveBeenCalledTimes(REJECT_REREAD_ATTEMPTS - 1);
   });
 });

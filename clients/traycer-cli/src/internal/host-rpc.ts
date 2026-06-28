@@ -196,6 +196,7 @@ async function requestAtEndpoint<
     lease,
     store: cliBearerStore,
     clearOnReject: false,
+    delay: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   });
 
   const messenger = createRetryingMessenger<HostRpcRegistry>(

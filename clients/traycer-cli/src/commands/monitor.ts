@@ -139,6 +139,7 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
     lease,
     store: cliBearerStore,
     clearOnReject: false,
+    delay: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   });
 
   // The shared client reads `endpoint()` on every (re)connect, so a poller that
