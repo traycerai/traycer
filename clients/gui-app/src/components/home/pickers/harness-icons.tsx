@@ -8,18 +8,19 @@ import QwenMono from "@lobehub/icons/es/Qwen/components/Mono";
 import KiroMono from "@lobehub/icons/es/Kiro/components/Mono";
 import KiloCodeMono from "@lobehub/icons/es/KiloCode/components/Mono";
 import GithubCopilotMono from "@lobehub/icons/es/GithubCopilot/components/Mono";
-import { Bot, Route } from "lucide-react";
+import OpenRouterMono from "@lobehub/icons/es/OpenRouter/components/Mono";
+import { Bot } from "lucide-react";
 import KimiMono from "@lobehub/icons/es/Kimi/components/Mono";
 
 export type HarnessIcon = (props: SVGProps<SVGSVGElement>) => ReactElement;
 
 // Brand logos come from @lobehub/icons (every provider lives there, so we don't
-// hand-roll SVGs). We import the leaf component files rather than each provider's
-// barrel: the barrel also pulls the `Combine`/`Avatar` variants, which depend on
-// `@lobehub/ui` + antd - peers we don't install - and would break Vite's dep
-// prebundle. The mono variants paint with `currentColor`, so they follow the
-// light/dark theme via the `text-*` class applied by `HarnessIcon`; Claude uses
-// the colored sunburst so it keeps its brand orange in both themes.
+// hand-roll SVGs). Most imports use leaf component files to avoid pulling extra
+// variants; this includes OpenRouter, whose package barrels pull generated
+// feature exports that are not needed here. The mono variants paint with
+// `currentColor`, so they follow the light/dark theme via the `text-*` class
+// applied by `HarnessIcon`; Claude uses the colored sunburst so it keeps its
+// brand orange in both themes.
 export const CodexIcon: HarnessIcon = (props) => <CodexMono {...props} />;
 export const ClaudeAIIcon: HarnessIcon = (props) => <ClaudeColor {...props} />;
 export const OpenCodeIcon: HarnessIcon = (props) => <OpenCodeMono {...props} />;
@@ -32,7 +33,9 @@ export const CopilotIcon: HarnessIcon = (props) => (
   <GithubCopilotMono {...props} />
 );
 export const DroidIcon: HarnessIcon = (props) => <Bot {...props} />;
-export const OpenRouterIcon: HarnessIcon = (props) => <Route {...props} />;
+export const OpenRouterIcon: HarnessIcon = (props) => (
+  <OpenRouterMono {...props} />
+);
 export const KimiIcon: HarnessIcon = (props) => <KimiMono {...props} />;
 
 // Traycer does not have a lobehub entry — hand-rolled from the brand mark.

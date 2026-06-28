@@ -45,7 +45,7 @@ export function ProviderRail(props: ProviderRailProps) {
       <div
         role="tablist"
         aria-label="Model providers"
-        className="compact-scrollbar flex min-h-0 flex-1 flex-col items-center gap-1 overflow-y-auto overscroll-contain px-1 [scrollbar-gutter:stable]"
+        className="no-scrollbar flex min-h-0 flex-1 flex-col items-center gap-1 overflow-y-auto overscroll-contain px-1"
       >
         {pending && visibleHarnesses.length === 0 ? (
           <span className="mt-1 flex size-8 items-center justify-center rounded-lg text-muted-foreground">
