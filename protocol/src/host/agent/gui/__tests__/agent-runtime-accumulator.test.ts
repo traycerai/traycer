@@ -512,8 +512,11 @@ describe("accumulateEvent", () => {
     // turn boundary must NOT force-complete it.
     expect(blocks[3].status).toBe("streaming");
     expect(blocks[4].type).toBe("subagent");
+    // Option B: a subagent still streaming at a CLEAN turn end is a backgrounded
+    // subagent that outlives the turn - its card stays "running" until its own
+    // completion finalizes it (unlike the turn-scoped tool_call above).
     expect(blocks.find((block) => block.blockId === "sa1")?.status).toBe(
-      "completed",
+      "streaming",
     );
   });
 
@@ -1895,7 +1898,7 @@ describe("turn-end finalization of streaming blocks", () => {
     ]);
   });
 
-  it("completes in-flight action blocks on a clean turn.completed", () => {
+  it("completes turn-scoped action blocks but keeps a backgrounded subagent streaming on a clean turn.completed", () => {
     let blocks = startedActionBlocks();
     blocks = accumulateEvent(blocks, {
       type: "turn.completed",
@@ -1903,8 +1906,12 @@ describe("turn-end finalization of streaming blocks", () => {
       timestamp: 5,
       turnId: "turn",
     });
+    // Option B: the subagent (pos 0) is still streaming at a clean turn end, so it
+    // is a backgrounded subagent that outlives the turn - its card stays "running"
+    // until its own completion finalizes it. file_change/tool_call/command are
+    // turn-scoped and finalize.
     expect(blocks.map((b) => b.status)).toEqual([
-      "completed",
+      "streaming",
       "completed",
       "completed",
       "completed",

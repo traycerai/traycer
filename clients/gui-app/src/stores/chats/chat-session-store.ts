@@ -2147,6 +2147,67 @@ function applyBlockDelta(
   return applyContentBlockDelta(state, event);
 }
 
+// The block id whose OWNING message a detached backgrounded-subagent event
+// targets: the subagent block for `subagent.*`, else the `parentBlockId` of a
+// nested tool/file event. Null for everything else (text/reasoning/top-level
+// tool deltas), so the common high-frequency path skips the owner lookup.
+function detachedSubagentOwnerBlockId(event: RuntimeEvent): string | null {
+  if (
+    event.type === "subagent.started" ||
+    event.type === "subagent.progress" ||
+    event.type === "subagent.completed"
+  ) {
+    return event.blockId;
+  }
+  if (
+    "parentBlockId" in event &&
+    typeof event.parentBlockId === "string" &&
+    event.parentBlockId.length > 0
+  ) {
+    return event.parentBlockId;
+  }
+  return null;
+}
+
+function assistantMessageOwnsBlock(message: Message, blockId: string): boolean {
+  return (
+    message.role === "assistant" &&
+    message.blocks.some((block) => block.blockId === blockId)
+  );
+}
+
+// Apply a detached backgrounded-subagent event to the SETTLED message that owns
+// its card (its spawning turn already ended), so the card keeps updating instead
+// of being dropped (no active turn) or mis-applied to a later turn's row. Returns
+// null when no message owns the block (caller falls back to active-turn routing).
+function applyEventToOwningMessage(
+  state: ChatSessionState,
+  event: RuntimeEvent,
+  ownerBlockId: string,
+): Partial<ChatSessionState> | null {
+  const index = state.messages.findIndex((message) =>
+    assistantMessageOwnsBlock(message, ownerBlockId),
+  );
+  if (index < 0) return null;
+  const target = state.messages[index];
+  if (target.role !== "assistant") return null;
+  const content = accumulateTurnContent(
+    { blocks: target.blocks, blocksVersion: target.blocksVersion ?? 0 },
+    event,
+  );
+  if (content.blocks === target.blocks) return {};
+  const next = state.messages.slice();
+  next[index] = {
+    ...target,
+    blocks: content.blocks,
+    ...(target.blocksVersion === undefined
+      ? {}
+      : { blocksVersion: content.blocksVersion }),
+    timestamp: event.timestamp,
+  };
+  return { messages: next };
+}
+
 // Reduces a single runtime delta event onto the session state. The branches map
 // one-to-one to the distinct block/delta kinds; flattening that mapping is
 // clearer than threading the dispatch through extra indirection.
@@ -2159,6 +2220,28 @@ function applyContentBlockDelta(
     state.messages,
     state.activeTurn?.turnId ?? state.liveAssistantMessage?.turnId ?? null,
   );
+  // Detached backgrounded-subagent activity: its card lives in an earlier,
+  // already-settled message. Route the event to that message when the active
+  // turn's row does not own the block, so the card keeps updating live. Gated to
+  // subagent-context events; the active turn's own subagent skips this.
+  const detachedOwnerBlockId = detachedSubagentOwnerBlockId(event);
+  if (
+    detachedOwnerBlockId !== null &&
+    !(
+      assistantIndex >= 0 &&
+      assistantMessageOwnsBlock(
+        state.messages[assistantIndex],
+        detachedOwnerBlockId,
+      )
+    )
+  ) {
+    const routed = applyEventToOwningMessage(
+      state,
+      event,
+      detachedOwnerBlockId,
+    );
+    if (routed !== null) return routed;
+  }
   if (assistantIndex >= 0) {
     const target = state.messages[assistantIndex];
     if (target.role !== "assistant") {

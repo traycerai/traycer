@@ -172,6 +172,34 @@ export function finalizeStreamingActionBlocks(
   return hasUpdates ? finalizedBlocks : blocks;
 }
 
+// Option B (backgrounded subagents): restore any subagent block that
+// `finalizeStreamingActionBlocks` just finalized but was "streaming" before, to
+// its pre-finalize (streaming) state. A subagent still streaming at a CLEAN turn
+// end is a backgrounded subagent that outlives the turn that spawned it (a
+// synchronous subagent's result returns to the model BEFORE the model finishes),
+// so its card must keep reading "running" until its OWN completion finalizes it
+// (the host's detached execution). Turn-scoped action blocks
+// (tool_call/command/file_change) stay finalized. Only applied on `turn.completed`
+// - a stopped/interrupted turn DOES finalize a still-running subagent.
+function reopenStreamingSubagentBlocks(
+  before: ContentBlock[],
+  finalized: ContentBlock[],
+): ContentBlock[] {
+  if (finalized === before) return finalized;
+  const streamingSubagentIds = new Set(
+    before
+      .filter((block) => block.type === "subagent" && block.status === "streaming")
+      .map((block) => block.blockId),
+  );
+  if (streamingSubagentIds.size === 0) return finalized;
+  const beforeById = new Map(before.map((block) => [block.blockId, block]));
+  return finalized.map((block) =>
+    block.type === "subagent" && streamingSubagentIds.has(block.blockId)
+      ? beforeById.get(block.blockId) ?? block
+      : block,
+  );
+}
+
 function finalizeBlock(
   blocks: ContentBlock[],
   blockId: string,
@@ -483,9 +511,20 @@ export function accumulateEvent(
         },
       ];
 
-    case "turn.completed":
+    case "turn.completed": {
+      // Clean turn end: finalize turn-scoped blocks, but keep a still-streaming
+      // (backgrounded) subagent's card "running" until its own completion lands.
+      const finalized = finalizeStreamingActionBlocks(
+        blocks,
+        event.timestamp,
+        finalizeStatusForTerminalEvent(event),
+      );
+      return reopenStreamingSubagentBlocks(blocks, finalized);
+    }
     case "turn.stopped":
     case "turn.interrupted":
+      // A cut-short turn finalizes everything still streaming, subagents
+      // included - they cannot keep running once the turn is torn down.
       return finalizeStreamingActionBlocks(
         blocks,
         event.timestamp,
