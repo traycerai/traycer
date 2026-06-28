@@ -512,7 +512,8 @@ export type DeviceFlowResult =
  * the GUI calls it on the browser-return signal so approval is picked up at
  * once. `cancel()` stops the shell-side poll loop and frees its resources - the
  * GUI calls it when the attempt is superseded (retry), on sign-out, and on
- * dispose.
+ * dispose; it must never invoke `onResult` synchronously, so a caller can safely
+ * cancel from inside a teardown path without re-entering its own finalizer.
  */
 export interface DeviceFlowSession {
   readonly authorization: DeviceFlowAuthorization;

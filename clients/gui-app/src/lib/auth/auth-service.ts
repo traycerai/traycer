@@ -1411,8 +1411,13 @@ export class AuthService {
       );
       return;
     }
-    attempt.deviceSession?.cancel();
+    // Dispose the result subscription (via clearActiveAttempt) BEFORE cancelling
+    // the session, mirroring discardActiveAttempt's dispose-before-cancel order:
+    // even if a session's cancel() ever delivered the terminal result
+    // synchronously, there is no live onResult handler left to re-enter this
+    // finalizer.
     this.clearActiveAttempt();
+    attempt.deviceSession?.cancel();
     this.setDeviceProgress(null);
     if (this.starting) {
       this.authResolvedDuringStart = true;
