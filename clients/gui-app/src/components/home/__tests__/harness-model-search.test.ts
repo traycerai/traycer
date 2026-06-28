@@ -56,6 +56,16 @@ const OPENROUTER_HARNESS: HarnessOption = {
   supportedPermissionModes: [...ALL_PERMISSION_MODES],
 };
 
+const KILOCODE_HARNESS: HarnessOption = {
+  id: "kilocode",
+  label: "Kilo Code",
+  available: true,
+  error: null,
+  modes: ["gui", "tui"],
+  requiresApiKey: false,
+  supportedPermissionModes: [...ALL_PERMISSION_MODES],
+};
+
 function model(overrides: Partial<ModelOption>): ModelOption {
   const base: ModelOption = {
     harnessId: "codex",
@@ -422,6 +432,58 @@ describe("harness model search", () => {
         modelSlug: "openrouter:openrouter/owl-alpha",
       }),
     ).toBe("Owl Alpha");
+  });
+
+  it("groups Kilo Code models by provider and trims the '/' provider prefix from rows", () => {
+    const models = [
+      model({
+        harnessId: "kilocode",
+        slug: "kilo/amazon/nova-pro-v1",
+        label: "Kilo Gateway/Amazon: Nova Pro 1.0",
+        metadata: {
+          openCodeProviderId: "kilo",
+          openCodeProviderLabel: "Kilo Gateway",
+        },
+      }),
+      model({
+        harnessId: "kilocode",
+        slug: "openrouter/anthropic/claude-3-haiku",
+        label: "OpenRouter/Claude 3 Haiku",
+        metadata: {
+          openCodeProviderId: "openrouter",
+          openCodeProviderLabel: "OpenRouter",
+        },
+      }),
+      model({
+        harnessId: "kilocode",
+        slug: "google-vertex/gemini-2.5-pro",
+        label: "Vertex/Gemini 2.5 Pro",
+        metadata: {
+          openCodeProviderId: "google-vertex",
+          openCodeProviderLabel: "Vertex",
+        },
+      }),
+    ];
+    const rows = buildHarnessModelRows(KILOCODE_HARNESS, models);
+
+    // Grouped off the host-declared provider; browseLabel drops the
+    // "<Provider>/" prefix Kilo's names carry (the "/" separator).
+    expect(
+      rows.map((row) => [row.providerGroupLabel, row.browseLabel]),
+    ).toEqual([
+      ["Kilo Gateway", "Amazon: Nova Pro 1.0"],
+      ["OpenRouter", "Claude 3 Haiku"],
+      ["Vertex", "Gemini 2.5 Pro"],
+    ]);
+    // The full "<Provider>/<Model>" name is preserved for search.
+    expect(rows[0]?.label).toBe("Kilo Gateway/Amazon: Nova Pro 1.0");
+    // The collapsed trigger shows the trimmed name.
+    expect(
+      findModelLabel(models, {
+        harnessId: "kilocode",
+        modelSlug: "google-vertex/gemini-2.5-pro",
+      }),
+    ).toBe("Gemini 2.5 Pro");
   });
 
   it("keeps host order when only some models carry group metadata (partial rollout)", () => {

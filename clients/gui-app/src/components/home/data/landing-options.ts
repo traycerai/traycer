@@ -283,10 +283,11 @@ export function modelMetadataString(value: unknown): string {
 }
 
 function stripProviderPrefix(label: string, providerLabel: string): string {
-  // Names carry the vendor as a prefix - "Z.ai: GLM 5.2", or for OpenRouter's
-  // "latest" aliases "Anthropic Claude Haiku Latest". Trim it (": " or " "
-  // separator) since the vendor is already shown as the group header.
-  for (const separator of [": ", " "]) {
+  // Names carry the provider/vendor as a prefix - "Z.ai: GLM 5.2", OpenRouter's
+  // "latest" aliases "Anthropic Claude Haiku Latest", or Kilo's "OpenRouter/Aion
+  // -1.0". Trim it (": ", " ", or "/" separator) since the provider is already
+  // shown as the group header.
+  for (const separator of [": ", " ", "/"]) {
     const prefix = `${providerLabel}${separator}`;
     if (label.startsWith(prefix)) return label.slice(prefix.length);
   }
