@@ -153,6 +153,10 @@ interface Attempt {
   readonly epoch: number;
   readonly abortController: AbortController;
   deviceSession: DeviceFlowSession | null;
+  // Subscription to the device session's terminal result. Retained so it can be
+  // disposed when the attempt is superseded, torn down, or finished - otherwise
+  // the `onResult` closure (and the IPC listener behind it) leaks.
+  resultDisposable: Disposable | null;
 }
 
 /**
@@ -481,7 +485,24 @@ export class AuthService {
     const attempt = this.beginAttempt();
     useAuthStore.getState().setSigningIn();
     this.runnerHost.beginAuthAttempt();
-    const session = await this.runnerHost.deviceFlow.start();
+    let session: DeviceFlowSession | null;
+    try {
+      session = await this.runnerHost.deviceFlow.start();
+    } catch {
+      // A rejected `start()` (host/IPC failure) must route to the SAME
+      // launch-failed cleanup as a `null` return - otherwise the UI stays stuck
+      // in `signing-in` with a live attempt that never settles. Guard on the
+      // attempt still being current so a superseded/disposed attempt is left
+      // alone.
+      if (this.activeAttempt === attempt) {
+        this.activeAttempt = null;
+        if (this.starting) {
+          this.authResolvedDuringStart = true;
+        }
+        await this.applyFailure(AUTH_ERROR_LAUNCH_FAILED);
+      }
+      return;
+    }
     if (this.isDisposed()) {
       session?.cancel();
       return;
@@ -522,7 +543,7 @@ export class AuthService {
     void this.runnerHost
       .openExternalLink(authorization.verificationUriComplete)
       .catch(() => {});
-    session.onResult((result) => {
+    attempt.resultDisposable = session.onResult((result) => {
       void this.finalizeDeviceResult(result, attempt.epoch);
     });
   }
@@ -1046,7 +1067,7 @@ export class AuthService {
       }
       appLogger.warn("[auth] OAuth callback delivered an empty token", {});
       this.clearPendingTimeout();
-      this.activeAttempt = null;
+      this.clearActiveAttempt();
       await this.applyFailure(AUTH_ERROR_SIGN_IN_FAILED);
       return false;
     }
@@ -1074,7 +1095,7 @@ export class AuthService {
     if (outcome.kind === "valid") {
       // Consume the attempt so a subsequent replayed device result cannot
       // re-apply the same token.
-      this.activeAttempt = null;
+      this.clearActiveAttempt();
       const accepted = this.acceptedToken(outcome, { token, refreshToken });
       await this.tokenStore.save(accepted);
       if (this.isDisposed()) {
@@ -1102,7 +1123,7 @@ export class AuthService {
     appLogger.warn("[auth] OAuth token validation failed", {
       outcome: outcome.kind,
     });
-    this.activeAttempt = null;
+    this.clearActiveAttempt();
     await this.applyFailure(AUTH_ERROR_SIGN_IN_FAILED);
     return false;
   }
@@ -1135,7 +1156,7 @@ export class AuthService {
     }
     // Terminal device failure (denied / expired / unrecoverable error).
     this.clearPendingTimeout();
-    this.activeAttempt = null;
+    this.clearActiveAttempt();
     if (this.starting) {
       this.authResolvedDuringStart = true;
     }
@@ -1249,10 +1270,22 @@ export class AuthService {
       return;
     }
     attempt.abortController.abort();
+    attempt.resultDisposable?.dispose();
     if (attempt.deviceSession !== null) {
       attempt.deviceSession.cancel();
     }
     this.setDeviceProgress(null);
+    this.activeAttempt = null;
+  }
+
+  /**
+   * Concludes the active attempt from a terminal finalizer: disposes its
+   * device-result subscription (releasing the `onResult`/IPC closure) and clears
+   * it. Unlike `discardActiveAttempt`, it does NOT abort/cancel - the attempt
+   * has already settled, so there is nothing to tear down.
+   */
+  private clearActiveAttempt(): void {
+    this.activeAttempt?.resultDisposable?.dispose();
     this.activeAttempt = null;
   }
 
@@ -1268,6 +1301,7 @@ export class AuthService {
       epoch,
       abortController: new AbortController(),
       deviceSession: null,
+      resultDisposable: null,
     };
     this.activeAttempt = attempt;
     return attempt;
@@ -1318,6 +1352,7 @@ export class AuthService {
     // process doesn't keep running after this service is gone.
     if (this.activeAttempt !== null) {
       this.activeAttempt.abortController.abort();
+      this.activeAttempt.resultDisposable?.dispose();
       this.activeAttempt.deviceSession?.cancel();
       this.activeAttempt = null;
     }
@@ -1377,7 +1412,7 @@ export class AuthService {
       return;
     }
     attempt.deviceSession?.cancel();
-    this.activeAttempt = null;
+    this.clearActiveAttempt();
     this.setDeviceProgress(null);
     if (this.starting) {
       this.authResolvedDuringStart = true;

@@ -499,8 +499,11 @@ export class MockDeviceFlowSession implements DeviceFlowSession {
   cancelled = false;
   /** Test counter: how many times the browser-return nudge poked this poll. */
   pollNowCalls = 0;
-  private pendingResult: DeviceFlowResult | null = null;
-  private handler: ((result: DeviceFlowResult) => void) | null = null;
+  // The terminal result is cached for the session's lifetime so every
+  // subscriber - late or repeat - replays it, matching the
+  // `DeviceFlowSession.onResult` contract (the desktop preload caches likewise).
+  private settledResult: DeviceFlowResult | null = null;
+  private readonly handlers = new Set<(result: DeviceFlowResult) => void>();
 
   constructor(authorization: DeviceFlowAuthorization) {
     this.authorization = authorization;
@@ -511,33 +514,35 @@ export class MockDeviceFlowSession implements DeviceFlowSession {
   }
 
   onResult(handler: (result: DeviceFlowResult) => void): Disposable {
-    this.handler = handler;
-    // Replay a result that settled before this subscription (mirrors the
-    // desktop preload's per-attempt result cache).
-    if (this.pendingResult !== null) {
-      const result = this.pendingResult;
-      this.pendingResult = null;
-      handler(result);
+    // Replay the settled result to a subscription that arrives after the
+    // attempt has already concluded (cached, not consumed - a second
+    // subscriber still sees it).
+    if (this.settledResult !== null) {
+      handler(this.settledResult);
+      return { dispose: () => undefined };
     }
+    this.handlers.add(handler);
     return {
       dispose: () => {
-        if (this.handler === handler) {
-          this.handler = null;
-        }
+        this.handlers.delete(handler);
       },
     };
   }
 
   cancel(): void {
     this.cancelled = true;
+    this.handlers.clear();
   }
 
   emit(result: DeviceFlowResult): void {
-    if (this.handler !== null) {
-      this.handler(result);
+    if (this.cancelled || this.settledResult !== null) {
       return;
     }
-    this.pendingResult = result;
+    this.settledResult = result;
+    for (const handler of this.handlers) {
+      handler(result);
+    }
+    this.handlers.clear();
   }
 }
 

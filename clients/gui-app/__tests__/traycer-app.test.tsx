@@ -279,7 +279,7 @@ describe("<TraycerApp />", () => {
     // A terminal device-flow error surfaces the generic sign-in-failed copy.
     host.deviceFlow.emitResult({ kind: "error" });
 
-    const errorNode = await screen.findByTestId("signin-error");
+    const errorNode = await screen.findByRole("alert");
     expect(errorNode.textContent).toContain("Sign-in failed");
 
     // The button remains the retry CTA.

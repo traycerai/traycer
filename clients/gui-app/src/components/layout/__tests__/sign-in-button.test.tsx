@@ -372,8 +372,9 @@ describe("<SignInButton />", () => {
     });
 
     // The single "Sign in" runs the device flow directly - no separate "use a
-    // code" affordance.
-    await result.getAuthService().signIn();
+    // code" affordance. Drive it through the button so a broken click handler
+    // fails the test.
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     await waitFor(() => {
       expect(result.host.deviceFlow.startCalls).toBe(1);

@@ -138,7 +138,7 @@ describe("loginCommand", () => {
 
     // Sign-in must NOT trigger a host download/install as a side effect.
     expect(autoBootstrap.maybeAutoBootstrap).not.toHaveBeenCalled();
-    expect(loginFlow.runDeviceAuthFlow).toHaveBeenCalled();
+    expect(loginFlow.runDeviceAuthFlow).toHaveBeenCalledWith(ctx);
     const data = result.data as { bootstrap: null; user: { id: string } };
     expect(data.bootstrap).toBeNull();
     expect(data.user.id).toBe("u");

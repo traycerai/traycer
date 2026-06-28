@@ -27,10 +27,28 @@ export function registerDeviceFlowIpc(bridge: RunnerIpcBridge): void {
   bridge.handleInvoke(RunnerHostInvoke.deviceFlowStart, async (event) => {
     const windowId = bridge.resolveSenderWindowId(event);
     const sender = event.sender;
+    // Watch the owner window for the WHOLE attempt lifecycle, not just after
+    // `start()` resolves: a window closed mid-`/device/authorize` would
+    // otherwise leave the poll loop running once the attempt id lands. The
+    // listener is removed on the terminal result (and on a failed start) so
+    // repeated sign-ins don't accumulate stale `destroyed` listeners.
+    let startedAttemptId: string | null = null;
+    let senderDestroyed = false;
+    const onSenderDestroyed = (): void => {
+      senderDestroyed = true;
+      if (startedAttemptId !== null) {
+        controller.cancel(startedAttemptId);
+      }
+    };
+    const cleanupSenderDestroyedListener = (): void => {
+      sender.removeListener("destroyed", onSenderDestroyed);
+    };
+    sender.once("destroyed", onSenderDestroyed);
     const deliver = (
       attemptId: string,
       result: DeviceFlowResultPayload,
     ): void => {
+      cleanupSenderDestroyedListener();
       const payload = { attemptId, result };
       // Deliver to the window that started the attempt; device-flow results are
       // process-global (not Epic-scoped), so fall back to a broadcast if that
@@ -49,8 +67,14 @@ export function registerDeviceFlowIpc(bridge: RunnerIpcBridge): void {
 
     const outcome = await controller.start({ onResult: deliver });
     if (outcome.ok) {
-      // Stop the loop if the owner window goes away before it settles.
-      sender.once("destroyed", () => controller.cancel(outcome.attemptId));
+      startedAttemptId = outcome.attemptId;
+      // The window may have closed while `/device/authorize` was in flight -
+      // before we had an attempt id to cancel - so reconcile now.
+      if (senderDestroyed || sender.isDestroyed()) {
+        controller.cancel(outcome.attemptId);
+      }
+    } else {
+      cleanupSenderDestroyedListener();
     }
     return outcome;
   });

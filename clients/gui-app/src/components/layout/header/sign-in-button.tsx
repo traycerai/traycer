@@ -50,7 +50,14 @@ export function SignInButton(props: SignInButtonProps) {
   return (
     <div
       className={cn(
-        isHero ? "flex w-full flex-col gap-4" : "flex items-center gap-2",
+        "flex",
+        isHero && "w-full flex-col gap-4",
+        !isHero && "gap-2",
+        // Compact mode sits in the header's non-wrapping controls row. While the
+        // device panel is showing, stack full-width so the verification URL and
+        // buttons wrap cleanly instead of being pushed off-screen.
+        !isHero && deviceProgress !== null && "w-full flex-col",
+        !isHero && deviceProgress === null && "items-center",
       )}
       data-testid="signin-controls"
       data-layout={props.layout}
@@ -96,7 +103,7 @@ function DeviceCodeProgress(props: {
     <div
       className={cn(
         "flex flex-col gap-3 rounded-lg border border-border bg-card p-4 text-card-foreground shadow-sm",
-        props.isHero ? "w-full text-ui-sm" : "text-ui-xs",
+        props.isHero ? "w-full text-ui-sm" : "w-full min-w-0 text-ui-xs",
       )}
       data-testid="signin-device-progress"
     >
@@ -128,7 +135,7 @@ function DeviceCodeProgress(props: {
           {progress.userCode}
         </code>
         at
-        <span className="font-medium text-foreground">
+        <span className="min-w-0 break-all font-medium text-foreground">
           {progress.verificationUri}
         </span>
       </span>

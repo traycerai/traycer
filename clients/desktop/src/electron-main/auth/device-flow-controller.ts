@@ -77,14 +77,25 @@ export interface DeviceFlowStartHandlers {
 /**
  * Per-attempt interrupt that lets `pollNow` cut short the loop's interval sleep
  * so the next `/device/token` poll fires immediately. `arm` registers the
- * current sleep's early-resolve; `wake` fires it (a no-op when nothing is armed,
- * e.g. while a poll is already on the wire); `clear` disarms once the sleep
- * settles for any reason.
+ * current sleep's early-resolve; `wake` fires it, OR latches a pending nudge
+ * when nothing is armed (e.g. while a poll is already on the wire) so the next
+ * `arm` consumes it immediately instead of waiting out the interval; `clear`
+ * disarms once the sleep settles for any reason.
  */
 class PollWaker {
   private resolve: (() => void) | null = null;
+  // A `wake()` that lands while no sleep is armed (a browser-return nudge during
+  // an in-flight `/device/token` poll) is remembered here and consumed by the
+  // next `arm`, so the nudge collapses the upcoming interval wait instead of
+  // being dropped.
+  private pending = false;
 
   arm(resolve: () => void): void {
+    if (this.pending) {
+      this.pending = false;
+      resolve();
+      return;
+    }
     this.resolve = resolve;
   }
 
@@ -95,7 +106,11 @@ class PollWaker {
   wake(): void {
     const resolve = this.resolve;
     this.resolve = null;
-    resolve?.();
+    if (resolve === null) {
+      this.pending = true;
+      return;
+    }
+    resolve();
   }
 }
 

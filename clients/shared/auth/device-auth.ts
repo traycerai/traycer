@@ -262,8 +262,8 @@ async function readAuthorization(
   const record = body as Record<string, unknown>;
   const deviceCode = pickNonEmptyString(record, "device_code");
   const userCode = pickNonEmptyString(record, "user_code");
-  const verificationUri = pickNonEmptyString(record, "verification_uri");
-  const verificationUriComplete = pickNonEmptyString(
+  const verificationUri = pickHttpUrl(record, "verification_uri");
+  const verificationUriComplete = pickHttpUrl(
     record,
     "verification_uri_complete",
   );
@@ -345,13 +345,47 @@ function pickNonEmptyString(
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
+/**
+ * Like `pickNonEmptyString`, but additionally requires the value to parse as an
+ * absolute `http`/`https` URL. The verification URIs come straight from the
+ * server response and are opened in the user's browser, so a non-http(s) scheme
+ * (`file:`, `javascript:`, ...) must be rejected as an invalid authorization
+ * body rather than handed to the platform opener.
+ */
+function pickHttpUrl(
+  record: Record<string, unknown>,
+  key: string,
+): string | null {
+  const value = pickNonEmptyString(record, key);
+  if (value === null) {
+    return null;
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return null;
+  }
+  return value;
+}
+
 function pickPositiveInt(
   record: Record<string, unknown>,
   key: string,
 ): number | null {
   const value = record[key];
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+  // Require a positive integer: flooring a fractional value would accept a
+  // malformed `expires_in: 0.5` as `0` (instant expiry) instead of rejecting the
+  // `/device/authorize` body as invalid.
+  if (
+    typeof value !== "number" ||
+    !Number.isInteger(value) ||
+    value <= 0
+  ) {
     return null;
   }
-  return Math.floor(value);
+  return value;
 }
