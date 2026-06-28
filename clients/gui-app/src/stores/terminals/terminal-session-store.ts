@@ -204,15 +204,17 @@ export function createTerminalSessionStore(
         markTerminalLoad(options.sessionId, "snapshot");
         // Per the protocol contract on `terminalSubscribeServerFrameSchema`,
         // `scrollback` is raw terminal bytes the renderer feeds straight into
-        // xterm. We always have a fresh xterm here: tab switches inside a
-        // group keep tiles mounted (and therefore re-use the same handle, so
-        // no new snapshot arrives), but a tab close → reopen tears down the
-        // store entirely and `acquire` builds a brand-new one. Routing
-        // scrollback through the same writer/pending-queue path as `onData`
-        // means the reopened tile sees the prior session output instead of
-        // an empty buffer. The source tag is load-bearing: xterm can emit
-        // protocol responses while parsing historical bytes, and those must not
-        // be forwarded back to the live PTY as user input.
+        // xterm. This is usually the first frame into a fresh xterm, but NOT
+        // always: a transport reconnect re-subscribes and the host re-sends a
+        // full snapshot into the SAME kept-alive engine that still holds
+        // pre-disconnect content. The engine's snapshot write path resets the
+        // buffer before replaying a snapshot once it already has content (see
+        // `writerProxy`), so the authoritative snapshot lands clean instead of
+        // colliding with the stale screen (which dropped the trailing output and
+        // left the native OSC theme un-rasterized until a tab switch). The
+        // `snapshot` kind is load-bearing: xterm can emit protocol responses
+        // while parsing historical bytes, and those must not be forwarded back
+        // to the live PTY as user input.
         if (frame.scrollback.length > 0) {
           // Carry the snapshot's grid so the host resizes xterm to it BEFORE
           // replaying. `session.cols/rows` are the post-`min()` effective size
