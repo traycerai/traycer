@@ -262,12 +262,15 @@ describe("<SignInButton />", () => {
     });
 
     const retry = await screen.findByTestId("signin-retry-link");
+    // `signIn()` restarts the device flow and re-opens the verification page, so
+    // a stalled attempt has an immediate escape hatch. Capturing the count
+    // before the retry proves the click drove a fresh start, not just the
+    // initial sign-in.
+    const startCallsBeforeRetry = result.host.deviceFlow.startCalls;
     fireEvent.click(retry);
 
-    // `signIn()` restarts the device flow and re-opens the verification page, so
-    // a stalled attempt has an immediate escape hatch.
     await waitFor(() => {
-      expect(result.host.deviceFlow.startCalls).toBeGreaterThanOrEqual(1);
+      expect(result.host.deviceFlow.startCalls).toBe(startCallsBeforeRetry + 1);
       expect(
         result.host.openedExternalLinks.some((url) =>
           url.startsWith("https://app.traycer.ai/device"),

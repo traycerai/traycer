@@ -21,7 +21,15 @@ let authReturnSignalled = false;
 const authCallbackHandlers = new Set<Listener<void>>();
 
 ipcRenderer.on(RunnerHostEvent.authCallback, (): void => {
-  authReturnSignalled = true;
+  // No live subscriber yet (cold-start deep link): cache the signal as a
+  // one-time replay for the next subscriber. With live subscribers, deliver
+  // straight through and drop any stale cache so a later subscriber doesn't
+  // replay an already-handled return.
+  if (authCallbackHandlers.size === 0) {
+    authReturnSignalled = true;
+    return;
+  }
+  authReturnSignalled = false;
   for (const handler of authCallbackHandlers) {
     handler();
   }
@@ -30,6 +38,9 @@ ipcRenderer.on(RunnerHostEvent.authCallback, (): void => {
 function subscribeAuthCallback(handler: Listener<void>): Disposable {
   authCallbackHandlers.add(handler);
   if (authReturnSignalled) {
+    // Consume the cached signal so it replays exactly once, to the first
+    // subscriber, and never to later ones.
+    authReturnSignalled = false;
     handler();
   }
   return {

@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import {
   applySlowDown,
   createPollSchedule,
+  DEFAULT_DEVICE_REQUEST_TIMEOUT_MS,
   isDeviceExpired,
   pollDeviceToken,
   startDeviceAuthorization,
@@ -28,14 +29,14 @@ import { log } from "../app/logger";
  * (supersede / sign-out / dispose / window-close) aborts the attempt; an aborted
  * attempt delivers NOTHING - the renderer has already moved on.
  *
- * Accepted residual (Finding 7): `pollDeviceToken` (shared) takes no
- * `AbortSignal`, so a request already on the wire when the attempt is aborted
- * can't be socket-cancelled. We re-check `signal.aborted` immediately before
- * dispatching each poll AND immediately after it resolves, and we stop waiting
- * for an in-flight poll the moment the abort fires (its late result is
- * discarded). The window where the server still mints an unused refresh token
- * after a redirect won locally is therefore minimized but not eliminable until
- * the deferred per-credential (`jti`) revocation phase.
+ * Cancellation reaches the wire (Finding 7): the attempt's `AbortSignal` is
+ * threaded into `pollDeviceToken`, so aborting an attempt (supersede / sign-out
+ * / dispose / window-close) cancels the in-flight `/device/token` request, not
+ * just our await of it. Each poll also carries a per-request timeout so a
+ * black-holed connection can't outlive the interval. The window where the
+ * server still mints an unused refresh token after a redirect won locally - if
+ * the socket-cancel races the server's commit - is therefore minimized but not
+ * fully eliminable until the deferred per-credential (`jti`) revocation phase.
  */
 export interface DeviceFlowAuthorizationPayload {
   readonly userCode: string;
@@ -134,10 +135,17 @@ export class DeviceFlowController {
   async start(
     handlers: DeviceFlowStartHandlers,
   ): Promise<DeviceFlowStartOutcome> {
-    const authorization = await startDeviceAuthorization(this.authnBaseUrl, {
-      clientId: "desktop",
-      hostLabel: deviceHostLabel(),
-    });
+    const authorization = await startDeviceAuthorization(
+      this.authnBaseUrl,
+      {
+        clientId: "desktop",
+        hostLabel: deviceHostLabel(),
+      },
+      // No per-attempt abort exists until the attempt id is minted below; a
+      // bounded timeout still guarantees `/device/authorize` can't hang the
+      // invoke forever.
+      { signal: undefined, timeoutMs: DEFAULT_DEVICE_REQUEST_TIMEOUT_MS },
+    );
     if (authorization.kind !== "started") {
       return { ok: false };
     }
@@ -240,9 +248,16 @@ async function runDevicePollLoop(
       return { kind: "expired" };
     }
     // Re-check currency immediately before dispatching, and stop waiting for an
-    // in-flight poll the moment the attempt is superseded.
+    // in-flight poll the moment the attempt is superseded. The attempt `signal`
+    // is threaded into the request so an abort/supersede actually cancels the
+    // in-flight `/device/token` socket (not just stops awaiting it), and a
+    // per-request timeout bounds a stalled connection so it can't outlive the
+    // interval.
     const poll = await raceAbort(
-      pollDeviceToken(authnBaseUrl, authorization.deviceCode, "desktop"),
+      pollDeviceToken(authnBaseUrl, authorization.deviceCode, "desktop", {
+        signal,
+        timeoutMs: pollRequestTimeoutMs(schedule.intervalMs),
+      }),
       signal,
     );
     if (poll === "aborted") {
@@ -336,6 +351,16 @@ function sleep(
     // A browser-return nudge collapses the remaining wait into an immediate poll.
     waker.arm(() => settle(true));
   });
+}
+
+/**
+ * Per-`/device/token` request timeout. Never below the shared default ceiling,
+ * and never below the current poll interval, so a legitimately slow round-trip
+ * isn't cut off mid-flight while a truly black-holed connection still can't
+ * outlive a long backoff interval.
+ */
+function pollRequestTimeoutMs(intervalMs: number): number {
+  return Math.max(intervalMs, DEFAULT_DEVICE_REQUEST_TIMEOUT_MS);
 }
 
 /**

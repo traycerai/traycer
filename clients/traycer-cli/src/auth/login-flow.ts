@@ -3,6 +3,7 @@ import { hostname, platform as osPlatform } from "node:os";
 import {
   applySlowDown,
   createPollSchedule,
+  DEFAULT_DEVICE_REQUEST_TIMEOUT_MS,
   type DevicePollSchedule,
   isDeviceExpired,
   pollDeviceToken,
@@ -38,10 +39,16 @@ export async function runDeviceAuthFlow(
 ): Promise<LoginSuccess> {
   const { authnBaseUrl } = config;
 
-  const authorization = await startDeviceAuthorization(authnBaseUrl, {
-    clientId: "cli",
-    hostLabel: hostname(),
-  });
+  const authorization = await startDeviceAuthorization(
+    authnBaseUrl,
+    {
+      clientId: "cli",
+      hostLabel: hostname(),
+    },
+    // No expiry deadline exists yet (it comes from this very response); a
+    // bounded timeout still stops `/device/authorize` hanging the CLI forever.
+    { signal: undefined, timeoutMs: DEFAULT_DEVICE_REQUEST_TIMEOUT_MS },
+  );
   if (authorization.kind === "network-error") {
     throw cliError({
       code: CLI_ERROR_CODES.AUTH_NETWORK,
@@ -155,43 +162,21 @@ async function pollUntilAuthorized(
   initialSchedule: DevicePollSchedule,
 ): Promise<{ token: string; refreshToken: string }> {
   let schedule = initialSchedule;
-  for (;;) {
-    // Wait the (possibly backed-off) interval before each poll, then bail if
-    // the device_code has expired so a never-approved request can't poll past
-    // its TTL.
-    await sleep(schedule.intervalMs);
-    if (isDeviceExpired(schedule, Date.now())) {
-      throw cliError({
-        code: CLI_ERROR_CODES.AUTH_REJECTED,
-        message:
-          "Sign-in request expired before it was approved - re-run `traycer login` to try again.",
-        details: null,
-        exitCode: 1,
-      });
-    }
-
-    const poll = await pollDeviceToken(authnBaseUrl, deviceCode, "cli");
-    switch (poll.kind) {
-      case "authorized":
-        return { token: poll.token, refreshToken: poll.refreshToken };
-      case "authorization-pending":
-        // Not approved yet - keep polling at the current interval.
-        break;
-      case "slow-down":
-        // Polling too fast - widen the interval (honoring Retry-After).
-        schedule = applySlowDown(schedule, poll.retryAfterSeconds);
-        break;
-      case "network-error":
-        // Transient (transport blip or 5xx) - keep polling until expiry.
-        break;
-      case "access-denied":
-        throw cliError({
-          code: CLI_ERROR_CODES.AUTH_REJECTED,
-          message: "Sign-in was denied. Re-run `traycer login` to try again.",
-          details: null,
-          exitCode: 1,
-        });
-      case "expired":
+  // Aborts any in-flight `/device/token` request once the device_code TTL
+  // elapses, so a request stuck on a black-holed socket can't keep the expiry
+  // check from ever running (it sits behind the awaited poll otherwise).
+  const expiryController = new AbortController();
+  const expiryTimer = setTimeout(
+    () => expiryController.abort(),
+    Math.max(0, schedule.expiresAtMs - Date.now()),
+  );
+  try {
+    for (;;) {
+      // Wait the (possibly backed-off) interval before each poll, then bail if
+      // the device_code has expired so a never-approved request can't poll past
+      // its TTL.
+      await sleep(schedule.intervalMs);
+      if (isDeviceExpired(schedule, Date.now())) {
         throw cliError({
           code: CLI_ERROR_CODES.AUTH_REJECTED,
           message:
@@ -199,15 +184,55 @@ async function pollUntilAuthorized(
           details: null,
           exitCode: 1,
         });
-      case "invalid":
-        throw cliError({
-          code: CLI_ERROR_CODES.AUTH_REJECTED,
-          message:
-            "Sign-in request was rejected. Re-run `traycer login` to try again.",
-          details: null,
-          exitCode: 1,
-        });
+      }
+
+      const poll = await pollDeviceToken(authnBaseUrl, deviceCode, "cli", {
+        signal: expiryController.signal,
+        timeoutMs: Math.max(
+          schedule.intervalMs,
+          DEFAULT_DEVICE_REQUEST_TIMEOUT_MS,
+        ),
+      });
+      switch (poll.kind) {
+        case "authorized":
+          return { token: poll.token, refreshToken: poll.refreshToken };
+        case "authorization-pending":
+          // Not approved yet - keep polling at the current interval.
+          break;
+        case "slow-down":
+          // Polling too fast - widen the interval (honoring Retry-After).
+          schedule = applySlowDown(schedule, poll.retryAfterSeconds);
+          break;
+        case "network-error":
+          // Transient (transport blip or 5xx) - keep polling until expiry.
+          break;
+        case "access-denied":
+          throw cliError({
+            code: CLI_ERROR_CODES.AUTH_REJECTED,
+            message: "Sign-in was denied. Re-run `traycer login` to try again.",
+            details: null,
+            exitCode: 1,
+          });
+        case "expired":
+          throw cliError({
+            code: CLI_ERROR_CODES.AUTH_REJECTED,
+            message:
+              "Sign-in request expired before it was approved - re-run `traycer login` to try again.",
+            details: null,
+            exitCode: 1,
+          });
+        case "invalid":
+          throw cliError({
+            code: CLI_ERROR_CODES.AUTH_REJECTED,
+            message:
+              "Sign-in request was rejected. Re-run `traycer login` to try again.",
+            details: null,
+            exitCode: 1,
+          });
+      }
     }
+  } finally {
+    clearTimeout(expiryTimer);
   }
 }
 

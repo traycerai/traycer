@@ -23,6 +23,51 @@ import { readRotatedTokens } from "./auth-validation";
 export type DeviceClientId = "cli" | "desktop";
 
 /**
+ * Per-request cancellation + timeout for the device HTTP calls. `signal` is the
+ * caller's abort (a superseded/cancelled desktop attempt, or the CLI's expiry
+ * watchdog); `timeoutMs` is a hard ceiling so a stalled connection can never
+ * hang the loop indefinitely - a timeout/abort surfaces as the retryable
+ * `network-error` variant, identical to any other transport failure.
+ *
+ * Required (no optional `?:` / defaults): callers pass `signal: undefined`
+ * explicitly when they have no caller-side abort to thread.
+ */
+export interface DeviceRequestOptions {
+  readonly signal: AbortSignal | undefined;
+  readonly timeoutMs: number;
+}
+
+/**
+ * Default per-request ceiling for a single device HTTP call. Sized well above a
+ * healthy round-trip but low enough that a black-holed connection can't wedge
+ * the poll loop until the device_code TTL. Callers may pass a tighter value
+ * (e.g. derived from the poll interval).
+ */
+export const DEFAULT_DEVICE_REQUEST_TIMEOUT_MS = 30_000;
+
+/**
+ * Builds the effective abort signal for one fetch by combining the caller's
+ * `signal` (if any) with a fresh per-request timeout. Returns the merged signal
+ * plus a `clear` to cancel the pending timeout once the request settles so the
+ * timer can't fire (or leak) after the fetch resolves.
+ */
+function buildRequestSignal(options: DeviceRequestOptions): {
+  readonly signal: AbortSignal;
+  readonly clear: () => void;
+} {
+  const timeoutController = new AbortController();
+  const timer = setTimeout(() => timeoutController.abort(), options.timeoutMs);
+  const clear = (): void => clearTimeout(timer);
+  if (options.signal === undefined) {
+    return { signal: timeoutController.signal, clear };
+  }
+  return {
+    signal: AbortSignal.any([options.signal, timeoutController.signal]),
+    clear,
+  };
+}
+
+/**
  * Result of `POST /device/authorize`. `started` carries the fields the caller
  * needs to display the verification prompt and drive the poll loop; a
  * transport failure or any non-200 is a transient `network-error` (the caller
@@ -73,7 +118,9 @@ export type DevicePollResult =
 export async function startDeviceAuthorization(
   authnBaseUrl: string,
   params: { readonly clientId: DeviceClientId; readonly hostLabel: string },
+  options: DeviceRequestOptions,
 ): Promise<DeviceAuthorizationResult> {
+  const request = buildRequestSignal(options);
   let response: Response;
   try {
     response = await fetch(deviceApiUrl(authnBaseUrl, "authorize"), {
@@ -86,9 +133,15 @@ export async function startDeviceAuthorization(
         client_id: params.clientId,
         host_label: params.hostLabel,
       }),
+      signal: request.signal,
     });
   } catch {
+    // A caller abort or per-request timeout surfaces here too; both collapse
+    // into the retryable `network-error` variant - the caller decides whether
+    // to retry (poll loop) or give up (abort already consumed).
     return { kind: "network-error" };
+  } finally {
+    request.clear();
   }
 
   if (response.status !== 200) {
@@ -112,7 +165,9 @@ export async function pollDeviceToken(
   authnBaseUrl: string,
   deviceCode: string,
   clientId: DeviceClientId,
+  options: DeviceRequestOptions,
 ): Promise<DevicePollResult> {
+  const request = buildRequestSignal(options);
   let response: Response;
   try {
     response = await fetch(deviceApiUrl(authnBaseUrl, "token"), {
@@ -122,9 +177,15 @@ export async function pollDeviceToken(
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ device_code: deviceCode, client_id: clientId }),
+      signal: request.signal,
     });
   } catch {
+    // Caller abort (superseded attempt / CLI expiry) and per-request timeout
+    // both land here and map to the retryable `network-error`, so a stalled
+    // `/device/token` socket can no longer wedge the poll loop.
     return { kind: "network-error" };
+  } finally {
+    request.clear();
   }
 
   if (response.status === 200) {

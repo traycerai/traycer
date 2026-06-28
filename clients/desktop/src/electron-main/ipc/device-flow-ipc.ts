@@ -23,6 +23,11 @@ import {
  */
 export function registerDeviceFlowIpc(bridge: RunnerIpcBridge): void {
   const controller = new DeviceFlowController(bridge.options.authnBaseUrl);
+  // Tracks each started attempt's owner-window listener cleanup so EVERY
+  // terminal path removes it exactly once: `deviceFlowCancel`, `disposeAll`, and
+  // a thrown `controller.start()` would otherwise leave stale `destroyed`
+  // listeners accumulating across repeated cancelled sign-ins.
+  const cleanupByAttemptId = new Map<string, () => void>();
 
   bridge.handleInvoke(RunnerHostInvoke.deviceFlowStart, async (event) => {
     const windowId = bridge.resolveSenderWindowId(event);
@@ -42,6 +47,9 @@ export function registerDeviceFlowIpc(bridge: RunnerIpcBridge): void {
     };
     const cleanupSenderDestroyedListener = (): void => {
       sender.removeListener("destroyed", onSenderDestroyed);
+      if (startedAttemptId !== null) {
+        cleanupByAttemptId.delete(startedAttemptId);
+      }
     };
     sender.once("destroyed", onSenderDestroyed);
     const deliver = (
@@ -65,18 +73,31 @@ export function registerDeviceFlowIpc(bridge: RunnerIpcBridge): void {
       }
     };
 
-    const outcome = await controller.start({ onResult: deliver });
-    if (outcome.ok) {
-      startedAttemptId = outcome.attemptId;
-      // The window may have closed while `/device/authorize` was in flight -
-      // before we had an attempt id to cancel - so reconcile now.
-      if (senderDestroyed || sender.isDestroyed()) {
-        controller.cancel(outcome.attemptId);
+    try {
+      const outcome = await controller.start({ onResult: deliver });
+      if (outcome.ok) {
+        startedAttemptId = outcome.attemptId;
+        cleanupByAttemptId.set(
+          outcome.attemptId,
+          cleanupSenderDestroyedListener,
+        );
+        // The window may have closed while `/device/authorize` was in flight -
+        // before we had an attempt id to cancel - so reconcile now (and tear
+        // down the listener, since the attempt is already cancelled).
+        if (senderDestroyed || sender.isDestroyed()) {
+          controller.cancel(outcome.attemptId);
+          cleanupSenderDestroyedListener();
+        }
+      } else {
+        cleanupSenderDestroyedListener();
       }
-    } else {
+      return outcome;
+    } catch (err) {
+      // A thrown `start()` (e.g. abort during shutdown) is still a terminal
+      // path: remove the listener so it can't leak.
       cleanupSenderDestroyedListener();
+      throw err;
     }
-    return outcome;
   });
 
   bridge.handleInvoke(
@@ -92,10 +113,15 @@ export function registerDeviceFlowIpc(bridge: RunnerIpcBridge): void {
     (_event, attemptId: unknown) => {
       assertString(attemptId, "deviceFlowCancel");
       controller.cancel(attemptId);
+      cleanupByAttemptId.get(attemptId)?.();
     },
   );
 
   bridge.disposeFns.push(() => {
+    for (const cleanup of cleanupByAttemptId.values()) {
+      cleanup();
+    }
+    cleanupByAttemptId.clear();
     controller.disposeAll();
   });
 }

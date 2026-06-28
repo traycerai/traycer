@@ -6,7 +6,7 @@ import {
 import type {
   DeviceFlowAuthorization,
   DeviceFlowResult,
-} from "@traycer-clients/shared/platform/runner-host";
+} from "../ipc-contracts/device-flow-types";
 import type { Disposable, Listener } from "./subscribe";
 
 interface DeviceFlowResultEnvelope {
@@ -144,9 +144,16 @@ export interface DeviceFlowBridgeSurface {
 export function buildDeviceFlowBridge(): DeviceFlowBridgeSurface {
   return {
     start: async (): Promise<DeviceFlowSessionBridge | null> => {
-      const response: unknown = await ipcRenderer.invoke(
-        RunnerHostInvoke.deviceFlowStart,
-      );
+      // The invoke can reject if the main handler throws or the channel is gone
+      // during shutdown; this preload boundary collapses that to a failed start
+      // (`null`) to honor the `DeviceFlowSession | null` contract instead of
+      // rejecting `start()`.
+      let response: unknown;
+      try {
+        response = await ipcRenderer.invoke(RunnerHostInvoke.deviceFlowStart);
+      } catch {
+        return null;
+      }
       // Validate the reply shape before dereferencing: a null / shape-drifted
       // reply is treated as a failed start (null) rather than throwing here.
       if (!isStartedDeviceFlowResponse(response)) {
