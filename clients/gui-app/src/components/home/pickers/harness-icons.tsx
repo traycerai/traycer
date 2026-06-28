@@ -8,7 +8,7 @@ import QwenMono from "@lobehub/icons/es/Qwen/components/Mono";
 import KiroMono from "@lobehub/icons/es/Kiro/components/Mono";
 import KiloCodeMono from "@lobehub/icons/es/KiloCode/components/Mono";
 import GithubCopilotMono from "@lobehub/icons/es/GithubCopilot/components/Mono";
-import { Bot } from "lucide-react";
+import { Bot, Route } from "lucide-react";
 import KimiMono from "@lobehub/icons/es/Kimi/components/Mono";
 
 export type HarnessIcon = (props: SVGProps<SVGSVGElement>) => ReactElement;
@@ -32,6 +32,7 @@ export const CopilotIcon: HarnessIcon = (props) => (
   <GithubCopilotMono {...props} />
 );
 export const DroidIcon: HarnessIcon = (props) => <Bot {...props} />;
+export const OpenRouterIcon: HarnessIcon = (props) => <Route {...props} />;
 export const KimiIcon: HarnessIcon = (props) => <KimiMono {...props} />;
 
 // Traycer does not have a lobehub entry — hand-rolled from the brand mark.

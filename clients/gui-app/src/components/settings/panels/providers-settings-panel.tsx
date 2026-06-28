@@ -91,6 +91,7 @@ function initialActiveProviderId(
 const API_KEY_DASHBOARD_URL: Partial<Record<ProviderId, string>> = {
   cursor: "https://cursor.com/dashboard/api?section=user-keys#user-api-keys",
   droid: "https://app.factory.ai/settings/api-keys",
+  openrouter: "https://openrouter.ai/settings/keys",
 };
 
 const PROVIDER_DESCRIPTIONS: Record<ProviderId, string> = {
@@ -100,6 +101,8 @@ const PROVIDER_DESCRIPTIONS: Record<ProviderId, string> = {
   cursor:
     "Cursor agent - SDK-driven chats authenticated with your Cursor API key.",
   traycer: "Traycer's managed harness uses the selected OpenCode CLI binary.",
+  openrouter:
+    "OpenRouter - OpenAI-compatible gateway authenticated with your OpenRouter API key.",
   grok: "Grok agent - xAI's coding CLI via your SuperGrok / X subscription.",
   qwen: "Qwen Code CLI agent.",
   kiro: "Kiro agent - Kiro's coding CLI via login or KIRO_API_KEY.",
@@ -130,6 +133,7 @@ function terminalAgentArgsPlaceholder(providerId: ProviderId): string {
       return TERMINAL_AGENT_ARGS_PLACEHOLDER.opencode;
     case "cursor":
     case "traycer":
+    case "openrouter":
     case "grok":
     case "qwen":
     case "kiro":
@@ -147,6 +151,7 @@ const HARNESS_ICON_ID: Record<ProviderId, HarnessIconId> = {
   opencode: "opencode",
   cursor: "cursor",
   traycer: "traycer",
+  openrouter: "openrouter",
   grok: "grok",
   qwen: "qwen",
   kiro: "kiro",
@@ -171,7 +176,9 @@ function candidateConfigForProvider(
   state: ProviderCliState,
   providers: readonly ProviderCliState[],
 ): ProviderCandidateConfig {
-  if (state.providerId !== "traycer" || state.candidates.length > 0) {
+  const usesOpenCodeCandidates =
+    state.providerId === "traycer" || state.providerId === "openrouter";
+  if (!usesOpenCodeCandidates || state.candidates.length > 0) {
     return { selected: state.selected, candidates: state.candidates };
   }
 
@@ -488,10 +495,10 @@ function ProviderDetail({
   const providerId = state.providerId;
   // Cursor's chat runs through the `@cursor/sdk` (no CLI binary) and its
   // terminal-agent surface is hidden for now, so there's no CLI path to pick -
-  // hide the candidates table and show only the API-key section. Traycer shares
-  // the OpenCode binary path set: its table shows the OpenCode candidates (or
-  // Traycer's own when present) while selection / custom-path mutations target
-  // the Traycer provider id.
+  // hide the candidates table and show only the API-key section.
+  // Traycer/OpenRouter share the OpenCode binary path set: their tables show
+  // the OpenCode candidates (or their own when present) while selection /
+  // custom-path mutations target the focused provider id.
   const cliConfig = candidateConfigForProvider(state, providers);
   const showCliCandidates = providerId !== "cursor";
   const radioName = useId();
@@ -748,6 +755,8 @@ function envNamePlaceholder(providerId: ProviderId): string {
     case "opencode":
     case "traycer":
       return "ANTHROPIC_API_KEY";
+    case "openrouter":
+      return "OPENROUTER_API_KEY";
     case "cursor":
       return "CURSOR_API_KEY";
     case "grok":

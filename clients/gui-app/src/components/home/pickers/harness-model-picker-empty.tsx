@@ -67,10 +67,9 @@ export function ModelRowsState(props: ModelRowsStateProps): ReactNode | null {
   }
 
   if (activeProvider !== null && activeProvider.modelsError !== null) {
-    // Surface the host's specific reason - the cursor adapter classifies a
-    // rejected key ("Cursor rejected the API key…") or an un-shipped SDK
-    // ("Cursor isn't available in this host build…") into clear copy - instead
-    // of a generic catch-all. Fall back when the message is empty.
+    // Surface the host's specific reason for API-key providers and packaged SDK
+    // failures instead of a generic catch-all. Fall back when the message is
+    // empty.
     const reason = activeProvider.modelsError.message.trim();
     return (
       <PickerStateRow
@@ -104,15 +103,14 @@ function noModelsLabel(
   return `No ${activeProvider.label} models match`;
 }
 
-// The state row shown when the active provider is unavailable. Cursor
-// authenticates with an API key (not a CLI login), so an unavailable Cursor
-// almost always means "no key yet" - surface a CTA that walks the user to
-// Settings → Providers instead of a dead-end "unavailable" row.
+// The state row shown when the active provider is unavailable. API-key
+// providers stay visible in the picker so they can surface a CTA that walks the
+// user to Settings → Providers instead of a dead-end "unavailable" row.
 function unavailableProviderState(
   provider: GuiHarnessCatalogEntry,
   onOpenProviderSettings: () => void,
 ): ReactNode {
-  if (provider.id === "cursor") {
+  if (provider.requiresApiKey) {
     return (
       <ProviderApiKeyCta
         harnessId={provider.id}
@@ -126,9 +124,9 @@ function unavailableProviderState(
   );
 }
 
-// Shown in place of the model list when an API-key provider (Cursor) has no
-// key configured. A friendly prompt + a one-click path to Settings → Providers
-// where the key is entered.
+// Shown in place of the model list when an API-key provider has no key
+// configured. A friendly prompt + a one-click path to Settings → Providers where
+// the key is entered.
 function ProviderApiKeyCta(props: {
   readonly harnessId: GuiHarnessCatalogEntry["id"];
   readonly label: string;

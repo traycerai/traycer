@@ -344,6 +344,12 @@ const PROVIDERS: ReadonlyArray<{
     capabilities: ["gui"],
   },
   {
+    harnessId: "openrouter",
+    label: "OpenRouter",
+    status: "API key set",
+    capabilities: ["gui"],
+  },
+  {
     harnessId: "grok",
     label: "Grok",
     status: "SuperGrok / X",

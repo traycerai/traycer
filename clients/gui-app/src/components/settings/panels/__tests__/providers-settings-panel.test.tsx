@@ -234,6 +234,12 @@ describe("<ProvidersSettingsPanel />", () => {
           candidates: [],
           envOverrides: [],
         }),
+        providerState({
+          providerId: "openrouter",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+        }),
       ],
     };
     providerMocks.setSelectionMutate.mockClear();
@@ -265,6 +271,29 @@ describe("<ProvidersSettingsPanel />", () => {
 
     expect(providerMocks.setSelectionMutate).toHaveBeenCalledWith({
       providerId: "traycer",
+      selection: { kind: "path" },
+    });
+  });
+
+  it("lists OpenCode CLI candidates for OpenRouter and mutates OpenRouter selection", () => {
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /OpenRouter/i }));
+
+    expect(screen.getByText("/usr/local/bin/opencode")).toBeDefined();
+
+    fireEvent.click(
+      screen.getByRole("radio", {
+        name: "Select /usr/local/bin/opencode",
+      }),
+    );
+
+    expect(providerMocks.setSelectionMutate).toHaveBeenCalledWith({
+      providerId: "openrouter",
       selection: { kind: "path" },
     });
   });

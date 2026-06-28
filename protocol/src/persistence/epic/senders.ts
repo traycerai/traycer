@@ -124,6 +124,18 @@ export type TraycerChatSessionAnchor = z.infer<
   typeof traycerChatSessionAnchorSchema
 >;
 
+export const openRouterChatSessionAnchorSchema = z.object({
+  harnessId: z.literal("openrouter"),
+  hostId: z.string(),
+  sessionId: z.string(),
+  sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
+  opencodeUserMessageId: z.string(),
+  createdAt: z.number(),
+});
+export type OpenRouterChatSessionAnchor = z.infer<
+  typeof openRouterChatSessionAnchorSchema
+>;
+
 // Grok (ACP) resumes at session granularity only — `session/load` reloads the
 // whole ACP session, with no per-message truncation/fork point — so the anchor
 // carries just the ACP session id (no provider-native user-message id like the
@@ -213,6 +225,7 @@ export const chatSessionAnchorSchema = z.discriminatedUnion("harnessId", [
   openCodeChatSessionAnchorSchema,
   cursorChatSessionAnchorSchema,
   traycerChatSessionAnchorSchema,
+  openRouterChatSessionAnchorSchema,
   grokChatSessionAnchorSchema,
   qwenChatSessionAnchorSchema,
   kiroChatSessionAnchorSchema,
