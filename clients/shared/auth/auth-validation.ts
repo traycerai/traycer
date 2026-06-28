@@ -242,6 +242,15 @@ export async function refreshAuthTokenViaHttp(
     return { kind: "network-error" };
   }
 
+  // A 409 means the authn refresh grace window is mid-rotation: a concurrent
+  // refresher won the race and is minting the new pair. This is transient and
+  // retriable, NOT a dead credential, so map it to `network-error` (a retry
+  // re-drives and lands on the winner's replayed pair) rather than `rejected`,
+  // which would sign the GUI out.
+  if (response.status === 409) {
+    return { kind: "network-error" };
+  }
+
   if (
     response.status === 400 ||
     response.status === 401 ||
