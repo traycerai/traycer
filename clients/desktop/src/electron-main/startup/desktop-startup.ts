@@ -176,7 +176,7 @@ async function timed(
   } catch (err) {
     log.warn("[startup] step failed", { phase, step, err });
   } finally {
-    log.info("[startup] step", {
+    log.debug("[startup] step", {
       phase,
       step,
       ms: Math.round(performance.now() - start),
@@ -307,7 +307,7 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
 
   const tray = await createTraySafe(createMruWindowProxy(windowRegistry));
 
-  log.info("[desktop] authn base URL", { authnBaseUrl: config.authnBaseUrl });
+  log.debug("[desktop] authn base URL", { authnBaseUrl: config.authnBaseUrl });
   const bridge = new RunnerIpcBridge({
     host,
     authnBaseUrl: config.authnBaseUrl,
@@ -414,7 +414,7 @@ function runDeferred(state: BootState, services: AppServices): void {
   void timed("deferred", "registry-probe", async () => {
     const result = await refreshRegistryUpdateState({ force: false });
     applyHostUpdateMenuState(services.menu, result);
-    log.info("[host-registry] launch probe complete", {
+    log.debug("[host-registry] launch probe complete", {
       reachable: result.reachable,
       latestVersion: result.latestVersion,
       installedVersion: result.installedVersion,
@@ -449,7 +449,7 @@ function runDeferred(state: BootState, services: AppServices): void {
       isDevDesktop: state.config.environment === "dev",
       deps: defaultReconcileCliDeps(),
     });
-    log.info("[cli-reconcile] launch outcome", { kind: outcome.kind });
+    log.debug("[cli-reconcile] launch outcome", { kind: outcome.kind });
   });
 
   void timed("deferred", "auto-updater", () =>
@@ -704,7 +704,7 @@ async function configureAppIdentity(iconPath: string): Promise<void> {
     return;
   }
   app.dock?.setIcon(image);
-  log.info("[desktop] configured app identity", {
+  log.debug("[desktop] configured app identity", {
     appName: app.getName(),
     iconPath,
   });

@@ -18,14 +18,14 @@ export function subscribeStreamWakeReconnect(
   runnerHost: IRunnerHost,
 ): () => void {
   const offOnline = onWakeReconnect(() => {
-    appLogger.info("[stream] wake reconnect requested", {
+    appLogger.debug("[stream] wake reconnect requested", {
       reason: "wake-online",
     });
     client.reconnectAll("wake-online");
   });
   try {
     const resumeSubscription = runnerHost.onSystemResumed(() => {
-      appLogger.info("[stream] wake reconnect requested", {
+      appLogger.debug("[stream] wake reconnect requested", {
         reason: "wake-resume",
       });
       client.reconnectAll("wake-resume");

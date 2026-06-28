@@ -1060,9 +1060,12 @@ export class AuthService {
     }
     if (token.length === 0) {
       if (!this.isAttemptCurrent(expectedOAuthEpoch)) {
-        appLogger.info("[auth] ignored empty token from stale OAuth callback", {
-          expectedEpoch: expectedOAuthEpoch ?? "cold-start",
-        });
+        appLogger.debug(
+          "[auth] ignored empty token from stale OAuth callback",
+          {
+            expectedEpoch: expectedOAuthEpoch ?? "cold-start",
+          },
+        );
         return false;
       }
       appLogger.warn("[auth] OAuth callback delivered an empty token", {});
@@ -1072,7 +1075,7 @@ export class AuthService {
       return false;
     }
     if (!this.isAttemptCurrent(expectedOAuthEpoch)) {
-      appLogger.info("[auth] ignored stale OAuth callback before validation", {
+      appLogger.debug("[auth] ignored stale OAuth callback before validation", {
         expectedEpoch: expectedOAuthEpoch ?? "cold-start",
       });
       return false;
@@ -1087,7 +1090,7 @@ export class AuthService {
     // fresh `signIn()` could have minted a new attempt. In that case this
     // result is stale and must not mutate state.
     if (!this.isAttemptCurrent(expectedOAuthEpoch)) {
-      appLogger.info("[auth] ignored stale OAuth callback after validation", {
+      appLogger.debug("[auth] ignored stale OAuth callback after validation", {
         expectedEpoch: expectedOAuthEpoch ?? "cold-start",
       });
       return false;
@@ -1403,7 +1406,7 @@ export class AuthService {
       return;
     }
     if (useAuthStore.getState().status !== "signing-in") {
-      appLogger.info(
+      appLogger.debug(
         "[auth] sign-in timeout ignored outside signing-in state",
         {
           status: useAuthStore.getState().status,

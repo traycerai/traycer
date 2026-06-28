@@ -40,7 +40,7 @@ export function useStreamAuthRevalidator(): StreamAuthRevalidator {
           // AuthnV3 accepts the credential (it may have rotated the bearer in
           // place). Re-dial; the open frame reads the live, possibly-fresh
           // bearer.
-          appLogger.info("[stream-auth] reconnect revalidation accepted", {
+          appLogger.debug("[stream-auth] reconnect revalidation accepted", {
             outcome: "valid",
           });
           return "rotated";

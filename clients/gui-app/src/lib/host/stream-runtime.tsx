@@ -74,7 +74,7 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
   }, [binding, auth, identityKey]);
   useEffect(() => {
     if (value === null) return;
-    appLogger.info("[stream] app stream client created", {
+    appLogger.debug("[stream] app stream client created", {
       hostId: readiness.hostId,
       hasTransport:
         binding !== null && binding.hostClient.getActiveHost() !== null,
@@ -135,7 +135,10 @@ function useReconnectStreamOnEndpointChange(
       transportKey !== null &&
       prev.transportKey !== transportKey
     ) {
-      appLogger.info("[stream] app stream endpoint changed - reconnecting", {});
+      appLogger.debug(
+        "[stream] app stream endpoint changed - reconnecting",
+        {},
+      );
       client.reconnectAll("host-endpoint-change");
     }
   }, [client, transportKey]);

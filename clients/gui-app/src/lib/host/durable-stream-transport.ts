@@ -62,7 +62,7 @@ export function openDurableStreamTransport(params: {
     bearer: params.bearer,
     auth: params.auth,
   });
-  appLogger.info("[stream] durable transport opened", {
+  appLogger.debug("[stream] durable transport opened", {
     hasEndpoint: params.endpoint() !== null,
   });
   const disposers: Array<() => void> = [];
@@ -123,7 +123,7 @@ function subscribeEndpointRedial(
     }
     lastWebsocketUrl = nextWebsocketUrl;
     if (nextWebsocketUrl !== null) {
-      appLogger.info("[stream] durable endpoint changed - reconnecting", {});
+      appLogger.debug("[stream] durable endpoint changed - reconnecting", {});
       client.reconnectAll("host-endpoint-change");
     }
   });

@@ -1386,7 +1386,7 @@ export function createOpenEpicStore(
                 // `hasConnectedOnce` keeps this to genuine RE-connections (wake)
                 // - not the first connect or a `requestFreshSnapshot` re-open,
                 // which would pollute the trace.
-                appLogger.info("[epic-stream] cloud sync connected", {
+                appLogger.debug("[epic-stream] cloud sync connected", {
                   epicId,
                 });
               }
@@ -1415,7 +1415,7 @@ export function createOpenEpicStore(
                 // `warn` is the only info-ish console level lint permits here.
                 // Gated on `hasConnectedOnce` so it marks only RE-connections
                 // (wake), not the initial connect or a fresh-snapshot re-open.
-                appLogger.info("[epic-stream] transport open", {
+                appLogger.debug("[epic-stream] transport open", {
                   epicId,
                   contextRegistered: true,
                 });

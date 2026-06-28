@@ -22,13 +22,13 @@ export async function validateStoredCredentials(): Promise<ValidationOutcome> {
   const logger = createCliLogger(config.environment);
   const stored = await readCredentials();
   if (stored === null) {
-    logger.info("Stored credential validation skipped; no credentials", {
+    logger.debug("Stored credential validation skipped; no credentials", {
       environment: config.environment,
     });
     return { kind: "no-credentials" };
   }
 
-  logger.info("Stored credential validation started", {
+  logger.debug("Stored credential validation started", {
     environment: config.environment,
     hasToken: stored.token.length > 0,
     hasRefreshToken: stored.refreshToken.length > 0,
@@ -78,7 +78,7 @@ export async function validateStoredCredentials(): Promise<ValidationOutcome> {
       }
     : stored;
   if (refreshed !== stored) await writeCredentials(refreshed);
-  logger.info("Stored credential validation succeeded", {
+  logger.debug("Stored credential validation succeeded", {
     environment: config.environment,
     tokenChanged,
     userChanged,

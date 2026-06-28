@@ -27,6 +27,6 @@ export function resolveManageSubscriptionUrl(authnBaseUrl: string): string {
     });
     // Falls through to the production default.
   }
-  appLogger.info("[auth] using default manage subscription URL", {});
+  appLogger.debug("[auth] using default manage subscription URL", {});
   return "https://platform.traycer.ai";
 }

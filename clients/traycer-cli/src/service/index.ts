@@ -71,19 +71,19 @@ export function createServiceController(): ServiceController {
     platform,
   });
   if (platform === "darwin") {
-    logger.info("Service controller selected macOS backend", {
+    logger.debug("Service controller selected macOS backend", {
       environment: config.environment,
     });
     return createMacosController(null);
   }
   if (platform === "linux") {
-    logger.info("Service controller selected Linux backend", {
+    logger.debug("Service controller selected Linux backend", {
       environment: config.environment,
     });
     return createLinuxController(null);
   }
   if (platform === "win32") {
-    logger.info("Service controller selected Windows backend", {
+    logger.debug("Service controller selected Windows backend", {
       environment: config.environment,
     });
     return createWindowsController(null);

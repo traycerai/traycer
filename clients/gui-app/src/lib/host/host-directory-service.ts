@@ -88,7 +88,7 @@ export class HostDirectoryService implements IHostDirectoryService {
     this.started = true;
     this.localSubscription = this.runnerHost.onLocalHostChange((snapshot) => {
       this.localEntry = toLocalEntry(snapshot);
-      appLogger.info("[host-directory] local host snapshot changed", {
+      appLogger.debug("[host-directory] local host snapshot changed", {
         hostId: snapshot?.hostId ?? null,
         hasWebsocketUrl: snapshot !== null,
         status: snapshot === null ? "missing" : "available",
@@ -108,7 +108,7 @@ export class HostDirectoryService implements IHostDirectoryService {
     this.remoteEntries = await this.remoteFetcher();
     this.reconcileSelection();
     this.emit();
-    appLogger.info("[host-directory] refresh complete", {
+    appLogger.debug("[host-directory] refresh complete", {
       localCount: this.localEntry === null ? 0 : 1,
       remoteCount: this.remoteEntries.length,
       totalCount: this.snapshot().length,
@@ -139,7 +139,7 @@ export class HostDirectoryService implements IHostDirectoryService {
   }
 
   selectById(hostId: string | null): void {
-    appLogger.info("[host-directory] explicit host selection requested", {
+    appLogger.debug("[host-directory] explicit host selection requested", {
       hostId,
       clearingSelection: hostId === null,
     });
@@ -242,7 +242,7 @@ export class HostDirectoryService implements IHostDirectoryService {
       return;
     }
     this.selected = entry;
-    appLogger.info("[host-directory] effective host selection changed", {
+    appLogger.debug("[host-directory] effective host selection changed", {
       hostId: entry?.hostId ?? null,
       kind: entry?.kind ?? null,
       hasWebsocketUrl: entry !== null && entry.websocketUrl !== null,
@@ -261,7 +261,7 @@ export class HostDirectoryService implements IHostDirectoryService {
       }
       if (fresh !== this.selected) {
         this.selected = fresh;
-        appLogger.info("[host-directory] effective host selection refreshed", {
+        appLogger.debug("[host-directory] effective host selection refreshed", {
           hostId: fresh.hostId,
           kind: fresh.kind,
           hasWebsocketUrl: fresh.websocketUrl !== null,

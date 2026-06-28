@@ -64,7 +64,7 @@ export async function ensureHost(
   // while an unchanged build is a no-op. An explicit `--release <semver>`
   // resolves to a registry source and keeps the real semver as its target.
   const source = await resolveEnsureSource(opts);
-  opts.runtime.logger.info("Host ensure source resolved", {
+  opts.runtime.logger.debug("Host ensure source resolved", {
     environment: opts.runtime.environment,
     ...installSourceLogFields(source),
   });

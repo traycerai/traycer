@@ -19,7 +19,7 @@ export function openOwnedDurableStreamClient<TClient extends { close(): void }>(
   const transport = openTransport(hostId);
   try {
     const client = build(transport.wsStreamClient);
-    appLogger.info("[stream] owned durable client opened", { hostId });
+    appLogger.debug("[stream] owned durable client opened", { hostId });
     return {
       client,
       close: () => {
