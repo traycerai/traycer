@@ -2,6 +2,7 @@ import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { RefreshIconButton } from "@/components/refresh-icon-button";
 import { Settings } from "lucide-react";
+import { useId } from "react";
 import type {
   HarnessOption,
   ProviderId,
@@ -111,6 +112,7 @@ function ProviderRailButton(props: ProviderRailButtonProps) {
   const { harness, index, active, degraded, disabled, onProviderChange } =
     props;
   const leaderModifier = usePickerProviderLeaderForIndex(index);
+  const degradedDescriptionId = useId();
   return (
     <TooltipWrapper
       label={disabled ? LOCKED_PROVIDER_TOOLTIP : null}
@@ -124,6 +126,7 @@ function ProviderRailButton(props: ProviderRailButtonProps) {
         aria-selected={active}
         aria-disabled={disabled ? true : undefined}
         aria-label={harness.label}
+        aria-describedby={degraded ? degradedDescriptionId : undefined}
         title={disabled ? LOCKED_PROVIDER_TOOLTIP : harness.label}
         tabIndex={disabled ? -1 : undefined}
         data-active={active}
@@ -141,6 +144,11 @@ function ProviderRailButton(props: ProviderRailButtonProps) {
         }}
       >
         <HarnessIcon harnessId={harness.id} />
+        {degraded ? (
+          <span id={degradedDescriptionId} className="sr-only">
+            Setup required
+          </span>
+        ) : null}
         <PickerLeaderBadge
           show={leaderModifier !== null && !disabled}
           index={index}

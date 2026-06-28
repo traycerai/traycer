@@ -179,10 +179,9 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     enabled: activityEnabled,
     subscribed: activityEnabled,
   });
-  const providerStateActive = activityEnabled && visibleOpen;
   const providersQuery = useProvidersList({
-    enabled: providerStateActive,
-    subscribed: providerStateActive,
+    enabled: activityEnabled,
+    subscribed: activityEnabled,
   });
   const degradedProviderIds = useMemo(
     () =>
@@ -385,7 +384,8 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   // the badges. Both handlers are pure state writes, so the search input keeps
   // focus and the user can keep typing after switching.
   const railHarnesses = useMemo(
-    () => visibleRailHarnesses(catalogHarnesses, harnesses, degradedProviderIds),
+    () =>
+      visibleRailHarnesses(catalogHarnesses, harnesses, degradedProviderIds),
     [catalogHarnesses, degradedProviderIds, harnesses],
   );
   // ⌥-reasoning is armed whenever the selected model exposes thinking levels.

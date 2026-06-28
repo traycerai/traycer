@@ -1,69 +1,45 @@
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 
-const DEFAULT_GUI_HARNESS_ORDER: ReadonlyArray<GuiHarnessId> = [
-  "codex",
-  "claude",
-  "opencode",
-  "traycer",
-  "openrouter",
-  "droid",
-  "cursor",
-  "copilot",
-  "grok",
-  "kiro",
-  "kilocode",
-  "kimi",
-  "qwen",
+interface ProviderOrderEntry {
+  readonly providerId: ProviderId;
+  readonly guiHarnessId: GuiHarnessId;
+}
+
+const DEFAULT_PROVIDER_ORDER: ReadonlyArray<ProviderOrderEntry> = [
+  { providerId: "codex", guiHarnessId: "codex" },
+  { providerId: "claude-code", guiHarnessId: "claude" },
+  { providerId: "opencode", guiHarnessId: "opencode" },
+  { providerId: "traycer", guiHarnessId: "traycer" },
+  { providerId: "openrouter", guiHarnessId: "openrouter" },
+  { providerId: "droid", guiHarnessId: "droid" },
+  { providerId: "cursor", guiHarnessId: "cursor" },
+  { providerId: "copilot", guiHarnessId: "copilot" },
+  { providerId: "grok", guiHarnessId: "grok" },
+  { providerId: "kiro", guiHarnessId: "kiro" },
+  { providerId: "kilocode", guiHarnessId: "kilocode" },
+  { providerId: "kimi", guiHarnessId: "kimi" },
+  { providerId: "qwen", guiHarnessId: "qwen" },
 ];
 
-const DEFAULT_PROVIDER_ORDER: ReadonlyArray<ProviderId> = [
-  "codex",
-  "claude-code",
-  "opencode",
-  "traycer",
-  "openrouter",
-  "droid",
-  "cursor",
-  "copilot",
-  "grok",
-  "kiro",
-  "kilocode",
-  "kimi",
-  "qwen",
-];
+const DEFAULT_GUI_HARNESS_ORDER = DEFAULT_PROVIDER_ORDER.map(
+  (entry) => entry.guiHarnessId,
+);
+const DEFAULT_PROVIDER_ID_ORDER = DEFAULT_PROVIDER_ORDER.map(
+  (entry) => entry.providerId,
+);
+const GUI_HARNESS_BY_PROVIDER_ID = new Map(
+  DEFAULT_PROVIDER_ORDER.map(providerOrderMapEntry),
+);
 
 const UNKNOWN_PROVIDER_RANK = Number.MAX_SAFE_INTEGER;
 
 export function providerIdToGuiHarnessId(providerId: ProviderId): GuiHarnessId {
-  switch (providerId) {
-    case "claude-code":
-      return "claude";
-    case "codex":
-      return "codex";
-    case "opencode":
-      return "opencode";
-    case "cursor":
-      return "cursor";
-    case "traycer":
-      return "traycer";
-    case "grok":
-      return "grok";
-    case "qwen":
-      return "qwen";
-    case "kiro":
-      return "kiro";
-    case "droid":
-      return "droid";
-    case "kimi":
-      return "kimi";
-    case "copilot":
-      return "copilot";
-    case "kilocode":
-      return "kilocode";
-    case "openrouter":
-      return "openrouter";
+  const guiHarnessId = GUI_HARNESS_BY_PROVIDER_ID.get(providerId);
+  if (guiHarnessId === undefined) {
+    throw new Error(`Provider is missing GUI harness mapping: ${providerId}`);
   }
+  return guiHarnessId;
 }
 
 export function sortGuiHarnessesByProviderOrder<
@@ -78,7 +54,7 @@ export function sortProviderStatesByProviderOrder<
   T extends { readonly providerId: ProviderId },
 >(providers: ReadonlyArray<T>): ReadonlyArray<T> {
   return stableSortByRank(providers, (provider) =>
-    rankInOrder(DEFAULT_PROVIDER_ORDER, provider.providerId),
+    rankInOrder(DEFAULT_PROVIDER_ID_ORDER, provider.providerId),
   );
 }
 
@@ -88,6 +64,12 @@ function rankInOrder<T extends string>(
 ): number {
   const index = order.indexOf(value);
   return index === -1 ? UNKNOWN_PROVIDER_RANK : index;
+}
+
+function providerOrderMapEntry(
+  entry: ProviderOrderEntry,
+): readonly [ProviderId, GuiHarnessId] {
+  return [entry.providerId, entry.guiHarnessId];
 }
 
 function stableSortByRank<T>(

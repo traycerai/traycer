@@ -70,18 +70,28 @@ const queryMock = vi.hoisted(() => ({
       readonly enabled: boolean;
       readonly subscribed: boolean;
     }>,
+    providers: [] as Array<{
+      readonly enabled: boolean;
+      readonly subscribed: boolean;
+    }>,
   },
 }));
 
 vi.mock("@/hooks/providers/use-providers-list-query", () => ({
-  useProvidersList: (activity: QueryActivity) => ({
-    data: activity.enabled
-      ? { providers: queryMock.providerStates }
-      : undefined,
-    isPending: false,
-    isError: false,
-    isFetching: false,
-  }),
+  useProvidersList: (activity: QueryActivity) => {
+    queryMock.calls.providers.push({
+      enabled: activity.enabled,
+      subscribed: activity.subscribed,
+    });
+    return {
+      data: activity.enabled
+        ? { providers: queryMock.providerStates }
+        : undefined,
+      isPending: false,
+      isError: false,
+      isFetching: false,
+    };
+  },
 }));
 
 vi.mock("react-virtuoso", async () => {
@@ -574,6 +584,7 @@ describe("<HarnessModelPicker />", () => {
     queryMock.calls.harnesses = [];
     queryMock.calls.catalog = [];
     queryMock.calls.models = [];
+    queryMock.calls.providers = [];
     openSettingsMock.mockClear();
     useProvidersFocusStore.getState().clearFocusHarnessId();
   });
@@ -758,6 +769,19 @@ describe("<HarnessModelPicker />", () => {
       enabled: false,
       subscribed: false,
     });
+    expect(queryMock.calls.providers.at(-1)).toEqual({
+      enabled: false,
+      subscribed: false,
+    });
+  });
+
+  it("keeps provider state warm before opening the picker", () => {
+    renderPicker(undefined);
+
+    expect(queryMock.calls.providers.at(-1)).toEqual({
+      enabled: true,
+      subscribed: true,
+    });
   });
 
   it("hides unavailable providers that are not recoverable from the rail", async () => {
@@ -816,14 +840,21 @@ describe("<HarnessModelPicker />", () => {
       "OpenRouter",
     ]);
     expect(
-      screen.getByRole("tab", { name: "OpenRouter" }).getAttribute(
-        "data-degraded",
-      ),
+      screen
+        .getByRole("tab", { name: "OpenRouter" })
+        .getAttribute("data-degraded"),
     ).toBe("true");
+    const openRouterDescriptionId = screen
+      .getByRole("tab", { name: "OpenRouter" })
+      .getAttribute("aria-describedby");
+    if (openRouterDescriptionId === null) {
+      throw new Error("Expected degraded provider to have a description.");
+    }
+    expect(document.getElementById(openRouterDescriptionId)?.textContent).toBe(
+      "Setup required",
+    );
     expect(
-      screen.getByRole("tab", { name: "Codex" }).getAttribute(
-        "data-degraded",
-      ),
+      screen.getByRole("tab", { name: "Codex" }).getAttribute("data-degraded"),
     ).toBeNull();
   });
 
@@ -857,15 +888,15 @@ describe("<HarnessModelPicker />", () => {
     const claudeTab = screen.getByRole("tab", { name: "Claude" });
 
     expect(
-      screen
-        .getAllByRole("tab")
-        .map((tab) => tab.getAttribute("aria-label")),
+      screen.getAllByRole("tab").map((tab) => tab.getAttribute("aria-label")),
     ).toEqual(["Codex", "Claude"]);
     expect(claudeTab.getAttribute("data-degraded")).toBe("true");
 
     fireEvent.click(claudeTab);
 
-    expect(screen.getByText("Claude unavailable")).not.toBeNull();
+    expect(
+      screen.getByRole("option", { name: "Claude unavailable" }),
+    ).not.toBeNull();
   });
 
   it("keeps unavailable API-key providers visible with a settings CTA", async () => {
