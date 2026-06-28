@@ -76,11 +76,16 @@ export function buildHarnessModelRows(
 ): ReadonlyArray<HarnessModelRow> {
   // When the host declares per-model groups (OpenCode by provider, OpenRouter by
   // vendor), order by group so contiguous runs line up with the group headers
-  // the picker renders. Ungrouped harnesses keep host order - the first model is
-  // the preferred one and stays first.
-  const isGrouped = models.some(
-    (model) => modelMetadataString(model.metadata.openCodeProviderId).length > 0,
-  );
+  // the picker renders. Reorder only when EVERY model is annotated: a partially
+  // annotated list (a transitional/skewed host that tags only some models) keeps
+  // host order rather than floating the unannotated models to the top. Ungrouped
+  // harnesses keep host order too - the first model is preferred and stays first.
+  const isGrouped =
+    models.length > 0 &&
+    models.every(
+      (model) =>
+        modelMetadataString(model.metadata.openCodeProviderId).length > 0,
+    );
   const orderedModels = isGrouped ? sortByProviderGroup(models) : models;
   return orderedModels.map((model) => modelRow(harness, model));
 }

@@ -424,6 +424,33 @@ describe("harness model search", () => {
     ).toBe("Owl Alpha");
   });
 
+  it("keeps host order when only some models carry group metadata (partial rollout)", () => {
+    const rows = buildHarnessModelRows(OPENROUTER_HARNESS, [
+      model({
+        harnessId: "openrouter",
+        slug: "openrouter:z-ai/glm-4.6",
+        label: "Z.ai: GLM 4.6",
+        metadata: {
+          openCodeProviderId: "z-ai",
+          openCodeProviderLabel: "Z.ai",
+        },
+      }),
+      model({
+        harnessId: "openrouter",
+        slug: "openrouter:unannotated",
+        label: "Unannotated",
+        metadata: {},
+      }),
+    ]);
+
+    // Mixed annotated/unannotated: not reordered (sorting by group would float
+    // the empty-group model to the top), so the host-preferred order is kept.
+    expect(rows.map((row) => row.value)).toEqual([
+      "openrouter:z-ai/glm-4.6",
+      "openrouter:unannotated",
+    ]);
+  });
+
   it("adds capacity metadata on model rows", () => {
     const rows = buildHarnessModelRows(CLAUDE_HARNESS, [
       model({
