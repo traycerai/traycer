@@ -1,7 +1,8 @@
 import { useStore } from "zustand";
 
 import { Popover, PopoverTrigger } from "@/components/ui/popover";
-import { NarrowOnlyTooltip } from "@/components/home/toolbar/narrow-only-tooltip";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { Kbd } from "@/components/ui/kbd";
 import { HarnessModelTrigger } from "@/components/home/pickers/harness-model-trigger";
 import {
   findReasoningOptionsForModel,
@@ -48,6 +49,9 @@ import type {
   ServiceTierFooterConfig,
 } from "@/components/home/pickers/harness-model-picker-footers";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
+import { useRegisterActiveModelPicker } from "@/hooks/command-palette/use-register-active-model-picker";
+import { useBindingForAction } from "@/stores/settings/keybinding-store";
+import { formatChordForDisplay } from "@/lib/keybindings/chord";
 
 export type { ReasoningFooterConfig, ServiceTierFooterConfig };
 
@@ -70,10 +74,25 @@ interface HarnessModelPickerProps {
   tuiOnly: boolean;
   lockedHarnessId: ProviderId | null;
   disabled: boolean;
+  /**
+   * When true, this picker registers as the active composer's toggle target
+   * (the `composer.model-picker.toggle` shortcut + the palette's "Change model…"
+   * command act on it) while its surface is active and it isn't disabled. The
+   * main composer toolbar and the terminal launcher pass `true`; fork / add-node
+   * dialog pickers pass `false` so the global shortcut never targets them.
+   */
+  registerActivation: boolean;
 }
 
 function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
-  const { store, withServiceTier, tuiOnly, lockedHarnessId, disabled } = props;
+  const {
+    store,
+    withServiceTier,
+    tuiOnly,
+    lockedHarnessId,
+    disabled,
+    registerActivation,
+  } = props;
   const activityEnabled = useSurfaceActivity();
   const selection = useStore(store, (s) => s.selection);
   const selectedModel = useStore(store, (s) => s.selectedModel);
@@ -346,9 +365,48 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     reasoningActionable,
   });
 
+  // Active-composer registration: while this picker's surface is active and it
+  // isn't disabled, expose its open/close toggle + current-selection summary to
+  // the `composer.model-picker.toggle` shortcut and the palette's "Change model…"
+  // command. `registerActivation` keeps fork / add-node dialog pickers out; the
+  // registration hook ref-parks the controller, so per-render identity churn is
+  // harmless.
+  const modelPickerChord = useBindingForAction("composer.model-picker.toggle");
+  const activationController = useMemo(
+    () => ({
+      toggle: () => handleOpenChange(!visibleOpen),
+      getSelectionSummary: () =>
+        modelPickerSelectionSummary(
+          presentation.label,
+          presentation.reasoningLabel,
+        ),
+    }),
+    [handleOpenChange, visibleOpen, presentation],
+  );
+  useRegisterActiveModelPicker(
+    registerActivation && activityEnabled && !disabled,
+    activationController,
+  );
+
+  const tooltipLabel = (
+    <span className="flex items-center gap-2">
+      <span className="truncate">{presentation.label}</span>
+      {modelPickerChord !== null ? (
+        <Kbd className="text-code-xs">
+          {formatChordForDisplay(modelPickerChord)}
+        </Kbd>
+      ) : null}
+    </span>
+  );
+
   return (
     <Popover open={visibleOpen} onOpenChange={handleOpenChange}>
-      <NarrowOnlyTooltip label={presentation.label}>
+      <TooltipWrapper
+        label={tooltipLabel}
+        side="top"
+        sideOffset={undefined}
+        align={undefined}
+      >
         <PopoverTrigger asChild>
           <HarnessModelTrigger
             selection={selection}
@@ -360,7 +418,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
             disabled={disabled}
           />
         </PopoverTrigger>
-      </NarrowOnlyTooltip>
+      </TooltipWrapper>
       <HarnessModelPickerPanel
         trimmedQuery={trimmedQuery}
         hasQuery={hasQuery}
@@ -400,6 +458,17 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
 }
 
 export const HarnessModelPicker = memo(HarnessModelPickerImpl);
+
+// Short current-selection summary for the palette's "Change model…" subtitle.
+// Null while the model label is still resolving so the row shows no stale copy.
+function modelPickerSelectionSummary(
+  label: string,
+  reasoningLabel: string | null,
+): string | null {
+  if (label.length === 0) return null;
+  if (reasoningLabel === null) return label;
+  return `${label} · Thinking ${reasoningLabel}`;
+}
 
 // Restrict to harnesses whose adapter advertises a TUI surface. This is the
 // runtime capability (`modes`), not the schema id: Cursor is a TUI harness at

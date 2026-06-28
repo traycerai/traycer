@@ -349,6 +349,42 @@ const PROVIDERS: ReadonlyArray<{
     status: "SuperGrok / X",
     capabilities: ["gui"],
   },
+  {
+    harnessId: "qwen",
+    label: "Qwen Code",
+    status: "API key / OAuth",
+    capabilities: ["gui"],
+  },
+  {
+    harnessId: "kiro",
+    label: "Kiro",
+    status: "Kiro login / API key",
+    capabilities: ["gui"],
+  },
+  {
+    harnessId: "droid",
+    label: "Droid",
+    status: "Factory account",
+    capabilities: ["gui"],
+  },
+  {
+    harnessId: "kimi",
+    label: "Kimi",
+    status: "Kimi account",
+    capabilities: ["gui"],
+  },
+  {
+    harnessId: "copilot",
+    label: "Copilot",
+    status: "GitHub Copilot",
+    capabilities: ["gui"],
+  },
+  {
+    harnessId: "kilocode",
+    label: "Kilo Code",
+    status: "Kilo login",
+    capabilities: ["gui"],
+  },
 ];
 
 const PALETTE_ROWS = [

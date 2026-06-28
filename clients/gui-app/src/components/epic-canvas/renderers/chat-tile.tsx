@@ -1211,14 +1211,15 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     () => <ContextUsageChipForChat handle={handle} />,
     [handle],
   );
-  // Composer v3 cluster: host select + Workspace rail picker on the left, the
-  // context-usage indicator pushed to the right edge of the row. Per-folder
-  // Environment config lives inside the selected Workspace panel.
+  // Composer v3 cluster: host select + Workspace rail picker on the left, with
+  // the context-usage leaf owning its trailing chip and optional full-width
+  // pinned strip. Per-folder Environment config lives inside the selected
+  // Workspace panel.
   const workspaceControls = useMemo(
     () => (
       <>
         <div className="min-w-0 overflow-hidden">{hostWorkspaceSelector}</div>
-        <div className="min-w-0 justify-self-end">{usageChip}</div>
+        {usageChip}
       </>
     ),
     [hostWorkspaceSelector, usageChip],

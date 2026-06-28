@@ -14,6 +14,7 @@ function resetSettingsStore(): void {
     defaultAgentMode: DEFAULT_AGENT_MODE,
     defaultEditor: "vscode",
     notifyOnChatTurnComplete: true,
+    pinContextUsageBreakdown: false,
     diffViewerPreferences: DEFAULT_DIFF_VIEWER_PREFERENCES,
   });
 }
@@ -159,6 +160,51 @@ describe("useSettingsStore", () => {
     await useSettingsStore.persist.rehydrate();
 
     expect(useSettingsStore.getState().notifyOnChatTurnComplete).toBe(false);
+  });
+
+  it("defaults the pinned context usage breakdown to off", () => {
+    expect(useSettingsStore.getState().pinContextUsageBreakdown).toBe(false);
+  });
+
+  it("toggles the pinned context usage breakdown on", () => {
+    useSettingsStore.getState().setPinContextUsageBreakdown(true);
+
+    expect(useSettingsStore.getState().pinContextUsageBreakdown).toBe(true);
+  });
+
+  it("persists the pinned context usage breakdown preference", () => {
+    useSettingsStore.getState().setPinContextUsageBreakdown(true);
+    const persisted = window.localStorage.getItem("traycer-gui-app:settings");
+
+    expect(persisted ?? "").toContain('"pinContextUsageBreakdown":true');
+  });
+
+  it("rehydrates the pinned context usage breakdown from persisted settings", async () => {
+    window.localStorage.setItem(
+      "traycer-gui-app:settings",
+      JSON.stringify({
+        state: { pinContextUsageBreakdown: true },
+        version: 1,
+      }),
+    );
+
+    await useSettingsStore.persist.rehydrate();
+
+    expect(useSettingsStore.getState().pinContextUsageBreakdown).toBe(true);
+  });
+
+  it("rehydrates old settings without the field to the default off", async () => {
+    window.localStorage.setItem(
+      "traycer-gui-app:settings",
+      JSON.stringify({
+        state: { artifactIconColorMode: "none" },
+        version: 1,
+      }),
+    );
+
+    await useSettingsStore.persist.rehydrate();
+
+    expect(useSettingsStore.getState().pinContextUsageBreakdown).toBe(false);
   });
 
   it("defaults new chats to supervised permissions", () => {

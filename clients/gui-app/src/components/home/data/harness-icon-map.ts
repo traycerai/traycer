@@ -1,9 +1,15 @@
 import {
   ClaudeAIIcon,
   CodexIcon,
+  CopilotIcon,
   CursorIcon,
+  DroidIcon,
   GrokIcon,
+  KiroIcon,
+  KiloCodeIcon,
+  KimiIcon,
   OpenCodeIcon,
+  QwenIcon,
   TraycerIcon,
   type HarnessIcon,
 } from "@/components/home/pickers/harness-icons";
@@ -21,4 +27,10 @@ export const PROVIDER_ICON_CONFIG: Record<ProviderId, HarnessIconConfig> = {
   traycer: { Icon: TraycerIcon, className: "text-foreground" },
   cursor: { Icon: CursorIcon, className: "text-foreground" },
   grok: { Icon: GrokIcon, className: "text-foreground" },
+  qwen: { Icon: QwenIcon, className: "text-foreground" },
+  kiro: { Icon: KiroIcon, className: "text-foreground" },
+  droid: { Icon: DroidIcon, className: "text-foreground" },
+  kimi: { Icon: KimiIcon, className: "text-foreground" },
+  copilot: { Icon: CopilotIcon, className: "text-foreground" },
+  kilocode: { Icon: KiloCodeIcon, className: "text-foreground" },
 };
