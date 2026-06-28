@@ -847,6 +847,7 @@ export class AuthService {
         await this.ensureLocalProvisioning(
           accepted.token,
           accepted.refreshToken,
+          () => this.isDisposed() || this.currentBearer !== accepted.token,
         );
       }
       return outcome;
@@ -1045,7 +1046,11 @@ export class AuthService {
     // credential file keeps the now-spent token pair and later host/CLI flows
     // fail to refresh. Best-effort, mirroring sign-in provisioning; a no-op on
     // shells without a local CLI.
-    await this.ensureLocalProvisioning(newToken, newRefreshToken);
+    await this.ensureLocalProvisioning(
+      newToken,
+      newRefreshToken,
+      () => this.isDisposed() || this.currentBearer !== newToken,
+    );
   }
 
   /**
@@ -1122,7 +1127,11 @@ export class AuthService {
       // closes the race where early RPCs are rejected as UNAUTHORIZED, which
       // would burn single-use refresh tokens and can trip a refresh-reuse
       // sign-out. No-op on shells without a local CLI.
-      await this.ensureLocalProvisioning(accepted.token, accepted.refreshToken);
+      await this.ensureLocalProvisioning(
+        accepted.token,
+        accepted.refreshToken,
+        () => this.isDisposed(),
+      );
       if (this.isDisposed()) {
         return false;
       }
@@ -1192,17 +1201,27 @@ export class AuthService {
   private async ensureLocalProvisioning(
     token: string,
     refreshToken: string,
+    isStale: () => boolean,
   ): Promise<void> {
     const cli = this.runnerHost.traycerCli;
     if (cli === null) {
       return;
     }
-    await this.retryLocalCredentialCommand(
-      () => cli.cliLogin(token, refreshToken),
-      "[auth] local credential provisioning failed; the host may be " +
-        "unreachable until the next token refresh",
-      1,
-    );
+    // Serialize behind any in-flight deprovision (sign-out) so a provisioning
+    // retry can't land AFTER a logout and re-authenticate the host owner gate.
+    // Re-check staleness once we hold the chain: a sign-out (or a newer
+    // rotation) queued ahead of us makes this write stale - skip it.
+    await this.enqueueCredentialOp(async () => {
+      if (isStale()) {
+        return;
+      }
+      await this.retryLocalCredentialCommand(
+        () => cli.cliLogin(token, refreshToken),
+        "[auth] local credential provisioning failed; the host may be " +
+          "unreachable until the next token refresh",
+        1,
+      );
+    });
   }
 
   private async clearStoredAuth(): Promise<void> {
@@ -1232,12 +1251,34 @@ export class AuthService {
     if (cli === null) {
       return;
     }
-    await this.retryLocalCredentialCommand(
-      () => cli.cliLogout(),
-      "[auth] local credential deprovisioning failed; the host may " +
-        "remain bound to the prior owner until its credentials are cleared",
-      1,
+    // Same chain as provisioning so a sign-out's logout and a refresh's login
+    // can never interleave - whichever is queued last wins the file.
+    await this.enqueueCredentialOp(() =>
+      this.retryLocalCredentialCommand(
+        () => cli.cliLogout(),
+        "[auth] local credential deprovisioning failed; the host may " +
+          "remain bound to the prior owner until its credentials are cleared",
+        1,
+      ),
     );
+  }
+
+  /** Single chain that serializes local credential provision/deprovision ops. */
+  private credentialOpChain: Promise<void> = Promise.resolve();
+
+  /**
+   * Runs `op` after any in-flight credential op completes, so a provisioning
+   * retry can never interleave with - and land after - a concurrent sign-out's
+   * deprovision (which would re-authenticate the host owner gate post-sign-out).
+   * Errors are swallowed into the chain so one failed op can't poison the next.
+   */
+  private enqueueCredentialOp(op: () => Promise<void>): Promise<void> {
+    const run = this.credentialOpChain.then(op, op);
+    this.credentialOpChain = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
   }
 
   private async retryLocalCredentialCommand(
