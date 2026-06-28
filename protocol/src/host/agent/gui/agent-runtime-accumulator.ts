@@ -181,7 +181,7 @@ export function finalizeStreamingActionBlocks(
 // (the host's detached execution). Turn-scoped action blocks
 // (tool_call/command/file_change) stay finalized. Only applied on `turn.completed`
 // - a stopped/interrupted turn DOES finalize a still-running subagent.
-function reopenStreamingSubagentBlocks(
+export function reopenStreamingSubagentBlocks(
   before: ContentBlock[],
   finalized: ContentBlock[],
 ): ContentBlock[] {
@@ -512,14 +512,19 @@ export function accumulateEvent(
       ];
 
     case "turn.completed": {
-      // Clean turn end: finalize turn-scoped blocks, but keep a still-streaming
-      // (backgrounded) subagent's card "running" until its own completion lands.
       const finalized = finalizeStreamingActionBlocks(
         blocks,
         event.timestamp,
         finalizeStatusForTerminalEvent(event),
       );
-      return reopenStreamingSubagentBlocks(blocks, finalized);
+      // Keep a still-streaming (backgrounded) subagent's card "running" ONLY on a
+      // CLEAN completion. A degraded ending (`event.reason` set - e.g. max_tokens,
+      // refusal) is a real termination: the host does NOT keep the query alive for
+      // it, so the subagent will not continue. Finalize its card here rather than
+      // leaving a lying "running" that never resolves.
+      return event.reason === undefined
+        ? reopenStreamingSubagentBlocks(blocks, finalized)
+        : finalized;
     }
     case "turn.stopped":
     case "turn.interrupted":

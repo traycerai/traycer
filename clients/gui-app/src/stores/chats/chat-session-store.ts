@@ -41,6 +41,7 @@ import { AUTH_ERROR_CODE } from "@traycer/protocol/host/agent/gui/agent-runtime"
 import {
   accumulateTurnContent,
   finalizeStreamingActionBlocks,
+  reopenStreamingSubagentBlocks,
   type FinalizedActionStatus,
 } from "@traycer/protocol/host/agent/gui/agent-runtime-accumulator";
 import type {
@@ -2203,7 +2204,10 @@ function applyEventToOwningMessage(
     ...(target.blocksVersion === undefined
       ? {}
       : { blocksVersion: content.blocksVersion }),
-    timestamp: event.timestamp,
+    // Preserve the settled row's `timestamp` (its completed-at). A detached
+    // subagent's later activity must NOT advance the turn's completed-at / cache
+    // token - the host detached writer only replaces blocks/blocksVersion, and
+    // this mirrors it so the turn doesn't appear to "complete later".
   };
   return { messages: next };
 }
@@ -2423,6 +2427,22 @@ function assistantMessageFromLiveAssistant(
   liveAssistant: LiveAssistantMessage,
   fallbackStatus: FinalizedActionStatus,
 ): Extract<Message, { role: "assistant" }> {
+  // Spread converts the readonly live blocks to the mutable array the accumulator
+  // signature takes (it does not mutate in place).
+  const liveBlocks = [...liveAssistant.blocks];
+  // Finalize the row's streaming blocks for this transient safety-net placeholder,
+  // but keep a still-`streaming` (backgrounded) subagent card "running" - mirroring
+  // the accumulator's terminal handling. Force-finalizing it to `interrupted` here
+  // would briefly flicker a legitimately-running detached subagent until the host's
+  // authoritative snapshot (which carries the real status) replaces this row.
+  const finalizedBlocks = reopenStreamingSubagentBlocks(
+    liveBlocks,
+    finalizeStreamingActionBlocks(
+      liveBlocks,
+      liveAssistant.timestamp,
+      fallbackStatus,
+    ),
+  );
   return {
     role: "assistant",
     // This frozen row is a transient safety-net placeholder that the host's
@@ -2430,13 +2450,7 @@ function assistantMessageFromLiveAssistant(
     // wait for a durable assistant message id from persistence.
     messageId: transientLiveAssistantMessageId(liveAssistant.turnId),
     sender: liveAssistant.sender,
-    // Spread converts the readonly live blocks to the mutable array the
-    // accumulator signature takes (it does not mutate in place).
-    blocks: finalizeStreamingActionBlocks(
-      [...liveAssistant.blocks],
-      liveAssistant.timestamp,
-      fallbackStatus,
-    ),
+    blocks: finalizedBlocks,
     startedAt: liveAssistant.startedAt,
     blocksVersion: liveAssistant.blocksVersion,
     timestamp: liveAssistant.timestamp,

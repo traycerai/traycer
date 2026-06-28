@@ -520,6 +520,30 @@ describe("accumulateEvent", () => {
     );
   });
 
+  it("turn.completed with a degraded reason (max_tokens) finalizes a streaming subagent (no lying 'running')", () => {
+    // A degraded ending is a REAL termination: the host does not keep the query
+    // alive for it, so a backgrounded subagent would never continue. Unlike a
+    // CLEAN completion (which keeps the card "running" via the detached
+    // execution), a degraded completion must finalize the card.
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "subagent.started",
+      blockId: "sa1",
+      timestamp: 1,
+      name: "explorer",
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "turn.completed",
+      blockId: "turn1",
+      timestamp: 2,
+      turnId: "turn-123",
+      reason: "max_tokens",
+    });
+    expect(blocks.find((block) => block.blockId === "sa1")?.status).toBe(
+      "completed",
+    );
+  });
+
   it("turn.completed leaves a pending interview streaming (resolved out-of-band)", () => {
     let blocks = makeBlocks();
     blocks = accumulateEvent(blocks, {
