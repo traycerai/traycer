@@ -12,7 +12,7 @@ import { log } from "./logger";
 export function configureV8CodeCache(): void {
   const cacheDir = join(app.getPath("userData"), "v8-code-cache");
   session.defaultSession.setCodeCachePath(cacheDir);
-  log.info("[lifecycle] v8 code cache path", { cacheDir });
+  log.debug("[lifecycle] v8 code cache path", { cacheDir });
 }
 
 /**

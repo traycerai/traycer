@@ -39,7 +39,7 @@ export function openOneShotStreamTransport(params: {
     bearer: params.bearer,
     auth: null,
   });
-  appLogger.info("[stream] one-shot transport opened", {
+  appLogger.debug("[stream] one-shot transport opened", {
     hasEndpoint: params.endpoint() !== null,
   });
   return {

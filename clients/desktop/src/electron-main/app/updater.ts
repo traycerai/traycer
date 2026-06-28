@@ -149,7 +149,7 @@ export async function installAutoUpdater(
   configurePrivateGitHubUpdateFeed();
 
   autoUpdater.on("checking-for-update", () =>
-    log.info("[updater] checking for updates"),
+    log.debug("[updater] checking for updates"),
   );
   autoUpdater.on("update-available", (info) => {
     log.info("[updater] update available", info);
@@ -175,7 +175,7 @@ export async function installAutoUpdater(
     notifyUpdateWhenUnfocused("available", info.version);
   });
   autoUpdater.on("update-not-available", (info) => {
-    log.info("[updater] no update available", info);
+    log.debug("[updater] no update available", info);
     if (currentSnapshot.status === "ready") {
       return;
     }
@@ -191,7 +191,7 @@ export async function installAutoUpdater(
     });
   });
   autoUpdater.on("download-progress", (progress) => {
-    log.info("[updater] download progress", progress);
+    log.debug("[updater] download progress", progress);
     if (currentSnapshot.status === "ready" || !downloadInProgress) {
       return;
     }
@@ -263,7 +263,7 @@ export async function checkForUpdatesNow(
     return currentSnapshot;
   }
   if (!(await canCheckForUpdates(isDev))) {
-    log.info("[updater] check skipped outside a shipped build");
+    log.debug("[updater] check skipped outside a shipped build");
     if (intent === "manual") {
       emitSnapshot({
         status: "unavailable",
@@ -433,7 +433,7 @@ function configurePrivateGitHubUpdateFeed(): void {
     token,
   };
   autoUpdater.setFeedURL(feed);
-  log.info("[updater] configured private GitHub update feed", {
+  log.debug("[updater] configured private GitHub update feed", {
     repo: `${coordinate.owner}/${coordinate.repo}`,
   });
 }
@@ -551,7 +551,7 @@ function handledNoStableReleaseForPrerelease(error: unknown): boolean {
     return true;
   }
   checkErrorEmitted = true;
-  log.info(
+  log.debug(
     "[updater] no production release to update to yet (prerelease build) - skipping",
   );
   if (currentSnapshot.status === "ready" || downloadInProgress) {

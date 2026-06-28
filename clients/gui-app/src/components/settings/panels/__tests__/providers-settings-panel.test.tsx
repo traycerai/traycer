@@ -4,7 +4,13 @@ import type {
   ProviderCliState,
   ProviderSelection,
 } from "@traycer/protocol/host/provider-schemas";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const providerMocks = vi.hoisted(() => ({
@@ -273,6 +279,83 @@ describe("<ProvidersSettingsPanel />", () => {
       providerId: "traycer",
       selection: { kind: "path" },
     });
+  });
+
+  it("orders the provider rail by the default provider order", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "openrouter",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+        }),
+        providerState({
+          providerId: "qwen",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+        }),
+        providerState({
+          providerId: "codex",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+        }),
+        providerState({
+          providerId: "cursor",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+        }),
+        providerState({
+          providerId: "droid",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+        }),
+        providerState({
+          providerId: "kilocode",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+        }),
+        providerState({
+          providerId: "claude-code",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+        }),
+        providerState({
+          providerId: "copilot",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+        }),
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    const nav = screen.getByRole("navigation", { name: "Providers" });
+    expect(
+      within(nav)
+        .getAllByRole("button")
+        .map((button) => button.getAttribute("aria-label")),
+    ).toEqual([
+      "Codex",
+      "Claude Code",
+      "OpenRouter",
+      "Droid",
+      "Cursor",
+      "Copilot",
+      "Kilo Code",
+      "Qwen Code",
+    ]);
   });
 
   it("lists OpenCode CLI candidates for OpenRouter and mutates OpenRouter selection", () => {

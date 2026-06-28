@@ -73,7 +73,7 @@ let activeEnvironment: Environment = "production";
 
 export function setActiveEnvironment(environment: Environment): void {
   activeEnvironment = environment;
-  log.info("[host-management] active environment set", { environment });
+  log.debug("[host-management] active environment set", { environment });
 }
 
 export function getActiveEnvironment(): Environment {
@@ -503,7 +503,7 @@ async function readRegistryCache(): Promise<RegistryUpdateCacheFile | null> {
       typeof parsed.environment === "string" &&
       parsed.environment !== activeEnvironment
     ) {
-      log.info(
+      log.debug(
         "[host-management] ignored registry cache for other environment",
         {
           path,
@@ -631,7 +631,7 @@ async function probeRegistry(): Promise<RegistryUpdateCacheFile> {
         : err instanceof Error
           ? err.message
           : String(err);
-    log.info("[host-management] registry probe failed (silent)", { message });
+    log.debug("[host-management] registry probe failed (silent)", { message });
     return {
       checkedAt,
       latestVersion: null,

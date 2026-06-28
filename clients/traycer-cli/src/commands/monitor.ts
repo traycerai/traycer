@@ -92,7 +92,7 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
   const agentId = args.agentId ?? process.env.TRAYCER_AGENT_ID ?? null;
   const epicId = args.epicId ?? process.env.TRAYCER_EPIC_ID ?? null;
 
-  logger.info("Monitor resolving target", {
+  logger.debug("Monitor resolving target", {
     environment: config.environment,
     agentIdPresent: agentId !== null && agentId.length > 0,
     epicIdPresent: epicId !== null && epicId.length > 0,
@@ -127,7 +127,7 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
       "traycer monitor: not signed in — run `traycer login` to authenticate.",
     );
   }
-  logger.info("Monitor credentials resolved", {
+  logger.debug("Monitor credentials resolved", {
     environment: config.environment,
     agentId,
     epicId,
@@ -152,7 +152,7 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
     logger,
     endpointResolutionLogState,
   );
-  logger.info("Monitor initial endpoint resolution completed", {
+  logger.debug("Monitor initial endpoint resolution completed", {
     environment: config.environment,
     hasEndpoint: endpoint !== null,
     agentId,
@@ -336,7 +336,7 @@ function runInboxSubscription(
     const subscribe = (): void => {
       clearRetryTimer();
       session?.close();
-      logger.info("Monitor subscribing to inbox stream", {
+      logger.debug("Monitor subscribing to inbox stream", {
         environment: config.environment,
         method: SUBSCRIBE_METHOD,
         agentId: target.agentId,
@@ -363,7 +363,7 @@ function runInboxSubscription(
       diag(`stream ${status}`);
       clearHealthTimer();
       if (status === "open") {
-        logger.info("Monitor stream opened", {
+        logger.debug("Monitor stream opened", {
           environment: config.environment,
           agentId: target.agentId,
           epicId: target.epicId,
@@ -399,7 +399,7 @@ function runInboxSubscription(
       if (settled) {
         return;
       }
-      logger.info("Monitor auth revalidation completed", {
+      logger.debug("Monitor auth revalidation completed", {
         environment: config.environment,
         outcome,
         authRefreshCount,
@@ -470,7 +470,7 @@ function handleServerFrame(
     return;
   }
   if (parsed.data.kind === "message") {
-    logger.info("Monitor received inbox message frame", {
+    logger.debug("Monitor received inbox message frame", {
       environment: config.environment,
       agentId: target.agentId,
       epicId: target.epicId,
@@ -481,7 +481,7 @@ function handleServerFrame(
     return;
   }
   if (parsed.data.kind === "notice") {
-    logger.info("Monitor received inbox notice frame", {
+    logger.debug("Monitor received inbox notice frame", {
       environment: config.environment,
       agentId: target.agentId,
       epicId: target.epicId,

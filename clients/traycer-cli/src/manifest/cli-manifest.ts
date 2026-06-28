@@ -403,7 +403,7 @@ export async function readCliManifest(
     source: obj.source,
     pendingUpgrade: readPendingUpgrade(obj.pendingUpgrade, path),
   };
-  logger.info("CLI manifest read completed", {
+  logger.debug("CLI manifest read completed", {
     environment,
     hasVersion: manifest.version.length > 0,
     source: manifest.source,
@@ -419,7 +419,7 @@ export async function writeCliManifest(
   manifest: CliInstallManifest,
 ): Promise<void> {
   const logger = createCliLogger(environment);
-  logger.info("CLI manifest write started", {
+  logger.debug("CLI manifest write started", {
     environment,
     hasVersion: manifest.version.length > 0,
     source: manifest.source,
@@ -453,7 +453,7 @@ export async function updateCliManifest(
   patch: Partial<Omit<CliInstallManifest, never>>,
 ): Promise<CliInstallManifest> {
   const logger = createCliLogger(environment);
-  logger.info("CLI manifest update started", {
+  logger.debug("CLI manifest update started", {
     environment,
     patchesVersion: patch.version !== undefined,
     patchesBinaryPath: patch.binaryPath !== undefined,
@@ -504,7 +504,7 @@ export async function clearPendingUpgrade(
     readonly installedAt: string;
   } | null,
 ): Promise<CliInstallManifest> {
-  createCliLogger(environment).info("CLI manifest clearing pending upgrade", {
+  createCliLogger(environment).debug("CLI manifest clearing pending upgrade", {
     environment,
     promoted: promotedInstall !== null,
     hasPromotedVersion:

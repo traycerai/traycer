@@ -220,7 +220,7 @@ export class WsStreamClient<Registry extends VersionedStreamRpcRegistry> {
     }
     // Wake-recovery trace (piped to the desktop log via the renderer-console
     // bridge): proves the wake signal arrived and how many sessions re-dialed.
-    console.info(
+    console.debug(
       `[stream] reconnectAll reason=${reason} sessions=${this.ownedSessions.size}`,
     );
     for (const session of Array.from(this.ownedSessions)) {
@@ -803,7 +803,7 @@ class StreamSession<
     }
     // Wake-recovery trace: which way the overnight-expired-bearer revalidation
     // resolved, so an on-device wake shows whether the fresh bearer landed.
-    console.info(
+    console.debug(
       `[stream] UNAUTHORIZED revalidate outcome=${outcome} method=${String(
         this.config.method,
       )}`,

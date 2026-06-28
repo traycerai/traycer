@@ -20,7 +20,7 @@ export function enableSpellCheck(): void {
   const target = session.defaultSession;
   target.setSpellCheckerEnabled(true);
   target.setSpellCheckerLanguages(DEFAULT_LANGUAGES);
-  log.info("[spell-check] enabled", { languages: DEFAULT_LANGUAGES });
+  log.debug("[spell-check] enabled", { languages: DEFAULT_LANGUAGES });
 }
 
 /**

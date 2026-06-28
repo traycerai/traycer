@@ -105,7 +105,7 @@ export async function readCredentials(): Promise<StoredCredentials | null> {
 
 export async function writeCredentials(creds: StoredCredentials): Promise<void> {
   const logger = createCliLogger(config.environment);
-  logger.info("Credentials write started", {
+  logger.debug("Credentials write started", {
     environment: config.environment,
     hasToken: creds.token.length > 0,
     hasRefreshToken: creds.refreshToken.length > 0,
