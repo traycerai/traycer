@@ -838,6 +838,16 @@ export class AuthService {
         this.currentProfile = profile;
         this.emitSessionSnapshot();
         this.refreshScheduler.start();
+        // Re-provision the FULL pair to the machine-local CLI/host credentials.
+        // The snapshot emit above drives `CliCredentialSeeder`, which re-seeds
+        // the bearer ONLY (empty refresh token), so the file would keep the
+        // now-spent refresh token beside the fresh bearer and later host/CLI
+        // refreshes would fail. Mirrors the proactive path's full-pair
+        // re-provision; best-effort and a no-op on shells without a local CLI.
+        await this.ensureLocalProvisioning(
+          accepted.token,
+          accepted.refreshToken,
+        );
       }
       return outcome;
     }
