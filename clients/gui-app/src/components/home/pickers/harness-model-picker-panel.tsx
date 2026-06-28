@@ -33,6 +33,7 @@ interface HarnessModelPickerPanelProps {
   readonly fallbackHarnesses: ReadonlyArray<HarnessOption>;
   readonly resolvedActiveProviderId: ProviderId;
   readonly lockedHarnessId: ProviderId | null;
+  readonly degradedProviderIds: ReadonlySet<ProviderId>;
   readonly catalogHarnessesLoading: boolean;
   readonly onProviderChange: (providerId: ProviderId) => void;
   readonly onRefreshCatalog: () => Promise<void>;
@@ -73,6 +74,7 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
     fallbackHarnesses,
     resolvedActiveProviderId,
     lockedHarnessId,
+    degradedProviderIds,
     catalogHarnessesLoading,
     onProviderChange,
     onRefreshCatalog,
@@ -137,6 +139,7 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
           fallbackHarnesses={fallbackHarnesses}
           activeProviderId={resolvedActiveProviderId}
           lockedHarnessId={lockedHarnessId}
+          degradedProviderIds={degradedProviderIds}
           pending={catalogHarnessesLoading}
           onProviderChange={onProviderChange}
           onRefresh={onRefreshCatalog}

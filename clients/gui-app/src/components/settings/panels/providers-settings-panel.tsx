@@ -35,7 +35,6 @@ import { Switch } from "@/components/ui/switch";
 import { FilePathTooltip } from "@/components/file-path-tooltip";
 import { StartTruncatedText } from "@/components/ui/start-truncated-text";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
-import type { ProviderId as HarnessIconId } from "@/components/home/data/landing-options";
 import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
 import { useProvidersSetSelection } from "@/hooks/providers/use-providers-set-selection-mutation";
 import { useProvidersAddCustomPath } from "@/hooks/providers/use-providers-add-custom-path-mutation";
@@ -59,6 +58,10 @@ import type { HostRpcRegistry } from "@/lib/host";
 import { HostRuntimeContext, useHostBinding } from "@/lib/host/runtime";
 import { useRelativeTimestamp } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
+import {
+  providerIdToGuiHarnessId,
+  sortProviderStatesByProviderOrder,
+} from "@/lib/provider-ordering";
 import { ProviderAuthBadge, ProviderAuthLine } from "./provider-auth-display";
 import { EnvOverrideEditor } from "./env-override-editor";
 import { TraycerSubscriptionSection } from "./traycer-subscription-section";
@@ -70,7 +73,7 @@ type ProvidersListQuery = UseQueryResult<
 >;
 
 // The provider to select on mount: the deep-link focus target (mapped from its
-// GUI harness id via `HARNESS_ICON_ID`) when one was requested and is present,
+// GUI harness id) when one was requested and is present,
 // otherwise the first provider in the list.
 function initialActiveProviderId(
   providers: readonly ProviderCliState[],
@@ -78,7 +81,7 @@ function initialActiveProviderId(
   const focusHarnessId = useProvidersFocusStore.getState().focusHarnessId;
   if (focusHarnessId !== null) {
     const match = providers.find(
-      (p) => HARNESS_ICON_ID[p.providerId] === focusHarnessId,
+      (p) => providerIdToGuiHarnessId(p.providerId) === focusHarnessId,
     );
     if (match !== undefined) return match.providerId;
   }
@@ -144,22 +147,6 @@ function terminalAgentArgsPlaceholder(providerId: ProviderId): string {
       return "CLI arguments (optional)";
   }
 }
-
-const HARNESS_ICON_ID: Record<ProviderId, HarnessIconId> = {
-  "claude-code": "claude",
-  codex: "codex",
-  opencode: "opencode",
-  cursor: "cursor",
-  traycer: "traycer",
-  openrouter: "openrouter",
-  grok: "grok",
-  qwen: "qwen",
-  kiro: "kiro",
-  droid: "droid",
-  kimi: "kimi",
-  copilot: "copilot",
-  kilocode: "kilocode",
-};
 
 // Grid keeps the columns aligned across header + rows; `minmax(0,1fr)` on
 // the Path column guarantees it shrinks/truncates instead of pushing the
@@ -386,18 +373,23 @@ function ProvidersRailLayout({
 }: {
   readonly providers: readonly ProviderCliState[];
 }) {
+  const orderedProviders = useMemo(
+    () => sortProviderStatesByProviderOrder(providers),
+    [providers],
+  );
   // A deep-link entry point (e.g. the model picker's "Add API key" CTA) can ask
   // the panel to open on a specific provider via the focus store. Read it once
   // for the initial selection, then clear it so a later manual open starts on
   // the first provider again.
   const [activeId, setActiveId] = useState<ProviderId>(() =>
-    initialActiveProviderId(providers),
+    initialActiveProviderId(orderedProviders),
   );
   useEffect(() => {
     useProvidersFocusStore.getState().clearFocusHarnessId();
   }, []);
   const active =
-    providers.find((p) => p.providerId === activeId) ?? providers[0];
+    orderedProviders.find((p) => p.providerId === activeId) ??
+    orderedProviders[0];
 
   return (
     // Fill the panel body (the shell stretches it to the settings scroll
@@ -406,13 +398,17 @@ function ProvidersRailLayout({
     // overlay - owns the scroll. Height follows the viewport: on shorter
     // screens it shrinks to fit the modal instead of overflowing it.
     <div className="flex h-full">
-      <nav className="flex w-[clamp(10rem,22vw,14rem)] shrink-0 flex-col gap-1 overflow-y-auto border-r border-border/60 p-2">
-        {providers.map((state) => {
+      <nav
+        aria-label="Providers"
+        className="flex w-[clamp(10rem,22vw,14rem)] shrink-0 flex-col gap-1 overflow-y-auto border-r border-border/60 p-2"
+      >
+        {orderedProviders.map((state) => {
           const selected = state.providerId === active.providerId;
           return (
             <button
               key={state.providerId}
               type="button"
+              aria-label={PROVIDER_DISPLAY_NAMES[state.providerId]}
               data-active={selected}
               onClick={() => setActiveId(state.providerId)}
               className={cn(
@@ -422,7 +418,9 @@ function ProvidersRailLayout({
                   : "text-foreground/70 hover:bg-accent/60 hover:text-accent-foreground",
               )}
             >
-              <HarnessIcon harnessId={HARNESS_ICON_ID[state.providerId]} />
+              <HarnessIcon
+                harnessId={providerIdToGuiHarnessId(state.providerId)}
+              />
               <span className="flex-1 truncate">
                 {PROVIDER_DISPLAY_NAMES[state.providerId]}
               </span>
@@ -437,7 +435,7 @@ function ProvidersRailLayout({
         <ProviderDetail
           key={active.providerId}
           state={active}
-          providers={providers}
+          providers={orderedProviders}
         />
       </div>
     </div>
@@ -796,7 +794,7 @@ function TerminalAgentArgsSection({
   const saved = state.terminalAgentArgs;
   const [draft, setDraft] = useState(saved);
 
-  const harnessId = HARNESS_ICON_ID[providerId];
+  const harnessId = providerIdToGuiHarnessId(providerId);
   const supportsTerminalAgent =
     harnessesQuery.data?.harnesses.some(
       (harness) => harness.id === harnessId && harness.modes.includes("tui"),
