@@ -140,6 +140,9 @@ describe("post-v1.0 GUI harness non-breaking v2→v1 downgrade bridges", () => {
     expect(PROVIDER_AUTH_STATUS_SCHEMA_V10.safeParse("configured").success).toBe(
       false,
     );
+    expect(PROVIDER_AUTH_STATUS_SCHEMA_V10.safeParse("unavailable").success).toBe(
+      false,
+    );
 
     const v2Response = providersListResponseSchema.parse({
       providers: [

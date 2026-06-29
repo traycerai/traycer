@@ -241,6 +241,19 @@ const providerCliStateBaseShape = {
   loginCapability: providerLoginCapabilitySchema.nullable().catch(null),
 };
 
+const providerCliStateBaseShapeV10 = {
+  enabled: z.boolean(),
+  disabledBy: providerDisabledBySchema.nullable(),
+  selected: providerSelectionSchema,
+  candidates: z.array(providerCliCandidateSchema),
+  authPending: z.boolean(),
+  checkedAt: z.number().nullable(),
+  apiKey: providerApiKeyStateSchema,
+  terminalAgentArgs: z.string().catch(""),
+  envOverrides: z.array(providerEnvOverrideSchema).catch([]),
+  loginCapability: providerLoginCapabilitySchema.nullable().catch(null),
+};
+
 export const providerCliStateSchemaV20 = z.object({
   providerId: providerIdSchema,
   ...providerCliStateBaseShape,
@@ -269,7 +282,7 @@ export type ProvidersListResponse = ProvidersListResponseV20;
 // them for v1.0 callers.
 export const providerCliStateSchemaV10 = z.object({
   providerId: providerIdSchemaV10,
-  ...providerCliStateBaseShape,
+  ...providerCliStateBaseShapeV10,
   auth: PROVIDER_AUTH_SCHEMA_V10,
 });
 export type ProviderCliStateV10 = z.infer<typeof providerCliStateSchemaV10>;
@@ -284,8 +297,10 @@ export const providersSetSelectionRequestSchema = z.object({
   providerId: providerIdSchema,
   selection: providerSelectionSchema,
 });
-export const providersSetSelectionRequestSchemaV10 =
-  providersSetSelectionRequestSchema.extend({ providerId: providerIdSchemaV10 });
+export const providersSetSelectionRequestSchemaV10 = z.object({
+  providerId: providerIdSchemaV10,
+  selection: providerSelectionSchema,
+});
 export type ProvidersSetSelectionRequest = z.infer<
   typeof providersSetSelectionRequestSchema
 >;
@@ -304,8 +319,10 @@ export const providersAddCustomPathRequestSchema = z.object({
   providerId: providerIdSchema,
   path: z.string().min(1),
 });
-export const providersAddCustomPathRequestSchemaV10 =
-  providersAddCustomPathRequestSchema.extend({ providerId: providerIdSchemaV10 });
+export const providersAddCustomPathRequestSchemaV10 = z.object({
+  providerId: providerIdSchemaV10,
+  path: z.string().min(1),
+});
 export type ProvidersAddCustomPathRequest = z.infer<
   typeof providersAddCustomPathRequestSchema
 >;
@@ -324,10 +341,10 @@ export const providersRemoveCustomPathRequestSchema = z.object({
   providerId: providerIdSchema,
   path: z.string().min(1),
 });
-export const providersRemoveCustomPathRequestSchemaV10 =
-  providersRemoveCustomPathRequestSchema.extend({
-    providerId: providerIdSchemaV10,
-  });
+export const providersRemoveCustomPathRequestSchemaV10 = z.object({
+  providerId: providerIdSchemaV10,
+  path: z.string().min(1),
+});
 export type ProvidersRemoveCustomPathRequest = z.infer<
   typeof providersRemoveCustomPathRequestSchema
 >;
@@ -346,8 +363,10 @@ export const providersSetEnabledRequestSchema = z.object({
   providerId: providerIdSchema,
   enabled: z.boolean(),
 });
-export const providersSetEnabledRequestSchemaV10 =
-  providersSetEnabledRequestSchema.extend({ providerId: providerIdSchemaV10 });
+export const providersSetEnabledRequestSchemaV10 = z.object({
+  providerId: providerIdSchemaV10,
+  enabled: z.boolean(),
+});
 export type ProvidersSetEnabledRequest = z.infer<
   typeof providersSetEnabledRequestSchema
 >;
@@ -366,8 +385,10 @@ export const providersSetApiKeyRequestSchema = z.object({
   providerId: providerIdSchema,
   apiKey: z.string().min(1),
 });
-export const providersSetApiKeyRequestSchemaV10 =
-  providersSetApiKeyRequestSchema.extend({ providerId: providerIdSchemaV10 });
+export const providersSetApiKeyRequestSchemaV10 = z.object({
+  providerId: providerIdSchemaV10,
+  apiKey: z.string().min(1),
+});
 export type ProvidersSetApiKeyRequest = z.infer<
   typeof providersSetApiKeyRequestSchema
 >;
@@ -385,8 +406,9 @@ export type ProvidersSetApiKeyResponse = z.infer<
 export const providersClearApiKeyRequestSchema = z.object({
   providerId: providerIdSchema,
 });
-export const providersClearApiKeyRequestSchemaV10 =
-  providersClearApiKeyRequestSchema.extend({ providerId: providerIdSchemaV10 });
+export const providersClearApiKeyRequestSchemaV10 = z.object({
+  providerId: providerIdSchemaV10,
+});
 export type ProvidersClearApiKeyRequest = z.infer<
   typeof providersClearApiKeyRequestSchema
 >;
@@ -406,10 +428,10 @@ export const providersSetTerminalAgentArgsRequestSchema = z.object({
   // Empty string clears the saved override.
   terminalAgentArgs: z.string(),
 });
-export const providersSetTerminalAgentArgsRequestSchemaV10 =
-  providersSetTerminalAgentArgsRequestSchema.extend({
-    providerId: providerIdSchemaV10,
-  });
+export const providersSetTerminalAgentArgsRequestSchemaV10 = z.object({
+  providerId: providerIdSchemaV10,
+  terminalAgentArgs: z.string(),
+});
 export type ProvidersSetTerminalAgentArgsRequest = z.infer<
   typeof providersSetTerminalAgentArgsRequestSchema
 >;
@@ -430,8 +452,11 @@ export const providersSetEnvOverrideRequestSchema = z.object({
   // null = explicit unset; a string sets the value.
   value: z.string().nullable(),
 });
-export const providersSetEnvOverrideRequestSchemaV10 =
-  providersSetEnvOverrideRequestSchema.extend({ providerId: providerIdSchemaV10 });
+export const providersSetEnvOverrideRequestSchemaV10 = z.object({
+  providerId: providerIdSchemaV10,
+  key: z.string().min(1),
+  value: z.string().nullable(),
+});
 export type ProvidersSetEnvOverrideRequest = z.infer<
   typeof providersSetEnvOverrideRequestSchema
 >;
@@ -450,10 +475,10 @@ export const providersDeleteEnvOverrideRequestSchema = z.object({
   providerId: providerIdSchema,
   key: z.string().min(1),
 });
-export const providersDeleteEnvOverrideRequestSchemaV10 =
-  providersDeleteEnvOverrideRequestSchema.extend({
-    providerId: providerIdSchemaV10,
-  });
+export const providersDeleteEnvOverrideRequestSchemaV10 = z.object({
+  providerId: providerIdSchemaV10,
+  key: z.string().min(1),
+});
 export type ProvidersDeleteEnvOverrideRequest = z.infer<
   typeof providersDeleteEnvOverrideRequestSchema
 >;
@@ -515,8 +540,9 @@ export type ProvidersStartLoginResponse = z.infer<
 export const providersAwaitLoginRequestSchema = z.object({
   providerId: providerIdSchema,
 });
-export const providersAwaitLoginRequestSchemaV10 =
-  providersAwaitLoginRequestSchema.extend({ providerId: providerIdSchemaV10 });
+export const providersAwaitLoginRequestSchemaV10 = z.object({
+  providerId: providerIdSchemaV10,
+});
 export type ProvidersAwaitLoginRequest = z.infer<
   typeof providersAwaitLoginRequestSchema
 >;
