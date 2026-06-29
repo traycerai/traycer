@@ -1,15 +1,10 @@
-import { CheckCheck, RotateCw, XCircle } from "lucide-react";
-import { Fragment, useState, type ReactNode } from "react";
+import { CheckCheck, XCircle } from "lucide-react";
+import { useState, type ReactNode } from "react";
 import type { AutonomousResumeTrigger } from "@traycer/protocol/persistence/epic/content-blocks";
-import {
-  useScrollToChatBlock,
-  type ChatScrollCardKind,
-  type ScrollToChatBlock,
-} from "@/components/chat/chat-scroll-to-block";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
-import { cn, formatSingleLine } from "@/lib/utils";
+import { formatSingleLine } from "@/lib/utils";
 import { AgentReferenceMarkdown } from "./agent-reference-markdown";
 import { SegmentCard } from "./segment-card";
 import { SegmentPanel } from "./segment-panel";
@@ -19,11 +14,10 @@ import { SegmentPanel } from "./segment-panel";
  * naming which backgrounded command/Monitor/subagent completion woke the agent
  * - so the resume reads as a consequence, not an abrupt reply.
  *
- * - Command / monitor triggers with an output file: rendered as expandable
- *   cards that lazy-fetch output on expand.
+ * - Command / monitor triggers: rendered as expandable cards that lazy-fetch
+ *   output on expand when an output file is available.
  * - Subagent triggers with a result summary: rendered as expandable cards
  *   showing the full markdown result.
- * - Triggers without expanded content remain inline in the compact row.
  */
 interface AutonomousResumeSegmentProps {
   triggers: ReadonlyArray<AutonomousResumeTrigger>;
@@ -31,126 +25,20 @@ interface AutonomousResumeSegmentProps {
 
 const RESUME_OUTPUT_FILE_MAX_BYTES = 500_000;
 
-function kindNoun(kind: AutonomousResumeTrigger["kind"]): string {
-  switch (kind) {
-    case "command":
-      return "command";
-    case "monitor":
-      return "monitor";
-    case "subagent":
-      return "subagent";
-  }
-}
-
-function statusVerb(status: AutonomousResumeTrigger["status"]): string {
-  switch (status) {
-    case "completed":
-      return "completed";
-    case "failed":
-      return "failed";
-    case "stopped":
-      return "stopped";
-  }
-}
-
-function cardKindForTrigger(
-  kind: AutonomousResumeTrigger["kind"],
-): ChatScrollCardKind {
-  return kind === "subagent" ? "subagent" : "tool";
-}
-
 function triggerKey(trigger: AutonomousResumeTrigger): string {
   return `${trigger.kind}:${trigger.blockId}:${trigger.title}:${trigger.status}`;
 }
 
-function hasExpandedResumeContent(trigger: AutonomousResumeTrigger): boolean {
-  if (trigger.kind === "subagent") return trigger.summary.trim().length > 0;
-  return trigger.outputFile !== null;
-}
-
 export function AutonomousResumeSegment(props: AutonomousResumeSegmentProps) {
   const { triggers } = props;
-  const scrollToBlock = useScrollToChatBlock();
 
-  const cardTriggers = triggers.filter(hasExpandedResumeContent);
-  const inlineTriggers = triggers.filter((t) => !hasExpandedResumeContent(t));
-
+  if (triggers.length === 0) return null;
   return (
     <div className="flex flex-col gap-2">
-      {inlineTriggers.length > 0 || cardTriggers.length === 0 ? (
-        <div
-          data-testid="autonomous-resume-marker"
-          className={cn(
-            "flex w-fit min-w-0 max-w-full flex-wrap items-center gap-x-1.5 gap-y-0.5",
-            "rounded-md border border-border/40 bg-muted/20 px-2 py-1",
-            "text-ui-xs text-muted-foreground",
-          )}
-        >
-          <RotateCw className="size-3.5 shrink-0" aria-hidden />
-          <span className="shrink-0 font-medium text-foreground/80">
-            Resumed
-          </span>
-          {inlineTriggers.length > 0 ? (
-            <span aria-hidden className="shrink-0 text-muted-foreground/40">
-              ·
-            </span>
-          ) : null}
-          {inlineTriggers.map((trigger, index) => (
-            <Fragment key={triggerKey(trigger)}>
-              {index > 0 ? (
-                <span aria-hidden className="shrink-0 text-muted-foreground/40">
-                  ·
-                </span>
-              ) : null}
-              <ResumeTriggerRef trigger={trigger} onScroll={scrollToBlock} />
-            </Fragment>
-          ))}
-        </div>
-      ) : null}
-      {cardTriggers.map((trigger) => (
+      {triggers.map((trigger) => (
         <ResumeCompletionCard key={triggerKey(trigger)} trigger={trigger} />
       ))}
     </div>
-  );
-}
-
-function ResumeTriggerRef(props: {
-  readonly trigger: AutonomousResumeTrigger;
-  readonly onScroll: ScrollToChatBlock | null;
-}) {
-  const { trigger, onScroll } = props;
-  const title = formatSingleLine(trigger.title, {
-    maxLength: 60,
-    ellipsis: "…",
-  });
-  const content = (
-    <>
-      <span className="text-muted-foreground">{kindNoun(trigger.kind)}</span>{" "}
-      <span className="font-medium text-foreground/85">{title}</span>{" "}
-      <span className="text-muted-foreground">
-        {statusVerb(trigger.status)}
-      </span>
-    </>
-  );
-  // No scroll target (older trigger missing its block id, or no chat tile in
-  // context) → render the reference as inert text rather than a dead button.
-  if (onScroll === null || trigger.blockId.length === 0) {
-    return <span className="min-w-0">{content}</span>;
-  }
-  return (
-    <button
-      type="button"
-      onClick={() =>
-        onScroll(trigger.blockId, cardKindForTrigger(trigger.kind))
-      }
-      className={cn(
-        "-mx-1 min-w-0 rounded px-1 text-left underline-offset-2 transition-colors",
-        "hover:text-foreground hover:underline",
-        "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
-      )}
-    >
-      {content}
-    </button>
   );
 }
 
@@ -198,11 +86,7 @@ function ResumeCompletionCard(props: {
 
   const body = open ? (
     <div className="flex flex-col gap-2">
-      {trigger.kind === "subagent" ? (
-        <ResumeResultPanel result={trigger.summary} />
-      ) : (
-        <ResumeOutputPanel outputFile={trigger.outputFile} enabled={open} />
-      )}
+      <ResumeCompletionCardBody trigger={trigger} enabled={open} />
     </div>
   ) : null;
 
@@ -222,6 +106,25 @@ function ResumeCompletionCard(props: {
         className={undefined}
       />
     </div>
+  );
+}
+
+function ResumeCompletionCardBody(props: {
+  readonly trigger: AutonomousResumeTrigger;
+  readonly enabled: boolean;
+}) {
+  const { trigger } = props;
+  if (trigger.kind === "subagent") {
+    return <ResumeResultPanel result={trigger.summary} />;
+  }
+  if (trigger.outputFile === null) {
+    return <ResumeOutputUnavailablePanel />;
+  }
+  return (
+    <ResumeOutputPanel
+      outputFile={trigger.outputFile}
+      enabled={props.enabled}
+    />
   );
 }
 
@@ -268,8 +171,30 @@ function ResumeResultPanel(props: { readonly result: string }) {
   );
 }
 
+function ResumeOutputUnavailablePanel() {
+  return (
+    <SegmentPanel
+      label="Output"
+      copyValue={null}
+      tone="default"
+      bodyChrome="framed"
+      className={undefined}
+    >
+      <div className="max-h-[min(40vh,24rem)] overflow-auto px-3 py-2">
+        {resumeOutputBody({
+          outputFileAvailable: false,
+          isLoading: false,
+          readError: null,
+          content: null,
+          truncated: false,
+        })}
+      </div>
+    </SegmentPanel>
+  );
+}
+
 function ResumeOutputPanel(props: {
-  readonly outputFile: AutonomousResumeTrigger["outputFile"];
+  readonly outputFile: NonNullable<AutonomousResumeTrigger["outputFile"]>;
   readonly enabled: boolean;
 }) {
   const outputQuery = useResumeOutputFileQuery(props.outputFile, props.enabled);
@@ -282,7 +207,7 @@ function ResumeOutputPanel(props: {
   const copyValue = content !== null && content.length > 0 ? content : null;
   const tone = readError === null ? "default" : "destructive";
   const body = resumeOutputBody({
-    outputFileAvailable: props.outputFile !== null,
+    outputFileAvailable: true,
     isLoading,
     readError,
     content,
@@ -351,7 +276,7 @@ function resumeOutputBody(input: {
 }
 
 function useResumeOutputFileQuery(
-  outputFile: AutonomousResumeTrigger["outputFile"],
+  outputFile: NonNullable<AutonomousResumeTrigger["outputFile"]>,
   enabled: boolean,
 ) {
   const client = useHostClient();
@@ -359,12 +284,12 @@ function useResumeOutputFileQuery(
     client,
     method: "workspace.readFile",
     params: {
-      workspacePath: outputFile?.workspacePath ?? "",
-      filePath: outputFile?.filePath ?? "",
+      workspacePath: outputFile.workspacePath,
+      filePath: outputFile.filePath,
       maxBytes: RESUME_OUTPUT_FILE_MAX_BYTES,
     },
     options: {
-      enabled: enabled && outputFile !== null,
+      enabled,
       staleTime: 30 * 1000,
       retry: false,
     },

@@ -101,7 +101,7 @@ describe("<AutonomousResumeSegment />", () => {
     expect(screen.getByText("Output truncated")).toBeTruthy();
   });
 
-  it("keeps command triggers without output files inline", () => {
+  it("renders command triggers without output files as cards", () => {
     render(
       <AutonomousResumeSegment
         triggers={[
@@ -117,8 +117,35 @@ describe("<AutonomousResumeSegment />", () => {
       />,
     );
 
-    expect(screen.getByTestId("autonomous-resume-marker")).toBeTruthy();
-    expect(screen.queryByText("Command completed")).toBeNull();
+    expect(screen.queryByTestId("autonomous-resume-marker")).toBeNull();
+    expect(screen.getByText("Command completed")).toBeTruthy();
+    expect(hostQueryMock.calls).toHaveLength(0);
+
+    fireEvent.click(screen.getByRole("button", { name: /Command completed/ }));
+
+    expect(screen.getByText("Output")).toBeTruthy();
+    expect(screen.getByText("Output file unavailable.")).toBeTruthy();
+    expect(hostQueryMock.calls).toHaveLength(0);
+  });
+
+  it("renders stopped monitor triggers without output files as cards", () => {
+    render(
+      <AutonomousResumeSegment
+        triggers={[
+          {
+            kind: "monitor",
+            title: "All updates in ~/.traycer/host/dev/host.log",
+            status: "stopped",
+            summary: "Monitor stopped",
+            blockId: "tool-2",
+            outputFile: null,
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.queryByTestId("autonomous-resume-marker")).toBeNull();
+    expect(screen.getAllByText("Monitor stopped").length).toBeGreaterThan(0);
     expect(hostQueryMock.calls).toHaveLength(0);
   });
 });
