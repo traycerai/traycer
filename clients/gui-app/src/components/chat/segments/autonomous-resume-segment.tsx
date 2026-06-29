@@ -1,11 +1,14 @@
 import { CheckCheck, RotateCw, XCircle } from "lucide-react";
-import { Fragment, useState } from "react";
+import { Fragment, useState, type ReactNode } from "react";
 import type { AutonomousResumeTrigger } from "@traycer/protocol/persistence/epic/content-blocks";
 import {
   useScrollToChatBlock,
   type ChatScrollCardKind,
   type ScrollToChatBlock,
 } from "@/components/chat/chat-scroll-to-block";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { useHostQuery } from "@/hooks/host/use-host-query";
+import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { cn, formatSingleLine } from "@/lib/utils";
 import { AgentReferenceMarkdown } from "./agent-reference-markdown";
 import { SegmentCard } from "./segment-card";
@@ -16,13 +19,17 @@ import { SegmentPanel } from "./segment-panel";
  * naming which backgrounded command/Monitor/subagent completion woke the agent
  * - so the resume reads as a consequence, not an abrupt reply.
  *
- * - Command / monitor triggers: rendered inline in the compact "Resumed ·" row
+ * - Command / monitor triggers with an output file: rendered as expandable
+ *   cards that lazy-fetch output on expand.
  * - Subagent triggers with a result summary: rendered as expandable cards
- *   showing the full markdown result (similar to A2A "Received message" cards)
+ *   showing the full markdown result.
+ * - Triggers without expanded content remain inline in the compact row.
  */
 interface AutonomousResumeSegmentProps {
   triggers: ReadonlyArray<AutonomousResumeTrigger>;
 }
+
+const RESUME_OUTPUT_FILE_MAX_BYTES = 500_000;
 
 function kindNoun(kind: AutonomousResumeTrigger["kind"]): string {
   switch (kind) {
@@ -46,19 +53,6 @@ function statusVerb(status: AutonomousResumeTrigger["status"]): string {
   }
 }
 
-function subagentStatusTitle(
-  status: AutonomousResumeTrigger["status"],
-): string {
-  switch (status) {
-    case "completed":
-      return "Subagent completed";
-    case "failed":
-      return "Subagent failed";
-    case "stopped":
-      return "Subagent stopped";
-  }
-}
-
 function cardKindForTrigger(
   kind: AutonomousResumeTrigger["kind"],
 ): ChatScrollCardKind {
@@ -69,22 +63,21 @@ function triggerKey(trigger: AutonomousResumeTrigger): string {
   return `${trigger.kind}:${trigger.blockId}:${trigger.title}:${trigger.status}`;
 }
 
+function hasExpandedResumeContent(trigger: AutonomousResumeTrigger): boolean {
+  if (trigger.kind === "subagent") return trigger.summary.trim().length > 0;
+  return trigger.outputFile !== null;
+}
+
 export function AutonomousResumeSegment(props: AutonomousResumeSegmentProps) {
   const { triggers } = props;
   const scrollToBlock = useScrollToChatBlock();
 
-  // Subagent triggers with a meaningful summary are rendered as expandable
-  // cards. All other triggers remain inline in the compact "Resumed ·" row.
-  const subagentCardTriggers = triggers.filter(
-    (t) => t.kind === "subagent" && t.summary.trim().length > 0,
-  );
-  const inlineTriggers = triggers.filter(
-    (t) => t.kind !== "subagent" || t.summary.trim().length === 0,
-  );
+  const cardTriggers = triggers.filter(hasExpandedResumeContent);
+  const inlineTriggers = triggers.filter((t) => !hasExpandedResumeContent(t));
 
   return (
     <div className="flex flex-col gap-2">
-      {inlineTriggers.length > 0 || subagentCardTriggers.length === 0 ? (
+      {inlineTriggers.length > 0 || cardTriggers.length === 0 ? (
         <div
           data-testid="autonomous-resume-marker"
           className={cn(
@@ -114,8 +107,8 @@ export function AutonomousResumeSegment(props: AutonomousResumeSegmentProps) {
           ))}
         </div>
       ) : null}
-      {subagentCardTriggers.map((trigger) => (
-        <SubagentCompletionCard key={triggerKey(trigger)} trigger={trigger} />
+      {cardTriggers.map((trigger) => (
+        <ResumeCompletionCard key={triggerKey(trigger)} trigger={trigger} />
       ))}
     </div>
   );
@@ -162,10 +155,11 @@ function ResumeTriggerRef(props: {
 }
 
 /**
- * Expandable card for a settled background subagent, showing the full markdown
- * result. Modelled after the A2A "Received message" card.
+ * Expandable card for a settled background task. Subagents render their
+ * markdown result inline; command/monitor triggers fetch their output file on
+ * expand through workspace.readFile.
  */
-function SubagentCompletionCard(props: {
+function ResumeCompletionCard(props: {
   readonly trigger: AutonomousResumeTrigger;
 }) {
   const { trigger } = props;
@@ -184,7 +178,7 @@ function SubagentCompletionCard(props: {
         aria-hidden
       />
       <span className="shrink-0 text-ui-sm font-medium text-foreground/85">
-        {subagentStatusTitle(trigger.status)}
+        {resumeStatusTitle(trigger)}
       </span>
       <span aria-hidden className="shrink-0 text-muted-foreground/40">
         ·
@@ -195,29 +189,20 @@ function SubagentCompletionCard(props: {
     </>
   );
 
-  const preview = (
-    <p className="m-0 line-clamp-2 text-ui-sm leading-6 text-foreground/85">
-      {formatSingleLine(trigger.summary, { maxLength: 180, ellipsis: "…" })}
-    </p>
-  );
+  const preview =
+    trigger.summary.trim().length > 0 ? (
+      <p className="m-0 line-clamp-2 text-ui-sm leading-6 text-foreground/85">
+        {formatSingleLine(trigger.summary, { maxLength: 180, ellipsis: "…" })}
+      </p>
+    ) : null;
 
   const body = open ? (
     <div className="flex flex-col gap-2">
-      <SegmentPanel
-        label="Result"
-        copyValue={trigger.summary}
-        tone="default"
-        bodyChrome="framed"
-        className={undefined}
-      >
-        <div className="max-h-[min(40vh,24rem)] overflow-auto px-3 py-2">
-          <AgentReferenceMarkdown
-            isStreaming={false}
-            markdown={trigger.summary}
-            proseSize="compact"
-          />
-        </div>
-      </SegmentPanel>
+      {trigger.kind === "subagent" ? (
+        <ResumeResultPanel result={trigger.summary} />
+      ) : (
+        <ResumeOutputPanel outputFile={trigger.outputFile} enabled={open} />
+      )}
     </div>
   ) : null;
 
@@ -238,4 +223,150 @@ function SubagentCompletionCard(props: {
       />
     </div>
   );
+}
+
+function resumeStatusTitle(trigger: AutonomousResumeTrigger): string {
+  const noun = resumeKindTitle(trigger.kind);
+  switch (trigger.status) {
+    case "completed":
+      return `${noun} completed`;
+    case "failed":
+      return `${noun} failed`;
+    case "stopped":
+      return `${noun} stopped`;
+  }
+}
+
+function resumeKindTitle(kind: AutonomousResumeTrigger["kind"]): string {
+  switch (kind) {
+    case "command":
+      return "Command";
+    case "monitor":
+      return "Monitor";
+    case "subagent":
+      return "Subagent";
+  }
+}
+
+function ResumeResultPanel(props: { readonly result: string }) {
+  return (
+    <SegmentPanel
+      label="Result"
+      copyValue={props.result}
+      tone="default"
+      bodyChrome="framed"
+      className={undefined}
+    >
+      <div className="max-h-[min(40vh,24rem)] overflow-auto px-3 py-2">
+        <AgentReferenceMarkdown
+          isStreaming={false}
+          markdown={props.result}
+          proseSize="compact"
+        />
+      </div>
+    </SegmentPanel>
+  );
+}
+
+function ResumeOutputPanel(props: {
+  readonly outputFile: AutonomousResumeTrigger["outputFile"];
+  readonly enabled: boolean;
+}) {
+  const outputQuery = useResumeOutputFileQuery(props.outputFile, props.enabled);
+  const content = outputQuery.data?.content ?? null;
+  const readError =
+    outputQuery.data?.error ?? outputQuery.error?.message ?? null;
+  const isLoading =
+    outputQuery.isPending ||
+    (outputQuery.isFetching && outputQuery.data === undefined);
+  const copyValue = content !== null && content.length > 0 ? content : null;
+  const tone = readError === null ? "default" : "destructive";
+  const body = resumeOutputBody({
+    outputFileAvailable: props.outputFile !== null,
+    isLoading,
+    readError,
+    content,
+    truncated: outputQuery.data?.truncated === true,
+  });
+
+  return (
+    <SegmentPanel
+      label="Output"
+      copyValue={copyValue}
+      tone={tone}
+      bodyChrome="framed"
+      className={undefined}
+    >
+      <div className="max-h-[min(40vh,24rem)] overflow-auto px-3 py-2">
+        {body}
+      </div>
+    </SegmentPanel>
+  );
+}
+
+function resumeOutputBody(input: {
+  readonly outputFileAvailable: boolean;
+  readonly isLoading: boolean;
+  readonly readError: string | null;
+  readonly content: string | null;
+  readonly truncated: boolean;
+}): ReactNode {
+  if (!input.outputFileAvailable) {
+    return (
+      <p className="m-0 text-ui-sm text-muted-foreground">
+        Output file unavailable.
+      </p>
+    );
+  }
+  if (input.isLoading) {
+    return (
+      <div className="flex items-center gap-2 text-ui-sm text-muted-foreground">
+        <AgentSpinningDots
+          className={undefined}
+          testId={undefined}
+          variant={undefined}
+        />
+        <span>Fetching output</span>
+      </div>
+    );
+  }
+  if (input.readError !== null) {
+    return <p className="m-0 text-ui-sm text-destructive">{input.readError}</p>;
+  }
+  if (input.content === null || input.content.length === 0) {
+    return <p className="m-0 text-ui-sm text-muted-foreground">No output.</p>;
+  }
+  return (
+    <>
+      <pre className="m-0 whitespace-pre-wrap font-mono text-code-sm text-foreground/90">
+        {input.content}
+      </pre>
+      {input.truncated ? (
+        <div className="mt-2 text-ui-xs text-muted-foreground">
+          Output truncated
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+function useResumeOutputFileQuery(
+  outputFile: AutonomousResumeTrigger["outputFile"],
+  enabled: boolean,
+) {
+  const client = useHostClient();
+  return useHostQuery<HostRpcRegistry, "workspace.readFile">({
+    client,
+    method: "workspace.readFile",
+    params: {
+      workspacePath: outputFile?.workspacePath ?? "",
+      filePath: outputFile?.filePath ?? "",
+      maxBytes: RESUME_OUTPUT_FILE_MAX_BYTES,
+    },
+    options: {
+      enabled: enabled && outputFile !== null,
+      staleTime: 30 * 1000,
+      retry: false,
+    },
+  });
 }

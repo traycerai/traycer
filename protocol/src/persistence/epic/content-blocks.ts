@@ -401,6 +401,14 @@ export const compactionBlockSchema = z.object({
 });
 export type CompactionBlock = z.infer<typeof compactionBlockSchema>;
 
+export const autonomousResumeOutputFileSchema = z.object({
+  workspacePath: z.string(),
+  filePath: z.string(),
+});
+export type AutonomousResumeOutputFile = z.infer<
+  typeof autonomousResumeOutputFileSchema
+>;
+
 // One background task whose terminal settle contributed to waking the agent
 // into an autonomous (no-user-message) turn. `kind`/`status` mirror the live
 // BackgroundItem vocabulary; `title` is the same human label; `summary` is the
@@ -408,12 +416,15 @@ export type CompactionBlock = z.infer<typeof compactionBlockSchema>;
 // originating card's block id (the spawning tool_call / subagent block) so the
 // resume marker can scroll back to it; defaulted for back-compat with any
 // trigger persisted before this field existed (renders as non-clickable).
+// `outputFile` points at an SDK task output file using the existing
+// workspace.readFile address shape; the GUI lazy-fetches it only on expand.
 export const autonomousResumeTriggerSchema = z.object({
   kind: z.enum(["command", "monitor", "subagent"]),
   title: z.string(),
   status: z.enum(["completed", "failed", "stopped"]),
   summary: z.string(),
   blockId: z.string().default(""),
+  outputFile: autonomousResumeOutputFileSchema.nullable().default(null),
 });
 export type AutonomousResumeTrigger = z.infer<
   typeof autonomousResumeTriggerSchema
