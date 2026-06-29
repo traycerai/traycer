@@ -135,6 +135,7 @@ interface FakeBridge {
     (event: unknown, raw: unknown) => Promise<unknown>
   >;
   readonly fanOut: Mock;
+  readonly disposeFns: Array<() => void>;
   readonly options: {
     readonly host: {
       readonly reloadSnapshotFromDisk: Mock;
@@ -154,6 +155,7 @@ function makeBridge(): FakeBridge {
   return {
     handlers,
     fanOut: vi.fn(),
+    disposeFns: [],
     options: {
       host: {
         reloadSnapshotFromDisk: vi.fn(() => Promise.resolve(null)),

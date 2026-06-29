@@ -489,19 +489,24 @@ function clampPercent(percent: number): number {
 
 function emitSnapshot(patch: AppUpdateSnapshotPatch): DesktopAppUpdateSnapshot {
   sequence += 1;
+  const status = patch.status ?? currentSnapshot.status;
+  let downloadProgress: number | null = null;
+  if (status === "downloading") {
+    downloadProgress =
+      patch.downloadProgress === undefined
+        ? currentSnapshot.downloadProgress
+        : patch.downloadProgress;
+  }
   currentSnapshot = {
     ...currentSnapshot,
     sequence,
-    status: patch.status ?? currentSnapshot.status,
+    status,
     installBlockedReason: currentInstallBlockedReason(),
     latestVersion:
       patch.latestVersion === undefined
         ? currentSnapshot.latestVersion
         : patch.latestVersion,
-    downloadProgress:
-      patch.downloadProgress === undefined
-        ? currentSnapshot.downloadProgress
-        : patch.downloadProgress,
+    downloadProgress,
     errorMessage:
       patch.errorMessage === undefined
         ? currentSnapshot.errorMessage

@@ -219,6 +219,40 @@ describe("<HostSettingsPanel /> - mutation flows", () => {
       });
     });
   });
+
+  it("disables advanced install when the registry asset is unavailable", async () => {
+    const installHost = vi.fn(() =>
+      Promise.resolve(makeInstallResult("1.4.2")),
+    );
+    const availableVersions = vi.fn(() =>
+      Promise.resolve(makeUnavailableAvailableSnapshot()),
+    );
+    const { management } = makeManagement({
+      installHost,
+      availableVersions,
+      registryCheck: vi.fn(() =>
+        Promise.resolve<HostRegistryUpdateState>({
+          checkedAt: "2026-05-15T00:00:00Z",
+          latestVersion: "1.4.2",
+          installedVersion: null,
+          updateAvailable: false,
+          reachable: true,
+          errorMessage: null,
+        }),
+      ),
+    });
+
+    renderPanel(makeHost(management, null));
+
+    await openAdvancedDisclosure();
+    expect(
+      await screen.findByText("Build unavailable for this platform."),
+    ).toBeTruthy();
+    const installButton = screen.getByRole("button", { name: "Install" });
+    expect(installButton.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(installButton);
+    expect(installHost).not.toHaveBeenCalled();
+  });
 });
 
 async function openAdvancedDisclosure(): Promise<void> {
@@ -348,6 +382,28 @@ function makeAvailableSnapshot(): HostAvailableSnapshot {
         platformAsset: {
           available: true,
           unavailableReason: null,
+          url: "",
+          sizeBytes: 1024,
+          sha256: "",
+          signatureUrl: "",
+          publicKeyId: "",
+        },
+      },
+    ],
+  };
+}
+
+function makeUnavailableAvailableSnapshot(): HostAvailableSnapshot {
+  const base = makeAvailableSnapshot();
+  const entry = base.versions[0];
+  return {
+    ...base,
+    versions: [
+      {
+        ...entry,
+        platformAsset: {
+          available: false,
+          unavailableReason: "Build unavailable for this platform.",
           url: "",
           sizeBytes: 1024,
           sha256: "",

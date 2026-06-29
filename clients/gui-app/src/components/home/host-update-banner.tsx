@@ -136,6 +136,7 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
 
   return (
     <output
+      aria-label={`Traycer host update available: ${latestVersion}`}
       data-testid="host-update-banner"
       className={cn(
         "flex items-center gap-2 rounded-md border border-sky-500/30 bg-sky-500/10 px-3 py-2 text-ui-sm text-sky-950 dark:text-sky-100",

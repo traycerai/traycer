@@ -63,6 +63,9 @@ export interface HostManagementBridgeSurface {
   registryCheck(input: {
     readonly force: boolean;
   }): Promise<HostRegistryUpdateState>;
+  onRegistryUpdateState(handler: (state: HostRegistryUpdateState) => void): {
+    dispose: () => void;
+  };
   freePortAndRestart(
     input: FreePortAndRestartInput,
   ): Promise<FreePortAndRestartInput>;
@@ -183,6 +186,20 @@ export function buildHostManagementBridge(): HostManagementBridgeSurface {
       ipcRenderer.invoke(RunnerHostInvoke.traycerRegistryCheck, {
         force,
       }) as Promise<HostRegistryUpdateState>,
+    onRegistryUpdateState(handler) {
+      const listener = (_event: IpcRendererEvent, payload: unknown): void => {
+        if (!isHostRegistryUpdateState(payload)) return;
+        handler(payload);
+      };
+      ipcRenderer.on(RunnerHostEvent.hostRegistryUpdateStateChange, listener);
+      return {
+        dispose: () =>
+          ipcRenderer.removeListener(
+            RunnerHostEvent.hostRegistryUpdateStateChange,
+            listener,
+          ),
+      };
+    },
     freePortAndRestart: (input) =>
       ipcRenderer.invoke(
         RunnerHostInvoke.traycerFreePortAndRestart,
@@ -201,6 +218,25 @@ export function buildHostManagementBridge(): HostManagementBridgeSurface {
         customName,
       }) as Promise<HostNameSettings>,
   };
+}
+
+function isHostRegistryUpdateState(
+  value: unknown,
+): value is HostRegistryUpdateState {
+  if (value === null || typeof value !== "object") return false;
+  const candidate = value as Record<string, unknown>;
+  const checkedAt = candidate.checkedAt;
+  const latestVersion = candidate.latestVersion;
+  const installedVersion = candidate.installedVersion;
+  const errorMessage = candidate.errorMessage;
+  return (
+    (typeof checkedAt === "string" || checkedAt === null) &&
+    (typeof latestVersion === "string" || latestVersion === null) &&
+    (typeof installedVersion === "string" || installedVersion === null) &&
+    typeof candidate.updateAvailable === "boolean" &&
+    typeof candidate.reachable === "boolean" &&
+    (typeof errorMessage === "string" || errorMessage === null)
+  );
 }
 
 /**

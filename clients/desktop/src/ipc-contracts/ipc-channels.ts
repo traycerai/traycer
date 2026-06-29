@@ -209,6 +209,11 @@ export const RunnerHostEvent = {
   // `HostTrayCommandListener`. Payloads match the shared
   // `HostTrayCommand` union.
   hostTrayCommand: "runnerHost:event:host:trayCommand",
+  // Main-process registry refreshes (launch probe, auto-update reconcile,
+  // renderer forced checks) fan out here so already-mounted renderer update
+  // surfaces can keep their TanStack Query cache in lockstep.
+  hostRegistryUpdateStateChange:
+    "runnerHost:event:host:registryUpdateStateChange",
 } as const;
 
 /**

@@ -1,6 +1,7 @@
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import type {
   DesktopAppUpdatesBridge,
+  DesktopHostRegistryUpdatesBridge,
   DesktopMenuBridge,
   DesktopPowerBridge,
   DesktopSupportBridge,
@@ -33,6 +34,14 @@ export function resolveDesktopPowerBridge(
   const value: unknown = Reflect.get(runnerHost, "power");
   return isDesktopPowerBridge(value) ? value : null;
 }
+
+export function resolveDesktopHostRegistryUpdatesBridge(
+  runnerHost: IRunnerHost,
+): DesktopHostRegistryUpdatesBridge | null {
+  const value: unknown = Reflect.get(runnerHost, "hostRegistryUpdates");
+  return isDesktopHostRegistryUpdatesBridge(value) ? value : null;
+}
+
 function isDesktopMenuBridge(value: unknown): value is DesktopMenuBridge {
   return isRecord(value) && typeof value.onCommand === "function";
 }
@@ -61,6 +70,12 @@ function isDesktopAppUpdatesBridge(
 
 function isDesktopPowerBridge(value: unknown): value is DesktopPowerBridge {
   return isRecord(value) && typeof value.setSleepBlocked === "function";
+}
+
+function isDesktopHostRegistryUpdatesBridge(
+  value: unknown,
+): value is DesktopHostRegistryUpdatesBridge {
+  return isRecord(value) && typeof value.onChange === "function";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
