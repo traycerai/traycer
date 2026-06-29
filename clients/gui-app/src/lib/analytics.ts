@@ -10,6 +10,7 @@ export enum AnalyticsEvent {
   CommandPaletteOpened = "command_palette_opened",
   TerminalOpened = "terminal_opened",
   HarnessChanged = "harness_changed",
+  HistoryNavigationUsed = "history_navigation_used",
 }
 
 export class Analytics {
