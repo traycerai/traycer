@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { useDesktopAppUpdates } from "@/hooks/runner/use-desktop-app-updates";
@@ -195,6 +195,17 @@ function AppUpdateActionToastContent(props: {
   readonly actionLabel: string;
   readonly onAction: () => void;
 }) {
+  const actionHandledRef = useRef(false);
+  const [actionHandled, setActionHandled] = useState(false);
+
+  function handleAction(): void {
+    if (actionHandledRef.current) return;
+    actionHandledRef.current = true;
+    setActionHandled(true);
+    toast.dismiss(APP_UPDATE_TOAST_ID);
+    props.onAction();
+  }
+
   return (
     <div className="flex items-center gap-4">
       <div className="min-w-0 flex-1">
@@ -206,7 +217,8 @@ function AppUpdateActionToastContent(props: {
           type="button"
           size="sm"
           className="w-full min-w-max"
-          onClick={props.onAction}
+          disabled={actionHandled}
+          onClick={handleAction}
         >
           {props.actionLabel}
         </Button>

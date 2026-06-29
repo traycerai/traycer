@@ -414,10 +414,14 @@ describe("desktop app update UI", () => {
     screen.getByText("Update available");
     screen.getByText("Version 1.2.3 is ready to download.");
 
-    const downloadButton = screen.getByRole("button", { name: "Download" });
+    const downloadButton = screen.getByRole("button", {
+      name: "Download",
+    });
     const laterButton = screen.getByRole("button", { name: "Later" });
     fireEvent.click(downloadButton);
+    fireEvent.click(downloadButton);
     expect(bridge.downloadUpdate).toHaveBeenCalledTimes(1);
+    expect(downloadButton.hasAttribute("disabled")).toBe(true);
     fireEvent.click(laterButton);
     expect(toastMock.dismiss).toHaveBeenCalledWith("traycer-app-update");
   });
