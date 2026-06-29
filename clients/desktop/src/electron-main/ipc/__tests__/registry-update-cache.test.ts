@@ -52,6 +52,40 @@ const ORIGINAL_HOME = process.env.HOME;
 const ORIGINAL_USERPROFILE = process.env.USERPROFILE;
 let workHome: string;
 
+interface RegistryProbeFixture {
+  readonly manifest: RegistryManifestFixture;
+  readonly platformKey: string;
+  readonly manifestUrl: string;
+}
+
+interface RegistryManifestFixture {
+  readonly schemaVersion: 1;
+  readonly generatedAt: string;
+  readonly latest: string;
+  readonly versions: readonly RegistryVersionFixture[];
+}
+
+interface RegistryVersionFixture {
+  readonly version: string;
+  readonly releasedAt: string;
+  readonly releaseNotesUrl: string;
+  readonly yanked: boolean;
+  readonly deprecationReason: string | null;
+  readonly requiredCliVersion: string | null;
+  readonly platforms: Readonly<Record<string, RegistryPlatformAssetFixture>>;
+}
+
+interface RegistryPlatformAssetFixture {
+  readonly available: boolean;
+  readonly unavailableReason: string | null;
+  readonly url: string;
+  readonly sizeBytes: number;
+  readonly sha256: string;
+  readonly signatureUrl: string;
+  readonly signatureAlgorithm: "minisign";
+  readonly publicKeyId: string;
+}
+
 beforeEach(() => {
   workHome = mkdtempSync(join(tmpdir(), "traycer-registry-cache-"));
   process.env.HOME = workHome;
@@ -102,9 +136,10 @@ function registryProbeResult(
   latest: string,
   assetAvailable: boolean,
   unavailableReason: string | null,
-): unknown {
+): RegistryProbeFixture {
   return {
     manifest: {
+      schemaVersion: 1,
       generatedAt: "2026-05-15T00:00:00Z",
       latest,
       versions: [registryVersion(latest, assetAvailable, unavailableReason)],
@@ -118,13 +153,14 @@ function registryVersion(
   version: string,
   assetAvailable: boolean,
   unavailableReason: string | null,
-): unknown {
+): RegistryVersionFixture {
   return {
     version,
     releasedAt: "2026-05-15T00:00:00Z",
     releaseNotesUrl: "https://example.invalid/release-notes",
     yanked: false,
     deprecationReason: null,
+    requiredCliVersion: null,
     platforms: {
       "darwin-arm64": {
         available: assetAvailable,
@@ -133,6 +169,7 @@ function registryVersion(
         sizeBytes: 1024,
         sha256: "abc",
         signatureUrl: "https://example.invalid/host.tar.gz.minisig",
+        signatureAlgorithm: "minisign",
         publicKeyId: "test-key",
       },
     },
@@ -175,17 +212,6 @@ function deferred<T>(): {
     resolveValue = resolve;
   });
   return { promise, resolve: resolveValue };
-}
-
-async function waitForCallCount(
-  mock: { readonly mock: { readonly calls: readonly unknown[] } },
-  count: number,
-): Promise<void> {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    if (mock.mock.calls.length >= count) return;
-    await new Promise((resolve) => setTimeout(resolve, 0));
-  }
-  expect(mock.mock.calls.length).toBeGreaterThanOrEqual(count);
 }
 
 // Pre-Ticket 398e84f4 cache layout. Used to assert that an upgraded
@@ -366,10 +392,14 @@ describe("refreshRegistryUpdateState - launch-time probe", () => {
 
   it("serializes concurrent registry refreshes", async () => {
     writeInstallRecord("production", "1.4.1");
-    const firstProbe = deferred<unknown>();
+    const firstProbe = deferred<RegistryProbeFixture>();
+    const firstProbeStarted = deferred<void>();
     const probeSpy = vi
       .fn()
-      .mockReturnValueOnce(firstProbe.promise)
+      .mockImplementationOnce(() => {
+        firstProbeStarted.resolve(undefined);
+        return firstProbe.promise;
+      })
       .mockResolvedValueOnce(registryProbeResult("1.4.2", true, null));
     vi.doMock("../../cli/traycer-cli", () => ({
       runTraycerCliJson: probeSpy,
@@ -380,7 +410,7 @@ describe("refreshRegistryUpdateState - launch-time probe", () => {
       await import("../host-management-ipc");
 
     const first = refreshRegistryUpdateState({ force: true });
-    await waitForCallCount(probeSpy, 1);
+    await firstProbeStarted.promise;
     const second = refreshRegistryUpdateState({ force: true });
 
     expect(probeSpy).toHaveBeenCalledTimes(1);

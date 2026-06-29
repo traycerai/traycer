@@ -492,10 +492,11 @@ function emitSnapshot(patch: AppUpdateSnapshotPatch): DesktopAppUpdateSnapshot {
   const status = patch.status ?? currentSnapshot.status;
   let downloadProgress: number | null = null;
   if (status === "downloading") {
-    downloadProgress =
+    const nextDownloadProgress =
       patch.downloadProgress === undefined
         ? currentSnapshot.downloadProgress
         : patch.downloadProgress;
+    downloadProgress = nextDownloadProgress ?? 0;
   }
   currentSnapshot = {
     ...currentSnapshot,

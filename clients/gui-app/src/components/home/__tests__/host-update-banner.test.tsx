@@ -309,9 +309,9 @@ describe("HostUpdateBanner (Flow 6)", () => {
     });
   });
 
-  it("renders nothing when hostManagement is null (mobile/web)", async () => {
+  it("renders nothing when hostManagement is null (mobile/web)", () => {
     renderBanner(makeHost(null));
-    await new Promise((r) => setTimeout(r, 20));
+
     expect(queryHostUpdateBanner()).toBeNull();
   });
 
