@@ -280,7 +280,7 @@ export type ProvidersListResponse = ProvidersListResponseV20;
 // Frozen protocol-v1.0 provider state + list response. The v2.0 line of
 // `providers.list` adds ACP GUI harness providers; the v2→v1 bridge filters
 // them for v1.0 callers.
-export const providerCliStateSchemaV10 = z.object({
+export const providerCliStateSchemaV10 = z.strictObject({
   providerId: providerIdSchemaV10,
   ...providerCliStateBaseShapeV10,
   auth: PROVIDER_AUTH_SCHEMA_V10,
@@ -297,7 +297,7 @@ export const providersSetSelectionRequestSchema = z.object({
   providerId: providerIdSchema,
   selection: providerSelectionSchema,
 });
-export const providersSetSelectionRequestSchemaV10 = z.object({
+export const providersSetSelectionRequestSchemaV10 = z.strictObject({
   providerId: providerIdSchemaV10,
   selection: providerSelectionSchema,
 });
@@ -319,7 +319,7 @@ export const providersAddCustomPathRequestSchema = z.object({
   providerId: providerIdSchema,
   path: z.string().min(1),
 });
-export const providersAddCustomPathRequestSchemaV10 = z.object({
+export const providersAddCustomPathRequestSchemaV10 = z.strictObject({
   providerId: providerIdSchemaV10,
   path: z.string().min(1),
 });
@@ -341,7 +341,7 @@ export const providersRemoveCustomPathRequestSchema = z.object({
   providerId: providerIdSchema,
   path: z.string().min(1),
 });
-export const providersRemoveCustomPathRequestSchemaV10 = z.object({
+export const providersRemoveCustomPathRequestSchemaV10 = z.strictObject({
   providerId: providerIdSchemaV10,
   path: z.string().min(1),
 });
@@ -363,7 +363,7 @@ export const providersSetEnabledRequestSchema = z.object({
   providerId: providerIdSchema,
   enabled: z.boolean(),
 });
-export const providersSetEnabledRequestSchemaV10 = z.object({
+export const providersSetEnabledRequestSchemaV10 = z.strictObject({
   providerId: providerIdSchemaV10,
   enabled: z.boolean(),
 });
@@ -385,7 +385,7 @@ export const providersSetApiKeyRequestSchema = z.object({
   providerId: providerIdSchema,
   apiKey: z.string().min(1),
 });
-export const providersSetApiKeyRequestSchemaV10 = z.object({
+export const providersSetApiKeyRequestSchemaV10 = z.strictObject({
   providerId: providerIdSchemaV10,
   apiKey: z.string().min(1),
 });
@@ -406,7 +406,7 @@ export type ProvidersSetApiKeyResponse = z.infer<
 export const providersClearApiKeyRequestSchema = z.object({
   providerId: providerIdSchema,
 });
-export const providersClearApiKeyRequestSchemaV10 = z.object({
+export const providersClearApiKeyRequestSchemaV10 = z.strictObject({
   providerId: providerIdSchemaV10,
 });
 export type ProvidersClearApiKeyRequest = z.infer<
@@ -428,7 +428,7 @@ export const providersSetTerminalAgentArgsRequestSchema = z.object({
   // Empty string clears the saved override.
   terminalAgentArgs: z.string(),
 });
-export const providersSetTerminalAgentArgsRequestSchemaV10 = z.object({
+export const providersSetTerminalAgentArgsRequestSchemaV10 = z.strictObject({
   providerId: providerIdSchemaV10,
   terminalAgentArgs: z.string(),
 });
@@ -452,7 +452,7 @@ export const providersSetEnvOverrideRequestSchema = z.object({
   // null = explicit unset; a string sets the value.
   value: z.string().nullable(),
 });
-export const providersSetEnvOverrideRequestSchemaV10 = z.object({
+export const providersSetEnvOverrideRequestSchemaV10 = z.strictObject({
   providerId: providerIdSchemaV10,
   key: z.string().min(1),
   value: z.string().nullable(),
@@ -475,7 +475,7 @@ export const providersDeleteEnvOverrideRequestSchema = z.object({
   providerId: providerIdSchema,
   key: z.string().min(1),
 });
-export const providersDeleteEnvOverrideRequestSchemaV10 = z.object({
+export const providersDeleteEnvOverrideRequestSchemaV10 = z.strictObject({
   providerId: providerIdSchemaV10,
   key: z.string().min(1),
 });
@@ -540,7 +540,7 @@ export type ProvidersStartLoginResponse = z.infer<
 export const providersAwaitLoginRequestSchema = z.object({
   providerId: providerIdSchema,
 });
-export const providersAwaitLoginRequestSchemaV10 = z.object({
+export const providersAwaitLoginRequestSchemaV10 = z.strictObject({
   providerId: providerIdSchemaV10,
 });
 export type ProvidersAwaitLoginRequest = z.infer<

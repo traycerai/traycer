@@ -14,6 +14,7 @@ import {
 import {
   PROVIDER_AUTH_STATUS_SCHEMA,
   PROVIDER_AUTH_STATUS_SCHEMA_V10,
+  providerCliStateSchemaV10,
   providersListResponseSchema,
   providersListResponseSchemaV10,
   providersSetApiKeyResponseSchemaV10,
@@ -195,10 +196,32 @@ describe("post-v1.0 GUI harness non-breaking v2→v1 downgrade bridges", () => {
 
   it("rejects post-v1.0 provider mutation requests during v2→v1 downgrade", () => {
     expect(
+      providerCliStateSchemaV10.safeParse({
+        ...providerState("cursor", "unknown"),
+        futureField: true,
+      }).success,
+    ).toBe(false);
+
+    expect(
       providersSetApiKeyDowngradeV2ToV1.downgradeRequest({
         providerId: "grok",
         apiKey: "grok-key",
       }),
+    ).toMatchObject({
+      ok: false,
+      error: { code: "DOWNGRADE_UNSUPPORTED" },
+    });
+
+    const requestWithFutureField = Object.freeze({
+      providerId: "cursor",
+      apiKey: "cursor-key",
+      futureField: true,
+    });
+
+    expect(
+      providersSetApiKeyDowngradeV2ToV1.downgradeRequest(
+        requestWithFutureField,
+      ),
     ).toMatchObject({
       ok: false,
       error: { code: "DOWNGRADE_UNSUPPORTED" },
