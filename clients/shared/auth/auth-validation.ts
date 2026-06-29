@@ -175,7 +175,8 @@ type UserFetchResult =
   | {
       readonly kind: "failed";
       readonly result:
-        { readonly kind: "rejected" } | { readonly kind: "network-error" };
+        | { readonly kind: "rejected" }
+        | { readonly kind: "network-error" };
     };
 
 async function fetchUserResponse(
