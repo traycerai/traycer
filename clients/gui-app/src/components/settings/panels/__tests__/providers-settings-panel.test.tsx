@@ -1,5 +1,6 @@
 import "../../../../../__tests__/test-browser-apis";
 import type {
+  ProviderAuth,
   ProviderCliCandidate,
   ProviderCliState,
   ProviderSelection,
@@ -224,6 +225,19 @@ function providerState(input: {
   };
 }
 
+function providerStateWithAuth(
+  input: {
+    readonly providerId: ProviderCliState["providerId"];
+    readonly selected: ProviderSelection;
+    readonly candidates: readonly ProviderCliCandidate[];
+    readonly envOverrides: ProviderCliState["envOverrides"];
+  },
+  auth: ProviderAuth,
+  authPending: boolean,
+): ProviderCliState {
+  return { ...providerState(input), auth, authPending };
+}
+
 describe("<ProvidersSettingsPanel />", () => {
   beforeEach(() => {
     providerMocks.listResult.data = {
@@ -356,6 +370,72 @@ describe("<ProvidersSettingsPanel />", () => {
       "Kilo Code",
       "Qwen Code",
     ]);
+  });
+
+  it("renders configured, unavailable, and pending auth statuses", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        providerStateWithAuth(
+          {
+            providerId: "codex",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+          },
+          {
+            status: "configured",
+            badgeText: "Codex API Key",
+            label: null,
+            detail: null,
+          },
+          false,
+        ),
+        providerStateWithAuth(
+          {
+            providerId: "cursor",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+          },
+          {
+            status: "unavailable",
+            badgeText: null,
+            label: null,
+            detail: "network failed",
+          },
+          false,
+        ),
+        providerStateWithAuth(
+          {
+            providerId: "qwen",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+          },
+          {
+            status: "authenticated",
+            badgeText: null,
+            label: "Authenticated as qwen@example.test",
+            detail: null,
+          },
+          true,
+        ),
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(screen.getByText("Configured, not verified")).toBeDefined();
+
+    fireEvent.click(screen.getByRole("button", { name: "Cursor" }));
+    expect(screen.getByText("Could not check account status")).toBeDefined();
+
+    fireEvent.click(screen.getByRole("button", { name: "Qwen Code" }));
+    expect(screen.getByText("Checking account")).toBeDefined();
   });
 
   it("lists OpenCode CLI candidates for OpenRouter and mutates OpenRouter selection", () => {
