@@ -377,12 +377,20 @@ describe("<ProviderReauthBanner />", () => {
     expect(screen.getByRole("button", { name: "Save" })).toBeDefined();
   });
 
-  it("shows a no-method stub for an API-key-only provider (Cursor) with no OAuth", () => {
+  it("offers the paste form for an API-key-only provider (Cursor) with no OAuth", () => {
     render(<ProviderReauthBanner providerId="cursor" state={cursorState()} />);
 
-    // No paste form, no OAuth button - keys are configured in Settings.
-    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    expect(screen.getByPlaceholderText("Paste your API key")).toBeDefined();
+    expect(screen.getByRole("button", { name: "Save" })).toBeDefined();
     expect(screen.queryByRole("button", { name: /Authenticate/ })).toBeNull();
-    expect(screen.getByText(/Reconnect .* from its CLI/)).toBeDefined();
+
+    fireEvent.change(screen.getByPlaceholderText("Paste your API key"), {
+      target: { value: "  cursor-key  " },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(mocks.setApiKeyMutate).toHaveBeenCalledWith(
+      { providerId: "cursor", apiKey: "cursor-key" },
+      expect.anything(),
+    );
   });
 });
