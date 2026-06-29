@@ -10,11 +10,12 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
 import { LivePulse } from "@/components/ui/live-pulse";
 import { cn } from "@/lib/utils";
-import { TraycerMarkdown } from "@/markdown/traycer-markdown";
 import { useSubagentOpenStore } from "@/stores/chats/subagent-open-store";
+import { AgentReferenceMarkdown } from "./agent-reference-markdown";
 import { SubagentAvatar } from "./subagent-avatar";
 import { ElapsedTime } from "./segment-elapsed";
 import { SegmentCard } from "./segment-card";
+import { SegmentPanel } from "./segment-panel";
 import { SegmentRow } from "./segment-row";
 import { SegmentEndStateBadge } from "./segment-end-state-badge";
 import type { SegmentEndState } from "@/stores/composer/chat-store";
@@ -154,21 +155,7 @@ function CompactSubagentSegment(props: CompactSubagentSegmentProps) {
         </div>
       ) : null}
       {result !== null ? (
-        <div className="flex flex-col gap-1">
-          <span className="select-none font-medium uppercase text-overline text-muted-foreground/80">
-            Result
-          </span>
-          <TraycerMarkdown
-            className={null}
-            proseSize="compact"
-            components={null}
-            remarkPlugins={null}
-            rehypePlugins={null}
-            isStreaming={isStreaming}
-          >
-            {result}
-          </TraycerMarkdown>
-        </div>
+        <SubagentResultPanel result={result} isStreaming={isStreaming} />
       ) : null}
     </div>
   );
@@ -406,23 +393,33 @@ function SubagentDetails(props: SubagentDetailsProps) {
         </div>
       ) : null}
       {result !== null ? (
-        <div className="flex flex-col gap-1">
-          <span className="select-none font-medium uppercase text-overline text-muted-foreground/80">
-            Result
-          </span>
-          <TraycerMarkdown
-            className={null}
-            proseSize="compact"
-            components={null}
-            remarkPlugins={null}
-            rehypePlugins={null}
-            isStreaming={isStreaming}
-          >
-            {result}
-          </TraycerMarkdown>
-        </div>
+        <SubagentResultPanel result={result} isStreaming={isStreaming} />
       ) : null}
     </div>
+  );
+}
+
+function SubagentResultPanel(props: {
+  readonly result: string;
+  readonly isStreaming: boolean;
+}) {
+  const { isStreaming, result } = props;
+  return (
+    <SegmentPanel
+      label="Result"
+      copyValue={result}
+      tone="default"
+      bodyChrome="framed"
+      className={undefined}
+    >
+      <div className="max-h-[min(40vh,24rem)] overflow-auto px-3 py-2">
+        <AgentReferenceMarkdown
+          isStreaming={isStreaming}
+          markdown={result}
+          proseSize="compact"
+        />
+      </div>
+    </SegmentPanel>
   );
 }
 
