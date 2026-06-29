@@ -87,4 +87,27 @@ describe("buildEpicMentionSuggestionsFromTasks", () => {
       label: "Untitled task",
     });
   });
+
+  it("keeps a literal Untitled epic title unchanged", () => {
+    const [entry] = buildEpicMentionSuggestionsFromTasks(
+      [
+        task(
+          epic({
+            id: "task-1",
+            title: "Untitled epic",
+            initialUserPrompt: "",
+            updatedAt: 10,
+          }),
+        ),
+      ],
+      "",
+      25,
+    );
+
+    expect(entry).toMatchObject({
+      id: "epic:task-1",
+      token: "epic:task-1",
+      label: "Untitled epic",
+    });
+  });
 });

@@ -25,17 +25,12 @@ import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import type { RequestOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import { mentionAttachmentFromSuggestion } from "./attachments";
+import { taskMentionQueryForRequest } from "./task-mention-helpers";
 
 const MENU_ICON_CLASS = "size-4 shrink-0 text-muted-foreground";
 const EMPTY_MENU_ENTRIES: ReadonlyArray<MentionMenuEntry> = [];
 const EMPTY_WORKSPACE_REQUESTS: ReadonlyArray<MentionWorkspaceRequest> = [];
 const EMPTY_EPIC_REQUESTS: ReadonlyArray<MentionEpicRequest> = [];
-const TASK_PROVIDER_QUERY_ALIASES: ReadonlySet<string> = new Set([
-  "task",
-  "tasks",
-  "epic",
-  "epics",
-]);
 
 export type MentionProviderId =
   | "files"
@@ -928,15 +923,10 @@ function epicTaskRequest(
   return {
     method: "epic.mentionEpics",
     params: {
-      query: taskProviderMentionQuery(context.query),
+      query: taskMentionQueryForRequest(context.query),
       limit: context.limit,
     },
   };
-}
-
-function taskProviderMentionQuery(query: string): string {
-  const normalizedQuery = query.trim().toLowerCase();
-  return TASK_PROVIDER_QUERY_ALIASES.has(normalizedQuery) ? "" : query.trim();
 }
 
 function gitMethodForStep(stepId: string): WorkspaceGitMentionMethod {

@@ -31,7 +31,8 @@ import {
   type MentionWorkspaceRequest,
 } from "@/lib/composer/mentions";
 import { buildEpicMentionSuggestionsFromTasks } from "@/lib/composer/mentions/local-epic-suggestions";
-import { displayTitle, UNTITLED_EPIC_TITLE } from "@/lib/display-title";
+import { taskMentionTitleFromRawTitle } from "@/lib/composer/mentions/task-mention-helpers";
+import { displayTitle } from "@/lib/display-title";
 import type {
   EpicChatMentionEntry,
   EpicMentionEntry,
@@ -49,7 +50,6 @@ const EMPTY_WORKSPACE_REQUESTS: ReadonlyArray<MentionWorkspaceRequest> = [];
 const EMPTY_EPIC_REQUESTS: ReadonlyArray<MentionEpicRequest> = [];
 const EMPTY_WORKSPACE_ENTRIES: ReadonlyArray<WorkspaceEntry> = [];
 const EMPTY_EPIC_ENTRIES: ReadonlyArray<EpicMentionEntry> = [];
-const UNTITLED_TASK_TITLE = "Untitled task";
 
 export interface UseMentionItemsParams {
   readonly pickerStore: ComposerPickerStore;
@@ -208,7 +208,6 @@ export function useMentionItems(params: UseMentionItemsParams): void {
     for (const task of cachedEpicTasks) {
       const light = task.epic?.light;
       if (light === null || light === undefined) continue;
-      if (light.title.length === 0) continue;
       titles.set(light.id, light.title);
     }
     return titles;
@@ -220,13 +219,9 @@ export function useMentionItems(params: UseMentionItemsParams): void {
       const normalizedEntry = normalizeTaskMentionEntry(entry);
       if (normalizedEntry.kind !== "epic-artifact") return normalizedEntry;
       const cachedTitle = epicTitleByIdFromCache.get(entry.epicId);
-      if (
-        cachedTitle === undefined ||
-        normalizedEntry.epicTitle === cachedTitle
-      ) {
-        return normalizedEntry;
-      }
-      const epicTitle = normalizeTaskTitleText(cachedTitle);
+      if (cachedTitle === undefined) return normalizedEntry;
+      const epicTitle = taskMentionTitle(cachedTitle);
+      if (normalizedEntry.epicTitle === epicTitle) return normalizedEntry;
       return {
         ...normalizedEntry,
         epicTitle,
@@ -471,59 +466,33 @@ export function mergeTaskAndArtifactMentionEntries(
     return EMPTY_EPIC_ENTRIES;
   }
 
-  const merged: EpicMentionEntry[] = [];
-  const seenTaskIds = new Set<string>();
+  const normalizedLocalEntries = localTaskEntries.map(
+    normalizeTaskMentionEntry,
+  );
+  const seenTaskIds = normalizedLocalEntries.reduce((ids, entry) => {
+    if (entry.kind === "epic") ids.add(entry.id);
+    return ids;
+  }, new Set<string>());
+  const normalizedCloudEntries = cloudAndArtifactEntries
+    .map(normalizeTaskMentionEntry)
+    .filter((entry) => {
+      if (entry.kind !== "epic") return true;
+      if (seenTaskIds.has(entry.id)) return false;
+      seenTaskIds.add(entry.id);
+      return true;
+    });
 
-  for (const entry of localTaskEntries) {
-    const normalized = normalizeTaskMentionEntry(entry);
-    merged.push(normalized);
-    if (normalized.kind === "epic") seenTaskIds.add(normalized.id);
-  }
-
-  for (const entry of cloudAndArtifactEntries) {
-    const normalized = normalizeTaskMentionEntry(entry);
-    if (normalized.kind === "epic" && seenTaskIds.has(normalized.id)) {
-      continue;
-    }
-    merged.push(normalized);
-    if (normalized.kind === "epic") seenTaskIds.add(normalized.id);
-  }
-
+  const merged: ReadonlyArray<EpicMentionEntry> = [
+    ...normalizedLocalEntries,
+    ...normalizedCloudEntries,
+  ];
   return merged.length === 0 ? EMPTY_EPIC_ENTRIES : merged;
 }
 
 function normalizeTaskMentionEntry(entry: EpicMentionEntry): EpicMentionEntry {
-  if (entry.kind === "epic") {
-    const label = normalizeTaskTitleText(entry.label);
-    return label === entry.label ? entry : { ...entry, label };
-  }
-
-  if (entry.kind === "epic-artifact") {
-    const epicTitle = normalizeTaskTitleText(entry.epicTitle);
-    const description =
-      entry.description === entry.epicTitle
-        ? epicTitle
-        : normalizeTaskTitleText(entry.description);
-    return epicTitle === entry.epicTitle && description === entry.description
-      ? entry
-      : { ...entry, epicTitle, description };
-  }
-
-  const epicTitle = normalizeTaskTitleText(entry.epicTitle);
-  const description =
-    entry.description === entry.epicTitle
-      ? epicTitle
-      : normalizeTaskTitleText(entry.description);
-  return epicTitle === entry.epicTitle && description === entry.description
-    ? entry
-    : { ...entry, epicTitle, description };
+  return entry;
 }
 
 function taskMentionTitle(rawTitle: string): string {
-  const title = displayTitle(rawTitle, "epic");
-  return normalizeTaskTitleText(title);
-}
-
-function normalizeTaskTitleText(title: string): string {
-  return title === UNTITLED_EPIC_TITLE ? UNTITLED_TASK_TITLE : title;
+  return taskMentionTitleFromRawTitle(rawTitle);
 }

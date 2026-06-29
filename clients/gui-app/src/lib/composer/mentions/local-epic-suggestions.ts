@@ -4,15 +4,10 @@ import type {
 } from "@traycer/protocol/host/epic/unary-schemas";
 import type { EpicLight } from "@traycer/protocol/host/epic/unary-schemas";
 import { isSubsequence } from "@traycer/protocol/utils/text/fuzzy";
-import { epicDisplayTitle, UNTITLED_EPIC_TITLE } from "@/lib/display-title";
-
-const UNTITLED_TASK_TITLE = "Untitled task";
-const TASK_QUERY_ALIASES: ReadonlySet<string> = new Set([
-  "task",
-  "tasks",
-  "epic",
-  "epics",
-]);
+import {
+  isTaskMentionAliasQuery,
+  taskMentionDisplayTitle,
+} from "./task-mention-helpers";
 
 export function buildEpicMentionSuggestionsFromTasks(
   tasks: ReadonlyArray<TaskLight>,
@@ -67,7 +62,7 @@ function scoreEpic(epic: EpicLight, normalizedQuery: string): number | null {
   if (label === normalizedQuery || id === normalizedQuery) return 0;
   if (label.startsWith(normalizedQuery)) return 100;
   if (label.includes(normalizedQuery)) return 200;
-  if (TASK_QUERY_ALIASES.has(normalizedQuery)) return 250;
+  if (isTaskMentionAliasQuery(normalizedQuery)) return 250;
   if (id.includes(normalizedQuery)) return 300;
   if (
     isSubsequence(normalizedQuery, label) ||
@@ -76,11 +71,6 @@ function scoreEpic(epic: EpicLight, normalizedQuery: string): number | null {
     return 400 + label.length;
   }
   return null;
-}
-
-function taskMentionDisplayTitle(epic: EpicLight): string {
-  const label = epicDisplayTitle(epic);
-  return label === UNTITLED_EPIC_TITLE ? UNTITLED_TASK_TITLE : label;
 }
 
 function countDescription(epic: EpicLight): string {

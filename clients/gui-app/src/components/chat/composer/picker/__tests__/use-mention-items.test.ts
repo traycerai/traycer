@@ -91,6 +91,17 @@ describe("epicChatMentionEntriesFromChats", () => {
     expect(entry.description).toBe("Untitled task");
   });
 
+  it("keeps a literal Untitled epic title unchanged for chat descriptions", () => {
+    const [entry] = epicChatMentionEntriesFromChats(
+      chatsSlice([chat("c1", "Planning", null, 0)]),
+      "epic-1",
+      "Untitled epic",
+    );
+
+    expect(entry.epicTitle).toBe("Untitled epic");
+    expect(entry.description).toBe("Untitled epic");
+  });
+
   it("skips chat ids missing from the byId projection", () => {
     const presentChat = chat("c1", "Planning", null, 200);
     const entries = epicChatMentionEntriesFromChats(
@@ -392,7 +403,7 @@ describe("mergeTaskAndArtifactMentionEntries", () => {
     ]);
   });
 
-  it("normalizes legacy untitled task copy without changing mention tokens", () => {
+  it("keeps literal host task labels unchanged while preserving mention tokens", () => {
     const [entry] = mergeTaskAndArtifactMentionEntries(
       [],
       [
@@ -414,7 +425,7 @@ describe("mergeTaskAndArtifactMentionEntries", () => {
       id: "epic:task-1",
       token: "epic:task-1",
       epicId: "task-1",
-      label: "Untitled task",
+      label: "Untitled epic",
     });
   });
 });
