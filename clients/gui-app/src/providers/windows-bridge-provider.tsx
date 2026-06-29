@@ -15,7 +15,6 @@ import {
   applyLandingDraftDesktopProjection,
   setLandingDraftDesktopProjectionBridge,
 } from "@/stores/home/landing-draft-store";
-import { isolateWorkspaceFoldersForDesktopWindow } from "@/stores/workspace/workspace-folders-store";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { setDesktopEpicOwnershipBridge } from "@/lib/windows/desktop-epic-ownership";
 import {
@@ -154,9 +153,6 @@ function installDesktopWindowsBridge(
   setActiveDesktopPerWindowProjectionBridge(projectionBridge);
   setEpicCanvasDesktopProjectionBridge(projectionBridge);
   setLandingDraftDesktopProjectionBridge(projectionBridge);
-  // Folders aren't projected per-window; isolate them so a new window doesn't
-  // inherit another's off the shared localStorage key (issue #104).
-  isolateWorkspaceFoldersForDesktopWindow();
   if (typeof window !== "undefined") {
     window.addEventListener("pagehide", flushProjection);
     window.addEventListener("beforeunload", flushProjection);
