@@ -26,8 +26,19 @@ export interface AuthRevalidator {
  * is shared across sibling processes and the Desktop re-seeding it, so a
  * concurrently-rotated token must be adopted rather than clobbered.
  */
+/**
+ * What `BearerStore.read()` surfaces: the persisted pair plus the identity it
+ * belongs to. Adoption of a concurrently-written token is gated on this
+ * `userId` matching the active lease's, so a different account re-seeding the
+ * shared store cannot rotate this process into a foreign session - mirroring
+ * the GUI `AuthService`'s deliberate refusal to blind-adopt the shell token.
+ */
+export interface StoredBearer extends StoredAuthTokens {
+  readonly userId: string;
+}
+
 export interface BearerStore {
-  read(): Promise<StoredAuthTokens | null>;
+  read(): Promise<StoredBearer | null>;
   write(tokens: StoredAuthTokens): Promise<void>;
   clear(): Promise<void>;
 }
@@ -136,12 +147,18 @@ export function createBearerRevalidator(args: {
       // without a try/catch and without risking an unhandled rejection.
       try {
         const current = args.lease.getBearerToken();
+        // Adopt a concurrently-written token only when it belongs to the SAME
+        // user as this lease. The shared credentials file can be rewritten by a
+        // different account (a sibling `traycer login`), and blind-adopting that
+        // would rotate this process into a foreign session.
+        const leaseUserId = args.lease.identity.userId;
 
         const before = await args.store.read();
         if (
           before !== null &&
           before.token.length > 0 &&
-          before.token !== current
+          before.token !== current &&
+          before.userId === leaseUserId
         ) {
           args.lease.rotate(before.token);
           return "rotated";
@@ -185,7 +202,8 @@ export function createBearerRevalidator(args: {
             if (
               persisted !== null &&
               persisted.token.length > 0 &&
-              persisted.token !== current
+              persisted.token !== current &&
+              persisted.userId === leaseUserId
             ) {
               adopted = persisted.token;
               break;
@@ -214,7 +232,8 @@ export function createBearerRevalidator(args: {
           latest !== null &&
           latest.token.length > 0 &&
           latest.token !== current &&
-          latest.token !== result.token;
+          latest.token !== result.token &&
+          latest.userId === leaseUserId;
         if (siblingRotated) {
           args.lease.rotate(latest.token);
           return "rotated";

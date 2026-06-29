@@ -78,7 +78,11 @@ export const cliBearerStore: BearerStore = {
     });
     return stored === null
       ? null
-      : { token: stored.token, refreshToken: stored.refreshToken };
+      : {
+          token: stored.token,
+          refreshToken: stored.refreshToken,
+          userId: stored.user.id,
+        };
   },
   write: async (tokens) => {
     const logger = createCliLogger(config.environment);

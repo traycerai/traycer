@@ -4,6 +4,7 @@ import {
   REJECT_REREAD_ATTEMPTS,
   rotateAndPersistBearer,
   type BearerStore,
+  type StoredBearer,
 } from "../bearer-revalidator";
 import { MutableBearerLease } from "../bearer-source";
 import { refreshAuthTokenViaHttp } from "../auth-validation";
@@ -19,8 +20,11 @@ const AUTHN = "https://authn.test";
 
 // Wrap a bearer string into the persisted `{ token, refreshToken }` pair; the
 // refresh token pairs deterministically so assertions can predict it.
-function tokens(token: string): StoredAuthTokens {
-  return { token, refreshToken: `${token}-refresh` };
+// All tests run as user "u1"; read() now surfaces the persisted userId so the
+// revalidator can gate adoption on it. tokens() bakes "u1" so same-user adopts
+// still fire; foreign-user cases use an inline literal with a different userId.
+function tokens(token: string): StoredBearer {
+  return { token, refreshToken: `${token}-refresh`, userId: "u1" };
 }
 
 function makeStore(initial: string | null): BearerStore & {
@@ -39,7 +43,7 @@ function makeStore(initial: string | null): BearerStore & {
     },
     read: async () => state.current,
     write: async (next: StoredAuthTokens) => {
-      state.current = next;
+      state.current = { ...next, userId: "u1" };
       state.writes.push(next.token);
     },
     clear: async () => {
@@ -163,7 +167,9 @@ describe("createBearerRevalidator", () => {
     const store: BearerStore = {
       read: async () => {
         reads += 1;
-        return reads === 1 ? tokens("stale") : { token: "", refreshToken: "" };
+        return reads === 1
+          ? tokens("stale")
+          : { token: "", refreshToken: "", userId: "u1" };
       },
       write: vi.fn(async () => undefined),
       clear: vi.fn(async () => undefined),
@@ -357,5 +363,67 @@ describe("createBearerRevalidator", () => {
     expect(store.writes).toEqual([]);
     // Poll exhausted its budget: one delay per gap between the re-reads.
     expect(delay).toHaveBeenCalledTimes(REJECT_REREAD_ATTEMPTS - 1);
+  });
+
+  it("does NOT adopt a different user's token before refreshing (identity gate)", async () => {
+    refreshMock.mockResolvedValue({ kind: "rejected" });
+    const lease = new MutableBearerLease("stale", "u1");
+    // The shared store holds a DIFFERENT account's token (a sibling
+    // `traycer login`); it must not be adopted into this u1 session.
+    const store: BearerStore = {
+      read: async () => ({
+        token: "foreign",
+        refreshToken: "foreign-refresh",
+        userId: "u2",
+      }),
+      write: vi.fn(async () => undefined),
+      clear: vi.fn(async () => undefined),
+    };
+    const revalidator = createBearerRevalidator({
+      authnBaseUrl: AUTHN,
+      lease,
+      store,
+      clearOnReject: false,
+      delay: async () => undefined,
+    });
+
+    const outcome = await revalidator.revalidateCurrentContext();
+
+    // STEP-1 did not adopt the foreign token; the refresh was attempted and
+    // rejected, and the lease was never rotated into u2's session.
+    expect(refreshMock).toHaveBeenCalled();
+    expect(outcome).toBe("rejected");
+    expect(lease.getBearerToken()).toBe("stale");
+  });
+
+  it("does NOT adopt a different user's token on the reject re-read (identity gate)", async () => {
+    refreshMock.mockResolvedValue({ kind: "rejected" });
+    const lease = new MutableBearerLease("stale", "u1");
+    // Pre-refresh read sees our own token; the reject re-read finds a different
+    // account's freshly-persisted token, which must NOT be adopted.
+    let reads = 0;
+    const store: BearerStore = {
+      read: async () => {
+        reads += 1;
+        return reads === 1
+          ? tokens("stale")
+          : { token: "foreign", refreshToken: "foreign-refresh", userId: "u2" };
+      },
+      write: vi.fn(async () => undefined),
+      clear: vi.fn(async () => undefined),
+    };
+    const revalidator = createBearerRevalidator({
+      authnBaseUrl: AUTHN,
+      lease,
+      store,
+      clearOnReject: false,
+      delay: async () => undefined,
+    });
+
+    const outcome = await revalidator.revalidateCurrentContext();
+
+    expect(outcome).toBe("rejected");
+    expect(lease.getBearerToken()).toBe("stale");
+    expect(store.clear).not.toHaveBeenCalled();
   });
 });
