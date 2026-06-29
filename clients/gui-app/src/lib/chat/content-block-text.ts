@@ -45,6 +45,8 @@ function contentBlockText(block: ContentBlock): string {
       return block.message;
     case "compaction":
       return compactionBlockText(block);
+    case "autonomous_resume":
+      return autonomousResumeBlockText(block);
     case "interview":
       return interviewBlockText(block);
     case "steer":
@@ -52,6 +54,15 @@ function contentBlockText(block: ContentBlock): string {
     case "artifact_operation":
       return artifactOperationBlockText(block);
   }
+}
+
+function autonomousResumeBlockText(
+  block: Extract<ContentBlock, { type: "autonomous_resume" }>,
+): string {
+  if (block.triggers.length === 0) return "Resumed";
+  return `Resumed: ${block.triggers
+    .map((trigger) => `${trigger.title} ${trigger.status}`)
+    .join("; ")}`;
 }
 
 function artifactOperationBlockText(

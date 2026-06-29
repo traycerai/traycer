@@ -22,6 +22,11 @@ describe("epic message schemas", () => {
     expect(parsed.agentMessageSend).toBeNull();
     // `progress` is additive + defaulted, so blocks persisted before it parse.
     expect(parsed.progress).toBeNull();
+    // `startedAt` is additive + nullable/defaulted, so older tool-call blocks
+    // parse and simply omit completed-duration rendering.
+    expect(parsed.startedAt).toBeNull();
+    // `endedAt` is additive + nullable/defaulted for the same reason.
+    expect(parsed.endedAt).toBeNull();
   });
 
   it("parses the new terminal block statuses (interrupted / superseded) on ACTION blocks", () => {

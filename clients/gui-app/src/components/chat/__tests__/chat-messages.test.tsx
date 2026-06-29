@@ -22,6 +22,7 @@ import {
   type ChatUserMinimapItem,
 } from "@/components/chat/chat-user-message-minimap-items";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
+import type { BackgroundItem } from "@traycer/protocol/host/agent/gui/subscribe";
 
 import {
   makeAssistantMessage,
@@ -51,6 +52,7 @@ function minimapItemsFor(
 function chatMessagesJsx(
   messages: ReadonlyArray<ChatMessageModel>,
   opts: {
+    backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
     minimapItems: ReadonlyArray<ChatUserMinimapItem>;
     scrollStateKey: string;
     visible: boolean;
@@ -61,12 +63,14 @@ function chatMessagesJsx(
       <ChatMessages
         taskTitle="Transcript"
         messages={messages}
+        backgroundItems={opts.backgroundItems}
         minimapItems={opts.minimapItems}
         scrollStateKey={opts.scrollStateKey}
         getMessageActions={() => null}
         nextStepActions={null}
         instanceId="test-instance"
         visible={opts.visible}
+        scrollRequest={null}
       />
     </VirtuosoMessageListTestingContext.Provider>
   );
@@ -75,6 +79,7 @@ function chatMessagesJsx(
 function renderChatMessages(
   messages: ReadonlyArray<ChatMessageModel>,
   opts: {
+    backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
     minimapItems: ReadonlyArray<ChatUserMinimapItem>;
     scrollStateKey: string;
     visible: boolean;
@@ -85,12 +90,14 @@ function renderChatMessages(
 
 function makeDefaultOpts(
   overrides: Partial<{
+    backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
     minimapItems: ReadonlyArray<ChatUserMinimapItem>;
     scrollStateKey: string;
     visible: boolean;
   }>,
 ) {
   return {
+    backgroundItems: overrides.backgroundItems,
     minimapItems: overrides.minimapItems ?? [],
     scrollStateKey:
       overrides.scrollStateKey ??
@@ -103,6 +110,7 @@ function rerenderChatMessages(
   rerender: (ui: ReactNode) => void,
   messages: ReadonlyArray<ChatMessageModel>,
   opts: {
+    backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
     minimapItems: ReadonlyArray<ChatUserMinimapItem>;
     scrollStateKey: string;
     visible: boolean;
@@ -224,6 +232,55 @@ describe("ChatMessages Virtuoso renderer", () => {
     );
 
     expect(screen.getByText("echo hi")).not.toBeNull();
+  });
+
+  it("renders a host-reported background command as a live standalone card", async () => {
+    const assistant: ChatMessageModel = {
+      ...makeMessage(1, "assistant"),
+      segments: [
+        {
+          id: "tool-bg",
+          kind: "tool",
+          toolName: "Bash",
+          inputSummary: "sleep 60",
+          inputDetail: { kind: "command", command: "sleep 60" },
+          taskTodoItems: null,
+          error: null,
+          agentMessageSend: null,
+          isStreaming: false,
+          endState: null,
+          progress: null,
+          backgroundOutput: null,
+          backgroundTask: false,
+          startedAt: Date.now(),
+          durationMs: null,
+          parentId: null,
+        },
+      ],
+    };
+
+    renderChatMessages(
+      [assistant],
+      makeDefaultOpts({
+        backgroundItems: [
+          {
+            taskId: "task-bg",
+            kind: "command",
+            title: "sleep 60",
+            status: "running",
+            toolUseId: "tool-bg",
+            blockId: "tool-bg",
+            startedAt: 1,
+          },
+        ],
+      }),
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByText("Ran 1 command")).toBeNull();
+      expect(screen.getByText("Bash")).not.toBeNull();
+      expect(screen.getByLabelText("Tool running")).not.toBeNull();
+    });
   });
 
   it("uses sticky opaque headers for expanded accumulated rows", () => {

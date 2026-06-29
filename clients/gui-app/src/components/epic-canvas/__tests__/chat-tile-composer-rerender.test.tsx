@@ -156,6 +156,8 @@ const QUEUE: ChatLowerQueueState = {
   onCancel: () => undefined,
   onAbortSteer: () => undefined,
   onCancelEdit: () => undefined,
+  onStopBackgroundItem: () => null,
+  onStopAllBackgroundItems: () => null,
   onReorder: () => undefined,
   onSteerNow: () => undefined,
 };
@@ -215,6 +217,8 @@ function props(
     composer: COMPOSER,
     todo: todoSnapshot(`token-${token}`),
     restoreContext: restoreContext(),
+    backgroundItems: undefined,
+    onBackgroundItemClick: () => undefined,
   };
 }
 

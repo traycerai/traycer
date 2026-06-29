@@ -57,6 +57,7 @@ describe("fileChangeBlockSchema backward-compat", () => {
     expect(block.inputSummary).toBeNull();
     expect(block.inputDetail).toBeNull();
     expect(block.taskTodoItems).toBeNull();
+    expect(block.endedAt).toBeNull();
     // The dropped raw input - the bloat carrier - is not retained.
     expect("input" in block).toBe(false);
   });

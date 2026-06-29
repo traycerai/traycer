@@ -162,7 +162,62 @@ describe("chat.subscribe@1.0 server frames", () => {
       expect(parsed.snapshot.pendingApprovals).toHaveLength(1);
       expect(parsed.snapshot.pendingInterviews).toHaveLength(1);
       expect(parsed.snapshot.pendingFileEditApprovals).toHaveLength(1);
+      expect(parsed.snapshot.backgroundItems).toBeUndefined();
     }
+  });
+
+  it("parses background items on snapshots and turn-state deltas", () => {
+    const item = {
+      taskId: "task-1",
+      kind: "command",
+      title: "bun test",
+      status: "running",
+      toolUseId: "tool-1",
+      blockId: "tool-1",
+      startedAt: 1007,
+    };
+    const snapshot = chatSubscribeServerFrameSchema.parse({
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      snapshot: {
+        chat,
+        access: {
+          role: "owner",
+          ownerUserId: "user-1",
+          canAct: true,
+        },
+        queue: { status: "idle", items: [] },
+        activeTurn: null,
+        runStatus: "idle",
+        pendingApprovals: [],
+        pendingInterviews: [],
+        pendingFileEditApprovals: [],
+        worktreeBinding: null,
+        missingWorktreePaths: [],
+        accumulatedFileChanges: [],
+        backgroundItems: [item],
+      },
+    });
+    const turnState = chatSubscribeServerFrameSchema.parse({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      runStatus: "running",
+      activeTurn: null,
+      backgroundItems: [item],
+    });
+
+    expect(snapshot).toMatchObject({
+      kind: "snapshot",
+      snapshot: { backgroundItems: [item] },
+    });
+    expect(turnState).toMatchObject({
+      kind: "turnStateChanged",
+      backgroundItems: [item],
+    });
   });
 
   it("parses action acknowledgements for accepted and rejected owner actions", () => {
@@ -414,6 +469,34 @@ describe("chat.subscribe@1.0 client frames", () => {
         turnId: "turn-1",
       }),
     ).toThrow();
+  });
+
+  it("parses background-item stop owner actions", () => {
+    expect(
+      chatSubscribeClientFrameSchema.parse({
+        kind: "stopBackgroundItem",
+        hasBinaryPayload: false,
+        epicId: "epic-1",
+        chatId: "chat-1",
+        clientActionId: "stop-bg-action-1",
+        taskId: "task-1",
+      }),
+    ).toMatchObject({
+      kind: "stopBackgroundItem",
+      taskId: "task-1",
+    });
+
+    expect(
+      chatSubscribeClientFrameSchema.parse({
+        kind: "stopAllBackgroundItems",
+        hasBinaryPayload: false,
+        epicId: "epic-1",
+        chatId: "chat-1",
+        clientActionId: "stop-all-bg-action-1",
+      }),
+    ).toMatchObject({
+      kind: "stopAllBackgroundItems",
+    });
   });
 
   it("parses send frames with Tiptap JSONContent attachment mentions", () => {

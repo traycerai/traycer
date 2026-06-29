@@ -2548,6 +2548,16 @@ function completedDurationMs(
   return Math.max(0, timestamp - startedAt);
 }
 
+function backgroundToolDurationMs(
+  block: Extract<ContentBlock, { type: "tool_call" }>,
+): number | null {
+  if (!block.backgroundTask) return null;
+  if (block.status !== "completed" && block.status !== "errored") return null;
+  if (block.startedAt === null || block.endedAt === null) return null;
+  const durationMs = block.endedAt - block.startedAt;
+  return durationMs > 0 ? durationMs : null;
+}
+
 /**
  * Todo-block → item mapping for the rendered todo segment, including the
  * synthetic `${blockId}:item:${index}` id fallback for items persisted
@@ -2608,7 +2618,10 @@ const BLOCK_HANDLERS: {
     isStreaming: block.status === "streaming",
     endState: segmentEndState(block.status),
     progress: block.progress,
-    startedAt: block.timestamp,
+    backgroundOutput: block.backgroundOutput,
+    backgroundTask: block.backgroundTask,
+    startedAt: block.startedAt ?? block.timestamp,
+    durationMs: backgroundToolDurationMs(block),
     parentId: block.parentBlockId ?? null,
   }),
   file_change: (block) => ({
@@ -2711,6 +2724,10 @@ const BLOCK_HANDLERS: {
     durationMs: block.durationMs,
     summary: block.summary,
     error: block.error,
+  }),
+  autonomous_resume: (block) => ({
+    kind: "autonomous_resume",
+    triggers: block.triggers,
   }),
   interview: (block) => ({
     kind: "interview",

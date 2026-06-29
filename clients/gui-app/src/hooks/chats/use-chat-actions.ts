@@ -46,6 +46,8 @@ export interface ChatActions {
     revertArtifacts: boolean,
   ) => string | null;
   readonly stopTurn: () => string | null;
+  readonly stopBackgroundItem: (taskId: string) => string | null;
+  readonly stopAllBackgroundItems: () => string | null;
   readonly resumeQueue: () => string | null;
   readonly queueEdit: (
     queueItemId: string,
@@ -116,6 +118,10 @@ export function useChatActions(handle: ChatSessionStoreHandle): ChatActions {
           .getState()
           .revertFileChanges(fromMessageId, filePaths, revertArtifacts),
       stopTurn: () => handle.store.getState().stopTurn(),
+      stopBackgroundItem: (taskId) =>
+        handle.store.getState().stopBackgroundItem(taskId),
+      stopAllBackgroundItems: () =>
+        handle.store.getState().stopAllBackgroundItems(),
       resumeQueue: () => handle.store.getState().resumeQueue(),
       queueEdit: (queueItemId, content) =>
         handle.store.getState().queueEdit(queueItemId, content),

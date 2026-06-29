@@ -45,6 +45,7 @@ import {
   type FinalizedActionStatus,
 } from "@traycer/protocol/host/agent/gui/agent-runtime-accumulator";
 import type {
+  BackgroundItem,
   ChatAccess,
   ChatAccumulatedFileChange,
   ChatActiveTurn,
@@ -254,6 +255,7 @@ export interface ChatSessionState {
   readonly pendingFileEditApprovals: ReadonlyArray<ChatFileEditApprovalState>;
   readonly pendingInterviews: ReadonlyArray<ChatPendingInterviewState>;
   readonly accumulatedFileChanges: ReadonlyArray<ChatAccumulatedFileChange>;
+  readonly backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
   readonly restore: ChatRestoreSlot | null;
   readonly pendingActions: Readonly<Record<string, PendingChatAction>>;
   readonly acceptedActions: Readonly<Record<string, AcceptedChatAction>>;
@@ -350,6 +352,8 @@ export interface ChatSessionState {
     revertArtifacts: boolean,
   ) => string | null;
   stopTurn: () => string | null;
+  stopBackgroundItem: (taskId: string) => string | null;
+  stopAllBackgroundItems: () => string | null;
   resumeQueue: () => string | null;
   queueEdit: (queueItemId: string, content: JsonContent) => string | null;
   queueCancel: (queueItemId: string) => string | null;
@@ -697,6 +701,7 @@ export function createChatSessionStore(
             pendingFileEditApprovals: frame.snapshot.pendingFileEditApprovals,
             pendingInterviews: frame.snapshot.pendingInterviews,
             accumulatedFileChanges: frame.snapshot.accumulatedFileChanges,
+            backgroundItems: frame.snapshot.backgroundItems,
             pendingActions: pending.pendingActions,
             acceptedActions: pruneAcceptedActions(
               {
@@ -886,6 +891,7 @@ export function createChatSessionStore(
             messages: nextMessages,
             runStatus: frame.runStatus,
             activeTurn: frame.activeTurn,
+            backgroundItems: frame.backgroundItems ?? state.backgroundItems,
             liveAssistantMessage: liveAssistantForTurnStateFrame({
               current: state.liveAssistantMessage,
               previousTurnId,
@@ -1215,6 +1221,7 @@ export function createChatSessionStore(
       pendingFileEditApprovals: [],
       pendingInterviews: [],
       accumulatedFileChanges: [],
+      backgroundItems: undefined,
       restore: null,
       pendingActions: {},
       acceptedActions: {},
@@ -1504,6 +1511,43 @@ export function createChatSessionStore(
             settings: null,
             createdAt: Date.now(),
           },
+          pendingUserMessage: null,
+        });
+      },
+      stopBackgroundItem: (taskId) => {
+        if (get().backgroundItems === undefined) return null;
+        const clientActionId = uuidv4();
+        const frame: ChatOwnerActionFrame = {
+          kind: "stopBackgroundItem",
+          hasBinaryPayload: false,
+          epicId: options.epicId,
+          chatId: options.chatId,
+          clientActionId,
+          taskId,
+        };
+        return sendAction({
+          set,
+          get,
+          frame,
+          pending: basicPending(clientActionId, "stopBackgroundItem"),
+          pendingUserMessage: null,
+        });
+      },
+      stopAllBackgroundItems: () => {
+        if (get().backgroundItems === undefined) return null;
+        const clientActionId = uuidv4();
+        const frame: ChatOwnerActionFrame = {
+          kind: "stopAllBackgroundItems",
+          hasBinaryPayload: false,
+          epicId: options.epicId,
+          chatId: options.chatId,
+          clientActionId,
+        };
+        return sendAction({
+          set,
+          get,
+          frame,
+          pending: basicPending(clientActionId, "stopAllBackgroundItems"),
           pendingUserMessage: null,
         });
       },
@@ -2157,6 +2201,12 @@ function detachedSubagentOwnerBlockId(event: RuntimeEvent): string | null {
     event.type === "subagent.started" ||
     event.type === "subagent.progress" ||
     event.type === "subagent.completed"
+  ) {
+    return event.blockId;
+  }
+  if (
+    event.type === "tool_call.completed" ||
+    event.type === "tool_call.errored"
   ) {
     return event.blockId;
   }

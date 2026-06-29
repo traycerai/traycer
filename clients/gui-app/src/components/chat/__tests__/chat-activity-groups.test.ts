@@ -14,6 +14,8 @@ import {
   parseTaskTodoToolPayloads,
 } from "@traycer/protocol/host/agent/gui/task-todo-tools";
 
+const EMPTY_PROMOTED_TOOL_BLOCK_IDS: ReadonlySet<string> = new Set();
+
 // Mirror the host accumulator: the raw input is not persisted, so a tool
 // segment carries precomputed display fields. Computed via the same protocol
 // helpers the host uses so the fixtures stay faithful.
@@ -257,6 +259,165 @@ describe("chat activity grouping", () => {
     ).not.toContain("subagent");
   });
 
+  it("promotes running background command tools out of generic activity groups", () => {
+    const bash = {
+      ...toolSegment("tool-1", "Bash", {
+        command: "sleep 60",
+        run_in_background: true,
+      }),
+      isStreaming: true,
+    };
+    const timeline = buildCompleteTimeline([
+      toolSegment("tool-0", "read_file", { path: "/repo/a.ts" }),
+      bash,
+      toolSegment("tool-2", "glob", { pattern: "src/**/*.ts" }),
+    ]);
+
+    expect(timeline.map((item) => item.kind)).toEqual([
+      "activity_group",
+      "segment",
+      "activity_group",
+    ]);
+    expect(timeline[1]?.kind).toBe("segment");
+    if (timeline[1]?.kind !== "segment") {
+      throw new Error("Expected promoted background command tool");
+    }
+    expect(timeline[1].segment.kind).toBe("tool");
+    if (timeline[1].segment.kind !== "tool") {
+      throw new Error("Expected promoted tool segment");
+    }
+    expect(timeline[1].segment.toolName).toBe("Bash");
+  });
+
+  it("promotes command tools that are completed locally but still backgrounded by the host", () => {
+    const bash = toolSegment("tool-1", "Bash", {
+      command: "sleep 60",
+      run_in_background: true,
+    });
+    const timeline = buildCompleteTimelineWithPromoted(
+      [
+        toolSegment("tool-0", "read_file", { path: "/repo/a.ts" }),
+        bash,
+        toolSegment("tool-2", "glob", { pattern: "src/**/*.ts" }),
+      ],
+      new Set(["tool-1"]),
+    );
+
+    expect(timeline.map((item) => item.kind)).toEqual([
+      "activity_group",
+      "segment",
+      "activity_group",
+    ]);
+    expect(timeline[1]?.kind).toBe("segment");
+    if (timeline[1]?.kind !== "segment") {
+      throw new Error("Expected live background command tool card");
+    }
+    expect(timeline[1].segment.kind).toBe("tool");
+    if (timeline[1].segment.kind !== "tool") {
+      throw new Error("Expected promoted tool segment");
+    }
+    expect(timeline[1].segment.id).toBe("tool-1");
+  });
+
+  it("keeps completed background command output promoted as a standalone card", () => {
+    const bash = {
+      ...toolSegment("tool-1", "Bash", {
+        command: "sleep 1",
+        run_in_background: true,
+      }),
+      backgroundOutput: {
+        stdout: "done\n",
+        stderr: "",
+        truncated: false,
+      },
+    };
+    const timeline = buildCompleteTimeline([
+      toolSegment("tool-0", "read_file", { path: "/repo/a.ts" }),
+      bash,
+      toolSegment("tool-2", "glob", { pattern: "src/**/*.ts" }),
+    ]);
+
+    expect(timeline.map((item) => item.kind)).toEqual([
+      "activity_group",
+      "segment",
+      "activity_group",
+    ]);
+    expect(timeline[1]?.kind).toBe("segment");
+    if (timeline[1]?.kind !== "segment") {
+      throw new Error("Expected promoted completed background command tool");
+    }
+    expect(timeline[1].segment.kind).toBe("tool");
+    if (timeline[1].segment.kind !== "tool") {
+      throw new Error("Expected promoted tool segment");
+    }
+    expect(timeline[1].segment.backgroundOutput?.stdout).toBe("done\n");
+  });
+
+  it("keeps a completed background command promoted via the persistent marker (no live item, no output)", () => {
+    // The exact recurring regression: at completion the host removes the live
+    // background item, and several terminal paths set neither backgroundOutput
+    // nor error. The persistent `backgroundTask` marker must keep the card a
+    // standalone card so it never collapses back into the activity group.
+    const bash = {
+      ...toolSegment("tool-1", "Bash", {
+        command: "sleep 60",
+        run_in_background: true,
+      }),
+      backgroundTask: true,
+    };
+    const timeline = buildCompleteTimeline([
+      toolSegment("tool-0", "read_file", { path: "/repo/a.ts" }),
+      bash,
+      toolSegment("tool-2", "glob", { pattern: "src/**/*.ts" }),
+    ]);
+
+    expect(timeline.map((item) => item.kind)).toEqual([
+      "activity_group",
+      "segment",
+      "activity_group",
+    ]);
+    expect(timeline[1]?.kind).toBe("segment");
+    if (timeline[1]?.kind !== "segment") {
+      throw new Error("Expected promoted completed background command card");
+    }
+    expect(timeline[1].segment.kind).toBe("tool");
+    if (timeline[1].segment.kind !== "tool") {
+      throw new Error("Expected promoted tool segment");
+    }
+    expect(timeline[1].segment.id).toBe("tool-1");
+  });
+
+  it("keeps errored command tools promoted as standalone cards", () => {
+    const bash = {
+      ...toolSegment("tool-1", "Bash", {
+        command: "sleep 60",
+        run_in_background: true,
+      }),
+      error: "stopped: user requested stop",
+      endState: null,
+    };
+    const timeline = buildCompleteTimeline([
+      toolSegment("tool-0", "read_file", { path: "/repo/a.ts" }),
+      bash,
+      toolSegment("tool-2", "glob", { pattern: "src/**/*.ts" }),
+    ]);
+
+    expect(timeline.map((item) => item.kind)).toEqual([
+      "activity_group",
+      "segment",
+      "activity_group",
+    ]);
+    expect(timeline[1]?.kind).toBe("segment");
+    if (timeline[1]?.kind !== "segment") {
+      throw new Error("Expected promoted errored command tool");
+    }
+    expect(timeline[1].segment.kind).toBe("tool");
+    if (timeline[1].segment.kind !== "tool") {
+      throw new Error("Expected promoted tool segment");
+    }
+    expect(timeline[1].segment.error).toContain("stopped");
+  });
+
   it("keeps completed subagents as promoted standalone items", () => {
     const timeline = buildCompleteTimeline([
       subagentSegment("subagent-1", false),
@@ -491,13 +652,29 @@ describe("chat activity grouping", () => {
 function buildCompleteTimeline(
   segments: ReadonlyArray<MessageSegment>,
 ): ReadonlyArray<ChatActivityTimelineItem> {
-  return buildChatActivityTimeline(segments, { turnState: "complete" });
+  return buildChatActivityTimeline(segments, {
+    turnState: "complete",
+    promotedToolBlockIds: EMPTY_PROMOTED_TOOL_BLOCK_IDS,
+  });
+}
+
+function buildCompleteTimelineWithPromoted(
+  segments: ReadonlyArray<MessageSegment>,
+  promotedToolBlockIds: ReadonlySet<string>,
+): ReadonlyArray<ChatActivityTimelineItem> {
+  return buildChatActivityTimeline(segments, {
+    turnState: "complete",
+    promotedToolBlockIds,
+  });
 }
 
 function buildActiveTimeline(
   segments: ReadonlyArray<MessageSegment>,
 ): ReadonlyArray<ChatActivityTimelineItem> {
-  return buildChatActivityTimeline(segments, { turnState: "active" });
+  return buildChatActivityTimeline(segments, {
+    turnState: "active",
+    promotedToolBlockIds: EMPTY_PROMOTED_TOOL_BLOCK_IDS,
+  });
 }
 
 function textSegment(id: string, markdown: string): MessageSegment {
@@ -519,7 +696,10 @@ function toolSegment(
     isStreaming: false,
     endState: null,
     progress: null,
+    backgroundOutput: null,
+    backgroundTask: false,
     startedAt: 0,
+    durationMs: null,
     parentId: null,
   };
 }
@@ -544,7 +724,10 @@ function a2aToolSegment(
     isStreaming: false,
     endState: null,
     progress: null,
+    backgroundOutput: null,
+    backgroundTask: false,
     startedAt: 0,
+    durationMs: null,
     parentId: null,
   };
 }

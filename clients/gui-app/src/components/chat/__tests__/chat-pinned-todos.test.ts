@@ -443,7 +443,10 @@ function toolSegment(
     isStreaming: false,
     endState: null,
     progress: null,
+    backgroundOutput: null,
+    backgroundTask: false,
     startedAt: 0,
+    durationMs: null,
     parentId: null,
   };
 }

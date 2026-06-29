@@ -19,7 +19,10 @@ import {
   type RenderedMessagesDisplayContext,
   type RenderedMessagesInput,
 } from "@/stores/chats/rendered-messages";
-import type { SubagentSegment } from "@/stores/composer/chat-store";
+import type {
+  SubagentSegment,
+  ToolSegment,
+} from "@/stores/composer/chat-store";
 import { deriveToolInputDetail } from "@traycer/protocol/host/agent/gui/tool-input-detail";
 import { deriveToolInputSummary } from "@traycer/protocol/host/agent/gui/tool-input-summary";
 import {
@@ -1412,8 +1415,12 @@ describe("useRenderedMessages", () => {
           error: null,
           agentMessageSend: null,
           progress: null,
+          backgroundOutput: null,
+          backgroundTask: false,
           status: "completed",
           timestamp: 2002,
+          startedAt: 2002,
+          endedAt: 2002,
         },
         {
           type: "command",
@@ -1521,8 +1528,12 @@ describe("useRenderedMessages", () => {
           error: null,
           agentMessageSend: null,
           progress: null,
+          backgroundOutput: null,
+          backgroundTask: false,
           status: "streaming",
           timestamp: 2001,
+          startedAt: 2001,
+          endedAt: null,
         },
         {
           type: "subagent",
@@ -1627,6 +1638,140 @@ describe("useRenderedMessages", () => {
     // Interrupted: `timestamp` is the turn-end, not the real finish, so the
     // builder leaves durationMs null (the end-state badge conveys the outcome).
     expect(interrupted?.durationMs).toBeNull();
+  });
+
+  it("computes background tool durationMs only from explicit start and end", () => {
+    const assistant: Message = {
+      ...assistantMessage("turn-1", 2000),
+      blocks: [
+        {
+          type: "tool_call",
+          blockId: "background-done",
+          status: "completed",
+          timestamp: 6_000,
+          toolName: "Bash",
+          ...toolCallInputFields("Bash", {
+            command: "sleep 60",
+            run_in_background: true,
+          }),
+          error: null,
+          agentMessageSend: null,
+          progress: null,
+          backgroundOutput: { stdout: "", stderr: "", truncated: false },
+          backgroundTask: true,
+          startedAt: 5_000,
+          endedAt: 70_000,
+        },
+        {
+          type: "tool_call",
+          blockId: "background-old",
+          status: "completed",
+          timestamp: 5000,
+          toolName: "Bash",
+          ...toolCallInputFields("Bash", {
+            command: "true",
+            run_in_background: true,
+          }),
+          error: null,
+          agentMessageSend: null,
+          progress: null,
+          backgroundOutput: { stdout: "", stderr: "", truncated: false },
+          backgroundTask: true,
+          startedAt: null,
+          endedAt: 70_000,
+        },
+        {
+          type: "tool_call",
+          blockId: "background-stopped",
+          status: "errored",
+          timestamp: 70_000,
+          toolName: "Bash",
+          ...toolCallInputFields("Bash", {
+            command: "sleep 60",
+            run_in_background: true,
+          }),
+          error: "stopped: user requested stop",
+          agentMessageSend: null,
+          progress: null,
+          backgroundOutput: null,
+          backgroundTask: true,
+          startedAt: 5_000,
+          endedAt: 70_000,
+        },
+        {
+          type: "tool_call",
+          blockId: "background-failed",
+          status: "errored",
+          timestamp: 67_000,
+          toolName: "Bash",
+          ...toolCallInputFields("Bash", {
+            command: "sleep 60",
+            run_in_background: true,
+          }),
+          error: "failed: command exited with code 1",
+          agentMessageSend: null,
+          progress: null,
+          backgroundOutput: null,
+          backgroundTask: true,
+          startedAt: 5_000,
+          endedAt: 67_000,
+        },
+        {
+          type: "tool_call",
+          blockId: "regular-tool",
+          status: "completed",
+          timestamp: 5000,
+          toolName: "Bash",
+          ...toolCallInputFields("Bash", { command: "pwd" }),
+          error: null,
+          agentMessageSend: null,
+          progress: null,
+          backgroundOutput: null,
+          backgroundTask: false,
+          startedAt: 2000,
+          endedAt: 5000,
+        },
+      ],
+    };
+
+    const { result } = renderHook(() =>
+      useRenderedMessages(
+        {
+          messages: [assistant],
+          events: [],
+          pendingUserMessages: [],
+          liveAssistantMessage: null,
+          activeTurn: null,
+          runStatus: "running",
+          ...BINDING,
+        },
+        displayContext,
+      ),
+    );
+
+    const tools = (result.current[0]?.segments ?? []).filter(
+      (segment): segment is ToolSegment => segment.kind === "tool",
+    );
+    const backgroundDone = tools.find(
+      (segment) => segment.id === "background-done",
+    );
+    const backgroundOld = tools.find(
+      (segment) => segment.id === "background-old",
+    );
+    const backgroundStopped = tools.find(
+      (segment) => segment.id === "background-stopped",
+    );
+    const backgroundFailed = tools.find(
+      (segment) => segment.id === "background-failed",
+    );
+    const regularTool = tools.find((segment) => segment.id === "regular-tool");
+
+    expect(backgroundDone?.startedAt).toBe(5_000);
+    expect(backgroundDone?.durationMs).toBe(65_000);
+    expect(backgroundOld?.durationMs).toBeNull();
+    expect(backgroundStopped?.durationMs).toBe(65_000);
+    expect(backgroundFailed?.durationMs).toBe(62_000);
+    expect(regularTool?.durationMs).toBeNull();
   });
 
   it("nests a subagent's command under its block via parentBlockId", () => {
@@ -2276,8 +2421,12 @@ describe("useRenderedMessages", () => {
           error: null,
           agentMessageSend: null,
           progress: null,
+          backgroundOutput: null,
+          backgroundTask: false,
           status: "completed",
           timestamp: 2001,
+          startedAt: 2001,
+          endedAt: 2001,
         },
         {
           type: "file_change",
@@ -2335,8 +2484,12 @@ describe("useRenderedMessages", () => {
           error: "Permission denied by user",
           agentMessageSend: null,
           progress: null,
+          backgroundOutput: null,
+          backgroundTask: false,
           status: "errored",
           timestamp: 2001,
+          startedAt: 2001,
+          endedAt: 2001,
         },
         {
           type: "file_change",

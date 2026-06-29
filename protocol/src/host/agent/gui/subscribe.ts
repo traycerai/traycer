@@ -105,6 +105,11 @@ export const chatActionSchema = z.enum([
   "interviewError",
   "restoreCheckpoint",
   "revertFileChanges",
+  // Background-items controls (additive; gated on the host advertising
+  // `backgroundItems` in its snapshot - an older host that can't parse these
+  // silently drops them, so the renderer MUST only send them when supported).
+  "stopBackgroundItem",
+  "stopAllBackgroundItems",
 ]);
 export type ChatAction = z.infer<typeof chatActionSchema>;
 
@@ -135,6 +140,44 @@ export const chatAccumulatedFileChangeSchema = z.object({
 export type ChatAccumulatedFileChange = z.infer<
   typeof chatAccumulatedFileChangeSchema
 >;
+
+export const backgroundItemKindSchema = z.enum([
+  "subagent",
+  "command",
+  "monitor",
+]);
+export type BackgroundItemKind = z.infer<typeof backgroundItemKindSchema>;
+
+export const backgroundItemStatusSchema = z.enum([
+  "running",
+  "completed",
+  "failed",
+  "stopped",
+]);
+export type BackgroundItemStatus = z.infer<typeof backgroundItemStatusSchema>;
+
+/**
+ * One in-flight (or just-settled) background work item in this chat - a
+ * backgrounded subagent, a `run_in_background` command, or a Monitor. The host
+ * is the only correctness source for the *running* set: a background command's
+ * `tool_call` block finalizes at turn end, so the renderer cannot tell "running"
+ * from "done" itself. Surfaced so the renderer can list running items above the
+ * composer, scroll to / expand the originating card, and stop them.
+ *
+ * `taskId` is the SDK task id - the stop handle and identity. `blockId` is the
+ * rendered card's block id (a subagent's `blockId` equals its `taskId`; a
+ * command/monitor's equals its originating `toolUseId`), used to scroll/expand.
+ */
+export const backgroundItemSchema = z.object({
+  taskId: z.string(),
+  kind: backgroundItemKindSchema,
+  title: z.string(),
+  status: backgroundItemStatusSchema,
+  toolUseId: z.string().nullable(),
+  blockId: z.string(),
+  startedAt: z.number(),
+});
+export type BackgroundItem = z.infer<typeof backgroundItemSchema>;
 
 export const chatActionAckStatusSchema = z.enum(["accepted", "rejected"]);
 export type ChatActionAckStatus = z.infer<typeof chatActionAckStatusSchema>;
@@ -302,6 +345,12 @@ export const chatSnapshotSchema = z.object({
   // computed host-side from checkpoint manifests + current disk content.
   // Drives the pinned accumulated-changes panel above the composer.
   accumulatedFileChanges: z.array(chatAccumulatedFileChangeSchema),
+  // In-flight background work (backgrounded subagents, run_in_background
+  // commands, Monitors). OPTIONAL on purpose: `undefined` means an older host
+  // that does not support background-item controls, so the renderer hides the
+  // Background section and never sends stop actions; a present (possibly empty)
+  // array means the host supports them. This is the capability sentinel.
+  backgroundItems: z.array(backgroundItemSchema).optional(),
 });
 export type ChatSnapshot = z.infer<typeof chatSnapshotSchema>;
 
@@ -351,6 +400,10 @@ export const chatSubscribeServerFrameSchema = z.discriminatedUnion("kind", [
     // including the request→activeTurn window where `activeTurn` is still null.
     runStatus: chatRunStatusSchema,
     activeTurn: chatActiveTurnSchema.nullable(),
+    // Background-items deltas ride this same broadcast (added/settled/stopped).
+    // Optional for the same capability-sentinel reason as the snapshot field; an
+    // older host omits it and the renderer keeps its last snapshot value.
+    backgroundItems: z.array(backgroundItemSchema).optional(),
   }),
   z.object({
     kind: z.literal("blockDelta"),
@@ -511,6 +564,20 @@ export const chatSubscribeClientFrameSchema = z.discriminatedUnion("kind", [
     kind: z.literal("stop"),
     ...ownerActionFrameFields,
     turnId: z.string().nullable(),
+  }),
+  // Stop a single background item (subagent/command/monitor) by its SDK task id,
+  // WITHOUT aborting the foreground turn (unlike `stop`). The host calls
+  // `query.stopTask(taskId)`; the SDK emits a `stopped` notification that
+  // finalizes the card. Renderer gates sending on snapshot `backgroundItems`.
+  z.object({
+    kind: z.literal("stopBackgroundItem"),
+    ...ownerActionFrameFields,
+    taskId: z.string(),
+  }),
+  // Stop every in-flight background item in this chat (the section's "Stop all").
+  z.object({
+    kind: z.literal("stopAllBackgroundItems"),
+    ...ownerActionFrameFields,
   }),
   z.object({
     kind: z.literal("resumeQueue"),

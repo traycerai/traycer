@@ -135,10 +135,10 @@ export function finalizeStreamingActionBlocks(
       block.type !== "interview"
     ) {
       hasUpdates = true;
-      // For tool_call/command, `timestamp` is the START anchor the GUI reads as
-      // `startedAt` (the elapsed heartbeat) - advancing it to turn-end would
-      // give a force-finalized (e.g. interrupted) call a start time equal to the
-      // turn end. Flip status only, keep the start.
+      // For tool_call/command, keep the start timestamp stable. Tool calls also
+      // carry immutable `startedAt`; `timestamp` advances only when their own
+      // terminal event arrives, which lets background command cards derive a
+      // post-completion duration.
       if (block.type === "tool_call" || block.type === "command") {
         return { ...block, status: actionStatus };
       }
@@ -172,29 +172,33 @@ export function finalizeStreamingActionBlocks(
   return hasUpdates ? finalizedBlocks : blocks;
 }
 
-// Option B (backgrounded subagents): restore any subagent block that
+// Option B (backgrounded work): restore any subagent/background-tool block that
 // `finalizeStreamingActionBlocks` just finalized but was "streaming" before, to
-// its pre-finalize (streaming) state. A subagent still streaming at a CLEAN turn
-// end is a backgrounded subagent that outlives the turn that spawned it (a
-// synchronous subagent's result returns to the model BEFORE the model finishes),
-// so its card must keep reading "running" until its OWN completion finalizes it
-// (the host's detached execution). Turn-scoped action blocks
-// (tool_call/command/file_change) stay finalized. Only applied on `turn.completed`
-// - a stopped/interrupted turn DOES finalize a still-running subagent.
+// its pre-finalize (streaming) state. Detached work still streaming at a CLEAN
+// turn end outlives the turn that spawned it, so its card must keep reading
+// "running" until its OWN completion finalizes it (the host's detached
+// execution). Other turn-scoped action blocks (ordinary tool_call/command/
+// file_change) stay finalized. Only applied on `turn.completed` - a
+// stopped/interrupted turn DOES finalize still-running detached work.
 export function reopenStreamingSubagentBlocks(
   before: ContentBlock[],
   finalized: ContentBlock[],
 ): ContentBlock[] {
   if (finalized === before) return finalized;
-  const streamingSubagentIds = new Set(
+  const streamingDetachedIds = new Set(
     before
-      .filter((block) => block.type === "subagent" && block.status === "streaming")
+      .filter(
+        (block) =>
+          block.status === "streaming" &&
+          (block.type === "subagent" ||
+            (block.type === "tool_call" && block.backgroundTask)),
+      )
       .map((block) => block.blockId),
   );
-  if (streamingSubagentIds.size === 0) return finalized;
+  if (streamingDetachedIds.size === 0) return finalized;
   const beforeById = new Map(before.map((block) => [block.blockId, block]));
   return finalized.map((block) =>
-    block.type === "subagent" && streamingSubagentIds.has(block.blockId)
+    streamingDetachedIds.has(block.blockId)
       ? beforeById.get(block.blockId) ?? block
       : block,
   );
@@ -275,6 +279,13 @@ function nullableMetadata(
   value: Record<string, unknown> | undefined,
 ): Record<string, unknown> | null {
   return value ?? null;
+}
+
+function mergeBackgroundTaskMarker(
+  existing: boolean,
+  incoming: boolean | undefined,
+): boolean {
+  return existing || incoming === true;
 }
 
 function normalizeApprovalDecision(
@@ -517,11 +528,11 @@ export function accumulateEvent(
         event.timestamp,
         finalizeStatusForTerminalEvent(event),
       );
-      // Keep a still-streaming (backgrounded) subagent's card "running" ONLY on a
-      // CLEAN completion. A degraded ending (`event.reason` set - e.g. max_tokens,
-      // refusal) is a real termination: the host does NOT keep the query alive for
-      // it, so the subagent will not continue. Finalize its card here rather than
-      // leaving a lying "running" that never resolves.
+      // Keep still-streaming detached work (backgrounded subagent/tool card)
+      // "running" ONLY on a CLEAN completion. A degraded ending
+      // (`event.reason` set - e.g. max_tokens, refusal) is a real termination:
+      // the host does NOT keep the query alive for it, so detached work will not
+      // continue. Finalize its card here rather than leaving a lying "running".
       return event.reason === undefined
         ? reopenStreamingSubagentBlocks(blocks, finalized)
         : finalized;
@@ -590,6 +601,7 @@ export function accumulateEvent(
       return finalizeBlock(blocks, event.blockId, "reasoning", event.timestamp);
 
     case "tool_call.started": {
+      const startedAt = event.startedAt ?? event.timestamp;
       const existing = findBlockOfType(blocks, event.blockId, "tool_call");
       if (existing) {
         const updated = {
@@ -608,7 +620,13 @@ export function accumulateEvent(
               }),
           parentBlockId: resolveParentBlockId(event, existing),
           timestamp: event.timestamp,
+          startedAt: event.startedAt ?? existing.startedAt ?? startedAt,
+          endedAt: existing.endedAt,
           agentMessageSend: event.agentMessageSend ?? existing.agentMessageSend,
+          backgroundTask: mergeBackgroundTaskMarker(
+            existing.backgroundTask,
+            event.backgroundTask,
+          ),
         };
         return replaceBlock(blocks, event.blockId, updated);
       }
@@ -626,11 +644,16 @@ export function accumulateEvent(
           error: null,
           agentMessageSend: event.agentMessageSend,
           progress: null,
+          backgroundOutput: null,
+          startedAt,
+          endedAt: null,
+          backgroundTask: event.backgroundTask === true,
         },
       ];
     }
 
     case "tool_call.completed": {
+      const endedAt = event.endedAt ?? event.timestamp;
       const existing = findBlockOfType(blocks, event.blockId, "tool_call");
       if (existing) {
         const updated = {
@@ -639,6 +662,14 @@ export function accumulateEvent(
           parentBlockId: resolveParentBlockId(event, existing),
           timestamp: event.timestamp,
           agentMessageSend: event.agentMessageSend ?? existing.agentMessageSend,
+          backgroundOutput:
+            event.backgroundOutput ?? existing.backgroundOutput,
+          startedAt: event.backgroundStartedAt ?? existing.startedAt,
+          endedAt,
+          backgroundTask: mergeBackgroundTaskMarker(
+            existing.backgroundTask,
+            event.backgroundTask,
+          ),
         };
         return replaceBlock(blocks, event.blockId, updated);
       }
@@ -657,11 +688,16 @@ export function accumulateEvent(
           error: null,
           agentMessageSend: event.agentMessageSend,
           progress: null,
+          backgroundOutput: event.backgroundOutput ?? null,
+          startedAt: event.backgroundStartedAt ?? null,
+          endedAt,
+          backgroundTask: event.backgroundTask === true,
         },
       ];
     }
 
     case "tool_call.errored": {
+      const endedAt = event.endedAt ?? event.timestamp;
       const existing = findBlockOfType(blocks, event.blockId, "tool_call");
       if (existing) {
         const updated = {
@@ -671,6 +707,14 @@ export function accumulateEvent(
           parentBlockId: resolveParentBlockId(event, existing),
           timestamp: event.timestamp,
           agentMessageSend: event.agentMessageSend ?? existing.agentMessageSend,
+          backgroundOutput:
+            event.backgroundOutput ?? existing.backgroundOutput,
+          startedAt: event.backgroundStartedAt ?? existing.startedAt,
+          endedAt,
+          backgroundTask: mergeBackgroundTaskMarker(
+            existing.backgroundTask,
+            event.backgroundTask,
+          ),
         };
         return replaceBlock(blocks, event.blockId, updated);
       }
@@ -689,16 +733,21 @@ export function accumulateEvent(
           error: event.error,
           agentMessageSend: event.agentMessageSend,
           progress: null,
+          backgroundOutput: event.backgroundOutput ?? null,
+          startedAt: event.backgroundStartedAt ?? null,
+          endedAt,
+          backgroundTask: event.backgroundTask === true,
         },
       ];
     }
 
     case "tool_call.progress": {
       // Replace-latest: stamp the most recent progress line onto the owning
-      // tool_call block. Deliberately does NOT advance `timestamp` - the GUI
-      // derives the elapsed heartbeat from the block's start time, which must
-      // stay anchored across progress updates. Progress for a tool_call that
-      // doesn't exist (or a block of another type) is meaningless - drop it.
+      // tool_call block. Deliberately does NOT advance `timestamp`; while the
+      // block streams, timestamp still matches immutable `startedAt`, and once
+      // finalized timestamp becomes the completion time for duration derivation.
+      // Progress for a tool_call that doesn't exist (or a block of another
+      // type) is meaningless - drop it.
       const existing = findBlockOfType(blocks, event.blockId, "tool_call");
       if (!existing) return blocks;
       return replaceBlock(blocks, event.blockId, {
