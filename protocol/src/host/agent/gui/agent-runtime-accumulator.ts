@@ -600,6 +600,23 @@ export function accumulateEvent(
     case "reasoning.completed":
       return finalizeBlock(blocks, event.blockId, "reasoning", event.timestamp);
 
+    case "monitor.event": {
+      const existing = findBlockOfType(blocks, event.blockId, "monitor_event");
+      const updated = {
+        type: "monitor_event" as const,
+        blockId: event.blockId,
+        status: "completed" as const,
+        timestamp: event.timestamp,
+        parentBlockId: resolveParentBlockId(event, existing),
+        name: event.name,
+        message: event.message,
+      };
+      if (existing) {
+        return replaceBlock(blocks, event.blockId, updated);
+      }
+      return [...blocks, updated];
+    }
+
     case "tool_call.started": {
       const startedAt = event.startedAt ?? event.timestamp;
       const existing = findBlockOfType(blocks, event.blockId, "tool_call");

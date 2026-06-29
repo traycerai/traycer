@@ -312,6 +312,14 @@ export type ReasoningCompletedEvent = z.infer<
   typeof reasoningCompletedEventSchema
 >;
 
+export const monitorEventEventSchema = z.object({
+  ...baseRuntimeEventFields,
+  type: z.literal("monitor.event"),
+  name: z.string(),
+  message: z.string(),
+});
+export type MonitorEventEvent = z.infer<typeof monitorEventEventSchema>;
+
 export const toolCallStartedEventSchema = z.object({
   ...baseRuntimeEventFields,
   type: z.literal("tool_call.started"),
@@ -864,6 +872,7 @@ export const runtimeEventSchema = z.discriminatedUnion("type", [
   textCompletedEventSchema,
   reasoningDeltaEventSchema,
   reasoningCompletedEventSchema,
+  monitorEventEventSchema,
   toolCallStartedEventSchema,
   toolCallCompletedEventSchema,
   toolCallErroredEventSchema,

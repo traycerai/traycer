@@ -2607,6 +2607,11 @@ const BLOCK_HANDLERS: {
             block.timestamp,
           ),
         },
+  monitor_event: (block) => ({
+    kind: "monitor_event",
+    name: block.name,
+    message: block.message,
+  }),
   tool_call: (block) => ({
     kind: "tool",
     toolName: block.toolName,

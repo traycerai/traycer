@@ -27,6 +27,8 @@ function contentBlockText(block: ContentBlock): string {
       return block.text;
     case "reasoning":
       return `Reasoning\n${block.content}`;
+    case "monitor_event":
+      return `Event received from monitor "${block.name}"`;
     case "tool_call":
       return `Tool: ${block.toolName}`;
     case "file_change":
@@ -41,6 +43,26 @@ function contentBlockText(block: ContentBlock): string {
       return todoBlockText(block);
     case "plan":
       return planBlockText(block);
+    default:
+      return auxiliaryContentBlockText(block);
+  }
+}
+
+function auxiliaryContentBlockText(
+  block: Extract<
+    ContentBlock,
+    {
+      type:
+        | "error"
+        | "compaction"
+        | "autonomous_resume"
+        | "interview"
+        | "steer"
+        | "artifact_operation";
+    }
+  >,
+): string {
+  switch (block.type) {
     case "error":
       return block.message;
     case "compaction":

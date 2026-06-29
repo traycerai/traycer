@@ -17,6 +17,7 @@ function makeBlocks(): ContentBlock[] {
 
 type TextBlock = Extract<ContentBlock, { type: "text" }>;
 type ReasoningBlock = Extract<ContentBlock, { type: "reasoning" }>;
+type MonitorEventBlock = Extract<ContentBlock, { type: "monitor_event" }>;
 type ToolCallBlock = Extract<ContentBlock, { type: "tool_call" }>;
 type FileChangeBlock = Extract<ContentBlock, { type: "file_change" }>;
 type CommandBlock = Extract<ContentBlock, { type: "command" }>;
@@ -145,6 +146,22 @@ describe("accumulateEvent", () => {
     // completion time, so the GUI derives a stable 7ms (12 - 5) duration.
     expect((blocks[0] as ReasoningBlock).startedAt).toBe(5);
     expect(blocks[0].timestamp).toBe(12);
+  });
+
+  it("records monitor event notifications as completed content blocks", () => {
+    const blocks = accumulateEvent(makeBlocks(), {
+      type: "monitor.event",
+      blockId: "monitor-event-1",
+      timestamp: 10,
+      name: "watch logs",
+      message: "new log line",
+    });
+
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].type).toBe("monitor_event");
+    expect(blocks[0].status).toBe("completed");
+    expect((blocks[0] as MonitorEventBlock).name).toBe("watch logs");
+    expect((blocks[0] as MonitorEventBlock).message).toBe("new log line");
   });
 
   // ── tool call lifecycle ──────────────────────────────────────
