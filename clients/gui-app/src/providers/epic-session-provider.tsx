@@ -1,5 +1,12 @@
-import { useEffect, useEffectEvent, useState, type ReactNode } from "react";
+import {
+  use,
+  useEffect,
+  useEffectEvent,
+  useState,
+  type ReactNode,
+} from "react";
 import { useNavigate } from "@tanstack/react-router";
+import { QueryClientContext, type QueryClient } from "@tanstack/react-query";
 import {
   createOpenEpicStore,
   type EpicStreamClientFactory,
@@ -12,6 +19,7 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useAuthService } from "@/lib/host";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { updateEpicTitleInCloudTaskCaches } from "@/lib/cloud-epic-tasks-query/cache";
 import {
   claimDesktopEpicOwnership,
   getDesktopEpicOwnershipBridge,
@@ -47,13 +55,17 @@ export function EpicSessionProvider(
   const openTransport = useDurableStreamTransportFactory();
   const activeHostId = useReactiveActiveHostId();
   const authService = useAuthService();
+  const queryClient = use(QueryClientContext);
   const navigate = useNavigate();
   const desktopBridge = getDesktopEpicOwnershipBridge();
   // Persisted state (`lastFocusedArtifactId`) is bucketed under the active
   // user's email so a different signed-in identity on this device cannot
   // restore prior-user focus state. Email is the only stable identity field
   // surfaced through `AuthProfile`; null means signed-out / hydrating.
-  const userId = useAuthStore((state) => state.profile?.email ?? null);
+  const sessionUserId = useAuthStore((state) => state.profile?.email ?? null);
+  const cloudTasksUserId = useAuthStore(
+    (state) => state.contextMetadata?.userId ?? null,
+  );
 
   // When the host terminates the epic stream with `UNAUTHORIZED`, the
   // current context bearer is no longer accepted. Re-validate the live
@@ -114,7 +126,7 @@ export function EpicSessionProvider(
     };
   }, [desktopBridge, epicId, navigate, ownershipKey, tabId]);
 
-  const sessionKey = `${epicId}\x1f${activeHostId ?? "host:none"}\x1f${userId ?? "user:none"}`;
+  const sessionKey = `${epicId}\x1f${activeHostId ?? "host:none"}\x1f${sessionUserId ?? "user:none"}`;
   const [session, setSession] = useState<MountedSessionState | null>(null);
 
   useEffect(() => {
@@ -135,7 +147,10 @@ export function EpicSessionProvider(
     const existing = registry.get(epicId);
     if (existing !== null) {
       const existingHostId = handleHostIds.get(existing) ?? null;
-      if (existing.userId !== userId || existingHostId !== activeHostId) {
+      if (
+        existing.userId !== sessionUserId ||
+        existingHostId !== activeHostId
+      ) {
         registry.release(epicId);
       }
     }
@@ -187,7 +202,7 @@ export function EpicSessionProvider(
       createOpenEpicStore({
         epicId: id,
         streamClientFactory,
-        userId,
+        userId: sessionUserId,
         onAuthError: handleSessionAuthError,
       }),
     );
@@ -207,15 +222,61 @@ export function EpicSessionProvider(
     openTransport,
     ownershipClaimed,
     sessionKey,
-    userId,
+    sessionUserId,
   ]);
 
   const handle =
     ownershipClaimed && session?.key === sessionKey ? session.handle : null;
+  useCloudTaskTitleCacheSync({
+    activeHostId,
+    epicId,
+    handle,
+    queryClient,
+    userId: cloudTasksUserId,
+  });
 
   return (
     <EpicSessionContext.Provider value={handle}>
       {children}
     </EpicSessionContext.Provider>
   );
+}
+
+interface CloudTaskTitleCacheSyncArgs {
+  readonly activeHostId: string | null;
+  readonly epicId: string;
+  readonly handle: OpenEpicStoreHandle | null;
+  readonly queryClient: QueryClient | undefined;
+  readonly userId: string | null;
+}
+
+function useCloudTaskTitleCacheSync(args: CloudTaskTitleCacheSyncArgs): void {
+  const { activeHostId, epicId, handle, queryClient, userId } = args;
+  useEffect(() => {
+    if (activeHostId === null) return;
+    if (handle === null) return;
+    if (queryClient === undefined) return;
+    if (userId === null) return;
+
+    let lastSyncedTitle: string | null = null;
+    const syncTitle = (): void => {
+      const title = normalizeGeneratedTitle(handle.store.getState().epic.title);
+      if (title === null || title === lastSyncedTitle) return;
+      lastSyncedTitle = title;
+      updateEpicTitleInCloudTaskCaches(
+        queryClient,
+        { hostId: activeHostId, userId },
+        epicId,
+        title,
+      );
+    };
+
+    syncTitle();
+    return handle.store.subscribe(syncTitle);
+  }, [activeHostId, epicId, handle, queryClient, userId]);
+}
+
+function normalizeGeneratedTitle(title: string): string | null {
+  const trimmed = title.trim();
+  return trimmed.length > 0 ? trimmed : null;
 }
