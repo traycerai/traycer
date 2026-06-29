@@ -1340,7 +1340,11 @@ describe("AuthService", () => {
       const service = trackService(new AuthService({ runnerHost: host }));
       await service.start();
       await service.signIn();
-      host.emitAuthCallback({ code: "old-token" });
+      host.deviceFlow.emitResult({
+        kind: "authorized",
+        token: "old-token",
+        refreshToken: "old-token-refresh",
+      });
       await vi.waitFor(() => {
         expect(useAuthStore.getState().status).toBe("signed-in");
       });
