@@ -50,13 +50,27 @@ function accountLineFor(state: ProviderCliState): AccountLine {
   }
   if (!state.enabled) return { text: "Disabled", tone: "muted", title: null };
   const { auth } = state;
-  if (state.authPending && auth.status === "unknown") {
+  if (state.authPending) {
     return { text: "Checking account…", tone: "muted", title: null };
   }
   if (auth.status === "authenticated") {
     return {
       text: auth.label ?? "Signed in",
       tone: "good",
+      title: auth.detail,
+    };
+  }
+  if (auth.status === "configured") {
+    return {
+      text: "Configured, not verified",
+      tone: "muted",
+      title: auth.detail,
+    };
+  }
+  if (auth.status === "unavailable") {
+    return {
+      text: "Status check failed",
+      tone: "muted",
       title: auth.detail,
     };
   }

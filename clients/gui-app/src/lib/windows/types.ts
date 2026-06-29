@@ -1,3 +1,5 @@
+import type { HostRegistryUpdateState } from "@traycer-clients/shared/platform/runner-host";
+
 export type DesktopJsonPrimitive = string | number | boolean | null;
 export type DesktopJsonValue =
   | DesktopJsonPrimitive
@@ -208,6 +210,12 @@ export interface DesktopAppUpdatesBridge {
   downloadUpdate(): Promise<DesktopAppUpdateSnapshot>;
   installUpdate(): Promise<DesktopAppUpdateSnapshot>;
   onChange(handler: (snapshot: DesktopAppUpdateSnapshot) => void): {
+    dispose(): void;
+  };
+}
+
+export interface DesktopHostRegistryUpdatesBridge {
+  onChange(handler: (state: HostRegistryUpdateState) => void): {
     dispose(): void;
   };
 }

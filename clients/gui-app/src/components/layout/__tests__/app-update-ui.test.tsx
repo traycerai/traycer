@@ -307,17 +307,56 @@ describe("desktop app update UI", () => {
 
   it("runs the restart action only after the modal is confirmed", () => {
     const onConfirm = vi.fn();
-    render(
+    const onOpenChange = vi.fn();
+    const { rerender } = render(
       <RestartUpdateDialog
         open
-        onOpenChange={() => undefined}
+        onOpenChange={onOpenChange}
         latestVersion="1.2.3"
         onConfirm={onConfirm}
       />,
     );
 
-    fireEvent.click(screen.getByTestId("restart-update-confirm"));
+    fireEvent.click(screen.getByRole("button", { name: /Restart now/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Restart now/i }));
     expect(onConfirm).toHaveBeenCalledTimes(1);
+    expect(
+      screen
+        .getByRole("button", { name: /Restart now/i })
+        .hasAttribute("disabled"),
+    ).toBe(true);
+    expect(
+      screen.getByRole("status", {
+        name: /Restart request in progress/i,
+      }),
+    ).toBeTruthy();
+    rerender(
+      <RestartUpdateDialog
+        open={false}
+        onOpenChange={onOpenChange}
+        latestVersion="1.2.3"
+        onConfirm={onConfirm}
+      />,
+    );
+    rerender(
+      <RestartUpdateDialog
+        open
+        onOpenChange={onOpenChange}
+        latestVersion="1.2.3"
+        onConfirm={onConfirm}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Later" }).hasAttribute("disabled"),
+    ).toBe(false);
+    expect(
+      screen
+        .getByRole("button", { name: /Restart now/i })
+        .hasAttribute("disabled"),
+    ).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: /Restart now/i }));
+    expect(onConfirm).toHaveBeenCalledTimes(2);
   });
 
   it("shares one desktop update subscription across update UI consumers", async () => {
@@ -372,7 +411,7 @@ describe("desktop app update UI", () => {
     await waitFor(() => {
       expect(toastMock.info).toHaveBeenCalledWith(
         "Checking for Traycer updates...",
-        { id: "traycer-app-update" },
+        { id: "traycer-app-update", description: null, duration: 4000 },
       );
     });
 
@@ -472,6 +511,40 @@ describe("desktop app update UI", () => {
         expect.objectContaining({
           id: "traycer-app-update",
           description: "50% complete",
+        }),
+      );
+    });
+  });
+
+  it("clears stale download progress copy when the update becomes ready", async () => {
+    const bridge = new FakeAppUpdatesBridge(IDLE_SNAPSHOT);
+    renderWithHost(<AppUpdateToastController />, bridge);
+    await waitFor(() => {
+      expect(bridge.subscriptionCount()).toBe(1);
+    });
+
+    act(() => {
+      bridge.emit(downloadingSnapshot(1, 0));
+    });
+    await waitFor(() => {
+      expect(toastMock.loading).toHaveBeenCalledWith(
+        "Downloading update…",
+        expect.objectContaining({
+          id: "traycer-app-update",
+          description: "0% complete",
+        }),
+      );
+    });
+
+    act(() => {
+      bridge.emit(readySnapshot(2));
+    });
+    await waitFor(() => {
+      expect(toastMock).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          id: "traycer-app-update",
+          description: null,
         }),
       );
     });

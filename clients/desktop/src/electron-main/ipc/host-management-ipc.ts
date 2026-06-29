@@ -52,6 +52,27 @@ import type { RunnerIpcBridge } from "./runner-ipc-bridge";
 
 const LONG_OP_TIMEOUT_MS = 10 * 60_000;
 const REGISTRY_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+type HostRegistryUpdateStateListener = (state: HostRegistryUpdateState) => void;
+const registryUpdateStateListeners = new Set<HostRegistryUpdateStateListener>();
+
+export function onHostRegistryUpdateStateChange(
+  listener: HostRegistryUpdateStateListener,
+): () => void {
+  registryUpdateStateListeners.add(listener);
+  return () => {
+    registryUpdateStateListeners.delete(listener);
+  };
+}
+
+function emitHostRegistryUpdateState(state: HostRegistryUpdateState): void {
+  for (const listener of registryUpdateStateListeners) {
+    try {
+      listener(state);
+    } catch (err) {
+      log.warn("[host-management] registry update listener failed", err);
+    }
+  }
+}
 
 /**
  * Active host environment for this Desktop process. Set at boot via
@@ -452,6 +473,8 @@ interface RegistryUpdateCacheFile {
   readonly errorMessage: string | null;
 }
 
+let registryRefreshQueue: Promise<void> = Promise.resolve();
+
 function desktopCacheDir(): string {
   return join(homedir(), ".traycer", "desktop");
 }
@@ -599,20 +622,22 @@ function isVerifyDisabledForBuild(err: unknown): boolean {
 
 async function probeRegistry(): Promise<RegistryUpdateCacheFile> {
   const checkedAt = new Date().toISOString();
-  const installed = await readInstalledHostRecord();
-  const installedVersion = installed?.version ?? null;
   try {
     const snapshot = projectAvailableSnapshot(
       await runTraycerCliJson<unknown>(["host", "available", "--json"]),
     );
+    const installed = await readInstalledHostRecord();
+    const installedVersion = installed?.version ?? null;
     return {
       checkedAt,
-      latestVersion: snapshot.latest === "" ? null : snapshot.latest,
+      latestVersion: availableLatestVersion(snapshot),
       installedVersion,
       reachable: true,
       errorMessage: null,
     };
   } catch (err) {
+    const installed = await readInstalledHostRecord();
+    const installedVersion = installed?.version ?? null;
     if (isVerifyDisabledForBuild(err)) {
       // Pin `latestVersion = installedVersion` so `buildUpdateState`'s
       // diff yields `updateAvailable: false` - the Updates row reads
@@ -642,6 +667,24 @@ async function probeRegistry(): Promise<RegistryUpdateCacheFile> {
   }
 }
 
+function availableLatestVersion(
+  snapshot: HostAvailableSnapshot,
+): string | null {
+  if (snapshot.latest.length === 0) {
+    return null;
+  }
+  const latest = snapshot.versions.find(
+    (entry) => entry.version === snapshot.latest,
+  );
+  if (latest === undefined) {
+    return null;
+  }
+  if (latest.platformAsset === null || !latest.platformAsset.available) {
+    return null;
+  }
+  return latest.version;
+}
+
 // Empty `HostAvailableSnapshot` used by handlers that need to render a
 // "no versions" state without inventing a failure (e.g. dev builds where
 // the registry probe is intentionally disabled).
@@ -663,16 +706,34 @@ function emptyAvailableSnapshot(): HostAvailableSnapshot {
 export async function refreshRegistryUpdateState(opts: {
   readonly force: boolean;
 }): Promise<HostRegistryUpdateState> {
+  const run = registryRefreshQueue.then(
+    () => refreshRegistryUpdateStateSerial(opts),
+    () => refreshRegistryUpdateStateSerial(opts),
+  );
+  registryRefreshQueue = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
+}
+
+async function refreshRegistryUpdateStateSerial(opts: {
+  readonly force: boolean;
+}): Promise<HostRegistryUpdateState> {
   const cache = await readRegistryCache();
   if (!opts.force && cache !== null && cache.reachable) {
     const ageMs = Date.now() - Date.parse(cache.checkedAt);
     if (Number.isFinite(ageMs) && ageMs >= 0 && ageMs < REGISTRY_CACHE_TTL_MS) {
-      return buildUpdateState(cache);
+      const state = buildUpdateState(cache);
+      emitHostRegistryUpdateState(state);
+      return state;
     }
   }
   const fresh = await probeRegistry();
   await writeRegistryCache(fresh);
-  return buildUpdateState(fresh);
+  const state = buildUpdateState(fresh);
+  emitHostRegistryUpdateState(state);
+  return state;
 }
 
 function projectUninstallResult(
@@ -805,6 +866,12 @@ export function narrowPostSwapAction(raw: unknown): PostSwapAction {
 }
 
 export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
+  bridge.disposeFns.push(
+    onHostRegistryUpdateStateChange((state) => {
+      bridge.fanOut(RunnerHostEvent.hostRegistryUpdateStateChange, state);
+    }),
+  );
+
   bridge.handleInvoke(
     RunnerHostInvoke.traycerHostInstall,
     async (_event, raw: unknown) => {

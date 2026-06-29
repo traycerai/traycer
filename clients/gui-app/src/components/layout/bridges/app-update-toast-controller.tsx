@@ -9,6 +9,7 @@ import type {
 } from "@/lib/windows/types";
 
 const APP_UPDATE_TOAST_ID = "traycer-app-update";
+const APP_UPDATE_TRANSIENT_TOAST_DURATION_MS = 4000;
 
 export function AppUpdateToastController(): null {
   const { bridge, snapshot } = useDesktopAppUpdates();
@@ -70,6 +71,8 @@ function showAppUpdateToast(
       if (snapshot.lastCheckIntent === "manual") {
         toast.info("Checking for Traycer updates...", {
           id: APP_UPDATE_TOAST_ID,
+          description: null,
+          duration: APP_UPDATE_TRANSIENT_TOAST_DURATION_MS,
         });
       }
       return;
@@ -82,6 +85,7 @@ function showAppUpdateToast(
         toast("Update available", {
           id: APP_UPDATE_TOAST_ID,
           description: snapshot.installBlockedReason,
+          duration: APP_UPDATE_TRANSIENT_TOAST_DURATION_MS,
         });
         return;
       }
@@ -96,6 +100,7 @@ function showAppUpdateToast(
         />,
         {
           id: APP_UPDATE_TOAST_ID,
+          description: null,
           duration: Infinity,
         },
       );
@@ -120,6 +125,7 @@ function showAppUpdateToast(
         />,
         {
           id: APP_UPDATE_TOAST_ID,
+          description: null,
           duration: Infinity,
         },
       );
@@ -141,13 +147,16 @@ function showAppUpdateToast(
         id: APP_UPDATE_TOAST_ID,
         description:
           snapshot.currentVersion.length === 0
-            ? undefined
+            ? null
             : `Current version: v${snapshot.currentVersion}`,
+        duration: APP_UPDATE_TRANSIENT_TOAST_DURATION_MS,
       });
       return;
     case "unavailable":
       toast.info("Updates are not available for this build.", {
         id: APP_UPDATE_TOAST_ID,
+        description: null,
+        duration: APP_UPDATE_TRANSIENT_TOAST_DURATION_MS,
       });
       return;
     case "idle":

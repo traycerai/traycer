@@ -215,7 +215,7 @@ function ReauthBannerInner({
   // No reconnect method available from here: a provider with no web login, or an
   // OAuth-only provider on a remote host (loopback unreachable) with no paste
   // vars. Direct the user to the CLI.
-  if (!canOauth && envVars.length === 0) {
+  if (!canOauth && envVars.length === 0 && !apiKeySupported) {
     return (
       <ReauthBannerShell
         icon={BANNER_HEADER_ICON}
@@ -241,7 +241,7 @@ function ReauthBannerInner({
           providerLabel={providerLabel}
         />
       ) : null}
-      {envVars.length > 0 ? (
+      {envVars.length > 0 || apiKeySupported ? (
         <TokenReauthForm
           providerId={providerId}
           envVars={envVars}
@@ -386,6 +386,7 @@ function TokenReauthForm({
     pickedVar !== "" && envVars.includes(pickedVar)
       ? pickedVar
       : (envVars[0] ?? "");
+  const activeCredentialLabel = activeVar === "" ? "API key" : activeVar;
 
   const busy = setEnvOverride.isPending || setApiKey.isPending || probing;
 
@@ -428,7 +429,13 @@ function TokenReauthForm({
 
   const onSave = (): void => {
     const trimmed = draft.trim();
-    if (trimmed.length === 0 || activeVar === "" || busy) return;
+    if (
+      trimmed.length === 0 ||
+      (!apiKeySupported && activeVar === "") ||
+      busy
+    ) {
+      return;
+    }
     setTokenError(null);
     if (apiKeySupported) {
       // Cursor / Droid: store as the encrypted host-side secret, exactly like
@@ -483,7 +490,7 @@ function TokenReauthForm({
           type="password"
           autoComplete="off"
           className="min-w-0 flex-1 font-mono text-ui-sm"
-          placeholder={`Paste your ${activeVar}`}
+          placeholder={`Paste your ${activeCredentialLabel}`}
           value={draft}
           onChange={(e) => {
             setDraft(e.target.value);
