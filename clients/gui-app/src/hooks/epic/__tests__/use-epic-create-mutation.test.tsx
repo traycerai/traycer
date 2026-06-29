@@ -315,4 +315,53 @@ describe("useEpicCreate", () => {
       { value: "shared", count: 0 },
     ]);
   });
+
+  it("preserves an existing generated title when the live epic session is gone", () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    const cachedGeneratedTask = makeTask({
+      id: "new",
+      title: "Generated history title",
+      createdBy: "user-1",
+      updatedAt: 2,
+      repos: [],
+      workspaces: [],
+    });
+    const staleCreateResponseTask = makeTask({
+      id: "new",
+      title: "Initial user prompt",
+      createdBy: "user-1",
+      updatedAt: 2,
+      repos: [],
+      workspaces: [],
+    });
+    const queryKey = cloudEpicTasksQueryKey(
+      "host-1",
+      "user-1",
+      LIST_CLOUD_TASKS_REQUEST,
+    );
+    queryClient.setQueryData<ListTasksResponse>(queryKey, {
+      tasks: [cachedGeneratedTask],
+      hasMore: false,
+    });
+
+    renderHook(() => useEpicCreate(), { wrapper: makeWrapper(queryClient) });
+    const options = testState.capturedOptions;
+    if (options === null) throw new Error("expected mutation options");
+
+    options.onSuccess(
+      { task: staleCreateResponseTask },
+      {},
+      options.onMutate(),
+    );
+
+    expect(
+      queryClient.getQueryData<ListTasksResponse>(queryKey)?.tasks[0]?.epic
+        ?.light?.title,
+    ).toBe("Generated history title");
+  });
 });

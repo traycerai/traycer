@@ -27,6 +27,7 @@ import { cloudEpicTasksQueryKeyMatchesScope } from "@/lib/cloud-epic-tasks-query
 import type { ListCloudTasksRequest } from "@/lib/cloud-epic-tasks-query";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 
 interface CreateEpicMutationContext {
   readonly hostId: string | null;
@@ -127,17 +128,20 @@ function mergeTaskIntoCloudTasksResponse(
   request: ListCloudTasksRequest,
   userId: string,
 ): ListTasksResponse {
-  const projection = taskProjection(task);
-  if (projection === null) return response;
+  const incomingProjection = taskProjection(task);
+  if (incomingProjection === null) return response;
   const existingTask = response.tasks.find(
-    (existing) => taskProjection(existing)?.id === projection.id,
+    (existing) => taskProjection(existing)?.id === incomingProjection.id,
   );
+  const taskToMerge = taskWithPreferredEpicTitle(task, existingTask);
+  const projection = taskProjection(taskToMerge);
+  if (projection === null) return response;
   if (!taskProjectionMatchesRequest(projection, request, userId)) {
     return response;
   }
   const tasks = response.tasks
     .filter((existing) => taskProjection(existing)?.id !== projection.id)
-    .concat(task)
+    .concat(taskToMerge)
     .sort((left, right) =>
       compareTaskLights(
         left,
@@ -553,4 +557,38 @@ function relevanceScore(task: TaskProjection, query: string): number {
 function normalizedQuery(request: ListCloudTasksRequest): string | null {
   const query = request.filters?.query?.trim().toLowerCase();
   return query === undefined || query.length === 0 ? null : query;
+}
+
+function taskWithPreferredEpicTitle(
+  task: TaskLight,
+  existingTask: TaskLight | undefined,
+): TaskLight {
+  const epic = task.epic;
+  const light = epic?.light;
+  if (epic === null || epic === undefined) return task;
+  if (light === null || light === undefined) return task;
+  const title = liveOpenEpicTitle(light.id) ?? cachedEpicTitle(existingTask);
+  if (title === null || title === light.title) return task;
+  return {
+    ...task,
+    epic: {
+      ...epic,
+      light: {
+        ...light,
+        title,
+      },
+    },
+  };
+}
+
+function cachedEpicTitle(task: TaskLight | undefined): string | null {
+  const title = task?.epic?.light?.title;
+  return title === undefined || title.trim().length === 0 ? null : title;
+}
+
+function liveOpenEpicTitle(epicId: string): string | null {
+  const handle = getOpenEpicRegistry().peek(epicId);
+  if (handle === null) return null;
+  const title = handle.store.getState().epic.title.trim();
+  return title.length > 0 ? title : null;
 }
