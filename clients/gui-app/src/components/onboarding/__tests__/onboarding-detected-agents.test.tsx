@@ -39,10 +39,11 @@ describe("OnboardingDetectedAgents", () => {
       "Kimi",
       "Qwen Code",
     ];
+    const textOrEmpty = (text: string | null): string => text ?? "";
 
     expect(
       screen.getAllByRole("listitem").map((row) => {
-        const text = row.textContent;
+        const text = textOrEmpty(row.textContent);
         return expectedNames.find((name) => text.includes(name)) ?? "";
       }),
     ).toEqual(expectedNames);

@@ -23,7 +23,19 @@ const PROVIDER_ID_ORDER = [
   "kilocode",
   "kimi",
   "qwen",
-] satisfies ReadonlyArray<ProviderId>;
+] as const satisfies ReadonlyArray<ProviderId>;
+
+type MissingProviderIdFromOrder = Exclude<
+  ProviderId,
+  (typeof PROVIDER_ID_ORDER)[number]
+>;
+
+type ExhaustiveOrderedProviders = [MissingProviderIdFromOrder] extends [never]
+  ? ReadonlyArray<OrderedProvider>
+  : readonly [
+      "Missing ProviderId in PROVIDER_ID_ORDER",
+      MissingProviderIdFromOrder,
+    ];
 
 const GUI_HARNESS_BY_PROVIDER_ID = {
   codex: "codex",
@@ -41,7 +53,7 @@ const GUI_HARNESS_BY_PROVIDER_ID = {
   qwen: "qwen",
 } satisfies Readonly<Record<ProviderId, GuiHarnessId>>;
 
-export const ORDERED_PROVIDERS: ReadonlyArray<OrderedProvider> =
+export const ORDERED_PROVIDERS: ExhaustiveOrderedProviders =
   PROVIDER_ID_ORDER.map((providerId) => ({
     providerId,
     harnessId: GUI_HARNESS_BY_PROVIDER_ID[providerId],

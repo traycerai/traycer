@@ -118,7 +118,16 @@ function installBadge(
 function accountDescription(state: ProviderCliState | undefined): ReactNode {
   if (state === undefined) return null;
   const account = accountLineFor(state);
-  return <span title={account.title ?? undefined}>{account.text}</span>;
+  return (
+    <span
+      title={account.title ?? undefined}
+      className={cn(
+        account.tone === "good" ? "text-[#7fd6a4]" : "text-white/45",
+      )}
+    >
+      {account.text}
+    </span>
+  );
 }
 
 function ProviderEnableSwitch(props: {
