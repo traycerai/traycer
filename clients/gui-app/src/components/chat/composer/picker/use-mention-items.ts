@@ -31,7 +31,7 @@ import {
   type MentionWorkspaceRequest,
 } from "@/lib/composer/mentions";
 import { buildEpicMentionSuggestionsFromTasks } from "@/lib/composer/mentions/local-epic-suggestions";
-import { displayTitle } from "@/lib/display-title";
+import { displayTitle, UNTITLED_EPIC_TITLE } from "@/lib/display-title";
 import type {
   EpicChatMentionEntry,
   EpicMentionEntry,
@@ -49,6 +49,7 @@ const EMPTY_WORKSPACE_REQUESTS: ReadonlyArray<MentionWorkspaceRequest> = [];
 const EMPTY_EPIC_REQUESTS: ReadonlyArray<MentionEpicRequest> = [];
 const EMPTY_WORKSPACE_ENTRIES: ReadonlyArray<WorkspaceEntry> = [];
 const EMPTY_EPIC_ENTRIES: ReadonlyArray<EpicMentionEntry> = [];
+const UNTITLED_TASK_TITLE = "Untitled task";
 
 export interface UseMentionItemsParams {
   readonly pickerStore: ComposerPickerStore;
@@ -197,7 +198,7 @@ export function useMentionItems(params: UseMentionItemsParams): void {
 
   const { data: workspaceEntries, isLoading: workspaceLoading } =
     useWorkspaceEntries({ requests: workspaceRequests, client: hostClient });
-  const { data: artifactEpicEntries, isLoading: epicLoading } =
+  const { data: remoteEpicEntries, isLoading: epicLoading } =
     useEpicMentionEntries({
       requests: epicRequests,
     });
@@ -212,16 +213,28 @@ export function useMentionItems(params: UseMentionItemsParams): void {
     }
     return titles;
   }, [cachedEpicTasks]);
-  const enrichedArtifactEntries = useMemo<
+  const enrichedRemoteEpicEntries = useMemo<
     ReadonlyArray<EpicMentionEntry>
   >(() => {
-    const enrichedCloud = artifactEpicEntries.map((entry) => {
-      if (entry.kind !== "epic-artifact") return entry;
+    const enrichedCloud = remoteEpicEntries.map((entry) => {
+      const normalizedEntry = normalizeTaskMentionEntry(entry);
+      if (normalizedEntry.kind !== "epic-artifact") return normalizedEntry;
       const cachedTitle = epicTitleByIdFromCache.get(entry.epicId);
-      if (cachedTitle === undefined || entry.epicTitle === cachedTitle) {
-        return entry;
+      if (
+        cachedTitle === undefined ||
+        normalizedEntry.epicTitle === cachedTitle
+      ) {
+        return normalizedEntry;
       }
-      return { ...entry, epicTitle: cachedTitle };
+      const epicTitle = normalizeTaskTitleText(cachedTitle);
+      return {
+        ...normalizedEntry,
+        epicTitle,
+        description:
+          normalizedEntry.description === normalizedEntry.epicTitle
+            ? epicTitle
+            : normalizedEntry.description,
+      };
     });
     if (currentEpicId === null) {
       return enrichedCloud.length === 0 ? EMPTY_EPIC_ENTRIES : enrichedCloud;
@@ -233,16 +246,17 @@ export function useMentionItems(params: UseMentionItemsParams): void {
     );
     return merged.length === 0 ? EMPTY_EPIC_ENTRIES : merged;
   }, [
-    artifactEpicEntries,
+    remoteEpicEntries,
     epicTitleByIdFromCache,
     currentEpicId,
     localArtifactEntries,
   ]);
   const epicEntries = useMemo<ReadonlyArray<EpicMentionEntry>>(() => {
-    if (localEpicSuggestions.length === 0) return enrichedArtifactEntries;
-    if (enrichedArtifactEntries.length === 0) return localEpicSuggestions;
-    return [...localEpicSuggestions, ...enrichedArtifactEntries];
-  }, [enrichedArtifactEntries, localEpicSuggestions]);
+    return mergeTaskAndArtifactMentionEntries(
+      localEpicSuggestions,
+      enrichedRemoteEpicEntries,
+    );
+  }, [enrichedRemoteEpicEntries, localEpicSuggestions]);
 
   const resolvedContext = useMemo<ComposerMentionProviderContext>(
     () => ({
@@ -337,7 +351,7 @@ export function epicChatMentionEntriesFromChats(
   rawEpicTitle: string,
 ): ReadonlyArray<EpicChatMentionEntry> {
   if (chats.allIds.length === 0) return EMPTY_CHAT_ENTRIES;
-  const epicTitle = displayTitle(rawEpicTitle, "epic");
+  const epicTitle = taskMentionTitle(rawEpicTitle);
   const entries = chats.allIds.flatMap((id) => {
     if (!Object.hasOwn(chats.byId, id)) return [];
     const chat = chats.byId[id];
@@ -401,7 +415,7 @@ export function buildCurrentEpicArtifactMentionEntries(
 ): ReadonlyArray<EpicMentionArtifactSuggestion> {
   if (artifacts.allIds.length === 0) return EMPTY_ARTIFACT_ENTRIES;
   const normalizedQuery = query.trim().toLowerCase();
-  const epicTitle = displayTitle(rawEpicTitle, "epic");
+  const epicTitle = taskMentionTitle(rawEpicTitle);
   const entries = artifacts.allIds.flatMap((id) => {
     if (!Object.hasOwn(artifacts.byId, id)) return [];
     const artifact = artifacts.byId[id];
@@ -447,4 +461,69 @@ export function mergeCurrentEpicArtifactMentions(
       .filter((entry) => !isCurrentEpicArtifact(entry))
       .toSorted(byRecency),
   ];
+}
+
+export function mergeTaskAndArtifactMentionEntries(
+  localTaskEntries: ReadonlyArray<EpicMentionEntry>,
+  cloudAndArtifactEntries: ReadonlyArray<EpicMentionEntry>,
+): ReadonlyArray<EpicMentionEntry> {
+  if (localTaskEntries.length === 0 && cloudAndArtifactEntries.length === 0) {
+    return EMPTY_EPIC_ENTRIES;
+  }
+
+  const merged: EpicMentionEntry[] = [];
+  const seenTaskIds = new Set<string>();
+
+  for (const entry of localTaskEntries) {
+    const normalized = normalizeTaskMentionEntry(entry);
+    merged.push(normalized);
+    if (normalized.kind === "epic") seenTaskIds.add(normalized.id);
+  }
+
+  for (const entry of cloudAndArtifactEntries) {
+    const normalized = normalizeTaskMentionEntry(entry);
+    if (normalized.kind === "epic" && seenTaskIds.has(normalized.id)) {
+      continue;
+    }
+    merged.push(normalized);
+    if (normalized.kind === "epic") seenTaskIds.add(normalized.id);
+  }
+
+  return merged.length === 0 ? EMPTY_EPIC_ENTRIES : merged;
+}
+
+function normalizeTaskMentionEntry(entry: EpicMentionEntry): EpicMentionEntry {
+  if (entry.kind === "epic") {
+    const label = normalizeTaskTitleText(entry.label);
+    return label === entry.label ? entry : { ...entry, label };
+  }
+
+  if (entry.kind === "epic-artifact") {
+    const epicTitle = normalizeTaskTitleText(entry.epicTitle);
+    const description =
+      entry.description === entry.epicTitle
+        ? epicTitle
+        : normalizeTaskTitleText(entry.description);
+    return epicTitle === entry.epicTitle && description === entry.description
+      ? entry
+      : { ...entry, epicTitle, description };
+  }
+
+  const epicTitle = normalizeTaskTitleText(entry.epicTitle);
+  const description =
+    entry.description === entry.epicTitle
+      ? epicTitle
+      : normalizeTaskTitleText(entry.description);
+  return epicTitle === entry.epicTitle && description === entry.description
+    ? entry
+    : { ...entry, epicTitle, description };
+}
+
+function taskMentionTitle(rawTitle: string): string {
+  const title = displayTitle(rawTitle, "epic");
+  return normalizeTaskTitleText(title);
+}
+
+function normalizeTaskTitleText(title: string): string {
+  return title === UNTITLED_EPIC_TITLE ? UNTITLED_TASK_TITLE : title;
 }
