@@ -124,12 +124,12 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     cleanup();
   });
 
-  it("falls back to the first available provider when the default is unavailable", async () => {
+  it("falls back by provider order when the default is unavailable", async () => {
     seedDefault("opencode");
     harnessesData.value = {
       harnesses: [
-        { id: "codex", available: true },
         { id: "claude", available: true },
+        { id: "codex", available: true },
         { id: "opencode", available: false },
       ],
     };
@@ -183,13 +183,14 @@ describe("useComposerToolbarStore selection reconciliation", () => {
   it("reroutes a GUI-only selection off the terminal surface", async () => {
     // `traycer` is selectable in chat but can't back a terminal agent. On the
     // terminal surface (`tuiOnly`) it must reroute to the first available
-    // TUI-capable harness instead of being carried forward un-launchable.
+    // TUI-capable harness in provider order instead of being carried forward
+    // un-launchable.
     seedDefault("traycer");
     harnessesData.value = {
       harnesses: [
         { id: "traycer", available: true, modes: ["gui"] },
-        { id: "codex", available: true, modes: ["gui", "tui"] },
         { id: "claude", available: true, modes: ["gui", "tui"] },
+        { id: "codex", available: true, modes: ["gui", "tui"] },
       ],
     };
 

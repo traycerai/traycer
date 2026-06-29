@@ -34,8 +34,10 @@ import { AgentSelectionGuideEditorSurface } from "@/components/agent-selection-g
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { OnboardingClaudeTui } from "@/components/onboarding/onboarding-claude-tui";
 import { OnboardingOpencodeTui } from "@/components/onboarding/onboarding-opencode-tui";
+import { ProviderList } from "@/components/providers/provider-list";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import type { GuiHarnessId } from "@traycer/protocol/host/agent/shared";
+import { ORDERED_PROVIDERS } from "@/lib/provider-ordering";
 import { cn } from "@/lib/utils";
 
 interface OnboardingDioramaProps {
@@ -70,7 +72,6 @@ type SceneId =
   | "agent-guide"
   | "command-theme";
 
-type CapabilityId = "gui" | "terminal";
 type NavigationPhase = "single" | "drag-1" | "split-1" | "drag-2" | "split-2";
 type MeshAgentId = "gui" | "claude" | "opencode";
 type SpotlightRegion =
@@ -306,92 +307,6 @@ const SIDEBAR_PANEL_RAIL_ITEMS: ReadonlyArray<{
 function taskSceneFor(index: number): TaskScene {
   return TASK_SCENES[index] ?? TASK_SCENES[0];
 }
-
-const PROVIDERS: ReadonlyArray<{
-  readonly harnessId: GuiHarnessId;
-  readonly label: string;
-  readonly status: string;
-  readonly capabilities: ReadonlyArray<CapabilityId>;
-}> = [
-  {
-    harnessId: "traycer",
-    label: "Traycer Inference",
-    status: "Built in · ready",
-    capabilities: ["gui"],
-  },
-  {
-    harnessId: "claude",
-    label: "Claude Code",
-    status: "Installed · signed in",
-    capabilities: ["gui", "terminal"],
-  },
-  {
-    harnessId: "codex",
-    label: "Codex",
-    status: "Installed · signed in",
-    capabilities: ["gui", "terminal"],
-  },
-  {
-    harnessId: "opencode",
-    label: "OpenCode",
-    status: "Installed",
-    capabilities: ["gui", "terminal"],
-  },
-  {
-    harnessId: "cursor",
-    label: "Cursor",
-    status: "API key set",
-    capabilities: ["gui"],
-  },
-  {
-    harnessId: "openrouter",
-    label: "OpenRouter",
-    status: "API key set",
-    capabilities: ["gui"],
-  },
-  {
-    harnessId: "grok",
-    label: "Grok",
-    status: "SuperGrok / X",
-    capabilities: ["gui"],
-  },
-  {
-    harnessId: "qwen",
-    label: "Qwen Code",
-    status: "API key / OAuth",
-    capabilities: ["gui"],
-  },
-  {
-    harnessId: "kiro",
-    label: "Kiro",
-    status: "Kiro login / API key",
-    capabilities: ["gui"],
-  },
-  {
-    harnessId: "droid",
-    label: "Droid",
-    status: "Factory account",
-    capabilities: ["gui"],
-  },
-  {
-    harnessId: "kimi",
-    label: "Kimi",
-    status: "Kimi account",
-    capabilities: ["gui"],
-  },
-  {
-    harnessId: "copilot",
-    label: "Copilot",
-    status: "GitHub Copilot",
-    capabilities: ["gui"],
-  },
-  {
-    harnessId: "kilocode",
-    label: "Kilo Code",
-    status: "Kilo login",
-    capabilities: ["gui"],
-  },
-];
 
 const PALETTE_ROWS = [
   { label: "New task", hint: "Cmd N" },
@@ -1289,31 +1204,26 @@ function OpenHarnessPicker() {
       <div className="border-b border-border px-2.5 py-1.5 text-overline uppercase tracking-wider text-muted-foreground">
         Select harness
       </div>
-      <ul className="flex flex-col p-1">
-        {PROVIDERS.map((provider) => {
-          const active = provider.harnessId === "claude";
-          return (
-            <li
-              key={provider.harnessId}
-              className={cn(
-                "flex items-center gap-2 rounded px-2 py-1 text-ui-xs",
-                active
-                  ? "bg-accent text-accent-foreground"
-                  : "text-foreground/80",
-              )}
-            >
-              <HarnessIcon
-                harnessId={provider.harnessId}
-                className="size-3.5 shrink-0"
-              />
-              <span className="min-w-0 flex-1 truncate">{provider.label}</span>
-              {active ? (
-                <Check className="size-3 shrink-0 text-[var(--term-ansi-green)]" />
-              ) : null}
-            </li>
-          );
+      <ProviderList
+        ariaLabel="Diorama harness options"
+        variant="diorama"
+        className="p-1"
+        rows={ORDERED_PROVIDERS.map(({ providerId }) => {
+          const active = providerId === "claude-code";
+          return {
+            providerId,
+            active,
+            dimmed: false,
+            enabled: null,
+            badge: null,
+            description: null,
+            trailing: active ? (
+              <Check className="size-3 shrink-0 text-[var(--term-ansi-green)]" />
+            ) : null,
+            onSelect: null,
+          };
         })}
-      </ul>
+      />
     </div>
   );
 }

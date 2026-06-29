@@ -17,6 +17,7 @@ import {
   type ServiceTier,
 } from "@/components/home/data/landing-options";
 import { buildChatRunSettings } from "@/lib/composer/chat-run-settings";
+import { sortGuiHarnessesByProviderOrder } from "@/lib/provider-ordering";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 /**
@@ -357,7 +358,7 @@ function effectiveSelectionFromHarnesses(
 ): HarnessModelSelection {
   if (harnesses === undefined) return selection;
   let firstEligible: HarnessOption | null = null;
-  for (const harness of harnesses) {
+  for (const harness of sortGuiHarnessesByProviderOrder(harnesses)) {
     if (!harness.available) continue;
     // On the terminal surface only TUI-capable harnesses are eligible, so a
     // GUI-only selection carried over from chat is rerouted off it - mirroring

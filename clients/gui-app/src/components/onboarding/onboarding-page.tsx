@@ -82,6 +82,29 @@ const ONBOARDING_STYLE = `
   padding-bottom: var(--onboarding-stage-bottom-pad);
 }
 
+/* When the mini-app is dropped (providers act), the providers list owns the
+   remaining space so long provider catalogs can scroll. */
+.onboarding-stage-content--solo {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.onboarding-stage-content--solo .onboarding-copy-rail {
+  align-self: stretch;
+  min-height: 0;
+}
+
+.onboarding-stage-content--solo .onboarding-copy-rail > :last-child {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+
+.onboarding-stage-content--solo .onboarding-copy {
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
 .onboarding-copy-rail {
   padding-top: var(--onboarding-copy-rail-top);
 }
@@ -250,30 +273,6 @@ const ONBOARDING_STYLE = `
     left: var(--onboarding-action-inset);
     right: var(--onboarding-action-inset);
   }
-
-  /* When the mini-app is dropped (providers act): keep the heading pinned at
-     the top (it must not move across screens), and center only the providers
-     list in the remaining space below it. */
-  .onboarding-stage-content--solo {
-    grid-template-rows: minmax(0, 1fr);
-  }
-  .onboarding-stage-content--solo .onboarding-copy-rail {
-    align-self: stretch;
-    min-height: 0;
-  }
-  .onboarding-stage-content--solo .onboarding-copy-rail > :last-child {
-    display: flex;
-    min-height: 0;
-    flex: 1 1 auto;
-    flex-direction: column;
-  }
-  .onboarding-stage-content--solo .onboarding-copy {
-    min-height: 0;
-    flex: 1 1 auto;
-  }
-  .onboarding-stage-content--solo .onboarding-addon {
-    margin-block: auto;
-  }
 }
 
 @media (max-width: 639px) {
@@ -305,6 +304,7 @@ function resolveAppVersionLabel(): string {
 function ActCopy(props: { act: OnboardingAct }) {
   const { act } = props;
   const headingRef = useRef<HTMLHeadingElement | null>(null);
+  const isAgentsAct = act.addon === "agents";
 
   useEffect(() => {
     headingRef.current?.focus({ preventScroll: true });
@@ -316,7 +316,10 @@ function ActCopy(props: { act: OnboardingAct }) {
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
       transition={{ duration: 0.28, ease: ACT_EASE }}
-      className="onboarding-copy flex w-full flex-col items-center text-center lg:items-start lg:text-left"
+      className={cn(
+        "onboarding-copy flex min-h-0 w-full flex-col items-center text-center lg:items-start lg:text-left",
+        isAgentsAct && "h-full",
+      )}
     >
       <p className="onboarding-copy-kicker hidden font-mono leading-normal font-medium tracking-[0.07em] text-white/55 uppercase lg:block">
         {act.eyebrow}
@@ -333,8 +336,8 @@ function ActCopy(props: { act: OnboardingAct }) {
           {act.body}
         </p>
       </div>
-      {act.addon === "agents" ? (
-        <div className="onboarding-addon w-full self-center pt-1 text-left lg:self-start">
+      {isAgentsAct ? (
+        <div className="onboarding-addon flex min-h-0 w-full flex-1 flex-col self-center overflow-hidden pt-1 text-left lg:self-start">
           <OnboardingDetectedAgents />
         </div>
       ) : null}
@@ -646,11 +649,11 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
             <div
               className={cn(
                 "onboarding-stage-content relative mx-auto grid h-full min-h-0 w-full max-w-[104rem] items-start overflow-hidden",
-                // No mini-app on stacked (providers act): single centered column.
+                // The providers act needs a stretched copy rail so its list can scroll.
                 act.addon === "agents" && "onboarding-stage-content--solo",
               )}
             >
-              <div className="onboarding-copy-rail flex min-w-0 flex-col items-center lg:items-start">
+              <div className="onboarding-copy-rail flex min-h-0 min-w-0 flex-col items-center lg:items-start">
                 <div className="hidden w-full justify-center lg:flex lg:justify-start">
                   <ProgressRail activeIndex={step} />
                 </div>
