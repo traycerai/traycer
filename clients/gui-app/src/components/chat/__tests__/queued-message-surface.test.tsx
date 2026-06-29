@@ -40,9 +40,41 @@ interface TestCollisionArgs {
   } | null;
 }
 
+interface TestTransform {
+  readonly x: number;
+  readonly y: number;
+  readonly scaleX: number;
+  readonly scaleY: number;
+}
+
+interface TestClientRect {
+  readonly width: number;
+  readonly height: number;
+  readonly top: number;
+  readonly bottom: number;
+  readonly left: number;
+  readonly right: number;
+}
+
+type TestDndModifier = (args: {
+  readonly activatorEvent: Event | null;
+  readonly active: null;
+  readonly activeNodeRect: TestClientRect | null;
+  readonly draggingNodeRect: TestClientRect | null;
+  readonly containerNodeRect: TestClientRect | null;
+  readonly over: null;
+  readonly overlayNodeRect: TestClientRect | null;
+  readonly scrollableAncestors: ReadonlyArray<Element>;
+  readonly scrollableAncestorRects: ReadonlyArray<TestClientRect>;
+  readonly transform: TestTransform;
+  readonly windowRect: TestClientRect | null;
+}) => TestTransform;
+
 interface CapturedDndContextProps {
   readonly children: ReactNode;
+  readonly autoScroll: boolean;
   readonly collisionDetection: (args: TestCollisionArgs) => unknown;
+  readonly modifiers: ReadonlyArray<TestDndModifier>;
   readonly onDragStart: TestDndHandler;
   readonly onDragMove: TestDndHandler;
   readonly onDragOver: TestDndHandler;
@@ -488,6 +520,59 @@ describe("<QueuedMessagePanel />", () => {
     expect(onReorder).toHaveBeenCalledWith(second, "queue-1");
   });
 
+  it("contains queue drags inside the queue scroll region without edge auto-scroll", () => {
+    renderPanel({
+      queue: queueState([
+        queuedItem("queue-1", "First queued prompt", "pending"),
+        queuedItem("queue-2", "Second queued prompt", "pending"),
+      ]),
+      readOnly: false,
+      canAct: true,
+      onReorder: null,
+    });
+
+    const provider = testState.providerProps;
+    expect(provider).not.toBeNull();
+    if (provider === null) return;
+
+    expect(provider.autoScroll).toBe(false);
+    expect(provider.modifiers).toHaveLength(1);
+
+    const [modifier] = provider.modifiers;
+    const sourceRect = makeClientRect({
+      top: 100,
+      left: 20,
+      width: 300,
+      height: 40,
+    });
+    const scrollRegionRect = makeClientRect({
+      top: 120,
+      left: 10,
+      width: 320,
+      height: 120,
+    });
+
+    expect(
+      modifier(
+        makeModifierArgs({
+          transform: { x: -40, y: -120, scaleX: 1, scaleY: 1 },
+          draggingNodeRect: sourceRect,
+          scrollableAncestorRects: [scrollRegionRect],
+        }),
+      ),
+    ).toEqual({ x: -10, y: 20, scaleX: 1, scaleY: 1 });
+
+    expect(
+      modifier(
+        makeModifierArgs({
+          transform: { x: 40, y: 200, scaleX: 1, scaleY: 1 },
+          draggingNodeRect: sourceRect,
+          scrollableAncestorRects: [scrollRegionRect],
+        }),
+      ),
+    ).toEqual({ x: 10, y: 100, scaleX: 1, scaleY: 1 });
+  });
+
   it("renders received A2A items as read-only rows with a sender badge", () => {
     renderPanel({
       queue: queueState([
@@ -701,5 +786,41 @@ function makeDndEvent(input: {
             data: { current: input.target.data },
             rect: { top: input.target.top, height: input.target.height },
           },
+  };
+}
+
+function makeModifierArgs(input: {
+  readonly transform: TestTransform;
+  readonly draggingNodeRect: TestClientRect | null;
+  readonly scrollableAncestorRects: ReadonlyArray<TestClientRect>;
+}) {
+  return {
+    activatorEvent: null,
+    active: null,
+    activeNodeRect: null,
+    draggingNodeRect: input.draggingNodeRect,
+    containerNodeRect: null,
+    over: null,
+    overlayNodeRect: null,
+    scrollableAncestors: [],
+    scrollableAncestorRects: input.scrollableAncestorRects,
+    transform: input.transform,
+    windowRect: null,
+  };
+}
+
+function makeClientRect(input: {
+  readonly top: number;
+  readonly left: number;
+  readonly width: number;
+  readonly height: number;
+}): TestClientRect {
+  return {
+    width: input.width,
+    height: input.height,
+    top: input.top,
+    bottom: input.top + input.height,
+    left: input.left,
+    right: input.left + input.width,
   };
 }

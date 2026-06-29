@@ -14,12 +14,52 @@ import {
   type DragMoveEvent,
   type DragOverEvent,
   type DragStartEvent,
+  type ClientRect,
+  type Modifiers,
 } from "@dnd-kit/core";
 import { useSortable } from "@dnd-kit/sortable";
-import { CSS } from "@dnd-kit/utilities";
+import { CSS, type Transform } from "@dnd-kit/utilities";
 import type { ChatQueuedItem } from "@traycer/protocol/host/agent/gui/subscribe";
 
 const QUEUED_MESSAGE_DND_TYPE = "queued-message";
+
+interface QueuedMessageDragModifierInput {
+  readonly draggingNodeRect: ClientRect | null;
+  readonly scrollableAncestorRects: ReadonlyArray<ClientRect>;
+  readonly transform: Transform;
+}
+
+const restrictQueuedMessageDragToScrollContainer = (
+  args: QueuedMessageDragModifierInput,
+): Transform => {
+  const { draggingNodeRect, scrollableAncestorRects, transform } = args;
+  if (draggingNodeRect === null || scrollableAncestorRects.length === 0) {
+    return transform;
+  }
+  const scrollContainerRect = scrollableAncestorRects[0];
+
+  return {
+    ...transform,
+    x: clampTransformAxis({
+      currentStart: draggingNodeRect.left,
+      currentEnd: draggingNodeRect.right,
+      boundaryStart: scrollContainerRect.left,
+      boundaryEnd: scrollContainerRect.right,
+      transformValue: transform.x,
+    }),
+    y: clampTransformAxis({
+      currentStart: draggingNodeRect.top,
+      currentEnd: draggingNodeRect.bottom,
+      boundaryStart: scrollContainerRect.top,
+      boundaryEnd: scrollContainerRect.bottom,
+      transformValue: transform.y,
+    }),
+  };
+};
+
+export const QUEUED_MESSAGE_DND_MODIFIERS: Modifiers = [
+  restrictQueuedMessageDragToScrollContainer,
+];
 
 interface QueuedMessageDndData {
   readonly kind: typeof QUEUED_MESSAGE_DND_TYPE;
@@ -382,4 +422,20 @@ function readQueuedMessageDndData(value: unknown): QueuedMessageDndData | null {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function clampTransformAxis(input: {
+  readonly currentStart: number;
+  readonly currentEnd: number;
+  readonly boundaryStart: number;
+  readonly boundaryEnd: number;
+  readonly transformValue: number;
+}): number {
+  if (input.currentStart + input.transformValue <= input.boundaryStart) {
+    return input.boundaryStart - input.currentStart;
+  }
+  if (input.currentEnd + input.transformValue >= input.boundaryEnd) {
+    return input.boundaryEnd - input.currentEnd;
+  }
+  return input.transformValue;
 }

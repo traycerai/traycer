@@ -1,5 +1,6 @@
 import type { RouterHistory } from "@tanstack/react-router";
 import { getHistoryController } from "@/lib/persistent-history";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 /**
  * The single function every back/forward surface calls. Takes the **current**
@@ -28,6 +29,7 @@ export function goBack(router: HistoryNavRouter): void {
   const controller = getHistoryController(router.history);
   if (controller === null || !controller.canGoBack()) return;
   router.history.go(-1);
+  trackHistoryNavigationUsed("back");
 }
 
 /**
@@ -40,4 +42,21 @@ export function goForward(router: HistoryNavRouter): void {
   const controller = getHistoryController(router.history);
   if (controller === null || !controller.canGoForward()) return;
   router.history.go(1);
+  trackHistoryNavigationUsed("forward");
+}
+
+type HistoryNavigationDirection = "back" | "forward";
+
+function trackHistoryNavigationUsed(
+  direction: HistoryNavigationDirection,
+): void {
+  globalThis.setTimeout(() => {
+    try {
+      Analytics.getInstance().track(AnalyticsEvent.HistoryNavigationUsed, {
+        direction,
+      });
+    } catch {
+      // Analytics is best-effort and must never affect navigation.
+    }
+  }, 0);
 }
