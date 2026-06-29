@@ -1,9 +1,5 @@
 import { create } from "zustand";
-import {
-  createJSONStorage,
-  persist,
-  type StateStorage,
-} from "zustand/middleware";
+import { persist } from "zustand/middleware";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
 import type { TaskRepoIdentifier } from "@traycer/protocol/host/epic/unary-schemas";
 
@@ -25,22 +21,6 @@ const INITIAL_FOLDER_INFO_BY_PATH: Readonly<
   Record<string, WorkspaceFolderInfo>
 > = {};
 const MAX_FOLDERS = 50;
-
-// Desktop windows share one localStorage, so persisting this global set made a
-// new window inherit another window's folders (issue #104). The desktop bridge
-// flips this off to keep each window's set in memory; web keeps persistence.
-let localPersistenceEnabled = true;
-
-const workspaceFoldersStorage: StateStorage = {
-  getItem: (name) => window.localStorage.getItem(name),
-  setItem: (name, value) => {
-    if (!localPersistenceEnabled) return;
-    window.localStorage.setItem(name, value);
-  },
-  removeItem: (name) => {
-    window.localStorage.removeItem(name);
-  },
-};
 
 export const useWorkspaceFoldersStore = create<WorkspaceFoldersStore>()(
   persist(
@@ -64,23 +44,9 @@ export const useWorkspaceFoldersStore = create<WorkspaceFoldersStore>()(
     }),
     {
       ...basePersistOptions(persistKey(STORE_KEYS.workspaceFolders)),
-      storage: createJSONStorage(() => workspaceFoldersStorage),
     },
   ),
 );
-
-// Make this window's folder set per-window: stop persisting, then drop the set
-// hydrated from the shared key (disable first so the reset doesn't write back).
-// Idempotent — once isolated, a bridge teardown/re-install must not wipe the
-// folders the user has added in this window.
-export function isolateWorkspaceFoldersForDesktopWindow(): void {
-  if (!localPersistenceEnabled) return;
-  localPersistenceEnabled = false;
-  useWorkspaceFoldersStore.setState({
-    folders: INITIAL_FOLDERS,
-    folderInfoByPath: INITIAL_FOLDER_INFO_BY_PATH,
-  });
-}
 
 function mergeWorkspaceFolderInfo(
   state: WorkspaceFoldersStore,
