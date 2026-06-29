@@ -87,21 +87,18 @@ function showAppUpdateToast(
       }
       // A quiet, dismissible heads-up - the header button is the persistent
       // fallback once it's dismissed.
-      toast("Update available", {
-        id: APP_UPDATE_TOAST_ID,
-        description: updateAvailableDescription(snapshot.latestVersion),
-        duration: Infinity,
-        action: {
-          label: "Download",
-          onClick: actions.onDownload,
+      toast(
+        <AppUpdateActionToastContent
+          title="Update available"
+          description={updateAvailableDescription(snapshot.latestVersion)}
+          actionLabel="Download"
+          onAction={actions.onDownload}
+        />,
+        {
+          id: APP_UPDATE_TOAST_ID,
+          duration: Infinity,
         },
-        cancel: {
-          label: "Later",
-          onClick: () => {
-            toast.dismiss(APP_UPDATE_TOAST_ID);
-          },
-        },
-      });
+      );
       return;
     case "downloading":
       toast.loading("Downloading update…", {
@@ -114,21 +111,18 @@ function showAppUpdateToast(
       });
       return;
     case "ready":
-      toast("Update ready to install", {
-        id: APP_UPDATE_TOAST_ID,
-        description: "Restart Traycer to finish updating.",
-        duration: Infinity,
-        action: {
-          label: "Restart",
-          onClick: actions.onRestart,
+      toast(
+        <AppUpdateActionToastContent
+          title="Update ready to install"
+          description="Restart Traycer to finish updating."
+          actionLabel="Restart"
+          onAction={actions.onRestart}
+        />,
+        {
+          id: APP_UPDATE_TOAST_ID,
+          duration: Infinity,
         },
-        cancel: {
-          label: "Later",
-          onClick: () => {
-            toast.dismiss(APP_UPDATE_TOAST_ID);
-          },
-        },
-      });
+      );
       return;
     case "error":
       toast.error("Couldn't update Traycer", {
@@ -192,6 +186,43 @@ function isManualFeedbackSnapshot(snapshot: DesktopAppUpdateSnapshot): boolean {
     (snapshot.status === "checking" ||
       snapshot.status === "up-to-date" ||
       snapshot.status === "unavailable")
+  );
+}
+
+function AppUpdateActionToastContent(props: {
+  readonly title: string;
+  readonly description: string;
+  readonly actionLabel: string;
+  readonly onAction: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-4">
+      <div className="min-w-0 flex-1">
+        <div className="font-medium">{props.title}</div>
+        <div className="mt-1 text-muted-foreground">{props.description}</div>
+      </div>
+      <div className="grid shrink-0 grid-cols-1 gap-1.5">
+        <Button
+          type="button"
+          size="sm"
+          className="w-full min-w-max"
+          onClick={props.onAction}
+        >
+          {props.actionLabel}
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="secondary"
+          className="w-full min-w-max"
+          onClick={() => {
+            toast.dismiss(APP_UPDATE_TOAST_ID);
+          }}
+        >
+          Later
+        </Button>
+      </div>
+    </div>
   );
 }
 
