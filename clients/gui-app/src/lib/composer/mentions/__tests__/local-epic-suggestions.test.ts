@@ -86,10 +86,15 @@ describe("buildEpicMentionSuggestionsFromTasks", () => {
     ];
 
     expect(
-      buildEpicMentionSuggestionsFromTasks(tasks, "task", 25).map(
-        (entry) => entry.id,
+      ["task", "epic"].map((alias) =>
+        buildEpicMentionSuggestionsFromTasks(tasks, alias, 25).map(
+          (entry) => entry.id,
+        ),
       ),
-    ).toEqual(["epic:newer-neutral", "epic:older-title-match"]);
+    ).toEqual([
+      ["epic:newer-neutral", "epic:older-title-match"],
+      ["epic:newer-neutral", "epic:older-title-match"],
+    ]);
   });
 
   it("uses task copy for empty titles while preserving epic tokens", () => {
