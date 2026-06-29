@@ -837,6 +837,9 @@ describe("epic sidebar selection mode", () => {
     expect(markAllReadButton.className).toContain(
       "disabled:group-hover/panel-section:opacity-50",
     );
+    expect(markAllReadButton.className).toContain(
+      "disabled:group-focus-within/panel-section:opacity-50",
+    );
 
     testState.unreadArtifactIds = new Set(["ticket-child"]);
     rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
