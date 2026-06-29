@@ -57,12 +57,12 @@ function rankEpics(
 
 function scoreEpic(epic: EpicLight, normalizedQuery: string): number | null {
   if (normalizedQuery.length === 0) return 0;
+  if (isTaskMentionAliasQuery(normalizedQuery)) return 250;
   const label = taskMentionDisplayTitle(epic).toLowerCase();
   const id = `epic:${epic.id}`.toLowerCase();
   if (label === normalizedQuery || id === normalizedQuery) return 0;
   if (label.startsWith(normalizedQuery)) return 100;
   if (label.includes(normalizedQuery)) return 200;
-  if (isTaskMentionAliasQuery(normalizedQuery)) return 250;
   if (id.includes(normalizedQuery)) return 300;
   if (
     isSubsequence(normalizedQuery, label) ||

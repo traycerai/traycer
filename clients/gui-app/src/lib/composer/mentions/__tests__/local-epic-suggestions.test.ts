@@ -65,6 +65,33 @@ describe("buildEpicMentionSuggestionsFromTasks", () => {
     ).toEqual(["epic:task-1"]);
   });
 
+  it("keeps alias query ranking neutral instead of promoting title matches", () => {
+    const tasks = [
+      task(
+        epic({
+          id: "older-title-match",
+          title: "Task cleanup",
+          initialUserPrompt: "",
+          updatedAt: 10,
+        }),
+      ),
+      task(
+        epic({
+          id: "newer-neutral",
+          title: "Billing flow",
+          initialUserPrompt: "",
+          updatedAt: 30,
+        }),
+      ),
+    ];
+
+    expect(
+      buildEpicMentionSuggestionsFromTasks(tasks, "task", 25).map(
+        (entry) => entry.id,
+      ),
+    ).toEqual(["epic:newer-neutral", "epic:older-title-match"]);
+  });
+
   it("uses task copy for empty titles while preserving epic tokens", () => {
     const [entry] = buildEpicMentionSuggestionsFromTasks(
       [
