@@ -36,7 +36,10 @@ type ToastOptions = {
   cancel?: ToastAction;
 };
 
-type ToastCall = (message: string, options: ToastOptions | undefined) => void;
+type ToastCall = (
+  message: ReactNode,
+  options: ToastOptions | undefined,
+) => void;
 
 const toastMock = vi.hoisted(() => {
   const actions: {
@@ -396,17 +399,31 @@ describe("desktop app update UI", () => {
     });
     await waitFor(() => {
       expect(toastMock).toHaveBeenCalledWith(
-        "Update available",
+        expect.anything(),
         expect.objectContaining({ id: "traycer-app-update" }),
       );
     });
 
-    const download = toastMock.actions.action;
-    if (download === null) {
-      throw new Error("Expected a Download action");
+    const [message, options] = toastMock.mock.lastCall ?? [];
+    if (message === undefined || options === undefined) {
+      throw new Error("Expected update available toast content");
     }
-    download();
+    expect(options.action).toBeUndefined();
+    expect(options.cancel).toBeUndefined();
+    render(<>{message}</>);
+    screen.getByText("Update available");
+    screen.getByText("Version 1.2.3 is ready to download.");
+
+    const downloadButton = screen.getByRole("button", {
+      name: "Download",
+    });
+    const laterButton = screen.getByRole("button", { name: "Later" });
+    fireEvent.click(downloadButton);
+    fireEvent.click(downloadButton);
     expect(bridge.downloadUpdate).toHaveBeenCalledTimes(1);
+    expect(downloadButton.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(laterButton);
+    expect(toastMock.dismiss).toHaveBeenCalledWith("traycer-app-update");
   });
 
   it("explains why a blocked update can't be installed instead of offering Download", async () => {
@@ -472,17 +489,24 @@ describe("desktop app update UI", () => {
     });
     await waitFor(() => {
       expect(toastMock).toHaveBeenCalledWith(
-        "Update ready to install",
+        expect.anything(),
         expect.objectContaining({ id: "traycer-app-update" }),
       );
     });
 
-    const restart = toastMock.actions.action;
-    if (restart === null) {
-      throw new Error("Expected a Restart action");
+    const [message, options] = toastMock.mock.lastCall ?? [];
+    if (message === undefined || options === undefined) {
+      throw new Error("Expected update ready toast content");
     }
+    expect(options.action).toBeUndefined();
+    expect(options.cancel).toBeUndefined();
+    render(<>{message}</>);
+    screen.getByText("Update ready to install");
+    screen.getByText("Restart Traycer to finish updating.");
+
+    const restart = screen.getByRole("button", { name: "Restart" });
     expect(useDesktopDialogStore.getState().activeDialog).toBeNull();
-    restart();
+    fireEvent.click(restart);
     expect(useDesktopDialogStore.getState().activeDialog).toBe(
       "confirm-restart-update",
     );
