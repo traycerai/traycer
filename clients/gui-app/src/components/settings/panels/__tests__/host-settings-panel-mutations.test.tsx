@@ -253,6 +253,37 @@ describe("<HostSettingsPanel /> - mutation flows", () => {
     fireEvent.click(installButton);
     expect(installHost).not.toHaveBeenCalled();
   });
+
+  it("uses the default advanced install reason for blank unavailable reasons", async () => {
+    const availableVersions = vi.fn(() =>
+      Promise.resolve(makeUnavailableAvailableSnapshotWithReason("   ")),
+    );
+    const { management } = makeManagement({
+      availableVersions,
+      registryCheck: vi.fn(() =>
+        Promise.resolve<HostRegistryUpdateState>({
+          checkedAt: "2026-05-15T00:00:00Z",
+          latestVersion: "1.4.2",
+          installedVersion: null,
+          updateAvailable: false,
+          reachable: true,
+          errorMessage: null,
+        }),
+      ),
+    });
+
+    renderPanel(makeHost(management, null));
+
+    await openAdvancedDisclosure();
+    expect(
+      await screen.findByText("Unavailable on this platform."),
+    ).toBeTruthy();
+    const installButton = screen.getByRole("button", { name: "Install" });
+    expect(installButton.hasAttribute("disabled")).toBe(true);
+    expect(installButton.getAttribute("title")).toBe(
+      "Unavailable on this platform.",
+    );
+  });
 });
 
 async function openAdvancedDisclosure(): Promise<void> {
@@ -394,6 +425,14 @@ function makeAvailableSnapshot(): HostAvailableSnapshot {
 }
 
 function makeUnavailableAvailableSnapshot(): HostAvailableSnapshot {
+  return makeUnavailableAvailableSnapshotWithReason(
+    "Build unavailable for this platform.",
+  );
+}
+
+function makeUnavailableAvailableSnapshotWithReason(
+  unavailableReason: string | null,
+): HostAvailableSnapshot {
   const base = makeAvailableSnapshot();
   const entry = base.versions[0];
   return {
@@ -403,7 +442,7 @@ function makeUnavailableAvailableSnapshot(): HostAvailableSnapshot {
         ...entry,
         platformAsset: {
           available: false,
-          unavailableReason: "Build unavailable for this platform.",
+          unavailableReason,
           url: "",
           sizeBytes: 1024,
           sha256: "",

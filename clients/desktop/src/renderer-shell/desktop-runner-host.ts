@@ -657,8 +657,7 @@ export class DesktopRunnerHost implements IRunnerHost {
       setHostName: (input) => managementBridge.setHostName(input),
     };
     this.hostRegistryUpdates = {
-      onChange: (handler) =>
-        toDisposable(managementBridge.onRegistryUpdateState(handler)),
+      onChange: (handler) => managementBridge.onRegistryUpdateState(handler),
     };
     this.hostTray = {
       onCommand: (handler) =>

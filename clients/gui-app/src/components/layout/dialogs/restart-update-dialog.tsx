@@ -87,11 +87,17 @@ export function RestartUpdateDialog(props: RestartUpdateDialogProps) {
             data-testid="restart-update-confirm"
           >
             {actionHandled ? (
-              <AgentSpinningDots
-                className={undefined}
-                testId="restart-update-confirm-spinner"
-                variant={undefined}
-              />
+              <span
+                role="status"
+                aria-label="Restart request in progress"
+                className="inline-flex"
+              >
+                <AgentSpinningDots
+                  className={undefined}
+                  testId={undefined}
+                  variant={undefined}
+                />
+              </span>
             ) : null}
             Restart now
           </Button>

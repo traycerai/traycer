@@ -170,7 +170,8 @@ function platformUnavailableReason(
   if (entry.platformAsset.available) {
     return null;
   }
-  return (
-    entry.platformAsset.unavailableReason ?? "Unavailable on this platform."
-  );
+  const reason = entry.platformAsset.unavailableReason?.trim();
+  return reason === undefined || reason.length === 0
+    ? "Unavailable on this platform."
+    : reason;
 }

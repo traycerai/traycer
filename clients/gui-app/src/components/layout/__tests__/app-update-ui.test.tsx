@@ -325,7 +325,11 @@ describe("desktop app update UI", () => {
         .getByRole("button", { name: /Restart now/i })
         .hasAttribute("disabled"),
     ).toBe(true);
-    expect(screen.getByTestId("restart-update-confirm-spinner")).toBeTruthy();
+    expect(
+      screen.getByRole("status", {
+        name: /Restart request in progress/i,
+      }),
+    ).toBeTruthy();
     rerender(
       <RestartUpdateDialog
         open={false}
