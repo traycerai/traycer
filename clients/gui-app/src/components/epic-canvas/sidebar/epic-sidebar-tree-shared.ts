@@ -27,9 +27,14 @@ export const EMPTY_PRE_ACK_LIST: ReadonlyArray<{
  * selection, collapse-all). Hidden until the `group/panel-section` is hovered
  * or a child is focused, so the header stays quiet at rest. The filter trigger
  * layers its own active-state override so an applied filter remains visible.
+ *
+ * Disabled shadcn buttons carry `disabled:opacity-50`, which would otherwise
+ * pin these controls visible at rest because the pseudo-class outranks the base
+ * `opacity-0`. The disabled overrides keep them hidden until the section is
+ * revealed, then show them dimmed to signal that they are unavailable.
  */
 export const PANEL_HEADER_ACTION_REVEAL_CLASS =
-  "opacity-0 transition-opacity focus-visible:opacity-100 group-hover/panel-section:opacity-100 group-focus-within/panel-section:opacity-100";
+  "opacity-0 transition-opacity disabled:opacity-0 focus-visible:opacity-100 group-hover/panel-section:opacity-100 group-focus-within/panel-section:opacity-100 disabled:group-hover/panel-section:opacity-50 disabled:group-focus-within/panel-section:opacity-50";
 
 /**
  * Reveal-on-hover styling for a tree row's inline "+" add control. Hidden at
