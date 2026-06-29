@@ -231,6 +231,9 @@ export interface DesktopHostManagementBridge {
   registryCheck(input: {
     readonly force: boolean;
   }): Promise<HostRegistryUpdateState>;
+  onRegistryUpdateState(handler: (state: HostRegistryUpdateState) => void): {
+    dispose: () => void;
+  };
   freePortAndRestart(
     input: FreePortAndRestartInput,
   ): Promise<FreePortAndRestartInput>;
@@ -243,6 +246,12 @@ export interface DesktopHostManagementBridge {
 
 export interface DesktopHostTrayBridge {
   onCommand(handler: (command: HostTrayCommand) => void): {
+    dispose: () => void;
+  };
+}
+
+export interface DesktopHostRegistryUpdatesBridge {
+  onChange(handler: (state: HostRegistryUpdateState) => void): {
     dispose: () => void;
   };
 }
@@ -497,6 +506,7 @@ export class DesktopRunnerHost implements IRunnerHost {
   readonly power: DesktopPowerBridge;
   readonly hostManagement: IHostManagement;
   readonly hostTray: IHostTray;
+  readonly hostRegistryUpdates: DesktopHostRegistryUpdatesBridge;
   readonly deviceFlow: IDeviceFlowHost;
 
   private readonly bridge: DesktopPreloadBridge;
@@ -645,6 +655,9 @@ export class DesktopRunnerHost implements IRunnerHost {
       cliManifest: () => managementBridge.cliManifest(),
       getHostName: () => managementBridge.getHostName(),
       setHostName: (input) => managementBridge.setHostName(input),
+    };
+    this.hostRegistryUpdates = {
+      onChange: (handler) => managementBridge.onRegistryUpdateState(handler),
     };
     this.hostTray = {
       onCommand: (handler) =>

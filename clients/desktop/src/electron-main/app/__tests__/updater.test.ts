@@ -133,6 +133,7 @@ describe("desktop app updater", () => {
 
     expect(updater.getAppUpdateSnapshot()).toMatchObject({
       status: "error",
+      downloadProgress: null,
       errorMessage:
         "Traycer ran into a problem while updating. Please try again in a little while.",
       // The download was user-initiated, so its failure is manual-intent.

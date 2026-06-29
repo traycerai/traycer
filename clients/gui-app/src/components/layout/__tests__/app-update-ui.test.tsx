@@ -36,7 +36,10 @@ type ToastOptions = {
   cancel?: ToastAction;
 };
 
-type ToastCall = (message: string, options: ToastOptions | undefined) => void;
+type ToastCall = (
+  message: ReactNode,
+  options: ToastOptions | undefined,
+) => void;
 
 const toastMock = vi.hoisted(() => {
   const actions: {
@@ -304,17 +307,56 @@ describe("desktop app update UI", () => {
 
   it("runs the restart action only after the modal is confirmed", () => {
     const onConfirm = vi.fn();
-    render(
+    const onOpenChange = vi.fn();
+    const { rerender } = render(
       <RestartUpdateDialog
         open
-        onOpenChange={() => undefined}
+        onOpenChange={onOpenChange}
         latestVersion="1.2.3"
         onConfirm={onConfirm}
       />,
     );
 
-    fireEvent.click(screen.getByTestId("restart-update-confirm"));
+    fireEvent.click(screen.getByRole("button", { name: /Restart now/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Restart now/i }));
     expect(onConfirm).toHaveBeenCalledTimes(1);
+    expect(
+      screen
+        .getByRole("button", { name: /Restart now/i })
+        .hasAttribute("disabled"),
+    ).toBe(true);
+    expect(
+      screen.getByRole("status", {
+        name: /Restart request in progress/i,
+      }),
+    ).toBeTruthy();
+    rerender(
+      <RestartUpdateDialog
+        open={false}
+        onOpenChange={onOpenChange}
+        latestVersion="1.2.3"
+        onConfirm={onConfirm}
+      />,
+    );
+    rerender(
+      <RestartUpdateDialog
+        open
+        onOpenChange={onOpenChange}
+        latestVersion="1.2.3"
+        onConfirm={onConfirm}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Later" }).hasAttribute("disabled"),
+    ).toBe(false);
+    expect(
+      screen
+        .getByRole("button", { name: /Restart now/i })
+        .hasAttribute("disabled"),
+    ).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: /Restart now/i }));
+    expect(onConfirm).toHaveBeenCalledTimes(2);
   });
 
   it("shares one desktop update subscription across update UI consumers", async () => {
@@ -369,7 +411,7 @@ describe("desktop app update UI", () => {
     await waitFor(() => {
       expect(toastMock.info).toHaveBeenCalledWith(
         "Checking for Traycer updates...",
-        { id: "traycer-app-update" },
+        { id: "traycer-app-update", description: null, duration: 4000 },
       );
     });
 
@@ -396,17 +438,31 @@ describe("desktop app update UI", () => {
     });
     await waitFor(() => {
       expect(toastMock).toHaveBeenCalledWith(
-        "Update available",
+        expect.anything(),
         expect.objectContaining({ id: "traycer-app-update" }),
       );
     });
 
-    const download = toastMock.actions.action;
-    if (download === null) {
-      throw new Error("Expected a Download action");
+    const [message, options] = toastMock.mock.lastCall ?? [];
+    if (message === undefined || options === undefined) {
+      throw new Error("Expected update available toast content");
     }
-    download();
+    expect(options.action).toBeUndefined();
+    expect(options.cancel).toBeUndefined();
+    render(<>{message}</>);
+    screen.getByText("Update available");
+    screen.getByText("Version 1.2.3 is ready to download.");
+
+    const downloadButton = screen.getByRole("button", {
+      name: "Download",
+    });
+    const laterButton = screen.getByRole("button", { name: "Later" });
+    fireEvent.click(downloadButton);
+    fireEvent.click(downloadButton);
     expect(bridge.downloadUpdate).toHaveBeenCalledTimes(1);
+    expect(downloadButton.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(laterButton);
+    expect(toastMock.dismiss).toHaveBeenCalledWith("traycer-app-update");
   });
 
   it("explains why a blocked update can't be installed instead of offering Download", async () => {
@@ -460,6 +516,40 @@ describe("desktop app update UI", () => {
     });
   });
 
+  it("clears stale download progress copy when the update becomes ready", async () => {
+    const bridge = new FakeAppUpdatesBridge(IDLE_SNAPSHOT);
+    renderWithHost(<AppUpdateToastController />, bridge);
+    await waitFor(() => {
+      expect(bridge.subscriptionCount()).toBe(1);
+    });
+
+    act(() => {
+      bridge.emit(downloadingSnapshot(1, 0));
+    });
+    await waitFor(() => {
+      expect(toastMock.loading).toHaveBeenCalledWith(
+        "Downloading update…",
+        expect.objectContaining({
+          id: "traycer-app-update",
+          description: "0% complete",
+        }),
+      );
+    });
+
+    act(() => {
+      bridge.emit(readySnapshot(2));
+    });
+    await waitFor(() => {
+      expect(toastMock).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          id: "traycer-app-update",
+          description: null,
+        }),
+      );
+    });
+  });
+
   it("offers Restart on the ready toast, opening the confirmation modal", async () => {
     const bridge = new FakeAppUpdatesBridge(IDLE_SNAPSHOT);
     renderWithHost(<AppUpdateToastController />, bridge);
@@ -472,17 +562,24 @@ describe("desktop app update UI", () => {
     });
     await waitFor(() => {
       expect(toastMock).toHaveBeenCalledWith(
-        "Update ready to install",
+        expect.anything(),
         expect.objectContaining({ id: "traycer-app-update" }),
       );
     });
 
-    const restart = toastMock.actions.action;
-    if (restart === null) {
-      throw new Error("Expected a Restart action");
+    const [message, options] = toastMock.mock.lastCall ?? [];
+    if (message === undefined || options === undefined) {
+      throw new Error("Expected update ready toast content");
     }
+    expect(options.action).toBeUndefined();
+    expect(options.cancel).toBeUndefined();
+    render(<>{message}</>);
+    screen.getByText("Update ready to install");
+    screen.getByText("Restart Traycer to finish updating.");
+
+    const restart = screen.getByRole("button", { name: "Restart" });
     expect(useDesktopDialogStore.getState().activeDialog).toBeNull();
-    restart();
+    fireEvent.click(restart);
     expect(useDesktopDialogStore.getState().activeDialog).toBe(
       "confirm-restart-update",
     );

@@ -25,6 +25,7 @@ import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import type { RequestOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import { mentionAttachmentFromSuggestion } from "./attachments";
+import { taskMentionQueryForRequest } from "./task-mention-helpers";
 
 const MENU_ICON_CLASS = "size-4 shrink-0 text-muted-foreground";
 const EMPTY_MENU_ENTRIES: ReadonlyArray<MentionMenuEntry> = [];
@@ -474,8 +475,8 @@ class GitMentionProvider extends ComposerMentionProvider {
 class EpicMentionProvider extends ComposerMentionProvider {
   readonly id = "epic" as const;
   readonly rootOrder = 40;
-  protected readonly label = "Epic";
-  protected readonly description = "Accessible epics";
+  protected readonly label = "Task";
+  protected readonly description = "Accessible tasks";
 
   rootEntry(_context: ComposerMentionProviderContext): MentionMenuEntry | null {
     return providerEntry({
@@ -496,16 +497,16 @@ class EpicMentionProvider extends ComposerMentionProvider {
   }
 
   rootEpicRequests(
-    _context: ComposerMentionProviderContext,
+    context: ComposerMentionProviderContext,
   ): ReadonlyArray<MentionEpicRequest> {
-    return EMPTY_EPIC_REQUESTS;
+    return [epicTaskRequest(context)];
   }
 
   epicRequests(
     _step: MentionFlowStep,
-    _context: ComposerMentionProviderContext,
+    context: ComposerMentionProviderContext,
   ): ReadonlyArray<MentionEpicRequest> {
-    return EMPTY_EPIC_REQUESTS;
+    return this.rootEpicRequests(context);
   }
 
   stepEntries(
@@ -521,7 +522,7 @@ class EpicMentionProvider extends ComposerMentionProvider {
   }
 
   menuCopy(_step: MentionFlowStep): MentionMenuCopy {
-    return { header: "Epics", empty: "No matching epics" };
+    return { header: "Tasks", empty: "No matching tasks" };
   }
 }
 
@@ -529,7 +530,7 @@ class ChatMentionProvider extends ComposerMentionProvider {
   readonly id = "chat" as const;
   readonly rootOrder = 45;
   protected readonly label = "Chat";
-  protected readonly description = "Epic chats";
+  protected readonly description = "Task chats";
 
   rootEntry(context: ComposerMentionProviderContext): MentionMenuEntry | null {
     if (context.currentEpicId === null) return null;
@@ -911,6 +912,18 @@ function epicRequest(
     method,
     params: {
       query: context.query.trim(),
+      limit: context.limit,
+    },
+  };
+}
+
+function epicTaskRequest(
+  context: ComposerMentionProviderContext,
+): MentionEpicRequest {
+  return {
+    method: "epic.mentionEpics",
+    params: {
+      query: taskMentionQueryForRequest(context.query),
       limit: context.limit,
     },
   };

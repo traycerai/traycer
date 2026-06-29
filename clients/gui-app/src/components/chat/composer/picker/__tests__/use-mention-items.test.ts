@@ -4,6 +4,7 @@ import {
   buildCurrentEpicArtifactMentionEntries,
   epicChatMentionEntriesFromChats,
   mergeCurrentEpicArtifactMentions,
+  mergeTaskAndArtifactMentionEntries,
 } from "../use-mention-items";
 import type {
   ArtifactProjection,
@@ -86,6 +87,17 @@ describe("epicChatMentionEntriesFromChats", () => {
       "",
     );
     expect(entry.label).toBe("Untitled chat");
+    expect(entry.epicTitle).toBe("Untitled task");
+    expect(entry.description).toBe("Untitled task");
+  });
+
+  it("keeps a literal Untitled epic title unchanged for chat descriptions", () => {
+    const [entry] = epicChatMentionEntriesFromChats(
+      chatsSlice([chat("c1", "Planning", null, 0)]),
+      "epic-1",
+      "Untitled epic",
+    );
+
     expect(entry.epicTitle).toBe("Untitled epic");
     expect(entry.description).toBe("Untitled epic");
   });
@@ -340,5 +352,80 @@ describe("mergeCurrentEpicArtifactMentions", () => {
     );
     const merged = mergeCurrentEpicArtifactMentions(local, [], "epic-cur");
     expect(merged.map((e) => e.id)).toEqual(["spec:epic-cur:only-local"]);
+  });
+});
+
+describe("mergeTaskAndArtifactMentionEntries", () => {
+  it("keeps cached task suggestions ahead of host fallback suggestions and de-dupes by id", () => {
+    const local: ReadonlyArray<EpicMentionEntry> = [
+      {
+        kind: "epic",
+        id: "epic:task-1",
+        token: "epic:task-1",
+        epicId: "task-1",
+        label: "Cached task",
+        description: "1 spec",
+        status: "active",
+        updatedAt: 20,
+      },
+    ];
+    const cloud: ReadonlyArray<EpicMentionEntry> = [
+      {
+        kind: "epic",
+        id: "epic:task-1",
+        token: "epic:task-1",
+        epicId: "task-1",
+        label: "Host task",
+        description: "1 spec",
+        status: "active",
+        updatedAt: 10,
+      },
+      {
+        kind: "epic",
+        id: "epic:task-2",
+        token: "epic:task-2",
+        epicId: "task-2",
+        label: "Host-only task",
+        description: "",
+        status: "active",
+        updatedAt: 30,
+      },
+    ];
+
+    expect(
+      mergeTaskAndArtifactMentionEntries(local, cloud).map((entry) => [
+        entry.id,
+        entry.label,
+      ]),
+    ).toEqual([
+      ["epic:task-1", "Cached task"],
+      ["epic:task-2", "Host-only task"],
+    ]);
+  });
+
+  it("keeps literal host task labels unchanged while preserving mention tokens", () => {
+    const [entry] = mergeTaskAndArtifactMentionEntries(
+      [],
+      [
+        {
+          kind: "epic",
+          id: "epic:task-1",
+          token: "epic:task-1",
+          epicId: "task-1",
+          label: "Untitled epic",
+          description: "",
+          status: "active",
+          updatedAt: 10,
+        },
+      ],
+    );
+
+    expect(entry).toMatchObject({
+      kind: "epic",
+      id: "epic:task-1",
+      token: "epic:task-1",
+      epicId: "task-1",
+      label: "Untitled epic",
+    });
   });
 });

@@ -47,7 +47,7 @@ describe("mention provider registry", () => {
       "Folders",
       "Worktrees",
       "Git",
-      "Epic",
+      "Task",
       "Spec",
       "Ticket",
       "Story",
@@ -82,7 +82,7 @@ describe("mention provider registry", () => {
       "Folders",
       "Worktrees",
       "Git",
-      "Epic",
+      "Task",
       "Chat",
       "Spec",
       "Ticket",
@@ -318,18 +318,38 @@ describe("mention provider registry", () => {
       "workspace.mentionWorktrees",
     ]);
 
-    // `epic.mentionEpics` is intentionally absent: the picker derives epic
-    // suggestions from the cached cloud-tasks history slice, so the host
-    // RPC fan-out for that kind has been removed (see `EpicMentionProvider`).
     const epicRequests = mentionProviderRegistry.epicRequests(
       ROOT_MENTION_STEP,
       context({ query: "login" }),
     );
     expect(epicRequests.map((request) => request.method)).toEqual([
+      "epic.mentionEpics",
       "epic.mentionSpecs",
       "epic.mentionTickets",
       "epic.mentionStories",
       "epic.mentionReviews",
     ]);
+  });
+
+  it("keeps task and epic provider aliases backward-compatible for task requests", () => {
+    expect(
+      mentionProviderRegistry.epicRequests(
+        ROOT_MENTION_STEP,
+        context({ query: "task" }),
+      )[0],
+    ).toMatchObject({
+      method: "epic.mentionEpics",
+      params: { query: "" },
+    });
+
+    expect(
+      mentionProviderRegistry.epicRequests(
+        ROOT_MENTION_STEP,
+        context({ query: "epic" }),
+      )[0],
+    ).toMatchObject({
+      method: "epic.mentionEpics",
+      params: { query: "" },
+    });
   });
 });

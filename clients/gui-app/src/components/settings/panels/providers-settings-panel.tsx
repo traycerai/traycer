@@ -34,7 +34,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { FilePathTooltip } from "@/components/file-path-tooltip";
 import { StartTruncatedText } from "@/components/ui/start-truncated-text";
-import { HarnessIcon } from "@/components/home/pickers/harness-icon";
+import { ProviderList } from "@/components/providers/provider-list";
 import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
 import { useProvidersSetSelection } from "@/hooks/providers/use-providers-set-selection-mutation";
 import { useProvidersAddCustomPath } from "@/hooks/providers/use-providers-add-custom-path-mutation";
@@ -402,34 +402,21 @@ function ProvidersRailLayout({
         aria-label="Providers"
         className="flex w-[clamp(10rem,22vw,14rem)] shrink-0 flex-col gap-1 overflow-y-auto border-r border-border/60 p-2"
       >
-        {orderedProviders.map((state) => {
-          const selected = state.providerId === active.providerId;
-          return (
-            <button
-              key={state.providerId}
-              type="button"
-              aria-label={PROVIDER_DISPLAY_NAMES[state.providerId]}
-              data-active={selected}
-              onClick={() => setActiveId(state.providerId)}
-              className={cn(
-                "flex items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-ui-sm transition-colors",
-                selected
-                  ? "bg-accent text-accent-foreground"
-                  : "text-foreground/70 hover:bg-accent/60 hover:text-accent-foreground",
-              )}
-            >
-              <HarnessIcon
-                harnessId={providerIdToGuiHarnessId(state.providerId)}
-              />
-              <span className="flex-1 truncate">
-                {PROVIDER_DISPLAY_NAMES[state.providerId]}
-              </span>
-              {state.enabled ? null : (
-                <span className="size-1.5 shrink-0 rounded-full bg-muted-foreground/50" />
-              )}
-            </button>
-          );
-        })}
+        <ProviderList
+          ariaLabel="Providers"
+          variant="settings"
+          className="gap-1"
+          rows={orderedProviders.map((state) => ({
+            providerId: state.providerId,
+            active: state.providerId === active.providerId,
+            dimmed: false,
+            enabled: state.enabled,
+            badge: null,
+            description: null,
+            trailing: null,
+            onSelect: setActiveId,
+          }))}
+        />
       </nav>
       <div className="min-h-0 min-w-0 flex-1 overflow-y-auto p-5">
         <ProviderDetail

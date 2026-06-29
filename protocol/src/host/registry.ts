@@ -2,6 +2,7 @@ import {
   defineDowngradePath,
   defineUpgradePath,
   defineVersionedRpcRegistry,
+  type DowngradeResult,
 } from "@traycer/protocol/framework/index";
 import { defineVersionedStreamRpcRegistry } from "@traycer/protocol/framework/versioned-stream-rpc";
 import {
@@ -169,35 +170,57 @@ import {
 } from "@traycer/protocol/host/snapshot-schemas";
 import {
   providersAddCustomPathRequestSchema,
+  providersAddCustomPathRequestSchemaV10,
   providersAddCustomPathResponseSchema,
+  providersAddCustomPathResponseSchemaV10,
   providersAwaitLoginRequestSchema,
+  providersAwaitLoginRequestSchemaV10,
   providersAwaitLoginResponseSchema,
+  providersAwaitLoginResponseSchemaV10,
   providersCancelLoginRequestSchema,
   providersCancelLoginResponseSchema,
   providersClearApiKeyRequestSchema,
+  providersClearApiKeyRequestSchemaV10,
   providersClearApiKeyResponseSchema,
+  providersClearApiKeyResponseSchemaV10,
   providersDeleteEnvOverrideRequestSchema,
+  providersDeleteEnvOverrideRequestSchemaV10,
   providersDeleteEnvOverrideResponseSchema,
+  providersDeleteEnvOverrideResponseSchemaV10,
   providersDetectVersionRequestSchema,
   providersDetectVersionResponseSchema,
   providersStartLoginRequestSchema,
   providersStartLoginResponseSchema,
   providersListRequestSchema,
-  providersListResponseSchema,
   providersListResponseSchemaV10,
-  providerCliStateSchemaV10,
+  providersListResponseSchemaV20,
+  downgradeProviderCliStateV20ToV10,
   providersRemoveCustomPathRequestSchema,
+  providersRemoveCustomPathRequestSchemaV10,
   providersRemoveCustomPathResponseSchema,
+  providersRemoveCustomPathResponseSchemaV10,
   providersSetApiKeyRequestSchema,
+  providersSetApiKeyRequestSchemaV10,
   providersSetApiKeyResponseSchema,
+  providersSetApiKeyResponseSchemaV10,
   providersSetEnabledRequestSchema,
+  providersSetEnabledRequestSchemaV10,
   providersSetEnabledResponseSchema,
+  providersSetEnabledResponseSchemaV10,
   providersSetEnvOverrideRequestSchema,
+  providersSetEnvOverrideRequestSchemaV10,
   providersSetEnvOverrideResponseSchema,
+  providersSetEnvOverrideResponseSchemaV10,
   providersSetSelectionRequestSchema,
+  providersSetSelectionRequestSchemaV10,
   providersSetSelectionResponseSchema,
+  providersSetSelectionResponseSchemaV10,
   providersSetTerminalAgentArgsRequestSchema,
+  providersSetTerminalAgentArgsRequestSchemaV10,
   providersSetTerminalAgentArgsResponseSchema,
+  providersSetTerminalAgentArgsResponseSchemaV10,
+  type ProviderCliState,
+  type ProviderCliStateV10,
 } from "@traycer/protocol/host/provider-schemas";
 
 export { hostGetRuntimeCapabilitiesV10 };
@@ -399,8 +422,52 @@ export const providersListV20 = defineRpcContract({
   method: "providers.list",
   schemaVersion: { major: 2, minor: 0 } as const,
   requestSchema: providersListRequestSchema,
-  responseSchema: providersListResponseSchema,
+  responseSchema: providersListResponseSchemaV20,
 });
+
+function unsupportedProviderStateDowngrade(
+  providerId: ProviderCliState["providerId"],
+): DowngradeResult<never> {
+  return {
+    ok: false,
+    error: {
+      code: "DOWNGRADE_UNSUPPORTED",
+      message: `Provider ${providerId} is not available in providers.*@1.0`,
+    },
+  };
+}
+
+function downgradeProviderStateForV10(
+  state: ProviderCliState,
+): DowngradeResult<ProviderCliStateV10> {
+  const downgraded = downgradeProviderCliStateV20ToV10(state);
+  if (downgraded === null) {
+    return unsupportedProviderStateDowngrade(state.providerId);
+  }
+  return { ok: true, value: downgraded };
+}
+
+function downgradeProviderStateListForV10(
+  states: readonly ProviderCliState[],
+): ProviderCliStateV10[] {
+  return states.flatMap((state) => {
+    const downgraded = downgradeProviderCliStateV20ToV10(state);
+    return downgraded === null ? [] : [downgraded];
+  });
+}
+
+function downgradeProviderRequestForV10<T>(
+  schema: {
+    safeParse: (
+      value: unknown,
+    ) => { success: true; data: T } | { success: false };
+  },
+  request: { readonly providerId: ProviderCliState["providerId"] },
+): DowngradeResult<T> {
+  const parsed = schema.safeParse(request);
+  if (!parsed.success) return unsupportedProviderStateDowngrade(request.providerId);
+  return { ok: true, value: parsed.data };
+}
 
 export const providersListUpgradeV1ToV2 = defineUpgradePath<
   typeof providersListV10,
@@ -422,9 +489,7 @@ export const providersListDowngradeV2ToV1 = defineDowngradePath<
   downgradeResponse: (response) => ({
     ok: true,
     value: providersListResponseSchemaV10.parse({
-      providers: response.providers.filter(
-        (provider) => providerCliStateSchemaV10.safeParse(provider).success,
-      ),
+      providers: downgradeProviderStateListForV10(response.providers),
     }),
   }),
 });
@@ -432,22 +497,136 @@ export const providersListDowngradeV2ToV1 = defineDowngradePath<
 export const providersSetSelectionV10 = defineRpcContract({
   method: "providers.setSelection",
   schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: providersSetSelectionRequestSchemaV10,
+  responseSchema: providersSetSelectionResponseSchemaV10,
+});
+
+export const providersSetSelectionV20 = defineRpcContract({
+  method: "providers.setSelection",
+  schemaVersion: { major: 2, minor: 0 } as const,
   requestSchema: providersSetSelectionRequestSchema,
   responseSchema: providersSetSelectionResponseSchema,
+});
+
+export const providersSetSelectionUpgradeV1ToV2 = defineUpgradePath<
+  typeof providersSetSelectionV10,
+  typeof providersSetSelectionV20
+>({
+  from: { major: 1, minor: 0 },
+  to: { major: 2, minor: 0 },
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const providersSetSelectionDowngradeV2ToV1 = defineDowngradePath<
+  typeof providersSetSelectionV20,
+  typeof providersSetSelectionV10
+>({
+  from: { major: 2, minor: 0 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) =>
+    downgradeProviderRequestForV10(providersSetSelectionRequestSchemaV10, request),
+  downgradeResponse: (response) => {
+    const state = downgradeProviderStateForV10(response.state);
+    if (!state.ok) return state;
+    return {
+      ok: true,
+      value: providersSetSelectionResponseSchemaV10.parse({
+        state: state.value,
+      }),
+    };
+  },
 });
 
 export const providersAddCustomPathV10 = defineRpcContract({
   method: "providers.addCustomPath",
   schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: providersAddCustomPathRequestSchemaV10,
+  responseSchema: providersAddCustomPathResponseSchemaV10,
+});
+
+export const providersAddCustomPathV20 = defineRpcContract({
+  method: "providers.addCustomPath",
+  schemaVersion: { major: 2, minor: 0 } as const,
   requestSchema: providersAddCustomPathRequestSchema,
   responseSchema: providersAddCustomPathResponseSchema,
+});
+
+export const providersAddCustomPathUpgradeV1ToV2 = defineUpgradePath<
+  typeof providersAddCustomPathV10,
+  typeof providersAddCustomPathV20
+>({
+  from: { major: 1, minor: 0 },
+  to: { major: 2, minor: 0 },
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const providersAddCustomPathDowngradeV2ToV1 = defineDowngradePath<
+  typeof providersAddCustomPathV20,
+  typeof providersAddCustomPathV10
+>({
+  from: { major: 2, minor: 0 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) =>
+    downgradeProviderRequestForV10(providersAddCustomPathRequestSchemaV10, request),
+  downgradeResponse: (response) => {
+    const state = downgradeProviderStateForV10(response.state);
+    if (!state.ok) return state;
+    return {
+      ok: true,
+      value: providersAddCustomPathResponseSchemaV10.parse({
+        state: state.value,
+      }),
+    };
+  },
 });
 
 export const providersRemoveCustomPathV10 = defineRpcContract({
   method: "providers.removeCustomPath",
   schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: providersRemoveCustomPathRequestSchemaV10,
+  responseSchema: providersRemoveCustomPathResponseSchemaV10,
+});
+
+export const providersRemoveCustomPathV20 = defineRpcContract({
+  method: "providers.removeCustomPath",
+  schemaVersion: { major: 2, minor: 0 } as const,
   requestSchema: providersRemoveCustomPathRequestSchema,
   responseSchema: providersRemoveCustomPathResponseSchema,
+});
+
+export const providersRemoveCustomPathUpgradeV1ToV2 = defineUpgradePath<
+  typeof providersRemoveCustomPathV10,
+  typeof providersRemoveCustomPathV20
+>({
+  from: { major: 1, minor: 0 },
+  to: { major: 2, minor: 0 },
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const providersRemoveCustomPathDowngradeV2ToV1 = defineDowngradePath<
+  typeof providersRemoveCustomPathV20,
+  typeof providersRemoveCustomPathV10
+>({
+  from: { major: 2, minor: 0 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) =>
+    downgradeProviderRequestForV10(
+      providersRemoveCustomPathRequestSchemaV10,
+      request,
+    ),
+  downgradeResponse: (response) => {
+    const state = downgradeProviderStateForV10(response.state);
+    if (!state.ok) return state;
+    return {
+      ok: true,
+      value: providersRemoveCustomPathResponseSchemaV10.parse({
+        state: state.value,
+      }),
+    };
+  },
 });
 
 export const providersDetectVersionV10 = defineRpcContract({
@@ -467,8 +646,51 @@ export const providersStartLoginV10 = defineRpcContract({
 export const providersAwaitLoginV10 = defineRpcContract({
   method: "providers.awaitLogin",
   schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: providersAwaitLoginRequestSchemaV10,
+  responseSchema: providersAwaitLoginResponseSchemaV10,
+});
+
+export const providersAwaitLoginV20 = defineRpcContract({
+  method: "providers.awaitLogin",
+  schemaVersion: { major: 2, minor: 0 } as const,
   requestSchema: providersAwaitLoginRequestSchema,
   responseSchema: providersAwaitLoginResponseSchema,
+});
+
+export const providersAwaitLoginUpgradeV1ToV2 = defineUpgradePath<
+  typeof providersAwaitLoginV10,
+  typeof providersAwaitLoginV20
+>({
+  from: { major: 1, minor: 0 },
+  to: { major: 2, minor: 0 },
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const providersAwaitLoginDowngradeV2ToV1 = defineDowngradePath<
+  typeof providersAwaitLoginV20,
+  typeof providersAwaitLoginV10
+>({
+  from: { major: 2, minor: 0 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) =>
+    downgradeProviderRequestForV10(providersAwaitLoginRequestSchemaV10, request),
+  downgradeResponse: (response) => {
+    if (response.state === null) {
+      return {
+        ok: true,
+        value: providersAwaitLoginResponseSchemaV10.parse({ state: null }),
+      };
+    }
+    const state = downgradeProviderStateForV10(response.state);
+    if (!state.ok) return state;
+    return {
+      ok: true,
+      value: providersAwaitLoginResponseSchemaV10.parse({
+        state: state.value,
+      }),
+    };
+  },
 });
 
 export const providersCancelLoginV10 = defineRpcContract({
@@ -481,43 +703,272 @@ export const providersCancelLoginV10 = defineRpcContract({
 export const providersSetEnabledV10 = defineRpcContract({
   method: "providers.setEnabled",
   schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: providersSetEnabledRequestSchemaV10,
+  responseSchema: providersSetEnabledResponseSchemaV10,
+});
+
+export const providersSetEnabledV20 = defineRpcContract({
+  method: "providers.setEnabled",
+  schemaVersion: { major: 2, minor: 0 } as const,
   requestSchema: providersSetEnabledRequestSchema,
   responseSchema: providersSetEnabledResponseSchema,
+});
+
+export const providersSetEnabledUpgradeV1ToV2 = defineUpgradePath<
+  typeof providersSetEnabledV10,
+  typeof providersSetEnabledV20
+>({
+  from: { major: 1, minor: 0 },
+  to: { major: 2, minor: 0 },
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const providersSetEnabledDowngradeV2ToV1 = defineDowngradePath<
+  typeof providersSetEnabledV20,
+  typeof providersSetEnabledV10
+>({
+  from: { major: 2, minor: 0 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) =>
+    downgradeProviderRequestForV10(providersSetEnabledRequestSchemaV10, request),
+  downgradeResponse: (response) => {
+    const state = downgradeProviderStateForV10(response.state);
+    if (!state.ok) return state;
+    return {
+      ok: true,
+      value: providersSetEnabledResponseSchemaV10.parse({
+        state: state.value,
+      }),
+    };
+  },
 });
 
 export const providersSetApiKeyV10 = defineRpcContract({
   method: "providers.setApiKey",
   schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: providersSetApiKeyRequestSchemaV10,
+  responseSchema: providersSetApiKeyResponseSchemaV10,
+});
+
+export const providersSetApiKeyV20 = defineRpcContract({
+  method: "providers.setApiKey",
+  schemaVersion: { major: 2, minor: 0 } as const,
   requestSchema: providersSetApiKeyRequestSchema,
   responseSchema: providersSetApiKeyResponseSchema,
+});
+
+export const providersSetApiKeyUpgradeV1ToV2 = defineUpgradePath<
+  typeof providersSetApiKeyV10,
+  typeof providersSetApiKeyV20
+>({
+  from: { major: 1, minor: 0 },
+  to: { major: 2, minor: 0 },
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const providersSetApiKeyDowngradeV2ToV1 = defineDowngradePath<
+  typeof providersSetApiKeyV20,
+  typeof providersSetApiKeyV10
+>({
+  from: { major: 2, minor: 0 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) =>
+    downgradeProviderRequestForV10(providersSetApiKeyRequestSchemaV10, request),
+  downgradeResponse: (response) => {
+    const state = downgradeProviderStateForV10(response.state);
+    if (!state.ok) return state;
+    return {
+      ok: true,
+      value: providersSetApiKeyResponseSchemaV10.parse({
+        state: state.value,
+      }),
+    };
+  },
 });
 
 export const providersClearApiKeyV10 = defineRpcContract({
   method: "providers.clearApiKey",
   schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: providersClearApiKeyRequestSchemaV10,
+  responseSchema: providersClearApiKeyResponseSchemaV10,
+});
+
+export const providersClearApiKeyV20 = defineRpcContract({
+  method: "providers.clearApiKey",
+  schemaVersion: { major: 2, minor: 0 } as const,
   requestSchema: providersClearApiKeyRequestSchema,
   responseSchema: providersClearApiKeyResponseSchema,
+});
+
+export const providersClearApiKeyUpgradeV1ToV2 = defineUpgradePath<
+  typeof providersClearApiKeyV10,
+  typeof providersClearApiKeyV20
+>({
+  from: { major: 1, minor: 0 },
+  to: { major: 2, minor: 0 },
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const providersClearApiKeyDowngradeV2ToV1 = defineDowngradePath<
+  typeof providersClearApiKeyV20,
+  typeof providersClearApiKeyV10
+>({
+  from: { major: 2, minor: 0 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) =>
+    downgradeProviderRequestForV10(providersClearApiKeyRequestSchemaV10, request),
+  downgradeResponse: (response) => {
+    const state = downgradeProviderStateForV10(response.state);
+    if (!state.ok) return state;
+    return {
+      ok: true,
+      value: providersClearApiKeyResponseSchemaV10.parse({
+        state: state.value,
+      }),
+    };
+  },
 });
 
 export const providersSetTerminalAgentArgsV10 = defineRpcContract({
   method: "providers.setTerminalAgentArgs",
   schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: providersSetTerminalAgentArgsRequestSchemaV10,
+  responseSchema: providersSetTerminalAgentArgsResponseSchemaV10,
+});
+
+export const providersSetTerminalAgentArgsV20 = defineRpcContract({
+  method: "providers.setTerminalAgentArgs",
+  schemaVersion: { major: 2, minor: 0 } as const,
   requestSchema: providersSetTerminalAgentArgsRequestSchema,
   responseSchema: providersSetTerminalAgentArgsResponseSchema,
 });
 
+export const providersSetTerminalAgentArgsUpgradeV1ToV2 = defineUpgradePath<
+  typeof providersSetTerminalAgentArgsV10,
+  typeof providersSetTerminalAgentArgsV20
+>({
+  from: { major: 1, minor: 0 },
+  to: { major: 2, minor: 0 },
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const providersSetTerminalAgentArgsDowngradeV2ToV1 =
+  defineDowngradePath<
+    typeof providersSetTerminalAgentArgsV20,
+    typeof providersSetTerminalAgentArgsV10
+  >({
+    from: { major: 2, minor: 0 },
+    to: { major: 1, minor: 0 },
+    downgradeRequest: (request) =>
+      downgradeProviderRequestForV10(
+        providersSetTerminalAgentArgsRequestSchemaV10,
+        request,
+      ),
+    downgradeResponse: (response) => {
+      const state = downgradeProviderStateForV10(response.state);
+      if (!state.ok) return state;
+      return {
+        ok: true,
+        value: providersSetTerminalAgentArgsResponseSchemaV10.parse({
+          state: state.value,
+        }),
+      };
+    },
+  });
+
 export const providersSetEnvOverrideV10 = defineRpcContract({
   method: "providers.setEnvOverride",
   schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: providersSetEnvOverrideRequestSchemaV10,
+  responseSchema: providersSetEnvOverrideResponseSchemaV10,
+});
+
+export const providersSetEnvOverrideV20 = defineRpcContract({
+  method: "providers.setEnvOverride",
+  schemaVersion: { major: 2, minor: 0 } as const,
   requestSchema: providersSetEnvOverrideRequestSchema,
   responseSchema: providersSetEnvOverrideResponseSchema,
+});
+
+export const providersSetEnvOverrideUpgradeV1ToV2 = defineUpgradePath<
+  typeof providersSetEnvOverrideV10,
+  typeof providersSetEnvOverrideV20
+>({
+  from: { major: 1, minor: 0 },
+  to: { major: 2, minor: 0 },
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const providersSetEnvOverrideDowngradeV2ToV1 = defineDowngradePath<
+  typeof providersSetEnvOverrideV20,
+  typeof providersSetEnvOverrideV10
+>({
+  from: { major: 2, minor: 0 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) =>
+    downgradeProviderRequestForV10(providersSetEnvOverrideRequestSchemaV10, request),
+  downgradeResponse: (response) => {
+    const state = downgradeProviderStateForV10(response.state);
+    if (!state.ok) return state;
+    return {
+      ok: true,
+      value: providersSetEnvOverrideResponseSchemaV10.parse({
+        state: state.value,
+      }),
+    };
+  },
 });
 
 export const providersDeleteEnvOverrideV10 = defineRpcContract({
   method: "providers.deleteEnvOverride",
   schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: providersDeleteEnvOverrideRequestSchemaV10,
+  responseSchema: providersDeleteEnvOverrideResponseSchemaV10,
+});
+
+export const providersDeleteEnvOverrideV20 = defineRpcContract({
+  method: "providers.deleteEnvOverride",
+  schemaVersion: { major: 2, minor: 0 } as const,
   requestSchema: providersDeleteEnvOverrideRequestSchema,
   responseSchema: providersDeleteEnvOverrideResponseSchema,
+});
+
+export const providersDeleteEnvOverrideUpgradeV1ToV2 = defineUpgradePath<
+  typeof providersDeleteEnvOverrideV10,
+  typeof providersDeleteEnvOverrideV20
+>({
+  from: { major: 1, minor: 0 },
+  to: { major: 2, minor: 0 },
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const providersDeleteEnvOverrideDowngradeV2ToV1 = defineDowngradePath<
+  typeof providersDeleteEnvOverrideV20,
+  typeof providersDeleteEnvOverrideV10
+>({
+  from: { major: 2, minor: 0 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) =>
+    downgradeProviderRequestForV10(
+      providersDeleteEnvOverrideRequestSchemaV10,
+      request,
+    ),
+  downgradeResponse: (response) => {
+    const state = downgradeProviderStateForV10(response.state);
+    if (!state.ok) return state;
+    return {
+      ok: true,
+      value: providersDeleteEnvOverrideResponseSchemaV10.parse({
+        state: state.value,
+      }),
+    };
+  },
 });
 
 export const worktreeListBindingsForEpicV10 = defineRpcContract({
@@ -1746,6 +2197,16 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
       },
       downgradePathsFromLatest: {},
     },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersSetSelectionV20,
+          upgradeFromPreviousVersion: providersSetSelectionUpgradeV1ToV2,
+        },
+      },
+      downgradePathsFromLatest: { 1: providersSetSelectionDowngradeV2ToV1 },
+    },
   },
   "providers.addCustomPath": {
     1: {
@@ -1758,6 +2219,16 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
       },
       downgradePathsFromLatest: {},
     },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersAddCustomPathV20,
+          upgradeFromPreviousVersion: providersAddCustomPathUpgradeV1ToV2,
+        },
+      },
+      downgradePathsFromLatest: { 1: providersAddCustomPathDowngradeV2ToV1 },
+    },
   },
   "providers.removeCustomPath": {
     1: {
@@ -1769,6 +2240,16 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
         },
       },
       downgradePathsFromLatest: {},
+    },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersRemoveCustomPathV20,
+          upgradeFromPreviousVersion: providersRemoveCustomPathUpgradeV1ToV2,
+        },
+      },
+      downgradePathsFromLatest: { 1: providersRemoveCustomPathDowngradeV2ToV1 },
     },
   },
   "providers.detectVersion": {
@@ -1806,6 +2287,16 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
       },
       downgradePathsFromLatest: {},
     },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersAwaitLoginV20,
+          upgradeFromPreviousVersion: providersAwaitLoginUpgradeV1ToV2,
+        },
+      },
+      downgradePathsFromLatest: { 1: providersAwaitLoginDowngradeV2ToV1 },
+    },
   },
   "providers.cancelLogin": {
     1: {
@@ -1830,6 +2321,16 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
       },
       downgradePathsFromLatest: {},
     },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersSetApiKeyV20,
+          upgradeFromPreviousVersion: providersSetApiKeyUpgradeV1ToV2,
+        },
+      },
+      downgradePathsFromLatest: { 1: providersSetApiKeyDowngradeV2ToV1 },
+    },
   },
   "providers.clearApiKey": {
     1: {
@@ -1841,6 +2342,16 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
         },
       },
       downgradePathsFromLatest: {},
+    },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersClearApiKeyV20,
+          upgradeFromPreviousVersion: providersClearApiKeyUpgradeV1ToV2,
+        },
+      },
+      downgradePathsFromLatest: { 1: providersClearApiKeyDowngradeV2ToV1 },
     },
   },
   "providers.setTerminalAgentArgs": {
@@ -1854,6 +2365,19 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
       },
       downgradePathsFromLatest: {},
     },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersSetTerminalAgentArgsV20,
+          upgradeFromPreviousVersion:
+            providersSetTerminalAgentArgsUpgradeV1ToV2,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: providersSetTerminalAgentArgsDowngradeV2ToV1,
+      },
+    },
   },
   "providers.setEnvOverride": {
     1: {
@@ -1865,6 +2389,16 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
         },
       },
       downgradePathsFromLatest: {},
+    },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersSetEnvOverrideV20,
+          upgradeFromPreviousVersion: providersSetEnvOverrideUpgradeV1ToV2,
+        },
+      },
+      downgradePathsFromLatest: { 1: providersSetEnvOverrideDowngradeV2ToV1 },
     },
   },
   "providers.deleteEnvOverride": {
@@ -1878,6 +2412,19 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
       },
       downgradePathsFromLatest: {},
     },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersDeleteEnvOverrideV20,
+          upgradeFromPreviousVersion:
+            providersDeleteEnvOverrideUpgradeV1ToV2,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: providersDeleteEnvOverrideDowngradeV2ToV1,
+      },
+    },
   },
   "providers.setEnabled": {
     1: {
@@ -1889,6 +2436,16 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
         },
       },
       downgradePathsFromLatest: {},
+    },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersSetEnabledV20,
+          upgradeFromPreviousVersion: providersSetEnabledUpgradeV1ToV2,
+        },
+      },
+      downgradePathsFromLatest: { 1: providersSetEnabledDowngradeV2ToV1 },
     },
   },
   "worktree.listBindingsForEpic": {

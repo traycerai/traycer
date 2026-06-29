@@ -16,6 +16,7 @@ import { HostLifecycle, type HostStartupError } from "../host/host-lifecycle";
 import type { HostRegistryUpdateState } from "../../ipc-contracts/host-management-types";
 import { getHostFsLayout, labelForEnvironment } from "../host/host-paths";
 import {
+  onHostRegistryUpdateStateChange,
   refreshRegistryUpdateState,
   setActiveEnvironment,
 } from "../ipc/host-management-ipc";
@@ -399,6 +400,11 @@ function applyHostUpdateMenuState(
 // never blocks first paint.
 function runDeferred(state: BootState, services: AppServices): void {
   startRendererMemorySampler();
+  state.bridge?.disposeFns.push(
+    onHostRegistryUpdateStateChange((result) => {
+      applyHostUpdateMenuState(services.menu, result);
+    }),
+  );
 
   // Captured (not just fire-and-forget) so the host auto-update idle gate can
   // wait for discovery to settle before trusting the host snapshot - `timed`

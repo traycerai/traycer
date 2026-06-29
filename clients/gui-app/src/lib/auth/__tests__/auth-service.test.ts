@@ -1324,5 +1324,112 @@ describe("AuthService", () => {
       expect(hostB.openedExternalLinks).toHaveLength(0);
       expect(hostB.deviceFlow.startCalls).toBe(0);
     });
+
+    it("re-provisions the FULL pair to the local CLI on a reactive refresh", async () => {
+      const cli = new MockTraycerCli();
+      const host = new MockRunnerHost({
+        signInUrl:
+          "https://auth.traycer.ai/sign-in?redirect_uri=traycer%3A%2F%2Fauth",
+        authnBaseUrl: "http://localhost:5005",
+        localHost: null,
+        hosts: [],
+        workspaceFolderPickerPaths: undefined,
+        hasLocalHost: undefined,
+        traycerCli: cli,
+      });
+      const service = trackService(new AuthService({ runnerHost: host }));
+      await service.start();
+      await service.signIn();
+      host.deviceFlow.emitResult({
+        kind: "authorized",
+        token: "old-token",
+        refreshToken: "old-token-refresh",
+      });
+      await vi.waitFor(() => {
+        expect(useAuthStore.getState().status).toBe("signed-in");
+      });
+      // First sign-in provisions the full pair up front.
+      expect(cli.lastLoginToken).toBe("old-token");
+      expect(cli.lastLoginRefreshToken).toBe("old-token-refresh");
+
+      // A reactive revalidation 401s on the current bearer, refreshes once, and
+      // rotates the live lease in place.
+      restoreFetch();
+      restoreFetch = installFetch((input, init) => {
+        const url = typeof input === "string" ? input : String(input);
+        if (
+          url === VALIDATION_URL &&
+          init?.headers?.Authorization === "Bearer old-token"
+        ) {
+          return status(401);
+        }
+        if (
+          url === REFRESH_URL &&
+          init?.headers?.Authorization === "Bearer old-token"
+        ) {
+          return okWithRefreshToken("rotated-token");
+        }
+        if (
+          url === VALIDATION_URL &&
+          init?.headers?.Authorization === "Bearer rotated-token"
+        ) {
+          return okWithProfile();
+        }
+        return status(500);
+      });
+
+      const outcome = await service.revalidateCurrentContext();
+
+      expect(outcome?.kind).toBe("valid");
+      expect(service.getCurrentSessionSnapshot().token).toBe("rotated-token");
+      // Fix (2): the reactive rotate path now re-provisions the FULL pair, so the
+      // CLI file never holds the fresh bearer beside the now-spent refresh token.
+      expect(cli.lastLoginToken).toBe("rotated-token");
+      expect(cli.lastLoginRefreshToken).toBe("rotated-token-refresh");
+    });
+
+    it("still provisions the FULL pair to the local CLI on a proactive refresh", async () => {
+      const cli = new MockTraycerCli();
+      const host = new MockRunnerHost({
+        signInUrl:
+          "https://auth.traycer.ai/sign-in?redirect_uri=traycer%3A%2F%2Fauth",
+        authnBaseUrl: "http://localhost:5005",
+        localHost: null,
+        hosts: [],
+        workspaceFolderPickerPaths: undefined,
+        hasLocalHost: undefined,
+        traycerCli: cli,
+      });
+      // 5m of life left → inside the proactive lead window, so an OS resume
+      // drives an immediate force-refresh against `/api/v3/auth/refresh`.
+      const nearExpiry = jwtExpiringInMs(5 * 60_000);
+      await host.tokenStore.set({
+        token: nearExpiry,
+        refreshToken: `${nearExpiry}-refresh`,
+      });
+      const service = trackService(new AuthService({ runnerHost: host }));
+      await service.start();
+      expect(useAuthStore.getState().status).toBe("signed-in");
+
+      const rotated = jwtExpiringInMs(4 * 60 * 60_000);
+      restoreFetch();
+      restoreFetch = installFetch((input) => {
+        const url = typeof input === "string" ? input : String(input);
+        if (url === REFRESH_URL) {
+          return okWithRefreshToken(rotated);
+        }
+        return okWithProfile();
+      });
+
+      host.emitSystemResumed();
+
+      await vi.waitFor(() => {
+        expect(service.getCurrentSessionSnapshot().token).toBe(rotated);
+      });
+      await vi.waitFor(() => {
+        expect(cli.lastLoginToken).toBe(rotated);
+      });
+      expect(cli.lastLoginRefreshToken).toBe(`${rotated}-refresh`);
+    });
   });
 });
