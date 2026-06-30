@@ -44,12 +44,12 @@ export function ComposerSlotApprovalQueue(
   const showBulk = count >= 2;
   return (
     <div
-      className="flex flex-col gap-2 rounded-md border border-primary/40 bg-primary/5 px-3 py-2.5 text-ui-sm"
+      className="flex flex-col overflow-hidden rounded-lg border border-border/60 bg-card shadow-sm text-ui-sm"
       data-testid="approval-prompt"
     >
-      <div className="flex items-center gap-2">
-        <ShieldAlert className="size-3.5 shrink-0 text-primary" aria-hidden />
-        <span className="select-none font-medium uppercase text-overline text-primary">
+      <div className="flex items-center gap-2 border-b border-border/40 bg-muted/30 px-3 py-2.5">
+        <ShieldAlert className="size-4 shrink-0 text-amber-500" aria-hidden />
+        <span className="select-none font-medium uppercase tracking-wider text-overline text-foreground/80">
           Approval needed
         </span>
         {showBulk ? (
@@ -93,7 +93,7 @@ export function ComposerSlotApprovalQueue(
           </>
         ) : null}
       </div>
-      <div className="flex flex-col divide-y divide-border/30">
+      <div className="flex flex-col divide-y divide-border/40 px-3 py-1">
         {approvals.map((approval) => (
           <ApprovalRow
             key={approval.approvalId}
@@ -135,31 +135,36 @@ function ApprovalRow(props: ApprovalRowProps) {
   // affordance, mirroring that the host would persist nothing.
   const suggestedRule = approval.suggestedRule;
   return (
-    <div className="flex flex-col gap-2 py-2.5 first:pt-0 last:pb-0">
-      <div className="flex min-w-0 items-center gap-2">
-        <Badge variant="outline" className="font-mono">
+    <div className="flex flex-col gap-3 py-3 first:pt-2 last:pb-2">
+      <div className="flex min-w-0 items-center gap-2.5">
+        <Badge
+          variant="secondary"
+          className="font-mono text-xs text-foreground/80 bg-muted/50 hover:bg-muted/50 border border-border/40"
+        >
           {approval.toolName}
         </Badge>
         {description !== null ? (
-          <span className="min-w-0 flex-1 truncate text-ui-xs text-muted-foreground">
+          <span className="min-w-0 flex-1 truncate text-ui-sm text-muted-foreground">
             {description}
           </span>
         ) : null}
       </div>
       {commandPreview !== null ? (
-        <div className="flex max-h-[min(30vh,9rem)] gap-2.5 overflow-auto rounded-md border border-canvas-border/30 bg-canvas/40 px-3 py-2">
-          <span className="shrink-0 select-none font-mono text-code-sm leading-relaxed text-muted-foreground/60">
-            $
-          </span>
-          <code className="min-w-0 flex-1 font-mono text-code-sm leading-relaxed break-words whitespace-pre-wrap text-foreground/90">
-            {commandPreview}
-          </code>
+        <div className="flex max-h-[min(30vh,9rem)] flex-col overflow-auto rounded-md border border-border/50 bg-muted/30">
+          <div className="flex w-full items-start gap-3 px-3 py-2.5">
+            <span className="shrink-0 select-none font-mono text-code-sm text-muted-foreground/40 mt-px">
+              $
+            </span>
+            <code className="min-w-0 flex-1 font-mono text-code-sm leading-relaxed break-words whitespace-pre-wrap text-foreground/90">
+              {commandPreview}
+            </code>
+          </div>
         </div>
       ) : null}
       {commandPreview === null && description === null ? (
         <p className="m-0 text-foreground/85">{approval.toolName}</p>
       ) : null}
-      <div className="flex flex-wrap items-center justify-end gap-2">
+      <div className="flex flex-wrap items-center justify-end gap-2 mt-1">
         <Button
           type="button"
           size="sm"
