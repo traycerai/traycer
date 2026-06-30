@@ -172,7 +172,7 @@ export function LocalHostGate(props: LocalHostGateProps) {
         source="busy-keep"
         checking={props.loading}
         onRefreshBusy={provisioning.retry}
-        onForce={provisioning.force}
+        onForce={provisioning.canManageHost ? provisioning.force : null}
         restartError={provisioning.error}
       >
         {props.children}
@@ -205,7 +205,7 @@ export function LocalHostGate(props: LocalHostGateProps) {
         source="normal-ready"
         checking={props.loading}
         onRefreshBusy={null}
-        onForce={provisioning.force}
+        onForce={provisioning.canManageHost ? provisioning.force : null}
         restartError={provisioning.error}
       >
         {props.children}
@@ -270,6 +270,7 @@ interface HostProvisioning {
   // Traycer's background components on this device, so the desktop refused to
   // reinstall. The gate shows the removed surface instead of spinning.
   readonly removed: boolean;
+  readonly canManageHost: boolean;
   readonly retry: () => void;
   // Forced update: re-run ensure with `force`, skipping the busy check, to
   // reinstall + restart onto this build (can end in-progress work).
@@ -371,6 +372,7 @@ function useHostProvisioning(args: {
     progress,
     hostBusy: hasManagement && inBusyKeepFlow,
     removed: hasManagement && removed,
+    canManageHost: hasManagement,
     retry: () => run(false),
     force: () => run(true),
     reinstall,
@@ -386,7 +388,7 @@ interface HostBusyGateProps {
   readonly source: HostCompatibilityGateSource;
   readonly checking: ReactNode;
   readonly onRefreshBusy: (() => void) | null;
-  readonly onForce: () => void;
+  readonly onForce: (() => void) | null;
   readonly restartError: Error | null;
 }
 
@@ -409,6 +411,15 @@ function HostCompatibilityGate(props: HostBusyGateProps) {
       />
     );
   }
+  if (compat.status === "failed") {
+    return (
+      <GateProvisioningError
+        message={`Could not verify host compatibility. ${compat.error.message}`}
+        onRetry={compat.retry}
+        isRetrying={compat.retrying}
+      />
+    );
+  }
   if (compat.status === "compatible") {
     return <>{props.children}</>;
   }
@@ -419,7 +430,7 @@ interface GateIncompatibleBusyProps {
   readonly source: HostCompatibilityGateSource;
   readonly reason: string;
   readonly onRefreshBusy: (() => void) | null;
-  readonly onForce: () => void;
+  readonly onForce: (() => void) | null;
   readonly restartError: Error | null;
 }
 
@@ -481,20 +492,22 @@ function GateIncompatibleHost(props: GateIncompatibleBusyProps) {
                   Refresh
                 </Button>
               ) : null}
-              <Button
-                type="button"
-                size="sm"
-                variant={isBusyKeep ? "destructive" : "default"}
-                className={cn("w-full", !isBusyKeep && "sm:w-auto")}
-                onClick={props.onForce}
-                data-testid={
-                  isBusyKeep
-                    ? "local-host-incompatible-busy-force-update"
-                    : "local-host-incompatible-update"
-                }
-              >
-                {isBusyKeep ? "Force update host" : "Update host"}
-              </Button>
+              {props.onForce !== null ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={isBusyKeep ? "destructive" : "default"}
+                  className={cn("w-full", !isBusyKeep && "sm:w-auto")}
+                  onClick={props.onForce}
+                  data-testid={
+                    isBusyKeep
+                      ? "local-host-incompatible-busy-force-update"
+                      : "local-host-incompatible-update"
+                  }
+                >
+                  {isBusyKeep ? "Force update host" : "Update host"}
+                </Button>
+              ) : null}
             </div>
           </CardContent>
         </Card>

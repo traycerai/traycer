@@ -48,9 +48,15 @@ interface Deferred<T> {
 
 interface StartupConsumersOptions {
   readonly hostStatus: () => Promise<HostStatusResponse> | HostStatusResponse;
-  readonly listTasks: () => ListTasksResponse;
-  readonly listHarnesses: () => ListHarnessesResponse;
+  readonly listTasks: () => Promise<ListTasksResponse> | ListTasksResponse;
+  readonly listHarnesses: () =>
+    Promise<ListHarnessesResponse> | ListHarnessesResponse;
   readonly onMethod: (method: string) => void;
+}
+
+interface StartupConsumersMount {
+  readonly queryClient: QueryClient;
+  readonly host: MockRunnerHost;
 }
 
 const compatibleHostStatus: HostStatusResponse = {
@@ -104,7 +110,9 @@ function buildMessengerFactory(
     });
 }
 
-function mountStartupConsumers(options: StartupConsumersOptions): QueryClient {
+function mountStartupConsumers(
+  options: StartupConsumersOptions,
+): StartupConsumersMount {
   const host = new MockRunnerHost({
     signInUrl: "https://auth.traycer.invalid/sign-in",
     authnBaseUrl: "http://localhost:5005",
@@ -150,12 +158,22 @@ function mountStartupConsumers(options: StartupConsumersOptions): QueryClient {
       </QueryClientProvider>
     </RunnerHostProvider>,
   );
-  return queryClient;
+  return { queryClient, host };
 }
 
 function CompatibilityStatusProbe(): ReactNode {
   const compatibility = useHostCompatibility();
-  return <div data-testid="compat-status">{compatibility.status}</div>;
+  return (
+    <div role="status" aria-label="Host compatibility status">
+      {compatibility.status}
+    </div>
+  );
+}
+
+function getCompatibilityStatusText(): string | null {
+  return screen.getByRole("status", {
+    name: "Host compatibility status",
+  }).textContent;
 }
 
 function installAuthFetch(): () => void {
@@ -243,7 +261,7 @@ describe("HostCompatibilityProvider startup consumers", () => {
     const listHarnesses = vi.fn((): ListHarnessesResponse => ({
       harnesses: [],
     }));
-    const queryClient = mountStartupConsumers({
+    const { queryClient } = mountStartupConsumers({
       hostStatus: () => hostStatus.promise,
       listTasks,
       listHarnesses,
@@ -257,7 +275,7 @@ describe("HostCompatibilityProvider startup consumers", () => {
     });
     expect(listTasks).not.toHaveBeenCalled();
     expect(listHarnesses).not.toHaveBeenCalled();
-    expect(screen.getByTestId("compat-status").textContent).toBe("checking");
+    expect(getCompatibilityStatusText()).toBe("checking");
 
     act(() => {
       hostStatus.resolve(compatibleHostStatus);
@@ -267,7 +285,7 @@ describe("HostCompatibilityProvider startup consumers", () => {
       expect(listTasks).toHaveBeenCalledTimes(1);
       expect(listHarnesses).toHaveBeenCalledTimes(1);
     });
-    expect(screen.getByTestId("compat-status").textContent).toBe("compatible");
+    expect(getCompatibilityStatusText()).toBe("compatible");
     expect(methods[0]).toBe("host.status");
     expect(methods).toEqual(
       expect.arrayContaining([
@@ -288,7 +306,7 @@ describe("HostCompatibilityProvider startup consumers", () => {
     const listHarnesses = vi.fn((): ListHarnessesResponse => ({
       harnesses: [],
     }));
-    const queryClient = mountStartupConsumers({
+    const { queryClient } = mountStartupConsumers({
       hostStatus: () => {
         throw new HostRpcError({
           code: "INCOMPATIBLE",
@@ -306,13 +324,87 @@ describe("HostCompatibilityProvider startup consumers", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByTestId("compat-status").textContent).toBe(
-        "incompatible",
-      );
+      expect(getCompatibilityStatusText()).toBe("incompatible");
     });
     expect(methods).toEqual(["host.status"]);
     expect(listTasks).not.toHaveBeenCalled();
     expect(listHarnesses).not.toHaveBeenCalled();
+    queryClient.clear();
+  });
+
+  it("surfaces exhausted non-terminal status probe failures without starting startup consumers", async () => {
+    const methods: string[] = [];
+    const listTasks = vi.fn((): ListTasksResponse => ({
+      tasks: [],
+      hasMore: false,
+    }));
+    const listHarnesses = vi.fn((): ListHarnessesResponse => ({
+      harnesses: [],
+    }));
+    const { queryClient } = mountStartupConsumers({
+      hostStatus: () => {
+        throw new HostRpcError({
+          code: "RPC_ERROR",
+          message: "status probe failed",
+          requestId: "req-status",
+          method: "host.status",
+          fatalDetails: null,
+        });
+      },
+      listTasks,
+      listHarnesses,
+      onMethod: (method) => {
+        methods.push(method);
+      },
+    });
+
+    await waitFor(() => {
+      expect(getCompatibilityStatusText()).toBe("failed");
+    });
+    expect(methods).toEqual(["host.status", "host.status", "host.status"]);
+    expect(listTasks).not.toHaveBeenCalled();
+    expect(listHarnesses).not.toHaveBeenCalled();
+    queryClient.clear();
+  });
+
+  it("retries tab reconciliation after an in-flight compatibility interruption", async () => {
+    const listTasksDeferred = createDeferred<ListTasksResponse>();
+    const methods: string[] = [];
+    const listTasks = vi.fn(() => listTasksDeferred.promise);
+    const listHarnesses = vi.fn((): ListHarnessesResponse => ({
+      harnesses: [],
+    }));
+    const { queryClient, host } = mountStartupConsumers({
+      hostStatus: () => compatibleHostStatus,
+      listTasks,
+      listHarnesses,
+      onMethod: (method) => {
+        methods.push(method);
+      },
+    });
+
+    await waitFor(() => {
+      expect(listTasks).toHaveBeenCalledTimes(1);
+    });
+
+    act(() => {
+      host.setLocalHost(null);
+    });
+    await waitFor(() => {
+      expect(getCompatibilityStatusText()).toBe("checking");
+    });
+
+    act(() => {
+      host.setLocalHost(localSnapshot);
+    });
+    await waitFor(() => {
+      expect(listTasks).toHaveBeenCalledTimes(2);
+    });
+
+    act(() => {
+      listTasksDeferred.resolve({ tasks: [], hasMore: false });
+    });
+    expect(methods[0]).toBe("host.status");
     queryClient.clear();
   });
 });

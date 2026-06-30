@@ -57,8 +57,10 @@ function useReconcilePersistedEpicTabs(): void {
     if (openEpicIds.length === 0) return;
 
     let cancelled = false;
+    let settled = false;
     void fetchExistingEpicIds(client)
       .then((existingEpicIds) => {
+        settled = true;
         if (cancelled) return;
         const staleEpicIds = missingEpicIds(openEpicIds, existingEpicIds);
         if (staleEpicIds.length === 0) return;
@@ -68,6 +70,7 @@ function useReconcilePersistedEpicTabs(): void {
         useEpicCanvasStore.getState().closeTabsForEpics(staleEpicIds);
       })
       .catch(() => {
+        settled = true;
         if (!cancelled) {
           reconciledIdentities.delete(identity);
         }
@@ -75,6 +78,9 @@ function useReconcilePersistedEpicTabs(): void {
 
     return () => {
       cancelled = true;
+      if (!settled) {
+        reconciledIdentities.delete(identity);
+      }
     };
   }, [client, identity, reconciledIdentities]);
 }

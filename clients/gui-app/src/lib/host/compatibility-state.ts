@@ -15,6 +15,12 @@ export type HostCompatibility =
       readonly retry: () => void;
     }
   | {
+      readonly status: "failed";
+      readonly retry: () => void;
+      readonly retrying: boolean;
+      readonly error: HostRpcError;
+    }
+  | {
       readonly status: "incompatible";
       readonly retry: () => void;
       readonly error: HostRpcError;
@@ -51,6 +57,7 @@ export function useHostCompatibilityProbe(): HostCompatibility {
         !isTerminalHostCompatibilityError(error) &&
         !(error instanceof RetryableTransportError) &&
         failureCount < 2,
+      retryDelay: 0,
       // A compatible verdict must not bounce back to "checking": Infinity keeps
       // the success cached with no background refetch, so children stay mounted
       // even if the host connection later churns. The query key is host-id
@@ -65,6 +72,14 @@ export function useHostCompatibilityProbe(): HostCompatibility {
     return {
       status: "incompatible",
       retry: () => void probe.refetch(),
+      error: probe.error,
+    };
+  }
+  if (probe.isError) {
+    return {
+      status: "failed",
+      retry: () => void probe.refetch(),
+      retrying: probe.isFetching,
       error: probe.error,
     };
   }

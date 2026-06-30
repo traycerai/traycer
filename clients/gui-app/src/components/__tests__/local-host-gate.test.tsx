@@ -634,13 +634,45 @@ describe("LocalHostGate", () => {
     expect(screen.queryByText(/Force restart/i)).toBeNull();
     expect(screen.queryByText(/Force update/i)).toBeNull();
     expect(screen.queryByText(/Retry check/i)).toBeNull();
-    expect(
-      screen.getByTestId("local-host-incompatible-update").textContent,
-    ).toContain("Update host");
+    expect(screen.queryByRole("button", { name: "Update host" })).toBeNull();
     expect(screen.queryByTestId("gate-children")).toBeNull();
     expect(activeMessenger?.calls.map((entry) => entry.method)).not.toContain(
       "epic.listTasks",
     );
+  });
+
+  it("shows a retryable error when the compatibility probe fails after retries", async () => {
+    useAuthStore.getState().setSignedIn(
+      {
+        userId: "test-user",
+        userName: "Test User",
+        email: "test@example.com",
+      },
+      { userId: "test-user", username: "Test User" },
+      [],
+    );
+    mountGateWithRuntime(
+      makeHost(validSnapshot),
+      localEntry,
+      () => {
+        throw new HostRpcError({
+          code: "RPC_ERROR",
+          message: "status probe failed",
+          requestId: "req-status",
+          method: "host.status",
+          fatalDetails: null,
+        });
+      },
+      <div data-testid="gate-children">children</div>,
+    );
+
+    expect(
+      await screen.findByText(
+        "Could not verify host compatibility. status probe failed",
+      ),
+    ).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Retry" })).not.toBeNull();
+    expect(screen.queryByTestId("gate-children")).toBeNull();
   });
 
   it("treats downgrade-unsupported as a terminal normal-launch compatibility failure", async () => {
@@ -716,8 +748,7 @@ describe("LocalHostGate", () => {
       <div data-testid="gate-children">children</div>,
     );
 
-    const update = await screen.findByTestId("local-host-incompatible-update");
-    expect(update.textContent).toContain("Update host");
+    const update = await screen.findByRole("button", { name: "Update host" });
     fireEvent.click(update);
 
     await waitFor(() => {
@@ -783,12 +814,10 @@ describe("LocalHostGate", () => {
     expect(
       screen.getByTestId("local-host-incompatible-reason").textContent,
     ).toContain("Incompatible methods: epic.listTasks");
-    const refresh = screen.getByTestId("local-host-incompatible-busy-refresh");
-    expect(refresh.textContent).toContain("Refresh");
+    const refresh = screen.getByRole("button", { name: "Refresh" });
     expect(
-      screen.getByTestId("local-host-incompatible-busy-force-update")
-        .textContent,
-    ).toContain("Force update host");
+      screen.getByRole("button", { name: "Force update host" }),
+    ).not.toBeNull();
     expect(screen.queryByText(/Force restart/i)).toBeNull();
     expect(screen.queryByText(/Retry update/i)).toBeNull();
 
@@ -801,9 +830,9 @@ describe("LocalHostGate", () => {
       expect.objectContaining({ force: false }),
     );
 
-    const forceUpdate = await screen.findByTestId(
-      "local-host-incompatible-busy-force-update",
-    );
+    const forceUpdate = await screen.findByRole("button", {
+      name: "Force update host",
+    });
     fireEvent.click(forceUpdate);
 
     await waitFor(() => {
