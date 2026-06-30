@@ -16,6 +16,12 @@ export const tuiHarnessOptionSchema = z.object({
   label: z.string(),
   available: z.boolean(),
   error: z.string().nullable(),
+  // True while the host's availability probe for this harness is still running
+  // in the background (mirrors `guiHarnessOptionSchema`). A pending row carries
+  // `available: false`; a TUI consumer should re-fetch until it flips false
+  // rather than treat the harness as unavailable. `.catch(false)` tolerates old
+  // host builds that omit the field.
+  availabilityPending: z.boolean().catch(false),
 });
 export type TuiHarnessOption = z.infer<typeof tuiHarnessOptionSchema>;
 

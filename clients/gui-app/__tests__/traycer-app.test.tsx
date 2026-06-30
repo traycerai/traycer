@@ -115,6 +115,7 @@ function guiHarness(id: GuiHarnessId, label: string): GuiHarnessOption {
       "auto_accept_edits",
       "full_access",
     ],
+    availabilityPending: false,
   };
 }
 

@@ -73,7 +73,8 @@ export function ProviderRail(props: ProviderRailProps) {
             active={harness.id === activeProviderId}
             degraded={railHarnessDegraded(harness, degradedHarnessIds)}
             disabled={
-              lockedHarnessId !== null && harness.id !== lockedHarnessId
+              (lockedHarnessId !== null && harness.id !== lockedHarnessId) ||
+              harness.availabilityPending
             }
             onProviderChange={onProviderChange}
           />
@@ -106,6 +107,17 @@ interface ProviderRailButtonProps {
   readonly onProviderChange: (providerId: ProviderId) => void;
 }
 
+// Hover/AT title for a rail tab: surfaces the probe-in-flight state, then the
+// fork-lock reason, else the plain label. A function (not a nested ternary) so
+// it stays lint-clean and the three states read top to bottom.
+function railButtonTitle(harness: HarnessOption, disabled: boolean): string {
+  if (harness.availabilityPending) {
+    return `${harness.label} — checking availability…`;
+  }
+  if (disabled) return LOCKED_PROVIDER_TOOLTIP;
+  return harness.label;
+}
+
 // One rail tab. Split out so each can call the leader hook (hooks can't run in
 // a `.map`). The ⌘-digit badge masks the icon's right edge while the leader is
 // held; switching is pure state (no focus move), so the search box keeps focus.
@@ -126,9 +138,17 @@ function ProviderRailButton(props: ProviderRailButtonProps) {
         role="tab"
         aria-selected={active}
         aria-disabled={disabled ? true : undefined}
-        aria-label={harness.label}
-        aria-describedby={degraded ? degradedDescriptionId : undefined}
-        title={disabled ? LOCKED_PROVIDER_TOOLTIP : harness.label}
+        aria-label={
+          harness.availabilityPending
+            ? `${harness.label} — loading…`
+            : harness.label
+        }
+        aria-describedby={
+          degraded && !harness.availabilityPending
+            ? degradedDescriptionId
+            : undefined
+        }
+        title={railButtonTitle(harness, disabled)}
         tabIndex={disabled ? -1 : undefined}
         data-active={active}
         data-degraded={degraded ? true : undefined}
@@ -144,20 +164,33 @@ function ProviderRailButton(props: ProviderRailButtonProps) {
           onProviderChange(harness.id);
         }}
       >
-        <HarnessIcon harnessId={harness.id} />
-        {degraded ? (
-          <span id={degradedDescriptionId} className="sr-only">
-            Setup required
-          </span>
-        ) : null}
-        <PickerLeaderBadge
-          show={leaderModifier !== null && !disabled}
-          index={index}
-          hintAction="to browse"
-          hintTarget={harness.label}
-          testId={`model-provider-digit-${leaderDigitFor(index)}`}
-          placement="corner"
-        />
+        {harness.availabilityPending ? (
+          <>
+            <span className="opacity-25">
+              <HarnessIcon harnessId={harness.id} />
+            </span>
+            <span className="absolute inset-0 flex items-center justify-center">
+              <MutedAgentSpinner />
+            </span>
+          </>
+        ) : (
+          <>
+            <HarnessIcon harnessId={harness.id} />
+            {degraded ? (
+              <span id={degradedDescriptionId} className="sr-only">
+                Setup required
+              </span>
+            ) : null}
+            <PickerLeaderBadge
+              show={leaderModifier !== null && !disabled}
+              index={index}
+              hintAction="to browse"
+              hintTarget={harness.label}
+              testId={`model-provider-digit-${leaderDigitFor(index)}`}
+              placement="corner"
+            />
+          </>
+        )}
       </button>
     </TooltipWrapper>
   );

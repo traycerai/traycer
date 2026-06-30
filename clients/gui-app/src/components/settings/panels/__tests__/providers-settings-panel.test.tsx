@@ -222,6 +222,7 @@ function providerState(input: {
     terminalAgentArgs: "",
     envOverrides: [...input.envOverrides],
     loginCapability: null,
+    availabilityPending: false,
   };
 }
 
