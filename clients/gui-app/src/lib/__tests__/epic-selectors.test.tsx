@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
@@ -56,6 +56,30 @@ describe("useMaybeEpicTuiAgentHarnessId", () => {
       () => useMaybeEpicTuiAgentHarnessId("agent-1"),
       { wrapper: openEpicWrapper(handle) },
     );
+
+    expect(result.current).toBe("codex");
+  });
+
+  it("updates when tuiAgents.byId changes after mount", () => {
+    const handle = createHandle("epic-live-update");
+
+    const { result } = renderHook(
+      () => useMaybeEpicTuiAgentHarnessId("agent-1"),
+      { wrapper: openEpicWrapper(handle) },
+    );
+
+    expect(result.current).toBeNull();
+
+    act(() => {
+      handle.store.setState({
+        tuiAgents: {
+          allIds: ["agent-1"],
+          byId: {
+            "agent-1": tuiAgent("agent-1", "codex"),
+          },
+        },
+      });
+    });
 
     expect(result.current).toBe("codex");
   });
