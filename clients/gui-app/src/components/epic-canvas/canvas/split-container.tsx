@@ -78,7 +78,20 @@ const SplitNodeView = memo(function SplitNodeView(props: SplitNodeViewProps) {
       data-split-id={node.id}
       data-axis={node.direction}
       className={cn(
-        "flex h-full min-h-0 w-full min-w-0",
+        // The split group fills its `relative` parent (TileCanvas for the root
+        // group, a `data-split-child` for nested groups) via `absolute inset-0`
+        // rather than `h-full`. This hands the group a definite height the
+        // instant its parent has a box, sidestepping the percentage-height
+        // cascade. With `h-full` the group's height is a percentage of an
+        // ancestor whose own height resolves lazily on a `display:none` ->
+        // visible reveal, and the split's flex children then resolve their
+        // cross-axis height inconsistently against it - one pane lands full, the
+        // other collapses to its content height (the xterm's default grid) and
+        // sticks until a manual relayout. It's a layout-engine race, not a
+        // static bug, so adding more percentage layers can't win it; an absolute
+        // box makes the container height non-lazy. This is the same `absolute
+        // inset-0` escape the terminal host and pane-tab-layer already use.
+        "absolute inset-0 flex min-h-0 min-w-0",
         horizontal ? "flex-row" : "flex-col",
       )}
     >
@@ -97,7 +110,22 @@ const SplitNodeView = memo(function SplitNodeView(props: SplitNodeViewProps) {
           ) : null}
           <div
             data-split-child
-            className="relative min-h-0 min-w-0"
+            // `h-full` is load-bearing, not cosmetic. This wrapper is the one
+            // node in the height chain that exists ONLY in a split (a single
+            // pane renders `PaneComponent` directly), and the descendants below
+            // resolve their height via `height:100%`. Without an explicit
+            // definite height here the percentage cascade has nothing to resolve
+            // against (a flex-stretched cross size is not "definite" for child
+            // percentage resolution), and on a `display:none` -> visible reveal
+            // the children collapse to content height (~the xterm's intrinsic
+            // rows) and stay collapsed until a full relayout. `h-full` mirrors
+            // the single-pane `TileCanvas` contract (`relative h-full`) that
+            // never collapses. In a flex-COLUMN split it's a no-op
+            // (`flexBasis:0`+`flexGrow` own the main axis); in a flex-ROW split
+            // it pins the cross-axis height. The `flexGrow/flexBasis` style still
+            // distributes the main axis and is mutated directly by the resize
+            // handle, unaffected by this.
+            className="relative h-full min-h-0 min-w-0"
             style={{ flexGrow: sizes[index], flexBasis: 0, flexShrink: 1 }}
           >
             <SplitNodeView
