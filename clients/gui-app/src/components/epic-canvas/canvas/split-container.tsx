@@ -97,22 +97,7 @@ const SplitNodeView = memo(function SplitNodeView(props: SplitNodeViewProps) {
           ) : null}
           <div
             data-split-child
-            // `h-full` is load-bearing, not cosmetic. This wrapper is the one
-            // node in the height chain that exists ONLY in a split (a single
-            // pane renders `PaneComponent` directly), and the descendants below
-            // resolve their height via `height:100%`. Without an explicit
-            // definite height here the percentage cascade has nothing to resolve
-            // against (a flex-stretched cross size is not "definite" for child
-            // percentage resolution), and on a `display:none` -> visible reveal
-            // the children collapse to content height (~the xterm's intrinsic
-            // rows) and stay collapsed until a full relayout. `h-full` mirrors
-            // the single-pane `TileCanvas` contract (`relative h-full`) that
-            // never collapses. In a flex-COLUMN split it's a no-op
-            // (`flexBasis:0`+`flexGrow` own the main axis); in a flex-ROW split
-            // it pins the cross-axis height. The `flexGrow/flexBasis` style still
-            // distributes the main axis and is mutated directly by the resize
-            // handle, unaffected by this.
-            className="relative h-full min-h-0 min-w-0"
+            className="relative min-h-0 min-w-0"
             style={{ flexGrow: sizes[index], flexBasis: 0, flexShrink: 1 }}
           >
             <SplitNodeView

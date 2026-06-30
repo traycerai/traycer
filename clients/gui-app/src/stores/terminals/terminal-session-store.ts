@@ -196,6 +196,37 @@ export function createTerminalSessionStore(
       client.sendAction(frame);
     };
 
+    const flushRequestedResize = (): void => {
+      // Reconnect ordering is open -> snapshot. The open callback can see the
+      // old effective grid and skip, then the snapshot can overwrite effective
+      // with the host's stale serialized size. Re-check after both events so a
+      // remembered resize is not stranded behind the xterm engine's dedupe.
+      const state = get();
+      if (state.status === "exited" || state.status === "lost") return;
+      if (state.connectionStatus !== "open") return;
+      if (
+        state.requestedCols === state.effectiveCols &&
+        state.requestedRows === state.effectiveRows
+      ) {
+        return;
+      }
+      const clientActionId = uuidv4();
+      set((current) => ({
+        pendingActions: appendPendingAction(current.pendingActions, {
+          clientActionId,
+          action: "resize",
+        }),
+      }));
+      dispatchClientFrame({
+        kind: "resize",
+        hasBinaryPayload: false,
+        sessionId: options.sessionId,
+        clientActionId,
+        cols: state.requestedCols,
+        rows: state.requestedRows,
+      });
+    };
+
     const callbacks: TerminalStreamCallbacks = {
       onSnapshot: (frame) => {
         if (disposed || frame.sessionId !== options.sessionId) return;
@@ -246,6 +277,7 @@ export function createTerminalSessionStore(
           reattachMode: "live",
           lastOutputPreview,
         });
+        flushRequestedResize();
       },
       onData: (frame) => {
         if (disposed || frame.sessionId !== options.sessionId) return;
@@ -300,28 +332,7 @@ export function createTerminalSessionStore(
               : state.status,
         }));
         if (status !== "open") return;
-        const state = get();
-        if (
-          state.requestedCols === state.effectiveCols &&
-          state.requestedRows === state.effectiveRows
-        ) {
-          return;
-        }
-        const clientActionId = uuidv4();
-        set((current) => ({
-          pendingActions: appendPendingAction(current.pendingActions, {
-            clientActionId,
-            action: "resize",
-          }),
-        }));
-        dispatchClientFrame({
-          kind: "resize",
-          hasBinaryPayload: false,
-          sessionId: options.sessionId,
-          clientActionId,
-          cols: state.requestedCols,
-          rows: state.requestedRows,
-        });
+        flushRequestedResize();
       },
     };
 
