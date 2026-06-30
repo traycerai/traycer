@@ -291,8 +291,8 @@ describe("<TraycerApp />", () => {
 
     // After a new signIn() the error is cleared and the active approval panel
     // takes over instead of showing a separate disabled "Signing in" button.
-    await screen.findByTestId("signin-device-progress");
-    expect(screen.queryByTestId("signin-error")).toBeNull();
+    await screen.findByRole("heading", { name: "Approve in your browser" });
+    expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.queryByRole("button", { name: "Signing in" })).toBeNull();
   });
 

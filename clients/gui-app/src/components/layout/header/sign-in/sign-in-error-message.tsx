@@ -31,7 +31,11 @@ export function SignInErrorMessage(props: {
       role="alert"
     >
       {messageForError(props.lastError)}
-      <span className="sr-only" data-testid="signin-error-detail">
+      <span
+        className="sr-only"
+        data-testid="signin-error-detail"
+        aria-hidden="true"
+      >
         {props.lastError}
       </span>
     </span>

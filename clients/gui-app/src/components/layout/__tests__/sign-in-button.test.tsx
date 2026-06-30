@@ -424,32 +424,44 @@ describe("<SignInButton />", () => {
     await waitFor(() => {
       expect(result.host.deviceFlow.startCalls).toBe(1);
     });
-    await screen.findByTestId("signin-device-progress");
+    await screen.findByRole("heading", { name: "Approve in your browser" });
     expect(screen.queryByRole("button", { name: "Signing in" })).toBeNull();
-    fireEvent.click(screen.getByTestId("signin-device-fallback-trigger"));
-    const code = await screen.findByTestId("signin-device-code");
+    fireEvent.click(screen.getByRole("button", { name: "Use code instead" }));
+    const code = await screen.findByText("ABCDE-FGHIJ");
     expect(code.textContent).toBe("ABCDE-FGHIJ");
-    expect(screen.getByTestId("signin-device-url").textContent).toBe(
+    expect(screen.getByText("https://app.traycer.ai/device").textContent).toBe(
       "https://app.traycer.ai/device",
     );
     const writeText = vi.fn(() => Promise.resolve());
+    const previousClipboard = Object.getOwnPropertyDescriptor(
+      navigator,
+      "clipboard",
+    );
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
       value: { writeText },
     });
-    expect(screen.queryByText("Copied")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Copy device code" }));
-    fireEvent.click(
-      screen.getByRole("button", { name: "Copy approval address" }),
-    );
-    await waitFor(() => {
-      expect(writeText).toHaveBeenCalledWith("ABCDE-FGHIJ");
-      expect(writeText).toHaveBeenCalledWith("https://app.traycer.ai/device");
-    });
-    expect(screen.getAllByText("Copied")).toHaveLength(2);
-    // There is no device-code fallback link anymore.
-    expect(screen.queryByTestId("signin-device-code-link")).toBeNull();
-    result.cleanupClient();
+    try {
+      expect(screen.queryByText("Copied")).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: "Copy device code" }));
+      fireEvent.click(
+        screen.getByRole("button", { name: "Copy approval address" }),
+      );
+      await waitFor(() => {
+        expect(writeText).toHaveBeenCalledWith("ABCDE-FGHIJ");
+        expect(writeText).toHaveBeenCalledWith("https://app.traycer.ai/device");
+      });
+      expect(screen.getAllByText("Copied")).toHaveLength(2);
+      // There is no device-code fallback link anymore.
+      expect(screen.queryByTestId("signin-device-code-link")).toBeNull();
+    } finally {
+      if (previousClipboard === undefined) {
+        Reflect.deleteProperty(navigator, "clipboard");
+      } else {
+        Object.defineProperty(navigator, "clipboard", previousClipboard);
+      }
+      result.cleanupClient();
+    }
   });
 
   it("renders an expired approval status without the waiting spinner", async () => {
