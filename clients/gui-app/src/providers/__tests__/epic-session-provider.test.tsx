@@ -1,7 +1,12 @@
 import "../../../__tests__/test-browser-apis";
 import { useEffect } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import type {
+  ListTasksResponse,
+  TaskLight,
+} from "@traycer/protocol/host/epic/unary-schemas";
 
 const hostState = vi.hoisted((): { id: string | null } => ({ id: "host-a" }));
 const authServiceStub = vi.hoisted(() => ({
@@ -47,6 +52,10 @@ import { setDesktopEpicOwnershipBridge } from "@/lib/windows/desktop-epic-owners
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
+import {
+  LIST_CLOUD_TASKS_REQUEST,
+  cloudEpicTasksQueryKey,
+} from "@/lib/cloud-epic-tasks-query";
 import type {
   DesktopOwnershipClaimResult,
   DesktopPerWindowStatePatch,
@@ -191,6 +200,35 @@ function resetCanvasStore(): void {
     mostRecentTabIdByEpicId: {},
     artifactTreeByEpicId: {},
   });
+}
+
+function makeHistoryTask(
+  id: string,
+  title: string,
+  createdBy: string,
+): TaskLight {
+  return {
+    epic: {
+      light: {
+        id,
+        title,
+        initialUserPrompt: "Investigate the title update bug",
+        ticketCount: 0,
+        specCount: 0,
+        storyCount: 0,
+        reviewCount: 0,
+        status: "draft",
+        createdAt: 1,
+        updatedAt: 1,
+        createdBy,
+        version: "1",
+      },
+      permission: null,
+      repos: [],
+      workspaces: [],
+      roomInfo: null,
+    },
+  };
 }
 
 describe("<EpicSessionProvider />", () => {
@@ -395,6 +433,64 @@ describe("<EpicSessionProvider />", () => {
     });
     expect(streams).toHaveLength(1);
     expect(__getOpenEpicRegistryForTests().size()).toBe(1);
+  });
+
+  it("patches cached history titles when a generated epic title lands", async () => {
+    const queryClient = new QueryClient();
+    const sessionUserId = "alice@example.com";
+    const cloudTasksUserId = "cloud-user-1";
+    useAuthStore.setState({
+      contextMetadata: { userId: cloudTasksUserId, username: sessionUserId },
+    });
+    const queryKey = cloudEpicTasksQueryKey(
+      "host-a",
+      cloudTasksUserId,
+      LIST_CLOUD_TASKS_REQUEST,
+    );
+    queryClient.setQueryData<ListTasksResponse>(queryKey, {
+      tasks: [makeHistoryTask("epic-session-test", "", cloudTasksUserId)],
+      hasMore: false,
+    });
+    const seenHandles: OpenEpicStoreHandle[] = [];
+    __setEpicStreamClientFactoryForTests((_epicId, _callbacks) => ({
+      applyUpdate: () => undefined,
+      awareness: () => undefined,
+      applyArtifactRoomUpdate: () => undefined,
+      artifactRoomAwareness: () => undefined,
+      retryMigration: () => undefined,
+      close: () => undefined,
+    }));
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <EpicSessionProvider
+          epicId="epic-session-test"
+          tabId="epic-session-test"
+        >
+          <HandleProbe
+            onHandle={(handle) => {
+              seenHandles.push(handle);
+            }}
+          />
+        </EpicSessionProvider>
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(seenHandles).toHaveLength(1);
+    });
+    expect(seenHandles[0].userId).toBe(sessionUserId);
+
+    act(() => {
+      seenHandles[0].store.getState().setEpicTitle("Generated history title");
+    });
+
+    await waitFor(() => {
+      expect(
+        queryClient.getQueryData<ListTasksResponse>(queryKey)?.tasks[0]?.epic
+          ?.light?.title,
+      ).toBe("Generated history title");
+    });
   });
 
   it("claims desktop epic ownership before acquiring a renderer session", async () => {

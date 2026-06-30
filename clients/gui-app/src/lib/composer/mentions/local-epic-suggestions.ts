@@ -4,7 +4,10 @@ import type {
 } from "@traycer/protocol/host/epic/unary-schemas";
 import type { EpicLight } from "@traycer/protocol/host/epic/unary-schemas";
 import { isSubsequence } from "@traycer/protocol/utils/text/fuzzy";
-import { epicDisplayTitle } from "@/lib/display-title";
+import {
+  isTaskMentionAliasQuery,
+  taskMentionDisplayTitle,
+} from "./task-mention-helpers";
 
 export function buildEpicMentionSuggestionsFromTasks(
   tasks: ReadonlyArray<TaskLight>,
@@ -24,7 +27,7 @@ function buildSuggestion(epic: EpicLight): EpicMentionEpicSuggestion {
     id: `epic:${epic.id}`,
     token: `epic:${epic.id}`,
     epicId: epic.id,
-    label: epicDisplayTitle(epic),
+    label: taskMentionDisplayTitle(epic),
     description: countDescription(epic),
     status: epic.status,
     updatedAt: epic.updatedAt,
@@ -54,7 +57,8 @@ function rankEpics(
 
 function scoreEpic(epic: EpicLight, normalizedQuery: string): number | null {
   if (normalizedQuery.length === 0) return 0;
-  const label = epicDisplayTitle(epic).toLowerCase();
+  if (isTaskMentionAliasQuery(normalizedQuery)) return 250;
+  const label = taskMentionDisplayTitle(epic).toLowerCase();
   const id = `epic:${epic.id}`.toLowerCase();
   if (label === normalizedQuery || id === normalizedQuery) return 0;
   if (label.startsWith(normalizedQuery)) return 100;

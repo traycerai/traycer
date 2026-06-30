@@ -46,8 +46,7 @@ import { resolveRowChildHost } from "./chat-row-child-host";
 export interface ChatRowChildCreate {
   readonly onAddChild: (type: EpicNodeKind) => void;
   readonly onAddTerminalAgent:
-    | ((input: TerminalAgentWorktreeCreateInput) => void)
-    | undefined;
+    ((input: TerminalAgentWorktreeCreateInput) => void) | undefined;
   readonly addMenuOpen: boolean;
   readonly onAddMenuOpenChange: (open: boolean) => void;
   readonly terminalAgentWorkspaceSeed: ForkWorkspaceSeed | null;

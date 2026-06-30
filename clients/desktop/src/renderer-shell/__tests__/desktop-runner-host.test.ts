@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type {
-  AuthCallbackResult,
   AuthTokenValidationResult,
+  HostRegistryUpdateState,
   LocalHostSnapshot,
   TrayEpic,
   TrayIndicatorState,
@@ -82,15 +82,18 @@ function buildFakeBridge(
       },
     }),
     validateAuthTokenIdentity: async () => ({ kind: "rejected" as const }),
-    exchangeAuthCode: async () => null,
+    refreshAuthToken: async () => ({ kind: "network-error" as const }),
     openExternalLink: async () => undefined,
     getRegisteredUrlSchemes: async () => [],
     requestMicrophoneAccess: async () => "granted" as const,
     openMicrophoneSettings: async () => undefined,
     beginAuthAttempt: () => undefined,
-    onAuthCallback: (_handler: (result: AuthCallbackResult) => void) => ({
+    onAuthCallback: (_handler: () => void) => ({
       dispose: () => undefined,
     }),
+    deviceFlow: {
+      start: async () => null,
+    },
     notifications: {
       show: async () => undefined,
       onClick: (_handler: (payload: unknown) => void) => ({
@@ -437,6 +440,7 @@ function buildFakeBridge(
         reachable: false,
         errorMessage: null,
       }),
+      onRegistryUpdateState: () => ({ dispose: () => undefined }),
       freePortAndRestart: async (input) => input,
       cliManifest: async () => null,
       getHostName: async () => ({
@@ -681,6 +685,25 @@ describe("DesktopRunnerHost.onLocalHostChange", () => {
     // The fake bridge increments its internal counter - observable via a
     // subsequent respawn not throwing and the await resolving.
     expect(host.authnBaseUrl).toBe("http://localhost:5005");
+  });
+
+  it("passes host registry update subscriptions through to host management", () => {
+    const fake = buildFakeBridge(null);
+    const disposer = { dispose: vi.fn() };
+    const onRegistryUpdateState = vi.fn(
+      (_handler: (state: HostRegistryUpdateState) => void) => disposer,
+    );
+    fake.bridge.hostManagement.onRegistryUpdateState = onRegistryUpdateState;
+    const host = new DesktopRunnerHost({
+      bridge: fake.bridge,
+      signInUrl: "https://auth.example.invalid/sign-in",
+    });
+    const handler = vi.fn();
+
+    const subscription = host.hostRegistryUpdates.onChange(handler);
+
+    expect(onRegistryUpdateState).toHaveBeenCalledWith(handler);
+    expect(subscription).toBe(disposer);
   });
 
   it("forwards workspace folder picking to the bridge", async () => {

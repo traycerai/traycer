@@ -60,7 +60,7 @@ export async function callHostRpc<
   params: RequestOfMethod<HostRpcRegistry, Method>,
 ): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
   const logger = createCliLogger(config.environment);
-  logger.info("Host RPC requested", {
+  logger.debug("Host RPC requested", {
     environment: config.environment,
     method,
     retryPolicy: "default",
@@ -107,7 +107,7 @@ export async function callHostRpcFastFail<
   params: RequestOfMethod<HostRpcRegistry, Method>,
 ): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
   const logger = createCliLogger(config.environment);
-  logger.info("Host RPC requested", {
+  logger.debug("Host RPC requested", {
     environment: config.environment,
     method,
     retryPolicy: "fast-fail",
@@ -151,7 +151,7 @@ export async function callHostRpcAtEndpoint<
   endpoint: HostTransportEndpoint,
 ): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
   const logger = createCliLogger(config.environment);
-  logger.info("Host RPC requested at explicit endpoint", {
+  logger.debug("Host RPC requested at explicit endpoint", {
     environment: config.environment,
     method,
     retryPolicy: "default",
@@ -196,6 +196,7 @@ async function requestAtEndpoint<
     lease,
     store: cliBearerStore,
     clearOnReject: false,
+    delay: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   });
 
   const messenger = createRetryingMessenger<HostRpcRegistry>(
@@ -217,7 +218,7 @@ async function requestAtEndpoint<
 
   try {
     const response = await messenger.request(method, params);
-    logger.info("Host RPC completed", {
+    logger.debug("Host RPC completed", {
       environment: config.environment,
       method,
       retryPolicy: retryPolicyLabel(retryPolicy),

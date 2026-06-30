@@ -14,11 +14,7 @@ export type HistoryMatchMode = "any" | "all";
 export type HistoryOwnershipScope = TaskOwnershipScope;
 export type HistoryWorkspaceRef = TaskWorkspaceIdentifier;
 export type HistorySortOption =
-  | "recent"
-  | "oldest"
-  | "title-asc"
-  | "title-desc"
-  | "relevance";
+  "recent" | "oldest" | "title-asc" | "title-desc" | "relevance";
 
 export const DEFAULT_SORT: HistorySortOption = "recent";
 

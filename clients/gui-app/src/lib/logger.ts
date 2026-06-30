@@ -1,3 +1,9 @@
+import {
+  DEFAULT_LOG_LEVEL,
+  logLevelAllows,
+  type LogLevel,
+} from "@traycer/protocol/config/log-level";
+
 export type AppLogLevel = "debug" | "info" | "warn" | "error";
 
 export type AppLogValue =
@@ -24,9 +30,17 @@ const SENSITIVE_INLINE_VALUE_PATTERN =
   /(\b(?:access[_-]?token|refresh[_-]?token|id[_-]?token|token|code[_-]?verifier|password|secret|client[_-]?secret|api[_-]?key|authorization|cookie|credential)\b\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;}&]+)/gi;
 const NOT_SCALAR_LOG_VALUE = Symbol("not-scalar-log-value");
 
+// The renderer's threshold, hydrated from the desktop log level over IPC (see
+// LogLevelBridge). Defaults to debug in dev for DX, info otherwise; in the
+// desktop shell the configured `desktopLogLevel` takes over once it loads.
+let appLogLevel: LogLevel = import.meta.env.DEV ? "debug" : DEFAULT_LOG_LEVEL;
+
+export function setAppLogLevel(level: LogLevel): void {
+  appLogLevel = level;
+}
+
 export const appLogger = {
   debug(message: string, fields: AppLogFields): void {
-    if (!import.meta.env.DEV) return;
     emitLog("debug", message, fields);
   },
   info(message: string, fields: AppLogFields): void {
@@ -122,6 +136,7 @@ function emitLog(
   message: string,
   fields: AppLogFields,
 ): void {
+  if (!logLevelAllows(appLogLevel, level)) return;
   const payload = {
     source: "gui-app",
     level,

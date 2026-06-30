@@ -62,7 +62,7 @@ export function ChatComposerEditorSlot(props: ChatComposerEditorSlotProps) {
       isActive={isActive}
       disabled={false}
       placeholder={isNarrow ? NARROW_PLACEHOLDER : PLACEHOLDER}
-      editorClassName="min-h-9"
+      editorClassName="max-h-[3.5lh] min-h-9"
       onSnapshot={onSnapshot}
       onSubmit={onSubmit}
       onPaste={onPaste}

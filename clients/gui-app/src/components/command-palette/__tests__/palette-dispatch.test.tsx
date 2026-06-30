@@ -35,6 +35,11 @@ function buildRouter(calls: RouterCalls): KeybindingRouter {
       calls.settingsSection.push(sectionId);
     },
     navigateToTabIntent: () => undefined,
+    goBack: () => undefined,
+    goForward: () => undefined,
+    isHistoryNavAvailable: () => false,
+    canGoBack: () => false,
+    canGoForward: () => false,
   };
 }
 

@@ -128,6 +128,7 @@ export function WorktreePicker(props: WorktreePickerProps) {
           secondaryLabel={(row) => row.runningDir}
           disabledLabel={gitDiffDisabledLabel}
           onSelect={handleSelectRow}
+          autoFocusSearch={false}
         />
       </PopoverContent>
     </Popover>

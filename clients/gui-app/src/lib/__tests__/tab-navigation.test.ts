@@ -100,6 +100,11 @@ function buildRecordingRouter(initialPath: string): RecordedRouter {
     navigateToTabIntent: (intent) => {
       intents.push(intent);
     },
+    goBack: () => undefined,
+    goForward: () => undefined,
+    isHistoryNavAvailable: () => false,
+    canGoBack: () => false,
+    canGoForward: () => false,
   };
   return {
     router,

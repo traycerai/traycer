@@ -1274,7 +1274,7 @@ if (isTraycerCliEntrypoint(entryArgv)) {
   const entryLogger = createCliLogger(config.environment);
   installProcessFailureHandlers(entryLogger);
   const program = buildProgram();
-  entryLogger.info("CLI entrypoint parsing argv", {
+  entryLogger.debug("CLI entrypoint parsing argv", {
     environment: config.environment,
     argvLength: process.argv.length,
   });
@@ -1289,7 +1289,7 @@ if (isTraycerCliEntrypoint(entryArgv)) {
         // override) so we wrap it in a single `result/ok` envelope rather than
         // leaking raw prose onto an NDJSON stream.
         if (err.exitCode === 0) {
-          entryLogger.info("Commander handled informational exit", {
+          entryLogger.debug("Commander handled informational exit", {
             json: jsonMode,
             commanderCode: err.code,
             exitCode: err.exitCode,

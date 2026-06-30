@@ -9,17 +9,15 @@ interface EpicSelectorsMockState {
   retryMigration: () => void;
 }
 
-const epicSelectorsMockState = vi.hoisted(
-  (): EpicSelectorsMockState => ({
-    migration: {
-      status: "idle",
-      phase: null,
-      chunksDone: 0,
-      chunksTotal: 0,
-    },
-    retryMigration: vi.fn(),
-  }),
-);
+const epicSelectorsMockState = vi.hoisted((): EpicSelectorsMockState => ({
+  migration: {
+    status: "idle",
+    phase: null,
+    chunksDone: 0,
+    chunksTotal: 0,
+  },
+  retryMigration: vi.fn(),
+}));
 
 const navigateMock = vi.hoisted(() => vi.fn());
 

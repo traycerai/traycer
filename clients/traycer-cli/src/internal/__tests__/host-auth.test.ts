@@ -56,7 +56,11 @@ describe("resolveHostAuth", () => {
 describe("cliBearerStore", () => {
   it("read returns the stored token, or null when absent", async () => {
     readMock.mockResolvedValueOnce(storedCreds);
-    expect(await cliBearerStore.read()).toEqual({ token: "stored-token", refreshToken: "stored-refresh" });
+    expect(await cliBearerStore.read()).toEqual({
+      token: "stored-token",
+      refreshToken: "stored-refresh",
+      userId: "u1",
+    });
     readMock.mockResolvedValueOnce(null);
     expect(await cliBearerStore.read()).toBeNull();
   });

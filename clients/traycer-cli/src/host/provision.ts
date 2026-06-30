@@ -116,7 +116,7 @@ export async function provisionHost(
   // when the install record already matches, so it never takes the satisfied
   // no-op fast path.
   if (!opts.force && isSatisfied(fast, opts.targetVersion, opts.registerService)) {
-    opts.runtime.logger.info("Host provisioning fast-path satisfied", {
+    opts.runtime.logger.debug("Host provisioning fast-path satisfied", {
       environment: opts.runtime.environment,
       installed: fast.installed,
       registered: fast.registered,
@@ -125,7 +125,7 @@ export async function provisionHost(
     });
     return noopResult(fast);
   }
-  opts.runtime.logger.info("Host provisioning entering CLI lock", {
+  opts.runtime.logger.debug("Host provisioning entering CLI lock", {
     environment: opts.runtime.environment,
     lockReason: opts.lockReason,
     force: opts.force,
@@ -158,7 +158,7 @@ export async function provisionHost(
         !opts.force &&
         isSatisfied(state, opts.targetVersion, opts.registerService)
       ) {
-        opts.runtime.logger.info("Host provisioning satisfied after lock recheck", {
+        opts.runtime.logger.debug("Host provisioning satisfied after lock recheck", {
           environment: opts.runtime.environment,
           installed: state.installed,
           registered: state.registered,
@@ -174,7 +174,7 @@ export async function provisionHost(
         versionSatisfied(state, opts.targetVersion) &&
         !opts.registerService
       ) {
-        opts.runtime.logger.info("Host provisioning no-op for host-owned service registration", {
+        opts.runtime.logger.debug("Host provisioning no-op for host-owned service registration", {
           environment: opts.runtime.environment,
           installed: state.installed,
           hasVersion: state.version !== null,
@@ -192,7 +192,7 @@ export async function provisionHost(
       // status drift where the controller reports stopped while a process is
       // still live and busy).
       if (!opts.force) {
-        opts.runtime.logger.info("Host provisioning running busy guard", {
+        opts.runtime.logger.debug("Host provisioning running busy guard", {
           environment: opts.runtime.environment,
           reason: opts.lockReason,
         });
@@ -210,7 +210,7 @@ export async function provisionHost(
         !state.installed ||
         !versionSatisfied(state, opts.targetVersion)
       ) {
-        opts.runtime.logger.info("Host provisioning selected install branch", {
+        opts.runtime.logger.debug("Host provisioning selected install branch", {
           environment: opts.runtime.environment,
           force: opts.force,
           installed: state.installed,
@@ -219,13 +219,13 @@ export async function provisionHost(
         return runInstall(opts, controller, label, progress);
       }
       if (!state.registered) {
-        opts.runtime.logger.info("Host provisioning selected service-register branch", {
+        opts.runtime.logger.debug("Host provisioning selected service-register branch", {
           environment: opts.runtime.environment,
         });
         return runServiceRegister(opts, controller, label, progress);
       }
       // installed + registered + stopped → start.
-      opts.runtime.logger.info("Host provisioning selected service-start branch", {
+      opts.runtime.logger.debug("Host provisioning selected service-start branch", {
         environment: opts.runtime.environment,
       });
       return runStart(opts, controller, label, state, progress);
@@ -240,7 +240,7 @@ async function runInstall(
   progress: (info: ProgressInfo) => void,
 ): Promise<HostProvisionResult> {
   const source = await opts.resolveInstallSource();
-  opts.runtime.logger.info("Host provisioning install source resolved", {
+  opts.runtime.logger.debug("Host provisioning install source resolved", {
     environment: opts.runtime.environment,
     sourceKind: source.kind,
     versionRequest:

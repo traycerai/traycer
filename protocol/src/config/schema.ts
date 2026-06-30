@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { LOG_LEVELS, DEFAULT_LOG_LEVEL } from "./log-level";
 
 /**
  * Current on-disk schema version for `~/.traycer/cli/config.json`. Bump it
@@ -24,6 +25,22 @@ export interface EnvOverrideEntry {
 }
 
 const envOverrideMapSchema = z.record(z.string(), z.string().nullable());
+
+/**
+ * The `logs` block in `~/.traycer/cli/config.json`: two independent thresholds —
+ * one for the client processes (CLI + desktop/renderer), one for the host — both
+ * defaulting to `info` so a fresh install is quiet by default. Additive and
+ * `.default()`-ed, so older config files that lack it keep validating; the only
+ * compatibility cost is that a pre-feature binary's writer drops it on its next
+ * write (the setting then resolves back to the `info` default).
+ */
+export const logsConfigSchema = z
+  .object({
+    cliLogLevel: z.enum(LOG_LEVELS).default(DEFAULT_LOG_LEVEL),
+    hostLogLevel: z.enum(LOG_LEVELS).default(DEFAULT_LOG_LEVEL),
+  })
+  .default({ cliLogLevel: DEFAULT_LOG_LEVEL, hostLogLevel: DEFAULT_LOG_LEVEL });
+export type LogsConfig = z.infer<typeof logsConfigSchema>;
 
 /**
  * Zod schema for `~/.traycer/cli/config.json` - the single on-disk source
@@ -54,6 +71,7 @@ export const cliConfigSchema = z.object({
     })
     .default({ path: null, args: null }),
   envOverrides: envOverrideMapSchema.default({}),
+  logs: logsConfigSchema,
 });
 
 export type CliConfig = z.infer<typeof cliConfigSchema>;
@@ -91,4 +109,5 @@ export const EMPTY_CLI_CONFIG: CliConfig = {
   version: CLI_CONFIG_VERSION,
   shell: { path: null, args: null },
   envOverrides: {},
+  logs: { cliLogLevel: DEFAULT_LOG_LEVEL, hostLogLevel: DEFAULT_LOG_LEVEL },
 };

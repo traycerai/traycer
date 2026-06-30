@@ -115,7 +115,7 @@ export async function detectBootstrapState(
 export async function evaluateAutoBootstrap(
   opts: AutoBootstrapOptions,
 ): Promise<AutoBootstrapDecision> {
-  opts.runtime.logger.info("Auto-bootstrap evaluation started", {
+  opts.runtime.logger.debug("Auto-bootstrap evaluation started", {
     environment: opts.runtime.environment,
     trigger: opts.trigger,
     noBootstrap: opts.runtime.noBootstrap,
@@ -124,7 +124,7 @@ export async function evaluateAutoBootstrap(
   const state = await detectBootstrapState(opts.runtime);
 
   if (state.hostInstalled && state.serviceRegistered) {
-    opts.runtime.logger.info("Auto-bootstrap skipped; host already ready", {
+    opts.runtime.logger.debug("Auto-bootstrap skipped; host already ready", {
       environment: opts.runtime.environment,
       trigger: opts.trigger,
     });
@@ -140,7 +140,7 @@ export async function evaluateAutoBootstrap(
   }
 
   if (opts.runtime.noBootstrap) {
-    opts.runtime.logger.info("Auto-bootstrap skipped by flag", {
+    opts.runtime.logger.debug("Auto-bootstrap skipped by flag", {
       environment: opts.runtime.environment,
       trigger: opts.trigger,
       hostInstalled: state.hostInstalled,
@@ -158,7 +158,7 @@ export async function evaluateAutoBootstrap(
   }
 
   if (opts.runtime.nonInteractive) {
-    opts.runtime.logger.info("Auto-bootstrap skipped in non-interactive runtime", {
+    opts.runtime.logger.debug("Auto-bootstrap skipped in non-interactive runtime", {
       environment: opts.runtime.environment,
       trigger: opts.trigger,
       hostInstalled: state.hostInstalled,
@@ -228,7 +228,7 @@ export async function maybeAutoBootstrap(
   const decision = await evaluateAutoBootstrap(opts);
   if (decision.status !== "service-registered" && decision.status !== "installed") {
     // "skipped" or "ready" - nothing to do.
-    opts.runtime.logger.info("Auto-bootstrap returning without provisioning", {
+    opts.runtime.logger.debug("Auto-bootstrap returning without provisioning", {
       environment: opts.runtime.environment,
       trigger: opts.trigger,
       status: decision.status,
@@ -244,7 +244,7 @@ export async function maybeAutoBootstrap(
     // registry fallback uses the CLI's stamped supported host version when
     // present.
     const source = await resolveAutoBootstrapSource();
-    opts.runtime.logger.info("Auto-bootstrap source resolved", {
+    opts.runtime.logger.debug("Auto-bootstrap source resolved", {
       environment: opts.runtime.environment,
       trigger: opts.trigger,
       serviceOnly: isServiceOnly,

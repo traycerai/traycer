@@ -49,6 +49,7 @@ import type {
 import { QueuedMessageContentPreview } from "@/components/chat/queued-message-content-preview";
 import { isReceivedAgentResponse } from "@/components/chat/chat-queue-utils";
 import {
+  QUEUED_MESSAGE_DND_MODIFIERS,
   useQueuedMessageReorderDnd,
   useQueuedMessageRowSortable,
   type QueuedMessageDropPreview,
@@ -184,7 +185,9 @@ export function QueuedMessagePanel(props: QueuedMessagePanelProps) {
         >
           <DndContext
             sensors={sensors}
+            autoScroll={false}
             collisionDetection={reorderDnd.collisionDetection}
+            modifiers={QUEUED_MESSAGE_DND_MODIFIERS}
             onDragStart={reorderDnd.handleDragStart}
             onDragMove={reorderDnd.handleDragMove}
             onDragOver={reorderDnd.handleDragOver}

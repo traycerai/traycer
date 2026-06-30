@@ -12,6 +12,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  refreshAuthTokenViaHttp,
   validateAuthTokenIdentityViaHttp,
   type AuthIdentityValidationResult,
 } from "../auth-validation";
@@ -201,5 +202,58 @@ describe("validateAuthTokenIdentityViaHttp - full AuthenticatedUser", () => {
     );
 
     expect(result.kind).toBe("rejected");
+  });
+});
+
+describe("refreshAuthTokenViaHttp - status mapping", () => {
+  it("maps a 409 (refresh grace window in progress) to network-error", async () => {
+    installMockFetch([{ status: 409, body: { error: "in progress" } }]);
+
+    const result = await refreshAuthTokenViaHttp(
+      AUTHN_BASE_URL,
+      "stale-bearer",
+      "stale-refresh",
+    );
+
+    // A concurrent refresher is mid-rotation: transient/retriable, NOT a dead
+    // credential. Must NOT downgrade to `rejected` (which signs the GUI out).
+    expect(result.kind).toBe("network-error");
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe(REFRESH_ENDPOINT);
+    expect(calls[0].method).toBe("POST");
+  });
+
+  it("maps a 401 to rejected", async () => {
+    installMockFetch([{ status: 401, body: { error: "Unauthorized" } }]);
+
+    const result = await refreshAuthTokenViaHttp(
+      AUTHN_BASE_URL,
+      "stale-bearer",
+      "stale-refresh",
+    );
+
+    expect(result.kind).toBe("rejected");
+  });
+
+  it("returns the rotated pair on success", async () => {
+    installMockFetch([
+      {
+        status: 200,
+        body: { token: "rotated-bearer", refreshToken: "rotated-refresh" },
+      },
+    ]);
+
+    const result = await refreshAuthTokenViaHttp(
+      AUTHN_BASE_URL,
+      "stale-bearer",
+      "stale-refresh",
+    );
+
+    expect(result.kind).toBe("refreshed");
+    if (result.kind !== "refreshed") {
+      throw new Error("expected refreshed result");
+    }
+    expect(result.token).toBe("rotated-bearer");
+    expect(result.refreshToken).toBe("rotated-refresh");
   });
 });

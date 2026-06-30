@@ -74,7 +74,7 @@ export async function createRegistryClient(
   const transport = opts.transport ?? DEFAULT_TRANSPORT;
   const manifestUrlInfo = resolveManifestUrl();
   const trustedKeySet = await loadTrustedKeys();
-  logger.info("Registry client created", {
+  logger.debug("Registry client created", {
     environment: opts.environment,
     customTransport: opts.transport !== null,
     requireTrustedKeys: opts.requireTrustedKeys,
@@ -123,7 +123,7 @@ export async function createRegistryClient(
         });
         return cachedManifest;
       }
-      logger.info("Registry manifest fetch started", {
+      logger.debug("Registry manifest fetch started", {
         environment: opts.environment,
         manifestUrl: manifestUrlInfo.url,
       });
@@ -152,7 +152,7 @@ export async function createRegistryClient(
         manifestUrlInfo.url,
       );
       cachedManifest = manifest;
-      logger.info("Registry manifest parsed", {
+      logger.debug("Registry manifest parsed", {
         environment: opts.environment,
         hasLatest: manifest.latest.length > 0,
         versionCount: manifest.versions.length,
@@ -173,7 +173,7 @@ export async function createRegistryClient(
       const resolvedVersion = requestedLatest
         ? manifest.latest
         : versionRequest;
-      logger.info("Registry asset resolution started", {
+      logger.debug("Registry asset resolution started", {
         environment: opts.environment,
         requestedLatest,
         platformKey,
@@ -239,7 +239,7 @@ export async function createRegistryClient(
           exitCode: 1,
         });
       }
-      logger.info("Registry asset resolved", {
+      logger.debug("Registry asset resolved", {
         environment: opts.environment,
         requestedLatest,
         platformKey,
@@ -276,7 +276,7 @@ export async function createRegistryClient(
         });
       }
       const tmpDir = await mkdtemp(join(tmpdir(), "traycer-host-dl-"));
-      logger.info("Registry download started", {
+      logger.debug("Registry download started", {
         environment: opts.environment,
       });
       // Track whether we succeeded so the `finally` block can clean up

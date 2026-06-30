@@ -126,7 +126,7 @@ async function ensureHost(
         version: serviceStatus.version,
       };
     }
-    log.info(
+    log.debug(
       "[host-ensure] service status file points at an unreachable endpoint - ensuring",
       { listenUrl: serviceStatus.listenUrl },
     );

@@ -19,14 +19,21 @@ export const providerIdSchema = z.enum([
   "cursor",
   "traycer",
   "grok",
+  "qwen",
+  "kiro",
+  "droid",
+  "kimi",
+  "copilot",
+  "kilocode",
+  "openrouter",
 ]);
 export type ProviderId = z.infer<typeof providerIdSchema>;
 
 /**
- * Frozen grok-less provider id set as shipped in protocol v1.0. Used only by the
- * frozen v1.0 `providers.list` response so a v1.0 client never receives the grok
- * provider; the v2.0 line adds it with a v2→v1 downgrade bridge. Do not add new
- * providers here.
+ * Frozen provider id set as shipped in protocol v1.0. Used only by the frozen
+ * v1.0 `providers.list` response so a v1.0 client never receives the ACP GUI
+ * harness providers; the v2.0 line adds them with a v2→v1 downgrade bridge. Do
+ * not add new providers here.
  */
 export const providerIdSchemaV10 = z.enum([
   "claude-code",
@@ -45,6 +52,13 @@ export const PROVIDER_DISPLAY_NAMES: Record<ProviderId, string> = {
   cursor: "Cursor",
   traycer: "Traycer",
   grok: "Grok",
+  qwen: "Qwen Code",
+  kiro: "Kiro",
+  droid: "Droid",
+  kimi: "Kimi",
+  copilot: "Copilot",
+  kilocode: "Kilo Code",
+  openrouter: "OpenRouter",
 };
 
 /**
@@ -81,20 +95,45 @@ export const providerCliCandidateSchema = z.object({
 });
 export type ProviderCliCandidate = z.infer<typeof providerCliCandidateSchema>;
 
-export const PROVIDER_AUTH_STATUS_SCHEMA = z.enum([
+export const PROVIDER_AUTH_STATUS_SCHEMA_V10 = z.enum([
   "authenticated",
   "unauthenticated",
   "unknown",
 ]);
-export type ProviderAuthStatus = z.infer<typeof PROVIDER_AUTH_STATUS_SCHEMA>;
+export type ProviderAuthStatusV10 = z.infer<
+  typeof PROVIDER_AUTH_STATUS_SCHEMA_V10
+>;
 
-export const PROVIDER_AUTH_SCHEMA = z.object({
-  status: PROVIDER_AUTH_STATUS_SCHEMA,
+export const PROVIDER_AUTH_SCHEMA_V10 = z.object({
+  status: PROVIDER_AUTH_STATUS_SCHEMA_V10,
   badgeText: z.string().nullable(),
   label: z.string().nullable(),
   detail: z.string().nullable(),
 });
-export type ProviderAuth = z.infer<typeof PROVIDER_AUTH_SCHEMA>;
+export type ProviderAuthV10 = z.infer<typeof PROVIDER_AUTH_SCHEMA_V10>;
+
+export const PROVIDER_AUTH_STATUS_SCHEMA_V20 = z.enum([
+  "authenticated",
+  "unauthenticated",
+  "configured",
+  "unavailable",
+  "unknown",
+]);
+export const PROVIDER_AUTH_STATUS_SCHEMA = PROVIDER_AUTH_STATUS_SCHEMA_V20;
+export type ProviderAuthStatusV20 = z.infer<
+  typeof PROVIDER_AUTH_STATUS_SCHEMA_V20
+>;
+export type ProviderAuthStatus = ProviderAuthStatusV20;
+
+export const PROVIDER_AUTH_SCHEMA_V20 = z.object({
+  status: PROVIDER_AUTH_STATUS_SCHEMA_V20,
+  badgeText: z.string().nullable(),
+  label: z.string().nullable(),
+  detail: z.string().nullable(),
+});
+export const PROVIDER_AUTH_SCHEMA = PROVIDER_AUTH_SCHEMA_V20;
+export type ProviderAuthV20 = z.infer<typeof PROVIDER_AUTH_SCHEMA_V20>;
+export type ProviderAuth = ProviderAuthV20;
 
 export const UNKNOWN_PROVIDER_AUTH: ProviderAuth = {
   status: "unknown",
@@ -177,15 +216,15 @@ export const providerLoginCapabilitySchema = z.object({
    */
   token: z.object({ vars: z.array(z.string()) }).nullable(),
 });
-export type ProviderLoginCapability = z.infer<typeof providerLoginCapabilitySchema>;
+export type ProviderLoginCapability = z.infer<
+  typeof providerLoginCapabilitySchema
+>;
 
-export const providerCliStateSchema = z.object({
-  providerId: providerIdSchema,
+const providerCliStateBaseShape = {
   enabled: z.boolean(),
   disabledBy: providerDisabledBySchema.nullable(),
   selected: providerSelectionSchema,
   candidates: z.array(providerCliCandidateSchema),
-  auth: PROVIDER_AUTH_SCHEMA,
   authPending: z.boolean(),
   checkedAt: z.number().nullable(),
   apiKey: providerApiKeyStateSchema,
@@ -200,31 +239,66 @@ export const providerCliStateSchema = z.object({
   // supported login flow (cursor, traycer) or where login capability is not
   // yet modelled. `.catch(null)` tolerates old host builds that omit the field.
   loginCapability: providerLoginCapabilitySchema.nullable().catch(null),
+};
+
+const providerCliStateBaseShapeV10 = {
+  enabled: z.boolean(),
+  disabledBy: providerDisabledBySchema.nullable(),
+  selected: providerSelectionSchema,
+  candidates: z.array(providerCliCandidateSchema),
+  authPending: z.boolean(),
+  checkedAt: z.number().nullable(),
+  apiKey: providerApiKeyStateSchema,
+  terminalAgentArgs: z.string().catch(""),
+  envOverrides: z.array(providerEnvOverrideSchema).catch([]),
+  loginCapability: providerLoginCapabilitySchema.nullable().catch(null),
+};
+
+export const providerCliStateSchemaV20 = z.object({
+  providerId: providerIdSchema,
+  ...providerCliStateBaseShape,
+  auth: PROVIDER_AUTH_SCHEMA_V20,
 });
-export type ProviderCliState = z.infer<typeof providerCliStateSchema>;
+export const providerCliStateSchema = providerCliStateSchemaV20;
+export type ProviderCliStateV20 = z.infer<typeof providerCliStateSchemaV20>;
+export type ProviderCliState = ProviderCliStateV20;
 
 export const providersListRequestSchema = z.object({
   forceAuthRefresh: z.boolean().optional(),
 });
 export type ProvidersListRequest = z.infer<typeof providersListRequestSchema>;
 
-export const providersListResponseSchema = z.object({
-  providers: z.array(providerCliStateSchema),
+export const providersListResponseSchemaV20 = z.object({
+  providers: z.array(providerCliStateSchemaV20),
 });
-export type ProvidersListResponse = z.infer<typeof providersListResponseSchema>;
+export const providersListResponseSchema = providersListResponseSchemaV20;
+export type ProvidersListResponseV20 = z.infer<
+  typeof providersListResponseSchemaV20
+>;
+export type ProvidersListResponse = ProvidersListResponseV20;
 
-// Frozen protocol-v1.0 (grok-less) provider state + list response. The v2.0 line
-// of `providers.list` adds grok; the v2→v1 bridge filters it for v1.0 callers.
-export const providerCliStateSchemaV10 = providerCliStateSchema.extend({
+// Frozen protocol-v1.0 provider state + list response. The v2.0 line of
+// `providers.list` adds ACP GUI harness providers; the v2→v1 bridge filters
+// them for v1.0 callers.
+export const providerCliStateSchemaV10 = z.strictObject({
   providerId: providerIdSchemaV10,
+  ...providerCliStateBaseShapeV10,
+  auth: PROVIDER_AUTH_SCHEMA_V10,
 });
+export type ProviderCliStateV10 = z.infer<typeof providerCliStateSchemaV10>;
 export const providersListResponseSchemaV10 = z.object({
   providers: z.array(providerCliStateSchemaV10),
 });
-export type ProvidersListResponseV10 = z.infer<typeof providersListResponseSchemaV10>;
+export type ProvidersListResponseV10 = z.infer<
+  typeof providersListResponseSchemaV10
+>;
 
 export const providersSetSelectionRequestSchema = z.object({
   providerId: providerIdSchema,
+  selection: providerSelectionSchema,
+});
+export const providersSetSelectionRequestSchemaV10 = z.strictObject({
+  providerId: providerIdSchemaV10,
   selection: providerSelectionSchema,
 });
 export type ProvidersSetSelectionRequest = z.infer<
@@ -234,12 +308,19 @@ export type ProvidersSetSelectionRequest = z.infer<
 export const providersSetSelectionResponseSchema = z.object({
   state: providerCliStateSchema,
 });
+export const providersSetSelectionResponseSchemaV10 = z.object({
+  state: providerCliStateSchemaV10,
+});
 export type ProvidersSetSelectionResponse = z.infer<
   typeof providersSetSelectionResponseSchema
 >;
 
 export const providersAddCustomPathRequestSchema = z.object({
   providerId: providerIdSchema,
+  path: z.string().min(1),
+});
+export const providersAddCustomPathRequestSchemaV10 = z.strictObject({
+  providerId: providerIdSchemaV10,
   path: z.string().min(1),
 });
 export type ProvidersAddCustomPathRequest = z.infer<
@@ -249,12 +330,19 @@ export type ProvidersAddCustomPathRequest = z.infer<
 export const providersAddCustomPathResponseSchema = z.object({
   state: providerCliStateSchema,
 });
+export const providersAddCustomPathResponseSchemaV10 = z.object({
+  state: providerCliStateSchemaV10,
+});
 export type ProvidersAddCustomPathResponse = z.infer<
   typeof providersAddCustomPathResponseSchema
 >;
 
 export const providersRemoveCustomPathRequestSchema = z.object({
   providerId: providerIdSchema,
+  path: z.string().min(1),
+});
+export const providersRemoveCustomPathRequestSchemaV10 = z.strictObject({
+  providerId: providerIdSchemaV10,
   path: z.string().min(1),
 });
 export type ProvidersRemoveCustomPathRequest = z.infer<
@@ -264,12 +352,19 @@ export type ProvidersRemoveCustomPathRequest = z.infer<
 export const providersRemoveCustomPathResponseSchema = z.object({
   state: providerCliStateSchema,
 });
+export const providersRemoveCustomPathResponseSchemaV10 = z.object({
+  state: providerCliStateSchemaV10,
+});
 export type ProvidersRemoveCustomPathResponse = z.infer<
   typeof providersRemoveCustomPathResponseSchema
 >;
 
 export const providersSetEnabledRequestSchema = z.object({
   providerId: providerIdSchema,
+  enabled: z.boolean(),
+});
+export const providersSetEnabledRequestSchemaV10 = z.strictObject({
+  providerId: providerIdSchemaV10,
   enabled: z.boolean(),
 });
 export type ProvidersSetEnabledRequest = z.infer<
@@ -279,12 +374,19 @@ export type ProvidersSetEnabledRequest = z.infer<
 export const providersSetEnabledResponseSchema = z.object({
   state: providerCliStateSchema,
 });
+export const providersSetEnabledResponseSchemaV10 = z.object({
+  state: providerCliStateSchemaV10,
+});
 export type ProvidersSetEnabledResponse = z.infer<
   typeof providersSetEnabledResponseSchema
 >;
 
 export const providersSetApiKeyRequestSchema = z.object({
   providerId: providerIdSchema,
+  apiKey: z.string().min(1),
+});
+export const providersSetApiKeyRequestSchemaV10 = z.strictObject({
+  providerId: providerIdSchemaV10,
   apiKey: z.string().min(1),
 });
 export type ProvidersSetApiKeyRequest = z.infer<
@@ -294,6 +396,9 @@ export type ProvidersSetApiKeyRequest = z.infer<
 export const providersSetApiKeyResponseSchema = z.object({
   state: providerCliStateSchema,
 });
+export const providersSetApiKeyResponseSchemaV10 = z.object({
+  state: providerCliStateSchemaV10,
+});
 export type ProvidersSetApiKeyResponse = z.infer<
   typeof providersSetApiKeyResponseSchema
 >;
@@ -301,12 +406,18 @@ export type ProvidersSetApiKeyResponse = z.infer<
 export const providersClearApiKeyRequestSchema = z.object({
   providerId: providerIdSchema,
 });
+export const providersClearApiKeyRequestSchemaV10 = z.strictObject({
+  providerId: providerIdSchemaV10,
+});
 export type ProvidersClearApiKeyRequest = z.infer<
   typeof providersClearApiKeyRequestSchema
 >;
 
 export const providersClearApiKeyResponseSchema = z.object({
   state: providerCliStateSchema,
+});
+export const providersClearApiKeyResponseSchemaV10 = z.object({
+  state: providerCliStateSchemaV10,
 });
 export type ProvidersClearApiKeyResponse = z.infer<
   typeof providersClearApiKeyResponseSchema
@@ -317,12 +428,19 @@ export const providersSetTerminalAgentArgsRequestSchema = z.object({
   // Empty string clears the saved override.
   terminalAgentArgs: z.string(),
 });
+export const providersSetTerminalAgentArgsRequestSchemaV10 = z.strictObject({
+  providerId: providerIdSchemaV10,
+  terminalAgentArgs: z.string(),
+});
 export type ProvidersSetTerminalAgentArgsRequest = z.infer<
   typeof providersSetTerminalAgentArgsRequestSchema
 >;
 
 export const providersSetTerminalAgentArgsResponseSchema = z.object({
   state: providerCliStateSchema,
+});
+export const providersSetTerminalAgentArgsResponseSchemaV10 = z.object({
+  state: providerCliStateSchemaV10,
 });
 export type ProvidersSetTerminalAgentArgsResponse = z.infer<
   typeof providersSetTerminalAgentArgsResponseSchema
@@ -334,12 +452,20 @@ export const providersSetEnvOverrideRequestSchema = z.object({
   // null = explicit unset; a string sets the value.
   value: z.string().nullable(),
 });
+export const providersSetEnvOverrideRequestSchemaV10 = z.strictObject({
+  providerId: providerIdSchemaV10,
+  key: z.string().min(1),
+  value: z.string().nullable(),
+});
 export type ProvidersSetEnvOverrideRequest = z.infer<
   typeof providersSetEnvOverrideRequestSchema
 >;
 
 export const providersSetEnvOverrideResponseSchema = z.object({
   state: providerCliStateSchema,
+});
+export const providersSetEnvOverrideResponseSchemaV10 = z.object({
+  state: providerCliStateSchemaV10,
 });
 export type ProvidersSetEnvOverrideResponse = z.infer<
   typeof providersSetEnvOverrideResponseSchema
@@ -349,12 +475,19 @@ export const providersDeleteEnvOverrideRequestSchema = z.object({
   providerId: providerIdSchema,
   key: z.string().min(1),
 });
+export const providersDeleteEnvOverrideRequestSchemaV10 = z.strictObject({
+  providerId: providerIdSchemaV10,
+  key: z.string().min(1),
+});
 export type ProvidersDeleteEnvOverrideRequest = z.infer<
   typeof providersDeleteEnvOverrideRequestSchema
 >;
 
 export const providersDeleteEnvOverrideResponseSchema = z.object({
   state: providerCliStateSchema,
+});
+export const providersDeleteEnvOverrideResponseSchemaV10 = z.object({
+  state: providerCliStateSchemaV10,
 });
 export type ProvidersDeleteEnvOverrideResponse = z.infer<
   typeof providersDeleteEnvOverrideResponseSchema
@@ -407,6 +540,9 @@ export type ProvidersStartLoginResponse = z.infer<
 export const providersAwaitLoginRequestSchema = z.object({
   providerId: providerIdSchema,
 });
+export const providersAwaitLoginRequestSchemaV10 = z.strictObject({
+  providerId: providerIdSchemaV10,
+});
 export type ProvidersAwaitLoginRequest = z.infer<
   typeof providersAwaitLoginRequestSchema
 >;
@@ -415,6 +551,9 @@ export const providersAwaitLoginResponseSchema = z.object({
   // The provider's state after the login child closed and auth was re-probed.
   // Null when no login was in flight for this provider (nothing to await).
   state: providerCliStateSchema.nullable(),
+});
+export const providersAwaitLoginResponseSchemaV10 = z.object({
+  state: providerCliStateSchemaV10.nullable(),
 });
 export type ProvidersAwaitLoginResponse = z.infer<
   typeof providersAwaitLoginResponseSchema
@@ -434,3 +573,29 @@ export const providersCancelLoginResponseSchema = z.object({
 export type ProvidersCancelLoginResponse = z.infer<
   typeof providersCancelLoginResponseSchema
 >;
+
+export function downgradeProviderAuthV20ToV10(
+  auth: ProviderAuthV20,
+): ProviderAuthV10 {
+  switch (auth.status) {
+    case "configured":
+    case "unavailable":
+      return { ...auth, status: "unknown" };
+    case "authenticated":
+      return { ...auth, status: "authenticated" };
+    case "unauthenticated":
+      return { ...auth, status: "unauthenticated" };
+    case "unknown":
+      return { ...auth, status: "unknown" };
+  }
+}
+
+export function downgradeProviderCliStateV20ToV10(
+  state: ProviderCliStateV20,
+): ProviderCliStateV10 | null {
+  const parsed = providerCliStateSchemaV10.safeParse({
+    ...state,
+    auth: downgradeProviderAuthV20ToV10(state.auth),
+  });
+  return parsed.success ? parsed.data : null;
+}

@@ -26,6 +26,7 @@
 import { authRecordRegistry } from "@traycer/protocol/auth/registry";
 import { getRecordSchema } from "@traycer/protocol/framework/index";
 import type {
+  AuthTokenRefreshResult,
   AuthTokenValidationResult,
   AuthValidationProfile,
 } from "../platform/runner-host";
@@ -35,21 +36,13 @@ export type {
   AuthIdentityValidationResult,
   AuthIdentityValidResult,
 } from "./auth-validation-types";
+export type { AuthTokenRefreshResult } from "../platform/runner-host";
 
 const authenticatedUserResponseSchema = getRecordSchema(
   authRecordRegistry,
   "authenticated-user-response",
   "latest",
 );
-
-export type AuthTokenRefreshResult =
-  | {
-      readonly kind: "refreshed";
-      readonly token: string;
-      readonly refreshToken: string;
-    }
-  | { readonly kind: "rejected" }
-  | { readonly kind: "network-error" };
 
 /**
  * Shared bearer-token validation helper used by runner-host implementations.
@@ -182,8 +175,7 @@ type UserFetchResult =
   | {
       readonly kind: "failed";
       readonly result:
-        | { readonly kind: "rejected" }
-        | { readonly kind: "network-error" };
+        { readonly kind: "rejected" } | { readonly kind: "network-error" };
     };
 
 async function fetchUserResponse(
@@ -247,6 +239,15 @@ export async function refreshAuthTokenViaHttp(
       body: JSON.stringify({ refreshToken }),
     });
   } catch {
+    return { kind: "network-error" };
+  }
+
+  // A 409 means the authn refresh grace window is mid-rotation: a concurrent
+  // refresher won the race and is minting the new pair. This is transient and
+  // retriable, NOT a dead credential, so map it to `network-error` (a retry
+  // re-drives and lands on the winner's replayed pair) rather than `rejected`,
+  // which would sign the GUI out.
+  if (response.status === 409) {
     return { kind: "network-error" };
   }
 
@@ -364,7 +365,14 @@ function projectProfile(body: unknown): AuthValidationProfile | null {
   };
 }
 
-async function readRotatedTokens(
+/**
+ * Parses the rotated `{ token, refreshToken }` pair from a 2xx token-mint
+ * response body. Exported so the device-flow client (`device-auth.ts`) can
+ * reuse the exact same 200-body shape that `exchange-code` / `refresh` use,
+ * without duplicating the field validation. Returns `null` when the body is
+ * missing either non-empty string field.
+ */
+export async function readRotatedTokens(
   response: Response,
 ): Promise<{ readonly token: string; readonly refreshToken: string } | null> {
   try {

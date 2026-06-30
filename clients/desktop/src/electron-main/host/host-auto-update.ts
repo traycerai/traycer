@@ -31,10 +31,7 @@ export const LAUNCH_HOST_UPDATE_TIMEOUT_MS = 5 * 60_000;
 export const QUIT_HOST_UPDATE_TIMEOUT_MS = 2 * 60_000;
 
 export type HostAutoUpdateOutcome =
-  | "updated"
-  | "up-to-date"
-  | "skipped-busy"
-  | "failed";
+  "updated" | "up-to-date" | "skipped-busy" | "failed";
 
 export interface HostAutoUpdateDeps {
   // Current host update availability (force:false - the launch probe / 24h

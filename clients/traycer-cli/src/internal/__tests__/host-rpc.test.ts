@@ -74,6 +74,7 @@ beforeEach(() => {
   storeRead.mockResolvedValue({
     token: "tok-1",
     refreshToken: "tok-1-refresh",
+    userId: "u1",
   });
 });
 

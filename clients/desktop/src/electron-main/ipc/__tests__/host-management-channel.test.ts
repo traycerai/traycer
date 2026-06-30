@@ -44,11 +44,13 @@ vi.mock("electron", () => ({
 vi.mock("electron-log", () => ({
   default: {
     transports: { file: { level: "info", resolvePathFn: vi.fn() } },
+    debug: vi.fn(),
     info: vi.fn(),
     warn: vi.fn(),
     error: vi.fn(),
   },
   transports: { file: { level: "info", resolvePathFn: vi.fn() } },
+  debug: vi.fn(),
   info: vi.fn(),
   warn: vi.fn(),
   error: vi.fn(),
@@ -133,6 +135,7 @@ interface FakeBridge {
     (event: unknown, raw: unknown) => Promise<unknown>
   >;
   readonly fanOut: Mock;
+  readonly disposeFns: Array<() => void>;
   readonly options: {
     readonly host: {
       readonly reloadSnapshotFromDisk: Mock;
@@ -152,6 +155,7 @@ function makeBridge(): FakeBridge {
   return {
     handlers,
     fanOut: vi.fn(),
+    disposeFns: [],
     options: {
       host: {
         reloadSnapshotFromDisk: vi.fn(() => Promise.resolve(null)),

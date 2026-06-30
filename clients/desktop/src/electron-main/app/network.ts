@@ -24,7 +24,7 @@ export function preconnectTraycerHosts(): void {
       log.warn("[network] preconnect failed", { url, err });
     }
   }
-  log.info("[network] preconnected hosts", {
+  log.debug("[network] preconnected hosts", {
     count: TRAYCER_PRECONNECT_HOSTS.length,
   });
 }
@@ -37,5 +37,5 @@ export function preconnectTraycerHosts(): void {
 export function configureUserAgent(): void {
   const ua = `TraycerDesktop/${app.getVersion()} Electron/${process.versions.electron} Chrome/${process.versions.chrome}`;
   session.defaultSession.setUserAgent(ua);
-  log.info("[network] user agent set", { ua });
+  log.debug("[network] user agent set", { ua });
 }

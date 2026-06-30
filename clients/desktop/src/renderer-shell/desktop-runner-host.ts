@@ -1,7 +1,9 @@
 import type {
-  AuthCallbackResult,
+  AuthTokenRefreshResult,
   AuthTokenValidationResult,
   CliInstallManifestSnapshot,
+  DeviceFlowSession,
+  IDeviceFlowHost,
   HostAvailableSnapshot,
   HostAvailableVersionsInput,
   HostDoctorReport,
@@ -33,7 +35,6 @@ import type {
   LocalHostSnapshot,
   MigrationRunningSnapshot,
   ServiceStatusSnapshot,
-  StoredAuthTokens,
   TrayEpic,
   TrayIndicatorState,
   TraycerHostStatusSnapshot,
@@ -126,10 +127,10 @@ export interface DesktopPreloadBridge {
     token: string,
     refreshToken: string,
   ): Promise<AuthIdentityValidationResult>;
-  exchangeAuthCode(
-    code: string,
-    codeVerifier: string,
-  ): Promise<StoredAuthTokens | null>;
+  refreshAuthToken(
+    token: string,
+    refreshToken: string,
+  ): Promise<AuthTokenRefreshResult>;
   openExternalLink(url: string): Promise<void>;
   getRegisteredUrlSchemes(
     schemes: readonly string[],
@@ -137,8 +138,11 @@ export interface DesktopPreloadBridge {
   requestMicrophoneAccess(): Promise<"granted" | "denied">;
   openMicrophoneSettings(): Promise<void>;
   beginAuthAttempt(): void;
-  onAuthCallback(handler: (result: AuthCallbackResult) => void): {
+  onAuthCallback(handler: () => void): {
     dispose: () => void;
+  };
+  deviceFlow: {
+    start(): Promise<DeviceFlowSession | null>;
   };
   notifications: {
     show(title: string, body: string, payload: unknown): Promise<void>;
@@ -227,6 +231,9 @@ export interface DesktopHostManagementBridge {
   registryCheck(input: {
     readonly force: boolean;
   }): Promise<HostRegistryUpdateState>;
+  onRegistryUpdateState(handler: (state: HostRegistryUpdateState) => void): {
+    dispose: () => void;
+  };
   freePortAndRestart(
     input: FreePortAndRestartInput,
   ): Promise<FreePortAndRestartInput>;
@@ -239,6 +246,12 @@ export interface DesktopHostManagementBridge {
 
 export interface DesktopHostTrayBridge {
   onCommand(handler: (command: HostTrayCommand) => void): {
+    dispose: () => void;
+  };
+}
+
+export interface DesktopHostRegistryUpdatesBridge {
+  onChange(handler: (state: HostRegistryUpdateState) => void): {
     dispose: () => void;
   };
 }
@@ -334,9 +347,7 @@ export interface DesktopPlatformBridge {
     onTopologyChange(
       handler: (event: {
         readonly reason:
-          | "display-added"
-          | "display-removed"
-          | "display-metrics-changed";
+          "display-added" | "display-removed" | "display-metrics-changed";
         readonly topology: DisplayTopology;
       }) => void,
     ): { dispose: () => void };
@@ -493,6 +504,8 @@ export class DesktopRunnerHost implements IRunnerHost {
   readonly power: DesktopPowerBridge;
   readonly hostManagement: IHostManagement;
   readonly hostTray: IHostTray;
+  readonly hostRegistryUpdates: DesktopHostRegistryUpdatesBridge;
+  readonly deviceFlow: IDeviceFlowHost;
 
   private readonly bridge: DesktopPreloadBridge;
   private cachedLocalHost: LocalHostSnapshot | null = null;
@@ -641,9 +654,18 @@ export class DesktopRunnerHost implements IRunnerHost {
       getHostName: () => managementBridge.getHostName(),
       setHostName: (input) => managementBridge.setHostName(input),
     };
+    this.hostRegistryUpdates = {
+      onChange: (handler) => managementBridge.onRegistryUpdateState(handler),
+    };
     this.hostTray = {
       onCommand: (handler) =>
         toDisposable(this.bridge.hostTray.onCommand(handler)),
+    };
+    // The preload bridge already returns a `DeviceFlowSession`-shaped handle
+    // (authorize result + per-attempt `onResult` + `cancel`), so this forwards
+    // straight through - the CORS-safe authorize + poll loop lives in main.
+    this.deviceFlow = {
+      start: () => this.bridge.deviceFlow.start(),
     };
   }
 
@@ -679,18 +701,18 @@ export class DesktopRunnerHost implements IRunnerHost {
     return this.bridge.validateAuthTokenIdentity(token, refreshToken);
   }
 
-  exchangeAuthCode(
-    code: string,
-    codeVerifier: string,
-  ): Promise<StoredAuthTokens | null> {
-    return this.bridge.exchangeAuthCode(code, codeVerifier);
+  refreshAuthToken(
+    token: string,
+    refreshToken: string,
+  ): Promise<AuthTokenRefreshResult> {
+    return this.bridge.refreshAuthToken(token, refreshToken);
   }
 
   beginAuthAttempt(): void {
     this.bridge.beginAuthAttempt();
   }
 
-  onAuthCallback(handler: (result: AuthCallbackResult) => void): Disposable {
+  onAuthCallback(handler: () => void): Disposable {
     return toDisposable(this.bridge.onAuthCallback(handler));
   }
 

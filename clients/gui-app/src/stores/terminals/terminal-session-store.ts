@@ -26,10 +26,7 @@ export type TerminalStreamClientFactory = (
 
 export type TerminalReattachMode = "fresh" | "live";
 export type TerminalLifecycleStatus =
-  | "creating"
-  | "running"
-  | "exited"
-  | "lost";
+  "creating" | "running" | "exited" | "lost";
 
 const MAX_PENDING_ACTIONS = 64;
 // Cap the pre-writer queue so a misconfigured tile that never registers a

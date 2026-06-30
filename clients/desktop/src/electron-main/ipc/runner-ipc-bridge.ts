@@ -6,7 +6,6 @@ import {
   RunnerHostEvent,
   RunnerHostInvoke,
 } from "../../ipc-contracts/ipc-channels";
-import type { AuthCallbackParseResult } from "../auth/deep-link";
 import type { DesktopLocalHostSnapshot } from "../../ipc-contracts/host-types";
 import type {
   QuitDecision,
@@ -44,6 +43,7 @@ import {
   uniquePerWindowTabs,
 } from "./landing-draft-helpers";
 import { registerAuthIpc } from "./auth-ipc";
+import { registerDeviceFlowIpc } from "./device-flow-ipc";
 import { registerTrayIpc } from "./tray-ipc";
 import { registerWindowsIpc } from "./windows-ipc";
 import { registerOwnershipIpc } from "./ownership-ipc";
@@ -247,8 +247,7 @@ export interface RunnerIpcRegistryOptions {
 }
 
 export type RunnerIpcBridgeOptions =
-  | RunnerIpcOptions
-  | RunnerIpcRegistryOptions;
+  RunnerIpcOptions | RunnerIpcRegistryOptions;
 
 interface FreshSnapshotWaiter {
   readonly windowId: string;
@@ -274,7 +273,10 @@ export class RunnerIpcBridge {
     listener: (event: IpcMainEvent, ...args: unknown[]) => void;
   }> = [];
   private hostPickerOpen = false;
-  readonly pendingAuthCallbacks: AuthCallbackParseResult[] = [];
+  // Set when a browser-return deep link arrives before any renderer window
+  // exists; drained to the MRU window once one registers. Coalesced to a single
+  // flag - the signal is a payload-free nudge, so repeated arrivals collapse.
+  pendingAuthReturnSignal = false;
   readonly appLifecycleReadyWindowIds = new Set<string>();
   readonly unsyncedEditsSnapshots = new Map<string, UnsyncedEditsSnapshot>();
   /**
@@ -309,6 +311,7 @@ export class RunnerIpcBridge {
 
   install(): void {
     registerAuthIpc(this);
+    registerDeviceFlowIpc(this);
     registerTrayIpc(this);
     registerLifecycleIpc(this);
     registerWindowsIpc(this);
@@ -340,37 +343,27 @@ export class RunnerIpcBridge {
   }
 
   /**
-   * Forwards a parsed auth-callback result to the renderer bridge. Delivery
-   * targets the MRU renderer because OAuth callbacks are process-global and
-   * not Epic-scoped. If no window exists, the result is queued until the next
-   * registry change exposes a target.
+   * Handles a browser-return deep link: focuses the MRU renderer (so the user
+   * lands back in the app) and forwards the payload-free return signal so the
+   * renderer nudges its in-flight device poll. Targets the MRU window because
+   * the signal is process-global, not Epic-scoped. If no window exists yet, the
+   * signal is coalesced into a pending flag and drained on the next registry
+   * change. It carries no token - that always arrives over the device poll.
    */
-  deliverAuthCallback(result: AuthCallbackParseResult): void {
+  deliverAuthReturnSignal(): void {
     const target = this.windowRegistry.getMruRecord();
     if (target === null) {
-      this.pendingAuthCallbacks.push(result);
-      log.info("[auth] callback queued until renderer is ready", {
-        resultKind: authCallbackKind(result),
-        pendingCount: this.pendingAuthCallbacks.length,
-      });
+      this.pendingAuthReturnSignal = true;
       return;
     }
-    const delivered = this.safeSendToWindow(
+    if (!target.window.isFocused()) {
+      this.windowRegistry.focusById(target.windowId);
+    }
+    this.safeSendToWindow(
       target.windowId,
       RunnerHostEvent.authCallback,
-      result,
+      undefined,
     );
-    if (delivered) {
-      log.info("[auth] callback delivered to renderer", {
-        resultKind: authCallbackKind(result),
-        windowId: target.windowId,
-      });
-    } else {
-      log.warn("[auth] callback delivery failed", {
-        resultKind: authCallbackKind(result),
-        windowId: target.windowId,
-      });
-    }
   }
 
   deliverNotificationClick(payload: unknown): void {
@@ -719,29 +712,23 @@ export class RunnerIpcBridge {
     }
   }
 
-  flushPendingAuthCallbacks(): void {
-    if (this.pendingAuthCallbacks.length === 0) {
+  flushPendingAuthReturnSignal(): void {
+    if (!this.pendingAuthReturnSignal) {
       return;
     }
     const target = this.windowRegistry.getMruRecord();
     if (target === null) {
-      log.info("[auth] pending callbacks still waiting for renderer", {
-        pendingCount: this.pendingAuthCallbacks.length,
-      });
       return;
     }
-    const pendingCount = this.pendingAuthCallbacks.length;
-    for (const result of this.pendingAuthCallbacks.splice(0)) {
-      this.safeSendToWindow(
-        target.windowId,
-        RunnerHostEvent.authCallback,
-        result,
-      );
+    this.pendingAuthReturnSignal = false;
+    if (!target.window.isFocused()) {
+      this.windowRegistry.focusById(target.windowId);
     }
-    log.info("[auth] pending callbacks flushed", {
-      pendingCount,
-      windowId: target.windowId,
-    });
+    this.safeSendToWindow(
+      target.windowId,
+      RunnerHostEvent.authCallback,
+      undefined,
+    );
   }
 
   replayCurrentStateToWindow(windowId: string): void {
@@ -884,10 +871,6 @@ export class RunnerIpcBridge {
     this.quitDecisionWaiters.length = 0;
     this.quitDecisionWaiters.push(...retained);
   }
-}
-
-function authCallbackKind(result: AuthCallbackParseResult): "code" | "error" {
-  return "code" in result ? "code" : "error";
 }
 
 class SingleWindowRegistry implements IpcWindowRegistry {

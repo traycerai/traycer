@@ -52,6 +52,12 @@ export interface SettingsState {
    * prompt surfaces on the first unfocused completion.
    */
   notifyOnChatTurnComplete: boolean;
+  /**
+   * Keep the chat context-window breakdown pinned near the composer instead of
+   * the compact-only chip. Global preference, default off; chats without
+   * reliable context-window data still render nothing.
+   */
+  pinContextUsageBreakdown: boolean;
   pointerCursors: boolean;
   uiFontSize: number;
   codeFontSize: number;
@@ -78,6 +84,7 @@ export interface SettingsState {
   setComposerMode: (mode: ComposerMode) => void;
   setPreventSleepWhileRunning: (value: boolean) => void;
   setNotifyOnChatTurnComplete: (value: boolean) => void;
+  setPinContextUsageBreakdown: (value: boolean) => void;
   setPointerCursors: (value: boolean) => void;
   setUiFontSize: (value: number) => void;
   setCodeFontSize: (value: number) => void;
@@ -103,6 +110,7 @@ type PersistedSettingsState = Pick<
   | "composerMode"
   | "preventSleepWhileRunning"
   | "notifyOnChatTurnComplete"
+  | "pinContextUsageBreakdown"
   | "pointerCursors"
   | "uiFontSize"
   | "codeFontSize"
@@ -153,6 +161,7 @@ function partializeSettingsState(state: SettingsState): PersistedSettingsState {
     composerMode: state.composerMode,
     preventSleepWhileRunning: state.preventSleepWhileRunning,
     notifyOnChatTurnComplete: state.notifyOnChatTurnComplete,
+    pinContextUsageBreakdown: state.pinContextUsageBreakdown,
     pointerCursors: state.pointerCursors,
     uiFontSize: state.uiFontSize,
     codeFontSize: state.codeFontSize,
@@ -178,6 +187,7 @@ export const useSettingsStore = create<SettingsState>()(
       composerMode: DEFAULT_COMPOSER_MODE,
       preventSleepWhileRunning: false,
       notifyOnChatTurnComplete: true,
+      pinContextUsageBreakdown: false,
       pointerCursors: true,
       uiFontSize: 15,
       codeFontSize: 12,
@@ -193,6 +203,7 @@ export const useSettingsStore = create<SettingsState>()(
       setComposerMode: makeSetter(set, "composerMode"),
       setPreventSleepWhileRunning: makeSetter(set, "preventSleepWhileRunning"),
       setNotifyOnChatTurnComplete: makeSetter(set, "notifyOnChatTurnComplete"),
+      setPinContextUsageBreakdown: makeSetter(set, "pinContextUsageBreakdown"),
       setPointerCursors: makeSetter(set, "pointerCursors"),
       setUiFontSize: makeClampedFontSizeSetter(set, "uiFontSize"),
       setCodeFontSize: makeClampedFontSizeSetter(set, "codeFontSize"),

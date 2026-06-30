@@ -133,6 +133,7 @@ describe("desktop app updater", () => {
 
     expect(updater.getAppUpdateSnapshot()).toMatchObject({
       status: "error",
+      downloadProgress: null,
       errorMessage:
         "Traycer ran into a problem while updating. Please try again in a little while.",
       // The download was user-initiated, so its failure is manual-intent.
@@ -577,6 +578,7 @@ async function loadUpdater(): Promise<{
   }));
   vi.doMock("../logger", () => ({
     log: {
+      debug: vi.fn(),
       info: vi.fn(),
       warn: vi.fn(),
       error: vi.fn(),

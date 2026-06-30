@@ -144,9 +144,23 @@ function agentProviderLabel(provider: GuiHarnessId): string {
       return "OpenCode";
     case "traycer":
       return "Traycer";
+    case "openrouter":
+      return "OpenRouter";
     case "cursor":
       return "Cursor";
     case "grok":
       return "Grok";
+    case "qwen":
+      return "Qwen Code";
+    case "kiro":
+      return "Kiro";
+    case "droid":
+      return "Droid";
+    case "kimi":
+      return "Kimi";
+    case "copilot":
+      return "Copilot";
+    case "kilocode":
+      return "Kilo Code";
   }
 }

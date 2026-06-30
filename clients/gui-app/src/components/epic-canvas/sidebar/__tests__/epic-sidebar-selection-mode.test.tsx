@@ -15,12 +15,7 @@ interface TestTreeNode {
   readonly parentId: string | null;
   readonly title: string;
   readonly type:
-    | "spec"
-    | "ticket"
-    | "story"
-    | "review"
-    | "chat"
-    | "terminal-agent";
+    "spec" | "ticket" | "story" | "review" | "chat" | "terminal-agent";
   readonly status: number | null;
   readonly createdAt: number;
   readonly updatedAt: number;
@@ -820,7 +815,7 @@ describe("epic sidebar selection mode", () => {
     ).not.toBeNull();
   });
 
-  it("shows mark-all-read only when artifacts are unread", () => {
+  it("keeps mark-all-read hidden at rest and disables it when no artifacts are unread", () => {
     seedArtifactTree();
     testState.activePanelId = "artifacts";
 
@@ -828,20 +823,40 @@ describe("epic sidebar selection mode", () => {
       <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
     );
 
-    expect(
-      screen.queryByRole("button", {
-        name: "Mark all unread artifacts as read",
-      }),
-    ).toBeNull();
+    const markAllReadButton = screen.getByRole("button", {
+      name: "Mark all unread artifacts as read",
+    });
+
+    expect(markAllReadButton.matches(":disabled")).toBe(true);
+    expect(markAllReadButton.className).toContain("disabled:opacity-0");
+    expect(markAllReadButton.className).toContain(
+      "disabled:group-hover/panel-section:opacity-50",
+    );
+    expect(markAllReadButton.className).toContain(
+      "disabled:group-focus-within/panel-section:opacity-50",
+    );
 
     testState.unreadArtifactIds = new Set(["ticket-child"]);
     rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
 
     expect(
-      screen.getByRole("button", {
-        name: "Mark all unread artifacts as read",
-      }),
-    ).not.toBeNull();
+      screen
+        .getByRole("button", {
+          name: "Mark all unread artifacts as read",
+        })
+        .matches(":disabled"),
+    ).toBe(false);
+
+    testState.unreadArtifactIds = new Set<string>();
+    rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    expect(
+      screen
+        .getByRole("button", {
+          name: "Mark all unread artifacts as read",
+        })
+        .matches(":disabled"),
+    ).toBe(true);
   });
 
   it("marks every unread artifact read from the artifact header action", () => {

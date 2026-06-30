@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import { DEFAULT_DIAL_TIMEOUT_MS } from "@traycer-clients/shared/host-transport/transport-config";
 import { createWhatwgStreamWebSocketFactory } from "@traycer-clients/shared/host-transport/whatwg-stream-ws-factory";
@@ -165,6 +165,22 @@ export function useHostStreamClientBindingFor(
     };
   }, [auth, endpointHostId, endpointWebsocketUrl, globalClient, transportKey]);
   useCloseWsStreamClientOnReplace(binding?.client ?? null);
+
+  // Push the rotated bearer onto this client's open sessions whenever a token
+  // refresh rotates the credential lease in place, so the host updates each
+  // connection's credential without a reconnect (`credentialUpdate`). Same-user
+  // rotation is silent on `onChange`, so we subscribe to the dedicated
+  // `onBearerRotated` signal.
+  const client = binding?.client ?? null;
+  useEffect(() => {
+    if (client === null) {
+      return;
+    }
+    return globalClient.onBearerRotated(() => {
+      client.notifyBearerRotated();
+    });
+  }, [client, globalClient]);
+
   return binding;
 }
 

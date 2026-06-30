@@ -1,10 +1,17 @@
 import "../../../../../__tests__/test-browser-apis";
 import type {
+  ProviderAuth,
   ProviderCliCandidate,
   ProviderCliState,
   ProviderSelection,
 } from "@traycer/protocol/host/provider-schemas";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const providerMocks = vi.hoisted(() => ({
@@ -218,6 +225,19 @@ function providerState(input: {
   };
 }
 
+function providerStateWithAuth(
+  input: {
+    readonly providerId: ProviderCliState["providerId"];
+    readonly selected: ProviderSelection;
+    readonly candidates: readonly ProviderCliCandidate[];
+    readonly envOverrides: ProviderCliState["envOverrides"];
+  },
+  auth: ProviderAuth,
+  authPending: boolean,
+): ProviderCliState {
+  return { ...providerState(input), auth, authPending };
+}
+
 describe("<ProvidersSettingsPanel />", () => {
   beforeEach(() => {
     providerMocks.listResult.data = {
@@ -230,6 +250,12 @@ describe("<ProvidersSettingsPanel />", () => {
         }),
         providerState({
           providerId: "traycer",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+        }),
+        providerState({
+          providerId: "openrouter",
           selected: { kind: "bundled" },
           candidates: [],
           envOverrides: [],
@@ -265,6 +291,172 @@ describe("<ProvidersSettingsPanel />", () => {
 
     expect(providerMocks.setSelectionMutate).toHaveBeenCalledWith({
       providerId: "traycer",
+      selection: { kind: "path" },
+    });
+  });
+
+  it("orders the provider rail by the default provider order", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "openrouter",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+        }),
+        providerState({
+          providerId: "qwen",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+        }),
+        providerState({
+          providerId: "codex",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+        }),
+        providerState({
+          providerId: "cursor",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+        }),
+        providerState({
+          providerId: "droid",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+        }),
+        providerState({
+          providerId: "kilocode",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+        }),
+        providerState({
+          providerId: "claude-code",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+        }),
+        providerState({
+          providerId: "copilot",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+        }),
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    const nav = screen.getByRole("navigation", { name: "Providers" });
+    expect(
+      within(nav)
+        .getAllByRole("button")
+        .map((button) => button.getAttribute("aria-label")),
+    ).toEqual([
+      "Codex",
+      "Claude Code",
+      "OpenRouter",
+      "Droid",
+      "Cursor",
+      "Copilot",
+      "Kilo Code",
+      "Qwen Code",
+    ]);
+  });
+
+  it("renders configured, unavailable, and pending auth statuses", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        providerStateWithAuth(
+          {
+            providerId: "codex",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+          },
+          {
+            status: "configured",
+            badgeText: "Codex API Key",
+            label: null,
+            detail: null,
+          },
+          false,
+        ),
+        providerStateWithAuth(
+          {
+            providerId: "cursor",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+          },
+          {
+            status: "unavailable",
+            badgeText: null,
+            label: null,
+            detail: "network failed",
+          },
+          false,
+        ),
+        providerStateWithAuth(
+          {
+            providerId: "qwen",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+          },
+          {
+            status: "authenticated",
+            badgeText: null,
+            label: "Authenticated as qwen@example.test",
+            detail: null,
+          },
+          true,
+        ),
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(screen.getByText("Configured, not verified")).toBeDefined();
+
+    fireEvent.click(screen.getByRole("button", { name: "Cursor" }));
+    expect(screen.getByText("Could not check account status")).toBeDefined();
+
+    fireEvent.click(screen.getByRole("button", { name: "Qwen Code" }));
+    expect(screen.getByText("Checking account")).toBeDefined();
+  });
+
+  it("lists OpenCode CLI candidates for OpenRouter and mutates OpenRouter selection", () => {
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /OpenRouter/i }));
+
+    expect(screen.getByText("/usr/local/bin/opencode")).toBeDefined();
+
+    fireEvent.click(
+      screen.getByRole("radio", {
+        name: "Select /usr/local/bin/opencode",
+      }),
+    );
+
+    expect(providerMocks.setSelectionMutate).toHaveBeenCalledWith({
+      providerId: "openrouter",
       selection: { kind: "path" },
     });
   });

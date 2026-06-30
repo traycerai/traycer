@@ -55,4 +55,11 @@ export const harnessIdSchema = z.enum([
   "traycer",
   "cursor",
   "grok",
+  "qwen",
+  "kiro",
+  "droid",
+  "kimi",
+  "copilot",
+  "kilocode",
+  "openrouter",
 ]);

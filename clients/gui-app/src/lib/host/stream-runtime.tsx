@@ -74,7 +74,7 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
   }, [binding, auth, identityKey]);
   useEffect(() => {
     if (value === null) return;
-    appLogger.info("[stream] app stream client created", {
+    appLogger.debug("[stream] app stream client created", {
       hostId: readiness.hostId,
       hasTransport:
         binding !== null && binding.hostClient.getActiveHost() !== null,
@@ -86,6 +86,20 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
     value?.wsStreamClient ?? null,
     transportKey,
   );
+
+  // On an in-place bearer rotation (token refresh), push the fresh credential
+  // onto the app-wide stream client's open sessions so the host updates each
+  // connection's lease without a reconnect.
+  const wsStreamClient = value?.wsStreamClient ?? null;
+  const hostClient = binding?.hostClient ?? null;
+  useEffect(() => {
+    if (wsStreamClient === null || hostClient === null) {
+      return;
+    }
+    return hostClient.onBearerRotated(() => {
+      wsStreamClient.notifyBearerRotated();
+    });
+  }, [wsStreamClient, hostClient]);
 
   return (
     <StreamRuntimeContext.Provider value={value}>
@@ -121,7 +135,10 @@ function useReconnectStreamOnEndpointChange(
       transportKey !== null &&
       prev.transportKey !== transportKey
     ) {
-      appLogger.info("[stream] app stream endpoint changed - reconnecting", {});
+      appLogger.debug(
+        "[stream] app stream endpoint changed - reconnecting",
+        {},
+      );
       client.reconnectAll("host-endpoint-change");
     }
   }, [client, transportKey]);

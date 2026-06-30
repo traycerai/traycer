@@ -186,7 +186,7 @@ describe("<TraycerApp />", () => {
     expect(screen.queryByTestId("user-menu-trigger")).toBeNull();
   });
 
-  it("launches the shell-provided signInUrl through openExternalLink on sign-in", async () => {
+  it("starts the device flow and opens the verification page through openExternalLink on sign-in", async () => {
     const host = buildHost();
     render(
       <TraycerApp
@@ -202,21 +202,17 @@ describe("<TraycerApp />", () => {
     fireEvent.click(signIn);
 
     await waitFor(() => {
+      expect(host.deviceFlow.startCalls).toBe(1);
+    });
+    // signIn() runs the device flow directly and opens the pre-filled
+    // verification page from the `/device/authorize` response - not the
+    // shell's redirect sign-in URL.
+    await waitFor(() => {
       expect(host.openedExternalLinks).toHaveLength(1);
     });
-    // signIn appends the PKCE challenge; the opened URL preserves the signInUrl
-    // origin + redirect_uri and adds the S256 code_challenge. (Compare parsed
-    // parts rather than a raw prefix - `new URL()` normalizes the base.)
-    const opened = new URL(host.openedExternalLinks[0]);
-    const base = new URL(host.signInUrl);
-    expect(opened.origin).toBe(base.origin);
-    expect(opened.searchParams.get("redirect_uri")).toBe(
-      base.searchParams.get("redirect_uri"),
+    expect(host.openedExternalLinks[0]).toBe(
+      "https://app.traycer.ai/device?user_code=ABCDE-FGHIJ",
     );
-    expect(
-      (opened.searchParams.get("code_challenge") ?? "").length,
-    ).toBeGreaterThan(0);
-    expect(opened.searchParams.get("code_challenge_method")).toBe("S256");
   });
 
   it(
@@ -238,11 +234,18 @@ describe("<TraycerApp />", () => {
       const signInButton = await screen.findByRole("button", {
         name: "Sign in",
       });
-      // Click to start the PKCE attempt (sets the in-memory verifier) before
-      // the callback delivers the code.
+      // Start the device-flow attempt, then drive its poll to the authorized
+      // terminal so the app lands signed-in.
       fireEvent.click(signInButton);
+      await waitFor(() => {
+        expect(host.deviceFlow.lastSession).not.toBeNull();
+      });
       act(() => {
-        host.emitAuthCallback({ code: "test-token" });
+        host.deviceFlow.emitResult({
+          kind: "authorized",
+          token: "test-token",
+          refreshToken: "test-token-refresh",
+        });
       });
 
       const menuTrigger = await screen.findByTestId(
@@ -256,7 +259,7 @@ describe("<TraycerApp />", () => {
     TRAYCER_APP_TEST_TIMEOUT_MS,
   );
 
-  it("renders a visible failure message and keeps Sign in enabled as the retry CTA on an error callback", async () => {
+  it("renders a visible failure message and keeps Sign in enabled as the retry CTA on a failed device attempt", async () => {
     const host = buildHost();
     render(
       <TraycerApp
@@ -270,10 +273,14 @@ describe("<TraycerApp />", () => {
       name: "Sign in",
     });
     fireEvent.click(signIn);
-    host.emitAuthCallback({ error: "denied" });
+    await waitFor(() => {
+      expect(host.deviceFlow.lastSession).not.toBeNull();
+    });
+    // A terminal device-flow error surfaces the generic sign-in-failed copy.
+    host.deviceFlow.emitResult({ kind: "error" });
 
-    const errorNode = await screen.findByTestId("signin-error");
-    expect(errorNode.textContent).toContain("Sign in failed");
+    const errorNode = await screen.findByRole("alert");
+    expect(errorNode.textContent).toContain("Sign-in failed");
 
     // The button remains the retry CTA.
     const retry = await screen.findByRole("button", {
@@ -282,10 +289,11 @@ describe("<TraycerApp />", () => {
     expect(retry).not.toBeNull();
     fireEvent.click(retry);
 
-    // After a new signIn() the error is cleared and the button flips to
-    // "Signing in" again.
-    await screen.findByRole("button", { name: "Signing in" });
-    expect(screen.queryByTestId("signin-error")).toBeNull();
+    // After a new signIn() the error is cleared and the active approval panel
+    // takes over instead of showing a separate disabled "Signing in" button.
+    await screen.findByRole("heading", { name: "Approve in your browser" });
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Signing in" })).toBeNull();
   });
 
   it(
@@ -520,11 +528,18 @@ describe("<TraycerApp />", () => {
       const signInButton = await screen.findByRole("button", {
         name: "Sign in",
       });
-      // Click to start the PKCE attempt (sets the in-memory verifier) before
-      // the callback delivers the code.
+      // Start the device-flow attempt, then drive its poll to the authorized
+      // terminal so the app lands signed-in.
       fireEvent.click(signInButton);
+      await waitFor(() => {
+        expect(host.deviceFlow.lastSession).not.toBeNull();
+      });
       act(() => {
-        host.emitAuthCallback({ code: "test-token" });
+        host.deviceFlow.emitResult({
+          kind: "authorized",
+          token: "test-token",
+          refreshToken: "test-token-refresh",
+        });
       });
       await screen.findByTestId("user-menu-trigger", undefined, {
         timeout: TRAYCER_APP_TEST_TIMEOUT_MS,

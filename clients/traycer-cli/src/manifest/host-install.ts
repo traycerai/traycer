@@ -228,7 +228,7 @@ export async function readHostInstallRecord(
     sizeBytes: obj.sizeBytes,
     executablePath: obj.executablePath,
   };
-  logger.info("Host install record read completed", {
+  logger.debug("Host install record read completed", {
     environment,
     version: record.version,
     platform: record.platform,
@@ -250,7 +250,7 @@ export async function writeHostInstallRecord(
   record: HostInstallRecord,
 ): Promise<void> {
   const logger = createCliLogger(environment);
-  logger.info("Host install record write started", {
+  logger.debug("Host install record write started", {
     environment,
     version: record.version,
     platform: record.platform,

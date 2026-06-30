@@ -19,6 +19,14 @@ export const LEADER_SCOPE_HEADER_TABS = "header-tabs";
 export const LEADER_SCOPE_CANVAS_TABS = "canvas-tabs";
 export const LEADER_SCOPE_SETTINGS = "settings";
 export const LEADER_SCOPE_MODEL_PICKER = "model-picker";
+/**
+ * The new-chat / new-terminal modal. It opts out of the keybinding provider's
+ * dialog block (`data-leader-scope`) so a leader-aware overlay nested inside it
+ * (the model picker) can run its ⌘/⌥ digit shortcuts, but owns no shortcuts of
+ * its own. An absorber scope under this id claims both leaders so closed-picker
+ * leader digits are swallowed instead of switching the tabs behind the modal.
+ */
+export const LEADER_SCOPE_NEW_CONVERSATION_MODAL = "new-conversation-modal";
 
 export type LeaderDigitSequenceState = "invalid" | "exact" | "ambiguous";
 
@@ -34,15 +42,13 @@ export interface LeaderScopeAction {
    * beyond 9. Keep null for single-key digit scopes.
    */
   readonly dispatchSequence:
-    | ((digits: ReadonlyArray<number>) => boolean)
-    | null;
+    ((digits: ReadonlyArray<number>) => boolean) | null;
   /**
    * Classifies the currently typed sequence without side effects. Required when
    * `dispatchSequence` is set, null otherwise.
    */
   readonly sequenceState:
-    | ((digits: ReadonlyArray<number>) => LeaderDigitSequenceState)
-    | null;
+    ((digits: ReadonlyArray<number>) => LeaderDigitSequenceState) | null;
 }
 
 export interface LeaderScope {

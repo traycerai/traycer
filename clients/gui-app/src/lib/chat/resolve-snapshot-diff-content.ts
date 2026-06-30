@@ -119,8 +119,7 @@ export function resolveHashBackedEndpoints(
 
 export function resolveSnapshotDiffContents(
   payload:
-    | SnapshotCumulativeDiffTilePayload
-    | SnapshotCumulativeBundleDiffTilePayload,
+    SnapshotCumulativeDiffTilePayload | SnapshotCumulativeBundleDiffTilePayload,
   source: SnapshotDiffSource,
 ): ReadonlyArray<ResolvedSnapshotDiff> {
   if (payload.kind === "snapshot-cumulative-bundle") {

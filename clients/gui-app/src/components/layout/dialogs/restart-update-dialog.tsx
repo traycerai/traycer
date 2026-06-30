@@ -1,4 +1,6 @@
+import { useState } from "react";
 import { RotateCcw } from "lucide-react";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -22,10 +24,28 @@ export interface RestartUpdateDialogProps {
  */
 export function RestartUpdateDialog(props: RestartUpdateDialogProps) {
   const { open, onOpenChange, latestVersion, onConfirm } = props;
+  const [actionState, setActionState] = useState({
+    open,
+    actionHandled: false,
+  });
   const versionLabel =
     latestVersion === null ? "the latest version" : `v${latestVersion}`;
+
+  if (actionState.open !== open) {
+    setActionState({ open, actionHandled: false });
+  }
+
+  const actionHandled =
+    actionState.open === open ? actionState.actionHandled : false;
+
+  function handleConfirm(): void {
+    if (actionHandled) return;
+    setActionState({ open, actionHandled: true });
+    onConfirm();
+  }
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={actionHandled ? undefined : onOpenChange}>
       <DialogContent
         showCloseButton={false}
         className="w-[min(92vw,28rem)] gap-0 overflow-hidden p-0 sm:max-w-md"
@@ -51,6 +71,7 @@ export function RestartUpdateDialog(props: RestartUpdateDialogProps) {
             type="button"
             variant="ghost"
             size="sm"
+            disabled={actionHandled}
             onClick={() => {
               onOpenChange(false);
             }}
@@ -61,9 +82,23 @@ export function RestartUpdateDialog(props: RestartUpdateDialogProps) {
           <Button
             type="button"
             size="sm"
-            onClick={onConfirm}
+            disabled={actionHandled}
+            onClick={handleConfirm}
             data-testid="restart-update-confirm"
           >
+            {actionHandled ? (
+              <span
+                role="status"
+                aria-label="Restart request in progress"
+                className="inline-flex"
+              >
+                <AgentSpinningDots
+                  className={undefined}
+                  testId={undefined}
+                  variant={undefined}
+                />
+              </span>
+            ) : null}
             Restart now
           </Button>
         </div>

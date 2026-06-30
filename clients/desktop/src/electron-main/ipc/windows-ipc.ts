@@ -115,7 +115,7 @@ export function registerWindowsIpc(bridge: RunnerIpcBridge): void {
     liveWindowIds = nextLiveWindowIds;
     bridge.pruneClosedWindowState();
     bridge.fanOut(RunnerHostEvent.windowsChange, bridge.windowRegistry.list());
-    bridge.flushPendingAuthCallbacks();
+    bridge.flushPendingAuthReturnSignal();
   };
   bridge.windowRegistry.on("change", onWindowRegistryChange);
   bridge.disposeFns.push(() => {

@@ -1,3 +1,9 @@
+import type { LogLevel } from "@traycer/protocol/config/log-level";
+
+// Re-exported so the preload bridge (which must import only from
+// `src/ipc-contracts/`) can reach the protocol's `LogLevel` through this layer.
+export type { LogLevel };
+
 export interface AccessibilityThemeSnapshot {
   readonly prefersReducedTransparency: boolean;
   readonly shouldUseHighContrastColors: boolean;
@@ -40,11 +46,7 @@ export type Vibrancy =
   | "under-page";
 
 export type BackgroundMaterial =
-  | "auto"
-  | "none"
-  | "mica"
-  | "acrylic"
-  | "tabbed";
+  "auto" | "none" | "mica" | "acrylic" | "tabbed";
 
 export interface PendingCertificateError {
   readonly id: string;
@@ -87,9 +89,7 @@ export interface FileSaveInput {
 }
 
 export type FindInPageStopAction =
-  | "clearSelection"
-  | "keepSelection"
-  | "activateSelection";
+  "clearSelection" | "keepSelection" | "activateSelection";
 
 export interface TrustedCertificateEntry {
   readonly fingerprint: string;
@@ -97,4 +97,14 @@ export interface TrustedCertificateEntry {
   readonly subject: string;
   readonly issuer: string;
   readonly trustedAt: number;
+}
+
+/** Which logger a Settings change targets. */
+export type LogLevelScope = "cli" | "host" | "desktop";
+
+/** The three configurable thresholds, surfaced together to the renderer. */
+export interface LogLevelsSnapshot {
+  readonly cliLogLevel: LogLevel;
+  readonly hostLogLevel: LogLevel;
+  readonly desktopLogLevel: LogLevel;
 }

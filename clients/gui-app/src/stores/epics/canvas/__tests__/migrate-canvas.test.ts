@@ -119,6 +119,7 @@ describe("parseEpicCanvasState current N-ary round-trip", () => {
       tabInstanceIds: [CHAT_A.instanceId, SPEC_B.instanceId],
       activeTabId: CHAT_A.instanceId,
       previewTabId: SPEC_B.instanceId,
+      activationHistory: [SPEC_B.instanceId, CHAT_A.instanceId],
     };
     const paneB: TilePane = {
       kind: "pane",
@@ -126,6 +127,7 @@ describe("parseEpicCanvasState current N-ary round-trip", () => {
       tabInstanceIds: [TICKET_C.instanceId],
       activeTabId: TICKET_C.instanceId,
       previewTabId: null,
+      activationHistory: [TICKET_C.instanceId],
     };
     const paneC: TilePane = {
       kind: "pane",
@@ -133,6 +135,7 @@ describe("parseEpicCanvasState current N-ary round-trip", () => {
       tabInstanceIds: [GIT_FILE_B.instanceId],
       activeTabId: GIT_FILE_B.instanceId,
       previewTabId: null,
+      activationHistory: [],
     };
     const innerGroup: TileGroup = {
       kind: "group",
@@ -173,6 +176,7 @@ describe("parseEpicCanvasState current N-ary round-trip", () => {
       tabInstanceIds: [CHAT_A.instanceId],
       activeTabId: CHAT_A.instanceId,
       previewTabId: null,
+      activationHistory: [CHAT_A.instanceId],
     };
     const serialized = {
       root: serializeTileNode(pane),
@@ -182,6 +186,110 @@ describe("parseEpicCanvasState current N-ary round-trip", () => {
     };
     const state = requireParse(serialized);
     expect(state.activePaneId).toBe("pane-only");
+    expectCanvasInvariants(state);
+  });
+
+  it("seeds missing legacy activation history from the resolved active tab only", () => {
+    const state = requireParse({
+      root: {
+        kind: "pane",
+        id: "pane-legacy",
+        tabInstanceIds: [CHAT_A.instanceId, SPEC_B.instanceId],
+        activeTabId: "missing-active",
+        previewTabId: null,
+      },
+      activePaneId: "pane-legacy",
+      tilesByInstanceId: {
+        [CHAT_A.instanceId]: ser(CHAT_A),
+        [SPEC_B.instanceId]: ser(SPEC_B),
+      },
+      sizesByGroupId: {},
+    });
+
+    expect(state.root?.kind).toBe("pane");
+    if (state.root?.kind !== "pane") throw new Error("expected pane");
+    expect(state.root.activeTabId).toBe(CHAT_A.instanceId);
+    expect(state.root.activationHistory).toEqual([CHAT_A.instanceId]);
+    expectCanvasInvariants(state);
+  });
+
+  it("filters persisted activation history to unique live ids", () => {
+    const state = requireParse({
+      root: {
+        kind: "pane",
+        id: "pane-history",
+        tabInstanceIds: [CHAT_A.instanceId, SPEC_B.instanceId],
+        activeTabId: CHAT_A.instanceId,
+        previewTabId: null,
+        activationHistory: [
+          SPEC_B.instanceId,
+          "stale-instance",
+          SPEC_B.instanceId,
+          42,
+          CHAT_A.instanceId,
+        ],
+      },
+      activePaneId: "pane-history",
+      tilesByInstanceId: {
+        [CHAT_A.instanceId]: ser(CHAT_A),
+        [SPEC_B.instanceId]: ser(SPEC_B),
+        "stale-instance": ser(TICKET_C),
+      },
+      sizesByGroupId: {},
+    });
+
+    expect(state.root?.kind).toBe("pane");
+    if (state.root?.kind !== "pane") throw new Error("expected pane");
+    expect(state.root.activationHistory).toEqual([
+      SPEC_B.instanceId,
+      CHAT_A.instanceId,
+    ]);
+    expectCanvasInvariants(state);
+  });
+
+  it("reseeds stale-only persisted activation history from the resolved active tab", () => {
+    const state = requireParse({
+      root: {
+        kind: "pane",
+        id: "pane-stale-only-history",
+        tabInstanceIds: [CHAT_A.instanceId, SPEC_B.instanceId],
+        activeTabId: SPEC_B.instanceId,
+        previewTabId: null,
+        activationHistory: ["stale-instance", 42],
+      },
+      activePaneId: "pane-stale-only-history",
+      tilesByInstanceId: {
+        [CHAT_A.instanceId]: ser(CHAT_A),
+        [SPEC_B.instanceId]: ser(SPEC_B),
+        "stale-instance": ser(TICKET_C),
+      },
+      sizesByGroupId: {},
+    });
+
+    expect(state.root?.kind).toBe("pane");
+    if (state.root?.kind !== "pane") throw new Error("expected pane");
+    expect(state.root.activationHistory).toEqual([SPEC_B.instanceId]);
+    expectCanvasInvariants(state);
+  });
+
+  it("keeps an explicit empty persisted activation history empty", () => {
+    const state = requireParse({
+      root: {
+        kind: "pane",
+        id: "pane-empty-history",
+        tabInstanceIds: [CHAT_A.instanceId],
+        activeTabId: CHAT_A.instanceId,
+        previewTabId: null,
+        activationHistory: [],
+      },
+      activePaneId: "pane-empty-history",
+      tilesByInstanceId: { [CHAT_A.instanceId]: ser(CHAT_A) },
+      sizesByGroupId: {},
+    });
+
+    expect(state.root?.kind).toBe("pane");
+    if (state.root?.kind !== "pane") throw new Error("expected pane");
+    expect(state.root.activationHistory).toEqual([]);
     expectCanvasInvariants(state);
   });
 });
@@ -194,6 +302,7 @@ describe("parseCanvasByTabId", () => {
       tabInstanceIds: [CHAT_A.instanceId],
       activeTabId: CHAT_A.instanceId,
       previewTabId: null,
+      activationHistory: [CHAT_A.instanceId],
     };
     const valid = serializeEpicCanvasState({
       root: pane,
@@ -211,6 +320,9 @@ describe("parseCanvasByTabId", () => {
     expect(Object.keys(parsed)).toEqual(["tab-valid"]);
     const canvas = parsed["tab-valid"];
     expect(reachableInstanceIds(canvas)).toEqual([CHAT_A.instanceId]);
+    expect(canvas.root?.kind).toBe("pane");
+    if (canvas.root?.kind !== "pane") throw new Error("expected pane");
+    expect(canvas.root.activationHistory).toEqual([CHAT_A.instanceId]);
     expectCanvasInvariants(canvas);
   });
 });

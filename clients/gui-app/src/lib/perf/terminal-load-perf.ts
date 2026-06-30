@@ -158,7 +158,7 @@ function finishTerminalLoad(
   }
 
   const totalMs = roundMs(previous - timeline.startedAt);
-  appLogger.info("[terminal-perf] first paint measured", {
+  appLogger.debug("[terminal-perf] first paint measured", {
     sessionId,
     kind: timeline.kind,
     totalMs,
@@ -175,7 +175,7 @@ export function markXtermChunkLoad(durationMs: number): void {
   if (!instrumentationEnabled()) return;
   if (chunkLoadLogged) return;
   chunkLoadLogged = true;
-  appLogger.info("[terminal-perf] xterm chunk loaded", {
+  appLogger.debug("[terminal-perf] xterm chunk loaded", {
     durationMs: roundMs(durationMs),
   });
 }

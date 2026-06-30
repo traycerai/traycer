@@ -33,11 +33,34 @@ import type { SchemaVersion } from "@traycer/protocol/framework/index";
  * control-path and application-path handlers.
  */
 
+/**
+ * Capability tag a host advertises in `openAck.capabilities` when it accepts
+ * the `credentialUpdate` control frame (in-place bearer rotation on a live
+ * stream connection, no reconnect). A client MUST only send `credentialUpdate`
+ * after seeing this tag in the host's `openAck`; against an older host that
+ * omits it the client stays silent and relies on reconnect-time re-auth. This
+ * keeps a newer-client / older-host pairing from tripping the host's
+ * unknown-frame guard and dropping the connection.
+ */
+export const STREAM_CAPABILITY_CREDENTIAL_UPDATE = "credentialUpdate";
+
 /** First frame sent by the client: bearer token + per-method canonicals. */
 export type ClientStreamOpenFrame = {
   readonly kind: "open";
   readonly token: string;
   readonly manifest: ConnectionManifest;
+};
+
+/**
+ * Pushes a freshly-rotated bearer onto an already-open stream connection so the
+ * host updates the connection's credential lease in place - without a reconnect.
+ * Sent only after a proactive/reactive token refresh and only when the host
+ * advertised `credentialUpdate` support in its `openAck`. The host re-verifies
+ * the token (signature + owner binding) and rotates only on a same-user match.
+ */
+export type ClientStreamCredentialUpdateFrame = {
+  readonly kind: "credentialUpdate";
+  readonly token: string;
 };
 
 /**
@@ -62,10 +85,17 @@ export type ClientStreamFatalErrorFrame = {
   readonly details: FatalErrorDetails;
 };
 
-/** Host ack of the open + manifest. */
+/** Host ack of the open + manifest, plus the control-frame capabilities it accepts. */
 export type HostStreamOpenAckFrame = {
   readonly kind: "openAck";
   readonly manifest: ConnectionManifest;
+  /**
+   * Optional, additive control-frame capabilities (e.g.
+   * `credentialUpdate`). A client only uses a capability it finds here; an
+   * older host omits the field entirely and the schema defaults it to `[]`,
+   * so a newer client safely reads "none supported".
+   */
+  readonly capabilities: readonly string[];
 };
 
 /** Fatal error from the host (auth or compat rejection). */
@@ -87,6 +117,11 @@ export const clientStreamSubscribeFrameSchema = z.object({
   params: z.unknown(),
 });
 
+export const clientStreamCredentialUpdateFrameSchema = z.object({
+  kind: z.literal("credentialUpdate"),
+  token: z.string().min(1),
+});
+
 export const clientStreamFatalErrorFrameSchema = z.object({
   kind: z.literal("fatalError"),
   details: fatalErrorDetailsSchema,
@@ -95,6 +130,10 @@ export const clientStreamFatalErrorFrameSchema = z.object({
 export const hostStreamOpenAckFrameSchema = z.object({
   kind: z.literal("openAck"),
   manifest: connectionManifestSchema,
+  // Backward-compat: an older host omits `capabilities`; default to none so a
+  // newer client parsing an older host's ack still succeeds and treats every
+  // capability as unsupported.
+  capabilities: z.array(z.string()).default([]),
 });
 
 export const hostStreamFatalErrorFrameSchema = z.object({

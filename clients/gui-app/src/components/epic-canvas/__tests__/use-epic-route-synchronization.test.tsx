@@ -285,6 +285,7 @@ describe("useEpicRouteSynchronization", () => {
       tabInstanceIds: [gitTile.instanceId, removedChat.instanceId],
       activeTabId: "inst-git-diff-local",
       previewTabId: null,
+      activationHistory: [gitTile.instanceId],
     };
     testState.canvasTiles = {
       [gitTile.instanceId]: gitTile,

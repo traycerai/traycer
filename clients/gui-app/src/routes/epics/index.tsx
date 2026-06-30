@@ -1,5 +1,4 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { EpicsRoute } from "@/components/epics/epics-route";
 import {
   cloudEpicTasksFirstPageQueryOptions,
   listCloudTasksRequestForHistorySearch,
@@ -10,6 +9,7 @@ import {
   parseHistorySearch,
 } from "@/lib/history-search";
 import { requireSignedIn } from "@/lib/router-auth";
+import { EpicsIndexRoute } from "../epics-index-route-components";
 
 export const Route = createFileRoute("/epics/")({
   validateSearch: (search: Record<string, unknown>) =>
@@ -40,14 +40,5 @@ export const Route = createFileRoute("/epics/")({
     );
     return { historyNowMs };
   },
-  component: EpicsRouteComponent,
+  component: EpicsIndexRoute,
 });
-
-function EpicsRouteComponent() {
-  const search = Route.useSearch({
-    select: (value) => parseHistorySearch(value),
-    structuralSharing: true,
-  });
-  const { historyNowMs } = Route.useLoaderData();
-  return <EpicsRoute routeSearch={search} historyNowMs={historyNowMs} />;
-}

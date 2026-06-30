@@ -9,6 +9,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
 } from "@testing-library/react";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
@@ -86,10 +87,17 @@ describe("<TraycerApp /> mobile cardinality behavior", () => {
     );
 
     const signInButton = await screen.findByRole("button", { name: "Sign in" });
-    // Start the PKCE attempt (sets the verifier) before the code callback.
+    // Start the device-flow attempt, then drive its poll to authorized.
     fireEvent.click(signInButton);
+    await waitFor(() => {
+      expect(host.deviceFlow.lastSession).not.toBeNull();
+    });
     act(() => {
-      host.emitAuthCallback({ code: "test-token" });
+      host.deviceFlow.emitResult({
+        kind: "authorized",
+        token: "test-token",
+        refreshToken: "test-token-refresh",
+      });
     });
 
     expect(await screen.findByTestId("mobile-no-host")).not.toBeNull();

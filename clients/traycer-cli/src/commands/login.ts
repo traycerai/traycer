@@ -1,5 +1,5 @@
 import { validateAuthTokenViaHttp } from "../../../shared/auth/auth-validation";
-import { runLoginFlow } from "../auth/login-flow";
+import { runDeviceAuthFlow } from "../auth/login-flow";
 import { config } from "../config";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type { CommandFn, CommandResult } from "../runner/runner";
@@ -14,7 +14,7 @@ export const loginCommand: CommandFn = async (ctx): Promise<CommandResult> => {
   ctx.runtime.logger.info("Interactive login command started", {
     environment: ctx.runtime.environment,
   });
-  const result = await runLoginFlow();
+  const result = await runDeviceAuthFlow(ctx);
   ctx.runtime.logger.info("Interactive login command completed", {
     environment: ctx.runtime.environment,
     hasUserId: result.user.id.length > 0,

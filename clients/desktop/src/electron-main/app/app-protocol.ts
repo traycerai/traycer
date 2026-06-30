@@ -94,7 +94,7 @@ export function installAppProtocolHandler(): void {
       return new Response("not found", { status: 404 });
     }
   });
-  log.info("[app-protocol] handler installed", { rendererRoot });
+  log.debug("[app-protocol] handler installed", { rendererRoot });
 }
 
 export function buildAppUrl(): string {

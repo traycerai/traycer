@@ -473,7 +473,10 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.workspaceFoldersPick,
         RunnerHostInvoke.validateAuthToken,
         RunnerHostInvoke.validateAuthTokenIdentity,
-        RunnerHostInvoke.exchangeAuthCode,
+        RunnerHostInvoke.deviceFlowStart,
+        RunnerHostInvoke.deviceFlowPollNow,
+        RunnerHostInvoke.deviceFlowCancel,
+        RunnerHostInvoke.refreshAuthToken,
         RunnerHostInvoke.notificationShow,
         RunnerHostInvoke.openExternalLink,
         RunnerHostInvoke.getRegisteredUrlSchemes,
@@ -590,6 +593,8 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.fileSave,
         RunnerHostInvoke.gpuAccelerationGet,
         RunnerHostInvoke.gpuAccelerationSet,
+        RunnerHostInvoke.logLevelsGet,
+        RunnerHostInvoke.logLevelsSet,
       ].sort(),
     );
     bridge.dispose();
@@ -1039,7 +1044,7 @@ describe("RunnerIpcBridge", () => {
     bridge.dispose();
   });
 
-  it("delivers parsed auth-callback results over the authCallback channel", async () => {
+  it("delivers the payload-free browser-return signal over the authCallback channel", async () => {
     const mod = await import("../register-runner-ipc");
     const host = new FakeHost();
     const bridge = new mod.RunnerIpcBridge({
@@ -1051,18 +1056,17 @@ describe("RunnerIpcBridge", () => {
     });
     bridge.install();
 
-    bridge.deliverAuthCallback({ code: "abc" });
-    bridge.deliverAuthCallback({ error: "denied" });
+    bridge.deliverAuthReturnSignal();
+    bridge.deliverAuthReturnSignal();
 
     const callbacks = sentMessages.filter(
       (m) => m.channel === RunnerHostEvent.authCallback,
     );
+    // The renderer turns each signal into a poll nudge; the channel carries no
+    // token or code, so the payload is undefined.
     expect(callbacks).toEqual([
-      {
-        channel: RunnerHostEvent.authCallback,
-        payload: { code: "abc" },
-      },
-      { channel: RunnerHostEvent.authCallback, payload: { error: "denied" } },
+      { channel: RunnerHostEvent.authCallback, payload: undefined },
+      { channel: RunnerHostEvent.authCallback, payload: undefined },
     ]);
     bridge.dispose();
   });
@@ -1091,12 +1095,12 @@ describe("RunnerIpcBridge", () => {
     registry.focusById("window-a");
     windowA.sentMessages.length = 0;
     windowB.sentMessages.length = 0;
-    bridge.deliverAuthCallback({ code: "mru-token" });
+    bridge.deliverAuthReturnSignal();
 
     expect(windowA.sentMessages).toEqual([
       {
         channel: RunnerHostEvent.authCallback,
-        payload: { code: "mru-token" },
+        payload: undefined,
       },
     ]);
     expect(
@@ -1432,7 +1436,7 @@ describe("RunnerIpcBridge", () => {
     windowA.sentMessages.length = 0;
     windowB.sentMessages.length = 0;
 
-    bridgeA.deliverAuthCallback({ code: "token-a" });
+    bridgeA.deliverAuthReturnSignal();
     bridgeB.deliverNotificationClick({ epicId: "epic-b" });
     hostA.setSnapshot({
       hostId: "host-a",
@@ -1455,7 +1459,7 @@ describe("RunnerIpcBridge", () => {
     expect(windowA.sentMessages).toEqual([
       {
         channel: RunnerHostEvent.authCallback,
-        payload: { code: "token-a" },
+        payload: undefined,
       },
       {
         channel: RunnerHostEvent.localHostChange,

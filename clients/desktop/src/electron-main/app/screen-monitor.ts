@@ -41,9 +41,7 @@ export function readDisplayTopology(): DisplayTopology {
 }
 
 export type DisplayChangeReason =
-  | "display-added"
-  | "display-removed"
-  | "display-metrics-changed";
+  "display-added" | "display-removed" | "display-metrics-changed";
 
 /**
  * Subscribes to OS display add/remove/metrics events and pushes a fresh

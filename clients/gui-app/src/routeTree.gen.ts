@@ -22,6 +22,7 @@ import { Route as SettingsProvidersRouteImport } from "./routes/settings.provide
 import { Route as SettingsKeybindingsRouteImport } from "./routes/settings.keybindings";
 import { Route as SettingsHostRouteImport } from "./routes/settings.host";
 import { Route as SettingsGeneralRouteImport } from "./routes/settings.general";
+import { Route as SettingsDiagnosticsRouteImport } from "./routes/settings.diagnostics";
 import { Route as SettingsAppearanceRouteImport } from "./routes/settings.appearance";
 import { Route as SettingsAgentsRouteImport } from "./routes/settings.agents";
 import { Route as DraftNewRouteImport } from "./routes/draft.new";
@@ -93,6 +94,11 @@ const SettingsGeneralRoute = SettingsGeneralRouteImport.update({
   path: "/general",
   getParentRoute: () => SettingsRoute,
 } as any);
+const SettingsDiagnosticsRoute = SettingsDiagnosticsRouteImport.update({
+  id: "/diagnostics",
+  path: "/diagnostics",
+  getParentRoute: () => SettingsRoute,
+} as any);
 const SettingsAppearanceRoute = SettingsAppearanceRouteImport.update({
   id: "/appearance",
   path: "/appearance",
@@ -128,6 +134,7 @@ export interface FileRoutesByFullPath {
   "/draft/new": typeof DraftNewRoute;
   "/settings/agents": typeof SettingsAgentsRoute;
   "/settings/appearance": typeof SettingsAppearanceRoute;
+  "/settings/diagnostics": typeof SettingsDiagnosticsRoute;
   "/settings/general": typeof SettingsGeneralRoute;
   "/settings/host": typeof SettingsHostRoute;
   "/settings/keybindings": typeof SettingsKeybindingsRoute;
@@ -146,6 +153,7 @@ export interface FileRoutesByTo {
   "/draft/new": typeof DraftNewRoute;
   "/settings/agents": typeof SettingsAgentsRoute;
   "/settings/appearance": typeof SettingsAppearanceRoute;
+  "/settings/diagnostics": typeof SettingsDiagnosticsRoute;
   "/settings/general": typeof SettingsGeneralRoute;
   "/settings/host": typeof SettingsHostRoute;
   "/settings/keybindings": typeof SettingsKeybindingsRoute;
@@ -167,6 +175,7 @@ export interface FileRoutesById {
   "/draft/new": typeof DraftNewRoute;
   "/settings/agents": typeof SettingsAgentsRoute;
   "/settings/appearance": typeof SettingsAppearanceRoute;
+  "/settings/diagnostics": typeof SettingsDiagnosticsRoute;
   "/settings/general": typeof SettingsGeneralRoute;
   "/settings/host": typeof SettingsHostRoute;
   "/settings/keybindings": typeof SettingsKeybindingsRoute;
@@ -189,6 +198,7 @@ export interface FileRouteTypes {
     | "/draft/new"
     | "/settings/agents"
     | "/settings/appearance"
+    | "/settings/diagnostics"
     | "/settings/general"
     | "/settings/host"
     | "/settings/keybindings"
@@ -207,6 +217,7 @@ export interface FileRouteTypes {
     | "/draft/new"
     | "/settings/agents"
     | "/settings/appearance"
+    | "/settings/diagnostics"
     | "/settings/general"
     | "/settings/host"
     | "/settings/keybindings"
@@ -227,6 +238,7 @@ export interface FileRouteTypes {
     | "/draft/new"
     | "/settings/agents"
     | "/settings/appearance"
+    | "/settings/diagnostics"
     | "/settings/general"
     | "/settings/host"
     | "/settings/keybindings"
@@ -341,6 +353,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof SettingsGeneralRouteImport;
       parentRoute: typeof SettingsRoute;
     };
+    "/settings/diagnostics": {
+      id: "/settings/diagnostics";
+      path: "/diagnostics";
+      fullPath: "/settings/diagnostics";
+      preLoaderRoute: typeof SettingsDiagnosticsRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
     "/settings/appearance": {
       id: "/settings/appearance";
       path: "/appearance";
@@ -394,6 +413,7 @@ const EpicsRouteWithChildren = EpicsRoute._addFileChildren(EpicsRouteChildren);
 interface SettingsRouteChildren {
   SettingsAgentsRoute: typeof SettingsAgentsRoute;
   SettingsAppearanceRoute: typeof SettingsAppearanceRoute;
+  SettingsDiagnosticsRoute: typeof SettingsDiagnosticsRoute;
   SettingsGeneralRoute: typeof SettingsGeneralRoute;
   SettingsHostRoute: typeof SettingsHostRoute;
   SettingsKeybindingsRoute: typeof SettingsKeybindingsRoute;
@@ -407,6 +427,7 @@ interface SettingsRouteChildren {
 const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsAgentsRoute: SettingsAgentsRoute,
   SettingsAppearanceRoute: SettingsAppearanceRoute,
+  SettingsDiagnosticsRoute: SettingsDiagnosticsRoute,
   SettingsGeneralRoute: SettingsGeneralRoute,
   SettingsHostRoute: SettingsHostRoute,
   SettingsKeybindingsRoute: SettingsKeybindingsRoute,

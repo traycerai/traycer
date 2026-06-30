@@ -72,7 +72,7 @@ export function publishDeletedEpicNotification(
     epicIds,
     epicTitlesById: titlesForEpicIds(epicIds, input.epicTitlesById),
   };
-  appLogger.info("[deleted-epic-events] publishing notification", {
+  appLogger.debug("[deleted-epic-events] publishing notification", {
     hostId: input.hostId,
     epicCount: epicIds.length,
     sequence,

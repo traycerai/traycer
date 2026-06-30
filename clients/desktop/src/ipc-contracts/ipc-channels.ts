@@ -11,7 +11,18 @@
 export const RunnerHostInvoke = {
   validateAuthToken: "runnerHost:auth:validateToken",
   validateAuthTokenIdentity: "runnerHost:auth:validateTokenIdentity",
-  exchangeAuthCode: "runnerHost:auth:exchangeAuthCode",
+  // Device Authorization Grant (RFC 8628) - the only interactive login. `start`
+  // runs `/device/authorize` + the `/device/token` poll loop in main (CORS-safe,
+  // resilient to renderer sleep) and returns the authorization; the terminal
+  // outcome is pushed on `deviceFlowResult`. The attempt is owned by the window
+  // that started it: when that `webContents` is destroyed the attempt is
+  // cancelled, so closing a window mid device-flow never leaks the poll loop.
+  // `pollNow` nudges the named attempt's loop to poll immediately (the
+  // browser-return deep link uses it). `cancel` aborts the named attempt's loop.
+  deviceFlowStart: "runnerHost:auth:deviceFlowStart",
+  deviceFlowPollNow: "runnerHost:auth:deviceFlowPollNow",
+  deviceFlowCancel: "runnerHost:auth:deviceFlowCancel",
+  refreshAuthToken: "runnerHost:auth:refreshToken",
   openExternalLink: "runnerHost:openExternalLink",
   getRegisteredUrlSchemes: "runnerHost:getRegisteredUrlSchemes",
   requestMicrophoneAccess: "runnerHost:requestMicrophoneAccess",
@@ -122,6 +133,8 @@ export const RunnerHostInvoke = {
   displayList: "runnerHost:display:list",
   gpuAccelerationGet: "runnerHost:gpu:get",
   gpuAccelerationSet: "runnerHost:gpu:set",
+  logLevelsGet: "runnerHost:logLevels:get",
+  logLevelsSet: "runnerHost:logLevels:set",
   // Renderer-driven sleep prevention. The renderer recomputes
   // `preventSleepWhileRunning && anyLocalAgentActive` and pushes the boolean
   // here; main holds a single `powerSaveBlocker` while any window wants it.
@@ -163,6 +176,9 @@ export const RunnerHostInvoke = {
 
 export const RunnerHostEvent = {
   authCallback: "runnerHost:event:authCallback",
+  // Terminal outcome of a device-flow attempt, keyed by `attemptId` so a
+  // superseded attempt's late result can't be mistaken for the live one.
+  deviceFlowResult: "runnerHost:event:deviceFlowResult",
   localHostChange: "runnerHost:event:localHostChange",
   // OS wake pulse (powerMonitor `resume` / `unlock-screen`) bridged to the
   // renderer so it force-reconnects its host streams - re-registering the
@@ -193,6 +209,11 @@ export const RunnerHostEvent = {
   // `HostTrayCommandListener`. Payloads match the shared
   // `HostTrayCommand` union.
   hostTrayCommand: "runnerHost:event:host:trayCommand",
+  // Main-process registry refreshes (launch probe, auto-update reconcile,
+  // renderer forced checks) fan out here so already-mounted renderer update
+  // surfaces can keep their TanStack Query cache in lockstep.
+  hostRegistryUpdateStateChange:
+    "runnerHost:event:host:registryUpdateStateChange",
 } as const;
 
 /**
