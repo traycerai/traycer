@@ -10,6 +10,7 @@ import {
   CURRENT_PHASE_VERSION,
 } from "@traycer-clients/shared/epic/epic-version";
 import type { ListTasksResponse } from "@traycer/protocol/host/epic/unary-schemas";
+import { useShallow } from "zustand/react/shallow";
 import {
   useHostClient,
   useHostCompatibility,
@@ -20,11 +21,7 @@ import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readine
 import { missingEpicIds } from "@/lib/epics/epic-tab-existence";
 import { useWindowsBridgeHydrated } from "@/providers/windows-bridge-context";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import {
-  useEpicCanvasStore,
-  useOpenEpicTabs,
-} from "@/stores/epics/canvas/store";
-import type { EpicViewTab } from "@/stores/epics/canvas/types";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 
 const EPIC_TAB_RECONCILE_PAGE_LIMIT = 100;
@@ -60,11 +57,7 @@ function usePersistedEpicTabReconcileSeed(): ReconcileSeed | null {
     (state) => state.contextMetadata?.userId ?? null,
   );
   const canvasHydrationVersion = useEpicCanvasHydrationVersion();
-  const openEpicTabs = useOpenEpicTabs();
-  const openEpicIds = useMemo(
-    () => collectEpicIds(openEpicTabs),
-    [openEpicTabs],
-  );
+  const openEpicIds = useVisibleEpicIds();
 
   const identity = useMemo(() => {
     if (!windowsHydrated) return null;
@@ -198,15 +191,19 @@ function nextReconcileCursor(page: ListTasksResponse): string | null {
   return page.nextCursor;
 }
 
-function collectEpicIds(
-  tabs: ReadonlyArray<EpicViewTab>,
-): ReadonlyArray<string> {
-  const seen = new Set<string>();
-  return tabs.flatMap((tab) => {
-    if (seen.has(tab.epicId)) return [];
-    seen.add(tab.epicId);
-    return [tab.epicId];
-  });
+function useVisibleEpicIds(): ReadonlyArray<string> {
+  return useEpicCanvasStore(
+    useShallow((state) => {
+      const seen = new Set<string>();
+      return state.openTabOrder
+        .map((tabId) => state.tabsById[tabId])
+        .flatMap((tab) => {
+          if (tab === undefined || seen.has(tab.epicId)) return [];
+          seen.add(tab.epicId);
+          return [tab.epicId];
+        });
+    }),
+  );
 }
 
 function useEpicCanvasHydrationVersion(): number {
