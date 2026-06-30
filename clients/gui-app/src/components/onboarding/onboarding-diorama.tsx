@@ -56,13 +56,7 @@ export interface OnboardingAgentGuideState {
 }
 
 type NodeKind =
-  | "chat"
-  | "terminal-agent"
-  | "spec"
-  | "ticket"
-  | "review"
-  | "file"
-  | "diff";
+  "chat" | "terminal-agent" | "spec" | "ticket" | "review" | "file" | "diff";
 
 type SceneId =
   | "task-tabs"

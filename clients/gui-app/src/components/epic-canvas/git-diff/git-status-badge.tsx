@@ -23,8 +23,7 @@ interface GitStatusBadgeClassNameProps extends GitStatusBadgeBaseProps {
 }
 
 type GitStatusBadgeProps =
-  | GitStatusBadgeBaseProps
-  | GitStatusBadgeClassNameProps;
+  GitStatusBadgeBaseProps | GitStatusBadgeClassNameProps;
 
 export function GitStatusBadge(props: GitStatusBadgeProps): ReactNode {
   const className = "className" in props ? props.className : undefined;

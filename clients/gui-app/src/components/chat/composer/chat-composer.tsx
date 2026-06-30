@@ -60,8 +60,7 @@ interface ChatComposerProps {
   readonly settingsSeed: ChatRunSettings | null;
   readonly fallbackSettingsSeed: ChatRunSettings | null;
   readonly onSubmitMessage:
-    | ((input: ChatComposerSubmitInput) => boolean)
-    | null;
+    ((input: ChatComposerSubmitInput) => boolean) | null;
   readonly onSettingsChange: ((settings: ChatRunSettings) => void) | null;
   readonly activeTurnStatus: ChatActiveTurn["status"] | null;
   readonly editingQueueItemId: string | null;

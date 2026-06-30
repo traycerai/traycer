@@ -8,19 +8,12 @@ import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
 
 export type PathKind = "file" | "folder";
 export type EntityMentionContextType =
-  | "epic"
-  | "chat"
-  | EpicArtifactKind
-  | "user";
+  "epic" | "chat" | EpicArtifactKind | "user";
 export type MentionContextType =
-  | PathKind
-  | "git"
-  | "worktree"
-  | EntityMentionContextType;
+  PathKind | "git" | "worktree" | EntityMentionContextType;
 
 export type ComposerPromptSegment =
-  | { type: "text"; text: string }
-  | { type: "mention"; path: string };
+  { type: "text"; text: string } | { type: "mention"; path: string };
 
 export type WorkspaceEntry = WorkspaceMentionSuggestion;
 export interface EpicChatMentionEntry {

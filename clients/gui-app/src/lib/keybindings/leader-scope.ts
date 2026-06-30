@@ -42,15 +42,13 @@ export interface LeaderScopeAction {
    * beyond 9. Keep null for single-key digit scopes.
    */
   readonly dispatchSequence:
-    | ((digits: ReadonlyArray<number>) => boolean)
-    | null;
+    ((digits: ReadonlyArray<number>) => boolean) | null;
   /**
    * Classifies the currently typed sequence without side effects. Required when
    * `dispatchSequence` is set, null otherwise.
    */
   readonly sequenceState:
-    | ((digits: ReadonlyArray<number>) => LeaderDigitSequenceState)
-    | null;
+    ((digits: ReadonlyArray<number>) => LeaderDigitSequenceState) | null;
 }
 
 export interface LeaderScope {

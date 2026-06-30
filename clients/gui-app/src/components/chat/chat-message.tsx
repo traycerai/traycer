@@ -54,8 +54,7 @@ export interface ChatMessageAssistantActions {
 }
 
 export type ChatMessageActions =
-  | ChatMessageUserActions
-  | ChatMessageAssistantActions;
+  ChatMessageUserActions | ChatMessageAssistantActions;
 
 const ROLE_LABELS: Record<ChatMessageModel["role"], string> = {
   user: "You",

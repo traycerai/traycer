@@ -28,8 +28,7 @@ vi.mock("react-virtuoso", async () => {
     readonly data?: ReadonlyArray<unknown>;
     readonly computeItemKey?: (index: number, item: unknown) => Key;
     readonly initialTopMostItemIndex?:
-      | number
-      | { readonly index: number | "LAST" };
+      number | { readonly index: number | "LAST" };
     readonly itemContent?: (index: number, item: unknown) => ReactNode;
   }
 

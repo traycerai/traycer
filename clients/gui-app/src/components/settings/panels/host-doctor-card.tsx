@@ -57,8 +57,7 @@ interface HostDoctorCardInnerProps {
   readonly management: IHostManagement;
   readonly externalRecurrence: RecurrenceState | undefined;
   readonly onExternalRecurrenceChange:
-    | ((next: RecurrenceState) => void)
-    | undefined;
+    ((next: RecurrenceState) => void) | undefined;
 }
 
 function HostDoctorCardInner(props: HostDoctorCardInnerProps) {
@@ -221,8 +220,7 @@ function HostDoctorCardInner(props: HostDoctorCardInnerProps) {
 interface DoctorRecurrenceInput {
   readonly externalRecurrence: RecurrenceState | undefined;
   readonly onExternalRecurrenceChange:
-    | ((next: RecurrenceState) => void)
-    | undefined;
+    ((next: RecurrenceState) => void) | undefined;
 }
 
 function useDoctorRecurrence(input: DoctorRecurrenceInput) {

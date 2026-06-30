@@ -137,11 +137,9 @@ export interface DigitActionMatch {
   readonly digit: number;
   readonly run: () => boolean;
   readonly dispatchSequence:
-    | ((digits: ReadonlyArray<number>) => boolean)
-    | null;
+    ((digits: ReadonlyArray<number>) => boolean) | null;
   readonly sequenceState:
-    | ((digits: ReadonlyArray<number>) => LeaderDigitSequenceState)
-    | null;
+    ((digits: ReadonlyArray<number>) => LeaderDigitSequenceState) | null;
 }
 
 export function matchDigitAction(
