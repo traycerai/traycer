@@ -256,7 +256,8 @@ describe("ChatMessages Virtuoso renderer", () => {
       expect(screen.getByText("echo hi")).not.toBeNull();
     });
 
-    fireEvent.click(getButtonContainingText("Ran 1 command"));
+    screen.getByTestId("virtuoso-list").style.visibility = "visible";
+    fireEvent.click(screen.getByRole("button", { name: /Ran 1 command/i }));
     expect(screen.queryByText("echo hi")).toBeNull();
 
     rerenderChatMessages(rerender, messages, {

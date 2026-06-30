@@ -140,7 +140,9 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /Sent message/ }));
 
-    expect(screen.getByText("Open receiving agent")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: /Open receiving agent/i }),
+    ).toBeTruthy();
   });
 
   it("opens sent-message cards from the shared tool open store", () => {
