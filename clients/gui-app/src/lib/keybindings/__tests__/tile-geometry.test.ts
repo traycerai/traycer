@@ -133,3 +133,43 @@ describe("readTileRects excludes split resize handles", () => {
     expect(findNeighbor(paneB, rects, "left")).toBe("pane-A");
   });
 });
+
+describe("readTileRects normalizes pane-scoped child markers", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+    vi.restoreAllMocks();
+  });
+
+  function appendPaneBox(
+    parent: HTMLElement,
+    id: string,
+    box: [number, number, number, number],
+  ): HTMLElement {
+    const [x, y, width, height] = box;
+    const el = document.createElement("div");
+    el.setAttribute("data-group-id", id);
+    parent.append(el);
+    vi.spyOn(el, "getBoundingClientRect").mockReturnValue(
+      new DOMRect(x, y, width, height),
+    );
+    return el;
+  }
+
+  it("keeps one full-pane rect per pane id so child strips cannot win focus search", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    const paneA = appendPaneBox(container, "pane-A", [0, 0, 500, 600]);
+    appendPaneBox(paneA, "pane-A", [0, 0, 500, 36]);
+    const paneB = appendPaneBox(container, "pane-B", [500, 0, 500, 600]);
+    appendPaneBox(paneB, "pane-B", [500, 0, 500, 36]);
+
+    const rects = readTileRects(container);
+
+    expect(rects).toEqual([
+      rect("pane-A", [0, 0, 500, 600]),
+      rect("pane-B", [500, 0, 500, 600]),
+    ]);
+    expect(findNeighbor(rects[0], rects, "right")).toBe("pane-B");
+  });
+});
