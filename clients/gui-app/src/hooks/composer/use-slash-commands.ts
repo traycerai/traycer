@@ -50,10 +50,12 @@ export function useSlashCommands(
   const allCommands = useMemo<ReadonlyArray<SlashCommand>>(() => {
     const providerCommands: ReadonlyArray<ProviderSlashCommand> = (
       commandsQuery.data?.commands ?? []
-    ).map((command): ProviderSlashCommand => ({
-      ...command,
-      source: "provider",
-    }));
+    ).map(
+      (command): ProviderSlashCommand => ({
+        ...command,
+        source: "provider",
+      }),
+    );
     return dedupeSlashCommands(providerCommands).toSorted(compareCommandNames);
   }, [commandsQuery.data?.commands]);
   const data = useMemo<ReadonlyArray<SlashCommand>>(() => {

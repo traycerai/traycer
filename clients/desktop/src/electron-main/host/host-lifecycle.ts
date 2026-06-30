@@ -125,7 +125,8 @@ export interface HostLifecycleOptions {
    * on binding/rebinding real sockets (a CI-flaky timing dependency).
    */
   readonly reachabilityProbe:
-    ((websocketUrl: string) => Promise<boolean>) | undefined;
+    | ((websocketUrl: string) => Promise<boolean>)
+    | undefined;
 }
 
 /**

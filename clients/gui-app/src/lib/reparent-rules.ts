@@ -10,7 +10,10 @@ import {
 
 export type NodeFamily = "artifact" | "agent";
 export type ReparentRejectionReason =
-  "missing-node" | "cross-panel" | "cycle" | "same-parent";
+  | "missing-node"
+  | "cross-panel"
+  | "cycle"
+  | "same-parent";
 
 export interface ReparentNode {
   readonly id: string;

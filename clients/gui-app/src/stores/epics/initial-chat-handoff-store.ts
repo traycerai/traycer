@@ -7,7 +7,11 @@ import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
 import type { ConversationTilePlacement } from "@/lib/canvas/conversation-tile-placement";
 
 export type InitialChatHandoffStatus =
-  "pending" | "waitingProjection" | "waitingChat" | "sending" | "failed";
+  | "pending"
+  | "waitingProjection"
+  | "waitingChat"
+  | "sending"
+  | "failed";
 
 export interface InitialChatHandoffScope {
   readonly hostId: string | null;

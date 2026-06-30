@@ -10,7 +10,11 @@ import { appLogger, describeLogError } from "@/lib/logger";
 import { useRunnerHost } from "@/providers/use-runner-host";
 
 export type VoiceDictationState =
-  "idle" | "requesting" | "recording" | "transcribing" | "error";
+  | "idle"
+  | "requesting"
+  | "recording"
+  | "transcribing"
+  | "error";
 
 export interface UseVoiceDictationArgs {
   readonly language: string;

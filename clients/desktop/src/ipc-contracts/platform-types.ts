@@ -46,7 +46,11 @@ export type Vibrancy =
   | "under-page";
 
 export type BackgroundMaterial =
-  "auto" | "none" | "mica" | "acrylic" | "tabbed";
+  | "auto"
+  | "none"
+  | "mica"
+  | "acrylic"
+  | "tabbed";
 
 export interface PendingCertificateError {
   readonly id: string;
@@ -89,7 +93,9 @@ export interface FileSaveInput {
 }
 
 export type FindInPageStopAction =
-  "clearSelection" | "keepSelection" | "activateSelection";
+  | "clearSelection"
+  | "keepSelection"
+  | "activateSelection";
 
 export interface TrustedCertificateEntry {
   readonly fingerprint: string;

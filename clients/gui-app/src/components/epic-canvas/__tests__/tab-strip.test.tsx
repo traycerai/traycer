@@ -22,10 +22,12 @@ interface TabStripTestState {
   droppableInputs: CapturedDroppableInput[];
 }
 
-const testState = vi.hoisted((): TabStripTestState => ({
-  draggableInputs: [],
-  droppableInputs: [],
-}));
+const testState = vi.hoisted(
+  (): TabStripTestState => ({
+    draggableInputs: [],
+    droppableInputs: [],
+  }),
+);
 
 vi.mock("@dnd-kit/core", () => ({
   useDraggable: (input: CapturedDraggableInput) => {

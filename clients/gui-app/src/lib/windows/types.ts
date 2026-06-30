@@ -20,7 +20,8 @@ export interface DesktopOwnershipEntry {
 }
 
 export type DesktopOwnershipClaimResult =
-  { readonly ok: true } | { readonly ok: false; readonly currentOwner: string };
+  | { readonly ok: true }
+  | { readonly ok: false; readonly currentOwner: string };
 
 export interface DesktopPerWindowEpicViewTab {
   readonly id: string;
@@ -61,7 +62,9 @@ export interface DesktopPerWindowStatePatch {
 }
 
 export type DesktopAuthSessionStatus =
-  "signed-out" | "signing-in" | "signed-in";
+  | "signed-out"
+  | "signing-in"
+  | "signed-in";
 
 export interface DesktopAuthSessionProfile {
   readonly userId: string;
@@ -108,7 +111,11 @@ export interface DesktopMenuCommandPayload {
 export type DesktopSupportLogTarget = "desktop" | "host";
 
 export type DesktopSupportLinkId =
-  "website" | "documentation" | "release-notes" | "discord" | "support";
+  | "website"
+  | "documentation"
+  | "release-notes"
+  | "discord"
+  | "support";
 
 export interface DesktopSupportLinkDescriptor {
   readonly id: DesktopSupportLinkId;

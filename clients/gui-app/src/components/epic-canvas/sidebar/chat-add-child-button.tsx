@@ -31,7 +31,8 @@ export function ChatAddChildButton(props: {
   readonly onAddMenuOpenChange: (open: boolean) => void;
   readonly onAdd: (type: EpicNodeKind) => void;
   readonly onAddTerminalAgent:
-    ((input: TerminalAgentWorktreeCreateInput) => void) | undefined;
+    | ((input: TerminalAgentWorktreeCreateInput) => void)
+    | undefined;
   readonly terminalAgentWorkspaceSeed: ForkWorkspaceSeed | null;
   readonly terminalAgentHostScope: HostWorkspaceControlsHostScope;
   readonly terminalAgentStagingKey: WorktreeStagingKey;

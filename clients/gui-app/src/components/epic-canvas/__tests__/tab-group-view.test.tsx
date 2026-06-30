@@ -17,11 +17,13 @@ interface TestState {
   readonly deferredClicks: Map<string, number>;
 }
 
-const testState = vi.hoisted((): TestState => ({
-  mounts: new Map(),
-  unmounts: new Map(),
-  deferredClicks: new Map(),
-}));
+const testState = vi.hoisted(
+  (): TestState => ({
+    mounts: new Map(),
+    unmounts: new Map(),
+    deferredClicks: new Map(),
+  }),
+);
 
 vi.mock("@dnd-kit/core", () => ({
   useDraggable: () => ({

@@ -16,7 +16,11 @@ import {
 } from "@/lib/tab-navigation";
 
 export type NotificationPayloadKind =
-  "session" | "artifact" | "epic" | "approval" | "chat";
+  | "session"
+  | "artifact"
+  | "epic"
+  | "approval"
+  | "chat";
 
 export interface SessionNotificationPayload {
   readonly kind: "session";

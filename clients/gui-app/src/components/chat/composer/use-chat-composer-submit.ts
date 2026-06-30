@@ -47,7 +47,8 @@ interface UseChatComposerSubmitArgs {
   readonly workspaceBlocked: boolean;
   readonly imagesUnsupported: boolean;
   readonly onSubmitMessage:
-    ((input: ChatComposerSubmitInput) => boolean) | null;
+    | ((input: ChatComposerSubmitInput) => boolean)
+    | null;
 }
 
 interface ChatComposerSubmitInput {

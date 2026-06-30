@@ -33,7 +33,13 @@ const EMPTY_WORKSPACE_REQUESTS: ReadonlyArray<MentionWorkspaceRequest> = [];
 const EMPTY_EPIC_REQUESTS: ReadonlyArray<MentionEpicRequest> = [];
 
 export type MentionProviderId =
-  "files" | "folders" | "worktree" | "git" | "epic" | "chat" | EpicArtifactKind;
+  | "files"
+  | "folders"
+  | "worktree"
+  | "git"
+  | "epic"
+  | "chat"
+  | EpicArtifactKind;
 
 export interface MentionMenuCopy {
   readonly header: string;
@@ -74,7 +80,8 @@ export type WorkspaceGitMentionMethod =
   | "workspace.mentionGitCommits";
 
 export type WorkspaceMentionMethod =
-  WorkspacePathMentionMethod | WorkspaceGitMentionMethod;
+  | WorkspacePathMentionMethod
+  | WorkspaceGitMentionMethod;
 
 export type EpicMentionMethod =
   | "epic.mentionEpics"
