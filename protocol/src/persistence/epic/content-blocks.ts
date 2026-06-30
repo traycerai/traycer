@@ -77,14 +77,6 @@ export const reasoningBlockSchema = z.object({
 });
 export type ReasoningBlock = z.infer<typeof reasoningBlockSchema>;
 
-export const monitorEventBlockSchema = z.object({
-  ...baseBlockFields,
-  type: z.literal("monitor_event"),
-  name: z.string(),
-  message: z.string(),
-});
-export type MonitorEventBlock = z.infer<typeof monitorEventBlockSchema>;
-
 export const agentMessageSendSchema = z.object({
   receiverAgentId: z.string(),
   message: z.string(),
@@ -565,7 +557,6 @@ export type ArtifactOperationBlock = z.infer<
 export const contentBlockSchema = z.discriminatedUnion("type", [
   textBlockSchema,
   reasoningBlockSchema,
-  monitorEventBlockSchema,
   toolCallBlockSchema,
   fileChangeBlockSchema,
   commandBlockSchema,

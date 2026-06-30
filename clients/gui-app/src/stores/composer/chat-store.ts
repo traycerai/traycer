@@ -267,7 +267,6 @@ export interface ArtifactChangeRow {
 export type MessageSegment =
   | { id: string; kind: "text"; markdown: string; isStreaming: boolean }
   | ReasoningSegment
-  | { id: string; kind: "monitor_event"; name: string; message: string }
   | ToolSegment
   | FileChangeSegment
   | {

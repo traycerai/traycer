@@ -28,7 +28,6 @@ import { ErrorSegment } from "./segments/error-segment";
 import { FileChangeGroupSegment } from "./segments/file-change-group-segment";
 import { FileChangeSegment } from "./segments/file-change-segment";
 import { InterviewSegment } from "./segments/interview-segment";
-import { MonitorEventSegment } from "./segments/monitor-event-segment";
 import type { NextStepActionHandler } from "./segments/next-steps-action-group";
 import { PlanSegment } from "./segments/plan-segment";
 import { ReasoningSegment } from "./segments/reasoning-segment";
@@ -642,8 +641,6 @@ function AssistantSegment({
           durationMs={segment.durationMs}
         />
       );
-    case "monitor_event":
-      return <MonitorEventSegment name={segment.name} />;
     case "tool": {
       const isBackgroundRunning = backgroundToolBlockIds.has(segment.id);
       return (
