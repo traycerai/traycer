@@ -50,7 +50,7 @@ afterAll(() => {
   rmSync(tmpRoot, { recursive: true, force: true });
 });
 
-const MANIFEST_BODY = JSON.stringify({
+const MANIFEST_DATA = {
   schemaVersion: 1,
   generatedAt: "2026-05-15T12:00:00Z",
   latest: "1.5.0",
@@ -106,7 +106,9 @@ const MANIFEST_BODY = JSON.stringify({
       },
     },
   ],
-});
+};
+
+const MANIFEST_BODY = JSON.stringify(MANIFEST_DATA);
 
 function fakeTransport(): RegistryTransport {
   return {
@@ -138,12 +140,14 @@ describe("registry client", () => {
   });
 
   it("logs manifest parse warnings while returning the usable manifest", async () => {
-    const manifest = JSON.parse(MANIFEST_BODY);
-    manifest.versions.push(manifest.versions[0]);
+    const manifestWithDupe = {
+      ...MANIFEST_DATA,
+      versions: [...MANIFEST_DATA.versions, MANIFEST_DATA.versions[0]],
+    };
     const client = await createRegistryClient({
       environment: "production",
       transport: {
-        fetchText: async () => JSON.stringify(manifest),
+        fetchText: async () => JSON.stringify(manifestWithDupe),
         downloadToFile: async () => ({ downloadedBytes: 0, sha256: "" }),
       },
       requireTrustedKeys: false,

@@ -152,7 +152,7 @@ export async function createRegistryClient(
         manifestUrlInfo.url,
       );
       const { manifest } = parseResult;
-      for (const warning of parseResult.warnings) {
+      parseResult.warnings.forEach((warning) => {
         logger.warn("Registry manifest entry skipped", {
           environment: opts.environment,
           manifestUrl: manifestUrlInfo.url,
@@ -160,7 +160,7 @@ export async function createRegistryClient(
           entryLabel: warning.entryLabel,
           warning: warning.message,
         });
-      }
+      });
       cachedManifest = manifest;
       logger.debug("Registry manifest parsed", {
         environment: opts.environment,
