@@ -168,6 +168,17 @@ export class MockHostMessenger<
     try {
       result = await handler(params);
     } catch (cause) {
+      if (cause instanceof HostRpcError) {
+        this.emit({
+          kind: "response",
+          method,
+          requestId,
+          result: null,
+          error: cause,
+        });
+        this.emit({ kind: "close", method, requestId });
+        throw cause;
+      }
       const error = new HostRpcError({
         code: "RPC_ERROR",
         message: cause instanceof Error ? cause.message : String(cause),

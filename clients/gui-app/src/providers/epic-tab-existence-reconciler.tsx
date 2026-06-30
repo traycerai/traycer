@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
-import { useHostClient } from "@/lib/host";
+import { useHostClient, useHostCompatibility } from "@/lib/host";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import {
   fetchExistingEpicIds,
@@ -20,6 +20,7 @@ export function EpicTabExistenceReconciler() {
 
 function useReconcilePersistedEpicTabs(): void {
   const client = useHostClient();
+  const compatibility = useHostCompatibility();
   const readiness = useReactiveHostReadiness(client);
   const windowsHydrated = useWindowsBridgeHydrated();
   const authStatus = useAuthStore((state) => state.status);
@@ -32,6 +33,7 @@ function useReconcilePersistedEpicTabs(): void {
   const identity = useMemo(() => {
     if (!windowsHydrated) return null;
     if (authStatus !== "signed-in") return null;
+    if (compatibility.status !== "compatible") return null;
     if (readiness.hostId === null) return null;
     if (authUserId === null) return null;
     if (readiness.requestContextUserId !== authUserId) return null;
@@ -40,6 +42,7 @@ function useReconcilePersistedEpicTabs(): void {
     authStatus,
     authUserId,
     canvasHydrationVersion,
+    compatibility.status,
     readiness.hostId,
     readiness.requestContextUserId,
     windowsHydrated,

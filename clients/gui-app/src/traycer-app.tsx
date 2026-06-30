@@ -8,6 +8,7 @@ import { RootErrorBoundary } from "@/components/errors/root-error-boundary";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
+  HostCompatibilityProvider,
   HostRuntimeProvider,
   type HostRpcRegistry,
   type MessengerFactory,
@@ -78,9 +79,9 @@ export interface TraycerAppProps {
  *
  * Mounts the documented provider stack - outer to inner -
  *   RunnerHostProvider → QueryClientProvider → ThemeProvider →
- *   TooltipProvider → HostRuntimeProvider → auth-scoped lifecycle providers
- *   → RunnerHostBridges → LocalHostGate → RouterProvider → HostPicker
- *   → Toaster.
+ *   TooltipProvider → HostRuntimeProvider → HostCompatibilityProvider →
+ *   auth-scoped lifecycle providers → RunnerHostBridges → LocalHostGate →
+ *   RouterProvider → HostPicker → Toaster.
  *
  * Concrete shells (Electron, Capacitor, gui-app-dev preview) construct a
  * `IRunnerHost` at bootstrap and pass it alongside the shared
@@ -120,9 +121,11 @@ export function TraycerApp(props: TraycerAppProps): ReactNode {
                     remoteFetcher={props.remoteFetcher}
                     fallback={hostRuntimeFallback}
                   >
-                    <RootErrorBoundary router={router}>
-                      <TraycerAuthenticatedRuntime router={router} />
-                    </RootErrorBoundary>
+                    <HostCompatibilityProvider>
+                      <RootErrorBoundary router={router}>
+                        <TraycerAuthenticatedRuntime router={router} />
+                      </RootErrorBoundary>
+                    </HostCompatibilityProvider>
                   </HostRuntimeProvider>
                 </KeybindingProvider>
               </TooltipProvider>
