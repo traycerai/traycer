@@ -16,10 +16,7 @@ import type { CommandFn } from "../runner/runner";
 type ActivityHookEvent = "start" | "stop";
 
 type NoopReason =
-  | "missing-context"
-  | "unknown-event"
-  | "unknown-provider"
-  | "host-unreachable";
+  "missing-context" | "unknown-event" | "unknown-provider" | "host-unreachable";
 
 /**
  * `traycer agent activity-from-hook` - invoked by provider TUI lifecycle

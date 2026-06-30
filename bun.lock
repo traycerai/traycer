@@ -209,6 +209,7 @@
         "@typescript-eslint/parser": "catalog:",
         "esbuild": "catalog:",
         "eslint": "catalog:",
+        "prettier": "catalog:",
         "typescript": "catalog:",
         "vitest": "catalog:",
       },

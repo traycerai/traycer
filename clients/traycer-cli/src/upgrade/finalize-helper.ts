@@ -430,9 +430,7 @@ function shString(value: string): string {
 }
 
 export type PostFinalizeMarkerStatus =
-  | "swapped"
-  | "swap-failed"
-  | "parent-still-alive";
+  "swapped" | "swap-failed" | "parent-still-alive";
 
 export interface PostFinalizeMarker {
   readonly status: PostFinalizeMarkerStatus;

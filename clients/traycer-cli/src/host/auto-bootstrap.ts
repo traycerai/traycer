@@ -42,11 +42,7 @@ export type AutoBootstrapReason =
   | "service-registration-warning";
 
 export type AutoBootstrapStatus =
-  | "skipped"
-  | "ready"
-  | "installed"
-  | "service-registered"
-  | "failed";
+  "skipped" | "ready" | "installed" | "service-registered" | "failed";
 
 export interface AutoBootstrapDecision {
   readonly status: AutoBootstrapStatus;

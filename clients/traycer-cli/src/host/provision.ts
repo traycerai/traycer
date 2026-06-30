@@ -26,10 +26,7 @@ import { assertHostNotBusy } from "./busy-check";
 // and `targetVersion` (null = presence-based) controls the fast no-op.
 
 export type HostProvisionAction =
-  | "noop"
-  | "installed"
-  | "service-registered"
-  | "started";
+  "noop" | "installed" | "service-registered" | "started";
 
 export interface HostProvisionServiceLifecycle {
   readonly priorServiceState: ServiceState;
