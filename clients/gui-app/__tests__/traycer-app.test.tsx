@@ -289,10 +289,11 @@ describe("<TraycerApp />", () => {
     expect(retry).not.toBeNull();
     fireEvent.click(retry);
 
-    // After a new signIn() the error is cleared and the button flips to
-    // "Signing in" again.
-    await screen.findByRole("button", { name: "Signing in" });
+    // After a new signIn() the error is cleared and the active approval panel
+    // takes over instead of showing a separate disabled "Signing in" button.
+    await screen.findByTestId("signin-device-progress");
     expect(screen.queryByTestId("signin-error")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Signing in" })).toBeNull();
   });
 
   it(

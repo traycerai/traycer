@@ -382,8 +382,27 @@ describe("<SignInButton />", () => {
     await waitFor(() => {
       expect(result.host.deviceFlow.startCalls).toBe(1);
     });
+    await screen.findByTestId("signin-device-progress");
+    expect(screen.queryByRole("button", { name: "Signing in" })).toBeNull();
+    fireEvent.click(screen.getByTestId("signin-device-fallback-trigger"));
     const code = await screen.findByTestId("signin-device-code");
     expect(code.textContent).toBe("ABCDE-FGHIJ");
+    expect(screen.getByTestId("signin-device-url").textContent).toBe(
+      "https://app.traycer.ai/device",
+    );
+    const writeText = vi.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Copy device code" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Copy approval address" }),
+    );
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith("ABCDE-FGHIJ");
+      expect(writeText).toHaveBeenCalledWith("https://app.traycer.ai/device");
+    });
     // There is no device-code fallback link anymore.
     expect(screen.queryByTestId("signin-device-code-link")).toBeNull();
     result.cleanupClient();
