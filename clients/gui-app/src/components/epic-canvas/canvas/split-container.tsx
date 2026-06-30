@@ -78,20 +78,7 @@ const SplitNodeView = memo(function SplitNodeView(props: SplitNodeViewProps) {
       data-split-id={node.id}
       data-axis={node.direction}
       className={cn(
-        // The split group fills its `relative` parent (TileCanvas for the root
-        // group, a `data-split-child` for nested groups) via `absolute inset-0`
-        // rather than `h-full`. This hands the group a definite height the
-        // instant its parent has a box, sidestepping the percentage-height
-        // cascade. With `h-full` the group's height is a percentage of an
-        // ancestor whose own height resolves lazily on a `display:none` ->
-        // visible reveal, and the split's flex children then resolve their
-        // cross-axis height inconsistently against it - one pane lands full, the
-        // other collapses to its content height (the xterm's default grid) and
-        // sticks until a manual relayout. It's a layout-engine race, not a
-        // static bug, so adding more percentage layers can't win it; an absolute
-        // box makes the container height non-lazy. This is the same `absolute
-        // inset-0` escape the terminal host and pane-tab-layer already use.
-        "absolute inset-0 flex min-h-0 min-w-0",
+        "flex h-full min-h-0 w-full min-w-0",
         horizontal ? "flex-row" : "flex-col",
       )}
     >

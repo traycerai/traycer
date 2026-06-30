@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
 import { EpicRouteSessionBody } from "@/components/epic-canvas/epic-route-session-body";
@@ -58,35 +58,97 @@ export function EpicTabHost(props: EpicTabHostProps) {
           tab.epicId === activeRoute.epicId;
         if (migrating && routeMatchesTab) return null;
         const isActive = routeMatchesTab;
-        const activeSearch = isActive ? activeRoute.search : null;
         return (
-          <div
+          <EpicTabPane
             key={tabId}
-            className={cn(
-              "absolute inset-0 isolate flex min-h-0 flex-col [contain:layout_paint_style]",
-              !isActive && "hidden",
-            )}
-            data-testid={`epic-pane-${tabId}`}
-            data-epic-id={tab.epicId}
-            data-active={isActive ? "true" : "false"}
-          >
-            <PaneVisibilityContext.Provider value={isActive}>
-              <EpicSessionProvider epicId={tab.epicId} tabId={tabId}>
-                <EpicRouteSessionBody
-                  epicId={tab.epicId}
-                  tabId={tabId}
-                  active={isActive}
-                  focusedAt={activeSearch?.focusedAt}
-                  focusArtifactId={activeSearch?.focusArtifactId}
-                  focusThreadId={activeSearch?.focusThreadId}
-                />
-              </EpicSessionProvider>
-            </PaneVisibilityContext.Provider>
-          </div>
+            tabId={tabId}
+            epicId={tab.epicId}
+            isActive={isActive}
+            activeSearch={isActive ? activeRoute.search : null}
+          />
         );
       })}
     </>
   );
+}
+
+interface EpicTabPaneProps {
+  readonly tabId: string;
+  readonly epicId: string;
+  readonly isActive: boolean;
+  readonly activeSearch: EpicFocusSearch | null;
+}
+
+/**
+ * One keep-alive epic pane. Inactive panes stay mounted but hidden with
+ * `display:none`; switching tabs is a visibility toggle.
+ *
+ * `useRevealReflow` repairs a layout-engine reveal race: on the
+ * `display:none` -> visible reveal, the canvas's split layout (a `flex-row` of
+ * `h-full` children) resolves its children's cross-axis height inconsistently
+ * against the not-yet-settled ancestor chain, so one split pane can collapse to
+ * its content height (the terminal sticks at its default 80x24 grid) and stay
+ * collapsed until a manual relayout. Re-toggling THIS element's `display` -
+ * exactly what a manual navigate-away-and-back does, and at the same level - is
+ * the known recovery. The descendant-level nudge (TileCanvas) was too low to
+ * re-resolve the whole chain; toggling the actual hidden element re-lays-out the
+ * full subtree. It is a forced reflow only, so it can never change the final
+ * layout (never regresses); the rAF pass covers the case where the subtree
+ * hadn't finished mounting on the synchronous pass.
+ */
+function EpicTabPane(props: EpicTabPaneProps) {
+  const { tabId, epicId, isActive, activeSearch } = props;
+  const ref = useRevealReflow(isActive);
+  return (
+    <div
+      ref={ref}
+      className={cn(
+        "absolute inset-0 isolate flex min-h-0 flex-col [contain:layout_paint_style]",
+        !isActive && "hidden",
+      )}
+      data-testid={`epic-pane-${tabId}`}
+      data-epic-id={epicId}
+      data-active={isActive ? "true" : "false"}
+    >
+      <PaneVisibilityContext.Provider value={isActive}>
+        <EpicSessionProvider epicId={epicId} tabId={tabId}>
+          <EpicRouteSessionBody
+            epicId={epicId}
+            tabId={tabId}
+            active={isActive}
+            focusedAt={activeSearch?.focusedAt}
+            focusArtifactId={activeSearch?.focusArtifactId}
+            focusThreadId={activeSearch?.focusThreadId}
+          />
+        </EpicSessionProvider>
+      </PaneVisibilityContext.Provider>
+    </div>
+  );
+}
+
+function useRevealReflow(isActive: boolean) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  useLayoutEffect(() => {
+    if (!isActive) return;
+    const el = ref.current;
+    if (el === null) return;
+    forceRevealReflow(el);
+    const raf = requestAnimationFrame(() => forceRevealReflow(el));
+    return () => cancelAnimationFrame(raf);
+  }, [isActive]);
+  return ref;
+}
+
+function forceRevealReflow(el: HTMLElement): void {
+  const previousDisplay = el.style.display;
+  // Detach from layout, flush, then re-attach and flush again: this discards the
+  // stale (collapsed) layout and re-resolves the subtree from scratch, the same
+  // way a `display:none` -> visible navigate-away-and-back does. `getBoundingClientRect`
+  // forces the synchronous layout flush each way.
+  el.style.display = "none";
+  el.getBoundingClientRect();
+  el.style.display = previousDisplay;
+  el.getBoundingClientRect();
 }
 
 /**

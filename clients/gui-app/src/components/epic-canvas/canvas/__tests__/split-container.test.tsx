@@ -50,14 +50,6 @@ describe("SplitContainer split-child height contract", () => {
       />,
     );
 
-    // The split group fills its parent via `absolute inset-0` (definite height
-    // on reveal) instead of `h-full`, so the children don't lose the
-    // percentage-height race on a display:none -> visible reveal.
-    const groupEl = container.querySelector('[data-testid="tile-split"]');
-    expect(groupEl).not.toBeNull();
-    expect(groupEl?.classList.contains("absolute")).toBe(true);
-    expect(groupEl?.classList.contains("inset-0")).toBe(true);
-
     const children = container.querySelectorAll("[data-split-child]");
     expect(children).toHaveLength(2);
     for (const child of children) {
