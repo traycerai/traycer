@@ -71,8 +71,7 @@ export interface AddArtifactDropdownProps {
    * dropdown cleanup cannot clear the binding before the dispatcher sees it.
    */
   onAddTerminalAgent:
-    | ((input: TerminalAgentWorktreeCreateInput) => void)
-    | undefined;
+    ((input: TerminalAgentWorktreeCreateInput) => void) | undefined;
   /**
    * Optional seed copied from the latest chat's visible workspace binding.
    * Terminal-agent submenu uses it both for the initial folder rows and for the

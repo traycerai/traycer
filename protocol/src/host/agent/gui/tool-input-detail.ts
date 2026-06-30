@@ -185,10 +185,16 @@ export function deriveToolInputDetail(
         };
   }
 
+  const metadata = asRecord(record["metadata"]);
   const command =
     asString(record["command"]) ??
     asString(record["cmd"]) ??
-    asString(record["script"]);
+    asString(record["script"]) ??
+    (metadata === null
+      ? null
+      : (asString(metadata["command"]) ??
+        asString(metadata["cmd"]) ??
+        asString(metadata["script"])));
   if (command !== null) return { kind: "command", command };
 
   const name = toolName.toLowerCase();

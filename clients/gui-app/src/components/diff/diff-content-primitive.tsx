@@ -24,8 +24,7 @@ export interface DiffContentFrameProps {
   readonly sizing: "fill" | "content";
   readonly banner: ReactNode | null;
   readonly scrollContainerRef:
-    | ((element: HTMLDivElement | null) => void)
-    | null;
+    ((element: HTMLDivElement | null) => void) | null;
   readonly onScroll: ((event: UIEvent<HTMLDivElement>) => void) | null;
   readonly children: ReactNode;
 }

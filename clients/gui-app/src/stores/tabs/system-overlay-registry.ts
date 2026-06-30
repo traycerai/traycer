@@ -101,8 +101,7 @@ export function routeIntentViaModalBridge(
     readonly openHistory: () => void;
     readonly openSettings: (opts: {
       readonly section:
-        | import("@/lib/settings-sections").SettingsSectionId
-        | null;
+        import("@/lib/settings-sections").SettingsSectionId | null;
       readonly resetToGeneral: boolean;
     }) => void;
   },

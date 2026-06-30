@@ -2783,8 +2783,7 @@ function planContentIdentity(
 
 function blockToSegment(block: ContentBlock): MessageSegment | null {
   const handler = BLOCK_HANDLERS[block.type] as
-    | ((b: ContentBlock) => Omit<MessageSegment, "id"> | null)
-    | undefined;
+    ((b: ContentBlock) => Omit<MessageSegment, "id"> | null) | undefined;
   if (handler === undefined) {
     // Forward-compat: a newer host may emit a block.type the current GUI
     // bundle does not know about. Drop it instead of crashing the chat.

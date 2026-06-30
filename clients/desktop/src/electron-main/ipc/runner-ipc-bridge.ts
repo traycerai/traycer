@@ -247,8 +247,7 @@ export interface RunnerIpcRegistryOptions {
 }
 
 export type RunnerIpcBridgeOptions =
-  | RunnerIpcOptions
-  | RunnerIpcRegistryOptions;
+  RunnerIpcOptions | RunnerIpcRegistryOptions;
 
 interface FreshSnapshotWaiter {
   readonly windowId: string;

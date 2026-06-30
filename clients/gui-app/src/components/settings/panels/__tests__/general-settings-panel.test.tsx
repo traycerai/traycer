@@ -125,22 +125,20 @@ const runnerHostMock = vi.hoisted((): { current: TestRunnerHost } => ({
   current: { hostManagement: null },
 }));
 
-const hostQueryMocks = vi.hoisted(
-  (): HostQueryMocks => ({
-    queryResult: {
-      data: { bytes: 432 * 1024 * 1024 },
-      isPending: false,
-      isError: false,
-    },
-    mutationResult: {
-      mutate: vi.fn(),
-      isPending: false,
-    },
-    capturedQueryArgs: null,
-    capturedMutationArgs: null,
-    getActiveHostId: vi.fn(() => "host-test"),
-  }),
-);
+const hostQueryMocks = vi.hoisted((): HostQueryMocks => ({
+  queryResult: {
+    data: { bytes: 432 * 1024 * 1024 },
+    isPending: false,
+    isError: false,
+  },
+  mutationResult: {
+    mutate: vi.fn(),
+    isPending: false,
+  },
+  capturedQueryArgs: null,
+  capturedMutationArgs: null,
+  getActiveHostId: vi.fn(() => "host-test"),
+}));
 
 vi.mock("@/components/migration/migration-run-handle", () => ({
   startMigrationRun: () => {

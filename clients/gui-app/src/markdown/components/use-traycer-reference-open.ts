@@ -19,8 +19,7 @@ import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
  * the chip to inert text rather than a dead click.
  */
 export type TraycerReferenceOpenHandler =
-  | ((event: MouseEvent<HTMLElement>) => void)
-  | null;
+  ((event: MouseEvent<HTMLElement>) => void) | null;
 
 /**
  * What a click on the reference should do, resolved once in render:

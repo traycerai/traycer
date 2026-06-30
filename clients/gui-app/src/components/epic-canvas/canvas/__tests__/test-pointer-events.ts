@@ -16,10 +16,7 @@ export interface PointerEventOptions {
 }
 
 export type PointerEventType =
-  | "pointerdown"
-  | "pointermove"
-  | "pointerup"
-  | "pointercancel";
+  "pointerdown" | "pointermove" | "pointerup" | "pointercancel";
 
 export function pointerEvent(
   type: PointerEventType,

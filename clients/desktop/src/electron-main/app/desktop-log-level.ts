@@ -43,12 +43,7 @@ function getStore() {
 // electron-log's level vocabulary differs slightly from ours: `trace` maps to
 // its most-verbose `silly`; the rest line up one-to-one.
 type ElectronLogLevel =
-  | "error"
-  | "warn"
-  | "info"
-  | "verbose"
-  | "debug"
-  | "silly";
+  "error" | "warn" | "info" | "verbose" | "debug" | "silly";
 const ELECTRON_LOG_LEVEL: Record<LogLevel, ElectronLogLevel> = {
   trace: "silly",
   debug: "debug",

@@ -21,9 +21,7 @@ import type { StateSnapshot } from "react-virtuoso";
  * exactly the fields it can restore from.
  */
 export type TileScrollAnchor =
-  | ChatScrollAnchor
-  | NativeScrollAnchor
-  | BundleDiffScrollAnchor;
+  ChatScrollAnchor | NativeScrollAnchor | BundleDiffScrollAnchor;
 
 /**
  * Chat transcript anchor. `followingBottom` is the reader's pin intent: when

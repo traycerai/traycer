@@ -80,10 +80,16 @@ function summarizeUrl(record: Record<string, unknown>): string | null {
 }
 
 function summarizeCommand(record: Record<string, unknown>): string | null {
+  const metadata = asRecord(record["metadata"]);
   const cmd =
     asString(record["command"]) ??
     asString(record["cmd"]) ??
-    asString(record["script"]);
+    asString(record["script"]) ??
+    (metadata === null
+      ? null
+      : (asString(metadata["command"]) ??
+        asString(metadata["cmd"]) ??
+        asString(metadata["script"])));
   if (cmd === null) return null;
   return trim(cmd);
 }
@@ -113,14 +119,19 @@ function summarizeCommentThreadStatus(
   let threadCount = 0;
   let status: string | null = null;
   for (const update of updates) {
-    if (update === null || typeof update !== "object" || Array.isArray(update)) {
+    if (
+      update === null ||
+      typeof update !== "object" ||
+      Array.isArray(update)
+    ) {
       continue;
     }
     const updateRecord = update as Record<string, unknown>;
     const threadIds = updateRecord["threadIds"];
     if (Array.isArray(threadIds)) {
-      threadCount += threadIds.filter((value) => typeof value === "string")
-        .length;
+      threadCount += threadIds.filter(
+        (value) => typeof value === "string",
+      ).length;
     }
     status ??= asString(updateRecord["status"]);
   }

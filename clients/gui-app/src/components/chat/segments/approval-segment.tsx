@@ -10,6 +10,7 @@ import { ToolInputPanel } from "./tool-input-panel";
 interface ResolvedApprovalSegmentProps {
   toolName: string | null;
   description: string | null;
+  inputSummary: string | null;
   // Precomputed expand body for the pending tool's input (raw input not stored).
   inputDetail: ToolInputDetail | null;
   decision: ApprovalDecision;
@@ -23,10 +24,23 @@ interface ResolvedApprovalSegmentProps {
  * `isWorkStep`), so this component does not accept Approve/Deny callbacks.
  */
 export function ResolvedApprovalSegment(props: ResolvedApprovalSegmentProps) {
-  const { toolName, description, inputDetail, decision, variant } = props;
+  const {
+    toolName,
+    description,
+    inputSummary,
+    inputDetail,
+    decision,
+    variant,
+  } = props;
   const [open, setOpen] = useState<boolean>(false);
   const label = toolName ?? description ?? "approval";
-  const header = <ResolvedApprovalHeader label={label} decision={decision} />;
+  const header = (
+    <ResolvedApprovalHeader
+      label={label}
+      inputSummary={inputSummary}
+      decision={decision}
+    />
+  );
   const body = (
     <ResolvedApprovalBody
       description={description}
@@ -70,9 +84,10 @@ export function ResolvedApprovalSegment(props: ResolvedApprovalSegmentProps) {
 
 function ResolvedApprovalHeader(props: {
   label: string;
+  inputSummary: string | null;
   decision: ApprovalDecision;
 }) {
-  const { label, decision } = props;
+  const { label, inputSummary, decision } = props;
   const verdictLabel = decision.approved ? "Approved" : "Denied";
   const VerdictIcon = decision.approved ? Check : X;
   return (
@@ -95,9 +110,21 @@ function ResolvedApprovalHeader(props: {
       <span aria-hidden className="shrink-0 text-muted-foreground/40">
         ·
       </span>
-      <span className="min-w-0 flex-1 truncate font-mono text-code-sm text-muted-foreground">
+      <span className="shrink-0 font-mono text-code-sm text-muted-foreground">
         {label}
       </span>
+      {inputSummary !== null ? (
+        <>
+          <span aria-hidden className="shrink-0 text-muted-foreground/40">
+            ·
+          </span>
+          <span className="min-w-0 flex-1 truncate font-mono text-code-sm text-muted-foreground">
+            {inputSummary}
+          </span>
+        </>
+      ) : (
+        <span aria-hidden className="flex-1" />
+      )}
       {!decision.approved && decision.reason !== null ? (
         <span
           className="@max-[28rem]:hidden shrink-0 truncate text-ui-xs text-destructive/80"

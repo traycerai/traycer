@@ -608,6 +608,7 @@ function ApprovalSegmentCard({
     <ResolvedApprovalSegment
       toolName={segment.toolName}
       description={segment.description}
+      inputSummary={segment.inputSummary}
       inputDetail={segment.inputDetail}
       decision={segment.decision}
       variant="card"
