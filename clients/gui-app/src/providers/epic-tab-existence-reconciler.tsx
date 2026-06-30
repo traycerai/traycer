@@ -1,24 +1,56 @@
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
-import { useHostClient, useHostCompatibility } from "@/lib/host";
-import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import {
-  fetchExistingEpicIds,
-  missingEpicIds,
-} from "@/lib/epics/epic-tab-existence";
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
+import {
+  CURRENT_EPIC_VERSION,
+  CURRENT_PHASE_VERSION,
+} from "@traycer-clients/shared/epic/epic-version";
+import type { ListTasksResponse } from "@traycer/protocol/host/epic/unary-schemas";
+import {
+  useHostClient,
+  useHostCompatibility,
+  type HostRpcRegistry,
+} from "@/lib/host";
+import { useHostQuery } from "@/hooks/host/use-host-query";
+import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
+import { missingEpicIds } from "@/lib/epics/epic-tab-existence";
 import { useWindowsBridgeHydrated } from "@/providers/windows-bridge-context";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
-  collectOpenEpicIds,
   useEpicCanvasStore,
+  useOpenEpicTabs,
 } from "@/stores/epics/canvas/store";
+import type { EpicViewTab } from "@/stores/epics/canvas/types";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 
+const EPIC_TAB_RECONCILE_PAGE_LIMIT = 100;
+const EMPTY_EXISTING_EPIC_IDS: ReadonlyArray<string> = [];
+
 export function EpicTabExistenceReconciler() {
-  useReconcilePersistedEpicTabs();
-  return null;
+  const seed = usePersistedEpicTabReconcileSeed();
+  if (seed === null) return null;
+  return <EpicTabReconciliationRun key={seed.identity} seed={seed} />;
 }
 
-function useReconcilePersistedEpicTabs(): void {
+interface ReconcileSeed {
+  readonly identity: string;
+  readonly openEpicIds: ReadonlyArray<string>;
+}
+
+interface ReconcileRun extends ReconcileSeed {
+  readonly attempt: number;
+}
+
+interface ReconcilePage {
+  readonly existingEpicIds: ReadonlyArray<string>;
+  readonly cursor: string | undefined;
+}
+
+function usePersistedEpicTabReconcileSeed(): ReconcileSeed | null {
   const client = useHostClient();
   const compatibility = useHostCompatibility();
   const readiness = useReactiveHostReadiness(client);
@@ -28,7 +60,11 @@ function useReconcilePersistedEpicTabs(): void {
     (state) => state.contextMetadata?.userId ?? null,
   );
   const canvasHydrationVersion = useEpicCanvasHydrationVersion();
-  const [reconciledIdentities] = useState(() => new Set<string>());
+  const openEpicTabs = useOpenEpicTabs();
+  const openEpicIds = useMemo(
+    () => collectEpicIds(openEpicTabs),
+    [openEpicTabs],
+  );
 
   const identity = useMemo(() => {
     if (!windowsHydrated) return null;
@@ -48,41 +84,129 @@ function useReconcilePersistedEpicTabs(): void {
     windowsHydrated,
   ]);
 
-  useEffect(() => {
-    if (identity === null) return;
-    if (reconciledIdentities.has(identity)) return;
-    reconciledIdentities.add(identity);
+  return useMemo(() => {
+    if (identity === null) return null;
+    if (openEpicIds.length === 0) return null;
+    return { identity, openEpicIds };
+  }, [identity, openEpicIds]);
+}
 
-    const openEpicIds = collectOpenEpicIds();
-    if (openEpicIds.length === 0) return;
+let nextReconcileAttempt = 0;
 
-    let cancelled = false;
-    let settled = false;
-    void fetchExistingEpicIds(client)
-      .then((existingEpicIds) => {
-        settled = true;
-        if (cancelled) return;
-        const staleEpicIds = missingEpicIds(openEpicIds, existingEpicIds);
-        if (staleEpicIds.length === 0) return;
-        useComposerRunSettingsStore
-          .getState()
-          .clearEpicRunSettings(staleEpicIds);
-        useEpicCanvasStore.getState().closeTabsForEpics(staleEpicIds);
-      })
-      .catch(() => {
-        settled = true;
-        if (!cancelled) {
-          reconciledIdentities.delete(identity);
-        }
-      });
-
-    return () => {
-      cancelled = true;
-      if (!settled) {
-        reconciledIdentities.delete(identity);
-      }
+function EpicTabReconciliationRun(props: { readonly seed: ReconcileSeed }) {
+  const [run] = useState<ReconcileRun>(() => {
+    nextReconcileAttempt += 1;
+    return {
+      ...props.seed,
+      attempt: nextReconcileAttempt,
     };
-  }, [client, identity, reconciledIdentities]);
+  });
+
+  return (
+    <EpicTabReconciliationPage
+      run={run}
+      page={{
+        existingEpicIds: EMPTY_EXISTING_EPIC_IDS,
+        cursor: undefined,
+      }}
+    />
+  );
+}
+
+function EpicTabReconciliationPage(props: {
+  readonly run: ReconcileRun;
+  readonly page: ReconcilePage;
+}) {
+  const client = useHostClient();
+  const completionAppliedRef = useRef(false);
+  const reconcileParams = useMemo(
+    () => ({
+      limit: EPIC_TAB_RECONCILE_PAGE_LIMIT,
+      cursor: props.page.cursor,
+      filters: { taskType: "epic" as const },
+      extensionPhaseVersion: String(CURRENT_PHASE_VERSION),
+      extensionEpicVersion: String(CURRENT_EPIC_VERSION),
+    }),
+    [props.page.cursor],
+  );
+  const existingEpicsQuery = useHostQuery<HostRpcRegistry, "epic.listTasks">({
+    client,
+    method: "epic.listTasks",
+    params: reconcileParams,
+    cacheKeyIdentity: [props.run.identity, props.run.attempt],
+    options: {
+      enabled: true,
+    },
+  });
+  const nextPage = useMemo((): ReconcilePage | null => {
+    if (!existingEpicsQuery.isSuccess) return null;
+    const existingEpicIds = mergeExistingEpicIds(
+      props.page.existingEpicIds,
+      existingEpicsQuery.data,
+    );
+    const cursor = nextReconcileCursor(existingEpicsQuery.data);
+    return { existingEpicIds, cursor: cursor ?? undefined };
+  }, [
+    existingEpicsQuery.data,
+    existingEpicsQuery.isSuccess,
+    props.page.existingEpicIds,
+  ]);
+  const terminalExistingEpicIds =
+    nextPage !== null && nextPage.cursor === undefined
+      ? nextPage.existingEpicIds
+      : null;
+
+  useEffect(() => {
+    if (terminalExistingEpicIds === null) return;
+    if (completionAppliedRef.current) return;
+    completionAppliedRef.current = true;
+    const staleEpicIds = missingEpicIds(
+      props.run.openEpicIds,
+      new Set(terminalExistingEpicIds),
+    );
+    if (staleEpicIds.length > 0) {
+      useComposerRunSettingsStore.getState().clearEpicRunSettings(staleEpicIds);
+      useEpicCanvasStore.getState().closeTabsForEpics(staleEpicIds);
+    }
+  }, [props.run.openEpicIds, terminalExistingEpicIds]);
+
+  if (nextPage === null) return null;
+  if (nextPage.cursor === undefined) return null;
+
+  return <EpicTabReconciliationPage run={props.run} page={nextPage} />;
+}
+
+function mergeExistingEpicIds(
+  previousIds: ReadonlyArray<string>,
+  page: ListTasksResponse,
+): ReadonlyArray<string> {
+  return Array.from(
+    new Set([
+      ...previousIds,
+      ...page.tasks.flatMap((task) => {
+        const epicId = task.epic?.light?.id ?? null;
+        return epicId === null ? [] : [epicId];
+      }),
+    ]),
+  );
+}
+
+function nextReconcileCursor(page: ListTasksResponse): string | null {
+  if (!page.hasMore) return null;
+  if (typeof page.nextCursor !== "string") return null;
+  if (page.nextCursor.length === 0) return null;
+  return page.nextCursor;
+}
+
+function collectEpicIds(
+  tabs: ReadonlyArray<EpicViewTab>,
+): ReadonlyArray<string> {
+  const seen = new Set<string>();
+  return tabs.flatMap((tab) => {
+    if (seen.has(tab.epicId)) return [];
+    seen.add(tab.epicId);
+    return [tab.epicId];
+  });
 }
 
 function useEpicCanvasHydrationVersion(): number {

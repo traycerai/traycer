@@ -6,6 +6,7 @@ import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import {
   HostRpcError,
+  type RequestOfMethod,
   type ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { LocalHostSnapshot } from "@traycer-clients/shared/platform/runner-host";
@@ -21,7 +22,10 @@ import { EpicTabExistenceReconciler } from "@/providers/epic-tab-existence-recon
 import { HarnessCatalogPrefetcher } from "@/providers/harness-catalog-prefetcher";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import {
+  collectOpenEpicIds,
+  useEpicCanvasStore,
+} from "@/stores/epics/canvas/store";
 
 const STARTUP_EPIC_ID = "epic-startup-compat";
 
@@ -36,6 +40,7 @@ const localSnapshot: LocalHostSnapshot = {
 
 type HostStatusResponse = ResponseOfMethod<HostRpcRegistry, "host.status">;
 type ListTasksResponse = ResponseOfMethod<HostRpcRegistry, "epic.listTasks">;
+type ListTasksRequest = RequestOfMethod<HostRpcRegistry, "epic.listTasks">;
 type ListHarnessesResponse = ResponseOfMethod<
   HostRpcRegistry,
   "agent.gui.listHarnesses"
@@ -48,7 +53,9 @@ interface Deferred<T> {
 
 interface StartupConsumersOptions {
   readonly hostStatus: () => Promise<HostStatusResponse> | HostStatusResponse;
-  readonly listTasks: () => Promise<ListTasksResponse> | ListTasksResponse;
+  readonly listTasks: (
+    params: ListTasksRequest,
+  ) => Promise<ListTasksResponse> | ListTasksResponse;
   readonly listHarnesses: () =>
     Promise<ListHarnessesResponse> | ListHarnessesResponse;
   readonly onMethod: (method: string) => void;
@@ -98,9 +105,9 @@ function buildMessengerFactory(
           options.onMethod("host.status");
           return options.hostStatus();
         },
-        "epic.listTasks": () => {
+        "epic.listTasks": (params) => {
           options.onMethod("epic.listTasks");
-          return options.listTasks();
+          return options.listTasks(params);
         },
         "agent.gui.listHarnesses": () => {
           options.onMethod("agent.gui.listHarnesses");
@@ -174,6 +181,31 @@ function getCompatibilityStatusText(): string | null {
   return screen.getByRole("status", {
     name: "Host compatibility status",
   }).textContent;
+}
+
+function epicTask(epicId: string): ListTasksResponse["tasks"][number] {
+  return {
+    epic: {
+      light: {
+        id: epicId,
+        title: epicId,
+        initialUserPrompt: "",
+        ticketCount: 0,
+        specCount: 0,
+        storyCount: 0,
+        reviewCount: 0,
+        status: "active",
+        createdAt: 0,
+        updatedAt: 0,
+        createdBy: "test",
+        version: "2.0.0",
+      },
+      permission: null,
+      repos: [],
+      workspaces: [],
+      roomInfo: null,
+    },
+  };
 }
 
 function installAuthFetch(): () => void {
@@ -254,7 +286,7 @@ describe("HostCompatibilityProvider startup consumers", () => {
   it("holds startup host RPC consumers until host.status succeeds", async () => {
     const hostStatus = createDeferred<HostStatusResponse>();
     const methods: string[] = [];
-    const listTasks = vi.fn((): ListTasksResponse => ({
+    const listTasks = vi.fn((_params: ListTasksRequest): ListTasksResponse => ({
       tasks: [],
       hasMore: false,
     }));
@@ -299,7 +331,7 @@ describe("HostCompatibilityProvider startup consumers", () => {
 
   it("does not start startup host RPC consumers after an incompatible status verdict", async () => {
     const methods: string[] = [];
-    const listTasks = vi.fn((): ListTasksResponse => ({
+    const listTasks = vi.fn((_params: ListTasksRequest): ListTasksResponse => ({
       tasks: [],
       hasMore: false,
     }));
@@ -334,7 +366,7 @@ describe("HostCompatibilityProvider startup consumers", () => {
 
   it("surfaces exhausted non-terminal status probe failures without starting startup consumers", async () => {
     const methods: string[] = [];
-    const listTasks = vi.fn((): ListTasksResponse => ({
+    const listTasks = vi.fn((_params: ListTasksRequest): ListTasksResponse => ({
       tasks: [],
       hasMore: false,
     }));
@@ -367,10 +399,42 @@ describe("HostCompatibilityProvider startup consumers", () => {
     queryClient.clear();
   });
 
+  it("fetches every reconciliation page before pruning persisted epic tabs", async () => {
+    const methods: string[] = [];
+    const listTasks = vi.fn((params: ListTasksRequest): ListTasksResponse =>
+      params.cursor === undefined
+        ? { tasks: [], hasMore: true, nextCursor: "page-2" }
+        : { tasks: [epicTask(STARTUP_EPIC_ID)], hasMore: false },
+    );
+    const listHarnesses = vi.fn((): ListHarnessesResponse => ({
+      harnesses: [],
+    }));
+    const { queryClient } = mountStartupConsumers({
+      hostStatus: () => compatibleHostStatus,
+      listTasks,
+      listHarnesses,
+      onMethod: (method) => {
+        methods.push(method);
+      },
+    });
+
+    await waitFor(() => {
+      expect(listTasks).toHaveBeenCalledTimes(2);
+    });
+    expect(
+      listTasks.mock.calls.map(([params]) => params.cursor ?? null),
+    ).toEqual([null, "page-2"]);
+    expect(collectOpenEpicIds()).toContain(STARTUP_EPIC_ID);
+    expect(methods[0]).toBe("host.status");
+    queryClient.clear();
+  });
+
   it("retries tab reconciliation after an in-flight compatibility interruption", async () => {
     const listTasksDeferred = createDeferred<ListTasksResponse>();
     const methods: string[] = [];
-    const listTasks = vi.fn(() => listTasksDeferred.promise);
+    const listTasks = vi.fn(
+      (_params: ListTasksRequest) => listTasksDeferred.promise,
+    );
     const listHarnesses = vi.fn((): ListHarnessesResponse => ({
       harnesses: [],
     }));
