@@ -2,8 +2,10 @@ import { CheckCheck, RotateCw, XCircle } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import type { AutonomousResumeTrigger } from "@traycer/protocol/persistence/epic/content-blocks";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { useScrollToChatBlock } from "@/components/chat/chat-scroll-to-block";
 import { useHostQuery } from "@/hooks/host/use-host-query";
-import { useHostClient, type HostRpcRegistry } from "@/lib/host";
+import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
+import type { HostRpcRegistry } from "@/lib/host";
 import { formatSingleLine } from "@/lib/utils";
 import { AgentReferenceMarkdown } from "./agent-reference-markdown";
 import { SegmentCard } from "./segment-card";
@@ -66,6 +68,7 @@ function ResumeCompletionCard(props: {
 }) {
   const { trigger } = props;
   const [open, setOpen] = useState(false);
+  const scrollToBlock = useScrollToChatBlock();
 
   const title = formatSingleLine(trigger.title, {
     maxLength: 60,
@@ -108,7 +111,12 @@ function ResumeCompletionCard(props: {
     <div className="w-full max-w-[min(100%,48rem)]">
       <SegmentCard
         open={open}
-        onOpenChange={setOpen}
+        onOpenChange={(next) => {
+          setOpen(next);
+          if (next && scrollToBlock !== null) {
+            scrollToBlock(trigger.blockId, resumeScrollCardKind(trigger.kind));
+          }
+        }}
         header={header}
         headerAction={null}
         collapsedPreview={preview}
@@ -163,6 +171,12 @@ function resumeKindTitle(kind: AutonomousResumeTrigger["kind"]): string {
     case "subagent":
       return "Subagent";
   }
+}
+
+function resumeScrollCardKind(
+  kind: AutonomousResumeTrigger["kind"],
+): "subagent" | "tool" {
+  return kind === "subagent" ? "subagent" : "tool";
 }
 
 function ResumeResultPanel(props: { readonly result: string }) {
@@ -291,7 +305,7 @@ function useResumeOutputFileQuery(
   outputFile: NonNullable<AutonomousResumeTrigger["outputFile"]>,
   enabled: boolean,
 ) {
-  const client = useHostClient();
+  const client = useTabHostClient();
   return useHostQuery<HostRpcRegistry, "workspace.readFile">({
     client,
     method: "workspace.readFile",

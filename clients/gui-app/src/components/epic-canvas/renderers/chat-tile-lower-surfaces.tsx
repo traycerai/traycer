@@ -55,6 +55,8 @@ export interface ChatLowerInteractionSurfacesProps {
   readonly todo: PinnedTodoSnapshot | null;
   readonly restoreContext: ChatRestoreContextValue;
   readonly backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
+  readonly backgroundStopPendingTaskIds: ReadonlySet<string>;
+  readonly backgroundStopAllPending: boolean;
   readonly onBackgroundItemClick: (item: BackgroundItem) => void;
 }
 
@@ -288,6 +290,8 @@ export function ChatLowerInteractionSurfaces(
         restore={props.restoreContext}
         queue={props.queue.value}
         backgroundItems={props.backgroundItems}
+        backgroundStopPendingTaskIds={props.backgroundStopPendingTaskIds}
+        backgroundStopAllPending={props.backgroundStopAllPending}
         activeTurnStatus={props.turn.activeTurnStatus}
         canAct={props.access.canAct}
         readOnly={props.access.isViewer}

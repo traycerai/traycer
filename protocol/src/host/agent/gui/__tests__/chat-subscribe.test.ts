@@ -3,7 +3,7 @@ import {
   chatQueuedItemSchema,
   chatSubscribeClientFrameSchema,
   chatSubscribeServerFrameSchema,
-  chatSubscribeV10,
+  chatSubscribeV20,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import { getRecordSchema } from "@traycer/protocol/framework/index";
 import type {
@@ -62,19 +62,19 @@ const event: ChatEvent = {
   metadata: null,
 };
 
-describe("chat.subscribe@1.0 open request", () => {
+describe("chat.subscribe@2.0 open request", () => {
   it("requires an epicId and chatId", () => {
-    const parsed = chatSubscribeV10.openRequestSchema.parse({
+    const parsed = chatSubscribeV20.openRequestSchema.parse({
       epicId: "epic-1",
       chatId: "chat-1",
     });
 
     expect(parsed).toEqual({ epicId: "epic-1", chatId: "chat-1" });
-    expect(() => chatSubscribeV10.openRequestSchema.parse({})).toThrow();
+    expect(() => chatSubscribeV20.openRequestSchema.parse({})).toThrow();
   });
 });
 
-describe("chat.subscribe@1.0 server frames", () => {
+describe("chat.subscribe@2.0 server frames", () => {
   it("parses queued steer-requested items with durable steer metadata", () => {
     const parsed = chatQueuedItemSchema.parse({
       queueItemId: "queue-1",
@@ -171,10 +171,7 @@ describe("chat.subscribe@1.0 server frames", () => {
       taskId: "task-1",
       kind: "command",
       title: "bun test",
-      status: "running",
-      toolUseId: "tool-1",
       blockId: "tool-1",
-      startedAt: 1007,
     };
     const snapshot = chatSubscribeServerFrameSchema.parse({
       kind: "snapshot",
@@ -447,7 +444,7 @@ describe("chat.subscribe@1.0 server frames", () => {
   });
 });
 
-describe("chat.subscribe@1.0 client frames", () => {
+describe("chat.subscribe@2.0 client frames", () => {
   it("requires clientActionId on owner action frames", () => {
     expect(
       chatSubscribeClientFrameSchema.parse({

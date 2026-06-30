@@ -24,6 +24,8 @@ export interface ChatLowerDockProps {
   readonly restore: ChatRestoreContextValue;
   readonly queue: ChatSessionState["queue"];
   readonly backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
+  readonly backgroundStopPendingTaskIds: ReadonlySet<string>;
+  readonly backgroundStopAllPending: boolean;
   readonly activeTurnStatus: ChatActiveTurn["status"] | null;
   readonly canAct: boolean;
   readonly readOnly: boolean;
@@ -167,6 +169,8 @@ function BackgroundSection(props: {
       items={items}
       canAct={dock.canAct}
       readOnly={dock.readOnly}
+      pendingStopTaskIds={dock.backgroundStopPendingTaskIds}
+      stopAllPending={dock.backgroundStopAllPending}
       scrollRegionMaxHeightClass={dock.scrollRegionMaxHeightClass}
       separated={props.separated}
       onItemClick={dock.onBackgroundItemClick}

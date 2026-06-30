@@ -64,10 +64,27 @@ function BackgroundStopButton(props: {
   );
 }
 
+// Collapse the host list to one row per task id. The host broadcasts a
+// running-only list and removes an item atomically at its terminal, so this is
+// a defensive guard: a transient duplicate (same `taskId`) must not render two
+// rows with the same React key or two stop affordances for one task.
+function dedupeByTaskId(
+  items: ReadonlyArray<BackgroundItem>,
+): ReadonlyArray<BackgroundItem> {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    if (seen.has(item.taskId)) return false;
+    seen.add(item.taskId);
+    return true;
+  });
+}
+
 export function BackgroundItemsPanel(props: {
   readonly items: ReadonlyArray<BackgroundItem>;
   readonly canAct: boolean;
   readonly readOnly: boolean;
+  readonly pendingStopTaskIds: ReadonlySet<string>;
+  readonly stopAllPending: boolean;
   readonly scrollRegionMaxHeightClass: string;
   readonly separated: boolean;
   readonly onItemClick: (item: BackgroundItem) => void;
@@ -76,6 +93,10 @@ export function BackgroundItemsPanel(props: {
 }) {
   const [open, setOpen] = useState(false);
   const stoppable = props.canAct && !props.readOnly;
+  const items = dedupeByTaskId(props.items);
+  // While a "Stop all" is in flight every Stop is disabled; otherwise a row is
+  // disabled only while its own task's stop is pending.
+  const stopAllDisabled = !stoppable || props.stopAllPending;
 
   return (
     <Collapsible
@@ -109,14 +130,14 @@ export function BackgroundItemsPanel(props: {
             ·
           </span>
           <span className="min-w-0 flex-1 truncate text-ui-xs text-muted-foreground">
-            {props.items.length} running
+            {items.length} running
           </span>
         </CollapsibleTrigger>
         <div className="flex shrink-0 items-center gap-1 pr-1.5">
           <BackgroundStopButton
             label="Stop all"
             iconOnly={false}
-            disabled={!stoppable}
+            disabled={stopAllDisabled}
             testId="background-stop-all"
             onClick={props.onStopAll}
           />
@@ -131,7 +152,7 @@ export function BackgroundItemsPanel(props: {
           )}
         >
           <ul className="m-0 flex list-none flex-col gap-0.5 p-1.5">
-            {props.items.map((item) => (
+            {items.map((item) => (
               <li
                 key={item.taskId}
                 className="group flex min-w-0 items-center gap-2 rounded-md px-2 hover:bg-muted/40"
@@ -154,7 +175,10 @@ export function BackgroundItemsPanel(props: {
                   <BackgroundStopButton
                     label={`Stop ${backgroundKindLabel(item.kind)}`}
                     iconOnly
-                    disabled={!stoppable}
+                    disabled={
+                      stopAllDisabled ||
+                      props.pendingStopTaskIds.has(item.taskId)
+                    }
                     testId={undefined}
                     onClick={() => props.onStopItem(item.taskId)}
                   />

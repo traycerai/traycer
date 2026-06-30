@@ -434,7 +434,9 @@ export type AutonomousResumeTrigger = z.infer<
 // the turn resumed (which backgrounded command/Monitor/subagent completed). The
 // turn carries no user message, so without this the resume looks abrupt. Usually
 // one trigger; can be several if multiple settled while idle before the model
-// woke. Additive union member; older GUI bundles drop unknown block kinds.
+// woke. This block is surfaced through `chat.subscribe@2.0`; older 1.x stream
+// clients must upgrade instead of receiving an unknown discriminated-union
+// variant they cannot parse.
 export const autonomousResumeBlockSchema = z.object({
   ...baseBlockFields,
   type: z.literal("autonomous_resume"),

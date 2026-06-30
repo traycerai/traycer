@@ -1,5 +1,5 @@
 /**
- * `chat.subscribe@1.0` - versioned streaming-RPC contract for a single
+ * `chat.subscribe@2.0` - versioned streaming-RPC contract for a single
  * host-owned GUI chat session.
  *
  * This stream is intentionally text-frame-only. The existing `epic.subscribe`
@@ -148,34 +148,25 @@ export const backgroundItemKindSchema = z.enum([
 ]);
 export type BackgroundItemKind = z.infer<typeof backgroundItemKindSchema>;
 
-export const backgroundItemStatusSchema = z.enum([
-  "running",
-  "completed",
-  "failed",
-  "stopped",
-]);
-export type BackgroundItemStatus = z.infer<typeof backgroundItemStatusSchema>;
-
 /**
- * One in-flight (or just-settled) background work item in this chat - a
- * backgrounded subagent, a `run_in_background` command, or a Monitor. The host
- * is the only correctness source for the *running* set: a background command's
- * `tool_call` block finalizes at turn end, so the renderer cannot tell "running"
- * from "done" itself. Surfaced so the renderer can list running items above the
- * composer, scroll to / expand the originating card, and stop them.
+ * One currently-running background work item in this chat - a backgrounded
+ * subagent, a `run_in_background` command, or a Monitor. The host is the only
+ * correctness source for the running set: it removes an item in the same update
+ * cycle that finalizes the originating transcript card. Surfaced so the
+ * renderer can list running items above the composer, scroll to / expand the
+ * originating card, and stop them.
  *
  * `taskId` is the SDK task id - the stop handle and identity. `blockId` is the
  * rendered card's block id (a subagent's `blockId` equals its `taskId`; a
  * command/monitor's equals its originating `toolUseId`), used to scroll/expand.
+ * Host-internal scheduling metadata such as tool-use id and start time must not
+ * leak onto this wire contract.
  */
 export const backgroundItemSchema = z.object({
   taskId: z.string(),
   kind: backgroundItemKindSchema,
   title: z.string(),
-  status: backgroundItemStatusSchema,
-  toolUseId: z.string().nullable(),
   blockId: z.string(),
-  startedAt: z.number(),
 });
 export type BackgroundItem = z.infer<typeof backgroundItemSchema>;
 
@@ -697,9 +688,9 @@ export type ChatSubscribeClientFrame = z.infer<
   typeof chatSubscribeClientFrameSchema
 >;
 
-export const chatSubscribeV10 = defineStreamRpcContract({
+export const chatSubscribeV20 = defineStreamRpcContract({
   method: "chat.subscribe",
-  schemaVersion: { major: 1, minor: 0 } as const,
+  schemaVersion: { major: 2, minor: 0 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchema,
   serverFrameSchema: chatSubscribeServerFrameSchema,
   clientFrameSchema: chatSubscribeClientFrameSchema,

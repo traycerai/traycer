@@ -82,6 +82,7 @@ const USAGE_PROBE_25: TokenUsage = {
   contextTokens: 150_000,
   contextWindow: 200_000,
 };
+const EMPTY_BACKGROUND_STOP_TASK_IDS: ReadonlySet<string> = new Set();
 
 interface UsageProbeState {
   readonly usage: TokenUsage;
@@ -218,6 +219,8 @@ function props(
     todo: todoSnapshot(`token-${token}`),
     restoreContext: restoreContext(),
     backgroundItems: undefined,
+    backgroundStopPendingTaskIds: EMPTY_BACKGROUND_STOP_TASK_IDS,
+    backgroundStopAllPending: false,
     onBackgroundItemClick: () => undefined,
   };
 }

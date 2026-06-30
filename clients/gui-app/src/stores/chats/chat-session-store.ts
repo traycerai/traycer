@@ -256,6 +256,22 @@ export interface ChatSessionState {
   readonly pendingInterviews: ReadonlyArray<ChatPendingInterviewState>;
   readonly accumulatedFileChanges: ReadonlyArray<ChatAccumulatedFileChange>;
   readonly backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
+  /**
+   * In-flight per-item background stops, keyed by `taskId` → the
+   * `clientActionId` of the stop frame that was sent. An entry exists from the
+   * moment its Stop frame is dispatched until the host either removes that item
+   * from {@link backgroundItems} (its terminal) or rejects the stop. Drives
+   * per-row Stop disabling and the no-duplicate-frame guard - a repeat stop for
+   * an already-stopping task is a no-op.
+   */
+  readonly pendingBackgroundStops: Readonly<Record<string, string>>;
+  /**
+   * The in-flight "Stop all" background request (its `clientActionId`), or
+   * null. Set while a stop-all frame is outstanding and cleared on its ack or
+   * once the running list drains. While present, every Stop control is
+   * disabled and a repeat "Stop all" is a no-op.
+   */
+  readonly pendingBackgroundStopAll: { readonly clientActionId: string } | null;
   readonly restore: ChatRestoreSlot | null;
   readonly pendingActions: Readonly<Record<string, PendingChatAction>>;
   readonly acceptedActions: Readonly<Record<string, AcceptedChatAction>>;
@@ -702,6 +718,17 @@ export function createChatSessionStore(
             pendingInterviews: frame.snapshot.pendingInterviews,
             accumulatedFileChanges: frame.snapshot.accumulatedFileChanges,
             backgroundItems: frame.snapshot.backgroundItems,
+            // Drop per-item stops whose task has left the running-only list
+            // (its terminal landed) and clear the stop-all flag once nothing
+            // is left running, so settled rows never stay disabled.
+            pendingBackgroundStops: reconcileBackgroundStops(
+              state.pendingBackgroundStops,
+              frame.snapshot.backgroundItems,
+            ),
+            pendingBackgroundStopAll: reconcileBackgroundStopAll(
+              state.pendingBackgroundStopAll,
+              frame.snapshot.backgroundItems,
+            ),
             pendingActions: pending.pendingActions,
             acceptedActions: pruneAcceptedActions(
               {
@@ -760,11 +787,32 @@ export function createChatSessionStore(
               : state.pendingUserMessages.filter(
                   (message) => message.clientActionId !== frame.clientActionId,
                 );
+          // Background-stop bookkeeping. A per-item stop stays "in flight"
+          // until its item leaves the running list (its terminal), so an
+          // `accepted` ack keeps it pending; a `rejected` ack clears it so the
+          // row's Stop re-enables for a retry. The stop-all flag clears on
+          // either outcome - the batch has been dispatched and individual
+          // items still drain through their own terminals.
+          const ackTaskId = backgroundStopTaskIdForActionId(
+            state.pendingBackgroundStops,
+            frame.clientActionId,
+          );
+          const nextBackgroundStops =
+            ackTaskId !== null && frame.status === "rejected"
+              ? withoutRecordKey(state.pendingBackgroundStops, ackTaskId)
+              : state.pendingBackgroundStops;
+          const nextBackgroundStopAll =
+            state.pendingBackgroundStopAll?.clientActionId ===
+            frame.clientActionId
+              ? null
+              : state.pendingBackgroundStopAll;
           if (frame.status === "accepted") {
             if (pending === null) {
               return {
                 pendingActions: nextPending,
                 pendingUserMessages: nextPendingUsers,
+                pendingBackgroundStops: nextBackgroundStops,
+                pendingBackgroundStopAll: nextBackgroundStopAll,
               };
             }
             return {
@@ -775,11 +823,15 @@ export function createChatSessionStore(
                 Date.now(),
               ),
               pendingUserMessages: nextPendingUsers,
+              pendingBackgroundStops: nextBackgroundStops,
+              pendingBackgroundStopAll: nextBackgroundStopAll,
             };
           }
           return {
             pendingActions: nextPending,
             pendingUserMessages: nextPendingUsers,
+            pendingBackgroundStops: nextBackgroundStops,
+            pendingBackgroundStopAll: nextBackgroundStopAll,
             queue: removeOptimisticQueuedItemByClientActionId(
               state.queue,
               frame.clientActionId,
@@ -887,11 +939,24 @@ export function createChatSessionStore(
           const previousTurnId = state.activeTurn?.turnId ?? null;
           const nextTurnId = frame.activeTurn?.turnId ?? null;
           const turnIdChanged = previousTurnId !== nextTurnId;
+          const nextBackgroundItems =
+            frame.backgroundItems ?? state.backgroundItems;
           return {
             messages: nextMessages,
             runStatus: frame.runStatus,
             activeTurn: frame.activeTurn,
-            backgroundItems: frame.backgroundItems ?? state.backgroundItems,
+            backgroundItems: nextBackgroundItems,
+            // Keep background-stop pending state in lockstep with the
+            // running-only list: a task that has left the list settled, so its
+            // Stop is no longer in flight.
+            pendingBackgroundStops: reconcileBackgroundStops(
+              state.pendingBackgroundStops,
+              nextBackgroundItems,
+            ),
+            pendingBackgroundStopAll: reconcileBackgroundStopAll(
+              state.pendingBackgroundStopAll,
+              nextBackgroundItems,
+            ),
             liveAssistantMessage: liveAssistantForTurnStateFrame({
               current: state.liveAssistantMessage,
               previousTurnId,
@@ -1222,6 +1287,8 @@ export function createChatSessionStore(
       pendingInterviews: [],
       accumulatedFileChanges: [],
       backgroundItems: undefined,
+      pendingBackgroundStops: {},
+      pendingBackgroundStopAll: null,
       restore: null,
       pendingActions: {},
       acceptedActions: {},
@@ -1515,7 +1582,15 @@ export function createChatSessionStore(
         });
       },
       stopBackgroundItem: (taskId) => {
-        if (get().backgroundItems === undefined) return null;
+        const state = get();
+        const items = state.backgroundItems;
+        // Unsupported by this provider (sentinel), a stop-all already in
+        // flight, this task already stopping, or the task no longer in the
+        // host's running-only list: no-op, so no duplicate stop frame is sent.
+        if (items === undefined) return null;
+        if (state.pendingBackgroundStopAll !== null) return null;
+        if (Object.hasOwn(state.pendingBackgroundStops, taskId)) return null;
+        if (!items.some((item) => item.taskId === taskId)) return null;
         const clientActionId = uuidv4();
         const frame: ChatOwnerActionFrame = {
           kind: "stopBackgroundItem",
@@ -1525,16 +1600,30 @@ export function createChatSessionStore(
           clientActionId,
           taskId,
         };
-        return sendAction({
+        const sent = sendAction({
           set,
           get,
           frame,
           pending: basicPending(clientActionId, "stopBackgroundItem"),
           pendingUserMessage: null,
         });
+        if (sent === null) return null;
+        set((current) => ({
+          pendingBackgroundStops: {
+            ...current.pendingBackgroundStops,
+            [taskId]: sent,
+          },
+        }));
+        return sent;
       },
       stopAllBackgroundItems: () => {
-        if (get().backgroundItems === undefined) return null;
+        const state = get();
+        const items = state.backgroundItems;
+        // Unsupported sentinel, a stop-all already in flight, or nothing
+        // running: ignore so a rapid repeat does not enqueue a second frame.
+        if (items === undefined) return null;
+        if (state.pendingBackgroundStopAll !== null) return null;
+        if (items.length === 0) return null;
         const clientActionId = uuidv4();
         const frame: ChatOwnerActionFrame = {
           kind: "stopAllBackgroundItems",
@@ -1543,13 +1632,16 @@ export function createChatSessionStore(
           chatId: options.chatId,
           clientActionId,
         };
-        return sendAction({
+        const sent = sendAction({
           set,
           get,
           frame,
           pending: basicPending(clientActionId, "stopAllBackgroundItems"),
           pendingUserMessage: null,
         });
+        if (sent === null) return null;
+        set(() => ({ pendingBackgroundStopAll: { clientActionId: sent } }));
+        return sent;
       },
       resumeQueue: () => {
         const clientActionId = uuidv4();
@@ -1978,6 +2070,60 @@ function pendingActionForId(
   return pendingActions[clientActionId];
 }
 
+// The `taskId` whose in-flight stop carries `clientActionId`, or null. Used by
+// the ack handler to clear the right per-item pending entry.
+function backgroundStopTaskIdForActionId(
+  pendingBackgroundStops: Readonly<Record<string, string>>,
+  clientActionId: string,
+): string | null {
+  for (const taskId of Object.keys(pendingBackgroundStops)) {
+    if (pendingBackgroundStops[taskId] === clientActionId) return taskId;
+  }
+  return null;
+}
+
+function withoutRecordKey(
+  record: Readonly<Record<string, string>>,
+  key: string,
+): Readonly<Record<string, string>> {
+  if (!Object.hasOwn(record, key)) return record;
+  const next = { ...record };
+  delete next[key];
+  return next;
+}
+
+// Keep only the per-item stops whose task is still in the host's running-only
+// list; a task that has left the list reached its terminal and is no longer
+// stopping. Returns the same reference when nothing changes so zustand skips a
+// redundant notification.
+function reconcileBackgroundStops(
+  pendingBackgroundStops: Readonly<Record<string, string>>,
+  items: ReadonlyArray<BackgroundItem> | undefined,
+): Readonly<Record<string, string>> {
+  const taskIds = Object.keys(pendingBackgroundStops);
+  if (taskIds.length === 0) return pendingBackgroundStops;
+  const running =
+    items === undefined ? null : new Set(items.map((i) => i.taskId));
+  const kept = taskIds.filter(
+    (taskId) => running !== null && running.has(taskId),
+  );
+  if (kept.length === taskIds.length) return pendingBackgroundStops;
+  return Object.fromEntries(
+    kept.map((taskId) => [taskId, pendingBackgroundStops[taskId]]),
+  );
+}
+
+// The stop-all flag clears once the running list has fully drained (or the
+// provider stopped reporting one); otherwise it persists until its ack.
+function reconcileBackgroundStopAll(
+  pendingBackgroundStopAll: { readonly clientActionId: string } | null,
+  items: ReadonlyArray<BackgroundItem> | undefined,
+): { readonly clientActionId: string } | null {
+  if (pendingBackgroundStopAll === null) return null;
+  if (items === undefined || items.length === 0) return null;
+  return pendingBackgroundStopAll;
+}
+
 /**
  * Resolves the restorable `send` record for a `messageId` across either
  * the `pendingActions` or `acceptedActions` map. Returns the matched
@@ -2193,29 +2339,44 @@ function applyBlockDelta(
 }
 
 // The block id whose OWNING message a detached backgrounded-subagent event
-// targets: the subagent block for `subagent.*`, else the `parentBlockId` of a
-// nested tool/file event. Null for everything else (text/reasoning/top-level
-// tool deltas), so the common high-frequency path skips the owner lookup.
-function detachedSubagentOwnerBlockId(event: RuntimeEvent): string | null {
+// targets, plus whether routing to that owner is MANDATORY:
+//   - `subagent.*`             → the subagent block (`event.blockId`).
+//   - a terminal `tool_call.*` → its non-empty `parentBlockId` when it is a
+//     subagent CHILD; otherwise its own `blockId` (a genuinely top-level
+//     background command/Monitor terminal).
+//   - any other nested event  → its `parentBlockId`.
+// `mandatory` is set whenever the owner comes from `parentBlockId`: such an
+// event belongs to a child session and must NEVER fall through to the active
+// turn, where the accumulator would mint a duplicate top-level card for it.
+// Null for everything else (text/reasoning/top-level tool deltas), so the
+// common high-frequency path skips the owner lookup.
+function detachedSubagentOwnerTarget(
+  event: RuntimeEvent,
+): { readonly ownerBlockId: string; readonly mandatory: boolean } | null {
+  const parentBlockId =
+    "parentBlockId" in event &&
+    typeof event.parentBlockId === "string" &&
+    event.parentBlockId.length > 0
+      ? event.parentBlockId
+      : null;
   if (
     event.type === "subagent.started" ||
     event.type === "subagent.progress" ||
     event.type === "subagent.completed"
   ) {
-    return event.blockId;
+    return { ownerBlockId: event.blockId, mandatory: false };
   }
   if (
     event.type === "tool_call.completed" ||
     event.type === "tool_call.errored"
   ) {
-    return event.blockId;
+    if (parentBlockId !== null) {
+      return { ownerBlockId: parentBlockId, mandatory: true };
+    }
+    return { ownerBlockId: event.blockId, mandatory: false };
   }
-  if (
-    "parentBlockId" in event &&
-    typeof event.parentBlockId === "string" &&
-    event.parentBlockId.length > 0
-  ) {
-    return event.parentBlockId;
+  if (parentBlockId !== null) {
+    return { ownerBlockId: parentBlockId, mandatory: true };
   }
   return null;
 }
@@ -2278,23 +2439,29 @@ function applyContentBlockDelta(
   // already-settled message. Route the event to that message when the active
   // turn's row does not own the block, so the card keeps updating live. Gated to
   // subagent-context events; the active turn's own subagent skips this.
-  const detachedOwnerBlockId = detachedSubagentOwnerBlockId(event);
+  const detachedTarget = detachedSubagentOwnerTarget(event);
   if (
-    detachedOwnerBlockId !== null &&
+    detachedTarget !== null &&
     !(
       assistantIndex >= 0 &&
       assistantMessageOwnsBlock(
         state.messages[assistantIndex],
-        detachedOwnerBlockId,
+        detachedTarget.ownerBlockId,
       )
     )
   ) {
     const routed = applyEventToOwningMessage(
       state,
       event,
-      detachedOwnerBlockId,
+      detachedTarget.ownerBlockId,
     );
     if (routed !== null) return routed;
+    // A parented (subagent-child) event whose owning message is gone must NOT
+    // fall through to the active turn: the accumulator would append its
+    // terminal as a duplicate top-level card on an unrelated turn. The settled
+    // subagent owner is its only legitimate target, so drop it (identity =
+    // no-op) instead.
+    if (detachedTarget.mandatory) return state;
   }
   if (assistantIndex >= 0) {
     const target = state.messages[assistantIndex];

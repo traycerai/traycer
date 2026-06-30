@@ -123,10 +123,7 @@ describe("<ChatLowerDock />", () => {
       taskId: "task-1",
       kind: "command",
       title: "bun test",
-      status: "running",
-      toolUseId: "tool-1",
       blockId: "tool-1",
-      startedAt: 1000,
     };
 
     renderDock({
@@ -179,6 +176,8 @@ function renderDock(input: {
         restore={baseRestore(input.changes)}
         queue={input.queue}
         backgroundItems={input.backgroundItems}
+        backgroundStopPendingTaskIds={new Set()}
+        backgroundStopAllPending={false}
         activeTurnStatus="running"
         canAct
         readOnly={false}

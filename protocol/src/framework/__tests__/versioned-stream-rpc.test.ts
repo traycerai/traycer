@@ -21,8 +21,10 @@ describe("validateVersionedStreamRpcRegistry", () => {
       validateVersionedStreamRpcRegistry(hostStreamRpcRegistry);
     }).not.toThrow();
     expect(hostStreamRpcRegistry["epic.subscribe"][1].latestMinor).toBe(0);
-    expect(hostStreamRpcRegistry["chat.subscribe"][1].latestMinor).toBe(0);
-    expect(hostStreamRpcRegistry["notifications.subscribe"][1].latestMinor).toBe(0);
+    expect(hostStreamRpcRegistry["chat.subscribe"][2].latestMinor).toBe(0);
+    expect(
+      hostStreamRpcRegistry["notifications.subscribe"][1].latestMinor,
+    ).toBe(0);
   });
 
   it("rejects a minor that drops a server-frame field from an earlier minor", () => {

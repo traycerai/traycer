@@ -174,6 +174,7 @@ import { SurfaceActivityProvider } from "@/components/home/composer/surface-acti
 
 const EMPTY_MENTION_ROOTS: ReadonlyArray<string> = [];
 const EMPTY_WORKSPACE_PATH_SET: ReadonlySet<string> = new Set();
+const EMPTY_BACKGROUND_STOP_TASK_IDS: ReadonlySet<string> = new Set();
 
 interface ChatTileProps {
   node: EpicNodeRef;
@@ -621,6 +622,10 @@ function ChatTileSessionView(props: ChatTileSessionViewProps) {
               todo={view.todo}
               restoreContext={view.restoreContext}
               backgroundItems={view.lower.backgroundItems}
+              backgroundStopPendingTaskIds={
+                view.lower.backgroundStopPendingTaskIds
+              }
+              backgroundStopAllPending={view.lower.backgroundStopAllPending}
               onBackgroundItemClick={scrollToBackgroundItem}
             />
           </SurfaceActivityProvider>
@@ -773,6 +778,8 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       pendingInterviews: s.pendingInterviews,
       accumulatedFileChanges: s.accumulatedFileChanges,
       backgroundItems: s.backgroundItems,
+      pendingBackgroundStops: s.pendingBackgroundStops,
+      pendingBackgroundStopAll: s.pendingBackgroundStopAll,
       restore: s.restore,
       pendingActions: s.pendingActions,
       acceptedActions: s.acceptedActions,
@@ -1441,6 +1448,12 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     ],
   );
 
+  const backgroundStopPendingTaskIds = useMemo<ReadonlySet<string>>(() => {
+    const taskIds = Object.keys(state.pendingBackgroundStops);
+    if (taskIds.length === 0) return EMPTY_BACKGROUND_STOP_TASK_IDS;
+    return new Set(taskIds);
+  }, [state.pendingBackgroundStops]);
+
   return {
     handle,
     node,
@@ -1468,6 +1481,8 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       queue: lowerQueue,
       composer: lowerComposer,
       backgroundItems: state.backgroundItems,
+      backgroundStopPendingTaskIds,
+      backgroundStopAllPending: state.pendingBackgroundStopAll !== null,
     },
     todo: pinnedTodoRenderState.todo,
     revertOnEdit,
