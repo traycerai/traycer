@@ -16,8 +16,7 @@ const testState = vi.hoisted(() => ({
       _variables: { readonly phaseId: string },
       options: {
         readonly onSuccess:
-          | ((data: { readonly epicId: string }) => void)
-          | undefined;
+          ((data: { readonly epicId: string }) => void) | undefined;
       },
     ) => {
       options.onSuccess?.({ epicId: "phase-1" });

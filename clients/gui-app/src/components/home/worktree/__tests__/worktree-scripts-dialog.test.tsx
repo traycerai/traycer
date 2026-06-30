@@ -49,8 +49,7 @@ const mocks = vi.hoisted(() => ({
   readScriptsAtRef: vi.fn<
     () => {
       readonly data:
-        | { readonly scripts: WorktreeEntryScripts | null }
-        | undefined;
+        { readonly scripts: WorktreeEntryScripts | null } | undefined;
       readonly isSuccess: boolean;
       readonly isError: boolean;
     }

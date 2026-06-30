@@ -61,8 +61,7 @@ vi.mock(
       surface: {
         binding: WorktreeBinding | null;
         onBindingCommitted:
-          | ((changedWorkspacePaths: ReadonlyArray<string>) => void)
-          | null;
+          ((changedWorkspacePaths: ReadonlyArray<string>) => void) | null;
       };
     }) => {
       dialogMocks.workspaceSelectorProps.push(props);
@@ -470,8 +469,7 @@ describe("<TuiAgentTile /> worktree chip binding wiring", () => {
     const props = dialogMocks.workspaceSelectorProps[0] as {
       readonly surface: {
         readonly onBindingCommitted:
-          | ((changedWorkspacePaths: ReadonlyArray<string>) => void)
-          | null;
+          ((changedWorkspacePaths: ReadonlyArray<string>) => void) | null;
       };
     };
     if (props.surface.onBindingCommitted === null) {

@@ -268,9 +268,10 @@ export interface ChatSessionState {
   readonly pendingBackgroundStops: Readonly<Record<string, string>>;
   /**
    * The in-flight "Stop all" background request (its `clientActionId`), or
-   * null. Set while a stop-all frame is outstanding and kept after an accepted
-   * ack until the running list drains. While present, every Stop control is
-   * disabled and a repeat "Stop all" is a no-op.
+   * null. Used only while the stop-all frame is outstanding before its ack; the
+   * matching ack clears it. Accepted task ids from that ack move into
+   * `pendingBackgroundStops`, which then owns per-row disabling until those
+   * tasks leave the running list.
    */
   readonly pendingBackgroundStopAll: {
     readonly clientActionId: string;

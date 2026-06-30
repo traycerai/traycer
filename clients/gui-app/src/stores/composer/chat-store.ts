@@ -127,9 +127,7 @@ export interface ToolSegment {
 }
 
 export type SubagentChildSegment =
-  | ToolSegment
-  | FileChangeSegment
-  | CommandSegment;
+  ToolSegment | FileChangeSegment | CommandSegment;
 
 export interface ReasoningSegment {
   id: string;

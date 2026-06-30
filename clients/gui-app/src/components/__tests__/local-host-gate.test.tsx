@@ -275,13 +275,12 @@ describe("LocalHostGate", () => {
       { userId: "test-user", username: "Test User" },
       [],
     );
-    const ensureHost = vi.fn(
-      (): Promise<HostEnsureResult> =>
-        Promise.resolve({
-          action: "provisioned",
-          running: true,
-          version: "1.2.3",
-        }),
+    const ensureHost = vi.fn((): Promise<HostEnsureResult> =>
+      Promise.resolve({
+        action: "provisioned",
+        running: true,
+        version: "1.2.3",
+      }),
     );
     const host = new DeferredInitialSnapshotHost(
       null,

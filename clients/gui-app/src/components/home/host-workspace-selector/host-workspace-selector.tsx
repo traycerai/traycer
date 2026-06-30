@@ -134,8 +134,7 @@ type BoundOwnerSurface = {
   // host — a real terminal state, not an indefinite spinner).
   readonly bindingResolved: boolean;
   readonly onBindingCommitted:
-    | ((changedWorkspacePaths: ReadonlyArray<string>) => void)
-    | null;
+    ((changedWorkspacePaths: ReadonlyArray<string>) => void) | null;
 };
 
 const EMPTY_BINDING_ENTRIES: ReadonlyArray<WorktreeBindingEntry> = [];

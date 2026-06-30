@@ -778,11 +778,7 @@ export function projectFullState(
 // ─── Y.Doc mutation helpers (used by store actions) ───────────────────────
 
 export type AddableArtifactType =
-  | "chat"
-  | "spec"
-  | "ticket"
-  | "story"
-  | "review";
+  "chat" | "spec" | "ticket" | "story" | "review";
 
 export const NEW_ARTIFACT_TITLES: Readonly<
   Record<AddableArtifactType, string>

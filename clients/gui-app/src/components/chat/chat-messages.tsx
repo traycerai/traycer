@@ -36,6 +36,7 @@ import { useScrollRestoration } from "@/hooks/scroll/use-scroll-restoration";
 import { ActivityGroupOpenStoreProvider } from "@/stores/chats/activity-group-open-store";
 import { createActivityGroupOpenStore } from "@/stores/chats/activity-group-open-store-core";
 import { ChatOpenStoreScopeProvider } from "@/stores/chats/open-store-scope";
+import { useSubagentOpenStore } from "@/stores/chats/subagent-open-store";
 import { useToolOpenStore } from "@/stores/chats/tool-open-store";
 import type {
   ChatMessage as ChatMessageModel,
@@ -312,6 +313,7 @@ export function ChatMessages(props: ChatMessagesProps) {
 
   useLayoutEffect(() => {
     useToolOpenStore.getState().reset(instanceId);
+    useSubagentOpenStore.getState().reset(instanceId);
   }, [instanceId]);
 
   let effectiveBottomFollowing = bottomFollowing;

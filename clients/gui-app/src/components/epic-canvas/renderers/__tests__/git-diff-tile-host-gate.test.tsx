@@ -25,23 +25,21 @@ interface GateTestState {
   subscribe: Mock;
 }
 
-const state = vi.hoisted(
-  (): GateTestState => ({
-    activeHostId: "host-A",
-    reachability: {
-      status: "reachable",
-      hostLabel: "Host A",
-    },
-    subscribe: vi.fn(() => ({
-      data: null,
-      error: null,
-      isPending: true,
-      repoState: null,
-      repoMode: null,
-      pollStartedAtMs: null,
-    })),
-  }),
-);
+const state = vi.hoisted((): GateTestState => ({
+  activeHostId: "host-A",
+  reachability: {
+    status: "reachable",
+    hostLabel: "Host A",
+  },
+  subscribe: vi.fn(() => ({
+    data: null,
+    error: null,
+    isPending: true,
+    repoState: null,
+    repoMode: null,
+    pollStartedAtMs: null,
+  })),
+}));
 
 vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
   useReactiveActiveHostId: () => state.activeHostId,

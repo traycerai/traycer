@@ -59,8 +59,7 @@ function readActiveDragKind(active: Active): string | null {
 
 /** Every drop-target kind the root context can resolve a collision against. */
 type EpicRootDropTargetKind =
-  | EpicCanvasDropTargetData["kind"]
-  | typeof HEADER_TAB_SLOT_DND_TYPE;
+  EpicCanvasDropTargetData["kind"] | typeof HEADER_TAB_SLOT_DND_TYPE;
 
 const LEFT_PANEL_TARGET_KINDS: ReadonlyArray<EpicRootDropTargetKind> = [
   "left-panel-rail-item",

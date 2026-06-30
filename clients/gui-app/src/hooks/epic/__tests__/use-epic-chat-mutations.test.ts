@@ -36,8 +36,7 @@ interface CapturedMutationArgs {
   readonly method: string;
   readonly options: unknown;
   readonly mapVariables:
-    | ((variables: CreateChatMutationInput) => CreateChatRequest)
-    | undefined;
+    ((variables: CreateChatMutationInput) => CreateChatRequest) | undefined;
 }
 
 const capturedMutations: Partial<Record<string, CapturedMutationArgs>> = {};
