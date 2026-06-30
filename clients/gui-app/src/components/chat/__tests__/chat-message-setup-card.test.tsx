@@ -41,6 +41,8 @@ vi.mock("../segments/forked-chat-link-segment", () => ({
 
 import { ChatMessage } from "@/components/chat/chat-message";
 
+const EMPTY_BACKGROUND_TOOL_BLOCK_IDS: ReadonlySet<string> = new Set();
+
 const SETUP_MODEL: SetupCardViewModel = {
   aggregate: {
     epicId: "epic-1",
@@ -135,6 +137,7 @@ describe("<ChatMessage /> setup-card routing", () => {
       <ChatMessage
         message={setupCardRow()}
         actions={null}
+        backgroundToolBlockIds={EMPTY_BACKGROUND_TOOL_BLOCK_IDS}
         nextStepActions={null}
       />,
     );
@@ -151,6 +154,7 @@ describe("<ChatMessage /> setup-card routing", () => {
       <ChatMessage
         message={forkedChatLinkRow()}
         actions={null}
+        backgroundToolBlockIds={EMPTY_BACKGROUND_TOOL_BLOCK_IDS}
         nextStepActions={null}
       />,
     );

@@ -54,7 +54,11 @@ describe("routeIncompatibleRecovery", () => {
   });
 
   it("DOWNGRADE_UNSUPPORTED (null guidance) → host-install-latest, not restart", () => {
-    const r = routeIncompatibleRecovery("DOWNGRADE_UNSUPPORTED", null, "manual");
+    const r = routeIncompatibleRecovery(
+      "DOWNGRADE_UNSUPPORTED",
+      null,
+      "manual",
+    );
     // Client newer than host with no bridge ⇒ host is the stale side and
     // must update. A restart would loop forever under the softened trigger.
     expect(r.fixAction).toBe("host-install-latest");

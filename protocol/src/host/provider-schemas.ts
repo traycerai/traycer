@@ -239,6 +239,13 @@ const providerCliStateBaseShape = {
   // supported login flow (cursor, traycer) or where login capability is not
   // yet modelled. `.catch(null)` tolerates old host builds that omit the field.
   loginCapability: providerLoginCapabilitySchema.nullable().catch(null),
+  // True while the host's shell-env probe for this provider is still running
+  // in the background (e.g. PATH binary discovery or env-sourced API key
+  // lookup). The client re-fetches until it flips false. A pending row always
+  // carries `available: false` semantically (don't trust candidates/auth yet).
+  // `.catch(false)` tolerates old host builds that omit the field — old
+  // behavior treats every verdict as final, which is correct for old hosts.
+  availabilityPending: z.boolean().catch(false),
 };
 
 const providerCliStateBaseShapeV10 = {
@@ -593,9 +600,23 @@ export function downgradeProviderAuthV20ToV10(
 export function downgradeProviderCliStateV20ToV10(
   state: ProviderCliStateV20,
 ): ProviderCliStateV10 | null {
+  // `providerCliStateSchemaV10` is a `z.strictObject`, so it REJECTS any key it
+  // doesn't model. Drop v2.0-only fields (here `availabilityPending`) before the
+  // parse — otherwise every provider fails the parse and silently vanishes from
+  // the downgraded payload for v1.0 clients.
+  const { availabilityPending, ...rest } = state;
   const parsed = providerCliStateSchemaV10.safeParse({
-    ...state,
+    ...rest,
     auth: downgradeProviderAuthV20ToV10(state.auth),
   });
   return parsed.success ? parsed.data : null;
+}
+
+export function upgradeProviderCliStateV10ToV20(
+  state: ProviderCliStateV10,
+): ProviderCliStateV20 {
+  return providerCliStateSchemaV20.parse({
+    ...state,
+    availabilityPending: false,
+  });
 }

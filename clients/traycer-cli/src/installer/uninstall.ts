@@ -46,7 +46,10 @@ export async function uninstallHost(
   });
   let removedInstallDir = false;
   try {
-    await rm(hostInstallDir(opts.environment), { recursive: true, force: true });
+    await rm(hostInstallDir(opts.environment), {
+      recursive: true,
+      force: true,
+    });
     removedInstallDir = true;
   } catch (err) {
     logger.warn("Host uninstall failed to remove install directory", {

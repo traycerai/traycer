@@ -39,10 +39,7 @@ const PURE_ALGORITHM_MAX_BYTES = 500 * 1024 * 1024;
 // key to get a DER blob Node's `createPublicKey({ format: "der" })`
 // will accept. The bytes are the fixed AlgorithmIdentifier + BIT STRING
 // envelope from RFC 8410 §4.
-const ED25519_SPKI_PREFIX = Buffer.from(
-  "302a300506032b6570032100",
-  "hex",
-);
+const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
 
 export interface ParsedMinisignSignature {
   readonly algorithm: "pure" | "prehashed";
@@ -65,7 +62,10 @@ export function parseMinisignSignatureFile(
     allLines.pop();
   }
   if (allLines.length < 4) {
-    throw signatureMalformed(sourceLabel, `expected 4 lines, got ${allLines.length}`);
+    throw signatureMalformed(
+      sourceLabel,
+      `expected 4 lines, got ${allLines.length}`,
+    );
   }
   const untrustedHeader = allLines[0] ?? "";
   const signatureLine = allLines[1] ?? "";
@@ -74,15 +74,25 @@ export function parseMinisignSignatureFile(
   const untrustedPrefix = "untrusted comment: ";
   const trustedPrefix = "trusted comment: ";
   if (!untrustedHeader.startsWith(untrustedPrefix)) {
-    throw signatureMalformed(sourceLabel, "line 1 must start with 'untrusted comment: '");
+    throw signatureMalformed(
+      sourceLabel,
+      "line 1 must start with 'untrusted comment: '",
+    );
   }
   if (!trustedHeader.startsWith(trustedPrefix)) {
-    throw signatureMalformed(sourceLabel, "line 3 must start with 'trusted comment: '");
+    throw signatureMalformed(
+      sourceLabel,
+      "line 3 must start with 'trusted comment: '",
+    );
   }
   const untrustedComment = untrustedHeader.slice(untrustedPrefix.length);
   const trustedComment = trustedHeader.slice(trustedPrefix.length);
 
-  const sigPayload = decodeBase64(signatureLine, sourceLabel, "signature payload");
+  const sigPayload = decodeBase64(
+    signatureLine,
+    sourceLabel,
+    "signature payload",
+  );
   if (sigPayload.length !== 74) {
     throw signatureMalformed(
       sourceLabel,
@@ -104,7 +114,11 @@ export function parseMinisignSignatureFile(
   const keyId = sigPayload.subarray(2, 10).toString("hex");
   const signature = new Uint8Array(sigPayload.subarray(10, 74));
 
-  const globalPayload = decodeBase64(globalLine, sourceLabel, "global signature payload");
+  const globalPayload = decodeBase64(
+    globalLine,
+    sourceLabel,
+    "global signature payload",
+  );
   if (globalPayload.length !== 64) {
     throw signatureMalformed(
       sourceLabel,
@@ -166,7 +180,10 @@ export async function verifyMinisignArchive(
     });
   }
   const publicKey = createPublicKey({
-    key: Buffer.concat([ED25519_SPKI_PREFIX, Buffer.from(trustedKey.publicKey)]),
+    key: Buffer.concat([
+      ED25519_SPKI_PREFIX,
+      Buffer.from(trustedKey.publicKey),
+    ]),
     format: "der",
     type: "spki",
   });
@@ -209,7 +226,12 @@ export async function verifyMinisignArchive(
     Buffer.from(parsed.signature),
     Buffer.from(parsed.trustedComment, "utf8"),
   ]);
-  const globalOk = verify(null, globalMessage, publicKey, parsed.globalSignature);
+  const globalOk = verify(
+    null,
+    globalMessage,
+    publicKey,
+    parsed.globalSignature,
+  );
   if (!globalOk) {
     throw cliError({
       code: CLI_ERROR_CODES.HOST_VERIFY_FAILED,
@@ -228,7 +250,11 @@ export async function verifyMinisignArchive(
   };
 }
 
-function decodeBase64(line: string, sourceLabel: string, fieldName: string): Buffer {
+function decodeBase64(
+  line: string,
+  sourceLabel: string,
+  fieldName: string,
+): Buffer {
   const trimmed = line.trim();
   if (trimmed.length === 0) {
     throw signatureMalformed(sourceLabel, `${fieldName} line is empty`);

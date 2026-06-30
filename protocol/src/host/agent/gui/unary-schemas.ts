@@ -50,6 +50,13 @@ export const guiHarnessOptionSchema = z.object({
   supportedPermissionModes: z
     .array(permissionModeSchema)
     .default([...ALL_PERMISSION_MODES]),
+  // True while the host's availability probe for this harness is still running
+  // in the background (e.g. the cold interactive-shell PATH probe). The client
+  // re-fetches until it flips false. A pending row always carries
+  // `available: false` so an old app that doesn't understand this field errs on
+  // the side of hiding the harness and retrying via its normal unavailable
+  // backoff. `.catch(false)` tolerates old host builds that omit the field.
+  availabilityPending: z.boolean().catch(false),
 });
 export type GuiHarnessOption = z.infer<typeof guiHarnessOptionSchema>;
 

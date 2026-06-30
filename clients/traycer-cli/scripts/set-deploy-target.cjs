@@ -21,13 +21,9 @@ const {
 } = require("../../scripts/rewrite-config-target.cjs");
 
 function parseSupportedHostVersion(argv, raw) {
-  const arg = argv.find((item) =>
-    item.startsWith("--supported-host-version="),
-  );
+  const arg = argv.find((item) => item.startsWith("--supported-host-version="));
   const value =
-    arg === undefined
-      ? raw
-      : arg.slice("--supported-host-version=".length);
+    arg === undefined ? raw : arg.slice("--supported-host-version=".length);
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   return trimmed.length === 0 ? null : trimmed;

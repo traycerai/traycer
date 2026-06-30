@@ -17,9 +17,15 @@ import type {
   UserMessageSender,
 } from "@traycer/protocol/persistence/epic/schemas";
 import type { TokenUsage } from "@traycer/protocol/persistence/epic/foundation";
-import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
+import type {
+  BackgroundItem,
+  ChatRunSettings,
+} from "@traycer/protocol/host/agent/gui/subscribe";
 import type { WorktreeBinding } from "@traycer/protocol/host/worktree-schemas";
-import { ChatMessages } from "@/components/chat/chat-messages";
+import {
+  ChatMessages,
+  type ChatMessageScrollRequest,
+} from "@/components/chat/chat-messages";
 import { ChatMarkdownLinkProvider } from "@/components/chat/chat-markdown-link-provider";
 import {
   ChatForkDialog,
@@ -29,6 +35,10 @@ import {
   ChatDiffTargetContext,
   type ChatSnapshotDiffOpener,
 } from "@/components/chat/chat-diff-target";
+import {
+  ChatScrollToBlockContext,
+  type ChatScrollCardKind,
+} from "@/components/chat/chat-scroll-to-block";
 import {
   ChatPlanActionsContext,
   type ChatPlanActionsContextValue,
@@ -63,11 +73,16 @@ import {
 } from "@/hooks/composer/use-workspace-mention-roots";
 import { useChatSessionHandle } from "@/lib/registries/chat-session-registry";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
-import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
+import type {
+  ChatMessage as ChatMessageModel,
+  MessageSegment,
+} from "@/stores/composer/chat-store";
 import type {
   ChatSessionState,
   ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
+import { useSubagentOpenStore } from "@/stores/chats/subagent-open-store";
+import { useToolOpenStore } from "@/stores/chats/tool-open-store";
 import {
   useRenderedMessages,
   type RenderedMessagesDisplayContext,
@@ -159,6 +174,7 @@ import { SurfaceActivityProvider } from "@/components/home/composer/surface-acti
 
 const EMPTY_MENTION_ROOTS: ReadonlyArray<string> = [];
 const EMPTY_WORKSPACE_PATH_SET: ReadonlySet<string> = new Set();
+const EMPTY_BACKGROUND_STOP_TASK_IDS: ReadonlySet<string> = new Set();
 
 interface ChatTileProps {
   node: EpicNodeRef;
@@ -409,11 +425,102 @@ function chatTileAccessFlags(
   };
 }
 
+type BackgroundBlockSearchNode =
+  | MessageSegment
+  | {
+      readonly id: string;
+      readonly children: ReadonlyArray<BackgroundBlockSearchNode>;
+    }
+  | {
+      readonly id: string;
+      readonly files: ReadonlyArray<BackgroundBlockSearchNode>;
+    }
+  | {
+      readonly id: string;
+      readonly segments: ReadonlyArray<BackgroundBlockSearchNode>;
+    }
+  | {
+      readonly id: string;
+      readonly group: {
+        readonly segments: ReadonlyArray<BackgroundBlockSearchNode>;
+      };
+    };
+
+function segmentContainsBackgroundBlock(
+  segment: BackgroundBlockSearchNode,
+  blockId: string,
+): boolean {
+  if (segment.id === blockId) return true;
+  return backgroundBlockSearchChildren(segment).some((child) =>
+    segmentContainsBackgroundBlock(child, blockId),
+  );
+}
+
+function backgroundBlockSearchChildren(
+  segment: BackgroundBlockSearchNode,
+): ReadonlyArray<BackgroundBlockSearchNode> {
+  if ("children" in segment) return segment.children;
+  if ("files" in segment) return segment.files;
+  if ("segments" in segment) return segment.segments;
+  if ("group" in segment) return segment.group.segments;
+  return [];
+}
+
+function messageIdForBlock(
+  messages: ReadonlyArray<ChatMessageModel>,
+  blockId: string,
+): string | null {
+  const owner = messages.find((message) =>
+    message.segments.some((segment) =>
+      segmentContainsBackgroundBlock(segment, blockId),
+    ),
+  );
+  return owner?.id ?? null;
+}
+
 function ChatTileSessionView(props: ChatTileSessionViewProps) {
   const view = useChatTileSessionViewModel(props);
   const hostId = useTabHostId();
   const openPreview = useEpicCanvasStore((s) => s.openTilePreviewInTab);
   const openPinned = useEpicCanvasStore((s) => s.openTileInTab);
+  const [backgroundScrollRequest, setBackgroundScrollRequest] =
+    useState<ChatMessageScrollRequest | null>(null);
+  const backgroundScrollRequestIdRef = useRef(0);
+  // Shared transcript jump: resolve the owning message, expand the card via its
+  // open-store, and bump the scroll request the messages surface watches. Both
+  // the Background panel rows and the autonomous-resume marker route through
+  // here so the two navigations behave identically.
+  const scrollToBlock = useCallback(
+    (blockId: string, card: ChatScrollCardKind): void => {
+      const messageId = messageIdForBlock(view.messages, blockId);
+      if (messageId === null) return;
+      if (card === "subagent") {
+        useSubagentOpenStore
+          .getState()
+          .setOpen(props.node.instanceId, blockId, true);
+      } else {
+        useToolOpenStore
+          .getState()
+          .setOpen(props.node.instanceId, blockId, true);
+      }
+      backgroundScrollRequestIdRef.current += 1;
+      setBackgroundScrollRequest({
+        messageId,
+        blockId,
+        requestId: backgroundScrollRequestIdRef.current,
+      });
+    },
+    [props.node.instanceId, view.messages],
+  );
+  const scrollToBackgroundItem = useCallback(
+    (item: BackgroundItem): void => {
+      scrollToBlock(
+        item.blockId,
+        item.kind === "subagent" ? "subagent" : "tool",
+      );
+    },
+    [scrollToBlock],
+  );
   // Canvas-owned implementation of the chat file-change click contract. The
   // chat components receive only inert row handlers; they do not know about
   // canvas stores, tab ids, or tile factories.
@@ -470,74 +577,84 @@ function ChatTileSessionView(props: ChatTileSessionViewProps) {
 
   return (
     <ChatDiffTargetContext.Provider value={diffOpener}>
-      <div
-        data-testid="chat-tile"
-        data-node-id={view.node.id}
-        className="flex h-full min-h-0 flex-col"
-      >
-        <ChatSessionMessagesSurface
-          snapshotLoaded={view.snapshotLoaded}
-          fatalClose={view.fatalClose}
-          onRetry={view.onChatRetry}
-          restoreContext={view.restoreContext}
-          node={view.node}
-          viewTabId={view.viewTabId}
-          tabHostId={view.tabHostId}
-          workspaceRoots={view.linkResolutionRoots}
-          messages={view.messages}
-          minimapItems={view.minimapItems}
-          surfaceVisible={view.surfaceVisible}
-          getMessageActions={view.getMessageActions}
-          nextStepActions={view.nextStepActions}
-          planActions={view.planActions}
-        />
-        <ChatTileErrorNoticeToasts handle={view.handle} />
-        {/*
-         * SurfaceActivityProvider narrows catalog/provider query subscriptions
-         * to the pane+tab that is actually visible. Hidden keep-alive chat panes
-         * (surfaceVisible = false) mark their harness-catalog and model-list
-         * queries as subscribed:false, releasing their cache observer slots. The
-         * queries remain in the cache and refetch on resubscribe (i.e. when the
-         * pane becomes visible again), so the composer never shows stale data on
-         * return. Providers compose by narrowing only — the context can never
-         * widen past the parent.
-         */}
-        <SurfaceActivityProvider active={view.surfaceVisible}>
-          <ChatLowerInteractionSurfaces
-            epicId={view.currentEpicId}
-            chatId={view.node.id}
-            runtime={view.lower.runtime}
-            access={view.lower.access}
-            turn={view.lower.turn}
-            interview={view.lower.interview}
-            approvals={view.lower.approvals}
-            queue={view.lower.queue}
-            composer={view.lower.composer}
-            todo={view.todo}
+      <ChatScrollToBlockContext.Provider value={scrollToBlock}>
+        <div
+          data-testid="chat-tile"
+          data-node-id={view.node.id}
+          className="flex h-full min-h-0 flex-col"
+        >
+          <ChatSessionMessagesSurface
+            snapshotLoaded={view.snapshotLoaded}
+            fatalClose={view.fatalClose}
+            onRetry={view.onChatRetry}
             restoreContext={view.restoreContext}
+            node={view.node}
+            viewTabId={view.viewTabId}
+            tabHostId={view.tabHostId}
+            workspaceRoots={view.linkResolutionRoots}
+            messages={view.messages}
+            backgroundItems={view.lower.backgroundItems}
+            minimapItems={view.minimapItems}
+            scrollRequest={backgroundScrollRequest}
+            surfaceVisible={view.surfaceVisible}
+            getMessageActions={view.getMessageActions}
+            nextStepActions={view.nextStepActions}
+            planActions={view.planActions}
           />
-        </SurfaceActivityProvider>
-        <RevertOnEditDialog
-          open={view.revertOnEdit.open}
-          onOpenChange={view.revertOnEdit.onOpenChange}
-          onRevert={view.revertOnEdit.onRevert}
-          onDontRevert={view.revertOnEdit.onDontRevert}
-          artifactCount={view.revertOnEdit.artifactCount}
-        />
-        <SteerSettingsConflictDialog
-          open={view.steerRestart.open}
-          onOpenChange={view.steerRestart.onOpenChange}
-          onRestart={view.steerRestart.onRestart}
-          changed={view.steerRestart.changed}
-        />
-        <ChatForkDialog
-          open={view.fork.open}
-          target={view.fork.target}
-          epicId={view.currentEpicId}
-          tabId={view.viewTabId}
-          onOpenChange={view.fork.onOpenChange}
-        />
-      </div>
+          <ChatTileErrorNoticeToasts handle={view.handle} />
+          {/*
+           * SurfaceActivityProvider narrows catalog/provider query subscriptions
+           * to the pane+tab that is actually visible. Hidden keep-alive chat panes
+           * (surfaceVisible = false) mark their harness-catalog and model-list
+           * queries as subscribed:false, releasing their cache observer slots. The
+           * queries remain in the cache and refetch on resubscribe (i.e. when the
+           * pane becomes visible again), so the composer never shows stale data on
+           * return. Providers compose by narrowing only — the context can never
+           * widen past the parent.
+           */}
+          <SurfaceActivityProvider active={view.surfaceVisible}>
+            <ChatLowerInteractionSurfaces
+              epicId={view.currentEpicId}
+              chatId={view.node.id}
+              runtime={view.lower.runtime}
+              access={view.lower.access}
+              turn={view.lower.turn}
+              interview={view.lower.interview}
+              approvals={view.lower.approvals}
+              queue={view.lower.queue}
+              composer={view.lower.composer}
+              todo={view.todo}
+              restoreContext={view.restoreContext}
+              backgroundItems={view.lower.backgroundItems}
+              backgroundStopPendingTaskIds={
+                view.lower.backgroundStopPendingTaskIds
+              }
+              backgroundStopAllPending={view.lower.backgroundStopAllPending}
+              onBackgroundItemClick={scrollToBackgroundItem}
+            />
+          </SurfaceActivityProvider>
+          <RevertOnEditDialog
+            open={view.revertOnEdit.open}
+            onOpenChange={view.revertOnEdit.onOpenChange}
+            onRevert={view.revertOnEdit.onRevert}
+            onDontRevert={view.revertOnEdit.onDontRevert}
+            artifactCount={view.revertOnEdit.artifactCount}
+          />
+          <SteerSettingsConflictDialog
+            open={view.steerRestart.open}
+            onOpenChange={view.steerRestart.onOpenChange}
+            onRestart={view.steerRestart.onRestart}
+            changed={view.steerRestart.changed}
+          />
+          <ChatForkDialog
+            open={view.fork.open}
+            target={view.fork.target}
+            epicId={view.currentEpicId}
+            tabId={view.viewTabId}
+            onOpenChange={view.fork.onOpenChange}
+          />
+        </div>
+      </ChatScrollToBlockContext.Provider>
     </ChatDiffTargetContext.Provider>
   );
 }
@@ -664,6 +781,9 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       pendingFileEditApprovals: s.pendingFileEditApprovals,
       pendingInterviews: s.pendingInterviews,
       accumulatedFileChanges: s.accumulatedFileChanges,
+      backgroundItems: s.backgroundItems,
+      pendingBackgroundStops: s.pendingBackgroundStops,
+      pendingBackgroundStopAll: s.pendingBackgroundStopAll,
       restore: s.restore,
       pendingActions: s.pendingActions,
       acceptedActions: s.acceptedActions,
@@ -1283,6 +1403,8 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       onCancel: cancelQueuedItem,
       onAbortSteer: abortSteerQueuedItem,
       onCancelEdit: cancelQueueEditMode,
+      onStopBackgroundItem: chatActions.stopBackgroundItem,
+      onStopAllBackgroundItems: chatActions.stopAllBackgroundItems,
       onReorder: reorderQueuedItem,
       onSteerNow: steerQueuedItemNow,
     }),
@@ -1295,6 +1417,8 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       cancelQueuedItem,
       abortSteerQueuedItem,
       cancelQueueEditMode,
+      chatActions.stopBackgroundItem,
+      chatActions.stopAllBackgroundItems,
       reorderQueuedItem,
       steerQueuedItemNow,
     ],
@@ -1328,6 +1452,17 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     ],
   );
 
+  const backgroundStopPendingTaskIds = useMemo<ReadonlySet<string>>(() => {
+    const taskIds = [
+      ...Object.keys(state.pendingBackgroundStops),
+      ...(state.pendingBackgroundStopAll === null
+        ? []
+        : Array.from(state.pendingBackgroundStopAll.taskIds)),
+    ];
+    if (taskIds.length === 0) return EMPTY_BACKGROUND_STOP_TASK_IDS;
+    return new Set(taskIds);
+  }, [state.pendingBackgroundStopAll, state.pendingBackgroundStops]);
+
   return {
     handle,
     node,
@@ -1354,6 +1489,11 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       approvals: lowerApprovals,
       queue: lowerQueue,
       composer: lowerComposer,
+      backgroundItems: state.backgroundItems,
+      backgroundStopPendingTaskIds,
+      backgroundStopAllPending:
+        state.pendingBackgroundStopAll !== null ||
+        backgroundStopPendingTaskIds.size > 0,
     },
     todo: pinnedTodoRenderState.todo,
     revertOnEdit,
@@ -1377,7 +1517,9 @@ interface ChatSessionMessagesSurfaceProps {
   readonly tabHostId: string | null;
   readonly workspaceRoots: ReadonlyArray<string>;
   readonly messages: ReadonlyArray<ChatMessageModel>;
+  readonly backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
   readonly minimapItems: ReadonlyArray<ChatUserMinimapItem>;
+  readonly scrollRequest: ChatMessageScrollRequest | null;
   readonly surfaceVisible: boolean;
   readonly getMessageActions: (
     message: ChatMessageModel,
@@ -1453,7 +1595,9 @@ function ChatSessionMessagesSurface(
             <ChatMessages
               taskTitle={props.node.name}
               messages={props.messages}
+              backgroundItems={props.backgroundItems}
               minimapItems={props.minimapItems}
+              scrollRequest={props.scrollRequest}
               scrollStateKey={props.node.instanceId}
               getMessageActions={props.getMessageActions}
               nextStepActions={props.nextStepActions}

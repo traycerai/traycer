@@ -13,6 +13,7 @@ import type { NextStepActionHandler } from "./segments/next-steps-action-group";
 interface ChatMessageProps {
   message: ChatMessageModel;
   actions: ChatMessageActions | null;
+  backgroundToolBlockIds: ReadonlySet<string>;
   nextStepActions: NextStepActionHandler | null;
 }
 
@@ -107,7 +108,7 @@ function renderSingleSpecialSegment(
 }
 
 function ChatMessageImpl(props: ChatMessageProps) {
-  const { actions, message, nextStepActions } = props;
+  const { actions, backgroundToolBlockIds, message, nextStepActions } = props;
   const specialSegment = renderSingleSpecialSegment(message);
   if (specialSegment !== null) {
     return specialSegment;
@@ -125,6 +126,7 @@ function ChatMessageImpl(props: ChatMessageProps) {
       >
         <AssistantMessageBody
           segments={message.segments}
+          backgroundToolBlockIds={backgroundToolBlockIds}
           runState={message.runState}
           messageId={message.id}
           createdAt={message.createdAt}

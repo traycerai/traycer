@@ -24,6 +24,7 @@ import { ResolvedApprovalSegment } from "./segments/approval-segment";
 import { ArtifactCardSegment } from "./segments/artifact-card-segment";
 import { CommandSegment } from "./segments/command-segment";
 import { CompactionSegment } from "./segments/compaction-segment";
+import { AutonomousResumeSegment } from "./segments/autonomous-resume-segment";
 import { ErrorSegment } from "./segments/error-segment";
 import { FileChangeGroupSegment } from "./segments/file-change-group-segment";
 import { FileChangeSegment } from "./segments/file-change-segment";
@@ -59,6 +60,7 @@ function collectAssistantReplyText(
 
 interface AssistantBodyProps {
   segments: ReadonlyArray<MessageSegment>;
+  backgroundToolBlockIds: ReadonlySet<string>;
   /**
    * Host-owned run state of this turn. Non-null only for the active turn;
    * drives the in-progress indicator that persists for the whole turn (first
@@ -94,6 +96,7 @@ interface AssistantBodyProps {
 
 export function AssistantMessageBody({
   segments,
+  backgroundToolBlockIds,
   runState,
   messageId,
   createdAt,
@@ -109,8 +112,9 @@ export function AssistantMessageBody({
     () =>
       buildChatActivityTimeline(segments, {
         turnState: activityTimelineTurnState,
+        promotedToolBlockIds: backgroundToolBlockIds,
       }),
-    [activityTimelineTurnState, segments],
+    [activityTimelineTurnState, backgroundToolBlockIds, segments],
   );
   const replyText = useMemo(
     () => collectAssistantReplyText(segments),
@@ -176,6 +180,7 @@ export function AssistantMessageBody({
             key={item.id}
             id={item.id}
             segment={item.segment}
+            backgroundToolBlockIds={backgroundToolBlockIds}
             nextStepActions={nextStepActions}
           />
         );
@@ -589,6 +594,7 @@ function WorkingDots() {
 interface AssistantSegmentProps {
   id: string;
   segment: MessageSegment;
+  backgroundToolBlockIds: ReadonlySet<string>;
   nextStepActions: NextStepActionHandler | null;
 }
 
@@ -606,6 +612,7 @@ function ApprovalSegmentCard({
     <ResolvedApprovalSegment
       toolName={segment.toolName}
       description={segment.description}
+      inputSummary={segment.inputSummary}
       inputDetail={segment.inputDetail}
       decision={segment.decision}
       variant="card"
@@ -620,6 +627,7 @@ function ApprovalSegmentCard({
 function AssistantSegment({
   id,
   segment,
+  backgroundToolBlockIds,
   nextStepActions,
 }: AssistantSegmentProps) {
   const findUnitId = chatFindSegmentUnitId(id);
@@ -642,25 +650,30 @@ function AssistantSegment({
           durationMs={segment.durationMs}
         />
       );
-    case "tool":
+    case "tool": {
+      const isBackgroundRunning = backgroundToolBlockIds.has(segment.id);
       return (
         <ToolSegment
-          id={id}
+          id={segment.id}
           toolName={segment.toolName}
           inputSummary={segment.inputSummary}
           inputDetail={segment.inputDetail}
           error={segment.error}
           agentMessageSend={segment.agentMessageSend}
-          isStreaming={segment.isStreaming}
-          endState={segment.endState}
+          isStreaming={segment.isStreaming || isBackgroundRunning}
+          endState={isBackgroundRunning ? null : segment.endState}
           progress={segment.progress}
+          backgroundOutput={segment.backgroundOutput}
+          backgroundTask={segment.backgroundTask}
           startedAt={segment.startedAt}
+          durationMs={segment.durationMs}
           variant="card"
           headerFindUnitId={
             segment.agentMessageSend === null ? findUnitId : null
           }
         />
       );
+    }
     case "file_change":
       return (
         <FileChangeSegment
@@ -747,6 +760,8 @@ function AssistantSegment({
           findUnitId={findUnitId}
         />
       );
+    case "autonomous_resume":
+      return <AutonomousResumeSegment triggers={segment.triggers} />;
     case "interview":
       return (
         <InterviewSegment

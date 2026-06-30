@@ -128,7 +128,8 @@ export function createServiceInstallLifecycle(
       } catch (cause) {
         // No rollback. New host is in place; surface the failure
         // so the command can warn the user and Doctor can flag it.
-        state.postSwapError = cause instanceof Error ? cause.message : String(cause);
+        state.postSwapError =
+          cause instanceof Error ? cause.message : String(cause);
       }
     },
   };

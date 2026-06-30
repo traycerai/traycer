@@ -241,9 +241,12 @@ function chatFindUnitsForMessage(
 ): ReadonlyArray<ChatFindUnit> {
   if (message.role === "assistant") {
     const turnState = message.runState === null ? "complete" : "active";
-    return buildChatActivityTimeline(message.segments, { turnState }).flatMap(
-      (item) => timelineItemSearchUnits(item, tileInstanceId),
-    );
+    // Find indexes the full transcript inline regardless of background
+    // promotion, so no tool blocks are treated as promoted here.
+    return buildChatActivityTimeline(message.segments, {
+      turnState,
+      promotedToolBlockIds: new Set<string>(),
+    }).flatMap((item) => timelineItemSearchUnits(item, tileInstanceId));
   }
 
   if (message.role === "user" && message.agentSenderInfo !== null) {
@@ -495,6 +498,10 @@ function segmentSearchText(segment: MessageSegment): ReadonlyArray<string> {
           ].join(" "),
         ),
       ];
+    case "autonomous_resume":
+      // Not find-indexed: the autonomous-resume card carries no find-unit
+      // anchor, so indexing it would count matches that cannot be highlighted.
+      return [];
     default: {
       const _exhaustive: never = segment;
       void _exhaustive;

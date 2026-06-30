@@ -71,10 +71,7 @@ describe("resolveCompatRecovery", () => {
   });
 
   it("DOWNGRADE_UNSUPPORTED with null guidance normalizes to host-stale", () => {
-    const normalized = effectiveUpgradeGuidance(
-      "DOWNGRADE_UNSUPPORTED",
-      null,
-    );
+    const normalized = effectiveUpgradeGuidance("DOWNGRADE_UNSUPPORTED", null);
     expect(normalized).toEqual(guidance(true, false));
 
     const plan = resolveCompatRecovery(normalized, "manual");

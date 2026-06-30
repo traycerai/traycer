@@ -64,9 +64,9 @@ describe("parseHostVersionsManifest", () => {
 
   it("rejects a manifest where latest is not in versions[]", () => {
     const bad = { ...VALID_MANIFEST, latest: "9.9.9" };
-    expect(() =>
-      parseHostVersionsManifest(bad, "test://bad-latest"),
-    ).toThrow(/'latest=9.9.9' does not appear/);
+    expect(() => parseHostVersionsManifest(bad, "test://bad-latest")).toThrow(
+      /'latest=9.9.9' does not appear/,
+    );
   });
 
   it("skips a non-latest entry with invalid sha256 and surfaces a warning", () => {
@@ -97,7 +97,10 @@ describe("parseHostVersionsManifest", () => {
         "sunos-sparc": bad.versions[0].platforms["darwin-arm64"],
       },
     });
-    const result = parseHostVersionsManifestWithWarnings(bad, "test://bad-plat");
+    const result = parseHostVersionsManifestWithWarnings(
+      bad,
+      "test://bad-plat",
+    );
     expect(result.manifest.versions.map((v) => v.version)).toEqual(["1.5.0"]);
     expect(result.warnings).toHaveLength(1);
     expect(result.warnings[0]?.message).toMatch(/platform key 'sunos-sparc'/);

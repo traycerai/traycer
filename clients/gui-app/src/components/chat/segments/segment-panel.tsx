@@ -33,6 +33,7 @@ export function SegmentPanel(props: SegmentPanelProps) {
     >
       <div className="flex items-center justify-between gap-2 px-1">
         <span
+          data-find-skip
           className={cn(
             "select-none font-medium uppercase text-overline",
             TONE_LABEL_CLASS[tone],

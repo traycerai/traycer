@@ -32,7 +32,10 @@ export function useProvidersList(
         const data = query.state.data;
         const pending =
           data?.providers.some(
-            (p) => p.authPending || p.candidates.some((c) => c.versionPending),
+            (p) =>
+              p.authPending ||
+              p.availabilityPending ||
+              p.candidates.some((c) => c.versionPending),
           ) ?? false;
         return pending
           ? PROVIDERS_LIST_PENDING_REFRESH_MS

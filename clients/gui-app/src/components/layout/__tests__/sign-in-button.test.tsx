@@ -24,6 +24,7 @@ vi.mock("sonner", () => ({
 
 import { toast } from "sonner";
 import { SignInButton } from "@/components/layout/header/sign-in-button";
+import { DeviceCodeProgress } from "@/components/layout/header/sign-in/device-code-progress";
 import {
   hostRpcRegistry,
   HostRuntimeProvider,
@@ -188,6 +189,42 @@ function mountSignInButton(host: MockRunnerHost): MountResult {
   };
 }
 
+function mountDeviceCodeProgress(host: MockRunnerHost): () => void {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+
+  render(
+    <RunnerHostProvider runnerHost={host}>
+      <QueryClientProvider client={queryClient}>
+        <HostRuntimeProvider
+          registry={hostRpcRegistry}
+          messengerFactory={makeMessengerFactory()}
+          invalidator={null}
+          requestId={null}
+          remoteFetcher={() => Promise.resolve([])}
+          fallback={<div data-testid="runtime-fallback">…</div>}
+        >
+          <DeviceCodeProgress
+            isHero
+            progress={{
+              userCode: "ABCDE-FGHIJ",
+              verificationUri: "https://app.traycer.ai/device",
+              verificationUriComplete:
+                "https://app.traycer.ai/device?user_code=ABCDE-FGHIJ",
+              expiresAtMs: 0,
+            }}
+          />
+        </HostRuntimeProvider>
+      </QueryClientProvider>
+    </RunnerHostProvider>,
+  );
+
+  return () => {
+    queryClient.clear();
+  };
+}
+
 function CaptureAuthService(props: {
   readonly onCapture: (auth: AuthService) => void;
 }): null {
@@ -261,6 +298,11 @@ describe("<SignInButton />", () => {
       useAuthStore.getState().setSigningIn();
     });
 
+    expect(screen.queryByRole("button", { name: "Signing in" })).toBeNull();
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", { name: "Sign in" })
+        .disabled,
+    ).toBe(true);
     const retry = await screen.findByTestId("signin-retry-link");
     // `signIn()` restarts the device flow and re-opens the verification page, so
     // a stalled attempt has an immediate escape hatch. Capturing the count
@@ -382,10 +424,53 @@ describe("<SignInButton />", () => {
     await waitFor(() => {
       expect(result.host.deviceFlow.startCalls).toBe(1);
     });
-    const code = await screen.findByTestId("signin-device-code");
+    await screen.findByRole("heading", { name: "Approve in your browser" });
+    expect(screen.queryByRole("button", { name: "Signing in" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Use code instead" }));
+    const code = await screen.findByText("ABCDE-FGHIJ");
     expect(code.textContent).toBe("ABCDE-FGHIJ");
-    // There is no device-code fallback link anymore.
-    expect(screen.queryByTestId("signin-device-code-link")).toBeNull();
-    result.cleanupClient();
+    expect(screen.getByText("https://app.traycer.ai/device").textContent).toBe(
+      "https://app.traycer.ai/device",
+    );
+    const writeText = vi.fn(() => Promise.resolve());
+    const previousClipboard = Object.getOwnPropertyDescriptor(
+      navigator,
+      "clipboard",
+    );
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    try {
+      expect(screen.queryByText("Copied")).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: "Copy device code" }));
+      fireEvent.click(
+        screen.getByRole("button", { name: "Copy approval address" }),
+      );
+      await waitFor(() => {
+        expect(writeText).toHaveBeenCalledWith("ABCDE-FGHIJ");
+        expect(writeText).toHaveBeenCalledWith("https://app.traycer.ai/device");
+      });
+      expect(screen.getAllByText("Copied")).toHaveLength(2);
+      // There is no device-code fallback link anymore.
+      expect(screen.queryByTestId("signin-device-code-link")).toBeNull();
+    } finally {
+      if (previousClipboard === undefined) {
+        Reflect.deleteProperty(navigator, "clipboard");
+      } else {
+        Object.defineProperty(navigator, "clipboard", previousClipboard);
+      }
+      result.cleanupClient();
+    }
+  });
+
+  it("renders an expired approval status without the waiting spinner", async () => {
+    const cleanupClient = mountDeviceCodeProgress(buildHost());
+
+    expect(await screen.findByText("Approval code expired")).not.toBeNull();
+    expect(screen.getByText("Code expired")).not.toBeNull();
+    expect(screen.queryByTestId("signin-device-spinner")).toBeNull();
+
+    cleanupClient();
   });
 });

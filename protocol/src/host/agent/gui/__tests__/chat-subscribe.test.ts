@@ -3,7 +3,7 @@ import {
   chatQueuedItemSchema,
   chatSubscribeClientFrameSchema,
   chatSubscribeServerFrameSchema,
-  chatSubscribeV10,
+  chatSubscribeV20,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import { getRecordSchema } from "@traycer/protocol/framework/index";
 import type {
@@ -62,19 +62,19 @@ const event: ChatEvent = {
   metadata: null,
 };
 
-describe("chat.subscribe@1.0 open request", () => {
+describe("chat.subscribe@2.0 open request", () => {
   it("requires an epicId and chatId", () => {
-    const parsed = chatSubscribeV10.openRequestSchema.parse({
+    const parsed = chatSubscribeV20.openRequestSchema.parse({
       epicId: "epic-1",
       chatId: "chat-1",
     });
 
     expect(parsed).toEqual({ epicId: "epic-1", chatId: "chat-1" });
-    expect(() => chatSubscribeV10.openRequestSchema.parse({})).toThrow();
+    expect(() => chatSubscribeV20.openRequestSchema.parse({})).toThrow();
   });
 });
 
-describe("chat.subscribe@1.0 server frames", () => {
+describe("chat.subscribe@2.0 server frames", () => {
   it("parses queued steer-requested items with durable steer metadata", () => {
     const parsed = chatQueuedItemSchema.parse({
       queueItemId: "queue-1",
@@ -162,7 +162,59 @@ describe("chat.subscribe@1.0 server frames", () => {
       expect(parsed.snapshot.pendingApprovals).toHaveLength(1);
       expect(parsed.snapshot.pendingInterviews).toHaveLength(1);
       expect(parsed.snapshot.pendingFileEditApprovals).toHaveLength(1);
+      expect(parsed.snapshot.backgroundItems).toBeUndefined();
     }
+  });
+
+  it("parses background items on snapshots and turn-state deltas", () => {
+    const item = {
+      taskId: "task-1",
+      kind: "command",
+      title: "bun test",
+      blockId: "tool-1",
+    };
+    const snapshot = chatSubscribeServerFrameSchema.parse({
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      snapshot: {
+        chat,
+        access: {
+          role: "owner",
+          ownerUserId: "user-1",
+          canAct: true,
+        },
+        queue: { status: "idle", items: [] },
+        activeTurn: null,
+        runStatus: "idle",
+        pendingApprovals: [],
+        pendingInterviews: [],
+        pendingFileEditApprovals: [],
+        worktreeBinding: null,
+        missingWorktreePaths: [],
+        accumulatedFileChanges: [],
+        backgroundItems: [item],
+      },
+    });
+    const turnState = chatSubscribeServerFrameSchema.parse({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      runStatus: "running",
+      activeTurn: null,
+      backgroundItems: [item],
+    });
+
+    expect(snapshot).toMatchObject({
+      kind: "snapshot",
+      snapshot: { backgroundItems: [item] },
+    });
+    expect(turnState).toMatchObject({
+      kind: "turnStateChanged",
+      backgroundItems: [item],
+    });
   });
 
   it("parses action acknowledgements for accepted and rejected owner actions", () => {
@@ -177,6 +229,7 @@ describe("chat.subscribe@1.0 server frames", () => {
         status: "accepted",
         reason: null,
         code: null,
+        backgroundStopTaskIds: [],
       }),
     ).toMatchObject({ kind: "actionAck", status: "accepted" });
 
@@ -191,6 +244,7 @@ describe("chat.subscribe@1.0 server frames", () => {
         status: "rejected",
         reason: "Only the chat owner can stop a turn.",
         code: "NOT_OWNER",
+        backgroundStopTaskIds: [],
       }),
     ).toMatchObject({ kind: "actionAck", status: "rejected" });
 
@@ -205,6 +259,7 @@ describe("chat.subscribe@1.0 server frames", () => {
         status: "accepted",
         reason: null,
         code: null,
+        backgroundStopTaskIds: [],
       }),
     ).toMatchObject({ kind: "actionAck", action: "editUserMessage" });
 
@@ -219,6 +274,7 @@ describe("chat.subscribe@1.0 server frames", () => {
         status: "accepted",
         reason: null,
         code: null,
+        backgroundStopTaskIds: [],
       }),
     ).toMatchObject({ kind: "actionAck", action: "restoreCheckpoint" });
 
@@ -233,6 +289,7 @@ describe("chat.subscribe@1.0 server frames", () => {
         status: "accepted",
         reason: null,
         code: null,
+        backgroundStopTaskIds: [],
       }),
     ).toMatchObject({
       kind: "actionAck",
@@ -392,7 +449,7 @@ describe("chat.subscribe@1.0 server frames", () => {
   });
 });
 
-describe("chat.subscribe@1.0 client frames", () => {
+describe("chat.subscribe@2.0 client frames", () => {
   it("requires clientActionId on owner action frames", () => {
     expect(
       chatSubscribeClientFrameSchema.parse({
@@ -414,6 +471,34 @@ describe("chat.subscribe@1.0 client frames", () => {
         turnId: "turn-1",
       }),
     ).toThrow();
+  });
+
+  it("parses background-item stop owner actions", () => {
+    expect(
+      chatSubscribeClientFrameSchema.parse({
+        kind: "stopBackgroundItem",
+        hasBinaryPayload: false,
+        epicId: "epic-1",
+        chatId: "chat-1",
+        clientActionId: "stop-bg-action-1",
+        taskId: "task-1",
+      }),
+    ).toMatchObject({
+      kind: "stopBackgroundItem",
+      taskId: "task-1",
+    });
+
+    expect(
+      chatSubscribeClientFrameSchema.parse({
+        kind: "stopAllBackgroundItems",
+        hasBinaryPayload: false,
+        epicId: "epic-1",
+        chatId: "chat-1",
+        clientActionId: "stop-all-bg-action-1",
+      }),
+    ).toMatchObject({
+      kind: "stopAllBackgroundItems",
+    });
   });
 
   it("parses send frames with Tiptap JSONContent attachment mentions", () => {

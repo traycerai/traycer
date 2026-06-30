@@ -8,10 +8,7 @@ import {
   type MockInstance,
 } from "vitest";
 import { Command } from "commander";
-import {
-  buildProgram,
-  extractActionPositionals,
-} from "../index";
+import { buildProgram, extractActionPositionals } from "../index";
 import * as hostInstallModule from "../commands/host-install";
 
 // `host install` accepts a registry version via the `--release`
@@ -39,9 +36,7 @@ describe("extractActionPositionals", () => {
   it("returns one positional for a single-argument command", () => {
     const opts = {};
     const cmd = {};
-    expect(extractActionPositionals(["1.4.2", opts, cmd])).toEqual([
-      "1.4.2",
-    ]);
+    expect(extractActionPositionals(["1.4.2", opts, cmd])).toEqual(["1.4.2"]);
   });
 
   it("preserves `undefined` for an optional positional that was not supplied", () => {
@@ -102,11 +97,11 @@ describe("traycer host install - --release / --from handling", () => {
   // because we re-suppress it inside the helper.
   let exitSpy: MockInstance;
   beforeEach(() => {
-    exitSpy = vi
-      .spyOn(process, "exit")
-      .mockImplementation(((code: number | undefined) => {
-        throw new Error(`__test_exit_${code ?? 0}`);
-      }) as never);
+    exitSpy = vi.spyOn(process, "exit").mockImplementation(((
+      code: number | undefined,
+    ) => {
+      throw new Error(`__test_exit_${code ?? 0}`);
+    }) as never);
   });
   afterEach(() => {
     exitSpy.mockRestore();
@@ -134,10 +129,7 @@ describe("traycer host install - --release / --from handling", () => {
     try {
       await program.parseAsync(argv as string[], { from: "user" });
     } catch (err) {
-      if (
-        err instanceof Error &&
-        err.message.startsWith("__test_exit_")
-      ) {
+      if (err instanceof Error && err.message.startsWith("__test_exit_")) {
         return;
       }
       throw err;
@@ -146,13 +138,7 @@ describe("traycer host install - --release / --from handling", () => {
 
   it("forwards the explicit --release value to buildHostInstallCommand", async () => {
     const spy = setupSpy();
-    await parseHostInstall([
-      "host",
-      "install",
-      "--release",
-      "1.4.2",
-      "--json",
-    ]);
+    await parseHostInstall(["host", "install", "--release", "1.4.2", "--json"]);
     expect(spy).toHaveBeenCalledTimes(1);
     expect(spy.mock.calls[0][0]).toMatchObject({
       versionRequest: "1.4.2",

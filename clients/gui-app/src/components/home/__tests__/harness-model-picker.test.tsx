@@ -273,6 +273,7 @@ const CODEX_HARNESS: HarnessOption = {
   modes: ["gui", "tui"],
   requiresApiKey: false,
   supportedPermissionModes: [...ALL_PERMISSION_MODES],
+  availabilityPending: false,
 };
 
 const CLAUDE_HARNESS: HarnessOption = {
@@ -283,6 +284,7 @@ const CLAUDE_HARNESS: HarnessOption = {
   modes: ["gui", "tui"],
   requiresApiKey: false,
   supportedPermissionModes: [...ALL_PERMISSION_MODES],
+  availabilityPending: false,
 };
 
 const OPENCODE_HARNESS: HarnessOption = {
@@ -293,6 +295,7 @@ const OPENCODE_HARNESS: HarnessOption = {
   modes: ["gui", "tui"],
   requiresApiKey: false,
   supportedPermissionModes: [...ALL_PERMISSION_MODES],
+  availabilityPending: false,
 };
 
 const OPENROUTER_HARNESS: HarnessOption = {
@@ -303,6 +306,7 @@ const OPENROUTER_HARNESS: HarnessOption = {
   modes: ["gui"],
   requiresApiKey: true,
   supportedPermissionModes: [...ALL_PERMISSION_MODES],
+  availabilityPending: false,
 };
 
 const DROID_HARNESS: HarnessOption = {
@@ -313,6 +317,7 @@ const DROID_HARNESS: HarnessOption = {
   modes: ["gui"],
   requiresApiKey: false,
   supportedPermissionModes: [...ALL_PERMISSION_MODES],
+  availabilityPending: false,
 };
 
 const CURSOR_HARNESS: HarnessOption = {
@@ -323,6 +328,7 @@ const CURSOR_HARNESS: HarnessOption = {
   modes: ["gui"],
   requiresApiKey: false,
   supportedPermissionModes: [...ALL_PERMISSION_MODES],
+  availabilityPending: false,
 };
 
 function model(overrides: Partial<ModelOption>): ModelOption {
@@ -381,6 +387,7 @@ function providerCliState(input: {
     terminalAgentArgs: "",
     envOverrides: [],
     loginCapability: null,
+    availabilityPending: false,
   };
 }
 

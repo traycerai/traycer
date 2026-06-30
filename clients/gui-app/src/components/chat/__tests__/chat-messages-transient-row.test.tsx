@@ -90,12 +90,14 @@ describe("ChatMessages transient Virtuoso rows", () => {
       <ChatMessages
         taskTitle="Transcript"
         messages={[message]}
+        backgroundItems={undefined}
         minimapItems={minimapItemsFor([message])}
         scrollStateKey="transient-row-test"
         getMessageActions={() => null}
         nextStepActions={null}
         instanceId="test-instance"
         visible
+        scrollRequest={null}
       />,
     );
 

@@ -359,6 +359,21 @@ function effectiveSelectionFromHarnesses(
   if (harnesses === undefined) return selection;
   let firstEligible: HarnessOption | null = null;
   for (const harness of sortGuiHarnessesByProviderOrder(harnesses)) {
+    // A harness whose availability probe is still in flight is NOT yet known to
+    // be unavailable. Keep the user's selection on it rather than rerouting to
+    // whichever provider settled first - otherwise a cold boot flickers the
+    // composer and, mid-probe, a Send would dispatch the turn on the wrong
+    // harness. Capability (`modes`) is static and known even while pending, so
+    // the terminal-surface reroute still applies. The send gate blocks on the
+    // unresolved (empty) model slug until the probe settles, so a pending
+    // selection can't actually launch.
+    if (
+      harness.id === selection.harnessId &&
+      harness.availabilityPending &&
+      (!tuiOnly || harness.modes.includes("tui"))
+    ) {
+      return selection;
+    }
     if (!harness.available) continue;
     // On the terminal surface only TUI-capable harnesses are eligible, so a
     // GUI-only selection carried over from chat is rerouted off it - mirroring

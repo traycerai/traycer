@@ -20,7 +20,8 @@ export function buildConfigShellSetCommand(
     if (args.path === null && args.args === null) {
       throw cliError({
         code: CLI_ERROR_CODES.CONFIG_INVALID_VALUE,
-        message: "config shell set: pass --path, args after `--`, or --clear-args",
+        message:
+          "config shell set: pass --path, args after `--`, or --clear-args",
         details: null,
         exitCode: 1,
       });

@@ -16,6 +16,7 @@ import {
   useChatCollapsibleTileInstanceId,
   useSetChatFindForcedOpen,
 } from "@/stores/chats/chat-find-force-store-context";
+import { useToolOpenStore } from "@/stores/chats/tool-open-store";
 
 function render(ui: ReactNode) {
   return rtlRender(
@@ -94,6 +95,7 @@ function ForceA2ASendButton(props: ForceA2ASendButtonProps) {
 
 describe("<ToolSegment /> A2A send-message rendering", () => {
   afterEach(() => {
+    useToolOpenStore.getState().reset("default");
     cleanup();
   });
 
@@ -119,7 +121,10 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
         isStreaming={false}
         endState={null}
         progress={null}
+        backgroundOutput={null}
+        backgroundTask={false}
         startedAt={0}
+        durationMs={null}
         variant="card"
       />,
     );
@@ -158,7 +163,10 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
           isStreaming={false}
           endState={null}
           progress={null}
+          backgroundOutput={null}
+          backgroundTask={false}
           startedAt={0}
+          durationMs={null}
           variant="card"
         />
       </>,
@@ -192,7 +200,10 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
           isStreaming={false}
           endState={null}
           progress={null}
+          backgroundOutput={null}
+          backgroundTask={false}
           startedAt={0}
+          durationMs={null}
           variant="card"
         />
       </>,
@@ -219,7 +230,10 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
         isStreaming={false}
         endState={null}
         progress={null}
+        backgroundOutput={null}
+        backgroundTask={false}
         startedAt={0}
+        durationMs={null}
         variant="card"
       />,
     );
@@ -245,19 +259,25 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
         isStreaming={false}
         endState={null}
         progress={null}
+        backgroundOutput={null}
+        backgroundTask={false}
         startedAt={0}
+        durationMs={null}
         variant="card"
       />,
     );
 
     fireEvent.click(screen.getByRole("button", { name: /Sent message/ }));
 
-    expect(screen.getByText("Open receiving agent")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: /Open receiving agent/i }),
+    ).toBeTruthy();
   });
 });
 
 describe("<ToolSegment /> input rendering", () => {
   afterEach(() => {
+    useToolOpenStore.getState().reset("default");
     cleanup();
   });
 
@@ -278,7 +298,10 @@ describe("<ToolSegment /> input rendering", () => {
         isStreaming={false}
         endState={null}
         progress={null}
+        backgroundOutput={null}
+        backgroundTask={false}
         startedAt={0}
+        durationMs={null}
         variant="card"
       />,
     );
@@ -305,7 +328,10 @@ describe("<ToolSegment /> input rendering", () => {
         isStreaming={false}
         endState={null}
         progress={null}
+        backgroundOutput={null}
+        backgroundTask={false}
         startedAt={0}
+        durationMs={null}
         variant="card"
       />,
     );
@@ -314,11 +340,136 @@ describe("<ToolSegment /> input rendering", () => {
     expect(screen.getByText("glob")).toBeTruthy();
     expect(screen.queryByRole("button", { name: /glob/ })).toBeNull();
   });
+
+  it("renders capped background output in the expanded tool card", () => {
+    render(
+      <ToolSegment
+        headerFindUnitId={null}
+        id="tool-background-output"
+        toolName="Bash"
+        {...inputProps("Bash", {
+          command: "printf hello",
+          run_in_background: true,
+        })}
+        error={null}
+        agentMessageSend={null}
+        isStreaming={false}
+        endState={null}
+        progress={null}
+        backgroundOutput={{
+          stdout: "hello\n",
+          stderr: "warning\n",
+          truncated: true,
+        }}
+        backgroundTask
+        startedAt={0}
+        durationMs={null}
+        variant="card"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Bash/ }));
+
+    expect(screen.getByText("Output")).toBeTruthy();
+    expect(screen.getByText("hello")).toBeTruthy();
+    expect(screen.getByText("Error output")).toBeTruthy();
+    expect(screen.getByText("warning")).toBeTruthy();
+    expect(screen.getByText("Output truncated")).toBeTruthy();
+  });
+
+  it("shows a completed badge for a background command with empty output", () => {
+    render(
+      <ToolSegment
+        headerFindUnitId={null}
+        id="tool-background-empty"
+        toolName="Bash"
+        {...inputProps("Bash", {
+          command: "true",
+          run_in_background: true,
+        })}
+        error={null}
+        agentMessageSend={null}
+        isStreaming={false}
+        endState={null}
+        progress={null}
+        backgroundOutput={{ stdout: "", stderr: "", truncated: false }}
+        backgroundTask
+        startedAt={0}
+        durationMs={7_600}
+        variant="card"
+      />,
+    );
+
+    expect(screen.getByText("completed")).toBeTruthy();
+    expect(screen.getByText("7s")).toBeTruthy();
+  });
+
+  it("shows a neutral stopped badge for a stopped background command", () => {
+    render(
+      <ToolSegment
+        headerFindUnitId={null}
+        id="tool-background-stopped"
+        toolName="Bash"
+        {...inputProps("Bash", {
+          command: "sleep 60",
+          run_in_background: true,
+        })}
+        error="stopped: user requested stop"
+        agentMessageSend={null}
+        isStreaming={false}
+        endState={null}
+        progress={null}
+        backgroundOutput={null}
+        backgroundTask
+        startedAt={0}
+        durationMs={7_600}
+        variant="card"
+      />,
+    );
+
+    expect(screen.getByText("stopped")).toBeTruthy();
+    expect(screen.getByText("7s")).toBeTruthy();
+    expect(screen.queryByText("error")).toBeNull();
+  });
 });
 
 describe("<ToolSegment /> streaming heartbeat", () => {
   afterEach(() => {
+    useToolOpenStore.getState().reset("default");
     cleanup();
+    vi.useRealTimers();
+  });
+
+  it("keeps a streaming background command timer in the card header", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+
+    render(
+      <ToolSegment
+        headerFindUnitId={null}
+        id="tool-background-streaming"
+        toolName="Bash"
+        {...inputProps("Bash", {
+          command: "sleep 60",
+          run_in_background: true,
+        })}
+        error={null}
+        agentMessageSend={null}
+        isStreaming
+        endState={null}
+        progress={null}
+        backgroundOutput={null}
+        backgroundTask
+        startedAt={5_000}
+        durationMs={null}
+        variant="card"
+      />,
+    );
+
+    const header = screen.getByText("Bash").closest("div");
+
+    expect(header?.textContent).toContain("5s");
+    expect(header?.textContent).toContain("Running sleep 60");
   });
 
   // The row variant is the path generic tools actually render on (they group
@@ -336,7 +487,10 @@ describe("<ToolSegment /> streaming heartbeat", () => {
         isStreaming
         endState={null}
         progress="Fetched 3/10 pages"
+        backgroundOutput={null}
+        backgroundTask={false}
         startedAt={startedAt}
+        durationMs={null}
         variant="row"
       />,
     );
@@ -359,7 +513,10 @@ describe("<ToolSegment /> streaming heartbeat", () => {
         isStreaming={false}
         endState={null}
         progress="Fetched 10/10 pages"
+        backgroundOutput={null}
+        backgroundTask={false}
         startedAt={startedAt}
+        durationMs={null}
         variant="row"
       />,
     );
@@ -381,7 +538,10 @@ describe("<ToolSegment /> streaming heartbeat", () => {
         isStreaming={false}
         endState="interrupted"
         progress={null}
+        backgroundOutput={null}
+        backgroundTask={false}
         startedAt={0}
+        durationMs={null}
         variant="row"
       />,
     );
@@ -398,7 +558,10 @@ describe("<ToolSegment /> streaming heartbeat", () => {
         isStreaming={false}
         endState="superseded"
         progress={null}
+        backgroundOutput={null}
+        backgroundTask={false}
         startedAt={0}
+        durationMs={null}
         variant="row"
       />,
     );

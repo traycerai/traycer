@@ -194,6 +194,7 @@ describe("accumulateEvent", () => {
     expect(blocks[0].type).toBe("tool_call");
     expect(blocks[0].status).toBe("streaming");
     expect((blocks[0] as ToolCallBlock).toolName).toBe("read_file");
+    expect((blocks[0] as ToolCallBlock).startedAt).toBe(1);
     // Raw input is no longer persisted; the block carries precomputed display.
     expect((blocks[0] as ToolCallBlock).inputSummary).toBe("/foo");
     expect((blocks[0] as ToolCallBlock).inputDetail).toEqual({
@@ -225,6 +226,7 @@ describe("accumulateEvent", () => {
     expect(blocks[0].type).toBe("tool_call");
     expect(blocks[0].status).toBe("streaming");
     expect(blocks[0].timestamp).toBe(2);
+    expect((blocks[0] as ToolCallBlock).startedAt).toBe(1);
     // The update recomputes structured fields from the latest input. TaskUpdate
     // is a task-todo tool, so its item is parsed for the pinned-todo stack.
     expect((blocks[0] as ToolCallBlock).taskTodoItems).toEqual([
@@ -261,6 +263,110 @@ describe("accumulateEvent", () => {
     // Tool output is intentionally not persisted (chat-doc bloat); the block
     // keeps the input-derived identity for the card.
     expect((blocks[0] as ToolCallBlock).toolName).toBe("read_file");
+    expect(blocks[0].timestamp).toBe(2);
+    expect((blocks[0] as ToolCallBlock).startedAt).toBe(1);
+    expect((blocks[0] as ToolCallBlock).endedAt).toBe(2);
+  });
+
+  it("tool_call events preserve detached background task timing", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "tool_call.started",
+      blockId: "tc1",
+      timestamp: 5_010,
+      toolName: "Bash",
+      agentMessageSend: null,
+      startedAt: 5_000,
+      backgroundTask: true,
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "tool_call.completed",
+      blockId: "tc1",
+      timestamp: 70_010,
+      toolName: "Bash",
+      agentMessageSend: null,
+      backgroundOutput: { stdout: "", stderr: "", truncated: false },
+      backgroundStartedAt: 5_000,
+      backgroundTask: true,
+    });
+
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].status).toBe("completed");
+    expect(blocks[0].timestamp).toBe(70_010);
+    expect((blocks[0] as ToolCallBlock).startedAt).toBe(5_000);
+    expect((blocks[0] as ToolCallBlock).endedAt).toBe(70_010);
+  });
+
+  it("turn.completed keeps a background tool_call streaming until detached completion", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "tool_call.started",
+      blockId: "tc1",
+      timestamp: 5_000,
+      toolName: "Bash",
+      agentMessageSend: null,
+      startedAt: 5_000,
+      backgroundTask: true,
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "turn.completed",
+      blockId: "turn1",
+      timestamp: 6_000,
+      turnId: "turn-123",
+    });
+
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].status).toBe("streaming");
+    expect((blocks[0] as ToolCallBlock).backgroundTask).toBe(true);
+
+    blocks = accumulateEvent(blocks, {
+      type: "tool_call.completed",
+      blockId: "tc1",
+      timestamp: 70_000,
+      toolName: "Bash",
+      agentMessageSend: null,
+      backgroundOutput: { stdout: "", stderr: "", truncated: false },
+      backgroundStartedAt: 5_000,
+      backgroundTask: true,
+    });
+
+    expect(blocks[0].status).toBe("completed");
+    expect((blocks[0] as ToolCallBlock).backgroundTask).toBe(true);
+    expect((blocks[0] as ToolCallBlock).startedAt).toBe(5_000);
+    expect((blocks[0] as ToolCallBlock).endedAt).toBe(70_000);
+  });
+
+  it("keeps backgroundTask sticky across duplicate tool_call.started events", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "tool_call.started",
+      blockId: "tc1",
+      timestamp: 5_000,
+      toolName: "Bash",
+      agentMessageSend: null,
+      startedAt: 5_000,
+      backgroundTask: true,
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "tool_call.started",
+      blockId: "tc1",
+      timestamp: 5_100,
+      toolName: "Bash",
+      input: { command: "sleep 60" },
+      agentMessageSend: null,
+      backgroundTask: false,
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "turn.completed",
+      blockId: "turn1",
+      timestamp: 6_000,
+      turnId: "turn-123",
+    });
+
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].status).toBe("streaming");
+    expect((blocks[0] as ToolCallBlock).backgroundTask).toBe(true);
+    expect((blocks[0] as ToolCallBlock).startedAt).toBe(5_000);
   });
 
   it("tool_call.errored updates to errored with error", () => {
@@ -512,6 +618,33 @@ describe("accumulateEvent", () => {
     // turn boundary must NOT force-complete it.
     expect(blocks[3].status).toBe("streaming");
     expect(blocks[4].type).toBe("subagent");
+    // Option B: a subagent still streaming at a CLEAN turn end is a backgrounded
+    // subagent that outlives the turn - its card stays "running" until its own
+    // completion finalizes it (unlike the turn-scoped tool_call above).
+    expect(blocks.find((block) => block.blockId === "sa1")?.status).toBe(
+      "streaming",
+    );
+  });
+
+  it("turn.completed with a degraded reason (max_tokens) finalizes a streaming subagent (no lying 'running')", () => {
+    // A degraded ending is a REAL termination: the host does not keep the query
+    // alive for it, so a backgrounded subagent would never continue. Unlike a
+    // CLEAN completion (which keeps the card "running" via the detached
+    // execution), a degraded completion must finalize the card.
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "subagent.started",
+      blockId: "sa1",
+      timestamp: 1,
+      name: "explorer",
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "turn.completed",
+      blockId: "turn1",
+      timestamp: 2,
+      turnId: "turn-123",
+      reason: "max_tokens",
+    });
     expect(blocks.find((block) => block.blockId === "sa1")?.status).toBe(
       "completed",
     );
@@ -1895,7 +2028,7 @@ describe("turn-end finalization of streaming blocks", () => {
     ]);
   });
 
-  it("completes in-flight action blocks on a clean turn.completed", () => {
+  it("completes turn-scoped action blocks but keeps a backgrounded subagent streaming on a clean turn.completed", () => {
     let blocks = startedActionBlocks();
     blocks = accumulateEvent(blocks, {
       type: "turn.completed",
@@ -1903,11 +2036,75 @@ describe("turn-end finalization of streaming blocks", () => {
       timestamp: 5,
       turnId: "turn",
     });
+    // Option B: the subagent (pos 0) is still streaming at a clean turn end, so it
+    // is a backgrounded subagent that outlives the turn - its card stays "running"
+    // until its own completion finalizes it. file_change/tool_call/command are
+    // turn-scoped and finalize.
     expect(blocks.map((b) => b.status)).toEqual([
+      "streaming",
       "completed",
       "completed",
       "completed",
-      "completed",
+    ]);
+  });
+
+  it("keeps streaming descendants of detached roots open on a clean turn.completed", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "subagent.started",
+      blockId: "sa",
+      timestamp: 1,
+      name: "explorer",
+      task: "investigate",
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "tool_call.started",
+      blockId: "sa-tool",
+      parentBlockId: "sa",
+      timestamp: 2,
+      toolName: "read",
+      input: {},
+      agentMessageSend: null,
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "file_change.started",
+      blockId: "sa-file",
+      parentBlockId: "sa-tool",
+      timestamp: 3,
+      filePath: "/repo/a.ts",
+      operation: "modify",
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "tool_call.started",
+      blockId: "bg-tool",
+      timestamp: 4,
+      toolName: "Bash",
+      input: {},
+      agentMessageSend: null,
+      backgroundTask: true,
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "command.started",
+      blockId: "bg-command",
+      parentBlockId: "bg-tool",
+      timestamp: 5,
+      command: "sleep 60",
+      cwd: "/repo",
+    });
+
+    blocks = accumulateEvent(blocks, {
+      type: "turn.completed",
+      blockId: "turn",
+      timestamp: 6,
+      turnId: "turn",
+    });
+
+    expect(blocks.map((block) => [block.blockId, block.status])).toEqual([
+      ["sa", "streaming"],
+      ["sa-tool", "streaming"],
+      ["sa-file", "streaming"],
+      ["bg-tool", "streaming"],
+      ["bg-command", "streaming"],
     ]);
   });
 

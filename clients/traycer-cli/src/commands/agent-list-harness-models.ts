@@ -28,10 +28,7 @@ export function buildAgentListHarnessModelsCommand(opts: {
     const result = await toAgentCliError(
       callHostRpc("agent.listHarnessModels", request),
     );
-    const response = parseHostResponse(
-      listHarnessModelsResponseSchema,
-      result,
-    );
+    const response = parseHostResponse(listHarnessModelsResponseSchema, result);
     return {
       data: response,
       human: formatListHarnessModelsResponse(response),

@@ -57,6 +57,7 @@ describe("fileChangeBlockSchema backward-compat", () => {
     expect(block.inputSummary).toBeNull();
     expect(block.inputDetail).toBeNull();
     expect(block.taskTodoItems).toBeNull();
+    expect(block.endedAt).toBeNull();
     // The dropped raw input - the bloat carrier - is not retained.
     expect("input" in block).toBe(false);
   });
@@ -69,7 +70,10 @@ describe("fileChangeBlockSchema backward-compat", () => {
       timestamp: 2,
       toolName: "TaskUpdate",
       inputSummary: "1",
-      inputDetail: { kind: "fields", entries: [{ key: "id", label: "Id", value: "1" }] },
+      inputDetail: {
+        kind: "fields",
+        entries: [{ key: "id", label: "Id", value: "1" }],
+      },
       taskTodoItems: [
         {
           id: "1",

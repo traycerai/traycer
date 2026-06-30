@@ -9,14 +9,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  vi,
-} from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Pending CLI upgrade is staged by `traycer cli upgrade` when the
 // live binary is locked (Windows: the host supervisor holds the
@@ -63,10 +56,14 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function writeManifest(environment: "production" | "dev", manifest: unknown): string {
-  const dir = environment === "production"
-    ? join(workHome, ".traycer", "cli")
-    : join(workHome, ".traycer", "cli", "dev");
+function writeManifest(
+  environment: "production" | "dev",
+  manifest: unknown,
+): string {
+  const dir =
+    environment === "production"
+      ? join(workHome, ".traycer", "cli")
+      : join(workHome, ".traycer", "cli", "dev");
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const path = join(dir, "manifest.json");
   writeFileSync(path, `${JSON.stringify(manifest, null, 2)}\n`, {
@@ -99,8 +96,11 @@ function makePendingManifest(opts: {
 
 describe("readPendingCliUpgrade", () => {
   it("returns null when manifest is missing", async () => {
-    const { readPendingCliUpgrade } = await import("../../commands/cli-upgrade");
-    expect(await readPendingCliUpgrade({ environment: "production" })).toBeNull();
+    const { readPendingCliUpgrade } =
+      await import("../../commands/cli-upgrade");
+    expect(
+      await readPendingCliUpgrade({ environment: "production" }),
+    ).toBeNull();
   });
 
   it("returns null when manifest exists but pendingUpgrade is null", async () => {
@@ -111,8 +111,11 @@ describe("readPendingCliUpgrade", () => {
       source: "manual",
       pendingUpgrade: null,
     });
-    const { readPendingCliUpgrade } = await import("../../commands/cli-upgrade");
-    expect(await readPendingCliUpgrade({ environment: "production" })).toBeNull();
+    const { readPendingCliUpgrade } =
+      await import("../../commands/cli-upgrade");
+    expect(
+      await readPendingCliUpgrade({ environment: "production" }),
+    ).toBeNull();
   });
 
   it("returns the pending payload alongside current install fields", async () => {
@@ -131,7 +134,8 @@ describe("readPendingCliUpgrade", () => {
         reason: "binary-locked",
       }),
     );
-    const { readPendingCliUpgrade } = await import("../../commands/cli-upgrade");
+    const { readPendingCliUpgrade } =
+      await import("../../commands/cli-upgrade");
     const result = await readPendingCliUpgrade({ environment: "production" });
     expect(result).not.toBeNull();
     expect(result?.pending.version).toBe("1.5.0");
@@ -145,10 +149,11 @@ describe("readPendingCliUpgrade", () => {
 
 describe("finalizePendingCliUpgrade", () => {
   it("returns no-manifest when there is no install record", async () => {
-    const { finalizePendingCliUpgrade } = await import(
-      "../../commands/cli-upgrade"
-    );
-    const outcome = await finalizePendingCliUpgrade({ environment: "production" });
+    const { finalizePendingCliUpgrade } =
+      await import("../../commands/cli-upgrade");
+    const outcome = await finalizePendingCliUpgrade({
+      environment: "production",
+    });
     expect(outcome).toEqual({ status: "no-manifest" });
   });
 
@@ -160,10 +165,11 @@ describe("finalizePendingCliUpgrade", () => {
       source: "manual",
       pendingUpgrade: null,
     });
-    const { finalizePendingCliUpgrade } = await import(
-      "../../commands/cli-upgrade"
-    );
-    const outcome = await finalizePendingCliUpgrade({ environment: "production" });
+    const { finalizePendingCliUpgrade } =
+      await import("../../commands/cli-upgrade");
+    const outcome = await finalizePendingCliUpgrade({
+      environment: "production",
+    });
     expect(outcome).toEqual({ status: "no-pending" });
   });
 
@@ -182,10 +188,11 @@ describe("finalizePendingCliUpgrade", () => {
         reason: "binary-locked",
       }),
     );
-    const { finalizePendingCliUpgrade } = await import(
-      "../../commands/cli-upgrade"
-    );
-    const outcome = await finalizePendingCliUpgrade({ environment: "production" });
+    const { finalizePendingCliUpgrade } =
+      await import("../../commands/cli-upgrade");
+    const outcome = await finalizePendingCliUpgrade({
+      environment: "production",
+    });
     expect(outcome.status).toBe("staged-binary-missing");
     if (outcome.status === "staged-binary-missing") {
       expect(outcome.stagedBinaryPath).toBe(stagedBinaryPath);
@@ -212,10 +219,11 @@ describe("finalizePendingCliUpgrade", () => {
         reason: "binary-locked",
       }),
     );
-    const { finalizePendingCliUpgrade } = await import(
-      "../../commands/cli-upgrade"
-    );
-    const outcome = await finalizePendingCliUpgrade({ environment: "production" });
+    const { finalizePendingCliUpgrade } =
+      await import("../../commands/cli-upgrade");
+    const outcome = await finalizePendingCliUpgrade({
+      environment: "production",
+    });
     expect(outcome.status).toBe("finalised");
     if (outcome.status === "finalised") {
       expect(outcome.version).toBe("1.5.0");
@@ -273,10 +281,11 @@ describe("finalizePendingCliUpgrade", () => {
     // workDir cleanup in afterEach() can succeed.
     chmodSync(lockedDir, 0o555);
     try {
-      const { finalizePendingCliUpgrade } = await import(
-        "../../commands/cli-upgrade"
-      );
-      const outcome = await finalizePendingCliUpgrade({ environment: "production" });
+      const { finalizePendingCliUpgrade } =
+        await import("../../commands/cli-upgrade");
+      const outcome = await finalizePendingCliUpgrade({
+        environment: "production",
+      });
       expect(outcome.status).toBe("still-locked");
       if (outcome.status === "still-locked") {
         expect(outcome.stagedBinaryPath).toBe(stagedBinaryPath);

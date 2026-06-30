@@ -68,6 +68,7 @@ export function ActivityGroupSegment(props: ActivityGroupSegmentProps) {
       <CollapsibleTrigger
         data-find-include="true"
         data-chat-find-unit={summaryFindUnitId}
+        aria-label={group.label}
         className={cn(
           "group/activity flex max-w-full items-center gap-2 overflow-hidden rounded-sm py-1 pr-1 text-left text-muted-foreground transition-colors",
           "hover:text-foreground focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
@@ -148,7 +149,10 @@ function ActivityChildSegment(props: ActivityChildSegmentProps) {
           isStreaming={segment.isStreaming}
           endState={segment.endState}
           progress={segment.progress}
+          backgroundOutput={segment.backgroundOutput}
+          backgroundTask={segment.backgroundTask}
           startedAt={segment.startedAt}
+          durationMs={segment.durationMs}
           variant="row"
           headerFindUnitId={
             segment.agentMessageSend === null ? headerFindUnitId : null
@@ -199,6 +203,7 @@ function ActivityChildSegment(props: ActivityChildSegmentProps) {
         <ResolvedApprovalSegment
           toolName={segment.toolName}
           description={segment.description}
+          inputSummary={segment.inputSummary}
           inputDetail={segment.inputDetail}
           decision={segment.decision}
           variant="row"

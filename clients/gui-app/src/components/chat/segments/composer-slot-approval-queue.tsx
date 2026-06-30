@@ -1,5 +1,6 @@
 import { Check, ShieldAlert, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { deriveToolInputSummary } from "@/lib/segment-summary";
 import type { ChatApprovalState } from "@traycer/protocol/host/agent/gui/subscribe";
 
 interface ComposerSlotApprovalQueueProps {
@@ -94,13 +95,27 @@ interface ApprovalRowProps {
 
 function ApprovalRow(props: ApprovalRowProps) {
   const { approval, canAct, onDecision } = props;
+  const inputSummary = deriveToolInputSummary(
+    approval.toolName,
+    approval.input,
+  );
   const headline =
     approval.description.length > 0 ? approval.description : approval.toolName;
   return (
-    <div className="flex flex-col gap-1.5 py-2 first:pt-0 last:pb-0">
-      <span className="font-mono text-code-sm text-foreground/80">
-        {approval.toolName}
-      </span>
+    <div className="flex min-w-0 flex-col gap-1.5 py-2 first:pt-0 last:pb-0">
+      <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 font-mono text-code-sm text-foreground/80">
+        <span className="shrink-0">{approval.toolName}</span>
+        {inputSummary !== null ? (
+          <>
+            <span aria-hidden className="shrink-0 text-muted-foreground/40">
+              ·
+            </span>
+            <span className="min-w-0 break-words text-muted-foreground">
+              {inputSummary}
+            </span>
+          </>
+        ) : null}
+      </div>
       <p className="m-0 text-foreground/85">{headline}</p>
       <div className="flex items-center justify-end gap-2">
         <Button

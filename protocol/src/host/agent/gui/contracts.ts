@@ -15,7 +15,7 @@ import {
   listGuiHarnessesResponseSchemaV10,
   guiHarnessOptionSchemaV10,
 } from "@traycer/protocol/host/agent/gui/unary-schemas";
-import { chatSubscribeV10 } from "@traycer/protocol/host/agent/gui/subscribe";
+import { chatSubscribeV20 } from "@traycer/protocol/host/agent/gui/subscribe";
 
 // ─── GUI-surface catalog (`agent.gui.*`) ──────────────────────────────────
 
@@ -90,4 +90,4 @@ export const agentGuiGetPlanV10 = defineRpcContract({
   responseSchema: getGuiAgentPlanResponseSchema,
 });
 
-export { chatSubscribeV10 };
+export { chatSubscribeV20 };

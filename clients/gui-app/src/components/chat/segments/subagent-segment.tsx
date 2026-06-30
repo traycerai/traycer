@@ -10,7 +10,11 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
 import { LivePulse } from "@/components/ui/live-pulse";
 import { cn } from "@/lib/utils";
-import { TraycerMarkdown } from "@/markdown/traycer-markdown";
+import {
+  scopedChatOpenId,
+  useChatOpenStoreScope,
+} from "@/stores/chats/open-store-scope";
+import { useSubagentOpenStore } from "@/stores/chats/subagent-open-store";
 import {
   deriveSubagentCollapsibleKey,
   type ChatCollapsibleKey,
@@ -25,17 +29,15 @@ import {
   useSetChatFindForcedOpen,
 } from "@/stores/chats/chat-find-force-store-context";
 import {
-  useSetSubagentOpen,
-  useSubagentOpen,
-} from "@/stores/chats/subagent-open-store-context";
-import {
   adjacentDedupedProgressItems,
   cleanSubagentNotificationText,
   type ProgressUpdateItem,
 } from "./subagent-display";
+import { AgentReferenceMarkdown } from "./agent-reference-markdown";
 import { SubagentAvatar } from "./subagent-avatar";
 import { ElapsedTime } from "./segment-elapsed";
 import { SegmentCard } from "./segment-card";
+import { SegmentPanel } from "./segment-panel";
 import { SegmentRow } from "./segment-row";
 import { SegmentEndStateBadge } from "./segment-end-state-badge";
 import type { SegmentEndState } from "@/stores/composer/chat-store";
@@ -90,17 +92,20 @@ function CompactSubagentSegment(props: CompactSubagentSegmentProps) {
   const collapsibleKey = useSubagentCollapsibleKey(id);
   const headerFindUnitId = chatFindSubagentHeaderUnitId(id);
   const bodyFindUnitId = chatFindSubagentBodyUnitId(id);
-  const userOpen = useSubagentOpen(id);
+  const openScope = useChatOpenStoreScope();
+  const userOpen = useSubagentOpenStore((s) =>
+    s.openIds.has(scopedChatOpenId(openScope, id)),
+  );
   const findForcedOpen = useChatFindForcedOpen(collapsibleKey);
   const open = userOpen || findForcedOpen;
-  const setOpen = useSetSubagentOpen();
+  const setOpen = useSubagentOpenStore((s) => s.setOpen);
   const setFindForcedOpen = useSetChatFindForcedOpen();
   const handleOpenChange = useCallback(
     (newOpen: boolean) => {
-      setOpen(id, newOpen);
+      setOpen(openScope, id, newOpen);
       if (!newOpen) setFindForcedOpen(collapsibleKey, false);
     },
-    [collapsibleKey, id, setFindForcedOpen, setOpen],
+    [collapsibleKey, id, openScope, setFindForcedOpen, setOpen],
   );
   const displayProgressUpdates =
     useAdjacentDedupedProgressItems(progressUpdates);
@@ -191,24 +196,7 @@ function CompactSubagentSegment(props: CompactSubagentSegmentProps) {
         </div>
       ) : null}
       {result !== null ? (
-        <div className="flex flex-col gap-1">
-          <span
-            data-find-skip
-            className="select-none font-medium uppercase text-overline text-muted-foreground/80"
-          >
-            Result
-          </span>
-          <TraycerMarkdown
-            className={null}
-            proseSize="compact"
-            components={null}
-            remarkPlugins={null}
-            rehypePlugins={null}
-            isStreaming={isStreaming}
-          >
-            {result}
-          </TraycerMarkdown>
-        </div>
+        <SubagentResultPanel result={result} isStreaming={isStreaming} />
       ) : null}
     </div>
   );
@@ -265,17 +253,20 @@ function PromotedSubagentSegment(props: Omit<SubagentSegmentProps, "variant">) {
   const collapsibleKey = useSubagentCollapsibleKey(id);
   const headerFindUnitId = chatFindSubagentHeaderUnitId(id);
   const bodyFindUnitId = chatFindSubagentBodyUnitId(id);
-  const userOpen = useSubagentOpen(id);
+  const openScope = useChatOpenStoreScope();
+  const userOpen = useSubagentOpenStore((s) =>
+    s.openIds.has(scopedChatOpenId(openScope, id)),
+  );
   const findForcedOpen = useChatFindForcedOpen(collapsibleKey);
   const open = userOpen || findForcedOpen;
-  const setOpen = useSetSubagentOpen();
+  const setOpen = useSubagentOpenStore((s) => s.setOpen);
   const setFindForcedOpen = useSetChatFindForcedOpen();
   const updateOpen = useCallback(
     (newOpen: boolean) => {
-      setOpen(id, newOpen);
+      setOpen(openScope, id, newOpen);
       if (!newOpen) setFindForcedOpen(collapsibleKey, false);
     },
-    [collapsibleKey, id, setFindForcedOpen, setOpen],
+    [collapsibleKey, id, openScope, setFindForcedOpen, setOpen],
   );
   const handleOpenChange = useChatMeasuredOpenChange(updateOpen);
   const displayName = cleanSubagentNotificationText(name) ?? "Subagent";
@@ -484,26 +475,33 @@ function SubagentDetails(props: SubagentDetailsProps) {
         </div>
       ) : null}
       {result !== null ? (
-        <div className="flex flex-col gap-1">
-          <span
-            data-find-skip
-            className="select-none font-medium uppercase text-overline text-muted-foreground/80"
-          >
-            Result
-          </span>
-          <TraycerMarkdown
-            className={null}
-            proseSize="compact"
-            components={null}
-            remarkPlugins={null}
-            rehypePlugins={null}
-            isStreaming={isStreaming}
-          >
-            {result}
-          </TraycerMarkdown>
-        </div>
+        <SubagentResultPanel result={result} isStreaming={isStreaming} />
       ) : null}
     </div>
+  );
+}
+
+function SubagentResultPanel(props: {
+  readonly result: string;
+  readonly isStreaming: boolean;
+}) {
+  const { isStreaming, result } = props;
+  return (
+    <SegmentPanel
+      label="Result"
+      copyValue={result}
+      tone="default"
+      bodyChrome="framed"
+      className={undefined}
+    >
+      <div className="px-3 py-2">
+        <AgentReferenceMarkdown
+          isStreaming={isStreaming}
+          markdown={result}
+          proseSize="compact"
+        />
+      </div>
+    </SegmentPanel>
   );
 }
 

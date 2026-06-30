@@ -157,10 +157,7 @@ describe("extractHostSource (tar)", () => {
     const sourceDir = mkdtempSync(join(scratchRoot, "src-"));
     writeFileSync(join(sourceDir, "foo"), "data");
     const archive = join(scratchRoot, "absolute.tar");
-    await tarCreate(
-      { file: archive, cwd: sourceDir, prefix: "/etc" },
-      ["foo"],
-    );
+    await tarCreate({ file: archive, cwd: sourceDir, prefix: "/etc" }, ["foo"]);
     const targetDir = mkdtempSync(join(scratchRoot, "tgt-"));
     let caught: unknown = null;
     try {
@@ -235,5 +232,4 @@ describe("extractHostSource (tar)", () => {
     const targetEntries = await readdir(targetDir);
     expect(targetEntries).toEqual([]);
   });
-
 });

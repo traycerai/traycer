@@ -5,7 +5,7 @@ import type { Environment } from "../runner/environment";
 import { createCliLogger, errorFromUnknown } from "../logger";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import { downloadToFile, fetchText } from "./fetch-resource";
-import { parseHostVersionsManifest } from "./manifest-schema";
+import { parseHostVersionsManifestWithWarnings } from "./manifest-schema";
 import { resolveManifestUrl } from "./manifest-url";
 import { verifyMinisignArchive } from "./minisign";
 import { loadTrustedKeys } from "./trusted-keys";
@@ -147,15 +147,26 @@ export async function createRegistryClient(
           exitCode: 1,
         });
       }
-      const manifest = parseHostVersionsManifest(
+      const parseResult = parseHostVersionsManifestWithWarnings(
         parsedJson,
         manifestUrlInfo.url,
       );
+      const { manifest } = parseResult;
+      parseResult.warnings.forEach((warning) => {
+        logger.warn("Registry manifest entry skipped", {
+          environment: opts.environment,
+          manifestUrl: manifestUrlInfo.url,
+          entryIndex: warning.entryIndex,
+          entryLabel: warning.entryLabel,
+          warning: warning.message,
+        });
+      });
       cachedManifest = manifest;
       logger.debug("Registry manifest parsed", {
         environment: opts.environment,
         hasLatest: manifest.latest.length > 0,
         versionCount: manifest.versions.length,
+        warningCount: parseResult.warnings.length,
       });
       return manifest;
     },

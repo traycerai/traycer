@@ -180,7 +180,10 @@ describe("hostStatusCommand auto-bootstrap wiring", () => {
     expect(autoBootstrap.maybeAutoBootstrap).toHaveBeenCalledWith(
       expect.objectContaining({ trigger: "host-status" }),
     );
-    const data = result.data as { bootstrap: AutoBootstrapDecision; running: boolean };
+    const data = result.data as {
+      bootstrap: AutoBootstrapDecision;
+      running: boolean;
+    };
     expect(data.bootstrap.status).toBe("installed");
     expect(data.bootstrap.installedVersion).toBe("1.5.0");
   });
@@ -190,9 +193,7 @@ describe("hostStatusCommand auto-bootstrap wiring", () => {
     const pid = await import("../../host/pid-metadata");
     const log = await import("../../host/bootstrap-log");
 
-    (autoBootstrap.maybeAutoBootstrap as Mock).mockResolvedValue(
-      decisionReady,
-    );
+    (autoBootstrap.maybeAutoBootstrap as Mock).mockResolvedValue(decisionReady);
     (pid.readHostPidMetadata as Mock).mockResolvedValue({
       // Use the live test-process pid so the status command's liveness
       // check (isProcessAlive) sees the host as actually running, not
@@ -209,7 +210,10 @@ describe("hostStatusCommand auto-bootstrap wiring", () => {
     const { hostStatusCommand } = await import("../host-status");
     const ctx = makeCtx(makeRuntime({}));
     const result = await hostStatusCommand(ctx);
-    const data = result.data as { bootstrap: AutoBootstrapDecision; running: boolean };
+    const data = result.data as {
+      bootstrap: AutoBootstrapDecision;
+      running: boolean;
+    };
     expect(data.bootstrap.status).toBe("ready");
     expect(data.running).toBe(true);
   });

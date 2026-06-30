@@ -115,7 +115,10 @@ export async function provisionHost(
   // `--force` (the desktop "Force restart", D5) must reinstall + restart even
   // when the install record already matches, so it never takes the satisfied
   // no-op fast path.
-  if (!opts.force && isSatisfied(fast, opts.targetVersion, opts.registerService)) {
+  if (
+    !opts.force &&
+    isSatisfied(fast, opts.targetVersion, opts.registerService)
+  ) {
     opts.runtime.logger.debug("Host provisioning fast-path satisfied", {
       environment: opts.runtime.environment,
       installed: fast.installed,
@@ -142,11 +145,7 @@ export async function provisionHost(
       // Re-read inside the lock so a caller that lost the race observes the
       // now-provisioned state and short-circuits instead of redundantly
       // downloading.
-      const state = await readProvisionState(
-        controller,
-        label,
-        opts.runtime,
-      );
+      const state = await readProvisionState(controller, label, opts.runtime);
       opts.runtime.logger.debug("Host provisioning locked state read", {
         environment: opts.runtime.environment,
         installed: state.installed,
@@ -158,12 +157,15 @@ export async function provisionHost(
         !opts.force &&
         isSatisfied(state, opts.targetVersion, opts.registerService)
       ) {
-        opts.runtime.logger.debug("Host provisioning satisfied after lock recheck", {
-          environment: opts.runtime.environment,
-          installed: state.installed,
-          registered: state.registered,
-          running: state.running,
-        });
+        opts.runtime.logger.debug(
+          "Host provisioning satisfied after lock recheck",
+          {
+            environment: opts.runtime.environment,
+            installed: state.installed,
+            registered: state.registered,
+            running: state.running,
+          },
+        );
         return noopResult(state);
       }
       // Bytes present + at target with host-owned registration: there is
@@ -174,11 +176,14 @@ export async function provisionHost(
         versionSatisfied(state, opts.targetVersion) &&
         !opts.registerService
       ) {
-        opts.runtime.logger.debug("Host provisioning no-op for host-owned service registration", {
-          environment: opts.runtime.environment,
-          installed: state.installed,
-          hasVersion: state.version !== null,
-        });
+        opts.runtime.logger.debug(
+          "Host provisioning no-op for host-owned service registration",
+          {
+            environment: opts.runtime.environment,
+            installed: state.installed,
+            hasVersion: state.version !== null,
+          },
+        );
         return noopResult(state);
       }
       // Every remaining path replaces or cycles a LIVE host - reinstall
@@ -198,10 +203,13 @@ export async function provisionHost(
         });
         await assertHostNotBusy(opts.runtime.environment);
       } else {
-        opts.runtime.logger.warn("Host provisioning skipped busy guard because force=true", {
-          environment: opts.runtime.environment,
-          reason: opts.lockReason,
-        });
+        opts.runtime.logger.warn(
+          "Host provisioning skipped busy guard because force=true",
+          {
+            environment: opts.runtime.environment,
+            reason: opts.lockReason,
+          },
+        );
       }
       // Reinstall when the bytes are absent/stale, OR when forced (D5: Force =
       // reinstall + restart onto this build even if the install record matches).
@@ -219,15 +227,21 @@ export async function provisionHost(
         return runInstall(opts, controller, label, progress);
       }
       if (!state.registered) {
-        opts.runtime.logger.debug("Host provisioning selected service-register branch", {
-          environment: opts.runtime.environment,
-        });
+        opts.runtime.logger.debug(
+          "Host provisioning selected service-register branch",
+          {
+            environment: opts.runtime.environment,
+          },
+        );
         return runServiceRegister(opts, controller, label, progress);
       }
       // installed + registered + stopped → start.
-      opts.runtime.logger.debug("Host provisioning selected service-start branch", {
-        environment: opts.runtime.environment,
-      });
+      opts.runtime.logger.debug(
+        "Host provisioning selected service-start branch",
+        {
+          environment: opts.runtime.environment,
+        },
+      );
       return runStart(opts, controller, label, state, progress);
     },
   );
@@ -336,19 +350,25 @@ async function runServiceRegister(
     override: null,
     allowSelfInvocation: opts.allowSelfInvocation,
   });
-  opts.runtime.logger.debug("Host provisioning service CLI invocation resolved", {
-    environment: opts.runtime.environment,
-    argCount: cli.args.length,
-    enableLinger: opts.enableLinger,
-    allowSelfInvocation: opts.allowSelfInvocation,
-  });
+  opts.runtime.logger.debug(
+    "Host provisioning service CLI invocation resolved",
+    {
+      environment: opts.runtime.environment,
+      argCount: cli.args.length,
+      enableLinger: opts.enableLinger,
+      allowSelfInvocation: opts.allowSelfInvocation,
+    },
+  );
   await controller.install({ label, cli, enableLinger: opts.enableLinger });
   const post = await readProvisionState(controller, label, opts.runtime);
-  opts.runtime.logger.info("Host provisioning service-register branch completed", {
-    environment: opts.runtime.environment,
-    registered: post.registered,
-    running: post.running,
-  });
+  opts.runtime.logger.info(
+    "Host provisioning service-register branch completed",
+    {
+      environment: opts.runtime.environment,
+      registered: post.registered,
+      running: post.running,
+    },
+  );
   return {
     installed: true,
     registered: post.registered,
