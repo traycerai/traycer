@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { deriveToolInputDetail } from "@traycer/protocol/host/agent/gui/tool-input-detail";
 import { deriveToolInputSummary } from "@traycer/protocol/host/agent/gui/tool-input-summary";
 import { ToolSegment } from "@/components/chat/segments/tool-segment";
+import { useToolOpenStore } from "@/stores/chats/tool-open-store";
 
 // The host precomputes these from the raw harness input (no longer persisted)
 // at the accumulator chokepoint; the component renders the precomputed fields.
@@ -43,6 +44,7 @@ vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
 
 describe("<ToolSegment /> A2A send-message rendering", () => {
   afterEach(() => {
+    useToolOpenStore.getState().reset();
     cleanup();
   });
 
@@ -140,10 +142,41 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
 
     expect(screen.getByText("Open receiving agent")).toBeTruthy();
   });
+
+  it("opens sent-message cards from the shared tool open store", () => {
+    useToolOpenStore.getState().setOpen("tool-a2a-store", true);
+
+    render(
+      <ToolSegment
+        id="tool-a2a-store"
+        toolName="traycer_a2a/traycer_send_message"
+        {...inputProps("traycer_a2a/traycer_send_message", {})}
+        error={null}
+        agentMessageSend={{
+          receiverAgentId: "agent-receiver-1",
+          message: "Open through the shared store.",
+          responseId: null,
+          expectReply: false,
+        }}
+        isStreaming={false}
+        endState={null}
+        progress={null}
+        backgroundOutput={null}
+        backgroundTask={false}
+        startedAt={0}
+        durationMs={null}
+        variant="card"
+      />,
+    );
+
+    expect(screen.getByText("Open receiving agent")).toBeTruthy();
+    expect(screen.getByText("Open through the shared store.")).toBeTruthy();
+  });
 });
 
 describe("<ToolSegment /> input rendering", () => {
   afterEach(() => {
+    useToolOpenStore.getState().reset();
     cleanup();
   });
 
@@ -296,6 +329,7 @@ describe("<ToolSegment /> input rendering", () => {
 
 describe("<ToolSegment /> streaming heartbeat", () => {
   afterEach(() => {
+    useToolOpenStore.getState().reset();
     cleanup();
     vi.useRealTimers();
   });

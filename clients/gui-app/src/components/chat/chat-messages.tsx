@@ -35,6 +35,7 @@ import type { ScrollRestorationAdapter } from "@/hooks/scroll/scroll-restoration
 import { useScrollRestoration } from "@/hooks/scroll/use-scroll-restoration";
 import { ActivityGroupOpenStoreProvider } from "@/stores/chats/activity-group-open-store";
 import { createActivityGroupOpenStore } from "@/stores/chats/activity-group-open-store-core";
+import { useToolOpenStore } from "@/stores/chats/tool-open-store";
 import type {
   ChatMessage as ChatMessageModel,
   MessageSegment,
@@ -284,6 +285,8 @@ export function ChatMessages(props: ChatMessagesProps) {
   );
   const messageIndexByIdRef = useRef(messageIndexById);
   const scrollRequestRef = useRef(scrollRequest);
+  const handledScrollRequestIdRef = useRef<number | null>(null);
+  const backgroundToolBlockIdsRef = useRef(backgroundToolBlockIds);
   const [activityGroupOpenStore] = useState(createActivityGroupOpenStore);
 
   const [listDataState, setListDataState] = useState<ChatListDataState>(() =>
@@ -301,6 +304,14 @@ export function ChatMessages(props: ChatMessagesProps) {
   useLayoutEffect(() => {
     scrollRequestRef.current = scrollRequest;
   }, [scrollRequest]);
+
+  useLayoutEffect(() => {
+    backgroundToolBlockIdsRef.current = backgroundToolBlockIds;
+  }, [backgroundToolBlockIds]);
+
+  useLayoutEffect(() => {
+    useToolOpenStore.getState().reset();
+  }, [instanceId]);
 
   let effectiveBottomFollowing = bottomFollowing;
   let listData = listDataState.value;
@@ -657,22 +668,20 @@ export function ChatMessages(props: ChatMessagesProps) {
   useLayoutEffect(() => {
     const request = scrollRequestRef.current;
     if (request === null) return;
+    if (handledScrollRequestIdRef.current === request.requestId) return;
+    handledScrollRequestIdRef.current = request.requestId;
     const activityGroupId = activityGroupIdForBlock(
       messagesRef.current,
       request.messageId,
       request.blockId,
-      backgroundToolBlockIds,
+      backgroundToolBlockIdsRef.current,
     );
     if (activityGroupId !== null) {
       activityGroupOpenStore.getState().setOpen(activityGroupId, true);
     }
     navigateToMessage(request.messageId);
-  }, [
-    activityGroupOpenStore,
-    backgroundToolBlockIds,
-    navigateToMessage,
-    scrollRequest?.requestId,
-  ]);
+    scrollRequestRef.current = null;
+  }, [activityGroupOpenStore, navigateToMessage, scrollRequest?.requestId]);
 
   return (
     <ActivityGroupOpenStoreProvider store={activityGroupOpenStore}>

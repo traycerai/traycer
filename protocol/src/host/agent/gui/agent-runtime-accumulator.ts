@@ -185,8 +185,21 @@ export function reopenStreamingSubagentBlocks(
   finalized: ContentBlock[],
 ): ContentBlock[] {
   if (finalized === before) return finalized;
-  const streamingDetachedIds = new Set(
-    before
+  const streamingDetachedIds = streamingDetachedBlockIds(before);
+  if (streamingDetachedIds.size === 0) return finalized;
+  const beforeById = new Map(before.map((block) => [block.blockId, block]));
+  return finalized.map((block) =>
+    streamingDetachedIds.has(block.blockId)
+      ? (beforeById.get(block.blockId) ?? block)
+      : block,
+  );
+}
+
+function streamingDetachedBlockIds(
+  blocks: ContentBlock[],
+): ReadonlySet<string> {
+  const ids = new Set(
+    blocks
       .filter(
         (block) =>
           block.status === "streaming" &&
@@ -195,13 +208,22 @@ export function reopenStreamingSubagentBlocks(
       )
       .map((block) => block.blockId),
   );
-  if (streamingDetachedIds.size === 0) return finalized;
-  const beforeById = new Map(before.map((block) => [block.blockId, block]));
-  return finalized.map((block) =>
-    streamingDetachedIds.has(block.blockId)
-      ? beforeById.get(block.blockId) ?? block
-      : block,
-  );
+  if (ids.size === 0) return ids;
+
+  let changed = true;
+  while (changed) {
+    changed = false;
+    blocks.forEach((block) => {
+      if (block.status !== "streaming") return;
+      const parentBlockId = block.parentBlockId ?? null;
+      if (parentBlockId === null) return;
+      if (!ids.has(parentBlockId) || ids.has(block.blockId)) return;
+      ids.add(block.blockId);
+      changed = true;
+    });
+  }
+
+  return ids;
 }
 
 function finalizeBlock(

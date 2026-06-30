@@ -1,4 +1,4 @@
-import { CheckCheck, XCircle } from "lucide-react";
+import { CheckCheck, RotateCw, XCircle } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import type { AutonomousResumeTrigger } from "@traycer/protocol/persistence/epic/content-blocks";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -32,12 +32,26 @@ function triggerKey(trigger: AutonomousResumeTrigger): string {
 export function AutonomousResumeSegment(props: AutonomousResumeSegmentProps) {
   const { triggers } = props;
 
-  if (triggers.length === 0) return null;
   return (
     <div className="flex flex-col gap-2">
+      <ResumeMarker />
       {triggers.map((trigger) => (
         <ResumeCompletionCard key={triggerKey(trigger)} trigger={trigger} />
       ))}
+    </div>
+  );
+}
+
+function ResumeMarker() {
+  return (
+    <div
+      role="status"
+      aria-label="Resumed"
+      data-testid="autonomous-resume-marker"
+      className="flex w-fit min-w-0 max-w-full items-center gap-1.5 rounded-md border border-border/40 bg-muted/20 px-2 py-1 text-ui-xs text-muted-foreground"
+    >
+      <RotateCw className="size-3.5 shrink-0" aria-hidden />
+      <span className="shrink-0 font-medium text-foreground/80">Resumed</span>
     </div>
   );
 }
@@ -160,7 +174,7 @@ function ResumeResultPanel(props: { readonly result: string }) {
       bodyChrome="framed"
       className={undefined}
     >
-      <div className="max-h-[min(40vh,24rem)] overflow-auto px-3 py-2">
+      <div className="px-3 py-2">
         <AgentReferenceMarkdown
           isStreaming={false}
           markdown={props.result}
@@ -180,7 +194,7 @@ function ResumeOutputUnavailablePanel() {
       bodyChrome="framed"
       className={undefined}
     >
-      <div className="max-h-[min(40vh,24rem)] overflow-auto px-3 py-2">
+      <div className="px-3 py-2">
         {resumeOutputBody({
           outputFileAvailable: false,
           isLoading: false,
@@ -222,9 +236,7 @@ function ResumeOutputPanel(props: {
       bodyChrome="framed"
       className={undefined}
     >
-      <div className="max-h-[min(40vh,24rem)] overflow-auto px-3 py-2">
-        {body}
-      </div>
+      <div className="px-3 py-2">{body}</div>
     </SegmentPanel>
   );
 }

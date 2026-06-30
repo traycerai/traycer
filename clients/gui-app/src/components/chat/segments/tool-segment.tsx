@@ -1,5 +1,5 @@
 import { SendHorizontal, Wrench } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { v4 as uuidv4 } from "uuid";
 import type {
   AgentMessageSend,
@@ -510,8 +510,10 @@ function BackgroundOutputPanels(props: {
 function A2ASendToolSegment(
   props: ToolSegmentProps & { readonly send: AgentMessageSend },
 ) {
-  const { error, isStreaming, endState, send, variant } = props;
-  const [open, setOpen] = useState<boolean>(false);
+  const { error, isStreaming, endState, id, send, variant } = props;
+  const open = useToolOpenStore((state) => state.openIds.has(id));
+  const setToolOpen = useToolOpenStore((state) => state.setOpen);
+  const setOpen = (next: boolean): void => setToolOpen(id, next);
   const hasError = error !== null && error.length > 0;
   const badgeState = resolveToolBadgeState({
     hasError,

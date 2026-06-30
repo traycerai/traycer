@@ -15,7 +15,10 @@ import type { ReactNode } from "react";
 vi.mock("@/hooks/editor/use-editor-open-mutation", () => ({
   useEditorOpen: () => ({ mutate: () => undefined }),
 }));
-import { ChatMessages } from "@/components/chat/chat-messages";
+import {
+  ChatMessages,
+  type ChatMessageScrollRequest,
+} from "@/components/chat/chat-messages";
 import { ChatUserMessageMinimap } from "@/components/chat/chat-user-message-minimap";
 import {
   chatMinimapClipRegionProps,
@@ -56,6 +59,7 @@ function chatMessagesJsx(
     minimapItems: ReadonlyArray<ChatUserMinimapItem>;
     scrollStateKey: string;
     visible: boolean;
+    scrollRequest: ChatMessageScrollRequest | null;
   },
 ): ReactNode {
   return (
@@ -70,7 +74,7 @@ function chatMessagesJsx(
         nextStepActions={null}
         instanceId="test-instance"
         visible={opts.visible}
-        scrollRequest={null}
+        scrollRequest={opts.scrollRequest}
       />
     </VirtuosoMessageListTestingContext.Provider>
   );
@@ -83,6 +87,7 @@ function renderChatMessages(
     minimapItems: ReadonlyArray<ChatUserMinimapItem>;
     scrollStateKey: string;
     visible: boolean;
+    scrollRequest: ChatMessageScrollRequest | null;
   },
 ) {
   return render(chatMessagesJsx(messages, opts));
@@ -94,6 +99,7 @@ function makeDefaultOpts(
     minimapItems: ReadonlyArray<ChatUserMinimapItem>;
     scrollStateKey: string;
     visible: boolean;
+    scrollRequest: ChatMessageScrollRequest | null;
   }>,
 ) {
   return {
@@ -103,6 +109,7 @@ function makeDefaultOpts(
       overrides.scrollStateKey ??
       `chat-scroll-test-key-${scrollStateKeySequence++}`,
     visible: overrides.visible ?? true,
+    scrollRequest: overrides.scrollRequest ?? null,
   };
 }
 
@@ -114,6 +121,7 @@ function rerenderChatMessages(
     minimapItems: ReadonlyArray<ChatUserMinimapItem>;
     scrollStateKey: string;
     visible: boolean;
+    scrollRequest: ChatMessageScrollRequest | null;
   },
 ): void {
   rerender(chatMessagesJsx(messages, opts));
@@ -232,6 +240,41 @@ describe("ChatMessages Virtuoso renderer", () => {
     );
 
     expect(screen.getByText("echo hi")).not.toBeNull();
+  });
+
+  it("consumes background scroll requests once across background item refreshes", async () => {
+    const messages = [makeAssistantMessage("assistant-1", "activity-1")];
+    const scrollRequest = {
+      messageId: "assistant-1",
+      blockId: "activity-1:command",
+      requestId: 1,
+    };
+    const opts = makeDefaultOpts({ minimapItems: [], scrollRequest });
+    const { rerender } = renderChatMessages(messages, opts);
+
+    await waitFor(() => {
+      expect(screen.getByText("echo hi")).not.toBeNull();
+    });
+
+    fireEvent.click(getButtonContainingText("Ran 1 command"));
+    expect(screen.queryByText("echo hi")).toBeNull();
+
+    rerenderChatMessages(rerender, messages, {
+      ...opts,
+      backgroundItems: [
+        {
+          taskId: "task-bg",
+          kind: "command",
+          title: "sleep 60",
+          status: "running",
+          toolUseId: "tool-bg",
+          blockId: "unrelated-tool",
+          startedAt: 1,
+        },
+      ],
+    });
+
+    expect(screen.queryByText("echo hi")).toBeNull();
   });
 
   it("renders a host-reported background command as a live standalone card", async () => {

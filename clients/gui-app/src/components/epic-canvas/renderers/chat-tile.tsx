@@ -73,7 +73,10 @@ import {
 } from "@/hooks/composer/use-workspace-mention-roots";
 import { useChatSessionHandle } from "@/lib/registries/chat-session-registry";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
-import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
+import type {
+  ChatMessage as ChatMessageModel,
+  MessageSegment,
+} from "@/stores/composer/chat-store";
 import type {
   ChatSessionState,
   ChatSessionStoreHandle,
@@ -421,18 +424,45 @@ function chatTileAccessFlags(
   };
 }
 
+type BackgroundBlockSearchNode =
+  | MessageSegment
+  | {
+      readonly id: string;
+      readonly children: ReadonlyArray<BackgroundBlockSearchNode>;
+    }
+  | {
+      readonly id: string;
+      readonly files: ReadonlyArray<BackgroundBlockSearchNode>;
+    }
+  | {
+      readonly id: string;
+      readonly segments: ReadonlyArray<BackgroundBlockSearchNode>;
+    }
+  | {
+      readonly id: string;
+      readonly group: {
+        readonly segments: ReadonlyArray<BackgroundBlockSearchNode>;
+      };
+    };
+
 function segmentContainsBackgroundBlock(
-  segment: ChatMessageModel["segments"][number],
+  segment: BackgroundBlockSearchNode,
   blockId: string,
 ): boolean {
   if (segment.id === blockId) return true;
-  if (segment.kind === "subagent") {
-    return segment.children.some((child) => child.id === blockId);
-  }
-  if (segment.kind === "file_change_group") {
-    return segment.files.some((file) => file.id === blockId);
-  }
-  return false;
+  return backgroundBlockSearchChildren(segment).some((child) =>
+    segmentContainsBackgroundBlock(child, blockId),
+  );
+}
+
+function backgroundBlockSearchChildren(
+  segment: BackgroundBlockSearchNode,
+): ReadonlyArray<BackgroundBlockSearchNode> {
+  if ("children" in segment) return segment.children;
+  if ("files" in segment) return segment.files;
+  if ("segments" in segment) return segment.segments;
+  if ("group" in segment) return segment.group.segments;
+  return [];
 }
 
 function messageIdForBlock(

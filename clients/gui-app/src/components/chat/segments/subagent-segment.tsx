@@ -412,7 +412,7 @@ function SubagentResultPanel(props: {
       bodyChrome="framed"
       className={undefined}
     >
-      <div className="max-h-[min(40vh,24rem)] overflow-auto px-3 py-2">
+      <div className="px-3 py-2">
         <AgentReferenceMarkdown
           isStreaming={isStreaming}
           markdown={result}

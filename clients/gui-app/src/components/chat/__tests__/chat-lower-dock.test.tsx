@@ -139,18 +139,22 @@ describe("<ChatLowerDock />", () => {
       onBackgroundItemsStopAll,
     });
 
-    expect(screen.getByTestId("background-items-panel")).not.toBeNull();
-    fireEvent.click(screen.getByTestId("background-stop-all"));
+    const backgroundPanel = screen.getByRole("button", {
+      name: /Background.*1 running/,
+    });
+    expect(backgroundPanel).not.toBeNull();
+    const stopAll = screen.getByRole("button", { name: "Stop all" });
+    fireEvent.click(stopAll);
     expect(onBackgroundItemsStopAll).toHaveBeenCalledTimes(1);
 
-    fireEvent.click(screen.getByText("Background"));
-    fireEvent.click(screen.getByTestId("background-stop-all"));
+    fireEvent.click(backgroundPanel);
+    fireEvent.click(stopAll);
     expect(onBackgroundItemsStopAll).toHaveBeenCalledTimes(2);
 
-    fireEvent.click(screen.getByText("bun test"));
+    fireEvent.click(screen.getByRole("button", { name: /bun test.*Command/ }));
     expect(onBackgroundItemClick).toHaveBeenCalledWith(item);
 
-    fireEvent.click(screen.getByLabelText("Stop Command"));
+    fireEvent.click(screen.getByRole("button", { name: "Stop Command" }));
     expect(onBackgroundItemStop).toHaveBeenCalledWith("task-1");
   });
 });

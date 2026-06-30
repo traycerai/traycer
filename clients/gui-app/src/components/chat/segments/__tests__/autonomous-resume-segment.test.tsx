@@ -69,11 +69,14 @@ describe("<AutonomousResumeSegment />", () => {
       />,
     );
 
-    expect(screen.getByText("Command completed")).toBeTruthy();
+    const commandButton = screen.getByRole("button", {
+      name: /Command completed/,
+    });
+    expect(commandButton).toBeTruthy();
     expect(screen.getByText("Command finished")).toBeTruthy();
     expect(hostQueryMock.calls).toHaveLength(0);
 
-    fireEvent.click(screen.getByRole("button", { name: /Command completed/ }));
+    fireEvent.click(commandButton);
 
     expect(
       hostQueryMock.calls.map((call) => ({
@@ -117,11 +120,14 @@ describe("<AutonomousResumeSegment />", () => {
       />,
     );
 
-    expect(screen.queryByTestId("autonomous-resume-marker")).toBeNull();
-    expect(screen.getByText("Command completed")).toBeTruthy();
+    expect(screen.getByRole("status", { name: "Resumed" })).toBeTruthy();
+    const commandButton = screen.getByRole("button", {
+      name: /Command completed/,
+    });
+    expect(commandButton).toBeTruthy();
     expect(hostQueryMock.calls).toHaveLength(0);
 
-    fireEvent.click(screen.getByRole("button", { name: /Command completed/ }));
+    fireEvent.click(commandButton);
 
     expect(screen.getByText("Output")).toBeTruthy();
     expect(screen.getByText("Output file unavailable.")).toBeTruthy();
@@ -144,8 +150,10 @@ describe("<AutonomousResumeSegment />", () => {
       />,
     );
 
-    expect(screen.queryByTestId("autonomous-resume-marker")).toBeNull();
-    expect(screen.getAllByText("Monitor stopped").length).toBeGreaterThan(0);
+    expect(screen.getByRole("status", { name: "Resumed" })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: /Monitor stopped/ }),
+    ).toBeTruthy();
     expect(hostQueryMock.calls).toHaveLength(0);
   });
 });

@@ -2050,6 +2050,66 @@ describe("turn-end finalization of streaming blocks", () => {
     ]);
   });
 
+  it("keeps streaming descendants of detached roots open on a clean turn.completed", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "subagent.started",
+      blockId: "sa",
+      timestamp: 1,
+      name: "explorer",
+      task: "investigate",
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "tool_call.started",
+      blockId: "sa-tool",
+      parentBlockId: "sa",
+      timestamp: 2,
+      toolName: "read",
+      input: {},
+      agentMessageSend: null,
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "file_change.started",
+      blockId: "sa-file",
+      parentBlockId: "sa-tool",
+      timestamp: 3,
+      filePath: "/repo/a.ts",
+      operation: "modify",
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "tool_call.started",
+      blockId: "bg-tool",
+      timestamp: 4,
+      toolName: "Bash",
+      input: {},
+      agentMessageSend: null,
+      backgroundTask: true,
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "command.started",
+      blockId: "bg-command",
+      parentBlockId: "bg-tool",
+      timestamp: 5,
+      command: "sleep 60",
+      cwd: "/repo",
+    });
+
+    blocks = accumulateEvent(blocks, {
+      type: "turn.completed",
+      blockId: "turn",
+      timestamp: 6,
+      turnId: "turn",
+    });
+
+    expect(blocks.map((block) => [block.blockId, block.status])).toEqual([
+      ["sa", "streaming"],
+      ["sa-tool", "streaming"],
+      ["sa-file", "streaming"],
+      ["bg-tool", "streaming"],
+      ["bg-command", "streaming"],
+    ]);
+  });
+
   it("treats a non-steer turn.interrupted as 'interrupted'", () => {
     let blocks = startedActionBlocks();
     blocks = accumulateEvent(blocks, {

@@ -3,6 +3,7 @@ import { create } from "zustand";
 interface ToolOpenState {
   readonly openIds: ReadonlySet<string>;
   setOpen: (segmentId: string, open: boolean) => void;
+  reset: () => void;
 }
 
 export const useToolOpenStore = create<ToolOpenState>((set) => ({
@@ -19,4 +20,5 @@ export const useToolOpenStore = create<ToolOpenState>((set) => ({
       }
       return { openIds: next };
     }),
+  reset: () => set({ openIds: new Set() }),
 }));
