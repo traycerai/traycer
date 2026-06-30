@@ -10,6 +10,10 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
 import { LivePulse } from "@/components/ui/live-pulse";
 import { cn } from "@/lib/utils";
+import {
+  scopedChatOpenId,
+  useChatOpenStoreScope,
+} from "@/stores/chats/open-store-scope";
 import { useSubagentOpenStore } from "@/stores/chats/subagent-open-store";
 import { AgentReferenceMarkdown } from "./agent-reference-markdown";
 import { SubagentAvatar } from "./subagent-avatar";
@@ -71,11 +75,14 @@ function CompactSubagentSegment(props: CompactSubagentSegmentProps) {
     durationMs,
     variant,
   } = props;
-  const open = useSubagentOpenStore((s) => s.openIds.has(id));
+  const openScope = useChatOpenStoreScope();
+  const open = useSubagentOpenStore((s) =>
+    s.openIds.has(scopedChatOpenId(openScope, id)),
+  );
   const setOpen = useSubagentOpenStore((s) => s.setOpen);
   const handleOpenChange = useCallback(
-    (newOpen: boolean) => setOpen(id, newOpen),
-    [id, setOpen],
+    (newOpen: boolean) => setOpen(openScope, id, newOpen),
+    [id, openScope, setOpen],
   );
   const displayProgressUpdates =
     useAdjacentDedupedProgressItems(progressUpdates);
@@ -205,11 +212,14 @@ function PromotedSubagentSegment(props: Omit<SubagentSegmentProps, "variant">) {
     startedAt,
     durationMs,
   } = props;
-  const open = useSubagentOpenStore((s) => s.openIds.has(id));
+  const openScope = useChatOpenStoreScope();
+  const open = useSubagentOpenStore((s) =>
+    s.openIds.has(scopedChatOpenId(openScope, id)),
+  );
   const setOpen = useSubagentOpenStore((s) => s.setOpen);
   const updateOpen = useCallback(
-    (newOpen: boolean) => setOpen(id, newOpen),
-    [id, setOpen],
+    (newOpen: boolean) => setOpen(openScope, id, newOpen),
+    [id, openScope, setOpen],
   );
   const handleOpenChange = useChatMeasuredOpenChange(updateOpen);
   const displayName = cleanSubagentNotificationText(name) ?? "Subagent";

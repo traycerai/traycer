@@ -2516,8 +2516,8 @@ export type HostRpcRegistry = typeof hostRpcRegistry;
  * `chat.subscribe@2.0`, `notifications.subscribe@1.0`,
  * `terminal.subscribe@1.0`, `git.subscribeStatus@1.0`,
  * `agent.inbox.subscribe@1.0`, `speech.dictate@1.0`, and
- * `migration.run@1.0` live at
- * `{ major: 1, minor: 0 }`. Later minors within the same major line must be
+ * `migration.run@1.0` are negotiated from this registry. Later minors within
+ * the same major line must be
  * additive; later majors must carry a real breaking change and ship without a
  * cross-major downgrade bridge (streams reconnect on mismatched majors in v1).
  *

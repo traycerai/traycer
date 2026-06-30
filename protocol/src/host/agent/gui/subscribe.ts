@@ -105,9 +105,9 @@ export const chatActionSchema = z.enum([
   "interviewError",
   "restoreCheckpoint",
   "revertFileChanges",
-  // Background-items controls (additive; gated on the host advertising
-  // `backgroundItems` in its snapshot - an older host that can't parse these
-  // silently drops them, so the renderer MUST only send them when supported).
+  // Background-items controls for the v2 chat stream. The renderer still gates
+  // sends on the host advertising `backgroundItems` in snapshots so test hosts
+  // and unsupported providers remain inert.
   "stopBackgroundItem",
   "stopAllBackgroundItems",
 ]);
@@ -337,10 +337,10 @@ export const chatSnapshotSchema = z.object({
   // Drives the pinned accumulated-changes panel above the composer.
   accumulatedFileChanges: z.array(chatAccumulatedFileChangeSchema),
   // In-flight background work (backgrounded subagents, run_in_background
-  // commands, Monitors). OPTIONAL on purpose: `undefined` means an older host
-  // that does not support background-item controls, so the renderer hides the
+  // commands, Monitors). OPTIONAL on purpose: `undefined` means this host/session
+  // does not expose background-item controls, so the renderer hides the
   // Background section and never sends stop actions; a present (possibly empty)
-  // array means the host supports them. This is the capability sentinel.
+  // array means the controls are supported. This is the capability sentinel.
   backgroundItems: z.array(backgroundItemSchema).optional(),
 });
 export type ChatSnapshot = z.infer<typeof chatSnapshotSchema>;
@@ -369,6 +369,9 @@ export const chatSubscribeServerFrameSchema = z.discriminatedUnion("kind", [
     status: chatActionAckStatusSchema,
     reason: z.string().nullable(),
     code: z.string().nullable(),
+    // For background stop-all, task ids whose provider stop request was accepted
+    // even when the aggregate action is rejected for partial failure.
+    backgroundStopTaskIds: z.array(z.string()),
   }),
   z.object({
     kind: z.literal("messageAccepted"),

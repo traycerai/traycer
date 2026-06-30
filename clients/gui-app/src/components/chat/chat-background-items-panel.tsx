@@ -94,8 +94,6 @@ export function BackgroundItemsPanel(props: {
   const [open, setOpen] = useState(false);
   const stoppable = props.canAct && !props.readOnly;
   const items = dedupeByTaskId(props.items);
-  // While a "Stop all" is in flight every Stop is disabled; otherwise a row is
-  // disabled only while its own task's stop is pending.
   const stopAllDisabled = !stoppable || props.stopAllPending;
 
   return (
@@ -176,8 +174,7 @@ export function BackgroundItemsPanel(props: {
                     label={`Stop ${backgroundKindLabel(item.kind)}`}
                     iconOnly
                     disabled={
-                      stopAllDisabled ||
-                      props.pendingStopTaskIds.has(item.taskId)
+                      !stoppable || props.pendingStopTaskIds.has(item.taskId)
                     }
                     testId={undefined}
                     onClick={() => props.onStopItem(item.taskId)}

@@ -44,7 +44,7 @@ vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
 
 describe("<ToolSegment /> A2A send-message rendering", () => {
   afterEach(() => {
-    useToolOpenStore.getState().reset();
+    useToolOpenStore.getState().reset("default");
     cleanup();
   });
 
@@ -146,7 +146,7 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
   });
 
   it("opens sent-message cards from the shared tool open store", () => {
-    useToolOpenStore.getState().setOpen("tool-a2a-store", true);
+    useToolOpenStore.getState().setOpen("default", "tool-a2a-store", true);
 
     render(
       <ToolSegment
@@ -178,7 +178,7 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
 
 describe("<ToolSegment /> input rendering", () => {
   afterEach(() => {
-    useToolOpenStore.getState().reset();
+    useToolOpenStore.getState().reset("default");
     cleanup();
   });
 
@@ -331,7 +331,7 @@ describe("<ToolSegment /> input rendering", () => {
 
 describe("<ToolSegment /> streaming heartbeat", () => {
   afterEach(() => {
-    useToolOpenStore.getState().reset();
+    useToolOpenStore.getState().reset("default");
     cleanup();
     vi.useRealTimers();
   });

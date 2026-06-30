@@ -35,6 +35,7 @@ import type { ScrollRestorationAdapter } from "@/hooks/scroll/scroll-restoration
 import { useScrollRestoration } from "@/hooks/scroll/use-scroll-restoration";
 import { ActivityGroupOpenStoreProvider } from "@/stores/chats/activity-group-open-store";
 import { createActivityGroupOpenStore } from "@/stores/chats/activity-group-open-store-core";
+import { ChatOpenStoreScopeProvider } from "@/stores/chats/open-store-scope";
 import { useToolOpenStore } from "@/stores/chats/tool-open-store";
 import type {
   ChatMessage as ChatMessageModel,
@@ -310,7 +311,7 @@ export function ChatMessages(props: ChatMessagesProps) {
   }, [backgroundToolBlockIds]);
 
   useLayoutEffect(() => {
-    useToolOpenStore.getState().reset();
+    useToolOpenStore.getState().reset(instanceId);
   }, [instanceId]);
 
   let effectiveBottomFollowing = bottomFollowing;
@@ -684,62 +685,66 @@ export function ChatMessages(props: ChatMessagesProps) {
   }, [activityGroupOpenStore, navigateToMessage, scrollRequest?.requestId]);
 
   return (
-    <ActivityGroupOpenStoreProvider store={activityGroupOpenStore}>
-      <ChatMeasuredItemChangeContext.Provider value={requestMeasuredItemChange}>
-        <div
-          {...chatMinimapClipRegionProps}
-          className="relative flex-1 overflow-hidden"
+    <ChatOpenStoreScopeProvider value={instanceId}>
+      <ActivityGroupOpenStoreProvider store={activityGroupOpenStore}>
+        <ChatMeasuredItemChangeContext.Provider
+          value={requestMeasuredItemChange}
         >
-          <VirtuosoMessageListLicense
-            licenseKey={VIRTUOSO_MESSAGE_LIST_LICENSE_KEY}
-          >
-            <VirtuosoMessageList<ChatVirtuosoItem, ChatListContext>
-              ref={virtuosoRef}
-              data={listData}
-              context={context}
-              computeItemKey={chatComputeItemKey}
-              itemIdentity={chatItemIdentity}
-              shortSizeAlign="top"
-              increaseViewportBy={INCREASE_VIEWPORT_BY_PX}
-              ItemContent={ChatItemContent}
-              Header={ChatListHeader}
-              Footer={ChatListFooter}
-              EmptyPlaceholder={ChatListEmptyPlaceholder}
-              className="chat-scrollbar-native-thin mr-1 h-full overflow-y-auto"
-              data-testid="chat-messages-scroll"
-              onScroll={handleScroll}
-              onWheelCapture={handleWheelCapture}
-              onKeyDownCapture={handleKeyDownCapture}
-              onPointerDownCapture={handlePointerDownCapture}
-              onPointerUpCapture={handlePointerUpCapture}
-              onPointerCancelCapture={handlePointerUpCapture}
-              onTouchStartCapture={handleTouchStartCapture}
-              onTouchMoveCapture={handleTouchMoveCapture}
-              onTouchEndCapture={handleTouchEndCapture}
-              onTouchCancelCapture={handleTouchEndCapture}
-              onRenderedDataChange={handleRenderedDataChange}
-            />
-          </VirtuosoMessageListLicense>
           <div
-            aria-hidden="true"
-            className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-linear-to-t from-background to-transparent"
-          />
-          {hasContent ? (
-            <ChatUserMessageMinimap
-              items={minimapItems}
-              activeMessageId={activeUserMessageId}
-              onItemClick={onMinimapItemClick}
+            {...chatMinimapClipRegionProps}
+            className="relative flex-1 overflow-hidden"
+          >
+            <VirtuosoMessageListLicense
+              licenseKey={VIRTUOSO_MESSAGE_LIST_LICENSE_KEY}
+            >
+              <VirtuosoMessageList<ChatVirtuosoItem, ChatListContext>
+                ref={virtuosoRef}
+                data={listData}
+                context={context}
+                computeItemKey={chatComputeItemKey}
+                itemIdentity={chatItemIdentity}
+                shortSizeAlign="top"
+                increaseViewportBy={INCREASE_VIEWPORT_BY_PX}
+                ItemContent={ChatItemContent}
+                Header={ChatListHeader}
+                Footer={ChatListFooter}
+                EmptyPlaceholder={ChatListEmptyPlaceholder}
+                className="chat-scrollbar-native-thin mr-1 h-full overflow-y-auto"
+                data-testid="chat-messages-scroll"
+                onScroll={handleScroll}
+                onWheelCapture={handleWheelCapture}
+                onKeyDownCapture={handleKeyDownCapture}
+                onPointerDownCapture={handlePointerDownCapture}
+                onPointerUpCapture={handlePointerUpCapture}
+                onPointerCancelCapture={handlePointerUpCapture}
+                onTouchStartCapture={handleTouchStartCapture}
+                onTouchMoveCapture={handleTouchMoveCapture}
+                onTouchEndCapture={handleTouchEndCapture}
+                onTouchCancelCapture={handleTouchEndCapture}
+                onRenderedDataChange={handleRenderedDataChange}
+              />
+            </VirtuosoMessageListLicense>
+            <div
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-linear-to-t from-background to-transparent"
             />
-          ) : null}
-          {hasContent ? (
-            <ScrollToBottomChip
-              visible={!effectiveBottomFollowing}
-              onClick={jumpToBottom}
-            />
-          ) : null}
-        </div>
-      </ChatMeasuredItemChangeContext.Provider>
-    </ActivityGroupOpenStoreProvider>
+            {hasContent ? (
+              <ChatUserMessageMinimap
+                items={minimapItems}
+                activeMessageId={activeUserMessageId}
+                onItemClick={onMinimapItemClick}
+              />
+            ) : null}
+            {hasContent ? (
+              <ScrollToBottomChip
+                visible={!effectiveBottomFollowing}
+                onClick={jumpToBottom}
+              />
+            ) : null}
+          </div>
+        </ChatMeasuredItemChangeContext.Provider>
+      </ActivityGroupOpenStoreProvider>
+    </ChatOpenStoreScopeProvider>
   );
 }
 

@@ -14,8 +14,8 @@ const hostQueryMock = vi.hoisted(() => ({
   }>,
 }));
 
-vi.mock("@/lib/host", () => ({
-  useHostClient: () => ({ request: vi.fn() }),
+vi.mock("@/hooks/host/use-tab-host-client", () => ({
+  useTabHostClient: () => ({ request: vi.fn() }),
 }));
 
 vi.mock("@/hooks/host/use-host-query", () => ({

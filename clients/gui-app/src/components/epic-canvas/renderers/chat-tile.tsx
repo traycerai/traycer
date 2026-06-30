@@ -495,9 +495,13 @@ function ChatTileSessionView(props: ChatTileSessionViewProps) {
       const messageId = messageIdForBlock(view.messages, blockId);
       if (messageId === null) return;
       if (card === "subagent") {
-        useSubagentOpenStore.getState().setOpen(blockId, true);
+        useSubagentOpenStore
+          .getState()
+          .setOpen(props.node.instanceId, blockId, true);
       } else {
-        useToolOpenStore.getState().setOpen(blockId, true);
+        useToolOpenStore
+          .getState()
+          .setOpen(props.node.instanceId, blockId, true);
       }
       backgroundScrollRequestIdRef.current += 1;
       setBackgroundScrollRequest({
@@ -506,7 +510,7 @@ function ChatTileSessionView(props: ChatTileSessionViewProps) {
         requestId: backgroundScrollRequestIdRef.current,
       });
     },
-    [view.messages],
+    [props.node.instanceId, view.messages],
   );
   const scrollToBackgroundItem = useCallback(
     (item: BackgroundItem): void => {
@@ -1449,10 +1453,15 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   );
 
   const backgroundStopPendingTaskIds = useMemo<ReadonlySet<string>>(() => {
-    const taskIds = Object.keys(state.pendingBackgroundStops);
+    const taskIds = [
+      ...Object.keys(state.pendingBackgroundStops),
+      ...(state.pendingBackgroundStopAll === null
+        ? []
+        : Array.from(state.pendingBackgroundStopAll.taskIds)),
+    ];
     if (taskIds.length === 0) return EMPTY_BACKGROUND_STOP_TASK_IDS;
     return new Set(taskIds);
-  }, [state.pendingBackgroundStops]);
+  }, [state.pendingBackgroundStopAll, state.pendingBackgroundStops]);
 
   return {
     handle,
@@ -1482,7 +1491,9 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       composer: lowerComposer,
       backgroundItems: state.backgroundItems,
       backgroundStopPendingTaskIds,
-      backgroundStopAllPending: state.pendingBackgroundStopAll !== null,
+      backgroundStopAllPending:
+        state.pendingBackgroundStopAll !== null ||
+        backgroundStopPendingTaskIds.size > 0,
     },
     todo: pinnedTodoRenderState.todo,
     revertOnEdit,

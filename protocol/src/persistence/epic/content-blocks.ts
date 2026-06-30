@@ -410,9 +410,10 @@ export type AutonomousResumeOutputFile = z.infer<
 >;
 
 // One background task whose terminal settle contributed to waking the agent
-// into an autonomous (no-user-message) turn. `kind`/`status` mirror the live
-// BackgroundItem vocabulary; `title` is the same human label; `summary` is the
-// task notification's summary / a short result line. `blockId` is the
+// into an autonomous (no-user-message) turn. `kind` mirrors the live
+// BackgroundItem vocabulary, while `status` is the terminal outcome; `title` is
+// the same human label; `summary` is the task notification's summary / a short
+// result line. `blockId` is the
 // originating card's block id (the spawning tool_call / subagent block) so the
 // resume marker can scroll back to it; defaulted for back-compat with any
 // trigger persisted before this field existed (renders as non-clickable).

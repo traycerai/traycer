@@ -89,6 +89,7 @@ type ChatOwnerActionFrame = Exclude<
   ChatSubscribeClientFrame,
   { readonly kind: "ping" }
 >;
+type ChatActionAckFrame = Parameters<ChatStreamCallbacks["onActionAck"]>[0];
 type ChatSessionSetState = StoreApi<ChatSessionState>["setState"];
 type ChatSessionGetState = StoreApi<ChatSessionState>["getState"];
 type SendActionInput = {
@@ -267,11 +268,14 @@ export interface ChatSessionState {
   readonly pendingBackgroundStops: Readonly<Record<string, string>>;
   /**
    * The in-flight "Stop all" background request (its `clientActionId`), or
-   * null. Set while a stop-all frame is outstanding and cleared on its ack or
-   * once the running list drains. While present, every Stop control is
+   * null. Set while a stop-all frame is outstanding and kept after an accepted
+   * ack until the running list drains. While present, every Stop control is
    * disabled and a repeat "Stop all" is a no-op.
    */
-  readonly pendingBackgroundStopAll: { readonly clientActionId: string } | null;
+  readonly pendingBackgroundStopAll: {
+    readonly clientActionId: string;
+    readonly taskIds: ReadonlySet<string>;
+  } | null;
   readonly restore: ChatRestoreSlot | null;
   readonly pendingActions: Readonly<Record<string, PendingChatAction>>;
   readonly acceptedActions: Readonly<Record<string, AcceptedChatAction>>;
@@ -787,32 +791,14 @@ export function createChatSessionStore(
               : state.pendingUserMessages.filter(
                   (message) => message.clientActionId !== frame.clientActionId,
                 );
-          // Background-stop bookkeeping. A per-item stop stays "in flight"
-          // until its item leaves the running list (its terminal), so an
-          // `accepted` ack keeps it pending; a `rejected` ack clears it so the
-          // row's Stop re-enables for a retry. The stop-all flag clears on
-          // either outcome - the batch has been dispatched and individual
-          // items still drain through their own terminals.
-          const ackTaskId = backgroundStopTaskIdForActionId(
-            state.pendingBackgroundStops,
-            frame.clientActionId,
-          );
-          const nextBackgroundStops =
-            ackTaskId !== null && frame.status === "rejected"
-              ? withoutRecordKey(state.pendingBackgroundStops, ackTaskId)
-              : state.pendingBackgroundStops;
-          const nextBackgroundStopAll =
-            state.pendingBackgroundStopAll?.clientActionId ===
-            frame.clientActionId
-              ? null
-              : state.pendingBackgroundStopAll;
+          const backgroundStopAck = reconcileBackgroundStopAck(state, frame);
           if (frame.status === "accepted") {
             if (pending === null) {
               return {
                 pendingActions: nextPending,
                 pendingUserMessages: nextPendingUsers,
-                pendingBackgroundStops: nextBackgroundStops,
-                pendingBackgroundStopAll: nextBackgroundStopAll,
+                pendingBackgroundStops: backgroundStopAck.pendingStops,
+                pendingBackgroundStopAll: backgroundStopAck.pendingStopAll,
               };
             }
             return {
@@ -823,15 +809,15 @@ export function createChatSessionStore(
                 Date.now(),
               ),
               pendingUserMessages: nextPendingUsers,
-              pendingBackgroundStops: nextBackgroundStops,
-              pendingBackgroundStopAll: nextBackgroundStopAll,
+              pendingBackgroundStops: backgroundStopAck.pendingStops,
+              pendingBackgroundStopAll: backgroundStopAck.pendingStopAll,
             };
           }
           return {
             pendingActions: nextPending,
             pendingUserMessages: nextPendingUsers,
-            pendingBackgroundStops: nextBackgroundStops,
-            pendingBackgroundStopAll: nextBackgroundStopAll,
+            pendingBackgroundStops: backgroundStopAck.pendingStops,
+            pendingBackgroundStopAll: backgroundStopAck.pendingStopAll,
             queue: removeOptimisticQueuedItemByClientActionId(
               state.queue,
               frame.clientActionId,
@@ -1619,11 +1605,14 @@ export function createChatSessionStore(
       stopAllBackgroundItems: () => {
         const state = get();
         const items = state.backgroundItems;
-        // Unsupported sentinel, a stop-all already in flight, or nothing
-        // running: ignore so a rapid repeat does not enqueue a second frame.
+        // Unsupported sentinel, a stop-all already in flight, an accepted row
+        // stop still pending, or nothing running: ignore so a rapid repeat does
+        // not enqueue duplicate stop frames.
         if (items === undefined) return null;
         if (state.pendingBackgroundStopAll !== null) return null;
+        if (Object.keys(state.pendingBackgroundStops).length > 0) return null;
         if (items.length === 0) return null;
+        const taskIds = new Set(items.map((item) => item.taskId));
         const clientActionId = uuidv4();
         const frame: ChatOwnerActionFrame = {
           kind: "stopAllBackgroundItems",
@@ -1640,7 +1629,9 @@ export function createChatSessionStore(
           pendingUserMessage: null,
         });
         if (sent === null) return null;
-        set(() => ({ pendingBackgroundStopAll: { clientActionId: sent } }));
+        set(() => ({
+          pendingBackgroundStopAll: { clientActionId: sent, taskIds },
+        }));
         return sent;
       },
       resumeQueue: () => {
@@ -2082,6 +2073,39 @@ function backgroundStopTaskIdForActionId(
   return null;
 }
 
+function reconcileBackgroundStopAck(
+  state: ChatSessionState,
+  frame: ChatActionAckFrame,
+): {
+  readonly pendingStops: Readonly<Record<string, string>>;
+  readonly pendingStopAll: ChatSessionState["pendingBackgroundStopAll"];
+} {
+  // A stop stays "in flight" until the host running-only list drops the item(s),
+  // so accepted acks keep disabled state tied to stream truth instead of ack
+  // timing. Rejected acks clear only the failed request's pending state.
+  const ackTaskId = backgroundStopTaskIdForActionId(
+    state.pendingBackgroundStops,
+    frame.clientActionId,
+  );
+  const stopAllAcked =
+    state.pendingBackgroundStopAll?.clientActionId === frame.clientActionId;
+  const basePendingStops =
+    ackTaskId !== null && frame.status === "rejected"
+      ? withoutRecordKey(state.pendingBackgroundStops, ackTaskId)
+      : state.pendingBackgroundStops;
+  const pendingStops = stopAllAcked
+    ? withBackgroundStopTaskIds(
+        basePendingStops,
+        frame.backgroundStopTaskIds,
+        frame.clientActionId,
+      )
+    : basePendingStops;
+  return {
+    pendingStops,
+    pendingStopAll: stopAllAcked ? null : state.pendingBackgroundStopAll,
+  };
+}
+
 function withoutRecordKey(
   record: Readonly<Record<string, string>>,
   key: string,
@@ -2090,6 +2114,18 @@ function withoutRecordKey(
   const next = { ...record };
   delete next[key];
   return next;
+}
+
+function withBackgroundStopTaskIds(
+  record: Readonly<Record<string, string>>,
+  taskIds: ReadonlyArray<string>,
+  clientActionId: string,
+): Readonly<Record<string, string>> {
+  if (taskIds.length === 0) return record;
+  return {
+    ...record,
+    ...Object.fromEntries(taskIds.map((taskId) => [taskId, clientActionId])),
+  };
 }
 
 // Keep only the per-item stops whose task is still in the host's running-only
@@ -2116,12 +2152,29 @@ function reconcileBackgroundStops(
 // The stop-all flag clears once the running list has fully drained (or the
 // provider stopped reporting one); otherwise it persists until its ack.
 function reconcileBackgroundStopAll(
-  pendingBackgroundStopAll: { readonly clientActionId: string } | null,
+  pendingBackgroundStopAll: {
+    readonly clientActionId: string;
+    readonly taskIds: ReadonlySet<string>;
+  } | null,
   items: ReadonlyArray<BackgroundItem> | undefined,
-): { readonly clientActionId: string } | null {
+): {
+  readonly clientActionId: string;
+  readonly taskIds: ReadonlySet<string>;
+} | null {
   if (pendingBackgroundStopAll === null) return null;
   if (items === undefined || items.length === 0) return null;
-  return pendingBackgroundStopAll;
+  const running = new Set(items.map((item) => item.taskId));
+  const covered = Array.from(pendingBackgroundStopAll.taskIds).filter(
+    (taskId) => running.has(taskId),
+  );
+  if (covered.length === 0) return null;
+  if (covered.length === pendingBackgroundStopAll.taskIds.size) {
+    return pendingBackgroundStopAll;
+  }
+  return {
+    clientActionId: pendingBackgroundStopAll.clientActionId,
+    taskIds: new Set(covered),
+  };
 }
 
 /**
@@ -2345,9 +2398,10 @@ function applyBlockDelta(
 //     subagent CHILD; otherwise its own `blockId` (a genuinely top-level
 //     background command/Monitor terminal).
 //   - any other nested event  → its `parentBlockId`.
-// `mandatory` is set whenever the owner comes from `parentBlockId`: such an
-// event belongs to a child session and must NEVER fall through to the active
-// turn, where the accumulator would mint a duplicate top-level card for it.
+// `mandatory` is set whenever the owner comes from `parentBlockId` or from a
+// parentless background tool terminal: such an event belongs to an older row
+// and must NEVER fall through to the active turn, where the accumulator would
+// mint a duplicate top-level card for it.
 // Null for everything else (text/reasoning/top-level tool deltas), so the
 // common high-frequency path skips the owner lookup.
 function detachedSubagentOwnerTarget(
@@ -2373,7 +2427,10 @@ function detachedSubagentOwnerTarget(
     if (parentBlockId !== null) {
       return { ownerBlockId: parentBlockId, mandatory: true };
     }
-    return { ownerBlockId: event.blockId, mandatory: false };
+    return {
+      ownerBlockId: event.blockId,
+      mandatory: "backgroundTask" in event && event.backgroundTask === true,
+    };
   }
   if (parentBlockId !== null) {
     return { ownerBlockId: parentBlockId, mandatory: true };

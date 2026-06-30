@@ -229,6 +229,7 @@ describe("chat.subscribe@2.0 server frames", () => {
         status: "accepted",
         reason: null,
         code: null,
+        backgroundStopTaskIds: [],
       }),
     ).toMatchObject({ kind: "actionAck", status: "accepted" });
 
@@ -243,6 +244,7 @@ describe("chat.subscribe@2.0 server frames", () => {
         status: "rejected",
         reason: "Only the chat owner can stop a turn.",
         code: "NOT_OWNER",
+        backgroundStopTaskIds: [],
       }),
     ).toMatchObject({ kind: "actionAck", status: "rejected" });
 
@@ -257,6 +259,7 @@ describe("chat.subscribe@2.0 server frames", () => {
         status: "accepted",
         reason: null,
         code: null,
+        backgroundStopTaskIds: [],
       }),
     ).toMatchObject({ kind: "actionAck", action: "editUserMessage" });
 
@@ -271,6 +274,7 @@ describe("chat.subscribe@2.0 server frames", () => {
         status: "accepted",
         reason: null,
         code: null,
+        backgroundStopTaskIds: [],
       }),
     ).toMatchObject({ kind: "actionAck", action: "restoreCheckpoint" });
 
@@ -285,6 +289,7 @@ describe("chat.subscribe@2.0 server frames", () => {
         status: "accepted",
         reason: null,
         code: null,
+        backgroundStopTaskIds: [],
       }),
     ).toMatchObject({
       kind: "actionAck",

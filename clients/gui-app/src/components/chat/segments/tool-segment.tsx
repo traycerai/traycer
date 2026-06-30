@@ -28,6 +28,10 @@ import { SegmentRow } from "./segment-row";
 import { ToolInputPanel } from "./tool-input-panel";
 import { StreamingActivityFooter } from "./streaming-activity-footer";
 import { useToolOpenStore } from "@/stores/chats/tool-open-store";
+import {
+  scopedChatOpenId,
+  useChatOpenStoreScope,
+} from "@/stores/chats/open-store-scope";
 import { ElapsedTime } from "./segment-elapsed";
 
 interface ToolSegmentProps {
@@ -255,9 +259,12 @@ function GenericToolSegment(props: ToolSegmentProps) {
     isStreaming,
     isStopped,
   });
-  const open = useToolOpenStore((state) => state.openIds.has(id));
+  const openScope = useChatOpenStoreScope();
+  const open = useToolOpenStore((state) =>
+    state.openIds.has(scopedChatOpenId(openScope, id)),
+  );
   const setToolOpen = useToolOpenStore((state) => state.setOpen);
-  const setOpen = (next: boolean): void => setToolOpen(id, next);
+  const setOpen = (next: boolean): void => setToolOpen(openScope, id, next);
   const summary = inputSummary;
   const stackedHeader = variant === "card" && isStreaming;
   const headerLayout: ToolHeaderLayout = stackedHeader ? "stacked" : "inline";
@@ -511,9 +518,12 @@ function A2ASendToolSegment(
   props: ToolSegmentProps & { readonly send: AgentMessageSend },
 ) {
   const { error, isStreaming, endState, id, send, variant } = props;
-  const open = useToolOpenStore((state) => state.openIds.has(id));
+  const openScope = useChatOpenStoreScope();
+  const open = useToolOpenStore((state) =>
+    state.openIds.has(scopedChatOpenId(openScope, id)),
+  );
   const setToolOpen = useToolOpenStore((state) => state.setOpen);
-  const setOpen = (next: boolean): void => setToolOpen(id, next);
+  const setOpen = (next: boolean): void => setToolOpen(openScope, id, next);
   const hasError = error !== null && error.length > 0;
   const badgeState = resolveToolBadgeState({
     hasError,
