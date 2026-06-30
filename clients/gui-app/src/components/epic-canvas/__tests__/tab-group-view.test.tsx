@@ -45,6 +45,7 @@ vi.mock("@/lib/epic-selectors", () => ({
   useEpicLiveArtifactTitleGenerating: () => false,
   useEpicPermissionRole: () => "owner",
   useEpicSnapshotLoaded: () => true,
+  useMaybeEpicTuiAgentHarnessId: () => null,
 }));
 
 vi.mock("@/components/epic-canvas/renderers/epic-node-tile", async () => {

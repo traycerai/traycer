@@ -399,6 +399,7 @@ vi.mock("@/lib/epic-selectors", () => ({
   useEpicPermissionRole: () => testState.permissionRole,
   useEpicTreeIndex: () => testState.tree,
   useEpicTreeNode: (nodeId: string) => testState.tree.nodeById[nodeId] ?? null,
+  useMaybeEpicTuiAgentHarnessId: () => null,
   useRootIds: () => testState.tree.rootIds,
 }));
 

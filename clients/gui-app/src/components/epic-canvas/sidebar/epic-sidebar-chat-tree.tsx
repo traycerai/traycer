@@ -24,6 +24,7 @@ import {
 import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { cn } from "@/lib/utils";
 import { ChatProgressIcon } from "@/components/chat/chat-progress-icon";
+import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
@@ -76,6 +77,7 @@ import {
   useEpicPermissionRole,
   useEpicTreeIndex,
   useEpicTreeNode,
+  useMaybeEpicTuiAgentHarnessId,
 } from "@/lib/epic-selectors";
 import { isEditableRole } from "@/lib/epic-permissions";
 import { useSettingsStore } from "@/stores/settings/settings-store";
@@ -1324,7 +1326,17 @@ function TerminalAgentProgressIcon(props: {
   readonly iconStyle: { color: string | undefined } | undefined;
 }) {
   const isActive = useEpicActiveAgentIds().has(props.nodeId);
+  const harnessId = useMaybeEpicTuiAgentHarnessId(props.nodeId);
   if (!isActive) {
+    // The underlying harness's brand mark (Claude, Codex, …) so the row reads
+    // as the tool driving the agent. Brand marks keep their own colors and
+    // intentionally don't follow the per-type icon-color customization; the
+    // generic bot glyph is the fallback for unresolved/legacy records.
+    if (harnessId !== null) {
+      return (
+        <HarnessIcon harnessId={harnessId} className="size-3.5 shrink-0" />
+      );
+    }
     return (
       <StaticSidebarNodeIcon
         Icon={props.Icon}

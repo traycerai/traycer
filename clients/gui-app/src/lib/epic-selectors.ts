@@ -28,6 +28,7 @@ import { v4 as uuidv4 } from "uuid";
 import * as Y from "yjs";
 import type { Awareness } from "y-protocols/awareness";
 import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
+import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 import type { WorktreeBindingOwnerKind } from "@traycer/protocol/host/worktree-schemas";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import { AGENT_WORKING_AWARENESS_FIELD } from "@traycer/protocol/host/epic/subscribe";
@@ -36,7 +37,10 @@ import { displayTitle, tuiAgentDisplayTitle } from "@/lib/display-title";
 import { useEpicStore } from "@/hooks/use-epic-store";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
-import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
+import {
+  useMaybeOpenEpicHandle,
+  useOpenEpicHandle,
+} from "@/providers/use-open-epic-handle";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 import {
   pendingTitleVisibleAutoPurge,
@@ -939,6 +943,38 @@ export function useEpicNodeHostId(nodeId: string): string | null {
     }
     return null;
   });
+}
+
+/**
+ * A terminal-agent row's harness id, read narrowly off `tuiAgents.byId` so a
+ * tab / sidebar row can render the harness's brand icon (Claude, Codex, …) in
+ * place of the generic bot glyph. Returns `null` for chat / artifact rows, for
+ * ids that resolve to nothing, AND when called outside an open-epic session
+ * (e.g. the drag overlay, which mounts at the app shell with no provider). In
+ * every null case the caller falls back to the bot icon.
+ *
+ * Resolves through `useMaybeOpenEpicHandle` + `useSyncExternalStore` (the same
+ * provider-optional pattern as the `useRegistered*` hooks above) so the single
+ * `EpicNodeTabIcon` source can render it both inside the canvas tab strip and in
+ * the provider-less overlay without a conditional hook call. The selected
+ * harness id is a reference-stable primitive, so unrelated store churn does not
+ * re-render the consuming row. See RENDER_PERF_INVARIANTS.md.
+ */
+export function useMaybeEpicTuiAgentHarnessId(
+  nodeId: string,
+): TuiHarnessId | null {
+  const handle = useMaybeOpenEpicHandle();
+  return useSyncExternalStore(
+    (listener) => handle?.store.subscribe(listener) ?? noopSubscribe,
+    () => {
+      if (handle === null) return null;
+      const s = handle.store.getState();
+      return Object.hasOwn(s.tuiAgents.byId, nodeId)
+        ? s.tuiAgents.byId[nodeId].harnessId
+        : null;
+    },
+    () => null,
+  );
 }
 
 export function useEpicNodeOwnerKind(
