@@ -22,6 +22,19 @@ describe("deriveToolInputDetail", () => {
     ).toEqual({ kind: "command", command: "npm run build" });
   });
 
+  it("uses nested metadata command for OpenCode shell approvals", () => {
+    expect(
+      deriveToolInputDetail("bash", {
+        type: "bash",
+        metadata: { command: "find . -name '*.sentry' | head -50" },
+        pattern: ["find . -name '*.sentry'", "head -50"],
+      }),
+    ).toEqual({
+      kind: "command",
+      command: "find . -name '*.sentry' | head -50",
+    });
+  });
+
   it("humanizes an arbitrary object into label/value fields (no JSON braces)", () => {
     expect(
       deriveToolInputDetail("create_issue", {
