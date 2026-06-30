@@ -353,8 +353,6 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
     controlsRef,
     canvasRef,
     theme,
-    effectiveCols: props.effectiveCols,
-    effectiveRows: props.effectiveRows,
   });
   useActiveTerminalFocus(termRef, props.shouldFocusOnActivePane);
 
@@ -547,6 +545,10 @@ function createXtermEntry(
   );
 
   let snapshotReplayDepth = 0;
+  // True once this kept-alive engine has had ANY output written to it. A second
+  // snapshot (transport reconnect / reopen of a kept-alive engine) then arrives
+  // for a buffer that already holds pre-disconnect content: see `writerProxy`.
+  let hasReceivedContent = false;
   const dataDisposable = term.onData((d) => {
     if (snapshotReplayDepth > 0) return;
     live.onUserInput(d);
@@ -575,12 +577,31 @@ function createXtermEntry(
       ) {
         term.resize(write.cols, write.rows);
       }
+      // Reset before replaying a snapshot into an engine that already holds
+      // content. A snapshot is always the host's AUTHORITATIVE full-screen state
+      // (serialized emulator screen + scrollback + OSC colour preamble), so it
+      // must land on a clean buffer. On a transport reconnect / reopen the
+      // engine is kept alive and still shows pre-disconnect content; replaying
+      // the serialized redraw on top of it collides with the stale
+      // cursor/content - dropping the tail (the "last few output chars lost on
+      // resume" bug) and leaving the native OSC theme un-rasterized until a tab
+      // switch forces a repaint ("theme lost, comes back on tab switch"). RIS
+      // (`ESC c`) is a full reset through the parser - clears buffer + scrollback
+      // and restores default colours while preserving the grid size we just set
+      // - so the snapshot's OSC preamble then re-applies the native palette,
+      // exactly like a fresh open. (We use the escape, not `term.reset()`, which
+      // is unbound in this xterm build.) The first snapshot on a fresh engine
+      // skips this - nothing to clear. Prepended to the chunk so it parses
+      // in-order, ahead of the redraw, inside the replay-suppression guard.
+      const replay = hasReceivedContent ? `\x1bc${write.chunk}` : write.chunk;
+      hasReceivedContent = true;
       snapshotReplayDepth += 1;
-      term.write(write.chunk, () => {
+      term.write(replay, () => {
         snapshotReplayDepth = Math.max(0, snapshotReplayDepth - 1);
       });
       return;
     }
+    hasReceivedContent = true;
     term.write(write.chunk);
   };
 
@@ -1002,25 +1023,8 @@ function useVisibleTerminalRepair(input: {
   readonly controlsRef: RefObject<XtermHostControls | null>;
   readonly canvasRef: RefObject<CanvasAddon | null>;
   readonly theme: ITerminalOptions["theme"];
-  readonly effectiveCols: number;
-  readonly effectiveRows: number;
 }): void {
-  const {
-    termRef,
-    controlsRef,
-    canvasRef,
-    theme,
-    effectiveCols,
-    effectiveRows,
-  } = input;
-  // Read the host's effective grid through a ref so a live resize doesn't churn
-  // the `refitVisiblePane` callback identity (which would re-run the full
-  // atlas-clear + repaint below on every resize step). The visible-transition
-  // recovery only needs whatever the effective grid is at the moment it fires.
-  const effectiveRef = useRef({ cols: effectiveCols, rows: effectiveRows });
-  useEffect(() => {
-    effectiveRef.current = { cols: effectiveCols, rows: effectiveRows };
-  }, [effectiveCols, effectiveRows]);
+  const { termRef, controlsRef, canvasRef, theme } = input;
   // Repaint when this pane becomes visible again. A tab switch never unmounts
   // the tile (the pane is hidden via `visibility:hidden` / `display:none` and
   // kept mounted so xterm scrollback survives), so the Traycer Host reattach pulse
@@ -1048,16 +1052,16 @@ function useVisibleTerminalRepair(input: {
     if (term === null) return;
     const controls = controlsRef.current;
     if (controls !== null) {
-      // Refit to the box this pane now occupies, then reconcile against the
-      // host's grid: the shared min-size grid can have drifted to a stale/tiny
-      // value while we were hidden (effective never changed for us, so the
-      // effective-keyed reconcile won't fire), and re-reporting our natural size
-      // from the now-visible, healthy box releases that latch.
+      // Refit to the box this pane now occupies. This re-reports only when the
+      // measured grid differs from what we last sent (the `fitToContainer`
+      // dedupe), so an ordinary tab switch with an unchanged box sends nothing.
+      // We deliberately do NOT `reconcileWithHost` here: it compares natural
+      // dims against the host's effective grid (not lastSent), which legitimately
+      // differ under "smaller-pane-wins"/rounding, so it re-reported on every
+      // pane-show and caused the spurious resize-on-tab-switch. Recovery from a
+      // genuinely stale shared grid is left to `useHostGridReconcile`, which
+      // fires on an actual effective-size change, not on visibility.
       controls.fitToContainer();
-      controls.reconcileWithHost(
-        effectiveRef.current.cols,
-        effectiveRef.current.rows,
-      );
     }
     term.options.theme = theme;
     clearTerminalAtlasSafely(canvasRef.current);

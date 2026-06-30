@@ -19,7 +19,7 @@ type TerminalDataFrame = Extract<
   { readonly kind: "data" }
 >;
 
-function terminalInfo(): TerminalSessionInfo {
+function terminalInfoWithSize(cols: number, rows: number): TerminalSessionInfo {
   return {
     sessionId: "terminal-1",
     epicId: "epic-1",
@@ -27,8 +27,8 @@ function terminalInfo(): TerminalSessionInfo {
     cwd: "/repo",
     shellCommand: "zsh",
     shellArgs: [],
-    cols: 80,
-    rows: 24,
+    cols,
+    rows,
     status: "running",
     exitCode: null,
     createdAt: 1,
@@ -37,11 +37,19 @@ function terminalInfo(): TerminalSessionInfo {
 }
 
 function snapshot(scrollback: string): TerminalSnapshotFrame {
+  return snapshotWithSize(scrollback, 80, 24);
+}
+
+function snapshotWithSize(
+  scrollback: string,
+  cols: number,
+  rows: number,
+): TerminalSnapshotFrame {
   return {
     kind: "snapshot",
     hasBinaryPayload: false,
     sessionId: "terminal-1",
-    session: terminalInfo(),
+    session: terminalInfoWithSize(cols, rows),
     scrollback,
   };
 }
@@ -128,5 +136,49 @@ describe("createTerminalSessionStore", () => {
       snapshotLoaded: false,
       status: "lost",
     });
+  });
+
+  it("re-flushes a remembered resize after a reconnect snapshot reports stale dimensions", () => {
+    const harness = createHarness();
+
+    harness.callbacks().onConnectionStatus("open", null);
+    harness.handle.store.getState().requestResize(105, 91);
+    expect(harness.sendAction).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        kind: "resize",
+        cols: 105,
+        rows: 91,
+      }),
+    );
+
+    harness.callbacks().onResized({
+      kind: "resized",
+      hasBinaryPayload: false,
+      sessionId: "terminal-1",
+      cols: 105,
+      rows: 91,
+    });
+    harness.sendAction.mockClear();
+
+    harness.callbacks().onConnectionStatus("reconnecting", null);
+    harness.callbacks().onConnectionStatus("open", null);
+    expect(harness.sendAction).not.toHaveBeenCalled();
+
+    harness.callbacks().onSnapshot(snapshotWithSize("", 80, 24));
+
+    expect(harness.handle.store.getState()).toMatchObject({
+      requestedCols: 105,
+      requestedRows: 91,
+      effectiveCols: 80,
+      effectiveRows: 24,
+    });
+    expect(harness.sendAction).toHaveBeenCalledTimes(1);
+    expect(harness.sendAction).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        kind: "resize",
+        cols: 105,
+        rows: 91,
+      }),
+    );
   });
 });

@@ -848,6 +848,73 @@ describe("<TerminalXtermHost /> terminal find", () => {
     expect(onUserInput).toHaveBeenCalledWith("\x1b[16;39R");
   });
 
+  it("resets the buffer before replaying a reconnect snapshot", async () => {
+    // A transport reconnect re-sends a full snapshot into the same kept-alive
+    // engine that still holds pre-disconnect content. The engine must reset the
+    // buffer before replaying so the authoritative snapshot lands clean instead
+    // of colliding with the stale screen (the dropped-tail / lost-theme bug).
+    // We assert this indirectly: replaying identical content twice leaves the
+    // cursor in the SAME place only if the second snapshot reset first; without
+    // a reset the second snapshot would append and the cursor would advance.
+    const inputReports: string[] = [];
+    const onUserInput = vi.fn((data: string) => {
+      inputReports.push(data);
+    });
+    let writer: TerminalDataWriter | null = null;
+
+    render(
+      <TerminalXtermHost
+        sessionId="test-session-reset"
+        tileKind="terminal"
+        instanceId="test-instance-reset"
+        effectiveCols={80}
+        effectiveRows={24}
+        onUserInput={onUserInput}
+        onContainerResize={vi.fn()}
+        onWriterReady={(nextWriter) => {
+          writer = nextWriter;
+        }}
+        shouldFocusOnActivePane={false}
+        findTargetId={null}
+        keepAlive={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(writer).not.toBeNull();
+    });
+    const getWriter = (): TerminalDataWriter => {
+      if (writer === null) {
+        throw new Error("Expected terminal writer");
+      }
+      return writer;
+    };
+
+    // First snapshot: prints content and ends with a cursor-position query.
+    getWriter()({
+      kind: "snapshot",
+      chunk: "hello world\x1b[6n",
+      cols: 80,
+      rows: 24,
+    });
+    getWriter()({ kind: "live", chunk: "\x1b[6n" });
+    const afterFirst = inputReports.at(-1);
+    expect(afterFirst).toBeDefined();
+
+    // Reconnect: the SAME content replayed. With a reset the cursor lands in the
+    // same spot; without a reset it would append after the first copy.
+    getWriter()({
+      kind: "snapshot",
+      chunk: "hello world\x1b[6n",
+      cols: 80,
+      rows: 24,
+    });
+    getWriter()({ kind: "live", chunk: "\x1b[6n" });
+    const afterReconnect = inputReports.at(-1);
+
+    expect(afterReconnect).toBe(afterFirst);
+  });
+
   it("focuses the active terminal when a retained hidden pane becomes visible", async () => {
     const { rerender } = render(
       <PaneVisibilityContext.Provider value={false}>
