@@ -1,8 +1,10 @@
 import { SendHorizontal, Wrench } from "lucide-react";
-import { useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { v4 as uuidv4 } from "uuid";
 import type { AgentMessageSend } from "@traycer/protocol/persistence/epic/content-blocks";
 import type { SegmentEndState } from "@/stores/composer/chat-store";
+import { deriveA2ASendCollapsibleKey } from "@/components/chat/chat-collapsible-key";
+import { chatFindA2ASendBodyUnitId } from "@/components/chat/chat-find";
 import { SegmentEndStateBadge } from "./segment-end-state-badge";
 import { LivePulse } from "@/components/ui/live-pulse";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
@@ -24,8 +26,18 @@ import { SegmentPanel } from "./segment-panel";
 import { SegmentRow } from "./segment-row";
 import { ToolInputPanel } from "./tool-input-panel";
 import { StreamingActivityFooter } from "./streaming-activity-footer";
+import {
+  useA2ASendOpen,
+  useSetA2ASendOpen,
+} from "@/stores/chats/a2a-open-store-context";
+import {
+  useChatCollapsibleTileInstanceId,
+  useChatFindForcedOpen,
+  useSetChatFindForcedOpen,
+} from "@/stores/chats/chat-find-force-store-context";
 
 interface ToolSegmentProps {
+  id: string;
   toolName: string;
   // Precomputed on the host (raw input not persisted): the ≤80-char header
   // line and the optional expand body.
@@ -42,6 +54,7 @@ interface ToolSegmentProps {
   // Wall-clock start (epoch ms) driving the elapsed heartbeat while streaming.
   startedAt: number;
   variant: "card" | "row";
+  headerFindUnitId: string | null;
 }
 
 interface ToolBadgeProps {
@@ -201,6 +214,8 @@ function GenericToolSegment(props: ToolSegmentProps) {
         tone={hasError ? "destructive" : "default"}
         stickyHeader
         expandable={expandable}
+        headerFindUnitId={props.headerFindUnitId ?? null}
+        bodyFindUnitId={null}
         className={undefined}
         footer={streamingFooter}
       />
@@ -220,6 +235,8 @@ function GenericToolSegment(props: ToolSegmentProps) {
       headerPosition="normal"
       bodyOverflow="hidden"
       expandable={expandable}
+      headerFindUnitId={props.headerFindUnitId ?? null}
+      bodyFindUnitId={null}
       className={undefined}
     />
   );
@@ -228,8 +245,25 @@ function GenericToolSegment(props: ToolSegmentProps) {
 function A2ASendToolSegment(
   props: ToolSegmentProps & { readonly send: AgentMessageSend },
 ) {
-  const { error, isStreaming, endState, send, variant } = props;
-  const [open, setOpen] = useState<boolean>(false);
+  const { id, error, isStreaming, endState, send, variant } = props;
+  const bodyFindUnitId = chatFindA2ASendBodyUnitId(id);
+  const tileInstanceId = useChatCollapsibleTileInstanceId();
+  const collapsibleKey = useMemo(
+    () => deriveA2ASendCollapsibleKey(tileInstanceId, id),
+    [id, tileInstanceId],
+  );
+  const userOpen = useA2ASendOpen(id);
+  const findForcedOpen = useChatFindForcedOpen(collapsibleKey);
+  const open = userOpen || findForcedOpen;
+  const setOpen = useSetA2ASendOpen();
+  const setFindForcedOpen = useSetChatFindForcedOpen();
+  const handleOpenChange = useCallback(
+    (next: boolean) => {
+      setOpen(id, next);
+      if (!next) setFindForcedOpen(collapsibleKey, false);
+    },
+    [collapsibleKey, id, setFindForcedOpen, setOpen],
+  );
   const hasError = error !== null && error.length > 0;
   const receiverNode = useEpicArtifact(send.receiverAgentId);
   const activeHostId = useReactiveActiveHostId();
@@ -312,11 +346,13 @@ function A2ASendToolSegment(
         className={undefined}
       >
         <div className="max-h-[min(40vh,24rem)] overflow-auto px-3 py-2">
-          <AgentReferenceMarkdown
-            isStreaming={false}
-            markdown={send.message}
-            proseSize="compact"
-          />
+          <div data-chat-find-unit={bodyFindUnitId}>
+            <AgentReferenceMarkdown
+              isStreaming={false}
+              markdown={send.message}
+              proseSize="compact"
+            />
+          </div>
         </div>
       </SegmentPanel>
       {hasError ? (
@@ -339,12 +375,14 @@ function A2ASendToolSegment(
     return (
       <SegmentRow
         open={open}
-        onOpenChange={setOpen}
+        onOpenChange={handleOpenChange}
         header={header}
         body={body}
         tone={hasError ? "destructive" : "default"}
         stickyHeader
         expandable
+        headerFindUnitId={null}
+        bodyFindUnitId={null}
         className={undefined}
         footer={null}
       />
@@ -353,7 +391,7 @@ function A2ASendToolSegment(
   return (
     <SegmentCard
       open={open}
-      onOpenChange={setOpen}
+      onOpenChange={handleOpenChange}
       header={header}
       headerAction={null}
       collapsedPreview={preview}
@@ -362,6 +400,8 @@ function A2ASendToolSegment(
       headerPosition="normal"
       bodyOverflow="hidden"
       expandable
+      headerFindUnitId={null}
+      bodyFindUnitId={null}
       className={undefined}
     />
   );

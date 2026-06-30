@@ -11,6 +11,7 @@ import {
 } from "./next-steps-action-group";
 
 interface TextSegmentProps {
+  findUnitId: string | null;
   markdown: string;
   isStreaming: boolean;
   nextStepActions: NextStepActionHandler | null;
@@ -29,7 +30,10 @@ export function TextSegment(props: TextSegmentProps) {
   }, []);
 
   return (
-    <div className="text-ui leading-7 text-foreground">
+    <div
+      data-chat-find-unit={props.findUnitId ?? undefined}
+      className="text-ui leading-7 text-foreground"
+    >
       {parts.map((part) => (
         <TextSegmentPart
           key={part.id}

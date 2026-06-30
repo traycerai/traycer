@@ -24,6 +24,7 @@ interface FileChangeGroupSegmentProps {
   artifacts: ReadonlyArray<ArtifactChangeRowModel>;
   checkpointManifest: TurnCheckpointManifest | null;
   hasLaterOverlappingChanges: boolean;
+  findUnitId: string | null;
 }
 
 function changeCountLabel(fileCount: number, artifactCount: number): string {
@@ -126,7 +127,12 @@ export function FileChangeGroupSegment(props: FileChangeGroupSegmentProps) {
   const body = (
     <div className="flex flex-col gap-1.5" data-testid="file-change-group-body">
       {files.map((file) => (
-        <FileChangeSegment key={file.id} segment={file} variant="row" />
+        <FileChangeSegment
+          key={file.id}
+          segment={file}
+          variant="row"
+          headerFindUnitId={null}
+        />
       ))}
       {artifacts.map((artifact) => (
         <ArtifactChangeRow
@@ -150,6 +156,8 @@ export function FileChangeGroupSegment(props: FileChangeGroupSegmentProps) {
         headerPosition="normal"
         bodyOverflow="visible"
         expandable
+        headerFindUnitId={props.findUnitId ?? null}
+        bodyFindUnitId={null}
         className={undefined}
       />
       {checkpointManifest === null ? null : (

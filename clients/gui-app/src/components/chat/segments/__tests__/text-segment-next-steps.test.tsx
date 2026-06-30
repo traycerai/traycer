@@ -60,6 +60,7 @@ describe("TextSegment next steps rendering", () => {
   it("renders prose and prompt options as action buttons", () => {
     render(
       <TextSegment
+        findUnitId={null}
         markdown={COMPLETE_BLOCK}
         isStreaming={false}
         nextStepActions={{ canSend: true, onSend: () => true }}
@@ -89,6 +90,7 @@ describe("TextSegment next steps rendering", () => {
   it("disables action buttons while a next steps block is still streaming", () => {
     render(
       <TextSegment
+        findUnitId={null}
         markdown={COMPLETE_BLOCK.replace("\n</TRAYCER_NEXT_STEPS>", "")}
         isStreaming
         nextStepActions={{ canSend: true, onSend: () => true }}
@@ -105,6 +107,7 @@ describe("TextSegment next steps rendering", () => {
     const onSend = vi.fn(() => true);
     render(
       <TextSegment
+        findUnitId={null}
         markdown={COMPLETE_BLOCK}
         isStreaming={false}
         nextStepActions={{ canSend: true, onSend }}
@@ -134,6 +137,7 @@ describe("TextSegment next steps rendering", () => {
     const onSend = vi.fn(() => true);
     render(
       <TextSegment
+        findUnitId={null}
         markdown={COMPLETE_BLOCK}
         isStreaming={false}
         nextStepActions={{ canSend: true, onSend }}
@@ -155,6 +159,7 @@ describe("TextSegment next steps rendering", () => {
   it("renders blocks without prompt options as normal markdown without raw wrapper tags", () => {
     render(
       <TextSegment
+        findUnitId={null}
         markdown={[
           "<TRAYCER_NEXT_STEPS>",
           "Readable prose survives.",
@@ -175,6 +180,7 @@ describe("TextSegment next steps rendering", () => {
   it("does not leak partial wrapper tags while streaming", () => {
     render(
       <TextSegment
+        findUnitId={null}
         markdown="<TRAYCER_NEXT_STEPS"
         isStreaming
         nextStepActions={{ canSend: true, onSend: () => true }}
@@ -187,6 +193,7 @@ describe("TextSegment next steps rendering", () => {
   it("renders known agent ids as agent reference chips", () => {
     render(
       <TextSegment
+        findUnitId={null}
         markdown={[
           `Replied to agent \`${KNOWN_AGENT_ID}\` with the repo orientation.`,
           "",

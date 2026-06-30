@@ -14,6 +14,7 @@ interface ResolvedApprovalSegmentProps {
   inputDetail: ToolInputDetail | null;
   decision: ApprovalDecision;
   variant: "card" | "row";
+  headerFindUnitId: string | null;
 }
 
 /**
@@ -46,6 +47,8 @@ export function ResolvedApprovalSegment(props: ResolvedApprovalSegmentProps) {
         tone={tone}
         stickyHeader
         expandable
+        headerFindUnitId={props.headerFindUnitId}
+        bodyFindUnitId={null}
         className={undefined}
         footer={null}
       />
@@ -63,6 +66,8 @@ export function ResolvedApprovalSegment(props: ResolvedApprovalSegmentProps) {
       headerPosition="normal"
       bodyOverflow="hidden"
       expandable
+      headerFindUnitId={props.headerFindUnitId}
+      bodyFindUnitId={null}
       className={undefined}
     />
   );

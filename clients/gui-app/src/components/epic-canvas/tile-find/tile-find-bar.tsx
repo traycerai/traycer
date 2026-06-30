@@ -8,6 +8,7 @@ import {
 import {
   CaseSensitive,
   ChevronDown,
+  ChevronRight,
   ChevronUp,
   Replace,
   ReplaceAll,
@@ -22,6 +23,11 @@ import {
 } from "@/stores/tile-find/tile-find-store";
 import type { TileFindStateSnapshot } from "@/stores/tile-find/types";
 
+// Chat search scans the whole transcript, so keystrokes are coalesced into a
+// single search instead of one per character. Mirrors the artifact adapter's
+// rescan debounce window (ARTIFACT_FIND_RESCAN_DEBOUNCE_MS).
+const CHAT_FIND_QUERY_DEBOUNCE_MS = 80;
+
 interface TileFindBarProps {
   readonly tileInstanceId: string;
 }
@@ -32,13 +38,25 @@ export function TileFindBar(props: TileFindBarProps) {
   const setQuery = useTileFindStore((state) => state.setQuery);
   const setMatchCase = useTileFindStore((state) => state.setMatchCase);
   const setReplaceText = useTileFindStore((state) => state.setReplaceText);
+  const setReplaceExpanded = useTileFindStore(
+    (state) => state.setReplaceExpanded,
+  );
   const search = useTileFindStore((state) => state.search);
   const next = useTileFindStore((state) => state.next);
   const previous = useTileFindStore((state) => state.previous);
+  const registerPendingSearchFlush = useTileFindStore(
+    (state) => state.registerPendingSearchFlush,
+  );
   const replaceCurrent = useTileFindStore((state) => state.replaceCurrent);
   const replaceAll = useTileFindStore((state) => state.replaceAll);
   const close = useTileFindStore((state) => state.close);
+  const tileKind = useTileFindStore(
+    (state) => state.targetsByTileInstanceId[tileInstanceId]?.tileKind ?? null,
+  );
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const searchDebounceRef = useRef<number | null>(null);
+
+  const debounceSearch = tileKind === "chat";
 
   useEffect(() => {
     if (ui?.isOpen !== true) return;
@@ -46,19 +64,84 @@ export function TileFindBar(props: TileFindBarProps) {
     inputRef.current?.select();
   }, [ui?.isOpen, ui?.focusRequestNonce]);
 
+  const cancelPendingSearch = useCallback(() => {
+    if (searchDebounceRef.current === null) return;
+    window.clearTimeout(searchDebounceRef.current);
+    searchDebounceRef.current = null;
+  }, []);
+
+  // Run a pending debounced search now. Returns true when one was flushed so the
+  // caller can skip an extra advance (the search itself reveals the first match).
+  const flushPendingSearch = useCallback(() => {
+    if (searchDebounceRef.current === null) return false;
+    window.clearTimeout(searchDebounceRef.current);
+    searchDebounceRef.current = null;
+    search(tileInstanceId);
+    return true;
+  }, [search, tileInstanceId]);
+
+  useEffect(() => {
+    return () => {
+      cancelPendingSearch();
+    };
+  }, [cancelPendingSearch]);
+
+  // Expose the flush to the store so store-driven navigation (the desktop menu's
+  // Find Next/Previous, which bypasses this bar's `handleNavigate`) flushes a
+  // pending debounced search before advancing, instead of advancing the prior
+  // query's stale matches.
+  useEffect(() => {
+    registerPendingSearchFlush(tileInstanceId, flushPendingSearch);
+    return () => {
+      registerPendingSearchFlush(tileInstanceId, null);
+    };
+  }, [flushPendingSearch, registerPendingSearchFlush, tileInstanceId]);
+
   const handleQueryChange = useCallback(
     (event: ChangeEvent<HTMLInputElement>) => {
-      setQuery(tileInstanceId, event.target.value);
+      const nextQuery = event.target.value;
+      setQuery(tileInstanceId, nextQuery);
+      // Always cancel any in-flight debounce so the latest query wins. Chat
+      // debounces non-empty queries; every other tile kind (and an emptied
+      // query, which clears instantly) searches immediately.
+      cancelPendingSearch();
+      if (debounceSearch && nextQuery.length > 0) {
+        searchDebounceRef.current = window.setTimeout(() => {
+          searchDebounceRef.current = null;
+          search(tileInstanceId);
+        }, CHAT_FIND_QUERY_DEBOUNCE_MS);
+        return;
+      }
       search(tileInstanceId);
     },
-    [search, setQuery, tileInstanceId],
+    [cancelPendingSearch, debounceSearch, search, setQuery, tileInstanceId],
   );
 
   const handleMatchCase = useCallback(() => {
     if (ui === null) return;
+    // A match-case toggle re-runs the search with the current query, so it
+    // supersedes any pending debounced search.
+    cancelPendingSearch();
     setMatchCase(tileInstanceId, !ui.matchCase);
     search(tileInstanceId);
-  }, [search, setMatchCase, tileInstanceId, ui]);
+  }, [cancelPendingSearch, search, setMatchCase, tileInstanceId, ui]);
+
+  const handleNavigate = useCallback(
+    (direction: 1 | -1) => {
+      // A still-pending debounced search means the adapter holds stale matches;
+      // flush it now (which reveals the first match) instead of advancing past
+      // them. Otherwise navigate immediately.
+      if (flushPendingSearch()) return;
+      if (direction === 1) next(tileInstanceId);
+      else previous(tileInstanceId);
+    },
+    [flushPendingSearch, next, previous, tileInstanceId],
+  );
+
+  const handleClose = useCallback(() => {
+    cancelPendingSearch();
+    close(tileInstanceId);
+  }, [cancelPendingSearch, close, tileInstanceId]);
 
   const handleReplaceTextChange = useCallback(
     (event: ChangeEvent<HTMLInputElement>) => {
@@ -67,19 +150,23 @@ export function TileFindBar(props: TileFindBarProps) {
     [setReplaceText, tileInstanceId],
   );
 
+  const handleReplaceExpanded = useCallback(() => {
+    if (ui === null) return;
+    setReplaceExpanded(tileInstanceId, !ui.replaceExpanded);
+  }, [setReplaceExpanded, tileInstanceId, ui]);
+
   const handleKeyDown = useCallback(
     (event: KeyboardEvent<HTMLInputElement>) => {
       if (event.key === "Escape") {
         event.preventDefault();
         event.stopPropagation();
-        close(tileInstanceId);
+        handleClose();
         return;
       }
       if (event.key === "Enter") {
         event.preventDefault();
         event.stopPropagation();
-        if (event.shiftKey) previous(tileInstanceId);
-        else next(tileInstanceId);
+        handleNavigate(event.shiftKey ? -1 : 1);
         return;
       }
       const isModG =
@@ -87,10 +174,9 @@ export function TileFindBar(props: TileFindBarProps) {
       if (!isModG) return;
       event.preventDefault();
       event.stopPropagation();
-      if (event.shiftKey) previous(tileInstanceId);
-      else next(tileInstanceId);
+      handleNavigate(event.shiftKey ? -1 : 1);
     },
-    [close, next, previous, tileInstanceId],
+    [handleClose, handleNavigate],
   );
 
   if (ui === null || !ui.isOpen) return null;
@@ -98,122 +184,219 @@ export function TileFindBar(props: TileFindBarProps) {
   const snapshot = ui.lastSnapshot;
   const replaceEnabled = snapshot.capabilities.has("replace");
   const replaceAllEnabled = snapshot.capabilities.has("replaceAll");
-  const showReplaceControls = replaceEnabled || replaceAllEnabled;
   const canNavigate = ui.query.length > 0 && snapshot.status !== "unavailable";
   const canSearch = snapshot.capabilities.has("find");
+
+  if (!replaceEnabled) {
+    return (
+      <search
+        data-testid="tile-find-bar"
+        className={cn(
+          "pointer-events-auto absolute right-3 top-3 z-30 flex max-w-[min(92vw,42rem)] flex-wrap items-center gap-1 rounded-md border border-border bg-popover px-2 py-1 shadow-md",
+        )}
+        aria-label="Find in tile"
+      >
+        <Input
+          ref={inputRef}
+          type="text"
+          value={ui.query}
+          onChange={handleQueryChange}
+          onKeyDown={handleKeyDown}
+          placeholder="Find"
+          aria-label="Find in tile"
+          autoComplete="off"
+          autoCorrect="off"
+          spellCheck={false}
+          className="h-7 w-[min(42vw,14rem)] min-w-[8rem] border-0 bg-transparent px-1 shadow-none focus-visible:ring-0"
+        />
+        <TileFindStatusLabel snapshot={snapshot} noMatchesLabel="No matches" />
+        <Button
+          type="button"
+          variant={ui.matchCase ? "secondary" : "ghost"}
+          size="icon-sm"
+          aria-label="Match case"
+          aria-pressed={ui.matchCase}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={handleMatchCase}
+          disabled={!canSearch}
+        >
+          <CaseSensitive className="size-4" />
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          aria-label="Previous match"
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => handleNavigate(-1)}
+          disabled={!canNavigate}
+        >
+          <ChevronUp className="size-4" />
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          aria-label="Next match"
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => handleNavigate(1)}
+          disabled={!canNavigate}
+        >
+          <ChevronDown className="size-4" />
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          aria-label="Close find"
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={handleClose}
+        >
+          <X className="size-4" />
+        </Button>
+      </search>
+    );
+  }
 
   return (
     <search
       data-testid="tile-find-bar"
       className={cn(
-        "pointer-events-auto absolute right-3 top-3 z-30 flex max-w-[min(92vw,42rem)] flex-wrap items-center gap-1 rounded-md border border-border bg-popover px-2 py-1 shadow-md",
+        "pointer-events-auto absolute right-3 top-3 z-30 flex max-w-[min(92vw,42rem)] items-start gap-1 rounded-md border border-border bg-popover px-2 py-1 shadow-md",
       )}
       aria-label="Find in tile"
     >
-      <Input
-        ref={inputRef}
-        type="text"
-        value={ui.query}
-        onChange={handleQueryChange}
-        onKeyDown={handleKeyDown}
-        placeholder="Find"
-        aria-label="Find in tile"
-        autoComplete="off"
-        autoCorrect="off"
-        spellCheck={false}
-        className="h-7 w-[min(42vw,14rem)] min-w-[8rem] border-0 bg-transparent px-1 shadow-none focus-visible:ring-0"
-      />
-      <TileFindStatusLabel snapshot={snapshot} />
-      <Button
-        type="button"
-        variant={ui.matchCase ? "secondary" : "ghost"}
-        size="icon-sm"
-        aria-label="Match case"
-        aria-pressed={ui.matchCase}
-        onMouseDown={(event) => event.preventDefault()}
-        onClick={handleMatchCase}
-        disabled={!canSearch}
-      >
-        <CaseSensitive className="size-4" />
-      </Button>
       <Button
         type="button"
         variant="ghost"
         size="icon-sm"
-        aria-label="Previous match"
+        className="shrink-0"
+        aria-label={ui.replaceExpanded ? "Collapse replace" : "Expand replace"}
+        aria-expanded={ui.replaceExpanded}
         onMouseDown={(event) => event.preventDefault()}
-        onClick={() => previous(tileInstanceId)}
-        disabled={!canNavigate}
+        onClick={handleReplaceExpanded}
       >
-        <ChevronUp className="size-4" />
+        {ui.replaceExpanded ? (
+          <ChevronDown className="size-4" />
+        ) : (
+          <ChevronRight className="size-4" />
+        )}
       </Button>
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon-sm"
-        aria-label="Next match"
-        onMouseDown={(event) => event.preventDefault()}
-        onClick={() => next(tileInstanceId)}
-        disabled={!canNavigate}
-      >
-        <ChevronDown className="size-4" />
-      </Button>
-      {showReplaceControls ? (
+      <div className="flex min-w-0 flex-col gap-1">
         <div className="flex min-w-0 items-center gap-1">
           <Input
+            ref={inputRef}
             type="text"
-            value={ui.replaceText}
-            onChange={handleReplaceTextChange}
-            placeholder="Replace"
-            aria-label="Replace with"
+            value={ui.query}
+            onChange={handleQueryChange}
+            onKeyDown={handleKeyDown}
+            placeholder="Find"
+            aria-label="Find in tile"
             autoComplete="off"
             autoCorrect="off"
             spellCheck={false}
-            className="h-7 w-[min(34vw,12rem)] min-w-[7rem] border-0 bg-transparent px-1 shadow-none focus-visible:ring-0"
+            className="h-7 w-[min(42vw,14rem)] min-w-[8rem] border-0 bg-transparent px-1 shadow-none focus-visible:ring-0"
+          />
+          <Button
+            type="button"
+            variant={ui.matchCase ? "secondary" : "ghost"}
+            size="icon-sm"
+            aria-label="Match case"
+            aria-pressed={ui.matchCase}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={handleMatchCase}
+            disabled={!canSearch}
+          >
+            <CaseSensitive className="size-4" />
+          </Button>
+          <TileFindStatusLabel
+            snapshot={snapshot}
+            noMatchesLabel="No results"
           />
           <Button
             type="button"
             variant="ghost"
             size="icon-sm"
-            aria-label="Replace current match"
+            aria-label="Previous match"
             onMouseDown={(event) => event.preventDefault()}
-            onClick={() => replaceCurrent(tileInstanceId)}
-            disabled={!replaceEnabled || ui.query.length === 0}
+            onClick={() => previous(tileInstanceId)}
+            disabled={!canNavigate}
           >
-            <Replace className="size-4" />
+            <ChevronUp className="size-4" />
           </Button>
           <Button
             type="button"
             variant="ghost"
             size="icon-sm"
-            aria-label="Replace all matches"
+            aria-label="Next match"
             onMouseDown={(event) => event.preventDefault()}
-            onClick={() => replaceAll(tileInstanceId)}
-            disabled={!replaceAllEnabled || ui.query.length === 0}
+            onClick={() => next(tileInstanceId)}
+            disabled={!canNavigate}
           >
-            <ReplaceAll className="size-4" />
+            <ChevronDown className="size-4" />
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Close find"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => close(tileInstanceId)}
+          >
+            <X className="size-4" />
           </Button>
         </div>
-      ) : null}
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon-sm"
-        aria-label="Close find"
-        onMouseDown={(event) => event.preventDefault()}
-        onClick={() => close(tileInstanceId)}
-      >
-        <X className="size-4" />
-      </Button>
+        {ui.replaceExpanded ? (
+          <div
+            className="flex min-w-0 items-center gap-1"
+            data-testid="tile-find-replace-row"
+          >
+            <Input
+              type="text"
+              value={ui.replaceText}
+              onChange={handleReplaceTextChange}
+              placeholder="Replace"
+              aria-label="Replace with"
+              autoComplete="off"
+              autoCorrect="off"
+              spellCheck={false}
+              className="h-7 min-w-0 flex-1 border-0 bg-transparent px-1 shadow-none focus-visible:ring-0"
+            />
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Replace current match"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => replaceCurrent(tileInstanceId)}
+              disabled={ui.query.length === 0}
+            >
+              <Replace className="size-4" />
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Replace all matches"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => replaceAll(tileInstanceId)}
+              disabled={!replaceAllEnabled || ui.query.length === 0}
+            >
+              <ReplaceAll className="size-4" />
+            </Button>
+          </div>
+        ) : null}
+      </div>
     </search>
   );
 }
 
 function TileFindStatusLabel(props: {
   readonly snapshot: TileFindStateSnapshot;
+  readonly noMatchesLabel: string;
 }) {
-  const { snapshot } = props;
-  const label = statusLabel(snapshot);
+  const { snapshot, noMatchesLabel } = props;
+  const label = statusLabel(snapshot, noMatchesLabel);
   if (label === null) return null;
   const destructive =
     snapshot.status === "error" ||
@@ -235,7 +418,10 @@ function TileFindStatusLabel(props: {
   );
 }
 
-function statusLabel(snapshot: TileFindStateSnapshot): string | null {
+function statusLabel(
+  snapshot: TileFindStateSnapshot,
+  noMatchesLabel: string,
+): string | null {
   if (snapshot.status === "searching") return "Searching";
   if (snapshot.status === "unavailable") {
     return snapshot.coverageMessage ?? "Unavailable";
@@ -244,7 +430,7 @@ function statusLabel(snapshot: TileFindStateSnapshot): string | null {
     return snapshot.errorMessage ?? "Error";
   }
   if (snapshot.query.length === 0) return null;
-  if (snapshot.total === 0) return "No matches";
+  if (snapshot.total === 0) return noMatchesLabel;
   if (snapshot.status === "partial") {
     return `${snapshot.current} of ${snapshot.total} partial`;
   }

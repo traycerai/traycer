@@ -384,13 +384,16 @@ describe("useTileFindStore", () => {
     useTileFindStore.getState().setQuery("tile-a", "alpha");
     useTileFindStore.getState().setQuery("tile-b", "beta");
     useTileFindStore.getState().setReplaceText("tile-b", "gamma");
+    useTileFindStore.getState().setReplaceExpanded("tile-b", true);
     useTileFindStore.getState().openForTile("tile-a");
 
     const state = useTileFindStore.getState();
     expect(state.uiByTileInstanceId["tile-a"]?.query).toBe("alpha");
     expect(state.uiByTileInstanceId["tile-a"]?.isOpen).toBe(true);
+    expect(state.uiByTileInstanceId["tile-a"]?.replaceExpanded).toBe(false);
     expect(state.uiByTileInstanceId["tile-b"]?.query).toBe("beta");
     expect(state.uiByTileInstanceId["tile-b"]?.replaceText).toBe("gamma");
+    expect(state.uiByTileInstanceId["tile-b"]?.replaceExpanded).toBe(true);
     expect(state.uiByTileInstanceId["tile-b"]?.isOpen).toBe(false);
   });
 
@@ -481,5 +484,120 @@ describe("useTileFindStore", () => {
 
     expect(useTileFindStore.getState().advanceActiveOwner(1)).toBe(false);
     expect(activeAdapter.nextMock.mock.calls).toHaveLength(1);
+  });
+
+  it("reclaims per-tile ui state when a tile is permanently torn down", async () => {
+    const adapter = createTestAdapter({
+      tileInstanceId: "tile-a",
+      tileKind: "chat",
+      capabilities: FIND_CAPABILITY,
+    });
+    const unregister = register(adapter, true);
+    useTileFindStore.getState().setQuery("tile-a", "needle");
+    expect(
+      useTileFindStore.getState().uiByTileInstanceId["tile-a"]?.query,
+    ).toBe("needle");
+
+    unregister();
+
+    // Reclaim is deferred so an immediate re-registration (swap) can keep it.
+    expect(
+      useTileFindStore.getState().uiByTileInstanceId["tile-a"],
+    ).toBeDefined();
+
+    await Promise.resolve();
+
+    expect(
+      useTileFindStore.getState().uiByTileInstanceId["tile-a"],
+    ).toBeUndefined();
+    expect(
+      useTileFindStore.getState().targetsByTileInstanceId["tile-a"],
+    ).toBeUndefined();
+  });
+
+  it("keeps per-tile session state across an unregister/re-register swap", async () => {
+    const firstAdapter = createTestAdapter({
+      tileInstanceId: "tile-a",
+      tileKind: "chat",
+      capabilities: FIND_CAPABILITY,
+    });
+    const unregisterFirst = register(firstAdapter, true);
+    useTileFindStore.getState().setMatchCase("tile-a", true);
+    useTileFindStore.getState().setQuery("tile-a", "needle");
+    useTileFindStore.getState().search("tile-a");
+
+    // Forward-ordered swap: the live target unregisters, then a fresh adapter
+    // re-registers for the same tile in the same tick (keep-alive remount).
+    unregisterFirst();
+    const secondAdapter = createTestAdapter({
+      tileInstanceId: "tile-a",
+      tileKind: "chat",
+      capabilities: FIND_CAPABILITY,
+    });
+    register(secondAdapter, true);
+
+    // The deferred reclaim must observe the re-created target and leave ui alone.
+    await Promise.resolve();
+
+    const ui = useTileFindStore.getState().uiByTileInstanceId["tile-a"];
+    expect(ui?.query).toBe("needle");
+    expect(ui?.matchCase).toBe(true);
+    // The session search replays onto the replacement adapter.
+    expect(secondAdapter.searchInputs).toEqual([
+      { requestId: 1, query: "needle", matchCase: true },
+    ]);
+  });
+
+  it("flushes a registered pending search before advancing and skips the advance when it flushes", () => {
+    const adapter = createTestAdapter({
+      tileInstanceId: "tile-a",
+      tileKind: "chat",
+      capabilities: FIND_CAPABILITY,
+    });
+    register(adapter, true);
+
+    const flush = vi.fn(() => true);
+    useTileFindStore.getState().registerPendingSearchFlush("tile-a", flush);
+
+    useTileFindStore.getState().next("tile-a");
+
+    // A pending debounced search was flushed (revealing the first match), so the
+    // advance is skipped - adapter.next must not run.
+    expect(flush).toHaveBeenCalledTimes(1);
+    expect(adapter.nextMock.mock.calls).toHaveLength(0);
+
+    // With nothing pending (flush returns false), next advances normally.
+    flush.mockReturnValue(false);
+    useTileFindStore.getState().next("tile-a");
+    expect(flush).toHaveBeenCalledTimes(2);
+    expect(adapter.nextMock.mock.calls).toHaveLength(1);
+
+    // Unregistering removes the flush hook entirely.
+    useTileFindStore.getState().registerPendingSearchFlush("tile-a", null);
+    useTileFindStore.getState().next("tile-a");
+    expect(flush).toHaveBeenCalledTimes(2);
+    expect(adapter.nextMock.mock.calls).toHaveLength(2);
+  });
+
+  it("flushes a registered pending search on the desktop-menu advanceActiveOwner path", () => {
+    const adapter = createTestAdapter({
+      tileInstanceId: "active",
+      tileKind: "chat",
+      capabilities: FIND_CAPABILITY,
+    });
+    register(adapter, true);
+    const flush = vi.fn(() => true);
+    useTileFindStore.getState().registerPendingSearchFlush("active", flush);
+
+    // The desktop menu drives navigation through advanceActiveOwner -> next /
+    // previous, which must flush the pending (new-query) search instead of
+    // advancing the prior query's stale matches.
+    expect(useTileFindStore.getState().advanceActiveOwner(1)).toBe(true);
+    expect(flush).toHaveBeenCalledTimes(1);
+    expect(adapter.nextMock.mock.calls).toHaveLength(0);
+
+    expect(useTileFindStore.getState().advanceActiveOwner(-1)).toBe(true);
+    expect(flush).toHaveBeenCalledTimes(2);
+    expect(adapter.previousMock.mock.calls).toHaveLength(0);
   });
 });

@@ -1,6 +1,7 @@
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { findPaneById } from "@/stores/epics/canvas/tile-tree";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import { useTileFindStore } from "@/stores/tile-find";
 import { getHeaderTabs } from "@/stores/tabs/use-header-tabs";
 import { getSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
 import { isSettingsPath } from "@/stores/tabs/kinds/settings";
@@ -323,6 +324,7 @@ const STATIC_HANDLERS: Readonly<Partial<Record<ActionId, StaticHandler>>> = {
   "group.focus.left": (r) => focusGroupInDirection(r, "left"),
   "group.focus.right": (r) => focusGroupInDirection(r, "right"),
   "group.focus-editor": (r) => focusActiveGroupEditor(r),
+  "tile.find.replace": () => openActiveTileFindWithReplace(),
   "app.history.open": (r) => {
     r.navigateToEpicList();
     return true;
@@ -638,4 +640,13 @@ function focusActiveGroupEditor(router: KeybindingRouter): boolean {
     }
   }
   return focusActiveComposer();
+}
+
+function openActiveTileFindWithReplace(): boolean {
+  const state = useTileFindStore.getState();
+  const activeOwner = state.activeOwner;
+  if (activeOwner === null) return false;
+  if (!state.openForTile(activeOwner.tileInstanceId)) return false;
+  state.setReplaceExpanded(activeOwner.tileInstanceId, true);
+  return true;
 }

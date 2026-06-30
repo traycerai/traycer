@@ -16,7 +16,30 @@ import type { ReactNode } from "react";
 vi.mock("@/hooks/editor/use-editor-open-mutation", () => ({
   useEditorOpen: () => ({ mutate: () => undefined }),
 }));
+vi.mock("@/lib/epic-selectors", () => ({
+  useEpicArtifact: (artifactId: string | null) =>
+    artifactId === "agent-sender-1"
+      ? {
+          id: "agent-sender-1",
+          parentId: null,
+          title: "Review Agent",
+          hostId: "host-1",
+        }
+      : null,
+  useOpenEpicId: () => "epic-1",
+}));
 import { ChatMessages } from "@/components/chat/chat-messages";
+import {
+  chatFindA2AReceivedBodyUnitId,
+  chatFindActivityGroupChildHeaderUnitId,
+  chatFindSegmentUnitId,
+  chatFindSubagentBodyUnitId,
+  chatFindSubagentHeaderUnitId,
+} from "@/components/chat/chat-find";
+import {
+  deriveActivityGroupRenderId,
+  derivePromotedSubagentRenderId,
+} from "@/components/chat/chat-collapsible-key";
 import {
   TileFindContext,
   type TileFindContextValue,
@@ -41,6 +64,20 @@ const VIRTUOSO_TEST_CONTEXT = {
   viewportHeight: 500,
 };
 const TILE_FIND_TEST_INSTANCE_ID = "test-instance";
+const TILE_FIND_CONTEXT_VALUE: TileFindContextValue = {
+  tileInstanceId: TILE_FIND_TEST_INSTANCE_ID,
+  registerAdapter: (adapter: TileFindAdapter) =>
+    useTileFindStore.getState().registerTarget({
+      tileInstanceId: TILE_FIND_TEST_INSTANCE_ID,
+      contentId: "chat-1",
+      viewTabId: "view-tab-1",
+      tileId: "tile-1",
+      epicId: "epic-1",
+      tileKind: "chat",
+      isEligible: true,
+      adapter,
+    }),
+};
 let scrollStateKeySequence = 0;
 let restoreHighlights: (() => void) | null = null;
 
@@ -107,28 +144,21 @@ function renderChatMessagesWithTileFind(
     visible: boolean;
   },
 ) {
-  const registerAdapter: TileFindContextValue["registerAdapter"] = (
-    adapter: TileFindAdapter,
-  ) =>
-    useTileFindStore.getState().registerTarget({
-      tileInstanceId: TILE_FIND_TEST_INSTANCE_ID,
-      contentId: "chat-1",
-      viewTabId: "view-tab-1",
-      tileId: "tile-1",
-      epicId: "epic-1",
-      tileKind: "chat",
-      isEligible: true,
-      adapter,
-    });
-  return render(
-    <TileFindContext.Provider
-      value={{
-        tileInstanceId: TILE_FIND_TEST_INSTANCE_ID,
-        registerAdapter,
-      }}
-    >
+  return render(chatMessagesWithTileFindJsx(messages, opts));
+}
+
+function chatMessagesWithTileFindJsx(
+  messages: ReadonlyArray<ChatMessageModel>,
+  opts: {
+    minimapItems: ReadonlyArray<ChatUserMinimapItem>;
+    scrollStateKey: string;
+    visible: boolean;
+  },
+): ReactNode {
+  return (
+    <TileFindContext.Provider value={TILE_FIND_CONTEXT_VALUE}>
       {chatMessagesJsx(messages, opts)}
-    </TileFindContext.Provider>,
+    </TileFindContext.Provider>
   );
 }
 
@@ -158,6 +188,18 @@ function rerenderChatMessages(
   },
 ): void {
   rerender(chatMessagesJsx(messages, opts));
+}
+
+function rerenderChatMessagesWithTileFind(
+  rerender: (ui: ReactNode) => void,
+  messages: ReadonlyArray<ChatMessageModel>,
+  opts: {
+    minimapItems: ReadonlyArray<ChatUserMinimapItem>;
+    scrollStateKey: string;
+    visible: boolean;
+  },
+): void {
+  rerender(chatMessagesWithTileFindJsx(messages, opts));
 }
 
 describe("ChatMessages Virtuoso renderer", () => {
@@ -273,7 +315,7 @@ describe("ChatMessages Virtuoso renderer", () => {
         ?.lastSnapshot,
     ).toMatchObject({
       total: 1,
-      activeUnitId: "message-0",
+      activeUnitId: "message:message-0:content",
       exactHighlight: "pending",
     });
 
@@ -335,6 +377,412 @@ describe("ChatMessages Virtuoso renderer", () => {
         "button",
       );
     expect(activeButton?.getAttribute("data-find-include")).toBe("true");
+  });
+
+  it("reveals a collapsed subagent body match before scrolling and painting the body unit", async () => {
+    const registry = installMockHighlights();
+    const scrollIntoView = vi
+      .spyOn(Element.prototype, "scrollIntoView")
+      .mockImplementation(() => undefined);
+    const subagentId = "subagent-hidden-needle";
+    const messages = [makeSubagentMessage("assistant-subagent", subagentId)];
+    renderChatMessagesWithTileFind(
+      messages,
+      makeDefaultOpts({ minimapItems: [] }),
+    );
+
+    await waitForChatFindAdapter();
+    searchChat("needle");
+
+    await waitFor(() => {
+      expect(lastChatFindSnapshot()?.exactHighlight).toBe("painted");
+    });
+
+    const unitId = chatFindSubagentBodyUnitId(
+      derivePromotedSubagentRenderId(subagentId),
+    );
+    const range = activeHighlightRange(registry);
+    const unitRoot = activeHighlightUnitRoot(range);
+    expect(unitRoot?.dataset.chatFindUnit).toBe(unitId);
+    expect(range?.startContainer.parentElement?.closest("button")).toBeNull();
+    expect(unitRoot?.closest("[hidden]")).toBeNull();
+    expect(scrollIntoView).toHaveBeenCalled();
+  });
+
+  it("paints a subagent name match inside the always-visible header unit", async () => {
+    const registry = installMockHighlights();
+    const subagentId = "subagent-header-name";
+    const messages = [
+      makeSubagentMessage("assistant-subagent-header", subagentId),
+    ];
+    renderChatMessagesWithTileFind(
+      messages,
+      makeDefaultOpts({ minimapItems: [] }),
+    );
+
+    await waitForChatFindAdapter();
+    // "Researcher" is the subagent's name - rendered only in the always-visible
+    // header (not the collapsed body), so it must paint in the header unit.
+    searchChat("Researcher");
+
+    await waitFor(() => {
+      expect(lastChatFindSnapshot()?.exactHighlight).toBe("painted");
+    });
+
+    expect(lastChatFindSnapshot()?.total).toBe(1);
+    const range = activeHighlightRange(registry);
+    const unitRoot = activeHighlightUnitRoot(range);
+    expect(unitRoot?.dataset.chatFindUnit).toBe(
+      chatFindSubagentHeaderUnitId(derivePromotedSubagentRenderId(subagentId)),
+    );
+    // The header is a content-bearing trigger button (always visible, never
+    // collapsed away).
+    expect(
+      range?.startContainer.parentElement?.closest("button"),
+    ).not.toBeNull();
+    expect(unitRoot?.closest("[hidden]")).toBeNull();
+    expect(unitRoot?.textContent).toContain("Researcher");
+  });
+
+  it("does not over-paint the streaming subagent header summary mirror", async () => {
+    const registry = installMockHighlights();
+    const subagentId = "subagent-header-mirror";
+    const messages = [
+      makeStreamingSubagentMirrorMessage("assistant-header-mirror", subagentId),
+    ];
+    renderChatMessagesWithTileFind(
+      messages,
+      makeDefaultOpts({ minimapItems: [] }),
+    );
+
+    await waitForChatFindAdapter();
+    // The agent is named "Scanner" and its latest progress line is "Scanner
+    // online", which the streaming header trigger mirrors. The painter scopes to
+    // the active match's unit; the active match here is the name in the header
+    // unit, so the trigger DOM is the paint root. The projection indexes only
+    // name + type for the header, so the mirror occurrence in that same trigger
+    // must be data-find-skip'd or it paints a phantom second highlight.
+    searchChat("Scanner");
+
+    await waitFor(() => {
+      expect(lastChatFindSnapshot()?.exactHighlight).toBe("painted");
+    });
+
+    // Two projected matches: the header name and the body progress line. The
+    // header summary mirror is NOT indexed.
+    expect(lastChatFindSnapshot()?.total).toBe(2);
+    expect(lastChatFindSnapshot()?.activeUnitId).toBe(
+      chatFindSubagentHeaderUnitId(derivePromotedSubagentRenderId(subagentId)),
+    );
+    // Only the header unit is painted (the active match). With the mirror
+    // skipped, that unit highlights the single projected occurrence (the name) -
+    // before the fix the mirror added a phantom second highlight, so this was 2.
+    expect(totalPaintedRanges(registry)).toBe(1);
+    for (const range of allPaintedRanges(registry)) {
+      expect(
+        range.startContainer.parentElement?.closest("[data-find-skip]"),
+      ).toBeNull();
+    }
+    // The painted occurrence is the name in the always-visible header trigger.
+    const active = activeHighlightRange(registry);
+    expect(
+      active?.startContainer.parentElement?.closest("button"),
+    ).not.toBeNull();
+    expect(active?.startContainer.textContent).toContain("Scanner");
+  });
+
+  it("does not re-center the unit when navigating between consecutive matches in the same section", async () => {
+    installMockHighlights();
+    const scrollIntoView = vi
+      .spyOn(Element.prototype, "scrollIntoView")
+      .mockImplementation(() => undefined);
+    const subagentId = "subagent-consecutive";
+    const messages = [
+      makeSubagentMessageWithResult(
+        "assistant-consecutive",
+        subagentId,
+        "First needle here. Second needle there.",
+      ),
+    ];
+    renderChatMessagesWithTileFind(
+      messages,
+      makeDefaultOpts({ minimapItems: [] }),
+    );
+
+    await waitForChatFindAdapter();
+    searchChat("needle");
+    await waitFor(() => {
+      expect(lastChatFindSnapshot()?.exactHighlight).toBe("painted");
+    });
+    expect(lastChatFindSnapshot()?.total).toBe(2);
+    // The first reveal force-opens the collapsed card and centers the unit.
+    expect(
+      scrollIntoView.mock.calls.some((call) => {
+        const arg = call[0];
+        return typeof arg === "object" && arg.block === "center";
+      }),
+    ).toBe(true);
+
+    scrollIntoView.mockClear();
+    act(() => {
+      useTileFindStore.getState().next(TILE_FIND_TEST_INSTANCE_ID);
+    });
+    await waitFor(() => {
+      expect(lastChatFindSnapshot()?.current).toBe(2);
+      expect(lastChatFindSnapshot()?.exactHighlight).toBe("painted");
+    });
+
+    // Same already-open unit: no unit re-center (would flicker); only the
+    // active-match scroll within the inner scroll container.
+    const blocks = scrollIntoView.mock.calls.map((call) => {
+      const arg = call[0];
+      return typeof arg === "object" ? arg.block : undefined;
+    });
+    expect(blocks).not.toContain("center");
+    expect(blocks).toContain("nearest");
+  });
+
+  it("paints an always-visible file-change group match inside its unit anchor", async () => {
+    const registry = installMockHighlights();
+    const groupId = "file-change-group-anchor";
+    const messages = [
+      makeFileChangeGroupMessage("assistant-file-group", groupId),
+    ];
+    renderChatMessagesWithTileFind(
+      messages,
+      makeDefaultOpts({ minimapItems: [] }),
+    );
+
+    await waitForChatFindAdapter();
+    searchChat("Changes");
+
+    await waitFor(() => {
+      expect(lastChatFindSnapshot()?.exactHighlight).toBe("painted");
+    });
+
+    const range = activeHighlightRange(registry);
+    const unitRoot = activeHighlightUnitRoot(range);
+    expect(unitRoot?.dataset.chatFindUnit).toBe(chatFindSegmentUnitId(groupId));
+    expect(unitRoot?.textContent).toContain("Changes");
+  });
+
+  it("paints a subagent body occurrence instead of a skipped section label", async () => {
+    const registry = installMockHighlights();
+    const subagentId = "subagent-result-label";
+    const messages = [
+      makeSubagentMessageWithResult(
+        "assistant-subagent-result",
+        subagentId,
+        "Result body target.",
+      ),
+    ];
+    renderChatMessagesWithTileFind(
+      messages,
+      makeDefaultOpts({ minimapItems: [] }),
+    );
+
+    await waitForChatFindAdapter();
+    searchChat("Result");
+
+    await waitFor(() => {
+      expect(lastChatFindSnapshot()?.exactHighlight).toBe("painted");
+    });
+
+    const range = activeHighlightRange(registry);
+    const unitRoot = activeHighlightUnitRoot(range);
+    expect(unitRoot?.dataset.chatFindUnit).toBe(
+      chatFindSubagentBodyUnitId(derivePromotedSubagentRenderId(subagentId)),
+    );
+    expect(
+      range?.startContainer.parentElement?.closest("[data-find-skip]"),
+    ).toBeNull();
+    expect(range?.startContainer.textContent).toContain("Result body target.");
+  });
+
+  it("reveals a collapsed activity group child header match and paints that header unit", async () => {
+    const registry = installMockHighlights();
+    const messages = [makeAssistantMessage("assistant-activity", "activity-2")];
+    renderChatMessagesWithTileFind(
+      messages,
+      makeDefaultOpts({ minimapItems: [] }),
+    );
+
+    await waitForChatFindAdapter();
+    searchChat("echo hi");
+
+    await waitFor(() => {
+      expect(lastChatFindSnapshot()?.exactHighlight).toBe("painted");
+    });
+
+    const childSegmentId = "activity-2:command";
+    const unitId = chatFindActivityGroupChildHeaderUnitId(
+      deriveActivityGroupRenderId(childSegmentId),
+      childSegmentId,
+    );
+    const range = activeHighlightRange(registry);
+    const unitRoot = activeHighlightUnitRoot(range);
+    expect(unitRoot?.dataset.chatFindUnit).toBe(unitId);
+    expect(unitRoot?.closest("button")?.textContent).toContain("echo hi");
+    expect(unitRoot?.closest("[hidden]")).toBeNull();
+  });
+
+  it("reveals a collapsed received A2A body match and paints inside the message body", async () => {
+    const registry = installMockHighlights();
+    const message = makeAgentUserMessage("agent-message-1", "received needle");
+    renderChatMessagesWithTileFind(
+      [message],
+      makeDefaultOpts({ minimapItems: minimapItemsFor([message]) }),
+    );
+
+    await waitForChatFindAdapter();
+    searchChat("needle");
+
+    await waitFor(() => {
+      expect(lastChatFindSnapshot()?.exactHighlight).toBe("painted");
+    });
+
+    const range = activeHighlightRange(registry);
+    const unitRoot = activeHighlightUnitRoot(range);
+    expect(unitRoot?.dataset.chatFindUnit).toBe(
+      chatFindA2AReceivedBodyUnitId(message.id),
+    );
+    expect(screen.getByText("Open sending agent")).not.toBeNull();
+    expect(range?.startContainer.parentElement?.closest("button")).toBeNull();
+  });
+
+  it("manual collapse clears the active subagent highlight and next navigation re-reveals it", async () => {
+    installMockHighlights();
+    const subagentId = "subagent-manual-collapse";
+    const messages = [makeSubagentMessage("assistant-collapse", subagentId)];
+    renderChatMessagesWithTileFind(
+      messages,
+      makeDefaultOpts({ minimapItems: [] }),
+    );
+
+    await waitForChatFindAdapter();
+    searchChat("needle");
+    await waitFor(() => {
+      expect(lastChatFindSnapshot()?.exactHighlight).toBe("painted");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Subagent" }));
+
+    await waitFor(() => {
+      expect(lastChatFindSnapshot()?.exactHighlight).toBe("pending");
+    });
+
+    act(() => {
+      useTileFindStore.getState().next(TILE_FIND_TEST_INSTANCE_ID);
+    });
+
+    await waitFor(() => {
+      expect(lastChatFindSnapshot()?.exactHighlight).toBe("painted");
+    });
+  });
+
+  it("rescans reapply the active chain without explicit navigation when the active unit moves", async () => {
+    installMockHighlights();
+    const scrollIntoView = vi
+      .spyOn(Element.prototype, "scrollIntoView")
+      .mockImplementation(() => undefined);
+    const opts = makeDefaultOpts({ minimapItems: [] });
+    const initialMessages = [
+      makeCommandMessageWithCommand(
+        "assistant-rescan-reapply",
+        "activity-rescan-reapply",
+        "needle",
+      ),
+    ];
+    const { container, rerender } = renderChatMessagesWithTileFind(
+      initialMessages,
+      opts,
+    );
+
+    await waitForChatFindAdapter();
+    searchChat("needle");
+    await waitFor(() => {
+      expect(lastChatFindSnapshot()?.exactHighlight).toBe("painted");
+    });
+    const initialScrollCallCount = scrollIntoView.mock.calls.length;
+
+    const subagentId = "subagent-rescan-reapply";
+    const nextMessages = [
+      makeSubagentMessageWithResult(
+        "assistant-rescan-reapply",
+        subagentId,
+        "Body needle target.",
+      ),
+    ];
+    const unitId = chatFindSubagentBodyUnitId(
+      derivePromotedSubagentRenderId(subagentId),
+    );
+    rerenderChatMessagesWithTileFind(rerender, nextMessages, opts);
+
+    await waitFor(() => {
+      expect(lastChatFindSnapshot()).toMatchObject({
+        total: 1,
+        activeUnitId: unitId,
+        exactHighlight: "painted",
+      });
+    });
+    expect(findChatFindUnitRoot(container, unitId)?.closest("[hidden]")).toBe(
+      null,
+    );
+    expect(scrollIntoView.mock.calls.length).toBe(initialScrollCallCount);
+  });
+
+  it("releases find-forced cards when the active match disappears on rescan", async () => {
+    installMockHighlights();
+    const subagentId = "subagent-rescan-release";
+    const unitId = chatFindSubagentBodyUnitId(
+      derivePromotedSubagentRenderId(subagentId),
+    );
+    const opts = makeDefaultOpts({ minimapItems: [] });
+    const initialMessages = [
+      makeSubagentMessageWithResult(
+        "assistant-rescan-release",
+        subagentId,
+        "Needle is present.",
+      ),
+    ];
+    const { container, rerender } = renderChatMessagesWithTileFind(
+      initialMessages,
+      opts,
+    );
+
+    await waitForChatFindAdapter();
+    searchChat("needle");
+    await waitFor(() => {
+      expect(lastChatFindSnapshot()?.exactHighlight).toBe("painted");
+    });
+    expect(findChatFindUnitRoot(container, unitId)?.closest("[hidden]")).toBe(
+      null,
+    );
+
+    rerenderChatMessagesWithTileFind(
+      rerender,
+      [
+        makeSubagentMessageWithResult(
+          "assistant-rescan-release",
+          subagentId,
+          "The streamed result changed.",
+        ),
+      ],
+      opts,
+    );
+
+    await waitFor(() => {
+      expect(lastChatFindSnapshot()).toMatchObject({
+        total: 0,
+        activeUnitId: null,
+        exactHighlight: "none",
+      });
+    });
+    await waitFor(() => {
+      expect(
+        findChatFindUnitRoot(container, unitId)?.closest("[hidden]"),
+      ).not.toBeNull();
+    });
   });
 
   it("samples the minimap rail for long chats", async () => {
@@ -657,12 +1105,239 @@ function rowIds(container: HTMLElement): ReadonlyArray<string> {
     .filter((id): id is string => id !== null);
 }
 
+async function waitForChatFindAdapter(): Promise<void> {
+  await waitFor(() => {
+    expect(
+      useTileFindStore.getState().targetsByTileInstanceId[
+        TILE_FIND_TEST_INSTANCE_ID
+      ]?.adapter.tileKind,
+    ).toBe("chat");
+  });
+}
+
+function searchChat(query: string): void {
+  act(() => {
+    const store = useTileFindStore.getState();
+    store.setQuery(TILE_FIND_TEST_INSTANCE_ID, query);
+    store.search(TILE_FIND_TEST_INSTANCE_ID);
+  });
+}
+
+function lastChatFindSnapshot() {
+  return useTileFindStore.getState().uiByTileInstanceId[
+    TILE_FIND_TEST_INSTANCE_ID
+  ]?.lastSnapshot;
+}
+
+function activeHighlightRange(registry: {
+  readonly values: ReadonlyMap<string, TestHighlight>;
+}): Range | undefined {
+  return Array.from(registry.values.entries()).find(([name]) =>
+    name.includes("active"),
+  )?.[1].ranges[0];
+}
+
+function allPaintedRanges(registry: {
+  readonly values: ReadonlyMap<string, TestHighlight>;
+}): ReadonlyArray<Range> {
+  // Both the "active" and the "match" highlights together are every range the
+  // painter put on screen for the current query.
+  return Array.from(registry.values.values()).flatMap(
+    (highlight) => highlight.ranges,
+  );
+}
+
+function totalPaintedRanges(registry: {
+  readonly values: ReadonlyMap<string, TestHighlight>;
+}): number {
+  return allPaintedRanges(registry).length;
+}
+
+function activeHighlightUnitRoot(range: Range | undefined): HTMLElement | null {
+  return (
+    range?.startContainer.parentElement?.closest("[data-chat-find-unit]") ??
+    null
+  );
+}
+
+function findChatFindUnitRoot(
+  container: HTMLElement,
+  unitId: string,
+): HTMLElement | null {
+  return container.querySelector<HTMLElement>(
+    `[data-chat-find-unit="${unitId}"]`,
+  );
+}
+
 function getButtonContainingText(text: string): HTMLButtonElement {
   const button = screen.getByText(text).closest("button");
   if (!(button instanceof HTMLButtonElement)) {
     throw new Error(`Expected ${text} to be inside a button`);
   }
   return button;
+}
+
+function makeSubagentMessage(
+  messageId: string,
+  subagentId: string,
+): ChatMessageModel {
+  return makeSubagentMessageWithResult(
+    messageId,
+    subagentId,
+    "Collapsed preview also says needle. Body needle target.",
+  );
+}
+
+function makeSubagentMessageWithResult(
+  messageId: string,
+  subagentId: string,
+  result: string,
+): ChatMessageModel {
+  return {
+    ...makeMessage(0, "assistant"),
+    id: messageId,
+    segments: [
+      {
+        id: subagentId,
+        kind: "subagent",
+        name: "Researcher",
+        agentType: "analysis",
+        task: "Investigate the issue",
+        progressUpdates: ["Checked visible state"],
+        result,
+        isStreaming: false,
+        endState: null,
+        startedAt: 1,
+        durationMs: 1200,
+        spawnToolCallId: null,
+        children: [],
+      },
+    ],
+  };
+}
+
+function makeStreamingSubagentMirrorMessage(
+  messageId: string,
+  subagentId: string,
+): ChatMessageModel {
+  return {
+    ...makeMessage(0, "assistant"),
+    id: messageId,
+    segments: [
+      {
+        id: subagentId,
+        kind: "subagent",
+        // Name is a substring of the latest progress line, so a search for it
+        // matches the projected header name AND the streaming header summary
+        // mirror that echoes that progress line in the same trigger DOM.
+        name: "Scanner",
+        agentType: null,
+        task: "Investigate the issue",
+        progressUpdates: ["Scanner online"],
+        result: null,
+        isStreaming: true,
+        endState: null,
+        startedAt: 1,
+        durationMs: null,
+        spawnToolCallId: null,
+        children: [],
+      },
+    ],
+  };
+}
+
+function makeCommandMessageWithCommand(
+  messageId: string,
+  activityId: string,
+  command: string,
+): ChatMessageModel {
+  return {
+    ...makeMessage(0, "assistant"),
+    id: messageId,
+    segments: [
+      {
+        id: `${activityId}:command`,
+        kind: "command",
+        command,
+        cwd: null,
+        exitCode: 0,
+        isStreaming: false,
+        endState: null,
+        progress: null,
+        startedAt: 0,
+        parentId: null,
+      },
+    ],
+  };
+}
+
+function makeFileChangeGroupMessage(
+  messageId: string,
+  groupId: string,
+): ChatMessageModel {
+  return {
+    ...makeMessage(0, "assistant"),
+    id: messageId,
+    segments: [
+      {
+        id: groupId,
+        kind: "file_change_group",
+        files: [
+          {
+            id: `${groupId}:file`,
+            kind: "file_change",
+            filePath: "src/components/chat/find-anchor.ts",
+            operation: "update",
+            diffSource: "snapshot",
+            beforeHash: "before",
+            afterHash: "after",
+            additions: 3,
+            deletions: 1,
+            sourceBlockIds: [`${groupId}:file`],
+            reason: "snapshot",
+            isStreaming: false,
+            endState: null,
+            parentId: null,
+          },
+        ],
+        artifacts: [],
+        checkpointManifest: null,
+        hasLaterOverlappingChanges: false,
+      },
+    ],
+  };
+}
+
+function makeAgentUserMessage(id: string, content: string): ChatMessageModel {
+  return {
+    ...makeMessage(0, "user"),
+    id,
+    content,
+    persistentMessageId: id,
+    senderLabel: "Review Agent",
+    agentSenderInfo: {
+      agentId: "agent-sender-1",
+      senderTitle: "Review Agent",
+      expectReply: true,
+      responseId: "response-1",
+    },
+    agentMessage: {
+      kind: "agent",
+      content: {
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [{ type: "text", text: content }],
+          },
+        ],
+      },
+      fromAgentId: "agent-sender-1",
+      senderTitle: "Review Agent",
+      senderHarnessId: "codex",
+      reply: { expectsReply: true, responseId: "response-1" },
+    },
+  };
 }
 
 function testDomRect(input: {

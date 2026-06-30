@@ -52,7 +52,7 @@ describe("ArtifactFindExtension", () => {
     ).toHaveLength(0);
   });
 
-  it("moves the current decoration without changing the match set", () => {
+  it("moves the current decoration without changing the match set or selection", () => {
     const editor = makeEditor("<p>alpha beta alpha</p>");
 
     applyArtifactFindSearch(
@@ -61,8 +61,10 @@ describe("ArtifactFindExtension", () => {
       null,
     );
     expect(getArtifactFindState(editor).currentIndex).toBe(0);
+    expect(editor.commands.setTextSelection(7)).toBe(true);
+    const selectionBefore = JSON.stringify(editor.state.selection.toJSON());
 
-    setArtifactFindCurrent(editor, 1, false);
+    setArtifactFindCurrent(editor, 1);
 
     const state = getArtifactFindState(editor);
     const highlighted = Array.from(
@@ -75,6 +77,9 @@ describe("ArtifactFindExtension", () => {
     );
     expect(state.matches).toHaveLength(2);
     expect(state.currentIndex).toBe(1);
+    expect(JSON.stringify(editor.state.selection.toJSON())).toEqual(
+      selectionBefore,
+    );
     expect(highlighted).toHaveLength(2);
     expect(current?.textContent).toBe("alpha");
   });

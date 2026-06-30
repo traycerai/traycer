@@ -94,6 +94,7 @@ export interface TileFindUiState {
   readonly query: string;
   readonly matchCase: boolean;
   readonly replaceText: string;
+  readonly replaceExpanded: boolean;
   readonly currentRequestId: number;
   readonly focusRequestNonce: number;
   readonly lastSnapshot: TileFindStateSnapshot;

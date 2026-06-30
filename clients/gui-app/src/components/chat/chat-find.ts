@@ -3,9 +3,29 @@ import {
   answeredQuestionsSummary,
   buildChatActivityTimeline,
 } from "@/components/chat/chat-activity-groups";
+import {
+  deriveA2AReceivedCollapsibleKey,
+  deriveA2ASendCollapsibleKey,
+  deriveActivityGroupCollapsibleKey,
+  derivePromotedSubagentRenderId,
+  deriveSubagentCollapsibleKey,
+  type ChatCollapsibleKey,
+} from "@/components/chat/chat-collapsible-key";
+import {
+  adjacentDedupedProgressItems,
+  cleanSubagentNotificationText,
+} from "@/components/chat/segments/subagent-display";
 import { parseTraycerNextStepsMarkdown } from "@/markdown/traycer-next-steps";
 import { composerClipboardPlainText } from "@/lib/composer/composer-clipboard";
 import { artifactOperationVerb } from "@/lib/chat/artifact-operation-verb";
+import { segmentStepLabel } from "@/lib/chat/todo-status-tones";
+import {
+  PLAN_PREVIEW_STEP_LIMIT,
+  planCardSubtitle,
+  planFallbackMarkdown,
+  planHeadline,
+  planStatusBadgeLabel,
+} from "@/components/chat/segments/plan-display";
 import { formatClockDuration } from "@/lib/format-duration";
 import { formatSingleLine } from "@/lib/utils";
 import type {
@@ -32,7 +52,13 @@ import type {
 
 export interface ChatFindRow {
   readonly messageId: string;
-  readonly searchableText: string;
+  readonly units: ReadonlyArray<ChatFindUnit>;
+}
+
+export interface ChatFindUnit {
+  readonly unitId: string;
+  readonly text: string;
+  readonly owningChain: ReadonlyArray<ChatCollapsibleKey>;
 }
 
 export interface ChatFindAdapter extends TileFindAdapter {
@@ -43,16 +69,53 @@ export interface ChatFindAdapter extends TileFindAdapter {
 
 interface ChatFindAdapterOptions {
   readonly tileInstanceId: string;
-  readonly scrollToMessage: (messageId: string) => void;
+  readonly revealMatch: (target: ChatFindRevealTarget) => void;
+  readonly reconcileMatch: (target: ChatFindReconcileTarget) => void;
+  readonly clearReveal: () => void;
   readonly getMountedMessageRoot: (messageId: string) => HTMLElement | null;
+  readonly getMountedUnitRoot: (
+    messageId: string,
+    unitId: string,
+  ) => HTMLElement | null;
+}
+
+export interface ChatFindRevealTarget {
+  readonly messageId: string;
+  readonly unitId: string;
+  readonly owningChain: ReadonlyArray<ChatCollapsibleKey>;
+  readonly matchKey: string;
+  readonly paint: () => void;
+  readonly paintFallback: () => void;
+}
+
+export interface ChatFindReconcileTarget {
+  readonly messageId: string;
+  readonly unitId: string;
+  readonly owningChain: ReadonlyArray<ChatCollapsibleKey>;
+  readonly matchKey: string;
 }
 
 interface ChatFindMatch {
   readonly messageId: string;
   readonly rowIndex: number;
+  readonly unitId: string;
+  readonly unitIndex: number;
   readonly start: number;
   readonly end: number;
-  readonly rowMatchIndex: number;
+  // Occurrence ordinal within the match's own unit. Drives the unit-scope paint
+  // and the match key.
+  readonly occurrenceInUnit: number;
+  // Occurrence ordinal across the WHOLE message (all units, in render order).
+  // Drives the message-scope fallback paint, whose root walks every unit - the
+  // per-unit ordinal would point at the wrong occurrence there.
+  readonly occurrenceInMessage: number;
+  // Surrounding unit text immediately before/after this occurrence (capped to a
+  // small window). Used to re-anchor the active match across mid-unit streaming
+  // inserts, where neither the occurrence ordinal nor the absolute offset is
+  // stable but the immediate neighbours are.
+  readonly contextBefore: string;
+  readonly contextAfter: string;
+  readonly owningChain: ReadonlyArray<ChatCollapsibleKey>;
 }
 
 interface SupportedHighlightsAPI {
@@ -102,19 +165,29 @@ const SKIPPED_HIGHLIGHT_ANCESTOR_SELECTOR = [
   "svg",
   "title",
   "[hidden]",
+  "[data-slot='collapsible-content'][data-state='closed']",
   ".sr-only",
   "[aria-hidden='true']",
 ].join(",");
 const INCLUDED_BUTTON_HIGHLIGHT_SELECTOR = "button[data-find-include='true']";
 const CHAT_FIND_PREVIEW_MAX_LENGTH = 180;
+// How much neighbouring unit text to snapshot on each side of an occurrence for
+// active-match re-anchoring across streaming inserts. Long enough to
+// disambiguate occurrences of the same query, short enough to ignore edits that
+// land elsewhere in the (often concatenated) unit.
+const FIND_RECONCILE_CONTEXT_WINDOW = 32;
 
 export function buildChatFindRows(
   messages: ReadonlyArray<ChatMessageModel>,
+  tileInstanceId: string,
 ): ReadonlyArray<ChatFindRow> {
-  return messages.map((message) => ({
-    messageId: message.id,
-    searchableText: searchableTextForMessage(message),
-  }));
+  return messages.map((message) => {
+    const units = chatFindUnitsForMessage(message, tileInstanceId);
+    return {
+      messageId: message.id,
+      units,
+    };
+  });
 }
 
 export function markdownToChatSearchText(markdown: string): string {
@@ -127,41 +200,217 @@ export function createChatFindAdapter(
   return new ChatFindAdapterImpl(options);
 }
 
-function searchableTextForMessage(message: ChatMessageModel): string {
+export function chatFindMessageContentUnitId(messageId: string): string {
+  return `message:${messageId}:content`;
+}
+
+export function chatFindSegmentUnitId(segmentId: string): string {
+  return `segment:${segmentId}`;
+}
+
+export function chatFindActivityGroupSummaryUnitId(groupId: string): string {
+  return `activity-group:${groupId}:summary`;
+}
+
+export function chatFindActivityGroupChildHeaderUnitId(
+  groupId: string,
+  segmentId: string,
+): string {
+  return `activity-group:${groupId}:child:${segmentId}:header`;
+}
+
+export function chatFindSubagentHeaderUnitId(renderId: string): string {
+  return `subagent:${renderId}:header`;
+}
+
+export function chatFindSubagentBodyUnitId(renderId: string): string {
+  return `subagent:${renderId}:body`;
+}
+
+export function chatFindA2ASendBodyUnitId(segmentId: string): string {
+  return `a2a-send:${segmentId}:body`;
+}
+
+export function chatFindA2AReceivedBodyUnitId(messageId: string): string {
+  return `a2a-received:${messageId}:body`;
+}
+
+function chatFindUnitsForMessage(
+  message: ChatMessageModel,
+  tileInstanceId: string,
+): ReadonlyArray<ChatFindUnit> {
   if (message.role === "assistant") {
     const turnState = message.runState === null ? "complete" : "active";
-    return normalizeSearchableText(
-      buildChatActivityTimeline(message.segments, { turnState })
-        .flatMap(timelineItemSearchText)
-        .join("\n"),
+    return buildChatActivityTimeline(message.segments, { turnState }).flatMap(
+      (item) => timelineItemSearchUnits(item, tileInstanceId),
     );
+  }
+
+  if (message.role === "user" && message.agentSenderInfo !== null) {
+    return compactUnits([
+      chatFindUnit({
+        unitId: chatFindA2AReceivedBodyUnitId(message.id),
+        text: markdownToChatSearchText(message.content),
+        owningChain: [
+          deriveA2AReceivedCollapsibleKey(tileInstanceId, message.id),
+        ],
+      }),
+    ]);
   }
 
   const contentText =
     message.structuredContent === null
       ? message.content
       : composerClipboardPlainText(message.structuredContent);
-  const segmentText = message.segments.flatMap(segmentSearchText).join("\n");
-  return normalizeSearchableText([contentText, segmentText].join("\n"));
+  return compactUnits([
+    chatFindUnit({
+      unitId: chatFindMessageContentUnitId(message.id),
+      text: contentText,
+      owningChain: [],
+    }),
+    ...message.segments.flatMap((segment) =>
+      segmentSearchUnits(segment, tileInstanceId),
+    ),
+  ]);
 }
 
-function timelineItemSearchText(
+function timelineItemSearchUnits(
   item: ChatActivityTimelineItem,
-): ReadonlyArray<string> {
-  if (item.kind === "segment") return segmentSearchText(item.segment);
+  tileInstanceId: string,
+): ReadonlyArray<ChatFindUnit> {
+  if (item.kind === "segment") {
+    return segmentSearchUnits(item.segment, tileInstanceId);
+  }
   if (item.kind === "answered_questions") {
-    return [item.summary];
+    return compactUnits([
+      chatFindUnit({
+        unitId: chatFindSegmentUnitId(item.segment.id),
+        text: item.summary,
+        owningChain: [],
+      }),
+    ]);
   }
   if (item.kind === "promoted_subagent") {
-    return promotedSubagentSegmentSearchText(item.segment);
+    const renderId = derivePromotedSubagentRenderId(item.segment.id);
+    return subagentSegmentSearchUnits(
+      item.segment,
+      renderId,
+      [],
+      deriveSubagentCollapsibleKey(tileInstanceId, renderId),
+    );
   }
-  return activityGroupSearchText(item.group);
+  return activityGroupSearchUnits(item.group, tileInstanceId);
 }
 
-function activityGroupSearchText(
+function activityGroupSearchUnits(
   group: ActivityGroupModel,
-): ReadonlyArray<string> {
-  return [group.label];
+  tileInstanceId: string,
+): ReadonlyArray<ChatFindUnit> {
+  const groupKey = deriveActivityGroupCollapsibleKey(tileInstanceId, group.id);
+  return compactUnits([
+    chatFindUnit({
+      unitId: chatFindActivityGroupSummaryUnitId(group.id),
+      text: group.label,
+      owningChain: [],
+    }),
+    ...group.segments.flatMap((segment) =>
+      activityGroupChildSearchUnits(
+        segment,
+        group.id,
+        [groupKey],
+        tileInstanceId,
+      ),
+    ),
+  ]);
+}
+
+function activityGroupChildSearchUnits(
+  segment: ActivityGroupModel["segments"][number],
+  groupId: string,
+  groupChain: ReadonlyArray<ChatCollapsibleKey>,
+  tileInstanceId: string,
+): ReadonlyArray<ChatFindUnit> {
+  if (segment.kind === "subagent") {
+    const renderId = segment.id;
+    return subagentSegmentSearchUnits(
+      segment,
+      renderId,
+      groupChain,
+      deriveSubagentCollapsibleKey(tileInstanceId, renderId),
+    );
+  }
+  if (segment.kind === "tool" && segment.agentMessageSend !== null) {
+    return compactUnits([
+      chatFindUnit({
+        unitId: chatFindA2ASendBodyUnitId(segment.id),
+        text: markdownToChatSearchText(segment.agentMessageSend.message),
+        owningChain: [
+          ...groupChain,
+          deriveA2ASendCollapsibleKey(tileInstanceId, segment.id),
+        ],
+      }),
+    ]);
+  }
+
+  return compactUnits([
+    chatFindUnit({
+      unitId: chatFindActivityGroupChildHeaderUnitId(groupId, segment.id),
+      text: activityGroupChildHeaderSearchText(segment).join("\n"),
+      owningChain: groupChain,
+    }),
+  ]);
+}
+
+function chatFindUnit(args: {
+  readonly unitId: string;
+  readonly text: string;
+  readonly owningChain: ReadonlyArray<ChatCollapsibleKey>;
+}): ChatFindUnit | null {
+  const text = normalizeSearchableText(args.text);
+  if (text.length === 0) return null;
+  return {
+    unitId: args.unitId,
+    text,
+    owningChain: args.owningChain,
+  };
+}
+
+function compactUnits(
+  units: ReadonlyArray<ChatFindUnit | null>,
+): ReadonlyArray<ChatFindUnit> {
+  return units.filter((unit): unit is ChatFindUnit => unit !== null);
+}
+
+function segmentSearchUnits(
+  segment: MessageSegment,
+  tileInstanceId: string,
+): ReadonlyArray<ChatFindUnit> {
+  if (segment.kind === "subagent") {
+    const renderId = segment.id;
+    return subagentSegmentSearchUnits(
+      segment,
+      renderId,
+      [],
+      deriveSubagentCollapsibleKey(tileInstanceId, renderId),
+    );
+  }
+  if (segment.kind === "tool" && segment.agentMessageSend !== null) {
+    return compactUnits([
+      chatFindUnit({
+        unitId: chatFindA2ASendBodyUnitId(segment.id),
+        text: markdownToChatSearchText(segment.agentMessageSend.message),
+        owningChain: [deriveA2ASendCollapsibleKey(tileInstanceId, segment.id)],
+      }),
+    ]);
+  }
+
+  return compactUnits([
+    chatFindUnit({
+      unitId: chatFindSegmentUnitId(segment.id),
+      text: segmentSearchText(segment).join("\n"),
+      owningChain: [],
+    }),
+  ]);
 }
 
 // The branch count mirrors the persisted chat segment taxonomy.
@@ -189,12 +438,14 @@ function segmentSearchText(segment: MessageSegment): ReadonlyArray<string> {
     case "command":
       return commandSegmentSearchText(segment);
     case "subagent":
-      return subagentSegmentSearchText(segment);
+      return subagentBodySearchText(segment);
     case "approval":
+      // Mirror the rendered header label: verdict + (toolName ?? description ??
+      // "approval"). `description`/`reason` live only in the unanchored body, so
+      // indexing them would count matches that can never paint.
       return [
         segment.decision?.approved === true ? "Approved" : "Denied",
-        segment.toolName ?? "",
-        segment.description ?? "",
+        segment.toolName ?? segment.description ?? "approval",
       ];
     case "artifact_operation":
       return [
@@ -209,11 +460,7 @@ function segmentSearchText(segment: MessageSegment): ReadonlyArray<string> {
     case "plan":
       return planSegmentSearchText(segment);
     case "todo":
-      return segment.items.map((item) =>
-        normalizeSearchableText(
-          [item.activeForm ?? item.text, item.status, item.priority].join(" "),
-        ),
-      );
+      return todoSegmentSearchText(segment);
     case "error":
       return [
         normalizeSearchableText([segment.message, segment.code].join(" ")),
@@ -248,6 +495,33 @@ function segmentSearchText(segment: MessageSegment): ReadonlyArray<string> {
           ].join(" "),
         ),
       ];
+    default: {
+      const _exhaustive: never = segment;
+      void _exhaustive;
+      return [];
+    }
+  }
+}
+
+function activityGroupChildHeaderSearchText(
+  segment: ActivityGroupModel["segments"][number],
+): ReadonlyArray<string> {
+  switch (segment.kind) {
+    case "tool":
+      return toolSegmentSearchText(segment);
+    case "command":
+      return commandSegmentSearchText(segment);
+    case "file_change":
+      return fileChangeSegmentSearchText(segment);
+    case "approval":
+      // Same parity rule as the top-level approval projection above: only the
+      // verdict + header label are rendered (body is unanchored).
+      return [
+        segment.decision?.approved === true ? "Approved" : "Denied",
+        segment.toolName ?? segment.description ?? "approval",
+      ];
+    case "subagent":
+      return [];
     default: {
       const _exhaustive: never = segment;
       void _exhaustive;
@@ -323,75 +597,103 @@ function commandSegmentSearchText(
   return [normalizeSearchableText(segment.command)];
 }
 
-function subagentSegmentSearchText(
+// A subagent renders TWO independently-visible regions, so it projects to two
+// find units:
+//   - header (name + agent type): always visible while the parent is open, so
+//     its owning chain is the PARENT chain - it must stay findable even when the
+//     subagent's own body is collapsed.
+//   - body (task + progress + result): inside the subagent's own collapsible, so
+//     its chain additionally includes the subagent's own key.
+function subagentSegmentSearchUnits(
+  segment: SubagentSegment,
+  renderId: string,
+  parentChain: ReadonlyArray<ChatCollapsibleKey>,
+  ownKey: ChatCollapsibleKey,
+): ReadonlyArray<ChatFindUnit> {
+  return compactUnits([
+    chatFindUnit({
+      unitId: chatFindSubagentHeaderUnitId(renderId),
+      text: subagentHeaderSearchText(segment),
+      owningChain: parentChain,
+    }),
+    chatFindUnit({
+      unitId: chatFindSubagentBodyUnitId(renderId),
+      text: subagentBodySearchText(segment).join("\n"),
+      owningChain: [...parentChain, ownKey],
+    }),
+  ]);
+}
+
+// The always-visible header line: the cleaned display name (falling back to the
+// rendered "Subagent" placeholder) plus the cleaned agent-type badge text.
+function subagentHeaderSearchText(segment: SubagentSegment): string {
+  return [
+    cleanSubagentNotificationText(segment.name) ?? "Subagent",
+    cleanSubagentNotificationText(segment.agentType) ?? "",
+  ].join(" ");
+}
+
+function subagentBodySearchText(
   segment: SubagentSegment,
 ): ReadonlyArray<string> {
   return [
-    normalizeSearchableText(
-      [
-        cleanSubagentNotificationText(segment.name) ?? "Subagent",
-        cleanSubagentNotificationText(segment.agentType) ?? "",
-        compactSubagentSummaryText(segment),
-      ].join(" "),
+    cleanSubagentNotificationText(segment.task) ?? "",
+    // Progress is rendered raw and adjacent-deduped; index the SAME deduped raw
+    // lines so the counter matches the rendered list (no phantom duplicates).
+    ...adjacentDedupedProgressItems(segment.progressUpdates).map(
+      (item) => item.text,
     ),
+    segment.result === null ? "" : markdownToChatSearchText(segment.result),
   ];
 }
 
-function promotedSubagentSegmentSearchText(
-  segment: SubagentSegment,
-): ReadonlyArray<string> {
-  const progress = compactSubagentProgressText(segment);
-  return [
-    normalizeSearchableText(
-      [
-        cleanSubagentNotificationText(segment.name) ?? "Subagent",
-        cleanSubagentNotificationText(segment.agentType) ?? "",
-        segment.isStreaming ? (progress ?? "Starting…") : "",
-      ].join(" "),
-    ),
-  ];
-}
-
-function compactSubagentSummaryText(segment: SubagentSegment): string {
-  if (segment.result !== null) {
-    return formatSingleLine(markdownToChatSearchText(segment.result), {
-      maxLength: CHAT_FIND_PREVIEW_MAX_LENGTH,
-      ellipsis: "...",
-    });
-  }
-  return (
-    compactSubagentProgressText(segment) ??
-    (segment.isStreaming ? "Starting…" : "")
-  );
-}
-
-function compactSubagentProgressText(segment: SubagentSegment): string | null {
-  const latestProgress = segment.progressUpdates.at(-1) ?? null;
-  return cleanSubagentNotificationText(latestProgress);
-}
-
+// Reasoning is intentionally summary-only: the find unit is the header BUTTON,
+// whose only text is this label ("Thinking" while streaming, "Thought for Xs"
+// once done). The streaming tail and the expanded full trace render in a SIBLING
+// element OUTSIDE the find-unit anchor, so they are neither paintable nor
+// counted - indexing them would be a phantom match. Keep this in lockstep with
+// the button label in `reasoning-segment.tsx`.
 function reasoningSegmentSearchText(
   segment: Extract<MessageSegment, { kind: "reasoning" }>,
 ): ReadonlyArray<string> {
-  if (segment.isStreaming) {
-    return ["Thinking", markdownToChatSearchText(segment.markdown)];
-  }
+  if (segment.isStreaming) return ["Thinking"];
   return [reasoningSummaryLabel(segment.durationMs)];
 }
 
+// Index ONLY what the inline plan card renders: the headline, the status badge
+// label (suppressed for awaiting_approval), the optional subtitle, and the first
+// N step labels. The full markdown preview and the remaining steps live behind
+// an unopened dialog, so indexing them would over-count un-findable matches.
 function planSegmentSearchText(
   segment: PlanSegmentModel,
 ): ReadonlyArray<string> {
+  const cardHeadline = planHeadline(segment, planFallbackMarkdown(segment));
   return [
     normalizeSearchableText(
       [
-        segment.title ?? "",
-        segment.summary ?? "",
-        markdownToChatSearchText(segment.markdownPreview),
-        segment.planStatus,
-        ...segment.steps.map((step) => step.activeForm ?? step.text),
+        cardHeadline,
+        planStatusBadgeLabel(segment.planStatus) ?? "",
+        planCardSubtitle(segment, cardHeadline) ?? "",
+        ...segment.steps
+          .slice(0, PLAN_PREVIEW_STEP_LIMIT)
+          .map((step) => segmentStepLabel(step)),
       ].join(" "),
     ),
+  ];
+}
+
+// The todo card renders a "<done> of <total> Done" header line and one
+// status-aware label per item. The status / priority words are NOT rendered, so
+// they must not be indexed (they were phantom matches before).
+function todoSegmentSearchText(
+  segment: Extract<MessageSegment, { kind: "todo" }>,
+): ReadonlyArray<string> {
+  const done = segment.items.filter(
+    (item) => item.status === "completed",
+  ).length;
+  return [
+    `${done} of ${segment.items.length} Done`,
+    ...segment.items.map((item) => segmentStepLabel(item)),
   ];
 }
 
@@ -504,50 +806,17 @@ function reasoningSummaryLabel(durationMs: number | null): string {
   return `Thought for ${formatClockDuration(seconds)}`;
 }
 
-function cleanSubagentNotificationText(input: string | null): string | null {
-  if (input === null) return null;
-  const trimmed = input.trim();
-  if (trimmed.length === 0) return null;
-  if (!trimmed.includes("<task-notification")) return trimmed;
-  const message =
-    extractTagText(trimmed, "message") ??
-    extractTagText(trimmed, "prompt") ??
-    extractTagText(trimmed, "task") ??
-    extractTagText(trimmed, "summary") ??
-    extractTagText(trimmed, "task-notification");
-  const cleaned = stripMonitorEventPrefix(
-    message ?? stripTaskNotificationMarkup(trimmed),
-  ).trim();
-  return cleaned.length > 0 ? cleaned : null;
-}
-
-function extractTagText(input: string, tagName: string): string | null {
-  const match = new RegExp(
-    `<${tagName}\\b[^>]*>([\\s\\S]*?)</${tagName}>`,
-    "i",
-  ).exec(input);
-  if (match === null) return null;
-  const value = match[1].trim();
-  return value.length > 0 ? value : null;
-}
-
-function stripTaskNotificationMarkup(input: string): string {
-  return input
-    .replace(/<task-id>[\s\S]*?<\/task-id>/gi, "")
-    .replace(/<task-notification\b[^>]*>/gi, "")
-    .replace(/<\/task-notification>/gi, "")
-    .replace(/<\/?(summary|message|prompt|task)>/gi, "");
-}
-
-function stripMonitorEventPrefix(input: string): string {
-  return input.replace(/^Monitor event:\s*/i, "");
-}
-
 class ChatFindAdapterImpl implements ChatFindAdapter {
   readonly tileInstanceId: string;
   readonly tileKind = "chat" as const;
 
-  private readonly scrollToMessage: (messageId: string) => void;
+  private readonly revealMatch: (target: ChatFindRevealTarget) => void;
+  private readonly reconcileMatch: (target: ChatFindReconcileTarget) => void;
+  private readonly clearReveal: () => void;
+  private readonly getMountedUnitRoot: (
+    messageId: string,
+    unitId: string,
+  ) => HTMLElement | null;
   private readonly getMountedMessageRoot: (
     messageId: string,
   ) => HTMLElement | null;
@@ -563,8 +832,11 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
 
   constructor(options: ChatFindAdapterOptions) {
     this.tileInstanceId = options.tileInstanceId;
-    this.scrollToMessage = options.scrollToMessage;
+    this.revealMatch = options.revealMatch;
+    this.reconcileMatch = options.reconcileMatch;
+    this.clearReveal = options.clearReveal;
     this.getMountedMessageRoot = options.getMountedMessageRoot;
+    this.getMountedUnitRoot = options.getMountedUnitRoot;
     this.highlighter = new ChatFindHighlighter(options.tileInstanceId);
     this.snapshot = createChatFindSnapshot({
       requestId: 0,
@@ -590,6 +862,7 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
   }
 
   search(input: TileFindInput): void {
+    this.clearReveal();
     this.cancelScheduledPaint();
     this.highlighter.clear();
     this.matches =
@@ -633,13 +906,27 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
   }
 
   clear(): void {
+    this.clearReveal();
     this.cancelScheduledPaint();
     this.highlighter.clear();
-    this.snapshot = {
-      ...this.snapshot,
+    // Closing the bar must end scanning. updateRows runs from a layout effect on
+    // every `messages` change (i.e. every streaming token) and is gated only on
+    // `snapshot.query.length`, so leaving the query/matches set keeps re-running
+    // findMatches over the whole transcript forever. Reset the scan state and
+    // publish an idle, empty snapshot so a closed bar does no per-token work;
+    // reopening re-runs search from scratch.
+    this.matches = EMPTY_MATCHES;
+    this.activeMatchIndex = 0;
+    this.snapshot = createChatFindSnapshot({
+      requestId: this.snapshot.requestId,
+      status: "idle",
+      query: "",
+      matchCase: this.snapshot.matchCase,
+      current: 0,
+      total: 0,
       activeUnitId: null,
       exactHighlight: "none",
-    };
+    });
     this.notify();
   }
 
@@ -679,6 +966,7 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
   }
 
   dispose(): void {
+    this.clearReveal();
     this.cancelScheduledPaint();
     this.highlighter.dispose();
     this.listeners.clear();
@@ -693,6 +981,7 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
     if (args.query.length === 0) {
       this.matches = EMPTY_MATCHES;
       this.activeMatchIndex = 0;
+      this.clearReveal();
       this.snapshot = createChatFindSnapshot({
         requestId: args.requestId,
         status: "idle",
@@ -710,6 +999,7 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
 
     if (this.matches.length === 0) {
       this.activeMatchIndex = 0;
+      this.clearReveal();
       this.snapshot = createChatFindSnapshot({
         requestId: args.requestId,
         status: "ready",
@@ -727,7 +1017,6 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
 
     const activeMatch = this.matches.at(this.activeMatchIndex);
     if (activeMatch === undefined) return;
-    if (args.navigate) this.scrollToMessage(activeMatch.messageId);
     this.snapshot = createChatFindSnapshot({
       requestId: args.requestId,
       status: "ready",
@@ -735,51 +1024,121 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
       matchCase: args.matchCase,
       current: this.activeMatchIndex + 1,
       total: this.matches.length,
-      activeUnitId: activeMatch.messageId,
+      activeUnitId: activeMatch.unitId,
       exactHighlight: "pending",
     });
     this.notify();
+    if (args.navigate) {
+      this.requestReveal(activeMatch);
+      return;
+    }
+    this.requestReconcile(activeMatch);
     this.requestHighlightPaint();
+  }
+
+  private requestReveal(activeMatch: ChatFindMatch): void {
+    const matchKey = chatFindMatchKey(activeMatch);
+    const generation = this.paintGeneration + 1;
+    this.paintGeneration = generation;
+    this.revealMatch({
+      messageId: activeMatch.messageId,
+      unitId: activeMatch.unitId,
+      owningChain: activeMatch.owningChain,
+      matchKey,
+      paint: () => this.paintMatch(generation, matchKey, "unit", true),
+      paintFallback: () =>
+        this.paintMatch(generation, matchKey, "message", true),
+    });
+  }
+
+  private requestReconcile(activeMatch: ChatFindMatch): void {
+    this.reconcileMatch({
+      messageId: activeMatch.messageId,
+      unitId: activeMatch.unitId,
+      owningChain: activeMatch.owningChain,
+      matchKey: chatFindMatchKey(activeMatch),
+    });
   }
 
   private requestHighlightPaint(): void {
     this.cancelScheduledPaint();
     const activeMatch = this.matches.at(this.activeMatchIndex);
     if (activeMatch === undefined) return;
-    const requestId = this.snapshot.requestId;
-    const query = this.snapshot.query;
-    const matchCase = this.snapshot.matchCase;
     const matchKey = chatFindMatchKey(activeMatch);
     const generation = this.paintGeneration + 1;
     this.paintGeneration = generation;
     this.paintFrameId = window.requestAnimationFrame(() => {
       this.paintFrameId = null;
-      if (this.paintGeneration !== generation) return;
-      if (this.snapshot.requestId !== requestId) return;
-      if (this.snapshot.query !== query) return;
-      const currentMatch = this.matches.at(this.activeMatchIndex);
-      if (
-        currentMatch === undefined ||
-        chatFindMatchKey(currentMatch) !== matchKey
-      ) {
-        return;
-      }
-      const root = this.getMountedMessageRoot(currentMatch.messageId);
-      if (root === null) return;
-      const painted = this.highlighter.paint({
-        root,
-        query,
-        matchCase,
-        activeMatchIndex: currentMatch.rowMatchIndex,
-      });
-      if (!painted) return;
-      if (this.snapshot.requestId !== requestId) return;
-      this.snapshot = {
-        ...this.snapshot,
-        exactHighlight: "painted",
-      };
-      this.notify();
+      this.paintMatch(generation, matchKey, "unit", false);
     });
+  }
+
+  private paintMatch(
+    generation: number,
+    matchKey: string,
+    scope: "unit" | "message",
+    scrollActiveIntoView: boolean,
+  ): void {
+    if (this.paintGeneration !== generation) return;
+    const requestId = this.snapshot.requestId;
+    const query = this.snapshot.query;
+    const matchCase = this.snapshot.matchCase;
+    if (query.length === 0) return;
+    const currentMatch = this.matches.at(this.activeMatchIndex);
+    if (
+      currentMatch === undefined ||
+      chatFindMatchKey(currentMatch) !== matchKey
+    ) {
+      return;
+    }
+    const root =
+      scope === "unit"
+        ? this.getMountedUnitRoot(currentMatch.messageId, currentMatch.unitId)
+        : this.getMountedMessageRoot(currentMatch.messageId);
+    if (root === null) {
+      if (this.getMountedMessageRoot(currentMatch.messageId) !== null) {
+        this.highlighter.clear();
+        if (this.snapshot.exactHighlight !== "pending") {
+          this.snapshot = {
+            ...this.snapshot,
+            exactHighlight: "pending",
+          };
+          this.notify();
+        }
+      }
+      return;
+    }
+    // The unit-scope root walks only the active unit, so the per-unit ordinal is
+    // correct. The message-scope fallback root walks every unit in the message,
+    // so it must use the message-wide ordinal - otherwise an earlier matching
+    // unit steals the highlight.
+    const activeOccurrence =
+      scope === "message"
+        ? currentMatch.occurrenceInMessage
+        : currentMatch.occurrenceInUnit;
+    const painted = this.highlighter.paint({
+      root,
+      query,
+      matchCase,
+      activeMatchIndex: activeOccurrence,
+      scrollActiveIntoView,
+    });
+    if (this.snapshot.requestId !== requestId) return;
+    if (!painted) {
+      if (this.snapshot.exactHighlight !== "pending") {
+        this.snapshot = {
+          ...this.snapshot,
+          exactHighlight: "pending",
+        };
+        this.notify();
+      }
+      return;
+    }
+    this.snapshot = {
+      ...this.snapshot,
+      exactHighlight: "painted",
+    };
+    this.notify();
   }
 
   private cancelScheduledPaint(): void {
@@ -828,27 +1187,52 @@ function findMatches(input: {
   const needle = input.matchCase ? input.query : input.query.toLowerCase();
   const matches: ChatFindMatch[] = [];
   input.rows.forEach((row, rowIndex) => {
-    const haystack = input.matchCase
-      ? row.searchableText
-      : row.searchableText.toLowerCase();
-    const step = Math.max(input.query.length, 1);
-    let rowMatchIndex = 0;
-    let index = haystack.indexOf(needle);
-    while (index !== -1) {
-      matches.push({
-        messageId: row.messageId,
-        rowIndex,
-        start: index,
-        end: index + input.query.length,
-        rowMatchIndex,
-      });
-      rowMatchIndex += 1;
-      index = haystack.indexOf(needle, index + step);
-    }
+    let occurrenceInMessage = 0;
+    row.units.forEach((unit, unitIndex) => {
+      const haystack = input.matchCase ? unit.text : unit.text.toLowerCase();
+      const step = Math.max(input.query.length, 1);
+      let occurrenceInUnit = 0;
+      let index = haystack.indexOf(needle);
+      while (index !== -1) {
+        const end = index + input.query.length;
+        matches.push({
+          messageId: row.messageId,
+          rowIndex,
+          unitId: unit.unitId,
+          unitIndex,
+          start: index,
+          end,
+          occurrenceInUnit,
+          occurrenceInMessage,
+          // Context is sliced from the original-cased unit text so before/after
+          // neighbours compare faithfully during reconciliation.
+          contextBefore: unit.text.slice(
+            Math.max(0, index - FIND_RECONCILE_CONTEXT_WINDOW),
+            index,
+          ),
+          contextAfter: unit.text.slice(
+            end,
+            end + FIND_RECONCILE_CONTEXT_WINDOW,
+          ),
+          owningChain: unit.owningChain,
+        });
+        occurrenceInUnit += 1;
+        occurrenceInMessage += 1;
+        index = haystack.indexOf(needle, index + step);
+      }
+    });
   });
   return matches;
 }
 
+// Re-anchor the active match after a rescan. Streaming rebuilds the match set
+// every keystroke/update, so the previously active occurrence must be tracked to
+// the same logical spot without re-navigating. The catch: in a concatenated unit
+// (subagent task+progress+result) a streamed insert that lands BEFORE the active
+// occurrence shifts BOTH its per-unit ordinal (a query insert adds an earlier
+// occurrence) AND its absolute offset, so neither alone is a stable identity.
+// The occurrence's immediate neighbours are what stay put, so context wins before
+// ordinal/offset fallbacks.
 function nextActiveMatchIndex(
   matches: ReadonlyArray<ChatFindMatch>,
   previousActive: ChatFindMatch | null,
@@ -856,23 +1240,117 @@ function nextActiveMatchIndex(
 ): number {
   if (matches.length === 0) return 0;
   if (previousActive !== null) {
-    const exactIndex = matches.findIndex(
+    // The identical DOM occurrence (unit text unchanged, or only edited
+    // elsewhere): same unit and same span. Unambiguous, so take it first.
+    const identicalIndex = matches.findIndex(
       (match) =>
         match.messageId === previousActive.messageId &&
+        match.unitId === previousActive.unitId &&
         match.start === previousActive.start &&
         match.end === previousActive.end,
     );
-    if (exactIndex !== -1) return exactIndex;
-    const rowIndex = matches.findIndex(
-      (match) => match.messageId === previousActive.messageId,
+    if (identicalIndex !== -1) return identicalIndex;
+    // The occurrence whose surrounding text best survives a mid-unit insert.
+    const contextual = bestContextMatchIndexInSameUnit(matches, previousActive);
+    if (contextual !== -1) return contextual;
+    // Context was uninformative (e.g. the query spans the whole unit). Fall back
+    // to the prior ordinal identity, then to the nearest offset.
+    const sameOrdinal = matches.findIndex(
+      (match) =>
+        match.messageId === previousActive.messageId &&
+        match.unitId === previousActive.unitId &&
+        match.occurrenceInUnit === previousActive.occurrenceInUnit,
     );
-    if (rowIndex !== -1) return rowIndex;
+    if (sameOrdinal !== -1) return sameOrdinal;
+    const sameUnit = nearestMatchIndexInSameUnit(matches, previousActive);
+    if (sameUnit !== -1) return sameUnit;
   }
   return Math.min(fallbackIndex, matches.length - 1);
 }
 
+// Among the candidates in the previously active unit, pick the one whose
+// before/after neighbours best overlap the previous active occurrence's
+// neighbours. The score is the shared run lengths (suffix of `contextBefore`
+// plus prefix of `contextAfter`); an insert that lands on only one side leaves
+// the other side fully intact, so the true occurrence still outscores a
+// freshly-inserted duplicate. Ties resolve toward the prior ordinal, then the
+// nearest offset, for determinism. Returns -1 when nothing overlaps.
+function bestContextMatchIndexInSameUnit(
+  matches: ReadonlyArray<ChatFindMatch>,
+  previousActive: ChatFindMatch,
+): number {
+  let bestIndex = -1;
+  let bestScore = 0;
+  let bestOrdinalDelta = 0;
+  let bestStartDelta = 0;
+  matches.forEach((match, index) => {
+    if (match.messageId !== previousActive.messageId) return;
+    if (match.unitId !== previousActive.unitId) return;
+    const score =
+      commonSuffixLength(match.contextBefore, previousActive.contextBefore) +
+      commonPrefixLength(match.contextAfter, previousActive.contextAfter);
+    if (score === 0) return;
+    const ordinalDelta = Math.abs(
+      match.occurrenceInUnit - previousActive.occurrenceInUnit,
+    );
+    const startDelta = Math.abs(match.start - previousActive.start);
+    if (bestIndex === -1 || score > bestScore) {
+      bestIndex = index;
+      bestScore = score;
+      bestOrdinalDelta = ordinalDelta;
+      bestStartDelta = startDelta;
+      return;
+    }
+    if (score < bestScore) return;
+    if (
+      ordinalDelta < bestOrdinalDelta ||
+      (ordinalDelta === bestOrdinalDelta && startDelta < bestStartDelta)
+    ) {
+      bestIndex = index;
+      bestOrdinalDelta = ordinalDelta;
+      bestStartDelta = startDelta;
+    }
+  });
+  return bestIndex;
+}
+
+function commonPrefixLength(left: string, right: string): number {
+  const limit = Math.min(left.length, right.length);
+  let length = 0;
+  while (length < limit && left[length] === right[length]) length += 1;
+  return length;
+}
+
+function commonSuffixLength(left: string, right: string): number {
+  const limit = Math.min(left.length, right.length);
+  let length = 0;
+  while (
+    length < limit &&
+    left[left.length - 1 - length] === right[right.length - 1 - length]
+  ) {
+    length += 1;
+  }
+  return length;
+}
+
 function chatFindMatchKey(match: ChatFindMatch): string {
-  return `${match.messageId}:${match.start}:${match.end}:${match.rowMatchIndex}`;
+  return `${match.messageId}:${match.unitId}:${match.occurrenceInUnit}`;
+}
+
+function nearestMatchIndexInSameUnit(
+  matches: ReadonlyArray<ChatFindMatch>,
+  previousActive: ChatFindMatch,
+): number {
+  return matches.reduce((bestIndex, match, index) => {
+    if (match.messageId !== previousActive.messageId) return bestIndex;
+    if (match.unitId !== previousActive.unitId) return bestIndex;
+    if (bestIndex === -1) return index;
+    const best = matches.at(bestIndex);
+    if (best === undefined) return index;
+    const bestDistance = Math.abs(best.start - previousActive.start);
+    const candidateDistance = Math.abs(match.start - previousActive.start);
+    return candidateDistance < bestDistance ? index : bestIndex;
+  }, -1);
 }
 
 class ChatFindHighlighter {
@@ -892,6 +1370,7 @@ class ChatFindHighlighter {
     readonly query: string;
     readonly matchCase: boolean;
     readonly activeMatchIndex: number;
+    readonly scrollActiveIntoView: boolean;
   }): boolean {
     const highlights = getHighlights();
     if (highlights === null || typeof Highlight === "undefined") return false;
@@ -900,16 +1379,33 @@ class ChatFindHighlighter {
       this.clear();
       return false;
     }
+    const active = ranges.at(input.activeMatchIndex);
+    if (active === undefined) {
+      this.clear();
+      return false;
+    }
     this.ensureStyleElement();
-    const activeIndex = Math.min(input.activeMatchIndex, ranges.length - 1);
-    const active = ranges[activeIndex];
-    const others = ranges.filter((_range, index) => index !== activeIndex);
+    const others = ranges.filter(
+      (_range, index) => index !== input.activeMatchIndex,
+    );
     if (others.length > 0) {
       highlights.set(this.names.match, new Highlight(...others));
     } else {
       highlights.delete(this.names.match);
     }
     highlights.set(this.names.active, new Highlight(active));
+    // The active match may sit below the fold of a card's own height-capped
+    // scroll container (subagent/A2A bodies use `max-h` + `overflow-auto`).
+    // Scrolling the match's element walks every scroll ancestor, so the inner
+    // container reveals the match in addition to the chat row scroll the reveal
+    // controller already did. Only the navigation paint passes this; passive
+    // streaming/sync repaints must never yank the scroll position.
+    if (input.scrollActiveIntoView) {
+      active.startContainer.parentElement?.scrollIntoView({
+        block: "nearest",
+        inline: "nearest",
+      });
+    }
     return true;
   }
 

@@ -34,6 +34,7 @@ function makeAdapter(
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
   editors.splice(0).forEach((editor) => editor.destroy());
 });
 
@@ -80,6 +81,142 @@ describe("createArtifactEditorFindAdapter", () => {
       expect(snapshot.exactHighlight).toBe("painted");
     },
   );
+
+  it("scrolls the current artifact match after search", () => {
+    const frames = installAnimationFrameQueue();
+    const scrollIntoView = vi
+      .spyOn(Element.prototype, "scrollIntoView")
+      .mockImplementation(() => undefined);
+    const editor = makeEditor("<p>alpha beta alpha</p>", true);
+    const adapter = makeAdapter(editor, "spec", "search-scroll");
+
+    void adapter.search({ requestId: 1, query: "beta", matchCase: false });
+
+    expect(scrollIntoView).not.toHaveBeenCalled();
+    frames.runNextFrame();
+
+    const current = editor.view.dom.querySelector<HTMLElement>(
+      "[data-artifact-find-current]",
+    );
+    expect(current?.textContent).toBe("beta");
+    expect(scrollIntoView).toHaveBeenCalledWith({
+      block: "center",
+      inline: "nearest",
+    });
+  });
+
+  it("keeps selection unchanged while next and previous mark and scroll the current match", () => {
+    const frames = installAnimationFrameQueue();
+    const scrollIntoView = vi
+      .spyOn(Element.prototype, "scrollIntoView")
+      .mockImplementation(() => undefined);
+    const editor = makeEditor("<p>alpha beta alpha beta</p>", true);
+    const adapter = makeAdapter(editor, "ticket", "navigation-scroll");
+
+    void adapter.search({ requestId: 1, query: "alpha", matchCase: false });
+    frames.runNextFrame();
+    expect(editor.commands.setTextSelection(7)).toBe(true);
+    const selectionBefore = JSON.stringify(editor.state.selection.toJSON());
+    scrollIntoView.mockClear();
+
+    void adapter.next();
+    expect(getArtifactFindState(editor).currentIndex).toBe(1);
+    expect(JSON.stringify(editor.state.selection.toJSON())).toEqual(
+      selectionBefore,
+    );
+    expectCurrentElementToBeMatch(editor, 1);
+    frames.runNextFrame();
+    expect(scrollIntoView).toHaveBeenCalledWith({
+      block: "center",
+      inline: "nearest",
+    });
+
+    scrollIntoView.mockClear();
+    void adapter.previous();
+    expect(getArtifactFindState(editor).currentIndex).toBe(0);
+    expect(JSON.stringify(editor.state.selection.toJSON())).toEqual(
+      selectionBefore,
+    );
+    expectCurrentElementToBeMatch(editor, 0);
+    frames.runNextFrame();
+    expect(scrollIntoView).toHaveBeenCalledWith({
+      block: "center",
+      inline: "nearest",
+    });
+  });
+
+  it("retries current match scrolling when the decoration is not rendered on the first frame", () => {
+    const frames = installAnimationFrameQueue();
+    const scrollIntoView = vi
+      .spyOn(Element.prototype, "scrollIntoView")
+      .mockImplementation(() => undefined);
+    const editor = makeEditor("<p>alpha beta alpha</p>", true);
+    const adapter = makeAdapter(editor, "review", "scroll-retry");
+    void adapter.search({ requestId: 1, query: "alpha", matchCase: false });
+    frames.runNextFrame();
+    scrollIntoView.mockClear();
+    // Return null on the first lookup (decoration not yet rendered) to exercise
+    // the retry; vi.spyOn calls through to the real querySelector afterwards.
+    vi.spyOn(editor.view.dom, "querySelector").mockImplementationOnce(
+      () => null,
+    );
+
+    void adapter.next();
+    frames.runNextFrame();
+    expect(scrollIntoView).not.toHaveBeenCalled();
+
+    frames.runNextFrame();
+    expect(scrollIntoView).toHaveBeenCalledWith({
+      block: "center",
+      inline: "nearest",
+    });
+  });
+
+  it("recomputes highlights without scrolling on passive document changes, but still scrolls on explicit navigation", () => {
+    vi.useFakeTimers();
+    const frames = installAnimationFrameQueue();
+    const scrollIntoView = vi
+      .spyOn(Element.prototype, "scrollIntoView")
+      .mockImplementation(() => undefined);
+    const editor = makeEditor("<p>alpha beta alpha beta</p>", true);
+    const adapter = makeAdapter(editor, "spec", "rescan-scroll-guard");
+    // The doc-change rescan path only runs while the editor listener is
+    // attached, which happens on subscribe.
+    const unsubscribe = adapter.subscribe(() => undefined);
+
+    // Explicit search scrolls the current match into view.
+    void adapter.search({ requestId: 1, query: "beta", matchCase: false });
+    frames.flushFrames();
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    expect(getArtifactFindState(editor).matches.length).toBe(2);
+    scrollIntoView.mockClear();
+
+    // A passive document edit (e.g. a streamed / collaborative Y.Doc change)
+    // dispatches a docChanged transaction with no find meta, triggering the
+    // debounced rescan.
+    editor.view.dispatch(editor.state.tr.insertText("z", 1));
+    vi.runOnlyPendingTimers();
+    frames.flushFrames();
+
+    // Highlights are recomputed (current decoration still present) but the
+    // viewport is NOT yanked. Reintroducing scheduleCurrentScroll() in the
+    // rescan path makes this assertion fail.
+    expect(getArtifactFindState(editor).matches.length).toBe(2);
+    expect(
+      editor.view.dom.querySelector("[data-artifact-find-current]"),
+    ).not.toBeNull();
+    expect(scrollIntoView).not.toHaveBeenCalled();
+
+    // Explicit navigation still scrolls the current match into view.
+    void adapter.next();
+    frames.flushFrames();
+    expect(scrollIntoView).toHaveBeenCalledWith({
+      block: "center",
+      inline: "nearest",
+    });
+
+    unsubscribe();
+  });
 
   it("recomputes replace-current against the latest document before editing", () => {
     vi.useFakeTimers();
@@ -131,3 +268,60 @@ describe("createArtifactEditorFindAdapter", () => {
     editor.off("transaction", handleTransaction);
   });
 });
+
+function installAnimationFrameQueue(): {
+  readonly runNextFrame: () => void;
+  readonly flushFrames: () => void;
+} {
+  let nextHandle = 1;
+  const callbacks = new Map<number, FrameRequestCallback>();
+  vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+    const handle = nextHandle;
+    nextHandle += 1;
+    callbacks.set(handle, callback);
+    return handle;
+  });
+  vi.spyOn(window, "cancelAnimationFrame").mockImplementation((handle) => {
+    callbacks.delete(handle);
+  });
+  return {
+    runNextFrame: () => {
+      const entry = Array.from(callbacks.entries()).at(0);
+      if (entry === undefined) {
+        throw new Error("Expected a pending animation frame.");
+      }
+      const [handle, callback] = entry;
+      callbacks.delete(handle);
+      callback(0);
+    },
+    // Drain every pending frame, including frames re-scheduled while draining
+    // (e.g. the scroll retry loop), so a test can assert that NO scroll frame
+    // ever ran. Guarded against runaway re-scheduling.
+    flushFrames: () => {
+      let guard = 0;
+      while (callbacks.size > 0) {
+        guard += 1;
+        if (guard > 50) {
+          throw new Error("Too many pending animation frames.");
+        }
+        const entry = Array.from(callbacks.entries()).at(0);
+        if (entry === undefined) return;
+        const [handle, callback] = entry;
+        callbacks.delete(handle);
+        callback(0);
+      }
+    },
+  };
+}
+
+function expectCurrentElementToBeMatch(editor: Editor, index: number): void {
+  const highlighted = Array.from(
+    editor.view.dom.querySelectorAll<HTMLElement>(
+      "[data-artifact-find-match='true']",
+    ),
+  );
+  const current = editor.view.dom.querySelector<HTMLElement>(
+    "[data-artifact-find-current]",
+  );
+  expect(current).toBe(highlighted[index]);
+}

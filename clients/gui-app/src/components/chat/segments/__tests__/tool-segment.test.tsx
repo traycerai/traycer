@@ -1,8 +1,29 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render as rtlRender,
+  screen,
+} from "@testing-library/react";
+import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { deriveToolInputDetail } from "@traycer/protocol/host/agent/gui/tool-input-detail";
 import { deriveToolInputSummary } from "@traycer/protocol/host/agent/gui/tool-input-summary";
+import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
+import { deriveA2ASendCollapsibleKey } from "@/components/chat/chat-collapsible-key";
 import { ToolSegment } from "@/components/chat/segments/tool-segment";
+import { useSetA2ASendOpen } from "@/stores/chats/a2a-open-store-context";
+import {
+  useChatCollapsibleTileInstanceId,
+  useSetChatFindForcedOpen,
+} from "@/stores/chats/chat-find-force-store-context";
+
+function render(ui: ReactNode) {
+  return rtlRender(
+    <ChatExpansionTestProviders tileInstanceId="tool-segment-test-tile">
+      {ui}
+    </ChatExpansionTestProviders>,
+  );
+}
 
 // The host precomputes these from the raw harness input (no longer persisted)
 // at the accumulator chokepoint; the component renders the precomputed fields.
@@ -41,6 +62,36 @@ vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
   useReactiveActiveHostId: () => "active-host-1",
 }));
 
+interface OpenA2ASendButtonProps {
+  readonly label: string;
+  readonly segmentId: string;
+}
+
+function OpenA2ASendButton(props: OpenA2ASendButtonProps) {
+  const setOpen = useSetA2ASendOpen();
+  return (
+    <button type="button" onClick={() => setOpen(props.segmentId, true)}>
+      {props.label}
+    </button>
+  );
+}
+
+interface ForceA2ASendButtonProps {
+  readonly label: string;
+  readonly segmentId: string;
+}
+
+function ForceA2ASendButton(props: ForceA2ASendButtonProps) {
+  const tileInstanceId = useChatCollapsibleTileInstanceId();
+  const setFindForcedOpen = useSetChatFindForcedOpen();
+  const key = deriveA2ASendCollapsibleKey(tileInstanceId, props.segmentId);
+  return (
+    <button type="button" onClick={() => setFindForcedOpen(key, true)}>
+      {props.label}
+    </button>
+  );
+}
+
 describe("<ToolSegment /> A2A send-message rendering", () => {
   afterEach(() => {
     cleanup();
@@ -49,6 +100,8 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
   it("renders a structured agentMessageSend as an expandable agent-message card", () => {
     render(
       <ToolSegment
+        headerFindUnitId={null}
+        id="a2a-send-1"
         toolName="traycer_a2a/traycer_send_message"
         {...inputProps("traycer_a2a/traycer_send_message", {
           toAgentId: "agent-receiver-1",
@@ -85,9 +138,80 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
     expect(screen.queryByText("Output")).toBeNull();
   });
 
+  it("opens sent A2A cards through the provider store", () => {
+    const segmentId = "a2a-send-controlled";
+    render(
+      <>
+        <OpenA2ASendButton label="Open sent A2A" segmentId={segmentId} />
+        <ToolSegment
+          headerFindUnitId={null}
+          id={segmentId}
+          toolName="traycer_a2a/traycer_send_message"
+          {...inputProps("traycer_a2a/traycer_send_message", {})}
+          error={null}
+          agentMessageSend={{
+            receiverAgentId: "agent-receiver-1",
+            message: "Please inspect the controlled card.",
+            responseId: "response-1",
+            expectReply: true,
+          }}
+          isStreaming={false}
+          endState={null}
+          progress={null}
+          startedAt={0}
+          variant="card"
+        />
+      </>,
+    );
+
+    expect(screen.queryByText("Open receiving agent")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Open sent A2A" }));
+
+    expect(screen.getByText("Open receiving agent")).toBeTruthy();
+    expect(screen.getByText("reply expected")).toBeTruthy();
+  });
+
+  it("opens sent A2A cards through find-force and releases on manual collapse", () => {
+    const segmentId = "a2a-send-find-forced";
+    render(
+      <>
+        <ForceA2ASendButton label="Force sent A2A" segmentId={segmentId} />
+        <ToolSegment
+          headerFindUnitId={null}
+          id={segmentId}
+          toolName="traycer_a2a/traycer_send_message"
+          {...inputProps("traycer_a2a/traycer_send_message", {})}
+          error={null}
+          agentMessageSend={{
+            receiverAgentId: "agent-receiver-1",
+            message: "Please inspect the find-forced card.",
+            responseId: "response-1",
+            expectReply: true,
+          }}
+          isStreaming={false}
+          endState={null}
+          progress={null}
+          startedAt={0}
+          variant="card"
+        />
+      </>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Force sent A2A" }));
+
+    expect(screen.getByText("Open receiving agent")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /Sent message/ }));
+
+    expect(screen.queryByText("Open receiving agent")).toBeNull();
+  });
+
   it("keeps tools without an agentMessageSend payload on the generic tool surface", () => {
     render(
       <ToolSegment
+        headerFindUnitId={null}
+        id="generic-tool-1"
         toolName="shell"
         {...inputProps("shell", { command: "echo hi" })}
         error={null}
@@ -107,6 +231,8 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
   it("opens optimistic chat receivers with the active host fallback", () => {
     render(
       <ToolSegment
+        headerFindUnitId={null}
+        id="a2a-send-optimistic"
         toolName="traycer_a2a/traycer_send_message"
         {...inputProps("traycer_a2a/traycer_send_message", {})}
         error={null}
@@ -138,6 +264,8 @@ describe("<ToolSegment /> input rendering", () => {
   it("expands a grep call into a reconstructed command, not JSON", () => {
     render(
       <ToolSegment
+        headerFindUnitId={null}
+        id="grep-tool-1"
         toolName="Grep"
         {...inputProps("Grep", {
           pattern: "overflow-anchor",
@@ -168,6 +296,8 @@ describe("<ToolSegment /> input rendering", () => {
   it("renders a self-describing call as a non-expandable header (no toggle)", () => {
     render(
       <ToolSegment
+        headerFindUnitId={null}
+        id="glob-tool-1"
         toolName="glob"
         {...inputProps("glob", { pattern: "**/*.tsx" })}
         error={null}
@@ -197,6 +327,8 @@ describe("<ToolSegment /> streaming heartbeat", () => {
     const startedAt = Date.now();
     render(
       <ToolSegment
+        headerFindUnitId={null}
+        id="streaming-tool-1"
         toolName="mcp__fetch"
         {...inputProps("mcp__fetch", { url: "https://example.com" })}
         error={null}
@@ -218,6 +350,8 @@ describe("<ToolSegment /> streaming heartbeat", () => {
     const startedAt = Date.now();
     render(
       <ToolSegment
+        headerFindUnitId={null}
+        id="completed-tool-1"
         toolName="mcp__fetch"
         {...inputProps("mcp__fetch", { url: "https://example.com" })}
         error={null}
@@ -238,6 +372,8 @@ describe("<ToolSegment /> streaming heartbeat", () => {
   it("shows a 'stopped' badge for an interrupted call and 'superseded' for a steered one", () => {
     const { rerender } = render(
       <ToolSegment
+        headerFindUnitId={null}
+        id="end-state-tool-1"
         toolName="shell"
         {...inputProps("shell", { command: "sleep 30" })}
         error={null}
@@ -253,6 +389,8 @@ describe("<ToolSegment /> streaming heartbeat", () => {
 
     rerender(
       <ToolSegment
+        headerFindUnitId={null}
+        id="end-state-tool-1"
         toolName="shell"
         {...inputProps("shell", { command: "sleep 30" })}
         error={null}

@@ -85,6 +85,7 @@ function renderSegment(args: RenderArgs) {
         }}
       >
         <FileChangeGroupSegment
+          findUnitId={null}
           files={FILES}
           artifacts={[]}
           checkpointManifest={args.manifest}

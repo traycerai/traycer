@@ -3,7 +3,6 @@ import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
 import {
   Plugin,
   PluginKey,
-  TextSelection,
   type EditorState,
   type Transaction,
 } from "@tiptap/pm/state";
@@ -207,22 +206,14 @@ export function clearArtifactFind(editor: Editor, requestId: number): void {
 export function setArtifactFindCurrent(
   editor: Editor,
   currentIndex: number,
-  selectMatch: boolean,
 ): void {
-  const state = getArtifactFindState(editor);
   const command: ArtifactFindCurrentCommand = {
     kind: "current",
     currentIndex,
   };
-  let tr = editor.state.tr.setMeta(artifactFindPluginKey, {
+  const tr = editor.state.tr.setMeta(artifactFindPluginKey, {
     [ARTIFACT_FIND_META_KEY]: command,
   });
-  const match = artifactFindMatchAt(state.matches, currentIndex);
-  if (selectMatch && match !== null) {
-    tr = tr
-      .setSelection(TextSelection.create(tr.doc, match.from, match.to))
-      .scrollIntoView();
-  }
   editor.view.dispatch(tr);
 }
 

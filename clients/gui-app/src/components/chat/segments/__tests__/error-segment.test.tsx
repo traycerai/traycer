@@ -14,7 +14,13 @@ describe("<ErrorSegment />", () => {
   // other (non-auth) error: the "Error" overline, the code badge, and the
   // message.
   it("renders the error chrome with the code badge and message", () => {
-    render(<ErrorSegment message="Boom went the host" code="RUNTIME_THROWN" />);
+    render(
+      <ErrorSegment
+        message="Boom went the host"
+        code="RUNTIME_THROWN"
+        findUnitId={null}
+      />,
+    );
 
     expect(screen.getByText("Error")).toBeDefined();
     expect(screen.getByText("RUNTIME_THROWN")).toBeDefined();
@@ -22,7 +28,9 @@ describe("<ErrorSegment />", () => {
   });
 
   it("omits the code badge when there is no code", () => {
-    render(<ErrorSegment message="Something failed" code={null} />);
+    render(
+      <ErrorSegment message="Something failed" code={null} findUnitId={null} />,
+    );
 
     expect(screen.getByText("Error")).toBeDefined();
     expect(screen.getByText("Something failed")).toBeDefined();

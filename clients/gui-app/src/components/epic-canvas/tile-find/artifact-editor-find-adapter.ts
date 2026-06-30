@@ -33,6 +33,8 @@ const FIND_ONLY_CAPABILITIES: ReadonlySet<TileFindCapability> =
 const REPLACE_CAPABILITIES: ReadonlySet<TileFindCapability> =
   new Set<TileFindCapability>(["find", "replace", "replaceAll"]);
 const ARTIFACT_FIND_RESCAN_DEBOUNCE_MS = 80;
+const ARTIFACT_FIND_CURRENT_SELECTOR = "[data-artifact-find-current]";
+const ARTIFACT_FIND_SCROLL_RETRY_FRAMES = 2;
 
 export function createArtifactEditorFindAdapter(
   params: ArtifactEditorFindAdapterParams,
@@ -43,6 +45,7 @@ export function createArtifactEditorFindAdapter(
   let replaceText = "";
   let unsubscribeEditor: (() => void) | null = null;
   let rescanTimer: number | null = null;
+  let currentScrollFrame: number | null = null;
 
   const publish = (): void => {
     snapshot = snapshotFromEditor(editor, activeUnitId, replaceText);
@@ -53,6 +56,40 @@ export function createArtifactEditorFindAdapter(
     if (rescanTimer === null) return;
     window.clearTimeout(rescanTimer);
     rescanTimer = null;
+  };
+
+  const cancelCurrentScroll = (): void => {
+    if (currentScrollFrame === null) return;
+    window.cancelAnimationFrame(currentScrollFrame);
+    currentScrollFrame = null;
+  };
+
+  const requestCurrentScroll = (remainingRetries: number): void => {
+    currentScrollFrame = window.requestAnimationFrame(() => {
+      currentScrollFrame = null;
+      const currentElement = editor.view.dom.querySelector<HTMLElement>(
+        ARTIFACT_FIND_CURRENT_SELECTOR,
+      );
+      if (currentElement !== null) {
+        currentElement.scrollIntoView({
+          block: "center",
+          inline: "nearest",
+        });
+        return;
+      }
+      if (
+        remainingRetries > 0 &&
+        getArtifactFindState(editor).matches.length > 0
+      ) {
+        requestCurrentScroll(remainingRetries - 1);
+      }
+    });
+  };
+
+  const scheduleCurrentScroll = (): void => {
+    cancelCurrentScroll();
+    if (getArtifactFindState(editor).matches.length === 0) return;
+    requestCurrentScroll(ARTIFACT_FIND_SCROLL_RETRY_FRAMES);
   };
 
   const scheduleRescan = (): void => {
@@ -83,6 +120,11 @@ export function createArtifactEditorFindAdapter(
         },
         currentMatch === null ? null : currentMatch.from,
       );
+      // Passive repaint: recompute highlights/decorations as the doc changes,
+      // but never move the viewport. Only explicit user actions (search via the
+      // find box, next, previous) scroll the current match into view. Mirrors
+      // the chat adapter's "passive streaming/sync repaints must never yank the
+      // scroll position" rule.
       publish();
     }, ARTIFACT_FIND_RESCAN_DEBOUNCE_MS);
   };
@@ -108,6 +150,7 @@ export function createArtifactEditorFindAdapter(
 
   const detachEditorListener = (): void => {
     cancelRescan();
+    cancelCurrentScroll();
     unsubscribeEditor?.();
     unsubscribeEditor = null;
   };
@@ -201,6 +244,7 @@ export function createArtifactEditorFindAdapter(
       cancelRescan();
       applyArtifactFindSearch(editor, input, null);
       publish();
+      scheduleCurrentScroll();
     },
     next: () => {
       const state = getArtifactFindState(editor);
@@ -209,8 +253,9 @@ export function createArtifactEditorFindAdapter(
         state.currentIndex < 0
           ? 0
           : (state.currentIndex + 1) % state.matches.length;
-      setArtifactFindCurrent(editor, nextIndex, true);
+      setArtifactFindCurrent(editor, nextIndex);
       publish();
+      scheduleCurrentScroll();
     },
     previous: () => {
       const state = getArtifactFindState(editor);
@@ -219,11 +264,13 @@ export function createArtifactEditorFindAdapter(
         state.currentIndex <= 0
           ? state.matches.length - 1
           : state.currentIndex - 1;
-      setArtifactFindCurrent(editor, previousIndex, true);
+      setArtifactFindCurrent(editor, previousIndex);
       publish();
+      scheduleCurrentScroll();
     },
     clear: () => {
       cancelRescan();
+      cancelCurrentScroll();
       clearArtifactFind(editor, snapshot.requestId);
       publish();
     },

@@ -119,8 +119,8 @@ function createAdapter(args: {
   };
 }
 
-function registerAndOpen(adapter: TestAdapter): void {
-  useTileFindStore.getState().registerTarget({
+function registerAndOpen(adapter: TestAdapter): () => void {
+  const unregister = useTileFindStore.getState().registerTarget({
     tileInstanceId: adapter.tileInstanceId,
     contentId: "content-1",
     viewTabId: "view-1",
@@ -131,6 +131,7 @@ function registerAndOpen(adapter: TestAdapter): void {
     adapter,
   });
   useTileFindStore.getState().openForTile(adapter.tileInstanceId);
+  return unregister;
 }
 
 describe("<TileFindBar />", () => {
@@ -258,7 +259,7 @@ describe("<TileFindBar />", () => {
     expect(screen.getByText("Search failed")).toBeTruthy();
   });
 
-  it("shows replace controls only when adapter capabilities allow them", () => {
+  it("shows a collapsible replace row only when adapter capabilities allow it", () => {
     const adapter = createAdapter({
       tileInstanceId: "tile-1",
       tileKind: "ticket",
@@ -268,6 +269,7 @@ describe("<TileFindBar />", () => {
     render(<TileFindBar tileInstanceId="tile-1" />);
 
     expect(screen.queryByLabelText("Replace with")).toBeNull();
+    expect(screen.queryByLabelText("Expand replace")).toBeNull();
 
     fireEvent.change(screen.getByRole("textbox", { name: "Find in tile" }), {
       target: { value: "needle" },
@@ -289,6 +291,10 @@ describe("<TileFindBar />", () => {
         }),
       );
     });
+    expect(screen.getByLabelText("Expand replace")).toBeTruthy();
+    expect(screen.queryByLabelText("Replace with")).toBeNull();
+
+    fireEvent.click(screen.getByLabelText("Expand replace"));
     expect(screen.getByLabelText("Replace with")).toBeTruthy();
     expect(screen.getByLabelText("Replace current match")).toBeTruthy();
     expect(buttonDisabled("Replace all matches")).toBe(true);
@@ -310,6 +316,31 @@ describe("<TileFindBar />", () => {
       );
     });
     expect(buttonDisabled("Replace all matches")).toBe(false);
+
+    fireEvent.click(screen.getByLabelText("Collapse replace"));
+    expect(screen.queryByLabelText("Replace with")).toBeNull();
+  });
+
+  it("remembers replace expansion across close and reopen for the tile", () => {
+    const adapter = createAdapter({
+      tileInstanceId: "tile-1",
+      tileKind: "spec",
+      capabilities: REPLACE_ALL,
+    });
+    registerAndOpen(adapter);
+    render(<TileFindBar tileInstanceId="tile-1" />);
+
+    fireEvent.click(screen.getByLabelText("Expand replace"));
+    expect(screen.getByLabelText("Replace with")).toBeTruthy();
+
+    fireEvent.click(screen.getByLabelText("Close find"));
+    expect(screen.queryByTestId("tile-find-bar")).toBeNull();
+
+    act(() => {
+      useTileFindStore.getState().openForTile("tile-1");
+    });
+
+    expect(screen.getByLabelText("Replace with")).toBeTruthy();
   });
 
   it("updates input state and dispatches search/navigation commands", () => {
@@ -347,6 +378,107 @@ describe("<TileFindBar />", () => {
       shiftKey: true,
     });
     expect(adapter.previousMock.mock.calls).toHaveLength(1);
+  });
+
+  it("coalesces rapid chat typing into a single debounced search", () => {
+    vi.useFakeTimers();
+    try {
+      const adapter = createAdapter({
+        tileInstanceId: "tile-chat",
+        tileKind: "chat",
+        capabilities: FIND_ONLY,
+      });
+      registerAndOpen(adapter);
+      render(<TileFindBar tileInstanceId="tile-chat" />);
+
+      const input = screen.getByRole("textbox", { name: "Find in tile" });
+      fireEvent.change(input, { target: { value: "n" } });
+      fireEvent.change(input, { target: { value: "ne" } });
+      fireEvent.change(input, { target: { value: "nee" } });
+      fireEvent.change(input, { target: { value: "need" } });
+
+      // No search fires per keystroke while the chat debounce window is open.
+      expect(adapter.searchInputs).toHaveLength(0);
+
+      act(() => {
+        vi.advanceTimersByTime(80);
+      });
+
+      expect(adapter.searchInputs).toEqual([
+        { requestId: 1, query: "need", matchCase: false },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("flushes a pending chat search immediately on Enter, then advances", () => {
+    vi.useFakeTimers();
+    try {
+      const adapter = createAdapter({
+        tileInstanceId: "tile-chat",
+        tileKind: "chat",
+        capabilities: FIND_ONLY,
+      });
+      registerAndOpen(adapter);
+      render(<TileFindBar tileInstanceId="tile-chat" />);
+
+      const input = screen.getByRole("textbox", { name: "Find in tile" });
+      fireEvent.change(input, { target: { value: "needle" } });
+      expect(adapter.searchInputs).toHaveLength(0);
+
+      // Enter before the debounce fires runs the search now (revealing the
+      // first match) rather than advancing past stale matches.
+      act(() => {
+        fireEvent.keyDown(input, { key: "Enter" });
+      });
+      expect(adapter.searchInputs).toEqual([
+        { requestId: 1, query: "needle", matchCase: false },
+      ]);
+      expect(adapter.nextMock.mock.calls).toHaveLength(0);
+
+      // With nothing pending, Enter advances immediately and runs no new search.
+      act(() => {
+        fireEvent.keyDown(input, { key: "Enter" });
+      });
+      expect(adapter.nextMock.mock.calls).toHaveLength(1);
+      expect(adapter.searchInputs).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("flushes a pending chat search when the desktop menu advances within the debounce window", () => {
+    vi.useFakeTimers();
+    try {
+      const adapter = createAdapter({
+        tileInstanceId: "tile-chat",
+        tileKind: "chat",
+        capabilities: FIND_ONLY,
+      });
+      registerAndOpen(adapter);
+      render(<TileFindBar tileInstanceId="tile-chat" />);
+
+      const input = screen.getByRole("textbox", { name: "Find in tile" });
+      fireEvent.change(input, { target: { value: "needle" } });
+      // The debounce window is still open: no search has fired yet.
+      expect(adapter.searchInputs).toHaveLength(0);
+
+      // The desktop menu Find Next path goes through the store
+      // (advanceActiveOwner -> next), bypassing the bar's own handleNavigate. The
+      // bar-registered flush must run the pending search now (revealing the first
+      // match) and skip advancing the prior query's stale matches.
+      act(() => {
+        useTileFindStore.getState().advanceActiveOwner(1);
+      });
+
+      expect(adapter.searchInputs).toEqual([
+        { requestId: 1, query: "needle", matchCase: false },
+      ]);
+      expect(adapter.nextMock.mock.calls).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
