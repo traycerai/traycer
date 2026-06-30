@@ -26,6 +26,7 @@ import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-sett
 
 const EPIC_TAB_RECONCILE_PAGE_LIMIT = 100;
 const EMPTY_EXISTING_EPIC_IDS: ReadonlyArray<string> = [];
+const EMPTY_SEEN_RECONCILE_CURSORS: ReadonlySet<string> = new Set();
 
 export function EpicTabExistenceReconciler() {
   const seed = usePersistedEpicTabReconcileSeed();
@@ -45,6 +46,7 @@ interface ReconcileRun extends ReconcileSeed {
 interface ReconcilePage {
   readonly existingEpicIds: ReadonlyArray<string>;
   readonly cursor: string | undefined;
+  readonly seenCursors: ReadonlySet<string>;
 }
 
 function usePersistedEpicTabReconcileSeed(): ReconcileSeed | null {
@@ -101,6 +103,7 @@ function EpicTabReconciliationRun(props: { readonly seed: ReconcileSeed }) {
       page={{
         existingEpicIds: EMPTY_EXISTING_EPIC_IDS,
         cursor: undefined,
+        seenCursors: EMPTY_SEEN_RECONCILE_CURSORS,
       }}
     />
   );
@@ -112,15 +115,20 @@ function EpicTabReconciliationPage(props: {
 }) {
   const client = useHostClient();
   const completionAppliedRef = useRef(false);
+  const {
+    cursor: pageCursor,
+    existingEpicIds: previousExistingEpicIds,
+    seenCursors,
+  } = props.page;
   const reconcileParams = useMemo(
     () => ({
       limit: EPIC_TAB_RECONCILE_PAGE_LIMIT,
-      cursor: props.page.cursor,
+      cursor: pageCursor,
       filters: { taskType: "epic" as const },
       extensionPhaseVersion: String(CURRENT_PHASE_VERSION),
       extensionEpicVersion: String(CURRENT_EPIC_VERSION),
     }),
-    [props.page.cursor],
+    [pageCursor],
   );
   const existingEpicsQuery = useHostQuery<HostRpcRegistry, "epic.listTasks">({
     client,
@@ -134,15 +142,27 @@ function EpicTabReconciliationPage(props: {
   const nextPage = useMemo((): ReconcilePage | null => {
     if (!existingEpicsQuery.isSuccess) return null;
     const existingEpicIds = mergeExistingEpicIds(
-      props.page.existingEpicIds,
+      previousExistingEpicIds,
       existingEpicsQuery.data,
     );
     const cursor = nextReconcileCursor(existingEpicsQuery.data);
-    return { existingEpicIds, cursor: cursor ?? undefined };
+    if (cursor === null || seenCursors.has(cursor)) {
+      return {
+        existingEpicIds,
+        cursor: undefined,
+        seenCursors,
+      };
+    }
+    return {
+      existingEpicIds,
+      cursor,
+      seenCursors: addSeenReconcileCursor(seenCursors, cursor),
+    };
   }, [
     existingEpicsQuery.data,
     existingEpicsQuery.isSuccess,
-    props.page.existingEpicIds,
+    previousExistingEpicIds,
+    seenCursors,
   ]);
   const terminalExistingEpicIds =
     nextPage !== null && nextPage.cursor === undefined
@@ -189,6 +209,15 @@ function nextReconcileCursor(page: ListTasksResponse): string | null {
   if (typeof page.nextCursor !== "string") return null;
   if (page.nextCursor.length === 0) return null;
   return page.nextCursor;
+}
+
+function addSeenReconcileCursor(
+  seenCursors: ReadonlySet<string>,
+  cursor: string,
+): ReadonlySet<string> {
+  const nextSeenCursors = new Set(seenCursors);
+  nextSeenCursors.add(cursor);
+  return nextSeenCursors;
 }
 
 function useVisibleEpicIds(): ReadonlyArray<string> {

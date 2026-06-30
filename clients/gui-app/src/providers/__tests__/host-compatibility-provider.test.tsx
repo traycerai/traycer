@@ -429,6 +429,36 @@ describe("HostCompatibilityProvider startup consumers", () => {
     queryClient.clear();
   });
 
+  it("treats repeated reconciliation cursors as terminal before pruning persisted epic tabs", async () => {
+    const methods: string[] = [];
+    const listTasks = vi.fn((params: ListTasksRequest): ListTasksResponse =>
+      params.cursor === undefined
+        ? { tasks: [], hasMore: true, nextCursor: "repeat" }
+        : { tasks: [], hasMore: true, nextCursor: "repeat" },
+    );
+    const listHarnesses = vi.fn((): ListHarnessesResponse => ({
+      harnesses: [],
+    }));
+    const { queryClient } = mountStartupConsumers({
+      hostStatus: () => compatibleHostStatus,
+      listTasks,
+      listHarnesses,
+      onMethod: (method) => {
+        methods.push(method);
+      },
+    });
+
+    await waitFor(() => {
+      expect(collectOpenEpicIds()).not.toContain(STARTUP_EPIC_ID);
+    });
+    expect(listTasks).toHaveBeenCalledTimes(2);
+    expect(
+      listTasks.mock.calls.map(([params]) => params.cursor ?? null),
+    ).toEqual([null, "repeat"]);
+    expect(methods[0]).toBe("host.status");
+    queryClient.clear();
+  });
+
   it("retries tab reconciliation after an in-flight compatibility interruption", async () => {
     const listTasksDeferred = createDeferred<ListTasksResponse>();
     const methods: string[] = [];
