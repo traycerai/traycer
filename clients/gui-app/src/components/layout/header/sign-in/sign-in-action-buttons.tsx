@@ -1,6 +1,6 @@
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
-import { useAuthService } from "@/lib/host";
+import { useAuthSignInMutation } from "@/hooks/auth/use-auth-sign-in-mutation";
 import { cn } from "@/lib/utils";
 import { HERO_PRIMARY_BUTTON_CLASS } from "./styles";
 
@@ -8,17 +8,17 @@ export function PrimarySignInButton(props: {
   readonly isHero: boolean;
   readonly isSigningIn: boolean;
 }) {
-  const auth = useAuthService();
-  const label = props.isSigningIn ? "Signing in" : "Sign in";
+  const signInMutation = useAuthSignInMutation();
+  const isPending = props.isSigningIn || signInMutation.isPending;
 
   return (
     <Button
       type="button"
       size={props.isHero ? "lg" : "sm"}
       variant={props.isHero ? "default" : "outline"}
-      disabled={props.isSigningIn}
+      disabled={isPending}
       onClick={() => {
-        void auth.signIn();
+        signInMutation.mutate();
       }}
       data-testid="signin-button"
       className={cn(
@@ -26,8 +26,8 @@ export function PrimarySignInButton(props: {
         props.isHero && HERO_PRIMARY_BUTTON_CLASS,
       )}
     >
-      {label}
-      {props.isSigningIn ? (
+      Sign in
+      {isPending ? (
         <AgentSpinningDots
           variant="dots"
           className="ml-1.5"
@@ -42,7 +42,7 @@ export function RetrySignInButton(props: {
   readonly isHero: boolean;
   readonly isSigningIn: boolean;
 }) {
-  const auth = useAuthService();
+  const signInMutation = useAuthSignInMutation();
 
   if (!props.isSigningIn) return null;
 
@@ -56,8 +56,9 @@ export function RetrySignInButton(props: {
       size={props.isHero ? "default" : "sm"}
       variant="link"
       data-testid="signin-retry-link"
+      disabled={signInMutation.isPending}
       onClick={() => {
-        void auth.signIn();
+        signInMutation.mutate();
       }}
       className={cn(
         props.isHero ? "h-auto justify-center px-0 py-0 text-ui-sm" : null,

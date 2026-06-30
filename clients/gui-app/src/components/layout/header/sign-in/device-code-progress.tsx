@@ -1,9 +1,10 @@
-import { Clock, SquareArrowOutUpRight } from "lucide-react";
+import { CircleAlert, Clock, SquareArrowOutUpRight } from "lucide-react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
+import { useAuthOpenVerificationPageMutation } from "@/hooks/auth/use-auth-open-verification-page-mutation";
+import { useAuthSignInMutation } from "@/hooks/auth/use-auth-sign-in-mutation";
 import { type DeviceFlowProgress } from "@/lib/auth/auth-service";
 import { formatClockDuration } from "@/lib/format-duration";
-import { useAuthService } from "@/lib/host";
 import { cn } from "@/lib/utils";
 import { DeviceCodeFallback } from "./device-code-fallback";
 import { useRemainingDeviceSeconds } from "./use-remaining-device-seconds";
@@ -20,13 +21,14 @@ export function DeviceCodeProgress(props: {
   readonly progress: DeviceFlowProgress;
   readonly isHero: boolean;
 }) {
-  const auth = useAuthService();
+  const openVerificationPageMutation = useAuthOpenVerificationPageMutation();
+  const signInMutation = useAuthSignInMutation();
   const progress = props.progress;
   const remainingSeconds = useRemainingDeviceSeconds(progress.expiresAtMs);
-  const expiryCopy =
-    remainingSeconds === 0
-      ? "Code expired"
-      : `Expires in ${formatClockDuration(remainingSeconds)}`;
+  const isExpired = remainingSeconds === 0;
+  const expiryCopy = isExpired
+    ? "Code expired"
+    : `Expires in ${formatClockDuration(remainingSeconds)}`;
 
   return (
     <div
@@ -56,7 +58,7 @@ export function DeviceCodeProgress(props: {
               ? "h-11 border-white/20 bg-white text-zinc-950 hover:bg-white/90"
               : null,
           )}
-          onClick={() => auth.openVerificationPage()}
+          onClick={() => openVerificationPageMutation.mutate()}
           data-testid="signin-open-approval"
         >
           Open approval page
@@ -71,14 +73,21 @@ export function DeviceCodeProgress(props: {
               : "border-border/70 bg-muted/30 text-muted-foreground",
           )}
         >
-          <div className="flex items-center gap-1">
-            <AgentSpinningDots
-              variant="dots"
-              className="ml-0.5 shrink-0"
-              testId="signin-device-spinner"
-            />
-            <span className="shrink-0">Waiting for approval</span>
-          </div>
+          {isExpired ? (
+            <div className="flex items-center gap-1">
+              <CircleAlert className="size-3.5 shrink-0" aria-hidden="true" />
+              <span className="shrink-0">Approval code expired</span>
+            </div>
+          ) : (
+            <div className="flex items-center gap-1">
+              <AgentSpinningDots
+                variant="dots"
+                className="ml-0.5 shrink-0"
+                testId="signin-device-spinner"
+              />
+              <span className="shrink-0">Waiting for approval</span>
+            </div>
+          )}
           <div className="flex items-center gap-1">
             <Clock className="size-3.5 shrink-0" aria-hidden="true" />
             <span className="truncate">{expiryCopy}</span>
@@ -93,7 +102,7 @@ export function DeviceCodeProgress(props: {
           variant="link"
           data-testid="signin-retry-link"
           onClick={() => {
-            void auth.signIn();
+            signInMutation.mutate();
           }}
           className={cn(
             "h-auto self-center px-0 py-0",

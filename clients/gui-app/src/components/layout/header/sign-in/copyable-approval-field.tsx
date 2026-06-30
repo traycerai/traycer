@@ -79,7 +79,7 @@ export function CopyableApprovalField(props: {
         )}
         aria-live="polite"
       >
-        Copied
+        {copied ? "Copied" : ""}
       </span>
     </div>
   );
