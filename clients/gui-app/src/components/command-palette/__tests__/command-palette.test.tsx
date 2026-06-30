@@ -59,6 +59,26 @@ function getVisibleCommandRows(root: ParentNode): ReadonlyArray<HTMLElement> {
   ).filter((row) => row.closest("[hidden]") === null);
 }
 
+function installPaletteListLayout(
+  list: HTMLElement,
+  rows: ReadonlyArray<HTMLElement>,
+): void {
+  Object.defineProperty(list, "clientHeight", {
+    configurable: true,
+    value: 144,
+  });
+  rows.forEach((row) => {
+    Object.defineProperty(row, "offsetHeight", {
+      configurable: true,
+      value: 36,
+    });
+  });
+}
+
+function getCommandSearchInput(): HTMLElement {
+  return screen.getByRole("combobox", { name: "Search commands" });
+}
+
 describe("<CommandPalette />", () => {
   beforeEach(() => {
     window.localStorage.clear();
@@ -101,7 +121,7 @@ describe("<CommandPalette />", () => {
       expect(firstRows[0].getAttribute("data-selected")).toBe("true");
     });
 
-    fireEvent.keyDown(screen.getByLabelText("Search commands"), {
+    fireEvent.keyDown(getCommandSearchInput(), {
       key: "ArrowDown",
     });
     await waitFor(() => {
@@ -111,6 +131,55 @@ describe("<CommandPalette />", () => {
     fireEvent.pointerMove(firstRows[0]);
     await waitFor(() => {
       expect(firstRows[0].getAttribute("data-selected")).toBe("true");
+    });
+  });
+
+  it("moves the selected row by a viewport with PageUp and PageDown", async () => {
+    render(wrap(<div>app</div>));
+    act(() => {
+      useCommandPaletteStore.getState().setOpen(true);
+    });
+    const list = await screen.findByTestId("command-palette-list");
+
+    const rows = getVisibleCommandRows(document.body);
+    expect(rows.length).toBeGreaterThan(3);
+    installPaletteListLayout(list, rows);
+    await waitFor(() => {
+      expect(rows[0].getAttribute("data-selected")).toBe("true");
+    });
+
+    const input = getCommandSearchInput();
+    fireEvent.keyDown(input, { key: "PageDown" });
+    await waitFor(() => {
+      expect(rows[3].getAttribute("data-selected")).toBe("true");
+    });
+
+    fireEvent.keyDown(input, { key: "PageUp" });
+    await waitFor(() => {
+      expect(rows[0].getAttribute("data-selected")).toBe("true");
+    });
+  });
+
+  it("skips hidden rows when moving the selected row by a viewport", async () => {
+    render(wrap(<div>app</div>));
+    act(() => {
+      useCommandPaletteStore.getState().setOpen(true);
+    });
+    const list = await screen.findByTestId("command-palette-list");
+
+    const rows = getVisibleCommandRows(document.body);
+    expect(rows.length).toBeGreaterThan(4);
+    installPaletteListLayout(list, rows);
+    rows[1].hidden = true;
+    await waitFor(() => {
+      expect(rows[0].getAttribute("data-selected")).toBe("true");
+    });
+
+    fireEvent.keyDown(getCommandSearchInput(), {
+      key: "PageDown",
+    });
+    await waitFor(() => {
+      expect(rows[4].getAttribute("data-selected")).toBe("true");
     });
   });
 

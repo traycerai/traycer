@@ -81,6 +81,49 @@ describe("MockHostMessenger", () => {
     );
   });
 
+  it("rewraps handler HostRpcError with the current request metadata", async () => {
+    const fatalDetails = {
+      code: "INCOMPATIBLE",
+      reason: "host protocol mismatch",
+      incompatibleMethods: [],
+      upgradeGuidance: null,
+    };
+    const messenger = new MockHostMessenger<typeof registry>({
+      registry,
+      handlers: {
+        "host.echo": () => {
+          throw new HostRpcError({
+            code: "INCOMPATIBLE",
+            message: "handler supplied metadata",
+            requestId: "handler-req",
+            method: "handler.method",
+            fatalDetails,
+          });
+        },
+      },
+      requestId: () => "req-current",
+    });
+
+    await expect(
+      messenger.request("host.echo", { message: "x" }),
+    ).rejects.toSatisfy(
+      (err: unknown) =>
+        err instanceof HostRpcError &&
+        err.code === "INCOMPATIBLE" &&
+        err.message === "handler supplied metadata" &&
+        err.requestId === "req-current" &&
+        err.method === "host.echo" &&
+        err.fatalDetails === fatalDetails,
+    );
+
+    const responseEvent = messenger.phases[4];
+    if (responseEvent.kind !== "response") {
+      throw new Error("expected response phase at index 4");
+    }
+    expect(responseEvent.error?.requestId).toBe("req-current");
+    expect(responseEvent.error?.method).toBe("host.echo");
+  });
+
   it("emits phase hooks in the WS lifecycle order on the happy path", async () => {
     const messenger = new MockHostMessenger<typeof registry>({
       registry,
