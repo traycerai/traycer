@@ -1,5 +1,8 @@
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
-import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
+import {
+  AgentSpinningDots,
+  MutedAgentSpinner,
+} from "@/components/ui/agent-spinning-dots";
 import { RefreshIconButton } from "@/components/refresh-icon-button";
 import { Settings } from "lucide-react";
 import { useId } from "react";
@@ -128,7 +131,11 @@ function ProviderRailButton(props: ProviderRailButtonProps) {
   const degradedDescriptionId = useId();
   return (
     <TooltipWrapper
-      label={disabled ? LOCKED_PROVIDER_TOOLTIP : null}
+      label={
+        disabled && !harness.availabilityPending
+          ? LOCKED_PROVIDER_TOOLTIP
+          : null
+      }
       side="right"
       sideOffset={6}
       align={undefined}
@@ -170,7 +177,11 @@ function ProviderRailButton(props: ProviderRailButtonProps) {
               <HarnessIcon harnessId={harness.id} />
             </span>
             <span className="absolute inset-0 flex items-center justify-center">
-              <MutedAgentSpinner />
+              <AgentSpinningDots
+                className="text-muted-foreground"
+                testId={undefined}
+                variant={undefined}
+              />
             </span>
           </>
         ) : (
