@@ -337,9 +337,6 @@ export const toolCallCompletedEventSchema = z.object({
   // For detached background command/Monitor completion, this is the SDK task's
   // own start time from BackgroundItem, not the short foreground spawn call.
   backgroundStartedAt: z.number().optional(),
-  // Explicit call/task terminal time. Optional so older emitters remain valid;
-  // the accumulator falls back to the event timestamp when absent.
-  endedAt: z.number().optional(),
   // Reinforces the persistent background marker at terminal (the runtime now
   // knows for certain this was a backgrounded task). Optional/preserved.
   backgroundTask: z.boolean().optional(),
@@ -358,9 +355,6 @@ export const toolCallErroredEventSchema = z.object({
   // For detached background command/Monitor failure/stop, this is the SDK
   // task's own start time from BackgroundItem when available.
   backgroundStartedAt: z.number().optional(),
-  // Explicit call/task terminal time. Optional so older emitters remain valid;
-  // the accumulator falls back to the event timestamp when absent.
-  endedAt: z.number().optional(),
   // Reinforces the persistent background marker at terminal. Optional/preserved.
   backgroundTask: z.boolean().optional(),
 });

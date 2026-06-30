@@ -268,7 +268,7 @@ describe("accumulateEvent", () => {
     expect((blocks[0] as ToolCallBlock).endedAt).toBe(2);
   });
 
-  it("tool_call events preserve explicit detached background task timing", () => {
+  it("tool_call events preserve detached background task timing", () => {
     let blocks = makeBlocks();
     blocks = accumulateEvent(blocks, {
       type: "tool_call.started",
@@ -287,7 +287,6 @@ describe("accumulateEvent", () => {
       agentMessageSend: null,
       backgroundOutput: { stdout: "", stderr: "", truncated: false },
       backgroundStartedAt: 5_000,
-      endedAt: 70_000,
       backgroundTask: true,
     });
 
@@ -295,7 +294,7 @@ describe("accumulateEvent", () => {
     expect(blocks[0].status).toBe("completed");
     expect(blocks[0].timestamp).toBe(70_010);
     expect((blocks[0] as ToolCallBlock).startedAt).toBe(5_000);
-    expect((blocks[0] as ToolCallBlock).endedAt).toBe(70_000);
+    expect((blocks[0] as ToolCallBlock).endedAt).toBe(70_010);
   });
 
   it("turn.completed keeps a background tool_call streaming until detached completion", () => {
@@ -328,7 +327,6 @@ describe("accumulateEvent", () => {
       agentMessageSend: null,
       backgroundOutput: { stdout: "", stderr: "", truncated: false },
       backgroundStartedAt: 5_000,
-      endedAt: 70_000,
       backgroundTask: true,
     });
 

@@ -675,7 +675,6 @@ export function accumulateEvent(
     }
 
     case "tool_call.completed": {
-      const endedAt = event.endedAt ?? event.timestamp;
       const existing = findBlockOfType(blocks, event.blockId, "tool_call");
       if (existing) {
         const updated = {
@@ -687,7 +686,7 @@ export function accumulateEvent(
           backgroundOutput:
             event.backgroundOutput ?? existing.backgroundOutput,
           startedAt: event.backgroundStartedAt ?? existing.startedAt,
-          endedAt,
+          endedAt: event.timestamp,
           backgroundTask: mergeBackgroundTaskMarker(
             existing.backgroundTask,
             event.backgroundTask,
@@ -712,14 +711,13 @@ export function accumulateEvent(
           progress: null,
           backgroundOutput: event.backgroundOutput ?? null,
           startedAt: event.backgroundStartedAt ?? null,
-          endedAt,
+          endedAt: event.timestamp,
           backgroundTask: event.backgroundTask === true,
         },
       ];
     }
 
     case "tool_call.errored": {
-      const endedAt = event.endedAt ?? event.timestamp;
       const existing = findBlockOfType(blocks, event.blockId, "tool_call");
       if (existing) {
         const updated = {
@@ -732,7 +730,7 @@ export function accumulateEvent(
           backgroundOutput:
             event.backgroundOutput ?? existing.backgroundOutput,
           startedAt: event.backgroundStartedAt ?? existing.startedAt,
-          endedAt,
+          endedAt: event.timestamp,
           backgroundTask: mergeBackgroundTaskMarker(
             existing.backgroundTask,
             event.backgroundTask,
@@ -757,7 +755,7 @@ export function accumulateEvent(
           progress: null,
           backgroundOutput: event.backgroundOutput ?? null,
           startedAt: event.backgroundStartedAt ?? null,
-          endedAt,
+          endedAt: event.timestamp,
           backgroundTask: event.backgroundTask === true,
         },
       ];
