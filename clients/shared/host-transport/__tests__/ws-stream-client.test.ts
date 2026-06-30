@@ -227,6 +227,13 @@ function parseText(raw: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function expectedEpicOpenManifest(): Record<string, unknown> {
+  return {
+    ...buildStreamManifest(hostStreamRpcRegistry),
+    "chat.subscribe": { major: 1, minor: 0 },
+  };
+}
+
 describe("WsStreamClient", () => {
   beforeEach(() => {
     vi.useRealTimers();
@@ -266,12 +273,15 @@ describe("WsStreamClient", () => {
     const openFrame = parseText(stub.textSent[0]);
     expect(openFrame.kind).toBe("open");
     expect(openFrame.token).toBe("token-abc");
-    // Derived from the live registry so the assertion can't go stale as stream
-    // methods are added (the open frame advertises the full canonical manifest).
-    const expectedManifest = buildStreamManifest(hostStreamRpcRegistry);
+    // Non-chat streams advertise a chat v1 compatibility line in the open frame
+    // so already-deployed hosts can reach the method-specific subscribe check.
+    const expectedManifest = expectedEpicOpenManifest();
     expect(openFrame.manifest).toEqual(expectedManifest);
 
-    stub.fireText({ kind: "openAck", manifest: expectedManifest });
+    stub.fireText({
+      kind: "openAck",
+      manifest: buildStreamManifest(hostStreamRpcRegistry),
+    });
 
     expect(stub.textSent).toHaveLength(2);
     const subscribeFrame = parseText(stub.textSent[1]);
@@ -283,6 +293,65 @@ describe("WsStreamClient", () => {
     });
 
     expect(statuses).toContain("open");
+
+    session.close();
+  });
+
+  it("subscribes to a compatible method even when an unrelated method has major skew", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "token-abc",
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+
+    await flush();
+    const stub = sockets[0].socket;
+    stub.fireOpen();
+
+    const skewedManifest = {
+      ...buildStreamManifest(hostStreamRpcRegistry),
+      "chat.subscribe": { major: 1, minor: 0 },
+    };
+    stub.fireText({ kind: "openAck", manifest: skewedManifest });
+
+    expect(stub.textSent).toHaveLength(2);
+    expect(parseText(stub.textSent[1])).toEqual({
+      kind: "subscribe",
+      method: "epic.subscribe",
+      schemaVersion: { major: 1, minor: 0 },
+      params: { epicId: "epic-1" },
+    });
+
+    session.close();
+  });
+
+  it("advertises the canonical chat stream version for chat subscriptions", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "token-abc",
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+
+    const session = client.subscribe("chat.subscribe", {
+      epicId: "epic-1",
+      chatId: "chat-1",
+    });
+    await flush();
+
+    sockets[0].socket.fireOpen();
+    const openFrame = parseText(sockets[0].socket.textSent[0]);
+    expect(openFrame.manifest).toEqual(
+      buildStreamManifest(hostStreamRpcRegistry),
+    );
 
     session.close();
   });

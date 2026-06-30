@@ -68,15 +68,16 @@ export async function validateStoredCredentials(): Promise<ValidationOutcome> {
     nextUser.id !== stored.user.id ||
     nextUser.email !== stored.user.email ||
     nextUser.name !== stored.user.name;
-  const refreshed: StoredCredentials = tokenChanged || userChanged
-    ? {
-        token: nextToken,
-        refreshToken: nextRefreshToken,
-        authnBaseUrl: stored.authnBaseUrl,
-        savedAt: new Date().toISOString(),
-        user: nextUser,
-      }
-    : stored;
+  const refreshed: StoredCredentials =
+    tokenChanged || userChanged
+      ? {
+          token: nextToken,
+          refreshToken: nextRefreshToken,
+          authnBaseUrl: stored.authnBaseUrl,
+          savedAt: new Date().toISOString(),
+          user: nextUser,
+        }
+      : stored;
   if (refreshed !== stored) await writeCredentials(refreshed);
   logger.debug("Stored credential validation succeeded", {
     environment: config.environment,

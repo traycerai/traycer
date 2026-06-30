@@ -28,11 +28,7 @@ import {
 import type { Environment } from "../runner/environment";
 import type { CommandFn, CommandResult } from "../runner/runner";
 import { CLI_ERROR_CODES, CliError, cliError } from "../runner/errors";
-import {
-  createCliLogger,
-  errorFromUnknown,
-  type ILogger,
-} from "../logger";
+import { createCliLogger, errorFromUnknown, type ILogger } from "../logger";
 import { withCliLock } from "../store/cli-lock";
 
 // `traycer cli upgrade` - self-upgrade the installed CLI binary.
@@ -97,9 +93,12 @@ export function buildCliUpgradeCommand(args: CliUpgradeArgs): CommandFn {
       async () => {
         const manifest = await readCliManifest(ctx.runtime.environment);
         if (manifest === null) {
-          ctx.runtime.logger.warn("CLI upgrade refused because manifest is missing", {
-            environment: ctx.runtime.environment,
-          });
+          ctx.runtime.logger.warn(
+            "CLI upgrade refused because manifest is missing",
+            {
+              environment: ctx.runtime.environment,
+            },
+          );
           throw cliError({
             code: CLI_ERROR_CODES.CLI_UPGRADE_NO_MANIFEST,
             message:
@@ -116,11 +115,14 @@ export function buildCliUpgradeCommand(args: CliUpgradeArgs): CommandFn {
         // the ownership contract spelled out in the Tech Plan.
         if (PACKAGE_MANAGER_CLI_SOURCES.has(manifest.source)) {
           const hint = UPGRADE_HINT_FOR_SOURCE[manifest.source];
-          ctx.runtime.logger.warn("CLI upgrade refused package-manager-owned install", {
-            environment: ctx.runtime.environment,
-            source: manifest.source,
-            currentVersion: manifest.version,
-          });
+          ctx.runtime.logger.warn(
+            "CLI upgrade refused package-manager-owned install",
+            {
+              environment: ctx.runtime.environment,
+              source: manifest.source,
+              currentVersion: manifest.version,
+            },
+          );
           throw cliError({
             code: CLI_ERROR_CODES.CLI_UPGRADE_PACKAGE_MANAGER_OWNED,
             message: `cli upgrade: CLI is installed via ${manifest.source}; self-upgrade is disabled to keep package-manager ownership intact. ${hint}`,
@@ -247,7 +249,10 @@ export function buildCliUpgradeCommand(args: CliUpgradeArgs): CommandFn {
             },
             errorFromUnknown(cause),
           );
-          if (cause instanceof Error && (cause as { code?: string }).code !== undefined) {
+          if (
+            cause instanceof Error &&
+            (cause as { code?: string }).code !== undefined
+          ) {
             throw cause;
           }
           throw cliError({
@@ -381,10 +386,16 @@ async function tryReplaceLiveBinary(opts: {
     });
     return { status: "replaced", errorMessage: null };
   } catch (err) {
-    const code = err !== null && typeof err === "object" && "code" in err
-      ? String((err as { code: unknown }).code)
-      : null;
-    if (code === "EBUSY" || code === "EPERM" || code === "EACCES" || code === "ETXTBSY") {
+    const code =
+      err !== null && typeof err === "object" && "code" in err
+        ? String((err as { code: unknown }).code)
+        : null;
+    if (
+      code === "EBUSY" ||
+      code === "EPERM" ||
+      code === "EACCES" ||
+      code === "ETXTBSY"
+    ) {
       opts.logger.warn("CLI upgrade live binary is locked", {
         environment: opts.environment,
         errorCode: code,
@@ -439,11 +450,14 @@ async function tryReplaceLiveBinary(opts: {
         try {
           await unlink(opts.stagedBinaryPath);
         } catch (unlinkErr) {
-          opts.logger.warn("CLI upgrade failed to remove staged copy after fallback", {
-            environment: opts.environment,
-            errorName: errorFromUnknown(unlinkErr).name,
-            errorMessage: errorFromUnknown(unlinkErr).message,
-          });
+          opts.logger.warn(
+            "CLI upgrade failed to remove staged copy after fallback",
+            {
+              environment: opts.environment,
+              errorName: errorFromUnknown(unlinkErr).name,
+              errorMessage: errorFromUnknown(unlinkErr).message,
+            },
+          );
           // Staged copy is harmless if it lingers.
         }
         opts.logger.info("CLI upgrade live binary replacement succeeded", {
@@ -463,7 +477,10 @@ async function tryReplaceLiveBinary(opts: {
         throw cliError({
           code: CLI_ERROR_CODES.CLI_UPGRADE_REPLACE_FAILED,
           message: `cli upgrade: cross-device fallback copy failed: ${copyErr instanceof Error ? copyErr.message : String(copyErr)}`,
-          details: { livePath: opts.livePath, stagedBinaryPath: opts.stagedBinaryPath },
+          details: {
+            livePath: opts.livePath,
+            stagedBinaryPath: opts.stagedBinaryPath,
+          },
           exitCode: 1,
         });
       }
@@ -479,7 +496,10 @@ async function tryReplaceLiveBinary(opts: {
     throw cliError({
       code: CLI_ERROR_CODES.CLI_UPGRADE_REPLACE_FAILED,
       message: `cli upgrade: replace failed: ${err instanceof Error ? err.message : String(err)}`,
-      details: { livePath: opts.livePath, stagedBinaryPath: opts.stagedBinaryPath },
+      details: {
+        livePath: opts.livePath,
+        stagedBinaryPath: opts.stagedBinaryPath,
+      },
       exitCode: 1,
     });
   }
@@ -560,11 +580,14 @@ export async function finalizePendingCliUpgrade(opts: {
   }
   const pending = manifest.pendingUpgrade;
   if (pending === null) {
-    logger.info("CLI pending upgrade finalization skipped; no pending upgrade", {
-      environment: opts.environment,
-      currentVersion: manifest.version,
-      source: manifest.source,
-    });
+    logger.info(
+      "CLI pending upgrade finalization skipped; no pending upgrade",
+      {
+        environment: opts.environment,
+        currentVersion: manifest.version,
+        source: manifest.source,
+      },
+    );
     return { status: "no-pending" };
   }
   if (

@@ -5,10 +5,7 @@ import { spawn, type SpawnOptions } from "node:child_process";
 import { clearPendingUpgrade, readCliManifest } from "../manifest/cli-manifest";
 import type { Environment } from "../runner/environment";
 import { isErrnoException } from "../runner/errors";
-import {
-  cliPostFinalizeMarkerPath,
-  ensureCliHomeDir,
-} from "../store/paths";
+import { cliPostFinalizeMarkerPath, ensureCliHomeDir } from "../store/paths";
 import { windowsTaskName, type ServiceLabel } from "../service";
 
 // Pending CLI upgrade finalize - detached helper path.
@@ -209,13 +206,13 @@ export async function scheduleFinalizationHelper(
   }
 }
 
-function makeHelperScriptPath(environment: Environment, platform: NodeJS.Platform): string {
+function makeHelperScriptPath(
+  environment: Environment,
+  platform: NodeJS.Platform,
+): string {
   const ext = platform === "win32" ? ".ps1" : ".sh";
   const stamp = `${Date.now()}-${process.pid}-${Math.random().toString(16).slice(2, 8)}`;
-  return join(
-    tmpdir(),
-    `traycer-cli-finalize-${environment}-${stamp}${ext}`,
-  );
+  return join(tmpdir(), `traycer-cli-finalize-${environment}-${stamp}${ext}`);
 }
 
 function buildSpawnDescriptor(opts: {
@@ -433,9 +430,7 @@ function shString(value: string): string {
 }
 
 export type PostFinalizeMarkerStatus =
-  | "swapped"
-  | "swap-failed"
-  | "parent-still-alive";
+  "swapped" | "swap-failed" | "parent-still-alive";
 
 export interface PostFinalizeMarker {
   readonly status: PostFinalizeMarkerStatus;
@@ -549,8 +544,7 @@ export async function reconcilePostFinalizeMarker(opts: {
     return parsed.status === "swap-failed"
       ? {
           status: "applied-swap-failed",
-          errorMessage:
-            parsed.errorMessage ?? "swap failed (no error message)",
+          errorMessage: parsed.errorMessage ?? "swap failed (no error message)",
         }
       : { status: "applied-parent-still-alive" };
   }

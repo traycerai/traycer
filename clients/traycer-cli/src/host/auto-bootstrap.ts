@@ -42,11 +42,7 @@ export type AutoBootstrapReason =
   | "service-registration-warning";
 
 export type AutoBootstrapStatus =
-  | "skipped"
-  | "ready"
-  | "installed"
-  | "service-registered"
-  | "failed";
+  "skipped" | "ready" | "installed" | "service-registered" | "failed";
 
 export interface AutoBootstrapDecision {
   readonly status: AutoBootstrapStatus;
@@ -68,9 +64,7 @@ export interface AutoBootstrapOptions {
   readonly onProgress: ((info: ProgressInfo) => void) | null;
 }
 
-export async function detectBootstrapState(
-  runtime: RuntimeContext,
-): Promise<{
+export async function detectBootstrapState(runtime: RuntimeContext): Promise<{
   readonly hostInstalled: boolean;
   readonly serviceRegistered: boolean;
 }> {
@@ -158,12 +152,15 @@ export async function evaluateAutoBootstrap(
   }
 
   if (opts.runtime.nonInteractive) {
-    opts.runtime.logger.debug("Auto-bootstrap skipped in non-interactive runtime", {
-      environment: opts.runtime.environment,
-      trigger: opts.trigger,
-      hostInstalled: state.hostInstalled,
-      serviceRegistered: state.serviceRegistered,
-    });
+    opts.runtime.logger.debug(
+      "Auto-bootstrap skipped in non-interactive runtime",
+      {
+        environment: opts.runtime.environment,
+        trigger: opts.trigger,
+        hostInstalled: state.hostInstalled,
+        serviceRegistered: state.serviceRegistered,
+      },
+    );
     return {
       status: "skipped",
       reason: "noninteractive-cannot-prompt",
@@ -226,7 +223,10 @@ export async function maybeAutoBootstrap(
   opts: AutoBootstrapOptions,
 ): Promise<AutoBootstrapDecision> {
   const decision = await evaluateAutoBootstrap(opts);
-  if (decision.status !== "service-registered" && decision.status !== "installed") {
+  if (
+    decision.status !== "service-registered" &&
+    decision.status !== "installed"
+  ) {
     // "skipped" or "ready" - nothing to do.
     opts.runtime.logger.debug("Auto-bootstrap returning without provisioning", {
       environment: opts.runtime.environment,

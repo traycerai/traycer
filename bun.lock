@@ -184,6 +184,7 @@
         "@typescript-eslint/eslint-plugin": "catalog:",
         "@typescript-eslint/parser": "catalog:",
         "eslint": "catalog:",
+        "prettier": "catalog:",
       },
     },
     "clients/traycer-cli": {
@@ -208,6 +209,7 @@
         "@typescript-eslint/parser": "catalog:",
         "esbuild": "catalog:",
         "eslint": "catalog:",
+        "prettier": "catalog:",
         "typescript": "catalog:",
         "vitest": "catalog:",
       },

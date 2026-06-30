@@ -815,6 +815,7 @@ describe("<ChatTile />", () => {
         status: "accepted",
         reason: null,
         code: null,
+        backgroundStopTaskIds: [],
       });
     });
 
@@ -1505,6 +1506,7 @@ describe("<ChatTile />", () => {
         status: "accepted",
         reason: null,
         code: null,
+        backgroundStopTaskIds: [],
       });
     });
 
@@ -1547,6 +1549,7 @@ describe("<ChatTile />", () => {
         status: "rejected",
         reason: "Only the chat owner can perform this action.",
         code: "NOT_OWNER",
+        backgroundStopTaskIds: [],
       });
     });
 

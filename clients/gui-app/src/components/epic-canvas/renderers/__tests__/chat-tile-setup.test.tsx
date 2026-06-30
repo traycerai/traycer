@@ -319,6 +319,7 @@ describe("useChatSetupFailureRestoreDriver", () => {
         status: "accepted",
         reason: null,
         code: null,
+        backgroundStopTaskIds: [],
       });
       harness.callbacks().onMessageAccepted({
         kind: "messageAccepted",

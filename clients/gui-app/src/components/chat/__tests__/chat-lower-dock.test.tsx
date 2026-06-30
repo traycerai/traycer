@@ -1,10 +1,11 @@
 import "../../../../__tests__/test-browser-apis";
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
+  BackgroundItem,
   ChatQueuedItem,
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
@@ -73,6 +74,10 @@ describe("<ChatLowerDock />", () => {
       queue: queueState([queuedItem("queue-1", "Queued prompt")]),
       todo: todoSnapshot([todoItem("Current task")]),
       changes: [fileChange()],
+      backgroundItems: undefined,
+      onBackgroundItemClick: () => undefined,
+      onBackgroundItemStop: () => null,
+      onBackgroundItemsStopAll: () => null,
     });
 
     const dock = screen.getByTestId("chat-lower-dock");
@@ -96,6 +101,10 @@ describe("<ChatLowerDock />", () => {
       queue: queueState([]),
       todo: null,
       changes: [fileChange()],
+      backgroundItems: undefined,
+      onBackgroundItemClick: () => undefined,
+      onBackgroundItemStop: () => null,
+      onBackgroundItemsStopAll: () => null,
     });
 
     const dock = screen.getByTestId("chat-lower-dock");
@@ -105,12 +114,56 @@ describe("<ChatLowerDock />", () => {
     expect(frame).not.toBeNull();
     expect(changes.className).not.toContain("border-t");
   });
+
+  it("renders background items and dispatches item actions", () => {
+    const onBackgroundItemClick = vi.fn();
+    const onBackgroundItemStop = vi.fn(() => null);
+    const onBackgroundItemsStopAll = vi.fn(() => null);
+    const item: BackgroundItem = {
+      taskId: "task-1",
+      kind: "command",
+      title: "bun test",
+      blockId: "tool-1",
+    };
+
+    renderDock({
+      queue: queueState([]),
+      todo: null,
+      changes: [],
+      backgroundItems: [item],
+      onBackgroundItemClick,
+      onBackgroundItemStop,
+      onBackgroundItemsStopAll,
+    });
+
+    const backgroundPanel = screen.getByRole("button", {
+      name: /Background.*1 running/,
+    });
+    expect(backgroundPanel).not.toBeNull();
+    const stopAll = screen.getByRole("button", { name: "Stop all" });
+    fireEvent.click(stopAll);
+    expect(onBackgroundItemsStopAll).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(backgroundPanel);
+    fireEvent.click(stopAll);
+    expect(onBackgroundItemsStopAll).toHaveBeenCalledTimes(2);
+
+    fireEvent.click(screen.getByRole("button", { name: /bun test.*Command/ }));
+    expect(onBackgroundItemClick).toHaveBeenCalledWith(item);
+
+    fireEvent.click(screen.getByRole("button", { name: "Stop Command" }));
+    expect(onBackgroundItemStop).toHaveBeenCalledWith("task-1");
+  });
 });
 
 function renderDock(input: {
   readonly queue: ChatSessionState["queue"];
   readonly todo: PinnedTodoSnapshot | null;
   readonly changes: ReadonlyArray<AccumulatedFileChange>;
+  readonly backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
+  readonly onBackgroundItemClick: (item: BackgroundItem) => void;
+  readonly onBackgroundItemStop: (taskId: string) => string | null;
+  readonly onBackgroundItemsStopAll: () => string | null;
 }) {
   return render(
     <TooltipProvider delayDuration={0}>
@@ -122,6 +175,9 @@ function renderDock(input: {
         todo={input.todo}
         restore={baseRestore(input.changes)}
         queue={input.queue}
+        backgroundItems={input.backgroundItems}
+        backgroundStopPendingTaskIds={new Set()}
+        backgroundStopAllPending={false}
         activeTurnStatus="running"
         canAct
         readOnly={false}
@@ -134,6 +190,9 @@ function renderDock(input: {
         onQueueAbortSteer={vi.fn()}
         onQueueReorder={vi.fn()}
         onQueueSteerNow={vi.fn()}
+        onBackgroundItemClick={input.onBackgroundItemClick}
+        onBackgroundItemStop={input.onBackgroundItemStop}
+        onBackgroundItemsStopAll={input.onBackgroundItemsStopAll}
       />
     </TooltipProvider>,
   );

@@ -75,10 +75,7 @@ const {
   withCliLockMock,
 } = mocks;
 
-import {
-  evaluateAutoBootstrap,
-  maybeAutoBootstrap,
-} from "../auto-bootstrap";
+import { evaluateAutoBootstrap, maybeAutoBootstrap } from "../auto-bootstrap";
 import { config } from "../../config";
 
 function makeRuntime(overrides: Partial<RuntimeContext>): RuntimeContext {
@@ -147,11 +144,13 @@ beforeEach(() => {
   vi.clearAllMocks();
   config.supportedHostVersion = null;
   resolveBundledHostArchiveMock.mockResolvedValue(null);
-  serviceLabelForMock.mockImplementation((environment: "production" | "dev") => ({
-    id: environment === "dev" ? "ai.traycer.host.dev" : "ai.traycer.host",
-    displayName: "Traycer Host",
-    environment,
-  }));
+  serviceLabelForMock.mockImplementation(
+    (environment: "production" | "dev") => ({
+      id: environment === "dev" ? "ai.traycer.host.dev" : "ai.traycer.host",
+      displayName: "Traycer Host",
+      environment,
+    }),
+  );
   resolveServiceCliInvocationMock.mockReturnValue({
     command: "/usr/local/bin/traycer",
     args: [],

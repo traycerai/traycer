@@ -19,6 +19,7 @@
   "scripts": {
     "traycer": "bun run src/index.ts",
     "compile": "tsc --noEmit",
+    "format": "bun x prettier --write .",
     "lint": "eslint . --cache --fix --max-warnings 0",
     "test": "vitest run --config vitest.config.ts",
     "build": "node scripts/build-cli-npm.cjs",
@@ -43,6 +44,7 @@
     "@typescript-eslint/parser": "catalog:",
     "esbuild": "catalog:",
     "eslint": "catalog:",
+    "prettier": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
   }

@@ -131,14 +131,16 @@ function renderHumanStatus(
     const m = output.pidMetadata;
     lines.push(`${c.green("●")} ${c.bold("Traycer host is running")}`);
     lines.push("");
-    lines.push(...kvBlock(c, [
-      ["PID", String(m.pid)],
-      ["Version", m.version],
-      ["WebSocket", m.websocketUrl],
-      ["Started", formatStartedAt(m.startedAt, c)],
-      ["Host ID", m.hostId],
-      ["Log", tildePath(output.bootstrapLogPath)],
-    ]));
+    lines.push(
+      ...kvBlock(c, [
+        ["PID", String(m.pid)],
+        ["Version", m.version],
+        ["WebSocket", m.websocketUrl],
+        ["Started", formatStartedAt(m.startedAt, c)],
+        ["Host ID", m.hostId],
+        ["Log", tildePath(output.bootstrapLogPath)],
+      ]),
+    );
   } else {
     const last = output.bootstrapMarkers.at(-1);
     lines.push(`${c.gray("○")} ${c.bold("Traycer host is not running")}`);
@@ -277,7 +279,8 @@ function formatPhaseDetail(entry: BootstrapLogEntry): string {
   const f = entry.fields;
   const parts: string[] = [];
   if (f.code !== undefined && f.code !== "") parts.push(`code=${f.code}`);
-  if (f.signal !== undefined && f.signal !== "") parts.push(`signal=${f.signal}`);
+  if (f.signal !== undefined && f.signal !== "")
+    parts.push(`signal=${f.signal}`);
   if (f.error !== undefined && f.error !== "") parts.push(`error=${f.error}`);
   return parts.join(" ");
 }

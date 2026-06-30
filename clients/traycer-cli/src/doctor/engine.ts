@@ -251,8 +251,7 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
           title: "Host port held by another process",
           message: `Port ${portInfo.port} (${pidMetadata.websocketUrl}) is held by ${conflict.processName} (pid=${conflict.pid}), not the host (pid=${pidMetadata.pid}).`,
           fixAction: "host-free-port-and-restart",
-          terminalCommand:
-            `traycer host free-port-and-restart --pid ${conflict.pid} --port ${portInfo.port}`,
+          terminalCommand: `traycer host free-port-and-restart --pid ${conflict.pid} --port ${portInfo.port}`,
           details: {
             pid: pidMetadata.pid,
             websocketUrl: pidMetadata.websocketUrl,
@@ -318,7 +317,9 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
   // queued, and offers `host restart` as the fix - restarting the
   // service releases the binary lock and the next CLI invocation (or
   // the finalize hook on `host restart`) completes the swap.
-  const pendingUpgrade = await readPendingCliUpgrade({ environment: opts.environment });
+  const pendingUpgrade = await readPendingCliUpgrade({
+    environment: opts.environment,
+  });
   if (pendingUpgrade !== null) {
     const stagedExists = await pendingUpgradeFinalisable({
       stagedBinaryPath: pendingUpgrade.pending.stagedBinaryPath,
@@ -434,8 +435,10 @@ function lastCrashMarker(
 function formatMarkerMessage(entry: BootstrapLogEntry): string {
   const parts: string[] = [`phase=${entry.phase}`, `at=${entry.timestamp}`];
   if (entry.fields.code !== undefined) parts.push(`code=${entry.fields.code}`);
-  if (entry.fields.signal !== undefined) parts.push(`signal=${entry.fields.signal}`);
-  if (entry.fields.error !== undefined) parts.push(`error=${entry.fields.error}`);
+  if (entry.fields.signal !== undefined)
+    parts.push(`signal=${entry.fields.signal}`);
+  if (entry.fields.error !== undefined)
+    parts.push(`error=${entry.fields.error}`);
   return parts.join(" ");
 }
 

@@ -1,15 +1,14 @@
 import type { CommandFn, CommandResult } from "../runner/runner";
-import {
-  createServiceController,
-  serviceLabelFor,
-} from "../service";
+import { createServiceController, serviceLabelFor } from "../service";
 import { withCliLock } from "../store/cli-lock";
 
 // `traycer host service uninstall` - deregister the OS service for the
 // current environment. Idempotent: a not-installed service resolves
 // cleanly. Does NOT remove the host install dir; that's
 // `host uninstall --all`.
-export const serviceUninstallCommand: CommandFn = async (ctx): Promise<CommandResult> => {
+export const serviceUninstallCommand: CommandFn = async (
+  ctx,
+): Promise<CommandResult> => {
   ctx.runtime.logger.info("Service uninstall command started", {
     environment: ctx.runtime.environment,
   });

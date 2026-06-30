@@ -1,5 +1,6 @@
 import { memo, useCallback, useMemo, useState, type ReactNode } from "react";
 import type {
+  BackgroundItem,
   ChatActiveTurn,
   ChatApprovalState,
   ChatFileEditApprovalState,
@@ -53,6 +54,10 @@ export interface ChatLowerInteractionSurfacesProps {
   readonly composer: ChatLowerComposerState;
   readonly todo: PinnedTodoSnapshot | null;
   readonly restoreContext: ChatRestoreContextValue;
+  readonly backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
+  readonly backgroundStopPendingTaskIds: ReadonlySet<string>;
+  readonly backgroundStopAllPending: boolean;
+  readonly onBackgroundItemClick: (item: BackgroundItem) => void;
 }
 
 export interface ChatLowerRuntimeState {
@@ -95,6 +100,8 @@ export interface ChatLowerQueueState {
   readonly onCancel: (item: ChatQueuedItem) => void;
   readonly onAbortSteer: (item: ChatQueuedItem) => void;
   readonly onCancelEdit: () => void;
+  readonly onStopBackgroundItem: (taskId: string) => string | null;
+  readonly onStopAllBackgroundItems: () => string | null;
   readonly onReorder: (
     item: ChatQueuedItem,
     beforeQueueItemId: string | null,
@@ -191,6 +198,10 @@ export function ChatLowerInteractionSurfaces(
   // Show the queue surface whenever it holds anything - user-typed sends and
   // received A2A responses alike (the latter render read-only).
   const queueVisible = props.queue.value.items.length > 0;
+  const backgroundVisible =
+    props.backgroundItems !== undefined && props.backgroundItems.length > 0;
+  const activeAgentsVisible =
+    stopControls.self !== null && activeAgents.length > 0;
   const approvalVisible = approvalSurfaceVisible(
     props.runtime.snapshotLoaded,
     props.access.isViewer,
@@ -199,10 +210,15 @@ export function ChatLowerInteractionSurfaces(
   const scrollRegionMaxHeightClass = lowerScrollRegionMaxHeightClass({
     pinnedStackVisible,
     queueVisible,
+    backgroundVisible,
+    activeAgentsVisible,
     approvalVisible,
   });
   const lowerSurfaceTopSpacing: ChatLowerSurfaceTopSpacing =
-    pinnedStackVisible || queueVisible || activeAgents.length > 0
+    pinnedStackVisible ||
+    queueVisible ||
+    activeAgents.length > 0 ||
+    backgroundVisible
       ? "connected"
       : "normal";
   const pinnedStackTopSpacing: ChatPinnedStackTopSpacing = approvalVisible
@@ -273,6 +289,9 @@ export function ChatLowerInteractionSurfaces(
         todo={props.todo}
         restore={props.restoreContext}
         queue={props.queue.value}
+        backgroundItems={props.backgroundItems}
+        backgroundStopPendingTaskIds={props.backgroundStopPendingTaskIds}
+        backgroundStopAllPending={props.backgroundStopAllPending}
         activeTurnStatus={props.turn.activeTurnStatus}
         canAct={props.access.canAct}
         readOnly={props.access.isViewer}
@@ -285,6 +304,9 @@ export function ChatLowerInteractionSurfaces(
         onQueueAbortSteer={props.queue.onAbortSteer}
         onQueueReorder={props.queue.onReorder}
         onQueueSteerNow={props.queue.onSteerNow}
+        onBackgroundItemClick={props.onBackgroundItemClick}
+        onBackgroundItemStop={props.queue.onStopBackgroundItem}
+        onBackgroundItemsStopAll={props.queue.onStopAllBackgroundItems}
       />
       <ChatComposerRegion model={composerModel} layout={composerLayout} />
       <StopChildrenDialog

@@ -53,7 +53,12 @@ export async function loadTrustedKeys(): Promise<TrustedKeySet> {
   }
   // Disk overlay: operator escape hatch for pinning extra keys without
   // rebuilding. ADDS to the trust set; cannot replace baked.
-  const overlayPath = join(homedir(), ".traycer", "cli", "host-trusted-pubkeys");
+  const overlayPath = join(
+    homedir(),
+    ".traycer",
+    "cli",
+    "host-trusted-pubkeys",
+  );
   try {
     const contents = await readFile(overlayPath, "utf8");
     for (const line of contents.split(/\r?\n/)) {
@@ -90,8 +95,7 @@ export async function loadTrustedKeys(): Promise<TrustedKeySet> {
       // CliError - overlay parse failures are operator-actionable but
       // should not abort the install path that the baked keys can
       // service on their own.
-      const message =
-        err instanceof Error ? err.message : String(err);
+      const message = err instanceof Error ? err.message : String(err);
       console.warn(
         `host trusted pubkey overlay (${source}) skipped: ${message}`,
       );
@@ -112,8 +116,12 @@ export function parseMinisignPublicKey(
   raw: string,
   sourceLabel: string,
 ): ParsedMinisignPublicKey {
-  const lines = raw.split(/\r?\n/).map((line) => line.trim()).filter((line) => line.length > 0);
-  const payloadLine = lines.find((line) => !line.startsWith("untrusted comment:")) ?? "";
+  const lines = raw
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  const payloadLine =
+    lines.find((line) => !line.startsWith("untrusted comment:")) ?? "";
   if (payloadLine.length === 0) {
     throw cliError({
       code: CLI_ERROR_CODES.CONFIG_INVALID,
@@ -129,7 +137,10 @@ export function parseMinisignPublicKey(
     throw cliError({
       code: CLI_ERROR_CODES.CONFIG_INVALID,
       message: `host trusted pubkey (${sourceLabel}): payload is not valid base64`,
-      details: { sourceLabel, error: err instanceof Error ? err.message : String(err) },
+      details: {
+        sourceLabel,
+        error: err instanceof Error ? err.message : String(err),
+      },
       exitCode: 1,
     });
   }

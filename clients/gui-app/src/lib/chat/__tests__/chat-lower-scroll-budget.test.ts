@@ -7,6 +7,8 @@ describe("lowerScrollRegionMaxHeightClass", () => {
       lowerScrollRegionMaxHeightClass({
         pinnedStackVisible: false,
         queueVisible: true,
+        backgroundVisible: false,
+        activeAgentsVisible: false,
         approvalVisible: false,
       }),
     ).toBe("max-h-[min(40dvh,24rem)]");
@@ -17,6 +19,8 @@ describe("lowerScrollRegionMaxHeightClass", () => {
       lowerScrollRegionMaxHeightClass({
         pinnedStackVisible: true,
         queueVisible: true,
+        backgroundVisible: false,
+        activeAgentsVisible: false,
         approvalVisible: false,
       }),
     ).toBe("max-h-[min(24dvh,14rem)]");
@@ -27,7 +31,45 @@ describe("lowerScrollRegionMaxHeightClass", () => {
       lowerScrollRegionMaxHeightClass({
         pinnedStackVisible: true,
         queueVisible: true,
+        backgroundVisible: false,
+        activeAgentsVisible: false,
         approvalVisible: true,
+      }),
+    ).toBe("max-h-[min(18dvh,11rem)]");
+  });
+
+  it("counts the background section as another scroll region", () => {
+    expect(
+      lowerScrollRegionMaxHeightClass({
+        pinnedStackVisible: true,
+        queueVisible: true,
+        backgroundVisible: true,
+        activeAgentsVisible: false,
+        approvalVisible: false,
+      }),
+    ).toBe("max-h-[min(18dvh,11rem)]");
+  });
+
+  it("counts active agents with background as multiple scroll regions", () => {
+    expect(
+      lowerScrollRegionMaxHeightClass({
+        pinnedStackVisible: false,
+        queueVisible: false,
+        backgroundVisible: true,
+        activeAgentsVisible: true,
+        approvalVisible: false,
+      }),
+    ).toBe("max-h-[min(24dvh,14rem)]");
+  });
+
+  it("counts queue, background, and active agents as three regions", () => {
+    expect(
+      lowerScrollRegionMaxHeightClass({
+        pinnedStackVisible: false,
+        queueVisible: true,
+        backgroundVisible: true,
+        activeAgentsVisible: true,
+        approvalVisible: false,
       }),
     ).toBe("max-h-[min(18dvh,11rem)]");
   });

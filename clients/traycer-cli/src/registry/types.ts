@@ -67,7 +67,10 @@ export interface RegistryClient {
   downloadAndVerify(
     entry: HostVersionEntry,
     asset: HostPlatformAsset,
-    onProgress: (progress: { downloadedBytes: number; totalBytes: number }) => void,
+    onProgress: (progress: {
+      downloadedBytes: number;
+      totalBytes: number;
+    }) => void,
   ): Promise<{
     readonly archivePath: string;
     readonly archiveSha256: string;

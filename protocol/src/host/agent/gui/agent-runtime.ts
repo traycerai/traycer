@@ -14,15 +14,18 @@ import {
 import {
   agentMessageSendSchema,
   artifactOperationActionSchema,
+  backgroundTaskOutputSchema,
   diffSourceSchema,
   fileEditReasonSchema,
 } from "@traycer/protocol/persistence/epic/content-blocks";
 
 export {
   agentMessageSendSchema,
+  backgroundTaskOutputSchema,
   diffSourceSchema,
   fileEditReasonSchema,
   type AgentMessageSend,
+  type BackgroundTaskOutput,
   type DiffSource,
   type FileEditReason,
 } from "@traycer/protocol/persistence/epic/content-blocks";
@@ -315,6 +318,13 @@ export const toolCallStartedEventSchema = z.object({
   toolName: z.string(),
   input: z.unknown().optional(),
   agentMessageSend: agentMessageSendSchema.nullable().default(null),
+  // Explicit call/task start time. Optional so older emitters remain valid; the
+  // accumulator falls back to the event timestamp when absent.
+  startedAt: z.number().optional(),
+  // True when this call is a backgrounded command/Monitor (Bash with
+  // `run_in_background`, or the Monitor tool). Stamped at started so the
+  // persistent block marker is set before any terminal path.
+  backgroundTask: z.boolean().optional(),
 });
 export type ToolCallStartedEvent = z.infer<typeof toolCallStartedEventSchema>;
 
@@ -323,6 +333,13 @@ export const toolCallCompletedEventSchema = z.object({
   type: z.literal("tool_call.completed"),
   toolName: z.string(),
   agentMessageSend: agentMessageSendSchema.nullable().default(null),
+  backgroundOutput: backgroundTaskOutputSchema.nullable().optional(),
+  // For detached background command/Monitor completion, this is the SDK task's
+  // own start time from BackgroundItem, not the short foreground spawn call.
+  backgroundStartedAt: z.number().optional(),
+  // Reinforces the persistent background marker at terminal (the runtime now
+  // knows for certain this was a backgrounded task). Optional/preserved.
+  backgroundTask: z.boolean().optional(),
 });
 export type ToolCallCompletedEvent = z.infer<
   typeof toolCallCompletedEventSchema
@@ -334,6 +351,12 @@ export const toolCallErroredEventSchema = z.object({
   toolName: z.string(),
   error: z.string(),
   agentMessageSend: agentMessageSendSchema.nullable().default(null),
+  backgroundOutput: backgroundTaskOutputSchema.nullable().optional(),
+  // For detached background command/Monitor failure/stop, this is the SDK
+  // task's own start time from BackgroundItem when available.
+  backgroundStartedAt: z.number().optional(),
+  // Reinforces the persistent background marker at terminal. Optional/preserved.
+  backgroundTask: z.boolean().optional(),
 });
 export type ToolCallErroredEvent = z.infer<typeof toolCallErroredEventSchema>;
 

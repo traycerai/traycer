@@ -1,11 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import {
-  LOCAL_CLI_VERSION,
-  buildProgram,
-  resolveCliVersion,
-} from "../index";
+import { LOCAL_CLI_VERSION, buildProgram, resolveCliVersion } from "../index";
 
 // `traycer --version` must report the release-injected
 // `TRAYCER_CLI_VERSION` for SEA builds and the local/dev fallback
@@ -86,9 +82,7 @@ describe("resolveCliVersion", () => {
     expect(buildScript).toContain(
       "process.env.TRAYCER_CLI_VERSION=${JSON.stringify(cliVersion)}",
     );
-    expect(buildScript).toContain(
-      'process.env.TRAYCER_CLI_DISTRIBUTION="npm"',
-    );
+    expect(buildScript).toContain('process.env.TRAYCER_CLI_DISTRIBUTION="npm"');
     expect(buildScript).not.toContain(
       "if(!process.env.TRAYCER_CLI_VERSION)process.env.TRAYCER_CLI_VERSION=",
     );

@@ -15,13 +15,17 @@ import type { ReactNode } from "react";
 vi.mock("@/hooks/editor/use-editor-open-mutation", () => ({
   useEditorOpen: () => ({ mutate: () => undefined }),
 }));
-import { ChatMessages } from "@/components/chat/chat-messages";
+import {
+  ChatMessages,
+  type ChatMessageScrollRequest,
+} from "@/components/chat/chat-messages";
 import { ChatUserMessageMinimap } from "@/components/chat/chat-user-message-minimap";
 import {
   chatMinimapClipRegionProps,
   type ChatUserMinimapItem,
 } from "@/components/chat/chat-user-message-minimap-items";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
+import type { BackgroundItem } from "@traycer/protocol/host/agent/gui/subscribe";
 
 import {
   makeAssistantMessage,
@@ -51,9 +55,11 @@ function minimapItemsFor(
 function chatMessagesJsx(
   messages: ReadonlyArray<ChatMessageModel>,
   opts: {
+    backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
     minimapItems: ReadonlyArray<ChatUserMinimapItem>;
     scrollStateKey: string;
     visible: boolean;
+    scrollRequest: ChatMessageScrollRequest | null;
   },
 ): ReactNode {
   return (
@@ -61,12 +67,14 @@ function chatMessagesJsx(
       <ChatMessages
         taskTitle="Transcript"
         messages={messages}
+        backgroundItems={opts.backgroundItems}
         minimapItems={opts.minimapItems}
         scrollStateKey={opts.scrollStateKey}
         getMessageActions={() => null}
         nextStepActions={null}
         instanceId="test-instance"
         visible={opts.visible}
+        scrollRequest={opts.scrollRequest}
       />
     </VirtuosoMessageListTestingContext.Provider>
   );
@@ -75,9 +83,11 @@ function chatMessagesJsx(
 function renderChatMessages(
   messages: ReadonlyArray<ChatMessageModel>,
   opts: {
+    backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
     minimapItems: ReadonlyArray<ChatUserMinimapItem>;
     scrollStateKey: string;
     visible: boolean;
+    scrollRequest: ChatMessageScrollRequest | null;
   },
 ) {
   return render(chatMessagesJsx(messages, opts));
@@ -85,17 +95,21 @@ function renderChatMessages(
 
 function makeDefaultOpts(
   overrides: Partial<{
+    backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
     minimapItems: ReadonlyArray<ChatUserMinimapItem>;
     scrollStateKey: string;
     visible: boolean;
+    scrollRequest: ChatMessageScrollRequest | null;
   }>,
 ) {
   return {
+    backgroundItems: overrides.backgroundItems,
     minimapItems: overrides.minimapItems ?? [],
     scrollStateKey:
       overrides.scrollStateKey ??
       `chat-scroll-test-key-${scrollStateKeySequence++}`,
     visible: overrides.visible ?? true,
+    scrollRequest: overrides.scrollRequest ?? null,
   };
 }
 
@@ -103,9 +117,11 @@ function rerenderChatMessages(
   rerender: (ui: ReactNode) => void,
   messages: ReadonlyArray<ChatMessageModel>,
   opts: {
+    backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
     minimapItems: ReadonlyArray<ChatUserMinimapItem>;
     scrollStateKey: string;
     visible: boolean;
+    scrollRequest: ChatMessageScrollRequest | null;
   },
 ): void {
   rerender(chatMessagesJsx(messages, opts));
@@ -224,6 +240,85 @@ describe("ChatMessages Virtuoso renderer", () => {
     );
 
     expect(screen.getByText("echo hi")).not.toBeNull();
+  });
+
+  it("consumes background scroll requests once across background item refreshes", async () => {
+    const messages = [makeAssistantMessage("assistant-1", "activity-1")];
+    const scrollRequest = {
+      messageId: "assistant-1",
+      blockId: "activity-1:command",
+      requestId: 1,
+    };
+    const opts = makeDefaultOpts({ minimapItems: [], scrollRequest });
+    const { rerender } = renderChatMessages(messages, opts);
+
+    await waitFor(() => {
+      expect(screen.getByText("echo hi")).not.toBeNull();
+    });
+
+    screen.getByTestId("virtuoso-list").style.visibility = "visible";
+    fireEvent.click(screen.getByRole("button", { name: /Ran 1 command/i }));
+    expect(screen.queryByText("echo hi")).toBeNull();
+
+    rerenderChatMessages(rerender, messages, {
+      ...opts,
+      backgroundItems: [
+        {
+          taskId: "task-bg",
+          kind: "command",
+          title: "sleep 60",
+          blockId: "unrelated-tool",
+        },
+      ],
+    });
+
+    expect(screen.queryByText("echo hi")).toBeNull();
+  });
+
+  it("renders a host-reported background command as a live standalone card", async () => {
+    const assistant: ChatMessageModel = {
+      ...makeMessage(1, "assistant"),
+      segments: [
+        {
+          id: "tool-bg",
+          kind: "tool",
+          toolName: "Bash",
+          inputSummary: "sleep 60",
+          inputDetail: { kind: "command", command: "sleep 60" },
+          taskTodoItems: null,
+          error: null,
+          agentMessageSend: null,
+          isStreaming: false,
+          endState: null,
+          progress: null,
+          backgroundOutput: null,
+          backgroundTask: false,
+          startedAt: Date.now(),
+          durationMs: null,
+          parentId: null,
+        },
+      ],
+    };
+
+    renderChatMessages(
+      [assistant],
+      makeDefaultOpts({
+        backgroundItems: [
+          {
+            taskId: "task-bg",
+            kind: "command",
+            title: "sleep 60",
+            blockId: "tool-bg",
+          },
+        ],
+      }),
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByText("Ran 1 command")).toBeNull();
+      expect(screen.getByText("Bash")).not.toBeNull();
+      expect(screen.getByLabelText("Tool running")).not.toBeNull();
+    });
   });
 
   it("uses sticky opaque headers for expanded accumulated rows", () => {

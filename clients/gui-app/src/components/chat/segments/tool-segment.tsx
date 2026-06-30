@@ -1,7 +1,10 @@
 import { SendHorizontal, Wrench } from "lucide-react";
-import { useState } from "react";
+import type { ReactNode } from "react";
 import { v4 as uuidv4 } from "uuid";
-import type { AgentMessageSend } from "@traycer/protocol/persistence/epic/content-blocks";
+import type {
+  AgentMessageSend,
+  BackgroundTaskOutput,
+} from "@traycer/protocol/persistence/epic/content-blocks";
 import type { SegmentEndState } from "@/stores/composer/chat-store";
 import { SegmentEndStateBadge } from "./segment-end-state-badge";
 import { LivePulse } from "@/components/ui/live-pulse";
@@ -24,8 +27,15 @@ import { SegmentPanel } from "./segment-panel";
 import { SegmentRow } from "./segment-row";
 import { ToolInputPanel } from "./tool-input-panel";
 import { StreamingActivityFooter } from "./streaming-activity-footer";
+import { useToolOpenStore } from "@/stores/chats/tool-open-store";
+import {
+  scopedChatOpenId,
+  useChatOpenStoreScope,
+} from "@/stores/chats/open-store-scope";
+import { ElapsedTime } from "./segment-elapsed";
 
 interface ToolSegmentProps {
+  id: string;
   toolName: string;
   // Precomputed on the host (raw input not persisted): the ≤80-char header
   // line and the optional expand body.
@@ -39,15 +49,34 @@ interface ToolSegmentProps {
   endState: SegmentEndState;
   // Latest harness progress line for an in-flight call (null when none).
   progress: string | null;
+  backgroundOutput: BackgroundTaskOutput | null;
+  backgroundTask: boolean;
   // Wall-clock start (epoch ms) driving the elapsed heartbeat while streaming.
   startedAt: number;
+  durationMs: number | null;
   variant: "card" | "row";
 }
 
 interface ToolBadgeProps {
-  readonly hasError: boolean;
-  readonly isStreaming: boolean;
+  readonly state: ToolBadgeState;
   readonly endState: SegmentEndState;
+}
+
+interface GenericToolHeaderProps {
+  readonly toolName: string;
+  readonly summary: string | null;
+  readonly progress: string | null;
+  readonly badgeState: ToolBadgeState;
+  readonly endState: SegmentEndState;
+  readonly elapsed: ToolHeaderElapsed;
+  readonly layout: ToolHeaderLayout;
+}
+
+interface ToolSegmentBodyProps {
+  readonly expandDetail: ToolInputDetail | null;
+  readonly error: string | null;
+  readonly hasError: boolean;
+  readonly backgroundOutput: BackgroundTaskOutput | null;
 }
 
 type ReceiverNode = ArtifactProjection | ChatProjection | TuiAgentProjection;
@@ -56,6 +85,16 @@ interface ReceiverOpenTarget {
   readonly type: "chat" | "terminal-agent";
   readonly hostId: string;
 }
+
+type ToolBadgeState =
+  "background-complete" | "end-state" | "error" | "stopped" | "streaming";
+
+type ToolHeaderLayout = "inline" | "stacked";
+
+type ToolHeaderElapsed =
+  | { readonly kind: "hidden" }
+  | { readonly kind: "live"; readonly startedAt: number }
+  | { readonly kind: "static"; readonly durationMs: number };
 
 function receiverDisplayName(
   receiverNode: ReceiverNode | null,
@@ -81,15 +120,15 @@ function receiverOpenTarget(
   return { type: "chat", hostId };
 }
 
-function ToolBadge({ hasError, isStreaming, endState }: ToolBadgeProps) {
-  if (hasError) {
+function ToolBadge({ state, endState }: ToolBadgeProps) {
+  if (state === "error") {
     return (
       <span className="shrink-0 rounded border border-destructive/40 bg-destructive/10 px-1 text-overline font-medium uppercase text-destructive">
         error
       </span>
     );
   }
-  if (isStreaming) {
+  if (state === "streaming") {
     return (
       <LivePulse
         size="xs"
@@ -99,7 +138,85 @@ function ToolBadge({ hasError, isStreaming, endState }: ToolBadgeProps) {
       />
     );
   }
+  if (state === "stopped") {
+    return <ToolStateBadge label="stopped" />;
+  }
+  if (state === "background-complete") {
+    return <ToolStateBadge label="completed" />;
+  }
   return <SegmentEndStateBadge endState={endState} />;
+}
+
+function ToolStateBadge({ label }: { readonly label: string }) {
+  return (
+    <span className="shrink-0 rounded border border-border bg-muted px-1 text-overline font-medium uppercase text-muted-foreground">
+      {label}
+    </span>
+  );
+}
+
+function isStoppedToolError(error: string | null): boolean {
+  return error !== null && error.toLowerCase().startsWith("stopped:");
+}
+
+function toolCardTone(
+  hasError: boolean,
+  isStreaming: boolean,
+): "default" | "destructive" | "primary" {
+  if (hasError) return "destructive";
+  if (isStreaming) return "primary";
+  return "default";
+}
+
+function hasBackgroundOutput(output: BackgroundTaskOutput | null): boolean {
+  if (output === null) return false;
+  if (output.stdout.length > 0) return true;
+  if (output.stderr.length > 0) return true;
+  return output.truncated;
+}
+
+function resolveToolBadgeState(props: {
+  readonly hasError: boolean;
+  readonly isBackgroundComplete: boolean;
+  readonly isStreaming: boolean;
+  readonly isStopped: boolean;
+}): ToolBadgeState {
+  if (props.hasError) return "error";
+  if (props.isStreaming) return "streaming";
+  if (props.isStopped) return "stopped";
+  if (props.isBackgroundComplete) return "background-complete";
+  return "end-state";
+}
+
+function resolveToolHeaderElapsed(props: {
+  readonly durationMs: number | null;
+  readonly isStreaming: boolean;
+  readonly startedAt: number;
+  readonly variant: ToolSegmentProps["variant"];
+}): ToolHeaderElapsed {
+  if (props.variant !== "card") return { kind: "hidden" };
+  if (props.isStreaming) {
+    return { kind: "live", startedAt: props.startedAt };
+  }
+  if (props.durationMs !== null) {
+    return { kind: "static", durationMs: props.durationMs };
+  }
+  return { kind: "hidden" };
+}
+
+function renderToolStreamingFooter(props: {
+  readonly isStreaming: boolean;
+  readonly progress: string | null;
+  readonly stackedHeader: boolean;
+  readonly startedAt: number;
+}): ReactNode {
+  if (!props.isStreaming || props.stackedHeader) return null;
+  return (
+    <StreamingActivityFooter
+      startedAt={props.startedAt}
+      progress={props.progress}
+    />
+  );
 }
 
 export function ToolSegment(props: ToolSegmentProps) {
@@ -118,49 +235,58 @@ function GenericToolSegment(props: ToolSegmentProps) {
     isStreaming,
     endState,
     progress,
+    backgroundOutput,
+    backgroundTask,
     startedAt,
+    durationMs,
+    id,
   } = props;
   const { variant } = props;
-  const hasError = error !== null && error.length > 0;
-  const [open, setOpen] = useState<boolean>(false);
+  const isStopped = isStoppedToolError(error);
+  const hasError = error !== null && error.length > 0 && !isStopped;
+  const isBackgroundComplete =
+    (backgroundTask || backgroundOutput !== null) &&
+    !isStreaming &&
+    !hasError &&
+    !isStopped;
+  const badgeState = resolveToolBadgeState({
+    hasError,
+    isBackgroundComplete,
+    isStreaming,
+    isStopped,
+  });
+  const openScope = useChatOpenStoreScope();
+  const open = useToolOpenStore((state) =>
+    state.openIds.has(scopedChatOpenId(openScope, id)),
+  );
+  const setToolOpen = useToolOpenStore((state) => state.setOpen);
+  const setOpen = (next: boolean): void => setToolOpen(openScope, id, next);
   const summary = inputSummary;
-  // Heartbeat while the call runs: latest progress line + a ticking elapsed
-  // counter, so a long tool/MCP call shows life instead of a frozen row. This
-  // renders in the ROW variant (beneath the nested row, on group-expand) - the
-  // only path GenericToolSegment is reached on. A top-level tool's "still
-  // working" cue is the group-header elapsed (GroupElapsed); its progress shows
-  // here when the activity group is expanded.
-  const streamingFooter = isStreaming ? (
-    <StreamingActivityFooter startedAt={startedAt} progress={progress} />
-  ) : null;
+  const stackedHeader = variant === "card" && isStreaming;
+  const headerLayout: ToolHeaderLayout = stackedHeader ? "stacked" : "inline";
+  const headerElapsed = resolveToolHeaderElapsed({
+    durationMs,
+    isStreaming,
+    startedAt,
+    variant,
+  });
+  const streamingFooter = renderToolStreamingFooter({
+    isStreaming,
+    progress,
+    stackedHeader,
+    startedAt,
+  });
 
   const header = (
-    <>
-      <Wrench
-        className="size-3.5 shrink-0 text-muted-foreground/80"
-        aria-hidden
-      />
-      <span className="shrink-0 font-mono text-code-sm font-medium text-foreground/85">
-        {toolName}
-      </span>
-      {summary !== null ? (
-        <>
-          <span aria-hidden className="shrink-0 text-muted-foreground/40">
-            ·
-          </span>
-          <span className="min-w-0 flex-1 truncate font-mono text-code-sm text-muted-foreground">
-            {summary}
-          </span>
-        </>
-      ) : (
-        <span aria-hidden className="flex-1" />
-      )}
-      <ToolBadge
-        hasError={hasError}
-        isStreaming={isStreaming}
-        endState={endState}
-      />
-    </>
+    <GenericToolHeader
+      toolName={toolName}
+      summary={summary}
+      progress={progress}
+      badgeState={badgeState}
+      endState={endState}
+      elapsed={headerElapsed}
+      layout={headerLayout}
+    />
   );
 
   // Hybrid input rendering: null when the header summary already captures the
@@ -168,25 +294,16 @@ function GenericToolSegment(props: ToolSegmentProps) {
   // humanized command/fields view - never a raw JSON dump. Operates on the
   // precomputed detail rather than re-deriving from raw input (no longer stored).
   const expandDetail = resolveToolInputDetail(inputDetail, summary);
-  const expandable = expandDetail !== null || hasError;
+  const expandable =
+    expandDetail !== null || hasError || hasBackgroundOutput(backgroundOutput);
 
   const body = open ? (
-    <div className="flex flex-col gap-2">
-      {expandDetail !== null ? <ToolInputPanel detail={expandDetail} /> : null}
-      {hasError ? (
-        <SegmentPanel
-          label="Error"
-          copyValue={error}
-          tone="destructive"
-          bodyChrome="framed"
-          className={undefined}
-        >
-          <pre className="m-0 px-3 py-2 font-mono text-code-sm whitespace-pre-wrap text-destructive">
-            {error}
-          </pre>
-        </SegmentPanel>
-      ) : null}
-    </div>
+    <ToolSegmentBody
+      expandDetail={expandDetail}
+      error={isStopped ? null : error}
+      hasError={hasError}
+      backgroundOutput={backgroundOutput}
+    />
   ) : null;
 
   if (variant === "row") {
@@ -212,11 +329,9 @@ function GenericToolSegment(props: ToolSegmentProps) {
       onOpenChange={setOpen}
       header={header}
       headerAction={null}
-      // The card variant is never reached for a streaming generic tool (those
-      // group into an activity row); the heartbeat lives in the row branch.
       collapsedPreview={null}
       body={body}
-      tone={hasError ? "destructive" : "default"}
+      tone={toolCardTone(hasError, isStreaming)}
       headerPosition="normal"
       bodyOverflow="hidden"
       expandable={expandable}
@@ -225,12 +340,193 @@ function GenericToolSegment(props: ToolSegmentProps) {
   );
 }
 
+function GenericToolHeader(props: GenericToolHeaderProps) {
+  const status = (
+    <span className="ml-auto flex shrink-0 items-center gap-1.5">
+      <ToolHeaderElapsedLabel elapsed={props.elapsed} />
+      <ToolBadge state={props.badgeState} endState={props.endState} />
+    </span>
+  );
+
+  if (props.layout === "stacked") {
+    const runningLine = runningToolLine(props.summary, props.progress);
+    return (
+      <>
+        <Wrench
+          className="mt-[0.2rem] size-3.5 shrink-0 text-muted-foreground/80"
+          aria-hidden
+        />
+        <span className="flex min-w-0 flex-1 flex-col gap-0.5 self-stretch">
+          <span className="flex w-full min-w-0 items-center gap-1.5">
+            <span className="min-w-0 truncate font-mono text-code-sm font-medium text-foreground/85">
+              {props.toolName}
+            </span>
+            {status}
+          </span>
+          <span className="flex w-full min-w-0 items-start gap-1.5 pl-2 text-muted-foreground">
+            <span
+              aria-hidden
+              className="mt-[0.2rem] h-2.5 w-3 shrink-0 rounded-bl-sm border-b border-l border-muted-foreground/35"
+            />
+            <span className="min-w-0 flex-1 truncate font-mono text-code-sm">
+              {runningLine}
+            </span>
+          </span>
+        </span>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <Wrench
+        className="size-3.5 shrink-0 text-muted-foreground/80"
+        aria-hidden
+      />
+      <span className="shrink-0 font-mono text-code-sm font-medium text-foreground/85">
+        {props.toolName}
+      </span>
+      {props.summary !== null ? (
+        <>
+          <span aria-hidden className="shrink-0 text-muted-foreground/40">
+            ·
+          </span>
+          <span className="min-w-0 flex-1 truncate font-mono text-code-sm text-muted-foreground">
+            {props.summary}
+          </span>
+        </>
+      ) : (
+        <span aria-hidden className="flex-1" />
+      )}
+      {status}
+    </>
+  );
+}
+
+function ToolHeaderElapsedLabel(props: {
+  readonly elapsed: ToolHeaderElapsed;
+}) {
+  if (props.elapsed.kind === "live") {
+    return (
+      <ElapsedTime
+        startedAt={props.elapsed.startedAt}
+        durationMs={null}
+        isStreaming
+      />
+    );
+  }
+  if (props.elapsed.kind === "static") {
+    return (
+      <ElapsedTime
+        startedAt={null}
+        durationMs={props.elapsed.durationMs}
+        isStreaming={false}
+      />
+    );
+  }
+  return null;
+}
+
+function runningToolLine(
+  summary: string | null,
+  progress: string | null,
+): string {
+  if (progress !== null && progress.trim().length > 0) return progress;
+  if (summary !== null && summary.trim().length > 0) {
+    return `Running ${summary}`;
+  }
+  return "Running";
+}
+
+function ToolSegmentBody(props: ToolSegmentBodyProps) {
+  const backgroundStdout = props.backgroundOutput?.stdout ?? "";
+  const backgroundStderr = props.backgroundOutput?.stderr ?? "";
+  return (
+    <div className="flex flex-col gap-2">
+      {props.expandDetail !== null ? (
+        <ToolInputPanel detail={props.expandDetail} />
+      ) : null}
+      <BackgroundOutputPanels
+        stdout={backgroundStdout}
+        stderr={backgroundStderr}
+        truncated={props.backgroundOutput?.truncated === true}
+      />
+      {props.hasError ? (
+        <SegmentPanel
+          label="Error"
+          copyValue={props.error}
+          tone="destructive"
+          bodyChrome="framed"
+          className={undefined}
+        >
+          <pre className="m-0 px-3 py-2 font-mono text-code-sm whitespace-pre-wrap text-destructive">
+            {props.error}
+          </pre>
+        </SegmentPanel>
+      ) : null}
+    </div>
+  );
+}
+
+function BackgroundOutputPanels(props: {
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly truncated: boolean;
+}) {
+  return (
+    <>
+      {props.stdout.length > 0 ? (
+        <SegmentPanel
+          label="Output"
+          copyValue={props.stdout}
+          tone="default"
+          bodyChrome="framed"
+          className={undefined}
+        >
+          <pre className="m-0 px-3 py-2 font-mono text-code-sm whitespace-pre-wrap text-foreground/90">
+            {props.stdout}
+          </pre>
+        </SegmentPanel>
+      ) : null}
+      {props.stderr.length > 0 ? (
+        <SegmentPanel
+          label="Error output"
+          copyValue={props.stderr}
+          tone="destructive"
+          bodyChrome="framed"
+          className={undefined}
+        >
+          <pre className="m-0 px-3 py-2 font-mono text-code-sm whitespace-pre-wrap text-destructive">
+            {props.stderr}
+          </pre>
+        </SegmentPanel>
+      ) : null}
+      {props.truncated ? (
+        <div className="px-1 text-ui-xs text-muted-foreground">
+          Output truncated
+        </div>
+      ) : null}
+    </>
+  );
+}
+
 function A2ASendToolSegment(
   props: ToolSegmentProps & { readonly send: AgentMessageSend },
 ) {
-  const { error, isStreaming, endState, send, variant } = props;
-  const [open, setOpen] = useState<boolean>(false);
+  const { error, isStreaming, endState, id, send, variant } = props;
+  const openScope = useChatOpenStoreScope();
+  const open = useToolOpenStore((state) =>
+    state.openIds.has(scopedChatOpenId(openScope, id)),
+  );
+  const setToolOpen = useToolOpenStore((state) => state.setOpen);
+  const setOpen = (next: boolean): void => setToolOpen(openScope, id, next);
   const hasError = error !== null && error.length > 0;
+  const badgeState = resolveToolBadgeState({
+    hasError,
+    isBackgroundComplete: false,
+    isStreaming,
+    isStopped: false,
+  });
   const receiverNode = useEpicArtifact(send.receiverAgentId);
   const activeHostId = useReactiveActiveHostId();
   const epicId = useOpenEpicId();
@@ -272,11 +568,7 @@ function A2ASendToolSegment(
         ·
       </span>
       {receiver}
-      <ToolBadge
-        hasError={hasError}
-        isStreaming={isStreaming}
-        endState={endState}
-      />
+      <ToolBadge state={badgeState} endState={endState} />
     </>
   );
 

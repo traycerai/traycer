@@ -16,11 +16,13 @@ import type {
 import type {
   AgentMessageSend,
   ArtifactOperationAction,
+  BackgroundTaskOutput,
   ContentBlock,
   DiffSource,
   FileEditReason,
   PlanAction,
   PlanContentRef,
+  AutonomousResumeTrigger,
   PlanSource,
   PlanStatus,
   PlanStep,
@@ -107,10 +109,18 @@ export interface ToolSegment {
   // Latest intermediate progress line for an in-flight call (replace-latest;
   // null when the harness reports none). Shown only while streaming.
   progress: string | null;
-  // Wall-clock start of the call (block timestamp; stays anchored while
-  // streaming since progress events don't advance it). Drives the elapsed
-  // heartbeat shown while the call runs.
+  // Capped terminal output from a backgrounded command/monitor once it settles.
+  backgroundOutput: BackgroundTaskOutput | null;
+  // Persistent: true for a backgrounded command/Monitor (Bash run_in_background
+  // or the Monitor tool). Drives standalone-card promotion across the whole
+  // lifecycle - running -> completed/stopped/errored -> reload - so it never
+  // collapses back into the generic activity group.
+  backgroundTask: boolean;
+  // Wall-clock start of the call. Drives the elapsed heartbeat while running.
   startedAt: number;
+  // Completed background command/Monitor duration; null while streaming, for
+  // non-background tools, or when persisted data predates immutable tool start.
+  durationMs: number | null;
   // Owning subagent block id when this call was made by a subagent (nests under
   // that subagent block). Null for top-level / main-agent tool calls.
   parentId: string | null;
@@ -294,6 +304,11 @@ export type MessageSegment =
       durationMs: number | null;
       summary: string | null;
       error: string | null;
+    }
+  | {
+      id: string;
+      kind: "autonomous_resume";
+      triggers: ReadonlyArray<AutonomousResumeTrigger>;
     }
   | InterviewSegment
   | {

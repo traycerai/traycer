@@ -11,11 +11,7 @@ export const logoutCommand: CommandFn = async (ctx): Promise<CommandResult> => {
   const removed = await deleteCredentials();
   return {
     data: { loggedOut: removed },
-    human: ctx.runtime.json
-      ? null
-      : removed
-        ? "Logged out."
-        : "Not logged in.",
+    human: ctx.runtime.json ? null : removed ? "Logged out." : "Not logged in.",
     exitCode: 0,
   };
 };

@@ -82,9 +82,7 @@ async function main() {
   const sentryPlugins = (() => {
     if (!process.env.SENTRY_AUTH_TOKEN) return [];
     if (!process.env.SENTRY_ORG) {
-      throw new Error(
-        "SENTRY_AUTH_TOKEN is set but SENTRY_ORG is missing",
-      );
+      throw new Error("SENTRY_AUTH_TOKEN is set but SENTRY_ORG is missing");
     }
     return [
       sentryEsbuildPlugin({

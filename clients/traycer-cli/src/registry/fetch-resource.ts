@@ -38,6 +38,17 @@ const FETCH_TEXT_MAX_BYTES = 1024 * 1024;
 // while still capping a hostile run-on stream.
 const DOWNLOAD_SIZE_SLACK_BYTES = 1024;
 
+interface DrainableWriter {
+  readonly destroyed: boolean;
+  readonly writableEnded: boolean;
+  once(event: "drain", listener: () => void): unknown;
+  once(event: "error", listener: (err: Error) => void): unknown;
+  once(event: "close", listener: () => void): unknown;
+  off(event: "drain", listener: () => void): unknown;
+  off(event: "error", listener: (err: Error) => void): unknown;
+  off(event: "close", listener: () => void): unknown;
+}
+
 export interface FetchOptions {
   // AbortSignal for caller-side cancellation. Not used yet but reserved
   // so callers don't have to refactor when host-install grows a
@@ -45,7 +56,10 @@ export interface FetchOptions {
   readonly signal: AbortSignal | null;
 }
 
-export async function fetchText(url: string, opts: FetchOptions): Promise<string> {
+export async function fetchText(
+  url: string,
+  opts: FetchOptions,
+): Promise<string> {
   if (isFileUrl(url)) {
     const path = fileUrlToPath(url);
     let raw: Buffer;
@@ -185,7 +199,7 @@ export async function downloadToFile(
         });
       }
       if (!writer.write(chunk)) {
-        await new Promise<void>((resolve) => writer.once("drain", () => resolve()));
+        await waitForWriterDrain(writer, opts.url);
       }
       opts.onProgress({ downloadedBytes, totalBytes });
     }
@@ -293,6 +307,43 @@ async function downloadFileScheme(
   return { downloadedBytes, sha256 };
 }
 
+export function waitForWriterDrain(
+  writer: DrainableWriter,
+  url: string,
+): Promise<void> {
+  if (writer.destroyed || writer.writableEnded) {
+    return Promise.reject(writerClosedBeforeDrainError(url));
+  }
+  return new Promise<void>((resolve, reject) => {
+    const cleanup = (): void => {
+      writer.off("drain", onDrain);
+      writer.off("error", onError);
+      writer.off("close", onClose);
+    };
+    const onDrain = (): void => {
+      cleanup();
+      resolve();
+    };
+    const onError = (err: Error): void => {
+      cleanup();
+      reject(err);
+    };
+    const onClose = (): void => {
+      cleanup();
+      reject(writerClosedBeforeDrainError(url));
+    };
+    writer.once("drain", onDrain);
+    writer.once("error", onError);
+    writer.once("close", onClose);
+  });
+}
+
+function writerClosedBeforeDrainError(url: string): Error {
+  return new Error(
+    `host registry: file writer closed before drain while downloading ${url}`,
+  );
+}
+
 function isFileUrl(url: string): boolean {
   return url.startsWith("file://");
 }
@@ -314,7 +365,10 @@ function networkError(url: string, cause: unknown): Error {
   return cliError({
     code: CLI_ERROR_CODES.REGISTRY_UNAVAILABLE,
     message: `host registry: GET ${url} failed: ${cause instanceof Error ? cause.message : String(cause)}`,
-    details: { url, error: cause instanceof Error ? cause.message : String(cause) },
+    details: {
+      url,
+      error: cause instanceof Error ? cause.message : String(cause),
+    },
     exitCode: 1,
   });
 }
@@ -339,7 +393,9 @@ function linkAbortSignals(
     if (external.aborted) {
       internal.abort();
     } else {
-      external.addEventListener("abort", () => internal.abort(), { once: true });
+      external.addEventListener("abort", () => internal.abort(), {
+        once: true,
+      });
     }
   }
   return internal.signal;

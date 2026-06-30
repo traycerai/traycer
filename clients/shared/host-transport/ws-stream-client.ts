@@ -1,7 +1,7 @@
 import type { VersionedStreamRpcRegistry } from "@traycer/protocol/framework/versioned-stream-rpc";
 import {
   buildStreamManifest,
-  checkStreamCompatibility,
+  checkStreamMethodCompatibility,
 } from "@traycer/protocol/framework/stream-compat";
 import {
   extractBearerForOpenFrame,
@@ -13,7 +13,10 @@ import type {
   RevalidateOutcome,
   StreamAuthRevalidator,
 } from "@traycer-clients/shared/auth/bearer-revalidator";
-import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
+import type {
+  ConnectionManifest,
+  FatalErrorDetails,
+} from "@traycer/protocol/framework/ws-protocol";
 import {
   hostStreamOpenAckFrameSchema,
   hostStreamFatalErrorFrameSchema,
@@ -82,7 +85,7 @@ export interface WsStreamClientOptions<
  *
  * Per-session lifecycle (mirrors the tech plan's decision #3 handshake):
  *   dial → send `open { token, manifest }` → await `openAck { manifest }`
- *        → run client-side `checkStreamCompatibility` mirror
+ *        → run client-side subscribed-method compatibility mirror
  *        → send `subscribe { method, schemaVersion, params }`
  *        → enter the bidirectional frame loop
  *        → ping/pong heartbeat every `pingIntervalMs`
@@ -532,7 +535,10 @@ class StreamSession<
       this.onTransportDrop();
       return;
     }
-    const manifest = buildStreamManifest(this.config.registry);
+    const manifest = streamOpenManifestForMethod(
+      this.config.registry,
+      this.config.method,
+    );
     const openFrame: ClientStreamOpenFrame = {
       kind: "open",
       token,
@@ -678,11 +684,12 @@ class StreamSession<
     );
 
     const myManifest = buildStreamManifest(this.config.registry);
-    const compat = checkStreamCompatibility(
+    const compat = checkStreamMethodCompatibility(
       this.config.registry,
       myManifest,
       ackParse.data.manifest,
       "client",
+      this.config.method,
     );
 
     const socket = this.activeSocket;
@@ -1137,6 +1144,21 @@ class StreamSession<
     this.config.onDispose();
     return true;
   }
+}
+
+function streamOpenManifestForMethod(
+  registry: VersionedStreamRpcRegistry,
+  method: string,
+): ConnectionManifest {
+  const manifest = buildStreamManifest(registry);
+  if (method !== "chat.subscribe" && manifest["chat.subscribe"]?.major === 2) {
+    // Older hosts checked the full manifest before subscribe. For non-chat
+    // streams, advertise the last pre-v2 chat line only in the open manifest so
+    // old hosts can reach subscribe; the real method version is still checked
+    // from the canonical manifest after openAck.
+    return { ...manifest, "chat.subscribe": { major: 1, minor: 0 } };
+  }
+  return manifest;
 }
 
 type SessionPhase = "idle" | "dialing" | "awaitingOpenAck" | "subscribed";

@@ -18,9 +18,7 @@ import { isTraycerCliEntrypoint } from "../index";
 describe("isTraycerCliEntrypoint", () => {
   it("accepts the tsx dev path (POSIX)", () => {
     expect(
-      isTraycerCliEntrypoint(
-        "/repo/clients/traycer-cli/src/index.ts",
-      ),
+      isTraycerCliEntrypoint("/repo/clients/traycer-cli/src/index.ts"),
     ).toBe(true);
   });
 
@@ -72,9 +70,7 @@ describe("isTraycerCliEntrypoint", () => {
     );
     // Substring match guard: a path that *contains* "traycer" but the
     // basename is something else (e.g. a wrapper) should not match.
-    expect(
-      isTraycerCliEntrypoint("/repo/clients/cli/wrapper.sh"),
-    ).toBe(false);
+    expect(isTraycerCliEntrypoint("/repo/clients/cli/wrapper.sh")).toBe(false);
     // `.exe` on a non-traycer binary must not match either.
     expect(isTraycerCliEntrypoint("C:\\bin\\not-traycer.exe")).toBe(false);
   });

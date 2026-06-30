@@ -74,7 +74,8 @@ export const CLI_ERROR_CODES = {
   CLI_UPGRADE_FINALIZE_HELPER_FAILED: "E_CLI_UPGRADE_FINALIZE_HELPER_FAILED",
 } as const;
 
-export type CliErrorCode = (typeof CLI_ERROR_CODES)[keyof typeof CLI_ERROR_CODES];
+export type CliErrorCode =
+  (typeof CLI_ERROR_CODES)[keyof typeof CLI_ERROR_CODES];
 
 export interface CliErrorInit {
   readonly code: CliErrorCode;
@@ -107,7 +108,9 @@ export function cliError(init: CliErrorInit): CliError {
 // Narrow an unknown thrown value to a NodeJS.ErrnoException. Centralised
 // here so the dozen platform/store/installer files that need to branch on
 // `err.code` don't each define their own copy.
-export function isErrnoException(value: unknown): value is NodeJS.ErrnoException {
+export function isErrnoException(
+  value: unknown,
+): value is NodeJS.ErrnoException {
   return value instanceof Error && "code" in value;
 }
 
