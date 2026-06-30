@@ -30,7 +30,10 @@ function expectCommand(program: Command, path: readonly string[]): Command {
   let cursor: Command = program;
   for (const segment of path) {
     const next = findSubcommand(cursor, segment);
-    expect(next, `expected command '${path.join(" ")}' to be registered`).not.toBeNull();
+    expect(
+      next,
+      `expected command '${path.join(" ")}' to be registered`,
+    ).not.toBeNull();
     if (next === null) {
       throw new Error(`unreachable: command '${path.join(" ")}' not found`);
     }
@@ -42,9 +45,10 @@ function expectCommand(program: Command, path: readonly string[]): Command {
 function expectRunnerFlags(cmd: Command, label: string): void {
   const flags = cmd.options.map((o) => o.long);
   for (const expected of ["--json", "--no-progress"]) {
-    expect(flags, `'${label}' is missing the shared runner flag '${expected}'`).toContain(
-      expected,
-    );
+    expect(
+      flags,
+      `'${label}' is missing the shared runner flag '${expected}'`,
+    ).toContain(expected);
   }
 }
 
@@ -253,10 +257,9 @@ describe("traycer CLI entrypoint registration", () => {
     });
     let thrown: unknown = null;
     try {
-      await program.parseAsync(
-        ["host", "start", "--bundle", "/tmp/main.mjs"],
-        { from: "user" },
-      );
+      await program.parseAsync(["host", "start", "--bundle", "/tmp/main.mjs"], {
+        from: "user",
+      });
     } catch (err) {
       thrown = err;
     }
@@ -273,10 +276,9 @@ describe("traycer CLI entrypoint registration", () => {
     });
     let thrown: unknown = null;
     try {
-      await program.parseAsync(
-        ["host", "start", "--environment", "dev"],
-        { from: "user" },
-      );
+      await program.parseAsync(["host", "start", "--environment", "dev"], {
+        from: "user",
+      });
     } catch (err) {
       thrown = err;
     }

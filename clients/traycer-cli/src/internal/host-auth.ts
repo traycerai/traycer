@@ -88,11 +88,14 @@ export const cliBearerStore: BearerStore = {
     const logger = createCliLogger(config.environment);
     const stored = await readCredentials();
     if (stored === null) {
-      logger.warn("Bearer store skipped token write because credentials disappeared", {
-        environment: config.environment,
-        receivedToken: tokens.token.length > 0,
-        receivedRefreshToken: tokens.refreshToken.length > 0,
-      });
+      logger.warn(
+        "Bearer store skipped token write because credentials disappeared",
+        {
+          environment: config.environment,
+          receivedToken: tokens.token.length > 0,
+          receivedRefreshToken: tokens.refreshToken.length > 0,
+        },
+      );
       return;
     }
     await writeCredentials({

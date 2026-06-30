@@ -22,11 +22,7 @@ import {
   listEnvOverrides,
   type EnvOverrideValue,
 } from "../store/config-store";
-import {
-  createCliLogger,
-  errorFromUnknown,
-  type ILogger,
-} from "../logger";
+import { createCliLogger, errorFromUnknown, type ILogger } from "../logger";
 
 // `traycer host start` is the long-running supervisor invoked by the OS
 // service manager (launchd, systemd-user, or Windows Scheduled Task). The

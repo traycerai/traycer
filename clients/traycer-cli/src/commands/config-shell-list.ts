@@ -27,7 +27,10 @@ export const configShellListCommand: CommandFn = async (
   return {
     data,
     human: data
-      .map((shell) => `${shell.isDefault ? "*" : " "} ${shell.name}\t${shell.path}`)
+      .map(
+        (shell) =>
+          `${shell.isDefault ? "*" : " "} ${shell.name}\t${shell.path}`,
+      )
       .join("\n"),
     exitCode: 0,
   };

@@ -59,5 +59,4 @@ export function releaseManifestUrl(manifestTag: string): string {
 // Non-production builds are never released on their own channel - staging is
 // exercised with local builds or production builds for testing, and dev hosts
 // come from the working tree.
-export const hostRegistryUrl =
-  releaseManifestUrl("released-host-versions");
+export const hostRegistryUrl = releaseManifestUrl("released-host-versions");

@@ -14,8 +14,14 @@ import {
 
 describe("parseLsof", () => {
   it("extracts pid + command from a typical -Fpcn payload", () => {
-    const stdout = ["p4321", "cnode", "n*:7300", "p9999", "cother", "n*:1"]
-      .join("\n");
+    const stdout = [
+      "p4321",
+      "cnode",
+      "n*:7300",
+      "p9999",
+      "cother",
+      "n*:1",
+    ].join("\n");
     expect(parseLsof(stdout)).toEqual({ pid: 4321, processName: "node" });
   });
 
@@ -27,7 +33,7 @@ describe("parseLsof", () => {
 describe("parseSs", () => {
   it("extracts pid + name from the systemd ss `users:` field", () => {
     const stdout =
-      "LISTEN 0  128  0.0.0.0:7300  0.0.0.0:*  users:((\"node\",pid=4321,fd=18))";
+      'LISTEN 0  128  0.0.0.0:7300  0.0.0.0:*  users:(("node",pid=4321,fd=18))';
     expect(parseSs(stdout)).toEqual({ pid: 4321, processName: "node" });
   });
 
@@ -77,14 +83,10 @@ describe("resolvePortConflict - platform routing", () => {
   });
 
   it("ignores the host's own pid (no false positive)", async () => {
-    const result = await resolvePortConflict(
-      7300,
-      new Set([4321]),
-      {
-        platform: "darwin",
-        runCommand: async () => ({ stdout: "p4321\ncnode\n", stderr: "" }),
-      },
-    );
+    const result = await resolvePortConflict(7300, new Set([4321]), {
+      platform: "darwin",
+      runCommand: async () => ({ stdout: "p4321\ncnode\n", stderr: "" }),
+    });
     expect(result).toBeNull();
   });
 
@@ -96,7 +98,7 @@ describe("resolvePortConflict - platform routing", () => {
         if (bin === "ss") {
           return {
             stdout:
-              "LISTEN 0 128 0.0.0.0:7300 0.0.0.0:* users:((\"node\",pid=4321,fd=18))",
+              'LISTEN 0 128 0.0.0.0:7300 0.0.0.0:* users:(("node",pid=4321,fd=18))',
             stderr: "",
           };
         }

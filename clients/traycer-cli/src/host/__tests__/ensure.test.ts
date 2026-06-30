@@ -80,9 +80,7 @@ function makeRuntime(): RuntimeContext {
   };
 }
 
-function makeOpts(
-  overrides: Partial<EnsureHostOptions>,
-): EnsureHostOptions {
+function makeOpts(overrides: Partial<EnsureHostOptions>): EnsureHostOptions {
   return {
     runtime: makeRuntime(),
     versionRequest: null,
@@ -126,11 +124,13 @@ function makeController(state: "running" | "stopped" | "not-installed") {
 beforeEach(() => {
   vi.clearAllMocks();
   config.supportedHostVersion = null;
-  serviceLabelForMock.mockImplementation((environment: "production" | "dev") => ({
-    id: environment === "dev" ? "ai.traycer.host.dev" : "ai.traycer.host",
-    displayName: "Traycer Host",
-    environment,
-  }));
+  serviceLabelForMock.mockImplementation(
+    (environment: "production" | "dev") => ({
+      id: environment === "dev" ? "ai.traycer.host.dev" : "ai.traycer.host",
+      displayName: "Traycer Host",
+      environment,
+    }),
+  );
   resolveServiceCliInvocationMock.mockResolvedValue({
     command: "/usr/local/bin/traycer",
     args: [],
@@ -384,9 +384,7 @@ describe("ensureHost", () => {
     const controller = makeController("running");
     createServiceControllerMock.mockReturnValue(controller);
 
-    const result = await ensureHost(
-      makeOpts({ versionRequest: "1.6.0" }),
-    );
+    const result = await ensureHost(makeOpts({ versionRequest: "1.6.0" }));
 
     expect(result.action).toBe("installed");
     expect(installHostMock).toHaveBeenCalledWith(

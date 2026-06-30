@@ -12,10 +12,7 @@ import {
   SHUTDOWN_FORCE_EXIT_MS,
   STOP_EXIT_GRACE_MARGIN_MS,
 } from "@traycer/protocol/host/lifecycle-constants";
-import {
-  serviceManifestPath,
-  type ServiceLabel,
-} from "../label";
+import { serviceManifestPath, type ServiceLabel } from "../label";
 import {
   ProcessRunError,
   runCommand,
@@ -165,20 +162,16 @@ async function installService(
     // is running against the new manifest.
   }
   try {
-    await run(
-      "launchctl",
-      ["kickstart", `${guiTarget}/${options.label.id}`],
-      {
-        env: undefined,
-        cwd: undefined,
-        // 30s, not 10s: the dev wrapper at ~/.traycer/cli/dev/bin/traycer
-        // exec's `bun src/index.ts` - bun cold-start across ~2500 TS
-        // files plus the host's first-boot work can comfortably exceed
-        // 10s on a loaded laptop.
-        timeoutMs: 30_000,
-        tolerateNonZeroExit: false,
-      },
-    );
+    await run("launchctl", ["kickstart", `${guiTarget}/${options.label.id}`], {
+      env: undefined,
+      cwd: undefined,
+      // 30s, not 10s: the dev wrapper at ~/.traycer/cli/dev/bin/traycer
+      // exec's `bun src/index.ts` - bun cold-start across ~2500 TS
+      // files plus the host's first-boot work can comfortably exceed
+      // 10s on a loaded laptop.
+      timeoutMs: 30_000,
+      tolerateNonZeroExit: false,
+    });
   } catch (cause) {
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
@@ -240,16 +233,12 @@ async function uninstallService(
 ): Promise<void> {
   // `bootout` non-zero exit on uninstall is a legitimate "already gone"
   // signal - keep this tolerant so repeat uninstalls stay idempotent.
-  await run(
-    "launchctl",
-    ["bootout", `${guiDomain()}/${options.label.id}`],
-    {
-      env: undefined,
-      cwd: undefined,
-      timeoutMs: 10_000,
-      tolerateNonZeroExit: true,
-    },
-  );
+  await run("launchctl", ["bootout", `${guiDomain()}/${options.label.id}`], {
+    env: undefined,
+    cwd: undefined,
+    timeoutMs: 10_000,
+    tolerateNonZeroExit: true,
+  });
   await rm(serviceManifestPath(options.label), { force: true });
 }
 
@@ -279,8 +268,7 @@ async function statusService(label: ServiceLabel): Promise<ServiceStatus> {
 // `restart` before it re-launches - for a host that is in fact guaranteed to
 // exit moments later. Derived from the SHARED constants (not a hand-tuned
 // literal) so raising the watchdog can't silently leave this grace too short.
-const STOP_EXIT_TIMEOUT_MS =
-  SHUTDOWN_FORCE_EXIT_MS + STOP_EXIT_GRACE_MARGIN_MS;
+const STOP_EXIT_TIMEOUT_MS = SHUTDOWN_FORCE_EXIT_MS + STOP_EXIT_GRACE_MARGIN_MS;
 const STOP_EXIT_POLL_MS = 150;
 
 async function stopService(
@@ -315,7 +303,11 @@ async function stopService(
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
       message: `host (pid=${before.pid}) did not exit within ${STOP_EXIT_TIMEOUT_MS}ms of SIGTERM; stop did not take effect.`,
-      details: { label: label.id, pid: before.pid, timeoutMs: STOP_EXIT_TIMEOUT_MS },
+      details: {
+        label: label.id,
+        pid: before.pid,
+        timeoutMs: STOP_EXIT_TIMEOUT_MS,
+      },
       exitCode: 1,
     });
   }
@@ -348,16 +340,12 @@ async function startService(
   run: ProcessRunner,
 ): Promise<void> {
   try {
-    await run(
-      "launchctl",
-      ["kickstart", `${guiDomain()}/${label.id}`],
-      {
-        env: undefined,
-        cwd: undefined,
-        timeoutMs: 10_000,
-        tolerateNonZeroExit: false,
-      },
-    );
+    await run("launchctl", ["kickstart", `${guiDomain()}/${label.id}`], {
+      env: undefined,
+      cwd: undefined,
+      timeoutMs: 10_000,
+      tolerateNonZeroExit: false,
+    });
   } catch (cause) {
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
@@ -373,16 +361,12 @@ async function restartService(
   run: ProcessRunner,
 ): Promise<void> {
   try {
-    await run(
-      "launchctl",
-      ["kickstart", "-k", `${guiDomain()}/${label.id}`],
-      {
-        env: undefined,
-        cwd: undefined,
-        timeoutMs: 10_000,
-        tolerateNonZeroExit: false,
-      },
-    );
+    await run("launchctl", ["kickstart", "-k", `${guiDomain()}/${label.id}`], {
+      env: undefined,
+      cwd: undefined,
+      timeoutMs: 10_000,
+      tolerateNonZeroExit: false,
+    });
   } catch (cause) {
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,

@@ -1,9 +1,6 @@
 import { uninstallHost } from "../installer";
 import type { CommandFn, CommandResult } from "../runner/runner";
-import {
-  createServiceController,
-  serviceLabelFor,
-} from "../service";
+import { createServiceController, serviceLabelFor } from "../service";
 import { withCliLock } from "../store/cli-lock";
 
 // `traycer host uninstall [--all]`:
@@ -15,9 +12,7 @@ export interface HostUninstallArgs {
   readonly all: boolean;
 }
 
-export function buildHostUninstallCommand(
-  args: HostUninstallArgs,
-): CommandFn {
+export function buildHostUninstallCommand(args: HostUninstallArgs): CommandFn {
   return async (ctx): Promise<CommandResult> => {
     ctx.runtime.logger.info("Host uninstall command started", {
       environment: ctx.runtime.environment,
@@ -33,9 +28,12 @@ export function buildHostUninstallCommand(
       async () => {
         let serviceUninstalled = false;
         if (args.all) {
-          ctx.runtime.logger.warn("Host uninstall command will deregister service and purge runtime", {
-            environment: ctx.runtime.environment,
-          });
+          ctx.runtime.logger.warn(
+            "Host uninstall command will deregister service and purge runtime",
+            {
+              environment: ctx.runtime.environment,
+            },
+          );
           ctx.progress({
             stage: "service-stop",
             message: `stopping service for ${ctx.runtime.environment} environment`,
@@ -51,11 +49,14 @@ export function buildHostUninstallCommand(
           try {
             await controller.stop(label);
           } catch (err) {
-            ctx.runtime.logger.warn("Host uninstall service stop failed; continuing", {
-              environment: ctx.runtime.environment,
-              errorName: err instanceof Error ? err.name : "Error",
-              errorMessage: err instanceof Error ? err.message : String(err),
-            });
+            ctx.runtime.logger.warn(
+              "Host uninstall service stop failed; continuing",
+              {
+                environment: ctx.runtime.environment,
+                errorName: err instanceof Error ? err.name : "Error",
+                errorMessage: err instanceof Error ? err.message : String(err),
+              },
+            );
             // Service may not be running; proceed.
           }
           await controller.uninstall({ label });

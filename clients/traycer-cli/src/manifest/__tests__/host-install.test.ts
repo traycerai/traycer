@@ -1,4 +1,10 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -10,9 +16,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 let sandboxRoot = "";
 
 vi.mock("../../store/paths", async () => {
-  const actual = await vi.importActual<typeof import("../../store/paths")>(
-    "../../store/paths",
-  );
+  const actual =
+    await vi.importActual<typeof import("../../store/paths")>(
+      "../../store/paths",
+    );
   type Environment = "dev" | "production";
   const hostHomeFor = (environment: Environment | undefined): string => {
     const base = join(sandboxRoot, "host");
@@ -25,9 +32,11 @@ vi.mock("../../store/paths", async () => {
     join(installDirFor(environment), "install.json");
   return {
     ...actual,
-    hostHomeDir: (environment: Environment | undefined) => hostHomeFor(environment),
+    hostHomeDir: (environment: Environment | undefined) =>
+      hostHomeFor(environment),
     hostInstallDir: (environment: Environment) => installDirFor(environment),
-    hostInstallRecordPath: (environment: Environment) => recordPathFor(environment),
+    hostInstallRecordPath: (environment: Environment) =>
+      recordPathFor(environment),
     ensureHostInstallDir: async (environment: Environment) => {
       mkdirSync(installDirFor(environment), { recursive: true });
     },

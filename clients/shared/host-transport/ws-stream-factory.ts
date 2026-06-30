@@ -29,8 +29,7 @@ export interface StreamWebSocketBinaryMessageEvent {
 }
 
 export type StreamWebSocketMessageEvent =
-  | StreamWebSocketTextMessageEvent
-  | StreamWebSocketBinaryMessageEvent;
+  StreamWebSocketTextMessageEvent | StreamWebSocketBinaryMessageEvent;
 
 /**
  * Subset of the native WebSocket surface required by `WsStreamClient`. The

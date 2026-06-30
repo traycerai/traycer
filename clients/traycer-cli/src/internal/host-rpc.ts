@@ -29,11 +29,7 @@ import {
   readHostPidMetadata,
 } from "../host/pid-metadata";
 import { isProcessAlive } from "../store/cli-lock";
-import {
-  cliBearerStore,
-  resolveHostAuth,
-  type HostAuth,
-} from "./host-auth";
+import { cliBearerStore, resolveHostAuth, type HostAuth } from "./host-auth";
 import { cliError, CLI_ERROR_CODES, type CliError } from "../runner/errors";
 import {
   compatRecoveryHint,
@@ -159,11 +155,14 @@ export async function callHostRpcAtEndpoint<
   });
   const auth = await resolveHostAuth();
   if (auth === null) {
-    logger.warn("Host RPC explicit-endpoint call blocked by missing credentials", {
-      environment: config.environment,
-      method,
-      hostId: endpoint.hostId,
-    });
+    logger.warn(
+      "Host RPC explicit-endpoint call blocked by missing credentials",
+      {
+        environment: config.environment,
+        method,
+        hostId: endpoint.hostId,
+      },
+    );
     throw cliError({
       code: CLI_ERROR_CODES.AUTH_NO_CREDENTIALS,
       message: "traycer: not signed in - run `traycer login` to authenticate.",
@@ -180,9 +179,7 @@ export async function callHostRpcAtEndpoint<
   );
 }
 
-async function requestAtEndpoint<
-  Method extends keyof HostRpcRegistry & string,
->(
+async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
   method: Method,
   params: RequestOfMethod<HostRpcRegistry, Method>,
   endpoint: HostTransportEndpoint,
@@ -354,10 +351,13 @@ export function parseUserInput<T>(schema: ZodType<T>, value: unknown): T {
 export function parseHostResponse<T>(schema: ZodType<T>, value: unknown): T {
   const parsed = schema.safeParse(value);
   if (parsed.success) return parsed.data;
-  createCliLogger(config.environment).warn("Host RPC response validation failed", {
-    environment: config.environment,
-    issueCount: parsed.error.issues.length,
-  });
+  createCliLogger(config.environment).warn(
+    "Host RPC response validation failed",
+    {
+      environment: config.environment,
+      issueCount: parsed.error.issues.length,
+    },
+  );
   throw cliError({
     code: CLI_ERROR_CODES.HOST_INCOMPATIBLE,
     message:
@@ -369,10 +369,13 @@ export function parseHostResponse<T>(schema: ZodType<T>, value: unknown): T {
 
 function hostRpcToCliError(err: unknown): unknown {
   if (!(err instanceof HostRpcError)) return err;
-  createCliLogger(config.environment).warn("Mapping host RPC wire error to CLI error", {
-    environment: config.environment,
-    hostRpcCode: err.code,
-  });
+  createCliLogger(config.environment).warn(
+    "Mapping host RPC wire error to CLI error",
+    {
+      environment: config.environment,
+      hostRpcCode: err.code,
+    },
+  );
   return mapHostRpcError(err);
 }
 
@@ -450,6 +453,8 @@ function isAccessDenied(err: HostRpcError): boolean {
   );
 }
 
-function retryPolicyLabel(policy: TransportRetryPolicy): "default" | "fast-fail" {
+function retryPolicyLabel(
+  policy: TransportRetryPolicy,
+): "default" | "fast-fail" {
   return policy === NO_RETRY_TRANSPORT_POLICY ? "fast-fail" : "default";
 }

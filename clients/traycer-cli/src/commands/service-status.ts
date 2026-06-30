@@ -11,7 +11,9 @@ import {
 // raw ServiceStatus the controller returns; the human path renders a
 // terse summary so a user can tell at a glance whether the service is
 // registered + running.
-export const serviceStatusCommand: CommandFn = async (ctx): Promise<CommandResult> => {
+export const serviceStatusCommand: CommandFn = async (
+  ctx,
+): Promise<CommandResult> => {
   const label = serviceLabelFor(ctx.runtime.environment);
   const status = await createServiceController().status(label);
   const platform = process.platform;

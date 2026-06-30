@@ -45,7 +45,10 @@ export interface FetchOptions {
   readonly signal: AbortSignal | null;
 }
 
-export async function fetchText(url: string, opts: FetchOptions): Promise<string> {
+export async function fetchText(
+  url: string,
+  opts: FetchOptions,
+): Promise<string> {
   if (isFileUrl(url)) {
     const path = fileUrlToPath(url);
     let raw: Buffer;
@@ -185,7 +188,9 @@ export async function downloadToFile(
         });
       }
       if (!writer.write(chunk)) {
-        await new Promise<void>((resolve) => writer.once("drain", () => resolve()));
+        await new Promise<void>((resolve) =>
+          writer.once("drain", () => resolve()),
+        );
       }
       opts.onProgress({ downloadedBytes, totalBytes });
     }
@@ -314,7 +319,10 @@ function networkError(url: string, cause: unknown): Error {
   return cliError({
     code: CLI_ERROR_CODES.REGISTRY_UNAVAILABLE,
     message: `host registry: GET ${url} failed: ${cause instanceof Error ? cause.message : String(cause)}`,
-    details: { url, error: cause instanceof Error ? cause.message : String(cause) },
+    details: {
+      url,
+      error: cause instanceof Error ? cause.message : String(cause),
+    },
     exitCode: 1,
   });
 }
@@ -339,7 +347,9 @@ function linkAbortSignals(
     if (external.aborted) {
       internal.abort();
     } else {
-      external.addEventListener("abort", () => internal.abort(), { once: true });
+      external.addEventListener("abort", () => internal.abort(), {
+        once: true,
+      });
     }
   }
   return internal.signal;

@@ -3,10 +3,7 @@ import type { InstallSourceArg } from "../installer";
 import { resolveBundledHostArchive } from "../installer/bundled-host";
 import type { ProgressInfo } from "../runner/output";
 import type { RuntimeContext } from "../runner/runtime";
-import {
-  provisionHost,
-  type HostProvisionResult,
-} from "./provision";
+import { provisionHost, type HostProvisionResult } from "./provision";
 import { defaultRegistryHostVersionRequest } from "./supported-host-version";
 import { installSourceLogFields } from "./install-source-log-fields";
 

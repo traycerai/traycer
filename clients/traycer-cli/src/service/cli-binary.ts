@@ -83,7 +83,10 @@ export async function resolveServiceCliInvocation(
       throw cliError({
         code: CLI_ERROR_CODES.SERVICE_CLI_PATH_UNRESOLVED,
         message: `service install: CLI manifest binaryPath does not exist: ${manifest.binaryPath}`,
-        details: { binaryPath: manifest.binaryPath, environment: opts.environment },
+        details: {
+          binaryPath: manifest.binaryPath,
+          environment: opts.environment,
+        },
         exitCode: 1,
       });
     }
@@ -103,8 +106,7 @@ export async function resolveServiceCliInvocation(
   if (!opts.allowSelfInvocation) {
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_CLI_PATH_UNRESOLVED,
-      message:
-        `service install: no CLI manifest at <cliHomeDir>/manifest.json and no binary at ${conventionalBinary}; stage a CLI binary at the well-known location or run from a packaged CLI`,
+      message: `service install: no CLI manifest at <cliHomeDir>/manifest.json and no binary at ${conventionalBinary}; stage a CLI binary at the well-known location or run from a packaged CLI`,
       details: { environment: opts.environment, conventionalBinary },
       exitCode: 1,
     });
@@ -118,7 +120,8 @@ export async function resolveServiceCliInvocation(
   // the same tsx-shebanged entry that's already on disk.
   const command = process.execPath;
   const entryArg = process.argv[1];
-  const args: readonly string[] = typeof entryArg === "string" ? [entryArg] : [];
+  const args: readonly string[] =
+    typeof entryArg === "string" ? [entryArg] : [];
   return { command, args };
 }
 

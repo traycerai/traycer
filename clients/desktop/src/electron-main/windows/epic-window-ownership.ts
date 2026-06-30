@@ -3,8 +3,7 @@ import type { OwnershipEntry } from "../../ipc-contracts/window-types";
 import type { DesktopStateStore } from "./desktop-state-store";
 
 export type OwnershipClaimResult =
-  | { readonly ok: true }
-  | { readonly ok: false; readonly currentOwner: string };
+  { readonly ok: true } | { readonly ok: false; readonly currentOwner: string };
 
 type OwnershipListener = (entries: readonly OwnershipEntry[]) => void;
 

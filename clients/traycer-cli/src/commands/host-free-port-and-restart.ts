@@ -2,10 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type { CommandFn, CommandResult } from "../runner/runner";
-import {
-  createServiceController,
-  serviceLabelFor,
-} from "../service";
+import { createServiceController, serviceLabelFor } from "../service";
 
 const execFileAsync = promisify(execFile);
 
@@ -163,7 +160,12 @@ interface ExecFileError {
 
 function readExecFileError(err: unknown): ExecFileError {
   if (typeof err !== "object" || err === null) {
-    return { code: undefined, signal: undefined, stdout: undefined, stderr: undefined };
+    return {
+      code: undefined,
+      signal: undefined,
+      stdout: undefined,
+      stderr: undefined,
+    };
   }
   const obj = err as Record<string, unknown>;
   const code =
@@ -199,7 +201,10 @@ async function posixPidOwnsPort(
     // (no listener on the port). That's a legitimate "no-listener"
     // signal, NOT a probe failure - distinguish it so the caller can
     // emit a clearer message than "couldn't verify".
-    if (info.code === 1 && (info.stdout === undefined || info.stdout.length === 0)) {
+    if (
+      info.code === 1 &&
+      (info.stdout === undefined || info.stdout.length === 0)
+    ) {
       return { owns: false, actualPid: null, probe: "no-listener" };
     }
     // Anything else (exit 2+, killed by signal, etc.) is a genuine
@@ -219,7 +224,11 @@ async function posixPidOwnsPort(
   if (pids.length === 0) {
     return { owns: false, actualPid: null, probe: "no-listener" };
   }
-  return { owns: pids.includes(pid), actualPid: pids[0] ?? null, probe: "lsof" };
+  return {
+    owns: pids.includes(pid),
+    actualPid: pids[0] ?? null,
+    probe: "lsof",
+  };
 }
 
 // `netstat -p TCP` only enumerates IPv4 listeners; a host bound to
@@ -229,11 +238,9 @@ async function netstatListenersForProto(
   proto: "TCP" | "TCPv6",
 ): Promise<{ readonly stdout: string; readonly available: boolean }> {
   try {
-    const { stdout } = await execFileAsync(
-      "netstat",
-      ["-ano", "-p", proto],
-      { encoding: "utf8" },
-    );
+    const { stdout } = await execFileAsync("netstat", ["-ano", "-p", proto], {
+      encoding: "utf8",
+    });
     return { stdout, available: true };
   } catch (err) {
     const info = readExecFileError(err);
@@ -243,7 +250,10 @@ async function netstatListenersForProto(
     // Some hosts disable TCPv6 entirely - `netstat -p TCPv6` exits
     // non-zero but TCP still works. Treat as "no data for this proto"
     // rather than a probe failure so the IPv4 path can still answer.
-    return { stdout: typeof info.stdout === "string" ? info.stdout : "", available: true };
+    return {
+      stdout: typeof info.stdout === "string" ? info.stdout : "",
+      available: true,
+    };
   }
 }
 

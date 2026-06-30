@@ -100,7 +100,8 @@ function fakeTransport(): RegistryTransport {
 describe("registry client", () => {
   it("fetches and parses the manifest", async () => {
     const client = await createRegistryClient({
-      environment: "production",      transport: fakeTransport(),
+      environment: "production",
+      transport: fakeTransport(),
       requireTrustedKeys: false,
     });
     const manifest = await client.fetchManifest();
@@ -110,17 +111,22 @@ describe("registry client", () => {
 
   it("resolves 'latest' to the manifest's latest version", async () => {
     const client = await createRegistryClient({
-      environment: "production",      transport: fakeTransport(),
+      environment: "production",
+      transport: fakeTransport(),
       requireTrustedKeys: false,
     });
-    const { entry, asset } = await client.resolveAsset("latest", "darwin-arm64");
+    const { entry, asset } = await client.resolveAsset(
+      "latest",
+      "darwin-arm64",
+    );
     expect(entry.version).toBe("1.5.0");
     expect(asset.available).toBe(true);
   });
 
   it("refuses to resolve a yanked version", async () => {
     const client = await createRegistryClient({
-      environment: "production",      transport: fakeTransport(),
+      environment: "production",
+      transport: fakeTransport(),
       requireTrustedKeys: false,
     });
     await expect(client.resolveAsset("1.4.0", "darwin-arm64")).rejects.toThrow(
@@ -130,7 +136,8 @@ describe("registry client", () => {
 
   it("refuses to resolve a platform marked unavailable", async () => {
     const client = await createRegistryClient({
-      environment: "production",      transport: fakeTransport(),
+      environment: "production",
+      transport: fakeTransport(),
       requireTrustedKeys: false,
     });
     await expect(client.resolveAsset("latest", "linux-x64")).rejects.toThrow(
@@ -140,7 +147,8 @@ describe("registry client", () => {
 
   it("surfaces unknown version as REGISTRY_VERSION_NOT_FOUND", async () => {
     const client = await createRegistryClient({
-      environment: "production",      transport: fakeTransport(),
+      environment: "production",
+      transport: fakeTransport(),
       requireTrustedKeys: false,
     });
     let caught: unknown = null;
@@ -157,7 +165,8 @@ describe("registry client", () => {
 
   it("surfaces JSON parse errors as REGISTRY_UNAVAILABLE", async () => {
     const client = await createRegistryClient({
-      environment: "production",      transport: {
+      environment: "production",
+      transport: {
         fetchText: async () => "{ not valid json",
         downloadToFile: async () => ({ downloadedBytes: 0, sha256: "" }),
       },
@@ -177,10 +186,14 @@ describe("registry client", () => {
 
   it("does not lose a destination archive on a happy-path download", async () => {
     const client = await createRegistryClient({
-      environment: "production",      transport: fakeTransport(),
+      environment: "production",
+      transport: fakeTransport(),
       requireTrustedKeys: false,
     });
-    const { entry, asset } = await client.resolveAsset("latest", "darwin-arm64");
+    const { entry, asset } = await client.resolveAsset(
+      "latest",
+      "darwin-arm64",
+    );
     let receivedProgress = false;
     // downloadAndVerify also runs minisign verify against the URL we
     // never actually serve - we expect it to fail at the signature
