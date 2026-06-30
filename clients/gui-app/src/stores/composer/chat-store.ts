@@ -106,6 +106,10 @@ export interface ToolSegment {
   isStreaming: boolean;
   // Terminal outcome when the turn ended mid-flight (else null). See SegmentEndState.
   endState: SegmentEndState;
+  // True when `status === "errored"` was an explicit stop (deadline-killed
+  // Monitor, user-stopped command) rather than a genuine failure. Drives a
+  // neutral "stopped" badge in place of the destructive error treatment.
+  stopped: boolean;
   // Latest intermediate progress line for an in-flight call (replace-latest;
   // null when the harness reports none). Shown only while streaming.
   progress: string | null;
@@ -114,8 +118,11 @@ export interface ToolSegment {
   // Persistent: true for a backgrounded command/Monitor (Bash run_in_background
   // or the Monitor tool). Drives standalone-card promotion across the whole
   // lifecycle - running -> completed/stopped/errored -> reload - so it never
-  // collapses back into the generic activity group.
-  backgroundTask: boolean;
+  // collapses back into the generic activity group. `null` means "not yet
+  // known" (mid-stream, before the classifier has seen enough input) -
+  // consumers treat it like `false` (no promotion) without treating it as a
+  // confirmed negative.
+  backgroundTask: boolean | null;
   // Wall-clock start of the call. Drives the elapsed heartbeat while running.
   startedAt: number;
   // Completed background command/Monitor duration; null while streaming, for
@@ -171,6 +178,10 @@ export interface SubagentSegment {
   isStreaming: boolean;
   // Terminal outcome when the turn ended mid-flight (else null). See SegmentEndState.
   endState: SegmentEndState;
+  // True when `status === "errored"` was an explicit stop rather than a
+  // genuine failure - mirrors ToolSegment.stopped. Drives a neutral "stopped"
+  // badge in place of the destructive error treatment.
+  stopped: boolean;
   // Immutable spawn time, driving the live elapsed heartbeat on the card while
   // running. Null for blocks persisted before this field existed.
   startedAt: number | null;

@@ -86,7 +86,7 @@ export function CommandSegment(props: CommandSegmentProps) {
         />
       ) : null}
       {exitBadge}
-      <SegmentEndStateBadge endState={endState} />
+      <SegmentEndStateBadge endState={endState} stopped={false} />
     </>
   );
 

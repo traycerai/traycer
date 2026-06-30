@@ -35,6 +35,10 @@ interface SubagentSegmentProps {
   // Terminal outcome when the turn ended mid-run (else null): drives a neutral
   // "stopped"/"superseded" badge instead of a spinner.
   endState: SegmentEndState;
+  // True when `status === "errored"` was an explicit stop rather than a
+  // genuine failure - mirrors ToolSegment.stopped. Drives the same neutral
+  // "stopped" badge in place of any destructive error treatment.
+  stopped: boolean;
   // Immutable spawn time for the live elapsed heartbeat (null when unknown).
   startedAt: number | null;
   // Total run duration once finished; null while streaming / when unknown.
@@ -71,6 +75,7 @@ function CompactSubagentSegment(props: CompactSubagentSegmentProps) {
     result,
     isStreaming,
     endState,
+    stopped,
     startedAt,
     durationMs,
     variant,
@@ -128,7 +133,7 @@ function CompactSubagentSegment(props: CompactSubagentSegmentProps) {
         durationMs={durationMs}
         isStreaming={isStreaming}
       />
-      <SegmentEndStateBadge endState={endState} />
+      <SegmentEndStateBadge endState={endState} stopped={stopped} />
     </>
   );
 
@@ -209,6 +214,7 @@ function PromotedSubagentSegment(props: Omit<SubagentSegmentProps, "variant">) {
     result,
     isStreaming,
     endState,
+    stopped,
     startedAt,
     durationMs,
   } = props;
@@ -252,6 +258,7 @@ function PromotedSubagentSegment(props: Omit<SubagentSegmentProps, "variant">) {
         showHeaderSummary={showHeaderSummary}
         isStreaming={isStreaming}
         endState={endState}
+        stopped={stopped}
         startedAt={startedAt}
         durationMs={durationMs}
         open={open}
@@ -283,6 +290,7 @@ interface PromotedSubagentTriggerProps {
   readonly showHeaderSummary: boolean;
   readonly isStreaming: boolean;
   readonly endState: SegmentEndState;
+  readonly stopped: boolean;
   readonly startedAt: number | null;
   readonly durationMs: number | null;
   readonly open: boolean;
@@ -300,6 +308,7 @@ function PromotedSubagentTrigger(props: PromotedSubagentTriggerProps) {
     open,
     showHeaderSummary,
     startedAt,
+    stopped,
   } = props;
   return (
     <CollapsibleTrigger
@@ -345,7 +354,7 @@ function PromotedSubagentTrigger(props: PromotedSubagentTriggerProps) {
                 className={undefined}
               />
             ) : null}
-            <SegmentEndStateBadge endState={endState} />
+            <SegmentEndStateBadge endState={endState} stopped={stopped} />
             <ChevronDown
               aria-hidden
               className={cn(

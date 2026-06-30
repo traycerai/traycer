@@ -113,6 +113,7 @@ function ActivityChildSegment(props: ActivityChildSegmentProps) {
           agentMessageSend={segment.agentMessageSend}
           isStreaming={segment.isStreaming}
           endState={segment.endState}
+          stopped={segment.stopped}
           progress={segment.progress}
           backgroundOutput={segment.backgroundOutput}
           backgroundTask={segment.backgroundTask}
@@ -147,6 +148,7 @@ function ActivityChildSegment(props: ActivityChildSegmentProps) {
           result={segment.result}
           isStreaming={segment.isStreaming}
           endState={segment.endState}
+          stopped={segment.stopped}
           startedAt={segment.startedAt}
           durationMs={segment.durationMs}
           variant="row"

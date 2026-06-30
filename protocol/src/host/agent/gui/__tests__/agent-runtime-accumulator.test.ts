@@ -203,6 +203,80 @@ describe("accumulateEvent", () => {
     });
   });
 
+  it("tool_call.started with backgroundTask omitted creates the block with backgroundTask:null, not a committed false", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "tool_call.started",
+      blockId: "tc1",
+      timestamp: 1,
+      toolName: "Bash",
+      input: { command: "sleep 60" },
+      agentMessageSend: null,
+      // backgroundTask omitted - the classifier hasn't seen run_in_background
+      // yet (e.g. mid-stream, before that key has arrived).
+    });
+
+    expect((blocks[0] as ToolCallBlock).backgroundTask).toBeNull();
+  });
+
+  it("a non-confirming tool_call.started re-emit leaves backgroundTask:null unknown, not downgraded to false", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "tool_call.started",
+      blockId: "tc1",
+      timestamp: 1,
+      toolName: "Bash",
+      input: { command: "sleep" },
+      agentMessageSend: null,
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "tool_call.started",
+      blockId: "tc1",
+      timestamp: 2,
+      toolName: "Bash",
+      input: { command: "sleep 60" },
+      agentMessageSend: null,
+    });
+
+    expect((blocks[0] as ToolCallBlock).backgroundTask).toBeNull();
+  });
+
+  it("backgroundTask:true confirmation upgrades an unknown marker and a later non-confirming event never downgrades it", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "tool_call.started",
+      blockId: "tc1",
+      timestamp: 1,
+      toolName: "Bash",
+      input: { command: "sleep" },
+      agentMessageSend: null,
+    });
+    expect((blocks[0] as ToolCallBlock).backgroundTask).toBeNull();
+
+    blocks = accumulateEvent(blocks, {
+      type: "tool_call.started",
+      blockId: "tc1",
+      timestamp: 2,
+      toolName: "Bash",
+      input: { command: "sleep 60", run_in_background: true },
+      agentMessageSend: null,
+      backgroundTask: true,
+    });
+    expect((blocks[0] as ToolCallBlock).backgroundTask).toBe(true);
+
+    // task_started's retroactive re-stamp does not always re-send
+    // backgroundTask:true on every subsequent event - the sticky merge must
+    // hold the confirmed true regardless.
+    blocks = accumulateEvent(blocks, {
+      type: "tool_call.completed",
+      blockId: "tc1",
+      timestamp: 3,
+      toolName: "Bash",
+      agentMessageSend: null,
+    });
+    expect((blocks[0] as ToolCallBlock).backgroundTask).toBe(true);
+  });
+
   it("tool_call.started updates an existing ToolCallBlock instead of duplicating it", () => {
     let blocks = makeBlocks();
     blocks = accumulateEvent(blocks, {
@@ -384,12 +458,38 @@ describe("accumulateEvent", () => {
       timestamp: 2,
       toolName: "read_file",
       error: "File not found",
+      terminationReason: "error",
       agentMessageSend: null,
     });
 
     expect(blocks).toHaveLength(1);
     expect(blocks[0].status).toBe("errored");
     expect((blocks[0] as ToolCallBlock).error).toBe("File not found");
+    expect((blocks[0] as ToolCallBlock).stopped).toBe(false);
+  });
+
+  it("tool_call.errored with terminationReason 'stopped' sets stopped:true, status stays errored", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "tool_call.started",
+      blockId: "tc1",
+      timestamp: 1,
+      toolName: "Bash",
+      agentMessageSend: null,
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "tool_call.errored",
+      blockId: "tc1",
+      timestamp: 2,
+      toolName: "Bash",
+      error: "stopped by deadline",
+      terminationReason: "stopped",
+      agentMessageSend: null,
+    });
+
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].status).toBe("errored");
+    expect((blocks[0] as ToolCallBlock).stopped).toBe(true);
   });
 
   it("tool_call.progress replaces progress without advancing timestamp", () => {
@@ -1740,6 +1840,7 @@ describe("accumulateEvent", () => {
       type: "subagent.completed",
       blockId: "sa1",
       timestamp: 12,
+      outcome: "completed",
       result: "done",
     });
 
@@ -1838,6 +1939,49 @@ describe("accumulateEvent", () => {
     ]);
   });
 
+  it("subagent.completed with outcome 'failed' marks the block errored, not completed", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "subagent.started",
+      blockId: "sa1",
+      timestamp: 1,
+      name: "explorer",
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "subagent.completed",
+      blockId: "sa1",
+      timestamp: 2,
+      outcome: "failed",
+      result: "hit a permission error",
+    });
+
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].status).toBe("errored");
+    expect((blocks[0] as SubAgentBlock).stopped).toBe(false);
+    expect((blocks[0] as SubAgentBlock).result).toBe("hit a permission error");
+  });
+
+  it("subagent.completed with outcome 'stopped' marks the block errored and stopped", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "subagent.started",
+      blockId: "sa1",
+      timestamp: 1,
+      name: "explorer",
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "subagent.completed",
+      blockId: "sa1",
+      timestamp: 2,
+      outcome: "stopped",
+      result: "stopped by deadline",
+    });
+
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].status).toBe("errored");
+    expect((blocks[0] as SubAgentBlock).stopped).toBe(true);
+  });
+
   it("subagent.completed finalizes SubAgentBlock", () => {
     let blocks = makeBlocks();
     blocks = accumulateEvent(blocks, {
@@ -1850,11 +1994,13 @@ describe("accumulateEvent", () => {
       type: "subagent.completed",
       blockId: "sa1",
       timestamp: 2,
+      outcome: "completed",
       result: "Done exploring",
     });
 
     expect(blocks).toHaveLength(1);
     expect(blocks[0].status).toBe("completed");
+    expect((blocks[0] as SubAgentBlock).stopped).toBe(false);
     expect((blocks[0] as SubAgentBlock).result).toBe("Done exploring");
   });
 
@@ -1864,6 +2010,7 @@ describe("accumulateEvent", () => {
       type: "subagent.completed",
       blockId: "sa1",
       timestamp: 1,
+      outcome: "completed",
       result: "Done exploring",
     });
 
@@ -1891,6 +2038,7 @@ describe("accumulateEvent", () => {
       type: "subagent.completed",
       blockId: "sa1",
       timestamp: 2000,
+      outcome: "completed",
       result: "done",
     });
     // Codex resolves the nickname a beat later and re-emits subagent.started

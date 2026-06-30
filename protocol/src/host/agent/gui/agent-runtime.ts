@@ -350,6 +350,11 @@ export const toolCallErroredEventSchema = z.object({
   type: z.literal("tool_call.errored"),
   toolName: z.string(),
   error: z.string(),
+  // Distinguishes an explicit stop (deadline-killed Monitor, user-stopped
+  // command) from a genuine failure. Optional/defaulted: an old emitter that
+  // never sends this reproduces today's shipped behavior exactly - every
+  // terminal failure rendered as a plain error.
+  terminationReason: z.enum(["error", "stopped"]).default("error"),
   agentMessageSend: agentMessageSendSchema.nullable().default(null),
   backgroundOutput: backgroundTaskOutputSchema.nullable().optional(),
   // For detached background command/Monitor failure/stop, this is the SDK
@@ -560,6 +565,11 @@ export type SubAgentProgressEvent = z.infer<typeof subAgentProgressEventSchema>;
 export const subAgentCompletedEventSchema = z.object({
   ...baseRuntimeEventFields,
   type: z.literal("subagent.completed"),
+  // Defaulted to "completed" so an old emitter that never sends this
+  // reproduces today's shipped (if imprecise) behavior exactly, rather than
+  // failing to parse. Only an emitter that knows the real outcome sets this
+  // explicitly to "failed"/"stopped".
+  outcome: z.enum(["completed", "failed", "stopped"]).default("completed"),
   result: z.string().optional(),
 });
 export type SubAgentCompletedEvent = z.infer<

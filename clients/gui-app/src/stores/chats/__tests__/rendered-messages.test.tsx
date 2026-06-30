@@ -1417,6 +1417,7 @@ describe("useRenderedMessages", () => {
           progress: null,
           backgroundOutput: null,
           backgroundTask: false,
+          stopped: false,
           status: "completed",
           timestamp: 2002,
           startedAt: 2002,
@@ -1456,6 +1457,141 @@ describe("useRenderedMessages", () => {
     ]);
   });
 
+  it("drops a resume trigger whose blockId is the immediately preceding tool segment", () => {
+    const assistant: Message = {
+      ...assistantMessage("turn-1", 2000),
+      blocks: [
+        {
+          type: "tool_call",
+          blockId: "tool-1",
+          toolName: "Bash",
+          ...toolCallInputFields("Bash", { command: "bun run compile" }),
+          error: null,
+          agentMessageSend: null,
+          progress: null,
+          backgroundOutput: null,
+          backgroundTask: true,
+          stopped: false,
+          status: "completed",
+          timestamp: 2002,
+          startedAt: 2002,
+          endedAt: 2002,
+        },
+        {
+          type: "autonomous_resume",
+          blockId: "resume-1",
+          status: "completed",
+          timestamp: 2003,
+          triggers: [
+            {
+              kind: "command",
+              title: "bun run compile",
+              status: "completed",
+              summary: "Command finished",
+              blockId: "tool-1",
+              outputFile: null,
+            },
+          ],
+        },
+        {
+          type: "text",
+          blockId: "text-1",
+          text: "Now let's type-check.",
+          status: "completed",
+          timestamp: 2004,
+        },
+      ],
+    };
+
+    const { result } = renderHook(() =>
+      useRenderedMessages(
+        {
+          messages: [assistant],
+          events: [],
+          pendingUserMessages: [],
+          liveAssistantMessage: null,
+          activeTurn: null,
+          runStatus: "idle",
+          ...BINDING,
+        },
+        displayContext,
+      ),
+    );
+
+    expect(result.current[0]?.segments.map((segment) => segment.kind)).toEqual([
+      "tool",
+      "text",
+    ]);
+  });
+
+  it("keeps a resume trigger whose blockId is not the immediately preceding segment", () => {
+    const assistant: Message = {
+      ...assistantMessage("turn-1", 2000),
+      blocks: [
+        {
+          type: "tool_call",
+          blockId: "tool-1",
+          toolName: "Bash",
+          ...toolCallInputFields("Bash", { command: "bun run compile" }),
+          error: null,
+          agentMessageSend: null,
+          progress: null,
+          backgroundOutput: null,
+          backgroundTask: true,
+          stopped: false,
+          status: "completed",
+          timestamp: 2002,
+          startedAt: 2002,
+          endedAt: 2002,
+        },
+        {
+          type: "text",
+          blockId: "text-1",
+          text: "Now let's also check this other thing.",
+          status: "completed",
+          timestamp: 2003,
+        },
+        {
+          type: "autonomous_resume",
+          blockId: "resume-1",
+          status: "completed",
+          timestamp: 2004,
+          triggers: [
+            {
+              kind: "command",
+              title: "bun run compile",
+              status: "completed",
+              summary: "Command finished",
+              blockId: "tool-1",
+              outputFile: null,
+            },
+          ],
+        },
+      ],
+    };
+
+    const { result } = renderHook(() =>
+      useRenderedMessages(
+        {
+          messages: [assistant],
+          events: [],
+          pendingUserMessages: [],
+          liveAssistantMessage: null,
+          activeTurn: null,
+          runStatus: "idle",
+          ...BINDING,
+        },
+        displayContext,
+      ),
+    );
+
+    expect(result.current[0]?.segments.map((segment) => segment.kind)).toEqual([
+      "tool",
+      "text",
+      "autonomous_resume",
+    ]);
+  });
+
   it("drops prompt-less subagent blocks from background command tasks", () => {
     const assistant: Message = {
       ...assistantMessage("turn-1", 2000),
@@ -1472,6 +1608,7 @@ describe("useRenderedMessages", () => {
           timestamp: 2001,
           startedAt: 2001,
           spawnToolCallId: null,
+          stopped: false,
         },
         {
           type: "subagent",
@@ -1485,6 +1622,7 @@ describe("useRenderedMessages", () => {
           timestamp: 2002,
           startedAt: 2002,
           spawnToolCallId: null,
+          stopped: false,
         },
       ],
     };
@@ -1530,6 +1668,7 @@ describe("useRenderedMessages", () => {
           progress: null,
           backgroundOutput: null,
           backgroundTask: false,
+          stopped: false,
           status: "streaming",
           timestamp: 2001,
           startedAt: 2001,
@@ -1547,6 +1686,7 @@ describe("useRenderedMessages", () => {
           timestamp: 2002,
           startedAt: 2001,
           spawnToolCallId: "toolu_1",
+          stopped: false,
         },
       ],
     };
@@ -1594,6 +1734,7 @@ describe("useRenderedMessages", () => {
           timestamp: 5000,
           startedAt: 2000,
           spawnToolCallId: null,
+          stopped: false,
         },
         {
           type: "subagent",
@@ -1607,6 +1748,7 @@ describe("useRenderedMessages", () => {
           timestamp: 9000,
           startedAt: 2000,
           spawnToolCallId: null,
+          stopped: false,
         },
       ],
     };
@@ -1659,6 +1801,7 @@ describe("useRenderedMessages", () => {
           progress: null,
           backgroundOutput: { stdout: "", stderr: "", truncated: false },
           backgroundTask: true,
+          stopped: false,
           startedAt: 5_000,
           endedAt: 70_000,
         },
@@ -1677,6 +1820,7 @@ describe("useRenderedMessages", () => {
           progress: null,
           backgroundOutput: { stdout: "", stderr: "", truncated: false },
           backgroundTask: true,
+          stopped: false,
           startedAt: null,
           endedAt: 70_000,
         },
@@ -1695,6 +1839,10 @@ describe("useRenderedMessages", () => {
           progress: null,
           backgroundOutput: null,
           backgroundTask: true,
+          // Modeling a block persisted before `stopped` existed - the legacy
+          // string-prefix error is the only signal, parsed false per the
+          // schema default. Exercises the GUI's fallback sniff.
+          stopped: false,
           startedAt: 5_000,
           endedAt: 70_000,
         },
@@ -1713,6 +1861,7 @@ describe("useRenderedMessages", () => {
           progress: null,
           backgroundOutput: null,
           backgroundTask: true,
+          stopped: false,
           startedAt: 5_000,
           endedAt: 67_000,
         },
@@ -1728,6 +1877,7 @@ describe("useRenderedMessages", () => {
           progress: null,
           backgroundOutput: null,
           backgroundTask: false,
+          stopped: false,
           startedAt: 2000,
           endedAt: 5000,
         },
@@ -1790,6 +1940,7 @@ describe("useRenderedMessages", () => {
           timestamp: 2001,
           startedAt: 2001,
           spawnToolCallId: null,
+          stopped: false,
         },
         {
           type: "command",
@@ -2423,6 +2574,7 @@ describe("useRenderedMessages", () => {
           progress: null,
           backgroundOutput: null,
           backgroundTask: false,
+          stopped: false,
           status: "completed",
           timestamp: 2001,
           startedAt: 2001,
@@ -2486,6 +2638,7 @@ describe("useRenderedMessages", () => {
           progress: null,
           backgroundOutput: null,
           backgroundTask: false,
+          stopped: false,
           status: "errored",
           timestamp: 2001,
           startedAt: 2001,

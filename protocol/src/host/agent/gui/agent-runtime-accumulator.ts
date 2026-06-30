@@ -284,7 +284,7 @@ function taskTodoItemsFromInput(
 // the block shape - and the `type` discriminant - defined once.
 function makeSubAgentBlock(fields: {
   blockId: string;
-  status: "streaming" | "completed";
+  status: "streaming" | "completed" | "errored";
   timestamp: number;
   startedAt: number | null;
   name: string | null;
@@ -293,6 +293,7 @@ function makeSubAgentBlock(fields: {
   progressUpdates: string[];
   result: string | null;
   spawnToolCallId: string | null;
+  stopped: boolean;
 }): Extract<ContentBlock, { type: "subagent" }> {
   return { type: "subagent", ...fields };
 }
@@ -303,11 +304,18 @@ function nullableMetadata(
   return value ?? null;
 }
 
+// Sticky-OR with a third "not yet known" state: only an explicit `true` ever
+// changes the marker. `existing: null` ("unknown so far") and an `incoming`
+// that doesn't confirm either way leave it `null`, rather than collapsing to a
+// committed `false` - a later event (the SDK's own retroactive confirmation,
+// or simply more of the streamed input parsing) can still resolve it to
+// `true`, but nothing ever downgrades a `true` once set.
 function mergeBackgroundTaskMarker(
-  existing: boolean,
+  existing: boolean | null,
   incoming: boolean | undefined,
-): boolean {
-  return existing || incoming === true;
+): boolean | null {
+  if (existing === true || incoming === true) return true;
+  return existing;
 }
 
 function normalizeApprovalDecision(
@@ -669,7 +677,8 @@ export function accumulateEvent(
           backgroundOutput: null,
           startedAt,
           endedAt: null,
-          backgroundTask: event.backgroundTask === true,
+          backgroundTask: event.backgroundTask ?? null,
+          stopped: false,
         },
       ];
     }
@@ -712,7 +721,8 @@ export function accumulateEvent(
           backgroundOutput: event.backgroundOutput ?? null,
           startedAt: event.backgroundStartedAt ?? null,
           endedAt: event.timestamp,
-          backgroundTask: event.backgroundTask === true,
+          backgroundTask: event.backgroundTask ?? null,
+          stopped: false,
         },
       ];
     }
@@ -723,6 +733,7 @@ export function accumulateEvent(
         const updated = {
           ...existing,
           status: "errored" as const,
+          stopped: event.terminationReason === "stopped",
           error: event.error,
           parentBlockId: resolveParentBlockId(event, existing),
           timestamp: event.timestamp,
@@ -756,7 +767,8 @@ export function accumulateEvent(
           backgroundOutput: event.backgroundOutput ?? null,
           startedAt: event.backgroundStartedAt ?? null,
           endedAt: event.timestamp,
-          backgroundTask: event.backgroundTask === true,
+          backgroundTask: event.backgroundTask ?? null,
+          stopped: event.terminationReason === "stopped",
         },
       ];
     }
@@ -1430,6 +1442,7 @@ export function accumulateEvent(
           progressUpdates: [],
           result: null,
           spawnToolCallId: event.spawnToolCallId ?? null,
+          stopped: false,
         }),
       ];
     }
@@ -1459,16 +1472,24 @@ export function accumulateEvent(
           progressUpdates: [event.update],
           result: null,
           spawnToolCallId: null,
+          stopped: false,
         }),
       ];
     }
 
     case "subagent.completed": {
       const existing = findBlockOfType(blocks, event.blockId, "subagent");
+      // `outcome` is defaulted "completed" on the wire (see agent-runtime.ts),
+      // so an old emitter that never sets it reproduces today's shipped
+      // behavior exactly. Only "failed"/"stopped" diverge from "completed".
+      const status: "completed" | "errored" =
+        event.outcome === "completed" ? "completed" : "errored";
+      const stopped = event.outcome === "stopped";
       if (existing) {
         const updated = {
           ...existing,
-          status: "completed" as const,
+          status,
+          stopped,
           result: event.result ?? existing.result,
           timestamp: event.timestamp,
         };
@@ -1478,7 +1499,8 @@ export function accumulateEvent(
         ...blocks,
         makeSubAgentBlock({
           blockId: event.blockId,
-          status: "completed",
+          status,
+          stopped,
           timestamp: event.timestamp,
           // No `started` was seen, so the spawn time is unknown. Leave it null
           // (rather than the completion time) so the card shows no duration

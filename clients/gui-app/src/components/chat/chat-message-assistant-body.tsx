@@ -167,6 +167,7 @@ export function AssistantMessageBody({
               result={item.segment.result}
               isStreaming={item.segment.isStreaming}
               endState={item.segment.endState}
+              stopped={item.segment.stopped}
               startedAt={item.segment.startedAt}
               durationMs={item.segment.durationMs}
               variant="promoted"
@@ -654,6 +655,7 @@ function AssistantSegment({
           agentMessageSend={segment.agentMessageSend}
           isStreaming={segment.isStreaming || isBackgroundRunning}
           endState={isBackgroundRunning ? null : segment.endState}
+          stopped={segment.stopped}
           progress={segment.progress}
           backgroundOutput={segment.backgroundOutput}
           backgroundTask={segment.backgroundTask}
@@ -698,6 +700,7 @@ function AssistantSegment({
           result={segment.result}
           isStreaming={segment.isStreaming}
           endState={segment.endState}
+          stopped={segment.stopped}
           startedAt={segment.startedAt}
           durationMs={segment.durationMs}
           variant="card"
