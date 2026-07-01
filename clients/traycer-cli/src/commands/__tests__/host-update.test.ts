@@ -103,7 +103,9 @@ function fakeCtx(): CommandContext {
 
 describe("buildHostUpdateCommand busy-check gating", () => {
   afterEach(() => {
-    vi.clearAllMocks();
+    // resetAllMocks (not clearAllMocks) so a mockResolvedValue/
+    // mockRejectedValue configured in one test can't leak into the next.
+    vi.resetAllMocks();
   });
 
   it("rejects with E_HOST_BUSY without --force, and never calls installHost", async () => {

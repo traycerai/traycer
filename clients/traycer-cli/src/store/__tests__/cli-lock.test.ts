@@ -67,19 +67,27 @@ describe("isProcessAlive", () => {
     expect(spy).not.toHaveBeenCalled();
   });
 
-  it("returns false when kill(pid, 0) throws ESRCH (process is gone)", () => {
-    vi.spyOn(process, "kill").mockImplementation(() => {
-      throw Object.assign(new Error("no such process"), { code: "ESRCH" });
-    });
-    expect(isProcessAlive(999999)).toBe(false);
-  });
+  // On win32, isProcessAlive never calls process.kill (it shells out to
+  // tasklist instead), so mocking kill here would test nothing there.
+  it.skipIf(process.platform === "win32")(
+    "returns false when kill(pid, 0) throws ESRCH (process is gone)",
+    () => {
+      vi.spyOn(process, "kill").mockImplementation(() => {
+        throw Object.assign(new Error("no such process"), { code: "ESRCH" });
+      });
+      expect(isProcessAlive(999999)).toBe(false);
+    },
+  );
 
-  it("returns true (conservative) when kill(pid, 0) throws EPERM", () => {
-    vi.spyOn(process, "kill").mockImplementation(() => {
-      throw Object.assign(new Error("not permitted"), { code: "EPERM" });
-    });
-    expect(isProcessAlive(1)).toBe(true);
-  });
+  it.skipIf(process.platform === "win32")(
+    "returns true (conservative) when kill(pid, 0) throws EPERM",
+    () => {
+      vi.spyOn(process, "kill").mockImplementation(() => {
+        throw Object.assign(new Error("not permitted"), { code: "EPERM" });
+      });
+      expect(isProcessAlive(1)).toBe(true);
+    },
+  );
 });
 
 describe("acquireCliLock", () => {
@@ -197,6 +205,24 @@ describe("acquireCliLock", () => {
       code: CLI_ERROR_CODES.CLI_LOCK_BUSY,
       message: expect.stringContaining("holder.pid=" + process.pid),
     });
+  });
+
+  it("falls back to the lock file's mtime when startedAt is unparseable, and still breaks past the ceiling", async () => {
+    writeLock({
+      pid: process.pid,
+      reason: "host-update",
+      startedAt: "not-a-real-timestamp",
+    });
+    const old = new Date(Date.now() - MAX_LOCK_AGE_MS - 1000);
+    utimesSync(mocks.lockPath, old, old);
+    const handle = await acquireCliLock({
+      environment: "production",
+      reason: "contender",
+      waitMs: 1000,
+      pollIntervalMs: 50,
+    });
+    expect(handle.metadata.reason).toBe("contender");
+    await handle.release();
   });
 });
 

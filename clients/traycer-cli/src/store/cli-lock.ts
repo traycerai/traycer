@@ -282,9 +282,23 @@ export async function acquireCliLock(
       // Age is checked regardless of what the PID check concludes - a
       // recycled-PID impostor would otherwise be read as "alive" forever
       // (see MAX_LOCK_AGE_MS above), so no amount of PID-liveness confidence
-      // exempts a lock from this ceiling.
-      const ageMs = Date.now() - new Date(holder.startedAt).getTime();
-      if (!holderAlive(holder.pid) || ageMs >= MAX_LOCK_AGE_MS) {
+      // exempts a lock from this ceiling. `startedAt` is holder-supplied,
+      // not a trusted clock - an unparseable or future value (corruption,
+      // clock skew) would otherwise make ageMs NaN or negative, which never
+      // satisfies `>=` and silently defeats the ceiling. Fall back to the
+      // lock file's own mtime in that case, since the filesystem - not the
+      // holder - controls that timestamp.
+      const now = Date.now();
+      const startedAtMs = new Date(holder.startedAt).getTime();
+      const ageMs =
+        Number.isFinite(startedAtMs) && startedAtMs <= now
+          ? now - startedAtMs
+          : await lockFileAgeMs(path);
+      if (
+        !holderAlive(holder.pid) ||
+        ageMs === null ||
+        ageMs >= MAX_LOCK_AGE_MS
+      ) {
         await breakStaleLock(path);
         continue;
       }
