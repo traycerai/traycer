@@ -276,57 +276,17 @@ export function createComposerToolbarStore(
         const state = get();
         if (sameCatalog(state.catalog, catalog)) return;
         const derived = deriveToolbarState(state.values, catalog, state);
-        // Reroute guard: never emit while the derived harness is a surface clamp
-        // of the user's choice, or the rerouted harness would leak into settings.
-        const rerouted =
-          derived.selection.harnessId !== state.values.selection.harnessId;
-        // A catalog LOAD that resolves a previously-CONCRETE slug to a different
-        // concrete slug - the delisted self-heal (a stale remembered slug X
-        // resolving to the first model Y) - must propagate an emit so the surface
-        // live-settings (and the memory write) pick up Y. Gated on the NEW derived
-        // selection being catalog-confirmed: otherwise an UNLOAD (the query
-        // detaches, `modelsLoaded:false`, derive falls back to holding the raw
-        // still-stale slug) would look like a Y->X change and re-emit the dead
-        // slug. The empty -> first-model INITIAL resolution stays silent (prev
-        // slug was ""), matching today's seed-doesn't-emit behavior.
-        const resolvedSlugSelfHealed =
-          derived.selectionCatalogConfirmed &&
-          state.selection.modelSlug.length > 0 &&
-          derived.selection.modelSlug !== state.selection.modelSlug;
-        const shouldEmit =
-          !rerouted &&
-          derived.selection.modelSlug.length > 0 &&
-          (state.pendingSettingsEmit || resolvedSlugSelfHealed);
-        if (!shouldEmit) {
-          set({ catalog, ...derived });
-          return;
-        }
-        // Heal the RAW sticky slug to the confirmed resolved one on a delisting
-        // (loaded catalog, raw slug concretely absent, not rerouted), so later
-        // load/unload cycles don't keep re-deriving the X->Y transition or
-        // re-emitting Y. Only `modelSlug` is healed (never `harnessId`, so the
-        // reroute write-guard is untouched), and only for a confirmed delisting.
-        const healedValues =
-          derived.selectionCatalogConfirmed &&
-          state.values.selection.modelSlug.length > 0 &&
-          derived.selection.modelSlug !== state.values.selection.modelSlug
-            ? {
-                ...state.values,
-                selection: {
-                  ...state.values.selection,
-                  modelSlug: derived.selection.modelSlug,
-                },
-              }
-            : state.values;
-        // Either a deferred edit can finally emit with a concrete slug, or the
-        // catalog self-healed a delisted slug - emit the resolved settings.
+        // The emit/heal decision (the two intentionally-different raw-vs-derived
+        // comparisons) lives in one named, testable place.
+        const { emit, healedValues } = decideCatalogTransition(state, derived);
         set({
           catalog,
           values: healedValues,
           ...derived,
-          pendingSettingsEmit: false,
+          // Only an emit clears the deferred flag; a silent push leaves it as-is.
+          pendingSettingsEmit: emit ? false : state.pendingSettingsEmit,
         });
-        state.onSettingsChange?.(settingsFromDerived(derived));
+        if (emit) state.onSettingsChange?.(settingsFromDerived(derived));
       },
 
       setOnSettingsChange: (onSettingsChange) => {
@@ -387,10 +347,11 @@ function deriveToolbarState(
       : { harnessId: availabilitySelection.harnessId, modelSlug: resolvedSlug };
   // True ONLY when the resolved slug is a real, loaded model of this harness.
   // The surface emit is NOT gated on this (live-settings propagate immediately);
-  // it is the signal Ticket 4's recording wrapper reads at write time so an
-  // unvalidated / stale remembered slug is never written to memory. Once loaded,
-  // the resolved FALLBACK slug (delisted case) is what becomes confirmed, letting
-  // the memory write self-heal a dead slug.
+  // it is the signal the `recordingOnSettingsChange` wrapper reads at write time
+  // so an unvalidated / stale remembered slug is never written to memory before
+  // the catalog proves it valid. Once loaded, the resolved FALLBACK slug
+  // (delisted case) is what becomes confirmed, letting the memory write
+  // self-heal a dead slug.
   const selectionCatalogConfirmed =
     catalogLoadedForHarness &&
     modelExists(models, selection.harnessId, resolvedSlug);
@@ -437,6 +398,63 @@ function deriveToolbarState(
     return { ...derived, selection: previous.selection };
   }
   return derived;
+}
+
+/**
+ * Decide, on a fresh catalog push, whether the resolved settings should EMIT to
+ * the surface and whether the RAW sticky slug should be HEALED to the resolved
+ * one. Extracted from `setCatalog` so the two comparisons - which intentionally
+ * key off DIFFERENT baselines (the previous derived slug for the emit, the raw
+ * sticky slug for the heal) - are named and unit-testable in one place rather
+ * than inlined into an already-busy action. `healedValues === state.values`
+ * whenever nothing is healed, so the caller spreads it unconditionally.
+ */
+function decideCatalogTransition(
+  state: ComposerToolbarState,
+  derived: ComposerToolbarDerived,
+): { emit: boolean; healedValues: ComposerToolbarValues } {
+  // Reroute guard: never emit while the derived harness is a surface clamp of
+  // the user's choice, or the rerouted harness would leak into settings.
+  const rerouted =
+    derived.selection.harnessId !== state.values.selection.harnessId;
+  // A catalog LOAD that resolves a previously-CONCRETE slug to a different
+  // concrete slug - the delisted self-heal (a stale remembered slug X resolving
+  // to the first model Y) - must propagate an emit so the surface live-settings
+  // (and the memory write) pick up Y. Compared against the previous DERIVED slug
+  // (what the surface last saw), and gated on the NEW derived selection being
+  // catalog-confirmed: otherwise an UNLOAD (the query detaches,
+  // `modelsLoaded:false`, derive falls back to holding the raw still-stale slug)
+  // would look like a Y->X change and re-emit the dead slug. The empty ->
+  // first-model INITIAL resolution stays silent (prev slug was ""), matching the
+  // seed-doesn't-emit behavior.
+  const resolvedSlugSelfHealed =
+    derived.selectionCatalogConfirmed &&
+    state.selection.modelSlug.length > 0 &&
+    derived.selection.modelSlug !== state.selection.modelSlug;
+  const emit =
+    !rerouted &&
+    derived.selection.modelSlug.length > 0 &&
+    (state.pendingSettingsEmit || resolvedSlugSelfHealed);
+  if (!emit) return { emit: false, healedValues: state.values };
+  // Heal the RAW sticky slug to the confirmed resolved one on a delisting
+  // (loaded catalog, raw slug concretely absent, not rerouted), so later
+  // load/unload cycles don't keep re-deriving the X->Y transition or re-emitting
+  // Y. Compared against the RAW sticky slug - the distinct baseline from the
+  // emit decision above. Only `modelSlug` is healed (never `harnessId`, so the
+  // reroute write-guard is untouched), and only for a confirmed delisting.
+  const healedValues =
+    derived.selectionCatalogConfirmed &&
+    state.values.selection.modelSlug.length > 0 &&
+    derived.selection.modelSlug !== state.values.selection.modelSlug
+      ? {
+          ...state.values,
+          selection: {
+            ...state.values.selection,
+            modelSlug: derived.selection.modelSlug,
+          },
+        }
+      : state.values;
+  return { emit: true, healedValues };
 }
 
 function sameCatalog(

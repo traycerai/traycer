@@ -15,7 +15,6 @@
  */
 import type {
   PermissionMode,
-  HarnessModelSelection,
   ProviderId,
   ReasoningLevel,
   ServiceTier,
@@ -23,7 +22,6 @@ import type {
 import type { FocusedComposerKind } from "@/lib/commands/types";
 
 export interface ComposerControls {
-  readonly setSelection: (selection: HarnessModelSelection) => void;
   readonly setReasoning: (level: ReasoningLevel) => void;
   readonly setServiceTier: (tier: ServiceTier) => void;
   readonly setPermission: (mode: PermissionMode) => void;

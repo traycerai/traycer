@@ -105,6 +105,10 @@ export function useComposerToolbarStore(
   // written. `record()` also self-guards an empty model.
   const recordingOnSettingsChange = useCallback(
     (settings: ChatRunSettings) => {
+      // Precondition: every store emit site `set()`s the derived state BEFORE
+      // invoking `onSettingsChange`, so `getState().selectionCatalogConfirmed`
+      // here reflects the very settings being emitted - the write gate does not
+      // race the emit.
       if (store.getState().selectionCatalogConfirmed) {
         useComposerHarnessMemoryStore.getState().record(settings);
       }
@@ -157,7 +161,6 @@ export function useComposerToolbarStore(
   const registeredControls = useMemo(() => {
     const actions = store.getState();
     return {
-      setSelection: actions.setSelection,
       setReasoning: actions.setReasoning,
       setServiceTier: actions.setServiceTier,
       setPermission: actions.setPermission,

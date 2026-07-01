@@ -29,9 +29,6 @@ export function useRegisterFocusedComposerControls(
   useEffect(() => {
     if (kind === null) return;
     const dispose = registerFocusedComposerControls(kind, {
-      setSelection: (selection) => {
-        controlsRef.current.setSelection(selection);
-      },
       setReasoning: (level) => {
         controlsRef.current.setReasoning(level);
       },

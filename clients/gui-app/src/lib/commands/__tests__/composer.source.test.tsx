@@ -136,7 +136,6 @@ function captureItems(
 
 function stubControls(overrides: Partial<ComposerControls>): ComposerControls {
   return {
-    setSelection: () => undefined,
     setReasoning: () => undefined,
     setServiceTier: () => undefined,
     setPermission: () => undefined,
@@ -375,12 +374,10 @@ describe("composerSource", () => {
 
   it("provider leaf item dispatches the memory-aware switchHarness control", () => {
     const switches: Array<string> = [];
-    const selections: Array<unknown> = [];
     registerFocusedComposerControls(
       "landing",
       stubControls({
         switchHarness: (harnessId) => switches.push(harnessId),
-        setSelection: (next) => selections.push(next),
       }),
     );
 
@@ -407,7 +404,7 @@ describe("composerSource", () => {
     void subItems[0].run(ctx(null, "landing"));
     // Switch-provider funnels through `switchHarness` (restores the harness's
     // remembered model/effort/tier), never the old `setSelection(firstModel…)`.
+    // (`setSelection` is no longer part of `ComposerControls` at all.)
     expect(switches).toEqual(["codex"]);
-    expect(selections).toEqual([]);
   });
 });

@@ -10,22 +10,22 @@ import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-sett
 // own default effort/tier on the next visit.
 export const COMPOSER_HARNESS_MEMORY_CAP = 200;
 
-export interface HarnessModelEffortRecord {
+// Effort + service tier as stored on `ChatRunSettings` (both nullable). Every
+// memory shape below carries this pair, so it is their single shared base.
+export interface EffortTier {
   readonly reasoningEffort: string | null; // ChatRunSettings.reasoningEffort shape
   readonly serviceTier: string | null; // ChatRunSettings.serviceTier shape
+}
+
+export interface HarnessModelEffortRecord extends EffortTier {
   readonly updatedAt: number;
 }
 
-export interface ResolvedHarnessSwitch {
+export interface ResolvedHarnessSwitch extends EffortTier {
   readonly modelSlug: string;
-  readonly reasoningEffort: string | null;
-  readonly serviceTier: string | null;
 }
 
-export interface ResolvedModelSelection {
-  readonly reasoningEffort: string | null;
-  readonly serviceTier: string | null;
-}
+export type ResolvedModelSelection = EffortTier;
 
 interface ComposerHarnessMemoryStore {
   // harnessId → last committed model slug (small, bounded by harness count).
@@ -88,14 +88,11 @@ export const useComposerHarnessMemoryStore =
           const state = get();
           if (Object.hasOwn(state.lastModelByHarness, harnessId)) {
             const modelSlug = state.lastModelByHarness[harnessId];
-            const key = harnessModelKey(harnessId, modelSlug);
-            const record = Object.hasOwn(state.effortByHarnessModel, key)
-              ? state.effortByHarnessModel[key]
-              : null;
+            // Reuse the model-pick resolver for the exact same (harness, model)
+            // record lookup - `{ null, null }` when the pair has no record.
             return {
               modelSlug,
-              reasoningEffort: record === null ? null : record.reasoningEffort,
-              serviceTier: record === null ? null : record.serviceTier,
+              ...state.resolveModelSelection(harnessId, modelSlug),
             };
           }
           // Lazy backfill (read-time `getState()` only, no eager hydration-time
