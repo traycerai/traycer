@@ -33,6 +33,7 @@ import { useLandingComposerStore } from "@/stores/composer/landing-composer-stor
 import { useInitialChatHandoffStore } from "@/stores/epics/initial-chat-handoff-store";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { markEpicCreatedThisSession } from "@/lib/epics/session-created-epics";
 import {
   existingEpicTabIntent,
   navigateToTabIntent,
@@ -291,6 +292,9 @@ export function useLandingComposerActions(): LandingComposerActions {
       const tabId = useEpicCanvasStore
         .getState()
         .openEpicTab(epicId, epicTitle);
+      // Mark before navigation so the epic-tab existence reconciler never
+      // force-closes this tab while `epic.listTasks` still lags `epic.create`.
+      markEpicCreatedThisSession(epicId);
       // Spinner anchor is the pre-generation title (empty here); it clears once
       // a non-empty title is projected or the backstop fires.
       useEpicCanvasStore.getState().markEpicTitlePending(epicId, epicTitle);
@@ -491,6 +495,10 @@ export function useLandingComposerActions(): LandingComposerActions {
       const tabId = useEpicCanvasStore
         .getState()
         .openEpicTab(epicId, epicTitle);
+      // Terminal-agent create registers no initial-chat handoff, so this
+      // synchronous marker is what keeps the existence reconciler from
+      // force-closing the tab before `epic.listTasks` reflects the new epic.
+      markEpicCreatedThisSession(epicId);
       const activeDraftId = useLandingDraftStore.getState().activeDraftId;
       if (activeDraftId !== null) {
         useLandingDraftStore.getState().closeDraft(activeDraftId);
