@@ -82,6 +82,10 @@ export const runnerQueryKeys = {
   hostCliManifest: (management: object) =>
     ["runner.host.cliManifest", management] as const,
   hostName: (management: object) => ["runner.host.name", management] as const,
+  // Direct removal-sentinel read used by the host gate, independent of
+  // `ensureHost`'s one-shot auto-provision result.
+  hostRemovalState: (management: object) =>
+    ["runner.host.removalState", management] as const,
   /**
    * Stable cache key for the placeholder ServiceStatusSnapshot used by
    * Settings → Host when the shell does not expose `IServiceHost`. The
