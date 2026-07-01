@@ -3,6 +3,7 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { disposeAllChatSessions } from "@/lib/registries/chat-session-registry";
 import { disposeAllTerminalSessions } from "@/lib/registries/terminal-session-registry";
 import { disposeAllOpenEpicSessions } from "@/lib/registries/epic-session-registry";
+import { clearSessionCreatedEpics } from "@/lib/epics/session-created-epics";
 import {
   useAuthIdentityTransition,
   type AuthIdentityTransition,
@@ -35,6 +36,10 @@ export function EpicSessionLifecycleBridge(
       disposeAllOpenEpicSessions();
       disposeAllChatSessions();
       disposeAllTerminalSessions();
+      // Drop the "created this session" markers so a new identity's persisted
+      // tabs are reconciled normally instead of being protected by the prior
+      // identity's create markers.
+      clearSessionCreatedEpics();
     }
   }, []);
 
