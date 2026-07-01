@@ -4,6 +4,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ReactNode,
   type RefObject,
 } from "react";
 import { useStore } from "zustand";
@@ -52,13 +53,16 @@ import {
   useLatestConversationWorkspaceSeed,
   type LatestConversationWorkspaceSeed,
 } from "@/hooks/worktree/use-latest-conversation-workspace-seed";
+import { useOwnerWorkspaceInheritanceSeed } from "@/hooks/worktree/use-owner-workspace-inheritance-seed";
 import { useEpicStore } from "@/hooks/use-epic-store";
 import { useHostClient } from "@/lib/host";
 import { LEADER_SCOPE_NEW_CONVERSATION_MODAL } from "@/lib/keybindings/leader-scope";
 import {
   useEpicConnectionStatus,
+  useEpicNodeWorkspaceFolders,
   useEpicPermissionRole,
 } from "@/lib/epic-selectors";
+import { displayTitle } from "@/lib/display-title";
 import { isEditableRole } from "@/lib/epic-permissions";
 import { buildChatRunSettings } from "@/lib/composer/chat-run-settings";
 import { contentIsSubmittable } from "@/lib/composer/composer-content";
@@ -158,6 +162,7 @@ export function NewConversationModalAction(
       epicId: props.epicId,
       tabId: props.tabId,
       placement: ACTIVE_TILE_PLACEMENT,
+      parentId: null,
     });
   }, [openModal, props.disabled, props.epicId, props.tabId]);
   const trigger = (
@@ -232,6 +237,7 @@ export function NewConversationModalHost(props: {
       epicId={props.epicId}
       tabId={props.tabId}
       placement={isOpen ? request.placement : ACTIVE_TILE_PLACEMENT}
+      parentId={isOpen ? request.parentId : null}
       open={isOpen}
       onOpenChange={(next) => {
         if (!next) closeModal();
@@ -244,6 +250,7 @@ function NewConversationModalDialog(props: {
   readonly epicId: string;
   readonly tabId: string;
   readonly placement: ConversationTilePlacement;
+  readonly parentId: string | null;
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
 }) {
@@ -297,6 +304,7 @@ function NewConversationModalDialog(props: {
               epicId={props.epicId}
               tabId={props.tabId}
               placement={props.placement}
+              parentId={props.parentId}
               dismissPickerRef={dismissPickerRef}
               onSubmitted={() => props.onOpenChange(false)}
             />
@@ -307,14 +315,53 @@ function NewConversationModalDialog(props: {
   );
 }
 
+/**
+ * Modal title row. For a child chat (`parentId !== null`) the chat/terminal
+ * switcher is hidden (child creation is chat-only here - the row's own dropdown
+ * covers a child terminal agent) and a muted subtext names the parent chat.
+ */
+function NewConversationModalHeader(props: {
+  readonly composerMode: ComposerMode;
+  readonly parentId: string | null;
+  readonly switcher: ReactNode;
+}) {
+  const { composerMode, parentId, switcher } = props;
+  const isChildChat = parentId !== null;
+  const parentChatTitle = useEpicStore((state) =>
+    parentId !== null && Object.hasOwn(state.chats.byId, parentId)
+      ? state.chats.byId[parentId].title
+      : null,
+  );
+  return (
+    <div className="flex min-w-0 flex-col gap-0.5">
+      <div className="flex min-w-0 items-center justify-between">
+        <span className="text-sm font-medium text-foreground">
+          {composerMode === "chat"
+            ? "Start a new chat"
+            : "Start a new terminal agent"}
+        </span>
+        {isChildChat ? null : switcher}
+      </div>
+      {isChildChat ? (
+        <span className="truncate text-ui-xs text-muted-foreground">
+          Creating a child chat from{" "}
+          {displayTitle(parentChatTitle ?? "", "chat")}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
 function NewConversationModalBody(props: {
   readonly epicId: string;
   readonly tabId: string;
   readonly placement: ConversationTilePlacement;
+  readonly parentId: string | null;
   readonly dismissPickerRef: RefObject<(() => boolean) | null>;
   readonly onSubmitted: () => void;
 }) {
-  const { epicId, tabId, placement, dismissPickerRef, onSubmitted } = props;
+  const { epicId, tabId, placement, parentId, dismissPickerRef, onSubmitted } =
+    props;
   const permissionRole = useEpicPermissionRole();
   const connectionStatus = useEpicConnectionStatus();
   const isDisconnected = connectionStatus === "closed";
@@ -332,7 +379,8 @@ function NewConversationModalBody(props: {
       dismissPickerRef.current = null;
     };
   }, [dismissPickerRef]);
-  const latestWorkspaceSeed = useLatestConversationWorkspaceSeed(epicId);
+  const hostClient = useHostClient();
+  const latestWorkspaceSeed = useModalWorkspaceSeed(epicId, parentId);
   const seed = useNewConversationModalSeed(epicId, latestWorkspaceSeed);
   // Subscribe to the NON-content draft fields only. `content` is rewritten on
   // every keystroke (see `handleSnapshot`); subscribing to the whole patch here
@@ -406,7 +454,6 @@ function NewConversationModalBody(props: {
     toolbarStore,
     (state) => state.selection.harnessId,
   );
-  const hostClient = useHostClient();
   const mentionIntent = useMemo(
     () =>
       effectiveWorktreeIntent({
@@ -486,14 +533,11 @@ function NewConversationModalBody(props: {
     </button>
   );
   const header = (
-    <div className="flex min-w-0 items-center justify-between">
-      <span className="text-sm font-medium text-foreground">
-        {draftComposerMode === "chat"
-          ? "Start a new chat"
-          : "Start a new terminal agent"}
-      </span>
-      {switcher}
-    </div>
+    <NewConversationModalHeader
+      composerMode={draftComposerMode}
+      parentId={parentId}
+      switcher={switcher}
+    />
   );
   const cleanupAfterSubmit = useCallback((): void => {
     clearDraft(epicId);
@@ -585,7 +629,7 @@ function NewConversationModalBody(props: {
     createChat.mutate(
       {
         epicId,
-        parentId: null,
+        parentId,
         title: "",
         chatId,
         settings,
@@ -621,6 +665,7 @@ function NewConversationModalBody(props: {
     createChat,
     epicId,
     hostClient,
+    parentId,
     placement,
     rememberEpicIntent,
     setEpicRunSettings,
@@ -640,7 +685,7 @@ function NewConversationModalBody(props: {
         .create({
           epicId,
           tabId,
-          parentId: null,
+          parentId,
           title: "",
           placement: toTuiPlacement(placement),
           harnessId: launch.harnessId,
@@ -658,6 +703,7 @@ function NewConversationModalBody(props: {
       canMutate,
       cleanupAfterSubmit,
       epicId,
+      parentId,
       placement,
       rememberEpicIntent,
       tabId,
@@ -704,6 +750,43 @@ function NewConversationModalBody(props: {
       onStartTerminal={handleStartTerminal}
       onSnapshot={handleSnapshot}
     />
+  );
+}
+
+/**
+ * Workspace seed that drives the modal's workspace controls + submit intent.
+ * For a child chat (per-row `+`, `parentId !== null`) it inherits the PARENT
+ * chat's binding so the child lands in the parent's worktree - matching the
+ * eager row-create path (`useChatRowChildCreate`) this modal replaces. Read on
+ * the active host (the modal always creates there); an unbound/remote parent
+ * falls back to an empty workspace the user can adjust via the controls. For a
+ * top-level chat it falls back to the latest-conversation seed.
+ */
+function useModalWorkspaceSeed(
+  epicId: string,
+  parentId: string | null,
+): LatestConversationWorkspaceSeed | null {
+  const hostClient = useHostClient();
+  const latestConversationSeed = useLatestConversationWorkspaceSeed(epicId);
+  const parentWorkspaceFolders = useEpicNodeWorkspaceFolders(parentId ?? "");
+  const parentInheritance = useOwnerWorkspaceInheritanceSeed({
+    client: hostClient,
+    epicId,
+    ownerId: parentId ?? "",
+    ownerKind: "chat",
+    enabled: parentId !== null,
+    fallbackWorkspaceFolders: parentWorkspaceFolders,
+  });
+  return useMemo(
+    () =>
+      parentId !== null && parentInheritance.seed !== null
+        ? {
+            ...parentInheritance.seed,
+            sourceOwnerId: parentId,
+            sourceOwnerKind: "chat",
+          }
+        : latestConversationSeed,
+    [latestConversationSeed, parentId, parentInheritance.seed],
   );
 }
 

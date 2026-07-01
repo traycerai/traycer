@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import type { WorktreeBindingEntry } from "@traycer/protocol/host/worktree-schemas";
-import { buildChildChatCreateInput } from "../use-chat-row-child-create";
 import { buildOwnerWorkspaceInheritanceSeed } from "@/lib/worktree/owner-workspace-inheritance-seed";
 import { buildFixedHostWorkspaceControlsScope } from "@/components/home/host-workspace-selector/host-workspace-controls-scope";
 import { resolveOwnerWorkspaceInheritanceSeed } from "@/hooks/worktree/use-owner-workspace-inheritance-seed";
@@ -273,45 +272,6 @@ describe("child conversation workspace seed", () => {
           isPrimary: true,
         },
       ],
-    });
-  });
-
-  it("passes the inherited intent through the child chat create request", () => {
-    const seed = buildOwnerWorkspaceInheritanceSeed({
-      binding: {
-        entries: [
-          bindingEntry({
-            workspacePath: "/repo/source",
-            mode: "worktree",
-            worktreePath: "/worktrees/feature",
-          }),
-        ],
-      },
-      stagedIntent: null,
-      fallbackWorkspaceFolders: [],
-    });
-
-    expect(
-      buildChildChatCreateInput({
-        epicId: "epic-1",
-        parentId: "parent-1",
-        chatId: "child-1",
-        workspaceSeed: seed,
-      }),
-    ).toMatchObject({
-      epicId: "epic-1",
-      parentId: "parent-1",
-      chatId: "child-1",
-      title: "",
-      worktreeIntent: {
-        entries: [
-          {
-            kind: "import",
-            workspacePath: "/repo/source",
-            worktreePath: "/worktrees/feature",
-          },
-        ],
-      },
     });
   });
 });

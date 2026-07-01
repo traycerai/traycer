@@ -1,12 +1,4 @@
-import {
-  startTransition,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
-import { v4 as uuidv4 } from "uuid";
+import { useCallback, useMemo, useState } from "react";
 import type { EpicNodeKind } from "@/lib/artifacts/node-display";
 import { useCreateTuiAgentForClient } from "@/hooks/agent/use-create-tui-agent";
 import type { TerminalAgentWorktreeCreateInput } from "@/components/epic-canvas/hooks/use-terminal-agent-worktree-gate";
@@ -16,13 +8,8 @@ import { useHostClientFor } from "@/hooks/host/use-host-client-for";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { dialableHostEndpoint } from "@/lib/host/transport-key";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
-import {
-  useEpicCreateChatForHostClient,
-  type CreateChatMutationInput,
-} from "@/hooks/epic/use-epic-chat-mutations";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { useHostClient } from "@/lib/host/runtime";
-import { displayTitle } from "@/lib/display-title";
 import {
   useEpicNodeHostId,
   useEpicNodeOwnerKind,
@@ -30,17 +17,15 @@ import {
 } from "@/lib/epic-selectors";
 import type { ForkWorkspaceSeed } from "@/lib/worktree/fork-workspace-seed";
 import { useOwnerWorkspaceInheritanceSeed } from "@/hooks/worktree/use-owner-workspace-inheritance-seed";
-import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
-import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import type { EpicNodeRef } from "@/stores/epics/canvas/types";
+import { ACTIVE_TILE_PLACEMENT } from "@/lib/canvas/conversation-tile-placement";
+import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
+import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
 import {
   pendingChildTerminalAgentStagingKey,
   useWorktreeIntentStagingStore,
   type WorktreeStagingKey,
 } from "@/stores/worktree/worktree-intent-staging-store";
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
-import { openProjectedSidebarNodeInTabWhenAvailable } from "./open-projected-sidebar-node";
-import { computeArtifactNodeAddChildPending } from "./epic-sidebar-tree-shared";
 import { resolveRowChildHost } from "./chat-row-child-host";
 
 export interface ChatRowChildCreate {
@@ -59,21 +44,6 @@ export interface ChatRowChildCreate {
   readonly workspaceInheritanceBlocked: boolean;
 }
 
-export function buildChildChatCreateInput(input: {
-  readonly epicId: string;
-  readonly parentId: string;
-  readonly chatId: string;
-  readonly workspaceSeed: ForkWorkspaceSeed | null;
-}): CreateChatMutationInput {
-  return {
-    epicId: input.epicId,
-    parentId: input.parentId,
-    title: "",
-    chatId: input.chatId,
-    worktreeIntent: input.workspaceSeed?.intent ?? null,
-  };
-}
-
 export function useChatRowChildCreate(args: {
   readonly epicId: string;
   readonly tabId: string;
@@ -82,8 +52,6 @@ export function useChatRowChildCreate(args: {
   readonly ensureExpanded: (id: string) => void;
 }): ChatRowChildCreate {
   const { epicId, tabId, nodeId, canMutate, ensureExpanded } = args;
-  const epicHandle = useOpenEpicHandle();
-  const openTileInTab = useEpicCanvasStore((s) => s.openTileInTab);
   const [addMenuOpen, onAddMenuOpenChange] = useState(false);
   const rowHostId = useEpicNodeHostId(nodeId);
   const parentOwnerKind = useEpicNodeOwnerKind(nodeId);
@@ -118,7 +86,6 @@ export function useChatRowChildCreate(args: {
       }),
     [createHostClient, createHostId],
   );
-  const createChild = useEpicCreateChatForHostClient(createHostClient);
   const terminalAgentCreate = useCreateTuiAgentForClient(
     createHostClient,
     createHostId ?? UNKNOWN_HOST_PLACEHOLDER,
@@ -140,92 +107,24 @@ export function useChatRowChildCreate(args: {
   const workspaceInheritanceUnavailable = childWorkspace.unavailable;
   const parentBindingBlocked =
     parentBindingPending || workspaceInheritanceUnavailable;
-  const [pendingChildName, setPendingChildName] = useState<string | null>(null);
-  const pendingProjectedOpenCancelRef = useRef<(() => void) | null>(null);
-
-  useEffect(() => {
-    const cancelRef = pendingProjectedOpenCancelRef;
-    return () => {
-      cancelRef.current?.();
-      cancelRef.current = null;
-    };
-  }, []);
-
-  const clearPendingChildCreate = useCallback(() => {
-    pendingProjectedOpenCancelRef.current?.();
-    pendingProjectedOpenCancelRef.current = null;
-    startTransition(() => {
-      setPendingChildName(null);
-    });
-  }, []);
-
-  const openProjectedChildInTab = useCallback(
-    (
-      projectedNodeId: string,
-      onBeforeOpen: ((node: EpicNodeRef) => void) | null,
-    ) => {
-      pendingProjectedOpenCancelRef.current?.();
-      pendingProjectedOpenCancelRef.current =
-        openProjectedSidebarNodeInTabWhenAvailable({
-          epicHandle,
-          tabId,
-          nodeId: projectedNodeId,
-          fallbackHostId: createHostId ?? UNKNOWN_HOST_PLACEHOLDER,
-          openTileInTab,
-          onBeforeOpen,
-          onOpened: () => {
-            pendingProjectedOpenCancelRef.current = null;
-            startTransition(() => {
-              setPendingChildName(null);
-            });
-          },
-          onUnavailable: () => {
-            pendingProjectedOpenCancelRef.current = null;
-            startTransition(() => {
-              setPendingChildName(null);
-            });
-          },
-          onCleanup: null,
-        });
-    },
-    [createHostId, epicHandle, openTileInTab, tabId],
-  );
 
   const onAddChild = useCallback(
     (type: EpicNodeKind) => {
       if (!canMutate || hostUnavailable || parentBindingBlocked) return;
       if (type !== "chat") return;
-      ensureExpanded(nodeId);
-      setPendingChildName(displayTitle("", "chat"));
-      createChild.mutate(
-        buildChildChatCreateInput({
-          epicId,
-          chatId: uuidv4(),
-          parentId: nodeId,
-          workspaceSeed: childWorkspace.seed,
-        }),
-        {
-          onSuccess: (result) => {
-            openProjectedChildInTab(result.chatId, null);
-          },
-          onError: () => {
-            clearPendingChildCreate();
-          },
-        },
-      );
+      // Consistency with the chats-panel "+": open the shared New Conversation
+      // modal seeded as a child of this row (compose-first) instead of eagerly
+      // creating an empty child chat tile. The modal reads the parent binding
+      // to inherit its worktree and creates the child with `parentId` on submit.
+      useNewConversationModalStore.getState().setComposerMode(epicId, "chat");
+      useNewConversationModalOpenStore.getState().open({
+        epicId,
+        tabId,
+        placement: ACTIVE_TILE_PLACEMENT,
+        parentId: nodeId,
+      });
     },
-    [
-      canMutate,
-      clearPendingChildCreate,
-      createChild,
-      childWorkspace.seed,
-      hostUnavailable,
-      parentBindingBlocked,
-      ensureExpanded,
-      epicId,
-      nodeId,
-      openProjectedChildInTab,
-    ],
+    [canMutate, epicId, hostUnavailable, nodeId, parentBindingBlocked, tabId],
   );
 
   const onAddTerminalAgent = useCallback(
@@ -281,12 +180,6 @@ export function useChatRowChildCreate(args: {
     ],
   );
 
-  const addChildIsPending = computeArtifactNodeAddChildPending({
-    pendingChildName,
-    pendingChildRealId: null,
-    createArtifactPending: createChild.isPending,
-  });
-
   return {
     onAddChild,
     onAddTerminalAgent,
@@ -295,8 +188,10 @@ export function useChatRowChildCreate(args: {
     terminalAgentWorkspaceSeed: childWorkspace.seed,
     terminalAgentHostScope,
     terminalAgentStagingKey,
-    pendingChildName,
-    addChildIsPending,
+    // Child chats are now composed in the shared modal, so the row no longer
+    // shows an optimistic pending placeholder for them (the modal owns that UX).
+    pendingChildName: null,
+    addChildIsPending: false,
     tuiAgentPending: terminalAgentCreate.isPending,
     hostUnavailable,
     workspaceInheritanceBlocked: parentBindingBlocked,
