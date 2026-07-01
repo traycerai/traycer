@@ -32,7 +32,7 @@ function imageContent(id: string): JsonContent {
     type: "doc",
     content: [
       {
-        type: "attachmentGroup",
+        type: "paragraph",
         content: [
           {
             type: "imageAttachment",
@@ -46,7 +46,6 @@ function imageContent(id: string): JsonContent {
           },
         ],
       },
-      { type: "paragraph" },
     ],
   };
 }

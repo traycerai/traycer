@@ -9,7 +9,7 @@ function SlashCommandNodeViewBase(props: NodeViewProps) {
 
   return (
     <NodeViewWrapper as="span" contentEditable={false}>
-      <SlashCommandChip name={label} />
+      <SlashCommandChip name={label} density="regular" />
     </NodeViewWrapper>
   );
 }

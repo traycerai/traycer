@@ -47,7 +47,7 @@ describe("QueuedMessageContentPreview", () => {
     expect(screen.queryByText("1 mention")).toBeNull();
   });
 
-  it("renders inline image chips for attachments", () => {
+  it("renders inline image reference chips for attachments", () => {
     const content: JsonContent = {
       type: "doc",
       content: [
@@ -66,7 +66,8 @@ describe("QueuedMessageContentPreview", () => {
 
     renderPreview(content);
 
-    expect(screen.getByText("shot.png")).not.toBeNull();
+    expect(screen.getByText("Image#1")).not.toBeNull();
+    expect(screen.getByLabelText("Attached Image#1: shot.png")).not.toBeNull();
     expect(screen.queryByText("1 image")).toBeNull();
   });
 });
