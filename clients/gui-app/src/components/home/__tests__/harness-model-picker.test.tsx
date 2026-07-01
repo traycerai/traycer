@@ -260,6 +260,7 @@ import {
   createComposerToolbarStore,
   type ComposerToolbarStore,
 } from "@/stores/composer/composer-toolbar-store";
+import { useComposerHarnessMemoryStore } from "@/stores/composer/composer-harness-memory-store";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ALL_PERMISSION_MODES } from "@traycer/protocol/persistence/epic/foundation";
@@ -525,6 +526,7 @@ function pickerHarness(input: RenderPickerInput | undefined): PickerHarness {
       harnesses: undefined,
       modelsHarnessId: selection.harnessId,
       models: resolvedInput.storeModels,
+      modelsLoaded: true,
       tuiOnly: resolvedInput.tuiOnly ?? false,
     });
   }
@@ -593,12 +595,51 @@ describe("<HarnessModelPicker />", () => {
     queryMock.calls.providers = [];
     openSettingsMock.mockClear();
     useProvidersFocusStore.getState().clearFocusHarnessId();
+    // Memory is a module singleton read by `commitSelection`; reset so a
+    // seeded record can't leak between tests.
+    useComposerHarnessMemoryStore.getState().resetForTests();
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
     cleanup();
+    useComposerHarnessMemoryStore.getState().resetForTests();
   });
+
+  // Seed the per-harness memory so a switch / pick restores a known record.
+  function recordMemory(input: {
+    readonly harnessId: ProviderId;
+    readonly model: string;
+    readonly reasoningEffort: string | null;
+    readonly serviceTier: string | null;
+  }): void {
+    useComposerHarnessMemoryStore.getState().record({
+      harnessId: input.harnessId,
+      model: input.model,
+      permissionMode: "supervised",
+      reasoningEffort: input.reasoningEffort,
+      serviceTier: input.serviceTier,
+      agentMode: "regular",
+    });
+  }
+
+  // Simulate the hook reloading the committed harness's catalog into the store
+  // (the picker itself never pushes catalog; `useComposerToolbarStore` does).
+  function pushStoreCatalog(
+    store: ComposerToolbarStore,
+    modelsHarnessId: ProviderId,
+    models: ReadonlyArray<ModelOption>,
+  ): void {
+    act(() => {
+      store.getState().setCatalog({
+        harnesses: undefined,
+        modelsHarnessId,
+        models,
+        modelsLoaded: true,
+        tuiOnly: false,
+      });
+    });
+  }
 
   it("opens with one search input, a provider rail, and selected provider rows", async () => {
     renderPicker(undefined);
@@ -672,13 +713,16 @@ describe("<HarnessModelPicker />", () => {
     expect(scrollSpy).toHaveBeenCalledTimes(scrollCallCount);
   });
 
-  it("switches the browsed provider from the rail without emitting selection", async () => {
+  it("commits a switch to the browsed provider from the rail", async () => {
     const { selections } = renderPicker(undefined);
 
     await openPicker();
     fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
 
-    expect(selections).toEqual([]);
+    // An AVAILABLE rail click now COMMITS the switch (was browse-only). No memory
+    // for Claude, so the harness commits with an unresolved model (the store
+    // resolves the first model once its catalog loads); the rail still rebases.
+    expect(selections.at(-1)?.harnessId).toBe("claude");
     expect(screen.getByText("Claude Sonnet 4.6")).not.toBeNull();
     expect(
       screen.getByRole("tab", { name: "Claude" }).getAttribute("aria-selected"),
@@ -928,8 +972,8 @@ describe("<HarnessModelPicker />", () => {
     });
   });
 
-  it("keeps the query when switching harness and re-scopes the results", async () => {
-    renderPicker(undefined);
+  it("keeps the query when switching harness, re-scopes the results, and commits", async () => {
+    const { selections } = renderPicker(undefined);
 
     const input = await openPicker();
     // "opus" matches nothing in Codex (the active harness) -> scope-aware empty.
@@ -938,13 +982,14 @@ describe("<HarnessModelPicker />", () => {
     expect(screen.queryByText("Claude Opus 4.7")).toBeNull();
 
     // Switching to Claude from the rail keeps the typed query and re-runs it
-    // against Claude's models, now surfacing the match.
+    // against Claude's models, now surfacing the match - AND commits the switch.
     fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
 
     expect(input.value).toBe("opus");
     expect(
       screen.getByRole("option", { name: /Claude Opus 4\.7/ }),
     ).not.toBeNull();
+    expect(selections.at(-1)?.harnessId).toBe("claude");
   });
 
   it("renders thinking effort controls in the picker footer", async () => {
@@ -1057,12 +1102,12 @@ describe("<HarnessModelPicker />", () => {
     ).not.toBeNull();
   });
 
-  it("switches the browsed provider rail with the leader digit", async () => {
+  it("commits a switch via the leader digit", async () => {
     const { selections } = renderPicker(undefined);
 
     await openPicker();
-    // ⌘2 → the 2nd rail provider (Claude). Pure browse switch: no selection is
-    // emitted and the popover stays open, exactly like clicking the rail icon.
+    // ⌘2 → the 2nd rail provider (Claude). Now COMMITS the switch (was
+    // browse-only), exactly like clicking the rail icon; the popover stays open.
     act(() => {
       fireLeaderDigit(2, "mod");
     });
@@ -1075,7 +1120,7 @@ describe("<HarnessModelPicker />", () => {
       ).toBe("true");
     });
     expect(screen.getByText("Claude Sonnet 4.6")).not.toBeNull();
-    expect(selections).toEqual([]);
+    expect(selections.at(-1)?.harnessId).toBe("claude");
   });
 
   it("sets the thinking level with the sub-leader digit", async () => {
@@ -1103,9 +1148,11 @@ describe("<HarnessModelPicker />", () => {
     expect(reasoningChanges).toEqual(["high"]);
   });
 
-  it("sets the thinking level with the sub-leader digit while browsing a different provider", async () => {
-    const { reasoningChanges } = renderPicker({
-      reasoning: "low",
+  it("sets the thinking level on the now-committed model after a rail switch", async () => {
+    // The old "browse a different provider without committing" premise is gone -
+    // a rail switch now COMMITS. Once the new harness's catalog loads, the footer
+    // reflects the committed model and ⌥-digit sets ITS effort.
+    const { store, reasoningChanges } = renderPicker({
       storeModels: [
         model({
           slug: "gpt-5.5",
@@ -1119,15 +1166,154 @@ describe("<HarnessModelPicker />", () => {
     });
 
     await openPicker();
-    // Browse Claude while the selected model is still Codex. The footer always
-    // reflects the selected model, so ⌥ stays armed and ⌥2 sets that model's
-    // level regardless of which provider rail is being browsed.
     fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
+    // Hook reloads Claude's catalog post-switch; the committed (empty) slug
+    // resolves to the first Claude model, which exposes thinking levels.
+    pushStoreCatalog(store, "claude", [
+      model({
+        harnessId: "claude",
+        slug: "claude-opus-4-7",
+        label: "Claude Opus 4.7",
+        defaultReasoningEffort: "low",
+        supportedReasoningEfforts: [
+          { id: "low", label: "Low", description: null },
+          { id: "high", label: "High", description: null },
+        ],
+      }),
+    ]);
     act(() => {
       fireLeaderDigit(2, "alt");
     });
 
-    expect(reasoningChanges).toEqual(["high"]);
+    expect(reasoningChanges.at(-1)).toBe("high");
+  });
+
+  it("does not commit a degraded provider (browse + reauth CTA only)", async () => {
+    // OpenRouter is signed-out -> degraded. Clicking it browses (the panel shows
+    // its reauth CTA) but must NOT commit a switch.
+    queryMock.providerStates = [
+      providerCliState({
+        providerId: "openrouter",
+        authStatus: "unauthenticated",
+        apiKey: { supported: true, configured: false, source: null },
+      }),
+    ];
+    const { selections } = renderPicker(undefined);
+
+    await openPicker();
+    fireEvent.click(screen.getByRole("tab", { name: "OpenRouter" }));
+
+    // Browsed (rail rebased) but never committed.
+    expect(
+      screen
+        .getByRole("tab", { name: "OpenRouter" })
+        .getAttribute("aria-selected"),
+    ).toBe("true");
+    expect(selections).toEqual([]);
+  });
+
+  it("restores the remembered (harness, model) effort + tier on a rail switch", async () => {
+    recordMemory({
+      harnessId: "claude",
+      model: "claude-opus-4-7",
+      reasoningEffort: "high",
+      serviceTier: "fast",
+    });
+    const { selections, reasoningChanges, serviceTierChanges } = renderPicker({
+      withServiceTier: true,
+    });
+
+    await openPicker();
+    fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
+
+    // The switch restores the harness's last model AND that pair's effort/tier.
+    expect(selections.at(-1)).toEqual({
+      harnessId: "claude",
+      modelSlug: "claude-opus-4-7",
+    });
+    expect(reasoningChanges.at(-1)).toBe("high");
+    expect(serviceTierChanges.at(-1)).toBe("fast");
+  });
+
+  it("restores a (harness, model) record on a model-row pick", async () => {
+    recordMemory({
+      harnessId: "codex",
+      model: "gpt-4.1",
+      reasoningEffort: "high",
+      serviceTier: null,
+    });
+    const { selections, reasoningChanges } = renderPicker(undefined);
+
+    await openPicker();
+    fireEvent.click(screen.getByRole("option", { name: /GPT-4\.1/ }));
+
+    expect(selections.at(-1)).toEqual({
+      harnessId: "codex",
+      modelSlug: "gpt-4.1",
+    });
+    expect(reasoningChanges.at(-1)).toBe("high");
+  });
+
+  it("uses the model's own default effort for an unvisited model (no-carry)", async () => {
+    // No memory for this (harness, model): the pick passes reasoning "" and the
+    // store resolves it to the model's OWN default, overriding the sticky value.
+    const { reasoningChanges } = renderPicker({
+      reasoning: "high",
+      storeModels: [
+        model({
+          harnessId: "codex",
+          slug: "gpt-4.1",
+          label: "GPT-4.1",
+          defaultReasoningEffort: "medium",
+          supportedReasoningEfforts: [
+            { id: "low", label: "Low", description: null },
+            { id: "medium", label: "Medium", description: null },
+            { id: "high", label: "High", description: null },
+          ],
+        }),
+      ],
+    });
+
+    // The trigger reflects the store's first model (GPT-4.1) here, not GPT-5.5.
+    await openPickerByTriggerName(/^GPT-4\.1/);
+    fireEvent.click(screen.getByRole("option", { name: /GPT-4\.1/ }));
+
+    expect(reasoningChanges.at(-1)).toBe("medium");
+  });
+
+  it("resolves a stale remembered slug to the first model on a switch", async () => {
+    // Claude's remembered model was delisted. The switch carries the stale slug,
+    // and once Claude's catalog loads (without it) the derive falls back to the
+    // first model.
+    recordMemory({
+      harnessId: "claude",
+      model: "claude-delisted",
+      reasoningEffort: null,
+      serviceTier: null,
+    });
+    const { store, selections } = renderPicker(undefined);
+
+    await openPicker();
+    fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
+    // Stale slug is held for display until the catalog proves it absent.
+    expect(selections.at(-1)).toEqual({
+      harnessId: "claude",
+      modelSlug: "claude-delisted",
+    });
+
+    pushStoreCatalog(store, "claude", [
+      model({
+        harnessId: "claude",
+        slug: "claude-opus-4-7",
+        label: "Claude Opus 4.7",
+      }),
+    ]);
+
+    // Catalog loaded WITHOUT the stale slug -> resolves to the first model.
+    expect(store.getState().selection).toEqual({
+      harnessId: "claude",
+      modelSlug: "claude-opus-4-7",
+    });
   });
 });
 

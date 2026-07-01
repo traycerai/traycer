@@ -16,6 +16,7 @@
 import type {
   PermissionMode,
   HarnessModelSelection,
+  ProviderId,
   ReasoningLevel,
   ServiceTier,
 } from "@/components/home/data/landing-options";
@@ -26,6 +27,18 @@ export interface ComposerControls {
   readonly setReasoning: (level: ReasoningLevel) => void;
   readonly setServiceTier: (tier: ServiceTier) => void;
   readonly setPermission: (mode: PermissionMode) => void;
+  /**
+   * Memory-aware harness SWITCH: restore that harness's last model + effort/tier
+   * (or its defaults). The palette "Switch provider" leaf and the picker rail
+   * funnel through this instead of `setSelection`.
+   */
+  readonly switchHarness: (harnessId: ProviderId) => void;
+  /**
+   * Memory-aware model PICK: keep the slug, restore that `(harness, model)`
+   * pair's effort/tier (or its defaults). The palette "Switch model" leaf and
+   * the picker's model rows funnel through this instead of `setSelection`.
+   */
+  readonly selectModel: (harnessId: ProviderId, modelSlug: string) => void;
 }
 
 export interface FocusedComposerEntry {

@@ -195,7 +195,7 @@ function ProviderRailButton(props: ProviderRailButtonProps) {
             <PickerLeaderBadge
               show={leaderModifier !== null && !disabled}
               index={index}
-              hintAction="to browse"
+              hintAction="to switch"
               hintTarget={harness.label}
               testId={`model-provider-digit-${leaderDigitFor(index)}`}
               placement="corner"

@@ -41,6 +41,12 @@ export function useRegisterFocusedComposerControls(
       setPermission: (mode) => {
         controlsRef.current.setPermission(mode);
       },
+      switchHarness: (harnessId) => {
+        controlsRef.current.switchHarness(harnessId);
+      },
+      selectModel: (harnessId, modelSlug) => {
+        controlsRef.current.selectModel(harnessId, modelSlug);
+      },
     });
     return dispose;
   }, [kind]);

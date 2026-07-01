@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   PERSIST_STORES,
+  composerHarnessMemoryKey,
   composerRunSettingsKey,
   epicCanvasKey,
   openEpicKey,
@@ -69,7 +70,7 @@ describe("persist key builders — output-preserving against current source", ()
     );
   });
 
-  it("emits the current localStorage key for each of the 5 scoped stores", () => {
+  it("emits the current localStorage key for each of the 6 scoped stores", () => {
     // Source: src/stores/composer/composer-run-settings-store.ts
     // (`composerRunSettingsPersistKey`).
     expect(composerRunSettingsKey(null)).toBe(
@@ -77,6 +78,14 @@ describe("persist key builders — output-preserving against current source", ()
     );
     expect(composerRunSettingsKey("a@b.com")).toBe(
       "traycer-gui-app:composer-run-settings:a@b.com",
+    );
+    // Source: src/stores/composer/composer-harness-memory-store.ts
+    // (`composerHarnessMemoryKey`).
+    expect(composerHarnessMemoryKey(null)).toBe(
+      "traycer-gui-app:composer-harness-memory:anon",
+    );
+    expect(composerHarnessMemoryKey("a@b.com")).toBe(
+      "traycer-gui-app:composer-harness-memory:a@b.com",
     );
     // Source: src/stores/worktree/worktree-intent-memory-store.ts
     // (`worktreeIntentMemoryPersistKey`).

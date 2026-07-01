@@ -70,6 +70,7 @@ function makeToolbarStore() {
     ],
     modelsHarnessId: "claude",
     models: [],
+    modelsLoaded: true,
     tuiOnly: true,
   });
   return store;
@@ -106,6 +107,7 @@ function makeGuiOnlyToolbarStore() {
     ],
     modelsHarnessId: "cursor",
     models: [],
+    modelsLoaded: true,
     tuiOnly: true,
   });
   return store;
