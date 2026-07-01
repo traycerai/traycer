@@ -1,6 +1,11 @@
 /**
- * `chat.subscribe@2.0` - versioned streaming-RPC contract for a single
- * host-owned GUI chat session.
+ * `chat.subscribe@1.1` - versioned streaming-RPC contract for a single
+ * host-owned GUI chat session. `chat.subscribe@1.0` (frozen, near the bottom
+ * of this file) is the exact shape shipped in host-v1.0.0; `@1.1` only adds
+ * the background-items controls on top of it, additively, so a `1.1` app
+ * still bridges to a host still on `1.0`. Streams have no cross-major
+ * downgrade bridge (see `stream-compat.ts`'s `canBridgeStream()`), so once a
+ * method ships, its major must never move again - only additive minors.
  *
  * This stream is intentionally text-frame-only. The existing `epic.subscribe`
  * stream remains responsible for Y.Doc binary updates; chat execution frames
@@ -370,8 +375,11 @@ export const chatSubscribeServerFrameSchema = z.discriminatedUnion("kind", [
     reason: z.string().nullable(),
     code: z.string().nullable(),
     // For background stop-all, task ids whose provider stop request was accepted
-    // even when the aggregate action is rejected for partial failure.
-    backgroundStopTaskIds: z.array(z.string()),
+    // even when the aggregate action is rejected for partial failure. Defaulted
+    // so a `chat.subscribe@1.0` host (no background-items support) still
+    // parses - it never emits a background-stop ack, so `[]` is the correct
+    // reading, not a lossy fallback.
+    backgroundStopTaskIds: z.array(z.string()).default([]),
   }),
   z.object({
     kind: z.literal("messageAccepted"),
@@ -691,9 +699,321 @@ export type ChatSubscribeClientFrame = z.infer<
   typeof chatSubscribeClientFrameSchema
 >;
 
-export const chatSubscribeV20 = defineStreamRpcContract({
+// ─── Frozen `chat.subscribe@1.0` shape (host-v1.0.0, as shipped) ──────────
+//
+// Sourced verbatim from `release-v1.0.0` and kept registered (never edited)
+// so `chatSubscribeV10` below stays an honest record of what that host
+// actually speaks - `canBridgeStream()` needs the `{1,0}` line to be present
+// in the registry to bridge a `1.1` app down to it. Do not add fields or
+// variants here; extend the live schemas above instead.
+
+const chatActionSchemaV10 = z.enum([
+  "send",
+  "deleteMessageSuffix",
+  "editUserMessage",
+  "stop",
+  "resumeQueue",
+  "queueEdit",
+  "queueCancel",
+  "queueReorder",
+  "queueSteerNow",
+  "queueAbortSteer",
+  "queueSettingsUpdate",
+  "queueSettingsRestamp",
+  "activePermissionModeUpdate",
+  "approvalDecision",
+  "fileEditApprovalDecision",
+  "interviewAnswer",
+  "interviewError",
+  "restoreCheckpoint",
+  "revertFileChanges",
+]);
+
+const chatSnapshotSchemaV10 = chatSnapshotSchema.omit({
+  backgroundItems: true,
+});
+
+const chatSubscribeServerFrameSchemaV10 = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("snapshot"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    snapshot: chatSnapshotSchemaV10,
+  }),
+  z.object({
+    kind: z.literal("actionAck"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    clientActionId: z.string(),
+    action: chatActionSchemaV10,
+    status: chatActionAckStatusSchema,
+    reason: z.string().nullable(),
+    code: z.string().nullable(),
+  }),
+  z.object({
+    kind: z.literal("messageAccepted"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    message: userMessageSchema,
+  }),
+  z.object({
+    kind: z.literal("queueChanged"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    queue: chatQueueStateSchema,
+  }),
+  z.object({
+    kind: z.literal("turnStateChanged"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    runStatus: chatRunStatusSchema,
+    activeTurn: chatActiveTurnSchema.nullable(),
+  }),
+  z.object({
+    kind: z.literal("blockDelta"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    event: runtimeEventSchema,
+  }),
+  z.object({
+    kind: z.literal("approvalRequested"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    approval: chatApprovalStateSchema,
+  }),
+  z.object({
+    kind: z.literal("approvalResolved"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    approvalId: z.string(),
+    decision: runtimeApprovalDecisionSchema,
+    resolvedAt: z.number(),
+  }),
+  z.object({
+    kind: z.literal("fileEditApprovalRequested"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    approval: chatFileEditApprovalStateSchema,
+  }),
+  z.object({
+    kind: z.literal("fileEditApprovalResolved"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    approvalId: z.string(),
+    decision: runtimeApprovalDecisionSchema,
+    resolvedAt: z.number(),
+  }),
+  z.object({
+    kind: z.literal("interviewRequested"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    blockId: z.string(),
+    requestedAt: z.number(),
+  }),
+  z.object({
+    kind: z.literal("interviewAnswered"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    blockId: z.string(),
+    answers: z.array(runtimeInterviewAnswerSchema),
+    resolvedAt: z.number(),
+  }),
+  z.object({
+    kind: z.literal("interviewErrored"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    blockId: z.string(),
+    reason: z.string(),
+    resolvedAt: z.number(),
+  }),
+  z.object({
+    kind: z.literal("eventAppended"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    event: chatEventSchema,
+  }),
+  z.object({
+    kind: z.literal("restoreStarted"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    ...restoreStartedManifestSchema.shape,
+  }),
+  z.object({
+    kind: z.literal("restoreProgress"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    checkpointId: z.string(),
+    processedCount: z.number(),
+    totalCount: z.number(),
+  }),
+  z.object({
+    kind: z.literal("restoreCompleted"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    checkpointId: z.string(),
+    finishedAt: z.number(),
+    results: z.array(restoreResultEntrySchema),
+  }),
+  z.object({
+    kind: z.literal("errorNotice"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    notice: chatErrorNoticeSchema,
+  }),
+  z.object({
+    kind: z.literal("worktreeStateChanged"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    worktreeBinding: worktreeBindingSchema.nullable(),
+    missingWorktreePaths: z.array(z.string()),
+  }),
+  z.object({
+    kind: z.literal("pong"),
+    ...textFrameFields,
+  }),
+]);
+
+const chatSubscribeClientFrameSchemaV10 = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("send"),
+    ...ownerActionFrameFields,
+    messageId: z.string(),
+    content: jsonContentSchema,
+    sender: userMessageSenderSchema,
+    settings: chatRunSettingsSchema,
+    accountContext: accountContextSchema,
+    deliveryPolicy: chatQueueDeliveryPolicySchema.default("auto"),
+    worktreeIntent: worktreeIntentSchema.nullable().default(null),
+  }),
+  z.object({
+    kind: z.literal("deleteMessageSuffix"),
+    ...ownerActionFrameFields,
+    fromMessageId: z.string(),
+  }),
+  z.object({
+    kind: z.literal("editUserMessage"),
+    ...ownerActionFrameFields,
+    targetMessageId: z.string(),
+    messageId: z.string(),
+    content: jsonContentSchema,
+    sender: userMessageSenderSchema,
+    settings: chatRunSettingsSchema,
+    accountContext: accountContextSchema,
+    revertFileChanges: z.boolean(),
+    revertArtifacts: z.boolean().default(true),
+  }),
+  z.object({
+    kind: z.literal("stop"),
+    ...ownerActionFrameFields,
+    turnId: z.string().nullable(),
+  }),
+  z.object({
+    kind: z.literal("resumeQueue"),
+    ...ownerActionFrameFields,
+  }),
+  z.object({
+    kind: z.literal("queueEdit"),
+    ...ownerActionFrameFields,
+    queueItemId: z.string(),
+    content: jsonContentSchema,
+  }),
+  z.object({
+    kind: z.literal("queueCancel"),
+    ...ownerActionFrameFields,
+    queueItemId: z.string(),
+  }),
+  z.object({
+    kind: z.literal("queueReorder"),
+    ...ownerActionFrameFields,
+    queueItemId: z.string(),
+    beforeQueueItemId: z.string().nullable(),
+  }),
+  z.object({
+    kind: z.literal("queueSteerNow"),
+    ...ownerActionFrameFields,
+    queueItemId: z.string(),
+    newSettings: chatRunSettingsSchema.nullable().default(null),
+  }),
+  z.object({
+    kind: z.literal("queueAbortSteer"),
+    ...ownerActionFrameFields,
+    queueItemId: z.string(),
+  }),
+  z.object({
+    kind: z.literal("queueSettingsUpdate"),
+    ...ownerActionFrameFields,
+    queueItemId: z.string(),
+    settings: chatRunSettingsSchema,
+    accountContext: accountContextSchema,
+  }),
+  z.object({
+    kind: z.literal("queueSettingsRestamp"),
+    ...ownerActionFrameFields,
+    settings: chatRunSettingsSchema,
+    accountContext: accountContextSchema,
+    excludeQueueItemId: z.string().nullable(),
+  }),
+  z.object({
+    kind: z.literal("activePermissionModeUpdate"),
+    ...ownerActionFrameFields,
+    permissionMode: permissionModeSchema,
+  }),
+  z.object({
+    kind: z.literal("approvalDecision"),
+    ...ownerActionFrameFields,
+    approvalId: z.string(),
+    decision: runtimeApprovalDecisionSchema,
+  }),
+  z.object({
+    kind: z.literal("fileEditApprovalDecision"),
+    ...ownerActionFrameFields,
+    approvalId: z.string(),
+    decision: runtimeApprovalDecisionSchema,
+  }),
+  z.object({
+    kind: z.literal("interviewAnswer"),
+    ...ownerActionFrameFields,
+    blockId: z.string(),
+    answers: z.array(runtimeInterviewAnswerSchema),
+  }),
+  z.object({
+    kind: z.literal("interviewError"),
+    ...ownerActionFrameFields,
+    blockId: z.string(),
+    reason: z.string(),
+  }),
+  z.object({
+    kind: z.literal("restoreCheckpoint"),
+    ...ownerActionFrameFields,
+    checkpointId: z.string(),
+    revertArtifacts: z.boolean().default(true),
+  }),
+  z.object({
+    kind: z.literal("revertFileChanges"),
+    ...ownerActionFrameFields,
+    fromMessageId: z.string().nullable(),
+    filePaths: z.array(z.string()).nullable(),
+    revertArtifacts: z.boolean().default(true),
+  }),
+  z.object({
+    kind: z.literal("ping"),
+    ...textFrameFields,
+  }),
+]);
+
+export const chatSubscribeV10 = defineStreamRpcContract({
   method: "chat.subscribe",
-  schemaVersion: { major: 2, minor: 0 } as const,
+  schemaVersion: { major: 1, minor: 0 } as const,
+  openRequestSchema: chatSubscribeOpenRequestSchema,
+  serverFrameSchema: chatSubscribeServerFrameSchemaV10,
+  clientFrameSchema: chatSubscribeClientFrameSchemaV10,
+});
+
+// ─── Live `chat.subscribe@1.1` contract ────────────────────────────────────
+
+export const chatSubscribeV11 = defineStreamRpcContract({
+  method: "chat.subscribe",
+  schemaVersion: { major: 1, minor: 1 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchema,
   serverFrameSchema: chatSubscribeServerFrameSchema,
   clientFrameSchema: chatSubscribeClientFrameSchema,

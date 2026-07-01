@@ -13,7 +13,7 @@ import type {
 import type { WsStreamClient } from "./ws-stream-client";
 
 /**
- * Typed handlers for a `chat.subscribe@2.0` session. The GUI chat store binds
+ * Typed handlers for a `chat.subscribe@1.1` session. The GUI chat store binds
  * these directly into Zustand so raw stream envelopes do not leak into React.
  */
 export interface ChatStreamCallbacks {

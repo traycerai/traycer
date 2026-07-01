@@ -33,7 +33,8 @@ import {
   agentGuiListHarnessesV10,
   agentGuiListHarnessesV20,
   agentGuiListModelsV10,
-  chatSubscribeV20,
+  chatSubscribeV10,
+  chatSubscribeV11,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -2549,7 +2550,7 @@ export type HostRpcRegistry = typeof hostRpcRegistry;
  * Combined streaming-RPC registry for the `/stream` WS manifest.
  *
  * One manifest per `/stream` WS: `epic.subscribe@1.0`,
- * `chat.subscribe@2.0`, `notifications.subscribe@1.0`,
+ * `chat.subscribe@1.1`, `notifications.subscribe@1.0`,
  * `terminal.subscribe@1.0`, `git.subscribeStatus@1.0`,
  * `agent.inbox.subscribe@1.0`, `speech.dictate@1.0`, and
  * `migration.run@1.0` are negotiated from this registry. Later minors within
@@ -2561,7 +2562,12 @@ export type HostRpcRegistry = typeof hostRpcRegistry;
  *
  * 1. Add new methods as top-level keys.
  * 2. Add new minors within a major line for additive changes.
- * 3. Add new majors only when a sub-schema actually breaks compatibility.
+ * 3. Add new majors only when a sub-schema actually breaks compatibility -
+ *    and never for a shipped method with a peer still in the field, since a
+ *    stream major bump has no downgrade bridge (see `chat.subscribe`'s
+ *    history: `1.0` is frozen and kept registered forever; `1.1` added
+ *    background-items controls as an additive minor instead of a major, to
+ *    stay compatible with host-v1.0.0).
  */
 export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
   "epic.subscribe": {
@@ -2575,11 +2581,14 @@ export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
     },
   },
   "chat.subscribe": {
-    2: {
-      latestMinor: 0,
+    1: {
+      latestMinor: 1,
       versions: {
         0: {
-          contract: chatSubscribeV20,
+          contract: chatSubscribeV10,
+        },
+        1: {
+          contract: chatSubscribeV11,
         },
       },
     },

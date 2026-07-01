@@ -26,7 +26,7 @@ describe("validateVersionedStreamRpcRegistry", () => {
       validateVersionedStreamRpcRegistry(hostStreamRpcRegistry);
     }).not.toThrow();
     expect(hostStreamRpcRegistry["epic.subscribe"][1].latestMinor).toBe(0);
-    expect(hostStreamRpcRegistry["chat.subscribe"][2].latestMinor).toBe(0);
+    expect(hostStreamRpcRegistry["chat.subscribe"][1].latestMinor).toBe(1);
     expect(
       hostStreamRpcRegistry["notifications.subscribe"][1].latestMinor,
     ).toBe(0);
@@ -262,15 +262,18 @@ describe("validateVersionedStreamRpcRegistry", () => {
 describe("stream compatibility", () => {
   it("allows a compatible subscribed method when another stream method has major skew", () => {
     const currentManifest = buildStreamManifest(hostStreamRpcRegistry);
-    const olderChatManifest = {
+    // A hypothetical peer on some future, unbridgeable chat.subscribe major -
+    // exercises the method-isolation property below, independent of
+    // chat.subscribe's real, currently-bridgeable version history.
+    const skewedManifest = {
       ...currentManifest,
-      "chat.subscribe": { major: 1, minor: 0 },
+      "chat.subscribe": { major: 2, minor: 0 },
     };
 
     const fullConnection = checkStreamCompatibility(
       hostStreamRpcRegistry,
       currentManifest,
-      olderChatManifest,
+      skewedManifest,
       "host",
     );
     expect(fullConnection.ok).toBe(false);
@@ -278,7 +281,7 @@ describe("stream compatibility", () => {
     const epicSubscribe = checkStreamMethodCompatibility(
       hostStreamRpcRegistry,
       currentManifest,
-      olderChatManifest,
+      skewedManifest,
       "host",
       "epic.subscribe",
     );
@@ -287,10 +290,40 @@ describe("stream compatibility", () => {
     const chatSubscribe = checkStreamMethodCompatibility(
       hostStreamRpcRegistry,
       currentManifest,
-      olderChatManifest,
+      skewedManifest,
       "host",
       "chat.subscribe",
     );
     expect(chatSubscribe.ok).toBe(false);
+  });
+
+  // Regression guard for the release-v1.1.0 RC incident: chat.subscribe
+  // bumped to a new major (dropping the v1.0 registration entirely) and broke
+  // every host still running host-v1.0.0. Fixed by keeping chat.subscribe on
+  // major 1 and shipping the background-items controls as an additive 1.1
+  // minor, so a 1.1 app must still bridge to a host that only advertises 1.0.
+  it("bridges chat.subscribe@1.1 to a host still on chat.subscribe@1.0 (host-v1.0.0)", () => {
+    const currentManifest = buildStreamManifest(hostStreamRpcRegistry);
+    const hostV100Manifest = {
+      ...currentManifest,
+      "chat.subscribe": { major: 1, minor: 0 },
+    };
+
+    const fullConnection = checkStreamCompatibility(
+      hostStreamRpcRegistry,
+      currentManifest,
+      hostV100Manifest,
+      "client",
+    );
+    expect(fullConnection.ok).toBe(true);
+
+    const chatSubscribe = checkStreamMethodCompatibility(
+      hostStreamRpcRegistry,
+      currentManifest,
+      hostV100Manifest,
+      "client",
+      "chat.subscribe",
+    );
+    expect(chatSubscribe.ok).toBe(true);
   });
 });

@@ -1,4 +1,8 @@
-import type { VersionedStreamRpcRegistry } from "@traycer/protocol/framework/versioned-stream-rpc";
+import type {
+  SchemaVersion,
+  StreamMethodVersionRegistry,
+  VersionedStreamRpcRegistry,
+} from "@traycer/protocol/framework/versioned-stream-rpc";
 import {
   buildStreamManifest,
   checkStreamMethodCompatibility,
@@ -13,10 +17,7 @@ import type {
   RevalidateOutcome,
   StreamAuthRevalidator,
 } from "@traycer-clients/shared/auth/bearer-revalidator";
-import type {
-  ConnectionManifest,
-  FatalErrorDetails,
-} from "@traycer/protocol/framework/ws-protocol";
+import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import {
   hostStreamOpenAckFrameSchema,
   hostStreamFatalErrorFrameSchema,
@@ -535,10 +536,7 @@ class StreamSession<
       this.onTransportDrop();
       return;
     }
-    const manifest = streamOpenManifestForMethod(
-      this.config.registry,
-      this.config.method,
-    );
+    const manifest = buildStreamManifest(this.config.registry);
     const openFrame: ClientStreamOpenFrame = {
       kind: "open",
       token,
@@ -715,11 +713,18 @@ class StreamSession<
       return;
     }
 
+    const prepared = prepareStreamSubscribeRequest(
+      this.config.registry,
+      this.config.method,
+      myManifest[this.config.method],
+      ackParse.data.manifest[this.config.method],
+      this.config.params,
+    );
     const subscribeFrame: ClientStreamSubscribeFrame = {
       kind: "subscribe",
       method: this.config.method,
-      schemaVersion: myManifest[this.config.method],
-      params: this.config.params,
+      schemaVersion: prepared.onWireVersion,
+      params: prepared.onWirePayload,
     };
     if (!this.sendControlText(socket, subscribeFrame)) {
       this.onSendFailure(socket);
@@ -1146,19 +1151,48 @@ class StreamSession<
   }
 }
 
-function streamOpenManifestForMethod(
+interface PreparedStreamSubscribeRequest {
+  readonly onWireVersion: SchemaVersion;
+  readonly onWirePayload: unknown;
+}
+
+/**
+ * Computes what the `subscribe` control frame should actually declare on the
+ * wire - the streaming analog of `ws-rpc-client.ts`'s `prepareRequestPayload`.
+ *
+ * `checkStreamMethodCompatibility` already proved `mine`/`theirs` are
+ * bridgeable before this runs. For a same-major minor skew that only ever
+ * means one thing: MY OWN registry carries a contract at the peer's exact
+ * (older) minor - that's what made `canBridgeStream()` return `true`. Per the
+ * framework's asymmetric contract, the older side never transforms, so the
+ * newer side is the one that must downgrade what it declares: sending my own
+ * canonical here would declare a minor the older peer's dispatch table has
+ * never heard of, even though the abstract compatibility check passed (this
+ * is what broke `chat.subscribe@1.1` against host-v1.0.0 - the compat check
+ * passed, but the client still declared `1.1`, which host-v1.0.0's registry
+ * has no contract for). Cross-major skew never reaches here: streams have no
+ * cross-major bridge, so `compat.ok` would already be `false`.
+ */
+function prepareStreamSubscribeRequest(
   registry: VersionedStreamRpcRegistry,
   method: string,
-): ConnectionManifest {
-  const manifest = buildStreamManifest(registry);
-  if (method !== "chat.subscribe" && manifest["chat.subscribe"]?.major === 2) {
-    // Older hosts checked the full manifest before subscribe. For non-chat
-    // streams, advertise the last pre-v2 chat line only in the open manifest so
-    // old hosts can reach subscribe; the real method version is still checked
-    // from the canonical manifest after openAck.
-    return { ...manifest, "chat.subscribe": { major: 1, minor: 0 } };
+  myCanonical: SchemaVersion,
+  theirCanonical: SchemaVersion,
+  params: unknown,
+): PreparedStreamSubscribeRequest {
+  if (
+    myCanonical.major !== theirCanonical.major ||
+    myCanonical.minor <= theirCanonical.minor
+  ) {
+    return { onWireVersion: myCanonical, onWirePayload: params };
   }
-  return manifest;
+  const methodRegistry = registry[method] as StreamMethodVersionRegistry;
+  const olderLine = methodRegistry[myCanonical.major];
+  const olderEntry = olderLine.versions[theirCanonical.minor];
+  return {
+    onWireVersion: theirCanonical,
+    onWirePayload: olderEntry.contract.openRequestSchema.parse(params),
+  };
 }
 
 type SessionPhase = "idle" | "dialing" | "awaitingOpenAck" | "subscribed";

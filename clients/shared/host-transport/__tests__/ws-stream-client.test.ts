@@ -227,13 +227,6 @@ function parseText(raw: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function expectedEpicOpenManifest(): Record<string, unknown> {
-  return {
-    ...buildStreamManifest(hostStreamRpcRegistry),
-    "chat.subscribe": { major: 1, minor: 0 },
-  };
-}
-
 describe("WsStreamClient", () => {
   beforeEach(() => {
     vi.useRealTimers();
@@ -273,10 +266,15 @@ describe("WsStreamClient", () => {
     const openFrame = parseText(stub.textSent[0]);
     expect(openFrame.kind).toBe("open");
     expect(openFrame.token).toBe("token-abc");
-    // Non-chat streams advertise a chat v1 compatibility line in the open frame
-    // so already-deployed hosts can reach the method-specific subscribe check.
-    const expectedManifest = expectedEpicOpenManifest();
-    expect(openFrame.manifest).toEqual(expectedManifest);
+    // The open frame's manifest is the client's raw canonical - no per-method
+    // substitution needed. A same-major minor skew (e.g. host-v1.0.0's
+    // chat.subscribe@1.0 vs this client's @1.1) is safe for the old host's own
+    // full-manifest check: `canBridgeStream` trusts an older peer receiving a
+    // newer minor unconditionally (additive minors), so it never poisons an
+    // unrelated method's open handshake the way the old major bump once did.
+    expect(openFrame.manifest).toEqual(
+      buildStreamManifest(hostStreamRpcRegistry),
+    );
 
     stub.fireText({
       kind: "openAck",
@@ -313,9 +311,12 @@ describe("WsStreamClient", () => {
     const stub = sockets[0].socket;
     stub.fireOpen();
 
+    // A hypothetical peer on some future, unbridgeable chat.subscribe major -
+    // exercises method isolation, independent of chat.subscribe's real,
+    // currently-bridgeable version history.
     const skewedManifest = {
       ...buildStreamManifest(hostStreamRpcRegistry),
-      "chat.subscribe": { major: 1, minor: 0 },
+      "chat.subscribe": { major: 2, minor: 0 },
     };
     stub.fireText({ kind: "openAck", manifest: skewedManifest });
 
@@ -352,6 +353,50 @@ describe("WsStreamClient", () => {
     expect(openFrame.manifest).toEqual(
       buildStreamManifest(hostStreamRpcRegistry),
     );
+
+    session.close();
+  });
+
+  // Regression test for the release-v1.1.0 RC incident: the compatibility
+  // check correctly determined chat.subscribe@1.1 bridges to a host still on
+  // @1.0, but the subscribe frame kept declaring this client's own canonical
+  // (1.1) regardless - a version host-v1.0.0's dispatch table has never heard
+  // of, so it rejected the subscribe outright even though the handshake
+  // passed. The client must downgrade what it declares to the version the
+  // host actually advertised.
+  it("declares the host's own chat.subscribe version when the host is still on 1.0", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "token-abc",
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+
+    const session = client.subscribe("chat.subscribe", {
+      epicId: "epic-1",
+      chatId: "chat-1",
+    });
+    await flush();
+
+    const stub = sockets[0].socket;
+    stub.fireOpen();
+
+    const hostV100Manifest = {
+      ...buildStreamManifest(hostStreamRpcRegistry),
+      "chat.subscribe": { major: 1, minor: 0 },
+    };
+    stub.fireText({ kind: "openAck", manifest: hostV100Manifest });
+
+    expect(stub.textSent).toHaveLength(2);
+    expect(parseText(stub.textSent[1])).toEqual({
+      kind: "subscribe",
+      method: "chat.subscribe",
+      schemaVersion: { major: 1, minor: 0 },
+      params: { epicId: "epic-1", chatId: "chat-1" },
+    });
 
     session.close();
   });
