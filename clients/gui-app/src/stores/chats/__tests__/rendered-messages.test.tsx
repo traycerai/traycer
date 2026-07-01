@@ -1592,6 +1592,84 @@ describe("useRenderedMessages", () => {
     ]);
   });
 
+  it("drops a resume trigger for a subagent whose last raw child segment differs from the visible parent card", () => {
+    const assistant: Message = {
+      ...assistantMessage("turn-1", 2000),
+      blocks: [
+        {
+          type: "subagent",
+          agentType: null,
+          blockId: "agent-1",
+          name: "Investigate lifecycle",
+          task: "Investigate the lifecycle.",
+          progressUpdates: [],
+          result: "Done.",
+          status: "completed",
+          timestamp: 2001,
+          startedAt: 2000,
+          spawnToolCallId: null,
+          stopped: false,
+        },
+        {
+          type: "tool_call",
+          blockId: "child-tool-1",
+          parentBlockId: "agent-1",
+          toolName: "read_file",
+          ...toolCallInputFields("read_file", { path: "/repo/src/app.ts" }),
+          error: null,
+          agentMessageSend: null,
+          progress: null,
+          backgroundOutput: null,
+          backgroundTask: false,
+          stopped: false,
+          status: "completed",
+          timestamp: 2002,
+          startedAt: 2002,
+          endedAt: 2002,
+        },
+        {
+          // The resume trigger's blockId targets the subagent itself, but in
+          // raw block order the immediately preceding block is the child tool
+          // call nested under it - the scenario suppressRedundantResumeMarkers
+          // must catch by comparing against the visible (post-nesting) order.
+          type: "autonomous_resume",
+          blockId: "resume-1",
+          status: "completed",
+          timestamp: 2003,
+          triggers: [
+            {
+              kind: "subagent",
+              title: "Investigate lifecycle",
+              status: "completed",
+              summary: "Subagent finished",
+              blockId: "agent-1",
+              outputFile: null,
+            },
+          ],
+        },
+      ],
+    };
+
+    const { result } = renderHook(() =>
+      useRenderedMessages(
+        {
+          messages: [assistant],
+          events: [],
+          pendingUserMessages: [],
+          liveAssistantMessage: null,
+          activeTurn: null,
+          runStatus: "idle",
+          ...BINDING,
+        },
+        displayContext,
+      ),
+    );
+
+    expect(result.current[0]?.segments.map((segment) => segment.kind)).toEqual([
+      "subagent",
+    ]);
+  });
+
   it("drops prompt-less subagent blocks from background command tasks", () => {
     const assistant: Message = {
       ...assistantMessage("turn-1", 2000),

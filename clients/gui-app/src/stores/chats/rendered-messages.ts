@@ -2109,7 +2109,7 @@ function buildAssistantSegments(
       flat.push(segment);
     }
   }
-  const nested = nestSubagentChildren(suppressRedundantResumeMarkers(flat));
+  const nested = suppressRedundantResumeMarkers(nestSubagentChildren(flat));
   const visible = suppressAuthErrors(
     suppressEditToolCalls(suppressSubagentSpawnToolCalls(nested)),
   );
@@ -2273,15 +2273,23 @@ function rejectToolSegments<T extends MessageSegment>(
  * `appendAutonomousResumeNotificationToActiveTurn`). With nothing else
  * streamed in between, the "X completed" marker lands directly under the
  * card that already shows its own completed status - pure duplication. Drop
- * a trigger whose blockId is the immediately preceding segment; a resume
- * segment left with zero triggers is removed outright.
+ * a trigger whose blockId is the immediately preceding segment.
+ *
+ * Must run on the post-`nestSubagentChildren` (visible) order, not the raw
+ * flat block order: a subagent's own trigger's `blockId` targets the
+ * subagent segment itself, but in raw order the block right before the
+ * trigger is often the subagent's *last child* (its own activity streamed
+ * after the subagent block started). Comparing against that child would
+ * never match the subagent's id, so the redundant marker would leak through
+ * under the parent card the user actually sees. A resume segment left with
+ * zero triggers is removed outright.
  */
 function suppressRedundantResumeMarkers(
-  flat: ReadonlyArray<MessageSegment>,
+  nested: ReadonlyArray<MessageSegment>,
 ): ReadonlyArray<MessageSegment> {
-  return flat.flatMap((segment, index): MessageSegment[] => {
+  return nested.flatMap((segment, index): MessageSegment[] => {
     if (segment.kind !== "autonomous_resume") return [segment];
-    const previousId = index > 0 ? (flat.at(index - 1)?.id ?? null) : null;
+    const previousId = index > 0 ? (nested.at(index - 1)?.id ?? null) : null;
     if (previousId === null) return [segment];
     const triggers = segment.triggers.filter(
       (trigger) => trigger.blockId !== previousId,
