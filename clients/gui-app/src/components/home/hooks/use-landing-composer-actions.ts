@@ -33,7 +33,10 @@ import { useLandingComposerStore } from "@/stores/composer/landing-composer-stor
 import { useInitialChatHandoffStore } from "@/stores/epics/initial-chat-handoff-store";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import { markEpicCreatedThisSession } from "@/lib/epics/session-created-epics";
+import {
+  markEpicCreatedThisSession,
+  unmarkEpicCreatedThisSession,
+} from "@/lib/epics/session-created-epics";
 import {
   existingEpicTabIntent,
   navigateToTabIntent,
@@ -365,6 +368,9 @@ export function useLandingComposerActions(): LandingComposerActions {
           }
         })
         .catch(() => {
+          // The epic never landed on the host: drop the create marker so its
+          // orphaned tab is no longer exempt from existence reconciliation.
+          unmarkEpicCreatedThisSession(epicId);
           useComposerRunSettingsStore.getState().clearEpicRunSettings([epicId]);
           useEpicCanvasStore.getState().clearEpicTitlePending(epicId);
           useEpicCanvasStore.getState().clearChatTitlePending(chatId);
@@ -525,22 +531,31 @@ export function useLandingComposerActions(): LandingComposerActions {
         now,
         chat: null,
       })
-        .then(() =>
-          terminalAgentCreateFn({
-            epicId,
-            tabId,
-            parentId: null,
-            title: "",
-            placement: { kind: "active-tile" },
-            harnessId,
-            model,
-            reasoningEffort,
-            agentMode,
-            forkSourceHarnessSessionId: null,
-            onStatusChange: null,
-            worktreeIntent: workspaceContext.worktreeIntent,
-            terminalAgentArgs,
-          }),
+        .then(
+          () =>
+            terminalAgentCreateFn({
+              epicId,
+              tabId,
+              parentId: null,
+              title: "",
+              placement: { kind: "active-tile" },
+              harnessId,
+              model,
+              reasoningEffort,
+              agentMode,
+              forkSourceHarnessSessionId: null,
+              onStatusChange: null,
+              worktreeIntent: workspaceContext.worktreeIntent,
+              terminalAgentArgs,
+            }),
+          // Only `epic.create` rejection reaches this arm (a later tui-agent
+          // failure goes to the trailing `.catch`). The epic never landed, so
+          // drop the create marker to let the reconciler prune the orphan tab.
+          // A downstream tui-agent failure leaves the marker in place - the epic
+          // exists, so it must stay protected until `epic.listTasks` reflects it.
+          () => {
+            unmarkEpicCreatedThisSession(epicId);
+          },
         )
         .catch(() => undefined);
     },

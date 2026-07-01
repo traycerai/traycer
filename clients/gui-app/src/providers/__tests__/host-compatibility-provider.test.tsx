@@ -36,6 +36,7 @@ import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe
 
 const STARTUP_EPIC_ID = "epic-startup-compat";
 const STALE_EPIC_ID = "epic-stale-persisted";
+const FRESH_EPIC_ID = "epic-fresh-created";
 
 const HANDOFF_SETTINGS = {
   harnessId: "codex",
@@ -241,6 +242,27 @@ function epicTask(epicId: string): ListTasksResponse["tasks"][number] {
   };
 }
 
+// Shared harness for the "freshly-created epic survives reconciliation" tests.
+// `epic.listTasks` returns only the pre-existing startup tab, so a just-created
+// epic (absent from the page while epic.listTasks lags epic.create) is pruned
+// unless a protection guard exempts it.
+function mountReconcilerHarness(): { readonly queryClient: QueryClient } {
+  const listTasks = vi.fn((_params: ListTasksRequest): ListTasksResponse => ({
+    tasks: [epicTask(STARTUP_EPIC_ID)],
+    hasMore: false,
+  }));
+  const listHarnesses = vi.fn((): ListHarnessesResponse => ({
+    harnesses: [],
+  }));
+  const { queryClient } = mountStartupConsumers({
+    hostStatus: () => compatibleHostStatus,
+    listTasks,
+    listHarnesses,
+    onMethod: () => undefined,
+  });
+  return { queryClient };
+}
+
 function installAuthFetch(): () => void {
   const originalFetch: unknown = (globalThis as { fetch?: unknown }).fetch;
   Object.defineProperty(globalThis, "fetch", {
@@ -313,7 +335,7 @@ describe("HostCompatibilityProvider startup consumers", () => {
     useAuthStore.getState().setSignedOut();
     useEpicCanvasStore
       .getState()
-      .closeTabsForEpics([STARTUP_EPIC_ID, STALE_EPIC_ID]);
+      .closeTabsForEpics([STARTUP_EPIC_ID, STALE_EPIC_ID, FRESH_EPIC_ID]);
     useInitialChatHandoffStore.getState().resetForTests();
     clearSessionCreatedEpics();
     vi.restoreAllMocks();
@@ -496,69 +518,45 @@ describe("HostCompatibilityProvider startup consumers", () => {
     queryClient.clear();
   });
 
-  it("keeps a freshly-created epic tab whose epic is not yet in the reconcile page but has an active initial-chat handoff", async () => {
-    const listTasks = vi.fn((_params: ListTasksRequest): ListTasksResponse => ({
-      tasks: [],
-      hasMore: false,
-    }));
-    const listHarnesses = vi.fn((): ListHarnessesResponse => ({
-      harnesses: [],
-    }));
-    const { queryClient } = mountStartupConsumers({
-      hostStatus: () => compatibleHostStatus,
-      listTasks,
-      listHarnesses,
-      onMethod: () => undefined,
-    });
+  it("keeps a freshly-created epic tab absent from the reconcile page but protected by an active initial-chat handoff", async () => {
+    const { queryClient } = mountReconcilerHarness();
 
-    // `STARTUP_EPIC_ID` stands in for a just-created epic: it carries an active
-    // initial-chat handoff and is not in the (empty) reconcile page because
-    // `epic.listTasks` lags `epic.create`. `STALE_EPIC_ID` is a genuinely-stale
-    // persisted tab (no session, no handoff). Register/open both before the
-    // reconciler run captures `openEpicIds` (host.status resolves on a later
-    // microtask, so this synchronous block wins).
+    // FRESH_EPIC_ID models a just-created epic: absent from the reconcile page
+    // (epic.listTasks lags epic.create) but carrying an active initial-chat
+    // handoff. STALE_EPIC_ID is a genuinely-stale persisted tab with no
+    // protection. Both are opened before the reconciler run captures
+    // openEpicIds (host.status resolves on a later microtask, so this
+    // synchronous block wins).
     act(() => {
+      useEpicCanvasStore.getState().openEpicTab(FRESH_EPIC_ID, "Fresh");
       useEpicCanvasStore.getState().openEpicTab(STALE_EPIC_ID, "Stale");
-      registerActiveHandoff(STARTUP_EPIC_ID);
+      registerActiveHandoff(FRESH_EPIC_ID);
     });
 
-    // The unprotected stale tab is pruned - proof the reconciliation ran to
+    // The unprotected stale tab is pruned - proof reconciliation ran to
     // completion - while the handoff-protected fresh tab survives.
     await waitFor(() => {
       expect(collectOpenEpicIds()).not.toContain(STALE_EPIC_ID);
     });
-    expect(collectOpenEpicIds()).toContain(STARTUP_EPIC_ID);
+    expect(collectOpenEpicIds()).toContain(FRESH_EPIC_ID);
     queryClient.clear();
   });
 
-  it("keeps a freshly-created epic tab marked created-this-session (terminal-agent path, no handoff) that is absent from the reconcile page", async () => {
-    const listTasks = vi.fn((_params: ListTasksRequest): ListTasksResponse => ({
-      tasks: [],
-      hasMore: false,
-    }));
-    const listHarnesses = vi.fn((): ListHarnessesResponse => ({
-      harnesses: [],
-    }));
-    const { queryClient } = mountStartupConsumers({
-      hostStatus: () => compatibleHostStatus,
-      listTasks,
-      listHarnesses,
-      onMethod: () => undefined,
-    });
+  it("keeps a freshly-created epic tab absent from the reconcile page but marked created-this-session (terminal-agent path, no handoff)", async () => {
+    const { queryClient } = mountReconcilerHarness();
 
-    // `STARTUP_EPIC_ID` stands in for a terminal-agent epic just created from
-    // the start page: no initial-chat handoff, no live session yet, only the
-    // synchronous create-time marker. `STALE_EPIC_ID` is a genuinely-stale
-    // persisted tab. Both are absent from the (empty) reconcile page.
+    // Terminal-agent create registers no initial-chat handoff, so only the
+    // synchronous created-this-session marker protects FRESH_EPIC_ID here.
     act(() => {
+      useEpicCanvasStore.getState().openEpicTab(FRESH_EPIC_ID, "Fresh");
       useEpicCanvasStore.getState().openEpicTab(STALE_EPIC_ID, "Stale");
-      markEpicCreatedThisSession(STARTUP_EPIC_ID);
+      markEpicCreatedThisSession(FRESH_EPIC_ID);
     });
 
     await waitFor(() => {
       expect(collectOpenEpicIds()).not.toContain(STALE_EPIC_ID);
     });
-    expect(collectOpenEpicIds()).toContain(STARTUP_EPIC_ID);
+    expect(collectOpenEpicIds()).toContain(FRESH_EPIC_ID);
     queryClient.clear();
   });
 

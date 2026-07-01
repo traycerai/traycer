@@ -25,6 +25,14 @@ export function markEpicCreatedThisSession(epicId: string): void {
   sessionCreatedEpicIds.add(epicId);
 }
 
+/**
+ * Drop a single marker when the optimistic create fails, so a tab whose epic
+ * never landed on the host is no longer exempt from existence reconciliation.
+ */
+export function unmarkEpicCreatedThisSession(epicId: string): void {
+  sessionCreatedEpicIds.delete(epicId);
+}
+
 export function wasEpicCreatedThisSession(epicId: string): boolean {
   return sessionCreatedEpicIds.has(epicId);
 }
