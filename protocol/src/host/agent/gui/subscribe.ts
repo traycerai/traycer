@@ -347,6 +347,20 @@ export const chatSnapshotSchema = z.object({
   // Background section and never sends stop actions; a present (possibly empty)
   // array means the controls are supported. This is the capability sentinel.
   backgroundItems: z.array(backgroundItemSchema).optional(),
+  // Whether the host considers a turn genuinely active or activating right
+  // now - exactly its own `isTurnInProgress()` (backs `stop`'s
+  // `NO_ACTIVE_TURN` rejection). Narrower than `runStatus !== "idle"`, which
+  // also reads "running" while a queued item is pending or visible
+  // background work outlives the turn - neither of which corresponds to an
+  // active turn. Consumers that need "is there a turn to stop/attribute an
+  // indicator to/block a restore against" should read this, not derive it
+  // from `runStatus`. OPTIONAL for the same rolling-update reason as
+  // `backgroundItems`: an older host omits it, and the renderer falls back to
+  // its own `runStatus`/`activeTurn`/`queue`/`backgroundItems`-derived
+  // approximation (see `chat-tile-session-state.ts`) rather than treating a
+  // missing value as either "always active" or "never active" - both would
+  // be wrong for the whole session against an older host.
+  turnInProgress: z.boolean().optional(),
 });
 export type ChatSnapshot = z.infer<typeof chatSnapshotSchema>;
 
@@ -406,6 +420,9 @@ export const chatSubscribeServerFrameSchema = z.discriminatedUnion("kind", [
     // Optional for the same capability-sentinel reason as the snapshot field; an
     // older host omits it and the renderer keeps its last snapshot value.
     backgroundItems: z.array(backgroundItemSchema).optional(),
+    // See `chatSnapshotSchema.turnInProgress` - same predicate, same
+    // optionality, same conservative-fallback contract.
+    turnInProgress: z.boolean().optional(),
   }),
   z.object({
     kind: z.literal("blockDelta"),

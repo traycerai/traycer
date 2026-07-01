@@ -8,7 +8,7 @@ import type {
 import type { ChatMessage } from "@/stores/composer/chat-store";
 import {
   chatMessageEditingForInlineEdit,
-  composerStopTurnStatus,
+  resolvedTurnStatus,
   type InlineEditState,
 } from "../chat-tile-session-state";
 
@@ -125,11 +125,16 @@ function runnableQueue(itemCount: number): ChatQueueState {
   };
 }
 
-describe("composerStopTurnStatus", () => {
+describe("resolvedTurnStatus - no turnInProgress from the host (older-host fallback heuristic)", () => {
   it("passes null through unchanged (idle chat)", () => {
     expect(
-      composerStopTurnStatus(
-        { activeTurn: null, queue: EMPTY_QUEUE, backgroundItems: undefined },
+      resolvedTurnStatus(
+        {
+          activeTurn: null,
+          queue: EMPTY_QUEUE,
+          backgroundItems: undefined,
+          turnInProgress: undefined,
+        },
         null,
       ),
     ).toBeNull();
@@ -137,11 +142,12 @@ describe("composerStopTurnStatus", () => {
 
   it("returns the turn status when a turn is genuinely active", () => {
     expect(
-      composerStopTurnStatus(
+      resolvedTurnStatus(
         {
           activeTurn: ACTIVE_TURN,
           queue: EMPTY_QUEUE,
           backgroundItems: undefined,
+          turnInProgress: undefined,
         },
         "running",
       ),
@@ -150,13 +156,14 @@ describe("composerStopTurnStatus", () => {
 
   it("returns the turn status when a turn is genuinely active even alongside a queued item or background work", () => {
     expect(
-      composerStopTurnStatus(
+      resolvedTurnStatus(
         {
           activeTurn: ACTIVE_TURN,
           queue: runnableQueue(1),
           backgroundItems: [
             { taskId: "t1", kind: "subagent", title: "Sub", blockId: "t1" },
           ],
+          turnInProgress: undefined,
         },
         "running",
       ),
@@ -165,11 +172,12 @@ describe("composerStopTurnStatus", () => {
 
   it("falls back to null when runStatus is running purely because of a pending queued item (no active turn)", () => {
     expect(
-      composerStopTurnStatus(
+      resolvedTurnStatus(
         {
           activeTurn: null,
           queue: runnableQueue(1),
           backgroundItems: undefined,
+          turnInProgress: undefined,
         },
         "running",
       ),
@@ -178,13 +186,14 @@ describe("composerStopTurnStatus", () => {
 
   it("falls back to null when runStatus is running purely because of visible background work (no active turn) - the reported regression", () => {
     expect(
-      composerStopTurnStatus(
+      resolvedTurnStatus(
         {
           activeTurn: null,
           queue: EMPTY_QUEUE,
           backgroundItems: [
             { taskId: "t1", kind: "subagent", title: "Sub", blockId: "t1" },
           ],
+          turnInProgress: undefined,
         },
         "running",
       ),
@@ -193,8 +202,13 @@ describe("composerStopTurnStatus", () => {
 
   it("keeps the turn status when running is explained by neither the queue nor background work (the pre-turn activating window)", () => {
     expect(
-      composerStopTurnStatus(
-        { activeTurn: null, queue: EMPTY_QUEUE, backgroundItems: undefined },
+      resolvedTurnStatus(
+        {
+          activeTurn: null,
+          queue: EMPTY_QUEUE,
+          backgroundItems: undefined,
+          turnInProgress: undefined,
+        },
         "running",
       ),
     ).toBe("running");
@@ -202,11 +216,12 @@ describe("composerStopTurnStatus", () => {
 
   it("a paused queue with pending items does not count as runnable", () => {
     expect(
-      composerStopTurnStatus(
+      resolvedTurnStatus(
         {
           activeTurn: null,
           queue: { status: "paused", items: runnableQueue(1).items },
           backgroundItems: undefined,
+          turnInProgress: undefined,
         },
         "running",
       ),
@@ -215,10 +230,89 @@ describe("composerStopTurnStatus", () => {
 
   it("an empty backgroundItems array does not count as visible background work", () => {
     expect(
-      composerStopTurnStatus(
-        { activeTurn: null, queue: EMPTY_QUEUE, backgroundItems: [] },
+      resolvedTurnStatus(
+        {
+          activeTurn: null,
+          queue: EMPTY_QUEUE,
+          backgroundItems: [],
+          turnInProgress: undefined,
+        },
         "running",
       ),
     ).toBe("running");
+  });
+
+  it("known gap: a turn still activating with another item queued behind it is (incorrectly) treated as not active", () => {
+    // Documents the precision gap the host-sent `turnInProgress` layer
+    // exists to close - see the next describe block.
+    expect(
+      resolvedTurnStatus(
+        {
+          activeTurn: null,
+          queue: runnableQueue(1),
+          backgroundItems: undefined,
+          turnInProgress: undefined,
+        },
+        "running",
+      ),
+    ).toBeNull();
+  });
+});
+
+describe("resolvedTurnStatus - turnInProgress present (host-sent, exact)", () => {
+  it("turnInProgress: true overrides the heuristic even when it would say not-active (closes the activating+queued-behind gap)", () => {
+    expect(
+      resolvedTurnStatus(
+        {
+          activeTurn: null,
+          queue: runnableQueue(1),
+          backgroundItems: undefined,
+          turnInProgress: true,
+        },
+        "running",
+      ),
+    ).toBe("running");
+  });
+
+  it("turnInProgress: false overrides the heuristic even when it would say active (background-only phase)", () => {
+    expect(
+      resolvedTurnStatus(
+        {
+          activeTurn: null,
+          queue: EMPTY_QUEUE,
+          backgroundItems: undefined,
+          turnInProgress: false,
+        },
+        "running",
+      ),
+    ).toBeNull();
+  });
+
+  it("turnInProgress: false wins even when activeTurn is (unexpectedly) non-null", () => {
+    expect(
+      resolvedTurnStatus(
+        {
+          activeTurn: ACTIVE_TURN,
+          queue: EMPTY_QUEUE,
+          backgroundItems: undefined,
+          turnInProgress: false,
+        },
+        "running",
+      ),
+    ).toBeNull();
+  });
+
+  it("null turnStatus (already idle) short-circuits regardless of turnInProgress", () => {
+    expect(
+      resolvedTurnStatus(
+        {
+          activeTurn: null,
+          queue: EMPTY_QUEUE,
+          backgroundItems: undefined,
+          turnInProgress: true,
+        },
+        null,
+      ),
+    ).toBeNull();
   });
 });

@@ -99,9 +99,18 @@ export interface RenderedMessagesInput {
   readonly pendingFileEditApprovals?: ReadonlyArray<ChatFileEditApprovalState>;
   readonly pendingInterviews?: ReadonlyArray<ChatPendingInterviewState>;
   /**
-   * Host-owned chat run state. Drives the in-progress indicator on the
-   * active assistant turn's row (`running` → "Working…", `stopping` →
-   * "Stopping…"). `idle` leaves every row indicator-free.
+   * Drives the in-progress indicator on the active assistant turn's row
+   * (`running` → "Working…", `stopping` → "Stopping…"). `idle` leaves every
+   * row indicator-free.
+   *
+   * NOT the raw host `runStatus` - that also reads `"running"` while a
+   * queued item is pending or visible background work (Bash
+   * `run_in_background` / a subagent / Monitor) outlives the turn, neither of
+   * which this indicator belongs to. Passing it raw synthesizes a duplicate,
+   * live "Working…" row alongside the real turn's already-settled "done"
+   * footer. Pass the caller's narrowed turn-status derivation instead (see
+   * `resolvedTurnStatus` in `chat-tile-session-state.ts`), mapping its
+   * `null` to `"idle"`.
    */
   readonly runStatus: ChatRunStatus;
   /**
