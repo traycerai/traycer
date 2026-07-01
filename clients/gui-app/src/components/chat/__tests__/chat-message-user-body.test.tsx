@@ -16,6 +16,7 @@ import { UserMessageBody } from "@/components/chat/chat-message-user-body";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { parseComposerClipboardHtml } from "@/lib/composer/composer-clipboard";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
+import type { ChatMessageUserActions } from "@/components/chat/chat-message";
 import { useSetA2AReceivedOpen } from "@/stores/chats/a2a-open-store-context";
 import {
   useChatCollapsibleTileInstanceId,
@@ -41,6 +42,14 @@ vi.mock("@/lib/epic-selectors", () => ({
         }
       : null,
   useOpenEpicId: () => "epic-1",
+}));
+
+vi.mock("@/hooks/host/use-tab-host-client", () => ({
+  useTabHostClient: () => null,
+}));
+
+vi.mock("@/components/chat/composer/picker/use-composer-picker-items", () => ({
+  useComposerPickerItems: () => undefined,
 }));
 
 interface OpenReceivedA2AButtonProps {
@@ -123,6 +132,22 @@ const STRUCTURED_USER_CONTENT: JsonContent = {
             },
           ],
         },
+      ],
+    },
+  ],
+};
+
+const STRUCTURED_IMAGE_USER_CONTENT: JsonContent = {
+  type: "doc",
+  content: [
+    {
+      type: "paragraph",
+      content: [
+        { type: "slashCommand", attrs: { commandName: "plan" } },
+        { type: "text", text: " can you see this " },
+        imageNode("img-1", "first.png"),
+        { type: "text", text: " and this " },
+        imageNode("img-2", "second.png"),
       ],
     },
   ],
@@ -218,10 +243,74 @@ describe("<UserMessageBody /> agent messages", () => {
     );
 
     const trigger = screen.getByRole("button", {
-      name: "Open screenshot.png",
+      name: "Open Image#1: screenshot.png",
     });
     expect(trigger.className).toContain("size-12");
     expect(trigger.className).not.toContain("size-24");
+    expect(
+      trigger.querySelector('[data-user-message-image-badge="1"]'),
+    ).not.toBeNull();
+  });
+
+  it("renders submitted image references inline with matching thumbnail order", () => {
+    render(
+      <UserMessageBody
+        actions={null}
+        message={{
+          ...plainUserMessage("fallback text"),
+          structuredContent: STRUCTURED_IMAGE_USER_CONTENT,
+          attachments: [
+            imageAttachment("first.png"),
+            imageAttachment("second.png"),
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByText("/plan")).not.toBeNull();
+    expect(screen.getByText("Image#1")).not.toBeNull();
+    expect(screen.getByText("Image#2")).not.toBeNull();
+    expect(screen.getByLabelText("Attached Image#1: first.png")).not.toBeNull();
+    expect(
+      screen.getByLabelText("Attached Image#2: second.png"),
+    ).not.toBeNull();
+    expect(screen.getByLabelText("Open Image#1: first.png")).not.toBeNull();
+    expect(screen.getByLabelText("Open Image#2: second.png")).not.toBeNull();
+    const display = screen
+      .getByLabelText("Attached Image#2: second.png")
+      .closest("[data-user-message-display]");
+    expect(display?.className).toContain("max-w-[min(100%,48rem)]");
+    expect(display?.className).not.toContain("max-w-[85%]");
+  });
+
+  it("keeps image reference labels coherent when a user message enters edit mode", async () => {
+    const message = {
+      ...plainUserMessage("fallback text"),
+      structuredContent: STRUCTURED_IMAGE_USER_CONTENT,
+      attachments: [
+        imageAttachment("first.png"),
+        imageAttachment("second.png"),
+      ],
+    };
+    const actions = editingUserActions(STRUCTURED_IMAGE_USER_CONTENT);
+    const view = render(<UserMessageBody actions={null} message={message} />);
+
+    expect(screen.getByLabelText("Attached Image#1: first.png")).not.toBeNull();
+
+    view.rerender(
+      <ChatExpansionTestProviders tileInstanceId="user-body-test-tile">
+        <TooltipProvider>
+          <UserMessageBody actions={actions} message={message} />
+        </TooltipProvider>
+      </ChatExpansionTestProviders>,
+    );
+
+    await screen.findByLabelText("Attached Image#1: first.png");
+    expect(
+      screen.getByLabelText("Attached Image#2: second.png"),
+    ).not.toBeNull();
+    expect(screen.getByLabelText("Open Image#1: first.png")).not.toBeNull();
+    expect(screen.getByLabelText("Open Image#2: second.png")).not.toBeNull();
   });
 
   it("renders received agent messages as an expandable A2A card", () => {
@@ -371,6 +460,54 @@ function plainUserMessage(content: string): ChatMessageModel {
     senderLabel: "You",
     agentSenderInfo: null,
     agentMessage: null,
+  };
+}
+
+function imageNode(id: string, fileName: string): JsonContent {
+  return {
+    type: "imageAttachment",
+    attrs: {
+      id,
+      fileName,
+      b64content: id,
+      mimeType: "image/png",
+      size: id.length,
+    },
+  };
+}
+
+function imageAttachment(name: string) {
+  return {
+    kind: "image" as const,
+    hash: null,
+    mediaType: "image/png",
+    dataUrl: "data:image/png;base64,aW1hZ2U=",
+    name,
+    size: 128,
+  };
+}
+
+function editingUserActions(content: JsonContent): ChatMessageUserActions {
+  return {
+    type: "user",
+    enabled: true,
+    confirmingDelete: false,
+    editing: {
+      initialContent: content,
+      currentContent: content,
+      pending: false,
+      canSubmit: false,
+      slashProviderId: "claude",
+      mentionRoots: [],
+      currentEpicId: "epic-1",
+      onSnapshot: () => undefined,
+      onSubmit: () => undefined,
+      onCancel: () => undefined,
+    },
+    onEdit: () => undefined,
+    onDeleteRequest: () => undefined,
+    onDeleteConfirm: () => undefined,
+    onDeleteCancel: () => undefined,
   };
 }
 

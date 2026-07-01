@@ -1139,6 +1139,11 @@
   [data-composer-editor] s {
     text-decoration: line-through;
   }
+  /* Inline atom node views need a zero-width inline edge so the caret can sit
+     after a terminal image chip on the same visual line. */
+  [data-composer-editor] [data-composer-image-atom]::after {
+    content: "\200B";
+  }
   [data-composer-editor] :where(:not(pre) > code) {
     background: color-mix(in oklch, currentColor 10%, transparent);
     border: 1px solid color-mix(in oklch, currentColor 16%, transparent);
