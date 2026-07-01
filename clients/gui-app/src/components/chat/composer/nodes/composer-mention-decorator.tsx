@@ -7,16 +7,13 @@ import { basenameOfPath } from "@/lib/path";
 import { EPIC_NODE_ICONS } from "@/lib/artifacts/node-display";
 import { cn } from "@/lib/utils";
 import {
-  COMPOSER_INLINE_CHIP_CLASSNAME,
-  COMPOSER_INLINE_CHIP_ICON_CLASSNAME,
-  COMPOSER_INLINE_CHIP_TEXT_CLASSNAME,
+  composerInlineChipClassNames,
+  type ComposerInlineChipDensity,
 } from "./composer-inline-chip-classnames";
 
 interface ComposerMentionDecoratorProps {
   readonly mention: MentionAttachment;
-  readonly className?: string;
-  readonly iconClassName?: string;
-  readonly textClassName?: string;
+  readonly density: ComposerInlineChipDensity;
 }
 
 interface DecoratorIconProps {
@@ -74,11 +71,10 @@ function DecoratorIcon({
 }
 
 export function ComposerMentionDecorator({
-  className,
-  iconClassName,
+  density,
   mention,
-  textClassName,
 }: ComposerMentionDecoratorProps): ReactElement {
+  const classNames = composerInlineChipClassNames(density);
   const isPathMention =
     mention.contextType === "file" || mention.contextType === "folder";
   const label = isPathMention
@@ -96,18 +92,16 @@ export function ComposerMentionDecorator({
       align={undefined}
     >
       <span
-        className={className ?? COMPOSER_INLINE_CHIP_CLASSNAME}
+        className={classNames.root}
         data-composer-chip="mention"
         contentEditable={false}
       >
         <DecoratorIcon
           mention={mention}
           filename={filename}
-          className={iconClassName ?? COMPOSER_INLINE_CHIP_ICON_CLASSNAME}
+          className={classNames.icon}
         />
-        <span className={textClassName ?? COMPOSER_INLINE_CHIP_TEXT_CLASSNAME}>
-          {label}
-        </span>
+        <span className={classNames.text}>{label}</span>
       </span>
     </TooltipWrapper>
   );

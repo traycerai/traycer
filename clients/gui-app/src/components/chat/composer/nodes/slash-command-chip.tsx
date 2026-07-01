@@ -2,32 +2,23 @@ import { memo } from "react";
 
 import { cn } from "@/lib/utils";
 import {
-  COMPOSER_INLINE_CHIP_CLASSNAME,
-  COMPOSER_INLINE_CHIP_TEXT_CLASSNAME,
+  composerInlineChipClassNames,
+  type ComposerInlineChipDensity,
 } from "./composer-inline-chip-classnames";
 
 interface SlashCommandChipProps {
   readonly name: string;
-  readonly className?: string;
-  readonly textClassName?: string;
+  readonly density: ComposerInlineChipDensity;
 }
 
-function SlashCommandChipBase({
-  className,
-  name,
-  textClassName,
-}: SlashCommandChipProps) {
+function SlashCommandChipBase({ density, name }: SlashCommandChipProps) {
+  const classNames = composerInlineChipClassNames(density);
   return (
     <span
-      className={cn(
-        className ?? COMPOSER_INLINE_CHIP_CLASSNAME,
-        "font-mono text-foreground",
-      )}
+      className={cn(classNames.root, "font-mono text-foreground")}
       data-composer-chip="slash-command"
     >
-      <span className={textClassName ?? COMPOSER_INLINE_CHIP_TEXT_CLASSNAME}>
-        {name}
-      </span>
+      <span className={classNames.text}>{name}</span>
     </span>
   );
 }

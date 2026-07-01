@@ -5,7 +5,7 @@ import { act, cleanup, render } from "@testing-library/react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
 import type { ImageAttachmentAttrs } from "@/components/chat/composer/editor/extensions/image-attachment-extension";
-import { COMPOSER_INLINE_CHIP_METRIC_CLASSNAME } from "@/components/chat/composer/nodes/composer-inline-chip-classnames";
+import { composerInlineChipClassNames } from "@/components/chat/composer/nodes/composer-inline-chip-classnames";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ComposerPromptEditor } from "../composer-prompt-editor";
 import type { ComposerPromptEditorHandle } from "../composer-prompt-editor";
@@ -252,7 +252,9 @@ describe("ComposerPromptEditor render isolation", () => {
       "mention",
     ]);
 
-    const sharedClasses = COMPOSER_INLINE_CHIP_METRIC_CLASSNAME.split(" ");
+    const sharedClasses = composerInlineChipClassNames("regular")
+      .root.split(" ")
+      .filter((className) => !className.startsWith("text-"));
     for (const chip of chips) {
       expect(chip.className.split(" ")).toEqual(
         expect.arrayContaining(sharedClasses),
