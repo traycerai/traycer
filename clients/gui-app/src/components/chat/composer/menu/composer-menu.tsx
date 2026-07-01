@@ -209,6 +209,12 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
 
   const headerLabel = copy.header;
   const emptyLabel = copy.empty;
+  const dialogContentShard = useMemo(() => activeDialogContentShard(), []);
+  const removeScrollShards = useMemo(
+    () => (dialogContentShard === null ? [] : [dialogContentShard]),
+    [dialogContentShard],
+  );
+  const isolateOutsideScroll = dialogContentShard !== null;
 
   // The menu portals to `document.body`, so it lives OUTSIDE the Radix modal
   // Dialog's scroll-lock subtree (the Dialog's `react-remove-scroll` node and
@@ -219,15 +225,18 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
   // lock pushes it to the top of react-remove-scroll's `lockStack` while open,
   // so its own overflow region is honored and the Dialog's lock is suspended -
   // the same way nested Radix modal popovers coexist with a modal Dialog.
-  // `noIsolation` leaves background/page scroll untouched (so the inline
-  // composers behave exactly as before), and `removeScrollBar={false}` avoids
+  // When opened from inside a Dialog, the Dialog content is registered as a
+  // shard so modal scroll containment still applies outside both the menu and
+  // the modal content. Inline composers keep `noIsolation`, preserving their
+  // background/page scroll behavior. `removeScrollBar={false}` avoids
   // re-managing the scrollbar the Dialog already owns.
   const menu = (
     <RemoveScroll
       ref={floatingRef}
       forwardProps
       enabled
-      noIsolation
+      noIsolation={!isolateOutsideScroll}
+      shards={removeScrollShards}
       removeScrollBar={false}
       allowPinchZoom
     >
@@ -300,6 +309,22 @@ function selectInitialPlacement(store: ComposerPickerStore): LockedPlacement {
   if (spaceBelow >= MENU_HEIGHT_ESTIMATE) return "bottom-start";
   if (spaceAbove >= MENU_HEIGHT_ESTIMATE) return "top-start";
   return spaceBelow >= spaceAbove ? "bottom-start" : "top-start";
+}
+
+function activeDialogContentShard(): HTMLElement | null {
+  const activeElement = document.activeElement;
+  if (activeElement instanceof HTMLElement) {
+    const activeDialog = activeElement.closest<HTMLElement>(
+      '[data-slot="dialog-content"]',
+    );
+    if (activeDialog !== null) return activeDialog;
+  }
+
+  const dialogs = document.querySelectorAll<HTMLElement>(
+    '[data-slot="dialog-content"]',
+  );
+  if (dialogs.length === 0) return null;
+  return dialogs[dialogs.length - 1];
 }
 
 interface RenderedItem {

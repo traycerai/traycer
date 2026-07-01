@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { Editor } from "@tiptap/core";
 
 import type { SlashCommand } from "@/lib/composer/types";
+import { insertImageAttachmentsCommand } from "@/hooks/composer/use-composer-paste";
 
 import { buildComposerExtensions } from "../editor/editor-config";
 import {
@@ -72,6 +73,40 @@ describe("composer slash flow", () => {
     expect(editor.state.doc.textContent).toBe("/plan");
   });
 
+  it("opens picker when user types / after a leading image", async () => {
+    const { editor, pickerStore } = makeFixture();
+    insertImageAttachmentsCommand(editor, [imageAttrs("img-1")]);
+
+    editor.commands.insertContent("/");
+    await flush();
+
+    expect(pickerStore.getState().open).toBe(true);
+    expect(pickerStore.getState().kind).toBe("slash");
+  });
+
+  it("does not open slash picker on a later block after an image-only block", async () => {
+    const { editor, pickerStore } = makeFixture();
+    editor.commands.setContent({
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [{ type: "imageAttachment", attrs: imageAttrs("img-1") }],
+        },
+        { type: "paragraph" },
+      ],
+    });
+    const firstBlock = editor.state.doc.firstChild;
+    if (firstBlock === null) throw new Error("expected first block");
+    editor.commands.setTextSelection(firstBlock.nodeSize + 1);
+
+    editor.commands.insertContent("/");
+    await flush();
+
+    expect(pickerStore.getState().open).toBe(false);
+    expect(editor.state.doc.textContent).toBe("/");
+  });
+
   it("does not open slash picker when / typed mid-paragraph", async () => {
     const { editor, pickerStore } = makeFixture();
     editor.commands.insertContent("hello /");
@@ -119,4 +154,47 @@ describe("composer slash flow", () => {
     });
     expect(slashCount).toBe(0);
   });
+
+  it("keeps a slash chip when only images precede it", async () => {
+    const { editor } = makeFixture();
+    insertImageAttachmentsCommand(editor, [imageAttrs("img-1")]);
+    editor.commands.insertContent({
+      type: "slashCommand",
+      attrs: { commandName: "plan" },
+    });
+    await flush();
+
+    expect(slashCount(editor)).toBe(1);
+  });
+
+  it("strips a slash chip when real text appears before leading images", async () => {
+    const { editor } = makeFixture();
+    editor.commands.insertContent("hello ");
+    insertImageAttachmentsCommand(editor, [imageAttrs("img-1")]);
+    editor.commands.insertContent({
+      type: "slashCommand",
+      attrs: { commandName: "plan" },
+    });
+    await flush();
+
+    expect(slashCount(editor)).toBe(0);
+  });
 });
+
+function imageAttrs(id: string) {
+  return {
+    id,
+    fileName: `${id}.png`,
+    b64content: id,
+    mimeType: "image/png",
+    size: id.length,
+  };
+}
+
+function slashCount(editor: Editor): number {
+  let count = 0;
+  editor.state.doc.descendants((node) => {
+    if (node.type.name === "slashCommand") count += 1;
+  });
+  return count;
+}

@@ -29,6 +29,7 @@ import {
   ComposerPromptEditor,
   type ComposerPromptEditorHandle,
 } from "@/components/chat/composer/composer-prompt-editor";
+import { ChatComposerAttachmentsStrip } from "@/components/chat/composer/chat-composer-attachments-strip";
 import { ComposerContentRenderer } from "@/components/chat/composer/content-renderer";
 import { createComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
 import { useComposerPickerItems } from "@/components/chat/composer/picker/use-composer-picker-items";
@@ -42,6 +43,11 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import type { Attachment, ImageAttachment } from "@/lib/composer/types";
+import {
+  buildImageAttachmentDisplayLabels,
+  fallbackImageAttachmentDisplayLabel,
+  type ImageAttachmentDisplayLabel,
+} from "@/lib/composer/image-attachment-labels";
 import { useAttachmentBlobSrc } from "@/lib/attachments/use-attachment-blob-src";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import {
@@ -108,7 +114,7 @@ export function UserMessageBody({
   if (message.role !== "user") {
     return (
       <>
-        <AttachmentGallery attachments={message.attachments} />
+        <AttachmentGallery attachments={message.attachments} align="end" />
         <div className="w-full rounded-lg border border-border/40 bg-muted/20 px-4 py-3 text-ui leading-7 text-muted-foreground">
           <ChatUserMessageContent
             content={message.content}
@@ -126,7 +132,7 @@ export function UserMessageBody({
   if (message.agentSenderInfo !== null) {
     return (
       <>
-        <AttachmentGallery attachments={message.attachments} />
+        <AttachmentGallery attachments={message.attachments} align="end" />
         <AgentMessageDisplayView
           messageId={message.id}
           messageText={message.content}
@@ -137,12 +143,7 @@ export function UserMessageBody({
     );
   }
 
-  return (
-    <>
-      <AttachmentGallery attachments={message.attachments} />
-      <UserMessageDisplayView message={message} actions={actions} />
-    </>
-  );
+  return <UserMessageDisplayView message={message} actions={actions} />;
 }
 
 /**
@@ -366,7 +367,10 @@ function UserMessageDisplayView({
   );
 
   return (
-    <div className="group/user-message flex min-w-0 max-w-[85%] flex-col items-end">
+    <div
+      className="group/user-message flex min-w-0 max-w-[min(100%,48rem)] flex-col items-end"
+      data-user-message-display=""
+    >
       {visibleSteerBadge !== null ? (
         <div className="mb-1.5">
           <UserMessageSteerBadge badge={visibleSteerBadge} />
@@ -374,6 +378,7 @@ function UserMessageDisplayView({
       ) : null}
       <div className="relative min-w-0 max-w-full">
         <div className="rounded-lg border border-border/50 bg-muted/30 px-4 py-3 text-ui leading-7 text-foreground [overflow-wrap:anywhere]">
+          <AttachmentGallery attachments={message.attachments} align="start" />
           <div
             ref={contentRef}
             data-chat-find-unit={findUnitId}
@@ -518,6 +523,10 @@ function InlineUserMessageEditor({
     editing.onCancel();
   }, [editing]);
 
+  const removeImageAttachment = useCallback((id: string) => {
+    editorRef.current?.removeImageAttachmentById(id);
+  }, []);
+
   const onSnapshot = useCallback(
     (content: JsonContent, selection: { from: number; to: number }) => {
       editing.onSnapshot(content, selection);
@@ -592,6 +601,20 @@ function InlineUserMessageEditor({
     ),
     [editing, handleEditorKeyDown, onSnapshot, pickerStore, submit],
   );
+  const editorSlot = useMemo(
+    () => (
+      <>
+        <ChatComposerAttachmentsStrip
+          content={editing.currentContent}
+          editingQueueItemId={null}
+          onCancelQueueEdit={null}
+          onRemoveImage={removeImageAttachment}
+        />
+        {editor}
+      </>
+    ),
+    [editing.currentContent, editor, removeImageAttachment],
+  );
   const toolbar = useMemo(
     () => (
       <div className="flex justify-end gap-1 px-4 pb-3 pt-2">
@@ -627,7 +650,7 @@ function InlineUserMessageEditor({
       <ComposerArea
         pickerStore={pickerStore}
         overlay={null}
-        editor={editor}
+        editor={editorSlot}
         toolbar={toolbar}
       />
     </div>
@@ -789,23 +812,49 @@ function MessageCopyButton({
 }
 
 function AttachmentGallery({
+  align,
   attachments,
 }: {
+  align: "start" | "end";
   attachments: ReadonlyArray<Attachment>;
 }): ReactNode {
-  const images = attachments.flatMap((attachment) =>
-    attachment.kind === "image"
-      ? [{ key: imageAttachmentRenderKey(attachment), attachment }]
-      : [],
-  );
+  const images = useMemo(() => {
+    const imageAttachments = attachments.filter(isImageAttachment);
+    const labels = buildImageAttachmentDisplayLabels(
+      imageAttachments.map((attachment, index) => ({
+        id: String(index),
+        fileName: attachment.name ?? "image",
+      })),
+    );
+    return imageAttachments.map((attachment, index) => ({
+      key: imageAttachmentRenderKey(attachment),
+      attachment,
+      label: labels.get(String(index)),
+    }));
+  }, [attachments]);
   if (images.length === 0) return null;
   return (
-    <div className="mb-2 flex w-full flex-wrap justify-end gap-1.5">
+    <div
+      className={cn(
+        "mb-2 flex w-full flex-wrap gap-1.5",
+        align === "start" ? "justify-start" : "justify-end",
+      )}
+    >
       {images.map((image) => (
-        <ImageAttachmentThumb key={image.key} attachment={image.attachment} />
+        <ImageAttachmentThumb
+          key={image.key}
+          attachment={image.attachment}
+          displayLabel={image.label}
+        />
       ))}
     </div>
   );
+}
+
+function isImageAttachment(
+  attachment: Attachment,
+): attachment is ImageAttachment {
+  return attachment.kind === "image";
 }
 
 function imageAttachmentRenderKey(attachment: ImageAttachment): string {
@@ -832,19 +881,31 @@ function useImageAttachmentSrc(attachment: ImageAttachment): string | null {
 
 function ImageAttachmentThumb({
   attachment,
+  displayLabel,
 }: {
   attachment: ImageAttachment;
+  displayLabel: ImageAttachmentDisplayLabel | undefined;
 }): ReactNode {
   const alt = attachment.name || "Image attachment";
+  const label =
+    displayLabel ??
+    fallbackImageAttachmentDisplayLabel({ id: "fallback", fileName: alt });
   const src = useImageAttachmentSrc(attachment);
   return (
     <Dialog>
       <DialogTrigger asChild>
         <button
           type="button"
-          aria-label={`Open ${alt}`}
+          aria-label={`Open ${label.ariaLabel}`}
+          title={label.title}
           className="group relative size-12 overflow-hidden rounded-md border border-border/70 bg-muted/40 outline-none transition-colors hover:border-foreground/40 focus-visible:ring-2 focus-visible:ring-ring"
         >
+          <span
+            className="pointer-events-none absolute left-0.5 top-0.5 z-10 flex h-4 min-w-4 items-center justify-center rounded-sm border border-border/70 bg-background/90 px-1 text-[0.625rem] font-semibold leading-none text-foreground shadow-sm"
+            data-user-message-image-badge={label.badgeLabel}
+          >
+            {label.badgeLabel}
+          </span>
           {src === null ? (
             <div className="size-full animate-pulse bg-muted/60" aria-hidden />
           ) : (

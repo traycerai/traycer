@@ -4,39 +4,58 @@ import type { MentionAttachment } from "@/lib/composer/types";
 import { MaterialFileIcon } from "@/components/material-file-icon";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { basenameOfPath } from "@/lib/path";
-import { cn } from "@/lib/utils";
 import { EPIC_NODE_ICONS } from "@/lib/artifacts/node-display";
+import { cn } from "@/lib/utils";
+import {
+  COMPOSER_INLINE_CHIP_CLASSNAME,
+  COMPOSER_INLINE_CHIP_ICON_CLASSNAME,
+  COMPOSER_INLINE_CHIP_TEXT_CLASSNAME,
+} from "./composer-inline-chip-classnames";
 
 interface ComposerMentionDecoratorProps {
-  mention: MentionAttachment;
+  readonly mention: MentionAttachment;
+  readonly className?: string;
+  readonly iconClassName?: string;
+  readonly textClassName?: string;
 }
 
 interface DecoratorIconProps {
   readonly mention: MentionAttachment;
   readonly filename: string;
+  readonly className: string;
 }
 
-const DECORATOR_ICON_CLASS = "size-3 shrink-0 text-muted-foreground";
-
 function DecoratorIcon({
+  className,
   mention,
   filename,
 }: DecoratorIconProps): ReactElement {
   if (mention.contextType === "file") {
-    return <MaterialFileIcon filename={filename} className="size-3 shrink-0" />;
+    return <MaterialFileIcon filename={filename} className={className} />;
   }
   if (mention.contextType === "folder") {
-    return <Folder className={DECORATOR_ICON_CLASS} aria-hidden />;
+    return (
+      <Folder className={cn(className, "text-muted-foreground")} aria-hidden />
+    );
   }
   if (mention.contextType === "worktree") {
-    return <FolderGit2 className={DECORATOR_ICON_CLASS} aria-hidden />;
+    return (
+      <FolderGit2
+        className={cn(className, "text-muted-foreground")}
+        aria-hidden
+      />
+    );
   }
   if (mention.contextType === "epic") {
-    return <Layers className={DECORATOR_ICON_CLASS} aria-hidden />;
+    return (
+      <Layers className={cn(className, "text-muted-foreground")} aria-hidden />
+    );
   }
   if (mention.contextType === "chat") {
     const Icon = EPIC_NODE_ICONS.chat;
-    return <Icon className={DECORATOR_ICON_CLASS} aria-hidden />;
+    return (
+      <Icon className={cn(className, "text-muted-foreground")} aria-hidden />
+    );
   }
   if (
     mention.contextType === "spec" ||
@@ -45,13 +64,20 @@ function DecoratorIcon({
     mention.contextType === "review"
   ) {
     const Icon = EPIC_NODE_ICONS[mention.contextType];
-    return <Icon className={DECORATOR_ICON_CLASS} aria-hidden />;
+    return (
+      <Icon className={cn(className, "text-muted-foreground")} aria-hidden />
+    );
   }
-  return <GitBranch className={DECORATOR_ICON_CLASS} aria-hidden />;
+  return (
+    <GitBranch className={cn(className, "text-muted-foreground")} aria-hidden />
+  );
 }
 
 export function ComposerMentionDecorator({
+  className,
+  iconClassName,
   mention,
+  textClassName,
 }: ComposerMentionDecoratorProps): ReactElement {
   const isPathMention =
     mention.contextType === "file" || mention.contextType === "folder";
@@ -70,15 +96,18 @@ export function ComposerMentionDecorator({
       align={undefined}
     >
       <span
-        className={cn(
-          "mx-[1px] inline-flex items-center gap-1 rounded-md border border-border/60 bg-muted/60 px-1.5 py-0.5 align-baseline font-medium text-foreground/90",
-          "select-none",
-        )}
+        className={className ?? COMPOSER_INLINE_CHIP_CLASSNAME}
         data-composer-chip="mention"
         contentEditable={false}
       >
-        <DecoratorIcon mention={mention} filename={filename} />
-        <span className="truncate">{label}</span>
+        <DecoratorIcon
+          mention={mention}
+          filename={filename}
+          className={iconClassName ?? COMPOSER_INLINE_CHIP_ICON_CLASSNAME}
+        />
+        <span className={textClassName ?? COMPOSER_INLINE_CHIP_TEXT_CLASSNAME}>
+          {label}
+        </span>
       </span>
     </TooltipWrapper>
   );

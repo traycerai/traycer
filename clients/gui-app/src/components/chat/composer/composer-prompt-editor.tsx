@@ -18,6 +18,7 @@ import type { GuiHarnessId } from "@traycer/protocol/host/index";
 
 import { cn } from "@/lib/utils";
 import { registerComposerFocus } from "@/lib/composer/composer-focus-registry";
+import { normalizeComposerContentWithSelection } from "@/lib/composer/composer-content-normalizer";
 
 import { buildComposerExtensions } from "./editor/editor-config";
 import { mentionSuggestionPluginKey } from "./editor/extensions/mention-extension";
@@ -111,9 +112,14 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
   // latest-value-ref usage (closure into a static external library plugin) -
   // do not "fix" it by adding the callbacks to the editor deps; that would
   // rebuild Tiptap on every keystroke.
+  const normalizedInitial = useMemo(
+    () =>
+      normalizeComposerContentWithSelection(initialContent, initialSelection),
+    [initialContent, initialSelection],
+  );
   const onSubmitRef = useRef(onSubmit);
   const onSnapshotRef = useRef(onSnapshot);
-  const initialSelectionRef = useRef(initialSelection);
+  const initialSelectionRef = useRef(normalizedInitial.selection);
   useEffect(() => {
     onSubmitRef.current = onSubmit;
     onSnapshotRef.current = onSnapshot;
@@ -142,11 +148,10 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
     () => editorAttributes(placeholder, editorClassName),
     [editorClassName, placeholder],
   );
-
   const editor = useEditor(
     {
       extensions,
-      content: initialContent,
+      content: normalizedInitial.content,
       autofocus: isActive ? "end" : false,
       immediatelyRender: false,
       editable: !disabled,
@@ -214,9 +219,9 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
   }, [editor]);
 
   const getJSON = useCallback((): JsonContent => {
-    if (editor === null) return initialContent;
+    if (editor === null) return normalizedInitial.content;
     return editor.getJSON();
-  }, [editor, initialContent]);
+  }, [editor, normalizedInitial.content]);
 
   const isEmpty = useCallback((): boolean => {
     if (editor === null) return true;
@@ -234,17 +239,38 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
       selection: { readonly from: number; readonly to: number } | null,
     ) => {
       if (editor === null) return;
-      editor.commands.setContent(content);
-      if (selection !== null) {
+      const normalized = normalizeComposerContentWithSelection(
+        content,
+        selection,
+      );
+      editor.commands.setContent(normalized.content);
+      if (normalized.selection !== null) {
         editor.commands.setTextSelection({
-          from: selection.from,
-          to: selection.to,
+          from: normalized.selection.from,
+          to: normalized.selection.to,
         });
       } else {
         editor.commands.focus("end");
       }
     },
     [editor],
+  );
+
+  const handleDrop = useCallback<DragEventHandler<HTMLElement>>(
+    (event) => {
+      const hasFiles = Array.from(event.dataTransfer.types).includes("Files");
+      if (editor !== null && hasFiles) {
+        const dropPos = editor.view.posAtCoords({
+          left: event.clientX,
+          top: event.clientY,
+        });
+        if (dropPos !== null) {
+          editor.commands.setTextSelection(dropPos.pos);
+        }
+      }
+      onDrop(event);
+    },
+    [editor, onDrop],
   );
 
   const insertImageAttachments = useCallback(
@@ -343,7 +369,7 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
       className="relative flex-1"
       onPaste={onPaste}
       onDragOver={onDragOver}
-      onDrop={onDrop}
+      onDrop={handleDrop}
       onKeyDown={onKeyDown}
       onFocus={onFocus}
       onBlur={onBlur}
