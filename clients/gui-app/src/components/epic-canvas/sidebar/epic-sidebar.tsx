@@ -1712,6 +1712,8 @@ function TreePanelActions(props: TreePanelActionsProps) {
         <NewConversationModalAction
           epicId={props.epicId}
           tabId={props.tabId}
+          parentId={null}
+          size="icon-sm"
           disabled={!canMutate || addIsPending}
           disabledTooltip={isDisconnected ? "Reconnect to make changes." : null}
           triggerLabel={props.addLabel}

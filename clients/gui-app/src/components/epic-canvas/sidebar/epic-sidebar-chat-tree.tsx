@@ -106,6 +106,7 @@ import {
   INDENT_PX,
   anyMutationPending,
   nodePadRightClass,
+  rowAddControlRevealClass,
 } from "./epic-sidebar-tree-shared";
 import { TreeGroupGuide } from "./epic-sidebar-tree-guide";
 import {
@@ -127,11 +128,7 @@ import {
   type EpicCanvasSidebarNodeDragData,
 } from "@/components/epic-canvas/dnd/dnd";
 import { SidebarReparentRowDropWrapper } from "@/components/epic-canvas/sidebar/sidebar-reparent-row-drop-wrapper";
-import { ChatAddChildButton } from "@/components/epic-canvas/sidebar/chat-add-child-button";
-import {
-  useChatRowChildCreate,
-  type ChatRowChildCreate,
-} from "@/components/epic-canvas/sidebar/use-chat-row-child-create";
+import { NewConversationModalAction } from "@/components/epic-canvas/sidebar/new-conversation-modal";
 import { SidebarPanelEmptyState } from "@/components/epic-canvas/sidebar/sidebar-panel-empty-state";
 
 interface ChatTreePanelBodyProps {
@@ -442,16 +439,9 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
     selectedIds,
     onToggleSelection,
   } = props;
-  const { expandedIds, toggleExpanded, ensureExpanded } = expansion;
+  const { expandedIds, toggleExpanded } = expansion;
   const node = useEpicTreeNode(nodeId);
   const childIds = useFilteredPanelChildIds(nodeId, treeFilter);
-  const childCreate = useChatRowChildCreate({
-    epicId,
-    tabId,
-    nodeId,
-    canMutate,
-    ensureExpanded,
-  });
   const openTileInTab = useEpicCanvasStore((s) => s.openTileInTab);
   const closeCanvasTab = useEpicCanvasStore((s) => s.closeCanvasTab);
   const openTilePreviewInTab = useEpicCanvasStore(
@@ -717,7 +707,6 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
       treeFilter={treeFilter}
       onStartRename={startRename}
       onPerformDelete={performDelete}
-      childCreate={childCreate}
       confirmDeleteOpen={confirmDeleteOpen}
       onConfirmDeleteOpenChange={setConfirmDeleteOpen}
       cascadeSummary={cascadeSummary}
@@ -763,7 +752,6 @@ interface ChatNodeShellProps {
   readonly onDoubleClick: () => void;
   readonly onStartRename: () => void;
   readonly onPerformDelete: () => void;
-  readonly childCreate: ChatRowChildCreate;
   readonly confirmDeleteOpen: boolean;
   readonly onConfirmDeleteOpenChange: (open: boolean) => void;
   readonly cascadeSummary: string | null;
@@ -808,7 +796,6 @@ function ChatNodeShell(props: ChatNodeShellProps) {
     onDoubleClick,
     onStartRename,
     onPerformDelete,
-    childCreate,
     confirmDeleteOpen,
     onConfirmDeleteOpenChange,
     cascadeSummary,
@@ -820,6 +807,10 @@ function ChatNodeShell(props: ChatNodeShellProps) {
     selectedIds,
     onToggleSelection,
   } = props;
+
+  // The row `+` (child-create trigger) reserves right padding and is offered
+  // whenever the epic is editable and we are not bulk-selecting.
+  const showAddChild = canEdit && !selectionMode;
 
   return (
     <li
@@ -860,7 +851,6 @@ function ChatNodeShell(props: ChatNodeShellProps) {
             depth={depth}
             isActive={isActive}
             canEdit={canEdit}
-            showAddChild={!childCreate.hostUnavailable}
             hasChildren={hasChildren}
             expanded={expanded}
             onToggle={onToggle}
@@ -872,28 +862,29 @@ function ChatNodeShell(props: ChatNodeShellProps) {
             selectionMode={selectionMode}
             isSelected={isSelected}
             onToggleSelection={onToggleSelection}
+            showAddChild={showAddChild}
           />
         )}
 
         {canEdit && !isRenaming && !selectionMode ? (
-          <ChatAddChildButton
+          // Same trigger + modal as the chats-panel `+`, seeded as a child of
+          // this row. No dropdown: the modal's switcher is the one way to pick a
+          // chat vs a terminal agent.
+          <NewConversationModalAction
             epicId={epicId}
-            nodeId={nodeId}
-            canMutate={canMutate}
-            addChildIsPending={childCreate.addChildIsPending}
-            tuiAgentPending={childCreate.tuiAgentPending}
-            isDisconnected={isDisconnected}
-            childHostUnavailable={childCreate.hostUnavailable}
-            workspaceInheritanceBlocked={
-              childCreate.workspaceInheritanceBlocked
+            tabId={tabId}
+            parentId={nodeId}
+            size="icon-xs"
+            disabled={!canMutate}
+            disabledTooltip={
+              isDisconnected ? "Reconnect to make changes." : null
             }
-            addMenuOpen={childCreate.addMenuOpen}
-            onAddMenuOpenChange={childCreate.onAddMenuOpenChange}
-            onAdd={childCreate.onAddChild}
-            onAddTerminalAgent={childCreate.onAddTerminalAgent}
-            terminalAgentWorkspaceSeed={childCreate.terminalAgentWorkspaceSeed}
-            terminalAgentHostScope={childCreate.terminalAgentHostScope}
-            terminalAgentStagingKey={childCreate.terminalAgentStagingKey}
+            triggerLabel="Add child chat or agent"
+            triggerTestId={`epic-sidebar-add-${nodeId}`}
+            actionRevealClassName={cn(
+              "absolute right-7 top-1/2 -translate-y-1/2",
+              rowAddControlRevealClass(false),
+            )}
           />
         ) : null}
 
@@ -908,9 +899,8 @@ function ChatNodeShell(props: ChatNodeShellProps) {
         ) : null}
       </SidebarReparentRowDropWrapper>
       <ChatNodeChildren
-        visible={showChildren || childCreate.addChildIsPending}
+        visible={showChildren}
         childIds={childIds}
-        pendingChildName={childCreate.pendingChildName}
         epicId={epicId}
         tabId={tabId}
         depth={depth}
@@ -952,7 +942,6 @@ function NodeChevron(props: NodeChevronProps) {
 interface ChatNodeChildrenProps {
   visible: boolean;
   childIds: readonly string[];
-  pendingChildName: string | null;
   epicId: string;
   tabId: string;
   depth: number;
@@ -971,12 +960,6 @@ function ChatNodeChildren(props: ChatNodeChildrenProps) {
   return (
     <ul role="group" className="relative space-y-0.5">
       <TreeGroupGuide parentDepth={props.depth} />
-      {props.pendingChildName !== null && (
-        <PendingCreateRow
-          depth={props.depth + 1}
-          name={props.pendingChildName}
-        />
-      )}
       {props.childIds.map((childId) => (
         <ChatNode
           key={childId}

@@ -39,6 +39,7 @@ export function useChatsOpenerItems(
           epicId: ctx.activeEpicId,
           tabId: ctx.activeTabId,
           placement: { kind: "target-group", groupId: ctx.targetGroupId },
+          parentId: null,
         });
       },
     });
