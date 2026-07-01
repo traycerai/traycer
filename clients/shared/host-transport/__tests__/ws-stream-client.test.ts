@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import { buildStreamManifest } from "@traycer/protocol/framework/stream-compat";
+import {
+  defineStreamRpcContract,
+  defineVersionedStreamRpcRegistry,
+} from "@traycer/protocol/framework/versioned-stream-rpc";
 import {
   createRequestContext,
   identityFromAuthenticatedUser,
@@ -396,6 +401,100 @@ describe("WsStreamClient", () => {
       method: "chat.subscribe",
       schemaVersion: { major: 1, minor: 0 },
       params: { epicId: "epic-1", chatId: "chat-1" },
+    });
+
+    session.close();
+  });
+
+  // chat.subscribe's own openRequestSchema never changed across 1.0/1.1, so
+  // the test above can't prove `prepareStreamSubscribeRequest` actually
+  // reprojects params through the older contract - only that it downgrades
+  // the declared version. A synthetic method with a genuinely different
+  // open-request shape per minor closes that gap.
+  it("rewrites the subscribe params onto the host's older contract when the open-request shape changed", async () => {
+    const openRequestSchemaV10 = z.object({ id: z.string() });
+    const openRequestSchemaV11 = z.object({
+      id: z.string(),
+      locale: z.string().nullable(),
+    });
+    const frameSchemas = {
+      serverFrameSchema: z.discriminatedUnion("kind", [
+        z.object({
+          kind: z.literal("snapshot"),
+          hasBinaryPayload: z.literal(false),
+          id: z.string(),
+        }),
+      ]),
+      clientFrameSchema: z.discriminatedUnion("kind", [
+        z.object({
+          kind: z.literal("noop"),
+          hasBinaryPayload: z.literal(false),
+        }),
+      ]),
+    };
+    const versionSkewRegistry = defineVersionedStreamRpcRegistry({
+      "version-skew.subscribe": {
+        1: {
+          latestMinor: 1,
+          versions: {
+            0: {
+              contract: defineStreamRpcContract({
+                method: "version-skew.subscribe",
+                schemaVersion: { major: 1, minor: 0 } as const,
+                openRequestSchema: openRequestSchemaV10,
+                ...frameSchemas,
+              }),
+            },
+            1: {
+              contract: defineStreamRpcContract({
+                method: "version-skew.subscribe",
+                schemaVersion: { major: 1, minor: 1 } as const,
+                openRequestSchema: openRequestSchemaV11,
+                ...frameSchemas,
+              }),
+            },
+          },
+        },
+      },
+    });
+
+    const { factory, sockets } = makeFactory();
+    const client = new WsStreamClient({
+      registry: versionSkewRegistry,
+      endpoint: () => mockLocalHostEntry,
+      bearer: () => makeRequestContext("t")?.credentials ?? null,
+      auth: null,
+      webSocketFactory: factory,
+      dialTimeoutMs: 1000,
+      openAckTimeoutMs: 1000,
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+
+    const session = client.subscribe("version-skew.subscribe", {
+      id: "item-1",
+      locale: "en-US",
+    });
+    await flush();
+
+    const stub = sockets[0].socket;
+    stub.fireOpen();
+
+    stub.fireText({
+      kind: "openAck",
+      manifest: { "version-skew.subscribe": { major: 1, minor: 0 } },
+    });
+
+    expect(stub.textSent).toHaveLength(2);
+    expect(parseText(stub.textSent[1])).toEqual({
+      kind: "subscribe",
+      method: "version-skew.subscribe",
+      schemaVersion: { major: 1, minor: 0 },
+      // `locale` is stripped - the 1.0 contract the host actually has never
+      // declared that field, so the params get reprojected onto it.
+      params: { id: "item-1" },
     });
 
     session.close();

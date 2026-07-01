@@ -729,8 +729,26 @@ const chatActionSchemaV10 = z.enum([
   "revertFileChanges",
 ]);
 
-const chatSnapshotSchemaV10 = chatSnapshotSchema.omit({
-  backgroundItems: true,
+const chatSubscribeOpenRequestSchemaV10 = z.object({
+  epicId: z.string(),
+  chatId: z.string(),
+});
+
+// Pinned field-for-field, not derived via `.omit()` from `chatSnapshotSchema`
+// - a later required field added to the live schema must not silently leak
+// into this frozen contract.
+const chatSnapshotSchemaV10 = z.object({
+  chat: chatSchema,
+  access: chatAccessSchema,
+  queue: chatQueueStateSchema,
+  runStatus: chatRunStatusSchema,
+  activeTurn: chatActiveTurnSchema.nullable(),
+  pendingApprovals: z.array(chatApprovalStateSchema),
+  pendingInterviews: z.array(chatPendingInterviewStateSchema),
+  worktreeBinding: worktreeBindingSchema.nullable(),
+  missingWorktreePaths: z.array(z.string()),
+  pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchema),
+  accumulatedFileChanges: z.array(chatAccumulatedFileChangeSchema),
 });
 
 const chatSubscribeServerFrameSchemaV10 = z.discriminatedUnion("kind", [
@@ -1004,7 +1022,7 @@ const chatSubscribeClientFrameSchemaV10 = z.discriminatedUnion("kind", [
 export const chatSubscribeV10 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 0 } as const,
-  openRequestSchema: chatSubscribeOpenRequestSchema,
+  openRequestSchema: chatSubscribeOpenRequestSchemaV10,
   serverFrameSchema: chatSubscribeServerFrameSchemaV10,
   clientFrameSchema: chatSubscribeClientFrameSchemaV10,
 });

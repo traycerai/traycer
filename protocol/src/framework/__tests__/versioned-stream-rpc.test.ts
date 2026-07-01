@@ -317,6 +317,27 @@ describe("stream compatibility", () => {
     );
     expect(fullConnection.ok).toBe(true);
 
+    // Mirrored host-role check: host-v1.0.0 itself, running this same check
+    // from its own (older) side against a 1.1 client's manifest, must reach
+    // the same verdict - the host's own subscribe-time compatibility gate
+    // runs with `selfRole: "host"`, not "client".
+    const fullConnectionAsHost = checkStreamCompatibility(
+      hostStreamRpcRegistry,
+      hostV100Manifest,
+      currentManifest,
+      "host",
+    );
+    expect(fullConnectionAsHost.ok).toBe(true);
+
+    const chatSubscribeAsHost = checkStreamMethodCompatibility(
+      hostStreamRpcRegistry,
+      hostV100Manifest,
+      currentManifest,
+      "host",
+      "chat.subscribe",
+    );
+    expect(chatSubscribeAsHost.ok).toBe(true);
+
     const chatSubscribe = checkStreamMethodCompatibility(
       hostStreamRpcRegistry,
       currentManifest,
