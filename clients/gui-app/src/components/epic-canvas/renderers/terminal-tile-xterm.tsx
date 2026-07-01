@@ -11,10 +11,14 @@ import {
 import { Terminal, type ITerminalOptions } from "@xterm/xterm";
 import { ClipboardAddon } from "@xterm/addon-clipboard";
 import { FitAddon } from "@xterm/addon-fit";
-import { SearchAddon, type ISearchOptions } from "@xterm/addon-search";
+import {
+  SearchAddon,
+  type ISearchResultChangeEvent,
+} from "@xterm/addon-search";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { CanvasAddon } from "@xterm/addon-canvas";
 import "@xterm/xterm/css/xterm.css";
+import { useRegisterTileFindAdapter } from "@/components/epic-canvas/tile-find/tile-find-adapter-context";
 import { isMac } from "@/lib/keybindings/platform";
 import { translateLineEditChord } from "@/lib/terminal-line-edit";
 import { useSettingsStore } from "@/stores/settings/settings-store";
@@ -36,6 +40,13 @@ import {
   type XtermHostEntry,
   type XtermHostLiveCallbacks,
 } from "@/components/epic-canvas/renderers/xterm-host-registry";
+import {
+  createTerminalTileFindAdapter,
+  runTerminalXtermSearch,
+  type TerminalSearchResultSource,
+  type TerminalTileFindAdapter,
+  type TerminalTileFindKind,
+} from "@/components/epic-canvas/renderers/terminal-tile-find-adapter";
 
 const RESIZE_DEBOUNCE_MS = 50;
 const XTERM_STARTUP_DISPOSE_DELAY_MS = 0;
@@ -55,14 +66,9 @@ interface XtermInitialOptions extends ITerminalOptions {
 const FALLBACK_FONT_FAMILY =
   "Menlo, Monaco, 'SF Mono', 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace";
 
-const TERMINAL_SEARCH_DECORATIONS: ISearchOptions["decorations"] = {
-  matchBackground: "#854d0e",
-  matchOverviewRuler: "#f59e0b",
-  activeMatchBackground: "#facc15",
-  activeMatchColorOverviewRuler: "#facc15",
-};
-
 const TERMINAL_DRAG_PATH_ESCAPE_PATTERN = /([\\\s!"#$&'()*;<>?[\]^`{|}])/g;
+const getEmptyFindTargetId = (): string | null => null;
+const ignoreSearchResults = (): void => {};
 
 // xterm measures glyph cell width on a hidden canvas using the configured
 // `fontFamily`. CSS variables don't resolve in that measurement pass, so we
@@ -84,6 +90,7 @@ export interface TerminalXtermHostProps {
    * tile and session store report into.
    */
   readonly sessionId: string;
+  readonly tileKind: TerminalTileFindKind;
   /**
    * Per-tab instance id this host's persistent xterm engine is cached under in
    * `xterm-host-registry`. Keying by `instanceId` (not `sessionId`) lets two
@@ -145,6 +152,8 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
   const canvasRef = useRef<CanvasAddon | null>(null);
   const controlsRef = useRef<XtermHostControls | null>(null);
   const findTargetIdRef = useRef(props.findTargetId);
+  const terminalSearchResultSourceRef =
+    useRef<TerminalSearchResultSource | null>(null);
   const dragDepthRef = useRef(0);
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   // Stable for the host's lifetime; held in a ref so the acquire effect can tag
@@ -168,6 +177,33 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
   // Inactive panes unregister global find ownership. They stay mounted, but
   // app-level find should only target the visible terminal.
   const activeFindTargetId = useVisiblePaneValue(props.findTargetId, null);
+  const markSearchResultSource = useCallback(
+    (source: TerminalSearchResultSource): void => {
+      terminalSearchResultSourceRef.current = source;
+    },
+    [],
+  );
+  const tileFindAdapter = useMemo(
+    () =>
+      createTerminalTileFindAdapter({
+        tileInstanceId: props.instanceId,
+        tileKind: props.tileKind,
+      }),
+    [props.instanceId, props.tileKind],
+  );
+  const tileFindAdapterRef = useRef<TerminalTileFindAdapter>(tileFindAdapter);
+  useEffect(() => {
+    tileFindAdapterRef.current = tileFindAdapter;
+  }, [tileFindAdapter]);
+  useEffect(() => {
+    tileFindAdapter.setSearchAddon(searchAddonRef.current);
+    tileFindAdapter.setSearchResultSourceSink(markSearchResultSource);
+    return () => {
+      tileFindAdapter.setSearchAddon(null);
+      tileFindAdapter.setSearchResultSourceSink(null);
+    };
+  }, [markSearchResultSource, tileFindAdapter]);
+  useRegisterTileFindAdapter(tileFindAdapter);
 
   const initialOptionsRef = useRef<XtermInitialOptions>({
     cursorBlink: true,
@@ -248,10 +284,22 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
     entry.live.openExternalLink = (uri) => {
       void runnerHostRef.current.openExternalLink(uri);
     };
-    entry.live.getFindTargetId = () => findTargetIdRef.current;
+    const getFindTargetId = () => findTargetIdRef.current;
+    const onSearchResults = (result: ISearchResultChangeEvent): void => {
+      const source = terminalSearchResultSourceRef.current;
+      if (source === "tile") {
+        tileFindAdapterRef.current.publishResults(result);
+      }
+      if (source === "legacy" && getFindTargetId() !== null) {
+        publishLegacyTerminalSearchResult(result);
+      }
+    };
+    entry.live.getFindTargetId = getFindTargetId;
+    entry.live.onSearchResults = onSearchResults;
 
     termRef.current = entry.term;
     searchAddonRef.current = entry.searchAddon;
+    tileFindAdapterRef.current.setSearchAddon(entry.searchAddon);
     canvasRef.current = entry.canvasAddon;
     controlsRef.current = entry.controls;
 
@@ -268,6 +316,14 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
       }
       termRef.current = null;
       searchAddonRef.current = null;
+      tileFindAdapterRef.current.setSearchAddon(null);
+      terminalSearchResultSourceRef.current = null;
+      if (entry.live.getFindTargetId === getFindTargetId) {
+        entry.live.getFindTargetId = getEmptyFindTargetId;
+      }
+      if (entry.live.onSearchResults === onSearchResults) {
+        entry.live.onSearchResults = ignoreSearchResults;
+      }
       canvasRef.current = null;
       controlsRef.current = null;
       // Keep the engine cached for a still-live session; dispose it otherwise.
@@ -277,7 +333,11 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
     };
   }, []);
 
-  useTerminalFindRegistration(activeFindTargetId, searchAddonRef);
+  useTerminalFindRegistration(
+    activeFindTargetId,
+    searchAddonRef,
+    markSearchResultSource,
+  );
   useTerminalResizeSync(termRef, props.effectiveCols, props.effectiveRows);
   useHostGridReconcile(controlsRef, props.effectiveCols, props.effectiveRows);
   useTerminalAppearanceSync({
@@ -304,7 +364,7 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
       dragDepthRef.current += 1;
       setIsDraggingFiles(true);
     },
-    [],
+    [setIsDraggingFiles],
   );
 
   const handleDragOver = useCallback(
@@ -315,7 +375,7 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
       event.dataTransfer.dropEffect = "copy";
       setIsDraggingFiles(true);
     },
-    [],
+    [setIsDraggingFiles],
   );
 
   const handleDragLeave = useCallback(
@@ -328,7 +388,7 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
         setIsDraggingFiles(false);
       }
     },
-    [],
+    [setIsDraggingFiles],
   );
 
   const handleDrop = useCallback(
@@ -369,7 +429,7 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
         })
         .catch(() => undefined);
     },
-    [runnerHost.fileDrops],
+    [runnerHost.fileDrops, setIsDraggingFiles],
   );
 
   // `absolute inset-0` sidesteps the percentage-height chain (`h-full` →
@@ -425,7 +485,8 @@ function createXtermEntry(
     onUserInput: () => {},
     onContainerResize: () => {},
     openExternalLink: () => {},
-    getFindTargetId: () => null,
+    getFindTargetId: getEmptyFindTargetId,
+    onSearchResults: ignoreSearchResults,
   };
 
   const containerEl = document.createElement("div");
@@ -493,22 +554,7 @@ function createXtermEntry(
     live.onUserInput(d);
   });
   const searchResultsDisposable = searchAddon.onDidChangeResults((result) => {
-    if (live.getFindTargetId() === null) return;
-    if (result.resultCount === 0) {
-      useFindInPageStore.getState().setMatches({ current: 0, total: 0 });
-      return;
-    }
-    if (result.resultIndex < 0) {
-      useFindInPageStore.getState().setMatches({
-        current: 0,
-        total: result.resultCount,
-      });
-      return;
-    }
-    useFindInPageStore.getState().setMatches({
-      current: result.resultIndex + 1,
-      total: result.resultCount,
-    });
+    live.onSearchResults(result);
   });
 
   const writerProxy: TerminalDataWriter = (write) => {
@@ -856,33 +902,39 @@ function escapeTerminalDragPath(path: string): string {
 function useTerminalFindRegistration(
   activeFindTargetId: string | null,
   searchAddonRef: RefObject<SearchAddon | null>,
+  markSearchResultSource: (source: TerminalSearchResultSource) => void,
 ): void {
   useEffect(() => {
     const findTargetId = activeFindTargetId;
     if (findTargetId === null) return;
     return registerActiveTerminalFindController({
       id: findTargetId,
-      findNext: (query, matchCase, incremental) =>
-        runTerminalSearch({
+      findNext: (query, matchCase, incremental) => {
+        markSearchResultSource("legacy");
+        return runLegacyTerminalSearch({
           addon: searchAddonRef.current,
           query,
           matchCase,
           forward: true,
           incremental,
-        }),
-      findPrevious: (query, matchCase) =>
-        runTerminalSearch({
+        });
+      },
+      findPrevious: (query, matchCase) => {
+        markSearchResultSource("legacy");
+        return runLegacyTerminalSearch({
           addon: searchAddonRef.current,
           query,
           matchCase,
           forward: false,
           incremental: false,
-        }),
+        });
+      },
       clear: () => {
+        markSearchResultSource("legacy");
         searchAddonRef.current?.clearDecorations();
       },
     });
-  }, [activeFindTargetId, searchAddonRef]);
+  }, [activeFindTargetId, markSearchResultSource, searchAddonRef]);
 }
 
 function useTerminalResizeSync(
@@ -1043,32 +1095,41 @@ function useActiveTerminalFocus(
   useActivePaneEffect(focusVisibleTerminal);
 }
 
-interface RunTerminalSearchInput {
+function runLegacyTerminalSearch(input: {
   readonly addon: SearchAddon | null;
   readonly query: string;
   readonly matchCase: boolean;
   readonly forward: boolean;
   readonly incremental: boolean;
-}
-
-function runTerminalSearch(input: RunTerminalSearchInput): boolean {
-  const { addon, query, matchCase, forward, incremental } = input;
-  if (addon === null) return false;
-  if (query.length === 0) {
-    addon.clearDecorations();
+}): boolean {
+  const result = runTerminalXtermSearch(input);
+  if (!result.attempted) return false;
+  if (result.cleared) {
     useFindInPageStore.getState().setMatches(null);
     return true;
   }
-  const options: ISearchOptions = {
-    caseSensitive: matchCase,
-    incremental,
-    decorations: TERMINAL_SEARCH_DECORATIONS,
-  };
-  const found = forward
-    ? addon.findNext(query, options)
-    : addon.findPrevious(query, options);
-  if (!found) {
+  if (!result.found) {
     useFindInPageStore.getState().setMatches({ current: 0, total: 0 });
   }
   return true;
+}
+
+function publishLegacyTerminalSearchResult(
+  result: ISearchResultChangeEvent,
+): void {
+  if (result.resultCount === 0) {
+    useFindInPageStore.getState().setMatches({ current: 0, total: 0 });
+    return;
+  }
+  if (result.resultIndex < 0) {
+    useFindInPageStore.getState().setMatches({
+      current: 0,
+      total: result.resultCount,
+    });
+    return;
+  }
+  useFindInPageStore.getState().setMatches({
+    current: result.resultIndex + 1,
+    total: result.resultCount,
+  });
 }

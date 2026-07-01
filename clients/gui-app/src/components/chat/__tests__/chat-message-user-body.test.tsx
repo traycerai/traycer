@@ -2,17 +2,33 @@ import "../../../../__tests__/test-browser-apis";
 import {
   cleanup,
   fireEvent,
-  render,
+  render as rtlRender,
   screen,
   waitFor,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Mock } from "vitest";
+import type { ReactNode } from "react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
+import { deriveA2AReceivedCollapsibleKey } from "@/components/chat/chat-collapsible-key";
 import { UserMessageBody } from "@/components/chat/chat-message-user-body";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { parseComposerClipboardHtml } from "@/lib/composer/composer-clipboard";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
+import { useSetA2AReceivedOpen } from "@/stores/chats/a2a-open-store-context";
+import {
+  useChatCollapsibleTileInstanceId,
+  useSetChatFindForcedOpen,
+} from "@/stores/chats/chat-find-force-store-context";
+
+function render(ui: ReactNode) {
+  return rtlRender(
+    <ChatExpansionTestProviders tileInstanceId="user-body-test-tile">
+      {ui}
+    </ChatExpansionTestProviders>,
+  );
+}
 
 vi.mock("@/lib/epic-selectors", () => ({
   useEpicArtifact: (artifactId: string | null) =>
@@ -26,6 +42,36 @@ vi.mock("@/lib/epic-selectors", () => ({
       : null,
   useOpenEpicId: () => "epic-1",
 }));
+
+interface OpenReceivedA2AButtonProps {
+  readonly label: string;
+  readonly messageId: string;
+}
+
+function OpenReceivedA2AButton(props: OpenReceivedA2AButtonProps) {
+  const setOpen = useSetA2AReceivedOpen();
+  return (
+    <button type="button" onClick={() => setOpen(props.messageId, true)}>
+      {props.label}
+    </button>
+  );
+}
+
+interface ForceReceivedA2AButtonProps {
+  readonly label: string;
+  readonly messageId: string;
+}
+
+function ForceReceivedA2AButton(props: ForceReceivedA2AButtonProps) {
+  const tileInstanceId = useChatCollapsibleTileInstanceId();
+  const setFindForcedOpen = useSetChatFindForcedOpen();
+  const key = deriveA2AReceivedCollapsibleKey(tileInstanceId, props.messageId);
+  return (
+    <button type="button" onClick={() => setFindForcedOpen(key, true)}>
+      {props.label}
+    </button>
+  );
+}
 
 const AGENT_CONTENT: JsonContent = {
   type: "doc",
@@ -197,6 +243,51 @@ describe("<UserMessageBody /> agent messages", () => {
     expect(screen.getByText("Open sending agent")).toBeTruthy();
     expect(screen.getByText("reply expected")).toBeTruthy();
     expect(screen.getByText("Message")).toBeTruthy();
+  });
+
+  it("opens received A2A cards through the provider store", () => {
+    const message = agentMessage("Investigate this externally opened card.");
+    render(
+      <>
+        <OpenReceivedA2AButton
+          label="Open received A2A"
+          messageId={message.id}
+        />
+        <UserMessageBody actions={null} message={message} />
+      </>,
+    );
+
+    expect(screen.queryByText("Open sending agent")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Open received A2A" }));
+
+    expect(screen.getByText("Open sending agent")).toBeTruthy();
+    expect(screen.getByText("Message")).toBeTruthy();
+  });
+
+  it("opens received A2A cards through find-force and releases on manual collapse", () => {
+    const message = agentMessage("Investigate this find-forced card.");
+    render(
+      <>
+        <ForceReceivedA2AButton
+          label="Force received A2A"
+          messageId={message.id}
+        />
+        <UserMessageBody actions={null} message={message} />
+      </>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Force received A2A" }));
+
+    expect(
+      screen.getByRole("button", { name: "Open sending agent" }),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /Received message/ }));
+
+    expect(
+      screen.queryByRole("button", { name: "Open sending agent" }),
+    ).toBeNull();
   });
 
   it("copies structured user messages as rich composer clipboard content", async () => {

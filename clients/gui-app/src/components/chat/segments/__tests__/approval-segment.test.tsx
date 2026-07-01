@@ -10,6 +10,7 @@ describe("<ResolvedApprovalSegment />", () => {
   it("renders the approval input summary in the resolved header", () => {
     render(
       <ResolvedApprovalSegment
+        headerFindUnitId={null}
         toolName="bash"
         description="OpenCode requests bash permission"
         inputSummary="find . -name '*.sentry' | head -50"

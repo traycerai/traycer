@@ -902,6 +902,7 @@ function TerminalAgentLive(props: TerminalAgentLiveProps) {
       <Suspense fallback={<TerminalLoadingSkeleton />}>
         <TerminalXtermHost
           sessionId={handle.sessionId}
+          tileKind="terminal-agent"
           instanceId={props.instanceId}
           effectiveCols={effectiveCols}
           effectiveRows={effectiveRows}

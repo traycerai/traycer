@@ -30,6 +30,14 @@ vi.mock("@/components/layout/bridges/quit-intercept-bridge", () => ({
   QuitInterceptBridge: () => <div data-testid="quit-intercept-bridge" />,
 }));
 
+vi.mock("@/components/layout/find-in-page-bar", () => ({
+  FindInPageBar: () => <div data-testid="legacy-find-in-page-bar" />,
+}));
+
+vi.mock("@/components/epic-canvas/tile-find/tile-find-owner-bridge", () => ({
+  TileFindOwnerBridge: () => <div data-testid="tile-find-owner-bridge" />,
+}));
+
 vi.mock("@/components/migration/migration-run-controller", () => ({
   MigrationRunController: () => null,
 }));
@@ -73,6 +81,8 @@ describe("<AppShell />", () => {
 
     expect(screen.getByTestId("user-menu")).not.toBeNull();
     expect(screen.getByTestId("app-shell-child")).not.toBeNull();
+    expect(screen.getByTestId("tile-find-owner-bridge")).not.toBeNull();
+    expect(screen.queryByTestId("legacy-find-in-page-bar")).toBeNull();
     // Host status footer was removed; the combined chip on the
     // composer is now the host-state surface.
     expect(screen.queryByTestId("host-status-footer")).toBeNull();

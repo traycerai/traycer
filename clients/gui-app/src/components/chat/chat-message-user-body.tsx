@@ -51,10 +51,24 @@ import {
 import { useEpicArtifact, useOpenEpicId } from "@/lib/epic-selectors";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { cn, formatSingleLine } from "@/lib/utils";
+import { deriveA2AReceivedCollapsibleKey } from "@/components/chat/chat-collapsible-key";
+import {
+  chatFindA2AReceivedBodyUnitId,
+  chatFindMessageContentUnitId,
+} from "@/components/chat/chat-find";
 import type {
   ChatMessage as ChatMessageModel,
   ChatMessageSteerBadge,
 } from "@/stores/composer/chat-store";
+import {
+  useA2AReceivedOpen,
+  useSetA2AReceivedOpen,
+} from "@/stores/chats/a2a-open-store-context";
+import {
+  useChatCollapsibleTileInstanceId,
+  useChatFindForcedOpen,
+  useSetChatFindForcedOpen,
+} from "@/stores/chats/chat-find-force-store-context";
 import type {
   ChatMessageEditing,
   ChatMessageUserActions,
@@ -114,6 +128,7 @@ export function UserMessageBody({
       <>
         <AttachmentGallery attachments={message.attachments} />
         <AgentMessageDisplayView
+          messageId={message.id}
           messageText={message.content}
           agentMessage={message.agentMessage}
           agentSenderInfo={message.agentSenderInfo}
@@ -136,15 +151,34 @@ export function UserMessageBody({
  * user bubble; the visible body is the structured message body only.
  */
 function AgentMessageDisplayView({
+  messageId,
   messageText,
   agentMessage,
   agentSenderInfo,
 }: {
+  messageId: string;
   messageText: string;
   agentMessage: ChatMessageModel["agentMessage"];
   agentSenderInfo: NonNullable<ChatMessageModel["agentSenderInfo"]>;
 }): ReactNode {
-  const [open, setOpen] = useState(false);
+  const tileInstanceId = useChatCollapsibleTileInstanceId();
+  const collapsibleKey = useMemo(
+    () => deriveA2AReceivedCollapsibleKey(tileInstanceId, messageId),
+    [messageId, tileInstanceId],
+  );
+  const bodyFindUnitId = chatFindA2AReceivedBodyUnitId(messageId);
+  const userOpen = useA2AReceivedOpen(messageId);
+  const findForcedOpen = useChatFindForcedOpen(collapsibleKey);
+  const open = userOpen || findForcedOpen;
+  const setOpen = useSetA2AReceivedOpen();
+  const setFindForcedOpen = useSetChatFindForcedOpen();
+  const handleOpenChange = useCallback(
+    (next: boolean) => {
+      setOpen(messageId, next);
+      if (!next) setFindForcedOpen(collapsibleKey, false);
+    },
+    [collapsibleKey, messageId, setFindForcedOpen, setOpen],
+  );
 
   const epicId = useOpenEpicId();
   const senderNode = useEpicArtifact(agentSenderInfo.agentId);
@@ -242,11 +276,13 @@ function AgentMessageDisplayView({
         className={undefined}
       >
         <div className="max-h-[min(40vh,24rem)] overflow-auto px-3 py-2">
-          <AgentReferenceMarkdown
-            isStreaming={false}
-            markdown={messageText}
-            proseSize="compact"
-          />
+          <div data-chat-find-unit={bodyFindUnitId}>
+            <AgentReferenceMarkdown
+              isStreaming={false}
+              markdown={messageText}
+              proseSize="compact"
+            />
+          </div>
         </div>
       </SegmentPanel>
     </div>
@@ -256,7 +292,7 @@ function AgentMessageDisplayView({
     <div className="w-full max-w-[min(100%,48rem)]">
       <SegmentCard
         open={open}
-        onOpenChange={setOpen}
+        onOpenChange={handleOpenChange}
         header={header}
         headerAction={null}
         collapsedPreview={preview}
@@ -265,6 +301,8 @@ function AgentMessageDisplayView({
         headerPosition="normal"
         bodyOverflow="hidden"
         expandable
+        headerFindUnitId={null}
+        bodyFindUnitId={null}
         className={undefined}
       />
     </div>
@@ -318,6 +356,7 @@ function UserMessageDisplayView({
   // bottom fade so the full prompt is readable in place. The overflow probe
   // keeps measuring the (now uncapped) content, so the toggle stays visible.
   const clamped = isOverflowing && !expanded;
+  const findUnitId = chatFindMessageContentUnitId(message.id);
   const copyText = useMemo(
     () =>
       message.structuredContent === null
@@ -337,6 +376,7 @@ function UserMessageDisplayView({
         <div className="rounded-lg border border-border/50 bg-muted/30 px-4 py-3 text-ui leading-7 text-foreground [overflow-wrap:anywhere]">
           <div
             ref={contentRef}
+            data-chat-find-unit={findUnitId}
             style={clamped ? { maxHeight: DISPLAY_MAX_HEIGHT_PX } : undefined}
             className={cn(
               "min-w-0",

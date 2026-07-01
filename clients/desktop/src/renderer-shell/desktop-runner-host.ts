@@ -49,7 +49,6 @@ import type {
   DisplaySnapshot,
   DisplayTopology,
   FileSaveInput,
-  FindResultSnapshot,
   PendingCertificateError,
   ProcessMetricsSnapshot,
   TrustedCertificateEntry,
@@ -66,7 +65,6 @@ export type {
   BackgroundMaterial as DesktopBackgroundMaterial,
   DisplaySnapshot,
   DisplayTopology,
-  FindResultSnapshot,
   PendingCertificateError,
   ProcessMetricsSnapshot,
   TrustedCertificateEntry,
@@ -323,22 +321,6 @@ export interface DesktopPlatformBridge {
     dismissPending(id: string): Promise<void>;
     showSystemDialog(certificate: unknown, message: string): Promise<boolean>;
     onPending(handler: (entry: PendingCertificateError) => void): {
-      dispose: () => void;
-    };
-  };
-  find: {
-    inPage(
-      text: string,
-      options: {
-        readonly forward: boolean | undefined;
-        readonly findNext: boolean | undefined;
-        readonly matchCase: boolean | undefined;
-      },
-    ): Promise<number | null>;
-    stop(
-      action: "clearSelection" | "keepSelection" | "activateSelection",
-    ): Promise<void>;
-    onResult(handler: (snapshot: FindResultSnapshot) => void): {
       dispose: () => void;
     };
   };

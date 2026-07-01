@@ -692,8 +692,7 @@ export function accumulateEvent(
           parentBlockId: resolveParentBlockId(event, existing),
           timestamp: event.timestamp,
           agentMessageSend: event.agentMessageSend ?? existing.agentMessageSend,
-          backgroundOutput:
-            event.backgroundOutput ?? existing.backgroundOutput,
+          backgroundOutput: event.backgroundOutput ?? existing.backgroundOutput,
           startedAt: event.backgroundStartedAt ?? existing.startedAt,
           endedAt: event.timestamp,
           backgroundTask: mergeBackgroundTaskMarker(
@@ -738,8 +737,7 @@ export function accumulateEvent(
           parentBlockId: resolveParentBlockId(event, existing),
           timestamp: event.timestamp,
           agentMessageSend: event.agentMessageSend ?? existing.agentMessageSend,
-          backgroundOutput:
-            event.backgroundOutput ?? existing.backgroundOutput,
+          backgroundOutput: event.backgroundOutput ?? existing.backgroundOutput,
           startedAt: event.backgroundStartedAt ?? existing.startedAt,
           endedAt: event.timestamp,
           backgroundTask: mergeBackgroundTaskMarker(
@@ -1336,7 +1334,9 @@ export function accumulateEvent(
               ? event.beforeHash
               : existing.beforeHash,
           afterHash:
-            event.afterHash !== undefined ? event.afterHash : existing.afterHash,
+            event.afterHash !== undefined
+              ? event.afterHash
+              : existing.afterHash,
         });
       }
       return [

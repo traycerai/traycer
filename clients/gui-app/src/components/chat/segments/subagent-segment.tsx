@@ -15,6 +15,24 @@ import {
   useChatOpenStoreScope,
 } from "@/stores/chats/open-store-scope";
 import { useSubagentOpenStore } from "@/stores/chats/subagent-open-store";
+import {
+  deriveSubagentCollapsibleKey,
+  type ChatCollapsibleKey,
+} from "@/components/chat/chat-collapsible-key";
+import {
+  chatFindSubagentBodyUnitId,
+  chatFindSubagentHeaderUnitId,
+} from "@/components/chat/chat-find";
+import {
+  useChatCollapsibleTileInstanceId,
+  useChatFindForcedOpen,
+  useSetChatFindForcedOpen,
+} from "@/stores/chats/chat-find-force-store-context";
+import {
+  adjacentDedupedProgressItems,
+  cleanSubagentNotificationText,
+  type ProgressUpdateItem,
+} from "./subagent-display";
 import { AgentReferenceMarkdown } from "./agent-reference-markdown";
 import { SubagentAvatar } from "./subagent-avatar";
 import { ElapsedTime } from "./segment-elapsed";
@@ -49,10 +67,6 @@ interface SubagentSegmentProps {
 type CompactSubagentSegmentProps = Omit<SubagentSegmentProps, "variant"> & {
   variant: "card" | "row";
 };
-interface ProgressUpdateItem {
-  readonly key: string;
-  readonly text: string;
-}
 
 export function SubagentSegment(props: SubagentSegmentProps) {
   // Both child variants take the same props minus `variant`; spread the rest so
@@ -80,14 +94,23 @@ function CompactSubagentSegment(props: CompactSubagentSegmentProps) {
     durationMs,
     variant,
   } = props;
+  const collapsibleKey = useSubagentCollapsibleKey(id);
+  const headerFindUnitId = chatFindSubagentHeaderUnitId(id);
+  const bodyFindUnitId = chatFindSubagentBodyUnitId(id);
   const openScope = useChatOpenStoreScope();
-  const open = useSubagentOpenStore((s) =>
+  const userOpen = useSubagentOpenStore((s) =>
     s.openIds.has(scopedChatOpenId(openScope, id)),
   );
+  const findForcedOpen = useChatFindForcedOpen(collapsibleKey);
+  const open = userOpen || findForcedOpen;
   const setOpen = useSubagentOpenStore((s) => s.setOpen);
+  const setFindForcedOpen = useSetChatFindForcedOpen();
   const handleOpenChange = useCallback(
-    (newOpen: boolean) => setOpen(openScope, id, newOpen),
-    [id, openScope, setOpen],
+    (newOpen: boolean) => {
+      setOpen(openScope, id, newOpen);
+      if (!newOpen) setFindForcedOpen(collapsibleKey, false);
+    },
+    [collapsibleKey, id, openScope, setFindForcedOpen, setOpen],
   );
   const displayProgressUpdates =
     useAdjacentDedupedProgressItems(progressUpdates);
@@ -121,19 +144,24 @@ function CompactSubagentSegment(props: CompactSubagentSegmentProps) {
           <span aria-hidden className="shrink-0 text-muted-foreground/40">
             ·
           </span>
-          <span className="min-w-0 flex-1 truncate text-ui-sm text-muted-foreground">
+          <span
+            data-find-skip
+            className="min-w-0 flex-1 truncate text-ui-sm text-muted-foreground"
+          >
             {summary}
           </span>
         </>
       ) : (
         <span aria-hidden className="flex-1" />
       )}
-      <ElapsedTime
-        startedAt={startedAt}
-        durationMs={durationMs}
-        isStreaming={isStreaming}
-      />
-      <SegmentEndStateBadge endState={endState} stopped={stopped} />
+      <span data-find-skip className="contents">
+        <ElapsedTime
+          startedAt={startedAt}
+          durationMs={durationMs}
+          isStreaming={isStreaming}
+        />
+        <SegmentEndStateBadge endState={endState} stopped={stopped} />
+      </span>
     </>
   );
 
@@ -141,7 +169,10 @@ function CompactSubagentSegment(props: CompactSubagentSegmentProps) {
     <div className="flex flex-col gap-2 text-ui-sm">
       {displayTask !== null ? (
         <div className="flex flex-col gap-1">
-          <span className="select-none font-medium uppercase text-overline text-muted-foreground/80">
+          <span
+            data-find-skip
+            className="select-none font-medium uppercase text-overline text-muted-foreground/80"
+          >
             Task
           </span>
           <p className="m-0 whitespace-pre-wrap text-foreground/85">
@@ -151,7 +182,10 @@ function CompactSubagentSegment(props: CompactSubagentSegmentProps) {
       ) : null}
       {displayProgressUpdates.length > 0 ? (
         <div className="flex flex-col gap-1">
-          <span className="select-none font-medium uppercase text-overline text-muted-foreground/80">
+          <span
+            data-find-skip
+            className="select-none font-medium uppercase text-overline text-muted-foreground/80"
+          >
             Progress
           </span>
           <ul className="m-0 flex list-none flex-col gap-1 pl-0">
@@ -182,6 +216,8 @@ function CompactSubagentSegment(props: CompactSubagentSegmentProps) {
         tone="default"
         stickyHeader
         expandable
+        headerFindUnitId={headerFindUnitId}
+        bodyFindUnitId={bodyFindUnitId}
         className={undefined}
         footer={null}
       />
@@ -199,6 +235,8 @@ function CompactSubagentSegment(props: CompactSubagentSegmentProps) {
       headerPosition="normal"
       bodyOverflow="hidden"
       expandable
+      headerFindUnitId={headerFindUnitId}
+      bodyFindUnitId={bodyFindUnitId}
       className={undefined}
     />
   );
@@ -218,14 +256,23 @@ function PromotedSubagentSegment(props: Omit<SubagentSegmentProps, "variant">) {
     startedAt,
     durationMs,
   } = props;
+  const collapsibleKey = useSubagentCollapsibleKey(id);
+  const headerFindUnitId = chatFindSubagentHeaderUnitId(id);
+  const bodyFindUnitId = chatFindSubagentBodyUnitId(id);
   const openScope = useChatOpenStoreScope();
-  const open = useSubagentOpenStore((s) =>
+  const userOpen = useSubagentOpenStore((s) =>
     s.openIds.has(scopedChatOpenId(openScope, id)),
   );
+  const findForcedOpen = useChatFindForcedOpen(collapsibleKey);
+  const open = userOpen || findForcedOpen;
   const setOpen = useSubagentOpenStore((s) => s.setOpen);
+  const setFindForcedOpen = useSetChatFindForcedOpen();
   const updateOpen = useCallback(
-    (newOpen: boolean) => setOpen(openScope, id, newOpen),
-    [id, openScope, setOpen],
+    (newOpen: boolean) => {
+      setOpen(openScope, id, newOpen);
+      if (!newOpen) setFindForcedOpen(collapsibleKey, false);
+    },
+    [collapsibleKey, id, openScope, setFindForcedOpen, setOpen],
   );
   const handleOpenChange = useChatMeasuredOpenChange(updateOpen);
   const displayName = cleanSubagentNotificationText(name) ?? "Subagent";
@@ -252,6 +299,7 @@ function PromotedSubagentSegment(props: Omit<SubagentSegmentProps, "variant">) {
     >
       <PromotedSubagentTrigger
         id={id}
+        headerFindUnitId={headerFindUnitId}
         displayName={displayName}
         displayAgentType={displayAgentType}
         headerSummary={headerSummary}
@@ -265,6 +313,7 @@ function PromotedSubagentSegment(props: Omit<SubagentSegmentProps, "variant">) {
       />
       <CollapsibleContent className="overflow-hidden">
         <div
+          data-chat-find-unit={bodyFindUnitId}
           className={cn(
             "px-3 py-2.5",
             open ? null : "border-t border-border/35",
@@ -284,6 +333,7 @@ function PromotedSubagentSegment(props: Omit<SubagentSegmentProps, "variant">) {
 
 interface PromotedSubagentTriggerProps {
   readonly id: string;
+  readonly headerFindUnitId: string;
   readonly displayName: string;
   readonly displayAgentType: string | null;
   readonly headerSummary: string;
@@ -296,12 +346,21 @@ interface PromotedSubagentTriggerProps {
   readonly open: boolean;
 }
 
+function useSubagentCollapsibleKey(renderId: string): ChatCollapsibleKey {
+  const tileInstanceId = useChatCollapsibleTileInstanceId();
+  return useMemo(
+    () => deriveSubagentCollapsibleKey(tileInstanceId, renderId),
+    [renderId, tileInstanceId],
+  );
+}
+
 function PromotedSubagentTrigger(props: PromotedSubagentTriggerProps) {
   const {
     displayAgentType,
     displayName,
     durationMs,
     endState,
+    headerFindUnitId,
     headerSummary,
     id,
     isStreaming,
@@ -313,6 +372,8 @@ function PromotedSubagentTrigger(props: PromotedSubagentTriggerProps) {
   return (
     <CollapsibleTrigger
       aria-label="Subagent"
+      data-find-include="true"
+      data-chat-find-unit={headerFindUnitId}
       className={cn(
         "group/subagent flex w-full gap-2 px-3 py-2 text-left transition-colors",
         showHeaderSummary ? "items-start" : "items-center",
@@ -340,7 +401,10 @@ function PromotedSubagentTrigger(props: PromotedSubagentTriggerProps) {
               {displayAgentType}
             </Badge>
           ) : null}
-          <span className="ml-auto flex shrink-0 items-center gap-1.5">
+          <span
+            data-find-skip
+            className="ml-auto flex shrink-0 items-center gap-1.5"
+          >
             <ElapsedTime
               startedAt={startedAt}
               durationMs={durationMs}
@@ -370,7 +434,9 @@ function PromotedSubagentTrigger(props: PromotedSubagentTriggerProps) {
               aria-hidden
               className="mt-[0.2rem] h-2.5 w-3 shrink-0 rounded-bl-sm border-b border-l border-muted-foreground/35"
             />
-            <span className="min-w-0 flex-1 truncate">{headerSummary}</span>
+            <span data-find-skip className="min-w-0 flex-1 truncate">
+              {headerSummary}
+            </span>
           </span>
         ) : null}
       </span>
@@ -391,7 +457,10 @@ function SubagentDetails(props: SubagentDetailsProps) {
     <div className="flex flex-col gap-2 text-ui-sm">
       {displayTask !== null ? (
         <div className="flex flex-col gap-1">
-          <span className="select-none font-medium uppercase text-overline text-muted-foreground/80">
+          <span
+            data-find-skip
+            className="select-none font-medium uppercase text-overline text-muted-foreground/80"
+          >
             Task
           </span>
           <p className="m-0 whitespace-pre-wrap text-foreground/85">
@@ -401,7 +470,10 @@ function SubagentDetails(props: SubagentDetailsProps) {
       ) : null}
       {progressUpdates.length > 0 || isStreaming ? (
         <div className="flex flex-col gap-1">
-          <span className="select-none font-medium uppercase text-overline text-muted-foreground/80">
+          <span
+            data-find-skip
+            className="select-none font-medium uppercase text-overline text-muted-foreground/80"
+          >
             Progress
           </span>
           <ProgressTimeline
@@ -501,65 +573,8 @@ function ProgressTimeline(props: ProgressTimelineProps) {
 function useAdjacentDedupedProgressItems(
   progressUpdates: ReadonlyArray<string>,
 ): ReadonlyArray<ProgressUpdateItem> {
-  return useMemo(() => {
-    const seenCounts = new Map<string, number>();
-    return progressUpdates.reduce<ProgressUpdateItem[]>((acc, update) => {
-      if (acc.at(-1)?.text !== update) {
-        const count = (seenCounts.get(update) ?? 0) + 1;
-        seenCounts.set(update, count);
-        acc.push({
-          key: `${stableProgressUpdateHash(update)}:${count}`,
-          text: update,
-        });
-      }
-      return acc;
-    }, []);
-  }, [progressUpdates]);
-}
-
-function stableProgressUpdateHash(update: string): string {
-  let hash = 0;
-  for (const char of update) {
-    hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
-  }
-  return hash.toString(36);
-}
-
-function cleanSubagentNotificationText(input: string | null): string | null {
-  if (input === null) return null;
-  const trimmed = input.trim();
-  if (trimmed.length === 0) return null;
-  if (!trimmed.includes("<task-notification")) return trimmed;
-  const message =
-    extractTagText(trimmed, "message") ??
-    extractTagText(trimmed, "prompt") ??
-    extractTagText(trimmed, "task") ??
-    extractTagText(trimmed, "summary") ??
-    extractTagText(trimmed, "task-notification");
-  const cleaned = stripMonitorEventPrefix(
-    message ?? stripTaskNotificationMarkup(trimmed),
-  ).trim();
-  return cleaned.length > 0 ? cleaned : null;
-}
-
-function extractTagText(input: string, tagName: string): string | null {
-  const match = new RegExp(
-    `<${tagName}\\b[^>]*>([\\s\\S]*?)</${tagName}>`,
-    "i",
-  ).exec(input);
-  if (match === null) return null;
-  const value = match[1].trim();
-  return value.length > 0 ? value : null;
-}
-
-function stripTaskNotificationMarkup(input: string): string {
-  return input
-    .replace(/<task-id>[\s\S]*?<\/task-id>/gi, "")
-    .replace(/<task-notification\b[^>]*>/gi, "")
-    .replace(/<\/task-notification>/gi, "")
-    .replace(/<\/?(summary|message|prompt|task)>/gi, "");
-}
-
-function stripMonitorEventPrefix(input: string): string {
-  return input.replace(/^Monitor event:\s*/i, "");
+  return useMemo(
+    () => adjacentDedupedProgressItems(progressUpdates),
+    [progressUpdates],
+  );
 }

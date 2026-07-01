@@ -112,6 +112,8 @@ export function ArtifactChangeRow(props: { row: ArtifactChangeRowModel }) {
       tone={display.isDeleted ? "destructive" : "default"}
       stickyHeader
       expandable={hasDiff}
+      headerFindUnitId={null}
+      bodyFindUnitId={null}
       className={undefined}
       footer={null}
     />

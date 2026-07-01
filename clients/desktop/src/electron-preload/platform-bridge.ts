@@ -7,8 +7,6 @@ import type {
   AccessibilityThemeSnapshot,
   BackgroundMaterial,
   DisplayTopology,
-  FindInPageStopAction,
-  FindResultSnapshot,
   LogLevel,
   LogLevelScope,
   LogLevelsSnapshot,
@@ -24,8 +22,6 @@ export type {
   BackgroundMaterial,
   DisplaySnapshot,
   DisplayTopology,
-  FindInPageStopAction,
-  FindResultSnapshot,
   PendingCertificateError,
   ProcessMetricsSnapshot,
   TrustedCertificateEntry,
@@ -91,18 +87,6 @@ export interface PlatformBridgeSurface {
     dismissPending(id: string): Promise<void>;
     showSystemDialog(certificate: unknown, message: string): Promise<boolean>;
     onPending(handler: Listener<PendingCertificateError>): Disposable;
-  };
-  find: {
-    inPage(
-      text: string,
-      options: {
-        readonly forward: boolean | undefined;
-        readonly findNext: boolean | undefined;
-        readonly matchCase: boolean | undefined;
-      },
-    ): Promise<number | null>;
-    stop(action: FindInPageStopAction): Promise<void>;
-    onResult(handler: Listener<FindResultSnapshot>): Disposable;
   };
   display: {
     list(): Promise<DisplayTopology>;
@@ -278,21 +262,6 @@ export function buildPlatformBridge(): PlatformBridgeSurface {
         ) as Promise<boolean>,
       onPending: (handler) =>
         subscribe(RunnerHostEvent.certificateErrorPending, handler),
-    },
-    find: {
-      inPage: (text, options) =>
-        ipcRenderer.invoke(
-          RunnerHostInvoke.windowFindInPage,
-          text,
-          options,
-        ) as Promise<number | null>,
-      stop: (action) =>
-        ipcRenderer.invoke(
-          RunnerHostInvoke.windowStopFindInPage,
-          action,
-        ) as Promise<void>,
-      onResult: (handler) =>
-        subscribe(RunnerHostEvent.findInPageResult, handler),
     },
     display: {
       list: () =>

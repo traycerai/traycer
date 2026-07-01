@@ -7,6 +7,8 @@ interface DiffBundleFileSectionFrameProps {
   readonly collapsed: boolean;
   readonly headerRow: ReactNode;
   readonly onOpenFileTile: () => void;
+  readonly findFilePath: string;
+  readonly bundleFindFileId: string;
   readonly children: ReactNode;
 }
 
@@ -14,7 +16,11 @@ export function DiffBundleFileSectionFrame(
   props: DiffBundleFileSectionFrameProps,
 ): ReactNode {
   return (
-    <div className="border-b border-border/70 bg-background">
+    <div
+      className="border-b border-border/70 bg-background"
+      data-diff-find-file={props.findFilePath}
+      data-bundle-diff-file-id={props.bundleFindFileId}
+    >
       <div className="sticky top-0 z-10 flex items-center gap-1 border-b border-border/60 bg-background p-1">
         <div className="min-w-0 flex-1">{props.headerRow}</div>
         <Button

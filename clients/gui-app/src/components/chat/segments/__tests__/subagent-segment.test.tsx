@@ -1,14 +1,83 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  cleanup,
+  fireEvent,
+  render as rtlRender,
+  screen,
+} from "@testing-library/react";
+import type { ReactNode } from "react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ChatMeasuredItemChangeContext } from "@/components/chat/chat-measured-item-change-context";
+import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
+import { deriveSubagentCollapsibleKey } from "@/components/chat/chat-collapsible-key";
+import { chatFindSubagentHeaderUnitId } from "@/components/chat/chat-find";
 import { SubagentSegment } from "@/components/chat/segments/subagent-segment";
-import { useSubagentOpenStore } from "@/stores/chats/subagent-open-store";
+import {
+  useChatFindForcedOpen,
+  useSetChatFindForcedOpen,
+  useChatCollapsibleTileInstanceId,
+} from "@/stores/chats/chat-find-force-store-context";
+
+function render(ui: ReactNode) {
+  return rtlRender(
+    <ChatExpansionTestProviders tileInstanceId="subagent-test-tile">
+      {ui}
+    </ChatExpansionTestProviders>,
+  );
+}
+
+interface SubagentPersistenceHarnessProps {
+  readonly segmentId: string;
+  readonly visible: boolean;
+}
+
+function SubagentPersistenceHarness(props: SubagentPersistenceHarnessProps) {
+  if (!props.visible) return null;
+  return (
+    <SubagentSegment
+      id={props.segmentId}
+      name="reviewer"
+      task="Review the implementation"
+      progressUpdates={["Step one"]}
+      result="Done."
+      isStreaming={false}
+      endState={null}
+      stopped={false}
+      startedAt={null}
+      durationMs={null}
+      agentType={null}
+      variant="promoted"
+    />
+  );
+}
+
+interface ForceSubagentOpenButtonProps {
+  readonly label: string;
+  readonly renderId: string;
+}
+
+function ForceSubagentOpenButton(props: ForceSubagentOpenButtonProps) {
+  const tileInstanceId = useChatCollapsibleTileInstanceId();
+  const setFindForcedOpen = useSetChatFindForcedOpen();
+  const key = deriveSubagentCollapsibleKey(tileInstanceId, props.renderId);
+  return (
+    <button type="button" onClick={() => setFindForcedOpen(key, true)}>
+      {props.label}
+    </button>
+  );
+}
+
+interface FindForceStatusProps {
+  readonly renderId: string;
+}
+
+function FindForceStatus(props: FindForceStatusProps) {
+  const tileInstanceId = useChatCollapsibleTileInstanceId();
+  const key = deriveSubagentCollapsibleKey(tileInstanceId, props.renderId);
+  const forced = useChatFindForcedOpen(key);
+  return <span>{forced ? "forced" : "released"}</span>;
+}
 
 describe("<SubagentSegment /> promoted feed", () => {
-  beforeEach(() => {
-    useSubagentOpenStore.setState({ openIds: new Set() });
-  });
-
   afterEach(() => {
     cleanup();
   });
@@ -66,6 +135,163 @@ describe("<SubagentSegment /> promoted feed", () => {
     );
 
     expect(screen.getByText("Starting…")).toBeTruthy();
+  });
+
+  it("skips ephemeral header chrome from find highlighting but keeps name and type findable", () => {
+    render(
+      <SubagentSegment
+        id="subagent-header-skip"
+        name="Scanner"
+        task="Scan the repo"
+        progressUpdates={["Scanning"]}
+        result={null}
+        isStreaming
+        endState={null}
+        stopped={false}
+        startedAt={null}
+        durationMs={null}
+        agentType="analysis"
+        variant="promoted"
+      />,
+    );
+
+    // Name + agent type are projected/indexed, so they must stay highlightable
+    // (no data-find-skip ancestor).
+    expect(screen.getByText("Scanner").closest("[data-find-skip]")).toBeNull();
+    expect(screen.getByText("analysis").closest("[data-find-skip]")).toBeNull();
+
+    // The latest-progress header mirror duplicates the body's last progress line
+    // (see "shows ... in both the header summary and the history list" above).
+    // The projection does not index it, so it must be skipped by the highlighter
+    // to keep count == highlightable.
+    expect(
+      screen.getByText("Scanning").closest("[data-find-skip]"),
+    ).not.toBeNull();
+  });
+
+  it("skips the promoted live elapsed timer and Starting placeholder from highlighting", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(10_000);
+      render(
+        <SubagentSegment
+          id="subagent-header-skip-elapsed"
+          name="Probe"
+          task="Scan the repo"
+          progressUpdates={[]}
+          result={null}
+          isStreaming
+          endState={null}
+          stopped={false}
+          startedAt={5_000}
+          durationMs={null}
+          agentType={null}
+          variant="promoted"
+        />,
+      );
+
+      // Name stays findable; the elapsed timer and the "Starting…" mirror are
+      // ephemeral chrome the projection never indexes, so both are skipped.
+      const name = screen.getByText("Probe");
+      expect(name.closest("[data-find-skip]")).toBeNull();
+      expect(name.closest("button")).not.toBeNull();
+      expect(screen.getByText("5s").closest("[data-find-skip]")).not.toBeNull();
+      expect(
+        screen.getByText("Starting…").closest("[data-find-skip]"),
+      ).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("skips the promoted end-state badge from highlighting", () => {
+    render(
+      <SubagentSegment
+        id="subagent-header-skip-badge"
+        name="Probe"
+        task="Scan the repo"
+        progressUpdates={["Scanning"]}
+        result={null}
+        isStreaming={false}
+        endState="interrupted"
+        stopped={false}
+        startedAt={null}
+        durationMs={null}
+        agentType={null}
+        variant="promoted"
+      />,
+    );
+
+    const name = screen.getByText("Probe");
+    expect(name.closest("[data-find-skip]")).toBeNull();
+    expect(name.closest("button")).not.toBeNull();
+    expect(
+      screen.getByText("stopped").closest("[data-find-skip]"),
+    ).not.toBeNull();
+  });
+
+  it("skips the compact card header mirror and elapsed timer, keeping the name findable", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(10_000);
+      render(
+        <SubagentSegment
+          id="subagent-card-header-skip"
+          name="Probe"
+          task="Scan the repo"
+          progressUpdates={["Scanning"]}
+          result={null}
+          isStreaming
+          endState={null}
+          stopped={false}
+          startedAt={5_000}
+          durationMs={null}
+          agentType="analysis"
+          variant="card"
+        />,
+      );
+
+      // Name + type stay highlightable; the collapsed summary mirror and elapsed
+      // timer in the compact header are skipped, matching the promoted variant.
+      const name = screen.getByText("Probe");
+      expect(name.closest("[data-find-skip]")).toBeNull();
+      expect(name.closest("button")).not.toBeNull();
+      expect(
+        screen.getByText("analysis").closest("[data-find-skip]"),
+      ).toBeNull();
+      expect(
+        screen.getByText("Scanning").closest("[data-find-skip]"),
+      ).not.toBeNull();
+      expect(screen.getByText("5s").closest("[data-find-skip]")).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("skips the compact card end-state badge from highlighting", () => {
+    render(
+      <SubagentSegment
+        id="subagent-card-header-skip-badge"
+        name="Probe"
+        task="Scan the repo"
+        progressUpdates={[]}
+        result={null}
+        isStreaming={false}
+        endState="superseded"
+        stopped={false}
+        startedAt={null}
+        durationMs={null}
+        agentType={null}
+        variant="card"
+      />,
+    );
+
+    const name = screen.getByText("Probe");
+    expect(name.closest("[data-find-skip]")).toBeNull();
+    expect(name.closest("button")).not.toBeNull();
+    expect(
+      screen.getByText("superseded").closest("[data-find-skip]"),
+    ).not.toBeNull();
   });
 
   it("requests measured item-change when promoted card toggles", () => {
@@ -245,21 +471,10 @@ describe("<SubagentSegment /> promoted feed", () => {
   it("preserves open state across unmount and remount with same segment id", () => {
     const segmentId = "test-segment-persistent";
 
-    const { unmount } = render(
-      <SubagentSegment
-        id={segmentId}
-        name="reviewer"
-        task="Review the implementation"
-        progressUpdates={["Step one"]}
-        result="Done."
-        isStreaming={false}
-        endState={null}
-        stopped={false}
-        startedAt={null}
-        durationMs={null}
-        agentType={null}
-        variant="promoted"
-      />,
+    const { rerender } = rtlRender(
+      <ChatExpansionTestProviders tileInstanceId="subagent-test-tile">
+        <SubagentPersistenceHarness segmentId={segmentId} visible />
+      </ChatExpansionTestProviders>,
     );
 
     expect(screen.queryByText("Progress")).toBeNull();
@@ -268,26 +483,106 @@ describe("<SubagentSegment /> promoted feed", () => {
 
     expect(screen.getByText("Progress")).toBeTruthy();
 
-    unmount();
-
-    render(
-      <SubagentSegment
-        id={segmentId}
-        name="reviewer"
-        task="Review the implementation"
-        progressUpdates={["Step one"]}
-        result="Done."
-        isStreaming={false}
-        endState={null}
-        stopped={false}
-        startedAt={null}
-        durationMs={null}
-        agentType={null}
-        variant="promoted"
-      />,
+    rerender(
+      <ChatExpansionTestProviders tileInstanceId="subagent-test-tile">
+        <SubagentPersistenceHarness segmentId={segmentId} visible={false} />
+      </ChatExpansionTestProviders>,
+    );
+    rerender(
+      <ChatExpansionTestProviders tileInstanceId="subagent-test-tile">
+        <SubagentPersistenceHarness segmentId={segmentId} visible />
+      </ChatExpansionTestProviders>,
     );
 
     expect(screen.getByText("Progress")).toBeTruthy();
+  });
+
+  it("opens from find-force and releases force on manual collapse", () => {
+    const segmentId = "test-segment-find-forced";
+    render(
+      <>
+        <ForceSubagentOpenButton label="Force subagent" renderId={segmentId} />
+        <FindForceStatus renderId={segmentId} />
+        <SubagentSegment
+          id={segmentId}
+          name="reviewer"
+          task="Find-forced task"
+          progressUpdates={["Step one"]}
+          result="Done."
+          isStreaming={false}
+          endState={null}
+          stopped={false}
+          startedAt={null}
+          durationMs={null}
+          agentType={null}
+          variant="promoted"
+        />
+      </>,
+    );
+
+    expect(screen.queryByText("Find-forced task")).toBeNull();
+    expect(screen.getByText("released")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Force subagent" }));
+
+    expect(screen.getByText("Find-forced task")).toBeTruthy();
+    expect(screen.getByText("forced")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /Subagent/ }));
+
+    expect(screen.queryByText("Find-forced task")).toBeNull();
+    expect(screen.getByText("released")).toBeTruthy();
+  });
+
+  it("keeps find-force scoped to the tile provider", () => {
+    const segmentId = "shared-subagent-id";
+    rtlRender(
+      <div>
+        <ChatExpansionTestProviders tileInstanceId="tile-a">
+          <ForceSubagentOpenButton
+            label="Force tile A subagent"
+            renderId={segmentId}
+          />
+          <SubagentSegment
+            id={segmentId}
+            name="reviewer"
+            task="Tile A task"
+            progressUpdates={[]}
+            result="Tile A result"
+            isStreaming={false}
+            endState={null}
+            stopped={false}
+            startedAt={null}
+            durationMs={null}
+            agentType={null}
+            variant="promoted"
+          />
+        </ChatExpansionTestProviders>
+        <ChatExpansionTestProviders tileInstanceId="tile-b">
+          <SubagentSegment
+            id={segmentId}
+            name="reviewer"
+            task="Tile B task"
+            progressUpdates={[]}
+            result="Tile B result"
+            isStreaming={false}
+            endState={null}
+            stopped={false}
+            startedAt={null}
+            durationMs={null}
+            agentType={null}
+            variant="promoted"
+          />
+        </ChatExpansionTestProviders>
+      </div>,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Force tile A subagent" }),
+    );
+
+    expect(screen.getByText("Tile A task")).toBeTruthy();
+    expect(screen.queryByText("Tile B task")).toBeNull();
   });
 
   it("renders the agent type as a distinct title segment alongside the name", () => {
@@ -311,6 +606,35 @@ describe("<SubagentSegment /> promoted feed", () => {
     // Title reads "Subagent · explorer · Godel · ..." (role CSS-capitalized).
     expect(screen.getByText("explorer")).toBeTruthy();
     expect(screen.getByText("Godel")).toBeTruthy();
+  });
+
+  it("anchors the always-visible header (name + type) to the header find unit", () => {
+    render(
+      <SubagentSegment
+        id="test-header-anchor"
+        name="Godel"
+        agentType="explorer"
+        task="Investigate the auth flow"
+        progressUpdates={[]}
+        result={null}
+        isStreaming
+        endState={null}
+        stopped={false}
+        startedAt={null}
+        durationMs={null}
+        variant="promoted"
+      />,
+    );
+
+    const trigger = screen.getByRole("button", { name: /Subagent/ });
+    // The name + agent type render inside the always-visible header trigger, and
+    // that trigger carries the header find-unit anchor so the painter can target
+    // it without expanding the body.
+    expect(trigger.getAttribute("data-chat-find-unit")).toBe(
+      chatFindSubagentHeaderUnitId("test-header-anchor"),
+    );
+    expect(trigger.textContent).toContain("Godel");
+    expect(trigger.textContent).toContain("explorer");
   });
 
   it("shows a live elapsed timer while streaming", () => {

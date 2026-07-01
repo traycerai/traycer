@@ -39,20 +39,12 @@ import {
   trustCertificate,
   untrustCertificate,
 } from "../app/cert-trust";
-import {
-  handleFindInPage,
-  handleStopFindInPage,
-  installFindResultForwarder,
-} from "../app/find-in-page";
 import { readDisplayTopology } from "../app/screen-monitor";
 import {
   getHardwareAccelerationPreference,
   setHardwareAccelerationPreference,
 } from "../app/gpu-acceleration";
-import {
-  RunnerHostEvent,
-  RunnerHostInvoke,
-} from "../../ipc-contracts/ipc-channels";
+import { RunnerHostInvoke } from "../../ipc-contracts/ipc-channels";
 import type { FileSaveInput } from "../../ipc-contracts/platform-types";
 import { app, BrowserWindow, dialog, type ProxyConfig } from "electron";
 import { randomUUID } from "node:crypto";
@@ -360,20 +352,6 @@ export function registerPlatformIpc(bridge: RunnerIpcBridge): void {
   );
 
   bridge.handleInvoke(
-    RunnerHostInvoke.windowFindInPage,
-    (event, text: unknown, options: unknown) => {
-      return handleFindInPage(event, text, options);
-    },
-  );
-
-  bridge.handleInvoke(
-    RunnerHostInvoke.windowStopFindInPage,
-    (event, action: unknown) => {
-      handleStopFindInPage(event, action);
-    },
-  );
-
-  bridge.handleInvoke(
     RunnerHostInvoke.windowSetOverlayIcon,
     (event, image: unknown, description: unknown) => {
       handleSetOverlayIcon(event, image, description);
@@ -570,18 +548,4 @@ function sanitizedDroppedFileBase(value: string): string {
     .replace(/^-+|-+$/g, "")
     .slice(0, 80);
   return cleaned.length > 0 ? cleaned : "dropped-file";
-}
-
-/**
- * Per-window setup that depends on the bridge. Wires the find-in-page
- * result forwarder so Chromium's `found-in-page` events reach the
- * renderer's search UI. Called from window-factory when the window is
- * created.
- */
-export function installPerWindowPlatformHooks(
-  webContents: Electron.WebContents,
-): void {
-  installFindResultForwarder(webContents, (snapshot) => {
-    webContents.send(RunnerHostEvent.findInPageResult, snapshot);
-  });
 }

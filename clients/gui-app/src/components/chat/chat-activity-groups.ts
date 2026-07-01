@@ -17,6 +17,10 @@ import type {
   SubagentSegment,
   ToolSegment,
 } from "@/stores/composer/chat-store";
+import {
+  deriveActivityGroupRenderId,
+  derivePromotedSubagentRenderId,
+} from "./chat-collapsible-key";
 
 export type ActivitySegment =
   | ToolSegment
@@ -241,7 +245,7 @@ function buildChatActivityTimelineImpl(
       flushRun();
       out.push({
         kind: "promoted_subagent",
-        id: `promoted:${segment.id}`,
+        id: derivePromotedSubagentRenderId(segment.id),
         segment,
       });
       continue;
@@ -432,7 +436,7 @@ function activityGroupFromRun(
   const summary = activityGroupSummary(segments);
   const isStreaming = segments.some(isStreamingActivitySegment);
   return {
-    id: `activity:${first.id}`,
+    id: deriveActivityGroupRenderId(first.id),
     segments,
     isActive: isStreaming,
     isStreaming,

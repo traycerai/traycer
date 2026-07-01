@@ -4,6 +4,7 @@ import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-sto
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import { AssistantMessageBody } from "./chat-message-assistant-body";
+import { chatFindSegmentUnitId } from "./chat-find";
 import { UserMessageBody } from "./chat-message-user-body";
 import { ForkedChatLinkSegment } from "./segments/forked-chat-link-segment";
 import { SetupCardSegment } from "./segments/setup-card-segment";
@@ -82,19 +83,24 @@ function renderSingleSpecialSegment(
   const segment = message.segments[0];
   if (segment.kind === "setup-card") {
     return (
-      <div className="flex w-full flex-col">
+      <div
+        data-chat-find-unit={chatFindSegmentUnitId(segment.id)}
+        className="flex w-full flex-col"
+      >
         <SetupCardSegment model={segment.model} viewTabId={segment.viewTabId} />
       </div>
     );
   }
   if (segment.kind === "forked-chat-link") {
     return (
-      <ForkedChatLinkSegment
-        viewTabId={segment.viewTabId}
-        sourceChatId={segment.sourceChatId}
-        sourceChatTitle={segment.sourceChatTitle}
-        sourceHostId={segment.sourceHostId}
-      />
+      <div data-chat-find-unit={chatFindSegmentUnitId(segment.id)}>
+        <ForkedChatLinkSegment
+          viewTabId={segment.viewTabId}
+          sourceChatId={segment.sourceChatId}
+          sourceChatTitle={segment.sourceChatTitle}
+          sourceHostId={segment.sourceHostId}
+        />
+      </div>
     );
   }
   return null;
@@ -162,9 +168,9 @@ function ChatMessageImpl(props: ChatMessageProps) {
 }
 
 /**
- * Activity-group open state lives in `ActivityGroupOpenStoreProvider`; toggling
- * one group only re-renders its `ActivityGroupSegment` (leaf subscription),
- * not every visible row. That leaves `ChatMessage` free to bail on default
- * shallow equality whenever its render-driving props are reference-equal.
+ * Collapsible open state lives in provider-scoped stores under `ChatMessages`;
+ * toggling one card only re-renders the subscribing leaf segment, not every
+ * visible row. That leaves `ChatMessage` free to bail on default shallow
+ * equality whenever its render-driving props are reference-equal.
  */
 export const ChatMessage = memo(ChatMessageImpl);
