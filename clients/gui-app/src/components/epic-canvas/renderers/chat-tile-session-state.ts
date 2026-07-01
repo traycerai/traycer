@@ -171,6 +171,42 @@ export function composerTurnStatus(
   return null;
 }
 
+/**
+ * Narrows {@link composerTurnStatus} to the question the composer's Stop/Send
+ * toggle actually needs: is there a turn the host would let us stop right
+ * now? `runStatus` also reads "running" while a queued item is pending or
+ * visible background work outlives the turn (Bash `run_in_background` / a
+ * subagent / Monitor) - neither of which the host's `stop` action can act on
+ * (it rejects with `NO_ACTIVE_TURN`). Background work already has its own
+ * "stop all background" control, so rather than show a live-but-broken Stop
+ * button, this falls back to `null` - the composer's normal Send state -
+ * exactly as if the chat were idle.
+ *
+ * `activeTurn !== null` covers a genuinely running (or stopping) turn
+ * directly. When it's null but `runStatus` still reads "running", process of
+ * elimination against the queue/background signals is the only way to tell a
+ * pre-turn "activating" window (stoppable) apart from a queue-only or
+ * background-only one (not stoppable) - both look identical on the wire
+ * otherwise.
+ *
+ * Known gap: if a turn is still activating AND another item is queued behind
+ * it, the queue signal is also "runnable", so this can't distinguish that
+ * from a queue-only state and will (narrowly, incorrectly) fall back to Send
+ * during that brief pre-turn window. A precise fix needs a host-sent signal;
+ * not worth a wire-protocol change for this edge.
+ */
+export function composerStopTurnStatus(
+  state: Pick<ChatSessionState, "activeTurn" | "queue" | "backgroundItems">,
+  turnStatus: ChatActiveTurn["status"] | null,
+): ChatActiveTurn["status"] | null {
+  if (turnStatus === null) return null;
+  if (state.activeTurn !== null) return turnStatus;
+  const isQueueRunnable =
+    state.queue.status !== "paused" && state.queue.items.length > 0;
+  const hasVisibleBackgroundWork = (state.backgroundItems?.length ?? 0) > 0;
+  return isQueueRunnable || hasVisibleBackgroundWork ? null : turnStatus;
+}
+
 export function normalizeInlineEditForSession(
   inlineEdit: InlineEditState | null,
   state: Pick<

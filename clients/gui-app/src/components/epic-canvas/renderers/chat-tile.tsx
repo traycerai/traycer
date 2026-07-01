@@ -166,6 +166,7 @@ import {
   userMessageSenderForProfile,
   plainTextPromptContent,
   composerTurnStatus,
+  composerStopTurnStatus,
   chatTileCanAct,
   findPendingInterview,
 } from "./chat-tile-session-state";
@@ -978,14 +979,20 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   const approvalDecisionPending = Object.values(state.pendingActions).some(
     (action) => action.action === "approvalDecision",
   );
-  // In-progress UI (composer stop button, restore gating, owner-active) is
-  // driven by the host-owned chat `runStatus` - the single source of truth
-  // that covers the first turn and every multi-turn send and flips to
-  // `stopping` the moment a stop is requested. We map it onto the composer's
-  // turn-status prop shape (`running`/`stopping`/null).
+  // In-progress UI (restore gating, owner-active) is driven by the host-owned
+  // chat `runStatus` - the single source of truth that covers the first turn
+  // and every multi-turn send and flips to `stopping` the moment a stop is
+  // requested. We map it onto the composer's turn-status prop shape
+  // (`running`/`stopping`/null).
   const activeTurnStatus = composerTurnStatus(state.runStatus);
+  // The composer's Stop/Send toggle needs a narrower question than the label
+  // above - see `composerStopTurnStatus`'s doc comment.
+  const composerActiveTurnStatus = composerStopTurnStatus(
+    state,
+    activeTurnStatus,
+  );
   const stopDisabled =
-    !canAct || stopPending || activeTurnStatus === "stopping";
+    !canAct || stopPending || composerActiveTurnStatus === "stopping";
   const chatActions = useChatActions(handle);
   const restoreActionPending = useMemo(
     () =>
@@ -1362,11 +1369,11 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
 
   const lowerTurn = useMemo(
     () => ({
-      activeTurnStatus,
+      activeTurnStatus: composerActiveTurnStatus,
       stopDisabled,
       onStopTurn: chatActions.stopTurn,
     }),
-    [activeTurnStatus, stopDisabled, chatActions.stopTurn],
+    [composerActiveTurnStatus, stopDisabled, chatActions.stopTurn],
   );
 
   const lowerInterview = useMemo(
