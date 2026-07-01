@@ -300,6 +300,45 @@ describe("createArtifactEditorFindAdapter", () => {
     unsubscribe();
   });
 
+  it("scrolls the newly current match after replace-current", () => {
+    const frames = installAnimationFrameQueue();
+    const scrollIntoView = vi
+      .spyOn(Element.prototype, "scrollIntoView")
+      .mockImplementation(() => undefined);
+    const editor = makeEditor(
+      "<p>one needle two needle three needle four needle</p>",
+      true,
+    );
+    const adapter = makeAdapter(editor, "spec", "replace-current-scroll");
+
+    void adapter.search({ requestId: 1, query: "needle", matchCase: false });
+    void adapter.next();
+    void adapter.next();
+    frames.flushFrames();
+    scrollIntoView.mockClear();
+    expectCurrentElementToBeMatch(editor, 2);
+
+    void requireReplace(adapter).replaceCurrent({
+      requestId: 2,
+      query: "needle",
+      matchCase: false,
+      replaceText: "done",
+    });
+
+    expect(editor.getText()).toBe(
+      "one needle two needle three done four needle",
+    );
+    expect(getArtifactFindState(editor).currentIndex).toBe(2);
+    expectCurrentElementToBeMatch(editor, 2);
+    expect(scrollIntoView).not.toHaveBeenCalled();
+
+    frames.runNextFrame();
+    expect(scrollIntoView).toHaveBeenCalledWith({
+      block: "center",
+      inline: "nearest",
+    });
+  });
+
   it("dispatches replace-all as one undoable editor transaction", () => {
     const editor = makeEditor("<p>foo foo foo</p>", true);
     const adapter = makeAdapter(editor, "review", "replace-all");

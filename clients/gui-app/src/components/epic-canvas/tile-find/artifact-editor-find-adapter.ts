@@ -188,9 +188,10 @@ export function createArtifactEditorFindAdapter(
       editor.state.tr.insertText(input.replaceText, match.from, match.to),
       input,
       preferredPosition,
-    ).scrollIntoView();
+    );
     editor.view.dispatch(tr);
     publish();
+    scheduleCurrentScroll();
   };
 
   const dispatchReplaceAll = (input: TileReplaceInput): void => {
@@ -224,9 +225,10 @@ export function createArtifactEditorFindAdapter(
         editor.state.tr,
       );
     editor.view.dispatch(
-      setArtifactFindSearchMeta(tr, input, preferredPosition).scrollIntoView(),
+      setArtifactFindSearchMeta(tr, input, preferredPosition),
     );
     publish();
+    scheduleCurrentScroll();
   };
 
   return {
