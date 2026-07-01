@@ -24,10 +24,10 @@ import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-di
 import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
 
 // Stable identity for a rule across list/remove (no id field on the wire shape).
+// Structured-encode so token boundaries can't blur — joining with a delimiter
+// would collide (`["a b","c"]` vs `["a","b c"]`); JSON keeps each token distinct.
 function ruleKey(rule: CommandAllowRule): string {
-  const scope =
-    rule.scope.kind === "global" ? "global" : `workspace:${rule.scope.path}`;
-  return `${scope}|${rule.match}|${rule.tokens.join(" ")}`;
+  return JSON.stringify([rule.scope, rule.match, rule.tokens]);
 }
 
 // Identity for a clear target across the shared clear mutation: `undefined`
