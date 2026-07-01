@@ -192,8 +192,18 @@ export const toolCallBlockSchema = z.object({
   // `backgroundOutput` (only set on some terminal paths), this survives EVERY
   // terminal path and reload - so the GUI keeps rendering it as a standalone
   // background card after it completes/stops/errors instead of collapsing into
-  // the generic activity group. Defaulted so pre-existing blocks parse cleanly.
-  backgroundTask: z.boolean().default(false),
+  // the generic activity group. `null` means "not yet known" (the classifier
+  // hasn't seen enough of the streamed input to tell) - distinct from a
+  // confirmed `false`, so a brief mid-stream gap is never misrendered as a
+  // definitive "not background." Defaulted to `false` (not `null`) for blocks
+  // persisted before this field existed, since backgrounding didn't exist as a
+  // concept then.
+  backgroundTask: z.boolean().nullable().default(false),
+  // Set alongside `status: "errored"` when the terminal outcome was an
+  // explicit stop (deadline-killed Monitor, user-stopped command) rather than
+  // a genuine failure. `status` itself is unchanged - this only adds the
+  // finer distinction. Defaulted so pre-existing blocks parse cleanly.
+  stopped: z.boolean().default(false),
 });
 export type ToolCallBlock = z.infer<typeof toolCallBlockSchema>;
 
@@ -283,6 +293,11 @@ export const subAgentBlockSchema = z.object({
   // `task` part) and therefore emit no separate tool call. Defaulted so blocks
   // persisted before this field parse cleanly.
   spawnToolCallId: z.string().nullable().default(null),
+  // Set alongside `status: "errored"` when the subagent's terminal outcome
+  // was an explicit stop rather than a genuine failure - mirrors
+  // `toolCallBlockSchema.stopped`. Defaulted so pre-existing blocks parse
+  // cleanly.
+  stopped: z.boolean().default(false),
 });
 export type SubAgentBlock = z.infer<typeof subAgentBlockSchema>;
 

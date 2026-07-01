@@ -371,16 +371,20 @@ function shouldPromoteToolSegment(
   if (segment.agentMessageSend !== null) return true;
   // A backgrounded command/Monitor stays a standalone card for its whole life -
   // running, completed, stopped, errored, and after reload - keyed on the
-  // persistent block marker. This is the durable signal; the transient host
-  // `backgroundItems` set (below) is removed at completion, and `backgroundOutput`
-  // is only set on some terminal paths, so neither alone keeps the card.
+  // persistent block marker. This is the durable signal: it is stamped at birth
+  // from the tool input (`run_in_background` / Monitor) and is sticky, so it
+  // covers the running phase too. The transient host `backgroundItems` set
+  // (`promotedToolBlockIds`) keeps the card live while the host tracks it.
   if (segment.backgroundTask) return true;
   if (promotedToolBlockIds.has(segment.id)) return true;
+  // Background-only terminal fallback: some terminal paths surface
+  // `backgroundOutput` without the durable marker. Foreground commands never
+  // capture background output, so this never promotes them. Deliberately NOT
+  // keyed on `isStreaming`/`error` - those fire for foreground commands too and
+  // would flash every normal command into a standalone card while it runs,
+  // then collapse it back into the activity group on completion.
   return (
-    isCommandLikeTool(segment.toolName) &&
-    (segment.isStreaming ||
-      segment.backgroundOutput !== null ||
-      segment.error !== null)
+    isCommandLikeTool(segment.toolName) && segment.backgroundOutput !== null
   );
 }
 

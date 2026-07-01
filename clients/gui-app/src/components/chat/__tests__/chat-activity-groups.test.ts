@@ -265,6 +265,10 @@ describe("chat activity grouping", () => {
         command: "sleep 60",
         run_in_background: true,
       }),
+      // The accumulator stamps `backgroundTask` at birth from `run_in_background`;
+      // that sticky marker - not the transient streaming state - is what keeps a
+      // background command promoted while it runs.
+      backgroundTask: true,
       isStreaming: true,
     };
     const timeline = buildCompleteTimeline([
@@ -387,12 +391,16 @@ describe("chat activity grouping", () => {
     expect(timeline[1].segment.id).toBe("tool-1");
   });
 
-  it("keeps errored command tools promoted as standalone cards", () => {
+  it("keeps errored background command tools promoted as standalone cards", () => {
     const bash = {
       ...toolSegment("tool-1", "Bash", {
         command: "sleep 60",
         run_in_background: true,
       }),
+      // A backgrounded command that errors keeps its sticky `backgroundTask`
+      // marker, so it stays a standalone card (an errored *foreground* command,
+      // which has no marker, folds into the activity group instead).
+      backgroundTask: true,
       error: "stopped: user requested stop",
       endState: null,
     };
@@ -416,6 +424,37 @@ describe("chat activity grouping", () => {
       throw new Error("Expected promoted tool segment");
     }
     expect(timeline[1].segment.error).toContain("stopped");
+  });
+
+  it("never promotes a foreground command tool - it folds into the activity group while streaming and after it completes or errors", () => {
+    // Regression: a normal foreground command carries no `backgroundTask`
+    // marker, never lands in `promotedToolBlockIds`, and captures no
+    // `backgroundOutput`. It must stay inside the activity group through its
+    // whole life - it must not flash into a standalone card while it runs and
+    // collapse back on completion.
+    const streamingForeground = {
+      ...toolSegment("tool-1", "Bash", { command: "ls" }),
+      isStreaming: true,
+    };
+    const erroredForeground = {
+      ...toolSegment("tool-2", "Bash", { command: "false" }),
+      error: "command failed",
+    };
+    const timeline = buildActiveTimeline([
+      toolSegment("tool-0", "read_file", { path: "/repo/a.ts" }),
+      streamingForeground,
+      erroredForeground,
+    ]);
+
+    expect(timeline.map((item) => item.kind)).toEqual(["activity_group"]);
+    if (timeline[0]?.kind !== "activity_group") {
+      throw new Error("Expected a single activity group");
+    }
+    expect(timeline[0].group.segments.map((segment) => segment.id)).toEqual([
+      "tool-0",
+      "tool-1",
+      "tool-2",
+    ]);
   });
 
   it("keeps completed subagents as promoted standalone items", () => {
@@ -695,6 +734,7 @@ function toolSegment(
     agentMessageSend: null,
     isStreaming: false,
     endState: null,
+    stopped: false,
     progress: null,
     backgroundOutput: null,
     backgroundTask: false,
@@ -723,6 +763,7 @@ function a2aToolSegment(
     agentMessageSend: send,
     isStreaming: false,
     endState: null,
+    stopped: false,
     progress: null,
     backgroundOutput: null,
     backgroundTask: false,
@@ -788,6 +829,7 @@ function subagentSegment(
     result: isStreaming ? null : "Found the issue.",
     isStreaming,
     endState: null,
+    stopped: false,
     startedAt: null,
     durationMs: null,
     spawnToolCallId: null,

@@ -2109,7 +2109,7 @@ function buildAssistantSegments(
       flat.push(segment);
     }
   }
-  const nested = nestSubagentChildren(flat);
+  const nested = suppressRedundantResumeMarkers(nestSubagentChildren(flat));
   const visible = suppressAuthErrors(
     suppressEditToolCalls(suppressSubagentSpawnToolCalls(nested)),
   );
@@ -2264,6 +2264,40 @@ function rejectToolSegments<T extends MessageSegment>(
   return segments.filter(
     (segment) => segment.kind !== "tool" || !shouldDrop(segment.id),
   );
+}
+
+/**
+ * When a backgrounded command/monitor/subagent settles while its own turn is
+ * still streaming, the host appends the resume trigger right after that
+ * block's own segment (see chat-session-manager.ts
+ * `appendAutonomousResumeNotificationToActiveTurn`). With nothing else
+ * streamed in between, the "X completed" marker lands directly under the
+ * card that already shows its own completed status - pure duplication. Drop
+ * a trigger whose blockId is the immediately preceding segment.
+ *
+ * Must run on the post-`nestSubagentChildren` (visible) order, not the raw
+ * flat block order: a subagent's own trigger's `blockId` targets the
+ * subagent segment itself, but in raw order the block right before the
+ * trigger is often the subagent's *last child* (its own activity streamed
+ * after the subagent block started). Comparing against that child would
+ * never match the subagent's id, so the redundant marker would leak through
+ * under the parent card the user actually sees. A resume segment left with
+ * zero triggers is removed outright.
+ */
+function suppressRedundantResumeMarkers(
+  nested: ReadonlyArray<MessageSegment>,
+): ReadonlyArray<MessageSegment> {
+  return nested.flatMap((segment, index): MessageSegment[] => {
+    if (segment.kind !== "autonomous_resume") return [segment];
+    const previousId = index > 0 ? (nested.at(index - 1)?.id ?? null) : null;
+    if (previousId === null) return [segment];
+    const triggers = segment.triggers.filter(
+      (trigger) => trigger.blockId !== previousId,
+    );
+    if (triggers.length === segment.triggers.length) return [segment];
+    if (triggers.length === 0) return [];
+    return [{ ...segment, triggers }];
+  });
 }
 
 /**
@@ -2617,6 +2651,7 @@ const BLOCK_HANDLERS: {
     agentMessageSend: block.agentMessageSend,
     isStreaming: block.status === "streaming",
     endState: segmentEndState(block.status),
+    stopped: block.stopped,
     progress: block.progress,
     backgroundOutput: block.backgroundOutput,
     backgroundTask: block.backgroundTask,
@@ -2662,6 +2697,7 @@ const BLOCK_HANDLERS: {
           result: block.result,
           isStreaming: block.status === "streaming",
           endState: segmentEndState(block.status),
+          stopped: block.stopped,
           startedAt: block.startedAt,
           // While streaming the card ticks live from `startedAt`; once cleanly
           // completed it shows the spawn->completion total. An interrupted/

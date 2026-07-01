@@ -104,7 +104,7 @@ describe("<AutonomousResumeSegment />", () => {
     expect(screen.getByText("Output truncated")).toBeTruthy();
   });
 
-  it("renders command triggers without output files as cards", () => {
+  it("renders command triggers without output files as non-expandable cards", () => {
     render(
       <AutonomousResumeSegment
         triggers={[
@@ -120,21 +120,19 @@ describe("<AutonomousResumeSegment />", () => {
       />,
     );
 
-    expect(screen.getByRole("status", { name: "Resumed" })).toBeTruthy();
-    const commandButton = screen.getByRole("button", {
-      name: /Command completed/,
-    });
-    expect(commandButton).toBeTruthy();
-    expect(hostQueryMock.calls).toHaveLength(0);
-
-    fireEvent.click(commandButton);
-
-    expect(screen.getByText("Output")).toBeTruthy();
-    expect(screen.getByText("Output file unavailable.")).toBeTruthy();
+    expect(screen.queryByRole("status", { name: "Resumed" })).toBeNull();
+    // No captured output file, so the card is a static header - no expand
+    // toggle/button, no "Output file unavailable" row.
+    expect(
+      screen.queryByRole("button", { name: /Command completed/ }),
+    ).toBeNull();
+    expect(screen.getByText("Command finished")).toBeTruthy();
+    expect(screen.queryByText("Output")).toBeNull();
+    expect(screen.queryByText("Output file unavailable.")).toBeNull();
     expect(hostQueryMock.calls).toHaveLength(0);
   });
 
-  it("renders stopped monitor triggers without output files as cards", () => {
+  it("renders monitor triggers as non-expandable cards with no output row", () => {
     render(
       <AutonomousResumeSegment
         triggers={[
@@ -150,10 +148,17 @@ describe("<AutonomousResumeSegment />", () => {
       />,
     );
 
-    expect(screen.getByRole("status", { name: "Resumed" })).toBeTruthy();
+    expect(screen.queryByRole("status", { name: "Resumed" })).toBeNull();
+    // Monitor never has a capturable output file, so the card is a static
+    // header - no expand toggle/button, no "Output file unavailable" row.
     expect(
-      screen.getByRole("button", { name: /Monitor stopped/ }),
+      screen.queryByRole("button", { name: /Monitor stopped/ }),
+    ).toBeNull();
+    expect(
+      screen.getByText("All updates in ~/.traycer/host/dev/host.log"),
     ).toBeTruthy();
+    expect(screen.queryByText("Output")).toBeNull();
+    expect(screen.queryByText("Output file unavailable.")).toBeNull();
     expect(hostQueryMock.calls).toHaveLength(0);
   });
 });

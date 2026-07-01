@@ -1,8 +1,7 @@
-import { CheckCheck, RotateCw, XCircle } from "lucide-react";
+import { CheckCheck, XCircle } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import type { AutonomousResumeTrigger } from "@traycer/protocol/persistence/epic/content-blocks";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
-import { useScrollToChatBlock } from "@/components/chat/chat-scroll-to-block";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -36,24 +35,9 @@ export function AutonomousResumeSegment(props: AutonomousResumeSegmentProps) {
 
   return (
     <div className="flex flex-col gap-2">
-      <ResumeMarker />
       {triggers.map((trigger) => (
         <ResumeCompletionCard key={triggerKey(trigger)} trigger={trigger} />
       ))}
-    </div>
-  );
-}
-
-function ResumeMarker() {
-  return (
-    <div
-      role="status"
-      aria-label="Resumed"
-      data-testid="autonomous-resume-marker"
-      className="flex w-fit min-w-0 max-w-full items-center gap-1.5 rounded-md border border-border/40 bg-muted/20 px-2 py-1 text-ui-xs text-muted-foreground"
-    >
-      <RotateCw className="size-3.5 shrink-0" aria-hidden />
-      <span className="shrink-0 font-medium text-foreground/80">Resumed</span>
     </div>
   );
 }
@@ -68,7 +52,6 @@ function ResumeCompletionCard(props: {
 }) {
   const { trigger } = props;
   const [open, setOpen] = useState(false);
-  const scrollToBlock = useScrollToChatBlock();
 
   const title = formatSingleLine(trigger.title, {
     maxLength: 60,
@@ -107,16 +90,19 @@ function ResumeCompletionCard(props: {
     </div>
   ) : null;
 
+  // Command/monitor triggers only have something to reveal when there's a
+  // captured output file - without one the body is just "Output file
+  // unavailable." every time, so collapse to a static single-row card.
+  // Monitor never has a capturable output file (it watches/polls rather than
+  // captures stdout - see `claudeOutputFileRef`); subagents always have a
+  // markdown result to show.
+  const expandable = trigger.kind === "subagent" || trigger.outputFile !== null;
+
   return (
     <div className="w-full max-w-[min(100%,48rem)]">
       <SegmentCard
         open={open}
-        onOpenChange={(next) => {
-          setOpen(next);
-          if (next && scrollToBlock !== null) {
-            scrollToBlock(trigger.blockId, resumeScrollCardKind(trigger.kind));
-          }
-        }}
+        onOpenChange={setOpen}
         header={header}
         headerAction={null}
         collapsedPreview={preview}
@@ -124,7 +110,7 @@ function ResumeCompletionCard(props: {
         tone="default"
         headerPosition="normal"
         bodyOverflow="hidden"
-        expandable
+        expandable={expandable}
         className={undefined}
       />
     </div>
@@ -171,12 +157,6 @@ function resumeKindTitle(kind: AutonomousResumeTrigger["kind"]): string {
     case "subagent":
       return "Subagent";
   }
-}
-
-function resumeScrollCardKind(
-  kind: AutonomousResumeTrigger["kind"],
-): "subagent" | "tool" {
-  return kind === "subagent" ? "subagent" : "tool";
 }
 
 function ResumeResultPanel(props: { readonly result: string }) {
