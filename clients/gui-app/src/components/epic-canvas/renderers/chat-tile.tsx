@@ -309,6 +309,7 @@ function ChatTileFallbackComposer(props: {
           ownerId: props.node.id,
           binding: null,
           isOwnerActive: false,
+          hasActiveTurn: false,
           // Pre-subscribe setup state: no binding resolved yet, so the chip shows
           // its loading affordance (never a "no folders" terminal state).
           missingWorktreePaths: [],
@@ -1333,6 +1334,14 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
           ownerId: node.id,
           binding: state.worktreeBinding,
           isOwnerActive: activeTurnStatus !== null,
+          // Distinguishes WHY the owner reads active, for the disabled-remove
+          // tooltip wording only (the disable decision itself stays on the
+          // broader `isOwnerActive`, unchanged - a live background Bash/Monitor
+          // could still be reading or writing in the folder even with no
+          // foreground turn active). `false` here means it's active purely
+          // because of visible background work, not a turn the "stop" wording
+          // would make sense for.
+          hasActiveTurn: composerActiveTurnStatus !== null,
           missingWorktreePaths: effectiveMissingPaths,
           bindingResolved: state.snapshotLoaded,
           onBindingCommitted: clearMissingPathsAfterBindingCommit,
@@ -1347,6 +1356,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       effectiveMissingPaths,
       state.snapshotLoaded,
       activeTurnStatus,
+      composerActiveTurnStatus,
       clearMissingPathsAfterBindingCommit,
       viewTabId,
     ],

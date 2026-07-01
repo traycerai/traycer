@@ -12,6 +12,7 @@ import { useIsMutating } from "@tanstack/react-query";
 import { workspaceMutationKeys } from "@/lib/query-keys";
 import { DropdownMenuLabel } from "@/components/ui/dropdown-menu";
 import { HostSection } from "./host-section";
+import { activeRunNoticeFor } from "./active-run-notice";
 import type {
   WorktreeBinding,
   WorktreeBindingEntry,
@@ -121,6 +122,13 @@ type BoundOwnerSurface = {
   readonly ownerId: string;
   readonly binding: WorktreeBinding | null;
   readonly isOwnerActive: boolean;
+  // Narrower than `isOwnerActive`: is the owner active specifically because
+  // of a genuinely running/activating turn, as opposed to visible background
+  // work (Bash `run_in_background` / a subagent / Monitor) outliving an
+  // already-completed turn? Drives ONLY the disabled-remove tooltip wording -
+  // `isOwnerActive` still decides whether removal is disabled at all (a live
+  // background process could still be touching the folder either way).
+  readonly hasActiveTurn: boolean;
   // The `workspacePath`s whose bound directory is gone on disk (host-computed,
   // delivered on the chat snapshot / `worktreeStateChanged` for chat and on
   // `worktree.getBinding` for terminal-agents). Drives the per-folder "missing"
@@ -1579,10 +1587,10 @@ function InEpicSurface(props: InEpicSurfaceProps) {
           (entry) => entry.hostId === pendingCloneHostId,
         ) ?? null);
 
-  const activeRunNotice =
-    surface.kind === "terminal-agent"
-      ? "Terminal will restart after rebinding"
-      : "Stop the active run before rebinding";
+  const activeRunNotice = activeRunNoticeFor(
+    surface.kind,
+    surface.hasActiveTurn,
+  );
   const activeRunLocksBinding =
     surface.kind === "chat" && surface.isOwnerActive;
 
