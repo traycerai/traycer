@@ -70,7 +70,10 @@ describe("fileChangeBlockSchema backward-compat", () => {
       timestamp: 2,
       toolName: "TaskUpdate",
       inputSummary: "1",
-      inputDetail: { kind: "fields", entries: [{ key: "id", label: "Id", value: "1" }] },
+      inputDetail: {
+        kind: "fields",
+        entries: [{ key: "id", label: "Id", value: "1" }],
+      },
       taskTodoItems: [
         {
           id: "1",

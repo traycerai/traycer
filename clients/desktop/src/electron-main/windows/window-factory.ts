@@ -15,7 +15,6 @@ import { safelyOpenExternal, installNavigationGuard } from "../app/security";
 import { installContextMenu } from "../app/spell-check";
 import { installResponsivenessListeners } from "../app/responsiveness";
 import { buildAppUrl } from "../app/app-protocol";
-import { installPerWindowPlatformHooks } from "../ipc/platform-ipc";
 
 // Vite dev server served by the `make dev-desktop` orchestrator.
 const DEV_RENDERER_URL = "http://localhost:5173";
@@ -95,7 +94,6 @@ export function createMainWindow(options: MainWindowOptions): BrowserWindow {
   installNavigationGuard(window.webContents);
   installContextMenu(window.webContents);
   installResponsivenessListeners(window.webContents);
-  installPerWindowPlatformHooks(window.webContents);
 
   window.once("ready-to-show", () => {
     // Open filling the screen's work area (full width/height minus OS

@@ -1,6 +1,9 @@
 import type { Terminal } from "@xterm/xterm";
 import type { FitAddon } from "@xterm/addon-fit";
-import type { SearchAddon } from "@xterm/addon-search";
+import type {
+  ISearchResultChangeEvent,
+  SearchAddon,
+} from "@xterm/addon-search";
 import type { CanvasAddon } from "@xterm/addon-canvas";
 import type { TerminalDataWriter } from "@/stores/terminals/terminal-session-store";
 import { getTerminalSessionRegistry } from "@/lib/registries/terminal-session-registry";
@@ -17,6 +20,7 @@ export interface XtermHostLiveCallbacks {
   onContainerResize: (cols: number, rows: number) => void;
   openExternalLink: (uri: string) => void;
   getFindTargetId: () => string | null;
+  onSearchResults: (result: ISearchResultChangeEvent) => void;
 }
 
 /**
@@ -179,4 +183,10 @@ export function __disposeAllXtermHostsForTests(): void {
     entry.disposeEngine();
   }
   entries.clear();
+}
+
+export function __getXtermHostEntryForTests(
+  instanceId: string,
+): XtermHostEntry | null {
+  return entries.get(instanceId) ?? null;
 }

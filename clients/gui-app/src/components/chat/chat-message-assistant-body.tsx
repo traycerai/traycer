@@ -1,4 +1,5 @@
 import { buildChatActivityTimeline } from "@/components/chat/chat-activity-groups";
+import { chatFindSegmentUnitId } from "@/components/chat/chat-find";
 import {
   WorkingVerbContext,
   pickWorkingVerb,
@@ -145,6 +146,7 @@ export function AssistantMessageBody({
           return (
             <InterviewSegment
               key={item.id}
+              findUnitId={chatFindSegmentUnitId(item.segment.id)}
               status={item.segment.status}
               toolName={item.segment.toolName}
               title={item.segment.title}
@@ -598,8 +600,10 @@ interface AssistantSegmentProps {
 }
 
 function ApprovalSegmentCard({
+  findUnitId,
   segment,
 }: {
+  findUnitId: string;
   segment: Extract<MessageSegment, { kind: "approval" }>;
 }) {
   // Pending approvals are routed to the composer-slot queue by the timeline
@@ -613,6 +617,7 @@ function ApprovalSegmentCard({
       inputDetail={segment.inputDetail}
       decision={segment.decision}
       variant="card"
+      headerFindUnitId={findUnitId}
     />
   );
 }
@@ -626,10 +631,12 @@ function AssistantSegment({
   backgroundToolBlockIds,
   nextStepActions,
 }: AssistantSegmentProps) {
+  const findUnitId = chatFindSegmentUnitId(id);
   switch (segment.kind) {
     case "text":
       return (
         <TextSegment
+          findUnitId={findUnitId}
           markdown={segment.markdown}
           isStreaming={segment.isStreaming}
           nextStepActions={nextStepActions}
@@ -638,6 +645,7 @@ function AssistantSegment({
     case "reasoning":
       return (
         <ReasoningSegment
+          findUnitId={findUnitId}
           markdown={segment.markdown}
           isStreaming={segment.isStreaming}
           durationMs={segment.durationMs}
@@ -662,11 +670,20 @@ function AssistantSegment({
           startedAt={segment.startedAt}
           durationMs={segment.durationMs}
           variant="card"
+          headerFindUnitId={
+            segment.agentMessageSend === null ? findUnitId : null
+          }
         />
       );
     }
     case "file_change":
-      return <FileChangeSegment segment={segment} variant="card" />;
+      return (
+        <FileChangeSegment
+          segment={segment}
+          variant="card"
+          headerFindUnitId={findUnitId}
+        />
+      );
     case "file_change_group":
       return (
         <FileChangeGroupSegment
@@ -674,6 +691,7 @@ function AssistantSegment({
           artifacts={segment.artifacts}
           checkpointManifest={segment.checkpointManifest}
           hasLaterOverlappingChanges={segment.hasLaterOverlappingChanges}
+          findUnitId={findUnitId}
         />
       );
     case "command":
@@ -687,6 +705,7 @@ function AssistantSegment({
           progress={segment.progress}
           startedAt={segment.startedAt}
           variant="card"
+          headerFindUnitId={findUnitId}
         />
       );
     case "subagent":
@@ -707,7 +726,7 @@ function AssistantSegment({
         />
       );
     case "approval":
-      return <ApprovalSegmentCard segment={segment} />;
+      return <ApprovalSegmentCard segment={segment} findUnitId={findUnitId} />;
     case "artifact_operation":
       return (
         <ArtifactCardSegment
@@ -716,14 +735,21 @@ function AssistantSegment({
           artifactId={segment.artifactId}
           title={segment.title}
           change={segment.change}
+          findUnitId={findUnitId}
         />
       );
     case "todo":
-      return <TodoSegment items={segment.items} />;
+      return <TodoSegment items={segment.items} findUnitId={findUnitId} />;
     case "plan":
-      return <PlanSegment segment={segment} />;
+      return <PlanSegment segment={segment} findUnitId={findUnitId} />;
     case "error":
-      return <ErrorSegment message={segment.message} code={segment.code} />;
+      return (
+        <ErrorSegment
+          message={segment.message}
+          code={segment.code}
+          findUnitId={findUnitId}
+        />
+      );
     case "compaction":
       return (
         <CompactionSegment
@@ -734,6 +760,7 @@ function AssistantSegment({
           durationMs={segment.durationMs}
           summary={segment.summary}
           error={segment.error}
+          findUnitId={findUnitId}
         />
       );
     case "autonomous_resume":
@@ -741,6 +768,7 @@ function AssistantSegment({
     case "interview":
       return (
         <InterviewSegment
+          findUnitId={findUnitId}
           status={segment.status}
           toolName={segment.toolName}
           title={segment.title}

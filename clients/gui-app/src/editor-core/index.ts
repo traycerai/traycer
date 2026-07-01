@@ -36,3 +36,18 @@ export {
   CommentShortcutExtension,
   type CommentShortcutExtensionOptions,
 } from "./extensions/comment-shortcut-extension";
+export {
+  ArtifactFindExtension,
+  artifactFindPluginKey,
+  applyArtifactFindSearch,
+  calculateArtifactFindMatches,
+  clearArtifactFind,
+  findNearestArtifactFindMatchIndex,
+  getArtifactFindState,
+  hasArtifactFindTransactionMeta,
+  setArtifactFindCurrent,
+  setArtifactFindSearchMeta,
+  type ArtifactFindMatch,
+  type ArtifactFindPluginState,
+  type ArtifactFindSearchParams,
+} from "./extensions/artifact-find-extension";

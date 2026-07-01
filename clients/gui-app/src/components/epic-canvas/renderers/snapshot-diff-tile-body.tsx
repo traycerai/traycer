@@ -24,7 +24,16 @@ import {
   DiffContentFrame,
   DiffContentPrimitive,
 } from "@/components/diff/diff-content-primitive";
+import { useDiffFindNavigation } from "@/components/diff/diff-find-navigation";
+import { useRegisterDiffTileFindAdapter } from "@/components/diff/use-register-diff-tile-find-adapter";
+import type { DiffFindMetadataUnitInput } from "@/lib/diff/diff-find";
 import { useNativeDivScrollRestoration } from "@/hooks/scroll/use-native-div-scroll-restoration";
+import {
+  createLoadedDiffTileFindSource,
+  createLoadingDiffTileFindSource,
+  createMissingDiffTileFindSource,
+  type DiffTileFindSource,
+} from "@/stores/tile-find";
 import { DiffBundleLoadingSkeleton } from "@/components/epic-canvas/git-diff/diff-bundle-loading-skeleton";
 import {
   SnapshotBundleDiffTileContent,
@@ -39,6 +48,11 @@ import {
   type DiffTabToolbarViewPatch,
 } from "@/components/epic-canvas/git-diff/diff-tab-toolbar";
 import { SnapshotDiffSourceUnavailableBanner } from "./dead-tile-banner";
+
+const SNAPSHOT_DIFF_LOADING_FIND_MESSAGE =
+  "Snapshot diff content is still loading.";
+const SNAPSHOT_DIFF_MISSING_FIND_MESSAGE =
+  "Snapshot source content is unavailable.";
 
 interface SnapshotDiffTileBodyProps {
   readonly node: SnapshotDiffTileRef;
@@ -62,6 +76,12 @@ export function SnapshotDiffTileBody(
   if (handle === null) {
     return (
       <SnapshotDiffTileShell node={node} viewTabId={viewTabId}>
+        <SnapshotDiffFindRegistration
+          tileInstanceId={node.instanceId}
+          source={createLoadingDiffTileFindSource({
+            coverageMessage: SNAPSHOT_DIFF_LOADING_FIND_MESSAGE,
+          })}
+        />
         <SnapshotDiffLoading node={node} />
       </SnapshotDiffTileShell>
     );
@@ -252,6 +272,12 @@ function SnapshotDiffTileResolved(props: {
   if (!snapshotLoaded || segmentPending) {
     return (
       <SnapshotDiffTileShell node={node} viewTabId={viewTabId}>
+        <SnapshotDiffFindRegistration
+          tileInstanceId={node.instanceId}
+          source={createLoadingDiffTileFindSource({
+            coverageMessage: SNAPSHOT_DIFF_LOADING_FIND_MESSAGE,
+          })}
+        />
         <SnapshotDiffLoading node={node} />
       </SnapshotDiffTileShell>
     );
@@ -260,6 +286,12 @@ function SnapshotDiffTileResolved(props: {
   if (resolved.length === 0) {
     return (
       <SnapshotDiffTileShell node={node} viewTabId={viewTabId}>
+        <SnapshotDiffFindRegistration
+          tileInstanceId={node.instanceId}
+          source={createMissingDiffTileFindSource({
+            coverageMessage: SNAPSHOT_DIFF_MISSING_FIND_MESSAGE,
+          })}
+        />
         <SnapshotDiffSourceUnavailableBanner
           testId={`snapshot-diff-unavailable-${node.id}`}
         />
@@ -286,6 +318,7 @@ function SnapshotDiffTileResolved(props: {
       <SnapshotFileDiffContent
         node={node}
         patch={patch}
+        resolved={resolved}
         diffViewerPreferences={diffViewerPreferences}
       />
     </SnapshotDiffTileShell>
@@ -302,16 +335,46 @@ function SnapshotDiffTileResolved(props: {
 function SnapshotFileDiffContent(props: {
   readonly node: SnapshotDiffTileRef;
   readonly patch: string;
+  readonly resolved: ReadonlyArray<ResolvedSnapshotDiff>;
   readonly diffViewerPreferences: DiffViewerPreferences;
 }): ReactNode {
   const { scrollContainerRef, onScroll } = useNativeDivScrollRestoration(
     props.node.instanceId,
     true,
   );
+  const findNavigation = useDiffFindNavigation();
+  const findSource = useMemo(
+    () =>
+      createLoadedDiffTileFindSource({
+        patch: props.patch,
+        metadataUnits: snapshotDiffMetadataUnits({
+          node: props.node,
+          resolved: props.resolved,
+        }),
+        cacheKey: `snapshot:${props.node.id}`,
+        isPartial: false,
+        partialMessage: null,
+      }),
+    [props.node, props.patch, props.resolved],
+  );
+  useRegisterDiffTileFindAdapter({
+    tileInstanceId: props.node.instanceId,
+    tileKind: "snapshot-diff",
+    source: findSource,
+    renderer: findNavigation,
+  });
+  const findScrollContainerRef = useCallback(
+    (element: HTMLDivElement | null): void => {
+      scrollContainerRef(element);
+      findNavigation.setScrollContainer(element);
+    },
+    [findNavigation, scrollContainerRef],
+  );
+
   return (
     <DiffContentFrame
       sizing="fill"
-      scrollContainerRef={scrollContainerRef}
+      scrollContainerRef={findScrollContainerRef}
       onScroll={onScroll}
       banner={null}
     >
@@ -327,6 +390,62 @@ function SnapshotFileDiffContent(props: {
       />
     </DiffContentFrame>
   );
+}
+
+function SnapshotDiffFindRegistration(props: {
+  readonly tileInstanceId: string;
+  readonly source: DiffTileFindSource;
+}): ReactNode {
+  useRegisterDiffTileFindAdapter({
+    tileInstanceId: props.tileInstanceId,
+    tileKind: "snapshot-diff",
+    source: props.source,
+    renderer: null,
+  });
+  return null;
+}
+
+function snapshotDiffMetadataUnits(args: {
+  readonly node: SnapshotDiffTileRef;
+  readonly resolved: ReadonlyArray<ResolvedSnapshotDiff>;
+}): ReadonlyArray<DiffFindMetadataUnitInput> {
+  return args.resolved.map((entry, index) => {
+    const directory = getDirname(entry.filePath);
+    return {
+      id: `snapshot-file:${args.node.id}:${index}:${entry.filePath}`,
+      filePath: entry.filePath,
+      scopeId: null,
+      text: [
+        snapshotDiffFindTitle(args.node.diff, entry.filePath),
+        directory.length > 0 ? directory : "Repository root",
+        entry.filePath,
+        snapshotDiffFindKindLabel(args.node.diff),
+      ]
+        .filter((part) => part.length > 0)
+        .join(" "),
+    };
+  });
+}
+
+function snapshotDiffFindTitle(
+  diff: SnapshotDiffTilePayload,
+  filePath: string,
+): string {
+  if (
+    diff.kind === "snapshot-hash" &&
+    diff.title !== null &&
+    diff.title.length > 0
+  ) {
+    return diff.title;
+  }
+  return getBasename(filePath);
+}
+
+function snapshotDiffFindKindLabel(diff: SnapshotDiffTilePayload): string {
+  if (diff.kind === "snapshot-hash") return "Artifact diff";
+  if (diff.kind === "snapshot-segment") return "Edit";
+  if (diff.kind === "snapshot-cumulative") return "Changes";
+  return "Cumulative chat changes";
 }
 
 function SnapshotDiffLoading(props: {

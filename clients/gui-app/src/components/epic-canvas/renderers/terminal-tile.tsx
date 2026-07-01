@@ -236,6 +236,7 @@ function TerminalLive(props: TerminalLiveProps) {
         <Suspense fallback={<TerminalLoadingSkeleton />}>
           <TerminalXtermHost
             sessionId={handle.sessionId}
+            tileKind="terminal"
             instanceId={props.instanceId}
             effectiveCols={effectiveCols}
             effectiveRows={effectiveRows}

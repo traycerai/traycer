@@ -9,6 +9,7 @@
  */
 import type { ReactNode } from "react";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
+import { TileFindScope } from "@/components/epic-canvas/tile-find/tile-find-scope";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 import type { TileKindId } from "@/stores/epics/canvas/tile-kinds";
 import type { TileKindToRefMap } from "@/stores/epics/canvas/tile-kind-types";
@@ -134,7 +135,15 @@ function tileRenderer<K extends TileKindId>(
 export function renderTile(args: TileRenderArgs<EpicCanvasTileRef>): ReactNode {
   return (
     <TabHostProvider hostId={args.node.hostId}>
-      {tileRenderer(args.node.type)(args)}
+      <TileFindScope
+        node={args.node}
+        viewTabId={args.viewTabId}
+        tileId={args.tileId}
+        epicId={args.epicId}
+        isActive={args.isActive}
+      >
+        {tileRenderer(args.node.type)(args)}
+      </TileFindScope>
     </TabHostProvider>
   );
 }

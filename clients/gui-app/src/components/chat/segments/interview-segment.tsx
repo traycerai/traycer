@@ -14,6 +14,7 @@ import { answeredQuestionsSummaryFromCounts } from "@/components/chat/chat-activ
 import { cn } from "@/lib/utils";
 
 interface InterviewSegmentProps {
+  findUnitId: string | null;
   status: "streaming" | "completed" | "errored";
   toolName: string | null;
   title: string | null;
@@ -29,7 +30,7 @@ interface InterviewSegmentProps {
  * the question doesn't appear twice.
  */
 export function InterviewSegment(props: InterviewSegmentProps) {
-  const { status, questions, answers, error } = props;
+  const { findUnitId, status, questions, answers, error } = props;
   const [open, setOpen] = useState(false);
   const measuredOpenChange = useChatMeasuredOpenChange(setOpen);
 
@@ -47,6 +48,8 @@ export function InterviewSegment(props: InterviewSegmentProps) {
       className="text-ui-sm text-muted-foreground"
     >
       <CollapsibleTrigger
+        data-find-include="true"
+        data-chat-find-unit={findUnitId ?? undefined}
         className={cn(
           "group/interview flex max-w-full items-center gap-2 rounded-sm py-1 pr-1 text-left transition-colors",
           "hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",

@@ -110,6 +110,8 @@ function ResumeCompletionCard(props: {
         tone="default"
         headerPosition="normal"
         bodyOverflow="hidden"
+        headerFindUnitId={null}
+        bodyFindUnitId={null}
         expandable={expandable}
         className={undefined}
       />
