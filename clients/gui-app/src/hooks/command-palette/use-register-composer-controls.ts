@@ -29,9 +29,6 @@ export function useRegisterFocusedComposerControls(
   useEffect(() => {
     if (kind === null) return;
     const dispose = registerFocusedComposerControls(kind, {
-      setSelection: (selection) => {
-        controlsRef.current.setSelection(selection);
-      },
       setReasoning: (level) => {
         controlsRef.current.setReasoning(level);
       },
@@ -40,6 +37,12 @@ export function useRegisterFocusedComposerControls(
       },
       setPermission: (mode) => {
         controlsRef.current.setPermission(mode);
+      },
+      switchHarness: (harnessId) => {
+        controlsRef.current.switchHarness(harnessId);
+      },
+      selectModel: (harnessId, modelSlug) => {
+        controlsRef.current.selectModel(harnessId, modelSlug);
       },
     });
     return dispose;

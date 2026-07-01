@@ -195,7 +195,9 @@ function ProviderRailButton(props: ProviderRailButtonProps) {
             <PickerLeaderBadge
               show={leaderModifier !== null && !disabled}
               index={index}
-              hintAction="to browse"
+              // Degraded providers stay browse-only (the leader digit browses,
+              // it does not commit), so the hint must not over-promise "switch".
+              hintAction={degraded ? "to browse" : "to switch"}
               hintTarget={harness.label}
               testId={`model-provider-digit-${leaderDigitFor(index)}`}
               placement="corner"
