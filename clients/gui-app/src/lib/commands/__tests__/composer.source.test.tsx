@@ -293,6 +293,7 @@ describe("composerSource", () => {
       epicId: "epic-1",
       tabId: "epic-1",
       placement: { kind: "active-tile" },
+      parentId: null,
     });
     expect(
       useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"]
@@ -337,6 +338,7 @@ describe("composerSource", () => {
       epicId: "epic-1",
       tabId: "epic-1",
       placement: { kind: "split", groupId: activeGroupId, position: "right" },
+      parentId: null,
     });
     expect(
       useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"]

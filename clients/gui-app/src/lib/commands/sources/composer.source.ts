@@ -188,7 +188,7 @@ function openNewConversationModal(
   useNewConversationModalStore.getState().setComposerMode(epicId, mode);
   useNewConversationModalOpenStore
     .getState()
-    .open({ epicId, tabId, placement });
+    .open({ epicId, tabId, placement, parentId: null });
 }
 
 function buildNewChatReplaceItem(args: {
