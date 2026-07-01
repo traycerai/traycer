@@ -122,9 +122,41 @@ export const runtimeSessionInfoSchema = z.object({
 });
 export type RuntimeSessionInfo = z.infer<typeof runtimeSessionInfoSchema>;
 
+/**
+ * Where a saved command rule applies. `global` matches on every workspace this
+ * device runs; `workspace` is pinned to one primary-workspace path. Many linked
+ * workspaces are just many `workspace` rules — no schema change to add one.
+ */
+export const commandAllowScopeSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("global") }),
+  z.object({ kind: z.literal("workspace"), path: z.string() }),
+]);
+export type CommandAllowScope = z.infer<typeof commandAllowScopeSchema>;
+
+/**
+ * A saved "always allow" rule. `tokens` is the derived argv prefix (Claude-style:
+ * `npm run *` → `["npm","run"]`) or the full command for `exact`; `match` says
+ * whether trailing args are allowed (`prefix`) or the lengths must be equal
+ * (`exact`, used for wrappers like `sudo`/`timeout`). The host always re-derives
+ * tokens through the fail-closed shell tokenizer — never a raw `startsWith` —
+ * so a rule can never widen to chained/redirected/substituted invocations and
+ * `npm` can never match `npmtrojan`.
+ */
+export const commandAllowRuleSchema = z.object({
+  tokens: z.array(z.string()),
+  match: z.enum(["prefix", "exact"]),
+  scope: commandAllowScopeSchema,
+});
+export type CommandAllowRule = z.infer<typeof commandAllowRuleSchema>;
+
 export const runtimeApprovalDecisionSchema = z.object({
   approved: z.boolean(),
   reason: z.string().optional(),
+  // Set by the GUI "Always allow" menu: approve this command AND persist a rule
+  // at the chosen scope. The client sends only the scope choice — the host
+  // derives the rule tokens from the trusted request and resolves `"workspace"`
+  // to the active primary-workspace path, so the client can't forge either.
+  remember: z.object({ scope: z.enum(["global", "workspace"]) }).optional(),
 });
 export type RuntimeApprovalDecision = z.infer<
   typeof runtimeApprovalDecisionSchema

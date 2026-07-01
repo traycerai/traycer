@@ -9,6 +9,7 @@ import { WorktreesSettingsPanel } from "@/components/settings/panels/worktrees-s
 import { HostSettingsPanel } from "@/components/settings/panels/host-settings-panel";
 import { DiagnosticsSettingsPanel } from "@/components/settings/panels/diagnostics-settings-panel";
 import { ProvidersSettingsPanel } from "@/components/settings/panels/providers-settings-panel";
+import { PermissionsSettingsPanel } from "@/components/settings/panels/permissions-settings-panel";
 import { AgentsSettingsPanel } from "@/components/settings/panels/agents-settings-panel";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 
@@ -52,6 +53,8 @@ function SettingsPanelForSection(props: {
       return <AppearanceSettingsPanel />;
     case "providers":
       return <ProvidersSettingsPanel />;
+    case "permissions":
+      return <PermissionsSettingsPanel />;
     case "agents":
       return <AgentsSettingsPanel />;
     case "keybindings":

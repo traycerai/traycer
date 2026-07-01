@@ -7,6 +7,7 @@ import {
   Keyboard,
   Palette,
   Server,
+  ShieldCheck,
   Settings as SettingsIcon,
   TerminalSquare,
 } from "lucide-react";
@@ -15,6 +16,7 @@ export type SettingsSectionId =
   | "general"
   | "appearance"
   | "providers"
+  | "permissions"
   | "agents"
   | "keybindings"
   | "shell"
@@ -32,6 +34,7 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
   { id: "general", label: "General", icon: SettingsIcon },
   { id: "appearance", label: "Appearance", icon: Palette },
   { id: "providers", label: "Providers", icon: Boxes },
+  { id: "permissions", label: "Permissions", icon: ShieldCheck },
   { id: "agents", label: "Agents", icon: Bot },
   { id: "keybindings", label: "Keybindings", icon: Keyboard },
   { id: "shell", label: "Shell", icon: TerminalSquare },

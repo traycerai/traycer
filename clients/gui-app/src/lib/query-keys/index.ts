@@ -28,6 +28,7 @@ export { agentMutationKeys } from "@/lib/query-keys/agent-mutation-keys";
 export { worktreeMutationKeys } from "@/lib/query-keys/worktree-mutation-keys";
 export { snapshotsMutationKeys } from "@/lib/query-keys/snapshots-mutation-keys";
 export { providersMutationKeys } from "@/lib/query-keys/providers-mutation-keys";
+export { commandAllowlistMutationKeys } from "@/lib/query-keys/command-allowlist-mutation-keys";
 export { speechMutationKeys } from "@/lib/query-keys/speech-mutation-keys";
 export { notificationsMutationKeys } from "@/lib/query-keys/notifications-mutation-keys";
 

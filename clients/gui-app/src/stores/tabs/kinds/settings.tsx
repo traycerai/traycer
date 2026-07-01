@@ -21,6 +21,8 @@ function settingsRouteOptions(section: SettingsSectionId) {
       return { to: "/settings/appearance" } as const;
     case "providers":
       return { to: "/settings/providers" } as const;
+    case "permissions":
+      return { to: "/settings/permissions" } as const;
     case "agents":
       return { to: "/settings/agents" } as const;
     case "keybindings":
