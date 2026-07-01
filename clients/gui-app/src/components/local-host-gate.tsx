@@ -359,6 +359,32 @@ function useHostProvisioning(args: {
     );
   }, [canProvision, args.isReady, mutate, markBusyKeep]);
 
+  // Direct removal-sentinel check, independent of the one-shot `ensureHost`
+  // effect above. That effect never re-fires once `attemptedRef` is set -
+  // typically right after the very first sign-in, long before the user ever
+  // visits Settings -> Danger Zone - so it cannot notice a removal that
+  // happens later in the same session. Re-checking the sentinel is a cheap
+  // read, not a provisioning attempt, so unlike the ensure effect it is safe
+  // to re-run on every not-ready transition; it short-circuits straight to
+  // the removed surface per `getRemovalState`'s contract instead of falling
+  // through to the generic unavailable/Retry card until a reload re-mounts
+  // this hook and resets `attemptedRef`.
+  useEffect(() => {
+    if (!canProvision || args.isReady) {
+      return;
+    }
+    const management = runnerHost.hostManagement;
+    let cancelled = false;
+    void management.getRemovalState().then((removalState) => {
+      if (!cancelled && removalState.removedByUser) {
+        setRemoved(true);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [canProvision, args.isReady, runnerHost]);
+
   return {
     // Report provisioning/error whenever this shell manages the host - NOT
     // gated on `canProvision`, which collapses to false the instant a busy
