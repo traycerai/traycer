@@ -9,6 +9,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { RefreshCwIcon } from "lucide-react";
+import { RemoveScroll } from "react-remove-scroll";
 import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import {
@@ -209,61 +210,81 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
   const headerLabel = copy.header;
   const emptyLabel = copy.empty;
 
+  // The menu portals to `document.body`, so it lives OUTSIDE the Radix modal
+  // Dialog's scroll-lock subtree (the Dialog's `react-remove-scroll` node and
+  // its `contentRef` shard). That lock installs a document-level, non-passive
+  // wheel/touch listener that `preventDefault()`s any scroll whose target is
+  // neither the lock node nor a shard - so without intervention this list can't
+  // scroll while the new-conversation modal is open. Giving the menu its own
+  // lock pushes it to the top of react-remove-scroll's `lockStack` while open,
+  // so its own overflow region is honored and the Dialog's lock is suspended -
+  // the same way nested Radix modal popovers coexist with a modal Dialog.
+  // `noIsolation` leaves background/page scroll untouched (so the inline
+  // composers behave exactly as before), and `removeScrollBar={false}` avoids
+  // re-managing the scrollbar the Dialog already owns.
   const menu = (
-    <div
+    <RemoveScroll
       ref={floatingRef}
-      role="presentation"
-      data-slot="composer-menu"
-      // top-0/left-0 so floating-ui's translate3d is the source of truth.
-      // Width fits content (w-max) so short menus stay compact and long command
-      // names render in full, with a comfortable floor (min-w) and a
-      // viewport-aware ceiling (max-w) past which items truncate. floating-ui's
-      // shift() keeps the grown menu on-screen (CLAUDE.md sizing).
-      className="pointer-events-auto fixed top-0 left-0 z-50 w-max min-w-[min(90vw,16rem)] max-w-[min(92vw,42rem)] overflow-hidden rounded-xl border border-border/70 bg-popover text-popover-foreground shadow-lg"
+      forwardProps
+      enabled
+      noIsolation
+      removeScrollBar={false}
+      allowPinchZoom
     >
-      <div className="flex items-center justify-between gap-2 border-b border-border/60 px-3 py-1.5">
-        <div className="min-w-0 truncate text-overline font-medium uppercase text-muted-foreground/70">
-          {headerLabel}
-        </div>
-        {refreshAvailable ? (
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-xs"
-            aria-label="Refresh artifacts"
-            title="Refresh artifacts"
-            className="-my-1 text-muted-foreground/70 hover:text-foreground"
-            disabled={artifactRefresh.refreshing}
-            onMouseDown={(event) => {
-              event.preventDefault();
-            }}
-            onClick={artifactRefresh.trigger}
-          >
-            <RefreshCwIcon
-              className={cn(
-                "size-3.5",
-                artifactRefresh.refreshing && "animate-spin",
-              )}
-            />
-          </Button>
-        ) : null}
-      </div>
       <div
-        ref={listRef}
-        id={menuId}
-        role="listbox"
-        className="max-h-[min(50vh,12rem)] overflow-y-auto py-1"
+        role="presentation"
+        data-slot="composer-menu"
+        // top-0/left-0 so floating-ui's translate3d is the source of truth.
+        // Width fits content (w-max) so short menus stay compact and long command
+        // names render in full, with a comfortable floor (min-w) and a
+        // viewport-aware ceiling (max-w) past which items truncate. floating-ui's
+        // shift() keeps the grown menu on-screen (CLAUDE.md sizing).
+        className="pointer-events-auto fixed top-0 left-0 z-50 w-max min-w-[min(90vw,16rem)] max-w-[min(92vw,42rem)] overflow-hidden rounded-xl border border-border/70 bg-popover text-popover-foreground shadow-lg"
       >
-        <ComposerMenuBody
-          renderedItems={renderedItems}
-          loading={loading}
-          emptyLabel={emptyLabel}
-          showEmptyLabelWithItems={showEmptyLabelWithItems}
-          activeIndex={activeIndex}
-          pickerStore={pickerStore}
-        />
+        <div className="flex items-center justify-between gap-2 border-b border-border/60 px-3 py-1.5">
+          <div className="min-w-0 truncate text-overline font-medium uppercase text-muted-foreground/70">
+            {headerLabel}
+          </div>
+          {refreshAvailable ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              aria-label="Refresh artifacts"
+              title="Refresh artifacts"
+              className="-my-1 text-muted-foreground/70 hover:text-foreground"
+              disabled={artifactRefresh.refreshing}
+              onMouseDown={(event) => {
+                event.preventDefault();
+              }}
+              onClick={artifactRefresh.trigger}
+            >
+              <RefreshCwIcon
+                className={cn(
+                  "size-3.5",
+                  artifactRefresh.refreshing && "animate-spin",
+                )}
+              />
+            </Button>
+          ) : null}
+        </div>
+        <div
+          ref={listRef}
+          id={menuId}
+          role="listbox"
+          className="max-h-[min(50vh,12rem)] overflow-y-auto py-1"
+        >
+          <ComposerMenuBody
+            renderedItems={renderedItems}
+            loading={loading}
+            emptyLabel={emptyLabel}
+            showEmptyLabelWithItems={showEmptyLabelWithItems}
+            activeIndex={activeIndex}
+            pickerStore={pickerStore}
+          />
+        </div>
       </div>
-    </div>
+    </RemoveScroll>
   );
 
   return createPortal(menu, document.body);
