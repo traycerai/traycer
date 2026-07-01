@@ -281,6 +281,10 @@ function existingLeadingSlashCommandPaste(
   knownCommands: ReadonlyMap<string, string> | null,
 ): { readonly pos: number; readonly text: string } | null {
   if (knownCommands === null) return null;
+  // This path inserts after the existing chip without replacing the selection,
+  // so restrict it to a collapsed caret. A range selection falls through to the
+  // markdown branch, which replaces the selected content as the user expects.
+  if (!state.selection.empty) return null;
   if (!isLeadingRange(state, state.selection.from, state.selection.to)) {
     return null;
   }

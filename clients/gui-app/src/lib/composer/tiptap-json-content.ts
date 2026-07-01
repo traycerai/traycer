@@ -217,6 +217,16 @@ function nodeWithLeadingSlashCommandNode(
     ];
   }
 
+  // A leading `/command` only becomes a chip in the document's first paragraph.
+  // Other leading blocks (code blocks, list items, etc.) are not command
+  // contexts, so end the scan instead of recursing - otherwise a leading
+  // ```/plan``` fence or `- /plan` list item would get a slashCommand node
+  // spliced inside it, producing schema-invalid submitted content.
+  if (node.type !== "doc" && node.type !== "paragraph") {
+    state.complete = true;
+    return [node];
+  }
+
   const children = node.content;
   if (children === undefined) {
     state.complete = true;

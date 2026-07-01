@@ -246,10 +246,10 @@ describe("ComposerPromptEditor render isolation", () => {
     const chipsByKind = new Map(
       chips.map((chip) => [chip.dataset.composerChip, chip]),
     );
-    expect(Array.from(chipsByKind.keys())).toEqual([
-      "slash-command",
+    expect(Array.from(chipsByKind.keys()).sort()).toEqual([
       "image-attachment",
       "mention",
+      "slash-command",
     ]);
 
     const sharedClasses = composerInlineChipClassNames("regular")

@@ -196,6 +196,7 @@ const ChatUserMessageMinimapItemContent = memo(
           content={item.structuredContent}
           variant="minimap"
           className={className}
+          testId={undefined}
         />
       );
     }

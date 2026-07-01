@@ -41,6 +41,24 @@ describe("normalizeComposerContent", () => {
     });
   });
 
+  it("preserves inline image atoms for positional awareness", () => {
+    const content: JsonContent = {
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [
+            { type: "text", text: "use " },
+            imageNode("img-1"),
+            { type: "text", text: " here" },
+          ],
+        },
+      ],
+    };
+
+    expect(normalizeComposerContent(content)).toBe(content);
+  });
+
   it("maps a mid-text legacy selection to the same text offset", () => {
     const normalized = normalizeComposerContentWithSelection(
       {
@@ -60,6 +78,29 @@ describe("normalizeComposerContent", () => {
     );
 
     expect(normalized.selection).toEqual({ from: 5, to: 5 });
+  });
+
+  it("does not remap a selection when image atoms are already inline", () => {
+    const content: JsonContent = {
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [
+            { type: "text", text: "abc" },
+            imageNode("img-1"),
+            { type: "text", text: "def" },
+          ],
+        },
+      ],
+    };
+    const normalized = normalizeComposerContentWithSelection(content, {
+      from: 6,
+      to: 6,
+    });
+
+    expect(normalized.changed).toBe(false);
+    expect(normalized.selection).toEqual({ from: 6, to: 6 });
   });
 
   it("maps a legacy selection after synthesized image paragraph without shifting into a code block", () => {
@@ -135,6 +176,20 @@ describe("normalizeComposerContent", () => {
         },
         {
           type: "paragraph",
+          content: [{ type: "text", text: "/plan review this" }],
+        },
+      ],
+    };
+
+    expect(buildSubmittedChatJSONContent(content)).toBe(content);
+  });
+
+  it("does not convert a leading slash command inside a non-paragraph block", () => {
+    const content: JsonContent = {
+      type: "doc",
+      content: [
+        {
+          type: "codeBlock",
           content: [{ type: "text", text: "/plan review this" }],
         },
       ],

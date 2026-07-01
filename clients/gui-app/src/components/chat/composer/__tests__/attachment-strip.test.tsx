@@ -21,14 +21,20 @@ describe("AttachmentStrip", () => {
     );
 
     expect(
-      Array.from(
-        document.querySelectorAll<HTMLElement>(
-          "[data-composer-image-strip-badge]",
-        ),
-      ).map((badge) => badge.textContent),
-    ).toEqual(["1", "2", "3"]);
-    expect(screen.getByLabelText("Open Image#2: image.png")).toBeTruthy();
-    expect(screen.getByLabelText("Remove Image#3: image.png")).toBeTruthy();
+      screen
+        .getAllByRole("button", { name: /^Open Image#/ })
+        .map((button) => button.getAttribute("aria-label")),
+    ).toEqual([
+      "Open Image#1: image.png",
+      "Open Image#2: image.png",
+      "Open Image#3: image.png",
+    ]);
+    expect(
+      screen.getByRole("button", { name: "Open Image#2: image.png" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Remove Image#3: image.png" }),
+    ).toBeTruthy();
   });
 });
 

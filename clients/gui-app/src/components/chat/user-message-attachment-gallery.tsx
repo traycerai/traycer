@@ -33,7 +33,9 @@ export function UserMessageAttachmentGallery({
       })),
     );
     return imageAttachments.map((attachment, index) => ({
-      key: imageAttachmentRenderKey(attachment),
+      // Prefix with the stable list index so two images that share name+size and
+      // both lack hash/dataUrl can't collide into the same React key.
+      key: `${index}:${imageAttachmentRenderKey(attachment)}`,
       attachment,
       label: labels.get(String(index)),
     }));

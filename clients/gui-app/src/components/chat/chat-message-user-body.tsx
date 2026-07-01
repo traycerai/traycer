@@ -334,7 +334,12 @@ function UserMessageDisplayView({
 
   const body =
     message.structuredContent !== null ? (
-      <ComposerContentRenderer content={message.structuredContent} />
+      <ComposerContentRenderer
+        content={message.structuredContent}
+        variant={undefined}
+        className={undefined}
+        testId={undefined}
+      />
     ) : (
       <ChatUserMessageContent
         content={message.content}

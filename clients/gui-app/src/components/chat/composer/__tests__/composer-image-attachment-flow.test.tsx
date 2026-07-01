@@ -94,6 +94,35 @@ describe("composer image attachment flow", () => {
     expect(imageIds(editor)).toEqual(["img-1", "img-2", "img-3"]);
   });
 
+  it("keeps a pasted image as a positional inline atom when text is typed after it", () => {
+    const editor = makeEditor();
+
+    insertImageAttachmentsCommand(editor, [imageAttrs("img-1")]);
+    editor.commands.insertContent("hello");
+
+    expect(editor.getJSON()).toEqual({
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [
+            {
+              type: "imageAttachment",
+              attrs: {
+                ...imageAttrs("img-1"),
+                hash: null,
+              },
+            },
+            { type: "text", text: "hello" },
+          ],
+        },
+      ],
+    });
+    expect(
+      editor.view.dom.querySelector("p [data-composer-image-attachment]"),
+    ).not.toBeNull();
+  });
+
   it("removes the matching inline image atom by id", () => {
     const editor = makeEditor();
     insertImageAttachmentsCommand(editor, [

@@ -9,9 +9,9 @@ import { buildImageAttachmentDisplayLabels } from "@/lib/composer/image-attachme
 
 interface ComposerContentRendererProps {
   readonly content: JsonContent;
-  readonly variant?: ComposerContentRenderVariant;
-  readonly className?: string;
-  readonly testId?: string;
+  readonly variant: ComposerContentRenderVariant | undefined;
+  readonly className: string | undefined;
+  readonly testId: string | undefined;
 }
 
 function ComposerContentRendererBase(
