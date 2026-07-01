@@ -1,4 +1,5 @@
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -8,6 +9,7 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HostUpdateBanner } from "@/components/home/host-update-banner";
+import { HostRegistryUpdateListener } from "@/components/layout/bridges/host-registry-update-listener";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import {
   HOST_UPDATE_BANNER_SNOOZE_MS,
@@ -20,6 +22,7 @@ import type {
   IRunnerHost,
 } from "@traycer-clients/shared/platform/runner-host";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import type { DesktopHostRegistryUpdatesBridge } from "@/lib/windows/types";
 
 vi.mock("sonner", () => ({
   toast: {
@@ -118,6 +121,57 @@ function renderBanner(host: IRunnerHost): QueryClient {
   return queryClient;
 }
 
+function renderBannerWithRegistryListener(host: IRunnerHost): QueryClient {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  });
+  render(
+    <QueryClientProvider client={queryClient}>
+      <RunnerHostProvider runnerHost={host}>
+        <HostRegistryUpdateListener />
+        <HostUpdateBanner className={undefined} />
+      </RunnerHostProvider>
+    </QueryClientProvider>,
+  );
+  return queryClient;
+}
+
+function createRegistryUpdatesBridge(): {
+  readonly bridge: DesktopHostRegistryUpdatesBridge;
+  readonly emit: (state: HostRegistryUpdateState) => void;
+} {
+  const handlers = new Set<(state: HostRegistryUpdateState) => void>();
+  return {
+    bridge: {
+      onChange: (handler) => {
+        handlers.add(handler);
+        return {
+          dispose: () => {
+            handlers.delete(handler);
+          },
+        };
+      },
+    },
+    emit: (state) => {
+      for (const handler of handlers) {
+        handler(state);
+      }
+    },
+  };
+}
+
+function findHostUpdateBanner(): Promise<HTMLElement> {
+  return screen.findByRole("status", {
+    name: /Traycer host update available: 1\.4\.2/i,
+  });
+}
+
+function queryHostUpdateBanner(): HTMLElement | null {
+  return screen.queryByRole("status", {
+    name: /Traycer host update available/i,
+  });
+}
+
 describe("HostUpdateBanner (Flow 6)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -142,7 +196,7 @@ describe("HostUpdateBanner (Flow 6)", () => {
         }),
     });
     renderBanner(makeHost(management));
-    expect(await screen.findByTestId("host-update-banner")).toBeTruthy();
+    expect(await findHostUpdateBanner()).toBeTruthy();
     expect(screen.getByText(/1\.4\.2/)).toBeTruthy();
     expect(screen.getByRole("button", { name: /Install/i })).toBeTruthy();
   });
@@ -161,7 +215,7 @@ describe("HostUpdateBanner (Flow 6)", () => {
     });
     renderBanner(makeHost(management));
     await new Promise((r) => setTimeout(r, 20));
-    expect(screen.queryByTestId("host-update-banner")).toBeNull();
+    expect(queryHostUpdateBanner()).toBeNull();
   });
 
   it("stays hidden when the registry probe was not reachable", async () => {
@@ -178,7 +232,7 @@ describe("HostUpdateBanner (Flow 6)", () => {
     });
     renderBanner(makeHost(management));
     await new Promise((r) => setTimeout(r, 20));
-    expect(screen.queryByTestId("host-update-banner")).toBeNull();
+    expect(queryHostUpdateBanner()).toBeNull();
   });
 
   it("invokes updateHost when Install is clicked and invalidates the registry cache", async () => {
@@ -220,10 +274,45 @@ describe("HostUpdateBanner (Flow 6)", () => {
     });
   });
 
-  it("renders nothing when hostManagement is null (mobile/web)", async () => {
+  it("hides when the desktop registry update event clears availability", async () => {
+    const updates = createRegistryUpdatesBridge();
+    const management = makeManagement({
+      registryCheck: () =>
+        Promise.resolve<HostRegistryUpdateState>({
+          checkedAt: "2026-05-15T00:00:00Z",
+          latestVersion: "1.4.2",
+          installedVersion: "1.4.1",
+          updateAvailable: true,
+          reachable: true,
+          errorMessage: null,
+        }),
+    });
+    const host = Object.assign(makeHost(management), {
+      hostRegistryUpdates: updates.bridge,
+    });
+    renderBannerWithRegistryListener(host);
+    expect(await findHostUpdateBanner()).toBeTruthy();
+
+    act(() => {
+      updates.emit({
+        checkedAt: "2026-05-15T00:01:00Z",
+        latestVersion: "1.4.2",
+        installedVersion: "1.4.2",
+        updateAvailable: false,
+        reachable: true,
+        errorMessage: null,
+      });
+    });
+
+    await waitFor(() => {
+      expect(queryHostUpdateBanner()).toBeNull();
+    });
+  });
+
+  it("renders nothing when hostManagement is null (mobile/web)", () => {
     renderBanner(makeHost(null));
-    await new Promise((r) => setTimeout(r, 20));
-    expect(screen.queryByTestId("host-update-banner")).toBeNull();
+
+    expect(queryHostUpdateBanner()).toBeNull();
   });
 
   // Snooze flow - keyed to the persistent `useHostUpdateBannerStore`.
@@ -242,11 +331,11 @@ describe("HostUpdateBanner (Flow 6)", () => {
         }),
     });
     renderBanner(makeHost(management));
-    expect(await screen.findByTestId("host-update-banner")).toBeTruthy();
-    const snoozeBtn = screen.getByTestId("host-update-banner-snooze");
+    expect(await findHostUpdateBanner()).toBeTruthy();
+    const snoozeBtn = screen.getByRole("button", { name: /Remind me later/i });
     fireEvent.click(snoozeBtn);
     await waitFor(() => {
-      expect(screen.queryByTestId("host-update-banner")).toBeNull();
+      expect(queryHostUpdateBanner()).toBeNull();
     });
     // Persisted store should now hold an entry for the snoozed version.
     const snoozes = useHostUpdateBannerStore.getState().snoozeUntilByVersion;
@@ -274,7 +363,7 @@ describe("HostUpdateBanner (Flow 6)", () => {
     });
     renderBanner(makeHost(management));
     await new Promise((r) => setTimeout(r, 20));
-    expect(screen.queryByTestId("host-update-banner")).toBeNull();
+    expect(queryHostUpdateBanner()).toBeNull();
   });
 
   it("re-appears when the snooze entry has expired (snoozeUntil < now)", async () => {
@@ -296,7 +385,7 @@ describe("HostUpdateBanner (Flow 6)", () => {
         }),
     });
     renderBanner(makeHost(management));
-    expect(await screen.findByTestId("host-update-banner")).toBeTruthy();
+    expect(await findHostUpdateBanner()).toBeTruthy();
   });
 
   it("re-arms when latestVersion advances past the snoozed version (snooze is per-version)", async () => {
@@ -318,7 +407,7 @@ describe("HostUpdateBanner (Flow 6)", () => {
         }),
     });
     renderBanner(makeHost(management));
-    expect(await screen.findByTestId("host-update-banner")).toBeTruthy();
+    expect(await findHostUpdateBanner()).toBeTruthy();
   });
 
   it("clears the snooze for the installed version after a successful install via the Install button", async () => {

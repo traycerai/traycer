@@ -5,10 +5,7 @@ import {
   parseHostResponse,
   toAgentCliError,
 } from "../internal/host-rpc";
-import {
-  resolveEpicId,
-  resolveSenderAgentId,
-} from "../internal/agent-context";
+import { resolveEpicId, resolveSenderAgentId } from "../internal/agent-context";
 import type { CommandFn } from "../runner/runner";
 
 /**

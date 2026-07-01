@@ -4,7 +4,13 @@
  * that owns the sub-page stack + item dispatch. Split out from the view
  * components (`palette-cmdk.tsx`) so each file stays fast-refresh friendly.
  */
-import { useCallback, useRef, useState, type RefObject } from "react";
+import {
+  useCallback,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type RefObject,
+} from "react";
 import { defaultFilter } from "cmdk";
 import { runCommandItem } from "@/lib/commands/dispatch";
 import { isPathLikeQuery, matchesPathQuery } from "@/lib/commands/path-query";
@@ -51,6 +57,55 @@ export function usePaletteScrollReset(
     [setQuery],
   );
   return { listRef, handleQueryChange };
+}
+
+type PalettePageDirection = "up" | "down";
+
+function pointerMoveEvent(): Event {
+  if (typeof PointerEvent === "function") {
+    return new PointerEvent("pointermove", { bubbles: true });
+  }
+  return new MouseEvent("pointermove", { bubbles: true });
+}
+
+export function movePaletteSelectionByPage(
+  list: HTMLElement,
+  direction: PalettePageDirection,
+): void {
+  const items = Array.from(
+    list.querySelectorAll<HTMLElement>('[data-slot="command-item"]'),
+  ).filter((el) => el.closest("[hidden]") === null);
+  if (items.length === 0) return;
+
+  const rowHeight = items[0]?.offsetHeight || 36;
+  const pageSize = Math.max(1, Math.floor(list.clientHeight / rowHeight) - 1);
+  const selectedIndex = items.findIndex(
+    (el) => el.getAttribute("data-selected") === "true",
+  );
+  // When nothing is selected yet, anchor just outside the list so the first
+  // page lands on the first/last row.
+  const unselectedAnchor = direction === "down" ? -1 : items.length;
+  const from = selectedIndex === -1 ? unselectedAnchor : selectedIndex;
+  const delta = direction === "down" ? pageSize : -pageSize;
+  const targetIndex = Math.min(items.length - 1, Math.max(0, from + delta));
+  const target = items[targetIndex];
+
+  target.dispatchEvent(pointerMoveEvent());
+  target.scrollIntoView({ block: "nearest" });
+}
+
+export function handlePalettePageNavigation(
+  event: KeyboardEvent,
+  listRef: RefObject<HTMLDivElement | null>,
+): boolean {
+  if (event.key !== "PageDown" && event.key !== "PageUp") return false;
+
+  event.preventDefault();
+  const list = listRef.current;
+  if (list !== null) {
+    movePaletteSelectionByPage(list, event.key === "PageDown" ? "down" : "up");
+  }
+  return true;
 }
 
 export function paletteFilter(

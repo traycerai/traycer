@@ -67,7 +67,13 @@ export function usePickerLeaderScope(input: PickerLeaderScopeInput): void {
             const list = stateRef.current.railHarnesses;
             const index = digit === 0 ? 9 : digit - 1;
             if (index < 0 || index >= list.length) return false;
-            stateRef.current.onProviderChange(list[index].id);
+            const target = list[index];
+            // Mirror the rail button's disabled state: a still-probing (pending)
+            // provider can't be selected by click, so the ⌘-digit shortcut must
+            // not select it either. Its digit badge is hidden while pending, so
+            // dispatching here would be a silent no-op the picker resolves away.
+            if (target.availabilityPending) return false;
+            stateRef.current.onProviderChange(target.id);
             return true;
           },
           dispatchSequence: null,

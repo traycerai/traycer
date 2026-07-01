@@ -1,5 +1,6 @@
 import { HostPicker } from "@/components/layout/header/host-picker";
 import { AppUpdateToastController } from "@/components/layout/bridges/app-update-toast-controller";
+import { HostRegistryUpdateListener } from "@/components/layout/bridges/host-registry-update-listener";
 import { RunnerHostBridges } from "@/components/layout/bridges/runner-host-bridges";
 import { WorktreeDeleteProgressToastBridge } from "@/components/layout/bridges/worktree-delete-progress-toast-bridge";
 import { CenteredCard } from "@/components/centered-card";
@@ -7,6 +8,7 @@ import { RootErrorBoundary } from "@/components/errors/root-error-boundary";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
+  HostCompatibilityProvider,
   HostRuntimeProvider,
   type HostRpcRegistry,
   type MessengerFactory,
@@ -77,9 +79,9 @@ export interface TraycerAppProps {
  *
  * Mounts the documented provider stack - outer to inner -
  *   RunnerHostProvider → QueryClientProvider → ThemeProvider →
- *   TooltipProvider → HostRuntimeProvider → auth-scoped lifecycle providers
- *   → RunnerHostBridges → LocalHostGate → RouterProvider → HostPicker
- *   → Toaster.
+ *   TooltipProvider → HostRuntimeProvider → HostCompatibilityProvider →
+ *   auth-scoped lifecycle providers → RunnerHostBridges → LocalHostGate →
+ *   RouterProvider → HostPicker → Toaster.
  *
  * Concrete shells (Electron, Capacitor, gui-app-dev preview) construct a
  * `IRunnerHost` at bootstrap and pass it alongside the shared
@@ -119,9 +121,11 @@ export function TraycerApp(props: TraycerAppProps): ReactNode {
                     remoteFetcher={props.remoteFetcher}
                     fallback={hostRuntimeFallback}
                   >
-                    <RootErrorBoundary router={router}>
-                      <TraycerAuthenticatedRuntime router={router} />
-                    </RootErrorBoundary>
+                    <HostCompatibilityProvider>
+                      <RootErrorBoundary router={router}>
+                        <TraycerAuthenticatedRuntime router={router} />
+                      </RootErrorBoundary>
+                    </HostCompatibilityProvider>
                   </HostRuntimeProvider>
                 </KeybindingProvider>
               </TooltipProvider>
@@ -187,6 +191,7 @@ function TraycerAppRuntimeSurface(props: TraycerAppRuntimeSurfaceProps) {
   return (
     <>
       <RunnerHostBridges />
+      <HostRegistryUpdateListener />
       <AppUpdateToastController />
       <WorktreeDeleteProgressToastBridge />
       <CliCredentialSeeder />

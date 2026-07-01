@@ -86,21 +86,17 @@ interface ActivitySummaryCounts {
 }
 
 type ToolActivityKind =
-  | "explore"
-  | "read"
-  | "search"
-  | "edit"
-  | "run"
-  | "hook"
-  | "tool";
+  "explore" | "read" | "search" | "edit" | "run" | "hook" | "tool";
 
 const SUMMARY_MAX = 96;
 const EMPTY_QUESTION_TOOL_IDS: ReadonlySet<string> = new Set();
+const EMPTY_PROMOTED_TOOL_BLOCK_IDS: ReadonlySet<string> = new Set();
 
 export type ActivityTimelineTurnState = "active" | "complete";
 
 export interface ActivityTimelineOptions {
   readonly turnState: ActivityTimelineTurnState;
+  readonly promotedToolBlockIds: ReadonlySet<string>;
 }
 
 interface TimelineCacheEntry {
@@ -177,9 +173,24 @@ export function buildChatActivityTimeline(
   segments: ReadonlyArray<MessageSegment>,
   options: ActivityTimelineOptions,
 ): ReadonlyArray<ChatActivityTimelineItem> {
+  if (options.promotedToolBlockIds.size > 0) {
+    const base = buildChatActivityTimelineImpl(
+      segments,
+      options.promotedToolBlockIds,
+    );
+    return options.turnState === "complete"
+      ? base
+      : markTrailingActivityGroupActive(base);
+  }
   let entry = timelineCache.get(segments);
   if (entry === undefined) {
-    entry = { base: buildChatActivityTimelineImpl(segments), active: null };
+    entry = {
+      base: buildChatActivityTimelineImpl(
+        segments,
+        EMPTY_PROMOTED_TOOL_BLOCK_IDS,
+      ),
+      active: null,
+    };
     timelineCache.set(segments, entry);
   }
   if (options.turnState === "complete") return entry.base;
@@ -191,6 +202,7 @@ export function buildChatActivityTimeline(
 
 function buildChatActivityTimelineImpl(
   segments: ReadonlyArray<MessageSegment>,
+  promotedToolBlockIds: ReadonlySet<string>,
 ): ReadonlyArray<ChatActivityTimelineItem> {
   const matchedQuestionToolIds = buildMatchedQuestionToolIds(segments);
   const out: ChatActivityTimelineItem[] = [];
@@ -234,7 +246,10 @@ function buildChatActivityTimelineImpl(
       });
       continue;
     }
-    if (segment.kind === "tool" && segment.agentMessageSend !== null) {
+    if (
+      segment.kind === "tool" &&
+      shouldPromoteToolSegment(segment, promotedToolBlockIds)
+    ) {
       flushRun();
       out.push({ kind: "segment", id: segment.id, segment });
       continue;
@@ -347,6 +362,40 @@ function approvalActivityLabel(segment: ApprovalSegment): string {
   return segment.decision.approved
     ? `Approved ${singleLine(label)}`
     : `Denied ${singleLine(label)}`;
+}
+
+function shouldPromoteToolSegment(
+  segment: ToolSegment,
+  promotedToolBlockIds: ReadonlySet<string>,
+): boolean {
+  if (segment.agentMessageSend !== null) return true;
+  // A backgrounded command/Monitor stays a standalone card for its whole life -
+  // running, completed, stopped, errored, and after reload - keyed on the
+  // persistent block marker. This is the durable signal: it is stamped at birth
+  // from the tool input (`run_in_background` / Monitor) and is sticky, so it
+  // covers the running phase too. The transient host `backgroundItems` set
+  // (`promotedToolBlockIds`) keeps the card live while the host tracks it.
+  if (segment.backgroundTask) return true;
+  if (promotedToolBlockIds.has(segment.id)) return true;
+  // Background-only terminal fallback: some terminal paths surface
+  // `backgroundOutput` without the durable marker. Foreground commands never
+  // capture background output, so this never promotes them. Deliberately NOT
+  // keyed on `isStreaming`/`error` - those fire for foreground commands too and
+  // would flash every normal command into a standalone card while it runs,
+  // then collapse it back into the activity group on completion.
+  return (
+    isCommandLikeTool(segment.toolName) && segment.backgroundOutput !== null
+  );
+}
+
+function isCommandLikeTool(toolName: string): boolean {
+  const normalized = normalizedToolName(toolName);
+  return (
+    normalized === "bash" ||
+    normalized === "shell" ||
+    normalized === "monitor" ||
+    RUN_TOOL_NAMES.has(normalized)
+  );
 }
 
 function toolActivityLabel(segment: ToolSegment): string {

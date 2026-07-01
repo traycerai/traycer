@@ -34,6 +34,7 @@ import {
   agentGuiListHarnessesV20,
   agentGuiListModelsV10,
   chatSubscribeV10,
+  chatSubscribeV11,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -195,6 +196,7 @@ import {
   providersListResponseSchemaV10,
   providersListResponseSchemaV20,
   downgradeProviderCliStateV20ToV10,
+  upgradeProviderCliStateV10ToV20,
   providersRemoveCustomPathRequestSchema,
   providersRemoveCustomPathRequestSchemaV10,
   providersRemoveCustomPathResponseSchema,
@@ -487,6 +489,16 @@ function downgradeProviderStateListForV10(
   });
 }
 
+function upgradeProviderStateFromV10(state: ProviderCliStateV10): ProviderCliState {
+  return upgradeProviderCliStateV10ToV20(state);
+}
+
+function upgradeProviderStateListFromV10(
+  states: readonly ProviderCliStateV10[],
+): ProviderCliState[] {
+  return states.map(upgradeProviderCliStateV10ToV20);
+}
+
 function downgradeProviderRequestForV10<T>(
   schema: {
     safeParse: (
@@ -508,7 +520,9 @@ export const providersListUpgradeV1ToV2 = defineUpgradePath<
   from: { major: 1, minor: 0 },
   to: { major: 2, minor: 0 },
   upgradeRequest: (request) => request,
-  upgradeResponse: (response) => response,
+  upgradeResponse: (response) => ({
+    providers: upgradeProviderStateListFromV10(response.providers),
+  }),
 });
 
 export const providersListDowngradeV2ToV1 = defineDowngradePath<
@@ -547,7 +561,9 @@ export const providersSetSelectionUpgradeV1ToV2 = defineUpgradePath<
   from: { major: 1, minor: 0 },
   to: { major: 2, minor: 0 },
   upgradeRequest: (request) => request,
-  upgradeResponse: (response) => response,
+  upgradeResponse: (response) => ({
+    state: upgradeProviderStateFromV10(response.state),
+  }),
 });
 
 export const providersSetSelectionDowngradeV2ToV1 = defineDowngradePath<
@@ -594,7 +610,9 @@ export const providersAddCustomPathUpgradeV1ToV2 = defineUpgradePath<
   from: { major: 1, minor: 0 },
   to: { major: 2, minor: 0 },
   upgradeRequest: (request) => request,
-  upgradeResponse: (response) => response,
+  upgradeResponse: (response) => ({
+    state: upgradeProviderStateFromV10(response.state),
+  }),
 });
 
 export const providersAddCustomPathDowngradeV2ToV1 = defineDowngradePath<
@@ -641,7 +659,9 @@ export const providersRemoveCustomPathUpgradeV1ToV2 = defineUpgradePath<
   from: { major: 1, minor: 0 },
   to: { major: 2, minor: 0 },
   upgradeRequest: (request) => request,
-  upgradeResponse: (response) => response,
+  upgradeResponse: (response) => ({
+    state: upgradeProviderStateFromV10(response.state),
+  }),
 });
 
 export const providersRemoveCustomPathDowngradeV2ToV1 = defineDowngradePath<
@@ -702,7 +722,12 @@ export const providersAwaitLoginUpgradeV1ToV2 = defineUpgradePath<
   from: { major: 1, minor: 0 },
   to: { major: 2, minor: 0 },
   upgradeRequest: (request) => request,
-  upgradeResponse: (response) => response,
+  upgradeResponse: (response) => ({
+    state:
+      response.state === null
+        ? null
+        : upgradeProviderStateFromV10(response.state),
+  }),
 });
 
 export const providersAwaitLoginDowngradeV2ToV1 = defineDowngradePath<
@@ -762,7 +787,9 @@ export const providersSetEnabledUpgradeV1ToV2 = defineUpgradePath<
   from: { major: 1, minor: 0 },
   to: { major: 2, minor: 0 },
   upgradeRequest: (request) => request,
-  upgradeResponse: (response) => response,
+  upgradeResponse: (response) => ({
+    state: upgradeProviderStateFromV10(response.state),
+  }),
 });
 
 export const providersSetEnabledDowngradeV2ToV1 = defineDowngradePath<
@@ -809,7 +836,9 @@ export const providersSetApiKeyUpgradeV1ToV2 = defineUpgradePath<
   from: { major: 1, minor: 0 },
   to: { major: 2, minor: 0 },
   upgradeRequest: (request) => request,
-  upgradeResponse: (response) => response,
+  upgradeResponse: (response) => ({
+    state: upgradeProviderStateFromV10(response.state),
+  }),
 });
 
 export const providersSetApiKeyDowngradeV2ToV1 = defineDowngradePath<
@@ -853,7 +882,9 @@ export const providersClearApiKeyUpgradeV1ToV2 = defineUpgradePath<
   from: { major: 1, minor: 0 },
   to: { major: 2, minor: 0 },
   upgradeRequest: (request) => request,
-  upgradeResponse: (response) => response,
+  upgradeResponse: (response) => ({
+    state: upgradeProviderStateFromV10(response.state),
+  }),
 });
 
 export const providersClearApiKeyDowngradeV2ToV1 = defineDowngradePath<
@@ -900,7 +931,9 @@ export const providersSetTerminalAgentArgsUpgradeV1ToV2 = defineUpgradePath<
   from: { major: 1, minor: 0 },
   to: { major: 2, minor: 0 },
   upgradeRequest: (request) => request,
-  upgradeResponse: (response) => response,
+  upgradeResponse: (response) => ({
+    state: upgradeProviderStateFromV10(response.state),
+  }),
 });
 
 export const providersSetTerminalAgentArgsDowngradeV2ToV1 = defineDowngradePath<
@@ -947,7 +980,9 @@ export const providersSetEnvOverrideUpgradeV1ToV2 = defineUpgradePath<
   from: { major: 1, minor: 0 },
   to: { major: 2, minor: 0 },
   upgradeRequest: (request) => request,
-  upgradeResponse: (response) => response,
+  upgradeResponse: (response) => ({
+    state: upgradeProviderStateFromV10(response.state),
+  }),
 });
 
 export const providersSetEnvOverrideDowngradeV2ToV1 = defineDowngradePath<
@@ -994,7 +1029,9 @@ export const providersDeleteEnvOverrideUpgradeV1ToV2 = defineUpgradePath<
   from: { major: 1, minor: 0 },
   to: { major: 2, minor: 0 },
   upgradeRequest: (request) => request,
-  upgradeResponse: (response) => response,
+  upgradeResponse: (response) => ({
+    state: upgradeProviderStateFromV10(response.state),
+  }),
 });
 
 export const providersDeleteEnvOverrideDowngradeV2ToV1 = defineDowngradePath<
@@ -2580,11 +2617,11 @@ export type HostRpcRegistry = typeof hostRpcRegistry;
  * Combined streaming-RPC registry for the `/stream` WS manifest.
  *
  * One manifest per `/stream` WS: `epic.subscribe@1.0`,
- * `chat.subscribe@1.0`, `notifications.subscribe@1.0`,
+ * `chat.subscribe@1.1`, `notifications.subscribe@1.0`,
  * `terminal.subscribe@1.0`, `git.subscribeStatus@1.0`,
  * `agent.inbox.subscribe@1.0`, `speech.dictate@1.0`, and
- * `migration.run@1.0` live at
- * `{ major: 1, minor: 0 }`. Later minors within the same major line must be
+ * `migration.run@1.0` are negotiated from this registry. Later minors within
+ * the same major line must be
  * additive; later majors must carry a real breaking change and ship without a
  * cross-major downgrade bridge (streams reconnect on mismatched majors in v1).
  *
@@ -2592,7 +2629,12 @@ export type HostRpcRegistry = typeof hostRpcRegistry;
  *
  * 1. Add new methods as top-level keys.
  * 2. Add new minors within a major line for additive changes.
- * 3. Add new majors only when a sub-schema actually breaks compatibility.
+ * 3. Add new majors only when a sub-schema actually breaks compatibility -
+ *    and never for a shipped method with a peer still in the field, since a
+ *    stream major bump has no downgrade bridge (see `chat.subscribe`'s
+ *    history: `1.0` is frozen and kept registered forever; `1.1` added
+ *    background-items controls as an additive minor instead of a major, to
+ *    stay compatible with host-v1.0.0).
  */
 export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
   "epic.subscribe": {
@@ -2607,10 +2649,13 @@ export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
   },
   "chat.subscribe": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: chatSubscribeV10,
+        },
+        1: {
+          contract: chatSubscribeV11,
         },
       },
     },

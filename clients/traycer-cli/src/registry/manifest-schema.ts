@@ -215,7 +215,10 @@ function parseVersionEntry(
         `platform key '${key}' is not one of ${PLATFORM_KEYS.join("|")}`,
       );
     }
-    platforms[key] = parsePlatformAsset(value, `${sourceLabel}.platforms.${key}`);
+    platforms[key] = parsePlatformAsset(
+      value,
+      `${sourceLabel}.platforms.${key}`,
+    );
   }
   return {
     version: obj.version,
@@ -249,22 +252,44 @@ function parsePlatformAsset(
     // non-empty. We refuse to surface partial entries - the manifest
     // publisher is expected to mark the asset unavailable instead.
     if (typeof obj.url !== "string" || obj.url.length === 0) {
-      throw manifestInvalid(sourceLabel, "'url' must be a non-empty string when available=true");
+      throw manifestInvalid(
+        sourceLabel,
+        "'url' must be a non-empty string when available=true",
+      );
     }
-    if (typeof obj.sizeBytes !== "number" || !Number.isFinite(obj.sizeBytes) || obj.sizeBytes <= 0) {
-      throw manifestInvalid(sourceLabel, "'sizeBytes' must be a positive number when available=true");
+    if (
+      typeof obj.sizeBytes !== "number" ||
+      !Number.isFinite(obj.sizeBytes) ||
+      obj.sizeBytes <= 0
+    ) {
+      throw manifestInvalid(
+        sourceLabel,
+        "'sizeBytes' must be a positive number when available=true",
+      );
     }
     if (typeof obj.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(obj.sha256)) {
-      throw manifestInvalid(sourceLabel, "'sha256' must be a lowercase 64-char hex digest when available=true");
+      throw manifestInvalid(
+        sourceLabel,
+        "'sha256' must be a lowercase 64-char hex digest when available=true",
+      );
     }
     if (typeof obj.signatureUrl !== "string" || obj.signatureUrl.length === 0) {
-      throw manifestInvalid(sourceLabel, "'signatureUrl' must be a non-empty string when available=true");
+      throw manifestInvalid(
+        sourceLabel,
+        "'signatureUrl' must be a non-empty string when available=true",
+      );
     }
     if (obj.signatureAlgorithm !== "minisign") {
-      throw manifestInvalid(sourceLabel, "'signatureAlgorithm' must equal 'minisign'");
+      throw manifestInvalid(
+        sourceLabel,
+        "'signatureAlgorithm' must equal 'minisign'",
+      );
     }
     if (typeof obj.publicKeyId !== "string" || obj.publicKeyId.length === 0) {
-      throw manifestInvalid(sourceLabel, "'publicKeyId' must be a non-empty string when available=true");
+      throw manifestInvalid(
+        sourceLabel,
+        "'publicKeyId' must be a non-empty string when available=true",
+      );
     }
     return {
       available: true,
@@ -289,11 +314,9 @@ function parsePlatformAsset(
         ? obj.sizeBytes
         : 0,
     sha256: typeof obj.sha256 === "string" ? obj.sha256 : "",
-    signatureUrl:
-      typeof obj.signatureUrl === "string" ? obj.signatureUrl : "",
+    signatureUrl: typeof obj.signatureUrl === "string" ? obj.signatureUrl : "",
     signatureAlgorithm: "minisign",
-    publicKeyId:
-      typeof obj.publicKeyId === "string" ? obj.publicKeyId : "",
+    publicKeyId: typeof obj.publicKeyId === "string" ? obj.publicKeyId : "",
   };
 }
 
@@ -304,10 +327,7 @@ function parseNullableString(
 ): string | null {
   if (value === null) return null;
   if (typeof value === "string") return value;
-  throw manifestInvalid(
-    sourceLabel,
-    `'${fieldName}' must be a string or null`,
-  );
+  throw manifestInvalid(sourceLabel, `'${fieldName}' must be a string or null`);
 }
 
 function manifestInvalid(sourceLabel: string, detail: string): Error {

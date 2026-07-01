@@ -44,6 +44,7 @@ export function ActivityGroupSegment(props: ActivityGroupSegmentProps) {
       className="text-ui-sm text-muted-foreground"
     >
       <CollapsibleTrigger
+        aria-label={group.label}
         className={cn(
           "group/activity flex max-w-full items-center gap-2 overflow-hidden rounded-sm py-1 pr-1 text-left text-muted-foreground transition-colors",
           "hover:text-foreground focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
@@ -104,6 +105,7 @@ function ActivityChildSegment(props: ActivityChildSegmentProps) {
     case "tool":
       return (
         <ToolSegment
+          id={segment.id}
           toolName={segment.toolName}
           inputSummary={segment.inputSummary}
           inputDetail={segment.inputDetail}
@@ -111,8 +113,12 @@ function ActivityChildSegment(props: ActivityChildSegmentProps) {
           agentMessageSend={segment.agentMessageSend}
           isStreaming={segment.isStreaming}
           endState={segment.endState}
+          stopped={segment.stopped}
           progress={segment.progress}
+          backgroundOutput={segment.backgroundOutput}
+          backgroundTask={segment.backgroundTask}
           startedAt={segment.startedAt}
+          durationMs={segment.durationMs}
           variant="row"
         />
       );
@@ -142,6 +148,7 @@ function ActivityChildSegment(props: ActivityChildSegmentProps) {
           result={segment.result}
           isStreaming={segment.isStreaming}
           endState={segment.endState}
+          stopped={segment.stopped}
           startedAt={segment.startedAt}
           durationMs={segment.durationMs}
           variant="row"
@@ -153,6 +160,7 @@ function ActivityChildSegment(props: ActivityChildSegmentProps) {
         <ResolvedApprovalSegment
           toolName={segment.toolName}
           description={segment.description}
+          inputSummary={segment.inputSummary}
           inputDetail={segment.inputDetail}
           decision={segment.decision}
           variant="row"

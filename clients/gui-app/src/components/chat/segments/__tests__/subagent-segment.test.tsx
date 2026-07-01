@@ -23,6 +23,7 @@ describe("<SubagentSegment /> promoted feed", () => {
         result={null}
         isStreaming
         endState={null}
+        stopped={false}
         startedAt={null}
         durationMs={null}
         agentType={null}
@@ -56,6 +57,7 @@ describe("<SubagentSegment /> promoted feed", () => {
         result={null}
         isStreaming
         endState={null}
+        stopped={false}
         startedAt={null}
         durationMs={null}
         agentType={null}
@@ -78,6 +80,7 @@ describe("<SubagentSegment /> promoted feed", () => {
           result={null}
           isStreaming
           endState={null}
+          stopped={false}
           startedAt={null}
           durationMs={null}
           agentType={null}
@@ -105,6 +108,7 @@ describe("<SubagentSegment /> promoted feed", () => {
           result={null}
           isStreaming
           endState={null}
+          stopped={false}
           startedAt={null}
           durationMs={null}
           agentType={null}
@@ -135,6 +139,7 @@ describe("<SubagentSegment /> promoted feed", () => {
         result={null}
         isStreaming
         endState={null}
+        stopped={false}
         startedAt={null}
         durationMs={null}
         agentType={null}
@@ -167,6 +172,7 @@ describe("<SubagentSegment /> promoted feed", () => {
         result={null}
         isStreaming
         endState={null}
+        stopped={false}
         startedAt={null}
         durationMs={null}
         agentType={null}
@@ -191,6 +197,7 @@ describe("<SubagentSegment /> promoted feed", () => {
         result={null}
         isStreaming
         endState={null}
+        stopped={false}
         startedAt={null}
         durationMs={null}
         agentType={null}
@@ -216,6 +223,7 @@ describe("<SubagentSegment /> promoted feed", () => {
         result="Completed the review."
         isStreaming={false}
         endState={null}
+        stopped={false}
         startedAt={null}
         durationMs={null}
         agentType={null}
@@ -246,6 +254,7 @@ describe("<SubagentSegment /> promoted feed", () => {
         result="Done."
         isStreaming={false}
         endState={null}
+        stopped={false}
         startedAt={null}
         durationMs={null}
         agentType={null}
@@ -270,6 +279,7 @@ describe("<SubagentSegment /> promoted feed", () => {
         result="Done."
         isStreaming={false}
         endState={null}
+        stopped={false}
         startedAt={null}
         durationMs={null}
         agentType={null}
@@ -291,6 +301,7 @@ describe("<SubagentSegment /> promoted feed", () => {
         result={null}
         isStreaming
         endState={null}
+        stopped={false}
         startedAt={null}
         durationMs={null}
         variant="promoted"
@@ -317,6 +328,7 @@ describe("<SubagentSegment /> promoted feed", () => {
           result={null}
           isStreaming
           endState={null}
+          stopped={false}
           startedAt={5_000}
           durationMs={null}
           variant="promoted"
@@ -340,6 +352,7 @@ describe("<SubagentSegment /> promoted feed", () => {
         result="Done."
         isStreaming={false}
         endState={null}
+        stopped={false}
         startedAt={1_000}
         durationMs={7_000}
         variant="promoted"
@@ -360,6 +373,7 @@ describe("<SubagentSegment /> promoted feed", () => {
         result="Done."
         isStreaming={false}
         endState={null}
+        stopped={false}
         startedAt={0}
         durationMs={7_600}
         variant="promoted"
@@ -382,6 +396,7 @@ describe("<SubagentSegment /> promoted feed", () => {
         result="Done."
         isStreaming={false}
         endState={null}
+        stopped={false}
         startedAt={0}
         durationMs={300}
         variant="promoted"
@@ -403,6 +418,7 @@ describe("<SubagentSegment /> promoted feed", () => {
         result={null}
         isStreaming={false}
         endState="interrupted"
+        stopped={false}
         startedAt={1_000}
         durationMs={null}
         variant="promoted"
@@ -412,5 +428,30 @@ describe("<SubagentSegment /> promoted feed", () => {
     // A force-finalized card carries no (turn-end-inflated) duration; the
     // builder passes durationMs=null for non-completed blocks.
     expect(screen.queryByText(/^\d+s$/)).toBeNull();
+  });
+
+  it("shows a neutral stopped badge for a subagent whose terminal status is errored but stopped is true", () => {
+    // `status: "errored"` with `stopped: true` is how the host reports a
+    // subagent that was explicitly stopped (e.g. a deadline-killed run) rather
+    // than one that genuinely failed - distinct from `endState`, which only
+    // covers `interrupted`/`superseded` statuses.
+    render(
+      <SubagentSegment
+        id="test-subagent-stopped"
+        name="reviewer"
+        agentType={null}
+        task="Review the implementation"
+        progressUpdates={["Scanning"]}
+        result={null}
+        isStreaming={false}
+        endState={null}
+        stopped
+        startedAt={1_000}
+        durationMs={4_000}
+        variant="promoted"
+      />,
+    );
+
+    expect(screen.getByText("stopped")).toBeTruthy();
   });
 });

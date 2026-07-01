@@ -67,6 +67,7 @@ function providerState(
     terminalAgentArgs: "",
     envOverrides: [],
     loginCapability: null,
+    availabilityPending: false,
   };
 }
 

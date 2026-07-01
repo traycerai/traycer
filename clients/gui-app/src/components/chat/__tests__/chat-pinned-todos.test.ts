@@ -442,8 +442,12 @@ function toolSegment(
     agentMessageSend: null,
     isStreaming: false,
     endState: null,
+    stopped: false,
     progress: null,
+    backgroundOutput: null,
+    backgroundTask: false,
     startedAt: 0,
+    durationMs: null,
     parentId: null,
   };
 }

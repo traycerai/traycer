@@ -26,17 +26,15 @@ interface RevealTestState {
   reachability: { status: "reachable" | "unreachable"; hostLabel: string };
 }
 
-const state = vi.hoisted(
-  (): RevealTestState => ({
-    readFile: {
-      data: { content: "", error: null, truncated: false },
-      isLoading: false,
-      isError: false,
-      error: null,
-    },
-    reachability: { status: "reachable", hostLabel: "Host A" },
-  }),
-);
+const state = vi.hoisted((): RevealTestState => ({
+  readFile: {
+    data: { content: "", error: null, truncated: false },
+    isLoading: false,
+    isError: false,
+    error: null,
+  },
+  reachability: { status: "reachable", hostLabel: "Host A" },
+}));
 
 vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
   useReactiveActiveHostId: () => "host-A",

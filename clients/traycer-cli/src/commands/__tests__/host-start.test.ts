@@ -60,10 +60,7 @@ describe("resolveHostStartTarget", () => {
     expect(target.executable).toBe(execPath);
     // Passes the resolved slot dir so a host baked for a different slot still
     // publishes pid.json where this environment expects it.
-    expect(target.args).toEqual([
-      "--host-data-dir",
-      hostHomeDir("production"),
-    ]);
+    expect(target.args).toEqual(["--host-data-dir", hostHomeDir("production")]);
     expect(target.cwd).toBe(work);
     expect(target.record.version).toBe("1.0.0");
   });
@@ -298,8 +295,7 @@ describe("runHostStart - installed-record launch path", () => {
   it("writes bootstrap markers under the dev environment and passes no environment arg", async () => {
     const exec = "/opt/traycer/host/dev/install/traycer-host";
     const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
-    const invoke = () =>
-      runHostStart({ environment: "dev", cwd: null }, deps);
+    const invoke = () => runHostStart({ environment: "dev", cwd: null }, deps);
     setTimeout(() => child.emit("exit", 0, null));
     await runUntilExit(invoke, recorded);
     expect(recorded.markers.every((m) => m.environment === "dev")).toBe(true);
@@ -317,8 +313,7 @@ describe("runHostStart - installed-record launch path", () => {
     // path - it does NOT branch on bundle / node-bin args anymore.
     const wrapper = "/Users/dev/.traycer/host/dev/runtime/traycer-host";
     const { child, recorded, deps } = makeRunStubs(sampleRecord(wrapper), null);
-    const invoke = () =>
-      runHostStart({ environment: "dev", cwd: null }, deps);
+    const invoke = () => runHostStart({ environment: "dev", cwd: null }, deps);
     setTimeout(() => child.emit("exit", 0, null));
     await runUntilExit(invoke, recorded);
     expect(recorded.spawnCalls).toHaveLength(1);

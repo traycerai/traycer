@@ -16,11 +16,25 @@ export default defineConfig({
       },
       {
         find: /^@traycer\/protocol\/utils\/(.*)$/,
-        replacement: path.resolve(__dirname, "..", "..", "protocol", "utils", "$1"),
+        replacement: path.resolve(
+          __dirname,
+          "..",
+          "..",
+          "protocol",
+          "utils",
+          "$1",
+        ),
       },
       {
         find: /^@traycer\/protocol\/(.*)$/,
-        replacement: path.resolve(__dirname, "..", "..", "protocol", "src", "$1"),
+        replacement: path.resolve(
+          __dirname,
+          "..",
+          "..",
+          "protocol",
+          "src",
+          "$1",
+        ),
       },
     ],
   },

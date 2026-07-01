@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import { buildStreamManifest } from "@traycer/protocol/framework/stream-compat";
+import {
+  defineStreamRpcContract,
+  defineVersionedStreamRpcRegistry,
+} from "@traycer/protocol/framework/versioned-stream-rpc";
 import {
   createRequestContext,
   identityFromAuthenticatedUser,
@@ -266,12 +271,20 @@ describe("WsStreamClient", () => {
     const openFrame = parseText(stub.textSent[0]);
     expect(openFrame.kind).toBe("open");
     expect(openFrame.token).toBe("token-abc");
-    // Derived from the live registry so the assertion can't go stale as stream
-    // methods are added (the open frame advertises the full canonical manifest).
-    const expectedManifest = buildStreamManifest(hostStreamRpcRegistry);
-    expect(openFrame.manifest).toEqual(expectedManifest);
+    // The open frame's manifest is the client's raw canonical - no per-method
+    // substitution needed. A same-major minor skew (e.g. host-v1.0.0's
+    // chat.subscribe@1.0 vs this client's @1.1) is safe for the old host's own
+    // full-manifest check: `canBridgeStream` trusts an older peer receiving a
+    // newer minor unconditionally (additive minors), so it never poisons an
+    // unrelated method's open handshake the way the old major bump once did.
+    expect(openFrame.manifest).toEqual(
+      buildStreamManifest(hostStreamRpcRegistry),
+    );
 
-    stub.fireText({ kind: "openAck", manifest: expectedManifest });
+    stub.fireText({
+      kind: "openAck",
+      manifest: buildStreamManifest(hostStreamRpcRegistry),
+    });
 
     expect(stub.textSent).toHaveLength(2);
     const subscribeFrame = parseText(stub.textSent[1]);
@@ -283,6 +296,206 @@ describe("WsStreamClient", () => {
     });
 
     expect(statuses).toContain("open");
+
+    session.close();
+  });
+
+  it("subscribes to a compatible method even when an unrelated method has major skew", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "token-abc",
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+
+    await flush();
+    const stub = sockets[0].socket;
+    stub.fireOpen();
+
+    // A hypothetical peer on some future, unbridgeable chat.subscribe major -
+    // exercises method isolation, independent of chat.subscribe's real,
+    // currently-bridgeable version history.
+    const skewedManifest = {
+      ...buildStreamManifest(hostStreamRpcRegistry),
+      "chat.subscribe": { major: 2, minor: 0 },
+    };
+    stub.fireText({ kind: "openAck", manifest: skewedManifest });
+
+    expect(stub.textSent).toHaveLength(2);
+    expect(parseText(stub.textSent[1])).toEqual({
+      kind: "subscribe",
+      method: "epic.subscribe",
+      schemaVersion: { major: 1, minor: 0 },
+      params: { epicId: "epic-1" },
+    });
+
+    session.close();
+  });
+
+  it("advertises the canonical chat stream version for chat subscriptions", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "token-abc",
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+
+    const session = client.subscribe("chat.subscribe", {
+      epicId: "epic-1",
+      chatId: "chat-1",
+    });
+    await flush();
+
+    sockets[0].socket.fireOpen();
+    const openFrame = parseText(sockets[0].socket.textSent[0]);
+    expect(openFrame.manifest).toEqual(
+      buildStreamManifest(hostStreamRpcRegistry),
+    );
+
+    session.close();
+  });
+
+  // Regression test for the release-v1.1.0 RC incident: the compatibility
+  // check correctly determined chat.subscribe@1.1 bridges to a host still on
+  // @1.0, but the subscribe frame kept declaring this client's own canonical
+  // (1.1) regardless - a version host-v1.0.0's dispatch table has never heard
+  // of, so it rejected the subscribe outright even though the handshake
+  // passed. The client must downgrade what it declares to the version the
+  // host actually advertised.
+  it("declares the host's own chat.subscribe version when the host is still on 1.0", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "token-abc",
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+
+    const session = client.subscribe("chat.subscribe", {
+      epicId: "epic-1",
+      chatId: "chat-1",
+    });
+    await flush();
+
+    const stub = sockets[0].socket;
+    stub.fireOpen();
+
+    const hostV100Manifest = {
+      ...buildStreamManifest(hostStreamRpcRegistry),
+      "chat.subscribe": { major: 1, minor: 0 },
+    };
+    stub.fireText({ kind: "openAck", manifest: hostV100Manifest });
+
+    expect(stub.textSent).toHaveLength(2);
+    expect(parseText(stub.textSent[1])).toEqual({
+      kind: "subscribe",
+      method: "chat.subscribe",
+      schemaVersion: { major: 1, minor: 0 },
+      params: { epicId: "epic-1", chatId: "chat-1" },
+    });
+
+    session.close();
+  });
+
+  // chat.subscribe's own openRequestSchema never changed across 1.0/1.1, so
+  // the test above can't prove `prepareStreamSubscribeRequest` actually
+  // reprojects params through the older contract - only that it downgrades
+  // the declared version. A synthetic method with a genuinely different
+  // open-request shape per minor closes that gap.
+  it("rewrites the subscribe params onto the host's older contract when the open-request shape changed", async () => {
+    const openRequestSchemaV10 = z.object({ id: z.string() });
+    const openRequestSchemaV11 = z.object({
+      id: z.string(),
+      locale: z.string().nullable(),
+    });
+    const frameSchemas = {
+      serverFrameSchema: z.discriminatedUnion("kind", [
+        z.object({
+          kind: z.literal("snapshot"),
+          hasBinaryPayload: z.literal(false),
+          id: z.string(),
+        }),
+      ]),
+      clientFrameSchema: z.discriminatedUnion("kind", [
+        z.object({
+          kind: z.literal("noop"),
+          hasBinaryPayload: z.literal(false),
+        }),
+      ]),
+    };
+    const versionSkewRegistry = defineVersionedStreamRpcRegistry({
+      "version-skew.subscribe": {
+        1: {
+          latestMinor: 1,
+          versions: {
+            0: {
+              contract: defineStreamRpcContract({
+                method: "version-skew.subscribe",
+                schemaVersion: { major: 1, minor: 0 } as const,
+                openRequestSchema: openRequestSchemaV10,
+                ...frameSchemas,
+              }),
+            },
+            1: {
+              contract: defineStreamRpcContract({
+                method: "version-skew.subscribe",
+                schemaVersion: { major: 1, minor: 1 } as const,
+                openRequestSchema: openRequestSchemaV11,
+                ...frameSchemas,
+              }),
+            },
+          },
+        },
+      },
+    });
+
+    const { factory, sockets } = makeFactory();
+    const client = new WsStreamClient({
+      registry: versionSkewRegistry,
+      endpoint: () => mockLocalHostEntry,
+      bearer: () => makeRequestContext("t")?.credentials ?? null,
+      auth: null,
+      webSocketFactory: factory,
+      dialTimeoutMs: 1000,
+      openAckTimeoutMs: 1000,
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+
+    const session = client.subscribe("version-skew.subscribe", {
+      id: "item-1",
+      locale: "en-US",
+    });
+    await flush();
+
+    const stub = sockets[0].socket;
+    stub.fireOpen();
+
+    stub.fireText({
+      kind: "openAck",
+      manifest: { "version-skew.subscribe": { major: 1, minor: 0 } },
+    });
+
+    expect(stub.textSent).toHaveLength(2);
+    expect(parseText(stub.textSent[1])).toEqual({
+      kind: "subscribe",
+      method: "version-skew.subscribe",
+      schemaVersion: { major: 1, minor: 0 },
+      // `locale` is stripped - the 1.0 contract the host actually has never
+      // declared that field, so the params get reprojected onto it.
+      params: { id: "item-1" },
+    });
 
     session.close();
   });

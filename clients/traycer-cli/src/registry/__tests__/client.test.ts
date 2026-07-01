@@ -1,10 +1,31 @@
 import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import { createRegistryClient } from "../client";
 import type { RegistryTransport } from "../client";
 import { CliError } from "../../runner/errors";
+
+const loggerMock = vi.hoisted(() => ({
+  debug: vi.fn(),
+  error: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+}));
+
+vi.mock("../../logger", () => ({
+  createCliLogger: () => loggerMock,
+  errorFromUnknown: (value: unknown) =>
+    value instanceof Error ? value : new Error(String(value)),
+}));
 
 // Smoke-level test that wires the client end-to-end against a fake
 // transport so we can assert manifest parsing, version resolution,
@@ -18,11 +39,18 @@ beforeAll(() => {
   tmpRoot = mkdtempSync(join(tmpdir(), "traycer-registry-client-"));
 });
 
+beforeEach(() => {
+  loggerMock.debug.mockClear();
+  loggerMock.error.mockClear();
+  loggerMock.info.mockClear();
+  loggerMock.warn.mockClear();
+});
+
 afterAll(() => {
   rmSync(tmpRoot, { recursive: true, force: true });
 });
 
-const MANIFEST_BODY = JSON.stringify({
+const MANIFEST_DATA = {
   schemaVersion: 1,
   generatedAt: "2026-05-15T12:00:00Z",
   latest: "1.5.0",
@@ -78,7 +106,9 @@ const MANIFEST_BODY = JSON.stringify({
       },
     },
   ],
-});
+};
+
+const MANIFEST_BODY = JSON.stringify(MANIFEST_DATA);
 
 function fakeTransport(): RegistryTransport {
   return {
@@ -100,7 +130,8 @@ function fakeTransport(): RegistryTransport {
 describe("registry client", () => {
   it("fetches and parses the manifest", async () => {
     const client = await createRegistryClient({
-      environment: "production",      transport: fakeTransport(),
+      environment: "production",
+      transport: fakeTransport(),
       requireTrustedKeys: false,
     });
     const manifest = await client.fetchManifest();
@@ -108,19 +139,50 @@ describe("registry client", () => {
     expect(manifest.versions).toHaveLength(2);
   });
 
-  it("resolves 'latest' to the manifest's latest version", async () => {
+  it("logs manifest parse warnings while returning the usable manifest", async () => {
+    const manifestWithDupe = {
+      ...MANIFEST_DATA,
+      versions: [...MANIFEST_DATA.versions, MANIFEST_DATA.versions[0]],
+    };
     const client = await createRegistryClient({
-      environment: "production",      transport: fakeTransport(),
+      environment: "production",
+      transport: {
+        fetchText: async () => JSON.stringify(manifestWithDupe),
+        downloadToFile: async () => ({ downloadedBytes: 0, sha256: "" }),
+      },
       requireTrustedKeys: false,
     });
-    const { entry, asset } = await client.resolveAsset("latest", "darwin-arm64");
+
+    const parsed = await client.fetchManifest();
+
+    expect(parsed.versions).toHaveLength(2);
+    expect(loggerMock.warn).toHaveBeenCalledWith(
+      "Registry manifest entry skipped",
+      expect.objectContaining({
+        entryIndex: 2,
+        warning: expect.stringContaining("duplicate version entry"),
+      }),
+    );
+  });
+
+  it("resolves 'latest' to the manifest's latest version", async () => {
+    const client = await createRegistryClient({
+      environment: "production",
+      transport: fakeTransport(),
+      requireTrustedKeys: false,
+    });
+    const { entry, asset } = await client.resolveAsset(
+      "latest",
+      "darwin-arm64",
+    );
     expect(entry.version).toBe("1.5.0");
     expect(asset.available).toBe(true);
   });
 
   it("refuses to resolve a yanked version", async () => {
     const client = await createRegistryClient({
-      environment: "production",      transport: fakeTransport(),
+      environment: "production",
+      transport: fakeTransport(),
       requireTrustedKeys: false,
     });
     await expect(client.resolveAsset("1.4.0", "darwin-arm64")).rejects.toThrow(
@@ -130,7 +192,8 @@ describe("registry client", () => {
 
   it("refuses to resolve a platform marked unavailable", async () => {
     const client = await createRegistryClient({
-      environment: "production",      transport: fakeTransport(),
+      environment: "production",
+      transport: fakeTransport(),
       requireTrustedKeys: false,
     });
     await expect(client.resolveAsset("latest", "linux-x64")).rejects.toThrow(
@@ -140,7 +203,8 @@ describe("registry client", () => {
 
   it("surfaces unknown version as REGISTRY_VERSION_NOT_FOUND", async () => {
     const client = await createRegistryClient({
-      environment: "production",      transport: fakeTransport(),
+      environment: "production",
+      transport: fakeTransport(),
       requireTrustedKeys: false,
     });
     let caught: unknown = null;
@@ -157,7 +221,8 @@ describe("registry client", () => {
 
   it("surfaces JSON parse errors as REGISTRY_UNAVAILABLE", async () => {
     const client = await createRegistryClient({
-      environment: "production",      transport: {
+      environment: "production",
+      transport: {
         fetchText: async () => "{ not valid json",
         downloadToFile: async () => ({ downloadedBytes: 0, sha256: "" }),
       },
@@ -177,10 +242,14 @@ describe("registry client", () => {
 
   it("does not lose a destination archive on a happy-path download", async () => {
     const client = await createRegistryClient({
-      environment: "production",      transport: fakeTransport(),
+      environment: "production",
+      transport: fakeTransport(),
       requireTrustedKeys: false,
     });
-    const { entry, asset } = await client.resolveAsset("latest", "darwin-arm64");
+    const { entry, asset } = await client.resolveAsset(
+      "latest",
+      "darwin-arm64",
+    );
     let receivedProgress = false;
     // downloadAndVerify also runs minisign verify against the URL we
     // never actually serve - we expect it to fail at the signature

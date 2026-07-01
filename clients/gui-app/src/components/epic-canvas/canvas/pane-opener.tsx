@@ -29,6 +29,7 @@ import {
 } from "@/components/command-palette/palette-cmdk";
 import {
   paletteFilter,
+  handlePalettePageNavigation,
   usePaletteController,
   usePaletteScrollReset,
 } from "@/components/command-palette/palette-cmdk-controller";
@@ -89,34 +90,6 @@ export function PaneOpener(props: PaneOpenerProps) {
   // first match in view by snapping the scroll container back to the top.
   const { listRef, handleQueryChange } = usePaletteScrollReset(setQuery);
 
-  // cmdk only navigates by ArrowUp/Down/Home/End. Page Up/Down jump a viewport:
-  // we find the target row in the DOM and select it with a single `pointermove`
-  // (cmdk selects an item on pointer-move), then scroll it into view. A loop of
-  // synthetic arrow keys does NOT work - cmdk derives "next" from the
-  // not-yet-committed selection, so every key in one tick lands on the same row.
-  const pageMove = (direction: "up" | "down") => {
-    const list = listRef.current;
-    if (list === null) return;
-    const items = Array.from(
-      list.querySelectorAll<HTMLElement>('[data-slot="command-item"]'),
-    );
-    if (items.length === 0) return;
-    const rowHeight = items[0].offsetHeight || 36;
-    const pageSize = Math.max(1, Math.floor(list.clientHeight / rowHeight) - 1);
-    const selectedIndex = items.findIndex(
-      (el) => el.getAttribute("data-selected") === "true",
-    );
-    // When nothing is selected yet, anchor just outside the list so the first
-    // page lands on the first/last row.
-    const unselectedAnchor = direction === "down" ? -1 : items.length;
-    const from = selectedIndex === -1 ? unselectedAnchor : selectedIndex;
-    const delta = direction === "down" ? pageSize : -pageSize;
-    const targetIndex = Math.min(items.length - 1, Math.max(0, from + delta));
-    const target = items[targetIndex];
-    target.dispatchEvent(new PointerEvent("pointermove", { bubbles: true }));
-    target.scrollIntoView({ block: "nearest" });
-  };
-
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     // Escape backs out of a sub-page; at the root it does nothing (the pane
     // stays empty/open, still a drop target).
@@ -126,10 +99,7 @@ export function PaneOpener(props: PaneOpenerProps) {
       popSubpage();
       return;
     }
-    if (event.key === "PageDown" || event.key === "PageUp") {
-      event.preventDefault();
-      pageMove(event.key === "PageDown" ? "down" : "up");
-    }
+    handlePalettePageNavigation(event, listRef);
   };
 
   return (

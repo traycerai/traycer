@@ -137,6 +137,13 @@ export const parsedTaskTodoSchema = z.object({
 });
 export type ParsedTaskTodoPersisted = z.infer<typeof parsedTaskTodoSchema>;
 
+export const backgroundTaskOutputSchema = z.object({
+  stdout: z.string(),
+  stderr: z.string(),
+  truncated: z.boolean(),
+});
+export type BackgroundTaskOutput = z.infer<typeof backgroundTaskOutputSchema>;
+
 export const toolCallBlockSchema = z.object({
   ...baseBlockFields,
   status: actionBlockStatus,
@@ -163,6 +170,40 @@ export const toolCallBlockSchema = z.object({
   // never an append-log). Shown by the GUI only while `status === "streaming"`.
   // Nullable + defaulted so blocks persisted before this field parse cleanly.
   progress: z.string().nullable().default(null),
+  // Capped terminal output for a backgrounded command/monitor, populated from
+  // the SDK's terminal task notification when available. Completion-only by
+  // design: this is not a persisted streaming stdout log.
+  backgroundOutput: backgroundTaskOutputSchema.nullable().default(null),
+  // Wall-clock start of the call. Immutable across progress/completion - unlike
+  // `timestamp`, which becomes the completion time once the block finalizes - so
+  // background command/Monitor cards can preserve their final elapsed duration.
+  // Nullable for blocks persisted before this field existed.
+  startedAt: z.number().nullable().default(null),
+  // Wall-clock end of the call once a real terminal event arrives. Kept
+  // separate from `timestamp` so background command/Monitor duration is always
+  // derived from explicit task timing, not from whichever lifecycle event last
+  // touched the block. Nullable/defaulted for persisted blocks from older
+  // protocol versions.
+  endedAt: z.number().nullable().default(null),
+  // Persistent marker: true once this tool_call is identified as a backgrounded
+  // command/Monitor (stamped at started time from `run_in_background` / the
+  // Monitor tool, and reinforced by the terminal task notification). Unlike the
+  // transient host `backgroundItems` list (removed at completion) or
+  // `backgroundOutput` (only set on some terminal paths), this survives EVERY
+  // terminal path and reload - so the GUI keeps rendering it as a standalone
+  // background card after it completes/stops/errors instead of collapsing into
+  // the generic activity group. `null` means "not yet known" (the classifier
+  // hasn't seen enough of the streamed input to tell) - distinct from a
+  // confirmed `false`, so a brief mid-stream gap is never misrendered as a
+  // definitive "not background." Defaulted to `false` (not `null`) for blocks
+  // persisted before this field existed, since backgrounding didn't exist as a
+  // concept then.
+  backgroundTask: z.boolean().nullable().default(false),
+  // Set alongside `status: "errored"` when the terminal outcome was an
+  // explicit stop (deadline-killed Monitor, user-stopped command) rather than
+  // a genuine failure. `status` itself is unchanged - this only adds the
+  // finer distinction. Defaulted so pre-existing blocks parse cleanly.
+  stopped: z.boolean().default(false),
 });
 export type ToolCallBlock = z.infer<typeof toolCallBlockSchema>;
 
@@ -252,6 +293,11 @@ export const subAgentBlockSchema = z.object({
   // `task` part) and therefore emit no separate tool call. Defaulted so blocks
   // persisted before this field parse cleanly.
   spawnToolCallId: z.string().nullable().default(null),
+  // Set alongside `status: "errored"` when the subagent's terminal outcome
+  // was an explicit stop rather than a genuine failure - mirrors
+  // `toolCallBlockSchema.stopped`. Defaulted so pre-existing blocks parse
+  // cleanly.
+  stopped: z.boolean().default(false),
 });
 export type SubAgentBlock = z.infer<typeof subAgentBlockSchema>;
 
@@ -369,6 +415,50 @@ export const compactionBlockSchema = z.object({
   error: z.string().nullable(),
 });
 export type CompactionBlock = z.infer<typeof compactionBlockSchema>;
+
+export const autonomousResumeOutputFileSchema = z.object({
+  workspacePath: z.string(),
+  filePath: z.string(),
+});
+export type AutonomousResumeOutputFile = z.infer<
+  typeof autonomousResumeOutputFileSchema
+>;
+
+// One background task whose terminal settle contributed to waking the agent
+// into an autonomous (no-user-message) turn. `kind` mirrors the live
+// BackgroundItem vocabulary, while `status` is the terminal outcome; `title` is
+// the same human label; `summary` is the task notification's summary / a short
+// result line. `blockId` is the
+// originating card's block id (the spawning tool_call / subagent block) so the
+// resume marker can scroll back to it; defaulted for back-compat with any
+// trigger persisted before this field existed (renders as non-clickable).
+// `outputFile` points at an SDK task output file using the existing
+// workspace.readFile address shape; the GUI lazy-fetches it only on expand.
+export const autonomousResumeTriggerSchema = z.object({
+  kind: z.enum(["command", "monitor", "subagent"]),
+  title: z.string(),
+  status: z.enum(["completed", "failed", "stopped"]),
+  summary: z.string(),
+  blockId: z.string().default(""),
+  outputFile: autonomousResumeOutputFileSchema.nullable().default(null),
+});
+export type AutonomousResumeTrigger = z.infer<
+  typeof autonomousResumeTriggerSchema
+>;
+
+// Compaction-style divider at the HEAD of an autonomous turn, explaining why
+// the turn resumed (which backgrounded command/Monitor/subagent completed). The
+// turn carries no user message, so without this the resume looks abrupt. Usually
+// one trigger; can be several if multiple settled while idle before the model
+// woke. This block is surfaced through `chat.subscribe@1.1`; older 1.0 stream
+// peers must upgrade instead of receiving an unknown discriminated-union
+// variant they cannot parse.
+export const autonomousResumeBlockSchema = z.object({
+  ...baseBlockFields,
+  type: z.literal("autonomous_resume"),
+  triggers: z.array(autonomousResumeTriggerSchema),
+});
+export type AutonomousResumeBlock = z.infer<typeof autonomousResumeBlockSchema>;
 
 export const steerBlockSchema = z.object({
   ...baseBlockFields,
@@ -494,6 +584,7 @@ export const contentBlockSchema = z.discriminatedUnion("type", [
   planBlockSchema,
   errorBlockSchema,
   compactionBlockSchema,
+  autonomousResumeBlockSchema,
   steerBlockSchema,
   interviewBlockSchema,
   artifactOperationBlockSchema,

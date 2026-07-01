@@ -1,7 +1,4 @@
-import {
-  installHost,
-  type InstallSourceArg,
-} from "../installer";
+import { installHost, type InstallSourceArg } from "../installer";
 import type { CommandFn, CommandResult } from "../runner/runner";
 import { formatServiceLifecycleWarning } from "../service";
 import { createServiceInstallLifecycle } from "../service/install-lifecycle";
@@ -43,7 +40,8 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
     ctx.runtime.logger.info("Host install command started", {
       environment: ctx.runtime.environment,
       sourceKind: args.fromPath !== null ? "local-file" : "registry",
-      versionRequest: args.fromPath !== null ? "local-file" : args.versionRequest,
+      versionRequest:
+        args.fromPath !== null ? "local-file" : args.versionRequest,
       enableLinger: args.enableLinger,
       allowSelfInvocation: args.allowSelfInvocation,
     });

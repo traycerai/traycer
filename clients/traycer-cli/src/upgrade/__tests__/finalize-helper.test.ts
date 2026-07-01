@@ -277,10 +277,10 @@ describe("scheduleFinalizationHelper", () => {
 
 describe("reconcilePostFinalizeMarker", () => {
   it("returns no-marker when the file is absent", async () => {
-    const { reconcilePostFinalizeMarker } = await import(
-      "../finalize-helper"
-    );
-    const outcome = await reconcilePostFinalizeMarker({ environment: "production" });
+    const { reconcilePostFinalizeMarker } = await import("../finalize-helper");
+    const outcome = await reconcilePostFinalizeMarker({
+      environment: "production",
+    });
     expect(outcome).toEqual({ status: "no-marker" });
   });
 
@@ -310,10 +310,10 @@ describe("reconcilePostFinalizeMarker", () => {
       }),
     );
 
-    const { reconcilePostFinalizeMarker } = await import(
-      "../finalize-helper"
-    );
-    const outcome = await reconcilePostFinalizeMarker({ environment: "production" });
+    const { reconcilePostFinalizeMarker } = await import("../finalize-helper");
+    const outcome = await reconcilePostFinalizeMarker({
+      environment: "production",
+    });
     expect(outcome.status).toBe("applied-swapped");
     if (outcome.status === "applied-swapped") {
       expect(outcome.previousVersion).toBe("1.4.0");
@@ -350,10 +350,10 @@ describe("reconcilePostFinalizeMarker", () => {
       }),
     );
 
-    const { reconcilePostFinalizeMarker } = await import(
-      "../finalize-helper"
-    );
-    const outcome = await reconcilePostFinalizeMarker({ environment: "production" });
+    const { reconcilePostFinalizeMarker } = await import("../finalize-helper");
+    const outcome = await reconcilePostFinalizeMarker({
+      environment: "production",
+    });
     expect(outcome.status).toBe("applied-swap-failed");
     if (outcome.status === "applied-swap-failed") {
       expect(outcome.errorMessage).toContain("Access denied");
@@ -390,10 +390,10 @@ describe("reconcilePostFinalizeMarker", () => {
       }),
     );
 
-    const { reconcilePostFinalizeMarker } = await import(
-      "../finalize-helper"
-    );
-    const outcome = await reconcilePostFinalizeMarker({ environment: "production" });
+    const { reconcilePostFinalizeMarker } = await import("../finalize-helper");
+    const outcome = await reconcilePostFinalizeMarker({
+      environment: "production",
+    });
     expect(outcome.status).toBe("applied-parent-still-alive");
     expect(existsSync(markerPath)).toBe(false);
     const reread = JSON.parse(readFileSync(manifestPath, "utf8"));
@@ -415,10 +415,10 @@ describe("reconcilePostFinalizeMarker", () => {
     const markerPath = join(workHome, ".traycer", "cli", "post-finalize.json");
     writeFileSync(markerPath, "{ malformed json :::");
 
-    const { reconcilePostFinalizeMarker } = await import(
-      "../finalize-helper"
-    );
-    const outcome = await reconcilePostFinalizeMarker({ environment: "production" });
+    const { reconcilePostFinalizeMarker } = await import("../finalize-helper");
+    const outcome = await reconcilePostFinalizeMarker({
+      environment: "production",
+    });
     expect(outcome.status).toBe("marker-invalid");
     expect(existsSync(markerPath)).toBe(false);
   });
@@ -450,10 +450,10 @@ describe("reconcilePostFinalizeMarker", () => {
       }),
     );
 
-    const { reconcilePostFinalizeMarker } = await import(
-      "../finalize-helper"
-    );
-    const outcome = await reconcilePostFinalizeMarker({ environment: "production" });
+    const { reconcilePostFinalizeMarker } = await import("../finalize-helper");
+    const outcome = await reconcilePostFinalizeMarker({
+      environment: "production",
+    });
     // No pendingUpgrade to clear, but the marker is still consumed so
     // we don't re-apply it next cycle.
     expect(outcome.status).toBe("applied-swapped");

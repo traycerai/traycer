@@ -41,6 +41,9 @@ import {
   type SettingsSectionId,
 } from "@/lib/settings-sections";
 
+const GROUP_EDITOR_FOCUS_TARGET_SELECTOR =
+  "[data-composer-editor], [data-artifact-editor]";
+
 // ---------------------------------------------------------------------------
 // Narrow router adapter - decouples dispatch from `@tanstack/react-router`'s
 // full `AppRouter` type so tests can supply a tiny fake without reaching for
@@ -137,11 +140,9 @@ export interface DigitActionMatch {
   readonly digit: number;
   readonly run: () => boolean;
   readonly dispatchSequence:
-    | ((digits: ReadonlyArray<number>) => boolean)
-    | null;
+    ((digits: ReadonlyArray<number>) => boolean) | null;
   readonly sequenceState:
-    | ((digits: ReadonlyArray<number>) => LeaderDigitSequenceState)
-    | null;
+    ((digits: ReadonlyArray<number>) => LeaderDigitSequenceState) | null;
 }
 
 export function matchDigitAction(
@@ -616,26 +617,37 @@ function focusGroupInDirection(
   const nextId = findNeighbor(active, rects, dir);
   if (nextId === null) return false;
   useEpicCanvasStore.getState().setActiveTilePane(tab.tabId, nextId);
+  focusGroupEditor(nextId);
+  return true;
+}
+
+function focusGroupEditor(groupId: string): boolean {
+  if (typeof document === "undefined") return false;
+  const group = document.querySelector<HTMLElement>(groupIdSelector(groupId));
+  const editor = group?.querySelector<HTMLElement>(
+    GROUP_EDITOR_FOCUS_TARGET_SELECTOR,
+  );
+  if (editor === undefined || editor === null) return false;
+  editor.focus({ preventScroll: true });
   return true;
 }
 
 function focusActiveGroupEditor(router: KeybindingRouter): boolean {
-  if (typeof document === "undefined") return false;
   const tab = getActiveTab(router);
   if (tab !== null) {
     const target = getActiveGroupAndTab(tab.tabId);
-    if (target !== null) {
-      const group = document.querySelector<HTMLElement>(
-        `[data-group-id="${CSS.escape(target.groupId)}"]`,
-      );
-      const editor = group?.querySelector<HTMLElement>(
-        "[data-composer-editor]",
-      );
-      if (editor) {
-        editor.focus();
-        return true;
-      }
-    }
+    if (target !== null && focusGroupEditor(target.groupId)) return true;
   }
   return focusActiveComposer();
+}
+
+function groupIdSelector(groupId: string): string {
+  return `[data-group-id="${escapeAttributeSelectorValue(groupId)}"]`;
+}
+
+function escapeAttributeSelectorValue(value: string): string {
+  if (typeof CSS !== "undefined" && typeof CSS.escape === "function") {
+    return CSS.escape(value);
+  }
+  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }

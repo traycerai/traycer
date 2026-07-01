@@ -139,6 +139,7 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
     lease,
     store: cliBearerStore,
     clearOnReject: false,
+    delay: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   });
 
   // The shared client reads `endpoint()` on every (re)connect, so a poller that
@@ -147,7 +148,9 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
   // are serialized (no out-of-order clobber) and a good endpoint is never
   // overwritten with `null` (a momentarily-absent pid file keeps the last-known
   // URL; dials simply retry until a fresh one appears).
-  const endpointResolutionLogState: EndpointResolutionLogState = { value: null };
+  const endpointResolutionLogState: EndpointResolutionLogState = {
+    value: null,
+  };
   let endpoint = await tryResolveStreamEndpoint(
     logger,
     endpointResolutionLogState,
@@ -233,7 +236,12 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
     epicId,
   });
   try {
-    await runInboxSubscription(client, revalidator, { agentId, epicId }, logger);
+    await runInboxSubscription(
+      client,
+      revalidator,
+      { agentId, epicId },
+      logger,
+    );
   } finally {
     refreshScheduler.stop();
     clearInterval(poll);
@@ -508,10 +516,13 @@ async function tryResolveStreamEndpoint(
   }
   if (!isValidLocalHostWebsocketUrl(metadata.websocketUrl)) {
     logEndpointResolution(logState, `invalid:${metadata.hostId}`, () => {
-      logger.warn("Monitor endpoint metadata advertised invalid websocket URL", {
-        environment: config.environment,
-        hostId: metadata.hostId,
-      });
+      logger.warn(
+        "Monitor endpoint metadata advertised invalid websocket URL",
+        {
+          environment: config.environment,
+          hostId: metadata.hostId,
+        },
+      );
     });
     return null;
   }

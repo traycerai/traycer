@@ -15,6 +15,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { deriveToolInputSummary } from "@/lib/segment-summary";
 import type { ChatApprovalState } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { RuntimeApprovalDecision } from "@traycer/protocol/host/agent/gui/agent-runtime";
 
@@ -127,6 +128,13 @@ function ApprovalRow(props: ApprovalRowProps) {
   // Demoted to muted context once a concrete command is shown above it.
   const description =
     approval.description.length > 0 ? approval.description : null;
+  // Concise "what" derived from the tool input (path, url, …) for non-command
+  // tools, where the host resolves no command preview. Used as the last-resort
+  // line so such approvals still say what they act on.
+  const inputSummary =
+    commandPreview === null
+      ? deriveToolInputSummary(approval.toolName, approval.input)
+      : null;
   // "Always allow" is offered only when the host attached concrete rule(s) it
   // would save (`suggestedRules`): command tools whose every segment tokenizes
   // safely. Non-command tools and un-tokenizable/chained-unsafe commands send an
@@ -161,7 +169,14 @@ function ApprovalRow(props: ApprovalRowProps) {
           </code>
         </div>
       ) : null}
-      {commandPreview === null && description === null ? (
+      {commandPreview === null && inputSummary !== null ? (
+        <p className="m-0 font-mono text-code-sm break-words text-muted-foreground">
+          {inputSummary}
+        </p>
+      ) : null}
+      {commandPreview === null &&
+      description === null &&
+      inputSummary === null ? (
         <p className="m-0 text-xs text-foreground/85">{approval.toolName}</p>
       ) : null}
       <div className="flex flex-wrap items-center justify-end gap-2 mt-1">

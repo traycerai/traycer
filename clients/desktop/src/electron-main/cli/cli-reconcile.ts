@@ -17,12 +17,7 @@ import {
 import { log } from "../app/logger";
 
 type PackageManagerSource =
-  | "homebrew"
-  | "npm"
-  | "winget"
-  | "scoop"
-  | "apt"
-  | "rpm";
+  "homebrew" | "npm" | "winget" | "scoop" | "apt" | "rpm";
 
 /**
  * Launch-time CLI reconciliation (Core Flow 2, "newest-wins"):

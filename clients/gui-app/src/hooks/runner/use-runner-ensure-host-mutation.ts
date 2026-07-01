@@ -12,9 +12,8 @@ import { runnerMutationKeys, runnerQueryKeys } from "@/lib/query-keys";
 
 export interface EnsureHostVariables {
   readonly onProgress: ((event: HostProgressEvent) => void) | null;
-  // `true` = the user's "Force restart" (skip the busy check and restart a
-  // running host unconditionally). Normal provisioning and "Retry restart"
-  // pass `false`.
+  // `true` = update the host even when a running host would normally be kept
+  // because it has active work. Normal provisioning passes `false`.
   readonly force: boolean;
 }
 

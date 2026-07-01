@@ -42,9 +42,7 @@ export interface CliMarkSourceArgs {
   readonly version: string;
 }
 
-export function buildCliMarkSourceCommand(
-  args: CliMarkSourceArgs,
-): CommandFn {
+export function buildCliMarkSourceCommand(args: CliMarkSourceArgs): CommandFn {
   return async (ctx): Promise<CommandResult> => {
     const source = parsePmHookSource(args.source);
     ctx.runtime.logger.info("CLI mark-source command started", {
@@ -113,11 +111,14 @@ export async function writeMarkSource(opts: {
     hasVersion: opts.version.length > 0,
   });
   if (!VALID_CLI_INSTALL_SOURCES.has(opts.source)) {
-    opts.ctx.runtime.logger.warn("CLI install source write rejected invalid source", {
-      environment: opts.ctx.runtime.environment,
-      reason: opts.reason,
-      source: opts.source,
-    });
+    opts.ctx.runtime.logger.warn(
+      "CLI install source write rejected invalid source",
+      {
+        environment: opts.ctx.runtime.environment,
+        reason: opts.reason,
+        source: opts.source,
+      },
+    );
     throw cliError({
       code: CLI_ERROR_CODES.INVALID_ARGUMENT,
       message: `${opts.reason}: invalid source '${opts.source}'`,
@@ -130,12 +131,15 @@ export async function writeMarkSource(opts: {
     binaryStat = await stat(opts.binaryPath);
   } catch (err) {
     const error = errorFromUnknown(err);
-    opts.ctx.runtime.logger.warn("CLI install source write binary path missing", {
-      environment: opts.ctx.runtime.environment,
-      reason: opts.reason,
-      errorName: error.name,
-      errorCode: readErrorCode(err),
-    });
+    opts.ctx.runtime.logger.warn(
+      "CLI install source write binary path missing",
+      {
+        environment: opts.ctx.runtime.environment,
+        reason: opts.reason,
+        errorName: error.name,
+        errorCode: readErrorCode(err),
+      },
+    );
     throw cliError({
       code: CLI_ERROR_CODES.INVALID_ARGUMENT,
       message: `${opts.reason}: binary path does not exist: ${opts.binaryPath}`,
@@ -144,10 +148,13 @@ export async function writeMarkSource(opts: {
     });
   }
   if (!binaryStat.isFile()) {
-    opts.ctx.runtime.logger.warn("CLI install source write rejected non-file binary path", {
-      environment: opts.ctx.runtime.environment,
-      reason: opts.reason,
-    });
+    opts.ctx.runtime.logger.warn(
+      "CLI install source write rejected non-file binary path",
+      {
+        environment: opts.ctx.runtime.environment,
+        reason: opts.reason,
+      },
+    );
     throw cliError({
       code: CLI_ERROR_CODES.INVALID_ARGUMENT,
       message: `${opts.reason}: binary path is not a regular file: ${opts.binaryPath}`,
@@ -156,10 +163,13 @@ export async function writeMarkSource(opts: {
     });
   }
   if (opts.version.length === 0) {
-    opts.ctx.runtime.logger.warn("CLI install source write rejected empty version", {
-      environment: opts.ctx.runtime.environment,
-      reason: opts.reason,
-    });
+    opts.ctx.runtime.logger.warn(
+      "CLI install source write rejected empty version",
+      {
+        environment: opts.ctx.runtime.environment,
+        reason: opts.reason,
+      },
+    );
     throw cliError({
       code: CLI_ERROR_CODES.INVALID_ARGUMENT,
       message: `${opts.reason}: --installed-version is required and must be non-empty`,
@@ -176,12 +186,15 @@ export async function writeMarkSource(opts: {
     },
     async () => {
       const previous = await readCliManifest(opts.ctx.runtime.environment);
-      opts.ctx.runtime.logger.debug("CLI install source write read previous manifest", {
-        environment: opts.ctx.runtime.environment,
-        reason: opts.reason,
-        hadPreviousManifest: previous !== null,
-        previousSource: previous?.source ?? null,
-      });
+      opts.ctx.runtime.logger.debug(
+        "CLI install source write read previous manifest",
+        {
+          environment: opts.ctx.runtime.environment,
+          reason: opts.reason,
+          hadPreviousManifest: previous !== null,
+          previousSource: previous?.source ?? null,
+        },
+      );
       const next: CliInstallManifest = {
         version: opts.version,
         installedAt: new Date().toISOString(),

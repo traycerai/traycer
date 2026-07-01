@@ -219,6 +219,71 @@ describe("<HostSettingsPanel /> - mutation flows", () => {
       });
     });
   });
+
+  it("disables advanced install when the registry asset is unavailable", async () => {
+    const installHost = vi.fn(() =>
+      Promise.resolve(makeInstallResult("1.4.2")),
+    );
+    const availableVersions = vi.fn(() =>
+      Promise.resolve(makeUnavailableAvailableSnapshot()),
+    );
+    const { management } = makeManagement({
+      installHost,
+      availableVersions,
+      registryCheck: vi.fn(() =>
+        Promise.resolve<HostRegistryUpdateState>({
+          checkedAt: "2026-05-15T00:00:00Z",
+          latestVersion: "1.4.2",
+          installedVersion: null,
+          updateAvailable: false,
+          reachable: true,
+          errorMessage: null,
+        }),
+      ),
+    });
+
+    renderPanel(makeHost(management, null));
+
+    await openAdvancedDisclosure();
+    expect(
+      await screen.findByText("Build unavailable for this platform."),
+    ).toBeTruthy();
+    const installButton = screen.getByRole("button", { name: "Install" });
+    expect(installButton.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(installButton);
+    expect(installHost).not.toHaveBeenCalled();
+  });
+
+  it("uses the default advanced install reason for blank unavailable reasons", async () => {
+    const availableVersions = vi.fn(() =>
+      Promise.resolve(makeUnavailableAvailableSnapshotWithReason("   ")),
+    );
+    const { management } = makeManagement({
+      availableVersions,
+      registryCheck: vi.fn(() =>
+        Promise.resolve<HostRegistryUpdateState>({
+          checkedAt: "2026-05-15T00:00:00Z",
+          latestVersion: "1.4.2",
+          installedVersion: null,
+          updateAvailable: false,
+          reachable: true,
+          errorMessage: null,
+        }),
+      ),
+    });
+
+    renderPanel(makeHost(management, null));
+
+    await openAdvancedDisclosure();
+    expect(
+      await screen.findByText("Unavailable on this platform."),
+    ).toBeTruthy();
+    const installButton = screen.getByRole("button", { name: "Install" });
+    expect(installButton.hasAttribute("disabled")).toBe(true);
+    expect(installButton.getAttribute("title")).toBe(
+      "Unavailable on this platform.",
+    );
+  });
 });
 
 async function openAdvancedDisclosure(): Promise<void> {
@@ -348,6 +413,36 @@ function makeAvailableSnapshot(): HostAvailableSnapshot {
         platformAsset: {
           available: true,
           unavailableReason: null,
+          url: "",
+          sizeBytes: 1024,
+          sha256: "",
+          signatureUrl: "",
+          publicKeyId: "",
+        },
+      },
+    ],
+  };
+}
+
+function makeUnavailableAvailableSnapshot(): HostAvailableSnapshot {
+  return makeUnavailableAvailableSnapshotWithReason(
+    "Build unavailable for this platform.",
+  );
+}
+
+function makeUnavailableAvailableSnapshotWithReason(
+  unavailableReason: string | null,
+): HostAvailableSnapshot {
+  const base = makeAvailableSnapshot();
+  const entry = base.versions[0];
+  return {
+    ...base,
+    versions: [
+      {
+        ...entry,
+        platformAsset: {
+          available: false,
+          unavailableReason,
           url: "",
           sizeBytes: 1024,
           sha256: "",

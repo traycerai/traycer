@@ -31,10 +31,7 @@ const epicArtifactKindSchema = getRecordSchema(
 const HEX_COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
 
 export type EpicNodeKind =
-  | EpicArtifactKind
-  | "chat"
-  | "terminal-agent"
-  | "terminal";
+  EpicArtifactKind | "chat" | "terminal-agent" | "terminal";
 
 export const EPIC_NODE_KINDS: ReadonlyArray<EpicNodeKind> = [
   "chat",

@@ -19,6 +19,7 @@
   "scripts": {
     "traycer": "bun run src/index.ts",
     "compile": "tsc --noEmit",
+    "format": "bun x prettier --write .",
     "lint": "eslint . --cache --fix --max-warnings 0",
     "test": "vitest run --config vitest.config.ts",
     "build": "node scripts/build-cli-npm.cjs",
@@ -31,7 +32,7 @@
     "@sentry/node": "catalog:",
     "commander": "catalog:",
     "node-stream-zip": "catalog:",
-    "tar": "^7.5.16",
+    "tar": "^7.5.19",
     "zod": "catalog:"
   },
   "devDependencies": {
@@ -43,6 +44,7 @@
     "@typescript-eslint/parser": "catalog:",
     "esbuild": "catalog:",
     "eslint": "catalog:",
+    "prettier": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
   }

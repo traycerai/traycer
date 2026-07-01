@@ -65,7 +65,7 @@
     "dompurify": "catalog:",
     "fuse.js": "catalog:",
     "hast-util-sanitize": "catalog:",
-    "idb-keyval": "^6.2.5",
+    "idb-keyval": "^6.2.6",
     "lowlight": "catalog:",
     "lucide-react": "catalog:",
     "marked": "catalog:",

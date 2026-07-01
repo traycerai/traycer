@@ -56,14 +56,21 @@ describe("resolveHostAuth", () => {
 describe("cliBearerStore", () => {
   it("read returns the stored token, or null when absent", async () => {
     readMock.mockResolvedValueOnce(storedCreds);
-    expect(await cliBearerStore.read()).toEqual({ token: "stored-token", refreshToken: "stored-refresh" });
+    expect(await cliBearerStore.read()).toEqual({
+      token: "stored-token",
+      refreshToken: "stored-refresh",
+      userId: "u1",
+    });
     readMock.mockResolvedValueOnce(null);
     expect(await cliBearerStore.read()).toBeNull();
   });
 
   it("write merges the rotated token, preserving the advisory user + authnBaseUrl", async () => {
     readMock.mockResolvedValue(storedCreds);
-    await cliBearerStore.write({ token: "rotated", refreshToken: "rotated-refresh" });
+    await cliBearerStore.write({
+      token: "rotated",
+      refreshToken: "rotated-refresh",
+    });
     expect(writeMock).toHaveBeenCalledTimes(1);
     const written = writeMock.mock.calls[0][0];
     expect(written.token).toBe("rotated");
@@ -74,7 +81,10 @@ describe("cliBearerStore", () => {
 
   it("write is a no-op when the credentials file vanished mid-flight", async () => {
     readMock.mockResolvedValue(null);
-    await cliBearerStore.write({ token: "rotated", refreshToken: "rotated-refresh" });
+    await cliBearerStore.write({
+      token: "rotated",
+      refreshToken: "rotated-refresh",
+    });
     expect(writeMock).not.toHaveBeenCalled();
   });
 

@@ -2,10 +2,7 @@ import { readFile, rename, unlink, writeFile } from "node:fs/promises";
 import type { Environment } from "../runner/environment";
 import { createCliLogger, errorFromUnknown } from "../logger";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
-import {
-  hostInstallRecordPath,
-  ensureHostInstallDir,
-} from "../store/paths";
+import { hostInstallRecordPath, ensureHostInstallDir } from "../store/paths";
 
 // HostInstallRecord - the single authoritative record describing the
 // host currently installed at ~/.traycer/host[/dev]/install/. Written

@@ -52,6 +52,40 @@ const ORIGINAL_HOME = process.env.HOME;
 const ORIGINAL_USERPROFILE = process.env.USERPROFILE;
 let workHome: string;
 
+interface RegistryProbeFixture {
+  readonly manifest: RegistryManifestFixture;
+  readonly platformKey: string;
+  readonly manifestUrl: string;
+}
+
+interface RegistryManifestFixture {
+  readonly schemaVersion: 1;
+  readonly generatedAt: string;
+  readonly latest: string;
+  readonly versions: readonly RegistryVersionFixture[];
+}
+
+interface RegistryVersionFixture {
+  readonly version: string;
+  readonly releasedAt: string;
+  readonly releaseNotesUrl: string;
+  readonly yanked: boolean;
+  readonly deprecationReason: string | null;
+  readonly requiredCliVersion: string | null;
+  readonly platforms: Readonly<Record<string, RegistryPlatformAssetFixture>>;
+}
+
+interface RegistryPlatformAssetFixture {
+  readonly available: boolean;
+  readonly unavailableReason: string | null;
+  readonly url: string;
+  readonly sizeBytes: number;
+  readonly sha256: string;
+  readonly signatureUrl: string;
+  readonly signatureAlgorithm: "minisign";
+  readonly publicKeyId: string;
+}
+
 beforeEach(() => {
   workHome = mkdtempSync(join(tmpdir(), "traycer-registry-cache-"));
   process.env.HOME = workHome;
@@ -98,6 +132,88 @@ function writeCache(opts: {
   );
 }
 
+function registryProbeResult(
+  latest: string,
+  assetAvailable: boolean,
+  unavailableReason: string | null,
+): RegistryProbeFixture {
+  return {
+    manifest: {
+      schemaVersion: 1,
+      generatedAt: "2026-05-15T00:00:00Z",
+      latest,
+      versions: [registryVersion(latest, assetAvailable, unavailableReason)],
+    },
+    platformKey: "darwin-arm64",
+    manifestUrl: "https://example.invalid/versions.json",
+  };
+}
+
+function registryVersion(
+  version: string,
+  assetAvailable: boolean,
+  unavailableReason: string | null,
+): RegistryVersionFixture {
+  return {
+    version,
+    releasedAt: "2026-05-15T00:00:00Z",
+    releaseNotesUrl: "https://example.invalid/release-notes",
+    yanked: false,
+    deprecationReason: null,
+    requiredCliVersion: null,
+    platforms: {
+      "darwin-arm64": {
+        available: assetAvailable,
+        unavailableReason,
+        url: "https://example.invalid/host.tar.gz",
+        sizeBytes: 1024,
+        sha256: "abc",
+        signatureUrl: "https://example.invalid/host.tar.gz.minisig",
+        signatureAlgorithm: "minisign",
+        publicKeyId: "test-key",
+      },
+    },
+  };
+}
+
+function writeInstallRecord(
+  environment: "production" | "dev",
+  version: string,
+): void {
+  const dir =
+    environment === "dev"
+      ? join(workHome, ".traycer", "host", "dev", "install")
+      : join(workHome, ".traycer", "host", "install");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, "install.json"),
+    JSON.stringify({
+      version,
+      installedAt: "2026-05-15T00:00:00Z",
+      executablePath: `/tmp/traycer/${version}/host`,
+      source: { kind: "registry", value: version },
+      archiveSha256: "abc",
+      signatureKeyId: "test-key",
+      sizeBytes: 1024,
+      signatureVerifiedAt: "2026-05-15T00:00:00Z",
+      platform: "darwin",
+      arch: "arm64",
+    }),
+    "utf8",
+  );
+}
+
+function deferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+} {
+  let resolveValue: (value: T) => void = () => undefined;
+  const promise = new Promise<T>((resolve) => {
+    resolveValue = resolve;
+  });
+  return { promise, resolve: resolveValue };
+}
+
 // Pre-Ticket 398e84f4 cache layout. Used to assert that an upgraded
 // Desktop ignores the legacy unscoped file rather than projecting it
 // through as either environment's state.
@@ -125,16 +241,85 @@ describe("refreshRegistryUpdateState - launch-time probe", () => {
     expect(state.installedVersion).toBe("1.4.1");
   });
 
-  it("re-probes when force is true even with a fresh cache", async () => {
-    const probeSpy = vi.fn().mockResolvedValue({
-      manifest: {
-        generatedAt: "2026-05-15T00:00:00Z",
-        latest: "1.4.3",
-        versions: [],
-      },
-      platformKey: "darwin-arm64",
-      manifestUrl: "https://example.invalid/versions.json",
+  it("notifies registry update listeners when state is read from cache", async () => {
+    vi.doMock("../../cli/traycer-cli", () => ({
+      runTraycerCliJson: vi.fn(),
+      streamTraycerCliJson: vi.fn(),
+      TraycerCliError: class extends Error {},
+    }));
+    writeCache({
+      checkedAt: new Date().toISOString(),
+      latestVersion: "1.4.2",
+      installedVersion: "1.4.1",
+      reachable: true,
+      errorMessage: null,
     });
+    const { refreshRegistryUpdateState, onHostRegistryUpdateStateChange } =
+      await import("../host-management-ipc");
+    const listener = vi.fn();
+    const unsubscribe = onHostRegistryUpdateStateChange(listener);
+
+    await refreshRegistryUpdateState({ force: false });
+    unsubscribe();
+
+    expect(listener).toHaveBeenCalledWith(
+      expect.objectContaining({
+        latestVersion: "1.4.2",
+        installedVersion: "1.4.1",
+        updateAvailable: true,
+      }),
+    );
+  });
+
+  it("keeps refresh successful when a registry update listener throws", async () => {
+    vi.doMock("../../cli/traycer-cli", () => ({
+      runTraycerCliJson: vi.fn(),
+      streamTraycerCliJson: vi.fn(),
+      TraycerCliError: class extends Error {},
+    }));
+    writeCache({
+      checkedAt: new Date().toISOString(),
+      latestVersion: "1.4.2",
+      installedVersion: "1.4.1",
+      reachable: true,
+      errorMessage: null,
+    });
+    const { refreshRegistryUpdateState, onHostRegistryUpdateStateChange } =
+      await import("../host-management-ipc");
+    const throwingListener = vi.fn(() => {
+      throw new Error("listener failed");
+    });
+    const succeedingListener = vi.fn();
+    const unsubscribeThrowing =
+      onHostRegistryUpdateStateChange(throwingListener);
+    const unsubscribeSucceeding =
+      onHostRegistryUpdateStateChange(succeedingListener);
+
+    const state = await refreshRegistryUpdateState({ force: false });
+    unsubscribeThrowing();
+    unsubscribeSucceeding();
+
+    expect(state).toEqual(
+      expect.objectContaining({
+        latestVersion: "1.4.2",
+        installedVersion: "1.4.1",
+        updateAvailable: true,
+      }),
+    );
+    expect(throwingListener).toHaveBeenCalledOnce();
+    expect(succeedingListener).toHaveBeenCalledWith(
+      expect.objectContaining({
+        latestVersion: "1.4.2",
+        installedVersion: "1.4.1",
+        updateAvailable: true,
+      }),
+    );
+  });
+
+  it("re-probes when force is true even with a fresh cache", async () => {
+    const probeSpy = vi
+      .fn()
+      .mockResolvedValue(registryProbeResult("1.4.3", true, null));
     vi.doMock("../../cli/traycer-cli", () => ({
       runTraycerCliJson: probeSpy,
       streamTraycerCliJson: vi.fn(),
@@ -155,15 +340,9 @@ describe("refreshRegistryUpdateState - launch-time probe", () => {
   });
 
   it("re-probes when cache is stale (>= 24h)", async () => {
-    const probeSpy = vi.fn().mockResolvedValue({
-      manifest: {
-        generatedAt: "2026-05-15T00:00:00Z",
-        latest: "1.4.3",
-        versions: [],
-      },
-      platformKey: "darwin-arm64",
-      manifestUrl: "https://example.invalid/versions.json",
-    });
+    const probeSpy = vi
+      .fn()
+      .mockResolvedValue(registryProbeResult("1.4.3", true, null));
     vi.doMock("../../cli/traycer-cli", () => ({
       runTraycerCliJson: probeSpy,
       streamTraycerCliJson: vi.fn(),
@@ -183,6 +362,62 @@ describe("refreshRegistryUpdateState - launch-time probe", () => {
     const state = await refreshRegistryUpdateState({ force: false });
     expect(probeSpy).toHaveBeenCalledOnce();
     expect(state.latestVersion).toBe("1.4.3");
+  });
+
+  it("does not advertise latest when the platform asset is unavailable", async () => {
+    writeInstallRecord("production", "1.4.1");
+    const probeSpy = vi
+      .fn()
+      .mockResolvedValue(
+        registryProbeResult(
+          "1.4.3",
+          false,
+          "Build unavailable for this platform.",
+        ),
+      );
+    vi.doMock("../../cli/traycer-cli", () => ({
+      runTraycerCliJson: probeSpy,
+      streamTraycerCliJson: vi.fn(),
+      TraycerCliError: class extends Error {},
+    }));
+
+    const { refreshRegistryUpdateState } =
+      await import("../host-management-ipc");
+    const state = await refreshRegistryUpdateState({ force: true });
+
+    expect(state.latestVersion).toBeNull();
+    expect(state.installedVersion).toBe("1.4.1");
+    expect(state.updateAvailable).toBe(false);
+  });
+
+  it("serializes concurrent registry refreshes", async () => {
+    writeInstallRecord("production", "1.4.1");
+    const firstProbe = deferred<RegistryProbeFixture>();
+    const firstProbeStarted = deferred<void>();
+    const probeSpy = vi
+      .fn()
+      .mockImplementationOnce(() => {
+        firstProbeStarted.resolve(undefined);
+        return firstProbe.promise;
+      })
+      .mockResolvedValueOnce(registryProbeResult("1.4.2", true, null));
+    vi.doMock("../../cli/traycer-cli", () => ({
+      runTraycerCliJson: probeSpy,
+      streamTraycerCliJson: vi.fn(),
+      TraycerCliError: class extends Error {},
+    }));
+    const { refreshRegistryUpdateState } =
+      await import("../host-management-ipc");
+
+    const first = refreshRegistryUpdateState({ force: true });
+    await firstProbeStarted.promise;
+    const second = refreshRegistryUpdateState({ force: true });
+
+    expect(probeSpy).toHaveBeenCalledTimes(1);
+    firstProbe.resolve(registryProbeResult("1.4.2", true, null));
+    await first;
+    await second;
+    expect(probeSpy).toHaveBeenCalledTimes(2);
   });
 
   it("treats registry failures as non-blocking and records reachable=false", async () => {
@@ -294,15 +529,9 @@ describe("refreshRegistryUpdateState - launch-time probe", () => {
   });
 
   it("re-probes a fresh failed cache instead of replaying a stale error", async () => {
-    const probeSpy = vi.fn().mockResolvedValue({
-      manifest: {
-        generatedAt: "2026-05-15T00:00:00Z",
-        latest: "1.4.3",
-        versions: [],
-      },
-      platformKey: "darwin-arm64",
-      manifestUrl: "https://example.invalid/versions.json",
-    });
+    const probeSpy = vi
+      .fn()
+      .mockResolvedValue(registryProbeResult("1.4.3", true, null));
     vi.doMock("../../cli/traycer-cli", () => ({
       runTraycerCliJson: probeSpy,
       streamTraycerCliJson: vi.fn(),
@@ -397,15 +626,9 @@ describe("refreshRegistryUpdateState - environment-scoped cache", () => {
   });
 
   it("dev launch ignores stale prod cache and re-probes when no dev cache exists", async () => {
-    const probeSpy = vi.fn().mockResolvedValue({
-      manifest: {
-        generatedAt: "2026-05-15T00:00:00Z",
-        latest: "DEV-2.0.0",
-        versions: [],
-      },
-      platformKey: "darwin-arm64",
-      manifestUrl: "https://example.invalid/versions.json",
-    });
+    const probeSpy = vi
+      .fn()
+      .mockResolvedValue(registryProbeResult("DEV-2.0.0", true, null));
     vi.doMock("../../cli/traycer-cli", () => ({
       runTraycerCliJson: probeSpy,
       streamTraycerCliJson: vi.fn(),
@@ -439,15 +662,9 @@ describe("refreshRegistryUpdateState - environment-scoped cache", () => {
   });
 
   it("prod launch ignores stale dev cache and re-probes when no prod cache exists", async () => {
-    const probeSpy = vi.fn().mockResolvedValue({
-      manifest: {
-        generatedAt: "2026-05-15T00:00:00Z",
-        latest: "PROD-1.4.2",
-        versions: [],
-      },
-      platformKey: "darwin-arm64",
-      manifestUrl: "https://example.invalid/versions.json",
-    });
+    const probeSpy = vi
+      .fn()
+      .mockResolvedValue(registryProbeResult("PROD-1.4.2", true, null));
     vi.doMock("../../cli/traycer-cli", () => ({
       runTraycerCliJson: probeSpy,
       streamTraycerCliJson: vi.fn(),
@@ -476,15 +693,9 @@ describe("refreshRegistryUpdateState - environment-scoped cache", () => {
   });
 
   it("does not allow a environment-scoped file whose body claims the other environment to leak through (defence in depth)", async () => {
-    const probeSpy = vi.fn().mockResolvedValue({
-      manifest: {
-        generatedAt: "2026-05-15T00:00:00Z",
-        latest: "PROD-1.4.2",
-        versions: [],
-      },
-      platformKey: "darwin-arm64",
-      manifestUrl: "https://example.invalid/versions.json",
-    });
+    const probeSpy = vi
+      .fn()
+      .mockResolvedValue(registryProbeResult("PROD-1.4.2", true, null));
     vi.doMock("../../cli/traycer-cli", () => ({
       runTraycerCliJson: probeSpy,
       streamTraycerCliJson: vi.fn(),

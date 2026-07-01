@@ -316,7 +316,7 @@ export function FileChangeHeader(props: FileChangeHeaderProps) {
           className={undefined}
         />
       ) : null}
-      <SegmentEndStateBadge endState={endState} />
+      <SegmentEndStateBadge endState={endState} stopped={false} />
     </>
   );
 }

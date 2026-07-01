@@ -1,19 +1,7 @@
-import {
-  mkdirSync,
-  mkdtempSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  vi,
-} from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Doctor must emit a stable `CLI_UPGRADE_PENDING` issue whenever the
 // CLI install manifest has a non-null pendingUpgrade - Settings and
@@ -141,7 +129,10 @@ describe("runDoctor pending CLI upgrade surface", () => {
     });
 
     const { runDoctor } = await import("../engine");
-    const result = await runDoctor({ environment: "production", portConflictDeps: null });
+    const result = await runDoctor({
+      environment: "production",
+      portConflictDeps: null,
+    });
     const issue = result.issues.find((i) => i.code === "CLI_UPGRADE_PENDING");
     expect(issue).toBeDefined();
     expect(issue?.severity).toBe("warning");
@@ -170,7 +161,10 @@ describe("runDoctor pending CLI upgrade surface", () => {
     });
 
     const { runDoctor } = await import("../engine");
-    const result = await runDoctor({ environment: "production", portConflictDeps: null });
+    const result = await runDoctor({
+      environment: "production",
+      portConflictDeps: null,
+    });
     const issue = result.issues.find((i) => i.code === "CLI_UPGRADE_PENDING");
     expect(issue).toBeDefined();
     expect(issue?.severity).toBe("warning");
@@ -203,7 +197,10 @@ describe("runDoctor pending CLI upgrade surface", () => {
     );
 
     const { runDoctor } = await import("../engine");
-    const result = await runDoctor({ environment: "production", portConflictDeps: null });
+    const result = await runDoctor({
+      environment: "production",
+      portConflictDeps: null,
+    });
     expect(
       result.issues.find((i) => i.code === "CLI_UPGRADE_PENDING"),
     ).toBeUndefined();
@@ -214,7 +211,10 @@ describe("runDoctor pending CLI upgrade surface", () => {
     // No manifest file written - fresh install with no CLI upgrade
     // state at all.
     const { runDoctor } = await import("../engine");
-    const result = await runDoctor({ environment: "production", portConflictDeps: null });
+    const result = await runDoctor({
+      environment: "production",
+      portConflictDeps: null,
+    });
     expect(
       result.issues.find((i) => i.code === "CLI_UPGRADE_PENDING"),
     ).toBeUndefined();
@@ -252,7 +252,10 @@ describe("runDoctor pending CLI upgrade surface", () => {
     );
 
     const { runDoctor } = await import("../engine");
-    const result = await runDoctor({ environment: "production", portConflictDeps: null });
+    const result = await runDoctor({
+      environment: "production",
+      portConflictDeps: null,
+    });
     expect(
       result.issues.find((i) => i.code === "CLI_UPGRADE_PENDING"),
     ).toBeUndefined();
@@ -293,7 +296,10 @@ describe("runDoctor pending CLI upgrade surface", () => {
     );
 
     const { runDoctor } = await import("../engine");
-    const result = await runDoctor({ environment: "production", portConflictDeps: null });
+    const result = await runDoctor({
+      environment: "production",
+      portConflictDeps: null,
+    });
     const issue = result.issues.find((i) => i.code === "CLI_UPGRADE_PENDING");
     expect(issue).toBeDefined();
     expect(issue?.severity).toBe("warning");

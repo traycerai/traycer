@@ -10,11 +10,16 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
 import { LivePulse } from "@/components/ui/live-pulse";
 import { cn } from "@/lib/utils";
-import { TraycerMarkdown } from "@/markdown/traycer-markdown";
+import {
+  scopedChatOpenId,
+  useChatOpenStoreScope,
+} from "@/stores/chats/open-store-scope";
 import { useSubagentOpenStore } from "@/stores/chats/subagent-open-store";
+import { AgentReferenceMarkdown } from "./agent-reference-markdown";
 import { SubagentAvatar } from "./subagent-avatar";
 import { ElapsedTime } from "./segment-elapsed";
 import { SegmentCard } from "./segment-card";
+import { SegmentPanel } from "./segment-panel";
 import { SegmentRow } from "./segment-row";
 import { SegmentEndStateBadge } from "./segment-end-state-badge";
 import type { SegmentEndState } from "@/stores/composer/chat-store";
@@ -30,6 +35,10 @@ interface SubagentSegmentProps {
   // Terminal outcome when the turn ended mid-run (else null): drives a neutral
   // "stopped"/"superseded" badge instead of a spinner.
   endState: SegmentEndState;
+  // True when `status === "errored"` was an explicit stop rather than a
+  // genuine failure - mirrors ToolSegment.stopped. Drives the same neutral
+  // "stopped" badge in place of any destructive error treatment.
+  stopped: boolean;
   // Immutable spawn time for the live elapsed heartbeat (null when unknown).
   startedAt: number | null;
   // Total run duration once finished; null while streaming / when unknown.
@@ -66,15 +75,19 @@ function CompactSubagentSegment(props: CompactSubagentSegmentProps) {
     result,
     isStreaming,
     endState,
+    stopped,
     startedAt,
     durationMs,
     variant,
   } = props;
-  const open = useSubagentOpenStore((s) => s.openIds.has(id));
+  const openScope = useChatOpenStoreScope();
+  const open = useSubagentOpenStore((s) =>
+    s.openIds.has(scopedChatOpenId(openScope, id)),
+  );
   const setOpen = useSubagentOpenStore((s) => s.setOpen);
   const handleOpenChange = useCallback(
-    (newOpen: boolean) => setOpen(id, newOpen),
-    [id, setOpen],
+    (newOpen: boolean) => setOpen(openScope, id, newOpen),
+    [id, openScope, setOpen],
   );
   const displayProgressUpdates =
     useAdjacentDedupedProgressItems(progressUpdates);
@@ -120,7 +133,7 @@ function CompactSubagentSegment(props: CompactSubagentSegmentProps) {
         durationMs={durationMs}
         isStreaming={isStreaming}
       />
-      <SegmentEndStateBadge endState={endState} />
+      <SegmentEndStateBadge endState={endState} stopped={stopped} />
     </>
   );
 
@@ -154,21 +167,7 @@ function CompactSubagentSegment(props: CompactSubagentSegmentProps) {
         </div>
       ) : null}
       {result !== null ? (
-        <div className="flex flex-col gap-1">
-          <span className="select-none font-medium uppercase text-overline text-muted-foreground/80">
-            Result
-          </span>
-          <TraycerMarkdown
-            className={null}
-            proseSize="compact"
-            components={null}
-            remarkPlugins={null}
-            rehypePlugins={null}
-            isStreaming={isStreaming}
-          >
-            {result}
-          </TraycerMarkdown>
-        </div>
+        <SubagentResultPanel result={result} isStreaming={isStreaming} />
       ) : null}
     </div>
   );
@@ -215,14 +214,18 @@ function PromotedSubagentSegment(props: Omit<SubagentSegmentProps, "variant">) {
     result,
     isStreaming,
     endState,
+    stopped,
     startedAt,
     durationMs,
   } = props;
-  const open = useSubagentOpenStore((s) => s.openIds.has(id));
+  const openScope = useChatOpenStoreScope();
+  const open = useSubagentOpenStore((s) =>
+    s.openIds.has(scopedChatOpenId(openScope, id)),
+  );
   const setOpen = useSubagentOpenStore((s) => s.setOpen);
   const updateOpen = useCallback(
-    (newOpen: boolean) => setOpen(id, newOpen),
-    [id, setOpen],
+    (newOpen: boolean) => setOpen(openScope, id, newOpen),
+    [id, openScope, setOpen],
   );
   const handleOpenChange = useChatMeasuredOpenChange(updateOpen);
   const displayName = cleanSubagentNotificationText(name) ?? "Subagent";
@@ -255,6 +258,7 @@ function PromotedSubagentSegment(props: Omit<SubagentSegmentProps, "variant">) {
         showHeaderSummary={showHeaderSummary}
         isStreaming={isStreaming}
         endState={endState}
+        stopped={stopped}
         startedAt={startedAt}
         durationMs={durationMs}
         open={open}
@@ -286,6 +290,7 @@ interface PromotedSubagentTriggerProps {
   readonly showHeaderSummary: boolean;
   readonly isStreaming: boolean;
   readonly endState: SegmentEndState;
+  readonly stopped: boolean;
   readonly startedAt: number | null;
   readonly durationMs: number | null;
   readonly open: boolean;
@@ -303,6 +308,7 @@ function PromotedSubagentTrigger(props: PromotedSubagentTriggerProps) {
     open,
     showHeaderSummary,
     startedAt,
+    stopped,
   } = props;
   return (
     <CollapsibleTrigger
@@ -348,7 +354,7 @@ function PromotedSubagentTrigger(props: PromotedSubagentTriggerProps) {
                 className={undefined}
               />
             ) : null}
-            <SegmentEndStateBadge endState={endState} />
+            <SegmentEndStateBadge endState={endState} stopped={stopped} />
             <ChevronDown
               aria-hidden
               className={cn(
@@ -406,23 +412,33 @@ function SubagentDetails(props: SubagentDetailsProps) {
         </div>
       ) : null}
       {result !== null ? (
-        <div className="flex flex-col gap-1">
-          <span className="select-none font-medium uppercase text-overline text-muted-foreground/80">
-            Result
-          </span>
-          <TraycerMarkdown
-            className={null}
-            proseSize="compact"
-            components={null}
-            remarkPlugins={null}
-            rehypePlugins={null}
-            isStreaming={isStreaming}
-          >
-            {result}
-          </TraycerMarkdown>
-        </div>
+        <SubagentResultPanel result={result} isStreaming={isStreaming} />
       ) : null}
     </div>
+  );
+}
+
+function SubagentResultPanel(props: {
+  readonly result: string;
+  readonly isStreaming: boolean;
+}) {
+  const { isStreaming, result } = props;
+  return (
+    <SegmentPanel
+      label="Result"
+      copyValue={result}
+      tone="default"
+      bodyChrome="framed"
+      className={undefined}
+    >
+      <div className="px-3 py-2">
+        <AgentReferenceMarkdown
+          isStreaming={isStreaming}
+          markdown={result}
+          proseSize="compact"
+        />
+      </div>
+    </SegmentPanel>
   );
 }
 

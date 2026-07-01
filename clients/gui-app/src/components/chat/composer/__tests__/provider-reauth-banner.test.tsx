@@ -128,6 +128,7 @@ function claudeState(
     terminalAgentArgs: "",
     envOverrides: [],
     loginCapability,
+    availabilityPending: false,
   };
 }
 
@@ -151,6 +152,7 @@ function cursorState(): ProviderCliState {
     envOverrides: [],
     // API-key-only provider: no OAuth session to reconnect → no banner capability.
     loginCapability: null,
+    availabilityPending: false,
   };
 }
 
@@ -173,6 +175,7 @@ function droidState(): ProviderCliState {
     terminalAgentArgs: "",
     envOverrides: [],
     loginCapability: DROID_CAP,
+    availabilityPending: false,
   };
 }
 

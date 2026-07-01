@@ -1,7 +1,11 @@
-import type { VersionedStreamRpcRegistry } from "@traycer/protocol/framework/versioned-stream-rpc";
+import type {
+  SchemaVersion,
+  StreamMethodVersionRegistry,
+  VersionedStreamRpcRegistry,
+} from "@traycer/protocol/framework/versioned-stream-rpc";
 import {
   buildStreamManifest,
-  checkStreamCompatibility,
+  checkStreamMethodCompatibility,
 } from "@traycer/protocol/framework/stream-compat";
 import {
   extractBearerForOpenFrame,
@@ -82,7 +86,7 @@ export interface WsStreamClientOptions<
  *
  * Per-session lifecycle (mirrors the tech plan's decision #3 handshake):
  *   dial → send `open { token, manifest }` → await `openAck { manifest }`
- *        → run client-side `checkStreamCompatibility` mirror
+ *        → run client-side subscribed-method compatibility mirror
  *        → send `subscribe { method, schemaVersion, params }`
  *        → enter the bidirectional frame loop
  *        → ping/pong heartbeat every `pingIntervalMs`
@@ -678,11 +682,12 @@ class StreamSession<
     );
 
     const myManifest = buildStreamManifest(this.config.registry);
-    const compat = checkStreamCompatibility(
+    const compat = checkStreamMethodCompatibility(
       this.config.registry,
       myManifest,
       ackParse.data.manifest,
       "client",
+      this.config.method,
     );
 
     const socket = this.activeSocket;
@@ -708,11 +713,18 @@ class StreamSession<
       return;
     }
 
+    const prepared = prepareStreamSubscribeRequest(
+      this.config.registry,
+      this.config.method,
+      myManifest[this.config.method],
+      ackParse.data.manifest[this.config.method],
+      this.config.params,
+    );
     const subscribeFrame: ClientStreamSubscribeFrame = {
       kind: "subscribe",
       method: this.config.method,
-      schemaVersion: myManifest[this.config.method],
-      params: this.config.params,
+      schemaVersion: prepared.onWireVersion,
+      params: prepared.onWirePayload,
     };
     if (!this.sendControlText(socket, subscribeFrame)) {
       this.onSendFailure(socket);
@@ -1137,6 +1149,50 @@ class StreamSession<
     this.config.onDispose();
     return true;
   }
+}
+
+interface PreparedStreamSubscribeRequest {
+  readonly onWireVersion: SchemaVersion;
+  readonly onWirePayload: unknown;
+}
+
+/**
+ * Computes what the `subscribe` control frame should actually declare on the
+ * wire - the streaming analog of `ws-rpc-client.ts`'s `prepareRequestPayload`.
+ *
+ * `checkStreamMethodCompatibility` already proved `mine`/`theirs` are
+ * bridgeable before this runs. For a same-major minor skew that only ever
+ * means one thing: MY OWN registry carries a contract at the peer's exact
+ * (older) minor - that's what made `canBridgeStream()` return `true`. Per the
+ * framework's asymmetric contract, the older side never transforms, so the
+ * newer side is the one that must downgrade what it declares: sending my own
+ * canonical here would declare a minor the older peer's dispatch table has
+ * never heard of, even though the abstract compatibility check passed (this
+ * is what broke `chat.subscribe@1.1` against host-v1.0.0 - the compat check
+ * passed, but the client still declared `1.1`, which host-v1.0.0's registry
+ * has no contract for). Cross-major skew never reaches here: streams have no
+ * cross-major bridge, so `compat.ok` would already be `false`.
+ */
+function prepareStreamSubscribeRequest(
+  registry: VersionedStreamRpcRegistry,
+  method: string,
+  myCanonical: SchemaVersion,
+  theirCanonical: SchemaVersion,
+  params: unknown,
+): PreparedStreamSubscribeRequest {
+  if (
+    myCanonical.major !== theirCanonical.major ||
+    myCanonical.minor <= theirCanonical.minor
+  ) {
+    return { onWireVersion: myCanonical, onWirePayload: params };
+  }
+  const methodRegistry = registry[method] as StreamMethodVersionRegistry;
+  const olderLine = methodRegistry[myCanonical.major];
+  const olderEntry = olderLine.versions[theirCanonical.minor];
+  return {
+    onWireVersion: theirCanonical,
+    onWirePayload: olderEntry.contract.openRequestSchema.parse(params),
+  };
 }
 
 type SessionPhase = "idle" | "dialing" | "awaitingOpenAck" | "subscribed";

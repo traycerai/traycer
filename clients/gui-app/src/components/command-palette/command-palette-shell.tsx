@@ -16,7 +16,12 @@
  * (`>`, `#`, `@`, `?`). The input shows the raw query with the prefix visible;
  * a custom cmdk filter strips the prefix before substring matching.
  */
-import { useCallback, useMemo, type ComponentType } from "react";
+import {
+  useCallback,
+  useMemo,
+  type ComponentType,
+  type KeyboardEvent,
+} from "react";
 import {
   Command,
   CommandEmpty,
@@ -38,6 +43,7 @@ import { PinToggle } from "@/components/command-palette/pin-toggle";
 import { SubpageView } from "@/components/command-palette/palette-cmdk";
 import {
   buildCmdkValue,
+  handlePalettePageNavigation,
   paletteFilter,
   usePaletteController,
   usePaletteScrollReset,
@@ -114,6 +120,12 @@ export function CommandPaletteShell(props: CommandPaletteShellProps) {
   // auto-selected first match stays in view instead of cmdk's scroll landing
   // off-target.
   const { listRef, handleQueryChange } = usePaletteScrollReset(setQuery);
+  const handleKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLDivElement>) => {
+      handlePalettePageNavigation(event, listRef);
+    },
+    [listRef],
+  );
 
   const handleOpenChange = useCallback(
     (next: boolean) => {
@@ -147,7 +159,11 @@ export function CommandPaletteShell(props: CommandPaletteShellProps) {
           <DialogTitle>Command Palette</DialogTitle>
           <DialogDescription>Search for a command to run.</DialogDescription>
         </DialogHeader>
-        <Command filter={paletteFilter}>
+        <Command
+          filter={paletteFilter}
+          label="Search commands"
+          onKeyDown={handleKeyDown}
+        >
           <PaletteQueryProvider value={query}>
             <CommandInput
               value={query}

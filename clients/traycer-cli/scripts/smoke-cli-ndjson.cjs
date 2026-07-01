@@ -73,9 +73,7 @@ function parseEnvelopes(stdout) {
       );
     }
     if (parsed === null || typeof parsed !== "object") {
-      throw new Error(
-        `stdout line was not an object: ${JSON.stringify(line)}`,
-      );
+      throw new Error(`stdout line was not an object: ${JSON.stringify(line)}`);
     }
     if (parsed.type !== "progress" && parsed.type !== "result") {
       throw new Error(
@@ -119,10 +117,7 @@ function assertResultShape(event) {
     if (!event.error || typeof event.error !== "object") {
       throw new Error("result error envelope is missing 'error' object");
     }
-    if (
-      typeof event.error.code !== "string" ||
-      event.error.code.length === 0
-    ) {
+    if (typeof event.error.code !== "string" || event.error.code.length === 0) {
       throw new Error(
         "result error envelope is missing machine-readable 'error.code'",
       );
@@ -181,7 +176,9 @@ function smokeVersion() {
     const terminal = envelopes[envelopes.length - 1];
     assertResultShape(terminal);
   }
-  console.log(`[cli ndjson smoke] version ok (stdout=${JSON.stringify(trimmed)})`);
+  console.log(
+    `[cli ndjson smoke] version ok (stdout=${JSON.stringify(trimmed)})`,
+  );
 }
 
 function smokeUnknownSubcommand() {
@@ -233,7 +230,9 @@ function smokeWhoamiNoCredentials() {
   // either reports `status: "ok"` with `data.status: "no-credentials"`
   // (and a non-zero exit), or `status: "error"` if the auth helper
   // surfaced a structured failure. Either way the envelope must validate.
-  const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "traycer-ndjson-whoami-"));
+  const tmpHome = fs.mkdtempSync(
+    path.join(os.tmpdir(), "traycer-ndjson-whoami-"),
+  );
   try {
     const run = runCli(["whoami", "--json"], {
       HOME: tmpHome,

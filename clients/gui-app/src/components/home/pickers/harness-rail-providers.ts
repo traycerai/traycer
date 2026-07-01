@@ -40,5 +40,9 @@ function railHarnessVisible(
   harness: HarnessOption,
   degradedHarnessIds: ReadonlySet<GuiHarnessId>,
 ): boolean {
-  return harness.available || railHarnessDegraded(harness, degradedHarnessIds);
+  return (
+    harness.available ||
+    harness.availabilityPending ||
+    railHarnessDegraded(harness, degradedHarnessIds)
+  );
 }

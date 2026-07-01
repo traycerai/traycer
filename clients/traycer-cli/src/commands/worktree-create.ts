@@ -135,10 +135,7 @@ export function buildWorktreeCreateCommand(
     const result = await toAgentCliError(
       callHostRpc("worktree.createPaths", request),
     );
-    const parsed = parseHostResponse(
-      worktreeCreatePathsResponseSchema,
-      result,
-    );
+    const parsed = parseHostResponse(worktreeCreatePathsResponseSchema, result);
     return {
       data: parsed,
       human: JSON.stringify(parsed, null, 2),

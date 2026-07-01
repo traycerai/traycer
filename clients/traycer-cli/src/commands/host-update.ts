@@ -13,7 +13,9 @@ import { withCliLock } from "../store/cli-lock";
 // `host install` so an in-place update doesn't leave the OS service
 // pointed at a half-replaced install dir (especially relevant on
 // Windows where executable locks block the rename otherwise).
-export const hostUpdateCommand: CommandFn = async (ctx): Promise<CommandResult> => {
+export const hostUpdateCommand: CommandFn = async (
+  ctx,
+): Promise<CommandResult> => {
   ctx.runtime.logger.info("Host update command started", {
     environment: ctx.runtime.environment,
   });
@@ -25,14 +27,16 @@ export const hostUpdateCommand: CommandFn = async (ctx): Promise<CommandResult> 
       pollIntervalMs: 100,
     },
     async () => {
-      const { readHostInstallRecord } = await import(
-        "../manifest/host-install"
-      );
+      const { readHostInstallRecord } =
+        await import("../manifest/host-install");
       const previous = await readHostInstallRecord(ctx.runtime.environment);
       if (previous === null) {
-        ctx.runtime.logger.warn("Host update refused because host is not installed", {
-          environment: ctx.runtime.environment,
-        });
+        ctx.runtime.logger.warn(
+          "Host update refused because host is not installed",
+          {
+            environment: ctx.runtime.environment,
+          },
+        );
         throw cliError({
           code: CLI_ERROR_CODES.HOST_NOT_INSTALLED,
           message: `host update: no host installed for environment=${ctx.runtime.environment}; run 'traycer host install latest' first`,

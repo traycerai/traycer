@@ -815,6 +815,7 @@ describe("<ChatTile />", () => {
         status: "accepted",
         reason: null,
         code: null,
+        backgroundStopTaskIds: [],
       });
     });
 
@@ -1058,7 +1059,10 @@ describe("<ChatTile />", () => {
           approvalId: "approval-1",
           toolName: "bash",
           description: "Run tests",
-          input: null,
+          input: {
+            metadata: { command: "bun test | head -50" },
+            pattern: ["bun test", "head -50"],
+          },
           planId: null,
           actions: [],
           requestedAt: 3,
@@ -1076,6 +1080,9 @@ describe("<ChatTile />", () => {
     ).not.toBe(0);
     expect(within(fileQueue).getByText("/repo/src/app.ts")).not.toBeNull();
     expect(within(fileQueue).getByText("Edit")).not.toBeNull();
+    expect(
+      within(genericQueue).getByText("bun test | head -50"),
+    ).not.toBeNull();
 
     fireEvent.click(within(fileQueue).getByRole("button", { name: "Approve" }));
 
@@ -1503,6 +1510,7 @@ describe("<ChatTile />", () => {
         status: "accepted",
         reason: null,
         code: null,
+        backgroundStopTaskIds: [],
       });
     });
 
@@ -1545,6 +1553,7 @@ describe("<ChatTile />", () => {
         status: "rejected",
         reason: "Only the chat owner can perform this action.",
         code: "NOT_OWNER",
+        backgroundStopTaskIds: [],
       });
     });
 

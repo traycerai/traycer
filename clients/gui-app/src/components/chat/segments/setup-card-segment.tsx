@@ -36,11 +36,7 @@ import { LiveElapsed } from "./segment-elapsed";
  * spins).
  */
 export type SetupWorkspaceState =
-  | "creating"
-  | "setting-up"
-  | "ready"
-  | "failed"
-  | "cancelled";
+  "creating" | "setting-up" | "ready" | "failed" | "cancelled";
 
 /** Per-workspace entry within one setup lifecycle. */
 export interface SetupCardWorkspace {

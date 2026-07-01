@@ -33,10 +33,7 @@ import {
   ensureHostHomeDir,
   ensureHostStagingRoot,
 } from "../store/paths";
-import {
-  extractHostSource,
-  resolveHostExecutable,
-} from "./extract";
+import { extractHostSource, resolveHostExecutable } from "./extract";
 import { hashFileSha256 } from "./sha256";
 
 // Host installer - verify-before-replace per the Tech Plan.
@@ -124,7 +121,9 @@ export async function installHost(
     arch,
     sourceKind: opts.source.kind,
     versionRequest:
-      opts.source.kind === "registry" ? opts.source.versionRequest : "local-file",
+      opts.source.kind === "registry"
+        ? opts.source.versionRequest
+        : "local-file",
     hasPreviousInstall: previous !== null,
     lifecycleEnabled: opts.lifecycle !== null,
     recordVersionOverride: opts.recordVersionOverride !== null,
@@ -455,9 +454,7 @@ interface StageRegistryOptions {
   readonly onProgress: (info: ProgressInfo) => void;
 }
 
-async function stageRegistry(
-  opts: StageRegistryOptions,
-): Promise<StageResult> {
+async function stageRegistry(opts: StageRegistryOptions): Promise<StageResult> {
   const logger = createCliLogger(opts.environment);
   const client = await createDefaultRegistryClient(opts.environment);
   const platformKey = currentHostPlatformKey();

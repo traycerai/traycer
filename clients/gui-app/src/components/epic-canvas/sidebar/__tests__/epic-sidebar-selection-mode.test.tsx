@@ -15,12 +15,7 @@ interface TestTreeNode {
   readonly parentId: string | null;
   readonly title: string;
   readonly type:
-    | "spec"
-    | "ticket"
-    | "story"
-    | "review"
-    | "chat"
-    | "terminal-agent";
+    "spec" | "ticket" | "story" | "review" | "chat" | "terminal-agent";
   readonly status: number | null;
   readonly createdAt: number;
   readonly updatedAt: number;
@@ -404,6 +399,7 @@ vi.mock("@/lib/epic-selectors", () => ({
   useEpicPermissionRole: () => testState.permissionRole,
   useEpicTreeIndex: () => testState.tree,
   useEpicTreeNode: (nodeId: string) => testState.tree.nodeById[nodeId] ?? null,
+  useMaybeEpicTuiAgentHarnessId: () => null,
   useRootIds: () => testState.tree.rootIds,
 }));
 

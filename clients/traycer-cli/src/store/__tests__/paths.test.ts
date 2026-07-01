@@ -31,18 +31,10 @@ describe("store/paths host helpers", () => {
   });
 
   it("resolves host runtime files to the environment root", () => {
-    expect(hostPidMetadataPath("production")).toBe(
-      join(HOST_HOME, "pid.json"),
-    );
-    expect(hostPidMetadataPath("dev")).toBe(
-      join(HOST_HOME, "dev", "pid.json"),
-    );
-    expect(hostLogPath("production")).toBe(
-      join(HOST_HOME, "host.log"),
-    );
-    expect(hostLogPath("dev")).toBe(
-      join(HOST_HOME, "dev", "host.log"),
-    );
+    expect(hostPidMetadataPath("production")).toBe(join(HOST_HOME, "pid.json"));
+    expect(hostPidMetadataPath("dev")).toBe(join(HOST_HOME, "dev", "pid.json"));
+    expect(hostLogPath("production")).toBe(join(HOST_HOME, "host.log"));
+    expect(hostLogPath("dev")).toBe(join(HOST_HOME, "dev", "host.log"));
     // bootstrap markers share the host log file by design.
     expect(bootstrapLogPath("production")).toBe(hostLogPath("production"));
     expect(bootstrapLogPath("dev")).toBe(hostLogPath("dev"));
@@ -56,12 +48,8 @@ describe("store/paths host helpers", () => {
   });
 
   it("resolves host install/staging dirs per environment", () => {
-    expect(hostInstallDir("production")).toBe(
-      join(HOST_HOME, "install"),
-    );
-    expect(hostInstallDir("dev")).toBe(
-      join(HOST_HOME, "dev", "install"),
-    );
+    expect(hostInstallDir("production")).toBe(join(HOST_HOME, "install"));
+    expect(hostInstallDir("dev")).toBe(join(HOST_HOME, "dev", "install"));
     // "install-staging" is the host install temp/extract area, kept distinct
     // from the host root.
     expect(hostStagingRoot("production")).toBe(
@@ -108,9 +96,7 @@ describe("store/paths CLI helpers", () => {
 
   it("places per-environment manifest/lock/post-finalize markers under the environment CLI dir", () => {
     expect(cliManifestPath("production")).toBe(join(CLI_HOME, "manifest.json"));
-    expect(cliManifestPath("dev")).toBe(
-      join(CLI_HOME, "dev", "manifest.json"),
-    );
+    expect(cliManifestPath("dev")).toBe(join(CLI_HOME, "dev", "manifest.json"));
     expect(cliLockPath("production")).toBe(join(CLI_HOME, ".lock"));
     expect(cliLockPath("dev")).toBe(join(CLI_HOME, "dev", ".lock"));
     expect(cliPostFinalizeMarkerPath("production")).toBe(
