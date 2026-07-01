@@ -224,6 +224,24 @@ describe("acquireCliLock", () => {
     expect(handle.metadata.reason).toBe("contender");
     await handle.release();
   });
+
+  it("falls back to the lock file's mtime when startedAt is in the future, and still breaks past the ceiling", async () => {
+    writeLock({
+      pid: process.pid,
+      reason: "host-update",
+      startedAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+    const old = new Date(Date.now() - MAX_LOCK_AGE_MS - 1000);
+    utimesSync(mocks.lockPath, old, old);
+    const handle = await acquireCliLock({
+      environment: "production",
+      reason: "contender",
+      waitMs: 1000,
+      pollIntervalMs: 50,
+    });
+    expect(handle.metadata.reason).toBe("contender");
+    await handle.release();
+  });
 });
 
 describe("release() compare-and-delete", () => {
