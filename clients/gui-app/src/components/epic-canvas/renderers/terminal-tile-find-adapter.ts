@@ -206,16 +206,17 @@ export function createTerminalTileFindAdapter(args: {
     clear: () => {
       markSearchResultSource("tile");
       searchAddon?.clearDecorations();
-      publish({
-        ...snapshot,
-        status: "idle",
-        current: 0,
-        total: 0,
-        coverageMessage: null,
-        errorMessage: null,
-        activeUnitId: null,
-        exactHighlight: "none",
-      });
+      publish(
+        createTerminalSnapshot({
+          tileInstanceId: args.tileInstanceId,
+          requestId: snapshot.requestId,
+          status: "idle",
+          query: "",
+          matchCase: snapshot.matchCase,
+          current: 0,
+          total: 0,
+        }),
+      );
     },
     publishResults: (result) => {
       const totals = totalsFromSearchResult(result);

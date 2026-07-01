@@ -39,6 +39,7 @@ import type {
   InterviewSegment,
   MessageSegment,
   PlanSegmentModel,
+  ApprovalSegment,
   SubagentSegment,
   ToolSegment,
 } from "@/stores/composer/chat-store";
@@ -339,13 +340,7 @@ function segmentSearchText(segment: MessageSegment): ReadonlyArray<string> {
     case "subagent":
       return subagentBodySearchText(segment);
     case "approval":
-      // Mirror the rendered header label: verdict + (toolName ?? description ??
-      // "approval"). `description`/`reason` live only in the unanchored body, so
-      // indexing them would count matches that can never paint.
-      return [
-        segment.decision?.approved === true ? "Approved" : "Denied",
-        segment.toolName ?? segment.description ?? "approval",
-      ];
+      return approvalHeaderSearchText(segment);
     case "artifact_operation":
       return [
         normalizeSearchableText(
@@ -417,12 +412,7 @@ function activityGroupChildHeaderSearchText(
     case "file_change":
       return fileChangeSegmentSearchText(segment);
     case "approval":
-      // Same parity rule as the top-level approval projection above: only the
-      // verdict + header label are rendered (body is unanchored).
-      return [
-        segment.decision?.approved === true ? "Approved" : "Denied",
-        segment.toolName ?? segment.description ?? "approval",
-      ];
+      return approvalHeaderSearchText(segment);
     case "subagent":
       return [];
     default: {
@@ -431,6 +421,18 @@ function activityGroupChildHeaderSearchText(
       return [];
     }
   }
+}
+
+function approvalHeaderSearchText(
+  segment: ApprovalSegment,
+): ReadonlyArray<string> {
+  // Mirror the rendered header label: verdict + (toolName ?? description ??
+  // "approval"). Body text is unanchored, so indexing it would count matches
+  // that cannot paint.
+  return [
+    segment.decision?.approved === true ? "Approved" : "Denied",
+    segment.toolName ?? segment.description ?? "approval",
+  ];
 }
 
 function toolSegmentSearchText(segment: ToolSegment): ReadonlyArray<string> {

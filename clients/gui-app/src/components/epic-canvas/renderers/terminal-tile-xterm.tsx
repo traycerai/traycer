@@ -290,7 +290,7 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
       if (source === "tile") {
         tileFindAdapterRef.current.publishResults(result);
       }
-      if (source === "legacy") {
+      if (source === "legacy" && getFindTargetId() !== null) {
         publishLegacyTerminalSearchResult(result);
       }
     };
@@ -554,7 +554,6 @@ function createXtermEntry(
     live.onUserInput(d);
   });
   const searchResultsDisposable = searchAddon.onDidChangeResults((result) => {
-    if (live.getFindTargetId() === null) return;
     live.onSearchResults(result);
   });
 

@@ -120,6 +120,16 @@ const CODE_NODE: WorkspaceFileRef = {
   filePath: "src/index.ts",
 };
 
+const SECOND_CODE_NODE: WorkspaceFileRef = {
+  id: "workspace-file:host-A:/work/repo:src/other.ts",
+  instanceId: "inst-file-other",
+  type: "workspace-file",
+  name: "other.ts",
+  hostId: "host-A",
+  workspacePath: "/work/repo",
+  filePath: "src/other.ts",
+};
+
 const MARKDOWN_NODE: WorkspaceFileRef = {
   id: "workspace-file:host-A:/work/repo:README.md",
   instanceId: "inst-file-readme",
@@ -131,6 +141,9 @@ const MARKDOWN_NODE: WorkspaceFileRef = {
 };
 
 const highlightEntries = new Map<string, MockCssHighlight>();
+const SOURCE_FIND_HIGHLIGHT_NAME_PREFIX = "traycer-source-find-match-";
+const SOURCE_FIND_ACTIVE_HIGHLIGHT_NAME_PREFIX =
+  "traycer-source-find-match-active-";
 
 let originalCssDescriptor: PropertyDescriptor | undefined;
 let originalWindowCssDescriptor: PropertyDescriptor | undefined;
@@ -259,8 +272,29 @@ describe("<WorkspaceFileTile /> tile find", () => {
     });
 
     await waitFor(() => {
-      expect(highlightEntries.has("traycer-find-match-active")).toBe(false);
-      expect(highlightEntries.has("traycer-find-match")).toBe(false);
+      expect(sourceHighlightKeys()).toHaveLength(0);
+    });
+  });
+
+  it("keeps source highlights isolated between mounted file tiles", async () => {
+    state.readFile = loadedReadFile("ab cd ab cd", false);
+    renderTiles([CODE_NODE, SECOND_CODE_NODE]);
+    await waitForSearchable(CODE_NODE);
+    await waitForSearchable(SECOND_CODE_NODE);
+
+    searchTile(CODE_NODE, "ab", false);
+    searchTile(SECOND_CODE_NODE, "cd", false);
+
+    await waitFor(() => {
+      expect(sourceActiveHighlightTexts()).toEqual(["ab", "cd"]);
+    });
+
+    act(() => {
+      useTileFindStore.getState().close(CODE_NODE.instanceId);
+    });
+
+    await waitFor(() => {
+      expect(sourceActiveHighlightTexts()).toEqual(["cd"]);
     });
   });
 
@@ -339,36 +373,31 @@ describe("<WorkspaceFileTile /> tile find", () => {
     });
   });
 
-  it("reports loading, error, and missing content as unavailable", async () => {
-    renderTile(CODE_NODE);
-    await waitForSnapshot(CODE_NODE, "File is still loading.");
-    searchTile(CODE_NODE, "needle", false);
-    expect(tileSnapshot(CODE_NODE)).toMatchObject({
-      status: "unavailable",
+  it.each([
+    {
+      label: "loading",
+      readFile: loadingReadFile(),
       coverageMessage: "File is still loading.",
-      total: 0,
-    });
-
-    cleanup();
-    useTileFindStore.getState().resetForTests();
-    state.readFile = errorReadFile("Permission denied");
-    renderTile(CODE_NODE);
-    await waitForSnapshot(CODE_NODE, "Permission denied");
-    searchTile(CODE_NODE, "needle", false);
-    expect(tileSnapshot(CODE_NODE)).toMatchObject({
-      status: "unavailable",
+    },
+    {
+      label: "error",
+      readFile: errorReadFile("Permission denied"),
       coverageMessage: "Permission denied",
-    });
-
-    cleanup();
-    useTileFindStore.getState().resetForTests();
-    state.readFile = missingReadFile();
+    },
+    {
+      label: "missing",
+      readFile: missingReadFile(),
+      coverageMessage: "File content is unavailable.",
+    },
+  ])("reports $label content as unavailable", async (scenario) => {
+    state.readFile = scenario.readFile;
     renderTile(CODE_NODE);
-    await waitForSnapshot(CODE_NODE, "File content is unavailable.");
+    await waitForSnapshot(CODE_NODE, scenario.coverageMessage);
     searchTile(CODE_NODE, "needle", false);
     expect(tileSnapshot(CODE_NODE)).toMatchObject({
       status: "unavailable",
-      coverageMessage: "File content is unavailable.",
+      coverageMessage: scenario.coverageMessage,
+      total: 0,
     });
   });
 
@@ -441,6 +470,25 @@ function renderTile(node: WorkspaceFileRef): RenderResult {
   );
 }
 
+function renderTiles(nodes: readonly WorkspaceFileRef[]): RenderResult {
+  return render(
+    <TabHostProvider hostId="host-A">
+      {nodes.map((node, index) => (
+        <TileFindScope
+          key={node.id}
+          node={node}
+          viewTabId={`tab-${index}`}
+          tileId={`pane-${index}`}
+          epicId="epic-1"
+          isActive
+        >
+          <WorkspaceFileTile node={node} viewTabId={`tab-${index}`} isActive />
+        </TileFindScope>
+      ))}
+    </TabHostProvider>,
+  );
+}
+
 function renderTileWithOutside(
   node: WorkspaceFileRef,
   outsideText: string,
@@ -507,7 +555,7 @@ function activeSourceLine(container: HTMLElement): Element | null {
 }
 
 function activeHighlightRange(): Range {
-  const highlight = highlightEntries.get("traycer-find-match-active");
+  const highlight = firstSourceActiveHighlight();
   if (highlight === undefined || highlight.ranges.length === 0) {
     throw new Error("Missing active find highlight range");
   }
@@ -527,9 +575,47 @@ function activeHighlightText(): string {
 }
 
 function inactiveHighlightStartOffsets(): readonly number[] {
-  const highlight = highlightEntries.get("traycer-find-match");
+  const highlight = firstSourceInactiveHighlight();
   if (highlight === undefined) return [];
   return highlight.ranges.map((range) => range.startOffset);
+}
+
+function sourceActiveHighlightTexts(): readonly string[] {
+  return sourceActiveHighlights()
+    .filter((highlight) => highlight.ranges.length > 0)
+    .map((highlight) => highlight.ranges[0].cloneContents().textContent)
+    .sort();
+}
+
+function firstSourceActiveHighlight(): MockCssHighlight | undefined {
+  return sourceActiveHighlights()[0];
+}
+
+function firstSourceInactiveHighlight(): MockCssHighlight | undefined {
+  return Array.from(highlightEntries)
+    .filter(([name]) => isSourceInactiveHighlightName(name))
+    .map(([_name, highlight]) => highlight)[0];
+}
+
+function sourceActiveHighlights(): readonly MockCssHighlight[] {
+  return Array.from(highlightEntries)
+    .filter(([name]) =>
+      name.startsWith(SOURCE_FIND_ACTIVE_HIGHLIGHT_NAME_PREFIX),
+    )
+    .map(([_name, highlight]) => highlight);
+}
+
+function sourceHighlightKeys(): readonly string[] {
+  return Array.from(highlightEntries.keys()).filter((name) =>
+    name.startsWith(SOURCE_FIND_HIGHLIGHT_NAME_PREFIX),
+  );
+}
+
+function isSourceInactiveHighlightName(name: string): boolean {
+  return (
+    name.startsWith(SOURCE_FIND_HIGHLIGHT_NAME_PREFIX) &&
+    !name.startsWith(SOURCE_FIND_ACTIVE_HIGHLIGHT_NAME_PREFIX)
+  );
 }
 
 function installMockCssHighlights(): void {

@@ -560,6 +560,24 @@ describe("<TerminalXtermHost /> terminal find", () => {
       useTileFindStore.getState().close("terminal-instance");
     });
     expect(addon.clearDecorations).toHaveBeenCalledTimes(1);
+    expect(
+      useTileFindStore.getState().uiByTileInstanceId["terminal-instance"]
+        ?.lastSnapshot,
+    ).toMatchObject({
+      status: "idle",
+      query: "",
+      current: 0,
+      total: 0,
+    });
+
+    const findNextCallCount = addon.findNext.mock.calls.length;
+    const findPreviousCallCount = addon.findPrevious.mock.calls.length;
+    act(() => {
+      useTileFindStore.getState().next("terminal-instance");
+      useTileFindStore.getState().previous("terminal-instance");
+    });
+    expect(addon.findNext).toHaveBeenCalledTimes(findNextCallCount);
+    expect(addon.findPrevious).toHaveBeenCalledTimes(findPreviousCallCount);
   });
 
   it("registers the same tile-local adapter path for terminal-agent TUI tiles", async () => {
@@ -643,6 +661,64 @@ describe("<TerminalXtermHost /> terminal find", () => {
       expect.objectContaining({ incremental: true }),
     );
     expect(getSearchAddon(1).findNext).not.toHaveBeenCalled();
+  });
+
+  it("forwards direct tile search results for an inactive terminal", async () => {
+    render(
+      <>
+        <ScopedTerminalHost
+          tileKind="terminal"
+          instanceId="active-terminal-instance"
+          sessionId="active-terminal-session"
+          tileId="active-pane"
+          isActive
+          keepAlive={false}
+        />
+        <ScopedTerminalHost
+          tileKind="terminal"
+          instanceId="inactive-terminal-instance"
+          sessionId="inactive-terminal-session"
+          tileId="inactive-pane"
+          isActive={false}
+          keepAlive={false}
+        />
+      </>,
+    );
+
+    await waitFor(() => {
+      expect(
+        useTileFindStore.getState().targetsByTileInstanceId[
+          "inactive-terminal-instance"
+        ],
+      ).toBeDefined();
+    });
+
+    const inactiveAddon = getSearchAddon(1);
+    act(() => {
+      useTileFindStore.getState().openForTile("inactive-terminal-instance");
+      useTileFindStore
+        .getState()
+        .setQuery("inactive-terminal-instance", "needle");
+      useTileFindStore.getState().search("inactive-terminal-instance");
+      inactiveAddon.emitResults({ resultIndex: 0, resultCount: 2 });
+    });
+
+    expect(inactiveAddon.findNext).toHaveBeenCalledWith(
+      "needle",
+      expect.objectContaining({ incremental: true }),
+    );
+    expect(
+      useTileFindStore.getState().uiByTileInstanceId[
+        "inactive-terminal-instance"
+      ]?.lastSnapshot,
+    ).toMatchObject({
+      status: "ready",
+      query: "needle",
+      current: 1,
+      total: 2,
+      exactHighlight: "painted",
+    });
+    expect(useFindInPageStore.getState().matches).toBeNull();
   });
 
   it("keeps legacy terminal results out of tile-local snapshots", async () => {

@@ -367,10 +367,10 @@ function collectIndexedText(doc: ProseMirrorNode): IndexedText {
       const text = child.text;
       if (typeof text !== "string" || text.length === 0) return true;
       const from = pos + 1 + childOffset;
-      for (let index = 0; index < text.length; index += 1) {
-        chars.push(text[index] ?? "");
+      text.split("").forEach((character, index) => {
+        chars.push(character);
         positions.push({ from: from + index, to: from + index + 1 });
-      }
+      });
       return false;
     });
     return false;
@@ -387,8 +387,12 @@ function matchFromIndexedText(
   const from = indexed.positions[fromIndex] ?? null;
   const to = indexed.positions[toIndex] ?? null;
   if (from === null || to === null) return null;
-  for (let index = fromIndex; index <= toIndex; index += 1) {
-    if ((indexed.positions[index] ?? null) === null) return null;
+  if (
+    indexed.positions
+      .slice(fromIndex, toIndex + 1)
+      .some((position) => position === null)
+  ) {
+    return null;
   }
   return {
     from: from.from,

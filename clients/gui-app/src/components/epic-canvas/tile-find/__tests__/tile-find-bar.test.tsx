@@ -514,6 +514,33 @@ describe("<TileFindBar />", () => {
       vi.useRealTimers();
     }
   });
+
+  it("cancels a pending chat search when the bar unmounts", () => {
+    vi.useFakeTimers();
+    try {
+      const adapter = createAdapter({
+        tileInstanceId: "tile-chat",
+        tileKind: "chat",
+        capabilities: FIND_ONLY,
+      });
+      registerAndOpen(adapter);
+      const view = render(<TileFindBar tileInstanceId="tile-chat" />);
+
+      const input = screen.getByRole("textbox", { name: "Find in tile" });
+      fireEvent.change(input, { target: { value: "needle" } });
+      expect(adapter.searchInputs).toHaveLength(0);
+
+      view.unmount();
+      act(() => {
+        vi.advanceTimersByTime(80);
+        useTileFindStore.getState().advanceActiveOwner(1);
+      });
+
+      expect(adapter.searchInputs).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 function buttonDisabled(label: string): boolean {

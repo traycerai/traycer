@@ -7,9 +7,8 @@
  * several text nodes and a per-text-node `indexOf` would miss it. The source
  * adapter therefore searches the raw file string and produces absolute
  * character offsets; this module maps those offsets back onto the rendered DOM
- * and paints them with the same CSS Custom Highlight API (and the same
- * `traycer-find-match*` highlight names styled in `index.css`) so multiple
- * matches on one line are individually visible and the active one stands out.
+ * and paints them with the same CSS Custom Highlight API so multiple matches on
+ * one line are individually visible and the active one stands out.
  *
  * The concatenated text content of the code container equals the file content
  * verbatim for both render paths - the plain `<pre>` fallback (a single text
@@ -17,8 +16,10 @@
  * walk of the container's text nodes yields a faithful offset map.
  */
 
-const FIND_HIGHLIGHT_NAME = "traycer-find-match";
-const FIND_HIGHLIGHT_ACTIVE_NAME = "traycer-find-match-active";
+const FIND_HIGHLIGHT_NAME_PREFIX = "traycer-source-find-match";
+const FIND_HIGHLIGHT_ACTIVE_NAME_PREFIX = "traycer-source-find-match-active";
+
+let nextHighlightId = 1;
 
 export interface SourceFindRange {
   readonly offset: number;
@@ -30,11 +31,56 @@ interface SupportedHighlightsAPI {
   delete(name: string): void;
 }
 
+interface SourceHighlightEntry {
+  readonly matchName: string;
+  readonly activeName: string;
+  readonly styleElement: HTMLStyleElement;
+}
+
+const sourceHighlightEntries = new WeakMap<HTMLElement, SourceHighlightEntry>();
+
 function getHighlights(): SupportedHighlightsAPI | null {
   if (typeof CSS === "undefined") return null;
   if (typeof Highlight === "undefined") return null;
-  const reg = (CSS as { highlights?: SupportedHighlightsAPI }).highlights;
+  const reg = (CSS as { highlights: SupportedHighlightsAPI | undefined })
+    .highlights;
   return reg ?? null;
+}
+
+function getOrCreateHighlightEntry(root: HTMLElement): SourceHighlightEntry {
+  const existing = sourceHighlightEntries.get(root);
+  if (existing !== undefined) return existing;
+  const id = nextHighlightId;
+  nextHighlightId += 1;
+  const entry: SourceHighlightEntry = {
+    matchName: `${FIND_HIGHLIGHT_NAME_PREFIX}-${id}`,
+    activeName: `${FIND_HIGHLIGHT_ACTIVE_NAME_PREFIX}-${id}`,
+    styleElement: createHighlightStyleElement(root.ownerDocument, id),
+  };
+  sourceHighlightEntries.set(root, entry);
+  return entry;
+}
+
+function createHighlightStyleElement(
+  doc: Document,
+  id: number,
+): HTMLStyleElement {
+  const matchName = `${FIND_HIGHLIGHT_NAME_PREFIX}-${id}`;
+  const activeName = `${FIND_HIGHLIGHT_ACTIVE_NAME_PREFIX}-${id}`;
+  const style = doc.createElement("style");
+  style.dataset.traycerSourceFindHighlight = matchName;
+  style.textContent = [
+    `::highlight(${matchName}) {`,
+    "background-color: color-mix(in srgb, var(--primary) 35%, transparent);",
+    "color: inherit;",
+    "}",
+    `::highlight(${activeName}) {`,
+    "background-color: color-mix(in srgb, var(--primary) 75%, transparent);",
+    "color: var(--primary-foreground);",
+    "}",
+  ].join("\n");
+  doc.head.append(style);
+  return style;
 }
 
 interface TextNodeSpan {
@@ -65,14 +111,22 @@ function resolvePoint(
   position: number,
 ): { readonly node: Text; readonly offset: number } | null {
   if (spans.length === 0) return null;
-  for (const span of spans) {
-    const end = span.start + span.node.data.length;
-    if (position <= end) {
-      return { node: span.node, offset: Math.max(0, position - span.start) };
+  let low = 0;
+  let high = spans.length - 1;
+  while (low < high) {
+    const mid = Math.floor((low + high) / 2);
+    const span = spans[mid];
+    if (position <= span.start + span.node.data.length) {
+      high = mid;
+    } else {
+      low = mid + 1;
     }
   }
-  const last = spans[spans.length - 1];
-  return { node: last.node, offset: last.node.data.length };
+  const span = spans[low];
+  return {
+    node: span.node,
+    offset: Math.min(span.node.data.length, Math.max(0, position - span.start)),
+  };
 }
 
 function buildRange(
@@ -89,11 +143,16 @@ function buildRange(
   return domRange;
 }
 
-export function clearSourceFindHighlights(): void {
+export function clearSourceFindHighlights(root: HTMLElement): void {
+  const entry = sourceHighlightEntries.get(root);
+  if (entry === undefined) return;
   const reg = getHighlights();
-  if (reg === null) return;
-  reg.delete(FIND_HIGHLIGHT_NAME);
-  reg.delete(FIND_HIGHLIGHT_ACTIVE_NAME);
+  if (reg !== null) {
+    reg.delete(entry.matchName);
+    reg.delete(entry.activeName);
+  }
+  entry.styleElement.remove();
+  sourceHighlightEntries.delete(root);
 }
 
 /**
@@ -109,6 +168,7 @@ export function paintSourceFindHighlights(args: {
 }): void {
   const reg = getHighlights();
   if (reg === null) return;
+  const entry = getOrCreateHighlightEntry(args.root);
 
   const spans = collectTextSpans(args.root);
   const inactive: Range[] = [];
@@ -124,13 +184,13 @@ export function paintSourceFindHighlights(args: {
   }
 
   if (inactive.length > 0) {
-    reg.set(FIND_HIGHLIGHT_NAME, new Highlight(...inactive));
+    reg.set(entry.matchName, new Highlight(...inactive));
   } else {
-    reg.delete(FIND_HIGHLIGHT_NAME);
+    reg.delete(entry.matchName);
   }
   if (active !== null) {
-    reg.set(FIND_HIGHLIGHT_ACTIVE_NAME, new Highlight(active));
+    reg.set(entry.activeName, new Highlight(active));
   } else {
-    reg.delete(FIND_HIGHLIGHT_ACTIVE_NAME);
+    reg.delete(entry.activeName);
   }
 }

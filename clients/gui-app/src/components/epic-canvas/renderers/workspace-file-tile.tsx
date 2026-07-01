@@ -545,7 +545,7 @@ function CodeEditorPreview(props: {
     const root = codeContentRef.current;
     if (root === null) return;
     if (props.findTarget === null) {
-      clearSourceFindHighlights();
+      clearSourceFindHighlights(root);
       return;
     }
     paintSourceFindHighlights({
@@ -554,7 +554,7 @@ function CodeEditorPreview(props: {
       activeOffset: props.findTarget.active.offset,
     });
     return () => {
-      clearSourceFindHighlights();
+      clearSourceFindHighlights(root);
     };
   }, [props.findTarget, highlightedNodes]);
 

@@ -31,6 +31,7 @@ import {
 } from "@/components/epic-canvas/git-diff/diff-bundle-file-section";
 import { FileChangeHeader } from "@/components/chat/segments/file-change-segment";
 import { cn } from "@/lib/utils";
+import { getBasename, getDirname } from "@/lib/path/cross-platform-path";
 import type { BundleDiffFindFileInput } from "@/stores/tile-find";
 
 export type SnapshotCumulativeBundleDiffTileRef = Omit<
@@ -54,6 +55,7 @@ export function SnapshotBundleDiffTileContent(props: {
   const nodeId = props.node.id;
   const nodeView = props.node.view;
   const collapsedFilePaths = nodeView.collapsedFilePaths;
+  const ignoreWhitespace = diffViewerPreferences.ignoreWhitespace;
   const { virtuosoRef, restoreStateFrom, isScrolling } =
     useBundleDiffScrollRestoration(
       props.node.instanceId,
@@ -113,14 +115,19 @@ export function SnapshotBundleDiffTileContent(props: {
     expandFile: expandBundleFindFile,
     virtuosoRef,
   });
+  const bundleFindContentIdentity = useMemo(
+    () =>
+      snapshotBundleDiffFindContentIdentity({
+        entries: props.entries,
+        ignoreWhitespace,
+      }),
+    [ignoreWhitespace, props.entries],
+  );
   const bundleFindRegistration = useRegisterBundleDiffTileFindAdapter({
     tileInstanceId: props.node.instanceId,
     tileKind: "snapshot-diff",
     files: bundleFindFiles,
-    contentIdentity: snapshotBundleDiffFindContentIdentity({
-      entries: props.entries,
-      ignoreWhitespace: diffViewerPreferences.ignoreWhitespace,
-    }),
+    contentIdentity: bundleFindContentIdentity,
     renderer: bundleFindNavigation,
     sourceOverride: null,
   });
@@ -406,7 +413,7 @@ function snapshotBundleDiffMetadataUnits(args: {
   readonly entry: SnapshotBundleSectionEntry;
   readonly fileId: string;
 }): ReadonlyArray<DiffFindMetadataUnitInput> {
-  const directory = snapshotBundleDirectory(args.entry.filePath);
+  const directory = getDirname(args.entry.filePath);
   return [
     {
       id: `snapshot-bundle-file:${args.fileId}`,
@@ -415,7 +422,7 @@ function snapshotBundleDiffMetadataUnits(args: {
       text: [
         snapshotOperationLabel(args.entry.operation),
         args.entry.filePath,
-        snapshotBundleBasename(args.entry.filePath),
+        getBasename(args.entry.filePath),
         directory.length > 0 ? directory : "Repository root",
         FILE_EDIT_REASON_COPY[args.entry.reason],
       ]
@@ -444,15 +451,4 @@ function snapshotBundleDiffFindContentIdentity(args: {
       entry.afterContent,
     ]),
   ]);
-}
-
-function snapshotBundleBasename(filePath: string): string {
-  const parts = filePath.split("/");
-  return parts[parts.length - 1] ?? filePath;
-}
-
-function snapshotBundleDirectory(filePath: string): string {
-  const index = filePath.lastIndexOf("/");
-  if (index === -1) return "";
-  return filePath.slice(0, index);
 }
