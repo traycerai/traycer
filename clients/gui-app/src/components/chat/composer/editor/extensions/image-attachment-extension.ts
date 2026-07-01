@@ -1,11 +1,20 @@
 import { mergeAttributes, Node as TiptapNode } from "@tiptap/core";
+import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
+import { Plugin, PluginKey, type EditorState } from "@tiptap/pm/state";
+import { Decoration, DecorationSet } from "@tiptap/pm/view";
 import { ReactNodeViewRenderer } from "@tiptap/react";
 
+import {
+  imageAttachmentDisplayLabelFromDecorations,
+  imageAttachmentLabelDecorationSpec,
+} from "../nodes/image-attachment-label-decorations";
 import { ImageAttachmentNodeView } from "../nodes/image-attachment-node-view";
 import {
   dataAttributeMap,
   IMAGE_ATTACHMENT_ATTRIBUTE_NAMES,
 } from "./attribute-helpers";
+import { buildImageAttachmentDisplayLabels } from "@/lib/composer/image-attachment-labels";
+import { stringValue } from "@/lib/composer/tiptap-json-content";
 
 interface ImageAttachmentBaseAttrs {
   readonly id: string;
@@ -34,6 +43,22 @@ export type ImageAttachmentAttrs =
       readonly hash: string;
       readonly b64content?: never;
     });
+
+interface ImageAttachmentLabelPluginState {
+  readonly decorations: DecorationSet;
+}
+
+interface ImageAttachmentLabelNode {
+  readonly id: string;
+  readonly fileName: string;
+  readonly pos: number;
+  readonly size: number;
+}
+
+export const imageAttachmentLabelPluginKey =
+  new PluginKey<ImageAttachmentLabelPluginState>(
+    "composer-image-attachment-labels",
+  );
 
 declare module "@tiptap/core" {
   interface Commands<ReturnType> {
@@ -72,53 +97,64 @@ export const ImageAttachmentNode = TiptapNode.create({
   },
 
   addNodeView() {
-    return ReactNodeViewRenderer(ImageAttachmentNodeView);
+    return ReactNodeViewRenderer(ImageAttachmentNodeView, {
+      update: ({
+        oldNode,
+        oldDecorations,
+        newNode,
+        newDecorations,
+        updateProps,
+      }) => {
+        if (newNode.type !== oldNode.type) return false;
+        const oldLabel =
+          imageAttachmentDisplayLabelFromDecorations(oldDecorations);
+        const newLabel =
+          imageAttachmentDisplayLabelFromDecorations(newDecorations);
+        if (newNode !== oldNode || oldLabel?.title !== newLabel?.title) {
+          updateProps();
+        }
+        return true;
+      },
+    });
+  },
+
+  addProseMirrorPlugins() {
+    return [imageAttachmentLabelPlugin()];
   },
 
   addCommands() {
     return {
       insertImageAttachment:
         (attrs) =>
-        ({ tr, state, dispatch }) => {
-          const groupType = state.schema.nodes.attachmentGroup;
-          const atomType = state.schema.nodes.imageAttachment;
-          const atomNode = atomType.create(attrs);
-          const firstChild = tr.doc.firstChild;
-          if (firstChild !== null && firstChild.type === groupType) {
-            const insertAt = firstChild.nodeSize - 1;
-            tr.insert(insertAt, atomNode);
-            if (dispatch) dispatch(tr);
-            return true;
-          }
-          const groupNode = groupType.create(null, [atomNode]);
-          tr.insert(0, groupNode);
-          if (dispatch) dispatch(tr);
-          return true;
+        ({ commands, state }) => {
+          const content = { type: "imageAttachment", attrs };
+          if (state.selection.empty) return commands.insertContent(content);
+          return commands.insertContentAt(state.selection.to, content);
         },
       removeImageAttachmentById:
         (id) =>
         ({ tr, state, dispatch }) => {
           const groupType = state.schema.nodes.attachmentGroup;
-          const atomType = state.schema.nodes.imageAttachment;
-          const firstChild = tr.doc.firstChild;
-          if (firstChild === null || firstChild.type !== groupType) {
+          const matches: Array<{
+            readonly pos: number;
+            readonly size: number;
+          }> = [];
+          state.doc.descendants((node, pos) => {
+            if (node.type.name !== "imageAttachment") return true;
+            if (node.attrs.id !== id) return false;
+            matches.push({ pos, size: node.nodeSize });
             return false;
-          }
-          const matches: Array<{ offset: number; size: number }> = [];
-          firstChild.forEach((child, offset) => {
-            if (child.type !== atomType) return;
-            if (child.attrs.id !== id) return;
-            matches.push({ offset, size: child.nodeSize });
           });
           if (matches.length === 0) return false;
           const match = matches[0];
-          const willBeEmpty = firstChild.childCount === 1;
-          if (willBeEmpty) {
-            tr.delete(0, firstChild.nodeSize);
+
+          const $from = state.doc.resolve(match.pos);
+          const parent = $from.parent;
+          if (parent.type === groupType && parent.childCount === 1) {
+            const parentStart = match.pos - $from.parentOffset - 1;
+            tr.delete(parentStart, parentStart + parent.nodeSize);
           } else {
-            const atomFrom = 1 + match.offset;
-            const atomTo = atomFrom + match.size;
-            tr.delete(atomFrom, atomTo);
+            tr.delete(match.pos, match.pos + match.size);
           }
           if (dispatch) dispatch(tr);
           return true;
@@ -126,3 +162,77 @@ export const ImageAttachmentNode = TiptapNode.create({
     };
   },
 });
+
+function imageAttachmentLabelPlugin(): Plugin<ImageAttachmentLabelPluginState> {
+  return new Plugin<ImageAttachmentLabelPluginState>({
+    key: imageAttachmentLabelPluginKey,
+    state: {
+      init: (_config, state: EditorState): ImageAttachmentLabelPluginState =>
+        buildImageAttachmentLabelPluginState(state.doc),
+      apply: (
+        tr,
+        prev,
+        _oldState,
+        newState,
+      ): ImageAttachmentLabelPluginState =>
+        tr.docChanged
+          ? buildImageAttachmentLabelPluginState(newState.doc)
+          : prev,
+    },
+    props: {
+      decorations(state) {
+        return imageAttachmentLabelPluginKey.getState(state)?.decorations;
+      },
+    },
+  });
+}
+
+function buildImageAttachmentLabelPluginState(
+  doc: ProseMirrorNode,
+): ImageAttachmentLabelPluginState {
+  const imageNodes = imageAttachmentLabelNodesFromDoc(doc);
+  const labels = buildImageAttachmentDisplayLabels(imageNodes);
+  const decorations = imageNodes
+    .map((imageNode) => {
+      const label = labels.get(imageNode.id);
+      if (label === undefined) return null;
+      return Decoration.node(
+        imageNode.pos,
+        imageNode.pos + imageNode.size,
+        {},
+        imageAttachmentLabelDecorationSpec(label),
+      );
+    })
+    .filter(isDecoration);
+  return {
+    decorations: DecorationSet.create(doc, decorations),
+  };
+}
+
+function imageAttachmentLabelNodesFromDoc(
+  doc: ProseMirrorNode,
+): ImageAttachmentLabelNode[] {
+  const imageNodes: ImageAttachmentLabelNode[] = [];
+  doc.descendants((node, pos) => {
+    if (node.type.name !== "imageAttachment") return true;
+    const id = stringValue(node.attrs.id);
+    if (id !== null) {
+      imageNodes.push({
+        id,
+        fileName: imageAttachmentFileName(node.attrs),
+        pos,
+        size: node.nodeSize,
+      });
+    }
+    return false;
+  });
+  return imageNodes;
+}
+
+function imageAttachmentFileName(attrs: Record<string, unknown>): string {
+  return stringValue(attrs.fileName) ?? "Image";
+}
+
+function isDecoration(value: Decoration | null): value is Decoration {
+  return value !== null;
+}

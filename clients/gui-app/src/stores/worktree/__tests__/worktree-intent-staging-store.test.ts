@@ -2,6 +2,7 @@ import "../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { WorktreeFolderIntent } from "@traycer/protocol/host/worktree-schemas";
 import {
+  newConversationModalStagingKey,
   pendingChildTerminalAgentStagingKey,
   pendingForkChatStagingKey,
   pendingTerminalAgentStagingKey,
@@ -162,6 +163,35 @@ describe("worktree-intent-staging-store", () => {
       ),
     ).not.toBe(
       worktreeStagingKeyString(pendingTerminalAgentStagingKey("epic-A")),
+    );
+  });
+
+  it("scopes the new-conversation modal slot per parent (child vs top-level)", () => {
+    const store = useWorktreeIntentStagingStore.getState();
+    // A top-level create stages under the epic/null slot.
+    store.stageEntry(
+      newConversationModalStagingKey("epic-A", null),
+      worktreeEntry("/a"),
+    );
+    // Reopening the modal to add a CHILD reads an independent slot, so it never
+    // inherits the top-level (or another parent's) staged worktree intent.
+    expect(
+      readStagedWorktreeIntent(
+        newConversationModalStagingKey("epic-A", "parent-1"),
+      ),
+    ).toBeNull();
+    expect(
+      readStagedWorktreeIntent(newConversationModalStagingKey("epic-A", null)),
+    ).not.toBeNull();
+    // Different parents get distinct slots.
+    expect(
+      worktreeStagingKeyString(
+        newConversationModalStagingKey("epic-A", "parent-1"),
+      ),
+    ).not.toBe(
+      worktreeStagingKeyString(
+        newConversationModalStagingKey("epic-A", "parent-2"),
+      ),
     );
   });
 

@@ -1,26 +1,53 @@
-import { memo, type ReactNode } from "react";
+import { memo, useMemo, type ReactNode } from "react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
 import { RenderedComposerNode } from "./render-node";
+import type { ComposerContentRenderVariant } from "./types";
+import { composerContentRenderProfile } from "./render-profile";
+import { collectImageAtoms } from "@/lib/composer/image-atoms";
+import { buildImageAttachmentDisplayLabels } from "@/lib/composer/image-attachment-labels";
 
 interface ComposerContentRendererProps {
   readonly content: JsonContent;
+  readonly variant: ComposerContentRenderVariant | undefined;
+  readonly className: string | undefined;
+  readonly testId: string | undefined;
 }
 
-function ComposerContentRendererBase({
-  content,
-}: ComposerContentRendererProps): ReactNode {
+function ComposerContentRendererBase(
+  props: ComposerContentRendererProps,
+): ReactNode {
+  const { className, content, testId } = props;
+  const variant = props.variant ?? "message";
+  const profile = composerContentRenderProfile(variant);
   const topNodes = content.content ?? [];
-  return (
-    <div className="flex flex-col gap-1 text-ui leading-7 text-foreground">
-      {topNodes.map((node, i) => {
-        const nodeKey = `n${i}`;
-        return (
-          <RenderedComposerNode key={nodeKey} node={node} nodeKey={nodeKey} />
-        );
-      })}
-    </div>
+  const imageAtoms = useMemo(() => collectImageAtoms(content), [content]);
+  const context = useMemo(
+    () => ({
+      imageLabelsById: buildImageAttachmentDisplayLabels(imageAtoms),
+      profile,
+    }),
+    [imageAtoms, profile],
   );
+
+  const children = topNodes.map((node, i) => {
+    const nodeKey = `n${i}`;
+    const child = (
+      <RenderedComposerNode
+        key={nodeKey}
+        node={node}
+        nodeKey={nodeKey}
+        context={context}
+      />
+    );
+    return profile.renderTopLevelNode({
+      child,
+      index: i,
+      nodeKey,
+    });
+  });
+
+  return profile.renderRoot({ children, className, testId });
 }
 
 export const ComposerContentRenderer = memo(ComposerContentRendererBase);

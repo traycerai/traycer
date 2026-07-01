@@ -9,6 +9,7 @@ import type {
   MentionAttachment,
   PathKind,
 } from "@/lib/composer/types";
+import { normalizeComposerContent } from "@/lib/composer/composer-content-normalizer";
 
 const LEADING_SLASH_COMMAND_REGEX = /^\/([A-Za-z0-9][A-Za-z0-9:_-]*)(?=$|\s)/;
 
@@ -28,7 +29,9 @@ const GIT_TYPES: ReadonlyArray<WorkspaceMentionGitType> = [
 export function buildSubmittedChatJSONContent(
   promptContent: JsonContent,
 ): JsonContent {
-  return contentWithLeadingSlashCommandNode(promptContent);
+  return contentWithLeadingSlashCommandNode(
+    normalizeComposerContent(promptContent),
+  );
 }
 
 export function extractPlainTextFromComposerJSONContent(
@@ -175,34 +178,79 @@ export function parseLeadingSlashCommand(
 }
 
 function contentWithLeadingSlashCommandNode(content: JsonContent): JsonContent {
-  const children = content.content ?? [];
-  if (children.length === 0) return content;
-  const first = children[0];
-  const normalizedFirst = blockWithLeadingSlashCommandNode(first);
-  if (normalizedFirst === first) return content;
-  return {
-    ...content,
-    content: [normalizedFirst, ...children.slice(1)],
-  };
+  const state = { complete: false, changed: false };
+  const nodes = nodesWithLeadingSlashCommandNode([content], state);
+  if (!state.changed) return content;
+  return nodes[0];
 }
 
-function blockWithLeadingSlashCommandNode(block: JsonContent): JsonContent {
-  const children = block.content ?? [];
-  if (children.length === 0) return block;
-  const first = children[0];
-  if (first.type === "slashCommand") return block;
-  if (first.type !== "text") return block;
-  const parsed = parseLeadingSlashCommand(first.text ?? "");
-  if (parsed === null) return block;
-  const rest = (first.text ?? "").slice(parsed.end);
-  return {
-    ...block,
-    content: [
+function nodesWithLeadingSlashCommandNode(
+  nodes: ReadonlyArray<JsonContent>,
+  state: { complete: boolean; changed: boolean },
+): JsonContent[] {
+  return nodes.flatMap((node) => nodeWithLeadingSlashCommandNode(node, state));
+}
+
+function nodeWithLeadingSlashCommandNode(
+  node: JsonContent,
+  state: { complete: boolean; changed: boolean },
+): JsonContent[] {
+  if (state.complete) return [node];
+  if (node.type === "imageAttachment" || node.type === "attachmentGroup") {
+    return [node];
+  }
+  if (node.type === "slashCommand") {
+    state.complete = true;
+    return [node];
+  }
+  if (node.type === "text") {
+    const text = node.text ?? "";
+    if (text.length === 0) return [node];
+    state.complete = true;
+    const parsed = parseLeadingSlashCommand(text);
+    if (parsed === null) return [node];
+    const rest = text.slice(parsed.end);
+    state.changed = true;
+    return [
       slashCommandNodeFromName(parsed.name),
-      ...(rest.length === 0 ? [] : [{ ...first, text: rest }]),
-      ...children.slice(1),
-    ],
-  };
+      ...(rest.length === 0 ? [] : [{ ...node, text: rest }]),
+    ];
+  }
+
+  // A leading `/command` only becomes a chip in the document's first paragraph.
+  // Other leading blocks (code blocks, list items, etc.) are not command
+  // contexts, so end the scan instead of recursing - otherwise a leading
+  // ```/plan``` fence or `- /plan` list item would get a slashCommand node
+  // spliced inside it, producing schema-invalid submitted content.
+  if (node.type !== "doc" && node.type !== "paragraph") {
+    state.complete = true;
+    return [node];
+  }
+
+  const children = node.content;
+  if (children === undefined) {
+    state.complete = true;
+    return [node];
+  }
+  const normalizedChildren = nodesWithLeadingSlashCommandNode(children, state);
+  if (node.type !== "doc") state.complete = true;
+  if (sameJsonContentArray(normalizedChildren, children)) return [node];
+  return [
+    {
+      ...node,
+      content: normalizedChildren,
+    },
+  ];
+}
+
+function sameJsonContentArray(
+  left: ReadonlyArray<JsonContent>,
+  right: ReadonlyArray<JsonContent>,
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every((node, index) => node === right[index])
+  );
 }
 
 function slashCommandNodeFromName(name: string): JsonContent {

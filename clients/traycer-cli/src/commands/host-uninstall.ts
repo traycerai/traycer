@@ -43,9 +43,24 @@ export function buildHostUninstallCommand(args: HostUninstallArgs): CommandFn {
           });
           const controller = createServiceController();
           const label = serviceLabelFor(ctx.runtime.environment);
-          // Best-effort stop before uninstall so any held file handles
-          // release cleanly. Tolerate failures - the uninstall path
-          // forces removal regardless.
+          // Deregister BEFORE waiting for the process to exit. On macOS the
+          // running job stays under launchd's `KeepAlive` supervision until
+          // its registration is torn down (`uninstall` -> `launchctl
+          // bootout`); stopping first and deregistering after leaves a
+          // window where a non-clean SIGTERM exit gets treated as a
+          // failed/crashed exit and launchd respawns the host before we
+          // ever reach `uninstall`. Deregistering first removes that
+          // supervision so no exit outcome can trigger a respawn.
+          await controller.uninstall({ label });
+          serviceUninstalled = true;
+          ctx.runtime.logger.info("Host uninstall service deregistered", {
+            environment: ctx.runtime.environment,
+            label: label.id,
+          });
+          // Best-effort: confirm the process actually exited so any held
+          // file handles release before the install dir is removed below.
+          // Tolerate failures - the uninstall path forces removal
+          // regardless.
           try {
             await controller.stop(label);
           } catch (err) {
@@ -59,12 +74,6 @@ export function buildHostUninstallCommand(args: HostUninstallArgs): CommandFn {
             );
             // Service may not be running; proceed.
           }
-          await controller.uninstall({ label });
-          serviceUninstalled = true;
-          ctx.runtime.logger.info("Host uninstall service deregistered", {
-            environment: ctx.runtime.environment,
-            label: label.id,
-          });
         }
         ctx.progress({
           stage: "uninstall",

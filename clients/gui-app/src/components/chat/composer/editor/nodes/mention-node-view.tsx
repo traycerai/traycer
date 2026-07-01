@@ -20,7 +20,7 @@ function MentionNodeViewBase(props: NodeViewProps) {
 
   return (
     <NodeViewWrapper as="span" contentEditable={false}>
-      <ComposerMentionDecorator mention={mention} />
+      <ComposerMentionDecorator mention={mention} density="regular" />
     </NodeViewWrapper>
   );
 }

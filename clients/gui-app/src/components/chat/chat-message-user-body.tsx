@@ -29,20 +29,13 @@ import {
   ComposerPromptEditor,
   type ComposerPromptEditorHandle,
 } from "@/components/chat/composer/composer-prompt-editor";
+import { ChatComposerAttachmentsStrip } from "@/components/chat/composer/chat-composer-attachments-strip";
 import { ComposerContentRenderer } from "@/components/chat/composer/content-renderer";
 import { createComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
 import { useComposerPickerItems } from "@/components/chat/composer/picker/use-composer-picker-items";
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
-import {
-  Dialog,
-  DialogContent,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog";
-import type { Attachment, ImageAttachment } from "@/lib/composer/types";
-import { useAttachmentBlobSrc } from "@/lib/attachments/use-attachment-blob-src";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import {
   composerClipboardPlainText,
@@ -74,6 +67,7 @@ import type {
   ChatMessageUserActions,
 } from "./chat-message";
 import { ChatUserMessageContent } from "./chat-user-message-content";
+import { UserMessageAttachmentGallery } from "./user-message-attachment-gallery";
 import { ComposerArea } from "@/components/home/composer/composer-shell";
 import { LivePulse } from "@/components/ui/live-pulse";
 import { AgentReferenceMarkdown } from "./segments/agent-reference-markdown";
@@ -108,7 +102,10 @@ export function UserMessageBody({
   if (message.role !== "user") {
     return (
       <>
-        <AttachmentGallery attachments={message.attachments} />
+        <UserMessageAttachmentGallery
+          attachments={message.attachments}
+          align="end"
+        />
         <div className="w-full rounded-lg border border-border/40 bg-muted/20 px-4 py-3 text-ui leading-7 text-muted-foreground">
           <ChatUserMessageContent
             content={message.content}
@@ -126,7 +123,10 @@ export function UserMessageBody({
   if (message.agentSenderInfo !== null) {
     return (
       <>
-        <AttachmentGallery attachments={message.attachments} />
+        <UserMessageAttachmentGallery
+          attachments={message.attachments}
+          align="end"
+        />
         <AgentMessageDisplayView
           messageId={message.id}
           messageText={message.content}
@@ -137,12 +137,7 @@ export function UserMessageBody({
     );
   }
 
-  return (
-    <>
-      <AttachmentGallery attachments={message.attachments} />
-      <UserMessageDisplayView message={message} actions={actions} />
-    </>
-  );
+  return <UserMessageDisplayView message={message} actions={actions} />;
 }
 
 /**
@@ -339,7 +334,12 @@ function UserMessageDisplayView({
 
   const body =
     message.structuredContent !== null ? (
-      <ComposerContentRenderer content={message.structuredContent} />
+      <ComposerContentRenderer
+        content={message.structuredContent}
+        variant={undefined}
+        className={undefined}
+        testId={undefined}
+      />
     ) : (
       <ChatUserMessageContent
         content={message.content}
@@ -366,7 +366,10 @@ function UserMessageDisplayView({
   );
 
   return (
-    <div className="group/user-message flex min-w-0 max-w-[85%] flex-col items-end">
+    <div
+      className="group/user-message flex min-w-0 max-w-[min(100%,48rem)] flex-col items-end"
+      data-user-message-display=""
+    >
       {visibleSteerBadge !== null ? (
         <div className="mb-1.5">
           <UserMessageSteerBadge badge={visibleSteerBadge} />
@@ -374,6 +377,10 @@ function UserMessageDisplayView({
       ) : null}
       <div className="relative min-w-0 max-w-full">
         <div className="rounded-lg border border-border/50 bg-muted/30 px-4 py-3 text-ui leading-7 text-foreground [overflow-wrap:anywhere]">
+          <UserMessageAttachmentGallery
+            attachments={message.attachments}
+            align="start"
+          />
           <div
             ref={contentRef}
             data-chat-find-unit={findUnitId}
@@ -518,6 +525,10 @@ function InlineUserMessageEditor({
     editing.onCancel();
   }, [editing]);
 
+  const removeImageAttachment = useCallback((id: string) => {
+    editorRef.current?.removeImageAttachmentById(id);
+  }, []);
+
   const onSnapshot = useCallback(
     (content: JsonContent, selection: { from: number; to: number }) => {
       editing.onSnapshot(content, selection);
@@ -592,6 +603,20 @@ function InlineUserMessageEditor({
     ),
     [editing, handleEditorKeyDown, onSnapshot, pickerStore, submit],
   );
+  const editorSlot = useMemo(
+    () => (
+      <>
+        <ChatComposerAttachmentsStrip
+          content={editing.currentContent}
+          editingQueueItemId={null}
+          onCancelQueueEdit={null}
+          onRemoveImage={removeImageAttachment}
+        />
+        {editor}
+      </>
+    ),
+    [editing.currentContent, editor, removeImageAttachment],
+  );
   const toolbar = useMemo(
     () => (
       <div className="flex justify-end gap-1 px-4 pb-3 pt-2">
@@ -627,7 +652,7 @@ function InlineUserMessageEditor({
       <ComposerArea
         pickerStore={pickerStore}
         overlay={null}
-        editor={editor}
+        editor={editorSlot}
         toolbar={toolbar}
       />
     </div>
@@ -785,98 +810,6 @@ function MessageCopyButton({
         <Copy className="size-3.5" aria-hidden />
       )}
     </MessageActionButton>
-  );
-}
-
-function AttachmentGallery({
-  attachments,
-}: {
-  attachments: ReadonlyArray<Attachment>;
-}): ReactNode {
-  const images = attachments.flatMap((attachment) =>
-    attachment.kind === "image"
-      ? [{ key: imageAttachmentRenderKey(attachment), attachment }]
-      : [],
-  );
-  if (images.length === 0) return null;
-  return (
-    <div className="mb-2 flex w-full flex-wrap justify-end gap-1.5">
-      {images.map((image) => (
-        <ImageAttachmentThumb key={image.key} attachment={image.attachment} />
-      ))}
-    </div>
-  );
-}
-
-function imageAttachmentRenderKey(attachment: ImageAttachment): string {
-  return [
-    attachment.name ?? "image",
-    attachment.size ?? 0,
-    attachment.hash ?? attachment.dataUrl?.slice(-64) ?? "",
-  ].join(":");
-}
-
-/**
- * Resolves the image source: persisted images (`hash`) stream their bytes from
- * the epic doc's attachments map into a shared blob URL via the content-addressed
- * cache; draft/optimistic images render their inline `dataUrl` directly. Returns
- * null while a persisted image's blob is still loading.
- */
-function useImageAttachmentSrc(attachment: ImageAttachment): string | null {
-  return useAttachmentBlobSrc(
-    attachment.hash,
-    attachment.mediaType,
-    attachment.dataUrl,
-  );
-}
-
-function ImageAttachmentThumb({
-  attachment,
-}: {
-  attachment: ImageAttachment;
-}): ReactNode {
-  const alt = attachment.name || "Image attachment";
-  const src = useImageAttachmentSrc(attachment);
-  return (
-    <Dialog>
-      <DialogTrigger asChild>
-        <button
-          type="button"
-          aria-label={`Open ${alt}`}
-          className="group relative size-12 overflow-hidden rounded-md border border-border/70 bg-muted/40 outline-none transition-colors hover:border-foreground/40 focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          {src === null ? (
-            <div className="size-full animate-pulse bg-muted/60" aria-hidden />
-          ) : (
-            <img
-              src={src}
-              alt={alt}
-              className="size-full object-cover transition-transform group-hover:scale-[1.02]"
-              draggable={false}
-            />
-          )}
-        </button>
-      </DialogTrigger>
-      <DialogContent
-        className="w-[min(95vw,80rem)] max-w-[min(95vw,80rem)] sm:max-w-[min(95vw,80rem)] bg-popover/95 p-2"
-        showCloseButton
-      >
-        <DialogTitle className="sr-only">{alt}</DialogTitle>
-        {src === null ? (
-          <div
-            className="aspect-video w-full animate-pulse rounded-lg bg-muted/60"
-            aria-hidden
-          />
-        ) : (
-          <img
-            src={src}
-            alt={alt}
-            className="block w-full rounded-lg object-contain max-h-[min(90vh,52rem)]"
-            draggable={false}
-          />
-        )}
-      </DialogContent>
-    </Dialog>
   );
 }
 

@@ -10,9 +10,12 @@ import {
 import type { ComposerImageAtom } from "@/lib/composer/image-atoms";
 import { type ImageBytesFetcher } from "@/lib/attachments/image-blob-cache";
 import { useImageBlobUrl } from "@/lib/attachments/use-image-blob-url";
+import type { ImageAttachmentDisplayLabel } from "@/lib/composer/image-attachment-labels";
+import { fallbackImageAttachmentDisplayLabel } from "@/lib/composer/image-attachment-labels";
 
 export interface ImageAttachmentChipProps {
   atom: ComposerImageAtom;
+  displayLabel: ImageAttachmentDisplayLabel | undefined;
   onRemove: (id: string) => void;
   /** Streams a hash's bytes when no synchronous source is available. */
   fetcher: ImageBytesFetcher;
@@ -21,7 +24,13 @@ export interface ImageAttachmentChipProps {
 }
 
 export function ImageAttachmentChip(props: ImageAttachmentChipProps) {
-  const { atom, onRemove, fetcher, sessionObjectUrl } = props;
+  const { atom, displayLabel, onRemove, fetcher, sessionObjectUrl } = props;
+  const label =
+    displayLabel ??
+    fallbackImageAttachmentDisplayLabel({
+      id: atom.id,
+      fileName: atom.fileName,
+    });
   const alt = atom.fileName.length > 0 ? atom.fileName : "Pasted image";
   const wrapperRef = useRef<HTMLDivElement>(null);
   const dataUrl =
@@ -40,11 +49,18 @@ export function ImageAttachmentChip(props: ImageAttachmentChipProps) {
       <div
         ref={wrapperRef}
         className="group relative size-14 shrink-0 overflow-hidden rounded-md border border-border/70 bg-muted/40"
+        title={label.title}
       >
+        <span
+          className="pointer-events-none absolute left-0.5 top-0.5 z-10 flex h-4 min-w-4 items-center justify-center rounded-sm border border-border/70 bg-background/90 px-1 text-[0.625rem] font-semibold leading-none text-foreground shadow-sm"
+          data-composer-image-strip-badge={label.badgeLabel}
+        >
+          {label.badgeLabel}
+        </span>
         <DialogTrigger asChild>
           <button
             type="button"
-            aria-label={`Open ${alt}`}
+            aria-label={`Open ${label.ariaLabel}`}
             className="block size-full cursor-zoom-in focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             {src === null ? (
@@ -66,7 +82,7 @@ export function ImageAttachmentChip(props: ImageAttachmentChipProps) {
           type="button"
           size="icon"
           variant="secondary"
-          aria-label={`Remove ${alt}`}
+          aria-label={`Remove ${label.ariaLabel}`}
           onPointerDown={(event) => {
             event.stopPropagation();
           }}
@@ -97,7 +113,7 @@ export function ImageAttachmentChip(props: ImageAttachmentChipProps) {
           editor?.focus();
         }}
       >
-        <DialogTitle className="sr-only">{alt}</DialogTitle>
+        <DialogTitle className="sr-only">{label.title}</DialogTitle>
         {src === null ? (
           <div
             className="aspect-video w-full animate-pulse rounded-md bg-muted/60"
