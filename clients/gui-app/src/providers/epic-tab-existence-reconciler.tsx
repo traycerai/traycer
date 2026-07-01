@@ -19,10 +19,16 @@ import {
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { missingEpicIds } from "@/lib/epics/epic-tab-existence";
+import { wasEpicCreatedThisSession } from "@/lib/epics/session-created-epics";
+import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 import { useWindowsBridgeHydrated } from "@/providers/windows-bridge-context";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
+import {
+  selectHasActiveInitialChatHandoffForEpic,
+  useInitialChatHandoffStore,
+} from "@/stores/epics/initial-chat-handoff-store";
 
 const EPIC_TAB_RECONCILE_PAGE_LIMIT = 100;
 const EMPTY_EXISTING_EPIC_IDS: ReadonlyArray<string> = [];
@@ -173,9 +179,19 @@ function EpicTabReconciliationPage(props: {
     if (terminalExistingEpicIds === null) return;
     if (completionAppliedRef.current) return;
     completionAppliedRef.current = true;
-    const staleEpicIds = missingEpicIds(
-      props.run.openEpicIds,
-      new Set(terminalExistingEpicIds),
+    // Never force-close an epic this session just created (or is creating):
+    // `epic.listTasks` lags `epic.create` (that lag is exactly why
+    // `useEpicCreate.onSuccess` manually patches the cloud-tasks cache), so a
+    // freshly-created epic is legitimately absent from the reconcile page for a
+    // short window. Closing its tab strands the route on a loading skeleton
+    // that never recovers. Such epics carry a live open-epic session and/or an
+    // active initial-chat handoff; a genuinely-stale persisted tab (its epic
+    // deleted while the app was closed) carries neither. A remote delete of an
+    // OPEN epic is handled by `EpicAccessCoordinator` (via the live session's
+    // `epicDeleted` / `accessLost` / unavailable-`snapshotFetchError` signals),
+    // not here, so this exclusion cannot hide a real "epic is gone" signal.
+    const staleEpicIds = closableStaleEpicIds(
+      missingEpicIds(props.run.openEpicIds, new Set(terminalExistingEpicIds)),
     );
     if (staleEpicIds.length > 0) {
       useComposerRunSettingsStore.getState().clearEpicRunSettings(staleEpicIds);
@@ -187,6 +203,34 @@ function EpicTabReconciliationPage(props: {
   if (nextPage.cursor === undefined) return null;
 
   return <EpicTabReconciliationPage run={props.run} page={nextPage} />;
+}
+
+/**
+ * Drop epics that must never be force-closed by existence reconciliation. An
+ * epic is protected when ANY of these hold:
+ *  - it was created from the start page this session (synchronous marker set at
+ *    create time - the deterministic guard both the GUI-chat and terminal-agent
+ *    landing flows share);
+ *  - it has a live open-epic session in the registry (`peek` reads without
+ *    disturbing MRU ordering);
+ *  - it has an active (non-failed) initial-chat handoff (the GUI-chat flow).
+ * Each marks an epic this session opened or created, for which a transient
+ * `epic.listTasks` miss is propagation lag rather than a deletion. Evaluated
+ * fresh here, at close time, so a session/handoff that appears after the
+ * reconcile RPC resolves still counts.
+ */
+function closableStaleEpicIds(
+  candidateEpicIds: ReadonlyArray<string>,
+): ReadonlyArray<string> {
+  if (candidateEpicIds.length === 0) return candidateEpicIds;
+  const handoffState = useInitialChatHandoffStore.getState();
+  const registry = getOpenEpicRegistry();
+  return candidateEpicIds.filter(
+    (epicId) =>
+      !wasEpicCreatedThisSession(epicId) &&
+      registry.peek(epicId) === null &&
+      !selectHasActiveInitialChatHandoffForEpic(handoffState, epicId),
+  );
 }
 
 function mergeExistingEpicIds(
