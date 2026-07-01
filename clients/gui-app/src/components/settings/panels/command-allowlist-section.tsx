@@ -157,7 +157,9 @@ export function CommandAllowlistSection() {
         openPaths={openPaths}
         onRemove={(rule) => remove.mutate({ rule })}
         removingKey={remove.isPending ? ruleKey(remove.variables.rule) : null}
-        onClearScope={(scope) => clear.mutate({ scope })}
+        onClearScope={(scope, onSuccess) =>
+          clear.mutate({ scope }, { onSuccess })
+        }
         clearingScopeKey={clearingScopeKey}
         busy={busy}
       />
@@ -191,7 +193,10 @@ function CommandAllowlistBody(props: {
   readonly openPaths: ReadonlySet<string>;
   readonly onRemove: (rule: CommandAllowRule) => void;
   readonly removingKey: string | null;
-  readonly onClearScope: (scope: CommandAllowScope) => void;
+  readonly onClearScope: (
+    scope: CommandAllowScope,
+    onSuccess: () => void,
+  ) => void;
   readonly clearingScopeKey: string | null;
   readonly busy: boolean;
 }) {
@@ -349,7 +354,7 @@ function ScopeCard(props: {
   readonly rules: readonly CommandAllowRule[];
   readonly onRemove: (rule: CommandAllowRule) => void;
   readonly removingKey: string | null;
-  readonly onClear: (scope: CommandAllowScope) => void;
+  readonly onClear: (scope: CommandAllowScope, onSuccess: () => void) => void;
   readonly clearing: boolean;
   readonly busy: boolean;
 }) {
@@ -419,10 +424,9 @@ function ScopeCard(props: {
         cascadeSummary={null}
         actionLabel="Clear"
         isPending={props.clearing}
-        onConfirm={() => {
-          props.onClear(props.scope);
-          setConfirmClear(false);
-        }}
+        onConfirm={() =>
+          props.onClear(props.scope, () => setConfirmClear(false))
+        }
       />
       <ul className="m-0 flex list-none flex-col divide-y divide-border/30 bg-muted/5 p-0">
         {props.rules.map((rule) => (
