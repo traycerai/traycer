@@ -42,13 +42,20 @@ export const gitStageSchema = z.enum([
 export type GitStage = z.infer<typeof gitStageSchema>;
 
 /**
- * Per-file metadata from a `git status` poll.
+ * Per-file metadata from a `git status` poll - the FROZEN v1.0 file shape.
  *
  * `path` and `previousPath` are repo-relative Git paths.
  * `previousPath` is set only for renamed/copied files (ADR-0002).
  * `stagedOid` + `worktreeOid` are nullable in degraded mode (ADR-0007).
+ *
+ * This is the ONLY file schema on the `git.subscribeStatus@1.0` stream and the
+ * `git.listChangedFiles@1.0` response. It must NOT be mutated: the broadcaster
+ * streams `listChangedFiles` results directly through it, and stream methods
+ * carry no version bridge, so any added field would silently break old peers on
+ * the live path. Submodule-aware (v1.1) additions live on the DISTINCT
+ * `gitChangedFileV11Schema` below, never here.
  */
-export const gitChangedFileSchema = z.object({
+export const gitChangedFileV10Schema = z.object({
   path: z.string(),
   previousPath: z.string().nullable(),
   status: gitFileStatusSchema,
@@ -60,7 +67,15 @@ export const gitChangedFileSchema = z.object({
   stagedOid: z.string().nullable(),
   worktreeOid: z.string().nullable(),
 });
-export type GitChangedFile = z.infer<typeof gitChangedFileSchema>;
+export type GitChangedFileV10 = z.infer<typeof gitChangedFileV10Schema>;
+
+/**
+ * Back-compat alias for the frozen v1.0 file schema. Existing consumers import
+ * `gitChangedFileSchema`; new code should reference `gitChangedFileV10Schema`
+ * (the stream's only file schema) or `gitChangedFileV11Schema` (unary v1.1).
+ */
+export const gitChangedFileSchema = gitChangedFileV10Schema;
+export type GitChangedFile = GitChangedFileV10;
 
 /**
  * Discriminated union of seven repo state kinds per Q17 lock.
@@ -132,7 +147,7 @@ export const gitListChangedFilesResponseSchema = z.object({
   runningDir: z.string(),
   headSha: z.string(),
   branch: z.string().nullable(),
-  files: z.array(gitChangedFileSchema),
+  files: z.array(gitChangedFileV10Schema),
   fingerprint: z.string(),
   repoMode: repoModeSchema,
   repoState: repoStateSchema,
@@ -276,7 +291,7 @@ export const gitSubscribeStatusEventSchema = z.discriminatedUnion("type", [
     runningDir: z.string(),
     headSha: z.string(),
     branch: z.string().nullable(),
-    files: z.array(gitChangedFileSchema),
+    files: z.array(gitChangedFileV10Schema),
     fingerprint: z.string(),
     repoMode: repoModeSchema,
     repoState: repoStateSchema,
@@ -287,7 +302,7 @@ export const gitSubscribeStatusEventSchema = z.discriminatedUnion("type", [
     runningDir: z.string(),
     headSha: z.string(),
     branch: z.string().nullable(),
-    files: z.array(gitChangedFileSchema),
+    files: z.array(gitChangedFileV10Schema),
     fingerprint: z.string(),
     repoMode: repoModeSchema,
     repoState: repoStateSchema,
@@ -317,4 +332,218 @@ export const gitSubscribeStatusRequestSchema = z.object({
 });
 export type GitSubscribeStatusRequest = z.infer<
   typeof gitSubscribeStatusRequestSchema
+>;
+
+// ---- Submodule-aware v1.1 (unary-only) ---------------------------------- //
+//
+// Everything below is exclusive to the unary `git.*@1.1` surface. None of it
+// may reach `git.subscribeStatus@1.0` (frozen, parent-only). The host composes
+// one nested snapshot: `git.listChangedFiles@1.1` returns the parent changeset
+// plus a `submodules[]` array; `git.getFileDiff(s)@1.1` add a per-request
+// `compareFromSha` for ahead-of-pin diffs. See plan §2.2.
+
+/**
+ * Base/ours/theirs pins carried by a conflicted (`u UU S...`) parent gitlink
+ * row. A conflicted gitlink has no single recorded pin (`<hH>`), so the ordinary
+ * pin model does not apply; these three SHAs are the only pointer facts. Each is
+ * nullable because a stage may be absent (e.g. an add/add conflict has no base).
+ */
+const submoduleConflictShas = {
+  baseSha: z.string().nullable(),
+  oursSha: z.string().nullable(),
+  theirsSha: z.string().nullable(),
+};
+
+/**
+ * A file changed between the parent-recorded pin and the submodule HEAD
+ * (`git diff <pin>..HEAD`), listed under the "Committed changes not recorded by
+ * parent" group. Diffed by re-issuing `git.getFileDiff@1.1` with
+ * `compareFromSha = <pin>`. No `stage` (these are committed, not worktree/index)
+ * and no OIDs (the diff is a commit-range diff resolved host-side).
+ */
+export const commitAheadFileSchema = z.object({
+  path: z.string(),
+  previousPath: z.string().nullable(),
+  status: gitFileStatusSchema,
+  isBinary: z.boolean(),
+  insertions: z.number().int().nonnegative(),
+  deletions: z.number().int().nonnegative(),
+});
+export type CommitAheadFile = z.infer<typeof commitAheadFileSchema>;
+
+/**
+ * How the submodule's checkout HEAD relates to the parent-recorded pin
+ * (`merge-base --is-ancestor` classification). A discriminated union so
+ * `commitsAhead` exists ONLY on `ahead` - `count: 0` can never masquerade as
+ * "unavailable", and shallow/unborn/errored classifications are first-class
+ * `unknown{reason}` rather than a bare `equal`. See plan §2.2.
+ */
+export const submoduleRelationSchema = z.discriminatedUnion("state", [
+  z.object({
+    state: z.literal("ahead"),
+    recordedPinSha: z.string(),
+    submoduleHeadSha: z.string(),
+    commitsAhead: z.object({
+      count: z.number().int().nonnegative(),
+      files: z.array(commitAheadFileSchema),
+    }),
+  }),
+  z.object({
+    state: z.literal("behind"),
+    recordedPinSha: z.string(),
+    submoduleHeadSha: z.string(),
+  }),
+  z.object({
+    state: z.literal("diverged"),
+    recordedPinSha: z.string(),
+    submoduleHeadSha: z.string(),
+  }),
+  z.object({
+    state: z.literal("equal"),
+    recordedPinSha: z.string(),
+    submoduleHeadSha: z.string(),
+  }),
+  z.object({
+    state: z.literal("unknown"),
+    reason: z.enum(["missing-pin-object", "unborn-head", "git-error"]),
+    recordedPinSha: z.string().nullable(),
+    submoduleHeadSha: z.string().nullable(),
+  }),
+]);
+export type SubmoduleRelation = z.infer<typeof submoduleRelationSchema>;
+
+/**
+ * The parent's view of a gitlink row - the descriptor hung off a parent file
+ * row via `gitChangedFileV11Schema.gitlink`, and the SINGLE canonical home for a
+ * submodule pointer conflict. A discriminated union so a normal pin-and-flags
+ * row can never also carry conflict SHAs (an unrepresentable mixture):
+ *
+ * - `normal` carries what an ordinary dirty gitlink's parent porcelain knows:
+ *   the recorded pin (`<hH>`), the staged index pin (`<hI>`), and the dirty
+ *   flags from `<sub>` (`c`/`m`/`u`). Pins are nullable to tolerate added/removed
+ *   gitlink edge cases (an added gitlink has no `<hH>`, etc.).
+ * - `conflicted` carries the unmerged base/ours/theirs pins of a pointer-only
+ *   `u UU S...` row - which has no single recorded pin and earns no
+ *   `submodules[]` section (plan §1.1), so its conflict facts live only here.
+ *
+ * The computed relationship and the submodule's own files live on
+ * `submoduleChangesetSchema`; the client joins the two by the gitlink row `path`
+ * <-> `submoduleChangeset.parentPath`.
+ */
+export const submodulePointerSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("normal"),
+    recordedPinSha: z.string().nullable(),
+    stagedPinSha: z.string().nullable(),
+    commitChanged: z.boolean(),
+    modifiedContent: z.boolean(),
+    untrackedContent: z.boolean(),
+  }),
+  z.object({ kind: z.literal("conflicted"), ...submoduleConflictShas }),
+]);
+export type SubmodulePointer = z.infer<typeof submodulePointerSchema>;
+
+/**
+ * The unary v1.1 file shape: the frozen v1.0 file EXTENDED with a nullable
+ * `gitlink` descriptor. Additive by construction (`.default(null)`), so a v1.0
+ * response upgrades cleanly. Only a parent gitlink row carries a non-null
+ * `gitlink`; every ordinary file row keeps it `null`. This schema NEVER touches
+ * the stream - the stream stays on `gitChangedFileV10Schema`.
+ */
+export const gitChangedFileV11Schema = gitChangedFileV10Schema.extend({
+  gitlink: submodulePointerSchema.nullable().default(null),
+});
+export type GitChangedFileV11 = z.infer<typeof gitChangedFileV11Schema>;
+
+/**
+ * One dirty, initialized submodule section in the `git.listChangedFiles@1.1`
+ * response (plan §1.3). A submodule earns an entry only when the parent flags it
+ * dirty (`c`/`m`/`u`) AND it has an existing worktree; conflicted/removed
+ * gitlinks are pointer-only and surface solely on the parent gitlink row. A
+ * changeset therefore always carries a computed `relation` (never a conflict) -
+ * `compareFromSha` diffs are legal exactly when `relation.state === "ahead"`.
+ *
+ * `repoRoot` is a canonical absolute host path (realpath/NFC-normalized).
+ * `parentPath` is the gitlink's parent-repo-relative Git path - the join key
+ * back to the parent gitlink row. `files` are the submodule's own worktree/
+ * index/untracked/conflicted files (v1.1 file shape). `branch`/`repoState`
+ * describe the submodule checkout itself.
+ */
+export const submoduleChangesetSchema = z.object({
+  repoRoot: z.string(),
+  parentPath: z.string(),
+  branch: z.string().nullable(),
+  repoState: repoStateSchema,
+  relation: submoduleRelationSchema,
+  files: z.array(gitChangedFileV11Schema),
+});
+export type SubmoduleChangeset = z.infer<typeof submoduleChangesetSchema>;
+
+/**
+ * `git.listChangedFiles@1.1` request. The frozen v1.0 request with one additive
+ * field: `refreshRelations`, the manual-refresh signal. When `true`, the host
+ * bypasses the SHA-tuple relation cache and recomputes each submodule's relation
+ * (plan §1.4) — the only way a client can force a cached `unknown` to be
+ * re-evaluated without a tuple change. `.default(false)` keeps it additive; a
+ * v1.0 host strips it on the wire, degrading to cache-served relations.
+ */
+export const gitListChangedFilesRequestSchemaV11 =
+  gitListChangedFilesRequestSchema.extend({
+    refreshRelations: z.boolean().default(false),
+  });
+export type GitListChangedFilesRequestV11 = z.infer<
+  typeof gitListChangedFilesRequestSchemaV11
+>;
+
+/**
+ * `git.listChangedFiles@1.1` response. The frozen v1.0 response with two
+ * additive fields: parent `files` carry the v1.1 file shape (nullable `gitlink`),
+ * and `submodules` is the host-composed nested snapshot. `submodules` is
+ * `.default([])` so a v1.0 host's response upgrades to a parent-only view.
+ */
+export const gitListChangedFilesResponseSchemaV11 =
+  gitListChangedFilesResponseSchema.extend({
+    files: z.array(gitChangedFileV11Schema),
+    submodules: z.array(submoduleChangesetSchema).default([]),
+  });
+export type GitListChangedFilesResponseV11 = z.infer<
+  typeof gitListChangedFilesResponseSchemaV11
+>;
+
+/**
+ * `git.getFileDiff@1.1` request. Adds `compareFromSha`: when non-null, the host
+ * diffs the file against that ref (the submodule pin) instead of the working
+ * tree/index - the ahead-of-pin ("committed changes not recorded by parent")
+ * diff. `.default(null)` keeps it additive; a v1.0 host strips it on the wire,
+ * degrading to an ordinary stage-based diff.
+ */
+export const gitGetFileDiffRequestSchemaV11 =
+  gitGetFileDiffRequestSchema.extend({
+    compareFromSha: z.string().nullable().default(null),
+  });
+export type GitGetFileDiffRequestV11 = z.infer<
+  typeof gitGetFileDiffRequestSchemaV11
+>;
+
+/**
+ * `git.getFileDiffs@1.1` request. Adds a per-file `compareFromSha` (same
+ * semantics as the single-file variant) so a batch can mix ordinary and
+ * ahead-of-pin diffs. The batch bounds (`min(1).max(10)`) are unchanged.
+ */
+export const gitGetFileDiffsRequestSchemaV11 = gitGetFileDiffsRequestSchema
+  .extend({
+    files: z
+      .array(
+        z.object({
+          filePath: z.string(),
+          previousPath: z.string().nullable(),
+          stage: gitStageSchema,
+          compareFromSha: z.string().nullable().default(null),
+        }),
+      )
+      .min(1)
+      .max(10),
+  });
+export type GitGetFileDiffsRequestV11 = z.infer<
+  typeof gitGetFileDiffsRequestSchemaV11
 >;

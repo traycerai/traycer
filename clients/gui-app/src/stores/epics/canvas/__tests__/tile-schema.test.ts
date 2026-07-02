@@ -6,6 +6,7 @@ import {
 } from "@/stores/epics/canvas/tile-schema";
 import {
   gitDiffTileId,
+  makeGitAheadFileDiffTile,
   makeGitBundleDiffTile,
   makeGitFileDiffTile,
 } from "@/lib/git/git-diff-tile";
@@ -59,9 +60,17 @@ describe("gitDiffTileId", () => {
       runningDir: "/repo",
       bundleGroup: "changes",
     });
-    expect(new Set([fileA, fileAStaged, fileB, otherHost, bundle]).size).toBe(
-      5,
-    );
+    // An ahead-of-pin diff of the SAME path in the SAME repo must not collide
+    // with the working-tree `file` tile id.
+    const aheadA = gitDiffTileId(HOST, {
+      kind: "ahead-file",
+      runningDir: "/repo",
+      parentRunningDir: "/parent",
+      filePath: "src/a.ts",
+    });
+    expect(
+      new Set([fileA, fileAStaged, fileB, otherHost, bundle, aheadA]).size,
+    ).toBe(6);
   });
 });
 
@@ -138,8 +147,15 @@ describe("parseTileRef / serializeTileRef", () => {
       runningDir: "/repo",
       bundleGroup: "changes",
     });
+    const ahead = makeGitAheadFileDiffTile({
+      hostId: HOST,
+      runningDir: "/repo/traycer",
+      parentRunningDir: "/repo",
+      filePath: "src/a.ts",
+    });
     expect(parseTileRef(serializeTileRef(file))).toEqual(file);
     expect(parseTileRef(serializeTileRef(bundle))).toEqual(bundle);
+    expect(parseTileRef(serializeTileRef(ahead))).toEqual(ahead);
   });
 
   it("recomputes a random git-diff id on parse", () => {

@@ -20,6 +20,7 @@ interface GitGetFileDiffsRequestLike {
     readonly filePath: string;
     readonly previousPath: string | null;
     readonly stage: GitStage;
+    readonly compareFromSha: string | null;
   }>;
   readonly ignoreWhitespace: boolean;
   readonly byteBudget: number;
@@ -209,8 +210,14 @@ describe("useGitGetFileDiffsBatched", () => {
             filePath: "staged.ts",
             previousPath: "old-staged.ts",
             stage: "staged",
+            compareFromSha: null,
           },
-          { filePath: "unstaged.ts", previousPath: null, stage: "unstaged" },
+          {
+            filePath: "unstaged.ts",
+            previousPath: null,
+            stage: "unstaged",
+            compareFromSha: null,
+          },
         ],
         ignoreWhitespace: true,
         byteBudget: DEFAULT_GIT_FILE_DIFFS_BYTE_BUDGET,
@@ -229,8 +236,7 @@ describe("useGitGetFileDiffsBatched", () => {
           "staged-oid",
           null,
           true,
-          DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET,
-        ),
+          DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET, null),
       ),
     ).toEqual(stagedDiff);
     expect(
@@ -245,8 +251,7 @@ describe("useGitGetFileDiffsBatched", () => {
           null,
           "worktree-oid",
           true,
-          DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET,
-        ),
+          DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET, null),
       ),
     ).toEqual(unstagedDiff);
     expect(
@@ -261,8 +266,7 @@ describe("useGitGetFileDiffsBatched", () => {
           null,
           "worktree-oid",
           true,
-          DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET,
-        ),
+          DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET, null),
       ),
     ).toBeUndefined();
   });

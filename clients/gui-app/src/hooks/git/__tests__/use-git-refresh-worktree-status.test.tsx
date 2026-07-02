@@ -55,6 +55,7 @@ describe("useGitRefreshWorktreeStatus", () => {
       hostId: "host-1",
       runningDir: "/repo",
       ignoreWhitespace: false,
+      refreshRelations: false,
     });
     expect(
       queryClient.getQueryData(

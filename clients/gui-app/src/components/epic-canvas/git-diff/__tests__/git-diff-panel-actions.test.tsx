@@ -23,8 +23,8 @@ vi.mock("@/hooks/worktree/use-worktree-list-bindings-for-epic-query", () => ({
 }));
 
 const refreshStatus = vi.fn(() => Promise.resolve());
-vi.mock("@/hooks/git/use-git-refresh-worktree-status", () => ({
-  useGitRefreshWorktreeStatus: () => ({
+vi.mock("@/hooks/git/use-git-refresh-submodule-status", () => ({
+  useGitRefreshSubmoduleStatus: () => ({
     mutateAsync: refreshStatus,
   }),
 }));

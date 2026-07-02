@@ -135,10 +135,15 @@ async function fetchPage(options: {
   }
 
   try {
+    // Batched prefetch only ever covers ordinary working-tree / staged files, so
+    // every entry is a stage-based diff (`compareFromSha: null`). A submodule's
+    // ahead-of-pin diff is opened one file at a time via `useGitGetFileDiffQuery`,
+    // never through this batch path.
     const requestFiles = options.files.map((file) => ({
       filePath: file.path,
       previousPath: file.previousPath,
       stage: file.stage,
+      compareFromSha: null,
     }));
 
     const response: GitGetFileDiffsResponse = await options.client.request(

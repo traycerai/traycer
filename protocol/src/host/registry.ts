@@ -125,8 +125,14 @@ import { worktreeDeleteByPathStreamV10 } from "@traycer/protocol/host/worktree-d
 import { editorOpenPathsV10 } from "@traycer/protocol/host/editor/contracts";
 import {
   gitListChangedFilesV10,
+  gitListChangedFilesV11,
+  gitListChangedFilesUpgradeV10ToV11,
   gitGetFileDiffV10,
+  gitGetFileDiffV11,
+  gitGetFileDiffUpgradeV10ToV11,
   gitGetFileDiffsV10,
+  gitGetFileDiffsV11,
+  gitGetFileDiffsUpgradeV10ToV11,
   gitGetCapabilitiesV10,
   gitSubscribeStatusV10,
 } from "@traycer/protocol/host/git-contracts";
@@ -1977,11 +1983,15 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
   },
   "git.listChangedFiles": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: gitListChangedFilesV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: gitListChangedFilesV11,
+          upgradeFromPreviousVersion: gitListChangedFilesUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -1989,11 +1999,15 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
   },
   "git.getFileDiff": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: gitGetFileDiffV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: gitGetFileDiffV11,
+          upgradeFromPreviousVersion: gitGetFileDiffUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -2001,11 +2015,15 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
   },
   "git.getFileDiffs": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: gitGetFileDiffsV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: gitGetFileDiffsV11,
+          upgradeFromPreviousVersion: gitGetFileDiffsUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},

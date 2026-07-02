@@ -5,7 +5,7 @@ import {
 } from "@tanstack/react-query";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
-  GitGetFileDiffRequest,
+  GitGetFileDiffRequestV11,
   GitGetFileDiffResponse,
   GitStage,
 } from "@traycer/protocol/host";
@@ -24,6 +24,14 @@ export function useGitGetFileDiffQuery(args: {
   readonly worktreeOid: string | null;
   readonly ignoreWhitespace: boolean;
   readonly byteBudget: number | null;
+  /**
+   * v1.1 ahead-of-pin base. `null` for ordinary stage-based diffs (parent files
+   * and a submodule's own working-tree files). Non-null only for a submodule's
+   * "committed changes not recorded by parent" diff, where the host runs
+   * `git diff <compareFromSha>..HEAD -- <file>` and ignores `stage`. Part of the
+   * cache key so it never collides with the same path's working-tree diff.
+   */
+  readonly compareFromSha: string | null;
   readonly enabled: boolean;
 }): UseQueryResult<GitGetFileDiffResponse, HostRpcError> {
   const client = useHostClient();
@@ -49,6 +57,7 @@ export function useGitGetFileDiffQuery(args: {
           args.worktreeOid,
           args.ignoreWhitespace,
           args.byteBudget,
+          args.compareFromSha,
         ),
       ],
       queryFn: async () => {
@@ -59,7 +68,7 @@ export function useGitGetFileDiffQuery(args: {
         if (!client) {
           throw new Error("Host client unavailable");
         }
-        const request: GitGetFileDiffRequest = {
+        const request: GitGetFileDiffRequestV11 = {
           hostId: args.hostId ?? "",
           runningDir: args.runningDir,
           filePath: args.filePath,
@@ -67,6 +76,7 @@ export function useGitGetFileDiffQuery(args: {
           stage: args.stage,
           ignoreWhitespace: args.ignoreWhitespace,
           byteBudget: args.byteBudget,
+          compareFromSha: args.compareFromSha,
         };
         return client.request("git.getFileDiff", request);
       },

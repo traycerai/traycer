@@ -4,7 +4,7 @@ import type { LeftPanelSlotProps } from "@/components/epic-canvas/sidebar/left-p
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useWorktreeListBindingsForEpic } from "@/hooks/worktree/use-worktree-list-bindings-for-epic-query";
-import { useGitRefreshWorktreeStatus } from "@/hooks/git/use-git-refresh-worktree-status";
+import { useGitRefreshSubmoduleStatus } from "@/hooks/git/use-git-refresh-submodule-status";
 import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
 import {
   selectGitPanelEpicState,
@@ -48,15 +48,22 @@ export function GitDiffPanelActions(props: LeftPanelSlotProps) {
     useGitPanelStore.getState().setListLayout(props.epicId, nextLayout);
   }, [listLayout, props.epicId]);
 
-  const { mutateAsync: refreshWorktreeStatus } = useGitRefreshWorktreeStatus();
+  // Manual refresh re-fetches the submodule-aware nested snapshot with
+  // `refreshRelations: true` (bypassing the host's SHA-tuple relation cache),
+  // writing both the v1.1 slot the panel renders and the v1.0 slot the picker
+  // reads. On an old host this degrades to a parent-only refresh. Scoped to the
+  // selected worktree's host (git panels are worktree-scoped).
+  const { mutateAsync: refreshSubmoduleStatus } = useGitRefreshSubmoduleStatus(
+    selectedRow === null ? null : selectedRow.hostId,
+  );
   const handleRefresh = useCallback(async () => {
     if (selectedRow === null) return;
-    await refreshWorktreeStatus({
+    await refreshSubmoduleStatus({
       hostId: selectedRow.hostId,
       runningDir: selectedRow.runningDir,
       ignoreWhitespace,
     });
-  }, [ignoreWhitespace, refreshWorktreeStatus, selectedRow]);
+  }, [ignoreWhitespace, refreshSubmoduleStatus, selectedRow]);
 
   const refresh = useRefreshSpinner({
     onRefresh: handleRefresh,

@@ -1,26 +1,9 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ChangeEvent,
-  type KeyboardEvent,
-  type ReactNode,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, type ReactNode } from "react";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
-import { Search, X } from "lucide-react";
 import type {
-  GitChangedFile,
   GitListChangedFilesResponse,
   WorktreeBindingSelectorRow,
 } from "@traycer/protocol/host";
-import {
-  InputGroup,
-  InputGroupAddon,
-  InputGroupButton,
-  InputGroupInput,
-} from "@/components/ui/input-group";
 import { useWorktreeListBindingsForEpic } from "@/hooks/worktree/use-worktree-list-bindings-for-epic-query";
 import { useGitPrefetchWorktreeStatus } from "@/hooks/git/use-git-prefetch-worktree-status";
 import { useGitCapabilitiesQuery } from "@/hooks/git/use-git-capabilities-query";
@@ -28,8 +11,12 @@ import {
   useGitListChangedFilesSubscription,
   type GitListChangedFilesSubscriptionResult,
 } from "@/hooks/git/use-git-list-changed-files-subscription";
+import { useGitListChangedFilesWithSubmodules } from "@/hooks/git/use-git-list-changed-files-with-submodules";
+import { useGitRefreshSubmoduleStatus } from "@/hooks/git/use-git-refresh-submodule-status";
 import { gitQueryKeys } from "@/lib/query-keys/git-query-keys";
 import { formatGitWorktreeLabel } from "@/lib/git/worktree-label";
+import { composeGitRepos } from "@/lib/git/git-repo-composition";
+import { getBasename } from "@/lib/path/cross-platform-path";
 import {
   selectGitPanelEpicState,
   useGitPanelStore,
@@ -39,7 +26,8 @@ import { worktreeRowKey } from "@/lib/worktree/worktree-row-key";
 import { isGitSelectable } from "@/lib/worktree/worktree-git-selectable";
 import { CapabilityGate } from "./capability-gate";
 import { DiffLoadingSkeleton } from "./diff-loading-skeleton";
-import { FileList } from "./file-list";
+import { GitChangedFilesView } from "./git-changed-files-view";
+import { GitReposPanel } from "./git-repos-panel";
 import { NoGitWorktrees } from "./empty-states/no-git-worktrees";
 import { NoChangesInWorktree } from "./empty-states/no-changes-in-worktree";
 import { SubscriptionErrorState } from "./empty-states/subscription-error-state";
@@ -212,6 +200,59 @@ function PanelContent(props: PanelContentProps): ReactNode {
     ignoreWhitespace,
     enabled: true,
   });
+
+  // The submodule-aware nested snapshot (single epoch). The parent subscription
+  // fingerprint is the change-trigger; a bounded timer covers inner-only edits
+  // (both inside the hook). Manual refresh flows through the toolbar mutation.
+  const submoduleSnapshot = useGitListChangedFilesWithSubmodules({
+    hostId: props.selectedRow.hostId,
+    runningDir: props.selectedRow.runningDir,
+    ignoreWhitespace,
+    enabled: true,
+    changeToken: subscription.data?.fingerprint ?? null,
+  });
+
+  const composition = useMemo(() => {
+    const snapshot = submoduleSnapshot.data;
+    if (snapshot === null) return null;
+    return composeGitRepos({
+      runningDir: snapshot.runningDir,
+      label: getBasename(props.selectedRow.runningDir),
+      branch: snapshot.branch,
+      headSha: snapshot.headSha,
+      repoState: snapshot.repoState,
+      files: snapshot.files,
+      submodules: snapshot.submodules,
+    });
+  }, [submoduleSnapshot.data, props.selectedRow.runningDir]);
+
+  const refresh = useGitRefreshSubmoduleStatus(props.selectedRow.hostId);
+  const handleRefresh = useCallback(() => {
+    void refresh.mutateAsync({
+      hostId: props.selectedRow.hostId,
+      runningDir: props.selectedRow.runningDir,
+      ignoreWhitespace,
+    });
+  }, [ignoreWhitespace, props.selectedRow, refresh]);
+
+  // Group-by-repo engages only once the nested snapshot confirms submodule
+  // content. Otherwise the panel renders exactly as the single-repo case does
+  // today, off the live subscription (no flicker while the unary call lands).
+  if (composition !== null && composition.hasSubmoduleContent) {
+    return (
+      <GitReposPanel
+        epicId={props.epicId}
+        viewTabId={props.viewTabId}
+        hostId={props.selectedRow.hostId}
+        runningDir={props.selectedRow.runningDir}
+        composition={composition}
+        repoMode={submoduleSnapshot.data?.repoMode ?? null}
+        onRefresh={handleRefresh}
+        isRefreshing={refresh.isPending}
+      />
+    );
+  }
+
   const conflictCount =
     subscription.data?.files.filter((file) => file.stage === "conflicted")
       .length ?? 0;
@@ -262,102 +303,6 @@ function PanelBody(props: PanelBodyProps): ReactNode {
     );
   }
   return null;
-}
-
-// Mirrors the file-tree explorer panel: the controlled input updates
-// immediately while the applied query (which drives filtering) is debounced.
-const GIT_PANEL_SEARCH_DEBOUNCE_MS = 150;
-
-interface GitChangedFilesViewProps {
-  readonly epicId: string;
-  readonly viewTabId: string;
-  readonly hostId: string;
-  readonly runningDir: string;
-  readonly files: ReadonlyArray<GitChangedFile>;
-}
-
-function GitChangedFilesView(props: GitChangedFilesViewProps): ReactNode {
-  const [searchQuery, setSearchQuery] = useState("");
-  const [appliedQuery, setAppliedQuery] = useState("");
-  const debounceTimerRef = useRef<number | null>(null);
-
-  const clearPendingDebounce = useCallback(() => {
-    if (debounceTimerRef.current === null) return;
-    window.clearTimeout(debounceTimerRef.current);
-    debounceTimerRef.current = null;
-  }, []);
-
-  const handleSearchChange = useCallback(
-    (event: ChangeEvent<HTMLInputElement>) => {
-      const next = event.target.value;
-      setSearchQuery(next);
-      clearPendingDebounce();
-      debounceTimerRef.current = window.setTimeout(() => {
-        debounceTimerRef.current = null;
-        setAppliedQuery(next);
-      }, GIT_PANEL_SEARCH_DEBOUNCE_MS);
-    },
-    [clearPendingDebounce],
-  );
-
-  const handleClear = useCallback(() => {
-    clearPendingDebounce();
-    setSearchQuery("");
-    setAppliedQuery("");
-  }, [clearPendingDebounce]);
-
-  const handleKeyDown = useCallback(
-    (event: KeyboardEvent<HTMLInputElement>) => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      handleClear();
-      event.currentTarget.blur();
-    },
-    [handleClear],
-  );
-
-  useEffect(() => clearPendingDebounce, [clearPendingDebounce]);
-
-  return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <div className="shrink-0 bg-background/50 px-2 py-1.5">
-        <InputGroup className="h-7 border-transparent bg-muted/25 shadow-none focus-within:bg-muted/35">
-          <InputGroupAddon align="inline-start">
-            <Search className="size-3.5" aria-hidden />
-          </InputGroupAddon>
-          <InputGroupInput
-            type="text"
-            value={searchQuery}
-            onChange={handleSearchChange}
-            onKeyDown={handleKeyDown}
-            placeholder="Filter changed files…"
-            aria-label="Filter changed files"
-            className="text-ui-sm"
-          />
-          {searchQuery.length > 0 ? (
-            <InputGroupAddon align="inline-end">
-              <InputGroupButton
-                size="icon-xs"
-                onClick={handleClear}
-                aria-label="Clear filter"
-              >
-                <X className="size-3.5" aria-hidden />
-              </InputGroupButton>
-            </InputGroupAddon>
-          ) : null}
-        </InputGroup>
-      </div>
-      <FileList
-        epicId={props.epicId}
-        viewTabId={props.viewTabId}
-        hostId={props.hostId}
-        runningDir={props.runningDir}
-        files={props.files}
-        query={appliedQuery}
-        onClearQuery={handleClear}
-      />
-    </div>
-  );
 }
 
 function pickDefaultRow(

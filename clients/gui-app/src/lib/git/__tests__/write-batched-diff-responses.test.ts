@@ -51,6 +51,7 @@ describe("writeBatchedDiffResponses", () => {
         filePath: response.filePath,
         previousPath: null,
         stage,
+        compareFromSha: null,
       })),
       ignoreWhitespace,
       diffs: responses,
@@ -67,8 +68,7 @@ describe("writeBatchedDiffResponses", () => {
       "oid-1",
       "oid-2",
       ignoreWhitespace,
-      DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET,
-    );
+      DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET, null);
 
     const key2 = gitQueryKeys.fileDiff(
       hostId,
@@ -80,8 +80,7 @@ describe("writeBatchedDiffResponses", () => {
       "oid-3",
       "oid-4",
       ignoreWhitespace,
-      DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET,
-    );
+      DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET, null);
 
     expect(queryClient.getQueryData(key1)).toEqual(responses[0]);
     expect(queryClient.getQueryData(key2)).toEqual(responses[1]);
@@ -110,7 +109,12 @@ describe("writeBatchedDiffResponses", () => {
       hostId,
       runningDir,
       requestFiles: [
-        { filePath: response.filePath, previousPath: null, stage },
+        {
+          filePath: response.filePath,
+          previousPath: null,
+          stage,
+          compareFromSha: null,
+        },
       ],
       ignoreWhitespace,
       diffs: [response],
@@ -127,8 +131,7 @@ describe("writeBatchedDiffResponses", () => {
       "response-oid-1",
       "response-oid-2",
       ignoreWhitespace,
-      DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET,
-    );
+      DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET, null);
 
     expect(queryClient.getQueryData(correctKey)).toEqual(response);
   });
@@ -158,6 +161,7 @@ describe("writeBatchedDiffResponses", () => {
           filePath: "subscriber/file.ts",
           previousPath: null,
           stage,
+          compareFromSha: null,
         },
       ],
       ignoreWhitespace,
@@ -174,8 +178,7 @@ describe("writeBatchedDiffResponses", () => {
       "response-oid-1",
       "response-oid-2",
       ignoreWhitespace,
-      DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET,
-    );
+      DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET, null);
     const normalizedResponseKey = gitQueryKeys.fileDiff(
       hostId,
       runningDir,
@@ -186,8 +189,7 @@ describe("writeBatchedDiffResponses", () => {
       "response-oid-1",
       "response-oid-2",
       ignoreWhitespace,
-      DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET,
-    );
+      DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET, null);
 
     expect(queryClient.getQueryData(subscriberKey)).toEqual(response);
     expect(queryClient.getQueryData(normalizedResponseKey)).toBeUndefined();
@@ -229,7 +231,12 @@ describe("writeBatchedDiffResponses", () => {
       hostId,
       runningDir,
       requestFiles: [
-        { filePath: response.filePath, previousPath: null, stage },
+        {
+          filePath: response.filePath,
+          previousPath: null,
+          stage,
+          compareFromSha: null,
+        },
       ],
       ignoreWhitespace,
       diffs: [response],
@@ -245,8 +252,7 @@ describe("writeBatchedDiffResponses", () => {
       null,
       null,
       ignoreWhitespace,
-      DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET,
-    );
+      DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET, null);
 
     expect(queryClient.getQueryData(key)).toEqual(response);
   });
@@ -284,8 +290,13 @@ describe("writeBatchedDiffResponses", () => {
       hostId,
       runningDir,
       requestFiles: [
-        { filePath, previousPath: null, stage: "staged" },
-        { filePath, previousPath: null, stage: "unstaged" },
+        { filePath, previousPath: null, stage: "staged", compareFromSha: null },
+        {
+          filePath,
+          previousPath: null,
+          stage: "unstaged",
+          compareFromSha: null,
+        },
       ],
       ignoreWhitespace,
       diffs: responses,
@@ -301,8 +312,7 @@ describe("writeBatchedDiffResponses", () => {
       "staged-oid",
       null,
       ignoreWhitespace,
-      DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET,
-    );
+      DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET, null);
     const unstagedKey = gitQueryKeys.fileDiff(
       hostId,
       runningDir,
@@ -313,8 +323,7 @@ describe("writeBatchedDiffResponses", () => {
       null,
       "worktree-oid",
       ignoreWhitespace,
-      DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET,
-    );
+      DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET, null);
 
     expect(
       queryClient.getQueryData<GitGetFileDiffResponse>(stagedKey)?.patch,
@@ -347,6 +356,7 @@ describe("writeBatchedDiffResponses", () => {
           filePath: "src/new-name.ts",
           previousPath: "src/old-name.ts",
           stage: "staged",
+          compareFromSha: null,
         },
       ],
       ignoreWhitespace: false,
@@ -363,8 +373,7 @@ describe("writeBatchedDiffResponses", () => {
       "staged-oid",
       null,
       false,
-      DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET,
-    );
+      DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET, null);
     const missingPreviousPathKey = gitQueryKeys.fileDiff(
       hostId,
       runningDir,
@@ -375,8 +384,7 @@ describe("writeBatchedDiffResponses", () => {
       "staged-oid",
       null,
       false,
-      DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET,
-    );
+      DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET, null);
 
     expect(queryClient.getQueryData(renameKey)).toEqual(response);
     expect(queryClient.getQueryData(missingPreviousPathKey)).toBeUndefined();
