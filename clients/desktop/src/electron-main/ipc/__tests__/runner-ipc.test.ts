@@ -2319,6 +2319,7 @@ describe("RunnerIpcBridge", () => {
           latestVersion: null,
           downloadProgress: null,
           installBlockedReason: null,
+          installGuidance: null,
           errorMessage: null,
           lastCheckedAt: null,
           lastCheckIntent: null,
