@@ -118,7 +118,17 @@ export class TerminalStreamClient {
         return;
       }
       case "binarySnapshot": {
-        if (binaryPayload === null) return;
+        if (binaryPayload === null) {
+          // Protocol violation: `hasBinaryPayload: true` promises a paired
+          // binary WS frame right behind this envelope (see subscribe.ts's
+          // file-level doc comment). Losing it here means the transport's
+          // envelope/binary-frame pairing broke somewhere below this class -
+          // surface it rather than silently dropping the snapshot.
+          console.warn(
+            `[stream] binarySnapshot for terminal.subscribe (sessionId=${frame.sessionId}) arrived without its paired binary payload; dropping frame`,
+          );
+          return;
+        }
         this.callbacks.onSnapshot(frame, binaryPayload);
         return;
       }
@@ -127,7 +137,14 @@ export class TerminalStreamClient {
         return;
       }
       case "binaryData": {
-        if (binaryPayload === null) return;
+        if (binaryPayload === null) {
+          // Same protocol violation as `binarySnapshot` above, for the live
+          // data frame.
+          console.warn(
+            `[stream] binaryData for terminal.subscribe (sessionId=${frame.sessionId}) arrived without its paired binary payload; dropping frame`,
+          );
+          return;
+        }
         this.callbacks.onData(frame, binaryPayload);
         return;
       }
