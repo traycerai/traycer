@@ -525,7 +525,9 @@ export async function readRotatedTokens(
   try {
     body = await response.json();
   } catch (error) {
-    return isAbortOrTimeout(error) ? { kind: "transient" } : { kind: "invalid" };
+    return isAbortOrTimeout(error)
+      ? { kind: "transient" }
+      : { kind: "invalid" };
   }
 
   if (body === null || typeof body !== "object") {
