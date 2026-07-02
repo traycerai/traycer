@@ -743,6 +743,10 @@ function main() {
     return;
   }
   const managers = selectedManagers(args.managers);
+  const homebrewVersionedOnlyBackfill =
+    args.homebrewVersionedOnly === true &&
+    managers.size === 1 &&
+    managers.has("homebrew");
   const descriptors = (args.descriptors || []).map(readDescriptor);
   if (descriptors.length === 0) {
     throw new Error("At least one --descriptor must be supplied");
@@ -874,7 +878,8 @@ function main() {
     });
   }
 
-  if (args.homebrewVersionedOnly !== true) {
+  // Only a true Homebrew-only backfill should avoid advancing the shared feed.
+  if (homebrewVersionedOnlyBackfill !== true) {
     // ----- CLI versions.json (used by scoop's checkver + Desktop probe) -----
     const cliVersions = {
       schemaVersion: 1,
