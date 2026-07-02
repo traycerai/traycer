@@ -208,12 +208,21 @@ class EmptyWindowRegistry extends EventEmitter implements MenuWindowRegistry {
     readonly initialRoute: string | null;
     readonly beforeLoad: ((windowId: string) => void) | null;
   }> = [];
+  private readonly createError: Error | null;
+
+  constructor(createError: Error | null) {
+    super();
+    this.createError = createError;
+  }
 
   async create(options: {
     readonly initialRoute: string | null;
     readonly beforeLoad: ((windowId: string) => void) | null;
   }): Promise<string> {
     this.createRequests.push(options);
+    if (this.createError !== null) {
+      throw this.createError;
+    }
     return "window-created";
   }
 
@@ -484,7 +493,7 @@ describe("MenuController", () => {
 
   it("opens a window and retries Restart Host when no renderer is available", async () => {
     const host = new FakeHost();
-    const registry = new EmptyWindowRegistry();
+    const registry = new EmptyWindowRegistry(null);
     const dispatchRendererCommand = vi
       .fn<(_command: MenuCommandId) => boolean>()
       .mockReturnValueOnce(false)
@@ -508,6 +517,70 @@ describe("MenuController", () => {
     expect(dispatchRendererCommand).toHaveBeenNthCalledWith(1, "host.restart");
     expect(dispatchRendererCommand).toHaveBeenNthCalledWith(2, "host.restart");
     expect(host.respawnCalls).toBe(0);
+    controller.dispose();
+  });
+
+  it("logs when Restart Host opens a window but still has no renderer target", async () => {
+    const host = new FakeHost();
+    const registry = new EmptyWindowRegistry(null);
+    const dispatchRendererCommand = vi.fn(() => false);
+    const controller = createController({
+      registry,
+      host,
+      authSession: new DesktopAuthSession(),
+      perWindowState: new PerWindowState(null),
+      dispatchRendererCommand,
+    });
+
+    controller.install();
+    vi.mocked(log.warn).mockClear();
+    runControllerCommand(controller, "host.restart", null);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(registry.createRequests).toEqual([
+      { initialRoute: null, beforeLoad: null },
+    ]);
+    expect(dispatchRendererCommand).toHaveBeenCalledTimes(2);
+    expect(dispatchRendererCommand).toHaveBeenNthCalledWith(1, "host.restart");
+    expect(dispatchRendererCommand).toHaveBeenNthCalledWith(2, "host.restart");
+    expect(host.respawnCalls).toBe(0);
+    expect(log.warn).toHaveBeenCalledWith(
+      "[menu] host.restart had no renderer after opening window",
+      { command: "host.restart" },
+    );
+    controller.dispose();
+  });
+
+  it("logs when Restart Host cannot open a renderer window", async () => {
+    const createError = new Error("create failed");
+    const host = new FakeHost();
+    const registry = new EmptyWindowRegistry(createError);
+    const dispatchRendererCommand = vi.fn(() => false);
+    const controller = createController({
+      registry,
+      host,
+      authSession: new DesktopAuthSession(),
+      perWindowState: new PerWindowState(null),
+      dispatchRendererCommand,
+    });
+
+    controller.install();
+    vi.mocked(log.warn).mockClear();
+    runControllerCommand(controller, "host.restart", null);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(registry.createRequests).toEqual([
+      { initialRoute: null, beforeLoad: null },
+    ]);
+    expect(dispatchRendererCommand).toHaveBeenCalledTimes(1);
+    expect(dispatchRendererCommand).toHaveBeenCalledWith("host.restart");
+    expect(host.respawnCalls).toBe(0);
+    expect(log.warn).toHaveBeenCalledWith(
+      "[menu] host.restart window creation failed",
+      createError,
+    );
     controller.dispose();
   });
 
