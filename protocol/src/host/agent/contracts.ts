@@ -18,8 +18,8 @@ import {
   agentSelectionGuideGlobalSetResponseSchema,
   getAgentTranscriptRequestSchema,
   getAgentTranscriptResponseSchema,
-  listHarnessModelsRequestSchema,
   listHarnessModelsRequestSchemaV10,
+  listHarnessModelsRequestSchemaV20,
   listHarnessModelsResponseSchema,
   listAgentsRequestSchema,
   listAgentsResponseSchema,
@@ -97,7 +97,7 @@ export const agentListHarnessModelsV10 = defineRpcContract({
 export const agentListHarnessModelsV20 = defineRpcContract({
   method: "agent.listHarnessModels",
   schemaVersion: { major: 2, minor: 0 } as const,
-  requestSchema: listHarnessModelsRequestSchema,
+  requestSchema: listHarnessModelsRequestSchemaV20,
   responseSchema: listHarnessModelsResponseSchema,
 });
 

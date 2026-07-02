@@ -7,8 +7,8 @@ import {
   hostRpcRegistry,
   getGuiAgentPlanRequestSchema,
   getGuiAgentPlanResponseSchema,
-  listHarnessModelsRequestSchema,
   listHarnessModelsRequestSchemaV10,
+  listHarnessModelsRequestSchemaV20,
   listHarnessModelsResponseSchema,
   listAgentsResponseSchema,
   listGuiAgentCommandsRequestSchema,
@@ -51,7 +51,7 @@ describe("agent host schemas", () => {
 
   it("defaults agent.listHarnessModels context fields to null", () => {
     expect(
-      listHarnessModelsRequestSchema.parse({
+      listHarnessModelsRequestSchemaV20.parse({
         harnessId: "codex",
       }),
     ).toEqual({
@@ -253,6 +253,7 @@ describe("agent host schemas", () => {
       }),
     ).toMatchObject({
       senderAgentId: "agent-1",
+      name: null,
       surface: null,
       harnessId: "claude",
       model: "opus-4.7",

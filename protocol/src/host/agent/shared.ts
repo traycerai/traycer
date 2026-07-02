@@ -334,13 +334,14 @@ export type ListHarnessModelsRequestV10 = z.infer<
   typeof listHarnessModelsRequestSchemaV10
 >;
 
-export const listHarnessModelsRequestSchema = z.object({
+export const listHarnessModelsRequestSchemaV20 = z.object({
   epicId: z.string().nullable().default(null),
   senderAgentId: z.string().nullable().default(null),
   harnessId: agentFacingHarnessIdSchema,
 });
+export const listHarnessModelsRequestSchema = listHarnessModelsRequestSchemaV20;
 export type ListHarnessModelsRequest = z.infer<
-  typeof listHarnessModelsRequestSchema
+  typeof listHarnessModelsRequestSchemaV20
 >;
 
 export const harnessModelSummarySchema = z.object({
