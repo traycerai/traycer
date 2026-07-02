@@ -13,15 +13,31 @@ import type {
 import type { WsStreamClient } from "./ws-stream-client";
 
 /**
- * Typed handlers for a `terminal.subscribe@1.0` session. The renderer's
- * terminal store binds these so raw stream envelopes do not leak into React.
+ * Typed handlers for a `terminal.subscribe` session. The renderer's terminal
+ * store binds these so raw stream envelopes do not leak into React.
+ *
+ * `onSnapshot`/`onData` take the content as a separate `string | Uint8Array`
+ * parameter rather than reading it off the frame: a `@1.2`+ connection
+ * receives `binarySnapshot`/`binaryData` instead of `snapshot`/`data`, whose
+ * payload arrives out-of-band as the paired binary WS frame rather than a
+ * JSON string field (see `subscribe.ts`'s file-level doc comment). This
+ * lets the store handle either encoding uniformly without knowing which
+ * minor negotiated.
  */
 export interface TerminalStreamCallbacks {
   readonly onSnapshot: (
-    frame: Extract<TerminalSubscribeServerFrame, { readonly kind: "snapshot" }>,
+    frame: Extract<
+      TerminalSubscribeServerFrame,
+      { readonly kind: "snapshot" | "binarySnapshot" }
+    >,
+    scrollback: string | Uint8Array,
   ) => void;
   readonly onData: (
-    frame: Extract<TerminalSubscribeServerFrame, { readonly kind: "data" }>,
+    frame: Extract<
+      TerminalSubscribeServerFrame,
+      { readonly kind: "data" | "binaryData" }
+    >,
+    chunk: string | Uint8Array,
   ) => void;
   readonly onResized: (
     frame: Extract<TerminalSubscribeServerFrame, { readonly kind: "resized" }>,
@@ -91,7 +107,6 @@ export class TerminalStreamClient {
     envelope: StreamFrameEnvelope,
     binaryPayload: Uint8Array | null,
   ): void {
-    if (binaryPayload !== null) return;
     const parsed = terminalSubscribeServerFrameSchema.safeParse(envelope);
     if (!parsed.success) {
       return;
@@ -99,11 +114,21 @@ export class TerminalStreamClient {
     const frame: TerminalSubscribeServerFrame = parsed.data;
     switch (frame.kind) {
       case "snapshot": {
-        this.callbacks.onSnapshot(frame);
+        this.callbacks.onSnapshot(frame, frame.scrollback);
+        return;
+      }
+      case "binarySnapshot": {
+        if (binaryPayload === null) return;
+        this.callbacks.onSnapshot(frame, binaryPayload);
         return;
       }
       case "data": {
-        this.callbacks.onData(frame);
+        this.callbacks.onData(frame, frame.chunk);
+        return;
+      }
+      case "binaryData": {
+        if (binaryPayload === null) return;
+        this.callbacks.onData(frame, binaryPayload);
         return;
       }
       case "resized": {
