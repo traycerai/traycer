@@ -12,6 +12,7 @@ import { useHostClient } from "@/lib/host";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { openTileIntoTargetGroup } from "@/lib/commands/actions";
 import { formatGitWorktreeLabel } from "@/lib/git/worktree-label";
+import { isVisibleRawTerminalSession } from "@/lib/terminals/terminal-session-filters";
 import {
   DEFAULT_TERMINAL_TITLE,
   terminalSessionTitle,
@@ -107,7 +108,13 @@ export function useTerminalsOpenerItems(
   const sessionsData = terminals.data;
 
   return useMemo<ReadonlyArray<CommandItem>>(() => {
-    const sessions = sessionsData?.sessions ?? [];
+    // `terminal.list` also returns `terminal-agent` backing PTYs; those belong
+    // to the "TUI agents" category, so filter to raw terminals only (shared
+    // predicate with the sidebar) - otherwise an agent double-lists here as a
+    // plain terminal and, worse, opens as a raw terminal tile on its PTY.
+    const sessions = (sessionsData?.sessions ?? []).filter(
+      isVisibleRawTerminalSession,
+    );
     const newTerminal = openerSubpageLeaf({
       id: "open:terminals:new",
       label: "Create new terminal",
