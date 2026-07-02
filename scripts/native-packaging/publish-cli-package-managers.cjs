@@ -79,6 +79,9 @@ function parseArgs(argv) {
       out.desktopCask = true;
     } else if (token === "--homebrew-versioned-only") {
       out.homebrewVersionedOnly = true;
+    } else if (token === "--target-homebrew-version") {
+      out.targetHomebrewVersion = valueFor(token, i);
+      i += 1;
     } else if (token === "--mac-arm-url") {
       out.macArmUrl = valueFor(token, i);
       i += 1;
@@ -163,6 +166,7 @@ function maybePlatform(byPlatform, key) {
 }
 
 const DEFAULT_MANAGERS = ["homebrew", "winget", "scoop", "deb-rpm"];
+const HOMEBREW_LINUX_CASK_MIN_VERSION = "4.5.0";
 
 function selectedManagers(rawManagers) {
   if (typeof rawManagers !== "string" || rawManagers.trim().length === 0) {
@@ -197,6 +201,31 @@ function homebrewExactVersionTokenSuffix(version) {
 
 function homebrewVersionedClassName(version) {
   return `TraycerAT${version.replace(/[^0-9]/g, "")}`;
+}
+
+function compareDottedVersions(left, right) {
+  const leftParts = left.split(".").map((part) => Number.parseInt(part, 10));
+  const rightParts = right.split(".").map((part) => Number.parseInt(part, 10));
+  const length = Math.max(leftParts.length, rightParts.length);
+  for (let i = 0; i < length; i += 1) {
+    const leftPart = Number.isNaN(leftParts[i]) ? 0 : leftParts[i] || 0;
+    const rightPart = Number.isNaN(rightParts[i]) ? 0 : rightParts[i] || 0;
+    if (leftPart !== rightPart) return leftPart - rightPart;
+  }
+  return 0;
+}
+
+function requireHomebrewLinuxCaskSupport(targetHomebrewVersion) {
+  if (
+    compareDottedVersions(
+      targetHomebrewVersion,
+      HOMEBREW_LINUX_CASK_MIN_VERSION,
+    ) < 0
+  ) {
+    throw new Error(
+      `Desktop Linux AppImage casks require Homebrew >= ${HOMEBREW_LINUX_CASK_MIN_VERSION}; target is ${targetHomebrewVersion}`,
+    );
+  }
 }
 
 // Homebrew formula - single ruby file that downloads the SEA binary
@@ -247,7 +276,6 @@ class ${className} < Formula
   version "${version}"
   license "${license}"
 ${kegOnlyBlock}
-
   on_macos do
     on_arm do
       url "${darwinArm.url}"
@@ -306,6 +334,7 @@ function renderHomebrewCask({
     linuxX64AppImage === null
       ? ""
       : `
+  # Linux AppImage casks require Homebrew >= ${HOMEBREW_LINUX_CASK_MIN_VERSION}.
   on_linux do
     depends_on arch: :x86_64
 
@@ -654,6 +683,11 @@ function main() {
             sha256: requiredArg(args, "linuxX64AppImageSha256"),
           }
         : null;
+    if (linuxX64AppImage !== null) {
+      requireHomebrewLinuxCaskSupport(
+        args.targetHomebrewVersion || HOMEBREW_LINUX_CASK_MIN_VERSION,
+      );
+    }
     const versionedCaskVersion = homebrewExactVersionTokenSuffix(version);
     const caskOutputs = [];
     if (args.homebrewVersionedOnly !== true) {
