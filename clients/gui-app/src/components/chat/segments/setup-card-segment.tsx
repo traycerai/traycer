@@ -11,6 +11,11 @@ import type { WorktreeBindingOwnerKind } from "@traycer/protocol/host/worktree-s
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
@@ -108,12 +113,20 @@ type TerminalLiveness = "live" | "ended" | "none";
  * Open-terminal action) for a single repo, or a per-workspace row for multi.
  * Auto-expands on failure so Retry is one glance away. Pinned above the first
  * user message by the renderer; see `rendered-messages.ts`.
+ *
+ * `variant` selects the presentation without changing any of the setup logic:
+ *  - `"card"` (chat transcript): the full-width, hairline-ruled line that
+ *    expands INLINE, pushing the messages below it.
+ *  - `"inline"` (terminal-agent status bar): a compact right-aligned trigger
+ *    whose detail opens as a downward Popover OVERLAY, so expanding it never
+ *    reflows the terminal session beneath the bar.
  */
 export function SetupCardSegment(props: {
   readonly model: SetupCardViewModel;
   readonly viewTabId: string;
+  readonly variant: "card" | "inline";
 }) {
-  const { model, viewTabId } = props;
+  const { model, viewTabId, variant } = props;
   const { aggregate, workspaces, createdAt, isActive } = model;
 
   // Open terminal, liveness, and Retry must all address the SAME host the tab
@@ -217,6 +230,56 @@ export function SetupCardSegment(props: {
     </div>
   );
 
+  const workspaceDetail = multi ? (
+    // One block per worktree (branch · path header + create/setup steps).
+    // Capped to ~2 blocks tall and scrolls beyond, so many linked repos don't
+    // grow the surface unbounded.
+    <div
+      data-testid="setup-card-workspaces"
+      className="flex max-h-[min(45vh,13rem)] flex-col divide-y divide-border/50 overflow-y-auto pr-1"
+    >
+      {workspaces.map((entry) => (
+        <WorkspaceSetupDetail
+          key={entry.workspacePath}
+          entry={entry}
+          {...shared}
+        />
+      ))}
+    </div>
+  ) : (
+    <WorkspaceSetupDetail entry={workspaces[0]} {...shared} />
+  );
+
+  if (variant === "inline") {
+    // Compact status-bar trigger + downward Popover overlay: expanding it
+    // renders in a portal, so the terminal session under the bar never reflows.
+    return (
+      <Popover open={expanded} onOpenChange={setManualExpanded}>
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            aria-expanded={expanded}
+            data-testid="setup-card-toggle"
+            className={cn(
+              "flex items-center rounded-sm px-1.5 py-0.5 outline-none transition-colors",
+              "hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring",
+            )}
+          >
+            {labelInner}
+          </button>
+        </PopoverTrigger>
+        <PopoverContent
+          align="end"
+          side="bottom"
+          data-testid="setup-card"
+          className="w-[min(90vw,36rem)] p-3"
+        >
+          {workspaceDetail}
+        </PopoverContent>
+      </Popover>
+    );
+  }
+
   return (
     <div data-testid="setup-card" className="flex w-full flex-col gap-1">
       <div className="flex items-center gap-3">
@@ -238,25 +301,7 @@ export function SetupCardSegment(props: {
       </div>
       {expanded ? (
         <div className="mx-auto w-full max-w-[min(90vw,42rem)] rounded-md border border-border/60 bg-muted/30 p-3">
-          {multi ? (
-            // One block per worktree (branch · path header + create/setup
-            // steps). Capped to ~2 blocks tall and scrolls beyond, so many
-            // linked repos don't grow the card unbounded.
-            <div
-              data-testid="setup-card-workspaces"
-              className="flex max-h-[min(45vh,13rem)] flex-col divide-y divide-border/50 overflow-y-auto pr-1"
-            >
-              {workspaces.map((entry) => (
-                <WorkspaceSetupDetail
-                  key={entry.workspacePath}
-                  entry={entry}
-                  {...shared}
-                />
-              ))}
-            </div>
-          ) : (
-            <WorkspaceSetupDetail entry={workspaces[0]} {...shared} />
-          )}
+          {workspaceDetail}
         </div>
       ) : null}
     </div>
