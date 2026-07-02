@@ -1,4 +1,5 @@
 import { ChatEmptyState } from "@/components/chat/chat-empty-state";
+import { useChatFindController } from "@/components/chat/use-chat-find-controller";
 import { ChatMeasuredItemChangeContext } from "@/components/chat/chat-measured-item-change-context";
 import {
   ChatMessage,
@@ -34,6 +35,8 @@ import { VIRTUOSO_MESSAGE_LIST_LICENSE_KEY } from "@/lib/virtuoso-license";
 import type { ScrollRestorationAdapter } from "@/hooks/scroll/scroll-restoration-adapter";
 import { useScrollRestoration } from "@/hooks/scroll/use-scroll-restoration";
 import { ActivityGroupOpenStoreProvider } from "@/stores/chats/activity-group-open-store";
+import { A2AOpenStoreProvider } from "@/stores/chats/a2a-open-store";
+import { ChatFindForceStoreProvider } from "@/stores/chats/chat-find-force-store";
 import { createActivityGroupOpenStore } from "@/stores/chats/activity-group-open-store-core";
 import { ChatOpenStoreScopeProvider } from "@/stores/chats/open-store-scope";
 import { useSubagentOpenStore } from "@/stores/chats/subagent-open-store";
@@ -47,6 +50,7 @@ import {
   VirtuosoMessageList,
   VirtuosoMessageListLicense,
   type DataWithScrollModifier,
+  type ItemLocation,
   type ListScrollLocation,
   type ScrollModifier,
   type VirtuosoMessageListMethods,
@@ -221,6 +225,16 @@ const ChatListEmptyPlaceholder: ChatVirtuosoProps["EmptyPlaceholder"] = ({
  * `chat-messages-virtuoso-helpers.ts`.
  */
 export function ChatMessages(props: ChatMessagesProps) {
+  return (
+    <A2AOpenStoreProvider>
+      <ChatFindForceStoreProvider tileInstanceId={props.instanceId}>
+        <ChatMessagesInner {...props} />
+      </ChatFindForceStoreProvider>
+    </A2AOpenStoreProvider>
+  );
+}
+
+function ChatMessagesInner(props: ChatMessagesProps) {
   const {
     getMessageActions,
     backgroundItems,
@@ -241,6 +255,10 @@ export function ChatMessages(props: ChatMessagesProps) {
   );
   const virtuosoRef =
     useRef<VirtuosoMessageListMethods<ChatVirtuosoItem, ChatListContext>>(null);
+  // The find controller triggers a measured-item change on reveal/reconcile;
+  // the concrete callback lives in this component, so the hook reads it lazily
+  // through this ref (set in a layout effect below).
+  const requestMeasuredItemChangeRef = useRef<() => void>(() => undefined);
 
   // "Following latest" is user intent. Virtuoso's `isAtBottom` is only a
   // strict measurement signal, so streaming markdown height drift must not be
@@ -630,6 +648,36 @@ export function ChatMessages(props: ChatMessagesProps) {
     });
   }, [cancelScrollRestorationRetry, setBottomFollowingIfChanged]);
 
+  const getScroller = useCallback(
+    (): HTMLElement | null => virtuosoRef.current?.scrollerElement() ?? null,
+    [],
+  );
+
+  const scrollToItem = useCallback((location: ItemLocation): void => {
+    virtuosoRef.current?.scrollToItem(location);
+  }, []);
+
+  const resetScrollGesture = useCallback((): void => {
+    lastScrollGestureRef.current = null;
+  }, []);
+
+  const {
+    scheduleMountedHighlightSync: scheduleChatFindHighlightSync,
+    onRenderedDataChange: onChatFindRenderedDataChange,
+  } = useChatFindController({
+    instanceId,
+    messages,
+    messagesRef,
+    messageIndexByIdRef,
+    getScroller,
+    scrollToItem,
+    requestMeasuredItemChangeRef,
+    setBottomFollowingIfChanged,
+    setScrolledActiveUserMessageIdIfChanged,
+    cancelScrollRestorationRetry,
+    resetScrollGesture,
+  });
+
   const requestMeasuredItemChange = useCallback((): void => {
     const shouldFollowOutput = bottomFollowRef.current;
     setListDataState((current) => ({
@@ -640,7 +688,12 @@ export function ChatMessages(props: ChatMessagesProps) {
         scrollModifier: measuredItemChangeScrollModifier(shouldFollowOutput),
       },
     }));
-  }, []);
+    scheduleChatFindHighlightSync();
+  }, [scheduleChatFindHighlightSync]);
+
+  useLayoutEffect(() => {
+    requestMeasuredItemChangeRef.current = requestMeasuredItemChange;
+  }, [requestMeasuredItemChange]);
 
   const navigateToMessage = useCallback(
     (messageId: string): void => {
@@ -662,6 +715,11 @@ export function ChatMessages(props: ChatMessagesProps) {
     },
     [setBottomFollowingIfChanged, setScrolledActiveUserMessageIdIfChanged],
   );
+
+  const handleRenderedDataChangeWithFind = useCallback((): void => {
+    handleRenderedDataChange();
+    onChatFindRenderedDataChange();
+  }, [handleRenderedDataChange, onChatFindRenderedDataChange]);
 
   const onMinimapItemClick = useCallback(
     (messageId: string): void => navigateToMessage(messageId),
@@ -723,7 +781,7 @@ export function ChatMessages(props: ChatMessagesProps) {
                 onTouchMoveCapture={handleTouchMoveCapture}
                 onTouchEndCapture={handleTouchEndCapture}
                 onTouchCancelCapture={handleTouchEndCapture}
-                onRenderedDataChange={handleRenderedDataChange}
+                onRenderedDataChange={handleRenderedDataChangeWithFind}
               />
             </VirtuosoMessageListLicense>
             <div

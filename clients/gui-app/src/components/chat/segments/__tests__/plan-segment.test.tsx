@@ -338,6 +338,53 @@ describe("PlanSegment", () => {
     expect(within(card).getByText("Renderer plan")).toBeTruthy();
     expect(within(card).getByText("Preview-only plan body")).toBeTruthy();
   });
+
+  it("renders exactly the find-indexed card text inside the find-unit anchor", () => {
+    const steps = Array.from({ length: 6 }, (_value, index) => ({
+      id: `step-${index}`,
+      text: `Plan step ${index}`,
+      status: "pending" as const,
+      activeForm: null,
+    }));
+    render(
+      <ChatPlanActionsContext.Provider
+        value={planActionContext({ canAct: true, pending: false })}
+      >
+        <PlanSegment
+          segment={planSegment({
+            planStatus: "approved",
+            actions: [],
+            approvalId: null,
+            title: "Refactor the search index",
+            summary: "Split projection from rendering",
+            markdownPreview:
+              "## Hidden heading\n\nSecret dialog-only paragraph.",
+            steps,
+          })}
+          findUnitId="plan-find-unit"
+        />
+      </ChatPlanActionsContext.Provider>,
+    );
+
+    // The card IS the find-unit anchor; reach it from the visible headline.
+    // Its mounted text must equal what the projection indexes - headline,
+    // status label, subtitle, first four steps.
+    const card = screen
+      .getByRole("heading", { name: "Refactor the search index" })
+      .closest<HTMLElement>("[data-chat-find-unit]");
+    expect(card?.dataset.chatFindUnit).toBe("plan-find-unit");
+    const text = card?.textContent ?? "";
+    expect(text).toContain("Refactor the search index");
+    expect(text).toContain("Approved");
+    expect(text).toContain("Split projection from rendering");
+    expect(text).toContain("Plan step 0");
+    expect(text).toContain("Plan step 3");
+    // Dialog-only content (extra steps + full preview) is NOT on the card.
+    expect(text).not.toContain("Plan step 4");
+    expect(text).not.toContain("Plan step 5");
+    expect(text).not.toContain("Hidden heading");
+    expect(text).not.toContain("Secret dialog-only paragraph");
+  });
 });
 
 function renderPlan(segment: PlanSegmentModel) {
@@ -360,7 +407,7 @@ function planElement(
 ) {
   return (
     <ChatPlanActionsContext.Provider value={context}>
-      <PlanSegment segment={segment} />
+      <PlanSegment segment={segment} findUnitId={null} />
     </ChatPlanActionsContext.Provider>
   );
 }

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Check,
   ChevronDown,
@@ -79,6 +79,8 @@ export function FolderLocationControl(props: {
   readonly item: WorkspaceRunItem;
   /** Host-wide uncommitted counts keyed by worktree path (optional annotation). */
   readonly uncommittedByPath: ReadonlyMap<string, number>;
+  /** Collision boundary for the menu (in-epic rows live in a popover). */
+  readonly boundaryEl: HTMLElement | null;
   readonly readOnly: boolean;
 }) {
   const { item } = props;
@@ -159,14 +161,36 @@ export function FolderLocationControl(props: {
   }
 
   return (
+    <FolderLocationMenu
+      item={item}
+      value={value}
+      trigger={trigger}
+      importRows={importRows}
+      uncommittedByPath={props.uncommittedByPath}
+      boundaryEl={props.boundaryEl}
+    />
+  );
+}
+
+function FolderLocationMenu(props: {
+  readonly item: WorkspaceRunItem;
+  readonly value: FolderLocationValue;
+  readonly trigger: ReactNode;
+  readonly importRows: ReadonlyArray<UnifiedPickerWorktreeRow>;
+  readonly uncommittedByPath: ReadonlyMap<string, number>;
+  readonly boundaryEl: HTMLElement | null;
+}) {
+  const { item, value, importRows } = props;
+  return (
     // Non-modal so the menu's focus scope doesn't trap focus back into the menu:
     // that trap is what stole the search autofocus in the "Existing worktree"
     // submenu (its search input lives outside the roving menu-item focus).
     <DropdownMenu modal={false}>
-      <DropdownMenuTrigger asChild>{trigger}</DropdownMenuTrigger>
+      <DropdownMenuTrigger asChild>{props.trigger}</DropdownMenuTrigger>
       <DropdownMenuContent
         align="start"
         data-testid="folder-location-menu"
+        container={props.boundaryEl ?? undefined}
         className="w-[min(80vw,15rem)]"
       >
         <DropdownMenuItem

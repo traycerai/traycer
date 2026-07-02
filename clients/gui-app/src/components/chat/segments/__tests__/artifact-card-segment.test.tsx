@@ -80,6 +80,7 @@ describe("<ArtifactCardSegment />", () => {
     };
     render(
       <ArtifactCardSegment
+        findUnitId={null}
         operation="create"
         artifactKind="spec"
         artifactId="a1"
@@ -104,6 +105,7 @@ describe("<ArtifactCardSegment />", () => {
     };
     render(
       <ArtifactCardSegment
+        findUnitId={null}
         operation="update"
         artifactKind="spec"
         artifactId="a1"
@@ -127,6 +129,7 @@ describe("<ArtifactCardSegment />", () => {
     };
     const { rerender } = render(
       <ArtifactCardSegment
+        findUnitId={null}
         operation="update"
         artifactKind="spec"
         artifactId="a1"
@@ -142,6 +145,7 @@ describe("<ArtifactCardSegment />", () => {
     expect(screen.getByTestId("artifact-inline-diff")).toBeTruthy();
     rerender(
       <ArtifactCardSegment
+        findUnitId={null}
         operation="update"
         artifactKind="spec"
         artifactId="a1"
@@ -152,6 +156,7 @@ describe("<ArtifactCardSegment />", () => {
     expect(screen.queryByTestId("artifact-inline-diff")).toBeNull();
     rerender(
       <ArtifactCardSegment
+        findUnitId={null}
         operation="update"
         artifactKind="spec"
         artifactId="a1"
@@ -176,6 +181,7 @@ describe("<ArtifactCardSegment />", () => {
     };
     render(
       <ArtifactCardSegment
+        findUnitId={null}
         operation="update"
         artifactKind="spec"
         artifactId="a1"
@@ -196,6 +202,7 @@ describe("<ArtifactCardSegment />", () => {
     };
     render(
       <ArtifactCardSegment
+        findUnitId={null}
         operation="update"
         artifactKind="spec"
         artifactId="a1"
@@ -218,6 +225,7 @@ describe("<ArtifactCardSegment />", () => {
     };
     render(
       <ArtifactCardSegment
+        findUnitId={null}
         operation="delete"
         artifactKind="spec"
         artifactId="d1"
@@ -238,6 +246,7 @@ describe("<ArtifactCardSegment />", () => {
     };
     render(
       <ArtifactCardSegment
+        findUnitId={null}
         operation="update"
         artifactKind="ticket"
         artifactId="t1"
@@ -262,6 +271,7 @@ describe("<ArtifactCardSegment />", () => {
     };
     render(
       <ArtifactCardSegment
+        findUnitId={null}
         operation="delete"
         artifactKind="spec"
         artifactId="d1"
@@ -283,6 +293,7 @@ describe("<ArtifactCardSegment />", () => {
   it("renders a delete with a fallback title before the tombstone projects", () => {
     render(
       <ArtifactCardSegment
+        findUnitId={null}
         operation="delete"
         artifactKind="spec"
         artifactId="pending-delete"
@@ -302,6 +313,7 @@ describe("<ArtifactCardSegment />", () => {
   it("renders an unavailable titled update with deleted styling but keeps the update badge", () => {
     render(
       <ArtifactCardSegment
+        findUnitId={null}
         operation="update"
         artifactKind="spec"
         artifactId="deleted-before-tombstone"
@@ -323,6 +335,7 @@ describe("<ArtifactCardSegment />", () => {
   it("renders an unavailable titled create with deleted styling but keeps the create badge", () => {
     render(
       <ArtifactCardSegment
+        findUnitId={null}
         operation="create"
         artifactKind="spec"
         artifactId="created-then-missing"
@@ -345,6 +358,7 @@ describe("<ArtifactCardSegment />", () => {
   it("renders a graceful pending placeholder for an unresolved id, then resolves without remount", () => {
     const { rerender } = render(
       <ArtifactCardSegment
+        findUnitId={null}
         operation="create"
         artifactKind="spec"
         artifactId="late"
@@ -369,6 +383,7 @@ describe("<ArtifactCardSegment />", () => {
     };
     rerender(
       <ArtifactCardSegment
+        findUnitId={null}
         operation="create"
         artifactKind="spec"
         artifactId="late"
@@ -394,6 +409,7 @@ describe("<ArtifactCardSegment />", () => {
     };
     render(
       <ArtifactCardSegment
+        findUnitId={null}
         operation="update"
         artifactKind="story"
         artifactId="a1"
@@ -423,6 +439,7 @@ describe("<ArtifactCardSegment />", () => {
   it("stays non-crashing and non-openable for an entirely unknown id", () => {
     render(
       <ArtifactCardSegment
+        findUnitId={null}
         operation="update"
         artifactKind="review"
         artifactId="ghost"

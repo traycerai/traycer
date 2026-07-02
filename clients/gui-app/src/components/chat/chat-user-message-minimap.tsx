@@ -8,6 +8,7 @@ import {
 } from "react";
 import * as m from "motion/react-m";
 import { ChatUserMessageContent } from "@/components/chat/chat-user-message-content";
+import { ComposerContentRenderer } from "@/components/chat/composer/content-renderer";
 import {
   CHAT_MINIMAP_CLIP_REGION_SELECTOR,
   type ChatUserMinimapItem,
@@ -174,17 +175,41 @@ function ChatUserMessageMinimapOverlay(props: ChatUserMessageMinimapProps) {
               : "text-muted-foreground hover:bg-muted hover:text-foreground",
           )}
         >
-          <span className="line-clamp-2 h-full break-words whitespace-normal [content-visibility:auto] [contain-intrinsic-size:2.5rem]">
-            <ChatUserMessageContent
-              content={item.content}
-              attachments={item.attachments}
-            />
-          </span>
+          <ChatUserMessageMinimapItemContent item={item} />
         </button>
       ))}
     </m.div>
   );
 }
+
+const ChatUserMessageMinimapItemContent = memo(
+  function ChatUserMessageMinimapItemContent({
+    item,
+  }: {
+    readonly item: ChatUserMinimapItem;
+  }) {
+    const className =
+      "line-clamp-2 h-full break-words whitespace-normal [content-visibility:auto] [contain-intrinsic-size:2.5rem]";
+    if (item.structuredContent !== null) {
+      return (
+        <ComposerContentRenderer
+          content={item.structuredContent}
+          variant="minimap"
+          className={className}
+          testId={undefined}
+        />
+      );
+    }
+    return (
+      <span className={className}>
+        <ChatUserMessageContent
+          content={item.content}
+          attachments={item.attachments}
+        />
+      </span>
+    );
+  },
+);
 
 function revealActiveMinimapOption(
   overlay: HTMLElement,

@@ -1,9 +1,9 @@
 import { type ReactNode } from "react";
 import { DiffWorkerPoolProvider } from "@/components/diff-worker-pool-provider";
 import { RootDndProvider } from "@/components/epic-canvas/dnd/root-dnd-provider";
+import { TileFindOwnerBridge } from "@/components/epic-canvas/tile-find/tile-find-owner-bridge";
 import { QuitInterceptBridge } from "@/components/layout/bridges/quit-intercept-bridge";
 import { MigrationBlockingModalHost } from "@/components/layout/dialogs/migration-blocking-modal-host";
-import { FindInPageBar } from "@/components/layout/find-in-page-bar";
 import { AppHeader } from "@/components/layout/header/app-header";
 import { MigrationRunController } from "@/components/migration/migration-run-controller";
 import { OpenFolderDialog } from "@/components/open-folder-dialog";
@@ -30,7 +30,7 @@ export function AppShell(props: AppShellProps) {
             <AppHeader variant="app" />
             <main className="relative flex min-h-0 flex-1 flex-col">
               {children}
-              <FindInPageBar />
+              <TileFindOwnerBridge />
             </main>
             <OpenFolderDialog />
             <QuitInterceptBridge />

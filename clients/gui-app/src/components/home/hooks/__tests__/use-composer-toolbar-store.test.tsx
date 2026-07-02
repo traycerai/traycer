@@ -15,31 +15,37 @@ const harnessesData: {
     | undefined;
 } = { value: undefined };
 const modelsData: {
-  value: {
-    models: ReadonlyArray<{
-      harnessId: string;
-      slug: string;
-      label: string;
-      description: null;
-      isDefault: boolean;
-      contextWindow: null;
-      maxOutputTokens: null;
-      defaultReasoningEffort: string | null;
-      supportedReasoningEfforts: ReadonlyArray<{
-        id: string;
-        label: string;
-        description: null;
-      }>;
-      defaultServiceTier: string | null;
-      supportedServiceTiers: ReadonlyArray<{
-        id: string;
-        label: string;
-        description: null;
-      }>;
-      metadata: Record<string, unknown>;
-    }>;
-  };
-} = { value: { models: [] } };
+  // `undefined` models the models query still LOADING (no data yet); a `models`
+  // object models it RESOLVED. The store now distinguishes the two via the
+  // explicit `modelsLoaded` status, so tests drive the loading window by leaving
+  // this undefined and the loaded window by assigning a `{ models }` object.
+  value:
+    | {
+        models: ReadonlyArray<{
+          harnessId: string;
+          slug: string;
+          label: string;
+          description: null;
+          isDefault: boolean;
+          contextWindow: null;
+          maxOutputTokens: null;
+          defaultReasoningEffort: string | null;
+          supportedReasoningEfforts: ReadonlyArray<{
+            id: string;
+            label: string;
+            description: null;
+          }>;
+          defaultServiceTier: string | null;
+          supportedServiceTiers: ReadonlyArray<{
+            id: string;
+            label: string;
+            description: null;
+          }>;
+          metadata: Record<string, unknown>;
+        }>;
+      }
+    | undefined;
+} = { value: undefined };
 const harnessQueryCalls: Array<{
   readonly enabled: boolean;
   readonly subscribed: boolean;
@@ -88,6 +94,8 @@ import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import { useComposerHarnessMemoryStore } from "@/stores/composer/composer-harness-memory-store";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import type { FocusedComposerKind } from "@/lib/commands/types";
 
 function seedDefault(
@@ -109,13 +117,18 @@ function inactiveWrapper(props: { children: ReactNode }) {
 describe("useComposerToolbarStore selection reconciliation", () => {
   beforeEach(() => {
     harnessesData.value = undefined;
-    modelsData.value = { models: [] };
+    // Default to the LOADING window (no model data yet); tests that need a
+    // resolved catalog assign `modelsData.value = { models: [...] }` explicitly.
+    modelsData.value = undefined;
     harnessQueryCalls.length = 0;
     modelQueryCalls.length = 0;
     registeredComposerKinds.length = 0;
     // Reset the sticky tier default so a tier-normalization test can't leak its
     // preference into a later test's seeded values.
     useSettingsStore.setState({ defaultServiceTier: "" });
+    // The harness-memory store is a module singleton written by the recording
+    // wrapper; reset so write assertions don't leak between tests.
+    useComposerHarnessMemoryStore.getState().resetForTests();
   });
 
   // Unmount each test's hook so a later `useSettingsStore.setState` can't
@@ -554,6 +567,477 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     );
   });
 
+  it("commits a (harness,model) selection in a single emit", async () => {
+    // The combined action must patch selection + reasoning + tier in one
+    // `update()`, so a commit emits exactly once - never the multiple emits a
+    // sequenced setSelection/setReasoning/setServiceTier would produce.
+    useSettingsStore.setState({
+      defaultSelection: { harnessId: "codex", modelSlug: "multi" },
+    });
+    harnessesData.value = {
+      harnesses: [{ id: "codex", available: true }],
+    };
+    modelsData.value = {
+      models: [
+        {
+          harnessId: "codex",
+          slug: "multi",
+          label: "Multi",
+          description: null,
+          isDefault: true,
+          contextWindow: null,
+          maxOutputTokens: null,
+          defaultReasoningEffort: "medium",
+          supportedReasoningEfforts: [
+            { id: "low", label: "Low", description: null },
+            { id: "medium", label: "Medium", description: null },
+            { id: "high", label: "High", description: null },
+          ],
+          defaultServiceTier: null,
+          supportedServiceTiers: [],
+          metadata: {},
+        },
+      ],
+    };
+    const onSettingsChange = vi.fn();
+    const { result } = renderHook(() =>
+      useComposerToolbarStore(null, null, onSettingsChange, false),
+    );
+
+    // Let the catalog load so the commit resolves a concrete slug and emits
+    // (rather than deferring). The mount itself never emits.
+    await waitFor(() =>
+      expect(result.current.getState().catalog.models.length).toBe(1),
+    );
+    expect(onSettingsChange).not.toHaveBeenCalled();
+
+    act(() => {
+      result.current.getState().applyComposerSelection({
+        selection: { harnessId: "codex", modelSlug: "multi" },
+        reasoning: "high",
+        serviceTier: "",
+      });
+    });
+
+    expect(onSettingsChange).toHaveBeenCalledTimes(1);
+    expect(onSettingsChange).toHaveBeenCalledWith(
+      expect.objectContaining({ model: "multi", reasoningEffort: "high" }),
+    );
+  });
+
+  it("fires HarnessChanged once on a harness switch, not on a same-harness model change", () => {
+    seedDefault("codex");
+    const trackSpy = vi.spyOn(Analytics.getInstance(), "track");
+    const { result } = renderHook(() =>
+      useComposerToolbarStore(null, null, null, false),
+    );
+    // The mount path (catalog sync / seed) never tracks; start from a clean count.
+    trackSpy.mockClear();
+
+    act(() => {
+      result.current.getState().applyComposerSelection({
+        selection: { harnessId: "claude", modelSlug: "some-model" },
+        reasoning: "",
+        serviceTier: "",
+      });
+    });
+
+    expect(trackSpy).toHaveBeenCalledTimes(1);
+    expect(trackSpy).toHaveBeenCalledWith(AnalyticsEvent.HarnessChanged, {
+      from: "codex",
+      to: "claude",
+    });
+
+    // Same harness, different model: no harness-change analytics.
+    act(() => {
+      result.current.getState().applyComposerSelection({
+        selection: { harnessId: "claude", modelSlug: "another-model" },
+        reasoning: "",
+        serviceTier: "",
+      });
+    });
+
+    expect(trackSpy).toHaveBeenCalledTimes(1);
+    trackSpy.mockRestore();
+  });
+
+  it("drops sticky effort and tier to the model's defaults via the no-carry levers", async () => {
+    // A commit through the combined action sets effort/tier from the SUPPLIED
+    // values, so passing "" resolves to the selected model's own default
+    // (effort) and drops the tier - even when the model would support the
+    // sticky values. This is the per-(harness,model) "no carry" behavior.
+    useSettingsStore.setState({
+      defaultSelection: { harnessId: "codex", modelSlug: "multi" },
+      defaultReasoning: "high",
+      defaultServiceTier: "priority",
+    });
+    harnessesData.value = {
+      harnesses: [{ id: "codex", available: true }],
+    };
+    modelsData.value = {
+      models: [
+        {
+          harnessId: "codex",
+          slug: "multi",
+          label: "Multi",
+          description: null,
+          isDefault: true,
+          contextWindow: null,
+          maxOutputTokens: null,
+          defaultReasoningEffort: "medium",
+          supportedReasoningEfforts: [
+            { id: "low", label: "Low", description: null },
+            { id: "medium", label: "Medium", description: null },
+            { id: "high", label: "High", description: null },
+          ],
+          defaultServiceTier: null,
+          supportedServiceTiers: [
+            { id: "priority", label: "Fast", description: null },
+          ],
+          metadata: {},
+        },
+      ],
+    };
+    const onSettingsChange = vi.fn();
+    const { result } = renderHook(() =>
+      useComposerToolbarStore(null, null, onSettingsChange, false),
+    );
+
+    // The model supports both sticky values, so they carry before the commit.
+    await waitFor(() =>
+      expect(result.current.getState().selectedModel?.slug).toBe("multi"),
+    );
+    expect(result.current.getState().reasoning).toBe("high");
+    expect(result.current.getState().serviceTier).toBe("priority");
+
+    act(() => {
+      result.current.getState().applyComposerSelection({
+        selection: { harnessId: "codex", modelSlug: "multi" },
+        reasoning: "",
+        serviceTier: "",
+      });
+    });
+
+    // The supplied "" wins: effort falls to the model default, tier drops.
+    expect(result.current.getState().reasoning).toBe("medium");
+    expect(result.current.getState().serviceTier).toBe("");
+    expect(onSettingsChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        model: "multi",
+        reasoningEffort: "medium",
+        serviceTier: null,
+      }),
+    );
+  });
+
+  it("resolves a stale/delisted remembered slug to the first model and emits the resolved slug", async () => {
+    // A remembered slug comes from memory, not a loaded list, so it can be
+    // delisted. Once THIS harness's catalog loads WITHOUT it, the derive falls
+    // back to the first model + its default effort, and the RESOLVED slug - not
+    // the dead one - is what emits (so the memory write self-heals next time).
+    useSettingsStore.setState({
+      defaultSelection: { harnessId: "codex", modelSlug: "delisted-old" },
+      // No sticky effort, so the resolved first model surfaces its OWN default.
+      defaultReasoning: "",
+    });
+    harnessesData.value = {
+      harnesses: [{ id: "codex", available: true }],
+    };
+    modelsData.value = {
+      models: [
+        {
+          harnessId: "codex",
+          slug: "survivor",
+          label: "Survivor",
+          description: null,
+          isDefault: true,
+          contextWindow: null,
+          maxOutputTokens: null,
+          defaultReasoningEffort: "medium",
+          supportedReasoningEfforts: [
+            { id: "low", label: "Low", description: null },
+            { id: "medium", label: "Medium", description: null },
+            { id: "high", label: "High", description: null },
+          ],
+          defaultServiceTier: null,
+          supportedServiceTiers: [],
+          metadata: {},
+        },
+      ],
+    };
+    const onSettingsChange = vi.fn();
+    const { result } = renderHook(() =>
+      useComposerToolbarStore(null, null, onSettingsChange, false),
+    );
+
+    // The dead slug resolves to the first live model for display, with that
+    // model's own default effort - never the stale slug.
+    await waitFor(() =>
+      expect(result.current.getState().selection.modelSlug).toBe("survivor"),
+    );
+    expect(result.current.getState().reasoning).toBe("medium");
+    expect(result.current.getState().selectionCatalogConfirmed).toBe(true);
+
+    // A commit that still carries the dead remembered slug (as Ticket 4's entry
+    // points will, reading it from memory) emits the RESOLVED slug, not the
+    // dead one.
+    act(() => {
+      result.current.getState().applyComposerSelection({
+        selection: { harnessId: "codex", modelSlug: "delisted-old" },
+        reasoning: "",
+        serviceTier: "",
+      });
+    });
+
+    expect(onSettingsChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ model: "survivor", reasoningEffort: "medium" }),
+    );
+  });
+
+  it("emits immediately for a non-empty unvalidated slug but reports it not catalog-confirmed until validated", async () => {
+    // Under the "gate only the write" decision the surface emit is NOT held: a
+    // held non-empty remembered slug still propagates to live-settings the moment
+    // it is edited. The `selectionCatalogConfirmed` flag - which Ticket 4's record
+    // wrapper gates the MEMORY write on - is what stays false until the catalog
+    // validates the slug, so an unvalidated slug reaches live-settings but is
+    // never recorded.
+    useSettingsStore.setState({
+      defaultSelection: { harnessId: "codex", modelSlug: "remembered" },
+    });
+    harnessesData.value = {
+      harnesses: [{ id: "codex", available: true }],
+    };
+    // Models query still loading: data is undefined.
+    modelsData.value = undefined;
+    const onSettingsChange = vi.fn();
+    const { result, rerender } = renderHook(() =>
+      useComposerToolbarStore(null, null, onSettingsChange, false),
+    );
+
+    // Loading window: the remembered slug is held for display but unconfirmed.
+    await waitFor(() =>
+      expect(result.current.getState().selection.modelSlug).toBe("remembered"),
+    );
+    expect(result.current.getState().selectionCatalogConfirmed).toBe(false);
+
+    act(() => {
+      result.current.getState().setReasoning("high");
+    });
+
+    // The edit emits immediately, carrying the held slug...
+    expect(onSettingsChange).toHaveBeenCalledTimes(1);
+    expect(onSettingsChange).toHaveBeenCalledWith(
+      expect.objectContaining({ model: "remembered", reasoningEffort: "high" }),
+    );
+    // ...but it is NOT catalog-confirmed yet, so the Ticket 4 write skips it.
+    expect(result.current.getState().pendingSettingsEmit).toBe(false);
+
+    // The catalog loads WITH the remembered slug -> confirmed flips true (no
+    // spurious re-emit, since the resolved slug did not change).
+    modelsData.value = {
+      models: [
+        {
+          harnessId: "codex",
+          slug: "remembered",
+          label: "Remembered",
+          description: null,
+          isDefault: true,
+          contextWindow: null,
+          maxOutputTokens: null,
+          defaultReasoningEffort: null,
+          supportedReasoningEfforts: [
+            { id: "high", label: "High", description: null },
+          ],
+          defaultServiceTier: null,
+          supportedServiceTiers: [],
+          metadata: {},
+        },
+      ],
+    };
+    rerender();
+
+    await waitFor(() =>
+      expect(result.current.getState().selectionCatalogConfirmed).toBe(true),
+    );
+    expect(onSettingsChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("emits the resolved first-model slug when a delisted remembered slug self-heals on catalog load", async () => {
+    // INV3: when a remembered slug is absent on load and resolves X -> Y, the
+    // catalog load itself must propagate an emit carrying Y - so live-settings
+    // updates AND Ticket 4 later records Y (not the dead slug). No user action is
+    // required; the catalog resolution alone drives the emit.
+    useSettingsStore.setState({
+      defaultSelection: { harnessId: "codex", modelSlug: "delisted-old" },
+      defaultReasoning: "",
+    });
+    harnessesData.value = {
+      harnesses: [{ id: "codex", available: true }],
+    };
+    // Still loading: the dead slug is held, nothing emitted yet.
+    modelsData.value = undefined;
+    const onSettingsChange = vi.fn();
+    const { result, rerender } = renderHook(() =>
+      useComposerToolbarStore(null, null, onSettingsChange, false),
+    );
+
+    await waitFor(() =>
+      expect(result.current.getState().selection.modelSlug).toBe(
+        "delisted-old",
+      ),
+    );
+    expect(onSettingsChange).not.toHaveBeenCalled();
+
+    // The catalog loads WITHOUT the remembered slug -> resolves to the first
+    // model AND emits it (the self-heal), carrying that model's own default
+    // effort - never the dead slug.
+    modelsData.value = {
+      models: [
+        {
+          harnessId: "codex",
+          slug: "survivor",
+          label: "Survivor",
+          description: null,
+          isDefault: true,
+          contextWindow: null,
+          maxOutputTokens: null,
+          defaultReasoningEffort: "medium",
+          supportedReasoningEfforts: [
+            { id: "low", label: "Low", description: null },
+            { id: "medium", label: "Medium", description: null },
+            { id: "high", label: "High", description: null },
+          ],
+          defaultServiceTier: null,
+          supportedServiceTiers: [],
+          metadata: {},
+        },
+      ],
+    };
+    rerender();
+
+    await waitFor(() =>
+      expect(onSettingsChange).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          model: "survivor",
+          reasoningEffort: "medium",
+        }),
+      ),
+    );
+    expect(result.current.getState().selection.modelSlug).toBe("survivor");
+    expect(result.current.getState().selectionCatalogConfirmed).toBe(true);
+  });
+
+  it("does not re-emit a stale slug when the catalog unloads after a delisting self-heal", async () => {
+    // Regression (cold-review repro): a delisted slug self-heals X -> Y on load and
+    // emits Y. If the surface later goes inactive / the query detaches
+    // (`modelsLoaded:false`), the derive falls back to holding a raw slug - the
+    // self-heal detector must NOT fire in that UNLOAD direction (it would emit the
+    // dead slug). The catalog-confirmed gate on the detector prevents it; the raw
+    // heal additionally aligns the sticky slug so there is no transition at all.
+    useSettingsStore.setState({
+      defaultSelection: { harnessId: "codex", modelSlug: "delisted-old" },
+      defaultReasoning: "",
+    });
+    harnessesData.value = {
+      harnesses: [{ id: "codex", available: true }],
+    };
+    modelsData.value = undefined;
+    const onSettingsChange = vi.fn();
+    const { result, rerender } = renderHook(() =>
+      useComposerToolbarStore(null, null, onSettingsChange, false),
+    );
+
+    // Load WITHOUT the remembered slug -> self-heals to the first model, emits it.
+    modelsData.value = {
+      models: [
+        {
+          harnessId: "codex",
+          slug: "survivor",
+          label: "Survivor",
+          description: null,
+          isDefault: true,
+          contextWindow: null,
+          maxOutputTokens: null,
+          defaultReasoningEffort: null,
+          supportedReasoningEfforts: [],
+          defaultServiceTier: null,
+          supportedServiceTiers: [],
+          metadata: {},
+        },
+      ],
+    };
+    rerender();
+    await waitFor(() =>
+      expect(onSettingsChange).toHaveBeenLastCalledWith(
+        expect.objectContaining({ model: "survivor" }),
+      ),
+    );
+    // Raw heal: the sticky slug is now the resolved one, not the dead slug.
+    expect(result.current.getState().values.selection.modelSlug).toBe(
+      "survivor",
+    );
+
+    // The query now detaches / surface unloads: `modelsLoaded` flips false.
+    onSettingsChange.mockClear();
+    modelsData.value = undefined;
+    rerender();
+    await waitFor(() =>
+      expect(result.current.getState().selectionCatalogConfirmed).toBe(false),
+    );
+    // The unload must NOT re-emit - neither the healed slug nor the dead one.
+    expect(onSettingsChange).not.toHaveBeenCalled();
+  });
+
+  it("holds a valid remembered slug through the loading window without resetting it", async () => {
+    // The inverse guard: while THIS harness's catalog is still loading, a valid
+    // remembered slug must be HELD for display, not reset to the first model -
+    // so the normal cross-harness loading window never blows away a good
+    // selection. It is only reset once the catalog is actually loaded-without-it.
+    useSettingsStore.setState({
+      defaultSelection: { harnessId: "codex", modelSlug: "remembered" },
+    });
+    harnessesData.value = {
+      harnesses: [{ id: "codex", available: true }],
+    };
+    modelsData.value = undefined;
+    const { result, rerender } = renderHook(() =>
+      useComposerToolbarStore(null, null, null, false),
+    );
+
+    await waitFor(() =>
+      expect(result.current.getState().selection.harnessId).toBe("codex"),
+    );
+    // Held verbatim during loading - NOT reset to "" or a first model.
+    expect(result.current.getState().selection.modelSlug).toBe("remembered");
+    expect(result.current.getState().selectionCatalogConfirmed).toBe(false);
+
+    // Once the catalog loads and contains it, it survives and is now confirmed.
+    modelsData.value = {
+      models: [
+        {
+          harnessId: "codex",
+          slug: "remembered",
+          label: "Remembered",
+          description: null,
+          isDefault: true,
+          contextWindow: null,
+          maxOutputTokens: null,
+          defaultReasoningEffort: null,
+          supportedReasoningEfforts: [],
+          defaultServiceTier: null,
+          supportedServiceTiers: [],
+          metadata: {},
+        },
+      ],
+    };
+    rerender();
+
+    await waitFor(() =>
+      expect(result.current.getState().selectionCatalogConfirmed).toBe(true),
+    );
+    expect(result.current.getState().selection.modelSlug).toBe("remembered");
+  });
+
   it("re-seeds the store when the settings seed identity changes", async () => {
     seedDefault("codex");
     const seeds: { current: ChatRunSettings | null } = { current: null };
@@ -580,6 +1064,102 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     );
     expect(result.current.getState().agentMode).toBe("epic");
     expect(result.current.getState().permission).toBe("full_access");
+  });
+
+  it("records memory even when the surface passes a null onSettingsChange", async () => {
+    // Fork dialogs / add-node pass `onSettingsChange: null`. The always-on
+    // recording wrapper must still populate memory on a confirmed user edit.
+    seedDefault("codex");
+    harnessesData.value = {
+      harnesses: [{ id: "codex", available: true }],
+    };
+    modelsData.value = {
+      models: [
+        {
+          harnessId: "codex",
+          slug: "saved-model",
+          label: "Saved Model",
+          description: null,
+          isDefault: true,
+          contextWindow: null,
+          maxOutputTokens: null,
+          defaultReasoningEffort: null,
+          supportedReasoningEfforts: [
+            { id: "high", label: "High", description: null },
+          ],
+          defaultServiceTier: null,
+          supportedServiceTiers: [],
+          metadata: {},
+        },
+      ],
+    };
+    const { result } = renderHook(() =>
+      useComposerToolbarStore(null, null, null, false),
+    );
+
+    await waitFor(() =>
+      expect(result.current.getState().selectedModel?.slug).toBe("saved-model"),
+    );
+
+    act(() => {
+      result.current.getState().setReasoning("high");
+    });
+
+    const memory = useComposerHarnessMemoryStore.getState();
+    expect(memory.lastModelByHarness.codex).toBe("saved-model");
+    expect(
+      memory.resolveModelSelection("codex", "saved-model").reasoningEffort,
+    ).toBe("high");
+  });
+
+  it("does not record memory while the surface reroutes the harness", async () => {
+    // GUI-only `traycer` is rerouted to `codex` on the terminal surface. The edit
+    // is suppressed (rerouted), so the catalog-confirmed write must record
+    // nothing - not under the rerouted harness, not under the raw one.
+    seedDefault("traycer");
+    harnessesData.value = {
+      harnesses: [
+        { id: "traycer", available: true, modes: ["gui"] },
+        { id: "codex", available: true, modes: ["gui", "tui"] },
+      ],
+    };
+    modelsData.value = {
+      models: [
+        {
+          harnessId: "codex",
+          slug: "codex-default",
+          label: "Codex Default",
+          description: null,
+          isDefault: true,
+          contextWindow: null,
+          maxOutputTokens: null,
+          defaultReasoningEffort: null,
+          supportedReasoningEfforts: [
+            { id: "high", label: "High", description: null },
+          ],
+          defaultServiceTier: null,
+          supportedServiceTiers: [],
+          metadata: {},
+        },
+      ],
+    };
+    const { result } = renderHook(() =>
+      useComposerToolbarStore(null, null, null, true),
+    );
+
+    await waitFor(() => {
+      const selection = result.current.getState().selection;
+      expect(selection.harnessId).toBe("codex");
+      expect(selection.modelSlug).toBe("codex-default");
+    });
+
+    act(() => {
+      result.current.getState().setReasoning("high");
+    });
+
+    // Rerouted -> emit suppressed -> nothing recorded for either harness.
+    const memory = useComposerHarnessMemoryStore.getState();
+    expect(memory.lastModelByHarness).toEqual({});
   });
 
   it("detaches harness queries and command registration when inactive", () => {

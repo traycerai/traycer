@@ -170,21 +170,6 @@ export function selectedModelRowId(
   );
 }
 
-export function modelRowToSelection(
-  row: HarnessModelRow,
-): HarnessModelSelection {
-  return modelRowValueToSelection(row.harnessId, row.value);
-}
-function modelRowValueToSelection(
-  harnessId: ProviderId,
-  value: string,
-): HarnessModelSelection {
-  return {
-    harnessId,
-    modelSlug: value,
-  };
-}
-
 function modelRow(harness: HarnessOption, model: ModelOption): HarnessModelRow {
   const openCodeProviderLabel = modelMetadataString(
     model.metadata.openCodeProviderLabel,

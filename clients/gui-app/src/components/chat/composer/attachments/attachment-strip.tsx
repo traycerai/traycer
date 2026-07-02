@@ -3,6 +3,7 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 
 import { type ImageBytesFetcher } from "@/lib/attachments/image-blob-cache";
 import { collectImageAtoms } from "@/lib/composer/image-atoms";
+import { buildImageAttachmentDisplayLabels } from "@/lib/composer/image-attachment-labels";
 
 import { ImageAttachmentChip } from "./image-attachment-chip";
 
@@ -18,6 +19,10 @@ export interface AttachmentStripProps {
 export function AttachmentStrip(props: AttachmentStripProps) {
   const { content, onRemoveImage, fetcher, sessionObjectUrl } = props;
   const atoms = useMemo(() => collectImageAtoms(content), [content]);
+  const labelsByImageId = useMemo(
+    () => buildImageAttachmentDisplayLabels(atoms),
+    [atoms],
+  );
   if (atoms.length === 0) return null;
   return (
     <div className="flex flex-wrap gap-2 px-1 pb-2">
@@ -25,6 +30,7 @@ export function AttachmentStrip(props: AttachmentStripProps) {
         <ImageAttachmentChip
           key={atom.id}
           atom={atom}
+          displayLabel={labelsByImageId.get(atom.id)}
           onRemove={onRemoveImage}
           fetcher={fetcher}
           sessionObjectUrl={sessionObjectUrl}

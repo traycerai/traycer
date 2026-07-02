@@ -3,14 +3,18 @@ import { AlertTriangle } from "lucide-react";
 interface ErrorSegmentProps {
   message: string;
   code: string | null;
+  findUnitId: string | null;
 }
 
 // Static error row. Auth errors never reach here - they are suppressed at the
 // projection layer (`suppressAuthErrors` in `rendered-messages.ts`) and surfaced
 // live as the composer's re-auth banner instead.
-export function ErrorSegment({ message, code }: ErrorSegmentProps) {
+export function ErrorSegment({ code, findUnitId, message }: ErrorSegmentProps) {
   return (
-    <div className="flex w-full flex-col gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-ui-sm">
+    <div
+      data-chat-find-unit={findUnitId ?? undefined}
+      className="flex w-full flex-col gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-ui-sm"
+    >
       <div className="flex items-start gap-2">
         <AlertTriangle
           className="mt-0.5 size-3.5 shrink-0 text-destructive"

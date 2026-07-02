@@ -383,11 +383,6 @@ function buildFakeBridge(
         showSystemDialog: async () => false,
         onPending: () => ({ dispose: () => undefined }),
       },
-      find: {
-        inPage: async () => null,
-        stop: async () => undefined,
-        onResult: () => ({ dispose: () => undefined }),
-      },
       display: {
         list: async () => ({ displays: [], primaryId: 0 }),
         onTopologyChange: () => ({ dispose: () => undefined }),

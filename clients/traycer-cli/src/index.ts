@@ -47,7 +47,7 @@ import { runHostStart } from "./commands/host-start";
 import { hostStatusCommand } from "./commands/host-status";
 import { hostStopCommand } from "./commands/host-stop";
 import { buildHostUninstallCommand } from "./commands/host-uninstall";
-import { hostUpdateCommand } from "./commands/host-update";
+import { buildHostUpdateCommand } from "./commands/host-update";
 import { buildLoginCommand } from "./commands/login";
 import { logoutCommand } from "./commands/logout";
 import { buildServiceInstallCommand } from "./commands/service-install";
@@ -494,8 +494,15 @@ function registerHostCommands(program: Command): void {
   withRunner(
     host
       .command("update")
-      .description("Update the installed host to the latest registry version"),
-    () => hostUpdateCommand,
+      .description("Update the installed host to the latest registry version")
+      .option(
+        "--force",
+        "Update the host even if it has work in progress (skips the busy check).",
+      ),
+    (opts) =>
+      buildHostUpdateCommand({
+        force: opts.force === true,
+      }),
   );
 
   withRunner(

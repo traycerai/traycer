@@ -79,6 +79,7 @@
     "react": "catalog:",
     "react-dom": "catalog:",
     "react-markdown": "catalog:",
+    "react-remove-scroll": "catalog:",
     "react-virtuoso": "catalog:",
     "react-zoom-pan-pinch": "catalog:",
     "rehype-raw": "catalog:",

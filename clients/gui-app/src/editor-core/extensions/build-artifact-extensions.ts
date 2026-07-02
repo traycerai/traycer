@@ -24,6 +24,7 @@ import { ThreadAnchor } from "./thread-anchor";
 import { CommentDecorationsExtension } from "./comment-decorations-extension";
 import { CommentShortcutExtension } from "./comment-shortcut-extension";
 import { MarkdownClipboard } from "./markdown-clipboard-extension";
+import { ArtifactFindExtension } from "./artifact-find-extension";
 
 /**
  * `@tiptap/extension-collaboration-caret` only reads `provider.awareness` off
@@ -128,6 +129,9 @@ export function buildArtifactExtensions(
     // `applyCommentDecorationSnapshot(editor, ...)` so the persisted doc
     // never carries UI-only attrs.
     CommentDecorationsExtension,
+    // Tile-local find paints search matches and tracks the active match in
+    // ProseMirror document positions rather than mounted DOM text.
+    ArtifactFindExtension,
     // Global Cmd+Opt+M shortcut to start a comment draft from the current
     // selection. Mounted on every artifact editor; tiles that don't support
     // comments pass `onCommentShortcut: null` so the keystroke is a no-op.

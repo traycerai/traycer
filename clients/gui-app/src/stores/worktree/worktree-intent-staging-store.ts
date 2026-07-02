@@ -28,7 +28,15 @@ import { basePersistOptions, worktreeIntentStagingKey } from "@/lib/persist";
  */
 export type WorktreeStagingKey =
   | { readonly surface: "landing"; readonly draftId: string | null }
-  | { readonly surface: "new-conversation"; readonly epicId: string }
+  | {
+      readonly surface: "new-conversation";
+      readonly epicId: string;
+      // `null` for a top-level conversation; the parent conversation id when the
+      // modal is adding a CHILD. Scoping the scratch slot by parent keeps a
+      // stale top-level (or other-parent) staged intent from leaking into a
+      // child, where it would override the parent's inherited worktree.
+      readonly parentId: string | null;
+    }
   | {
       readonly surface: "owner";
       readonly epicId: string;
@@ -57,20 +65,24 @@ export function worktreeStagingKeyString(key: WorktreeStagingKey): string {
     return `landing:${key.draftId ?? ""}`;
   }
   if (key.surface === "new-conversation") {
-    return `new-conversation:${key.epicId}`;
+    return `new-conversation:${key.epicId}:${key.parentId ?? ""}`;
   }
   return `owner:${key.epicId}:${key.ownerKind}:${key.ownerId}`;
 }
 
 /**
  * Scratch slot for the in-epic new conversation modal. It is scoped to an epic
- * and paired with `useNewConversationModalStore`; it persists while the modal is
- * being configured in-session, then clears on send.
+ * AND the parent being added to (`null` for a top-level create), and paired with
+ * `useNewConversationModalStore`; it persists while the modal is being
+ * configured in-session, then clears on send. Scoping by parent keeps a stale
+ * top-level / other-parent staged intent from overriding a child's inherited
+ * worktree when the same modal reopens in a different context.
  */
 export function newConversationModalStagingKey(
   epicId: string,
+  parentId: string | null,
 ): WorktreeStagingKey {
-  return { surface: "new-conversation", epicId };
+  return { surface: "new-conversation", epicId, parentId };
 }
 
 /**

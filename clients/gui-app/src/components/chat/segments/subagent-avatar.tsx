@@ -3,7 +3,7 @@ import { cn } from "@/lib/utils";
 
 // A deterministic, identicon-style pixel avatar keyed on the subagent's stable
 // block id. The id is the canonical per-subagent key (it also drives
-// useSubagentOpenStore), so the same subagent always renders the same icon -
+// subagent open state), so the same subagent always renders the same icon -
 // available from the first frame, before Codex's async nickname/role resolve.
 // While the subagent works its pixels drift upward (rising one row at a time
 // and wrapping back to the bottom, like Codex); idle freezes them into the

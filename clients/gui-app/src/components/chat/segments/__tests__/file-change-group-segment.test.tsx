@@ -168,6 +168,7 @@ function renderGroup(input: RenderGroupInput) {
           }}
         >
           <FileChangeGroupSegment
+            findUnitId={null}
             files={FILES}
             artifacts={[]}
             checkpointManifest={input.manifest}

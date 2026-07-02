@@ -243,30 +243,6 @@ export interface DesktopPowerBridge {
   setSleepBlocked(blocked: boolean): Promise<void>;
 }
 
-export interface DesktopFindResultSnapshot {
-  readonly requestId: number;
-  readonly activeMatchOrdinal: number;
-  readonly matches: number;
-  readonly finalUpdate: boolean;
-}
-
-export interface DesktopPlatformFindBridge {
-  inPage(
-    text: string,
-    options: {
-      readonly forward: boolean | undefined;
-      readonly findNext: boolean | undefined;
-      readonly matchCase: boolean | undefined;
-    },
-  ): Promise<number | null>;
-  stop(
-    action: "clearSelection" | "keepSelection" | "activateSelection",
-  ): Promise<void>;
-  onResult(handler: (snapshot: DesktopFindResultSnapshot) => void): {
-    dispose(): void;
-  };
-}
-
 export interface DesktopWindowsBridge {
   readonly windowId: string;
   list(): Promise<readonly DesktopWindowSummary[]>;

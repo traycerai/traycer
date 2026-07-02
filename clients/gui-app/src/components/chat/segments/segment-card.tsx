@@ -18,6 +18,8 @@ interface SegmentCardProps {
   tone: "default" | "destructive" | "primary";
   headerPosition: "normal" | "sticky";
   bodyOverflow: "hidden" | "visible";
+  headerFindUnitId: string | null;
+  bodyFindUnitId: string | null;
   // When false the card is a static header with no toggle/chevron and no body -
   // for segments whose collapsed header already says everything (e.g. a tool
   // call whose summary captures the whole input).
@@ -42,6 +44,7 @@ export function SegmentCard(props: SegmentCardProps) {
     headerAction,
     collapsedPreview,
     tone,
+    headerFindUnitId,
     expandable,
     className,
   } = props;
@@ -56,6 +59,7 @@ export function SegmentCard(props: SegmentCardProps) {
       >
         <div className="flex w-full items-stretch overflow-hidden rounded-md">
           <div
+            data-chat-find-unit={headerFindUnitId ?? undefined}
             className={cn(
               "flex min-w-0 flex-1 items-center gap-2 overflow-hidden px-2.5 py-2",
               headerAction === null ? "rounded-md" : "rounded-l-md",
@@ -89,6 +93,8 @@ function ExpandableSegmentCard(props: SegmentCardProps) {
     tone,
     headerPosition,
     bodyOverflow,
+    headerFindUnitId,
+    bodyFindUnitId,
     className,
   } = props;
   const measuredOpenChange = useChatMeasuredOpenChange(onOpenChange);
@@ -113,6 +119,8 @@ function ExpandableSegmentCard(props: SegmentCardProps) {
         )}
       >
         <CollapsibleTrigger
+          data-find-include="true"
+          data-chat-find-unit={headerFindUnitId ?? undefined}
           className={cn(
             "group/segment-card relative flex min-w-0 flex-1 items-center gap-2 overflow-hidden px-2.5 py-2 text-left transition-colors hover:bg-muted/40",
             headerAction === null ? "rounded-md" : "rounded-l-md",
@@ -140,7 +148,12 @@ function ExpandableSegmentCard(props: SegmentCardProps) {
       <CollapsibleContent
         className={bodyOverflow === "hidden" ? "overflow-hidden" : undefined}
       >
-        <div className="px-2.5 pt-2 pb-2.5">{body}</div>
+        <div
+          data-chat-find-unit={bodyFindUnitId ?? undefined}
+          className="px-2.5 pt-2 pb-2.5"
+        >
+          {body}
+        </div>
       </CollapsibleContent>
     </Collapsible>
   );

@@ -252,6 +252,17 @@ export interface ChatSessionState {
    */
   readonly runStatus: ChatRunStatus;
   readonly activeTurn: ChatActiveTurn | null;
+  /**
+   * The host's own `isTurnInProgress()`: is a turn genuinely active or
+   * activating right now? Narrower than `runStatus !== "idle"`, which also
+   * reads "running" for a pending queued item or visible background work
+   * outliving the turn - neither of which this corresponds to. `undefined`
+   * means an older host that predates this field; consumers should fall back
+   * to their own `runStatus`/`activeTurn`/`queue`/`backgroundItems`-derived
+   * approximation (see `chat-tile-session-state.ts`) rather than treat a
+   * missing value as a fixed true/false for the whole session.
+   */
+  readonly turnInProgress: boolean | undefined;
   readonly pendingApprovals: ReadonlyArray<ChatApprovalState>;
   readonly pendingFileEditApprovals: ReadonlyArray<ChatFileEditApprovalState>;
   readonly pendingInterviews: ReadonlyArray<ChatPendingInterviewState>;
@@ -718,6 +729,7 @@ export function createChatSessionStore(
             ),
             runStatus: frame.snapshot.runStatus,
             activeTurn: frame.snapshot.activeTurn,
+            turnInProgress: frame.snapshot.turnInProgress,
             pendingApprovals: frame.snapshot.pendingApprovals,
             pendingFileEditApprovals: frame.snapshot.pendingFileEditApprovals,
             pendingInterviews: frame.snapshot.pendingInterviews,
@@ -932,6 +944,7 @@ export function createChatSessionStore(
             messages: nextMessages,
             runStatus: frame.runStatus,
             activeTurn: frame.activeTurn,
+            turnInProgress: frame.turnInProgress ?? state.turnInProgress,
             backgroundItems: nextBackgroundItems,
             // Keep background-stop pending state in lockstep with the
             // running-only list: a task that has left the list settled, so its
@@ -1269,6 +1282,7 @@ export function createChatSessionStore(
       queue: EMPTY_QUEUE,
       runStatus: "idle",
       activeTurn: null,
+      turnInProgress: undefined,
       pendingApprovals: [],
       pendingFileEditApprovals: [],
       pendingInterviews: [],

@@ -584,8 +584,6 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.certTrustListPending,
         RunnerHostInvoke.certTrustDismissPending,
         RunnerHostInvoke.certTrustSystemDialog,
-        RunnerHostInvoke.windowFindInPage,
-        RunnerHostInvoke.windowStopFindInPage,
         RunnerHostInvoke.windowSetOverlayIcon,
         RunnerHostInvoke.displayList,
         RunnerHostInvoke.fileDropWriteTemporary,
