@@ -8,7 +8,10 @@ import { defineVersionedStreamRpcRegistry } from "@traycer/protocol/framework/ve
 import {
   agentCreateV10,
   agentGetTranscriptV10,
+  agentListHarnessModelsDowngradeV2ToV1,
   agentListHarnessModelsV10,
+  agentListHarnessModelsV20,
+  agentListHarnessModelsUpgradeV1ToV2,
   agentListDowngradeV2ToV1,
   agentListUpgradeV1ToV2,
   agentListV10,
@@ -1339,6 +1342,18 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
         },
       },
       downgradePathsFromLatest: {},
+    },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentListHarnessModelsV20,
+          upgradeFromPreviousVersion: agentListHarnessModelsUpgradeV1ToV2,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentListHarnessModelsDowngradeV2ToV1,
+      },
     },
   },
   "agent.list": {

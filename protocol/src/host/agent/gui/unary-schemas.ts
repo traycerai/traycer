@@ -29,6 +29,7 @@ export type HarnessSurface = z.infer<typeof harnessSurfaceSchema>;
 export const guiHarnessOptionSchema = z.object({
   id: guiHarnessIdSchema,
   label: z.string(),
+  enabled: z.boolean().default(true),
   available: z.boolean(),
   error: z.string().nullable(),
   modes: z.array(harnessSurfaceSchema),
