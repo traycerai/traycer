@@ -134,6 +134,7 @@ describe("FolderLocationControl", () => {
         <FolderLocationControl
           item={item(over)}
           uncommittedByPath={EMPTY_COUNTS}
+          boundaryEl={null}
           readOnly={false}
         />
       </TooltipProvider>,

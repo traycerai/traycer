@@ -91,7 +91,6 @@ export function FolderBranchControl(props: {
           align="start"
           collisionPadding={12}
           container={props.boundaryEl ?? undefined}
-          collisionBoundary={props.boundaryEl ?? undefined}
           className="w-[min(92vw,22rem)] gap-0 p-2.5"
           data-testid="folder-branch-popover"
           onInteractOutside={(event) =>
@@ -179,7 +178,6 @@ export function FolderBranchControl(props: {
         align="start"
         collisionPadding={12}
         container={props.boundaryEl ?? undefined}
-        collisionBoundary={props.boundaryEl ?? undefined}
         className="w-[min(92vw,22rem)] gap-0 p-2.5"
         data-testid="folder-branch-popover"
         onInteractOutside={(event) =>
