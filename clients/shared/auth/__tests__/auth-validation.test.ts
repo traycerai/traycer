@@ -78,6 +78,19 @@ function serializeAuthenticatedUserForHttp(): unknown {
   return JSON.parse(JSON.stringify(user));
 }
 
+// A real `Response` (so it stays `Response`-typed with no casts) whose body read
+// rejects with a `TimeoutError` - mirrors `AbortSignal.timeout` firing during
+// `response.json()`, after the status/headers have already arrived.
+function responseWithAbortingBody(status: number): Response {
+  const response = new Response("{}", { status });
+  Object.defineProperty(response, "json", {
+    value: async () => {
+      throw new DOMException("The operation timed out.", "TimeoutError");
+    },
+  });
+  return response;
+}
+
 beforeEach(() => {
   originalFetch = globalThis.fetch;
   calls = [];
@@ -255,6 +268,35 @@ describe("validateAuthTokenIdentityViaHttp - full AuthenticatedUser", () => {
     expect(calls.every((call) => call.hasSignal)).toBe(true);
   });
 
+  it("retries a user lookup whose body read times out (mid-read abort maps to network-error)", async () => {
+    vi.useFakeTimers();
+    let attempts = 0;
+    globalThis.fetch = (async (): Promise<Response> => {
+      attempts += 1;
+      if (attempts === 1) {
+        return responseWithAbortingBody(200);
+      }
+      return new Response(JSON.stringify(serializeAuthenticatedUserForHttp()), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    const pending = validateAuthTokenIdentityViaHttp(
+      AUTHN_BASE_URL,
+      "bearer",
+      "bearer-refresh",
+    );
+    await vi.runAllTimersAsync();
+    const result = await pending;
+
+    // A timeout during response.json() (after headers) is transient, so the
+    // lookup retries and succeeds instead of collapsing to a `rejected` sign-out.
+    expect(result.kind).toBe("valid");
+    expect(attempts).toBe(2);
+    vi.useRealTimers();
+  });
+
   it("returns rejected when the response body fails AuthenticatedUser parsing", async () => {
     installMockFetch([
       { status: 200, body: { user: { id: "u" }, partial: true } },
@@ -325,6 +367,38 @@ describe("refreshAuthTokenViaHttp - status mapping", () => {
     expect(result.token).toBe("rotated-bearer");
     expect(result.refreshToken).toBe("rotated-refresh");
   });
+
+  it("retries a refresh whose body read times out (mid-read abort maps to network-error)", async () => {
+    vi.useFakeTimers();
+    let attempts = 0;
+    globalThis.fetch = (async (): Promise<Response> => {
+      attempts += 1;
+      if (attempts === 1) {
+        return responseWithAbortingBody(200);
+      }
+      return new Response(
+        JSON.stringify({
+          token: "rotated-bearer",
+          refreshToken: "rotated-refresh",
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as typeof fetch;
+
+    const pending = refreshAuthTokenViaHttp(
+      AUTHN_BASE_URL,
+      "stale-bearer",
+      "stale-refresh",
+    );
+    await vi.runAllTimersAsync();
+    const result = await pending;
+
+    // A mid-read timeout on a 200 is transient, not a bad body: it retries into
+    // the rotated pair rather than downgrading to `rejected` (a sign-out).
+    expect(result.kind).toBe("refreshed");
+    expect(attempts).toBe(2);
+    vi.useRealTimers();
+  });
 });
 
 describe("exchangeCodeForTokens - timeout without retry", () => {
@@ -380,5 +454,42 @@ describe("exchangeCodeForTokens - timeout without retry", () => {
     expect(result.refreshToken).toBe("exchanged-refresh");
     expect(calls).toHaveLength(1);
     expect(calls[0].url).toBe(EXCHANGE_ENDPOINT);
+  });
+
+  it("maps a body-read timeout to network-error (transient), still without retrying", async () => {
+    let attempts = 0;
+    globalThis.fetch = (async (): Promise<Response> => {
+      attempts += 1;
+      return responseWithAbortingBody(200);
+    }) as typeof fetch;
+
+    const result = await exchangeCodeForTokens(
+      AUTHN_BASE_URL,
+      "pkce-code",
+      "pkce-verifier",
+    );
+
+    // A mid-read timeout is transient (the caller can retry the whole sign-in),
+    // NOT a consumed code - so it must not be a terminal `rejected`.
+    expect(result.kind).toBe("network-error");
+    expect(attempts).toBe(1);
+  });
+
+  it("maps a genuinely malformed 2xx body to rejected (a parse failure stays terminal)", async () => {
+    globalThis.fetch = (async (): Promise<Response> =>
+      new Response("not-json{", {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })) as typeof fetch;
+
+    const result = await exchangeCodeForTokens(
+      AUTHN_BASE_URL,
+      "pkce-code",
+      "pkce-verifier",
+    );
+
+    // A SyntaxError from response.json() is NOT an abort/timeout, so it stays a
+    // terminal `rejected` - proving the transient/terminal distinction holds.
+    expect(result.kind).toBe("rejected");
   });
 });

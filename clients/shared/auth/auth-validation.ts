@@ -99,6 +99,22 @@ function delayFor(ms: number): Promise<void> {
 }
 
 /**
+ * True for an abort/timeout thrown while reading a response body *after* the
+ * headers arrived - the per-attempt `AbortSignal.timeout` (a `TimeoutError`) or
+ * a caller abort (`AbortError`) firing during `response.json()`. Such a failure
+ * is transient/retriable and must surface as `network-error`, NOT be collapsed
+ * into a terminal `rejected`/invalid body the way a genuine parse failure is.
+ */
+function isAbortOrTimeout(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "name" in error &&
+    (error.name === "TimeoutError" || error.name === "AbortError")
+  );
+}
+
+/**
  * Shared bearer-token validation helper used by runner-host implementations.
  *
  * Browser-only hosts (tests, preview, mobile webview) call this directly with
@@ -278,7 +294,13 @@ async function fetchUserResponseOnce(
   let body: unknown;
   try {
     body = await response.json();
-  } catch {
+  } catch (error) {
+    // A timeout/abort firing mid-body-read (after headers) is transient, not a
+    // dead credential - classify it like a pre-headers abort. A genuinely
+    // malformed 2xx body stays `rejected`.
+    if (isAbortOrTimeout(error)) {
+      return { kind: "failed", result: { kind: "network-error" } };
+    }
     return { kind: "failed", result: { kind: "rejected" } };
   }
   return { kind: "ok", body };
@@ -359,7 +381,10 @@ async function refreshAuthTokenOnceViaHttp(
   }
 
   const rotated = await readRotatedTokens(response);
-  if (rotated === null) {
+  if (rotated.kind === "transient") {
+    return { kind: "network-error" };
+  }
+  if (rotated.kind === "invalid") {
     return { kind: "rejected" };
   }
   return {
@@ -429,7 +454,10 @@ export async function exchangeCodeForTokens(
   }
 
   const tokens = await readRotatedTokens(response);
-  if (tokens === null) {
+  if (tokens.kind === "transient") {
+    return { kind: "network-error" };
+  }
+  if (tokens.kind === "invalid") {
     return { kind: "rejected" };
   }
   return {
@@ -466,37 +494,57 @@ function projectProfile(body: unknown): AuthValidationProfile | null {
 }
 
 /**
+ * Outcome of reading the rotated `{ token, refreshToken }` pair from a 2xx
+ * token-mint body:
+ *   - `ok`        - a valid non-empty pair;
+ *   - `invalid`   - the body is malformed or missing a field (terminal);
+ *   - `transient` - the body read was aborted/timed out after headers arrived
+ *                   (retriable; must NOT be treated as a bad body).
+ */
+export type RotatedTokensOutcome =
+  | {
+      readonly kind: "ok";
+      readonly token: string;
+      readonly refreshToken: string;
+    }
+  | { readonly kind: "invalid" }
+  | { readonly kind: "transient" };
+
+/**
  * Parses the rotated `{ token, refreshToken }` pair from a 2xx token-mint
  * response body. Exported so the device-flow client (`device-auth.ts`) can
  * reuse the exact same 200-body shape that `exchange-code` / `refresh` use,
- * without duplicating the field validation. Returns `null` when the body is
- * missing either non-empty string field.
+ * without duplicating the field validation. A body-read abort/timeout is
+ * reported as `transient` so callers keep it retriable instead of collapsing it
+ * into a terminal bad-body outcome; a malformed/missing-field body is `invalid`.
  */
 export async function readRotatedTokens(
   response: Response,
-): Promise<{ readonly token: string; readonly refreshToken: string } | null> {
+): Promise<RotatedTokensOutcome> {
+  let body: unknown;
   try {
-    const body: unknown = await response.json();
-    if (body === null || typeof body !== "object") {
-      return null;
-    }
-
-    const record = body as Record<string, unknown>;
-    const token = record.token;
-    const refreshToken = record.refreshToken;
-    if (
-      typeof token !== "string" ||
-      token.length === 0 ||
-      typeof refreshToken !== "string" ||
-      refreshToken.length === 0
-    ) {
-      return null;
-    }
-
-    return { token, refreshToken };
-  } catch {
-    return null;
+    body = await response.json();
+  } catch (error) {
+    return isAbortOrTimeout(error) ? { kind: "transient" } : { kind: "invalid" };
   }
+
+  if (body === null || typeof body !== "object") {
+    return { kind: "invalid" };
+  }
+
+  const record = body as Record<string, unknown>;
+  const token = record.token;
+  const refreshToken = record.refreshToken;
+  if (
+    typeof token !== "string" ||
+    token.length === 0 ||
+    typeof refreshToken !== "string" ||
+    refreshToken.length === 0
+  ) {
+    return { kind: "invalid" };
+  }
+
+  return { kind: "ok", token, refreshToken };
 }
 
 function authnApiUrl(authnBaseUrl: string, path: string): string {
