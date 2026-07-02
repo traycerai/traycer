@@ -234,7 +234,10 @@ describe("refreshRegistryUpdateState - launch-time probe", () => {
     });
     const { refreshRegistryUpdateState } =
       await import("../host-management-ipc");
-    const state = await refreshRegistryUpdateState({ force: false });
+    const state = await refreshRegistryUpdateState({
+      force: false,
+      maxAgeMs: null,
+    });
     expect(probeSpy).not.toHaveBeenCalled();
     expect(state.updateAvailable).toBe(true);
     expect(state.latestVersion).toBe("1.4.2");
@@ -259,7 +262,7 @@ describe("refreshRegistryUpdateState - launch-time probe", () => {
     const listener = vi.fn();
     const unsubscribe = onHostRegistryUpdateStateChange(listener);
 
-    await refreshRegistryUpdateState({ force: false });
+    await refreshRegistryUpdateState({ force: false, maxAgeMs: null });
     unsubscribe();
 
     expect(listener).toHaveBeenCalledWith(
@@ -295,7 +298,10 @@ describe("refreshRegistryUpdateState - launch-time probe", () => {
     const unsubscribeSucceeding =
       onHostRegistryUpdateStateChange(succeedingListener);
 
-    const state = await refreshRegistryUpdateState({ force: false });
+    const state = await refreshRegistryUpdateState({
+      force: false,
+      maxAgeMs: null,
+    });
     unsubscribeThrowing();
     unsubscribeSucceeding();
 
@@ -334,7 +340,10 @@ describe("refreshRegistryUpdateState - launch-time probe", () => {
     });
     const { refreshRegistryUpdateState } =
       await import("../host-management-ipc");
-    const state = await refreshRegistryUpdateState({ force: true });
+    const state = await refreshRegistryUpdateState({
+      force: true,
+      maxAgeMs: null,
+    });
     expect(probeSpy).toHaveBeenCalledOnce();
     expect(state.latestVersion).toBe("1.4.3");
   });
@@ -359,9 +368,68 @@ describe("refreshRegistryUpdateState - launch-time probe", () => {
     });
     const { refreshRegistryUpdateState } =
       await import("../host-management-ipc");
-    const state = await refreshRegistryUpdateState({ force: false });
+    const state = await refreshRegistryUpdateState({
+      force: false,
+      maxAgeMs: null,
+    });
     expect(probeSpy).toHaveBeenCalledOnce();
     expect(state.latestVersion).toBe("1.4.3");
+  });
+
+  // Ticket: host-update-race-conditions - the periodic/resume re-check
+  // (desktop-startup.ts) passes a much shorter `maxAgeMs` than the default
+  // 24h TTL so a long-running session (or a machine waking from sleep)
+  // notices a new release without requiring a relaunch or a manual click.
+  it("maxAgeMs overrides the default 24h TTL - a 2h-old cache re-probes under a 1h threshold", async () => {
+    const probeSpy = vi
+      .fn()
+      .mockResolvedValue(registryProbeResult("1.4.3", true, null));
+    vi.doMock("../../cli/traycer-cli", () => ({
+      runTraycerCliJson: probeSpy,
+      streamTraycerCliJson: vi.fn(),
+      TraycerCliError: class extends Error {},
+    }));
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    writeCache({
+      checkedAt: twoHoursAgo,
+      latestVersion: "1.4.0",
+      installedVersion: null,
+      reachable: true,
+      errorMessage: null,
+    });
+    const { refreshRegistryUpdateState } =
+      await import("../host-management-ipc");
+    const state = await refreshRegistryUpdateState({
+      force: false,
+      maxAgeMs: 60 * 60 * 1000,
+    });
+    expect(probeSpy).toHaveBeenCalledOnce();
+    expect(state.latestVersion).toBe("1.4.3");
+  });
+
+  it("maxAgeMs still honours a fresh cache - a 2h-old cache under a 4h threshold does not re-probe", async () => {
+    const probeSpy = vi.fn();
+    vi.doMock("../../cli/traycer-cli", () => ({
+      runTraycerCliJson: probeSpy,
+      streamTraycerCliJson: vi.fn(),
+      TraycerCliError: class extends Error {},
+    }));
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    writeCache({
+      checkedAt: twoHoursAgo,
+      latestVersion: "1.4.2",
+      installedVersion: "1.4.1",
+      reachable: true,
+      errorMessage: null,
+    });
+    const { refreshRegistryUpdateState } =
+      await import("../host-management-ipc");
+    const state = await refreshRegistryUpdateState({
+      force: false,
+      maxAgeMs: 4 * 60 * 60 * 1000,
+    });
+    expect(probeSpy).not.toHaveBeenCalled();
+    expect(state.latestVersion).toBe("1.4.2");
   });
 
   it("does not advertise latest when the platform asset is unavailable", async () => {
@@ -383,7 +451,10 @@ describe("refreshRegistryUpdateState - launch-time probe", () => {
 
     const { refreshRegistryUpdateState } =
       await import("../host-management-ipc");
-    const state = await refreshRegistryUpdateState({ force: true });
+    const state = await refreshRegistryUpdateState({
+      force: true,
+      maxAgeMs: null,
+    });
 
     expect(state.latestVersion).toBeNull();
     expect(state.installedVersion).toBe("1.4.1");
@@ -409,9 +480,9 @@ describe("refreshRegistryUpdateState - launch-time probe", () => {
     const { refreshRegistryUpdateState } =
       await import("../host-management-ipc");
 
-    const first = refreshRegistryUpdateState({ force: true });
+    const first = refreshRegistryUpdateState({ force: true, maxAgeMs: null });
     await firstProbeStarted.promise;
-    const second = refreshRegistryUpdateState({ force: true });
+    const second = refreshRegistryUpdateState({ force: true, maxAgeMs: null });
 
     expect(probeSpy).toHaveBeenCalledTimes(1);
     firstProbe.resolve(registryProbeResult("1.4.2", true, null));
@@ -431,7 +502,10 @@ describe("refreshRegistryUpdateState - launch-time probe", () => {
     }));
     const { refreshRegistryUpdateState } =
       await import("../host-management-ipc");
-    const state = await refreshRegistryUpdateState({ force: false });
+    const state = await refreshRegistryUpdateState({
+      force: false,
+      maxAgeMs: null,
+    });
     expect(state.reachable).toBe(false);
     expect(state.updateAvailable).toBe(false);
     expect(state.errorMessage).toContain("registry unreachable");
@@ -453,7 +527,10 @@ describe("refreshRegistryUpdateState - launch-time probe", () => {
     });
     const { refreshRegistryUpdateState } =
       await import("../host-management-ipc");
-    const state = await refreshRegistryUpdateState({ force: false });
+    const state = await refreshRegistryUpdateState({
+      force: false,
+      maxAgeMs: null,
+    });
     expect(state.updateAvailable).toBe(false);
   });
 
@@ -477,7 +554,10 @@ describe("refreshRegistryUpdateState - launch-time probe", () => {
     });
     const { refreshRegistryUpdateState } =
       await import("../host-management-ipc");
-    const state = await refreshRegistryUpdateState({ force: false });
+    const state = await refreshRegistryUpdateState({
+      force: false,
+      maxAgeMs: null,
+    });
     expect(probeSpy).not.toHaveBeenCalled();
     expect(state.updateAvailable).toBe(false);
   });
@@ -501,7 +581,10 @@ describe("refreshRegistryUpdateState - launch-time probe", () => {
     });
     const { refreshRegistryUpdateState } =
       await import("../host-management-ipc");
-    const state = await refreshRegistryUpdateState({ force: false });
+    const state = await refreshRegistryUpdateState({
+      force: false,
+      maxAgeMs: null,
+    });
     expect(probeSpy).not.toHaveBeenCalled();
     expect(state.updateAvailable).toBe(true);
   });
@@ -523,7 +606,10 @@ describe("refreshRegistryUpdateState - launch-time probe", () => {
     });
     const { refreshRegistryUpdateState } =
       await import("../host-management-ipc");
-    const state = await refreshRegistryUpdateState({ force: false });
+    const state = await refreshRegistryUpdateState({
+      force: false,
+      maxAgeMs: null,
+    });
     expect(probeSpy).not.toHaveBeenCalled();
     expect(state.updateAvailable).toBe(false);
   });
@@ -546,7 +632,10 @@ describe("refreshRegistryUpdateState - launch-time probe", () => {
     });
     const { refreshRegistryUpdateState } =
       await import("../host-management-ipc");
-    const state = await refreshRegistryUpdateState({ force: false });
+    const state = await refreshRegistryUpdateState({
+      force: false,
+      maxAgeMs: null,
+    });
     expect(probeSpy).toHaveBeenCalledOnce();
     expect(state.reachable).toBe(true);
     expect(state.latestVersion).toBe("1.4.3");
@@ -588,7 +677,10 @@ describe("refreshRegistryUpdateState - environment-scoped cache", () => {
     });
     const mgmt = await import("../host-management-ipc");
     mgmt.setActiveEnvironment("production");
-    const state = await mgmt.refreshRegistryUpdateState({ force: false });
+    const state = await mgmt.refreshRegistryUpdateState({
+      force: false,
+      maxAgeMs: null,
+    });
     expect(probeSpy).not.toHaveBeenCalled();
     expect(state.latestVersion).toBe("1.4.2");
     expect(state.installedVersion).toBe("1.4.1");
@@ -619,7 +711,10 @@ describe("refreshRegistryUpdateState - environment-scoped cache", () => {
     });
     const mgmt = await import("../host-management-ipc");
     mgmt.setActiveEnvironment("dev");
-    const state = await mgmt.refreshRegistryUpdateState({ force: false });
+    const state = await mgmt.refreshRegistryUpdateState({
+      force: false,
+      maxAgeMs: null,
+    });
     expect(probeSpy).not.toHaveBeenCalled();
     expect(state.latestVersion).toBe("DEV-2.0.0");
     expect(state.installedVersion).toBe("DEV-1.0.0");
@@ -644,7 +739,10 @@ describe("refreshRegistryUpdateState - environment-scoped cache", () => {
     });
     const mgmt = await import("../host-management-ipc");
     mgmt.setActiveEnvironment("dev");
-    const state = await mgmt.refreshRegistryUpdateState({ force: false });
+    const state = await mgmt.refreshRegistryUpdateState({
+      force: false,
+      maxAgeMs: null,
+    });
     expect(probeSpy).toHaveBeenCalledOnce();
     expect(state.latestVersion).toBe("DEV-2.0.0");
     // The freshly written cache must land in the dev file, not the
@@ -680,7 +778,10 @@ describe("refreshRegistryUpdateState - environment-scoped cache", () => {
     });
     const mgmt = await import("../host-management-ipc");
     mgmt.setActiveEnvironment("production");
-    const state = await mgmt.refreshRegistryUpdateState({ force: false });
+    const state = await mgmt.refreshRegistryUpdateState({
+      force: false,
+      maxAgeMs: null,
+    });
     expect(probeSpy).toHaveBeenCalledOnce();
     expect(state.latestVersion).toBe("PROD-1.4.2");
     const prodPath = join(
@@ -720,7 +821,10 @@ describe("refreshRegistryUpdateState - environment-scoped cache", () => {
     );
     const mgmt = await import("../host-management-ipc");
     mgmt.setActiveEnvironment("production");
-    const state = await mgmt.refreshRegistryUpdateState({ force: false });
+    const state = await mgmt.refreshRegistryUpdateState({
+      force: false,
+      maxAgeMs: null,
+    });
     expect(probeSpy).toHaveBeenCalledOnce();
     expect(state.latestVersion).toBe("PROD-1.4.2");
   });
@@ -736,7 +840,10 @@ describe("refreshRegistryUpdateState - environment-scoped cache", () => {
     }));
     const mgmt = await import("../host-management-ipc");
     mgmt.setActiveEnvironment("dev");
-    const state = await mgmt.refreshRegistryUpdateState({ force: false });
+    const state = await mgmt.refreshRegistryUpdateState({
+      force: false,
+      maxAgeMs: null,
+    });
     expect(state.reachable).toBe(false);
     expect(state.updateAvailable).toBe(false);
     expect(state.errorMessage).toContain("registry unreachable");

@@ -1,5 +1,6 @@
 import { HostPicker } from "@/components/layout/header/host-picker";
 import { AppUpdateToastController } from "@/components/layout/bridges/app-update-toast-controller";
+import { HostOperationStatusListener } from "@/components/layout/bridges/host-operation-status-listener";
 import { HostRegistryUpdateListener } from "@/components/layout/bridges/host-registry-update-listener";
 import { RunnerHostBridges } from "@/components/layout/bridges/runner-host-bridges";
 import { WorktreeDeleteProgressToastBridge } from "@/components/layout/bridges/worktree-delete-progress-toast-bridge";
@@ -195,6 +196,7 @@ function TraycerAppRuntimeSurface(props: TraycerAppRuntimeSurfaceProps) {
     <>
       <RunnerHostBridges />
       <HostRegistryUpdateListener />
+      <HostOperationStatusListener />
       <AppUpdateToastController />
       <WorktreeDeleteProgressToastBridge />
       <CliCredentialSeeder />

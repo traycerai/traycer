@@ -1,4 +1,7 @@
-import type { HostRegistryUpdateState } from "@traycer-clients/shared/platform/runner-host";
+import type {
+  HostOperationStatus,
+  HostRegistryUpdateState,
+} from "@traycer-clients/shared/platform/runner-host";
 
 export type DesktopJsonPrimitive = string | number | boolean | null;
 export type DesktopJsonValue =
@@ -209,6 +212,12 @@ export interface DesktopAppUpdatesBridge {
 
 export interface DesktopHostRegistryUpdatesBridge {
   onChange(handler: (state: HostRegistryUpdateState) => void): {
+    dispose(): void;
+  };
+}
+
+export interface DesktopHostOperationStatusBridge {
+  onChange(handler: (status: HostOperationStatus | null) => void): {
     dispose(): void;
   };
 }

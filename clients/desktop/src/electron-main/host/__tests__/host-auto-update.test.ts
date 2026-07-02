@@ -149,3 +149,96 @@ describe("reconcileHostAutoUpdate", () => {
     expect(runHostUpdate).toHaveBeenCalledOnce();
   });
 });
+
+// Ticket: host-update-race-conditions. `runHostUpdate` used to call
+// `streamTraycerCliJson` directly, so a launch/quit-time coordinated update
+// held the CLI lock but was completely invisible to every renderer window -
+// a manual click during that window would spawn a second `traycer host
+// update` and lose the race. It now goes through the same
+// `streamCliWithProgress` seam (and thus the same in-main single-flight
+// guard + `hostOperationStatusChange` broadcast) as every renderer-triggered
+// operation, so the background update disables/shows-progress-on every
+// surface instead of silently racing them.
+vi.mock("../../ipc/host-management-ipc", () => ({
+  refreshRegistryUpdateState: vi.fn().mockResolvedValue({
+    checkedAt: "2026-06-23T00:00:00Z",
+    latestVersion: "0.0.3",
+    installedVersion: "0.0.2",
+    updateAvailable: true,
+    reachable: true,
+    errorMessage: null,
+  }),
+  streamCliWithProgress: vi.fn().mockResolvedValue({}),
+}));
+
+describe("defaultHostAutoUpdateDeps", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("runs the update through streamCliWithProgress with kind 'update' and the given bridge/timeout", async () => {
+    const { defaultHostAutoUpdateDeps } = await import("../host-auto-update");
+    const { streamCliWithProgress } =
+      await import("../../ipc/host-management-ipc");
+    const host = { getSnapshot: () => null } as never;
+    const bridge = { fanOut: vi.fn() } as never;
+    const deps = defaultHostAutoUpdateDeps(
+      host,
+      12345,
+      () => Promise.resolve(),
+      bridge,
+    );
+
+    await deps.runHostUpdate();
+
+    expect(streamCliWithProgress).toHaveBeenCalledWith(
+      ["host", "update"],
+      expect.any(String),
+      "update",
+      12345,
+      bridge,
+    );
+  });
+
+  it("checkUpdateState reads the cache without forcing and without overriding the freshness threshold", async () => {
+    const { defaultHostAutoUpdateDeps } = await import("../host-auto-update");
+    const { refreshRegistryUpdateState } =
+      await import("../../ipc/host-management-ipc");
+    const host = { getSnapshot: () => null } as never;
+    const bridge = { fanOut: vi.fn() } as never;
+    const deps = defaultHostAutoUpdateDeps(
+      host,
+      12345,
+      () => Promise.resolve(),
+      bridge,
+    );
+
+    await deps.checkUpdateState();
+
+    expect(refreshRegistryUpdateState).toHaveBeenCalledWith({
+      force: false,
+      maxAgeMs: null,
+    });
+  });
+
+  it("refreshAfter force-refreshes the cache after a successful update", async () => {
+    const { defaultHostAutoUpdateDeps } = await import("../host-auto-update");
+    const { refreshRegistryUpdateState } =
+      await import("../../ipc/host-management-ipc");
+    const host = { getSnapshot: () => null } as never;
+    const bridge = { fanOut: vi.fn() } as never;
+    const deps = defaultHostAutoUpdateDeps(
+      host,
+      12345,
+      () => Promise.resolve(),
+      bridge,
+    );
+
+    await deps.refreshAfter();
+
+    expect(refreshRegistryUpdateState).toHaveBeenCalledWith({
+      force: true,
+      maxAgeMs: null,
+    });
+  });
+});

@@ -18,6 +18,7 @@ import { cn } from "@/lib/utils";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import type {
   HostInstallResult,
+  HostOperationStatus,
   HostRegistryUpdateState,
   IHostManagement,
 } from "@traycer-clients/shared/platform/runner-host";
@@ -85,8 +86,32 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
     }),
   );
 
+  // Canonical cross-surface "is a host mutation running" status (Ticket:
+  // host-update-race-conditions) - shared with Settings → Host and any other
+  // open window via the same query key, so the button here disables and
+  // shows progress whether THIS banner, Settings, or the background
+  // auto-update reconciler is the one actually driving the update.
+  // `staleTime: Infinity` because this is entirely event-sourced (pushed by
+  // `HostOperationStatusListener`), never polling-appropriate.
+  const { data: operationStatus } = useQuery(
+    queryOptions<HostOperationStatus | null>({
+      queryKey: runnerQueryKeys.hostOperationStatus(management),
+      queryFn: () => management.getOperationStatus(),
+      staleTime: Infinity,
+    }),
+  );
+  const sharedOperationActive =
+    operationStatus !== undefined && operationStatus !== null;
+  const sharedPercent =
+    operationStatus !== undefined && operationStatus !== null
+      ? operationStatus.percent
+      : null;
+
   const updateMutation = useMutation<HostInstallResult>({
     mutationKey: runnerMutationKeys.hostUpdate(),
+    // Progress is read from the shared `operationStatus` query above (it
+    // reflects the operation regardless of which surface started it), so
+    // this mutation doesn't need its own progress callback.
     mutationFn: () => management.updateHost({ onProgress: null }),
     onSuccess: (data) => {
       toast.success(`Updated host to v${data.version}`);
@@ -160,15 +185,25 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
         type="button"
         size="sm"
         variant="default"
-        disabled={updateMutation.isPending}
+        disabled={updateMutation.isPending || sharedOperationActive}
         onClick={() => updateMutation.mutate()}
       >
-        {updateMutation.isPending ? (
-          <AgentSpinningDots
-            className="mr-2 size-3"
-            testId={undefined}
-            variant={undefined}
-          />
+        {updateMutation.isPending || sharedOperationActive ? (
+          <>
+            <AgentSpinningDots
+              className="mr-2 size-3"
+              testId={undefined}
+              variant={undefined}
+            />
+            {sharedPercent !== null ? (
+              <span
+                className="mr-2 font-mono text-code-xs tabular-nums"
+                data-testid="host-update-banner-progress-percent"
+              >
+                {Math.max(0, Math.min(100, Math.round(sharedPercent)))}%
+              </span>
+            ) : null}
+          </>
         ) : null}
         Install
       </Button>

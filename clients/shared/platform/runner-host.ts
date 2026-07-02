@@ -691,6 +691,30 @@ export interface HostProgressEvent {
   readonly message: string | null;
 }
 
+export type HostOperationKind =
+  "install" | "update" | "register-service" | "ensure";
+
+/**
+ * Canonical cross-surface snapshot of the single host mutation currently
+ * running (if any), mirrored from Desktop main to every renderer window via
+ * `hostOperationStatusChange`. Unlike `HostProgressEvent` - which is scoped to
+ * the `operationId` of the caller that started it - this is the single source
+ * of truth every UI surface (landing-page banner, Settings → Host, a second
+ * window) reads to disable its trigger and render progress, regardless of
+ * which surface (or the background auto-update reconciler) started the
+ * operation. `null` means no host mutation is in flight.
+ */
+export interface HostOperationStatus {
+  readonly operationId: string;
+  readonly kind: HostOperationKind;
+  readonly stage: string | null;
+  readonly percent: number | null;
+  readonly bytes: number | null;
+  readonly totalBytes: number | null;
+  readonly message: string | null;
+  readonly startedAt: string;
+}
+
 export interface HostInstallSourceTag {
   readonly kind: "registry" | "local-file";
   readonly value: string;
@@ -943,6 +967,11 @@ export interface IHostManagement {
   readonly registryCheck: (input: {
     readonly force: boolean;
   }) => Promise<HostRegistryUpdateState>;
+  // Current cross-surface host operation status (or `null` when idle), read
+  // once on mount to prime the shared query cache; live updates arrive via
+  // the desktop-only `hostOperationStatus` push bridge (see
+  // `HostOperationStatusListener`).
+  readonly getOperationStatus: () => Promise<HostOperationStatus | null>;
   readonly freePortAndRestart: (
     input: FreePortAndRestartInput,
   ) => Promise<FreePortAndRestartInput>;

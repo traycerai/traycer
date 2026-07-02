@@ -436,6 +436,8 @@ function buildFakeBridge(
         errorMessage: null,
       }),
       onRegistryUpdateState: () => ({ dispose: () => undefined }),
+      getOperationStatus: async () => null,
+      onOperationStatus: () => ({ dispose: () => undefined }),
       freePortAndRestart: async (input) => input,
       cliManifest: async () => null,
       getHostName: async () => ({

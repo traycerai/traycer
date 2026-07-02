@@ -166,6 +166,11 @@ export const RunnerHostInvoke = {
   traycerServiceRegister: "runnerHost:traycer:service:register",
   traycerServiceDeregister: "runnerHost:traycer:service:deregister",
   traycerRegistryCheck: "runnerHost:traycer:registry:check",
+  // Reads the current cross-surface host operation status (or null when
+  // idle) once on mount, so a component that mounts mid-operation (e.g.
+  // Settings opened after the banner already started an update) sees it
+  // immediately instead of waiting for the next `hostOperationStatusChange`.
+  traycerHostOperationStatusGet: "runnerHost:traycer:host:operationStatus:get",
   traycerFreePortAndRestart: "runnerHost:traycer:freePortAndRestart",
   traycerCliManifestRead: "runnerHost:traycer:cli:manifestRead",
   traycerHostNameGet: "runnerHost:traycer:host:name:get",
@@ -211,6 +216,13 @@ export const RunnerHostEvent = {
   // surfaces can keep their TanStack Query cache in lockstep.
   hostRegistryUpdateStateChange:
     "runnerHost:event:host:registryUpdateStateChange",
+  // Canonical cross-surface "is a host mutation running" broadcast (see
+  // `HostOperationStatus`). Fired on start, every progress tick, and settle
+  // (success/error) of any install/update/register-service/ensure
+  // operation, whether triggered by a renderer surface or the background
+  // auto-update reconciler, so every open window's banner/Settings stay in
+  // lockstep without racing the CLI's cross-process lock file.
+  hostOperationStatusChange: "runnerHost:event:host:operationStatusChange",
 } as const;
 
 /**
