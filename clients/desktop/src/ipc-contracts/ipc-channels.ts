@@ -127,8 +127,6 @@ export const RunnerHostInvoke = {
   certTrustListPending: "runnerHost:cert:listPending",
   certTrustDismissPending: "runnerHost:cert:dismissPending",
   certTrustSystemDialog: "runnerHost:cert:systemDialog",
-  windowFindInPage: "runnerHost:window:findInPage",
-  windowStopFindInPage: "runnerHost:window:stopFindInPage",
   windowSetOverlayIcon: "runnerHost:window:setOverlayIcon",
   displayList: "runnerHost:display:list",
   gpuAccelerationGet: "runnerHost:gpu:get",
@@ -200,7 +198,6 @@ export const RunnerHostEvent = {
   certificateErrorPending: "runnerHost:event:cert:errorPending",
   appUpdateChange: "runnerHost:event:appUpdate:change",
   displayTopologyChange: "runnerHost:event:display:topologyChange",
-  findInPageResult: "runnerHost:event:findInPage:result",
   // Progress events emitted by long-running host-management invokes
   // (install / update / register-service). The preload bridge filters by
   // `operationId` so concurrent operations don't cross-contaminate.

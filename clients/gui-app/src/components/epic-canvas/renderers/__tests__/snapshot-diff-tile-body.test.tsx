@@ -6,10 +6,16 @@ import { create } from "zustand";
 import type { StoreApi, UseBoundStore } from "zustand";
 import type { ChatAccumulatedFileChange } from "@traycer/protocol/host/agent/gui/subscribe";
 import { makeSnapshotCumulativeDiffTile } from "@/lib/chat/snapshot-diff-tile";
+import { TileFindScope } from "@/components/epic-canvas/tile-find/tile-find-scope";
 import {
   DEFAULT_DIFF_VIEWER_PREFERENCES,
   type DiffViewerPreferences,
 } from "@/lib/diff/diff-viewer-preferences";
+import {
+  useTileFindStore,
+  type TileFindStateSnapshot,
+} from "@/stores/tile-find";
+import type { SnapshotDiffTileRef } from "@/stores/epics/canvas/types";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { TabHostProvider } from "../../tab-host-provider";
 
@@ -36,6 +42,16 @@ const state = vi.hoisted(() => ({
   buildPatch: vi.fn(),
   diffPrimitiveCalls: [] as DiffPrimitiveCall[],
 }));
+
+const SNAPSHOT_PATCH = [
+  "diff --git a/src/a.ts b/src/a.ts",
+  "--- a/src/a.ts",
+  "+++ b/src/a.ts",
+  "@@ -1 +1 @@",
+  "-const label = 'OldName';",
+  "+const label = 'NewName';",
+  "",
+].join("\n");
 
 vi.mock("@/lib/registries/chat-session-registry", () => ({
   useChatSessionHandle: () => state.handle,
@@ -80,16 +96,18 @@ function cumulativeChange(
   };
 }
 
-function renderSnapshotTile(): void {
-  const node = makeSnapshotCumulativeDiffTile({
-    hostId: "host-1",
-    chatId: "chat-1",
-    filePath: "src/a.ts",
-  });
-
+function renderSnapshotTile(node: SnapshotDiffTileRef): void {
   render(
     <TabHostProvider hostId="host-1">
-      <SnapshotDiffTileBody node={node} viewTabId="view-1" />
+      <TileFindScope
+        node={node}
+        viewTabId="view-1"
+        tileId={node.id}
+        epicId="epic-1"
+        isActive
+      >
+        <SnapshotDiffTileBody node={node} viewTabId="view-1" />
+      </TileFindScope>
     </TabHostProvider>,
   );
 }
@@ -119,11 +137,17 @@ describe("<SnapshotDiffTileBody />", () => {
 
   afterEach(() => {
     cleanup();
+    useTileFindStore.getState().resetForTests();
     vi.restoreAllMocks();
   });
 
   it("rerenders mounted snapshot diffs from global preferences", async () => {
-    renderSnapshotTile();
+    const node = makeSnapshotCumulativeDiffTile({
+      hostId: "host-1",
+      chatId: "chat-1",
+      filePath: "src/a.ts",
+    });
+    renderSnapshotTile(node);
 
     expect(state.diffPrimitiveCalls.at(-1)).toMatchObject({
       patch: "patch:include",
@@ -176,4 +200,78 @@ describe("<SnapshotDiffTileBody />", () => {
       ignoreWhitespace: true,
     });
   });
+
+  it("replays the active search when a loading single-file snapshot diff becomes loaded", async () => {
+    const node = makeSnapshotCumulativeDiffTile({
+      hostId: "host-1",
+      chatId: "chat-1",
+      filePath: "src/a.ts",
+    });
+    const handleStore = create<SnapshotTestStore>(() => ({
+      snapshotLoaded: false,
+      messages: [],
+      liveAssistantMessage: null,
+      accumulatedFileChanges: [],
+    }));
+    state.handle = { store: handleStore };
+    state.buildPatch.mockReturnValue(SNAPSHOT_PATCH);
+
+    renderSnapshotTile(node);
+
+    await waitFor(() => {
+      expect(tileSnapshot(node).coverageMessage).toBe(
+        "Snapshot diff content is still loading.",
+      );
+    });
+    act(() => {
+      const store = useTileFindStore.getState();
+      store.openForTile(node.instanceId);
+      store.setMatchCase(node.instanceId, true);
+      store.setQuery(node.instanceId, "NewName");
+      store.search(node.instanceId);
+    });
+    expect(tileSnapshot(node)).toMatchObject({
+      requestId: 1,
+      status: "unavailable",
+      query: "NewName",
+      matchCase: true,
+      total: 0,
+      coverageMessage: "Snapshot diff content is still loading.",
+    });
+
+    act(() => {
+      handleStore.setState({
+        snapshotLoaded: true,
+        accumulatedFileChanges: [
+          cumulativeChange(
+            "src/a.ts",
+            "const label = 'OldName';\n",
+            "const label = 'NewName';\n",
+          ),
+        ],
+      });
+    });
+
+    await waitFor(() => {
+      expect(tileSnapshot(node)).toMatchObject({
+        requestId: 1,
+        status: "ready",
+        query: "NewName",
+        matchCase: true,
+        current: 1,
+        total: 1,
+        coverageMessage: null,
+      });
+    });
+  });
 });
+
+function tileSnapshot(node: SnapshotDiffTileRef): TileFindStateSnapshot {
+  const snapshot =
+    useTileFindStore.getState().uiByTileInstanceId[node.instanceId]
+      ?.lastSnapshot;
+  if (snapshot === undefined) {
+    throw new Error(`Missing tile find snapshot for ${node.instanceId}`);
+  }
+  return snapshot;
+}

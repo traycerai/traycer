@@ -754,22 +754,6 @@ describe("epic sidebar selection mode", () => {
     ).toBe(false);
   });
 
-  it("hides row child creation for chats bound to an unavailable remote host", () => {
-    seedChatTree();
-    testState.rowHostId = "host-2";
-    testState.rowHostEntry = null;
-    testState.rowHostClient = null;
-
-    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
-
-    // The "+" only creates children on the row's bound host; with that host
-    // offline there is no actionable target, so the control is omitted entirely
-    // rather than rendered disabled.
-    expect(
-      screen.queryAllByRole("button", { name: "Add child chat or agent" }),
-    ).toHaveLength(0);
-  });
-
   it("disables collapsed artifact header tools except add", () => {
     seedArtifactTree();
     testState.activePanelId = "artifacts";

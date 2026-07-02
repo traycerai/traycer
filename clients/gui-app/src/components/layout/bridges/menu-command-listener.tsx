@@ -19,9 +19,12 @@ import type {
   DesktopMenuCommandId,
   DesktopMenuCommandPayload,
 } from "@/lib/windows/types";
+import {
+  advanceActiveTileFind,
+  openActiveTileFind,
+} from "@/lib/commands/tile-find";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
-import { useFindInPageStore } from "@/stores/find-in-page/find-in-page-store";
 
 interface HostWithRequestClose extends IRunnerHost {
   readonly windows: {
@@ -78,13 +81,6 @@ export function MenuCommandListener() {
   );
   const openReportIssue = useDesktopDialogStore(
     (state) => state.openReportIssue,
-  );
-  const openFindBar = useFindInPageStore((s) => s.open);
-  const requestAdvanceForward = useFindInPageStore(
-    (s) => s.requestAdvanceForward,
-  );
-  const requestAdvanceBackward = useFindInPageStore(
-    (s) => s.requestAdvanceBackward,
   );
   const management = runnerHost.hostManagement;
   const service = runnerHost.service;
@@ -145,10 +141,11 @@ export function MenuCommandListener() {
             void runnerHost.windows.requestNew(null);
           }
         },
-        openFindBar,
+        openFindBar: () => {
+          openActiveTileFind();
+        },
         advanceFind: (forward) => {
-          if (forward) requestAdvanceForward();
-          else requestAdvanceBackward();
+          advanceActiveTileFind(forward ? 1 : -1);
         },
         installHostUpdate: () => {
           mutateInstallUpdate();
@@ -166,9 +163,6 @@ export function MenuCommandListener() {
     closeTabFlow.closeActiveTab,
     openEpicInNewWindow,
     openLogs,
-    openFindBar,
-    requestAdvanceForward,
-    requestAdvanceBackward,
     runnerHost,
     mutateInstallUpdate,
     openReportIssue,

@@ -114,6 +114,7 @@ function minimapItemsFor(
     .map((message) => ({
       id: message.id,
       content: message.content,
+      structuredContent: message.structuredContent,
       attachments: message.attachments,
     }));
 }

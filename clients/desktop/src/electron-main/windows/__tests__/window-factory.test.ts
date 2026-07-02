@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const electronState = vi.hoisted(() => ({
   appPath: "/desktop-app",
   browserWindowOptions: [] as unknown[],
+  webContentsOnChannels: [] as string[],
 }));
 
 // The renderer-load branch keys off the deploy slot (`config.isDevBuild`),
@@ -29,7 +30,9 @@ vi.mock("electron", () => ({
   BrowserWindow: class {
     readonly webContents = {
       setWindowOpenHandler: vi.fn(),
-      on: vi.fn(),
+      on: (channel: string) => {
+        electronState.webContentsOnChannels.push(channel);
+      },
     };
 
     constructor(options: unknown) {
@@ -97,6 +100,7 @@ describe("loadMainWindow", () => {
     configState.canOpenDevTools = true;
     electronState.appPath = "/desktop-app";
     electronState.browserWindowOptions = [];
+    electronState.webContentsOnChannels = [];
     Object.defineProperty(process, "resourcesPath", {
       configurable: true,
       value: "/packaged/Resources",
@@ -228,6 +232,16 @@ describe("loadMainWindow", () => {
         }),
       }),
     ]);
+  });
+
+  it("does not subscribe to Chromium native find result events", () => {
+    createMainWindow({
+      preloadPath: "/preload.js",
+      windowId: "window-a",
+      initialRoute: "/",
+    });
+
+    expect(electronState.webContentsOnChannels).not.toContain("found-in-page");
   });
 
   it("loads the Vite dev renderer shell on the dev slot without auto-opening DevTools", async () => {

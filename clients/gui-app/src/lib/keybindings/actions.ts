@@ -39,6 +39,7 @@ export const ACTION_IDS = [
   "group.focus.left",
   "group.focus.right",
   "group.focus-editor",
+  "tile.find.replace",
   "app.sidebar.toggle",
   "app.history.open",
   "app.settings.open",
@@ -275,6 +276,15 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     category: "groups",
     kind: "chord",
     defaultChord: "mod+l",
+  },
+  "tile.find.replace": {
+    id: "tile.find.replace",
+    label: "Find and replace in active tile",
+    description:
+      "Open the active tile's find bar and expand the Replace row when the tile supports replacement.",
+    category: "app",
+    kind: "chord",
+    defaultChord: "mod+alt+f",
   },
   "app.sidebar.toggle": {
     id: "app.sidebar.toggle",

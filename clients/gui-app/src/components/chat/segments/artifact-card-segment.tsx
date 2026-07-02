@@ -29,6 +29,7 @@ interface ArtifactCardSegmentProps {
   // uncaptured. When present, a file-diff toggle appears in the header and opens
   // the merged diff flush-connected below the card.
   readonly change: ArtifactSegmentChange | null;
+  readonly findUnitId: string | null;
 }
 
 /**
@@ -507,6 +508,7 @@ function ArtifactCardSegmentContent(props: ArtifactCardSegmentProps) {
   // file-change cards with large diffs.
   return (
     <div
+      data-chat-find-unit={props.findUnitId ?? undefined}
       className={cn(
         "group/artifact-card rounded-md border text-ui-sm transition-colors",
         ARTIFACT_KIND_CARD_CLASSES[displayKind],

@@ -1,7 +1,6 @@
 import { toast } from "sonner";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
-  ChatActiveTurn,
   ChatRunSettings,
   ChatRunStatus,
 } from "@traycer/protocol/host/agent/gui/subscribe";
@@ -159,16 +158,72 @@ export function chatTileUiReducer(
 // ── Pure session helpers (no React dependency) ────────────────────────────────
 
 /**
+ * The composer's turn-status prop shape - a strict subset of
+ * `ChatActiveTurn["status"]` (which also carries terminal values like
+ * `"completed"`/`"errored"` that never apply here). Narrower than that wider
+ * type so callers like `useRenderedMessages`'s `runStatus: ChatRunStatus`
+ * input can consume it directly (`"running"`/`"stopping"` overlap exactly;
+ * `null` maps to `"idle"`).
+ */
+export type ComposerTurnStatus = "running" | "stopping" | null;
+
+/**
  * Maps the host-owned chat `runStatus` onto the composer's turn-status prop
  * shape. `running` shows the stop button, `stopping` shows the "Stopping"
  * affordance, `idle` returns the composer to its send state.
  */
 export function composerTurnStatus(
   runStatus: ChatRunStatus,
-): ChatActiveTurn["status"] | null {
+): ComposerTurnStatus {
   if (runStatus === "running") return "running";
   if (runStatus === "stopping") return "stopping";
   return null;
+}
+
+/**
+ * Narrows {@link composerTurnStatus} to the question every turn-scoped
+ * consumer actually needs - the composer's Stop/Send toggle, restore/revert
+ * gating, and the per-row "Working…"/"Stopping…" indicator: is there a turn
+ * genuinely active or activating right now? `runStatus` also reads "running"
+ * while a queued item is pending or visible background work outlives the
+ * turn (Bash `run_in_background` / a subagent / Monitor) - neither of which
+ * corresponds to an active turn. Background work already has its own
+ * "stop all background" control, so rather than show a Stop button that
+ * would fail, block a restore that isn't actually unsafe, or duplicate the
+ * row indicator after the real turn already settled, this falls back to
+ * `null` - exactly as if the chat were idle.
+ *
+ * Two layers, in priority order:
+ *  1. `state.turnInProgress`, when present - the host's own
+ *     `isTurnInProgress()`, sent verbatim. Exact, no known gaps.
+ *  2. A local approximation, for an older host that predates the field:
+ *     `activeTurn !== null` covers a genuinely running (or stopping) turn
+ *     directly. When it's null but `runStatus` still reads "running",
+ *     process of elimination against the queue/background signals is the
+ *     only way to tell a pre-turn "activating" window (active) apart from a
+ *     queue-only or background-only one (not active) - both look identical
+ *     on the wire otherwise. Known gap: if a turn is still activating AND
+ *     another item is queued behind it, the queue signal is also "runnable",
+ *     so this can't distinguish that from a queue-only state and will
+ *     (narrowly, incorrectly) fall back to `null` during that brief pre-turn
+ *     window. Layer 1 closes this gap whenever the host supports it.
+ */
+export function resolvedTurnStatus(
+  state: Pick<
+    ChatSessionState,
+    "activeTurn" | "queue" | "backgroundItems" | "turnInProgress"
+  >,
+  turnStatus: ComposerTurnStatus,
+): ComposerTurnStatus {
+  if (turnStatus === null) return null;
+  if (state.turnInProgress !== undefined) {
+    return state.turnInProgress ? turnStatus : null;
+  }
+  if (state.activeTurn !== null) return turnStatus;
+  const isQueueRunnable =
+    state.queue.status !== "paused" && state.queue.items.length > 0;
+  const hasVisibleBackgroundWork = (state.backgroundItems?.length ?? 0) > 0;
+  return isQueueRunnable || hasVisibleBackgroundWork ? null : turnStatus;
 }
 
 export function normalizeInlineEditForSession(

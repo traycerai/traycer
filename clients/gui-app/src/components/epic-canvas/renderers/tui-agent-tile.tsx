@@ -700,6 +700,11 @@ function TerminalAgentPreLaunchToolbar(
           ownerId: props.agent.id,
           binding,
           isOwnerActive: props.isOwnerActive,
+          // Terminal agents have no background-work-outlives-the-turn concept
+          // distinct from PTY output (unlike chat), so there's no narrower
+          // signal to distinguish - this field is unread for this surface kind
+          // (the notice text is fixed regardless), kept equal for consistency.
+          hasActiveTurn: props.isOwnerActive,
           // Surfaced on the chip as a per-folder "missing on disk" indicator.
           // The host-computed signal on `worktree.getBinding` — the actual
           // launch gate is the `prepareLaunch` WORKTREE_MISSING reject, but this
@@ -1012,6 +1017,7 @@ function TerminalAgentLive(props: TerminalAgentLiveProps) {
       <Suspense fallback={<TerminalLoadingSkeleton />}>
         <TerminalXtermHost
           sessionId={handle.sessionId}
+          tileKind="terminal-agent"
           instanceId={props.instanceId}
           effectiveCols={effectiveCols}
           effectiveRows={effectiveRows}

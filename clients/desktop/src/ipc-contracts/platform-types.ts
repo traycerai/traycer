@@ -59,13 +59,6 @@ export interface PendingCertificateError {
   readonly observedAt: number;
 }
 
-export interface FindResultSnapshot {
-  readonly requestId: number;
-  readonly activeMatchOrdinal: number;
-  readonly matches: number;
-  readonly finalUpdate: boolean;
-}
-
 export interface DisplaySnapshot {
   readonly id: number;
   readonly bounds: { x: number; y: number; width: number; height: number };
@@ -87,9 +80,6 @@ export interface FileSaveInput {
   readonly type: string;
   readonly bytes: ArrayBuffer;
 }
-
-export type FindInPageStopAction =
-  "clearSelection" | "keepSelection" | "activateSelection";
 
 export interface TrustedCertificateEntry {
   readonly fingerprint: string;

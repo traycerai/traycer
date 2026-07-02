@@ -256,6 +256,7 @@ describe("Chats opener sub-page", () => {
       epicId: "epic-1",
       tabId: "tab-1",
       placement: { kind: "target-group", groupId: "group-1" },
+      parentId: null,
     });
     expect(
       useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"]
@@ -332,6 +333,7 @@ describe("TUI opener sub-page", () => {
       epicId: "epic-1",
       tabId: "tab-1",
       placement: { kind: "target-group", groupId: "group-1" },
+      parentId: null,
     });
     expect(
       useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"]

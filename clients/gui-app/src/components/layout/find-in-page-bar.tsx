@@ -22,7 +22,9 @@ import { useTerminalFindStore } from "@/stores/find-in-page/terminal-find-store"
 const LIVE_SEARCH_DEBOUNCE_MS = 140;
 
 /**
- * Floating find bar driven by the CSS-highlight-based `FindEngine`.
+ * Legacy global find bar driven by the CSS-highlight-based `FindEngine`.
+ * Quarantined after the tile-local Command+F cutover; do not mount for the
+ * default find command path.
  *
  * The engine paints matches via `CSS.highlights` and never mutates
  * `window.getSelection()` - so contenteditable editors (TipTap composer,

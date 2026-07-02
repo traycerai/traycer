@@ -615,5 +615,8 @@ export function downgradeProviderCliStateV20ToV10(
 export function upgradeProviderCliStateV10ToV20(
   state: ProviderCliStateV10,
 ): ProviderCliStateV20 {
-  return providerCliStateSchemaV20.parse({ ...state, availabilityPending: false });
+  return providerCliStateSchemaV20.parse({
+    ...state,
+    availabilityPending: false,
+  });
 }

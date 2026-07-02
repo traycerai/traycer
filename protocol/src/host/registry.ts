@@ -458,7 +458,9 @@ function downgradeProviderStateListForV10(
   });
 }
 
-function upgradeProviderStateFromV10(state: ProviderCliStateV10): ProviderCliState {
+function upgradeProviderStateFromV10(
+  state: ProviderCliStateV10,
+): ProviderCliState {
   return upgradeProviderCliStateV10ToV20(state);
 }
 

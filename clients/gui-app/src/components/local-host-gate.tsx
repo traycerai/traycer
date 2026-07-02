@@ -8,6 +8,7 @@ import {
   type ReactElement,
   type ReactNode,
 } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type {
   BootstrapMarkerEntry,
@@ -24,12 +25,14 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useRunnerRequestHostRespawn } from "@/hooks/runner/use-runner-request-host-respawn-mutation";
 import { useRunnerEnsureHost } from "@/hooks/runner/use-runner-ensure-host-mutation";
+import { useRunnerHostRemovalStateQuery } from "@/hooks/runner/use-runner-host-removal-state-query";
 import { useRunnerTraycerHostStatusQuery } from "@/hooks/runner/use-runner-traycer-host-status-query";
 import {
   describeHostCompatibilityError,
   useHostCompatibility,
 } from "@/lib/host";
 import { requestAppQuit } from "@/lib/desktop-app-lifecycle";
+import { runnerQueryKeys } from "@/lib/query-keys";
 import { cn } from "@/lib/utils";
 
 /**
@@ -289,6 +292,7 @@ function useHostProvisioning(args: {
   readonly isReady: boolean;
 }): HostProvisioning {
   const runnerHost = useRunnerHost();
+  const queryClient = useQueryClient();
   const ensure = useRunnerEnsureHost();
   const attemptedRef = useRef(false);
   const [progress, setProgress] = useState<HostProgressEvent | null>(null);
@@ -297,6 +301,14 @@ function useHostProvisioning(args: {
   const canProvision = args.enabled && runnerHost.hostManagement !== null;
   const hasManagement = runnerHost.hostManagement !== null;
   const { mutate, reset } = ensure;
+
+  // Kept in sync so the stable `markBusyKeep` callback below can read the
+  // latest management instance without widening its dependency array (see
+  // that callback's comment on why it must stay stable).
+  const hostManagementRef = useRef(runnerHost.hostManagement);
+  useEffect(() => {
+    hostManagementRef.current = runnerHost.hostManagement;
+  }, [runnerHost.hostManagement]);
 
   // Latch the busy-keep flow from the settled mutation RESULT (a mutation
   // event, not a render effect or a ref read), so it survives the surfaced
@@ -307,13 +319,27 @@ function useHostProvisioning(args: {
   // to rendering children against the still-unprobed busy host), and a failed
   // initial provision leaves the latch at its `false` default (normal error
   // path). Stable handler keeps the provision effect from re-running.
-  const markBusyKeep = useCallback((result: HostEnsureResult): void => {
-    setInBusyKeepFlow(result.action === "host-busy");
-    // The desktop refused to reinstall a user-removed host; latch the removed
-    // surface. Any other settled result (provisioned/already-ready after a
-    // reinstall) clears it.
-    setRemoved(result.action === "removed");
-  }, []);
+  const markBusyKeep = useCallback(
+    (result: HostEnsureResult): void => {
+      setInBusyKeepFlow(result.action === "host-busy");
+      // The desktop refused to reinstall a user-removed host; latch the removed
+      // surface. Any other settled result (provisioned/already-ready after a
+      // reinstall) clears it.
+      setRemoved(result.action === "removed");
+      // `ensureHost`'s own removal check is the freshest possible truth, so
+      // write it straight into the removal-state query cache too - a
+      // response-equals-state cache write (not a guess) that keeps the
+      // direct removal-sentinel query (below) from re-asserting a stale
+      // `true` it fetched before this settle.
+      const management = hostManagementRef.current;
+      if (management !== null) {
+        queryClient.setQueryData(runnerQueryKeys.hostRemovalState(management), {
+          removedByUser: result.action === "removed",
+        });
+      }
+    },
+    [queryClient],
+  );
 
   // Retry/forced update: clear any prior error/progress, then re-run ensure. Only
   // `onSuccess` transitions the busy-keep latch; an error leaves it untouched
@@ -335,8 +361,13 @@ function useHostProvisioning(args: {
     const management = runnerHost.hostManagement;
     if (management === null) return;
     // Optimistically drop the removed latch so the surface flips to the
-    // provisioning spinner immediately.
+    // provisioning spinner immediately. Also mirror it into the removal-state
+    // query cache - otherwise a `true` it fetched before this click would
+    // still OR back in below and hold the surface on `removed`.
     setRemoved(false);
+    queryClient.setQueryData(runnerQueryKeys.hostRemovalState(management), {
+      removedByUser: false,
+    });
     void management.clearRemoval().then(
       () => run(false),
       () => {
@@ -344,6 +375,9 @@ function useHostProvisioning(args: {
         // back to `removed`. Restore the removed surface instead of flashing a
         // spinner through a wasted round-trip; the user can retry Reinstall.
         setRemoved(true);
+        queryClient.setQueryData(runnerQueryKeys.hostRemovalState(management), {
+          removedByUser: true,
+        });
       },
     );
   };
@@ -359,6 +393,21 @@ function useHostProvisioning(args: {
     );
   }, [canProvision, args.isReady, mutate, markBusyKeep]);
 
+  // Direct removal-sentinel check, independent of the one-shot `ensureHost`
+  // effect above. That effect never re-fires once `attemptedRef` is set -
+  // typically right after the very first sign-in, long before the user ever
+  // visits Settings -> Danger Zone - so it cannot notice a removal that
+  // happens later in the same session. The query re-activates on every
+  // not-ready transition (see its `enabled`), and its result is read directly
+  // below (derived, not synced into state) so it short-circuits straight to
+  // the removed surface per `getRemovalState`'s contract instead of falling
+  // through to the generic unavailable/Retry card until a reload re-mounts
+  // this hook and resets `attemptedRef`.
+  const removalState = useRunnerHostRemovalStateQuery({
+    enabled: canProvision && !args.isReady,
+  });
+  const isRemoved = removed || removalState.data?.removedByUser === true;
+
   return {
     // Report provisioning/error whenever this shell manages the host - NOT
     // gated on `canProvision`, which collapses to false the instant a busy
@@ -371,7 +420,7 @@ function useHostProvisioning(args: {
     error: hasManagement ? ensure.error : null,
     progress,
     hostBusy: hasManagement && inBusyKeepFlow,
-    removed: hasManagement && removed,
+    removed: hasManagement && isRemoved,
     canManageHost: hasManagement,
     retry: () => run(false),
     force: () => run(true),

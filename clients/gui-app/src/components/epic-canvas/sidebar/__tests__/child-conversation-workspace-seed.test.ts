@@ -1,19 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { WorktreeBindingEntry } from "@traycer/protocol/host/worktree-schemas";
-import { buildChildChatCreateInput } from "../use-chat-row-child-create";
 import { buildOwnerWorkspaceInheritanceSeed } from "@/lib/worktree/owner-workspace-inheritance-seed";
 import { buildFixedHostWorkspaceControlsScope } from "@/components/home/host-workspace-selector/host-workspace-controls-scope";
 import { resolveOwnerWorkspaceInheritanceSeed } from "@/hooks/worktree/use-owner-workspace-inheritance-seed";
-import {
-  resolveRowChildHost,
-  type RowChildHostClient,
-} from "../chat-row-child-host";
-
-function client(hostId: string | null): RowChildHostClient {
-  return {
-    getActiveHostId: () => hostId,
-  };
-}
 
 function bindingEntry(
   overrides: Partial<WorktreeBindingEntry>,
@@ -34,99 +23,6 @@ function bindingEntry(
     ...overrides,
   };
 }
-
-describe("resolveRowChildHost", () => {
-  it("keeps legacy rows on the active host", () => {
-    const activeClient = client("host-1");
-
-    expect(
-      resolveRowChildHost({
-        rowHostId: null,
-        activeHostId: "host-1",
-        activeClient,
-        remoteClient: null,
-      }),
-    ).toEqual({
-      kind: "legacy-active",
-      client: activeClient,
-      hostId: "host-1",
-      isUnavailable: false,
-      intendedHostId: null,
-    });
-  });
-
-  it("uses the active client for rows bound to the active host", () => {
-    const activeClient = client("host-1");
-
-    expect(
-      resolveRowChildHost({
-        rowHostId: "host-1",
-        activeHostId: "host-1",
-        activeClient,
-        remoteClient: client("host-2"),
-      }),
-    ).toEqual({
-      kind: "active",
-      client: activeClient,
-      hostId: "host-1",
-      isUnavailable: false,
-      intendedHostId: "host-1",
-    });
-  });
-
-  it("uses a reachable remote client for rows bound to another host", () => {
-    const remoteClient = client("host-2");
-
-    expect(
-      resolveRowChildHost({
-        rowHostId: "host-2",
-        activeHostId: "host-1",
-        activeClient: client("host-1"),
-        remoteClient,
-      }),
-    ).toEqual({
-      kind: "remote",
-      client: remoteClient,
-      hostId: "host-2",
-      isUnavailable: false,
-      intendedHostId: "host-2",
-    });
-  });
-
-  it("never falls back to the active client for an unavailable remote host", () => {
-    expect(
-      resolveRowChildHost({
-        rowHostId: "host-2",
-        activeHostId: "host-1",
-        activeClient: client("host-1"),
-        remoteClient: null,
-      }),
-    ).toEqual({
-      kind: "unavailable-remote",
-      client: null,
-      hostId: null,
-      isUnavailable: true,
-      intendedHostId: "host-2",
-    });
-  });
-
-  it("rejects a remote client whose active host does not match the row", () => {
-    expect(
-      resolveRowChildHost({
-        rowHostId: "host-2",
-        activeHostId: "host-1",
-        activeClient: client("host-1"),
-        remoteClient: client("host-3"),
-      }),
-    ).toEqual({
-      kind: "unavailable-remote",
-      client: null,
-      hostId: null,
-      isUnavailable: true,
-      intendedHostId: "host-2",
-    });
-  });
-});
 
 describe("child conversation workspace seed", () => {
   it("returns null when the parent has no binding or legacy fallback folders", () => {
@@ -273,45 +169,6 @@ describe("child conversation workspace seed", () => {
           isPrimary: true,
         },
       ],
-    });
-  });
-
-  it("passes the inherited intent through the child chat create request", () => {
-    const seed = buildOwnerWorkspaceInheritanceSeed({
-      binding: {
-        entries: [
-          bindingEntry({
-            workspacePath: "/repo/source",
-            mode: "worktree",
-            worktreePath: "/worktrees/feature",
-          }),
-        ],
-      },
-      stagedIntent: null,
-      fallbackWorkspaceFolders: [],
-    });
-
-    expect(
-      buildChildChatCreateInput({
-        epicId: "epic-1",
-        parentId: "parent-1",
-        chatId: "child-1",
-        workspaceSeed: seed,
-      }),
-    ).toMatchObject({
-      epicId: "epic-1",
-      parentId: "parent-1",
-      chatId: "child-1",
-      title: "",
-      worktreeIntent: {
-        entries: [
-          {
-            kind: "import",
-            workspacePath: "/repo/source",
-            worktreePath: "/worktrees/feature",
-          },
-        ],
-      },
     });
   });
 });

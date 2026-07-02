@@ -6,6 +6,7 @@ import { getSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
 import { isSettingsPath } from "@/stores/tabs/kinds/settings";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { duplicateEpicTab, openNewEpic } from "@/lib/commands/actions";
+import { openActiveTileFindWithReplace } from "@/lib/commands/tile-find";
 import { toggleActiveModelPicker } from "@/lib/commands/active-model-picker-registry";
 import { focusActiveComposer } from "@/lib/composer/composer-focus-registry";
 import { tabMatchesPath, tabResolveIntent } from "@/stores/tabs/registry";
@@ -324,6 +325,7 @@ const STATIC_HANDLERS: Readonly<Partial<Record<ActionId, StaticHandler>>> = {
   "group.focus.left": (r) => focusGroupInDirection(r, "left"),
   "group.focus.right": (r) => focusGroupInDirection(r, "right"),
   "group.focus-editor": (r) => focusActiveGroupEditor(r),
+  "tile.find.replace": () => openActiveTileFindWithReplace(),
   "app.history.open": (r) => {
     r.navigateToEpicList();
     return true;

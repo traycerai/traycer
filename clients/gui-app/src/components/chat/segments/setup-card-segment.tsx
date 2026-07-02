@@ -286,6 +286,7 @@ export function SetupCardSegment(props: {
         <span aria-hidden className="h-px flex-1 bg-border/60" />
         <button
           type="button"
+          data-find-include="true"
           onClick={() => setManualExpanded(!expanded)}
           aria-expanded={expanded}
           data-testid="setup-card-toggle"

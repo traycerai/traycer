@@ -14,6 +14,7 @@ import {
 } from "react";
 
 interface ReasoningSegmentProps {
+  findUnitId: string | null;
   markdown: string;
   isStreaming: boolean;
   durationMs: number | null;
@@ -57,7 +58,7 @@ function ReasoningContent(props: ReasoningContentProps) {
 }
 
 export function ReasoningSegment(props: ReasoningSegmentProps) {
-  const { markdown, isStreaming, durationMs } = props;
+  const { findUnitId, markdown, isStreaming, durationMs } = props;
   // `expanded` shows the full trace. Default (false) means the streaming tail
   // preview while thinking, or the collapsed "Thought for Xs" line once done. A
   // click toggles and sticks for the segment's lifetime.
@@ -130,6 +131,8 @@ export function ReasoningSegment(props: ReasoningSegmentProps) {
     <div className="text-ui-sm text-muted-foreground">
       <button
         type="button"
+        data-find-include="true"
+        data-chat-find-unit={findUnitId ?? undefined}
         onClick={toggle}
         aria-expanded={expanded}
         aria-controls={bodyShown ? bodyId : undefined}

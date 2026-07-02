@@ -6,13 +6,30 @@ import { cn } from "@/lib/utils";
 import { TraycerMarkdown } from "@/markdown";
 import { useShikiHighlighter } from "@/markdown/shiki-highlighter";
 import { useThrottledCodeHighlight } from "@/markdown/use-throttled-code-highlight";
+import { useRegisterTileFindAdapter } from "@/components/epic-canvas/tile-find/tile-find-adapter-context";
+import {
+  createWorkspaceFileFindAdapter,
+  type WorkspaceFileFindEnvironment,
+  type WorkspaceFileSourceFindTarget,
+} from "@/components/epic-canvas/workspace-file/workspace-file-find-adapter";
+import {
+  clearSourceFindHighlights,
+  paintSourceFindHighlights,
+} from "@/components/epic-canvas/workspace-file/workspace-file-source-find-highlight";
 import type { WorkspaceFileRef } from "@/stores/epics/canvas/types";
 import {
   clearWorkspaceFileRevealTarget,
   useWorkspaceFileRevealTarget,
   type WorkspaceFileRevealTarget,
 } from "@/stores/epics/canvas/workspace-file-reveal-store";
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
@@ -23,6 +40,16 @@ import { WorkspaceMarkdownLinkProvider } from "@/components/epic-canvas/workspac
 const MAX_MARKDOWN_PREVIEW_CHARS = 100_000;
 
 type WorkspaceFileViewMode = "source" | "preview";
+
+interface WorkspaceFileSourceFindTargetWithNonce extends WorkspaceFileSourceFindTarget {
+  readonly nonce: number;
+}
+
+interface WorkspaceFileLineHighlight {
+  readonly line: number;
+  readonly top: number;
+  readonly height: number;
+}
 
 const MARKDOWN_VIEW_MODE_OPTIONS: ReadonlyArray<{
   readonly mode: WorkspaceFileViewMode;
@@ -106,7 +133,12 @@ function WorkspaceFileTileLive(props: {
 }) {
   const { node, revealTarget } = props;
   const query = useWorkspaceReadFile(node.workspacePath, node.filePath);
-  const content = readFileContent(query.data);
+  const rawContent = readFileContent(query.data);
+  const content = useMemo(
+    () =>
+      rawContent === null ? null : normalizeWorkspaceFileContent(rawContent),
+    [rawContent],
+  );
   const displayError = readFileDisplayError(
     readFilePayloadError(query.data),
     query.isError,
@@ -119,6 +151,30 @@ function WorkspaceFileTileLive(props: {
     [node.name],
   );
   const [viewMode, setViewMode] = useState<WorkspaceFileViewMode>("source");
+  const markdownPreviewRootRef = useRef<HTMLElement | null>(null);
+  const findEnvironmentRef = useRef<WorkspaceFileFindEnvironment | null>(null);
+  const [sourceFindTarget, setSourceFindTarget] =
+    useState<WorkspaceFileSourceFindTargetWithNonce | null>(null);
+  const sourceFindNonceRef = useRef(0);
+  const findAdapter = useMemo(
+    () => createWorkspaceFileFindAdapter({ tileInstanceId: node.instanceId }),
+    [node.instanceId],
+  );
+  useRegisterTileFindAdapter(findAdapter);
+  const revealSourceMatch = useCallback(
+    (target: WorkspaceFileSourceFindTarget | null): void => {
+      if (target === null) {
+        setSourceFindTarget(null);
+        return;
+      }
+      sourceFindNonceRef.current += 1;
+      setSourceFindTarget({
+        ...target,
+        nonce: sourceFindNonceRef.current,
+      });
+    },
+    [],
+  );
 
   // The preview content has loaded into a state the consume effect never runs
   // from - a host/payload error, or an empty/failed read (`content === null`).
@@ -152,6 +208,44 @@ function WorkspaceFileTileLive(props: {
     node.instanceId,
     content !== null && !query.isLoading,
   );
+
+  const publishFindEnvironment = useCallback((): void => {
+    const environment = findEnvironmentRef.current;
+    if (environment === null) return;
+    findAdapter.updateEnvironment({
+      ...environment,
+      previewRoot: markdownPreviewRootRef.current,
+    });
+  }, [findAdapter]);
+
+  const handleMarkdownPreviewRootChange = useCallback(
+    (root: HTMLElement | null): void => {
+      markdownPreviewRootRef.current = root;
+      publishFindEnvironment();
+    },
+    [publishFindEnvironment],
+  );
+
+  useLayoutEffect(() => {
+    findEnvironmentRef.current = {
+      viewMode: effectiveViewMode,
+      content,
+      isLoading: query.isLoading,
+      displayError,
+      truncated,
+      previewRoot: markdownPreviewRootRef.current,
+      revealSourceMatch,
+    };
+    publishFindEnvironment();
+  }, [
+    content,
+    displayError,
+    effectiveViewMode,
+    publishFindEnvironment,
+    query.isLoading,
+    revealSourceMatch,
+    truncated,
+  ]);
 
   return (
     <WorkspaceMarkdownLinkProvider
@@ -197,6 +291,8 @@ function WorkspaceFileTileLive(props: {
             contentId={node.id}
             revealLine={revealTarget?.line ?? null}
             revealNonce={revealTarget?.nonce ?? null}
+            sourceFindTarget={sourceFindTarget}
+            onMarkdownPreviewRootChange={handleMarkdownPreviewRootChange}
           />
         </div>
       </div>
@@ -243,6 +339,8 @@ function WorkspaceFilePreviewContent(props: {
   readonly contentId: string;
   readonly revealLine: number | null;
   readonly revealNonce: number | null;
+  readonly sourceFindTarget: WorkspaceFileSourceFindTargetWithNonce | null;
+  readonly onMarkdownPreviewRootChange: (root: HTMLElement | null) => void;
 }) {
   if (props.isLoading) {
     return (
@@ -268,7 +366,11 @@ function WorkspaceFilePreviewContent(props: {
 
   if (props.viewMode === "preview") {
     return (
-      <MarkdownFilePreview markdown={props.content} fileName={props.fileName} />
+      <MarkdownFilePreview
+        markdown={props.content}
+        fileName={props.fileName}
+        onRootChange={props.onMarkdownPreviewRootChange}
+      />
     );
   }
 
@@ -281,6 +383,7 @@ function WorkspaceFilePreviewContent(props: {
       contentId={props.contentId}
       revealLine={props.revealLine}
       revealNonce={props.revealNonce}
+      findTarget={props.sourceFindTarget}
     />
   );
 }
@@ -334,11 +437,21 @@ function MarkdownViewModeToggle(props: {
 function MarkdownFilePreview(props: {
   readonly markdown: string;
   readonly fileName: string;
+  readonly onRootChange: (root: HTMLElement | null) => void;
 }) {
+  const { fileName, markdown, onRootChange } = props;
+  const handleRootChange = useCallback(
+    (root: HTMLElement | null): void => {
+      onRootChange(root);
+    },
+    [onRootChange],
+  );
+
   return (
     <section
+      ref={handleRootChange}
       className="min-size-full bg-canvas px-6 py-5"
-      aria-label={`${props.fileName} markdown preview`}
+      aria-label={`${fileName} markdown preview`}
     >
       <TraycerMarkdown
         className="mx-auto w-full max-w-4xl text-foreground"
@@ -348,7 +461,7 @@ function MarkdownFilePreview(props: {
         rehypePlugins={null}
         isStreaming={false}
       >
-        {props.markdown}
+        {markdown}
       </TraycerMarkdown>
     </section>
   );
@@ -362,6 +475,7 @@ function CodeEditorPreview(props: {
   readonly contentId: string;
   readonly revealLine: number | null;
   readonly revealNonce: number | null;
+  readonly findTarget: WorkspaceFileSourceFindTargetWithNonce | null;
 }) {
   const { highlighter, theme, themesVersion } = useShikiHighlighter();
   // Shared MRU-cached highlight path. The `MAX_HIGHLIGHT_CHARS` guard lives
@@ -377,16 +491,10 @@ function CodeEditorPreview(props: {
 
   const lines = useMemo(() => lineNumbers(props.code), [props.code]);
 
-  // The targeted line, kept in local state so the indicator persists after the
-  // channel target is consumed below. `null` until a reveal fires.
-  const [highlightedLine, setHighlightedLine] = useState<number | null>(null);
-  // Measured geometry of the highlight band, positioned off the targeted gutter
-  // row so it lines up with both the gutter and the code column.
-  const [highlightBand, setHighlightBand] = useState<{
-    readonly top: number;
-    readonly height: number;
-  } | null>(null);
+  const [lineHighlight, setLineHighlight] =
+    useState<WorkspaceFileLineHighlight | null>(null);
   const gutterRowRefs = useRef<Array<HTMLDivElement | null>>([]);
+  const codeContentRef = useRef<HTMLDivElement | null>(null);
 
   // Reveal sync (legitimate DOM/external-store sync, not derived state): scroll
   // the targeted line into view, paint a transient highlight band, then CONSUME
@@ -401,8 +509,11 @@ function CodeEditorPreview(props: {
       if (typeof row.scrollIntoView === "function") {
         row.scrollIntoView({ block: "center", behavior: "auto" });
       }
-      setHighlightedLine(clampedLine);
-      setHighlightBand({ top: row.offsetTop, height: row.offsetHeight });
+      setLineHighlight({
+        line: clampedLine,
+        top: row.offsetTop,
+        height: row.offsetHeight,
+      });
     }
     clearWorkspaceFileRevealTarget(props.viewTabId, props.contentId);
   }, [
@@ -412,6 +523,40 @@ function CodeEditorPreview(props: {
     props.contentId,
     lines.length,
   ]);
+
+  useEffect(() => {
+    if (props.findTarget === null) return;
+    const clampedLine = Math.min(
+      Math.max(props.findTarget.active.line, 1),
+      lines.length,
+    );
+    const row = gutterRowRefs.current[clampedLine - 1];
+    if (row === null) return;
+    if (typeof row.scrollIntoView === "function") {
+      row.scrollIntoView({ block: "center", behavior: "auto" });
+    }
+  }, [props.findTarget, lines.length]);
+
+  // Paint the matched text spans over the rendered code. Re-runs when the
+  // active match changes (new target) and when the rendered DOM swaps between
+  // the Shiki output and the plain `<pre>` fallback (`highlightedNodes`), since
+  // either invalidates the offset-to-text-node mapping the painter relies on.
+  useEffect(() => {
+    const root = codeContentRef.current;
+    if (root === null) return;
+    if (props.findTarget === null) {
+      clearSourceFindHighlights(root);
+      return;
+    }
+    paintSourceFindHighlights({
+      root,
+      matches: props.findTarget.matches,
+      activeOffset: props.findTarget.active.offset,
+    });
+    return () => {
+      clearSourceFindHighlights(root);
+    };
+  }, [props.findTarget, highlightedNodes]);
 
   return (
     <div className="min-h-full w-max min-w-full bg-canvas font-mono text-code leading-relaxed">
@@ -430,23 +575,38 @@ function CodeEditorPreview(props: {
               ref={(el) => {
                 gutterRowRefs.current[index] = el;
               }}
+              data-workspace-file-line={line}
+              data-workspace-file-find-active={
+                props.findTarget !== null &&
+                props.findTarget.active.line === line
+                  ? "true"
+                  : undefined
+              }
+              data-workspace-file-find-column={
+                props.findTarget !== null &&
+                props.findTarget.active.line === line
+                  ? props.findTarget.active.column
+                  : undefined
+              }
               className={cn(
                 "tabular-nums",
-                line === highlightedLine && "font-medium text-primary",
+                (line === lineHighlight?.line ||
+                  line === props.findTarget?.active.line) &&
+                  "font-medium text-primary",
               )}
             >
               {line}
             </div>
           ))}
         </div>
-        {highlightBand !== null ? (
+        {lineHighlight !== null ? (
           <div
             aria-hidden
             className="pointer-events-none absolute inset-x-0 bg-primary/10"
-            style={{ top: highlightBand.top, height: highlightBand.height }}
+            style={{ top: lineHighlight.top, height: lineHighlight.height }}
           />
         ) : null}
-        <div className="min-w-0 flex-1 p-4">
+        <div ref={codeContentRef} className="min-w-0 flex-1 p-4">
           {highlightedNodes !== null ? (
             <div
               className="traycer-md-shiki"
@@ -484,6 +644,10 @@ function computeViewMode(
 function lineNumbers(code: string): ReadonlyArray<number> {
   const lineCount = code.length === 0 ? 1 : code.split("\n").length;
   return Array.from({ length: lineCount }, (_, index) => index + 1);
+}
+
+function normalizeWorkspaceFileContent(content: string): string {
+  return content.replace(/\r\n?/g, "\n");
 }
 
 function languageForFileName(fileName: string): string {
