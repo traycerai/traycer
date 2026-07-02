@@ -6,6 +6,7 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { RestartHostConfirmDialog } from "@/components/host/restart-host-confirm-dialog";
 import { ActionsRow } from "@/components/settings/panels/host-settings-actions-row";
 import { AdvancedDisclosure } from "@/components/settings/panels/host-settings-advanced-disclosure";
 import { DoctorSheet } from "@/components/settings/panels/host-settings-doctor-sheet";
@@ -168,6 +169,7 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
   const [hostNameDraftOverride, setHostNameDraftOverride] = useState<
     string | null
   >(null);
+  const [restartConfirmOpen, setRestartConfirmOpen] = useState<boolean>(false);
   const [includePreReleases, setIncludePreReleases] = useState(false);
   const localHost = useLocalHostSnapshot(runnerHost);
 
@@ -288,13 +290,17 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
     mutationKey: runnerMutationKeys.hostRestart(),
     mutationFn: () => management.restartHost(),
     onSuccess: () => {
+      setRestartConfirmOpen(false);
       toast.success("Host restart requested");
       void queryClient.invalidateQueries({
         queryKey: runnerQueryKeys.hostInstalledRecord(management),
       });
       invalidate();
     },
-    onError: (err) => toastFromRunnerError(err, "Couldn't restart host"),
+    onError: (err) => {
+      setRestartConfirmOpen(false);
+      toastFromRunnerError(err, "Couldn't restart host");
+    },
   });
 
   const registerServiceMutation = useMutation({
@@ -410,8 +416,16 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
         installPending={installMutation.isPending}
         restartPending={restartMutation.isPending}
         onInstall={() => installMutation.mutate(null)}
-        onRestart={() => restartMutation.mutate()}
+        onRestart={() => setRestartConfirmOpen(true)}
         onOpenDoctor={() => setDoctorOpen(true)}
+      />
+      <RestartHostConfirmDialog
+        open={restartConfirmOpen}
+        onOpenChange={(open) => {
+          if (!open) setRestartConfirmOpen(false);
+        }}
+        isPending={restartMutation.isPending}
+        onConfirm={() => restartMutation.mutate()}
       />
       {status?.state === "not-installed" ? null : (
         <UpdatesRow

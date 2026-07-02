@@ -314,6 +314,10 @@ export function isDialogHostedMenuCommand(command: MenuCommandId): boolean {
     // so route the install through the same fallback path. The renderer
     // owns the actual CLI mutation; main only needs to make sure *some*
     // renderer receives the command and is focused/visible to the user.
-    command === "host.installUpdate"
+    command === "host.installUpdate" ||
+    // Help -> Restart Host is destructive and renderer-confirmed. Use the
+    // same MRU fallback so menu activation without a focused renderer still
+    // presents the confirmation modal instead of no-oping.
+    command === "host.restart"
   );
 }
