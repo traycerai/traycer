@@ -83,7 +83,11 @@ function renderSingleSpecialSegment(
   if (segment.kind === "setup-card") {
     return (
       <div className="flex w-full flex-col">
-        <SetupCardSegment model={segment.model} viewTabId={segment.viewTabId} />
+        <SetupCardSegment
+          model={segment.model}
+          viewTabId={segment.viewTabId}
+          variant="card"
+        />
       </div>
     );
   }
