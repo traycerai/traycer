@@ -32,6 +32,10 @@ export function HarnessModelPickerItem(props: HarnessModelPickerItemProps) {
   // prefix now carried by the group header) and no redundant harness context.
   const capacityLabel =
     showCapacity && row.capacityLabel !== null ? row.capacityLabel : null;
+  // Same "has a notice" predicate TooltipWrapper uses (null or empty string is
+  // no notice), so the badge never renders without the tooltip behind it.
+  const hasDeprecationNotice =
+    row.deprecationNotice !== null && row.deprecationNotice.length > 0;
 
   return (
     // Anchored to the row button itself (not the inner Badge) so the notice is
@@ -79,11 +83,11 @@ export function HarnessModelPickerItem(props: HarnessModelPickerItemProps) {
             {row.browseLabel}
           </span>
         </span>
-        {row.deprecationNotice === null ? null : (
+        {hasDeprecationNotice ? (
           <Badge variant="destructive" className="shrink-0">
             Deprecated
           </Badge>
-        )}
+        ) : null}
         {capacityLabel === null ? null : (
           <span className="shrink-0 rounded-md bg-muted px-1.5 py-0.5 text-ui-xs text-muted-foreground">
             {capacityLabel}
