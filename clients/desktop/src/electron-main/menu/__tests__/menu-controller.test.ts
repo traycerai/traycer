@@ -203,6 +203,49 @@ class FakeWindowRegistry extends EventEmitter implements MenuWindowRegistry {
   }
 }
 
+class EmptyWindowRegistry extends EventEmitter implements MenuWindowRegistry {
+  readonly createRequests: Array<{
+    readonly initialRoute: string | null;
+    readonly beforeLoad: ((windowId: string) => void) | null;
+  }> = [];
+
+  async create(options: {
+    readonly initialRoute: string | null;
+    readonly beforeLoad: ((windowId: string) => void) | null;
+  }): Promise<string> {
+    this.createRequests.push(options);
+    return "window-created";
+  }
+
+  closeById(_windowId: string): Promise<void> {
+    return Promise.resolve();
+  }
+
+  minimizeById(_windowId: string): Promise<void> {
+    return Promise.resolve();
+  }
+
+  zoomById(_windowId: string): Promise<void> {
+    return Promise.resolve();
+  }
+
+  focusById(_windowId: string): boolean {
+    return false;
+  }
+
+  list(): readonly WindowSummary[] {
+    return [];
+  }
+
+  records(): readonly MenuWindowRecord[] {
+    return [];
+  }
+
+  mostRecentlyFocusedId(): string | null {
+    return null;
+  }
+}
+
 class MultiWindowRegistry extends EventEmitter implements MenuWindowRegistry {
   readonly windowA = new FakeWindow();
   readonly windowB = new FakeWindow();
@@ -415,6 +458,56 @@ describe("MenuController", () => {
     closeTab.click?.(null, null);
 
     expect(dispatchRendererCommand).toHaveBeenCalledWith("epic.closeTab");
+    controller.dispose();
+  });
+
+  it("dispatches Restart Host through the renderer confirmation path", () => {
+    const host = new FakeHost();
+    const registry = new FakeWindowRegistry();
+    const dispatchRendererCommand = vi.fn(() => true);
+    const controller = createController({
+      registry,
+      host,
+      authSession: new DesktopAuthSession(),
+      perWindowState: new PerWindowState(null),
+      dispatchRendererCommand,
+    });
+
+    controller.install();
+    runControllerCommand(controller, "host.restart", null);
+
+    expect(dispatchRendererCommand).toHaveBeenCalledWith("host.restart");
+    expect(host.respawnCalls).toBe(0);
+    expect(registry.createRequests).toEqual([]);
+    controller.dispose();
+  });
+
+  it("opens a window and retries Restart Host when no renderer is available", async () => {
+    const host = new FakeHost();
+    const registry = new EmptyWindowRegistry();
+    const dispatchRendererCommand = vi
+      .fn<(_command: MenuCommandId) => boolean>()
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(true);
+    const controller = createController({
+      registry,
+      host,
+      authSession: new DesktopAuthSession(),
+      perWindowState: new PerWindowState(null),
+      dispatchRendererCommand,
+    });
+
+    controller.install();
+    runControllerCommand(controller, "host.restart", null);
+    await Promise.resolve();
+
+    expect(registry.createRequests).toEqual([
+      { initialRoute: null, beforeLoad: null },
+    ]);
+    expect(dispatchRendererCommand).toHaveBeenCalledTimes(2);
+    expect(dispatchRendererCommand).toHaveBeenNthCalledWith(1, "host.restart");
+    expect(dispatchRendererCommand).toHaveBeenNthCalledWith(2, "host.restart");
+    expect(host.respawnCalls).toBe(0);
     controller.dispose();
   });
 

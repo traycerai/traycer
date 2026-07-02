@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -25,6 +25,7 @@ import {
 } from "@/lib/commands/tile-find";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
+import { RestartHostConfirmDialog } from "@/components/host/restart-host-confirm-dialog";
 
 interface HostWithRequestClose extends IRunnerHost {
   readonly windows: {
@@ -84,6 +85,26 @@ export function MenuCommandListener() {
   );
   const management = runnerHost.hostManagement;
   const service = runnerHost.service;
+  const traycerCli = runnerHost.traycerCli;
+  const [pendingHostRestart, setPendingHostRestart] = useState<boolean>(false);
+
+  const restartHostMutation = useMutation<void>({
+    mutationKey: runnerMutationKeys.requestHostRespawn(),
+    mutationFn: () => runnerHost.requestHostRespawn(),
+    onSuccess: () => {
+      toast.success("Host restart requested");
+      setPendingHostRestart(false);
+      if (traycerCli !== null) {
+        void queryClient.invalidateQueries({
+          queryKey: runnerQueryKeys.traycerHostStatus(traycerCli),
+        });
+      }
+    },
+    onError: (err) => {
+      setPendingHostRestart(false);
+      toastFromRunnerError(err, "Couldn't restart host");
+    },
+  });
 
   const installUpdateMutation = useMutation<HostInstallResult>({
     mutationKey: runnerMutationKeys.hostUpdate(),
@@ -150,6 +171,9 @@ export function MenuCommandListener() {
         installHostUpdate: () => {
           mutateInstallUpdate();
         },
+        requestHostRestart: () => {
+          setPendingHostRestart(true);
+        },
         reportIssue: openReportIssue,
       });
     });
@@ -168,7 +192,19 @@ export function MenuCommandListener() {
     openReportIssue,
   ]);
 
-  return <>{closeTabFlow.unsyncedDialog}</>;
+  return (
+    <>
+      {closeTabFlow.unsyncedDialog}
+      <RestartHostConfirmDialog
+        open={pendingHostRestart}
+        onOpenChange={(open) => {
+          if (!open) setPendingHostRestart(false);
+        }}
+        isPending={restartHostMutation.isPending}
+        onConfirm={() => restartHostMutation.mutate()}
+      />
+    </>
+  );
 }
 
 interface MenuCommandHandlers {
@@ -183,6 +219,7 @@ interface MenuCommandHandlers {
   readonly openFindBar: () => void;
   readonly advanceFind: (forward: boolean) => void;
   readonly installHostUpdate: () => void;
+  readonly requestHostRestart: () => void;
   readonly reportIssue: () => void;
 }
 
@@ -230,6 +267,10 @@ function handleMenuCommand(
   }
   if (payload.command === "host.installUpdate") {
     handlers.installHostUpdate();
+    return;
+  }
+  if (payload.command === "host.restart") {
+    handlers.requestHostRestart();
     return;
   }
   if (payload.command === "window.closeWindow") {
