@@ -53,6 +53,7 @@ import {
   type ChatUserMinimapItem,
 } from "@/components/chat/chat-user-message-minimap-items";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
+import type { JsonContent } from "@traycer/protocol/common/registry";
 import { useTileFindStore, type TileFindAdapter } from "@/stores/tile-find";
 import type { BackgroundItem } from "@traycer/protocol/host/agent/gui/subscribe";
 
@@ -101,6 +102,7 @@ function minimapItemsFor(
     .map((message) => ({
       id: message.id,
       content: message.content,
+      structuredContent: message.structuredContent,
       attachments: message.attachments,
     }));
 }
@@ -956,6 +958,68 @@ describe("ChatMessages Virtuoso renderer", () => {
     fireEvent.click(firstOption);
   });
 
+  it("renders structured image references in the expanded minimap", async () => {
+    const structuredContent: JsonContent = {
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [
+            {
+              type: "slashCommand",
+              attrs: { commandName: "thermo-nuclear-code-quality-review" },
+            },
+            { type: "text", text: " can you see this " },
+            {
+              type: "imageAttachment",
+              attrs: {
+                id: "img-1",
+                fileName: "first.png",
+                b64content: "img-1",
+                mimeType: "image/png",
+                size: 5,
+              },
+            },
+            { type: "text", text: " and this " },
+            {
+              type: "imageAttachment",
+              attrs: {
+                id: "img-2",
+                fileName: "second.png",
+                b64content: "img-2",
+                mimeType: "image/png",
+                size: 5,
+              },
+            },
+          ],
+        },
+      ],
+    };
+    const message: ChatMessageModel = {
+      ...makeMessage(0, "user"),
+      content: "/thermo-nuclear-code-quality-review can you see this and this",
+      structuredContent,
+    };
+    renderChatMessages(
+      [message],
+      makeDefaultOpts({ minimapItems: minimapItemsFor([message]) }),
+    );
+
+    fireEvent.pointerEnter(screen.getByTestId("chat-user-message-minimap"));
+
+    await waitFor(() => {
+      const overlay = screen.getByRole("listbox");
+      expect(within(overlay).getByText("Image#1")).not.toBeNull();
+      expect(within(overlay).getByText("Image#2")).not.toBeNull();
+      expect(
+        within(overlay).getByLabelText("Attached Image#1: first.png"),
+      ).not.toBeNull();
+      expect(
+        within(overlay).getByLabelText("Attached Image#2: second.png"),
+      ).not.toBeNull();
+    });
+  });
+
   it("reveals the active minimap option when the long overlay mounts", async () => {
     const scrollIntoView = vi
       .spyOn(Element.prototype, "scrollIntoView")
@@ -1083,6 +1147,7 @@ describe("ChatMessages Virtuoso renderer", () => {
       (_unused, index) => ({
         id: `item-${index}`,
         content: `User message ${index}`,
+        structuredContent: null,
         attachments: [],
       }),
     );
@@ -1113,6 +1178,7 @@ describe("ChatMessages Virtuoso renderer", () => {
       (_unused, index) => ({
         id: `item-${index}`,
         content: `User message ${index}`,
+        structuredContent: null,
         attachments: [],
       }),
     );

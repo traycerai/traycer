@@ -1,12 +1,24 @@
 import { memo } from "react";
 
-function SlashCommandChipBase({ name }: { name: string }) {
+import { cn } from "@/lib/utils";
+import {
+  composerInlineChipClassNames,
+  type ComposerInlineChipDensity,
+} from "./composer-inline-chip-classnames";
+
+interface SlashCommandChipProps {
+  readonly name: string;
+  readonly density: ComposerInlineChipDensity;
+}
+
+function SlashCommandChipBase({ density, name }: SlashCommandChipProps) {
+  const classNames = composerInlineChipClassNames(density);
   return (
     <span
-      className="mx-0.5 inline-flex items-center rounded-md border border-border/70 bg-muted px-1.5 py-0.5 align-baseline font-mono text-[0.85em] text-foreground"
+      className={cn(classNames.root, "font-mono text-foreground")}
       data-composer-chip="slash-command"
     >
-      {name}
+      <span className={classNames.text}>{name}</span>
     </span>
   );
 }

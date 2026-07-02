@@ -13,6 +13,8 @@ function noopControls() {
     setReasoning: () => undefined,
     setServiceTier: () => undefined,
     setPermission: () => undefined,
+    switchHarness: () => undefined,
+    selectModel: () => undefined,
   };
 }
 

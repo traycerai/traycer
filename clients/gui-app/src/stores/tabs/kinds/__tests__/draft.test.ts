@@ -55,7 +55,7 @@ describe("draftTabModule.build name", () => {
       type: "doc",
       content: [
         {
-          type: "attachmentGroup",
+          type: "paragraph",
           content: [
             {
               type: "imageAttachment",
@@ -69,7 +69,6 @@ describe("draftTabModule.build name", () => {
             },
           ],
         },
-        { type: "paragraph" },
       ],
     };
     expect(draftTabModule.build(draft(content)).name).toBe("Start Page");

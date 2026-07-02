@@ -12,6 +12,7 @@ import {
 } from "@/components/home/data/landing-options";
 import { useSurfaceActivity } from "@/components/home/composer/surface-activity-hooks";
 import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
+import { commitSelection } from "@/stores/composer/commit-selection";
 import {
   useGuiHarnessCatalog,
   useGuiHarnessModelsQuery,
@@ -23,7 +24,6 @@ import {
   createModelRowSearchIndex,
   filterModelRows,
   flattenModelRowSections,
-  modelRowToSelection,
   sectionModelRowsByProviderRank,
   selectedModelRowId,
   type HarnessModelRow,
@@ -109,7 +109,6 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   const selectedModel = useStore(store, (s) => s.selectedModel);
   const reasoning = useStore(store, (s) => s.reasoning);
   const serviceTier = useStore(store, (s) => s.serviceTier);
-  const onSelectionChange = useStore(store, (s) => s.setSelection);
   const setReasoning = useStore(store, (s) => s.setReasoning);
   const setServiceTier = useStore(store, (s) => s.setServiceTier);
   // The footer configs were previously assembled (identically) by both the
@@ -329,18 +328,42 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         closeOnly();
         return;
       }
+      // Commit the picked model through the memory-aware funnel (restores that
+      // (harness, model)'s remembered effort/tier, or the model's defaults).
       // Selecting a model keeps the picker open; it only closes on an outside
       // click / escape (handled by Popover's onOpenChange -> closeOnly).
-      onSelectionChange(modelRowToSelection(row));
+      commitSelection(store, row.harnessId, row.value);
     },
-    [closeOnly, disabled, onSelectionChange],
+    [closeOnly, disabled, store],
   );
   const handleProviderChange = useCallback(
     (providerId: ProviderId) => {
+      // Locked fork (terminal): the harness is immovable - never switch off it.
       if (lockedHarnessId !== null && providerId !== lockedHarnessId) return;
+      // Only an AVAILABLE, non-degraded provider commits a switch (restoring its
+      // remembered model/effort/tier). A degraded / unavailable provider just
+      // browses the rail - the panel shows its reauth / setup CTA, no commit.
+      const harness =
+        catalogHarnesses.find((option) => option.id === providerId) ??
+        harnesses.find((option) => option.id === providerId) ??
+        null;
+      if (
+        harness !== null &&
+        harness.available &&
+        !railHarnessDegraded(harness, degradedHarnessIds)
+      ) {
+        commitSelection(store, providerId, null);
+      }
       setActiveProviderId(providerId);
     },
-    [lockedHarnessId, setActiveProviderId],
+    [
+      catalogHarnesses,
+      degradedHarnessIds,
+      harnesses,
+      lockedHarnessId,
+      setActiveProviderId,
+      store,
+    ],
   );
 
   const handleKeyDown = useCallback(

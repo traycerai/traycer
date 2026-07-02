@@ -46,6 +46,7 @@ import {
   extractPlainTextFromComposerJSONContent,
   stringValue,
 } from "@/lib/composer/tiptap-json-content";
+import { normalizeComposerContent } from "@/lib/composer/composer-content-normalizer";
 import {
   collectImageAtoms,
   containsImageAtoms,
@@ -393,7 +394,7 @@ export function useLandingComposerActions(): LandingComposerActions {
       const { editor } = args;
       if (editor === null) return;
 
-      const editorContent = editor.getJSON();
+      const editorContent = normalizeComposerContent(editor.getJSON());
       const text = extractPlainTextFromComposerJSONContent(editorContent);
       const hasImages = containsImageAtoms(editorContent);
       if (text.trim().length === 0 && !hasImages) return;

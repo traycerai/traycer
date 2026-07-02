@@ -86,6 +86,7 @@ import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
+import { useComposerHarnessMemoryStore } from "@/stores/composer/composer-harness-memory-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import {
@@ -593,6 +594,7 @@ describe("<ChatTile />", () => {
       },
     });
     useComposerRunSettingsStore.getState().resetForTests();
+    useComposerHarnessMemoryStore.getState().resetForTests();
     // The composer gates Send on a resolved (non-empty) model slug. Without a
     // host binding the catalog never resolves the empty default, so seed a
     // concrete default model so the composer reaches a sendable state.
@@ -615,6 +617,7 @@ describe("<ChatTile />", () => {
       drafts: {},
     });
     useComposerRunSettingsStore.getState().resetForTests();
+    useComposerHarnessMemoryStore.getState().resetForTests();
     useAuthStore.setState({
       status: "signed-out",
       profile: null,
@@ -758,10 +761,10 @@ describe("<ChatTile />", () => {
     }
 
     act(() => {
-      focusedComposer.controls.setSelection({
-        harnessId: UPDATED_QUEUE_SETTINGS.harnessId,
-        modelSlug: UPDATED_QUEUE_SETTINGS.model,
-      });
+      focusedComposer.controls.selectModel(
+        UPDATED_QUEUE_SETTINGS.harnessId,
+        UPDATED_QUEUE_SETTINGS.model,
+      );
       focusedComposer.controls.setPermission("full_access");
       focusedComposer.controls.setReasoning(
         UPDATED_QUEUE_SETTINGS.reasoningEffort ?? "",
@@ -1272,10 +1275,10 @@ describe("<ChatTile />", () => {
     }
 
     act(() => {
-      focusedComposer.controls.setSelection({
-        harnessId: QUEUED_SETTINGS.harnessId,
-        modelSlug: QUEUED_SETTINGS.model,
-      });
+      focusedComposer.controls.selectModel(
+        QUEUED_SETTINGS.harnessId,
+        QUEUED_SETTINGS.model,
+      );
       focusedComposer.controls.setPermission(QUEUED_SETTINGS.permissionMode);
       focusedComposer.controls.setReasoning(
         QUEUED_SETTINGS.reasoningEffort ?? "",
@@ -1305,10 +1308,10 @@ describe("<ChatTile />", () => {
     }
 
     act(() => {
-      focusedComposer.controls.setSelection({
-        harnessId: UPDATED_QUEUE_SETTINGS.harnessId,
-        modelSlug: UPDATED_QUEUE_SETTINGS.model,
-      });
+      focusedComposer.controls.selectModel(
+        UPDATED_QUEUE_SETTINGS.harnessId,
+        UPDATED_QUEUE_SETTINGS.model,
+      );
       focusedComposer.controls.setPermission(
         UPDATED_QUEUE_SETTINGS.permissionMode,
       );
@@ -1340,10 +1343,10 @@ describe("<ChatTile />", () => {
     }
 
     act(() => {
-      focusedComposer.controls.setSelection({
-        harnessId: UPDATED_QUEUE_SETTINGS.harnessId,
-        modelSlug: UPDATED_QUEUE_SETTINGS.model,
-      });
+      focusedComposer.controls.selectModel(
+        UPDATED_QUEUE_SETTINGS.harnessId,
+        UPDATED_QUEUE_SETTINGS.model,
+      );
       focusedComposer.controls.setPermission(
         UPDATED_QUEUE_SETTINGS.permissionMode,
       );
@@ -1825,10 +1828,10 @@ describe("<ChatTile />", () => {
     }
 
     act(() => {
-      focusedComposer.controls.setSelection({
-        harnessId: UPDATED_QUEUE_SETTINGS.harnessId,
-        modelSlug: UPDATED_QUEUE_SETTINGS.model,
-      });
+      focusedComposer.controls.selectModel(
+        UPDATED_QUEUE_SETTINGS.harnessId,
+        UPDATED_QUEUE_SETTINGS.model,
+      );
       focusedComposer.controls.setPermission("full_access");
       focusedComposer.controls.setReasoning(
         UPDATED_QUEUE_SETTINGS.reasoningEffort ?? "",

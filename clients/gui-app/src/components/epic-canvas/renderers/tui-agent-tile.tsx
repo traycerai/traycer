@@ -56,6 +56,8 @@ import {
 } from "@/components/ui/popover";
 import { HostWorkspaceSelector } from "@/components/home/host-workspace-selector/host-workspace-selector";
 import { useWorktreeGetBinding } from "@/hooks/worktree/use-worktree-get-binding-query";
+import { SetupCardSegment } from "@/components/chat/segments/setup-card-segment";
+import { buildTuiAgentSetupCardModel } from "@/stores/chats/tui-agent-setup-card-model";
 import { AgentModeReadonlyLabel } from "@/components/home/pickers/agent-mode-toggle";
 import type { AgentMode } from "@/components/home/data/landing-options";
 import { useAgentStopControls } from "@/hooks/agent/use-agent-stop-controls";
@@ -175,12 +177,17 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
   }
   if (reachability.status === "checking") {
     return (
-      <div
-        className="flex h-full w-full items-center justify-center bg-canvas"
-        data-testid={`terminal-agent-tile-${props.tileId}`}
-      >
-        <TerminalLoadingSkeleton />
-      </div>
+      <TerminalAgentTileShell tileId={props.tileId}>
+        <TerminalAgentWorktreeNotice
+          hostId={hostId}
+          agentId={sessionId}
+          viewTabId={props.viewTabId}
+          layout="bar"
+        />
+        <div className="flex min-h-0 flex-1 items-center justify-center">
+          <TerminalLoadingSkeleton />
+        </div>
+      </TerminalAgentTileShell>
     );
   }
   // Keyed on `recoverNonce`: a recovery remounts the bootstrap subtree, which
@@ -438,13 +445,21 @@ function TuiAgentTileLive(
     // Same stable skeleton the reachability-check, pre-launch, and xterm
     // suspense states use, so the create→ready transition reads as one
     // continuous loading state instead of a sequence of placeholder strings.
+    // The worktree-setup notice still rides on top (it keys off the tab/node
+    // id, not the pending agent projection), so a just-created worktree agent
+    // shows its notice before the record lands.
     return (
-      <div
-        className="flex h-full w-full items-center justify-center bg-canvas"
-        data-testid={`terminal-agent-tile-${props.tileId}`}
-      >
-        <TerminalLoadingSkeleton />
-      </div>
+      <TerminalAgentTileShell tileId={props.tileId}>
+        <TerminalAgentWorktreeNotice
+          hostId={hostId}
+          agentId={props.node.id}
+          viewTabId={props.viewTabId}
+          layout="bar"
+        />
+        <div className="flex min-h-0 flex-1 items-center justify-center">
+          <TerminalLoadingSkeleton />
+        </div>
+      </TerminalAgentTileShell>
     );
   }
 
@@ -456,10 +471,7 @@ function TuiAgentTileLive(
   // underneath swaps between pre-launch placeholders and the live xterm host
   // based on session readiness.
   return (
-    <div
-      className="flex h-full w-full min-h-0 flex-col bg-canvas"
-      data-testid={`terminal-agent-tile-${props.tileId}`}
-    >
+    <TerminalAgentTileShell tileId={props.tileId}>
       <TerminalAgentPreLaunchToolbar
         hostId={hostId}
         hostClient={hostClient}
@@ -486,7 +498,7 @@ function TuiAgentTileLive(
           recovery={props.recovery}
         />
       </div>
-    </div>
+    </TerminalAgentTileShell>
   );
 }
 
@@ -688,6 +700,11 @@ function TerminalAgentPreLaunchToolbar(
           ownerId: props.agent.id,
           binding,
           isOwnerActive: props.isOwnerActive,
+          // Terminal agents have no background-work-outlives-the-turn concept
+          // distinct from PTY output (unlike chat), so there's no narrower
+          // signal to distinguish - this field is unread for this surface kind
+          // (the notice text is fixed regardless), kept equal for consistency.
+          hasActiveTurn: props.isOwnerActive,
           // Surfaced on the chip as a per-folder "missing on disk" indicator.
           // The host-computed signal on `worktree.getBinding` — the actual
           // launch gate is the `prepareLaunch` WORKTREE_MISSING reject, but this
@@ -714,10 +731,21 @@ function TerminalAgentPreLaunchToolbar(
         <GitFork aria-hidden className="size-3.5" />
         Fork
       </Button>
-      <TerminalAgentHeaderControls
-        epicId={props.epicId}
-        tuiAgentId={props.agent.id}
-      />
+      {/* Right-aligned status-bar group: the worktree-creation notice sits
+          beside the agent controls. The notice's expanded detail opens as a
+          downward Popover overlay, so it never reflows the terminal below. */}
+      <div className="ml-auto flex shrink-0 items-center gap-2">
+        <TerminalAgentWorktreeNotice
+          hostId={props.hostId}
+          agentId={props.agent.id}
+          viewTabId={props.viewTabId}
+          layout="chip"
+        />
+        <TerminalAgentHeaderControls
+          epicId={props.epicId}
+          tuiAgentId={props.agent.id}
+        />
+      </div>
       <TerminalAgentForkDialog
         open={forkDialogOpen}
         target={forkTarget}
@@ -727,6 +755,93 @@ function TerminalAgentPreLaunchToolbar(
         hostClient={props.hostClient}
         onOpenChange={setForkDialogOpen}
       />
+    </div>
+  );
+}
+
+/**
+ * Worktree-creation notice for a terminal agent - the TUI analog of the chat
+ * setup card. Reuses the exact `SetupCardSegment` a chat renders (in its
+ * `inline` variant), fed a view-model projected from this agent's
+ * `worktree.getBinding` (the same unary read the toolbar chip already uses, so
+ * this shares its TanStack cache - no extra request). Renders nothing unless
+ * the agent runs in a worktree it CREATED, so Local / imported bindings show no
+ * card. Retry / Open-terminal route by `ownerKind: "terminal-agent"` as in chat.
+ *
+ * Self-resolves the epic + tab-host client from `hostId` (rather than taking
+ * them as props) so it can render in EVERY tile state - reachability-checking,
+ * agent-projection-pending, and live - not only once the PTY toolbar mounts;
+ * `agentId` is the tab/node id, always known before the agent record projects.
+ *
+ * `layout`:
+ *  - `"chip"` - just the compact trigger, placed by the caller inside the live
+ *    status-bar toolbar.
+ *  - `"bar"` - the trigger wrapped in a standalone status-bar strip, for the
+ *    pre-launch (checking / projection-pending) states where no toolbar exists
+ *    yet. Returns null (no empty strip) when there is no notice to show.
+ */
+function TerminalAgentWorktreeNotice(props: {
+  readonly hostId: string;
+  readonly agentId: string;
+  readonly viewTabId: string;
+  readonly layout: "chip" | "bar";
+}) {
+  const epicId = useOpenEpicId();
+  const hostEntry = useHostDirectoryEntry(props.hostId);
+  const hostClient = useHostClientFor(hostEntry);
+  const paneVisible = usePaneVisible();
+  const bindingQuery = useWorktreeGetBinding({
+    client: hostClient,
+    epicId,
+    ownerId: props.agentId,
+    ownerKind: "terminal-agent",
+    enabled: true,
+    // Mirror the toolbar chip's query options so the two observers share one
+    // request and refresh together (re-check the binding on focus while the
+    // pane is visible, so a completed setup flips the card without a reopen).
+    staleTime: 0,
+    refetchOnWindowFocus: paneVisible,
+  });
+  const binding = bindingQuery.data?.binding ?? null;
+  const model = useMemo(
+    () =>
+      buildTuiAgentSetupCardModel(binding, { epicId, ownerId: props.agentId }),
+    [binding, epicId, props.agentId],
+  );
+  if (model === null) return null;
+  const card = (
+    <SetupCardSegment
+      model={model}
+      viewTabId={props.viewTabId}
+      variant="inline"
+    />
+  );
+  if (props.layout === "chip") return card;
+  return (
+    <div
+      className="flex min-w-0 shrink-0 items-center justify-end border-b border-canvas-border/70 px-3 py-1.5"
+      data-testid="terminal-agent-worktree-setup-notice"
+    >
+      {card}
+    </div>
+  );
+}
+
+/**
+ * The terminal-agent tile's outer chrome: a full-height `bg-canvas` column with
+ * the tile test id. State-specific content (status bar + skeleton, or the live
+ * shell) is provided as children.
+ */
+function TerminalAgentTileShell(props: {
+  readonly tileId: string;
+  readonly children: React.ReactNode;
+}) {
+  return (
+    <div
+      className="flex h-full w-full min-h-0 flex-col bg-canvas"
+      data-testid={`terminal-agent-tile-${props.tileId}`}
+    >
+      {props.children}
     </div>
   );
 }
@@ -759,7 +874,7 @@ function TerminalAgentHeaderControls(props: {
   const runningCount = controls.descendants.length + (self.active ? 1 : 0);
 
   return (
-    <div className="ml-auto flex shrink-0 items-center gap-1">
+    <div className="flex shrink-0 items-center gap-1">
       <Popover>
         <PopoverTrigger asChild>
           <Button
