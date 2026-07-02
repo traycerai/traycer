@@ -126,6 +126,7 @@ function makeManagement(): IHostManagement {
         errorMessage: null,
       }),
     ),
+    getOperationStatus: vi.fn(() => Promise.resolve(null)),
     freePortAndRestart: vi.fn((input) => Promise.resolve(input)),
     cliManifest: vi.fn(() => Promise.resolve(null)),
     getHostName: vi.fn(() =>

@@ -22,6 +22,8 @@ import type {
   HostInstallResult,
   HostInstalledRecord,
   HostLogsTailResult,
+  HostOperationKind,
+  HostOperationStatus,
   HostProgressEvent,
   HostRegistryUpdateState,
   HostRemovalState,
@@ -50,7 +52,7 @@ import {
 } from "../host/host-display-name";
 import type { RunnerIpcBridge } from "./runner-ipc-bridge";
 
-const LONG_OP_TIMEOUT_MS = 10 * 60_000;
+export const LONG_OP_TIMEOUT_MS = 10 * 60_000;
 const REGISTRY_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 type HostRegistryUpdateStateListener = (state: HostRegistryUpdateState) => void;
 const registryUpdateStateListeners = new Set<HostRegistryUpdateStateListener>();
@@ -255,14 +257,64 @@ function nullableString(raw: unknown, key: string): string | null {
   throw new Error(`${key} must be a string or null`);
 }
 
-export function streamCliWithProgress(
-  args: readonly string[],
-  operationId: string,
+/**
+ * Canonical cross-surface "is a host mutation running" snapshot (Ticket:
+ * host-update-race-conditions). Main is the single writer; every renderer
+ * window reads it via `traycerHostOperationStatusGet` on mount and
+ * `hostOperationStatusChange` thereafter.
+ *
+ * This is also the single-flight guard: `trackHostOperation` below rejects a
+ * second concurrent call synchronously (no `await` between the null-check and
+ * the set) instead of letting a second `traycer host …` subprocess spawn and
+ * lose the race on `cli-lock`'s file mutex. That turns the user-visible "two
+ * clicks -> CLI_LOCK_BUSY on the loser, stale UI on the winner" bug into a
+ * same-process no-op, and makes `cli-lock` a pure backstop for a genuinely
+ * separate process (a terminal `traycer host update` racing the desktop) -
+ * not the mechanism the UI relies on for correctness.
+ */
+let currentOperationStatus: HostOperationStatus | null = null;
+
+export function getHostOperationStatus(): HostOperationStatus | null {
+  return currentOperationStatus;
+}
+
+function setHostOperationStatus(
   bridge: RunnerIpcBridge,
-): Promise<unknown> {
-  // The wrapper guarantees `--json`; non-progress envelopes are absorbed
-  // by streamTraycerCliJson which only resolves on a terminal `result`
-  // event (ok → data, error → TraycerCliError reject).
+  status: HostOperationStatus | null,
+): void {
+  currentOperationStatus = status;
+  bridge.fanOut(RunnerHostEvent.hostOperationStatusChange, status);
+}
+
+/**
+ * Single seam every long-running CLI-backed operation (install / update /
+ * register-service / ensure) funnels through. Owns the single-flight guard,
+ * the canonical status broadcast (start / each progress tick / settle), and
+ * the legacy per-`operationId` `cliOperationProgress` fan-out that the
+ * preload's `withOperationListener` still reads.
+ */
+async function trackHostOperation<T>(
+  bridge: RunnerIpcBridge,
+  kind: HostOperationKind,
+  operationId: string,
+  run: (onEvent: (event: NdjsonEvent) => void) => Promise<T>,
+): Promise<T> {
+  if (currentOperationStatus !== null) {
+    throw new Error(
+      `Another host operation (${currentOperationStatus.kind}) is already in progress`,
+    );
+  }
+  const startedAt = new Date().toISOString();
+  setHostOperationStatus(bridge, {
+    operationId,
+    kind,
+    stage: null,
+    percent: null,
+    bytes: null,
+    totalBytes: null,
+    message: null,
+    startedAt,
+  });
   const onEvent = (event: NdjsonEvent): void => {
     if (event.type !== "progress") return;
     const payload: HostProgressEvent = {
@@ -274,13 +326,44 @@ export function streamCliWithProgress(
       message: event.message,
     };
     bridge.fanOut(RunnerHostEvent.cliOperationProgress, payload);
+    setHostOperationStatus(bridge, {
+      operationId,
+      kind,
+      stage: event.stage,
+      percent: event.percent,
+      bytes: event.bytes,
+      totalBytes: event.totalBytes,
+      message: event.message,
+      startedAt,
+    });
   };
-  return streamTraycerCliJson<unknown>({
-    args,
-    onEvent,
-    env: null,
-    timeoutMs: LONG_OP_TIMEOUT_MS,
-  }).then((result: { readonly data: unknown }) => result.data);
+  try {
+    return await run(onEvent);
+  } finally {
+    // Always clears, success or failure, so a rejected operation never
+    // leaves every surface permanently disabled.
+    setHostOperationStatus(bridge, null);
+  }
+}
+
+export function streamCliWithProgress(
+  args: readonly string[],
+  operationId: string,
+  kind: HostOperationKind,
+  timeoutMs: number,
+  bridge: RunnerIpcBridge,
+): Promise<unknown> {
+  // The wrapper guarantees `--json`; non-progress envelopes are absorbed
+  // by streamTraycerCliJson which only resolves on a terminal `result`
+  // event (ok → data, error → TraycerCliError reject).
+  return trackHostOperation(bridge, kind, operationId, (onEvent) =>
+    streamTraycerCliJson<unknown>({
+      args,
+      onEvent,
+      env: null,
+      timeoutMs,
+    }).then((result: { readonly data: unknown }) => result.data),
+  );
 }
 
 /**
@@ -700,11 +783,22 @@ function emptyAvailableSnapshot(): HostAvailableSnapshot {
 
 /**
  * Public entry point - Desktop boot calls this once at launch (Flow 6
- * "Discovery via Desktop"). Honours the 24h cache so frequent restarts
- * don't spam the registry; never throws.
+ * "Discovery via Desktop"), and the periodic/resume re-check calls it on a
+ * tighter cadence (Ticket: host-update-race-conditions). Honours the on-disk
+ * cache so frequent probes don't spam the registry; never throws.
+ *
+ * `maxAgeMs` overrides the freshness bound the cache is checked against -
+ * `null` means the default `REGISTRY_CACHE_TTL_MS` (24h, the launch/manual
+ * behaviour). The periodic/resume callers pass a much shorter bound so a
+ * long-running session (or a machine that was asleep across a release)
+ * notices a newer version without waiting out the full 24h TTL or requiring
+ * a relaunch. Irrelevant when `force` is `true` (the cache is bypassed
+ * entirely), but still required so every call site states its intent
+ * explicitly.
  */
 export async function refreshRegistryUpdateState(opts: {
   readonly force: boolean;
+  readonly maxAgeMs: number | null;
 }): Promise<HostRegistryUpdateState> {
   const run = registryRefreshQueue.then(
     () => refreshRegistryUpdateStateSerial(opts),
@@ -719,11 +813,13 @@ export async function refreshRegistryUpdateState(opts: {
 
 async function refreshRegistryUpdateStateSerial(opts: {
   readonly force: boolean;
+  readonly maxAgeMs: number | null;
 }): Promise<HostRegistryUpdateState> {
   const cache = await readRegistryCache();
   if (!opts.force && cache !== null && cache.reachable) {
     const ageMs = Date.now() - Date.parse(cache.checkedAt);
-    if (Number.isFinite(ageMs) && ageMs >= 0 && ageMs < REGISTRY_CACHE_TTL_MS) {
+    const threshold = opts.maxAgeMs ?? REGISTRY_CACHE_TTL_MS;
+    if (Number.isFinite(ageMs) && ageMs >= 0 && ageMs < threshold) {
       const state = buildUpdateState(cache);
       emitHostRegistryUpdateState(state);
       return state;
@@ -883,13 +979,19 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
         "install",
         ...(version !== null && version !== "latest" ? [version] : ["latest"]),
       ];
-      const data = await streamCliWithProgress(args, operationId, bridge);
+      const data = await streamCliWithProgress(
+        args,
+        operationId,
+        "install",
+        LONG_OP_TIMEOUT_MS,
+        bridge,
+      );
       // The install record on disk now points at the freshly installed
       // version. Re-probe the registry so the cached `installedVersion`
       // (and `updateAvailable`) reflect it - otherwise the 24h TTL cache
       // keeps the launch-time snapshot and the Updates row / banner stay
       // stuck advertising the version we just installed.
-      await refreshRegistryUpdateState({ force: true });
+      await refreshRegistryUpdateState({ force: true, maxAgeMs: null });
       return projectInstallResult(data);
     },
   );
@@ -902,9 +1004,11 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
       const data = await streamCliWithProgress(
         ["host", "update"],
         operationId,
+        "update",
+        LONG_OP_TIMEOUT_MS,
         bridge,
       );
-      await refreshRegistryUpdateState({ force: true });
+      await refreshRegistryUpdateState({ force: true, maxAgeMs: null });
       return projectInstallResult(data);
     },
   );
@@ -952,7 +1056,10 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
     // available" affordance - naturally no-op through their existing
     // `updateAvailable` guards. Tolerated: a failed probe must never fail an
     // otherwise-complete uninstall.
-    await refreshRegistryUpdateState({ force: true }).catch((err: unknown) => {
+    await refreshRegistryUpdateState({
+      force: true,
+      maxAgeMs: null,
+    }).catch((err: unknown) => {
       log.warn("[host-management] registry refresh after uninstall failed", {
         err,
       });
@@ -1052,7 +1159,13 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
         "install",
         ...(await devServiceInstallExtras()),
       ];
-      await streamCliWithProgress(args, operationId, bridge);
+      await streamCliWithProgress(
+        args,
+        operationId,
+        "register-service",
+        LONG_OP_TIMEOUT_MS,
+        bridge,
+      );
     },
   );
 
@@ -1064,7 +1177,14 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
     RunnerHostInvoke.traycerRegistryCheck,
     async (_event, raw: unknown) => {
       const force = optionalBoolean(raw, "force");
-      return refreshRegistryUpdateState({ force });
+      return refreshRegistryUpdateState({ force, maxAgeMs: null });
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.traycerHostOperationStatusGet,
+    async () => {
+      return getHostOperationStatus();
     },
   );
 

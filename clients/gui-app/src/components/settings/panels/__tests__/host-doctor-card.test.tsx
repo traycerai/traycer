@@ -56,6 +56,7 @@ function makeManagement(overrides: ManagementOverrides): IHostManagement {
     ensureHost: vi.fn(notImplemented("ensureHost")),
     deregisterService: vi.fn(notImplemented("deregisterService")),
     registryCheck: vi.fn(notImplemented("registryCheck")),
+    getOperationStatus: vi.fn(() => Promise.resolve(null)),
     freePortAndRestart:
       overrides.freePortAndRestart ?? vi.fn((input) => Promise.resolve(input)),
     cliManifest: vi.fn(() => Promise.resolve(null)),
