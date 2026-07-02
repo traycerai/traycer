@@ -213,6 +213,7 @@ describe("agent host schemas", () => {
       createAgentRequestSchema.parse({
         senderAgentId: "agent-1",
         epicId: "epic-1",
+        name: "Review agent",
         surface: "gui",
         harnessId: "codex",
         model: "gpt-5.4",
@@ -222,6 +223,7 @@ describe("agent host schemas", () => {
       }),
     ).toMatchObject({
       senderAgentId: "agent-1",
+      name: "Review agent",
       surface: "gui",
       harnessId: "codex",
       model: "gpt-5.4",

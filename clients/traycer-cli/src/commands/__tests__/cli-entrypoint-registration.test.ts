@@ -191,6 +191,13 @@ describe("traycer CLI entrypoint registration", () => {
     expectCommand(program, ["agent", "turn-ended-from-hook"]);
   });
 
+  it("agent create exposes --name for a child agent display name", () => {
+    const program = buildProgram();
+    const cmd = expectCommand(program, ["agent", "create"]);
+    const flags = cmd.options.map((o) => o.long);
+    expect(flags).toContain("--name");
+  });
+
   it("limits readonly agent CLI help to inspection commands", () => {
     const originalSurface = process.env.TRAYCER_AGENT_CLI_SURFACE;
     process.env.TRAYCER_AGENT_CLI_SURFACE = "readonly";

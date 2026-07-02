@@ -1003,6 +1003,7 @@ function registerAgentCommands(program: Command): void {
         "Creating (parent) agent (defaults to $TRAYCER_AGENT_ID)",
       )
       .option("--surface <surface>", "Child surface: 'gui' or 'tui'")
+      .option("--name <name>", "Display name for the child agent")
       .option("--harness <id>", harnessHelp)
       .option("--model <id>", "Model id for the child agent")
       .option("--agent-mode <mode>", "Agent mode: regular or epic")
@@ -1035,6 +1036,7 @@ function registerAgentCommands(program: Command): void {
         epicId: typeof opts.epicId === "string" ? opts.epicId : null,
         senderAgentId:
           typeof opts.senderAgentId === "string" ? opts.senderAgentId : null,
+        name: typeof opts.name === "string" ? opts.name : null,
         surface: typeof opts.surface === "string" ? opts.surface : null,
         harness: typeof opts.harness === "string" ? opts.harness : null,
         model: typeof opts.model === "string" ? opts.model : null,
