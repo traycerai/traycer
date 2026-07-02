@@ -10,8 +10,10 @@
  * "Token validation/refresh preserves full AuthenticatedUser when minting
  * or updating client contexts."
  */
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  AUTH_FETCH_MAX_ATTEMPTS,
+  exchangeCodeForTokens,
   refreshAuthTokenViaHttp,
   validateAuthTokenIdentityViaHttp,
   type AuthIdentityValidationResult,
@@ -21,11 +23,13 @@ import { createAuthenticatedUserFixture } from "../../test-fixtures/authenticate
 const AUTHN_BASE_URL = "https://authn.example.test";
 const USER_ENDPOINT = `${AUTHN_BASE_URL}/api/v3/user`;
 const REFRESH_ENDPOINT = `${AUTHN_BASE_URL}/api/v3/auth/refresh`;
+const EXCHANGE_ENDPOINT = `${AUTHN_BASE_URL}/api/v3/auth/exchange-code`;
 
 interface MockFetchCall {
   readonly url: string;
   readonly method: string;
   readonly authorization: string | null;
+  readonly hasSignal: boolean;
 }
 
 interface MockSpec {
@@ -54,6 +58,7 @@ function installMockFetch(specs: ReadonlyArray<MockSpec>): MockFetchCall[] {
       url,
       method,
       authorization: headers.get("Authorization"),
+      hasSignal: init?.signal instanceof AbortSignal,
     });
     const spec = specs[index] ?? specs[specs.length - 1];
     index++;
@@ -80,6 +85,7 @@ beforeEach(() => {
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
+  vi.useRealTimers();
 });
 
 describe("validateAuthTokenIdentityViaHttp - full AuthenticatedUser", () => {
@@ -176,18 +182,77 @@ describe("validateAuthTokenIdentityViaHttp - full AuthenticatedUser", () => {
     expect(result.kind).toBe("rejected");
   });
 
-  it("returns network-error when transport fails", async () => {
+  it("returns network-error when transport fails after exhausting retries", async () => {
+    vi.useFakeTimers();
+    let attempts = 0;
     globalThis.fetch = (async (): Promise<Response> => {
+      attempts += 1;
       throw new TypeError("network failure");
     }) as typeof fetch;
 
-    const result = await validateAuthTokenIdentityViaHttp(
+    const pending = validateAuthTokenIdentityViaHttp(
       AUTHN_BASE_URL,
       "bearer",
       "bearer-refresh",
     );
+    await vi.runAllTimersAsync();
+    const result = await pending;
 
     expect(result.kind).toBe("network-error");
+    // The initial user lookup and the follow-up refresh each exhaust the cap,
+    // and the whole thing settles in bounded time instead of hanging.
+    expect(attempts).toBe(AUTH_FETCH_MAX_ATTEMPTS * 2);
+  });
+
+  it("time-boxes each request with an AbortSignal and maps a timeout to network-error", async () => {
+    vi.useFakeTimers();
+    globalThis.fetch = (async (
+      _input: RequestInfo | URL,
+      init: RequestInit | undefined,
+    ): Promise<Response> => {
+      calls.push({
+        url: USER_ENDPOINT,
+        method: init?.method ?? "GET",
+        authorization: null,
+        hasSignal: init?.signal instanceof AbortSignal,
+      });
+      // Mirror what a fired `AbortSignal.timeout` throws into `fetch`.
+      throw new DOMException("The operation timed out.", "TimeoutError");
+    }) as typeof fetch;
+
+    const pending = validateAuthTokenIdentityViaHttp(
+      AUTHN_BASE_URL,
+      "bearer",
+      "bearer-refresh",
+    );
+    await vi.runAllTimersAsync();
+    const result = await pending;
+
+    expect(result.kind).toBe("network-error");
+    expect(calls.length).toBeGreaterThan(0);
+    expect(calls.every((call) => call.hasSignal)).toBe(true);
+  });
+
+  it("retries a transient user-lookup failure and then succeeds", async () => {
+    vi.useFakeTimers();
+    installMockFetch([
+      { status: 503, body: { error: "unavailable" } },
+      { status: 200, body: serializeAuthenticatedUserForHttp() },
+    ]);
+
+    const pending = validateAuthTokenIdentityViaHttp(
+      AUTHN_BASE_URL,
+      "bearer",
+      "bearer-refresh",
+    );
+    await vi.runAllTimersAsync();
+    const result = await pending;
+
+    expect(result.kind).toBe("valid");
+    // One transient 5xx retried straight into a success - no refresh round trip.
+    expect(calls).toHaveLength(2);
+    expect(calls.every((call) => call.url === USER_ENDPOINT)).toBe(true);
+    expect(calls.every((call) => call.hasSignal)).toBe(true);
   });
 
   it("returns rejected when the response body fails AuthenticatedUser parsing", async () => {
@@ -206,19 +271,23 @@ describe("validateAuthTokenIdentityViaHttp - full AuthenticatedUser", () => {
 });
 
 describe("refreshAuthTokenViaHttp - status mapping", () => {
-  it("maps a 409 (refresh grace window in progress) to network-error", async () => {
+  it("maps a 409 (refresh grace window in progress) to network-error and retries", async () => {
+    vi.useFakeTimers();
     installMockFetch([{ status: 409, body: { error: "in progress" } }]);
 
-    const result = await refreshAuthTokenViaHttp(
+    const pending = refreshAuthTokenViaHttp(
       AUTHN_BASE_URL,
       "stale-bearer",
       "stale-refresh",
     );
+    await vi.runAllTimersAsync();
+    const result = await pending;
 
     // A concurrent refresher is mid-rotation: transient/retriable, NOT a dead
-    // credential. Must NOT downgrade to `rejected` (which signs the GUI out).
+    // credential. Must NOT downgrade to `rejected` (which signs the GUI out) -
+    // the bounded retry re-drives to land on the winner's replayed pair.
     expect(result.kind).toBe("network-error");
-    expect(calls).toHaveLength(1);
+    expect(calls).toHaveLength(AUTH_FETCH_MAX_ATTEMPTS);
     expect(calls[0].url).toBe(REFRESH_ENDPOINT);
     expect(calls[0].method).toBe("POST");
   });
@@ -255,5 +324,61 @@ describe("refreshAuthTokenViaHttp - status mapping", () => {
     }
     expect(result.token).toBe("rotated-bearer");
     expect(result.refreshToken).toBe("rotated-refresh");
+  });
+});
+
+describe("exchangeCodeForTokens - timeout without retry", () => {
+  it("attaches an AbortSignal and maps a transport failure to network-error without retrying", async () => {
+    let attempts = 0;
+    globalThis.fetch = (async (
+      _input: RequestInfo | URL,
+      init: RequestInit | undefined,
+    ): Promise<Response> => {
+      attempts += 1;
+      calls.push({
+        url: EXCHANGE_ENDPOINT,
+        method: init?.method ?? "GET",
+        authorization: null,
+        hasSignal: init?.signal instanceof AbortSignal,
+      });
+      // Mirror what a fired `AbortSignal.timeout` throws into `fetch`.
+      throw new DOMException("The operation timed out.", "TimeoutError");
+    }) as typeof fetch;
+
+    const result = await exchangeCodeForTokens(
+      AUTHN_BASE_URL,
+      "pkce-code",
+      "pkce-verifier",
+    );
+
+    expect(result.kind).toBe("network-error");
+    // The PKCE code is single-use, so a lost/timed-out response must NOT be
+    // replayed: exactly one attempt, unlike validation/refresh.
+    expect(attempts).toBe(1);
+    expect(calls[0].hasSignal).toBe(true);
+  });
+
+  it("returns the exchanged token pair on success", async () => {
+    installMockFetch([
+      {
+        status: 200,
+        body: { token: "exchanged-bearer", refreshToken: "exchanged-refresh" },
+      },
+    ]);
+
+    const result = await exchangeCodeForTokens(
+      AUTHN_BASE_URL,
+      "pkce-code",
+      "pkce-verifier",
+    );
+
+    expect(result.kind).toBe("exchanged");
+    if (result.kind !== "exchanged") {
+      throw new Error("expected exchanged result");
+    }
+    expect(result.token).toBe("exchanged-bearer");
+    expect(result.refreshToken).toBe("exchanged-refresh");
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe(EXCHANGE_ENDPOINT);
   });
 });

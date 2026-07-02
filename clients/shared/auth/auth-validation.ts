@@ -45,6 +45,60 @@ const authenticatedUserResponseSchema = getRecordSchema(
 );
 
 /**
+ * Per-attempt ceiling and bounded exponential-backoff retry for the auth
+ * boundary's HTTP calls (`/api/v3/user`, `/api/v3/auth/refresh`).
+ *
+ * Every attempt is time-boxed with `AbortSignal.timeout(AUTH_FETCH_TIMEOUT_MS)`
+ * so a stalled/half-open socket can no longer hang the caller indefinitely -
+ * previously an un-timed-out `fetch` here could block `auth.start()` (and, through
+ * it, the renderer's "Initializing Traycer Host…" gate) until the OS TCP timeout,
+ * i.e. many minutes. A fired timeout rejects the `fetch`, which the surrounding
+ * `catch` already collapses to `network-error`; that outcome (plus a 5xx or a 409
+ * refresh-grace race) is the only one re-driven. A terminal `rejected`/`valid`
+ * returns on the first attempt.
+ *
+ * Total wall-clock is bounded to `AUTH_FETCH_MAX_ATTEMPTS` attempts spaced by an
+ * exponential backoff capped at `AUTH_FETCH_RETRY_MAX_DELAY_MS`.
+ */
+export const AUTH_FETCH_MAX_ATTEMPTS = 3;
+const AUTH_FETCH_TIMEOUT_MS = 10_000;
+const AUTH_FETCH_RETRY_BASE_DELAY_MS = 500;
+const AUTH_FETCH_RETRY_MAX_DELAY_MS = 4_000;
+
+/**
+ * Runs `attempt`, then re-drives it while `isTransient(outcome)` holds, up to
+ * `AUTH_FETCH_MAX_ATTEMPTS` total invocations. Never throws: `attempt` is a
+ * boundary helper that already maps every transport failure (including a fired
+ * per-attempt timeout) to a typed outcome, so there is nothing to catch here.
+ */
+async function withAuthNetworkRetry<T>(
+  attempt: () => Promise<T>,
+  isTransient: (outcome: T) => boolean,
+): Promise<T> {
+  let outcome = await attempt();
+  for (
+    let retry = 1;
+    retry < AUTH_FETCH_MAX_ATTEMPTS && isTransient(outcome);
+    retry += 1
+  ) {
+    await delayFor(authRetryDelayMs(retry));
+    outcome = await attempt();
+  }
+  return outcome;
+}
+
+function authRetryDelayMs(retry: number): number {
+  const candidate = AUTH_FETCH_RETRY_BASE_DELAY_MS * 2 ** (retry - 1);
+  return Math.min(candidate, AUTH_FETCH_RETRY_MAX_DELAY_MS);
+}
+
+function delayFor(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+/**
  * Shared bearer-token validation helper used by runner-host implementations.
  *
  * Browser-only hosts (tests, preview, mobile webview) call this directly with
@@ -182,6 +236,20 @@ async function fetchUserResponse(
   authnBaseUrl: string,
   token: string,
 ): Promise<UserFetchResult> {
+  return withAuthNetworkRetry(
+    () => fetchUserResponseOnce(authnBaseUrl, token),
+    isUserFetchTransient,
+  );
+}
+
+function isUserFetchTransient(result: UserFetchResult): boolean {
+  return result.kind === "failed" && result.result.kind === "network-error";
+}
+
+async function fetchUserResponseOnce(
+  authnBaseUrl: string,
+  token: string,
+): Promise<UserFetchResult> {
   let response: Response;
   try {
     response = await fetch(authnApiUrl(authnBaseUrl, "api/v3/user"), {
@@ -190,8 +258,12 @@ async function fetchUserResponse(
         Authorization: `Bearer ${token}`,
         Accept: "application/json",
       },
+      signal: AbortSignal.timeout(AUTH_FETCH_TIMEOUT_MS),
     });
   } catch {
+    // A thrown `fetch` - a transport failure OR the per-attempt
+    // `AbortSignal.timeout` firing (a `TimeoutError`) - is transient and
+    // retriable, so both collapse to `network-error`.
     return { kind: "failed", result: { kind: "network-error" } };
   }
 
@@ -213,16 +285,37 @@ async function fetchUserResponse(
 }
 
 /**
- * Single-shot token refresh against the authn service's `/api/v3/auth/refresh`
- * endpoint. Post raw-JWS cutover the access token (`token`, the bearer) and the
+ * Token refresh against the authn service's `/api/v3/auth/refresh` endpoint.
+ * Post raw-JWS cutover the access token (`token`, the bearer) and the
  * `refreshToken` are separate: the bearer goes in the `Authorization` header and
  * the `refreshToken` in the request body (the endpoint requires it). A success
  * rotates BOTH, so we return the new `{ token, refreshToken }` for the caller to
  * persist. Exported so the CLI's host-auth boundary can refresh a stale bearer
- * on a host `401` without re-running a full `/api/v3/user` validation round
- * trip.
+ * on a host `401` without re-running a full `/api/v3/user` validation round trip.
+ *
+ * Each attempt is time-boxed by `AbortSignal.timeout` and transient outcomes
+ * (transport failure, timeout, 5xx, or a 409 grace-window race) are retried on a
+ * bounded exponential backoff via {@link withAuthNetworkRetry}; a `rejected`
+ * (dead credential) returns on the first attempt. Replaying the same
+ * `refreshToken` on a retry is safe: if the prior attempt's write was lost the
+ * authn grace window replays the winner's rotated pair (the 409 path).
  */
 export async function refreshAuthTokenViaHttp(
+  authnBaseUrl: string,
+  token: string,
+  refreshToken: string,
+): Promise<AuthTokenRefreshResult> {
+  return withAuthNetworkRetry(
+    () => refreshAuthTokenOnceViaHttp(authnBaseUrl, token, refreshToken),
+    isRefreshTransient,
+  );
+}
+
+function isRefreshTransient(result: AuthTokenRefreshResult): boolean {
+  return result.kind === "network-error";
+}
+
+async function refreshAuthTokenOnceViaHttp(
   authnBaseUrl: string,
   token: string,
   refreshToken: string,
@@ -237,6 +330,7 @@ export async function refreshAuthTokenViaHttp(
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ refreshToken }),
+      signal: AbortSignal.timeout(AUTH_FETCH_TIMEOUT_MS),
     });
   } catch {
     return { kind: "network-error" };
@@ -291,7 +385,12 @@ export type AuthCodeExchangeResult =
  * endpoint - no bearer; the code is the credential.
  *
  * A `4xx` is a terminal `rejected` (bad/expired/used code, or a PKCE mismatch);
- * any other non-2xx or a transport failure is a transient `network-error`.
+ * any other non-2xx or a transport failure is a transient `network-error`. The
+ * request is time-boxed by `AbortSignal.timeout` (a fired timeout surfaces as
+ * `network-error` via the `catch`); unlike validation/refresh it is deliberately
+ * NOT retried, because the `code` is single-use - replaying it after a lost
+ * response would be rejected as already-consumed. The sign-in callback surfaces
+ * the `network-error` as a retry CTA instead.
  */
 export async function exchangeCodeForTokens(
   authnBaseUrl: string,
@@ -309,6 +408,7 @@ export async function exchangeCodeForTokens(
           "Content-Type": "application/json",
         },
         body: JSON.stringify({ code, code_verifier: codeVerifier }),
+        signal: AbortSignal.timeout(AUTH_FETCH_TIMEOUT_MS),
       },
     );
   } catch {
