@@ -1,4 +1,6 @@
 import type { HarnessModelRow } from "@/components/home/data/harness-model-search";
+import { Badge } from "@/components/ui/badge";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { cn } from "@/lib/utils";
 import { Check } from "lucide-react";
 
@@ -64,6 +66,18 @@ export function HarnessModelPickerItem(props: HarnessModelPickerItemProps) {
           {row.browseLabel}
         </span>
       </span>
+      {row.deprecationNotice === null ? null : (
+        <TooltipWrapper
+          label={row.deprecationNotice}
+          side="top"
+          sideOffset={6}
+          align="center"
+        >
+          <Badge variant="destructive" className="shrink-0">
+            Deprecated
+          </Badge>
+        </TooltipWrapper>
+      )}
       {capacityLabel === null ? null : (
         <span className="shrink-0 rounded-md bg-muted px-1.5 py-0.5 text-ui-xs text-muted-foreground">
           {capacityLabel}

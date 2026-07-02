@@ -40,6 +40,14 @@ export interface HarnessModelRow {
    */
   readonly providerGroupLabel: string | null;
   readonly capacityLabel: string | null;
+  /**
+   * Human-readable sunset notice when the host's catalog flags this model as
+   * deprecated (currently only the Traycer harness does). `null` for every
+   * actively-recommended model, including every non-Traycer harness (the
+   * field is optional on the wire - see `deprecationNotice` on
+   * `GuiAgentModelOption`).
+   */
+  readonly deprecationNotice: string | null;
   readonly model: ModelOption;
   readonly searchLabel: string;
   readonly searchSlug: string;
@@ -199,6 +207,7 @@ function modelRow(harness: HarnessOption, model: ModelOption): HarnessModelRow {
     providerGroupId,
     providerGroupLabel,
     capacityLabel: modelCapacityLabel(model),
+    deprecationNotice: model.deprecationNotice ?? null,
     model,
     searchLabel: model.label,
     searchSlug: model.slug,
