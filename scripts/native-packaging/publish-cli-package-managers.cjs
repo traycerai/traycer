@@ -874,23 +874,25 @@ function main() {
     });
   }
 
-  // ----- CLI versions.json (used by scoop's checkver + Desktop probe) -----
-  const cliVersions = {
-    schemaVersion: 1,
-    generatedAt: new Date().toISOString(),
-    latest: version,
-    version,
-    platforms: byPlatform,
-    releaseNotesUrl,
-  };
-  const cliVersionsPath = path.join(staging, "cli", "versions.json");
-  const cliVersionsContent = `${JSON.stringify(cliVersions, null, 2)}\n`;
-  writeFile(cliVersionsPath, cliVersionsContent);
-  summary.written.push({
-    manager: "cli-versions",
-    path: cliVersionsPath,
-    sha256: sha256OfString(cliVersionsContent),
-  });
+  if (args.homebrewVersionedOnly !== true) {
+    // ----- CLI versions.json (used by scoop's checkver + Desktop probe) -----
+    const cliVersions = {
+      schemaVersion: 1,
+      generatedAt: new Date().toISOString(),
+      latest: version,
+      version,
+      platforms: byPlatform,
+      releaseNotesUrl,
+    };
+    const cliVersionsPath = path.join(staging, "cli", "versions.json");
+    const cliVersionsContent = `${JSON.stringify(cliVersions, null, 2)}\n`;
+    writeFile(cliVersionsPath, cliVersionsContent);
+    summary.written.push({
+      manager: "cli-versions",
+      path: cliVersionsPath,
+      sha256: sha256OfString(cliVersionsContent),
+    });
+  }
 
   process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
 }
