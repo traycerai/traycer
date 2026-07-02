@@ -40,6 +40,16 @@ const MOCK_DEVICE_USER_CODE = "ABCDE-FGHIJ";
 const MOCK_DEVICE_VERIFICATION_URI_COMPLETE =
   "https://app.traycer.ai/device?user_code=ABCDE-FGHIJ";
 
+// Collapse consecutive identical entries so an ordered validate -> refresh
+// assertion tolerates the auth boundary's bounded retry (a transient 5xx /
+// transport error is re-driven a few times before the flow advances) without
+// coupling the test to the exact attempt count.
+function collapseConsecutiveCalls(calls: readonly string[]): string[] {
+  return calls.filter(
+    (call, index) => index === 0 || call !== calls[index - 1],
+  );
+}
+
 const trackedServices: AuthService[] = [];
 
 function makeService(): { service: AuthService; host: MockRunnerHost } {
@@ -546,7 +556,10 @@ describe("AuthService", () => {
     expect(service.getCurrentSessionSnapshot().token).toBeNull();
     expect(service.getLastError()).toBe(AUTH_ERROR_SESSION_EXPIRED);
     expect(await host.tokenStore.get()).toBeNull();
-    expect(calls).toEqual([`GET ${VALIDATION_URL}`, `POST ${REFRESH_URL}`]);
+    expect(collapseConsecutiveCalls(calls)).toEqual([
+      `GET ${VALIDATION_URL}`,
+      `POST ${REFRESH_URL}`,
+    ]);
   });
 
   it("clears tokenStore and surfaces session-expired when validation rejects with 401 on start()", async () => {
@@ -641,7 +654,10 @@ describe("AuthService", () => {
     expect(service.getCurrentSessionSnapshot().token).toBeNull();
     expect(await host.tokenStore.get()).toBeNull();
     expect(service.getLastError()).toBe(AUTH_ERROR_SESSION_EXPIRED);
-    expect(calls).toEqual([`GET ${VALIDATION_URL}`, `POST ${REFRESH_URL}`]);
+    expect(collapseConsecutiveCalls(calls)).toEqual([
+      `GET ${VALIDATION_URL}`,
+      `POST ${REFRESH_URL}`,
+    ]);
   });
 
   it("opens the device verification page and flips to signing-in on signIn()", async () => {
@@ -766,9 +782,15 @@ describe("AuthService", () => {
       refreshToken: "net-fail-token-refresh",
     });
 
-    await vi.waitFor(() => {
-      expect(service.getLastError()).toBe(AUTH_ERROR_SIGN_IN_FAILED);
-    });
+    // The device-poll token validation now retries transient failures on a
+    // bounded backoff, so the surfaced error can arrive after the default 1s
+    // waitFor budget - allow for the full retry window.
+    await vi.waitFor(
+      () => {
+        expect(service.getLastError()).toBe(AUTH_ERROR_SIGN_IN_FAILED);
+      },
+      { timeout: 5000 },
+    );
     expect(useAuthStore.getState().status).toBe("signed-out");
     expect(service.getCurrentSessionSnapshot().token).toBeNull();
     expect(await host.tokenStore.get()).toBeNull();
