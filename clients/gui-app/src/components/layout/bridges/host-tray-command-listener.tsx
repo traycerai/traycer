@@ -11,6 +11,7 @@ import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { runnerMutationKeys, runnerQueryKeys } from "@/lib/query-keys";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
+import { RestartHostConfirmDialog } from "@/components/host/restart-host-confirm-dialog";
 
 /**
  * NP-6: listens for host-scoped tray commands forwarded from the
@@ -145,15 +146,11 @@ export function HostTrayCommandListener() {
 
   return (
     <>
-      <ConfirmDestructiveDialog
+      <RestartHostConfirmDialog
         open={pendingRestart}
         onOpenChange={(open) => {
           if (!open) setPendingRestart(false);
         }}
-        title="Restart host?"
-        description="Restarting will end any running terminal sessions and cancel in-flight requests against this host."
-        cascadeSummary={null}
-        actionLabel="Restart host"
         isPending={restartMutation.isPending}
         onConfirm={() => restartMutation.mutate()}
       />
