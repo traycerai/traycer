@@ -41,7 +41,7 @@ afterEach(() => {
 });
 
 describe("<HostSettingsPanel /> - mutation flows", () => {
-  it("calls restartHost and shows a success toast when Restart is clicked", async () => {
+  it("opens a confirmation dialog before restarting the host", async () => {
     const restartHost = vi.fn(() => Promise.resolve());
     const { management } = makeManagement({ restartHost });
 
@@ -49,6 +49,12 @@ describe("<HostSettingsPanel /> - mutation flows", () => {
 
     const restartButton = await waitForButton("Restart");
     fireEvent.click(restartButton);
+
+    const dialog = await screen.findByTestId("confirm-destructive-dialog");
+    expect(dialog.textContent).toContain("in-progress chats");
+    expect(restartHost).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId("confirm-action"));
 
     await waitFor(() => {
       expect(restartHost).toHaveBeenCalledTimes(1);

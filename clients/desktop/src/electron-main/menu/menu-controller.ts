@@ -20,7 +20,6 @@ import type {
 import { buildApplicationMenu } from "./menu-builder";
 import { toMenuHostPresentation, type MenuState } from "./menu-state";
 import { log } from "../app/logger";
-import { respawnHost } from "../app/host-respawn";
 
 export interface MenuManagedWindow {
   isDestroyed(): boolean;
@@ -201,16 +200,29 @@ export class MenuController {
       return;
     }
     if (command === "host.restart") {
-      // Route through the shared respawn entrypoint, NOT `host.respawn`
-      // directly - on macOS shipped builds, `host.respawn` shells to
-      // `traycer host restart` (launchctl kickstart) which cannot
-      // refresh BTM's cached LWCR and would silently no-op for the very
-      // bug this surface exists to recover from. `respawnHost` picks
-      // the SMAppService cycle when the host owns the login item, and
-      // falls back to the CLI path otherwise.
-      void respawnHost(this.options.host).catch((err) => {
-        log.warn("[menu] host.restart failed", err);
-      });
+      // The renderer owns the confirmation modal. Once confirmed, it calls
+      // runnerHost.requestHostRespawn(), which routes back through the shared
+      // main-process respawn entrypoint.
+      if (this.options.dispatchRendererCommand(command)) return;
+
+      void this.options.windowRegistry
+        .create({
+          initialRoute: null,
+          beforeLoad: null,
+        })
+        .then(() => {
+          if (!this.options.dispatchRendererCommand(command)) {
+            log.warn(
+              "[menu] host.restart had no renderer after opening window",
+              {
+                command,
+              },
+            );
+          }
+        })
+        .catch((err) => {
+          log.warn("[menu] host.restart window creation failed", err);
+        });
       return;
     }
     if (command === "host.installUpdate") {

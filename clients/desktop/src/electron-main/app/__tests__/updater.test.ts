@@ -79,6 +79,7 @@ afterEach(() => {
   vi.doUnmock("electron-updater");
   vi.doUnmock("node:fs/promises");
   vi.doUnmock("../logger");
+  vi.doUnmock("../linux-update-guidance");
   restoreEnvValue(
     "VITE_TRAYCER_DESKTOP_UPDATE_REPO",
     originalPrivateUpdateRepo,
@@ -91,7 +92,7 @@ afterEach(() => {
 
 describe("desktop app updater", () => {
   it("does not override the generated update feed when no private token is baked", async () => {
-    const { autoUpdater, updater } = await loadUpdater();
+    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
 
     await updater.installAutoUpdater(true, makeDeps(true));
 
@@ -101,7 +102,7 @@ describe("desktop app updater", () => {
   it("configures a private GitHub feed when the testing token is baked", async () => {
     process.env.VITE_TRAYCER_DESKTOP_UPDATE_REPO = "traycerai/private-traycer";
     process.env.VITE_TRAYCER_DESKTOP_UPDATE_TOKEN = "test-token";
-    const { autoUpdater, updater } = await loadUpdater();
+    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
 
     await updater.installAutoUpdater(true, makeDeps(true));
 
@@ -115,7 +116,7 @@ describe("desktop app updater", () => {
   });
 
   it("emits an error instead of staying stuck when a download fails", async () => {
-    const { autoUpdater, updater } = await loadUpdater();
+    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
     autoUpdater.checkForUpdates.mockImplementation(() => {
       autoUpdater.emit("update-available", { version: "2.0.0" });
       return Promise.resolve(null);
@@ -142,7 +143,7 @@ describe("desktop app updater", () => {
   });
 
   it("does not start a second check when the user checks during a download", async () => {
-    const { autoUpdater, updater } = await loadUpdater();
+    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
     autoUpdater.checkForUpdates.mockImplementation(() => {
       autoUpdater.emit("update-available", { version: "2.0.0" });
       return Promise.resolve(null);
@@ -162,7 +163,7 @@ describe("desktop app updater", () => {
   });
 
   it("lets a manual click claim an in-flight automatic check result", async () => {
-    const { autoUpdater, updater } = await loadUpdater();
+    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
     const checkControl: { finish: (() => void) | null } = { finish: null };
     autoUpdater.checkForUpdates.mockImplementation(
       () =>
@@ -192,7 +193,7 @@ describe("desktop app updater", () => {
   });
 
   it("emits ready feedback for a manual check after an update is downloaded", async () => {
-    const { autoUpdater, updater } = await loadUpdater();
+    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
     autoUpdater.checkForUpdates.mockImplementation(() => {
       autoUpdater.emit("update-available", { version: "2.0.0" });
       return Promise.resolve(null);
@@ -212,14 +213,14 @@ describe("desktop app updater", () => {
   });
 
   it("does not flag an update install before the user requests a restart", async () => {
-    const { updater } = await loadUpdater();
+    const { updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
     await updater.installAutoUpdater(true, makeDeps(true));
 
     expect(updater.isInstallingUpdate()).toBe(false);
   });
 
   it("flags an in-progress install once a ready update is restarted", async () => {
-    const { autoUpdater, updater } = await loadUpdater();
+    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
     autoUpdater.checkForUpdates.mockImplementation(() => {
       autoUpdater.emit("update-available", { version: "2.0.0" });
       return Promise.resolve(null);
@@ -237,7 +238,7 @@ describe("desktop app updater", () => {
   });
 
   it("surfaces an install failure that arrives after the user chose Restart", async () => {
-    const { autoUpdater, updater } = await loadUpdater();
+    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
     autoUpdater.checkForUpdates.mockImplementation(() => {
       autoUpdater.emit("update-available", { version: "2.0.0" });
       return Promise.resolve(null);
@@ -266,7 +267,7 @@ describe("desktop app updater", () => {
 
   it("does not show the macOS 'move to Applications' message off macOS", async () => {
     setPlatform("win32");
-    const { autoUpdater, updater } = await loadUpdater();
+    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
     autoUpdater.checkForUpdates.mockImplementation(() => {
       autoUpdater.emit("update-available", { version: "2.0.0" });
       return Promise.resolve(null);
@@ -287,7 +288,7 @@ describe("desktop app updater", () => {
   });
 
   it("does not flag an install when no update is ready to restart", async () => {
-    const { autoUpdater, updater } = await loadUpdater();
+    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
     await updater.installAutoUpdater(true, makeDeps(true));
 
     updater.installDownloadedUpdate();
@@ -301,7 +302,7 @@ describe("desktop app updater", () => {
   });
 
   it("emits one error snapshot when electron-updater both emits and rejects", async () => {
-    const { autoUpdater, updater } = await loadUpdater();
+    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
     const snapshots: DesktopAppUpdateSnapshot[] = [];
     autoUpdater.checkForUpdates.mockImplementation(() => {
       autoUpdater.emit("error", new Error("feed failed"));
@@ -320,7 +321,7 @@ describe("desktop app updater", () => {
   });
 
   it("does not expose raw GitHub feed 404 details in manual-check feedback", async () => {
-    const { autoUpdater, updater } = await loadUpdater();
+    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
     const rawGitHubError =
       '404 "method: GET url: https://github.com/traycerai/traycer/releases.atom\\n\\nPlease double check that your authentication token is correct." Headers: { "set-cookie": [ "_gh_sess=secret" ] }';
     autoUpdater.checkForUpdates.mockRejectedValue(new Error(rawGitHubError));
@@ -342,7 +343,7 @@ describe("desktop app updater", () => {
   });
 
   it("shows a connection-friendly message when the check fails offline", async () => {
-    const { autoUpdater, updater } = await loadUpdater();
+    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
     autoUpdater.checkForUpdates.mockRejectedValue(
       new Error("net::ERR_INTERNET_DISCONNECTED"),
     );
@@ -359,7 +360,7 @@ describe("desktop app updater", () => {
   });
 
   it("shows a service message when the update feed returns an HTTP error", async () => {
-    const { autoUpdater, updater } = await loadUpdater();
+    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
     autoUpdater.checkForUpdates.mockRejectedValue(
       new Error("HttpError: 503 Service Unavailable"),
     );
@@ -373,7 +374,7 @@ describe("desktop app updater", () => {
   });
 
   it("shows a download-failure message when verification fails mid-download", async () => {
-    const { autoUpdater, updater } = await loadUpdater();
+    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
     autoUpdater.checkForUpdates.mockImplementation(() => {
       autoUpdater.emit("update-available", { version: "2.0.0" });
       return Promise.resolve(null);
@@ -396,7 +397,7 @@ describe("desktop app updater", () => {
   });
 
   it("shows a generic message for an unrecognized update error", async () => {
-    const { autoUpdater, updater } = await loadUpdater();
+    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
     autoUpdater.checkForUpdates.mockRejectedValue(
       new Error("Unexpected updater failure"),
     );
@@ -410,7 +411,7 @@ describe("desktop app updater", () => {
   });
 
   it("forces allowPrerelease off so RC builds use the stable feed", async () => {
-    const { autoUpdater, updater } = await loadUpdater();
+    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
     expect(autoUpdater.allowPrerelease).toBe(true);
 
     await updater.installAutoUpdater(true, makeDeps(true));
@@ -419,7 +420,7 @@ describe("desktop app updater", () => {
   });
 
   it("treats 'no production release yet' as up-to-date (not an error) on a prerelease build", async () => {
-    const { autoUpdater, updater } = await loadUpdater();
+    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
     autoUpdater.checkForUpdates.mockImplementation(() => {
       const err = new Error(
         "Unable to find latest version on GitHub (https://api.github.com/repos/o/r/releases/latest), please ensure a production release exists: HttpError: 404",
@@ -438,7 +439,7 @@ describe("desktop app updater", () => {
   });
 
   it("still surfaces a genuine error on a prerelease build", async () => {
-    const { autoUpdater, updater } = await loadUpdater();
+    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
     autoUpdater.checkForUpdates.mockImplementation(() => {
       const err = new Error("Unexpected updater failure");
       autoUpdater.emit("error", err);
@@ -452,7 +453,7 @@ describe("desktop app updater", () => {
   });
 
   it("surfaces an available update without auto-downloading it", async () => {
-    const { autoUpdater, updater } = await loadUpdater();
+    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
     autoUpdater.checkForUpdates.mockImplementation(() => {
       autoUpdater.emit("update-available", { version: "2.0.0" });
       return Promise.resolve(null);
@@ -471,7 +472,7 @@ describe("desktop app updater", () => {
   });
 
   it("blocks downloads and surfaces the reason when the location is read-only", async () => {
-    const { autoUpdater, updater } = await loadUpdater();
+    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
     autoUpdater.checkForUpdates.mockImplementation(() => {
       autoUpdater.emit("update-available", { version: "2.0.0" });
       return Promise.resolve(null);
@@ -494,7 +495,7 @@ describe("desktop app updater", () => {
   });
 
   it("downloads only on user request and tracks whole-percent progress", async () => {
-    const { autoUpdater, updater } = await loadUpdater();
+    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
     autoUpdater.checkForUpdates.mockImplementation(() => {
       autoUpdater.emit("update-available", { version: "2.0.0" });
       return Promise.resolve(null);
@@ -520,7 +521,8 @@ describe("desktop app updater", () => {
   });
 
   it("notifies on availability only when no window is focused", async () => {
-    const { autoUpdater, notify, updater } = await loadUpdater();
+    const { autoUpdater, notify, updater } =
+      await loadUpdater(NOT_LINUX_GUIDANCE);
     autoUpdater.checkForUpdates.mockImplementation(() => {
       autoUpdater.emit("update-available", { version: "2.0.0" });
       return Promise.resolve(null);
@@ -538,7 +540,8 @@ describe("desktop app updater", () => {
   });
 
   it("does not notify on availability while a window is focused", async () => {
-    const { autoUpdater, notify, updater } = await loadUpdater();
+    const { autoUpdater, notify, updater } =
+      await loadUpdater(NOT_LINUX_GUIDANCE);
     autoUpdater.checkForUpdates.mockImplementation(() => {
       autoUpdater.emit("update-available", { version: "2.0.0" });
       return Promise.resolve(null);
@@ -551,7 +554,178 @@ describe("desktop app updater", () => {
   });
 });
 
-async function loadUpdater(): Promise<{
+describe("Linux deb/rpm silent-install gating", () => {
+  it("keeps autoInstallOnAppQuit enabled off Linux", async () => {
+    setPlatform("darwin");
+    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+
+    await updater.installAutoUpdater(true, makeDeps(true));
+
+    expect(autoUpdater.autoInstallOnAppQuit).toBe(true);
+  });
+
+  it("keeps autoInstallOnAppQuit enabled for a Linux AppImage build (no package-type)", async () => {
+    setPlatform("linux");
+    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+
+    await updater.installAutoUpdater(true, makeDeps(true));
+
+    expect(autoUpdater.autoInstallOnAppQuit).toBe(true);
+  });
+
+  it("disables autoInstallOnAppQuit for a Linux deb build regardless of registration", async () => {
+    setPlatform("linux");
+    const { autoUpdater, updater } = await loadUpdater({
+      packageType: "deb",
+      silentInstallSupported: true,
+      isEscalationError: false,
+    });
+
+    await updater.installAutoUpdater(true, makeDeps(true));
+
+    expect(autoUpdater.autoInstallOnAppQuit).toBe(false);
+  });
+
+  it("disables autoInstallOnAppQuit for a Linux rpm build", async () => {
+    setPlatform("linux");
+    const { autoUpdater, updater } = await loadUpdater({
+      packageType: "rpm",
+      silentInstallSupported: false,
+      isEscalationError: false,
+    });
+
+    await updater.installAutoUpdater(true, makeDeps(true));
+
+    expect(autoUpdater.autoInstallOnAppQuit).toBe(false);
+  });
+
+  it("populates installGuidance on ready when silent install isn't supported", async () => {
+    setPlatform("linux");
+    const { autoUpdater, updater } = await loadUpdater({
+      packageType: "deb",
+      silentInstallSupported: false,
+      isEscalationError: false,
+    });
+    autoUpdater.checkForUpdates.mockImplementation(() => {
+      autoUpdater.emit("update-available", { version: "2.0.0" });
+      return Promise.resolve(null);
+    });
+    await updater.installAutoUpdater(true, makeDeps(true));
+    await updater.checkForUpdatesNow(false, "automatic");
+
+    autoUpdater.emit("update-downloaded", {
+      version: "2.0.0",
+      downloadedFile: "/home/user/.cache/updater/pending/traycer.deb",
+    });
+
+    const snapshot = updater.getAppUpdateSnapshot();
+    expect(snapshot.status).toBe("ready");
+    expect(snapshot.installGuidance).toMatchObject({
+      command: 'sudo dpkg -i "/home/user/.cache/updater/pending/traycer.deb"',
+    });
+  });
+
+  it("leaves installGuidance null on ready when silent install is supported", async () => {
+    setPlatform("linux");
+    const { autoUpdater, updater } = await loadUpdater({
+      packageType: "deb",
+      silentInstallSupported: true,
+      isEscalationError: false,
+    });
+    autoUpdater.checkForUpdates.mockImplementation(() => {
+      autoUpdater.emit("update-available", { version: "2.0.0" });
+      return Promise.resolve(null);
+    });
+    await updater.installAutoUpdater(true, makeDeps(true));
+    await updater.checkForUpdatesNow(false, "automatic");
+
+    autoUpdater.emit("update-downloaded", {
+      version: "2.0.0",
+      downloadedFile: "/home/user/.cache/updater/pending/traycer.deb",
+    });
+
+    expect(updater.getAppUpdateSnapshot().installGuidance).toBeNull();
+  });
+
+  it("falls back to guidance when a live install click hits an escalation failure", async () => {
+    setPlatform("linux");
+    const { autoUpdater, updater } = await loadUpdater({
+      packageType: "deb",
+      silentInstallSupported: true,
+      isEscalationError: true,
+    });
+    autoUpdater.checkForUpdates.mockImplementation(() => {
+      autoUpdater.emit("update-available", { version: "2.0.0" });
+      return Promise.resolve(null);
+    });
+    await updater.installAutoUpdater(true, makeDeps(true));
+    await updater.checkForUpdatesNow(false, "automatic");
+    autoUpdater.emit("update-downloaded", {
+      version: "2.0.0",
+      downloadedFile: "/home/user/.cache/updater/pending/traycer.deb",
+    });
+    // Pre-flight said this should work (installGuidance is null here) - the
+    // one-click path is offered, matching a normal desktop Linux session.
+    expect(updater.getAppUpdateSnapshot().installGuidance).toBeNull();
+
+    updater.installDownloadedUpdate();
+    autoUpdater.emit("error", new Error("Command pkexec exited with code 127"));
+
+    const snapshot = updater.getAppUpdateSnapshot();
+    expect(snapshot.status).toBe("error");
+    expect(snapshot.errorMessage).toBe(
+      "Traycer couldn't finish installing the update automatically. Follow the instructions below to finish it manually.",
+    );
+    expect(snapshot.installGuidance).toMatchObject({
+      command: 'sudo dpkg -i "/home/user/.cache/updater/pending/traycer.deb"',
+    });
+  });
+
+  it("does not misclassify an unrelated install failure as an escalation failure", async () => {
+    setPlatform("linux");
+    const { autoUpdater, updater } = await loadUpdater({
+      packageType: "deb",
+      silentInstallSupported: true,
+      isEscalationError: false,
+    });
+    autoUpdater.checkForUpdates.mockImplementation(() => {
+      autoUpdater.emit("update-available", { version: "2.0.0" });
+      return Promise.resolve(null);
+    });
+    await updater.installAutoUpdater(true, makeDeps(true));
+    await updater.checkForUpdatesNow(false, "automatic");
+    autoUpdater.emit("update-downloaded", {
+      version: "2.0.0",
+      downloadedFile: "/home/user/.cache/updater/pending/traycer.deb",
+    });
+
+    updater.installDownloadedUpdate();
+    autoUpdater.emit("error", new Error("ENOSPC: no space left on device"));
+
+    const snapshot = updater.getAppUpdateSnapshot();
+    expect(snapshot.installGuidance).toBeNull();
+    expect(snapshot.errorMessage).toBe(
+      "Traycer couldn't download and install the latest update. Please try again in a little while.",
+    );
+  });
+});
+
+interface LinuxGuidanceTestConfig {
+  readonly packageType: "deb" | "rpm" | null;
+  readonly silentInstallSupported: boolean;
+  readonly isEscalationError: boolean;
+}
+
+// Neutral config for every pre-existing (non-Linux-guidance-focused) test:
+// `packageType: null` mirrors macOS/Windows/AppImage, where
+// `installAutoUpdater` never touches the Linux guidance module at all.
+const NOT_LINUX_GUIDANCE: LinuxGuidanceTestConfig = {
+  packageType: null,
+  silentInstallSupported: true,
+  isEscalationError: false,
+};
+
+async function loadUpdater(linuxGuidance: LinuxGuidanceTestConfig): Promise<{
   readonly autoUpdater: FakeAutoUpdater;
   readonly notify: Mock;
   readonly updater: UpdaterModule;
@@ -583,6 +757,28 @@ async function loadUpdater(): Promise<{
       warn: vi.fn(),
       error: vi.fn(),
     },
+  }));
+  vi.doMock("../linux-update-guidance", () => ({
+    readLinuxPackageType: vi.fn(() => linuxGuidance.packageType),
+    resolveLinuxSilentInstallSupported: vi.fn(() =>
+      Promise.resolve(linuxGuidance.silentInstallSupported),
+    ),
+    buildLinuxUpdateGuidance: vi.fn(
+      (
+        packageType: "deb" | "rpm",
+        latestVersion: string | null,
+        downloadedFile: string | null,
+      ) => ({
+        summary: `guidance for ${packageType} (${latestVersion ?? "unknown"})`,
+        steps: ["Open a terminal.", "Run the command.", "Restart Traycer."],
+        command:
+          downloadedFile === null
+            ? null
+            : `sudo ${packageType === "deb" ? "dpkg -i" : "rpm -U"} "${downloadedFile}"`,
+        releaseUrl: "https://example.test/releases",
+      }),
+    ),
+    isLinuxEscalationError: vi.fn(() => linuxGuidance.isEscalationError),
   }));
   return { autoUpdater, notify, updater: await import("../updater") };
 }
