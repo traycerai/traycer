@@ -23,6 +23,11 @@ on:
         required: false
         type: boolean
         default: false
+      homebrew_versioned_only:
+        description: "Backfill mode: render only Casks/traycer-desktop@<version>.rb and leave Casks/traycer-desktop.rb untouched."
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -84,7 +89,7 @@ jobs:
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: "24.15.0"
-      - name: Download macOS DMGs from desktop release
+      - name: Download desktop artifacts from desktop release
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.resolve.outputs.version }}
@@ -95,44 +100,75 @@ jobs:
             echo "::error::Release 'desktop-v${VERSION}' does not exist on ${RELEASE_REPO}."
             exit 1
           fi
-          mkdir -p dmg
+          mkdir -p desktop-artifacts
           for asset in \
             "traycer-desktop-macos-arm64.dmg" \
             "traycer-desktop-macos-x64.dmg"; do
             gh release download "desktop-v${VERSION}" \
               --repo "$RELEASE_REPO" \
               --pattern "$asset" \
-              --dir dmg \
+              --dir desktop-artifacts \
               --clobber
-            test -f "dmg/$asset"
+            test -f "desktop-artifacts/$asset"
           done
+          linux_appimage="traycer-desktop-linux-x86_64.AppImage"
+          if gh release view "desktop-v${VERSION}" --repo "$RELEASE_REPO" --json assets \
+            --jq '.assets[].name' | grep -Fxq "$linux_appimage"; then
+            gh release download "desktop-v${VERSION}" \
+              --repo "$RELEASE_REPO" \
+              --pattern "$linux_appimage" \
+              --dir desktop-artifacts \
+              --clobber
+            test -f "desktop-artifacts/$linux_appimage"
+          else
+            echo "::notice::Optional Linux AppImage '${linux_appimage}' is not present on desktop-v${VERSION}; rendering macOS-only casks."
+          fi
       - name: Render cask
         env:
           VERSION: ${{ steps.resolve.outputs.version }}
+          HOMEBREW_VERSIONED_ONLY: ${{ inputs.homebrew_versioned_only }}
+          TARGET_HOMEBREW_VERSION: "4.5.0"
         shell: bash
         run: |
           set -euo pipefail
           base_url="https://github.com/${RELEASE_REPO}/releases/download/desktop-v${VERSION}"
-          arm_sha="$(shasum -a 256 dmg/traycer-desktop-macos-arm64.dmg | awk '{print $1}')"
-          x64_sha="$(shasum -a 256 dmg/traycer-desktop-macos-x64.dmg | awk '{print $1}')"
+          arm_sha="$(shasum -a 256 desktop-artifacts/traycer-desktop-macos-arm64.dmg | awk '{print $1}')"
+          x64_sha="$(shasum -a 256 desktop-artifacts/traycer-desktop-macos-x64.dmg | awk '{print $1}')"
+          VERSIONED_ONLY_ARGS=()
+          if [ "$HOMEBREW_VERSIONED_ONLY" = "true" ]; then
+            VERSIONED_ONLY_ARGS+=(--homebrew-versioned-only)
+          fi
+          LINUX_APPIMAGE_ARGS=()
+          linux_appimage="traycer-desktop-linux-x86_64.AppImage"
+          if [ -f "desktop-artifacts/${linux_appimage}" ]; then
+            linux_x64_appimage_sha="$(shasum -a 256 "desktop-artifacts/${linux_appimage}" | awk '{print $1}')"
+            LINUX_APPIMAGE_ARGS+=(
+              --linux-x64-appimage-url "${base_url}/${linux_appimage}"
+              --linux-x64-appimage-sha256 "$linux_x64_appimage_sha"
+            )
+          fi
           node scripts/native-packaging/publish-cli-package-managers.cjs \
             --desktop-cask \
             --version "$VERSION" \
             --staging staging \
+            --target-homebrew-version "$TARGET_HOMEBREW_VERSION" \
+            "${VERSIONED_ONLY_ARGS[@]}" \
             --mac-arm-url "${base_url}/traycer-desktop-macos-arm64.dmg" \
             --mac-arm-sha256 "$arm_sha" \
             --mac-x64-url "${base_url}/traycer-desktop-macos-x64.dmg" \
-            --mac-x64-sha256 "$x64_sha"
+            --mac-x64-sha256 "$x64_sha" \
+            "${LINUX_APPIMAGE_ARGS[@]}"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: desktop-cask
-          path: staging/homebrew/Casks/traycer-desktop.rb
+          name: desktop-casks
+          path: staging/homebrew/Casks/*.rb
       - name: Open desktop cask PR
         if: ${{ inputs.dry_run != true }}
         env:
           GH_TOKEN: ${{ secrets.TRAYCER_TAP_PUSH_TOKEN }}
           TAP_REPO: ${{ secrets.TRAYCER_HOMEBREW_TAP_REPO }}
           VERSION: ${{ steps.resolve.outputs.version }}
+          HOMEBREW_VERSIONED_ONLY: ${{ inputs.homebrew_versioned_only }}
         shell: bash
         run: |
           set -euo pipefail
@@ -143,8 +179,8 @@ jobs:
           branch="traycer-desktop-${VERSION}"
           git checkout -B "$branch"
           mkdir -p Casks
-          cp ../staging/homebrew/Casks/traycer-desktop.rb Casks/traycer-desktop.rb
-          git add Casks/traycer-desktop.rb
+          cp ../staging/homebrew/Casks/*.rb Casks/
+          git add Casks/*.rb
           if git diff --cached --quiet; then
             echo "::notice::Cask already up to date for ${VERSION}; nothing to PR."
             exit 0
@@ -152,10 +188,15 @@ jobs:
           git commit -m "traycer-desktop ${VERSION}"
           git push --force origin "$branch"
           existing="$(gh pr list --repo "$TAP_REPO" --head "$branch" --state open --json number --jq '.[0].number // empty')"
+          if [ "$HOMEBREW_VERSIONED_ONLY" = "true" ]; then
+            body="Automated Homebrew cask backfill for Traycer Desktop ${VERSION}. Adds/updates only Casks/traycer-desktop@${VERSION}.rb; the rolling Casks/traycer-desktop.rb is intentionally left untouched. Generated by publish-desktop-cask.yml. Review and merge to publish."
+          else
+            body="Automated Homebrew cask update for Traycer Desktop ${VERSION}. Updates the rolling Casks/traycer-desktop.rb and the exact-version Casks/traycer-desktop@${VERSION}.rb cask generated by publish-desktop-cask.yml. Review and merge to publish."
+          fi
           if [ -n "$existing" ]; then
             echo "::notice::PR #${existing} already open for ${branch}; updated its branch."
           else
             gh pr create --repo "$TAP_REPO" --base main --head "$branch" \
               --title "traycer-desktop ${VERSION}" \
-              --body "Automated Homebrew cask update for Traycer Desktop ${VERSION}. Generated by publish-desktop-cask.yml. Review and merge to publish."
+              --body "$body"
           fi

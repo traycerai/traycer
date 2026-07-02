@@ -83,6 +83,7 @@ function model(overrides: Partial<ModelOption>): ModelOption {
     supportedReasoningEfforts: [],
     defaultServiceTier: null,
     supportedServiceTiers: [],
+    deprecationNotice: null,
     metadata: {},
   };
   return {
@@ -531,5 +532,24 @@ describe("harness model search", () => {
 
     expect(rows[0]?.capacityLabel).toBe("200k ctx · 64k out");
     expect(rows[0]?.harnessLabel).toBe("Claude");
+  });
+
+  it("carries a model's deprecation notice onto its row, and null when absent", () => {
+    const rows = buildHarnessModelRows(CLAUDE_HARNESS, [
+      model({
+        harnessId: "claude",
+        slug: "claude-sonnet-4-6",
+        label: "Claude Sonnet 4.6",
+        deprecationNotice: "Switch to Claude Sonnet 5.",
+      }),
+      model({
+        harnessId: "claude",
+        slug: "claude-sonnet-5",
+        label: "Claude Sonnet 5",
+      }),
+    ]);
+
+    expect(rows[0]?.deprecationNotice).toBe("Switch to Claude Sonnet 5.");
+    expect(rows[1]?.deprecationNotice).toBeNull();
   });
 });
