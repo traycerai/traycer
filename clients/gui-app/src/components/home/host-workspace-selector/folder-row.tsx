@@ -135,6 +135,7 @@ function FolderRowBody(props: {
       <FolderLocationControl
         item={item}
         uncommittedByPath={props.uncommittedByPath}
+        boundaryEl={props.boundaryEl}
         readOnly={props.readOnly}
       />
       <FolderBranchControl

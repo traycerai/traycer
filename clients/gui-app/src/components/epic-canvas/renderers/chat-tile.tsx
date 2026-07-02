@@ -166,6 +166,7 @@ import {
   userMessageSenderForProfile,
   plainTextPromptContent,
   composerTurnStatus,
+  resolvedTurnStatus,
   chatTileCanAct,
   findPendingInterview,
 } from "./chat-tile-session-state";
@@ -308,6 +309,7 @@ function ChatTileFallbackComposer(props: {
           ownerId: props.node.id,
           binding: null,
           isOwnerActive: false,
+          hasActiveTurn: false,
           // Pre-subscribe setup state: no binding resolved yet, so the chip shows
           // its loading affordance (never a "no folders" terminal state).
           missingWorktreePaths: [],
@@ -777,6 +779,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       queue: s.queue,
       runStatus: s.runStatus,
       activeTurn: s.activeTurn,
+      turnInProgress: s.turnInProgress,
       pendingApprovals: s.pendingApprovals,
       pendingFileEditApprovals: s.pendingFileEditApprovals,
       pendingInterviews: s.pendingInterviews,
@@ -890,6 +893,21 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     [displayContext],
   );
   const activeTurnId = state.activeTurn?.turnId ?? null;
+  // In-progress UI (restore gating, owner-active, the per-row "Working…" /
+  // "Stopping…" indicator below) is driven by the host-owned chat
+  // `runStatus` - the single source of truth that covers the first turn and
+  // every multi-turn send and flips to `stopping` the moment a stop is
+  // requested. We map it onto the composer's turn-status prop shape
+  // (`running`/`stopping`/null).
+  const activeTurnStatus = composerTurnStatus(state.runStatus);
+  // Several consumers below (the row indicator, the composer Stop/Send
+  // toggle, restore gating) need a narrower question than the label above:
+  // `runStatus` also reads "running" while a queued item is pending or
+  // visible background work outlives the turn (Bash `run_in_background` / a
+  // subagent / Monitor) - neither of which corresponds to an active turn
+  // they can act on or attribute an indicator to. See
+  // `resolvedTurnStatus`'s doc comment for the exact derivation.
+  const composerActiveTurnStatus = resolvedTurnStatus(state, activeTurnStatus);
   const renderedMessages = useRenderedMessages(
     {
       messages: state.messages,
@@ -900,7 +918,12 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       pendingApprovals: state.pendingApprovals,
       pendingFileEditApprovals: state.pendingFileEditApprovals,
       pendingInterviews: state.pendingInterviews,
-      runStatus: state.runStatus,
+      // Narrowed, not the raw `state.runStatus`: this drives the per-row
+      // "Working…"/"Stopping…" indicator, which belongs to a genuinely
+      // active turn - passing the raw value synthesizes a duplicate, live
+      // indicator row during background-only phase (no active turn) even
+      // after the real row has already settled to its "done" footer.
+      runStatus: composerActiveTurnStatus ?? "idle",
       // Binding identity for the in-transcript setup card (replaces the old
       // strip's mount-time tuple): epic + chat owner route the retry mutation
       // and scope the terminal-liveness query; `viewTabId` rides the synthetic
@@ -978,14 +1001,8 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   const approvalDecisionPending = Object.values(state.pendingActions).some(
     (action) => action.action === "approvalDecision",
   );
-  // In-progress UI (composer stop button, restore gating, owner-active) is
-  // driven by the host-owned chat `runStatus` - the single source of truth
-  // that covers the first turn and every multi-turn send and flips to
-  // `stopping` the moment a stop is requested. We map it onto the composer's
-  // turn-status prop shape (`running`/`stopping`/null).
-  const activeTurnStatus = composerTurnStatus(state.runStatus);
   const stopDisabled =
-    !canAct || stopPending || activeTurnStatus === "stopping";
+    !canAct || stopPending || composerActiveTurnStatus === "stopping";
   const chatActions = useChatActions(handle);
   const restoreActionPending = useMemo(
     () =>
@@ -1014,7 +1031,15 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       accessRole: state.access?.role ?? null,
       currentUserId,
       activeHostId,
-      activeTurnStatus,
+      // Restoring/reverting files while a turn is actively writing is unsafe,
+      // but that's a turn-scoped concern, same as the composer's Stop button -
+      // `runStatus` alone also reads non-idle during background-only phase
+      // (Bash `run_in_background` / a subagent / Monitor with no active
+      // turn), which restore/revert can't conflict with. Use the same
+      // narrowed value the Stop button uses instead of the raw one, or this
+      // would show "Wait for the active turn to finish" and block restore
+      // during a window where nothing is actually running against it.
+      activeTurnStatus: composerActiveTurnStatus,
       localSnapshotsClearedAt: localSnapshotClearMarker,
       restore: state.restore,
       restoreActionPending,
@@ -1025,7 +1050,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     [
       accumulatedFileChanges,
       activeHostId,
-      activeTurnStatus,
+      composerActiveTurnStatus,
       chatActions.restoreCheckpoint,
       chatActions.revertFileChanges,
       currentUserId,
@@ -1309,6 +1334,14 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
           ownerId: node.id,
           binding: state.worktreeBinding,
           isOwnerActive: activeTurnStatus !== null,
+          // Distinguishes WHY the owner reads active, for the disabled-remove
+          // tooltip wording only (the disable decision itself stays on the
+          // broader `isOwnerActive`, unchanged - a live background Bash/Monitor
+          // could still be reading or writing in the folder even with no
+          // foreground turn active). `false` here means it's active purely
+          // because of visible background work, not a turn the "stop" wording
+          // would make sense for.
+          hasActiveTurn: composerActiveTurnStatus !== null,
           missingWorktreePaths: effectiveMissingPaths,
           bindingResolved: state.snapshotLoaded,
           onBindingCommitted: clearMissingPathsAfterBindingCommit,
@@ -1323,6 +1356,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       effectiveMissingPaths,
       state.snapshotLoaded,
       activeTurnStatus,
+      composerActiveTurnStatus,
       clearMissingPathsAfterBindingCommit,
       viewTabId,
     ],
@@ -1362,11 +1396,11 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
 
   const lowerTurn = useMemo(
     () => ({
-      activeTurnStatus,
+      activeTurnStatus: composerActiveTurnStatus,
       stopDisabled,
       onStopTurn: chatActions.stopTurn,
     }),
-    [activeTurnStatus, stopDisabled, chatActions.stopTurn],
+    [composerActiveTurnStatus, stopDisabled, chatActions.stopTurn],
   );
 
   const lowerInterview = useMemo(

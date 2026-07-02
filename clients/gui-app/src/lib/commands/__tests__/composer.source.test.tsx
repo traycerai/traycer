@@ -4,6 +4,7 @@ import { act, cleanup, render } from "@testing-library/react";
 import {
   registerFocusedComposerControls,
   resetFocusedComposerControlsForTests,
+  type ComposerControls,
 } from "@/lib/commands/composer-controls-registry";
 import {
   registerActiveModelPicker,
@@ -133,6 +134,17 @@ function captureItems(
   return captured;
 }
 
+function stubControls(overrides: Partial<ComposerControls>): ComposerControls {
+  return {
+    setReasoning: () => undefined,
+    setServiceTier: () => undefined,
+    setPermission: () => undefined,
+    switchHarness: () => undefined,
+    selectModel: () => undefined,
+    ...overrides,
+  };
+}
+
 function resetCanvasStore(): void {
   useEpicCanvasStore.setState({
     tabsById: {},
@@ -174,12 +186,7 @@ describe("composerSource", () => {
   });
 
   it("landing composer shows provider / model; no new-chat items", () => {
-    registerFocusedComposerControls("landing", {
-      setSelection: () => undefined,
-      setReasoning: () => undefined,
-      setServiceTier: () => undefined,
-      setPermission: () => undefined,
-    });
+    registerFocusedComposerControls("landing", stubControls({}));
     const ids = captureItems(null, "landing").map((i) => i.id);
     expect(ids).toContain("composer:switch-provider");
     expect(ids).toContain("composer:switch-model");
@@ -192,23 +199,13 @@ describe("composerSource", () => {
   it("hides Change model… when no picker is registered", () => {
     // A focused composer with no active picker (e.g. locked/pending) registers
     // its controls but not a picker, so the toggle would no-op.
-    registerFocusedComposerControls("landing", {
-      setSelection: () => undefined,
-      setReasoning: () => undefined,
-      setServiceTier: () => undefined,
-      setPermission: () => undefined,
-    });
+    registerFocusedComposerControls("landing", stubControls({}));
     const ids = captureItems(null, "landing").map((i) => i.id);
     expect(ids).not.toContain("composer:open-model-picker");
   });
 
   it("shows Change model… with the active selection when a picker is registered", () => {
-    registerFocusedComposerControls("landing", {
-      setSelection: () => undefined,
-      setReasoning: () => undefined,
-      setServiceTier: () => undefined,
-      setPermission: () => undefined,
-    });
+    registerFocusedComposerControls("landing", stubControls({}));
     registerActiveModelPicker({
       toggle: () => undefined,
       getSelectionSummary: () => "Claude Opus 4.8",
@@ -221,12 +218,7 @@ describe("composerSource", () => {
   });
 
   it("refreshes the Change model… summary when the top picker is swapped", () => {
-    registerFocusedComposerControls("landing", {
-      setSelection: () => undefined,
-      setReasoning: () => undefined,
-      setServiceTier: () => undefined,
-      setPermission: () => undefined,
-    });
+    registerFocusedComposerControls("landing", stubControls({}));
     registerActiveModelPicker({
       toggle: () => undefined,
       getSelectionSummary: () => "base",
@@ -254,12 +246,7 @@ describe("composerSource", () => {
   });
 
   it("chat-tile composer with an active epic shows the new-chat + terminal items; no Select PC", () => {
-    registerFocusedComposerControls("chat-tile", {
-      setSelection: () => undefined,
-      setReasoning: () => undefined,
-      setServiceTier: () => undefined,
-      setPermission: () => undefined,
-    });
+    registerFocusedComposerControls("chat-tile", stubControls({}));
     const ids = captureItems("epic-1", "chat-tile").map((i) => i.id);
     expect(ids).toContain("composer:switch-provider");
     expect(ids).toContain("composer:switch-model");
@@ -271,12 +258,7 @@ describe("composerSource", () => {
   });
 
   it("new-chat active tile command opens the modal in chat mode (active-tile)", () => {
-    registerFocusedComposerControls("chat-tile", {
-      setSelection: () => undefined,
-      setReasoning: () => undefined,
-      setServiceTier: () => undefined,
-      setPermission: () => undefined,
-    });
+    registerFocusedComposerControls("chat-tile", stubControls({}));
     const items = captureItems("epic-1", "chat-tile");
     const item = items.find((candidate) => {
       return candidate.id === "composer:new-chat:replace";
@@ -302,12 +284,7 @@ describe("composerSource", () => {
   });
 
   it("new-chat split command opens the modal in chat mode with the active group's split placement", () => {
-    registerFocusedComposerControls("chat-tile", {
-      setSelection: () => undefined,
-      setReasoning: () => undefined,
-      setServiceTier: () => undefined,
-      setPermission: () => undefined,
-    });
+    registerFocusedComposerControls("chat-tile", stubControls({}));
     useEpicCanvasStore
       .getState()
       .seedEpic("epic-1", { tabId: "epic-1", name: "Epic 1" }, []);
@@ -350,23 +327,13 @@ describe("composerSource", () => {
   });
 
   it("chat-tile without an active epic hides new-chat items", () => {
-    registerFocusedComposerControls("chat-tile", {
-      setSelection: () => undefined,
-      setReasoning: () => undefined,
-      setServiceTier: () => undefined,
-      setPermission: () => undefined,
-    });
+    registerFocusedComposerControls("chat-tile", stubControls({}));
     const ids = captureItems(null, "chat-tile").map((i) => i.id);
     expect(ids).not.toContain("composer:new-chat:replace");
   });
 
   it("provider / model entry items carry a subpage", () => {
-    registerFocusedComposerControls("landing", {
-      setSelection: () => undefined,
-      setReasoning: () => undefined,
-      setServiceTier: () => undefined,
-      setPermission: () => undefined,
-    });
+    registerFocusedComposerControls("landing", stubControls({}));
     const items = captureItems(null, "landing");
     const provider = items.find((i) => i.id === "composer:switch-provider");
     const model = items.find((i) => i.id === "composer:switch-model");
@@ -374,14 +341,15 @@ describe("composerSource", () => {
     expect(model?.subpage?.id).toBe("composer:model");
   });
 
-  it("model leaf item dispatches via the registered setter", () => {
-    const selections: Array<{ harnessId: string; modelSlug: string }> = [];
-    registerFocusedComposerControls("landing", {
-      setSelection: (next) => selections.push(next),
-      setReasoning: () => undefined,
-      setServiceTier: () => undefined,
-      setPermission: () => undefined,
-    });
+  it("model leaf item dispatches the memory-aware selectModel control", () => {
+    const picks: Array<{ harnessId: string; modelSlug: string }> = [];
+    registerFocusedComposerControls(
+      "landing",
+      stubControls({
+        selectModel: (harnessId, modelSlug) =>
+          picks.push({ harnessId, modelSlug }),
+      }),
+    );
 
     const items = captureItems(null, "landing");
     const modelEntry = items.find((i) => i.id === "composer:switch-model");
@@ -401,8 +369,44 @@ describe("composerSource", () => {
     if (subItems.length === 0) return;
     const firstModel = subItems[0];
     void firstModel.run(ctx(null, "landing"));
-    expect(selections).toHaveLength(1);
-    expect(typeof selections[0].harnessId).toBe("string");
-    expect(typeof selections[0].modelSlug).toBe("string");
+    // The leaf funnels through `selectModel` (memory-aware), NOT bare
+    // `setSelection`, so the pick restores that pair's remembered effort/tier.
+    expect(picks).toEqual([{ harnessId: "codex", modelSlug: "gpt-live" }]);
+  });
+
+  it("provider leaf item dispatches the memory-aware switchHarness control", () => {
+    const switches: Array<string> = [];
+    registerFocusedComposerControls(
+      "landing",
+      stubControls({
+        switchHarness: (harnessId) => switches.push(harnessId),
+      }),
+    );
+
+    const items = captureItems(null, "landing");
+    const providerEntry = items.find(
+      (i) => i.id === "composer:switch-provider",
+    );
+    expect(providerEntry?.subpage).not.toBeNull();
+    if (
+      providerEntry?.subpage === null ||
+      providerEntry?.subpage === undefined
+    ) {
+      return;
+    }
+    let subItems: ReadonlyArray<CommandItem> = [];
+    const subpage = providerEntry.subpage;
+    function SubProbe() {
+      subItems = subpage.useItems(ctx(null, "landing"));
+      return null;
+    }
+    render(<SubProbe />);
+    expect(subItems.length).toBeGreaterThan(0);
+    if (subItems.length === 0) return;
+    void subItems[0].run(ctx(null, "landing"));
+    // Switch-provider funnels through `switchHarness` (restores the harness's
+    // remembered model/effort/tier), never the old `setSelection(firstModel…)`.
+    // (`setSelection` is no longer part of `ComposerControls` at all.)
+    expect(switches).toEqual(["codex"]);
   });
 });

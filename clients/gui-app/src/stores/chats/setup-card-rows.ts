@@ -354,7 +354,7 @@ function workspaceStateFor(type: ChatEvent["type"]): SetupWorkspaceState {
  * `cancelled` (paused, recoverable), and only when every workspace is `ready`
  * does the card read `ready`.
  */
-function rollupState(
+export function rollupState(
   workspaces: ReadonlyArray<SetupCardWorkspace>,
 ): SetupWorkspaceState {
   if (workspaces.some((workspace) => workspace.state === "failed")) {

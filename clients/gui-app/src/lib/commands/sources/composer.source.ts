@@ -19,11 +19,9 @@
  * chats - final, not a v2 candidate).
  */
 import {
-  findDefaultModel,
   type ComposerMode,
   type HarnessOption,
   type ModelOption,
-  type ProviderId,
 } from "@/components/home/data/landing-options";
 import { useGuiHarnessCatalog } from "@/hooks/harnesses/use-gui-harness-catalog";
 import { getFocusedComposerControls } from "@/lib/commands/composer-controls-registry";
@@ -290,9 +288,7 @@ function useProviderSubpageItems(): ReadonlyArray<CommandItem> {
   return useMemo(
     () =>
       catalog.harnesses.flatMap((provider) =>
-        provider.available
-          ? [buildProviderItem(provider, provider.models)]
-          : [],
+        provider.available ? [buildProviderItem(provider)] : [],
       ),
     [catalog.harnesses],
   );
@@ -314,10 +310,7 @@ function useModelSubpageItems(): ReadonlyArray<CommandItem> {
   );
 }
 
-function buildProviderItem(
-  provider: HarnessOption,
-  models: ReadonlyArray<ModelOption>,
-): CommandItem {
+function buildProviderItem(provider: HarnessOption): CommandItem {
   return {
     id: `composer:provider:${provider.id}`,
     label: provider.label,
@@ -331,9 +324,10 @@ function buildProviderItem(
     run: () => {
       const entry = getFocusedComposerControls();
       if (entry === null) return;
-      const selection = firstModelForProvider(provider.id, models);
-      if (selection === null) return;
-      entry.controls.setSelection(selection);
+      // Memory-aware harness switch: restore that harness's last model +
+      // effort/tier (or its defaults). Replaces the old browse-only
+      // `setSelection(firstModel…)`.
+      entry.controls.switchHarness(provider.id);
     },
   };
 }
@@ -355,19 +349,9 @@ function buildModelItem(
     run: () => {
       const entry = getFocusedComposerControls();
       if (entry === null) return;
-      entry.controls.setSelection({
-        harnessId: provider.id,
-        modelSlug: model.slug,
-      });
+      // Memory-aware model pick: keep the slug, restore that pair's effort/tier
+      // (or the model's defaults). Replaces the old bare `setSelection`.
+      entry.controls.selectModel(provider.id, model.slug);
     },
   };
-}
-
-function firstModelForProvider(
-  harnessId: ProviderId,
-  models: ReadonlyArray<ModelOption>,
-): { harnessId: ProviderId; modelSlug: string } | null {
-  const model = findDefaultModel(models);
-  if (model === null) return null;
-  return { harnessId, modelSlug: model.slug };
 }

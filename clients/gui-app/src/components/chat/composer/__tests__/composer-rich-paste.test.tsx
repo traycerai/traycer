@@ -8,6 +8,7 @@ import {
   buildComposerClipboardHtml,
   composerClipboardPlainText,
 } from "@/lib/composer/composer-clipboard";
+import { insertImageAttachmentsCommand } from "@/hooks/composer/use-composer-paste";
 
 import { buildComposerExtensions } from "../editor/editor-config";
 import { createComposerPickerStore } from "../picker/composer-picker-store";
@@ -106,6 +107,71 @@ describe("composer rich clipboard paste", () => {
       mentionPath: "src/app.tsx",
     });
     expect(bulletItems).toEqual(["bullet one", "bullet two"]);
+  });
+
+  it("normalizes legacy attachment groups from structured clipboard content", () => {
+    const editor = makeEditor(KNOWN_SLASH_NAMES);
+    const legacyContent: JsonContent = {
+      type: "doc",
+      content: [
+        {
+          type: "attachmentGroup",
+          content: [
+            {
+              type: "imageAttachment",
+              attrs: {
+                id: "img-1",
+                fileName: "shot.png",
+                b64content: "abc",
+                hash: null,
+                mimeType: "image/png",
+                size: 3,
+              },
+            },
+          ],
+        },
+        {
+          type: "paragraph",
+          content: [{ type: "text", text: "describe it" }],
+        },
+      ],
+    };
+    const html = buildComposerClipboardHtml(
+      legacyContent,
+      composerClipboardPlainText(legacyContent),
+    );
+
+    fireEvent.paste(editor.view.dom, {
+      clipboardData: {
+        files: [],
+        items: [],
+        types: ["text/html"],
+        getData: (type: string) => (type === "text/html" ? html : ""),
+      },
+    });
+
+    expect(editor.getJSON()).toEqual({
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [
+            {
+              type: "imageAttachment",
+              attrs: {
+                id: "img-1",
+                fileName: "shot.png",
+                b64content: "abc",
+                hash: null,
+                mimeType: "image/png",
+                size: 3,
+              },
+            },
+            { type: "text", text: "describe it" },
+          ],
+        },
+      ],
+    });
   });
 
   it("pastes plain text Markdown as structured editor content", () => {
@@ -242,6 +308,41 @@ describe("composer rich clipboard paste", () => {
     expect(remainderText(editor)).toBe(" review the diff");
   });
 
+  it("keeps an existing leading slash chip when another slash command is pasted before it", () => {
+    const editor = makeEditor(KNOWN_SLASH_NAMES);
+    editor.commands.setContent({
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [
+            { type: "slashCommand", attrs: { commandName: "plan" } },
+            { type: "text", text: " existing" },
+          ],
+        },
+      ],
+    });
+    const slash = firstNodePosition(editor, "slashCommand");
+    if (slash === null) throw new Error("expected slash command");
+    editor.commands.setTextSelection(slash.pos);
+
+    pastePlainText(editor, "/implement new work");
+
+    expect(collectSlashCommands(editor)).toEqual(["plan"]);
+    expect(remainderText(editor)).toBe(" /implement new work existing");
+  });
+
+  it("converts a slash command paste when images appear before it", () => {
+    const editor = makeEditor(KNOWN_SLASH_NAMES);
+    insertImageAttachmentsCommand(editor, [imageAttrs("img-1")]);
+
+    pastePlainText(editor, "/plan review the diff");
+
+    expect(collectImageIds(editor)).toEqual(["img-1"]);
+    expect(collectSlashCommands(editor)).toEqual(["plan"]);
+    expect(remainderText(editor)).toBe(" review the diff");
+  });
+
   it("converts a bare leading slash command paste into a chip with a trailing space", () => {
     const editor = makeEditor(KNOWN_SLASH_NAMES);
 
@@ -356,6 +457,30 @@ function collectSlashCommands(editor: Editor): string[] {
   return names;
 }
 
+function collectImageIds(editor: Editor): string[] {
+  const ids: string[] = [];
+  editor.state.doc.descendants((node) => {
+    if (node.type.name !== "imageAttachment") return true;
+    if (typeof node.attrs.id === "string") ids.push(node.attrs.id);
+    return false;
+  });
+  return ids;
+}
+
+function firstNodePosition(
+  editor: Editor,
+  typeName: string,
+): { readonly pos: number } | null {
+  let found: { readonly pos: number } | null = null;
+  editor.state.doc.descendants((node, pos) => {
+    if (found !== null) return false;
+    if (node.type.name !== typeName) return true;
+    found = { pos };
+    return false;
+  });
+  return found;
+}
+
 function remainderText(editor: Editor): string {
   let text = "";
   editor.state.doc.descendants((node) => {
@@ -365,6 +490,16 @@ function remainderText(editor: Editor): string {
 }
 
 const KNOWN_SLASH_NAMES = ["plan", "code-review", "implement"];
+
+function imageAttrs(id: string) {
+  return {
+    id,
+    fileName: `${id}.png`,
+    b64content: id,
+    mimeType: "image/png",
+    size: id.length,
+  };
+}
 
 function makeEditor(slashNames: ReadonlyArray<string> | null): Editor {
   const element = document.createElement("div");

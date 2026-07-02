@@ -87,7 +87,11 @@ function renderSingleSpecialSegment(
         data-chat-find-unit={chatFindSegmentUnitId(segment.id)}
         className="flex w-full flex-col"
       >
-        <SetupCardSegment model={segment.model} viewTabId={segment.viewTabId} />
+        <SetupCardSegment
+          model={segment.model}
+          viewTabId={segment.viewTabId}
+          variant="card"
+        />
       </div>
     );
   }

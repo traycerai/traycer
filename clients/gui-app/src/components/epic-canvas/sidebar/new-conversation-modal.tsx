@@ -24,6 +24,7 @@ import {
   NO_SESSION_OBJECT_URL,
 } from "@/components/chat/composer/attachments/attachment-strip";
 import { useEpicImageFetcher } from "@/lib/attachments/use-attachment-blob-src";
+import { DialogOverlayBoundaryContext } from "@/providers/dialog-overlay-boundary-context";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import { createComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
 import { useComposerPickerItems } from "@/components/chat/composer/picker/use-composer-picker-items";
@@ -280,9 +281,19 @@ function NewConversationModalDialog(props: {
   // (first Escape closes only the picker); once it's closed the call returns
   // false and Escape falls through to dismiss the dialog (second Escape).
   const dismissPickerRef = useRef<(() => boolean) | null>(null);
+  // The workspace controls' nested Branch/Location popovers portal to
+  // `document.body` by default, landing as a DOM sibling of this dialog - the
+  // dialog's scroll-lock then swallows wheel input over their scrollable
+  // lists even though the lists themselves scroll fine (see
+  // `DialogOverlayBoundaryContext`). Publishing this dialog's own content node
+  // lets those nested overlays portal inside it instead, so the lock
+  // recognizes their content as its own.
+  const [overlayBoundaryEl, setOverlayBoundaryEl] =
+    useState<HTMLElement | null>(null);
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
       <DialogContent
+        ref={setOverlayBoundaryEl}
         className="w-[min(92vw,48rem)] max-w-[min(92vw,48rem)] gap-3 p-4 sm:max-w-[min(92vw,48rem)]"
         data-testid="epic-sidebar-new-conversation-modal"
         data-leader-scope={LEADER_SCOPE_NEW_CONVERSATION_MODAL}
@@ -308,16 +319,18 @@ function NewConversationModalDialog(props: {
           New chat or terminal agent
         </DialogTitle>
         {props.open ? (
-          <SurfaceActivityProvider active>
-            <NewConversationModalBody
-              epicId={props.epicId}
-              tabId={props.tabId}
-              placement={props.placement}
-              parentId={props.parentId}
-              dismissPickerRef={dismissPickerRef}
-              onSubmitted={() => props.onOpenChange(false)}
-            />
-          </SurfaceActivityProvider>
+          <DialogOverlayBoundaryContext.Provider value={overlayBoundaryEl}>
+            <SurfaceActivityProvider active>
+              <NewConversationModalBody
+                epicId={props.epicId}
+                tabId={props.tabId}
+                placement={props.placement}
+                parentId={props.parentId}
+                dismissPickerRef={dismissPickerRef}
+                onSubmitted={() => props.onOpenChange(false)}
+              />
+            </SurfaceActivityProvider>
+          </DialogOverlayBoundaryContext.Provider>
         ) : null}
       </DialogContent>
     </Dialog>

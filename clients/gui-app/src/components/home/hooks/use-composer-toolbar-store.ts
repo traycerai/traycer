@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useStore } from "zustand";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 
@@ -7,6 +7,7 @@ import type {
   AgentMode,
   HarnessModelSelection,
   ModelOption,
+  ProviderId,
   ReasoningLevel,
   ServiceTier,
 } from "@/components/home/data/landing-options";
@@ -17,6 +18,8 @@ import {
   type ComposerToolbarStore,
   type ComposerToolbarValues,
 } from "@/stores/composer/composer-toolbar-store";
+import { commitSelection } from "@/stores/composer/commit-selection";
+import { useComposerHarnessMemoryStore } from "@/stores/composer/composer-harness-memory-store";
 import {
   useGuiHarnessesQuery,
   useGuiHarnessModelsQuery,
@@ -87,13 +90,35 @@ export function useComposerToolbarStore(
     createComposerToolbarStore({
       seedKey,
       values: seededValues,
-      onSettingsChange,
+      // The recording wrapper is installed via the effect below - never the raw
+      // caller callback - so it is the single, always-present write site.
+      onSettingsChange: null,
       tuiOnly,
     }),
   );
+  // The store's `onSettingsChange` is ALWAYS this recording wrapper, even when
+  // the surface passes `onSettingsChange: null` (fork dialogs / add-node), so
+  // their edits still populate memory. It records ONLY when the resolved slug is
+  // catalog-confirmed (`selectionCatalogConfirmed`, exposed by the store) - the
+  // catalog-confirmed write gate - so a seed, a surface reroute (the store
+  // suppresses the emit), or an unvalidated/stale remembered slug is never
+  // written. `record()` also self-guards an empty model.
+  const recordingOnSettingsChange = useCallback(
+    (settings: ChatRunSettings) => {
+      // Precondition: every store emit site `set()`s the derived state BEFORE
+      // invoking `onSettingsChange`, so `getState().selectionCatalogConfirmed`
+      // here reflects the very settings being emitted - the write gate does not
+      // race the emit.
+      if (store.getState().selectionCatalogConfirmed) {
+        useComposerHarnessMemoryStore.getState().record(settings);
+      }
+      onSettingsChange?.(settings);
+    },
+    [store, onSettingsChange],
+  );
   useEffect(() => {
-    store.getState().setOnSettingsChange(onSettingsChange);
-  }, [store, onSettingsChange]);
+    store.getState().setOnSettingsChange(recordingOnSettingsChange);
+  }, [store, recordingOnSettingsChange]);
   // Re-seed when the seed identity changes (applySeed no-ops on a matching
   // key, so default-value churn never clobbers user edits).
   useEffect(() => {
@@ -118,22 +143,31 @@ export function useComposerToolbarStore(
   const models = activityEnabled
     ? (modelsQuery.data?.models ?? EMPTY_MODELS)
     : EMPTY_MODELS;
+  // Explicit load status for the CURRENT `harnessId`'s models query, threaded to
+  // the store so it can tell "loading" from "loaded empty" (the query is keyed
+  // on `harnessId`, so `data` resets to undefined during a cross-harness switch
+  // until the new harness's models land). Never inferred from `models.length`.
+  const modelsLoaded = activityEnabled && modelsQuery.data !== undefined;
   useEffect(() => {
     store.getState().setCatalog({
       harnesses,
       modelsHarnessId: harnessId,
       models,
+      modelsLoaded,
       tuiOnly,
     });
-  }, [store, harnesses, models, harnessId, tuiOnly]);
+  }, [store, harnesses, models, modelsLoaded, harnessId, tuiOnly]);
 
   const registeredControls = useMemo(() => {
     const actions = store.getState();
     return {
-      setSelection: actions.setSelection,
       setReasoning: actions.setReasoning,
       setServiceTier: actions.setServiceTier,
       setPermission: actions.setPermission,
+      switchHarness: (harnessId: ProviderId) =>
+        commitSelection(store, harnessId, null),
+      selectModel: (harnessId: ProviderId, modelSlug: string) =>
+        commitSelection(store, harnessId, modelSlug),
     };
   }, [store]);
   useRegisterFocusedComposerControls(

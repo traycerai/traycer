@@ -710,7 +710,7 @@ function editorHandleForHashImage(
     type: "doc",
     content: [
       {
-        type: "attachmentGroup",
+        type: "paragraph",
         content: [
           {
             type: "imageAttachment",
@@ -722,11 +722,8 @@ function editorHandleForHashImage(
               size: 5,
             },
           },
+          { type: "text", text: prompt },
         ],
-      },
-      {
-        type: "paragraph",
-        content: [{ type: "text", text: prompt }],
       },
     ],
   };

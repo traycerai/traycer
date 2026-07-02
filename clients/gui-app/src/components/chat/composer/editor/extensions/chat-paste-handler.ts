@@ -9,6 +9,7 @@ import {
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
 import { readComposerContentFromClipboardData } from "@/lib/composer/composer-clipboard";
+import { normalizeComposerContent } from "@/lib/composer/composer-content-normalizer";
 import { sanitizeMarkdownHtml } from "@/lib/composer/markdown-paste";
 import { normalizeSliceSoftBreaks } from "@/lib/composer/normalize-soft-breaks";
 import {
@@ -16,7 +17,10 @@ import {
   slashCommandParagraph,
 } from "@/lib/composer/tiptap-json-content";
 
-import { isLeadingRange } from "./slash-command-extension";
+import {
+  isLeadingRange,
+  leadingTokenInDocument,
+} from "./slash-command-extension";
 import type { ComposerPickerStore } from "../../picker/composer-picker-store";
 
 const chatPasteHandlerKey = new PluginKey("composer-chat-paste-handler");
@@ -90,6 +94,19 @@ export function createChatPasteHandler(deps: ChatPasteHandlerDeps) {
               );
               if (slashSlice !== null) {
                 const tr = view.state.tr.replaceSelection(slashSlice);
+                view.dispatch(tr.scrollIntoView());
+                return true;
+              }
+              const existingSlashPaste = existingLeadingSlashCommandPaste(
+                view.state,
+                text,
+                deps.pickerStore.getState().knownSlashCommands,
+              );
+              if (existingSlashPaste !== null) {
+                const tr = view.state.tr.insertText(
+                  existingSlashPaste.text,
+                  existingSlashPaste.pos,
+                );
                 view.dispatch(tr.scrollIntoView());
                 return true;
               }
@@ -210,7 +227,7 @@ function composerContentSlice(
   content: JsonContent,
 ): Slice | null {
   try {
-    const node = schema.nodeFromJSON(content);
+    const node = schema.nodeFromJSON(normalizeComposerContent(content));
     if (node.type.name === "doc") {
       return new Slice(node.content, 0, 0);
     }
@@ -254,8 +271,30 @@ function leadingSlashCommandSlice(
 // opens with a slashCommand chip (a second one would be stripped by the guard).
 function isLeadingSlashTarget(state: EditorState): boolean {
   const { selection, doc } = state;
-  if (selection.$from.parent !== doc.firstChild) return false;
   if (!isLeadingRange(state, selection.from, selection.to)) return false;
-  const firstInline = doc.firstChild.firstChild;
-  return firstInline === null || firstInline.type.name !== "slashCommand";
+  return leadingTokenInDocument(doc)?.node.type.name !== "slashCommand";
+}
+
+function existingLeadingSlashCommandPaste(
+  state: EditorState,
+  text: string,
+  knownCommands: ReadonlyMap<string, string> | null,
+): { readonly pos: number; readonly text: string } | null {
+  if (knownCommands === null) return null;
+  // This path inserts after the existing chip without replacing the selection,
+  // so restrict it to a collapsed caret. A range selection falls through to the
+  // markdown branch, which replaces the selected content as the user expects.
+  if (!state.selection.empty) return null;
+  if (!isLeadingRange(state, state.selection.from, state.selection.to)) {
+    return null;
+  }
+  const parsed = parseLeadingSlashCommand(text);
+  if (parsed === null) return null;
+  if (!knownCommands.has(parsed.name.toLowerCase())) return null;
+  const leadingToken = leadingTokenInDocument(state.doc);
+  if (leadingToken?.node.type.name !== "slashCommand") return null;
+  return {
+    pos: leadingToken.pos + leadingToken.node.nodeSize,
+    text: text.startsWith(" ") ? text : ` ${text}`,
+  };
 }
