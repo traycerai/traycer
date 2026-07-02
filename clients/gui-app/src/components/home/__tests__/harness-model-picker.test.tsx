@@ -691,8 +691,12 @@ describe("<HarnessModelPicker />", () => {
     // Exactly one row is flagged deprecated - getByText throws on more than
     // one match, so this also covers that the active (non-deprecated) model
     // does NOT carry the badge.
-    const badge = screen.getByText("Deprecated");
-    fireEvent.focus(badge);
+    expect(screen.getByText("Deprecated")).not.toBeNull();
+
+    // The tooltip is anchored to the row button (keyboard-reachable), not the
+    // inner badge span - focus the option itself, the same way a Tab press
+    // would.
+    fireEvent.focus(screen.getByRole("option", { name: /Claude Sonnet 4\.6/ }));
     expect((await screen.findByRole("tooltip")).textContent).toBe(
       deprecationNotice,
     );
