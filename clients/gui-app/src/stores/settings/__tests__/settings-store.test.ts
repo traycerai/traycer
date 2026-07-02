@@ -1,6 +1,9 @@
 import "../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { DEFAULT_AGENT_MODE } from "@/components/home/data/landing-options";
+import {
+  DEFAULT_AGENT_MODE,
+  DEFAULT_PERMISSION,
+} from "@/components/home/data/landing-options";
 import { DEFAULT_EPIC_NODE_ICON_COLORS } from "@/lib/artifacts/node-display";
 import { DEFAULT_DIFF_VIEWER_PREFERENCES } from "@/lib/diff/diff-viewer-preferences";
 import { useSettingsStore } from "@/stores/settings/settings-store";
@@ -10,7 +13,7 @@ function resetSettingsStore(): void {
   useSettingsStore.setState({
     artifactIconColorMode: "byType",
     artifactIconColors: DEFAULT_EPIC_NODE_ICON_COLORS,
-    defaultPermission: "supervised",
+    defaultPermission: DEFAULT_PERMISSION,
     defaultAgentMode: DEFAULT_AGENT_MODE,
     defaultEditor: "vscode",
     notifyOnChatTurnComplete: true,
@@ -207,8 +210,8 @@ describe("useSettingsStore", () => {
     expect(useSettingsStore.getState().pinContextUsageBreakdown).toBe(false);
   });
 
-  it("defaults new chats to supervised permissions", () => {
-    expect(useSettingsStore.getState().defaultPermission).toBe("supervised");
+  it("defaults new chats to full access permissions", () => {
+    expect(useSettingsStore.getState().defaultPermission).toBe("full_access");
   });
 
   it("defaults new runs to epic mode", () => {

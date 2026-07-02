@@ -875,7 +875,7 @@ describe("<ChatTile />", () => {
     // The toolbar stays editable mid-turn; the note only appears once the user
     // actually changes permission (live-mirror + steer reconcile the change).
     await waitFor(() => {
-      expect(getButtonByAriaLabel("Supervised").disabled).toBe(false);
+      expect(getButtonByAriaLabel("Full access").disabled).toBe(false);
       expect(
         screen.queryByText("New mode applies to the next turn"),
       ).toBeNull();
@@ -893,7 +893,7 @@ describe("<ChatTile />", () => {
     });
 
     await waitFor(() => {
-      expect(getButtonByAriaLabel("Supervised").disabled).toBe(false);
+      expect(getButtonByAriaLabel("Full access").disabled).toBe(false);
       expect(
         screen.queryByText("New mode applies to the next turn"),
       ).toBeNull();
@@ -1004,7 +1004,7 @@ describe("<ChatTile />", () => {
 
     // Approval-pending is still turn-in-progress, but the toolbar stays editable.
     await waitFor(() => {
-      expect(getButtonByAriaLabel("Supervised").disabled).toBe(false);
+      expect(getButtonByAriaLabel("Full access").disabled).toBe(false);
       expect(
         screen.queryByText("New mode applies to the next turn"),
       ).toBeNull();
