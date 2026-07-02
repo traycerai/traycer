@@ -112,6 +112,7 @@ describe("resolveLinuxSilentInstallSupported", () => {
     expect(execFileMock).toHaveBeenCalledWith(
       "dpkg",
       ["-S", expect.any(String)],
+      expect.objectContaining({ timeout: expect.any(Number) }),
       expect.any(Function),
     );
   });
@@ -141,6 +142,7 @@ describe("resolveLinuxSilentInstallSupported", () => {
     expect(execFileMock).toHaveBeenCalledWith(
       "rpm",
       ["-qf", expect.any(String)],
+      expect.objectContaining({ timeout: expect.any(Number) }),
       expect.any(Function),
     );
   });
@@ -264,7 +266,7 @@ async function loadGuidance(opts: {
       return "";
     }),
   };
-  const execFileMock: Mock = vi.fn((_command, _args, callback) => {
+  const execFileMock: Mock = vi.fn((_command, _args, _options, callback) => {
     if (opts.execFileSucceeds === false) {
       callback(new Error("command failed"), "", "");
     } else {

@@ -3,19 +3,20 @@ import { existsSync, readFileSync } from "node:fs";
 import { realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import type { DesktopAppUpdateGuidance } from "../../ipc-contracts/app-update-types";
 
 const execFileAsync = promisify(execFile);
 
 export type LinuxPackageType = "deb" | "rpm";
 
-export interface DesktopAppUpdateGuidance {
-  readonly summary: string;
-  readonly steps: readonly string[];
-  readonly command: string | null;
-  readonly releaseUrl: string;
-}
-
 const DESKTOP_RELEASES_URL = "https://github.com/traycerai/traycer/releases";
+
+// Bounds `dpkg -S`/`rpm -qf` in `isRegisteredAtRunningLocation`, which runs
+// unconditionally on every cold Linux launch before update listeners are
+// registered - a hang here (lock contention, etc.) must not hang the updater
+// indefinitely. A timeout is treated the same as any other query failure:
+// conservatively "not registered" (see the function's own doc comment).
+const REGISTRATION_QUERY_TIMEOUT_MS = 5_000;
 
 /**
  * `package-type` is written by app-builder-lib's `FpmTarget` only for deb/rpm
@@ -73,7 +74,9 @@ async function isRegisteredAtRunningLocation(
   const resolvedExecPath = await realpath(process.execPath).catch(
     () => process.execPath,
   );
-  return execFileAsync(queryCommand, [...queryArgs, resolvedExecPath]).then(
+  return execFileAsync(queryCommand, [...queryArgs, resolvedExecPath], {
+    timeout: REGISTRATION_QUERY_TIMEOUT_MS,
+  }).then(
     () => true,
     () => false,
   );
