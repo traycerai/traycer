@@ -189,6 +189,7 @@ export type CreateAgentWorkspace = z.infer<typeof createAgentWorkspaceSchema>;
 export const createAgentRequestSchema = z.object({
   senderAgentId: z.string(),
   epicId: z.string(),
+  name: z.string().min(1).nullable().default(null),
   surface: z.enum(["gui", "tui"]).nullable(),
   harnessId: agentFacingHarnessIdSchema.nullable(),
   model: z.string().nullable(),
