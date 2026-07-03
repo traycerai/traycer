@@ -331,9 +331,14 @@ describe("<TabStrip />", () => {
     expect(hoverChrome?.className).toContain("group-hover/tab:opacity-100");
     // :focus-visible (keyboard-only), NOT :focus-within - a mouse-drag reorder
     // focuses the tab div without activating it, and :focus-within would leave
-    // this accent chrome stuck lit on the inactive tab. See tab-strip-item.tsx.
+    // this accent chrome stuck lit on the inactive tab. The has-[:focus-visible]
+    // gate keeps it lit when the separate close button (a descendant tab stop)
+    // takes keyboard focus. See tab-strip-item.tsx.
     expect(hoverChrome?.className).toContain(
       "group-focus-visible/tab:opacity-100",
+    );
+    expect(hoverChrome?.className).toContain(
+      "group-has-[:focus-visible]/tab:opacity-100",
     );
     expect(hoverChrome?.querySelector("svg")).toBeNull();
   });
