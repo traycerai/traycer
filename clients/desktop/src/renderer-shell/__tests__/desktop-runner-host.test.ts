@@ -395,6 +395,9 @@ function buildFakeBridge(
         getAccelerationEnabled: async () => true,
         setAccelerationEnabled: async (enabled: boolean) => enabled,
       },
+      fonts: {
+        list: async () => [],
+      },
       windowEx: {
         setOverlayIcon: async () => undefined,
       },

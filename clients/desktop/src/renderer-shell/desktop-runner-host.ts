@@ -50,6 +50,7 @@ import type {
   DisplaySnapshot,
   DisplayTopology,
   FileSaveInput,
+  InstalledFont,
   PendingCertificateError,
   ProcessMetricsSnapshot,
   TrustedCertificateEntry,
@@ -340,7 +341,9 @@ export interface DesktopPlatformBridge {
     onTopologyChange(
       handler: (event: {
         readonly reason:
-          "display-added" | "display-removed" | "display-metrics-changed";
+          | "display-added"
+          | "display-removed"
+          | "display-metrics-changed";
         readonly topology: DisplayTopology;
       }) => void,
     ): { dispose: () => void };
@@ -348,6 +351,9 @@ export interface DesktopPlatformBridge {
   gpu: {
     getAccelerationEnabled(): Promise<boolean>;
     setAccelerationEnabled(enabled: boolean): Promise<boolean>;
+  };
+  fonts: {
+    list(): Promise<readonly InstalledFont[]>;
   };
   windowEx: {
     setOverlayIcon(image: string | null, description: string): Promise<void>;

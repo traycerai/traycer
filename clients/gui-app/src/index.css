@@ -2,7 +2,6 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/figtree";
-@import "@fontsource-variable/geist";
 @import "./editor-core/styles/editor.css";
 @import "./styles/terminal-themes.css";
 
@@ -309,7 +308,7 @@
   --traycer-font-ui:
     "Figtree Variable", "Figtree", ui-sans-serif, system-ui, -apple-system,
     BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --traycer-font-heading: "Geist Variable", "Geist", var(--traycer-font-ui);
+  --traycer-font-heading: var(--traycer-font-ui);
   --traycer-font-pixel:
     "Geist Pixel Square", "Geist Mono", var(--traycer-font-heading);
   --traycer-font-mono:

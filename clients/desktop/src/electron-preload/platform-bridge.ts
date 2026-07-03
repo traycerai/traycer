@@ -7,6 +7,7 @@ import type {
   AccessibilityThemeSnapshot,
   BackgroundMaterial,
   DisplayTopology,
+  InstalledFont,
   LogLevel,
   LogLevelScope,
   LogLevelsSnapshot,
@@ -22,6 +23,7 @@ export type {
   BackgroundMaterial,
   DisplaySnapshot,
   DisplayTopology,
+  InstalledFont,
   PendingCertificateError,
   ProcessMetricsSnapshot,
   TrustedCertificateEntry,
@@ -93,7 +95,9 @@ export interface PlatformBridgeSurface {
     onTopologyChange(
       handler: Listener<{
         readonly reason:
-          "display-added" | "display-removed" | "display-metrics-changed";
+          | "display-added"
+          | "display-removed"
+          | "display-metrics-changed";
         readonly topology: DisplayTopology;
       }>,
     ): Disposable;
@@ -105,6 +109,9 @@ export interface PlatformBridgeSurface {
   logLevels: {
     get(): Promise<LogLevelsSnapshot>;
     set(scope: LogLevelScope, level: LogLevel): Promise<LogLevelsSnapshot>;
+  };
+  fonts: {
+    list(): Promise<readonly InstalledFont[]>;
   };
   windowEx: {
     setOverlayIcon(image: string | null, description: string): Promise<void>;
@@ -292,6 +299,12 @@ export function buildPlatformBridge(): PlatformBridgeSurface {
           scope,
           level,
         }) as Promise<LogLevelsSnapshot>,
+    },
+    fonts: {
+      list: () =>
+        ipcRenderer.invoke(RunnerHostInvoke.fontsList) as Promise<
+          readonly InstalledFont[]
+        >,
     },
     windowEx: {
       setOverlayIcon: (image, description) =>

@@ -101,6 +101,10 @@ export const runnerQueryKeys = {
   // The three configurable log thresholds, read together from the desktop
   // platform bridge. Machine-local, so not host-scoped.
   logLevels: () => ["runner.logLevels"] as const,
+  // Fonts installed on this machine (Settings → Appearance font pickers).
+  // Machine-local and effectively static for the session, so a single
+  // static key suffices.
+  installedFonts: () => ["runner.installedFonts"] as const,
   // Desktop support log viewer (Diagnostics → Logs). Scoped by the support
   // bridge object identity so a host/shell swap invalidates cleanly, matching
   // the other runner-host queries.

@@ -1,11 +1,15 @@
+import { useMemo } from "react";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { EpicNodeIconColorPicker } from "@/components/settings/controls/node-icon-color-picker";
 import { SettingsNumberInput } from "@/components/settings/controls/settings-number-input";
+import { NullableFontSizeInput } from "@/components/settings/controls/nullable-font-size-input";
+import { FontPicker } from "@/components/settings/controls/font-picker";
 import { ThemeModeToggle } from "@/components/settings/controls/theme-mode-toggle";
 import { ThemePresetPicker } from "@/components/settings/controls/theme-preset-picker";
 import { Switch } from "@/components/ui/switch";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import { useRunnerInstalledFontsQuery } from "@/hooks/runner/use-runner-installed-fonts-query";
 
 export function AppearanceSettingsPanel() {
   const theme = useSettingsStore((state) => state.theme);
@@ -20,6 +24,27 @@ export function AppearanceSettingsPanel() {
   const setUiFontSize = useSettingsStore((state) => state.setUiFontSize);
   const codeFontSize = useSettingsStore((state) => state.codeFontSize);
   const setCodeFontSize = useSettingsStore((state) => state.setCodeFontSize);
+  const uiFontFamily = useSettingsStore((state) => state.uiFontFamily);
+  const setUiFontFamily = useSettingsStore((state) => state.setUiFontFamily);
+  const codeFontFamily = useSettingsStore((state) => state.codeFontFamily);
+  const setCodeFontFamily = useSettingsStore(
+    (state) => state.setCodeFontFamily,
+  );
+  const terminalFontFamily = useSettingsStore(
+    (state) => state.terminalFontFamily,
+  );
+  const setTerminalFontFamily = useSettingsStore(
+    (state) => state.setTerminalFontFamily,
+  );
+  const terminalFontSize = useSettingsStore((state) => state.terminalFontSize);
+  const setTerminalFontSize = useSettingsStore(
+    (state) => state.setTerminalFontSize,
+  );
+  const installedFontsQuery = useRunnerInstalledFontsQuery();
+  const installedFonts = useMemo(
+    () => installedFontsQuery.data ?? [],
+    [installedFontsQuery.data],
+  );
   const artifactIconColorMode = useSettingsStore(
     (state) => state.artifactIconColorMode,
   );
@@ -82,31 +107,76 @@ export function AppearanceSettingsPanel() {
         }
       />
       <SettingsRow
-        label="UI font size"
-        description="Adjust the base size used for the Traycer UI."
+        label="UI font"
+        description="Font and size used across the Traycer interface."
         control={
-          <SettingsNumberInput
-            value={uiFontSize}
-            onChange={setUiFontSize}
-            min={10}
-            max={24}
-            unit="px"
-            ariaLabel="UI font size"
-          />
+          <div className="flex flex-col items-end gap-2">
+            <FontPicker
+              value={uiFontFamily}
+              onChange={setUiFontFamily}
+              options={installedFonts}
+              defaultLabel="Figtree (Default)"
+              resetTooltip="Reset to default"
+              ariaLabel="UI font"
+            />
+            <SettingsNumberInput
+              value={uiFontSize}
+              onChange={setUiFontSize}
+              min={10}
+              max={20}
+              unit="px"
+              ariaLabel="UI font size"
+            />
+          </div>
         }
       />
       <SettingsRow
-        label="Code font size"
-        description="Adjust the base size used for code across chats and diffs."
+        label="Code font"
+        description="Font and size used for code across chats and diffs."
         control={
-          <SettingsNumberInput
-            value={codeFontSize}
-            onChange={setCodeFontSize}
-            min={10}
-            max={24}
-            unit="px"
-            ariaLabel="Code font size"
-          />
+          <div className="flex flex-col items-end gap-2">
+            <FontPicker
+              value={codeFontFamily}
+              onChange={setCodeFontFamily}
+              options={installedFonts}
+              defaultLabel="System Default"
+              resetTooltip="Reset to default"
+              ariaLabel="Code font"
+            />
+            <SettingsNumberInput
+              value={codeFontSize}
+              onChange={setCodeFontSize}
+              min={10}
+              max={24}
+              unit="px"
+              ariaLabel="Code font size"
+            />
+          </div>
+        }
+      />
+      <SettingsRow
+        label="Terminal font"
+        description="Font and size used in the terminal. Follows the code font until you set them."
+        control={
+          <div className="flex flex-col items-end gap-2">
+            <FontPicker
+              value={terminalFontFamily}
+              onChange={setTerminalFontFamily}
+              options={installedFonts}
+              defaultLabel="Same as code font"
+              resetTooltip="Use code font"
+              ariaLabel="Terminal font"
+            />
+            <NullableFontSizeInput
+              value={terminalFontSize}
+              followValue={codeFontSize}
+              onChange={setTerminalFontSize}
+              min={10}
+              max={24}
+              ariaLabel="Terminal font size"
+              resetTooltip="Follow code size"
+            />
+          </div>
         }
       />
     </SettingsPanelShell>
