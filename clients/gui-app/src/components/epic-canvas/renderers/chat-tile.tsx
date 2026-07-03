@@ -48,6 +48,11 @@ import {
   pickWorkingVerb,
 } from "@/components/chat/working-verb";
 import { ContextUsageChip } from "@/components/chat/context-usage-chip";
+import { providerIdForHarness } from "@/components/chat/composer/use-provider-reauth-gate";
+import {
+  isRateLimitCapableProvider,
+  type RateLimitProviderId,
+} from "@/lib/rate-limit-providers";
 import { ChatRestoreProvider } from "@/components/chat/chat-restore-context";
 import { RevertOnEditDialog } from "@/components/chat/segments/revert-on-edit-dialog";
 import { SteerSettingsConflictDialog } from "@/components/chat/segments/steer-settings-conflict-dialog";
@@ -1588,11 +1593,33 @@ function findLastAssistantUsage(
   return null;
 }
 
+/**
+ * Derives the chat's currently-selected provider for the context-usage
+ * popover/pinned-strip rate-limit sections, coalescing (in priority order) the
+ * running turn's harness, the composer's pending harness, and the chat's last
+ * persisted harness - the same precedence the provider re-auth gate uses for
+ * "what provider is this chat on right now". Narrowed to the two providers
+ * `host.getRateLimitUsage`'s provider-pull branch supports; every other
+ * provider (including `traycer`) resolves to `null`, hiding the sections.
+ */
+function selectChatProviderId(s: ChatSessionState): RateLimitProviderId | null {
+  const harnessId =
+    s.activeTurn?.harnessId ??
+    s.currentComposerSettings?.harnessId ??
+    s.chat?.settings?.harnessId ??
+    null;
+  if (harnessId === null) return null;
+  const providerId = providerIdForHarness(harnessId);
+  if (providerId === null) return null;
+  return isRateLimitCapableProvider(providerId) ? providerId : null;
+}
+
 function ContextUsageChipForChat(props: {
   readonly handle: ChatSessionStoreHandle;
 }): ReactNode {
   const usage = useStore(props.handle.store, selectContextUsage);
-  return <ContextUsageChip usage={usage} />;
+  const providerId = useStore(props.handle.store, selectChatProviderId);
+  return <ContextUsageChip usage={usage} providerId={providerId} />;
 }
 
 function ChatSessionMessagesSurface(

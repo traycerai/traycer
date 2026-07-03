@@ -427,7 +427,14 @@ function CreditBreakdownView({
   );
 }
 
-function UsageBar({
+/**
+ * Reusable consumed/total bar: a label + `format(consumed) / format(total)`
+ * text row above a percent-fill track. Exported so other settings surfaces
+ * (e.g. `provider-rate-limit-views.tsx`) reuse the same bar chrome instead of
+ * building parallel markup - the whole point of matching this card's design
+ * language.
+ */
+export function UsageBar({
   label,
   consumed,
   total,

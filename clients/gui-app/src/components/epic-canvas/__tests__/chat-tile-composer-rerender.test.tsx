@@ -119,7 +119,7 @@ function queryCompactContextTrigger() {
 
 function UsageLeafProbe() {
   const usage = useUsageProbeStore((s) => s.usage);
-  return <ContextUsageChip usage={usage} />;
+  return <ContextUsageChip usage={usage} providerId={null} />;
 }
 
 // ── Stable composer-relevant props (built once, never re-identified) ──────────

@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { formatRelativeTimestamp } from "@/lib/relative-time";
+import {
+  formatRelativeTimestamp,
+  formatResetCountdown,
+} from "@/lib/relative-time";
 
 const MINUTE_MS = 60_000;
 const HOUR_MS = 60 * MINUTE_MS;
@@ -53,5 +56,38 @@ describe("formatRelativeTimestamp", () => {
 
   it("clamps future timestamps to 'Just now' rather than rendering negative deltas", () => {
     expect(formatRelativeTimestamp(now + 10_000, now)).toBe("Just now");
+  });
+});
+
+describe("formatResetCountdown", () => {
+  const now = Date.parse("2026-04-23T12:00:00.000Z");
+
+  it("renders 'now' for deltas under one minute (regression: was unreachable under Math.ceil)", () => {
+    expect(formatResetCountdown(now, now)).toBe("now");
+    expect(formatResetCountdown(now + 5_000, now)).toBe("now");
+    expect(formatResetCountdown(now + (MINUTE_MS - 1), now)).toBe("now");
+  });
+
+  it("renders minute buckets once a full minute away", () => {
+    expect(formatResetCountdown(now + MINUTE_MS, now)).toBe("1m");
+    expect(formatResetCountdown(now + 2 * MINUTE_MS, now)).toBe("2m");
+    expect(formatResetCountdown(now + 59 * MINUTE_MS, now)).toBe("59m");
+  });
+
+  it("renders hour+minute buckets, omitting minutes when exactly on the hour", () => {
+    expect(formatResetCountdown(now + HOUR_MS, now)).toBe("1h");
+    expect(formatResetCountdown(now + HOUR_MS + 30 * MINUTE_MS, now)).toBe(
+      "1h 30m",
+    );
+    expect(formatResetCountdown(now + 23 * HOUR_MS, now)).toBe("23h");
+  });
+
+  it("renders day buckets past 24 hours", () => {
+    expect(formatResetCountdown(now + DAY_MS, now)).toBe("1d");
+    expect(formatResetCountdown(now + 4 * DAY_MS, now)).toBe("4d");
+  });
+
+  it("clamps a past resetsAt to 'now' rather than a negative duration", () => {
+    expect(formatResetCountdown(now - 10_000, now)).toBe("now");
   });
 });

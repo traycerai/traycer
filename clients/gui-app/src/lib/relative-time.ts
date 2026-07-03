@@ -89,3 +89,40 @@ export function useRelativeTimestamp(createdAt: number): string {
   useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   return formatRelativeTimestamp(createdAt, sampledNow);
 }
+
+/**
+ * Pure future-facing countdown formatter, the mirror of
+ * `formatRelativeTimestamp` for a reset time instead of a creation time.
+ *
+ * Buckets: "now" (<1m away) / `${n}m` / `${h}h ${m}m` (m omitted when 0) /
+ * `${d}d`. A past `resetsAt` (clock skew, or the window rolled over between
+ * fetch and render) clamps to "now" rather than a negative duration.
+ */
+export function formatResetCountdown(resetsAt: number, now: number): string {
+  const diffMs = Math.max(0, resetsAt - now);
+  const minutes = Math.floor(diffMs / MINUTE_MS);
+  if (minutes < 1) return "now";
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  if (hours < 24) {
+    return remainingMinutes > 0
+      ? `${hours}h ${remainingMinutes}m`
+      : `${hours}h`;
+  }
+  const days = Math.floor(hours / 24);
+  return `${days}d`;
+}
+
+/**
+ * Subscribes to the shared 60s tick clock and returns the current countdown
+ * label for `resetsAt` (epoch-ms), or `null` when there is nothing to count
+ * down to. Shares the same clock `useRelativeTimestamp` uses, so a popover
+ * showing several rate-limit windows alongside relative message timestamps
+ * still pays for only one interval.
+ */
+export function useResetCountdown(resetsAt: number | null): string | null {
+  useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  if (resetsAt === null) return null;
+  return formatResetCountdown(resetsAt, sampledNow);
+}
