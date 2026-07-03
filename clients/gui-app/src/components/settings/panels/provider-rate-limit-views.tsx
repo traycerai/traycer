@@ -59,8 +59,7 @@ function rateLimitSeverity(usedPercent: number): UsageBarTone | null {
   return null;
 }
 
-function windowTone(usedPercent: number): string {
-  const severity = rateLimitSeverity(usedPercent);
+function windowTone(severity: UsageBarTone | null): string {
   if (severity === "critical") return "text-destructive";
   if (severity === "warning") return "text-amber-500 dark:text-amber-400";
   return "text-muted-foreground";
@@ -150,10 +149,11 @@ function RateLimitWindowRow({
   readonly weekly: boolean;
 }): ReactNode {
   if (window === null) return null;
+  const severity = rateLimitSeverity(window.usedPercent);
   const resetLine = (
     <ResetLine
       resetsAt={window.resetsAt}
-      tone={windowTone(window.usedPercent)}
+      tone={windowTone(severity)}
       weekly={weekly}
     />
   );
@@ -163,7 +163,7 @@ function RateLimitWindowRow({
         label={label}
         consumed={window.usedPercent}
         total={100}
-        tone={usageBarTone(window.usedPercent)}
+        tone={severity ?? undefined}
         formatValue={formatUsagePercent}
       />
       <div className="flex justify-end">{resetLine}</div>
