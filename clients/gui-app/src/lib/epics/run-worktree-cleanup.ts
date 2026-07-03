@@ -1,6 +1,7 @@
 import { WorktreeDeleteStreamClient } from "@traycer-clients/shared/host-transport/worktree-delete-stream-client";
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
 import { openOwnedDurableStreamClient } from "@/lib/host/owned-durable-stream-client";
+import { appLogger } from "@/lib/logger";
 
 export interface WorktreeCleanupOutcome {
   readonly removed: ReadonlyArray<string>;
@@ -25,6 +26,13 @@ const MAX_PARALLEL_CLEANUP_STREAMS = 2;
  *
  * The host-side busy-check stays intact: a path that became in-use after the
  * dialog opened is declined and lands in `failed`, never silently force-removed.
+ *
+ * Every per-path delete settles: on an app terminal frame (`complete`/`failed`),
+ * on the FIRST connection drop after start (`reconnecting`/`closed`), or on a
+ * synchronous open failure. A drop is counted as `failed` and the session is
+ * torn down immediately so the transport's reconnect loop can't re-issue the
+ * `subscribe` frame (which would re-run the host delete pipeline) - so exactly
+ * one subscribe is ever sent per path, and the overall promise always resolves.
  */
 export async function runWorktreeCleanup(
   openStreamTransport: (hostId: string) => DurableStreamTransport,
@@ -97,10 +105,26 @@ function deleteOneWorktree(
               onOutput: () => {},
               onComplete: (deleted) => finish(deleted),
               onFailed: () => finish(false),
-              onConnectionStatus: (status, reason) => {
-                // Only a terminal close BEFORE an app-level terminal frame is a
-                // failure; recoverable reconnects surface as "reconnecting".
-                if (status !== "closed" || reason === null) return;
+              onConnectionStatus: (status) => {
+                // Fail fast on the FIRST drop after start. The one-shot delete
+                // stream must not silently re-run, but WsStreamClient's own
+                // reconnect loop keeps rescheduling `reconnecting` (reason:
+                // null) drops - which would both re-issue the subscribe (re-run
+                // the host pipeline) AND leave this promise hanging (the summary
+                // toast + cache invalidation would never fire). Any
+                // `reconnecting`/`closed` before a terminal frame means the
+                // delete never confirmed: count it failed and let `finish`'s
+                // `close()` tear the session down. `connecting`/`open` are the
+                // normal startup and are ignored; a `closed` fired by our own
+                // teardown after a terminal frame is absorbed by the `settled`
+                // guard.
+                if (status !== "reconnecting" && status !== "closed") return;
+                if (!state.settled) {
+                  appLogger.warn(
+                    "[worktree-cleanup] delete stream dropped before completing; the worktree may or may not have been removed",
+                    { worktreePath, status },
+                  );
+                }
                 finish(false);
               },
             },

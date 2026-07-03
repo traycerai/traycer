@@ -50,9 +50,15 @@ export function useTaskDeleteWorktreeCandidates(
     options: { enabled: deletedEpicIds !== null },
   });
 
+  // `listAllForHost` is the SHARED host-wide key (Settings / folder + worktree
+  // pickers populate it), so React Query can retain the last successful data
+  // after a failed refetch. Suppress candidates whenever the query is in an
+  // error state so a failed refresh can never offer stale (possibly already
+  // deleted) worktree paths - "failure -> no candidates".
+  const isError = query.isError;
   const worktrees = query.data?.worktrees;
   const candidates = useMemo<ReadonlyArray<TaskDeleteWorktreeCandidate>>(() => {
-    if (deletedEpicIds === null || worktrees === undefined) {
+    if (deletedEpicIds === null || worktrees === undefined || isError) {
       return EMPTY_CANDIDATES;
     }
     const deletedSet = new Set(deletedEpicIds);
@@ -72,7 +78,7 @@ export function useTaskDeleteWorktreeCandidates(
         },
       ];
     });
-  }, [deletedEpicIds, worktrees]);
+  }, [deletedEpicIds, isError, worktrees]);
 
-  return { candidates, isError: query.isError };
+  return { candidates, isError };
 }
