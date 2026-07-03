@@ -31,6 +31,12 @@ import {
   describeHostCompatibilityError,
   useHostCompatibility,
 } from "@/lib/host";
+import {
+  describeVersionSkew,
+  hostAppVersionFromDirectoryEntry,
+  type VersionSkewCopy,
+} from "@/lib/host/version-skew-copy";
+import { getClientAppVersion } from "@/lib/app-version";
 import { requestAppQuit } from "@/lib/desktop-app-lifecycle";
 import { runnerQueryKeys } from "@/lib/query-keys";
 import { cn } from "@/lib/utils";
@@ -172,6 +178,7 @@ export function LocalHostGate(props: LocalHostGateProps) {
     }
     return (
       <HostCompatibilityGate
+        selectedEntry={props.selectedEntry}
         source="busy-keep"
         checking={props.loading}
         onRefreshBusy={provisioning.retry}
@@ -205,6 +212,7 @@ export function LocalHostGate(props: LocalHostGateProps) {
   if (isReady) {
     return (
       <HostCompatibilityGate
+        selectedEntry={props.selectedEntry}
         source="normal-ready"
         checking={props.loading}
         onRefreshBusy={null}
@@ -434,6 +442,7 @@ function useHostProvisioning(args: {
 // initializing-host surface into an update-required card.
 interface HostBusyGateProps {
   readonly children: ReactNode;
+  readonly selectedEntry: HostDirectoryEntry | null;
   readonly source: HostCompatibilityGateSource;
   readonly checking: ReactNode;
   readonly onRefreshBusy: (() => void) | null;
@@ -454,6 +463,11 @@ function HostCompatibilityGate(props: HostBusyGateProps) {
       <GateIncompatibleHost
         source={props.source}
         reason={describeHostCompatibilityError(compat.error)}
+        skew={describeVersionSkew({
+          hostAppVersion: hostAppVersionFromDirectoryEntry(props.selectedEntry),
+          clientAppVersion: getClientAppVersion(),
+          guidance: compat.error.fatalDetails?.upgradeGuidance ?? null,
+        })}
         onRefreshBusy={props.onRefreshBusy}
         onForce={props.onForce}
         restartError={props.restartError}
@@ -478,16 +492,38 @@ function HostCompatibilityGate(props: HostBusyGateProps) {
 interface GateIncompatibleBusyProps {
   readonly source: HostCompatibilityGateSource;
   readonly reason: string;
+  /** Direction-aware copy (R4-D2) — which leg the handshake says is behind. */
+  readonly skew: VersionSkewCopy;
   readonly onRefreshBusy: (() => void) | null;
   readonly onForce: (() => void) | null;
   readonly restartError: Error | null;
 }
 
+function incompatibleHostDescription(
+  hostIsOutdated: boolean,
+  isBusyKeep: boolean,
+): string {
+  if (!hostIsOutdated) {
+    return "This app is running an older version than the host supports. Update Traycer to the latest version to continue.";
+  }
+  if (isBusyKeep) {
+    return "The running host has work in progress and is not compatible with this app update. Refresh to check again, or force update the host. Running work may be interrupted.";
+  }
+  return "This Traycer app update is not compatible with the running host. Update the local host before continuing.";
+}
+
 // Shown when the reachable host is incompatible with this build. Compatible
-// hosts continue automatically; incompatible hosts have one meaningful action:
-// update the local host to the app-compatible version.
+// hosts continue automatically. Above the support floor this should never
+// happen (Architecture §13's two-sided release invariant), so the copy names
+// the leg the handshake's own upgrade guidance says is behind rather than a
+// generic fatal: "Update host" is only offered when the HOST is the outdated
+// side — forcing a host update can never fix an outdated client, so that
+// affordance is hidden when this app itself is the one that needs updating.
 function GateIncompatibleHost(props: GateIncompatibleBusyProps) {
   const isBusyKeep = props.source === "busy-keep";
+  // The host-update actions only make sense when the host is confirmed to be
+  // the outdated side (or direction is unknown, matching today's behavior).
+  const hostIsOutdated = props.skew.action !== "Update the app";
   return (
     <div
       data-testid={
@@ -500,13 +536,14 @@ function GateIncompatibleHost(props: GateIncompatibleBusyProps) {
         <Card className="w-full max-w-md shadow-sm">
           <CardContent className="flex flex-col items-center gap-4 py-6 text-center text-ui-sm">
             <div className="flex flex-col gap-2">
-              <p className="text-ui font-medium text-foreground">
-                Host update required
+              <p
+                className="text-ui font-medium text-foreground"
+                data-testid="local-host-incompatible-title"
+              >
+                {props.skew.title}
               </p>
               <p className="text-muted-foreground">
-                {isBusyKeep
-                  ? "The running host has work in progress and is not compatible with this app update. Refresh to check again, or force update the host. Running work may be interrupted."
-                  : "This Traycer app update is not compatible with the running host. Update the local host before continuing."}
+                {incompatibleHostDescription(hostIsOutdated, isBusyKeep)}
               </p>
               <p
                 className="max-w-full break-words rounded-md bg-muted/50 px-3 py-2 text-left text-ui-xs text-muted-foreground"
@@ -529,7 +566,7 @@ function GateIncompatibleHost(props: GateIncompatibleBusyProps) {
                 isBusyKeep ? "sm:grid-cols-2" : "sm:flex sm:justify-center",
               )}
             >
-              {isBusyKeep && props.onRefreshBusy !== null ? (
+              {hostIsOutdated && isBusyKeep && props.onRefreshBusy !== null ? (
                 <Button
                   type="button"
                   size="sm"
@@ -541,7 +578,7 @@ function GateIncompatibleHost(props: GateIncompatibleBusyProps) {
                   Refresh
                 </Button>
               ) : null}
-              {props.onForce !== null ? (
+              {hostIsOutdated && props.onForce !== null ? (
                 <Button
                   type="button"
                   size="sm"

@@ -818,6 +818,7 @@ describe("createOpenEpicStore", () => {
     expect(opened.store.getState().snapshotFetchError).toEqual({
       code: "UNAUTHORIZED",
       message: "no token cached for user",
+      upgradeGuidance: null,
     });
     opened.dispose();
   });

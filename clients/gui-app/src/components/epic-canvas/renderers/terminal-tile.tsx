@@ -51,6 +51,10 @@ export function TerminalTile(props: TerminalTileProps) {
       kind: "shell",
     });
   }, [sessionId]);
+  // Directory loss/revocation is the only pre-bootstrap dead-tile gate here.
+  // Recoverable transport/session loss is handled by TerminalTileLive's
+  // lifecycle overlays so a reattachable remote session never becomes a
+  // permanent dead tile because its presence lease changed.
   if (reachability.status === "unreachable") {
     return (
       <TerminalDeadTileBanner
@@ -76,9 +80,9 @@ export function TerminalTile(props: TerminalTileProps) {
   // `terminal.list -> create` against the (now invalidated) host list.
   return (
     <TerminalTileLive
+      {...props}
       key={recovery.recoverNonce}
       recovery={recovery}
-      {...props}
     />
   );
 }
@@ -259,6 +263,9 @@ function TerminalLive(props: TerminalLiveProps) {
           <TerminalConnectionOverlay
             state={overlayState}
             onReconnect={props.recovery.onManualReconnect}
+            onClose={() =>
+              closeCanvasTab(props.viewTabId, props.tileId, props.instanceId)
+            }
             testId={`terminal-connection-overlay-${props.tileId}`}
           />
         ) : null}

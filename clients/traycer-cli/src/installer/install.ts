@@ -1,15 +1,18 @@
 import {
-  access,
+  lstat,
   mkdir,
   mkdtemp,
   readdir,
+  readlink,
   rename,
   rm,
   stat,
+  symlink,
 } from "node:fs/promises";
 import type { Stats } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { arch as osArch, platform as osPlatform } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import {
   type HostInstallArch,
   type HostInstallPlatform,
@@ -25,13 +28,15 @@ import {
 import type { ProgressInfo } from "../runner/output";
 import type { Environment } from "../runner/environment";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
-import { createCliLogger, errorFromUnknown } from "../logger";
+import { createCliLogger, errorFromUnknown, type ILogger } from "../logger";
 import {
   hostHomeDir,
   hostInstallDir,
   hostStagingRoot,
+  hostVersionsDir,
   ensureHostHomeDir,
   ensureHostStagingRoot,
+  ensureHostVersionsDir,
 } from "../store/paths";
 import { extractHostSource, resolveHostExecutable } from "./extract";
 import { hashFileSha256 } from "./sha256";
@@ -49,11 +54,18 @@ import { hashFileSha256 } from "./sha256";
 //   6. Atomically swap the staging dir into place at <installDir>.
 //   7. Write the install record.
 //
-// If swap-stage fails, the previous install is untouched. If swap
-// succeeds but the new host never reaches readiness, the new host
-// stays installed (no rollback cache); Doctor surfaces the
-// non-readiness so the operator can `host doctor` / `host install
-// --from <known-good>`.
+// If swap-stage fails, the previous install is untouched. `<installDir>`
+// (`hostInstallDir(environment)`) is a STABLE symlink (Windows: junction)
+// onto exactly one child of `hostVersionsDir(environment)` - see
+// `atomicSwap` below for the versioned-directory + atomic pointer-flip
+// scheme that makes the swap crash-safe (no window where the pointer
+// resolves to neither the old nor the new install). If swap succeeds but
+// the new host never reaches readiness, the new host stays installed at
+// this layer (no rollback cache HERE) - `commands/host-update.ts` is the
+// caller that adds a post-swap health probe + rollback on top of this
+// primitive; `host install` / `host ensure` callers that don't opt into
+// that keep today's Tech-Plan-documented "no rollback" behaviour, with
+// Doctor surfacing the non-readiness.
 //
 // Concurrency: callers must wrap this with `withCliLock` - see
 // `commands/host-install.ts`.
@@ -106,6 +118,14 @@ export interface InstallHostOptions {
 export interface InstallHostResult {
   readonly record: HostInstallRecord;
   readonly previous: HostInstallRecord | null;
+  // The versioned dir under `hostVersionsDir(environment)` that was active
+  // immediately before this swap - `null` when there was nothing to roll
+  // back to (first-ever install on this machine/environment). Callers that
+  // want rollback-on-unhealthy semantics (`commands/host-update.ts`) pass
+  // this straight to `rollbackToVersionedDir`; the bytes it points at are
+  // guaranteed to still be on disk (this swap keeps exactly the
+  // immediately-previous generation - see `atomicSwap`).
+  readonly previousVersionedDir: string | null;
 }
 
 export async function installHost(
@@ -147,10 +167,9 @@ export async function installHost(
     hasArchiveSha256: staging.archiveSha256 !== null,
   });
 
-  // Track whether the staging dir has been renamed into the install
-  // location. While `swapped === false` the staging dir is still
-  // exclusively owned by this attempt and needs explicit cleanup on a
-  // thrown extract/resolve/swap.
+  // Track whether the staging dir has been renamed into a versioned dir.
+  // While `swapped === false` the staging dir is still exclusively owned by
+  // this attempt and needs explicit cleanup on a thrown extract/resolve/swap.
   let swapped = false;
   try {
     opts.onProgress({
@@ -203,15 +222,17 @@ export async function installHost(
       bytes: null,
       totalBytes: null,
     });
-    await atomicSwap({
+    const swapResult = await atomicSwap({
       environment: opts.environment,
       stagingDir: staging.stagingDir,
+      version: staging.version,
+      previousRecordVersion: previous?.version ?? null,
     });
     swapped = true;
     logger.info("Host install atomic swap completed", {
       environment: opts.environment,
       version: staging.version,
-      replacedPreviousInstall: previous !== null,
+      replacedPreviousInstall: swapResult.previousVersionedDir !== null,
     });
 
     const finalExecutablePath = executablePath.replace(
@@ -265,10 +286,14 @@ export async function installHost(
       version: record.version,
       previousVersion: previous?.version ?? null,
     });
-    return { record, previous };
+    return {
+      record,
+      previous,
+      previousVersionedDir: swapResult.previousVersionedDir,
+    };
   } finally {
     // Best-effort sweep of the per-attempt staging archive (if any). The
-    // staging *directory* moved into the install dir on success - only
+    // staging *directory* moved into a versioned dir on success - only
     // clean up the leftover archive copy and (on a thrown attempt) the
     // staging dir that never made it through `atomicSwap`.
     if (staging.archiveIsTemporary) {
@@ -298,14 +323,43 @@ export async function installHost(
   }
 }
 
-// Sweep `<target>.old-*` siblings left behind by atomicSwap if the CLI
+// Sweep `<target>.old-*` siblings left behind by a PRE-versioned-dir CLI's
+// `atomicSwap` (the old two-step "move old aside, move new in" scheme) if it
 // crashed between a successful rename-aside and the fire-and-forget
-// `rm(trash)`. Called from `atomicSwap` on entry (so a repeated
+// `rm(trash)`. Kept as a best-effort backward-compat cleanup - the current
+// `atomicSwap` no longer creates `.old-*` siblings itself (it never moves
+// the previous install "aside": the previous versioned dir simply stays
+// where it already lives under `hostVersionsDir`, referenced by nothing
+// once the pointer flips). Called from `atomicSwap` on entry (so a repeated
 // install/update keeps the floor clean) and from the uninstaller. Best
 // effort - a failed sweep never aborts the surrounding operation.
 export async function sweepOldTrash(target: string): Promise<void> {
   const parent = dirname(target);
   const prefix = `${basename(target)}.old-`;
+  let names: string[];
+  try {
+    names = await readdir(parent);
+  } catch {
+    return;
+  }
+  const matches = names
+    .filter((name) => name.startsWith(prefix))
+    .map((name) => join(parent, name));
+  await Promise.all(
+    matches.map((path) =>
+      rm(path, { recursive: true, force: true }).catch(() => undefined),
+    ),
+  );
+}
+
+// Sweep `<target>.new-*` siblings left behind by a crash between creating
+// the temp symlink/junction in `flipHostInstallPointer` and the rename that
+// promotes it onto `target`. Harmless if left (just a small dangling link,
+// never the multi-file install payload) but swept best-effort on every
+// flip attempt to keep the floor clean, mirroring `sweepOldTrash`.
+async function sweepStaleLinkAttempts(target: string): Promise<void> {
+  const parent = dirname(target);
+  const prefix = `${basename(target)}.new-`;
   let names: string[];
   try {
     names = await readdir(parent);
@@ -521,60 +575,341 @@ async function stageRegistry(opts: StageRegistryOptions): Promise<StageResult> {
 interface AtomicSwapOptions {
   readonly environment: Environment;
   readonly stagingDir: string;
+  readonly version: string;
+  // The pre-swap install record's version (if any), used to synthesize a
+  // readable name when migrating a legacy plain-directory install dir into
+  // a versioned dir (see `migrateLegacyLayoutIfNeeded`). `null` when there
+  // was no prior record (first-ever install, or a legacy dir with a
+  // missing/corrupt record - the latter would already have thrown earlier
+  // in `installHost` via `readHostInstallRecord`, so in practice `null`
+  // here means "no prior install").
+  readonly previousRecordVersion: string | null;
 }
 
-async function atomicSwap(opts: AtomicSwapOptions): Promise<void> {
+export interface AtomicSwapResult {
+  // Absolute path of the versioned dir `hostInstallDir` pointed at
+  // immediately before this swap - `null` for a first-ever install/on a
+  // machine with nothing at `hostInstallDir` yet.
+  readonly previousVersionedDir: string | null;
+}
+
+// Versioned-directory + atomic-pointer-flip swap. Replaces the historical
+// two-step "move old aside, move new in" scheme (two `rename()` calls with
+// an unsafe gap between them where `hostInstallDir` resolved to nothing at
+// all) with:
+//
+//   (a) `promoteStagingToVersionedDir` - rename the staging dir into a
+//       FRESH, uniquely-named path under `hostVersionsDir(environment)`.
+//       The target never exists yet, so this is always a safe rename (no
+//       `ENOTEMPTY`, no partial state - either it lands fully or the
+//       rename call itself throws and nothing changed).
+//   (b) `flipHostInstallPointer` - atomically flip `hostInstallDir` to
+//       point at that fresh versioned dir: create the symlink/junction at
+//       a temp SIBLING path, then a single `rename()` onto
+//       `hostInstallDir` - which atomically replaces whatever was there
+//       (an existing symlink, junction, or nothing at all) in one syscall.
+//
+// At every point in time `hostInstallDir` therefore resolves to either the
+// fully-old or fully-new versioned dir, never a missing/partial one. A
+// crash between (a) and (b) leaves `hostInstallDir` resolving to the OLD
+// version (the new bytes sit inert under `hostVersionsDir`, cleaned up on
+// the next successful swap's sweep or left for a future retry to reuse the
+// pointer flip). A crash after (b) has already landed leaves it resolving
+// to the NEW version. There is no code path where a completed
+// `atomicSwap()` - or a crash at any single point within it - leaves
+// `hostInstallDir` resolving to neither.
+//
+// The previous versioned dir is deliberately NOT deleted here (unlike the
+// old scheme's `rm(trash)`) - it is the rollback source
+// `commands/host-update.ts` needs after a failed post-update health probe.
+// Anything OLDER than the immediately-previous generation is swept.
+async function atomicSwap(opts: AtomicSwapOptions): Promise<AtomicSwapResult> {
   const logger = createCliLogger(opts.environment);
   const target = hostInstallDir(opts.environment);
-  const trash = `${target}.old-${Date.now()}`;
-  await mkdir(hostHomeDir(opts.environment), { recursive: true });
+  const versionsDir = hostVersionsDir(opts.environment);
+  await ensureHostHomeDir(opts.environment);
+  await ensureHostVersionsDir(opts.environment);
 
-  // Best-effort sweep of any stale `<target>.old-*` siblings before we
-  // create another one. Doesn't block the swap on sweep success - if
-  // the sweep fails we log via the surrounding flow's progress and
-  // continue.
+  // Backward-compat sweep of `.old-*` siblings a pre-this-feature CLI's
+  // two-step swap may have left behind after a crash.
   await sweepOldTrash(target);
 
-  const targetExists = await access(target).then(
-    () => true,
-    () => false,
-  );
+  const previousVersionedDir = await migrateLegacyLayoutIfNeeded({
+    environment: opts.environment,
+    target,
+    versionsDir,
+    previousRecordVersion: opts.previousRecordVersion,
+    logger,
+  });
   logger.info("Host install atomic swap starting", {
     environment: opts.environment,
-    targetExists,
+    hasPreviousVersionedDir: previousVersionedDir !== null,
   });
-  if (targetExists) {
-    // Move the existing install aside before renaming the new one in,
-    // so the rename target is empty. We delete the trash copy after
-    // the new install is in place - there is no rollback cache by
-    // design.
-    await rename(target, trash);
-  }
+
+  let freshVersionedDir: string;
   try {
-    await rename(opts.stagingDir, target);
+    freshVersionedDir = await promoteStagingToVersionedDir(
+      opts.environment,
+      opts.stagingDir,
+      opts.version,
+    );
   } catch (cause) {
     logger.error(
-      "Host install atomic swap failed",
-      {
-        environment: opts.environment,
-        targetExists,
-      },
+      "Host install failed to move staged install into versions dir",
+      { environment: opts.environment },
       errorFromUnknown(cause),
     );
-    // Restore the previous install if the rename of the new one fails.
-    if (targetExists) {
-      await rename(trash, target).catch(() => undefined);
-    }
     throw cliError({
       code: CLI_ERROR_CODES.HOST_INSTALL_FAILED,
-      message: `host install: failed to swap staging dir into place: ${cause instanceof Error ? cause.message : String(cause)}`,
-      details: { target, stagingDir: opts.stagingDir },
+      message: `host install: failed to move staged install into place: ${cause instanceof Error ? cause.message : String(cause)}`,
+      details: { stagingDir: opts.stagingDir },
       exitCode: 1,
     });
   }
-  if (targetExists) {
-    await rm(trash, { recursive: true, force: true });
+
+  try {
+    await flipHostInstallPointer(opts.environment, freshVersionedDir);
+  } catch (cause) {
+    // The flip never landed - the fresh versioned dir is orphaned (nothing
+    // points at it) and `hostInstallDir` still resolves to whatever it
+    // resolved to before this call. Best-effort clean up the orphan so a
+    // retry doesn't accumulate dead directories; the caller's thrown
+    // error is `flipHostInstallPointer`'s own `HOST_INSTALL_FAILED`.
+    await rm(freshVersionedDir, { recursive: true, force: true }).catch(
+      () => undefined,
+    );
+    throw cause;
   }
+
+  logger.info("Host install atomic swap completed", {
+    environment: opts.environment,
+    activeVersionedDir: freshVersionedDir,
+    previousVersionedDir,
+  });
+
+  // Keep exactly the immediately-previous versioned dir (rollback source);
+  // sweep anything older. Best-effort - never blocks a completed swap.
+  await sweepStaleVersionedDirs(versionsDir, [
+    freshVersionedDir,
+    previousVersionedDir,
+  ]);
+
+  return { previousVersionedDir };
+}
+
+// Step (a) in isolation - exported so tests can simulate "crashed between
+// (a) and (b)" by calling this directly and asserting `hostInstallDir`
+// still resolves to the OLD version (via `readActiveVersionedDir`) before
+// ever calling `flipHostInstallPointer`.
+export async function promoteStagingToVersionedDir(
+  environment: Environment,
+  stagingDir: string,
+  version: string,
+): Promise<string> {
+  await ensureHostVersionsDir(environment);
+  const freshVersionedDir = join(
+    hostVersionsDir(environment),
+    uniqueVersionedDirName(version),
+  );
+  await rename(stagingDir, freshVersionedDir);
+  return freshVersionedDir;
+}
+
+// Step (b) in isolation - the atomic pointer-flip primitive shared by
+// `atomicSwap` and `rollbackToVersionedDir`. Exported so tests can call it
+// directly to assert the post-flip state, and so a caller that already has
+// a versioned dir in hand (rollback) can reuse the exact same mechanism a
+// forward swap uses.
+export async function flipHostInstallPointer(
+  environment: Environment,
+  versionedDir: string,
+): Promise<void> {
+  const target = hostInstallDir(environment);
+  await ensureHostHomeDir(environment);
+  await sweepStaleLinkAttempts(target);
+  const tmpLinkPath = `${target}.new-${randomSuffix()}`;
+  await symlinkCompat(versionedDir, tmpLinkPath);
+  try {
+    await rename(tmpLinkPath, target);
+  } catch (cause) {
+    await rm(tmpLinkPath, { recursive: true, force: true }).catch(
+      () => undefined,
+    );
+    throw cliError({
+      code: CLI_ERROR_CODES.HOST_INSTALL_FAILED,
+      message: `host install: failed to flip install dir pointer to ${versionedDir}: ${cause instanceof Error ? cause.message : String(cause)}`,
+      details: { target, versionedDir },
+      exitCode: 1,
+    });
+  }
+}
+
+// Rollback = flip the pointer back at a versioned dir that is still fully
+// on disk, untouched (the immediately-previous generation `atomicSwap`
+// deliberately keeps). Reuses the exact same atomic pointer-flip primitive
+// a forward swap uses - there is no separate "restore" code path to keep
+// in sync.
+export async function rollbackToVersionedDir(
+  environment: Environment,
+  previousVersionedDir: string,
+): Promise<void> {
+  const logger = createCliLogger(environment);
+  await flipHostInstallPointer(environment, previousVersionedDir);
+  logger.warn("Host install rolled back install dir pointer", {
+    environment,
+    previousVersionedDir,
+  });
+}
+
+// Resolve what `hostInstallDir(environment)` currently points at:
+//   - `null` when nothing exists there yet (first-ever install).
+//   - the resolved absolute symlink/junction target on the (post-
+//     migration) versioned-dir layout.
+//   - `hostInstallDir(environment)` itself when it is still a legacy plain
+//     directory (pre-migration) - the dir itself IS the active install in
+//     that case, there is no separate versioned-dir target to report.
+// Exported for tests (assert pre-/post-flip pointer state) and available
+// for any future caller that wants a read-only view of the active
+// versioned dir without triggering the migration side effect.
+export async function readActiveVersionedDir(
+  environment: Environment,
+): Promise<string | null> {
+  const target = hostInstallDir(environment);
+  let linkStat: Stats;
+  try {
+    linkStat = await lstat(target);
+  } catch (err) {
+    if (isEnoentError(err)) return null;
+    throw err;
+  }
+  if (linkStat.isSymbolicLink()) {
+    return resolveSymlinkTarget(target, await readlink(target));
+  }
+  return target;
+}
+
+interface MigrateLegacyLayoutOptions {
+  readonly environment: Environment;
+  readonly target: string;
+  readonly versionsDir: string;
+  readonly previousRecordVersion: string | null;
+  readonly logger: ILogger;
+}
+
+// Backward-compat sweep: a machine that installed the host before this
+// versioned-dir scheme shipped has a plain DIRECTORY at `hostInstallDir`,
+// not a symlink. Detect that case and migrate it in place - rename the
+// existing directory under `hostVersionsDir` (so its bytes are preserved
+// byte-for-byte, and it becomes a legitimate rollback source for the
+// update this call is already in the middle of) rather than crashing or
+// silently orphaning it. A subsequent call (once already migrated) just
+// reads the existing symlink's target - the migration only ever runs once
+// per machine/environment.
+//
+// Returns the resolved "previous versioned dir" either way - the freshly
+// migrated dir on a legacy machine, the existing symlink's target on an
+// already-migrated one, or `null` when there was nothing at `target` yet.
+async function migrateLegacyLayoutIfNeeded(
+  opts: MigrateLegacyLayoutOptions,
+): Promise<string | null> {
+  let linkStat: Stats;
+  try {
+    linkStat = await lstat(opts.target);
+  } catch (err) {
+    if (isEnoentError(err)) return null;
+    throw err;
+  }
+  if (linkStat.isSymbolicLink()) {
+    return resolveSymlinkTarget(opts.target, await readlink(opts.target));
+  }
+  if (!linkStat.isDirectory()) {
+    throw cliError({
+      code: CLI_ERROR_CODES.HOST_INSTALL_FAILED,
+      message: `host install: unexpected non-directory entry at install dir path ${opts.target}; refusing to overwrite`,
+      details: { target: opts.target },
+      exitCode: 1,
+    });
+  }
+  const migratedDir = join(
+    opts.versionsDir,
+    uniqueVersionedDirName(`${opts.previousRecordVersion ?? "legacy"}-legacy`),
+  );
+  await rename(opts.target, migratedDir);
+  opts.logger.info(
+    "Host install migrated legacy plain-directory layout into a versioned dir",
+    { environment: opts.environment, migratedDir },
+  );
+  return migratedDir;
+}
+
+function resolveSymlinkTarget(linkPath: string, rawTarget: string): string {
+  return isAbsolute(rawTarget)
+    ? rawTarget
+    : resolve(dirname(linkPath), rawTarget);
+}
+
+// Best-effort: remove every versioned dir under `versionsDir` except the
+// ones in `keep` (the freshly-active dir and the immediately-previous
+// generation). Never blocks a completed swap - a failed sweep just leaves
+// an extra directory on disk for the next successful swap to catch.
+async function sweepStaleVersionedDirs(
+  versionsDir: string,
+  keep: ReadonlyArray<string | null>,
+): Promise<void> {
+  const keepSet = new Set(keep.filter((p): p is string => p !== null));
+  let names: string[];
+  try {
+    names = await readdir(versionsDir);
+  } catch {
+    return;
+  }
+  await Promise.all(
+    names
+      .map((name) => join(versionsDir, name))
+      .filter((path) => !keepSet.has(path))
+      .map((path) =>
+        rm(path, { recursive: true, force: true }).catch(() => undefined),
+      ),
+  );
+}
+
+function uniqueVersionedDirName(version: string): string {
+  return `${sanitizeVersionForDirName(version)}-${randomSuffix()}`;
+}
+
+function sanitizeVersionForDirName(version: string): string {
+  const sanitized = version.replace(/[^A-Za-z0-9._-]/g, "-");
+  return sanitized.length > 0 ? sanitized : "unknown";
+}
+
+function randomSuffix(): string {
+  return randomBytes(6).toString("hex");
+}
+
+// Windows directory junctions (unlike regular symlinks) don't require
+// admin/Developer Mode, so we use them for the install-dir pointer on
+// win32; POSIX platforms ignore the `type` argument entirely, so "dir" is
+// just documentation there. Exported as a pure function so the platform
+// decision is unit-testable without touching the filesystem.
+export function hostInstallSymlinkType(
+  platform: NodeJS.Platform,
+): "dir" | "junction" {
+  return platform === "win32" ? "junction" : "dir";
+}
+
+async function symlinkCompat(
+  targetDir: string,
+  linkPath: string,
+): Promise<void> {
+  await symlink(targetDir, linkPath, hostInstallSymlinkType(osPlatform()));
+}
+
+function isEnoentError(err: unknown): boolean {
+  return (
+    err !== null &&
+    typeof err === "object" &&
+    Reflect.get(err, "code") === "ENOENT"
+  );
 }
 
 function deriveLocalVersion(sourcePath: string): string {

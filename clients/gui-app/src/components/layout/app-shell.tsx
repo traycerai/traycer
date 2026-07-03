@@ -7,6 +7,7 @@ import { MigrationBlockingModalHost } from "@/components/layout/dialogs/migratio
 import { AppHeader } from "@/components/layout/header/app-header";
 import { MigrationRunController } from "@/components/migration/migration-run-controller";
 import { OpenFolderDialog } from "@/components/open-folder-dialog";
+import { RemoteWorkspacePathPickerHost } from "@/components/home/host-workspace-selector/remote-workspace-path-picker-host";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 
 interface AppShellProps {
@@ -33,6 +34,7 @@ export function AppShell(props: AppShellProps) {
               <TileFindOwnerBridge />
             </main>
             <OpenFolderDialog />
+            <RemoteWorkspacePathPickerHost />
             <QuitInterceptBridge />
             <MigrationRunController />
             <MigrationBlockingModalHost />

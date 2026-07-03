@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { buildHostStreamClient } from "@/hooks/host/use-host-stream-client-for";
 
 // `subscribeStreamWakeReconnect` registers the `window 'online'` listener first,
@@ -18,15 +19,30 @@ vi.mock("@/lib/host/wake-reconnect", () => ({
 
 import { subscribeStreamWakeReconnect } from "@/lib/host/stream-wake-reconnect";
 
+const LOCAL_TARGET: HostDirectoryEntry = {
+  hostId: "host-a",
+  label: "host-a",
+  kind: "local",
+  websocketUrl: null,
+  version: null,
+  status: "available",
+};
+
 function makeClient() {
   // A real (inert) WsStreamClient: it dials nothing until `subscribe()` is
   // called, and `subscribeStreamWakeReconnect` only captures it in callbacks
   // that never fire here. Built via the real factory to avoid an unsafe cast.
-  return buildHostStreamClient({
+  const client = buildHostStreamClient({
+    target: LOCAL_TARGET,
     endpoint: () => null,
     bearer: () => null,
+    authnBaseUrl: "http://localhost:5005",
     auth: null,
   });
+  if (client === null) {
+    throw new Error("expected a local WsStreamClient, got null");
+  }
+  return client;
 }
 
 function makeRunnerHost() {

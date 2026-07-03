@@ -10,10 +10,12 @@
     "./auth/*": "./src/auth/*.ts",
     "./comments/*": "./src/comments/*.ts",
     "./common/*": "./src/common/*.ts",
+    "./crypto/noise": "./src/crypto/noise/index.ts",
     "./config": "./src/config/index.ts",
     "./config/*": "./src/config/*.ts",
     "./host": "./src/host/index.ts",
     "./host/*": "./src/host/*.ts",
+    "./host-transport/mux": "./src/host-transport/mux.ts",
     "./framework": "./src/framework/index.ts",
     "./framework/*": "./src/framework/*.ts",
     "./notifications/*": "./src/notifications/*.ts",
@@ -54,6 +56,10 @@
         "types": "./dist/src/common/*.d.ts",
         "import": "./dist/src/common/*.js"
       },
+      "./crypto/noise": {
+        "types": "./dist/src/crypto/noise/index.d.ts",
+        "import": "./dist/src/crypto/noise/index.js"
+      },
       "./config": {
         "types": "./dist/src/config/index.d.ts",
         "import": "./dist/src/config/index.js"
@@ -69,6 +75,10 @@
       "./host/*": {
         "types": "./dist/src/host/*.d.ts",
         "import": "./dist/src/host/*.js"
+      },
+      "./host-transport/mux": {
+        "types": "./dist/src/host-transport/mux.d.ts",
+        "import": "./dist/src/host-transport/mux.js"
       },
       "./framework": {
         "types": "./dist/src/framework/index.d.ts",
@@ -108,6 +118,7 @@
     "lint": "eslint . --cache --fix --max-warnings 0"
   },
   "dependencies": {
+    "@noble/curves": "^2.2.0",
     "y-utility": "^0.1.4",
     "yjs": "^13.6.31",
     "zod": "^4.4.3"

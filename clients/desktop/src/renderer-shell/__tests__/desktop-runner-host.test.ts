@@ -70,6 +70,7 @@ function buildFakeBridge(
   }> = [];
   const bridge: DesktopPreloadBridge = {
     authnBaseUrl: "http://localhost:5005",
+    relayBaseUrl: "ws://localhost:8787/attach",
     authRedirectUri: "",
     initialRoute: "/",
     sentryRendererDsn: "",
@@ -83,6 +84,8 @@ function buildFakeBridge(
     }),
     validateAuthTokenIdentity: async () => ({ kind: "rejected" as const }),
     refreshAuthToken: async () => ({ kind: "network-error" as const }),
+    listRegisteredHosts: async () => ({ kind: "network-error" as const }),
+    updateHostVersionPolicy: async () => ({ kind: "network-error" as const }),
     openExternalLink: async () => undefined,
     getRegisteredUrlSchemes: async () => [],
     requestMicrophoneAccess: async () => "granted" as const,

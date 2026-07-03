@@ -1,18 +1,28 @@
 import { useEffect, useMemo } from "react";
+import { v4 as uuidv4 } from "uuid";
 import { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import { DEFAULT_DIAL_TIMEOUT_MS } from "@traycer-clients/shared/host-transport/transport-config";
 import { createWhatwgStreamWebSocketFactory } from "@traycer-clients/shared/host-transport/whatwg-stream-ws-factory";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import {
+  isRemoteHostDirectoryEntry,
+  type RemoteHostDirectoryEntry,
+} from "@traycer-clients/shared/host-client/remote-fetcher";
+import { createRemoteHostTransport } from "@traycer-clients/shared/host-transport/remote/index";
+import type { HostStatusDTO } from "@traycer/protocol/host/host-status";
+import {
+  hostRpcRegistry,
   hostStreamRpcRegistry,
   type HostStreamRpcRegistry,
 } from "@traycer/protocol/host/registry";
 import type { StreamAuthRevalidator } from "@traycer-clients/shared/auth/bearer-revalidator";
 import type { BearerSourceProvider } from "@traycer-clients/shared/auth/bearer-source";
 import type { HostEndpointProvider } from "@traycer-clients/shared/host-transport/ws-rpc-client";
+import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { useHostClient } from "@/lib/host/runtime";
+import { useRunnerHost } from "@/providers/use-runner-host";
 import { hostTransportKey } from "@/lib/host/transport-key";
 import { useCloseWsStreamClientOnReplace } from "@/lib/host/use-close-ws-stream-client-on-replace";
 
@@ -31,8 +41,27 @@ const TRANSPORT_KEY_SEPARATOR = "\u0000";
 
 const browserStreamWebSocketFactory = createWhatwgStreamWebSocketFactory();
 
+/**
+ * Inert placeholder satisfying `RemoteHostDirectoryEntry.remoteStatus`'s shape
+ * requirement where a caller only has the primitive transport identity
+ * (hostId/websocketUrl/publicKey) on hand, not a live status DTO. Never read
+ * by `buildHostStreamClient` - only `isRemoteHostDirectoryEntry`'s structural
+ * check needs it to be present.
+ */
+const PLACEHOLDER_REMOTE_STATUS: HostStatusDTO = {
+  presenceLease: "expired",
+  hostRelayAttached: false,
+  viewerReachability: "unknown",
+  clientCloud: "ok",
+  busy: false,
+  busySessionCount: 0,
+  updateState: "current",
+  appVersion: null,
+  lastSeenAt: null,
+};
+
 export interface HostStreamClientBinding {
-  readonly client: WsStreamClient<HostStreamRpcRegistry>;
+  readonly client: IHostStreamClient<HostStreamRpcRegistry>;
   readonly transportKey: string;
 }
 
@@ -76,21 +105,61 @@ export function authenticatedHostStreamKey(
 }
 
 /**
- * Constructs a per-host `WsStreamClient` with the standard dial/heartbeat
+ * Constructs a per-host stream client with the standard dial/heartbeat
  * timings - the single place those timings live, shared by the app-wide
  * `HostStreamProvider`, the transient per-tab binding hook below, and the
  * session-owned durable transport (`openDurableStreamTransport`). Non-hook so
  * it can be called wherever a stream transport must be OWNED for a non-React
- * lifetime. `endpoint`, `bearer` and `auth` are all read live on each (re)dial:
- * `endpoint` so a host respawn on a new url is followed, `bearer` so
- * credential rotation is reflected; `auth` wires UNAUTHORIZED recovery
- * (null = terminal, for one-shot streams).
+ * lifetime.
+ *
+ * Selects the transport by `target.kind` (T14, mirrors `useHostClientFor`'s
+ * `buildMessenger`):
+ *  - `local`: a `WsStreamClient` dialing `endpoint` (read live on each
+ *    (re)dial, so a host respawn on a new url is followed without a client
+ *    rebuild); `auth` wires UNAUTHORIZED recovery (null = terminal, for
+ *    one-shot streams).
+ *  - `remote`: a persistent `RemoteSession` (Noise-NK + mux) behind a
+ *    `RemoteStreamClient`, built the SAME way `useHostClientFor` builds its
+ *    RPC messenger for the same host - an independent session, not a shared
+ *    one (a true single mux session per host across the RPC/stream/app-wide
+ *    consumers is a further optimization, not required for this transport
+ *    selection). Returns `null` when the host's public key does not decode
+ *    (a malformed registry row degrades to "unconnectable").
+ *
+ * `bearer` is read live on each (re)dial for both branches so a credential
+ * rotation is reflected.
  */
 export function buildHostStreamClient(params: {
+  readonly target: HostDirectoryEntry;
   readonly endpoint: HostEndpointProvider;
   readonly bearer: BearerSourceProvider;
+  readonly authnBaseUrl: string;
   readonly auth: StreamAuthRevalidator | null;
-}): WsStreamClient<HostStreamRpcRegistry> {
+}): IHostStreamClient<HostStreamRpcRegistry> | null {
+  if (
+    params.target.kind === "remote" &&
+    isRemoteHostDirectoryEntry(params.target) &&
+    params.target.websocketUrl !== null
+  ) {
+    const remoteTransport = createRemoteHostTransport<
+      HostRpcRegistry,
+      HostStreamRpcRegistry
+    >({
+      hostId: params.target.hostId,
+      relayAttachUrl: params.target.websocketUrl,
+      authnBaseUrl: params.authnBaseUrl,
+      hostPublicKey: params.target.publicKey,
+      bearer: params.bearer,
+      rpcRegistry: hostRpcRegistry,
+      streamRegistry: hostStreamRpcRegistry,
+      webSocketFactory: browserStreamWebSocketFactory,
+      requestId: uuidv4,
+    });
+    if (remoteTransport === null) return null;
+    remoteTransport.session.start();
+    return remoteTransport.streamClient;
+  }
+
   return new WsStreamClient<HostStreamRpcRegistry>({
     registry: hostStreamRpcRegistry,
     endpoint: params.endpoint,
@@ -133,6 +202,7 @@ export function useHostStreamClientBindingFor(
   auth: StreamAuthRevalidator | null,
 ): HostStreamClientBinding | null {
   const globalClient = useHostClient();
+  const authnBaseUrl = useRunnerHost().authnBaseUrl;
   // `null` when signed out or the credential lease was released - the
   // "no bound user" / "no auth" gate.
   const requestContext = globalClient.getRequestContext();
@@ -141,12 +211,18 @@ export function useHostStreamClientBindingFor(
     requestContext === null ? null : hostStreamTransportKeyFor(target, userId);
   const endpointHostId = target?.hostId ?? null;
   const endpointWebsocketUrl = target?.websocketUrl ?? null;
+  const endpointKind = target?.kind ?? null;
+  const endpointPublicKey =
+    target !== null && isRemoteHostDirectoryEntry(target)
+      ? target.publicKey
+      : null;
 
   const binding = useMemo(() => {
     if (
       transportKey === null ||
       endpointHostId === null ||
-      endpointWebsocketUrl === null
+      endpointWebsocketUrl === null ||
+      endpointKind === null
     ) {
       return null;
     }
@@ -154,16 +230,54 @@ export function useHostStreamClientBindingFor(
       hostId: endpointHostId,
       websocketUrl: endpointWebsocketUrl,
     };
+    // Rebuilt from the primitive dependency values (not the live `target`
+    // object identity) so a same-content directory re-emit does not rebuild
+    // the client - see the dependency array below. `remoteStatus` plays no
+    // role in transport construction (`buildHostStreamClient` only reads
+    // `hostId`/`websocketUrl`/`publicKey`); it is a placeholder purely to
+    // satisfy `isRemoteHostDirectoryEntry`'s shape check.
+    const memoizedTarget =
+      endpointKind === "remote" && endpointPublicKey !== null
+        ? ({
+            hostId: endpointHostId,
+            label: endpointHostId,
+            kind: "remote",
+            websocketUrl: endpointWebsocketUrl,
+            version: null,
+            status: "available",
+            publicKey: endpointPublicKey,
+            remoteStatus: PLACEHOLDER_REMOTE_STATUS,
+          } satisfies RemoteHostDirectoryEntry)
+        : ({
+            hostId: endpointHostId,
+            label: endpointHostId,
+            kind: endpointKind,
+            websocketUrl: endpointWebsocketUrl,
+            version: null,
+            status: "available",
+          } satisfies HostDirectoryEntry);
 
-    return {
-      transportKey,
-      client: buildHostStreamClient({
-        endpoint: () => endpoint,
-        bearer: () => globalClient.getRequestContext()?.credentials ?? null,
-        auth,
-      }),
-    };
-  }, [auth, endpointHostId, endpointWebsocketUrl, globalClient, transportKey]);
+    const client = buildHostStreamClient({
+      target: memoizedTarget,
+      endpoint: () => endpoint,
+      bearer: () => globalClient.getRequestContext()?.credentials ?? null,
+      authnBaseUrl,
+      auth,
+    });
+    if (client === null) {
+      return null;
+    }
+    return { transportKey, client };
+  }, [
+    auth,
+    authnBaseUrl,
+    endpointHostId,
+    endpointKind,
+    endpointPublicKey,
+    endpointWebsocketUrl,
+    globalClient,
+    transportKey,
+  ]);
   useCloseWsStreamClientOnReplace(binding?.client ?? null);
 
   // Push the rotated bearer onto this client's open sessions whenever a token
@@ -187,6 +301,6 @@ export function useHostStreamClientBindingFor(
 export function useHostStreamClientFor(
   target: HostDirectoryEntry | null,
   auth: StreamAuthRevalidator | null,
-): WsStreamClient<HostStreamRpcRegistry> | null {
+): IHostStreamClient<HostStreamRpcRegistry> | null {
   return useHostStreamClientBindingFor(target, auth)?.client ?? null;
 }

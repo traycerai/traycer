@@ -33,6 +33,12 @@ export const config = {
   version: "0.0.0-dev",
   authnBaseUrl: "https://authn.traycer.ai",
   cloudUiBaseUrl: "https://platform.traycer.ai",
+  // Remote Host Support (ticket T14): the relay worker's WebSocket attach
+  // endpoint (`workers/relay-do`, ticket T10) — mirrors the host build's own
+  // `relayAttachUrl` (`traycer-host/src/config.ts`). Committed directly like
+  // `authnBaseUrl`/`cloudUiBaseUrl` (the OSS build ships production endpoints
+  // in source); not stamped per-environment by the deploy script.
+  relayBaseUrl: "wss://relay.traycer.ai/attach",
   // Sentry crash-reporting DSN for the main process. Empty for local
   // (reporting disabled); the deploy script bakes the staging/production DSN.
   sentryDsn: "",

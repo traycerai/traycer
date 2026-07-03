@@ -24,6 +24,12 @@ vi.mock("@/lib/host/runtime", () => ({
   },
 }));
 
+// The hook now reads `runnerHost.authnBaseUrl` (for the remote transport's
+// attach-grant minting). Local targets never touch it; stub the minimum shape.
+vi.mock("@/providers/use-runner-host", () => ({
+  useRunnerHost: () => ({ authnBaseUrl: "https://authn.test" }),
+}));
+
 import { useHostClientFor } from "@/hooks/host/use-host-client-for";
 
 function buildGlobalClient(withContext: boolean): HostClient<HostRpcRegistry> {

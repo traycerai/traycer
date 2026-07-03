@@ -97,7 +97,11 @@ export interface WsRpcClientOptions<Registry extends VersionedRpcRegistry> {
  * Asymmetric per-method version-on-wire (specs/versioned-RPCs.yml, D-S6):
  *   - Same major, client newer minor: on-wire = host's older minor; request
  *     params are Zod-stripped to the older schema; response is upgraded from
- *     host's minor up to the client's canonical.
+ *     host's minor up to the client's canonical. If the caller's payload
+ *     doesn't project onto the older schema at all (a newer-minor-only
+ *     capability, e.g. a field the older schema requires non-null) this
+ *     surfaces as `DOWNGRADE_UNSUPPORTED` before the request frame is sent -
+ *     the same-major counterpart to the cross-major no-bridge case below.
  *   - Same major, client older minor: on-wire = caller's canonical; request
  *     and response flow unchanged (host handles the transforms).
  *   - Cross major, client newer: on-wire = host's canonical; the request is
@@ -120,8 +124,8 @@ export interface WsRpcClientOptions<Registry extends VersionedRpcRegistry> {
  *     called method) → emits a `fatalError` frame at the client, then
  *     surfaces the same details back as a thrown
  *     `HostRpcError(code: "INCOMPATIBLE")`.
- *   - cross-major no-bridge on the called method → no `fatalError` frame
- *     is emitted; surfaces as
+ *   - cross-major no-bridge, or same-major request-projection failure, on
+ *     the called method → no `fatalError` frame is emitted; surfaces as
  *     `HostRpcError(code: "DOWNGRADE_UNSUPPORTED")`.
  *   - response upgrade throw → `HostRpcError(code: "RPC_ERROR")` with the
  *     wrapped message.
@@ -329,7 +333,7 @@ interface PreparedRequest<Payload> {
  * when the client is the newer side we downgrade via `downgradeRequestAcrossMajors`
  * (cross-major) or Zod-strip on the older minor's request schema (same-major).
  */
-function prepareRequestPayload<Payload>(
+export function prepareRequestPayload<Payload>(
   methodRegistry: MethodVersionRegistry,
   clientCanonical: SchemaVersion,
   hostCanonical: SchemaVersion,
@@ -357,8 +361,14 @@ function prepareRequestPayload<Payload>(
     }
     const strippedParse = olderEntry.contract.requestSchema.safeParse(params);
     if (!strippedParse.success) {
+      // Same-major counterpart to the cross-major no-bridge case below: the
+      // caller's request genuinely doesn't fit the older peer's schema (a
+      // newer-minor-only capability, not an additive field the peer would
+      // just ignore). `DOWNGRADE_UNSUPPORTED` - not the generic `RPC_ERROR`
+      // transport/network code - lets a caller distinguish "this host is too
+      // old for what I just asked" from a real connectivity failure.
       throw new HostRpcError({
-        code: "RPC_ERROR",
+        code: "DOWNGRADE_UNSUPPORTED",
         message: `Failed to project request params onto ${hostCanonical.major}.${hostCanonical.minor}: ${strippedParse.error.message}`,
         requestId,
         method,
@@ -405,7 +415,7 @@ function prepareRequestPayload<Payload>(
  * through; when the client is the newer side we upgrade along the installed
  * chain via `upgradeResponseToVersion`.
  */
-function decodeResponsePayload<Payload>(
+export function decodeResponsePayload<Payload>(
   methodRegistry: MethodVersionRegistry,
   clientCanonical: SchemaVersion,
   hostCanonical: SchemaVersion,

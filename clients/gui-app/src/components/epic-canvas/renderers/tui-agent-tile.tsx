@@ -1042,6 +1042,9 @@ function TerminalAgentLive(props: TerminalAgentLiveProps) {
         <TerminalConnectionOverlay
           state={overlayState}
           onReconnect={props.recovery.onManualReconnect}
+          onClose={() =>
+            closeCanvasTab(props.viewTabId, props.tileId, props.instanceId)
+          }
           testId={`terminal-connection-overlay-${props.tileId}`}
         />
       ) : null}

@@ -6,7 +6,10 @@
  * suggestions.
  */
 import { z } from "zod";
-import { taskRepoIdentifierSchema } from "@traycer/protocol/host/epic/unary-schemas";
+import {
+  preparedWorkspaceFolderSchema,
+  taskRepoIdentifierSchema,
+} from "@traycer/protocol/host/epic/unary-schemas";
 
 export const workspaceMentionGitTypeSchema = z.enum([
   "against_uncommitted_changes",
@@ -347,4 +350,106 @@ export const workspaceReadFileResponseSchema = z.object({
 });
 export type WorkspaceReadFileResponse = z.infer<
   typeof workspaceReadFileResponseSchema
+>;
+
+// -----------------------------------------------------------------------------
+// Workspace root picking (T14, Journey 3; re-homed onto `workspace.prepareFolders`
+// v1.1 by T18 - see the RPC backward-compat decision log) - the pre-workspace
+// operations a remote client needs before it has a workspace to browse at all:
+// the folder lives on the host, so a client can only enter/paste a path, never
+// open a native OS dialog. Distinct from the mention/tree/read RPCs above,
+// which all assume a workspace root is already chosen.
+// -----------------------------------------------------------------------------
+
+export const workspacePathRejectionReasonSchema = z.enum([
+  "NOT_ABSOLUTE",
+  "NOT_FOUND",
+  "NOT_A_DIRECTORY",
+  "NO_PERMISSION",
+]);
+export type WorkspacePathRejectionReason = z.infer<
+  typeof workspacePathRejectionReasonSchema
+>;
+
+/**
+ * Shared outcome shape for both the `validatePath` operation (live,
+ * as-you-type probing - safe to call on every keystroke, never records
+ * anything) and `recordRecentWorkspace` (an explicit commit action:
+ * re-validates, and only on success appends to the recent list).
+ * `resolvedPath` is the realpath-canonicalized absolute directory the client
+ * should bind the workspace to.
+ */
+export const workspaceValidatePathResponseSchema = z.discriminatedUnion("ok", [
+  z.object({ ok: z.literal(true), resolvedPath: z.string() }),
+  z.object({ ok: z.literal(false), reason: workspacePathRejectionReasonSchema }),
+]);
+export type WorkspaceValidatePathResponse = z.infer<
+  typeof workspaceValidatePathResponseSchema
+>;
+
+export const workspaceRecentEntrySchema = z.object({
+  path: z.string(),
+  lastOpenedAt: z.string(),
+});
+export type WorkspaceRecentEntry = z.infer<typeof workspaceRecentEntrySchema>;
+
+// -----------------------------------------------------------------------------
+// `workspace.prepareFolders` v1.1 - additive `operation` discriminator folding
+// the 4 standalone workspace-picker methods (`workspace.getHomeDir`,
+// `workspace.validatePath`, `workspace.recordRecentWorkspace`,
+// `workspace.listRecentWorkspaces`) onto the existing method name (T18). Kept
+// as a flat object rather than a discriminated union at the top level: the
+// versioned-RPC framework's minor-line additivity check requires the same
+// JSON-Schema "kind" across a minor bump, and v1.0's request/response are
+// plain objects.
+//
+// `folderPaths` stays a plain (non-nullable) array ONLY for `operation:
+// "prepare"` - every other operation sends `folderPaths: null`, which v1.0's
+// `z.array(z.string())` request schema rejects. That is deliberate: it makes
+// the framework's automatic same-major downgrade (Zod-parsing a newer
+// request through the older schema when a v1.1 client talks to a v1.0 host)
+// fail closed with a per-call `RPC_ERROR` for the 4 genuinely-new operations,
+// instead of silently succeeding with a nonsensical "prepared 0 folders"
+// response. A real `prepare` call still degrades transparently against a
+// v1.0 host - the whole point of folding onto this method instead of a new
+// name.
+// -----------------------------------------------------------------------------
+
+export const workspacePrepareFoldersOperationSchema = z.enum([
+  "prepare",
+  "getHomeDir",
+  "validatePath",
+  "recordRecentWorkspace",
+  "listRecentWorkspaces",
+]);
+export type WorkspacePrepareFoldersOperation = z.infer<
+  typeof workspacePrepareFoldersOperationSchema
+>;
+
+export const workspacePrepareFoldersRequestSchemaV11 = z.object({
+  operation: workspacePrepareFoldersOperationSchema,
+  /** Set only for `operation: "prepare"`. */
+  folderPaths: z.array(z.string()).nullable(),
+  /** Set only for `operation: "validatePath" | "recordRecentWorkspace"`. */
+  path: z.string().nullable(),
+});
+export type WorkspacePrepareFoldersRequestV11 = z.infer<
+  typeof workspacePrepareFoldersRequestSchemaV11
+>;
+
+export const workspacePrepareFoldersResponseSchemaV11 = z.object({
+  operation: workspacePrepareFoldersOperationSchema,
+  /** Set for `operation: "prepare"`; `[]` otherwise. */
+  folders: z.array(preparedWorkspaceFolderSchema),
+  /** Set for `operation: "prepare"`; `[]` otherwise. */
+  repoIdentifiers: z.array(taskRepoIdentifierSchema),
+  /** Set only for `operation: "getHomeDir"`. */
+  homeDir: z.string().nullable(),
+  /** Set only for `operation: "validatePath" | "recordRecentWorkspace"`. */
+  validation: workspaceValidatePathResponseSchema.nullable(),
+  /** Set only for `operation: "listRecentWorkspaces"`. */
+  recentWorkspaces: z.array(workspaceRecentEntrySchema).nullable(),
+});
+export type WorkspacePrepareFoldersResponseV11 = z.infer<
+  typeof workspacePrepareFoldersResponseSchemaV11
 >;

@@ -200,7 +200,12 @@ export function useTerminalSessionHandle(
     return handle.store.subscribe((state) => {
       if (state.status === previousStatus) return;
       previousStatus = state.status;
-      if (state.status !== "exited" && state.status !== "lost") return;
+      if (
+        state.status !== "exited" &&
+        state.status !== "lost" &&
+        state.status !== "reaped"
+      )
+        return;
       void queryClient.invalidateQueries({
         queryKey: hostQueryKeys.scope(args.hostId),
       });

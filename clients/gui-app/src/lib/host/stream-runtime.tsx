@@ -7,7 +7,7 @@ import {
   type ReactNode,
 } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream-client";
+import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import { useHostBinding } from "@/lib/host/runtime";
@@ -19,6 +19,7 @@ import { StreamRuntimeContext } from "@/lib/host/stream-runtime-context";
 import type { StreamRuntimeBinding } from "@/lib/host/stream-runtime-context";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { useStreamWakeReconnect } from "@/lib/host/stream-wake-reconnect";
+import { useRunnerHost } from "@/providers/use-runner-host";
 import { appLogger } from "@/lib/logger";
 
 export interface HostStreamProviderProps {
@@ -47,6 +48,7 @@ export interface HostStreamProviderProps {
 export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
   const binding = useHostBinding();
   const auth = useStreamAuthRevalidator();
+  const authnBaseUrl = useRunnerHost().authnBaseUrl;
   const readiness = useReactiveHostReadiness(
     binding === null ? null : binding.hostClient,
   );
@@ -65,13 +67,18 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
   const value = useMemo<StreamRuntimeBinding | null>(() => {
     if (binding === null) return null;
     if (identityKey === null) return null;
+    const target = binding.hostClient.getActiveHost();
+    if (target === null) return null;
     const wsStreamClient = buildHostStreamClient({
+      target,
       endpoint: () => binding.hostClient.getActiveHost(),
       bearer: () => binding.hostClient.getRequestContext()?.credentials ?? null,
+      authnBaseUrl,
       auth,
     });
+    if (wsStreamClient === null) return null;
     return { wsStreamClient };
-  }, [binding, auth, identityKey]);
+  }, [binding, auth, authnBaseUrl, identityKey]);
   useEffect(() => {
     if (value === null) return;
     appLogger.debug("[stream] app stream client created", {
@@ -119,11 +126,11 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
  * null) - the next non-null transition fires it.
  */
 function useReconnectStreamOnEndpointChange(
-  client: WsStreamClient<HostStreamRpcRegistry> | null,
+  client: IHostStreamClient<HostStreamRpcRegistry> | null,
   transportKey: string | null,
 ): void {
   const previous = useRef<{
-    readonly client: WsStreamClient<HostStreamRpcRegistry> | null;
+    readonly client: IHostStreamClient<HostStreamRpcRegistry> | null;
     readonly transportKey: string | null;
   }>({ client: null, transportKey: null });
   useEffect(() => {

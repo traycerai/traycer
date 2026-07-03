@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import type { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream-client";
+import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import { onWakeReconnect } from "@/lib/host/wake-reconnect";
@@ -14,7 +14,7 @@ import { useRunnerHost } from "@/providers/use-runner-host";
  * created with the transport and torn down when it closes, not on tile unmount.
  */
 export function subscribeStreamWakeReconnect(
-  client: WsStreamClient<HostStreamRpcRegistry>,
+  client: IHostStreamClient<HostStreamRpcRegistry>,
   runnerHost: IRunnerHost,
 ): () => void {
   const offOnline = onWakeReconnect(() => {
@@ -66,7 +66,7 @@ export function subscribeStreamWakeReconnect(
  * calling this hook. Must be called inside a `<RunnerHostProvider>`.
  */
 export function useStreamWakeReconnect(
-  client: WsStreamClient<HostStreamRpcRegistry> | null,
+  client: IHostStreamClient<HostStreamRpcRegistry> | null,
 ): void {
   const runnerHost = useRunnerHost();
 

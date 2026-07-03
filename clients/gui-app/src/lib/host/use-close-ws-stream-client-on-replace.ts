@@ -1,9 +1,9 @@
 import { useEffect, useRef } from "react";
-import type { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream-client";
+import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 
 /**
- * Closes a tile-OWNED `WsStreamClient` when it is replaced by a different one,
+ * Closes a tile-OWNED host stream client when it is replaced by a different one,
  * and on unmount - but defers the unmount-close by a microtask guarded by a
  * lifecycle token, so a StrictMode double-invoke or a rapid unmount→remount
  * that hands back the SAME client does not tear down a socket that is about to
@@ -16,11 +16,10 @@ import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
  * `openDurableStreamTransport`, not to a tile's mount.
  */
 export function useCloseWsStreamClientOnReplace(
-  client: WsStreamClient<HostStreamRpcRegistry> | null,
+  client: IHostStreamClient<HostStreamRpcRegistry> | null,
 ): void {
-  const currentClientRef = useRef<WsStreamClient<HostStreamRpcRegistry> | null>(
-    null,
-  );
+  const currentClientRef =
+    useRef<IHostStreamClient<HostStreamRpcRegistry> | null>(null);
   const lifecycleTokenRef = useRef(0);
   useEffect(() => {
     lifecycleTokenRef.current += 1;

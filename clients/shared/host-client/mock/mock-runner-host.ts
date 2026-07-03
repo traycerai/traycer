@@ -32,6 +32,15 @@ import {
 } from "../../auth/auth-validation";
 import type { AuthIdentityValidationResult } from "../../auth/auth-validation-types";
 import type { HostDirectoryEntry } from "../host-directory";
+import {
+  fetchRegisteredHostsViaHttp,
+  type HostListFetchResult,
+} from "../remote-fetcher";
+import {
+  updateHostVersionPolicyViaHttp,
+  type UpdateHostVersionPolicyFetchResult,
+  type UpdateHostVersionPolicyInput,
+} from "../host-version-policy-fetcher";
 
 export interface MockRunnerHostOptions {
   readonly signInUrl: string;
@@ -71,6 +80,10 @@ const MOCK_TOKEN_STORE_KEY = "traycer.token";
 export class MockRunnerHost implements IRunnerHost {
   readonly signInUrl: string;
   readonly authnBaseUrl: string;
+  // Fixed test-only value: no test constructs a real remote transport against
+  // this mock (remote hosts flow through `hosts`/`HostDirectoryEntry` fixtures
+  // instead), so this never needs to vary per test the way `authnBaseUrl` does.
+  readonly relayBaseUrl: string = "wss://relay.test.invalid/attach";
   readonly hasLocalHost: boolean;
   readonly openedExternalLinks: string[] = [];
   readonly notificationsSent: Array<{
@@ -178,6 +191,26 @@ export class MockRunnerHost implements IRunnerHost {
     refreshToken: string,
   ): Promise<AuthTokenRefreshResult> {
     return refreshAuthTokenViaHttp(this.authnBaseUrl, token, refreshToken);
+  }
+
+  listRegisteredHosts(bearerToken: string): Promise<HostListFetchResult> {
+    // The in-memory shell has no CORS boundary, so it calls the shared HTTP
+    // helper directly (browser/dev parity with the auth validators above).
+    return fetchRegisteredHostsViaHttp(this.authnBaseUrl, bearerToken);
+  }
+
+  updateHostVersionPolicy(
+    bearerToken: string,
+    hostId: string,
+    input: UpdateHostVersionPolicyInput,
+  ): Promise<UpdateHostVersionPolicyFetchResult> {
+    // Same no-CORS-boundary parity as `listRegisteredHosts` above.
+    return updateHostVersionPolicyViaHttp(
+      this.authnBaseUrl,
+      bearerToken,
+      hostId,
+      input,
+    );
   }
 
   async openExternalLink(url: string): Promise<void> {

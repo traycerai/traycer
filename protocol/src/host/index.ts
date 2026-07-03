@@ -31,6 +31,7 @@ export {
   worktreeListByWorkspacePathsV10,
   worktreeListByWorkspacePathsV11,
   worktreeListByWorkspacePathsUpgradeV10ToV11,
+  workspacePrepareFoldersUpgradeV10ToV11,
   worktreeRetrySetupV10,
   workspaceBindingRemoveEntryV10,
   worktreeSetEntryModeV10,

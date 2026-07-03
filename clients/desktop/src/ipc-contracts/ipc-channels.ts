@@ -23,6 +23,14 @@ export const RunnerHostInvoke = {
   deviceFlowPollNow: "runnerHost:auth:deviceFlowPollNow",
   deviceFlowCancel: "runnerHost:auth:deviceFlowCancel",
   refreshAuthToken: "runnerHost:auth:refreshToken",
+  // Remote Host Support (§7): `GET /api/v3/hosts` with the user bearer. Run in
+  // main for the same CORS reason as the token validators — authn-v3's CORS
+  // allow-list is the web dashboard origin, not the app renderer.
+  listRegisteredHosts: "runnerHost:hosts:list",
+  // Remote Host Support (§13, T16): `PATCH /api/v3/hosts/:hostId` — "Update
+  // now" / auto-policy toggle / "Apply now — ends N sessions". Same CORS
+  // reason as `listRegisteredHosts`.
+  updateHostVersionPolicy: "runnerHost:hosts:updateVersionPolicy",
   openExternalLink: "runnerHost:openExternalLink",
   getRegisteredUrlSchemes: "runnerHost:getRegisteredUrlSchemes",
   requestMicrophoneAccess: "runnerHost:requestMicrophoneAccess",

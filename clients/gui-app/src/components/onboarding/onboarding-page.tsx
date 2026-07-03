@@ -12,7 +12,6 @@ import {
 import { useNavigate, useRouter } from "@tanstack/react-router";
 import { AnimatePresence, m } from "motion/react";
 import { traycerInfo } from "@traycer-clients/shared/platform/traycer-info";
-import packageJson from "../../../package.json";
 import geistPixelSquareUrl from "@/assets/fonts/GeistPixel-Square.woff2?url";
 import onboardingBackdropUrl from "@/assets/brand/gradient-bg.jpg?url";
 import { BrandMark } from "@/components/auth/cinematic-backdrop";
@@ -29,6 +28,7 @@ import { OnboardingThemePicker } from "@/components/onboarding/onboarding-theme-
 import { useAgentSelectionGuideGlobalOnboardingDraftQuery } from "@/hooks/agent/use-agent-selection-guide-global-onboarding-draft-query";
 import { useAgentSelectionGuideSetGlobalMutation } from "@/hooks/agent/use-agent-selection-guide-set-global-mutation";
 import { RunnerHostContext } from "@/providers/runner-host-context";
+import { getClientAppVersionLabel } from "@/lib/app-version";
 import {
   selectIsLastStep,
   selectStep,
@@ -291,15 +291,6 @@ const ONBOARDING_STYLE = `
     --onboarding-diorama-width: min(100%, 24rem);
   }
 }`;
-
-function resolveAppVersionLabel(): string {
-  const envVersion = import.meta.env.VITE_APP_VERSION;
-  const raw =
-    typeof envVersion === "string" && envVersion.length > 0
-      ? envVersion
-      : packageJson.version;
-  return raw.startsWith("v") ? raw : `v${raw}`;
-}
 
 function ActCopy(props: { act: OnboardingAct }) {
   const { act } = props;
@@ -735,7 +726,7 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
         </section>
 
         <footer className="flex items-center justify-between gap-4 px-10 font-heading text-[0.75rem] leading-none text-white/75 [@media(min-height:920px)]:text-[0.8125rem] max-sm:px-5">
-          <span>{resolveAppVersionLabel()}</span>
+          <span>{getClientAppVersionLabel()}</span>
           <OnboardingFooterLinks />
         </footer>
       </div>

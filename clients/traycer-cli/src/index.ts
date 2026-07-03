@@ -189,6 +189,22 @@ export function buildProgram(): Command {
   // `optsWithGlobals()` which is what the runner-aware action handlers
   // rely on.
   addRunnerFlags(program);
+  // Without this, Commander's root-level `program.version(...)` (the
+  // auto-registered `-V, --version` flag) greedily claims ANY `--version`
+  // token anywhere in argv - even one meant for a deeply-nested
+  // subcommand's own `--version <value>` option - because by default
+  // Commander scans the full argv for options it recognizes rather than
+  // stopping at the first subcommand boundary. `enablePositionalOptions()`
+  // makes the ROOT command stop scanning for its own options as soon as it
+  // reaches the first token that names a real subcommand (here: "host"),
+  // deferring everything after it to that subcommand's own parser. This is
+  // scoped to the root only - no nested command below it enables
+  // positional options, so multi-level flag/positional parsing elsewhere
+  // (repeated options, variadic positionals, etc.) is unaffected. Required
+  // so `host update --version <v> [--force]` - the exact invocation the
+  // host daemon spawns detached - reaches `host update`'s own `--version`
+  // option instead of printing the CLI's own version and exiting 0.
+  program.enablePositionalOptions();
   registerCommands(program);
   // Route commander's own parse failures (missing required option, unknown
   // option/command) through the runner's error contract so `--json`
@@ -509,13 +525,23 @@ function registerHostCommands(program: Command): void {
   withRunner(
     host
       .command("update")
-      .description("Update the installed host to the latest registry version")
+      .description(
+        "Update the installed host to a specific registry version (defaults to 'latest'); verifies local health after the swap and rolls back on failure",
+      )
+      .option(
+        "--version <version>",
+        "Target registry version to update to (defaults to 'latest'). This is the flag the host daemon spawns with, e.g. 'traycer host update --version 1.4.0'.",
+      )
       .option(
         "--force",
         "Update the host even if it has work in progress (skips the busy check).",
       ),
     (opts) =>
       buildHostUpdateCommand({
+        version:
+          typeof opts.version === "string" && opts.version.length > 0
+            ? opts.version
+            : "latest",
         force: opts.force === true,
       }),
   );

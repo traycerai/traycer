@@ -135,11 +135,16 @@ function createRunnerHost(menu: FakeDesktopMenu): FakeRunnerHost {
     {
       signInUrl: "https://auth.example.invalid/sign-in",
       authnBaseUrl: "https://auth.example.invalid",
+      relayBaseUrl: "wss://relay.example.invalid/attach",
       hasLocalHost: true,
       validateAuthToken: () => Promise.resolve({ kind: "rejected" as const }),
       validateAuthTokenIdentity: () =>
         Promise.resolve({ kind: "rejected" as const }),
       refreshAuthToken: () =>
+        Promise.resolve({ kind: "network-error" as const }),
+      listRegisteredHosts: () =>
+        Promise.resolve({ kind: "network-error" as const }),
+      updateHostVersionPolicy: () =>
         Promise.resolve({ kind: "network-error" as const }),
       openExternalLink: () => Promise.resolve(),
       getRegisteredUrlSchemes: () => Promise.resolve([]),

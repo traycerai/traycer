@@ -15,16 +15,22 @@ import type { TerminalConnectionOverlayState } from "./terminal-connection-overl
  * - `recovering` - the session was found gone and is being respawned-and-resumed
  *   automatically (see `useTerminalSessionRecovery`).
  * - `lost` - automatic recovery gave up (the respawn kept failing); offer a
- *   manual retry.
+ *   manual retry ("reattachable" - the session may still exist, Architecture §8).
+ * - `sessionLost` - the host confirmed (`TERMINAL_NOT_FOUND`) this session is
+ *   definitively gone (linger expired + reaped, or lost across a host
+ *   restart) - a final state (Journey 4: "Scroll back to see how it
+ *   finished"); no retry affordance, only Close.
  *
  * Keystrokes are already blocked from the dead PTY at the store
- * (`writeInput` returns null while `status === "lost"` or the connection is not
- * open), so the overlay does not steal focus; it covers the grid and announces
- * the state as a live region.
+ * (`writeInput` returns null while `status` is `"lost"`/`"reaped"` or the
+ * connection is not open), so the overlay does not steal focus; it covers
+ * the grid and announces the state as a live region.
  */
 export interface TerminalConnectionOverlayProps {
   readonly state: TerminalConnectionOverlayState;
   readonly onReconnect: () => void;
+  /** Only invoked from the `sessionLost` state's Close action. */
+  readonly onClose: () => void;
   readonly testId: string;
 }
 
@@ -32,43 +38,68 @@ export function TerminalConnectionOverlay(
   props: TerminalConnectionOverlayProps,
 ): ReactNode {
   const isLost = props.state === "lost";
+  const isSessionLost = props.state === "sessionLost";
+  const isAlert = isLost || isSessionLost;
+  let content: ReactNode;
+  if (isSessionLost) {
+    content = (
+      <>
+        <p className="max-w-md">
+          This terminal&apos;s session ended while you were away. Scroll back to
+          see how it finished.
+        </p>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={props.onClose}
+        >
+          Close
+        </Button>
+      </>
+    );
+  } else if (isLost) {
+    content = (
+      <>
+        <p className="max-w-md">
+          This session disconnected and could not be restarted. It may have
+          ended while the app was asleep.
+        </p>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={props.onReconnect}
+        >
+          Reconnect
+        </Button>
+      </>
+    );
+  } else {
+    const label =
+      props.state === "recovering"
+        ? "Reconnecting and resuming the session…"
+        : "Reconnecting…";
+    content = (
+      <div className="flex items-center gap-2">
+        <AgentSpinningDots
+          className={undefined}
+          testId={undefined}
+          variant={undefined}
+        />
+        <span>{label}</span>
+      </div>
+    );
+  }
   return (
     <div
       className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-canvas/85 px-6 text-center text-ui-sm text-muted-foreground"
       data-testid={props.testId}
-      role={isLost ? "alert" : "status"}
-      aria-live={isLost ? "assertive" : "polite"}
-      aria-busy={!isLost}
+      role={isAlert ? "alert" : "status"}
+      aria-live={isAlert ? "assertive" : "polite"}
+      aria-busy={!isAlert}
     >
-      {isLost ? (
-        <>
-          <p className="max-w-md">
-            This session disconnected and could not be restarted. It may have
-            ended while the app was asleep.
-          </p>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={props.onReconnect}
-          >
-            Reconnect
-          </Button>
-        </>
-      ) : (
-        <div className="flex items-center gap-2">
-          <AgentSpinningDots
-            className={undefined}
-            testId={undefined}
-            variant={undefined}
-          />
-          <span>
-            {props.state === "recovering"
-              ? "Reconnecting and resuming the session…"
-              : "Reconnecting…"}
-          </span>
-        </div>
-      )}
+      {content}
     </div>
   );
 }

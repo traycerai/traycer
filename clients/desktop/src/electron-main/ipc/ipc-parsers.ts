@@ -28,6 +28,7 @@ export {
   parseLandingDrafts,
 } from "../../ipc-contracts/window-state-parsers";
 import { normalizeDesktopAuthSession } from "../auth/desktop-auth-session";
+import type { UpdateHostVersionPolicyInput } from "@traycer-clients/shared/host-client/host-version-policy-fetcher";
 
 export function assertString(
   value: unknown,
@@ -278,6 +279,38 @@ export function parseDesktopAuthSession(
 
 export function parseSupportLogTarget(value: unknown): SupportLogTarget {
   return value === "host" ? "host" : "desktop";
+}
+
+/**
+ * Parses the renderer-supplied `PATCH /api/v3/hosts/:hostId` body (Remote
+ * Host Support §13, T16). Every field is tri-state (`undefined` = leave
+ * untouched); an unrecognized/mistyped value degrades to `undefined` rather
+ * than throwing, so a stale renderer build can never crash main — the server
+ * still 400s an empty-effective body.
+ */
+export function parseUpdateHostVersionPolicyInput(
+  value: unknown,
+): UpdateHostVersionPolicyInput {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return {
+      updatePolicy: undefined,
+      desiredVersion: undefined,
+      force: undefined,
+    };
+  }
+  const obj = value as Record<string, unknown>;
+  const updatePolicy =
+    obj.updatePolicy === "manual" || obj.updatePolicy === "auto"
+      ? obj.updatePolicy
+      : undefined;
+  const desiredVersion =
+    obj.desiredVersion === null
+      ? null
+      : typeof obj.desiredVersion === "string"
+        ? obj.desiredVersion
+        : undefined;
+  const force = typeof obj.force === "boolean" ? obj.force : undefined;
+  return { updatePolicy, desiredVersion, force };
 }
 
 export function readSenderWebContentsId(

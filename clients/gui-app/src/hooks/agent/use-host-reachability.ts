@@ -12,14 +12,11 @@ export interface HostReachability {
 /**
  * Reachability check for a tile's bound host.
  *
- * Per CLAUDE.md tabs are bound to a host for life and we treat the
- * verdict as an open-time gate: there is **no reactive surveillance**
- * dedicated to following host up/down events, no auto-recovery, no
- * "swap host" affordance. The hook reads from the directory query
- * (which is populated once at app start and refreshed via the picker
- * subscription); flicker is benign - host liveness is effectively
- * binary per session, and the bootstrap's own error path catches a
- * mid-session drop on the live socket.
+ * Per CLAUDE.md tabs are bound to a host for life. This hook is only a
+ * directory-membership gate for renderers that need to know whether the bound
+ * host still exists. It is NOT a remote reachability probe and must never write
+ * viewer-reachability provenance; remote presence leases are status evidence
+ * for My Hosts, not proof that an already-bound tab is permanently dead.
  *
  * Rows that carry the unknown-host placeholder (legacy artifacts
  * created before per-tile binding existed, or transient pre-binding
@@ -46,8 +43,15 @@ export function useHostReachability(hostId: string): HostReachability {
     if (entry === undefined) {
       return { status: "unreachable", hostLabel: hostId };
     }
+    if (entry.kind === "remote") {
+      return {
+        status: "reachable",
+        hostLabel: entry.label.length > 0 ? entry.label : hostId,
+      };
+    }
+    const reachable = entry.status === "available";
     return {
-      status: entry.status === "available" ? "reachable" : "unreachable",
+      status: reachable ? "reachable" : "unreachable",
       hostLabel: entry.label.length > 0 ? entry.label : hostId,
     };
   }, [hostId, list.data, list.fetchStatus]);

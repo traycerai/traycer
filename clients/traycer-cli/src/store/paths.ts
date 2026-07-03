@@ -20,16 +20,32 @@ import type { Environment } from "../runner/environment";
 //   ~/.traycer/host/                         - prod host runtime root
 //   ~/.traycer/host/host.log               - prod host stdout + bootstrap markers
 //   ~/.traycer/host/pid.json                 - prod host pid metadata
-//   ~/.traycer/host/install/                 - prod host install dir (atomic-swap target)
-//   ~/.traycer/host/install/install.json     - prod host install record
+//   ~/.traycer/host/update-progress.json     - prod cross-process `host update` outcome marker
+//   ~/.traycer/host/install/                 - prod host install dir: a STABLE symlink
+//                                               (Windows: junction) pointing at the
+//                                               currently-active dir under versions/ -
+//                                               never a real directory after migration.
+//   ~/.traycer/host/install/install.json     - prod host install record (lives inside
+//                                               the active versioned dir, reached through
+//                                               the install/ symlink)
+//   ~/.traycer/host/versions/                - prod host versioned install dirs
+//                                               (atomic-swap lands each install here under
+//                                               a fresh unique name; the immediately-
+//                                               previous generation is kept on disk as the
+//                                               rollback source, older ones are swept)
 //   ~/.traycer/host/staging/                 - prod host staging root (verify-before-replace)
 //   ~/.traycer/host/dev/                     - dev host runtime root (parallel layout)
 //   ~/.traycer/host/dev/install/install.json - dev host install record
+//   ~/.traycer/host/dev/versions/            - dev host versioned install dirs
 //   ~/.traycer/host/dev/staging/             - dev host staging root
 const TRAYCER_HOME = join(homedir(), ".traycer");
 const CLI_HOME = join(TRAYCER_HOME, "cli");
 const HOST_HOME = join(TRAYCER_HOME, "host");
 const HOST_INSTALL_SUBDIR = "install";
+// Where each installed version physically lives - `install` is a stable
+// symlink/junction onto one child of this dir. See the `hostVersionsDir`
+// doc comment below for why the two are kept separate.
+const HOST_VERSIONS_SUBDIR = "versions";
 // The host install temp/extract area (verify-before-replace), kept distinct
 // from the host root. Named "install-staging" for clarity.
 const HOST_STAGING_SUBDIR = "install-staging";
@@ -37,7 +53,7 @@ const HOST_INSTALL_RECORD_FILENAME = "install.json";
 const CLI_LOG_FILENAME = "cli.log";
 const HOST_LOG_FILENAME = "host.log";
 const HOST_PID_FILENAME = "pid.json";
-
+const HOST_UPDATE_PROGRESS_FILENAME = "update-progress.json";
 function environmentSubdir(base: string, environment: Environment): string {
   // production → base; dev → base/dev (the slot dir name is the environment
   // value itself).
@@ -124,11 +140,28 @@ export function bootstrapLogPath(environment: Environment | undefined): string {
 export function hostInstallDir(environment: Environment): string {
   return join(hostHomeDir(environment), HOST_INSTALL_SUBDIR);
 }
+// Root the installer lands each version under - `hostInstallDir` is a
+// stable symlink/junction pointing at exactly one child of this dir. Kept
+// distinct from `hostInstallDir` so a crash between "stage the new version
+// here" and "flip the pointer" (see `installer/install.ts`'s `atomicSwap`)
+// can never leave `hostInstallDir` resolving to a partially-written
+// directory - the pointer only ever flips onto a fully-written sibling.
+export function hostVersionsDir(environment: Environment): string {
+  return join(hostHomeDir(environment), HOST_VERSIONS_SUBDIR);
+}
 export function hostStagingRoot(environment: Environment): string {
   return join(hostHomeDir(environment), HOST_STAGING_SUBDIR);
 }
 export function hostInstallRecordPath(environment: Environment): string {
   return join(hostInstallDir(environment), HOST_INSTALL_RECORD_FILENAME);
+}
+// Cross-process handoff marker `traycer host update` writes before it
+// touches anything and clears/rewrites on outcome - see
+// `host/update-progress-marker.ts`. Deliberately mirrored (by contract, not
+// by import) at `traycer-host/src/paths.ts::hostHomeDir` so the daemon
+// polls the exact same path this CLI writes.
+export function hostUpdateProgressMarkerPath(environment: Environment): string {
+  return join(hostHomeDir(environment), HOST_UPDATE_PROGRESS_FILENAME);
 }
 
 export async function ensureTraycerHomeDir(): Promise<void> {
@@ -154,6 +187,12 @@ export async function ensureHostStagingRoot(
   environment: Environment,
 ): Promise<void> {
   await mkdir(hostStagingRoot(environment), { recursive: true });
+}
+
+export async function ensureHostVersionsDir(
+  environment: Environment,
+): Promise<void> {
+  await mkdir(hostVersionsDir(environment), { recursive: true });
 }
 
 // Environment-aware CLI home mkdir. Non-environment callers pass undefined to

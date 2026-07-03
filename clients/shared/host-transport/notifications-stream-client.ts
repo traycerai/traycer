@@ -10,7 +10,7 @@ import type {
   StreamConnectionStatus,
   StreamFrameEnvelope,
 } from "./i-stream-session";
-import type { WsStreamClient } from "./ws-stream-client";
+import type { IStreamClient } from "./i-stream-client";
 
 /**
  * Snapshot metadata for the per-user notifications stream. Mirrors the
@@ -46,7 +46,7 @@ export interface NotificationsStreamCallbacks {
 }
 
 export interface NotificationsStreamClientOptions {
-  readonly wsStreamClient: WsStreamClient<HostStreamRpcRegistry>;
+  readonly wsStreamClient: IStreamClient<HostStreamRpcRegistry>;
   readonly callbacks: NotificationsStreamCallbacks;
 }
 

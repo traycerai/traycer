@@ -1,4 +1,5 @@
-import { rm } from "node:fs/promises";
+import { dirname, isAbsolute, resolve } from "node:path";
+import { lstat, readlink, rm } from "node:fs/promises";
 import {
   deleteHostInstallRecord,
   readHostInstallRecord,
@@ -10,6 +11,7 @@ import {
   hostInstallDir,
   hostLogPath,
   hostPidMetadataPath,
+  hostVersionsDir,
 } from "../store/paths";
 import { sweepOldTrash } from "./install";
 
@@ -46,10 +48,27 @@ export async function uninstallHost(
   });
   let removedInstallDir = false;
   try {
-    await rm(hostInstallDir(opts.environment), {
+    // `hostInstallDir` is a stable symlink/junction onto a versioned dir
+    // under `hostVersionsDir` (or, on an unmigrated legacy machine, a
+    // plain directory) - `rm` on a symlink only removes the link entry
+    // itself, not the bytes it points at, so resolve the target first and
+    // remove both. Uninstall also clears every OTHER retained version
+    // (not just the active one, which normally keeps its immediately-
+    // previous generation around as a rollback source) - there is no
+    // "current"/"previous" distinction worth preserving once the whole
+    // host is being removed.
+    const target = hostInstallDir(opts.environment);
+    const resolvedTarget = await resolveInstallDirTarget(target);
+    await rm(target, { recursive: true, force: true });
+    if (resolvedTarget !== null) {
+      await rm(resolvedTarget, { recursive: true, force: true }).catch(
+        () => undefined,
+      );
+    }
+    await rm(hostVersionsDir(opts.environment), {
       recursive: true,
       force: true,
-    });
+    }).catch(() => undefined);
     removedInstallDir = true;
   } catch (err) {
     logger.warn("Host uninstall failed to remove install directory", {
@@ -64,8 +83,9 @@ export async function uninstallHost(
     environment: opts.environment,
     removedInstallDir,
   });
-  // Sweep any stale `<installDir>.old-*` siblings the atomic swap left
-  // behind after a crash. Best-effort; never blocks the uninstall.
+  // Sweep any stale `<installDir>.old-*` siblings a pre-versioned-dir CLI's
+  // atomic swap left behind after a crash. Best-effort; never blocks the
+  // uninstall.
   await sweepOldTrash(hostInstallDir(opts.environment));
 
   let purgedRuntime = false;
@@ -92,4 +112,20 @@ export async function uninstallHost(
     removedInstallDir,
     purgedRuntime,
   };
+}
+
+// Resolve the absolute versioned-dir path `target` (the `hostInstallDir`
+// symlink/junction) currently points at, or `null` when `target` doesn't
+// exist or is itself a plain directory (legacy, unmigrated layout - the
+// `rm(target, ...)` above already removes those bytes directly, there is
+// no separate resolved target to also remove).
+async function resolveInstallDirTarget(target: string): Promise<string | null> {
+  try {
+    const linkStat = await lstat(target);
+    if (!linkStat.isSymbolicLink()) return null;
+  } catch {
+    return null;
+  }
+  const raw = await readlink(target);
+  return isAbsolute(raw) ? raw : resolve(dirname(target), raw);
 }

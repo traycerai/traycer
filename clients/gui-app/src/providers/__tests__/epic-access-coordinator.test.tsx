@@ -269,7 +269,11 @@ describe("EpicAccessCoordinator", () => {
     // A revoke or delete discovered on (re)open surfaces indistinguishably as
     // an unreadable room; the toast must not claim either cause.
     handle.store.setState({
-      snapshotFetchError: { code: "UNAUTHORIZED", message: "null roomInfo" },
+      snapshotFetchError: {
+        code: "UNAUTHORIZED",
+        message: "null roomInfo",
+        upgradeGuidance: null,
+      },
     });
 
     await waitFor(() =>

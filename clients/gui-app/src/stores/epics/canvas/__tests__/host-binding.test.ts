@@ -13,6 +13,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderHook } from "@testing-library/react";
 import "../../../../../__tests__/test-browser-apis";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type {
@@ -25,11 +26,7 @@ import { paneTabRefs } from "@/stores/epics/canvas/actions";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 
 const directoryEntries = vi.hoisted(() => ({
-  current: [] as ReadonlyArray<{
-    hostId: string;
-    label: string;
-    status: "available" | "unavailable";
-  }>,
+  current: [] as ReadonlyArray<HostDirectoryEntry>,
 }));
 
 vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
@@ -159,6 +156,9 @@ describe("host binding survives restart", () => {
       {
         hostId: REPLACEMENT_HOST,
         label: "Replacement",
+        kind: "local",
+        websocketUrl: "ws://127.0.0.1:5002/rpc",
+        version: "1.0.0",
         status: "available",
       },
     ];
@@ -174,6 +174,9 @@ describe("host binding survives restart", () => {
       {
         hostId: SOURCE_HOST,
         label: "Local",
+        kind: "local",
+        websocketUrl: null,
+        version: "1.0.0",
         status: "unavailable",
       },
     ];
@@ -189,6 +192,9 @@ describe("host binding survives restart", () => {
       {
         hostId: SOURCE_HOST,
         label: "Local",
+        kind: "local",
+        websocketUrl: "ws://127.0.0.1:5001/rpc",
+        version: "1.0.0",
         status: "available",
       },
     ];
@@ -197,5 +203,23 @@ describe("host binding survives restart", () => {
 
     expect(result.current.status).toBe("reachable");
     expect(result.current.hostLabel).toBe("Local");
+  });
+
+  it("does not treat a remote presence-lease status as tab reachability", () => {
+    directoryEntries.current = [
+      {
+        hostId: SOURCE_HOST,
+        label: "Remote",
+        kind: "remote",
+        websocketUrl: "wss://relay.traycer.invalid/attach",
+        version: "1.0.0",
+        status: "unavailable",
+      },
+    ];
+
+    const { result } = renderHook(() => useHostReachability(SOURCE_HOST));
+
+    expect(result.current.status).toBe("reachable");
+    expect(result.current.hostLabel).toBe("Remote");
   });
 });

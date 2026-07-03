@@ -10,7 +10,7 @@ import type {
   StreamConnectionStatus,
   StreamFrameEnvelope,
 } from "./i-stream-session";
-import type { WsStreamClient } from "./ws-stream-client";
+import type { IStreamClient } from "./i-stream-client";
 
 /**
  * Typed handlers for a `terminal.subscribe` session. The renderer's terminal
@@ -58,7 +58,7 @@ export interface TerminalStreamCallbacks {
 }
 
 export interface TerminalStreamClientOptions {
-  readonly wsStreamClient: WsStreamClient<HostStreamRpcRegistry>;
+  readonly wsStreamClient: IStreamClient<HostStreamRpcRegistry>;
   readonly sessionId: string;
   readonly cols: number;
   readonly rows: number;

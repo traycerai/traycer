@@ -1,4 +1,5 @@
 import type { BearerSourceProvider } from "@traycer-clients/shared/auth/bearer-source";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type { HostEndpointProvider } from "@traycer-clients/shared/host-transport/ws-rpc-client";
 import { buildHostStreamClient } from "@/hooks/host/use-host-stream-client-for";
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
@@ -31,14 +32,25 @@ import { appLogger } from "@/lib/logger";
  * calls it exactly once, when the delete settles or is cancelled.
  */
 export function openOneShotStreamTransport(params: {
+  readonly target: HostDirectoryEntry;
   readonly endpoint: HostEndpointProvider;
   readonly bearer: BearerSourceProvider;
+  readonly authnBaseUrl: string;
 }): DurableStreamTransport {
   const wsStreamClient = buildHostStreamClient({
+    target: params.target,
     endpoint: params.endpoint,
     bearer: params.bearer,
+    authnBaseUrl: params.authnBaseUrl,
     auth: null,
   });
+  if (wsStreamClient === null) {
+    // Only reachable for a remote target whose registry-published public key
+    // does not decode (a corrupt row) — genuinely exceptional.
+    throw new Error(
+      `Remote host ${params.target.hostId} has an invalid public key; cannot open a one-shot stream`,
+    );
+  }
   appLogger.debug("[stream] one-shot transport opened", {
     hasEndpoint: params.endpoint() !== null,
   });

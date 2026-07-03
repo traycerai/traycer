@@ -5,6 +5,11 @@ import {
 } from "../ipc-contracts/ipc-channels";
 import type { AuthTokenValidationResult } from "@traycer-clients/shared/platform/runner-host";
 import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/auth-validation-types";
+import type { HostListFetchResult } from "@traycer-clients/shared/host-client/remote-fetcher";
+import type {
+  UpdateHostVersionPolicyFetchResult,
+  UpdateHostVersionPolicyInput,
+} from "@traycer-clients/shared/host-client/host-version-policy-fetcher";
 import type { AuthTokenRefreshResult } from "../ipc-contracts/auth-types";
 import type { DesktopAuthSessionSnapshot } from "../ipc-contracts/window-types";
 import { subscribe, type Disposable, type Listener } from "./subscribe";
@@ -63,6 +68,12 @@ export interface AuthBridgeSurface {
     token: string,
     refreshToken: string,
   ): Promise<AuthTokenRefreshResult>;
+  listRegisteredHosts(bearerToken: string): Promise<HostListFetchResult>;
+  updateHostVersionPolicy(
+    bearerToken: string,
+    hostId: string,
+    input: UpdateHostVersionPolicyInput,
+  ): Promise<UpdateHostVersionPolicyFetchResult>;
   beginAuthAttempt(): void;
   onAuthCallback(handler: Listener<void>): Disposable;
 }
@@ -89,6 +100,20 @@ export function buildAuthBridge(): AuthBridgeSurface {
         token,
         refreshToken,
       ) as Promise<AuthTokenRefreshResult>,
+
+    listRegisteredHosts: (bearerToken) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.listRegisteredHosts,
+        bearerToken,
+      ) as Promise<HostListFetchResult>,
+
+    updateHostVersionPolicy: (bearerToken, hostId, input) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.updateHostVersionPolicy,
+        bearerToken,
+        hostId,
+        input,
+      ) as Promise<UpdateHostVersionPolicyFetchResult>,
 
     // Desktop does not dedupe browser-return signals on URL identity, so the
     // attempt-boundary hook is a renderer-local no-op. It still exists to

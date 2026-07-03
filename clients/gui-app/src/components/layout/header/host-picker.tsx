@@ -224,7 +224,7 @@ function HostPickerOption(props: HostPickerOptionProps) {
 }
 
 function HostKindBadge(props: { readonly kind: string }) {
-  const label = props.kind === "local" ? "Local" : props.kind;
+  const label = hostKindLabel(props.kind);
   return (
     <Badge
       variant="outline"
@@ -233,4 +233,14 @@ function HostKindBadge(props: { readonly kind: string }) {
       {label}
     </Badge>
   );
+}
+
+function hostKindLabel(kind: string): string {
+  if (kind === "local") {
+    return "Local";
+  }
+  if (kind === "remote") {
+    return "Remote";
+  }
+  return kind;
 }

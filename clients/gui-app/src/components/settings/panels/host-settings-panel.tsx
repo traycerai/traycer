@@ -21,6 +21,7 @@ import {
   type HostProgressState,
 } from "@/components/settings/panels/host-settings-panel-model";
 import { HostProgressBanner } from "@/components/settings/panels/host-settings-progress-banner";
+import { MyHostsList } from "@/components/settings/panels/my-hosts-list";
 import { InstallationDetailsDisclosure } from "@/components/settings/panels/host-settings-installation-details";
 import { PackageManagerUpgradeHint } from "@/components/settings/panels/host-settings-package-manager-upgrade-hint";
 import { StatusRow } from "@/components/settings/panels/host-settings-status-row";
@@ -55,10 +56,12 @@ export function HostSettingsPanel() {
     return (
       <SettingsPanelShell
         title="Host"
-        description="Host management is only available on the desktop app."
+        description="Your hosts across every device, plus this machine's local service."
       >
+        <MyHostsList />
         <div className="px-5 py-6 text-ui-sm text-muted-foreground">
-          This shell doesn&apos;t bundle the Traycer CLI.
+          Local host management is only available on the desktop app — this
+          shell doesn&apos;t bundle the Traycer CLI.
         </div>
       </SettingsPanelShell>
     );
@@ -416,8 +419,9 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
   return (
     <SettingsPanelShell
       title="Host"
-      description="Local background service that runs Traycer on your machine."
+      description="Your hosts across every device, plus this machine's local service."
     >
+      <MyHostsList />
       {progress !== null ? <HostProgressBanner progress={progress} /> : null}
       {packageManagerUpgrade !== null ? (
         <PackageManagerUpgradeHint hint={packageManagerUpgrade} />

@@ -51,6 +51,14 @@ export const CLI_ERROR_CODES = {
   HOST_VERIFY_FAILED: "E_HOST_VERIFY_FAILED",
   HOST_SOURCE_MISSING: "E_HOST_SOURCE_MISSING",
   HOST_ALREADY_RUNNING: "E_HOST_ALREADY_RUNNING",
+  // `host update`'s post-swap local health probe (service/health-probe.ts)
+  // exhausted its retry budget - the new host never proved itself alive on
+  // its own loopback port. Distinct from HOST_INSTALL_FAILED (a
+  // stage/verify/extract/swap failure with the OLD host untouched): this
+  // fires AFTER a successful swap, so the command has already attempted a
+  // rollback to the previous version (or, with nothing to roll back to on
+  // a first-ever install, left the marker as `failed` without one).
+  HOST_UPDATE_HEALTH_CHECK_FAILED: "E_HOST_UPDATE_HEALTH_CHECK_FAILED",
   REGISTRY_UNAVAILABLE: "E_REGISTRY_UNAVAILABLE",
   REGISTRY_VERSION_NOT_FOUND: "E_REGISTRY_VERSION_NOT_FOUND",
   REGISTRY_NOT_IMPLEMENTED: "E_REGISTRY_NOT_IMPLEMENTED",

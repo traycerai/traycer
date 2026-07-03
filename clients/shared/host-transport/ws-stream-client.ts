@@ -36,6 +36,7 @@ import type {
   StreamConnectionStatus,
   StreamFrameEnvelope,
 } from "./i-stream-session";
+import type { IStreamClient } from "./i-stream-client";
 import type {
   IStreamWebSocketFactory,
   StreamWebSocketLike,
@@ -112,7 +113,9 @@ const INERT_STREAM_SESSION: IStreamSession = {
   close: () => undefined,
 };
 
-export class WsStreamClient<Registry extends VersionedStreamRpcRegistry> {
+export class WsStreamClient<
+  Registry extends VersionedStreamRpcRegistry,
+> implements IStreamClient<Registry> {
   private readonly options: WsStreamClientOptions<Registry>;
   private readonly ownedSessions = new Set<StreamSession<Registry>>();
   private closed = false;
@@ -1173,7 +1176,7 @@ interface PreparedStreamSubscribeRequest {
  * has no contract for). Cross-major skew never reaches here: streams have no
  * cross-major bridge, so `compat.ok` would already be `false`.
  */
-function prepareStreamSubscribeRequest(
+export function prepareStreamSubscribeRequest(
   registry: VersionedStreamRpcRegistry,
   method: string,
   myCanonical: SchemaVersion,

@@ -1,5 +1,10 @@
 import type { Disposable } from "./uri-callback";
 import type { AuthIdentityValidationResult } from "../auth/auth-validation-types";
+import type { HostListFetchResult } from "../host-client/remote-fetcher";
+import type {
+  UpdateHostVersionPolicyFetchResult,
+  UpdateHostVersionPolicyInput,
+} from "../host-client/host-version-policy-fetcher";
 
 /**
  * Composite runner-host surface consumed by `gui-app` on standalone desktop
@@ -54,6 +59,17 @@ export interface IRunnerHost {
   readonly authnBaseUrl: string;
 
   /**
+   * Browser-safe WebSocket attach endpoint for the Remote Host Support relay
+   * (Architecture §3/§4b, S2/T14), e.g. `wss://relay.traycer.ai/attach`.
+   * Shell-owned, read-only, parity with `authnBaseUrl`. Populated onto a
+   * connectable `RemoteHostDirectoryEntry.websocketUrl` so the existing
+   * `kind === "remote"` transport branch (`createRemoteHostTransport`) can
+   * dial it — the relay itself routes by the opaque `rendezvousId` carried
+   * inside the CS-minted attach grant, so this URL never varies per host.
+   */
+  readonly relayBaseUrl: string;
+
+  /**
    * Validates a Traycer bearer token against the shell-owned AuthnV3 base URL
    * and projects the minimum profile shape the GUI needs for signed-in state.
    * If the user lookup fails but the bundled refresh token is still accepted,
@@ -93,6 +109,33 @@ export interface IRunnerHost {
     token: string,
     refreshToken: string,
   ): Promise<AuthTokenRefreshResult>;
+
+  /**
+   * Fetches the signed-in user's host registry + live status from authn-v3's
+   * `GET /api/v3/hosts` with the user bearer (Remote Host Support §7). Desktop
+   * shells run this in Electron main so renderer-origin CORS does not block the
+   * request — authn-v3's CORS allow-list is the web dashboard origin, not the
+   * app renderer — exactly as the token-validation calls above do. Browser/dev
+   * shells may call the shared `fetchRegisteredHostsViaHttp` helper directly.
+   * Never throws: transport failures collapse into the discriminated result.
+   */
+  listRegisteredHosts(bearerToken: string): Promise<HostListFetchResult>;
+
+  /**
+   * Applies a version-policy write for one host with the user bearer
+   * (Remote Host Support §13, T16): `PATCH /api/v3/hosts/:hostId` — "Update
+   * now" (`desiredVersion`), the auto-update toggle (`updatePolicy`), or the
+   * drain-gate force ("Apply now — ends N sessions", `force: true`). Desktop
+   * shells run this in Electron main for the same CORS reason as
+   * `listRegisteredHosts`; browser/dev shells may call the shared
+   * `updateHostVersionPolicyViaHttp` helper directly. Never throws: transport
+   * failures collapse into the discriminated result.
+   */
+  updateHostVersionPolicy(
+    bearerToken: string,
+    hostId: string,
+    input: UpdateHostVersionPolicyInput,
+  ): Promise<UpdateHostVersionPolicyFetchResult>;
 
   openExternalLink(url: string): Promise<void>;
 
