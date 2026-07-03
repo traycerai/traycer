@@ -122,6 +122,10 @@ import {
   type EpicTreeRecord,
 } from "@/lib/epic-selectors";
 import { isEditableRole, mutationDisabledHint } from "@/lib/epic-permissions";
+import {
+  ARIA_DISABLED_TRIGGER_CLASS,
+  resolveDisabledPresentation,
+} from "@/lib/disabled-presentation";
 import { displayTitle, tuiAgentDisplayTitle } from "@/lib/display-title";
 import { useEpicDeleteChat } from "@/hooks/epic/use-epic-chat-mutations";
 import {
@@ -1696,10 +1700,10 @@ function TreePanelActions(props: TreePanelActionsProps) {
     "create artifacts",
   );
   const artifactsAddDisabled = !canMutate || addIsPending;
-  const artifactsAriaDisabled =
-    artifactsAddDisabled && artifactsDisabledTooltip !== null;
-  const artifactsNativeDisabled =
-    artifactsAddDisabled && !artifactsAriaDisabled;
+  const artifactsPresentation = resolveDisabledPresentation(
+    artifactsAddDisabled,
+    artifactsDisabledTooltip,
+  );
 
   return (
     <div className="flex items-center gap-0.5">
@@ -1761,13 +1765,13 @@ function TreePanelActions(props: TreePanelActionsProps) {
             variant="ghost"
             size="icon-sm"
             aria-label={props.addLabel}
-            aria-disabled={artifactsAriaDisabled ? true : undefined}
+            aria-disabled={artifactsPresentation.ariaDisabled ? true : undefined}
             data-testid={props.triggerTestId}
             className={cn(
               "text-muted-foreground hover:text-foreground",
-              "aria-disabled:cursor-not-allowed aria-disabled:opacity-50 aria-disabled:hover:bg-transparent aria-disabled:hover:text-muted-foreground",
+              ARIA_DISABLED_TRIGGER_CLASS,
             )}
-            disabled={artifactsNativeDisabled}
+            disabled={artifactsPresentation.nativeDisabled}
           >
             {addIsPending ? (
               <AgentSpinningDots
