@@ -51,16 +51,16 @@ function renderTree(props: {
   roots: ReadonlyArray<RepoTreeRootRow>;
   selected: GitPanelSelectedRepo;
   activeRootSubmodules: ReadonlyArray<RepoTreeSubmoduleNode>;
-  onSelectRoot?: (row: WorktreeBindingSelectorRow) => void;
-  onSelectSubmodule?: (node: RepoTreeSubmoduleNode) => void;
+  onSelectRoot: (row: WorktreeBindingSelectorRow) => void;
+  onSelectSubmodule: (node: RepoTreeSubmoduleNode) => void;
 }) {
   return render(
     <RepoTree
       roots={props.roots}
       selected={props.selected}
       activeRootSubmodules={props.activeRootSubmodules}
-      onSelectRoot={props.onSelectRoot ?? vi.fn()}
-      onSelectSubmodule={props.onSelectSubmodule ?? vi.fn()}
+      onSelectRoot={props.onSelectRoot}
+      onSelectSubmodule={props.onSelectSubmodule}
     />,
   );
 }
@@ -73,6 +73,8 @@ describe("<RepoTree />", () => {
       roots: [{ row: row({}), changeCount: 3, disabledLabel: null }],
       selected: rootSelection,
       activeRootSubmodules: [submoduleNode({})],
+      onSelectRoot: vi.fn(),
+      onSelectSubmodule: vi.fn(),
     });
     expect(screen.getByRole("tree")).toBeDefined();
     const root = screen.getByRole("treeitem", { name: /traycer-internal/ });
@@ -106,6 +108,8 @@ describe("<RepoTree />", () => {
       },
       // Submodules belong to the /other root; the /repo root shows none.
       activeRootSubmodules: [],
+      onSelectRoot: vi.fn(),
+      onSelectSubmodule: vi.fn(),
     });
     expect(screen.queryByTestId("git-repo-tree-submodule-traycer")).toBeNull();
   });
@@ -117,6 +121,7 @@ describe("<RepoTree />", () => {
       selected: rootSelection,
       activeRootSubmodules: [],
       onSelectRoot,
+      onSelectSubmodule: vi.fn(),
     });
     fireEvent.click(screen.getByRole("treeitem", { name: /traycer-internal/ }));
     expect(onSelectRoot).toHaveBeenCalledTimes(1);
@@ -128,6 +133,7 @@ describe("<RepoTree />", () => {
       roots: [{ row: row({}), changeCount: 1, disabledLabel: null }],
       selected: rootSelection,
       activeRootSubmodules: [submoduleNode({})],
+      onSelectRoot: vi.fn(),
       onSelectSubmodule,
     });
     fireEvent.click(screen.getByTestId("git-repo-tree-submodule-traycer"));
@@ -143,6 +149,8 @@ describe("<RepoTree />", () => {
       activeRootSubmodules: [
         submoduleNode({ unavailable: true, hasChanges: false, changeCount: 0 }),
       ],
+      onSelectRoot: vi.fn(),
+      onSelectSubmodule: vi.fn(),
     });
     const sub = screen.getByTestId("git-repo-tree-submodule-traycer");
     expect(sub.textContent).toContain("unavailable");
@@ -153,6 +161,8 @@ describe("<RepoTree />", () => {
       roots: [{ row: row({}), changeCount: 1, disabledLabel: null }],
       selected: rootSelection,
       activeRootSubmodules: [submoduleNode({})],
+      onSelectRoot: vi.fn(),
+      onSelectSubmodule: vi.fn(),
     });
     const root = screen.getByRole("treeitem", { name: /traycer-internal/ });
     root.focus();
@@ -163,11 +173,74 @@ describe("<RepoTree />", () => {
     );
   });
 
+  it("moves focus onto and past a disabled root (no native disabled trap)", () => {
+    // A disabled root (non-null disabledLabel) sits between two selectable
+    // roots. The row is `aria-disabled`, not natively `disabled`, so keyboard
+    // navigation must be able to land on it and then move past it - a
+    // native `disabled` attribute would swallow programmatic focus and trap nav.
+    renderTree({
+      roots: [
+        {
+          row: row({
+            runningDir: "/repo-a",
+            repoIdentifier: { owner: "acme", repo: "repo-a" },
+          }),
+          changeCount: 1,
+          disabledLabel: null,
+        },
+        {
+          row: row({
+            runningDir: "/not-git",
+            repoIdentifier: null,
+            isGitRepo: false,
+          }),
+          changeCount: null,
+          disabledLabel: "not git",
+        },
+        {
+          row: row({
+            runningDir: "/repo-c",
+            repoIdentifier: { owner: "acme", repo: "repo-c" },
+          }),
+          changeCount: 2,
+          disabledLabel: null,
+        },
+      ],
+      selected: {
+        hostId: "host-1",
+        rootRunningDir: "/repo-a",
+        repoRoot: "/repo-a",
+      },
+      activeRootSubmodules: [],
+      onSelectRoot: vi.fn(),
+      onSelectSubmodule: vi.fn(),
+    });
+    const first = screen.getByTestId("git-repo-tree-root-repo-a");
+    const disabled = screen.getByTestId("git-repo-tree-root-not-git");
+    const third = screen.getByTestId("git-repo-tree-root-repo-c");
+
+    first.focus();
+    fireEvent.keyDown(first, { key: "ArrowDown" });
+    // ArrowDown lands focus ON the disabled root (not skipped, not trapped).
+    expect(document.activeElement).toBe(disabled);
+    fireEvent.keyDown(disabled, { key: "ArrowDown" });
+    // ArrowDown again moves focus PAST it to the next selectable root.
+    expect(document.activeElement).toBe(third);
+    fireEvent.keyDown(third, { key: "ArrowUp" });
+    // ArrowUp lands back ON the disabled root...
+    expect(document.activeElement).toBe(disabled);
+    fireEvent.keyDown(disabled, { key: "ArrowUp" });
+    // ...and past it going up.
+    expect(document.activeElement).toBe(first);
+  });
+
   it("ArrowRight on an expanded root moves focus to its first child", () => {
     renderTree({
       roots: [{ row: row({}), changeCount: 1, disabledLabel: null }],
       selected: rootSelection,
       activeRootSubmodules: [submoduleNode({})],
+      onSelectRoot: vi.fn(),
+      onSelectSubmodule: vi.fn(),
     });
     const root = screen.getByRole("treeitem", { name: /traycer-internal/ });
     root.focus();
@@ -198,6 +271,7 @@ describe("<RepoTree />", () => {
       selected: rootSelection, // active root is /repo
       activeRootSubmodules: [],
       onSelectRoot,
+      onSelectSubmodule: vi.fn(),
     });
     const otherRoot = screen.getByTestId("git-repo-tree-root-other-repo");
     otherRoot.focus();
@@ -212,6 +286,8 @@ describe("<RepoTree />", () => {
       roots: [{ row: row({}), changeCount: 1, disabledLabel: null }],
       selected: rootSelection,
       activeRootSubmodules: [submoduleNode({})],
+      onSelectRoot: vi.fn(),
+      onSelectSubmodule: vi.fn(),
     });
     const sub = screen.getByTestId("git-repo-tree-submodule-traycer");
     sub.focus();
@@ -226,6 +302,8 @@ describe("<RepoTree />", () => {
       roots: [{ row: row({}), changeCount: 1, disabledLabel: null }],
       selected: rootSelection,
       activeRootSubmodules: [submoduleNode({})],
+      onSelectRoot: vi.fn(),
+      onSelectSubmodule: vi.fn(),
     });
     const root = screen.getByRole("treeitem", { name: /traycer-internal/ });
     root.focus();
@@ -239,6 +317,7 @@ describe("<RepoTree />", () => {
       roots: [{ row: row({}), changeCount: 1, disabledLabel: null }],
       selected: rootSelection,
       activeRootSubmodules: [submoduleNode({})],
+      onSelectRoot: vi.fn(),
       onSelectSubmodule,
     });
     const sub = screen.getByTestId("git-repo-tree-submodule-traycer");
@@ -264,6 +343,7 @@ describe("<RepoTree />", () => {
       selected: rootSelection,
       activeRootSubmodules: [],
       onSelectRoot,
+      onSelectSubmodule: vi.fn(),
     });
     const disabledRoot = screen.getByTestId("git-repo-tree-root-not-git");
     expect(disabledRoot.getAttribute("aria-disabled")).toBe("true");

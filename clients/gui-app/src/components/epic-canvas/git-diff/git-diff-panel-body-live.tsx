@@ -97,13 +97,13 @@ export function GitDiffPanelBodyLive(
     selectedRootRow === null ? null : (selectedCapabilityQuery.data ?? null);
 
   useEffect(() => {
-    for (const row of gitRows) {
+    gitRows.forEach((row) => {
       void prefetch({
         hostId: row.hostId,
         runningDir: row.runningDir,
         ignoreWhitespace,
       });
-    }
+    });
   }, [ignoreWhitespace, prefetch, gitRows]);
 
   useEffect(() => {

@@ -72,10 +72,10 @@ function parentRootIndex(
   visibleRows: ReadonlyArray<VisibleRow>,
   index: number,
 ): number {
-  for (let i = index - 1; i >= 0; i--) {
-    if (visibleRows[i].kind === "root") return i;
-  }
-  return index;
+  const parentIndex = visibleRows
+    .slice(0, index)
+    .findLastIndex((r) => r.kind === "root");
+  return parentIndex === -1 ? index : parentIndex;
 }
 
 /**
@@ -94,34 +94,35 @@ function parentRootIndex(
 export function RepoTree(props: RepoTreeProps): ReactNode {
   const { roots, selected, activeRootSubmodules } = props;
 
-  const visibleRows = useMemo<ReadonlyArray<VisibleRow>>(() => {
-    const rows: VisibleRow[] = [];
-    for (const { row, changeCount, disabledLabel } of roots) {
-      const isActiveRoot =
-        row.hostId === selected.hostId &&
-        row.runningDir === selected.rootRunningDir;
-      const hasChildren = isActiveRoot && activeRootSubmodules.length > 0;
-      rows.push({
-        kind: "root",
-        key: `root:${row.hostId}:${row.runningDir}`,
-        row,
-        changeCount,
-        disabledLabel,
-        selected: isActiveRoot && selected.repoRoot === row.runningDir,
-        hasChildren,
-      });
-      if (!isActiveRoot) continue;
-      for (const node of activeRootSubmodules) {
-        rows.push({
-          kind: "submodule",
-          key: `sub:${node.repoRoot}`,
-          node,
-          selected: selected.repoRoot === node.repoRoot,
-        });
-      }
-    }
-    return rows;
-  }, [roots, selected, activeRootSubmodules]);
+  const visibleRows = useMemo<ReadonlyArray<VisibleRow>>(
+    () =>
+      roots.flatMap(({ row, changeCount, disabledLabel }) => {
+        const isActiveRoot =
+          row.hostId === selected.hostId &&
+          row.runningDir === selected.rootRunningDir;
+        const hasChildren = isActiveRoot && activeRootSubmodules.length > 0;
+        const rootRow: VisibleRow = {
+          kind: "root",
+          key: `root:${row.hostId}:${row.runningDir}`,
+          row,
+          changeCount,
+          disabledLabel,
+          selected: isActiveRoot && selected.repoRoot === row.runningDir,
+          hasChildren,
+        };
+        // Only the active root is expanded, so only it contributes child rows.
+        const submoduleRows: VisibleRow[] = isActiveRoot
+          ? activeRootSubmodules.map((node) => ({
+              kind: "submodule",
+              key: `sub:${node.repoRoot}`,
+              node,
+              selected: selected.repoRoot === node.repoRoot,
+            }))
+          : [];
+        return [rootRow, ...submoduleRows];
+      }),
+    [roots, selected, activeRootSubmodules],
+  );
 
   // Positional row refs, written by each row's callback ref (and nulled on
   // unmount). Never reset during render - stale trailing entries are harmless
