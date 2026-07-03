@@ -917,10 +917,16 @@ describe("<TerminalXtermHost /> terminal find", () => {
       return writer;
     };
 
-    getWriter()({ kind: "snapshot", chunk: "\x1b[6n", cols: 80, rows: 24 });
+    getWriter()({
+      kind: "snapshot",
+      chunk: "\x1b[6n",
+      cols: 80,
+      rows: 24,
+      onAckable: () => {},
+    });
     expect(onUserInput).not.toHaveBeenCalled();
 
-    getWriter()({ kind: "live", chunk: "\x1b[6n" });
+    getWriter()({ kind: "live", chunk: "\x1b[6n", onAckable: () => {} });
     expect(onUserInput).toHaveBeenCalledWith("\x1b[16;39R");
   });
 
@@ -972,8 +978,9 @@ describe("<TerminalXtermHost /> terminal find", () => {
       chunk: "hello world\x1b[6n",
       cols: 80,
       rows: 24,
+      onAckable: () => {},
     });
-    getWriter()({ kind: "live", chunk: "\x1b[6n" });
+    getWriter()({ kind: "live", chunk: "\x1b[6n", onAckable: () => {} });
     const afterFirst = inputReports.at(-1);
     expect(afterFirst).toBeDefined();
 
@@ -984,8 +991,77 @@ describe("<TerminalXtermHost /> terminal find", () => {
       chunk: "hello world\x1b[6n",
       cols: 80,
       rows: 24,
+      onAckable: () => {},
     });
-    getWriter()({ kind: "live", chunk: "\x1b[6n" });
+    getWriter()({ kind: "live", chunk: "\x1b[6n", onAckable: () => {} });
+    const afterReconnect = inputReports.at(-1);
+
+    expect(afterReconnect).toBe(afterFirst);
+  });
+
+  it("resets the buffer before replaying a reconnect snapshot given as Uint8Array (terminal.subscribe@1.2)", async () => {
+    // Same reset-before-replay guarantee as the string case above, but for a
+    // `@1.2` binary connection's `Uint8Array` snapshot chunk - exercises
+    // `prependResetEscape`'s byte-concatenation path against a real xterm
+    // engine instead of just checking the produced bytes in isolation.
+    const inputReports: string[] = [];
+    const onUserInput = vi.fn((data: string) => {
+      inputReports.push(data);
+    });
+    let writer: TerminalDataWriter | null = null;
+
+    render(
+      <TerminalXtermHost
+        sessionId="test-session-reset-binary"
+        tileKind="terminal"
+        instanceId="test-instance-reset-binary"
+        effectiveCols={80}
+        effectiveRows={24}
+        onUserInput={onUserInput}
+        onContainerResize={vi.fn()}
+        onWriterReady={(nextWriter) => {
+          writer = nextWriter;
+        }}
+        shouldFocusOnActivePane={false}
+        findTargetId={null}
+        keepAlive={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(writer).not.toBeNull();
+    });
+    const getWriter = (): TerminalDataWriter => {
+      if (writer === null) {
+        throw new Error("Expected terminal writer");
+      }
+      return writer;
+    };
+
+    const snapshotBytes = new TextEncoder().encode("hello world\x1b[6n");
+
+    getWriter()({
+      kind: "snapshot",
+      chunk: snapshotBytes,
+      cols: 80,
+      rows: 24,
+      onAckable: () => {},
+    });
+    getWriter()({ kind: "live", chunk: "\x1b[6n", onAckable: () => {} });
+    const afterFirst = inputReports.at(-1);
+    expect(afterFirst).toBeDefined();
+
+    // Reconnect: the SAME bytes replayed. With a correctly-prepended reset
+    // the cursor lands in the same spot; without one (or with corrupted
+    // reset bytes) it would append after the first copy or garble entirely.
+    getWriter()({
+      kind: "snapshot",
+      chunk: snapshotBytes,
+      cols: 80,
+      rows: 24,
+      onAckable: () => {},
+    });
+    getWriter()({ kind: "live", chunk: "\x1b[6n", onAckable: () => {} });
     const afterReconnect = inputReports.at(-1);
 
     expect(afterReconnect).toBe(afterFirst);

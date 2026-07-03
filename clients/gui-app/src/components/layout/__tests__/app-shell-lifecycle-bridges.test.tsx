@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
+const windowHost = window as { runnerHost?: unknown };
+
 vi.mock("@/components/layout/tabs/tab-strip", () => ({
   TabStrip: () => <div data-testid="tab-strip" />,
 }));
@@ -58,6 +60,7 @@ import { AppShell } from "@/components/layout/app-shell";
 
 describe("<AppShell />", () => {
   beforeEach(() => {
+    windowHost.runnerHost = {};
     useAuthStore
       .getState()
       .setSignedIn(
@@ -69,6 +72,7 @@ describe("<AppShell />", () => {
 
   afterEach(() => {
     cleanup();
+    delete windowHost.runnerHost;
     useAuthStore.getState().setSignedOut();
   });
 
@@ -86,5 +90,17 @@ describe("<AppShell />", () => {
     // Host status footer was removed; the combined chip on the
     // composer is now the host-state surface.
     expect(screen.queryByTestId("host-status-footer")).toBeNull();
+  });
+
+  it("makes the capped tab strip leftover a desktop drag region", () => {
+    render(
+      <AppShell>
+        <div data-testid="app-shell-child" />
+      </AppShell>,
+    );
+
+    const tabRegion = screen.getByTestId("tab-strip").parentElement;
+    expect(tabRegion).not.toBeNull();
+    expect(tabRegion?.className).toContain("[-webkit-app-region:drag]");
   });
 });

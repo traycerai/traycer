@@ -288,6 +288,15 @@
 }
 
 /*
+ * Wide panes and modals may intentionally give markdown room for tables,
+ * diagrams, and code. Cap only prose-bearing blocks so plain paragraphs do not
+ * stretch into uncomfortable 4K line lengths while wide media remains usable.
+ */
+.md-prose :where(p, ul, ol, blockquote, h1, h2, h3, h4, h5, h6) {
+  max-width: 72ch;
+}
+
+/*
  * Table cells must NOT inherit `.md-prose { word-break: break-word }`.
  *
  * `word-break: break-word` is a legacy keyword defined as `word-break: normal`
@@ -937,9 +946,21 @@
   --text-ui-sm--line-height: 1.25rem;
   --text-ui-sm--letter-spacing: 0;
 
+  --text-ui-md: 0.9375rem;
+  --text-ui-md--line-height: 1.375rem;
+  --text-ui-md--letter-spacing: 0;
+
   --text-ui: 1rem;
   --text-ui--line-height: 1.5rem;
   --text-ui--letter-spacing: 0;
+
+  --text-ui-base: var(--text-ui);
+  --text-ui-base--line-height: var(--text-ui--line-height);
+  --text-ui-base--letter-spacing: var(--text-ui--letter-spacing);
+
+  --text-ui-lg: 1.125rem;
+  --text-ui-lg--line-height: 1.625rem;
+  --text-ui-lg--letter-spacing: 0;
 
   --text-title-xs: 0.875rem;
   --text-title-xs--line-height: 1.125rem;
@@ -1112,6 +1133,24 @@
  * for the composer's contenteditable root.
  */
 @layer components {
+  .header-tab-trailing-slot {
+    width: 0;
+    opacity: 0;
+  }
+
+  @container (min-width: 7rem) {
+    .group\/tab:hover .header-tab-trailing-slot,
+    .group\/tab:focus-within .header-tab-trailing-slot {
+      width: 1.25rem;
+      opacity: 1;
+    }
+
+    .group\/tab:hover .header-tab-close-button,
+    .group\/tab:focus-within .header-tab-close-button {
+      pointer-events: auto;
+    }
+  }
+
   [data-composer-editor] ul {
     list-style: disc;
     padding-left: 1.5rem;

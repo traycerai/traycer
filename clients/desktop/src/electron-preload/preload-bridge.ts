@@ -21,6 +21,7 @@ import { buildTraycerCliBridge } from "./traycer-cli-bridge";
 import { buildPlatformBridge } from "./platform-bridge";
 import { buildPowerBridge } from "./power-bridge";
 import { buildFileDropsBridge } from "./file-drops-bridge";
+import { buildZoomBridge } from "./zoom-bridge";
 import { readSyncString } from "./sync-bootstrap";
 
 /**
@@ -65,6 +66,7 @@ contextBridge.exposeInMainWorld("runnerHost", {
   migration: buildMigrationBridge(),
   platform: buildPlatformBridge(),
   power: buildPowerBridge(),
+  ...buildZoomBridge(),
   hostManagement: buildHostManagementBridge(),
   hostTray: buildHostTrayCommandSubscriber(),
 });

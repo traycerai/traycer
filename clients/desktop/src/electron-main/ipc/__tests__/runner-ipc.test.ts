@@ -461,6 +461,7 @@ describe("RunnerIpcBridge", () => {
       authnBaseUrl: "http://localhost:5005",
       authRedirectUri: null,
       tray: null,
+      zoomController: undefined,
       window: buildWindow(),
     });
     bridge.install();
@@ -594,6 +595,11 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.gpuAccelerationSet,
         RunnerHostInvoke.logLevelsGet,
         RunnerHostInvoke.logLevelsSet,
+        RunnerHostInvoke.zoomGet,
+        RunnerHostInvoke.zoomSet,
+        RunnerHostInvoke.zoomStepIn,
+        RunnerHostInvoke.zoomStepOut,
+        RunnerHostInvoke.zoomReset,
       ].sort(),
     );
     bridge.dispose();
@@ -607,6 +613,7 @@ describe("RunnerIpcBridge", () => {
       authnBaseUrl: "http://localhost:5005",
       authRedirectUri: null,
       tray: null,
+      zoomController: undefined,
       window: buildWindow(),
     });
     bridge.install();
@@ -650,6 +657,7 @@ describe("RunnerIpcBridge", () => {
       authnBaseUrl: "http://localhost:5005",
       authRedirectUri: null,
       tray: null,
+      zoomController: undefined,
       window: buildWindow(),
     });
     bridge.install();
@@ -687,6 +695,7 @@ describe("RunnerIpcBridge", () => {
       authnBaseUrl: "http://localhost:5005",
       authRedirectUri: null,
       tray: null,
+      zoomController: undefined,
       window: buildWindow(),
     });
     bridge.install();
@@ -722,6 +731,7 @@ describe("RunnerIpcBridge", () => {
       authnBaseUrl: "http://localhost:5005",
       authRedirectUri: null,
       tray: null,
+      zoomController: undefined,
       window: buildWindow(),
     });
     bridge.install();
@@ -754,6 +764,7 @@ describe("RunnerIpcBridge", () => {
       authnBaseUrl: "http://localhost:5005",
       authRedirectUri: null,
       tray: null,
+      zoomController: undefined,
       windowRegistry: registry,
       ownership,
       perWindowState: new PerWindowState(null),
@@ -831,6 +842,7 @@ describe("RunnerIpcBridge", () => {
       authnBaseUrl: "http://localhost:5005",
       authRedirectUri: null,
       tray: null,
+      zoomController: undefined,
       windowRegistry: registry,
       ownership,
       perWindowState,
@@ -899,6 +911,7 @@ describe("RunnerIpcBridge", () => {
       authnBaseUrl: "http://localhost:5005",
       authRedirectUri: null,
       tray: null,
+      zoomController: undefined,
       windowRegistry: registry,
       ownership,
       perWindowState,
@@ -959,6 +972,7 @@ describe("RunnerIpcBridge", () => {
       authnBaseUrl: "http://localhost:5005",
       authRedirectUri: null,
       tray: null,
+      zoomController: undefined,
       windowRegistry: registry,
       ownership,
       perWindowState,
@@ -1017,6 +1031,7 @@ describe("RunnerIpcBridge", () => {
       authnBaseUrl: "http://localhost:5005",
       authRedirectUri: null,
       tray: null,
+      zoomController: undefined,
       windowRegistry: registry,
       ownership,
       perWindowState: new PerWindowState(null),
@@ -1051,6 +1066,7 @@ describe("RunnerIpcBridge", () => {
       authnBaseUrl: "http://localhost:5005",
       authRedirectUri: null,
       tray: null,
+      zoomController: undefined,
       window: buildWindow(),
     });
     bridge.install();
@@ -1082,6 +1098,7 @@ describe("RunnerIpcBridge", () => {
       authnBaseUrl: "http://localhost:5005",
       authRedirectUri: null,
       tray: null,
+      zoomController: undefined,
       windowRegistry: registry,
       ownership: new EpicWindowOwnership(null),
       perWindowState: new PerWindowState(null),
@@ -1124,6 +1141,7 @@ describe("RunnerIpcBridge", () => {
       authnBaseUrl: "http://localhost:5005",
       authRedirectUri: null,
       tray: null,
+      zoomController: undefined,
       windowRegistry: registry,
       ownership,
       perWindowState: new PerWindowState(null),
@@ -1191,6 +1209,7 @@ describe("RunnerIpcBridge", () => {
       authnBaseUrl: "http://localhost:5005",
       authRedirectUri: null,
       tray: null,
+      zoomController: undefined,
       windowRegistry: registry,
       ownership: new EpicWindowOwnership(null),
       perWindowState: new PerWindowState(null),
@@ -1273,6 +1292,7 @@ describe("RunnerIpcBridge", () => {
       authnBaseUrl: "http://localhost:5005",
       authRedirectUri: null,
       tray: null,
+      zoomController: undefined,
       windowRegistry: registry,
       ownership: new EpicWindowOwnership(null),
       perWindowState: new PerWindowState(null),
@@ -1319,6 +1339,7 @@ describe("RunnerIpcBridge", () => {
       authnBaseUrl: "http://localhost:5005",
       authRedirectUri: null,
       tray: null,
+      zoomController: undefined,
       windowRegistry: registry,
       ownership: new EpicWindowOwnership(null),
       perWindowState: new PerWindowState(null),
@@ -1386,6 +1407,7 @@ describe("RunnerIpcBridge", () => {
       authnBaseUrl: "http://localhost:5005",
       authRedirectUri: null,
       tray: null,
+      zoomController: undefined,
       windowRegistry: registry,
       ownership: new EpicWindowOwnership(null),
       perWindowState: new PerWindowState(null),
@@ -1421,6 +1443,7 @@ describe("RunnerIpcBridge", () => {
       authnBaseUrl: "http://localhost:5005",
       authRedirectUri: null,
       tray: null,
+      zoomController: undefined,
       window: windowA,
     });
     const bridgeB = new mod.RunnerIpcBridge({
@@ -1428,6 +1451,7 @@ describe("RunnerIpcBridge", () => {
       authnBaseUrl: "http://localhost:5005",
       authRedirectUri: null,
       tray: null,
+      zoomController: undefined,
       window: windowB,
     });
     bridgeA.install();
@@ -1519,6 +1543,7 @@ describe("RunnerIpcBridge", () => {
       authnBaseUrl: "http://localhost:5005",
       authRedirectUri: null,
       tray: null,
+      zoomController: undefined,
       window: buildWindow(),
     });
     bridge.install();
@@ -1552,6 +1577,7 @@ describe("RunnerIpcBridge", () => {
       authnBaseUrl: "http://localhost:5005",
       authRedirectUri: null,
       tray: null,
+      zoomController: undefined,
       windowRegistry: registry,
       ownership: new EpicWindowOwnership(null),
       perWindowState: new PerWindowState(null),
@@ -1662,6 +1688,7 @@ describe("RunnerIpcBridge", () => {
       authnBaseUrl: "http://localhost:5005",
       authRedirectUri: null,
       tray: null,
+      zoomController: undefined,
       windowRegistry: registry,
       ownership: new EpicWindowOwnership(null),
       perWindowState: new PerWindowState(null),
@@ -1710,6 +1737,7 @@ describe("RunnerIpcBridge", () => {
       authnBaseUrl: "http://localhost:5005",
       authRedirectUri: null,
       tray: null,
+      zoomController: undefined,
       window: buildWindow(),
     });
     bridge.install();
@@ -1765,6 +1793,7 @@ describe("RunnerIpcBridge", () => {
         authnBaseUrl: "http://localhost:5005",
         authRedirectUri: null,
         tray: null,
+        zoomController: undefined,
         window: buildDestroyedWindow(),
       });
       bridge.install();
@@ -1804,6 +1833,7 @@ describe("RunnerIpcBridge", () => {
         authnBaseUrl: "http://localhost:5005",
         authRedirectUri: null,
         tray: null,
+        zoomController: undefined,
         window: buildWindow(),
       });
       bridge.install();
@@ -1850,6 +1880,7 @@ describe("RunnerIpcBridge", () => {
         authnBaseUrl: "http://localhost:5005",
         authRedirectUri: null,
         tray: null,
+        zoomController: undefined,
         window: buildWindow(),
       });
       bridge.install();
@@ -1920,6 +1951,7 @@ describe("RunnerIpcBridge", () => {
       authnBaseUrl: "http://localhost:5005",
       authRedirectUri: null,
       tray: null,
+      zoomController: undefined,
       window: buildWindow(),
     });
     bridge.install();
@@ -1991,6 +2023,7 @@ describe("RunnerIpcBridge", () => {
         authnBaseUrl: "http://localhost:5005",
         authRedirectUri: null,
         tray: null,
+        zoomController: undefined,
         window: buildWindow(),
       });
       bridge.install();
@@ -2026,6 +2059,7 @@ describe("RunnerIpcBridge", () => {
       authnBaseUrl: "http://localhost:5005",
       authRedirectUri: null,
       tray: null,
+      zoomController: undefined,
       window: buildWindow(),
     });
     bridge.install();
@@ -2067,6 +2101,7 @@ describe("RunnerIpcBridge", () => {
       authnBaseUrl: "http://localhost:5005",
       authRedirectUri: null,
       tray: null,
+      zoomController: undefined,
       window: buildWindow(),
     });
     bridge.install();
@@ -2126,6 +2161,7 @@ describe("RunnerIpcBridge", () => {
       authnBaseUrl: "http://localhost:5005",
       authRedirectUri: null,
       tray: null,
+      zoomController: undefined,
       window: buildWindow(),
     });
     bridge.install();
@@ -2171,6 +2207,7 @@ describe("RunnerIpcBridge", () => {
       authnBaseUrl: "http://localhost:5005",
       authRedirectUri: null,
       tray: null,
+      zoomController: undefined,
       window: buildWindow(),
     });
     bridge.install();
@@ -2205,6 +2242,7 @@ describe("RunnerIpcBridge", () => {
       authnBaseUrl: "http://localhost:5005",
       authRedirectUri: null,
       tray: null,
+      zoomController: undefined,
       window: buildWindow(),
     });
     bridge.install();
@@ -2228,6 +2266,7 @@ describe("RunnerIpcBridge", () => {
       authnBaseUrl: "https://authn.example.invalid",
       authRedirectUri: null,
       tray: null,
+      zoomController: undefined,
       window: buildWindow(),
     });
     bridge.install();
@@ -2265,6 +2304,7 @@ describe("RunnerIpcBridge", () => {
       authnBaseUrl: "https://authn.example.invalid",
       authRedirectUri: null,
       tray: null,
+      zoomController: undefined,
       windowRegistry: registry,
       ownership: new EpicWindowOwnership(null),
       perWindowState,
@@ -2326,6 +2366,7 @@ describe("RunnerIpcBridge", () => {
           lastCheckIntent: null,
         },
       },
+      { channel: RunnerHostEvent.zoomChange, payload: 100 },
     ]);
     bridge.dispose();
   });

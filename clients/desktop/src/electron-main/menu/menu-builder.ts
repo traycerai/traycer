@@ -25,7 +25,7 @@ export function buildApplicationMenu(
       ...buildAppMenu(state, actions),
       buildFileMenu(state, actions),
       buildEditMenu(actions),
-      buildViewMenu(state),
+      buildViewMenu(state, actions),
       buildWindowMenu(state, actions),
       buildHelpMenu(state, actions),
     ].filter(isMenuItem),
@@ -144,7 +144,10 @@ function buildEditMenu(actions: MenuBuildActions): MenuItemConstructorOptions {
   };
 }
 
-function buildViewMenu(state: MenuState): MenuItemConstructorOptions {
+function buildViewMenu(
+  state: MenuState,
+  actions: MenuBuildActions,
+): MenuItemConstructorOptions {
   const fullscreenSection =
     state.platform === "darwin"
       ? []
@@ -156,9 +159,21 @@ function buildViewMenu(state: MenuState): MenuItemConstructorOptions {
     { role: "reload" },
     { role: "forceReload" },
     { type: "separator" },
-    { role: "resetZoom" },
-    { role: "zoomIn" },
-    { role: "zoomOut" },
+    {
+      label: "Actual Size",
+      click: (_item, browserWindow) =>
+        actions.command("view.resetZoom", browserWindow ?? null),
+    },
+    {
+      label: "Zoom In",
+      click: (_item, browserWindow) =>
+        actions.command("view.zoomIn", browserWindow ?? null),
+    },
+    {
+      label: "Zoom Out",
+      click: (_item, browserWindow) =>
+        actions.command("view.zoomOut", browserWindow ?? null),
+    },
     // macOS injects a native full screen item into the View menu; adding the
     // Electron role here creates duplicate "Toggle Full Screen" rows.
     ...fullscreenSection,

@@ -28,6 +28,7 @@ import type { CommandFn } from "../runner/runner";
 export function buildAgentCreateCommand(opts: {
   readonly epicId: string | null;
   readonly senderAgentId: string | null;
+  readonly name: string | null;
   readonly surface: string | null;
   readonly harness: string | null;
   readonly model: string | null;
@@ -48,6 +49,7 @@ export function buildAgentCreateCommand(opts: {
     const request = parseUserInput(createAgentRequestSchema, {
       senderAgentId,
       epicId,
+      name: opts.name,
       surface: opts.surface,
       harnessId: opts.harness,
       model: opts.model,

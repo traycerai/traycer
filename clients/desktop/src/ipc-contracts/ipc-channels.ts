@@ -175,6 +175,11 @@ export const RunnerHostInvoke = {
   traycerCliManifestRead: "runnerHost:traycer:cli:manifestRead",
   traycerHostNameGet: "runnerHost:traycer:host:name:get",
   traycerHostNameSet: "runnerHost:traycer:host:name:set",
+  zoomGet: "runnerHost:zoom:get",
+  zoomSet: "runnerHost:zoom:set",
+  zoomStepIn: "runnerHost:zoom:stepIn",
+  zoomStepOut: "runnerHost:zoom:stepOut",
+  zoomReset: "runnerHost:zoom:reset",
 } as const;
 
 export const RunnerHostEvent = {
@@ -223,6 +228,7 @@ export const RunnerHostEvent = {
   // auto-update reconciler, so every open window's banner/Settings stay in
   // lockstep without racing the CLI's cross-process lock file.
   hostOperationStatusChange: "runnerHost:event:host:operationStatusChange",
+  zoomChange: "runnerHost:event:zoom:change",
 } as const;
 
 /**

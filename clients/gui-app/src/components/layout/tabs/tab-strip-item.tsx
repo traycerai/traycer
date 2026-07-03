@@ -70,7 +70,7 @@ import {
 } from "@/hooks/epic/use-epic-activity-status";
 
 const TAB_CLASS_BASE =
-  "group/tab relative flex h-10 w-full min-w-0 items-center gap-2 pl-6 pr-4 text-ui-sm transition-[color,transform] duration-300 ease-spring";
+  "group/tab relative flex h-10 w-full min-w-0 items-center gap-1.5 px-[clamp(0.75rem,10%,1.5rem)] text-ui-sm transition-[color,transform] duration-300 ease-spring";
 const NO_DRAG_CLASS = "[-webkit-app-region:no-drag]";
 const HEADER_TAB_LAYOUT_TRANSITION = {
   type: "spring",
@@ -473,7 +473,9 @@ function HeaderTabMotionFrame(props: {
         scale: props.isDragging ? 0.96 : 1,
       }}
       transition={HEADER_TAB_LAYOUT_TRANSITION}
-      className="relative flex min-w-[120px] flex-1 basis-0 items-end"
+      // Keep the 14rem cap in sync with TAB_WIDTH_CAP_PX in the desktop
+      // resolution harness.
+      className="relative flex w-56 min-w-[120px] max-w-56 flex-[1_1_14rem] items-end [container-type:inline-size]"
     >
       {props.children}
     </m.div>
@@ -501,11 +503,11 @@ interface TabTrailingSlotProps {
 }
 
 /**
- * Inline trailing slot that defaults to zero width so the tab label
- * can occupy the full available space. The slot expands only as needed
- * - and the label truncates to make room - only when one of:
- * - the user hovers the tab (reveals the close button)
- * - keyboard focus enters the tab (reveals the close button)
+ * Inline trailing slot that defaults to zero width so compact tabs stay
+ * icon-first. A container query reveals the close button only after the tab is
+ * wide enough to spare the room, and only when one of:
+ * - the user hovers a non-compact tab
+ * - keyboard focus enters a non-compact tab
  * - the leader modifier is held (renders the digit badge)
  *
  * The collapsed close button stays mounted (just zero-width and
@@ -519,9 +521,7 @@ function TabTrailingSlot(props: TabTrailingSlotProps) {
     <span
       className={cn(
         "z-20 flex shrink-0 items-center justify-center overflow-hidden transition-[width,opacity] duration-150 ease-spring [-webkit-app-region:no-drag]",
-        showLeader
-          ? "w-fit opacity-100"
-          : "w-0 opacity-0 group-hover/tab:w-5 group-hover/tab:opacity-100 group-focus-within/tab:w-5 group-focus-within/tab:opacity-100",
+        showLeader ? "w-fit opacity-100" : "header-tab-trailing-slot",
       )}
     >
       <AnimatePresence initial={false}>
@@ -549,7 +549,7 @@ function TabTrailingSlot(props: TabTrailingSlotProps) {
             onClose();
           }}
           className={cn(
-            "pointer-events-none size-5 text-muted-foreground hover:text-foreground group-focus-within/tab:pointer-events-auto group-hover/tab:pointer-events-auto [-webkit-app-region:no-drag]",
+            "header-tab-close-button pointer-events-none size-5 text-muted-foreground hover:text-foreground [-webkit-app-region:no-drag]",
             active &&
               "text-foreground/70 hover:bg-accent hover:text-accent-foreground",
           )}
@@ -573,7 +573,12 @@ function HeaderTabSeparator(props: { readonly visible: boolean }) {
 
 function TabChrome(props: { readonly isActive: boolean }) {
   if (!props.isActive) {
-    return null;
+    return (
+      <span
+        aria-hidden
+        className="pointer-events-none absolute inset-x-2 inset-y-1 rounded-md bg-accent/45 opacity-0 transition-opacity duration-150 ease-out group-focus-within/tab:opacity-100 group-hover/tab:opacity-100"
+      />
+    );
   }
 
   return (

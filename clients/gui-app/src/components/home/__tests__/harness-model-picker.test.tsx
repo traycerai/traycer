@@ -268,6 +268,7 @@ import { ALL_PERMISSION_MODES } from "@traycer/protocol/persistence/epic/foundat
 const CODEX_HARNESS: HarnessOption = {
   id: "codex",
   label: "Codex",
+  enabled: true,
   available: true,
   error: null,
   modes: ["gui", "tui"],
@@ -279,6 +280,7 @@ const CODEX_HARNESS: HarnessOption = {
 const CLAUDE_HARNESS: HarnessOption = {
   id: "claude",
   label: "Claude",
+  enabled: true,
   available: true,
   error: null,
   modes: ["gui", "tui"],
@@ -290,6 +292,7 @@ const CLAUDE_HARNESS: HarnessOption = {
 const OPENCODE_HARNESS: HarnessOption = {
   id: "opencode",
   label: "OpenCode",
+  enabled: true,
   available: false,
   error: "OpenCode not configured",
   modes: ["gui", "tui"],
@@ -301,6 +304,7 @@ const OPENCODE_HARNESS: HarnessOption = {
 const OPENROUTER_HARNESS: HarnessOption = {
   id: "openrouter",
   label: "OpenRouter",
+  enabled: true,
   available: false,
   error: "OpenRouter needs an API key",
   modes: ["gui"],
@@ -312,6 +316,7 @@ const OPENROUTER_HARNESS: HarnessOption = {
 const DROID_HARNESS: HarnessOption = {
   id: "droid",
   label: "Droid",
+  enabled: true,
   available: true,
   error: null,
   modes: ["gui"],
@@ -323,6 +328,7 @@ const DROID_HARNESS: HarnessOption = {
 const CURSOR_HARNESS: HarnessOption = {
   id: "cursor",
   label: "Cursor",
+  enabled: true,
   available: true,
   error: null,
   modes: ["gui"],

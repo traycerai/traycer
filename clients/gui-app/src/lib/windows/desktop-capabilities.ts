@@ -6,6 +6,7 @@ import type {
   DesktopMenuBridge,
   DesktopPowerBridge,
   DesktopSupportBridge,
+  DesktopZoomBridge,
 } from "@/lib/windows/types";
 
 export function resolveDesktopMenuBridge(
@@ -34,6 +35,13 @@ export function resolveDesktopPowerBridge(
 ): DesktopPowerBridge | null {
   const value: unknown = Reflect.get(runnerHost, "power");
   return isDesktopPowerBridge(value) ? value : null;
+}
+
+export function resolveDesktopZoomBridge(
+  runnerHost: IRunnerHost,
+): DesktopZoomBridge | null {
+  const value: unknown = Reflect.get(runnerHost, "zoom");
+  return isDesktopZoomBridge(value) ? value : null;
 }
 
 export function resolveDesktopHostRegistryUpdatesBridge(
@@ -78,6 +86,19 @@ function isDesktopAppUpdatesBridge(
 
 function isDesktopPowerBridge(value: unknown): value is DesktopPowerBridge {
   return isRecord(value) && typeof value.setSleepBlocked === "function";
+}
+
+function isDesktopZoomBridge(value: unknown): value is DesktopZoomBridge {
+  return (
+    isRecord(value) &&
+    Array.isArray(value.ladder) &&
+    typeof value.get === "function" &&
+    typeof value.set === "function" &&
+    typeof value.stepIn === "function" &&
+    typeof value.stepOut === "function" &&
+    typeof value.reset === "function" &&
+    typeof value.onChange === "function"
+  );
 }
 
 function isDesktopHostRegistryUpdatesBridge(
