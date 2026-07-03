@@ -32,7 +32,7 @@ export function makeTraycerReference(config: {
 }) {
   return function TraycerReference(props: TraycerReferenceProps) {
     const rawNodeId = config.idAttr === null ? undefined : props[config.idAttr];
-    const onOpen = useTraycerReferenceOpenHandler({
+    const { onOpen, sameEpicNodeRef } = useTraycerReferenceOpenHandler({
       epicId: props["data-epic-id"],
       nodeId: typeof rawNodeId === "string" ? rawNodeId : undefined,
       requiresNode: config.requiresNode,
@@ -43,6 +43,8 @@ export function makeTraycerReference(config: {
         title={props["data-title"]}
         refKind={config.refKind}
         onOpen={onOpen}
+        sameEpicNodeRef={sameEpicNodeRef}
+        epicId={props["data-epic-id"]}
       >
         {props.children}
       </TraycerReferenceChip>

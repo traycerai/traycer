@@ -1,5 +1,6 @@
-import { useState, type ReactNode } from "react";
-import { FileDiff } from "lucide-react";
+import { useId, useMemo, useState, type ReactNode } from "react";
+import { FileDiff, GripVertical } from "lucide-react";
+import { useDraggable, type DraggableSyntheticListeners } from "@dnd-kit/core";
 import { v4 as uuidv4 } from "uuid";
 import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
 import type { ArtifactOperationAction } from "@traycer/protocol/persistence/epic/content-blocks";
@@ -16,7 +17,15 @@ import { artifactDiffRenderable } from "@/lib/chat/artifact-diff-renderable";
 import { artifactOperationVerb } from "@/lib/chat/artifact-operation-verb";
 import { cn } from "@/lib/utils";
 import type { ArtifactSegmentChange } from "@/stores/composer/chat-store";
-import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import {
+  resolveTabIdForEpic,
+  useEpicCanvasStore,
+} from "@/stores/epics/canvas/store";
+import {
+  CHAT_ARTIFACT_DND_TYPE,
+  getChatArtifactDragId,
+  type EpicCanvasChatArtifactDragData,
+} from "@/components/epic-canvas/dnd/dnd";
 import { OpenFullDiffControl } from "./open-full-diff-control";
 import { SnapshotHashInlineDiff } from "./snapshot-hash-inline-diff";
 
@@ -66,24 +75,59 @@ function ArtifactDiffToggle(props: {
 }
 
 /**
- * The card's header row. The open-artifact action is a child button, while the
- * diff toggle and full-diff control are siblings, avoiding nested interactive
- * content.
+ * The card's header row, and the drag surface for the card. The open-artifact
+ * action is a child button, while the diff toggle and full-diff control are
+ * siblings, avoiding nested interactive content. Drag lives on this row (never
+ * the outer card) so an expanded diff body stays free for text selection.
+ *
+ * Only `setNodeRef` + `listeners` are attached (mirroring the git-diff
+ * `FileRow`): the row wraps a real open button, so spreading dnd-kit's default
+ * `attributes` (which set `role="button"` + `tabIndex` on this div) would nest
+ * interactive/focusable elements, and the DnD system ships no keyboard sensor -
+ * the card stays keyboard-openable via its inner buttons.
  */
 function ArtifactCardHeaderRow(props: {
   readonly sticky: boolean;
   readonly surfaceClassName: string;
   readonly stickySurfaceClassName: string;
   readonly hoverClassName: string | null;
+  readonly dragRef: (element: HTMLElement | null) => void;
+  readonly dragListeners: DraggableSyntheticListeners;
+  readonly draggable: boolean;
+  readonly isDragging: boolean;
+  readonly showGrip: boolean;
   readonly children: ReactNode;
 }) {
+  const {
+    sticky,
+    surfaceClassName,
+    stickySurfaceClassName,
+    hoverClassName,
+    dragRef,
+    dragListeners,
+    draggable,
+    isDragging,
+    showGrip,
+    children,
+  } = props;
   const className = cn(
     "relative flex w-full items-center gap-2 px-2.5 py-2 text-left",
-    props.sticky ? props.stickySurfaceClassName : props.surfaceClassName,
-    !props.sticky && props.hoverClassName,
-    props.sticky && "sticky top-0 z-20 border-b border-border/40 shadow-sm",
+    sticky ? stickySurfaceClassName : surfaceClassName,
+    !sticky && hoverClassName,
+    sticky && "sticky top-0 z-20 border-b border-border/40 shadow-sm",
+    draggable && (isDragging ? "cursor-grabbing" : "cursor-grab"),
   );
-  return <div className={className}>{props.children}</div>;
+  return (
+    <div ref={dragRef} className={className} {...dragListeners}>
+      {showGrip ? (
+        <GripVertical
+          aria-hidden
+          className="pointer-events-none absolute top-1/2 left-0.5 size-3.5 -translate-y-1/2 text-muted-foreground/60 opacity-0 transition-opacity group-hover/artifact-card:opacity-100"
+        />
+      ) : null}
+      {children}
+    </div>
+  );
 }
 
 const ARTIFACT_KIND_CARD_CLASSES: Readonly<Record<EpicArtifactKind, string>> = {
@@ -452,6 +496,42 @@ function ArtifactCardSegmentContent(props: ArtifactCardSegmentProps) {
     hasHost: activeHostId !== null,
   });
 
+  // Drag source (mirrors the sidebar): the card opens its artifact in the
+  // canvas. `viewTabId` comes from the NON-side-effecting resolver read
+  // reactively via a selector (constraint C1) - never `resolveTargetTabForEpic`,
+  // which mutates tab state and must not run during render. The drag id keys on
+  // `useId()`, not the artifact id, because the same artifact can appear many
+  // times in one thread (constraint C3). The payload carries identity only; the
+  // `instanceId` is minted per drop at commit time (constraint C2).
+  const viewTabId = useEpicCanvasStore((s) => resolveTabIdForEpic(s, epicId));
+  const dragOccurrenceId = useId();
+  // A missing tab (defensive; unreachable while the card is visible) blocks
+  // drag, alongside the `canOpen` gate (live artifact + host + not deleted).
+  const canDrag = canOpen && viewTabId !== null;
+  const dragData = useMemo<EpicCanvasChatArtifactDragData | undefined>(() => {
+    if (viewTabId === null || activeHostId === null) return undefined;
+    return {
+      kind: CHAT_ARTIFACT_DND_TYPE,
+      epicId,
+      viewTabId,
+      artifact: {
+        id: artifactId,
+        type: displayKind,
+        name: openTitle,
+        hostId: activeHostId,
+      },
+    };
+  }, [epicId, viewTabId, activeHostId, artifactId, displayKind, openTitle]);
+  const {
+    listeners: dragListeners,
+    setNodeRef: dragRef,
+    isDragging,
+  } = useDraggable({
+    id: getChatArtifactDragId(dragOccurrenceId),
+    disabled: !canDrag,
+    data: dragData,
+  });
+
   const openArtifact = (): void => {
     // Re-check the raw conditions so the host id narrows to a non-null string.
     if (isDeleted || live === null || activeHostId === null) return;
@@ -524,6 +604,11 @@ function ArtifactCardSegmentContent(props: ArtifactCardSegmentProps) {
         hoverClassName={
           canOpen ? ARTIFACT_KIND_HOVER_CLASSES[displayKind] : null
         }
+        dragRef={dragRef}
+        dragListeners={dragListeners}
+        draggable={canDrag}
+        isDragging={isDragging}
+        showGrip={canDrag}
       >
         {header}
       </ArtifactCardHeaderRow>
