@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { RotateCcw } from "lucide-react";
+import { Minus, Plus, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useDesktopZoomBridge } from "@/hooks/runner/use-desktop-zoom-bridge";
 import {
   useRunnerZoomResetMutation,
@@ -12,7 +13,7 @@ import { registerDynamicActionHandler } from "@/lib/keybindings/dispatch";
 import { formatZoomPercent } from "@/lib/windows/format-zoom-percent";
 import type { DesktopZoomBridge } from "@/lib/windows/types";
 
-const INDICATOR_DISMISS_MS = 2_000;
+const INDICATOR_DISMISS_MS = 4_000;
 const WHEEL_STEP_THRESHOLD_PX = 80;
 const LINE_DELTA_PX = 16;
 const PAGE_DELTA_PX = 800;
@@ -203,16 +204,60 @@ function DesktopZoomIndicator(props: {
       data-testid="desktop-zoom-indicator"
     >
       <div
-        className="flex h-10 min-w-20 items-center justify-center rounded-md border border-border bg-popover px-4 text-ui-sm font-semibold tabular-nums shadow-lg"
-        data-testid="desktop-zoom-percent"
+        className="flex h-10 min-w-36 items-center rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-lg"
+        data-testid="desktop-zoom-level-island"
       >
-        {formatZoomPercent(percent)}
+        <TooltipWrapper
+          label="Zoom out"
+          side="top"
+          sideOffset={8}
+          align="center"
+        >
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Zoom out"
+            className="size-8 rounded-sm text-muted-foreground hover:text-foreground"
+            onClick={() => {
+              void actions.stepOut().catch(() => undefined);
+            }}
+          >
+            <Minus aria-hidden="true" />
+          </Button>
+        </TooltipWrapper>
+        <div
+          className="flex min-w-16 flex-1 items-center justify-center px-2 text-ui-sm font-semibold tabular-nums"
+          data-testid="desktop-zoom-percent"
+        >
+          {formatZoomPercent(percent)}
+        </div>
+        <TooltipWrapper
+          label="Zoom in"
+          side="top"
+          sideOffset={8}
+          align="center"
+        >
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Zoom in"
+            className="size-8 rounded-sm text-muted-foreground hover:text-foreground"
+            onClick={() => {
+              void actions.stepIn().catch(() => undefined);
+            }}
+          >
+            <Plus aria-hidden="true" />
+          </Button>
+        </TooltipWrapper>
       </div>
       <Button
         type="button"
         variant="outline"
         size="sm"
         className="h-10 rounded-md border-border bg-popover px-4 text-popover-foreground shadow-lg hover:bg-accent hover:text-accent-foreground"
+        data-testid="desktop-zoom-reset-island"
         disabled={resetPending}
         onClick={() => {
           void actions.reset().catch(() => undefined);

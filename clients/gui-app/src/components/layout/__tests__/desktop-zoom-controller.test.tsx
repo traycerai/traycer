@@ -9,6 +9,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import { DesktopZoomController } from "@/components/layout/bridges/desktop-zoom-controller";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   dispatchAction,
   type KeybindingRouter,
@@ -139,25 +140,43 @@ describe("<DesktopZoomController />", () => {
     });
 
     const indicator = screen.getByTestId("desktop-zoom-indicator");
+    const zoomIsland = screen.getByTestId("desktop-zoom-level-island");
     const percent = screen.getByTestId("desktop-zoom-percent");
     const resetButton = screen.getByRole("button", {
       name: /Reset to 100%/i,
     });
+    const resetIsland = screen.getByTestId("desktop-zoom-reset-island");
+    const zoomInButton = screen.getByRole("button", { name: "Zoom in" });
+    const zoomOutButton = screen.getByRole("button", { name: "Zoom out" });
 
+    expect(indicator.contains(zoomIsland)).toBe(true);
     expect(indicator.contains(percent)).toBe(true);
-    expect(indicator.contains(resetButton)).toBe(true);
+    expect(indicator.contains(resetIsland)).toBe(true);
+    expect(resetIsland).toBe(resetButton);
+    expect(zoomIsland.contains(percent)).toBe(true);
+    expect(zoomIsland.contains(zoomInButton)).toBe(true);
+    expect(zoomIsland.contains(zoomOutButton)).toBe(true);
+    expect(zoomIsland.contains(resetButton)).toBe(false);
     expect(percent.textContent).toBe("125%");
 
+    fireEvent.click(zoomOutButton);
+    fireEvent.click(zoomInButton);
     fireEvent.click(resetButton);
     await act(async () => {
       await Promise.resolve();
     });
+    expect(bridge?.stepOut).toHaveBeenCalledTimes(1);
+    expect(bridge?.stepIn).toHaveBeenCalledTimes(1);
     expect(bridge?.reset).toHaveBeenCalledTimes(1);
 
     act(() => {
       vi.advanceTimersByTime(2_000);
     });
+    expect(screen.getByTestId("desktop-zoom-indicator")).toBeTruthy();
 
+    act(() => {
+      vi.advanceTimersByTime(2_000);
+    });
     expect(screen.queryByTestId("desktop-zoom-indicator")).toBeNull();
   });
 });
@@ -173,6 +192,8 @@ function createQueryClient(): QueryClient {
 
 function renderWithQueryClient(children: ReactNode): void {
   render(
-    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>,
+    <QueryClientProvider client={queryClient}>
+      <TooltipProvider>{children}</TooltipProvider>
+    </QueryClientProvider>,
   );
 }
