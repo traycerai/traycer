@@ -88,7 +88,11 @@ describe("<RepoTree />", () => {
   it("does not render submodules of a non-active root", () => {
     renderTree({
       roots: [
-        { row: row({ runningDir: "/repo" }), changeCount: 1, disabledLabel: null },
+        {
+          row: row({ runningDir: "/repo" }),
+          changeCount: 1,
+          disabledLabel: null,
+        },
         {
           row: row({ runningDir: "/other", repoIdentifier: null }),
           changeCount: 0,
@@ -177,7 +181,11 @@ describe("<RepoTree />", () => {
     const onSelectRoot = vi.fn();
     renderTree({
       roots: [
-        { row: row({ runningDir: "/repo" }), changeCount: 1, disabledLabel: null },
+        {
+          row: row({ runningDir: "/repo" }),
+          changeCount: 1,
+          disabledLabel: null,
+        },
         {
           row: row({
             runningDir: "/other",
