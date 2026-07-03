@@ -1,6 +1,6 @@
-import { useId, useMemo, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { FileDiff, GripVertical } from "lucide-react";
-import { useDraggable, type DraggableSyntheticListeners } from "@dnd-kit/core";
+import type { DraggableSyntheticListeners } from "@dnd-kit/core";
 import { v4 as uuidv4 } from "uuid";
 import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
 import type { ArtifactOperationAction } from "@traycer/protocol/persistence/epic/content-blocks";
@@ -17,15 +17,8 @@ import { artifactDiffRenderable } from "@/lib/chat/artifact-diff-renderable";
 import { artifactOperationVerb } from "@/lib/chat/artifact-operation-verb";
 import { cn } from "@/lib/utils";
 import type { ArtifactSegmentChange } from "@/stores/composer/chat-store";
-import {
-  resolveTabIdForEpic,
-  useEpicCanvasStore,
-} from "@/stores/epics/canvas/store";
-import {
-  CHAT_ARTIFACT_DND_TYPE,
-  getChatArtifactDragId,
-  type EpicCanvasChatArtifactDragData,
-} from "@/components/epic-canvas/dnd/dnd";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { useChatArtifactDragSource } from "@/components/epic-canvas/dnd/use-chat-artifact-drag-source";
 import { OpenFullDiffControl } from "./open-full-diff-control";
 import { SnapshotHashInlineDiff } from "./snapshot-hash-inline-diff";
 
@@ -497,39 +490,28 @@ function ArtifactCardSegmentContent(props: ArtifactCardSegmentProps) {
   });
 
   // Drag source (mirrors the sidebar): the card opens its artifact in the
-  // canvas. `viewTabId` comes from the NON-side-effecting resolver read
-  // reactively via a selector (constraint C1) - never `resolveTargetTabForEpic`,
-  // which mutates tab state and must not run during render. The drag id keys on
-  // `useId()`, not the artifact id, because the same artifact can appear many
-  // times in one thread (constraint C3). The payload carries identity only; the
-  // `instanceId` is minted per drop at commit time (constraint C2).
-  const viewTabId = useEpicCanvasStore((s) => resolveTabIdForEpic(s, epicId));
-  const dragOccurrenceId = useId();
-  // A missing tab (defensive; unreachable while the card is visible) blocks
-  // drag, alongside the `canOpen` gate (live artifact + host + not deleted).
-  const canDrag = canOpen && viewTabId !== null;
-  const dragData = useMemo<EpicCanvasChatArtifactDragData | undefined>(() => {
-    if (viewTabId === null || activeHostId === null) return undefined;
-    return {
-      kind: CHAT_ARTIFACT_DND_TYPE,
-      epicId,
-      viewTabId,
-      artifact: {
-        id: artifactId,
-        type: displayKind,
-        name: openTitle,
-        hostId: activeHostId,
-      },
-    };
-  }, [epicId, viewTabId, activeHostId, artifactId, displayKind, openTitle]);
+  // canvas. Identity is present only when a host is bound (`activeHostId`);
+  // `enabled` reuses the `canOpen` gate (live artifact + host + not deleted).
+  // The shared hook owns the pure `viewTabId` resolution (C1), the
+  // occurrence-unique drag id (C3), and the identity-only payload (C2). The card
+  // attaches `setNodeRef` + `listeners` only (no `attributes`).
   const {
-    listeners: dragListeners,
+    isDraggable: canDrag,
     setNodeRef: dragRef,
+    listeners: dragListeners,
     isDragging,
-  } = useDraggable({
-    id: getChatArtifactDragId(dragOccurrenceId),
-    disabled: !canDrag,
-    data: dragData,
+  } = useChatArtifactDragSource({
+    epicId,
+    identity:
+      activeHostId === null
+        ? null
+        : {
+            id: artifactId,
+            type: displayKind,
+            name: openTitle,
+            hostId: activeHostId,
+          },
+    enabled: canOpen,
   });
 
   const openArtifact = (): void => {

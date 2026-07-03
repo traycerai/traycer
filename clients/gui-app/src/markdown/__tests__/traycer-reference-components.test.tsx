@@ -104,7 +104,6 @@ vi.mock("@/stores/epics/canvas/store", () => {
   const canvasState = {
     resolveTargetTabForEpic,
     openTilePreviewInTab,
-    resolveTabIdForEpic,
   };
   return {
     useEpicCanvasStore: Object.assign(
@@ -112,6 +111,11 @@ vi.mock("@/stores/epics/canvas/store", () => {
         selector(canvasState),
       { getState: () => canvasState },
     ),
+    // Standalone pure resolver: the shared `useChatArtifactDragSource` hook
+    // reads `viewTabId` via `resolveTabIdForEpic(state, epicId)`. Delegate to the
+    // same spy by `epicId` so the existing single-arg call assertion holds.
+    resolveTabIdForEpic: (_state: typeof canvasState, epicId: string) =>
+      resolveTabIdForEpic(epicId),
   };
 });
 

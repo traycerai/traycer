@@ -1,15 +1,12 @@
-import {
-  useDraggable,
-  type DraggableAttributes,
-  type DraggableSyntheticListeners,
+import type {
+  DraggableAttributes,
+  DraggableSyntheticListeners,
 } from "@dnd-kit/core";
-import { useId, useMemo, type MouseEvent, type ReactNode } from "react";
+import { type MouseEvent, type ReactNode } from "react";
 import {
-  CHAT_ARTIFACT_DND_TYPE,
-  getChatArtifactDragId,
-  type EpicCanvasChatArtifactDragData,
-} from "@/components/epic-canvas/dnd/dnd";
-import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+  useChatArtifactDragSource,
+  type ChatArtifactDragIdentity,
+} from "@/components/epic-canvas/dnd/use-chat-artifact-drag-source";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
 import { isEpicArtifactKind } from "@/lib/artifacts/node-display";
 import { cn } from "@/lib/utils";
@@ -81,9 +78,10 @@ function isChatArtifactDragCandidate(
 
 /**
  * The drag-capable variant, mounted only for same-epic spec/ticket references.
- * Owns the canvas-store subscription (`viewTabId`) and the `useDraggable`
- * registration; a `null` `viewTabId` (no open tab for the epic) still renders
- * the same button but disables the drag surface.
+ * Delegates the canvas-store subscription (`viewTabId`) and the `useDraggable`
+ * registration to the shared `useChatArtifactDragSource` hook; a non-draggable
+ * result (e.g. no open tab for the epic) still renders the same button but
+ * disables the drag surface.
  */
 function DraggableReferenceChip(
   props: TraycerReferenceChipProps & {
@@ -91,54 +89,22 @@ function DraggableReferenceChip(
   },
 ) {
   const { refKind, sameEpicNodeRef, epicId } = props;
-  // Occurrence-unique drag id (C3): the same artifact may be mentioned many
-  // times in one message, so the id keys on `useId()`, not the artifact id.
-  const occurrenceId = useId();
-  // `viewTabId` (C1) comes from the pure, non-side-effecting resolver read via
-  // the canvas store - never the side-effecting `resolveTargetTabForEpic`. A
-  // `null` result (no open tab for the epic) makes the chip non-draggable.
-  const viewTabId = useEpicCanvasStore((state) =>
-    epicId === undefined || epicId.length === 0
+  // Build the artifact identity from the resolved same-epic ref, guarding the
+  // kind to the artifact-only payload type. `null` when the ref is absent or is
+  // not an artifact kind, which disables the drag surface. This component only
+  // mounts for spec/ticket candidates (see `isChatArtifactDragCandidate`), so
+  // the shared hook's own gate is `enabled: true`.
+  const identity: ChatArtifactDragIdentity | null =
+    sameEpicNodeRef === null || !isEpicArtifactKind(sameEpicNodeRef.type)
       ? null
-      : state.resolveTabIdForEpic(epicId),
-  );
-  // `epicNodeRefForNodeId` mints a fresh `instanceId` every render, so the ref
-  // object identity churns each render even though the payload omits it. Depend
-  // the memo on the primitive fields it actually reads (not the ref object) so
-  // `useDraggable` receives a stable `data` reference across renders.
-  const nodeId = sameEpicNodeRef === null ? null : sameEpicNodeRef.id;
-  const nodeType = sameEpicNodeRef === null ? null : sameEpicNodeRef.type;
-  const nodeName = sameEpicNodeRef === null ? null : sameEpicNodeRef.name;
-  const nodeHostId = sameEpicNodeRef === null ? null : sameEpicNodeRef.hostId;
-  const dragData = useMemo<EpicCanvasChatArtifactDragData | undefined>(() => {
-    if (refKind !== "spec" && refKind !== "ticket") return undefined;
-    if (epicId === undefined || epicId.length === 0) return undefined;
-    if (viewTabId === null) return undefined;
-    if (nodeId === null || nodeName === null || nodeHostId === null) {
-      return undefined;
-    }
-    // The ref is a spec/ticket artifact here (given the refKind gate); the
-    // guard narrows the kind to the artifact-only identity the payload carries.
-    if (!isEpicArtifactKind(nodeType)) return undefined;
-    return {
-      kind: CHAT_ARTIFACT_DND_TYPE,
-      epicId,
-      viewTabId,
-      artifact: {
-        id: nodeId,
-        type: nodeType,
-        name: nodeName,
-        hostId: nodeHostId,
-      },
-    };
-  }, [refKind, epicId, viewTabId, nodeId, nodeType, nodeName, nodeHostId]);
-
-  const isDraggable = dragData !== undefined;
-  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
-    id: getChatArtifactDragId(occurrenceId),
-    disabled: !isDraggable,
-    data: dragData,
-  });
+      : {
+          id: sameEpicNodeRef.id,
+          type: sameEpicNodeRef.type,
+          name: sameEpicNodeRef.name,
+          hostId: sameEpicNodeRef.hostId,
+        };
+  const { isDraggable, setNodeRef, listeners, attributes, isDragging } =
+    useChatArtifactDragSource({ epicId, identity, enabled: true });
 
   return (
     <ReferenceChipButton
