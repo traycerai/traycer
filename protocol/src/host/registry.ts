@@ -140,6 +140,8 @@ import {
   worktreeDeleteResponseSchema,
   worktreeListAllForHostRequestSchema,
   worktreeListAllForHostResponseSchema,
+  worktreeListAllForHostRequestSchemaV11,
+  worktreeListAllForHostResponseSchemaV11,
   worktreeImportRequestSchema,
   worktreeImportResponseSchema,
   worktreeListBranchesRequestSchema,
@@ -386,6 +388,43 @@ export const worktreeListAllForHostV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: worktreeListAllForHostRequestSchema,
   responseSchema: worktreeListAllForHostResponseSchema,
+});
+
+// v1.1 adds the staleness signals (`includeActivity` request flag; per-entry
+// `lastActivityAt`, `owners`, `branchStatus`, `createdAt`) the housekeeping
+// skill and Settings ▸ Worktrees tab consume. Folded onto this existing method
+// - never a new method name - so the wire method-set stays identical to v1.0.0;
+// see `worktreeListByWorkspacePathsV11` and the RPC backward-compat decision log.
+export const worktreeListAllForHostV11 = defineRpcContract({
+  method: "worktree.listAllForHost",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: worktreeListAllForHostRequestSchemaV11,
+  responseSchema: worktreeListAllForHostResponseSchemaV11,
+});
+
+// Additive upgrade from v1.0: an older peer neither asks for activity nor
+// carries the enriched fields, so the request defaults `includeActivity: false`
+// and each response entry defaults empty `owners` / `null` timestamps &
+// `branchStatus`. The newer side runs this when bridging a v1.0 peer up to
+// canonical (host: inbound v1.0 request; client: inbound v1.0 response).
+export const worktreeListAllForHostUpgradeV10ToV11 = defineUpgradePath<
+  typeof worktreeListAllForHostV10,
+  typeof worktreeListAllForHostV11
+>({
+  from: worktreeListAllForHostV10.schemaVersion,
+  to: worktreeListAllForHostV11.schemaVersion,
+  upgradeRequest: () => ({
+    includeActivity: false,
+  }),
+  upgradeResponse: (response) => ({
+    worktrees: response.worktrees.map((entry) => ({
+      ...entry,
+      lastActivityAt: null,
+      owners: [],
+      branchStatus: null,
+      createdAt: null,
+    })),
+  }),
 });
 
 export const worktreeSetRepoScriptsV10 = defineRpcContract({
@@ -2186,11 +2225,15 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
   },
   "worktree.listAllForHost": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: worktreeListAllForHostV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: worktreeListAllForHostV11,
+          upgradeFromPreviousVersion: worktreeListAllForHostUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},

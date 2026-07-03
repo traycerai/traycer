@@ -564,6 +564,101 @@ export type WorktreeListAllForHostResponse = z.infer<
 >;
 
 /**
+ * One persisted `WorktreeBindingV1` reference that points at a host worktree,
+ * joined into the v1.1 listing so callers can see WHICH epics/sessions still
+ * reference a path. An empty `owners` array on an entry means no binding
+ * references it ("unreferenced" - distinct from the disk-orphan `gitRemovable:
+ * false` signal). `updatedAt` is the binding row's last-touch stamp, one of the
+ * inputs to the derived `lastActivityAt`.
+ */
+export const worktreeHostEntryOwnerSchema = z.object({
+  epicId: z.string(),
+  ownerKind: worktreeBindingOwnerKindSchema,
+  ownerId: z.string(),
+  updatedAt: z.number(),
+});
+export type WorktreeHostEntryOwner = z.infer<
+  typeof worktreeHostEntryOwnerSchema
+>;
+
+/**
+ * Best-effort branch position for a worktree, probed only when the v1.1 request
+ * sets `includeActivity: true`. `null` when there is no upstream, the head is
+ * detached, or the probe failed - a failed probe never fails the listing.
+ */
+export const worktreeBranchStatusSchema = z.object({
+  ahead: z.number().int().nonnegative(),
+  behind: z.number().int().nonnegative(),
+  // `git branch --merged <default>` (or an equivalent rev-list count): the
+  // branch is fully contained in the repo's default branch, so removing the
+  // worktree loses no unmerged commits.
+  mergedIntoDefault: z.boolean(),
+});
+export type WorktreeBranchStatus = z.infer<typeof worktreeBranchStatusSchema>;
+
+/**
+ * `worktree.listAllForHost` v1.1 entry. Adds the staleness signals the
+ * housekeeping skill and the Settings ▸ Worktrees tab use, on top of every
+ * v1.0 field.
+ *
+ * `includeActivity` gates ONLY the git probes - `lastActivityAt` and
+ * `branchStatus` - which carry the per-worktree cost; both are `null` when the
+ * flag is `false`. The other two fields are cheap and ALWAYS populated,
+ * regardless of the flag:
+ *  - `owners` - a SQLite binding-table read (the same join `ensureIndexHydrated`
+ *    already performs). Consumers rely on this being present even with
+ *    `includeActivity: false`: the Task-delete dialog derives "unreferenced"
+ *    worktrees purely from `owners` (owner set ⊆ the deleted epics, and
+ *    `!inUse`) with no activity probes at all.
+ *  - `createdAt` - a single fs stat (worktree dir birthtime).
+ */
+export const worktreeHostEntrySchemaV11 = worktreeHostEntrySchema.extend({
+  // max(git HEAD reflog last entry, binding `updatedAt` for this path).
+  // Derived, never persisted. `null` when `includeActivity` is false or no
+  // signal is available.
+  lastActivityAt: z.number().nullable(),
+  // Persisted `WorktreeBindingV1` rows (this host) whose effective directory is
+  // this worktree. `[]` = unreferenced.
+  owners: z.array(worktreeHostEntryOwnerSchema),
+  // `null` when no upstream / detached / probe failed / `includeActivity` false.
+  branchStatus: worktreeBranchStatusSchema.nullable(),
+  // Worktree dir birthtime (fs stat) - a fallback age signal. `null` when stat
+  // is unavailable.
+  createdAt: z.number().nullable(),
+});
+export type WorktreeHostEntryV11 = z.infer<typeof worktreeHostEntrySchemaV11>;
+
+/**
+ * `worktree.listAllForHost` v1.1 request. Adds `includeActivity`: the git
+ * probes (reflog, ahead/behind, merged) add per-worktree cost, so the Settings
+ * tab passes `false` (or stays on v1.0) to keep the panel snappy while the
+ * housekeeping CLI passes `true`. Probes run concurrently, best-effort - a
+ * failed probe yields `null`, never fails the listing. The flag gates ONLY
+ * these git probes (`lastActivityAt`, `branchStatus`); `owners` and `createdAt`
+ * are cheap and returned either way.
+ */
+export const worktreeListAllForHostRequestSchemaV11 =
+  worktreeListAllForHostRequestSchema.extend({
+    includeActivity: z.boolean(),
+  });
+export type WorktreeListAllForHostRequestV11 = z.infer<
+  typeof worktreeListAllForHostRequestSchemaV11
+>;
+
+/**
+ * `worktree.listAllForHost` v1.1 response. Same `worktrees` field, enriched
+ * entry shape ({@link worktreeHostEntrySchemaV11}). Bridging down to a v1.0
+ * host yields the v1.0 entries with the new fields defaulted (empty `owners`,
+ * `null` timestamps / `branchStatus`).
+ */
+export const worktreeListAllForHostResponseSchemaV11 = z.object({
+  worktrees: z.array(worktreeHostEntrySchemaV11),
+});
+export type WorktreeListAllForHostResponseV11 = z.infer<
+  typeof worktreeListAllForHostResponseSchemaV11
+>;
+
+/**
  * Returns `null` when no row exists yet so a fresh terminal-agent
  * renders "not selected" without throwing.
  */
