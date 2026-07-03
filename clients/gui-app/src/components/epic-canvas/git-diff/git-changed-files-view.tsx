@@ -29,13 +29,9 @@ export interface GitChangedFilesViewProps {
   readonly files: ReadonlyArray<GitChangedFile>;
 }
 
-/**
- * The parent-repo file body: a debounced filter input over the flat/tree
- * `FileList`. Shared by the single-repo panel and the parent card of the
- * group-by-repo layout so parent files keep identical search / tree-list /
- * virtualization / bundle behavior in both.
- */
-export function GitChangedFilesView(props: GitChangedFilesViewProps): ReactNode {
+export function GitChangedFilesView(
+  props: GitChangedFilesViewProps,
+): ReactNode {
   const [searchQuery, setSearchQuery] = useState("");
   const [appliedQuery, setAppliedQuery] = useState("");
   const debounceTimerRef = useRef<number | null>(null);
@@ -89,7 +85,7 @@ export function GitChangedFilesView(props: GitChangedFilesViewProps): ReactNode 
             value={searchQuery}
             onChange={handleSearchChange}
             onKeyDown={handleKeyDown}
-            placeholder="Filter changed files…"
+            placeholder="Filter changed files..."
             aria-label="Filter changed files"
             className="text-ui-sm"
           />

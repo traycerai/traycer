@@ -55,9 +55,11 @@ export function useGitRefreshWorktreeStatus(): UseMutationResult<
   >({
     client,
     method: "git.listChangedFiles",
-    // The worktree-status refresh feeds the v1.0 change-count slot; it never
-    // needs to bypass the host's relation cache.
-    mapVariables: (variables) => ({ ...variables, refreshRelations: false }),
+    mapVariables: (variables) => ({
+      hostId: variables.hostId,
+      runningDir: variables.runningDir,
+      ignoreWhitespace: variables.ignoreWhitespace,
+    }),
     options: {
       mutationKey: gitMutationKeys.refreshWorktreeStatus(),
       onMutate: (variables) => ({

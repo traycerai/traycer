@@ -158,25 +158,6 @@ export interface GitDiffBundleTilePayload {
 }
 
 /**
- * A submodule's "committed changes not recorded by parent" (ahead-of-pin) diff:
- * `git diff <pin>..HEAD -- <filePath>` run inside the submodule.
- *
- * - `runningDir` is the submodule's own `repoRoot` (where the diff is computed),
- *   so its cache/tile identity can never collide with the parent's.
- * - `parentRunningDir` is the owning parent worktree - the ONLY source of fresh
- *   v1.1 `submodules[].relation` metadata. The `compareFromSha` (recorded pin) is
- *   never persisted here; it is re-derived at fetch time from that fresh metadata
- *   (the submodule must still be `ahead`), so a persisted tile can never issue a
- *   stale-pin diff against a downgraded host. See the ahead-diff gate.
- */
-export interface GitDiffAheadFileTilePayload {
-  readonly kind: "ahead-file";
-  readonly runningDir: string;
-  readonly parentRunningDir: string;
-  readonly filePath: string;
-}
-
-/**
  * Snapshot diff payloads address a chat file-edit by reference (not by copying
  * content): the renderer re-reads the agent's `beforeContent`/`afterContent`
  * live from the chat session by `chatId`. Addressing modes:
@@ -224,9 +205,7 @@ export interface SnapshotHashDiffTilePayload {
 }
 
 export type GitDiffTilePayload =
-  | GitDiffFileTilePayload
-  | GitDiffBundleTilePayload
-  | GitDiffAheadFileTilePayload;
+  GitDiffFileTilePayload | GitDiffBundleTilePayload;
 
 export type SnapshotDiffTilePayload =
   | SnapshotSegmentDiffTilePayload

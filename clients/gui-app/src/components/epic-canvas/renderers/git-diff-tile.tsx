@@ -3,7 +3,6 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Virtuoso } from "react-virtuoso";
 import {
   DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET,
-  type CommitAheadFile,
   type GitChangedFile,
   type GitGetFileDiffResponse,
 } from "@traycer/protocol/host";
@@ -16,16 +15,11 @@ import {
   useGitListChangedFilesSubscription,
   type GitListChangedFilesSubscriptionResult,
 } from "@/hooks/git/use-git-list-changed-files-subscription";
-import { useCurrentAheadSnapshot } from "@/hooks/git/use-current-ahead-snapshot";
-import { resolveAheadDiffGate } from "@/lib/git/submodule-ahead-diff-gate";
 import { gitQueryKeys } from "@/lib/query-keys/git-query-keys";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import type { DiffViewerPreferences } from "@/lib/diff/diff-viewer-preferences";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import type {
-  GitDiffAheadFileTilePayload,
-  GitDiffTileRef,
-} from "@/stores/epics/canvas/types";
+import type { GitDiffTileRef } from "@/stores/epics/canvas/types";
 import { gitBundleGroupLabel, gitStageLabel } from "@/lib/git/git-diff-tile";
 import { gitChangedFileBelongsToBundleGroup } from "@/lib/git/panel-file-rendering";
 import { getBasename, getDirname } from "@/lib/path/cross-platform-path";
@@ -46,7 +40,6 @@ import { useNativeDivScrollRestoration } from "@/hooks/scroll/use-native-div-scr
 import { useBundleDiffScrollRestoration } from "@/hooks/scroll/use-bundle-diff-scroll-restoration";
 import { BinaryPlaceholder } from "@/components/epic-canvas/git-diff/binary-placeholder";
 import { NoLongerChanged } from "@/components/epic-canvas/git-diff/placeholders/no-longer-changed";
-import { AheadReferenceUnavailable } from "@/components/epic-canvas/git-diff/placeholders/ahead-reference-unavailable";
 import { SubscriptionErrorState } from "@/components/epic-canvas/git-diff/empty-states/subscription-error-state";
 import { NoChangesInWorktree } from "@/components/epic-canvas/git-diff/empty-states/no-changes-in-worktree";
 import { GitErrorBlock } from "@/components/epic-canvas/git-diff/git-error-block";
@@ -86,15 +79,6 @@ interface GitDiffTileProps {
   readonly isActive: boolean;
 }
 
-type GitAheadFileDiffTileRef = Omit<GitDiffTileRef, "diff"> & {
-  readonly diff: GitDiffAheadFileTilePayload;
-};
-
-// `stage` is required by the request schema but the host ignores it whenever
-// `compareFromSha` is set (ahead-of-pin diffs are commit-range, not stage-based).
-// A fixed neutral value keeps the cache key stable.
-const AHEAD_FILE_DIFF_STAGE = "unstaged" as const;
-
 interface GitDiffTileLiveProps {
   readonly node: GitDiffTileRef;
   readonly viewTabId: string;
@@ -112,12 +96,6 @@ function isGitBundleDiffTileRef(
   node: GitDiffTileRef,
 ): node is GitBundleDiffTileRef {
   return node.diff.kind === "bundle";
-}
-
-function isGitAheadFileDiffTileRef(
-  node: GitDiffTileRef,
-): node is GitAheadFileDiffTileRef {
-  return node.diff.kind === "ahead-file";
 }
 
 /** The file path a tile targets for "open in editor"; bundles have none. */
@@ -209,9 +187,6 @@ function GitDiffTileLive(props: GitDiffTileLiveProps): ReactNode {
           viewTabId={props.viewTabId}
           subscription={subscription}
         />
-      ) : null}
-      {isGitAheadFileDiffTileRef(props.node) ? (
-        <GitAheadFileDiffTileBody node={props.node} />
       ) : null}
     </DiffTabShell>
   );
@@ -467,7 +442,6 @@ function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
     worktreeOid: props.file.worktreeOid,
     ignoreWhitespace: props.diffViewerPreferences.ignoreWhitespace,
     byteBudget,
-    compareFromSha: null,
     enabled: !props.file.isBinary,
   });
 
@@ -686,191 +660,6 @@ function gitFileDiffMetadataUnits(args: {
   ];
 }
 
-interface GitAheadFileDiffTileBodyProps {
-  readonly node: GitAheadFileDiffTileRef;
-}
-
-/**
- * Body for a submodule's ahead-of-pin diff. The recorded pin is NEVER taken from
- * the (persisted) tile payload - it is re-derived every render from fresh v1.1
- * `submodules[].relation` metadata fetched against the parent worktree, gated by
- * `resolveAheadDiffGate`. If the submodule is no longer `ahead` (an old-host
- * degrade drops `submodules[]`, or the pin moved), the gate closes and no
- * `getFileDiff({ compareFromSha })` is issued - the transport would otherwise
- * silently strip `compareFromSha` for a v1.0 host and return a wrong stage-based
- * diff.
- */
-function GitAheadFileDiffTileBody(
-  props: GitAheadFileDiffTileBodyProps,
-): ReactNode {
-  const diffViewerPreferences = useSettingsStore(
-    (s) => s.diffViewerPreferences,
-  );
-  const ignoreWhitespace = diffViewerPreferences.ignoreWhitespace;
-
-  // Fresh v1.1 metadata for the PARENT repo is the only legitimate pin source.
-  // Driven by the parent subscription's fingerprint exactly like the panel, so a
-  // degrade to `submodules: []` is picked up and closes the gate.
-  const parentSubscription = useGitListChangedFilesSubscription({
-    hostId: props.node.hostId,
-    runningDir: props.node.diff.parentRunningDir,
-    ignoreWhitespace,
-    enabled: true,
-  });
-  // Confirmed-current metadata: the query is keyed by the parent epoch
-  // (fingerprint), so `snapshot.data` is null (pending) until the CURRENT epoch's
-  // fetch lands. A previous-epoch cached snapshot never leaks through, so the
-  // pin re-derived below can never be stale/moved.
-  const snapshot = useCurrentAheadSnapshot({
-    hostId: props.node.hostId,
-    parentRunningDir: props.node.diff.parentRunningDir,
-    ignoreWhitespace,
-    changeToken: parentSubscription.data?.fingerprint ?? null,
-    enabled: true,
-  });
-
-  // Surface metadata failures instead of a permanent loading skeleton.
-  if (snapshot.error !== null) {
-    return <GitErrorBlock error={snapshot.error} />;
-  }
-  if (parentSubscription.error !== null) {
-    return <SubscriptionErrorState event={parentSubscription.error} />;
-  }
-
-  // `data === null` means the current epoch's snapshot has not landed yet
-  // (loading, or the parent fingerprint is still unknown): treat as pending and
-  // issue no `getFileDiff({ compareFromSha })`. Once present, the pin comes from
-  // this current-epoch metadata.
-  const gate =
-    snapshot.data === null
-      ? { status: "pending" as const }
-      : resolveAheadDiffGate(
-          snapshot.data,
-          props.node.diff.runningDir,
-          props.node.diff.filePath,
-        );
-
-  if (gate.status === "pending") {
-    return (
-      <DiffContentLoadingSkeleton
-        mode={diffViewerPreferences.mode}
-        sizing="fill"
-        density="full"
-        sectionIndex={0}
-      />
-    );
-  }
-  // The pin is gone from fresh metadata (old-host degrade, moved pin, or the file
-  // is no longer among the commits ahead): never fall through to a stripped,
-  // wrong stage-based diff - surface it as no longer available.
-  if (gate.status === "unavailable") {
-    return <AheadReferenceUnavailable filePath={props.node.diff.filePath} />;
-  }
-
-  // Gate is `ready`: the pin and submodule HEAD come straight from fresh
-  // metadata. Fetching happens in a child so this component's only job is the
-  // gate, and the diff query mounts/unmounts with readiness.
-  return (
-    <GitAheadFileDiffReady
-      node={props.node}
-      compareFromSha={gate.compareFromSha}
-      submoduleHeadSha={gate.submoduleHeadSha}
-      file={gate.file}
-      diffViewerPreferences={diffViewerPreferences}
-    />
-  );
-}
-
-interface GitAheadFileDiffReadyProps {
-  readonly node: GitAheadFileDiffTileRef;
-  readonly compareFromSha: string;
-  readonly submoduleHeadSha: string;
-  readonly file: CommitAheadFile;
-  readonly diffViewerPreferences: DiffViewerPreferences;
-}
-
-/** The ahead-of-pin diff once the gate is open: issues `getFileDiff` against the
- * fresh pin and renders it. Split from `GitAheadFileDiffTileBody` so neither is
- * over-complex and the query starts only after the gate passes. */
-function GitAheadFileDiffReady(props: GitAheadFileDiffReadyProps): ReactNode {
-  const ignoreWhitespace = props.diffViewerPreferences.ignoreWhitespace;
-
-  const diffIdentity = fileDiffLoadFullIdentity({
-    runningDir: props.node.diff.runningDir,
-    filePath: props.node.diff.filePath,
-    previousPath: props.file.previousPath,
-    stage: AHEAD_FILE_DIFF_STAGE,
-    headSha: props.submoduleHeadSha,
-    stagedOid: null,
-    worktreeOid: null,
-    ignoreWhitespace,
-  });
-  const [fullDiffIdentity, setFullDiffIdentity] = useState<string | null>(null);
-  const byteBudget =
-    fullDiffIdentity === diffIdentity
-      ? null
-      : DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET;
-
-  const diffQuery = useGitGetFileDiffQuery({
-    hostId: props.node.hostId,
-    runningDir: props.node.diff.runningDir,
-    filePath: props.node.diff.filePath,
-    previousPath: props.file.previousPath,
-    stage: AHEAD_FILE_DIFF_STAGE,
-    headSha: props.submoduleHeadSha,
-    stagedOid: null,
-    worktreeOid: null,
-    ignoreWhitespace,
-    byteBudget,
-    compareFromSha: props.compareFromSha,
-    enabled: !props.file.isBinary,
-  });
-
-  const { scrollContainerRef, onScroll } = useNativeDivScrollRestoration(
-    props.node.instanceId,
-    !props.file.isBinary &&
-      diffQuery.data !== undefined &&
-      diffQuery.error === null,
-  );
-
-  if (props.file.isBinary || diffQuery.data?.isBinary === true) {
-    return (
-      <div className="flex h-full min-h-0 flex-col items-center justify-center gap-2 p-6 text-center text-ui-sm text-muted-foreground">
-        <span>Binary file</span>
-      </div>
-    );
-  }
-  if (diffQuery.isPending) {
-    return (
-      <DiffContentLoadingSkeleton
-        mode={props.diffViewerPreferences.mode}
-        sizing="fill"
-        density="full"
-        sectionIndex={0}
-      />
-    );
-  }
-  if (diffQuery.error !== null)
-    return <GitErrorBlock error={diffQuery.error} />;
-
-  return (
-    <FileDiffContent
-      diff={diffQuery.data}
-      mode={props.diffViewerPreferences.mode}
-      wordWrap={props.diffViewerPreferences.wordWrap}
-      backgrounds={props.diffViewerPreferences.backgrounds}
-      lineNumbers={props.diffViewerPreferences.lineNumbers}
-      indicatorStyle={props.diffViewerPreferences.indicatorStyle}
-      sizing="fill"
-      scrollContainerRef={scrollContainerRef}
-      onScroll={onScroll}
-      onLoadFull={() => {
-        setFullDiffIdentity(diffIdentity);
-      }}
-    />
-  );
-}
-
 interface GitBundleDiffTileBodyProps {
   readonly node: GitBundleDiffTileRef;
   readonly viewTabId: string;
@@ -992,20 +781,6 @@ function buildTileHeader(
   const directoryName = getDirname(node.diff.filePath);
   const pathLabel =
     directoryName.length > 0 ? directoryName : "Repository root";
-
-  if (node.diff.kind === "ahead-file") {
-    return {
-      primaryTitle: getBasename(node.diff.filePath),
-      secondaryLine: (
-        <>
-          {pathLabel}
-          <span className="text-muted-foreground/50"> · </span>
-          Committed changes not recorded by parent
-        </>
-      ),
-      contextLabel,
-    };
-  }
 
   return {
     primaryTitle: getBasename(node.diff.filePath),

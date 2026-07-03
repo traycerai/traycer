@@ -216,7 +216,6 @@ function BundleInlineDiff(props: BundleInlineDiffProps): ReactNode {
     worktreeOid: props.file.worktreeOid,
     ignoreWhitespace: props.diffViewerPreferences.ignoreWhitespace,
     byteBudget,
-    compareFromSha: null,
     enabled: true,
   });
   useEffect(() => {

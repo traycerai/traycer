@@ -67,21 +67,6 @@ function parseGitDiffPayload(value: unknown): GitDiffTilePayload | null {
       bundleGroup: value.bundleGroup,
     };
   }
-  if (value.kind === "ahead-file") {
-    if (
-      typeof value.runningDir !== "string" ||
-      typeof value.parentRunningDir !== "string" ||
-      typeof value.filePath !== "string"
-    ) {
-      return null;
-    }
-    return {
-      kind: "ahead-file",
-      runningDir: value.runningDir,
-      parentRunningDir: value.parentRunningDir,
-      filePath: value.filePath,
-    };
-  }
   return null;
 }
 
@@ -124,13 +109,6 @@ function serializeGitDiffPayload(
         kind: diff.kind,
         runningDir: diff.runningDir,
         bundleGroup: diff.bundleGroup,
-      };
-    case "ahead-file":
-      return {
-        kind: diff.kind,
-        runningDir: diff.runningDir,
-        parentRunningDir: diff.parentRunningDir,
-        filePath: diff.filePath,
       };
   }
 }

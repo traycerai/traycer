@@ -24,7 +24,8 @@ describe("race-resolution: Q20 invalidate-then-write race", () => {
       "stagedV1",
       "worktreeV1",
       false,
-      DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET, null);
+      DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET,
+    );
     const v1Diff = {
       filePath: "foo.ts",
       headSha: "head1",
@@ -54,7 +55,6 @@ describe("race-resolution: Q20 invalidate-then-write race", () => {
           filePath: "foo.ts",
           previousPath: null,
           stage: "unstaged",
-          compareFromSha: null,
         },
       ],
       ignoreWhitespace: false,
@@ -84,7 +84,8 @@ describe("race-resolution: Q20 invalidate-then-write race", () => {
       "stagedV2",
       "worktreeV2",
       false,
-      DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET, null);
+      DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET,
+    );
     const v2Data = queryClient.getQueryData<GitGetFileDiffResponse>(v2Key);
     expect(v2Data).toBeDefined();
     expect(v2Data?.patch).toBe("v2-patch");
@@ -104,7 +105,8 @@ describe("race-resolution: Q20 invalidate-then-write race", () => {
       "oid1v1",
       "oid2v1",
       ignoreWhitespace,
-      DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET, null);
+      DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET,
+    );
     const v1Key2 = gitQueryKeys.fileDiff(
       "d",
       "/r",
@@ -115,7 +117,8 @@ describe("race-resolution: Q20 invalidate-then-write race", () => {
       "oid3v1",
       "oid4v1",
       ignoreWhitespace,
-      DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET, null);
+      DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET,
+    );
     queryClient.setQueryData(v1Key1, { filePath: "file1.ts" });
     queryClient.setQueryData(v1Key2, { filePath: "file2.ts" });
 
@@ -133,13 +136,11 @@ describe("race-resolution: Q20 invalidate-then-write race", () => {
           filePath: "file1.ts",
           previousPath: null,
           stage: "staged",
-          compareFromSha: null,
         },
         {
           filePath: "file2.ts",
           previousPath: null,
           stage: "staged",
-          compareFromSha: null,
         },
       ],
       ignoreWhitespace,
@@ -181,7 +182,8 @@ describe("race-resolution: Q20 invalidate-then-write race", () => {
       "oid1v2",
       "oid2v2",
       ignoreWhitespace,
-      DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET, null);
+      DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET,
+    );
     const v2Key2 = gitQueryKeys.fileDiff(
       "d",
       "/r",
@@ -192,7 +194,8 @@ describe("race-resolution: Q20 invalidate-then-write race", () => {
       "oid3v2",
       "oid4v2",
       ignoreWhitespace,
-      DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET, null);
+      DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET,
+    );
     expect(
       queryClient.getQueryData<GitGetFileDiffResponse>(v2Key1)?.patch,
     ).toBe("p1");

@@ -38,9 +38,6 @@ export function useGitPrefetchWorktreeStatus() {
         hostId: args.hostId,
         runningDir: args.runningDir,
         ignoreWhitespace: args.ignoreWhitespace,
-        // Cache-served relations: the picker only reads the change count, so it
-        // never needs to force a relation recompute past the host's cache.
-        refreshRelations: false,
       });
 
       writeGitListChangedFilesResponse(

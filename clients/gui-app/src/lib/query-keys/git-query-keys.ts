@@ -41,9 +41,8 @@ export const gitQueryKeys = {
    * Query key for the submodule-aware `git.listChangedFiles@1.1` nested
    * snapshot (parent changeset + `submodules[]`). A distinct slot from
    * `listChangedFiles` so the frozen v1.0 `subscribeStatus` stream, which feeds
-   * the v1.0 slot, never clobbers the richer nested snapshot. Both the passive
-   * fetch and the manual/bounded refresh write this stable slot (the
-   * `refreshRelations` flag is a request detail, not part of cache identity).
+   * the v1.0 slot, never clobbers the richer nested snapshot. The passive fetch
+   * and the manual refresh (a plain `invalidateQueries`) share this stable slot.
    */
   listChangedFilesWithSubmodules: (
     hostId: string | null,
@@ -59,43 +58,14 @@ export const gitQueryKeys = {
     ] as const,
 
   /**
-   * Query key for an **epoch-scoped** submodule-aware snapshot: the same
-   * `git.listChangedFiles@1.1` data, but keyed additionally by the parent
-   * `epoch` (the parent subscription fingerprint). A previous-epoch snapshot
-   * therefore lives under a different key, so a consumer that must never act on
-   * stale metadata - the ahead-of-pin diff tile, whose pin may have moved - is
-   * simply `data === undefined` (pending) until the CURRENT epoch's fetch lands.
-   * Distinct from `listChangedFilesWithSubmodules` (the panel's stable shared
-   * slot) via the `"epoch"` segment, so neither the panel poll nor the manual
-   * refresh writes into this key.
-   */
-  submoduleSnapshotAtEpoch: (
-    hostId: string | null,
-    runningDir: string,
-    ignoreWhitespace: boolean,
-    epoch: string,
-  ) =>
-    [
-      ...hostQueryKeys.scope(hostId),
-      "git",
-      "listChangedFilesWithSubmodules",
-      "epoch",
-      runningDir,
-      ignoreWhitespace,
-      epoch,
-    ] as const,
-
-  /**
    * Query key for git.getFileDiff RPC.
    * Scope: single host, single file, with all diff parameters.
    * Parameters include running directory, file path, previous path, stage, and OIDs for cache invalidation.
    *
    * `runningDir` is the owning repo root (the parent worktree for ordinary files,
-   * the submodule `repoRoot` for a submodule's own files), so a submodule diff can
-   * never collide with the parent's. `compareFromSha` is the v1.1 ahead-of-pin
-   * base (`null` for ordinary stage-based diffs): it is part of cache identity so a
-   * submodule's ahead-of-pin diff (`compareFromSha = <pin>`) can never collide with
-   * that same path's working-tree diff (`compareFromSha = null`).
+   * the submodule `repoRoot` for a submodule's own files), so a submodule's own
+   * working-tree diff can never collide with the parent's - the diff is plain
+   * stage-based, run against whichever repo root `runningDir` names.
    */
   // eslint-disable-next-line max-params -- All parameters are semantically distinct and required for cache identity.
   fileDiff: (
@@ -109,7 +79,6 @@ export const gitQueryKeys = {
     worktreeOid: string | null,
     ignoreWhitespace: boolean,
     byteBudget: number | null,
-    compareFromSha: string | null,
   ) =>
     [
       ...hostQueryKeys.scope(hostId),
@@ -124,7 +93,6 @@ export const gitQueryKeys = {
       worktreeOid,
       ignoreWhitespace,
       byteBudget,
-      compareFromSha,
     ] as const,
 
   /**

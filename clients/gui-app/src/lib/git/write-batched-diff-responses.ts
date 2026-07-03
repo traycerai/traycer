@@ -10,7 +10,6 @@ interface BatchedDiffRequestFile {
   readonly filePath: string;
   readonly previousPath: string | null;
   readonly stage: GitStage;
-  readonly compareFromSha: string | null;
 }
 
 export function writeBatchedDiffResponses(args: {
@@ -47,7 +46,6 @@ export function writeBatchedDiffResponses(args: {
       diff.worktreeOid,
       args.ignoreWhitespace,
       DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET,
-      requestFile.compareFromSha,
     );
     args.queryClient.setQueryData(correctedKey, diff);
   }

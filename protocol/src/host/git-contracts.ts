@@ -11,14 +11,11 @@ import {
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
 import {
   gitListChangedFilesRequestSchema,
-  gitListChangedFilesRequestSchemaV11,
   gitListChangedFilesResponseSchema,
   gitListChangedFilesResponseSchemaV11,
   gitGetFileDiffRequestSchema,
-  gitGetFileDiffRequestSchemaV11,
   gitGetFileDiffResponseSchema,
   gitGetFileDiffsRequestSchema,
-  gitGetFileDiffsRequestSchemaV11,
   gitGetFileDiffsResponseSchema,
   gitGetCapabilitiesResponseSchema,
   gitSubscribeStatusRequestSchema,
@@ -58,36 +55,39 @@ export const gitGetFileDiffsV10 = defineRpcContract({
 
 // ---- Submodule-aware v1.1 (unary-only) ---------------------------------- //
 //
-// Minor bumps of the three unary methods that carry the host-composed nested
-// snapshot. No new method names (a new name fatally fails the equal-set
-// handshake against a shipped v1.0.0 host). `git.subscribeStatus` stays v1.0.
-// Same-major minors need no downgrade path: a v1.1 peer projects onto a v1.0
-// host by re-parsing through the (non-strict) v1.0 schema, which strips the new
-// fields on the wire. The upgrade paths below bridge a v1.0 peer UP to canonical.
+// `git.listChangedFiles@1.1` is the ONLY minor bump - it carries the
+// host-composed nested snapshot on its response (`submodules[]` + parent-row
+// `gitlink`). `getFileDiff`/`getFileDiffs` stay v1.0-only: the submodule diff
+// path is plain stage-based (run against the submodule repo root), so they need
+// no request change and earn no v1.1. No new method names (a new name fatally
+// fails the equal-set handshake against a shipped v1.0.0 host).
+// `git.subscribeStatus` stays v1.0. The same-major minor needs no downgrade
+// path: a v1.1 peer projects onto a v1.0 host by re-parsing through the
+// (non-strict) v1.0 schema, which strips the new response fields on the wire.
+// The upgrade path below bridges a v1.0 peer UP to canonical.
 
 /**
  * `git.listChangedFiles@1.1` - adds parent-file `gitlink` descriptors and the
- * `submodules[]` nested snapshot, plus a `refreshRelations` request field that
- * forces a relation recompute past the SHA-tuple cache.
+ * `submodules[]` nested snapshot on the response. The request is unchanged from
+ * v1.0 (reuses `gitListChangedFilesRequestSchema`).
  */
 export const gitListChangedFilesV11 = defineRpcContract({
   method: "git.listChangedFiles",
   schemaVersion: { major: 1, minor: 1 } as const,
-  requestSchema: gitListChangedFilesRequestSchemaV11,
+  requestSchema: gitListChangedFilesRequestSchema,
   responseSchema: gitListChangedFilesResponseSchemaV11,
 });
 
 // A v1.0 host knows no submodules: every parent file gains `gitlink: null` and
-// the response gains an empty `submodules[]` (parent-only view). A v1.0 request
-// carries no manual-refresh signal, so it upgrades with `refreshRelations: false`
-// (cache-served relations).
+// the response gains an empty `submodules[]` (parent-only view). The request is
+// unchanged, so its upgrade is the identity.
 export const gitListChangedFilesUpgradeV10ToV11 = defineUpgradePath<
   typeof gitListChangedFilesV10,
   typeof gitListChangedFilesV11
 >({
   from: gitListChangedFilesV10.schemaVersion,
   to: gitListChangedFilesV11.schemaVersion,
-  upgradeRequest: (request) => ({ ...request, refreshRelations: false }),
+  upgradeRequest: (request) => request,
   upgradeResponse: (response) => ({
     ...response,
     files: response.files.map((file) => ({ ...file, gitlink: null })),
@@ -95,54 +95,8 @@ export const gitListChangedFilesUpgradeV10ToV11 = defineUpgradePath<
   }),
 });
 
-/**
- * `git.getFileDiff@1.1` - adds `compareFromSha` for ahead-of-pin diffs. Response
- * shape is unchanged from v1.0.
- */
-export const gitGetFileDiffV11 = defineRpcContract({
-  method: "git.getFileDiff",
-  schemaVersion: { major: 1, minor: 1 } as const,
-  requestSchema: gitGetFileDiffRequestSchemaV11,
-  responseSchema: gitGetFileDiffResponseSchema,
-});
-
-// A v1.0 request carries no `compareFromSha`, so it upgrades to `null` (ordinary
-// stage-based diff). The response is unchanged, so its upgrade is the identity.
-export const gitGetFileDiffUpgradeV10ToV11 = defineUpgradePath<
-  typeof gitGetFileDiffV10,
-  typeof gitGetFileDiffV11
->({
-  from: gitGetFileDiffV10.schemaVersion,
-  to: gitGetFileDiffV11.schemaVersion,
-  upgradeRequest: (request) => ({ ...request, compareFromSha: null }),
-  upgradeResponse: (response) => response,
-});
-
-/**
- * `git.getFileDiffs@1.1` - adds a per-file `compareFromSha`. Response shape is
- * unchanged from v1.0.
- */
-export const gitGetFileDiffsV11 = defineRpcContract({
-  method: "git.getFileDiffs",
-  schemaVersion: { major: 1, minor: 1 } as const,
-  requestSchema: gitGetFileDiffsRequestSchemaV11,
-  responseSchema: gitGetFileDiffsResponseSchema,
-});
-
-// Each v1.0 batch item gains `compareFromSha: null`. The response is unchanged,
-// so its upgrade is the identity.
-export const gitGetFileDiffsUpgradeV10ToV11 = defineUpgradePath<
-  typeof gitGetFileDiffsV10,
-  typeof gitGetFileDiffsV11
->({
-  from: gitGetFileDiffsV10.schemaVersion,
-  to: gitGetFileDiffsV11.schemaVersion,
-  upgradeRequest: (request) => ({
-    ...request,
-    files: request.files.map((file) => ({ ...file, compareFromSha: null })),
-  }),
-  upgradeResponse: (response) => response,
-});
+// `git.getFileDiff` / `git.getFileDiffs` have no v1.1 - they stay v1.0-only (see
+// the section note above). Their v1.0 contracts are defined earlier in this file.
 
 /**
  * `git.getCapabilities@1.0` - unary RPC to check if git feature is available

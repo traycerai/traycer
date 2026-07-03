@@ -1,14 +1,20 @@
 /**
- * Submodule-aware `git.*@1.1` compatibility + schema tests.
+ * Submodule-aware `git.*@1.1` compatibility + schema tests (v2 - simplified).
  *
- * Covers the three ticket verifications:
- *  1. Registry validation - `listChangedFiles`/`getFileDiff`/`getFileDiffs@1.1`
- *     carry an upgrade path and NO same-major downgrade path.
- *  2. Transport skew - new-GUI/old-host upgrades to `submodules: []` /
- *     `gitlink: null` and projects `compareFromSha` off the wire; old-GUI/
- *     new-host strips the v1.1 fields.
+ * Covers the ticket verifications for the de-implemented v1.1 schema:
+ *  1. Registry validation - `listChangedFiles@1.1` carries an upgrade path and
+ *     NO same-major downgrade path; `getFileDiff`/`getFileDiffs` stay v1.0-only
+ *     (their no-op v1.1 bump was dropped).
+ *  2. Transport skew - new-GUI/old-host upgrades a v1.0 listChangedFiles response
+ *     to `submodules: []` / `gitlink: null`; old-GUI/new-host strips the v1.1
+ *     response fields, and the v1.1 listChangedFiles request upgrade is the
+ *     identity (v1.1 adds no request fields).
  *  3. Stream no-leak - `subscribeStatus@1.0` frames stay parse-equivalent to
- *     today and carry no `gitlink`, even when a domain file carries one.
+ *     today and carry no `gitlink` / `submodules`, even when a domain value does.
+ *  4. Simplified shapes - the minimal `submodulePointer` (pin equality via
+ *     `diverged` + dirty/conflicted flags, no merge-base direction) and the
+ *     working-tree-only `submoduleChangeset` (files + a `pointer`, no
+ *     commits-ahead expansion).
  */
 import { describe, it, expect } from "vitest";
 import {
@@ -21,26 +27,18 @@ import {
   hostStreamRpcRegistry,
 } from "@traycer/protocol/host/index";
 import {
-  commitAheadFileSchema,
   gitChangedFileV10Schema,
   gitChangedFileV11Schema,
-  gitGetFileDiffRequestSchema,
-  gitGetFileDiffRequestSchemaV11,
-  gitGetFileDiffsRequestSchema,
-  gitGetFileDiffsRequestSchemaV11,
-  gitListChangedFilesRequestSchemaV11,
   gitListChangedFilesResponseSchema,
   gitListChangedFilesResponseSchemaV11,
   gitSubscribeStatusEventSchema,
+  submoduleAvailabilitySchema,
   submoduleChangesetSchema,
   submodulePointerSchema,
-  submoduleRelationSchema,
   type GitChangedFileV10,
-  type GitGetFileDiffRequest,
-  type GitGetFileDiffsRequest,
+  type GitListChangedFilesRequest,
   type GitListChangedFilesResponse,
 } from "@traycer/protocol/host/git-schemas";
-import { DEFAULT_GIT_FILE_DIFFS_BYTE_BUDGET } from "@traycer/protocol/host/git-constants";
 
 const V10 = { major: 1, minor: 0 } as const;
 const V11 = { major: 1, minor: 1 } as const;
@@ -59,42 +57,29 @@ const v10File: GitChangedFileV10 = {
   worktreeOid: "wt-oid",
 };
 
-// The parent's view of an ordinary (non-conflicted) dirty gitlink.
+// The parent's view of an ordinary (non-conflicted) dirty gitlink - the minimal
+// pointer: recorded pin vs submodule HEAD equality via `diverged`, plus the
+// dirty flags. NO ahead/behind direction, NO staged index pin.
 const gitlinkDescriptor = {
   kind: "normal" as const,
   recordedPinSha: "a1b2c3",
-  stagedPinSha: "a1b2c3",
+  submoduleHeadSha: "d4e5f6",
+  diverged: true,
   commitChanged: true,
   modifiedContent: false,
   untrackedContent: false,
 };
 
-// A fully-populated v1.1 submodule section: ahead-of-pin with committed files.
-// A changeset always carries a computed `relation` (never a conflict).
-const aheadChangeset = {
+// A working-tree-only v1.1 submodule section: WT files + the minimal pointer
+// (no commits-ahead expansion).
+const submoduleChangeset = {
   repoRoot: "/repo/traycer",
   parentPath: "traycer",
   branch: null,
   repoState: { kind: "clean" as const },
-  relation: {
-    state: "ahead" as const,
-    recordedPinSha: "a1b2c3",
-    submoduleHeadSha: "d4e5f6",
-    commitsAhead: {
-      count: 2,
-      files: [
-        {
-          path: "clients/gui-app/src/lib/foo.ts",
-          previousPath: null,
-          status: "modified" as const,
-          isBinary: false,
-          insertions: 40,
-          deletions: 5,
-        },
-      ],
-    },
-  },
   files: [{ ...v10File, path: "clients/gui-app/src/app.tsx", gitlink: null }],
+  pointer: gitlinkDescriptor,
+  availability: { state: "ok" as const },
 };
 
 const v10Response: GitListChangedFilesResponse = {
@@ -108,19 +93,23 @@ const v10Response: GitListChangedFilesResponse = {
 };
 
 describe("git.*@1.1 registry", () => {
-  it("validates: minor upgrade present, no same-major downgrade path", () => {
+  it("validates: only listChangedFiles bumps to v1.1; diff methods stay v1.0-only", () => {
     expect(() => validateVersionedRpcRegistry(hostRpcRegistry)).not.toThrow();
 
-    for (const method of [
-      "git.listChangedFiles",
-      "git.getFileDiff",
-      "git.getFileDiffs",
-    ] as const) {
+    // listChangedFiles is the sole minor bump - v1.1 carries the nested snapshot.
+    const listLine = hostRpcRegistry["git.listChangedFiles"][1];
+    expect(listLine.latestMinor).toBe(1);
+    expect(listLine.versions[0].upgradeFromPreviousVersion).toBeNull();
+    expect(listLine.versions[1].upgradeFromPreviousVersion).not.toBeNull();
+    // Same-major minors never need a downgrade bridge.
+    expect(listLine.downgradePathsFromLatest).toEqual({});
+
+    // getFileDiff / getFileDiffs reverted to v1.0-only: no v1.1 registered.
+    for (const method of ["git.getFileDiff", "git.getFileDiffs"] as const) {
       const line = hostRpcRegistry[method][1];
-      expect(line.latestMinor).toBe(1);
+      expect(line.latestMinor).toBe(0);
+      expect(Object.keys(line.versions)).toEqual(["0"]);
       expect(line.versions[0].upgradeFromPreviousVersion).toBeNull();
-      expect(line.versions[1].upgradeFromPreviousVersion).not.toBeNull();
-      // Same-major minors never need a downgrade bridge.
       expect(line.downgradePathsFromLatest).toEqual({});
     }
   });
@@ -153,47 +142,11 @@ describe("transport skew - new GUI (v1.1) against old host (v1.0)", () => {
       upgraded,
     );
   });
-
-  it("strips compareFromSha off the wire when projecting onto a v1.0 host", () => {
-    const v11Request = {
-      hostId: "h",
-      runningDir: "/repo/traycer",
-      filePath: "clients/gui-app/src/lib/foo.ts",
-      previousPath: null,
-      stage: "unstaged" as const,
-      ignoreWhitespace: false,
-      byteBudget: null,
-      compareFromSha: "a1b2c3",
-    };
-
-    const onWire = gitGetFileDiffRequestSchema.parse(v11Request);
-    expect("compareFromSha" in onWire).toBe(false);
-  });
-
-  it("strips per-file compareFromSha from a v1.0 getFileDiffs batch", () => {
-    const v11Batch = {
-      hostId: "h",
-      runningDir: "/repo/traycer",
-      files: [
-        {
-          filePath: "clients/gui-app/src/lib/foo.ts",
-          previousPath: null,
-          stage: "unstaged" as const,
-          compareFromSha: "a1b2c3",
-        },
-      ],
-      ignoreWhitespace: false,
-      byteBudget: DEFAULT_GIT_FILE_DIFFS_BYTE_BUDGET,
-    };
-
-    const onWire = gitGetFileDiffsRequestSchema.parse(v11Batch);
-    expect("compareFromSha" in onWire.files[0]).toBe(false);
-  });
 });
 
 describe("transport skew - old GUI (v1.0) against new host (v1.1)", () => {
-  it("upgrades a v1.0 listChangedFiles request to refreshRelations:false", () => {
-    const v10ListRequest = {
+  it("upgrades a v1.0 listChangedFiles request unchanged (no injected fields)", () => {
+    const v10ListRequest: GitListChangedFilesRequest = {
       hostId: "h",
       runningDir: "/repo",
       ignoreWhitespace: false,
@@ -206,53 +159,9 @@ describe("transport skew - old GUI (v1.0) against new host (v1.1)", () => {
       v10ListRequest,
     );
 
-    expect(upgraded.refreshRelations).toBe(false);
-  });
-
-  it("upgrades a v1.0 getFileDiff request to compareFromSha:null", () => {
-    const v10Request: GitGetFileDiffRequest = {
-      hostId: "h",
-      runningDir: "/repo",
-      filePath: "authn-v3/src/routes/session.ts",
-      previousPath: null,
-      stage: "unstaged",
-      ignoreWhitespace: false,
-      byteBudget: null,
-    };
-
-    const upgraded = upgradeRequestToVersion(
-      hostRpcRegistry["git.getFileDiff"],
-      V10,
-      V11,
-      v10Request,
-    );
-
-    expect(upgraded.compareFromSha).toBeNull();
-  });
-
-  it("upgrades a v1.0 getFileDiffs batch to per-file compareFromSha:null", () => {
-    const v10Batch: GitGetFileDiffsRequest = {
-      hostId: "h",
-      runningDir: "/repo",
-      files: [
-        {
-          filePath: "authn-v3/src/routes/session.ts",
-          previousPath: null,
-          stage: "unstaged",
-        },
-      ],
-      ignoreWhitespace: false,
-      byteBudget: DEFAULT_GIT_FILE_DIFFS_BYTE_BUDGET,
-    };
-
-    const upgraded = upgradeRequestToVersion(
-      hostRpcRegistry["git.getFileDiffs"],
-      V10,
-      V11,
-      v10Batch,
-    );
-
-    expect(upgraded.files[0].compareFromSha).toBeNull();
+    // v1.1 adds no request fields - the upgrade is the identity, so the result
+    // is deep-equal to the v1.0 request (no field added on the wire).
+    expect(upgraded).toEqual(v10ListRequest);
   });
 
   it("strips submodules[] and gitlink when downgrading a v1.1 response", () => {
@@ -262,7 +171,7 @@ describe("transport skew - old GUI (v1.0) against new host (v1.1)", () => {
         { ...v10File, gitlink: null },
         { ...v10File, path: "traycer", gitlink: gitlinkDescriptor },
       ],
-      submodules: [aheadChangeset],
+      submodules: [submoduleChangeset],
     };
 
     const onWire = gitListChangedFilesResponseSchema.parse(v11Response);
@@ -294,7 +203,7 @@ describe("subscribeStatus@1.0 no-leak", () => {
     const leaky = {
       ...cleanSnapshot,
       files: [{ ...v10File, gitlink: gitlinkDescriptor }],
-      submodules: [aheadChangeset],
+      submodules: [submoduleChangeset],
     };
 
     const parsed = gitSubscribeStatusEventSchema.parse(leaky);
@@ -320,7 +229,7 @@ describe("subscribeStatus@1.0 no-leak", () => {
       repoState: { kind: "clean" as const },
       changedPaths: [v10File.path],
       pollStartedAtMs: 1_700_000_001,
-      submodules: [aheadChangeset],
+      submodules: [submoduleChangeset],
     };
 
     const parsed = gitSubscribeStatusEventSchema.parse(leaky);
@@ -333,7 +242,7 @@ describe("subscribeStatus@1.0 no-leak", () => {
   });
 });
 
-describe("v1.1 schema shapes", () => {
+describe("v1.1 simplified schema shapes", () => {
   it("gitlink is additive: a v1.0 file parses as v1.1 with gitlink:null", () => {
     const parsed = gitChangedFileV11Schema.parse(v10File);
     expect(parsed.gitlink).toBeNull();
@@ -341,53 +250,27 @@ describe("v1.1 schema shapes", () => {
     expect("gitlink" in gitChangedFileV10Schema.parse(v10File)).toBe(false);
   });
 
-  it("commitsAhead exists only on the ahead relation variant", () => {
-    const ahead = submoduleRelationSchema.parse({
-      state: "ahead",
-      recordedPinSha: "a",
-      submoduleHeadSha: "b",
-      commitsAhead: { count: 1, files: [] },
-    });
-    expect(ahead.state).toBe("ahead");
-    if (ahead.state === "ahead") {
-      expect(ahead.commitsAhead.count).toBe(1);
-    }
-
-    // A behind relation cannot carry commitsAhead - it is stripped structurally.
-    const behind = submoduleRelationSchema.parse({
-      state: "behind",
-      recordedPinSha: "a",
-      submoduleHeadSha: "b",
-      commitsAhead: { count: 9, files: [] },
-    });
-    expect("commitsAhead" in behind).toBe(false);
-  });
-
-  it("classifies unknown relations with a reason and nullable pins", () => {
-    const parsed = submoduleRelationSchema.parse({
-      state: "unknown",
-      reason: "missing-pin-object",
-      recordedPinSha: null,
-      submoduleHeadSha: null,
-    });
-    expect(parsed.state).toBe("unknown");
-    if (parsed.state === "unknown") {
-      expect(parsed.reason).toBe("missing-pin-object");
-    }
-  });
-
-  it("models the gitlink descriptor as a normal|conflicted union", () => {
+  it("models the gitlink descriptor as a minimal normal|conflicted union", () => {
     const normal = submodulePointerSchema.parse({
       kind: "normal",
       recordedPinSha: "a1b2c3",
-      stagedPinSha: "a1b2c3",
+      submoduleHeadSha: "d4e5f6",
+      diverged: true,
       commitChanged: true,
       modifiedContent: false,
       untrackedContent: false,
     });
-    expect(normal.kind).toBe("normal");
-    // A normal descriptor cannot carry conflict SHAs - the mixture is stripped.
-    expect("baseSha" in normal).toBe(false);
+    // The parsed normal pointer carries exactly the minimal fields and nothing
+    // more - no conflict SHAs, and none of the legacy pin/ahead fields.
+    expect(normal).toEqual({
+      kind: "normal",
+      recordedPinSha: "a1b2c3",
+      submoduleHeadSha: "d4e5f6",
+      diverged: true,
+      commitChanged: true,
+      modifiedContent: false,
+      untrackedContent: false,
+    });
 
     const conflicted = submodulePointerSchema.parse({
       kind: "conflicted",
@@ -400,7 +283,54 @@ describe("v1.1 schema shapes", () => {
       expect(conflicted.theirsSha).toBe("theirs");
       // The conflicted variant carries no pins/flags.
       expect("recordedPinSha" in conflicted).toBe(false);
+      expect("diverged" in conflicted).toBe(false);
     }
+  });
+
+  it("nulls both pins on a normal pointer for added/removed gitlink edges", () => {
+    const parsed = submodulePointerSchema.parse({
+      kind: "normal",
+      recordedPinSha: null,
+      submoduleHeadSha: null,
+      diverged: false,
+      commitChanged: true,
+      modifiedContent: false,
+      untrackedContent: false,
+    });
+    if (parsed.kind === "normal") {
+      expect(parsed.recordedPinSha).toBeNull();
+      expect(parsed.submoduleHeadSha).toBeNull();
+      expect(parsed.diverged).toBe(false);
+    } else {
+      expect.fail("expected normal");
+    }
+  });
+
+  it("submodule changeset carries a pointer, not a relation", () => {
+    const parsed = submoduleChangesetSchema.parse(submoduleChangeset);
+    expect(submoduleChangesetSchema.parse(parsed)).toEqual(parsed);
+    expect("relation" in parsed).toBe(false);
+    expect(parsed.pointer.kind).toBe("normal");
+    expect(parsed.parentPath).toBe("traycer");
+  });
+
+  it("models availability as ok | unavailable{reason} and defaults to ok", () => {
+    // Additive: a changeset without `availability` parses to `ok`.
+    const { availability: _omitted, ...withoutAvailability } =
+      submoduleChangeset;
+    const defaulted = submoduleChangesetSchema.parse(withoutAvailability);
+    expect(defaulted.availability).toEqual({ state: "ok" });
+
+    // The unavailable variant carries a coarse reason and no `ok`-only shape.
+    const unavailable = submoduleAvailabilitySchema.parse({
+      state: "unavailable",
+      reason: "git-error",
+    });
+    expect(unavailable).toEqual({ state: "unavailable", reason: "git-error" });
+    // An unavailable payload without a reason is rejected.
+    expect(
+      submoduleAvailabilitySchema.safeParse({ state: "unavailable" }).success,
+    ).toBe(false);
   });
 
   it("round-trips a full v1.1 listChangedFiles response with a submodule", () => {
@@ -410,86 +340,13 @@ describe("v1.1 schema shapes", () => {
         { ...v10File, gitlink: null },
         { ...v10File, path: "traycer", gitlink: gitlinkDescriptor },
       ],
-      submodules: [aheadChangeset],
+      submodules: [submoduleChangeset],
     };
 
     const parsed = gitListChangedFilesResponseSchemaV11.parse(response);
     const reparsed = gitListChangedFilesResponseSchemaV11.parse(parsed);
     expect(reparsed).toEqual(parsed);
     expect(parsed.submodules[0].parentPath).toBe("traycer");
-  });
-
-  it("defaults refreshRelations to false and accepts an explicit true", () => {
-    // Additive: a v1.1 request that omits the field parses to `false`.
-    const defaulted = gitListChangedFilesRequestSchemaV11.parse({
-      hostId: "h",
-      runningDir: "/repo",
-      ignoreWhitespace: false,
-    });
-    expect(defaulted.refreshRelations).toBe(false);
-
-    // An explicit manual-refresh signal round-trips.
-    const refreshed = gitListChangedFilesRequestSchemaV11.parse({
-      hostId: "h",
-      runningDir: "/repo",
-      ignoreWhitespace: false,
-      refreshRelations: true,
-    });
-    expect(refreshed.refreshRelations).toBe(true);
-  });
-
-  it("accepts a per-file compareFromSha on v1.1 diff requests", () => {
-    const single = gitGetFileDiffRequestSchemaV11.parse({
-      hostId: "h",
-      runningDir: "/repo/traycer",
-      filePath: "clients/gui-app/src/lib/foo.ts",
-      previousPath: null,
-      stage: "unstaged",
-      ignoreWhitespace: false,
-      compareFromSha: "a1b2c3",
-    });
-    expect(single.compareFromSha).toBe("a1b2c3");
-    // Defaulted to null when omitted (additive).
-    const defaulted = gitGetFileDiffRequestSchemaV11.parse({
-      hostId: "h",
-      runningDir: "/repo",
-      filePath: "authn-v3/src/routes/session.ts",
-      previousPath: null,
-      stage: "unstaged",
-      ignoreWhitespace: false,
-    });
-    expect(defaulted.compareFromSha).toBeNull();
-
-    const batch = gitGetFileDiffsRequestSchemaV11.parse({
-      hostId: "h",
-      runningDir: "/repo/traycer",
-      files: [
-        {
-          filePath: "clients/gui-app/src/lib/foo.ts",
-          previousPath: null,
-          stage: "unstaged",
-        },
-      ],
-      ignoreWhitespace: false,
-      byteBudget: DEFAULT_GIT_FILE_DIFFS_BYTE_BUDGET,
-    });
-    expect(batch.files[0].compareFromSha).toBeNull();
-  });
-
-  it("round-trips a commit-ahead file row", () => {
-    const file = commitAheadFileSchema.parse({
-      path: "clients/gui-app/src/lib/bar.ts",
-      previousPath: null,
-      status: "added",
-      isBinary: false,
-      insertions: 88,
-      deletions: 0,
-    });
-    expect(commitAheadFileSchema.parse(file)).toEqual(file);
-  });
-
-  it("round-trips a submodule changeset", () => {
-    const parsed = submoduleChangesetSchema.parse(aheadChangeset);
-    expect(submoduleChangesetSchema.parse(parsed)).toEqual(parsed);
+    expect(parsed.submodules[0].pointer.kind).toBe("normal");
   });
 });

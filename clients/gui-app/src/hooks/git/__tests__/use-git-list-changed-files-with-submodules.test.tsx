@@ -3,15 +3,19 @@ import { renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import React from "react";
+import type {
+  GitListChangedFilesResponseV11,
+  SubmoduleChangeset,
+  SubmodulePointer,
+} from "@traycer/protocol/host";
 import {
+  hasDirtySubmodulesForRefresh,
   useGitListChangedFilesWithSubmodules,
-  hasDirtySubmodules,
 } from "../use-git-list-changed-files-with-submodules";
-import { __resetSubmoduleSnapshotEpochsForTesting } from "@/lib/git/submodule-snapshot-refresh-coordinator";
 
 type SnapshotRequest = (
   method: string,
-  params: { readonly refreshRelations: boolean },
+  params: { readonly ignoreWhitespace: boolean },
 ) => Promise<unknown>;
 
 // A distinct request spy per host so we can prove the RPC is routed through the
@@ -44,7 +48,30 @@ vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
   }),
 }));
 
-function snapshot(fingerprint: string) {
+const cleanPointer: SubmodulePointer = {
+  kind: "normal",
+  recordedPinSha: "1111111111",
+  submoduleHeadSha: "1111111111",
+  diverged: false,
+  commitChanged: false,
+  modifiedContent: false,
+  untrackedContent: false,
+};
+
+function submodule(overrides: Partial<SubmoduleChangeset>): SubmoduleChangeset {
+  return {
+    repoRoot: "/repo/sub",
+    parentPath: "sub",
+    branch: "main",
+    repoState: { kind: "clean" },
+    files: [],
+    pointer: cleanPointer,
+    availability: { state: "ok" },
+    ...overrides,
+  };
+}
+
+function snapshot(fingerprint: string): GitListChangedFilesResponseV11 {
   return {
     runningDir: "/repo",
     headSha: "abc123",
@@ -57,6 +84,64 @@ function snapshot(fingerprint: string) {
   };
 }
 
+describe("hasDirtySubmodulesForRefresh", () => {
+  it("does not keep polling for clean initialized submodules", () => {
+    expect(
+      hasDirtySubmodulesForRefresh({
+        ...snapshot("clean"),
+        submodules: [submodule({})],
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps polling for dirty, unavailable, or populated submodule sections", () => {
+    expect(
+      hasDirtySubmodulesForRefresh({
+        ...snapshot("dirty-pointer"),
+        submodules: [
+          submodule({
+            pointer: { ...cleanPointer, modifiedContent: true },
+          }),
+        ],
+      }),
+    ).toBe(true);
+    expect(
+      hasDirtySubmodulesForRefresh({
+        ...snapshot("unavailable"),
+        submodules: [
+          submodule({
+            availability: { state: "unavailable", reason: "git-error" },
+          }),
+        ],
+      }),
+    ).toBe(true);
+    expect(
+      hasDirtySubmodulesForRefresh({
+        ...snapshot("files"),
+        submodules: [
+          submodule({
+            files: [
+              {
+                path: "src/app.ts",
+                previousPath: null,
+                status: "modified",
+                stage: "unstaged",
+                isBinary: false,
+                insertions: 1,
+                deletions: 0,
+                sizeBytes: 1,
+                stagedOid: null,
+                worktreeOid: null,
+                gitlink: null,
+              },
+            ],
+          }),
+        ],
+      }),
+    ).toBe(true);
+  });
+});
+
 describe("useGitListChangedFilesWithSubmodules", () => {
   let queryClient: QueryClient;
 
@@ -65,7 +150,6 @@ describe("useGitListChangedFilesWithSubmodules", () => {
       defaultOptions: { queries: { retry: false } },
     });
     requestByHost.clear();
-    __resetSubmoduleSnapshotEpochsForTesting();
     vi.clearAllMocks();
   });
 
@@ -94,7 +178,6 @@ describe("useGitListChangedFilesWithSubmodules", () => {
         hostId: "selected-host",
         runningDir: "/repo",
         ignoreWhitespace: false,
-        refreshRelations: false,
       },
     );
     // The default/other host's client is never used.
@@ -168,31 +251,5 @@ describe("useGitListChangedFilesWithSubmodules", () => {
       { wrapper },
     );
     expect(clientForHost("h").request).not.toHaveBeenCalled();
-  });
-});
-
-describe("hasDirtySubmodules", () => {
-  it("is false for undefined or empty submodules and true otherwise", () => {
-    expect(hasDirtySubmodules(undefined)).toBe(false);
-    expect(hasDirtySubmodules(snapshot("fp-1"))).toBe(false);
-    expect(
-      hasDirtySubmodules({
-        ...snapshot("fp-1"),
-        submodules: [
-          {
-            repoRoot: "/repo/sub",
-            parentPath: "sub",
-            branch: null,
-            repoState: { kind: "clean" },
-            relation: {
-              state: "equal",
-              recordedPinSha: "1",
-              submoduleHeadSha: "1",
-            },
-            files: [],
-          },
-        ],
-      }),
-    ).toBe(true);
   });
 });

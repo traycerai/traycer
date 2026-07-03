@@ -401,7 +401,8 @@ describe("useGitListChangedFilesSubscription", () => {
       null,
       "def456",
       false,
-      DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET, null);
+      DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET,
+    );
     const unchangedDiffKey = gitQueryKeys.fileDiff(
       "host1",
       "/repo",
@@ -412,7 +413,8 @@ describe("useGitListChangedFilesSubscription", () => {
       null,
       "unchanged",
       false,
-      DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET, null);
+      DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET,
+    );
     queryClient.setQueryData(changedDiffKey, { patch: "old" });
     queryClient.setQueryData(unchangedDiffKey, { patch: "stable" });
 

@@ -1,15 +1,11 @@
 import { useEffect, useRef } from "react";
-import { queryOptions, useQuery, useQueryClient } from "@tanstack/react-query";
+import { queryOptions, useQuery } from "@tanstack/react-query";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { GitListChangedFilesResponseV11 } from "@traycer/protocol/host";
 import { useHostClientFor } from "@/hooks/host/use-host-client-for";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { gitQueryKeys } from "@/lib/query-keys/git-query-keys";
-import {
-  readSubmoduleSnapshotEpoch,
-  submoduleSnapshotSlotKey,
-} from "@/lib/git/submodule-snapshot-refresh-coordinator";
 
 /**
  * Bounded poll interval used while any submodule is dirty. The parent
@@ -19,7 +15,7 @@ import {
  * needs a timer to pick up further inner edits. 5s matches the host's own poll
  * class (UX-confirmed freshness for this review surface).
  */
-export const SUBMODULE_BOUNDED_REFRESH_MS = 5000;
+const SUBMODULE_BOUNDED_REFRESH_MS = 5000;
 
 export interface GitListChangedFilesWithSubmodulesResult {
   readonly data: GitListChangedFilesResponseV11 | null;
@@ -27,10 +23,22 @@ export interface GitListChangedFilesWithSubmodulesResult {
   readonly error: HostRpcError | null;
 }
 
-export function hasDirtySubmodules(
+export function hasDirtySubmodulesForRefresh(
   data: GitListChangedFilesResponseV11 | undefined,
 ): boolean {
-  return data !== undefined && data.submodules.length > 0;
+  return (
+    data !== undefined &&
+    data.submodules.some((submodule) => {
+      if (submodule.availability.state === "unavailable") return true;
+      if (submodule.files.length > 0) return true;
+      if (submodule.pointer.kind === "conflicted") return true;
+      return (
+        submodule.pointer.commitChanged ||
+        submodule.pointer.modifiedContent ||
+        submodule.pointer.untrackedContent
+      );
+    })
+  );
 }
 
 interface ChangeTokenIdentity {
@@ -41,9 +49,10 @@ interface ChangeTokenIdentity {
 }
 
 /**
- * Source of truth for the group-by-repo panel: the host-composed
- * `git.listChangedFiles@1.1` nested snapshot (parent changeset + `submodules[]`)
- * in a single epoch.
+ * Source of truth for the selected root repo's nested changes: the host-composed
+ * `git.listChangedFiles@1.1` snapshot (parent changeset + `submodules[]`) in a
+ * single epoch. Fetched only for the ACTIVE root (bounded lazy fan-out - the
+ * repo tree never eagerly fans out every root).
  *
  * Git panels are **worktree-scoped**, so the RPC must hit the selected worktree's
  * host, not the app-wide active host - `hostId` in the request body does not
@@ -51,22 +60,21 @@ interface ChangeTokenIdentity {
  * client is resolved via `useHostClientFor` for `args.hostId`, and readiness is
  * derived from *that* client.
  *
- * Freshness is driven three ways, none of them a per-submodule stream:
+ * Freshness is driven two ways, neither a per-submodule stream:
  * - `changeToken` (the parent subscription's fingerprint) - refetch when the
  *   parent working tree changes (which includes a submodule flipping
- *   clean↔dirty, since that moves the parent gitlink row).
+ *   clean<->dirty, since that moves the parent gitlink row).
  * - a bounded timer while any submodule is dirty - covers inner-only edits the
  *   parent stream can't see.
- * - the manual refresh (`useGitRefreshSubmoduleStatus`, `refreshRelations:true`)
- *   writes this same slot out of band; a poll that overlaps it stands down (see
- *   the epoch guard) so the forced snapshot wins.
+ *
+ * Manual refresh is a plain `invalidateQueries` on this slot (see
+ * `GitDiffPanelActions`); there is no `refreshRelations` flag (the host no longer
+ * carries a relation cache to bypass).
  *
  * Rolls a bespoke `useQuery` against `client.request` (rather than
- * `useHostQuery`) so the passive fetch and the manual-refresh mutation share one
- * stable `gitQueryKeys` slot - `useHostQuery` folds request params into its key,
- * which would split the passive (`refreshRelations:false`) and manual
- * (`refreshRelations:true`) writes into different slots. This mirrors how the
- * existing subscription/refresh pair already co-own the v1.0 slot.
+ * `useHostQuery`) so `client` stays out of the cache key - it is transport
+ * identity, not data identity - mirroring the subscription/refresh pair that
+ * co-own the v1.0 slot.
  */
 export function useGitListChangedFilesWithSubmodules(args: {
   readonly hostId: string | null;
@@ -75,7 +83,6 @@ export function useGitListChangedFilesWithSubmodules(args: {
   readonly enabled: boolean;
   readonly changeToken: string | null;
 }): GitListChangedFilesWithSubmodulesResult {
-  const queryClient = useQueryClient();
   const entry = useHostDirectoryEntry(args.hostId ?? "");
   const client = useHostClientFor(entry);
   const readiness = useReactiveHostReadiness(client);
@@ -91,37 +98,17 @@ export function useGitListChangedFilesWithSubmodules(args: {
     hostId !== null &&
     runningDir !== null;
 
-  const slotKey =
-    runningDir === null
-      ? null
-      : submoduleSnapshotSlotKey(hostId, runningDir, ignoreWhitespace);
-
   // Named request closure (mirrors `useHostQuery`) so `client` stays out of the
-  // cache key: it is transport identity, not data identity. Guards its own
-  // completion against a manual refresh that landed while it was in flight -
-  // returning the already-written forced snapshot instead of clobbering it.
+  // cache key: it is transport identity, not data identity.
   const request = async (): Promise<GitListChangedFilesResponseV11> => {
     if (client === null || hostId === null || runningDir === null) {
       return Promise.reject(new Error("Host client unavailable"));
     }
-    const startedEpoch = slotKey === null ? 0 : readSubmoduleSnapshotEpoch(slotKey);
-    const response = await client.request("git.listChangedFiles", {
+    return client.request("git.listChangedFiles", {
       hostId,
       runningDir,
       ignoreWhitespace,
-      refreshRelations: false,
     });
-    if (slotKey !== null && readSubmoduleSnapshotEpoch(slotKey) !== startedEpoch) {
-      const forced = queryClient.getQueryData<GitListChangedFilesResponseV11>(
-        gitQueryKeys.listChangedFilesWithSubmodules(
-          hostId,
-          runningDir,
-          ignoreWhitespace,
-        ),
-      );
-      if (forced !== undefined) return forced;
-    }
-    return response;
   };
 
   const query = useQuery(
@@ -140,7 +127,7 @@ export function useGitListChangedFilesWithSubmodules(args: {
       staleTime: Infinity,
       refetchOnWindowFocus: false,
       refetchInterval: (query) =>
-        hasDirtySubmodules(query.state.data)
+        hasDirtySubmodulesForRefresh(query.state.data)
           ? SUBMODULE_BOUNDED_REFRESH_MS
           : false,
     }),
@@ -171,7 +158,14 @@ export function useGitListChangedFilesWithSubmodules(args: {
     if (args.changeToken === null) return;
     if (previous.token === args.changeToken) return;
     void refetch();
-  }, [args.changeToken, enabled, hostId, runningDir, ignoreWhitespace, refetch]);
+  }, [
+    args.changeToken,
+    enabled,
+    hostId,
+    runningDir,
+    ignoreWhitespace,
+    refetch,
+  ]);
 
   return {
     data: query.data ?? null,

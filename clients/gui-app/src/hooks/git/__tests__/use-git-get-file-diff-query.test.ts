@@ -68,7 +68,8 @@ describe("useGitGetFileDiffQuery", () => {
       stagedOid,
       worktreeOid,
       ignoreWhitespace,
-      DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET, null);
+      DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET,
+    );
 
     // Manually verify key structure includes OIDs
     expect(expectedKey).toContain(headSha);
@@ -103,7 +104,6 @@ describe("useGitGetFileDiffQuery", () => {
           worktreeOid: "oid-worktree",
           ignoreWhitespace: false,
           byteBudget: DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET,
-          compareFromSha: null,
           enabled: true,
         }),
       { wrapper },
@@ -118,7 +118,6 @@ describe("useGitGetFileDiffQuery", () => {
       stage: "unstaged",
       ignoreWhitespace: false,
       byteBudget: DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET,
-      compareFromSha: null,
     });
     const queries = queryClient.getQueryCache().getAll();
     expect(queries).toHaveLength(1);
@@ -140,7 +139,6 @@ describe("useGitGetFileDiffQuery", () => {
           worktreeOid: "oid-worktree",
           ignoreWhitespace: false,
           byteBudget: DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET,
-          compareFromSha: null,
           enabled: false,
         }),
       { wrapper: makeWrapper() },
@@ -178,7 +176,6 @@ describe("useGitGetFileDiffQuery", () => {
           worktreeOid: "oid-worktree",
           ignoreWhitespace: false,
           byteBudget: null,
-          compareFromSha: null,
           enabled: true,
         }),
       { wrapper: makeWrapper() },
@@ -194,7 +191,6 @@ describe("useGitGetFileDiffQuery", () => {
       stage: "unstaged",
       ignoreWhitespace: false,
       byteBudget: null,
-      compareFromSha: null,
     });
   });
 
@@ -212,7 +208,6 @@ describe("useGitGetFileDiffQuery", () => {
           worktreeOid: "oid-worktree",
           ignoreWhitespace: false,
           byteBudget: DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET,
-          compareFromSha: null,
           enabled: true,
         }),
       { wrapper: makeWrapper() },
@@ -235,7 +230,8 @@ describe("useGitGetFileDiffQuery", () => {
       "oid-1",
       "oid-2",
       false,
-      DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET, null);
+      DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET,
+    );
 
     const key2 = gitQueryKeys.fileDiff(
       "host-1",
@@ -247,7 +243,8 @@ describe("useGitGetFileDiffQuery", () => {
       "oid-1-changed",
       "oid-2",
       false,
-      DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET, null);
+      DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET,
+    );
 
     expect(key1).not.toEqual(key2);
   });
@@ -263,7 +260,8 @@ describe("useGitGetFileDiffQuery", () => {
       "oid-1",
       "oid-2",
       false,
-      DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET, null);
+      DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET,
+    );
 
     const key2 = gitQueryKeys.fileDiff(
       "host-1",
@@ -275,7 +273,8 @@ describe("useGitGetFileDiffQuery", () => {
       "oid-1",
       "oid-2",
       false,
-      DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET, null);
+      DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET,
+    );
 
     expect(key1).not.toEqual(key2);
   });
@@ -291,7 +290,8 @@ describe("useGitGetFileDiffQuery", () => {
       "oid-1",
       "oid-2",
       false,
-      DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET, null);
+      DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET,
+    );
 
     const uncappedKey = gitQueryKeys.fileDiff(
       "host-1",
@@ -303,43 +303,10 @@ describe("useGitGetFileDiffQuery", () => {
       "oid-1",
       "oid-2",
       false,
-      null, null);
+      null,
+    );
 
     expect(cappedKey).not.toEqual(uncappedKey);
-  });
-
-  it("compareFromSha separates a submodule ahead-of-pin diff from its working-tree diff", () => {
-    // Same path, same repoRoot, identical (null) commit-range OIDs: only
-    // `compareFromSha` distinguishes the ahead-of-pin diff from the WT diff, so
-    // it MUST be part of cache identity or the two collide.
-    const workingTreeKey = gitQueryKeys.fileDiff(
-      "host-1",
-      "/repo/traycer",
-      "src/foo.ts",
-      null,
-      "unstaged",
-      "head-sha",
-      null,
-      null,
-      false,
-      DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET,
-      null,
-    );
-    const aheadOfPinKey = gitQueryKeys.fileDiff(
-      "host-1",
-      "/repo/traycer",
-      "src/foo.ts",
-      null,
-      "unstaged",
-      "head-sha",
-      null,
-      null,
-      false,
-      DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET,
-      "pin-sha",
-    );
-
-    expect(workingTreeKey).not.toEqual(aheadOfPinKey);
   });
 
   it("runningDir (repoRoot) separates a submodule diff from the parent's same-path diff", () => {
@@ -354,7 +321,6 @@ describe("useGitGetFileDiffQuery", () => {
       "wt-oid",
       false,
       DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET,
-      null,
     );
     const submoduleKey = gitQueryKeys.fileDiff(
       "host-1",
@@ -367,7 +333,6 @@ describe("useGitGetFileDiffQuery", () => {
       "wt-oid",
       false,
       DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET,
-      null,
     );
 
     expect(parentKey).not.toEqual(submoduleKey);
@@ -384,7 +349,8 @@ describe("useGitGetFileDiffQuery", () => {
       "oid-1",
       "oid-2",
       false,
-      DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET, null);
+      DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET,
+    );
 
     // Manually set data to verify cache times
     const response: GitGetFileDiffResponse = {
