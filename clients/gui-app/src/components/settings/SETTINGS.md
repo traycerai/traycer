@@ -54,6 +54,68 @@ must be added in BOTH places - the route file under `src/routes/` AND the modal
   local snapshot storage management, and data migration.
 - `Appearance` Theme, global artifact icon color mode, type-color customization,
   and typography controls.
+  - **Typography.** Three structurally identical rows - `UI font`, `Code font`,
+    and `Terminal font` - each pair a font picker with its size input stacked
+    directly below (the terminal row uses the nullable size input). Keeping the
+    terminal family + size in one row (rather than two) removes the stray
+    divider that used to split a single conceptual group. Backing state lives in
+    `settings-store.ts`:
+    `uiFontFamily` / `codeFontFamily` / `terminalFontFamily` (`string | null`)
+    and `terminalFontSize` (`number | null`) - `null` means "use the default"
+    (UI: Figtree, Code: the system mono stack) or, for the two terminal
+    fields, "follow the Code font/size". `uiFontSize` is clamped 10-20 (it
+    scales the root font-size and breaks layout above that); `codeFontSize`
+    and `terminalFontSize` are clamped 10-24. `theme-provider.tsx` applies
+    `uiFontFamily`/`codeFontFamily` as inline overrides of
+    `--traycer-font-ui`/`--traycer-font-mono` (chosen font + the default
+    stack as fallback), removing the override when `null`. The terminal host
+    (`terminal-tile-xterm.tsx`) resolves its own effective font
+    (`terminalFontFamily ?? codeFontFamily`) and size
+    (`terminalFontSize ?? codeFontSize`) directly from the store rather than
+    reading computed CSS, and live-syncs both into `term.options` (see
+    `resolveEffectiveFontFamily` and `useTerminalAppearanceSync`). The
+    `@pierre/diffs` diff viewer follows the code font via
+    `--diffs-font-family` / `--diffs-font-size` set on `[data-diffs-host]` in
+    `diff-tokens-css.ts`.
+  - **Font picker (`controls/font-picker.tsx`).** Searchable Popover + cmdk
+    combobox (modeled on `theme-preset-picker.tsx`). Its first entry is
+    always the group's default label ("Figtree (Default)" / "System Default"
+    / "Same as code font") and selecting it stores `null`; typing a name
+    absent from the list offers a "Use `<typed>`" item so unlisted/misdetected
+    fonts, and non-desktop hosts (no enumerated list at all), still work. Each
+    option renders in its own typeface via inline `style={{ fontFamily }}`.
+    When the value is `null` the trigger shows the default label muted; a
+    ghost reset button (`RotateCcw`) occupies a permanently-reserved `size-7`
+    gutter to the _left_ of the trigger and appears once a font is chosen. The
+    reserved left gutter means the trigger's right edge stays flush with every
+    other control in the panel and never shifts as the reset toggles. All three
+    rows offer the full installed-font list - no monospace pre-filter, because
+    the OS `monospace` trait misdetects many real mono fonts (e.g. Nerd Font
+    builds) and the picker already lets you free-type any name.
+  - **UI/Code size input (`controls/settings-number-input.tsx`).** Plain
+    non-nullable number field. Takes a `defaultValue`
+    (`DEFAULT_UI_FONT_SIZE` / `DEFAULT_CODE_FONT_SIZE`, the same constants the
+    store initializes from) and shows a ghost `RotateCcw` reset button in the
+    reserved `size-7` left gutter whenever the current size differs from it,
+    restoring the default on click - mirroring the font picker's reset gutter
+    so the two rows stay aligned.
+  - **Terminal size input (`controls/nullable-font-size-input.tsx`).**
+    `SettingsNumberInput`-alike but nullable: displays `terminalFontSize ??
+codeFontSize` in muted styling while `null`; any tick/type pins an
+    explicit value starting from what was displayed; a ghost reset button
+    clears back to `null`. Kept as a separate component because its reset target
+    is `null` (follow code) rather than a fixed default.
+  - **Installed-font enumeration.** Desktop-only, following the same chain as
+    `systemPreferencesAppearance`: `RunnerHostInvoke.fontsList` IPC channel →
+    `listInstalledFonts()` (`electron-main/app/installed-fonts.ts`, backed by
+    the `font-list` package's `getFonts2()`, deduped/sorted, empty array on
+    enumeration failure) → registered in `platform-ipc.ts` → exposed as
+    `platform.fonts.list()` on both `PlatformBridgeSurface` (preload) and
+    `DesktopPlatformBridge` (renderer-shell). gui-app reads it through
+    feature-detected `getInstalledFontsBridge()`
+    (`lib/desktop-installed-fonts.ts`, mirrors `desktop-log-levels.ts`) via
+    `useRunnerInstalledFontsQuery` (`staleTime: Infinity`; resolves `[]` on
+    shells without the bridge instead of erroring).
 - `Providers` Per-provider CLI binary selection (Codex / Claude Code / OpenCode
   / Traycer / Cursor). Left rail picks the provider (brand icons via
   `HarnessIcon`); the

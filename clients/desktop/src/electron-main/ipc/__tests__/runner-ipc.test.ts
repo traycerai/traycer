@@ -595,6 +595,7 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.gpuAccelerationSet,
         RunnerHostInvoke.logLevelsGet,
         RunnerHostInvoke.logLevelsSet,
+        RunnerHostInvoke.fontsList,
         RunnerHostInvoke.zoomGet,
         RunnerHostInvoke.zoomSet,
         RunnerHostInvoke.zoomStepIn,

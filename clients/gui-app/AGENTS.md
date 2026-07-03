@@ -323,10 +323,15 @@ adding a new preset only needs a CSS block.
   `<Suspense fallback={<TerminalLoadingSkeleton />}>`. The ~150 KB of `@xterm/*`
   is deferred until first terminal mount per session.
 
-- **Font.** `fontSize` follows `useSettingsStore(s => s.codeFontSize)`;
-  `fontFamily` is resolved once at mount from `--traycer-font-mono` and cached
-  via `useMemo([])`. Live size changes trigger a `fitAddon.fit()` refit
-  alongside the atlas clear.
+- **Font.** `fontSize` and `fontFamily` are the effective terminal values from
+  the settings store: `terminalFontSize ?? codeFontSize` and
+  `terminalFontFamily ?? codeFontFamily` prepended to the shared default mono
+  stack (`src/lib/default-font-stacks.ts`). The font-family string is built
+  from store values rather than read from `--traycer-font-mono`, because xterm
+  can't resolve CSS variables in its canvas measurement pass and a
+  `getComputedStyle` read would race the `ThemeProvider` effect that writes
+  the variable's inline override. Live size or family changes trigger a
+  `fitAddon.fit()` refit alongside the atlas clear.
 
 - **What stays pinned.** No per-tab terminal palette overrides - every terminal
   mirrors the app theme. The xterm.js stylesheet (`@xterm/xterm/css/xterm.css`)

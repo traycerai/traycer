@@ -24,6 +24,7 @@ import {
   promptTouchID,
 } from "../app/system-prefs";
 import { readAccessibilityTheme } from "../app/resilience";
+import { listInstalledFonts } from "../app/installed-fonts";
 import {
   clearProxyCredentials,
   listKnownProxyCredentials,
@@ -394,6 +395,10 @@ export function registerPlatformIpc(bridge: RunnerIpcBridge): void {
       return readLogLevelsSnapshot();
     },
   );
+
+  bridge.handleInvoke(RunnerHostInvoke.fontsList, () => {
+    return listInstalledFonts();
+  });
 }
 
 async function readLogLevelsSnapshot(): Promise<LogLevelsSnapshot> {

@@ -98,3 +98,8 @@ export interface LogLevelsSnapshot {
   readonly hostLogLevel: LogLevel;
   readonly desktopLogLevel: LogLevel;
 }
+
+/** A font family installed on this machine, offered by the Appearance font pickers. */
+export interface InstalledFont {
+  readonly family: string;
+}

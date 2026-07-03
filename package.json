@@ -31,7 +31,6 @@
     "@eslint/js": "^9.39.4",
     "@floating-ui/dom": "^1.7.6",
     "@fontsource-variable/figtree": "^5.2.10",
-    "@fontsource-variable/geist": "^5.2.9",
     "@lobehub/icons": "^5.10.0",
     "@pierre/diffs": "1.2.9",
     "@pierre/trees": "^1.0.0-beta.4",
