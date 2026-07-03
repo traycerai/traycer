@@ -108,6 +108,7 @@ export function useGitListChangedFilesWithSubmodules(args: {
       hostId,
       runningDir,
       ignoreWhitespace,
+      includeSubmodules: true,
     });
   };
 

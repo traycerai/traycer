@@ -34,10 +34,14 @@ export function useGitPrefetchWorktreeStatus() {
         return;
       }
 
+      // Parent-only: the badge/default-pick prefetch must never trigger the
+      // host's per-submodule git-status fan-out (bounded lazy fan-out - only
+      // the active root's nested snapshot asks for submodules).
       const result = await client.request("git.listChangedFiles", {
         hostId: args.hostId,
         runningDir: args.runningDir,
         ignoreWhitespace: args.ignoreWhitespace,
+        includeSubmodules: false,
       });
 
       writeGitListChangedFilesResponse(

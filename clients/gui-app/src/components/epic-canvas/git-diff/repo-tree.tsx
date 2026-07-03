@@ -16,6 +16,12 @@ export interface RepoTreeRootRow {
   readonly row: WorktreeBindingSelectorRow;
   /** Parent working-tree change count from the v1.0 cache; null when unknown. */
   readonly changeCount: number | null;
+  /**
+   * Why this binding cannot be selected ("not git", setup states), or null for
+   * a selectable git root. Disabled rows still render - greyed with the reason
+   * - so a bound folder never silently vanishes from the panel.
+   */
+  readonly disabledLabel: string | null;
 }
 
 export interface RepoTreeProps {
@@ -33,6 +39,7 @@ type VisibleRow =
       readonly key: string;
       readonly row: WorktreeBindingSelectorRow;
       readonly changeCount: number | null;
+      readonly disabledLabel: string | null;
       readonly selected: boolean;
       readonly hasChildren: boolean;
     }
@@ -89,7 +96,7 @@ export function RepoTree(props: RepoTreeProps): ReactNode {
 
   const visibleRows = useMemo<ReadonlyArray<VisibleRow>>(() => {
     const rows: VisibleRow[] = [];
-    for (const { row, changeCount } of roots) {
+    for (const { row, changeCount, disabledLabel } of roots) {
       const isActiveRoot =
         row.hostId === selected.hostId &&
         row.runningDir === selected.rootRunningDir;
@@ -99,6 +106,7 @@ export function RepoTree(props: RepoTreeProps): ReactNode {
         key: `root:${row.hostId}:${row.runningDir}`,
         row,
         changeCount,
+        disabledLabel,
         selected: isActiveRoot && selected.repoRoot === row.runningDir,
         hasChildren,
       });
@@ -132,6 +140,7 @@ export function RepoTree(props: RepoTreeProps): ReactNode {
     (index: number) => {
       const target = visibleRows[index];
       if (target.kind === "root") {
+        if (target.disabledLabel !== null) return;
         props.onSelectRoot(target.row);
       } else {
         props.onSelectSubmodule(target.node);
@@ -190,48 +199,58 @@ export function RepoTree(props: RepoTreeProps): ReactNode {
       className="flex max-h-[min(40vh,16rem)] shrink-0 flex-col overflow-y-auto border-b border-border/60 py-0.5"
       data-testid="git-repo-tree"
     >
-      {visibleRows.map((row, index) => (
-        <button
-          key={row.key}
-          ref={(element) => {
-            rowRefs.current[index] = element;
-          }}
-          type="button"
-          role="treeitem"
-          aria-level={row.kind === "root" ? 1 : 2}
-          aria-selected={row.selected}
-          aria-expanded={
-            row.kind === "root" && row.hasChildren ? true : undefined
-          }
-          tabIndex={index === tabbableIndex ? 0 : -1}
-          onClick={() => activateRow(index)}
-          onKeyDown={(event) => handleKeyDown(event, index)}
-          className={cn(
-            "group flex min-h-6 w-full items-center gap-1.5 text-left text-ui-sm transition-colors",
-            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
-            row.kind === "root" ? "px-2" : "pr-2 pl-6",
-            row.selected
-              ? "bg-accent text-accent-foreground"
-              : "hover:bg-accent/50",
-            row.kind === "submodule" &&
-              !row.node.hasChanges &&
-              !row.node.unavailable &&
-              !row.selected &&
-              "opacity-60",
-          )}
-          data-testid={
-            row.kind === "root"
-              ? `git-repo-tree-root-${rootLabel(row.row)}`
-              : `git-repo-tree-submodule-${row.node.parentPath}`
-          }
-        >
-          {row.kind === "root" ? (
-            <RootRowContent row={row.row} changeCount={row.changeCount} />
-          ) : (
-            <SubmoduleRowContent node={row.node} />
-          )}
-        </button>
-      ))}
+      {visibleRows.map((row, index) => {
+        const isDisabled = row.kind === "root" && row.disabledLabel !== null;
+        return (
+          <button
+            key={row.key}
+            ref={(element) => {
+              rowRefs.current[index] = element;
+            }}
+            type="button"
+            role="treeitem"
+            aria-level={row.kind === "root" ? 1 : 2}
+            aria-selected={row.selected}
+            aria-expanded={
+              row.kind === "root" && row.hasChildren ? true : undefined
+            }
+            aria-disabled={isDisabled ? true : undefined}
+            disabled={isDisabled}
+            tabIndex={index === tabbableIndex ? 0 : -1}
+            onClick={() => activateRow(index)}
+            onKeyDown={(event) => handleKeyDown(event, index)}
+            className={cn(
+              "group flex min-h-6 w-full items-center gap-1.5 text-left text-ui-sm transition-colors",
+              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+              row.kind === "root" ? "px-2" : "pr-2 pl-6",
+              row.selected
+                ? "bg-accent text-accent-foreground"
+                : "hover:bg-accent/50",
+              isDisabled && "cursor-default opacity-50 hover:bg-transparent",
+              row.kind === "submodule" &&
+                !row.node.hasChanges &&
+                !row.node.unavailable &&
+                !row.selected &&
+                "opacity-60",
+            )}
+            data-testid={
+              row.kind === "root"
+                ? `git-repo-tree-root-${rootLabel(row.row)}`
+                : `git-repo-tree-submodule-${row.node.parentPath}`
+            }
+          >
+            {row.kind === "root" ? (
+              <RootRowContent
+                row={row.row}
+                changeCount={row.changeCount}
+                disabledLabel={row.disabledLabel}
+              />
+            ) : (
+              <SubmoduleRowContent node={row.node} />
+            )}
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -239,6 +258,7 @@ export function RepoTree(props: RepoTreeProps): ReactNode {
 function RootRowContent(props: {
   readonly row: WorktreeBindingSelectorRow;
   readonly changeCount: number | null;
+  readonly disabledLabel: string | null;
 }): ReactNode {
   return (
     <>
@@ -256,7 +276,13 @@ function RootRowContent(props: {
       ) : (
         <span className="flex-1" aria-hidden />
       )}
-      <ChangeCount count={props.changeCount} />
+      {props.disabledLabel !== null ? (
+        <span className="shrink-0 text-ui-xs text-muted-foreground">
+          {props.disabledLabel}
+        </span>
+      ) : (
+        <ChangeCount count={props.changeCount} />
+      )}
     </>
   );
 }

@@ -7,8 +7,8 @@
  *     (their no-op v1.1 bump was dropped).
  *  2. Transport skew - new-GUI/old-host upgrades a v1.0 listChangedFiles response
  *     to `submodules: []` / `gitlink: null`; old-GUI/new-host strips the v1.1
- *     response fields, and the v1.1 listChangedFiles request upgrade is the
- *     identity (v1.1 adds no request fields).
+ *     response fields, and a v1.0 listChangedFiles request upgrades with
+ *     `includeSubmodules: false` (parent-only, no fan-out).
  *  3. Stream no-leak - `subscribeStatus@1.0` frames stay parse-equivalent to
  *     today and carry no `gitlink` / `submodules`, even when a domain value does.
  *  4. Simplified shapes - the minimal `submodulePointer` (pin equality via
@@ -145,7 +145,7 @@ describe("transport skew - new GUI (v1.1) against old host (v1.0)", () => {
 });
 
 describe("transport skew - old GUI (v1.0) against new host (v1.1)", () => {
-  it("upgrades a v1.0 listChangedFiles request unchanged (no injected fields)", () => {
+  it("upgrades a v1.0 listChangedFiles request to includeSubmodules: false", () => {
     const v10ListRequest: GitListChangedFilesRequest = {
       hostId: "h",
       runningDir: "/repo",
@@ -159,9 +159,9 @@ describe("transport skew - old GUI (v1.0) against new host (v1.1)", () => {
       v10ListRequest,
     );
 
-    // v1.1 adds no request fields - the upgrade is the identity, so the result
-    // is deep-equal to the v1.0 request (no field added on the wire).
-    expect(upgraded).toEqual(v10ListRequest);
+    // A v1.0 caller never asks for the submodule fan-out - the upgrade pins
+    // `includeSubmodules: false` so the host serves the cheap parent-only view.
+    expect(upgraded).toEqual({ ...v10ListRequest, includeSubmodules: false });
   });
 
   it("strips submodules[] and gitlink when downgrading a v1.1 response", () => {

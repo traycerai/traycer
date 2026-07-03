@@ -55,10 +55,13 @@ export function useGitRefreshWorktreeStatus(): UseMutationResult<
   >({
     client,
     method: "git.listChangedFiles",
+    // Parent-only: this refresh feeds the v1.0 change-list slot; the nested
+    // snapshot has its own invalidation path.
     mapVariables: (variables) => ({
       hostId: variables.hostId,
       runningDir: variables.runningDir,
       ignoreWhitespace: variables.ignoreWhitespace,
+      includeSubmodules: false,
     }),
     options: {
       mutationKey: gitMutationKeys.refreshWorktreeStatus(),

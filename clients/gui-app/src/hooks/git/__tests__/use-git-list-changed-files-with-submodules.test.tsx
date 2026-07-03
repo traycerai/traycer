@@ -178,6 +178,7 @@ describe("useGitListChangedFilesWithSubmodules", () => {
         hostId: "selected-host",
         runningDir: "/repo",
         ignoreWhitespace: false,
+        includeSubmodules: true,
       },
     );
     // The default/other host's client is never used.

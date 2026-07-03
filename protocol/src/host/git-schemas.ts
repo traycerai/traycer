@@ -444,10 +444,19 @@ export const submoduleChangesetSchema = z.object({
 export type SubmoduleChangeset = z.infer<typeof submoduleChangesetSchema>;
 
 /**
- * `git.listChangedFiles@1.1` request. Identical to the frozen v1.0 request - v1.1
- * adds no request fields, so the contract reuses `gitListChangedFilesRequestSchema`
- * directly; the version exists purely for the enriched response below.
+ * `git.listChangedFiles@1.1` request. The frozen v1.0 request plus
+ * `includeSubmodules`: the host runs the per-submodule fan-out (discovery +
+ * git status into each dirty submodule + `.gitmodules` enumeration) only when
+ * asked. Defaults to false so lightweight callers (and v1.0 requests upgraded
+ * to canonical) get the cheap parent-only snapshot with `submodules: []`.
  */
+export const gitListChangedFilesRequestSchemaV11 =
+  gitListChangedFilesRequestSchema.extend({
+    includeSubmodules: z.boolean().default(false),
+  });
+export type GitListChangedFilesRequestV11 = z.infer<
+  typeof gitListChangedFilesRequestSchemaV11
+>;
 
 /**
  * `git.listChangedFiles@1.1` response. The frozen v1.0 response with two

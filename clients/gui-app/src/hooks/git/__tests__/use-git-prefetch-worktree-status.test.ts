@@ -52,6 +52,7 @@ describe("useGitPrefetchWorktreeStatus", () => {
       hostId,
       runningDir,
       ignoreWhitespace,
+      includeSubmodules: false,
     });
 
     // Verify cache is populated using the same key structure

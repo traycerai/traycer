@@ -10,7 +10,7 @@ import {
   useGitPanelStore,
 } from "@/stores/epics/git-panel-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
-import { gitQueryKeys } from "@/lib/query-keys/git-query-keys";
+import { invalidateGitSubmoduleSnapshot } from "@/lib/git/invalidate-git-submodule-snapshot";
 
 // Safety cap so a hung host fetch can't wedge the spinning/disabled state.
 const GIT_REFRESH_TIMEOUT_MS = 10_000;
@@ -38,12 +38,10 @@ export function GitDiffPanelActions(props: LeftPanelSlotProps) {
   // On an old host this refetch still degrades to a parent-only snapshot.
   const handleRefresh = useCallback(async () => {
     if (selectedRepo === null) return;
-    await queryClient.invalidateQueries({
-      queryKey: gitQueryKeys.listChangedFilesWithSubmodules(
-        selectedRepo.hostId,
-        selectedRepo.rootRunningDir,
-        ignoreWhitespace,
-      ),
+    await invalidateGitSubmoduleSnapshot(queryClient, {
+      hostId: selectedRepo.hostId,
+      rootRunningDir: selectedRepo.rootRunningDir,
+      ignoreWhitespace,
     });
   }, [ignoreWhitespace, queryClient, selectedRepo]);
 

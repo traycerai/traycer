@@ -99,6 +99,23 @@ describe("buildSubmoduleReferenceRows", () => {
     expect(matches[0].divergence).toBe("matches");
   });
 
+  it("has no divergence for an unenriched pointer (checkout HEAD never read)", () => {
+    // A dirty submodule the host could not inspect keeps the parser defaults
+    // (`submoduleHeadSha: null, diverged: false`) - that must not read as a
+    // verified "matches".
+    const rows = buildSubmoduleReferenceRows(
+      [
+        file("traycer", {
+          ...normalPointer,
+          submoduleHeadSha: null,
+          diverged: false,
+        }),
+      ],
+      [],
+    );
+    expect(rows[0].divergence).toBeNull();
+  });
+
   it("has no divergence for a conflicted pointer (no single pin)", () => {
     const conflicted: SubmodulePointer = {
       kind: "conflicted",

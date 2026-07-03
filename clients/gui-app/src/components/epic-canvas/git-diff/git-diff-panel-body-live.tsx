@@ -18,6 +18,8 @@ import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
 import { gitQueryKeys } from "@/lib/query-keys/git-query-keys";
 import { formatGitWorktreeLabel } from "@/lib/git/worktree-label";
 import { buildSubmoduleNodes } from "@/lib/git/git-repo-tree";
+import { invalidateGitSubmoduleSnapshot } from "@/lib/git/invalidate-git-submodule-snapshot";
+import { formatWorktreeFolderDisabledReason } from "@/lib/worktree/worktree-folder-disabled-reason";
 import {
   selectGitPanelEpicState,
   useGitPanelStore,
@@ -166,7 +168,7 @@ export function GitDiffPanelBodyLive(
     <GitDiffPanelLoaded
       epicId={props.epicId}
       viewTabId={props.tabId}
-      gitRows={gitRows}
+      rows={rows}
       selected={selectedRepo}
       selectedRootRow={selectedRootRow}
     />
@@ -176,9 +178,19 @@ export function GitDiffPanelBodyLive(
 interface GitDiffPanelLoadedProps {
   readonly epicId: string;
   readonly viewTabId: string;
-  readonly gitRows: ReadonlyArray<WorktreeBindingSelectorRow>;
+  /**
+   * Every binding for the epic, selectable or not - disabled rows (non-git
+   * folders, setup states) render greyed with their reason instead of
+   * silently vanishing from the panel.
+   */
+  readonly rows: ReadonlyArray<WorktreeBindingSelectorRow>;
   readonly selected: GitPanelSelectedRepo;
   readonly selectedRootRow: WorktreeBindingSelectorRow;
+}
+
+function gitDiffDisabledLabel(row: WorktreeBindingSelectorRow): string | null {
+  if (!row.isGitRepo) return "not git";
+  return formatWorktreeFolderDisabledReason(row);
 }
 
 function GitDiffPanelLoaded(props: GitDiffPanelLoadedProps): ReactNode {
@@ -205,9 +217,12 @@ function GitDiffPanelLoaded(props: GitDiffPanelLoadedProps): ReactNode {
     changeToken: subscription.data?.fingerprint ?? null,
   });
 
-  // Reactive read of every root's cached v1.0 change count for the tree badges.
-  const rootCountQueries = useQueries({
-    queries: props.gitRows.map((row) =>
+  // Reactive read of every root's cached v1.0 change count for the tree
+  // badges. `combine` keeps the counts array referentially stable across
+  // unrelated re-renders, so the memoized `roots` below only rebuilds (and
+  // RepoTree's visibleRows memo only busts) when a count actually changes.
+  const rootCounts = useQueries({
+    queries: props.rows.map((row) =>
       queryOptions({
         queryKey: gitQueryKeys.listChangedFiles(
           row.hostId,
@@ -220,12 +235,20 @@ function GitDiffPanelLoaded(props: GitDiffPanelLoadedProps): ReactNode {
         staleTime: Infinity,
       }),
     ),
+    combine: (results) =>
+      results.map((result) => {
+        const data = result.data ?? null;
+        return data === null ? null : data.files.length;
+      }),
   });
-  const roots: ReadonlyArray<RepoTreeRootRow> = props.gitRows.map(
-    (row, index) => {
-      const data = rootCountQueries[index]?.data ?? null;
-      return { row, changeCount: data === null ? null : data.files.length };
-    },
+  const roots: ReadonlyArray<RepoTreeRootRow> = useMemo(
+    () =>
+      props.rows.map((row, index) => ({
+        row,
+        changeCount: rootCounts[index] ?? null,
+        disabledLabel: gitDiffDisabledLabel(row),
+      })),
+    [props.rows, rootCounts],
   );
 
   const submoduleNodes = useMemo(
@@ -259,12 +282,10 @@ function GitDiffPanelLoaded(props: GitDiffPanelLoadedProps): ReactNode {
 
   const handleRefresh = useCallback(
     (): Promise<void> =>
-      queryClient.invalidateQueries({
-        queryKey: gitQueryKeys.listChangedFilesWithSubmodules(
-          selectedRootRow.hostId,
-          selectedRootRow.runningDir,
-          ignoreWhitespace,
-        ),
+      invalidateGitSubmoduleSnapshot(queryClient, {
+        hostId: selectedRootRow.hostId,
+        rootRunningDir: selectedRootRow.runningDir,
+        ignoreWhitespace,
       }),
     [ignoreWhitespace, queryClient, selectedRootRow],
   );

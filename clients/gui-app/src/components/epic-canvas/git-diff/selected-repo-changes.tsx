@@ -117,15 +117,28 @@ function RootRepoChanges(props: SelectedRepoChangesProps): ReactNode {
   if (!source.hasLanded) {
     return <DiffLoadingSkeleton variant="panel" />;
   }
-  if (source.files.length === 0 && source.referenceRows.length === 0) {
-    return (
-      <NoChangesInWorktree lastUpdatedAtMs={subscription.pollStartedAtMs} />
-    );
-  }
 
   const conflictCount = source.files.filter(
     (file) => file.stage === "conflicted",
   ).length;
+
+  // The banner renders even with zero changes: a clean tree can still be in a
+  // non-clean repo state (detached HEAD, paused rebase/cherry-pick) the user
+  // must see - mirrors SubmoduleChanges below.
+  if (source.files.length === 0 && source.referenceRows.length === 0) {
+    return (
+      <div className="flex min-h-0 flex-1 flex-col">
+        {source.repoState !== null && source.repoState.kind !== "clean" ? (
+          <RepoStateBanner
+            state={source.repoState}
+            repoMode={source.repoMode}
+            conflictCount={conflictCount}
+          />
+        ) : null}
+        <NoChangesInWorktree lastUpdatedAtMs={subscription.pollStartedAtMs} />
+      </div>
+    );
+  }
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">

@@ -102,13 +102,17 @@ export interface SubmoduleReferenceRowView {
 
 /**
  * Human-readable pin-vs-checkout divergence from the enriched pointer, so the
- * user need not compare SHAs. `null` for a conflicted pointer (no single pin).
+ * user need not compare SHAs. `null` for a conflicted pointer (no single pin)
+ * and for an unenriched pointer (`submoduleHeadSha` unknown — the host never
+ * read the submodule HEAD, so `diverged: false` is a parser default, not a
+ * verified match).
  */
 function pointerDivergence(
   pointer: SubmodulePointer,
 ): "diverged" | "matches" | null {
   if (pointer.kind !== "normal") return null;
-  return pointer.diverged ? "diverged" : "matches";
+  if (pointer.diverged) return "diverged";
+  return pointer.submoduleHeadSha === null ? null : "matches";
 }
 
 /** A `normal` gitlink pointer is dirty when any of its `<sub>` flags are set. */

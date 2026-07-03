@@ -70,7 +70,7 @@ describe("<RepoTree />", () => {
 
   it("renders roots as level-1 treeitems and the active root's submodules as level-2", () => {
     renderTree({
-      roots: [{ row: row({}), changeCount: 3 }],
+      roots: [{ row: row({}), changeCount: 3, disabledLabel: null }],
       selected: rootSelection,
       activeRootSubmodules: [submoduleNode({})],
     });
@@ -88,10 +88,11 @@ describe("<RepoTree />", () => {
   it("does not render submodules of a non-active root", () => {
     renderTree({
       roots: [
-        { row: row({ runningDir: "/repo" }), changeCount: 1 },
+        { row: row({ runningDir: "/repo" }), changeCount: 1, disabledLabel: null },
         {
           row: row({ runningDir: "/other", repoIdentifier: null }),
           changeCount: 0,
+          disabledLabel: null,
         },
       ],
       selected: {
@@ -108,7 +109,7 @@ describe("<RepoTree />", () => {
   it("selects a root on click", () => {
     const onSelectRoot = vi.fn();
     renderTree({
-      roots: [{ row: row({}), changeCount: 1 }],
+      roots: [{ row: row({}), changeCount: 1, disabledLabel: null }],
       selected: rootSelection,
       activeRootSubmodules: [],
       onSelectRoot,
@@ -120,7 +121,7 @@ describe("<RepoTree />", () => {
   it("selects a submodule on click", () => {
     const onSelectSubmodule = vi.fn();
     renderTree({
-      roots: [{ row: row({}), changeCount: 1 }],
+      roots: [{ row: row({}), changeCount: 1, disabledLabel: null }],
       selected: rootSelection,
       activeRootSubmodules: [submoduleNode({})],
       onSelectSubmodule,
@@ -133,7 +134,7 @@ describe("<RepoTree />", () => {
 
   it("shows a warning affordance for an unavailable submodule", () => {
     renderTree({
-      roots: [{ row: row({}), changeCount: 1 }],
+      roots: [{ row: row({}), changeCount: 1, disabledLabel: null }],
       selected: rootSelection,
       activeRootSubmodules: [
         submoduleNode({ unavailable: true, hasChanges: false, changeCount: 0 }),
@@ -145,7 +146,7 @@ describe("<RepoTree />", () => {
 
   it("moves focus with ArrowDown across visible rows", () => {
     renderTree({
-      roots: [{ row: row({}), changeCount: 1 }],
+      roots: [{ row: row({}), changeCount: 1, disabledLabel: null }],
       selected: rootSelection,
       activeRootSubmodules: [submoduleNode({})],
     });
@@ -160,7 +161,7 @@ describe("<RepoTree />", () => {
 
   it("ArrowRight on an expanded root moves focus to its first child", () => {
     renderTree({
-      roots: [{ row: row({}), changeCount: 1 }],
+      roots: [{ row: row({}), changeCount: 1, disabledLabel: null }],
       selected: rootSelection,
       activeRootSubmodules: [submoduleNode({})],
     });
@@ -176,13 +177,14 @@ describe("<RepoTree />", () => {
     const onSelectRoot = vi.fn();
     renderTree({
       roots: [
-        { row: row({ runningDir: "/repo" }), changeCount: 1 },
+        { row: row({ runningDir: "/repo" }), changeCount: 1, disabledLabel: null },
         {
           row: row({
             runningDir: "/other",
             repoIdentifier: { owner: "acme", repo: "other-repo" },
           }),
           changeCount: 0,
+          disabledLabel: null,
         },
       ],
       selected: rootSelection, // active root is /repo
@@ -199,7 +201,7 @@ describe("<RepoTree />", () => {
 
   it("ArrowLeft from a submodule moves focus to its parent root", () => {
     renderTree({
-      roots: [{ row: row({}), changeCount: 1 }],
+      roots: [{ row: row({}), changeCount: 1, disabledLabel: null }],
       selected: rootSelection,
       activeRootSubmodules: [submoduleNode({})],
     });
@@ -213,7 +215,7 @@ describe("<RepoTree />", () => {
 
   it("ArrowLeft on a root is a no-op (keeps focus)", () => {
     renderTree({
-      roots: [{ row: row({}), changeCount: 1 }],
+      roots: [{ row: row({}), changeCount: 1, disabledLabel: null }],
       selected: rootSelection,
       activeRootSubmodules: [submoduleNode({})],
     });
@@ -226,7 +228,7 @@ describe("<RepoTree />", () => {
   it("activates the focused row with Enter", () => {
     const onSelectSubmodule = vi.fn();
     renderTree({
-      roots: [{ row: row({}), changeCount: 1 }],
+      roots: [{ row: row({}), changeCount: 1, disabledLabel: null }],
       selected: rootSelection,
       activeRootSubmodules: [submoduleNode({})],
       onSelectSubmodule,
@@ -234,5 +236,31 @@ describe("<RepoTree />", () => {
     const sub = screen.getByTestId("git-repo-tree-submodule-traycer");
     fireEvent.keyDown(sub, { key: "Enter" });
     expect(onSelectSubmodule).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders a disabled binding with its reason and blocks activation", () => {
+    const onSelectRoot = vi.fn();
+    renderTree({
+      roots: [
+        { row: row({}), changeCount: 1, disabledLabel: null },
+        {
+          row: row({
+            runningDir: "/not-git",
+            repoIdentifier: null,
+            isGitRepo: false,
+          }),
+          changeCount: null,
+          disabledLabel: "not git",
+        },
+      ],
+      selected: rootSelection,
+      activeRootSubmodules: [],
+      onSelectRoot,
+    });
+    const disabledRoot = screen.getByTestId("git-repo-tree-root-not-git");
+    expect(disabledRoot.getAttribute("aria-disabled")).toBe("true");
+    expect(disabledRoot.textContent).toContain("not git");
+    fireEvent.click(disabledRoot);
+    expect(onSelectRoot).not.toHaveBeenCalled();
   });
 });
