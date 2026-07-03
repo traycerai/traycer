@@ -8,7 +8,10 @@ import { defineVersionedStreamRpcRegistry } from "@traycer/protocol/framework/ve
 import {
   agentCreateV10,
   agentGetTranscriptV10,
+  agentListHarnessModelsDowngradeV2ToV1,
   agentListHarnessModelsV10,
+  agentListHarnessModelsV20,
+  agentListHarnessModelsUpgradeV1ToV2,
   agentListDowngradeV2ToV1,
   agentListUpgradeV1ToV2,
   agentListV10,
@@ -110,6 +113,8 @@ import {
   terminalListV10,
   terminalRenameV10,
   terminalSubscribeV10,
+  terminalSubscribeV11,
+  terminalSubscribeV12,
 } from "@traycer/protocol/host/terminal/contracts";
 import { notificationsSubscribeV10 } from "@traycer/protocol/host/notifications/contracts";
 import {
@@ -1370,6 +1375,18 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
         },
       },
       downgradePathsFromLatest: {},
+    },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentListHarnessModelsV20,
+          upgradeFromPreviousVersion: agentListHarnessModelsUpgradeV1ToV2,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentListHarnessModelsDowngradeV2ToV1,
+      },
     },
   },
   "agent.list": {
@@ -2674,10 +2691,16 @@ export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
   },
   "terminal.subscribe": {
     1: {
-      latestMinor: 0,
+      latestMinor: 2,
       versions: {
         0: {
           contract: terminalSubscribeV10,
+        },
+        1: {
+          contract: terminalSubscribeV11,
+        },
+        2: {
+          contract: terminalSubscribeV12,
         },
       },
     },

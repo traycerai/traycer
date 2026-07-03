@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
+import { downgradeRequestAcrossMajors } from "@traycer/protocol/framework/index";
+import { agentListHarnessModelsDowngradeV2ToV1 } from "@traycer/protocol/host/agent/contracts";
 import {
   agentSelectionGuideResponseSchema,
   createAgentRequestSchema,
   hostRpcRegistry,
   getGuiAgentPlanRequestSchema,
   getGuiAgentPlanResponseSchema,
+  listHarnessModelsRequestSchemaV10,
+  listHarnessModelsRequestSchemaV20,
   listHarnessModelsResponseSchema,
   listAgentsResponseSchema,
   listGuiAgentCommandsRequestSchema,
@@ -42,6 +46,119 @@ describe("agent host schemas", () => {
     ).toMatchObject({
       harnessId: "codex",
       commands: [{ name: "frontend-design", kind: "skill" }],
+    });
+  });
+
+  it("defaults agent.listHarnessModels context fields to null", () => {
+    expect(
+      listHarnessModelsRequestSchemaV20.parse({
+        harnessId: "codex",
+      }),
+    ).toEqual({
+      epicId: null,
+      senderAgentId: null,
+      harnessId: "codex",
+    });
+  });
+
+  it("keeps agent.listHarnessModels v1.0 request context required", () => {
+    expect(
+      listHarnessModelsRequestSchemaV10.safeParse({
+        epicId: null,
+        senderAgentId: null,
+        harnessId: "codex",
+      }).success,
+    ).toBe(false);
+    expect(
+      listHarnessModelsRequestSchemaV10.parse({
+        epicId: "epic-1",
+        senderAgentId: "agent-1",
+        harnessId: "codex",
+      }),
+    ).toEqual({
+      epicId: "epic-1",
+      senderAgentId: "agent-1",
+      harnessId: "codex",
+    });
+  });
+
+  it("downgrades contextual agent.listHarnessModels v2.0 requests to v1.0", () => {
+    expect(
+      agentListHarnessModelsDowngradeV2ToV1.downgradeRequest({
+        epicId: "epic-1",
+        senderAgentId: "agent-1",
+        harnessId: "codex",
+      }),
+    ).toEqual({
+      ok: true,
+      value: {
+        epicId: "epic-1",
+        senderAgentId: "agent-1",
+        harnessId: "codex",
+      },
+    });
+  });
+
+  it("downgrades contextual agent.listHarnessModels through the host registry", () => {
+    expect(
+      downgradeRequestAcrossMajors(
+        hostRpcRegistry["agent.listHarnessModels"],
+        2,
+        1,
+        {
+          epicId: "epic-1",
+          senderAgentId: "agent-1",
+          harnessId: "codex",
+        },
+      ),
+    ).toEqual({
+      ok: true,
+      value: {
+        epicId: "epic-1",
+        senderAgentId: "agent-1",
+        harnessId: "codex",
+      },
+    });
+  });
+
+  it("rejects no-context agent.listHarnessModels v2.0 downgrades", () => {
+    expect(
+      agentListHarnessModelsDowngradeV2ToV1.downgradeRequest({
+        epicId: null,
+        senderAgentId: null,
+        harnessId: "codex",
+      }),
+    ).toMatchObject({
+      ok: false,
+      error: { code: "DOWNGRADE_UNSUPPORTED" },
+    });
+    expect(
+      agentListHarnessModelsDowngradeV2ToV1.downgradeRequest({
+        epicId: "epic-1",
+        senderAgentId: null,
+        harnessId: "codex",
+      }),
+    ).toMatchObject({
+      ok: false,
+      error: { code: "DOWNGRADE_UNSUPPORTED" },
+    });
+  });
+
+  it("rejects no-context agent.listHarnessModels registry downgrades", () => {
+    expect(
+      downgradeRequestAcrossMajors(
+        hostRpcRegistry["agent.listHarnessModels"],
+        2,
+        1,
+        {
+          epicId: null,
+          senderAgentId: null,
+          harnessId: "codex",
+        },
+      ),
+    ).toMatchObject({
+      ok: false,
+      error: { code: "DOWNGRADE_UNSUPPORTED" },
     });
   });
 
@@ -136,6 +253,7 @@ describe("agent host schemas", () => {
       }),
     ).toMatchObject({
       senderAgentId: "agent-1",
+      name: null,
       surface: null,
       harnessId: "claude",
       model: "opus-4.7",
@@ -244,6 +362,10 @@ describe("agent host schemas", () => {
       hostRpcRegistry["agent.listHarnessModels"][1].versions[0].contract
         .schemaVersion,
     ).toEqual({ major: 1, minor: 0 });
+    expect(
+      hostRpcRegistry["agent.listHarnessModels"][2].versions[0].contract
+        .schemaVersion,
+    ).toEqual({ major: 2, minor: 0 });
     expect(
       hostRpcRegistry["agent.list"][1].versions[0].contract.schemaVersion,
     ).toEqual({ major: 1, minor: 0 });

@@ -19,6 +19,7 @@ import { ALL_PERMISSION_MODES } from "@traycer/protocol/persistence/epic/foundat
 const CODEX_HARNESS: HarnessOption = {
   id: "codex",
   label: "Codex",
+  enabled: true,
   available: true,
   error: null,
   modes: ["gui", "tui"],
@@ -30,6 +31,7 @@ const CODEX_HARNESS: HarnessOption = {
 const CLAUDE_HARNESS: HarnessOption = {
   id: "claude",
   label: "Claude",
+  enabled: true,
   available: true,
   error: null,
   modes: ["gui", "tui"],
@@ -41,6 +43,7 @@ const CLAUDE_HARNESS: HarnessOption = {
 const OPENCODE_HARNESS: HarnessOption = {
   id: "opencode",
   label: "OpenCode",
+  enabled: true,
   available: true,
   error: null,
   modes: ["gui", "tui"],
@@ -52,6 +55,7 @@ const OPENCODE_HARNESS: HarnessOption = {
 const OPENROUTER_HARNESS: HarnessOption = {
   id: "openrouter",
   label: "OpenRouter",
+  enabled: true,
   available: true,
   error: null,
   modes: ["gui"],
@@ -63,6 +67,7 @@ const OPENROUTER_HARNESS: HarnessOption = {
 const KILOCODE_HARNESS: HarnessOption = {
   id: "kilocode",
   label: "Kilo Code",
+  enabled: true,
   available: true,
   error: null,
   modes: ["gui", "tui"],

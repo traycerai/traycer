@@ -26,7 +26,7 @@ import { useFocusEpicTerminalSession } from "@/components/epic-canvas/renderers/
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useTerminalListFor } from "@/hooks/terminal/use-terminal-list-for-query";
 import { useWorktreeRetrySetupFor } from "@/hooks/worktree/use-worktree-retry-setup-mutation";
-import { isVisibleTerminalSidebarSession } from "@/lib/terminals/terminal-session-filters";
+import { isVisibleRawTerminalSession } from "@/lib/terminals/terminal-session-filters";
 import { cn } from "@/lib/utils";
 import { LiveElapsed } from "./segment-elapsed";
 
@@ -141,11 +141,11 @@ export function SetupCardSegment(props: {
   const liveSessionIds = useMemo(() => {
     const ids = new Set<string>();
     for (const session of terminalList.data?.sessions ?? []) {
-      // `isVisibleTerminalSidebarSession` is the shared "session is openable"
+      // `isVisibleRawTerminalSession` is the shared "session is openable"
       // rule; reuse it so the card's liveness can't drift from the
       // sidebar/bootstrap definition (it includes a completed setup terminal
       // the host retains so its output stays reachable).
-      if (isVisibleTerminalSidebarSession(session)) ids.add(session.sessionId);
+      if (isVisibleRawTerminalSession(session)) ids.add(session.sessionId);
     }
     return ids;
   }, [terminalList.data]);

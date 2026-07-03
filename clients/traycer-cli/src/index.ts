@@ -6,12 +6,14 @@ import {
   CommanderError,
   type Command as CommanderCommand,
 } from "commander";
+import { AGENT_FACING_HARNESS_ID_LIST } from "@traycer/protocol/host/agent/shared";
 import { config } from "./config";
 import { buildCliMarkSourceCommand } from "./commands/cli-mark-source";
 import { buildCliReAnchorCommand } from "./commands/cli-re-anchor";
 import { buildCliUpgradeCommand } from "./commands/cli-upgrade";
 import { buildAgentCreateCommand } from "./commands/agent-create";
 import { buildAgentActivityFromHookCommand } from "./commands/agent-activity-from-hook";
+import { buildAgentListHarnessesCommand } from "./commands/agent-list-harnesses";
 import { buildAgentListHarnessModelsCommand } from "./commands/agent-list-harness-models";
 import { buildAgentListCommand } from "./commands/agent-list";
 import { buildAgentSelectionGuideCommand } from "./commands/agent-selection-guide";
@@ -86,6 +88,19 @@ export function extractActionPositionals(
       );
     }
     return [undefined];
+  });
+}
+
+function expectRequiredPositional(
+  value: string | undefined,
+  name: string,
+): string {
+  if (typeof value === "string") return value;
+  throw cliError({
+    code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+    message: `traycer: ${name} is required.`,
+    details: null,
+    exitCode: 1,
   });
 }
 
@@ -949,6 +964,7 @@ function registerWorktreeCommands(program: Command): void {
 function registerAgentCommands(program: Command): void {
   const cliSurface = resolveAgentCliSurface(readonlyEnv());
   const readonlyHidden = { hidden: cliSurface === "readonly" };
+  const harnessHelp = `Harness id: ${AGENT_FACING_HARNESS_ID_LIST}`;
   const agent = program
     .command("agent")
     .description("Agent inspection and communication for the calling agent");
@@ -988,10 +1004,7 @@ function registerAgentCommands(program: Command): void {
       )
       .option("--surface <surface>", "Child surface: 'gui' or 'tui'")
       .option("--name <name>", "Display name for the child agent")
-      .option(
-        "--harness <id>",
-        "Harness id: claude, codex, opencode, traycer, or cursor",
-      )
+      .option("--harness <id>", harnessHelp)
       .option("--model <id>", "Model id for the child agent")
       .option("--agent-mode <mode>", "Agent mode: regular or epic")
       .option(
@@ -1068,25 +1081,30 @@ function registerAgentCommands(program: Command): void {
 
   withRunner(
     agent
+      .command("list-harnesses", readonlyHidden)
+      .description("List enabled harnesses."),
+    () => buildAgentListHarnessesCommand(),
+  );
+
+  withRunner(
+    agent
       .command("list-harness-models", readonlyHidden)
-      .description(
-        "List the available models (and available params) for a harness.",
+      .description("List available models (and params) for one harness.")
+      .argument("<harness>", harnessHelp)
+      .option(
+        "--epic-id <id>",
+        "Optional epic context (defaults to $TRAYCER_EPIC_ID)",
       )
-      .argument(
-        "<harness>",
-        "Harness id: claude, codex, opencode, traycer, or cursor",
-      )
-      .option("--epic-id <id>", "Epic (defaults to $TRAYCER_EPIC_ID)")
       .option(
         "--sender-agent-id <id>",
-        "Calling agent (defaults to $TRAYCER_AGENT_ID)",
+        "Optional calling-agent context (defaults to $TRAYCER_AGENT_ID)",
       ),
     (opts, args) =>
       buildAgentListHarnessModelsCommand({
         epicId: typeof opts.epicId === "string" ? opts.epicId : null,
         senderAgentId:
           typeof opts.senderAgentId === "string" ? opts.senderAgentId : null,
-        harnessId: args[0] ?? "",
+        harnessId: expectRequiredPositional(args[0], "harness"),
       }),
   );
 

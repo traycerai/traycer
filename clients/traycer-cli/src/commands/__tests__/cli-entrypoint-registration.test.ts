@@ -209,6 +209,7 @@ describe("traycer CLI entrypoint registration", () => {
       expect(help).toContain("transcript [options]");
       expect(help).not.toContain("create [options]");
       expect(help).not.toContain("selection-guide [options]");
+      expect(help).not.toContain("list-harnesses [options]");
       expect(help).not.toContain("list-harness-models [options]");
       expect(help).not.toContain("send [options]");
       expect(help).not.toContain("inbox [options]");
@@ -220,6 +221,19 @@ describe("traycer CLI entrypoint registration", () => {
         process.env.TRAYCER_AGENT_CLI_SURFACE = originalSurface;
       }
     }
+  });
+
+  it("registers agent harness catalog commands with current harness help", () => {
+    const program = buildProgram();
+    const agent = expectCommand(program, ["agent"]);
+    const create = expectCommand(program, ["agent", "create"]);
+    const listHarnesses = expectCommand(program, ["agent", "list-harnesses"]);
+    const listModels = expectCommand(program, ["agent", "list-harness-models"]);
+
+    expect(create.helpInformation()).toContain("openrouter");
+    expect(findSubcommand(agent, "list-harnesses")).toBe(listHarnesses);
+    expect(listModels.helpInformation()).toContain("openrouter");
+    expect(listModels.helpInformation()).toContain("<harness>");
   });
 
   it("host free-port-and-restart exposes --pid and --port so Doctor's free-port fix can be invoked", () => {

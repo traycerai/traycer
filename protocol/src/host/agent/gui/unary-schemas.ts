@@ -29,6 +29,10 @@ export type HarnessSurface = z.infer<typeof harnessSurfaceSchema>;
 export const guiHarnessOptionSchema = z.object({
   id: guiHarnessIdSchema,
   label: z.string(),
+  // Controls whether the harness is included in downstream filtering and shown
+  // in the CLI. This is distinct from `available` and `availabilityPending`,
+  // which describe the current host-side availability probe state.
+  enabled: z.boolean().default(true),
   available: z.boolean(),
   error: z.string().nullable(),
   modes: z.array(harnessSurfaceSchema),

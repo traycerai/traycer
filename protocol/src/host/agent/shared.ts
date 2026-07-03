@@ -123,7 +123,7 @@ export function canParticipateInA2A(target: {
 // renderer routes to the right UI. Other RPCs address the agent by id and
 // resolve `surface` from storage; they do not carry it on the wire.
 
-export const agentFacingHarnessIdSchema = harnessIdSchema.extract([
+export const AGENT_FACING_HARNESS_IDS = [
   "claude",
   "codex",
   "opencode",
@@ -137,6 +137,12 @@ export const agentFacingHarnessIdSchema = harnessIdSchema.extract([
   "copilot",
   "kilocode",
   "openrouter",
+] as const;
+
+export const AGENT_FACING_HARNESS_ID_LIST = AGENT_FACING_HARNESS_IDS.join(", ");
+
+export const agentFacingHarnessIdSchema = harnessIdSchema.extract([
+  ...AGENT_FACING_HARNESS_IDS,
 ]);
 export type AgentFacingHarnessId = z.infer<typeof agentFacingHarnessIdSchema>;
 
@@ -319,13 +325,23 @@ export type AgentSelectionGuideGlobalResetResponse = z.infer<
   typeof agentSelectionGuideGlobalResetResponseSchema
 >;
 
-export const listHarnessModelsRequestSchema = z.object({
+export const listHarnessModelsRequestSchemaV10 = z.object({
   epicId: z.string(),
   senderAgentId: z.string(),
   harnessId: agentFacingHarnessIdSchema,
 });
+export type ListHarnessModelsRequestV10 = z.infer<
+  typeof listHarnessModelsRequestSchemaV10
+>;
+
+export const listHarnessModelsRequestSchemaV20 = z.object({
+  epicId: z.string().nullable().default(null),
+  senderAgentId: z.string().nullable().default(null),
+  harnessId: agentFacingHarnessIdSchema,
+});
+export const listHarnessModelsRequestSchema = listHarnessModelsRequestSchemaV20;
 export type ListHarnessModelsRequest = z.infer<
-  typeof listHarnessModelsRequestSchema
+  typeof listHarnessModelsRequestSchemaV20
 >;
 
 export const harnessModelSummarySchema = z.object({

@@ -470,6 +470,19 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
   );
 }
 
+// RIS ("\x1bc") as raw bytes, for prepending to a `Uint8Array` snapshot chunk
+// (`terminal.subscribe@1.2`+) - see `writerProxy`'s reset-before-replay
+// comment. ASCII-only, so this is the same 2 bytes either way.
+const RESET_ESCAPE_BYTES = new Uint8Array([0x1b, 0x63]);
+
+function prependResetEscape(chunk: string | Uint8Array): string | Uint8Array {
+  if (typeof chunk === "string") return `\x1bc${chunk}`;
+  const combined = new Uint8Array(RESET_ESCAPE_BYTES.length + chunk.length);
+  combined.set(RESET_ESCAPE_BYTES, 0);
+  combined.set(chunk, RESET_ESCAPE_BYTES.length);
+  return combined;
+}
+
 /**
  * Build the long-lived xterm engine for a session: `Terminal` + addons opened
  * into a detached container element that the registry keeps alive across host
@@ -590,18 +603,26 @@ function createXtermEntry(
       // - so the snapshot's OSC preamble then re-applies the native palette,
       // exactly like a fresh open. (We use the escape, not `term.reset()`, which
       // is unbound in this xterm build.) The first snapshot on a fresh engine
-      // skips this - nothing to clear. Prepended to the chunk so it parses
-      // in-order, ahead of the redraw, inside the replay-suppression guard.
-      const replay = hasReceivedContent ? `\x1bc${write.chunk}` : write.chunk;
+      // skips this - nothing to clear. Prepended to the chunk (string or, for
+      // a `@1.2` binary connection, `Uint8Array` - see `prependResetEscape`)
+      // so it parses in-order, ahead of the redraw, inside the
+      // replay-suppression guard.
+      const replay = hasReceivedContent
+        ? prependResetEscape(write.chunk)
+        : write.chunk;
       hasReceivedContent = true;
       snapshotReplayDepth += 1;
       term.write(replay, () => {
         snapshotReplayDepth = Math.max(0, snapshotReplayDepth - 1);
+        // Ack-credit (terminal.subscribe@1.1): report the ORIGINAL
+        // `write.chunk` length the host actually counted, not the
+        // longer `replay` payload this proxy prepended the reset escape to.
+        write.onAckable();
       });
       return;
     }
     hasReceivedContent = true;
-    term.write(write.chunk);
+    term.write(write.chunk, write.onAckable);
   };
 
   // Dedupe so the host isn't spammed with identical resize frames on every
