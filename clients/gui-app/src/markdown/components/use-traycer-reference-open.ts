@@ -22,6 +22,22 @@ export type TraycerReferenceOpenHandler =
   ((event: MouseEvent<HTMLElement>) => void) | null;
 
 /**
+ * What `useTraycerReferenceOpenHandler` resolves in a single render pass:
+ *
+ * - `onOpen` - the click handler (or `null` when the reference is not
+ *   openable, the single signal the chip uses to degrade to plain text).
+ * - `sameEpicNodeRef` - the resolved `EpicNodeRef` for a `same-epic-node`
+ *   target, `null` for `navigate` (cross-epic) and `none`. This is the ONLY
+ *   case a chip may become a drag source: drag eligibility is narrower than
+ *   click (which is also non-null for cross-epic navigation), so the resolved
+ *   ref is surfaced here for the chip to gate on.
+ */
+export interface TraycerReferenceOpenState {
+  readonly onOpen: TraycerReferenceOpenHandler;
+  readonly sameEpicNodeRef: EpicNodeRef | null;
+}
+
+/**
  * What a click on the reference should do, resolved once in render:
  *
  * - `none` - not openable (missing ids, no epic-session context, a same-epic
@@ -76,7 +92,7 @@ export function useTraycerReferenceOpenHandler(input: {
    * `false` (`traycer-epic`), the reference focuses the epic with no node.
    */
   readonly requiresNode: boolean;
-}): TraycerReferenceOpenHandler {
+}): TraycerReferenceOpenState {
   const handle = useMaybeOpenEpicHandle();
   const activeHostId = useReactiveActiveHostId();
   const navigate = useNavigate();
@@ -129,8 +145,12 @@ export function useTraycerReferenceOpenHandler(input: {
     [target, navigate],
   );
 
-  if (target.kind === "none") return null;
-  return handler;
+  // Only a resolved `same-epic-node` surfaces a ref; `navigate` and `none`
+  // yield `null`, so the chip can gate drag to the same-epic case alone.
+  const sameEpicNodeRef = target.kind === "same-epic-node" ? target.ref : null;
+
+  if (target.kind === "none") return { onOpen: null, sameEpicNodeRef: null };
+  return { onOpen: handler, sameEpicNodeRef };
 }
 
 /**
