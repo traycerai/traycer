@@ -22,6 +22,8 @@ import { buildAgentTranscriptCommand } from "./commands/agent-transcript";
 import { buildAgentInboxCommand } from "./commands/agent-inbox";
 import { buildWorkspaceListCommand } from "./commands/workspace-list";
 import { buildWorktreeCreateCommand } from "./commands/worktree-create";
+import { buildWorktreeListCommand } from "./commands/worktree-list";
+import { buildWorktreeDeleteCommand } from "./commands/worktree-delete";
 import {
   buildCommentsListCommand,
   buildCommentsSetStatusCommand,
@@ -908,9 +910,44 @@ function registerCommentsCommands(program: Command): void {
 }
 
 function registerWorktreeCommands(program: Command): void {
+  // `worktree delete` mutates on-disk state, so it is hidden in the readonly
+  // agent surface (same mechanism as `agent create`); `worktree list` is a
+  // read and stays available in both surfaces.
+  const deleteHidden = {
+    hidden: resolveAgentCliSurface(readonlyEnv()) === "readonly",
+  };
   const worktree = program
     .command("worktree")
-    .description("Create and inspect Git worktree paths");
+    .description("Create, inspect, and remove Git worktree paths");
+
+  withRunner(
+    worktree
+      .command("list")
+      .description(
+        "List every Traycer-managed worktree on this host (host-wide)",
+      )
+      .option(
+        "--include-activity",
+        "Probe each worktree for last-active time and branch ahead/behind/merged status (slower)",
+      ),
+    (opts) =>
+      buildWorktreeListCommand({
+        includeActivity: opts.includeActivity === true,
+      }),
+  );
+
+  withRunner(
+    worktree
+      .command("delete", deleteHidden)
+      .description(
+        "Remove a Traycer-managed worktree by path (runs its teardown script, streams output)",
+      )
+      .requiredOption("--path <path>", "Worktree path to remove"),
+    (opts) =>
+      buildWorktreeDeleteCommand({
+        worktreePath: typeof opts.path === "string" ? opts.path : "",
+      }),
+  );
 
   withRunner(
     worktree
