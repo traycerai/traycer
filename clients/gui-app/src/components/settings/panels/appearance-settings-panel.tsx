@@ -1,4 +1,3 @@
-import { useEffect, useState } from "react";
 import { RotateCcw } from "lucide-react";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { SettingsRow } from "@/components/settings/settings-row";
@@ -7,15 +6,21 @@ import { SettingsNumberInput } from "@/components/settings/controls/settings-num
 import { ThemeModeToggle } from "@/components/settings/controls/theme-mode-toggle";
 import { ThemePresetPicker } from "@/components/settings/controls/theme-preset-picker";
 import { Button } from "@/components/ui/button";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
-  SelectValue,
 } from "@/components/ui/select";
 import { useDesktopZoomBridge } from "@/hooks/runner/use-desktop-zoom-bridge";
-import { appLogger } from "@/lib/logger";
+import {
+  useRunnerZoomChangeSubscription,
+  useRunnerZoomPercentQuery,
+  useRunnerZoomResetMutation,
+  useRunnerZoomSetMutation,
+} from "@/hooks/runner/use-runner-zoom";
+import { formatZoomPercent } from "@/lib/windows/format-zoom-percent";
 import { Switch } from "@/components/ui/switch";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 
@@ -128,27 +133,11 @@ export function AppearanceSettingsPanel() {
 
 function DesktopZoomSettingsRow() {
   const zoom = useDesktopZoomBridge();
-  const [percent, setPercent] = useState<number | null>(null);
-
-  useEffect(() => {
-    if (zoom === null) return;
-    let disposed = false;
-    void zoom
-      .get()
-      .then((nextPercent) => {
-        if (!disposed) setPercent(nextPercent);
-      })
-      .catch((err) => {
-        appLogger.errorSummary("[zoom] settings read failed", {}, err);
-      });
-    const subscription = zoom.onChange((nextPercent) => {
-      setPercent(nextPercent);
-    });
-    return () => {
-      disposed = true;
-      subscription.dispose();
-    };
-  }, [zoom]);
+  const zoomQuery = useRunnerZoomPercentQuery(zoom);
+  const setMutation = useRunnerZoomSetMutation(zoom);
+  const resetMutation = useRunnerZoomResetMutation(zoom);
+  useRunnerZoomChangeSubscription(zoom);
+  const percent = zoomQuery.data ?? null;
 
   if (zoom === null) {
     return null;
@@ -165,13 +154,13 @@ function DesktopZoomSettingsRow() {
         control={
           <div className="flex items-center gap-2">
             <Select
-              value={percent === null ? undefined : String(percent)}
+              key={percent === null ? "loading" : String(percent)}
+              value={percent === null ? "loading" : String(percent)}
+              disabled={setMutation.isPending || resetMutation.isPending}
               onValueChange={(value) => {
                 const nextPercent = Number.parseInt(value, 10);
                 if (!Number.isFinite(nextPercent)) return;
-                void zoom.set(nextPercent).catch((err) => {
-                  appLogger.errorSummary("[zoom] settings set failed", {}, err);
-                });
+                setMutation.mutate(nextPercent);
               }}
             >
               <SelectTrigger
@@ -179,9 +168,16 @@ function DesktopZoomSettingsRow() {
                 aria-label="Display zoom"
                 className="w-[min(40vw,8rem)]"
               >
-                <SelectValue placeholder="Loading" />
+                <span data-slot="select-value">
+                  {percent === null ? "Loading" : formatZoomPercent(percent)}
+                </span>
               </SelectTrigger>
               <SelectContent>
+                {percent === null ? (
+                  <SelectItem value="loading" disabled>
+                    Loading
+                  </SelectItem>
+                ) : null}
                 {zoom.ladder.map((candidate) => (
                   <SelectItem key={candidate} value={String(candidate)}>
                     {formatZoomPercent(candidate)}
@@ -193,28 +189,26 @@ function DesktopZoomSettingsRow() {
               type="button"
               variant="ghost"
               size="sm"
+              disabled={resetMutation.isPending}
               onClick={() => {
-                void zoom.reset().catch((err) => {
-                  appLogger.errorSummary(
-                    "[zoom] settings reset failed",
-                    {},
-                    err,
-                  );
-                });
+                resetMutation.mutate();
               }}
             >
               <RotateCcw aria-hidden="true" />
               Reset
+              {resetMutation.isPending ? (
+                <AgentSpinningDots
+                  className="ml-1 text-current"
+                  testId="desktop-zoom-settings-reset-pending"
+                  variant="dots2"
+                />
+              ) : null}
             </Button>
           </div>
         }
       />
     </>
   );
-}
-
-function formatZoomPercent(percent: number): string {
-  return `${Math.round(percent)}%`;
 }
 
 /**

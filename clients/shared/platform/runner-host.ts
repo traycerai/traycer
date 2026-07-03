@@ -170,7 +170,11 @@ export interface IRunnerHost {
   readonly hostPicker: IHostPicker;
   readonly workspaceFolders: IWorkspaceFoldersHost;
   readonly fileDrops: IFileDropHost;
-  readonly zoom?: IZoomHost | null;
+  /**
+   * Desktop display-zoom surface. Present on desktop shells and `null` on
+   * shells that do not own a native app-scale control.
+   */
+  readonly zoom: IZoomHost | null;
 
   /**
    * Typed token-storage capability shared across shells. Always present -
@@ -300,6 +304,10 @@ export interface IFileDropHost {
   copyDroppedFilePaths(paths: readonly string[]): Promise<readonly string[]>;
 }
 
+/**
+ * Native app display-zoom capability. Desktop exposes this through Electron
+ * IPC; unsupported shells set `IRunnerHost.zoom` to `null`.
+ */
 export interface IZoomHost {
   readonly ladder: readonly number[];
   get(): Promise<number>;

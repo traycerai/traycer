@@ -1,5 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { DisplayTopology } from "../../app/screen-monitor";
 import type { JsonFileStore } from "../../app/json-file-store";
 import {
@@ -14,9 +16,13 @@ import {
   type WindowGeometryState,
 } from "../window-geometry";
 
+const testState = vi.hoisted(() => ({
+  userDataDir: "",
+}));
+
 vi.mock("electron", () => ({
   app: {
-    getPath: (): string => "/tmp/traycer-user-data",
+    getPath: (): string => testState.userDataDir,
   },
 }));
 
@@ -48,8 +54,6 @@ const SINGLE_DISPLAY_TOPOLOGY: DisplayTopology = {
     },
   ],
 };
-const MOCK_USER_DATA_DIR = "/tmp/traycer-user-data";
-
 class FakeGeometryWindow implements PersistedGeometryWindow {
   private readonly listeners = new Map<string, Set<() => void>>();
   private destroyed = false;
@@ -128,6 +132,17 @@ class MemoryGeometryStore implements JsonFileStore<WindowGeometryState> {
 }
 
 describe("window geometry", () => {
+  beforeEach(() => {
+    testState.userDataDir = mkdtempSync(join(tmpdir(), "traycer-user-data-"));
+  });
+
+  afterEach(() => {
+    if (testState.userDataDir !== "") {
+      rmSync(testState.userDataDir, { recursive: true, force: true });
+      testState.userDataDir = "";
+    }
+  });
+
   it("keeps first launch maximized with the default initial size", () => {
     expect(createFirstLaunchWindowPlacement()).toEqual({
       x: null,
@@ -312,19 +327,14 @@ describe("window geometry", () => {
   });
 
   it("treats non-finite persisted bounds as absent geometry", () => {
-    mkdirSync(MOCK_USER_DATA_DIR, { recursive: true });
-    try {
-      writeFileSync(
-        `${MOCK_USER_DATA_DIR}/window-geometry.json`,
-        `{"bounds":{"x":10,"y":20,"width":1e309,"height":800},"maximized":false}`,
-      );
+    writeFileSync(
+      join(testState.userDataDir, "window-geometry.json"),
+      `{"bounds":{"x":10,"y":20,"width":1e309,"height":800},"maximized":false}`,
+    );
 
-      expect(loadInitialWindowGeometrySync()).toEqual({
-        bounds: null,
-        maximized: false,
-      });
-    } finally {
-      rmSync(MOCK_USER_DATA_DIR, { recursive: true, force: true });
-    }
+    expect(loadInitialWindowGeometrySync()).toEqual({
+      bounds: null,
+      maximized: false,
+    });
   });
 });

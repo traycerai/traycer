@@ -5,6 +5,7 @@ import {
   createJsonFileStore,
   type JsonFileStore,
 } from "../app/json-file-store";
+import { log } from "../app/logger";
 import type { DisplaySnapshot, DisplayTopology } from "../app/screen-monitor";
 import { initialWindowSize, minimumWindowSize } from "./window-layout";
 
@@ -78,7 +79,10 @@ export function loadInitialWindowGeometrySync(): WindowGeometryState {
   try {
     const raw = readFileSync(storePath(), "utf8");
     return parseWindowGeometryState(JSON.parse(raw));
-  } catch {
+  } catch (err) {
+    if (!hasErrorCode(err, "ENOENT")) {
+      log.warn("[window-geometry] load failed", { filePath: storePath(), err });
+    }
     return EMPTY_GEOMETRY_STATE;
   }
 }
@@ -433,6 +437,10 @@ function isValidBounds(bounds: WindowGeometryBounds): boolean {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasErrorCode(error: unknown, code: string): boolean {
+  return isRecord(error) && error.code === code;
 }
 
 function storePath(): string {

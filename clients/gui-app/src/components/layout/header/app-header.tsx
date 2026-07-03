@@ -88,19 +88,16 @@ export function AppHeader(props: AppHeaderProps): ReactNode {
       >
         {showTabStrip ? <TabStrip /> : null}
       </div>
-      {showTabStrip ? (
-        <div
-          aria-hidden
-          className="relative z-10 hidden h-full shrink-0 basis-[clamp(2rem,6vw,6rem)] md:block"
-          style={framelessDesktop ? DRAG_STYLE : undefined}
-        />
-      ) : (
-        <div
-          aria-hidden
-          className="relative z-10 h-full min-w-0 flex-1"
-          style={framelessDesktop ? DRAG_STYLE : undefined}
-        />
-      )}
+      <div
+        aria-hidden
+        className={cn(
+          "relative z-10 h-full",
+          showTabStrip
+            ? "hidden shrink-0 basis-[clamp(2rem,6vw,6rem)] md:block"
+            : "min-w-0 flex-1",
+        )}
+        style={framelessDesktop ? DRAG_STYLE : undefined}
+      />
       <div
         className="relative z-10 flex shrink-0 items-center gap-2"
         style={framelessDesktop ? NO_DRAG_STYLE : undefined}

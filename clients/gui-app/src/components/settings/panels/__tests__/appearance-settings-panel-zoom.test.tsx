@@ -1,5 +1,7 @@
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ReactNode } from "react";
 import { AppearanceSettingsPanel } from "@/components/settings/panels/appearance-settings-panel";
 import type { DesktopZoomBridge } from "@/lib/windows/types";
 
@@ -8,6 +10,7 @@ const zoomState: {
 } = {
   bridge: null,
 };
+let queryClient: QueryClient;
 
 vi.mock("@/hooks/runner/use-desktop-zoom-bridge", () => ({
   useDesktopZoomBridge: () => zoomState.bridge,
@@ -41,35 +44,61 @@ class FakeZoomBridge implements DesktopZoomBridge {
       handler(percent);
     }
   }
+
+  listenerCount(): number {
+    return this.handlers.size;
+  }
 }
 
 describe("<AppearanceSettingsPanel /> zoom control", () => {
   beforeEach(() => {
     zoomState.bridge = new FakeZoomBridge();
+    queryClient = createQueryClient();
   });
 
   afterEach(() => {
+    queryClient.clear();
     cleanup();
     zoomState.bridge = null;
   });
 
   it("renders the desktop Display zoom row and reflects live changes", async () => {
     const bridge = zoomState.bridge;
-    render(<AppearanceSettingsPanel />);
+    renderWithQueryClient(<AppearanceSettingsPanel />);
 
     expect(await screen.findByText("100%")).toBeTruthy();
+    await waitFor(() => {
+      expect(bridge?.listenerCount()).toBe(1);
+    });
 
     act(() => {
       bridge?.emit(125);
     });
 
-    expect(screen.getByText("125%")).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByText("125%")).toBeTruthy();
+    });
   });
 
   it("hides the Display zoom row without the desktop bridge", () => {
     zoomState.bridge = null;
-    render(<AppearanceSettingsPanel />);
+    renderWithQueryClient(<AppearanceSettingsPanel />);
 
     expect(screen.queryByLabelText("Display zoom")).toBeNull();
   });
 });
+
+function createQueryClient(): QueryClient {
+  return new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  });
+}
+
+function renderWithQueryClient(children: ReactNode): void {
+  render(
+    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>,
+  );
+}

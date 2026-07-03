@@ -79,6 +79,32 @@ describe("registerZoomIpc", () => {
     await controller.setZoomPercent(125);
     expect(fanOut).toHaveBeenCalledTimes(4);
   });
+
+  it("rejects malformed zoom set payloads", async () => {
+    const controller = new FakeZoomController();
+    const handlers = new Map<string, InvokeHandler>();
+    const bridge: ZoomIpcBridge = {
+      zoomController: controller,
+      disposeFns: [],
+      handleInvoke: (channel, handler) => {
+        handlers.set(channel, handler);
+      },
+      fanOut: vi.fn(),
+    };
+
+    registerZoomIpc(bridge);
+
+    await expect(
+      Promise.resolve().then(() =>
+        handlers.get(RunnerHostInvoke.zoomSet)?.({}, "125"),
+      ),
+    ).rejects.toThrow("Zoom percent must be a finite number");
+    await expect(
+      Promise.resolve().then(() =>
+        handlers.get(RunnerHostInvoke.zoomSet)?.({}, Number.POSITIVE_INFINITY),
+      ),
+    ).rejects.toThrow("Zoom percent must be a finite number");
+  });
 });
 
 function normalizeTestPercent(percent: number): ZoomPercent {

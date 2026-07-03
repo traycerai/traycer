@@ -243,7 +243,7 @@ export interface RunnerIpcOptions {
   readonly authRedirectUri: string | null;
   readonly tray: DesktopTrayController | null;
   readonly window: IpcManagedWindow;
-  readonly zoomController?: IpcZoomController;
+  readonly zoomController: IpcZoomController | undefined;
 }
 
 export interface RunnerIpcRegistryOptions {
@@ -256,7 +256,7 @@ export interface RunnerIpcRegistryOptions {
   readonly perWindowState: IpcPerWindowState;
   readonly authSession: IpcDesktopAuthSession;
   readonly support?: IpcSupportService;
-  readonly zoomController?: IpcZoomController;
+  readonly zoomController: IpcZoomController | undefined;
 }
 
 export type RunnerIpcBridgeOptions =

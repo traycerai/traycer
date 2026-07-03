@@ -13,7 +13,7 @@ export interface ZoomBridgeSurface {
   zoom: {
     readonly ladder: readonly ZoomPercent[];
     get(): Promise<ZoomPercent>;
-    set(percent: number): Promise<ZoomPercent>;
+    set(percent: ZoomPercent): Promise<ZoomPercent>;
     stepIn(): Promise<ZoomPercent>;
     stepOut(): Promise<ZoomPercent>;
     reset(): Promise<ZoomPercent>;

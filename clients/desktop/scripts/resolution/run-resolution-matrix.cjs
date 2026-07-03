@@ -20,6 +20,8 @@ const {
 } = require("./helpers.cjs");
 
 const workspaceRoot = path.resolve(__dirname, "..", "..");
+// Keep in sync with the header tab Tailwind sizing in
+// clients/gui-app/src/components/layout/tabs/tab-strip-item.tsx (`w-56 max-w-56`).
 const TAB_WIDTH_CAP_PX = 224;
 const ZOOM_TOLERANCE = 0.05;
 
@@ -103,9 +105,17 @@ async function main() {
   await mkdir(outputDir, { recursive: true });
 
   const results = [];
+  const errors = [];
   for (const scenario of matrix) {
     console.log(`[resolution] running ${scenario.name}`);
-    results.push(await runScenario(scenario, outputDir));
+    try {
+      results.push(await runScenario(scenario, outputDir));
+    } catch (err) {
+      errors.push({
+        scenario: scenario.name,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   const manifestPath = path.join(outputDir, "manifest.json");
@@ -115,16 +125,19 @@ async function main() {
       {
         generatedAt: new Date().toISOString(),
         scenarios: results,
+        errors,
       },
       null,
       2,
     ),
   );
   console.log(`[resolution] wrote ${manifestPath}`);
+  if (errors.length > 0) {
+    throw new Error(`${errors.length} resolution scenario(s) failed`);
+  }
 }
 
 async function runScenario(scenario, outputDir) {
-  const port = await getFreePort();
   const profileDir = await mkdtemp(
     path.join(os.tmpdir(), `traycer-resolution-${slug(scenario.name)}-`),
   );
@@ -208,10 +221,16 @@ async function runElectronPass(
   child.stderr.on("data", (chunk) => {
     stderr.push(chunk.toString());
   });
+  const spawnFailure = new Promise((_, reject) => {
+    child.once("error", reject);
+  });
 
   let client = null;
   try {
-    const target = await waitForInspectablePage(port, 30_000);
+    const target = await Promise.race([
+      waitForInspectablePage(port, 30_000),
+      spawnFailure,
+    ]);
     client = await connectCdp(target.webSocketDebuggerUrl);
     await waitForRendererReady(client, 30_000);
     await applyResolutionViewport(client, scenario);

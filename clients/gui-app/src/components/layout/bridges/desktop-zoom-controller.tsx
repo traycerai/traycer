@@ -1,9 +1,15 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { useDesktopZoomBridge } from "@/hooks/runner/use-desktop-zoom-bridge";
-import { appLogger } from "@/lib/logger";
+import {
+  useRunnerZoomResetMutation,
+  useRunnerZoomStepInMutation,
+  useRunnerZoomStepOutMutation,
+} from "@/hooks/runner/use-runner-zoom";
 import { registerDynamicActionHandler } from "@/lib/keybindings/dispatch";
+import { formatZoomPercent } from "@/lib/windows/format-zoom-percent";
 import type { DesktopZoomBridge } from "@/lib/windows/types";
 
 const INDICATOR_DISMISS_MS = 2_000;
@@ -14,30 +20,46 @@ const PINCH_STEP_RATIO = 1.08;
 
 export function DesktopZoomController() {
   const zoom = useDesktopZoomBridge();
-  useZoomKeybindings(zoom);
-  useZoomGestures(zoom);
-  return <DesktopZoomIndicator zoom={zoom} />;
+  const stepInMutation = useRunnerZoomStepInMutation(zoom);
+  const stepOutMutation = useRunnerZoomStepOutMutation(zoom);
+  const resetMutation = useRunnerZoomResetMutation(zoom);
+  const actions = useMemo<ZoomActions>(
+    () => ({
+      stepIn: () => stepInMutation.mutateAsync(),
+      stepOut: () => stepOutMutation.mutateAsync(),
+      reset: () => resetMutation.mutateAsync(),
+      resetPending: resetMutation.isPending,
+    }),
+    [resetMutation, stepInMutation, stepOutMutation],
+  );
+  useZoomKeybindings(zoom, actions);
+  useZoomGestures(zoom, actions);
+  return <DesktopZoomIndicator zoom={zoom} actions={actions} />;
 }
 
-function useZoomKeybindings(zoom: DesktopZoomBridge | null): void {
+interface ZoomActions {
+  stepIn(): Promise<number>;
+  stepOut(): Promise<number>;
+  reset(): Promise<number>;
+  readonly resetPending: boolean;
+}
+
+function useZoomKeybindings(
+  zoom: DesktopZoomBridge | null,
+  actions: ZoomActions,
+): void {
   useEffect(() => {
     if (zoom === null) return;
     const unregisterIn = registerDynamicActionHandler("app.zoom.in", () => {
-      void zoom.stepIn().catch((err) => {
-        appLogger.errorSummary("[zoom] keybinding zoom in failed", {}, err);
-      });
+      void actions.stepIn().catch(() => undefined);
     });
     const unregisterOut = registerDynamicActionHandler("app.zoom.out", () => {
-      void zoom.stepOut().catch((err) => {
-        appLogger.errorSummary("[zoom] keybinding zoom out failed", {}, err);
-      });
+      void actions.stepOut().catch(() => undefined);
     });
     const unregisterReset = registerDynamicActionHandler(
       "app.zoom.reset",
       () => {
-        void zoom.reset().catch((err) => {
-          appLogger.errorSummary("[zoom] keybinding reset failed", {}, err);
-        });
+        void actions.reset().catch(() => undefined);
       },
     );
     return () => {
@@ -45,10 +67,13 @@ function useZoomKeybindings(zoom: DesktopZoomBridge | null): void {
       unregisterOut();
       unregisterReset();
     };
-  }, [zoom]);
+  }, [actions, zoom]);
 }
 
-function useZoomGestures(zoom: DesktopZoomBridge | null): void {
+function useZoomGestures(
+  zoom: DesktopZoomBridge | null,
+  actions: ZoomActions,
+): void {
   const pendingWheelDeltaRef = useRef(0);
   const previousGestureScaleRef = useRef(1);
   const queueRef = useRef<Promise<void> | null>(null);
@@ -62,11 +87,9 @@ function useZoomGestures(zoom: DesktopZoomBridge | null): void {
     const enqueue = (direction: 1 | -1) => {
       const currentQueue = queueRef.current ?? Promise.resolve();
       queueRef.current = currentQueue
-        .then(() => (direction > 0 ? zoom.stepIn() : zoom.stepOut()))
+        .then(() => (direction > 0 ? actions.stepIn() : actions.stepOut()))
         .then(() => undefined)
-        .catch((err) => {
-          appLogger.errorSummary("[zoom] gesture step failed", {}, err);
-        });
+        .catch(() => undefined);
     };
 
     const handleWheel = (event: WheelEvent) => {
@@ -126,29 +149,24 @@ function useZoomGestures(zoom: DesktopZoomBridge | null): void {
         capture: true,
       });
     };
-  }, [zoom]);
+  }, [actions, zoom]);
 }
 
 function DesktopZoomIndicator(props: {
   readonly zoom: DesktopZoomBridge | null;
+  readonly actions: ZoomActions;
 }) {
-  const { zoom } = props;
+  const { actions, zoom } = props;
   const [percent, setPercent] = useState<number | null>(null);
   const dismissTimerRef = useRef<number | null>(null);
-  const awaitingInitialSyncRef = useRef(true);
 
   useEffect(() => {
-    awaitingInitialSyncRef.current = true;
     if (dismissTimerRef.current !== null) {
       window.clearTimeout(dismissTimerRef.current);
       dismissTimerRef.current = null;
     }
     if (zoom === null) return;
     const subscription = zoom.onChange((nextPercent) => {
-      if (awaitingInitialSyncRef.current) {
-        awaitingInitialSyncRef.current = false;
-        return;
-      }
       setPercent(nextPercent);
       if (dismissTimerRef.current !== null) {
         window.clearTimeout(dismissTimerRef.current);
@@ -189,14 +207,20 @@ function DesktopZoomIndicator(props: {
         variant="outline"
         size="sm"
         className="h-10 rounded-md border-border bg-popover px-4 text-popover-foreground shadow-lg hover:bg-accent hover:text-accent-foreground"
+        disabled={actions.resetPending}
         onClick={() => {
-          void zoom.reset().catch((err) => {
-            appLogger.errorSummary("[zoom] indicator reset failed", {}, err);
-          });
+          void actions.reset().catch(() => undefined);
         }}
       >
         <RotateCcw aria-hidden="true" />
         Reset to 100%
+        {actions.resetPending ? (
+          <AgentSpinningDots
+            className="ml-1 text-current"
+            testId="desktop-zoom-reset-pending"
+            variant="dots2"
+          />
+        ) : null}
       </Button>
     </div>
   );
@@ -215,8 +239,4 @@ function wheelDeltaToPixels(event: WheelEvent): number {
 function readGestureScale(event: Event): number | null {
   const scale: unknown = Reflect.get(event, "scale");
   return typeof scale === "number" && Number.isFinite(scale) ? scale : null;
-}
-
-function formatZoomPercent(percent: number): string {
-  return `${Math.round(percent)}%`;
 }

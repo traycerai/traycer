@@ -335,6 +335,10 @@ describe("loadMainWindow", () => {
         minHeight: 600,
       }),
     ]);
+
+    electronState.browserWindows[0].readyToShow();
+
+    expect(electronState.browserWindows[0].maximizeCalls).toBe(0);
   });
 
   it("creates maximized restored windows at their remembered normal bounds", () => {

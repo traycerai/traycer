@@ -473,6 +473,8 @@ function HeaderTabMotionFrame(props: {
         scale: props.isDragging ? 0.96 : 1,
       }}
       transition={HEADER_TAB_LAYOUT_TRANSITION}
+      // Keep the 14rem cap in sync with TAB_WIDTH_CAP_PX in the desktop
+      // resolution harness.
       className="relative flex w-56 min-w-[120px] max-w-56 flex-[1_1_14rem] items-end [container-type:inline-size]"
     >
       {props.children}

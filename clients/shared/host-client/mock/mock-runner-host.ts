@@ -118,6 +118,7 @@ export class MockRunnerHost implements IRunnerHost {
   readonly migration: null = null;
   readonly hostManagement: IHostManagement | null;
   readonly hostTray: null = null;
+  readonly zoom: null = null;
   readonly deviceFlow: MockDeviceFlowHost = new MockDeviceFlowHost();
 
   /**

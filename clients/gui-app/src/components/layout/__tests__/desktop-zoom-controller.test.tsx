@@ -1,5 +1,13 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ReactNode } from "react";
 import { DesktopZoomController } from "@/components/layout/bridges/desktop-zoom-controller";
 import {
   dispatchAction,
@@ -12,6 +20,7 @@ const zoomState: {
 } = {
   bridge: null,
 };
+let queryClient: QueryClient;
 
 vi.mock("@/hooks/runner/use-desktop-zoom-bridge", () => ({
   useDesktopZoomBridge: () => zoomState.bridge,
@@ -67,20 +76,27 @@ describe("<DesktopZoomController />", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     zoomState.bridge = new FakeZoomBridge();
+    queryClient = createQueryClient();
   });
 
   afterEach(() => {
+    queryClient.clear();
+    cleanup();
     vi.useRealTimers();
     zoomState.bridge = null;
   });
 
-  it("registers dynamic zoom keybinding handlers", () => {
+  it("registers dynamic zoom keybinding handlers", async () => {
     const bridge = zoomState.bridge;
-    render(<DesktopZoomController />);
+    renderWithQueryClient(<DesktopZoomController />);
 
     expect(dispatchAction("app.zoom.in", router)).toBe(true);
     expect(dispatchAction("app.zoom.out", router)).toBe(true);
     expect(dispatchAction("app.zoom.reset", router)).toBe(true);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
 
     expect(bridge?.stepIn).toHaveBeenCalledTimes(1);
     expect(bridge?.stepOut).toHaveBeenCalledTimes(1);
@@ -89,7 +105,7 @@ describe("<DesktopZoomController />", () => {
 
   it("steps ctrl-wheel gestures through the zoom bridge", async () => {
     const bridge = zoomState.bridge;
-    render(<DesktopZoomController />);
+    renderWithQueryClient(<DesktopZoomController />);
 
     fireEvent.wheel(window, { ctrlKey: true, deltaY: -100, deltaMode: 0 });
     fireEvent.wheel(window, { ctrlKey: true, deltaY: 100, deltaMode: 0 });
@@ -103,23 +119,22 @@ describe("<DesktopZoomController />", () => {
     expect(bridge?.stepOut).toHaveBeenCalledTimes(1);
   });
 
-  it("suppresses the initial zoom sync indicator", () => {
+  it("shows the first observed zoom change", () => {
     const bridge = zoomState.bridge;
-    render(<DesktopZoomController />);
+    renderWithQueryClient(<DesktopZoomController />);
 
     act(() => {
       bridge?.emit(125);
     });
 
-    expect(screen.queryByTestId("desktop-zoom-indicator")).toBeNull();
+    expect(screen.getByTestId("desktop-zoom-percent").textContent).toBe("125%");
   });
 
-  it("shows a transient indicator and reset affordance on user zoom changes", () => {
+  it("shows a transient indicator and reset affordance on user zoom changes", async () => {
     const bridge = zoomState.bridge;
-    render(<DesktopZoomController />);
+    renderWithQueryClient(<DesktopZoomController />);
 
     act(() => {
-      bridge?.emit(100);
       bridge?.emit(125);
     });
 
@@ -134,6 +149,9 @@ describe("<DesktopZoomController />", () => {
     expect(percent.textContent).toBe("125%");
 
     fireEvent.click(resetButton);
+    await act(async () => {
+      await Promise.resolve();
+    });
     expect(bridge?.reset).toHaveBeenCalledTimes(1);
 
     act(() => {
@@ -143,3 +161,18 @@ describe("<DesktopZoomController />", () => {
     expect(screen.queryByTestId("desktop-zoom-indicator")).toBeNull();
   });
 });
+
+function createQueryClient(): QueryClient {
+  return new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  });
+}
+
+function renderWithQueryClient(children: ReactNode): void {
+  render(
+    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>,
+  );
+}
