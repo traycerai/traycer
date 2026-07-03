@@ -86,7 +86,7 @@ must be added in BOTH places - the route file under `src/routes/` AND the modal
     option renders in its own typeface via inline `style={{ fontFamily }}`.
     When the value is `null` the trigger shows the default label muted; a
     ghost reset button (`RotateCcw`) occupies a permanently-reserved `size-7`
-    gutter to the *left* of the trigger and appears once a font is chosen. The
+    gutter to the _left_ of the trigger and appears once a font is chosen. The
     reserved left gutter means the trigger's right edge stays flush with every
     other control in the panel and never shifts as the reset toggles. All three
     rows offer the full installed-font list - no monospace pre-filter, because
