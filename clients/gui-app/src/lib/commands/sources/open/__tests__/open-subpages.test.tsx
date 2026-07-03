@@ -150,7 +150,13 @@ vi.mock("@/hooks/terminal/use-terminal-list-query", () => ({
   useTerminalList: () => ({
     data: {
       sessions: [
-        { sessionId: "term-1", title: "shell one", cwd: "/work/repo" },
+        {
+          sessionId: "term-1",
+          sessionKind: "terminal",
+          status: "running",
+          title: "shell one",
+          cwd: "/work/repo",
+        },
       ],
     },
   }),

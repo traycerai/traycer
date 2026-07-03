@@ -13,7 +13,9 @@
  */
 import {
   ARTIFACT_TAB_DND_TYPE,
+  CHAT_ARTIFACT_DND_TYPE,
   SIDEBAR_NODE_DND_TYPE,
+  readEpicCanvasDragSourceData,
   readEpicCanvasDropTargetData,
   type EpicCanvasDragSourceData,
   type PointLike,
@@ -71,9 +73,27 @@ import {
   type DragMoveEvent,
   type DragOverEvent,
   type DragStartEvent,
+  type Modifier,
 } from "@dnd-kit/core";
+import { snapCenterToCursor } from "@dnd-kit/modifiers";
 import { useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, type ReactNode } from "react";
+
+/**
+ * A chat-artifact card is the full width of the chat column, so dnd-kit's
+ * default overlay anchoring (chip top-left pinned to the dragged node's
+ * top-left) leaves the chip far from the pointer when the row is grabbed
+ * anywhere but its top-left corner. Center the overlay chip on the cursor for
+ * THIS source only - every other source (sidebar rows, tabs, tiles, rail items)
+ * keeps its grab-anchored overlay. Reuses dnd-kit's official
+ * `snapCenterToCursor`; the wrapper only gates which source it runs for.
+ */
+const snapChatArtifactChipToCursor: Modifier = (args) => {
+  const source = readEpicCanvasDragSourceData(args.active?.data.current);
+  return source?.kind === CHAT_ARTIFACT_DND_TYPE
+    ? snapCenterToCursor(args)
+    : args.transform;
+};
 
 function readOverRect(
   event: DragMoveEvent | DragOverEvent | DragEndEvent,
@@ -347,7 +367,10 @@ export function RootDndProvider(props: RootDndProviderProps) {
       onDragCancel={handleDragCancel}
     >
       {props.children}
-      <DragOverlay dropAnimation={null}>
+      <DragOverlay
+        dropAnimation={null}
+        modifiers={[snapChatArtifactChipToCursor]}
+      >
         <EpicRootDragOverlayContent />
       </DragOverlay>
     </DndContext>

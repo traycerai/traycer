@@ -48,6 +48,12 @@ export interface MenuWindowRegistry {
   off(event: "change", listener: () => void): void;
 }
 
+export interface MenuZoomController {
+  zoomIn(): Promise<number>;
+  zoomOut(): Promise<number>;
+  reset(): Promise<number>;
+}
+
 export interface MenuControllerOptions {
   readonly appName: string;
   readonly platform: NodeJS.Platform;
@@ -56,6 +62,7 @@ export interface MenuControllerOptions {
   readonly authSession: IpcDesktopAuthSession;
   readonly perWindowState: IpcPerWindowState;
   readonly tray: DesktopTrayController | null;
+  readonly zoomController: MenuZoomController;
   readonly dispatchRendererCommand: (command: MenuCommandId) => boolean;
   readonly checkForUpdates: () => Promise<void>;
 }
@@ -271,6 +278,24 @@ export class MenuController {
       }
       void this.options.windowRegistry.minimizeById(windowId).catch((err) => {
         log.warn("[menu] window.minimizeWindow failed", err);
+      });
+      return;
+    }
+    if (command === "view.zoomIn") {
+      void this.options.zoomController.zoomIn().catch((err) => {
+        log.warn("[menu] view.zoomIn failed", err);
+      });
+      return;
+    }
+    if (command === "view.zoomOut") {
+      void this.options.zoomController.zoomOut().catch((err) => {
+        log.warn("[menu] view.zoomOut failed", err);
+      });
+      return;
+    }
+    if (command === "view.resetZoom") {
+      void this.options.zoomController.reset().catch((err) => {
+        log.warn("[menu] view.resetZoom failed", err);
       });
       return;
     }

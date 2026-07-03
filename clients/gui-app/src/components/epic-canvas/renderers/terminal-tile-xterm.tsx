@@ -22,6 +22,10 @@ import { useRegisterTileFindAdapter } from "@/components/epic-canvas/tile-find/t
 import { isMac } from "@/lib/keybindings/platform";
 import { translateLineEditChord } from "@/lib/terminal-line-edit";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import {
+  DEFAULT_MONO_FONT_STACK,
+  buildFontFamilyValue,
+} from "@/lib/default-font-stacks";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useTerminalTheme } from "@/lib/terminal-theme";
 import { scheduleAtlasClear } from "@/lib/terminal-theme-scheduler";
@@ -63,24 +67,25 @@ interface XtermInitialOptions extends ITerminalOptions {
   };
 }
 
-const FALLBACK_FONT_FAMILY =
-  "Menlo, Monaco, 'SF Mono', 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace";
-
 const TERMINAL_DRAG_PATH_ESCAPE_PATTERN = /([\\\s!"#$&'()*;<>?[\]^`{|}])/g;
 const getEmptyFindTargetId = (): string | null => null;
 const ignoreSearchResults = (): void => {};
 
 // xterm measures glyph cell width on a hidden canvas using the configured
-// `fontFamily`. CSS variables don't resolve in that measurement pass, so we
-// resolve `--traycer-font-mono` to its concrete CSS string here at mount,
-// fall back to a system mono stack if the variable is unset, and pin
-// `letterSpacing` / `lineHeight` on the constructed Terminal so paint and
+// `fontFamily`, so CSS variables (which don't resolve in that measurement
+// pass) are not usable here. Instead the effective terminal font is built
+// directly from settings-store values against the same default mono stack
+// `theme-provider.tsx` uses for `--traycer-font-mono` - `letterSpacing` /
+// `lineHeight` are pinned on the constructed Terminal so paint and
 // measurement agree.
-function resolveFontFamily(doc: Document): string {
-  const raw = getComputedStyle(doc.documentElement)
-    .getPropertyValue("--traycer-font-mono")
-    .trim();
-  return raw.length > 0 ? raw : FALLBACK_FONT_FAMILY;
+function resolveEffectiveFontFamily(
+  terminalFontFamily: string | null,
+  codeFontFamily: string | null,
+): string {
+  return buildFontFamilyValue(
+    terminalFontFamily ?? codeFontFamily,
+    DEFAULT_MONO_FONT_STACK,
+  );
 }
 
 export interface TerminalXtermHostProps {
@@ -172,7 +177,14 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
   // reattached engine keeps its already-synced options.
   const theme = useTerminalTheme();
   const codeFontSize = useSettingsStore((s) => s.codeFontSize);
-  const fontFamily = useMemo(() => resolveFontFamily(document), []);
+  const terminalFontSize = useSettingsStore((s) => s.terminalFontSize);
+  const codeFontFamily = useSettingsStore((s) => s.codeFontFamily);
+  const terminalFontFamily = useSettingsStore((s) => s.terminalFontFamily);
+  const effectiveFontSize = terminalFontSize ?? codeFontSize;
+  const fontFamily = resolveEffectiveFontFamily(
+    terminalFontFamily,
+    codeFontFamily,
+  );
   const runnerHost = useRunnerHost();
   // Inactive panes unregister global find ownership. They stay mounted, but
   // app-level find should only target the visible terminal.
@@ -210,7 +222,7 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
     allowProposedApi: true,
     scrollback: 5000,
     fontFamily,
-    fontSize: codeFontSize,
+    fontSize: effectiveFontSize,
     letterSpacing: 0,
     lineHeight: 1,
     theme,
@@ -345,7 +357,7 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
     controlsRef,
     canvasRef,
     theme,
-    codeFontSize,
+    fontSize: effectiveFontSize,
     fontFamily,
   });
   useVisibleTerminalRepair({
@@ -1000,12 +1012,12 @@ interface TerminalAppearanceSyncInput {
   readonly controlsRef: RefObject<XtermHostControls | null>;
   readonly canvasRef: RefObject<CanvasAddon | null>;
   readonly theme: ITerminalOptions["theme"];
-  readonly codeFontSize: number;
+  readonly fontSize: number;
   readonly fontFamily: string;
 }
 
 function useTerminalAppearanceSync(input: TerminalAppearanceSyncInput): void {
-  const { termRef, controlsRef, canvasRef, theme, codeFontSize, fontFamily } =
+  const { termRef, controlsRef, canvasRef, theme, fontSize, fontFamily } =
     input;
 
   // Live theme switching: rebuild the xterm palette when the resolved
@@ -1020,13 +1032,14 @@ function useTerminalAppearanceSync(input: TerminalAppearanceSyncInput): void {
     scheduleAtlasClear(term, canvasRef.current);
   }, [termRef, theme, canvasRef]);
 
-  // Live font sync: codeFontSize is user-controlled in Settings; the mono
-  // font family is captured at mount via `useMemo([])` and stable for the
-  // tile lifetime, so this effect mainly tracks the size slider.
+  // Live font sync: `fontSize`/`fontFamily` are the effective terminal
+  // values - a Settings → Terminal override when set, else the Settings →
+  // Code value/font (see `resolveEffectiveFontFamily`) - so this effect
+  // tracks both the size slider and any font-family change.
   useLayoutEffect(() => {
     const term = termRef.current;
     if (term === null) return;
-    term.options.fontSize = codeFontSize;
+    term.options.fontSize = fontSize;
     term.options.fontFamily = fontFamily;
     scheduleAtlasClear(term, canvasRef.current);
     // A font/size change changes the cell box, so the grid must refit. Route it
@@ -1035,7 +1048,7 @@ function useTerminalAppearanceSync(input: TerminalAppearanceSyncInput): void {
     // renderer hasn't re-measured cells yet this proposes nothing; the onRender
     // propose loop refits on the next frame.
     controlsRef.current?.fitToContainer();
-  }, [codeFontSize, controlsRef, fontFamily, termRef, canvasRef]);
+  }, [fontSize, controlsRef, fontFamily, termRef, canvasRef]);
 }
 
 function useVisibleTerminalRepair(input: {

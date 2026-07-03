@@ -15,6 +15,15 @@ import { safelyOpenExternal, installNavigationGuard } from "../app/security";
 import { installContextMenu } from "../app/spell-check";
 import { installResponsivenessListeners } from "../app/responsiveness";
 import { buildAppUrl } from "../app/app-protocol";
+import { minimumWindowSize } from "./window-layout";
+import {
+  placementToBrowserWindowBounds,
+  type WindowGeometryPlacement,
+} from "./window-geometry";
+import {
+  readResolutionTestWindowConfig,
+  shouldUseBuiltRendererForResolutionTest,
+} from "./resolution-test-env";
 
 // Vite dev server served by the `make dev-desktop` orchestrator.
 const DEV_RENDERER_URL = "http://localhost:5173";
@@ -24,6 +33,8 @@ export interface MainWindowOptions {
   readonly preloadPath: string;
   readonly windowId: string;
   readonly initialRoute: string | null;
+  readonly zoomFactor: number;
+  readonly placement: WindowGeometryPlacement;
 }
 
 /**
@@ -39,11 +50,24 @@ export interface MainWindowOptions {
 export function createMainWindow(options: MainWindowOptions): BrowserWindow {
   const isMac = process.platform === "darwin";
   const isWindows = process.platform === "win32";
+  const minSize = minimumWindowSize();
+  const resolutionTest = readResolutionTestWindowConfig(process.env);
+  const placementBounds =
+    resolutionTest.bounds === null
+      ? placementToBrowserWindowBounds(options.placement)
+      : {
+          width: resolutionTest.bounds.width,
+          height: resolutionTest.bounds.height,
+          x: undefined,
+          y: undefined,
+        };
   const window = new BrowserWindow({
-    width: 1280,
-    height: 800,
-    minWidth: 960,
-    minHeight: 600,
+    width: placementBounds.width,
+    height: placementBounds.height,
+    x: placementBounds.x,
+    y: placementBounds.y,
+    minWidth: minSize.width,
+    minHeight: minSize.height,
     show: false,
     // Background-paint color before the renderer paints - eliminates the
     // white flash on launch. Matches the renderer's dark surface color.
@@ -83,7 +107,12 @@ export function createMainWindow(options: MainWindowOptions): BrowserWindow {
       // `process.argv`), so the flip is mechanical. All OS-touching work
       // already lives in main behind IPC.
       sandbox: true,
+      zoomFactor: options.zoomFactor,
     },
+  });
+
+  void window.webContents.setVisualZoomLevelLimits(1, 1).catch((err) => {
+    log.warn("[window] failed to lock visual zoom limits", err);
   });
 
   window.webContents.setWindowOpenHandler(({ url }) => {
@@ -99,7 +128,9 @@ export function createMainWindow(options: MainWindowOptions): BrowserWindow {
     // Open filling the screen's work area (full width/height minus OS
     // taskbar/menu). `maximize()` keeps native window chrome + the snap/restore
     // affordance, unlike fullscreen which hides the menu bar.
-    window.maximize();
+    if (options.placement.maximized && !resolutionTest.disableMaximize) {
+      window.maximize();
+    }
     window.show();
   });
 
@@ -174,7 +205,7 @@ export async function loadMainWindow(
   // server with HMR. DevTools are NOT auto-opened - use the View menu's
   // "Toggle Developer Tools" when policy exposes it. Shipped builds fall
   // through to the privileged `app://` scheme below.
-  if (isDevBuild) {
+  if (isDevBuild && !shouldUseBuiltRendererForResolutionTest(process.env)) {
     log.info("[window] loading dev renderer", { devUrl: DEV_RENDERER_URL });
     try {
       await window.loadURL(DEV_RENDERER_URL);

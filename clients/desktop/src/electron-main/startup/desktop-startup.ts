@@ -44,12 +44,28 @@ import {
   DesktopStateStore,
   resolveDesktopStateFilePath,
 } from "../windows/desktop-state-store";
+import {
+  createWindowZoomController,
+  loadInitialZoomPercentSync,
+  zoomPercentToFactor,
+  type WindowZoomController,
+} from "../windows/window-zoom";
+import {
+  createWindowGeometryPersistence,
+  createWindowGeometryStore,
+  installPrimaryWindowGeometryPersistence,
+  loadInitialWindowGeometrySync,
+  resolvePrimaryWindowPlacement,
+  resolveSecondaryWindowPlacement,
+  type WindowGeometryPersistence,
+} from "../windows/window-geometry";
 import { EpicWindowOwnership } from "../windows/epic-window-ownership";
 import { PerWindowState } from "../windows/per-window-state";
 import { DesktopAuthSession } from "../auth/desktop-auth-session";
 import { DesktopSupportService } from "../app/support";
 import { MenuController } from "../menu/menu-controller";
 import { initialRouteForWindowSnapshot } from "./window-initial-route";
+import { readResolutionTestDisplay } from "../windows/resolution-test-env";
 import { installNotificationActivationHandler } from "../notifications";
 import {
   initCrashReporter,
@@ -77,7 +93,10 @@ import {
 import { applyHardwareAccelerationPreference } from "../app/gpu-acceleration";
 import { configureHostResolverDoH } from "../app/host-resolver";
 import { configureUserAgent, preconnectTraycerHosts } from "../app/network";
-import { installScreenMonitor } from "../app/screen-monitor";
+import {
+  installScreenMonitor,
+  readDisplayTopology,
+} from "../app/screen-monitor";
 import { hardenDefaultSession } from "../app/security";
 import { registerGlobalShortcuts } from "../app/shortcuts";
 import { enableSpellCheck } from "../app/spell-check";
@@ -162,6 +181,7 @@ interface AppServices {
   readonly host: HostLifecycle;
   readonly menu: MenuController;
   readonly windowRegistry: WindowRegistry;
+  readonly zoomController: WindowZoomController;
 }
 
 // Wrap a step in timing + a best-effort boundary. A non-fatal step throwing
@@ -246,15 +266,59 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
   });
   await desktopStateStore.load();
 
-  const windowRegistry = new WindowRegistry({
-    createWindow: (request) =>
-      createMainWindow({
+  const launchDisplay =
+    readResolutionTestDisplay(process.env) ??
+    readDisplayTopology().displays.find((display) => display.primary) ??
+    null;
+  const initialZoomPercent = loadInitialZoomPercentSync(launchDisplay ?? null);
+  let currentWindowGeometry = loadInitialWindowGeometrySync();
+  const windowGeometryStore = createWindowGeometryStore();
+  const windowGeometryPersistence =
+    createWindowGeometryPersistence(windowGeometryStore);
+  let zoomController: WindowZoomController | null = null;
+  let windowRegistry: WindowRegistry | null = null;
+  windowRegistry = new WindowRegistry({
+    createWindow: (request) => {
+      const zoomFactor =
+        zoomController?.getZoomFactor() ??
+        zoomPercentToFactor(initialZoomPercent);
+      const sourceWindow = windowRegistry?.getMruRecord()?.window ?? null;
+      const isPrimaryWindow = sourceWindow === null;
+      const placement =
+        sourceWindow === null
+          ? resolvePrimaryWindowPlacement({
+              saved: currentWindowGeometry,
+              topology: readDisplayTopology(),
+            })
+          : resolveSecondaryWindowPlacement({
+              sourceWindow,
+              topology: readDisplayTopology(),
+            });
+      const createdWindow = createMainWindow({
         preloadPath: config.preloadPath,
         windowId: request.windowId,
         initialRoute: request.initialRoute,
-      }),
+        zoomFactor,
+        placement,
+      });
+      if (isPrimaryWindow) {
+        installPrimaryWindowGeometryPersistence(
+          createdWindow,
+          windowGeometryPersistence,
+          (state) => {
+            currentWindowGeometry = state;
+          },
+        );
+      }
+      return createdWindow;
+    },
     loadWindow: (createdWindow) => loadMainWindow(createdWindow),
   });
+  const createdZoomController = createWindowZoomController(
+    windowRegistry,
+    initialZoomPercent,
+  );
+  zoomController = createdZoomController;
 
   const restorableWindowEntries =
     desktopStateStore.getRestorableWindowEntries();
@@ -322,6 +386,7 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
     perWindowState,
     authSession,
     support,
+    zoomController: createdZoomController,
   });
   bridge.install();
   state.bridge = bridge;
@@ -344,6 +409,7 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
     authSession,
     perWindowState,
     tray,
+    zoomController: createdZoomController,
     dispatchRendererCommand: (command) =>
       bridge.dispatchMenuCommand(command) ?? false,
     checkForUpdates: () =>
@@ -377,9 +443,10 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
     bridge,
     tray,
     desktopStateStore,
+    windowGeometryPersistence,
   });
 
-  return { host, menu, windowRegistry };
+  return { host, menu, windowRegistry, zoomController: createdZoomController };
 }
 
 // Reflects the host update availability into the app menu's "Update host"
@@ -594,6 +661,7 @@ interface LifecycleServices {
   readonly bridge: RunnerIpcBridge;
   readonly tray: DesktopTrayController | null;
   readonly desktopStateStore: DesktopStateStore;
+  readonly windowGeometryPersistence: WindowGeometryPersistence;
 }
 
 function wireAppLifecycle(state: BootState, services: LifecycleServices): void {
@@ -621,13 +689,28 @@ function wireAppLifecycle(state: BootState, services: LifecycleServices): void {
   // attempt settles) doesn't re-enter the attempt.
   let quitTimeHostUpdateStarted = false;
 
+  const flushShellState = async (): Promise<void> => {
+    await Promise.all([
+      services.desktopStateStore.flush().catch((err) => {
+        log.warn("[desktop] desktop-state flush failed", err);
+      }),
+      services.windowGeometryPersistence.flushLatest().catch((err) => {
+        log.warn("[desktop] window-geometry flush failed", err);
+      }),
+    ]);
+  };
+
   const teardownShellObservers = (): void => {
     log.info("[desktop] before-quit - disposing bridge and tray");
     services.menu.dispose();
     services.bridge.dispose();
     services.tray?.dispose();
-    void services.desktopStateStore.flush().catch((err) => {
-      log.warn("[desktop] desktop-state flush failed", err);
+  };
+
+  const authorizeQuitAfterFlush = (): void => {
+    void flushShellState().finally(() => {
+      quitAuthorized = true;
+      app.quit();
     });
   };
 
@@ -638,8 +721,8 @@ function wireAppLifecycle(state: BootState, services: LifecycleServices): void {
     }
     const activeBridge = state.bridge;
     if (activeBridge === null) {
-      quitAuthorized = true;
-      teardownShellObservers();
+      event.preventDefault();
+      authorizeQuitAfterFlush();
       return;
     }
 
@@ -696,8 +779,7 @@ function wireAppLifecycle(state: BootState, services: LifecycleServices): void {
             );
             return;
           }
-          quitAuthorized = true;
-          app.quit();
+          authorizeQuitAfterFlush();
         });
       return;
     }
@@ -711,8 +793,7 @@ function wireAppLifecycle(state: BootState, services: LifecycleServices): void {
             "[desktop] before-quit - no unsynced edits after fresh query",
             { affectedEpics: snapshot.length },
           );
-          quitAuthorized = true;
-          app.quit();
+          authorizeQuitAfterFlush();
           return;
         }
         log.info(
@@ -723,8 +804,7 @@ function wireAppLifecycle(state: BootState, services: LifecycleServices): void {
           .requestQuitDecision(snapshot)
           .then((decision) => {
             log.info("[desktop] quit decision resolved", { decision });
-            quitAuthorized = true;
-            app.quit();
+            authorizeQuitAfterFlush();
           })
           .catch((err) => {
             log.warn("[desktop] quit decision failed - staying alive", err);

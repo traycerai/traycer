@@ -395,12 +395,24 @@ function buildFakeBridge(
         getAccelerationEnabled: async () => true,
         setAccelerationEnabled: async (enabled: boolean) => enabled,
       },
+      fonts: {
+        list: async () => [],
+      },
       windowEx: {
         setOverlayIcon: async () => undefined,
       },
     },
     power: {
       setSleepBlocked: async () => undefined,
+    },
+    zoom: {
+      ladder: [100] as const,
+      get: async () => 100,
+      set: async () => 100,
+      stepIn: async () => 100,
+      stepOut: async () => 100,
+      reset: async () => 100,
+      onChange: (_handler) => ({ dispose: () => undefined }),
     },
     hostManagement: {
       installHost: async () => {

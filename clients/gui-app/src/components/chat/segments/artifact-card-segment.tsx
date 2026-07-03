@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from "react";
-import { FileDiff } from "lucide-react";
+import { FileDiff, GripVertical } from "lucide-react";
+import type { DraggableSyntheticListeners } from "@dnd-kit/core";
 import { v4 as uuidv4 } from "uuid";
 import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
 import type { ArtifactOperationAction } from "@traycer/protocol/persistence/epic/content-blocks";
@@ -17,6 +18,7 @@ import { artifactOperationVerb } from "@/lib/chat/artifact-operation-verb";
 import { cn } from "@/lib/utils";
 import type { ArtifactSegmentChange } from "@/stores/composer/chat-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { useChatArtifactDragSource } from "@/components/epic-canvas/dnd/use-chat-artifact-drag-source";
 import { OpenFullDiffControl } from "./open-full-diff-control";
 import { SnapshotHashInlineDiff } from "./snapshot-hash-inline-diff";
 
@@ -66,24 +68,75 @@ function ArtifactDiffToggle(props: {
 }
 
 /**
- * The card's header row. The open-artifact action is a child button, while the
- * diff toggle and full-diff control are siblings, avoiding nested interactive
- * content.
+ * The card's header row, and the drag surface for the card. The open-artifact
+ * action is a child button, while the diff toggle and full-diff control are
+ * siblings, avoiding nested interactive content. Drag lives on this whole row
+ * (never the outer card) so an expanded diff body below stays free for text
+ * selection, and the whole row shows the grab cursor on hover. The overlay chip
+ * is centered on the pointer by the root DragOverlay's `snapCenterToCursor`
+ * modifier, so a full-width row does not leave the chip offset from the hand.
+ *
+ * A `GripVertical` fades in on hover to signal draggability. It lives in a
+ * reserved IN-FLOW column (never absolutely positioned), so it can never overlap
+ * the artifact icon, and it is `pointer-events-none` decoration - the row, not
+ * the grip, is the drag node. The column is reserved even for a non-draggable
+ * card (rendered empty) so icons stay aligned across a mixed list.
+ *
+ * Only `setNodeRef` + `listeners` are attached: the row wraps a real open
+ * button, so spreading dnd-kit's default `attributes` (which set `role="button"`
+ * + `tabIndex` on this div) would nest interactive/focusable elements, and the
+ * root DnD system ships no keyboard sensor. The card stays keyboard-openable via
+ * its inner buttons.
  */
 function ArtifactCardHeaderRow(props: {
   readonly sticky: boolean;
   readonly surfaceClassName: string;
   readonly stickySurfaceClassName: string;
   readonly hoverClassName: string | null;
+  readonly dragRef: (element: HTMLElement | null) => void;
+  readonly dragListeners: DraggableSyntheticListeners;
+  readonly draggable: boolean;
+  readonly isDragging: boolean;
   readonly children: ReactNode;
 }) {
+  const {
+    sticky,
+    surfaceClassName,
+    stickySurfaceClassName,
+    hoverClassName,
+    dragRef,
+    dragListeners,
+    draggable,
+    isDragging,
+    children,
+  } = props;
   const className = cn(
-    "relative flex w-full items-center gap-2 px-2.5 py-2 text-left",
-    props.sticky ? props.stickySurfaceClassName : props.surfaceClassName,
-    !props.sticky && props.hoverClassName,
-    props.sticky && "sticky top-0 z-20 border-b border-border/40 shadow-sm",
+    "flex w-full items-center gap-2 px-2.5 py-2 text-left",
+    sticky ? stickySurfaceClassName : surfaceClassName,
+    !sticky && hoverClassName,
+    sticky && "sticky top-0 z-20 border-b border-border/40 shadow-sm",
+    draggable && (isDragging ? "cursor-grabbing" : "cursor-grab"),
   );
-  return <div className={className}>{props.children}</div>;
+  return (
+    <div ref={dragRef} className={className} {...dragListeners}>
+      <span
+        aria-hidden
+        className="flex w-4 shrink-0 items-center justify-center"
+      >
+        {draggable ? (
+          <GripVertical
+            className={cn(
+              "pointer-events-none size-3.5 text-muted-foreground/45 transition-opacity",
+              isDragging
+                ? "opacity-100"
+                : "opacity-0 group-hover/artifact-card:opacity-100",
+            )}
+          />
+        ) : null}
+      </span>
+      {children}
+    </div>
+  );
 }
 
 const ARTIFACT_KIND_CARD_CLASSES: Readonly<Record<EpicArtifactKind, string>> = {
@@ -452,6 +505,32 @@ function ArtifactCardSegmentContent(props: ArtifactCardSegmentProps) {
     hasHost: activeHostId !== null,
   });
 
+  // Drag source (mirrors the sidebar): the card opens its artifact in the
+  // canvas. Identity is present only when a host is bound (`activeHostId`);
+  // `enabled` reuses the `canOpen` gate (live artifact + host + not deleted).
+  // The shared hook owns the pure `viewTabId` resolution (C1), the
+  // occurrence-unique drag id (C3), and the identity-only payload (C2). The card
+  // attaches `setNodeRef` + `listeners` to the whole header row (no
+  // `attributes`).
+  const {
+    isDraggable: canDrag,
+    setNodeRef: dragRef,
+    listeners: dragListeners,
+    isDragging,
+  } = useChatArtifactDragSource({
+    epicId,
+    identity:
+      activeHostId === null
+        ? null
+        : {
+            id: artifactId,
+            type: displayKind,
+            name: openTitle,
+            hostId: activeHostId,
+          },
+    enabled: canOpen,
+  });
+
   const openArtifact = (): void => {
     // Re-check the raw conditions so the host id narrows to a non-null string.
     if (isDeleted || live === null || activeHostId === null) return;
@@ -524,6 +603,10 @@ function ArtifactCardSegmentContent(props: ArtifactCardSegmentProps) {
         hoverClassName={
           canOpen ? ARTIFACT_KIND_HOVER_CLASSES[displayKind] : null
         }
+        dragRef={dragRef}
+        dragListeners={dragListeners}
+        draggable={canDrag}
+        isDragging={isDragging}
       >
         {header}
       </ArtifactCardHeaderRow>

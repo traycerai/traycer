@@ -8,6 +8,8 @@ import {
   isGitDiffTileRef,
   isWorkspaceFileRef,
 } from "@/stores/epics/canvas/types";
+import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
+import { isEpicArtifactKind } from "@/lib/artifacts/node-display";
 import { parseTileRef } from "@/stores/epics/canvas/tile-schema";
 import { resolveSplitDropPosition } from "@/components/epic-canvas/dnd/pane-drop-geometry";
 import {
@@ -36,6 +38,7 @@ export const SIDEBAR_NODE_DND_TYPE = "sidebar-node";
 export const TERMINAL_TILE_DND_TYPE = "terminal-tile";
 export const GIT_DIFF_TILE_DND_TYPE = "git-diff-tile";
 export const WORKSPACE_FILE_DND_TYPE = "workspace-file";
+export const CHAT_ARTIFACT_DND_TYPE = "chat-artifact";
 export const LEFT_PANEL_RAIL_ITEM_DND_TYPE = "left-panel-rail-item";
 export const EPIC_CANVAS_DND_SOURCE_TYPES = [
   ARTIFACT_TAB_DND_TYPE,
@@ -43,6 +46,7 @@ export const EPIC_CANVAS_DND_SOURCE_TYPES = [
   TERMINAL_TILE_DND_TYPE,
   GIT_DIFF_TILE_DND_TYPE,
   WORKSPACE_FILE_DND_TYPE,
+  CHAT_ARTIFACT_DND_TYPE,
 ];
 
 export interface RectLike {
@@ -117,12 +121,32 @@ export interface EpicCanvasLeftPanelRailDragData {
   readonly origin: "rail" | "panel-section";
 }
 
+/**
+ * A same-epic artifact reference dragged out of a chat message (a block
+ * card or an inline chip). Self-describing: it carries the artifact's
+ * IDENTITY so `sourceToTileRef` builds the tile ref directly, with no
+ * lookup against the sidebar-tree projection or open-epic registry. No
+ * `instanceId` - that is minted per drop at commit time (constraint C2).
+ */
+export interface EpicCanvasChatArtifactDragData {
+  readonly kind: typeof CHAT_ARTIFACT_DND_TYPE;
+  readonly epicId: string;
+  readonly viewTabId: string;
+  readonly artifact: {
+    readonly id: string;
+    readonly type: EpicArtifactKind;
+    readonly name: string;
+    readonly hostId: string;
+  };
+}
+
 export type EpicCanvasDragSourceData =
   | EpicCanvasArtifactTabDragData
   | EpicCanvasSidebarNodeDragData
   | EpicCanvasTerminalTileDragData
   | EpicCanvasGitDiffTileDragData
   | EpicCanvasWorkspaceFileDragData
+  | EpicCanvasChatArtifactDragData
   | EpicCanvasLeftPanelRailDragData;
 
 export type LeftPanelRailDropPosition = "before" | "after" | "combine";
@@ -267,6 +291,16 @@ export function getWorkspaceFileDragId(fileId: string): string {
   return `workspace-file:${fileId}`;
 }
 
+/**
+ * The same artifact can appear many times in one thread (repeated update
+ * cards, multiple inline mentions), so the drag id keys on a per-occurrence
+ * value the caller supplies (a `useId()`), NOT the artifact id - otherwise
+ * dnd-kit's registry collides on duplicate ids (constraint C3).
+ */
+export function getChatArtifactDragId(occurrenceKey: string): string {
+  return `chat-artifact:${occurrenceKey}`;
+}
+
 export function getLeftPanelRailDragId(panelId: string): string {
   return `left-panel-rail:${panelId}`;
 }
@@ -406,6 +440,33 @@ function readWorkspaceFileSource(
   return { kind: WORKSPACE_FILE_DND_TYPE, ...scope, ref };
 }
 
+function readChatArtifactSource(
+  value: Record<string, unknown>,
+): EpicCanvasDragSourceData | null {
+  const scope = readCanvasSourceScope(value);
+  if (scope === null || !isRecord(value.artifact)) return null;
+  const artifact = value.artifact;
+  if (
+    !isNonEmptyString(artifact.id) ||
+    !isNonEmptyString(artifact.name) ||
+    !isNonEmptyString(artifact.hostId) ||
+    typeof artifact.type !== "string" ||
+    !isEpicArtifactKind(artifact.type)
+  ) {
+    return null;
+  }
+  return {
+    kind: CHAT_ARTIFACT_DND_TYPE,
+    ...scope,
+    artifact: {
+      id: artifact.id,
+      type: artifact.type,
+      name: artifact.name,
+      hostId: artifact.hostId,
+    },
+  };
+}
+
 function readLeftPanelRailItemSource(
   value: Record<string, unknown>,
 ): EpicCanvasDragSourceData | null {
@@ -430,6 +491,8 @@ export function readEpicCanvasDragSourceData(
     return readGitDiffTileSource(value);
   if (value.kind === WORKSPACE_FILE_DND_TYPE)
     return readWorkspaceFileSource(value);
+  if (value.kind === CHAT_ARTIFACT_DND_TYPE)
+    return readChatArtifactSource(value);
   if (value.kind === LEFT_PANEL_RAIL_ITEM_DND_TYPE)
     return readLeftPanelRailItemSource(value);
   return null;

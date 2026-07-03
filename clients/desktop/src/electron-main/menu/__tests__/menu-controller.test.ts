@@ -16,6 +16,7 @@ import type {
   MenuManagedWindow,
   MenuWindowRecord,
   MenuWindowRegistry,
+  MenuZoomController,
 } from "../menu-controller";
 
 interface CapturedMenuItem {
@@ -203,6 +204,25 @@ class FakeWindowRegistry extends EventEmitter implements MenuWindowRegistry {
   }
 }
 
+class FakeZoomController implements MenuZoomController {
+  readonly requests: string[] = [];
+
+  zoomIn(): Promise<number> {
+    this.requests.push("in");
+    return Promise.resolve(110);
+  }
+
+  zoomOut(): Promise<number> {
+    this.requests.push("out");
+    return Promise.resolve(90);
+  }
+
+  reset(): Promise<number> {
+    this.requests.push("reset");
+    return Promise.resolve(100);
+  }
+}
+
 class EmptyWindowRegistry extends EventEmitter implements MenuWindowRegistry {
   readonly createRequests: Array<{
     readonly initialRoute: string | null;
@@ -346,6 +366,7 @@ function createController(options: {
     authSession: options.authSession,
     perWindowState: options.perWindowState,
     tray: null,
+    zoomController: new FakeZoomController(),
     dispatchRendererCommand: options.dispatchRendererCommand,
     checkForUpdates: () => Promise.resolve(),
   });
@@ -620,6 +641,33 @@ describe("MenuController", () => {
 
     expect(registry.minimizeRequests).toEqual(["window-a"]);
     expect(registry.zoomRequests).toEqual(["window-a"]);
+    expect(dispatchRendererCommand).not.toHaveBeenCalled();
+    controller.dispose();
+  });
+
+  it("routes View zoom commands through the zoom controller", async () => {
+    const zoomController = new FakeZoomController();
+    const dispatchRendererCommand = vi.fn(() => true);
+    const controller = new MenuController({
+      appName: "Traycer",
+      platform: "darwin",
+      windowRegistry: new FakeWindowRegistry(),
+      host: new FakeHost(),
+      authSession: new DesktopAuthSession(),
+      perWindowState: new PerWindowState(null),
+      tray: null,
+      zoomController,
+      dispatchRendererCommand,
+      checkForUpdates: () => Promise.resolve(),
+    });
+
+    controller.install();
+    runControllerCommand(controller, "view.zoomIn", null);
+    runControllerCommand(controller, "view.zoomOut", null);
+    runControllerCommand(controller, "view.resetZoom", null);
+    await Promise.resolve();
+
+    expect(zoomController.requests).toEqual(["in", "out", "reset"]);
     expect(dispatchRendererCommand).not.toHaveBeenCalled();
     controller.dispose();
   });
