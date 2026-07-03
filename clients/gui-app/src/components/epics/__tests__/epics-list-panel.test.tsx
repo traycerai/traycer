@@ -99,6 +99,11 @@ interface WorktreeCleanupCandidateStub {
   readonly repoLabel: string;
   readonly branch: string | null;
   readonly uncommittedCount: number;
+  readonly branchStatus: {
+    readonly ahead: number;
+    readonly behind: number;
+    readonly mergedIntoDefault: boolean;
+  } | null;
   readonly ownerEpicIds: ReadonlyArray<string>;
 }
 
@@ -622,13 +627,24 @@ describe("<EpicsListPanel />", () => {
     expect(typeof options.onSuccess).toBe("function");
   });
 
-  it("offers worktree cleanup with clean rows checked and dirty rows unchecked by default", async () => {
+  it("checks only PROVEN-removable rows by default (unproven and dirty stay unchecked)", async () => {
     testState.worktreeCandidates = [
       {
-        worktreePath: "/wt/clean",
+        // Proven: clean + non-null status (merged) -> checked.
+        worktreePath: "/wt/proven",
         repoLabel: "owner/repo",
-        branch: "feat/clean",
+        branch: "feat/proven",
         uncommittedCount: 0,
+        branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
+        ownerEpicIds: ["epic-from-history"],
+      },
+      {
+        // Clean but branch status unavailable (null) -> UNPROVEN -> unchecked.
+        worktreePath: "/wt/unproven",
+        repoLabel: "owner/repo",
+        branch: "feat/unproven",
+        uncommittedCount: 0,
+        branchStatus: null,
         ownerEpicIds: ["epic-from-history"],
       },
       {
@@ -636,6 +652,7 @@ describe("<EpicsListPanel />", () => {
         repoLabel: "owner/repo",
         branch: "feat/dirty",
         uncommittedCount: 3,
+        branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
         ownerEpicIds: ["epic-from-history"],
       },
     ];
@@ -649,8 +666,9 @@ describe("<EpicsListPanel />", () => {
     const checkboxes = screen.getAllByTestId("delete-tasks-worktree-checkbox");
     expect(checkboxes[0].getAttribute("aria-checked")).toBe("true");
     expect(checkboxes[1].getAttribute("aria-checked")).toBe("false");
+    expect(checkboxes[2].getAttribute("aria-checked")).toBe("false");
 
-    // Only the clean (checked) worktree is approved for removal by default.
+    // Only the proven (checked) worktree is approved for removal by default.
     fireEvent.click(screen.getByTestId("delete-tasks-confirm"));
     const deleteCall = testState.mutate.mock.calls.at(0);
     if (deleteCall === undefined) {
@@ -660,7 +678,7 @@ describe("<EpicsListPanel />", () => {
       ids: ["epic-from-history"],
       worktreeCleanup: {
         candidates: [
-          { worktreePath: "/wt/clean", ownerEpicIds: ["epic-from-history"] },
+          { worktreePath: "/wt/proven", ownerEpicIds: ["epic-from-history"] },
         ],
       },
     });
@@ -673,6 +691,7 @@ describe("<EpicsListPanel />", () => {
         repoLabel: "owner/repo",
         branch: "feat/dirty",
         uncommittedCount: 2,
+        branchStatus: null,
         ownerEpicIds: ["epic-from-history"],
       },
     ];

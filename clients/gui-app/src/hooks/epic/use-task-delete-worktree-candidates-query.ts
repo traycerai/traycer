@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import type { WorktreeBranchStatus } from "@traycer/protocol/host/index";
 import { useHostClient } from "@/lib/host";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 
@@ -7,13 +8,15 @@ import { useHostQuery } from "@/hooks/host/use-host-query";
  * one owner, EVERY owner belongs to the Task(s) being deleted, and it is not
  * busy right now. `ownerEpicIds` is carried so the mutation can re-confirm, once
  * the delete result is known, that every owner actually succeeded before
- * removing the worktree.
+ * removing the worktree. `branchStatus` (from the `includeActivity: true` probe)
+ * feeds the shared evidence rule that decides the default-checked state.
  */
 export interface TaskDeleteWorktreeCandidate {
   readonly worktreePath: string;
   readonly repoLabel: string;
   readonly branch: string | null;
   readonly uncommittedCount: number;
+  readonly branchStatus: WorktreeBranchStatus | null;
   readonly ownerEpicIds: ReadonlyArray<string>;
 }
 
@@ -27,8 +30,10 @@ const EMPTY_CANDIDATES: ReadonlyArray<TaskDeleteWorktreeCandidate> = [];
 /**
  * Derives the worktree-cleanup candidates for a pending Task deletion, entirely
  * client-side over `worktree.listAllForHost@1.1` (no dedicated RPC — the
- * released method-name surface is frozen). `owners` is populated regardless of
- * `includeActivity`, so the dialog pays no git-probe cost by passing `false`.
+ * released method-name surface is frozen). Passes `includeActivity: true` so the
+ * shared evidence rule can evaluate `branchStatus`: default-checked is reserved
+ * for PROVEN-removable candidates; unproven (null status) and dirty ones default
+ * unchecked. `owners` is populated either way.
  *
  * Scoped to the default-host client: candidates are computed against the
  * dialog's own host connection only. Worktrees a Task owned on OTHER hosts are
@@ -46,7 +51,7 @@ export function useTaskDeleteWorktreeCandidates(
   const query = useHostQuery({
     client,
     method: "worktree.listAllForHost",
-    params: { includeActivity: false },
+    params: { includeActivity: true },
     options: { enabled: deletedEpicIds !== null },
   });
 
@@ -74,6 +79,7 @@ export function useTaskDeleteWorktreeCandidates(
           repoLabel: entry.repoLabel,
           branch: entry.branch,
           uncommittedCount: entry.uncommittedCount,
+          branchStatus: entry.branchStatus,
           ownerEpicIds: entry.owners.map((owner) => owner.epicId),
         },
       ];

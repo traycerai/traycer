@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { AlertTriangle } from "lucide-react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -77,6 +78,10 @@ export function DeleteTasksDialog(props: DeleteTasksDialogProps) {
             <p className="text-ui-sm font-medium text-foreground">
               Also remove worktrees no longer used by any other Task
             </p>
+            <p className="mt-0.5 text-ui-xs text-muted-foreground">
+              Cleanup is limited to worktrees on this host. Only
+              proven-removable worktrees are pre-selected.
+            </p>
             <ul className="mt-2 flex max-h-[min(40vh,16rem)] flex-col gap-0.5 overflow-y-auto">
               {candidates.map((candidate) => (
                 <WorktreeCleanupRow
@@ -135,6 +140,25 @@ function WorktreeCleanupRow(props: {
 }) {
   const { candidate, checked, disabled, onToggle } = props;
   const branch = candidate.branch ?? "detached HEAD";
+  // Per-row loss/uncertainty hint. Dirty rows name the concrete uncommitted
+  // loss; clean rows whose branch status could not be probed carry a neutral
+  // "unverified" note (never "safe" / "loss-free"). A clean, proven row is quiet.
+  let hint: ReactNode = null;
+  if (candidate.uncommittedCount > 0) {
+    hint = (
+      <span className="mt-0.5 flex items-center gap-1 text-ui-xs text-amber-600 dark:text-amber-400">
+        <AlertTriangle className="size-3 shrink-0" aria-hidden />
+        {candidate.uncommittedCount} uncommitted change
+        {candidate.uncommittedCount === 1 ? "" : "s"} will be lost
+      </span>
+    );
+  } else if (candidate.branchStatus === null) {
+    hint = (
+      <span className="mt-0.5 block text-ui-xs text-muted-foreground">
+        Branch status unverified — unpushed work not proven
+      </span>
+    );
+  }
   return (
     <li>
       <label className="flex cursor-pointer items-start gap-2 rounded-md px-1.5 py-1.5 hover:bg-accent/40">
@@ -158,13 +182,7 @@ function WorktreeCleanupRow(props: {
           <span className="block truncate text-ui-xs text-muted-foreground">
             {candidate.worktreePath}
           </span>
-          {candidate.uncommittedCount > 0 ? (
-            <span className="mt-0.5 flex items-center gap-1 text-ui-xs text-amber-600 dark:text-amber-400">
-              <AlertTriangle className="size-3 shrink-0" aria-hidden />
-              {candidate.uncommittedCount} uncommitted change
-              {candidate.uncommittedCount === 1 ? "" : "s"} will be lost
-            </span>
-          ) : null}
+          {hint}
         </span>
       </label>
     </li>

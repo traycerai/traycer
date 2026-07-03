@@ -44,6 +44,7 @@ import {
 } from "@/components/ui/tooltip";
 import { useEpicBatchDelete } from "@/hooks/epic/use-epic-batch-delete-mutation";
 import { useTaskDeleteWorktreeCandidates } from "@/hooks/epic/use-task-delete-worktree-candidates-query";
+import { isEvidenceProvenRemovable } from "@/lib/worktree/classify-worktree";
 import { useEpicUpdateTitle } from "@/hooks/epic/use-epic-title-mutation";
 import { useInlineRename } from "@/hooks/ui/use-inline-rename";
 import { withMemberToggled } from "@/lib/immutable-set";
@@ -252,9 +253,10 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   const [pendingDeleteIds, setPendingDeleteIds] =
     useState<ReadonlyArray<string> | null>(null);
   // Explicit user overrides of the per-worktree checkbox. Absent entries fall
-  // back to the default: candidates with no uncommitted changes start checked;
-  // uncommitted-changes rows start unchecked (a warning is shown). Cleared when
-  // the dialog closes so a reopened dialog starts from defaults again.
+  // back to the default: only PROVEN-removable candidates (clean + a non-null
+  // branch status that is merged or has no local-only commits) start checked;
+  // unproven (null status) and dirty rows start unchecked. Cleared when the
+  // dialog closes so a reopened dialog starts from defaults again.
   const [worktreeCheckOverrides, setWorktreeCheckOverrides] = useState<
     ReadonlyMap<string, boolean>
   >(() => new Map());
@@ -267,7 +269,10 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
       new Map(
         worktreeCandidates.map((candidate) => [
           candidate.worktreePath,
-          candidate.uncommittedCount === 0,
+          isEvidenceProvenRemovable({
+            uncommittedCount: candidate.uncommittedCount,
+            branchStatus: candidate.branchStatus,
+          }),
         ]),
       ),
     [worktreeCandidates],

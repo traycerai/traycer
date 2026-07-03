@@ -179,6 +179,17 @@ function confirmDelete(branch: string): void {
   fireEvent.click(screen.getByTestId("confirm-action"));
 }
 
+// Two-button cleanup replaced "Select all": hand-pick rows via their checkboxes
+// after entering selection mode.
+function selectRows(branches: readonly string[]): void {
+  fireEvent.click(screen.getByRole("button", { name: "Select worktrees" }));
+  for (const branch of branches) {
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: `Select worktree ${branch}` }),
+    );
+  }
+}
+
 function callbacksFor(path: string): WorktreeDeleteStreamCallbacks {
   const callbacks = streamMock.callbacksByPath.get(path);
   if (callbacks === undefined) {
@@ -241,7 +252,6 @@ describe("WorktreesList delete flow", () => {
 
     expect(toolbarButtonLabels()).toEqual([
       "Collapse all",
-      "Select all",
       "Cancel",
       "Delete selected worktrees",
       "Refresh worktrees",
@@ -317,8 +327,9 @@ describe("WorktreesList delete flow", () => {
     screen.getByRole("button", { name: "Delete worktree feat-api-clean" });
 
     fireEvent.click(screen.getByRole("button", { name: "Collapse acme/app" }));
-    fireEvent.click(screen.getByRole("button", { name: "Select worktrees" }));
-    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+    // The secondary sweep names only the visible clean-unreferenced cohort; the
+    // collapsed acme/app rows are excluded from the count and the selection.
+    fireEvent.click(screen.getByTestId("worktrees-select-unreferenced"));
 
     expect(screen.getByText("1 selected")).not.toBeNull();
     fireEvent.click(screen.getByTestId("worktrees-list-delete-selected"));
@@ -428,8 +439,18 @@ describe("WorktreesList delete flow", () => {
         .getByTestId("worktrees-list-delete-selected")
         .hasAttribute("disabled"),
     ).toBe(true);
+    expect(
+      screen
+        .getByRole("checkbox", { name: "Select worktree feat-busy" })
+        .getAttribute("aria-disabled"),
+    ).toBe("true");
 
-    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Select worktree feat-clean" }),
+    );
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Select worktree feat-dirty" }),
+    );
 
     expect(screen.getByText("2 selected")).not.toBeNull();
     expect(
@@ -442,15 +463,13 @@ describe("WorktreesList delete flow", () => {
         .getByRole("checkbox", { name: "Select worktree feat-dirty" })
         .getAttribute("aria-checked"),
     ).toBe("true");
-    expect(
-      screen
-        .getByRole("checkbox", { name: "Select worktree feat-busy" })
-        .getAttribute("aria-disabled"),
-    ).toBe("true");
 
     fireEvent.click(screen.getByTestId("worktrees-list-delete-selected"));
 
-    screen.getByText("Discard 3 uncommitted changes across 2 worktrees?");
+    // Aggregate-by-class confirmation names the dirty loss and the neutral
+    // unverified caveat instead of a single stacked warning.
+    screen.getByText("Delete 2 worktrees?");
+    screen.getByTestId("worktree-bulk-delete-dirty-loss");
     fireEvent.click(screen.getByTestId("confirm-action"));
 
     expect(streamMock.paths).toEqual(["/wt/clean", "/wt/dirty"]);
@@ -486,8 +505,7 @@ describe("WorktreesList delete flow", () => {
       worktrees: multiRepoWorktrees,
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Select worktrees" }));
-    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+    selectRows(["feat-clean", "feat-dirty", "feat-api-clean"]);
     fireEvent.click(screen.getByTestId("worktrees-list-delete-selected"));
     fireEvent.click(screen.getByTestId("confirm-action"));
 
@@ -564,8 +582,12 @@ describe("WorktreesList delete flow", () => {
       worktrees: multiRepoWorktrees,
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Select worktrees" }));
-    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+    selectRows([
+      "feat-clean",
+      "feat-dirty",
+      "feat-api-clean",
+      "feat-web-clean",
+    ]);
     fireEvent.click(screen.getByTestId("worktrees-list-delete-selected"));
     fireEvent.click(screen.getByTestId("confirm-action"));
 
@@ -931,8 +953,7 @@ describe("WorktreesList delete flow", () => {
       worktrees: WORKTREES,
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Select worktrees" }));
-    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+    selectRows(["feat-clean", "feat-dirty"]);
     fireEvent.click(screen.getByTestId("worktrees-list-delete-selected"));
     fireEvent.click(screen.getByTestId("confirm-action"));
 
@@ -995,10 +1016,11 @@ describe("WorktreesList v1.1 signals", () => {
       taskTitlesByEpicId: new Map([["epic-1", "Ship the audit"]]),
     });
 
-    // Two distinct epics -> two chips; the duplicate epic-1 owner collapses.
+    // The resolved epic-1 renders a chip (the duplicate epic-1 owner collapses).
     screen.getByText("Ship the audit");
-    // epic-2 has no cached title -> graceful "Unknown Task" chip, not a crash.
-    screen.getByText("Unknown Task");
+    // epic-2 has no cached title -> demoted muted "Owner unresolved" text, not a
+    // prominent chip.
+    screen.getByText("Owner unresolved");
   });
 
   it("labels a worktree with no owners as not used by any Task", () => {
@@ -1010,7 +1032,7 @@ describe("WorktreesList v1.1 signals", () => {
     screen.getByText("Not used by any Task");
   });
 
-  it("surfaces merged and ahead/behind branch-status hints", () => {
+  it("leads merged rows with a green Merged pill and shows ahead/behind facts", () => {
     renderList({
       hostId: "host-a",
       queryClient: new QueryClient(),
@@ -1027,8 +1049,14 @@ describe("WorktreesList v1.1 signals", () => {
         }),
       ],
     });
-    screen.getByText("Merged");
-    screen.getByText("2 ahead, 3 behind");
+    // The merged row carries the proven-green "Merged" tier pill; the ahead/
+    // unmerged row is amber Review, with the counts in its facts line.
+    const tiers = screen
+      .getAllByTestId("worktree-tier-pill")
+      .map((pill) => pill.getAttribute("data-tier"));
+    expect(tiers).toContain("merged");
+    expect(tiers).toContain("review");
+    screen.getByText("2 ahead · 3 behind");
   });
 
   it("filters rows by branch, path, repo label, and resolved Task title", () => {
@@ -1079,42 +1107,48 @@ describe("WorktreesList v1.1 signals", () => {
     screen.getByText("No worktrees match your search.");
   });
 
-  it("reorders rows stalest-first within a repo when the sort is toggled", () => {
+  it("lands pre-triaged by tier (default), and the toggle switches to pure stalest", () => {
     renderList({
       hostId: "host-a",
       queryClient: new QueryClient(),
       worktrees: [
+        // Amber Review tier, and the staler of the two.
         entry({
-          worktreePath: "/wt/recent",
-          branch: "feat-recent",
-          lastActivityAt: 2_000,
-        }),
-        entry({
-          worktreePath: "/wt/stale",
-          branch: "feat-stale",
+          worktreePath: "/wt/review",
+          branch: "feat-review",
+          branchStatus: null,
           lastActivityAt: 1_000,
+        }),
+        // Green Merged tier, but the more recently active.
+        entry({
+          worktreePath: "/wt/merged",
+          branch: "feat-merged",
+          branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
+          lastActivityAt: 2_000,
         }),
       ],
     });
 
     const deleteLabel = (element: Element): string | null =>
       element.getAttribute("aria-label");
+    // Default: safe-first by tier - Merged leads even though it is more recent.
     const orderBefore = screen
       .getAllByRole("button", { name: /^Delete worktree/ })
       .map(deleteLabel);
     expect(orderBefore).toEqual([
-      "Delete worktree feat-recent",
-      "Delete worktree feat-stale",
+      "Delete worktree feat-merged",
+      "Delete worktree feat-review",
     ]);
 
     fireEvent.click(screen.getByRole("button", { name: "Stalest first" }));
 
+    // Stalest toggle ignores tier and leads with the least-recently-active row.
     const orderAfter = screen
       .getAllByRole("button", { name: /^Delete worktree/ })
       .map(deleteLabel);
     expect(orderAfter).toEqual([
-      "Delete worktree feat-stale",
-      "Delete worktree feat-recent",
+      "Delete worktree feat-review",
+      "Delete worktree feat-merged",
     ]);
   });
 });

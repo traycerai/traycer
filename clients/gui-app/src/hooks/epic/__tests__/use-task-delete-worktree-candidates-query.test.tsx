@@ -9,6 +9,12 @@ interface StubOwner {
   readonly updatedAt: number;
 }
 
+interface StubBranchStatus {
+  readonly ahead: number;
+  readonly behind: number;
+  readonly mergedIntoDefault: boolean;
+}
+
 interface StubEntry {
   readonly worktreePath: string;
   readonly repoLabel: string;
@@ -16,6 +22,7 @@ interface StubEntry {
   readonly uncommittedCount: number;
   readonly inUse: boolean;
   readonly owners: ReadonlyArray<StubOwner>;
+  readonly branchStatus: StubBranchStatus | null;
 }
 
 interface MockQueryResult {
@@ -46,6 +53,7 @@ function entry(over: Partial<StubEntry> & { worktreePath: string }): StubEntry {
     uncommittedCount: 0,
     inUse: false,
     owners: [owner("epic-1")],
+    branchStatus: null,
     ...over,
   };
 }
@@ -57,7 +65,14 @@ describe("useTaskDeleteWorktreeCandidates", () => {
 
   it("offers worktrees whose owners are all in the deleted set and not in use", () => {
     mockQueryResult.current = {
-      data: { worktrees: [entry({ worktreePath: "/wt/a" })] },
+      data: {
+        worktrees: [
+          entry({
+            worktreePath: "/wt/a",
+            branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
+          }),
+        ],
+      },
       isError: false,
     };
     const { result } = renderHook(() =>
@@ -67,6 +82,13 @@ describe("useTaskDeleteWorktreeCandidates", () => {
       "/wt/a",
     ]);
     expect(result.current.candidates[0].ownerEpicIds).toEqual(["epic-1"]);
+    // The activity-probed branch status is carried so the default-check evidence
+    // rule can evaluate it downstream.
+    expect(result.current.candidates[0].branchStatus).toEqual({
+      ahead: 0,
+      behind: 0,
+      mergedIntoDefault: true,
+    });
   });
 
   it("excludes in-use, ownerless, and out-of-scope worktrees", () => {

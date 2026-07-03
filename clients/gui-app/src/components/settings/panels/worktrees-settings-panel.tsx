@@ -8,7 +8,9 @@ import {
   type ReactNode,
 } from "react";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import {
+  AlertTriangle,
   ArrowDownWideNarrow,
   Check,
   ChevronRight,
@@ -20,6 +22,7 @@ import {
   ListChecks,
   RefreshCw,
   Search,
+  Sparkles,
   Trash2,
   X,
 } from "lucide-react";
@@ -27,6 +30,15 @@ import type {
   WorktreeHostEntry,
   WorktreeHostEntryV11,
 } from "@traycer/protocol/host/index";
+import {
+  WORKTREE_TIER_LABEL,
+  classifyWorktree,
+  classifyWorktreeTier,
+  isPrimarySweepEligible,
+  isSecondarySweepEligible,
+  worktreeTierRank,
+  type WorktreeTier,
+} from "@/lib/worktree/classify-worktree";
 import type { WorktreeEntryScripts } from "@traycer/protocol/host/worktree-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
@@ -50,10 +62,15 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
-import { Dialog } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
-import { StartTruncatedText } from "@/components/ui/start-truncated-text";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { CopyTextButton } from "@/components/copy-text-button";
 import { ScriptsReviewDialog } from "@/components/workspaces/scripts-review-dialog";
 import { type RepoScriptsSeed } from "@/components/workspaces/repo-scripts-form";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
@@ -340,7 +357,14 @@ function WorktreesBody(props: {
   } else {
     listOwnsToolbar = true;
     content = (
+      // Key by host so a host swap remounts the list with fresh selection /
+      // search / collapse state - a pending selection from another host is
+      // never carried across. (A same-host refresh keeps the mount; the
+      // selectable set is recomputed from the freshest listing every render and
+      // `selectedTargets` intersects with it, so a vanished row drops out of the
+      // effective selection on its own.)
       <WorktreesList
+        key={hostId}
         openStreamTransport={openStreamTransport}
         hostId={hostId}
         worktrees={listQuery.data.worktrees}
@@ -463,7 +487,7 @@ export function WorktreesList(props: {
   );
   const [selectionMode, setSelectionMode] = useState(false);
   const [pendingDeleteTargets, setPendingDeleteTargets] =
-    useState<ReadonlyArray<WorktreeHostEntry> | null>(null);
+    useState<ReadonlyArray<WorktreeHostEntryV11> | null>(null);
   const [pendingScriptReview, setPendingScriptReview] =
     useState<WorktreeScriptReviewDraft | null>(null);
   const reviewedScriptsByPathRef = useRef<ReadonlyMap<
@@ -540,10 +564,38 @@ export function WorktreesList(props: {
     [selectablePathSet, selectedPaths, visibleWorktrees],
   );
   const selectedCount = selectedTargets.length;
-  const dialogCopy =
-    pendingDeleteTargets === null
-      ? null
-      : deleteDialogCopyForTargets(pendingDeleteTargets);
+  // The two ship-now sweep cohorts, computed over the same selectable pool the
+  // checkboxes use (so a delete already in flight is excluded by construction).
+  const primarySweepPaths = useMemo(
+    () =>
+      visibleWorktrees
+        .filter(
+          (entry) =>
+            selectablePathSet.has(entry.worktreePath) &&
+            isPrimarySweepEligible(entry),
+        )
+        .map((entry) => entry.worktreePath),
+    [selectablePathSet, visibleWorktrees],
+  );
+  const secondarySweepPaths = useMemo(
+    () =>
+      visibleWorktrees
+        .filter(
+          (entry) =>
+            selectablePathSet.has(entry.worktreePath) &&
+            isSecondarySweepEligible(entry),
+        )
+        .map((entry) => entry.worktreePath),
+    [selectablePathSet, visibleWorktrees],
+  );
+  const singleDialogCopy =
+    pendingDeleteTargets !== null && pendingDeleteTargets.length === 1
+      ? deleteDialogCopy(pendingDeleteTargets[0])
+      : null;
+  const bulkDeleteSummary =
+    pendingDeleteTargets !== null && pendingDeleteTargets.length > 1
+      ? summarizeBulkWorktreeDelete(pendingDeleteTargets, visibleWorktrees)
+      : null;
   const progressSummary = useMemo(
     () => summarizeWorktreeDeleteRuns(runs),
     [runs],
@@ -573,9 +625,21 @@ export function WorktreesList(props: {
     setSelectedPaths(new Set());
     setSelectionMode(true);
   }, []);
-  const selectAllVisible = useCallback(() => {
-    setSelectedPaths(new Set(selectableWorktreePaths));
-  }, [selectableWorktreePaths]);
+  // Primary sweep: a fresh selection of the proven merged & clean cohort.
+  const selectMergedClean = useCallback(() => {
+    setSelectedPaths(new Set(primarySweepPaths));
+    setSelectionMode(true);
+  }, [primarySweepPaths]);
+  // Secondary sweep: a deliberate, separate click that ADDS the null-status
+  // clean-unreferenced cohort onto whatever is already selected.
+  const alsoSelectUnreferenced = useCallback(() => {
+    setSelectedPaths((prev) => {
+      const next = new Set(prev);
+      for (const path of secondarySweepPaths) next.add(path);
+      return next;
+    });
+    setSelectionMode(true);
+  }, [secondarySweepPaths]);
   const cancelSelection = useCallback(() => {
     setSelectedPaths(new Set());
     setSelectionMode(false);
@@ -600,7 +664,7 @@ export function WorktreesList(props: {
     setSelectedPaths(new Set());
   }, [allReposCollapsed, repoKeys]);
   const requestDeleteTargets = useCallback(
-    (targets: ReadonlyArray<WorktreeHostEntry>) => {
+    (targets: ReadonlyArray<WorktreeHostEntryV11>) => {
       const deletableTargets = targets.filter((entry) =>
         selectablePathSet.has(entry.worktreePath),
       );
@@ -612,7 +676,24 @@ export function WorktreesList(props: {
 
   const handleConfirm = (): void => {
     if (pendingDeleteTargets === null) return;
-    const targets = pendingDeleteTargets;
+    // Re-check eligibility against the freshest snapshot at the moment the run
+    // starts: a background refresh between opening the dialog and confirming may
+    // have made a row in-use or already-deleting. Drop those, and say so.
+    const targets = pendingDeleteTargets.filter((entry) =>
+      selectablePathSet.has(entry.worktreePath),
+    );
+    const dropped = pendingDeleteTargets.length - targets.length;
+    if (dropped > 0) {
+      toast.message(
+        `${dropped} worktree${dropped === 1 ? "" : "s"} became ineligible and ${
+          dropped === 1 ? "was" : "were"
+        } skipped.`,
+      );
+    }
+    if (targets.length === 0) {
+      setPendingDeleteTargets(null);
+      return;
+    }
     if (targets.length === 1) {
       start(
         targets[0],
@@ -682,7 +763,6 @@ export function WorktreesList(props: {
               canSelect={selectableWorktreePaths.length > 0}
               selectedCount={selectedCount}
               onStart={enterSelectionMode}
-              onSelectAll={selectAllVisible}
               onCancel={cancelSelection}
               onDeleteSelected={() => {
                 requestDeleteTargets(selectedTargets);
@@ -698,6 +778,12 @@ export function WorktreesList(props: {
             onSortModeChange={setSortMode}
           />
         }
+      />
+      <WorktreeCleanupBar
+        primaryCount={primarySweepPaths.length}
+        secondaryCount={secondarySweepPaths.length}
+        onSelectPrimary={selectMergedClean}
+        onSelectSecondary={alsoSelectUnreferenced}
       />
       <WorktreeDeleteProgressStrip
         summary={progressSummary}
@@ -763,15 +849,22 @@ export function WorktreesList(props: {
       })}
 
       <ConfirmDestructiveDialog
-        open={pendingDeleteTargets !== null}
+        open={singleDialogCopy !== null}
         onOpenChange={(open) => {
           if (!open) setPendingDeleteTargets(null);
         }}
-        title={dialogCopy?.title ?? ""}
-        description={dialogCopy?.description ?? ""}
+        title={singleDialogCopy?.title ?? ""}
+        description={singleDialogCopy?.description ?? ""}
         cascadeSummary={null}
-        actionLabel={dialogCopy?.actionLabel ?? "Delete"}
+        actionLabel={singleDialogCopy?.actionLabel ?? "Delete"}
         isPending={false}
+        onConfirm={handleConfirm}
+      />
+      <WorktreeBulkDeleteDialog
+        summary={bulkDeleteSummary}
+        onOpenChange={(open) => {
+          if (!open) setPendingDeleteTargets(null);
+        }}
         onConfirm={handleConfirm}
       />
       <WorktreeScriptReviewDialog
@@ -817,6 +910,145 @@ function WorktreeDeleteProgressStrip(props: {
         ) : null}
       </div>
     </div>
+  );
+}
+
+/**
+ * Two-button quick-cleanup bar. The primary CTA selects the proven merged &
+ * clean cohort; the secondary, visually distinct CTA is a SEPARATE deliberate
+ * click that also adds the clean-unreferenced cohort whose branch status could
+ * not be probed. The label names the widened scope ("unknown branch status")
+ * — never generic "safe". Hidden when neither cohort has any members.
+ */
+function WorktreeCleanupBar(props: {
+  readonly primaryCount: number;
+  readonly secondaryCount: number;
+  readonly onSelectPrimary: () => void;
+  readonly onSelectSecondary: () => void;
+}): ReactNode {
+  if (props.primaryCount === 0 && props.secondaryCount === 0) return null;
+  return (
+    <div
+      className="flex flex-wrap items-center gap-2 border-b border-border/40 bg-muted/10 px-5 py-2"
+      data-testid="worktrees-cleanup-bar"
+    >
+      <Sparkles className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+      <Button
+        type="button"
+        variant="secondary"
+        size="sm"
+        disabled={props.primaryCount === 0}
+        onClick={props.onSelectPrimary}
+        data-testid="worktrees-select-merged-clean"
+      >
+        Select {props.primaryCount} merged &amp; clean
+      </Button>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled={props.secondaryCount === 0}
+        onClick={props.onSelectSecondary}
+        data-testid="worktrees-select-unreferenced"
+      >
+        Also select {props.secondaryCount} clean, unreferenced (unknown branch
+        status)
+      </Button>
+    </div>
+  );
+}
+
+/**
+ * Bulk-delete confirmation: aggregate-by-class summary, dirty loss naming, a
+ * neutral caveat for the unverified cohort, named exclusions, and the full
+ * (path-addressed) target list. Reuses the shared confirm button test ids so
+ * the flow stays interchangeable with the single-target dialog.
+ */
+function WorktreeBulkDeleteDialog(props: {
+  readonly summary: WorktreeBulkDeleteSummary | null;
+  readonly onOpenChange: (open: boolean) => void;
+  readonly onConfirm: () => void;
+}): ReactNode {
+  const summary = props.summary;
+  return (
+    <Dialog open={summary !== null} onOpenChange={props.onOpenChange}>
+      <DialogContent
+        showCloseButton={false}
+        className="w-[min(92vw,32rem)] gap-0 overflow-hidden p-0 sm:max-w-lg"
+        data-testid="worktree-bulk-delete-dialog"
+      >
+        {summary !== null ? (
+          <>
+            <div className="flex min-w-0 items-start gap-3 p-5">
+              <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-destructive/10 text-destructive">
+                <AlertTriangle className="size-4" aria-hidden />
+              </div>
+              <div className="min-w-0 flex-1 space-y-2">
+                <DialogTitle className="text-ui font-semibold leading-snug wrap-anywhere">
+                  {summary.title}
+                </DialogTitle>
+                <DialogDescription className="text-ui-sm leading-relaxed text-muted-foreground wrap-anywhere">
+                  Deleting {summary.classSummary}. Traycer runs each repo's
+                  teardown script, then removes the worktree.
+                </DialogDescription>
+                {summary.dirtyLoss !== null ? (
+                  <p
+                    className="text-ui-sm leading-relaxed text-amber-700 dark:text-amber-400"
+                    data-testid="worktree-bulk-delete-dirty-loss"
+                  >
+                    {summary.dirtyLoss}
+                  </p>
+                ) : null}
+                {summary.unverifiedCaveat !== null ? (
+                  <p
+                    className="text-ui-sm leading-relaxed text-muted-foreground"
+                    data-testid="worktree-bulk-delete-caveat"
+                  >
+                    {summary.unverifiedCaveat}
+                  </p>
+                ) : null}
+                {summary.exclusions !== null ? (
+                  <p className="text-ui-xs text-muted-foreground">
+                    {summary.exclusions}
+                  </p>
+                ) : null}
+              </div>
+            </div>
+            <ul className="max-h-[min(30vh,12rem)] overflow-y-auto border-t border-border/60 px-5 py-2">
+              {summary.paths.map((path) => (
+                <li
+                  key={path}
+                  className="truncate py-0.5 text-ui-xs text-muted-foreground"
+                  title={path}
+                >
+                  {path}
+                </li>
+              ))}
+            </ul>
+            <div className="flex justify-end gap-2 border-t border-border/60 bg-muted/20 px-5 py-3">
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => props.onOpenChange(false)}
+                data-testid="confirm-cancel"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                variant="destructive"
+                size="sm"
+                onClick={props.onConfirm}
+                data-testid="confirm-action"
+              >
+                {summary.actionLabel}
+              </Button>
+            </div>
+          </>
+        ) : null}
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -892,6 +1124,7 @@ function WorktreeRow(props: {
   const deleting = deleteStatus !== null;
   const selectedForDelete = selectionMode && selected && canSelect;
   const selectionDisabled = selectionMode && !canSelect;
+  const classification = classifyWorktree(entry);
   return (
     <div
       aria-busy={deleting}
@@ -915,38 +1148,24 @@ function WorktreeRow(props: {
       </div>
       <div className="min-w-0 flex-1 space-y-1 pr-10">
         <div className="flex flex-wrap items-center gap-2">
+          <WorktreeTierPill tier={classification.tier} />
           <span className="truncate text-ui-sm font-medium text-foreground">
             {branchLabel(entry)}
           </span>
-          {entry.inUse ? (
-            <Badge variant="secondary" className="font-normal">
-              In use
-            </Badge>
-          ) : null}
-          {!entry.gitRemovable ? (
-            <Badge
-              variant="outline"
-              className="font-normal text-muted-foreground"
-            >
-              Orphaned
-            </Badge>
-          ) : null}
-          <WorktreeBranchStatusHints branchStatus={entry.branchStatus} />
-          {entry.uncommittedCount > 0 ? (
-            <span className="text-ui-xs text-muted-foreground">
-              {entry.uncommittedCount} uncommitted
-            </span>
-          ) : null}
         </div>
-        <StartTruncatedText className="block max-w-full text-ui-xs text-muted-foreground">
-          {entry.worktreePath}
-        </StartTruncatedText>
+        <WorktreeSecondaryFacts
+          facts={classification.facts}
+          lastActivityAt={entry.lastActivityAt}
+        />
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <WorktreeTaskAssociation
             owners={entry.owners}
             taskTitlesByEpicId={taskTitlesByEpicId}
           />
-          <WorktreeLastActive lastActivityAt={entry.lastActivityAt} />
+          <WorktreePathAffordance
+            worktreePath={entry.worktreePath}
+            disabled={deleting}
+          />
         </div>
       </div>
       {deleting ? (
@@ -973,43 +1192,111 @@ function WorktreeRow(props: {
 }
 
 /**
- * Best-effort branch-position hints from the v1.1 `branchStatus` probe. `null`
- * (no upstream / detached / probe failed / older host) renders nothing. "Merged"
- * means the branch is fully contained in the default branch, so removing the
- * worktree loses no unmerged commits; the ahead/behind counts surface otherwise.
+ * Evidence-tier pill. Leads every row with a TEXT label (never color-only, for
+ * accessibility). Green is reserved for the proven `merged` tier; `unreferenced`
+ * is a quieter green; `review` is amber; `orphaned` and `in-use` stay neutral.
  */
-function WorktreeBranchStatusHints(props: {
-  readonly branchStatus: WorktreeHostEntryV11["branchStatus"];
-}): ReactNode {
-  const status = props.branchStatus;
-  if (status === null) return null;
-  if (status.mergedIntoDefault) {
-    return (
-      <Badge
-        variant="outline"
-        className="gap-1 font-normal text-muted-foreground"
-      >
-        <GitMerge className="size-3" aria-hidden />
-        Merged
-      </Badge>
-    );
-  }
-  if (status.ahead === 0 && status.behind === 0) return null;
-  const parts = [
-    status.ahead > 0 ? `${status.ahead} ahead` : null,
-    status.behind > 0 ? `${status.behind} behind` : null,
-  ].filter((part): part is string => part !== null);
+function WorktreeTierPill(props: { readonly tier: WorktreeTier }): ReactNode {
+  const style = WORKTREE_TIER_PILL_STYLE[props.tier];
   return (
-    <span className="text-ui-xs text-muted-foreground">{parts.join(", ")}</span>
+    <Badge
+      variant="outline"
+      className={cn("gap-1 font-medium", style.className)}
+      data-testid="worktree-tier-pill"
+      data-tier={props.tier}
+    >
+      {props.tier === "merged" ? (
+        <GitMerge className="size-3" aria-hidden />
+      ) : null}
+      {WORKTREE_TIER_LABEL[props.tier]}
+    </Badge>
+  );
+}
+
+const WORKTREE_TIER_PILL_STYLE: Record<
+  WorktreeTier,
+  { readonly className: string }
+> = {
+  merged: {
+    className:
+      "border-emerald-600/30 bg-emerald-500/10 text-emerald-700 dark:border-emerald-400/30 dark:text-emerald-300",
+  },
+  unreferenced: {
+    className:
+      "border-emerald-600/20 bg-emerald-500/5 text-emerald-700/80 dark:border-emerald-400/20 dark:text-emerald-300/70",
+  },
+  review: {
+    className:
+      "border-amber-600/30 bg-amber-500/10 text-amber-700 dark:border-amber-400/30 dark:text-amber-300",
+  },
+  orphaned: {
+    className: "text-muted-foreground",
+  },
+  "in-use": {
+    className: "bg-muted text-muted-foreground",
+  },
+};
+
+/**
+ * One relevance-gated secondary line: the classifier's evidence facts joined,
+ * with the "last active" relative time appended. Renders nothing when there is
+ * neither a fact nor a timestamp (silence reads as quiet/clean).
+ */
+function WorktreeSecondaryFacts(props: {
+  readonly facts: readonly string[];
+  readonly lastActivityAt: number | null;
+}): ReactNode {
+  const hasFacts = props.facts.length > 0;
+  if (!hasFacts && props.lastActivityAt === null) return null;
+  return (
+    <p className="flex flex-wrap items-center gap-x-1 text-ui-xs text-muted-foreground">
+      {hasFacts ? <span>{props.facts.join(" · ")}</span> : null}
+      {hasFacts && props.lastActivityAt !== null ? (
+        <span aria-hidden>·</span>
+      ) : null}
+      {props.lastActivityAt !== null ? (
+        <WorktreeLastActiveLabel lastActivityAt={props.lastActivityAt} />
+      ) : null}
+    </p>
   );
 }
 
 /**
- * Task association chips resolved from `owners[].epicId`. Owners in the same
- * epic collapse to one chip. An epic with no resolved title (unknown / deleted /
- * not cached) still renders a chip so the association is visible. No owners at
- * all means nothing in Traycer references this worktree - deliberately NOT the
- * "Orphaned" badge, which means `gitRemovable: false`.
+ * The full worktree path leaves the scan line (it is long and low-signal) but
+ * stays one hover/click away: a copy-path affordance whose tooltip is the full
+ * path. Confirmation dialogs still list full paths - delete is path-addressed.
+ */
+function WorktreePathAffordance(props: {
+  readonly worktreePath: string;
+  readonly disabled: boolean;
+}): ReactNode {
+  return (
+    <TooltipWrapper
+      label={props.worktreePath}
+      side="top"
+      sideOffset={undefined}
+      align="start"
+    >
+      <span className="inline-flex shrink-0">
+        <CopyTextButton
+          value={props.worktreePath}
+          label={null}
+          ariaLabel={`Copy path ${props.worktreePath}`}
+          disabled={props.disabled}
+        />
+      </span>
+    </TooltipWrapper>
+  );
+}
+
+/**
+ * Task association resolved from `owners[].epicId`. Owners in the same epic
+ * collapse to one entry. An epic with a resolved title renders a chip; an epic
+ * whose title is unknown (deleted / not cached / other user) is DEMOTED to muted
+ * "Owner unresolved" text rather than a prominent chip - but it is still a
+ * reference, so the classifier keeps such a row out of the green tiers. No owners
+ * at all means nothing in Traycer references this worktree - deliberately NOT the
+ * "Orphaned" tier, which means `gitRemovable: false`.
  */
 function WorktreeTaskAssociation(props: {
   readonly owners: WorktreeHostEntryV11["owners"];
@@ -1023,36 +1310,39 @@ function WorktreeTaskAssociation(props: {
       </span>
     );
   }
+  const resolved = epicIds.map((epicId) => ({
+    epicId,
+    title: props.taskTitlesByEpicId.get(epicId) ?? null,
+  }));
+  const named = resolved.filter(
+    (item): item is { epicId: string; title: string } => item.title !== null,
+  );
+  const unresolvedCount = resolved.length - named.length;
   return (
     <span className="flex flex-wrap items-center gap-1">
-      {epicIds.map((epicId) => {
-        const title = props.taskTitlesByEpicId.get(epicId) ?? null;
-        return (
-          <Badge
-            key={epicId}
-            variant="outline"
-            className="max-w-[min(60vw,16rem)] font-normal"
-            title={title ?? undefined}
-          >
-            <span className="truncate">{title ?? "Unknown Task"}</span>
-          </Badge>
-        );
-      })}
+      {named.map((item) => (
+        <Badge
+          key={item.epicId}
+          variant="outline"
+          className="max-w-[min(60vw,16rem)] font-normal"
+          title={item.title}
+        >
+          <span className="truncate">{item.title}</span>
+        </Badge>
+      ))}
+      {unresolvedCount > 0 ? (
+        <span className="text-ui-xs text-muted-foreground/70">
+          Owner unresolved
+        </span>
+      ) : null}
     </span>
   );
 }
 
 /**
- * "Last active" label from the derived v1.1 `lastActivityAt`. `null` (older host
- * or no signal) renders nothing rather than a misleading placeholder.
+ * "Last active" label from the derived v1.1 `lastActivityAt`. Rendered inline in
+ * the secondary facts line only when a timestamp is present.
  */
-function WorktreeLastActive(props: {
-  readonly lastActivityAt: number | null;
-}): ReactNode {
-  if (props.lastActivityAt === null) return null;
-  return <WorktreeLastActiveLabel lastActivityAt={props.lastActivityAt} />;
-}
-
 function WorktreeLastActiveLabel(props: {
   readonly lastActivityAt: number;
 }): ReactNode {
@@ -1094,7 +1384,6 @@ function WorktreesSelectionControls(props: {
   readonly canSelect: boolean;
   readonly selectedCount: number;
   readonly onStart: () => void;
-  readonly onSelectAll: () => void;
   readonly onCancel: () => void;
   readonly onDeleteSelected: () => void;
 }): ReactNode {
@@ -1105,15 +1394,6 @@ function WorktreesSelectionControls(props: {
           <span className="px-1 text-ui-xs text-muted-foreground">
             {props.selectedCount} selected
           </span>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            disabled={!props.canSelect}
-            onClick={props.onSelectAll}
-          >
-            Select all
-          </Button>
           <Button
             type="button"
             variant="ghost"
@@ -1391,9 +1671,13 @@ function collapsedRepoKeysReducer(
 /**
  * Groups worktrees by repo for display, keyed on the resolved identifier when
  * present (real `owner/repo`) and otherwise on the display label (local repos
- * and orphans). In `stalest` sort mode each group's rows are ordered least-
- * recently-active first (`null` `lastActivityAt` sorts last, since a missing
- * signal is not evidence of staleness); `repo` mode preserves listing order.
+ * and orphans).
+ *
+ * The DEFAULT (`repo`) mode lands the group pre-triaged: rows are ordered by
+ * evidence tier (Merged, Unreferenced, Review, Orphaned, In use), stalest-first
+ * within each tier. The `stalest` toggle drops the tier grouping and orders the
+ * whole group least-recently-active first. Both keep `null` `lastActivityAt`
+ * last - a missing signal is not evidence of staleness.
  */
 function groupByRepo(
   worktrees: readonly WorktreeHostEntryV11[],
@@ -1413,12 +1697,23 @@ function groupByRepo(
     }
   }
   const groups = [...byKey.values()];
-  if (sortMode === "stalest") {
-    for (const group of groups) {
-      group.items.sort(compareStalestFirst);
-    }
+  const comparator =
+    sortMode === "stalest" ? compareStalestFirst : compareByTierThenStalest;
+  for (const group of groups) {
+    group.items.sort(comparator);
   }
   return groups;
+}
+
+function compareByTierThenStalest(
+  a: WorktreeHostEntryV11,
+  b: WorktreeHostEntryV11,
+): number {
+  const rankDiff =
+    worktreeTierRank(classifyWorktreeTier(a)) -
+    worktreeTierRank(classifyWorktreeTier(b));
+  if (rankDiff !== 0) return rankDiff;
+  return compareStalestFirst(a, b);
 }
 
 function compareStalestFirst(
@@ -1486,32 +1781,142 @@ function deleteDialogCopy(entry: WorktreeHostEntry): {
   };
 }
 
-function deleteDialogCopyForTargets(
-  targets: ReadonlyArray<WorktreeHostEntry>,
-): {
+interface WorktreeBulkDeleteSummary {
+  readonly count: number;
   readonly title: string;
-  readonly description: string;
   readonly actionLabel: string;
-} {
-  if (targets.length === 1) return deleteDialogCopy(targets[0]);
-  const uncommittedCount = targets.reduce(
+  readonly classSummary: string;
+  readonly dirtyLoss: string | null;
+  readonly unverifiedCaveat: string | null;
+  readonly exclusions: string | null;
+  readonly paths: readonly string[];
+}
+
+// Buckets a worktree into exactly one delete class, cautionary signals first so
+// a would-be-lost row is never mislabeled as a proven-clean one.
+type WorktreeDeleteClass =
+  | "merged"
+  | "clean"
+  | "unverified"
+  | "unmerged"
+  | "detached"
+  | "orphaned"
+  | "dirty";
+
+function worktreeDeleteClass(entry: WorktreeHostEntryV11): WorktreeDeleteClass {
+  const status = entry.branchStatus;
+  const merged = status !== null && status.mergedIntoDefault;
+  if (entry.uncommittedCount > 0) return "dirty";
+  if (entry.branch === null) return "detached";
+  if (status !== null && status.ahead > 0 && !merged) return "unmerged";
+  if (!entry.gitRemovable) return "orphaned";
+  if (merged) return "merged";
+  if (status !== null && status.ahead === 0) return "clean";
+  return "unverified";
+}
+
+const WORKTREE_DELETE_CLASS_LABEL: Record<WorktreeDeleteClass, string> = {
+  merged: "merged",
+  clean: "clean (no local-only commits)",
+  unverified: "unreferenced (branch status unverified)",
+  unmerged: "unmerged (local-only commits)",
+  detached: "detached HEAD",
+  orphaned: "orphaned",
+  dirty: "dirty",
+};
+
+// Safe-to-risky for the "Deleting" summary; risky-to-safe for the "not selected"
+// exclusion line (name the reasons a row was left out first).
+const WORKTREE_DELETE_SUMMARY_ORDER: readonly WorktreeDeleteClass[] = [
+  "merged",
+  "clean",
+  "unverified",
+  "unmerged",
+  "detached",
+  "orphaned",
+  "dirty",
+];
+const WORKTREE_EXCLUSION_ORDER: readonly WorktreeDeleteClass[] = [
+  "dirty",
+  "unmerged",
+  "detached",
+  "orphaned",
+  "unverified",
+  "clean",
+  "merged",
+];
+
+function countWorktreeClasses(
+  entries: readonly WorktreeHostEntryV11[],
+  order: readonly WorktreeDeleteClass[],
+): string {
+  const counts = new Map<WorktreeDeleteClass, number>();
+  for (const entry of entries) {
+    const key = worktreeDeleteClass(entry);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return order
+    .flatMap((key) => {
+      const count = counts.get(key);
+      return count === undefined || count === 0
+        ? []
+        : [`${count} ${WORKTREE_DELETE_CLASS_LABEL[key]}`];
+    })
+    .join(", ");
+}
+
+/**
+ * Confirmation copy for a multi-worktree delete. Aggregates the SELECTED targets
+ * by class (never 38 stacked warnings), names concrete loss for dirty rows, and
+ * — for the null-status cohort — uses deliberately NEUTRAL caveat wording (never
+ * "safe" / "loss-free"). Also names what was left out of the selection so the
+ * exclusion is transparent. Full paths are carried for the expandable list;
+ * delete is path-addressed.
+ */
+function summarizeBulkWorktreeDelete(
+  targets: ReadonlyArray<WorktreeHostEntryV11>,
+  visible: readonly WorktreeHostEntryV11[],
+): WorktreeBulkDeleteSummary {
+  const targetPaths = new Set(targets.map((entry) => entry.worktreePath));
+  const dirtyTargets = targets.filter((entry) => entry.uncommittedCount > 0);
+  const uncommittedTotal = dirtyTargets.reduce(
     (total, entry) => total + entry.uncommittedCount,
     0,
   );
-  if (uncommittedCount > 0) {
-    const changePlural = uncommittedCount === 1 ? "" : "s";
-    return {
-      title: `Discard ${uncommittedCount} uncommitted change${changePlural} across ${targets.length} worktrees?`,
-      description:
-        "Traycer runs each repo's teardown script, then force-removes the selected worktrees. Uncommitted changes in those worktrees will be permanently lost.",
-      actionLabel: "Delete and discard",
-    };
-  }
+  const hasUnverified = targets.some(
+    (entry) => worktreeDeleteClass(entry) === "unverified",
+  );
+  const dirtyLoss =
+    dirtyTargets.length === 0
+      ? null
+      : `Uncommitted changes in ${dirtyTargets.length} worktree${
+          dirtyTargets.length === 1 ? "" : "s"
+        } (${uncommittedTotal} change${
+          uncommittedTotal === 1 ? "" : "s"
+        }) will be permanently lost.`;
+  const unverifiedCaveat = hasUnverified
+    ? "For the worktrees with unverified branch status: branch status was unavailable, the branch refs are expected to remain, and unpushed work is not proven. Commit, stash, or push anything you want to keep first."
+    : null;
+  const excluded = visible.filter(
+    (entry) => !entry.inUse && !targetPaths.has(entry.worktreePath),
+  );
+  const exclusionSummary =
+    excluded.length === 0
+      ? null
+      : countWorktreeClasses(excluded, WORKTREE_EXCLUSION_ORDER);
   return {
+    count: targets.length,
     title: `Delete ${targets.length} worktrees?`,
-    description:
-      "Traycer runs each repo's teardown script, then removes the selected worktrees.",
-    actionLabel: "Delete worktrees",
+    actionLabel:
+      dirtyTargets.length > 0 ? "Delete and discard" : "Delete worktrees",
+    classSummary: countWorktreeClasses(targets, WORKTREE_DELETE_SUMMARY_ORDER),
+    dirtyLoss,
+    unverifiedCaveat,
+    exclusions:
+      exclusionSummary === null
+        ? null
+        : `${excluded.length} not selected: ${exclusionSummary}`,
+    paths: targets.map((entry) => entry.worktreePath),
   };
 }
 
