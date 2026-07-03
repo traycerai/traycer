@@ -13,9 +13,12 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 // `window.runnerHost` via `contextBridge.exposeInMainWorld`. Browser
 // shells never see it. Reliable in Electron 42 with sandbox + app://
 // scheme + Chromium UA reduction (UA sniffing is not).
-const IS_FRAMELESS_DESKTOP =
-  typeof window !== "undefined" &&
-  Object.prototype.hasOwnProperty.call(window, "runnerHost");
+function isFramelessDesktop(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    Object.prototype.hasOwnProperty.call(window, "runnerHost")
+  );
+}
 
 // `-webkit-app-region` isn't in the standard CSSProperties typings.
 const DRAG_STYLE = { WebkitAppRegion: "drag" } as CSSProperties;
@@ -40,6 +43,7 @@ export function AppHeader(props: AppHeaderProps): ReactNode {
   // throw when its hooks can't find the stream context.
   const navDisabled = variant === "host-loading";
   const showBell = variant !== "host-loading";
+  const framelessDesktop = isFramelessDesktop();
 
   return (
     <header
@@ -47,7 +51,7 @@ export function AppHeader(props: AppHeaderProps): ReactNode {
       data-variant={variant}
       className={cn(
         "relative z-20 flex h-10 shrink-0 items-center bg-canvas text-canvas-foreground after:absolute after:inset-x-0 after:bottom-0 after:z-1 after:h-px after:bg-border/90 after:content-['']",
-        IS_FRAMELESS_DESKTOP
+        framelessDesktop
           ? cn(
               "pl-3 pr-3",
               "wco:pl-[env(titlebar-area-x,82px)]",
@@ -69,32 +73,34 @@ export function AppHeader(props: AppHeaderProps): ReactNode {
           spacer, a direct header child, dragged). Electron registers
           `-webkit-app-region: drag` reliably only on top-level title-bar
           elements. */}
-      {showTabStrip && IS_FRAMELESS_DESKTOP ? (
+      {showTabStrip && framelessDesktop ? (
         <div
           aria-hidden
           className="relative z-10 hidden h-full shrink-0 basis-[clamp(2rem,6vw,6rem)] md:block"
           style={DRAG_STYLE}
         />
       ) : null}
-      <div className="relative z-10 flex min-w-0 flex-1 items-center">
+      <div
+        className={cn(
+          "relative z-10 flex min-w-0 flex-1 items-center",
+          framelessDesktop && "[-webkit-app-region:drag]",
+        )}
+      >
         {showTabStrip ? <TabStrip /> : null}
       </div>
-      {showTabStrip ? (
-        <div
-          aria-hidden
-          className="relative z-10 hidden h-full shrink-0 basis-[clamp(2rem,6vw,6rem)] md:block"
-          style={IS_FRAMELESS_DESKTOP ? DRAG_STYLE : undefined}
-        />
-      ) : (
-        <div
-          aria-hidden
-          className="relative z-10 h-full min-w-0 flex-1"
-          style={IS_FRAMELESS_DESKTOP ? DRAG_STYLE : undefined}
-        />
-      )}
+      <div
+        aria-hidden
+        className={cn(
+          "relative z-10 h-full",
+          showTabStrip
+            ? "hidden shrink-0 basis-[clamp(2rem,6vw,6rem)] md:block"
+            : "min-w-0 flex-1",
+        )}
+        style={framelessDesktop ? DRAG_STYLE : undefined}
+      />
       <div
         className="relative z-10 flex shrink-0 items-center gap-2"
-        style={IS_FRAMELESS_DESKTOP ? NO_DRAG_STYLE : undefined}
+        style={framelessDesktop ? NO_DRAG_STYLE : undefined}
       >
         {!navDisabled ? <AppUpdateHeaderButton /> : null}
         {!navDisabled ? <HistoryButton /> : null}

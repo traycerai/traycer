@@ -2,7 +2,7 @@
  * Header tab strip drag payloads + readers. Header tabs participate in the
  * single root DndContext (`root-dnd-provider.tsx`): each tab is a draggable
  * (`header-tab`) and a droppable slot (`header-tab-slot`), and the strip's
- * scroll container is a trailing slot covering the empty space after the
+ * tab row is a trailing slot covering the empty space after the
  * last tab. Canvas tear-off lands on the same slots - there is no separate
  * geometry bridge.
  */

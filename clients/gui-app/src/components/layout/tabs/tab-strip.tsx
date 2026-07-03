@@ -118,7 +118,7 @@ function TabStripBody() {
       data-testid="tab-strip"
       className="relative flex min-w-0 flex-1 items-end"
     >
-      <div className="relative flex min-w-0 flex-1 items-end">
+      <div className="relative flex min-w-0 max-w-full flex-1 items-end">
         <LayoutGroup id="header-tabs">
           <div
             ref={trailingSlotRef}
@@ -151,9 +151,9 @@ function TabStripBody() {
                 />
               );
             })}
-            <TabStripNewButton onNewTab={handleNewTab} />
           </div>
         </LayoutGroup>
+        <TabStripNewButton onNewTab={handleNewTab} />
       </div>
       {closeTabFlow.unsyncedDialog}
       <UnsyncedEpicMoveDialog flow={openInNewWindowFlow.epicFlow} />

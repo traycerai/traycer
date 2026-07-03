@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { RotateCcw } from "lucide-react";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { EpicNodeIconColorPicker } from "@/components/settings/controls/node-icon-color-picker";
@@ -7,6 +8,22 @@ import { NullableFontSizeInput } from "@/components/settings/controls/nullable-f
 import { FontPicker } from "@/components/settings/controls/font-picker";
 import { ThemeModeToggle } from "@/components/settings/controls/theme-mode-toggle";
 import { ThemePresetPicker } from "@/components/settings/controls/theme-preset-picker";
+import { Button } from "@/components/ui/button";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+} from "@/components/ui/select";
+import { useDesktopZoomBridge } from "@/hooks/runner/use-desktop-zoom-bridge";
+import {
+  useRunnerZoomChangeSubscription,
+  useRunnerZoomPercentQuery,
+  useRunnerZoomResetMutation,
+  useRunnerZoomSetMutation,
+} from "@/hooks/runner/use-runner-zoom";
+import { formatZoomPercent } from "@/lib/windows/format-zoom-percent";
 import { Switch } from "@/components/ui/switch";
 import {
   useSettingsStore,
@@ -110,6 +127,7 @@ export function AppearanceSettingsPanel() {
           />
         }
       />
+      <DesktopZoomSettingsRow />
       <SettingsRow
         label="UI font"
         description="Font and size used across the Traycer interface."
@@ -188,6 +206,85 @@ export function AppearanceSettingsPanel() {
         }
       />
     </SettingsPanelShell>
+  );
+}
+
+function DesktopZoomSettingsRow() {
+  const zoom = useDesktopZoomBridge();
+  const zoomQuery = useRunnerZoomPercentQuery(zoom);
+  const setMutation = useRunnerZoomSetMutation(zoom);
+  const resetMutation = useRunnerZoomResetMutation(zoom);
+  useRunnerZoomChangeSubscription(zoom);
+  const percent = zoomQuery.data ?? null;
+
+  if (zoom === null) {
+    return null;
+  }
+
+  return (
+    <>
+      <div className="border-b border-border/40 bg-muted/20 px-5 py-3 text-ui-xs font-semibold text-muted-foreground uppercase">
+        Display
+      </div>
+      <SettingsRow
+        label="Zoom"
+        description="Scales the whole app; font sizes only adjust typography."
+        control={
+          <div className="flex items-center gap-2">
+            <Select
+              value={percent === null ? "loading" : String(percent)}
+              disabled={setMutation.isPending || resetMutation.isPending}
+              onValueChange={(value) => {
+                const nextPercent = Number.parseInt(value, 10);
+                if (!Number.isFinite(nextPercent)) return;
+                setMutation.mutate(nextPercent);
+              }}
+            >
+              <SelectTrigger
+                size="sm"
+                aria-label="Display zoom"
+                className="w-[min(40vw,8rem)]"
+              >
+                <span data-slot="select-value">
+                  {percent === null ? "Loading" : formatZoomPercent(percent)}
+                </span>
+              </SelectTrigger>
+              <SelectContent>
+                {percent === null ? (
+                  <SelectItem value="loading" disabled>
+                    Loading
+                  </SelectItem>
+                ) : null}
+                {zoom.ladder.map((candidate) => (
+                  <SelectItem key={candidate} value={String(candidate)}>
+                    {formatZoomPercent(candidate)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={resetMutation.isPending}
+              onClick={() => {
+                resetMutation.mutate();
+              }}
+            >
+              <RotateCcw aria-hidden="true" />
+              Reset
+              {resetMutation.isPending ? (
+                <AgentSpinningDots
+                  className="ml-1 text-current"
+                  testId="desktop-zoom-settings-reset-pending"
+                  variant="dots2"
+                />
+              ) : null}
+            </Button>
+          </div>
+        }
+      />
+    </>
   );
 }
 

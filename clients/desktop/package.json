@@ -23,7 +23,8 @@
     "dev": "bun x concurrently -k -n renderer,main -c blue,magenta \"bun run dev:renderer\" \"bun x wait-on tcp:5173 && TRAYCER_DESKTOP_DEV=1 TRAYCER_DESKTOP_DEV_URL=http://localhost:5173 bun run dev:main\"",
     "lint": "eslint . --cache --fix --max-warnings 0",
     "format": "bun x prettier --write .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:resolution": "VITE_DESKTOP_LOCAL_STORAGE_KEY=traycer-resolution-test-local-storage-key bun run build:app && bun scripts/resolution/run-resolution-matrix.cjs"
   },
   "dependencies": {
     "@sentry/browser": "catalog:",

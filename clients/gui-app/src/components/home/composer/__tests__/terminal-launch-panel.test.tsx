@@ -56,6 +56,7 @@ function makeToolbarStore() {
       {
         id: "claude",
         label: "Claude Code",
+        enabled: true,
         available: true,
         error: null,
         modes: ["gui", "tui"],
@@ -97,6 +98,7 @@ function makeGuiOnlyToolbarStore() {
       {
         id: "cursor",
         label: "Cursor",
+        enabled: true,
         available: true,
         error: null,
         modes: ["gui"],

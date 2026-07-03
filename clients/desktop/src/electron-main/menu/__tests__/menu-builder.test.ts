@@ -218,6 +218,35 @@ describe("buildApplicationMenu", () => {
     }
   });
 
+  it("routes View zoom items through app-specific commands without native accelerators", () => {
+    const commands: MenuCommandId[] = [];
+    const items = template(
+      buildApplicationMenu(buildState("darwin"), {
+        command: (command) => {
+          commands.push(command);
+        },
+        focusWindow: () => undefined,
+        openExternal: () => undefined,
+      }),
+    );
+    const viewMenu = menuByLabel(items, "View").submenu ?? [];
+    const actualSize = menuByLabel(viewMenu, "Actual Size");
+    const zoomIn = menuByLabel(viewMenu, "Zoom In");
+    const zoomOut = menuByLabel(viewMenu, "Zoom Out");
+
+    expect(viewMenu.some((item) => item.role === "resetZoom")).toBe(false);
+    expect(viewMenu.some((item) => item.role === "zoomIn")).toBe(false);
+    expect(viewMenu.some((item) => item.role === "zoomOut")).toBe(false);
+    expect(actualSize.accelerator).toBeUndefined();
+    expect(zoomIn.accelerator).toBeUndefined();
+    expect(zoomOut.accelerator).toBeUndefined();
+
+    actualSize.click?.(null, null);
+    zoomIn.click?.(null, null);
+    zoomOut.click?.(null, null);
+    expect(commands).toEqual(["view.resetZoom", "view.zoomIn", "view.zoomOut"]);
+  });
+
   it("routes macOS Window actions through app-specific commands", () => {
     const commands: MenuCommandId[] = [];
     const items = template(

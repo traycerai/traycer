@@ -2,6 +2,7 @@ import { app } from "electron";
 import { DESKTOP_APP_NAME } from "../config";
 import { initLogger, log } from "./app/logger";
 import { runDesktopStartup } from "./startup/desktop-startup";
+import { RESOLUTION_TEST_USER_DATA_DIR_ENV } from "./windows/resolution-test-env";
 
 // Electron keys both the single-instance lock and the entire userData directory
 // off the app name. Set the per-environment name BEFORE requesting the lock (and
@@ -12,6 +13,14 @@ import { runDesktopStartup } from "./startup/desktop-startup";
 // per-slot value is stamped at build time by the deploy script, never hardcoded
 // here.
 app.setName(DESKTOP_APP_NAME);
+const resolutionTestUserDataDir =
+  process.env[RESOLUTION_TEST_USER_DATA_DIR_ENV] ?? null;
+if (
+  resolutionTestUserDataDir !== null &&
+  resolutionTestUserDataDir.length > 0
+) {
+  app.setPath("userData", resolutionTestUserDataDir);
+}
 
 // Single-instance lock applies uniformly so deep links and dock relaunches
 // target the primary process. With the dev userData split above, a

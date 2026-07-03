@@ -88,7 +88,7 @@ export const PERMISSION_OPTIONS: ReadonlyArray<PermissionOption> = [
   FULL_ACCESS_PERMISSION_OPTION,
 ];
 
-export const DEFAULT_PERMISSION: PermissionMode = "supervised";
+export const DEFAULT_PERMISSION: PermissionMode = "full_access";
 
 export function findPermissionLabel(mode: PermissionMode): string {
   return findPermissionOption(mode).label;

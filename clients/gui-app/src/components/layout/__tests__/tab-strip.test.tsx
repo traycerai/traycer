@@ -290,22 +290,77 @@ describe("<TabStrip />", () => {
     expect(screen.getByTestId("tab-new")).toBeDefined();
   });
 
-  it("maps vertical wheel movement to horizontal scroll when tabs overflow", async () => {
+  it("caps header tab frames while preserving the shrink floor", async () => {
+    openEpicFixture(EPIC_A);
+    const router = buildRouter("/epics/e-a/e-a");
+    render(<RouterProvider router={router} />);
+
+    const tab = await screen.findByTestId("tab-epic-e-a");
+    const frame = tab.parentElement;
+    if (frame === null) throw new Error("Expected tab frame");
+
+    expect(frame.className).toContain("min-w-[120px]");
+    expect(frame.className).toContain("w-56");
+    expect(frame.className).toContain("max-w-56");
+    expect(frame.className).toContain("flex-[1_1_14rem]");
+    expect(frame.className).toContain("[container-type:inline-size]");
+    expect(tab.className).toContain("[-webkit-app-region:no-drag]");
+    expect(screen.getByTestId("tab-new").className).toContain(
+      "[-webkit-app-region:no-drag]",
+    );
+  });
+
+  it("renders a hover chrome layer for inactive header tabs", async () => {
+    openEpicFixture(EPIC_A);
+    openEpicFixture(EPIC_B);
+    const router = buildRouter("/epics/e-b/e-b");
+    render(<RouterProvider router={router} />);
+
+    const inactiveTab = await screen.findByTestId("tab-epic-e-a");
+    const activeTab = screen.getByTestId("tab-epic-e-b");
+    const hoverChrome = inactiveTab.firstElementChild;
+
+    expect(inactiveTab.getAttribute("aria-selected")).toBe("false");
+    expect(activeTab.getAttribute("aria-selected")).toBe("true");
+    const closeSlot = screen.getByTestId("tab-close-epic-e-a").parentElement;
+    if (closeSlot === null) throw new Error("Expected tab close slot");
+
+    expect(closeSlot.className).toContain("header-tab-trailing-slot");
+    expect(closeSlot.className).not.toContain("group-hover/tab:w-5");
+    expect(hoverChrome?.className).toContain("rounded-md");
+    expect(hoverChrome?.className).toContain("group-hover/tab:opacity-100");
+    expect(hoverChrome?.className).toContain(
+      "group-focus-within/tab:opacity-100",
+    );
+    expect(hoverChrome?.querySelector("svg")).toBeNull();
+  });
+
+  it("keeps the new-tab button outside the scrollable full-width tab row", async () => {
     openEpicFixture(EPIC_A);
     openEpicFixture(EPIC_B);
     const router = buildRouter("/epics/e-a/e-a");
     render(<RouterProvider router={router} />);
     await screen.findByTestId("tab-epic-e-a");
 
-    const scroller = screen.getByTestId("header-tab-strip-scroll");
-    Object.defineProperties(scroller, {
+    const tabRow = screen.getByTestId("header-tab-strip-scroll");
+    const newTabButton = screen.getByTestId("tab-new");
+    const tabCluster = newTabButton.parentElement;
+    if (tabCluster === null) throw new Error("Expected tab cluster");
+    Object.defineProperties(tabRow, {
       clientWidth: { configurable: true, value: 100 },
       scrollWidth: { configurable: true, value: 400 },
     });
 
-    fireEvent.wheel(scroller, { deltaY: 80, deltaMode: 0 });
+    fireEvent.wheel(tabRow, { deltaY: 80, deltaMode: 0 });
 
-    expect(scroller.scrollLeft).toBe(80);
+    expect(tabRow.className).toContain("flex-1");
+    expect(tabRow.className).not.toContain("w-max");
+    expect(tabRow.className).toContain("overflow-x-auto");
+    expect(tabRow.scrollLeft).toBe(80);
+    expect(newTabButton.parentElement).not.toBe(tabRow);
+    expect(tabCluster.className).toContain("max-w-full");
+    expect(tabCluster.className).toContain("flex-1");
+    expect(newTabButton.className).toContain("shrink-0");
   });
 
   it("scrolls the active header tab into view after any route activation", async () => {
