@@ -32,6 +32,11 @@ import { type EditorId } from "@traycer/protocol/host";
 export type ThemeMode = "system" | "light" | "dark";
 export type EpicNodeIconColorMode = "byType" | "none";
 
+// Default font sizes, shared with the Appearance panel so its reset-to-default
+// affordance and the store's initial state stay a single source of truth.
+export const DEFAULT_UI_FONT_SIZE = 15;
+export const DEFAULT_CODE_FONT_SIZE = 12;
+
 export interface SettingsState {
   theme: ThemeMode;
   themePreset: ThemePreset;
@@ -61,6 +66,17 @@ export interface SettingsState {
   pointerCursors: boolean;
   uiFontSize: number;
   codeFontSize: number;
+  /** Chosen UI font family name, or null to use the default (Figtree). */
+  uiFontFamily: string | null;
+  /** Chosen code font family name, or null to use the default mono stack. */
+  codeFontFamily: string | null;
+  /**
+   * Chosen terminal font family name, or null to follow `codeFontFamily`
+   * (which itself falls back to the default mono stack when unset).
+   */
+  terminalFontFamily: string | null;
+  /** Chosen terminal font size, or null to follow `codeFontSize`. */
+  terminalFontSize: number | null;
   artifactIconColorMode: EpicNodeIconColorMode;
   artifactIconColors: EpicNodeIconColors;
   defaultEditor: EditorId | null;
@@ -88,6 +104,10 @@ export interface SettingsState {
   setPointerCursors: (value: boolean) => void;
   setUiFontSize: (value: number) => void;
   setCodeFontSize: (value: number) => void;
+  setUiFontFamily: (value: string | null) => void;
+  setCodeFontFamily: (value: string | null) => void;
+  setTerminalFontFamily: (value: string | null) => void;
+  setTerminalFontSize: (value: number | null) => void;
   setArtifactIconColorMode: (mode: EpicNodeIconColorMode) => void;
   setArtifactIconColor: (type: EpicNodeKind, color: string) => void;
   resetArtifactIconColors: () => void;
@@ -114,6 +134,10 @@ type PersistedSettingsState = Pick<
   | "pointerCursors"
   | "uiFontSize"
   | "codeFontSize"
+  | "uiFontFamily"
+  | "codeFontFamily"
+  | "terminalFontFamily"
+  | "terminalFontSize"
   | "artifactIconColorMode"
   | "artifactIconColors"
   | "defaultEditor"
@@ -138,14 +162,21 @@ function makeSetter<K extends keyof SettingsState>(
 function makeClampedFontSizeSetter<K extends "uiFontSize" | "codeFontSize">(
   set: SetFn,
   key: K,
+  clamp: (value: number) => number,
 ): (value: number) => void {
   return (value) => {
-    const next = clampFontSize(value);
+    const next = clamp(value);
     set((s) => (s[key] === next ? s : { [key]: next }));
   };
 }
 
-function clampFontSize(value: number): number {
+// The UI font size scales the root font-size, so it is capped tighter than
+// code/terminal sizes - anything above 20px starts breaking layout.
+function clampUiFontSize(value: number): number {
+  return Math.max(10, Math.min(20, Math.round(value)));
+}
+
+function clampCodeFontSize(value: number): number {
   return Math.max(10, Math.min(24, Math.round(value)));
 }
 
@@ -165,6 +196,10 @@ function partializeSettingsState(state: SettingsState): PersistedSettingsState {
     pointerCursors: state.pointerCursors,
     uiFontSize: state.uiFontSize,
     codeFontSize: state.codeFontSize,
+    uiFontFamily: state.uiFontFamily,
+    codeFontFamily: state.codeFontFamily,
+    terminalFontFamily: state.terminalFontFamily,
+    terminalFontSize: state.terminalFontSize,
     artifactIconColorMode: state.artifactIconColorMode,
     artifactIconColors: state.artifactIconColors,
     defaultEditor: state.defaultEditor,
@@ -189,8 +224,12 @@ export const useSettingsStore = create<SettingsState>()(
       notifyOnChatTurnComplete: true,
       pinContextUsageBreakdown: false,
       pointerCursors: true,
-      uiFontSize: 15,
-      codeFontSize: 12,
+      uiFontSize: DEFAULT_UI_FONT_SIZE,
+      codeFontSize: DEFAULT_CODE_FONT_SIZE,
+      uiFontFamily: null,
+      codeFontFamily: null,
+      terminalFontFamily: null,
+      terminalFontSize: null,
       artifactIconColorMode: "byType",
       artifactIconColors: DEFAULT_EPIC_NODE_ICON_COLORS,
       defaultEditor: "vscode",
@@ -205,8 +244,25 @@ export const useSettingsStore = create<SettingsState>()(
       setNotifyOnChatTurnComplete: makeSetter(set, "notifyOnChatTurnComplete"),
       setPinContextUsageBreakdown: makeSetter(set, "pinContextUsageBreakdown"),
       setPointerCursors: makeSetter(set, "pointerCursors"),
-      setUiFontSize: makeClampedFontSizeSetter(set, "uiFontSize"),
-      setCodeFontSize: makeClampedFontSizeSetter(set, "codeFontSize"),
+      setUiFontSize: makeClampedFontSizeSetter(
+        set,
+        "uiFontSize",
+        clampUiFontSize,
+      ),
+      setCodeFontSize: makeClampedFontSizeSetter(
+        set,
+        "codeFontSize",
+        clampCodeFontSize,
+      ),
+      setUiFontFamily: makeSetter(set, "uiFontFamily"),
+      setCodeFontFamily: makeSetter(set, "codeFontFamily"),
+      setTerminalFontFamily: makeSetter(set, "terminalFontFamily"),
+      setTerminalFontSize: (value) => {
+        const next = value === null ? null : clampCodeFontSize(value);
+        set((s) =>
+          s.terminalFontSize === next ? s : { terminalFontSize: next },
+        );
+      },
       setArtifactIconColorMode: makeSetter(set, "artifactIconColorMode"),
       setArtifactIconColor: (type, color) => {
         const next = normalizeEpicNodeIconColor(color);

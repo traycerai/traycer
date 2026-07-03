@@ -9,8 +9,10 @@
  * resolved drop (pointer-up can race the final collision update), which the
  * provider tracks in a ref and hands in here.
  */
+import { v4 as uuidv4 } from "uuid";
 import {
   ARTIFACT_TAB_DND_TYPE,
+  CHAT_ARTIFACT_DND_TYPE,
   GIT_DIFF_TILE_DND_TYPE,
   LEFT_PANEL_RAIL_ITEM_DND_TYPE,
   PANEL_NODE_FAMILY,
@@ -32,6 +34,7 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { findPaneById } from "@/stores/epics/canvas/tile-tree";
 import {
   isGitDiffTileRef,
+  makeOpenableNodeRef,
   type EpicCanvasTileRef,
   type EpicNodeRef,
   type GitDiffTileRef,
@@ -75,15 +78,22 @@ export function canDropOnHeaderStrip(
       | typeof SIDEBAR_NODE_DND_TYPE
       | typeof TERMINAL_TILE_DND_TYPE
       | typeof GIT_DIFF_TILE_DND_TYPE
-      | typeof WORKSPACE_FILE_DND_TYPE;
+      | typeof WORKSPACE_FILE_DND_TYPE
+      | typeof CHAT_ARTIFACT_DND_TYPE;
   }
 > {
+  // Every openable canvas source can tear off into a new header tab. A
+  // chat-artifact belongs here alongside sidebar nodes / workspace files:
+  // collision already offers it the header slot (via EPIC_CANVAS_DND_SOURCE_TYPES
+  // -> CANVAS_TARGET_KINDS), so omitting it here would leave the header strip a
+  // silent dead zone (preview + commit both gate on this predicate).
   return (
     source?.kind === ARTIFACT_TAB_DND_TYPE ||
     source?.kind === SIDEBAR_NODE_DND_TYPE ||
     source?.kind === TERMINAL_TILE_DND_TYPE ||
     source?.kind === GIT_DIFF_TILE_DND_TYPE ||
-    source?.kind === WORKSPACE_FILE_DND_TYPE
+    source?.kind === WORKSPACE_FILE_DND_TYPE ||
+    source?.kind === CHAT_ARTIFACT_DND_TYPE
   );
 }
 
@@ -116,6 +126,12 @@ export function sourceToTileRef(
   if (source.kind === TERMINAL_TILE_DND_TYPE) return source.tile;
   if (source.kind === GIT_DIFF_TILE_DND_TYPE) return source.tile;
   if (source.kind === WORKSPACE_FILE_DND_TYPE) return source.ref;
+  if (source.kind === CHAT_ARTIFACT_DND_TYPE) {
+    // Mint a FRESH instanceId per call (constraint C2): the payload carries
+    // artifact identity only, so two drags of the same card never reuse an
+    // instanceId and collide in `tilesByInstanceId`.
+    return makeOpenableNodeRef({ ...source.artifact, instanceId: uuidv4() });
+  }
   return null;
 }
 

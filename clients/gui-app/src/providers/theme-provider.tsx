@@ -8,6 +8,11 @@ import { useShallow } from "zustand/react/shallow";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { getResolvedTheme, subscribeResolvedTheme } from "@/lib/theme-applier";
 import {
+  DEFAULT_MONO_FONT_STACK,
+  DEFAULT_UI_FONT_STACK,
+  buildFontFamilyValue,
+} from "@/lib/default-font-stacks";
+import {
   ResolvedThemeContext,
   type ResolvedThemeContextValue,
 } from "@/providers/use-resolved-theme";
@@ -31,16 +36,51 @@ function applyCodeFontSize(size: number): void {
   );
 }
 
+// Chosen font names are set as an inline override of the same CSS variable
+// the stylesheet default lives on, with the default stack appended as a
+// fallback; `null` removes the override so the stylesheet default applies.
+function applyUiFontFamily(family: string | null): void {
+  const style = window.document.documentElement.style;
+  if (family === null) {
+    style.removeProperty("--traycer-font-ui");
+    return;
+  }
+  style.setProperty(
+    "--traycer-font-ui",
+    buildFontFamilyValue(family, DEFAULT_UI_FONT_STACK),
+  );
+}
+
+function applyCodeFontFamily(family: string | null): void {
+  const style = window.document.documentElement.style;
+  if (family === null) {
+    style.removeProperty("--traycer-font-mono");
+    return;
+  }
+  style.setProperty(
+    "--traycer-font-mono",
+    buildFontFamilyValue(family, DEFAULT_MONO_FONT_STACK),
+  );
+}
+
 export function ThemeProvider(props: ThemeProviderProps) {
-  const { themePreset, pointerCursors, uiFontSize, codeFontSize } =
-    useSettingsStore(
-      useShallow((s) => ({
-        themePreset: s.themePreset,
-        pointerCursors: s.pointerCursors,
-        uiFontSize: s.uiFontSize,
-        codeFontSize: s.codeFontSize,
-      })),
-    );
+  const {
+    themePreset,
+    pointerCursors,
+    uiFontSize,
+    codeFontSize,
+    uiFontFamily,
+    codeFontFamily,
+  } = useSettingsStore(
+    useShallow((s) => ({
+      themePreset: s.themePreset,
+      pointerCursors: s.pointerCursors,
+      uiFontSize: s.uiFontSize,
+      codeFontSize: s.codeFontSize,
+      uiFontFamily: s.uiFontFamily,
+      codeFontFamily: s.codeFontFamily,
+    })),
+  );
 
   // Resolved light/dark mode is owned by `theme-applier.ts`; we only
   // mirror its snapshot into a React-readable value so consumers can use
@@ -66,6 +106,14 @@ export function ThemeProvider(props: ThemeProviderProps) {
   useEffect(() => {
     applyCodeFontSize(codeFontSize);
   }, [codeFontSize]);
+
+  useEffect(() => {
+    applyUiFontFamily(uiFontFamily);
+  }, [uiFontFamily]);
+
+  useEffect(() => {
+    applyCodeFontFamily(codeFontFamily);
+  }, [codeFontFamily]);
 
   const contextValue = useMemo<ResolvedThemeContextValue>(
     () => ({ resolvedTheme, themePreset }),

@@ -57,7 +57,7 @@ import { useTerminalKill } from "@/hooks/terminal/use-terminal-kill-mutation";
 import { useTerminalList } from "@/hooks/terminal/use-terminal-list-query";
 import { useTerminalRename } from "@/hooks/terminal/use-terminal-rename-mutation";
 import { useHostClient } from "@/lib/host";
-import { isVisibleTerminalSidebarSession } from "@/lib/terminals/terminal-session-filters";
+import { isVisibleRawTerminalSession } from "@/lib/terminals/terminal-session-filters";
 import { terminalSessionTitle } from "@/lib/terminals/terminal-title";
 import { cn } from "@/lib/utils";
 import {
@@ -112,7 +112,7 @@ function TerminalsPanelBodyLive(props: {
   // Host keeps exited sessions for a 60s grace window; filter so a
   // single kill click feels like "remove" instead of "mark dead".
   const sessions = (list.data?.sessions ?? []).filter(
-    isVisibleTerminalSidebarSession,
+    isVisibleRawTerminalSession,
   );
 
   return (

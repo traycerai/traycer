@@ -65,6 +65,7 @@ import {
 import { ProviderAuthBadge, ProviderAuthLine } from "./provider-auth-display";
 import { EnvOverrideEditor } from "./env-override-editor";
 import { TraycerSubscriptionSection } from "./traycer-subscription-section";
+import { ProviderRateLimitForProvider } from "./provider-rate-limit-section";
 
 type ProviderId = ProviderCliState["providerId"];
 type ProvidersListQuery = UseQueryResult<
@@ -565,6 +566,7 @@ function ProviderDetail({
       </div>
 
       <TraycerSubscriptionForProvider providerId={providerId} />
+      <ProviderRateLimitForProvider providerId={providerId} />
 
       <div
         className={cn(

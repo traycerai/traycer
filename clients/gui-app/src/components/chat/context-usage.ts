@@ -128,3 +128,17 @@ export function formatContextWindowTokens(value: number): string {
   }
   return `${Math.round(value / 1_000_000).toLocaleString()}M`;
 }
+
+/**
+ * Shared "how much headroom is left" tone scale: `percent` is a LEFT/
+ * remaining percentage (0 = exhausted), not a used percentage - low
+ * remaining reads as destructive/amber. Reused by the context-window chip
+ * and the provider rate-limit views, which invert their native
+ * `usedPercent` (`100 - usedPercent`) before calling this so both surfaces
+ * share one polarity and one set of thresholds.
+ */
+export function contextUsageTone(percent: number): string {
+  if (percent <= 10) return "text-destructive";
+  if (percent <= 25) return "text-amber-500 dark:text-amber-400";
+  return "text-muted-foreground";
+}

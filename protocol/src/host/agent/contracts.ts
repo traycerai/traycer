@@ -18,7 +18,8 @@ import {
   agentSelectionGuideGlobalSetResponseSchema,
   getAgentTranscriptRequestSchema,
   getAgentTranscriptResponseSchema,
-  listHarnessModelsRequestSchema,
+  listHarnessModelsRequestSchemaV10,
+  listHarnessModelsRequestSchemaV20,
   listHarnessModelsResponseSchema,
   listAgentsRequestSchema,
   listAgentsResponseSchema,
@@ -89,8 +90,54 @@ export const agentSelectionGuideGlobalResetV10 = defineRpcContract({
 export const agentListHarnessModelsV10 = defineRpcContract({
   method: "agent.listHarnessModels",
   schemaVersion: { major: 1, minor: 0 } as const,
-  requestSchema: listHarnessModelsRequestSchema,
+  requestSchema: listHarnessModelsRequestSchemaV10,
   responseSchema: listHarnessModelsResponseSchema,
+});
+
+export const agentListHarnessModelsV20 = defineRpcContract({
+  method: "agent.listHarnessModels",
+  schemaVersion: { major: 2, minor: 0 } as const,
+  requestSchema: listHarnessModelsRequestSchemaV20,
+  responseSchema: listHarnessModelsResponseSchema,
+});
+
+export const agentListHarnessModelsUpgradeV1ToV2 = defineUpgradePath<
+  typeof agentListHarnessModelsV10,
+  typeof agentListHarnessModelsV20
+>({
+  from: { major: 1, minor: 0 },
+  to: { major: 2, minor: 0 },
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const agentListHarnessModelsDowngradeV2ToV1 = defineDowngradePath<
+  typeof agentListHarnessModelsV20,
+  typeof agentListHarnessModelsV10
+>({
+  from: { major: 2, minor: 0 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) => {
+    if (request.epicId === null || request.senderAgentId === null) {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "agent.listHarnessModels without epic and sender agent context requires a newer Traycer host.",
+        },
+      };
+    }
+    return {
+      ok: true,
+      value: {
+        epicId: request.epicId,
+        senderAgentId: request.senderAgentId,
+        harnessId: request.harnessId,
+      },
+    };
+  },
+  downgradeResponse: (response) => ({ ok: true, value: response }),
 });
 
 export const agentListV10 = defineRpcContract({

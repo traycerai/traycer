@@ -25,6 +25,13 @@
  * Externals:
  *   - `electron`            (Electron runtime - provided at load time)
  *   - `*.node`              (native bindings, future-proofing - none today)
+ *   - `font-list`           (spawns a compiled sidecar binary/script via
+ *     `__dirname`-relative `execFile` - inlining it breaks both that path
+ *     resolution and its ESM `createRequire(import.meta.url)` entry, which
+ *     esbuild reduces to `createRequire(undefined)` when squashed into a
+ *     CJS bundle. Left as a real `require("font-list")` so Node resolves it
+ *     from `node_modules` at runtime; `package.json`'s `files`/`asarUnpack`
+ *     ship it alongside the packaged app.)
  */
 
 const { existsSync, mkdirSync, rmSync } = require("node:fs");
@@ -78,7 +85,7 @@ const sharedConfig = {
   target: "node20",
   format: "cjs",
   tsconfig: tsconfigPath,
-  external: ["electron", "*.node"],
+  external: ["electron", "*.node", "font-list"],
   // Source maps are useful when the packaged app surfaces a stack trace
   // through electron-log; "external" keeps them out of app.asar.
   sourcemap: "external",

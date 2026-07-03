@@ -19,6 +19,9 @@ const CUSTOM_FONT_SIZE_TOKENS = [
   "title-sm",
   "title-xs",
   "ui",
+  "ui-base",
+  "ui-lg",
+  "ui-md",
   "ui-sm",
   "ui-xs",
 ];

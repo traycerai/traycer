@@ -65,7 +65,11 @@ import {
   useEpicPermissionRole,
 } from "@/lib/epic-selectors";
 import { displayTitle } from "@/lib/display-title";
-import { isEditableRole } from "@/lib/epic-permissions";
+import { isEditableRole, mutationDisabledHint } from "@/lib/epic-permissions";
+import {
+  ARIA_DISABLED_TRIGGER_CLASS,
+  resolveDisabledPresentation,
+} from "@/lib/disabled-presentation";
 import { buildChatRunSettings } from "@/lib/composer/chat-run-settings";
 import { contentIsSubmittable } from "@/lib/composer/composer-content";
 import { buildSubmittedChatJSONContent } from "@/lib/composer/tiptap-json-content";
@@ -175,18 +179,27 @@ export function NewConversationModalAction(
       parentId: props.parentId,
     });
   }, [openModal, props.disabled, props.epicId, props.parentId, props.tabId]);
+  // Activation while aria-disabled stays blocked via `handleOpen`'s early
+  // return; see `disabled-presentation.ts` for why native `disabled` can't
+  // carry the tooltip.
+  const { ariaDisabled, nativeDisabled } = resolveDisabledPresentation(
+    props.disabled,
+    props.disabledTooltip,
+  );
   const trigger = (
     <Button
       type="button"
       variant="ghost"
       size={props.size}
       aria-label={props.triggerLabel}
+      aria-disabled={ariaDisabled ? true : undefined}
       data-testid={props.triggerTestId}
       className={cn(
         "text-muted-foreground hover:text-foreground",
+        ARIA_DISABLED_TRIGGER_CLASS,
         props.actionRevealClassName,
       )}
-      disabled={props.disabled}
+      disabled={nativeDisabled}
       onClick={handleOpen}
     >
       <Plus className={props.size === "icon-xs" ? "size-3" : "size-4"} />
@@ -533,7 +546,7 @@ function NewConversationModalBody(props: {
   const canSubmit =
     canMutate && !isSubmitting && workspaceCanStart && hasSubmittableContent;
   const composerDisabledHint =
-    mutationDisabledHint(canMutate, isDisconnected) ??
+    mutationDisabledHint(permissionRole, isDisconnected, "make changes") ??
     workspaceAvailability.disabledHint;
   const paste = useComposerPaste(editorRef);
   const { dictationControl, dictationPreparing } = useComposerDictation({
@@ -947,15 +960,6 @@ function toTuiPlacement(
     return { kind: "target-group", groupId: placement.groupId };
   }
   return { kind: "active-tile" };
-}
-
-function mutationDisabledHint(
-  canMutate: boolean,
-  isDisconnected: boolean,
-): string | null {
-  if (canMutate) return null;
-  if (isDisconnected) return "Reconnect to make changes.";
-  return "You don't have permission to make changes.";
 }
 
 function effectiveWorktreeIntent(input: {

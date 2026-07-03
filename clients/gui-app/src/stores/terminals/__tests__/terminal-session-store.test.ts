@@ -63,6 +63,33 @@ function data(chunk: string): TerminalDataFrame {
   };
 }
 
+// A snapshot from a host that negotiated ack-credit support. The renderer
+// gates sending `ack` frames on having seen this confirmed at least once
+// (see `ackCreditSupported` in `terminal-session-store.ts`), so ack-credit
+// tests must send one before exercising the accounting.
+function snapshotWithAckCredit(scrollback: string): TerminalSnapshotFrame {
+  return { ...snapshot(scrollback), ackCreditSupported: true };
+}
+
+// `onSnapshot`/`onData` take the content as a second, separate argument (see
+// `TerminalStreamCallbacks`'s doc comment) so a `@1.2` binary connection can
+// pass a `Uint8Array` instead of reading it off the frame. These test frame
+// builders still carry the content inline for readability, so route through
+// these to derive the second argument automatically.
+function emitSnapshot(
+  callbacks: TerminalStreamCallbacks,
+  frame: TerminalSnapshotFrame,
+): void {
+  callbacks.onSnapshot(frame, frame.scrollback);
+}
+
+function emitData(
+  callbacks: TerminalStreamCallbacks,
+  frame: TerminalDataFrame,
+): void {
+  callbacks.onData(frame, frame.chunk);
+}
+
 function createHarness() {
   let callbacks: TerminalStreamCallbacks | null = null;
   const sendAction = vi.fn((_frame: TerminalSubscribeClientFrame) => undefined);
@@ -99,29 +126,37 @@ describe("createTerminalSessionStore", () => {
       writes.push(write);
     });
 
-    harness.callbacks().onSnapshot(snapshot("\x1b[6n"));
-    harness.callbacks().onData(data("live output"));
+    emitSnapshot(harness.callbacks(), snapshot("\x1b[6n"));
+    emitData(harness.callbacks(), data("live output"));
 
-    expect(writes).toEqual([
+    expect(writes).toHaveLength(2);
+    expect(writes).toMatchObject([
       { kind: "snapshot", chunk: "\x1b[6n", cols: 80, rows: 24 },
       { kind: "live", chunk: "live output" },
     ]);
+    expect(writes.every((write) => typeof write.onAckable === "function")).toBe(
+      true,
+    );
   });
 
   it("preserves write order and the snapshot grid while buffering before xterm registers", () => {
     const harness = createHarness();
     const writes: TerminalWrite[] = [];
 
-    harness.callbacks().onSnapshot(snapshot("historical output"));
-    harness.callbacks().onData(data("live output"));
+    emitSnapshot(harness.callbacks(), snapshot("historical output"));
+    emitData(harness.callbacks(), data("live output"));
     harness.handle.store.getState().setWriter((write) => {
       writes.push(write);
     });
 
-    expect(writes).toEqual([
+    expect(writes).toHaveLength(2);
+    expect(writes).toMatchObject([
       { kind: "snapshot", chunk: "historical output", cols: 80, rows: 24 },
       { kind: "live", chunk: "live output" },
     ]);
+    expect(writes.every((write) => typeof write.onAckable === "function")).toBe(
+      true,
+    );
   });
 
   it("marks the session lost when the stream closes before a snapshot", () => {
@@ -164,7 +199,7 @@ describe("createTerminalSessionStore", () => {
     harness.callbacks().onConnectionStatus("open", null);
     expect(harness.sendAction).not.toHaveBeenCalled();
 
-    harness.callbacks().onSnapshot(snapshotWithSize("", 80, 24));
+    emitSnapshot(harness.callbacks(), snapshotWithSize("", 80, 24));
 
     expect(harness.handle.store.getState()).toMatchObject({
       requestedCols: 105,
@@ -180,5 +215,245 @@ describe("createTerminalSessionStore", () => {
         rows: 91,
       }),
     );
+  });
+
+  describe("ack-credit (terminal.subscribe@1.1)", () => {
+    it("never sends an ack frame until a snapshot confirms ack-credit support", () => {
+      const harness = createHarness();
+      harness.callbacks().onConnectionStatus("open", null);
+      // Old-host-style snapshot: no `ackCreditSupported` field at all, so
+      // the renderer must never send an `ack` frame - a `1.0` host's frame
+      // schema can't parse "ack" and would just log malformed-frame warnings.
+      emitSnapshot(harness.callbacks(), snapshot(""));
+      const writes: TerminalWrite[] = [];
+      harness.handle.store.getState().setWriter((write) => {
+        writes.push(write);
+      });
+
+      emitData(harness.callbacks(), data("x".repeat(64 * 1024)));
+      writes[0].onAckable();
+
+      expect(harness.sendAction).not.toHaveBeenCalled();
+    });
+
+    it("flushes a coalesced ack once accumulated bytes cross the coalesce threshold", () => {
+      const harness = createHarness();
+      harness.callbacks().onConnectionStatus("open", null);
+      emitSnapshot(harness.callbacks(), snapshotWithAckCredit(""));
+      const writes: TerminalWrite[] = [];
+      harness.handle.store.getState().setWriter((write) => {
+        writes.push(write);
+      });
+
+      const bigChunk = "x".repeat(64 * 1024);
+      emitData(harness.callbacks(), data(bigChunk));
+      expect(writes).toHaveLength(1);
+
+      // Simulate xterm's own `write(data, callback)` firing once parsed.
+      writes[0].onAckable();
+
+      expect(harness.sendAction).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "ack",
+          sessionId: "terminal-1",
+          bytes: 64 * 1024,
+        }),
+      );
+    });
+
+    it("coalesces multiple small acks and flushes them together after the debounce window", () => {
+      vi.useFakeTimers();
+      try {
+        const harness = createHarness();
+        harness.callbacks().onConnectionStatus("open", null);
+        emitSnapshot(harness.callbacks(), snapshotWithAckCredit(""));
+        const writes: TerminalWrite[] = [];
+        harness.handle.store.getState().setWriter((write) => {
+          writes.push(write);
+        });
+
+        emitData(harness.callbacks(), data("a".repeat(1000)));
+        emitData(harness.callbacks(), data("b".repeat(2000)));
+        writes[0].onAckable();
+        writes[1].onAckable();
+
+        expect(harness.sendAction).not.toHaveBeenCalled();
+
+        vi.advanceTimersByTime(50);
+
+        expect(harness.sendAction).toHaveBeenCalledTimes(1);
+        expect(harness.sendAction).toHaveBeenCalledWith(
+          expect.objectContaining({ kind: "ack", bytes: 3000 }),
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("credits bytes immediately when the pre-writer queue evicts a write, without ever reaching a writer", () => {
+      const harness = createHarness();
+      harness.callbacks().onConnectionStatus("open", null);
+      emitSnapshot(harness.callbacks(), snapshotWithAckCredit(""));
+      // No writer registered - both writes land in the pre-writer queue.
+
+      // Exceeds MAX_PENDING_BYTES (1 MiB) on the second push, forcing the
+      // queue to evict the first (oldest) write.
+      emitData(harness.callbacks(), data("x".repeat(700 * 1024)));
+      emitData(harness.callbacks(), data("y".repeat(700 * 1024)));
+
+      // The evicted write's bytes are credited immediately - it will never
+      // reach a writer to fire its own `onAckable`.
+      expect(harness.sendAction).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "ack", bytes: 700 * 1024 }),
+      );
+    });
+
+    it("clears pending ack accounting when the connection drops before the coalesce window fires", () => {
+      vi.useFakeTimers();
+      try {
+        const harness = createHarness();
+        harness.callbacks().onConnectionStatus("open", null);
+        emitSnapshot(harness.callbacks(), snapshotWithAckCredit(""));
+        const writes: TerminalWrite[] = [];
+        harness.handle.store.getState().setWriter((write) => {
+          writes.push(write);
+        });
+
+        emitData(harness.callbacks(), data("small chunk"));
+        writes[0].onAckable();
+
+        harness.callbacks().onConnectionStatus("reconnecting", null);
+        vi.advanceTimersByTime(1000);
+
+        expect(harness.sendAction).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("ignores a stale onAckable callback that fires after a reconnect (late xterm write callback)", () => {
+      vi.useFakeTimers();
+      try {
+        const harness = createHarness();
+        harness.callbacks().onConnectionStatus("open", null);
+        emitSnapshot(harness.callbacks(), snapshotWithAckCredit(""));
+        const writes: TerminalWrite[] = [];
+        harness.handle.store.getState().setWriter((write) => {
+          writes.push(write);
+        });
+
+        // Written before the drop; xterm's own write callback for this
+        // chunk hasn't fired yet.
+        emitData(harness.callbacks(), data("stale chunk"));
+        const staleWrite = writes[0];
+
+        // Reconnect: the host mints a fresh subscriber with unackedBytes
+        // reset to 0, and its own snapshot re-confirms ack-credit support -
+        // isolating this test to the generation check, not the capability
+        // gate, as the reason the stale callback is ignored.
+        harness.callbacks().onConnectionStatus("reconnecting", null);
+        harness.callbacks().onConnectionStatus("open", null);
+        emitSnapshot(harness.callbacks(), snapshotWithAckCredit(""));
+
+        // The stale write's parse-completion callback finally fires late,
+        // after the reconnect - it must not start a new coalescing window
+        // or ever be acked against the fresh subscriber.
+        staleWrite.onAckable();
+        vi.advanceTimersByTime(1000);
+
+        expect(harness.sendAction).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  describe("binary framing (terminal.subscribe@1.2)", () => {
+    function binarySnapshotFrame(): Extract<
+      TerminalSubscribeServerFrame,
+      { readonly kind: "binarySnapshot" }
+    > {
+      return {
+        kind: "binarySnapshot",
+        hasBinaryPayload: true,
+        sessionId: "terminal-1",
+        session: terminalInfoWithSize(80, 24),
+      };
+    }
+
+    function binaryDataFrame(): Extract<
+      TerminalSubscribeServerFrame,
+      { readonly kind: "binaryData" }
+    > {
+      return {
+        kind: "binaryData",
+        hasBinaryPayload: true,
+        sessionId: "terminal-1",
+      };
+    }
+
+    it("passes Uint8Array content straight through to the writer without decoding it", () => {
+      const harness = createHarness();
+      const writes: TerminalWrite[] = [];
+      harness.handle.store.getState().setWriter((write) => {
+        writes.push(write);
+      });
+
+      const scrollbackBytes = new TextEncoder().encode("hello");
+      harness.callbacks().onSnapshot(binarySnapshotFrame(), scrollbackBytes);
+      const chunkBytes = new TextEncoder().encode("world");
+      harness.callbacks().onData(binaryDataFrame(), chunkBytes);
+
+      expect(writes).toHaveLength(2);
+      expect(writes[0]).toMatchObject({
+        kind: "snapshot",
+        chunk: scrollbackBytes,
+      });
+      expect(writes[1]).toMatchObject({ kind: "live", chunk: chunkBytes });
+    });
+
+    it("treats a binarySnapshot as confirming ack-credit support with no explicit field", () => {
+      const harness = createHarness();
+      harness.callbacks().onConnectionStatus("open", null);
+      harness.callbacks().onSnapshot(binarySnapshotFrame(), new Uint8Array());
+      const writes: TerminalWrite[] = [];
+      harness.handle.store.getState().setWriter((write) => {
+        writes.push(write);
+      });
+
+      harness.callbacks().onData(binaryDataFrame(), new Uint8Array(64 * 1024));
+      writes[0].onAckable();
+
+      expect(harness.sendAction).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "ack", bytes: 64 * 1024 }),
+      );
+    });
+
+    it("accounts ack-credit bytes as UTF-8 byte length, not UTF-16 string length", () => {
+      vi.useFakeTimers();
+      try {
+        const harness = createHarness();
+        harness.callbacks().onConnectionStatus("open", null);
+        harness.callbacks().onSnapshot(binarySnapshotFrame(), new Uint8Array());
+        const writes: TerminalWrite[] = [];
+        harness.handle.store.getState().setWriter((write) => {
+          writes.push(write);
+        });
+
+        // "héllo" is 5 UTF-16 code units but 6 UTF-8 bytes (é is 2 bytes) -
+        // discriminates byteLength accounting from a leftover .length mistake.
+        const chunkBytes = new TextEncoder().encode("héllo");
+        expect(chunkBytes.byteLength).toBe(6);
+        harness.callbacks().onData(binaryDataFrame(), chunkBytes);
+        writes[0].onAckable();
+        vi.advanceTimersByTime(50);
+
+        expect(harness.sendAction).toHaveBeenCalledWith(
+          expect.objectContaining({ kind: "ack", bytes: 6 }),
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 });

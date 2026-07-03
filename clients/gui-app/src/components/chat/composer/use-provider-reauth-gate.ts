@@ -13,8 +13,11 @@ import { useTabProvidersList } from "@/hooks/providers/use-tab-providers-list-qu
 // `traycer`, which has no provider-CLI login). Only CLI harnesses gate. Grok,
 // Qwen, Kiro, Kimi, Droid, Copilot, and Kilo Code are GUI-only (not in the TUI map)
 // but DO gate through their CLI login providers, mirroring the host's
-// `harnessIdToProviderId`.
-function providerIdForHarness(harnessId: GuiHarnessId): ProviderId | null {
+// `harnessIdToProviderId`. Exported so other harness->provider derivations
+// (e.g. the chat provider rate-limit selector) share this single mapping.
+export function providerIdForHarness(
+  harnessId: GuiHarnessId,
+): ProviderId | null {
   if (harnessId === "traycer") return null;
   if (harnessId === "openrouter") return "openrouter";
   if (harnessId === "grok") return "grok";
