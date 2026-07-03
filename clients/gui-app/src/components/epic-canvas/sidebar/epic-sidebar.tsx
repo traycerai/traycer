@@ -1765,7 +1765,9 @@ function TreePanelActions(props: TreePanelActionsProps) {
             variant="ghost"
             size="icon-sm"
             aria-label={props.addLabel}
-            aria-disabled={artifactsPresentation.ariaDisabled ? true : undefined}
+            aria-disabled={
+              artifactsPresentation.ariaDisabled ? true : undefined
+            }
             data-testid={props.triggerTestId}
             className={cn(
               "text-muted-foreground hover:text-foreground",
