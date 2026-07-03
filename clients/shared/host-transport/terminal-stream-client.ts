@@ -109,6 +109,18 @@ export class TerminalStreamClient {
   ): void {
     const parsed = terminalSubscribeServerFrameSchema.safeParse(envelope);
     if (!parsed.success) {
+      // Schema mismatch: a version-skewed host/client or a genuine wire bug.
+      // Log the envelope kind and issue paths only - never `parsed.error` or
+      // the raw envelope, which may carry user terminal content
+      // (scrollback/chunk) inside whichever field failed to validate.
+      const issuePaths = parsed.error.issues
+        .map((issue) =>
+          issue.path.length > 0 ? issue.path.join(".") : "(root)",
+        )
+        .join(", ");
+      console.warn(
+        `[stream] terminal.subscribe frame failed schema validation (kind=${envelope.kind}, issues=[${issuePaths}]); dropping frame`,
+      );
       return;
     }
     const frame: TerminalSubscribeServerFrame = parsed.data;
