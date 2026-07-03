@@ -73,6 +73,12 @@ export const runnerQueryKeys = {
     ] as const,
   hostRegistryUpdate: (management: object) =>
     ["runner.host.registryUpdate", management] as const,
+  // Canonical cross-surface "is a host mutation running" status (Ticket:
+  // host-update-race-conditions). Primed once via `getOperationStatus()` on
+  // mount, then pushed by `HostOperationStatusListener` - never refetched by
+  // TanStack's normal mechanisms, since it is entirely event-sourced.
+  hostOperationStatus: (management: object) =>
+    ["runner.host.operationStatus", management] as const,
   hostInstalledRecord: (management: object) =>
     ["runner.host.installedRecord", management] as const,
   hostLogs: (management: object, tailLines: number) =>

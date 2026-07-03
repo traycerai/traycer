@@ -19,6 +19,9 @@ export function AppUpdateToastController(): null {
   const openConfirmRestartUpdate = useDesktopDialogStore(
     (state) => state.openConfirmRestartUpdate,
   );
+  const openInstallGuidance = useDesktopDialogStore(
+    (state) => state.openInstallGuidance,
+  );
   const handledSequenceRef = useRef(0);
   const bridgeRef = useRef<DesktopAppUpdatesBridge | null | undefined>(
     undefined,
@@ -50,8 +53,15 @@ export function AppUpdateToastController(): null {
       },
       onRestart: openConfirmRestartUpdate,
       onReportIssue: openReportIssue,
+      onViewInstructions: openInstallGuidance,
     });
-  }, [bridge, snapshot, openReportIssue, openConfirmRestartUpdate]);
+  }, [
+    bridge,
+    snapshot,
+    openReportIssue,
+    openConfirmRestartUpdate,
+    openInstallGuidance,
+  ]);
 
   return null;
 }
@@ -60,6 +70,7 @@ interface AppUpdateToastActions {
   readonly onDownload: () => void;
   readonly onRestart: () => void;
   readonly onReportIssue: () => void;
+  readonly onViewInstructions: () => void;
 }
 
 function showAppUpdateToast(
@@ -116,13 +127,25 @@ function showAppUpdateToast(
       });
       return;
     case "ready":
+      // Linux deb/rpm where silent install can't/didn't work: the download
+      // succeeded, but "Restart" would trigger the same doomed install
+      // attempt. Point at the step-by-step dialog instead.
       toast(
-        <AppUpdateActionToastContent
-          title="Update ready to install"
-          description="Restart Traycer to finish updating."
-          actionLabel="Restart"
-          onAction={actions.onRestart}
-        />,
+        snapshot.installGuidance === null ? (
+          <AppUpdateActionToastContent
+            title="Update ready to install"
+            description="Restart Traycer to finish updating."
+            actionLabel="Restart"
+            onAction={actions.onRestart}
+          />
+        ) : (
+          <AppUpdateActionToastContent
+            title="Update downloaded"
+            description="One manual step finishes installing it."
+            actionLabel="View instructions"
+            onAction={actions.onViewInstructions}
+          />
+        ),
         {
           id: APP_UPDATE_TOAST_ID,
           description: null,
@@ -137,6 +160,11 @@ function showAppUpdateToast(
           <AppUpdateErrorToastDescription
             message={snapshot.errorMessage}
             onReportIssue={actions.onReportIssue}
+            onViewInstructions={
+              snapshot.installGuidance === null
+                ? null
+                : actions.onViewInstructions
+            }
           />
         ),
         duration: Infinity,
@@ -250,13 +278,26 @@ function AppUpdateActionToastContent(props: {
 function AppUpdateErrorToastDescription(props: {
   readonly message: string | null;
   readonly onReportIssue: () => void;
+  readonly onViewInstructions: (() => void) | null;
 }) {
   return (
     <div className="flex flex-col items-start gap-3">
       {props.message === null ? null : <span>{props.message}</span>}
-      <Button type="button" size="sm" onClick={props.onReportIssue}>
-        Report an issue
-      </Button>
+      <div className="flex gap-2">
+        {props.onViewInstructions === null ? null : (
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            onClick={props.onViewInstructions}
+          >
+            View instructions
+          </Button>
+        )}
+        <Button type="button" size="sm" onClick={props.onReportIssue}>
+          Report an issue
+        </Button>
+      </div>
     </div>
   );
 }

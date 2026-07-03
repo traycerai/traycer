@@ -9,7 +9,11 @@ import {
   renameTerminalRequestSchema,
   renameTerminalResponseSchema,
 } from "@traycer/protocol/host/terminal/unary-schemas";
-import { terminalSubscribeV10 } from "@traycer/protocol/host/terminal/subscribe";
+import {
+  terminalSubscribeV10,
+  terminalSubscribeV11,
+  terminalSubscribeV12,
+} from "@traycer/protocol/host/terminal/subscribe";
 
 // Terminal sessions live entirely in the host's memory; these contracts
 // expose the unary lifecycle (create/kill/list). The actual byte stream is
@@ -42,4 +46,4 @@ export const terminalRenameV10 = defineRpcContract({
   responseSchema: renameTerminalResponseSchema,
 });
 
-export { terminalSubscribeV10 };
+export { terminalSubscribeV10, terminalSubscribeV11, terminalSubscribeV12 };

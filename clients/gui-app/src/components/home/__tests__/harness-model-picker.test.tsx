@@ -268,6 +268,7 @@ import { ALL_PERMISSION_MODES } from "@traycer/protocol/persistence/epic/foundat
 const CODEX_HARNESS: HarnessOption = {
   id: "codex",
   label: "Codex",
+  enabled: true,
   available: true,
   error: null,
   modes: ["gui", "tui"],
@@ -279,6 +280,7 @@ const CODEX_HARNESS: HarnessOption = {
 const CLAUDE_HARNESS: HarnessOption = {
   id: "claude",
   label: "Claude",
+  enabled: true,
   available: true,
   error: null,
   modes: ["gui", "tui"],
@@ -290,6 +292,7 @@ const CLAUDE_HARNESS: HarnessOption = {
 const OPENCODE_HARNESS: HarnessOption = {
   id: "opencode",
   label: "OpenCode",
+  enabled: true,
   available: false,
   error: "OpenCode not configured",
   modes: ["gui", "tui"],
@@ -301,6 +304,7 @@ const OPENCODE_HARNESS: HarnessOption = {
 const OPENROUTER_HARNESS: HarnessOption = {
   id: "openrouter",
   label: "OpenRouter",
+  enabled: true,
   available: false,
   error: "OpenRouter needs an API key",
   modes: ["gui"],
@@ -312,6 +316,7 @@ const OPENROUTER_HARNESS: HarnessOption = {
 const DROID_HARNESS: HarnessOption = {
   id: "droid",
   label: "Droid",
+  enabled: true,
   available: true,
   error: null,
   modes: ["gui"],
@@ -323,6 +328,7 @@ const DROID_HARNESS: HarnessOption = {
 const CURSOR_HARNESS: HarnessOption = {
   id: "cursor",
   label: "Cursor",
+  enabled: true,
   available: true,
   error: null,
   modes: ["gui"],
@@ -343,6 +349,7 @@ function model(overrides: Partial<ModelOption>): ModelOption {
     supportedReasoningEfforts: [],
     defaultServiceTier: null,
     supportedServiceTiers: [],
+    deprecationNotice: null,
     metadata: {},
   };
   return {
@@ -662,6 +669,43 @@ describe("<HarnessModelPicker />", () => {
     ).toBe("true");
     expect(screen.getByText("GPT-4.1")).not.toBeNull();
     expect(screen.queryByText("Claude Sonnet 4.6")).toBeNull();
+  });
+
+  it("shows a deprecated-model badge with its notice as a tooltip", async () => {
+    const deprecationNotice =
+      "Claude Sonnet 4.6 is deprecated in favor of Claude Sonnet 5 and " +
+      "will be removed from Traycer on 2026-08-31. Switch to Claude Sonnet 5.";
+    installClaudeCatalog([
+      model({
+        harnessId: "claude",
+        slug: "claude-sonnet-5",
+        label: "Claude Sonnet 5",
+      }),
+      model({
+        harnessId: "claude",
+        slug: "claude-sonnet-4-6",
+        label: "Claude Sonnet 4.6",
+        deprecationNotice,
+      }),
+    ]);
+    renderPicker({
+      selection: { harnessId: "claude", modelSlug: "claude-sonnet-5" },
+    });
+
+    await openPickerByTriggerName("Claude Sonnet 5");
+
+    // Exactly one row is flagged deprecated - getByText throws on more than
+    // one match, so this also covers that the active (non-deprecated) model
+    // does NOT carry the badge.
+    expect(screen.getByText("Deprecated")).not.toBeNull();
+
+    // The tooltip is anchored to the row button (keyboard-reachable), not the
+    // inner badge span - focus the option itself, the same way a Tab press
+    // would.
+    fireEvent.focus(screen.getByRole("option", { name: /Claude Sonnet 4\.6/ }));
+    expect((await screen.findByRole("tooltip")).textContent).toBe(
+      deprecationNotice,
+    );
   });
 
   it("opens the virtualized provider list at a far-down selected model", async () => {

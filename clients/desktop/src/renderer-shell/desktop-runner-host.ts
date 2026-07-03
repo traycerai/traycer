@@ -12,6 +12,7 @@ import type {
   HostInstalledRecord,
   HostLogsTailResult,
   HostNameSettings,
+  HostOperationStatus,
   HostProgressEvent,
   HostRegistryUpdateState,
   HostRemovalState,
@@ -232,6 +233,10 @@ export interface DesktopHostManagementBridge {
   onRegistryUpdateState(handler: (state: HostRegistryUpdateState) => void): {
     dispose: () => void;
   };
+  getOperationStatus(): Promise<HostOperationStatus | null>;
+  onOperationStatus(handler: (status: HostOperationStatus | null) => void): {
+    dispose: () => void;
+  };
   freePortAndRestart(
     input: FreePortAndRestartInput,
   ): Promise<FreePortAndRestartInput>;
@@ -250,6 +255,12 @@ export interface DesktopHostTrayBridge {
 
 export interface DesktopHostRegistryUpdatesBridge {
   onChange(handler: (state: HostRegistryUpdateState) => void): {
+    dispose: () => void;
+  };
+}
+
+export interface DesktopHostOperationStatusBridge {
+  onChange(handler: (status: HostOperationStatus | null) => void): {
     dispose: () => void;
   };
 }
@@ -487,6 +498,7 @@ export class DesktopRunnerHost implements IRunnerHost {
   readonly hostManagement: IHostManagement;
   readonly hostTray: IHostTray;
   readonly hostRegistryUpdates: DesktopHostRegistryUpdatesBridge;
+  readonly hostOperationStatus: DesktopHostOperationStatusBridge;
   readonly deviceFlow: IDeviceFlowHost;
 
   private readonly bridge: DesktopPreloadBridge;
@@ -631,6 +643,7 @@ export class DesktopRunnerHost implements IRunnerHost {
       ensureHost: (input) => managementBridge.ensureHost(input),
       deregisterService: () => managementBridge.deregisterService(),
       registryCheck: (input) => managementBridge.registryCheck(input),
+      getOperationStatus: () => managementBridge.getOperationStatus(),
       freePortAndRestart: (input) => managementBridge.freePortAndRestart(input),
       cliManifest: () => managementBridge.cliManifest(),
       getHostName: () => managementBridge.getHostName(),
@@ -638,6 +651,9 @@ export class DesktopRunnerHost implements IRunnerHost {
     };
     this.hostRegistryUpdates = {
       onChange: (handler) => managementBridge.onRegistryUpdateState(handler),
+    };
+    this.hostOperationStatus = {
+      onChange: (handler) => managementBridge.onOperationStatus(handler),
     };
     this.hostTray = {
       onCommand: (handler) =>

@@ -3,10 +3,18 @@ import { autoUpdater } from "electron-updater";
 import { access } from "node:fs/promises";
 import { join } from "node:path";
 import { log } from "./logger";
+import {
+  buildLinuxUpdateGuidance,
+  isLinuxEscalationError,
+  readLinuxPackageType,
+  resolveLinuxSilentInstallSupported,
+  type LinuxPackageType,
+} from "./linux-update-guidance";
 import { UPDATE_BLOCKED_LOCATION_REASON } from "./relocate-to-applications";
 import { showSimpleNotification } from "../notifications";
 import type {
   DesktopAppUpdateCheckIntent,
+  DesktopAppUpdateGuidance,
   DesktopAppUpdateSnapshot,
   DesktopAppUpdateStatus,
 } from "../../ipc-contracts/app-update-types";
@@ -31,6 +39,31 @@ interface AppUpdateSnapshotPatch {
   readonly lastCheckedAt?: string | null;
   readonly lastCheckIntent?: DesktopAppUpdateCheckIntent | null;
 }
+
+// Set once at `installAutoUpdater` time from the `package-type` file
+// (deb/rpm only - AppImage never gets this file and keeps electron-updater's
+// default silent-update path untouched). Drives the `autoInstallOnAppQuit`
+// gate below and scopes every other Linux-guidance code path.
+let linuxPackageType: LinuxPackageType | null = null;
+// Whether an in-place `dpkg -i`/`rpm -U` upgrade would actually succeed and
+// replace the binary we're running from (see `linux-update-guidance.ts`).
+// Only meaningful when `linuxPackageType !== null`; UX gate, not a safety
+// net - `autoInstallOnAppQuit` is disabled for deb/rpm regardless of this.
+let linuxSilentInstallSupported = true;
+// Path electron-updater downloaded the update to, captured off the
+// `update-downloaded` event. Threaded into the guidance command so the user
+// runs `dpkg -i`/`rpm -U` against the file we already fetched instead of
+// re-downloading by hand.
+let linuxDownloadedFile: string | null = null;
+// Built once, exactly when we learn silent install won't/didn't work for this
+// update cycle - either decided up front (`linuxSilentInstallSupported ===
+// false` at download-complete time) or discovered the hard way (a live
+// "Restart to update" click hit an escalation failure despite looking safe up
+// front). Echoed by reference on every subsequent `emitSnapshot` call rather
+// than rebuilt fresh each time, so `sameSnapshot`'s renderer-side dedup (which
+// compares this field) doesn't see spurious changes on unrelated re-emits
+// while status stays "ready".
+let linuxInstallGuidance: DesktopAppUpdateGuidance | null = null;
 
 // Injected from `desktop-startup` so the updater can decide whether to raise an
 // OS notification (only when no app window is focused) and bring the app
@@ -70,6 +103,14 @@ const UPDATE_ERROR_DOWNLOAD_MESSAGE =
   "Traycer couldn't download and install the latest update. Please try again in a little while.";
 const UPDATE_ERROR_GENERIC_MESSAGE =
   "Traycer ran into a problem while updating. Please try again in a little while.";
+// Linux deb/rpm only: a live install attempt hit an escalation failure
+// (pkexec/sudo/dpkg/rpm). Unlike the other generic messages, this one points
+// at the guidance dialog rather than suggesting a retry - the escalation path
+// is now known not to work on this machine, so `installGuidance` is populated
+// alongside this message (see `handleUpdaterError`'s `installingUpdate`
+// branch).
+const UPDATE_ERROR_LINUX_MANUAL_INSTALL_MESSAGE =
+  "Traycer couldn't finish installing the update automatically. Follow the instructions below to finish it manually.";
 
 const listeners = new Set<AppUpdateListener>();
 let sequence = 0;
@@ -80,6 +121,7 @@ let currentSnapshot: DesktopAppUpdateSnapshot = {
   latestVersion: null,
   downloadProgress: null,
   installBlockedReason: null,
+  installGuidance: null,
   errorMessage: null,
   lastCheckedAt: null,
   lastCheckIntent: null,
@@ -94,6 +136,7 @@ function currentInstallBlockedReason(): string | null {
     ? null
     : resolveInstallBlockedReason();
 }
+
 let installed = false;
 let checkInFlight = false;
 let checkIntent: DesktopAppUpdateCheckIntent | null = null;
@@ -135,7 +178,24 @@ export async function installAutoUpdater(
   // Never download on our own - the user starts the download from the header
   // button (see `startUpdateDownload`). We only check + surface availability.
   autoUpdater.autoDownload = false;
-  autoUpdater.autoInstallOnAppQuit = true;
+  if (process.platform === "linux") {
+    linuxPackageType = readLinuxPackageType();
+    if (linuxPackageType !== null) {
+      linuxSilentInstallSupported =
+        await resolveLinuxSilentInstallSupported(linuxPackageType);
+    }
+  }
+  // deb/rpm installs require root escalation (pkexec/sudo) to apply -
+  // unlike macOS/Windows/AppImage, that escalation can fail in ways that are
+  // invisible when attempted from the quit-teardown path (see `doInstall` in
+  // `DebUpdater`/`RpmUpdater`): a failure there dispatches an error, but
+  // Electron's quit proceeds regardless, so the user just reopens the old
+  // binary with no explanation. Disabling this unconditionally for deb/rpm -
+  // regardless of `linuxSilentInstallSupported` - means a privileged install
+  // is only ever attempted synchronously from the user's explicit "Restart to
+  // update" click, where a failure is guaranteed to surface visibly (see
+  // `handleUpdaterError`'s `installingUpdate` branch).
+  autoUpdater.autoInstallOnAppQuit = linuxPackageType === null;
   // Never auto-update users onto a prerelease, and never let an RC build pick a
   // sibling product's prerelease out of the shared releases repo. electron-
   // updater auto-enables `allowPrerelease` for an RC app version, and on that
@@ -205,6 +265,15 @@ export async function installAutoUpdater(
     if (currentSnapshot.status === "ready") {
       return;
     }
+    linuxDownloadedFile = info.downloadedFile;
+    linuxInstallGuidance =
+      linuxPackageType !== null && !linuxSilentInstallSupported
+        ? buildLinuxUpdateGuidance(
+            linuxPackageType,
+            info.version,
+            linuxDownloadedFile,
+          )
+        : null;
     const intent = downloadIntent ?? checkIntent ?? "automatic";
     downloadInProgress = false;
     downloadIntent = null;
@@ -503,6 +572,7 @@ function emitSnapshot(patch: AppUpdateSnapshotPatch): DesktopAppUpdateSnapshot {
     sequence,
     status,
     installBlockedReason: currentInstallBlockedReason(),
+    installGuidance: linuxInstallGuidance,
     latestVersion:
       patch.latestVersion === undefined
         ? currentSnapshot.latestVersion
@@ -581,9 +651,27 @@ function handleUpdaterError(error: unknown): void {
   // the install flag so they can retry once the cause is fixed.
   if (installingUpdate) {
     installingUpdate = false;
+    // Pre-flight said this install could self-update, but the live escalation
+    // attempt (pkexec/sudo/dpkg/rpm) still failed - e.g. a minimal window
+    // manager with no polkit agent. We now know for certain silent install
+    // doesn't work here, so switch to the same guidance a blocked pre-flight
+    // would have shown instead of a generic "try again later" that just
+    // invites the same doomed retry.
+    const isLinuxEscalationFailure =
+      linuxPackageType !== null &&
+      isLinuxEscalationError(rawErrorMessage(error));
+    if (isLinuxEscalationFailure && linuxPackageType !== null) {
+      linuxInstallGuidance = buildLinuxUpdateGuidance(
+        linuxPackageType,
+        currentSnapshot.latestVersion,
+        linuxDownloadedFile,
+      );
+    }
     emitSnapshot({
       status: "error",
-      errorMessage: readErrorMessage(error),
+      errorMessage: isLinuxEscalationFailure
+        ? UPDATE_ERROR_LINUX_MANUAL_INSTALL_MESSAGE
+        : readErrorMessage(error),
       lastCheckedAt: new Date().toISOString(),
       lastCheckIntent: "manual",
     });
@@ -635,12 +723,14 @@ function emitCheckErrorFromCatch(
   });
 }
 
+function rawErrorMessage(error: unknown): string {
+  return error instanceof Error && error.message.length > 0
+    ? error.message
+    : String(error);
+}
+
 function readErrorMessage(error: unknown): string {
-  const rawMessage =
-    error instanceof Error && error.message.length > 0
-      ? error.message
-      : String(error);
-  return formatUserVisibleUpdateError(rawMessage);
+  return formatUserVisibleUpdateError(rawErrorMessage(error));
 }
 
 // Maps any `electron-updater` failure onto one of a few generic, user-safe

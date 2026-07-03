@@ -2,6 +2,7 @@ import type {
   CliInstallManifestSnapshot,
   HostAvailableSnapshot,
   HostInstalledRecord,
+  HostOperationKind,
   HostProgressEvent,
   HostRegistryUpdateState,
   LocalHostSnapshot,
@@ -10,10 +11,8 @@ import type {
 
 export const VERSION_LIST_PREVIEW = 10;
 
-export type HostProgressKind = "install" | "update" | "register-service";
-
 export interface HostProgressState {
-  readonly kind: HostProgressKind;
+  readonly kind: HostOperationKind;
   readonly event: HostProgressEvent;
 }
 
@@ -201,7 +200,7 @@ export function formatSource(source: HostInstalledRecord["source"]): string {
     : "Local file";
 }
 
-export function formatProgressKind(kind: HostProgressKind): string {
+export function formatProgressKind(kind: HostOperationKind): string {
   switch (kind) {
     case "install":
       return "Installing host";
@@ -209,6 +208,8 @@ export function formatProgressKind(kind: HostProgressKind): string {
       return "Updating host";
     case "register-service":
       return "Registering service";
+    case "ensure":
+      return "Setting up host";
   }
 }
 

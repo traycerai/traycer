@@ -26,6 +26,8 @@ export type {
   HostInstalledRecord,
   HostLogsTailResult,
   HostNameSettings,
+  HostOperationKind,
+  HostOperationStatus,
   HostProgressEvent,
   HostRegistryUpdateState,
   HostRemovalState,
