@@ -42,6 +42,15 @@ const epicNodeRefForNodeId = vi.fn(
         hostId: fallbackHostId,
       };
     }
+    if (nodeId === "ticket-1") {
+      return {
+        id: "ticket-1",
+        instanceId: "inst-ticket",
+        type: "ticket",
+        name: "Ticket One",
+        hostId: fallbackHostId,
+      };
+    }
     if (nodeId === "chat-1") {
       return {
         id: "chat-1",
@@ -60,17 +69,79 @@ vi.mock("@/lib/epic-selectors", () => ({
     epicNodeRefForNodeId(state, nodeId, fallback),
 }));
 
-const openTilePreviewInTab = vi.fn();
-const resolveTargetTabForEpic = vi.fn(() => "tab-for-open-epic");
+// The chip imports the canvas store and `@dnd-kit/core` at its module top, so
+// these spies must exist before those (hoisted) `vi.mock` factories run.
+// `vi.hoisted` guarantees that ordering; `resolveTabIdForEpic` is the pure,
+// non-side-effecting resolver the chip reads for its `viewTabId` (constraint
+// C1), returning a tab id for the open epic and `null` otherwise.
+const {
+  openTilePreviewInTab,
+  resolveTargetTabForEpic,
+  resolveTabIdForEpic,
+  useDraggableSpy,
+  setNodeRefSpy,
+} = vi.hoisted(() => ({
+  openTilePreviewInTab: vi.fn(),
+  resolveTargetTabForEpic: vi.fn(() => "tab-for-open-epic"),
+  resolveTabIdForEpic: vi.fn((epicId: string) =>
+    epicId === "epic-open" ? "tab-for-open-epic" : null,
+  ),
+  // Capture every `useDraggable` call so tests can assert the emitted payload
+  // and the `disabled` gate without wiring a DndContext + pointer simulation.
+  // Only a drag-eligible (same-epic spec/ticket) chip mounts the draggable
+  // child, so a non-eligible chip leaves this spy uncalled.
+  useDraggableSpy:
+    vi.fn<(args: { id: string; disabled: boolean; data: unknown }) => void>(),
+  // Captures the node the chip hands to dnd-kit's `setNodeRef`, so a test can
+  // assert the drag surface is actually attached to the rendered button (not
+  // just that `useDraggable` was called with the right input).
+  setNodeRefSpy: vi.fn<(element: HTMLElement | null) => void>(),
+}));
 
-vi.mock("@/stores/epics/canvas/store", () => ({
-  useEpicCanvasStore: {
-    getState: () => ({
-      resolveTargetTabForEpic,
-      openTilePreviewInTab,
-    }),
+// `useEpicCanvasStore` is used both as a selector hook (the chip) and via
+// `.getState()` (the open handler), so the mock is a callable with `getState`.
+vi.mock("@/stores/epics/canvas/store", () => {
+  const canvasState = {
+    resolveTargetTabForEpic,
+    openTilePreviewInTab,
+  };
+  return {
+    useEpicCanvasStore: Object.assign(
+      (selector: (state: typeof canvasState) => unknown) =>
+        selector(canvasState),
+      { getState: () => canvasState },
+    ),
+    // Standalone pure resolver: the shared `useChatArtifactDragSource` hook
+    // reads `viewTabId` via `resolveTabIdForEpic(state, epicId)`. Delegate to the
+    // same spy by `epicId` so the existing single-arg call assertion holds.
+    resolveTabIdForEpic: (_state: typeof canvasState, epicId: string) =>
+      resolveTabIdForEpic(epicId),
+  };
+});
+
+vi.mock("@dnd-kit/core", () => ({
+  useDraggable: (args: { id: string; disabled: boolean; data: unknown }) => {
+    useDraggableSpy(args);
+    return {
+      // A marker attribute the chip spreads onto its button - lets a test assert
+      // the drag surface is wired to the DOM (a broken `ref`/spread would drop
+      // it) rather than only asserting the `useDraggable` input.
+      attributes: { "data-dnd-attached": "true" },
+      listeners: {},
+      setNodeRef: setNodeRefSpy,
+      isDragging: false,
+    };
   },
 }));
+
+function lastDraggableCall(): {
+  id: string;
+  disabled: boolean;
+  data: unknown;
+} {
+  const calls = useDraggableSpy.mock.calls;
+  return calls[calls.length - 1][0];
+}
 
 const navigateToTabIntent = vi.fn();
 const openOrFocusEpicIntent = vi.fn(
@@ -100,8 +171,11 @@ beforeEach(() => {
   epicNodeRefForNodeId.mockClear();
   openTilePreviewInTab.mockClear();
   resolveTargetTabForEpic.mockClear();
+  resolveTabIdForEpic.mockClear();
   navigateToTabIntent.mockClear();
   openOrFocusEpicIntent.mockClear();
+  useDraggableSpy.mockClear();
+  setNodeRefSpy.mockClear();
 });
 
 afterEach(cleanup);
@@ -261,6 +335,146 @@ describe("legacy traycer-* reference components", () => {
 
     expect(screen.queryByRole("button")).toBeNull();
     expect(screen.getByText("Missing Spec")).toBeTruthy();
+  });
+});
+
+// ─── Inline-chip drag source (T3) ────────────────────────────────────────────
+
+describe("same-epic spec/ticket chips are canvas drag sources", () => {
+  it("a same-epic spec chip registers a draggable, emits the payload, and wires the drag surface", () => {
+    render(
+      <TraycerSpecReference
+        data-epic-id={OPEN_EPIC_ID}
+        data-spec-id="spec-1"
+        data-title="Spec One"
+      >
+        Spec One
+      </TraycerSpecReference>,
+    );
+
+    // Only the eligible chip mounts the draggable child and registers a source.
+    expect(useDraggableSpy).toHaveBeenCalledTimes(1);
+    const call = lastDraggableCall();
+    expect(call.disabled).toBe(false);
+    // Occurrence-unique drag id keyed on `useId()` (C3), not the artifact id.
+    expect(call.id.startsWith("chat-artifact:")).toBe(true);
+    expect(call.id).not.toBe("chat-artifact:spec-1");
+    expect(resolveTabIdForEpic).toHaveBeenCalledWith(OPEN_EPIC_ID);
+    expect(call.data).toEqual({
+      kind: "chat-artifact",
+      epicId: OPEN_EPIC_ID,
+      viewTabId: "tab-for-open-epic",
+      artifact: {
+        id: "spec-1",
+        type: "spec",
+        name: "Spec One",
+        hostId: "active-host-1",
+      },
+    });
+    // The drag surface is actually attached to the rendered button (ref +
+    // attributes), not merely requested from `useDraggable`.
+    const button = screen.getByRole("button", { name: "Spec One" });
+    expect(button.getAttribute("data-dnd-attached")).toBe("true");
+    expect(setNodeRefSpy).toHaveBeenCalled();
+    expect(
+      setNodeRefSpy.mock.calls.some(
+        ([element]) => element instanceof HTMLElement,
+      ),
+    ).toBe(true);
+    // Drag is purely additive - the pill still opens on click.
+    clickRef("Spec One");
+    expect(openTilePreviewInTab).toHaveBeenCalledTimes(1);
+  });
+
+  it("a same-epic ticket chip registers a draggable, emits the payload, and wires the drag surface", () => {
+    render(
+      <TraycerTicketReference
+        data-epic-id={OPEN_EPIC_ID}
+        data-ticket-id="ticket-1"
+      >
+        Ticket One
+      </TraycerTicketReference>,
+    );
+
+    expect(useDraggableSpy).toHaveBeenCalledTimes(1);
+    const call = lastDraggableCall();
+    expect(call.disabled).toBe(false);
+    expect(call.data).toEqual({
+      kind: "chat-artifact",
+      epicId: OPEN_EPIC_ID,
+      viewTabId: "tab-for-open-epic",
+      artifact: {
+        id: "ticket-1",
+        type: "ticket",
+        name: "Ticket One",
+        hostId: "active-host-1",
+      },
+    });
+    const button = screen.getByRole("button", { name: "Ticket One" });
+    expect(button.getAttribute("data-dnd-attached")).toBe("true");
+    expect(setNodeRefSpy).toHaveBeenCalled();
+  });
+
+  it("a cross-epic (navigate) ticket chip registers no draggable but still clicks", () => {
+    render(
+      <TraycerTicketReference
+        data-epic-id="epic-other"
+        data-ticket-id="ticket-9"
+      >
+        Ticket Nine
+      </TraycerTicketReference>,
+    );
+
+    // A click-only chip never touches the canvas store or dnd-kit.
+    expect(useDraggableSpy).not.toHaveBeenCalled();
+    const button = screen.getByRole("button", { name: "Ticket Nine" });
+    expect(button.getAttribute("data-dnd-attached")).toBeNull();
+    // Click semantics are unchanged - it still navigates.
+    clickRef("Ticket Nine");
+    expect(navigateToTabIntent).toHaveBeenCalledTimes(1);
+    expect(openTilePreviewInTab).not.toHaveBeenCalled();
+  });
+
+  it("an inert (none) reference registers no draggable and stays plain text", () => {
+    render(
+      <TraycerSpecReference
+        data-epic-id={OPEN_EPIC_ID}
+        data-spec-id="spec-missing"
+      >
+        Missing Spec
+      </TraycerSpecReference>,
+    );
+
+    expect(useDraggableSpy).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(screen.getByText("Missing Spec")).toBeTruthy();
+  });
+
+  it("a same-epic chat chip registers no draggable (chat is out of scope)", () => {
+    render(
+      <TraycerChatReference data-epic-id={OPEN_EPIC_ID} data-chat-id="chat-1">
+        Chat One
+      </TraycerChatReference>,
+    );
+
+    expect(useDraggableSpy).not.toHaveBeenCalled();
+    const button = screen.getByRole("button", { name: "Chat One" });
+    expect(button.getAttribute("data-dnd-attached")).toBeNull();
+    // Click still opens the same-epic chat tile.
+    clickRef("Chat One");
+    expect(openTilePreviewInTab).toHaveBeenCalledTimes(1);
+  });
+
+  it("an epic reference registers no draggable (navigate-only)", () => {
+    render(
+      <TraycerEpicReference data-epic-id="epic-other">
+        Some Epic
+      </TraycerEpicReference>,
+    );
+
+    expect(useDraggableSpy).not.toHaveBeenCalled();
+    const button = screen.getByRole("button", { name: "Some Epic" });
+    expect(button.getAttribute("data-dnd-attached")).toBeNull();
   });
 });
 

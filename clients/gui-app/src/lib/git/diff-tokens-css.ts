@@ -9,6 +9,8 @@
 
 export const DIFF_PANEL_UNSAFE_CSS = `
   [data-diffs-host] {
+    --diffs-font-family: var(--font-mono);
+    --diffs-font-size: var(--code-font-size, 13px);
     --diffs-bg: color-mix(in srgb, var(--card) 100%, transparent 0%);
     --diffs-bg-addition-override: color-mix(in srgb, var(--success) 14%, var(--card) 86%);
     --diffs-bg-deletion-override: color-mix(in srgb, var(--destructive) 14%, var(--card) 86%);
