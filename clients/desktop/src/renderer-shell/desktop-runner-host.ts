@@ -51,6 +51,7 @@ import type {
   DisplaySnapshot,
   DisplayTopology,
   FileSaveInput,
+  InstalledFont,
   PendingCertificateError,
   ProcessMetricsSnapshot,
   TrustedCertificateEntry,
@@ -351,6 +352,9 @@ export interface DesktopPlatformBridge {
   gpu: {
     getAccelerationEnabled(): Promise<boolean>;
     setAccelerationEnabled(enabled: boolean): Promise<boolean>;
+  };
+  fonts: {
+    list(): Promise<readonly InstalledFont[]>;
   };
   windowEx: {
     setOverlayIcon(image: string | null, description: string): Promise<void>;
