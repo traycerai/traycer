@@ -190,11 +190,11 @@ export async function pollDeviceToken(
 
   if (response.status === 200) {
     const tokens = await readRotatedTokens(response);
-    // A 200 whose body fails validation is treated as transient: the loop
-    // re-polls (and, since the server consumed the code on mint, will then see
-    // a terminal `invalid`). This never silently drops a real success on a
-    // momentary parse hiccup.
-    if (tokens === null) {
+    // A 200 whose body fails validation OR whose read aborts/times out is
+    // treated as transient: the loop re-polls (and, since the server consumed
+    // the code on mint, will then see a terminal `invalid`). This never silently
+    // drops a real success on a momentary parse hiccup.
+    if (tokens.kind !== "ok") {
       return { kind: "network-error" };
     }
     return {

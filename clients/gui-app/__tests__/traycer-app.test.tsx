@@ -106,6 +106,7 @@ function guiHarness(id: GuiHarnessId, label: string): GuiHarnessOption {
   return {
     id,
     label,
+    enabled: true,
     available: true,
     error: null,
     modes: ["gui", "tui"],

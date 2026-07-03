@@ -14,6 +14,10 @@ import { GENERATE_TITLE_SOURCE_TEXT_MAX_CHARS } from "@traycer/protocol/host/epi
 export const tuiHarnessOptionSchema = z.object({
   id: tuiHarnessIdSchema,
   label: z.string(),
+  // Controls whether the harness is included in downstream filtering and shown
+  // in the CLI. This is distinct from `available` and `availabilityPending`,
+  // which describe the current host-side availability probe state.
+  enabled: z.boolean().default(true),
   available: z.boolean(),
   error: z.string().nullable(),
   // True while the host's availability probe for this harness is still running

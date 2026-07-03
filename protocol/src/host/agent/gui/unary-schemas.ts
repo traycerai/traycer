@@ -29,6 +29,10 @@ export type HarnessSurface = z.infer<typeof harnessSurfaceSchema>;
 export const guiHarnessOptionSchema = z.object({
   id: guiHarnessIdSchema,
   label: z.string(),
+  // Controls whether the harness is included in downstream filtering and shown
+  // in the CLI. This is distinct from `available` and `availabilityPending`,
+  // which describe the current host-side availability probe state.
+  enabled: z.boolean().default(true),
   available: z.boolean(),
   error: z.string().nullable(),
   modes: z.array(harnessSurfaceSchema),
@@ -105,6 +109,18 @@ export const guiAgentModelOptionSchema = z.object({
   // side ChatRunSettings.serviceTier - same protocol-skew rationale).
   defaultServiceTier: z.string().nullable().default(null),
   supportedServiceTiers: z.array(agentServiceTierOptionSchema).default([]),
+  // Human-readable sunset notice for a model an adapter is keeping around only
+  // for backward compatibility with sessions/integrations still pinned to it
+  // (currently only the Traycer harness's catalog uses this - see
+  // SONNET_4_6_SUNSET_DATE in traycer-server's inference catalog). `.optional()`
+  // rather than `.default(null)` like the service-tier fields above: this is a
+  // Traycer-catalog-specific concept, so making it required would force every
+  // other adapter (Claude, Codex, OpenCode, Cursor, ...) to explicitly null it
+  // out for a field that will never apply to them. Absent and `null` are
+  // treated identically downstream, so an older host that hasn't shipped this
+  // field - or any adapter that never will - degrades cleanly to "not
+  // deprecated" instead of failing to parse.
+  deprecationNotice: z.string().nullable().optional(),
   metadata: z.record(z.string(), z.unknown()),
 });
 export type GuiAgentModelOption = z.infer<typeof guiAgentModelOptionSchema>;

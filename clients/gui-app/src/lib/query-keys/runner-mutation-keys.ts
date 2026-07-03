@@ -40,6 +40,11 @@ export const runnerMutationKeys = {
   // reloads. Keyed so the destructive action dedups and shows in devtools.
   clearAllLocalData: () => ["runner.clearAllLocalData"] as const,
   mermaidPngDownload: () => ["runner.mermaidPngDownload"] as const,
+  zoomSet: (scope: string | null) => ["runner.zoom.set", scope] as const,
+  zoomStepIn: (scope: string | null) => ["runner.zoom.stepIn", scope] as const,
+  zoomStepOut: (scope: string | null) =>
+    ["runner.zoom.stepOut", scope] as const,
+  zoomReset: (scope: string | null) => ["runner.zoom.reset", scope] as const,
   // Settings → log level (desktop/cli/host). Machine-local config, not
   // host-scoped, so a single static key suffices.
   logLevelsSet: () => ["runner.logLevels.set"] as const,
@@ -101,6 +106,8 @@ export const runnerQueryKeys = {
   // The three configurable log thresholds, read together from the desktop
   // platform bridge. Machine-local, so not host-scoped.
   logLevels: () => ["runner.logLevels"] as const,
+  zoomPercent: (scope: string | null) =>
+    ["runner.zoom.percent", scope] as const,
   // Desktop support log viewer (Diagnostics → Logs). Scoped by the support
   // bridge object identity so a host/shell swap invalidates cleanly, matching
   // the other runner-host queries.

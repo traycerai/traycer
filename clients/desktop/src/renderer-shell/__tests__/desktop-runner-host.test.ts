@@ -402,6 +402,15 @@ function buildFakeBridge(
     power: {
       setSleepBlocked: async () => undefined,
     },
+    zoom: {
+      ladder: [100] as const,
+      get: async () => 100,
+      set: async () => 100,
+      stepIn: async () => 100,
+      stepOut: async () => 100,
+      reset: async () => 100,
+      onChange: (_handler) => ({ dispose: () => undefined }),
+    },
     hostManagement: {
       installHost: async () => {
         throw new Error("installHost not used in test");
