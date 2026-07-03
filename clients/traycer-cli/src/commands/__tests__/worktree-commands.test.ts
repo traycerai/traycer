@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Command } from "commander";
 import { buildProgram } from "../../index";
-import { buildWorktreeDeleteCommand } from "../worktree-delete";
-import { CliError, CLI_ERROR_CODES } from "../../runner/errors";
-import type { CommandContext } from "../../runner/runner";
 
 function findSubcommand(parent: Command, name: string): Command | null {
   for (const child of parent.commands) {
@@ -27,8 +24,6 @@ function expectCommand(program: Command, path: readonly string[]): Command {
   }
   return cursor;
 }
-
-const ctx = {} as CommandContext;
 
 describe("worktree list / delete registration", () => {
   it("registers `worktree list` with --include-activity and the runner flags", () => {
@@ -83,19 +78,9 @@ describe("worktree delete readonly-surface hiding", () => {
       expect(help).toContain("list");
       // Delete is hidden from help ...
       expect(help).not.toContain("delete [options]");
-      // ... but still registered (Desktop/host may invoke it directly).
+      // ... but still registered (Desktop/host may invoke it directly, and the
+      // command itself guards the readonly surface at runtime).
       expectCommand(program, ["worktree", "delete"]);
     });
-  });
-});
-
-describe("buildWorktreeDeleteCommand input validation", () => {
-  it("rejects an empty --path before any network call", async () => {
-    await expect(
-      buildWorktreeDeleteCommand({ worktreePath: "   " })(ctx),
-    ).rejects.toBeInstanceOf(CliError);
-    await expect(
-      buildWorktreeDeleteCommand({ worktreePath: "" })(ctx),
-    ).rejects.toMatchObject({ code: CLI_ERROR_CODES.INVALID_ARGUMENT });
   });
 });

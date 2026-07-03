@@ -34,6 +34,12 @@ const MAX_BACKOFF_MS = 30_000;
 
 export interface WorktreeDeleteCommandOpts {
   readonly worktreePath: string;
+  // The delete is destructive, so it is a capability boundary - not merely a
+  // hidden command - in the readonly agent surface. Commander's `hidden` flag
+  // still runs the action when the subcommand is typed explicitly, so the
+  // command itself refuses up front (before any network/stream work) when this
+  // is true. Resolved from `TRAYCER_AGENT_CLI_SURFACE` at registration.
+  readonly readonlySurface: boolean;
 }
 
 /**
@@ -49,6 +55,15 @@ export function buildWorktreeDeleteCommand(
   opts: WorktreeDeleteCommandOpts,
 ): CommandFn {
   return async (ctx) => {
+    if (opts.readonlySurface) {
+      throw cliError({
+        code: CLI_ERROR_CODES.FORBIDDEN,
+        message:
+          "traycer: worktree delete is not available in the readonly agent surface - remove worktrees from Settings ▸ Worktrees, or run this from a full-surface session.",
+        details: null,
+        exitCode: 1,
+      });
+    }
     const worktreePath = opts.worktreePath.trim();
     if (worktreePath.length === 0) {
       throw cliError({
@@ -160,10 +175,28 @@ async function runWorktreeDeleteStream(
     });
     session.onStatusChange(
       (status: StreamConnectionStatus, reason: StreamCloseReason | null) => {
-        if (status !== "closed" || reason === null || reason.kind !== "fatalError") {
+        // The initial dial (`connecting`) and a healthy connection (`open`) are
+        // normal; everything else is a drop. For this one-shot DESTRUCTIVE
+        // command a drop before an application terminal frame (`complete` /
+        // `failed`) must be terminal: the shared client would otherwise
+        // reconnect and RE-SEND `worktree.deleteByPath`, re-entering the host's
+        // delete pipeline. So the first `reconnecting`/`closed` transition
+        // (before `finish` has run) fails the command with no resubscribe.
+        if (status === "connecting" || status === "open") {
           return;
         }
-        finish(() => reject(fatalCloseToCliError(reason.details)));
+        if (
+          status === "closed" &&
+          reason !== null &&
+          reason.kind === "fatalError"
+        ) {
+          finish(() => reject(fatalCloseToCliError(reason.details)));
+          return;
+        }
+        // `reconnecting`, or a non-fatal `closed` that isn't our own
+        // `finish()`-driven caller close (the latter is a no-op under the
+        // `settled` guard).
+        finish(() => reject(streamDroppedCliError()));
       },
     );
   });
@@ -210,6 +243,23 @@ function relayOutput(
   }
   const sink = channel === "stderr" ? process.stderr : process.stdout;
   sink.write(chunk);
+}
+
+/**
+ * A recoverable transport drop (socket close, dial/openAck timeout, missed
+ * pong, malformed frame) arrived before the host sent a terminal frame. The
+ * shared client would auto-reconnect and re-send the delete, so we stop here
+ * instead. The message is deliberately honest about the destructive
+ * uncertainty: the worktree may or may not have been removed.
+ */
+function streamDroppedCliError(): CliError {
+  return cliError({
+    code: CLI_ERROR_CODES.UNEXPECTED,
+    message:
+      "traycer: worktree delete stream dropped before the host reported a result - the worktree may or may not have been removed. Run `traycer worktree list` to check, then retry if needed.",
+    details: null,
+    exitCode: 1,
+  });
 }
 
 /**

@@ -910,12 +910,13 @@ function registerCommentsCommands(program: Command): void {
 }
 
 function registerWorktreeCommands(program: Command): void {
-  // `worktree delete` mutates on-disk state, so it is hidden in the readonly
-  // agent surface (same mechanism as `agent create`); `worktree list` is a
-  // read and stays available in both surfaces.
-  const deleteHidden = {
-    hidden: resolveAgentCliSurface(readonlyEnv()) === "readonly",
-  };
+  // `worktree delete` mutates on-disk state, so it is a capability boundary in
+  // the readonly agent surface: hidden from help (like `agent create`) AND
+  // guarded at runtime, because Commander's `hidden` flag still runs the action
+  // when the subcommand is typed explicitly. `worktree list` is a read and
+  // stays available in both surfaces.
+  const readonlySurface = resolveAgentCliSurface(readonlyEnv()) === "readonly";
+  const deleteHidden = { hidden: readonlySurface };
   const worktree = program
     .command("worktree")
     .description("Create, inspect, and remove Git worktree paths");
@@ -946,6 +947,7 @@ function registerWorktreeCommands(program: Command): void {
     (opts) =>
       buildWorktreeDeleteCommand({
         worktreePath: typeof opts.path === "string" ? opts.path : "",
+        readonlySurface,
       }),
   );
 
