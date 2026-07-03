@@ -21,6 +21,7 @@
     "@codemirror/language": "catalog:",
     "@codemirror/state": "catalog:",
     "@dnd-kit/core": "catalog:",
+    "@dnd-kit/modifiers": "catalog:",
     "@dnd-kit/sortable": "catalog:",
     "@dnd-kit/utilities": "catalog:",
     "@floating-ui/dom": "catalog:",

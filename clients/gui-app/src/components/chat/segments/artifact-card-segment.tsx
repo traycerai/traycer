@@ -70,14 +70,23 @@ function ArtifactDiffToggle(props: {
 /**
  * The card's header row, and the drag surface for the card. The open-artifact
  * action is a child button, while the diff toggle and full-diff control are
- * siblings, avoiding nested interactive content. Drag lives on this row (never
- * the outer card) so an expanded diff body stays free for text selection.
+ * siblings, avoiding nested interactive content. Drag lives on this whole row
+ * (never the outer card) so an expanded diff body below stays free for text
+ * selection, and the whole row shows the grab cursor on hover. The overlay chip
+ * is centered on the pointer by the root DragOverlay's `snapCenterToCursor`
+ * modifier, so a full-width row does not leave the chip offset from the hand.
  *
- * Only `setNodeRef` + `listeners` are attached (mirroring the git-diff
- * `FileRow`): the row wraps a real open button, so spreading dnd-kit's default
- * `attributes` (which set `role="button"` + `tabIndex` on this div) would nest
- * interactive/focusable elements, and the DnD system ships no keyboard sensor -
- * the card stays keyboard-openable via its inner buttons.
+ * A `GripVertical` fades in on hover to signal draggability. It lives in a
+ * reserved IN-FLOW column (never absolutely positioned), so it can never overlap
+ * the artifact icon, and it is `pointer-events-none` decoration - the row, not
+ * the grip, is the drag node. The column is reserved even for a non-draggable
+ * card (rendered empty) so icons stay aligned across a mixed list.
+ *
+ * Only `setNodeRef` + `listeners` are attached: the row wraps a real open
+ * button, so spreading dnd-kit's default `attributes` (which set `role="button"`
+ * + `tabIndex` on this div) would nest interactive/focusable elements, and the
+ * root DnD system ships no keyboard sensor. The card stays keyboard-openable via
+ * its inner buttons.
  */
 function ArtifactCardHeaderRow(props: {
   readonly sticky: boolean;
@@ -88,7 +97,6 @@ function ArtifactCardHeaderRow(props: {
   readonly dragListeners: DraggableSyntheticListeners;
   readonly draggable: boolean;
   readonly isDragging: boolean;
-  readonly showGrip: boolean;
   readonly children: ReactNode;
 }) {
   const {
@@ -100,11 +108,10 @@ function ArtifactCardHeaderRow(props: {
     dragListeners,
     draggable,
     isDragging,
-    showGrip,
     children,
   } = props;
   const className = cn(
-    "relative flex w-full items-center gap-2 px-2.5 py-2 text-left",
+    "flex w-full items-center gap-2 px-2.5 py-2 text-left",
     sticky ? stickySurfaceClassName : surfaceClassName,
     !sticky && hoverClassName,
     sticky && "sticky top-0 z-20 border-b border-border/40 shadow-sm",
@@ -112,12 +119,21 @@ function ArtifactCardHeaderRow(props: {
   );
   return (
     <div ref={dragRef} className={className} {...dragListeners}>
-      {showGrip ? (
-        <GripVertical
-          aria-hidden
-          className="pointer-events-none absolute top-1/2 left-0.5 size-3.5 -translate-y-1/2 text-muted-foreground/60 opacity-0 transition-opacity group-hover/artifact-card:opacity-100"
-        />
-      ) : null}
+      <span
+        aria-hidden
+        className="flex w-4 shrink-0 items-center justify-center"
+      >
+        {draggable ? (
+          <GripVertical
+            className={cn(
+              "pointer-events-none size-3.5 text-muted-foreground/45 transition-opacity",
+              isDragging
+                ? "opacity-100"
+                : "opacity-0 group-hover/artifact-card:opacity-100",
+            )}
+          />
+        ) : null}
+      </span>
       {children}
     </div>
   );
@@ -494,7 +510,8 @@ function ArtifactCardSegmentContent(props: ArtifactCardSegmentProps) {
   // `enabled` reuses the `canOpen` gate (live artifact + host + not deleted).
   // The shared hook owns the pure `viewTabId` resolution (C1), the
   // occurrence-unique drag id (C3), and the identity-only payload (C2). The card
-  // attaches `setNodeRef` + `listeners` only (no `attributes`).
+  // attaches `setNodeRef` + `listeners` to the whole header row (no
+  // `attributes`).
   const {
     isDraggable: canDrag,
     setNodeRef: dragRef,
@@ -590,7 +607,6 @@ function ArtifactCardSegmentContent(props: ArtifactCardSegmentProps) {
         dragListeners={dragListeners}
         draggable={canDrag}
         isDragging={isDragging}
-        showGrip={canDrag}
       >
         {header}
       </ArtifactCardHeaderRow>

@@ -34,8 +34,8 @@ export interface ChatArtifactDragIdentity {
  * id, the pure `viewTabId` resolution, the stable identity->payload memo, and
  * the `useDraggable` registration. Each caller keeps its own eligibility gate
  * (`enabled`) and attaches the returned wiring to its own element - the card
- * attaches `setNodeRef` + `listeners` (no `attributes`); the chip additionally
- * spreads `attributes`.
+ * attaches `setNodeRef` + `listeners` to its whole header row (no
+ * `attributes`); the chip additionally spreads `attributes`.
  *
  * - C1: `viewTabId` comes from the NON-side-effecting `resolveTabIdForEpic` read
  *   reactively via a selector - never `resolveTargetTabForEpic`, which mutates
