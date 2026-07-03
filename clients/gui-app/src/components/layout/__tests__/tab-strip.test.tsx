@@ -335,7 +335,7 @@ describe("<TabStrip />", () => {
     expect(hoverChrome?.querySelector("svg")).toBeNull();
   });
 
-  it("keeps the new-tab button outside the scrollable full-width tab row", async () => {
+  it("keeps the new-tab button after the tabs while preserving overflow", async () => {
     openEpicFixture(EPIC_A);
     openEpicFixture(EPIC_B);
     const router = buildRouter("/epics/e-a/e-a");
@@ -353,13 +353,14 @@ describe("<TabStrip />", () => {
 
     fireEvent.wheel(tabRow, { deltaY: 80, deltaMode: 0 });
 
-    expect(tabRow.className).toContain("flex-1");
+    expect(tabRow.className).toContain("flex-[0_1_auto]");
     expect(tabRow.className).not.toContain("w-max");
     expect(tabRow.className).toContain("overflow-x-auto");
     expect(tabRow.scrollLeft).toBe(80);
     expect(newTabButton.parentElement).not.toBe(tabRow);
     expect(tabCluster.className).toContain("max-w-full");
-    expect(tabCluster.className).toContain("flex-1");
+    expect(tabCluster.className).toContain("flex-[0_1_auto]");
+    expect(tabCluster.className).not.toContain("flex-1");
     expect(newTabButton.className).toContain("shrink-0");
   });
 
