@@ -224,7 +224,9 @@ function WorktreesFilterControls(props: {
         size="sm"
         aria-pressed={stalestFirst}
         className="shrink-0"
-        onClick={() => props.onSortModeChange(stalestFirst ? "repo" : "stalest")}
+        onClick={() =>
+          props.onSortModeChange(stalestFirst ? "repo" : "stalest")
+        }
       >
         <ArrowDownWideNarrow className="size-4" />
         <span>Stalest first</span>
@@ -983,7 +985,10 @@ function WorktreeBranchStatusHints(props: {
   if (status === null) return null;
   if (status.mergedIntoDefault) {
     return (
-      <Badge variant="outline" className="gap-1 font-normal text-muted-foreground">
+      <Badge
+        variant="outline"
+        className="gap-1 font-normal text-muted-foreground"
+      >
         <GitMerge className="size-3" aria-hidden />
         Merged
       </Badge>

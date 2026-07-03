@@ -7,12 +7,17 @@ import {
 import { toast } from "sonner";
 import type {
   HostRpcError,
-  RequestOfMethod,
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { hostQueryKeys, epicMutationKeys } from "@/lib/query-keys";
+import { WORKTREE_BINDING_INVALIDATIONS } from "@/hooks/worktree/invalidations";
+import { useWorktreeDeleteStreamTransportFactory } from "@/lib/host/use-worktree-delete-stream-transport";
+import {
+  runWorktreeCleanup,
+  type WorktreeCleanupOutcome,
+} from "@/lib/epics/run-worktree-cleanup";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { LANDING_ROUTE } from "@/lib/routes";
 import { navigateToTabIntent } from "@/lib/tab-navigation";
@@ -35,28 +40,53 @@ interface BatchDeleteEpicMutationContext {
   readonly epicTitlesById: Readonly<Record<string, string>>;
 }
 
+/**
+ * One approved worktree-cleanup candidate. `ownerEpicIds` lets `onSuccess`
+ * re-confirm — once the batch result is known — that EVERY owner actually
+ * succeeded before removing the worktree, so a partial-failure never deletes a
+ * worktree still referenced by a Task that failed to delete.
+ */
+export interface BatchDeleteWorktreeCandidate {
+  readonly worktreePath: string;
+  readonly ownerEpicIds: ReadonlyArray<string>;
+}
+
+/**
+ * Mutation variables. `worktreeCleanup` is `null` when the user approved no
+ * worktrees (or none were offered), in which case the flow is identical to
+ * before this feature. The wire request carries only `ids`.
+ */
+export interface BatchDeleteEpicVariables {
+  readonly ids: ReadonlyArray<string>;
+  readonly worktreeCleanup: {
+    readonly candidates: ReadonlyArray<BatchDeleteWorktreeCandidate>;
+  } | null;
+}
+
 type DeleteNavigationTarget = HeaderTab | null | undefined;
 
 export function useEpicBatchDelete(): UseMutationResult<
   ResponseOfMethod<HostRpcRegistry, "epic.batchDelete">,
   HostRpcError,
-  RequestOfMethod<HostRpcRegistry, "epic.batchDelete">,
+  BatchDeleteEpicVariables,
   BatchDeleteEpicMutationContext
 > {
   const client = useHostClient();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const openStreamTransport = useWorktreeDeleteStreamTransportFactory();
   const activePathname = useRouterState({
     select: (state) => state.location.pathname,
   });
   return useHostMutation<
     HostRpcRegistry,
     "epic.batchDelete",
-    BatchDeleteEpicMutationContext
+    BatchDeleteEpicMutationContext,
+    BatchDeleteEpicVariables
   >({
     client,
     method: "epic.batchDelete",
-    mapVariables: (variables) => variables,
+    mapVariables: (variables) => ({ ids: [...variables.ids] }),
     options: {
       mutationKey: epicMutationKeys.batchDelete(),
       onMutate: (variables) => {
@@ -73,7 +103,7 @@ export function useEpicBatchDelete(): UseMutationResult<
           ),
         };
       },
-      onSuccess: (data, _variables, ctx) => {
+      onSuccess: (data, variables, ctx) => {
         const failures = data.results.filter((r) => !r.success);
         const deletedIds = data.results.flatMap((result) =>
           result.success ? [result.taskId] : [],
@@ -100,20 +130,36 @@ export function useEpicBatchDelete(): UseMutationResult<
             navigateToTabIntent(navigate, tabResolveIntent(navigationTarget));
           }
         }
-        if (failures.length === 0) {
-          toast.success(
-            deletedEpicSuccessToastMessage(deletedIds, ctx.epicTitlesById),
-          );
-        } else if (successes === 0) {
-          toast.error(
-            failures.length === 1
-              ? "Couldn't delete epic."
-              : `Couldn't delete ${failures.length} epics.`,
-          );
+        const epicToast = epicDeleteToastParts({
+          failureCount: failures.length,
+          successes,
+          total: data.results.length,
+          deletedIds,
+          epicTitlesById: ctx.epicTitlesById,
+        });
+        const eligibleWorktreePaths = eligibleWorktreeCleanupPaths(
+          variables.worktreeCleanup,
+          deletedIds,
+          successes,
+        );
+        if (ctx.hostId === null || eligibleWorktreePaths.length === 0) {
+          emitToast(epicToast.level, epicToast.message);
         } else {
-          toast.warning(
-            `Deleted ${successes} of ${data.results.length}; ${failures.length} failed.`,
-          );
+          // The Task(s) are already deleted; stream the approved worktree
+          // removals and report a single combined summary once they settle.
+          // Deletion is never blocked or delayed on this cleanup - a slow or
+          // failing worktree delete only affects its own toast line. `hostId`
+          // is frozen from `onMutate` so a host swap mid-flight can't redirect
+          // the cleanup or its cache invalidation to the wrong scope.
+          const hostId = ctx.hostId;
+          void runWorktreeCleanup(
+            openStreamTransport,
+            hostId,
+            eligibleWorktreePaths,
+          ).then((outcome) => {
+            emitTaskDeleteSummaryToast(epicToast, outcome);
+            invalidateWorktreeCachesForHost(queryClient, hostId);
+          });
         }
         if (ctx.hostId !== null && ctx.userId !== null) {
           publishDeletedEpicNotification({
@@ -203,4 +249,129 @@ function readEpicTitle(
 function normalizeEpicTitle(title: string): string | null {
   const trimmed = title.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+type EpicDeleteToastLevel = "success" | "warning" | "error";
+
+interface EpicDeleteToastParts {
+  readonly level: EpicDeleteToastLevel;
+  readonly message: string;
+}
+
+// The Task-deletion half of the summary toast, factored so the same message can
+// be emitted immediately (no cleanup) or combined with the worktree tally once
+// the streamed cleanup settles.
+function epicDeleteToastParts(args: {
+  readonly failureCount: number;
+  readonly successes: number;
+  readonly total: number;
+  readonly deletedIds: ReadonlyArray<string>;
+  readonly epicTitlesById: Readonly<Record<string, string>>;
+}): EpicDeleteToastParts {
+  const { failureCount, successes, total, deletedIds, epicTitlesById } = args;
+  if (failureCount === 0) {
+    return {
+      level: "success",
+      message: deletedEpicSuccessToastMessage(deletedIds, epicTitlesById),
+    };
+  }
+  if (successes === 0) {
+    return {
+      level: "error",
+      message:
+        failureCount === 1
+          ? "Couldn't delete epic."
+          : `Couldn't delete ${failureCount} epics.`,
+    };
+  }
+  return {
+    level: "warning",
+    message: `Deleted ${successes} of ${total}; ${failureCount} failed.`,
+  };
+}
+
+function emitToast(level: EpicDeleteToastLevel, message: string): void {
+  if (level === "success") {
+    toast.success(message);
+    return;
+  }
+  if (level === "warning") {
+    toast.warning(message);
+    return;
+  }
+  toast.error(message);
+}
+
+// A worktree is safe to remove only when EVERY owning Task actually succeeded -
+// so a partial batch failure never removes a worktree still referenced by a
+// Task that failed to delete. Empty when no cleanup was approved or no Task
+// succeeded.
+function eligibleWorktreeCleanupPaths(
+  cleanup: BatchDeleteEpicVariables["worktreeCleanup"],
+  deletedIds: ReadonlyArray<string>,
+  successes: number,
+): ReadonlyArray<string> {
+  if (cleanup === null || successes === 0) return [];
+  const deletedSet = new Set(deletedIds);
+  return cleanup.candidates
+    .filter((candidate) =>
+      candidate.ownerEpicIds.every((epicId) => deletedSet.has(epicId)),
+    )
+    .map((candidate) => candidate.worktreePath);
+}
+
+function worktreeCleanupSummary(
+  removed: number,
+  failed: number,
+): string | null {
+  if (removed === 0 && failed === 0) return null;
+  const parts: string[] = [];
+  if (removed > 0) {
+    parts.push(`${removed} worktree${removed === 1 ? "" : "s"} removed`);
+  }
+  if (failed > 0) {
+    parts.push(
+      `${failed} worktree${failed === 1 ? "" : "s"} couldn't be removed`,
+    );
+  }
+  return parts.join(", ");
+}
+
+function emitTaskDeleteSummaryToast(
+  epicToast: EpicDeleteToastParts,
+  outcome: WorktreeCleanupOutcome,
+): void {
+  const summary = worktreeCleanupSummary(
+    outcome.removed.length,
+    outcome.failed.length,
+  );
+  if (summary === null) {
+    emitToast(epicToast.level, epicToast.message);
+    return;
+  }
+  // A worktree that couldn't be removed downgrades the combined toast to a
+  // warning even when every Task deleted cleanly.
+  const level = outcome.failed.length > 0 ? "warning" : epicToast.level;
+  emitToast(level, `${epicToast.message} · ${summary}`);
+}
+
+// Refresh the host-wide worktree list plus the shared binding-backed caches
+// after the cleanup lands, so Settings ▸ Worktrees and the folder/worktree
+// pickers stop showing the removed worktrees. `refetchType: "all"` reaches the
+// often-unmounted pickers too. Mirrors the Settings delete flow's invalidation.
+function invalidateWorktreeCachesForHost(
+  queryClient: QueryClient,
+  hostId: string,
+): void {
+  const refetchType = "all" as const;
+  void queryClient.invalidateQueries({
+    queryKey: hostQueryKeys.methodScope(hostId, "worktree.listAllForHost"),
+    refetchType,
+  });
+  for (const method of WORKTREE_BINDING_INVALIDATIONS) {
+    void queryClient.invalidateQueries({
+      queryKey: hostQueryKeys.methodScope(hostId, method),
+      refetchType,
+    });
+  }
 }

@@ -13,8 +13,7 @@ const hoisted = vi.hoisted(() => ({
   sessionCloseMock: vi.fn(),
   ref: {
     statusHandler: null as
-      | ((status: string, reason: StreamCloseReason | null) => void)
-      | null,
+      ((status: string, reason: StreamCloseReason | null) => void) | null,
   },
 }));
 
@@ -37,10 +36,9 @@ vi.mock("../../internal/host-auth", () => ({
 }));
 
 vi.mock("../../internal/host-rpc", async () => {
-  const actual =
-    await vi.importActual<typeof import("../../internal/host-rpc")>(
-      "../../internal/host-rpc",
-    );
+  const actual = await vi.importActual<
+    typeof import("../../internal/host-rpc")
+  >("../../internal/host-rpc");
   return { ...actual, resolveEndpoint: vi.fn() };
 });
 

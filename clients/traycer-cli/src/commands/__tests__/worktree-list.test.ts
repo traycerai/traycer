@@ -28,9 +28,7 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-function entry(
-  overrides: Partial<WorktreeHostEntryV11>,
-): WorktreeHostEntryV11 {
+function entry(overrides: Partial<WorktreeHostEntryV11>): WorktreeHostEntryV11 {
   return {
     worktreePath: "/Users/dev/.traycer/worktrees/acme__web/feature-x",
     repoLabel: "acme/web",

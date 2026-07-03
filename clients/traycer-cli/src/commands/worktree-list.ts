@@ -79,10 +79,7 @@ export function formatWorktreeListTable(
     entry.worktreePath,
   ]);
   const widths = COLUMNS.map((header, column) =>
-    rows.reduce(
-      (max, row) => Math.max(max, row[column].length),
-      header.length,
-    ),
+    rows.reduce((max, row) => Math.max(max, row[column].length), header.length),
   );
   const renderRow = (cells: ReadonlyArray<string>): string =>
     cells

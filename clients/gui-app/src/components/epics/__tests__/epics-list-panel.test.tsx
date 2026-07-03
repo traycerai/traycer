@@ -94,8 +94,22 @@ interface RenameEpicTitleVariables {
   };
 }
 
+interface WorktreeCleanupCandidateStub {
+  readonly worktreePath: string;
+  readonly repoLabel: string;
+  readonly branch: string | null;
+  readonly uncommittedCount: number;
+  readonly ownerEpicIds: ReadonlyArray<string>;
+}
+
 interface DeleteEpicsVariables {
   readonly ids: string[];
+  readonly worktreeCleanup: {
+    readonly candidates: ReadonlyArray<{
+      readonly worktreePath: string;
+      readonly ownerEpicIds: ReadonlyArray<string>;
+    }>;
+  } | null;
 }
 
 interface DeleteEpicsMutationOptions {
@@ -114,6 +128,7 @@ const testState = vi.hoisted(() => ({
   },
   isFetching: false,
   bridge: null as DesktopWindowsBridge | null,
+  worktreeCandidates: [] as WorktreeCleanupCandidateStub[],
   mutate:
     vi.fn<
       (
@@ -150,6 +165,13 @@ vi.mock("@/hooks/epic/use-epic-batch-delete-mutation", () => ({
   useEpicBatchDelete: () => ({
     isPending: false,
     mutate: testState.mutate,
+  }),
+}));
+
+vi.mock("@/hooks/epic/use-task-delete-worktree-candidates-query", () => ({
+  useTaskDeleteWorktreeCandidates: () => ({
+    candidates: testState.worktreeCandidates,
+    isError: false,
   }),
 }));
 
@@ -249,6 +271,7 @@ describe("<EpicsListPanel />", () => {
     };
     testState.isFetching = false;
     testState.bridge = null;
+    testState.worktreeCandidates = [];
     setDesktopEpicOwnershipBridge(null);
     testState.mutate.mockReset();
     testState.renameMutate.mockReset();
@@ -536,7 +559,7 @@ describe("<EpicsListPanel />", () => {
     ).toBe("true");
 
     fireEvent.click(screen.getByTestId("epics-list-delete-selected"));
-    fireEvent.click(screen.getByTestId("confirm-action"));
+    fireEvent.click(screen.getByTestId("delete-tasks-confirm"));
 
     expect(testState.mutate).toHaveBeenCalledTimes(1);
     const deleteCall = testState.mutate.mock.calls.at(0);
@@ -544,7 +567,10 @@ describe("<EpicsListPanel />", () => {
       throw new Error("expected selected epic delete mutation call");
     }
     const [variables] = deleteCall;
-    expect(variables).toEqual({ ids: ["epic-from-history"] });
+    expect(variables).toEqual({
+      ids: ["epic-from-history"],
+      worktreeCleanup: null,
+    });
   });
 
   it("disables history selection when every visible row is viewer-only", async () => {
@@ -581,7 +607,7 @@ describe("<EpicsListPanel />", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Select all" }));
     fireEvent.click(screen.getByTestId("epics-list-delete-selected"));
-    fireEvent.click(screen.getByTestId("confirm-action"));
+    fireEvent.click(screen.getByTestId("delete-tasks-confirm"));
 
     expect(testState.mutate).toHaveBeenCalledTimes(1);
     const deleteCall = testState.mutate.mock.calls.at(0);
@@ -589,8 +615,93 @@ describe("<EpicsListPanel />", () => {
       throw new Error("expected selected epic delete mutation call");
     }
     const [variables, options] = deleteCall;
-    expect(variables).toEqual({ ids: ["epic-from-history", "epic-two"] });
+    expect(variables).toEqual({
+      ids: ["epic-from-history", "epic-two"],
+      worktreeCleanup: null,
+    });
     expect(typeof options.onSuccess).toBe("function");
+  });
+
+  it("offers worktree cleanup with clean rows checked and dirty rows unchecked by default", async () => {
+    testState.worktreeCandidates = [
+      {
+        worktreePath: "/wt/clean",
+        repoLabel: "owner/repo",
+        branch: "feat/clean",
+        uncommittedCount: 0,
+        ownerEpicIds: ["epic-from-history"],
+      },
+      {
+        worktreePath: "/wt/dirty",
+        repoLabel: "owner/repo",
+        branch: "feat/dirty",
+        uncommittedCount: 3,
+        ownerEpicIds: ["epic-from-history"],
+      },
+    ];
+    renderPanel("embedded", "/");
+
+    fireEvent.click(await screen.findByTestId("epics-list-row-delete"));
+    expect(
+      await screen.findByTestId("delete-tasks-worktree-cleanup"),
+    ).not.toBeNull();
+
+    const checkboxes = screen.getAllByTestId("delete-tasks-worktree-checkbox");
+    expect(checkboxes[0].getAttribute("aria-checked")).toBe("true");
+    expect(checkboxes[1].getAttribute("aria-checked")).toBe("false");
+
+    // Only the clean (checked) worktree is approved for removal by default.
+    fireEvent.click(screen.getByTestId("delete-tasks-confirm"));
+    const deleteCall = testState.mutate.mock.calls.at(0);
+    if (deleteCall === undefined) {
+      throw new Error("expected epic delete mutation call");
+    }
+    expect(deleteCall[0]).toEqual({
+      ids: ["epic-from-history"],
+      worktreeCleanup: {
+        candidates: [
+          { worktreePath: "/wt/clean", ownerEpicIds: ["epic-from-history"] },
+        ],
+      },
+    });
+  });
+
+  it("includes a dirty worktree once its warning row is checked", async () => {
+    testState.worktreeCandidates = [
+      {
+        worktreePath: "/wt/dirty",
+        repoLabel: "owner/repo",
+        branch: "feat/dirty",
+        uncommittedCount: 2,
+        ownerEpicIds: ["epic-from-history"],
+      },
+    ];
+    renderPanel("embedded", "/");
+
+    fireEvent.click(await screen.findByTestId("epics-list-row-delete"));
+    const checkbox = await screen.findByTestId(
+      "delete-tasks-worktree-checkbox",
+    );
+    expect(checkbox.getAttribute("aria-checked")).toBe("false");
+    fireEvent.click(checkbox);
+
+    fireEvent.click(screen.getByTestId("delete-tasks-confirm"));
+    const deleteCall = testState.mutate.mock.calls.at(0);
+    if (deleteCall === undefined) {
+      throw new Error("expected epic delete mutation call");
+    }
+    expect(deleteCall[0].worktreeCleanup).toEqual({
+      candidates: [
+        { worktreePath: "/wt/dirty", ownerEpicIds: ["epic-from-history"] },
+      ],
+    });
+  });
+
+  it("omits the worktree cleanup section when there are no candidates", async () => {
+    renderPanel("embedded", "/");
+    fireEvent.click(await screen.findByTestId("epics-list-row-delete"));
+    expect(await screen.findByTestId("delete-tasks-dialog")).not.toBeNull();
+    expect(screen.queryByTestId("delete-tasks-worktree-cleanup")).toBeNull();
   });
 
   it("edits an epic title from a history row without opening the epic", async () => {

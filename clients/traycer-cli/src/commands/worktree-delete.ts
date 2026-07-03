@@ -277,7 +277,10 @@ function fatalCloseToCliError(details: FatalErrorDetails): CliError {
       exitCode: 1,
     });
   }
-  if (details.code === "INCOMPATIBLE" || details.code === "DOWNGRADE_UNSUPPORTED") {
+  if (
+    details.code === "INCOMPATIBLE" ||
+    details.code === "DOWNGRADE_UNSUPPORTED"
+  ) {
     return cliError({
       code: CLI_ERROR_CODES.HOST_INCOMPATIBLE,
       message: `traycer: ${details.reason} - update the host or CLI so their worktree.deleteByPath versions match.`,
