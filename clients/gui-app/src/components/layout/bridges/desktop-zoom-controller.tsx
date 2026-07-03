@@ -20,28 +20,33 @@ const PINCH_STEP_RATIO = 1.08;
 
 export function DesktopZoomController() {
   const zoom = useDesktopZoomBridge();
-  const stepInMutation = useRunnerZoomStepInMutation(zoom);
-  const stepOutMutation = useRunnerZoomStepOutMutation(zoom);
-  const resetMutation = useRunnerZoomResetMutation(zoom);
+  const { mutateAsync: stepIn } = useRunnerZoomStepInMutation(zoom);
+  const { mutateAsync: stepOut } = useRunnerZoomStepOutMutation(zoom);
+  const { isPending: resetPending, mutateAsync: reset } =
+    useRunnerZoomResetMutation(zoom);
   const actions = useMemo<ZoomActions>(
     () => ({
-      stepIn: () => stepInMutation.mutateAsync(),
-      stepOut: () => stepOutMutation.mutateAsync(),
-      reset: () => resetMutation.mutateAsync(),
-      resetPending: resetMutation.isPending,
+      stepIn: () => stepIn(),
+      stepOut: () => stepOut(),
+      reset: () => reset(),
     }),
-    [resetMutation, stepInMutation, stepOutMutation],
+    [reset, stepIn, stepOut],
   );
   useZoomKeybindings(zoom, actions);
   useZoomGestures(zoom, actions);
-  return <DesktopZoomIndicator zoom={zoom} actions={actions} />;
+  return (
+    <DesktopZoomIndicator
+      zoom={zoom}
+      actions={actions}
+      resetPending={resetPending}
+    />
+  );
 }
 
 interface ZoomActions {
   stepIn(): Promise<number>;
   stepOut(): Promise<number>;
   reset(): Promise<number>;
-  readonly resetPending: boolean;
 }
 
 function useZoomKeybindings(
@@ -155,8 +160,9 @@ function useZoomGestures(
 function DesktopZoomIndicator(props: {
   readonly zoom: DesktopZoomBridge | null;
   readonly actions: ZoomActions;
+  readonly resetPending: boolean;
 }) {
-  const { actions, zoom } = props;
+  const { actions, resetPending, zoom } = props;
   const [percent, setPercent] = useState<number | null>(null);
   const dismissTimerRef = useRef<number | null>(null);
 
@@ -207,14 +213,14 @@ function DesktopZoomIndicator(props: {
         variant="outline"
         size="sm"
         className="h-10 rounded-md border-border bg-popover px-4 text-popover-foreground shadow-lg hover:bg-accent hover:text-accent-foreground"
-        disabled={actions.resetPending}
+        disabled={resetPending}
         onClick={() => {
           void actions.reset().catch(() => undefined);
         }}
       >
         <RotateCcw aria-hidden="true" />
         Reset to 100%
-        {actions.resetPending ? (
+        {resetPending ? (
           <AgentSpinningDots
             className="ml-1 text-current"
             testId="desktop-zoom-reset-pending"

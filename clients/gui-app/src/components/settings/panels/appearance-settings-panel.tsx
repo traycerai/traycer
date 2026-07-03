@@ -154,7 +154,6 @@ function DesktopZoomSettingsRow() {
         control={
           <div className="flex items-center gap-2">
             <Select
-              key={percent === null ? "loading" : String(percent)}
               value={percent === null ? "loading" : String(percent)}
               disabled={setMutation.isPending || resetMutation.isPending}
               onValueChange={(value) => {
