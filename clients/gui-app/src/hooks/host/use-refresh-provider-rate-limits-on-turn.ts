@@ -9,13 +9,12 @@ import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
 
 /**
  * Shared "how fresh is fresh enough" window for provider rate-limit reads:
- * the `staleTime` on both query hooks (`use-host-provider-rate-limits-query`,
- * `use-tab-host-provider-rate-limits-query`) and the minimum spacing this
- * hook enforces between turn-completion-triggered refetches. Unlike the
- * aperture read (a cheap cloud call), a provider pull spawns a real CLI
- * subprocess (`codex app-server`, or a full `claude` idle `query()`) on the
- * host - a burst of back-to-back turn completions (e.g. a queued run) must
- * not each trigger their own spawn.
+ * the `staleTime` on `use-host-provider-rate-limits-query` and the minimum
+ * spacing this hook enforces between turn-completion-triggered refetches.
+ * Unlike the aperture read (a cheap cloud call), a provider pull spawns a
+ * real CLI subprocess (`codex app-server`, or a full `claude` idle
+ * `query()`) on the host - a burst of back-to-back turn completions (e.g. a
+ * queued run) must not each trigger their own spawn.
  */
 export const PROVIDER_RATE_LIMITS_STALE_TIME_MS = 30_000;
 
@@ -25,18 +24,16 @@ export const PROVIDER_RATE_LIMITS_STALE_TIME_MS = 30_000;
  * `useRefreshRateLimitUsageOnTraycerTurn`.
  *
  * Unlike the aperture refresh hook (always default-host scoped, mounted only
- * by the Traycer-only `RateLimitView`), a provider rate-limit surface can be
- * either default-host scoped (Settings) or tab-host scoped (the chat
- * popover/pinned strip) - so `hostId` is a caller-supplied parameter instead
- * of a hardcoded `useReactiveActiveHostId()` read.
+ * by the Traycer-only `RateLimitView`), `hostId` is a caller-supplied
+ * parameter instead of a hardcoded `useReactiveActiveHostId()` read, so a
+ * future tab-scoped consumer can reuse this hook without a rewrite.
  *
  * Invalidates the exact `{ accountContext, providerId }` params key (the same
- * one `useHostProviderRateLimitsQuery`/`useTabHostProviderRateLimitsQuery`
- * build), NOT the whole `host.getRateLimitUsage` method scope: a method-scope
- * invalidation would also refetch the aperture query and every OTHER
- * provider's query on this host, so e.g. a Codex turn completing would spawn
- * a `claude` subprocess to refresh Claude's rate limits too, for data a Codex
- * turn can't have changed.
+ * one `useHostProviderRateLimitsQuery` builds), NOT the whole
+ * `host.getRateLimitUsage` method scope: a method-scope invalidation would
+ * also refetch the aperture query and every OTHER provider's query on this
+ * host, so e.g. a Codex turn completing would spawn a `claude` subprocess to
+ * refresh Claude's rate limits too, for data a Codex turn can't have changed.
  *
  * `invalidateQueries` refetches an actively-observed query immediately
  * regardless of `staleTime` (TanStack only consults `staleTime` for
@@ -59,6 +56,12 @@ export function useRefreshProviderRateLimitsOnTurn(
   const lastInvalidatedAtRef = useRef(0);
 
   useEffect(() => {
+    // Reset the cooldown whenever this effect re-runs for a new hostId/
+    // providerId pair - otherwise a provider switch on the same mounted
+    // component (e.g. the chat's selected harness changes) inherits the
+    // previous provider's cooldown timestamp and can skip its own first,
+    // otherwise-due invalidation.
+    lastInvalidatedAtRef.current = 0;
     if (providerId === null) return;
     const harnessId = providerIdToGuiHarnessId(providerId);
     return subscribeChatTurnCompletions((completion) => {

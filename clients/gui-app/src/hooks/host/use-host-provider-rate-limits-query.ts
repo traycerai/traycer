@@ -1,6 +1,5 @@
-import { DEFAULT_ACCOUNT_CONTEXT } from "@traycer/protocol/common/schemas";
 import { useHostQuery } from "@/hooks/host/use-host-query";
-import { PROVIDER_RATE_LIMITS_STALE_TIME_MS } from "@/hooks/host/use-refresh-provider-rate-limits-on-turn";
+import { providerRateLimitQueryOptions } from "@/hooks/host/provider-rate-limit-query-options";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
 
@@ -29,11 +28,6 @@ export function useHostProviderRateLimitsQuery(
   const client = useHostClient();
   return useHostQuery<HostRpcRegistry, "host.getRateLimitUsage">({
     client,
-    method: "host.getRateLimitUsage",
-    params: { accountContext: DEFAULT_ACCOUNT_CONTEXT, providerId },
-    options: {
-      retry: false,
-      staleTime: PROVIDER_RATE_LIMITS_STALE_TIME_MS,
-    },
+    ...providerRateLimitQueryOptions(providerId),
   });
 }

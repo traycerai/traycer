@@ -8,7 +8,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   domAnimation,
   hasReducedMotionListener,
@@ -16,7 +16,6 @@ import {
   prefersReducedMotion,
 } from "motion/react";
 import type { ReactElement } from "react";
-import type { ProviderRateLimits } from "@traycer/protocol/host";
 
 import {
   buildContextUsageRows,
@@ -35,67 +34,6 @@ const RELIABLE_USAGE: TokenUsage = {
   contextTokens: 50_000,
   contextWindow: 200_000,
 };
-
-// The popover/pinned-strip provider rate-limit sections are tab-host scoped
-// (`useTabHostId` throws outside `<TabHostProvider>`, and the query hook
-// needs a `QueryClient` this unit harness doesn't set up) - stub them the
-// same way `traycer-subscription-section.test.tsx` stubs the aperture
-// hooks, and drive the returned data through a mutable mock object.
-const providerRateLimitMocks = vi.hoisted(() => ({
-  data: undefined as
-    { providerRateLimits: ProviderRateLimits | null } | undefined,
-  isPending: false,
-  isFetching: false,
-  isError: false,
-}));
-
-vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
-  useTabHostId: () => "host-1",
-}));
-vi.mock("@/hooks/host/use-tab-host-provider-rate-limits-query", () => ({
-  useTabHostProviderRateLimitsQuery: () => ({
-    data: providerRateLimitMocks.data,
-    isPending: providerRateLimitMocks.isPending,
-    isFetching: providerRateLimitMocks.isFetching,
-    isError: providerRateLimitMocks.isError,
-  }),
-}));
-vi.mock("@/hooks/host/use-refresh-provider-rate-limits-on-turn", () => ({
-  useRefreshProviderRateLimitsOnTurn: () => {},
-}));
-
-const CODEX_RATE_LIMITS: ProviderRateLimits = {
-  provider: "codex",
-  available: true,
-  // Real Codex `PlanType` values are lowercase tokens - the view maps them
-  // to display copy ("plus" -> "Plus").
-  planType: "plus",
-  primary: {
-    usedPercent: 42,
-    resetsAt: Date.now() + 3 * 60 * 60 * 1000,
-  },
-  secondary: {
-    usedPercent: 80,
-    resetsAt: Date.now() + 4 * 24 * 60 * 60 * 1000,
-  },
-  credits: null,
-  individualLimit: null,
-  rateLimitReachedType: null,
-};
-
-const UNAVAILABLE_RATE_LIMITS: ProviderRateLimits = {
-  provider: "codex",
-  available: false,
-  // A real host-emitted reason code - the view maps it to display copy.
-  reason: "cli_not_found",
-};
-
-function resetProviderRateLimitMocks(): void {
-  providerRateLimitMocks.data = undefined;
-  providerRateLimitMocks.isPending = false;
-  providerRateLimitMocks.isFetching = false;
-  providerRateLimitMocks.isError = false;
-}
 
 const REDUCED_MOTION_QUERY = "(prefers-reduced-motion)";
 const defaultMatchMedia = window.matchMedia;
@@ -163,7 +101,6 @@ function resetContextUsageSettings(): void {
   useSettingsStore.setState({ pinContextUsageBreakdown: false });
   restoreDefaultMatchMedia();
   resetMotionReducedMotionPreference();
-  resetProviderRateLimitMocks();
 }
 
 beforeEach(resetContextUsageSettings);
@@ -343,14 +280,12 @@ describe("buildContextUsageRows", () => {
 
 describe("ContextUsageChip", () => {
   it("renders nothing when usage is null", () => {
-    const { container } = render(
-      <ContextUsageChip usage={null} providerId={null} />,
-    );
+    const { container } = render(<ContextUsageChip usage={null} />);
     expect(container.firstChild).toBe(null);
   });
 
   it("renders a compact button for a usage with a contextWindow", () => {
-    render(<ContextUsageChip usage={RELIABLE_USAGE} providerId={null} />);
+    render(<ContextUsageChip usage={RELIABLE_USAGE} />);
     const button = screen.getByRole("button", {
       name: /Context window 75% left/,
     });
@@ -378,7 +313,6 @@ describe("ContextUsageChip", () => {
           totalTokens: 51_000,
           contextTokens: 50_000,
         }}
-        providerId={null}
       />,
     );
     expect(container.firstChild).toBe(null);
@@ -396,7 +330,6 @@ describe("ContextUsageChip", () => {
           cacheReadInputTokens: 100_000,
           contextWindow: 258_000,
         }}
-        providerId={null}
       />,
     );
     fireEvent.click(
@@ -416,7 +349,7 @@ describe("ContextUsageChip", () => {
   });
 
   it("updates the pinned context usage setting from the popover action", async () => {
-    render(<ContextUsageChip usage={RELIABLE_USAGE} providerId={null} />);
+    render(<ContextUsageChip usage={RELIABLE_USAGE} />);
 
     fireEvent.click(
       screen.getByRole("button", {
@@ -448,7 +381,7 @@ describe("ContextUsageChip", () => {
   });
 
   it("preserves trigger focus when the popover opens from a pointer action", async () => {
-    render(<ContextUsageChip usage={RELIABLE_USAGE} providerId={null} />);
+    render(<ContextUsageChip usage={RELIABLE_USAGE} />);
 
     const trigger = screen.getByRole("button", {
       name: /Context window 75% left/,
@@ -464,7 +397,7 @@ describe("ContextUsageChip", () => {
   });
 
   it("moves focus to the popover action when the popover opens from keyboard activation", async () => {
-    render(<ContextUsageChip usage={RELIABLE_USAGE} providerId={null} />);
+    render(<ContextUsageChip usage={RELIABLE_USAGE} />);
 
     const trigger = screen.getByRole("button", {
       name: /Context window 75% left/,
@@ -481,7 +414,7 @@ describe("ContextUsageChip", () => {
 
   it("renders the pinned strip when the setting is enabled and reliable usage exists", () => {
     useSettingsStore.getState().setPinContextUsageBreakdown(true);
-    render(<ContextUsageChip usage={RELIABLE_USAGE} providerId={null} />);
+    render(<ContextUsageChip usage={RELIABLE_USAGE} />);
 
     expect(
       screen.queryByRole("button", {
@@ -510,7 +443,7 @@ describe("ContextUsageChip", () => {
   });
 
   it("keeps detailed popover values on the static text path", async () => {
-    render(<ContextUsageChip usage={RELIABLE_USAGE} providerId={null} />);
+    render(<ContextUsageChip usage={RELIABLE_USAGE} />);
 
     fireEvent.click(
       screen.getByRole("button", {
@@ -537,7 +470,6 @@ describe("ContextUsageChip", () => {
           totalTokens: 51_000,
           contextTokens: 50_000,
         }}
-        providerId={null}
       />,
     );
 
@@ -547,7 +479,7 @@ describe("ContextUsageChip", () => {
 
   it("unpins from the inline pinned strip action", () => {
     useSettingsStore.getState().setPinContextUsageBreakdown(true);
-    render(<ContextUsageChip usage={RELIABLE_USAGE} providerId={null} />);
+    render(<ContextUsageChip usage={RELIABLE_USAGE} />);
 
     fireEvent.click(
       screen.getByRole("button", {
@@ -566,7 +498,7 @@ describe("ContextUsageChip", () => {
 
   it("moves focus to the restored compact trigger after focused inline unpin", () => {
     useSettingsStore.getState().setPinContextUsageBreakdown(true);
-    render(<ContextUsageChip usage={RELIABLE_USAGE} providerId={null} />);
+    render(<ContextUsageChip usage={RELIABLE_USAGE} />);
 
     const unpinButton = screen.getByRole("button", {
       name: "Unpin context usage breakdown",
@@ -582,7 +514,7 @@ describe("ContextUsageChip", () => {
 
   it("omits noisy cache rows from the pinned strip when cache values are absent", () => {
     useSettingsStore.getState().setPinContextUsageBreakdown(true);
-    render(<ContextUsageChip usage={RELIABLE_USAGE} providerId={null} />);
+    render(<ContextUsageChip usage={RELIABLE_USAGE} />);
 
     const strip = screen.getByTestId("context-usage-pinned-strip");
     expect(within(strip).getByText("Used")).toBeTruthy();
@@ -594,9 +526,7 @@ describe("ContextUsageChip", () => {
 
   it("updates the pinned strip from the same usage value", async () => {
     useSettingsStore.getState().setPinContextUsageBreakdown(true);
-    const { rerender } = render(
-      <ContextUsageChip usage={RELIABLE_USAGE} providerId={null} />,
-    );
+    const { rerender } = render(<ContextUsageChip usage={RELIABLE_USAGE} />);
 
     expect(queryCompactContextTrigger()).toBeNull();
     expect(screen.getByText("50K / 200K used")).toBeTruthy();
@@ -610,7 +540,6 @@ describe("ContextUsageChip", () => {
           contextTokens: 150_000,
           contextWindow: 200_000,
         }}
-        providerId={null}
       />,
     );
 
@@ -627,9 +556,7 @@ describe("ContextUsageChip", () => {
   it("updates the pinned percent instantly when reduced motion is requested", () => {
     installReducedMotionPreference(true);
     useSettingsStore.getState().setPinContextUsageBreakdown(true);
-    const { rerender } = render(
-      <ContextUsageChip usage={RELIABLE_USAGE} providerId={null} />,
-    );
+    const { rerender } = render(<ContextUsageChip usage={RELIABLE_USAGE} />);
 
     expect(
       screen.getByTestId("context-usage-pinned-percent-value").textContent,
@@ -644,7 +571,6 @@ describe("ContextUsageChip", () => {
           contextTokens: 150_000,
           contextWindow: 200_000,
         }}
-        providerId={null}
       />,
     );
 
@@ -655,7 +581,7 @@ describe("ContextUsageChip", () => {
 
   it("marks the pinned strip summary and details with container-query collapse classes", () => {
     useSettingsStore.getState().setPinContextUsageBreakdown(true);
-    render(<ContextUsageChip usage={RELIABLE_USAGE} providerId={null} />);
+    render(<ContextUsageChip usage={RELIABLE_USAGE} />);
 
     expect(
       screen.getByTestId("context-usage-pinned-summary").className,
@@ -663,94 +589,5 @@ describe("ContextUsageChip", () => {
     expect(
       screen.getByTestId("context-usage-pinned-details").className,
     ).toContain("@max-[34rem]:hidden");
-  });
-});
-
-describe("ContextUsageChip provider rate limits", () => {
-  it("omits the rate-limit section from the popover for a non-rate-limit-capable provider", async () => {
-    render(<ContextUsageChip usage={RELIABLE_USAGE} providerId={null} />);
-    fireEvent.click(
-      screen.getByRole("button", { name: /Context window 75% left/ }),
-    );
-
-    expect(await screen.findByText("Context window")).toBeTruthy();
-    expect(screen.queryByText("5-hour")).toBeNull();
-    expect(screen.queryByText("Weekly")).toBeNull();
-  });
-
-  it("renders the Codex rate-limit section in the popover", async () => {
-    providerRateLimitMocks.data = { providerRateLimits: CODEX_RATE_LIMITS };
-    render(<ContextUsageChip usage={RELIABLE_USAGE} providerId="codex" />);
-    fireEvent.click(
-      screen.getByRole("button", { name: /Context window 75% left/ }),
-    );
-
-    expect(await screen.findByText("Plus")).toBeTruthy();
-    expect(screen.getByText("5-hour")).toBeTruthy();
-    expect(screen.getByText("Weekly")).toBeTruthy();
-    expect(screen.getByText("42% / 100%")).toBeTruthy();
-    expect(screen.getByText("80% / 100%")).toBeTruthy();
-  });
-
-  it("shows the unavailable reason instead of a bar when the provider can't report rate limits", async () => {
-    providerRateLimitMocks.data = {
-      providerRateLimits: UNAVAILABLE_RATE_LIMITS,
-    };
-    render(<ContextUsageChip usage={RELIABLE_USAGE} providerId="codex" />);
-    fireEvent.click(
-      screen.getByRole("button", { name: /Context window 75% left/ }),
-    );
-
-    expect(
-      await screen.findByText(
-        "Rate limits unavailable — the CLI isn't installed",
-      ),
-    ).toBeTruthy();
-    expect(screen.queryByText("5-hour")).toBeNull();
-  });
-
-  it("maps a raw rateLimitReachedType token to display copy, and falls back to Title Case for an unmapped one", async () => {
-    providerRateLimitMocks.data = {
-      providerRateLimits: {
-        ...CODEX_RATE_LIMITS,
-        rateLimitReachedType: "rate_limit_reached",
-      },
-    };
-    render(<ContextUsageChip usage={RELIABLE_USAGE} providerId="codex" />);
-    fireEvent.click(
-      screen.getByRole("button", { name: /Context window 75% left/ }),
-    );
-    expect(await screen.findByText("Rate limit reached")).toBeTruthy();
-
-    cleanup();
-    providerRateLimitMocks.data = {
-      providerRateLimits: { ...CODEX_RATE_LIMITS, planType: "brand_new_tier" },
-    };
-    render(<ContextUsageChip usage={RELIABLE_USAGE} providerId="codex" />);
-    fireEvent.click(
-      screen.getByRole("button", { name: /Context window 75% left/ }),
-    );
-    expect(await screen.findByText("Brand New Tier")).toBeTruthy();
-  });
-
-  it("renders the most-utilized window as a compact row in the pinned strip", () => {
-    providerRateLimitMocks.data = { providerRateLimits: CODEX_RATE_LIMITS };
-    useSettingsStore.getState().setPinContextUsageBreakdown(true);
-    render(<ContextUsageChip usage={RELIABLE_USAGE} providerId="codex" />);
-
-    const strip = screen.getByTestId("context-usage-pinned-strip");
-    // The 80%-used "Weekly" window is more utilized than the 42%-used
-    // "5-hour" window, so the compact row surfaces it, not the other one.
-    expect(within(strip).getByText("Weekly")).toBeTruthy();
-    expect(within(strip).getByText("80%")).toBeTruthy();
-    expect(within(strip).queryByText("5-hour")).toBeNull();
-  });
-
-  it("omits the compact row from the pinned strip for a non-rate-limit-capable provider", () => {
-    useSettingsStore.getState().setPinContextUsageBreakdown(true);
-    render(<ContextUsageChip usage={RELIABLE_USAGE} providerId={null} />);
-
-    const strip = screen.getByTestId("context-usage-pinned-strip");
-    expect(within(strip).queryByText("Weekly")).toBeNull();
   });
 });

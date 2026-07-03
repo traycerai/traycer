@@ -126,3 +126,23 @@ export function useResetCountdown(resetsAt: number | null): string | null {
   if (resetsAt === null) return null;
   return formatResetCountdown(resetsAt, sampledNow);
 }
+
+/**
+ * Exact reset timestamp (e.g. "Jul 4, 2026 12:10 AM") for long-horizon
+ * windows, where a relative countdown ("Resets in 3d") is too coarse to act
+ * on. A pure function, not a hook: unlike a relative countdown, an absolute
+ * date/time string doesn't go stale as time passes, so it doesn't need to
+ * subscribe to the shared tick clock.
+ */
+export function formatResetDateTime(resetsAt: number): string {
+  const date = new Date(resetsAt).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+  const time = new Date(resetsAt).toLocaleTimeString(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  return `${date} ${time}`;
+}

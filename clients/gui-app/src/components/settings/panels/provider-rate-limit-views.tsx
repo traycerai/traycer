@@ -1,10 +1,8 @@
 /**
- * Bespoke per-provider rate-limit views, shared by three surfaces: the
- * Settings > Providers card (`provider-rate-limit-section.tsx`), the
- * per-chat context-usage popover, and its pinned-strip compact row
- * (`context-usage-chip.tsx`). Kept host/query-free - each surface owns its
- * own host-scoped query + refresh wiring and hands this module plain data,
- * so these views render identically everywhere and stay easy to test.
+ * Bespoke per-provider rate-limit views for the Settings > Providers card
+ * (`provider-rate-limit-section.tsx`). Kept host/query-free - the card owns
+ * its own host-scoped query + refresh wiring and hands this module plain
+ * data, so the data-to-UI mapping lives in exactly one place.
  */
 import type { ReactNode } from "react";
 import type {
@@ -14,9 +12,13 @@ import type {
 } from "@traycer/protocol/host";
 import { Badge } from "@/components/ui/badge";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
-import { UsageBar } from "@/components/settings/panels/traycer-subscription-section";
+import {
+  UsageBar,
+  type UsageBarTone,
+} from "@/components/settings/panels/traycer-subscription-section";
 import { contextUsageTone } from "@/components/chat/context-usage";
-import { useResetCountdown } from "@/lib/relative-time";
+import { resolveProviderRateLimitViewState } from "@/lib/provider-rate-limit-content";
+import { formatResetDateTime, useResetCountdown } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
 
 /** Shared read of a provider rate-limit query, independent of host scope. */
@@ -41,9 +43,31 @@ function formatUsagePercent(value: number): string {
   return `${Math.round(value)}%`;
 }
 
-/** `contextUsageTone` reads a LEFT/remaining percent; windows report used%. */
+/**
+ * Rate-limit severity scale: >70% used is a warning, >90% is critical - a
+ * single source of truth for both the bar's fill color (`usageBarTone`) and
+ * the adjacent percent/reset text color (`windowTone`), so a window's whole
+ * row changes color together instead of the bar and its text drifting at
+ * different thresholds. Distinct from the shared `contextUsageTone` (a
+ * LEFT/remaining-percent scale for the unrelated context-window chip, with
+ * its own thresholds) - rate limits report a USED percentage and warrant
+ * their own scale.
+ */
+function rateLimitSeverity(usedPercent: number): UsageBarTone | null {
+  if (usedPercent > 90) return "critical";
+  if (usedPercent > 70) return "warning";
+  return null;
+}
+
 function windowTone(usedPercent: number): string {
-  return contextUsageTone(100 - usedPercent);
+  const severity = rateLimitSeverity(usedPercent);
+  if (severity === "critical") return "text-destructive";
+  if (severity === "warning") return "text-amber-500 dark:text-amber-400";
+  return "text-muted-foreground";
+}
+
+function usageBarTone(usedPercent: number): UsageBarTone | undefined {
+  return rateLimitSeverity(usedPercent) ?? undefined;
 }
 
 /**
@@ -59,11 +83,12 @@ function titleCaseFromToken(value: string): string {
     .join(" ");
 }
 
-function ResetLine({
+/** Relative countdown ("Resets in 4h 7m") - ticks on the shared 60s clock. */
+function RelativeResetLine({
   resetsAt,
   tone,
 }: {
-  readonly resetsAt: number | null;
+  readonly resetsAt: number;
   readonly tone: string;
 }): ReactNode {
   const countdown = useResetCountdown(resetsAt);
@@ -71,28 +96,77 @@ function ResetLine({
   return <span className={cn("text-ui-xs", tone)}>Resets in {countdown}</span>;
 }
 
+/**
+ * Exact date/time ("Resets Jul 4, 2026 12:10 AM") - for weekly-scale windows,
+ * where a relative countdown ("Resets in 3d") is too coarse to act on. Pure,
+ * no clock subscription.
+ */
+function ExactResetLine({
+  resetsAt,
+  tone,
+}: {
+  readonly resetsAt: number;
+  readonly tone: string;
+}): ReactNode {
+  return (
+    <span className={cn("text-ui-xs", tone)}>
+      Resets {formatResetDateTime(resetsAt)}
+    </span>
+  );
+}
+
+/**
+ * Dispatches to `RelativeResetLine` or `ExactResetLine` by `weekly` - a
+ * static, per-window fact (which array field this is), never toggling for a
+ * given row instance, so choosing the component at this level (rather than
+ * conditionally calling one hook or the other inside a single component)
+ * keeps both leaves' hook calls unconditional.
+ */
+function ResetLine({
+  resetsAt,
+  tone,
+  weekly,
+}: {
+  readonly resetsAt: number | null;
+  readonly tone: string;
+  readonly weekly: boolean;
+}): ReactNode {
+  if (resetsAt === null) return null;
+  return weekly ? (
+    <ExactResetLine resetsAt={resetsAt} tone={tone} />
+  ) : (
+    <RelativeResetLine resetsAt={resetsAt} tone={tone} />
+  );
+}
+
+/** A single window row: a labeled `UsageBar` plus its reset line. */
 function RateLimitWindowRow({
   label,
   window,
+  weekly,
 }: {
   readonly label: string;
   readonly window: ProviderRateLimitWindow | null;
+  readonly weekly: boolean;
 }): ReactNode {
   if (window === null) return null;
+  const resetLine = (
+    <ResetLine
+      resetsAt={window.resetsAt}
+      tone={windowTone(window.usedPercent)}
+      weekly={weekly}
+    />
+  );
   return (
     <div className="flex flex-col gap-1">
       <UsageBar
         label={label}
         consumed={window.usedPercent}
         total={100}
+        tone={usageBarTone(window.usedPercent)}
         formatValue={formatUsagePercent}
       />
-      <div className="flex justify-end">
-        <ResetLine
-          resetsAt={window.resetsAt}
-          tone={windowTone(window.usedPercent)}
-        />
-      </div>
+      <div className="flex justify-end">{resetLine}</div>
     </div>
   );
 }
@@ -105,30 +179,10 @@ const CLAUDE_WINDOW_LABELS = {
   sevenDaySonnet: "Weekly (Sonnet)",
 } as const;
 
-// Codex's `PlanType` enum (host `harnesses/codex/protocol`) - lowercase
-// tokens on the wire, so the badge needs a display map rather than showing
-// the raw value. Falls back to `titleCaseFromToken` for any value not listed
-// here (forward-compat with a new plan type before this map is updated).
-const CODEX_PLAN_TYPE_LABELS: Record<string, string> = {
-  free: "Free",
-  go: "Go",
-  plus: "Plus",
-  pro: "Pro",
-  prolite: "Pro Lite",
-  team: "Team",
-  self_serve_business_usage_based: "Business (usage-based)",
-  business: "Business",
-  enterprise_cbp_usage_based: "Enterprise (usage-based)",
-  enterprise: "Enterprise",
-  edu: "Education",
-  unknown: "Unknown plan",
-};
-
-function formatCodexPlanType(planType: string): string {
-  return CODEX_PLAN_TYPE_LABELS[planType] ?? titleCaseFromToken(planType);
-}
-
-// Codex's `RateLimitReachedType` enum - same raw-token issue as `planType`.
+// Codex's `RateLimitReachedType` enum (host `harnesses/codex/protocol`) -
+// lowercase tokens on the wire, so the badge needs a display map rather than
+// showing the raw value. Falls back to `titleCaseFromToken` for any value
+// not listed here (forward-compat with a new value before this map updates).
 const CODEX_RATE_LIMIT_REACHED_LABELS: Record<string, string> = {
   rate_limit_reached: "Rate limit reached",
   workspace_owner_credits_depleted: "Workspace credits depleted",
@@ -148,25 +202,22 @@ export function CodexRateLimitView({
 }): ReactNode {
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-center gap-2">
-        {data.planType !== null ? (
-          <Badge variant="secondary">
-            {formatCodexPlanType(data.planType)}
-          </Badge>
-        ) : null}
-        {data.rateLimitReachedType !== null ? (
+      {data.rateLimitReachedType !== null ? (
+        <div className="flex flex-wrap items-center gap-2">
           <Badge variant="destructive">
             {formatRateLimitReachedType(data.rateLimitReachedType)}
           </Badge>
-        ) : null}
-      </div>
+        </div>
+      ) : null}
       <RateLimitWindowRow
         label={CODEX_WINDOW_LABELS.primary}
         window={data.primary}
+        weekly={false}
       />
       <RateLimitWindowRow
         label={CODEX_WINDOW_LABELS.secondary}
         window={data.secondary}
+        weekly
       />
       {data.credits !== null ? (
         <CodexCreditsRow credits={data.credits} />
@@ -211,6 +262,7 @@ function CodexSpendControlRow({
         <ResetLine
           resetsAt={limit.resetsAt}
           tone={contextUsageTone(limit.remainingPercent)}
+          weekly={false}
         />
       </div>
     </div>
@@ -224,28 +276,25 @@ export function ClaudeRateLimitView({
 }): ReactNode {
   return (
     <div className="flex flex-col gap-3">
-      {data.subscriptionType !== null ? (
-        <div className="flex flex-wrap items-center gap-2">
-          <Badge variant="secondary">
-            {titleCaseFromToken(data.subscriptionType)}
-          </Badge>
-        </div>
-      ) : null}
       <RateLimitWindowRow
         label={CLAUDE_WINDOW_LABELS.fiveHour}
         window={data.fiveHour}
+        weekly={false}
       />
       <RateLimitWindowRow
         label={CLAUDE_WINDOW_LABELS.sevenDay}
         window={data.sevenDay}
+        weekly
       />
       <RateLimitWindowRow
         label={CLAUDE_WINDOW_LABELS.sevenDayOpus}
         window={data.sevenDayOpus}
+        weekly
       />
       <RateLimitWindowRow
         label={CLAUDE_WINDOW_LABELS.sevenDaySonnet}
         window={data.sevenDaySonnet}
+        weekly
       />
       {data.modelScoped.length > 0 ? (
         <div className="flex flex-col gap-1.5">
@@ -253,10 +302,15 @@ export function ClaudeRateLimitView({
             Per-model
           </span>
           {data.modelScoped.map((entry) => (
+            // `displayName` alone isn't guaranteed unique across entries -
+            // fold in `resetsAt` (an array index would defeat reconciliation
+            // on reorder/filter, and ESLint's `no-array-index-key` disallows
+            // it outright).
             <RateLimitWindowRow
-              key={entry.displayName}
+              key={`${entry.displayName}-${entry.resetsAt}`}
               label={entry.displayName}
               window={entry}
+              weekly
             />
           ))}
         </div>
@@ -278,11 +332,16 @@ function ClaudeExtraUsageRow({
   // contract - see the tech plan). `utilization` is only ever shown as raw
   // supplementary text.
   if (extraUsage.monthlyLimit !== null && extraUsage.usedCredits !== null) {
+    const usedPercent =
+      extraUsage.monthlyLimit > 0
+        ? (extraUsage.usedCredits / extraUsage.monthlyLimit) * 100
+        : 0;
     return (
       <UsageBar
         label="Extra usage"
         consumed={extraUsage.usedCredits}
         total={extraUsage.monthlyLimit}
+        tone={usageBarTone(usedPercent)}
         formatValue={(value) => value.toFixed(2)}
       />
     );
@@ -328,26 +387,28 @@ function formatUnavailableReason(reason: RateLimitUnavailableReason): string {
 export function ProviderRateLimitBody(
   props: ProviderRateLimitQueryState,
 ): ReactNode {
+  const state = resolveProviderRateLimitViewState(props);
   // `isPending` alone stays `true` forever for a disabled query (e.g. a chat
   // tab bound to an unreachable host, where `useHostQuery` never enables) -
-  // gate on `isFetching` too so that case renders nothing (falls through to
-  // the `data === null` branch below) instead of an eternal spinner.
-  if (props.isPending && props.isFetching) {
+  // `resolveProviderRateLimitViewState` also gates on `isFetching` so that
+  // case falls through to the `empty` branch below instead of an eternal
+  // spinner.
+  if (state.kind === "loading") {
     return (
       <div className="flex items-center gap-2 text-ui-sm text-muted-foreground">
         <MutedAgentSpinner /> Loading rate limits
       </div>
     );
   }
-  if (props.isError) {
+  if (state.kind === "error") {
     return (
       <div className="text-ui-sm text-destructive">
         Couldn't load rate limits. Try refreshing.
       </div>
     );
   }
-  const data = props.providerRateLimits ?? null;
-  if (data === null) return null;
+  if (state.kind === "empty") return null;
+  const data = state.data;
   if (!data.available) {
     return (
       <p className="text-ui-xs text-muted-foreground">
@@ -363,84 +424,8 @@ function ProviderRateLimitDetail({
 }: {
   readonly data: AvailableProviderRateLimits;
 }): ReactNode {
-  if (data.provider === "codex") return <CodexRateLimitView data={data} />;
-  return <ClaudeRateLimitView data={data} />;
-}
-
-interface LabeledWindow {
-  readonly label: string;
-  readonly window: ProviderRateLimitWindow;
-}
-
-function windowsFor(
-  data: AvailableProviderRateLimits,
-): readonly LabeledWindow[] {
   if (data.provider === "codex") {
-    const candidates: readonly (LabeledWindow | null)[] = [
-      data.primary !== null
-        ? { label: CODEX_WINDOW_LABELS.primary, window: data.primary }
-        : null,
-      data.secondary !== null
-        ? { label: CODEX_WINDOW_LABELS.secondary, window: data.secondary }
-        : null,
-    ];
-    return candidates.filter((entry): entry is LabeledWindow => entry !== null);
+    return <CodexRateLimitView data={data} />;
   }
-  const candidates: readonly (LabeledWindow | null)[] = [
-    data.fiveHour !== null
-      ? { label: CLAUDE_WINDOW_LABELS.fiveHour, window: data.fiveHour }
-      : null,
-    data.sevenDay !== null
-      ? { label: CLAUDE_WINDOW_LABELS.sevenDay, window: data.sevenDay }
-      : null,
-    data.sevenDayOpus !== null
-      ? { label: CLAUDE_WINDOW_LABELS.sevenDayOpus, window: data.sevenDayOpus }
-      : null,
-    data.sevenDaySonnet !== null
-      ? {
-          label: CLAUDE_WINDOW_LABELS.sevenDaySonnet,
-          window: data.sevenDaySonnet,
-        }
-      : null,
-  ];
-  return candidates.filter((entry): entry is LabeledWindow => entry !== null);
-}
-
-function mostUtilizedWindow(
-  data: AvailableProviderRateLimits,
-): LabeledWindow | null {
-  const windows = windowsFor(data);
-  if (windows.length === 0) return null;
-  return windows.reduce((max, entry) =>
-    entry.window.usedPercent > max.window.usedPercent ? entry : max,
-  );
-}
-
-/**
- * Terse pinned-strip summary: the single most-utilized window's percent + a
- * short label, mirroring `PinnedUsageRow`'s compact styling. Renders nothing
- * while pending/errored/unavailable/dataless - the pinned strip stays silent
- * rather than noisy for a surface this secondary.
- */
-export function ProviderRateLimitCompactRow(
-  props: ProviderRateLimitQueryState,
-): ReactNode {
-  if (props.isPending || props.isError) return null;
-  const data = props.providerRateLimits ?? null;
-  if (data === null || !data.available) return null;
-  const summary = mostUtilizedWindow(data);
-  if (summary === null) return null;
-  return (
-    <span className="inline-flex min-w-0 items-baseline gap-1.5 whitespace-nowrap text-muted-foreground">
-      <span>{summary.label}</span>
-      <span
-        className={cn(
-          "font-mono tabular-nums",
-          windowTone(summary.window.usedPercent),
-        )}
-      >
-        {formatUsagePercent(summary.window.usedPercent)}
-      </span>
-    </span>
-  );
+  return <ClaudeRateLimitView data={data} />;
 }

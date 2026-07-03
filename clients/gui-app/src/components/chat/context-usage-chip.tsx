@@ -24,15 +24,6 @@ import {
   type ContextUsageRow,
   type EffectiveContextUsage,
 } from "@/components/chat/context-usage";
-import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
-import {
-  ProviderRateLimitBody,
-  ProviderRateLimitCompactRow,
-} from "@/components/settings/panels/provider-rate-limit-views";
-import { useTabHostProviderRateLimitsQuery } from "@/hooks/host/use-tab-host-provider-rate-limits-query";
-import { useRefreshProviderRateLimitsOnTurn } from "@/hooks/host/use-refresh-provider-rate-limits-on-turn";
-import { hasProviderRateLimitContent } from "@/lib/provider-rate-limit-content";
-import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
 import { cn } from "@/lib/utils";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 
@@ -44,14 +35,6 @@ interface ContextUsageChipProps {
    * percent isn't a finite number.
    */
   readonly usage: TokenUsage | null;
-  /**
-   * The chat's currently-selected provider, when it's one
-   * `host.getRateLimitUsage`'s provider-pull branch supports. Drives an
-   * additional rate-limit section in the popover and a compact row in the
-   * pinned strip; `null` renders neither (a Traycer chat, another provider,
-   * or no provider resolved yet).
-   */
-  readonly providerId: RateLimitProviderId | null;
 }
 
 type ContextUsageMeterStyle = CSSProperties & {
@@ -63,7 +46,7 @@ const PINNED_NUMBER_TRANSITION = {
   ease: "easeOut",
 } as const;
 
-export function ContextUsageChip({ usage, providerId }: ContextUsageChipProps) {
+export function ContextUsageChip({ usage }: ContextUsageChipProps) {
   const preserveFocusOnOpenRef = useRef(false);
   const pinBreakdownActionRef = useRef<HTMLButtonElement>(null);
   const compactTriggerRef = useRef<HTMLButtonElement>(null);
@@ -114,7 +97,6 @@ export function ContextUsageChip({ usage, providerId }: ContextUsageChipProps) {
       <ContextUsagePinnedStrip
         rows={rows}
         effective={effective}
-        providerId={providerId}
         onUnpin={unpinFromPinnedStrip}
         actionRef={pinnedUnpinActionRef}
       />
@@ -182,7 +164,6 @@ export function ContextUsageChip({ usage, providerId }: ContextUsageChipProps) {
           <ContextUsageBreakdown
             rows={rows}
             effective={effective}
-            providerId={providerId}
             pinned={pinContextUsageBreakdown}
             onPinnedChange={pinFromPopover}
             actionRef={pinBreakdownActionRef}
@@ -196,7 +177,6 @@ export function ContextUsageChip({ usage, providerId }: ContextUsageChipProps) {
 interface ContextUsageBreakdownProps {
   readonly rows: readonly ContextUsageRow[];
   readonly effective: EffectiveContextUsage;
-  readonly providerId: RateLimitProviderId | null;
   readonly pinned: boolean;
   readonly onPinnedChange: (value: boolean, restoreFocus: boolean) => void;
   readonly actionRef: Ref<HTMLButtonElement>;
@@ -205,7 +185,6 @@ interface ContextUsageBreakdownProps {
 function ContextUsageBreakdown({
   rows,
   effective,
-  providerId,
   pinned,
   onPinnedChange,
   actionRef,
@@ -223,9 +202,6 @@ function ContextUsageBreakdown({
           <UsageRow key={row.key} row={row} />
         ))}
       </div>
-      {providerId !== null ? (
-        <ChatProviderRateLimitSection providerId={providerId} />
-      ) : null}
       <Button
         ref={actionRef}
         type="button"
@@ -253,7 +229,6 @@ function ContextUsageBreakdown({
 interface ContextUsagePinnedStripProps {
   readonly rows: readonly ContextUsageRow[];
   readonly effective: EffectiveContextUsage;
-  readonly providerId: RateLimitProviderId | null;
   readonly onUnpin: (restoreFocus: boolean) => void;
   readonly actionRef: Ref<HTMLButtonElement>;
 }
@@ -261,7 +236,6 @@ interface ContextUsagePinnedStripProps {
 function ContextUsagePinnedStrip({
   rows,
   effective,
-  providerId,
   onUnpin,
   actionRef,
 }: ContextUsagePinnedStripProps) {
@@ -301,9 +275,6 @@ function ContextUsagePinnedStrip({
             {rows.map((row) => (
               <PinnedUsageRow key={row.key} row={row} />
             ))}
-            {providerId !== null ? (
-              <ChatProviderRateLimitCompact providerId={providerId} />
-            ) : null}
           </div>
         </div>
         <TooltipWrapper
@@ -404,61 +375,4 @@ function contextUsageMeterStyle(percent: number): ContextUsageMeterStyle {
   return {
     "--context-usage-percent": `${usedPercent}%`,
   };
-}
-
-/**
- * Owns the tab-scoped rate-limit query + turn-completion refresh for the
- * popover section, so `provider-rate-limit-views.tsx` stays host/query-free
- * and reusable across surfaces. Only mounted while `providerId` is
- * rate-limit-capable AND (via `PopoverContent`'s default lazy mount) the
- * popover is actually open, so this never polls in the background for a
- * chip the user hasn't opened.
- */
-function ChatProviderRateLimitSection({
-  providerId,
-}: {
-  readonly providerId: RateLimitProviderId;
-}) {
-  const tabHostId = useTabHostId();
-  const query = useTabHostProviderRateLimitsQuery(providerId);
-  useRefreshProviderRateLimitsOnTurn(providerId, tabHostId);
-  const state = {
-    isPending: query.isPending,
-    isFetching: query.isFetching,
-    isError: query.isError,
-    providerRateLimits: query.data?.providerRateLimits,
-  };
-  // Own the border/padding chrome here (rather than in the always-rendered
-  // popover breakdown) so a resolved-but-empty result - e.g. a v1.1 host
-  // answering a v1.2 request, where `providerRateLimits` comes back `null` -
-  // doesn't leave a bordered, empty-looking section in the popover.
-  if (!hasProviderRateLimitContent(state)) return null;
-  return (
-    <div className="flex flex-col gap-1.5 border-t border-border/40 pt-1.5">
-      <ProviderRateLimitBody {...state} />
-    </div>
-  );
-}
-
-/**
- * Compact counterpart of `ChatProviderRateLimitSection` for the pinned strip.
- * Mounted only while the strip is pinned, so - like the popover section - it
- * only queries for a chat the user has actually surfaced rate limits for.
- */
-function ChatProviderRateLimitCompact({
-  providerId,
-}: {
-  readonly providerId: RateLimitProviderId;
-}) {
-  const tabHostId = useTabHostId();
-  const query = useTabHostProviderRateLimitsQuery(providerId);
-  useRefreshProviderRateLimitsOnTurn(providerId, tabHostId);
-  return (
-    <ProviderRateLimitCompactRow
-      isPending={query.isPending}
-      isFetching={query.isFetching}
-      isError={query.isError}
-      providerRateLimits={query.data?.providerRateLimits}
-    />
-  );
 }

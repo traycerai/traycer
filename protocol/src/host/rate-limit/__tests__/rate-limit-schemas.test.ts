@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { DEFAULT_ACCOUNT_CONTEXT } from "@traycer/protocol/common/schemas";
 import {
   providerRateLimitsSchema,
+  rateLimitUsageRequestSchemaV12,
   rateLimitUsageResponseSchemaV12,
 } from "@traycer/protocol/host/rate-limit/schemas";
 
@@ -67,6 +69,23 @@ describe("providerRateLimitsSchema", () => {
       reason: "not_logged_in",
     };
     expect(providerRateLimitsSchema.safeParse(invalid).success).toBe(false);
+  });
+});
+
+describe("rateLimitUsageRequestSchemaV12", () => {
+  it("parses a request without providerId, leaving it undefined", () => {
+    const request = rateLimitUsageRequestSchemaV12.parse({
+      accountContext: DEFAULT_ACCOUNT_CONTEXT,
+    });
+    expect(request.providerId).toBeUndefined();
+  });
+
+  it("preserves providerId when the request asks for a specific provider", () => {
+    const request = rateLimitUsageRequestSchemaV12.parse({
+      accountContext: DEFAULT_ACCOUNT_CONTEXT,
+      providerId: "codex",
+    });
+    expect(request.providerId).toBe("codex");
   });
 });
 

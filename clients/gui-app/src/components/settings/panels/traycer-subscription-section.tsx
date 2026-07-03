@@ -300,6 +300,7 @@ function RateLimitView({
           label="Artifacts"
           consumed={artifactConsumed}
           total={artifactTotal}
+          tone={undefined}
           formatValue={formatArtifactTokens}
         />
       ) : (
@@ -312,6 +313,7 @@ function RateLimitView({
           label="Bundle"
           consumed={bundleConsumed}
           total={bundleTotal}
+          tone={undefined}
         />
       ) : null}
     </div>
@@ -406,6 +408,7 @@ function CreditBreakdownView({
           label="Plan"
           consumed={breakdown.planConsumed}
           total={breakdown.planTotal}
+          tone={undefined}
         />
       ) : null}
       {breakdown.bonusTotal > 0 ? (
@@ -414,6 +417,7 @@ function CreditBreakdownView({
           consumed={breakdown.bonusConsumed}
           total={breakdown.bonusTotal}
           accent
+          tone={undefined}
         />
       ) : null}
       {breakdown.bundleTotal > 0 ? (
@@ -421,10 +425,23 @@ function CreditBreakdownView({
           label="Bundle"
           consumed={breakdown.bundleConsumed}
           total={breakdown.bundleTotal}
+          tone={undefined}
         />
       ) : null}
     </div>
   );
+}
+
+/** Overrides the bar fill's default color - see `UsageBar`'s `tone` prop. */
+export type UsageBarTone = "warning" | "critical";
+
+function usageBarFillClassName(
+  accent: boolean | undefined,
+  tone: UsageBarTone | undefined,
+): string {
+  if (tone === "critical") return "bg-destructive";
+  if (tone === "warning") return "bg-amber-500 dark:bg-amber-400";
+  return accent ? "bg-blue-400" : "bg-primary";
 }
 
 /**
@@ -439,12 +456,18 @@ export function UsageBar({
   consumed,
   total,
   accent,
+  tone,
   formatValue,
 }: {
   readonly label: string;
   readonly consumed: number;
   readonly total: number;
   readonly accent?: boolean;
+  // Overrides the fill color regardless of `accent` - callers with their own
+  // usage-severity thresholds (e.g. rate-limit windows) pass this instead of
+  // the default primary/accent color. `undefined` for callers (the credit
+  // and bundle bars here) that don't want severity-based coloring.
+  readonly tone: UsageBarTone | undefined;
   // Defaults to $-denominated credits; artifact bars pass a token formatter.
   readonly formatValue?: (value: number) => string;
 }) {
@@ -466,7 +489,7 @@ export function UsageBar({
         <div
           className={cn(
             "h-full rounded-full transition-all",
-            accent ? "bg-blue-400" : "bg-primary",
+            usageBarFillClassName(accent, tone),
           )}
           style={{ width: `${percent}%` }}
         />
