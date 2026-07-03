@@ -1,5 +1,6 @@
 import "../../../../../__tests__/test-browser-apis";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -11,11 +12,12 @@ import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import { toast } from "sonner";
 import { HostSettingsPanel } from "@/components/settings/panels/host-settings-panel";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
+import { runnerQueryKeys } from "@/lib/query-keys/runner-mutation-keys";
 import type {
   HostAvailableSnapshot,
   HostInstallResult,
   HostInstalledRecord,
-  HostProgressEvent,
+  HostOperationStatus,
   HostRegistryUpdateState,
   IHostManagement,
   IRunnerHost,
@@ -39,7 +41,7 @@ afterEach(() => {
 });
 
 describe("<HostSettingsPanel /> - mutation flows", () => {
-  it("calls restartHost and shows a success toast when Restart is clicked", async () => {
+  it("opens a confirmation dialog before restarting the host", async () => {
     const restartHost = vi.fn(() => Promise.resolve());
     const { management } = makeManagement({ restartHost });
 
@@ -47,6 +49,12 @@ describe("<HostSettingsPanel /> - mutation flows", () => {
 
     const restartButton = await waitForButton("Restart");
     fireEvent.click(restartButton);
+
+    const dialog = await screen.findByTestId("confirm-destructive-dialog");
+    expect(dialog.textContent).toContain("in-progress chats");
+    expect(restartHost).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId("confirm-action"));
 
     await waitFor(() => {
       expect(restartHost).toHaveBeenCalledTimes(1);
@@ -119,21 +127,18 @@ describe("<HostSettingsPanel /> - mutation flows", () => {
     expect(toast.success).toHaveBeenCalledWith("Updated host to v2.0.0");
   });
 
-  it("surfaces the install progress banner when onProgress fires mid-flight", async () => {
-    const onProgressBox: {
-      handler: ((event: HostProgressEvent) => void) | null;
-    } = { handler: null };
+  it("surfaces the install progress banner when the shared operation status reports progress", async () => {
+    // The panel no longer wires its own `onProgress` callback (Ticket:
+    // host-update-race-conditions) - progress is read from the shared
+    // `hostOperationStatus` query, which in production is pushed by
+    // `HostOperationStatusListener`. Here we push it directly via
+    // `queryClient.setQueryData`, the same mechanism the listener uses.
     let resolveInstall: (value: HostInstallResult) => void = () => undefined;
     const installHost = vi.fn(
-      (input: {
-        readonly version: string | null;
-        readonly onProgress: ((event: HostProgressEvent) => void) | null;
-      }) => {
-        onProgressBox.handler = input.onProgress;
-        return new Promise<HostInstallResult>((resolve) => {
+      () =>
+        new Promise<HostInstallResult>((resolve) => {
           resolveInstall = resolve;
-        });
-      },
+        }),
     );
     // No installed record → status is "not-installed", so the Actions row
     // exposes "Install host" - the install entry point now that the
@@ -143,23 +148,29 @@ describe("<HostSettingsPanel /> - mutation flows", () => {
       installedRecord: vi.fn(() => Promise.resolve(null)),
     });
 
-    renderPanel(makeHost(management, null));
+    const queryClient = renderPanel(makeHost(management, null));
 
     const installButton = await waitForButton("Install host");
     fireEvent.click(installButton);
 
     await waitFor(() => {
-      expect(onProgressBox.handler).not.toBeNull();
+      expect(installHost).toHaveBeenCalledTimes(1);
     });
-    const emit = onProgressBox.handler;
-    if (emit === null) throw new Error("onProgress not captured");
-    emit({
-      operationId: "op-1",
-      stage: "download",
-      percent: 42,
-      bytes: 100,
-      totalBytes: 240,
-      message: "downloading",
+
+    act(() => {
+      queryClient.setQueryData<HostOperationStatus>(
+        runnerQueryKeys.hostOperationStatus(management),
+        {
+          operationId: "op-1",
+          kind: "install",
+          stage: "download",
+          percent: 42,
+          bytes: 100,
+          totalBytes: 240,
+          message: "downloading",
+          startedAt: "2026-05-15T00:00:00Z",
+        },
+      );
     });
 
     const banner = await screen.findByTestId("settings-host-progress");
@@ -169,6 +180,12 @@ describe("<HostSettingsPanel /> - mutation flows", () => {
       (await screen.findByTestId("settings-host-progress-percent")).textContent,
     ).toBe("42%");
 
+    act(() => {
+      queryClient.setQueryData<HostOperationStatus | null>(
+        runnerQueryKeys.hostOperationStatus(management),
+        null,
+      );
+    });
     resolveInstall(makeInstallResult("1.4.2"));
     await waitFor(() => {
       expect(toast.success).toHaveBeenCalledWith("Installed host v1.4.2");
@@ -373,6 +390,7 @@ function makeManagement(
           errorMessage: null,
         }),
       ),
+    getOperationStatus: vi.fn(() => Promise.resolve(null)),
     freePortAndRestart: vi.fn((input) => Promise.resolve(input)),
     cliManifest: overrides.cliManifest ?? vi.fn(() => Promise.resolve(null)),
     getHostName:

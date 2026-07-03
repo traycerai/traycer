@@ -14,6 +14,7 @@ const DESKTOP_APP_UPDATE_IDLE_SNAPSHOT: DesktopAppUpdateSnapshot = {
   latestVersion: null,
   downloadProgress: null,
   installBlockedReason: null,
+  installGuidance: null,
   errorMessage: null,
   lastCheckedAt: null,
   lastCheckIntent: null,
@@ -141,8 +142,25 @@ function sameSnapshot(
     left.latestVersion === right.latestVersion &&
     left.downloadProgress === right.downloadProgress &&
     left.installBlockedReason === right.installBlockedReason &&
+    sameInstallGuidance(left.installGuidance, right.installGuidance) &&
     left.errorMessage === right.errorMessage &&
     left.lastCheckedAt === right.lastCheckedAt &&
     left.lastCheckIntent === right.lastCheckIntent
   );
+}
+
+// `installGuidance` is the one non-primitive snapshot field, so it can't rely
+// on `===` like its siblings - every IPC send structurally clones the object,
+// so a reference comparison would report "changed" on every emit even when
+// the content is identical (spurious re-renders). `command` + `summary` are
+// deterministic given (packageType, downloadedFile, version) in
+// `buildLinuxUpdateGuidance`, so they're a sufficient proxy for full content
+// equality without a recursive deep-equal for the `steps` array.
+function sameInstallGuidance(
+  left: DesktopAppUpdateSnapshot["installGuidance"],
+  right: DesktopAppUpdateSnapshot["installGuidance"],
+): boolean {
+  if (left === right) return true;
+  if (left === null || right === null) return false;
+  return left.command === right.command && left.summary === right.summary;
 }

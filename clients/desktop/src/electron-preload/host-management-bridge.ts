@@ -13,6 +13,7 @@ import type {
   HostInstalledRecord,
   HostLogsTailResult,
   HostNameSettings,
+  HostOperationStatus,
   HostProgressEvent,
   HostRegistryUpdateState,
   HostRemovalState,
@@ -64,6 +65,10 @@ export interface HostManagementBridgeSurface {
     readonly force: boolean;
   }): Promise<HostRegistryUpdateState>;
   onRegistryUpdateState(handler: (state: HostRegistryUpdateState) => void): {
+    dispose: () => void;
+  };
+  getOperationStatus(): Promise<HostOperationStatus | null>;
+  onOperationStatus(handler: (status: HostOperationStatus | null) => void): {
     dispose: () => void;
   };
   freePortAndRestart(
@@ -200,6 +205,24 @@ export function buildHostManagementBridge(): HostManagementBridgeSurface {
           ),
       };
     },
+    getOperationStatus: () =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.traycerHostOperationStatusGet,
+      ) as Promise<HostOperationStatus | null>,
+    onOperationStatus(handler) {
+      const listener = (_event: IpcRendererEvent, payload: unknown): void => {
+        if (!isHostOperationStatusOrNull(payload)) return;
+        handler(payload);
+      };
+      ipcRenderer.on(RunnerHostEvent.hostOperationStatusChange, listener);
+      return {
+        dispose: () =>
+          ipcRenderer.removeListener(
+            RunnerHostEvent.hostOperationStatusChange,
+            listener,
+          ),
+      };
+    },
     freePortAndRestart: (input) =>
       ipcRenderer.invoke(
         RunnerHostInvoke.traycerFreePortAndRestart,
@@ -236,6 +259,32 @@ function isHostRegistryUpdateState(
     typeof candidate.updateAvailable === "boolean" &&
     typeof candidate.reachable === "boolean" &&
     (typeof errorMessage === "string" || errorMessage === null)
+  );
+}
+
+function isHostOperationStatusOrNull(
+  value: unknown,
+): value is HostOperationStatus | null {
+  if (value === null) return true;
+  if (typeof value !== "object") return false;
+  const candidate = value as Record<string, unknown>;
+  const stage = candidate.stage;
+  const percent = candidate.percent;
+  const bytes = candidate.bytes;
+  const totalBytes = candidate.totalBytes;
+  const message = candidate.message;
+  return (
+    typeof candidate.operationId === "string" &&
+    (candidate.kind === "install" ||
+      candidate.kind === "update" ||
+      candidate.kind === "register-service" ||
+      candidate.kind === "ensure") &&
+    (typeof stage === "string" || stage === null) &&
+    (typeof percent === "number" || percent === null) &&
+    (typeof bytes === "number" || bytes === null) &&
+    (typeof totalBytes === "number" || totalBytes === null) &&
+    (typeof message === "string" || message === null) &&
+    typeof candidate.startedAt === "string"
   );
 }
 

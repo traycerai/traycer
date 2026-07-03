@@ -396,6 +396,43 @@ function applyHostUpdateMenuState(
   }
 }
 
+// Auto-check-for-updates gap (Ticket: host-update-race-conditions): the
+// launch probe used to be gated by the full 24h `REGISTRY_CACHE_TTL_MS`, so a
+// relaunch shortly after a release, or a machine waking from sleep, could
+// still read a stale cache and never notice the update without a manual
+// "Check for updates" click. This mirrors the desktop APP's own update check
+// (`app/updater.ts`) exactly: `checkForUpdatesNow` fires unconditionally on
+// launch and `checkForUpdatesAfterResume` fires unconditionally on resume
+// (debounced only against a rapid double-fire, never against staleness) -
+// there is no cache to wait out. The host registry check now does the same:
+// launch and resume force a real probe every time; only the periodic
+// backstop (for a session that never relaunches or sleeps) uses a threshold,
+// and that threshold matches its own poll interval so it never becomes a
+// second long-lived cache. All three stay refresh-only (no auto-install):
+// the coordinated auto-update stays tied to the launch/quit lifecycle above,
+// since silently swapping host bytes mid-session on a background timer is a
+// bigger behavior change than "make the banner appear on time."
+const HOST_REGISTRY_PERIODIC_CHECK_INTERVAL_MS = 60 * 60 * 1000;
+const HOST_REGISTRY_PERIODIC_MAX_AGE_MS =
+  HOST_REGISTRY_PERIODIC_CHECK_INTERVAL_MS;
+// Mirrors `AUTOMATIC_RESUME_CHECK_DEBOUNCE_MS` in app/updater.ts - collapses
+// macOS firing both `onResume` and `onUnlockScreen` for one wake into a
+// single probe, without gating on how stale the cache is.
+const HOST_REGISTRY_RESUME_DEBOUNCE_MS = 30_000;
+let lastHostRegistryResumeCheckMs = 0;
+
+// Shared by the launch probe, the periodic timer, and the resume trigger.
+// `refreshRegistryUpdateState` never throws and is internally serialized
+// (`registryRefreshQueue`), so overlapping calls are safe.
+async function refreshHostRegistryIfNotRemoved(
+  services: AppServices,
+  opts: { readonly force: boolean; readonly maxAgeMs: number | null },
+): Promise<void> {
+  if (await isHostRemovedByUser()) return;
+  const result = await refreshRegistryUpdateState(opts);
+  applyHostUpdateMenuState(services.menu, result);
+}
+
 // Deferred, fire-and-forget work - runs after the window is loading and
 // never blocks first paint.
 function runDeferred(state: BootState, services: AppServices): void {
@@ -418,7 +455,13 @@ function runDeferred(state: BootState, services: AppServices): void {
   });
 
   void timed("deferred", "registry-probe", async () => {
-    const result = await refreshRegistryUpdateState({ force: false });
+    // `force: true` - matches the app's own `checkForUpdatesNow` on launch
+    // (app/updater.ts): always a real probe, never a cache read, so a
+    // relaunch shortly after a release still sees it immediately.
+    const result = await refreshRegistryUpdateState({
+      force: true,
+      maxAgeMs: null,
+    });
     applyHostUpdateMenuState(services.menu, result);
     log.debug("[host-registry] launch probe complete", {
       reachable: result.reachable,
@@ -430,21 +473,30 @@ function runDeferred(state: BootState, services: AppServices): void {
     // lands here, so an idle host tracks the app instead of drifting behind.
     // Idle-gated and fail-open - a busy/failed attempt just retries next time.
     // Skipped entirely once the user removed the host on this device, so a
-    // stray update probe never reinstalls what they uninstalled.
-    if (result.updateAvailable && !(await isHostRemovedByUser())) {
+    // stray update probe never reinstalls what they uninstalled. Also
+    // skipped if the bridge somehow isn't installed yet (it always is by
+    // this deferred phase in practice) since the reconciler needs it to
+    // broadcast operation status.
+    const bridge = state.bridge;
+    if (
+      result.updateAvailable &&
+      bridge !== null &&
+      !(await isHostRemovedByUser())
+    ) {
       const outcome = await reconcileHostAutoUpdate(
         "launch",
         defaultHostAutoUpdateDeps(
           services.host,
           LAUNCH_HOST_UPDATE_TIMEOUT_MS,
           () => hostReady,
+          bridge,
         ),
       );
       log.info("[host-auto-update] launch reconcile complete", { outcome });
       if (outcome === "updated") {
         applyHostUpdateMenuState(
           services.menu,
-          await refreshRegistryUpdateState({ force: false }),
+          await refreshRegistryUpdateState({ force: false, maxAgeMs: null }),
         );
       }
     }
@@ -502,8 +554,37 @@ function runDeferred(state: BootState, services: AppServices): void {
     installHostWakeRecovery(services.host, installPowerMonitorListeners, () => {
       state.bridge?.fanOut(RunnerHostEvent.systemResumed, undefined);
       checkForUpdatesAfterResume(state.config.isDev);
+      // `force: true` - matches `checkForUpdatesAfterResume` above: a real
+      // probe on every wake, gated only by the debounce below (not by cache
+      // age), so waking from sleep sees a release that shipped during sleep
+      // immediately instead of waiting out a staleness threshold.
+      const nowMs = Date.now();
+      if (
+        nowMs - lastHostRegistryResumeCheckMs >=
+        HOST_REGISTRY_RESUME_DEBOUNCE_MS
+      ) {
+        lastHostRegistryResumeCheckMs = nowMs;
+        void refreshHostRegistryIfNotRemoved(services, {
+          force: true,
+          maxAgeMs: null,
+        });
+      }
     }),
   );
+
+  // Process-lifetime timer - Electron main is a single long-lived process
+  // with no natural unmount point, so this is intentionally never cleared;
+  // it dies with the process. Backstop only: launch and resume above already
+  // force a real probe, so this only matters for a session that neither
+  // relaunches nor sleeps for an extended stretch. `maxAgeMs` matches the
+  // poll interval, so it only skips a network hit when a launch/resume probe
+  // already refreshed the cache more recently than this tick's own cadence.
+  setInterval(() => {
+    void refreshHostRegistryIfNotRemoved(services, {
+      force: false,
+      maxAgeMs: HOST_REGISTRY_PERIODIC_MAX_AGE_MS,
+    });
+  }, HOST_REGISTRY_PERIODIC_CHECK_INTERVAL_MS);
 }
 
 interface LifecycleServices {
@@ -595,6 +676,7 @@ function wireAppLifecycle(state: BootState, services: LifecycleServices): void {
           QUIT_HOST_UPDATE_TIMEOUT_MS,
           // The host was discovered long ago - no need to wait at quit time.
           () => Promise.resolve(),
+          services.bridge,
         ),
       )
         .then((outcome) =>

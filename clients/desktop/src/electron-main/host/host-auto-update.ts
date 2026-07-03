@@ -1,7 +1,11 @@
+import { randomUUID } from "node:crypto";
 import { probeHostActivityBusy } from "@traycer-clients/shared/host-client/host-activity-probe";
 import { log } from "../app/logger";
-import { streamTraycerCliJson } from "../cli/traycer-cli";
-import { refreshRegistryUpdateState } from "../ipc/host-management-ipc";
+import {
+  refreshRegistryUpdateState,
+  streamCliWithProgress,
+} from "../ipc/host-management-ipc";
+import type { RunnerIpcBridge } from "../ipc/runner-ipc-bridge";
 import type { HostRegistryUpdateState } from "../../ipc-contracts/host-management-types";
 import type { HostLifecycle } from "./host-lifecycle";
 
@@ -119,27 +123,40 @@ export async function reconcileHostAutoUpdate(
  * Wires {@link reconcileHostAutoUpdate} to the real registry cache, host
  * snapshot, activity probe, and CLI. `timeoutMs` bounds the `host update`
  * subprocess (the CLI runner SIGKILLs it on timeout).
+ *
+ * `runHostUpdate` goes through the same `streamCliWithProgress` seam the
+ * renderer-triggered install/update/register-service/ensure handlers use
+ * (Ticket: host-update-race-conditions) - a background-triggered update is
+ * otherwise invisible to every open window, so a manual click during a
+ * launch/quit-time coordinated update would spawn a second `traycer host
+ * update` and lose the race on the CLI's file lock. Routing through the
+ * shared single-flight guard instead makes the background update visible
+ * (buttons disable, progress shows) and makes a concurrent manual click a
+ * same-process no-op instead of a `CLI_LOCK_BUSY` error.
  */
 export function defaultHostAutoUpdateDeps(
   host: HostLifecycle,
   timeoutMs: number,
   awaitHostReady: () => Promise<void>,
+  bridge: RunnerIpcBridge,
 ): HostAutoUpdateDeps {
   return {
-    checkUpdateState: () => refreshRegistryUpdateState({ force: false }),
+    checkUpdateState: () =>
+      refreshRegistryUpdateState({ force: false, maxAgeMs: null }),
     awaitHostReady,
     getHostWebsocketUrl: () => host.getSnapshot()?.websocketUrl ?? null,
     probeBusy: probeHostActivityBusy,
     runHostUpdate: async () => {
-      await streamTraycerCliJson<unknown>({
-        args: ["host", "update"],
-        onEvent: () => {},
-        env: null,
+      await streamCliWithProgress(
+        ["host", "update"],
+        randomUUID(),
+        "update",
         timeoutMs,
-      });
+        bridge,
+      );
     },
     refreshAfter: async () => {
-      await refreshRegistryUpdateState({ force: true });
+      await refreshRegistryUpdateState({ force: true, maxAgeMs: null });
     },
   };
 }

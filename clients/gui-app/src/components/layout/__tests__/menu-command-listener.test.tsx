@@ -184,7 +184,7 @@ function createRunnerHost(menu: FakeDesktopMenu): FakeRunnerHost {
       },
       onLocalHostChange: () => ({ dispose: () => undefined }),
       onSystemResumed: () => ({ dispose: () => undefined }),
-      requestHostRespawn: () => Promise.resolve(),
+      requestHostRespawn: vi.fn(() => Promise.resolve()),
       service: null,
       traycerCli: null,
       migration: null,
@@ -564,6 +564,7 @@ describe("<MenuCommandListener />", () => {
       ),
       deregisterService: vi.fn(() => Promise.resolve()),
       registryCheck: vi.fn(() => Promise.reject(new Error("not used"))),
+      getOperationStatus: vi.fn(() => Promise.resolve(null)),
       freePortAndRestart: vi.fn(() => Promise.reject(new Error("not used"))),
       cliManifest: vi.fn(() => Promise.resolve(null)),
       getHostName: vi.fn(() =>
@@ -602,6 +603,36 @@ describe("<MenuCommandListener />", () => {
       expect(updateHost).toHaveBeenCalledTimes(1);
     });
     expect(updateHost).toHaveBeenCalledWith({ onProgress: null });
+  });
+
+  it("opens a confirmation dialog for host.restart and only respawns after confirm", async () => {
+    const menu = createMenu();
+    const requestHostRespawn = vi.fn(() => Promise.resolve());
+    const runnerHost = Object.assign(createRunnerHost(menu), {
+      requestHostRespawn,
+    });
+
+    render(
+      <QueryClientProvider client={makeQueryClient()}>
+        <RunnerHostProvider runnerHost={runnerHost}>
+          <MenuCommandListener />
+        </RunnerHostProvider>
+      </QueryClientProvider>,
+    );
+
+    act(() => {
+      menu.emit("host.restart");
+    });
+
+    const dialog = await screen.findByTestId("confirm-destructive-dialog");
+    expect(dialog.textContent).toContain("Restarting will stop");
+    expect(requestHostRespawn).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    await waitFor(() => {
+      expect(requestHostRespawn).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("closes the landing draft from the native menu command", () => {

@@ -1,9 +1,10 @@
-import { Check, Download } from "lucide-react";
+import { Check, Download, Terminal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useDesktopAppUpdates } from "@/hooks/runner/use-desktop-app-updates";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { cn } from "@/lib/utils";
+import type { DesktopAppUpdateGuidance } from "@/lib/windows/types";
 
 /**
  * Compact circular update control in the header's right-side cluster. It cycles
@@ -15,9 +16,6 @@ import { cn } from "@/lib/utils";
  */
 export function AppUpdateHeaderButton() {
   const { bridge, snapshot } = useDesktopAppUpdates();
-  const openConfirmRestartUpdate = useDesktopDialogStore(
-    (state) => state.openConfirmRestartUpdate,
-  );
   if (bridge === null) {
     return null;
   }
@@ -89,15 +87,47 @@ export function AppUpdateHeaderButton() {
     return null;
   }
 
-  // Defensive: a "ready" snapshot shouldn't co-occur with a blocked location
-  // (the download is gated), but if it ever does, never offer a restart that
-  // can't install - explain instead.
-  const readyBlockedReason = snapshot.installBlockedReason;
+  return (
+    <AppUpdateReadyButton
+      latestVersion={snapshot.latestVersion}
+      installBlockedReason={snapshot.installBlockedReason}
+      installGuidance={snapshot.installGuidance}
+    />
+  );
+}
+
+/**
+ * The "ready" state splits into three cases sharing one round tick:
+ * automated restart (emerald, opens the restart-confirm modal), a manual step
+ * still needed (sky, opens the guidance dialog - Linux deb/rpm where silent
+ * install can't/didn't work), or blocked with no path forward (disabled +
+ * tooltip - macOS outside /Applications). `installBlockedReason` and
+ * `installGuidance` shouldn't co-occur in practice (the download is gated
+ * before a blocked location ever reaches "ready"), but the blocked reason
+ * wins defensively if they ever do.
+ */
+function AppUpdateReadyButton(props: {
+  readonly latestVersion: string | null;
+  readonly installBlockedReason: string | null;
+  readonly installGuidance: DesktopAppUpdateGuidance | null;
+}) {
+  const openConfirmRestartUpdate = useDesktopDialogStore(
+    (state) => state.openConfirmRestartUpdate,
+  );
+  const openInstallGuidance = useDesktopDialogStore(
+    (state) => state.openInstallGuidance,
+  );
+  const { installBlockedReason } = props;
+  const needsManualInstall =
+    installBlockedReason === null && props.installGuidance !== null;
   const restartLabel =
-    snapshot.latestVersion === null
+    props.latestVersion === null
       ? "Restart to update"
-      : `Restart to update to v${snapshot.latestVersion}`;
-  const label = readyBlockedReason ?? restartLabel;
+      : `Restart to update to v${props.latestVersion}`;
+  const label =
+    installBlockedReason ??
+    (needsManualInstall ? "Finish update" : restartLabel);
+
   return (
     <TooltipWrapper label={label} side="top" sideOffset={6} align={undefined}>
       {/* Span trigger so the block-reason tooltip still opens when the Button
@@ -107,16 +137,25 @@ export function AppUpdateHeaderButton() {
           type="button"
           variant="ghost"
           size="icon-sm"
-          disabled={readyBlockedReason !== null}
+          disabled={installBlockedReason !== null}
           aria-label={label}
           data-testid="app-update-header-button"
           className={cn(
-            "rounded-full bg-emerald-500 text-white hover:bg-emerald-600 hover:text-white",
-            readyBlockedReason !== null && "disabled:opacity-60",
+            "rounded-full text-white",
+            needsManualInstall
+              ? "bg-sky-500 hover:bg-sky-600 hover:text-white"
+              : "bg-emerald-500 hover:bg-emerald-600 hover:text-white",
+            installBlockedReason !== null && "disabled:opacity-60",
           )}
-          onClick={openConfirmRestartUpdate}
+          onClick={
+            needsManualInstall ? openInstallGuidance : openConfirmRestartUpdate
+          }
         >
-          <Check className="size-4" aria-hidden />
+          {needsManualInstall ? (
+            <Terminal className="size-4" aria-hidden />
+          ) : (
+            <Check className="size-4" aria-hidden />
+          )}
         </Button>
       </span>
     </TooltipWrapper>

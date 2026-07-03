@@ -116,6 +116,7 @@ function makeHostManagement(
     ensureHost,
     deregisterService: notImplemented("deregisterService"),
     registryCheck: notImplemented("registryCheck"),
+    getOperationStatus: () => Promise.resolve(null),
     freePortAndRestart: (input) => Promise.resolve(input),
     cliManifest: () => Promise.resolve(null),
     getHostName: () =>
