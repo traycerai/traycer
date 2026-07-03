@@ -199,7 +199,14 @@ function isLandingDraftDocContent(value: unknown): value is JsonContent {
 function parseLandingDraftSelection(value: unknown): DraftSelection | null {
   if (!isRecord(value)) return null;
   const { from, to } = value;
-  if (typeof from !== "number" || typeof to !== "number") return null;
+  if (
+    typeof from !== "number" ||
+    typeof to !== "number" ||
+    !Number.isFinite(from) ||
+    !Number.isFinite(to)
+  ) {
+    return null;
+  }
   return { from, to };
 }
 

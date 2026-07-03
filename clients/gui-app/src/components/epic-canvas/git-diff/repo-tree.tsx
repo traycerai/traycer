@@ -215,7 +215,6 @@ export function RepoTree(props: RepoTreeProps): ReactNode {
               row.kind === "root" && row.hasChildren ? true : undefined
             }
             aria-disabled={isDisabled ? true : undefined}
-            disabled={isDisabled}
             tabIndex={index === tabbableIndex ? 0 : -1}
             onClick={() => activateRow(index)}
             onKeyDown={(event) => handleKeyDown(event, index)}
