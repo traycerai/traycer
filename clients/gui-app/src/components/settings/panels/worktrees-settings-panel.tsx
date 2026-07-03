@@ -212,7 +212,7 @@ function WorktreesBody(props: {
   const listQuery = useHostQuery({
     client,
     method: "worktree.listAllForHost",
-    params: {},
+    params: { includeActivity: false },
     options: { enabled: reachable },
   });
   const canRefresh = reachable && client !== null;
