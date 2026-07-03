@@ -92,12 +92,19 @@ must be added in BOTH places - the route file under `src/routes/` AND the modal
     rows offer the full installed-font list - no monospace pre-filter, because
     the OS `monospace` trait misdetects many real mono fonts (e.g. Nerd Font
     builds) and the picker already lets you free-type any name.
+  - **UI/Code size input (`controls/settings-number-input.tsx`).** Plain
+    non-nullable number field. Takes a `defaultValue`
+    (`DEFAULT_UI_FONT_SIZE` / `DEFAULT_CODE_FONT_SIZE`, the same constants the
+    store initializes from) and shows a ghost `RotateCcw` reset button in the
+    reserved `size-7` left gutter whenever the current size differs from it,
+    restoring the default on click - mirroring the font picker's reset gutter
+    so the two rows stay aligned.
   - **Terminal size input (`controls/nullable-font-size-input.tsx`).**
     `SettingsNumberInput`-alike but nullable: displays `terminalFontSize ??
 codeFontSize` in muted styling while `null`; any tick/type pins an
     explicit value starting from what was displayed; a ghost reset button
-    clears back to `null`. Kept as a separate component so the two existing
-    `SettingsNumberInput` call sites (UI/Code size) are untouched.
+    clears back to `null`. Kept as a separate component because its reset target
+    is `null` (follow code) rather than a fixed default.
   - **Installed-font enumeration.** Desktop-only, following the same chain as
     `systemPreferencesAppearance`: `RunnerHostInvoke.fontsList` IPC channel →
     `listInstalledFonts()` (`electron-main/app/installed-fonts.ts`, backed by

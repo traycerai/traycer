@@ -8,7 +8,11 @@ import { FontPicker } from "@/components/settings/controls/font-picker";
 import { ThemeModeToggle } from "@/components/settings/controls/theme-mode-toggle";
 import { ThemePresetPicker } from "@/components/settings/controls/theme-preset-picker";
 import { Switch } from "@/components/ui/switch";
-import { useSettingsStore } from "@/stores/settings/settings-store";
+import {
+  useSettingsStore,
+  DEFAULT_UI_FONT_SIZE,
+  DEFAULT_CODE_FONT_SIZE,
+} from "@/stores/settings/settings-store";
 import { useRunnerInstalledFontsQuery } from "@/hooks/runner/use-runner-installed-fonts-query";
 
 export function AppearanceSettingsPanel() {
@@ -126,6 +130,8 @@ export function AppearanceSettingsPanel() {
               max={20}
               unit="px"
               ariaLabel="UI font size"
+              defaultValue={DEFAULT_UI_FONT_SIZE}
+              resetTooltip="Reset to default"
             />
           </div>
         }
@@ -150,6 +156,8 @@ export function AppearanceSettingsPanel() {
               max={24}
               unit="px"
               ariaLabel="Code font size"
+              defaultValue={DEFAULT_CODE_FONT_SIZE}
+              resetTooltip="Reset to default"
             />
           </div>
         }

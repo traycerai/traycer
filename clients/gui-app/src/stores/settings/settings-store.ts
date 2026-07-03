@@ -32,6 +32,11 @@ import { type EditorId } from "@traycer/protocol/host";
 export type ThemeMode = "system" | "light" | "dark";
 export type EpicNodeIconColorMode = "byType" | "none";
 
+// Default font sizes, shared with the Appearance panel so its reset-to-default
+// affordance and the store's initial state stay a single source of truth.
+export const DEFAULT_UI_FONT_SIZE = 15;
+export const DEFAULT_CODE_FONT_SIZE = 12;
+
 export interface SettingsState {
   theme: ThemeMode;
   themePreset: ThemePreset;
@@ -219,8 +224,8 @@ export const useSettingsStore = create<SettingsState>()(
       notifyOnChatTurnComplete: true,
       pinContextUsageBreakdown: false,
       pointerCursors: true,
-      uiFontSize: 15,
-      codeFontSize: 12,
+      uiFontSize: DEFAULT_UI_FONT_SIZE,
+      codeFontSize: DEFAULT_CODE_FONT_SIZE,
       uiFontFamily: null,
       codeFontFamily: null,
       terminalFontFamily: null,
