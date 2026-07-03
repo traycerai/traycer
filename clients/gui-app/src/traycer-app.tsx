@@ -1,5 +1,6 @@
 import { HostPicker } from "@/components/layout/header/host-picker";
 import { AppUpdateToastController } from "@/components/layout/bridges/app-update-toast-controller";
+import { DesktopZoomController } from "@/components/layout/bridges/desktop-zoom-controller";
 import { HostOperationStatusListener } from "@/components/layout/bridges/host-operation-status-listener";
 import { HostRegistryUpdateListener } from "@/components/layout/bridges/host-registry-update-listener";
 import { RunnerHostBridges } from "@/components/layout/bridges/runner-host-bridges";
@@ -115,6 +116,7 @@ export function TraycerApp(props: TraycerAppProps): ReactNode {
             <ThemeProvider>
               <TooltipProvider>
                 <KeybindingProvider router={router}>
+                  <DesktopZoomController />
                   <HostRuntimeProvider
                     registry={props.registry}
                     messengerFactory={props.messengerFactory ?? null}

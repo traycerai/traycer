@@ -1,9 +1,21 @@
+import { useEffect, useState } from "react";
+import { RotateCcw } from "lucide-react";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { EpicNodeIconColorPicker } from "@/components/settings/controls/node-icon-color-picker";
 import { SettingsNumberInput } from "@/components/settings/controls/settings-number-input";
 import { ThemeModeToggle } from "@/components/settings/controls/theme-mode-toggle";
 import { ThemePresetPicker } from "@/components/settings/controls/theme-preset-picker";
+import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { useDesktopZoomBridge } from "@/hooks/runner/use-desktop-zoom-bridge";
+import { appLogger } from "@/lib/logger";
 import { Switch } from "@/components/ui/switch";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 
@@ -81,6 +93,7 @@ export function AppearanceSettingsPanel() {
           />
         }
       />
+      <DesktopZoomSettingsRow />
       <SettingsRow
         label="UI font size"
         description="Adjust the base size used for the Traycer UI."
@@ -111,6 +124,97 @@ export function AppearanceSettingsPanel() {
       />
     </SettingsPanelShell>
   );
+}
+
+function DesktopZoomSettingsRow() {
+  const zoom = useDesktopZoomBridge();
+  const [percent, setPercent] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (zoom === null) return;
+    let disposed = false;
+    void zoom
+      .get()
+      .then((nextPercent) => {
+        if (!disposed) setPercent(nextPercent);
+      })
+      .catch((err) => {
+        appLogger.errorSummary("[zoom] settings read failed", {}, err);
+      });
+    const subscription = zoom.onChange((nextPercent) => {
+      setPercent(nextPercent);
+    });
+    return () => {
+      disposed = true;
+      subscription.dispose();
+    };
+  }, [zoom]);
+
+  if (zoom === null) {
+    return null;
+  }
+
+  return (
+    <>
+      <div className="border-b border-border/40 bg-muted/20 px-5 py-3 text-ui-xs font-semibold text-muted-foreground uppercase">
+        Display
+      </div>
+      <SettingsRow
+        label="Zoom"
+        description="Scales the whole app; font sizes only adjust typography."
+        control={
+          <div className="flex items-center gap-2">
+            <Select
+              value={percent === null ? undefined : String(percent)}
+              onValueChange={(value) => {
+                const nextPercent = Number.parseInt(value, 10);
+                if (!Number.isFinite(nextPercent)) return;
+                void zoom.set(nextPercent).catch((err) => {
+                  appLogger.errorSummary("[zoom] settings set failed", {}, err);
+                });
+              }}
+            >
+              <SelectTrigger
+                size="sm"
+                aria-label="Display zoom"
+                className="w-[min(40vw,8rem)]"
+              >
+                <SelectValue placeholder="Loading" />
+              </SelectTrigger>
+              <SelectContent>
+                {zoom.ladder.map((candidate) => (
+                  <SelectItem key={candidate} value={String(candidate)}>
+                    {formatZoomPercent(candidate)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                void zoom.reset().catch((err) => {
+                  appLogger.errorSummary(
+                    "[zoom] settings reset failed",
+                    {},
+                    err,
+                  );
+                });
+              }}
+            >
+              <RotateCcw aria-hidden="true" />
+              Reset
+            </Button>
+          </div>
+        }
+      />
+    </>
+  );
+}
+
+function formatZoomPercent(percent: number): string {
+  return `${Math.round(percent)}%`;
 }
 
 /**

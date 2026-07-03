@@ -108,6 +108,16 @@ export interface DesktopMenuCommandPayload {
   readonly windowId: string;
 }
 
+export interface DesktopZoomBridge {
+  readonly ladder: readonly number[];
+  get(): Promise<number>;
+  set(percent: number): Promise<number>;
+  stepIn(): Promise<number>;
+  stepOut(): Promise<number>;
+  reset(): Promise<number>;
+  onChange(handler: (percent: number) => void): { dispose: () => void };
+}
+
 export type DesktopSupportLogTarget = "desktop" | "host";
 
 export type DesktopSupportLinkId =
