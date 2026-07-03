@@ -6,7 +6,7 @@ import type {
 } from "@traycer/protocol/host/epic/unary-schemas";
 import { formatDistanceToNow } from "date-fns";
 import { displayTitle } from "@/lib/display-title";
-import { isEditablePermissionRole } from "@/lib/epic-collaborator-roles";
+import { isEditableRole } from "@/lib/epic-permissions";
 
 export type HistoryRecencyBucket = "today" | "yesterday" | "earlier";
 export type HistoryItemTaskType = "epic" | "phase";
@@ -149,12 +149,12 @@ function buildHistoryItem(args: {
 
 export function canEditHistoryItemTitle(item: HistoryItem): boolean {
   return (
-    item.taskType === "epic" && isEditablePermissionRole(item.permissionRole)
+    item.taskType === "epic" && isEditableRole(item.permissionRole)
   );
 }
 
 export function canDeleteHistoryItem(item: HistoryItem): boolean {
-  return isEditablePermissionRole(item.permissionRole);
+  return isEditableRole(item.permissionRole);
 }
 
 function historyPermissionRole(

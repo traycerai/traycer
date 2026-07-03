@@ -1740,9 +1740,7 @@ function ArtifactAddChildButton(props: ArtifactAddChildButtonProps) {
       excludeTypes={ARTIFACT_PANEL_EXCLUDED_TYPES}
       disabledTypes={undefined}
       disabled={!canMutate || addChildIsPending}
-      disabledTooltip={
-        isDisconnected ? "Reconnect to make changes." : undefined
-      }
+      disabledTooltip={isDisconnected ? "Reconnect to make changes." : null}
     >
       <Button
         type="button"

@@ -22,6 +22,7 @@ import {
   useEpicSnapshotMeta,
 } from "@/lib/epic-selectors";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
+import { isEditableRole } from "@/lib/epic-permissions";
 import { cn } from "@/lib/utils";
 
 interface StoryTileProps {
@@ -46,7 +47,7 @@ function StatusPill(props: {
   const epicId = meta?.epicLight?.id ?? "";
   const liveArtifact = useEpicArtifact(artifactId);
   const role = useEpicPermissionRole();
-  const canEdit = role === "owner" || role === "editor";
+  const canEdit = isEditableRole(role);
   const connectionStatus = useEpicConnectionStatus();
   const isDisconnected = connectionStatus === "closed";
   const updateStatus = useEpicUpdateArtifactStatus();
