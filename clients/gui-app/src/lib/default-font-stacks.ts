@@ -12,7 +12,9 @@ export const DEFAULT_MONO_FONT_STACK =
   '"SFMono-Regular", "SF Mono", "Cascadia Code", "Roboto Mono", ui-monospace, monospace';
 
 export function quoteFontFamily(name: string): string {
-  return `"${name.replace(/"/g, '\\"')}"`;
+  // Escape backslashes before quotes so a family name containing either stays a
+  // well-formed CSS string (a trailing `\` would otherwise escape the closing quote).
+  return `"${name.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
 /**

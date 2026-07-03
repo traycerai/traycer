@@ -16,6 +16,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { cn } from "@/lib/utils";
+import { quoteFontFamily } from "@/lib/default-font-stacks";
 import type { InstalledFont } from "@/lib/desktop-installed-fonts";
 
 interface FontPickerProps {
@@ -111,7 +112,9 @@ export function FontPicker(props: FontPickerProps) {
                 value === null && "text-muted-foreground",
               )}
               style={
-                value !== null ? { fontFamily: cssQuote(value) } : undefined
+                value !== null
+                  ? { fontFamily: quoteFontFamily(value) }
+                  : undefined
               }
             >
               {value ?? defaultLabel}
@@ -172,7 +175,7 @@ export function FontPicker(props: FontPickerProps) {
                     >
                       <span
                         className="min-w-0 flex-1 truncate"
-                        style={{ fontFamily: cssQuote(font.family) }}
+                        style={{ fontFamily: quoteFontFamily(font.family) }}
                       >
                         {font.family}
                       </span>
@@ -186,8 +189,4 @@ export function FontPicker(props: FontPickerProps) {
       </Popover>
     </div>
   );
-}
-
-function cssQuote(family: string): string {
-  return `"${family.replace(/"/g, '\\"')}"`;
 }
