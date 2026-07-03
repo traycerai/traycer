@@ -549,7 +549,7 @@ function TabTrailingSlot(props: TabTrailingSlotProps) {
             onClose();
           }}
           className={cn(
-            "header-tab-close-button pointer-events-none size-5 text-muted-foreground hover:text-foreground [-webkit-app-region:no-drag]",
+            "header-tab-close-button size-5 text-muted-foreground hover:text-foreground [-webkit-app-region:no-drag]",
             active &&
               "text-foreground/70 hover:bg-accent hover:text-accent-foreground",
           )}
@@ -576,7 +576,7 @@ function TabChrome(props: { readonly isActive: boolean }) {
     return (
       <span
         aria-hidden
-        className="pointer-events-none absolute inset-x-2 inset-y-1 rounded-md bg-accent/45 opacity-0 transition-opacity duration-150 ease-out group-focus-within/tab:opacity-100 group-hover/tab:opacity-100"
+        className="pointer-events-none absolute inset-x-2 inset-y-1 rounded-md bg-accent/45 opacity-0 transition-opacity duration-150 ease-out group-focus-visible/tab:opacity-100 group-has-[:focus-visible]/tab:opacity-100 group-hover/tab:opacity-100"
       />
     );
   }

@@ -1137,15 +1137,41 @@
     opacity: 0;
   }
 
+  /* The close button is inert by default and only becomes clickable once the
+     tab is wide enough and hovered / keyboard-focused. Keep BOTH the `none`
+     default and the `auto` reveal in this same @layer so the reveal wins by
+     specificity. Do NOT put a `pointer-events-none` Tailwind utility on the
+     button: it lands in Tailwind's `utilities` layer, declared after
+     `components`, so it would beat this reveal in every state and leave the
+     button permanently unclickable. */
+  .header-tab-close-button {
+    pointer-events: none;
+  }
+
+  /* Reveal on hover, or keyboard focus - NOT :focus-within. A mouse-drag reorder
+     focuses the tab div, and dnd-kit swallows the trailing click so the tab is
+     never activated; with :focus-within the reveal (slot width + close button)
+     would stay stuck lit on that inactive tab until focus moved away.
+     Keyboard focus is expressed as :focus-visible (mouse focus doesn't match it,
+     so a drag doesn't stick) across two selectors:
+       - `:focus-visible` for the tab wrapper itself (Tab lands on the tab), and
+       - `:has(:focus-visible)` for a focused descendant - the close button is a
+         SEPARATE tab stop, and when Tab moves onto it the wrapper is no longer
+         :focus-visible, so without this the slot would collapse and hide the
+         very button the user just focused.
+     Keep in sync with the accent chrome's `group-focus-visible/tab` +
+     `group-has-[:focus-visible]/tab` gates in tab-strip-item.tsx. */
   @container (min-width: 7rem) {
     .group\/tab:hover .header-tab-trailing-slot,
-    .group\/tab:focus-within .header-tab-trailing-slot {
+    .group\/tab:focus-visible .header-tab-trailing-slot,
+    .group\/tab:has(:focus-visible) .header-tab-trailing-slot {
       width: 1.25rem;
       opacity: 1;
     }
 
     .group\/tab:hover .header-tab-close-button,
-    .group\/tab:focus-within .header-tab-close-button {
+    .group\/tab:focus-visible .header-tab-close-button,
+    .group\/tab:has(:focus-visible) .header-tab-close-button {
       pointer-events: auto;
     }
   }
