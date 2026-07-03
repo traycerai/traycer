@@ -148,9 +148,7 @@ function buildHistoryItem(args: {
 }
 
 export function canEditHistoryItemTitle(item: HistoryItem): boolean {
-  return (
-    item.taskType === "epic" && isEditableRole(item.permissionRole)
-  );
+  return item.taskType === "epic" && isEditableRole(item.permissionRole);
 }
 
 export function canDeleteHistoryItem(item: HistoryItem): boolean {

@@ -1698,7 +1698,8 @@ function TreePanelActions(props: TreePanelActionsProps) {
   const artifactsAddDisabled = !canMutate || addIsPending;
   const artifactsAriaDisabled =
     artifactsAddDisabled && artifactsDisabledTooltip !== null;
-  const artifactsNativeDisabled = artifactsAddDisabled && !artifactsAriaDisabled;
+  const artifactsNativeDisabled =
+    artifactsAddDisabled && !artifactsAriaDisabled;
 
   return (
     <div className="flex items-center gap-0.5">

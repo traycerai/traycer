@@ -143,8 +143,7 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
   const permissionRole = useRegisteredEpicPermissionRole(
     tab.kind === "epic" ? tab.epicId : null,
   );
-  const canEditTitle =
-    tab.kind === "epic" && isEditableRole(permissionRole);
+  const canEditTitle = tab.kind === "epic" && isEditableRole(permissionRole);
   // Epic tabs can carry an empty name; render through `displayTitle` so it falls
   // back to "Untitled epic". Other kinds render their name verbatim.
   const resolvedTabName = liveEpicTitle ?? tab.name;
