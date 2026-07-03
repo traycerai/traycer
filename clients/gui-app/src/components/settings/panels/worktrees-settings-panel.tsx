@@ -9,18 +9,24 @@ import {
 } from "react";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import {
+  ArrowDownWideNarrow,
   Check,
   ChevronRight,
   CopyMinus,
   CopyPlus,
   FileSliders,
   FolderGit2,
+  GitMerge,
   ListChecks,
   RefreshCw,
+  Search,
   Trash2,
   X,
 } from "lucide-react";
-import type { WorktreeHostEntry } from "@traycer/protocol/host/index";
+import type {
+  WorktreeHostEntry,
+  WorktreeHostEntryV11,
+} from "@traycer/protocol/host/index";
 import type { WorktreeEntryScripts } from "@traycer/protocol/host/worktree-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
@@ -42,6 +48,7 @@ import {
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { Dialog } from "@/components/ui/dialog";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -57,6 +64,9 @@ import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useWorktreeDeleteStreamTransportFactory } from "@/lib/host/use-worktree-delete-stream-transport";
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
 import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
+import { useRelativeTimestamp } from "@/lib/relative-time";
+import { useCloudEpicTasksQuery } from "@/hooks/epics/use-cloud-epic-tasks-query";
+import { readEpicTitlesFromCloudTaskCaches } from "@/lib/cloud-epic-tasks-query/cache";
 import { WORKTREE_BINDING_INVALIDATIONS } from "@/hooks/worktree/invalidations";
 import {
   backgroundForegroundWorktreeDeleteForHost,
@@ -70,8 +80,11 @@ import {
 import { WorktreeDeleteProgressModal } from "@/components/settings/panels/worktree-delete-progress-modal";
 
 type WorktreeRowDeleteStatus = "deleting";
+type WorktreeSortMode = "repo" | "stalest";
 const WORKTREES_REFRESH_TIMEOUT_MS = 10_000;
 const EMPTY_REPO_KEY_SET: ReadonlySet<string> = new Set();
+const EMPTY_WORKTREES: readonly WorktreeHostEntryV11[] = [];
+const EMPTY_TASK_TITLES: ReadonlyMap<string, string> = new Map();
 
 /**
  * Host-wide worktree management. Lists every git worktree under the selected
@@ -132,9 +145,11 @@ function WorktreesToolbar(props: {
   readonly refreshing: boolean;
   readonly canRefresh: boolean;
   readonly selectionControls: ReactNode | null;
+  readonly filterControls: ReactNode | null;
 }): ReactNode {
   const {
     canRefresh,
+    filterControls,
     hosts,
     onChange,
     onRefresh,
@@ -152,27 +167,68 @@ function WorktreesToolbar(props: {
   });
 
   return (
-    <div className="flex items-center justify-between gap-2 border-b border-border/40 bg-muted/20 px-5 py-3">
-      <HostSelect hosts={hosts} value={value} onChange={onChange} />
-      <div
-        className="flex shrink-0 items-center gap-1"
-        data-testid="worktrees-toolbar-actions"
-      >
-        {selectionControls}
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          disabled={!canRefresh || refresh.refreshing}
-          onClick={refresh.trigger}
-          aria-label="Refresh worktrees"
+    <div className="flex flex-col gap-2 border-b border-border/40 bg-muted/20 px-5 py-3">
+      <div className="flex items-center justify-between gap-2">
+        <HostSelect hosts={hosts} value={value} onChange={onChange} />
+        <div
+          className="flex shrink-0 items-center gap-1"
+          data-testid="worktrees-toolbar-actions"
         >
-          <RefreshCw
-            className={cn("size-4", refresh.refreshing && "animate-spin")}
-          />
-          <span>Refresh</span>
-        </Button>
+          {selectionControls}
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={!canRefresh || refresh.refreshing}
+            onClick={refresh.trigger}
+            aria-label="Refresh worktrees"
+          >
+            <RefreshCw
+              className={cn("size-4", refresh.refreshing && "animate-spin")}
+            />
+            <span>Refresh</span>
+          </Button>
+        </div>
       </div>
+      {filterControls}
+    </div>
+  );
+}
+
+function WorktreesFilterControls(props: {
+  readonly searchText: string;
+  readonly onSearchChange: (value: string) => void;
+  readonly sortMode: WorktreeSortMode;
+  readonly onSortModeChange: (mode: WorktreeSortMode) => void;
+}): ReactNode {
+  const stalestFirst = props.sortMode === "stalest";
+  return (
+    <div className="flex items-center gap-2">
+      <div className="relative min-w-0 flex-1">
+        <Search
+          className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground"
+          aria-hidden
+        />
+        <Input
+          type="search"
+          value={props.searchText}
+          onChange={(event) => props.onSearchChange(event.target.value)}
+          placeholder="Search repo, branch, path, or Task"
+          aria-label="Search worktrees"
+          className="pl-8"
+        />
+      </div>
+      <Button
+        type="button"
+        variant={stalestFirst ? "secondary" : "outline"}
+        size="sm"
+        aria-pressed={stalestFirst}
+        className="shrink-0"
+        onClick={() => props.onSortModeChange(stalestFirst ? "repo" : "stalest")}
+      >
+        <ArrowDownWideNarrow className="size-4" />
+        <span>Stalest first</span>
+      </Button>
     </div>
   );
 }
@@ -212,9 +268,18 @@ function WorktreesBody(props: {
   const listQuery = useHostQuery({
     client,
     method: "worktree.listAllForHost",
-    params: {},
+    // v1.1 with the git probes on: this is an on-demand settings surface, so the
+    // per-worktree cost of the concurrent, best-effort probes is acceptable.
+    // Every enriched field is null-tolerant (probes yield null on failure, and a
+    // v1.0 host bridges up to empty `owners` / null timestamps).
+    params: { includeActivity: true },
     options: { enabled: reachable },
   });
+  // Owning-Task titles come from the cloud epic-tasks caches the app already
+  // maintains (keyed by the signed-in user, any host) - no host-side title join.
+  const taskTitlesByEpicId = useWorktreeTaskTitles(
+    listQuery.data?.worktrees ?? EMPTY_WORKTREES,
+  );
   const canRefresh = reachable && client !== null;
   const toolbarProps = {
     hosts,
@@ -277,6 +342,7 @@ function WorktreesBody(props: {
         openStreamTransport={openStreamTransport}
         hostId={hostId}
         worktrees={listQuery.data.worktrees}
+        taskTitlesByEpicId={taskTitlesByEpicId}
         toolbarProps={toolbarProps}
       />
     );
@@ -287,11 +353,62 @@ function WorktreesBody(props: {
   return (
     <div className="flex flex-col">
       {showStandaloneToolbar ? (
-        <WorktreesToolbar {...toolbarProps} selectionControls={null} />
+        <WorktreesToolbar
+          {...toolbarProps}
+          selectionControls={null}
+          filterControls={null}
+        />
       ) : null}
       {content}
     </div>
   );
+}
+
+/**
+ * Resolves each owner `epicId` on the listing to its Task title by reading the
+ * cloud epic-tasks caches the app already maintains for the signed-in user
+ * (`readEpicTitlesFromCloudTaskCaches`). We warm those caches with the shared
+ * first-page query - the same one History/home use, so the cache is reused, not
+ * duplicated - and read titles back for the epics this host's worktrees own.
+ *
+ * Scope is `hostId: null` so an epic cached under any host (epics are
+ * user-scoped, not host-scoped) still resolves. An `epicId` with no cached Task
+ * (unknown / deleted / not yet loaded) is simply absent from the map, which the
+ * chip renderer degrades gracefully.
+ */
+function useWorktreeTaskTitles(
+  worktrees: readonly WorktreeHostEntryV11[],
+): ReadonlyMap<string, string> {
+  const queryClient = useQueryClient();
+  const epicIds = useMemo(
+    () => [
+      ...new Set(
+        worktrees.flatMap((entry) => entry.owners.map((owner) => owner.epicId)),
+      ),
+    ],
+    [worktrees],
+  );
+  // Only warm the shared cloud-tasks cache when something actually needs a title.
+  const cloud = useCloudEpicTasksQuery(undefined, {
+    enabled: epicIds.length > 0,
+  });
+  const userId = cloud.currentUserId;
+  const cloudTasks = cloud.tasks;
+  return useMemo(() => {
+    if (userId === null || epicIds.length === 0) return EMPTY_TASK_TITLES;
+    // `cloudTasks` is a recompute trigger: the read scans the query cache
+    // directly, so we re-derive whenever a fetched page changes it.
+    void cloudTasks;
+    return new Map(
+      Object.entries(
+        readEpicTitlesFromCloudTaskCaches(
+          queryClient,
+          { hostId: null, userId },
+          epicIds,
+        ),
+      ),
+    );
+  }, [queryClient, userId, epicIds, cloudTasks]);
 }
 
 // List renders many per-worktree states (loading / empty / error / per-row
@@ -300,7 +417,8 @@ function WorktreesBody(props: {
 export function WorktreesList(props: {
   readonly openStreamTransport: (hostId: string) => DurableStreamTransport;
   readonly hostId: string;
-  readonly worktrees: readonly WorktreeHostEntry[];
+  readonly worktrees: readonly WorktreeHostEntryV11[];
+  readonly taskTitlesByEpicId: ReadonlyMap<string, string>;
   readonly toolbarProps: {
     readonly hosts: readonly HostDirectoryEntry[];
     readonly value: string | null;
@@ -310,8 +428,14 @@ export function WorktreesList(props: {
     readonly canRefresh: boolean;
   };
 }): ReactNode {
-  const { hostId, worktrees, openStreamTransport } = props;
+  const { hostId, worktrees, taskTitlesByEpicId, openStreamTransport } = props;
   const queryClient = useQueryClient();
+  const [searchText, setSearchText] = useState("");
+  const [sortMode, setSortMode] = useState<WorktreeSortMode>("repo");
+  const filteredWorktrees = useMemo(
+    () => filterWorktrees(worktrees, searchText, taskTitlesByEpicId),
+    [worktrees, searchText, taskTitlesByEpicId],
+  );
 
   // Refresh the host-wide list plus the shared worktree/binding caches the
   // file-tree / home / create-worktree surfaces read, captured against the
@@ -349,7 +473,10 @@ export function WorktreesList(props: {
   }
   const reviewedScriptsByPath = reviewedScriptsByPathRef.current;
 
-  const groups = useMemo(() => groupByRepo(worktrees), [worktrees]);
+  const groups = useMemo(
+    () => groupByRepo(filteredWorktrees, sortMode),
+    [filteredWorktrees, sortMode],
+  );
   const repoKeys = useMemo(() => groups.map((group) => group.key), [groups]);
   const [collapsedRepoKeys, dispatchCollapsedRepoKeys] = useReducer(
     collapsedRepoKeysReducer,
@@ -561,11 +688,25 @@ export function WorktreesList(props: {
             />
           </>
         }
+        filterControls={
+          <WorktreesFilterControls
+            searchText={searchText}
+            onSearchChange={setSearchText}
+            sortMode={sortMode}
+            onSortModeChange={setSortMode}
+          />
+        }
       />
       <WorktreeDeleteProgressStrip
         summary={progressSummary}
         onDismiss={dismissTerminalBackgrounded}
       />
+
+      {groups.length === 0 ? (
+        <WorktreesStateMessage tone="muted" spinner={false}>
+          No worktrees match your search.
+        </WorktreesStateMessage>
+      ) : null}
 
       {groups.map((group) => {
         const collapsed = collapsedRepoKeys.has(group.key);
@@ -593,6 +734,7 @@ export function WorktreesList(props: {
                     <WorktreeRow
                       key={entry.worktreePath}
                       entry={entry}
+                      taskTitlesByEpicId={taskTitlesByEpicId}
                       deleteStatus={deleteStatus}
                       selectionMode={selectionMode}
                       selected={selectedPaths.has(entry.worktreePath)}
@@ -724,7 +866,8 @@ function WorktreeRepoHeader(props: {
 }
 
 function WorktreeRow(props: {
-  readonly entry: WorktreeHostEntry;
+  readonly entry: WorktreeHostEntryV11;
+  readonly taskTitlesByEpicId: ReadonlyMap<string, string>;
   readonly deleteStatus: WorktreeRowDeleteStatus | null;
   readonly selectionMode: boolean;
   readonly selected: boolean;
@@ -735,6 +878,7 @@ function WorktreeRow(props: {
 }): ReactNode {
   const {
     entry,
+    taskTitlesByEpicId,
     deleteStatus,
     selectionMode,
     selected,
@@ -785,6 +929,7 @@ function WorktreeRow(props: {
               Orphaned
             </Badge>
           ) : null}
+          <WorktreeBranchStatusHints branchStatus={entry.branchStatus} />
           {entry.uncommittedCount > 0 ? (
             <span className="text-ui-xs text-muted-foreground">
               {entry.uncommittedCount} uncommitted
@@ -794,6 +939,13 @@ function WorktreeRow(props: {
         <StartTruncatedText className="block max-w-full text-ui-xs text-muted-foreground">
           {entry.worktreePath}
         </StartTruncatedText>
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <WorktreeTaskAssociation
+            owners={entry.owners}
+            taskTitlesByEpicId={taskTitlesByEpicId}
+          />
+          <WorktreeLastActive lastActivityAt={entry.lastActivityAt} />
+        </div>
       </div>
       {deleting ? (
         <span className="inline-flex shrink-0 items-center gap-2 text-ui-xs text-muted-foreground">
@@ -815,6 +967,95 @@ function WorktreeRow(props: {
         />
       ) : null}
     </div>
+  );
+}
+
+/**
+ * Best-effort branch-position hints from the v1.1 `branchStatus` probe. `null`
+ * (no upstream / detached / probe failed / older host) renders nothing. "Merged"
+ * means the branch is fully contained in the default branch, so removing the
+ * worktree loses no unmerged commits; the ahead/behind counts surface otherwise.
+ */
+function WorktreeBranchStatusHints(props: {
+  readonly branchStatus: WorktreeHostEntryV11["branchStatus"];
+}): ReactNode {
+  const status = props.branchStatus;
+  if (status === null) return null;
+  if (status.mergedIntoDefault) {
+    return (
+      <Badge variant="outline" className="gap-1 font-normal text-muted-foreground">
+        <GitMerge className="size-3" aria-hidden />
+        Merged
+      </Badge>
+    );
+  }
+  if (status.ahead === 0 && status.behind === 0) return null;
+  const parts = [
+    status.ahead > 0 ? `${status.ahead} ahead` : null,
+    status.behind > 0 ? `${status.behind} behind` : null,
+  ].filter((part): part is string => part !== null);
+  return (
+    <span className="text-ui-xs text-muted-foreground">{parts.join(", ")}</span>
+  );
+}
+
+/**
+ * Task association chips resolved from `owners[].epicId`. Owners in the same
+ * epic collapse to one chip. An epic with no resolved title (unknown / deleted /
+ * not cached) still renders a chip so the association is visible. No owners at
+ * all means nothing in Traycer references this worktree - deliberately NOT the
+ * "Orphaned" badge, which means `gitRemovable: false`.
+ */
+function WorktreeTaskAssociation(props: {
+  readonly owners: WorktreeHostEntryV11["owners"];
+  readonly taskTitlesByEpicId: ReadonlyMap<string, string>;
+}): ReactNode {
+  const epicIds = [...new Set(props.owners.map((owner) => owner.epicId))];
+  if (epicIds.length === 0) {
+    return (
+      <span className="text-ui-xs text-muted-foreground">
+        Not used by any Task
+      </span>
+    );
+  }
+  return (
+    <span className="flex flex-wrap items-center gap-1">
+      {epicIds.map((epicId) => {
+        const title = props.taskTitlesByEpicId.get(epicId) ?? null;
+        return (
+          <Badge
+            key={epicId}
+            variant="outline"
+            className="max-w-[min(60vw,16rem)] font-normal"
+            title={title ?? undefined}
+          >
+            <span className="truncate">{title ?? "Unknown Task"}</span>
+          </Badge>
+        );
+      })}
+    </span>
+  );
+}
+
+/**
+ * "Last active" label from the derived v1.1 `lastActivityAt`. `null` (older host
+ * or no signal) renders nothing rather than a misleading placeholder.
+ */
+function WorktreeLastActive(props: {
+  readonly lastActivityAt: number | null;
+}): ReactNode {
+  if (props.lastActivityAt === null) return null;
+  return <WorktreeLastActiveLabel lastActivityAt={props.lastActivityAt} />;
+}
+
+function WorktreeLastActiveLabel(props: {
+  readonly lastActivityAt: number;
+}): ReactNode {
+  const relative = useRelativeTimestamp(props.lastActivityAt);
+  return (
+    <span className="text-ui-xs text-muted-foreground">
+      Last active {relative}
+    </span>
   );
 }
 
@@ -1106,7 +1347,7 @@ function WorktreesStateMessage(props: {
 interface WorktreeRepoGroup {
   readonly key: string;
   readonly label: string;
-  readonly items: WorktreeHostEntry[];
+  readonly items: WorktreeHostEntryV11[];
 }
 
 type WorktreeRepoCollapseAction =
@@ -1145,10 +1386,13 @@ function collapsedRepoKeysReducer(
 /**
  * Groups worktrees by repo for display, keyed on the resolved identifier when
  * present (real `owner/repo`) and otherwise on the display label (local repos
- * and orphans).
+ * and orphans). In `stalest` sort mode each group's rows are ordered least-
+ * recently-active first (`null` `lastActivityAt` sorts last, since a missing
+ * signal is not evidence of staleness); `repo` mode preserves listing order.
  */
 function groupByRepo(
-  worktrees: readonly WorktreeHostEntry[],
+  worktrees: readonly WorktreeHostEntryV11[],
+  sortMode: WorktreeSortMode,
 ): WorktreeRepoGroup[] {
   const byKey = new Map<string, WorktreeRepoGroup>();
   for (const entry of worktrees) {
@@ -1163,7 +1407,56 @@ function groupByRepo(
       byKey.set(key, { key, label: entry.repoLabel, items: [entry] });
     }
   }
-  return [...byKey.values()];
+  const groups = [...byKey.values()];
+  if (sortMode === "stalest") {
+    for (const group of groups) {
+      group.items.sort(compareStalestFirst);
+    }
+  }
+  return groups;
+}
+
+function compareStalestFirst(
+  a: WorktreeHostEntryV11,
+  b: WorktreeHostEntryV11,
+): number {
+  const aAt = a.lastActivityAt;
+  const bAt = b.lastActivityAt;
+  if (aAt === bAt) return 0;
+  if (aAt === null) return 1;
+  if (bAt === null) return -1;
+  return aAt - bAt;
+}
+
+/**
+ * Client-side text filter over the four fields the tab searches: repo label,
+ * branch, worktree path, and each owning Task's resolved title. Whitespace-only
+ * queries pass everything through. Pure renderer work - the full list is already
+ * in memory.
+ */
+function filterWorktrees(
+  worktrees: readonly WorktreeHostEntryV11[],
+  searchText: string,
+  taskTitlesByEpicId: ReadonlyMap<string, string>,
+): readonly WorktreeHostEntryV11[] {
+  const needle = searchText.trim().toLowerCase();
+  if (needle.length === 0) return worktrees;
+  return worktrees.filter((entry) =>
+    worktreeSearchHaystack(entry, taskTitlesByEpicId).includes(needle),
+  );
+}
+
+function worktreeSearchHaystack(
+  entry: WorktreeHostEntryV11,
+  taskTitlesByEpicId: ReadonlyMap<string, string>,
+): string {
+  const titles = entry.owners.flatMap((owner) => {
+    const title = taskTitlesByEpicId.get(owner.epicId);
+    return title === undefined ? [] : [title];
+  });
+  return [entry.repoLabel, entry.branch ?? "", entry.worktreePath, ...titles]
+    .join("\n")
+    .toLowerCase();
 }
 
 function deleteDialogCopy(entry: WorktreeHostEntry): {

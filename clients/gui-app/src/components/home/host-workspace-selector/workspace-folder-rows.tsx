@@ -63,7 +63,7 @@ export function WorkspaceFolderRows(props: {
   >({
     client: hostClient,
     method: "worktree.listAllForHost",
-    params: {},
+    params: { includeActivity: false },
     options: { enabled: hasAnyWorktrees && !props.readOnly },
   });
   const uncommittedByPath = useMemo(() => {

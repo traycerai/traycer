@@ -12,7 +12,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import type { WorktreeDeleteStreamCallbacks } from "@traycer-clients/shared/host-transport/worktree-delete-stream-client";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import type { WorktreeHostEntry } from "@traycer/protocol/host/index";
+import type { WorktreeHostEntryV11 } from "@traycer/protocol/host/index";
 import type { WorktreeEntryScripts } from "@traycer/protocol/host/worktree-schemas";
 import {
   hostStreamRpcRegistry,
@@ -90,8 +90,11 @@ function stubOpenStreamTransport() {
 }
 
 function entry(
-  over: Partial<WorktreeHostEntry> & { worktreePath: string; branch: string },
-): WorktreeHostEntry {
+  over: Partial<WorktreeHostEntryV11> & {
+    worktreePath: string;
+    branch: string;
+  },
+): WorktreeHostEntryV11 {
   return {
     repoLabel: "acme/app",
     repoIdentifier: { owner: "acme", repo: "app" },
@@ -99,11 +102,17 @@ function entry(
     uncommittedCount: 0,
     gitRemovable: true,
     scripts: null,
+    // v1.1 staleness signals default to the "no signal / older host" shape so
+    // each test opts into only the fields it exercises.
+    owners: [],
+    lastActivityAt: null,
+    branchStatus: null,
+    createdAt: null,
     ...over,
   };
 }
 
-const WORKTREES: WorktreeHostEntry[] = [
+const WORKTREES: WorktreeHostEntryV11[] = [
   entry({
     worktreePath: "/wt/clean",
     branch: "feat-clean",
@@ -134,7 +143,8 @@ const WORKTREES: WorktreeHostEntry[] = [
 function renderList(args: {
   readonly hostId: string;
   readonly queryClient: QueryClient;
-  readonly worktrees: readonly WorktreeHostEntry[];
+  readonly worktrees: readonly WorktreeHostEntryV11[];
+  readonly taskTitlesByEpicId?: ReadonlyMap<string, string>;
 }) {
   const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
     <QueryClientProvider client={args.queryClient}>
@@ -147,6 +157,7 @@ function renderList(args: {
         openStreamTransport={() => stubOpenStreamTransport()}
         hostId={args.hostId}
         worktrees={args.worktrees}
+        taskTitlesByEpicId={args.taskTitlesByEpicId ?? new Map()}
         toolbarProps={testToolbarProps()}
       />
     </Wrapper>,
@@ -681,6 +692,7 @@ describe("WorktreesList delete flow", () => {
             openStreamTransport={() => stubOpenStreamTransport()}
             hostId="host-b"
             worktrees={WORKTREES}
+            taskTitlesByEpicId={new Map()}
             toolbarProps={testToolbarProps()}
           />
         </TooltipProvider>
@@ -861,6 +873,7 @@ describe("WorktreesList delete flow", () => {
             worktrees={WORKTREES.filter(
               (worktree) => worktree.worktreePath !== "/wt/clean",
             )}
+            taskTitlesByEpicId={new Map()}
             toolbarProps={testToolbarProps()}
           />
         </TooltipProvider>
@@ -940,5 +953,168 @@ describe("WorktreesList delete flow", () => {
     fireEvent.click(screen.getByTestId("worktree-delete-progress-dismiss"));
     expect(screen.queryByText("1/2 deleted, 1 failed")).toBeNull();
     expect(screen.queryByTestId("worktree-delete-progress-dismiss")).toBeNull();
+  });
+});
+
+describe("WorktreesList v1.1 signals", () => {
+  afterEach(() => {
+    cleanup();
+    __resetWorktreeDeleteRunForTests();
+  });
+
+  it("renders a Task chip per owning epic, resolving titles from the cache", () => {
+    renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees: [
+        entry({
+          worktreePath: "/wt/owned",
+          branch: "feat-owned",
+          owners: [
+            {
+              epicId: "epic-1",
+              ownerKind: "chat",
+              ownerId: "chat-1",
+              updatedAt: 10,
+            },
+            {
+              epicId: "epic-1",
+              ownerKind: "terminal-agent",
+              ownerId: "agent-1",
+              updatedAt: 20,
+            },
+            {
+              epicId: "epic-2",
+              ownerKind: "chat",
+              ownerId: "chat-2",
+              updatedAt: 30,
+            },
+          ],
+        }),
+      ],
+      taskTitlesByEpicId: new Map([["epic-1", "Ship the audit"]]),
+    });
+
+    // Two distinct epics -> two chips; the duplicate epic-1 owner collapses.
+    screen.getByText("Ship the audit");
+    // epic-2 has no cached title -> graceful "Unknown Task" chip, not a crash.
+    screen.getByText("Unknown Task");
+  });
+
+  it("labels a worktree with no owners as not used by any Task", () => {
+    renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees: [entry({ worktreePath: "/wt/free", branch: "feat-free" })],
+    });
+    screen.getByText("Not used by any Task");
+  });
+
+  it("surfaces merged and ahead/behind branch-status hints", () => {
+    renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees: [
+        entry({
+          worktreePath: "/wt/merged",
+          branch: "feat-merged",
+          branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
+        }),
+        entry({
+          worktreePath: "/wt/diverged",
+          branch: "feat-diverged",
+          branchStatus: { ahead: 2, behind: 3, mergedIntoDefault: false },
+        }),
+      ],
+    });
+    screen.getByText("Merged");
+    screen.getByText("2 ahead, 3 behind");
+  });
+
+  it("filters rows by branch, path, repo label, and resolved Task title", () => {
+    renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees: [
+        entry({
+          repoLabel: "acme/app",
+          worktreePath: "/wt/alpha",
+          branch: "feat-alpha",
+          owners: [
+            {
+              epicId: "epic-1",
+              ownerKind: "chat",
+              ownerId: "chat-1",
+              updatedAt: 1,
+            },
+          ],
+        }),
+        entry({
+          repoLabel: "acme/app",
+          worktreePath: "/wt/beta",
+          branch: "feat-beta",
+        }),
+      ],
+      taskTitlesByEpicId: new Map([["epic-1", "Payments revamp"]]),
+    });
+
+    const search = screen.getByRole("searchbox", { name: "Search worktrees" });
+
+    // Match on the resolved Task title -> only the alpha row survives.
+    fireEvent.change(search, { target: { value: "payments" } });
+    screen.getByRole("button", { name: "Delete worktree feat-alpha" });
+    expect(
+      screen.queryByRole("button", { name: "Delete worktree feat-beta" }),
+    ).toBeNull();
+
+    // Match on the branch name -> only the beta row survives.
+    fireEvent.change(search, { target: { value: "feat-beta" } });
+    screen.getByRole("button", { name: "Delete worktree feat-beta" });
+    expect(
+      screen.queryByRole("button", { name: "Delete worktree feat-alpha" }),
+    ).toBeNull();
+
+    // A query that matches nothing shows the empty-search message.
+    fireEvent.change(search, { target: { value: "no-such-thing" } });
+    screen.getByText("No worktrees match your search.");
+  });
+
+  it("reorders rows stalest-first within a repo when the sort is toggled", () => {
+    renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees: [
+        entry({
+          worktreePath: "/wt/recent",
+          branch: "feat-recent",
+          lastActivityAt: 2_000,
+        }),
+        entry({
+          worktreePath: "/wt/stale",
+          branch: "feat-stale",
+          lastActivityAt: 1_000,
+        }),
+      ],
+    });
+
+    const deleteLabel = (element: Element): string | null =>
+      element.getAttribute("aria-label");
+    const orderBefore = screen
+      .getAllByRole("button", { name: /^Delete worktree/ })
+      .map(deleteLabel);
+    expect(orderBefore).toEqual([
+      "Delete worktree feat-recent",
+      "Delete worktree feat-stale",
+    ]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Stalest first" }));
+
+    const orderAfter = screen
+      .getAllByRole("button", { name: /^Delete worktree/ })
+      .map(deleteLabel);
+    expect(orderAfter).toEqual([
+      "Delete worktree feat-stale",
+      "Delete worktree feat-recent",
+    ]);
   });
 });
