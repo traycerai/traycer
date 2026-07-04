@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   ChatQueuedItem,
   ChatRunSettings,
@@ -10,7 +10,17 @@ import {
   type SteerSettingsDecision,
 } from "@/lib/chats/decide-steer-settings";
 import type { ChatActions } from "@/hooks/chats/use-chat-actions";
+import {
+  EMPTY_COMPOSER_DRAFT,
+  useComposerDraftStore,
+} from "@/stores/composer/composer-draft-store";
 import type { ChatTileUiAction } from "./chat-tile-session-state";
+
+interface QueuedEditDraftSnapshot {
+  readonly hadDraft: boolean;
+  readonly content: JsonContent;
+  readonly selection: { readonly from: number; readonly to: number } | null;
+}
 
 export interface ChatQueueActionsInput {
   readonly chatActions: ChatActions;
@@ -19,8 +29,9 @@ export interface ChatQueueActionsInput {
   readonly replaceDraftContent: (
     nodeId: string,
     content: JsonContent,
-    context: null,
+    selection: { readonly from: number; readonly to: number } | null,
   ) => void;
+  readonly clearDraftContent: (nodeId: string) => void;
   readonly currentComposerSettings: ChatRunSettings;
   readonly currentEpicId: string;
   readonly editingQueueItemId: string | null;
@@ -58,8 +69,8 @@ export interface ChatQueueActionsResult {
  * callback lives here because it drives `restampQueuedItemSettings` and the
  * live permission-mode update (both queue-scoped side effects).
  *
- * All callbacks preserve the same `useCallback` dependency structure as the
- * original view-model so memoized children are not disturbed.
+ * Callbacks stay memoized around stable queue/action inputs so memoized
+ * children are not disturbed during streaming updates.
  */
 export function useChatQueueActions(
   input: ChatQueueActionsInput,
@@ -69,6 +80,7 @@ export function useChatQueueActions(
     handle,
     nodeId,
     replaceDraftContent,
+    clearDraftContent,
     currentComposerSettings,
     currentEpicId,
     editingQueueItemId,
@@ -86,6 +98,20 @@ export function useChatQueueActions(
       { readonly kind: "interrupt_restart" }
     >;
   } | null>(null);
+  const queuedEditRestoreDraftRef = useRef<QueuedEditDraftSnapshot | null>(
+    null,
+  );
+
+  const restoreQueuedEditDraft = useCallback((): void => {
+    const snapshot = queuedEditRestoreDraftRef.current;
+    queuedEditRestoreDraftRef.current = null;
+    if (snapshot === null) return;
+    if (!snapshot.hadDraft) {
+      clearDraftContent(nodeId);
+      return;
+    }
+    replaceDraftContent(nodeId, snapshot.content, snapshot.selection);
+  }, [clearDraftContent, nodeId, replaceDraftContent]);
 
   const editQueuedItem = useCallback(
     (item: ChatQueuedItem): void => {
@@ -96,6 +122,14 @@ export function useChatQueueActions(
         dispatchUi({ type: "setEditingQueueItemId", editingQueueItemId: null });
         return;
       }
+      if (queuedEditRestoreDraftRef.current === null) {
+        const draft = useComposerDraftStore.getState().drafts[nodeId];
+        queuedEditRestoreDraftRef.current = {
+          hadDraft: draft !== undefined,
+          content: draft?.content ?? EMPTY_COMPOSER_DRAFT.content,
+          selection: draft?.selection ?? null,
+        };
+      }
       replaceDraftContent(nodeId, item.message.content, null);
       dispatchUi({
         type: "setEditingQueueItemId",
@@ -105,15 +139,31 @@ export function useChatQueueActions(
     [chatActions, dispatchUi, nodeId, replaceDraftContent],
   );
 
+  useEffect(() => {
+    if (editingQueueItemId === null) {
+      queuedEditRestoreDraftRef.current = null;
+      return;
+    }
+    if (activeEditingQueueItemId !== null) return;
+    restoreQueuedEditDraft();
+    dispatchUi({ type: "setEditingQueueItemId", editingQueueItemId: null });
+  }, [
+    activeEditingQueueItemId,
+    dispatchUi,
+    editingQueueItemId,
+    restoreQueuedEditDraft,
+  ]);
+
   const cancelQueuedItem = useCallback(
     (item: ChatQueuedItem): void => {
       const actionId = chatActions.queueCancel(item.queueItemId);
       if (actionId === null) return;
       if (editingQueueItemId === item.queueItemId) {
+        restoreQueuedEditDraft();
         dispatchUi({ type: "setEditingQueueItemId", editingQueueItemId: null });
       }
     },
-    [chatActions, dispatchUi, editingQueueItemId],
+    [chatActions, dispatchUi, editingQueueItemId, restoreQueuedEditDraft],
   );
 
   const abortSteerQueuedItem = useCallback(
@@ -127,8 +177,9 @@ export function useChatQueueActions(
   );
 
   const cancelQueueEditMode = useCallback((): void => {
+    restoreQueuedEditDraft();
     dispatchUi({ type: "setEditingQueueItemId", editingQueueItemId: null });
-  }, [dispatchUi]);
+  }, [dispatchUi, restoreQueuedEditDraft]);
 
   const reorderQueuedItem = useCallback(
     (item: ChatQueuedItem, beforeQueueItemId: string | null): void => {
