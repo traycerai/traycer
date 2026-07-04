@@ -6,6 +6,7 @@ import {
   screen,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { LazyMotion, domAnimation } from "motion/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import { DesktopZoomController } from "@/components/layout/bridges/desktop-zoom-controller";
@@ -158,6 +159,9 @@ describe("<DesktopZoomController />", () => {
     expect(zoomIsland.contains(zoomOutButton)).toBe(true);
     expect(zoomIsland.contains(resetButton)).toBe(false);
     expect(percent.textContent).toBe("125%");
+    expect(resetButton.className).toContain("bg-popover");
+    expect(resetButton.className).toContain("dark:bg-popover");
+    expect(resetButton.className).not.toMatch(/dark:bg-input/);
 
     fireEvent.click(zoomOutButton);
     fireEvent.click(zoomInButton);
@@ -177,7 +181,11 @@ describe("<DesktopZoomController />", () => {
     act(() => {
       vi.advanceTimersByTime(2_000);
     });
-    expect(screen.queryByTestId("desktop-zoom-indicator")).toBeNull();
+    const exitingIndicator = screen.getByTestId("desktop-zoom-indicator");
+    expect(exitingIndicator.getAttribute("style")).toContain("opacity: 0");
+    expect(exitingIndicator.getAttribute("style")).toContain(
+      "translateY(8px) scale(0.98)",
+    );
   });
 });
 
@@ -193,7 +201,9 @@ function createQueryClient(): QueryClient {
 function renderWithQueryClient(children: ReactNode): void {
   render(
     <QueryClientProvider client={queryClient}>
-      <TooltipProvider>{children}</TooltipProvider>
+      <TooltipProvider>
+        <LazyMotion features={domAnimation}>{children}</LazyMotion>
+      </TooltipProvider>
     </QueryClientProvider>,
   );
 }
