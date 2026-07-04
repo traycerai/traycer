@@ -22,7 +22,7 @@ describe("composer image attachment flow", () => {
     editor.commands.setContent(paragraphText("hello"));
     editor.commands.setTextSelection(1);
 
-    insertImageAttachmentsCommand(editor, [imageAttrs("img-1")]);
+    insertImageAttachmentsCommand(editor, [imageAttrs("img-1")], false);
 
     expect(paragraphChildTypes(editor)).toEqual(["imageAttachment", "text"]);
     expect(imageIds(editor)).toEqual(["img-1"]);
@@ -33,7 +33,7 @@ describe("composer image attachment flow", () => {
     editor.commands.setContent(paragraphText("hello"));
     editor.commands.setTextSelection(editor.state.doc.content.size - 1);
 
-    insertImageAttachmentsCommand(editor, [imageAttrs("img-1")]);
+    insertImageAttachmentsCommand(editor, [imageAttrs("img-1")], false);
 
     expect(paragraphChildTypes(editor)).toEqual(["text", "imageAttachment"]);
     expect(imageIds(editor)).toEqual(["img-1"]);
@@ -57,7 +57,7 @@ describe("composer image attachment flow", () => {
     if (slash === null) throw new Error("expected slash command");
     editor.commands.setTextSelection(slash.pos + slash.size);
 
-    insertImageAttachmentsCommand(editor, [imageAttrs("img-1")]);
+    insertImageAttachmentsCommand(editor, [imageAttrs("img-1")], false);
 
     expect(paragraphChildTypes(editor)).toEqual([
       "slashCommand",
@@ -71,7 +71,7 @@ describe("composer image attachment flow", () => {
     editor.commands.setContent(paragraphText("abcdef"));
     editor.commands.setTextSelection({ from: 2, to: 5 });
 
-    insertImageAttachmentsCommand(editor, [imageAttrs("img-1")]);
+    insertImageAttachmentsCommand(editor, [imageAttrs("img-1")], false);
 
     expect(editor.state.doc.textContent).toBe("abcdef");
     expect(imageIds(editor)).toEqual(["img-1"]);
@@ -85,11 +85,11 @@ describe("composer image attachment flow", () => {
   it("preserves insertion order for multiple images", () => {
     const editor = makeEditor();
 
-    insertImageAttachmentsCommand(editor, [
-      imageAttrs("img-1"),
-      imageAttrs("img-2"),
-      imageAttrs("img-3"),
-    ]);
+    insertImageAttachmentsCommand(
+      editor,
+      [imageAttrs("img-1"), imageAttrs("img-2"), imageAttrs("img-3")],
+      false,
+    );
 
     expect(imageIds(editor)).toEqual(["img-1", "img-2", "img-3"]);
   });
@@ -97,7 +97,7 @@ describe("composer image attachment flow", () => {
   it("keeps a pasted image as a positional inline atom when text is typed after it", () => {
     const editor = makeEditor();
 
-    insertImageAttachmentsCommand(editor, [imageAttrs("img-1")]);
+    insertImageAttachmentsCommand(editor, [imageAttrs("img-1")], false);
     editor.commands.insertContent("hello");
 
     expect(editor.getJSON()).toEqual({
@@ -123,13 +123,59 @@ describe("composer image attachment flow", () => {
     ).not.toBeNull();
   });
 
+  it("adds a stable caret boundary after a terminal image when requested", () => {
+    const editor = makeEditor();
+
+    insertImageAttachmentsCommand(editor, [imageAttrs("img-1")], true);
+
+    expect(paragraphInlineSequence(editor)).toEqual(["image:img-1", "text: "]);
+    expect(editor.state.selection.from).toBe(2);
+    expect(editor.state.selection.$from.nodeAfter?.text).toBe(" ");
+  });
+
+  it("keeps typed text before the terminal image caret boundary", () => {
+    const editor = makeEditor();
+
+    insertImageAttachmentsCommand(editor, [imageAttrs("img-1")], true);
+    editor.commands.insertContent("hello");
+
+    expect(paragraphInlineSequence(editor)).toEqual([
+      "image:img-1",
+      "text:hello ",
+    ]);
+    expect(editor.state.selection.from).toBe(7);
+    expect(editor.state.selection.$from.nodeAfter?.text).toBe(" ");
+  });
+
+  it("does not add a caret boundary when the inserted image is followed by content", () => {
+    const editor = makeEditor();
+    editor.commands.setContent(paragraphText("hello"));
+    editor.commands.setTextSelection(1);
+
+    insertImageAttachmentsCommand(editor, [imageAttrs("img-1")], true);
+
+    expect(paragraphInlineSequence(editor)).toEqual([
+      "image:img-1",
+      "text:hello",
+    ]);
+  });
+
+  it("undoes a terminal image insertion and its caret boundary together", () => {
+    const editor = makeEditor();
+
+    insertImageAttachmentsCommand(editor, [imageAttrs("img-1")], true);
+    editor.commands.undo();
+
+    expect(paragraphInlineSequence(editor)).toEqual([]);
+  });
+
   it("removes the matching inline image atom by id", () => {
     const editor = makeEditor();
-    insertImageAttachmentsCommand(editor, [
-      imageAttrs("img-1"),
-      imageAttrs("img-2"),
-      imageAttrs("img-3"),
-    ]);
+    insertImageAttachmentsCommand(
+      editor,
+      [imageAttrs("img-1"), imageAttrs("img-2"), imageAttrs("img-3")],
+      false,
+    );
 
     editor.commands.removeImageAttachmentById("img-2");
 
@@ -185,6 +231,24 @@ function paragraphChildTypes(editor: Editor): string[] {
     types.push(node.type.name);
   });
   return types;
+}
+
+function paragraphInlineSequence(editor: Editor): string[] {
+  const first = editor.state.doc.firstChild;
+  if (first === null) return [];
+  const sequence: string[] = [];
+  first.forEach((node) => {
+    if (node.type.name === "imageAttachment") {
+      sequence.push(`image:${node.attrs.id}`);
+      return;
+    }
+    if (node.isText) {
+      sequence.push(`text:${node.text ?? ""}`);
+      return;
+    }
+    sequence.push(node.type.name);
+  });
+  return sequence;
 }
 
 function imageIds(editor: Editor): string[] {

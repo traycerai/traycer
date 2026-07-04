@@ -67,6 +67,7 @@ export interface ComposerPromptEditorProps {
   readonly pickerStore: ComposerPickerStore;
   readonly placeholder: string;
   readonly editorClassName: string | undefined;
+  readonly stabilizeImageAttachmentCaret: boolean;
   readonly isActive: boolean;
   readonly disabled: boolean;
   readonly slashProviderId: GuiHarnessId;
@@ -91,6 +92,7 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
     pickerStore,
     placeholder,
     editorClassName,
+    stabilizeImageAttachmentCaret,
     isActive,
     disabled,
     slashProviderId,
@@ -276,9 +278,13 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
   const insertImageAttachments = useCallback(
     (attrs: ReadonlyArray<ImageAttachmentAttrs>) => {
       if (editor === null) return;
-      insertImageAttachmentsCommand(editor, attrs);
+      insertImageAttachmentsCommand(
+        editor,
+        attrs,
+        stabilizeImageAttachmentCaret,
+      );
     },
-    [editor],
+    [editor, stabilizeImageAttachmentCaret],
   );
 
   const removeImageAttachmentById = useCallback(

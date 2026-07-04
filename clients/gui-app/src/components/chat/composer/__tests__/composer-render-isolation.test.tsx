@@ -26,6 +26,7 @@ interface HarnessProps {
     readonly from: number;
     readonly to: number;
   } | null;
+  readonly stabilizeImageAttachmentCaret: boolean;
 }
 
 function Harness({
@@ -33,6 +34,7 @@ function Harness({
   handleRef,
   initialContent,
   initialSelection,
+  stabilizeImageAttachmentCaret,
 }: HarnessProps) {
   const [pickerStore] = useState<ComposerPickerStore>(() =>
     createComposerPickerStore(),
@@ -52,6 +54,7 @@ function Harness({
         isActive={false}
         disabled={false}
         slashProviderId="claude"
+        stabilizeImageAttachmentCaret={stabilizeImageAttachmentCaret}
         onSnapshot={() => undefined}
         onSubmit={() => undefined}
         onPaste={() => undefined}
@@ -80,6 +83,7 @@ describe("ComposerPromptEditor render isolation", () => {
         handleRef={handleRef}
         initialContent={emptyContent()}
         initialSelection={null}
+        stabilizeImageAttachmentCaret={false}
       />,
     );
     await act(async () => {
@@ -112,6 +116,7 @@ describe("ComposerPromptEditor render isolation", () => {
         handleRef={handleRef}
         initialContent={legacyImageContent("abcdef")}
         initialSelection={{ from: 7, to: 7 }}
+        stabilizeImageAttachmentCaret={false}
       />,
     );
     await act(async () => {
@@ -143,6 +148,7 @@ describe("ComposerPromptEditor render isolation", () => {
         handleRef={handleRef}
         initialContent={emptyContent()}
         initialSelection={null}
+        stabilizeImageAttachmentCaret={false}
       />,
     );
     await act(async () => {
@@ -171,6 +177,37 @@ describe("ComposerPromptEditor render isolation", () => {
     );
   });
 
+  it("stabilizes a terminal image atom with real inline text content when requested", async () => {
+    const handleRef: { current: ComposerPromptEditorHandle | null } = {
+      current: null,
+    };
+    render(
+      <Harness
+        profileRender={NOOP_PROFILE}
+        handleRef={handleRef}
+        initialContent={emptyContent()}
+        initialSelection={null}
+        stabilizeImageAttachmentCaret
+      />,
+    );
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    const handle = handleRef.current;
+    expect(handle).not.toBeNull();
+    if (handle === null) throw new Error("editor handle missing");
+    act(() => {
+      handle.insertImageAttachments([imageAttrs("img-1")]);
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(document.querySelector("br.ProseMirror-trailingBreak")).toBeNull();
+    expect(inlineSequence(handle.getJSON())).toEqual(["image:img-1", "text: "]);
+  });
+
   it("renumbers visible image atom chips from document order", async () => {
     const handleRef: { current: ComposerPromptEditorHandle | null } = {
       current: null,
@@ -181,6 +218,7 @@ describe("ComposerPromptEditor render isolation", () => {
         handleRef={handleRef}
         initialContent={duplicateImageContent()}
         initialSelection={null}
+        stabilizeImageAttachmentCaret={false}
       />,
     );
     await act(async () => {
@@ -204,6 +242,7 @@ describe("ComposerPromptEditor render isolation", () => {
         handleRef={handleRef}
         initialContent={singleImageContent()}
         initialSelection={{ from: 1, to: 1 }}
+        stabilizeImageAttachmentCaret={false}
       />,
     );
     await act(async () => {
@@ -233,6 +272,7 @@ describe("ComposerPromptEditor render isolation", () => {
           handleRef={{ current: null }}
           initialContent={mixedChipContent()}
           initialSelection={null}
+          stabilizeImageAttachmentCaret={false}
         />
       </TooltipProvider>,
     );

@@ -334,7 +334,7 @@ describe("composer rich clipboard paste", () => {
 
   it("converts a slash command paste when images appear before it", () => {
     const editor = makeEditor(KNOWN_SLASH_NAMES);
-    insertImageAttachmentsCommand(editor, [imageAttrs("img-1")]);
+    insertImageAttachmentsCommand(editor, [imageAttrs("img-1")], false);
 
     pastePlainText(editor, "/plan review the diff");
 

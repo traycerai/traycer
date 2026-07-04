@@ -101,6 +101,7 @@ export function ComposerBody({
                 disabled={false}
                 placeholder={COMPOSER_PLACEHOLDER}
                 editorClassName={editorClassName}
+                stabilizeImageAttachmentCaret={false}
                 onSnapshot={onSnapshot}
                 onSubmit={onSubmit}
                 onPaste={paste.onPaste}

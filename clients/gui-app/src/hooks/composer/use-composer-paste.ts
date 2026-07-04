@@ -209,6 +209,7 @@ export function useComposerPaste(editorRef: {
 export function insertImageAttachmentsCommand(
   editor: Editor,
   attrs: ReadonlyArray<ImageAttachmentAttrs>,
+  stabilizeCaretBoundary: boolean,
 ): void {
   if (attrs.length === 0) return;
   let chain = editor.chain();
@@ -216,4 +217,24 @@ export function insertImageAttachmentsCommand(
     chain = chain.insertImageAttachment(attr);
   }
   chain.run();
+  if (stabilizeCaretBoundary) {
+    stabilizeTerminalImageAttachmentCaret(editor);
+  }
+}
+
+function stabilizeTerminalImageAttachmentCaret(editor: Editor): void {
+  const { selection } = editor.state;
+  if (!selection.empty) return;
+  const { $from } = selection;
+  if (!$from.parent.inlineContent) return;
+  const nodeBefore = $from.nodeBefore;
+  if (nodeBefore?.type.name !== "imageAttachment") return;
+  if ($from.nodeAfter !== null) return;
+
+  const boundaryPos = selection.from;
+  editor
+    .chain()
+    .insertContent({ type: "text", text: " " })
+    .setTextSelection(boundaryPos)
+    .run();
 }
