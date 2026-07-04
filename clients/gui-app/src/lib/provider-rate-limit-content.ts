@@ -110,9 +110,15 @@ export function resolvePopoverProviderRateLimitState(
 ): PopoverProviderRateLimitState {
   const snapshot = props.providerRateLimits ?? null;
   if (snapshot === null) {
-    // Nothing usable yet: a failed first fetch is an error, otherwise it's
-    // still a cold load in flight (skeleton).
-    return props.isError ? { kind: "error" } : { kind: "cold" };
+    // Nothing usable yet. `isPending` alone stays `true` forever for a
+    // disabled query (e.g. a host that goes unreachable while this tab is
+    // open, mirroring `resolveProviderRateLimitViewState`'s same fix) - only
+    // treat it as a cold load in flight (skeleton) when a fetch is actually
+    // happening; a failed fetch, or a pending-but-not-fetching query that will
+    // never resolve on its own, both fall through to the retryable error copy.
+    return props.isPending && props.isFetching
+      ? { kind: "cold" }
+      : { kind: "error" };
   }
   if (!snapshot.available) {
     return { kind: "unavailable", reason: snapshot.reason };

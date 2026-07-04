@@ -212,11 +212,56 @@ function CreditBreakdownView({
 }
 
 /**
- * A credit/balance meter row - matching the Codex/Claude window rows exactly:
- * "{label} · {percent}% used" over a muted amount line, with the same
- * severity-colored side bar from `window-severity.ts`, so Traycer's own bars
- * read identically to the other providers' (feedback: "bar similar to
- * claude/codex").
+ * The shared meter-row shell every rate-limit/credit row in the app renders
+ * through: "{label} · {percent}% used" over a `subtext` slot (a reset line for
+ * windows, a plain amount line for credit buckets), with a severity-colored
+ * side bar from `window-severity.ts`. Centralizing this is what keeps the
+ * Codex/Claude windows (`RateLimitWindowRow` in `provider-rate-limit-views.tsx`)
+ * and Traycer's own bars (`CreditMeterRow` below) from drifting apart visually
+ * - each computes its own `usedPercent` and composes its own `subtext`, but
+ * both render through this one layout.
+ *
+ * The track carries a `border-border` outline so it stays visible even at 0%
+ * fill: several dark theme presets set `--muted` equal to `--popover`, so a
+ * borderless `bg-muted` empty track would be the same color as the popover
+ * background and read as "nothing there".
+ */
+export function MeterRow({
+  label,
+  usedPercent,
+  subtext,
+}: {
+  readonly label: string;
+  readonly usedPercent: number;
+  readonly subtext: ReactNode;
+}): ReactNode {
+  const severity = rateLimitWindowSeverity(usedPercent);
+  const fillPercent = rateLimitWindowFillPercent(usedPercent);
+  return (
+    <div className="flex items-center gap-2">
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <span className="text-ui-sm text-foreground">
+          {label} · {Math.round(Math.min(100, Math.max(0, usedPercent)))}% used
+        </span>
+        {subtext}
+      </div>
+      <div className="h-1.5 w-24 shrink-0 overflow-hidden rounded-full border border-border bg-muted">
+        <div
+          className={cn(
+            "h-full rounded-full transition-all",
+            rateLimitWindowSeverityBarClassName(severity),
+          )}
+          style={{ width: `${fillPercent}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * A credit/balance meter row - matching the Codex/Claude window rows exactly
+ * via the shared `MeterRow` shell, so Traycer's own bars read identically to
+ * the other providers' (feedback: "bar similar to claude/codex").
  */
 function CreditMeterRow({
   label,
@@ -230,28 +275,16 @@ function CreditMeterRow({
   readonly formatValue: (value: number) => string;
 }): ReactNode {
   const usedPercent = total > 0 ? (consumed / total) * 100 : 0;
-  const severity = rateLimitWindowSeverity(usedPercent);
-  const fillPercent = rateLimitWindowFillPercent(usedPercent);
   return (
-    <div className="flex items-center gap-2">
-      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className="text-ui-sm text-foreground">
-          {label} · {Math.round(Math.min(100, Math.max(0, usedPercent)))}% used
-        </span>
+    <MeterRow
+      label={label}
+      usedPercent={usedPercent}
+      subtext={
         <span className="text-ui-xs text-muted-foreground/70">
           {formatValue(consumed)} / {formatValue(total)}
         </span>
-      </div>
-      <div className="h-1.5 w-24 shrink-0 overflow-hidden rounded-full border border-border bg-muted">
-        <div
-          className={cn(
-            "h-full rounded-full transition-all",
-            rateLimitWindowSeverityBarClassName(severity),
-          )}
-          style={{ width: `${fillPercent}%` }}
-        />
-      </div>
-    </div>
+      }
+    />
   );
 }
 
@@ -295,7 +328,7 @@ export function UsageBar({
           {formatValue(consumed)} / {formatValue(total)}
         </span>
       </div>
-      <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+      <div className="h-1.5 w-full overflow-hidden rounded-full border border-border bg-muted">
         <div
           className={cn(
             "h-full rounded-full transition-all",

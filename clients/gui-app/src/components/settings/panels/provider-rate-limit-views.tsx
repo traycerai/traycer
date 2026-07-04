@@ -12,6 +12,7 @@ import type {
 import { Badge } from "@/components/ui/badge";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import {
+  MeterRow,
   UsageBar,
   type UsageBarTone,
 } from "@/components/settings/panels/traycer-subscription-views";
@@ -21,11 +22,6 @@ import {
   resolveProviderRateLimitViewState,
 } from "@/lib/provider-rate-limit-content";
 import { formatResetDateTime, useResetCountdown } from "@/lib/relative-time";
-import {
-  rateLimitWindowFillPercent,
-  rateLimitWindowSeverity,
-  rateLimitWindowSeverityBarClassName,
-} from "@/lib/rate-limits/window-severity";
 import { cn } from "@/lib/utils";
 
 /**
@@ -202,29 +198,15 @@ function ResetLine({
 }
 
 /**
- * A single window row - a compact two-row cell with the bar as a side element
- * (the Claude "Plan usage limits" layout the popover is modeled on), shared
- * identically by the Settings card and both popover surfaces so they can never
- * visually drift. Row 1 is the label folded with "% used" in normal (not bold)
- * weight; row 2 is just the reset line, muted and lower-opacity. The bar sits
- * to the right, a fixed wide meter vertically centered against the two stacked
- * rows, its fill+color tracking "% used" via `rateLimitWindowSeverity` (the
- * exact scale + colors the header glyph uses) - always computed from the
- * *real* `usedPercent`, never the `rateLimitWindowFillPercent` value that
- * force-fills the 0%-used green bar.
- *
- * The track carries a `border-border` outline so it stays visible even at 0%
- * fill: several dark theme presets set `--muted` equal to `--popover`, so a
- * borderless `bg-muted` empty track would be the same color as the popover
- * background and read as "nothing there".
- *
- * Reset uses a relative-for-short / exact-for-weekly split (via `weekly`): a
- * short window shows a relative countdown ("Resets in 4h 7m"), a weekly-scale
- * one an absolute date/time ("Resets Jul 11, 2026 (Tue) 3:35 AM") since
- * "Resets in 3d" is too coarse to act on. Choosing the leaf
- * (`RelativeResetLine`/`ExactResetLine`) by `weekly` keeps both leaves' hook
- * calls unconditional. Renders nothing for a `null` window so call sites can
- * pass optional windows directly.
+ * A single window row, shared identically by the Settings card and both
+ * popover surfaces so they can never visually drift - delegates to the
+ * shared `MeterRow` shell (`traycer-subscription-views.tsx`), passing the
+ * reset line as its `subtext` slot: a relative countdown for a short window
+ * ("Resets in 4h 7m"), an absolute date/time for a weekly-scale one ("Resets
+ * Jul 11, 2026 (Tue) 3:35 AM") since "Resets in 3d" is too coarse to act on.
+ * Choosing the leaf (`RelativeResetLine`/`ExactResetLine`) by `weekly` keeps
+ * both leaves' hook calls unconditional. Renders nothing for a `null` window
+ * so call sites can pass optional windows directly.
  */
 function RateLimitWindowRow({
   label,
@@ -236,33 +218,18 @@ function RateLimitWindowRow({
   readonly weekly: boolean;
 }): ReactNode {
   if (window === null) return null;
-  const usedPercent = Math.round(
-    Math.min(100, Math.max(0, window.usedPercent)),
-  );
-  const severity = rateLimitWindowSeverity(window.usedPercent);
-  const fillPercent = rateLimitWindowFillPercent(window.usedPercent);
   return (
-    <div className="flex items-center gap-2">
-      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className="text-ui-sm text-foreground">
-          {label} · {usedPercent}% used
-        </span>
+    <MeterRow
+      label={label}
+      usedPercent={window.usedPercent}
+      subtext={
         <ResetLine
           resetsAt={window.resetsAt}
           tone="text-muted-foreground/70"
           weekly={weekly}
         />
-      </div>
-      <div className="h-1.5 w-24 shrink-0 overflow-hidden rounded-full border border-border bg-muted">
-        <div
-          className={cn(
-            "h-full rounded-full transition-all",
-            rateLimitWindowSeverityBarClassName(severity),
-          )}
-          style={{ width: `${fillPercent}%` }}
-        />
-      </div>
-    </div>
+      }
+    />
   );
 }
 

@@ -94,11 +94,11 @@ export function RateLimitQueueProvider(): null {
       // Defensive: the timer is cleared while hidden, but guard the body too so
       // a tick that races a `visibilitychange` can't spawn a subprocess.
       if (document.visibilityState === "hidden") return;
-      for (const providerId of ephemeralProviderIdsRef.current) {
+      ephemeralProviderIdsRef.current.forEach((providerId) => {
         void enqueueRateLimitFetch(providerId, DEFAULT_ACCOUNT_CONTEXT, {
           force: false,
         });
-      }
+      });
     };
     const start = (): void => {
       if (intervalHandle !== null) return;

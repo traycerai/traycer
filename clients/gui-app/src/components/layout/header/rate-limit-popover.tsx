@@ -406,24 +406,28 @@ function RateLimitRefreshAllButton({
   // gets its `() => Promise<void>` contract without gating the spinner on the
   // fetches themselves - the queue's `draining` state (below) owns that.
   const refreshAll = (): Promise<void> => {
-    for (const provider of providers) {
-      if (provider.lane !== "httpFetch") continue;
-      void queryClient.invalidateQueries({
-        queryKey: queryKeys.hostMethod<
-          HostRpcRegistry,
-          "host.getRateLimitUsage"
-        >(hostId, "host.getRateLimitUsage", {
-          accountContext: DEFAULT_ACCOUNT_CONTEXT,
-          providerId: provider.providerId,
-        }),
+    providers
+      .filter((provider) => provider.lane === "httpFetch")
+      .forEach((provider) => {
+        void queryClient.invalidateQueries({
+          queryKey: queryKeys.hostMethod<
+            HostRpcRegistry,
+            "host.getRateLimitUsage"
+          >(hostId, "host.getRateLimitUsage", {
+            accountContext: DEFAULT_ACCOUNT_CONTEXT,
+            providerId: provider.providerId,
+          }),
+        });
       });
-    }
-    for (const provider of providers) {
-      if (provider.lane !== "ephemeralProcess") continue;
-      void enqueueRateLimitFetch(provider.providerId, DEFAULT_ACCOUNT_CONTEXT, {
-        force: true,
+    providers
+      .filter((provider) => provider.lane === "ephemeralProcess")
+      .forEach((provider) => {
+        void enqueueRateLimitFetch(
+          provider.providerId,
+          DEFAULT_ACCOUNT_CONTEXT,
+          { force: true },
+        );
       });
-    }
     return Promise.resolve();
   };
 

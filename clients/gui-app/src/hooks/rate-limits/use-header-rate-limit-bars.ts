@@ -96,6 +96,14 @@ function toBar(
   };
 }
 
+/** Both slots or neither - the atomic "fully populated or placeholder" pair. */
+function buildPair(
+  first: HeaderRateLimitBar | null,
+  second: HeaderRateLimitBar | null,
+): ReadonlyArray<HeaderRateLimitBar> {
+  return first !== null && second !== null ? [first, second] : [];
+}
+
 /**
  * The glyph's two bars, or `[]` when it can't populate *both* slots:
  *
@@ -117,7 +125,7 @@ function selectGlyphBars(
 ): ReadonlyArray<HeaderRateLimitBar> {
   if (readings.length >= 2) {
     const [first, second] = readings;
-    const bars = [
+    return buildPair(
       toBar(
         first.providerId,
         "5h",
@@ -130,12 +138,11 @@ function selectGlyphBars(
         fiveHourWindow(second.rateLimits),
         second.degraded,
       ),
-    ].filter((bar): bar is HeaderRateLimitBar => bar !== null);
-    return bars.length === 2 ? bars : [];
+    );
   }
   if (readings.length === 1) {
     const [only] = readings;
-    const bars = [
+    return buildPair(
       toBar(
         only.providerId,
         "5h",
@@ -148,8 +155,7 @@ function selectGlyphBars(
         weeklyWindow(only.rateLimits),
         only.degraded,
       ),
-    ].filter((bar): bar is HeaderRateLimitBar => bar !== null);
-    return bars.length === 2 ? bars : [];
+    );
   }
   return [];
 }
@@ -183,16 +189,35 @@ export function useHeaderRateLimitBars(): ReadonlyArray<HeaderRateLimitBar> {
     configuredIds.has(id),
   );
 
+  // `useHostQueries` applies one shared `options` object to every request in
+  // the batch, so it's only safe to reuse a single glyph provider's options if
+  // every glyph provider actually resolves to the same ones (true today: both
+  // are `ephemeralProcess`, never `httpFetch`). Verified here - rather than
+  // just trusted from `GLYPH_PROVIDER_IDS`'s own comment - so a future glyph
+  // provider on a different lane falls back to `null` (TanStack's defaults)
+  // instead of silently borrowing an unrelated provider's refetch behavior.
+  const glyphOptions = glyphProviders.map(
+    (providerId) => providerRateLimitQueryOptions(providerId).options,
+  );
+  const [firstGlyphOptions] = glyphOptions;
+  const sharedGlyphOptions =
+    glyphProviders.length > 0 &&
+    firstGlyphOptions !== null &&
+    glyphOptions.every(
+      (options) =>
+        options !== null &&
+        options.refetchInterval === firstGlyphOptions.refetchInterval,
+    )
+      ? firstGlyphOptions
+      : null;
+
   const results = useHostQueries<HostRpcRegistry, "host.getRateLimitUsage">({
     client,
     requests: glyphProviders.map((providerId) => {
       const { method, params } = providerRateLimitQueryOptions(providerId);
       return { method, params };
     }),
-    options:
-      glyphProviders.length > 0
-        ? providerRateLimitQueryOptions(glyphProviders[0]).options
-        : null,
+    options: sharedGlyphOptions,
   });
 
   const readings = glyphProviders.map((providerId, index) => ({
