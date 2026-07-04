@@ -1,5 +1,11 @@
 import "../../../../../__tests__/test-browser-apis";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderRateLimits } from "@traycer/protocol/host";
 import { formatResetDateTime } from "@/lib/relative-time";
@@ -11,6 +17,8 @@ const mocks = vi.hoisted(() => ({
   isError: false,
   isFetching: false,
   refetch: vi.fn(() => Promise.resolve({})),
+  draining: false,
+  enqueue: vi.fn((..._args: unknown[]) => Promise.resolve()),
 }));
 
 vi.mock("@/hooks/host/use-host-provider-rate-limits-query", () => ({
@@ -25,8 +33,17 @@ vi.mock("@/hooks/host/use-host-provider-rate-limits-query", () => ({
 vi.mock("@/hooks/host/use-refresh-provider-rate-limits-on-turn", () => ({
   useRefreshProviderRateLimitsOnTurn: () => {},
 }));
+vi.mock("@/hooks/host/use-refresh-provider-rate-limits-on-mount", () => ({
+  useRefreshProviderRateLimitsOnMount: () => {},
+}));
 vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
   useReactiveActiveHostId: () => "host-1",
+}));
+vi.mock("@/hooks/rate-limits/use-is-rate-limit-queue-draining", () => ({
+  useIsRateLimitQueueDraining: () => mocks.draining,
+}));
+vi.mock("@/lib/rate-limits/ephemeral-fetch-queue", () => ({
+  enqueueRateLimitFetch: (...args: unknown[]) => mocks.enqueue(...args),
 }));
 
 import { ProviderRateLimitForProvider } from "../provider-rate-limit-section";
@@ -101,6 +118,8 @@ describe("ProviderRateLimitForProvider", () => {
     mocks.isPending = false;
     mocks.isError = false;
     mocks.isFetching = false;
+    mocks.draining = false;
+    mocks.enqueue = vi.fn((..._args: unknown[]) => Promise.resolve());
   });
 
   afterEach(() => {
@@ -255,5 +274,30 @@ describe("ProviderRateLimitForProvider", () => {
       spendLimitScope.getByText(/^Resets [A-Za-z]{3} \d{1,2}:\d{2}\s?[AP]M$/i),
     ).toBeTruthy();
     expect(spendLimitScope.queryByText(/^Resets in /)).toBeNull();
+  });
+
+  it("routes a Codex (ephemeralProcess) manual refresh through the shared queue with force:true, not a bare query.refetch()", () => {
+    mocks.data = { providerRateLimits: CODEX_RATE_LIMITS };
+    render(<ProviderRateLimitForProvider providerId="codex" />);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Refresh rate limits" }),
+    );
+
+    expect(mocks.enqueue).toHaveBeenCalledWith("codex", expect.anything(), {
+      force: true,
+    });
+    expect(mocks.refetch).not.toHaveBeenCalled();
+  });
+
+  it("keeps the refresh button disabled while the shared queue is draining, even once this provider's own isFetching has settled", () => {
+    mocks.data = { providerRateLimits: CODEX_RATE_LIMITS };
+    mocks.isFetching = false;
+    mocks.draining = true;
+    render(<ProviderRateLimitForProvider providerId="codex" />);
+
+    expect(
+      screen.getByRole("button", { name: "Refresh rate limits" }),
+    ).toHaveProperty("disabled", true);
   });
 });

@@ -588,6 +588,7 @@ function RateLimitProviderBlock({
   // shared serial queue rather than TanStack's own (deliberately disabled)
   // refetch-on-mount - see providerRateLimitQueryOptions' doc comment.
   useRefreshProviderRateLimitsOnMount(providerId);
+  const draining = useIsRateLimitQueueDraining();
   const lane = rateLimitFetchLane(providerId);
   const queryState: ProviderRateLimitQueryState = {
     isPending: query.isPending,
@@ -654,7 +655,20 @@ function RateLimitProviderBlock({
             <RefreshIconButton
               onRefresh={refresh}
               label={`Refresh ${providerDisplayName(providerId)}`}
-              refreshing={query.isFetching}
+              // ephemeralProcess providers refresh one at a time through the
+              // shared serial queue: this provider's OWN `isFetching` can
+              // already be back to `false` (its turn in the round settled)
+              // while "Refresh all" is still working through a LATER provider
+              // in the same round (`draining` stays true for the whole
+              // round). Folding `draining` in here keeps this button disabled
+              // for the round's full duration, not just this provider's own
+              // slice of it - matching "Refresh all" being in progress" as
+              // the gating condition, not "my own fetch is in flight".
+              // httpFetch providers refresh concurrently (no shared queue),
+              // so their own `isFetching` is already the complete signal.
+              refreshing={
+                query.isFetching || (lane === "ephemeralProcess" && draining)
+              }
             />
           ) : null}
         </div>
