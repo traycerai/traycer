@@ -1089,6 +1089,45 @@ describe("WorktreesList confirm-time re-check", () => {
     expect(streamMock.paths).toEqual(["/wt/b"]);
   });
 
+  it("prunes a dropped row from the selection bookkeeping after confirm", () => {
+    const queryClient = new QueryClient();
+    const rendered = render(
+      renderWith(queryClient, [
+        merged("/wt/a", "feat-a"),
+        merged("/wt/b", "feat-b"),
+        merged("/wt/c", "feat-c"),
+      ]),
+    );
+
+    fireEvent.click(screen.getByTestId("worktrees-select-merged-clean"));
+    fireEvent.click(screen.getByTestId("worktrees-list-delete-selected"));
+    screen.getByText("Delete 3 worktrees?");
+
+    // /wt/c becomes dirty, so it is dropped at confirm while /wt/a and /wt/b run.
+    rendered.rerender(
+      renderWith(queryClient, [
+        merged("/wt/a", "feat-a"),
+        merged("/wt/b", "feat-b"),
+        entry({ worktreePath: "/wt/c", branch: "feat-c", uncommittedCount: 2 }),
+      ]),
+    );
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    expect(streamMock.paths).toEqual(["/wt/a", "/wt/b"]);
+    // The dropped row must not linger as selected state.
+    expect(
+      screen
+        .getByRole("checkbox", { name: "Select worktree feat-c" })
+        .getAttribute("aria-checked"),
+    ).toBe("false");
+    // Re-selecting it via its checkbox reads as a fresh pick (count 1, not a
+    // deselect of stale state).
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Select worktree feat-c" }),
+    );
+    screen.getByText("1 selected");
+  });
+
   it("names local-only commits in the per-row confirm for a clean, ahead worktree", () => {
     render(
       renderWith(new QueryClient(), [

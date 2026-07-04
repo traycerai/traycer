@@ -759,7 +759,7 @@ export function WorktreesList(props: {
   };
 
   const handleConfirm = (): void => {
-    if (pendingResolution === null) return;
+    if (pendingResolution === null || pendingDeleteTargets === null) return;
     // `pendingResolution` already re-resolved each pending path to its freshest
     // entry and split kept vs. dropped (gone from the list, now in-use /
     // deleting, or - for sweep-origin rows - no longer matching the sweep
@@ -768,16 +768,15 @@ export function WorktreesList(props: {
     if (dropped.length > 0) {
       toast.message(worktreeDropMessage(dropped));
     }
-    if (kept.length === 0) {
-      clearSelectionForTargets([]);
-      return;
-    }
     if (kept.length === 1) {
       start(kept[0], reviewedScriptsByPath.get(kept[0].worktreePath) ?? null);
-    } else {
+    } else if (kept.length > 1) {
       startBatchBackgrounded(kept, reviewedScriptsByPath);
     }
-    clearSelectionForTargets(kept);
+    // Prune the ENTIRE confirmed cohort - kept AND dropped - from the selection
+    // bookkeeping (even in the all-dropped case), so a dropped row can't linger
+    // as stale selected state / counts when selection mode is re-entered.
+    clearSelectionForTargets(pendingDeleteTargets);
   };
 
   const handleCloseModal = (): void => {
