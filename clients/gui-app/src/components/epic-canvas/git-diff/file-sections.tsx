@@ -10,6 +10,7 @@ import {
   useGitPanelActiveFile,
   useGitPanelRevealSection,
 } from "./use-git-panel-active-file";
+import type { GitDiffSectionCollapseController } from "./git-diff-section";
 
 // Deliberate hover dwell for the per-row path tooltips: long enough that
 // sweeping the cursor across the list never pops them, and skipDelay 0 so
@@ -25,6 +26,8 @@ export interface FileSectionsProps {
   readonly visibleFiles: ReadonlyArray<GitChangedFile>;
   readonly pathRangesByPath: ReadonlyMap<string, HighlightRanges>;
   readonly forceExpanded: boolean;
+  readonly hideEmptySections: boolean;
+  readonly sectionCollapseController: GitDiffSectionCollapseController | null;
 }
 
 export function FileSections(props: FileSectionsProps): ReactNode {
@@ -54,7 +57,9 @@ export function FileSections(props: FileSectionsProps): ReactNode {
           // otherwise keep the existing "hide the merge section when empty"
           // behavior and let staged/changes render their empty state.
           visibleFiles.length === 0 &&
-          (props.forceExpanded || group === "merge") ? null : (
+          (props.forceExpanded ||
+            props.hideEmptySections ||
+            group === "merge") ? null : (
             <GitDiffSection
               key={group}
               epicId={props.epicId}
@@ -65,6 +70,7 @@ export function FileSections(props: FileSectionsProps): ReactNode {
               visibleFiles={visibleFiles}
               bundleFileCount={bundleFileCount}
               forceExpanded={props.forceExpanded}
+              collapseController={props.sectionCollapseController}
             >
               <GitFlatFileList
                 epicId={props.epicId}

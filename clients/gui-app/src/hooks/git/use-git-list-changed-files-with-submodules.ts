@@ -51,8 +51,8 @@ interface ChangeTokenIdentity {
 /**
  * Source of truth for the selected root repo's nested changes: the host-composed
  * `git.listChangedFiles@1.1` snapshot (parent changeset + `submodules[]`) in a
- * single epoch. Fetched only for the ACTIVE root (bounded lazy fan-out - the
- * repo tree never eagerly fans out every root).
+ * single epoch. Fetched only for the selected root (bounded lazy fan-out - the
+ * switcher never eagerly fans out every root).
  *
  * Git panels are **worktree-scoped**, so the RPC must hit the selected worktree's
  * host, not the app-wide active host - `hostId` in the request body does not

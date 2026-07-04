@@ -11,12 +11,11 @@ export interface GitPanelEpicState {
 }
 
 /**
- * The repo currently in focus in the repo tree. `rootRunningDir` is the
- * top-level worktree/root repo (the binding row the selection lives under and
- * the only root whose nested `git.listChangedFiles@1.1` snapshot is fetched).
- * `repoRoot` is the actually-selected repo: it equals `rootRunningDir` when the
- * root itself is selected, or a submodule's canonical `repoRoot` when a
- * submodule node under that root is selected. Both share the root's `hostId`.
+ * The workspace currently selected in the Git Diff panel. `rootRunningDir` is
+ * the bound workspace/root repo and the only root whose nested
+ * `git.listChangedFiles@1.1` snapshot is fetched. `repoRoot` is retained for
+ * persisted v2 compatibility; current UI writes it equal to `rootRunningDir`,
+ * and legacy submodule values are normalized back to the workspace root.
  */
 export interface GitPanelSelectedRepo {
   readonly hostId: string;
@@ -92,9 +91,10 @@ function parsePersistedBoolean(value: unknown, fallback: boolean): boolean {
 
 // Rebuild one epic's persisted entry into the current shape. The v1 blob carried
 // `selectedWorktree` (a `{ hostId, runningDir }` that no longer maps to a
-// repo-tree selection); it is dropped - `selectedRepo` resets to null and the
-// panel re-picks a default root. Every other field is kept when valid, else
-// defaulted, so the result can never surface an `undefined` field.
+// persisted `selectedRepo` workspace shape); it is dropped - `selectedRepo`
+// resets to null and the panel re-picks a default root. Every other field is
+// kept when valid, else defaulted, so the result can never surface an
+// `undefined` field.
 function migratePersistedEpicState(value: unknown): GitPanelEpicState {
   if (!isRecord(value)) return defaultEpicState;
   return {

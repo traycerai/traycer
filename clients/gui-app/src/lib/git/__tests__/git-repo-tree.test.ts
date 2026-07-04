@@ -5,8 +5,9 @@ import type {
   SubmodulePointer,
 } from "@traycer/protocol/host";
 import {
+  buildGitModuleGroups,
   buildSubmoduleNodes,
-  buildSubmoduleReferenceRows,
+  buildSubmoduleParentReferences,
   findSubmoduleChangeset,
   formatRepoHeadLabel,
   splitParentFiles,
@@ -70,29 +71,29 @@ describe("splitParentFiles", () => {
   });
 });
 
-describe("buildSubmoduleReferenceRows", () => {
-  it("joins a gitlink row to its submodule node and reads pins off the pointer", () => {
-    const rows = buildSubmoduleReferenceRows(
+describe("buildSubmoduleParentReferences", () => {
+  it("joins a gitlink file to its submodule section and reads pins off the pointer", () => {
+    const references = buildSubmoduleParentReferences(
       [file("traycer", normalPointer)],
       [changeset({})],
     );
-    expect(rows).toHaveLength(1);
-    expect(rows[0].repoRoot).toBe("/repo/traycer");
-    expect(rows[0].isConflicted).toBe(false);
-    expect(rows[0].detailsUnavailable).toBe(false);
-    expect(rows[0].summary).toBe(
+    expect(references).toHaveLength(1);
+    expect(references[0].repoRoot).toBe("/repo/traycer");
+    expect(references[0].isConflicted).toBe(false);
+    expect(references[0].detailsUnavailable).toBe(false);
+    expect(references[0].summary).toBe(
       "parent references 1111111 · checkout at 2222222",
     );
   });
 
   it("surfaces the enriched `diverged` fact as divergence copy (both directions)", () => {
-    const diverged = buildSubmoduleReferenceRows(
+    const diverged = buildSubmoduleParentReferences(
       [file("traycer", { ...normalPointer, diverged: true })],
       [changeset({})],
     );
     expect(diverged[0].divergence).toBe("diverged");
 
-    const matches = buildSubmoduleReferenceRows(
+    const matches = buildSubmoduleParentReferences(
       [file("traycer", { ...normalPointer, diverged: false })],
       [changeset({})],
     );
@@ -103,7 +104,7 @@ describe("buildSubmoduleReferenceRows", () => {
     // A dirty submodule the host could not inspect keeps the parser defaults
     // (`submoduleHeadSha: null, diverged: false`) - that must not read as a
     // verified "matches".
-    const rows = buildSubmoduleReferenceRows(
+    const references = buildSubmoduleParentReferences(
       [
         file("traycer", {
           ...normalPointer,
@@ -113,7 +114,7 @@ describe("buildSubmoduleReferenceRows", () => {
       ],
       [],
     );
-    expect(rows[0].divergence).toBeNull();
+    expect(references[0].divergence).toBeNull();
   });
 
   it("has no divergence for a conflicted pointer (no single pin)", () => {
@@ -123,12 +124,15 @@ describe("buildSubmoduleReferenceRows", () => {
       oursSha: "c",
       theirsSha: "d",
     };
-    const rows = buildSubmoduleReferenceRows([file("traycer", conflicted)], []);
-    expect(rows[0].divergence).toBeNull();
+    const references = buildSubmoduleParentReferences(
+      [file("traycer", conflicted)],
+      [],
+    );
+    expect(references[0].divergence).toBeNull();
   });
 
-  it("propagates an unavailable matching section into the reference row (still navigable)", () => {
-    const rows = buildSubmoduleReferenceRows(
+  it("propagates an unavailable matching section into the parent-reference descriptor", () => {
+    const references = buildSubmoduleParentReferences(
       [file("traycer", normalPointer)],
       [
         changeset({
@@ -136,19 +140,17 @@ describe("buildSubmoduleReferenceRows", () => {
         }),
       ],
     );
-    // The section exists, so the row still navigates to it (which shows the
-    // "details unavailable" view), AND the reference row itself flags the degrade.
-    expect(rows[0].repoRoot).toBe("/repo/traycer");
-    expect(rows[0].detailsUnavailable).toBe(true);
+    expect(references[0].repoRoot).toBe("/repo/traycer");
+    expect(references[0].detailsUnavailable).toBe(true);
   });
 
-  it("flags a dirty normal pointer with no submodule section as details-unavailable and non-navigable", () => {
-    const rows = buildSubmoduleReferenceRows(
+  it("flags a dirty normal pointer with no submodule section as details-unavailable", () => {
+    const references = buildSubmoduleParentReferences(
       [file("traycer", normalPointer)],
       [], // old-host downgrade: submodules stripped
     );
-    expect(rows[0].repoRoot).toBeNull();
-    expect(rows[0].detailsUnavailable).toBe(true);
+    expect(references[0].repoRoot).toBeNull();
+    expect(references[0].detailsUnavailable).toBe(true);
   });
 
   it("treats a conflicted pointer as pointer-only (no section, not a degrade)", () => {
@@ -158,11 +160,14 @@ describe("buildSubmoduleReferenceRows", () => {
       oursSha: "cccccccccc",
       theirsSha: "dddddddddd",
     };
-    const rows = buildSubmoduleReferenceRows([file("traycer", conflicted)], []);
-    expect(rows[0].repoRoot).toBeNull();
-    expect(rows[0].isConflicted).toBe(true);
-    expect(rows[0].detailsUnavailable).toBe(false);
-    expect(rows[0].summary).toContain(
+    const references = buildSubmoduleParentReferences(
+      [file("traycer", conflicted)],
+      [],
+    );
+    expect(references[0].repoRoot).toBeNull();
+    expect(references[0].isConflicted).toBe(true);
+    expect(references[0].detailsUnavailable).toBe(false);
+    expect(references[0].summary).toContain(
       "merge conflict on the submodule pointer",
     );
   });
@@ -179,8 +184,24 @@ describe("buildSubmoduleNodes", () => {
     expect(node.headLabel).toBe("main");
   });
 
-  it("marks a committed-pin-only submodule (no working-tree files) as dimmed/no-changes", () => {
+  it("marks a parent-reference-only submodule as changed without changing its file count", () => {
     const [node] = buildSubmoduleNodes([changeset({ files: [] })]);
+    expect(node.changeCount).toBe(0);
+    expect(node.hasChanges).toBe(true);
+  });
+
+  it("marks a clean submodule with no working-tree files as unchanged", () => {
+    const [node] = buildSubmoduleNodes([
+      changeset({
+        pointer: {
+          ...normalPointer,
+          recordedPinSha: "2222222222",
+          diverged: false,
+          commitChanged: false,
+          modifiedContent: false,
+        },
+      }),
+    ]);
     expect(node.changeCount).toBe(0);
     expect(node.hasChanges).toBe(false);
   });
@@ -208,5 +229,103 @@ describe("formatRepoHeadLabel", () => {
     expect(formatRepoHeadLabel("main", "abcdef1234")).toBe("main");
     expect(formatRepoHeadLabel(null, "abcdef1234")).toBe("detached @ abcdef1");
     expect(formatRepoHeadLabel(null, null)).toBe("detached");
+  });
+});
+
+describe("buildGitModuleGroups", () => {
+  function model(args: {
+    readonly files?: ReadonlyArray<GitChangedFileV11>;
+    readonly submodules?: ReadonlyArray<SubmoduleChangeset>;
+  }) {
+    return buildGitModuleGroups({
+      root: {
+        repoRoot: "/repo",
+        label: "traycer-internal",
+        branch: "development",
+        headSha: "abcdef1234",
+        files: args.files ?? [],
+        repoState: { kind: "clean" },
+        repoMode: "normal",
+      },
+      submodules: args.submodules ?? [],
+    });
+  }
+
+  it("renders root first and hides matching parent gitlink rows from root files", () => {
+    const result = model({
+      files: [file("src/app.ts", null), file("traycer", normalPointer)],
+      submodules: [changeset({ files: [file("src/submodule.ts", null)] })],
+    });
+
+    expect(result.modules.map((module) => module.label)).toEqual([
+      "traycer-internal",
+      "traycer",
+    ]);
+    expect(
+      result.modules[0].files.map((changedFile) => changedFile.path),
+    ).toEqual(["src/app.ts"]);
+    expect(result.modules[1]).toMatchObject({
+      kind: "submodule",
+      label: "traycer",
+      clean: false,
+      defaultExpanded: true,
+    });
+  });
+
+  it("represents parent-reference mismatch on the submodule module", () => {
+    const result = model({
+      files: [file("traycer", normalPointer)],
+      submodules: [changeset({ files: [] })],
+    });
+
+    expect(result.modules[0].files).toHaveLength(0);
+    expect(result.modules[1]).toMatchObject({
+      label: "traycer",
+      parentReference: {
+        status: "differs",
+        summary: "parent references 1111111 · checkout at 2222222",
+      },
+      clean: false,
+      defaultExpanded: true,
+    });
+  });
+
+  it("keeps clean submodules collapsed behind the clean-module count", () => {
+    const result = model({
+      submodules: [
+        changeset({
+          pointer: {
+            ...normalPointer,
+            diverged: false,
+            commitChanged: false,
+            modifiedContent: false,
+          },
+        }),
+      ],
+    });
+
+    expect(result.hiddenCleanModuleCount).toBe(1);
+    expect(result.modules[1]).toMatchObject({
+      clean: true,
+      defaultExpanded: false,
+    });
+  });
+
+  it("turns unmatched dirty gitlink rows into unavailable module groups", () => {
+    const result = model({
+      files: [file("traycer", normalPointer)],
+      submodules: [],
+    });
+
+    expect(result.modules[0].files).toHaveLength(0);
+    expect(result.modules[1]).toMatchObject({
+      kind: "submodule",
+      label: "traycer",
+      repoRoot: null,
+      unavailable: true,
+      parentReference: {
+        status: "unavailable",
+      },
+    });
   });
 });

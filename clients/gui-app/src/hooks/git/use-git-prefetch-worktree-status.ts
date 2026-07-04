@@ -7,11 +7,11 @@ import { writeGitListChangedFilesResponse } from "@/lib/git/write-list-changed-f
 /**
  * Single-shot prefetch for git.listChangedFiles per (hostId, runningDir, ignoreWhitespace).
  * Populates the same cache slot as the subscription would, so rows read the cached
- * change count via queryClient.getQueryData without opening N streams.
+ * parent status via queryClient.getQueryData without opening N streams.
  *
  * Response written to cache per Q20 lock (response-equals-state carve-out):
- * listChangedFiles RPC directly reifies the picker's change-count badge; no
- * derivation or projection - the response shape matches the UI state exactly.
+ * listChangedFiles RPC is the parent-level status source for the picker badges;
+ * the UI projects it into typed file/module counts at the panel boundary.
  */
 export function useGitPrefetchWorktreeStatus() {
   const client = useHostClient();

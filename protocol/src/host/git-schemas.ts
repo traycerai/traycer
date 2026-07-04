@@ -403,7 +403,7 @@ export type GitChangedFileV11 = z.infer<typeof gitChangedFileV11Schema>;
 
 /**
  * Whether the host could actually inspect a discovered submodule. `ok` is the
- * normal case. `unavailable` marks a dirty submodule the host failed to read
+ * normal case. `unavailable` marks an initialized submodule the host failed to read
  * (broken worktree, permissions, timeout, or any git error - the production
  * command runner collapses those to an unresolved checkout HEAD), so the client
  * renders a visible "details unavailable" degrade instead of a silent empty
@@ -417,11 +417,12 @@ export const submoduleAvailabilitySchema = z.discriminatedUnion("state", [
 export type SubmoduleAvailability = z.infer<typeof submoduleAvailabilitySchema>;
 
 /**
- * One dirty, initialized submodule section in the `git.listChangedFiles@1.1`
- * response (plan §1.3) - working-tree only, NO commits-ahead. A submodule earns
- * an entry only when the parent flags it dirty (`c`/`m`/`u`) AND it has an
- * existing worktree; conflicted/removed gitlinks are pointer-only and surface
- * solely on the parent gitlink row.
+ * One initialized submodule section in the `git.listChangedFiles@1.1` response
+ * (plan §1.3) - working-tree only, NO commits-ahead. Dirty and unavailable
+ * submodules carry visible status/files, while clean initialized submodules may
+ * also be present so clients can show clean-module affordances. Conflicted or
+ * removed gitlinks remain pointer-only and surface solely on the parent gitlink
+ * row.
  *
  * `repoRoot` is a canonical absolute host path (realpath/NFC-normalized).
  * `parentPath` is the gitlink's parent-repo-relative Git path - the join key
@@ -446,7 +447,7 @@ export type SubmoduleChangeset = z.infer<typeof submoduleChangesetSchema>;
 /**
  * `git.listChangedFiles@1.1` request. The frozen v1.0 request plus
  * `includeSubmodules`: the host runs the per-submodule fan-out (discovery +
- * git status into each dirty submodule + `.gitmodules` enumeration) only when
+ * git status into initialized submodules + `.gitmodules` enumeration) only when
  * asked. Defaults to false so lightweight callers (and v1.0 requests upgraded
  * to canonical) get the cheap parent-only snapshot with `submodules: []`.
  */

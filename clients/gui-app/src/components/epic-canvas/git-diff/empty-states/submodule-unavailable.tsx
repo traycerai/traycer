@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 const GIT_SUBMODULE_REFRESH_TIMEOUT_MS = 10_000;
 
 /**
- * Shown when a selected submodule's details could not be read by the host
+ * Shown when a submodule module group's details could not be read by the host
  * (`availability: unavailable` - broken worktree, permissions, or a git error).
  * A visible degrade, never a silent empty section, with a targeted refresh.
  */

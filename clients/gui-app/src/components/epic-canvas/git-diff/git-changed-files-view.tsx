@@ -110,6 +110,8 @@ export function GitChangedFilesView(
         files={props.files}
         query={appliedQuery}
         onClearQuery={handleClear}
+        hideEmptySections={false}
+        sectionCollapseController={null}
       />
     </div>
   );

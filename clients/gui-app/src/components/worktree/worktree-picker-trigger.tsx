@@ -1,4 +1,4 @@
-import type { ButtonHTMLAttributes, Ref } from "react";
+import type { ButtonHTMLAttributes, ReactNode, Ref } from "react";
 import { ChevronDown } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { StartTruncatedText } from "@/components/ui/start-truncated-text";
@@ -8,6 +8,7 @@ export interface WorktreePickerTriggerProps extends ButtonHTMLAttributes<HTMLBut
   readonly worktreeLabel: string;
   readonly secondaryLabel: string;
   readonly changeCount: number | null;
+  readonly trailingStatus: ReactNode | null;
   readonly testId: string | undefined;
   readonly ref?: Ref<HTMLButtonElement>;
 }
@@ -17,6 +18,7 @@ export function WorktreePickerTrigger(props: WorktreePickerTriggerProps) {
     worktreeLabel,
     secondaryLabel,
     changeCount,
+    trailingStatus,
     testId,
     className,
     ...rest
@@ -40,6 +42,7 @@ export function WorktreePickerTrigger(props: WorktreePickerTriggerProps) {
           {secondaryLabel}
         </StartTruncatedText>
       </div>
+      {trailingStatus}
       {changeCount !== null ? (
         <Badge
           variant="secondary"

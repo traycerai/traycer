@@ -12,12 +12,25 @@ import type { GitListChangedFilesWithSubmodulesResult } from "@/hooks/git/use-gi
 import type { GitPanelSelectedRepo } from "@/stores/epics/git-panel-store";
 import { SelectedRepoChanges } from "../selected-repo-changes";
 
-// Stub the parent file body (Virtuoso + dnd is out of scope); expose the
-// `runningDir` it is scoped to so we can assert the SAME parent component renders
-// for both the root and a submodule (the parity fix).
-vi.mock("../git-changed-files-view", () => ({
-  GitChangedFilesView: (props: { runningDir: string }) => (
-    <div data-testid="changes-view" data-running-dir={props.runningDir} />
+vi.mock("../file-list", () => ({
+  FileList: (props: {
+    readonly runningDir: string;
+    readonly files: ReadonlyArray<GitChangedFileV11>;
+    readonly hideEmptySections: boolean;
+  }) => (
+    <div
+      data-testid={`file-list-${props.runningDir}`}
+      data-hide-empty-sections={props.hideEmptySections ? "true" : "false"}
+    >
+      {props.files.map((changedFile) => (
+        <span
+          key={changedFile.path}
+          data-testid={`file-row-${props.runningDir}-${changedFile.path}`}
+        >
+          {changedFile.path}
+        </span>
+      ))}
+    </div>
   ),
 }));
 
@@ -28,6 +41,15 @@ const normalPointer: SubmodulePointer = {
   diverged: true,
   commitChanged: true,
   modifiedContent: true,
+  untrackedContent: false,
+};
+
+const cleanPointer: SubmodulePointer = {
+  ...normalPointer,
+  recordedPinSha: "2222222222",
+  diverged: false,
+  commitChanged: false,
+  modifiedContent: false,
   untrackedContent: false,
 };
 
@@ -99,18 +121,11 @@ const rootSelected: GitPanelSelectedRepo = {
   rootRunningDir: "/repo",
   repoRoot: "/repo",
 };
-const submoduleSelected: GitPanelSelectedRepo = {
-  hostId: "host-1",
-  rootRunningDir: "/repo",
-  repoRoot: "/repo/traycer",
-};
 
 function renderChanges(props: {
-  selected: GitPanelSelectedRepo;
-  subscription?: GitListChangedFilesSubscriptionResult;
-  snapshot: GitListChangedFilesWithSubmodulesResult;
-  onSelectSubmoduleRepoRoot?: (repoRoot: string) => void;
-  onRefresh?: () => void;
+  readonly subscription?: GitListChangedFilesSubscriptionResult;
+  readonly snapshot: GitListChangedFilesWithSubmodulesResult;
+  readonly onRefresh?: () => void;
 }) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -120,10 +135,10 @@ function renderChanges(props: {
       <SelectedRepoChanges
         epicId="epic-1"
         viewTabId="tab-1"
-        selected={props.selected}
+        selected={rootSelected}
+        rootLabel="traycer-internal"
         subscription={props.subscription ?? EMPTY_SUBSCRIPTION}
         snapshot={props.snapshot}
-        onSelectSubmoduleRepoRoot={props.onSelectSubmoduleRepoRoot ?? vi.fn()}
         onRefresh={props.onRefresh ?? vi.fn()}
         isRefreshing={false}
       />
@@ -131,51 +146,110 @@ function renderChanges(props: {
   );
 }
 
-describe("<SelectedRepoChanges />", () => {
+describe("<SelectedRepoChanges /> module groups", () => {
   beforeEach(() => cleanup());
 
-  it("root view renders the parent changes-view (ordinary files) and a demoted reference row", () => {
-    const onSelectSubmoduleRepoRoot = vi.fn();
+  it("renders root-only changes in the root module", () => {
     renderChanges({
-      selected: rootSelected,
+      snapshot: snapshotResult(response({ files: [file("src/app.ts", null)] })),
+    });
+
+    expect(screen.getByTestId("git-module-group-root")).toBeDefined();
+    expect(screen.getByTestId("git-module-count-root").textContent).toBe(
+      "1 file",
+    );
+    expect(screen.getByTestId("file-list-/repo")).toBeDefined();
+    expect(screen.getByText("src/app.ts")).toBeDefined();
+    expect(screen.queryByText("Submodule reference:")).toBeNull();
+  });
+
+  it("renders dirty submodule-only changes below a clean root module", () => {
+    renderChanges({
+      snapshot: snapshotResult(
+        response({
+          files: [file("traycer", normalPointer)],
+          submodules: [changeset({ files: [file("src/submodule.ts", null)] })],
+        }),
+      ),
+    });
+
+    expect(screen.getByTestId("git-module-no-changes-root")).toBeDefined();
+    expect(
+      screen.getByTestId("git-module-group-submodule-traycer"),
+    ).toBeDefined();
+    expect(
+      screen.getByTestId("git-module-parent-reference-traycer").textContent,
+    ).toBe("parent ref differs");
+    expect(screen.getByTestId("file-list-/repo/traycer")).toBeDefined();
+    expect(screen.getByText("src/submodule.ts")).toBeDefined();
+    expect(screen.queryByText("Submodule reference:")).toBeNull();
+    expect(screen.queryByTestId("file-row-/repo-traycer")).toBeNull();
+  });
+
+  it("gives non-empty module lists a flex-height body for virtualized rows", () => {
+    renderChanges({
+      snapshot: snapshotResult(
+        response({
+          files: [file("traycer", normalPointer)],
+          submodules: [changeset({ files: [file("src/submodule.ts", null)] })],
+        }),
+      ),
+    });
+
+    const fileList = screen.getByTestId("file-list-/repo/traycer");
+    const body = fileList.parentElement;
+    if (body === null) {
+      throw new Error("Expected module file list to have a body wrapper");
+    }
+
+    expect(body.className).toContain("flex");
+    expect(body.className).toContain("min-h-[32dvh]");
+    expect(body.className).toContain("max-h-[58dvh]");
+    expect(body.className).toContain("flex-col");
+    expect(body.className).toContain("overflow-hidden");
+  });
+
+  it("renders root and dirty submodule changes as separate module-owned lists", () => {
+    renderChanges({
       snapshot: snapshotResult(
         response({
           files: [file("src/app.ts", null), file("traycer", normalPointer)],
-          submodules: [changeset({})],
+          submodules: [
+            changeset({ files: [file("clients/gui-app/src/view.tsx", null)] }),
+          ],
         }),
       ),
-      onSelectSubmoduleRepoRoot,
     });
-    const view = screen.getByTestId("changes-view");
-    expect(view.getAttribute("data-running-dir")).toBe("/repo");
-    // The gitlink row is demoted to a reference row, never a file row.
-    const ref = screen.getByTestId("submodule-reference-row-traycer");
-    expect(ref).toBeDefined();
-    fireEvent.click(
-      screen.getByRole("button", {
-        name: /Submodule reference:\s*traycer\s*parent references 1111111/,
-      }),
-    );
-    expect(onSelectSubmoduleRepoRoot).toHaveBeenCalledWith("/repo/traycer");
+
+    expect(screen.getByTestId("file-list-/repo")).toBeDefined();
+    expect(screen.getByTestId("file-list-/repo/traycer")).toBeDefined();
+    expect(screen.getByText("src/app.ts")).toBeDefined();
+    expect(screen.getByText("clients/gui-app/src/view.tsx")).toBeDefined();
+    expect(screen.queryByTestId("file-row-/repo-traycer")).toBeNull();
   });
 
-  it("old-host degrade: dirty gitlink with submodules:[] surfaces a details-unavailable reference row", () => {
+  it("shows a parent-reference mismatch on a clean submodule working tree", () => {
     renderChanges({
-      selected: rootSelected,
       snapshot: snapshotResult(
-        response({ files: [file("traycer", normalPointer)], submodules: [] }),
+        response({
+          files: [file("traycer", normalPointer)],
+          submodules: [changeset({ files: [] })],
+        }),
       ),
     });
-    expect(screen.getByTestId("submodule-reference-row-traycer")).toBeDefined();
+
     expect(
-      screen.getByTestId("submodule-reference-refresh-traycer"),
-    ).toBeDefined();
+      screen.getByTestId("git-module-parent-reference-traycer").textContent,
+    ).toBe("parent ref differs");
+    expect(screen.getByTestId("git-module-count-traycer").textContent).toBe(
+      "0 files",
+    );
+    expect(screen.getByTestId("git-module-no-changes-traycer")).toBeDefined();
+    expect(screen.queryByTestId("git-clean-modules-affordance")).toBeNull();
   });
 
-  it("root view: an unavailable matching section degrades the reference row (still navigable)", () => {
-    const onSelectSubmoduleRepoRoot = vi.fn();
+  it("renders an unavailable submodule module group with refresh", () => {
     renderChanges({
-      selected: rootSelected,
       snapshot: snapshotResult(
         response({
           files: [file("traycer", normalPointer)],
@@ -186,47 +260,76 @@ describe("<SelectedRepoChanges />", () => {
           ],
         }),
       ),
-      onSelectSubmoduleRepoRoot,
     });
+
     expect(
-      screen.getByTestId("submodule-reference-refresh-traycer"),
+      screen.getByTestId("git-module-group-submodule-traycer"),
     ).toBeDefined();
-    // Still navigable to the (unavailable) submodule node.
-    fireEvent.click(
-      screen.getByRole("button", {
-        name: /Submodule reference:\s*traycer\s*parent references 1111111/,
-      }),
-    );
-    expect(onSelectSubmoduleRepoRoot).toHaveBeenCalledWith("/repo/traycer");
+    expect(
+      screen.getByTestId("git-module-parent-reference-traycer").textContent,
+    ).toBe("details unavailable");
+    expect(screen.getByTestId("git-submodule-unavailable")).toBeDefined();
   });
 
-  it("submodule view renders the SAME parent changes-view scoped to the submodule repoRoot (parity)", () => {
+  it("keeps clean modules collapsed behind the clean-modules affordance", () => {
     renderChanges({
-      selected: submoduleSelected,
-      snapshot: snapshotResult(
-        response({
-          submodules: [changeset({ files: [file("src/foo.ts", null)] })],
-        }),
-      ),
-    });
-    const view = screen.getByTestId("changes-view");
-    expect(view.getAttribute("data-running-dir")).toBe("/repo/traycer");
-  });
-
-  it("submodule view with availability:unavailable renders the details-unavailable degrade", () => {
-    renderChanges({
-      selected: submoduleSelected,
       snapshot: snapshotResult(
         response({
           submodules: [
             changeset({
-              availability: { state: "unavailable", reason: "git-error" },
+              pointer: cleanPointer,
             }),
           ],
         }),
       ),
     });
+
+    expect(
+      screen.queryByTestId("git-module-group-submodule-traycer"),
+    ).toBeNull();
+    const affordance = screen.getByTestId("git-clean-modules-affordance");
+    expect(affordance.textContent).toContain("Show 1 clean Git module");
+
+    fireEvent.click(affordance);
+
+    const cleanModule = screen.getByTestId(
+      "git-module-group-submodule-traycer",
+    );
+    expect(cleanModule.getAttribute("data-clean")).toBe("true");
+    expect(
+      screen
+        .getByTestId("git-module-header-traycer")
+        .getAttribute("aria-expanded"),
+    ).toBe("false");
+  });
+
+  it("turns an unmatched dirty gitlink into an unavailable module group", () => {
+    renderChanges({
+      snapshot: snapshotResult(
+        response({ files: [file("traycer", normalPointer)], submodules: [] }),
+      ),
+    });
+
+    expect(
+      screen.getByTestId("git-module-group-submodule-traycer"),
+    ).toBeDefined();
     expect(screen.getByTestId("git-submodule-unavailable")).toBeDefined();
-    expect(screen.queryByTestId("changes-view")).toBeNull();
+    expect(screen.queryByText("Submodule reference:")).toBeNull();
+    expect(screen.queryByTestId("file-row-/repo-traycer")).toBeNull();
+  });
+
+  it("renders old-host parent-only snapshots without submodule metadata as root file rows", () => {
+    renderChanges({
+      snapshot: snapshotResult(
+        response({ files: [file("traycer", null)], submodules: [] }),
+      ),
+    });
+
+    expect(screen.getByTestId("git-module-group-root")).toBeDefined();
+    expect(screen.getByTestId("file-row-/repo-traycer")).toBeDefined();
+    expect(
+      screen.queryByTestId("git-module-group-submodule-traycer"),
+    ).toBeNull();
+    expect(screen.queryByText("Submodule reference:")).toBeNull();
   });
 });
