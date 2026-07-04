@@ -11,6 +11,20 @@ import { parsePerWindowStatePatch } from "./ipc-parsers";
 import type { RunnerIpcBridge } from "./runner-ipc-bridge";
 
 export function registerPerWindowStateIpc(bridge: RunnerIpcBridge): void {
+  // A window authors its own per-window state, so it already holds whatever it
+  // just sent us. Echoing that write straight back to the same window is at best
+  // redundant and at worst harmful: the echo is in flight for a while (the
+  // renderer debounces outbound writes), so one that lands after a newer local
+  // edit clobbers it - e.g. it resurrects a landing draft the window closed a
+  // moment earlier, leaving a phantom "New" tab. While we apply a window's own
+  // update we suppress the "change" push back to that window; MAIN-initiated
+  // changes (initial restore, move-tab) carry no origin and still push normally.
+  //
+  // `PerWindowState.update` emits "change" synchronously, so the listener below
+  // observes this flag within the same call and the `finally` clears it before
+  // control returns - no cross-update leakage.
+  let suppressEchoToWindowId: string | null = null;
+
   bridge.handleInvoke(RunnerHostInvoke.perWindowStateGet, (event) => {
     const windowId = bridge.resolveSenderWindowId(event);
     return windowId === null
@@ -26,7 +40,12 @@ export function registerPerWindowStateIpc(bridge: RunnerIpcBridge): void {
         log.warn("[runner-ipc] perWindowState.update from unknown window", {});
         return;
       }
-      bridge.perWindowState.update(windowId, parsePerWindowStatePatch(patch));
+      suppressEchoToWindowId = windowId;
+      try {
+        bridge.perWindowState.update(windowId, parsePerWindowStatePatch(patch));
+      } finally {
+        suppressEchoToWindowId = null;
+      }
     },
   );
 
@@ -40,6 +59,8 @@ export function registerPerWindowStateIpc(bridge: RunnerIpcBridge): void {
   });
 
   const onPerWindowStateChange = (change: PerWindowStateChange): void => {
+    // Don't bounce a window's own update back to it (see suppress note above).
+    if (change.windowId === suppressEchoToWindowId) return;
     bridge.safeSendToWindow(
       change.windowId,
       RunnerHostEvent.perWindowStateChange,
