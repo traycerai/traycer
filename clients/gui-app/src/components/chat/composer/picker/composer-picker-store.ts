@@ -4,7 +4,7 @@ import {
   type MentionFlowStep,
   type MentionMenuEntry,
 } from "@/lib/composer/mentions";
-import type { SlashCommand } from "@/lib/composer/types";
+import type { MentionPreview, SlashCommand } from "@/lib/composer/types";
 
 export type ComposerPickerKind = "mention" | "slash";
 
@@ -25,6 +25,17 @@ export type ComposerPickerItem =
       readonly command: SlashCommand;
     };
 
+/**
+ * Uniform preview lookup for either picker item shape - the side preview
+ * panel reads the active item via this instead of branching on `kind` itself.
+ */
+export function pickerItemPreview(
+  item: ComposerPickerItem,
+): MentionPreview | null {
+  if (item.kind === "mention") return item.entry.preview;
+  return item.command.preview;
+}
+
 export type ComposerPickerCommit = (item: ComposerPickerItem) => void;
 
 export type ComposerPickerClientRect = () => DOMRect | null;
@@ -40,6 +51,13 @@ export interface ComposerPickerState {
   readonly itemsForStepId: string | null;
   readonly activeIndex: number;
   readonly loading: boolean;
+  /**
+   * Background-refetch indicator, distinct from `loading`: true while a
+   * mention/slash query is refetching behind `placeholderData` (prior results
+   * still shown), so the menu header can show a subtle spinner without the
+   * list collapsing the way the full `loading` state implies.
+   */
+  readonly fetching: boolean;
   readonly commit: ComposerPickerCommit | null;
   /**
    * Latest viewport rect of the suggestion range (trigger char + query).
@@ -86,6 +104,7 @@ export interface ComposerPickerActions {
     readonly step: MentionFlowStep;
     readonly loading: boolean;
   }) => void;
+  readonly setFetching: (fetching: boolean) => void;
   readonly setActiveIndex: (index: number) => void;
   readonly moveActive: (direction: 1 | -1) => void;
   readonly commitActiveItem: () => boolean;
@@ -112,6 +131,7 @@ const INITIAL_STATE: ComposerPickerState = {
   itemsForStepId: null,
   activeIndex: 0,
   loading: false,
+  fetching: false,
   commit: null,
   clientRect: null,
   knownSlashCommands: null,
@@ -148,6 +168,7 @@ export function createComposerPickerStore(): ComposerPickerStore {
         itemsForStepId: null,
         activeIndex: 0,
         loading: false,
+        fetching: false,
         commit,
         clientRect,
       });
@@ -187,6 +208,7 @@ export function createComposerPickerStore(): ComposerPickerStore {
         itemsForStepId: null,
         activeIndex: 0,
         loading: false,
+        fetching: false,
       });
     },
 
@@ -221,6 +243,11 @@ export function createComposerPickerStore(): ComposerPickerStore {
       }
       if (previous.loading === loading) return;
       set({ loading });
+    },
+
+    setFetching: (fetching) => {
+      if (get().fetching === fetching) return;
+      set({ fetching });
     },
 
     setActiveIndex: (index) => {

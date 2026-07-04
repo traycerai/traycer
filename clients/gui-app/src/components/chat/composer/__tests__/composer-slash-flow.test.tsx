@@ -56,6 +56,12 @@ function planCommand(): SlashCommand {
     kind: "slash-command",
     metadata: {},
     source: "provider",
+    preview: {
+      kind: "text",
+      primary: "Plan something",
+      secondary: null,
+      mono: false,
+    },
   };
 }
 
@@ -75,7 +81,7 @@ describe("composer slash flow", () => {
 
   it("opens picker when user types / after a leading image", async () => {
     const { editor, pickerStore } = makeFixture();
-    insertImageAttachmentsCommand(editor, [imageAttrs("img-1")]);
+    insertImageAttachmentsCommand(editor, [imageAttrs("img-1")], false);
 
     editor.commands.insertContent("/");
     await flush();
@@ -157,7 +163,7 @@ describe("composer slash flow", () => {
 
   it("keeps a slash chip when only images precede it", async () => {
     const { editor } = makeFixture();
-    insertImageAttachmentsCommand(editor, [imageAttrs("img-1")]);
+    insertImageAttachmentsCommand(editor, [imageAttrs("img-1")], false);
     editor.commands.insertContent({
       type: "slashCommand",
       attrs: { commandName: "plan" },
@@ -170,7 +176,7 @@ describe("composer slash flow", () => {
   it("strips a slash chip when real text appears before leading images", async () => {
     const { editor } = makeFixture();
     editor.commands.insertContent("hello ");
-    insertImageAttachmentsCommand(editor, [imageAttrs("img-1")]);
+    insertImageAttachmentsCommand(editor, [imageAttrs("img-1")], false);
     editor.commands.insertContent({
       type: "slashCommand",
       attrs: { commandName: "plan" },
