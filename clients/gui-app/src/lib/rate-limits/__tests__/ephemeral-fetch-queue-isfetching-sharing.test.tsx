@@ -8,7 +8,7 @@
  * sides, not just TanStack's own sharing semantics in isolation.
  */
 import { afterEach, describe, expect, it } from "vitest";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -18,6 +18,7 @@ import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtur
 import { DEFAULT_ACCOUNT_CONTEXT } from "@traycer/protocol/common/schemas";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import { createAppQueryClient } from "@/lib/query-client";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { providerRateLimitQueryOptions } from "@/hooks/host/provider-rate-limit-query-options";
 import {
@@ -44,9 +45,12 @@ describe("enqueueRateLimitFetch keeps a mounted useHostProviderRateLimitsQuery o
   });
 
   it("flips isFetching true on the observer while a force:true enqueue is in flight, then false once it settles", async () => {
-    const queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false } },
-    });
+    // Production QueryClient configuration, not a bare test one: the global
+    // `staleTime` default changes `fetchQuery` semantics (it serves
+    // still-fresh cache without fetching), and this exact flow - data freshly
+    // loaded, then a force:true enqueue - is where that difference silently
+    // no-oped the real app's refresh while a staleTime-0 test client passed.
+    const queryClient = createAppQueryClient();
     let callCount = 0;
     const pending = { current: makeControllableResponse() };
     const client = new HostClient<HostRpcRegistry>({

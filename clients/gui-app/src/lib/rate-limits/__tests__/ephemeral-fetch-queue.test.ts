@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_ACCOUNT_CONTEXT } from "@traycer/protocol/common/schemas";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import { queryKeys } from "@/lib/query-keys";
+import { createAppQueryClient } from "@/lib/query-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import {
   __resetRateLimitQueueForTests,
@@ -215,6 +216,66 @@ describe("ephemeral-fetch-queue", () => {
     expect(notified.at(-1)).toBe(false);
 
     unsubscribe();
+  });
+
+  it("force: true actually refetches fresh-cached data under the app QueryClient's global staleTime", async () => {
+    // THE regression that made "Refresh all" look broken in the real app while
+    // every test passed: `fetchQuery` inherits the QueryClient's GLOBAL
+    // `staleTime` default (60s in the app's `query-client.ts`) and serves
+    // still-fresh cache without fetching. The popover's open-time refresh
+    // keeps provider data younger than 60s, so a user's `force: true` refresh
+    // resolved from cache in a microtask - no subprocess, no `isFetching`, a
+    // sub-frame `draining` blip - while the httpFetch lane's
+    // `invalidateQueries` (which always refetches) visibly spun. Every prior
+    // test built a bare `new QueryClient()` (staleTime 0), where `fetchQuery`
+    // always fetches - so the suite exercised semantics the app doesn't run.
+    // This test runs the production configuration.
+    const queryClient = createAppQueryClient();
+    const { request, settlers } = makeControllableRequest();
+    configureRateLimitQueue({ hostId: HOST_ID, queryClient, request });
+
+    // Seed fresh data (dataUpdatedAt = now), as the popover's open-time
+    // refresh does moments before the user clicks.
+    queryClient.setQueryData(keyFor("codex"), response());
+
+    void enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
+      force: true,
+    });
+    expect(isRateLimitQueueDraining()).toBe(true);
+    await flush();
+    expect(request).toHaveBeenCalledTimes(1);
+
+    settlers[0].ok();
+    await flush();
+    expect(isRateLimitQueueDraining()).toBe(false);
+  });
+
+  it("an automatic (force: false) enqueue re-checks freshness at its turn in the lane, not just at enqueue time", async () => {
+    // With `staleTime: 0` on the queue's own `fetchQuery`, the accidental
+    // dedupe the inherited global staleTime used to provide is gone - so the
+    // queue re-checks the freshness floor when a queued automatic fetch's
+    // turn arrives. An automatic trigger enqueued behind a fetch for the same
+    // provider must not re-spawn a subprocess for data that just became fresh.
+    const queryClient = createAppQueryClient();
+    const { request, settlers } = makeControllableRequest();
+    configureRateLimitQueue({ hostId: HOST_ID, queryClient, request });
+
+    // No cached data yet: both pass their enqueue-time freshness check.
+    void enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
+      force: true,
+    });
+    void enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
+      force: false,
+    });
+    await flush();
+    expect(request).toHaveBeenCalledTimes(1);
+
+    settlers[0].ok();
+    await flush();
+    // The automatic turn found the data fresh (the forced fetch just wrote
+    // it) and skipped instead of spawning a second subprocess.
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(isRateLimitQueueDraining()).toBe(false);
   });
 
   it("no-ops (never calls request) while the queue is unconfigured", async () => {

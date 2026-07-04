@@ -59,6 +59,40 @@ let chain: Promise<unknown> = Promise.resolve();
 let inFlightCount = 0;
 const drainingListeners = new Set<() => void>();
 
+/**
+ * Dev-only (Vite HMR) self-healing for this module's singleton state. An HMR
+ * update that re-executes this module - an edit to it or to anything in its
+ * import chain (`query-keys`, `rate-limit-providers`, `@/lib/host`, ...) -
+ * creates a fresh instance with `deps = null`. `RateLimitQueueProvider`'s
+ * configure effect does not re-run for a bubbled invalidation (its component
+ * and effect deps are unchanged), so nothing would rebind the fresh instance:
+ * every enqueue silently no-ops - buttons stop coordinating, manual refreshes
+ * do nothing - until a full window reload, while the old instance keeps
+ * servicing the interval timer's stale closure so data still looks live.
+ * Carrying the binding across HMR generations closes that gap. Tree-shaken
+ * out of production builds (`import.meta.hot` is statically false there).
+ */
+interface RateLimitQueueHotData {
+  rateLimitQueueDeps?: RateLimitQueueConfig | null;
+}
+// Vite types `hot.data` as `any`; the `unknown` hop + structural guard keeps
+// the read type-safe. The guard also handles Vitest, whose truthy
+// `import.meta.hot` stub carries no `data` object, unlike Vite's dev server.
+function isRateLimitQueueHotData(
+  value: unknown,
+): value is RateLimitQueueHotData {
+  return typeof value === "object" && value !== null;
+}
+const hot = import.meta.hot;
+const hotData: unknown = hot?.data;
+if (hot !== undefined && isRateLimitQueueHotData(hotData)) {
+  const carried = hotData.rateLimitQueueDeps;
+  if (carried !== undefined) deps = carried;
+  hot.dispose(() => {
+    hotData.rateLimitQueueDeps = deps;
+  });
+}
+
 function notifyDraining(): void {
   for (const listener of drainingListeners) listener();
 }
@@ -121,12 +155,11 @@ export function enqueueRateLimitFetch(
     "host.getRateLimitUsage"
   >(hostId, "host.getRateLimitUsage", params);
 
-  if (!opts.force) {
+  const isFresh = (): boolean => {
     const updatedAt = queryClient.getQueryState(queryKey)?.dataUpdatedAt ?? 0;
-    if (Date.now() - updatedAt < PROVIDER_RATE_LIMITS_STALE_TIME_MS) {
-      return chain;
-    }
-  }
+    return Date.now() - updatedAt < PROVIDER_RATE_LIMITS_STALE_TIME_MS;
+  };
+  if (!opts.force && isFresh()) return chain;
 
   // Named request fn (not an inline closure in `queryFn`) so the host-scoped
   // key stays the sole cache identity - `request` is stable module state, not a
@@ -138,7 +171,24 @@ export function enqueueRateLimitFetch(
   inFlightCount += 1;
   notifyDraining();
   chain = chain
-    .then(() => queryClient.fetchQuery({ queryKey, queryFn }))
+    .then(() => {
+      // Re-checked at this fetch's turn in the lane (not just at enqueue time):
+      // an earlier fetch in the same round may have just refreshed this exact
+      // provider, and an automatic trigger must not re-spawn a subprocess for
+      // data that became fresh while it waited in the queue.
+      if (!opts.force && isFresh()) return undefined;
+      // `staleTime: 0` is load-bearing: `fetchQuery` inherits the app
+      // QueryClient's GLOBAL `staleTime` default (60s in `query-client.ts`)
+      // and serves still-fresh cache without fetching at all. The popover's
+      // open-time refresh keeps this data younger than 60s, so without the
+      // override a user's `force: true` refresh silently no-oped - resolving
+      // from cache in a microtask, spawning no subprocess, flipping
+      // `draining` for under a frame - while the httpFetch lane's
+      // `invalidateQueries` (which always refetches) visibly spun. Freshness
+      // policy for automatic triggers lives in the explicit `isFresh` checks
+      // above, never in `fetchQuery`'s own staleness short-circuit.
+      return queryClient.fetchQuery({ queryKey, queryFn, staleTime: 0 });
+    })
     // One provider's failure must not block the next provider's turn in the
     // lane, and must not reject the shared chain (which every future enqueue
     // builds on).

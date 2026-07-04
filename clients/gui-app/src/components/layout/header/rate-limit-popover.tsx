@@ -22,13 +22,13 @@ import {
 import { useHostProviderRateLimitsQuery } from "@/hooks/host/use-host-provider-rate-limits-query";
 import { useHostQueries } from "@/hooks/host/use-host-queries";
 import { providerRateLimitQueryOptions } from "@/hooks/host/provider-rate-limit-query-options";
-import { useRefreshProviderRateLimitsOnMount } from "@/hooks/host/use-refresh-provider-rate-limits-on-mount";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import {
   useConfiguredRateLimitProviders,
   type ConfiguredRateLimitProvider,
 } from "@/hooks/rate-limits/use-configured-rate-limit-providers";
 import { useIsRateLimitQueueDraining } from "@/hooks/rate-limits/use-is-rate-limit-queue-draining";
+import { useProviderRateLimitRefresh } from "@/hooks/rate-limits/use-provider-rate-limit-refresh";
 import { enqueueRateLimitFetch } from "@/lib/rate-limits/ephemeral-fetch-queue";
 import {
   formatUnavailableReason,
@@ -43,10 +43,7 @@ import {
   sortProviderStatesByProviderOrder,
 } from "@/lib/provider-ordering";
 import { queryKeys } from "@/lib/query-keys";
-import {
-  rateLimitFetchLane,
-  type RateLimitProviderId,
-} from "@/lib/rate-limit-providers";
+import { type RateLimitProviderId } from "@/lib/rate-limit-providers";
 import { useRelativeTimestamp } from "@/lib/relative-time";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
@@ -584,12 +581,14 @@ function RateLimitProviderBlock({
   readonly onReady: (() => void) | null;
 }): ReactNode {
   const query = useHostProviderRateLimitsQuery(providerId);
-  // Fresh-data-on-open for the ephemeralProcess lane, routed through the
-  // shared serial queue rather than TanStack's own (deliberately disabled)
-  // refetch-on-mount - see providerRateLimitQueryOptions' doc comment.
-  useRefreshProviderRateLimitsOnMount(providerId);
-  const draining = useIsRateLimitQueueDraining();
-  const lane = rateLimitFetchLane(providerId);
+  // Single source of truth for this provider's refresh action + spinner state
+  // (fresh-on-open, queue routing, and the ephemeralProcess `draining` fold-in),
+  // shared verbatim with the Settings card so they can't drift apart.
+  const { refresh, isRefreshing } = useProviderRateLimitRefresh(
+    providerId,
+    query.isFetching,
+    query.refetch,
+  );
   const queryState: ProviderRateLimitQueryState = {
     isPending: query.isPending,
     isFetching: query.isFetching,
@@ -600,19 +599,6 @@ function RateLimitProviderBlock({
   useEffect(() => {
     if (state.kind !== "cold" && onReady !== null) onReady();
   }, [state.kind, onReady]);
-
-  // ephemeralProcess: a manual refresh must go through the serial queue
-  // (`force: true`) so it can't spawn a subprocess overlapping a scheduled tick.
-  // httpFetch: refetch the query directly - no subprocess to bound.
-  const refresh = async (): Promise<void> => {
-    if (lane === "ephemeralProcess") {
-      await enqueueRateLimitFetch(providerId, DEFAULT_ACCOUNT_CONTEXT, {
-        force: true,
-      });
-      return;
-    }
-    await query.refetch();
-  };
 
   // Chip next to the name, single-provider tab only (Overview stays
   // condensed - same scoping the plan/tier line used before it moved into
@@ -655,20 +641,11 @@ function RateLimitProviderBlock({
             <RefreshIconButton
               onRefresh={refresh}
               label={`Refresh ${providerDisplayName(providerId)}`}
-              // ephemeralProcess providers refresh one at a time through the
-              // shared serial queue: this provider's OWN `isFetching` can
-              // already be back to `false` (its turn in the round settled)
-              // while "Refresh all" is still working through a LATER provider
-              // in the same round (`draining` stays true for the whole
-              // round). Folding `draining` in here keeps this button disabled
-              // for the round's full duration, not just this provider's own
-              // slice of it - matching "Refresh all" being in progress" as
-              // the gating condition, not "my own fetch is in flight".
-              // httpFetch providers refresh concurrently (no shared queue),
-              // so their own `isFetching` is already the complete signal.
-              refreshing={
-                query.isFetching || (lane === "ephemeralProcess" && draining)
-              }
+              // `isRefreshing` (from useProviderRateLimitRefresh) already folds
+              // in the ephemeralProcess `draining` flag, so this button stays
+              // disabled for a "Refresh all" round's full duration, not just
+              // this provider's own slice of it.
+              refreshing={isRefreshing}
             />
           ) : null}
         </div>

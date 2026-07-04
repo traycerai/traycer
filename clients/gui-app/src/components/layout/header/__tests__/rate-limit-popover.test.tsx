@@ -678,6 +678,16 @@ describe("<RateLimitPopover /> Refresh all", () => {
     expect(mocks.lastUseHostQueriesOptions?.retry).toBe(false);
   });
 
+  it("keeps a single ephemeralProcess provider's own refresh button disabled while the queue is draining, even though its own isFetching has already settled", () => {
+    mocks.configured = [{ providerId: "codex", lane: "ephemeralProcess" }];
+    mocks.results = { codex: readyResult(codexReady()) };
+    mocks.draining = true;
+    renderPopover();
+    fireEvent.click(screen.getByRole("tab", { name: "Codex" }));
+    const refreshCodex = screen.getByRole("button", { name: "Refresh Codex" });
+    expect((refreshCodex as HTMLButtonElement).disabled).toBe(true);
+  });
+
   it("enqueues each ephemeralProcess provider with force:true", () => {
     mocks.configured = [
       { providerId: "codex", lane: "ephemeralProcess" },
