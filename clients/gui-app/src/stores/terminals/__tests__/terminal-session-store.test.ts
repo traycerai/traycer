@@ -200,9 +200,22 @@ describe("createTerminalSessionStore", () => {
     });
   });
 
-  it("leaves exitReason untouched on a live exit frame (snapshot is authoritative)", () => {
+  it("a live exit frame does not clobber a snapshot-set exitReason (snapshot is authoritative)", () => {
     const harness = createHarness();
 
+    // Seed a non-null reason via the authoritative snapshot path first...
+    const base = snapshot("");
+    emitSnapshot(harness.callbacks(), {
+      ...base,
+      session: {
+        ...base.session,
+        status: "exited",
+        exitCode: -1,
+        exitReason: "reaped",
+      },
+    });
+
+    // ...then a live exit frame (which carries no reason) must leave it intact.
     const frame: TerminalExitFrame = {
       kind: "exit",
       hasBinaryPayload: false,
@@ -214,7 +227,7 @@ describe("createTerminalSessionStore", () => {
     expect(harness.handle.store.getState()).toMatchObject({
       status: "exited",
       exitCode: 1,
-      exitReason: null,
+      exitReason: "reaped",
     });
   });
 
