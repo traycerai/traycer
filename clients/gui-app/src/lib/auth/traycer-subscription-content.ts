@@ -56,47 +56,43 @@ export function isCreditBasedPricing(status: SubscriptionStatus): boolean {
 // it isn't a pricing-generation tag on an otherwise-equivalent tier.
 const VERSION_SUFFIX_PATTERN = /_V\d+$/;
 
+// Every `SubscriptionStatus` this client's protocol version knows about maps
+// to an exact label here. `Partial` (not a bare `Record`) so a status a
+// *newer* backend added that this older client build doesn't know about yet
+// (the protocol is versioned and runtime-negotiated - clients and the host
+// ship independently) still falls through to `subscriptionPlanLabel`'s
+// `titleCaseFromToken` fallback instead of a missing-key crash.
+const PLAN_LABELS: Partial<Record<SubscriptionStatus, string>> = {
+  FREE: "BYOA",
+  PENDING: "BYOA",
+  BYOA_V3: "Sync",
+  LITE_V3: "Lite",
+  LITE_V2: "Lite (Legacy)",
+  LITE: "Lite (Legacy)",
+  PRO_V3: "Pro",
+  PRO_V2: "Pro (Legacy)",
+  PRO: "Pro (Legacy)",
+  PRO_LEGACY: "Pro (Legacy)",
+  PRO_PLUS: "Pro+ (Legacy)",
+  PRO_PLUS_V2: "Pro+",
+  ULTRA_1X_V3: "Ultra",
+  ULTRA_2X_V3: "Ultra+",
+  ULTRA_3X_V3: "Ultra+",
+  ULTRA_4X_V3: "Ultra+",
+  ULTRA_5X_V3: "Ultra+",
+};
+
 /**
  * The Traycer plan/tier label for the selected account (Core Flows parity
  * with Codex/Claude: "shown where the provider reports one") - the header
  * popover's "Traycer" tab shows this as a chip next to the name, same as
  * `resolveProviderPlanLabel` does for the host-RPC providers.
  */
-//eslint-disable-next-line complexity
 export function subscriptionPlanLabel(status: SubscriptionStatus): string {
-  switch (status) {
-    case "FREE":
-    case "PENDING":
-      return "BYOA";
-    case "BYOA_V3":
-      return "Sync";
-    case "LITE_V3":
-      return "Lite";
-    case "LITE_V2":
-    case "LITE":
-      return "Lite (Legacy)";
-    case "PRO_V3":
-      return "Pro";
-    case "PRO_V2":
-    case "PRO":
-    case "PRO_LEGACY":
-      return "Pro (Legacy)";
-    case "PRO_PLUS":
-      return "Pro+ (Legacy)";
-    case "PRO_PLUS_V2":
-      return "Pro+";
-    case "ULTRA_1X_V3":
-      return "Ultra";
-    case "ULTRA_2X_V3":
-    case "ULTRA_3X_V3":
-    case "ULTRA_4X_V3":
-    case "ULTRA_5X_V3":
-      return "Ultra+";
-    default:
-      return titleCaseFromToken(
-        String(status).replace(VERSION_SUFFIX_PATTERN, ""),
-      );
-  }
+  return (
+    PLAN_LABELS[status] ??
+    titleCaseFromToken(String(status).replace(VERSION_SUFFIX_PATTERN, ""))
+  );
 }
 
 /**

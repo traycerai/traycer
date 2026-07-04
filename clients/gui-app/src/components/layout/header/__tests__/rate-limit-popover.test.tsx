@@ -41,6 +41,10 @@ type MockState = {
   openSettings: Mock<(...args: unknown[]) => void>;
   enqueue: Mock<(...args: unknown[]) => Promise<void>>;
   authUser: MockAuthUser;
+  // Last `options` object `RateLimitRefreshAllButton` passed to
+  // `useHostQueries`, so a test can assert it reused the real lane options
+  // (e.g. `retry: false`) instead of dropping them.
+  lastUseHostQueriesOptions: { retry?: boolean } | null;
 };
 
 function coldAuthUser(): MockAuthUser {
@@ -60,6 +64,7 @@ const mocks = vi.hoisted<MockState>(() => ({
   draining: false,
   openSettings: vi.fn(),
   enqueue: vi.fn((..._args: unknown[]) => Promise.resolve()),
+  lastUseHostQueriesOptions: null,
   authUser: {
     data: null,
     isPending: false,
@@ -86,11 +91,14 @@ vi.mock("@/hooks/host/use-host-provider-rate-limits-query", () => ({
 vi.mock("@/hooks/host/use-host-queries", () => ({
   useHostQueries: (args: {
     requests: ReadonlyArray<{ params: { providerId: string } }>;
-  }) =>
-    args.requests.map(
+    options: { retry?: boolean } | null;
+  }) => {
+    mocks.lastUseHostQueriesOptions = args.options;
+    return args.requests.map(
       (request) =>
         mocks.results[request.params.providerId] ?? readyResult(null),
-    ),
+    );
+  },
 }));
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
@@ -304,6 +312,7 @@ beforeEach(() => {
   mocks.draining = false;
   mocks.openSettings = vi.fn();
   mocks.enqueue = vi.fn((..._args: unknown[]) => Promise.resolve());
+  mocks.lastUseHostQueriesOptions = null;
   mocks.authUser = coldAuthUser();
   useAccountContextStore.setState({ accountContext: { type: "PERSONAL" } });
   onClose = vi.fn();
@@ -649,6 +658,24 @@ describe("<RateLimitPopover /> Refresh all", () => {
     renderPopover();
     const refreshAll = screen.getByRole("button", { name: "Refresh all" });
     expect((refreshAll as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("passes the httpFetch lane's real query options (e.g. retry: false) to useHostQueries instead of the QueryClient defaults", () => {
+    // Regression: an earlier version passed `options: null`, so this batch of
+    // queries silently inherited the global QueryClient's default retry
+    // policy for the exact same query key `RateLimitProviderBlock`'s own
+    // `useHostProviderRateLimitsQuery` deliberately sets `retry: false` for.
+    mocks.configured = [{ providerId: "kilocode", lane: "httpFetch" }];
+    mocks.results = {
+      kilocode: readyResult({
+        provider: "kilocode",
+        available: true,
+        creditBalance: 9,
+        passState: null,
+      }),
+    };
+    renderPopover();
+    expect(mocks.lastUseHostQueriesOptions?.retry).toBe(false);
   });
 
   it("enqueues each ephemeralProcess provider with force:true", () => {

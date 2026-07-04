@@ -483,6 +483,20 @@ function RateLimitRefreshAllButton({
   const httpFetchProviders = providers.filter(
     (provider) => provider.lane === "httpFetch",
   );
+  // Every httpFetch provider resolves to the exact same lane options (the
+  // `isHttpFetch` branch in `providerRateLimitQueryOptions` doesn't vary by
+  // provider id) - reusing the first one's is safe without the "verify every
+  // request shares one lane" check `useHeaderRateLimitBars` needs (that hook's
+  // provider list isn't pre-filtered to a single lane the way `httpFetchProviders`
+  // is here). Passing this through (rather than `null`) matters:
+  // `RateLimitProviderBlock`'s own query for these same providers sets
+  // `retry: false`, and TanStack keys retry/staleTime/refetchOnMount per query
+  // key - an unset `options` here would silently inherit the global
+  // QueryClient's defaults (one retry) for this same key instead.
+  const httpFetchOptions =
+    httpFetchProviders.length === 0
+      ? null
+      : providerRateLimitQueryOptions(httpFetchProviders[0].providerId).options;
   const httpFetchQueries = useHostQueries<
     HostRpcRegistry,
     "host.getRateLimitUsage"
@@ -494,7 +508,7 @@ function RateLimitRefreshAllButton({
       );
       return { method, params };
     }),
-    options: null,
+    options: httpFetchOptions,
   });
   const refreshing =
     draining || httpFetchQueries.some((query) => query.isFetching);
