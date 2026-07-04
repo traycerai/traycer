@@ -101,8 +101,8 @@ export interface AddArtifactDropdownProps {
    */
   tuiAgentPending: boolean | undefined;
   disabled: boolean | undefined;
-  /** Tooltip text to show when disabled. Omit when no special message needed. */
-  disabledTooltip: string | undefined;
+  /** Tooltip text to show when disabled. `null` when no special message needed. */
+  disabledTooltip: string | null;
   disabledTypes: ReadonlyArray<EpicNodeKind> | undefined;
   /**
    * Optional set of kinds to omit from the dropdown.
@@ -157,7 +157,7 @@ export function AddNodeDropdown(props: AddArtifactDropdownProps) {
   if (disabled) {
     return (
       <TooltipWrapper
-        label={disabledTooltip ?? null}
+        label={disabledTooltip}
         side="top"
         sideOffset={undefined}
         align={undefined}

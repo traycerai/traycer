@@ -740,6 +740,7 @@ describe("useRenderedMessages", () => {
         codexTurnId: "turn-1",
         codexUserMessageId: "codex-user-1",
         createdAt: 1000,
+        coveredUntilMessageId: null,
       },
     };
 
