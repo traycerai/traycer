@@ -63,6 +63,7 @@ export function ChatComposerEditorSlot(props: ChatComposerEditorSlotProps) {
       disabled={false}
       placeholder={isNarrow ? NARROW_PLACEHOLDER : PLACEHOLDER}
       editorClassName="max-h-[3.5lh] min-h-9"
+      stabilizeImageAttachmentCaret
       onSnapshot={onSnapshot}
       onSubmit={onSubmit}
       onPaste={onPaste}
