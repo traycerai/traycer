@@ -60,13 +60,20 @@ export function worktreeTierRank(tier: WorktreeTier): number {
  *     otherwise swallow. Both tiers stay per-row only, so this ordering only
  *     changes the LABEL, never bulk safety.
  *  3. **review** (amber) - anything unproven or with would-be-lost state:
- *     dirty, ahead-and-unmerged, null branch status, referenced-and-unmerged
- *     (the `owners` gate), or a detached HEAD (`branch === null`, ALWAYS review
- *     - force-remove can orphan detached commits).
+ *     dirty, a detached HEAD (`branch === null`, ALWAYS review - force-remove
+ *     can orphan detached commits), null branch status (position unprobed),
+ *     referenced-and-unmerged (the `owners` gate), or not-merged with local
+ *     commits that aren't proven absent (`ahead === null` - never-pushed and
+ *     not contained in default - OR `ahead > 0`).
  *  4. clean + `mergedIntoDefault` → **merged** (green; proof stands regardless
- *     of owners - a merged branch loses nothing on removal).
+ *     of owners and of any upstream - a never-pushed branch whose HEAD is
+ *     contained in the default lands here. Proof beats owners: nothing is lost).
  *  5. clean + non-null status + `ahead === 0` + no owners + not merged →
- *     **unreferenced** (quiet-green).
+ *     **unreferenced** (quiet-green; reserved for a PROVEN upstream-tip branch).
+ *
+ * `ahead === null` (no upstream) is NOT a green light: a never-pushed branch is
+ * only ever Merged (proven contained) or Review (not proven) - never
+ * Unreferenced. Unreferenced requires a proven `ahead === 0`.
  */
 export function classifyWorktreeTier(
   entry: WorktreeHostEntryV11,
@@ -77,10 +84,10 @@ export function classifyWorktreeTier(
   const merged = status !== null && status.mergedIntoDefault;
   if (
     entry.uncommittedCount > 0 ||
-    (status !== null && status.ahead > 0 && !merged) ||
+    entry.branch === null ||
     status === null ||
     (entry.owners.length > 0 && !merged) ||
-    entry.branch === null
+    (!merged && (status.ahead === null || status.ahead > 0))
   ) {
     return "review";
   }
@@ -183,10 +190,16 @@ function worktreeFacts(
 
 function branchStatusFacts(status: WorktreeBranchStatus | null): string[] {
   if (status === null) return [];
+  // `ahead`/`behind` are null for a never-pushed branch (no upstream to diff);
+  // render nothing rather than a bogus "0 ahead". The merged fact still shows.
   return [
     ...(status.mergedIntoDefault ? ["merged"] : []),
-    ...(status.ahead > 0 ? [`${status.ahead} ahead`] : []),
-    ...(status.behind > 0 ? [`${status.behind} behind`] : []),
+    ...(status.ahead !== null && status.ahead > 0
+      ? [`${status.ahead} ahead`]
+      : []),
+    ...(status.behind !== null && status.behind > 0
+      ? [`${status.behind} behind`]
+      : []),
   ];
 }
 

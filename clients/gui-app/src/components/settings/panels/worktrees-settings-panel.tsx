@@ -1868,7 +1868,12 @@ function deleteDialogCopy(entry: WorktreeHostEntryV11): {
     };
   }
   const status = entry.branchStatus;
-  if (status !== null && status.ahead > 0 && !status.mergedIntoDefault) {
+  if (
+    status !== null &&
+    status.ahead !== null &&
+    status.ahead > 0 &&
+    !status.mergedIntoDefault
+  ) {
     const count = status.ahead;
     const plural = count === 1 ? "" : "s";
     return {
@@ -1922,7 +1927,18 @@ function worktreeDeleteClass(entry: WorktreeHostEntryV11): WorktreeDeleteClass {
   const merged = status !== null && status.mergedIntoDefault;
   if (entry.uncommittedCount > 0) return "dirty";
   if (entry.branch === null) return "detached";
-  if (status !== null && status.ahead > 0 && !merged) return "unmerged";
+  // Not merged and not proven at the upstream tip: real local-only commits
+  // (`ahead > 0`) OR a never-pushed branch with no upstream to prove them absent
+  // (`ahead === null`). Both are would-be-lost; only the PROVEN `ahead === 0`
+  // below is "clean". This keeps the never-pushed-diverged cohort out of the
+  // "unverified/unreferenced" bucket, matching its Review tier.
+  if (
+    status !== null &&
+    !merged &&
+    (status.ahead === null || status.ahead > 0)
+  ) {
+    return "unmerged";
+  }
   if (!entry.gitRemovable) return "orphaned";
   if (merged) return "merged";
   if (status !== null && status.ahead === 0) return "clean";

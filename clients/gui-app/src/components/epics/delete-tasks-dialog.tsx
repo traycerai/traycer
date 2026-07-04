@@ -154,7 +154,12 @@ function WorktreeCleanupRow(props: {
         {candidate.uncommittedCount === 1 ? "" : "s"} will be lost
       </span>
     );
-  } else if (status !== null && status.ahead > 0 && !status.mergedIntoDefault) {
+  } else if (
+    status !== null &&
+    status.ahead !== null &&
+    status.ahead > 0 &&
+    !status.mergedIntoDefault
+  ) {
     hint = (
       <span className="mt-0.5 flex items-center gap-1 text-ui-xs text-amber-600 dark:text-amber-400">
         <AlertTriangle className="size-3 shrink-0" aria-hidden />

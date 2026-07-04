@@ -119,6 +119,40 @@ describe("classifyWorktreeTier - canonical ladder (first match wins)", () => {
       tier: "merged",
     },
     {
+      name: "never-pushed + contained (null ahead/behind, merged) → merged (the win)",
+      entry: entry({
+        branchStatus: status({
+          ahead: null,
+          behind: null,
+          mergedIntoDefault: true,
+        }),
+      }),
+      tier: "merged",
+    },
+    {
+      name: "never-pushed + diverged (null ahead, not merged) → review, NEVER unreferenced",
+      entry: entry({
+        branchStatus: status({
+          ahead: null,
+          behind: null,
+          mergedIntoDefault: false,
+        }),
+      }),
+      tier: "review",
+    },
+    {
+      name: "never-pushed + contained but referenced → merged (proof beats owners, no upstream)",
+      entry: entry({
+        owners: [owner("epic-1")],
+        branchStatus: status({
+          ahead: null,
+          behind: null,
+          mergedIntoDefault: true,
+        }),
+      }),
+      tier: "merged",
+    },
+    {
       name: "merged proof holds even with behind > 0",
       entry: entry({
         branchStatus: status({ behind: 4, mergedIntoDefault: true }),
@@ -161,6 +195,27 @@ describe("classifyWorktreeTier - canonical ladder (first match wins)", () => {
       entry({ branch: null, branchStatus: status({ ahead: 1 }) }),
     );
     expect(detached.facts).toContain("detached HEAD");
+
+    // Never-pushed + contained: the "merged" fact shows, and null ahead/behind
+    // render nothing (never "0 ahead" / NaN).
+    const neverPushedMerged = classifyWorktree(
+      entry({
+        branchStatus: status({
+          ahead: null,
+          behind: null,
+          mergedIntoDefault: true,
+        }),
+      }),
+    );
+    expect(neverPushedMerged.tier).toBe("merged");
+    expect(neverPushedMerged.facts).toContain("merged");
+    expect(neverPushedMerged.facts).toContain("clean");
+    expect(neverPushedMerged.facts.some((f) => f.includes("ahead"))).toBe(
+      false,
+    );
+    expect(neverPushedMerged.facts.some((f) => f.includes("behind"))).toBe(
+      false,
+    );
   });
 });
 
@@ -207,6 +262,33 @@ describe("isPrimarySweepEligible", () => {
         }),
       ),
     ).toBe(true);
+  });
+
+  it("never-pushed: contained is primary-eligible, diverged is not", () => {
+    expect(
+      isPrimarySweepEligible(
+        entry({
+          branchStatus: status({
+            ahead: null,
+            behind: null,
+            mergedIntoDefault: true,
+          }),
+        }),
+      ),
+    ).toBe(true);
+    // Null ahead is not a proven `ahead === 0`, so a diverged never-pushed
+    // branch is never bulk-swept.
+    expect(
+      isPrimarySweepEligible(
+        entry({
+          branchStatus: status({
+            ahead: null,
+            behind: null,
+            mergedIntoDefault: false,
+          }),
+        }),
+      ),
+    ).toBe(false);
   });
 
   it("rejects referenced-not-merged, dirty, null status, in-use, orphan", () => {
@@ -299,6 +381,31 @@ describe("isEvidenceProvenRemovable (Task-delete default-check rule)", () => {
         branchStatus: status({ ahead: 0 }),
       }),
     ).toBe(true);
+  });
+
+  it("never-pushed: contained → proven removable, diverged → not", () => {
+    // Never-pushed + contained is proven by the upstream-free merge proof.
+    expect(
+      isEvidenceProvenRemovable({
+        uncommittedCount: 0,
+        branchStatus: status({
+          ahead: null,
+          behind: null,
+          mergedIntoDefault: true,
+        }),
+      }),
+    ).toBe(true);
+    // Never-pushed + diverged: null ahead is NOT `ahead === 0`, so unproven.
+    expect(
+      isEvidenceProvenRemovable({
+        uncommittedCount: 0,
+        branchStatus: status({
+          ahead: null,
+          behind: null,
+          mergedIntoDefault: false,
+        }),
+      }),
+    ).toBe(false);
   });
 
   it("false for null status (unproven), dirty, or ahead-not-merged", () => {
