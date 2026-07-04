@@ -232,6 +232,9 @@ function stabilizeTerminalImageAttachmentCaret(editor: Editor): void {
   if ($from.nodeAfter !== null) return;
 
   const boundaryPos = selection.from;
-  editor.commands.insertContent({ type: "text", text: " " });
-  editor.commands.setTextSelection(boundaryPos);
+  editor
+    .chain()
+    .insertContent({ type: "text", text: " " })
+    .setTextSelection(boundaryPos)
+    .run();
 }

@@ -16,7 +16,10 @@ export function MentionMenuItem(props: MentionMenuItemProps) {
         {entry.label}
       </span>
       {trailing ? (
-        <span className="min-w-0 shrink max-w-[45%] truncate text-ui-xs text-muted-foreground/70">
+        <span
+          className="min-w-0 shrink max-w-[45%] truncate text-ui-xs text-muted-foreground/70"
+          title={entry.preview === null ? trailing : undefined}
+        >
           {trailing}
         </span>
       ) : null}

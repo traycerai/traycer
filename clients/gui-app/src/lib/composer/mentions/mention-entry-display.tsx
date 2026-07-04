@@ -122,15 +122,22 @@ function commitSubjectFromLabel(label: string): string {
 export function iconForSuggestion(
   entry: WorkspaceEntry | EpicMentionEntry,
 ): ReactElement {
-  if (entry.kind === "file") {
-    return <MaterialFileIcon filename={entry.relPath} className="size-4" />;
+  switch (entry.kind) {
+    case "file":
+      return <MaterialFileIcon filename={entry.relPath} className="size-4" />;
+    case "folder":
+      return folderIcon();
+    case "worktree":
+      return worktreeIcon();
+    case "git":
+      return gitIcon();
+    case "epic":
+      return epicIcon();
+    case "epic-artifact":
+      return artifactIcon(entry.artifactType);
+    case "epic-chat":
+      return epicNodeIcon("chat");
   }
-  if (entry.kind === "folder") return folderIcon();
-  if (entry.kind === "worktree") return worktreeIcon();
-  if (entry.kind === "epic") return epicIcon();
-  if (entry.kind === "epic-artifact") return artifactIcon(entry.artifactType);
-  if (entry.kind === "epic-chat") return epicNodeIcon("chat");
-  return gitIcon();
 }
 
 export function folderIcon(): ReactElement {
