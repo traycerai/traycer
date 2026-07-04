@@ -45,6 +45,10 @@ type MockState = {
   // `useHostQueries`, so a test can assert it reused the real lane options
   // (e.g. `retry: false`) instead of dropping them.
   lastUseHostQueriesOptions: { retry?: boolean } | null;
+  // Provider ids of the last `requests` batch passed to `useHostQueries`, so
+  // a test can assert the button subscribes to EVERY configured httpFetch
+  // provider's query state, not just the first.
+  lastUseHostQueriesProviderIds: ReadonlyArray<string> | null;
 };
 
 function coldAuthUser(): MockAuthUser {
@@ -65,6 +69,7 @@ const mocks = vi.hoisted<MockState>(() => ({
   openSettings: vi.fn(),
   enqueue: vi.fn((..._args: unknown[]) => Promise.resolve()),
   lastUseHostQueriesOptions: null,
+  lastUseHostQueriesProviderIds: null,
   authUser: {
     data: null,
     isPending: false,
@@ -94,6 +99,9 @@ vi.mock("@/hooks/host/use-host-queries", () => ({
     options: { retry?: boolean } | null;
   }) => {
     mocks.lastUseHostQueriesOptions = args.options;
+    mocks.lastUseHostQueriesProviderIds = args.requests.map(
+      (request) => request.params.providerId,
+    );
     return args.requests.map(
       (request) =>
         mocks.results[request.params.providerId] ?? readyResult(null),
@@ -313,6 +321,7 @@ beforeEach(() => {
   mocks.openSettings = vi.fn();
   mocks.enqueue = vi.fn((..._args: unknown[]) => Promise.resolve());
   mocks.lastUseHostQueriesOptions = null;
+  mocks.lastUseHostQueriesProviderIds = null;
   mocks.authUser = coldAuthUser();
   useAccountContextStore.setState({ accountContext: { type: "PERSONAL" } });
   onClose = vi.fn();
@@ -660,12 +669,21 @@ describe("<RateLimitPopover /> Refresh all", () => {
     expect((refreshAll as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it("passes the httpFetch lane's real query options (e.g. retry: false) to useHostQueries instead of the QueryClient defaults", () => {
-    // Regression: an earlier version passed `options: null`, so this batch of
-    // queries silently inherited the global QueryClient's default retry
+  it("passes the httpFetch lane's real query options (e.g. retry: false) to useHostQueries for every configured httpFetch provider", () => {
+    // Regression 1: an earlier version passed `options: null`, so this batch
+    // of queries silently inherited the global QueryClient's default retry
     // policy for the exact same query key `RateLimitProviderBlock`'s own
     // `useHostProviderRateLimitsQuery` deliberately sets `retry: false` for.
-    mocks.configured = [{ providerId: "kilocode", lane: "httpFetch" }];
+    // Regression 2 (review feedback): both httpFetch providers are configured
+    // here - not just one - because production derives the shared options from
+    // `httpFetchProviders[0]` (safe today: `providerRateLimitQueryOptions`
+    // branches on lane, never provider id, so all httpFetch options are
+    // identical) and must still subscribe to EVERY provider's query state.
+    // Passed in non-canonical order to exercise the sort in front of `[0]`.
+    mocks.configured = [
+      { providerId: "kilocode", lane: "httpFetch" },
+      { providerId: "openrouter", lane: "httpFetch" },
+    ];
     mocks.results = {
       kilocode: readyResult({
         provider: "kilocode",
@@ -673,9 +691,25 @@ describe("<RateLimitPopover /> Refresh all", () => {
         creditBalance: 9,
         passState: null,
       }),
+      openrouter: readyResult({
+        provider: "openrouter",
+        available: true,
+        limit: 100,
+        limitRemaining: 40,
+        dailySpend: 5,
+        weeklySpend: 12,
+        monthlySpend: 30,
+        totalCredits: 100,
+        totalUsage: 60,
+        balance: 40,
+      }),
     };
     renderPopover();
     expect(mocks.lastUseHostQueriesOptions?.retry).toBe(false);
+    expect([...(mocks.lastUseHostQueriesProviderIds ?? [])].sort()).toEqual([
+      "kilocode",
+      "openrouter",
+    ]);
   });
 
   it("keeps a single ephemeralProcess provider's own refresh button disabled while the queue is draining, even though its own isFetching has already settled", () => {
