@@ -44,7 +44,7 @@ type MockState = {
   // Last `options` object `RateLimitRefreshAllButton` passed to
   // `useHostQueries`, so a test can assert it reused the real lane options
   // (e.g. `retry: false`) instead of dropping them.
-  lastUseHostQueriesOptions: { retry?: boolean } | null;
+  lastUseHostQueriesOptions: { retry: boolean | undefined } | null;
   // Provider ids of the last `requests` batch passed to `useHostQueries`, so
   // a test can assert the button subscribes to EVERY configured httpFetch
   // provider's query state, not just the first.
@@ -96,7 +96,7 @@ vi.mock("@/hooks/host/use-host-provider-rate-limits-query", () => ({
 vi.mock("@/hooks/host/use-host-queries", () => ({
   useHostQueries: (args: {
     requests: ReadonlyArray<{ params: { providerId: string } }>;
-    options: { retry?: boolean } | null;
+    options: { retry: boolean | undefined } | null;
   }) => {
     mocks.lastUseHostQueriesOptions = args.options;
     mocks.lastUseHostQueriesProviderIds = args.requests.map(

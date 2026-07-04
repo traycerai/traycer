@@ -3,35 +3,23 @@
  * httpFetch provider's query key (what `RateLimitRefreshAllButton` issues)
  * flips `isFetching` on an already-mounted `useHostProviderRateLimitsQuery`
  * observer for that same provider - the mechanism `RateLimitProviderBlock`'s
- * per-provider refresh icon depends on. Uses a real `HostClient` +
- * `MockHostMessenger`, not a fully mocked query hook.
+ * per-provider refresh icon depends on. Uses the shared harness's real
+ * `HostClient` + `MockHostMessenger` and PRODUCTION QueryClient
+ * configuration - a bare test client's staleTime-0 defaults exercise
+ * different fetch semantics than the app runs.
  */
 import { afterEach, describe, expect, it } from "vitest";
-import { QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, renderHook, waitFor } from "@testing-library/react";
-import type { ReactNode } from "react";
-import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
-import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
-import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { DEFAULT_ACCOUNT_CONTEXT } from "@traycer/protocol/common/schemas";
-import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
-import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
-import { createAppQueryClient } from "@/lib/query-client";
+import type { HostRpcRegistry } from "@/lib/host";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { providerRateLimitQueryOptions } from "@/hooks/host/provider-rate-limit-query-options";
 import { queryKeys } from "@/lib/query-keys";
-
-function makeControllableResponse() {
-  let resolveFn: (() => void) | null = null;
-  const promise = new Promise<void>((resolve) => {
-    resolveFn = resolve;
-  });
-  return {
-    promise,
-    resolve: () => resolveFn?.(),
-  };
-}
+import {
+  createQueryClientWrapper,
+  createRateLimitSharingHarness,
+} from "@/lib/rate-limits/__tests__/provider-rate-limit-sharing-harness";
 
 describe("invalidateQueries keeps a mounted useHostProviderRateLimitsQuery observer's isFetching in sync (httpFetch lane)", () => {
   afterEach(() => {
@@ -39,53 +27,12 @@ describe("invalidateQueries keeps a mounted useHostProviderRateLimitsQuery obser
   });
 
   it("flips isFetching true on the observer while the invalidation-triggered refetch is in flight", async () => {
-    // Production QueryClient configuration - same reasoning as the
-    // ephemeral-fetch-queue sharing test: a bare test client's staleTime-0
-    // defaults exercise different fetch semantics than the app runs.
-    const queryClient = createAppQueryClient();
-    let callCount = 0;
-    const pending = { current: makeControllableResponse() };
-    const client = new HostClient<HostRpcRegistry>({
-      registry: hostRpcRegistry,
-      invalidator: createHostQueryInvalidator(queryClient),
-      messenger: new MockHostMessenger<HostRpcRegistry>({
-        registry: hostRpcRegistry,
-        requestId: () => "req-1",
-        handlers: {
-          "host.getRateLimitUsage": async () => {
-            callCount += 1;
-            if (callCount === 1) {
-              return {
-                totalTokens: 0,
-                remainingTokens: 0,
-                providerRateLimits: null,
-              };
-            }
-            await pending.current.promise;
-            return {
-              totalTokens: 0,
-              remainingTokens: 0,
-              providerRateLimits: null,
-            };
-          },
-        },
-      }),
-    });
-    client.bind(mockLocalHostEntry);
-    client.setRequestContext(
-      createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
-    );
-
-    const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
-      <QueryClientProvider client={queryClient}>
-        {props.children}
-      </QueryClientProvider>
-    );
+    const harness = createRateLimitSharingHarness();
     const { method, params, options } =
       providerRateLimitQueryOptions("openrouter");
     const rendered = renderHook(
-      () => useHostQuery({ client, method, params, options }),
-      { wrapper: Wrapper },
+      () => useHostQuery({ client: harness.client, method, params, options }),
+      { wrapper: createQueryClientWrapper(harness.queryClient) },
     );
 
     await waitFor(() => expect(rendered.result.current.isPending).toBe(false));
@@ -93,7 +40,7 @@ describe("invalidateQueries keeps a mounted useHostProviderRateLimitsQuery obser
 
     // Exactly what `RateLimitRefreshAllButton.refreshAll` issues for an
     // httpFetch provider.
-    void queryClient.invalidateQueries({
+    void harness.queryClient.invalidateQueries({
       queryKey: queryKeys.hostMethod<HostRpcRegistry, "host.getRateLimitUsage">(
         mockLocalHostEntry.hostId,
         "host.getRateLimitUsage",
@@ -103,7 +50,7 @@ describe("invalidateQueries keeps a mounted useHostProviderRateLimitsQuery obser
 
     await waitFor(() => expect(rendered.result.current.isFetching).toBe(true));
 
-    pending.current.resolve();
+    harness.resolvePendingResponse();
     await waitFor(() => expect(rendered.result.current.isFetching).toBe(false));
   });
 });

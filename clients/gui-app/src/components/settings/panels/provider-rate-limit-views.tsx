@@ -299,6 +299,36 @@ function formatRateLimitReachedType(value: string): string {
   return CODEX_RATE_LIMIT_REACHED_LABELS[value] ?? titleCaseFromToken(value);
 }
 
+/**
+ * Stacks a detail view's content groups vertically with a hairline divider
+ * between consecutive groups that actually render (feedback: "show separator
+ * between global limits, Spark limits, credits and manual resets" - it looked
+ * cluttered without them). `null` groups are dropped before dividers are
+ * placed, so a divider never renders before the first visible group or after
+ * the last. Shared by `CodexRateLimitView` and `ClaudeRateLimitView` so the
+ * divider rules can't drift between providers.
+ */
+function RateLimitGroupStack({
+  groups,
+}: {
+  readonly groups: ReadonlyArray<{
+    readonly key: string;
+    readonly node: ReactNode;
+  }>;
+}): ReactNode {
+  const rendered = groups.filter((group) => group.node !== null);
+  return (
+    <div className="flex flex-col gap-3">
+      {rendered.map((group, index) => (
+        <div key={group.key} className="flex flex-col gap-3">
+          {index > 0 ? <div aria-hidden className="h-px bg-border/70" /> : null}
+          {group.node}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function CodexRateLimitView({
   data,
   variant,
@@ -367,20 +397,8 @@ export function CodexRateLimitView({
       <CodexResetCreditsRow resetCredits={data.resetCredits} />
     ) : null;
 
-  // Groups are separated by a divider only where both the preceding and the
-  // current group actually render (feedback: "show separator between global
-  // limits, Spark limits, credits and manual resets" - it looked cluttered
-  // without them). Overview never gets here with more than `globalLimits`.
-  const groups: ReadonlyArray<{
-    readonly key: string;
-    readonly node: ReactNode;
-  }> = [
-    { key: "global", node: globalLimits },
-    { key: "per-model", node: perModelLimits },
-    { key: "credits", node: credits },
-    { key: "manual-resets", node: manualResets },
-  ].filter((group) => group.node !== null);
-
+  // Overview never gets here with more than `globalLimits`; the divider
+  // placement rules live on `RateLimitGroupStack`.
   return (
     <div className="flex flex-col gap-3">
       {!overview && data.rateLimitReachedType !== null ? (
@@ -390,12 +408,14 @@ export function CodexRateLimitView({
           </Badge>
         </div>
       ) : null}
-      {groups.map((group, index) => (
-        <div key={group.key} className="flex flex-col gap-3">
-          {index > 0 ? <div aria-hidden className="h-px bg-border/70" /> : null}
-          {group.node}
-        </div>
-      ))}
+      <RateLimitGroupStack
+        groups={[
+          { key: "global", node: globalLimits },
+          { key: "per-model", node: perModelLimits },
+          { key: "credits", node: credits },
+          { key: "manual-resets", node: manualResets },
+        ]}
+      />
     </div>
   );
 }
@@ -527,27 +547,16 @@ export function ClaudeRateLimitView({
       <ClaudeExtraUsageRow extraUsage={data.extraUsage} />
     ) : null;
 
-  // Same divider rule as `CodexRateLimitView`: a hairline only where both the
-  // preceding and the current group actually render. Overview never gets here
-  // with more than `globalLimits`.
-  const groups: ReadonlyArray<{
-    readonly key: string;
-    readonly node: ReactNode;
-  }> = [
-    { key: "global", node: globalLimits },
-    { key: "per-model", node: perModelLimits },
-    { key: "extra-usage", node: extraUsage },
-  ].filter((group) => group.node !== null);
-
+  // Overview never gets here with more than `globalLimits`; the divider
+  // placement rules live on `RateLimitGroupStack`.
   return (
-    <div className="flex flex-col gap-3">
-      {groups.map((group, index) => (
-        <div key={group.key} className="flex flex-col gap-3">
-          {index > 0 ? <div aria-hidden className="h-px bg-border/70" /> : null}
-          {group.node}
-        </div>
-      ))}
-    </div>
+    <RateLimitGroupStack
+      groups={[
+        { key: "global", node: globalLimits },
+        { key: "per-model", node: perModelLimits },
+        { key: "extra-usage", node: extraUsage },
+      ]}
+    />
   );
 }
 

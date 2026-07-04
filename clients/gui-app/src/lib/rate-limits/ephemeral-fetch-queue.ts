@@ -72,8 +72,11 @@ const drainingListeners = new Set<() => void>();
  * Carrying the binding across HMR generations closes that gap. Tree-shaken
  * out of production builds (`import.meta.hot` is statically false there).
  */
+// `undefined` in the union (rather than an optional marker) is the "no
+// generation has stashed a binding yet" state a fresh `hot.data` object
+// starts in.
 interface RateLimitQueueHotData {
-  rateLimitQueueDeps?: RateLimitQueueConfig | null;
+  rateLimitQueueDeps: RateLimitQueueConfig | null | undefined;
 }
 // Vite types `hot.data` as `any`; the `unknown` hop + structural guard keeps
 // the read type-safe. The guard also handles Vitest, whose truthy
