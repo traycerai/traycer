@@ -306,11 +306,10 @@ describe("WorktreesList delete flow", () => {
   it("keeps a stable toolbar; the selection action bar is separate and only shown when selecting", () => {
     renderDefault();
 
-    // Toolbar action group stays put regardless of selection: expand-all, the
-    // Select-merged sweep, and Refresh (last so it never shifts).
+    // Toolbar action group stays put regardless of selection: expand-all and
+    // Refresh (last so it never shifts). Filter/Sort live in the row below.
     expect(toolbarButtonLabels()).toEqual([
       "Collapse all",
-      "Select merged (0)",
       "Refresh worktrees",
     ]);
     // No selection yet -> no contextual action bar.
@@ -323,7 +322,6 @@ describe("WorktreesList delete flow", () => {
     // The toolbar action group is unchanged; the delete lives in the action bar.
     expect(toolbarButtonLabels()).toEqual([
       "Collapse all",
-      "Select merged (0)",
       "Refresh worktrees",
     ]);
     const actionBar = screen.getByTestId("worktrees-selection-action-bar");
@@ -1090,17 +1088,23 @@ describe("WorktreesList confirm-time re-check", () => {
     ];
     const rendered = render(renderWith(queryClient, clean));
 
-    // The merged sweep selects all three proven merged rows.
-    fireEvent.click(screen.getByTestId("worktrees-select-merged"));
+    // Global select-all picks all three (all selectable) rows.
+    fireEvent.click(screen.getByTestId("worktrees-select-all"));
     fireEvent.click(screen.getByTestId("worktrees-list-delete-selected"));
     screen.getByText("Delete 3 worktrees?");
 
-    // A background refresh makes /wt/c dirty while the dialog is open.
+    // A background refresh makes /wt/c busy (and dirty) while the dialog is open,
+    // so it is no longer selectable and drops out of the confirm.
     rendered.rerender(
       renderWith(queryClient, [
         merged("/wt/a", "feat-a"),
         merged("/wt/b", "feat-b"),
-        entry({ worktreePath: "/wt/c", branch: "feat-c", uncommittedCount: 2 }),
+        entry({
+          worktreePath: "/wt/c",
+          branch: "feat-c",
+          inUse: true,
+          uncommittedCount: 2,
+        }),
       ]),
     );
 
@@ -1109,14 +1113,13 @@ describe("WorktreesList confirm-time re-check", () => {
 
     fireEvent.click(screen.getByTestId("confirm-action"));
 
-    // The now-dirty row is excluded from the started delete and named in the drop toast.
+    // The now-ineligible row is excluded from the started delete and named in the
+    // class-summarized drop toast (its freshest class is dirty).
     expect(streamMock.paths).toEqual(["/wt/a", "/wt/b"]);
     expect(toastMock.messages.join("\n")).toContain("1 dirty");
   });
 
-  it("sweeps only proven-Merged rows, disabled when none qualify", () => {
-    // Merged (swept), Unreferenced (null status - NOT swept), and an in-use
-    // merged row (not selectable). Only the first is picked.
+  it("filter → Merged then select-all picks only the Merged rows (fast path)", () => {
     render(
       renderWith(new QueryClient(), [
         merged("/wt/merged", "feat-merged"),
@@ -1125,45 +1128,82 @@ describe("WorktreesList confirm-time re-check", () => {
           branch: "feat-unref",
           branchStatus: null,
         }),
+      ]),
+    );
+
+    // Both rows visible initially; select-all would take both.
+    screen.getByRole("button", { name: "Delete worktree feat-unref" });
+    // Narrow to the Merged tier via the standard status filter.
+    fireEvent.click(screen.getByTestId("worktrees-filter-merged"));
+    expect(
+      screen.queryByRole("button", { name: "Delete worktree feat-unref" }),
+    ).toBeNull();
+
+    // Standard select-all now acts only on the visible (Merged) row.
+    fireEvent.click(screen.getByTestId("worktrees-select-all"));
+    expect(screen.getByText("1 selected")).not.toBeNull();
+    fireEvent.click(screen.getByTestId("worktrees-list-delete-selected"));
+    fireEvent.click(screen.getByTestId("confirm-action"));
+    expect(streamMock.paths).toEqual(["/wt/merged"]);
+  });
+
+  it("only offers filter options for tiers present in the list", () => {
+    render(
+      renderWith(new QueryClient(), [
+        merged("/wt/merged", "feat-merged"),
         entry({
-          worktreePath: "/wt/busy-merged",
-          branch: "feat-busy-merged",
+          worktreePath: "/wt/review",
+          branch: "feat-review",
+          branchStatus: null,
+        }),
+      ]),
+    );
+    // Present tiers get options.
+    screen.getByTestId("worktrees-filter-all");
+    screen.getByTestId("worktrees-filter-merged");
+    screen.getByTestId("worktrees-filter-review");
+    // Absent tiers do not.
+    expect(screen.queryByTestId("worktrees-filter-orphaned")).toBeNull();
+    expect(screen.queryByTestId("worktrees-filter-in-use")).toBeNull();
+  });
+
+  it("header select-all is tri-state and covers only visible selectable rows (excludes in-use)", () => {
+    render(
+      renderWith(new QueryClient(), [
+        merged("/wt/a", "feat-a"),
+        merged("/wt/b", "feat-b"),
+        entry({
+          worktreePath: "/wt/busy",
+          branch: "feat-busy",
           inUse: true,
           branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
         }),
       ]),
     );
 
-    const sweep = screen.getByTestId("worktrees-select-merged");
-    expect(sweep.textContent).toContain("Select merged (1)");
-    fireEvent.click(sweep);
+    const selectAll = screen.getByTestId("worktrees-select-all");
+    expect(selectAll.getAttribute("aria-checked")).toBe("false");
 
-    expect(screen.getByText("1 selected")).not.toBeNull();
-    expect(
-      screen
-        .getByRole("checkbox", { name: "Select worktree feat-merged" })
-        .getAttribute("aria-checked"),
-    ).toBe("true");
-    expect(
-      screen
-        .getByRole("checkbox", { name: "Select worktree feat-unref" })
-        .getAttribute("aria-checked"),
-    ).toBe("false");
-  });
-
-  it("disables the merged sweep when nothing qualifies", () => {
-    render(
-      renderWith(new QueryClient(), [
-        entry({
-          worktreePath: "/wt/unref",
-          branch: "feat-unref",
-          branchStatus: null,
-        }),
-      ]),
+    // One of two selectable rows -> indeterminate.
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Select worktree feat-a" }),
     );
-    const sweep = screen.getByTestId("worktrees-select-merged");
-    expect(sweep.textContent).toContain("Select merged (0)");
-    expect(sweep.hasAttribute("disabled")).toBe(true);
+    expect(selectAll.getAttribute("aria-checked")).toBe("mixed");
+
+    // Header selects all visible SELECTABLE rows; the in-use row is excluded.
+    fireEvent.click(selectAll);
+    expect(screen.getByText("2 selected")).not.toBeNull();
+    expect(selectAll.getAttribute("aria-checked")).toBe("true");
+    const busy = screen.getByRole("checkbox", {
+      name: "Select worktree feat-busy",
+    });
+    expect(busy.getAttribute("aria-disabled")).toBe("true");
+    expect(busy.getAttribute("aria-checked")).toBe("false");
+
+    // Header again clears the selection (action bar disappears).
+    fireEvent.click(selectAll);
+    expect(screen.queryByTestId("worktrees-selection-action-bar")).toBeNull();
+    expect(selectAll.getAttribute("aria-checked")).toBe("false");
   });
 
   it("prunes a dropped row from the selection bookkeeping after confirm", () => {
@@ -1176,32 +1216,37 @@ describe("WorktreesList confirm-time re-check", () => {
       ]),
     );
 
-    fireEvent.click(screen.getByTestId("worktrees-select-merged"));
+    fireEvent.click(screen.getByTestId("worktrees-select-all"));
     fireEvent.click(screen.getByTestId("worktrees-list-delete-selected"));
     screen.getByText("Delete 3 worktrees?");
 
-    // /wt/c becomes dirty, so it is dropped at confirm while /wt/a and /wt/b run.
+    // /wt/c becomes in-use, so it is dropped at confirm while /wt/a and /wt/b run.
     rendered.rerender(
       renderWith(queryClient, [
         merged("/wt/a", "feat-a"),
         merged("/wt/b", "feat-b"),
-        entry({ worktreePath: "/wt/c", branch: "feat-c", uncommittedCount: 2 }),
+        entry({
+          worktreePath: "/wt/c",
+          branch: "feat-c",
+          inUse: true,
+          branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
+        }),
       ]),
     );
+    screen.getByText("Delete 2 worktrees?");
     fireEvent.click(screen.getByTestId("confirm-action"));
 
     expect(streamMock.paths).toEqual(["/wt/a", "/wt/b"]);
-    // The dropped row must not linger as selected state.
-    expect(
-      screen
-        .getByRole("checkbox", { name: "Select worktree feat-c" })
-        .getAttribute("aria-checked"),
-    ).toBe("false");
-    // Re-selecting it via its checkbox reads as a fresh pick (count 1, not a
-    // deselect of stale state).
-    fireEvent.click(
-      screen.getByRole("checkbox", { name: "Select worktree feat-c" }),
-    );
+
+    // On a later refresh /wt/c is selectable again. If the dropped path had
+    // lingered in the selection it would show selected; the prune keeps it
+    // unselected, so it reads as a fresh pick.
+    rendered.rerender(renderWith(queryClient, [merged("/wt/c", "feat-c")]));
+    const cCheckbox = screen.getByRole("checkbox", {
+      name: "Select worktree feat-c",
+    });
+    expect(cCheckbox.getAttribute("aria-checked")).toBe("false");
+    fireEvent.click(cCheckbox);
     screen.getByText("1 selected");
   });
 
@@ -1354,48 +1399,51 @@ describe("WorktreesList v1.1 signals", () => {
     screen.getByText("No worktrees match your search.");
   });
 
-  it("lands pre-triaged by tier (default), and the toggle switches to pure stalest", () => {
+  it("orders by createdAt: Newest by default, Oldest reverses; null createdAt last", () => {
     renderList({
       hostId: "host-a",
       queryClient: new QueryClient(),
       worktrees: [
-        // Amber Review tier, and the staler of the two.
         entry({
-          worktreePath: "/wt/review",
-          branch: "feat-review",
-          branchStatus: null,
-          lastActivityAt: 1_000,
+          worktreePath: "/wt/old",
+          branch: "feat-old",
+          createdAt: 1_000,
         }),
-        // Green Merged tier, but the more recently active.
         entry({
-          worktreePath: "/wt/merged",
-          branch: "feat-merged",
-          branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
-          lastActivityAt: 2_000,
+          worktreePath: "/wt/new",
+          branch: "feat-new",
+          createdAt: 2_000,
+        }),
+        // A null createdAt sorts last in both directions.
+        entry({
+          worktreePath: "/wt/unknown",
+          branch: "feat-unknown",
+          createdAt: null,
         }),
       ],
     });
 
     const deleteLabel = (element: Element): string | null =>
       element.getAttribute("aria-label");
-    // Default: safe-first by tier - Merged leads even though it is more recent.
-    const orderBefore = screen
-      .getAllByRole("button", { name: /^Delete worktree/ })
-      .map(deleteLabel);
-    expect(orderBefore).toEqual([
-      "Delete worktree feat-merged",
-      "Delete worktree feat-review",
+    const order = (): (string | null)[] =>
+      screen
+        .getAllByRole("button", { name: /^Delete worktree/ })
+        .map(deleteLabel);
+
+    // Default "Newest": most recently created first, null last.
+    expect(order()).toEqual([
+      "Delete worktree feat-new",
+      "Delete worktree feat-old",
+      "Delete worktree feat-unknown",
     ]);
 
-    fireEvent.click(screen.getByTestId("worktrees-sort-stalest"));
+    fireEvent.click(screen.getByTestId("worktrees-sort-oldest"));
 
-    // Stalest sort ignores tier and leads with the least-recently-active row.
-    const orderAfter = screen
-      .getAllByRole("button", { name: /^Delete worktree/ })
-      .map(deleteLabel);
-    expect(orderAfter).toEqual([
-      "Delete worktree feat-review",
-      "Delete worktree feat-merged",
+    // "Oldest": reverses the dated rows, null still last.
+    expect(order()).toEqual([
+      "Delete worktree feat-old",
+      "Delete worktree feat-new",
+      "Delete worktree feat-unknown",
     ]);
   });
 });

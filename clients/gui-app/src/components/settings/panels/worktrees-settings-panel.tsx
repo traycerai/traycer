@@ -20,7 +20,8 @@ import {
   FileSliders,
   FolderGit2,
   GitMerge,
-  ListChecks,
+  ListFilter,
+  Minus,
   RefreshCw,
   Search,
   Trash2,
@@ -32,9 +33,9 @@ import type {
 } from "@traycer/protocol/host/index";
 import {
   WORKTREE_TIER_LABEL,
+  WORKTREE_TIER_ORDER,
   classifyWorktree,
   classifyWorktreeTier,
-  worktreeTierRank,
   type WorktreeTier,
 } from "@/lib/worktree/classify-worktree";
 import type { WorktreeEntryScripts } from "@traycer/protocol/host/worktree-schemas";
@@ -101,7 +102,8 @@ import {
 import { WorktreeDeleteProgressModal } from "@/components/settings/panels/worktree-delete-progress-modal";
 
 type WorktreeRowDeleteStatus = "deleting";
-type WorktreeSortMode = "repo" | "stalest";
+type WorktreeSortMode = "newest" | "oldest";
+type WorktreeTierFilter = WorktreeTier | "all";
 const WORKTREES_REFRESH_TIMEOUT_MS = 10_000;
 const EMPTY_REPO_KEY_SET: ReadonlySet<string> = new Set();
 const EMPTY_WORKTREES: readonly WorktreeHostEntryV11[] = [];
@@ -219,6 +221,9 @@ function WorktreesToolbar(props: {
 function WorktreesFilterControls(props: {
   readonly searchText: string;
   readonly onSearchChange: (value: string) => void;
+  readonly tierFilter: WorktreeTierFilter;
+  readonly availableTiers: readonly WorktreeTier[];
+  readonly onTierFilterChange: (filter: WorktreeTierFilter) => void;
   readonly sortMode: WorktreeSortMode;
   readonly onSortModeChange: (mode: WorktreeSortMode) => void;
 }): ReactNode {
@@ -238,6 +243,11 @@ function WorktreesFilterControls(props: {
           className="pl-8"
         />
       </div>
+      <WorktreeFilterMenu
+        tierFilter={props.tierFilter}
+        availableTiers={props.availableTiers}
+        onChange={props.onTierFilterChange}
+      />
       <WorktreeSortMenu
         sortMode={props.sortMode}
         onSortModeChange={props.onSortModeChange}
@@ -246,16 +256,68 @@ function WorktreesFilterControls(props: {
   );
 }
 
+function worktreeTierFilterLabel(filter: WorktreeTierFilter): string {
+  return filter === "all" ? "All" : WORKTREE_TIER_LABEL[filter];
+}
+
+/**
+ * Standard status filter: a dropdown of "All" plus each tier actually present in
+ * this host's list (zero-count tiers are not offered). Composes with the search
+ * box (both apply). Tier comes from the shared classifier, so the options match
+ * the row pills exactly.
+ */
+function WorktreeFilterMenu(props: {
+  readonly tierFilter: WorktreeTierFilter;
+  readonly availableTiers: readonly WorktreeTier[];
+  readonly onChange: (filter: WorktreeTierFilter) => void;
+}): ReactNode {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="shrink-0"
+          data-testid="worktrees-filter-trigger"
+          aria-label={`Filter: ${worktreeTierFilterLabel(props.tierFilter)}`}
+        >
+          <ListFilter className="size-4" />
+          <span>{worktreeTierFilterLabel(props.tierFilter)}</span>
+          <ChevronDown className="size-4 text-muted-foreground" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuCheckboxItem
+          checked={props.tierFilter === "all"}
+          onSelect={() => props.onChange("all")}
+          data-testid="worktrees-filter-all"
+        >
+          All
+        </DropdownMenuCheckboxItem>
+        {props.availableTiers.map((tier) => (
+          <DropdownMenuCheckboxItem
+            key={tier}
+            checked={props.tierFilter === tier}
+            onSelect={() => props.onChange(tier)}
+            data-testid={`worktrees-filter-${tier}`}
+          >
+            {WORKTREE_TIER_LABEL[tier]}
+          </DropdownMenuCheckboxItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 const WORKTREE_SORT_LABEL: Record<WorktreeSortMode, string> = {
-  repo: "Repository",
-  stalest: "Stalest first",
+  newest: "Newest",
+  oldest: "Oldest",
 };
 
 /**
- * Standard sort control: a small dropdown with checkmarked items. Same
- * `WorktreeSortMode` values as before - "Repository" (default listing order,
- * pre-triaged by tier) and "Stalest first" (pure staleness) - just a clearer,
- * lower-chrome affordance than the old ambiguous toggle button.
+ * Standard sort control: a small dropdown with checkmarked items. Orders rows
+ * WITHIN each repo group by creation time - "Newest" (default) or "Oldest".
  */
 function WorktreeSortMenu(props: {
   readonly sortMode: WorktreeSortMode;
@@ -279,18 +341,18 @@ function WorktreeSortMenu(props: {
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
         <DropdownMenuCheckboxItem
-          checked={props.sortMode === "repo"}
-          onSelect={() => props.onSortModeChange("repo")}
-          data-testid="worktrees-sort-repo"
+          checked={props.sortMode === "newest"}
+          onSelect={() => props.onSortModeChange("newest")}
+          data-testid="worktrees-sort-newest"
         >
-          Repository
+          Newest
         </DropdownMenuCheckboxItem>
         <DropdownMenuCheckboxItem
-          checked={props.sortMode === "stalest"}
-          onSelect={() => props.onSortModeChange("stalest")}
-          data-testid="worktrees-sort-stalest"
+          checked={props.sortMode === "oldest"}
+          onSelect={() => props.onSortModeChange("oldest")}
+          data-testid="worktrees-sort-oldest"
         >
-          Stalest first
+          Oldest
         </DropdownMenuCheckboxItem>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -502,11 +564,26 @@ export function WorktreesList(props: {
   const { hostId, worktrees, taskTitlesByEpicId, openStreamTransport } = props;
   const queryClient = useQueryClient();
   const [searchText, setSearchText] = useState("");
-  const [sortMode, setSortMode] = useState<WorktreeSortMode>("repo");
+  const [sortMode, setSortMode] = useState<WorktreeSortMode>("newest");
+  const [tierFilter, setTierFilter] = useState<WorktreeTierFilter>("all");
+  // The status filter composes with the search box (both apply) before repo
+  // grouping. Tier comes from the shared classifier, so the filter options
+  // exactly match the row pills.
   const filteredWorktrees = useMemo(
-    () => filterWorktrees(worktrees, searchText, taskTitlesByEpicId),
-    [worktrees, searchText, taskTitlesByEpicId],
+    () =>
+      filterWorktrees(worktrees, searchText, taskTitlesByEpicId).filter(
+        (entry) =>
+          tierFilter === "all" || classifyWorktreeTier(entry) === tierFilter,
+      ),
+    [worktrees, searchText, taskTitlesByEpicId, tierFilter],
   );
+  // Only offer filter options for tiers actually present in this host's list.
+  const availableTiers = useMemo(() => {
+    const present = new Set(
+      worktrees.map((entry) => classifyWorktreeTier(entry)),
+    );
+    return WORKTREE_TIER_ORDER.filter((tier) => present.has(tier));
+  }, [worktrees]);
 
   // Refresh the host-wide list plus the shared worktree/binding caches the
   // file-tree / home / create-worktree surfaces read, captured against the
@@ -528,13 +605,6 @@ export function WorktreesList(props: {
     dismissTerminalBackgrounded,
   } = useWorktreeDeleteRun(hostId, openStreamTransport, invalidate);
   const [selectedPaths, setSelectedPaths] = useState<ReadonlySet<string>>(
-    () => new Set(),
-  );
-  // Which currently-selected paths came from a SWEEP button (vs a hand-picked
-  // checkbox). Sweep-origin paths must stay sweep-eligible; at confirm they are
-  // re-checked against the sweep predicates, while manual picks only need to
-  // stay selectable. Always a subset of `selectedPaths`.
-  const [sweepOriginPaths, setSweepOriginPaths] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
   const [pendingDeleteTargets, setPendingDeleteTargets] =
@@ -615,34 +685,20 @@ export function WorktreesList(props: {
     [selectablePathSet, selectedPaths, visibleWorktrees],
   );
   const selectedCount = selectedTargets.length;
-  // The single ship-now sweep cohort: proven-`Merged`-tier rows (exactly the
-  // rows that show the "Merged" pill), computed over the same selectable pool
-  // the checkboxes use (so a delete already in flight is excluded by
-  // construction). The clean-unreferenced cohort is deliberately NOT swept - it
-  // is hand-selectable via its row checkbox only.
-  const mergedSweepPaths = useMemo(
-    () =>
-      visibleWorktrees
-        .filter(
-          (entry) =>
-            selectablePathSet.has(entry.worktreePath) &&
-            isMergedSweepTarget(entry),
-        )
-        .map((entry) => entry.worktreePath),
-    [selectablePathSet, visibleWorktrees],
-  );
   // Freshest listing keyed by path, so a pending delete captured at dialog-open
   // is always re-resolved to its CURRENT entry (a background refresh may have
-  // made a row dirty / ahead / in-use since the dialog opened).
+  // made a row in-use / mid-delete since the dialog opened).
   const worktreesByPath = useMemo(
     () => new Map(worktrees.map((entry) => [entry.worktreePath, entry])),
     [worktrees],
   );
   // Re-resolve the pending targets against the freshest listing and split into
   // the rows still eligible to delete vs. the ones dropped (gone from the list,
-  // now in-use / deleting, or - for sweep-origin rows - no longer matching the
-  // merged sweep predicate that selected them). Both the dialog copy and the
-  // confirm action read from this, so what the user sees is what gets deleted.
+  // or now in-use / mid-delete). All selection is user-driven now, so the only
+  // confirm-time gate is "still selectable"; a hand-picked dirty / ahead row
+  // proceeds with its FRESHEST loss copy (per-row opt-in is intentional). Both
+  // the dialog copy and the confirm action read from this, so what the user sees
+  // is what gets deleted.
   const pendingResolution = useMemo(() => {
     if (pendingDeleteTargets === null) return null;
     const kept: WorktreeHostEntryV11[] = [];
@@ -653,20 +709,11 @@ export function WorktreesList(props: {
         dropped.push(captured);
         continue;
       }
-      const stillSelectable = selectablePathSet.has(fresh.worktreePath);
-      const eligible = sweepOriginPaths.has(fresh.worktreePath)
-        ? stillSelectable && isMergedSweepTarget(fresh)
-        : stillSelectable;
-      if (eligible) kept.push(fresh);
+      if (selectablePathSet.has(fresh.worktreePath)) kept.push(fresh);
       else dropped.push(fresh);
     }
     return { kept, dropped };
-  }, [
-    pendingDeleteTargets,
-    selectablePathSet,
-    sweepOriginPaths,
-    worktreesByPath,
-  ]);
+  }, [pendingDeleteTargets, selectablePathSet, worktreesByPath]);
   const keptDeleteTargets = pendingResolution?.kept ?? null;
   const singleDialogCopy =
     keptDeleteTargets !== null && keptDeleteTargets.length === 1
@@ -697,23 +744,31 @@ export function WorktreesList(props: {
     (worktreePath: string) => {
       if (!selectablePathSet.has(worktreePath)) return;
       setSelectedPaths((prev) => withMemberToggled(prev, worktreePath));
-      // A hand-picked checkbox is a MANUAL selection - it must not be treated as
-      // sweep-origin (which would re-check it against the sweep predicates).
-      setSweepOriginPaths((prev) => withMemberRemoved(prev, worktreePath));
     },
     [selectablePathSet],
   );
-  // The single "Select merged" sweep: a fresh selection of the proven Merged
-  // cohort, all sweep-origin (so the confirm-time re-check holds them to the
-  // merged predicate).
-  const selectMerged = useCallback(() => {
-    const next = new Set(mergedSweepPaths);
-    setSelectedPaths(next);
-    setSweepOriginPaths(new Set(next));
-  }, [mergedSweepPaths]);
+  // Standard global tri-state select-all: acts on the CURRENTLY-VISIBLE,
+  // selectable rows (post-filter + post-search, across all repo groups). When
+  // every visible selectable row is already selected it deselects them;
+  // otherwise it selects them all. Hidden (filtered-out) selections are left
+  // untouched - the header + count reflect visible rows, and the confirm-time
+  // re-resolution + honest dialog still govern what is deleted.
+  const allVisibleSelected =
+    selectableWorktreePaths.length > 0 &&
+    selectedCount === selectableWorktreePaths.length;
+  const toggleSelectAllVisible = useCallback(() => {
+    setSelectedPaths((prev) => {
+      const next = new Set(prev);
+      if (allVisibleSelected) {
+        for (const path of selectableWorktreePaths) next.delete(path);
+      } else {
+        for (const path of selectableWorktreePaths) next.add(path);
+      }
+      return next;
+    });
+  }, [allVisibleSelected, selectableWorktreePaths]);
   const clearSelection = useCallback(() => {
     setSelectedPaths(new Set());
-    setSweepOriginPaths(new Set());
   }, []);
   const toggleRepoCollapsed = useCallback(
     (group: WorktreeRepoGroup, collapsed: boolean) => {
@@ -722,9 +777,6 @@ export function WorktreesList(props: {
       } else {
         dispatchCollapsedRepoKeys({ type: "collapse", key: group.key });
         setSelectedPaths((prev) => removeSelectedWorktrees(prev, group.items));
-        setSweepOriginPaths((prev) =>
-          removeSelectedWorktrees(prev, group.items),
-        );
       }
     },
     [],
@@ -736,7 +788,6 @@ export function WorktreesList(props: {
     }
     dispatchCollapsedRepoKeys({ type: "collapse-all", keys: repoKeys });
     setSelectedPaths(new Set());
-    setSweepOriginPaths(new Set());
   }, [allReposCollapsed, repoKeys]);
   const requestDeleteTargets = useCallback(
     (targets: ReadonlyArray<WorktreeHostEntryV11>) => {
@@ -753,16 +804,14 @@ export function WorktreesList(props: {
     targets: ReadonlyArray<WorktreeHostEntryV11>,
   ): void => {
     setSelectedPaths((prev) => removeSelectedWorktrees(prev, targets));
-    setSweepOriginPaths((prev) => removeSelectedWorktrees(prev, targets));
     setPendingDeleteTargets(null);
   };
 
   const handleConfirm = (): void => {
     if (pendingResolution === null || pendingDeleteTargets === null) return;
     // `pendingResolution` already re-resolved each pending path to its freshest
-    // entry and split kept vs. dropped (gone from the list, now in-use /
-    // deleting, or - for sweep-origin rows - no longer matching the sweep
-    // predicate). Start the run on the FRESHEST kept entries, and name the drops.
+    // entry and split kept vs. dropped (gone from the list, or now in-use /
+    // mid-delete). Start the run on the FRESHEST kept entries, and name the drops.
     const { kept, dropped } = pendingResolution;
     if (dropped.length > 0) {
       toast.message(worktreeDropMessage(dropped));
@@ -824,21 +873,18 @@ export function WorktreesList(props: {
       <WorktreesToolbar
         {...props.toolbarProps}
         selectionControls={
-          <>
-            <WorktreesRepoExpansionControl
-              allCollapsed={allReposCollapsed}
-              onToggle={toggleAllReposCollapsed}
-            />
-            <WorktreeSelectMergedButton
-              mergedCount={mergedSweepPaths.length}
-              onSelectMerged={selectMerged}
-            />
-          </>
+          <WorktreesRepoExpansionControl
+            allCollapsed={allReposCollapsed}
+            onToggle={toggleAllReposCollapsed}
+          />
         }
         filterControls={
           <WorktreesFilterControls
             searchText={searchText}
             onSearchChange={setSearchText}
+            tierFilter={tierFilter}
+            availableTiers={availableTiers}
+            onTierFilterChange={setTierFilter}
             sortMode={sortMode}
             onSortModeChange={setSortMode}
           />
@@ -860,7 +906,13 @@ export function WorktreesList(props: {
         <WorktreesStateMessage tone="muted" spinner={false}>
           No worktrees match your search.
         </WorktreesStateMessage>
-      ) : null}
+      ) : (
+        <WorktreeSelectAllHeader
+          selectableCount={selectableWorktreePaths.length}
+          selectedCount={selectedCount}
+          onToggle={toggleSelectAllVisible}
+        />
+      )}
 
       {groups.map((group) => {
         const collapsed = collapsedRepoKeys.has(group.key);
@@ -979,35 +1031,59 @@ function WorktreeDeleteProgressStrip(props: {
 }
 
 /**
- * The single ship-now sweep affordance: one standard toolbar button that selects
- * exactly the proven-`Merged` rows (the rows showing the "Merged" pill), so the
- * "Select merged" label is literally true for everything it picks. Disabled when
- * nothing qualifies. The clean-unreferenced cohort is intentionally NOT swept -
- * it is hand-selectable via its row checkbox. Clearing / deleting the resulting
- * selection lives in the contextual action bar, so this stays a lone button.
+ * Standard tri-state global select-all header - one row above the list, its
+ * checkbox aligned with the row checkboxes. Selects/deselects every CURRENTLY-
+ * VISIBLE, selectable row (post-filter + post-search, across all repo groups).
+ * Indeterminate when some-but-not-all are selected; disabled when nothing
+ * selectable. In-use / mid-delete rows keep disabled row checkboxes and are
+ * excluded here (standard table behavior).
  */
-function WorktreeSelectMergedButton(props: {
-  readonly mergedCount: number;
-  readonly onSelectMerged: () => void;
+function WorktreeSelectAllHeader(props: {
+  readonly selectableCount: number;
+  readonly selectedCount: number;
+  readonly onToggle: () => void;
 }): ReactNode {
+  const allSelected =
+    props.selectableCount > 0 && props.selectedCount === props.selectableCount;
+  const indeterminate =
+    props.selectedCount > 0 && props.selectedCount < props.selectableCount;
+  const ariaChecked = worktreeSelectAllAriaChecked(allSelected, indeterminate);
+  let indicator: ReactNode = null;
+  if (allSelected) indicator = <Check className="size-3" />;
+  else if (indeterminate) indicator = <Minus className="size-3" />;
   return (
-    <Button
-      type="button"
-      variant="outline"
-      size="sm"
-      disabled={props.mergedCount === 0}
-      onClick={props.onSelectMerged}
-      data-testid="worktrees-select-merged"
-    >
-      <ListChecks className="size-4" />
-      Select merged ({props.mergedCount})
-    </Button>
+    <div className="flex items-center gap-3 border-b border-border/40 bg-muted/10 px-5 py-1.5">
+      <div className="flex w-5 shrink-0 items-center justify-center">
+        <button
+          type="button"
+          role="checkbox"
+          aria-checked={ariaChecked}
+          aria-label="Select all worktrees"
+          data-testid="worktrees-select-all"
+          disabled={props.selectableCount === 0}
+          onClick={props.onToggle}
+          className={cn(
+            "flex size-4 items-center justify-center rounded-sm border transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-40",
+            allSelected || indeterminate
+              ? "border-primary bg-primary text-primary-foreground"
+              : "border-border bg-background text-transparent hover:border-foreground",
+          )}
+        >
+          {indicator}
+        </button>
+      </div>
+      <span className="text-ui-xs text-muted-foreground">Select all</span>
+    </div>
   );
 }
 
-/** A worktree is swept by "Select merged" iff it shows the proven Merged pill. */
-function isMergedSweepTarget(entry: WorktreeHostEntryV11): boolean {
-  return classifyWorktreeTier(entry) === "merged";
+function worktreeSelectAllAriaChecked(
+  allSelected: boolean,
+  indeterminate: boolean,
+): "true" | "mixed" | "false" {
+  if (allSelected) return "true";
+  if (indeterminate) return "mixed";
+  return "false";
 }
 
 /**
@@ -1703,13 +1779,9 @@ function collapsedRepoKeysReducer(
 /**
  * Groups worktrees by repo for display, keyed on the resolved identifier when
  * present (real `owner/repo`) and otherwise on the display label (local repos
- * and orphans).
- *
- * The DEFAULT (`repo`) mode lands the group pre-triaged: rows are ordered by
- * evidence tier (Merged, Unreferenced, Review, Orphaned, In use), stalest-first
- * within each tier. The `stalest` toggle drops the tier grouping and orders the
- * whole group least-recently-active first. Both keep `null` `lastActivityAt`
- * last - a missing signal is not evidence of staleness.
+ * and orphans). Rows WITHIN each repo group are ordered by creation time -
+ * "Newest" (default, most recently created first) or "Oldest". A `null`
+ * `createdAt` sorts last in both directions.
  */
 function groupByRepo(
   worktrees: readonly WorktreeHostEntryV11[],
@@ -1729,35 +1801,24 @@ function groupByRepo(
     }
   }
   const groups = [...byKey.values()];
-  const comparator =
-    sortMode === "stalest" ? compareStalestFirst : compareByTierThenStalest;
   for (const group of groups) {
-    group.items.sort(comparator);
+    group.items.sort((a, b) => compareByCreatedAt(a, b, sortMode));
   }
   return groups;
 }
 
-function compareByTierThenStalest(
+function compareByCreatedAt(
   a: WorktreeHostEntryV11,
   b: WorktreeHostEntryV11,
+  sortMode: WorktreeSortMode,
 ): number {
-  const rankDiff =
-    worktreeTierRank(classifyWorktreeTier(a)) -
-    worktreeTierRank(classifyWorktreeTier(b));
-  if (rankDiff !== 0) return rankDiff;
-  return compareStalestFirst(a, b);
-}
-
-function compareStalestFirst(
-  a: WorktreeHostEntryV11,
-  b: WorktreeHostEntryV11,
-): number {
-  const aAt = a.lastActivityAt;
-  const bAt = b.lastActivityAt;
+  const aAt = a.createdAt;
+  const bAt = b.createdAt;
   if (aAt === bAt) return 0;
+  // A missing creation time sorts last in both directions.
   if (aAt === null) return 1;
   if (bAt === null) return -1;
-  return aAt - bAt;
+  return sortMode === "newest" ? bAt - aAt : aAt - bAt;
 }
 
 /**
