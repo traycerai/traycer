@@ -161,4 +161,32 @@ describe("<AutonomousResumeSegment />", () => {
     expect(screen.queryByText("Output file unavailable.")).toBeNull();
     expect(hostQueryMock.calls).toHaveLength(0);
   });
+
+  it("renders wakeup triggers as schedule dividers carrying the prompt", () => {
+    render(
+      <AutonomousResumeSegment
+        triggers={[
+          {
+            kind: "wakeup",
+            title: "Review the deployment",
+            status: "completed",
+            summary: "Check the health dashboard and summarize alerts.",
+            blockId: "wake-tool",
+            outputFile: null,
+          },
+        ]}
+      />,
+    );
+
+    expect(
+      screen.getByRole("separator", {
+        name: "Woke on schedule: Review the deployment",
+      }),
+    ).toBeTruthy();
+    expect(
+      screen.getByText("Check the health dashboard and summarize alerts."),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Wake completed/ })).toBeNull();
+    expect(hostQueryMock.calls).toHaveLength(0);
+  });
 });

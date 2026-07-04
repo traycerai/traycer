@@ -1,11 +1,11 @@
 /**
- * `chat.subscribe@1.1` - versioned streaming-RPC contract for a single
- * host-owned GUI chat session. `chat.subscribe@1.0` (frozen, near the bottom
- * of this file) is the exact shape shipped in host-v1.0.0; `@1.1` only adds
- * the background-items controls on top of it, additively, so a `1.1` app
- * still bridges to a host still on `1.0`. Streams have no cross-major
- * downgrade bridge (see `stream-compat.ts`'s `canBridgeStream()`), so once a
- * method ships, its major must never move again - only additive minors.
+ * `chat.subscribe@1.2` - versioned streaming-RPC contract for a single
+ * host-owned GUI chat session. `chat.subscribe@1.0`/`@1.1` (frozen, near the
+ * bottom of this file) are the exact shapes shipped in earlier hosts; later
+ * minors only add to them, so a `1.2` app still bridges to hosts that only know
+ * `1.0`/`1.1`. Streams have no cross-major downgrade bridge (see
+ * `stream-compat.ts`'s `canBridgeStream()`), so once a method ships, its major
+ * must never move again - only additive minors.
  *
  * This stream is intentionally text-frame-only. The existing `epic.subscribe`
  * stream remains responsible for Y.Doc binary updates; chat execution frames
@@ -150,6 +150,7 @@ export const backgroundItemKindSchema = z.enum([
   "subagent",
   "command",
   "monitor",
+  "wakeup",
 ]);
 export type BackgroundItemKind = z.infer<typeof backgroundItemKindSchema>;
 
@@ -172,6 +173,12 @@ export const backgroundItemSchema = z.object({
   kind: backgroundItemKindSchema,
   title: z.string(),
   blockId: z.string(),
+  // Parent task id for nested background items. Optional/defaulted so a
+  // new-client parse of an old-host frame succeeds, while old clients strip it.
+  parentTaskId: z.string().nullable().default(null).optional(),
+  // Epoch milliseconds when a wakeup item is scheduled to fire. Null for
+  // ordinary background work and optional for old-host compatibility.
+  scheduledFor: z.number().nullable().default(null).optional(),
 });
 export type BackgroundItem = z.infer<typeof backgroundItemSchema>;
 
@@ -1044,11 +1051,193 @@ export const chatSubscribeV10 = defineStreamRpcContract({
   clientFrameSchema: chatSubscribeClientFrameSchemaV10,
 });
 
-// ─── Live `chat.subscribe@1.1` contract ────────────────────────────────────
+// ─── Frozen `chat.subscribe@1.1` shape (background-items controls) ──────────
+//
+// Kept registered so `chat.subscribe@1.2` clients can still bridge to a host
+// that only advertises `1.1`. Do not add the 1.2-only wakeup enum or metadata
+// fields here; old 1.1 peers must never receive those values on this line.
+
+const backgroundItemKindSchemaV11 = z.enum(["subagent", "command", "monitor"]);
+
+const backgroundItemSchemaV11 = z.object({
+  taskId: z.string(),
+  kind: backgroundItemKindSchemaV11,
+  title: z.string(),
+  blockId: z.string(),
+});
+
+const chatSnapshotSchemaV11 = z.object({
+  chat: chatSchema,
+  access: chatAccessSchema,
+  queue: chatQueueStateSchema,
+  runStatus: chatRunStatusSchema,
+  activeTurn: chatActiveTurnSchema.nullable(),
+  pendingApprovals: z.array(chatApprovalStateSchema),
+  pendingInterviews: z.array(chatPendingInterviewStateSchema),
+  worktreeBinding: worktreeBindingSchema.nullable(),
+  missingWorktreePaths: z.array(z.string()),
+  pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchema),
+  accumulatedFileChanges: z.array(chatAccumulatedFileChangeSchema),
+  backgroundItems: z.array(backgroundItemSchemaV11).optional(),
+  turnInProgress: z.boolean().optional(),
+});
+
+const chatSubscribeServerFrameSchemaV11 = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("snapshot"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    snapshot: chatSnapshotSchemaV11,
+  }),
+  z.object({
+    kind: z.literal("actionAck"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    clientActionId: z.string(),
+    action: chatActionSchema,
+    status: chatActionAckStatusSchema,
+    reason: z.string().nullable(),
+    code: z.string().nullable(),
+    backgroundStopTaskIds: z.array(z.string()).default([]),
+  }),
+  z.object({
+    kind: z.literal("messageAccepted"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    message: userMessageSchema,
+  }),
+  z.object({
+    kind: z.literal("queueChanged"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    queue: chatQueueStateSchema,
+  }),
+  z.object({
+    kind: z.literal("turnStateChanged"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    runStatus: chatRunStatusSchema,
+    activeTurn: chatActiveTurnSchema.nullable(),
+    backgroundItems: z.array(backgroundItemSchemaV11).optional(),
+    turnInProgress: z.boolean().optional(),
+  }),
+  z.object({
+    kind: z.literal("blockDelta"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    event: runtimeEventSchema,
+  }),
+  z.object({
+    kind: z.literal("approvalRequested"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    approval: chatApprovalStateSchema,
+  }),
+  z.object({
+    kind: z.literal("approvalResolved"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    approvalId: z.string(),
+    decision: runtimeApprovalDecisionSchema,
+    resolvedAt: z.number(),
+  }),
+  z.object({
+    kind: z.literal("fileEditApprovalRequested"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    approval: chatFileEditApprovalStateSchema,
+  }),
+  z.object({
+    kind: z.literal("fileEditApprovalResolved"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    approvalId: z.string(),
+    decision: runtimeApprovalDecisionSchema,
+    resolvedAt: z.number(),
+  }),
+  z.object({
+    kind: z.literal("interviewRequested"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    blockId: z.string(),
+    requestedAt: z.number(),
+  }),
+  z.object({
+    kind: z.literal("interviewAnswered"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    blockId: z.string(),
+    answers: z.array(runtimeInterviewAnswerSchema),
+    resolvedAt: z.number(),
+  }),
+  z.object({
+    kind: z.literal("interviewErrored"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    blockId: z.string(),
+    reason: z.string(),
+    resolvedAt: z.number(),
+  }),
+  z.object({
+    kind: z.literal("eventAppended"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    event: chatEventSchema,
+  }),
+  z.object({
+    kind: z.literal("restoreStarted"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    ...restoreStartedManifestSchema.shape,
+  }),
+  z.object({
+    kind: z.literal("restoreProgress"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    checkpointId: z.string(),
+    processedCount: z.number(),
+    totalCount: z.number(),
+  }),
+  z.object({
+    kind: z.literal("restoreCompleted"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    checkpointId: z.string(),
+    finishedAt: z.number(),
+    results: z.array(restoreResultEntrySchema),
+  }),
+  z.object({
+    kind: z.literal("errorNotice"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    notice: chatErrorNoticeSchema,
+  }),
+  z.object({
+    kind: z.literal("worktreeStateChanged"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    worktreeBinding: worktreeBindingSchema.nullable(),
+    missingWorktreePaths: z.array(z.string()),
+  }),
+  z.object({
+    kind: z.literal("pong"),
+    ...textFrameFields,
+  }),
+]);
 
 export const chatSubscribeV11 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 1 } as const,
+  openRequestSchema: chatSubscribeOpenRequestSchema,
+  serverFrameSchema: chatSubscribeServerFrameSchemaV11,
+  clientFrameSchema: chatSubscribeClientFrameSchema,
+});
+
+// ─── Live `chat.subscribe@1.2` contract ────────────────────────────────────
+
+export const chatSubscribeV12 = defineStreamRpcContract({
+  method: "chat.subscribe",
+  schemaVersion: { major: 1, minor: 2 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchema,
   serverFrameSchema: chatSubscribeServerFrameSchema,
   clientFrameSchema: chatSubscribeClientFrameSchema,

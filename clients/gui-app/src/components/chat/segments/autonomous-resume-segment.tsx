@@ -1,4 +1,4 @@
-import { CheckCheck, XCircle } from "lucide-react";
+import { AlarmClockCheck, CheckCheck, XCircle } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import type { AutonomousResumeTrigger } from "@traycer/protocol/persistence/epic/content-blocks";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -35,9 +35,52 @@ export function AutonomousResumeSegment(props: AutonomousResumeSegmentProps) {
 
   return (
     <div className="flex flex-col gap-2">
-      {triggers.map((trigger) => (
-        <ResumeCompletionCard key={triggerKey(trigger)} trigger={trigger} />
-      ))}
+      {triggers.map((trigger) =>
+        trigger.kind === "wakeup" ? (
+          <WakeupResumeDivider key={triggerKey(trigger)} trigger={trigger} />
+        ) : (
+          <ResumeCompletionCard key={triggerKey(trigger)} trigger={trigger} />
+        ),
+      )}
+    </div>
+  );
+}
+
+function WakeupResumeDivider(props: {
+  readonly trigger: AutonomousResumeTrigger;
+}) {
+  const { trigger } = props;
+  const reason = formatSingleLine(trigger.title, {
+    maxLength: 80,
+    ellipsis: "…",
+  });
+  const prompt =
+    trigger.summary.trim().length > 0
+      ? formatSingleLine(trigger.summary, { maxLength: 180, ellipsis: "…" })
+      : null;
+
+  return (
+    <div className="flex w-full flex-col gap-1">
+      <div className="flex items-center gap-3">
+        <span aria-hidden className="h-px flex-1 bg-border/60" />
+        <div
+          role="separator"
+          aria-label={`Woke on schedule: ${reason}`}
+          className="flex min-w-0 items-center gap-2 text-ui-xs text-muted-foreground"
+        >
+          <AlarmClockCheck className="size-3.5 shrink-0" aria-hidden />
+          <span className="shrink-0">Woke on schedule:</span>
+          <span className="min-w-0 truncate text-muted-foreground/90">
+            {reason}
+          </span>
+        </div>
+        <span aria-hidden className="h-px flex-1 bg-border/60" />
+      </div>
+      {prompt === null ? null : (
+        <p className="mx-auto m-0 w-full max-w-[min(90vw,42rem)] rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-ui-sm leading-6 text-foreground/85">
+          {prompt}
+        </p>
+      )}
     </div>
   );
 }
@@ -158,6 +201,8 @@ function resumeKindTitle(kind: AutonomousResumeTrigger["kind"]): string {
       return "Monitor";
     case "subagent":
       return "Subagent";
+    case "wakeup":
+      return "Wake";
   }
 }
 
