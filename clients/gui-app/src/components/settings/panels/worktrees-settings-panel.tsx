@@ -1882,6 +1882,17 @@ function deleteDialogCopy(entry: WorktreeHostEntryV11): {
       actionLabel: "Delete worktree",
     };
   }
+  // Never-pushed and not contained in the default branch (no upstream, so the
+  // commit count is unknown). Removing the worktree keeps the branch ref — the
+  // commits survive on the branch — but they were never pushed anywhere, so
+  // this machine is the only copy. Honest, not overstated as unrecoverable.
+  if (status !== null && status.ahead === null && !status.mergedIntoDefault) {
+    return {
+      title: "Delete worktree with unpushed local commits?",
+      description: `${branch} has local-only commits not on the default branch and was never pushed. Removing the worktree keeps the branch ref, so the commits survive on the branch — but this machine is their only copy. Traycer runs the repo's teardown script, then removes ${entry.worktreePath}.`,
+      actionLabel: "Delete worktree",
+    };
+  }
   return {
     title: "Delete worktree?",
     description: `Traycer runs the repo's teardown script, then removes ${branch} (${entry.worktreePath}).`,

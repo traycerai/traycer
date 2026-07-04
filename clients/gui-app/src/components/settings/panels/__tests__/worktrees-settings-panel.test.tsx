@@ -1267,6 +1267,28 @@ describe("WorktreesList confirm-time re-check", () => {
     screen.getByText("Delete worktree with 2 unpushed commits?");
     screen.getByText(/2 commits not on the default branch/i);
   });
+
+  it("warns about never-pushed local-only commits in the per-row confirm", () => {
+    render(
+      renderWith(new QueryClient(), [
+        entry({
+          worktreePath: "/wt/never-pushed",
+          branch: "feat-never-pushed",
+          // No upstream (ahead null) and not contained in the default branch:
+          // honest per-row warning rather than the generic "Delete worktree?".
+          branchStatus: { ahead: null, behind: null, mergedIntoDefault: false },
+        }),
+      ]),
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Delete worktree feat-never-pushed",
+      }),
+    );
+    screen.getByText("Delete worktree with unpushed local commits?");
+    screen.getByText(/local-only commits not on the default branch/i);
+  });
 });
 
 describe("WorktreesList v1.1 signals", () => {

@@ -100,8 +100,8 @@ interface WorktreeCleanupCandidateStub {
   readonly branch: string | null;
   readonly uncommittedCount: number;
   readonly branchStatus: {
-    readonly ahead: number;
-    readonly behind: number;
+    readonly ahead: number | null;
+    readonly behind: number | null;
     readonly mergedIntoDefault: boolean;
   } | null;
   readonly ownerEpicIds: ReadonlyArray<string>;
@@ -705,6 +705,30 @@ describe("<EpicsListPanel />", () => {
     // and the concrete loss is named.
     expect(checkbox.getAttribute("aria-checked")).toBe("false");
     screen.getByText(/3 commits not on the default branch/i);
+  });
+
+  it("names never-pushed local-only commits and leaves the row unchecked by default", async () => {
+    testState.worktreeCandidates = [
+      {
+        worktreePath: "/wt/never-pushed",
+        repoLabel: "owner/repo",
+        branch: "feat/never-pushed",
+        uncommittedCount: 0,
+        // No upstream (ahead null) and not contained in the default branch:
+        // must stay unchecked and carry the honest local-only hint, not the
+        // generic "unverified" note.
+        branchStatus: { ahead: null, behind: null, mergedIntoDefault: false },
+        ownerEpicIds: ["epic-from-history"],
+      },
+    ];
+    renderPanel("embedded", "/");
+
+    fireEvent.click(await screen.findByTestId("epics-list-row-delete"));
+    const checkbox = await screen.findByTestId(
+      "delete-tasks-worktree-checkbox",
+    );
+    expect(checkbox.getAttribute("aria-checked")).toBe("false");
+    screen.getByText(/local-only commits not on the default branch/i);
   });
 
   it("includes a dirty worktree once its warning row is checked", async () => {

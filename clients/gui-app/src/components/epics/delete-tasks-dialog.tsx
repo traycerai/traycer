@@ -167,6 +167,20 @@ function WorktreeCleanupRow(props: {
         branch
       </span>
     );
+  } else if (
+    status !== null &&
+    status.ahead === null &&
+    !status.mergedIntoDefault
+  ) {
+    // Never-pushed and not contained in the default branch: local-only commits
+    // exist but the count is unknown (no upstream). The branch ref survives
+    // removal, so this names the state without claiming unrecoverable loss.
+    hint = (
+      <span className="mt-0.5 flex items-center gap-1 text-ui-xs text-amber-600 dark:text-amber-400">
+        <AlertTriangle className="size-3 shrink-0" aria-hidden />
+        Local-only commits not on the default branch — never pushed
+      </span>
+    );
   } else if (status === null) {
     hint = (
       <span className="mt-0.5 block text-ui-xs text-muted-foreground">
