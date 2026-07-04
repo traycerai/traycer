@@ -407,12 +407,24 @@ export type GitChangedFileV11 = z.infer<typeof gitChangedFileV11Schema>;
  * (broken worktree, permissions, timeout, or any git error - the production
  * command runner collapses those to an unresolved checkout HEAD), so the client
  * renders a visible "details unavailable" degrade instead of a silent empty
- * section (plan: "visible degrade, never silent omission"). Kept minimal: a
- * single coarse `reason` today, extensible later.
+ * section (plan: "visible degrade, never silent omission").
+ *
+ * `reason` is a single coarse value today but tolerant by construction:
+ * `.catch("git-error")` degrades any UNKNOWN future reason (e.g. a later host
+ * that emits `"timeout"`) to `"git-error"` rather than hard-failing the entire
+ * `listChangedFiles@1.1` response on an already-shipped GUI. This is the trap the
+ * plain enum hid: minor-skew projection strips unknown KEYS, not unknown enum
+ * VALUES in a retained field, so a bare `z.enum(["git-error"])` would reject the
+ * whole response the moment a future host widens this reason. The tolerance has a
+ * deliberate side effect: `.catch` also absorbs a MISSING `reason`, defaulting it
+ * to `"git-error"` instead of rejecting the payload.
  */
 export const submoduleAvailabilitySchema = z.discriminatedUnion("state", [
   z.object({ state: z.literal("ok") }),
-  z.object({ state: z.literal("unavailable"), reason: z.enum(["git-error"]) }),
+  z.object({
+    state: z.literal("unavailable"),
+    reason: z.enum(["git-error"]).catch("git-error"),
+  }),
 ]);
 export type SubmoduleAvailability = z.infer<typeof submoduleAvailabilitySchema>;
 

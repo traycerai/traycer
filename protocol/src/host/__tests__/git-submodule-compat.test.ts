@@ -327,10 +327,43 @@ describe("v1.1 simplified schema shapes", () => {
       reason: "git-error",
     });
     expect(unavailable).toEqual({ state: "unavailable", reason: "git-error" });
-    // An unavailable payload without a reason is rejected.
-    expect(
-      submoduleAvailabilitySchema.safeParse({ state: "unavailable" }).success,
-    ).toBe(false);
+  });
+
+  it("tolerates unknown/missing reason values, degrading them to git-error", () => {
+    // A future host emitting a reason value this GUI does not know must NOT
+    // hard-fail parsing: `.catch("git-error")` degrades unknown enum VALUES in
+    // the retained `reason` field to the known default. Minor-skew projection
+    // strips unknown KEYS, never unknown VALUES, so the bare enum was a trap.
+    const futureReason = submoduleAvailabilitySchema.parse({
+      state: "unavailable",
+      reason: "timeout",
+    });
+    expect(futureReason).toEqual({ state: "unavailable", reason: "git-error" });
+
+    // The same tolerance absorbs a MISSING reason (deliberate `.catch` side
+    // effect): it defaults to `git-error` instead of rejecting the payload.
+    const missingReason = submoduleAvailabilitySchema.parse({
+      state: "unavailable",
+    });
+    expect(missingReason).toEqual({ state: "unavailable", reason: "git-error" });
+
+    // End to end: an unknown reason on a nested submodule degrades in place and
+    // does NOT fail the whole listChangedFiles@1.1 response.
+    const response = {
+      ...v10Response,
+      files: [{ ...v10File, gitlink: null }],
+      submodules: [
+        {
+          ...submoduleChangeset,
+          availability: { state: "unavailable", reason: "timeout" },
+        },
+      ],
+    };
+    const parsed = gitListChangedFilesResponseSchemaV11.parse(response);
+    expect(parsed.submodules[0].availability).toEqual({
+      state: "unavailable",
+      reason: "git-error",
+    });
   });
 
   it("round-trips a full v1.1 listChangedFiles response with a submodule", () => {
