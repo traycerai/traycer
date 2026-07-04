@@ -196,12 +196,18 @@ export function useMentionItems(params: UseMentionItemsParams): void {
     [active, debouncedRequestContext, step],
   );
 
-  const { data: workspaceEntries, isLoading: workspaceLoading } =
-    useWorkspaceEntries({ requests: workspaceRequests, client: hostClient });
-  const { data: remoteEpicEntries, isLoading: epicLoading } =
-    useEpicMentionEntries({
-      requests: epicRequests,
-    });
+  const {
+    data: workspaceEntries,
+    isLoading: workspaceLoading,
+    isFetching: workspaceFetching,
+  } = useWorkspaceEntries({ requests: workspaceRequests, client: hostClient });
+  const {
+    data: remoteEpicEntries,
+    isLoading: epicLoading,
+    isFetching: epicFetching,
+  } = useEpicMentionEntries({
+    requests: epicRequests,
+  });
   const epicTitleByIdFromCache = useMemo(() => {
     if (cachedEpicTasks.length === 0) return EMPTY_TITLE_MAP;
     const titles = new Map<string, string>();
@@ -299,6 +305,11 @@ export function useMentionItems(params: UseMentionItemsParams): void {
     ((workspaceRequests.length > 0 && workspaceLoading) ||
       (epicRequests.length > 0 && epicLoading));
 
+  const fetching =
+    active &&
+    ((workspaceRequests.length > 0 && workspaceFetching) ||
+      (epicRequests.length > 0 && epicFetching));
+
   useEffect(() => {
     if (!active) return;
     pickerStore.getState().setItems({
@@ -309,6 +320,11 @@ export function useMentionItems(params: UseMentionItemsParams): void {
       loading,
     });
   }, [active, items, loading, pickerStore, query, step]);
+
+  useEffect(() => {
+    if (!active) return;
+    pickerStore.getState().setFetching(fetching);
+  }, [active, fetching, pickerStore]);
 }
 
 const EMPTY_CHAT_ENTRIES: ReadonlyArray<EpicChatMentionEntry> = [];

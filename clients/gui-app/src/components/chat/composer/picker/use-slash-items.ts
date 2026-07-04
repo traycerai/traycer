@@ -42,7 +42,11 @@ export function useSlashItems(params: UseSlashItemsParams): void {
   const slice = useStore(pickerStore, useShallow(selectSlashSlice));
   const { active, query } = slice;
 
-  const { data: commands, isLoading } = useSlashCommands(query, {
+  const {
+    data: commands,
+    isLoading,
+    isFetching,
+  } = useSlashCommands(query, {
     hostClient,
     harnessId,
     workingDirectories,
@@ -69,6 +73,11 @@ export function useSlashItems(params: UseSlashItemsParams): void {
       loading: isLoading,
     });
   }, [active, isLoading, items, pickerStore, query]);
+
+  useEffect(() => {
+    if (!active) return;
+    pickerStore.getState().setFetching(isFetching);
+  }, [active, isFetching, pickerStore]);
 }
 
 const STATIC_STEP = { kind: "root" as const };

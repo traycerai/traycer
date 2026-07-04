@@ -12,13 +12,13 @@ export function MentionMenuItem(props: MentionMenuItemProps) {
   return (
     <div className="flex min-w-0 items-center gap-2 px-1 py-0.5">
       <span className="shrink-0">{entry.icon}</span>
-      <span className="min-w-0 truncate text-ui-sm font-medium text-foreground">
+      <span className="min-w-0 flex-1 truncate text-ui-sm font-medium text-foreground">
         {entry.label}
       </span>
       {trailing ? (
         <span
-          className="ml-auto min-w-0 shrink truncate text-ui-xs text-muted-foreground/70"
-          title={trailing}
+          className="min-w-0 shrink max-w-[45%] truncate text-ui-xs text-muted-foreground/70"
+          title={entry.preview === null ? trailing : undefined}
         >
           {trailing}
         </span>

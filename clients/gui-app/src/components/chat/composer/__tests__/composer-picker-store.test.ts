@@ -34,6 +34,7 @@ function fakeMentionEntry(id: string, label: string): MentionMenuEntry {
     description: "",
     icon: FAKE_ICON,
     action: { kind: "back" },
+    preview: null,
   };
 }
 
@@ -50,6 +51,7 @@ function slashCommand(name: string): SlashCommand {
     kind: "slash-command",
     metadata: {},
     source: "provider",
+    preview: { kind: "text", primary: "", secondary: null, mono: false },
   };
 }
 

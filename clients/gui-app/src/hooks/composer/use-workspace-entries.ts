@@ -1,3 +1,4 @@
+import { keepPreviousData } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { WorkspaceMentionSuggestion } from "@traycer/protocol/host/index";
@@ -16,6 +17,7 @@ export interface UseWorkspaceEntriesParams {
 export interface UseWorkspaceEntriesResult {
   data: ReadonlyArray<WorkspaceMentionSuggestion>;
   isLoading: boolean;
+  isFetching: boolean;
   error: HostRpcError | null;
 }
 
@@ -25,12 +27,13 @@ export function useWorkspaceEntries(
   const queries = useHostQueries<HostRpcRegistry, WorkspaceMentionMethod>({
     client: params.client,
     requests: params.requests,
-    options: { staleTime: 30_000 },
+    options: { staleTime: 30_000, placeholderData: keepPreviousData },
   });
 
   return {
     data: queries.flatMap((query) => query.data?.entries ?? EMPTY),
     isLoading: queries.some((query) => query.isLoading),
+    isFetching: queries.some((query) => query.isFetching),
     error: queries.find((query) => query.error !== null)?.error ?? null,
   };
 }
