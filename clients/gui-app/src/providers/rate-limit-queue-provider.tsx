@@ -10,12 +10,15 @@ import {
 } from "@/lib/rate-limits/ephemeral-fetch-queue";
 
 /**
- * Background poll cadence for the `ephemeralProcess` lane (codex, claude-code).
- * Deliberately slack (subprocess spawns are expensive) - the serial queue's 30s
- * freshness floor, turn-completion enqueues, and manual refresh all keep data
- * fresher between ticks.
+ * Background poll cadence for the `ephemeralProcess` lane (codex, claude-code),
+ * matching the `httpFetch` lane's own `refetchInterval`
+ * (`HTTP_FETCH_RATE_LIMIT_REFETCH_INTERVAL_MS`) so both lanes settle to the
+ * same background freshness regardless of fetch cost class. Still slack
+ * relative to a plain GET (subprocess spawns are expensive) - the serial
+ * queue's 30s freshness floor, turn-completion enqueues, and manual refresh
+ * all keep data fresher between ticks.
  */
-export const EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS = 10 * 60 * 1000;
+export const EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS = 5 * 60 * 1000;
 
 /**
  * The long-lived app-shell owner of the rate-limit data layer (no rendered

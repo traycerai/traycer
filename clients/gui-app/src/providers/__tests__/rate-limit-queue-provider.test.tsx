@@ -82,6 +82,10 @@ describe("<RateLimitQueueProvider />", () => {
     vi.useRealTimers();
   });
 
+  it("polls the ephemeralProcess lane every 5 minutes, matching the httpFetch lane's own refetchInterval", () => {
+    expect(EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS).toBe(5 * 60 * 1000);
+  });
+
   it("binds the serial queue to the default host on mount", () => {
     render(tree());
     const config = configureSpy.mock.calls.at(-1)?.[0] ?? null;

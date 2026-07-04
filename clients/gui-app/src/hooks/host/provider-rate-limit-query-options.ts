@@ -23,11 +23,21 @@ const HTTP_FETCH_RATE_LIMIT_REFETCH_INTERVAL_MS = 5 * 60 * 1000;
  * - `httpFetch` (openrouter, kilocode): its own `refetchInterval`, with
  *   `refetchIntervalInBackground: false` set explicitly (not left to the
  *   TanStack default) since these are now persistent app-shell subscriptions -
- *   no polling while the tab is hidden.
+ *   no polling while the tab is hidden. `refetchOnMount` stays at TanStack's
+ *   own default (`true`): a plain GET has no subprocess to bound, so letting a
+ *   popover/Settings-card remount refetch directly when stale is exactly
+ *   "fetch fresh data on open" with no downside.
  * - `ephemeralProcess` (codex, claude-code): no `refetchInterval` at all. Their
  *   background refresh is driven entirely by the serial queue's interval timer
  *   writing fresh data into this exact query key; adding an interval here would
- *   spawn subprocesses outside the queue and defeat its concurrency bound.
+ *   spawn subprocesses outside the queue and defeat its concurrency bound. For
+ *   the exact same reason, `refetchOnMount` is forced to `false`: TanStack's
+ *   default would otherwise fire a refetch straight through this query's own
+ *   `queryFn` on every popover/Settings-card open (a fresh mount) whenever the
+ *   cached data is stale - a direct host call that bypasses the queue and can
+ *   overlap a fetch it's already draining. `useRefreshProviderRateLimitsOnMount`
+ *   is the queue-routed replacement every `ephemeralProcess` consumer pairs
+ *   with this hook to get the same "fresh data on open" behavior safely.
  */
 export function providerRateLimitQueryOptions(
   providerId: RateLimitProviderId,
@@ -46,6 +56,7 @@ export function providerRateLimitQueryOptions(
         ? HTTP_FETCH_RATE_LIMIT_REFETCH_INTERVAL_MS
         : false,
       refetchIntervalInBackground: false,
+      refetchOnMount: isHttpFetch ? true : false,
     },
   };
 }

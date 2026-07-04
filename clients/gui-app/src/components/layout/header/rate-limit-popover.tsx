@@ -20,6 +20,9 @@ import {
   type ProviderRateLimitQueryState,
 } from "@/components/settings/panels/provider-rate-limit-views";
 import { useHostProviderRateLimitsQuery } from "@/hooks/host/use-host-provider-rate-limits-query";
+import { useHostQueries } from "@/hooks/host/use-host-queries";
+import { providerRateLimitQueryOptions } from "@/hooks/host/provider-rate-limit-query-options";
+import { useRefreshProviderRateLimitsOnMount } from "@/hooks/host/use-refresh-provider-rate-limits-on-mount";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import {
   useConfiguredRateLimitProviders,
@@ -33,7 +36,7 @@ import {
   resolveProviderPlanLabel,
   type PopoverProviderRateLimitState,
 } from "@/lib/provider-rate-limit-content";
-import type { HostRpcRegistry } from "@/lib/host";
+import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import {
   providerDisplayName,
   providerIdToGuiHarnessId,
@@ -459,8 +462,14 @@ function RateLimitOverviewLoading(): ReactNode {
  * refresh one at a time through the shared serial queue (`force: true`), while
  * httpFetch providers refresh concurrently alongside via a direct query
  * invalidation - a plain GET has no subprocess cost to serialize. `refreshing`
- * is wired to the queue's draining state so the icon spins and the button stays
- * disabled until the round finishes, so it can't be re-triggered mid-round.
+ * combines both lanes' real query state - the queue's draining flag for
+ * ephemeralProcess (which stays true a beat longer than any single provider's
+ * `isFetching`, covering the "still waiting behind an earlier provider in the
+ * queue" gap) and each configured httpFetch provider's own `isFetching` (read
+ * via `useHostQueries` against the exact same query keys the invalidation
+ * below targets) - so the icon spins for the whole round regardless of which
+ * lane(s) are actually configured, not just when an ephemeralProcess provider
+ * happens to be in the mix.
  */
 function RateLimitRefreshAllButton({
   providers,
@@ -470,26 +479,43 @@ function RateLimitRefreshAllButton({
   const draining = useIsRateLimitQueueDraining();
   const queryClient = useQueryClient();
   const hostId = useReactiveActiveHostId();
+  const client = useHostClient();
+  const httpFetchProviders = providers.filter(
+    (provider) => provider.lane === "httpFetch",
+  );
+  const httpFetchQueries = useHostQueries<
+    HostRpcRegistry,
+    "host.getRateLimitUsage"
+  >({
+    client,
+    requests: httpFetchProviders.map((provider) => {
+      const { method, params } = providerRateLimitQueryOptions(
+        provider.providerId,
+      );
+      return { method, params };
+    }),
+    options: null,
+  });
+  const refreshing =
+    draining || httpFetchQueries.some((query) => query.isFetching);
 
   // Fire-and-forget, not awaited: httpFetch providers refresh concurrently via a
   // direct invalidation while ephemeralProcess providers queue through the
   // shared serial lane. Returns an already-resolved promise so `RefreshIconButton`
   // gets its `() => Promise<void>` contract without gating the spinner on the
-  // fetches themselves - the queue's `draining` state (below) owns that.
+  // fetches themselves - `refreshing` (above) owns that.
   const refreshAll = (): Promise<void> => {
-    providers
-      .filter((provider) => provider.lane === "httpFetch")
-      .forEach((provider) => {
-        void queryClient.invalidateQueries({
-          queryKey: queryKeys.hostMethod<
-            HostRpcRegistry,
-            "host.getRateLimitUsage"
-          >(hostId, "host.getRateLimitUsage", {
-            accountContext: DEFAULT_ACCOUNT_CONTEXT,
-            providerId: provider.providerId,
-          }),
-        });
+    httpFetchProviders.forEach((provider) => {
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.hostMethod<
+          HostRpcRegistry,
+          "host.getRateLimitUsage"
+        >(hostId, "host.getRateLimitUsage", {
+          accountContext: DEFAULT_ACCOUNT_CONTEXT,
+          providerId: provider.providerId,
+        }),
       });
+    });
     providers
       .filter((provider) => provider.lane === "ephemeralProcess")
       .forEach((provider) => {
@@ -506,7 +532,7 @@ function RateLimitRefreshAllButton({
     <RefreshIconButton
       onRefresh={refreshAll}
       label="Refresh all"
-      refreshing={draining}
+      refreshing={refreshing}
       className="mt-1"
     />
   );
@@ -544,6 +570,10 @@ function RateLimitProviderBlock({
   readonly onReady: (() => void) | null;
 }): ReactNode {
   const query = useHostProviderRateLimitsQuery(providerId);
+  // Fresh-data-on-open for the ephemeralProcess lane, routed through the
+  // shared serial queue rather than TanStack's own (deliberately disabled)
+  // refetch-on-mount - see providerRateLimitQueryOptions' doc comment.
+  useRefreshProviderRateLimitsOnMount(providerId);
   const lane = rateLimitFetchLane(providerId);
   const queryState: ProviderRateLimitQueryState = {
     isPending: query.isPending,

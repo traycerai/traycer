@@ -10,6 +10,7 @@ import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import { RefreshIconButton } from "@/components/refresh-icon-button";
 import { ProviderRateLimitBody } from "@/components/settings/panels/provider-rate-limit-views";
 import { useHostProviderRateLimitsQuery } from "@/hooks/host/use-host-provider-rate-limits-query";
+import { useRefreshProviderRateLimitsOnMount } from "@/hooks/host/use-refresh-provider-rate-limits-on-mount";
 import { useRefreshProviderRateLimitsOnTurn } from "@/hooks/host/use-refresh-provider-rate-limits-on-turn";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import {
@@ -36,6 +37,10 @@ function ProviderRateLimitSettingsCard({
 }): ReactNode {
   const hostId = useReactiveActiveHostId();
   const query = useHostProviderRateLimitsQuery(providerId);
+  // Fresh-data-on-open for the ephemeralProcess lane, routed through the
+  // shared serial queue rather than TanStack's own (deliberately disabled)
+  // refetch-on-mount - see providerRateLimitQueryOptions' doc comment.
+  useRefreshProviderRateLimitsOnMount(providerId);
   // Keep the bars live: a turn on this provider finishing while the card is
   // open re-fetches usage. Only mounted here, so it costs nothing elsewhere.
   useRefreshProviderRateLimitsOnTurn(providerId, hostId);

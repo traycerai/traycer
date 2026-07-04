@@ -80,6 +80,22 @@ vi.mock("@/hooks/host/use-host-provider-rate-limits-query", () => ({
   useHostProviderRateLimitsQuery: (providerId: string) =>
     mocks.results[providerId] ?? readyResult(null),
 }));
+// `RateLimitRefreshAllButton` reads each configured httpFetch provider's
+// query state directly (to fold its `isFetching` into the button's own
+// spinner) via the same fixture map every other mocked query hook here uses.
+vi.mock("@/hooks/host/use-host-queries", () => ({
+  useHostQueries: (args: {
+    requests: ReadonlyArray<{ params: { providerId: string } }>;
+  }) =>
+    args.requests.map(
+      (request) =>
+        mocks.results[request.params.providerId] ?? readyResult(null),
+    ),
+}));
+vi.mock("@/lib/host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host")>();
+  return { ...actual, useHostClient: () => null };
+});
 vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
   useReactiveActiveHostId: () => "host-1",
 }));
@@ -607,6 +623,29 @@ describe("<RateLimitPopover /> Refresh all", () => {
     mocks.configured = [{ providerId: "codex", lane: "ephemeralProcess" }];
     mocks.results = { codex: readyResult(codexReady()) };
     mocks.draining = true;
+    renderPopover();
+    const refreshAll = screen.getByRole("button", { name: "Refresh all" });
+    expect((refreshAll as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("is disabled while an httpFetch provider is fetching, even though the ephemeralProcess queue isn't draining", () => {
+    // Regression: "Refresh all" used to read only the ephemeralProcess queue's
+    // draining flag, so an all-httpFetch popover (or one mid-invalidation on
+    // just its httpFetch providers) never visibly spun despite actively
+    // refreshing.
+    mocks.configured = [{ providerId: "kilocode", lane: "httpFetch" }];
+    mocks.results = {
+      kilocode: {
+        ...readyResult({
+          provider: "kilocode",
+          available: true,
+          creditBalance: 9,
+          passState: null,
+        }),
+        isFetching: true,
+      },
+    };
+    mocks.draining = false;
     renderPopover();
     const refreshAll = screen.getByRole("button", { name: "Refresh all" });
     expect((refreshAll as HTMLButtonElement).disabled).toBe(true);
