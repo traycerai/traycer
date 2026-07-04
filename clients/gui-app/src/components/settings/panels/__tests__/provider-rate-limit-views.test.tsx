@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import type { ProviderRateLimits } from "@traycer/protocol/host";
 import {
+  ClaudeRateLimitView,
   CodexRateLimitView,
   KiloCodeRateLimitView,
   OpenRouterRateLimitView,
@@ -10,6 +11,10 @@ import {
 } from "../provider-rate-limit-views";
 
 type CodexRateLimits = Extract<ProviderRateLimits, { provider: "codex" }>;
+type ClaudeRateLimits = Extract<
+  ProviderRateLimits,
+  { provider: "claude-code" }
+>;
 type OpenRouterRateLimits = Extract<
   ProviderRateLimits,
   { provider: "openrouter" }
@@ -59,24 +64,24 @@ describe("CodexRateLimitView (extended fields)", () => {
 
   it("labels windows from their real duration (not a hardcoded 5-hour/Weekly)", () => {
     render(<CodexRateLimitView data={codex} variant="settings" />);
-    expect(screen.getByText("5h · 4% used")).toBeTruthy();
-    expect(screen.getByText("Weekly · 68% used")).toBeTruthy();
+    expect(screen.getByText("Current session")).toBeTruthy();
+    expect(screen.getByText("4% used")).toBeTruthy();
+    expect(screen.getByText("Weekly")).toBeTruthy();
+    expect(screen.getByText("68% used")).toBeTruthy();
   });
 
-  it("shows the plan/tier label from planType in the popover detail tab", () => {
+  it("never renders the plan/tier label itself - the header popover owns that chip", () => {
+    // `resolveProviderPlanLabel` (provider-rate-limit-content.test.ts) covers the
+    // planType -> "Pro 5x" mapping; the popover header's own test coverage
+    // (rate-limit-popover.test.tsx) covers the chip actually rendering.
     render(<CodexRateLimitView data={codex} variant="popover-detail" />);
-    // `planType` ("pro_5x") title-cased - NOT `limitName` (a bucket id).
-    expect(screen.getByText("Pro 5x")).toBeTruthy();
-  });
-
-  it("omits any plan/tier label in the settings variant", () => {
-    render(<CodexRateLimitView data={codex} variant="settings" />);
     expect(screen.queryByText("Pro 5x")).toBeNull();
   });
 
   it("renders each extraWindow as its own labeled row (limit name + duration)", () => {
     render(<CodexRateLimitView data={codex} variant="settings" />);
-    expect(screen.getByText("GPT-5 · 5h · 20% used")).toBeTruthy();
+    expect(screen.getByText("GPT-5 · Current session")).toBeTruthy();
+    expect(screen.getByText("20% used")).toBeTruthy();
   });
 
   it("renders the manual reset-credits block", () => {
@@ -106,8 +111,10 @@ describe("CodexRateLimitView (extended fields)", () => {
         variant="settings"
       />,
     );
-    expect(screen.getByText("6h · 4% used")).toBeTruthy();
-    expect(screen.getByText("30d · 68% used")).toBeTruthy();
+    expect(screen.getByText("6h")).toBeTruthy();
+    expect(screen.getByText("4% used")).toBeTruthy();
+    expect(screen.getByText("30d")).toBeTruthy();
+    expect(screen.getByText("68% used")).toBeTruthy();
   });
 
   it("renders the popover variant as '% used' with a four-tier bar color", () => {
@@ -115,8 +122,10 @@ describe("CodexRateLimitView (extended fields)", () => {
       <CodexRateLimitView data={codex} variant="popover-detail" />,
     );
     // primary 4% used -> blue tier; secondary 68% used -> yellow tier.
-    expect(screen.getByText("5h · 4% used")).toBeTruthy();
-    expect(screen.getByText("Weekly · 68% used")).toBeTruthy();
+    expect(screen.getByText("Current session")).toBeTruthy();
+    expect(screen.getByText("4% used")).toBeTruthy();
+    expect(screen.getByText("Weekly")).toBeTruthy();
+    expect(screen.getByText("68% used")).toBeTruthy();
     expect(container.querySelectorAll(".bg-blue-500").length).toBeGreaterThan(
       0,
     );
@@ -125,10 +134,12 @@ describe("CodexRateLimitView (extended fields)", () => {
     );
   });
 
-  it("draws every popover window track with a border so an empty bar stays visible", () => {
-    // Regression (Issue 3): several dark presets set --muted == --popover, so a
-    // borderless bg-muted track vanished at 0% fill. A 0%-used window must still
-    // show a bordered, empty track.
+  it("draws every popover window track with a foreground-opacity fill so an empty bar stays visible", () => {
+    // Regression (Issue 3): several dark presets set --muted == --popover, so
+    // a `bg-muted` track vanished at 0% fill. The track now fills with
+    // `bg-foreground/15` instead, which contrasts against any background
+    // regardless of theme - a 0%-used window must still show a visible,
+    // empty track, with no border needed to keep it that way.
     const { container } = render(
       <CodexRateLimitView
         data={{
@@ -145,8 +156,9 @@ describe("CodexRateLimitView (extended fields)", () => {
         variant="popover-detail"
       />,
     );
-    expect(screen.getByText("5h · 0% used")).toBeTruthy();
-    const tracks = container.querySelectorAll(".bg-muted.border-border");
+    expect(screen.getByText("Current session")).toBeTruthy();
+    expect(screen.getByText("0% used")).toBeTruthy();
+    const tracks = container.querySelectorAll(".bg-foreground\\/15");
     expect(tracks.length).toBeGreaterThan(0);
   });
 
@@ -161,19 +173,21 @@ describe("CodexRateLimitView (extended fields)", () => {
       />,
     );
     expect(screen.getByText(/^Resets in /)).toBeTruthy();
-    expect(screen.queryByText(/\([A-Za-z]{3}\) /)).toBeNull();
+    expect(screen.queryByText(/^Resets [A-Za-z]{3} \d{1,2}:\d{2}/)).toBeNull();
   });
 
-  it("shows an absolute weekday-tagged date for a weekly popover window", () => {
+  it("shows an absolute weekday-tagged time for a weekly popover window", () => {
     // The weekly (10080-min) `secondary` window keeps the absolute reset line
-    // ("Resets Jul 11, 2026 (Tue) 3:35 AM"), since "Resets in 3d" is too coarse.
+    // ("Resets Sat 3:35 AM"), since "Resets in 3d" is too coarse.
     render(
       <CodexRateLimitView
         data={{ ...codex, primary: null, extraWindows: [] }}
         variant="popover-detail"
       />,
     );
-    expect(screen.getByText(/^Resets .+\([A-Za-z]{3}\) /)).toBeTruthy();
+    expect(
+      screen.getByText(/^Resets [A-Za-z]{3} \d{1,2}:\d{2}\s?[AP]M$/i),
+    ).toBeTruthy();
     expect(screen.queryByText(/^Resets in /)).toBeNull();
   });
 
@@ -191,14 +205,53 @@ describe("CodexRateLimitView (extended fields)", () => {
       />,
     );
     // Kept: primary (4% used) + secondary (68% used) windows.
-    expect(screen.getByText("5h · 4% used")).toBeTruthy();
-    expect(screen.getByText("Weekly · 68% used")).toBeTruthy();
+    expect(screen.getByText("Current session")).toBeTruthy();
+    expect(screen.getByText("4% used")).toBeTruthy();
+    expect(screen.getByText("Weekly")).toBeTruthy();
+    expect(screen.getByText("68% used")).toBeTruthy();
     // Dropped: plan label, per-model extraWindow row, reset-credits block, and
     // Credits.
     expect(screen.queryByText("Pro 5x")).toBeNull();
-    expect(screen.queryByText("GPT-5 · 5h · 20% used")).toBeNull();
+    expect(screen.queryByText("GPT-5 · Current session")).toBeNull();
     expect(screen.queryByText("Manual resets")).toBeNull();
     expect(screen.queryByText("Credits")).toBeNull();
+  });
+});
+
+describe("ClaudeRateLimitView", () => {
+  it("shows an absolute weekday-tagged time for a far per-model reset, even though modelScoped carries no durationMinutes", () => {
+    // Regression: `modelScoped` entries never carry a `durationMinutes` (the
+    // SDK's per-model usage has no separate duration field), so a
+    // duration-based "is this weekly-scale" check always fell back to the
+    // relative countdown for these rows, no matter how far away the real
+    // reset was ("Fable" usage showed "Resets in 3d" instead of "Resets Tue
+    // 5:29 PM"). The reset-format decision is now based on the real
+    // `resetsAt` delta instead, so a 3-day-out per-model reset gets the same
+    // absolute treatment a weekly window does.
+    const claude: ClaudeRateLimits = {
+      provider: "claude-code",
+      available: true,
+      subscriptionType: "max",
+      fiveHour: null,
+      sevenDay: null,
+      sevenDayOpus: null,
+      sevenDaySonnet: null,
+      modelScoped: [
+        {
+          displayName: "Fable",
+          usedPercent: 12,
+          resetsAt: NOW + 3 * 24 * 60 * 60 * 1000,
+          durationMinutes: null,
+        },
+      ],
+      extraUsage: null,
+    };
+    render(<ClaudeRateLimitView data={claude} variant="settings" />);
+    expect(screen.getByText("Fable")).toBeTruthy();
+    expect(
+      screen.getByText(/^Resets [A-Za-z]{3} \d{1,2}:\d{2}\s?[AP]M$/i),
+    ).toBeTruthy();
+    expect(screen.queryByText(/^Resets in /)).toBeNull();
   });
 });
 

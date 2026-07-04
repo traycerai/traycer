@@ -11,17 +11,18 @@ import type {
 } from "@traycer/protocol/host";
 import { Badge } from "@/components/ui/badge";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
-import {
-  MeterRow,
-  UsageBar,
-  type UsageBarTone,
-} from "@/components/settings/panels/traycer-subscription-views";
+import { MeterRow } from "@/components/settings/panels/traycer-subscription-views";
 import { contextUsageTone } from "@/components/chat/context-usage";
 import {
   formatUnavailableReason,
   resolveProviderRateLimitViewState,
+  titleCaseFromToken,
 } from "@/lib/provider-rate-limit-content";
-import { formatResetDateTime, useResetCountdown } from "@/lib/relative-time";
+import {
+  formatResetDateTime,
+  useIsFarReset,
+  useResetCountdown,
+} from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
 
 /**
@@ -32,12 +33,12 @@ import { cn } from "@/lib/utils";
  * this enum still drives is how much detail is shown:
  *
  * - `"settings"` / `"popover-detail"`: the provider's full detail (every
- *   window, credits, spend, reset credits, plan label, badges).
+ *   window, credits, spend, reset credits, badges).
  * - `"popover-overview"`: the header popover's Overview tab - condensed to
  *   only the primary/secondary (5h/Weekly) windows plus credit/balance
  *   figures, dropping per-model `extraWindows`, reset credits, the
- *   rate-limit-reached badge, the plan/tier label, and per-provider spend
- *   controls, which stay in the single-provider tab.
+ *   rate-limit-reached badge, and per-provider spend controls, which stay in
+ *   the single-provider tab.
  */
 export type RateLimitViewVariant =
   "settings" | "popover-detail" | "popover-overview";
@@ -76,6 +77,7 @@ type KiloCodeRateLimits = Extract<ProviderRateLimits, { provider: "kilocode" }>;
 const MINUTES_PER_HOUR = 60;
 const MINUTES_PER_DAY = MINUTES_PER_HOUR * 24;
 const MINUTES_PER_WEEK = MINUTES_PER_DAY * 7;
+const MINUTES_PER_SESSION = MINUTES_PER_HOUR * 5;
 
 /**
  * A window's label from its real duration, not a hardcoded "5-hour"/"Weekly"
@@ -84,61 +86,22 @@ const MINUTES_PER_WEEK = MINUTES_PER_DAY * 7;
  * Codex's primary/secondary, Claude's fixed buckets, and Codex's per-model
  * `extraWindows` all label from the same formatter. `10080` (a 7-day window)
  * reads as "Weekly" rather than "7d" since that's the product's own wording;
- * anything else falls back to whole-day / whole-hour / raw-minute forms.
+ * the well-known 5-hour rolling window both Codex and Claude use reads as
+ * "Current session" - a provider-reported 6-hour window still falls back to
+ * the generic "6h" form, since that isn't the same known quota.
  */
 function formatWindowDuration(minutes: number | null): string {
   if (minutes === null || minutes <= 0) return "Usage";
   if (minutes === MINUTES_PER_WEEK) return "Weekly";
+  if (minutes === MINUTES_PER_SESSION) return "Current session";
   if (minutes % MINUTES_PER_DAY === 0) return `${minutes / MINUTES_PER_DAY}d`;
   if (minutes % MINUTES_PER_HOUR === 0) return `${minutes / MINUTES_PER_HOUR}h`;
   return `${minutes}m`;
 }
 
-/**
- * Whether a window's reset should show as an exact date/time rather than a
- * relative countdown: a day-or-longer window ("Resets in 3d" is too coarse to
- * act on). Generalizes the old per-bucket `weekly` flag from `durationMinutes`,
- * so a provider-reported 6-hour window stays a countdown while a weekly one
- * shows the date.
- */
-function isWeeklyScale(minutes: number | null): boolean {
-  return minutes !== null && minutes >= MINUTES_PER_DAY;
-}
-
 /** $-denominated value (credits, balance, spend). */
 function formatProviderCurrency(value: number): string {
   return `$${value.toFixed(2)}`;
-}
-
-/**
- * Rate-limit severity scale: >70% used is a warning, >90% is critical - used
- * only for the uncapped `UsageBar` bars (OpenRouter/Claude extra-usage) that
- * have no fixed 100% ceiling. Distinct from the shared `contextUsageTone` (a
- * LEFT/remaining-percent scale for the unrelated context-window chip, with
- * its own thresholds) - rate limits report a USED percentage and warrant
- * their own scale.
- */
-function rateLimitSeverity(usedPercent: number): UsageBarTone | null {
-  if (usedPercent > 90) return "critical";
-  if (usedPercent > 70) return "warning";
-  return null;
-}
-
-function usageBarTone(usedPercent: number): UsageBarTone | undefined {
-  return rateLimitSeverity(usedPercent) ?? undefined;
-}
-
-/**
- * `snake_case`/lowercase-token → Title Case, for any enum value that isn't in
- * one of the display-name maps below (a forward-compat fallback for values
- * the host adds before this map is updated).
- */
-function titleCaseFromToken(value: string): string {
-  return value
-    .split("_")
-    .filter((word) => word.length > 0)
-    .map((word) => `${word[0].toUpperCase()}${word.slice(1)}`)
-    .join(" ");
 }
 
 /** Relative countdown ("Resets in 4h 7m") - ticks on the shared 60s clock. */
@@ -155,7 +118,7 @@ function RelativeResetLine({
 }
 
 /**
- * Exact date/time ("Resets Jul 4, 2026 12:10 AM") - for weekly-scale windows,
+ * Exact weekday/time ("Resets Sat 3:35 AM") - for weekly-scale windows,
  * where a relative countdown ("Resets in 3d") is too coarse to act on. Pure,
  * no clock subscription.
  */
@@ -174,23 +137,23 @@ function ExactResetLine({
 }
 
 /**
- * Dispatches to `RelativeResetLine` or `ExactResetLine` by `weekly` - a
- * static, per-window fact (which array field this is), never toggling for a
- * given row instance, so choosing the component at this level (rather than
- * conditionally calling one hook or the other inside a single component)
- * keeps both leaves' hook calls unconditional.
+ * Dispatches to `RelativeResetLine` or `ExactResetLine` by whether `resetsAt`
+ * is far enough away (`useIsFarReset` - the real time remaining, not a
+ * window's nominal duration, since not every window carries one; see that
+ * function's own doc). Calling the hook unconditionally here, then choosing
+ * which leaf to render, keeps both leaves' own hook calls (or lack thereof)
+ * unconditional per render.
  */
 function ResetLine({
   resetsAt,
   tone,
-  weekly,
 }: {
   readonly resetsAt: number | null;
   readonly tone: string;
-  readonly weekly: boolean;
 }): ReactNode {
+  const isFar = useIsFarReset(resetsAt);
   if (resetsAt === null) return null;
-  return weekly ? (
+  return isFar ? (
     <ExactResetLine resetsAt={resetsAt} tone={tone} />
   ) : (
     <RelativeResetLine resetsAt={resetsAt} tone={tone} />
@@ -198,35 +161,59 @@ function ResetLine({
 }
 
 /**
+ * The right-hand `detail` slot for a window row: "{percent}% used" followed
+ * by the reset line (a relative countdown for a near window - "Resets in 4h
+ * 7m" - or an absolute weekday/time for a far one - "Resets Sat 3:35 AM",
+ * since "Resets in 3d" is too coarse to act on), separated by a middle dot -
+ * dropped entirely when there's no reset to show. `tone` is left to
+ * `MeterRow`'s own wrapping span (this slot never overrides it), unlike
+ * `CodexSpendControlRow`'s reset line, which needs its own severity-driven
+ * tone outside a `MeterRow`.
+ */
+function WindowMeterDetail({
+  resetsAt,
+  usedPercent,
+}: {
+  readonly resetsAt: number | null;
+  readonly usedPercent: number;
+}): ReactNode {
+  const percent = Math.round(Math.min(100, Math.max(0, usedPercent)));
+  return (
+    <span className="flex items-center gap-1">
+      <span>{percent}% used</span>
+      {resetsAt !== null ? (
+        <>
+          <span aria-hidden="true">·</span>
+          <ResetLine resetsAt={resetsAt} tone="" />
+        </>
+      ) : null}
+    </span>
+  );
+}
+
+/**
  * A single window row, shared identically by the Settings card and both
  * popover surfaces so they can never visually drift - delegates to the
- * shared `MeterRow` shell (`traycer-subscription-views.tsx`), passing the
- * reset line as its `subtext` slot: a relative countdown for a short window
- * ("Resets in 4h 7m"), an absolute date/time for a weekly-scale one ("Resets
- * Jul 11, 2026 (Tue) 3:35 AM") since "Resets in 3d" is too coarse to act on.
- * Choosing the leaf (`RelativeResetLine`/`ExactResetLine`) by `weekly` keeps
- * both leaves' hook calls unconditional. Renders nothing for a `null` window
- * so call sites can pass optional windows directly.
+ * shared `MeterRow` shell (`traycer-subscription-views.tsx`), passing
+ * `WindowMeterDetail` as its `detail` slot. Renders nothing for a `null`
+ * window so call sites can pass optional windows directly.
  */
 function RateLimitWindowRow({
   label,
   window,
-  weekly,
 }: {
   readonly label: string;
   readonly window: ProviderRateLimitWindow | null;
-  readonly weekly: boolean;
 }): ReactNode {
   if (window === null) return null;
   return (
     <MeterRow
       label={label}
       usedPercent={window.usedPercent}
-      subtext={
-        <ResetLine
+      detail={
+        <WindowMeterDetail
           resetsAt={window.resetsAt}
-          tone="text-muted-foreground/70"
-          weekly={weekly}
+          usedPercent={window.usedPercent}
         />
       }
     />
@@ -237,9 +224,7 @@ function RateLimitWindowRow({
  * A window row whose label is composed from the window's real duration
  * (`formatWindowDuration`) plus, where a provider distinguishes otherwise
  * same-duration windows, a name prefix (Codex's per-model limit name) or a
- * trailing qualifier (Claude's "(Opus)"/"(Sonnet)"). `weekly` is derived from
- * the duration too, so the whole "labels come from `durationMinutes`, not a
- * hardcoded 5-hour/Weekly" rule lives in one place. Renders nothing for a
+ * trailing qualifier (Claude's "(Opus)"/"(Sonnet)"). Renders nothing for a
  * `null` window so call sites can pass optional windows directly.
  */
 // The label's base: a named window with a known duration reads "Name · 5h", a
@@ -269,18 +254,7 @@ function ProviderWindowRow({
   const duration = formatWindowDuration(window.durationMinutes);
   const base = windowBaseLabel(namePrefix, window.durationMinutes, duration);
   const label = qualifier !== null ? `${base} (${qualifier})` : base;
-  return (
-    <RateLimitWindowRow
-      label={label}
-      window={window}
-      weekly={isWeeklyScale(window.durationMinutes)}
-    />
-  );
-}
-
-/** A provider's plan/tier label (Core Flows: shown "where the provider reports one"). */
-function ProviderPlanLabel({ label }: { readonly label: string }): ReactNode {
-  return <div className="text-ui-xs text-muted-foreground">{label}</div>;
+  return <RateLimitWindowRow label={label} window={window} />;
 }
 
 /**
@@ -333,8 +307,10 @@ export function CodexRateLimitView({
   readonly variant: RateLimitViewVariant;
 }): ReactNode {
   // Overview keeps only the primary/secondary (5h/Weekly) windows; the badge,
-  // plan label, credits, per-model extraWindows, spend control, and reset
-  // credits are single-provider-tab detail (`!isOverviewVariant`).
+  // credits, per-model extraWindows, spend control, and reset credits are
+  // single-provider-tab detail (`!isOverviewVariant`). The plan/tier label
+  // isn't part of this body at all - the header popover renders it as a chip
+  // next to the provider name (`resolveProviderPlanLabel`).
   const overview = isOverviewVariant(variant);
 
   const globalLimits: ReactNode = (
@@ -414,15 +390,6 @@ export function CodexRateLimitView({
           </Badge>
         </div>
       ) : null}
-      {/* Plan/tier label (wireframe: "Pro 5x" under the provider name) is the
-          subscription tier - `planType` - not `limitName` (which is a rate-limit
-          *bucket* id, already surfaced by each extra-window's own label). Shown
-          only in the popover's single-provider detail tab; the Settings card
-          deliberately omits any plan-ish line (its auth badge above already
-          shows the plan), and Overview is condensed. */}
-      {variant === "popover-detail" && data.planType !== null ? (
-        <ProviderPlanLabel label={titleCaseFromToken(data.planType)} />
-      ) : null}
       {groups.map((group, index) => (
         <div key={group.key} className="flex flex-col gap-3">
           {index > 0 ? <div aria-hidden className="h-px bg-border/70" /> : null}
@@ -487,7 +454,6 @@ function CodexSpendControlRow({
         <ResetLine
           resetsAt={limit.resetsAt}
           tone={contextUsageTone(limit.remainingPercent)}
-          weekly={false}
         />
       </div>
     </div>
@@ -545,7 +511,6 @@ export function ClaudeRateLimitView({
               key={`${entry.displayName}-${entry.resetsAt}`}
               label={entry.displayName}
               window={entry}
-              weekly={isWeeklyScale(entry.durationMinutes)}
             />
           ))}
         </div>
@@ -572,12 +537,10 @@ function ClaudeExtraUsageRow({
         ? (extraUsage.usedCredits / extraUsage.monthlyLimit) * 100
         : 0;
     return (
-      <UsageBar
+      <MeterRow
         label="Extra usage"
-        consumed={extraUsage.usedCredits}
-        total={extraUsage.monthlyLimit}
-        tone={usageBarTone(usedPercent)}
-        formatValue={(value) => value.toFixed(2)}
+        usedPercent={usedPercent}
+        detail={`${extraUsage.usedCredits.toFixed(2)} / ${extraUsage.monthlyLimit.toFixed(2)}`}
       />
     );
   }
@@ -670,12 +633,10 @@ function OpenRouterCreditBar({
   const consumed = Math.max(0, limit - limitRemaining);
   const usedPercent = (consumed / limit) * 100;
   return (
-    <UsageBar
+    <MeterRow
       label="Credits"
-      consumed={consumed}
-      total={limit}
-      tone={usageBarTone(usedPercent)}
-      formatValue={formatProviderCurrency}
+      usedPercent={usedPercent}
+      detail={`${formatProviderCurrency(consumed)} / ${formatProviderCurrency(limit)}`}
     />
   );
 }

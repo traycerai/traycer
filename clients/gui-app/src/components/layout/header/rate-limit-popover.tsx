@@ -1,7 +1,15 @@
-import { useMemo, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Gauge, Settings } from "lucide-react";
 import { DEFAULT_ACCOUNT_CONTEXT } from "@traycer/protocol/common/schemas";
+import { Badge } from "@/components/ui/badge";
+import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { PopoverContent } from "@/components/ui/popover";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
@@ -22,6 +30,7 @@ import { enqueueRateLimitFetch } from "@/lib/rate-limits/ephemeral-fetch-queue";
 import {
   formatUnavailableReason,
   resolvePopoverProviderRateLimitState,
+  resolveProviderPlanLabel,
   type PopoverProviderRateLimitState,
 } from "@/lib/provider-rate-limit-content";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -50,6 +59,7 @@ import {
   parseAccountContextValue,
   resolveTraycerSubscriptionState,
   selectSubscription,
+  subscriptionPlanLabel,
   type TraycerSubscriptionState,
 } from "@/lib/auth/traycer-subscription-content";
 import {
@@ -224,9 +234,13 @@ function RateLimitDetailPane({
   readonly tab: Exclude<RateLimitTab, "overview">;
 }): ReactNode {
   return tab === "traycer" ? (
-    <TraycerRateLimitBlock variant="popover-detail" />
+    <TraycerRateLimitBlock variant="popover-detail" onReady={null} />
   ) : (
-    <RateLimitProviderBlock providerId={tab} variant="popover-detail" />
+    <RateLimitProviderBlock
+      providerId={tab}
+      variant="popover-detail"
+      onReady={null}
+    />
   );
 }
 
@@ -356,29 +370,86 @@ function RailTab({
  * Traycer account picker are single-provider-tab detail, not shown here. The
  * "Refresh all" and settings controls live on the rail (shared across every
  * tab), so this pane is pure content - no header row, and dividers only
- * *between* consecutive blocks (`index > 0`). Not capped at 3 (unlike the header
- * glyph) - it's a scroll, not a summary.
+ * *between* consecutive blocks. Not capped at 3 (unlike the header glyph) -
+ * it's a scroll, not a summary.
+ *
+ * Every tab's block stays mounted the whole time (so its query keeps running
+ * regardless of what's visible), but a tab that hasn't reported readiness yet
+ * (`onReady`, fired once its own state moves past `cold`) is hidden rather
+ * than painted as its own blank/loading section - it's revealed in place once
+ * its data arrives, so the list grows one provider at a time instead of every
+ * slot appearing empty up front. While nothing has reported ready yet, a
+ * single centered "Fetching rate limits" indicator stands in for the whole
+ * list (feedback: "just a modal centered fetching rate limits instead of
+ * empty provider sections").
  */
 function RateLimitOverview({
   railTabs,
 }: {
   readonly railTabs: ReadonlyArray<RailTabDescriptor>;
 }): ReactNode {
+  const [readyKeys, setReadyKeys] = useState<ReadonlySet<string>>(new Set());
+  const markReady = useCallback((key: string) => {
+    setReadyKeys((prev) => {
+      if (prev.has(key)) return prev;
+      const next = new Set(prev);
+      next.add(key);
+      return next;
+    });
+  }, []);
+
+  const anyReady = readyKeys.size > 0;
+  const readyOrder = railTabs
+    .filter((tab) => readyKeys.has(railTabProviderId(tab)))
+    .map(railTabProviderId);
+
   return (
-    <div className="flex flex-col gap-4">
-      {railTabs.map((tab, index) => (
-        <div key={railTabProviderId(tab)} className="flex flex-col gap-4">
-          {index > 0 ? <div aria-hidden className="h-px bg-border/70" /> : null}
-          {tab.kind === "traycer" ? (
-            <TraycerRateLimitBlock variant="popover-overview" />
-          ) : (
-            <RateLimitProviderBlock
-              providerId={tab.providerId}
-              variant="popover-overview"
-            />
-          )}
-        </div>
-      ))}
+    <div className="flex min-h-full flex-col gap-4">
+      {!anyReady ? <RateLimitOverviewLoading /> : null}
+      {railTabs.map((tab) => {
+        const key = railTabProviderId(tab);
+        const isReady = readyKeys.has(key);
+        const showDivider = isReady && readyOrder.indexOf(key) > 0;
+        const onReady = () => markReady(key);
+        return (
+          <div
+            key={key}
+            className={cn("flex flex-col gap-4", !isReady && "hidden")}
+          >
+            {showDivider ? (
+              <div aria-hidden className="h-px bg-border/70" />
+            ) : null}
+            {tab.kind === "traycer" ? (
+              <TraycerRateLimitBlock
+                variant="popover-overview"
+                onReady={onReady}
+              />
+            ) : (
+              <RateLimitProviderBlock
+                providerId={tab.providerId}
+                variant="popover-overview"
+                onReady={onReady}
+              />
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * The Overview's combined "nothing has arrived yet" state - a single centered
+ * indicator standing in for every provider's still-blank section, rather than
+ * painting N blank/loading sections at once. `flex-1` on a `min-h-full`
+ * column centers it within the popover's full pane height rather than
+ * collapsing to the height of the (hidden, zero-height) sibling blocks.
+ */
+function RateLimitOverviewLoading(): ReactNode {
+  return (
+    <div className="flex flex-1 items-center justify-center gap-2 py-10 text-ui-sm text-muted-foreground">
+      <MutedAgentSpinner />
+      Fetching rate limits
     </div>
   );
 }
@@ -449,18 +520,28 @@ function RateLimitRefreshAllButton({
 type PopoverBlockVariant = "popover-detail" | "popover-overview";
 
 /**
- * One provider's block - a header (name + "Updated Xm ago" + per-provider
- * refresh) over its state-driven body. Shared by the single-provider tab
- * (`variant="popover-detail"`, full detail) and each Overview entry
- * (`variant="popover-overview"`, condensed), so both render an identical header
- * over a variant-scoped body.
+ * One provider's block - a header (name + plan/tier chip + "Updated Xm ago" +
+ * per-provider refresh) over its state-driven body. Shared by the
+ * single-provider tab (`variant="popover-detail"`, full detail) and each
+ * Overview entry (`variant="popover-overview"`, condensed). The plan/tier
+ * chip (`resolveProviderPlanLabel`) is single-provider-tab only, same scoping
+ * Overview already applies to every other detail field; the rest of the
+ * header renders identically across both variants.
+ *
+ * `onReady` fires once (and again on every later state change, harmlessly -
+ * the callback is expected to be idempotent) `state.kind` moves past `cold`,
+ * so `RateLimitOverview` can reveal this block in place instead of painting
+ * it as a blank/loading section from mount. `null` on the single-provider
+ * detail tab, which always renders regardless of state.
  */
 function RateLimitProviderBlock({
   providerId,
   variant,
+  onReady,
 }: {
   readonly providerId: RateLimitProviderId;
   readonly variant: PopoverBlockVariant;
+  readonly onReady: (() => void) | null;
 }): ReactNode {
   const query = useHostProviderRateLimitsQuery(providerId);
   const lane = rateLimitFetchLane(providerId);
@@ -471,6 +552,9 @@ function RateLimitProviderBlock({
     providerRateLimits: query.data?.providerRateLimits,
   };
   const state = resolvePopoverProviderRateLimitState(queryState);
+  useEffect(() => {
+    if (state.kind !== "cold" && onReady !== null) onReady();
+  }, [state.kind, onReady]);
 
   // ephemeralProcess: a manual refresh must go through the serial queue
   // (`force: true`) so it can't spawn a subprocess overlapping a scheduled tick.
@@ -485,12 +569,35 @@ function RateLimitProviderBlock({
     await query.refetch();
   };
 
+  // Chip next to the name, single-provider tab only (Overview stays
+  // condensed - same scoping the plan/tier line used before it moved into
+  // this header). `null` for a provider that doesn't report a plan/tier
+  // (`resolveProviderPlanLabel`), so no chip renders for e.g. OpenRouter.
+  const planLabel =
+    variant === "popover-detail" && state.kind === "ready"
+      ? resolveProviderPlanLabel(state.data)
+      : null;
+
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-center justify-between gap-2">
-        <span className="text-ui-sm font-medium text-foreground">
-          {providerDisplayName(providerId)}
-        </span>
+        <div className="flex min-w-0 items-center gap-1.5">
+          {/* Overview stacks every provider's block in one scrollable list with
+              no rail-tab context alongside it, so the name alone doesn't say
+              which provider this is; the single-provider detail tab already has
+              that context from its selected rail icon. */}
+          {variant === "popover-overview" ? (
+            <HarnessIcon harnessId={providerIdToGuiHarnessId(providerId)} />
+          ) : null}
+          <span className="text-ui-sm font-medium text-foreground">
+            {providerDisplayName(providerId)}
+          </span>
+          {planLabel !== null ? (
+            <Badge variant="secondary" className="font-normal">
+              {planLabel}
+            </Badge>
+          ) : null}
+        </div>
         <div className="flex items-center gap-1.5">
           <RateLimitUpdatedLabel
             state={state}
@@ -508,11 +615,7 @@ function RateLimitProviderBlock({
           ) : null}
         </div>
       </div>
-      <RateLimitProviderBody
-        state={state}
-        onRetry={refresh}
-        variant={variant}
-      />
+      <RateLimitProviderBody state={state} variant={variant} />
     </div>
   );
 }
@@ -550,11 +653,9 @@ function UpdatedAgoText({
 
 function RateLimitProviderBody({
   state,
-  onRetry,
   variant,
 }: {
   readonly state: PopoverProviderRateLimitState;
-  readonly onRetry: () => Promise<void>;
   readonly variant: PopoverBlockVariant;
 }): ReactNode {
   switch (state.kind) {
@@ -562,16 +663,12 @@ function RateLimitProviderBody({
       return <RateLimitDetailSkeleton />;
     case "error":
       return (
-        <RateLimitErrorMessage
-          message="Couldn't load rate limits right now."
-          onRetry={onRetry}
-        />
+        <RateLimitErrorMessage message="Couldn't load rate limits right now." />
       );
     case "unavailable":
       return (
         <RateLimitErrorMessage
           message={`Rate limits unavailable — ${formatUnavailableReason(state.reason)}`}
-          onRetry={onRetry}
         />
       );
     case "ready":
@@ -590,16 +687,23 @@ function RateLimitProviderBody({
  * `RateLimitProviderBlock`. Its data is the signed-in user's subscription
  * (`useAuthUser`) for the globally-selected account (`useAccountContextStore`),
  * NOT a `host.getRateLimitUsage` provider pull. Header mirrors the provider
- * blocks (name + "Updated Xm ago" + refresh); the detail variant adds the same
- * Personal/Team picker the Settings card uses, so switching accounts here
- * updates the global selection (and therefore Overview, the Settings card, and
- * what a Traycer run bills). Both variants render through the shared
- * `TraycerSubscriptionView`.
+ * blocks (name + plan/tier chip + "Updated Xm ago" + refresh) - the chip
+ * (`subscriptionPlanLabel`) reflects whichever account is currently selected
+ * and is single-provider-tab only, same scoping
+ * `RateLimitProviderBlock` applies to its own plan chip; the detail variant
+ * adds the same Personal/Team picker the Settings card uses, so switching
+ * accounts here updates the global selection (and therefore Overview, the
+ * Settings card, and what a Traycer run bills). Both variants render through
+ * the shared `TraycerSubscriptionView`. `onReady` mirrors
+ * `RateLimitProviderBlock`'s own - fires once `state.kind` moves past `cold`,
+ * `null` on the single-provider detail tab.
  */
 function TraycerRateLimitBlock({
   variant,
+  onReady,
 }: {
   readonly variant: PopoverBlockVariant;
+  readonly onReady: (() => void) | null;
 }): ReactNode {
   const query = useAuthUser();
   const storedAccountContext = useAccountContextStore((s) => s.accountContext);
@@ -617,11 +721,22 @@ function TraycerRateLimitBlock({
     isError: query.isError,
     subscription,
   });
+  useEffect(() => {
+    if (state.kind !== "cold" && onReady !== null) onReady();
+  }, [state.kind, onReady]);
 
   const overview = variant === "popover-overview";
   const rateLimitBased =
     subscription !== null &&
     !isCreditBasedPricing(subscription.subscriptionStatus);
+  // Chip next to the name, single-provider tab only - same scoping
+  // `resolveProviderPlanLabel` uses for the host-RPC providers' plan chip.
+  // Reflects whichever account (personal/team) is currently selected, since
+  // `subscription` is already resolved against that selection.
+  const planLabel =
+    !overview && subscription !== null
+      ? subscriptionPlanLabel(subscription.subscriptionStatus)
+      : null;
 
   // Refetch the subscription, and - only for rate-limit-based plans, whose
   // aperture bar is live host data - invalidate that exact query so the mounted
@@ -646,9 +761,19 @@ function TraycerRateLimitBlock({
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-center justify-between gap-2">
-        <span className="text-ui-sm font-medium text-foreground">
-          {providerDisplayName("traycer")}
-        </span>
+        <div className="flex min-w-0 items-center gap-1.5">
+          {overview ? (
+            <HarnessIcon harnessId={providerIdToGuiHarnessId("traycer")} />
+          ) : null}
+          <span className="text-ui-sm font-medium text-foreground">
+            {providerDisplayName("traycer")}
+          </span>
+          {planLabel !== null ? (
+            <Badge variant="secondary" className="font-normal">
+              {planLabel}
+            </Badge>
+          ) : null}
+        </div>
         <div className="flex items-center gap-1.5">
           {state.kind === "ready" && query.dataUpdatedAt !== 0 ? (
             <UpdatedAgoText
@@ -679,27 +804,22 @@ function TraycerRateLimitBlock({
           }
         />
       ) : null}
-      <TraycerRateLimitBody state={state} onRetry={refresh} />
+      <TraycerRateLimitBody state={state} />
     </div>
   );
 }
 
 function TraycerRateLimitBody({
   state,
-  onRetry,
 }: {
   readonly state: TraycerSubscriptionState;
-  readonly onRetry: () => Promise<void>;
 }): ReactNode {
   switch (state.kind) {
     case "cold":
       return <RateLimitDetailSkeleton />;
     case "error":
       return (
-        <RateLimitErrorMessage
-          message="Couldn't load your Traycer subscription right now."
-          onRetry={onRetry}
-        />
+        <RateLimitErrorMessage message="Couldn't load your Traycer subscription right now." />
       );
     case "empty":
       return (
@@ -716,33 +836,29 @@ function TraycerRateLimitBody({
   }
 }
 
+// No inline retry action here - the block's own header refresh icon (detail
+// tab) or the rail's "Refresh all" (Overview) already covers it, so a second
+// retry control right below the message would just be a redundant control
+// for the same action.
 function RateLimitErrorMessage({
   message,
-  onRetry,
 }: {
   readonly message: string;
-  readonly onRetry: () => Promise<void>;
 }): ReactNode {
-  return (
-    <div className="flex flex-col items-start gap-1.5">
-      <p className="text-ui-xs text-muted-foreground">{message}</p>
-      <button
-        type="button"
-        onClick={() => {
-          void onRetry();
-        }}
-        className="rounded text-ui-xs font-medium text-primary outline-none transition-colors hover:text-primary/80 hover:underline focus-visible:ring-2 focus-visible:ring-ring/60"
-      >
-        Retry
-      </button>
-    </div>
-  );
+  return <p className="text-ui-xs text-muted-foreground">{message}</p>;
 }
 
 /**
  * Cold load (first open this session, no data yet): skeleton bars previewing
  * the eventual window layout, not a spinner replacing the panel (Core Flows -
  * a deliberate difference from the Settings card's spinner).
+ *
+ * Each block overrides `Skeleton`'s default `bg-muted` fill with
+ * `bg-foreground/15`, same reasoning as `MeterRow`'s track: several dark
+ * theme presets set `--muted` equal to `--popover`, so a plain `bg-muted`
+ * skeleton can end up the same color as the popover background and read as
+ * an empty section instead of a loading one. An opacity overlay on
+ * `--foreground` contrasts against any background without needing a border.
  */
 function RateLimitDetailSkeleton(): ReactNode {
   return (
@@ -753,10 +869,10 @@ function RateLimitDetailSkeleton(): ReactNode {
       {[0, 1].map((row) => (
         <div key={row} className="flex flex-col gap-1.5">
           <div className="flex items-center justify-between">
-            <Skeleton className="h-3 w-16" />
-            <Skeleton className="h-3 w-10" />
+            <Skeleton className="h-3 w-16 bg-foreground/15" />
+            <Skeleton className="h-3 w-10 bg-foreground/15" />
           </div>
-          <Skeleton className="h-1.5 w-full rounded-full" />
+          <Skeleton className="h-1.5 w-full rounded-full bg-foreground/15" />
         </div>
       ))}
     </div>

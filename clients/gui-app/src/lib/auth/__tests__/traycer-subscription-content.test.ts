@@ -13,6 +13,7 @@ import {
   parseAccountContextValue,
   resolveTraycerSubscriptionState,
   selectSubscription,
+  subscriptionPlanLabel,
 } from "@/lib/auth/traycer-subscription-content";
 
 const EPOCH = new Date(0);
@@ -217,5 +218,36 @@ describe("resolveTraycerSubscriptionState", () => {
         subscription,
       }),
     ).toEqual({ kind: "ready", subscription, degraded: true });
+  });
+});
+
+describe("subscriptionPlanLabel", () => {
+  it("maps free-tier statuses to BYOA", () => {
+    expect(subscriptionPlanLabel("FREE")).toBe("BYOA");
+    expect(subscriptionPlanLabel("PENDING")).toBe("BYOA");
+  });
+
+  it("maps V3 credit plans", () => {
+    expect(subscriptionPlanLabel("BYOA_V3")).toBe("Sync");
+    expect(subscriptionPlanLabel("LITE_V3")).toBe("Lite");
+    expect(subscriptionPlanLabel("PRO_V3")).toBe("Pro");
+    expect(subscriptionPlanLabel("ULTRA_1X_V3")).toBe("Ultra");
+    expect(subscriptionPlanLabel("ULTRA_2X_V3")).toBe("Ultra+");
+    expect(subscriptionPlanLabel("ULTRA_3X_V3")).toBe("Ultra+");
+    expect(subscriptionPlanLabel("ULTRA_4X_V3")).toBe("Ultra+");
+    expect(subscriptionPlanLabel("ULTRA_5X_V3")).toBe("Ultra+");
+  });
+
+  it("marks legacy lite and pro tiers", () => {
+    expect(subscriptionPlanLabel("LITE")).toBe("Lite (Legacy)");
+    expect(subscriptionPlanLabel("LITE_V2")).toBe("Lite (Legacy)");
+    expect(subscriptionPlanLabel("PRO")).toBe("Pro (Legacy)");
+    expect(subscriptionPlanLabel("PRO_V2")).toBe("Pro (Legacy)");
+    expect(subscriptionPlanLabel("PRO_LEGACY")).toBe("Pro (Legacy)");
+    expect(subscriptionPlanLabel("PRO_PLUS")).toBe("Pro+ (Legacy)");
+  });
+
+  it("maps PRO_PLUS_V2 without a legacy suffix", () => {
+    expect(subscriptionPlanLabel("PRO_PLUS_V2")).toBe("Pro+");
   });
 });

@@ -3,6 +3,7 @@ import type { ProviderRateLimits } from "@traycer/protocol/host";
 import {
   formatUnavailableReason,
   resolvePopoverProviderRateLimitState,
+  resolveProviderPlanLabel,
 } from "@/lib/provider-rate-limit-content";
 
 const READY: ProviderRateLimits = {
@@ -81,5 +82,86 @@ describe("resolvePopoverProviderRateLimitState", () => {
       providerRateLimits: READY,
     });
     expect(state).toEqual({ kind: "ready", data: READY, degraded: true });
+  });
+});
+
+describe("resolveProviderPlanLabel", () => {
+  it("title-cases Codex's planType", () => {
+    expect(
+      resolveProviderPlanLabel({
+        provider: "codex",
+        available: true,
+        planType: "pro_5x",
+        limitId: null,
+        limitName: null,
+        primary: null,
+        secondary: null,
+        extraWindows: [],
+        credits: null,
+        individualLimit: null,
+        resetCredits: null,
+        rateLimitReachedType: null,
+      }),
+    ).toBe("Pro 5x");
+  });
+
+  it("title-cases Claude Code's subscriptionType", () => {
+    expect(
+      resolveProviderPlanLabel({
+        provider: "claude-code",
+        available: true,
+        subscriptionType: "max",
+        fiveHour: null,
+        sevenDay: null,
+        sevenDayOpus: null,
+        sevenDaySonnet: null,
+        modelScoped: [],
+        extraUsage: null,
+      }),
+    ).toBe("Max");
+  });
+
+  it("is null when a provider didn't report a plan/tier", () => {
+    expect(
+      resolveProviderPlanLabel({
+        provider: "codex",
+        available: true,
+        planType: null,
+        limitId: null,
+        limitName: null,
+        primary: null,
+        secondary: null,
+        extraWindows: [],
+        credits: null,
+        individualLimit: null,
+        resetCredits: null,
+        rateLimitReachedType: null,
+      }),
+    ).toBeNull();
+  });
+
+  it("is always null for providers with no plan/tier concept (OpenRouter, Kilo Code)", () => {
+    expect(
+      resolveProviderPlanLabel({
+        provider: "openrouter",
+        available: true,
+        limit: null,
+        limitRemaining: null,
+        dailySpend: null,
+        weeklySpend: null,
+        monthlySpend: null,
+        totalCredits: null,
+        totalUsage: null,
+        balance: null,
+      }),
+    ).toBeNull();
+    expect(
+      resolveProviderPlanLabel({
+        provider: "kilocode",
+        available: true,
+        creditBalance: null,
+        passState: null,
+      }),
+    ).toBeNull();
   });
 });

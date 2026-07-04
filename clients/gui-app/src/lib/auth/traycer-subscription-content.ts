@@ -15,6 +15,7 @@ import type {
   TraycerTeamSubscription,
   TraycerUserSubscription,
 } from "@traycer/protocol/auth";
+import { titleCaseFromToken } from "@/lib/provider-rate-limit-content";
 
 /** The account-scoped subscription arms the account-context store can select between. */
 export type TraycerSubscription =
@@ -45,6 +46,57 @@ const CREDIT_BASED_STATUSES: ReadonlySet<SubscriptionStatus> = new Set([
 
 export function isCreditBasedPricing(status: SubscriptionStatus): boolean {
   return CREDIT_BASED_STATUSES.has(status);
+}
+
+// A trailing `_V2`/`_V3` is an internal pricing-generation tag, not part of
+// the plan's own identity - Cloud UI's own Settings pages never show it
+// (billing-overview.tsx renders the Stripe product's bare name, e.g. "Ultra",
+// never "Ultra V3"). Stripped before title-casing so `ULTRA_5X_V3` reads as
+// "Ultra 5x", not "Ultra 5x V3". `_LEGACY` isn't stripped - unlike `_V2`/`_V3`,
+// it isn't a pricing-generation tag on an otherwise-equivalent tier.
+const VERSION_SUFFIX_PATTERN = /_V\d+$/;
+
+/**
+ * The Traycer plan/tier label for the selected account (Core Flows parity
+ * with Codex/Claude: "shown where the provider reports one") - the header
+ * popover's "Traycer" tab shows this as a chip next to the name, same as
+ * `resolveProviderPlanLabel` does for the host-RPC providers.
+ */
+//eslint-disable-next-line complexity
+export function subscriptionPlanLabel(status: SubscriptionStatus): string {
+  switch (status) {
+    case "FREE":
+    case "PENDING":
+      return "BYOA";
+    case "BYOA_V3":
+      return "Sync";
+    case "LITE_V3":
+      return "Lite";
+    case "LITE_V2":
+    case "LITE":
+      return "Lite (Legacy)";
+    case "PRO_V3":
+      return "Pro";
+    case "PRO_V2":
+    case "PRO":
+    case "PRO_LEGACY":
+      return "Pro (Legacy)";
+    case "PRO_PLUS":
+      return "Pro+ (Legacy)";
+    case "PRO_PLUS_V2":
+      return "Pro+";
+    case "ULTRA_1X_V3":
+      return "Ultra";
+    case "ULTRA_2X_V3":
+    case "ULTRA_3X_V3":
+    case "ULTRA_4X_V3":
+    case "ULTRA_5X_V3":
+      return "Ultra+";
+    default:
+      return titleCaseFromToken(
+        String(status).replace(VERSION_SUFFIX_PATTERN, ""),
+      );
+  }
 }
 
 /**

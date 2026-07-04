@@ -1,11 +1,10 @@
 /**
  * Fixed severity scale for a single rate-limit window's used percentage -
  * shared by the header glyph (Rate Limit Bar Icon - Core Flows, "Icon
- * composition") and the popover's per-window bars ("Provider detail view"
- * explicitly reuses these same thresholds). Deliberately distinct from
- * `rateLimitSeverity` in `provider-rate-limit-views.tsx` (the Settings >
- * Providers card's own two-tier 70%/90% warning/critical scale) - that split is
- * intentional, not drift; see that file's own comment.
+ * composition") and every bar `MeterRow` renders ("Provider detail view"
+ * explicitly reuses these same thresholds) - the single scale every
+ * provider's capped and uncapped bars share, so no row anywhere uses a
+ * different palette or thresholds.
  *
  * `"green"` is a distinct fourth tier for a window at 0% used (100% available):
  * it renders as a fully-filled green bar (see `rateLimitWindowFillPercent`) so

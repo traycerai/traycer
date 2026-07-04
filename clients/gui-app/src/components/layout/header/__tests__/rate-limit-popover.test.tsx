@@ -359,8 +359,12 @@ describe("<RateLimitPopover /> rail", () => {
     // Both provider blocks render their header name (rail buttons are icon-only).
     expect(screen.getByText("Codex")).toBeTruthy();
     expect(screen.getByText("Claude Code")).toBeTruthy();
-    // Popover variant renders "% used" copy (codex primary 4% used).
-    expect(screen.getByText("5h · 4% used")).toBeTruthy();
+    // Popover variant renders "% used" copy (codex primary 4% used, claude
+    // fiveHour 22% used - both windows are the 5-hour session window, so the
+    // bare "Current session" label renders once per provider).
+    expect(screen.getAllByText("Current session")).toHaveLength(2);
+    expect(screen.getByText("4% used")).toBeTruthy();
+    expect(screen.getByText("22% used")).toBeTruthy();
     // Overview is condensed: the plan/tier label ("Pro 5x") is detail-only.
     expect(screen.queryByText("Pro 5x")).toBeNull();
   });
@@ -421,9 +425,91 @@ describe("<RateLimitPopover /> rail", () => {
     };
     renderPopover();
     // Fixup C #1: 5h primary -> relative countdown; weekly secondary -> absolute
-    // weekday-tagged date. Both split the same way as the Settings card.
+    // weekday-tagged time. Both split the same way as the Settings card.
     expect(screen.getByText(/^Resets in /)).toBeTruthy();
-    expect(screen.getByText(/^Resets .+\([A-Za-z]{3}\) /)).toBeTruthy();
+    expect(
+      screen.getByText(/^Resets [A-Za-z]{3} \d{1,2}:\d{2}\s?[AP]M$/i),
+    ).toBeTruthy();
+  });
+});
+
+function coldResult(): QueryResult {
+  return {
+    data: undefined,
+    isPending: true,
+    isFetching: true,
+    isError: false,
+    dataUpdatedAt: 0,
+    refetch: vi.fn(() => Promise.resolve({})),
+  };
+}
+
+describe("<RateLimitPopover /> Overview progressive reveal", () => {
+  function popoverElement() {
+    return (
+      <QueryClientProvider client={new QueryClient()}>
+        <TooltipProvider>
+          <Popover open>
+            <PopoverTrigger>trigger</PopoverTrigger>
+            <RateLimitPopover onClose={onClose} />
+          </Popover>
+        </TooltipProvider>
+      </QueryClientProvider>
+    );
+  }
+
+  it("shows one centered loading indicator, no per-provider sections, while nothing has resolved yet", () => {
+    mocks.configured = [
+      { providerId: "codex", lane: "ephemeralProcess" },
+      { providerId: "claude-code", lane: "ephemeralProcess" },
+    ];
+    mocks.results = { codex: coldResult(), "claude-code": coldResult() };
+    renderPopover();
+
+    expect(screen.getByText("Fetching rate limits")).toBeTruthy();
+    // Neither provider's own reading is visible yet - only the combined loader.
+    expect(screen.queryByText("Current session")).toBeNull();
+    expect(screen.queryByText("4% used")).toBeNull();
+  });
+
+  it("reveals a provider in place as it resolves, hiding still-cold siblings, and drops the combined loader", () => {
+    mocks.configured = [
+      { providerId: "codex", lane: "ephemeralProcess" },
+      { providerId: "claude-code", lane: "ephemeralProcess" },
+    ];
+    mocks.results = { codex: coldResult(), "claude-code": coldResult() };
+    const { rerender } = renderPopover();
+
+    // Codex resolves first; Claude Code is still in flight.
+    mocks.results = {
+      codex: readyResult(codexReady()),
+      "claude-code": coldResult(),
+    };
+    rerender(popoverElement());
+
+    // The combined loader is gone now that one provider has data...
+    expect(screen.queryByText("Fetching rate limits")).toBeNull();
+    // ...Codex's own section is visible...
+    expect(
+      screen.getByText("Codex").closest('[class*="gap-4"]')?.className,
+    ).not.toContain("hidden");
+    expect(screen.getByText("Current session")).toBeTruthy();
+    expect(screen.getByText("4% used")).toBeTruthy();
+    // ...but Claude Code's still-cold section is hidden, not painted as its
+    // own blank/loading block.
+    expect(
+      screen.getByText("Claude Code").closest('[class*="gap-4"]')?.className,
+    ).toContain("hidden");
+
+    // Claude Code resolves next - both sections are now visible.
+    mocks.results = {
+      codex: readyResult(codexReady()),
+      "claude-code": readyResult(claudeReady()),
+    };
+    rerender(popoverElement());
+    expect(
+      screen.getByText("Claude Code").closest('[class*="gap-4"]')?.className,
+    ).not.toContain("hidden");
   });
 });
 
@@ -441,7 +527,18 @@ describe("<RateLimitPopover /> per-provider states", () => {
       },
     };
     renderPopover();
-    expect(screen.getByTestId("rate-limit-detail-skeleton")).toBeTruthy();
+    const skeleton = screen.getByTestId("rate-limit-detail-skeleton");
+    expect(skeleton).toBeTruthy();
+    // Regression: several dark theme presets set `--muted` equal to
+    // `--popover`, so a plain `bg-muted` skeleton block is the same color as
+    // the popover background and reads as an empty section, not a loading
+    // one. Each block overrides that with `bg-foreground/15`, which contrasts
+    // against any background without needing a border.
+    const blocks = skeleton.querySelectorAll('[data-slot="skeleton"]');
+    expect(blocks.length).toBeGreaterThan(0);
+    blocks.forEach((block) => {
+      expect(block.className).toContain("bg-foreground/15");
+    });
   });
 
   it("dims stale content and notes a failed refresh when degraded", () => {
@@ -458,7 +555,7 @@ describe("<RateLimitPopover /> per-provider states", () => {
     expect(document.querySelectorAll(".opacity-60").length).toBeGreaterThan(0);
   });
 
-  it("shows a plain retry message when a fetch never succeeded", () => {
+  it("shows a plain error message with no inline retry control when a fetch never succeeded", () => {
     mocks.configured = [{ providerId: "codex", lane: "ephemeralProcess" }];
     mocks.results = {
       codex: {
@@ -474,8 +571,14 @@ describe("<RateLimitPopover /> per-provider states", () => {
     expect(
       screen.getByText("Couldn't load rate limits right now."),
     ).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-    // Codex is ephemeralProcess -> retry routes through the serial queue.
+    // No separate "Retry" link - the header's own refresh icon already covers
+    // it (feedback: "we already have a reload button"). That icon is
+    // detail-tab-only (Overview relies on "Refresh all"), so switch there first.
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    fireEvent.click(screen.getByRole("tab", { name: "Codex" }));
+    fireEvent.click(screen.getByRole("button", { name: "Refresh Codex" }));
+    // Codex is ephemeralProcess -> the header's refresh routes through the
+    // serial queue, same as retrying used to.
     expect(mocks.enqueue).toHaveBeenCalledWith(
       "codex",
       { type: "PERSONAL" },
@@ -675,9 +778,13 @@ describe("<RateLimitPopover /> Traycer tab", () => {
     expect(screen.getByText("$30.00 / $100.00")).toBeTruthy();
     // Detail tab surfaces the same Personal/Team picker as the Settings card.
     expect(screen.getByRole("combobox", { name: "Account" })).toBeTruthy();
+    // Plan/tier chip next to the name - the trailing "_V3" pricing-generation
+    // tag is stripped (matching Cloud UI's own Settings pages), so "PRO_V3"
+    // reads as "Pro", not "Pro V3".
+    expect(screen.getByText("Pro")).toBeTruthy();
   });
 
-  it("renders a condensed Traycer block with no picker on Overview", () => {
+  it("renders a condensed Traycer block with no picker or plan chip on Overview", () => {
     mocks.configured = [];
     mocks.authUser = readyAuthUser(
       authUserFixture({ status: "PRO_V3", withTeam: true }),
@@ -686,6 +793,27 @@ describe("<RateLimitPopover /> Traycer tab", () => {
     // Overview reflects the selected account's numbers, but exposes no controls.
     expect(screen.getByText("$30.00 / $100.00")).toBeTruthy();
     expect(screen.queryByRole("combobox", { name: "Account" })).toBeNull();
+    // Overview is condensed, same as the host-RPC providers' plan chip.
+    expect(screen.queryByText("Pro")).toBeNull();
+  });
+
+  it("reflects the selected account's own plan in the chip, not the personal account's", () => {
+    mocks.configured = [];
+    mocks.authUser = readyAuthUser(
+      authUserFixture({ status: "PRO_V3", withTeam: true }),
+    );
+    // The fixture's team subscription is on "ULTRA_1X_V3" - selecting the
+    // team account should show that plan in the chip, not the personal one.
+    useAccountContextStore.setState({
+      accountContext: { type: "TEAM", teamId: "team-1" },
+    });
+    renderPopover();
+    fireEvent.click(screen.getByRole("tab", { name: "Traycer Inference" }));
+    // "ULTRA_1X_V3" reads as the bare "Ultra" tier name (matching
+    // `subscriptionPlanLabel`'s own tier-name mapping), not the personal
+    // account's "Pro".
+    expect(screen.getByText("Ultra")).toBeTruthy();
+    expect(screen.queryByText("Pro")).toBeNull();
   });
 
   it("refetches the subscription from the Traycer tab's refresh button", () => {

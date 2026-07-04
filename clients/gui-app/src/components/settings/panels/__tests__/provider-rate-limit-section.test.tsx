@@ -137,8 +137,10 @@ describe("ProviderRateLimitForProvider", () => {
     mocks.data = { providerRateLimits: CLAUDE_RATE_LIMITS };
     render(<ProviderRateLimitForProvider providerId="claude-code" />);
 
-    expect(screen.getByText("5h · 12% used")).toBeTruthy();
-    expect(screen.getByText("Weekly · 55% used")).toBeTruthy();
+    expect(screen.getByText("Current session")).toBeTruthy();
+    expect(screen.getByText("12% used")).toBeTruthy();
+    expect(screen.getByText("Weekly")).toBeTruthy();
+    expect(screen.getByText("55% used")).toBeTruthy();
   });
 
   it("does not show a subscription-plan badge (the provider auth badge above already shows it)", () => {
@@ -204,8 +206,10 @@ describe("ProviderRateLimitForProvider", () => {
     mocks.data = { providerRateLimits: CODEX_RATE_LIMITS };
     render(<ProviderRateLimitForProvider providerId="codex" />);
 
-    expect(screen.getByText("5h · 42% used")).toBeTruthy();
-    expect(screen.getByText("Weekly · 80% used")).toBeTruthy();
+    expect(screen.getByText("Current session")).toBeTruthy();
+    expect(screen.getByText("42% used")).toBeTruthy();
+    expect(screen.getByText("Weekly")).toBeTruthy();
+    expect(screen.getByText("80% used")).toBeTruthy();
   });
 
   it("maps a rateLimitReachedType token to a destructive badge", () => {
@@ -230,21 +234,26 @@ describe("ProviderRateLimitForProvider", () => {
     expect(screen.getByText("$12.50")).toBeTruthy();
   });
 
-  it("renders the spend-control row with used/limit and a relative reset line", () => {
+  it("renders the spend-control row with used/limit and an absolute reset time", () => {
     mocks.data = { providerRateLimits: CODEX_RATE_LIMITS };
     render(<ProviderRateLimitForProvider providerId="codex" />);
 
-    // Scoped to the spend-limit row's own container: the 5-hour window above
-    // it also renders a relative "Resets in " line, so an unscoped query
-    // would match two elements.
+    // Scoped to the spend-limit row's own container: the current-session
+    // window above it also renders a reset line, so an unscoped query would
+    // match two elements.
     const spendLimitRow = screen
       .getByText("Spend limit")
       .closest("div.flex.flex-col.gap-1");
     expect(spendLimitRow).not.toBeNull();
     const spendLimitScope = within(spendLimitRow as HTMLElement);
     expect(spendLimitScope.getByText("42.00 / 100.00")).toBeTruthy();
-    // `CodexSpendControlRow` always passes `weekly={false}` to `ResetLine`,
-    // so this renders the relative countdown, not the exact date/time.
-    expect(spendLimitScope.getByText(/^Resets in /)).toBeTruthy();
+    // Regression: `CodexSpendControlRow` used to hardcode `weekly={false}`,
+    // always forcing a relative countdown regardless of the real reset time.
+    // `CODEX_SPEND_LIMIT_RESETS_AT` is 5 days out, so the reset line now
+    // correctly reads as an absolute weekday/time, not "Resets in ...".
+    expect(
+      spendLimitScope.getByText(/^Resets [A-Za-z]{3} \d{1,2}:\d{2}\s?[AP]M$/i),
+    ).toBeTruthy();
+    expect(spendLimitScope.queryByText(/^Resets in /)).toBeNull();
   });
 });

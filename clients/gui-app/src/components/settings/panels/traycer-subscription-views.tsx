@@ -13,7 +13,7 @@
  * to drop, so the Overview-vs-detail difference is purely the surrounding
  * chrome (the account picker, the "Manage subscription" link), which each
  * caller composes around this body. Each bucket (Plan/Bonus/Bundle/Artifacts)
- * renders through `CreditMeterRow`, the same label-plus-side-bar row the
+ * renders through `CreditMeterRow`, the same shared `MeterRow` shell the
  * Codex/Claude windows use, so Traycer's own bars read identically
  * (feedback: "bar similar to claude/codex").
  *
@@ -213,39 +213,53 @@ function CreditBreakdownView({
 
 /**
  * The shared meter-row shell every rate-limit/credit row in the app renders
- * through: "{label} · {percent}% used" over a `subtext` slot (a reset line for
- * windows, a plain amount line for credit buckets), with a severity-colored
- * side bar from `window-severity.ts`. Centralizing this is what keeps the
- * Codex/Claude windows (`RateLimitWindowRow` in `provider-rate-limit-views.tsx`)
- * and Traycer's own bars (`CreditMeterRow` below) from drifting apart visually
- * - each computes its own `usedPercent` and composes its own `subtext`, but
- * both render through this one layout.
+ * through: a header line (`label` left, a `detail` slot right - a reset line
+ * plus percent for windows, a plain amount line for credit/uncapped-usage
+ * buckets), then a bar spanning the row's *full* width on its own line below,
+ * colored by the shared 4-tier severity scale (`window-severity.ts`).
  *
- * The track carries a `border-border` outline so it stays visible even at 0%
- * fill: several dark theme presets set `--muted` equal to `--popover`, so a
- * borderless `bg-muted` empty track would be the same color as the popover
- * background and read as "nothing there".
+ * The bar is deliberately on its own line rather than beside the text (as it
+ * used to be): sitting the label and bar on the same line made the bar's
+ * start position and width drift with label length - a short "5h" row and a
+ * long per-model label ended up with visibly different bar widths on the same
+ * screen (feedback: "different width bars ... looking weird"). Putting the
+ * bar on a `w-full` line of its own means every row's bar is the same width
+ * regardless of what the label or detail text says, for every provider.
+ *
+ * Centralizing this is what keeps the Codex/Claude windows (`RateLimitWindowRow`
+ * in `provider-rate-limit-views.tsx`), Traycer's own bars (`CreditMeterRow`
+ * below), and the uncapped OpenRouter/Claude-extra-usage bars from drifting
+ * apart visually - each computes its own `usedPercent` and composes its own
+ * `detail`, but all of them render through this one layout and one severity
+ * scale.
+ *
+ * The track fills with `bg-foreground/15` rather than `bg-muted`, and carries
+ * no border: several dark theme presets set `--muted` equal to `--popover`,
+ * so a plain `bg-muted` track (with or without a border ring) can end up the
+ * same color as the popover background and read as "nothing there" (or as an
+ * unwanted outline where none was wanted - feedback: "keep the bar design
+ * like this [flat, no outline]"). An opacity overlay on `--foreground` is
+ * guaranteed to contrast against any background, in every theme, without
+ * needing a border to stay visible at 0% fill.
  */
 export function MeterRow({
   label,
   usedPercent,
-  subtext,
+  detail,
 }: {
   readonly label: string;
   readonly usedPercent: number;
-  readonly subtext: ReactNode;
+  readonly detail: ReactNode;
 }): ReactNode {
   const severity = rateLimitWindowSeverity(usedPercent);
   const fillPercent = rateLimitWindowFillPercent(usedPercent);
   return (
-    <div className="flex items-center gap-2">
-      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className="text-ui-sm text-foreground">
-          {label} · {Math.round(Math.min(100, Math.max(0, usedPercent)))}% used
-        </span>
-        {subtext}
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-center justify-between gap-3 text-ui-sm">
+        <span className="text-foreground">{label}</span>
+        <span className="text-ui-xs text-muted-foreground/70">{detail}</span>
       </div>
-      <div className="h-1.5 w-24 shrink-0 overflow-hidden rounded-full border border-border bg-muted">
+      <div className="h-1.5 w-full overflow-hidden rounded-full bg-foreground/15">
         <div
           className={cn(
             "h-full rounded-full transition-all",
@@ -279,64 +293,7 @@ function CreditMeterRow({
     <MeterRow
       label={label}
       usedPercent={usedPercent}
-      subtext={
-        <span className="text-ui-xs text-muted-foreground/70">
-          {formatValue(consumed)} / {formatValue(total)}
-        </span>
-      }
+      detail={`${formatValue(consumed)} / ${formatValue(total)}`}
     />
-  );
-}
-
-/** Overrides the bar fill's default color - see `UsageBar`'s `tone` prop. */
-export type UsageBarTone = "warning" | "critical";
-
-function usageBarFillClassName(tone: UsageBarTone | undefined): string {
-  if (tone === "critical") return "bg-destructive";
-  if (tone === "warning") return "bg-amber-500 dark:bg-amber-400";
-  return "bg-primary";
-}
-
-/**
- * Reusable consumed/total bar: a label + `format(consumed) / format(total)`
- * text row above a percent-fill track. Exported so other settings surfaces
- * (e.g. `provider-rate-limit-views.tsx`'s uncapped OpenRouter/Claude-extra-usage
- * bars) reuse the same bar chrome instead of building parallel markup.
- */
-export function UsageBar({
-  label,
-  consumed,
-  total,
-  tone,
-  formatValue,
-}: {
-  readonly label: string;
-  readonly consumed: number;
-  readonly total: number;
-  // Overrides the fill color for callers with their own usage-severity
-  // thresholds (e.g. rate-limit windows). `undefined` renders the default
-  // primary color.
-  readonly tone: UsageBarTone | undefined;
-  readonly formatValue: (value: number) => string;
-}): ReactNode {
-  const percent = total > 0 ? Math.min(100, (consumed / total) * 100) : 0;
-  return (
-    <div className="flex flex-col gap-1">
-      <div className="flex items-center justify-between text-ui-sm">
-        <span className="text-muted-foreground">{label}</span>
-        <span className="font-mono text-ui-xs text-foreground">
-          {formatValue(consumed)} / {formatValue(total)}
-        </span>
-      </div>
-      <div className="h-1.5 w-full overflow-hidden rounded-full border border-border bg-muted">
-        <div
-          className={cn(
-            "h-full rounded-full transition-all",
-            usageBarFillClassName(tone),
-          )}
-          style={{ width: `${percent}%` }}
-        />
-      </div>
-    </div>
   );
 }

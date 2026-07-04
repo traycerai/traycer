@@ -128,3 +128,46 @@ export function resolvePopoverProviderRateLimitState(
   // state, shown dimmed rather than replaced.
   return { kind: "ready", data: snapshot, degraded: props.isError };
 }
+
+/**
+ * `SNAKE_CASE`/`snake_case` token → Title Case, for any enum value that isn't
+ * in one of the bespoke display-name maps elsewhere (a forward-compat
+ * fallback for values a backend adds before those maps update) - used for
+ * provider enum tokens (`provider-rate-limit-views.tsx`, which are already
+ * lowercase) and, directly from `rate-limit-popover.tsx`, Traycer's own
+ * `SubscriptionStatus` (e.g. `"ULTRA_1X_V3"`, upper-case), so the rest of
+ * each word is explicitly lower-cased rather than left as-is. Homed here (a
+ * non-component module) rather than a component file so callers can share it
+ * without a plain-function export breaking that file's React Fast Refresh
+ * component-boundary detection.
+ */
+export function titleCaseFromToken(value: string): string {
+  return value
+    .split("_")
+    .filter((word) => word.length > 0)
+    .map((word) => `${word[0].toUpperCase()}${word.slice(1).toLowerCase()}`)
+    .join(" ");
+}
+
+/**
+ * A provider's plan/tier label, where one is fetched - the header popover
+ * shows this as a chip next to the provider name (Core Flows: "where the
+ * provider reports one"). Only Codex (`planType`) and Claude Code
+ * (`subscriptionType`) currently report a plan/tier; OpenRouter and Kilo Code
+ * have no analogous field, so they always resolve to `null` and render no chip.
+ */
+export function resolveProviderPlanLabel(
+  data: AvailableProviderRateLimits,
+): string | null {
+  switch (data.provider) {
+    case "codex":
+      return data.planType !== null ? titleCaseFromToken(data.planType) : null;
+    case "claude-code":
+      return data.subscriptionType !== null
+        ? titleCaseFromToken(data.subscriptionType)
+        : null;
+    case "openrouter":
+    case "kilocode":
+      return null;
+  }
+}
