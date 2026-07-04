@@ -128,21 +128,53 @@ export function useResetCountdown(resetsAt: number | null): string | null {
 }
 
 /**
- * Exact reset timestamp (e.g. "Jul 4, 2026 12:10 AM") for long-horizon
- * windows, where a relative countdown ("Resets in 3d") is too coarse to act
- * on. A pure function, not a hook: unlike a relative countdown, an absolute
- * date/time string doesn't go stale as time passes, so it doesn't need to
- * subscribe to the shared tick clock.
+ * Whether a reset is far enough away that an absolute weekday/time reads
+ * better than a relative countdown ("Resets in 3d" is too coarse to act on).
+ * Based on the real time remaining rather than a window's nominal duration:
+ * some windows (e.g. Claude's per-model `modelScoped` buckets) carry no
+ * `durationMinutes` at all, so gating this decision on duration meant those
+ * windows always fell back to the relative countdown even when their real
+ * reset was days away (regression: Claude's "Fable" per-model window showed
+ * "Resets in 3d" instead of "Resets Tue 5:29 PM"). Every window always has a
+ * real `resetsAt`, so every caller now derives this the same way instead of
+ * each threading through its own duration-based flag (or, worse, hardcoding
+ * one).
+ */
+export function isFarReset(resetsAt: number, now: number): boolean {
+  return resetsAt - now >= DAY_MS;
+}
+
+/**
+ * Subscribes to the shared 60s tick clock and returns whether `resetsAt` is
+ * currently far enough away to warrant `formatResetDateTime` over
+ * `formatResetCountdown` - `false` for a `null` resetsAt (nothing to compare).
+ * Reactive (unlike `formatResetDateTime` itself) so a window that crosses the
+ * one-day threshold while the popover is open flips from absolute to relative
+ * display without a remount.
+ */
+export function useIsFarReset(resetsAt: number | null): boolean {
+  useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  if (resetsAt === null) return false;
+  return isFarReset(resetsAt, sampledNow);
+}
+
+/**
+ * Exact reset time as weekday + time (e.g. "Sat 3:35 AM"), for windows where
+ * a relative countdown ("Resets in 3d") is too coarse to act on. Drops the
+ * calendar date on purpose: these windows reset within the next 7 days, so
+ * the weekday alone disambiguates it, and the shorter string reads better in
+ * a tight row. `hour12: true` is explicit rather than left to locale default
+ * so the AM/PM designator always renders. A pure function, not a hook: unlike
+ * a relative countdown, an absolute time string doesn't go stale as time
+ * passes, so it doesn't need to subscribe to the shared tick clock.
  */
 export function formatResetDateTime(resetsAt: number): string {
-  const date = new Date(resetsAt).toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
-  const time = new Date(resetsAt).toLocaleTimeString(undefined, {
+  const date = new Date(resetsAt);
+  const weekday = date.toLocaleDateString(undefined, { weekday: "short" });
+  const time = date.toLocaleTimeString(undefined, {
     hour: "numeric",
     minute: "2-digit",
+    hour12: true,
   });
-  return `${date} ${time}`;
+  return `${weekday} ${time}`;
 }

@@ -5,45 +5,45 @@ import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { subscribeChatTurnCompletions } from "@/lib/notifications/chat-turn-completion";
 import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
 import { queryKeys } from "@/lib/query-keys";
-import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
+import {
+  PROVIDER_RATE_LIMITS_STALE_TIME_MS,
+  rateLimitFetchLane,
+  type RateLimitProviderId,
+} from "@/lib/rate-limit-providers";
+import { enqueueRateLimitFetch } from "@/lib/rate-limits/ephemeral-fetch-queue";
 
 /**
- * Shared "how fresh is fresh enough" window for provider rate-limit reads:
- * the `staleTime` on `use-host-provider-rate-limits-query` and the minimum
- * spacing this hook enforces between turn-completion-triggered refetches.
- * Unlike the aperture read (a cheap cloud call), a provider pull spawns a
- * real CLI subprocess (`codex app-server`, or a full `claude` idle
- * `query()`) on the host - a burst of back-to-back turn completions (e.g. a
- * queued run) must not each trigger their own spawn.
- */
-export const PROVIDER_RATE_LIMITS_STALE_TIME_MS = 30_000;
-
-/**
- * While mounted, invalidates `host.getRateLimitUsage` for `hostId` whenever a
+ * While mounted, refreshes `host.getRateLimitUsage` for `hostId` whenever a
  * chat turn on `providerId`'s harness completes - the provider-pull analog of
- * `useRefreshRateLimitUsageOnTraycerTurn`.
+ * `useRefreshRateLimitUsageOnTraycerTurn`. Branches on the provider's fetch
+ * lane:
+ *
+ * - `ephemeralProcess` (codex, claude-code): enqueues onto the shared serial
+ *   queue (`enqueueRateLimitFetch(..., { force: false })`) rather than
+ *   invalidating directly, so a turn completion can't race a scheduled interval
+ *   tick into two overlapping subprocess spawns. This enqueue is deliberately
+ *   NOT gated by window visibility - only the interval timer pauses when hidden;
+ *   a background turn finishing while the user is away must still update data.
+ * - `httpFetch` (openrouter, kilocode): invalidates the query directly (no
+ *   subprocess to bound), exactly as before.
  *
  * Unlike the aperture refresh hook (always default-host scoped, mounted only
  * by the Traycer-only `RateLimitView`), `hostId` is a caller-supplied
  * parameter instead of a hardcoded `useReactiveActiveHostId()` read, so a
  * future tab-scoped consumer can reuse this hook without a rewrite.
  *
- * Invalidates the exact `{ accountContext, providerId }` params key (the same
- * one `useHostProviderRateLimitsQuery` builds), NOT the whole
+ * Targets the exact `{ accountContext, providerId }` params key (the same one
+ * `useHostProviderRateLimitsQuery` builds), NOT the whole
  * `host.getRateLimitUsage` method scope: a method-scope invalidation would
  * also refetch the aperture query and every OTHER provider's query on this
  * host, so e.g. a Codex turn completing would spawn a `claude` subprocess to
  * refresh Claude's rate limits too, for data a Codex turn can't have changed.
  *
- * `invalidateQueries` refetches an actively-observed query immediately
- * regardless of `staleTime` (TanStack only consults `staleTime` for
- * mount/refocus-triggered refetches, not explicit invalidation), so the
- * pinned strip - a persistent, always-mounted surface - would otherwise spawn
- * a fresh CLI subprocess on every single matching turn completion. A local
- * cooldown ref throttles invalidation to at most once per
- * `PROVIDER_RATE_LIMITS_STALE_TIME_MS`, which is what actually bounds that
- * cost; the query's own `staleTime` (set alongside this) separately avoids a
- * redundant refetch when a surface merely remounts within the same window.
+ * Both paths are throttled by an outer cooldown ref to at most once per
+ * `PROVIDER_RATE_LIMITS_STALE_TIME_MS` (a persistent, always-mounted surface
+ * would otherwise refresh on every single matching turn completion); for the
+ * queue path the queue's own 30s freshness floor is a second, independent layer
+ * under this ref.
  *
  * No-ops while `providerId` is `null` (surface isn't gated to a rate-limit
  * -capable provider).
@@ -74,6 +74,21 @@ export function useRefreshProviderRateLimitsOnTurn(
         return;
       }
       lastInvalidatedAtRef.current = now;
+      // ephemeralProcess providers (codex, claude-code) route through the shared
+      // serial queue so this turn-completion refresh can't spawn a subprocess
+      // that overlaps a scheduled interval tick. The queue's own 30s floor is a
+      // second, independent layer under this hook's outer cooldown ref. Crucially
+      // this fires regardless of window visibility - only the interval timer
+      // pauses when hidden, so a background turn finishing while the user is away
+      // still updates that provider's data.
+      if (rateLimitFetchLane(providerId) === "ephemeralProcess") {
+        void enqueueRateLimitFetch(providerId, DEFAULT_ACCOUNT_CONTEXT, {
+          force: false,
+        });
+        return;
+      }
+      // httpFetch providers (openrouter, kilocode) never touch the queue - a
+      // plain credential GET has no subprocess to bound, so invalidate directly.
       void queryClient.invalidateQueries({
         queryKey: queryKeys.hostMethod<
           HostRpcRegistry,
