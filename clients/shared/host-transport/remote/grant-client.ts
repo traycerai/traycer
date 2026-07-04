@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { attachGrantResponseSchema } from "@traycer/protocol/host/attach-grant";
 
 /**
  * Client-leg attach-grant acquisition (Architecture §2, §4b; relay-do README).
@@ -22,15 +22,6 @@ import { z } from "zod";
  */
 
 const GRANT_FETCH_TIMEOUT_MS = 10_000;
-
-const attachGrantResponseSchema = z.object({
-  /** The signed attach-grant JWS presented to the relay's `/attach`. */
-  grant: z.string().min(1),
-  /** `"client"` here; ignored by the client, which only presents the grant. */
-  role: z.string(),
-  /** Grant lifetime in seconds (the relay enforces its own `exp ≤ 5m`). */
-  expires_in: z.number(),
-});
 
 /** A minted attach grant ready to present to the relay. */
 export interface AttachGrant {
