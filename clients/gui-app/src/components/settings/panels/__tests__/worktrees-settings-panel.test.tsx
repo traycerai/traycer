@@ -47,6 +47,59 @@ vi.mock("sonner", () => ({
   },
 }));
 
+// Render the Radix dropdown menus inline + always-open so tests can assert /
+// click the Select and Sort menu items without fighting pointer-open semantics
+// in jsdom (mirrors the established mock in folder-controls.test).
+vi.mock("@/components/ui/dropdown-menu", () => {
+  const passthrough = (props: { readonly children: ReactNode }): ReactNode =>
+    props.children;
+  const item = (props: {
+    readonly children: ReactNode;
+    readonly onSelect?: () => void;
+    readonly disabled?: boolean;
+    readonly "data-testid"?: string;
+  }): ReactNode => (
+    <button
+      type="button"
+      data-testid={props["data-testid"]}
+      disabled={props.disabled ?? false}
+      onClick={props.onSelect}
+    >
+      {props.children}
+    </button>
+  );
+  const checkboxItem = (props: {
+    readonly children: ReactNode;
+    readonly onSelect?: () => void;
+    readonly checked?: boolean;
+    readonly "data-testid"?: string;
+  }): ReactNode => (
+    <button
+      type="button"
+      role="menuitemcheckbox"
+      aria-checked={props.checked ? "true" : "false"}
+      data-testid={props["data-testid"]}
+      onClick={props.onSelect}
+    >
+      {props.children}
+    </button>
+  );
+  return {
+    DropdownMenu: passthrough,
+    DropdownMenuTrigger: passthrough,
+    DropdownMenuContent: (props: {
+      readonly children: ReactNode;
+      readonly "data-testid"?: string;
+    }) => <div data-testid={props["data-testid"]}>{props.children}</div>,
+    DropdownMenuItem: item,
+    DropdownMenuCheckboxItem: checkboxItem,
+    DropdownMenuSeparator: () => <div role="separator" />,
+    DropdownMenuLabel: (props: { readonly children: ReactNode }) => (
+      <div>{props.children}</div>
+    ),
+  };
+});
+
 vi.mock(
   "@traycer-clients/shared/host-transport/worktree-delete-stream-client",
   () => ({
@@ -191,10 +244,8 @@ function confirmDelete(branch: string): void {
   fireEvent.click(screen.getByTestId("confirm-action"));
 }
 
-// Two-button cleanup replaced "Select all": hand-pick rows via their checkboxes
-// after entering selection mode.
+// No selection mode: checkboxes are always present. Hand-pick rows directly.
 function selectRows(branches: readonly string[]): void {
-  fireEvent.click(screen.getByRole("button", { name: "Select worktrees" }));
   for (const branch of branches) {
     fireEvent.click(
       screen.getByRole("checkbox", { name: `Select worktree ${branch}` }),
@@ -252,28 +303,32 @@ describe("WorktreesList delete flow", () => {
     expect(busyButton.getAttribute("aria-disabled")).toBe("true");
   });
 
-  it("keeps refresh after repo and selection controls so it does not shift", () => {
+  it("keeps a stable toolbar; the selection action bar is separate and only shown when selecting", () => {
     renderDefault();
 
+    // Toolbar action group stays put regardless of selection: expand-all, the
+    // Select-merged sweep, and Refresh (last so it never shifts).
     expect(toolbarButtonLabels()).toEqual([
       "Collapse all",
-      "Select worktrees",
+      "Select merged (0)",
       "Refresh worktrees",
     ]);
+    // No selection yet -> no contextual action bar.
+    expect(screen.queryByTestId("worktrees-selection-action-bar")).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "Select worktrees" }));
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Select worktree feat-clean" }),
+    );
 
+    // The toolbar action group is unchanged; the delete lives in the action bar.
     expect(toolbarButtonLabels()).toEqual([
       "Collapse all",
-      "Cancel",
-      "Delete selected worktrees",
+      "Select merged (0)",
       "Refresh worktrees",
     ]);
-    const cancelClassName = screen.getByRole("button", {
-      name: "Cancel",
-    }).className;
-    expect(cancelClassName).not.toContain("bg-destructive");
-    expect(cancelClassName).not.toContain("text-destructive");
+    const actionBar = screen.getByTestId("worktrees-selection-action-bar");
+    within(actionBar).getByText("1 selected");
+    within(actionBar).getByTestId("worktrees-list-delete-selected");
   });
 
   it("collapses and expands a repo section", () => {
@@ -340,9 +395,14 @@ describe("WorktreesList delete flow", () => {
     screen.getByRole("button", { name: "Delete worktree feat-api-clean" });
 
     fireEvent.click(screen.getByRole("button", { name: "Collapse acme/app" }));
-    // The secondary sweep names only the visible clean-unreferenced cohort; the
-    // collapsed acme/app rows are excluded from the count and the selection.
-    fireEvent.click(screen.getByTestId("worktrees-select-unreferenced"));
+    // Only the visible acme/api row can be hand-selected; the collapsed acme/app
+    // rows are not reachable.
+    expect(
+      screen.queryByRole("checkbox", { name: "Select worktree feat-clean" }),
+    ).toBeNull();
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Select worktree feat-api-clean" }),
+    );
 
     expect(screen.getByText("1 selected")).not.toBeNull();
     fireEvent.click(screen.getByTestId("worktrees-list-delete-selected"));
@@ -445,13 +505,8 @@ describe("WorktreesList delete flow", () => {
   it("selects visible deletable worktrees and starts bulk deletes in the background", () => {
     renderDefault();
 
-    fireEvent.click(screen.getByRole("button", { name: "Select worktrees" }));
-    expect(screen.getByText("0 selected")).not.toBeNull();
-    expect(
-      screen
-        .getByTestId("worktrees-list-delete-selected")
-        .hasAttribute("disabled"),
-    ).toBe(true);
+    // No selection yet -> no action bar. The in-use row's checkbox is disabled.
+    expect(screen.queryByTestId("worktrees-selection-action-bar")).toBeNull();
     expect(
       screen
         .getByRole("checkbox", { name: "Select worktree feat-busy" })
@@ -1035,8 +1090,8 @@ describe("WorktreesList confirm-time re-check", () => {
     ];
     const rendered = render(renderWith(queryClient, clean));
 
-    // Primary sweep selects all three proven merged & clean rows.
-    fireEvent.click(screen.getByTestId("worktrees-select-merged-clean"));
+    // The merged sweep selects all three proven merged rows.
+    fireEvent.click(screen.getByTestId("worktrees-select-merged"));
     fireEvent.click(screen.getByTestId("worktrees-list-delete-selected"));
     screen.getByText("Delete 3 worktrees?");
 
@@ -1059,34 +1114,56 @@ describe("WorktreesList confirm-time re-check", () => {
     expect(toastMock.messages.join("\n")).toContain("1 dirty");
   });
 
-  it("does not let a primary-selected path that stopped matching survive the secondary union", () => {
-    const queryClient = new QueryClient();
-    const rendered = render(
-      renderWith(queryClient, [
-        merged("/wt/a", "feat-a"),
-        entry({ worktreePath: "/wt/b", branch: "feat-b", branchStatus: null }),
+  it("sweeps only proven-Merged rows, disabled when none qualify", () => {
+    // Merged (swept), Unreferenced (null status - NOT swept), and an in-use
+    // merged row (not selectable). Only the first is picked.
+    render(
+      renderWith(new QueryClient(), [
+        merged("/wt/merged", "feat-merged"),
+        entry({
+          worktreePath: "/wt/unref",
+          branch: "feat-unref",
+          branchStatus: null,
+        }),
+        entry({
+          worktreePath: "/wt/busy-merged",
+          branch: "feat-busy-merged",
+          inUse: true,
+          branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
+        }),
       ]),
     );
 
-    // Primary sweep selects the merged row.
-    fireEvent.click(screen.getByTestId("worktrees-select-merged-clean"));
-    screen.getByText("1 selected");
+    const sweep = screen.getByTestId("worktrees-select-merged");
+    expect(sweep.textContent).toContain("Select merged (1)");
+    fireEvent.click(sweep);
 
-    // /wt/a becomes dirty (no longer sweep-eligible) in the freshest snapshot.
-    rendered.rerender(
-      renderWith(queryClient, [
-        entry({ worktreePath: "/wt/a", branch: "feat-a", uncommittedCount: 4 }),
-        entry({ worktreePath: "/wt/b", branch: "feat-b", branchStatus: null }),
+    expect(screen.getByText("1 selected")).not.toBeNull();
+    expect(
+      screen
+        .getByRole("checkbox", { name: "Select worktree feat-merged" })
+        .getAttribute("aria-checked"),
+    ).toBe("true");
+    expect(
+      screen
+        .getByRole("checkbox", { name: "Select worktree feat-unref" })
+        .getAttribute("aria-checked"),
+    ).toBe("false");
+  });
+
+  it("disables the merged sweep when nothing qualifies", () => {
+    render(
+      renderWith(new QueryClient(), [
+        entry({
+          worktreePath: "/wt/unref",
+          branch: "feat-unref",
+          branchStatus: null,
+        }),
       ]),
     );
-
-    // The secondary sweep unions the null-status cohort; the stale primary pick
-    // must be intersected out, leaving only /wt/b.
-    fireEvent.click(screen.getByTestId("worktrees-select-unreferenced"));
-    fireEvent.click(screen.getByTestId("worktrees-list-delete-selected"));
-    fireEvent.click(screen.getByTestId("confirm-action"));
-
-    expect(streamMock.paths).toEqual(["/wt/b"]);
+    const sweep = screen.getByTestId("worktrees-select-merged");
+    expect(sweep.textContent).toContain("Select merged (0)");
+    expect(sweep.hasAttribute("disabled")).toBe(true);
   });
 
   it("prunes a dropped row from the selection bookkeeping after confirm", () => {
@@ -1099,7 +1176,7 @@ describe("WorktreesList confirm-time re-check", () => {
       ]),
     );
 
-    fireEvent.click(screen.getByTestId("worktrees-select-merged-clean"));
+    fireEvent.click(screen.getByTestId("worktrees-select-merged"));
     fireEvent.click(screen.getByTestId("worktrees-list-delete-selected"));
     screen.getByText("Delete 3 worktrees?");
 
@@ -1310,9 +1387,9 @@ describe("WorktreesList v1.1 signals", () => {
       "Delete worktree feat-review",
     ]);
 
-    fireEvent.click(screen.getByRole("button", { name: "Stalest first" }));
+    fireEvent.click(screen.getByTestId("worktrees-sort-stalest"));
 
-    // Stalest toggle ignores tier and leads with the least-recently-active row.
+    // Stalest sort ignores tier and leads with the least-recently-active row.
     const orderAfter = screen
       .getAllByRole("button", { name: /^Delete worktree/ })
       .map(deleteLabel);

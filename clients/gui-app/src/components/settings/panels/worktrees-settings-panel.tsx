@@ -13,6 +13,7 @@ import {
   AlertTriangle,
   ArrowDownWideNarrow,
   Check,
+  ChevronDown,
   ChevronRight,
   CopyMinus,
   CopyPlus,
@@ -22,7 +23,6 @@ import {
   ListChecks,
   RefreshCw,
   Search,
-  Sparkles,
   Trash2,
   X,
 } from "lucide-react";
@@ -34,8 +34,6 @@ import {
   WORKTREE_TIER_LABEL,
   classifyWorktree,
   classifyWorktreeTier,
-  isPrimarySweepEligible,
-  isSecondarySweepEligible,
   worktreeTierRank,
   type WorktreeTier,
 } from "@/lib/worktree/classify-worktree";
@@ -58,6 +56,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -218,7 +222,6 @@ function WorktreesFilterControls(props: {
   readonly sortMode: WorktreeSortMode;
   readonly onSortModeChange: (mode: WorktreeSortMode) => void;
 }): ReactNode {
-  const stalestFirst = props.sortMode === "stalest";
   return (
     <div className="flex items-center gap-2">
       <div className="relative min-w-0 flex-1">
@@ -235,20 +238,62 @@ function WorktreesFilterControls(props: {
           className="pl-8"
         />
       </div>
-      <Button
-        type="button"
-        variant={stalestFirst ? "secondary" : "outline"}
-        size="sm"
-        aria-pressed={stalestFirst}
-        className="shrink-0"
-        onClick={() =>
-          props.onSortModeChange(stalestFirst ? "repo" : "stalest")
-        }
-      >
-        <ArrowDownWideNarrow className="size-4" />
-        <span>Stalest first</span>
-      </Button>
+      <WorktreeSortMenu
+        sortMode={props.sortMode}
+        onSortModeChange={props.onSortModeChange}
+      />
     </div>
+  );
+}
+
+const WORKTREE_SORT_LABEL: Record<WorktreeSortMode, string> = {
+  repo: "Repository",
+  stalest: "Stalest first",
+};
+
+/**
+ * Standard sort control: a small dropdown with checkmarked items. Same
+ * `WorktreeSortMode` values as before - "Repository" (default listing order,
+ * pre-triaged by tier) and "Stalest first" (pure staleness) - just a clearer,
+ * lower-chrome affordance than the old ambiguous toggle button.
+ */
+function WorktreeSortMenu(props: {
+  readonly sortMode: WorktreeSortMode;
+  readonly onSortModeChange: (mode: WorktreeSortMode) => void;
+}): ReactNode {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="shrink-0"
+          data-testid="worktrees-sort-trigger"
+          aria-label={`Sort: ${WORKTREE_SORT_LABEL[props.sortMode]}`}
+        >
+          <ArrowDownWideNarrow className="size-4" />
+          <span>{WORKTREE_SORT_LABEL[props.sortMode]}</span>
+          <ChevronDown className="size-4 text-muted-foreground" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuCheckboxItem
+          checked={props.sortMode === "repo"}
+          onSelect={() => props.onSortModeChange("repo")}
+          data-testid="worktrees-sort-repo"
+        >
+          Repository
+        </DropdownMenuCheckboxItem>
+        <DropdownMenuCheckboxItem
+          checked={props.sortMode === "stalest"}
+          onSelect={() => props.onSortModeChange("stalest")}
+          data-testid="worktrees-sort-stalest"
+        >
+          Stalest first
+        </DropdownMenuCheckboxItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -492,7 +537,6 @@ export function WorktreesList(props: {
   const [sweepOriginPaths, setSweepOriginPaths] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
-  const [selectionMode, setSelectionMode] = useState(false);
   const [pendingDeleteTargets, setPendingDeleteTargets] =
     useState<ReadonlyArray<WorktreeHostEntryV11> | null>(null);
   const [pendingScriptReview, setPendingScriptReview] =
@@ -571,26 +615,18 @@ export function WorktreesList(props: {
     [selectablePathSet, selectedPaths, visibleWorktrees],
   );
   const selectedCount = selectedTargets.length;
-  // The two ship-now sweep cohorts, computed over the same selectable pool the
-  // checkboxes use (so a delete already in flight is excluded by construction).
-  const primarySweepPaths = useMemo(
+  // The single ship-now sweep cohort: proven-`Merged`-tier rows (exactly the
+  // rows that show the "Merged" pill), computed over the same selectable pool
+  // the checkboxes use (so a delete already in flight is excluded by
+  // construction). The clean-unreferenced cohort is deliberately NOT swept - it
+  // is hand-selectable via its row checkbox only.
+  const mergedSweepPaths = useMemo(
     () =>
       visibleWorktrees
         .filter(
           (entry) =>
             selectablePathSet.has(entry.worktreePath) &&
-            isPrimarySweepEligible(entry),
-        )
-        .map((entry) => entry.worktreePath),
-    [selectablePathSet, visibleWorktrees],
-  );
-  const secondarySweepPaths = useMemo(
-    () =>
-      visibleWorktrees
-        .filter(
-          (entry) =>
-            selectablePathSet.has(entry.worktreePath) &&
-            isSecondarySweepEligible(entry),
+            isMergedSweepTarget(entry),
         )
         .map((entry) => entry.worktreePath),
     [selectablePathSet, visibleWorktrees],
@@ -602,19 +638,11 @@ export function WorktreesList(props: {
     () => new Map(worktrees.map((entry) => [entry.worktreePath, entry])),
     [worktrees],
   );
-  const primarySweepPathSet = useMemo(
-    () => new Set(primarySweepPaths),
-    [primarySweepPaths],
-  );
-  const secondarySweepPathSet = useMemo(
-    () => new Set(secondarySweepPaths),
-    [secondarySweepPaths],
-  );
   // Re-resolve the pending targets against the freshest listing and split into
   // the rows still eligible to delete vs. the ones dropped (gone from the list,
   // now in-use / deleting, or - for sweep-origin rows - no longer matching the
-  // sweep predicate that selected them). Both the dialog copy and the confirm
-  // action read from this, so what the user sees is what gets deleted.
+  // merged sweep predicate that selected them). Both the dialog copy and the
+  // confirm action read from this, so what the user sees is what gets deleted.
   const pendingResolution = useMemo(() => {
     if (pendingDeleteTargets === null) return null;
     const kept: WorktreeHostEntryV11[] = [];
@@ -625,9 +653,10 @@ export function WorktreesList(props: {
         dropped.push(captured);
         continue;
       }
+      const stillSelectable = selectablePathSet.has(fresh.worktreePath);
       const eligible = sweepOriginPaths.has(fresh.worktreePath)
-        ? isPrimarySweepEligible(fresh) || isSecondarySweepEligible(fresh)
-        : selectablePathSet.has(fresh.worktreePath);
+        ? stillSelectable && isMergedSweepTarget(fresh)
+        : stillSelectable;
       if (eligible) kept.push(fresh);
       else dropped.push(fresh);
     }
@@ -671,49 +700,20 @@ export function WorktreesList(props: {
       // A hand-picked checkbox is a MANUAL selection - it must not be treated as
       // sweep-origin (which would re-check it against the sweep predicates).
       setSweepOriginPaths((prev) => withMemberRemoved(prev, worktreePath));
-      setSelectionMode(true);
     },
     [selectablePathSet],
   );
-  const enterSelectionMode = useCallback(() => {
-    setSelectedPaths(new Set());
-    setSweepOriginPaths(new Set());
-    setSelectionMode(true);
-  }, []);
-  // Primary sweep: a fresh selection of the proven merged & clean cohort, all
-  // sweep-origin.
-  const selectMergedClean = useCallback(() => {
-    const next = new Set(primarySweepPaths);
+  // The single "Select merged" sweep: a fresh selection of the proven Merged
+  // cohort, all sweep-origin (so the confirm-time re-check holds them to the
+  // merged predicate).
+  const selectMerged = useCallback(() => {
+    const next = new Set(mergedSweepPaths);
     setSelectedPaths(next);
     setSweepOriginPaths(new Set(next));
-    setSelectionMode(true);
-  }, [primarySweepPaths]);
-  // Secondary sweep: a deliberate, separate click that ADDS the null-status
-  // clean-unreferenced cohort. The carried-over selection is first intersected
-  // against the CURRENT sweep-eligible paths, so a previously-selected row that
-  // has since stopped matching the sweep predicates does not survive the union.
-  const alsoSelectUnreferenced = useCallback(() => {
-    const eligible = new Set([
-      ...primarySweepPathSet,
-      ...secondarySweepPathSet,
-    ]);
-    const carried = [...selectedPaths].filter((path) => eligible.has(path));
-    const next = new Set([...carried, ...secondarySweepPaths]);
-    setSelectedPaths(next);
-    // Every surviving path is sweep-eligible, so the whole selection is now
-    // sweep-origin.
-    setSweepOriginPaths(new Set(next));
-    setSelectionMode(true);
-  }, [
-    primarySweepPathSet,
-    secondarySweepPathSet,
-    secondarySweepPaths,
-    selectedPaths,
-  ]);
-  const cancelSelection = useCallback(() => {
+  }, [mergedSweepPaths]);
+  const clearSelection = useCallback(() => {
     setSelectedPaths(new Set());
     setSweepOriginPaths(new Set());
-    setSelectionMode(false);
   }, []);
   const toggleRepoCollapsed = useCallback(
     (group: WorktreeRepoGroup, collapsed: boolean) => {
@@ -754,7 +754,6 @@ export function WorktreesList(props: {
   ): void => {
     setSelectedPaths((prev) => removeSelectedWorktrees(prev, targets));
     setSweepOriginPaths((prev) => removeSelectedWorktrees(prev, targets));
-    setSelectionMode(false);
     setPendingDeleteTargets(null);
   };
 
@@ -830,15 +829,9 @@ export function WorktreesList(props: {
               allCollapsed={allReposCollapsed}
               onToggle={toggleAllReposCollapsed}
             />
-            <WorktreesSelectionControls
-              selectionMode={selectionMode}
-              canSelect={selectableWorktreePaths.length > 0}
-              selectedCount={selectedCount}
-              onStart={enterSelectionMode}
-              onCancel={cancelSelection}
-              onDeleteSelected={() => {
-                requestDeleteTargets(selectedTargets);
-              }}
+            <WorktreeSelectMergedButton
+              mergedCount={mergedSweepPaths.length}
+              onSelectMerged={selectMerged}
             />
           </>
         }
@@ -851,11 +844,12 @@ export function WorktreesList(props: {
           />
         }
       />
-      <WorktreeCleanupBar
-        primaryCount={primarySweepPaths.length}
-        secondaryCount={secondarySweepPaths.length}
-        onSelectPrimary={selectMergedClean}
-        onSelectSecondary={alsoSelectUnreferenced}
+      <WorktreeSelectionActionBar
+        selectedCount={selectedCount}
+        onDelete={() => {
+          requestDeleteTargets(selectedTargets);
+        }}
+        onClear={clearSelection}
       />
       <WorktreeDeleteProgressStrip
         summary={progressSummary}
@@ -896,7 +890,6 @@ export function WorktreesList(props: {
                       entry={entry}
                       taskTitlesByEpicId={taskTitlesByEpicId}
                       deleteStatus={deleteStatus}
-                      selectionMode={selectionMode}
                       selected={selectedPaths.has(entry.worktreePath)}
                       canSelect={selectablePathSet.has(entry.worktreePath)}
                       onToggleSelection={() =>
@@ -986,46 +979,79 @@ function WorktreeDeleteProgressStrip(props: {
 }
 
 /**
- * Two-button quick-cleanup bar. The primary CTA selects the proven merged &
- * clean cohort; the secondary, visually distinct CTA is a SEPARATE deliberate
- * click that also adds the clean-unreferenced cohort whose branch status could
- * not be probed. The label names the widened scope ("unknown branch status")
- * — never generic "safe". Hidden when neither cohort has any members.
+ * The single ship-now sweep affordance: one standard toolbar button that selects
+ * exactly the proven-`Merged` rows (the rows showing the "Merged" pill), so the
+ * "Select merged" label is literally true for everything it picks. Disabled when
+ * nothing qualifies. The clean-unreferenced cohort is intentionally NOT swept -
+ * it is hand-selectable via its row checkbox. Clearing / deleting the resulting
+ * selection lives in the contextual action bar, so this stays a lone button.
  */
-function WorktreeCleanupBar(props: {
-  readonly primaryCount: number;
-  readonly secondaryCount: number;
-  readonly onSelectPrimary: () => void;
-  readonly onSelectSecondary: () => void;
+function WorktreeSelectMergedButton(props: {
+  readonly mergedCount: number;
+  readonly onSelectMerged: () => void;
 }): ReactNode {
-  if (props.primaryCount === 0 && props.secondaryCount === 0) return null;
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      disabled={props.mergedCount === 0}
+      onClick={props.onSelectMerged}
+      data-testid="worktrees-select-merged"
+    >
+      <ListChecks className="size-4" />
+      Select merged ({props.mergedCount})
+    </Button>
+  );
+}
+
+/** A worktree is swept by "Select merged" iff it shows the proven Merged pill. */
+function isMergedSweepTarget(entry: WorktreeHostEntryV11): boolean {
+  return classifyWorktreeTier(entry) === "merged";
+}
+
+/**
+ * Contextual action bar - present ONLY while a selection is active (empty =
+ * absent, so the page has no permanent selection chrome). Shows the count, a
+ * destructive "Delete N…" primary action, and a "Clear".
+ */
+function WorktreeSelectionActionBar(props: {
+  readonly selectedCount: number;
+  readonly onDelete: () => void;
+  readonly onClear: () => void;
+}): ReactNode {
+  if (props.selectedCount === 0) return null;
   return (
     <div
-      className="flex flex-wrap items-center gap-2 border-b border-border/40 bg-muted/10 px-5 py-2"
-      data-testid="worktrees-cleanup-bar"
+      className="flex flex-wrap items-center gap-3 border-b border-border/40 bg-muted/20 px-5 py-2"
+      data-testid="worktrees-selection-action-bar"
     >
-      <Sparkles className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-      <Button
-        type="button"
-        variant="secondary"
-        size="sm"
-        disabled={props.primaryCount === 0}
-        onClick={props.onSelectPrimary}
-        data-testid="worktrees-select-merged-clean"
-      >
-        Select {props.primaryCount} merged &amp; clean
-      </Button>
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        disabled={props.secondaryCount === 0}
-        onClick={props.onSelectSecondary}
-        data-testid="worktrees-select-unreferenced"
-      >
-        Also select {props.secondaryCount} clean, unreferenced (unknown branch
-        status)
-      </Button>
+      <span className="text-ui-sm font-medium text-foreground">
+        {props.selectedCount} selected
+      </span>
+      <div className="ml-auto flex items-center gap-1">
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={props.onClear}
+          data-testid="worktrees-clear-selection-inline"
+        >
+          <X className="size-4" />
+          Clear
+        </Button>
+        <Button
+          type="button"
+          variant="destructive"
+          size="sm"
+          onClick={props.onDelete}
+          aria-label={`Delete ${props.selectedCount} selected worktrees`}
+          data-testid="worktrees-list-delete-selected"
+        >
+          <Trash2 className="size-4" />
+          Delete {props.selectedCount}…
+        </Button>
+      </div>
     </div>
   );
 }
@@ -1175,7 +1201,6 @@ function WorktreeRow(props: {
   readonly entry: WorktreeHostEntryV11;
   readonly taskTitlesByEpicId: ReadonlyMap<string, string>;
   readonly deleteStatus: WorktreeRowDeleteStatus | null;
-  readonly selectionMode: boolean;
   readonly selected: boolean;
   readonly canSelect: boolean;
   readonly onToggleSelection: () => void;
@@ -1186,7 +1211,6 @@ function WorktreeRow(props: {
     entry,
     taskTitlesByEpicId,
     deleteStatus,
-    selectionMode,
     selected,
     canSelect,
     onToggleSelection,
@@ -1194,8 +1218,7 @@ function WorktreeRow(props: {
     onDelete,
   } = props;
   const deleting = deleteStatus !== null;
-  const selectedForDelete = selectionMode && selected && canSelect;
-  const selectionDisabled = selectionMode && !canSelect;
+  const selectedForDelete = selected && canSelect;
   const classification = classifyWorktree(entry);
   return (
     <div
@@ -1205,13 +1228,11 @@ function WorktreeRow(props: {
         "group/worktree-row relative flex items-center gap-3 px-5 py-3 transition-colors",
         deleting ? "pointer-events-none opacity-50" : "hover:bg-accent/30",
         selectedForDelete && "bg-accent/40 ring-1 ring-inset ring-primary/40",
-        selectionDisabled && "opacity-50",
       )}
     >
       <div className="flex w-5 shrink-0 items-center justify-center">
         <WorktreeSelectionControl
           entry={entry}
-          selectionMode={selectionMode}
           selected={selected}
           canSelect={canSelect}
           deleting={deleting}
@@ -1250,7 +1271,7 @@ function WorktreeRow(props: {
           Deleting…
         </span>
       ) : null}
-      {!deleting && !selectionMode ? (
+      {!deleting ? (
         <WorktreeRowActions
           inUse={entry.inUse}
           onManageScripts={onManageScripts}
@@ -1451,68 +1472,8 @@ function WorktreesRepoExpansionControl(props: {
   );
 }
 
-function WorktreesSelectionControls(props: {
-  readonly selectionMode: boolean;
-  readonly canSelect: boolean;
-  readonly selectedCount: number;
-  readonly onStart: () => void;
-  readonly onCancel: () => void;
-  readonly onDeleteSelected: () => void;
-}): ReactNode {
-  return (
-    <div className="flex shrink-0 items-center gap-1">
-      {props.selectionMode ? (
-        <>
-          <span className="px-1 text-ui-xs text-muted-foreground">
-            {props.selectedCount} selected
-          </span>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={props.onCancel}
-          >
-            <X />
-            Cancel
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            aria-label={
-              props.selectedCount > 0
-                ? `Delete ${props.selectedCount} selected worktrees`
-                : "Delete selected worktrees"
-            }
-            data-testid="worktrees-list-delete-selected"
-            disabled={props.selectedCount === 0}
-            className="text-destructive hover:bg-destructive/10 hover:text-destructive"
-            onClick={props.onDeleteSelected}
-          >
-            <Trash2 />
-          </Button>
-        </>
-      ) : (
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          aria-label="Select worktrees"
-          disabled={!props.canSelect}
-          className="gap-1.5 overflow-visible text-ui-sm text-muted-foreground hover:text-foreground"
-          onClick={props.onStart}
-        >
-          <ListChecks className="size-4" />
-          Select
-        </Button>
-      )}
-    </div>
-  );
-}
-
 function WorktreeSelectionControl(props: {
   readonly entry: WorktreeHostEntry;
-  readonly selectionMode: boolean;
   readonly selected: boolean;
   readonly canSelect: boolean;
   readonly deleting: boolean;
@@ -1529,7 +1490,6 @@ function WorktreeSelectionControl(props: {
       className={cn(
         "flex size-4 items-center justify-center rounded-sm border transition-[border-color,background-color,color,opacity] outline-none focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/50",
         worktreeSelectionCheckboxVisibility({
-          selectionMode: props.selectionMode,
           isSelected: props.selected,
           canSelect: props.canSelect,
         }),
@@ -2046,18 +2006,17 @@ function removeSelectedWorktrees(
   return next ?? selectedPaths;
 }
 
+// Checkboxes are ALWAYS rendered (no selection mode) - subtle by default, full
+// once the row is hovered/focused or the box is checked. Standard list pattern.
 function worktreeSelectionCheckboxVisibility(args: {
-  readonly selectionMode: boolean;
   readonly isSelected: boolean;
   readonly canSelect: boolean;
 }): string {
-  if (args.selectionMode || (args.isSelected && args.canSelect)) {
-    return args.canSelect ? "opacity-100" : "opacity-50";
-  }
+  if (args.isSelected && args.canSelect) return "opacity-100";
   if (args.canSelect) {
-    return "opacity-0 group-hover/worktree-row:opacity-100";
+    return "opacity-40 group-hover/worktree-row:opacity-100 focus-visible:opacity-100";
   }
-  return "opacity-0 group-hover/worktree-row:opacity-50 focus-visible:opacity-50";
+  return "opacity-40 group-hover/worktree-row:opacity-70 focus-visible:opacity-70";
 }
 
 function branchLabel(entry: WorktreeHostEntry): string {
