@@ -44,6 +44,7 @@ import { WorkspacePickerWithOpener } from "@/components/worktree/workspace-picke
 import { WorktreePickerHostSection } from "@/components/worktree/worktree-picker-host-section";
 import { CapabilityGate } from "./capability-gate";
 import { DiffLoadingSkeleton } from "./diff-loading-skeleton";
+import { GitRootsUnavailable } from "./empty-states/git-roots-unavailable";
 import { NoGitWorktrees } from "./empty-states/no-git-worktrees";
 import { GitDiffRepoSwitcher } from "./git-diff-repo-switcher";
 import { SelectedRepoChanges } from "./selected-repo-changes";
@@ -179,12 +180,45 @@ export function GitDiffPanelBodyLive(
     setSelectedRepo,
   ]);
 
+  // Clear the probed-unavailable set and re-probe every root's capability, so a
+  // fully-degraded panel can recover once a broken worktree is restored. The
+  // default-pick effect keys off `unavailableKeysRef` (not the snapshot), so
+  // clearing the set alone would not re-trigger it - we re-pick a root here so
+  // the freshly invalidated capability query runs against a candidate again.
+  const retryUnavailableRoots = useCallback(() => {
+    const cleared = new Set<string>();
+    unavailableKeysRef.current = cleared;
+    setUnavailableKeysSnapshot(cleared);
+    void queryClient.invalidateQueries({
+      predicate: (query) => query.queryKey.includes("git"),
+    });
+    const next = pickDefaultRow(
+      gitRows,
+      queryClient,
+      cleared,
+      ignoreWhitespace,
+    );
+    setSelectedRepo(
+      props.epicId,
+      next === null
+        ? null
+        : {
+            hostId: next.hostId,
+            rootRunningDir: next.runningDir,
+            repoRoot: next.runningDir,
+          },
+    );
+  }, [gitRows, ignoreWhitespace, props.epicId, queryClient, setSelectedRepo]);
+
   if (bindingsQuery.isPending) return <DiffLoadingSkeleton variant="panel" />;
   if (bindingsQuery.error !== null) return <NoGitWorktrees />;
   if (gitRows.length === 0) return <NoGitWorktrees />;
   if (selectedRepo === null || selectedRootRow === null) {
     if (allRowsKnownUnavailable(gitRows, unavailableKeysSnapshot)) {
-      return <NoGitWorktrees />;
+      // Every bound root probed unavailable: an explicit, recoverable degrade -
+      // never the transient skeleton, which with zero available roots would
+      // never resolve and read as "still loading" forever.
+      return <GitRootsUnavailable onRetry={retryUnavailableRoots} />;
     }
     // Default-pick is resolving the initial selection (one commit).
     return <DiffLoadingSkeleton variant="panel" />;

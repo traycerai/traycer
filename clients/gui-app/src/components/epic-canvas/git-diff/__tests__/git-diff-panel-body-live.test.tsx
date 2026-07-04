@@ -653,7 +653,7 @@ describe("<GitDiffPanelBodyLive /> workspace switcher integration", () => {
     ).toBe("/other");
   });
 
-  it("renders a terminal empty state when the only Git root becomes unavailable", async () => {
+  it("renders the degraded state when the only Git root becomes unavailable", async () => {
     testState.rows = [row({})];
     testState.snapshots = new Map([["/repo", response({})]]);
     testState.capabilities.set("/repo", {
@@ -669,9 +669,67 @@ describe("<GitDiffPanelBodyLive /> workspace switcher integration", () => {
         useGitPanelStore.getState().stateByEpicId[EPIC_ID].selectedRepo,
       ).toBeNull(),
     );
-    expect(screen.getByText("No git workspaces available")).toBeDefined();
+    // A broken worktree is a degrade, not "no workspaces" - the panel must not
+    // reuse the empty "add workspaces" nudge, and must not hang on the skeleton.
+    expect(screen.getByTestId("git-roots-unavailable")).toBeDefined();
+    expect(screen.queryByText("No git workspaces available")).toBeNull();
+    expect(screen.queryByTestId("diff-loading-skeleton")).toBeNull();
     expect(screen.queryByTestId("git-diff-repo-switcher-trigger")).toBeNull();
     expect(screen.queryByText("No changes")).toBeNull();
+  });
+
+  it("renders the degraded empty state when EVERY Git root probes unavailable", async () => {
+    testState.capabilities.set("/repo", {
+      available: false,
+      gitVersion: null,
+      reason: "git unavailable",
+    });
+    testState.capabilities.set("/other", {
+      available: false,
+      gitVersion: null,
+      reason: "git unavailable",
+    });
+
+    renderPanel(rootSelected);
+
+    await waitFor(() =>
+      expect(
+        useGitPanelStore.getState().stateByEpicId[EPIC_ID].selectedRepo,
+      ).toBeNull(),
+    );
+    // Degraded, never an indefinite skeleton: with zero available roots the
+    // default-pick settles to null and the panel must surface an explicit state.
+    expect(screen.getByTestId("git-roots-unavailable")).toBeDefined();
+    expect(screen.queryByTestId("diff-loading-skeleton")).toBeNull();
+    expect(screen.queryByTestId("git-diff-repo-switcher-trigger")).toBeNull();
+  });
+
+  it("recovers via retry once a previously unavailable root is readable again", async () => {
+    testState.rows = [row({})];
+    testState.snapshots = new Map([["/repo", response({})]]);
+    testState.capabilities.set("/repo", {
+      available: false,
+      gitVersion: null,
+      reason: "git unavailable",
+    });
+
+    renderPanel(rootSelected);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("git-roots-unavailable")).toBeDefined(),
+    );
+
+    // The worktree is restored; retry clears the probed-unavailable set so the
+    // root is re-picked, re-probed against the fresh capability, and loads.
+    testState.capabilities.set("/repo", testState.availableCapability);
+    fireEvent.click(screen.getByTestId("git-roots-unavailable-retry"));
+
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("git-diff-repo-switcher-trigger"),
+      ).toBeDefined(),
+    );
+    expect(screen.queryByTestId("git-roots-unavailable")).toBeNull();
   });
 
   it("renders the no-changes state after the selector with no leftover tree row", () => {
