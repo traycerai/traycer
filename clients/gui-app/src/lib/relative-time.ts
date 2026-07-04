@@ -128,21 +128,25 @@ export function useResetCountdown(resetsAt: number | null): string | null {
 }
 
 /**
- * Exact reset timestamp (e.g. "Jul 4, 2026 12:10 AM") for long-horizon
- * windows, where a relative countdown ("Resets in 3d") is too coarse to act
- * on. A pure function, not a hook: unlike a relative countdown, an absolute
- * date/time string doesn't go stale as time passes, so it doesn't need to
- * subscribe to the shared tick clock.
+ * Exact reset timestamp with the day-of-week called out (e.g.
+ * "Jul 11, 2026 (Tue) 3:35 AM"), for windows where a relative countdown
+ * ("Resets in 3d") is too coarse to act on. The `(EEE)` weekday between the
+ * date and the time lets a reader see which day a reset lands on without
+ * counting forward from today. A pure function, not a hook: unlike a relative
+ * countdown, an absolute date/time string doesn't go stale as time passes, so
+ * it doesn't need to subscribe to the shared tick clock.
  */
 export function formatResetDateTime(resetsAt: number): string {
-  const date = new Date(resetsAt).toLocaleDateString(undefined, {
+  const date = new Date(resetsAt);
+  const datePart = date.toLocaleDateString(undefined, {
     month: "short",
     day: "numeric",
     year: "numeric",
   });
-  const time = new Date(resetsAt).toLocaleTimeString(undefined, {
+  const weekday = date.toLocaleDateString(undefined, { weekday: "short" });
+  const time = date.toLocaleTimeString(undefined, {
     hour: "numeric",
     minute: "2-digit",
   });
-  return `${date} ${time}`;
+  return `${datePart} (${weekday}) ${time}`;
 }

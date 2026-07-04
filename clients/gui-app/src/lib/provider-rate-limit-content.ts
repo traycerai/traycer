@@ -1,5 +1,14 @@
-import type { ProviderRateLimits } from "@traycer/protocol/host";
+import type {
+  ProviderRateLimits,
+  RateLimitUnavailableReason,
+} from "@traycer/protocol/host";
 import type { ProviderRateLimitQueryState } from "@/components/settings/panels/provider-rate-limit-views";
+
+/** The provider snapshot arms that actually carry usage detail. */
+type AvailableProviderRateLimits = Extract<
+  ProviderRateLimits,
+  { available: true }
+>;
 
 /**
  * The loading/error/empty/data branch every rate-limit surface needs.
@@ -35,4 +44,81 @@ export function hasProviderRateLimitContent(
   props: ProviderRateLimitQueryState,
 ): boolean {
   return resolveProviderRateLimitViewState(props).kind !== "empty";
+}
+
+// Exhaustive set of `reason` codes the host emits (`provider-rate-limits.ts`,
+// `rate-limits/{codex,claude,openrouter,kilocode}.ts`, `rate-limits/common.ts`)
+// - the wire field is a machine identifier, not display copy.
+// `Record<RateLimitUnavailableReason, string>` (not `Record<string, string>`)
+// makes this exhaustive at compile time: adding a reason to the protocol's
+// closed enum without adding a label here fails the build instead of silently
+// showing a raw, underscore-joined reason code. Homed here (a non-component
+// module) rather than in `provider-rate-limit-views.tsx` so both the Settings
+// card body and the header popover can share it without a plain-function export
+// breaking that file's React Fast Refresh component-boundary detection.
+const RATE_LIMIT_UNAVAILABLE_REASON_LABELS: Record<
+  RateLimitUnavailableReason,
+  string
+> = {
+  cli_not_found: "the CLI isn't installed",
+  unsupported_provider: "this provider isn't supported",
+  invalid_response: "the CLI returned an unexpected response",
+  timeout: "the request timed out",
+  connection_failed: "couldn't connect to the CLI",
+  sdk_incompatible: "this SDK version doesn't support rate limits",
+  rate_limits_not_available: "not available for this account",
+  insufficient_permissions:
+    "this account doesn't have permission to view usage",
+};
+
+export function formatUnavailableReason(
+  reason: RateLimitUnavailableReason,
+): string {
+  return RATE_LIMIT_UNAVAILABLE_REASON_LABELS[reason];
+}
+
+/**
+ * The header popover's per-provider display state - richer than
+ * `resolveProviderRateLimitViewState` (which the Settings card uses) because
+ * this surface distinguishes cold-load from degraded from never-fetched-error,
+ * each with its own treatment (Core Flows: skeleton bars / dimmed stale reading
+ * / plain-language error + retry):
+ *
+ * - `cold`: no data has ever arrived and no fetch has failed yet -> skeleton.
+ * - `error`: no data has ever arrived and the fetch failed (transport-level,
+ *   not a provider `available: false` response) -> generic retry message.
+ * - `unavailable`: the pull succeeded but the provider reports it can't surface
+ *   usage (CLI missing, wrong account, etc.) -> mapped plain-language message.
+ * - `ready`: usable snapshot present. `degraded` is true when the latest poll
+ *   failed but a last-known-good reading is still shown (dimmed).
+ */
+export type PopoverProviderRateLimitState =
+  | { readonly kind: "cold" }
+  | { readonly kind: "error" }
+  | {
+      readonly kind: "unavailable";
+      readonly reason: RateLimitUnavailableReason;
+    }
+  | {
+      readonly kind: "ready";
+      readonly data: AvailableProviderRateLimits;
+      readonly degraded: boolean;
+    };
+
+export function resolvePopoverProviderRateLimitState(
+  props: ProviderRateLimitQueryState,
+): PopoverProviderRateLimitState {
+  const snapshot = props.providerRateLimits ?? null;
+  if (snapshot === null) {
+    // Nothing usable yet: a failed first fetch is an error, otherwise it's
+    // still a cold load in flight (skeleton).
+    return props.isError ? { kind: "error" } : { kind: "cold" };
+  }
+  if (!snapshot.available) {
+    return { kind: "unavailable", reason: snapshot.reason };
+  }
+  // A last-known-good snapshot is present. `isError` here means the most recent
+  // (background) refetch failed while retaining this data - Core Flows' degraded
+  // state, shown dimmed rather than replaced.
+  return { kind: "ready", data: snapshot, degraded: props.isError };
 }

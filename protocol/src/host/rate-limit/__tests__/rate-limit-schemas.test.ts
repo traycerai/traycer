@@ -15,33 +15,74 @@ import {
 // `.parse()`/`.safeParse()` for real to catch a regression back to
 // `discriminatedUnion`.
 describe("providerRateLimitsSchema", () => {
-  it("parses an available codex snapshot", () => {
+  it("parses an available codex snapshot with per-limit breakdown and reset credits", () => {
     const codex = {
       provider: "codex" as const,
       available: true as const,
       planType: "plus",
-      primary: { usedPercent: 42, resetsAt: 1735689600000 },
+      limitId: "plus-primary",
+      limitName: "Plus",
+      primary: { usedPercent: 42, resetsAt: 1735689600000, durationMinutes: 300 },
       secondary: null,
+      extraWindows: [
+        {
+          limitId: "plus-secondary",
+          limitName: "Plus (weekly)",
+          primary: { usedPercent: 12, resetsAt: 1735776000000, durationMinutes: 10080 },
+          secondary: null,
+        },
+      ],
       credits: { hasCredits: true, unlimited: false, balance: "10.00" },
       individualLimit: null,
+      resetCredits: {
+        availableCount: 2,
+      },
       rateLimitReachedType: null,
     };
     expect(providerRateLimitsSchema.parse(codex)).toEqual(codex);
   });
 
-  it("parses an available claude-code snapshot", () => {
+  it("parses an available claude-code snapshot with window durations", () => {
     const claudeCode = {
       provider: "claude-code" as const,
       available: true as const,
       subscriptionType: "max",
-      fiveHour: { usedPercent: 10, resetsAt: null },
+      fiveHour: { usedPercent: 10, resetsAt: null, durationMinutes: 300 },
       sevenDay: null,
       sevenDayOpus: null,
       sevenDaySonnet: null,
-      modelScoped: [{ displayName: "Opus", usedPercent: 5, resetsAt: null }],
+      modelScoped: [
+        { displayName: "Opus", usedPercent: 5, resetsAt: null, durationMinutes: null },
+      ],
       extraUsage: null,
     };
     expect(providerRateLimitsSchema.parse(claudeCode)).toEqual(claudeCode);
+  });
+
+  it("parses an available openrouter snapshot", () => {
+    const openRouter = {
+      provider: "openrouter" as const,
+      available: true as const,
+      limit: 100,
+      limitRemaining: 40,
+      dailySpend: 1.5,
+      weeklySpend: 10.25,
+      monthlySpend: 42,
+      totalCredits: 100,
+      totalUsage: 58,
+      balance: 42,
+    };
+    expect(providerRateLimitsSchema.parse(openRouter)).toEqual(openRouter);
+  });
+
+  it("parses an available kilocode snapshot", () => {
+    const kiloCode = {
+      provider: "kilocode" as const,
+      available: true as const,
+      creditBalance: 25.5,
+      passState: "active",
+    };
+    expect(providerRateLimitsSchema.parse(kiloCode)).toEqual(kiloCode);
   });
 
   it("parses an unavailable snapshot for a provider id shared with an available arm", () => {
@@ -60,6 +101,15 @@ describe("providerRateLimitsSchema", () => {
     expect(providerRateLimitsSchema.parse(claudeUnavailable)).toEqual(
       claudeUnavailable,
     );
+  });
+
+  it("parses an unavailable snapshot with the insufficient_permissions reason", () => {
+    const unavailable = {
+      provider: "droid" as const,
+      available: false as const,
+      reason: "insufficient_permissions" as const,
+    };
+    expect(providerRateLimitsSchema.parse(unavailable)).toEqual(unavailable);
   });
 
   it("rejects a reason outside the closed unavailable-reason set", () => {
@@ -98,10 +148,14 @@ describe("rateLimitUsageResponseSchemaV12", () => {
         provider: "codex" as const,
         available: true as const,
         planType: null,
+        limitId: null,
+        limitName: null,
         primary: null,
         secondary: null,
+        extraWindows: [],
         credits: null,
         individualLimit: null,
+        resetCredits: null,
         rateLimitReachedType: null,
       },
     };

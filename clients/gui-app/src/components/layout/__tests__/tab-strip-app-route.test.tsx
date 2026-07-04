@@ -67,6 +67,10 @@ vi.mock("@/components/notifications/notifications-bell", () => ({
   NotificationsBell: () => null,
 }));
 
+vi.mock("@/components/layout/header/rate-limit-icon", () => ({
+  RateLimitIconButton: () => null,
+}));
+
 vi.mock("@/components/auth/user-menu", () => ({
   UserMenu: () => <div data-testid="user-menu" />,
 }));

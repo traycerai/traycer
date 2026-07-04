@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   formatRelativeTimestamp,
   formatResetCountdown,
+  formatResetDateTime,
 } from "@/lib/relative-time";
 
 const MINUTE_MS = 60_000;
@@ -89,5 +90,22 @@ describe("formatResetCountdown", () => {
 
   it("clamps a past resetsAt to 'now' rather than a negative duration", () => {
     expect(formatResetCountdown(now - 10_000, now)).toBe("now");
+  });
+});
+
+describe("formatResetDateTime", () => {
+  it("inserts the day-of-week in parentheses between the date and the time", () => {
+    const formatted = formatResetDateTime(
+      Date.parse("2026-07-11T10:35:00.000Z"),
+    );
+    // The (EEE) weekday is the new part vs the old "Jul 11, 2026 3:35 AM": a
+    // three-letter day abbreviation in parentheses. Exact date/time is
+    // TZ/locale-dependent, so assert structure rather than a literal string.
+    expect(formatted).toMatch(/\([A-Za-z]{3}\)/);
+    // The date (carrying the year) is before the weekday; the time (a colon)
+    // is after it.
+    const weekdayIndex = formatted.indexOf("(");
+    expect(formatted.slice(0, weekdayIndex)).toContain("2026");
+    expect(formatted.slice(weekdayIndex)).toMatch(/\d{1,2}:\d{2}/);
   });
 });

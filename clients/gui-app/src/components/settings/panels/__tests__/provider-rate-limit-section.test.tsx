@@ -43,10 +43,12 @@ const CLAUDE_RATE_LIMITS: ProviderRateLimits = {
   fiveHour: {
     usedPercent: 12,
     resetsAt: CLAUDE_FIVE_HOUR_RESETS_AT,
+    durationMinutes: 300,
   },
   sevenDay: {
     usedPercent: 55,
     resetsAt: CLAUDE_SEVEN_DAY_RESETS_AT,
+    durationMinutes: 10080,
   },
   sevenDayOpus: null,
   sevenDaySonnet: null,
@@ -65,14 +67,19 @@ const CODEX_RATE_LIMITS: ProviderRateLimits = {
   // settings card no longer shows it - the provider auth badge above
   // already does.
   planType: "plus",
+  limitId: null,
+  limitName: null,
   primary: {
     usedPercent: 42,
     resetsAt: CODEX_PRIMARY_RESETS_AT,
+    durationMinutes: 300,
   },
   secondary: {
     usedPercent: 80,
     resetsAt: CODEX_SECONDARY_RESETS_AT,
+    durationMinutes: 10080,
   },
+  extraWindows: [],
   credits: {
     hasCredits: true,
     unlimited: false,
@@ -84,6 +91,7 @@ const CODEX_RATE_LIMITS: ProviderRateLimits = {
     remainingPercent: 58,
     resetsAt: CODEX_SPEND_LIMIT_RESETS_AT,
   },
+  resetCredits: null,
   rateLimitReachedType: "rate_limit_reached",
 };
 
@@ -129,10 +137,8 @@ describe("ProviderRateLimitForProvider", () => {
     mocks.data = { providerRateLimits: CLAUDE_RATE_LIMITS };
     render(<ProviderRateLimitForProvider providerId="claude-code" />);
 
-    expect(screen.getByText("5-hour")).toBeTruthy();
-    expect(screen.getByText("Weekly")).toBeTruthy();
-    expect(screen.getByText("12% / 100%")).toBeTruthy();
-    expect(screen.getByText("55% / 100%")).toBeTruthy();
+    expect(screen.getByText("5h · 12% used")).toBeTruthy();
+    expect(screen.getByText("Weekly · 55% used")).toBeTruthy();
   });
 
   it("does not show a subscription-plan badge (the provider auth badge above already shows it)", () => {
@@ -153,45 +159,53 @@ describe("ProviderRateLimitForProvider", () => {
     expect(screen.getByText(/^Resets in /)).toBeTruthy();
   });
 
-  it("colors a window's bar amber above 70% used and red above 90% used", () => {
+  it("colors a window's bar yellow at/above 60% used and red above 85% used", () => {
+    // The Settings card now shares the same four-tier severity scale as the
+    // popover (item 6 feedback: "different UX looks weird").
     mocks.data = {
       providerRateLimits: {
         ...CLAUDE_RATE_LIMITS,
-        fiveHour: { usedPercent: 75, resetsAt: CLAUDE_FIVE_HOUR_RESETS_AT },
-        sevenDay: { usedPercent: 95, resetsAt: CLAUDE_SEVEN_DAY_RESETS_AT },
+        fiveHour: {
+          usedPercent: 75,
+          resetsAt: CLAUDE_FIVE_HOUR_RESETS_AT,
+          durationMinutes: 300,
+        },
+        sevenDay: {
+          usedPercent: 95,
+          resetsAt: CLAUDE_SEVEN_DAY_RESETS_AT,
+          durationMinutes: 10080,
+        },
       },
     };
     const { container } = render(
       <ProviderRateLimitForProvider providerId="claude-code" />,
     );
 
-    expect(container.querySelectorAll(".bg-amber-500").length).toBeGreaterThan(
+    expect(container.querySelectorAll(".bg-yellow-500").length).toBeGreaterThan(
       0,
     );
-    expect(
-      container.querySelectorAll(".bg-destructive").length,
-    ).toBeGreaterThan(0);
+    expect(container.querySelectorAll(".bg-red-500").length).toBeGreaterThan(0);
   });
 
-  it("keeps the bar at the default color at or below 70% used", () => {
+  it("keeps the bar blue below the yellow threshold", () => {
     mocks.data = { providerRateLimits: CLAUDE_RATE_LIMITS };
     const { container } = render(
       <ProviderRateLimitForProvider providerId="claude-code" />,
     );
 
-    expect(container.querySelectorAll(".bg-amber-500").length).toBe(0);
-    expect(container.querySelectorAll(".bg-destructive").length).toBe(0);
-    expect(container.querySelectorAll(".bg-primary").length).toBeGreaterThan(0);
+    expect(container.querySelectorAll(".bg-yellow-500").length).toBe(0);
+    expect(container.querySelectorAll(".bg-red-500").length).toBe(0);
+    expect(container.querySelectorAll(".bg-blue-500").length).toBeGreaterThan(
+      0,
+    );
   });
 
   it("renders the Codex rate-limit detail once loaded", () => {
     mocks.data = { providerRateLimits: CODEX_RATE_LIMITS };
     render(<ProviderRateLimitForProvider providerId="codex" />);
 
-    expect(screen.getByText("5-hour")).toBeTruthy();
-    expect(screen.getByText("Weekly")).toBeTruthy();
-    expect(screen.getByText("42% / 100%")).toBeTruthy();
-    expect(screen.getByText("80% / 100%")).toBeTruthy();
+    expect(screen.getByText("5h · 42% used")).toBeTruthy();
+    expect(screen.getByText("Weekly · 80% used")).toBeTruthy();
   });
 
   it("maps a rateLimitReachedType token to a destructive badge", () => {
