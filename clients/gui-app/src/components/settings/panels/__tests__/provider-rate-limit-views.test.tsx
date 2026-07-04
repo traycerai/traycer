@@ -253,6 +253,72 @@ describe("ClaudeRateLimitView", () => {
     ).toBeTruthy();
     expect(screen.queryByText(/^Resets in /)).toBeNull();
   });
+
+  it("sets the model-scoped rows off with a divider, not a 'Per-model' heading", () => {
+    // Same header-less group treatment CodexRateLimitView gives its per-model
+    // (Spark) extraWindows: the rows' own display names already say which
+    // model each is, so the group gets a hairline divider instead of a label.
+    const claude: ClaudeRateLimits = {
+      provider: "claude-code",
+      available: true,
+      subscriptionType: "max",
+      fiveHour: {
+        usedPercent: 12,
+        resetsAt: NOW + 60 * 60 * 1000,
+        durationMinutes: 300,
+      },
+      sevenDay: {
+        usedPercent: 55,
+        resetsAt: NOW + 2 * 24 * 60 * 60 * 1000,
+        durationMinutes: 10080,
+      },
+      sevenDayOpus: null,
+      sevenDaySonnet: null,
+      modelScoped: [
+        {
+          displayName: "Fable",
+          usedPercent: 12,
+          resetsAt: NOW + 3 * 24 * 60 * 60 * 1000,
+          durationMinutes: null,
+        },
+      ],
+      extraUsage: null,
+    };
+    const { container } = render(
+      <ClaudeRateLimitView data={claude} variant="settings" />,
+    );
+    expect(screen.queryByText("Per-model")).toBeNull();
+    // Exactly one divider: between the fixed windows and the model-scoped
+    // group (extraUsage is null, so no second one).
+    expect(container.querySelectorAll('[class*="bg-border/70"]').length).toBe(
+      1,
+    );
+    expect(screen.getByText("Fable")).toBeTruthy();
+  });
+
+  it("renders no divider when only the fixed windows are present", () => {
+    const claude: ClaudeRateLimits = {
+      provider: "claude-code",
+      available: true,
+      subscriptionType: "max",
+      fiveHour: {
+        usedPercent: 12,
+        resetsAt: NOW + 60 * 60 * 1000,
+        durationMinutes: 300,
+      },
+      sevenDay: null,
+      sevenDayOpus: null,
+      sevenDaySonnet: null,
+      modelScoped: [],
+      extraUsage: null,
+    };
+    const { container } = render(
+      <ClaudeRateLimitView data={claude} variant="settings" />,
+    );
+    expect(container.querySelectorAll('[class*="bg-border/70"]').length).toBe(
+      0,
+    );
+  });
 });
 
 describe("OpenRouterRateLimitView", () => {

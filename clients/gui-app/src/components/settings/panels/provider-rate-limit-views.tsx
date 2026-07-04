@@ -471,7 +471,8 @@ export function ClaudeRateLimitView({
   // Opus/Sonnet weekly buckets, per-model rows, and extra-usage bar are
   // single-provider-tab detail.
   const overview = isOverviewVariant(variant);
-  return (
+
+  const globalLimits: ReactNode = (
     <div className="flex flex-col gap-3">
       <ProviderWindowRow
         window={data.fiveHour}
@@ -497,27 +498,55 @@ export function ClaudeRateLimitView({
           qualifier="Sonnet"
         />
       ) : null}
-      {!overview && data.modelScoped.length > 0 ? (
-        <div className="flex flex-col gap-1.5">
-          <span className="text-ui-sm font-medium text-foreground">
-            Per-model
-          </span>
-          {data.modelScoped.map((entry) => (
-            // `displayName` alone isn't guaranteed unique across entries -
-            // fold in `resetsAt` (an array index would defeat reconciliation
-            // on reorder/filter, and ESLint's `no-array-index-key` disallows
-            // it outright).
-            <RateLimitWindowRow
-              key={`${entry.displayName}-${entry.resetsAt}`}
-              label={entry.displayName}
-              window={entry}
-            />
-          ))}
+    </div>
+  );
+
+  // Each model-scoped window is its own labeled row - no "Per-model" heading;
+  // the rows' display names already say which model each is, and the group is
+  // set off by a divider instead, the same header-less treatment
+  // `CodexRateLimitView` gives its per-model (Spark) `extraWindows`.
+  const perModelLimits: ReactNode =
+    !overview && data.modelScoped.length > 0 ? (
+      <div className="flex flex-col gap-3">
+        {data.modelScoped.map((entry) => (
+          // `displayName` alone isn't guaranteed unique across entries -
+          // fold in `resetsAt` (an array index would defeat reconciliation
+          // on reorder/filter, and ESLint's `no-array-index-key` disallows
+          // it outright).
+          <RateLimitWindowRow
+            key={`${entry.displayName}-${entry.resetsAt}`}
+            label={entry.displayName}
+            window={entry}
+          />
+        ))}
+      </div>
+    ) : null;
+
+  const extraUsage: ReactNode =
+    !overview && data.extraUsage !== null && data.extraUsage.isEnabled ? (
+      <ClaudeExtraUsageRow extraUsage={data.extraUsage} />
+    ) : null;
+
+  // Same divider rule as `CodexRateLimitView`: a hairline only where both the
+  // preceding and the current group actually render. Overview never gets here
+  // with more than `globalLimits`.
+  const groups: ReadonlyArray<{
+    readonly key: string;
+    readonly node: ReactNode;
+  }> = [
+    { key: "global", node: globalLimits },
+    { key: "per-model", node: perModelLimits },
+    { key: "extra-usage", node: extraUsage },
+  ].filter((group) => group.node !== null);
+
+  return (
+    <div className="flex flex-col gap-3">
+      {groups.map((group, index) => (
+        <div key={group.key} className="flex flex-col gap-3">
+          {index > 0 ? <div aria-hidden className="h-px bg-border/70" /> : null}
+          {group.node}
         </div>
-      ) : null}
-      {!overview && data.extraUsage !== null && data.extraUsage.isEnabled ? (
-        <ClaudeExtraUsageRow extraUsage={data.extraUsage} />
-      ) : null}
+      ))}
     </div>
   );
 }
