@@ -31,6 +31,9 @@ export interface DurableStreamTransport {
  *    new `websocketUrl` while the session is warm (no tile mounted to recompute
  *    a memo) reconnects to the new address instead of retrying the dead one.
  *  - `bearer` + `auth` provide UNAUTHORIZED revalidate+reconnect.
+ *  - bearer-rotation forwarding pushes `credentialUpdate` frames to already-open
+ *    sessions after same-user token refresh, so long-lived streams do not keep
+ *    stale host-side request contexts.
  *  - wake re-dial (`window 'online'` + OS resume) is wired here.
  *  - endpoint-change re-dial: when the bound host moves to a NEW dialable
  *    endpoint while the app is awake (a Settings-page restart / re-provision -
@@ -51,6 +54,12 @@ export function openDurableStreamTransport(params: {
   readonly auth: StreamAuthRevalidator;
   readonly runnerHost: IRunnerHost;
   /**
+   * Subscribes to same-user bearer rotations. The durable transport forwards the
+   * event to its owned stream client so open host connections rotate credentials
+   * in place via `credentialUpdate`.
+   */
+  readonly subscribeBearerRotation: (onRotation: () => void) => () => void;
+  /**
    * Subscribes to host-directory changes for the bound host, returning a
    * disposer. The callback fires on ANY directory change; this module filters it
    * down to a genuine dialable-endpoint move before re-dialing.
@@ -67,6 +76,11 @@ export function openDurableStreamTransport(params: {
   });
   const disposers: Array<() => void> = [];
   try {
+    disposers.push(
+      params.subscribeBearerRotation(() => {
+        wsStreamClient.notifyBearerRotated();
+      }),
+    );
     disposers.push(
       subscribeStreamWakeReconnect(wsStreamClient, params.runnerHost),
     );

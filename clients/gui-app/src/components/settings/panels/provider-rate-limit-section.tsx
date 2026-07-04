@@ -12,6 +12,7 @@ import { ProviderRateLimitBody } from "@/components/settings/panels/provider-rat
 import { useHostProviderRateLimitsQuery } from "@/hooks/host/use-host-provider-rate-limits-query";
 import { useRefreshProviderRateLimitsOnTurn } from "@/hooks/host/use-refresh-provider-rate-limits-on-turn";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useProviderRateLimitRefresh } from "@/hooks/rate-limits/use-provider-rate-limit-refresh";
 import {
   isRateLimitCapableProvider,
   type RateLimitProviderId,
@@ -36,6 +37,14 @@ function ProviderRateLimitSettingsCard({
 }): ReactNode {
   const hostId = useReactiveActiveHostId();
   const query = useHostProviderRateLimitsQuery(providerId);
+  // Single source of truth for this provider's refresh action + spinner state
+  // (fresh-on-open, queue routing, and the ephemeralProcess `draining` fold-in),
+  // shared verbatim with the popover's per-provider block.
+  const { refresh, isRefreshing } = useProviderRateLimitRefresh(
+    providerId,
+    query.isFetching,
+    query.refetch,
+  );
   // Keep the bars live: a turn on this provider finishing while the card is
   // open re-fetches usage. Only mounted here, so it costs nothing elsewhere.
   useRefreshProviderRateLimitsOnTurn(providerId, hostId);
@@ -47,11 +56,12 @@ function ProviderRateLimitSettingsCard({
           Rate limits
         </div>
         <RefreshIconButton
-          onRefresh={async () => {
-            await query.refetch();
-          }}
+          onRefresh={refresh}
           label="Refresh rate limits"
-          refreshing={query.isFetching}
+          // `isRefreshing` (from useProviderRateLimitRefresh) already folds in
+          // the ephemeralProcess `draining` flag, so this stays disabled for a
+          // "Refresh all" round's full duration, not just this provider's slice.
+          refreshing={isRefreshing}
         />
       </div>
       <ProviderRateLimitBody
