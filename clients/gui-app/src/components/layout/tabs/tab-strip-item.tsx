@@ -40,7 +40,7 @@ import {
   useRegisteredEpicTitleGenerating,
 } from "@/lib/epic-selectors";
 import { displayTitle } from "@/lib/display-title";
-import { isEditablePermissionRole } from "@/lib/epic-collaborator-roles";
+import { isEditableRole } from "@/lib/epic-permissions";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 import { getHostBindingSnapshot } from "@/lib/host/runtime";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -143,8 +143,7 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
   const permissionRole = useRegisteredEpicPermissionRole(
     tab.kind === "epic" ? tab.epicId : null,
   );
-  const canEditTitle =
-    tab.kind === "epic" && isEditablePermissionRole(permissionRole);
+  const canEditTitle = tab.kind === "epic" && isEditableRole(permissionRole);
   // Epic tabs can carry an empty name; render through `displayTitle` so it falls
   // back to "Untitled epic". Other kinds render their name verbatim.
   const resolvedTabName = liveEpicTitle ?? tab.name;

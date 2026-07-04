@@ -16,6 +16,10 @@ import {
   type EpicNodeKind,
 } from "@/lib/artifacts/node-display";
 import { AddNodeDropdown } from "@/components/epic-canvas/add-node-dropdown";
+import {
+  ARIA_DISABLED_TRIGGER_CLASS,
+  resolveDisabledPresentation,
+} from "@/lib/disabled-presentation";
 import { ARTIFACT_PANEL_EXCLUDED_TYPES } from "@/components/epic-canvas/add-node-options";
 import {
   computeDescendantCountsFromTree,
@@ -1722,6 +1726,12 @@ function ArtifactAddChildButton(props: ArtifactAddChildButtonProps) {
     isDisconnected,
     onAdd,
   } = props;
+  const disabled = !canMutate || addChildIsPending;
+  const disabledTooltip = isDisconnected ? "Reconnect to make changes." : null;
+  const { ariaDisabled, nativeDisabled } = resolveDisabledPresentation(
+    disabled,
+    disabledTooltip,
+  );
   return (
     <AddNodeDropdown
       open={undefined}
@@ -1739,22 +1749,22 @@ function ArtifactAddChildButton(props: ArtifactAddChildButtonProps) {
       tuiAgentPending={undefined}
       excludeTypes={ARTIFACT_PANEL_EXCLUDED_TYPES}
       disabledTypes={undefined}
-      disabled={!canMutate || addChildIsPending}
-      disabledTooltip={
-        isDisconnected ? "Reconnect to make changes." : undefined
-      }
+      disabled={disabled}
+      disabledTooltip={disabledTooltip}
     >
       <Button
         type="button"
         variant="ghost"
         size="icon-xs"
         aria-label="Add child artifact"
+        aria-disabled={ariaDisabled ? true : undefined}
         data-testid={`epic-sidebar-add-${nodeId}`}
         className={cn(
           "absolute right-7 top-1/2 -translate-y-1/2",
+          ARIA_DISABLED_TRIGGER_CLASS,
           rowAddControlRevealClass(addChildIsPending),
         )}
-        disabled={!canMutate || addChildIsPending}
+        disabled={nativeDisabled}
       >
         {addChildIsPending ? (
           <AgentSpinningDots
