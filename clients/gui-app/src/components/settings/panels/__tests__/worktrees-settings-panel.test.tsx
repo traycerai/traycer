@@ -35,6 +35,18 @@ const streamMock = vi.hoisted(() => ({
   closeCount: 0,
 }));
 
+// Capture the confirm-time "dropped rows" toast so its class-summarized copy can
+// be asserted.
+const toastMock = vi.hoisted(() => ({ messages: [] as string[] }));
+vi.mock("sonner", () => ({
+  toast: {
+    message: (message: string) => {
+      toastMock.messages.push(message);
+    },
+    error: () => {},
+  },
+}));
+
 vi.mock(
   "@traycer-clients/shared/host-transport/worktree-delete-stream-client",
   () => ({
@@ -229,6 +241,7 @@ describe("WorktreesList delete flow", () => {
     streamMock.scriptsByPath.clear();
     streamMock.throwForPaths.clear();
     streamMock.closeCount = 0;
+    toastMock.messages = [];
   });
 
   it("disables delete for an in-use worktree", () => {
@@ -974,6 +987,124 @@ describe("WorktreesList delete flow", () => {
     fireEvent.click(screen.getByTestId("worktree-delete-progress-dismiss"));
     expect(screen.queryByText("1/2 deleted, 1 failed")).toBeNull();
     expect(screen.queryByTestId("worktree-delete-progress-dismiss")).toBeNull();
+  });
+});
+
+describe("WorktreesList confirm-time re-check", () => {
+  afterEach(() => {
+    cleanup();
+    __resetWorktreeDeleteRunForTests();
+    streamMock.paths = [];
+    streamMock.callbacksByPath.clear();
+    toastMock.messages = [];
+  });
+
+  function merged(path: string, branch: string): WorktreeHostEntryV11 {
+    return entry({
+      worktreePath: path,
+      branch,
+      branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
+    });
+  }
+
+  function renderWith(
+    queryClient: QueryClient,
+    worktrees: readonly WorktreeHostEntryV11[],
+  ) {
+    return (
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <WorktreesList
+            openStreamTransport={() => stubOpenStreamTransport()}
+            hostId="host-a"
+            worktrees={worktrees}
+            taskTitlesByEpicId={new Map()}
+            toolbarProps={testToolbarProps()}
+          />
+        </TooltipProvider>
+      </QueryClientProvider>
+    );
+  }
+
+  it("drops a swept row that became dirty in the freshest snapshot, updates the dialog, and names the drop", () => {
+    const queryClient = new QueryClient();
+    const clean = [
+      merged("/wt/a", "feat-a"),
+      merged("/wt/b", "feat-b"),
+      merged("/wt/c", "feat-c"),
+    ];
+    const rendered = render(renderWith(queryClient, clean));
+
+    // Primary sweep selects all three proven merged & clean rows.
+    fireEvent.click(screen.getByTestId("worktrees-select-merged-clean"));
+    fireEvent.click(screen.getByTestId("worktrees-list-delete-selected"));
+    screen.getByText("Delete 3 worktrees?");
+
+    // A background refresh makes /wt/c dirty while the dialog is open.
+    rendered.rerender(
+      renderWith(queryClient, [
+        merged("/wt/a", "feat-a"),
+        merged("/wt/b", "feat-b"),
+        entry({ worktreePath: "/wt/c", branch: "feat-c", uncommittedCount: 2 }),
+      ]),
+    );
+
+    // The dialog copy re-resolves to the freshest snapshot: only 2 remain.
+    screen.getByText("Delete 2 worktrees?");
+
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    // The now-dirty row is excluded from the started delete and named in the drop toast.
+    expect(streamMock.paths).toEqual(["/wt/a", "/wt/b"]);
+    expect(toastMock.messages.join("\n")).toContain("1 dirty");
+  });
+
+  it("does not let a primary-selected path that stopped matching survive the secondary union", () => {
+    const queryClient = new QueryClient();
+    const rendered = render(
+      renderWith(queryClient, [
+        merged("/wt/a", "feat-a"),
+        entry({ worktreePath: "/wt/b", branch: "feat-b", branchStatus: null }),
+      ]),
+    );
+
+    // Primary sweep selects the merged row.
+    fireEvent.click(screen.getByTestId("worktrees-select-merged-clean"));
+    screen.getByText("1 selected");
+
+    // /wt/a becomes dirty (no longer sweep-eligible) in the freshest snapshot.
+    rendered.rerender(
+      renderWith(queryClient, [
+        entry({ worktreePath: "/wt/a", branch: "feat-a", uncommittedCount: 4 }),
+        entry({ worktreePath: "/wt/b", branch: "feat-b", branchStatus: null }),
+      ]),
+    );
+
+    // The secondary sweep unions the null-status cohort; the stale primary pick
+    // must be intersected out, leaving only /wt/b.
+    fireEvent.click(screen.getByTestId("worktrees-select-unreferenced"));
+    fireEvent.click(screen.getByTestId("worktrees-list-delete-selected"));
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    expect(streamMock.paths).toEqual(["/wt/b"]);
+  });
+
+  it("names local-only commits in the per-row confirm for a clean, ahead worktree", () => {
+    render(
+      renderWith(new QueryClient(), [
+        entry({
+          worktreePath: "/wt/ahead",
+          branch: "feat-ahead",
+          branchStatus: { ahead: 2, behind: 0, mergedIntoDefault: false },
+        }),
+      ]),
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Delete worktree feat-ahead" }),
+    );
+    screen.getByText("Delete worktree with 2 unpushed commits?");
+    screen.getByText(/2 commits not on the default branch/i);
   });
 });
 

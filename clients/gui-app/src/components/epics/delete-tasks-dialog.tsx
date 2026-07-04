@@ -141,8 +141,10 @@ function WorktreeCleanupRow(props: {
   const { candidate, checked, disabled, onToggle } = props;
   const branch = candidate.branch ?? "detached HEAD";
   // Per-row loss/uncertainty hint. Dirty rows name the concrete uncommitted
-  // loss; clean rows whose branch status could not be probed carry a neutral
-  // "unverified" note (never "safe" / "loss-free"). A clean, proven row is quiet.
+  // loss; clean rows with local-only commits name that concrete loss; clean rows
+  // whose branch status could not be probed carry a neutral "unverified" note
+  // (never "safe" / "loss-free"). A clean, proven row is quiet.
+  const status = candidate.branchStatus;
   let hint: ReactNode = null;
   if (candidate.uncommittedCount > 0) {
     hint = (
@@ -152,7 +154,15 @@ function WorktreeCleanupRow(props: {
         {candidate.uncommittedCount === 1 ? "" : "s"} will be lost
       </span>
     );
-  } else if (candidate.branchStatus === null) {
+  } else if (status !== null && status.ahead > 0 && !status.mergedIntoDefault) {
+    hint = (
+      <span className="mt-0.5 flex items-center gap-1 text-ui-xs text-amber-600 dark:text-amber-400">
+        <AlertTriangle className="size-3 shrink-0" aria-hidden />
+        {status.ahead} commit{status.ahead === 1 ? "" : "s"} not on the default
+        branch
+      </span>
+    );
+  } else if (status === null) {
     hint = (
       <span className="mt-0.5 block text-ui-xs text-muted-foreground">
         Branch status unverified — unpushed work not proven

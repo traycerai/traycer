@@ -485,6 +485,13 @@ export function WorktreesList(props: {
   const [selectedPaths, setSelectedPaths] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
+  // Which currently-selected paths came from a SWEEP button (vs a hand-picked
+  // checkbox). Sweep-origin paths must stay sweep-eligible; at confirm they are
+  // re-checked against the sweep predicates, while manual picks only need to
+  // stay selectable. Always a subset of `selectedPaths`.
+  const [sweepOriginPaths, setSweepOriginPaths] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
   const [selectionMode, setSelectionMode] = useState(false);
   const [pendingDeleteTargets, setPendingDeleteTargets] =
     useState<ReadonlyArray<WorktreeHostEntryV11> | null>(null);
@@ -588,13 +595,57 @@ export function WorktreesList(props: {
         .map((entry) => entry.worktreePath),
     [selectablePathSet, visibleWorktrees],
   );
+  // Freshest listing keyed by path, so a pending delete captured at dialog-open
+  // is always re-resolved to its CURRENT entry (a background refresh may have
+  // made a row dirty / ahead / in-use since the dialog opened).
+  const worktreesByPath = useMemo(
+    () => new Map(worktrees.map((entry) => [entry.worktreePath, entry])),
+    [worktrees],
+  );
+  const primarySweepPathSet = useMemo(
+    () => new Set(primarySweepPaths),
+    [primarySweepPaths],
+  );
+  const secondarySweepPathSet = useMemo(
+    () => new Set(secondarySweepPaths),
+    [secondarySweepPaths],
+  );
+  // Re-resolve the pending targets against the freshest listing and split into
+  // the rows still eligible to delete vs. the ones dropped (gone from the list,
+  // now in-use / deleting, or - for sweep-origin rows - no longer matching the
+  // sweep predicate that selected them). Both the dialog copy and the confirm
+  // action read from this, so what the user sees is what gets deleted.
+  const pendingResolution = useMemo(() => {
+    if (pendingDeleteTargets === null) return null;
+    const kept: WorktreeHostEntryV11[] = [];
+    const dropped: WorktreeHostEntryV11[] = [];
+    for (const captured of pendingDeleteTargets) {
+      const fresh = worktreesByPath.get(captured.worktreePath) ?? null;
+      if (fresh === null) {
+        dropped.push(captured);
+        continue;
+      }
+      const eligible = sweepOriginPaths.has(fresh.worktreePath)
+        ? isPrimarySweepEligible(fresh) || isSecondarySweepEligible(fresh)
+        : selectablePathSet.has(fresh.worktreePath);
+      if (eligible) kept.push(fresh);
+      else dropped.push(fresh);
+    }
+    return { kept, dropped };
+  }, [
+    pendingDeleteTargets,
+    selectablePathSet,
+    sweepOriginPaths,
+    worktreesByPath,
+  ]);
+  const keptDeleteTargets = pendingResolution?.kept ?? null;
   const singleDialogCopy =
-    pendingDeleteTargets !== null && pendingDeleteTargets.length === 1
-      ? deleteDialogCopy(pendingDeleteTargets[0])
+    keptDeleteTargets !== null && keptDeleteTargets.length === 1
+      ? deleteDialogCopy(keptDeleteTargets[0])
       : null;
   const bulkDeleteSummary =
-    pendingDeleteTargets !== null && pendingDeleteTargets.length > 1
-      ? summarizeBulkWorktreeDelete(pendingDeleteTargets, visibleWorktrees)
+    keptDeleteTargets !== null && keptDeleteTargets.length > 1
+      ? summarizeBulkWorktreeDelete(keptDeleteTargets, visibleWorktrees)
       : null;
   const progressSummary = useMemo(
     () => summarizeWorktreeDeleteRuns(runs),
@@ -617,31 +668,51 @@ export function WorktreesList(props: {
     (worktreePath: string) => {
       if (!selectablePathSet.has(worktreePath)) return;
       setSelectedPaths((prev) => withMemberToggled(prev, worktreePath));
+      // A hand-picked checkbox is a MANUAL selection - it must not be treated as
+      // sweep-origin (which would re-check it against the sweep predicates).
+      setSweepOriginPaths((prev) => withMemberRemoved(prev, worktreePath));
       setSelectionMode(true);
     },
     [selectablePathSet],
   );
   const enterSelectionMode = useCallback(() => {
     setSelectedPaths(new Set());
+    setSweepOriginPaths(new Set());
     setSelectionMode(true);
   }, []);
-  // Primary sweep: a fresh selection of the proven merged & clean cohort.
+  // Primary sweep: a fresh selection of the proven merged & clean cohort, all
+  // sweep-origin.
   const selectMergedClean = useCallback(() => {
-    setSelectedPaths(new Set(primarySweepPaths));
+    const next = new Set(primarySweepPaths);
+    setSelectedPaths(next);
+    setSweepOriginPaths(new Set(next));
     setSelectionMode(true);
   }, [primarySweepPaths]);
   // Secondary sweep: a deliberate, separate click that ADDS the null-status
-  // clean-unreferenced cohort onto whatever is already selected.
+  // clean-unreferenced cohort. The carried-over selection is first intersected
+  // against the CURRENT sweep-eligible paths, so a previously-selected row that
+  // has since stopped matching the sweep predicates does not survive the union.
   const alsoSelectUnreferenced = useCallback(() => {
-    setSelectedPaths((prev) => {
-      const next = new Set(prev);
-      for (const path of secondarySweepPaths) next.add(path);
-      return next;
-    });
+    const eligible = new Set([
+      ...primarySweepPathSet,
+      ...secondarySweepPathSet,
+    ]);
+    const carried = [...selectedPaths].filter((path) => eligible.has(path));
+    const next = new Set([...carried, ...secondarySweepPaths]);
+    setSelectedPaths(next);
+    // Every surviving path is sweep-eligible, so the whole selection is now
+    // sweep-origin.
+    setSweepOriginPaths(new Set(next));
     setSelectionMode(true);
-  }, [secondarySweepPaths]);
+  }, [
+    primarySweepPathSet,
+    secondarySweepPathSet,
+    secondarySweepPaths,
+    selectedPaths,
+  ]);
   const cancelSelection = useCallback(() => {
     setSelectedPaths(new Set());
+    setSweepOriginPaths(new Set());
     setSelectionMode(false);
   }, []);
   const toggleRepoCollapsed = useCallback(
@@ -651,6 +722,9 @@ export function WorktreesList(props: {
       } else {
         dispatchCollapsedRepoKeys({ type: "collapse", key: group.key });
         setSelectedPaths((prev) => removeSelectedWorktrees(prev, group.items));
+        setSweepOriginPaths((prev) =>
+          removeSelectedWorktrees(prev, group.items),
+        );
       }
     },
     [],
@@ -662,6 +736,7 @@ export function WorktreesList(props: {
     }
     dispatchCollapsedRepoKeys({ type: "collapse-all", keys: repoKeys });
     setSelectedPaths(new Set());
+    setSweepOriginPaths(new Set());
   }, [allReposCollapsed, repoKeys]);
   const requestDeleteTargets = useCallback(
     (targets: ReadonlyArray<WorktreeHostEntryV11>) => {
@@ -674,37 +749,35 @@ export function WorktreesList(props: {
     [selectablePathSet],
   );
 
-  const handleConfirm = (): void => {
-    if (pendingDeleteTargets === null) return;
-    // Re-check eligibility against the freshest snapshot at the moment the run
-    // starts: a background refresh between opening the dialog and confirming may
-    // have made a row in-use or already-deleting. Drop those, and say so.
-    const targets = pendingDeleteTargets.filter((entry) =>
-      selectablePathSet.has(entry.worktreePath),
-    );
-    const dropped = pendingDeleteTargets.length - targets.length;
-    if (dropped > 0) {
-      toast.message(
-        `${dropped} worktree${dropped === 1 ? "" : "s"} became ineligible and ${
-          dropped === 1 ? "was" : "were"
-        } skipped.`,
-      );
-    }
-    if (targets.length === 0) {
-      setPendingDeleteTargets(null);
-      return;
-    }
-    if (targets.length === 1) {
-      start(
-        targets[0],
-        reviewedScriptsByPath.get(targets[0].worktreePath) ?? null,
-      );
-    } else {
-      startBatchBackgrounded(targets, reviewedScriptsByPath);
-    }
+  const clearSelectionForTargets = (
+    targets: ReadonlyArray<WorktreeHostEntryV11>,
+  ): void => {
     setSelectedPaths((prev) => removeSelectedWorktrees(prev, targets));
+    setSweepOriginPaths((prev) => removeSelectedWorktrees(prev, targets));
     setSelectionMode(false);
     setPendingDeleteTargets(null);
+  };
+
+  const handleConfirm = (): void => {
+    if (pendingResolution === null) return;
+    // `pendingResolution` already re-resolved each pending path to its freshest
+    // entry and split kept vs. dropped (gone from the list, now in-use /
+    // deleting, or - for sweep-origin rows - no longer matching the sweep
+    // predicate). Start the run on the FRESHEST kept entries, and name the drops.
+    const { kept, dropped } = pendingResolution;
+    if (dropped.length > 0) {
+      toast.message(worktreeDropMessage(dropped));
+    }
+    if (kept.length === 0) {
+      clearSelectionForTargets([]);
+      return;
+    }
+    if (kept.length === 1) {
+      start(kept[0], reviewedScriptsByPath.get(kept[0].worktreePath) ?? null);
+    } else {
+      startBatchBackgrounded(kept, reviewedScriptsByPath);
+    }
+    clearSelectionForTargets(kept);
   };
 
   const handleCloseModal = (): void => {
@@ -1759,7 +1832,7 @@ function worktreeSearchHaystack(
     .toLowerCase();
 }
 
-function deleteDialogCopy(entry: WorktreeHostEntry): {
+function deleteDialogCopy(entry: WorktreeHostEntryV11): {
   readonly title: string;
   readonly description: string;
   readonly actionLabel: string;
@@ -1774,11 +1847,32 @@ function deleteDialogCopy(entry: WorktreeHostEntry): {
       actionLabel: "Delete and discard",
     };
   }
+  const status = entry.branchStatus;
+  if (status !== null && status.ahead > 0 && !status.mergedIntoDefault) {
+    const count = status.ahead;
+    const plural = count === 1 ? "" : "s";
+    return {
+      title: `Delete worktree with ${count} unpushed commit${plural}?`,
+      description: `${branch} has ${count} commit${plural} not on the default branch. Removing the worktree keeps the branch ref, but that work exists only here. Traycer runs the repo's teardown script, then removes ${entry.worktreePath}.`,
+      actionLabel: "Delete worktree",
+    };
+  }
   return {
     title: "Delete worktree?",
     description: `Traycer runs the repo's teardown script, then removes ${branch} (${entry.worktreePath}).`,
     actionLabel: "Delete worktree",
   };
+}
+
+/**
+ * Toast copy when confirm-time re-check drops rows that stopped qualifying,
+ * class-summarized to stay consistent with the confirmation's exclusion line.
+ */
+function worktreeDropMessage(dropped: readonly WorktreeHostEntryV11[]): string {
+  const summary = countWorktreeClasses(dropped, WORKTREE_EXCLUSION_ORDER);
+  const plural = dropped.length === 1 ? "" : "s";
+  const verb = dropped.length === 1 ? "was" : "were";
+  return `${dropped.length} worktree${plural} became ineligible and ${verb} skipped: ${summary}.`;
 }
 
 interface WorktreeBulkDeleteSummary {

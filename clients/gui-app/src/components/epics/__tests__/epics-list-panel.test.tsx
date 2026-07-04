@@ -684,6 +684,29 @@ describe("<EpicsListPanel />", () => {
     });
   });
 
+  it("names local-only commits and leaves a clean-ahead candidate unchecked by default", async () => {
+    testState.worktreeCandidates = [
+      {
+        worktreePath: "/wt/ahead",
+        repoLabel: "owner/repo",
+        branch: "feat/ahead",
+        uncommittedCount: 0,
+        branchStatus: { ahead: 3, behind: 0, mergedIntoDefault: false },
+        ownerEpicIds: ["epic-from-history"],
+      },
+    ];
+    renderPanel("embedded", "/");
+
+    fireEvent.click(await screen.findByTestId("epics-list-row-delete"));
+    const checkbox = await screen.findByTestId(
+      "delete-tasks-worktree-checkbox",
+    );
+    // Unmerged local-only commits are not proven-removable -> default unchecked,
+    // and the concrete loss is named.
+    expect(checkbox.getAttribute("aria-checked")).toBe("false");
+    screen.getByText(/3 commits not on the default branch/i);
+  });
+
   it("includes a dirty worktree once its warning row is checked", async () => {
     testState.worktreeCandidates = [
       {
