@@ -13,6 +13,7 @@ import {
 } from "@traycer/protocol/framework/index";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import {
+  worktreeBranchStatusSchema,
   worktreeHostEntrySchema,
   worktreeHostEntrySchemaV11,
   worktreeListAllForHostRequestSchema,
@@ -78,9 +79,71 @@ describe("worktreeHostEntrySchemaV11", () => {
     expect(parsed.lastActivityAt).toBeNull();
   });
 
+  it("parses a never-pushed-but-merged entry (null diff, proven merged)", () => {
+    const parsed = worktreeHostEntrySchemaV11.parse({
+      ...v10Entry,
+      lastActivityAt: null,
+      owners: [],
+      branchStatus: { ahead: null, behind: null, mergedIntoDefault: true },
+      createdAt: null,
+    });
+    expect(parsed.branchStatus).toEqual({
+      ahead: null,
+      behind: null,
+      mergedIntoDefault: true,
+    });
+  });
+
   it("still accepts a bare v1.0 entry as its own (v1.0) shape", () => {
     // The v1.0 entry schema is unchanged - a v1.0 host keeps producing it.
     expect(worktreeHostEntrySchema.parse(v10Entry)).toEqual(v10Entry);
+  });
+});
+
+describe("worktreeBranchStatusSchema (upstream-independent reshape)", () => {
+  it("accepts null ahead/behind for a never-pushed branch proven merged", () => {
+    // The win: a never-pushed branch whose HEAD is contained in the default
+    // branch carries a real object with a proven `mergedIntoDefault` and null
+    // upstream diff.
+    const parsed = worktreeBranchStatusSchema.parse({
+      ahead: null,
+      behind: null,
+      mergedIntoDefault: true,
+    });
+    expect(parsed).toEqual({
+      ahead: null,
+      behind: null,
+      mergedIntoDefault: true,
+    });
+  });
+
+  it("accepts a never-pushed but diverged branch (null diff, not merged)", () => {
+    const parsed = worktreeBranchStatusSchema.parse({
+      ahead: null,
+      behind: null,
+      mergedIntoDefault: false,
+    });
+    expect(parsed.ahead).toBeNull();
+    expect(parsed.mergedIntoDefault).toBe(false);
+  });
+
+  it("still accepts a pushed branch with concrete ahead/behind counts", () => {
+    const parsed = worktreeBranchStatusSchema.parse({
+      ahead: 2,
+      behind: 1,
+      mergedIntoDefault: false,
+    });
+    expect(parsed).toEqual({ ahead: 2, behind: 1, mergedIntoDefault: false });
+  });
+
+  it("rejects negative counts", () => {
+    expect(() =>
+      worktreeBranchStatusSchema.parse({
+        ahead: -1,
+        behind: 0,
+        mergedIntoDefault: false,
+      }),
+    ).toThrow();
   });
 });
 

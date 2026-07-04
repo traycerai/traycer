@@ -583,15 +583,25 @@ export type WorktreeHostEntryOwner = z.infer<
 
 /**
  * Best-effort branch position for a worktree, probed only when the v1.1 request
- * sets `includeActivity: true`. `null` when there is no upstream, the head is
- * detached, or the probe failed - a failed probe never fails the listing.
+ * sets `includeActivity: true`. Present whenever the default branch resolves -
+ * `mergedIntoDefault` is derived from LOCAL ancestry and needs no upstream, so a
+ * never-pushed branch still gets a real object. `ahead`/`behind` are the
+ * upstream diff and go `null` when the branch has no upstream to diff against
+ * (they say nothing about merged state - read `mergedIntoDefault` for that).
+ * The whole object is `null` only when the position can't be probed at all: a
+ * detached HEAD, or an unresolvable default branch (see `branchStatus` on the
+ * v1.1 entry). A failed probe never fails the listing.
  */
 export const worktreeBranchStatusSchema = z.object({
-  ahead: z.number().int().nonnegative(),
-  behind: z.number().int().nonnegative(),
-  // `git branch --merged <default>` (or an equivalent rev-list count): the
-  // branch is fully contained in the repo's default branch, so removing the
-  // worktree loses no unmerged commits.
+  // Commits on HEAD not on its upstream / on upstream not on HEAD. `null` when
+  // the branch has no upstream (never pushed) - "unknown position", never
+  // "zero". `mergedIntoDefault` is the independent, upstream-free signal.
+  ahead: z.number().int().nonnegative().nullable(),
+  behind: z.number().int().nonnegative().nullable(),
+  // `merge-base --is-ancestor HEAD <default>`: the branch's HEAD is fully
+  // contained in the repo's default branch, so removing the worktree loses no
+  // unmerged commits. Computed from LOCAL ancestry - independent of any
+  // upstream - so it holds even for a never-pushed branch.
   mergedIntoDefault: z.boolean(),
 });
 export type WorktreeBranchStatus = z.infer<typeof worktreeBranchStatusSchema>;
@@ -620,7 +630,10 @@ export const worktreeHostEntrySchemaV11 = worktreeHostEntrySchema.extend({
   // Persisted `WorktreeBindingV1` rows (this host) whose effective directory is
   // this worktree. `[]` = unreferenced.
   owners: z.array(worktreeHostEntryOwnerSchema),
-  // `null` when no upstream / detached / probe failed / `includeActivity` false.
+  // `null` when detached / default branch unresolvable / probe failed /
+  // `includeActivity` false. A never-pushed branch is NOT null here: its
+  // `mergedIntoDefault` is proved from local ancestry (with `ahead`/`behind`
+  // null). Null therefore means "position unknown", never "no upstream".
   branchStatus: worktreeBranchStatusSchema.nullable(),
   // Worktree dir birthtime (fs stat) - a fallback age signal. `null` when stat
   // is unavailable.
