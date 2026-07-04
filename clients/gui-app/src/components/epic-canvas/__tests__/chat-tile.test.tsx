@@ -131,6 +131,24 @@ const QUEUED_CONTENT: JsonContent = {
     },
   ],
 };
+const SECOND_QUEUED_CONTENT: JsonContent = {
+  type: "doc",
+  content: [
+    {
+      type: "paragraph",
+      content: [{ type: "text", text: "Second queued prompt" }],
+    },
+  ],
+};
+const PENDING_DRAFT_CONTENT: JsonContent = {
+  type: "doc",
+  content: [
+    {
+      type: "paragraph",
+      content: [{ type: "text", text: "pending message" }],
+    },
+  ],
+};
 const QUEUED_SETTINGS: ChatRunSettings = {
   harnessId: "codex",
   model: "queued-model",
@@ -579,15 +597,7 @@ describe("<ChatTile />", () => {
     useComposerDraftStore.setState({
       drafts: {
         [CHAT_ARTIFACT.id]: {
-          content: {
-            type: "doc",
-            content: [
-              {
-                type: "paragraph",
-                content: [{ type: "text", text: "pending message" }],
-              },
-            ],
-          },
+          content: PENDING_DRAFT_CONTENT,
           selection: null,
           resetEpoch: 0,
         },
@@ -1855,7 +1865,8 @@ describe("<ChatTile />", () => {
     expect(settingsFrame?.settings).toEqual(UPDATED_QUEUE_SETTINGS);
   });
 
-  it("cancels queued edit mode from the composer without clearing the draft", async () => {
+  it("cancels queued edit mode from the composer and clears the queued content when there was no previous draft", async () => {
+    useComposerDraftStore.setState({ drafts: {} });
     chatHarness.teardown();
     chatHarness.install("owner", [
       {
@@ -1886,6 +1897,9 @@ describe("<ChatTile />", () => {
       screen.getByRole("button", { name: "Edit queued message" }),
     );
     expect(screen.getByTestId("queue-edit-draft-pill")).not.toBeNull();
+    expect(screen.getByTestId("composer-editor").textContent).toBe(
+      "Queued prompt",
+    );
 
     fireEvent.click(
       screen.getByRole("button", {
@@ -1896,13 +1910,151 @@ describe("<ChatTile />", () => {
     await waitFor(() => {
       expect(screen.queryByTestId("queue-edit-draft-pill")).toBeNull();
     });
+    expect(screen.getByTestId("composer-editor").textContent).toBe("");
+
+    const sendButton = screen.getByRole("button", { name: "Send" });
+    if (!(sendButton instanceof HTMLButtonElement)) {
+      throw new Error("expected send button");
+    }
+    expect(sendButton.disabled).toBe(true);
+    expect(chatHarness.sent).toHaveLength(0);
+  });
+
+  it("cancels queued edit mode from the composer and restores the previous draft", async () => {
+    chatHarness.teardown();
+    chatHarness.install("owner", [
+      {
+        queueItemId: "queue-1",
+        messageId: "message-queue-1",
+        message: {
+          kind: "user",
+          content: QUEUED_CONTENT,
+        },
+        sender: { type: "user", userId: "owner-1" },
+        settings: QUEUED_SETTINGS,
+        accountContext: { type: "PERSONAL" as const },
+        delivery: "next_turn",
+        status: "pending",
+        targetTurnId: null,
+        steerRequest: null,
+        fallbackReason: null,
+        createdAt: 2,
+        updatedAt: 2,
+      },
+    ]);
+
+    renderChatTile();
+
+    await waitForChatTileLoaded();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Edit queued message" }),
+    );
+    expect(screen.getByTestId("queue-edit-draft-pill")).not.toBeNull();
+    expect(screen.getByTestId("composer-editor").textContent).toBe(
+      "Queued prompt",
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Cancel queued message editing",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("queue-edit-draft-pill")).toBeNull();
+    });
+    expect(screen.getByTestId("composer-editor").textContent).toBe(
+      "pending message",
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
     expect(chatHarness.sent).toHaveLength(1);
     const frame = chatHarness.sent[0];
     if (frame.kind !== "send") throw new Error("expected send frame");
-    expect(frame.content).toEqual(QUEUED_CONTENT);
+    expect(frame.content).toEqual(PENDING_DRAFT_CONTENT);
+  });
+
+  it("keeps the original draft snapshot when switching queued items before cancelling edit", async () => {
+    chatHarness.teardown();
+    chatHarness.install("owner", [
+      {
+        queueItemId: "queue-1",
+        messageId: "message-queue-1",
+        message: {
+          kind: "user",
+          content: QUEUED_CONTENT,
+        },
+        sender: { type: "user", userId: "owner-1" },
+        settings: QUEUED_SETTINGS,
+        accountContext: { type: "PERSONAL" as const },
+        delivery: "next_turn",
+        status: "pending",
+        targetTurnId: null,
+        steerRequest: null,
+        fallbackReason: null,
+        createdAt: 2,
+        updatedAt: 2,
+      },
+      {
+        queueItemId: "queue-2",
+        messageId: "message-queue-2",
+        message: {
+          kind: "user",
+          content: SECOND_QUEUED_CONTENT,
+        },
+        sender: { type: "user", userId: "owner-1" },
+        settings: QUEUED_SETTINGS,
+        accountContext: { type: "PERSONAL" as const },
+        delivery: "next_turn",
+        status: "pending",
+        targetTurnId: null,
+        steerRequest: null,
+        fallbackReason: null,
+        createdAt: 3,
+        updatedAt: 3,
+      },
+    ]);
+
+    renderChatTile();
+
+    await waitForChatTileLoaded();
+
+    const editButtons = screen.getAllByRole("button", {
+      name: "Edit queued message",
+    });
+    const firstEditButton = editButtons[0];
+    const secondEditButton = editButtons[1];
+    if (
+      !(firstEditButton instanceof HTMLButtonElement) ||
+      !(secondEditButton instanceof HTMLButtonElement)
+    ) {
+      throw new Error("expected queued edit buttons");
+    }
+
+    fireEvent.click(firstEditButton);
+    expect(screen.getByTestId("composer-editor").textContent).toBe(
+      "Queued prompt",
+    );
+
+    fireEvent.click(secondEditButton);
+    expect(screen.getByTestId("composer-editor").textContent).toBe(
+      "Second queued prompt",
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Cancel queued message editing",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("queue-edit-draft-pill")).toBeNull();
+    });
+    expect(screen.getByTestId("composer-editor").textContent).toBe(
+      "pending message",
+    );
   });
 
   // The composer render-count proof lives in `chat-tile-composer-rerender.test.tsx`
