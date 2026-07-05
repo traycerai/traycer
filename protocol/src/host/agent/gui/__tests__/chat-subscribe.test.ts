@@ -45,6 +45,7 @@ const chat: Chat = {
   isTitleEditedByUser: false,
   settings: null,
   activeSessionChain: null,
+  claudePendingWakes: [],
   messages: [userMessage],
   events: [],
 };

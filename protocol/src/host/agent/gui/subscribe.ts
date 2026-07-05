@@ -379,13 +379,32 @@ export const chatErrorNoticeSchema = z.object({
 });
 export type ChatErrorNotice = z.infer<typeof chatErrorNoticeSchema>;
 
-export const chatSubscribeServerFrameSchema = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal("snapshot"),
-    ...textFrameFields,
-    ...chatReferenceFields,
-    snapshot: chatSnapshotSchema,
-  }),
+const chatSubscribeSnapshotServerFrameSchema = z.object({
+  kind: z.literal("snapshot"),
+  ...textFrameFields,
+  ...chatReferenceFields,
+  snapshot: chatSnapshotSchema,
+});
+
+const chatSubscribeTurnStateChangedServerFrameSchema = z.object({
+  kind: z.literal("turnStateChanged"),
+  ...textFrameFields,
+  ...chatReferenceFields,
+  // `runStatus` rides every turn-state broadcast so the GUI's in-progress
+  // indicator updates the instant a turn is requested, stops, or completes -
+  // including the request→activeTurn window where `activeTurn` is still null.
+  runStatus: chatRunStatusSchema,
+  activeTurn: chatActiveTurnSchema.nullable(),
+  // Background-items deltas ride this same broadcast (added/settled/stopped).
+  // Optional for the same capability-sentinel reason as the snapshot field; an
+  // older host omits it and the renderer keeps its last snapshot value.
+  backgroundItems: z.array(backgroundItemSchema).optional(),
+  // See `chatSnapshotSchema.turnInProgress` - same predicate, same
+  // optionality, same conservative-fallback contract.
+  turnInProgress: z.boolean().optional(),
+});
+
+const chatSubscribeSharedServerFrameSchemas = [
   z.object({
     kind: z.literal("actionAck"),
     ...textFrameFields,
@@ -413,23 +432,6 @@ export const chatSubscribeServerFrameSchema = z.discriminatedUnion("kind", [
     ...textFrameFields,
     ...chatReferenceFields,
     queue: chatQueueStateSchema,
-  }),
-  z.object({
-    kind: z.literal("turnStateChanged"),
-    ...textFrameFields,
-    ...chatReferenceFields,
-    // `runStatus` rides every turn-state broadcast so the GUI's in-progress
-    // indicator updates the instant a turn is requested, stops, or completes -
-    // including the request→activeTurn window where `activeTurn` is still null.
-    runStatus: chatRunStatusSchema,
-    activeTurn: chatActiveTurnSchema.nullable(),
-    // Background-items deltas ride this same broadcast (added/settled/stopped).
-    // Optional for the same capability-sentinel reason as the snapshot field; an
-    // older host omits it and the renderer keeps its last snapshot value.
-    backgroundItems: z.array(backgroundItemSchema).optional(),
-    // See `chatSnapshotSchema.turnInProgress` - same predicate, same
-    // optionality, same conservative-fallback contract.
-    turnInProgress: z.boolean().optional(),
   }),
   z.object({
     kind: z.literal("blockDelta"),
@@ -535,6 +537,12 @@ export const chatSubscribeServerFrameSchema = z.discriminatedUnion("kind", [
     kind: z.literal("pong"),
     ...textFrameFields,
   }),
+];
+
+export const chatSubscribeServerFrameSchema = z.discriminatedUnion("kind", [
+  chatSubscribeSnapshotServerFrameSchema,
+  chatSubscribeTurnStateChangedServerFrameSchema,
+  ...chatSubscribeSharedServerFrameSchemas,
 ]);
 export type ChatSubscribeServerFrame = z.infer<
   typeof chatSubscribeServerFrameSchema
@@ -1082,147 +1090,27 @@ const chatSnapshotSchemaV11 = z.object({
   turnInProgress: z.boolean().optional(),
 });
 
+const chatSubscribeSnapshotServerFrameSchemaV11 = z.object({
+  kind: z.literal("snapshot"),
+  ...textFrameFields,
+  ...chatReferenceFields,
+  snapshot: chatSnapshotSchemaV11,
+});
+
+const chatSubscribeTurnStateChangedServerFrameSchemaV11 = z.object({
+  kind: z.literal("turnStateChanged"),
+  ...textFrameFields,
+  ...chatReferenceFields,
+  runStatus: chatRunStatusSchema,
+  activeTurn: chatActiveTurnSchema.nullable(),
+  backgroundItems: z.array(backgroundItemSchemaV11).optional(),
+  turnInProgress: z.boolean().optional(),
+});
+
 const chatSubscribeServerFrameSchemaV11 = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal("snapshot"),
-    ...textFrameFields,
-    ...chatReferenceFields,
-    snapshot: chatSnapshotSchemaV11,
-  }),
-  z.object({
-    kind: z.literal("actionAck"),
-    ...textFrameFields,
-    ...chatReferenceFields,
-    clientActionId: z.string(),
-    action: chatActionSchema,
-    status: chatActionAckStatusSchema,
-    reason: z.string().nullable(),
-    code: z.string().nullable(),
-    backgroundStopTaskIds: z.array(z.string()).default([]),
-  }),
-  z.object({
-    kind: z.literal("messageAccepted"),
-    ...textFrameFields,
-    ...chatReferenceFields,
-    message: userMessageSchema,
-  }),
-  z.object({
-    kind: z.literal("queueChanged"),
-    ...textFrameFields,
-    ...chatReferenceFields,
-    queue: chatQueueStateSchema,
-  }),
-  z.object({
-    kind: z.literal("turnStateChanged"),
-    ...textFrameFields,
-    ...chatReferenceFields,
-    runStatus: chatRunStatusSchema,
-    activeTurn: chatActiveTurnSchema.nullable(),
-    backgroundItems: z.array(backgroundItemSchemaV11).optional(),
-    turnInProgress: z.boolean().optional(),
-  }),
-  z.object({
-    kind: z.literal("blockDelta"),
-    ...textFrameFields,
-    ...chatReferenceFields,
-    event: runtimeEventSchema,
-  }),
-  z.object({
-    kind: z.literal("approvalRequested"),
-    ...textFrameFields,
-    ...chatReferenceFields,
-    approval: chatApprovalStateSchema,
-  }),
-  z.object({
-    kind: z.literal("approvalResolved"),
-    ...textFrameFields,
-    ...chatReferenceFields,
-    approvalId: z.string(),
-    decision: runtimeApprovalDecisionSchema,
-    resolvedAt: z.number(),
-  }),
-  z.object({
-    kind: z.literal("fileEditApprovalRequested"),
-    ...textFrameFields,
-    ...chatReferenceFields,
-    approval: chatFileEditApprovalStateSchema,
-  }),
-  z.object({
-    kind: z.literal("fileEditApprovalResolved"),
-    ...textFrameFields,
-    ...chatReferenceFields,
-    approvalId: z.string(),
-    decision: runtimeApprovalDecisionSchema,
-    resolvedAt: z.number(),
-  }),
-  z.object({
-    kind: z.literal("interviewRequested"),
-    ...textFrameFields,
-    ...chatReferenceFields,
-    blockId: z.string(),
-    requestedAt: z.number(),
-  }),
-  z.object({
-    kind: z.literal("interviewAnswered"),
-    ...textFrameFields,
-    ...chatReferenceFields,
-    blockId: z.string(),
-    answers: z.array(runtimeInterviewAnswerSchema),
-    resolvedAt: z.number(),
-  }),
-  z.object({
-    kind: z.literal("interviewErrored"),
-    ...textFrameFields,
-    ...chatReferenceFields,
-    blockId: z.string(),
-    reason: z.string(),
-    resolvedAt: z.number(),
-  }),
-  z.object({
-    kind: z.literal("eventAppended"),
-    ...textFrameFields,
-    ...chatReferenceFields,
-    event: chatEventSchema,
-  }),
-  z.object({
-    kind: z.literal("restoreStarted"),
-    ...textFrameFields,
-    ...chatReferenceFields,
-    ...restoreStartedManifestSchema.shape,
-  }),
-  z.object({
-    kind: z.literal("restoreProgress"),
-    ...textFrameFields,
-    ...chatReferenceFields,
-    checkpointId: z.string(),
-    processedCount: z.number(),
-    totalCount: z.number(),
-  }),
-  z.object({
-    kind: z.literal("restoreCompleted"),
-    ...textFrameFields,
-    ...chatReferenceFields,
-    checkpointId: z.string(),
-    finishedAt: z.number(),
-    results: z.array(restoreResultEntrySchema),
-  }),
-  z.object({
-    kind: z.literal("errorNotice"),
-    ...textFrameFields,
-    ...chatReferenceFields,
-    notice: chatErrorNoticeSchema,
-  }),
-  z.object({
-    kind: z.literal("worktreeStateChanged"),
-    ...textFrameFields,
-    ...chatReferenceFields,
-    worktreeBinding: worktreeBindingSchema.nullable(),
-    missingWorktreePaths: z.array(z.string()),
-  }),
-  z.object({
-    kind: z.literal("pong"),
-    ...textFrameFields,
-  }),
+  chatSubscribeSnapshotServerFrameSchemaV11,
+  chatSubscribeTurnStateChangedServerFrameSchemaV11,
+  ...chatSubscribeSharedServerFrameSchemas,
 ]);
 
 export const chatSubscribeV11 = defineStreamRpcContract({

@@ -50,7 +50,7 @@ export const chatSchema = z.object({
   isTitleEditedByUser: z.boolean(),
   settings: chatRunSettingsSchema.nullable().default(null),
   activeSessionChain: activeSessionChainSchema.nullable().default(null),
-  claudePendingWakes: z.array(claudePendingWakeSchema).optional(),
+  claudePendingWakes: z.array(claudePendingWakeSchema).default([]),
   messages: z.array(messageSchema),
   events: z.array(chatEventSchema).default([]),
 });

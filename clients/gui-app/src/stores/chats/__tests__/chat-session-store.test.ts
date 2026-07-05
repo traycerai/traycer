@@ -190,6 +190,7 @@ function emitSnapshotFrame(input: SnapshotFrameInput): void {
         isTitleEditedByUser: false,
         settings: null,
         activeSessionChain: null,
+        claudePendingWakes: [],
         messages: [...input.messages],
         events: [],
       },
@@ -237,6 +238,7 @@ function emitSnapshotWithWorktree(
         isTitleEditedByUser: false,
         settings: null,
         activeSessionChain: null,
+        claudePendingWakes: [],
         messages: [],
         events: [...events],
       },
@@ -2118,6 +2120,7 @@ describe("createChatSessionStore", () => {
           isTitleEditedByUser: false,
           settings: null,
           activeSessionChain: null,
+          claudePendingWakes: [],
           messages: [
             {
               role: "assistant",

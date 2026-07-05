@@ -48,10 +48,18 @@ interface BackgroundTreeNode {
 }
 
 function backgroundKindLabel(kind: BackgroundItem["kind"]): string {
-  if (kind === "subagent") return "Agent";
-  if (kind === "monitor") return "Monitor";
-  if (kind === "wakeup") return "Wake";
-  return "Command";
+  switch (kind) {
+    case "subagent":
+      return "Agent";
+    case "command":
+      return "Command";
+    case "monitor":
+      return "Monitor";
+    case "wakeup":
+      return "Wake";
+  }
+  const unreachableKind: never = kind;
+  return unreachableKind;
 }
 
 function backgroundStopLabel(kind: BackgroundItem["kind"]): string {
@@ -60,22 +68,27 @@ function backgroundStopLabel(kind: BackgroundItem["kind"]): string {
 }
 
 function BackgroundKindIcon(props: { readonly kind: BackgroundItem["kind"] }) {
-  if (props.kind === "subagent") {
-    return <Bot aria-hidden className="size-3.5 shrink-0 text-primary/80" />;
+  switch (props.kind) {
+    case "subagent":
+      return <Bot aria-hidden className="size-3.5 shrink-0 text-primary/80" />;
+    case "command":
+      return (
+        <TerminalSquare
+          aria-hidden
+          className="size-3.5 shrink-0 text-primary/80"
+        />
+      );
+    case "monitor":
+      return (
+        <Monitor aria-hidden className="size-3.5 shrink-0 text-primary/80" />
+      );
+    case "wakeup":
+      return (
+        <AlarmClock aria-hidden className="size-3.5 shrink-0 text-primary/80" />
+      );
   }
-  if (props.kind === "monitor") {
-    return (
-      <Monitor aria-hidden className="size-3.5 shrink-0 text-primary/80" />
-    );
-  }
-  if (props.kind === "wakeup") {
-    return (
-      <AlarmClock aria-hidden className="size-3.5 shrink-0 text-primary/80" />
-    );
-  }
-  return (
-    <TerminalSquare aria-hidden className="size-3.5 shrink-0 text-primary/80" />
-  );
+  const unreachableKind: never = props.kind;
+  return unreachableKind;
 }
 
 function itemParentTaskId(item: BackgroundItem): string | null {
