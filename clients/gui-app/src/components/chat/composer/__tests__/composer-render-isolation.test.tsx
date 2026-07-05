@@ -63,6 +63,7 @@ function Harness({
         onKeyDown={undefined}
         onFocus={() => undefined}
         onBlur={() => undefined}
+        onEditorReady={null}
       />
     </Profiler>
   );

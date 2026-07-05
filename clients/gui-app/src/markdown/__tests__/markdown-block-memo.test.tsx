@@ -27,6 +27,7 @@ function StreamHarness({ content }: { content: string }) {
       components={null}
       remarkPlugins={null}
       rehypePlugins={null}
+      quotable={false}
       isStreaming
     >
       {content}

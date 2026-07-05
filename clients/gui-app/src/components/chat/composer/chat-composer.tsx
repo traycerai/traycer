@@ -65,6 +65,21 @@ interface ChatComposerProps {
   readonly activeTurnStatus: ChatActiveTurn["status"] | null;
   readonly editingQueueItemId: string | null;
   readonly onCancelQueueEdit: (() => void) | null;
+  /**
+   * True while the composer is the edit surface for a persisted message (the
+   * pencil loaded its content as the draft). Renders the "Editing message"
+   * pill above the editor; submit is routed to `editUserMessage` by the
+   * owner's `onSubmitMessage`.
+   */
+  readonly messageEditActive: boolean;
+  /** Ends message-edit mode from the pill; the draft stays as typed. */
+  readonly onCancelMessageEdit: () => void;
+  /**
+   * Worktree setup is provisioning for this chat. A fresh new-message send is
+   * blocked (it would stack a second message); editing the pending message is
+   * still allowed. See `setupInFlight` in the chat tile.
+   */
+  readonly setupInFlight: boolean;
   readonly hasPendingApprovals: boolean;
   readonly stopDisabled: boolean;
   readonly onStopTurn: (() => void) | null;
@@ -87,6 +102,9 @@ interface ChatComposerProps {
   readonly topSlot: ReactNode | null;
 }
 
+const SETUP_IN_FLIGHT_SEND_HINT =
+  "Setting up the worktree… edit your message above to change it.";
+
 export interface ChatComposerSubmitInput {
   readonly content: JsonContent;
   readonly contentText: string;
@@ -108,6 +126,9 @@ function ChatComposerImpl(props: ChatComposerProps) {
     activeTurnStatus,
     editingQueueItemId,
     onCancelQueueEdit,
+    messageEditActive,
+    onCancelMessageEdit,
+    setupInFlight,
     hasPendingApprovals,
     stopDisabled,
     onStopTurn,
@@ -121,6 +142,14 @@ function ChatComposerImpl(props: ChatComposerProps) {
   const workspaceBlocked = !workspaceComposerCanStart(workspaceAvailability);
 
   const editorRef = useRef<ComposerPromptEditorHandle | null>(null);
+  // Counts editor-ready transitions (a counter, not a boolean, so a torn-down
+  // and re-created editor re-fires). The draft-reset bridge keys its
+  // handle-ready catch-up on this - a ref flip alone never re-renders us.
+  const [editorReadyTick, setEditorReadyTick] = useState(0);
+  const handleEditorReady = useCallback(
+    () => setEditorReadyTick((tick) => tick + 1),
+    [],
+  );
   const [pickerStore] = useState(() => createComposerPickerStore());
 
   // The mention/slash menu renders through a body portal, so a left-open menu
@@ -148,6 +177,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
   } = useChatComposerDraft({
     taskId,
     editorRef,
+    editorReadyTick,
   });
 
   const { dictationControl, dictationPreparing } = useComposerDictation({
@@ -173,7 +203,13 @@ function ChatComposerImpl(props: ChatComposerProps) {
   // host. When the provider CLI is signed out it blocks send and mounts the
   // re-auth banner above the composer; a doomed turn can't start.
   const reauthGate = useProviderReauthGate(harnessId, isActive);
-  const sendBlocked = sendDisabled === true || reauthGate.signedOut;
+  // While worktree setup is provisioning, a fresh new-message send is blocked
+  // so it can't stack a second message onto the one that triggered setup - but
+  // editing that pending message (messageEditActive) stays allowed, since that
+  // is the sanctioned way to change it. Not applied in edit mode.
+  const newSendBlockedBySetup = setupInFlight && !messageEditActive;
+  const sendBlocked =
+    sendDisabled === true || reauthGate.signedOut || newSendBlockedBySetup;
   const selectedModel = useStore(toolbarStore, (s) => s.selectedModel);
   const imagesUnsupported = imageAttachmentsUnsupported(
     draftHasImages,
@@ -259,6 +295,8 @@ function ChatComposerImpl(props: ChatComposerProps) {
                 content={draftContent}
                 editingQueueItemId={editingQueueItemId}
                 onCancelQueueEdit={onCancelQueueEdit}
+                messageEditActive={messageEditActive}
+                onCancelMessageEdit={onCancelMessageEdit}
                 onRemoveImage={removeImage}
               />
             }
@@ -275,6 +313,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
                 onPaste={onPaste}
                 onDragOver={onDragOver}
                 onDrop={onDrop}
+                onEditorReady={handleEditorReady}
               />
             }
             toolbar={
@@ -287,7 +326,11 @@ function ChatComposerImpl(props: ChatComposerProps) {
                 hasPendingApprovals={hasPendingApprovals}
                 stopDisabled={stopDisabled}
                 onStopTurn={onStopTurn}
-                composerDisabledHint={workspaceAvailability.disabledHint}
+                composerDisabledHint={
+                  newSendBlockedBySetup
+                    ? SETUP_IN_FLIGHT_SEND_HINT
+                    : workspaceAvailability.disabledHint
+                }
                 dictation={dictationControl}
                 dictationPreparing={dictationPreparing}
                 settingsLocked={false}

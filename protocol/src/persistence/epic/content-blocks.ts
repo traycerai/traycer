@@ -435,7 +435,7 @@ export type AutonomousResumeOutputFile = z.infer<
 // `outputFile` points at an SDK task output file using the existing
 // workspace.readFile address shape; the GUI lazy-fetches it only on expand.
 export const autonomousResumeTriggerSchema = z.object({
-  kind: z.enum(["command", "monitor", "subagent"]),
+  kind: z.enum(["command", "monitor", "subagent", "wakeup"]),
   title: z.string(),
   status: z.enum(["completed", "failed", "stopped"]),
   summary: z.string(),
@@ -450,9 +450,8 @@ export type AutonomousResumeTrigger = z.infer<
 // the turn resumed (which backgrounded command/Monitor/subagent completed). The
 // turn carries no user message, so without this the resume looks abrupt. Usually
 // one trigger; can be several if multiple settled while idle before the model
-// woke. This block is surfaced through `chat.subscribe@1.1`; older 1.0 stream
-// peers must upgrade instead of receiving an unknown discriminated-union
-// variant they cannot parse.
+// woke. This block is surfaced through `chat.subscribe@1.1+`; 1.2 adds the
+// wakeup trigger kind, which the host projects out for older subscribers.
 export const autonomousResumeBlockSchema = z.object({
   ...baseBlockFields,
   type: z.literal("autonomous_resume"),

@@ -488,6 +488,7 @@ function renderMarkdown(markdown: string) {
       components={null}
       remarkPlugins={null}
       rehypePlugins={null}
+      quotable={false}
       isStreaming={false}
     >
       {markdown}

@@ -110,6 +110,7 @@ export function ComposerBody({
                 onKeyDown={undefined}
                 onFocus={NOOP}
                 onBlur={NOOP}
+                onEditorReady={null}
               />
             </div>
             <div className={hiddenInChat}>

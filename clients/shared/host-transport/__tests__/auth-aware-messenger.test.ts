@@ -35,6 +35,24 @@ function rpcError(): HostRpcError {
   });
 }
 
+// A transient host-side rejection (JWKS fetch timeout): wire `code` stays
+// UNAUTHORIZED but `fatalDetails.retryable` marks it recoverable-without-authn.
+function retryableUnauthorizedError(): HostRpcError {
+  return new HostRpcError({
+    code: "UNAUTHORIZED",
+    message: "Signing key unavailable: request timed out",
+    requestId: "req-3",
+    method: METHOD,
+    fatalDetails: {
+      code: "UNAUTHORIZED",
+      reason: "Signing key unavailable: request timed out",
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+      retryable: true,
+    },
+  });
+}
+
 describe("createAuthAwareMessenger", () => {
   it("passes results through without revalidating on success", async () => {
     const revalidate = vi.fn();
@@ -61,6 +79,24 @@ describe("createAuthAwareMessenger", () => {
       HostRpcError,
     );
     expect(revalidate).toHaveBeenCalledTimes(1);
+    expect(inner.request).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not revalidate a retryable transient UNAUTHORIZED (rethrows for the caller to retry)", async () => {
+    const revalidate = vi.fn();
+    const auth: AuthRevalidator = { revalidateCurrentContext: revalidate };
+    const original = retryableUnauthorizedError();
+    const inner: IHostMessenger<Registry> = {
+      request: vi.fn().mockRejectedValue(original),
+    };
+
+    const wrapped = createAuthAwareMessenger(inner, auth, null);
+    const thrown = await wrapped
+      .request(METHOD, PARAMS)
+      .catch((e: unknown) => e);
+    // Transient host-side failure - the bearer is fine, so no authn churn.
+    expect(thrown).toBe(original);
+    expect(revalidate).not.toHaveBeenCalled();
     expect(inner.request).toHaveBeenCalledTimes(1);
   });
 

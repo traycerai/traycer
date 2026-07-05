@@ -73,6 +73,13 @@ export function createAuthAwareMessenger<Registry extends VersionedRpcRegistry>(
         if (!(cause instanceof HostRpcError) || cause.code !== "UNAUTHORIZED") {
           throw cause;
         }
+        // A transient, host-side rejection (e.g. a JWKS fetch timeout) rides in
+        // as `code: "UNAUTHORIZED"` with `fatalDetails.retryable === true`. Our
+        // bearer is fine, so revalidating it can't help - rethrow the transient
+        // failure and let the caller retry the request instead of churning authn.
+        if (cause.fatalDetails?.retryable === true) {
+          throw cause;
+        }
         const retry = options?.retry ?? null;
         const before = readBearer(retry);
         try {
