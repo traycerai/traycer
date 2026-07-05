@@ -76,6 +76,7 @@ export function ComposerBody({
   const harnessId = useStore(toolbarStore, (s) => s.selection.harnessId);
   const hiddenInTerminal = cn(composerMode !== "chat" && "hidden");
   const hiddenInChat = cn(composerMode !== "terminal" && "hidden");
+  const showLandingAgentModeTooltip = true;
 
   return (
     <div className="flex flex-col gap-3">
@@ -132,7 +133,7 @@ export function ComposerBody({
                 store={toolbarStore}
                 onAttachImages={paste.attachImageFiles}
                 showNextTurnPermissionNote={false}
-                showAgentModeTooltip
+                showAgentModeTooltip={showLandingAgentModeTooltip}
                 canSubmit={canSubmit}
                 onSubmit={onSubmit}
                 activeTurnStatus={null}
