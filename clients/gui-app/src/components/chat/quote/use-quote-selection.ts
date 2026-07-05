@@ -80,39 +80,28 @@ export function useQuoteSelection(params: {
       cancelPending();
       pendingFrame = requestAnimationFrame(() => {
         pendingFrame = null;
-        const selection = window.getSelection();
-        if (
-          selection === null ||
-          selection.isCollapsed ||
-          selection.rangeCount === 0
-        ) {
-          return;
-        }
-        // A new invalid gesture replaces (clears) any currently open snapshot.
-        setSnapshot(
-          resolveQuoteSelection(selection.getRangeAt(0), selection.toString()),
-        );
+        const next = resolveFromLiveSelection();
+        // Summon (or replace) the snapshot; reuse the previous reference when
+        // unchanged so an equivalent re-read - e.g. a preceding selectionchange
+        // for the same shift-extend gesture - doesn't churn the popover.
+        setSnapshot((prev) => reuseEquivalentSnapshot(prev, next));
       });
     };
 
     const handleSelectionChange = (): void => {
-      const selection = window.getSelection();
-      if (
-        selection === null ||
-        selection.isCollapsed ||
-        selection.rangeCount === 0
-      ) {
-        setSnapshot(null);
-        return;
-      }
-      // A live selection can also MOVE without collapsing (Ctrl+A in the
-      // composer, a keyboard re-selection elsewhere). autoUpdate only fires on
-      // scroll/resize/layout, so without this check the popover would linger
-      // anchored to the old range while the real selection lives elsewhere.
-      const startContainer = selection.getRangeAt(0).startContainer;
-      setSnapshot((prev) =>
-        prev !== null && !prev.root.contains(startContainer) ? null : prev,
-      );
+      const next = resolveFromLiveSelection();
+      setSnapshot((prev) => {
+        // Release-only trigger: a selection change never summons the popover on
+        // its own - it only tracks or dismisses one that mouseup already opened.
+        // This also keeps a purely keyboard-built selection (no prior mouseup)
+        // from showing it.
+        if (prev === null) return null;
+        // Re-snapshot so the anchor AND captured text stay consistent with the
+        // live highlight when the user extends/adjusts the selection (Shift+
+        // Arrow/End/click). A null result - collapsed, multi-range, moved out of
+        // the root, intersecting excluded/unstable, or whitespace - dismisses.
+        return reuseEquivalentSnapshot(prev, next);
+      });
     };
 
     container.addEventListener("mousedown", handleMouseDown);
@@ -127,6 +116,62 @@ export function useQuoteSelection(params: {
   }, [containerRef, enabled]);
 
   return { snapshot: enabled ? snapshot : null, dismiss };
+}
+
+export interface UsableSelectionInfo {
+  readonly rangeCount: number;
+  readonly isCollapsed: boolean;
+}
+
+/**
+ * A selection yields a quote only when it holds exactly ONE, non-collapsed
+ * range. Multi-range selections (Firefox Ctrl/Cmd-select) are rejected: the
+ * native highlight would span more than the single `getRangeAt(0)` we capture,
+ * so the popover could promise more than it quotes.
+ */
+export function isSingleUsableSelection(info: UsableSelectionInfo): boolean {
+  return info.rangeCount === 1 && !info.isCollapsed;
+}
+
+/** Reads the live selection and resolves it, or `null` when it is collapsed,
+ *  empty, multi-range, or fails validation. */
+function resolveFromLiveSelection(): QuoteSelectionSnapshot | null {
+  const selection = window.getSelection();
+  if (selection === null || !isSingleUsableSelection(selection)) return null;
+  return resolveQuoteSelection(selection.getRangeAt(0), selection.toString());
+}
+
+/** Preserves referential stability: when `next` is equivalent to `prev` (same
+ *  root, text, fence, and range boundary points) returns `prev`, so a no-op
+ *  selectionchange doesn't tear down and re-arm the popover effect/autoUpdate. */
+function reuseEquivalentSnapshot(
+  prev: QuoteSelectionSnapshot | null,
+  next: QuoteSelectionSnapshot | null,
+): QuoteSelectionSnapshot | null {
+  if (prev !== null && next !== null && snapshotsEquivalent(prev, next)) {
+    return prev;
+  }
+  return next;
+}
+
+// Compare boundary NODE identity + offsets rather than
+// `range.compareBoundaryPoints`: both ranges are clones of the same live
+// selection, so their boundary nodes are the same objects when unchanged, and
+// this never throws a WrongDocumentError when `a`'s nodes were disconnected by a
+// streaming re-render while `b` is a fresh live range (different range roots).
+function snapshotsEquivalent(
+  a: QuoteSelectionSnapshot,
+  b: QuoteSelectionSnapshot,
+): boolean {
+  return (
+    a.root === b.root &&
+    a.text === b.text &&
+    a.fenceLanguage === b.fenceLanguage &&
+    a.range.startContainer === b.range.startContainer &&
+    a.range.startOffset === b.range.startOffset &&
+    a.range.endContainer === b.range.endContainer &&
+    a.range.endOffset === b.range.endOffset
+  );
 }
 
 /**

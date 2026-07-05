@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 
 import {
+  isSingleUsableSelection,
   resolveQuoteSelection,
   useQuoteSelection,
 } from "../use-quote-selection";
@@ -439,6 +440,128 @@ describe("useQuoteSelection - selectionchange dismissal", () => {
   });
 });
 
+describe("useQuoteSelection - re-snapshot on selection extension", () => {
+  it("updates the captured text when the highlight is extended after mouseup", async () => {
+    const { container, first, second } = makeExtendableFixture();
+    const ref: { current: HTMLElement | null } = { current: container };
+    const { result } = renderHook(() =>
+      useQuoteSelection({ containerRef: ref, enabled: true }),
+    );
+
+    const initial = document.createRange();
+    initial.selectNodeContents(first);
+    selectRange(initial);
+    act(() => {
+      container.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+    });
+    await act(async () => {
+      await flushFrame();
+    });
+    expect(result.current.snapshot?.text).toBe("First.");
+
+    // Shift+ArrowDown-style extension: no mouseup, only a selectionchange.
+    const extended = document.createRange();
+    extended.setStart(firstText(first), 0);
+    extended.setEnd(firstText(second), "Second.".length);
+    selectRange(extended);
+    act(() => {
+      document.dispatchEvent(new Event("selectionchange"));
+    });
+    expect(result.current.snapshot?.text).toBe("First.Second.");
+  });
+
+  it("dismisses when an extension crosses out of the snapshot's root", async () => {
+    const { container, first, other } = makeTwoRootFixture();
+    const ref: { current: HTMLElement | null } = { current: container };
+    const { result } = renderHook(() =>
+      useQuoteSelection({ containerRef: ref, enabled: true }),
+    );
+
+    const initial = document.createRange();
+    initial.selectNodeContents(first);
+    selectRange(initial);
+    act(() => {
+      container.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+    });
+    await act(async () => {
+      await flushFrame();
+    });
+    expect(result.current.snapshot).not.toBeNull();
+
+    const crossing = document.createRange();
+    crossing.setStart(firstText(first), 0);
+    crossing.setEnd(firstText(other), 3);
+    selectRange(crossing);
+    act(() => {
+      document.dispatchEvent(new Event("selectionchange"));
+    });
+    expect(result.current.snapshot).toBeNull();
+  });
+
+  it("keeps the SAME snapshot reference for a no-op selection change", async () => {
+    const { container, first } = makeExtendableFixture();
+    const ref: { current: HTMLElement | null } = { current: container };
+    const { result } = renderHook(() =>
+      useQuoteSelection({ containerRef: ref, enabled: true }),
+    );
+
+    const range = document.createRange();
+    range.selectNodeContents(first);
+    selectRange(range);
+    act(() => {
+      container.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+    });
+    await act(async () => {
+      await flushFrame();
+    });
+    const before = result.current.snapshot;
+    expect(before).not.toBeNull();
+
+    act(() => {
+      document.dispatchEvent(new Event("selectionchange"));
+    });
+    expect(result.current.snapshot).toBe(before);
+  });
+
+  it("never summons the popover from a keyboard selection with no prior mouseup", () => {
+    const { container, first } = makeExtendableFixture();
+    const ref: { current: HTMLElement | null } = { current: container };
+    const { result } = renderHook(() =>
+      useQuoteSelection({ containerRef: ref, enabled: true }),
+    );
+
+    const range = document.createRange();
+    range.selectNodeContents(first);
+    selectRange(range);
+    act(() => {
+      document.dispatchEvent(new Event("selectionchange"));
+    });
+    expect(result.current.snapshot).toBeNull();
+  });
+});
+
+describe("isSingleUsableSelection", () => {
+  it("accepts exactly one non-collapsed range", () => {
+    expect(isSingleUsableSelection({ rangeCount: 1, isCollapsed: false })).toBe(
+      true,
+    );
+  });
+
+  it("rejects collapsed, empty, and multi-range selections", () => {
+    // jsdom collapses a second addRange, so the multi-range case (Firefox
+    // Ctrl-select) is covered through this pure seam rather than a live Selection.
+    expect(isSingleUsableSelection({ rangeCount: 1, isCollapsed: true })).toBe(
+      false,
+    );
+    expect(isSingleUsableSelection({ rangeCount: 0, isCollapsed: true })).toBe(
+      false,
+    );
+    expect(isSingleUsableSelection({ rangeCount: 2, isCollapsed: false })).toBe(
+      false,
+    );
+  });
+});
+
 function flushFrame(): Promise<void> {
   return new Promise((resolve) => {
     requestAnimationFrame(() => resolve());
@@ -464,6 +587,49 @@ function makeContainerWithProse(text: string): {
   container.appendChild(root);
   document.body.appendChild(container);
   return { container, paragraph };
+}
+
+/** A transcript container holding one quotable root with two paragraphs, so a
+ *  selection can be extended from the first into the second. */
+function makeExtendableFixture(): {
+  readonly container: HTMLElement;
+  readonly first: HTMLElement;
+  readonly second: HTMLElement;
+} {
+  const container = document.createElement("div");
+  const root = document.createElement("div");
+  root.setAttribute("data-quotable", "true");
+  const first = document.createElement("p");
+  first.textContent = "First.";
+  const second = document.createElement("p");
+  second.textContent = "Second.";
+  root.append(first, second);
+  container.appendChild(root);
+  document.body.appendChild(container);
+  return { container, first, second };
+}
+
+/** A container with two SEPARATE quotable roots, so an extension can cross a
+ *  root boundary and become invalid. */
+function makeTwoRootFixture(): {
+  readonly container: HTMLElement;
+  readonly first: HTMLElement;
+  readonly other: HTMLElement;
+} {
+  const container = document.createElement("div");
+  const rootA = document.createElement("div");
+  rootA.setAttribute("data-quotable", "true");
+  const first = document.createElement("p");
+  first.textContent = "First.";
+  rootA.appendChild(first);
+  const rootB = document.createElement("div");
+  rootB.setAttribute("data-quotable", "true");
+  const other = document.createElement("p");
+  other.textContent = "Other.";
+  rootB.appendChild(other);
+  container.append(rootA, rootB);
+  document.body.appendChild(container);
+  return { container, first, other };
 }
 
 function makeChipParagraph(): {
