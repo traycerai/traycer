@@ -48,6 +48,23 @@ export const worktreeSetupStateSchema = z.enum([
 ]);
 export type WorktreeSetupState = z.infer<typeof worktreeSetupStateSchema>;
 
+/**
+ * A submodule branch a worktree binding OWNS - recorded at creation, after the
+ * setup script checks each submodule out on a branch matching the parent
+ * worktree. This is the *owned* set (what the binding created), distinct from
+ * whatever live checkout state a later probe discovers. It exists so the Task
+ * merge-rollup can require every owned branch - the superproject binding branch
+ * AND each submodule branch - to have landed (True AND). A detached / pinned
+ * submodule with no branch is not owned and never recorded here.
+ */
+export const worktreeOwnedSubmoduleSchema = z.object({
+  repoIdentifier: repoIdentifierSchema,
+  branch: z.string(),
+});
+export type WorktreeOwnedSubmodule = z.infer<
+  typeof worktreeOwnedSubmoduleSchema
+>;
+
 export const worktreeBindingEntrySchema = z.object({
   workspacePath: z.string(),
   mode: worktreeBindingEntryModeSchema,
@@ -61,6 +78,17 @@ export const worktreeBindingEntrySchema = z.object({
   setupExitCode: z.number().int().nullable(),
   setupFailedAt: z.number().nullable(),
   createdAt: z.number(),
+  // HEAD SHA captured by `git rev-parse HEAD` right after `git worktree add`,
+  // before setup runs - the anchor for the "At base commit" signal
+  // (`HEAD === baseSha && clean && no reflog commits`). `null` for imported
+  // worktrees: their creation point was never observed, so they get no at-base
+  // label. Nullable, never optional.
+  baseSha: z.string().nullable(),
+  // Submodule branches this worktree owns (see `worktreeOwnedSubmoduleSchema`).
+  // `[]` when the repo has no submodules, or none were checked out on a branch.
+  // Not optional - the host persistence migration (binding v1 -> v2) backfills
+  // `[]` on older rows so every read carries a concrete array.
+  ownedSubmodules: z.array(worktreeOwnedSubmoduleSchema),
 });
 export type WorktreeBindingEntry = z.infer<typeof worktreeBindingEntrySchema>;
 
@@ -607,6 +635,42 @@ export const worktreeBranchStatusSchema = z.object({
 export type WorktreeBranchStatus = z.infer<typeof worktreeBranchStatusSchema>;
 
 /**
+ * GitHub PR merge state for a branch, as discovered by the host's best-effort
+ * local `gh` probe. `"none"` means the probe ran but found no PR for the branch;
+ * the whole PR bundle goes `null` (see the entry fields) when the probe is
+ * absent / unauth / failed - PR data then contributes nothing and the classifier
+ * degrades to the local-ancestry and at-base signals, never an error.
+ */
+export const worktreePrStateSchema = z.enum([
+  "merged",
+  "open",
+  "closed",
+  "none",
+]);
+export type WorktreePrState = z.infer<typeof worktreePrStateSchema>;
+
+/**
+ * Per-owned-submodule merge facts, joined onto a v1.1 listing entry so the Task
+ * merge-rollup (True AND across the superproject and every owned submodule) is
+ * pure client work. Mirrors the superproject's PR fields plus the local-ancestry
+ * `mergedIntoDefault`. `mergedHeadShaMatches` is the host's live-HEAD comparison
+ * (submodule HEAD === the merged head SHA) so the pure client classifier never
+ * needs the SHA itself.
+ */
+export const worktreeSubmoduleMergeFactSchema = z.object({
+  repoIdentifier: repoIdentifierSchema,
+  branch: z.string(),
+  prState: worktreePrStateSchema.nullable(),
+  prNumber: z.number().int().nullable(),
+  prUrl: z.string().nullable(),
+  mergedHeadShaMatches: z.boolean(),
+  mergedIntoDefault: z.boolean(),
+});
+export type WorktreeSubmoduleMergeFact = z.infer<
+  typeof worktreeSubmoduleMergeFactSchema
+>;
+
+/**
  * `worktree.listAllForHost` v1.1 entry. Adds the staleness signals the
  * housekeeping skill and the Settings ▸ Worktrees tab use, on top of every
  * v1.0 field.
@@ -638,6 +702,23 @@ export const worktreeHostEntrySchemaV11 = worktreeHostEntrySchema.extend({
   // Worktree dir birthtime (fs stat) - a fallback age signal. `null` when stat
   // is unavailable.
   createdAt: z.number().nullable(),
+  // Base SHA captured at creation (mirrored from the binding), surfaced on the
+  // listing so the client can prove "At base commit" without a binding read.
+  // `null` for imported worktrees or when `includeActivity` is false.
+  baseSha: z.string().nullable(),
+  // Superproject PR facts from the host's best-effort `gh` probe. `prState`,
+  // `prNumber` and `prUrl` are all `null` together when the probe found nothing /
+  // was absent / `includeActivity` is false. `mergedHeadShaMatches` is the host's
+  // live-HEAD comparison (HEAD === the merged head SHA) - the pure client
+  // classifier greens `Merged (PR)` on `prState === "merged" &&
+  // mergedHeadShaMatches`, so it never needs the SHA. `false` whenever unproven.
+  prState: worktreePrStateSchema.nullable(),
+  prNumber: z.number().int().nullable(),
+  prUrl: z.string().nullable(),
+  mergedHeadShaMatches: z.boolean(),
+  // Per-owned-submodule merge facts for the True-AND Task rollup. `[]` when the
+  // worktree owns no submodule branches or `includeActivity` is false.
+  submodules: z.array(worktreeSubmoduleMergeFactSchema),
 });
 export type WorktreeHostEntryV11 = z.infer<typeof worktreeHostEntrySchemaV11>;
 

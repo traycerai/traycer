@@ -405,8 +405,10 @@ export const worktreeListAllForHostV11 = defineRpcContract({
 // Additive upgrade from v1.0: an older peer neither asks for activity nor
 // carries the enriched fields, so the request defaults `includeActivity: false`
 // and each response entry defaults empty `owners` / `null` timestamps &
-// `branchStatus`. The newer side runs this when bridging a v1.0 peer up to
-// canonical (host: inbound v1.0 request; client: inbound v1.0 response).
+// `branchStatus`, plus the merge-provenance fields (`baseSha`, PR bundle and
+// `submodules`) default to their absent shape (`null` / `false` / `[]`). The
+// newer side runs this when bridging a v1.0 peer up to canonical (host: inbound
+// v1.0 request; client: inbound v1.0 response).
 export const worktreeListAllForHostUpgradeV10ToV11 = defineUpgradePath<
   typeof worktreeListAllForHostV10,
   typeof worktreeListAllForHostV11
@@ -423,6 +425,12 @@ export const worktreeListAllForHostUpgradeV10ToV11 = defineUpgradePath<
       owners: [],
       branchStatus: null,
       createdAt: null,
+      baseSha: null,
+      prState: null,
+      prNumber: null,
+      prUrl: null,
+      mergedHeadShaMatches: false,
+      submodules: [],
     })),
   }),
 });

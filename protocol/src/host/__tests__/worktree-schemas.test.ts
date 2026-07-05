@@ -13,12 +13,14 @@ import {
 } from "@traycer/protocol/framework/index";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import {
+  worktreeBindingEntrySchema,
   worktreeBranchStatusSchema,
   worktreeHostEntrySchema,
   worktreeHostEntrySchemaV11,
   worktreeListAllForHostRequestSchema,
   worktreeListAllForHostRequestSchemaV11,
   worktreeListAllForHostResponseSchemaV11,
+  worktreeSubmoduleMergeFactSchema,
 } from "@traycer/protocol/host/worktree-schemas";
 
 const V10 = { major: 1, minor: 0 } as const;
@@ -38,6 +40,18 @@ const v10Entry = {
   gitRemovable: true,
   scripts: null,
 };
+
+// The merge-provenance fields in their absent shape - what an unprobed entry
+// (and the v1.0 -> v1.1 upgrade) fills in: no baseSha, no PR bundle, no owned
+// submodules. `mergedHeadShaMatches` is `false` (not null) - it is a boolean.
+const mergeProvenanceAbsent = {
+  baseSha: null,
+  prState: null,
+  prNumber: null,
+  prUrl: null,
+  mergedHeadShaMatches: false,
+  submodules: [],
+} as const;
 
 describe("worktreeHostEntrySchemaV11", () => {
   it("parses an enriched entry and reparses unchanged", () => {
@@ -60,6 +74,22 @@ describe("worktreeHostEntrySchemaV11", () => {
       ],
       branchStatus: { ahead: 2, behind: 1, mergedIntoDefault: false },
       createdAt: 1_698_000_000_000,
+      baseSha: "a".repeat(40),
+      prState: "merged" as const,
+      prNumber: 123,
+      prUrl: "https://github.com/acme/web/pull/123",
+      mergedHeadShaMatches: true,
+      submodules: [
+        {
+          repoIdentifier: { owner: "acme", repo: "protocol" },
+          branch: "feature-x",
+          prState: "open" as const,
+          prNumber: 45,
+          prUrl: "https://github.com/acme/protocol/pull/45",
+          mergedHeadShaMatches: false,
+          mergedIntoDefault: false,
+        },
+      ],
     };
     const parsed1 = worktreeHostEntrySchemaV11.parse(fixture);
     const parsed2 = worktreeHostEntrySchemaV11.parse(parsed1);
@@ -73,10 +103,15 @@ describe("worktreeHostEntrySchemaV11", () => {
       owners: [],
       branchStatus: null,
       createdAt: null,
+      ...mergeProvenanceAbsent,
     });
     expect(parsed.owners).toEqual([]);
     expect(parsed.branchStatus).toBeNull();
     expect(parsed.lastActivityAt).toBeNull();
+    expect(parsed.baseSha).toBeNull();
+    expect(parsed.prState).toBeNull();
+    expect(parsed.mergedHeadShaMatches).toBe(false);
+    expect(parsed.submodules).toEqual([]);
   });
 
   it("parses a never-pushed-but-merged entry (null diff, proven merged)", () => {
@@ -86,12 +121,28 @@ describe("worktreeHostEntrySchemaV11", () => {
       owners: [],
       branchStatus: { ahead: null, behind: null, mergedIntoDefault: true },
       createdAt: null,
+      ...mergeProvenanceAbsent,
     });
     expect(parsed.branchStatus).toEqual({
       ahead: null,
       behind: null,
       mergedIntoDefault: true,
     });
+  });
+
+  it("parses an at-base entry (baseSha present, no PR)", () => {
+    const parsed = worktreeHostEntrySchemaV11.parse({
+      ...v10Entry,
+      lastActivityAt: null,
+      owners: [],
+      branchStatus: { ahead: null, behind: null, mergedIntoDefault: false },
+      createdAt: null,
+      ...mergeProvenanceAbsent,
+      baseSha: "b".repeat(40),
+    });
+    expect(parsed.baseSha).toBe("b".repeat(40));
+    expect(parsed.prState).toBeNull();
+    expect(parsed.submodules).toEqual([]);
   });
 
   it("still accepts a bare v1.0 entry as its own (v1.0) shape", () => {
@@ -185,6 +236,7 @@ describe("worktree.listAllForHost v1.0 <-> v1.1 negotiation", () => {
           owners: [],
           branchStatus: null,
           createdAt: null,
+          ...mergeProvenanceAbsent,
         },
       ],
     });
@@ -200,5 +252,85 @@ describe("worktree.listAllForHost v1.0 <-> v1.1 negotiation", () => {
       "0",
       "1",
     ]);
+  });
+});
+
+// A binding entry as an older (pre-migration) row would carry it, before the
+// merge-provenance fields existed. The host binding-v1->v2 migration backfills
+// `baseSha: null` / `ownedSubmodules: []`; here we assert the schema round-trips
+// both the backfilled-empty and the fully-populated shapes.
+const bindingEntryBase = {
+  workspacePath: "/Users/dev/acme/web",
+  mode: "worktree" as const,
+  repoIdentifier: { owner: "acme", repo: "web" },
+  worktreePath: "/Users/dev/.traycer/worktrees/acme__web/feature-x",
+  branch: "feature-x",
+  isPrimary: true,
+  isImported: false,
+  setupState: "succeeded" as const,
+  setupTerminalSessionId: null,
+  setupExitCode: 0,
+  setupFailedAt: null,
+  createdAt: 1_700_000_000_000,
+};
+
+describe("worktreeBindingEntrySchema (merge-provenance additions)", () => {
+  it("round-trips a binding entry with baseSha + owned submodules", () => {
+    const entry = {
+      ...bindingEntryBase,
+      baseSha: "c".repeat(40),
+      ownedSubmodules: [
+        { repoIdentifier: { owner: "acme", repo: "protocol" }, branch: "feature-x" },
+      ],
+    };
+    const parsed1 = worktreeBindingEntrySchema.parse(entry);
+    const parsed2 = worktreeBindingEntrySchema.parse(parsed1);
+    expect(parsed2).toEqual(parsed1);
+    expect(parsed1.ownedSubmodules).toHaveLength(1);
+  });
+
+  it("accepts the backfilled-empty shape (null baseSha, no owned submodules)", () => {
+    const parsed = worktreeBindingEntrySchema.parse({
+      ...bindingEntryBase,
+      baseSha: null,
+      ownedSubmodules: [],
+    });
+    expect(parsed.baseSha).toBeNull();
+    expect(parsed.ownedSubmodules).toEqual([]);
+  });
+
+  it("rejects an entry missing the merge-provenance fields", () => {
+    // The fields are required (not optional) - a pre-migration row must be
+    // backfilled by the host before it validates.
+    expect(() => worktreeBindingEntrySchema.parse(bindingEntryBase)).toThrow();
+  });
+});
+
+describe("worktreeSubmoduleMergeFactSchema", () => {
+  it("round-trips a merged submodule fact", () => {
+    const fact = {
+      repoIdentifier: { owner: "acme", repo: "protocol" },
+      branch: "feature-x",
+      prState: "merged" as const,
+      prNumber: 45,
+      prUrl: "https://github.com/acme/protocol/pull/45",
+      mergedHeadShaMatches: true,
+      mergedIntoDefault: true,
+    };
+    expect(worktreeSubmoduleMergeFactSchema.parse(fact)).toEqual(fact);
+  });
+
+  it("accepts a submodule with no PR fact (null PR bundle)", () => {
+    const parsed = worktreeSubmoduleMergeFactSchema.parse({
+      repoIdentifier: { owner: "acme", repo: "protocol" },
+      branch: "feature-x",
+      prState: null,
+      prNumber: null,
+      prUrl: null,
+      mergedHeadShaMatches: false,
+      mergedIntoDefault: false,
+    });
+    expect(parsed.prState).toBeNull();
+    expect(parsed.mergedHeadShaMatches).toBe(false);
   });
 });
