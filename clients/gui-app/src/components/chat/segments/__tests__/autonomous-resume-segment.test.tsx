@@ -162,7 +162,7 @@ describe("<AutonomousResumeSegment />", () => {
     expect(hostQueryMock.calls).toHaveLength(0);
   });
 
-  it("renders wakeup triggers as schedule dividers carrying the prompt", () => {
+  it("renders wakeup triggers as non-expandable cards carrying the prompt", () => {
     render(
       <AutonomousResumeSegment
         triggers={[
@@ -178,15 +178,15 @@ describe("<AutonomousResumeSegment />", () => {
       />,
     );
 
-    expect(
-      screen.getByRole("separator", {
-        name: "Woke on schedule: Review the deployment",
-      }),
-    ).toBeTruthy();
+    expect(screen.queryByRole("separator")).toBeNull();
+    expect(screen.getByText("Woke on schedule")).toBeTruthy();
+    expect(screen.getByText("Review the deployment")).toBeTruthy();
     expect(
       screen.getByText("Check the health dashboard and summarize alerts."),
     ).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /Wake completed/ })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: /Woke on schedule/ }),
+    ).toBeNull();
     expect(hostQueryMock.calls).toHaveLength(0);
   });
 });
