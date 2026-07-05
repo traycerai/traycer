@@ -704,7 +704,8 @@ export const worktreeHostEntrySchemaV11 = worktreeHostEntrySchema.extend({
   createdAt: z.number().nullable(),
   // Base SHA captured at creation (mirrored from the binding), surfaced on the
   // listing so the client can prove "At base commit" without a binding read.
-  // `null` for imported worktrees or when `includeActivity` is false.
+  // Always populated regardless of `includeActivity` (a cheap binding read, like
+  // `owners`); `null` only for imported worktrees or pre-migration bindings.
   baseSha: z.string().nullable(),
   // Superproject PR facts from the host's best-effort `gh` probe. `prState`,
   // `prNumber` and `prUrl` are all `null` together when the probe found nothing /
