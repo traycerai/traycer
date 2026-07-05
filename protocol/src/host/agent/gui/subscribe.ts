@@ -1,11 +1,11 @@
 /**
- * `chat.subscribe@1.1` - versioned streaming-RPC contract for a single
- * host-owned GUI chat session. `chat.subscribe@1.0` (frozen, near the bottom
- * of this file) is the exact shape shipped in host-v1.0.0; `@1.1` only adds
- * the background-items controls on top of it, additively, so a `1.1` app
- * still bridges to a host still on `1.0`. Streams have no cross-major
- * downgrade bridge (see `stream-compat.ts`'s `canBridgeStream()`), so once a
- * method ships, its major must never move again - only additive minors.
+ * `chat.subscribe@1.2` - versioned streaming-RPC contract for a single
+ * host-owned GUI chat session. `chat.subscribe@1.0`/`@1.1` (frozen, near the
+ * bottom of this file) are the exact shapes shipped in earlier hosts; later
+ * minors only add to them, so a `1.2` app still bridges to hosts that only know
+ * `1.0`/`1.1`. Streams have no cross-major downgrade bridge (see
+ * `stream-compat.ts`'s `canBridgeStream()`), so once a method ships, its major
+ * must never move again - only additive minors.
  *
  * This stream is intentionally text-frame-only. The existing `epic.subscribe`
  * stream remains responsible for Y.Doc binary updates; chat execution frames
@@ -150,6 +150,7 @@ export const backgroundItemKindSchema = z.enum([
   "subagent",
   "command",
   "monitor",
+  "wakeup",
 ]);
 export type BackgroundItemKind = z.infer<typeof backgroundItemKindSchema>;
 
@@ -167,12 +168,41 @@ export type BackgroundItemKind = z.infer<typeof backgroundItemKindSchema>;
  * Host-internal scheduling metadata such as tool-use id and start time must not
  * leak onto this wire contract.
  */
-export const backgroundItemSchema = z.object({
+const backgroundItemBaseFields = {
   taskId: z.string(),
-  kind: backgroundItemKindSchema,
   title: z.string(),
   blockId: z.string(),
+  // Parent task id for nested background items. Optional/defaulted so a
+  // new-client parse of an old-host frame succeeds, while old clients strip it.
+  parentTaskId: z.string().nullable().default(null),
+} as const;
+
+const runningBackgroundItemKindSchema = z.enum([
+  "subagent",
+  "command",
+  "monitor",
+]);
+
+const runningBackgroundItemSchema = z.object({
+  ...backgroundItemBaseFields,
+  kind: runningBackgroundItemKindSchema,
+  // Epoch milliseconds when a wakeup item is scheduled to fire. Null for
+  // ordinary background work and optional for old-host compatibility.
+  scheduledFor: z.number().nullable().default(null),
 });
+
+const wakeupBackgroundItemSchema = z.object({
+  ...backgroundItemBaseFields,
+  kind: z.literal("wakeup"),
+  // Wakeup items represent a concrete scheduled wake and must carry its due
+  // timestamp. Parent metadata remains defaulted for old-host compatibility.
+  scheduledFor: z.number(),
+});
+
+export const backgroundItemSchema = z.discriminatedUnion("kind", [
+  runningBackgroundItemSchema,
+  wakeupBackgroundItemSchema,
+]);
 export type BackgroundItem = z.infer<typeof backgroundItemSchema>;
 
 export const chatActionAckStatusSchema = z.enum(["accepted", "rejected"]);
@@ -372,13 +402,32 @@ export const chatErrorNoticeSchema = z.object({
 });
 export type ChatErrorNotice = z.infer<typeof chatErrorNoticeSchema>;
 
-export const chatSubscribeServerFrameSchema = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal("snapshot"),
-    ...textFrameFields,
-    ...chatReferenceFields,
-    snapshot: chatSnapshotSchema,
-  }),
+const chatSubscribeSnapshotServerFrameSchema = z.object({
+  kind: z.literal("snapshot"),
+  ...textFrameFields,
+  ...chatReferenceFields,
+  snapshot: chatSnapshotSchema,
+});
+
+const chatSubscribeTurnStateChangedServerFrameSchema = z.object({
+  kind: z.literal("turnStateChanged"),
+  ...textFrameFields,
+  ...chatReferenceFields,
+  // `runStatus` rides every turn-state broadcast so the GUI's in-progress
+  // indicator updates the instant a turn is requested, stops, or completes -
+  // including the request→activeTurn window where `activeTurn` is still null.
+  runStatus: chatRunStatusSchema,
+  activeTurn: chatActiveTurnSchema.nullable(),
+  // Background-items deltas ride this same broadcast (added/settled/stopped).
+  // Optional for the same capability-sentinel reason as the snapshot field; an
+  // older host omits it and the renderer keeps its last snapshot value.
+  backgroundItems: z.array(backgroundItemSchema).optional(),
+  // See `chatSnapshotSchema.turnInProgress` - same predicate, same
+  // optionality, same conservative-fallback contract.
+  turnInProgress: z.boolean().optional(),
+});
+
+const chatSubscribeSharedServerFrameSchemas = [
   z.object({
     kind: z.literal("actionAck"),
     ...textFrameFields,
@@ -406,23 +455,6 @@ export const chatSubscribeServerFrameSchema = z.discriminatedUnion("kind", [
     ...textFrameFields,
     ...chatReferenceFields,
     queue: chatQueueStateSchema,
-  }),
-  z.object({
-    kind: z.literal("turnStateChanged"),
-    ...textFrameFields,
-    ...chatReferenceFields,
-    // `runStatus` rides every turn-state broadcast so the GUI's in-progress
-    // indicator updates the instant a turn is requested, stops, or completes -
-    // including the request→activeTurn window where `activeTurn` is still null.
-    runStatus: chatRunStatusSchema,
-    activeTurn: chatActiveTurnSchema.nullable(),
-    // Background-items deltas ride this same broadcast (added/settled/stopped).
-    // Optional for the same capability-sentinel reason as the snapshot field; an
-    // older host omits it and the renderer keeps its last snapshot value.
-    backgroundItems: z.array(backgroundItemSchema).optional(),
-    // See `chatSnapshotSchema.turnInProgress` - same predicate, same
-    // optionality, same conservative-fallback contract.
-    turnInProgress: z.boolean().optional(),
   }),
   z.object({
     kind: z.literal("blockDelta"),
@@ -528,6 +560,12 @@ export const chatSubscribeServerFrameSchema = z.discriminatedUnion("kind", [
     kind: z.literal("pong"),
     ...textFrameFields,
   }),
+];
+
+export const chatSubscribeServerFrameSchema = z.discriminatedUnion("kind", [
+  chatSubscribeSnapshotServerFrameSchema,
+  chatSubscribeTurnStateChangedServerFrameSchema,
+  ...chatSubscribeSharedServerFrameSchemas,
 ]);
 export type ChatSubscribeServerFrame = z.infer<
   typeof chatSubscribeServerFrameSchema
@@ -1044,11 +1082,73 @@ export const chatSubscribeV10 = defineStreamRpcContract({
   clientFrameSchema: chatSubscribeClientFrameSchemaV10,
 });
 
-// ─── Live `chat.subscribe@1.1` contract ────────────────────────────────────
+// ─── Frozen `chat.subscribe@1.1` shape (background-items controls) ──────────
+//
+// Kept registered so `chat.subscribe@1.2` clients can still bridge to a host
+// that only advertises `1.1`. Do not add the 1.2-only wakeup enum or metadata
+// fields here; old 1.1 peers must never receive those values on this line.
+
+const backgroundItemKindSchemaV11 = z.enum(["subagent", "command", "monitor"]);
+
+const backgroundItemSchemaV11 = z.object({
+  taskId: z.string(),
+  kind: backgroundItemKindSchemaV11,
+  title: z.string(),
+  blockId: z.string(),
+});
+
+const chatSnapshotSchemaV11 = z.object({
+  chat: chatSchema,
+  access: chatAccessSchema,
+  queue: chatQueueStateSchema,
+  runStatus: chatRunStatusSchema,
+  activeTurn: chatActiveTurnSchema.nullable(),
+  pendingApprovals: z.array(chatApprovalStateSchema),
+  pendingInterviews: z.array(chatPendingInterviewStateSchema),
+  worktreeBinding: worktreeBindingSchema.nullable(),
+  missingWorktreePaths: z.array(z.string()),
+  pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchema),
+  accumulatedFileChanges: z.array(chatAccumulatedFileChangeSchema),
+  backgroundItems: z.array(backgroundItemSchemaV11).optional(),
+  turnInProgress: z.boolean().optional(),
+});
+
+const chatSubscribeSnapshotServerFrameSchemaV11 = z.object({
+  kind: z.literal("snapshot"),
+  ...textFrameFields,
+  ...chatReferenceFields,
+  snapshot: chatSnapshotSchemaV11,
+});
+
+const chatSubscribeTurnStateChangedServerFrameSchemaV11 = z.object({
+  kind: z.literal("turnStateChanged"),
+  ...textFrameFields,
+  ...chatReferenceFields,
+  runStatus: chatRunStatusSchema,
+  activeTurn: chatActiveTurnSchema.nullable(),
+  backgroundItems: z.array(backgroundItemSchemaV11).optional(),
+  turnInProgress: z.boolean().optional(),
+});
+
+const chatSubscribeServerFrameSchemaV11 = z.discriminatedUnion("kind", [
+  chatSubscribeSnapshotServerFrameSchemaV11,
+  chatSubscribeTurnStateChangedServerFrameSchemaV11,
+  ...chatSubscribeSharedServerFrameSchemas,
+]);
 
 export const chatSubscribeV11 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 1 } as const,
+  openRequestSchema: chatSubscribeOpenRequestSchema,
+  serverFrameSchema: chatSubscribeServerFrameSchemaV11,
+  clientFrameSchema: chatSubscribeClientFrameSchema,
+});
+
+// ─── Live `chat.subscribe@1.2` contract ────────────────────────────────────
+
+export const chatSubscribeV12 = defineStreamRpcContract({
+  method: "chat.subscribe",
+  schemaVersion: { major: 1, minor: 2 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchema,
   serverFrameSchema: chatSubscribeServerFrameSchema,
   clientFrameSchema: chatSubscribeClientFrameSchema,

@@ -2301,7 +2301,7 @@ function suppressRedundantResumeMarkers(
     const previousId = index > 0 ? (nested.at(index - 1)?.id ?? null) : null;
     if (previousId === null) return [segment];
     const triggers = segment.triggers.filter(
-      (trigger) => trigger.blockId !== previousId,
+      (trigger) => trigger.kind === "wakeup" || trigger.blockId !== previousId,
     );
     if (triggers.length === segment.triggers.length) return [segment];
     if (triggers.length === 0) return [];
