@@ -16,6 +16,7 @@ export interface GitFlatFileListProps {
   /** Path of the canvas's focused diff file when it lives in this section. */
   readonly activeFilePath: string | null;
   readonly virtualized: boolean;
+  readonly nestedRows: boolean;
 }
 
 export function GitFlatFileList(props: GitFlatFileListProps): ReactNode {
@@ -67,9 +68,18 @@ export function GitFlatFileList(props: GitFlatFileListProps): ReactNode {
         file={file}
         active={file.path === activeFilePath}
         pathRanges={pathRangesByPath.get(file.path) ?? NO_HIGHLIGHT}
+        nested={props.nestedRows}
       />
     ),
-    [activeFilePath, hostId, epicId, pathRangesByPath, runningDir, viewTabId],
+    [
+      activeFilePath,
+      hostId,
+      epicId,
+      pathRangesByPath,
+      props.nestedRows,
+      runningDir,
+      viewTabId,
+    ],
   );
 
   const itemKey = useCallback(
@@ -90,6 +100,7 @@ export function GitFlatFileList(props: GitFlatFileListProps): ReactNode {
             file={file}
             active={file.path === activeFilePath}
             pathRanges={pathRangesByPath.get(file.path) ?? NO_HIGHLIGHT}
+            nested={props.nestedRows}
           />
         ))}
       </div>

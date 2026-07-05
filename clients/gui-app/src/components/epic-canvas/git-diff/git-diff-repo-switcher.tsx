@@ -85,6 +85,7 @@ export function GitDiffRepoSwitcher(
           testId={props.triggerTestId}
           className={props.triggerClassName}
           aria-label={triggerAccessibleName(model)}
+          title={triggerTooltip(model)}
           aria-haspopup="dialog"
           aria-expanded={props.open}
           aria-controls={props.open ? contentId : undefined}
@@ -121,6 +122,20 @@ function triggerAccessibleName(model: GitDiffRepoSwitcherModel): string {
     .concat(fileLabel === null ? [] : [fileLabel])
     .concat(stateLabel === null ? [] : [stateLabel])
     .join(", ");
+}
+
+function triggerTooltip(model: GitDiffRepoSwitcherModel): string {
+  const moduleLabel = changedSubmoduleLabel(model.trigger.moduleChangeCount);
+  const fileLabel = changedFileLabel(model.trigger.fileChangeCount);
+  return [
+    `Workspace: ${model.trigger.label}`,
+    `Path: ${model.trigger.secondaryLabel}`,
+    moduleLabel === null ? null : moduleLabel,
+    fileLabel === null ? null : fileLabel,
+    model.trigger.unavailable ? "Status: unavailable" : null,
+  ]
+    .filter((line): line is string => line !== null)
+    .join("\n");
 }
 
 export interface GitDiffRepoSwitcherDropdownProps {

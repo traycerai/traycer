@@ -485,8 +485,9 @@ describe("<GitDiffPanelBodyLive /> workspace switcher integration", () => {
       screen.getByTestId("git-module-group-submodule-traycer"),
     ).toBeDefined();
     expect(
-      screen.getByTestId("git-module-parent-reference-traycer").textContent,
+      screen.getByTestId("git-module-header-traycer").getAttribute("title"),
     ).toContain("pinned commit out of date");
+    expect(screen.queryByText("pinned commit out of date")).toBeNull();
     expect(screen.getByTestId("git-module-no-changes-traycer")).toBeDefined();
     expect(
       screen

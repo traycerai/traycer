@@ -50,6 +50,25 @@ function renderRow(args: {
       onClick={() => {}}
       onDoubleClick={undefined}
       ariaExpanded={undefined}
+      nested={false}
+      className={undefined}
+    />,
+  );
+}
+
+function renderNestedPanelRow(file: GitChangedFile) {
+  return render(
+    <GitChangedFileRow
+      file={file}
+      density="panel"
+      active={false}
+      leading={null}
+      trailing={null}
+      pathRanges={NO_HIGHLIGHT}
+      onClick={() => {}}
+      onDoubleClick={undefined}
+      ariaExpanded={undefined}
+      nested
       className={undefined}
     />,
   );
@@ -73,6 +92,12 @@ describe("GitChangedFileRow panel density", () => {
     expect(row.textContent).toContain("-1");
     expect(screen.getByText("+3").className).toContain("text-emerald");
     expect(screen.getByText("-1").className).toContain("text-red");
+    expect(screen.getByText("+3").parentElement?.className).toContain(
+      "absolute",
+    );
+    expect(screen.getByText("+3").parentElement?.className).not.toContain(
+      "z-10",
+    );
   });
 
   it("middle-truncates filenames so the extension remains separate", () => {
@@ -138,6 +163,19 @@ describe("GitChangedFileRow panel density", () => {
 
     const row = screen.getByRole("button", { name: "Modified README.md" });
     expect(row.textContent).not.toContain("Repository root");
+  });
+
+  it("indents nested panel rows beneath their section header", () => {
+    renderNestedPanelRow(
+      makeFile({ path: "src/routes/epic/index.ts", previousPath: null }),
+    );
+
+    const row = screen.getByRole("button", {
+      name: "Modified index.ts in src/routes/epic",
+    });
+    expect(row.className).toContain("pl-10");
+    expect(row.className).toContain("pr-3");
+    expect(row.className).not.toContain("px-3");
   });
 
   it("emphasizes matched characters across the filename and directory", () => {

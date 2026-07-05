@@ -155,18 +155,59 @@ function renderChanges(props: {
 describe("<SelectedRepoChanges /> module groups", () => {
   beforeEach(() => cleanup());
 
-  it("renders root-only changes in the root module", () => {
+  it("renders single-repo changes without a duplicate module header", () => {
     renderChanges({
       snapshot: snapshotResult(response({ files: [file("src/app.ts", null)] })),
     });
 
-    expect(screen.getByTestId("git-module-group-root")).toBeDefined();
-    expect(screen.getByTestId("git-module-count-root").textContent).toBe(
-      "1 file",
-    );
+    expect(screen.getByTestId("git-single-repo-changes")).toBeDefined();
+    expect(screen.queryByTestId("git-module-group-root")).toBeNull();
+    expect(screen.queryByTestId("git-module-header-root")).toBeNull();
+    expect(screen.getByRole("textbox", { name: "Filter files" })).toBeDefined();
+    expect(
+      screen.queryByRole("textbox", { name: "Filter submodules and files" }),
+    ).toBeNull();
+    expect(
+      screen
+        .getByRole("textbox", { name: "Filter files" })
+        .getAttribute("placeholder"),
+    ).toBe("Filter files...");
+    expect(screen.queryByTestId("git-module-count-root")).toBeNull();
     expect(screen.getByTestId("file-list-/repo")).toBeDefined();
     expect(screen.getByText("src/app.ts")).toBeDefined();
     expect(screen.queryByText("Submodule reference:")).toBeNull();
+  });
+
+  it("keeps repository operation banners in single-repo mode", () => {
+    renderChanges({
+      snapshot: snapshotResult(
+        response({
+          files: [file("src/app.ts", null)],
+          repoState: {
+            kind: "merge",
+            headRef: "refs/heads/development",
+            mergeHeads: ["refs/heads/feature"],
+          },
+        }),
+      ),
+    });
+
+    expect(screen.getByTestId("git-single-repo-changes")).toBeDefined();
+    expect(screen.queryByTestId("git-module-header-root")).toBeNull();
+    expect(screen.getByText("Merge in progress - 0 conflicts")).toBeDefined();
+  });
+
+  it("renders single-repo no-changes state without a duplicate module header", () => {
+    renderChanges({
+      snapshot: snapshotResult(response({ files: [] })),
+    });
+
+    expect(screen.getByTestId("git-single-repo-changes")).toBeDefined();
+    expect(screen.queryByTestId("git-module-group-root")).toBeNull();
+    expect(screen.queryByRole("textbox", { name: "Filter files" })).toBeNull();
+    expect(screen.getByTestId("git-module-no-changes-root").textContent).toBe(
+      "No changes",
+    );
   });
 
   it("renders dirty submodule-only changes below a clean root module", () => {
@@ -184,8 +225,9 @@ describe("<SelectedRepoChanges /> module groups", () => {
       screen.getByTestId("git-module-group-submodule-traycer"),
     ).toBeDefined();
     expect(
-      screen.getByTestId("git-module-parent-reference-traycer").textContent,
+      screen.getByTestId("git-module-header-traycer").getAttribute("title"),
     ).toContain("pinned commit out of date");
+    expect(screen.queryByText("pinned commit out of date")).toBeNull();
     expect(screen.getByTestId("file-list-/repo/traycer")).toBeDefined();
     expect(screen.getByText("src/submodule.ts")).toBeDefined();
     expect(screen.queryByText("Submodule reference:")).toBeNull();
@@ -265,8 +307,9 @@ describe("<SelectedRepoChanges /> module groups", () => {
     });
 
     expect(
-      screen.getByTestId("git-module-parent-reference-traycer").textContent,
+      screen.getByTestId("git-module-header-traycer").getAttribute("title"),
     ).toContain("pinned commit out of date");
+    expect(screen.queryByText("pinned commit out of date")).toBeNull();
     expect(screen.getByTestId("git-module-count-traycer").textContent).toBe(
       "0 files",
     );
@@ -291,9 +334,14 @@ describe("<SelectedRepoChanges /> module groups", () => {
     expect(
       screen.getByTestId("git-module-group-submodule-traycer"),
     ).toBeDefined();
+    const header = screen.getByTestId("git-module-header-traycer");
+    expect(header.getAttribute("aria-label")).toContain("details unavailable");
+    expect(header.getAttribute("title")?.match(/Status:/g)).toHaveLength(1);
+    expect(screen.queryByText("details unavailable")).toBeNull();
+    expect(header.querySelectorAll(".lucide-triangle-alert")).toHaveLength(1);
     expect(
-      screen.getByTestId("git-module-parent-reference-traycer").textContent,
-    ).toBe("details unavailable");
+      screen.getByTestId("git-module-parent-reference-traycer").className,
+    ).toContain("text-warning");
     expect(screen.getByTestId("git-submodule-unavailable")).toBeDefined();
   });
 
@@ -351,7 +399,8 @@ describe("<SelectedRepoChanges /> module groups", () => {
       ),
     });
 
-    expect(screen.getByTestId("git-module-group-root")).toBeDefined();
+    expect(screen.getByTestId("git-single-repo-changes")).toBeDefined();
+    expect(screen.queryByTestId("git-module-group-root")).toBeNull();
     expect(screen.getByTestId("file-row-/repo-traycer")).toBeDefined();
     expect(
       screen.queryByTestId("git-module-group-submodule-traycer"),

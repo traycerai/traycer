@@ -204,6 +204,18 @@ describe("<SelectedRepoChanges /> module section state", () => {
     });
     expect(rootHeader.getAttribute("aria-expanded")).toBe("true");
     expect(submoduleHeader.getAttribute("aria-expanded")).toBe("true");
+    expect(submoduleHeader.getAttribute("title")).toContain(
+      "Path: /repo/traycer",
+    );
+    expect(submoduleHeader.getAttribute("title")).toContain(
+      "Status: pinned commit out of date",
+    );
+    expect(rootHeader.className).toContain("bg-background");
+    expect(rootHeader.className).toContain("hover:bg-muted");
+    expect(rootHeader.className).toContain("z-40");
+    expect(rootHeader.className).not.toContain("hover:bg-muted/25");
+    expect(rootHeader.querySelector(".lucide-git-branch")).toBeNull();
+    expect(submoduleHeader.querySelector(".lucide-git-branch")).toBeNull();
 
     const stagedSections = screen.getAllByRole("button", {
       name: "Staged section, 1 file",
@@ -229,6 +241,31 @@ describe("<SelectedRepoChanges /> module section state", () => {
     expect(submoduleHeader.getAttribute("aria-expanded")).toBe("false");
     expect(screen.queryByText("src/submodule-working.ts")).toBeNull();
     expect(screen.getByText("src/root-working.ts")).toBeDefined();
+  });
+
+  it("renders a single repo as direct file sections and filters files only", () => {
+    vi.useFakeTimers();
+    renderSelectedChanges(
+      response({
+        branch: "development",
+        files: [file("src/root-working.ts")],
+      }),
+    );
+
+    expect(screen.getByTestId("git-single-repo-changes")).toBeDefined();
+    expect(screen.queryByTestId("git-module-header-root")).toBeNull();
+    expect(screen.getByRole("textbox", { name: "Filter files" })).toBeDefined();
+    expect(screen.getByText("src/root-working.ts")).toBeDefined();
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Filter files" }), {
+      target: { value: "development" },
+    });
+    act(() => {
+      vi.advanceTimersByTime(200);
+    });
+
+    expect(screen.queryByText("src/root-working.ts")).toBeNull();
+    expect(screen.getByTestId("git-no-matching-files")).toBeDefined();
   });
 
   it("expands a collapsed module while search reveals a matching file", () => {

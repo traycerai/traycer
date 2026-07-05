@@ -20,7 +20,7 @@ function sectionRootClassName(args: {
 }): string {
   return cn(
     "flex min-h-0 flex-col",
-    args.compactChrome ? "py-0.5" : "py-1",
+    args.compactChrome ? "py-0" : "py-1",
     args.expandsToFillSpace ? "flex-1 basis-0" : "flex-none",
   );
 }
@@ -32,7 +32,7 @@ function sectionChromeClassName(args: {
 }): string {
   if (args.compactChrome) {
     return cn(
-      "group relative flex min-w-0 items-center overflow-hidden rounded-sm px-0.5 py-0 transition-colors hover:bg-accent/50",
+      "group relative flex w-full min-w-0 items-center overflow-hidden bg-background px-2 py-1 transition-colors hover:bg-muted",
       "has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring has-[:focus-visible]:ring-offset-2",
     );
   }
@@ -82,7 +82,7 @@ export function Section(props: SectionProps): ReactNode {
         className={cn(
           "shrink-0",
           props.compactChrome
-            ? "sticky top-0 z-10 bg-background/95 px-3 backdrop-blur"
+            ? "sticky top-[var(--git-section-sticky-top,0px)] z-30 border-b border-border/30 bg-background"
             : "px-2",
         )}
       >
@@ -96,12 +96,20 @@ export function Section(props: SectionProps): ReactNode {
           <button
             type="button"
             onClick={onToggle}
-            className="absolute inset-0 z-0 rounded-md focus-visible:outline-none"
+            className={cn(
+              "absolute inset-0 z-0 focus-visible:outline-none",
+              props.compactChrome ? "rounded-none" : "rounded-md",
+            )}
             aria-expanded={isExpanded}
             aria-label={`${title} section, ${fileCountLabel}`}
           />
 
-          <div className="pointer-events-none relative z-10 flex min-w-0 flex-1 items-center gap-1.5 px-1.5 py-0.5 text-left">
+          <div
+            className={cn(
+              "pointer-events-none relative z-10 flex min-w-0 flex-1 items-center gap-1.5 text-left",
+              props.compactChrome ? "px-0 py-0" : "px-1.5 py-0.5",
+            )}
+          >
             <ChevronDown
               className={cn(
                 "size-3.5 shrink-0 text-muted-foreground transition-transform",

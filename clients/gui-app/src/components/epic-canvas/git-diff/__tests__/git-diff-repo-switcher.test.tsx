@@ -187,6 +187,15 @@ describe("<GitDiffRepoSwitcherDropdown />", () => {
       screen.getByTestId("repo-switcher-trigger").textContent,
     ).not.toContain("vendor/traycer");
     expect(
+      screen.getByTestId("repo-switcher-trigger").getAttribute("title"),
+    ).toContain(`Path: /repo`);
+    expect(
+      screen.getByTestId("repo-switcher-trigger").getAttribute("title"),
+    ).toContain("1 changed submodule");
+    expect(
+      screen.getByTestId("repo-switcher-trigger").getAttribute("title"),
+    ).toContain("6 changed files");
+    expect(
       screen.getByRole("button", {
         name: /Git workspace,\s*traycer-internal,.*1 changed submodule, 6 changed files/,
       }),

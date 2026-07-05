@@ -92,6 +92,7 @@ export function FileSections(props: FileSectionsProps): ReactNode {
                   group,
                 )}
                 virtualized={props.virtualized}
+                nestedRows={!props.virtualized}
               />
             </GitDiffSection>
           ),

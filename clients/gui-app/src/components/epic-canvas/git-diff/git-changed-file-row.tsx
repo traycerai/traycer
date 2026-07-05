@@ -28,6 +28,7 @@ export interface GitChangedFileRowProps {
   readonly onClick: (() => void) | null;
   readonly onDoubleClick: (() => void) | undefined;
   readonly ariaExpanded: boolean | undefined;
+  readonly nested: boolean;
   readonly className: string | undefined;
 }
 
@@ -160,9 +161,30 @@ function PanelRowContent(props: {
       {props.trailing}
       <RowStats
         file={props.file}
-        className="pointer-events-none absolute right-3 top-1/2 z-10 hidden -translate-y-1/2 rounded bg-background/95 px-1 py-0.5 shadow-sm group-hover:flex group-focus-visible:flex"
+        className="pointer-events-none absolute right-3 top-1/2 hidden -translate-y-1/2 rounded bg-background/95 px-1 py-0.5 shadow-sm group-hover:flex group-focus-visible:flex"
       />
     </>
+  );
+}
+
+function gitChangedFileRowClassName(args: {
+  readonly isPanel: boolean;
+  readonly nested: boolean;
+  readonly isConflict: boolean;
+  readonly active: boolean;
+  readonly className: string | undefined;
+}): string {
+  return cn(
+    "group relative flex w-full items-center text-left text-ui-sm",
+    args.isPanel && args.nested && "min-h-6 gap-1.5 py-0.5 pl-10 pr-3",
+    args.isPanel && !args.nested && "min-h-6 gap-1.5 px-3 py-0.5",
+    !args.isPanel && "min-h-7 gap-2 px-2 py-1",
+    args.isConflict &&
+      (args.nested
+        ? "border-l-2 border-l-destructive pl-9"
+        : "border-l-2 border-l-destructive pl-2"),
+    args.active && "bg-accent text-accent-foreground",
+    args.className,
   );
 }
 
@@ -223,13 +245,13 @@ export function GitChangedFileRow(props: GitChangedFileRowProps): ReactNode {
     />
   );
 
-  const rowClassName = cn(
-    "group relative flex w-full items-center text-left text-ui-sm",
-    isPanel ? "min-h-6 gap-1.5 px-3 py-0.5" : "min-h-7 gap-2 px-2 py-1",
-    metadata.isConflict && "border-l-2 border-l-destructive pl-2",
-    props.active && "bg-accent text-accent-foreground",
-    props.className,
-  );
+  const rowClassName = gitChangedFileRowClassName({
+    isPanel,
+    nested: props.nested,
+    isConflict: metadata.isConflict,
+    active: props.active,
+    className: props.className,
+  });
 
   const baseAriaLabel = metadata.previousFileName
     ? `${metadata.statusLabel} ${metadata.fileName} (renamed from ${metadata.previousFileName})`

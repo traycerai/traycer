@@ -94,7 +94,37 @@ describe("<Section />", () => {
       name: "Changes section, 2 files",
     });
     const header = sectionButton.closest(".sticky");
-    expect(header?.className).toContain("top-0");
+    const chrome = sectionButton.parentElement;
+    expect(header?.className).toContain("sticky");
+    expect(header?.className).toContain("z-30");
+    expect(header?.className).toContain(
+      "top-[var(--git-section-sticky-top,0px)]",
+    );
+    expect(header?.className).not.toContain("px-3");
+    expect(header?.getAttribute("style")).toBeNull();
+    expect(chrome?.className).toContain("w-full");
+    expect(chrome?.className).toContain("bg-background");
+    expect(chrome?.className).toContain("hover:bg-muted");
+    expect(chrome?.className).not.toContain("hover:bg-accent/50");
+  });
+
+  it("keeps compact section chrome flush with surrounding module chrome", () => {
+    const { container } = render(
+      <Section
+        title="Changes"
+        count={2}
+        summary={null}
+        collapsed={false}
+        onToggle={vi.fn()}
+        actions={<button type="button">Action</button>}
+        fillAvailable={false}
+        compactChrome
+      >
+        <section aria-label="Rows">Rows</section>
+      </Section>,
+    );
+
+    expect(container.firstElementChild?.className).toContain("py-0");
   });
 
   it("does not render a scroll body when collapsed", () => {

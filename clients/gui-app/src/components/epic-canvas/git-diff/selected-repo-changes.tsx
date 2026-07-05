@@ -1,5 +1,6 @@
 import {
   useCallback,
+  type CSSProperties,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -9,7 +10,7 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from "react";
-import { ChevronDown, GitBranch, Search, TriangleAlert, X } from "lucide-react";
+import { ChevronDown, Search, TriangleAlert, X } from "lucide-react";
 import type {
   GitChangedFile,
   GitChangedFileV11,
@@ -37,6 +38,7 @@ import {
   InputGroupInput,
 } from "@/components/ui/input-group";
 import { cn } from "@/lib/utils";
+import { StartTruncatedText } from "@/components/ui/start-truncated-text";
 import { FileList } from "./file-list";
 import { RepoStateBanner } from "./repo-state-banner";
 import { DiffLoadingSkeleton } from "./diff-loading-skeleton";
@@ -46,6 +48,11 @@ import { SubmoduleUnavailable } from "./empty-states/submodule-unavailable";
 import type { GitDiffSectionCollapseController } from "./git-diff-section";
 
 const GIT_MODULE_SEARCH_DEBOUNCE_MS = 150;
+const GIT_SECTION_STICKY_TOP_NONE = "0px";
+
+type GitSectionStickyStyle = CSSProperties & {
+  readonly "--git-section-sticky-top": string;
+};
 
 export interface SelectedRepoChangesProps {
   readonly epicId: string;
@@ -74,6 +81,11 @@ interface SubscriptionModuleSourceInput {
   readonly repoState: RepoState | null;
   readonly repoMode: RepoMode | null;
   readonly updatedAtMs: number | null;
+}
+
+interface GitModuleSearchCopy {
+  readonly placeholder: string;
+  readonly ariaLabel: string;
 }
 
 function withNullGitlinks(
@@ -146,6 +158,68 @@ function parentReferenceLabel(module: GitModuleGroup): string | null {
   return "working tree dirty";
 }
 
+function moduleHeaderPath(module: GitModuleGroup): string | null {
+  if (module.repoRoot !== null) return module.repoRoot;
+  return module.parentPath;
+}
+
+function moduleHeaderTooltip(args: {
+  readonly module: GitModuleGroup;
+  readonly countLabel: string;
+  readonly parentLabel: string | null;
+}): string {
+  const { module, countLabel, parentLabel } = args;
+  const path = moduleHeaderPath(module);
+  return [
+    module.kind === "submodule"
+      ? `Submodule: ${module.label}`
+      : `Workspace module: ${module.label}`,
+    path === null ? null : `Path: ${path}`,
+    module.parentPath === null ? null : `Parent path: ${module.parentPath}`,
+    `Head: ${module.headLabel}`,
+    `Changed files: ${countLabel}`,
+    parentLabel === null ? null : `Status: ${parentLabel}`,
+    module.parentReference?.summary === undefined
+      ? null
+      : `Details: ${module.parentReference.summary}`,
+    module.unavailable && module.parentReference?.status !== "unavailable"
+      ? "Status: unavailable"
+      : null,
+  ]
+    .filter((line): line is string => line !== null)
+    .join("\n");
+}
+
+function moduleHeaderAccessibleName(args: {
+  readonly module: GitModuleGroup;
+  readonly countLabel: string;
+  readonly parentLabel: string | null;
+}): string {
+  const { module, countLabel, parentLabel } = args;
+  return [
+    module.label,
+    module.kind === "submodule" ? "submodule" : null,
+    countLabel,
+    module.headLabel,
+    parentLabel,
+    module.unavailable ? "unavailable" : null,
+  ]
+    .filter((part): part is string => part !== null)
+    .join(" ");
+}
+
+function moduleHeaderStatusVisible(
+  status: GitModuleParentReferenceStatus | null,
+  unavailable: boolean,
+): boolean {
+  return (
+    unavailable ||
+    status === "differs" ||
+    status === "conflicted" ||
+    status === "unavailable"
+  );
+}
+
 function moduleMatchesQuery(
   module: GitModuleGroup,
   query: string,
@@ -155,6 +229,44 @@ function moduleMatchesQuery(
   if (module.files.length === 0) return false;
   const searchIndex = createGitChangedFileSearchIndex(module.files);
   return filterGitChangedFiles(module.files, searchIndex, query).length > 0;
+}
+
+function singleRepoModule(
+  modules: ReadonlyArray<GitModuleGroup>,
+  hiddenCleanModuleCount: number,
+): GitModuleGroup | null {
+  if (hiddenCleanModuleCount !== 0 || modules.length !== 1) return null;
+  const module = modules[0];
+  return module.kind === "root" ? module : null;
+}
+
+function gitModuleSearchCopy(
+  singleRepo: GitModuleGroup | null,
+): GitModuleSearchCopy {
+  if (singleRepo === null) {
+    return {
+      placeholder: "Filter submodules and files...",
+      ariaLabel: "Filter submodules and files",
+    };
+  }
+  return {
+    placeholder: "Filter files...",
+    ariaLabel: "Filter files",
+  };
+}
+
+function gitModuleSearchVisible(
+  modules: ReadonlyArray<GitModuleGroup>,
+  singleRepo: GitModuleGroup | null,
+): boolean {
+  if (singleRepo !== null) return singleRepo.files.length > 0;
+  return (
+    modules.length > 1 || modules.some((module) => module.files.length > 0)
+  );
+}
+
+function gitSectionStickyStyle(top: string): GitSectionStickyStyle {
+  return { "--git-section-sticky-top": top };
 }
 
 export function SelectedRepoChanges(
@@ -350,18 +462,24 @@ function GitModuleGroupsView(props: {
   const trimmedQuery = appliedQuery.trim();
   const normalizedQuery = trimmedQuery.toLowerCase();
   const queryActive = normalizedQuery.length > 0;
+  const singleRepo = singleRepoModule(
+    props.modules,
+    props.hiddenCleanModuleCount,
+  );
+  const searchCopy = gitModuleSearchCopy(singleRepo);
 
   const queryMatchByKey = useMemo(() => {
-    if (!queryActive) return new Map<string, boolean>();
+    if (singleRepo !== null || !queryActive) return new Map<string, boolean>();
     return new Map(
       props.modules.map((module) => [
         module.key,
         moduleMatchesQuery(module, appliedQuery, normalizedQuery),
       ]),
     );
-  }, [appliedQuery, normalizedQuery, props.modules, queryActive]);
+  }, [appliedQuery, normalizedQuery, props.modules, queryActive, singleRepo]);
 
   const visibleModules = useMemo(() => {
+    if (singleRepo !== null) return [];
     if (queryActive) {
       return props.modules.filter(
         (module) => queryMatchByKey.get(module.key) === true,
@@ -370,18 +488,24 @@ function GitModuleGroupsView(props: {
     return props.modules.filter(
       (module) => module.kind === "root" || !module.clean || showCleanModules,
     );
-  }, [props.modules, queryActive, queryMatchByKey, showCleanModules]);
+  }, [
+    props.modules,
+    queryActive,
+    queryMatchByKey,
+    showCleanModules,
+    singleRepo,
+  ]);
 
-  const searchVisible =
-    props.modules.length > 1 ||
-    props.modules.some((module) => module.files.length > 0);
+  const searchVisible = gitModuleSearchVisible(props.modules, singleRepo);
 
-  if (queryActive && visibleModules.length === 0) {
+  if (singleRepo === null && queryActive && visibleModules.length === 0) {
     return (
       <div className="flex min-h-0 flex-1 flex-col">
         {searchVisible ? (
           <GitModuleSearch
             searchQuery={searchQuery}
+            placeholder={searchCopy.placeholder}
+            ariaLabel={searchCopy.ariaLabel}
             onSearchChange={handleSearchChange}
             onSearchKeyDown={handleSearchKeyDown}
             onClearSearch={handleClearSearch}
@@ -397,74 +521,94 @@ function GitModuleGroupsView(props: {
       {searchVisible ? (
         <GitModuleSearch
           searchQuery={searchQuery}
+          placeholder={searchCopy.placeholder}
+          ariaLabel={searchCopy.ariaLabel}
           onSearchChange={handleSearchChange}
           onSearchKeyDown={handleSearchKeyDown}
           onClearSearch={handleClearSearch}
         />
       ) : null}
-      <div
-        ref={moduleGroupsRef}
-        className="flex min-h-0 flex-1 flex-col overflow-y-auto py-1"
-        data-testid="git-module-groups"
-      >
-        {visibleModules.map((module) => {
-          const matchedByQuery =
-            queryActive && queryMatchByKey.get(module.key) === true;
-          const expanded = matchedByQuery
-            ? true
-            : (expandedByKey[module.key] ?? module.defaultExpanded);
-          const moduleMatchesHeader =
-            queryActive && module.searchText.includes(normalizedQuery);
-          return (
-            <GitModuleGroupView
-              key={module.key}
-              epicId={props.epicId}
-              viewTabId={props.viewTabId}
-              hostId={props.hostId}
-              module={module}
-              expanded={expanded}
-              query={moduleMatchesHeader ? "" : appliedQuery}
-              lastUpdatedAtMs={props.lastUpdatedAtMs}
-              onToggle={toggleModule}
-              onHeaderRef={registerModuleHeader}
-              sectionCollapsedByKey={sectionCollapsedByKey}
-              onToggleModuleSection={toggleModuleSection}
-              onClearQuery={handleClearSearch}
-              onRefresh={props.onRefresh}
-              isRefreshing={props.isRefreshing}
-            />
-          );
-        })}
-        {!queryActive && props.hiddenCleanModuleCount > 0 ? (
-          <div className="px-2 pt-1">
-            <button
-              type="button"
-              onClick={handleToggleCleanModules}
-              className={cn(
-                "flex w-full items-center justify-between rounded-md px-2 py-1.5",
-                "text-left text-ui-xs text-muted-foreground transition-colors hover:bg-muted/30",
-                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-              )}
-              data-testid="git-clean-modules-affordance"
-            >
-              <span>
-                {showCleanModules ? "Hide" : "Show"}{" "}
-                {props.hiddenCleanModuleCount} clean{" "}
-                {props.hiddenCleanModuleCount === 1
-                  ? "submodule"
-                  : "submodules"}
-              </span>
-              <span aria-hidden>{showCleanModules ? "−" : "+"}</span>
-            </button>
-          </div>
-        ) : null}
-      </div>
+      {singleRepo !== null ? (
+        <SingleRepoChangesView
+          epicId={props.epicId}
+          viewTabId={props.viewTabId}
+          hostId={props.hostId}
+          module={singleRepo}
+          query={appliedQuery}
+          lastUpdatedAtMs={props.lastUpdatedAtMs}
+          sectionCollapsedByKey={sectionCollapsedByKey}
+          onToggleModuleSection={toggleModuleSection}
+          onClearQuery={handleClearSearch}
+          onRefresh={props.onRefresh}
+          isRefreshing={props.isRefreshing}
+        />
+      ) : (
+        <div
+          ref={moduleGroupsRef}
+          className="flex min-h-0 flex-1 flex-col overflow-y-auto pb-1"
+          data-testid="git-module-groups"
+        >
+          {visibleModules.map((module) => {
+            const matchedByQuery =
+              queryActive && queryMatchByKey.get(module.key) === true;
+            const expanded = matchedByQuery
+              ? true
+              : (expandedByKey[module.key] ?? module.defaultExpanded);
+            const moduleMatchesHeader =
+              queryActive && module.searchText.includes(normalizedQuery);
+            return (
+              <GitModuleGroupView
+                key={module.key}
+                epicId={props.epicId}
+                viewTabId={props.viewTabId}
+                hostId={props.hostId}
+                module={module}
+                expanded={expanded}
+                query={moduleMatchesHeader ? "" : appliedQuery}
+                lastUpdatedAtMs={props.lastUpdatedAtMs}
+                onToggle={toggleModule}
+                onHeaderRef={registerModuleHeader}
+                sectionCollapsedByKey={sectionCollapsedByKey}
+                onToggleModuleSection={toggleModuleSection}
+                onClearQuery={handleClearSearch}
+                onRefresh={props.onRefresh}
+                isRefreshing={props.isRefreshing}
+              />
+            );
+          })}
+          {!queryActive && props.hiddenCleanModuleCount > 0 ? (
+            <div className="px-2 pt-1">
+              <button
+                type="button"
+                onClick={handleToggleCleanModules}
+                className={cn(
+                  "flex w-full items-center justify-between rounded-md px-2 py-1.5",
+                  "text-left text-ui-xs text-muted-foreground transition-colors hover:bg-muted/30",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                )}
+                data-testid="git-clean-modules-affordance"
+              >
+                <span>
+                  {showCleanModules ? "Hide" : "Show"}{" "}
+                  {props.hiddenCleanModuleCount} clean{" "}
+                  {props.hiddenCleanModuleCount === 1
+                    ? "submodule"
+                    : "submodules"}
+                </span>
+                <span aria-hidden>{showCleanModules ? "−" : "+"}</span>
+              </button>
+            </div>
+          ) : null}
+        </div>
+      )}
     </div>
   );
 }
 
 function GitModuleSearch(props: {
   readonly searchQuery: string;
+  readonly placeholder: string;
+  readonly ariaLabel: string;
   readonly onSearchChange: (event: ChangeEvent<HTMLInputElement>) => void;
   readonly onSearchKeyDown: (event: KeyboardEvent<HTMLInputElement>) => void;
   readonly onClearSearch: () => void;
@@ -480,8 +624,8 @@ function GitModuleSearch(props: {
           value={props.searchQuery}
           onChange={props.onSearchChange}
           onKeyDown={props.onSearchKeyDown}
-          placeholder="Filter submodules and files..."
-          aria-label="Filter submodules and files"
+          placeholder={props.placeholder}
+          aria-label={props.ariaLabel}
           className="text-ui-sm"
         />
         {props.searchQuery.length > 0 ? (
@@ -496,6 +640,44 @@ function GitModuleSearch(props: {
           </InputGroupAddon>
         ) : null}
       </InputGroup>
+    </div>
+  );
+}
+
+function SingleRepoChangesView(props: {
+  readonly epicId: string;
+  readonly viewTabId: string;
+  readonly hostId: string;
+  readonly module: GitModuleGroup;
+  readonly query: string;
+  readonly lastUpdatedAtMs: number | null;
+  readonly sectionCollapsedByKey: Readonly<Record<string, boolean>>;
+  readonly onToggleModuleSection: (
+    module: GitModuleGroup,
+    group: GitDiffBundleGroup,
+  ) => void;
+  readonly onClearQuery: () => void;
+  readonly onRefresh: () => void;
+  readonly isRefreshing: boolean;
+}): ReactNode {
+  return (
+    <div
+      className="flex min-h-0 flex-1 flex-col overflow-y-auto pb-1"
+      data-testid="git-single-repo-changes"
+    >
+      <GitModuleBody
+        epicId={props.epicId}
+        viewTabId={props.viewTabId}
+        hostId={props.hostId}
+        module={props.module}
+        query={props.query}
+        lastUpdatedAtMs={props.lastUpdatedAtMs}
+        sectionCollapsedByKey={props.sectionCollapsedByKey}
+        onToggleModuleSection={props.onToggleModuleSection}
+        onClearQuery={props.onClearQuery}
+        onRefresh={props.onRefresh}
+        isRefreshing={props.isRefreshing}
+      />
     </div>
   );
 }
@@ -523,20 +705,39 @@ function GitModuleGroupView(props: {
   readonly isRefreshing: boolean;
 }): ReactNode {
   const { module } = props;
-  const repoState = module.repoState;
+  const { onHeaderRef } = props;
+  const headerElementRef = useRef<HTMLButtonElement | null>(null);
+  const [sectionStickyTop, setSectionStickyTop] = useState(
+    GIT_SECTION_STICKY_TOP_NONE,
+  );
   const expandedFileBody =
     props.expanded &&
     !module.unavailable &&
     module.repoRoot !== null &&
     module.files.length > 0;
-  const banner =
-    repoState !== null && repoState.kind !== "clean" ? (
-      <RepoStateBanner
-        state={repoState}
-        repoMode={module.repoMode}
-        conflictCount={conflictCount(module.files)}
-      />
-    ) : null;
+  const updateSectionStickyTop = useCallback(() => {
+    const element = headerElementRef.current;
+    if (element === null) return;
+    const next = `${Math.ceil(element.getBoundingClientRect().height)}px`;
+    setSectionStickyTop((current) => (current === next ? current : next));
+  }, []);
+  const handleHeaderRef = useCallback(
+    (moduleKey: string, element: HTMLButtonElement | null) => {
+      headerElementRef.current = element;
+      onHeaderRef(moduleKey, element);
+      updateSectionStickyTop();
+    },
+    [onHeaderRef, updateSectionStickyTop],
+  );
+  useLayoutEffect(() => {
+    const element = headerElementRef.current;
+    if (element === null) return;
+    updateSectionStickyTop();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(updateSectionStickyTop);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [updateSectionStickyTop]);
 
   return (
     <section
@@ -553,7 +754,7 @@ function GitModuleGroupView(props: {
         module={module}
         expanded={props.expanded}
         onToggle={props.onToggle}
-        onHeaderRef={props.onHeaderRef}
+        onHeaderRef={handleHeaderRef}
       />
       {props.expanded ? (
         <div
@@ -561,8 +762,8 @@ function GitModuleGroupView(props: {
             "bg-background/55",
             expandedFileBody && "overflow-visible",
           )}
+          style={gitSectionStickyStyle(sectionStickyTop)}
         >
-          {banner}
           <GitModuleBody
             epicId={props.epicId}
             viewTabId={props.viewTabId}
@@ -599,6 +800,12 @@ function GitModuleHeader(props: {
     module.files.length === 1 ? "file" : "files"
   }`;
   const showCount = !props.expanded || module.files.length === 0;
+  const tooltip = moduleHeaderTooltip({ module, countLabel, parentLabel });
+  const path = moduleHeaderPath(module);
+  const showStatusIcon = moduleHeaderStatusVisible(
+    parentReferenceStatus,
+    module.unavailable,
+  );
   const setHeaderRef = useCallback(
     (element: HTMLButtonElement | null) => {
       onHeaderRef(moduleKey, element);
@@ -611,11 +818,17 @@ function GitModuleHeader(props: {
       type="button"
       onClick={() => onToggle(module)}
       className={cn(
-        "group sticky top-0 z-20 flex w-full min-w-0 items-start gap-2 bg-background/95 px-2 py-2 text-left backdrop-blur transition-colors hover:bg-muted/25",
+        "@container group sticky top-0 z-40 flex w-full min-w-0 items-start gap-2 border-b border-border/40 bg-background px-2 py-1.5 text-left transition-colors hover:bg-muted",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
         module.clean && "text-muted-foreground",
       )}
       aria-expanded={props.expanded}
+      aria-label={moduleHeaderAccessibleName({
+        module,
+        countLabel,
+        parentLabel,
+      })}
+      title={tooltip}
       data-testid={`git-module-header-${moduleIdentifier(module)}`}
     >
       <ChevronDown
@@ -625,20 +838,16 @@ function GitModuleHeader(props: {
         )}
         aria-hidden
       />
-      <GitModuleHeaderIcon
-        unavailable={module.unavailable}
-        parentReferenceStatus={parentReferenceStatus}
-      />
       <span className="min-w-0 flex-1">
         <span className="flex min-w-0 items-center gap-2">
           <span className="min-w-0 truncate text-ui-sm font-semibold text-foreground/90">
             {module.label}
           </span>
-          {module.kind === "submodule" ? (
-            <span className="shrink-0 rounded-sm border border-border/60 bg-muted/30 px-1.5 py-0.5 text-ui-xs font-medium text-muted-foreground">
-              submodule
-            </span>
-          ) : null}
+          {path === null ? null : (
+            <StartTruncatedText className="ml-auto hidden min-w-0 max-w-[45%] shrink text-ui-xs text-muted-foreground @min-[20rem]:block">
+              {path}
+            </StartTruncatedText>
+          )}
           {showCount ? (
             <span
               className="shrink-0 rounded bg-muted/40 px-1.5 py-0.5 text-ui-xs tabular-nums text-muted-foreground"
@@ -655,59 +864,41 @@ function GitModuleHeader(props: {
             </span>
           )}
         </span>
-        <span className="mt-0.5 block min-w-0 truncate text-ui-xs text-muted-foreground">
-          {module.headLabel}
-        </span>
-        {parentLabel !== null ? (
-          <span
-            className={parentReferenceStatusClassName(parentReferenceStatus)}
-            title={module.parentReference?.summary}
-            data-testid={`git-module-parent-reference-${moduleIdentifier(module)}`}
-          >
-            {parentReferenceStatus === "differs" ||
-            parentReferenceStatus === "conflicted" ||
-            parentReferenceStatus === "unavailable" ? (
+        <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-ui-xs text-muted-foreground">
+          {module.kind === "submodule" ? (
+            <span className="shrink-0 rounded-sm border border-border/60 bg-muted/30 px-1.5 py-0.5 font-medium">
+              submodule
+            </span>
+          ) : null}
+          <span className="min-w-0 truncate">{module.headLabel}</span>
+          {showStatusIcon ? (
+            <span
+              className={parentReferenceStatusClassName(
+                parentReferenceStatus,
+                module.unavailable,
+              )}
+              title={module.parentReference?.summary}
+              data-testid={`git-module-parent-reference-${moduleIdentifier(module)}`}
+            >
               <TriangleAlert className="size-3 shrink-0" aria-hidden />
-            ) : null}
-            <span className="min-w-0 truncate">{parentLabel}</span>
-          </span>
-        ) : null}
-        {module.unavailable && parentReferenceStatus !== "unavailable" ? (
-          <span className="mt-0.5 block text-ui-xs font-medium text-warning">
-            unavailable
-          </span>
-        ) : null}
+            </span>
+          ) : null}
+        </span>
       </span>
     </button>
   );
 }
 
-function GitModuleHeaderIcon(props: {
-  readonly unavailable: boolean;
-  readonly parentReferenceStatus: GitModuleParentReferenceStatus | null;
-}): ReactNode {
-  const showWarning =
-    props.unavailable || props.parentReferenceStatus === "conflicted";
-  if (showWarning) {
-    return (
-      <TriangleAlert
-        className="mt-0.5 size-3.5 shrink-0 text-warning"
-        aria-hidden
-      />
-    );
-  }
-  return (
-    <GitBranch className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
-  );
-}
-
 function parentReferenceStatusClassName(
   status: GitModuleParentReferenceStatus | null,
+  unavailable: boolean,
 ): string {
   return cn(
-    "mt-0.5 flex min-w-0 items-center gap-1 text-ui-xs",
-    status === "differs" && "font-medium text-warning",
-    (status === "conflicted" || status === "unavailable") &&
+    "flex min-w-0 items-center gap-1",
+    (unavailable ||
+      status === "differs" ||
+      status === "conflicted" ||
+      status === "unavailable") &&
       "font-medium text-warning",
   );
 }
@@ -729,6 +920,15 @@ function GitModuleBody(props: {
   readonly isRefreshing: boolean;
 }): ReactNode {
   const { module, onToggleModuleSection, sectionCollapsedByKey } = props;
+  const repoState = module.repoState;
+  const banner =
+    repoState !== null && repoState.kind !== "clean" ? (
+      <RepoStateBanner
+        state={repoState}
+        repoMode={module.repoMode}
+        conflictCount={conflictCount(module.files)}
+      />
+    ) : null;
   const sectionCollapseController = useMemo<GitDiffSectionCollapseController>(
     () => ({
       collapsed: (group) =>
@@ -739,26 +939,33 @@ function GitModuleBody(props: {
   );
   if (module.unavailable) {
     return (
-      <div className="py-2" data-testid="git-module-unavailable-body">
-        <SubmoduleUnavailable
-          onRefresh={props.onRefresh}
-          isRefreshing={props.isRefreshing}
-        />
-      </div>
+      <>
+        {banner}
+        <div className="py-2" data-testid="git-module-unavailable-body">
+          <SubmoduleUnavailable
+            onRefresh={props.onRefresh}
+            isRefreshing={props.isRefreshing}
+          />
+        </div>
+      </>
     );
   }
   if (module.files.length === 0 || module.repoRoot === null) {
     return (
-      <div
-        className="px-4 py-3 text-ui-sm text-muted-foreground"
-        data-testid={moduleNoChangesTestId(module)}
-      >
-        No changes
-      </div>
+      <>
+        {banner}
+        <div
+          className="px-4 py-3 text-ui-sm text-muted-foreground"
+          data-testid={moduleNoChangesTestId(module)}
+        >
+          No changes
+        </div>
+      </>
     );
   }
   return (
     <div className="overflow-visible">
+      {banner}
       <FileList
         epicId={props.epicId}
         viewTabId={props.viewTabId}
