@@ -93,22 +93,22 @@ const NODE_META: Readonly<
 };
 
 const TASKS = [
-  "Team rate limits",
+  "Team usage limits",
   "Billing service",
   "Usage sync audit",
 ] as const;
 
 const TASK_SCENES = [
   {
-    chat: "Team rate limits",
+    chat: "Team usage limits",
     terminal: "billing-service run",
     terminalHarness: "claude",
     secondChat: "Grace-period plan",
-    spec: "rate-limits.spec",
+    spec: "usage-limits.spec",
     ticket: "Grace-period rollout",
     review: "Risk review",
-    canvas: "Team rate limits",
-    preview: "rate-limits.spec",
+    canvas: "Team usage limits",
+    preview: "usage-limits.spec",
   },
   {
     chat: "Billing service",
@@ -195,7 +195,7 @@ const STORY_STEPS = [
   {
     pane: "gui",
     kind: "user",
-    text: "We need team rate limits without locking existing customers out.",
+    text: "We need team usage limits without locking existing customers out.",
     to: null,
   },
   {
@@ -204,14 +204,14 @@ const STORY_STEPS = [
     text: "I'll split this into implementation, verification, and risk review.",
     to: null,
   },
-  { pane: "gui", kind: "spec", text: "rate-limits.spec", to: null },
+  { pane: "gui", kind: "spec", text: "usage-limits.spec", to: null },
   {
     pane: "gui",
     kind: "handoff",
-    text: "Claude Code, implement the billing-service check from rate-limits.spec.",
+    text: "Claude Code, implement the billing-service check from usage-limits.spec.",
     to: "claude",
   },
-  { pane: "claude", kind: "term", text: "reading rate-limits.spec", to: null },
+  { pane: "claude", kind: "term", text: "reading usage-limits.spec", to: null },
   {
     pane: "claude",
     kind: "blocked",
@@ -1129,7 +1129,7 @@ function ChatPane(props: {
   const userCopy =
     props.scene === "task-tabs"
       ? `Continue ${TASKS[props.activeTaskIndex].toLowerCase()}`
-      : "Let's ship team rate limits.";
+      : "Let's ship team usage limits.";
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex min-h-0 flex-1 flex-col justify-end gap-2 p-3">

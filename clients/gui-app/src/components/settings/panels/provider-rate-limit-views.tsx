@@ -288,7 +288,7 @@ function ProviderNumberRow({
 // showing the raw value. Falls back to `titleCaseFromToken` for any value
 // not listed here (forward-compat with a new value before this map updates).
 const CODEX_RATE_LIMIT_REACHED_LABELS: Record<string, string> = {
-  rate_limit_reached: "Rate limit reached",
+  rate_limit_reached: "Usage limit reached",
   workspace_owner_credits_depleted: "Workspace credits depleted",
   workspace_member_credits_depleted: "Workspace credits depleted",
   workspace_owner_usage_limit_reached: "Workspace usage limit reached",
@@ -725,14 +725,14 @@ export function ProviderRateLimitBody(
   if (state.kind === "loading") {
     return (
       <div className="flex items-center gap-2 text-ui-sm text-muted-foreground">
-        <MutedAgentSpinner /> Loading rate limits
+        <MutedAgentSpinner /> Loading usage limits
       </div>
     );
   }
   if (state.kind === "error") {
     return (
       <div className="text-ui-sm text-destructive">
-        Couldn't load rate limits. Try refreshing.
+        Couldn't load usage limits. Try refreshing.
       </div>
     );
   }
@@ -741,7 +741,7 @@ export function ProviderRateLimitBody(
   if (!data.available) {
     return (
       <p className="text-ui-xs text-muted-foreground">
-        Rate limits unavailable — {formatUnavailableReason(data.reason)}
+        Usage limits unavailable — {formatUnavailableReason(data.reason)}
       </p>
     );
   }
