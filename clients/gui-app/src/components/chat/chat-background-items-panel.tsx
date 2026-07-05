@@ -231,10 +231,17 @@ function backgroundTreeNodeFromNested(
     item: data.item,
     kind: data.kind,
     title: data.title,
-    children: (node.children ?? []).map((child) =>
-      backgroundTreeNodeFromNested(child),
-    ),
+    children: Array.from(node.children ?? [])
+      .sort(compareBackgroundTreeRecords)
+      .map((child) => backgroundTreeNodeFromNested(child)),
   };
+}
+
+function compareBackgroundTreeRecords(
+  left: TreeNodeNested<BackgroundTreeRecord>,
+  right: TreeNodeNested<BackgroundTreeRecord>,
+): number {
+  return left.data.order - right.data.order;
 }
 
 function buildBackgroundTree(
@@ -285,7 +292,7 @@ function buildBackgroundTree(
     },
     getData: (record) => record,
   })
-    .sort((left, right) => left.data.order - right.data.order)
+    .sort(compareBackgroundTreeRecords)
     .map((node) => backgroundTreeNodeFromNested(node));
 }
 

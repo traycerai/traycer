@@ -283,6 +283,35 @@ describe("chat.subscribe@1.2 server frames", () => {
     });
   });
 
+  it("requires wakeup background items to carry a scheduled timestamp", () => {
+    const wakeupBase = {
+      taskId: "wake-tool-1",
+      kind: "wakeup",
+      title: "Standup",
+      blockId: "wake-tool-1",
+      parentTaskId: null,
+    };
+    const parseResults = [
+      wakeupBase,
+      { ...wakeupBase, scheduledFor: null },
+    ].map((wakeupItem) =>
+      chatSubscribeServerFrameSchema.safeParse({
+        kind: "turnStateChanged",
+        hasBinaryPayload: false,
+        epicId: "epic-1",
+        chatId: "chat-1",
+        runStatus: "running",
+        activeTurn: null,
+        backgroundItems: [wakeupItem],
+      }),
+    );
+
+    expect(parseResults.map((result) => result.success)).toEqual([
+      false,
+      false,
+    ]);
+  });
+
   it("defaults new background-item metadata when parsing old-host frames", () => {
     const parsed = chatSubscribeServerFrameSchema.parse({
       kind: "turnStateChanged",

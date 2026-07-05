@@ -75,6 +75,103 @@ describe("<BackgroundItemsPanel />", () => {
     expect(onStopItem).toHaveBeenCalledWith("child-command");
   });
 
+  it("keeps nested child rows in current item order after reordering", () => {
+    const parent = backgroundItem({
+      taskId: "parent-agent",
+      kind: "subagent",
+      title: "Parent agent",
+      blockId: "parent-agent",
+      parentTaskId: null,
+      scheduledFor: null,
+    });
+    const firstChild = backgroundItem({
+      taskId: "first-child-command",
+      kind: "command",
+      title: "First child",
+      blockId: "first-child-command-tool",
+      parentTaskId: "parent-agent",
+      scheduledFor: null,
+    });
+    const secondChild = backgroundItem({
+      taskId: "second-child-command",
+      kind: "command",
+      title: "Second child",
+      blockId: "second-child-command-tool",
+      parentTaskId: "parent-agent",
+      scheduledFor: null,
+    });
+    const firstGrandchild = backgroundItem({
+      taskId: "first-grandchild-monitor",
+      kind: "monitor",
+      title: "First grandchild",
+      blockId: "first-grandchild-monitor-tool",
+      parentTaskId: "first-child-command",
+      scheduledFor: null,
+    });
+    const secondGrandchild = backgroundItem({
+      taskId: "second-grandchild-monitor",
+      kind: "monitor",
+      title: "Second grandchild",
+      blockId: "second-grandchild-monitor-tool",
+      parentTaskId: "first-child-command",
+      scheduledFor: null,
+    });
+
+    const { rerender } = renderPanel({
+      items: [
+        parent,
+        firstChild,
+        secondChild,
+        firstGrandchild,
+        secondGrandchild,
+      ],
+      onItemClick: () => undefined,
+      onStopItem: () => null,
+      onStopAll: () => null,
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /Background.*1 running/ }),
+    );
+
+    rerender(
+      panelElement({
+        items: [
+          parent,
+          secondChild,
+          firstChild,
+          secondGrandchild,
+          firstGrandchild,
+        ],
+        onItemClick: () => undefined,
+        onStopItem: () => null,
+        onStopAll: () => null,
+      }),
+    );
+
+    const secondChildButton = screen.getByRole("button", {
+      name: /Second child.*Command/,
+    });
+    const firstChildButton = screen.getByRole("button", {
+      name: /First child.*Command/,
+    });
+    const secondGrandchildButton = screen.getByRole("button", {
+      name: /Second grandchild.*Monitor/,
+    });
+    const firstGrandchildButton = screen.getByRole("button", {
+      name: /First grandchild.*Monitor/,
+    });
+
+    expect(
+      secondChildButton.compareDocumentPosition(firstChildButton) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      secondGrandchildButton.compareDocumentPosition(firstGrandchildButton) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
   it("keeps an orphaned child under the remembered parent title", () => {
     const parent = backgroundItem({
       taskId: "parent-agent",
@@ -283,20 +380,6 @@ function panelElement(input: {
   );
 }
 
-function backgroundItem(input: {
-  readonly taskId: string;
-  readonly kind: BackgroundItem["kind"];
-  readonly title: string;
-  readonly blockId: string;
-  readonly parentTaskId: string | null;
-  readonly scheduledFor: number | null;
-}): BackgroundItem {
-  return {
-    taskId: input.taskId,
-    kind: input.kind,
-    title: input.title,
-    blockId: input.blockId,
-    parentTaskId: input.parentTaskId,
-    scheduledFor: input.scheduledFor,
-  };
+function backgroundItem(input: BackgroundItem): BackgroundItem {
+  return input;
 }

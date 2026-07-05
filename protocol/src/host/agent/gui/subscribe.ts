@@ -168,18 +168,41 @@ export type BackgroundItemKind = z.infer<typeof backgroundItemKindSchema>;
  * Host-internal scheduling metadata such as tool-use id and start time must not
  * leak onto this wire contract.
  */
-export const backgroundItemSchema = z.object({
+const backgroundItemBaseFields = {
   taskId: z.string(),
-  kind: backgroundItemKindSchema,
   title: z.string(),
   blockId: z.string(),
   // Parent task id for nested background items. Optional/defaulted so a
   // new-client parse of an old-host frame succeeds, while old clients strip it.
   parentTaskId: z.string().nullable().default(null).optional(),
+} as const;
+
+const runningBackgroundItemKindSchema = z.enum([
+  "subagent",
+  "command",
+  "monitor",
+]);
+
+const runningBackgroundItemSchema = z.object({
+  ...backgroundItemBaseFields,
+  kind: runningBackgroundItemKindSchema,
   // Epoch milliseconds when a wakeup item is scheduled to fire. Null for
   // ordinary background work and optional for old-host compatibility.
   scheduledFor: z.number().nullable().default(null).optional(),
 });
+
+const wakeupBackgroundItemSchema = z.object({
+  ...backgroundItemBaseFields,
+  kind: z.literal("wakeup"),
+  // Wakeup items represent a concrete scheduled wake and must carry its due
+  // timestamp. Parent metadata remains defaulted for old-host compatibility.
+  scheduledFor: z.number(),
+});
+
+export const backgroundItemSchema = z.discriminatedUnion("kind", [
+  runningBackgroundItemSchema,
+  wakeupBackgroundItemSchema,
+]);
 export type BackgroundItem = z.infer<typeof backgroundItemSchema>;
 
 export const chatActionAckStatusSchema = z.enum(["accepted", "rejected"]);
