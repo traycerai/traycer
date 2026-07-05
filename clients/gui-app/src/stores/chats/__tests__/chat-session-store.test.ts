@@ -1880,6 +1880,8 @@ describe("createChatSessionStore", () => {
       kind: "command",
       title: "sleep 60",
       blockId: "tool-1",
+      parentTaskId: null,
+      scheduledFor: null,
     };
     emitSnapshotFrame({
       callbacks,
@@ -1935,6 +1937,8 @@ describe("createChatSessionStore", () => {
       kind: "command",
       title: "npm run dev",
       blockId: "tool-2",
+      parentTaskId: null,
+      scheduledFor: null,
     };
     callbacks.onTurnStateChanged({
       kind: "turnStateChanged",
