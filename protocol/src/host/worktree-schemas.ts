@@ -720,6 +720,15 @@ export const worktreeHostEntrySchemaV11 = worktreeHostEntrySchema.extend({
   // Per-owned-submodule merge facts for the True-AND Task rollup. `[]` when the
   // worktree owns no submodule branches or `includeActivity` is false.
   submodules: z.array(worktreeSubmoduleMergeFactSchema),
+  // Host-computed "At base commit" signal: the worktree was created and never
+  // advanced from its birth commit (`HEAD === baseSha && clean && no HEAD-reflog
+  // commit entries since creation`). The pure client classifier greens
+  // "At base commit" on this boolean alone - it never sees `baseSha`/HEAD. The
+  // host folds in the reflog-no-movement guard so a commit-then-reset-to-base
+  // worktree is NOT labelled at-base. `false` whenever unproven: an imported
+  // worktree (no `baseSha`), a moved / dirty worktree, or `includeActivity` false
+  // (the live HEAD read is gated with the other activity probes).
+  atBaseCommit: z.boolean(),
 });
 export type WorktreeHostEntryV11 = z.infer<typeof worktreeHostEntrySchemaV11>;
 

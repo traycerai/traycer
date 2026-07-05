@@ -51,6 +51,7 @@ const mergeProvenanceAbsent = {
   prUrl: null,
   mergedHeadShaMatches: false,
   submodules: [],
+  atBaseCommit: false,
 } as const;
 
 describe("worktreeHostEntrySchemaV11", () => {
@@ -90,6 +91,7 @@ describe("worktreeHostEntrySchemaV11", () => {
           mergedIntoDefault: false,
         },
       ],
+      atBaseCommit: false,
     };
     const parsed1 = worktreeHostEntrySchemaV11.parse(fixture);
     const parsed2 = worktreeHostEntrySchemaV11.parse(parsed1);
@@ -130,7 +132,7 @@ describe("worktreeHostEntrySchemaV11", () => {
     });
   });
 
-  it("parses an at-base entry (baseSha present, no PR)", () => {
+  it("parses an at-base entry (baseSha present, no PR, atBaseCommit true)", () => {
     const parsed = worktreeHostEntrySchemaV11.parse({
       ...v10Entry,
       lastActivityAt: null,
@@ -139,10 +141,12 @@ describe("worktreeHostEntrySchemaV11", () => {
       createdAt: null,
       ...mergeProvenanceAbsent,
       baseSha: "b".repeat(40),
+      atBaseCommit: true,
     });
     expect(parsed.baseSha).toBe("b".repeat(40));
     expect(parsed.prState).toBeNull();
     expect(parsed.submodules).toEqual([]);
+    expect(parsed.atBaseCommit).toBe(true);
   });
 
   it("still accepts a bare v1.0 entry as its own (v1.0) shape", () => {
@@ -200,8 +204,9 @@ describe("worktreeBranchStatusSchema (upstream-independent reshape)", () => {
 
 describe("worktreeListAllForHostRequestSchemaV11", () => {
   it("requires the includeActivity flag", () => {
-    expect(worktreeListAllForHostRequestSchemaV11.parse({ includeActivity: true }))
-      .toEqual({ includeActivity: true });
+    expect(
+      worktreeListAllForHostRequestSchemaV11.parse({ includeActivity: true }),
+    ).toEqual({ includeActivity: true });
     expect(worktreeListAllForHostRequestSchema.parse({})).toEqual({});
   });
 });
@@ -280,7 +285,10 @@ describe("worktreeBindingEntrySchema (merge-provenance additions)", () => {
       ...bindingEntryBase,
       baseSha: "c".repeat(40),
       ownedSubmodules: [
-        { repoIdentifier: { owner: "acme", repo: "protocol" }, branch: "feature-x" },
+        {
+          repoIdentifier: { owner: "acme", repo: "protocol" },
+          branch: "feature-x",
+        },
       ],
     };
     const parsed1 = worktreeBindingEntrySchema.parse(entry);

@@ -431,6 +431,7 @@ export const worktreeListAllForHostUpgradeV10ToV11 = defineUpgradePath<
       prUrl: null,
       mergedHeadShaMatches: false,
       submodules: [],
+      atBaseCommit: false,
     })),
   }),
 });
