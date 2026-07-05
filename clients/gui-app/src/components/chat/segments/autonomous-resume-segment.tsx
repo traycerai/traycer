@@ -1,4 +1,4 @@
-import { CheckCheck, XCircle } from "lucide-react";
+import { AlarmClockCheck, CheckCheck, XCircle } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import type { AutonomousResumeTrigger } from "@traycer/protocol/persistence/epic/content-blocks";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -12,10 +12,11 @@ import { SegmentPanel } from "./segment-panel";
 
 /**
  * Lean marker at the head of an AUTONOMOUS turn (one with no user message),
- * naming which backgrounded command/Monitor/subagent completion woke the agent
- * - so the resume reads as a consequence, not an abrupt reply.
+ * naming which backgrounded command/Monitor/subagent completion or scheduled
+ * wakeup woke the agent - so the resume reads as a consequence, not an abrupt
+ * reply.
  *
- * - Command / monitor triggers: rendered as expandable cards that lazy-fetch
+ * - Command / monitor / wakeup triggers: rendered as cards that lazy-fetch
  *   output on expand when an output file is available.
  * - Subagent triggers with a result summary: rendered as expandable cards
  *   showing the full markdown result.
@@ -43,8 +44,8 @@ export function AutonomousResumeSegment(props: AutonomousResumeSegmentProps) {
 }
 
 /**
- * Expandable card for a settled background task. Subagents render their
- * markdown result inline; command/monitor triggers fetch their output file on
+ * Card for a trigger that resumed an autonomous turn. Subagents render their
+ * markdown result inline; output-backed triggers fetch their output file on
  * expand through workspace.readFile.
  */
 function ResumeCompletionCard(props: {
@@ -57,14 +58,9 @@ function ResumeCompletionCard(props: {
     maxLength: 60,
     ellipsis: "…",
   });
-  const StatusIcon = trigger.status === "completed" ? CheckCheck : XCircle;
-
   const header = (
     <>
-      <StatusIcon
-        className="size-3.5 shrink-0 text-foreground/60"
-        aria-hidden
-      />
+      {resumeStatusIcon(trigger)}
       <span className="shrink-0 text-ui-sm font-medium text-foreground/85">
         {resumeStatusTitle(trigger)}
       </span>
@@ -90,11 +86,10 @@ function ResumeCompletionCard(props: {
     </div>
   ) : null;
 
-  // Command/monitor triggers only have something to reveal when there's a
-  // captured output file - without one the body is just "Output file
-  // unavailable." every time, so collapse to a static single-row card.
-  // Monitor never has a capturable output file (it watches/polls rather than
-  // captures stdout - see `claudeOutputFileRef`); subagents always have a
+  // Non-subagent triggers only have something to reveal when there's a captured
+  // output file - without one the body is just "Output file unavailable." every
+  // time, so collapse to a static single-row card. Monitor and wakeup triggers
+  // do not normally have capturable output files; subagents always have a
   // markdown result to show.
   const expandable = trigger.kind === "subagent" || trigger.outputFile !== null;
 
@@ -139,6 +134,8 @@ function ResumeCompletionCardBody(props: {
 }
 
 function resumeStatusTitle(trigger: AutonomousResumeTrigger): string {
+  if (trigger.kind === "wakeup") return wakeupStatusTitle(trigger.status);
+
   const noun = resumeKindTitle(trigger.kind);
   switch (trigger.status) {
     case "completed":
@@ -150,6 +147,17 @@ function resumeStatusTitle(trigger: AutonomousResumeTrigger): string {
   }
 }
 
+function wakeupStatusTitle(status: AutonomousResumeTrigger["status"]): string {
+  switch (status) {
+    case "completed":
+      return "Woke on schedule";
+    case "failed":
+      return "Scheduled wake failed";
+    case "stopped":
+      return "Scheduled wake canceled";
+  }
+}
+
 function resumeKindTitle(kind: AutonomousResumeTrigger["kind"]): string {
   switch (kind) {
     case "command":
@@ -158,7 +166,20 @@ function resumeKindTitle(kind: AutonomousResumeTrigger["kind"]): string {
       return "Monitor";
     case "subagent":
       return "Subagent";
+    case "wakeup":
+      return "Wake";
   }
+}
+
+function resumeStatusIcon(trigger: AutonomousResumeTrigger): ReactNode {
+  const className = "size-3.5 shrink-0 text-foreground/60";
+  if (trigger.status !== "completed") {
+    return <XCircle className={className} aria-hidden />;
+  }
+  if (trigger.kind === "wakeup") {
+    return <AlarmClockCheck className={className} aria-hidden />;
+  }
+  return <CheckCheck className={className} aria-hidden />;
 }
 
 function ResumeResultPanel(props: { readonly result: string }) {

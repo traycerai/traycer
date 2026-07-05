@@ -124,6 +124,8 @@ describe("<ChatLowerDock />", () => {
       kind: "command",
       title: "bun test",
       blockId: "tool-1",
+      parentTaskId: null,
+      scheduledFor: null,
     };
 
     renderDock({

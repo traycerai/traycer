@@ -872,6 +872,8 @@ describe("ChatMessages Virtuoso renderer", () => {
           kind: "command",
           title: "sleep 60",
           blockId: "unrelated-tool",
+          parentTaskId: null,
+          scheduledFor: null,
         },
       ],
     });
@@ -914,6 +916,8 @@ describe("ChatMessages Virtuoso renderer", () => {
             kind: "command",
             title: "sleep 60",
             blockId: "tool-bg",
+            parentTaskId: null,
+            scheduledFor: null,
           },
         ],
       }),

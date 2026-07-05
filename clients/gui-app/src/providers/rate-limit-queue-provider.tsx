@@ -29,7 +29,11 @@ export const EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS = 5 * 60 * 1000;
  *    on host loss so a stale client can't service an enqueue.
  * 2. Drives the single shared interval timer for the `ephemeralProcess` lane,
  *    walking the currently-configured providers and enqueuing a `force: false`
- *    pull for each (the queue serializes them, one subprocess at a time).
+ *    pull for each (the queue serializes them, one subprocess at a time). It
+ *    also enqueues the same safe pull immediately when the configured
+ *    `ephemeralProcess` provider set changes, so the header glyph/popover can
+ *    recover from a failed first read without waiting for a transient surface
+ *    mount.
  *
  * The timer PAUSES on `document.visibilityState === "hidden"` (window truly
  * minimized/backgrounded) and resumes when the window is shown again - matching
@@ -85,10 +89,19 @@ export function RateLimitQueueProvider(): null {
     ephemeralProviderIdsRef.current = ephemeralProviderIds;
   }, [ephemeralProviderIds]);
 
+  useEffect(() => {
+    if (hostId === null) return;
+    ephemeralProviderIds.forEach((providerId) => {
+      void enqueueRateLimitFetch(providerId, DEFAULT_ACCOUNT_CONTEXT, {
+        force: false,
+      });
+    });
+  }, [hostId, ephemeralProviderIds]);
+
   // The single shared interval timer, gated on host presence and paused while
   // the window is hidden. Initial per-provider data still populates through the
-  // per-provider query's own fetch-on-mount; this timer only does the periodic
-  // background refresh.
+  // immediate effect above and per-surface queue enqueue-on-mount; this timer
+  // only does the periodic background refresh.
   useEffect(() => {
     if (hostId === null) return;
     let intervalHandle: number | null = null;

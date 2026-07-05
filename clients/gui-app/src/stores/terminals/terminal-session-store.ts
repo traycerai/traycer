@@ -1,7 +1,10 @@
 import { create, type StoreApi, type UseBoundStore } from "zustand";
 import { v4 as uuidv4 } from "uuid";
 import type { TerminalSubscribeClientFrame } from "@traycer/protocol/host/terminal/subscribe";
-import type { TerminalSessionKind } from "@traycer/protocol/host/terminal/unary-schemas";
+import type {
+  TerminalSessionExitReason,
+  TerminalSessionKind,
+} from "@traycer/protocol/host/terminal/unary-schemas";
 import type {
   TerminalStreamCallbacks,
   TerminalStreamClient,
@@ -88,6 +91,13 @@ export interface TerminalSessionState {
   readonly snapshotLoaded: boolean;
   readonly status: TerminalLifecycleStatus;
   readonly exitCode: number | null;
+  /**
+   * Why the PTY ended, from the host's exit frame / exited snapshot.
+   * `null` until exited, and for hosts predating the field (treat as
+   * `process-exit`). A `reaped` exit is host lifecycle - the idle-reap of
+   * an unwatched terminal-agent - and must not be presented as a crash.
+   */
+  readonly exitReason: TerminalSessionExitReason | null;
   readonly effectiveCols: number;
   readonly effectiveRows: number;
   readonly requestedCols: number;
@@ -419,6 +429,7 @@ export function createTerminalSessionStore(
           snapshotLoaded: true,
           status: frame.session.status === "exited" ? "exited" : "running",
           exitCode: frame.session.exitCode,
+          exitReason: frame.session.exitReason ?? null,
           effectiveCols: frame.session.cols,
           effectiveRows: frame.session.rows,
           reattachMode: "live",
@@ -455,6 +466,11 @@ export function createTerminalSessionStore(
       },
       onExit: (frame) => {
         if (disposed || frame.sessionId !== options.sessionId) return;
+        // A live exit frame carries no reason - it is only ever a genuine
+        // process exit or an explicit kill to an attached viewer (a reaped
+        // idle session has no viewer, so it is observed via the reattach
+        // snapshot's `session.exitReason` instead). Leave `exitReason`
+        // untouched here; the snapshot path is authoritative for it.
         set({
           status: "exited",
           exitCode: frame.exitCode,
@@ -511,6 +527,7 @@ export function createTerminalSessionStore(
       snapshotLoaded: false,
       status: "creating",
       exitCode: null,
+      exitReason: null,
       effectiveCols: options.cols,
       effectiveRows: options.rows,
       requestedCols: options.cols,

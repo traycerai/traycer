@@ -38,6 +38,7 @@ import {
   agentGuiListModelsV10,
   chatSubscribeV10,
   chatSubscribeV11,
+  chatSubscribeV12,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -2575,7 +2576,7 @@ export type HostRpcRegistry = typeof hostRpcRegistry;
  * Combined streaming-RPC registry for the `/stream` WS manifest.
  *
  * One manifest per `/stream` WS: `epic.subscribe@1.0`,
- * `chat.subscribe@1.1`, `notifications.subscribe@1.0`,
+ * `chat.subscribe@1.2`, `notifications.subscribe@1.0`,
  * `terminal.subscribe@1.0`, `git.subscribeStatus@1.0`,
  * `agent.inbox.subscribe@1.0`, `speech.dictate@1.0`, and
  * `migration.run@1.0` are negotiated from this registry. Later minors within
@@ -2607,13 +2608,16 @@ export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
   },
   "chat.subscribe": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: chatSubscribeV10,
         },
         1: {
           contract: chatSubscribeV11,
+        },
+        2: {
+          contract: chatSubscribeV12,
         },
       },
     },

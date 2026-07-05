@@ -68,6 +68,15 @@ export type FatalErrorDetails = {
   readonly reason: string;
   readonly incompatibleMethods: readonly IncompatibleMethodDetails[] | null;
   readonly upgradeGuidance: IncompatibilityUpgradeGuidance | null;
+  /**
+   * When `true`, the rejection is transient and host-side (e.g. the host's
+   * JWKS fetch timed out while verifying the bearer) - NOT a statement about
+   * the credential's authenticity. A client that understands this field should
+   * reconnect with plain backoff instead of running credential recovery or
+   * going terminal. Additive and optional: an older host omits it entirely and
+   * a newer client then reads "not retryable".
+   */
+  readonly retryable?: boolean;
 };
 
 /**
@@ -200,6 +209,11 @@ export const fatalErrorDetailsSchema = z.object({
   reason: z.string(),
   incompatibleMethods: z.array(incompatibleMethodDetailsSchema).nullable(),
   upgradeGuidance: incompatibilityUpgradeGuidanceSchema.nullable(),
+  // Additive/optional: an older host omits it, so a newer client parsing an
+  // older host's frame reads `undefined` (not retryable). Set `true` only for
+  // transient host-side rejections (e.g. a JWKS fetch timeout) that the client
+  // recovers from with plain reconnect backoff, not credential revalidation.
+  retryable: z.boolean().optional(),
 });
 
 /** Canonical schema for the client `open` frame. */

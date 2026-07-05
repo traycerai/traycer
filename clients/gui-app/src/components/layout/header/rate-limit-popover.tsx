@@ -128,7 +128,7 @@ export function RateLimitPopover({
       sideOffset={8}
       collisionPadding={12}
       role="dialog"
-      aria-label="Rate limits"
+      aria-label="Usage limits"
       className="w-[min(92vw,30rem)] gap-0 overflow-hidden rounded-xl p-0"
       // Radix auto-focuses the first focusable child on open. Here that's the
       // Overview rail tab, whose `TooltipWrapper` opens the tooltip on focus
@@ -275,7 +275,7 @@ function RateLimitRail({
     <div className="flex min-h-0 flex-col items-center border-r bg-muted/20 p-1.5">
       <div
         role="tablist"
-        aria-label="Rate limit providers"
+        aria-label="Usage limit providers"
         aria-orientation="vertical"
         className="flex min-h-0 flex-1 flex-col items-center gap-1.5 overflow-y-auto"
       >
@@ -285,11 +285,7 @@ function RateLimitRail({
           onSelect={() => onSelect("overview")}
           icon={<Gauge className="size-4" />}
         />
-        <div
-          role="separator"
-          aria-orientation="horizontal"
-          className="my-0.5 h-px w-5 bg-border"
-        />
+        <div aria-hidden className="my-0.5 h-px w-5 bg-border" />
         {railTabs.map((tab) =>
           tab.kind === "traycer" ? (
             <RailTab
@@ -379,8 +375,8 @@ function RailTab({
  * than painted as its own blank/loading section - it's revealed in place once
  * its data arrives, so the list grows one provider at a time instead of every
  * slot appearing empty up front. While nothing has reported ready yet, a
- * single centered "Fetching rate limits" indicator stands in for the whole
- * list (feedback: "just a modal centered fetching rate limits instead of
+ * single centered "Fetching usage limits" indicator stands in for the whole
+ * list (feedback: "just a modal centered fetching usage limits instead of
  * empty provider sections").
  */
 function RateLimitOverview({
@@ -449,7 +445,7 @@ function RateLimitOverviewLoading(): ReactNode {
   return (
     <div className="flex flex-1 items-center justify-center gap-2 py-10 text-ui-sm text-muted-foreground">
       <MutedAgentSpinner />
-      Fetching rate limits
+      Fetching usage limits
     </div>
   );
 }
@@ -591,7 +587,7 @@ function RateLimitProviderBlock({
   );
   const queryState: ProviderRateLimitQueryState = {
     isPending: query.isPending,
-    isFetching: query.isFetching,
+    isFetching: isRefreshing,
     isError: query.isError,
     providerRateLimits: query.data?.providerRateLimits,
   };
@@ -630,9 +626,11 @@ function RateLimitProviderBlock({
           ) : null}
         </div>
         <div className="flex items-center gap-1.5">
-          <RateLimitUpdatedLabel
-            state={state}
+          <UsageLimitUpdatedLabel
+            ready={state.kind === "ready"}
             updatedAt={query.dataUpdatedAt}
+            refreshing={isRefreshing}
+            degraded={state.kind === "ready" && state.degraded}
           />
           {/* Overview has its own "Refresh all" on the rail (item 2 feedback:
               a per-provider icon there was redundant); only the single-provider
@@ -660,15 +658,44 @@ function RateLimitProviderBlock({
  * failed" appended when a last-known-good reading is being shown after a failed
  * poll (Core Flows degraded state).
  */
-function RateLimitUpdatedLabel({
-  state,
+function UsageLimitUpdatedLabel({
+  ready,
   updatedAt,
+  refreshing,
+  degraded,
 }: {
-  readonly state: PopoverProviderRateLimitState;
+  readonly ready: boolean;
   readonly updatedAt: number;
+  readonly refreshing: boolean;
+  readonly degraded: boolean;
 }): ReactNode {
-  if (state.kind !== "ready" || updatedAt === 0) return null;
-  return <UpdatedAgoText updatedAt={updatedAt} degraded={state.degraded} />;
+  if (!ready) return null;
+  if (refreshing) return <RefreshingText />;
+  if (updatedAt === 0) return null;
+  return <UpdatedAgoText updatedAt={updatedAt} degraded={degraded} />;
+}
+
+function RefreshingText(): ReactNode {
+  return (
+    <span className="inline-flex items-baseline gap-1 text-ui-xs text-muted-foreground">
+      <span className="working-text-shimmer text-ui-xs">Refreshing</span>
+      <RefreshingWorkingDots />
+    </span>
+  );
+}
+
+function RefreshingWorkingDots(): ReactNode {
+  return (
+    <span
+      aria-hidden="true"
+      className="working-dots text-current"
+      data-testid="usage-limit-refreshing-dots"
+    >
+      <span />
+      <span />
+      <span />
+    </span>
+  );
 }
 
 function UpdatedAgoText({
@@ -698,12 +725,12 @@ function RateLimitProviderBody({
       return <RateLimitDetailSkeleton />;
     case "error":
       return (
-        <RateLimitErrorMessage message="Couldn't load rate limits right now." />
+        <RateLimitErrorMessage message="Couldn't load usage limits right now." />
       );
     case "unavailable":
       return (
         <RateLimitErrorMessage
-          message={`Rate limits unavailable — ${formatUnavailableReason(state.reason)}`}
+          message={`Usage limits unavailable — ${formatUnavailableReason(state.reason)}`}
         />
       );
     case "ready":
@@ -810,12 +837,12 @@ function TraycerRateLimitBlock({
           ) : null}
         </div>
         <div className="flex items-center gap-1.5">
-          {state.kind === "ready" && query.dataUpdatedAt !== 0 ? (
-            <UpdatedAgoText
-              updatedAt={query.dataUpdatedAt}
-              degraded={state.degraded}
-            />
-          ) : null}
+          <UsageLimitUpdatedLabel
+            ready={state.kind === "ready"}
+            updatedAt={query.dataUpdatedAt}
+            refreshing={query.isFetching}
+            degraded={state.kind === "ready" && state.degraded}
+          />
           {/* Overview has its own "Refresh all" on the rail (item 2 feedback);
               only the single-provider detail tab keeps this one. */}
           {!overview ? (
