@@ -248,7 +248,10 @@ describe("GeneralSettingsPanel", () => {
     });
     useLocalSnapshotClearStore.setState({ clearedAtByScope: {} });
     useOnboardingStore.setState({ completedAt: null, step: 0 });
-    useSettingsStore.setState({ pinContextUsageBreakdown: false });
+    useSettingsStore.setState({
+      pinContextUsageBreakdown: false,
+      quoteReplyEnabled: true,
+    });
   });
 
   afterEach(() => {
@@ -283,6 +286,19 @@ describe("GeneralSettingsPanel", () => {
     fireEvent.click(toggle);
 
     expect(useSettingsStore.getState().pinContextUsageBreakdown).toBe(true);
+  });
+
+  it("renders the quote reply row and toggles the setting", () => {
+    renderPanel();
+
+    expect(useSettingsStore.getState().quoteReplyEnabled).toBe(true);
+    const toggle = screen.getByRole("switch", {
+      name: "Quote reply on text selection",
+    });
+
+    fireEvent.click(toggle);
+
+    expect(useSettingsStore.getState().quoteReplyEnabled).toBe(false);
   });
 
   it("navigates to replay onboarding without clearing first-run completion", () => {

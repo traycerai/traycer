@@ -1630,6 +1630,7 @@ function ChatSessionMessagesSurface(
           >
             <ChatMessages
               taskTitle={props.node.name}
+              taskId={props.node.id}
               messages={props.messages}
               backgroundItems={props.backgroundItems}
               minimapItems={props.minimapItems}

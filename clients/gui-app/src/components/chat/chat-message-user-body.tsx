@@ -276,6 +276,7 @@ function AgentMessageDisplayView({
               isStreaming={false}
               markdown={messageText}
               proseSize="compact"
+              quotable={false}
             />
           </div>
         </div>
@@ -600,6 +601,7 @@ function InlineUserMessageEditor({
         onKeyDown={handleEditorKeyDown}
         onFocus={NOOP}
         onBlur={NOOP}
+        onEditorReady={null}
       />
     ),
     [editing, handleEditorKeyDown, onSnapshot, pickerStore, submit],

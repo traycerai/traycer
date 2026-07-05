@@ -196,6 +196,7 @@ function ResumeResultPanel(props: { readonly result: string }) {
           isStreaming={false}
           markdown={props.result}
           proseSize="compact"
+          quotable={false}
         />
       </div>
     </SegmentPanel>

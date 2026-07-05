@@ -88,6 +88,12 @@ export interface SettingsState {
   /** BCP-47-ish dictation language hint, or "auto". */
   voiceLanguage: string;
   /**
+   * Quote-to-composer affordance. Opt-out: enabling it (default) surfaces a
+   * quote button when selecting assistant text, inserting the selection into
+   * the chat composer as a blockquote.
+   */
+  quoteReplyEnabled: boolean;
+  /**
    * Shared, user-level diff viewer configuration consumed by every git and
    * snapshot diff renderer. Persisted globally so the choice survives restarts
    * and live-updates all mounted viewers. Tile-local state (collapsed files)
@@ -114,6 +120,7 @@ export interface SettingsState {
   setDefaultEditor: (id: EditorId | null) => void;
   setVoiceInputEnabled: (value: boolean) => void;
   setVoiceLanguage: (value: string) => void;
+  setQuoteReplyEnabled: (value: boolean) => void;
   setDiffViewerPreferences: (preferences: DiffViewerPreferences) => void;
   patchDiffViewerPreferences: (patch: DiffViewerPreferencesPatch) => void;
 }
@@ -143,6 +150,7 @@ type PersistedSettingsState = Pick<
   | "defaultEditor"
   | "voiceInputEnabled"
   | "voiceLanguage"
+  | "quoteReplyEnabled"
   | "diffViewerPreferences"
 >;
 
@@ -205,6 +213,7 @@ function partializeSettingsState(state: SettingsState): PersistedSettingsState {
     defaultEditor: state.defaultEditor,
     voiceInputEnabled: state.voiceInputEnabled,
     voiceLanguage: state.voiceLanguage,
+    quoteReplyEnabled: state.quoteReplyEnabled,
     diffViewerPreferences: state.diffViewerPreferences,
   };
 }
@@ -235,6 +244,7 @@ export const useSettingsStore = create<SettingsState>()(
       defaultEditor: "vscode",
       voiceInputEnabled: true,
       voiceLanguage: "auto",
+      quoteReplyEnabled: true,
       diffViewerPreferences: DEFAULT_DIFF_VIEWER_PREFERENCES,
       setTheme: makeSetter(set, "theme"),
       setThemePreset: makeSetter(set, "themePreset"),
@@ -290,6 +300,7 @@ export const useSettingsStore = create<SettingsState>()(
       },
       setVoiceInputEnabled: makeSetter(set, "voiceInputEnabled"),
       setVoiceLanguage: makeSetter(set, "voiceLanguage"),
+      setQuoteReplyEnabled: makeSetter(set, "quoteReplyEnabled"),
       setDiffViewerPreferences: makeSetter(set, "diffViewerPreferences"),
       patchDiffViewerPreferences: (patch) => {
         set((s) => ({

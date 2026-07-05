@@ -63,6 +63,9 @@ function AgentReferenceButton(props: {
         "text-ui-sm font-medium text-primary transition-colors hover:bg-primary/15 hover:text-primary focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none",
       )}
       data-agent-reference={props.agent.id}
+      // Excluded from quote selection: it's an interactive chip inside quotable
+      // prose, so a drag across it must not append its label as quoted text.
+      data-quote-exclude=""
     >
       <Bot className="size-3 shrink-0" aria-hidden />
       <span className="truncate">{props.agent.name}</span>
