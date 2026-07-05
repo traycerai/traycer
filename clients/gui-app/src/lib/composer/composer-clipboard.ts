@@ -4,6 +4,7 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 import {
   mentionPlainTextFromAttrs,
   numberValue,
+  quotePrefixLines,
   slashCommandPlainTextFromAttrs,
 } from "@/lib/composer/tiptap-json-content";
 import { appLogger } from "@/lib/logger";
@@ -238,10 +239,7 @@ function blockquotePlainText(
   const text = children
     .map((child) => composerClipboardPlainTextFromNode(child, ctx))
     .join("\n");
-  return text
-    .split("\n")
-    .map((line) => (line.length === 0 ? ">" : `> ${line}`))
-    .join("\n");
+  return quotePrefixLines(text);
 }
 
 function listPlainText(
