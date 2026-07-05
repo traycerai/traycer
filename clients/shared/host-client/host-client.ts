@@ -8,6 +8,7 @@ import type {
 } from "../host-transport/host-messenger";
 import { HostRpcError as HostRpcErrorCtor } from "../host-transport/host-messenger";
 import type { HostDirectoryEntry } from "./host-directory";
+import { isRemoteHostDirectoryEntry } from "./remote-fetcher";
 
 /**
  * Narrow port the client calls to invalidate host-scoped query state.
@@ -320,6 +321,17 @@ function sameHostId(
   return previous.hostId === next.hostId;
 }
 
+/**
+ * `publicKey` is compared separately from the base fields (R-1): a remote
+ * host's static Noise key can rotate (re-enrollment / corruption recovery -
+ * `registerOrAdoptHost` overwrites the key on the same `hostId`) while every
+ * base field - including `websocketUrl`, since every remote host shares one
+ * fixed relay attach URL - stays identical. Treating that as "same transport"
+ * would swallow the `host-updated` `emitChange` this rotation must fire,
+ * leaving every `onChange` subscriber (the app-wide stream provider, the
+ * reactive active-host-id projection, the epic session mount) permanently
+ * pinned to the stale key with no signal that anything changed.
+ */
 function sameHostTransport(
   previous: HostDirectoryEntry | null,
   next: HostDirectoryEntry | null,
@@ -332,6 +344,11 @@ function sameHostTransport(
     previous.kind === next.kind &&
     previous.websocketUrl === next.websocketUrl &&
     previous.version === next.version &&
-    previous.status === next.status
+    previous.status === next.status &&
+    remotePublicKeyOf(previous) === remotePublicKeyOf(next)
   );
+}
+
+function remotePublicKeyOf(entry: HostDirectoryEntry): string | null {
+  return isRemoteHostDirectoryEntry(entry) ? entry.publicKey : null;
 }

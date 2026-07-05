@@ -63,6 +63,7 @@ function buildParams(closeWs: () => void) {
     fakeWs,
     params: {
       target: FAKE_TARGET,
+      userId: "user-a",
       endpoint: () => null,
       bearer: () => null,
       auth: AUTH,
@@ -140,6 +141,7 @@ describe("openDurableStreamTransport", () => {
     let fireDirectoryChange: () => void = () => undefined;
     const params = {
       target: FAKE_TARGET,
+      userId: "user-a",
       endpoint: () =>
         websocketUrl === null ? null : { hostId: "host-a", websocketUrl },
       bearer: () => null,

@@ -48,6 +48,8 @@ export interface DurableStreamTransport {
  */
 export function openDurableStreamTransport(params: {
   readonly target: HostDirectoryEntry;
+  /** The signed-in user this transport is built for (Architecture §4 / S1 cache key). */
+  readonly userId: string;
   readonly endpoint: HostEndpointProvider;
   readonly bearer: BearerSourceProvider;
   readonly auth: StreamAuthRevalidator;
@@ -65,6 +67,7 @@ export function openDurableStreamTransport(params: {
     bearer: params.bearer,
     authnBaseUrl: params.runnerHost.authnBaseUrl,
     auth: params.auth,
+    userId: params.userId,
     // Owned-lifetime transport: eager warm-connect is correct here.
     autoStart: true,
   });

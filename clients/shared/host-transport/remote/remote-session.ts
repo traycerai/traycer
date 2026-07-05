@@ -33,7 +33,10 @@ import {
   prepareRequestPayload,
   decodeResponsePayload,
 } from "../ws-rpc-client";
-import { prepareStreamSubscribeRequest } from "../ws-stream-client";
+import {
+  prepareStreamSubscribeRequest,
+  type ParamsOf,
+} from "../ws-stream-client";
 import { backoffFor } from "../backoff";
 import {
   CLIENT_REAUTH_INTERVAL_MS,
@@ -120,6 +123,33 @@ export interface RemoteSessionOptions<
   readonly requestId: () => string;
 }
 
+/**
+ * Public surface of `RemoteSession` (Architecture §4 / S1 session-collapse).
+ * A plain interface (not the concrete class) so the session cache
+ * (`active-remote-sessions.ts`) can hand each consumer its OWN wrapper object
+ * over one shared `RemoteSession` - every method delegates straight through
+ * except `close()`, which the cache intercepts to release that consumer's
+ * reference instead of tearing down the shared connection outright.
+ */
+export interface IRemoteSession<
+  RpcRegistry extends VersionedRpcRegistry,
+  StreamRegistry extends VersionedStreamRpcRegistry,
+> {
+  start(): void;
+  isClosed(): boolean;
+  isReady(): boolean;
+  sendUnary<Method extends keyof RpcRegistry & string>(
+    method: Method,
+    params: RequestOfMethod<RpcRegistry, Method>,
+  ): Promise<ResponseOfMethod<RpcRegistry, Method>>;
+  subscribe<Method extends keyof StreamRegistry & string>(
+    method: Method,
+    params: ParamsOf<StreamRegistry, Method>,
+  ): IStreamSession;
+  notifyBearerRotated(): void;
+  close(): void;
+}
+
 type SessionPhase =
   | "idle"
   | "connecting"
@@ -160,7 +190,9 @@ interface ActiveConnection {
 export class RemoteSession<
   RpcRegistry extends VersionedRpcRegistry,
   StreamRegistry extends VersionedStreamRpcRegistry,
-> implements LogicalStreamPort {
+>
+  implements LogicalStreamPort, IRemoteSession<RpcRegistry, StreamRegistry>
+{
   private readonly options: RemoteSessionOptions<RpcRegistry, StreamRegistry>;
   private readonly clientManifests: SessionManifests;
 
@@ -848,8 +880,21 @@ export class RemoteSession<
     }
     this.armStandingTimer();
     if (!connection.hostAttached) {
-      connection.hostAttached = true;
-      connection.scheduler.resume();
+      // The host discards ALL Noise state on any socket close
+      // (`teardownAllSessions`, host-side), so a `host_attached` transition
+      // out of "detached" ALWAYS means the host rebuilt a fresh Noise
+      // responder for this attach - even though the CLIENT's own relay
+      // socket never dropped. There is no "redundant re-handshake" case to
+      // special-case: resuming the paused scheduler on the STALE Noise
+      // channel (the old behavior) would silently desync the client against
+      // a responder that no longer exists on the host side, recoverable
+      // only by the 15-min standing watchdog - which a flapping host uplink
+      // re-arms indefinitely (Architecture §4 fix #2 / S2). Route it through
+      // the SAME full-attach path a genuine transport drop already uses -
+      // fresh `NoiseChannel` + relay dial + `open{bearer}` - rather than a
+      // second state machine or a new wire frame (`session_reset{sid}`
+      // stays deferred/telemetry-gated; see the S2 ticket).
+      this.handleConnectionLost(generation, "host-attached-stale-noise");
     }
   }
 

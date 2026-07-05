@@ -160,38 +160,52 @@ export const hostRegistryKindSchema = z.enum(["personal", "sandbox"]);
 
 export const hostUpdatePolicySchema = z.enum(["manual", "auto"]);
 
-export const hostStatusDtoSchema: z.ZodType<HostStatusDTO> = z.object({
-  presenceLease: hostPresenceLeaseStateSchema,
-  hostRelayAttached: z.boolean(),
-  viewerReachability: hostViewerReachabilitySchema,
-  clientCloud: hostClientCloudStateSchema,
-  busy: z.boolean(),
-  busySessionCount: z.number().int().nonnegative(),
-  updateState: hostUpdateStateSchema,
-  appVersion: z.string().nullable(),
-  lastSeenAt: z.string().nullable(),
-});
+// `.strict()` on every level (S5 / fix #5): a non-strict `z.object` silently
+// STRIPS a field the server adds, so a contract addition would render with a
+// piece quietly missing instead of failing loud. `.strict()` is not deep, so
+// each nested object below opts in individually — the negative fixture test
+// in `__tests__/host-status.test.ts` proves this actually rejects rather than
+// strips at every level, not just the top one.
+export const hostStatusDtoSchema: z.ZodType<HostStatusDTO> = z
+  .object({
+    presenceLease: hostPresenceLeaseStateSchema,
+    hostRelayAttached: z.boolean(),
+    viewerReachability: hostViewerReachabilitySchema,
+    clientCloud: hostClientCloudStateSchema,
+    busy: z.boolean(),
+    busySessionCount: z.number().int().nonnegative(),
+    updateState: hostUpdateStateSchema,
+    appVersion: z.string().nullable(),
+    lastSeenAt: z.string().nullable(),
+  })
+  .strict();
 
-export const hostListItemSchema: z.ZodType<HostListItem> = z.object({
-  hostId: z.string(),
-  displayName: z.string().nullable(),
-  platform: z.string().nullable(),
-  kind: hostRegistryKindSchema,
-  publicKey: z.string(),
-  createdAt: z.string(),
-  status: hostStatusDtoSchema,
-  updatePolicy: hostUpdatePolicySchema,
-});
+export const hostListItemSchema: z.ZodType<HostListItem> = z
+  .object({
+    hostId: z.string(),
+    displayName: z.string().nullable(),
+    platform: z.string().nullable(),
+    kind: hostRegistryKindSchema,
+    publicKey: z.string(),
+    createdAt: z.string(),
+    status: hostStatusDtoSchema,
+    updatePolicy: hostUpdatePolicySchema,
+  })
+  .strict();
 
-export const hostPresenceHealthSchema: z.ZodType<HostPresenceHealth> = z.object({
-  status: z.enum(["healthy", "degraded"]),
-  reason: z.string().nullable(),
-});
+export const hostPresenceHealthSchema: z.ZodType<HostPresenceHealth> = z
+  .object({
+    status: z.enum(["healthy", "degraded"]),
+    reason: z.string().nullable(),
+  })
+  .strict();
 
-export const hostListResponseSchema: z.ZodType<HostListResponse> = z.object({
-  hosts: z.array(hostListItemSchema),
-  presenceHealth: hostPresenceHealthSchema,
-});
+export const hostListResponseSchema: z.ZodType<HostListResponse> = z
+  .object({
+    hosts: z.array(hostListItemSchema),
+    presenceHealth: hostPresenceHealthSchema,
+  })
+  .strict();
 
 // -----------------------------------------------------------------------------
 // `PATCH /api/v3/hosts/:hostId` response — "Update now" / auto-policy toggle /

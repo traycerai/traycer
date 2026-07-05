@@ -16,6 +16,7 @@
     "./host": "./src/host/index.ts",
     "./host/*": "./src/host/*.ts",
     "./host-transport/mux": "./src/host-transport/mux.ts",
+    "./host-transport/__tests__/chunk-reassembler-conformance": "./src/host-transport/__tests__/chunk-reassembler-conformance.ts",
     "./framework": "./src/framework/index.ts",
     "./framework/*": "./src/framework/*.ts",
     "./notifications/*": "./src/notifications/*.ts",

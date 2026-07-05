@@ -180,6 +180,10 @@ export function createHostRuntime<
         runtime === null
           ? null
           : (runtime.hostClient.getRequestContext()?.credentials ?? null);
+      // Read live (mirrors `bearer`/`endpoint`) - the remote transport's
+      // `(hostId, userId)` session-cache key (Architecture §4 / S1).
+      const userId = () =>
+        runtime === null ? null : runtime.hostClient.getRequestContextUserId();
 
       let runtimeMessenger: RuntimeHostMessengerBinding<Registry> | null = null;
       const rawMessenger: IHostMessenger<Registry> =
@@ -189,6 +193,7 @@ export function createHostRuntime<
               registry,
               endpoint,
               bearer,
+              userId,
               authnBaseUrl: runnerHost.authnBaseUrl,
               requestId,
             })).messenger;

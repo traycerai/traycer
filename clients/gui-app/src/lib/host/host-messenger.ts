@@ -48,6 +48,8 @@ export interface BuildRawHostMessengerForTargetParams<
   readonly bearer: BearerSourceProvider;
   readonly authnBaseUrl: string;
   readonly requestId: RequestIdProvider;
+  /** The signed-in user this messenger is built for (Architecture §4 / S1 cache key). */
+  readonly userId: string;
 }
 
 export function buildRawHostMessengerForTarget<
@@ -71,6 +73,7 @@ export function buildRawHostMessengerForTarget<
       HostStreamRpcRegistry
     >({
       hostId: params.target.hostId,
+      userId: params.userId,
       relayAttachUrl: params.target.websocketUrl,
       authnBaseUrl: params.authnBaseUrl,
       hostPublicKey: params.target.publicKey,
@@ -117,6 +120,12 @@ export interface BuildRuntimeHostMessengerParams<
   readonly bearer: BearerSourceProvider;
   readonly authnBaseUrl: string;
   readonly requestId: RequestIdProvider;
+  /**
+   * Reads the signed-in user live (mirrors `bearer`/`endpoint`) - part of the
+   * shared `(hostId, userId)` remote-session cache key (Architecture §4 / S1).
+   * `null` while signed out.
+   */
+  readonly userId: () => string | null;
 }
 
 export function buildRuntimeHostMessenger<
@@ -140,6 +149,7 @@ class RuntimeHostMessenger<
   private readonly bearer: BearerSourceProvider;
   private readonly authnBaseUrl: string;
   private readonly requestId: RequestIdProvider;
+  private readonly userId: () => string | null;
   private readonly localMessenger: IHostMessenger<Registry>;
   private remoteBinding: RemoteBinding<Registry> | null = null;
 
@@ -149,6 +159,7 @@ class RuntimeHostMessenger<
     this.bearer = params.bearer;
     this.authnBaseUrl = params.authnBaseUrl;
     this.requestId = params.requestId;
+    this.userId = params.userId;
     this.localMessenger = new WsRpcClient<Registry>({
       registry: params.registry,
       endpoint: params.endpoint,
@@ -203,10 +214,15 @@ class RuntimeHostMessenger<
     if (this.remoteBinding !== null && this.remoteBinding.key === nextKey) {
       return this.remoteBinding.transport.messenger;
     }
+    const userId = this.userId();
+    if (userId === null) {
+      return null;
+    }
 
     this.closeRemoteTransport();
     const built = buildRawHostMessengerForTarget({
       target,
+      userId,
       endpoint: this.endpoint,
       registry: this.registry,
       bearer: this.bearer,

@@ -40,8 +40,16 @@ export function useWorktreeDeleteStreamTransportFactory(): (
       // degrade from gracefully.
       throw new Error(`No directory entry for host ${hostId}`);
     }
+    const userId = liveRef.current.globalClient.getRequestContextUserId();
+    if (userId === null) {
+      // The worktrees panel only renders (and can start a delete) once the
+      // global client has a signed-in user, so a null here is likewise a
+      // caller-bug condition, not one to degrade from gracefully.
+      throw new Error(`No signed-in user for host ${hostId}`);
+    }
     return openOneShotStreamTransport({
       target,
+      userId,
       endpoint: () =>
         dialableHostEndpoint(liveRef.current.directory.findById(hostId)),
       bearer: () =>

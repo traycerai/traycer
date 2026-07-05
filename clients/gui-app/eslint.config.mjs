@@ -225,4 +225,24 @@ export default tseslint.config(
       ],
     },
   },
+  {
+    // These hooks build a remote host transport (Architecture §4 / S1's
+    // shared `(hostId, userId)` session cache) inside a `useEffect`,
+    // deliberately NOT a `useMemo`: only an effect's cleanup is guaranteed to
+    // pair with exactly the committed acquire (a `useMemo` factory can run
+    // more than once per commit - StrictMode dev double-invoke, or a
+    // discarded concurrent render - silently orphaning a live reference on
+    // the shared session). This is React's own documented "connecting to an
+    // external system" pattern (react.dev/reference/react/useEffect), which
+    // this rule's heuristic cannot distinguish from an avoidable
+    // derived-state effect.
+    files: [
+      "src/hooks/host/use-host-client-for.ts",
+      "src/hooks/host/use-host-stream-client-for.ts",
+      "src/lib/host/stream-runtime.tsx",
+    ],
+    rules: {
+      "react-hooks/set-state-in-effect": "off",
+    },
+  },
 );

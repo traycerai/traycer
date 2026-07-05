@@ -25,6 +25,7 @@ const FAKE_TARGET: HostDirectoryEntry = {
 function buildParams() {
   return {
     target: FAKE_TARGET,
+    userId: "user-a",
     endpoint: () => null,
     bearer: () => null,
     authnBaseUrl: "http://localhost:5005",

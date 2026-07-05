@@ -5,7 +5,7 @@ import type {
   RequestOfMethod,
   ResponseOfMethod,
 } from "../host-messenger";
-import type { RemoteSession } from "./remote-session";
+import type { IRemoteSession } from "./remote-session";
 
 /**
  * `IHostMessenger` over the persistent remote session — the unary sibling of
@@ -21,9 +21,9 @@ export class RemoteHostMessenger<
   RpcRegistry extends VersionedRpcRegistry,
   StreamRegistry extends VersionedStreamRpcRegistry,
 > implements IHostMessenger<RpcRegistry> {
-  private readonly session: RemoteSession<RpcRegistry, StreamRegistry>;
+  private readonly session: IRemoteSession<RpcRegistry, StreamRegistry>;
 
-  constructor(session: RemoteSession<RpcRegistry, StreamRegistry>) {
+  constructor(session: IRemoteSession<RpcRegistry, StreamRegistry>) {
     this.session = session;
   }
 

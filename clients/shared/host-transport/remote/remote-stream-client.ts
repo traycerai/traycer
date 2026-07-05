@@ -3,7 +3,7 @@ import type { VersionedStreamRpcRegistry } from "@traycer/protocol/framework/ver
 import type { IHostStreamClient } from "../host-stream-client";
 import type { IStreamSession } from "../i-stream-session";
 import type { ParamsOf } from "../ws-stream-client";
-import type { RemoteSession } from "./remote-session";
+import type { IRemoteSession } from "./remote-session";
 
 /**
  * `IHostStreamClient` over the persistent remote session — the streaming
@@ -19,9 +19,9 @@ export class RemoteStreamClient<
   RpcRegistry extends VersionedRpcRegistry,
   StreamRegistry extends VersionedStreamRpcRegistry,
 > implements IHostStreamClient<StreamRegistry> {
-  private readonly session: RemoteSession<RpcRegistry, StreamRegistry>;
+  private readonly session: IRemoteSession<RpcRegistry, StreamRegistry>;
 
-  constructor(session: RemoteSession<RpcRegistry, StreamRegistry>) {
+  constructor(session: IRemoteSession<RpcRegistry, StreamRegistry>) {
     this.session = session;
   }
 

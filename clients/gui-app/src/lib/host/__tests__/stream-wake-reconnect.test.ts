@@ -34,6 +34,7 @@ function makeClient() {
   // that never fire here. Built via the real factory to avoid an unsafe cast.
   const client = buildHostStreamClient({
     target: LOCAL_TARGET,
+    userId: "user-a",
     endpoint: () => null,
     bearer: () => null,
     authnBaseUrl: "http://localhost:5005",

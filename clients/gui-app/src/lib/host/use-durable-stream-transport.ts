@@ -41,8 +41,16 @@ export function useDurableStreamTransportFactory(): (
       // the caller, not a runtime condition to degrade gracefully from.
       throw new Error(`No directory entry for host ${hostId}`);
     }
+    const userId = liveRef.current.globalClient.getRequestContextUserId();
+    if (userId === null) {
+      // Same gate as above (`authenticatedHostStreamKey`) also confirms a
+      // bound user before this opener runs - a null here is likewise a
+      // caller-gate bug, not a runtime condition to degrade from.
+      throw new Error(`No signed-in user for host ${hostId}`);
+    }
     return openDurableStreamTransport({
       target,
+      userId,
       endpoint: () =>
         dialableHostEndpoint(liveRef.current.directory.findById(hostId)),
       bearer: () =>

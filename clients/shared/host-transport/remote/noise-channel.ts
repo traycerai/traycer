@@ -22,7 +22,10 @@ import { NOISE_PROLOGUE } from "@traycer/protocol/host-transport/mux";
  * in-channel via the mux `open{bearer}` frame (R4-A2). Associated data is empty
  * on the client leg — the relay owns/stamps `sid`, so there is no outer routing
  * metadata for the client to bind (the monotonic counter + replay window already
- * defeat replay).
+ * defeat replay). Pinned by
+ * `@traycer/protocol/host-transport/__tests__/associated-data-invariant.test.ts`
+ * — a future mux field externalized outside the ciphertext must be bound via
+ * AD there, not left unbound like `sid`.
  */
 
 const EMPTY_ASSOCIATED_DATA = new Uint8Array(0);

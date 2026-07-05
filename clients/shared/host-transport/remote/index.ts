@@ -13,12 +13,17 @@ export {
   type CreateRemoteTransportOptions,
   type RemoteHostTransport,
 } from "./create-remote-transport";
-export { RemoteSession, type RemoteSessionOptions } from "./remote-session";
+export {
+  RemoteSession,
+  type RemoteSessionOptions,
+  type IRemoteSession,
+} from "./remote-session";
 export { RemoteHostMessenger } from "./remote-host-messenger";
 export { RemoteStreamClient } from "./remote-stream-client";
 export {
-  registerActiveRemoteSession,
+  acquireRemoteSession,
   hasReadyRemoteSession,
+  remoteSessionCacheKey,
 } from "./active-remote-sessions";
 export {
   mintAttachGrantViaHttp,

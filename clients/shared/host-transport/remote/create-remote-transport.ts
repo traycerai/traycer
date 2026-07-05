@@ -2,18 +2,20 @@ import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
 import type { VersionedStreamRpcRegistry } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type { BearerSourceProvider } from "@traycer-clients/shared/auth/bearer-source";
 import type { IStreamWebSocketFactory } from "../ws-stream-factory";
-import { RemoteSession } from "./remote-session";
+import { RemoteSession, type IRemoteSession } from "./remote-session";
 import { RemoteHostMessenger } from "./remote-host-messenger";
 import { RemoteStreamClient } from "./remote-stream-client";
 import { createAttachGrantProvider } from "./grant-client";
 import { decodeHostPublicKey } from "./noise-channel";
-import { registerActiveRemoteSession } from "./active-remote-sessions";
+import { acquireRemoteSession } from "./active-remote-sessions";
 
 /**
- * Assembles the client remote transport for one host: one shared
- * `RemoteSession` behind both a `RemoteHostMessenger` (unary) and a
- * `RemoteStreamClient` (streams), exactly as the transport-seam spike proved —
- * one connection carrying unary + N streams.
+ * Assembles the client remote transport for one host: one `RemoteSession`,
+ * shared across every consumer for the same `(hostId, userId)` via the
+ * get-or-create cache (Architecture §4, fix #4 / S1), behind a caller-owned
+ * `RemoteHostMessenger` (unary) and `RemoteStreamClient` (streams) - one
+ * connection carrying unary + N streams for every consumer that binds to it,
+ * exactly as the transport-seam spike proved.
  *
  * The caller supplies the base URLs (relay + authn) and one `BearerSourceProvider`
  * that serves BOTH the in-channel `open{bearer}` identity (A2) and the user
@@ -27,6 +29,8 @@ export interface CreateRemoteTransportOptions<
   StreamRegistry extends VersionedStreamRpcRegistry,
 > {
   readonly hostId: string;
+  /** The signed-in user this session is minted for; part of the cache key. */
+  readonly userId: string;
   /** Relay attach endpoint, e.g. `wss://relay.example/attach`. */
   readonly relayAttachUrl: string;
   /** authn-v3 base URL used to mint `role:"client"` attach grants. */
@@ -45,7 +49,14 @@ export interface RemoteHostTransport<
   RpcRegistry extends VersionedRpcRegistry,
   StreamRegistry extends VersionedStreamRpcRegistry,
 > {
-  readonly session: RemoteSession<RpcRegistry, StreamRegistry>;
+  /**
+   * A per-caller view onto the shared `(hostId, userId)` session. Every
+   * method delegates to the same live connection as every other consumer's
+   * view; `close()` releases only THIS caller's reference (Architecture §4 /
+   * S1) - the underlying connection tears down once every consumer has
+   * released, not on any single caller's `close()`.
+   */
+  readonly session: IRemoteSession<RpcRegistry, StreamRegistry>;
   readonly messenger: RemoteHostMessenger<RpcRegistry, StreamRegistry>;
   readonly streamClient: RemoteStreamClient<RpcRegistry, StreamRegistry>;
 }
@@ -63,36 +74,32 @@ export function createRemoteHostTransport<
     return null;
   }
 
-  const grantProvider = createAttachGrantProvider({
-    authnBaseUrl: options.authnBaseUrl,
-    hostId: options.hostId,
-    getBearerToken: () => deriveBearerToken(options.bearer),
-  });
-
-  const session = new RemoteSession<RpcRegistry, StreamRegistry>({
-    hostId: options.hostId,
-    attachBaseUrl: options.relayAttachUrl,
-    hostStaticPublicKey,
-    grantProvider,
-    bearer: options.bearer,
-    rpcRegistry: options.rpcRegistry,
-    streamRegistry: options.streamRegistry,
-    webSocketFactory: options.webSocketFactory,
-    requestId: options.requestId,
-  });
-
-  // Live-session-evidence registration (Architecture §7, R4-B5): every
-  // independently-constructed session for this host participates in the
-  // "does ANY client hold an open E2E session to this host" signal
-  // `my-hosts-model.ts` reads, regardless of which consumer (RPC messenger,
-  // durable stream, app-wide client) owns it. Unregistered exactly once, on
-  // `session.close()` - the single teardown path every consumer already calls.
-  const unregister = registerActiveRemoteSession(options.hostId, session);
-  const originalClose = session.close.bind(session);
-  session.close = () => {
-    unregister();
-    originalClose();
-  };
+  const session = acquireRemoteSession(
+    {
+      hostId: options.hostId,
+      userId: options.userId,
+      hostPublicKey: options.hostPublicKey,
+      relayAttachUrl: options.relayAttachUrl,
+    },
+    () => {
+      const grantProvider = createAttachGrantProvider({
+        authnBaseUrl: options.authnBaseUrl,
+        hostId: options.hostId,
+        getBearerToken: () => deriveBearerToken(options.bearer),
+      });
+      return new RemoteSession<RpcRegistry, StreamRegistry>({
+        hostId: options.hostId,
+        attachBaseUrl: options.relayAttachUrl,
+        hostStaticPublicKey,
+        grantProvider,
+        bearer: options.bearer,
+        rpcRegistry: options.rpcRegistry,
+        streamRegistry: options.streamRegistry,
+        webSocketFactory: options.webSocketFactory,
+        requestId: options.requestId,
+      });
+    },
+  );
 
   return {
     session,

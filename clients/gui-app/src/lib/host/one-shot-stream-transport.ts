@@ -33,6 +33,8 @@ import { appLogger } from "@/lib/logger";
  */
 export function openOneShotStreamTransport(params: {
   readonly target: HostDirectoryEntry;
+  /** The signed-in user this transport is built for (Architecture §4 / S1 cache key). */
+  readonly userId: string;
   readonly endpoint: HostEndpointProvider;
   readonly bearer: BearerSourceProvider;
   readonly authnBaseUrl: string;
@@ -43,6 +45,7 @@ export function openOneShotStreamTransport(params: {
     bearer: params.bearer,
     authnBaseUrl: params.authnBaseUrl,
     auth: null,
+    userId: params.userId,
     // Owned-lifetime transport: eager warm-connect is correct here.
     autoStart: true,
   });
