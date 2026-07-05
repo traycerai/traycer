@@ -170,6 +170,7 @@ function TerminalLaunchPanelImpl(props: TerminalLaunchPanelProps) {
         <AgentModeToggle
           value={agentMode}
           disabled={pending}
+          showTooltip
           onChange={setAgentMode}
         />
         <StartButton

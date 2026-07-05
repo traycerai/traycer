@@ -249,6 +249,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
                 <AgentModeToggle
                   value={agentMode}
                   disabled={busy}
+                  showTooltip={false}
                   onChange={setAgentMode}
                 />
               </div>

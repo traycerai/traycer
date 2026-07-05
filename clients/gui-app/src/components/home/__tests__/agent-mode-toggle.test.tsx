@@ -15,8 +15,13 @@ describe("<AgentModeToggle />", () => {
     const onChange = vi.fn();
 
     render(
-      <TooltipProvider>
-        <AgentModeToggle value="epic" disabled={false} onChange={onChange} />
+      <TooltipProvider delayDuration={0}>
+        <AgentModeToggle
+          value="epic"
+          disabled={false}
+          showTooltip={false}
+          onChange={onChange}
+        />
       </TooltipProvider>,
     );
 
@@ -32,8 +37,13 @@ describe("<AgentModeToggle />", () => {
     const onChange = vi.fn();
 
     render(
-      <TooltipProvider>
-        <AgentModeToggle value="regular" disabled={false} onChange={onChange} />
+      <TooltipProvider delayDuration={0}>
+        <AgentModeToggle
+          value="regular"
+          disabled={false}
+          showTooltip={false}
+          onChange={onChange}
+        />
       </TooltipProvider>,
     );
 
@@ -43,6 +53,50 @@ describe("<AgentModeToggle />", () => {
 
     expect(onChange).toHaveBeenCalledTimes(1);
     expect(onChange).toHaveBeenCalledWith("epic");
+  });
+
+  it("explains the current mode in a tooltip", async () => {
+    const onChange = vi.fn();
+
+    render(
+      <TooltipProvider delayDuration={0}>
+        <AgentModeToggle
+          value="regular"
+          disabled={false}
+          showTooltip
+          onChange={onChange}
+        />
+      </TooltipProvider>,
+    );
+
+    fireEvent.focus(
+      screen.getByRole("button", { name: "Switch to Epic Mode" }),
+    );
+
+    expect((await screen.findByRole("tooltip")).textContent).toBe(
+      "Regular mode: general-purpose coding agent experience.",
+    );
+  });
+
+  it("does not show a tooltip when disabled for a non-landing surface", () => {
+    const onChange = vi.fn();
+
+    render(
+      <TooltipProvider delayDuration={0}>
+        <AgentModeToggle
+          value="regular"
+          disabled={false}
+          showTooltip={false}
+          onChange={onChange}
+        />
+      </TooltipProvider>,
+    );
+
+    fireEvent.focus(
+      screen.getByRole("button", { name: "Switch to Epic Mode" }),
+    );
+
+    expect(screen.queryByRole("tooltip")).toBeNull();
   });
 
   it("renders the read-only label without hover affordances", () => {

@@ -131,6 +131,7 @@ export function ComposerBody({
                 store={toolbarStore}
                 onAttachImages={paste.attachImageFiles}
                 showNextTurnPermissionNote={false}
+                showAgentModeTooltip
                 canSubmit={canSubmit}
                 onSubmit={onSubmit}
                 activeTurnStatus={null}

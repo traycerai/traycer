@@ -387,6 +387,7 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
             <AgentModeToggle
               value={agentMode}
               disabled={tuiAgentPending}
+              showTooltip={false}
               onChange={setAgentMode}
             />
           </div>
