@@ -1340,6 +1340,19 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
       upgradeGuidance: null,
     },
   } as const;
+  // A transient, host-side rejection (e.g. the host's JWKS fetch timed out): the
+  // wire `code` stays `UNAUTHORIZED` for older clients, but `retryable: true`
+  // tells a newer client the credential is fine and to just reconnect.
+  const RETRYABLE_FATAL = {
+    kind: "fatalError",
+    details: {
+      code: "UNAUTHORIZED",
+      reason: "Signing key unavailable: request timed out",
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+      retryable: true,
+    },
+  } as const;
 
   function wait(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -1504,6 +1517,94 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
     if (fatalClose?.kind === "fatalError") {
       expect(fatalClose.details.code).toBe("CHAT_INVALID");
     }
+    session.close();
+  });
+
+  it("treats a `retryable` transient rejection as a transport drop: reconnects, never revalidates, never gives up", async () => {
+    const { factory, sockets } = makeFactory();
+    // Even though authn would report the credential current ("rotated"), a
+    // retryable host-side rejection must skip credential recovery entirely.
+    const revalidator = makeAuthRevalidator([
+      "rotated",
+      "rotated",
+      "rotated",
+      "rotated",
+      "rotated",
+    ]);
+    const client = makeAuthClient(factory, revalidator.auth, 5);
+    const statuses: StreamConnectionStatus[] = [];
+    const session = client.subscribe("epic.subscribe", { epicId: "e1" });
+    session.onStatusChange((status) => statuses.push(status));
+
+    await flush();
+    // Drive MORE consecutive rejections than the no-progress bound (3): a
+    // transient host-side rejection must never terminate the session.
+    for (let cycle = 0; cycle < 5; cycle += 1) {
+      const socket = sockets[sockets.length - 1].socket;
+      socket.fireOpen();
+      socket.fireText(RETRYABLE_FATAL);
+      await wait(50);
+    }
+
+    // Credential recovery is never engaged for a host-side transient rejection.
+    expect(revalidator.calls.count).toBe(0);
+    // Recoverable throughout - reconnecting, never terminal.
+    expect(statuses).toContain("reconnecting");
+    expect(statuses).not.toContain("closed");
+    // Reconnected well past the no-progress bound (3) that a misclassified
+    // UNAUTHORIZED would have hit - proof the transient path never gives up.
+    expect(sockets.length).toBeGreaterThan(4);
+    session.close();
+  });
+
+  it("clears the no-progress streak on a retryable interlude so a later genuine UNAUTHORIZED still gets the full bound", async () => {
+    const { factory, sockets } = makeFactory();
+    // Every revalidation reports the same never-rotated bearer ("rotated"),
+    // the no-progress case. Enough entries for a 2-cycle then a 3-cycle episode;
+    // the retryable interlude between them never revalidates.
+    const revalidator = makeAuthRevalidator([
+      "rotated",
+      "rotated",
+      "rotated",
+      "rotated",
+      "rotated",
+    ]);
+    // Tiny initial backoff: this episode drives ~5 reconnects and the shared
+    // `reconnectAttempt` escalates the delay each time, so keep it well under
+    // the per-cycle wait so every reconnected socket is live before the next.
+    const client = makeAuthClient(factory, revalidator.auth, 1);
+    const statuses: StreamConnectionStatus[] = [];
+    const session = client.subscribe("epic.subscribe", { epicId: "e1" });
+    session.onStatusChange((status) => statuses.push(status));
+
+    const driveFatal = async (frame: typeof UNAUTHORIZED_FATAL) => {
+      const socket = sockets[sockets.length - 1].socket;
+      socket.fireOpen();
+      socket.fireText(frame);
+      await wait(50);
+    };
+
+    await flush();
+    // Two genuine UNAUTHORIZED cycles: streak climbs to 2 (both re-dial).
+    await driveFatal(UNAUTHORIZED_FATAL);
+    await driveFatal(UNAUTHORIZED_FATAL);
+    expect(statuses).not.toContain("closed");
+
+    // A transient interlude clears the streak back to 0 (and re-dials).
+    await driveFatal(RETRYABLE_FATAL);
+
+    // With the streak cleared, the next two genuine cycles are 1 and 2 - still
+    // recoverable. WITHOUT the reset the first of these would hit 3 and go
+    // terminal here; this is the regression guard for the reset.
+    await driveFatal(UNAUTHORIZED_FATAL);
+    await driveFatal(UNAUTHORIZED_FATAL);
+    expect(statuses).not.toContain("closed");
+
+    // The third post-interlude cycle reaches the bound (3) and goes terminal.
+    await driveFatal(UNAUTHORIZED_FATAL);
+    expect(statuses).toContain("closed");
+    // 2 pre + 3 post revalidations; the retryable interlude never revalidates.
+    expect(revalidator.calls.count).toBe(5);
     session.close();
   });
 
