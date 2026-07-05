@@ -113,7 +113,7 @@ export function GitDiffRepoSwitcher(
 }
 
 function triggerAccessibleName(model: GitDiffRepoSwitcherModel): string {
-  const moduleLabel = changedModuleLabel(model.trigger.moduleChangeCount);
+  const moduleLabel = changedSubmoduleLabel(model.trigger.moduleChangeCount);
   const fileLabel = changedFileLabel(model.trigger.fileChangeCount);
   const stateLabel = model.trigger.unavailable ? "unavailable" : null;
   return ["Git workspace", model.trigger.label, model.trigger.secondaryLabel]
@@ -161,7 +161,7 @@ export function GitDiffRepoSwitcherDropdown(
             ref={searchInputRef}
             value={props.searchQuery}
             onChange={handleSearchChange}
-            placeholder="Search workspace, branch, submodule, or path..."
+            placeholder="Search branch, workspace, submodule, or path..."
             aria-label="Search workspaces"
           />
           <InputGroupAddon>
@@ -229,10 +229,12 @@ function RepoSwitcherRowButton(props: {
       <RepoSwitcherRowIcon />
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-center gap-1.5">
-          <span className="min-w-0 truncate font-medium">{row.label}</span>
+          <span className="min-w-0 truncate font-medium">
+            {row.headLabel ?? row.label}
+          </span>
           {row.headLabel === null ? null : (
             <span className="min-w-0 shrink truncate text-ui-xs text-muted-foreground">
-              {row.headLabel}
+              {row.label}
             </span>
           )}
         </div>
@@ -328,7 +330,7 @@ function GitDiffCountBadges(props: {
   readonly fileChangeCount: number | null;
   readonly moduleChangeCount: number | null;
 }): ReactNode {
-  const moduleLabel = changedModuleLabel(props.moduleChangeCount);
+  const moduleLabel = changedSubmoduleLabel(props.moduleChangeCount);
   const fileLabel = changedFileLabel(props.fileChangeCount);
   if (moduleLabel === null && fileLabel === null) return null;
   return (
@@ -359,9 +361,9 @@ function GitDiffCountBadges(props: {
   );
 }
 
-function changedModuleLabel(count: number | null): string | null {
+function changedSubmoduleLabel(count: number | null): string | null {
   if (count === null || count === 0) return null;
-  return count === 1 ? "1 changed Git module" : `${count} changed Git modules`;
+  return count === 1 ? "1 changed submodule" : `${count} changed submodules`;
 }
 
 function changedFileLabel(count: number | null): string | null {

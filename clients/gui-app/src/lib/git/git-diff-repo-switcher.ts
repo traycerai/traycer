@@ -161,6 +161,7 @@ function buildRootRow(
     selected !== null &&
     selected.hostId === input.row.hostId &&
     selected.rootRunningDir === input.row.runningDir;
+  const submoduleFileChangeCount = sumSubmoduleFileChanges(submodules);
   return {
     kind: "root",
     key: `root:${worktreeRowKey(input.row)}`,
@@ -168,7 +169,9 @@ function buildRootRow(
     label,
     secondaryLabel: input.row.runningDir,
     headLabel: input.row.branch,
-    fileChangeCount,
+    fileChangeCount: selectedRoot
+      ? addKnownCounts(fileChangeCount, submoduleFileChangeCount)
+      : fileChangeCount,
     moduleChangeCount,
     selected: selectedRoot,
     disabledLabel,
@@ -270,10 +273,9 @@ function buildTrigger(
   return {
     label: rootLabel(root.row),
     secondaryLabel: root.row.runningDir,
-    fileChangeCount: addKnownCounts(
-      row?.fileChangeCount ?? root.fileChangeCount,
-      sumSubmoduleFileChanges(submodules),
-    ),
+    fileChangeCount:
+      row?.fileChangeCount ??
+      addKnownCounts(root.fileChangeCount, sumSubmoduleFileChanges(submodules)),
     moduleChangeCount: row?.moduleChangeCount ?? root.moduleChangeCount,
     unavailable: false,
     openTarget: {

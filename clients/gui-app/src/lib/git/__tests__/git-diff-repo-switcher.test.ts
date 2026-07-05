@@ -98,7 +98,7 @@ describe("buildGitDiffRepoSwitcherModel", () => {
     expect(model.rows[0]).toMatchObject({
       label: "traycer-internal",
       selected: true,
-      fileChangeCount: 5,
+      fileChangeCount: 7,
       moduleChangeCount: 1,
       secondaryLabel: "/repo",
       disabledLabel: null,
@@ -118,7 +118,7 @@ describe("buildGitDiffRepoSwitcherModel", () => {
     });
   });
 
-  it("keeps row count and path stable when selecting a workspace with submodule files", () => {
+  it("keeps row path stable and aggregates selected workspace file counts", () => {
     const beforeSelection = buildGitDiffRepoSwitcherModel({
       roots: [
         rootInput({ row: row({}), fileChangeCount: 0, moduleChangeCount: 1 }),
@@ -168,7 +168,7 @@ describe("buildGitDiffRepoSwitcherModel", () => {
     expect(afterSelection.rows[0]).toMatchObject({
       selected: true,
       secondaryLabel: "/repo",
-      fileChangeCount: 0,
+      fileChangeCount: 133,
       moduleChangeCount: 1,
     });
     expect(afterSelection.trigger).toMatchObject({
@@ -191,7 +191,7 @@ describe("buildGitDiffRepoSwitcherModel", () => {
     expect(model.rows[0]).toMatchObject({
       label: "traycer-internal",
       selected: true,
-      fileChangeCount: 4,
+      fileChangeCount: 6,
       moduleChangeCount: 1,
     });
     expect(model.trigger).toMatchObject({

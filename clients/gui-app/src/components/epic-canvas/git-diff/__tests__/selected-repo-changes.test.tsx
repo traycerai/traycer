@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type {
   GitChangedFileV11,
@@ -179,14 +185,14 @@ describe("<SelectedRepoChanges /> module groups", () => {
     ).toBeDefined();
     expect(
       screen.getByTestId("git-module-parent-reference-traycer").textContent,
-    ).toBe("parent ref differs");
+    ).toContain("pinned commit out of date");
     expect(screen.getByTestId("file-list-/repo/traycer")).toBeDefined();
     expect(screen.getByText("src/submodule.ts")).toBeDefined();
     expect(screen.queryByText("Submodule reference:")).toBeNull();
     expect(screen.queryByTestId("file-row-/repo-traycer")).toBeNull();
   });
 
-  it("gives non-empty module lists a flex-height body for virtualized rows", () => {
+  it("renders empty modules intrinsically and file modules in compact flow", () => {
     renderChanges({
       snapshot: snapshotResult(
         response({
@@ -196,17 +202,27 @@ describe("<SelectedRepoChanges /> module groups", () => {
       ),
     });
 
+    const rootGroup = screen.getByTestId("git-module-group-root");
+    const submoduleGroup = screen.getByTestId(
+      "git-module-group-submodule-traycer",
+    );
     const fileList = screen.getByTestId("file-list-/repo/traycer");
     const body = fileList.parentElement;
     if (body === null) {
       throw new Error("Expected module file list to have a body wrapper");
     }
 
-    expect(body.className).toContain("flex");
-    expect(body.className).toContain("min-h-[32dvh]");
-    expect(body.className).toContain("max-h-[58dvh]");
-    expect(body.className).toContain("flex-col");
-    expect(body.className).toContain("overflow-hidden");
+    expect(rootGroup.getAttribute("data-file-body-expanded")).toBe("false");
+    expect(submoduleGroup.getAttribute("data-file-body-expanded")).toBe("true");
+    expect(submoduleGroup.className).toContain("flex-none");
+    expect(submoduleGroup.className).not.toContain("ml-5");
+    expect(submoduleGroup.className).not.toContain("border-l");
+    expect(within(submoduleGroup).getByText("submodule")).toBeDefined();
+    expect(submoduleGroup.className).not.toContain("flex-1");
+    expect(submoduleGroup.className).not.toContain("basis-0");
+    expect(body.className).toContain("overflow-visible");
+    expect(body.className).not.toContain("flex-1");
+    expect(body.className).not.toContain("dvh");
   });
 
   it("renders root and dirty submodule changes as separate module-owned lists", () => {
@@ -223,6 +239,16 @@ describe("<SelectedRepoChanges /> module groups", () => {
 
     expect(screen.getByTestId("file-list-/repo")).toBeDefined();
     expect(screen.getByTestId("file-list-/repo/traycer")).toBeDefined();
+    expect(
+      screen
+        .getByTestId("git-module-group-root")
+        .getAttribute("data-file-body-expanded"),
+    ).toBe("true");
+    expect(
+      screen
+        .getByTestId("git-module-group-submodule-traycer")
+        .getAttribute("data-file-body-expanded"),
+    ).toBe("true");
     expect(screen.getByText("src/app.ts")).toBeDefined();
     expect(screen.getByText("clients/gui-app/src/view.tsx")).toBeDefined();
     expect(screen.queryByTestId("file-row-/repo-traycer")).toBeNull();
@@ -240,7 +266,7 @@ describe("<SelectedRepoChanges /> module groups", () => {
 
     expect(
       screen.getByTestId("git-module-parent-reference-traycer").textContent,
-    ).toBe("parent ref differs");
+    ).toContain("pinned commit out of date");
     expect(screen.getByTestId("git-module-count-traycer").textContent).toBe(
       "0 files",
     );
@@ -271,7 +297,7 @@ describe("<SelectedRepoChanges /> module groups", () => {
     expect(screen.getByTestId("git-submodule-unavailable")).toBeDefined();
   });
 
-  it("keeps clean modules collapsed behind the clean-modules affordance", () => {
+  it("keeps clean modules collapsed behind the clean-submodules affordance", () => {
     renderChanges({
       snapshot: snapshotResult(
         response({
@@ -288,7 +314,7 @@ describe("<SelectedRepoChanges /> module groups", () => {
       screen.queryByTestId("git-module-group-submodule-traycer"),
     ).toBeNull();
     const affordance = screen.getByTestId("git-clean-modules-affordance");
-    expect(affordance.textContent).toContain("Show 1 clean Git module");
+    expect(affordance.textContent).toContain("Show 1 clean submodule");
 
     fireEvent.click(affordance);
 

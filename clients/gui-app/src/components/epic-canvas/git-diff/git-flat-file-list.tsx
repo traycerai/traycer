@@ -15,6 +15,7 @@ export interface GitFlatFileListProps {
   readonly pathRangesByPath: ReadonlyMap<string, HighlightRanges>;
   /** Path of the canvas's focused diff file when it lives in this section. */
   readonly activeFilePath: string | null;
+  readonly virtualized: boolean;
 }
 
 export function GitFlatFileList(props: GitFlatFileListProps): ReactNode {
@@ -75,6 +76,25 @@ export function GitFlatFileList(props: GitFlatFileListProps): ReactNode {
     (_index: number, file: GitChangedFile) => file.path,
     [],
   );
+
+  if (!props.virtualized) {
+    return (
+      <div data-testid="git-flat-file-list">
+        {files.map((file) => (
+          <FileRow
+            key={file.path}
+            epicId={epicId}
+            viewTabId={viewTabId}
+            hostId={hostId}
+            runningDir={runningDir}
+            file={file}
+            active={file.path === activeFilePath}
+            pathRanges={pathRangesByPath.get(file.path) ?? NO_HIGHLIGHT}
+          />
+        ))}
+      </div>
+    );
+  }
 
   return (
     <Virtuoso

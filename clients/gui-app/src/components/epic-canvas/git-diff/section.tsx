@@ -9,33 +9,89 @@ export interface SectionProps {
   readonly collapsed: boolean;
   readonly onToggle: () => void;
   readonly actions: ReactNode;
+  readonly fillAvailable: boolean;
+  readonly compactChrome: boolean;
   readonly children: ReactNode;
+}
+
+function sectionRootClassName(args: {
+  readonly compactChrome: boolean;
+  readonly expandsToFillSpace: boolean;
+}): string {
+  return cn(
+    "flex min-h-0 flex-col",
+    args.compactChrome ? "py-0.5" : "py-1",
+    args.expandsToFillSpace ? "flex-1 basis-0" : "flex-none",
+  );
+}
+
+function sectionChromeClassName(args: {
+  readonly compactChrome: boolean;
+  readonly collapsed: boolean;
+  readonly isEmpty: boolean;
+}): string {
+  if (args.compactChrome) {
+    return cn(
+      "group relative flex min-w-0 items-center overflow-hidden rounded-sm px-0.5 py-0 transition-colors hover:bg-accent/50",
+      "has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring has-[:focus-visible]:ring-offset-2",
+    );
+  }
+  return cn(
+    "group relative flex min-w-0 items-center overflow-hidden rounded-md px-1 py-0.5 transition-colors hover:bg-accent/50",
+    "has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring has-[:focus-visible]:ring-offset-2",
+    args.isEmpty ? "bg-muted/10" : "bg-muted/20",
+    !args.collapsed && !args.isEmpty && "bg-muted/30",
+  );
+}
+
+function sectionTitleClassName(args: {
+  readonly compactChrome: boolean;
+  readonly isEmpty: boolean;
+}): string {
+  return cn(
+    "whitespace-nowrap font-medium uppercase tracking-wide",
+    args.compactChrome ? "text-ui-xs" : "text-ui-sm",
+    args.isEmpty ? "text-muted-foreground/70" : "text-foreground/90",
+  );
+}
+
+function sectionBodyClassName(fillAvailable: boolean): string {
+  return cn(
+    "min-h-0 bg-background/70",
+    fillAvailable ? "flex-1 overflow-hidden" : "overflow-visible",
+  );
 }
 
 export function Section(props: SectionProps): ReactNode {
   const { title, count, summary, collapsed, onToggle, actions, children } =
     props;
 
-  const expandsToFillSpace = !collapsed && count > 0;
+  const expandsToFillSpace = props.fillAvailable && !collapsed && count > 0;
   const isEmpty = count === 0;
   const isExpanded = !collapsed && !isEmpty;
   const fileCountLabel = `${count} ${count === 1 ? "file" : "files"}`;
 
   return (
     <div
-      className={cn(
-        "flex min-h-0 flex-col py-1",
-        expandsToFillSpace ? "flex-1 basis-0" : "flex-none",
-      )}
+      className={sectionRootClassName({
+        compactChrome: props.compactChrome,
+        expandsToFillSpace,
+      })}
     >
-      <div className="shrink-0 px-2">
+      <div
+        className={cn(
+          "shrink-0",
+          props.compactChrome
+            ? "sticky top-0 z-10 bg-background/95 px-3 backdrop-blur"
+            : "px-2",
+        )}
+      >
         <div
-          className={cn(
-            "group relative flex min-w-0 items-center overflow-hidden rounded-md px-1 py-0.5 transition-colors hover:bg-accent/50",
-            "has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring has-[:focus-visible]:ring-offset-2",
-            isEmpty ? "bg-muted/10" : "bg-muted/20",
-            !collapsed && !isEmpty && "bg-muted/30",
-          )}
+          className={sectionChromeClassName({
+            compactChrome: props.compactChrome,
+            collapsed,
+            isEmpty,
+          })}
         >
           <button
             type="button"
@@ -53,10 +109,10 @@ export function Section(props: SectionProps): ReactNode {
               )}
             />
             <span
-              className={cn(
-                "whitespace-nowrap text-ui-sm font-medium uppercase tracking-wide",
-                isEmpty ? "text-muted-foreground/70" : "text-foreground/90",
-              )}
+              className={sectionTitleClassName({
+                compactChrome: props.compactChrome,
+                isEmpty,
+              })}
             >
               {title}
             </span>
@@ -82,7 +138,7 @@ export function Section(props: SectionProps): ReactNode {
       </div>
 
       {!collapsed && count > 0 ? (
-        <div className="min-h-0 flex-1 overflow-hidden bg-background/70">
+        <div className={sectionBodyClassName(props.fillAvailable)}>
           {children}
         </div>
       ) : null}

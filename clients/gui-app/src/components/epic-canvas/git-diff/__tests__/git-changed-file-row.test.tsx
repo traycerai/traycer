@@ -26,6 +26,13 @@ function makeFile(args: {
   };
 }
 
+function withStatus(
+  file: GitChangedFile,
+  status: GitChangedFile["status"],
+): GitChangedFile {
+  return { ...file, status };
+}
+
 function renderRow(args: {
   readonly file: GitChangedFile;
   readonly density: "panel" | "tile";
@@ -64,6 +71,61 @@ describe("GitChangedFileRow panel density", () => {
     expect(row.textContent).toContain("src/routes/epic");
     expect(row.textContent).toContain("+3");
     expect(row.textContent).toContain("-1");
+    expect(screen.getByText("+3").className).toContain("text-emerald");
+    expect(screen.getByText("-1").className).toContain("text-red");
+  });
+
+  it("middle-truncates filenames so the extension remains separate", () => {
+    renderRow({
+      file: makeFile({
+        path: "clients/gui-app/src/components/epic-canvas/git-diff/selected-repo-changes-section-state.test.tsx",
+        previousPath: null,
+      }),
+      density: "panel",
+      active: false,
+      pathRanges: NO_HIGHLIGHT,
+    });
+
+    const extension = screen.getByText(".tsx");
+    const directory = screen.getByText(
+      "clients/gui-app/src/components/epic-canvas/git-diff",
+    );
+    expect(extension.className).toContain("shrink-0");
+    expect(directory.className).toContain("truncate");
+  });
+
+  it("uses conventional Git status colors", () => {
+    const added = renderRow({
+      file: withStatus(
+        makeFile({ path: "src/added.ts", previousPath: null }),
+        "added",
+      ),
+      density: "panel",
+      active: false,
+      pathRanges: NO_HIGHLIGHT,
+    });
+    expect(screen.getByLabelText("Added").className).toContain("text-emerald");
+    added.unmount();
+
+    const modified = renderRow({
+      file: makeFile({ path: "src/modified.ts", previousPath: null }),
+      density: "panel",
+      active: false,
+      pathRanges: NO_HIGHLIGHT,
+    });
+    expect(screen.getByLabelText("Modified").className).toContain("text-amber");
+    modified.unmount();
+
+    renderRow({
+      file: withStatus(
+        makeFile({ path: "src/deleted.ts", previousPath: null }),
+        "deleted",
+      ),
+      density: "panel",
+      active: false,
+      pathRanges: NO_HIGHLIGHT,
+    });
+    expect(screen.getByLabelText("Deleted").className).toContain("text-red");
   });
 
   it("omits the directory for repository-root files", () => {

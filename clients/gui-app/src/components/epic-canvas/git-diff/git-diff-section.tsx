@@ -32,6 +32,8 @@ export interface GitDiffSectionProps {
    */
   readonly forceExpanded: boolean;
   readonly collapseController: GitDiffSectionCollapseController | null;
+  readonly fillAvailable: boolean;
+  readonly compactChrome: boolean;
   readonly children: ReactNode;
 }
 
@@ -77,6 +79,8 @@ export function GitDiffSection(props: GitDiffSectionProps): ReactNode {
       }
       collapsed={props.forceExpanded ? false : collapsed}
       onToggle={handleToggle}
+      fillAvailable={props.fillAvailable}
+      compactChrome={props.compactChrome}
       actions={
         <BundleOpenButton
           epicId={props.epicId}

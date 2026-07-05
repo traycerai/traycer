@@ -2,7 +2,6 @@ import {
   useCallback,
   useEffect,
   useMemo,
-  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -51,9 +50,83 @@ import { SelectedRepoChanges } from "./selected-repo-changes";
 
 const GIT_REFERENCE_REFRESH_TIMEOUT_MS = 10_000;
 
+interface UnavailableRootsState {
+  readonly keys: ReadonlySet<string>;
+  readonly observedRootKey: string | null;
+  readonly observedAvailable: boolean | null;
+}
+
+interface UnavailableGitRootKeys {
+  readonly keys: ReadonlySet<string>;
+  readonly reset: () => ReadonlySet<string>;
+}
+
 export interface GitDiffPanelBodyLiveProps {
   readonly epicId: string;
   readonly tabId: string;
+}
+
+function createUnavailableRootsState(
+  keys: ReadonlySet<string>,
+  observedRootKey: string | null,
+  observedAvailable: boolean | null,
+): UnavailableRootsState {
+  return { keys, observedRootKey, observedAvailable };
+}
+
+function updateUnavailableKeys(
+  current: ReadonlySet<string>,
+  rootKey: string,
+  shouldBeUnavailable: boolean,
+): ReadonlySet<string> {
+  const isUnavailable = current.has(rootKey);
+  if (isUnavailable === shouldBeUnavailable) return current;
+  const next = new Set(current);
+  if (shouldBeUnavailable) {
+    next.add(rootKey);
+  } else {
+    next.delete(rootKey);
+  }
+  return next;
+}
+
+function useUnavailableGitRootKeys(
+  selectedRootKey: string | null,
+  selectedRootAvailable: boolean | null,
+): UnavailableGitRootKeys {
+  const [unavailableRoots, setUnavailableRoots] =
+    useState<UnavailableRootsState>(() =>
+      createUnavailableRootsState(new Set(), null, null),
+    );
+  if (
+    selectedRootKey !== null &&
+    selectedRootAvailable !== null &&
+    (unavailableRoots.observedRootKey !== selectedRootKey ||
+      unavailableRoots.observedAvailable !== selectedRootAvailable)
+  ) {
+    setUnavailableRoots(
+      createUnavailableRootsState(
+        updateUnavailableKeys(
+          unavailableRoots.keys,
+          selectedRootKey,
+          !selectedRootAvailable,
+        ),
+        selectedRootKey,
+        selectedRootAvailable,
+      ),
+    );
+  }
+
+  const reset = useCallback((): ReadonlySet<string> => {
+    const cleared = new Set<string>();
+    setUnavailableRoots(createUnavailableRootsState(cleared, null, null));
+    return cleared;
+  }, []);
+
+  return useMemo(
+    () => ({ keys: unavailableRoots.keys, reset }),
+    [reset, unavailableRoots.keys],
+  );
 }
 
 export function GitDiffPanelBodyLive(
@@ -79,14 +152,6 @@ export function GitDiffPanelBodyLive(
   const queryClient = useQueryClient();
   const prefetch = useGitPrefetchWorktreeStatus();
 
-  // Worktrees the host reports as no longer usable git repos (e.g. deleted out
-  // from under us). The ref lets the default-pick effect update synchronously;
-  // the state snapshot is the render-safe view for terminal empty-state checks.
-  const unavailableKeysRef = useRef<Set<string>>(new Set());
-  const [unavailableKeysSnapshot, setUnavailableKeysSnapshot] = useState<
-    ReadonlySet<string>
-  >(() => new Set());
-
   // The root repo owning the current selection (the only root whose nested @1.1
   // snapshot is fetched - bounded lazy fan-out).
   const selectedRootRow = useMemo(
@@ -111,6 +176,14 @@ export function GitDiffPanelBodyLive(
     selectedRootRow === null ? null : worktreeRowKey(selectedRootRow);
   const selectedCapabilityData =
     selectedRootRow === null ? null : (selectedCapabilityQuery.data ?? null);
+  // Worktrees the host reports as no longer usable git repos (e.g. deleted out
+  // from under us). This render-time adjustment follows React's guarded
+  // "adjust state from props" pattern so the terminal empty-state check and the
+  // default-pick effect see the same unavailable-root set before commit.
+  const unavailableGitRootKeys = useUnavailableGitRootKeys(
+    selectedRootKey,
+    selectedCapabilityData?.available ?? null,
+  );
 
   useEffect(() => {
     gitRows.forEach((row) => {
@@ -125,36 +198,19 @@ export function GitDiffPanelBodyLive(
   useEffect(() => {
     if (bindingsQuery.isPending || bindingsQuery.error !== null) return;
 
-    let unavailable = unavailableKeysRef.current;
-    if (selectedRootKey !== null && selectedCapabilityData !== null) {
-      const shouldBeUnavailable = !selectedCapabilityData.available;
-      const isUnavailable = unavailable.has(selectedRootKey);
-      if (isUnavailable !== shouldBeUnavailable) {
-        const nextUnavailable = new Set(unavailable);
-        if (shouldBeUnavailable) {
-          nextUnavailable.add(selectedRootKey);
-        } else {
-          nextUnavailable.delete(selectedRootKey);
-        }
-        unavailable = nextUnavailable;
-        unavailableKeysRef.current = nextUnavailable;
-        setUnavailableKeysSnapshot(nextUnavailable);
-      }
-    }
-
     const selectedRootReady = gitRows.some(
       (row) =>
         selectedRepo !== null &&
         row.hostId === selectedRepo.hostId &&
         row.runningDir === selectedRepo.rootRunningDir &&
-        !unavailable.has(worktreeRowKey(row)),
+        !unavailableGitRootKeys.keys.has(worktreeRowKey(row)),
     );
     if (selectedRootReady) return;
 
     const next = pickDefaultRow(
       gitRows,
       queryClient,
-      unavailable,
+      unavailableGitRootKeys.keys,
       ignoreWhitespace,
     );
     setSelectedRepo(
@@ -174,21 +230,17 @@ export function GitDiffPanelBodyLive(
     ignoreWhitespace,
     queryClient,
     gitRows,
-    selectedCapabilityData,
-    selectedRootKey,
     selectedRepo,
     setSelectedRepo,
+    unavailableGitRootKeys.keys,
   ]);
 
   // Clear the probed-unavailable set and re-probe every root's capability, so a
   // fully-degraded panel can recover once a broken worktree is restored. The
-  // default-pick effect keys off `unavailableKeysRef` (not the snapshot), so
-  // clearing the set alone would not re-trigger it - we re-pick a root here so
-  // the freshly invalidated capability query runs against a candidate again.
+  // retry also re-picks a root so the freshly invalidated capability query runs
+  // against a candidate again.
   const retryUnavailableRoots = useCallback(() => {
-    const cleared = new Set<string>();
-    unavailableKeysRef.current = cleared;
-    setUnavailableKeysSnapshot(cleared);
+    const cleared = unavailableGitRootKeys.reset();
     void queryClient.invalidateQueries({
       predicate: (query) => query.queryKey.includes("git"),
     });
@@ -208,13 +260,20 @@ export function GitDiffPanelBodyLive(
             repoRoot: next.runningDir,
           },
     );
-  }, [gitRows, ignoreWhitespace, props.epicId, queryClient, setSelectedRepo]);
+  }, [
+    gitRows,
+    ignoreWhitespace,
+    props.epicId,
+    queryClient,
+    setSelectedRepo,
+    unavailableGitRootKeys,
+  ]);
 
   if (bindingsQuery.isPending) return <DiffLoadingSkeleton variant="panel" />;
   if (bindingsQuery.error !== null) return <NoGitWorktrees />;
   if (gitRows.length === 0) return <NoGitWorktrees />;
   if (selectedRepo === null || selectedRootRow === null) {
-    if (allRowsKnownUnavailable(gitRows, unavailableKeysSnapshot)) {
+    if (allRowsKnownUnavailable(gitRows, unavailableGitRootKeys.keys)) {
       // Every bound root probed unavailable: an explicit, recoverable degrade -
       // never the transient skeleton, which with zero available roots would
       // never resolve and read as "still loading" forever.

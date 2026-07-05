@@ -43,6 +43,7 @@ export interface FileTreeProps {
   readonly forceExpanded: boolean;
   readonly hideEmptySections: boolean;
   readonly sectionCollapseController: GitDiffSectionCollapseController | null;
+  readonly virtualized: boolean;
 }
 
 interface GitTreeSectionBodyProps {
@@ -89,6 +90,8 @@ export function FileTree(props: FileTreeProps): ReactNode {
             bundleFileCount={bundleFileCount}
             forceExpanded={props.forceExpanded}
             collapseController={props.sectionCollapseController}
+            fillAvailable={props.virtualized}
+            compactChrome={!props.virtualized}
           >
             <GitTreeSectionBody
               epicId={props.epicId}

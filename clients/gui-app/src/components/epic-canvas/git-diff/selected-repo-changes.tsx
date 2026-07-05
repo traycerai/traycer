@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -139,7 +140,7 @@ function moduleSectionCollapseKey(
 function parentReferenceLabel(module: GitModuleGroup): string | null {
   const reference = module.parentReference;
   if (reference === null) return null;
-  if (reference.status === "differs") return "parent ref differs";
+  if (reference.status === "differs") return "pinned commit out of date";
   if (reference.status === "conflicted") return "reference conflict";
   if (reference.status === "unavailable") return "details unavailable";
   return "working tree dirty";
@@ -233,6 +234,18 @@ function GitModuleGroupsView(props: {
   const [sectionCollapsedByKey, setSectionCollapsedByKey] = useState<
     Record<string, boolean>
   >({});
+  const moduleGroupsRef = useRef<HTMLDivElement | null>(null);
+  const moduleHeaderByKeyRef = useRef<Map<string, HTMLButtonElement> | null>(
+    null,
+  );
+  if (moduleHeaderByKeyRef.current === null) {
+    moduleHeaderByKeyRef.current = new Map();
+  }
+  const moduleHeaderByKey = moduleHeaderByKeyRef.current;
+  const pendingScrollAnchorRef = useRef<{
+    readonly moduleKey: string;
+    readonly top: number;
+  } | null>(null);
   const debounceTimerRef = useRef<number | null>(null);
 
   const clearPendingDebounce = useCallback(() => {
@@ -274,12 +287,31 @@ function GitModuleGroupsView(props: {
     setShowCleanModules((current) => !current);
   }, []);
 
-  const toggleModule = useCallback((module: GitModuleGroup) => {
-    setExpandedByKey((current) => ({
-      ...current,
-      [module.key]: !(current[module.key] ?? module.defaultExpanded),
-    }));
-  }, []);
+  const rememberModuleScrollAnchor = useCallback(
+    (moduleKey: string) => {
+      const container = moduleGroupsRef.current;
+      const header = moduleHeaderByKey.get(moduleKey) ?? null;
+      if (container === null || header === null) return;
+      const containerRect = container.getBoundingClientRect();
+      const headerRect = header.getBoundingClientRect();
+      pendingScrollAnchorRef.current = {
+        moduleKey,
+        top: headerRect.top - containerRect.top,
+      };
+    },
+    [moduleHeaderByKey],
+  );
+
+  const toggleModule = useCallback(
+    (module: GitModuleGroup) => {
+      rememberModuleScrollAnchor(module.key);
+      setExpandedByKey((current) => ({
+        ...current,
+        [module.key]: !(current[module.key] ?? module.defaultExpanded),
+      }));
+    },
+    [rememberModuleScrollAnchor],
+  );
   const toggleModuleSection = useCallback(
     (module: GitModuleGroup, group: GitDiffBundleGroup) => {
       const key = moduleSectionCollapseKey(module, group);
@@ -290,8 +322,30 @@ function GitModuleGroupsView(props: {
     },
     [],
   );
+  const registerModuleHeader = useCallback(
+    (moduleKey: string, element: HTMLButtonElement | null) => {
+      if (element === null) {
+        moduleHeaderByKey.delete(moduleKey);
+        return;
+      }
+      moduleHeaderByKey.set(moduleKey, element);
+    },
+    [moduleHeaderByKey],
+  );
 
   useEffect(() => clearPendingDebounce, [clearPendingDebounce]);
+  useLayoutEffect(() => {
+    const anchor = pendingScrollAnchorRef.current;
+    if (anchor === null) return;
+    pendingScrollAnchorRef.current = null;
+    const container = moduleGroupsRef.current;
+    const header = moduleHeaderByKey.get(anchor.moduleKey) ?? null;
+    if (container === null || header === null) return;
+    const containerRect = container.getBoundingClientRect();
+    const headerRect = header.getBoundingClientRect();
+    const nextTop = headerRect.top - containerRect.top;
+    container.scrollTop += nextTop - anchor.top;
+  });
 
   const trimmedQuery = appliedQuery.trim();
   const normalizedQuery = trimmedQuery.toLowerCase();
@@ -349,7 +403,8 @@ function GitModuleGroupsView(props: {
         />
       ) : null}
       <div
-        className="min-h-0 flex-1 overflow-y-auto py-1"
+        ref={moduleGroupsRef}
+        className="flex min-h-0 flex-1 flex-col overflow-y-auto py-1"
         data-testid="git-module-groups"
       >
         {visibleModules.map((module) => {
@@ -371,6 +426,7 @@ function GitModuleGroupsView(props: {
               query={moduleMatchesHeader ? "" : appliedQuery}
               lastUpdatedAtMs={props.lastUpdatedAtMs}
               onToggle={toggleModule}
+              onHeaderRef={registerModuleHeader}
               sectionCollapsedByKey={sectionCollapsedByKey}
               onToggleModuleSection={toggleModuleSection}
               onClearQuery={handleClearSearch}
@@ -393,8 +449,10 @@ function GitModuleGroupsView(props: {
             >
               <span>
                 {showCleanModules ? "Hide" : "Show"}{" "}
-                {props.hiddenCleanModuleCount} clean Git{" "}
-                {props.hiddenCleanModuleCount === 1 ? "module" : "modules"}
+                {props.hiddenCleanModuleCount} clean{" "}
+                {props.hiddenCleanModuleCount === 1
+                  ? "submodule"
+                  : "submodules"}
               </span>
               <span aria-hidden>{showCleanModules ? "−" : "+"}</span>
             </button>
@@ -422,8 +480,8 @@ function GitModuleSearch(props: {
           value={props.searchQuery}
           onChange={props.onSearchChange}
           onKeyDown={props.onSearchKeyDown}
-          placeholder="Filter Git modules and files..."
-          aria-label="Filter Git modules and files"
+          placeholder="Filter submodules and files..."
+          aria-label="Filter submodules and files"
           className="text-ui-sm"
         />
         {props.searchQuery.length > 0 ? (
@@ -451,6 +509,10 @@ function GitModuleGroupView(props: {
   readonly query: string;
   readonly lastUpdatedAtMs: number | null;
   readonly onToggle: (module: GitModuleGroup) => void;
+  readonly onHeaderRef: (
+    moduleKey: string,
+    element: HTMLButtonElement | null,
+  ) => void;
   readonly sectionCollapsedByKey: Readonly<Record<string, boolean>>;
   readonly onToggleModuleSection: (
     module: GitModuleGroup,
@@ -462,6 +524,11 @@ function GitModuleGroupView(props: {
 }): ReactNode {
   const { module } = props;
   const repoState = module.repoState;
+  const expandedFileBody =
+    props.expanded &&
+    !module.unavailable &&
+    module.repoRoot !== null &&
+    module.files.length > 0;
   const banner =
     repoState !== null && repoState.kind !== "clean" ? (
       <RepoStateBanner
@@ -474,19 +541,27 @@ function GitModuleGroupView(props: {
   return (
     <section
       className={cn(
-        "border-b border-border/50 last:border-b-0",
+        "flex flex-none flex-col border-b border-border/50 last:border-b-0",
+        module.kind === "submodule" && "bg-muted/[0.03]",
         module.clean && "opacity-70",
       )}
       data-testid={moduleGroupTestId(module)}
       data-clean={module.clean ? "true" : "false"}
+      data-file-body-expanded={expandedFileBody ? "true" : "false"}
     >
       <GitModuleHeader
         module={module}
         expanded={props.expanded}
         onToggle={props.onToggle}
+        onHeaderRef={props.onHeaderRef}
       />
       {props.expanded ? (
-        <div className="border-l border-border/50 bg-background/55">
+        <div
+          className={cn(
+            "bg-background/55",
+            expandedFileBody && "overflow-visible",
+          )}
+        >
           {banner}
           <GitModuleBody
             epicId={props.epicId}
@@ -511,19 +586,32 @@ function GitModuleHeader(props: {
   readonly module: GitModuleGroup;
   readonly expanded: boolean;
   readonly onToggle: (module: GitModuleGroup) => void;
+  readonly onHeaderRef: (
+    moduleKey: string,
+    element: HTMLButtonElement | null,
+  ) => void;
 }): ReactNode {
-  const { module } = props;
+  const { module, onHeaderRef, onToggle } = props;
+  const moduleKey = module.key;
   const parentLabel = parentReferenceLabel(module);
   const parentReferenceStatus = module.parentReference?.status ?? null;
   const countLabel = `${module.files.length} ${
     module.files.length === 1 ? "file" : "files"
   }`;
+  const showCount = !props.expanded || module.files.length === 0;
+  const setHeaderRef = useCallback(
+    (element: HTMLButtonElement | null) => {
+      onHeaderRef(moduleKey, element);
+    },
+    [moduleKey, onHeaderRef],
+  );
   return (
     <button
+      ref={setHeaderRef}
       type="button"
-      onClick={() => props.onToggle(module)}
+      onClick={() => onToggle(module)}
       className={cn(
-        "group flex w-full min-w-0 items-start gap-2 px-2 py-2 text-left transition-colors hover:bg-muted/25",
+        "group sticky top-0 z-20 flex w-full min-w-0 items-start gap-2 bg-background/95 px-2 py-2 text-left backdrop-blur transition-colors hover:bg-muted/25",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
         module.clean && "text-muted-foreground",
       )}
@@ -546,28 +634,49 @@ function GitModuleHeader(props: {
           <span className="min-w-0 truncate text-ui-sm font-semibold text-foreground/90">
             {module.label}
           </span>
-          <span
-            className="shrink-0 rounded bg-muted/40 px-1.5 py-0.5 text-ui-xs tabular-nums text-muted-foreground"
-            data-testid={`git-module-count-${moduleIdentifier(module)}`}
-          >
-            {countLabel}
-          </span>
-        </span>
-        <span className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-ui-xs text-muted-foreground">
-          <span className="min-w-0 truncate">{module.headLabel}</span>
-          {parentLabel !== null ? (
-            <span
-              className={parentReferenceStatusClassName(parentReferenceStatus)}
-              title={module.parentReference?.summary}
-              data-testid={`git-module-parent-reference-${moduleIdentifier(module)}`}
-            >
-              {parentLabel}
+          {module.kind === "submodule" ? (
+            <span className="shrink-0 rounded-sm border border-border/60 bg-muted/30 px-1.5 py-0.5 text-ui-xs font-medium text-muted-foreground">
+              submodule
             </span>
           ) : null}
-          {module.unavailable && parentReferenceStatus !== "unavailable" ? (
-            <span className="font-medium text-warning">unavailable</span>
-          ) : null}
+          {showCount ? (
+            <span
+              className="shrink-0 rounded bg-muted/40 px-1.5 py-0.5 text-ui-xs tabular-nums text-muted-foreground"
+              data-testid={`git-module-count-${moduleIdentifier(module)}`}
+            >
+              {countLabel}
+            </span>
+          ) : (
+            <span
+              className="sr-only"
+              data-testid={`git-module-count-${moduleIdentifier(module)}`}
+            >
+              {countLabel}
+            </span>
+          )}
         </span>
+        <span className="mt-0.5 block min-w-0 truncate text-ui-xs text-muted-foreground">
+          {module.headLabel}
+        </span>
+        {parentLabel !== null ? (
+          <span
+            className={parentReferenceStatusClassName(parentReferenceStatus)}
+            title={module.parentReference?.summary}
+            data-testid={`git-module-parent-reference-${moduleIdentifier(module)}`}
+          >
+            {parentReferenceStatus === "differs" ||
+            parentReferenceStatus === "conflicted" ||
+            parentReferenceStatus === "unavailable" ? (
+              <TriangleAlert className="size-3 shrink-0" aria-hidden />
+            ) : null}
+            <span className="min-w-0 truncate">{parentLabel}</span>
+          </span>
+        ) : null}
+        {module.unavailable && parentReferenceStatus !== "unavailable" ? (
+          <span className="mt-0.5 block text-ui-xs font-medium text-warning">
+            unavailable
+          </span>
+        ) : null}
       </span>
     </button>
   );
@@ -596,8 +705,8 @@ function parentReferenceStatusClassName(
   status: GitModuleParentReferenceStatus | null,
 ): string {
   return cn(
-    "min-w-0 truncate",
-    status === "differs" && "font-medium text-foreground/70",
+    "mt-0.5 flex min-w-0 items-center gap-1 text-ui-xs",
+    status === "differs" && "font-medium text-warning",
     (status === "conflicted" || status === "unavailable") &&
       "font-medium text-warning",
   );
@@ -630,7 +739,7 @@ function GitModuleBody(props: {
   );
   if (module.unavailable) {
     return (
-      <div className="min-h-[28dvh]" data-testid="git-module-unavailable-body">
+      <div className="py-2" data-testid="git-module-unavailable-body">
         <SubmoduleUnavailable
           onRefresh={props.onRefresh}
           isRefreshing={props.isRefreshing}
@@ -649,7 +758,7 @@ function GitModuleBody(props: {
     );
   }
   return (
-    <div className="flex min-h-[32dvh] max-h-[58dvh] flex-col overflow-hidden">
+    <div className="overflow-visible">
       <FileList
         epicId={props.epicId}
         viewTabId={props.viewTabId}
@@ -660,6 +769,7 @@ function GitModuleBody(props: {
         onClearQuery={props.onClearQuery}
         hideEmptySections
         sectionCollapseController={sectionCollapseController}
+        virtualized={false}
       />
     </div>
   );

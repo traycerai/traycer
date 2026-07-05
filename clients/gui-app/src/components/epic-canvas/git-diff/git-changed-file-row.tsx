@@ -7,11 +7,8 @@ import {
 import { WorkspaceFileIcon } from "@/components/epic-canvas/workspace-file/workspace-file-icons";
 import { Badge } from "@/components/ui/badge";
 import {
-  TRUNCATE_START_INNER_STYLE,
-  TRUNCATE_START_STYLE,
-} from "@/lib/truncate-start-style";
-import {
   splitPathMatchRanges,
+  type HighlightRange,
   type HighlightRanges,
 } from "@/lib/git/path-highlight";
 import { cn } from "@/lib/utils";
@@ -42,10 +39,10 @@ interface RowStatsProps {
 function RowStats(props: RowStatsProps): ReactNode {
   return (
     <span className={cn("shrink-0 items-center gap-1", props.className)}>
-      <span className="shrink-0 text-ui-xs font-medium tabular-nums text-success">
+      <span className="shrink-0 text-ui-xs font-medium tabular-nums text-emerald-600 dark:text-emerald-400">
         +{props.file.insertions}
       </span>
-      <span className="shrink-0 text-ui-xs font-medium tabular-nums text-destructive">
+      <span className="shrink-0 text-ui-xs font-medium tabular-nums text-red-600 dark:text-red-400">
         -{props.file.deletions}
       </span>
       {props.file.isBinary ? (
@@ -53,6 +50,73 @@ function RowStats(props: RowStatsProps): ReactNode {
           bin
         </Badge>
       ) : null}
+    </span>
+  );
+}
+
+interface FileNameParts {
+  readonly stem: string;
+  readonly extension: string | null;
+}
+
+function splitFileNameExtension(fileName: string): FileNameParts {
+  const extensionStart = fileName.lastIndexOf(".");
+  if (extensionStart <= 0 || extensionStart === fileName.length - 1) {
+    return { stem: fileName, extension: null };
+  }
+  return {
+    stem: fileName.slice(0, extensionStart),
+    extension: fileName.slice(extensionStart),
+  };
+}
+
+function rangesForTextSlice(
+  ranges: HighlightRanges,
+  sliceStart: number,
+  sliceEndExclusive: number,
+): HighlightRanges {
+  return ranges.flatMap((range) => {
+    const [rangeStart, rangeEnd] = range;
+    const clippedStart = Math.max(rangeStart, sliceStart);
+    const clippedEnd = Math.min(rangeEnd, sliceEndExclusive - 1);
+    if (clippedStart > clippedEnd) return [];
+    const shifted: HighlightRange = [
+      clippedStart - sliceStart,
+      clippedEnd - sliceStart,
+    ];
+    return [shifted];
+  });
+}
+
+function MiddleTruncatedFileName(props: {
+  readonly fileName: string;
+  readonly ranges: HighlightRanges;
+  readonly className: string;
+}): ReactNode {
+  const parts = splitFileNameExtension(props.fileName);
+  if (parts.extension === null) {
+    return (
+      <span className={cn("min-w-0 truncate font-normal", props.className)}>
+        <HighlightedText text={props.fileName} ranges={props.ranges} />
+      </span>
+    );
+  }
+  const stemRanges = rangesForTextSlice(props.ranges, 0, parts.stem.length);
+  const extensionRanges = rangesForTextSlice(
+    props.ranges,
+    parts.stem.length,
+    props.fileName.length,
+  );
+  return (
+    <span
+      className={cn("flex min-w-0 items-baseline font-normal", props.className)}
+    >
+      <span className="min-w-0 truncate">
+        <HighlightedText text={parts.stem} ranges={stemRanges} />
+      </span>
+      <span className="shrink-0">
+        <HighlightedText text={parts.extension} ranges={extensionRanges} />
+      </span>
     </span>
   );
 }
@@ -80,29 +144,17 @@ function PanelRowContent(props: {
         withNativeTitle={false}
       />
       <WorkspaceFileIcon fileName={metadata.fileName} className="size-3.5" />
-      <span
-        className={cn(
-          "min-w-0 truncate font-normal",
-          hasDirectory ? "shrink" : "flex-1",
-        )}
-      >
-        <HighlightedText text={metadata.fileName} ranges={fileNameRanges} />
-      </span>
+      <MiddleTruncatedFileName
+        fileName={metadata.fileName}
+        ranges={fileNameRanges}
+        className={hasDirectory ? "shrink" : "flex-1"}
+      />
       {hasDirectory ? (
-        // Left-ellipsis so the deepest (most distinguishing) directory
-        // segments survive width pressure; the filename keeps priority
-        // because this span's flex basis is 0 - it only ever consumes
-        // leftover row width.
-        <span
-          className="min-w-0 flex-1 text-ui-xs text-muted-foreground"
-          style={TRUNCATE_START_STYLE}
-        >
-          <span style={TRUNCATE_START_INNER_STYLE}>
-            <HighlightedText
-              text={metadata.directoryName}
-              ranges={directoryRanges}
-            />
-          </span>
+        <span className="min-w-0 flex-1 truncate text-ui-xs text-muted-foreground">
+          <HighlightedText
+            text={metadata.directoryName}
+            ranges={directoryRanges}
+          />
         </span>
       ) : null}
       {props.trailing}

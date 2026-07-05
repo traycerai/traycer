@@ -3,11 +3,11 @@ import type { StatusBadgeStyle } from "@/lib/git/status-icon";
 import { cn } from "@/lib/utils";
 
 const toneClass: Record<StatusBadgeStyle["tone"], string> = {
-  success: "bg-success/10 text-success",
-  destructive: "bg-destructive/10 text-destructive",
+  success: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+  destructive: "bg-red-500/10 text-red-600 dark:text-red-400",
   muted: "bg-muted text-muted-foreground",
   primary: "bg-primary/10 text-primary",
-  warning: "bg-warning/10 text-warning",
+  warning: "bg-amber-500/10 text-amber-700 dark:text-amber-300",
 };
 
 interface GitStatusBadgeBaseProps {

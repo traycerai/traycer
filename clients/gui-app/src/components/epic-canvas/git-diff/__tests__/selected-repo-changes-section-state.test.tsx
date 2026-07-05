@@ -169,7 +169,7 @@ describe("<SelectedRepoChanges /> module section state", () => {
 
     fireEvent.click(
       screen.getAllByRole("button", {
-        name: "Working section, 1 file",
+        name: "Changes section, 1 file",
       })[0],
     );
 
@@ -200,7 +200,7 @@ describe("<SelectedRepoChanges /> module section state", () => {
       name: /traycer-internal\s*2 files\s*development/,
     });
     const submoduleHeader = screen.getByRole("button", {
-      name: /traycer\s*2 files\s*main\s*parent ref differs/,
+      name: /traycer\s*submodule\s*2 files\s*main\s*pinned commit out of date/,
     });
     expect(rootHeader.getAttribute("aria-expanded")).toBe("true");
     expect(submoduleHeader.getAttribute("aria-expanded")).toBe("true");
@@ -209,7 +209,7 @@ describe("<SelectedRepoChanges /> module section state", () => {
       name: "Staged section, 1 file",
     });
     const workingSections = screen.getAllByRole("button", {
-      name: "Working section, 1 file",
+      name: "Changes section, 1 file",
     });
     expect(stagedSections).toHaveLength(2);
     expect(workingSections).toHaveLength(2);
@@ -250,7 +250,7 @@ describe("<SelectedRepoChanges /> module section state", () => {
 
     fireEvent.change(
       screen.getByRole("textbox", {
-        name: "Filter Git modules and files",
+        name: "Filter submodules and files",
       }),
       { target: { value: "needle" } },
     );
@@ -273,6 +273,34 @@ describe("<SelectedRepoChanges /> module section state", () => {
         .getAttribute("aria-expanded"),
     ).toBe("false");
     expect(screen.queryByText("src/needle.ts")).toBeNull();
+  });
+
+  it("preserves the toggled module header position when a tall module collapses", () => {
+    renderSelectedChanges(
+      response({
+        files: [file("src/root-working.ts"), gitlink("traycer")],
+        submodules: [changeset({ files: [file("src/submodule-working.ts")] })],
+      }),
+    );
+
+    const container = screen.getByTestId("git-module-groups");
+    const header = screen.getByTestId("git-module-header-traycer");
+    container.scrollTop = 160;
+    vi.spyOn(container, "getBoundingClientRect").mockReturnValue(
+      DOMRect.fromRect({ x: 0, y: 20, width: 320, height: 480 }),
+    );
+    vi.spyOn(header, "getBoundingClientRect")
+      .mockReturnValueOnce(
+        DOMRect.fromRect({ x: 0, y: 260, width: 320, height: 42 }),
+      )
+      .mockReturnValueOnce(
+        DOMRect.fromRect({ x: 0, y: 120, width: 320, height: 42 }),
+      );
+
+    fireEvent.click(header);
+
+    expect(header.getAttribute("aria-expanded")).toBe("false");
+    expect(container.scrollTop).toBe(20);
   });
 
   it("preserves global section collapse for normal changed-file views", () => {
@@ -300,7 +328,7 @@ describe("<SelectedRepoChanges /> module section state", () => {
 
     fireEvent.click(
       screen.getAllByRole("button", {
-        name: "Working section, 1 file",
+        name: "Changes section, 1 file",
       })[0],
     );
 

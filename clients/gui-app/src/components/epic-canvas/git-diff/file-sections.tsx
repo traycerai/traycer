@@ -3,6 +3,7 @@ import type { GitChangedFile } from "@traycer/protocol/host";
 import { buildGitPanelFileSections } from "@/lib/git/panel-file-rendering";
 import type { HighlightRanges } from "@/lib/git/path-highlight";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
 import { GitDiffSection } from "./git-diff-section";
 import { GitFlatFileList } from "./git-flat-file-list";
 import {
@@ -28,6 +29,7 @@ export interface FileSectionsProps {
   readonly forceExpanded: boolean;
   readonly hideEmptySections: boolean;
   readonly sectionCollapseController: GitDiffSectionCollapseController | null;
+  readonly virtualized: boolean;
 }
 
 export function FileSections(props: FileSectionsProps): ReactNode {
@@ -49,7 +51,11 @@ export function FileSections(props: FileSectionsProps): ReactNode {
       skipDelayDuration={0}
     >
       <div
-        className="flex min-h-0 flex-1 flex-col overflow-hidden"
+        className={cn(
+          props.virtualized
+            ? "flex min-h-0 flex-1 flex-col overflow-hidden"
+            : "flex flex-col overflow-visible",
+        )}
         data-testid="git-file-sections"
       >
         {sections.map(({ group, visibleFiles, bundleFileCount }) =>
@@ -71,6 +77,8 @@ export function FileSections(props: FileSectionsProps): ReactNode {
               bundleFileCount={bundleFileCount}
               forceExpanded={props.forceExpanded}
               collapseController={props.sectionCollapseController}
+              fillAvailable={props.virtualized}
+              compactChrome={!props.virtualized}
             >
               <GitFlatFileList
                 epicId={props.epicId}
@@ -83,6 +91,7 @@ export function FileSections(props: FileSectionsProps): ReactNode {
                   activeFile,
                   group,
                 )}
+                virtualized={props.virtualized}
               />
             </GitDiffSection>
           ),

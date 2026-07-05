@@ -24,6 +24,7 @@ export interface FileListProps {
   readonly onClearQuery: () => void;
   readonly hideEmptySections: boolean;
   readonly sectionCollapseController: GitDiffSectionCollapseController | null;
+  readonly virtualized: boolean;
 }
 
 export function FileList(props: FileListProps): ReactNode {
@@ -75,6 +76,7 @@ export function FileList(props: FileListProps): ReactNode {
         forceExpanded={queryActive}
         hideEmptySections={props.hideEmptySections}
         sectionCollapseController={props.sectionCollapseController}
+        virtualized={props.virtualized}
       />
     );
   }
@@ -91,6 +93,7 @@ export function FileList(props: FileListProps): ReactNode {
       forceExpanded={queryActive}
       hideEmptySections={props.hideEmptySections}
       sectionCollapseController={props.sectionCollapseController}
+      virtualized={props.virtualized}
     />
   );
 }

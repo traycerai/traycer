@@ -112,6 +112,7 @@ export function GitChangedFilesView(
         onClearQuery={handleClear}
         hideEmptySections={false}
         sectionCollapseController={null}
+        virtualized
       />
     </div>
   );

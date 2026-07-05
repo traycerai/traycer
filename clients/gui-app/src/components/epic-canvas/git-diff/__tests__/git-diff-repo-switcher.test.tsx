@@ -188,10 +188,10 @@ describe("<GitDiffRepoSwitcherDropdown />", () => {
     ).not.toContain("vendor/traycer");
     expect(
       screen.getByRole("button", {
-        name: /Git workspace,\s*traycer-internal,.*1 changed Git module, 6 changed files/,
+        name: /Git workspace,\s*traycer-internal,.*1 changed submodule, 6 changed files/,
       }),
     ).toBeDefined();
-    expect(screen.getByLabelText("1 changed Git module")).toBeDefined();
+    expect(screen.getByLabelText("1 changed submodule")).toBeDefined();
     expect(screen.getByLabelText("6 changed files")).toBeDefined();
   });
 
@@ -247,10 +247,10 @@ describe("<GitDiffRepoSwitcherDropdown />", () => {
     expect(root.getAttribute("aria-selected")).toBe("true");
     expect(root.getAttribute("data-depth")).toBe("0");
     expect(root.textContent).toContain("/repo");
-    expect(root.textContent).not.toContain("3 Git modules · 2 changed");
-    expect(screen.getAllByLabelText("1 changed Git module")).toHaveLength(1);
-    expect(screen.getByLabelText("4 changed files")).toBeDefined();
-    expect(root.textContent).toContain("4");
+    expect(root.textContent).not.toContain("3 submodules · 2 changed");
+    expect(screen.getAllByLabelText("1 changed submodule")).toHaveLength(1);
+    expect(screen.getByLabelText("6 changed files")).toBeDefined();
+    expect(root.textContent).toContain("6");
     expect(
       screen.queryByTestId("git-diff-repo-switcher-submodule-vendor/traycer"),
     ).toBeNull();
@@ -304,8 +304,8 @@ describe("<GitDiffRepoSwitcherDropdown />", () => {
       "git-diff-repo-switcher-root-traycer-internal",
     );
     expect(root.textContent).toContain("/repo");
-    expect(root.textContent).not.toContain("2 Git modules · 1 changed");
-    expect(screen.getByLabelText("1 changed Git module")).toBeDefined();
+    expect(root.textContent).not.toContain("2 submodules · 1 changed");
+    expect(screen.getByLabelText("1 changed submodule")).toBeDefined();
     expect(screen.queryByLabelText("1 changed file")).toBeNull();
     expect(
       screen.queryByTestId("git-diff-repo-switcher-submodule-vendor/traycer"),

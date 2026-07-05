@@ -351,11 +351,9 @@ describe("<GitDiffPanelBodyLive /> workspace switcher integration", () => {
     renderPanel(rootSelected);
 
     const trigger = screen.getByTestId("git-diff-repo-switcher-trigger");
-    expect(trigger.getAttribute("aria-label")).toContain(
-      "1 changed Git module",
-    );
+    expect(trigger.getAttribute("aria-label")).toContain("1 changed submodule");
     expect(trigger.getAttribute("aria-label")).toContain("133 changed files");
-    expect(screen.getByLabelText("1 changed Git module")).toBeDefined();
+    expect(screen.getByLabelText("1 changed submodule")).toBeDefined();
     expect(screen.getByLabelText("133 changed files")).toBeDefined();
     expect(screen.queryByLabelText("1 changed")).toBeNull();
     expect(screen.queryByLabelText("134 changed files")).toBeNull();
@@ -376,11 +374,9 @@ describe("<GitDiffPanelBodyLive /> workspace switcher integration", () => {
     renderPanel(rootSelected);
 
     const trigger = screen.getByTestId("git-diff-repo-switcher-trigger");
-    expect(trigger.getAttribute("aria-label")).toContain(
-      "1 changed Git module",
-    );
-    expect(screen.getByLabelText("1 changed Git module")).toBeDefined();
-    expect(screen.queryByLabelText("2 changed Git modules")).toBeNull();
+    expect(trigger.getAttribute("aria-label")).toContain("1 changed submodule");
+    expect(screen.getByLabelText("1 changed submodule")).toBeDefined();
+    expect(screen.queryByLabelText("2 changed submodules")).toBeNull();
     expect(screen.queryByLabelText("1 changed file")).toBeNull();
   });
 
@@ -490,19 +486,19 @@ describe("<GitDiffPanelBodyLive /> workspace switcher integration", () => {
     ).toBeDefined();
     expect(
       screen.getByTestId("git-module-parent-reference-traycer").textContent,
-    ).toBe("parent ref differs");
+    ).toContain("pinned commit out of date");
     expect(screen.getByTestId("git-module-no-changes-traycer")).toBeDefined();
     expect(
       screen
         .getByTestId("git-diff-repo-switcher-trigger")
         .getAttribute("aria-label"),
-    ).toContain("1 changed Git module");
-    expect(screen.getByLabelText("1 changed Git module")).toBeDefined();
+    ).toContain("1 changed submodule");
+    expect(screen.getByLabelText("1 changed submodule")).toBeDefined();
     expect(screen.queryByLabelText("1 changed file")).toBeNull();
     expect(screen.queryByText("Submodule reference:")).toBeNull();
   });
 
-  it("keeps all-clean modules collapsed behind the clean-module affordance", () => {
+  it("keeps all-clean modules collapsed behind the clean-submodule affordance", () => {
     testState.snapshots.set(
       "/repo",
       response({
@@ -517,7 +513,7 @@ describe("<GitDiffPanelBodyLive /> workspace switcher integration", () => {
     expect(
       screen.queryByTestId("git-module-group-submodule-traycer"),
     ).toBeNull();
-    expect(screen.queryByLabelText("1 changed Git module")).toBeNull();
+    expect(screen.queryByLabelText("1 changed submodule")).toBeNull();
   });
 
   it("surfaces old-host submodule-detail degradation in the integrated panel", () => {
