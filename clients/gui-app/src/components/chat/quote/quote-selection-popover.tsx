@@ -118,10 +118,14 @@ export function QuoteSelectionPopover(props: QuoteSelectionPopoverProps) {
     <div
       ref={floatingRef}
       data-slot="quote-selection-popover"
-      className={cn(
-        "absolute top-0 left-0 z-50 rounded-md border border-border bg-popover p-0.5 text-popover-foreground shadow-lg",
-        "animate-in fade-in-0 zoom-in-95 slide-in-from-bottom-1 duration-100",
-      )}
+      // No entrance animation: `animate-in` runs the `enter` keyframe, whose
+      // only `from` frame drives `transform` to the element's underlying value.
+      // Since positioning here IS a `transform` (Floating UI, set below), the
+      // keyframe animated the button diagonally from the `top-0 left-0` corner
+      // to the anchor. The app's other floating popovers (FloatingDraftPopover,
+      // MentionPreviewPanel) position with transform and add no entrance
+      // animation for the same reason; match them.
+      className="absolute top-0 left-0 z-50 rounded-md border border-border bg-popover p-0.5 text-popover-foreground shadow-lg"
     >
       <button
         type="button"
