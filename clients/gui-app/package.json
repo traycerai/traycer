@@ -33,6 +33,7 @@
     "@tanstack/react-query": "catalog:",
     "@tanstack/react-router": "catalog:",
     "@tiptap/core": "catalog:",
+    "@tiptap/extension-blockquote": "catalog:",
     "@tiptap/extension-code-block-lowlight": "catalog:",
     "@tiptap/extension-collaboration": "catalog:",
     "@tiptap/extension-collaboration-caret": "catalog:",

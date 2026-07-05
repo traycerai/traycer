@@ -156,6 +156,9 @@ function ReferenceChipButton(props: {
       onClick={props.onOpen}
       title={props.title}
       data-traycer-ref={props.refKind}
+      // Excluded from quote selection: it's an interactive chip inside quotable
+      // prose, so a drag across it must not append its label as quoted text.
+      data-quote-exclude=""
       className={cn(
         "mx-px inline-flex max-w-full items-center gap-1 rounded-md border border-border/60 bg-muted/60 px-1.5 py-0.5 align-baseline text-ui-sm font-medium text-foreground/90 no-underline",
         "transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none",

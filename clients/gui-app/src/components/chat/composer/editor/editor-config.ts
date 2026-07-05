@@ -1,5 +1,6 @@
 import type { Extensions } from "@tiptap/core";
 import StarterKit from "@tiptap/starter-kit";
+import Blockquote from "@tiptap/extension-blockquote";
 import { Markdown } from "@tiptap/markdown";
 import { Placeholder } from "@tiptap/extensions/placeholder";
 import Link from "@tiptap/extension-link";
@@ -25,6 +26,21 @@ export interface BuildComposerExtensionsArgs {
   readonly slashProviderId: GuiHarnessId;
 }
 
+// Blockquote is button-only (T5): the composer schema stays blockquote-valid
+// (so quoted drafts and edited sent messages round-trip) but grants none of
+// the extension's default authoring affordances - no `> ` wrapping input rule,
+// no Cmd-Shift-B toggle. `addCommands` (setBlockquote/toggleBlockquote/
+// unsetBlockquote) is left untouched; `unsetBlockquote` backs the composer's
+// own narrow Backspace-unwrap keymap.
+const ComposerBlockquote = Blockquote.extend({
+  addInputRules() {
+    return [];
+  },
+  addKeyboardShortcuts() {
+    return {};
+  },
+});
+
 export function buildComposerExtensions(
   args: BuildComposerExtensionsArgs,
 ): Extensions {
@@ -37,6 +53,7 @@ export function buildComposerExtensions(
       dropcursor: false,
       gapcursor: false,
     }),
+    ComposerBlockquote,
     Markdown,
     Link.configure({
       openOnClick: false,

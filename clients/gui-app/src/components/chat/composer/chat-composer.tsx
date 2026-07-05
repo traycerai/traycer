@@ -121,6 +121,14 @@ function ChatComposerImpl(props: ChatComposerProps) {
   const workspaceBlocked = !workspaceComposerCanStart(workspaceAvailability);
 
   const editorRef = useRef<ComposerPromptEditorHandle | null>(null);
+  // Counts editor-ready transitions (a counter, not a boolean, so a torn-down
+  // and re-created editor re-fires). The draft-reset bridge keys its
+  // handle-ready catch-up on this - a ref flip alone never re-renders us.
+  const [editorReadyTick, setEditorReadyTick] = useState(0);
+  const handleEditorReady = useCallback(
+    () => setEditorReadyTick((tick) => tick + 1),
+    [],
+  );
   const [pickerStore] = useState(() => createComposerPickerStore());
 
   // The mention/slash menu renders through a body portal, so a left-open menu
@@ -148,6 +156,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
   } = useChatComposerDraft({
     taskId,
     editorRef,
+    editorReadyTick,
   });
 
   const { dictationControl, dictationPreparing } = useComposerDictation({
@@ -275,6 +284,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
                 onPaste={onPaste}
                 onDragOver={onDragOver}
                 onDrop={onDrop}
+                onEditorReady={handleEditorReady}
               />
             }
             toolbar={

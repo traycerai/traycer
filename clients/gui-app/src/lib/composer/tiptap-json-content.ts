@@ -336,7 +336,18 @@ function plainTextFromNode(node: JsonContent): string {
   }
   if (node.type === "imageAttachment") return "";
   if (node.type === "attachmentGroup") return "";
+  if (node.type === "blockquote") return blockquotePlainText(node);
   return (node.content ?? []).map((child) => plainTextFromNode(child)).join("");
+}
+
+function blockquotePlainText(node: JsonContent): string {
+  const text = (node.content ?? [])
+    .map((child) => plainTextFromNode(child))
+    .join("\n");
+  return text
+    .split("\n")
+    .map((line) => (line.length === 0 ? ">" : `> ${line}`))
+    .join("\n");
 }
 
 function collectMentionAttachmentsFromNodes(

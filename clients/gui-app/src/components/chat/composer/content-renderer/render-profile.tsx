@@ -152,7 +152,7 @@ function renderBlockquote({
   return (
     <blockquote
       key={nodeKey}
-      className="my-0.5 border-l-2 border-border pl-3 text-muted-foreground"
+      className="my-0.5 border-l-2 border-primary/60 pl-3 leading-snug text-muted-foreground"
     >
       {children}
     </blockquote>

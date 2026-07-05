@@ -225,7 +225,23 @@ function composerClipboardBlockPlainText(
     );
     return `\`\`\`\n${code}\n\`\`\``;
   }
+  if (node.type === "blockquote") {
+    return blockquotePlainText(node.content ?? [], ctx);
+  }
   return null;
+}
+
+function blockquotePlainText(
+  children: ReadonlyArray<JsonContent>,
+  ctx: ClipboardTextContext,
+): string {
+  const text = children
+    .map((child) => composerClipboardPlainTextFromNode(child, ctx))
+    .join("\n");
+  return text
+    .split("\n")
+    .map((line) => (line.length === 0 ? ">" : `> ${line}`))
+    .join("\n");
 }
 
 function listPlainText(

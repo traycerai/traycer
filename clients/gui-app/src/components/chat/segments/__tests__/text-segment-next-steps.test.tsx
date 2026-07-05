@@ -75,6 +75,12 @@ describe("TextSegment next steps rendering", () => {
         ?.classList.contains("prose-base"),
     ).toBe(true);
     expect(
+      screen
+        .getByText("Implementation is complete.")
+        .closest(".md-prose")
+        ?.getAttribute("data-quotable"),
+    ).toBe("true");
+    expect(
       screen.getByRole("button", {
         name: "Use /implementation-validation to validate the work",
       }),
@@ -175,6 +181,23 @@ describe("TextSegment next steps rendering", () => {
     expect(screen.getByText("Readable prose survives.")).toBeTruthy();
     expect(screen.queryByRole("button")).toBeNull();
     expect(screen.queryByText(/TRAYCER_NEXT_STEPS/)).toBeNull();
+  });
+
+  it("excludes next-step action groups from quote selection", () => {
+    render(
+      <TextSegment
+        findUnitId={null}
+        markdown={COMPLETE_BLOCK}
+        isStreaming={false}
+        nextStepActions={{ canSend: true, onSend: () => true }}
+      />,
+    );
+
+    expect(
+      screen
+        .getByTestId("traycer-next-steps")
+        .getAttribute("data-quote-exclude"),
+    ).toBe("");
   });
 
   it("does not leak partial wrapper tags while streaming", () => {
