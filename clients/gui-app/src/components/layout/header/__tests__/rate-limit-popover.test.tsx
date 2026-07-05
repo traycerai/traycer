@@ -500,7 +500,7 @@ describe("<RateLimitPopover /> Overview progressive reveal", () => {
     mocks.results = { codex: coldResult(), "claude-code": coldResult() };
     renderPopover();
 
-    expect(screen.getByText("Fetching rate limits")).toBeTruthy();
+    expect(screen.getByText("Fetching usage limits")).toBeTruthy();
     // Neither provider's own reading is visible yet - only the combined loader.
     expect(screen.queryByText("Current session")).toBeNull();
     expect(screen.queryByText("4% used")).toBeNull();
@@ -522,7 +522,7 @@ describe("<RateLimitPopover /> Overview progressive reveal", () => {
     rerender(popoverElement());
 
     // The combined loader is gone now that one provider has data...
-    expect(screen.queryByText("Fetching rate limits")).toBeNull();
+    expect(screen.queryByText("Fetching usage limits")).toBeNull();
     // ...Codex's own section is visible...
     expect(
       screen.getByText("Codex").closest('[class*="gap-4"]')?.className,
@@ -589,6 +589,19 @@ describe("<RateLimitPopover /> per-provider states", () => {
     expect(document.querySelectorAll(".opacity-60").length).toBeGreaterThan(0);
   });
 
+  it("shows Refreshing instead of an updated timestamp while a refresh is in progress", () => {
+    mocks.configured = [{ providerId: "codex", lane: "ephemeralProcess" }];
+    mocks.results = { codex: readyResult(codexReady()) };
+    mocks.draining = true;
+    renderPopover();
+
+    const label = screen.getByText("Refreshing");
+    expect(label).toBeTruthy();
+    expect(label.className).toContain("working-text-shimmer");
+    expect(screen.getByTestId("usage-limit-refreshing-dots")).toBeTruthy();
+    expect(screen.queryByText(/^Updated /)).toBeNull();
+  });
+
   it("shows a plain error message with no inline retry control when a fetch never succeeded", () => {
     mocks.configured = [{ providerId: "codex", lane: "ephemeralProcess" }];
     mocks.results = {
@@ -603,7 +616,7 @@ describe("<RateLimitPopover /> per-provider states", () => {
     };
     renderPopover();
     expect(
-      screen.getByText("Couldn't load rate limits right now."),
+      screen.getByText("Couldn't load usage limits right now."),
     ).toBeTruthy();
     // No separate "Retry" link - the header's own refresh icon already covers
     // it (feedback: "we already have a reload button"). That icon is
@@ -631,7 +644,7 @@ describe("<RateLimitPopover /> per-provider states", () => {
     };
     renderPopover();
     expect(
-      screen.getByText("Rate limits unavailable — the CLI isn't installed"),
+      screen.getByText("Usage limits unavailable — the CLI isn't installed"),
     ).toBeTruthy();
   });
 });
