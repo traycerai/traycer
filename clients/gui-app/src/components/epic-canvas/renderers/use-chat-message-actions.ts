@@ -240,6 +240,12 @@ export function useChatMessageActions(
 
   const cancelActiveMessageEdit = useCallback(() => {
     dispatchUi({ type: "clearInlineEdit" });
+    // Also discard any submission stashed for the revert-on-edit dialog and
+    // close it: cancelling the edit while that dialog is open would otherwise
+    // leave `pendingEditSubmission` pointed at the now-cleared target and the
+    // dialog able to fire an edit against it.
+    pendingEditSubmission.current = null;
+    dispatchUi({ type: "setRevertOnEditOpen", open: false });
   }, [dispatchUi]);
 
   // Dialog-path submits bypass the composer's own submit/clear cycle, so the

@@ -1,8 +1,6 @@
 import { toast } from "sonner";
 import type { JsonContent } from "@traycer/protocol/common/registry";
-import type {
-  ChatRunStatus,
-} from "@traycer/protocol/host/agent/gui/subscribe";
+import type { ChatRunStatus } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { RestoreResultEntry } from "@traycer/protocol/persistence/epic/checkpoint-manifests";
 import type { UserMessageSender } from "@traycer/protocol/persistence/epic/schemas";
 import type { AuthProfile } from "@/stores/auth/auth-store";

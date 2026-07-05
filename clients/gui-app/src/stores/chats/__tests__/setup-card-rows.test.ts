@@ -678,6 +678,30 @@ describe("worktreeSetupInFlight", () => {
     ).toBe(false);
   });
 
+  it("is false when every workspace has terminally failed", () => {
+    // No workspace is creating/setting-up, so setup is not in flight even
+    // though the aggregate rolls up to `failed`.
+    expect(
+      worktreeSetupInFlight(
+        [
+          setupEvent("setup.running", { workspacePath: "/api" }, null),
+          setupEvent("setup.running", { workspacePath: "/web" }, null),
+          setupEvent(
+            "setup.failed",
+            { workspacePath: "/api", setupExitCode: 1 },
+            null,
+          ),
+          setupEvent(
+            "setup.failed",
+            { workspacePath: "/web", setupExitCode: 1 },
+            null,
+          ),
+        ],
+        BINDING,
+      ),
+    ).toBe(false);
+  });
+
   it("stays in-flight when one repo is still setting up beside a failed sibling", () => {
     // The aggregate rolls up to `failed`, but a repo is still provisioning -
     // the signal must key off the per-workspace state, not the rollup.
