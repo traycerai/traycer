@@ -174,7 +174,7 @@ const backgroundItemBaseFields = {
   blockId: z.string(),
   // Parent task id for nested background items. Optional/defaulted so a
   // new-client parse of an old-host frame succeeds, while old clients strip it.
-  parentTaskId: z.string().nullable().default(null).optional(),
+  parentTaskId: z.string().nullable().default(null),
 } as const;
 
 const runningBackgroundItemKindSchema = z.enum([
@@ -188,7 +188,7 @@ const runningBackgroundItemSchema = z.object({
   kind: runningBackgroundItemKindSchema,
   // Epoch milliseconds when a wakeup item is scheduled to fire. Null for
   // ordinary background work and optional for old-host compatibility.
-  scheduledFor: z.number().nullable().default(null).optional(),
+  scheduledFor: z.number().nullable().default(null),
 });
 
 const wakeupBackgroundItemSchema = z.object({
