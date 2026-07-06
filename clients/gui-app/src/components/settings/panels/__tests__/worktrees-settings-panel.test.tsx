@@ -265,6 +265,7 @@ function renderList(args: {
   readonly queryClient: QueryClient;
   readonly worktrees: readonly WorktreeHostEntryV11[];
   readonly enrichedByPath?: ReadonlyMap<string, WorktreeHostEntryV11>;
+  readonly erroredPaths?: ReadonlySet<string>;
   readonly onVisiblePathsChange?: (paths: readonly string[]) => void;
   readonly taskTitlesByEpicId?: ReadonlyMap<string, string>;
 }) {
@@ -280,6 +281,7 @@ function renderList(args: {
         hostId={args.hostId}
         worktrees={args.worktrees}
         enrichedByPath={args.enrichedByPath ?? fullyEnriched(args.worktrees)}
+        erroredPaths={args.erroredPaths ?? new Set()}
         onVisiblePathsChange={args.onVisiblePathsChange ?? vi.fn()}
         taskTitlesByEpicId={args.taskTitlesByEpicId ?? new Map()}
         toolbarProps={testToolbarProps()}
@@ -840,6 +842,7 @@ describe("WorktreesList delete flow", () => {
             hostId="host-b"
             worktrees={WORKTREES}
             enrichedByPath={fullyEnriched(WORKTREES)}
+            erroredPaths={new Set()}
             onVisiblePathsChange={vi.fn()}
             taskTitlesByEpicId={new Map()}
             toolbarProps={testToolbarProps()}
@@ -1027,6 +1030,7 @@ describe("WorktreesList delete flow", () => {
                 (worktree) => worktree.worktreePath !== "/wt/clean",
               ),
             )}
+            erroredPaths={new Set()}
             onVisiblePathsChange={vi.fn()}
             taskTitlesByEpicId={new Map()}
             toolbarProps={testToolbarProps()}
@@ -1139,6 +1143,7 @@ describe("WorktreesList confirm-time re-check", () => {
             hostId="host-a"
             worktrees={worktrees}
             enrichedByPath={fullyEnriched(worktrees)}
+            erroredPaths={new Set()}
             onVisiblePathsChange={vi.fn()}
             taskTitlesByEpicId={new Map()}
             toolbarProps={testToolbarProps()}
@@ -1800,6 +1805,7 @@ describe("WorktreesList virtualization + per-viewport enrichment", () => {
   function listElement(args: {
     readonly worktrees: readonly WorktreeHostEntryV11[];
     readonly enrichedByPath: ReadonlyMap<string, WorktreeHostEntryV11>;
+    readonly erroredPaths?: ReadonlySet<string>;
     readonly onVisiblePathsChange?: (paths: readonly string[]) => void;
   }): ReactNode {
     return (
@@ -1810,6 +1816,7 @@ describe("WorktreesList virtualization + per-viewport enrichment", () => {
             hostId="host-a"
             worktrees={args.worktrees}
             enrichedByPath={args.enrichedByPath}
+            erroredPaths={args.erroredPaths ?? new Set()}
             onVisiblePathsChange={args.onVisiblePathsChange ?? vi.fn()}
             taskTitlesByEpicId={new Map()}
             toolbarProps={testToolbarProps()}
@@ -1991,5 +1998,95 @@ describe("WorktreesList virtualization + per-viewport enrichment", () => {
     // "Review" tier is not offered until it enriches.
     screen.getByTestId("worktrees-filter-merged");
     expect(screen.queryByTestId("worktrees-filter-review")).toBeNull();
+  });
+
+  it("renders a settled-error row as a non-spinner Unknown, not an infinite spinner", () => {
+    const erroredRow = entry({
+      worktreePath: "/wt/errored",
+      branch: "feat-errored",
+      branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
+    });
+    render(
+      listElement({
+        worktrees: [erroredRow],
+        // Not enriched, but its per-path query SETTLED to an error.
+        enrichedByPath: new Map(),
+        erroredPaths: new Set([erroredRow.worktreePath]),
+      }),
+    );
+
+    // Base info still paints; the pill reads a static "Unknown" (data-tier=unknown)
+    // with NO "Checking…" spinner.
+    screen.getByText("feat-errored");
+    const pill = screen.getByTestId("worktree-tier-pill");
+    expect(pill.getAttribute("data-tier")).toBe("unknown");
+    screen.getByText("Unknown");
+    expect(screen.queryByText("Checking…")).toBeNull();
+    expect(
+      screen.queryByTestId("worktree-tier-pill-pending-spinner"),
+    ).toBeNull();
+  });
+
+  it("keeps an errored row out of tier filters exactly like a pending one", () => {
+    const mergedRow = entry({
+      worktreePath: "/wt/merged",
+      branch: "feat-merged",
+      branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
+    });
+    const erroredRow = entry({
+      worktreePath: "/wt/errored",
+      branch: "feat-errored",
+      branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
+    });
+    render(
+      listElement({
+        worktrees: [mergedRow, erroredRow],
+        enrichedByPath: new Map([[mergedRow.worktreePath, mergedRow]]),
+        erroredPaths: new Set([erroredRow.worktreePath]),
+      }),
+    );
+
+    // The errored row's tier is unknown, so it contributes no filter option and
+    // (like a pending row) is KEPT under an active tier filter rather than dropped.
+    expect(screen.queryByTestId("worktrees-filter-errored")).toBeNull();
+    fireEvent.click(screen.getByTestId("worktrees-filter-merged"));
+    screen.getByRole("button", { name: "Delete worktree feat-merged" });
+    screen.getByRole("button", { name: "Delete worktree feat-errored" });
+    // Still shown as Unknown while filtered, not spinning.
+    screen.getByText("Unknown");
+  });
+
+  it("upgrades an errored row in place once a later refetch succeeds", () => {
+    const merged = entry({
+      worktreePath: "/wt/errored",
+      branch: "feat-errored",
+      branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
+    });
+    const { rerender } = render(
+      listElement({
+        worktrees: [merged],
+        enrichedByPath: new Map(),
+        erroredPaths: new Set([merged.worktreePath]),
+      }),
+    );
+
+    // First: settled error → Unknown pill.
+    expect(
+      screen.getByTestId("worktree-tier-pill").getAttribute("data-tier"),
+    ).toBe("unknown");
+
+    // A refresh / scroll-back retry succeeds: the path moves from errored to
+    // enriched and the row upgrades in place to its real tier.
+    rerender(
+      listElement({
+        worktrees: [merged],
+        enrichedByPath: new Map([[merged.worktreePath, merged]]),
+        erroredPaths: new Set(),
+      }),
+    );
+    expect(
+      screen.getByTestId("worktree-tier-pill").getAttribute("data-tier"),
+    ).toBe("merged");
+    expect(screen.queryByText("Unknown")).toBeNull();
   });
 });

@@ -22,6 +22,7 @@ import {
   FolderGit2,
   GitCommitHorizontal,
   GitMerge,
+  HelpCircle,
   ListFilter,
   Minus,
   RefreshCw,
@@ -109,12 +110,18 @@ import {
 } from "@/components/settings/panels/use-worktree-delete-run";
 import { WorktreeDeleteProgressModal } from "@/components/settings/panels/worktree-delete-progress-modal";
 import {
+  useWorktreeEnrichSettlePerf,
   useWorktreeFirstPaintPerf,
   useWorktreeListQueryPerf,
 } from "@/components/settings/panels/worktrees-settings-perf";
 import { WorktreeListRenderProfiler } from "@/components/settings/panels/worktree-list-render-profiler";
 
 type WorktreeRowDeleteStatus = "deleting";
+// Per-row activity-enrichment state, driving ONLY the tier pill's presentation:
+// `ready` = enriched (real tier), `pending` = in flight ("Checking…" spinner),
+// `unknown` = the per-path query settled to an error (non-animated fallback, no
+// infinite spinner). `pending` and `unknown` are both un-enriched for filtering.
+type WorktreeEnrichmentState = "ready" | "pending" | "unknown";
 type WorktreeSortMode = "newest" | "oldest";
 // Multi-select status filter. An EMPTY set means "no filter" (show every tier);
 // a non-empty set shows only the selected tiers (union). Composes with search.
@@ -522,6 +529,12 @@ function useWorktreeActivityEnrichment(
   reachable: boolean,
 ): {
   readonly enrichedByPath: ReadonlyMap<string, WorktreeHostEntryV11>;
+  // Paths whose per-path enrichment query SETTLED to an error (retries exhausted).
+  // A path here is distinct from one still in flight: the row must stop reading as
+  // progress and fall back to a non-animated "Unknown" pill instead of spinning
+  // forever. Kept disjoint from `enrichedByPath` - a later successful refetch moves
+  // the path from errored to enriched.
+  readonly erroredPaths: ReadonlySet<string>;
   readonly reportVisiblePaths: (paths: readonly string[]) => void;
   readonly enriching: boolean;
 } {
@@ -565,24 +578,42 @@ function useWorktreeActivityEnrichment(
   });
 
   // The overlay is a pure projection of whatever per-path queries have settled -
-  // derived, never accumulated. Keyed by `worktreePath` (a v1.0 host that ignores
+  // derived, never accumulated. `results` is index-aligned with `requestedPaths`
+  // (both come from the same `requests` array), so an errored slot maps back to its
+  // requested path. Keyed by `worktreePath` (a v1.0 host that ignores
   // `activityPaths` returns extra entries; keying by path folds them in safely).
-  const enrichedByPath = useMemo(() => {
+  const { enrichedByPath, erroredPaths } = useMemo(() => {
     const map = new Map<string, WorktreeHostEntryV11>();
-    for (const result of results) {
+    const errored = new Set<string>();
+    results.forEach((result, index) => {
       const data = result.data;
-      if (data === undefined) continue;
-      for (const entry of data.worktrees) {
-        map.set(entry.worktreePath, entry);
+      if (data !== undefined) {
+        for (const entry of data.worktrees) map.set(entry.worktreePath, entry);
+        return;
       }
-    }
-    return map;
-  }, [results]);
+      // No data AND settled to error (retries exhausted, not merely in flight):
+      // record the requested path (index-aligned with `results`) so its row can
+      // stop showing progress.
+      if (result.isError) errored.add(requestedPaths[index]);
+    });
+    return { enrichedByPath: map, erroredPaths: errored };
+  }, [results, requestedPaths]);
+
+  const enriching = results.some((result) => result.isFetching);
+  // Gated perf telemetry for the enrichment leg (invisible before - only the base
+  // leg was tracked, so a wholesale enrichment failure left no trace). Emits once
+  // per settle window with how many paths were probed and how many errored.
+  useWorktreeEnrichSettlePerf({
+    fetching: enriching,
+    pathCount: requestedPaths.length,
+    erroredCount: erroredPaths.size,
+  });
 
   return {
     enrichedByPath,
+    erroredPaths,
     reportVisiblePaths,
-    enriching: results.some((result) => result.isFetching),
+    enriching,
   };
 }
 
@@ -684,6 +715,7 @@ function WorktreesBody(props: {
         hostId={hostId}
         worktrees={listing.worktrees}
         enrichedByPath={enrichment.enrichedByPath}
+        erroredPaths={enrichment.erroredPaths}
         onVisiblePathsChange={enrichment.reportVisiblePaths}
         taskTitlesByEpicId={taskTitlesByEpicId}
         toolbarProps={toolbarProps}
@@ -818,6 +850,10 @@ export function WorktreesList(props: {
   // not known yet, so the pill shows "Checking…" and it stays out of tier-based
   // filtering. Grows as rows scroll into view.
   readonly enrichedByPath: ReadonlyMap<string, WorktreeHostEntryV11>;
+  // Paths whose enrichment SETTLED to an error. Such a row is un-enriched just like
+  // a pending one (kept out of tier filtering, base presentation), but its pill
+  // reads a non-animated "Unknown" instead of an infinite "Checking…" spinner.
+  readonly erroredPaths: ReadonlySet<string>;
   // Reports the worktree paths currently on screen (from the virtualizer) so the
   // owner can enrich just those. Called whenever the on-screen set changes; the
   // owner debounces + batches.
@@ -836,6 +872,7 @@ export function WorktreesList(props: {
     hostId,
     worktrees,
     enrichedByPath,
+    erroredPaths,
     onVisiblePathsChange,
     taskTitlesByEpicId,
     openStreamTransport,
@@ -851,9 +888,22 @@ export function WorktreesList(props: {
       worktrees.map((entry) => enrichedByPath.get(entry.worktreePath) ?? entry),
     [worktrees, enrichedByPath],
   );
+  // Un-enriched for classification/filtering (covers BOTH still-in-flight and
+  // settled-error rows - neither has a known tier, so both stay out of the green /
+  // tier-filtered cohorts).
   const isPending = useCallback(
     (worktreePath: string) => !enrichedByPath.has(worktreePath),
     [enrichedByPath],
+  );
+  // The row PILL, however, distinguishes the two: an errored row reads a settled
+  // "Unknown" (non-animated), never an infinite "Checking…" spinner.
+  const enrichmentStateFor = useCallback(
+    (worktreePath: string): WorktreeEnrichmentState => {
+      if (enrichedByPath.has(worktreePath)) return "ready";
+      if (erroredPaths.has(worktreePath)) return "unknown";
+      return "pending";
+    },
+    [enrichedByPath, erroredPaths],
   );
   // True-AND merge rollup per owning Task (epic), aggregated across every worktree
   // entry the epic owns (superproject branch + each entry's owned submodules). Same
@@ -1348,7 +1398,9 @@ export function WorktreesList(props: {
                       >
                         <WorktreeRow
                           entry={item.entry}
-                          pending={isPending(item.entry.worktreePath)}
+                          enrichment={enrichmentStateFor(
+                            item.entry.worktreePath,
+                          )}
                           taskTitlesByEpicId={taskTitlesByEpicId}
                           taskRollupByEpicId={taskRollupByEpicId}
                           deleteStatus={
@@ -1694,9 +1746,10 @@ function WorktreeRepoHeader(props: {
 
 function WorktreeRow(props: {
   readonly entry: WorktreeHostEntryV11;
-  // True until THIS row's per-viewport activity enrichment has landed: base fields
-  // are painted, but the tier isn't classified yet, so the pill shows "Checking…".
-  readonly pending: boolean;
+  // This row's activity-enrichment state, driving the tier pill: `pending` (still
+  // in flight → "Checking…"), `unknown` (settled to error → non-animated fallback),
+  // or `ready` (enriched → real tier). Base fields paint regardless.
+  readonly enrichment: WorktreeEnrichmentState;
   readonly taskTitlesByEpicId: ReadonlyMap<string, string>;
   readonly taskRollupByEpicId: ReadonlyMap<string, TaskMergeRollup>;
   readonly deleteStatus: WorktreeRowDeleteStatus | null;
@@ -1708,7 +1761,7 @@ function WorktreeRow(props: {
 }): ReactNode {
   const {
     entry,
-    pending,
+    enrichment,
     taskTitlesByEpicId,
     taskRollupByEpicId,
     deleteStatus,
@@ -1742,7 +1795,7 @@ function WorktreeRow(props: {
       </div>
       <div className="min-w-0 flex-1 space-y-1 pr-10">
         <div className="flex flex-wrap items-center gap-2">
-          <WorktreeTierPill tier={classification.tier} pending={pending} />
+          <WorktreeTierPill tier={classification.tier} state={enrichment} />
           <span className="truncate text-ui-sm font-medium text-foreground">
             {branchLabel(entry)}
           </span>
@@ -1794,12 +1847,12 @@ function WorktreeRow(props: {
  */
 function WorktreeTierPill(props: {
   readonly tier: WorktreeTier;
-  readonly pending: boolean;
+  readonly state: WorktreeEnrichmentState;
 }): ReactNode {
-  // While the background activity leg is still resolving, the tier isn't known
-  // yet - show a neutral "Checking…" pill rather than a base-only tier that would
-  // flip (e.g. Review -> Merged) once the probes land.
-  if (props.pending) {
+  // While the activity probe is still in flight the tier isn't known yet - show a
+  // neutral "Checking…" spinner rather than a base-only tier that would flip (e.g.
+  // Review -> Merged) once the probes land.
+  if (props.state === "pending") {
     return (
       <Badge
         variant="outline"
@@ -1813,6 +1866,24 @@ function WorktreeTierPill(props: {
           variant={undefined}
         />
         Checking…
+      </Badge>
+    );
+  }
+  // The probe SETTLED to an error (host unreachable, gh/git probe timed out). The
+  // tier stays unknowable, so read a static "Unknown" - NEVER an infinite spinner.
+  // Like a pending row, this row is excluded from the green / tier-filtered cohorts
+  // upstream; a refresh or scrolling it back into view retries the probe.
+  if (props.state === "unknown") {
+    return (
+      <Badge
+        variant="outline"
+        className="gap-1 font-medium border-border/40 bg-muted/20 text-muted-foreground/80"
+        data-testid="worktree-tier-pill"
+        data-tier="unknown"
+        title="Activity status couldn't be loaded. Refresh or scroll to retry."
+      >
+        <HelpCircle className="size-3" aria-hidden />
+        Unknown
       </Badge>
     );
   }

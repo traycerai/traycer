@@ -78,6 +78,41 @@ export function useWorktreeListQueryPerf(input: {
 }
 
 /**
+ * Emits `worktree.enrich_settle` once per per-viewport enrichment settle window -
+ * the transition from "some per-path enrichment query fetching" to "none". Carries
+ * how many paths the window probed and how many SETTLED to an error, so a
+ * wholesale enrichment failure (e.g. every per-path RPC timing out on a gh network
+ * stall) is visible in `traycer-perf.ndjson` instead of only showing up as
+ * infinite "Checking…" spinners with no trace. `durationMs` spans from the first
+ * in-flight query to the settle, measured in the renderer (includes scheduling).
+ *
+ * Per-query error logging is NOT done here - the app's shared `QueryCache.onError`
+ * already warns each failed request; this is purely the aggregate perf signal.
+ */
+export function useWorktreeEnrichSettlePerf(input: {
+  readonly fetching: boolean;
+  readonly pathCount: number;
+  readonly erroredCount: number;
+}): void {
+  const { fetching, pathCount, erroredCount } = input;
+  const startRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (fetching) {
+      if (startRef.current === null) startRef.current = performance.now();
+      return;
+    }
+    const started = startRef.current;
+    if (started === null) return;
+    startRef.current = null;
+    logPerfEvent("worktree.enrich_settle", {
+      pathCount,
+      erroredCount,
+      durationMs: roundPerfMs(performance.now() - started),
+    });
+  }, [fetching, pathCount, erroredCount]);
+}
+
+/**
  * Emits `worktree.first_paint` once, the first time a non-empty list has
  * painted after the panel mounted (`painted` = query succeeded with rows).
  */
