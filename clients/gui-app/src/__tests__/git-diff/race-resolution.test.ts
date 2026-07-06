@@ -51,7 +51,11 @@ describe("race-resolution: Q20 invalidate-then-write race", () => {
       hostId: "host-1",
       runningDir: "/repo",
       requestFiles: [
-        { filePath: "foo.ts", previousPath: null, stage: "unstaged" },
+        {
+          filePath: "foo.ts",
+          previousPath: null,
+          stage: "unstaged",
+        },
       ],
       ignoreWhitespace: false,
       diffs: [
@@ -128,8 +132,16 @@ describe("race-resolution: Q20 invalidate-then-write race", () => {
       hostId: "d",
       runningDir: "/r",
       requestFiles: [
-        { filePath: "file1.ts", previousPath: null, stage: "staged" },
-        { filePath: "file2.ts", previousPath: null, stage: "staged" },
+        {
+          filePath: "file1.ts",
+          previousPath: null,
+          stage: "staged",
+        },
+        {
+          filePath: "file2.ts",
+          previousPath: null,
+          stage: "staged",
+        },
       ],
       ignoreWhitespace,
       diffs: [

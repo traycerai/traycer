@@ -15,6 +15,34 @@ export interface GitFlatFileListProps {
   readonly pathRangesByPath: ReadonlyMap<string, HighlightRanges>;
   /** Path of the canvas's focused diff file when it lives in this section. */
   readonly activeFilePath: string | null;
+  readonly virtualized: boolean;
+  readonly nestedRows: boolean;
+}
+
+interface GitFlatFileListItemProps {
+  readonly epicId: string;
+  readonly viewTabId: string;
+  readonly hostId: string;
+  readonly runningDir: string;
+  readonly file: GitChangedFile;
+  readonly activeFilePath: string | null;
+  readonly pathRangesByPath: ReadonlyMap<string, HighlightRanges>;
+  readonly nestedRows: boolean;
+}
+
+function GitFlatFileListItem(props: GitFlatFileListItemProps): ReactNode {
+  return (
+    <FileRow
+      epicId={props.epicId}
+      viewTabId={props.viewTabId}
+      hostId={props.hostId}
+      runningDir={props.runningDir}
+      file={props.file}
+      active={props.file.path === props.activeFilePath}
+      pathRanges={props.pathRangesByPath.get(props.file.path) ?? NO_HIGHLIGHT}
+      nested={props.nestedRows}
+    />
+  );
 }
 
 export function GitFlatFileList(props: GitFlatFileListProps): ReactNode {
@@ -58,23 +86,52 @@ export function GitFlatFileList(props: GitFlatFileListProps): ReactNode {
 
   const renderItem = useCallback(
     (_index: number, file: GitChangedFile) => (
-      <FileRow
+      <GitFlatFileListItem
         epicId={epicId}
         viewTabId={viewTabId}
         hostId={hostId}
         runningDir={runningDir}
         file={file}
-        active={file.path === activeFilePath}
-        pathRanges={pathRangesByPath.get(file.path) ?? NO_HIGHLIGHT}
+        activeFilePath={activeFilePath}
+        pathRangesByPath={pathRangesByPath}
+        nestedRows={props.nestedRows}
       />
     ),
-    [activeFilePath, hostId, epicId, pathRangesByPath, runningDir, viewTabId],
+    [
+      activeFilePath,
+      hostId,
+      epicId,
+      pathRangesByPath,
+      props.nestedRows,
+      runningDir,
+      viewTabId,
+    ],
   );
 
   const itemKey = useCallback(
     (_index: number, file: GitChangedFile) => file.path,
     [],
   );
+
+  if (!props.virtualized) {
+    return (
+      <div data-testid="git-flat-file-list">
+        {files.map((file) => (
+          <GitFlatFileListItem
+            key={file.path}
+            epicId={epicId}
+            viewTabId={viewTabId}
+            hostId={hostId}
+            runningDir={runningDir}
+            file={file}
+            activeFilePath={activeFilePath}
+            pathRangesByPath={pathRangesByPath}
+            nestedRows={props.nestedRows}
+          />
+        ))}
+      </div>
+    );
+  }
 
   return (
     <Virtuoso

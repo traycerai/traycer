@@ -2,6 +2,7 @@ import type { EpicNodeKind } from "@/lib/artifacts/node-display";
 import { makeLiteralGuard } from "@/lib/type-guard";
 import type { SnapshotSourceBlockIds } from "@/lib/chat/snapshot-source-block-ids";
 import type { GitStage } from "@traycer/protocol/host";
+import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 import type {
   EdgeDropPosition,
   SizesByGroupId,
@@ -79,6 +80,12 @@ export interface EpicArtifactRef {
   readonly type: RecordBackedEpicNodeKind;
   readonly name: string;
   readonly hostId: string;
+  /**
+   * Optimistic terminal-agent placeholders can render the provider brand before
+   * the durable tui-agent record projects. The persisted record remains the
+   * authority once available.
+   */
+  readonly pendingTuiHarnessId?: TuiHarnessId;
 }
 
 /**

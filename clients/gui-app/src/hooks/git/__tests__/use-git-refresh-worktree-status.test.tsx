@@ -6,12 +6,32 @@ import React from "react";
 import { gitQueryKeys } from "@/lib/query-keys/git-query-keys";
 import { useGitRefreshWorktreeStatus } from "../use-git-refresh-worktree-status";
 
-const mockClient = {
+const defaultHostClient = {
   request: vi.fn(),
+  label: "default",
 };
 
+const hostBClient = {
+  request: vi.fn(),
+  label: "host-B",
+};
+
+const directoryEntries = new Map<string, { hostId: string }>([
+  ["host-B", { hostId: "host-B" }],
+]);
+
 vi.mock("@/lib/host", () => ({
-  useHostClient: () => mockClient,
+  useHostClient: () => defaultHostClient,
+  useHostDirectory: () => ({
+    findById: (hostId: string) => directoryEntries.get(hostId) ?? null,
+  }),
+}));
+
+vi.mock("@/hooks/host/use-host-client-for", () => ({
+  buildTransientHostClient: (
+    globalClient: { label: string },
+    entry: { hostId: string },
+  ) => (entry.hostId === "host-B" ? hostBClient : globalClient),
 }));
 
 describe("useGitRefreshWorktreeStatus", () => {
@@ -37,7 +57,7 @@ describe("useGitRefreshWorktreeStatus", () => {
       repoMode: "normal" as const,
       repoState: { kind: "clean" as const },
     };
-    mockClient.request.mockResolvedValueOnce(response);
+    hostBClient.request.mockResolvedValueOnce(response);
 
     const { result } = renderHook(() => useGitRefreshWorktreeStatus(), {
       wrapper,
@@ -45,21 +65,74 @@ describe("useGitRefreshWorktreeStatus", () => {
 
     await act(async () => {
       await result.current.mutateAsync({
-        hostId: "host-1",
+        hostId: "host-B",
         runningDir: "/repo",
         ignoreWhitespace: false,
       });
     });
 
-    expect(mockClient.request).toHaveBeenCalledWith("git.listChangedFiles", {
-      hostId: "host-1",
+    expect(hostBClient.request).toHaveBeenCalledWith("git.listChangedFiles", {
+      hostId: "host-B",
       runningDir: "/repo",
       ignoreWhitespace: false,
+      includeSubmodules: false,
     });
     expect(
       queryClient.getQueryData(
-        gitQueryKeys.listChangedFiles("host-1", "/repo", false),
+        gitQueryKeys.listChangedFiles("host-B", "/repo", false),
       ),
     ).toEqual(response);
+  });
+
+  it("routes the request through the client for variables.hostId, not the default host client", async () => {
+    const response = {
+      runningDir: "/repo",
+      headSha: "abc123",
+      branch: "main",
+      files: [],
+      fingerprint: "fp-1",
+      repoMode: "normal" as const,
+      repoState: { kind: "clean" as const },
+    };
+    hostBClient.request.mockResolvedValueOnce(response);
+
+    const { result } = renderHook(() => useGitRefreshWorktreeStatus(), {
+      wrapper,
+    });
+
+    await act(async () => {
+      await result.current.mutateAsync({
+        hostId: "host-B",
+        runningDir: "/repo",
+        ignoreWhitespace: false,
+      });
+    });
+
+    expect(hostBClient.request).toHaveBeenCalledTimes(1);
+    expect(defaultHostClient.request).not.toHaveBeenCalled();
+  });
+
+  it("rejects and writes nothing to cache when variables.hostId has no reachable client", async () => {
+    const { result } = renderHook(() => useGitRefreshWorktreeStatus(), {
+      wrapper,
+    });
+
+    await act(async () => {
+      await expect(
+        result.current.mutateAsync({
+          hostId: "host-unreachable",
+          runningDir: "/repo",
+          ignoreWhitespace: false,
+        }),
+      ).rejects.toThrow();
+    });
+
+    expect(hostBClient.request).not.toHaveBeenCalled();
+    expect(defaultHostClient.request).not.toHaveBeenCalled();
+    expect(
+      queryClient.getQueryData(
+        gitQueryKeys.listChangedFiles("host-unreachable", "/repo", false),
+      ),
+    ).toBeUndefined();
   });
 });

@@ -25,7 +25,10 @@ export function DiffLoadingSkeleton(
   const config = VARIANT_CONFIG[props.variant];
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col items-stretch bg-background p-4">
+    <div
+      className="flex min-h-0 flex-1 flex-col items-stretch bg-background p-4"
+      data-testid="diff-loading-skeleton"
+    >
       <Skeleton className={config.headerClassName} />
       <div className={cn("space-y-2", config.rowSpacingClassName)}>
         {config.rowIds.map((rowId) => (
