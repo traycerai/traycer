@@ -87,7 +87,6 @@ import {
   useRenderedMessages,
   type RenderedMessagesDisplayContext,
 } from "@/stores/chats/rendered-messages";
-import { worktreeSetupInFlight } from "@/stores/chats/setup-card-rows";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useHostClient, useHostBinding } from "@/lib/host";
@@ -160,6 +159,7 @@ import {
 import {
   chatTileUiReducer,
   createInitialChatTileUiState,
+  normalizeInlineEditForSession,
   canModifyChatMessages,
   shouldGenerateChatTitleForSubmittedMessage,
   showRestoreResultToast,
@@ -1087,25 +1087,12 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     ],
   );
   const nextStepSettings = currentComposerSettings;
-  // Worktree setup in flight for THIS chat (creating / setting-up), from the
-  // same setup-card events the transcript renders. Authoritative for both the
-  // edit gate and the composer's fresh-send block during the setup window,
-  // where the host-owned runStatus desyncs. Memoized on events (a pure walk).
-  const setupInFlight = useMemo(
-    () =>
-      worktreeSetupInFlight(state.events, {
-        epicId: currentEpicId,
-        ownerId: node.id,
-        ownerKind: "chat",
-      }),
-    [state.events, currentEpicId, node.id],
-  );
-  const canModifyMessages = canModifyChatMessages({
-    canAct,
-    setupInFlight,
+  const editSettings = nextStepSettings;
+  const canModifyMessages = canModifyChatMessages({ canAct, state });
+  const activeInlineEdit = normalizeInlineEditForSession(
+    uiState.inlineEdit,
     state,
-  });
-  const activeInlineEdit = uiState.inlineEdit;
+  );
 
   const displayedMessages = useMemo(() => {
     if (activeInlineEdit === null) return renderedMessages;
@@ -1180,18 +1167,14 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     [chatActions],
   );
 
-  const {
-    messageActionsFor,
-    submitActiveMessageEdit,
-    cancelActiveMessageEdit,
-    revertOnEdit,
-  } = useChatMessageActions({
+  const { messageActionsFor, revertOnEdit } = useChatMessageActions({
     dispatchUi,
-    handle,
     activeInlineEdit,
     canModifyMessages,
     canAct,
     currentComposerSettings,
+    editSettings,
+    mentionRoots,
     currentEpicId,
     node,
     chatTitle: projectedChatTitle ?? state.chat?.title ?? null,
@@ -1204,7 +1187,6 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     setForkTarget,
     worktreeBinding: state.worktreeBinding,
     revertOnEditOpen: uiState.revertOnEditOpen,
-    replaceDraftContent,
   });
 
   const submitMessage = useCallback(
@@ -1232,16 +1214,6 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
         dispatchUi({ type: "setEditingQueueItemId", editingQueueItemId: null });
         return true;
       }
-      // Message-edit mode: the composer's draft replaces the target message
-      // (trim + resubmit host-side). Mutually exclusive with queue-edit mode
-      // via the UI reducer. Returns false when the revert-on-edit dialog
-      // opened, keeping the draft in place until the dialog decides.
-      if (activeInlineEdit !== null) {
-        return submitActiveMessageEdit({
-          content: input.content,
-          settings: input.settings,
-        });
-      }
       const expectedTitle = state.chat?.title ?? node.name;
       const shouldMarkTitlePending = shouldGenerateChatTitleForSubmittedMessage(
         {
@@ -1266,7 +1238,6 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     },
     [
       activeEditingQueueItemId,
-      activeInlineEdit,
       canAct,
       chatActions,
       node.id,
@@ -1275,7 +1246,6 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       state.chat,
       state.messages,
       state.pendingUserMessages,
-      submitActiveMessageEdit,
     ],
   );
   const sendNextStep = useCallback(
@@ -1490,10 +1460,6 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     ],
   );
 
-  // Boolean-only projection of the message-edit state: only open/close
-  // transitions matter to the composer (the pill), not which message is
-  // targeted, so the composer model never depends on the edit object itself.
-  const messageEditActive = activeInlineEdit !== null;
   const lowerComposer = useMemo(
     () => ({
       sessionSettingsSeed: state.currentComposerSettings ?? chatSettingsSeed,
@@ -1506,9 +1472,6 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       onSettingsChange: handleComposerSettingsChange,
       workspaceControls,
       workspaceAvailability,
-      messageEditActive,
-      onCancelMessageEdit: cancelActiveMessageEdit,
-      setupInFlight,
     }),
     [
       state.currentComposerSettings,
@@ -1522,9 +1485,6 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       handleComposerSettingsChange,
       workspaceControls,
       workspaceAvailability,
-      messageEditActive,
-      cancelActiveMessageEdit,
-      setupInFlight,
     ],
   );
 

@@ -53,7 +53,6 @@ import type { ContentBlock } from "@traycer/protocol/persistence/epic/schemas";
 import type { WorktreeBindingOwnerKind } from "@traycer/protocol/host/worktree-schemas";
 import {
   buildSetupCardRows,
-  setupRowsInFlight,
   type SetupCardRow,
 } from "@/stores/chats/setup-card-rows";
 
@@ -915,10 +914,26 @@ export function useRenderedMessages(
     // included so the indicator's `createdAt` floor sits above them and the row
     // sorts BELOW the just-sent message instead of jumping above it.
     // Suppress the pre-turn "Working…" indicator only while the LIVE setup
-    // lifecycle is in flight: the card itself stands in for the awaited turn.
-    // `setupRowsInFlight` is the shared signal (also gates the composer/edit in
-    // the chat tile) - see its doc for the `isActive` + per-workspace guards.
-    const setupGating = setupRowsInFlight(setupCardRows);
+    // lifecycle is in flight: the open (current) window has a workspace still
+    // `setting-up`, so the card itself stands in for the awaited turn. Two
+    // guards matter:
+    //  - `row.isActive` (NOT the row state): a window closed by a boundary
+    //    (`worktree.missing` / re-bind) can be stranded at `setting-up` when the
+    //    worktree vanished mid-setup, and that historical card must never gate a
+    //    later normal turn.
+    //  - per-workspace `setting-up` (NOT the rolled-up `aggregate.state`): the
+    //    rollup ranks `failed` above `setting-up`, so a multi-repo window with
+    //    one failed + one still-running repo rolls up to `failed`; keying off the
+    //    aggregate would wrongly un-suppress the indicator while a repo is still
+    //    in flight (a stray "Working…" beside the live card).
+    const setupGating = setupCardRows.some(
+      (row) =>
+        row.isActive &&
+        row.model.workspaces.some(
+          (workspace) =>
+            workspace.state === "creating" || workspace.state === "setting-up",
+        ),
+    );
     const trailing = setupGating
       ? []
       : renderPendingRunIndicator({
