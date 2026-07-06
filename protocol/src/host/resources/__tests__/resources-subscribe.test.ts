@@ -156,6 +156,32 @@ describe("resources.subscribe@1.0 server frames", () => {
       }),
     ).toThrow();
   });
+
+  it("rejects negative aggregate RSS values", () => {
+    expect(() =>
+      resourcesSubscribeServerFrameSchema.parse({
+        kind: "snapshot",
+        epicId: "epic-1",
+        sampledAt: 1_000,
+        app: null,
+        owners: [{ ...OWNER_FIXTURE, rssBytes: -1 }],
+        epic: null,
+        hasBinaryPayload: false,
+      }),
+    ).toThrow();
+
+    expect(() =>
+      resourcesSubscribeServerFrameSchema.parse({
+        kind: "snapshot",
+        epicId: "epic-1",
+        sampledAt: 1_000,
+        app: null,
+        owners: [],
+        epic: { ...EPIC_FIXTURE, rssBytes: -1 },
+        hasBinaryPayload: false,
+      }),
+    ).toThrow();
+  });
 });
 
 describe("resources.subscribe@1.0 client frames", () => {

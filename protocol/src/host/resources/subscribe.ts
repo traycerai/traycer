@@ -85,7 +85,7 @@ export const ownerResourceSnapshotSchema = z.object({
   activeProcessName: z.string().nullable(),
   processCount: z.number().int().nonnegative(),
   cpuPercent: z.number(),
-  rssBytes: z.number(),
+  rssBytes: z.number().int().nonnegative(),
   processes: z.array(resourceProcessSnapshotSchema),
 });
 export type OwnerResourceSnapshotWire = z.infer<
@@ -100,7 +100,7 @@ export const epicResourceSnapshotSchema = z.object({
   ownerCount: z.number().int().nonnegative(),
   processCount: z.number().int().nonnegative(),
   cpuPercent: z.number(),
-  rssBytes: z.number(),
+  rssBytes: z.number().int().nonnegative(),
 });
 export type EpicResourceSnapshotWire = z.infer<
   typeof epicResourceSnapshotSchema

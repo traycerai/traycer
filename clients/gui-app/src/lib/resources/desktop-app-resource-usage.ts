@@ -59,30 +59,44 @@ export function desktopAppResourceUsageFromMetrics(
   snapshot: DesktopProcessMetricsSnapshot,
   sampledAt: number,
 ): DesktopAppResourceUsage {
-  let main = EMPTY_GROUP;
-  let renderer = EMPTY_GROUP;
-  let other = EMPTY_GROUP;
-
-  for (const metric of snapshot.appMetrics) {
-    const usage = processMetricUsage(metric);
-    if (metric.type === "Browser") {
-      main = addProcessGroupUsage(main, usage);
-    } else if (isRendererProcessType(metric.type)) {
-      renderer = addProcessGroupUsage(renderer, usage);
-    } else {
-      other = addProcessGroupUsage(other, usage);
-    }
-  }
+  const groups = snapshot.appMetrics.reduce(
+    (current, metric) => {
+      const usage = processMetricUsage(metric);
+      if (metric.type === "Browser") {
+        return {
+          ...current,
+          main: addProcessGroupUsage(current.main, usage),
+        };
+      }
+      if (isRendererProcessType(metric.type)) {
+        return {
+          ...current,
+          renderer: addProcessGroupUsage(current.renderer, usage),
+        };
+      }
+      return {
+        ...current,
+        other: addProcessGroupUsage(current.other, usage),
+      };
+    },
+    { main: EMPTY_GROUP, renderer: EMPTY_GROUP, other: EMPTY_GROUP },
+  );
 
   return {
     sampledAt,
-    cpuPercent: main.cpuPercent + renderer.cpuPercent + other.cpuPercent,
-    rssBytes: main.rssBytes + renderer.rssBytes + other.rssBytes,
+    cpuPercent:
+      groups.main.cpuPercent +
+      groups.renderer.cpuPercent +
+      groups.other.cpuPercent,
+    rssBytes:
+      groups.main.rssBytes + groups.renderer.rssBytes + groups.other.rssBytes,
     processCount:
-      main.processCount + renderer.processCount + other.processCount,
-    main,
-    renderer,
-    other,
+      groups.main.processCount +
+      groups.renderer.processCount +
+      groups.other.processCount,
+    main: groups.main,
+    renderer: groups.renderer,
+    other: groups.other,
   };
 }
 

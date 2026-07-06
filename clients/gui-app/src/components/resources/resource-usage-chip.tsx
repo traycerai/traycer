@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { Cpu } from "lucide-react";
 import type { ResourceOwnerKindWire } from "@traycer/protocol/host/resources/subscribe";
 import {
@@ -14,6 +15,36 @@ import { cn } from "@/lib/utils";
 
 function pluralize(count: number, singular: string, plural: string): string {
   return count === 1 ? singular : plural;
+}
+
+function ResourceChipFrame(props: {
+  readonly slot: string;
+  readonly description: string;
+  readonly className: string | undefined;
+  readonly children: ReactNode;
+}) {
+  return (
+    <span
+      data-slot={props.slot}
+      title={props.description}
+      aria-label={props.description}
+      className={cn(
+        "inline-flex shrink-0 items-center gap-1 text-ui-xs tabular-nums text-muted-foreground",
+        props.className,
+      )}
+    >
+      <Cpu aria-hidden className="size-3 shrink-0" />
+      {props.children}
+    </span>
+  );
+}
+
+function ResourceChipSeparator() {
+  return (
+    <span aria-hidden className="text-muted-foreground/50">
+      ·
+    </span>
+  );
 }
 
 interface ResourceUsageChipProps {
@@ -39,26 +70,17 @@ export function ResourceUsageChip(props: ResourceUsageChipProps) {
   const description = `${props.label}: ${cpu} CPU, ${memory} memory, ${processes} ${processWord}`;
 
   return (
-    <span
-      data-slot="resource-usage-chip"
-      title={description}
-      aria-label={description}
-      className={cn(
-        "inline-flex shrink-0 items-center gap-1 text-ui-xs tabular-nums text-muted-foreground",
-        props.className,
-      )}
+    <ResourceChipFrame
+      slot="resource-usage-chip"
+      description={description}
+      className={props.className}
     >
-      <Cpu aria-hidden className="size-3 shrink-0" />
       <span>{cpu}</span>
-      <span aria-hidden className="text-muted-foreground/50">
-        ·
-      </span>
+      <ResourceChipSeparator />
       <span>{memory}</span>
-      <span aria-hidden className="text-muted-foreground/50">
-        ·
-      </span>
+      <ResourceChipSeparator />
       <span>{processes}</span>
-    </span>
+    </ResourceChipFrame>
   );
 }
 
@@ -154,37 +176,22 @@ export function TaskResourceSummaryChip(props: TaskResourceSummaryChipProps) {
   const description = `Task resource usage: ${cpu} CPU, ${memory} memory, ${trackedProcesses} ${trackedProcessWord}, ${openTerminals} ${terminalWord}, ${tuiAgents} ${tuiAgentWord}, ${guiAgents} ${guiAgentWord}`;
 
   return (
-    <span
-      data-slot="task-resource-summary-chip"
-      title={description}
-      aria-label={description}
-      className={cn(
-        "inline-flex shrink-0 items-center gap-1 text-ui-xs tabular-nums text-muted-foreground",
-        props.className,
-      )}
+    <ResourceChipFrame
+      slot="task-resource-summary-chip"
+      description={description}
+      className={props.className}
     >
-      <Cpu aria-hidden className="size-3 shrink-0" />
       <span>{cpu}</span>
-      <span aria-hidden className="text-muted-foreground/50">
-        ·
-      </span>
+      <ResourceChipSeparator />
       <span>{memory}</span>
-      <span aria-hidden className="text-muted-foreground/50">
-        ·
-      </span>
+      <ResourceChipSeparator />
       <span>{trackedProcesses} proc</span>
-      <span aria-hidden className="text-muted-foreground/50">
-        ·
-      </span>
+      <ResourceChipSeparator />
       <span>{openTerminals} term</span>
-      <span aria-hidden className="text-muted-foreground/50">
-        ·
-      </span>
+      <ResourceChipSeparator />
       <span>{tuiAgents} TUI</span>
-      <span aria-hidden className="text-muted-foreground/50">
-        ·
-      </span>
+      <ResourceChipSeparator />
       <span>{guiAgents} GUI</span>
-    </span>
+    </ResourceChipFrame>
   );
 }

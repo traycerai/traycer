@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "@tanstack/react-router";
+import { useNavigate, type UseNavigateResult } from "@tanstack/react-router";
 import { v4 as uuidv4 } from "uuid";
 import { useShallow } from "zustand/react/shallow";
 import {
@@ -65,6 +65,7 @@ import type {
 } from "@/stores/epics/canvas/types";
 
 type ResourceSortOption = "memory" | "cpu" | "name" | "tab";
+type NavigateFn = UseNavigateResult<string>;
 
 const SORT_LABELS: Record<ResourceSortOption, string> = {
   memory: "Memory",
@@ -110,6 +111,11 @@ interface OpenOwnerLocation {
 interface CanvasResourceIndex {
   readonly locationByOwner: ReadonlyMap<string, OpenOwnerLocation>;
   readonly tabOrderByOwner: ReadonlyMap<string, number>;
+}
+
+interface CanvasOwnerCandidate {
+  readonly key: string;
+  readonly location: OpenOwnerLocation | null;
 }
 
 interface OwnerDisplayRow {
@@ -738,35 +744,45 @@ function buildCanvasResourceIndex(
 ): CanvasResourceIndex {
   const locationByOwner = new Map<string, OpenOwnerLocation>();
   const tabOrderByOwner = new Map<string, number>();
-  let order = 0;
-
-  for (const tabId of canvas.openTabOrder) {
+  const candidates = canvas.openTabOrder.flatMap((tabId) => {
     const tab = canvas.tabsById[tabId];
     const state = canvas.canvasByTabId[tabId];
-    if (tab === undefined || state?.root === null || state === undefined) {
-      continue;
+    if (tab === undefined || state === undefined || state.root === null) {
+      return [];
     }
-    for (const pane of collectPanes(state.root)) {
-      for (const tileTabId of pane.tabInstanceIds) {
+    return collectPanes(state.root).flatMap((pane) =>
+      pane.tabInstanceIds.flatMap((tileTabId): CanvasOwnerCandidate[] => {
         const ref = state.tilesByInstanceId[tileTabId];
         const ownerKind =
           ref === undefined ? null : resourceOwnerKindForRef(ref);
-        if (ref === undefined || ownerKind === null) continue;
+        if (ref === undefined || ownerKind === null) return [];
         const key = ownerKey(ownerKind, ref.id);
-        if (!tabOrderByOwner.has(key)) tabOrderByOwner.set(key, order);
-        if (!locationByOwner.has(key) && isOwnerNodeRef(ref)) {
-          locationByOwner.set(key, {
-            epicId: tab.epicId,
-            tabId,
-            paneId: pane.id,
-            tileTabId,
-            ref,
-          });
-        }
-        order += 1;
-      }
+        return [
+          {
+            key,
+            location: isOwnerNodeRef(ref)
+              ? {
+                  epicId: tab.epicId,
+                  tabId,
+                  paneId: pane.id,
+                  tileTabId,
+                  ref,
+                }
+              : null,
+          },
+        ];
+      }),
+    );
+  });
+
+  candidates.forEach((candidate, order) => {
+    if (!tabOrderByOwner.has(candidate.key)) {
+      tabOrderByOwner.set(candidate.key, order);
     }
-  }
+    if (candidate.location !== null && !locationByOwner.has(candidate.key)) {
+      locationByOwner.set(candidate.key, candidate.location);
+    }
+  });
 
   return { locationByOwner, tabOrderByOwner };
 }
@@ -774,15 +790,15 @@ function buildCanvasResourceIndex(
 function buildRecordByOwner(
   canvas: CanvasResourceSnapshot,
 ): ReadonlyMap<string, EpicNodeRecord> {
-  const records = new Map<string, EpicNodeRecord>();
-  for (const entry of Object.entries(canvas.artifactTreeByEpicId)) {
-    const [_epicId, epicRecords] = entry;
-    for (const record of epicRecords ?? []) {
-      const kind = resourceOwnerKindForNodeType(record.type);
-      if (kind !== null) records.set(ownerKey(kind, record.id), record);
-    }
-  }
-  return records;
+  return new Map(
+    Object.values(canvas.artifactTreeByEpicId).flatMap((epicRecords) =>
+      (epicRecords ?? []).flatMap((record): [string, EpicNodeRecord][] => {
+        const kind = resourceOwnerKindForNodeType(record.type);
+        if (kind === null) return [];
+        return [[ownerKey(kind, record.id), record]];
+      }),
+    ),
+  );
 }
 
 function sortTaskRows(
@@ -839,7 +855,7 @@ function openResourceOwner(args: {
     paneId: string,
     tileTabId: string,
   ) => void;
-  readonly navigate: Parameters<typeof navigateToTabIntent>[0];
+  readonly navigate: NavigateFn;
 }): boolean {
   const location = args.row.location;
   if (location !== null) {

@@ -58,7 +58,10 @@ import { useTerminalList } from "@/hooks/terminal/use-terminal-list-query";
 import { useTerminalRename } from "@/hooks/terminal/use-terminal-rename-mutation";
 import { useHostClient } from "@/lib/host";
 import { isVisibleRawTerminalSession } from "@/lib/terminals/terminal-session-filters";
-import { terminalSessionTitle } from "@/lib/terminals/terminal-title";
+import {
+  deriveTitleSourceFromSessionTitle,
+  terminalSessionTitle,
+} from "@/lib/terminals/terminal-title";
 import { OwnerResourceChip } from "@/components/resources/resource-usage-chip";
 import { cn } from "@/lib/utils";
 import {
@@ -429,7 +432,10 @@ function TerminalRow(props: TerminalRowProps) {
 }
 
 function deriveTerminalLabel(session: TerminalSessionInfo): string {
-  return terminalSessionTitle(session);
+  return terminalSessionTitle({
+    title: session.title,
+    activeProcessName: session.activeProcessName,
+  });
 }
 
 function makeTerminalRef(
@@ -442,7 +448,7 @@ function makeTerminalRef(
     instanceId,
     type: "terminal",
     name: deriveTerminalLabel(session),
-    titleSource: session.title === null ? "default" : "manual",
+    titleSource: deriveTitleSourceFromSessionTitle(session.title),
     hostId,
     cwd: session.cwd,
   };

@@ -517,24 +517,54 @@ export function useEpicLiveArtifactTitle(
  * MUST read through this hook - never the raw `node.name` - so the resolve
  * cannot be forgotten in one place.
  */
-export function useEpicTabDisplayTitle(node: {
+type EpicTabDisplayTitleNode = {
+  readonly id: string;
+  readonly name: string;
+  readonly type: string | undefined;
+  readonly instanceId: string | undefined;
+  readonly titleSource: TerminalTitleSource | undefined;
+};
+
+type EpicTabDisplayTitleInputNode = {
   readonly id: string;
   readonly name: string;
   readonly type?: string | undefined;
   readonly instanceId?: string | undefined;
   readonly titleSource?: TerminalTitleSource | undefined;
-}): string {
-  const liveArtifactTitle = useEpicLiveArtifactTitle(node.id);
-  const liveTerminalTitle = useLiveTerminalTabTitle(node);
-  return liveArtifactTitle ?? liveTerminalTitle ?? node.name;
+};
+
+type TerminalTabTitleNode = Pick<
+  EpicTabDisplayTitleNode,
+  "instanceId" | "name" | "titleSource" | "type"
+>;
+
+type TerminalTabTitleHandleNode = Pick<
+  EpicTabDisplayTitleNode,
+  "name" | "titleSource"
+>;
+
+export function useEpicTabDisplayTitle(
+  node: EpicTabDisplayTitleInputNode,
+): string {
+  const normalizedNode = normalizeEpicTabDisplayTitleNode(node);
+  const liveArtifactTitle = useEpicLiveArtifactTitle(normalizedNode.id);
+  const liveTerminalTitle = useLiveTerminalTabTitle(normalizedNode);
+  return liveArtifactTitle ?? liveTerminalTitle ?? normalizedNode.name;
 }
 
-function useLiveTerminalTabTitle(node: {
-  readonly name: string;
-  readonly type?: string | undefined;
-  readonly instanceId?: string | undefined;
-  readonly titleSource?: TerminalTitleSource | undefined;
-}): string | null {
+function normalizeEpicTabDisplayTitleNode(
+  node: EpicTabDisplayTitleInputNode,
+): EpicTabDisplayTitleNode {
+  return {
+    id: node.id,
+    name: node.name,
+    type: node.type,
+    instanceId: node.instanceId,
+    titleSource: node.titleSource,
+  };
+}
+
+function useLiveTerminalTabTitle(node: TerminalTabTitleNode): string | null {
   const terminalInstanceId =
     node.type === "terminal" && node.instanceId !== undefined
       ? node.instanceId
@@ -559,10 +589,7 @@ function useLiveTerminalTabTitle(node: {
 
 function terminalTabTitleFromHandle(
   handle: TerminalSessionStoreHandle | null,
-  node: {
-    readonly name: string;
-    readonly titleSource?: TerminalTitleSource | undefined;
-  },
+  node: TerminalTabTitleHandleNode,
 ): string | null {
   if (node.titleSource === "manual") return node.name;
   if (handle === null) return null;

@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   desktopAppResourceUsageFromMetrics,
+  getDesktopDiagnosticsBridge,
   type DesktopProcessMetricsSnapshot,
 } from "@/lib/resources/desktop-app-resource-usage";
 
@@ -9,6 +10,52 @@ function snapshot(
 ): DesktopProcessMetricsSnapshot {
   return { appMetrics };
 }
+
+function setRunnerHost(value: object): void {
+  Object.defineProperty(globalThis, "runnerHost", {
+    configurable: true,
+    value,
+  });
+}
+
+afterEach(() => {
+  Reflect.deleteProperty(globalThis, "runnerHost");
+});
+
+describe("getDesktopDiagnosticsBridge", () => {
+  it("returns the diagnostics bridge when getMetrics is present", () => {
+    const getMetrics = vi.fn(() => Promise.resolve(snapshot([])));
+    setRunnerHost({
+      platform: {
+        diagnostics: {
+          getMetrics,
+        },
+      },
+    });
+
+    expect(getDesktopDiagnosticsBridge()).toEqual({ getMetrics });
+  });
+
+  it("returns null when runnerHost is missing", () => {
+    expect(getDesktopDiagnosticsBridge()).toBeNull();
+  });
+
+  it("returns null for missing platform diagnostics", () => {
+    setRunnerHost({ platform: {} });
+
+    expect(getDesktopDiagnosticsBridge()).toBeNull();
+  });
+
+  it("returns null for malformed diagnostics", () => {
+    setRunnerHost({
+      platform: {
+        diagnostics: {},
+      },
+    });
+
+    expect(getDesktopDiagnosticsBridge()).toBeNull();
+  });
+});
 
 describe("desktopAppResourceUsageFromMetrics", () => {
   it("groups Electron app metrics into main, renderer, and other usage", () => {

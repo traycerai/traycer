@@ -118,7 +118,7 @@ vi.mock("@/stores/epics/canvas/store", () => {
   return { useEpicCanvasStore };
 });
 
-function process(
+function resourceProcess(
   over: Partial<ResourceProcessSnapshotWire>,
 ): ResourceProcessSnapshotWire {
   return {
@@ -137,7 +137,7 @@ function app(): AppResourceSnapshotWire {
   return {
     sampledAt: 1_000,
     hostTotalMemoryBytes: 2 * 1024 * 1024 * 1024,
-    process: process({}),
+    process: resourceProcess({}),
     processCount: 1,
     cpuPercent: 1,
     rssBytes: 20 * 1024 * 1024,
@@ -161,7 +161,7 @@ function owner(
     cpuPercent: 12,
     rssBytes: 100 * 1024 * 1024,
     processes: [
-      process({
+      resourceProcess({
         pid: 100,
         rootPid: 100,
         name: "zsh",
@@ -169,7 +169,7 @@ function owner(
         cpuPercent: 2,
         rssBytes: 40 * 1024 * 1024,
       }),
-      process({
+      resourceProcess({
         pid: 101,
         parentPid: 100,
         rootPid: 100,
