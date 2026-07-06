@@ -1991,19 +1991,21 @@ type WorktreeDeleteClass =
 
 function worktreeDeleteClass(entry: WorktreeHostEntryV11): WorktreeDeleteClass {
   const status = entry.branchStatus;
-  // Merged = host-validated PR (`prState==="merged" && mergedHeadShaMatches`) OR
-  // local ancestry. Sourced the same way as the shared classifier so the copy
-  // never disagrees with the row pill.
-  const merged =
-    (entry.prState === "merged" && entry.mergedHeadShaMatches) ||
-    (status !== null && status.mergedIntoDefault);
+  // Sourced with the SAME precedence as the shared classifier so the copy never
+  // disagrees with the row pill: PR-merged is authoritative and highest;
+  // at-base sits ABOVE local ancestry (a never-touched worktree's base is in the
+  // default, so it is also mergedIntoDefault - it must read "at base commit", not
+  // "merged"); local ancestry is the genuine-merge case.
+  const mergedByPr = entry.prState === "merged" && entry.mergedHeadShaMatches;
+  const mergedLocal = status !== null && status.mergedIntoDefault;
   if (entry.uncommittedCount > 0) return "dirty";
   if (entry.branch === null) return "detached";
   // Proven no-loss states before the ahead-based "unmerged" bucket: a
   // squash-merged PR is locally "ahead" of default yet proven landed, so it must
   // read "merged", never "unmerged"; an at-base worktree lost nothing.
-  if (merged) return "merged";
+  if (mergedByPr) return "merged";
   if (entry.atBaseCommit) return "at-base";
+  if (mergedLocal) return "merged";
   // Reaching here the row is neither merged nor at-base. Not proven at the
   // upstream tip: real local-only commits (`ahead > 0`) OR a never-pushed branch
   // with no upstream to prove them absent (`ahead === null`). Both are

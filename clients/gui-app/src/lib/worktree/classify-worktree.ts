@@ -81,15 +81,21 @@ export function worktreeTierRank(tier: WorktreeTier): number {
  *     do NOT extend the new positive-proof greens to detached HEADs in this pass
  *     (a conservative, never-false-green choice - see report notes).
  *  5. `prState === "merged" && mergedHeadShaMatches` → **merged** (green, PR
- *     provenance). The host already validated the live HEAD is the merged SHA, so
- *     the pure client never needs the SHA. A merged PR state WITHOUT the live-HEAD
- *     match does NOT green - it falls through.
- *  6. `branchStatus.mergedIntoDefault === true` → **merged** (green, local
- *     ancestry). Proof stands regardless of owners and of any upstream - a
- *     never-pushed branch whose HEAD is contained in the default lands here.
- *  7. `atBaseCommit === true` → **at-base-commit** (green). Host-computed:
- *     `HEAD === baseSha && clean && no reflog commits`. Deleting loses nothing
- *     committed. Applies regardless of owners or an open PR.
+ *     provenance). Highest green - the authoritative signal that the work landed.
+ *     The host already validated the live HEAD is the merged SHA, so the pure
+ *     client never needs the SHA. A merged PR state WITHOUT the live-HEAD match
+ *     does NOT green - it falls through.
+ *  6. `atBaseCommit === true` → **at-base-commit** (green). Host-computed:
+ *     `HEAD === baseSha && clean && no reflog commits`. Checked BEFORE local
+ *     ancestry ON PURPOSE: a Traycer worktree is branched off the default, so a
+ *     PRISTINE never-touched worktree has `baseSha ∈ default` → `mergedIntoDefault`
+ *     is ALSO true. Ordering at-base first makes the common untouched worktree read
+ *     the honest "At base commit" instead of the misnomer "Merged". Applies
+ *     regardless of owners or an open PR; deleting loses nothing committed.
+ *  7. `branchStatus.mergedIntoDefault === true` → **merged** (green, local
+ *     ancestry). Now correctly rare: only a branch that actually ADVANCED from its
+ *     base and is now contained in the default lands here (a genuine merge). Proof
+ *     stands regardless of owners and of any upstream.
  *  8. clean + non-null status + `ahead === 0` + no owners → **unreferenced**
  *     (quiet-green; a PROVEN upstream-tip branch nothing references).
  *  9. else → **review** (null status, `ahead === null`/`> 0` unmerged,
@@ -106,11 +112,14 @@ export function classifyWorktreeTier(
   if (!entry.gitRemovable) return "orphaned";
   if (entry.uncommittedCount > 0) return "review";
   if (entry.branch === null) return "review";
-  // Positive, host-validated green proofs, in precedence order.
+  // Positive, host-validated green proofs, in precedence order. `atBaseCommit`
+  // sits ABOVE local ancestry so a never-touched worktree (whose base is in the
+  // default, making `mergedIntoDefault` also true) reads the honest "At base
+  // commit", not "Merged". A validated merged PR still wins over both.
   if (entry.prState === "merged" && entry.mergedHeadShaMatches) return "merged";
+  if (entry.atBaseCommit) return "at-base-commit";
   const status = entry.branchStatus;
   if (status !== null && status.mergedIntoDefault) return "merged";
-  if (entry.atBaseCommit) return "at-base-commit";
   if (status !== null && status.ahead === 0 && entry.owners.length === 0) {
     return "unreferenced";
   }

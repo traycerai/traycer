@@ -161,10 +161,13 @@ describe("classifyWorktreeTier - precedence truth table (first match wins)", () 
       }),
       tier: "review",
     },
-    // --- Merged (local ancestry) ---
+    // --- Merged (local ancestry) --- (worked-then-merged: NOT at base)
     {
-      name: "clean + mergedIntoDefault, no owners → merged (local)",
-      entry: entry({ branchStatus: status({ mergedIntoDefault: true }) }),
+      name: "clean + mergedIntoDefault, no owners, NOT at base → merged (local)",
+      entry: entry({
+        atBaseCommit: false,
+        branchStatus: status({ mergedIntoDefault: true }),
+      }),
       tier: "merged",
     },
     {
@@ -219,10 +222,24 @@ describe("classifyWorktreeTier - precedence truth table (first match wins)", () 
       tier: "review",
     },
     {
-      name: "merged proof beats at-base when both set",
+      // PRECEDENCE PIN: the common never-touched worktree. Its base is in the
+      // default branch, so `mergedIntoDefault` is ALSO true - at-base MUST win so
+      // it reads the honest "At base commit", never the "Merged" misnomer.
+      name: "at-base beats merged(local) when both set → at-base-commit (never Merged)",
       entry: entry({
         atBaseCommit: true,
         branchStatus: status({ mergedIntoDefault: true }),
+      }),
+      tier: "at-base-commit",
+    },
+    {
+      // A validated merged PR is authoritative and still wins over at-base.
+      name: "merged PR beats at-base when both set → merged (PR is highest)",
+      entry: entry({
+        atBaseCommit: true,
+        prState: "merged",
+        mergedHeadShaMatches: true,
+        prNumber: 9,
       }),
       tier: "merged",
     },
