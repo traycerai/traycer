@@ -78,12 +78,6 @@ export const worktreeBindingEntrySchema = z.object({
   setupExitCode: z.number().int().nullable(),
   setupFailedAt: z.number().nullable(),
   createdAt: z.number(),
-  // HEAD SHA captured by `git rev-parse HEAD` right after `git worktree add`,
-  // before setup runs - the anchor for the "At base commit" signal
-  // (`HEAD === baseSha && clean && no reflog commits`). `null` for imported
-  // worktrees: their creation point was never observed, so they get no at-base
-  // label. Nullable, never optional.
-  baseSha: z.string().nullable(),
   // Submodule branches this worktree owns (see `worktreeOwnedSubmoduleSchema`).
   // `[]` when the repo has no submodules, or none were checked out on a branch.
   // Not optional - the host persistence migration (binding v1 -> v2) backfills
@@ -705,11 +699,6 @@ export const worktreeHostEntrySchemaV11 = worktreeHostEntrySchema.extend({
   // Worktree dir birthtime (fs stat) - a fallback age signal. `null` when stat
   // is unavailable.
   createdAt: z.number().nullable(),
-  // Base SHA captured at creation (mirrored from the binding), surfaced on the
-  // listing so the client can prove "At base commit" without a binding read.
-  // Always populated regardless of `includeActivity` (a cheap binding read, like
-  // `owners`); `null` only for imported worktrees or pre-migration bindings.
-  baseSha: z.string().nullable(),
   // Superproject PR facts from the host's best-effort `gh` probe. When the
   // branch WAS probed but no green PR resulted - no PR found, or `gh`
   // absent/unauth/failed (indistinguishable to the host) - `prState` is `"none"`
@@ -725,14 +714,20 @@ export const worktreeHostEntrySchemaV11 = worktreeHostEntrySchema.extend({
   // Per-owned-submodule merge facts for the True-AND Task rollup. `[]` when the
   // worktree owns no submodule branches or `includeActivity` is false.
   submodules: z.array(worktreeSubmoduleMergeFactSchema),
-  // Host-computed "At base commit" signal: the worktree was created and never
-  // advanced from its birth commit (`HEAD === baseSha && clean && no HEAD-reflog
-  // commit entries since creation`). The pure client classifier greens
-  // "At base commit" on this boolean alone - it never sees `baseSha`/HEAD. The
-  // host folds in the reflog-no-movement guard so a commit-then-reset-to-base
-  // worktree is NOT labelled at-base. `false` whenever unproven: an imported
-  // worktree (no `baseSha`), a moved / dirty worktree, or `includeActivity` false
-  // (the live HEAD read is gated with the other activity probes).
+  // Host-computed "At base commit" signal: the worktree is untouched - clean,
+  // its HEAD is contained in the default branch, and its HEAD reflog carries no
+  // authored-`commit` entry. Derived retroactively from signals available for
+  // EVERY worktree (no creation-time anchor), so it works for pre-existing and
+  // imported worktrees too:
+  //   `uncommittedCount === 0 && branchStatus.mergedIntoDefault === true &&
+  //    hasReflogCommits === false`.
+  // `mergedIntoDefault` is the REQUIRED safety floor (HEAD contained in default
+  // ⇒ deleting loses nothing); the reflog-no-`commit` guard only splits the
+  // LABEL (an untouched worktree reads "At base commit" instead of "Merged").
+  // The pure client classifier greens "At base commit" on this boolean alone.
+  // FAILS CLOSED: an unknown reflog (`null`) is NOT at-base. `false` whenever
+  // unproven: dirty, HEAD not contained in default, an authored-commit reflog
+  // entry, or `includeActivity` false (the probes are gated).
   atBaseCommit: z.boolean(),
 });
 export type WorktreeHostEntryV11 = z.infer<typeof worktreeHostEntrySchemaV11>;

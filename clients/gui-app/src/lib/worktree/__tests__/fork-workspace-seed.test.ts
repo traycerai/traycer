@@ -26,7 +26,6 @@ function bindingEntry(
     setupExitCode: null,
     setupFailedAt: null,
     createdAt: 0,
-    baseSha: null,
     ownedSubmodules: [],
     ...overrides,
   };

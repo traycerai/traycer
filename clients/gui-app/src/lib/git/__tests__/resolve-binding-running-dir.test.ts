@@ -17,7 +17,6 @@ describe("resolveBindingRunningDir", () => {
       setupExitCode: 0,
       setupFailedAt: null,
       createdAt: Date.now(),
-      baseSha: null,
       ownedSubmodules: [],
     };
 
@@ -40,7 +39,6 @@ describe("resolveBindingRunningDir", () => {
       setupExitCode: null,
       setupFailedAt: null,
       createdAt: Date.now(),
-      baseSha: null,
       ownedSubmodules: [],
     };
 
@@ -61,7 +59,6 @@ describe("resolveBindingRunningDir", () => {
       setupExitCode: null,
       setupFailedAt: null,
       createdAt: Date.now(),
-      baseSha: null,
       ownedSubmodules: [],
     };
 
@@ -82,7 +79,6 @@ describe("resolveBindingRunningDir", () => {
       setupExitCode: null,
       setupFailedAt: null,
       createdAt: Date.now(),
-      baseSha: null,
       ownedSubmodules: [],
     };
 

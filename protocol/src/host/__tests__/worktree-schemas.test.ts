@@ -42,10 +42,9 @@ const v10Entry = {
 };
 
 // The merge-provenance fields in their absent shape - what an unprobed entry
-// (and the v1.0 -> v1.1 upgrade) fills in: no baseSha, no PR bundle, no owned
-// submodules. `mergedHeadShaMatches` is `false` (not null) - it is a boolean.
+// (and the v1.0 -> v1.1 upgrade) fills in: no PR bundle, no owned submodules,
+// not at-base. `mergedHeadShaMatches` is `false` (not null) - it is a boolean.
 const mergeProvenanceAbsent = {
-  baseSha: null,
   prState: null,
   prNumber: null,
   prUrl: null,
@@ -75,7 +74,6 @@ describe("worktreeHostEntrySchemaV11", () => {
       ],
       branchStatus: { ahead: 2, behind: 1, mergedIntoDefault: false },
       createdAt: 1_698_000_000_000,
-      baseSha: "a".repeat(40),
       prState: "merged" as const,
       prNumber: 123,
       prUrl: "https://github.com/acme/web/pull/123",
@@ -110,7 +108,6 @@ describe("worktreeHostEntrySchemaV11", () => {
     expect(parsed.owners).toEqual([]);
     expect(parsed.branchStatus).toBeNull();
     expect(parsed.lastActivityAt).toBeNull();
-    expect(parsed.baseSha).toBeNull();
     expect(parsed.prState).toBeNull();
     expect(parsed.mergedHeadShaMatches).toBe(false);
     expect(parsed.submodules).toEqual([]);
@@ -132,18 +129,16 @@ describe("worktreeHostEntrySchemaV11", () => {
     });
   });
 
-  it("parses an at-base entry (baseSha present, no PR, atBaseCommit true)", () => {
+  it("parses an at-base entry (contained in default, no PR, atBaseCommit true)", () => {
     const parsed = worktreeHostEntrySchemaV11.parse({
       ...v10Entry,
       lastActivityAt: null,
       owners: [],
-      branchStatus: { ahead: null, behind: null, mergedIntoDefault: false },
+      branchStatus: { ahead: null, behind: null, mergedIntoDefault: true },
       createdAt: null,
       ...mergeProvenanceAbsent,
-      baseSha: "b".repeat(40),
       atBaseCommit: true,
     });
-    expect(parsed.baseSha).toBe("b".repeat(40));
     expect(parsed.prState).toBeNull();
     expect(parsed.submodules).toEqual([]);
     expect(parsed.atBaseCommit).toBe(true);
@@ -261,9 +256,9 @@ describe("worktree.listAllForHost v1.0 <-> v1.1 negotiation", () => {
 });
 
 // A binding entry as an older (pre-migration) row would carry it, before the
-// merge-provenance fields existed. The host binding-v1->v2 migration backfills
-// `baseSha: null` / `ownedSubmodules: []`; here we assert the schema round-trips
-// both the backfilled-empty and the fully-populated shapes.
+// `ownedSubmodules` field existed. The host binding-v1->v2 migration backfills
+// `ownedSubmodules: []`; here we assert the schema round-trips both the
+// backfilled-empty and the fully-populated shapes.
 const bindingEntryBase = {
   workspacePath: "/Users/dev/acme/web",
   mode: "worktree" as const,
@@ -279,11 +274,10 @@ const bindingEntryBase = {
   createdAt: 1_700_000_000_000,
 };
 
-describe("worktreeBindingEntrySchema (merge-provenance additions)", () => {
-  it("round-trips a binding entry with baseSha + owned submodules", () => {
+describe("worktreeBindingEntrySchema (ownedSubmodules addition)", () => {
+  it("round-trips a binding entry with owned submodules", () => {
     const entry = {
       ...bindingEntryBase,
-      baseSha: "c".repeat(40),
       ownedSubmodules: [
         {
           repoIdentifier: { owner: "acme", repo: "protocol" },
@@ -297,18 +291,27 @@ describe("worktreeBindingEntrySchema (merge-provenance additions)", () => {
     expect(parsed1.ownedSubmodules).toHaveLength(1);
   });
 
-  it("accepts the backfilled-empty shape (null baseSha, no owned submodules)", () => {
+  it("accepts the backfilled-empty shape (no owned submodules)", () => {
     const parsed = worktreeBindingEntrySchema.parse({
       ...bindingEntryBase,
-      baseSha: null,
       ownedSubmodules: [],
     });
-    expect(parsed.baseSha).toBeNull();
     expect(parsed.ownedSubmodules).toEqual([]);
   });
 
-  it("rejects an entry missing the merge-provenance fields", () => {
-    // The fields are required (not optional) - a pre-migration row must be
+  it("strips a stray legacy baseSha key (retired field, no v2->v3 bump)", () => {
+    // A persisted v2 row written before baseSha was retired still carries the
+    // key; zod strips the now-unknown field on read, so no migration is needed.
+    const parsed = worktreeBindingEntrySchema.parse({
+      ...bindingEntryBase,
+      baseSha: "c".repeat(40),
+      ownedSubmodules: [],
+    });
+    expect("baseSha" in parsed).toBe(false);
+  });
+
+  it("rejects an entry missing ownedSubmodules", () => {
+    // The field is required (not optional) - a pre-migration row must be
     // backfilled by the host before it validates.
     expect(() => worktreeBindingEntrySchema.parse(bindingEntryBase)).toThrow();
   });

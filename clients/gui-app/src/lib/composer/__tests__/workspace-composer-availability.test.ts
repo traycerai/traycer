@@ -205,7 +205,6 @@ function bindingEntry(workspacePath: string): WorktreeBindingEntry {
     setupExitCode: null,
     setupFailedAt: null,
     createdAt: 1,
-    baseSha: null,
     ownedSubmodules: [],
   };
 }

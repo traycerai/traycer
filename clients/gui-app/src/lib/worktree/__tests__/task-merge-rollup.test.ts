@@ -56,7 +56,6 @@ function entry(over: Partial<WorktreeHostEntryV11>): WorktreeHostEntryV11 {
     lastActivityAt: null,
     branchStatus: null,
     createdAt: null,
-    baseSha: null,
     prState: null,
     prNumber: null,
     prUrl: null,

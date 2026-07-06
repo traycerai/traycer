@@ -42,7 +42,6 @@ function entry(over: Partial<WorktreeHostEntryV11>): WorktreeHostEntryV11 {
     // v1.1 merge-provenance fields default to the "no signal / v1.0 host" shape:
     // a null/false bundle that greens nothing. Each test opts into the fields it
     // exercises.
-    baseSha: null,
     prState: null,
     prNumber: null,
     prUrl: null,

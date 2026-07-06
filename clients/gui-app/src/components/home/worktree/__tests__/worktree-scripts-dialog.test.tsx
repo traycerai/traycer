@@ -241,7 +241,6 @@ function liveWorktreeBinding(): WorktreeBinding {
         setupExitCode: 1,
         setupFailedAt: 0,
         createdAt: 0,
-        baseSha: null,
         ownedSubmodules: [],
       },
     ],

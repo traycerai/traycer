@@ -85,12 +85,14 @@ export function worktreeTierRank(tier: WorktreeTier): number {
  *     The host already validated the live HEAD is the merged SHA, so the pure
  *     client never needs the SHA. A merged PR state WITHOUT the live-HEAD match
  *     does NOT green - it falls through.
- *  6. `atBaseCommit === true` → **at-base-commit** (green). Host-computed:
- *     `HEAD === baseSha && clean && no reflog commits`. Checked BEFORE local
- *     ancestry ON PURPOSE: a Traycer worktree is branched off the default, so a
- *     PRISTINE never-touched worktree has `baseSha ∈ default` → `mergedIntoDefault`
- *     is ALSO true. Ordering at-base first makes the common untouched worktree read
- *     the honest "At base commit" instead of the misnomer "Merged". Applies
+ *  6. `atBaseCommit === true` → **at-base-commit** (green). Host-computed
+ *     retroactively from signals every worktree carries: `clean && contained in
+ *     default (mergedIntoDefault) && no authored-commit reflog entry` ⇒ untouched.
+ *     Checked BEFORE local ancestry ON PURPOSE: an untouched worktree is contained
+ *     in the default, so `mergedIntoDefault` is ALSO true. Ordering at-base first
+ *     makes the common untouched worktree read the honest "At base commit" instead
+ *     of the misnomer "Merged". The reflog guard is the only thing splitting the
+ *     two labels - both share the `mergedIntoDefault` safety floor. Applies
  *     regardless of owners or an open PR; deleting loses nothing committed.
  *  7. `branchStatus.mergedIntoDefault === true` → **merged** (green, local
  *     ancestry). Now correctly rare: only a branch that actually ADVANCED from its

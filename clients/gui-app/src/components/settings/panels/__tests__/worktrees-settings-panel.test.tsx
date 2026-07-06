@@ -173,7 +173,6 @@ function entry(
     lastActivityAt: null,
     branchStatus: null,
     createdAt: null,
-    baseSha: null,
     prState: null,
     prNumber: null,
     prUrl: null,
