@@ -494,6 +494,46 @@ export function openTile(
   }
   const target = activePaneOrFirst(state);
   if (target === null) return state;
+
+  // Fill-in-place: a permanent open while the active tab is a blank "New tab"
+  // replaces that blank at its index rather than stacking a second tab (browser
+  // new-tab semantics; mirrors `openTileInPane`). Without this, opening content
+  // over the placeholder blank an empty epic seeds - e.g. a terminal-agent tile
+  // landing after `EmptyEpicBlankRoot` runs - leaves a phantom "New tab" beside
+  // it. Preview opens keep appending: a hover-preview must not consume a blank.
+  const active = preview ? null : resolveActiveTabInstance(target);
+  const activeRef =
+    active === null
+      ? null
+      : (state.tilesByInstanceId[active.instanceId] ?? null);
+  if (active !== null && activeRef !== null && isBlankTileRef(activeRef)) {
+    const tabInstanceIds = target.tabInstanceIds.map((id, index) =>
+      index === active.index ? node.instanceId : id,
+    );
+    const root = replacePane(state.root, target.id, (pane) => {
+      const nextPane = prunePaneActivationHistory(
+        {
+          ...pane,
+          tabInstanceIds,
+          activeTabId: node.instanceId,
+          previewTabId:
+            pane.previewTabId === active.instanceId ? null : pane.previewTabId,
+        },
+        tabInstanceIds,
+      );
+      return recordPaneActivation(nextPane, node.instanceId);
+    });
+    return {
+      ...state,
+      root,
+      activePaneId: target.id,
+      tilesByInstanceId: withTile(
+        withoutTiles(state.tilesByInstanceId, [active.instanceId]),
+        node,
+      ),
+    };
+  }
+
   const inserted = insertTabInstance(
     target,
     node.instanceId,

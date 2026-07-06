@@ -21,9 +21,11 @@ export function registerPerWindowStateIpc(bridge: RunnerIpcBridge): void {
   // changes (initial restore, move-tab) carry no origin and still push normally.
   //
   // `PerWindowState.update` emits "change" synchronously, so the listener below
-  // observes this flag within the same call and the `finally` clears it before
-  // control returns - no cross-update leakage.
-  let suppressEchoToWindowId: string | null = null;
+  // observes this set within the same call and the `finally` clears the entry
+  // before control returns. A per-window Set (rather than a single scalar)
+  // keeps suppression correct if two windows' updates ever interleave - e.g. if
+  // `update` becomes async - without one window clobbering another's flag.
+  const suppressEchoWindowIds = new Set<string>();
 
   bridge.handleInvoke(RunnerHostInvoke.perWindowStateGet, (event) => {
     const windowId = bridge.resolveSenderWindowId(event);
@@ -40,11 +42,11 @@ export function registerPerWindowStateIpc(bridge: RunnerIpcBridge): void {
         log.warn("[runner-ipc] perWindowState.update from unknown window", {});
         return;
       }
-      suppressEchoToWindowId = windowId;
+      suppressEchoWindowIds.add(windowId);
       try {
         bridge.perWindowState.update(windowId, parsePerWindowStatePatch(patch));
       } finally {
-        suppressEchoToWindowId = null;
+        suppressEchoWindowIds.delete(windowId);
       }
     },
   );
@@ -60,7 +62,7 @@ export function registerPerWindowStateIpc(bridge: RunnerIpcBridge): void {
 
   const onPerWindowStateChange = (change: PerWindowStateChange): void => {
     // Don't bounce a window's own update back to it (see suppress note above).
-    if (change.windowId === suppressEchoToWindowId) return;
+    if (suppressEchoWindowIds.has(change.windowId)) return;
     bridge.safeSendToWindow(
       change.windowId,
       RunnerHostEvent.perWindowStateChange,
