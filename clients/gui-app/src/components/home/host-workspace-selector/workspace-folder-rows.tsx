@@ -63,7 +63,9 @@ export function WorkspaceFolderRows(props: {
   >({
     client: hostClient,
     method: "worktree.listAllForHost",
-    params: { includeActivity: false },
+    // Whole-list mode (no per-viewport selection); this surface only reads the
+    // cheap base fields (uncommitted counts), so no activity enrichment.
+    params: { includeActivity: false, activityPaths: null },
     options: { enabled: hasAnyWorktrees && !props.readOnly },
   });
   const uncommittedByPath = useMemo(() => {

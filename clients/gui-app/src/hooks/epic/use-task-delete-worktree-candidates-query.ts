@@ -57,7 +57,9 @@ export function useTaskDeleteWorktreeCandidates(
   const query = useHostQuery({
     client,
     method: "worktree.listAllForHost",
-    params: { includeActivity: true },
+    // Whole-list mode (all worktrees), enriched: the candidate classifier needs
+    // every row's activity, not a viewport slice.
+    params: { includeActivity: true, activityPaths: null },
     options: { enabled: deletedEpicIds !== null },
   });
 

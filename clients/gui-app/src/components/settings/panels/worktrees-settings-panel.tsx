@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { toast } from "sonner";
 import {
   AlertTriangle,
@@ -89,6 +90,7 @@ import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { useHostClientFor } from "@/hooks/host/use-host-client-for";
 import { useHostQuery } from "@/hooks/host/use-host-query";
+import { useHostQueries } from "@/hooks/host/use-host-queries";
 import { useWorktreeDeleteStreamTransportFactory } from "@/lib/host/use-worktree-delete-stream-transport";
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
 import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
@@ -122,6 +124,21 @@ const WORKTREES_REFRESH_TIMEOUT_MS = 10_000;
 const EMPTY_REPO_KEY_SET: ReadonlySet<string> = new Set();
 const EMPTY_WORKTREES: readonly WorktreeHostEntryV11[] = [];
 const EMPTY_TASK_TITLES: ReadonlyMap<string, string> = new Map();
+const EMPTY_PATHS: readonly string[] = [];
+
+// Virtualization tuning. Row/header heights are estimates only - each rendered
+// item is measured (`virtualizer.measureElement`) so variable-height rows (a
+// wrapping Task-chip line, an optional facts line) still position correctly.
+// These are the one legitimately-fixed pixel constant in this surface: they seed
+// the window before the first measure, nothing more.
+const WORKTREE_ROW_ESTIMATE_PX = 88;
+const WORKTREE_REPO_HEADER_ESTIMATE_PX = 40;
+const WORKTREE_VIRTUAL_OVERSCAN = 8;
+// Coalesce the per-viewport enrichment fetch across a scroll gesture: collect the
+// on-screen row paths for this long before firing one batched activity query for
+// the paths not already enriched. One query per settle window, bounded by the
+// viewport - never the whole list.
+const WORKTREE_ENRICH_DEBOUNCE_MS = 80;
 
 /**
  * Host-wide worktree management. Lists every git worktree under the selected
@@ -160,7 +177,8 @@ export function WorktreesSettingsPanel(): ReactNode {
     <SettingsPanelShell
       title="Worktrees"
       description="Git worktrees Traycer created under ~/.traycer/worktrees on the selected host. Remove ones you no longer need - including orphans whose chat or agent was deleted."
-      bodyClassName="relative"
+      fillHeight
+      bodyClassName="relative max-h-[min(85vh,52rem)]"
     >
       <WorktreesBody
         client={client}
@@ -421,21 +439,19 @@ function HostSelect(props: {
 }
 
 /**
- * Two-phase worktree listing. The base leg (`includeActivity: false`) paints the
- * rows immediately - repo, branch, path, owning Task, uncommitted count - while
- * the activity leg (`includeActivity: true`) runs the heavy per-worktree gh PR +
- * git probes in the background and supersedes the base rows once it lands. On a
- * host with dozens of worktrees the activity leg is seconds of network work;
- * keeping it off first paint is the difference between an instant list and a
- * multi-second spinner (see the `worktree.first_paint` / `worktree.list_query`
- * perf telemetry).
+ * Base worktree listing - the instant, viewport-independent leg. `includeActivity:
+ * false, activityPaths: null` returns EVERY row with its cheap fields (repo,
+ * branch, path, owning Task, uncommitted count) and none of the per-worktree gh PR
+ * + git probes, so its cost does not scale with how much activity work the host
+ * has to do. The heavy activity probes are fetched lazily, only for the rows
+ * scrolled into view, by {@link useWorktreeActivityEnrichment} - so first paint is
+ * instant in ANY environment, no matter the total worktree count.
  */
 function useWorktreeListing(
   client: HostClient<HostRpcRegistry> | null,
   reachable: boolean,
 ): {
   readonly worktrees: readonly WorktreeHostEntryV11[];
-  readonly enriching: boolean;
   readonly isPending: boolean;
   readonly isError: boolean;
   readonly errorMessage: string | null;
@@ -446,32 +462,22 @@ function useWorktreeListing(
   const baseQuery = useHostQuery({
     client,
     method: "worktree.listAllForHost",
-    params: { includeActivity: false },
+    params: { includeActivity: false, activityPaths: null },
     options: { enabled: reachable },
   });
-  const activityQuery = useHostQuery({
-    client,
-    method: "worktree.listAllForHost",
-    // Enriched fields are null-tolerant (probes yield null on failure; a v1.0
-    // host bridges up to empty `owners` / null timestamps).
-    params: { includeActivity: true },
-    options: { enabled: reachable },
-  });
-  const worktrees =
-    activityQuery.data?.worktrees ??
-    baseQuery.data?.worktrees ??
-    EMPTY_WORKTREES;
-  // Perf telemetry (gated + non-throwing). First paint tracks the BASE leg (the
-  // real time-to-usable-list); the query leg tracks the enrichment cost.
+  const worktrees = baseQuery.data?.worktrees ?? EMPTY_WORKTREES;
+  // Perf telemetry (gated + non-throwing). Both legs now track the BASE query -
+  // the real time-to-usable-list, which is what "snappy in any environment" means.
   useWorktreeListQueryPerf({
-    fetchStatus: activityQuery.fetchStatus,
-    status: activityQuery.status,
+    includeActivity: false,
+    fetchStatus: baseQuery.fetchStatus,
+    status: baseQuery.status,
     worktreeCount: worktrees.length,
     submoduleCount: worktrees.reduce(
       (sum, entry) => sum + entry.submodules.length,
       0,
     ),
-    hasData: activityQuery.data !== undefined,
+    hasData: baseQuery.data !== undefined,
   });
   useWorktreeFirstPaintPerf({
     painted: baseQuery.isSuccess && worktrees.length > 0,
@@ -479,15 +485,104 @@ function useWorktreeListing(
   });
   return {
     worktrees,
-    // Tiers depend on the activity probes; while that leg is still in flight the
-    // pills show a pending state instead of a misleading base-only tier.
-    enriching: activityQuery.isPending,
     isPending: baseQuery.isPending,
     isError: baseQuery.isError,
     errorMessage: baseQuery.error?.message ?? null,
     isEmpty: baseQuery.isSuccess && worktrees.length === 0,
-    refresh: () => Promise.all([baseQuery.refetch(), activityQuery.refetch()]),
-    refreshing: baseQuery.isFetching || activityQuery.isFetching,
+    refresh: () => baseQuery.refetch(),
+    refreshing: baseQuery.isFetching,
+  };
+}
+
+/**
+ * Per-viewport lazy enrichment. The base list paints instantly with cheap fields;
+ * the expensive activity probes (git ahead/behind/merged, gh PR state, submodule
+ * merge facts) are fetched ONLY for the worktree paths currently on screen. Each
+ * on-screen path gets its OWN `worktree.listAllForHost {includeActivity: true,
+ * activityPaths: [path]}` query, so TanStack Query caches enrichment PER PATH: a
+ * path is probed once, and scrolling back to it is a cache hit, never a refetch.
+ * The `enrichedByPath` overlay is DERIVED from those query results each render (no
+ * accumulator state, no merge effect) - it holds exactly the settled on-screen
+ * paths, which is all the rows that render need.
+ *
+ * The reported on-screen set is debounced into `requestedPaths` (trailing edge),
+ * so a fast scroll spins up one batch of per-path queries per settle window, not
+ * one per frame; the number of concurrent queries is bounded by the viewport,
+ * never the whole list. Entries are merged into the overlay BY PATH, never by
+ * index - the response order follows the disk walk, not the request. A v1.0 host
+ * ignores `activityPaths` and returns the whole list base-only; keying the overlay
+ * by `worktreePath` folds those in harmlessly.
+ *
+ * There is no manual "clear" - a refresh invalidates the shared
+ * `worktree.listAllForHost` method scope (see `WorktreesBody`), which refetches
+ * the active per-path enrichment queries in place.
+ */
+function useWorktreeActivityEnrichment(
+  client: HostClient<HostRpcRegistry> | null,
+  reachable: boolean,
+): {
+  readonly enrichedByPath: ReadonlyMap<string, WorktreeHostEntryV11>;
+  readonly reportVisiblePaths: (paths: readonly string[]) => void;
+  readonly enriching: boolean;
+} {
+  const [requestedPaths, setRequestedPaths] =
+    useState<readonly string[]>(EMPTY_PATHS);
+  // The debounce coalesces every on-screen report inside one settle window into a
+  // single committed `requestedPaths` update (trailing edge), so a fast scroll
+  // fires one batch of per-path queries, not one per frame.
+  const latestVisibleRef = useRef<readonly string[]>(EMPTY_PATHS);
+  const debounceRef = useRef<number | null>(null);
+  const reportVisiblePaths = useCallback((paths: readonly string[]) => {
+    latestVisibleRef.current = paths;
+    if (debounceRef.current !== null) return;
+    debounceRef.current = window.setTimeout(() => {
+      debounceRef.current = null;
+      setRequestedPaths(latestVisibleRef.current);
+    }, WORKTREE_ENRICH_DEBOUNCE_MS);
+  }, []);
+  useEffect(
+    () => () => {
+      if (debounceRef.current !== null)
+        window.clearTimeout(debounceRef.current);
+    },
+    [],
+  );
+
+  // One enrichment query per on-screen path - so the cache identity is the path
+  // itself and each worktree is probed exactly once, cached independently.
+  const requests = useMemo(
+    () =>
+      requestedPaths.map((path) => ({
+        method: "worktree.listAllForHost" as const,
+        params: { includeActivity: true, activityPaths: [path] },
+      })),
+    [requestedPaths],
+  );
+  const results = useHostQueries({
+    client,
+    requests,
+    options: { enabled: reachable },
+  });
+
+  // The overlay is a pure projection of whatever per-path queries have settled -
+  // derived, never accumulated. Keyed by `worktreePath` (a v1.0 host that ignores
+  // `activityPaths` returns extra entries; keying by path folds them in safely).
+  const enrichedByPath = useMemo(() => {
+    const map = new Map<string, WorktreeHostEntryV11>();
+    for (const result of results) {
+      const data = result.data;
+      if (data === undefined) continue;
+      for (const entry of data.worktrees) {
+        map.set(entry.worktreePath, entry);
+      }
+    }
+    return map;
+  }, [results]);
+
+  return {
+    enrichedByPath,
+    reportVisiblePaths,
+    enriching: results.some((result) => result.isFetching),
   };
 }
 
@@ -500,19 +595,32 @@ function WorktreesBody(props: {
   readonly onChange: (hostId: string) => void;
 }): ReactNode {
   const { client, openStreamTransport, hostId, hosts, value, onChange } = props;
+  const queryClient = useQueryClient();
   const reachability = useHostReachability(hostId ?? "");
   const reachable = hostId !== null && reachability.status === "reachable";
   const listing = useWorktreeListing(client, reachable);
+  const enrichment = useWorktreeActivityEnrichment(client, reachable);
   // Owning-Task titles come from the cloud epic-tasks caches the app already
   // maintains (keyed by the signed-in user, any host) - no host-side title join.
   const taskTitlesByEpicId = useWorktreeTaskTitles(listing.worktrees);
   const canRefresh = reachable && client !== null;
+  // One invalidation refreshes BOTH legs: the base listing and every active
+  // per-path enrichment query live under the same `worktree.listAllForHost` method
+  // scope, so refetching that prefix re-probes the on-screen rows in place (no
+  // "Checking…" flash - the rows keep their current tier until fresh data lands).
+  const onRefresh = useCallback(() => {
+    if (hostId === null) return Promise.resolve();
+    return queryClient.invalidateQueries({
+      queryKey: hostQueryKeys.methodScope(hostId, "worktree.listAllForHost"),
+      refetchType: "all",
+    });
+  }, [queryClient, hostId]);
   const toolbarProps = {
     hosts,
     value,
     onChange,
-    onRefresh: listing.refresh,
-    refreshing: listing.refreshing,
+    onRefresh,
+    refreshing: listing.refreshing || enrichment.enriching,
     canRefresh,
   };
 
@@ -575,7 +683,8 @@ function WorktreesBody(props: {
         openStreamTransport={openStreamTransport}
         hostId={hostId}
         worktrees={listing.worktrees}
-        enriching={listing.enriching}
+        enrichedByPath={enrichment.enrichedByPath}
+        onVisiblePathsChange={enrichment.reportVisiblePaths}
         taskTitlesByEpicId={taskTitlesByEpicId}
         toolbarProps={toolbarProps}
       />
@@ -585,7 +694,7 @@ function WorktreesBody(props: {
   const showStandaloneToolbar = hosts.length > 0 && !listOwnsToolbar;
 
   return (
-    <div className="flex flex-col">
+    <div className="flex h-full flex-col">
       {showStandaloneToolbar ? (
         <WorktreesToolbar
           {...toolbarProps}
@@ -645,17 +754,74 @@ function useWorktreeTaskTitles(
   }, [queryClient, userId, epicIds, cloudTasks]);
 }
 
+/**
+ * One virtualized row of the flattened worktree list. The grouped-by-repo tree
+ * (collapsible repo headers + their rows) is flattened into this single stream so
+ * a single windowed list can render it: only the items intersecting the viewport
+ * mount. A collapsed group contributes just its header. `firstInGroup` /
+ * `showDivider` carry the hairline borders the old nested `divide-y` layout gave
+ * for free (absolutely-positioned virtual items can't rely on `:first-child`).
+ */
+type WorktreeFlatItem =
+  | {
+      readonly kind: "header";
+      readonly group: WorktreeRepoGroup;
+      readonly collapsed: boolean;
+      readonly showDivider: boolean;
+    }
+  | {
+      readonly kind: "row";
+      readonly entry: WorktreeHostEntryV11;
+      readonly group: WorktreeRepoGroup;
+      readonly firstInGroup: boolean;
+    };
+
+function worktreeFlatItemKey(item: WorktreeFlatItem): string {
+  return item.kind === "header"
+    ? `header:${item.group.key}`
+    : `row:${item.entry.worktreePath}`;
+}
+
+function buildWorktreeFlatItems(
+  groups: readonly WorktreeRepoGroup[],
+  collapsedRepoKeys: ReadonlySet<string>,
+): WorktreeFlatItem[] {
+  const items: WorktreeFlatItem[] = [];
+  for (const group of groups) {
+    const collapsed = collapsedRepoKeys.has(group.key);
+    items.push({
+      kind: "header",
+      group,
+      collapsed,
+      showDivider: items.length > 0,
+    });
+    if (collapsed) continue;
+    group.items.forEach((entry, index) => {
+      items.push({ kind: "row", entry, group, firstInGroup: index === 0 });
+    });
+  }
+  return items;
+}
+
 // List renders many per-worktree states (loading / empty / error / per-row
 // actions); branches are independent, not reducible nesting.
 // eslint-disable-next-line complexity
 export function WorktreesList(props: {
   readonly openStreamTransport: (hostId: string) => DurableStreamTransport;
   readonly hostId: string;
+  // The BASE listing (cheap fields for every row). Per-row activity enrichment
+  // arrives lazily through `enrichedByPath`.
   readonly worktrees: readonly WorktreeHostEntryV11[];
-  // True while the background `includeActivity` leg is still running: the base
-  // rows are painted, but the merge-status tiers aren't known yet, so pills show
-  // a pending state instead of a base-only (misleading) tier.
-  readonly enriching: boolean;
+  // The per-viewport enrichment overlay, keyed by `worktreePath`. A row present
+  // here carries its full activity-probed fields (branchStatus, prState, …); a row
+  // ABSENT here is still "pending" - its base fields are painted but its tier is
+  // not known yet, so the pill shows "Checking…" and it stays out of tier-based
+  // filtering. Grows as rows scroll into view.
+  readonly enrichedByPath: ReadonlyMap<string, WorktreeHostEntryV11>;
+  // Reports the worktree paths currently on screen (from the virtualizer) so the
+  // owner can enrich just those. Called whenever the on-screen set changes; the
+  // owner debounces + batches.
+  readonly onVisiblePathsChange: (paths: readonly string[]) => void;
   readonly taskTitlesByEpicId: ReadonlyMap<string, string>;
   readonly toolbarProps: {
     readonly hosts: readonly HostDirectoryEntry[];
@@ -669,48 +835,87 @@ export function WorktreesList(props: {
   const {
     hostId,
     worktrees,
-    enriching,
+    enrichedByPath,
+    onVisiblePathsChange,
     taskTitlesByEpicId,
     openStreamTransport,
   } = props;
   const queryClient = useQueryClient();
+  // The merged view every downstream computation reads: each base row overlaid
+  // with its enriched entry once that has landed. Base fields (repo, branch, path,
+  // owners, createdAt) are identical in both, so grouping / search / sort are
+  // stable across enrichment; only the activity-probed fields fill in. A row is
+  // "pending" until its path appears in the overlay.
+  const mergedWorktrees = useMemo(
+    () =>
+      worktrees.map((entry) => enrichedByPath.get(entry.worktreePath) ?? entry),
+    [worktrees, enrichedByPath],
+  );
+  const isPending = useCallback(
+    (worktreePath: string) => !enrichedByPath.has(worktreePath),
+    [enrichedByPath],
+  );
   // True-AND merge rollup per owning Task (epic), aggregated across every worktree
   // entry the epic owns (superproject branch + each entry's owned submodules). Same
   // map is read on every row a Task appears on, so a multi-worktree Task shows one
-  // consistent rollup.
+  // consistent rollup. Built from the MERGED view: an un-enriched entry contributes
+  // its base (no-PR) fields, so the rollup can only UNDER-count merged branches and
+  // fills UP as rows enrich - it never over-claims a merge.
   const taskRollupByEpicId = useMemo(
-    () => buildTaskMergeRollups(worktrees),
-    [worktrees],
+    () => buildTaskMergeRollups(mergedWorktrees),
+    [mergedWorktrees],
   );
   const [searchText, setSearchText] = useState("");
   const [sortMode, setSortMode] = useState<WorktreeSortMode>("newest");
   const [tierFilters, setTierFilters] =
     useState<WorktreeTierFilterSet>(EMPTY_TIER_FILTER);
   // Only offer filter options for tiers actually present in this host's list.
+  // Un-enriched rows have no known tier, so they cannot contribute an option -
+  // the menu grows as rows scroll into view and enrich.
   const availableTiers = useMemo(() => {
-    const present = new Set(
-      worktrees.map((entry) => classifyWorktreeTier(entry)),
-    );
+    const present = new Set<WorktreeTier>();
+    for (const entry of mergedWorktrees) {
+      if (isPending(entry.worktreePath)) continue;
+      present.add(classifyWorktreeTier(entry));
+    }
     return WORKTREE_TIER_ORDER.filter((tier) => present.has(tier));
-  }, [worktrees]);
+  }, [mergedWorktrees, isPending]);
   // The status filter composes with the search box (both apply) before repo
-  // grouping. Tier comes from the shared classifier, so the filter options
-  // exactly match the row pills. Intersect the selection with the tiers actually
-  // present (mirroring `worktreeTierFilterLabel`): a stale selection for a
-  // now-absent tier - e.g. the last Merged row was just deleted - is ignored, so
-  // the effective filter is empty and every row shows, matching the "All" the
-  // toolbar already reads. Without this the list would dead-end to empty under an
-  // "All" label.
+  // grouping. Search runs on cheap base fields, so it works before enrichment.
+  // Tier comes from the shared classifier, so the filter options exactly match the
+  // row pills. Intersect the selection with the tiers actually present (mirroring
+  // `worktreeTierFilterLabel`): a stale selection for a now-absent tier is ignored,
+  // so the effective filter is empty and every row shows, matching the "All" the
+  // toolbar reads.
+  //
+  // Pending rows are KEPT under an active tier filter (tier unknown ⇒ can't be
+  // excluded yet): they render as "Checking…", which is what drives their
+  // enrichment - dropping them would starve the very fetch that resolves them and
+  // dead-end the filtered view to empty. Once enriched, a non-matching row drops
+  // out on the next pass, so the filtered list converges as you scroll.
   const filteredWorktrees = useMemo(() => {
-    const searched = filterWorktrees(worktrees, searchText, taskTitlesByEpicId);
+    const searched = filterWorktrees(
+      mergedWorktrees,
+      searchText,
+      taskTitlesByEpicId,
+    );
     const effectiveTiers = new Set(
       availableTiers.filter((tier) => tierFilters.has(tier)),
     );
     if (effectiveTiers.size === 0) return searched;
-    return searched.filter((entry) =>
-      effectiveTiers.has(classifyWorktreeTier(entry)),
+    return searched.filter(
+      (entry) =>
+        isPending(entry.worktreePath) ||
+        effectiveTiers.has(classifyWorktreeTier(entry)),
     );
-  }, [worktrees, searchText, taskTitlesByEpicId, tierFilters, availableTiers]);
+  }, [
+    mergedWorktrees,
+    searchText,
+    taskTitlesByEpicId,
+    tierFilters,
+    availableTiers,
+    isPending,
+  ]);
   const toggleTierFilter = useCallback((tier: WorktreeTier) => {
     setTierFilters((prev) => withMemberToggled(prev, tier));
   }, []);
@@ -773,8 +978,8 @@ export function WorktreesList(props: {
     [collapsedRepoKeys, groups],
   );
   const visibleWorktreePathSet = useMemo(
-    () => new Set(worktrees.map((entry) => entry.worktreePath)),
-    [worktrees],
+    () => new Set(mergedWorktrees.map((entry) => entry.worktreePath)),
+    [mergedWorktrees],
   );
   useEffect(() => {
     clearCompletedDeletedMissingFromList(visibleWorktreePathSet);
@@ -822,8 +1027,8 @@ export function WorktreesList(props: {
   // is always re-resolved to its CURRENT entry (a background refresh may have
   // made a row in-use / mid-delete since the dialog opened).
   const worktreesByPath = useMemo(
-    () => new Map(worktrees.map((entry) => [entry.worktreePath, entry])),
-    [worktrees],
+    () => new Map(mergedWorktrees.map((entry) => [entry.worktreePath, entry])),
+    [mergedWorktrees],
   );
   // Re-resolve the pending targets against the freshest listing and split into
   // the rows still eligible to delete vs. the ones dropped (gone from the list,
@@ -985,12 +1190,60 @@ export function WorktreesList(props: {
     reviewedScriptsByPathRef.current = next;
   };
 
+  // Flatten the grouped tree into one stream and window it: only the on-screen
+  // items mount, so a host with hundreds of worktrees paints as cheaply as one
+  // with a handful. Row heights vary (an optional facts line, wrapping Task
+  // chips), so each item is measured after mount - the estimates only seed the
+  // window before the first measure.
+  const flatItems = useMemo(
+    () => buildWorktreeFlatItems(groups, collapsedRepoKeys),
+    [groups, collapsedRepoKeys],
+  );
+  const scrollParentRef = useRef<HTMLDivElement>(null);
+  // `useVirtualizer` returns fresh function identities each render; the React
+  // Compiler already skips memoizing this component for it, and this component
+  // memoizes its own derived data with `useMemo`, so the compat warning is noise.
+  // eslint-disable-next-line react-hooks/incompatible-library
+  const virtualizer = useVirtualizer({
+    count: flatItems.length,
+    getScrollElement: () => scrollParentRef.current,
+    estimateSize: (index) =>
+      flatItems[index].kind === "header"
+        ? WORKTREE_REPO_HEADER_ESTIMATE_PX
+        : WORKTREE_ROW_ESTIMATE_PX,
+    getItemKey: (index) => worktreeFlatItemKey(flatItems[index]),
+    overscan: WORKTREE_VIRTUAL_OVERSCAN,
+  });
+  const virtualItems = virtualizer.getVirtualItems();
+  // The worktree paths actually on screen right now - the driver of per-viewport
+  // enrichment. Repo-header items carry no path. Keyed by the joined string so the
+  // report fires only when the on-screen SET changes, not on every scroll tick
+  // that leaves the same rows mounted.
+  const onScreenPaths = useMemo(
+    () =>
+      virtualItems.flatMap((virtualItem) => {
+        const item = flatItems[virtualItem.index];
+        return item.kind === "row" ? [item.entry.worktreePath] : [];
+      }),
+    [virtualItems, flatItems],
+  );
+  // Report only when the on-screen SET actually changes. `onScreenPaths` gets a
+  // fresh identity on every scroll tick (a new `virtualItems`), so guard on the
+  // joined value to avoid re-reporting an unchanged set; the owner also debounces.
+  const onScreenPathsKey = onScreenPaths.join("\n");
+  const lastReportedPathsRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (lastReportedPathsRef.current === onScreenPathsKey) return;
+    lastReportedPathsRef.current = onScreenPathsKey;
+    onVisiblePathsChange(onScreenPaths);
+  }, [onScreenPathsKey, onScreenPaths, onVisiblePathsChange]);
+
   return (
     <WorktreeListRenderProfiler
-      rowCount={worktrees.length}
+      rowCount={mergedWorktrees.length}
       visibleRowCount={visibleWorktrees.length}
     >
-      <div className="flex flex-col">
+      <div className="flex h-full min-h-0 flex-col">
         {confirmed !== null && run !== null ? (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
             <div
@@ -1040,11 +1293,7 @@ export function WorktreesList(props: {
           onDismiss={dismissTerminalBackgrounded}
         />
 
-        {groups.length === 0 ? (
-          <WorktreesStateMessage tone="muted" spinner={false}>
-            No worktrees match your search.
-          </WorktreesStateMessage>
-        ) : (
+        {groups.length === 0 ? null : (
           <WorktreeSelectAllHeader
             selectableCount={selectableWorktreePaths.length}
             selectedCount={selectedCount}
@@ -1052,58 +1301,87 @@ export function WorktreesList(props: {
           />
         )}
 
-        {groups.map((group) => {
-          const collapsed = collapsedRepoKeys.has(group.key);
-          return (
+        <div
+          ref={scrollParentRef}
+          data-testid="worktrees-virtual-scroll"
+          className="min-h-0 flex-1 overflow-y-auto"
+        >
+          {groups.length === 0 ? (
+            <WorktreesStateMessage tone="muted" spinner={false}>
+              No worktrees match your search.
+            </WorktreesStateMessage>
+          ) : (
             <div
-              key={group.key}
-              className="border-b border-border/40 last:border-b-0"
+              className="relative w-full"
+              style={{ height: `${virtualizer.getTotalSize()}px` }}
             >
-              <WorktreeRepoHeader
-                label={group.label}
-                count={group.items.length}
-                collapsed={collapsed}
-                onToggle={() => toggleRepoCollapsed(group, collapsed)}
-              />
-              {collapsed ? null : (
-                <div className="flex flex-col divide-y divide-border/30">
-                  {group.items.map((entry) => {
-                    // The row carries the in-progress treatment only once the delete
-                    // is sent to the background; while the foreground modal is up
-                    // the modal alone shows progress - no duplication.
-                    const deleteStatus =
-                      backgroundedDeleteStatusByPath.get(entry.worktreePath) ??
-                      null;
-                    return (
-                      <WorktreeRow
-                        key={entry.worktreePath}
-                        entry={entry}
-                        enriching={enriching}
-                        taskTitlesByEpicId={taskTitlesByEpicId}
-                        taskRollupByEpicId={taskRollupByEpicId}
-                        deleteStatus={deleteStatus}
-                        selected={selectedPaths.has(entry.worktreePath)}
-                        canSelect={selectablePathSet.has(entry.worktreePath)}
-                        onToggleSelection={() =>
-                          toggleSelection(entry.worktreePath)
-                        }
-                        onManageScripts={() =>
-                          setPendingScriptReview({
-                            target: entry,
-                            scripts:
-                              reviewedScriptsByPath.get(entry.worktreePath) ??
-                              entry.scripts,
-                          })
-                        }
-                        onDelete={() => requestDeleteTargets([entry])}
-                      />
-                    );
-                  })}
-                </div>
-              )}
+              {virtualItems.map((virtualItem) => {
+                const item = flatItems[virtualItem.index];
+                return (
+                  <div
+                    key={virtualItem.key}
+                    data-index={virtualItem.index}
+                    ref={virtualizer.measureElement}
+                    className="absolute top-0 left-0 w-full"
+                    style={{ transform: `translateY(${virtualItem.start}px)` }}
+                  >
+                    {item.kind === "header" ? (
+                      <div
+                        className={cn(
+                          item.showDivider && "border-t border-border/40",
+                        )}
+                      >
+                        <WorktreeRepoHeader
+                          label={item.group.label}
+                          count={item.group.items.length}
+                          collapsed={item.collapsed}
+                          onToggle={() =>
+                            toggleRepoCollapsed(item.group, item.collapsed)
+                          }
+                        />
+                      </div>
+                    ) : (
+                      <div
+                        className={cn(
+                          !item.firstInGroup && "border-t border-border/30",
+                        )}
+                      >
+                        <WorktreeRow
+                          entry={item.entry}
+                          pending={isPending(item.entry.worktreePath)}
+                          taskTitlesByEpicId={taskTitlesByEpicId}
+                          taskRollupByEpicId={taskRollupByEpicId}
+                          deleteStatus={
+                            backgroundedDeleteStatusByPath.get(
+                              item.entry.worktreePath,
+                            ) ?? null
+                          }
+                          selected={selectedPaths.has(item.entry.worktreePath)}
+                          canSelect={selectablePathSet.has(
+                            item.entry.worktreePath,
+                          )}
+                          onToggleSelection={() =>
+                            toggleSelection(item.entry.worktreePath)
+                          }
+                          onManageScripts={() =>
+                            setPendingScriptReview({
+                              target: item.entry,
+                              scripts:
+                                reviewedScriptsByPath.get(
+                                  item.entry.worktreePath,
+                                ) ?? item.entry.scripts,
+                            })
+                          }
+                          onDelete={() => requestDeleteTargets([item.entry])}
+                        />
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
-          );
-        })}
+          )}
+        </div>
 
         <ConfirmDestructiveDialog
           open={singleDialogCopy !== null}
@@ -1416,7 +1694,9 @@ function WorktreeRepoHeader(props: {
 
 function WorktreeRow(props: {
   readonly entry: WorktreeHostEntryV11;
-  readonly enriching: boolean;
+  // True until THIS row's per-viewport activity enrichment has landed: base fields
+  // are painted, but the tier isn't classified yet, so the pill shows "Checking…".
+  readonly pending: boolean;
   readonly taskTitlesByEpicId: ReadonlyMap<string, string>;
   readonly taskRollupByEpicId: ReadonlyMap<string, TaskMergeRollup>;
   readonly deleteStatus: WorktreeRowDeleteStatus | null;
@@ -1428,7 +1708,7 @@ function WorktreeRow(props: {
 }): ReactNode {
   const {
     entry,
-    enriching,
+    pending,
     taskTitlesByEpicId,
     taskRollupByEpicId,
     deleteStatus,
@@ -1462,7 +1742,7 @@ function WorktreeRow(props: {
       </div>
       <div className="min-w-0 flex-1 space-y-1 pr-10">
         <div className="flex flex-wrap items-center gap-2">
-          <WorktreeTierPill tier={classification.tier} pending={enriching} />
+          <WorktreeTierPill tier={classification.tier} pending={pending} />
           <span className="truncate text-ui-sm font-medium text-foreground">
             {branchLabel(entry)}
           </span>

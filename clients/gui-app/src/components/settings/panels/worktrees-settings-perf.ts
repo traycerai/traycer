@@ -28,13 +28,21 @@ type QueryStatus = "pending" | "error" | "success";
  * available from the query result.
  */
 export function useWorktreeListQueryPerf(input: {
+  readonly includeActivity: boolean;
   readonly fetchStatus: QueryFetchStatus;
   readonly status: QueryStatus;
   readonly worktreeCount: number;
   readonly submoduleCount: number;
   readonly hasData: boolean;
 }): void {
-  const { fetchStatus, status, worktreeCount, submoduleCount, hasData } = input;
+  const {
+    includeActivity,
+    fetchStatus,
+    status,
+    worktreeCount,
+    submoduleCount,
+    hasData,
+  } = input;
   const startRef = useRef<{
     readonly startMs: number;
     readonly fromCache: boolean;
@@ -53,13 +61,20 @@ export function useWorktreeListQueryPerf(input: {
     if (status === "pending") return;
     startRef.current = null;
     logPerfEvent("worktree.list_query", {
-      includeActivity: true,
+      includeActivity,
       worktreeCount,
       submoduleCount,
       durationMs: roundPerfMs(performance.now() - started.startMs),
       fromCache: started.fromCache,
     });
-  }, [fetchStatus, status, worktreeCount, submoduleCount, hasData]);
+  }, [
+    includeActivity,
+    fetchStatus,
+    status,
+    worktreeCount,
+    submoduleCount,
+    hasData,
+  ]);
 }
 
 /**

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
   cleanup,
@@ -211,10 +211,61 @@ const WORKTREES: WorktreeHostEntryV11[] = [
   entry({ worktreePath: "/wt/busy", branch: "feat-busy", inUse: true }),
 ];
 
+// jsdom has no layout, so `@tanstack/react-virtual` (which sizes the scroll
+// viewport and measures items via `offsetHeight`) sees zero everywhere and would
+// window down to nothing. Feed it a real height for the scroll element
+// (`worktrees-virtual-scroll`) and a fixed height per measured virtual item
+// (`data-index`); everything else keeps jsdom's zero. A tall default viewport
+// renders every row (so the behavioural tests still find their rows); the
+// windowing test shrinks `virtualViewportHeight` to force a real window.
+const VIRTUAL_ITEM_TEST_HEIGHT = 80;
+let virtualViewportHeight = 100_000;
+let offsetHeightDescriptor: PropertyDescriptor | undefined;
+
+beforeEach(() => {
+  virtualViewportHeight = 100_000;
+  offsetHeightDescriptor = Object.getOwnPropertyDescriptor(
+    HTMLElement.prototype,
+    "offsetHeight",
+  );
+  Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
+    configurable: true,
+    get(this: HTMLElement): number {
+      if (this.dataset.testid === "worktrees-virtual-scroll") {
+        return virtualViewportHeight;
+      }
+      if (this.hasAttribute("data-index")) return VIRTUAL_ITEM_TEST_HEIGHT;
+      return 0;
+    },
+  });
+});
+
+afterEach(() => {
+  if (offsetHeightDescriptor !== undefined) {
+    Object.defineProperty(
+      HTMLElement.prototype,
+      "offsetHeight",
+      offsetHeightDescriptor,
+    );
+  }
+  offsetHeightDescriptor = undefined;
+});
+
+// Treat every passed worktree as already-enriched (its base entry IS its enriched
+// entry) - the default the behavioural tests want, so tiers classify immediately.
+// Tests that exercise the pending/lazy path pass their own partial overlay.
+function fullyEnriched(
+  worktrees: readonly WorktreeHostEntryV11[],
+): ReadonlyMap<string, WorktreeHostEntryV11> {
+  return new Map(worktrees.map((entry) => [entry.worktreePath, entry]));
+}
+
 function renderList(args: {
   readonly hostId: string;
   readonly queryClient: QueryClient;
   readonly worktrees: readonly WorktreeHostEntryV11[];
+  readonly enrichedByPath?: ReadonlyMap<string, WorktreeHostEntryV11>;
+  readonly onVisiblePathsChange?: (paths: readonly string[]) => void;
   readonly taskTitlesByEpicId?: ReadonlyMap<string, string>;
 }) {
   const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
@@ -228,7 +279,8 @@ function renderList(args: {
         openStreamTransport={() => stubOpenStreamTransport()}
         hostId={args.hostId}
         worktrees={args.worktrees}
-        enriching={false}
+        enrichedByPath={args.enrichedByPath ?? fullyEnriched(args.worktrees)}
+        onVisiblePathsChange={args.onVisiblePathsChange ?? vi.fn()}
         taskTitlesByEpicId={args.taskTitlesByEpicId ?? new Map()}
         toolbarProps={testToolbarProps()}
       />
@@ -787,7 +839,8 @@ describe("WorktreesList delete flow", () => {
             openStreamTransport={() => stubOpenStreamTransport()}
             hostId="host-b"
             worktrees={WORKTREES}
-            enriching={false}
+            enrichedByPath={fullyEnriched(WORKTREES)}
+            onVisiblePathsChange={vi.fn()}
             taskTitlesByEpicId={new Map()}
             toolbarProps={testToolbarProps()}
           />
@@ -969,7 +1022,12 @@ describe("WorktreesList delete flow", () => {
             worktrees={WORKTREES.filter(
               (worktree) => worktree.worktreePath !== "/wt/clean",
             )}
-            enriching={false}
+            enrichedByPath={fullyEnriched(
+              WORKTREES.filter(
+                (worktree) => worktree.worktreePath !== "/wt/clean",
+              ),
+            )}
+            onVisiblePathsChange={vi.fn()}
             taskTitlesByEpicId={new Map()}
             toolbarProps={testToolbarProps()}
           />
@@ -1080,7 +1138,8 @@ describe("WorktreesList confirm-time re-check", () => {
             openStreamTransport={() => stubOpenStreamTransport()}
             hostId="host-a"
             worktrees={worktrees}
-            enriching={false}
+            enrichedByPath={fullyEnriched(worktrees)}
+            onVisiblePathsChange={vi.fn()}
             taskTitlesByEpicId={new Map()}
             toolbarProps={testToolbarProps()}
           />
@@ -1504,27 +1563,20 @@ describe("WorktreesList v1.1 signals", () => {
     screen.getByText("2 ahead · 3 behind");
   });
 
-  it("shows pending tier pills while the activity leg is still enriching", () => {
-    render(
-      <QueryClientProvider client={new QueryClient()}>
-        <TooltipProvider>
-          <WorktreesList
-            openStreamTransport={() => stubOpenStreamTransport()}
-            hostId="host-a"
-            worktrees={[
-              entry({
-                worktreePath: "/wt/merged",
-                branch: "feat-merged",
-                branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
-              }),
-            ]}
-            enriching
-            taskTitlesByEpicId={new Map()}
-            toolbarProps={testToolbarProps()}
-          />
-        </TooltipProvider>
-      </QueryClientProvider>,
-    );
+  it("shows a pending tier pill for a row not yet enriched (empty overlay)", () => {
+    renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees: [
+        entry({
+          worktreePath: "/wt/merged",
+          branch: "feat-merged",
+          branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
+        }),
+      ],
+      // No path enriched yet: the base row paints but its tier isn't known.
+      enrichedByPath: new Map(),
+    });
     // The base row is painted immediately (branch name visible), but the tier is
     // not classified yet - the pill reads "Checking…" (data-tier="pending"),
     // never a base-only tier that would flip once the probes land.
@@ -1736,5 +1788,208 @@ describe("WorktreesList v1.1 signals", () => {
       "Delete worktree feat-new",
       "Delete worktree feat-unknown",
     ]);
+  });
+});
+
+describe("WorktreesList virtualization + per-viewport enrichment", () => {
+  afterEach(() => {
+    cleanup();
+    __resetWorktreeDeleteRunForTests();
+  });
+
+  function listElement(args: {
+    readonly worktrees: readonly WorktreeHostEntryV11[];
+    readonly enrichedByPath: ReadonlyMap<string, WorktreeHostEntryV11>;
+    readonly onVisiblePathsChange?: (paths: readonly string[]) => void;
+  }): ReactNode {
+    return (
+      <QueryClientProvider client={new QueryClient()}>
+        <TooltipProvider>
+          <WorktreesList
+            openStreamTransport={() => stubOpenStreamTransport()}
+            hostId="host-a"
+            worktrees={args.worktrees}
+            enrichedByPath={args.enrichedByPath}
+            onVisiblePathsChange={args.onVisiblePathsChange ?? vi.fn()}
+            taskTitlesByEpicId={new Map()}
+            toolbarProps={testToolbarProps()}
+          />
+        </TooltipProvider>
+      </QueryClientProvider>
+    );
+  }
+
+  function manyWorktrees(count: number): WorktreeHostEntryV11[] {
+    return Array.from({ length: count }, (_unused, index) =>
+      entry({
+        worktreePath: `/wt/w${index}`,
+        branch: `feat-${index}`,
+        branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
+      }),
+    );
+  }
+
+  it("renders only a windowed subset of a large list, not every row", () => {
+    // A short viewport forces a real window: far fewer rows mount than exist.
+    virtualViewportHeight = 3 * VIRTUAL_ITEM_TEST_HEIGHT;
+    const worktrees = manyWorktrees(60);
+    renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees,
+      enrichedByPath: fullyEnriched(worktrees),
+    });
+
+    const renderedRows = screen.getAllByTestId("worktree-row");
+    // Windowed: only a viewport-bounded handful mount, never all 60.
+    expect(renderedRows.length).toBeGreaterThan(0);
+    expect(renderedRows.length).toBeLessThan(worktrees.length);
+    expect(renderedRows.length).toBeLessThanOrEqual(20);
+  });
+
+  it("reports only the on-screen worktree paths (drives the per-visible query)", () => {
+    virtualViewportHeight = 3 * VIRTUAL_ITEM_TEST_HEIGHT;
+    const worktrees = manyWorktrees(60);
+    const onVisiblePathsChange = vi.fn<(paths: readonly string[]) => void>();
+    render(
+      listElement({
+        worktrees,
+        enrichedByPath: fullyEnriched(worktrees),
+        onVisiblePathsChange,
+      }),
+    );
+
+    expect(onVisiblePathsChange).toHaveBeenCalled();
+    const lastCall = onVisiblePathsChange.mock.lastCall;
+    const reported = lastCall === undefined ? [] : lastCall[0];
+    // Only the on-screen paths are reported - a viewport-bounded subset, never
+    // the whole list - and every one is a real worktree path.
+    expect(reported.length).toBeGreaterThan(0);
+    expect(reported.length).toBeLessThan(worktrees.length);
+    const allPaths = new Set(
+      worktrees.map((worktree) => worktree.worktreePath),
+    );
+    for (const path of reported) expect(allPaths.has(path)).toBe(true);
+  });
+
+  it("paints the base list with zero enrichment: rows show, tiers read Checking…", () => {
+    const worktrees = [
+      entry({
+        worktreePath: "/wt/a",
+        branch: "feat-a",
+        branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
+      }),
+      entry({
+        worktreePath: "/wt/b",
+        branch: "feat-b",
+        branchStatus: { ahead: 2, behind: 0, mergedIntoDefault: false },
+      }),
+    ];
+    // Empty overlay: nothing enriched yet.
+    renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees,
+      enrichedByPath: new Map(),
+    });
+
+    // Base fields paint immediately (branch names, delete affordances).
+    screen.getByText("feat-a");
+    screen.getByText("feat-b");
+    screen.getByRole("button", { name: "Delete worktree feat-a" });
+    // Every tier pill is the neutral pending state - NOT a base-only tier that
+    // would flip once the probes land. A base-only classify would call /wt/b
+    // "Review"; it must not, while pending.
+    const tiers = screen
+      .getAllByTestId("worktree-tier-pill")
+      .map((pill) => pill.getAttribute("data-tier"));
+    expect(tiers).toEqual(["pending", "pending"]);
+    expect(tiers).not.toContain("review");
+    expect(screen.getAllByText("Checking…")).toHaveLength(2);
+  });
+
+  it("fills a row's tier by path once its enrichment lands (merge by path)", () => {
+    const merged = entry({
+      worktreePath: "/wt/merged",
+      branch: "feat-merged",
+      branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
+    });
+    const { rerender } = render(
+      listElement({ worktrees: [merged], enrichedByPath: new Map() }),
+    );
+
+    // Pending first: the pill is "Checking…".
+    expect(
+      screen.getByTestId("worktree-tier-pill").getAttribute("data-tier"),
+    ).toBe("pending");
+
+    // The overlay gains this path (merge is by worktreePath, not index) - the row
+    // resolves to its enriched entry and the tier fills in.
+    rerender(
+      listElement({
+        worktrees: [merged],
+        enrichedByPath: new Map([[merged.worktreePath, merged]]),
+      }),
+    );
+    expect(
+      screen.getByTestId("worktree-tier-pill").getAttribute("data-tier"),
+    ).toBe("merged");
+    expect(screen.queryByText("Checking…")).toBeNull();
+  });
+
+  it("keeps a still-pending row under an active tier filter (no dead-end)", () => {
+    // One enriched Merged row + one still-pending row. Filtering to Merged must
+    // keep the pending row visible (its tier is unknown, so it can't be excluded
+    // yet) so it can enrich, instead of dead-ending the filtered view to empty.
+    const mergedRow = entry({
+      worktreePath: "/wt/merged",
+      branch: "feat-merged",
+      branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
+    });
+    const pendingRow = entry({
+      worktreePath: "/wt/pending",
+      branch: "feat-pending",
+      branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
+    });
+    render(
+      listElement({
+        worktrees: [mergedRow, pendingRow],
+        // Only the merged row is enriched; the other stays pending.
+        enrichedByPath: new Map([[mergedRow.worktreePath, mergedRow]]),
+      }),
+    );
+
+    // Merged is the only known tier, so it is the only filter option offered.
+    fireEvent.click(screen.getByTestId("worktrees-filter-merged"));
+
+    // The enriched Merged row stays; the still-pending row is KEPT (shown as
+    // "Checking…"), not dropped.
+    screen.getByRole("button", { name: "Delete worktree feat-merged" });
+    screen.getByRole("button", { name: "Delete worktree feat-pending" });
+    screen.getByText("Checking…");
+  });
+
+  it("excludes a still-pending row's unknown tier from the filter options", () => {
+    const mergedRow = entry({
+      worktreePath: "/wt/merged",
+      branch: "feat-merged",
+      branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
+    });
+    const pendingReview = entry({
+      worktreePath: "/wt/review",
+      branch: "feat-review",
+      branchStatus: { ahead: 2, behind: 0, mergedIntoDefault: false },
+    });
+    render(
+      listElement({
+        worktrees: [mergedRow, pendingReview],
+        enrichedByPath: new Map([[mergedRow.worktreePath, mergedRow]]),
+      }),
+    );
+
+    // Only the enriched row contributes a tier option; the pending row's would-be
+    // "Review" tier is not offered until it enriches.
+    screen.getByTestId("worktrees-filter-merged");
+    expect(screen.queryByTestId("worktrees-filter-review")).toBeNull();
   });
 });
