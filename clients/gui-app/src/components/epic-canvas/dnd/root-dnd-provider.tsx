@@ -80,10 +80,10 @@ import { useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, type ReactNode } from "react";
 
 /**
- * A chat-artifact card is the full width of the chat column, so dnd-kit's
- * default overlay anchoring (chip top-left pinned to the dragged node's
- * top-left) leaves the chip far from the pointer when the row is grabbed
- * anywhere but its top-left corner. Center the overlay chip on the cursor for
+ * The artifact-reference drag source can come from wide in-content rows/cards,
+ * so dnd-kit's default overlay anchoring (chip top-left pinned to the dragged
+ * node's top-left) can leave the chip far from the pointer when the row is
+ * grabbed away from its leading edge. Center the overlay chip on the cursor for
  * THIS source only - every other source (sidebar rows, tabs, tiles, rail items)
  * keeps its grab-anchored overlay. Reuses dnd-kit's official
  * `snapCenterToCursor`; the wrapper only gates which source it runs for.
