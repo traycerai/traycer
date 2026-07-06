@@ -77,22 +77,22 @@ type WorktreeCreateMutateAsync = (
  *   1. mints a client-side `tuiAgentId` so the same id can be used
  *      everywhere (binding row, agent.tui.prepareLaunch, persisted
  *      record),
- *   2. for Worktree-mode launches, dispatches the matching `worktree.*`
- *      RPC FIRST so the host SQLite binding row exists before the
- *      harness preparation reads it,
- *   3. opens a canvas tab placeholder for the client-minted id BEFORE
- *      `agent.tui.prepareLaunch` for normal launches so the user has a
- *      visible tui-agent surface inside the Epic while the resolver awaits
- *      orchestrator setup. Fork launches intentionally wait until
- *      `agent.tui.prepareLaunch` returns the new forked session so the tab
- *      opens on the forked session rather than a pre-fork placeholder.
+ *   2. opens a canvas tab placeholder for the client-minted id BEFORE
+ *      worktree creation and `agent.tui.prepareLaunch` for normal launches so
+ *      the user has a visible tui-agent surface inside the Epic while the
+ *      resolver awaits orchestrator setup. Fork launches intentionally wait
+ *      until `agent.tui.prepareLaunch` returns the new forked session so the
+ *      tab opens on the forked session rather than a pre-fork placeholder.
  *      The tile renders "Loading terminal agent…" until the persisted record
  *      lands (or the user closes the tab), so a long-running / failed /
  *      cancelled setup cannot strand the user without a placeholder/recovery
  *      surface in the Epic context.
+ *   3. for Worktree-mode launches, dispatches the matching `worktree.*`
+ *      RPC so the host SQLite binding row exists before the harness
+ *      preparation reads it,
  *   4. prepares a tui-agent session via `agent.tui.prepareLaunch`
  *      which seeds a default owner-scoped binding from the epic's folders
- *      when none was dispatched in step 2 (the always-non-empty seam),
+ *      when none was dispatched in step 3 (the always-non-empty seam),
  *      rejects with `WORKTREE_MISSING` if a bound folder is gone on disk
  *      (no silent demote), and awaits orchestrator setup,
  *   5. inserts a tui-agent record via `epic.createTuiAgent`
@@ -114,7 +114,7 @@ type WorktreeCreateMutateAsync = (
  *   - DEFAULT (null intent): no binding is written until prepareLaunch's seam
  *     runs, and the resolver preflights the missing-check BEFORE that seam write,
  *     so a rejected default-seed launch persists NO binding row. Orphan-safe.
- *   - EXPLICIT intent: step 2's `worktree.create` persists the binding BEFORE
+ *   - EXPLICIT intent: step 3's `worktree.create` persists the binding BEFORE
  *     prepareLaunch, so a setup failure / cancel after that write leaves a
  *     binding row for an owner id that never gets a record. This orphan window is
  *     inherent to this deliberately non-atomic 3-step flow (kept for the
@@ -213,26 +213,6 @@ export function useCreateTuiAgentForClient(
       const opensAfterSessionPrepared =
         input.forkSourceHarnessSessionId !== null;
 
-      // For an explicit intent (a worktree, or a specific Local folder set),
-      // the worktree binding RPC is dispatched BEFORE harness preparation so
-      // `agent.tui.prepareLaunch` reads the user's *intended* binding row -
-      // and, for Worktree mode, so the worktree directory is created and its
-      // setup awaited. Skipping it would leave no binding at prepareLaunch, so
-      // the seam there would seed a *default* Local binding from the epic's
-      // folders, silently discarding the explicit choice. (A null intent has
-      // nothing to dispatch; the seam's default seeding is the intended path.)
-      if (input.worktreeIntent !== null) {
-        if (input.worktreeIntent.entries.length > 0) {
-          input.onStatusChange?.("preparing-workspace");
-        }
-        await dispatchWorktreeIntent({
-          intent: input.worktreeIntent,
-          epicId: input.epicId,
-          tuiAgentId,
-          worktreeCreate: worktreeCreate.mutateAsync,
-        });
-      }
-
       // Object holder, not a bare `let`: `opened` is flipped inside the
       // `openPlaceholder` closure, and a closure-mutated `let` narrows to its
       // `false` initializer at the `finally` check (no-unnecessary-condition
@@ -262,6 +242,7 @@ export function useCreateTuiAgentForClient(
             harnessId: input.harnessId,
           }),
           hostId: placeholderHostId,
+          pendingTuiHarnessId: input.harnessId,
         };
         if (input.placement.kind === "target-group") {
           openTileInPane(input.tabId, input.placement.groupId, placeholderRef);
@@ -274,6 +255,25 @@ export function useCreateTuiAgentForClient(
       try {
         if (!opensAfterSessionPrepared) {
           openPlaceholder();
+        }
+        // For an explicit intent (a worktree, or a specific Local folder set),
+        // the worktree binding RPC is dispatched BEFORE harness preparation so
+        // `agent.tui.prepareLaunch` reads the user's *intended* binding row -
+        // and, for Worktree mode, so the worktree directory is created and its
+        // setup awaited. Skipping it would leave no binding at prepareLaunch, so
+        // the seam there would seed a *default* Local binding from the epic's
+        // folders, silently discarding the explicit choice. (A null intent has
+        // nothing to dispatch; the seam's default seeding is the intended path.)
+        if (input.worktreeIntent !== null) {
+          if (input.worktreeIntent.entries.length > 0) {
+            input.onStatusChange?.("preparing-workspace");
+          }
+          await dispatchWorktreeIntent({
+            intent: input.worktreeIntent,
+            epicId: input.epicId,
+            tuiAgentId,
+            worktreeCreate: worktreeCreate.mutateAsync,
+          });
         }
         if (input.forkSourceHarnessSessionId !== null) {
           input.onStatusChange?.("forking-session");

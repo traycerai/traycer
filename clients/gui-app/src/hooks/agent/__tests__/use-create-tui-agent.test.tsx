@@ -382,6 +382,7 @@ describe("useCreateTuiAgent", () => {
       expect.objectContaining({
         type: "terminal-agent",
         name: "Fork - Source terminal",
+        pendingTuiHarnessId: "claude",
       }),
     );
 
@@ -467,14 +468,27 @@ describe("useCreateTuiAgent", () => {
     expect(hookMocks.openTileInTab).toHaveBeenCalledTimes(1);
     const placeholderCall = hookMocks.openTileInTab.mock.calls[0] as [
       string,
-      { id: string; type: string; name: string },
+      {
+        id: string;
+        type: string;
+        name: string;
+        pendingTuiHarnessId: string | undefined;
+      },
     ];
     const placeholderTabId = placeholderCall[0];
     const placeholderNode = placeholderCall[1];
     expect(placeholderTabId).toBe(TAB_ID);
     expect(placeholderNode.type).toBe("terminal-agent");
+    expect(placeholderNode.pendingTuiHarnessId).toBe("claude");
     const bindingCall = calls.find((c) => c.method === "worktree.create");
     expect(bindingCall).toBeDefined();
+    const worktreeRequestIndex = hookMocks.request.mock.calls.findIndex(
+      ([method]) => method === "worktree.create",
+    );
+    expect(worktreeRequestIndex).toBeGreaterThanOrEqual(0);
+    expect(hookMocks.openTileInTab.mock.invocationCallOrder[0]).toBeLessThan(
+      hookMocks.request.mock.invocationCallOrder[worktreeRequestIndex],
+    );
     const ownerId = (bindingCall?.payload as { ownerId: string }).ownerId;
     expect(placeholderNode.id).toBe(ownerId);
     expect(calls.some((c) => c.method === "epic.createTuiAgent")).toBe(false);
