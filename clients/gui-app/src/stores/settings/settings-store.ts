@@ -31,6 +31,25 @@ import { type EditorId } from "@traycer/protocol/host";
 
 export type ThemeMode = "system" | "light" | "dark";
 export type EpicNodeIconColorMode = "byType" | "none";
+// Mirrors xterm's `cursorStyle` union; kept as our own type so the settings
+// surface doesn't take a value import from `@xterm/xterm`.
+export type TerminalCursorStyle = "block" | "bar" | "underline";
+
+export const DEFAULT_TERMINAL_CURSOR_STYLE: TerminalCursorStyle = "block";
+export const DEFAULT_TERMINAL_CURSOR_BLINK = true;
+
+// Shape drawn when the terminal loses focus (xterm's `cursorInactiveStyle`,
+// which never blinks). Bar/underline mirror the chosen shape so the cursor
+// keeps its identity on blur; block falls back to a hollow outline so an
+// unfocused pane stays visually distinct from a focused non-blinking block.
+export type TerminalInactiveCursorStyle =
+  TerminalCursorStyle | "outline" | "none";
+
+export function inactiveCursorStyleFor(
+  style: TerminalCursorStyle,
+): TerminalInactiveCursorStyle {
+  return style === "block" ? "outline" : style;
+}
 
 // Default font sizes, shared with the Appearance panel so its reset-to-default
 // affordance and the store's initial state stay a single source of truth.
@@ -81,6 +100,10 @@ export interface SettingsState {
   terminalFontFamily: string | null;
   /** Chosen terminal font size, or null to follow `codeFontSize`. */
   terminalFontSize: number | null;
+  /** Cursor shape drawn in the terminal (block/bar/underline). */
+  terminalCursorStyle: TerminalCursorStyle;
+  /** Whether the terminal cursor blinks while the terminal is focused. */
+  terminalCursorBlink: boolean;
   artifactIconColorMode: EpicNodeIconColorMode;
   artifactIconColors: EpicNodeIconColors;
   defaultEditor: EditorId | null;
@@ -91,6 +114,12 @@ export interface SettingsState {
   voiceInputEnabled: boolean;
   /** BCP-47-ish dictation language hint, or "auto". */
   voiceLanguage: string;
+  /**
+   * Quote-to-composer affordance. Opt-out: enabling it (default) surfaces a
+   * quote button when selecting assistant text, inserting the selection into
+   * the chat composer as a blockquote.
+   */
+  quoteReplyEnabled: boolean;
   /**
    * Shared, user-level diff viewer configuration consumed by every git and
    * snapshot diff renderer. Persisted globally so the choice survives restarts
@@ -114,12 +143,15 @@ export interface SettingsState {
   setCodeFontFamily: (value: string | null) => void;
   setTerminalFontFamily: (value: string | null) => void;
   setTerminalFontSize: (value: number | null) => void;
+  setTerminalCursorStyle: (value: TerminalCursorStyle) => void;
+  setTerminalCursorBlink: (value: boolean) => void;
   setArtifactIconColorMode: (mode: EpicNodeIconColorMode) => void;
   setArtifactIconColor: (type: EpicNodeKind, color: string) => void;
   resetArtifactIconColors: () => void;
   setDefaultEditor: (id: EditorId | null) => void;
   setVoiceInputEnabled: (value: boolean) => void;
   setVoiceLanguage: (value: string) => void;
+  setQuoteReplyEnabled: (value: boolean) => void;
   setDiffViewerPreferences: (preferences: DiffViewerPreferences) => void;
   patchDiffViewerPreferences: (patch: DiffViewerPreferencesPatch) => void;
 }
@@ -146,11 +178,14 @@ type PersistedSettingsState = Pick<
   | "codeFontFamily"
   | "terminalFontFamily"
   | "terminalFontSize"
+  | "terminalCursorStyle"
+  | "terminalCursorBlink"
   | "artifactIconColorMode"
   | "artifactIconColors"
   | "defaultEditor"
   | "voiceInputEnabled"
   | "voiceLanguage"
+  | "quoteReplyEnabled"
   | "diffViewerPreferences"
 >;
 
@@ -210,11 +245,14 @@ function partializeSettingsState(state: SettingsState): PersistedSettingsState {
     codeFontFamily: state.codeFontFamily,
     terminalFontFamily: state.terminalFontFamily,
     terminalFontSize: state.terminalFontSize,
+    terminalCursorStyle: state.terminalCursorStyle,
+    terminalCursorBlink: state.terminalCursorBlink,
     artifactIconColorMode: state.artifactIconColorMode,
     artifactIconColors: state.artifactIconColors,
     defaultEditor: state.defaultEditor,
     voiceInputEnabled: state.voiceInputEnabled,
     voiceLanguage: state.voiceLanguage,
+    quoteReplyEnabled: state.quoteReplyEnabled,
     diffViewerPreferences: state.diffViewerPreferences,
   };
 }
@@ -242,11 +280,14 @@ export const useSettingsStore = create<SettingsState>()(
       codeFontFamily: null,
       terminalFontFamily: null,
       terminalFontSize: null,
+      terminalCursorStyle: DEFAULT_TERMINAL_CURSOR_STYLE,
+      terminalCursorBlink: DEFAULT_TERMINAL_CURSOR_BLINK,
       artifactIconColorMode: "byType",
       artifactIconColors: DEFAULT_EPIC_NODE_ICON_COLORS,
       defaultEditor: "vscode",
       voiceInputEnabled: true,
       voiceLanguage: "auto",
+      quoteReplyEnabled: true,
       diffViewerPreferences: DEFAULT_DIFF_VIEWER_PREFERENCES,
       setTheme: makeSetter(set, "theme"),
       setThemePreset: makeSetter(set, "themePreset"),
@@ -283,6 +324,8 @@ export const useSettingsStore = create<SettingsState>()(
           s.terminalFontSize === next ? s : { terminalFontSize: next },
         );
       },
+      setTerminalCursorStyle: makeSetter(set, "terminalCursorStyle"),
+      setTerminalCursorBlink: makeSetter(set, "terminalCursorBlink"),
       setArtifactIconColorMode: makeSetter(set, "artifactIconColorMode"),
       setArtifactIconColor: (type, color) => {
         const next = normalizeEpicNodeIconColor(color);
@@ -310,6 +353,7 @@ export const useSettingsStore = create<SettingsState>()(
       },
       setVoiceInputEnabled: makeSetter(set, "voiceInputEnabled"),
       setVoiceLanguage: makeSetter(set, "voiceLanguage"),
+      setQuoteReplyEnabled: makeSetter(set, "quoteReplyEnabled"),
       setDiffViewerPreferences: makeSetter(set, "diffViewerPreferences"),
       patchDiffViewerPreferences: (patch) => {
         set((s) => ({

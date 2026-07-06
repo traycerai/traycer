@@ -161,7 +161,14 @@ describe("resolvedTurnStatus - no turnInProgress from the host (older-host fallb
           activeTurn: ACTIVE_TURN,
           queue: runnableQueue(1),
           backgroundItems: [
-            { taskId: "t1", kind: "subagent", title: "Sub", blockId: "t1" },
+            {
+              taskId: "t1",
+              kind: "subagent",
+              title: "Sub",
+              blockId: "t1",
+              parentTaskId: null,
+              scheduledFor: null,
+            },
           ],
           turnInProgress: undefined,
         },
@@ -191,7 +198,14 @@ describe("resolvedTurnStatus - no turnInProgress from the host (older-host fallb
           activeTurn: null,
           queue: EMPTY_QUEUE,
           backgroundItems: [
-            { taskId: "t1", kind: "subagent", title: "Sub", blockId: "t1" },
+            {
+              taskId: "t1",
+              kind: "subagent",
+              title: "Sub",
+              blockId: "t1",
+              parentTaskId: null,
+              scheduledFor: null,
+            },
           ],
           turnInProgress: undefined,
         },

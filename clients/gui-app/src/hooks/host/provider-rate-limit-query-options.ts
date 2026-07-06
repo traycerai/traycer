@@ -36,8 +36,9 @@ const HTTP_FETCH_RATE_LIMIT_REFETCH_INTERVAL_MS = 5 * 60 * 1000;
  *   `queryFn` on every popover/Settings-card open (a fresh mount) whenever the
  *   cached data is stale - a direct host call that bypasses the queue and can
  *   overlap a fetch it's already draining. `useRefreshProviderRateLimitsOnMount`
- *   is the queue-routed replacement every `ephemeralProcess` consumer pairs
- *   with this hook to get the same "fresh data on open" behavior safely.
+ *   and `RateLimitQueueProvider` are the queue-routed replacements. The query
+ *   observer is disabled for this lane so it observes the shared cache state
+ *   without ever initiating its own subprocess-spawning request.
  */
 export function providerRateLimitQueryOptions(
   providerId: RateLimitProviderId,
@@ -50,6 +51,7 @@ export function providerRateLimitQueryOptions(
     method: "host.getRateLimitUsage",
     params: { accountContext: DEFAULT_ACCOUNT_CONTEXT, providerId },
     options: {
+      enabled: isHttpFetch,
       retry: false,
       staleTime: PROVIDER_RATE_LIMITS_STALE_TIME_MS,
       refetchInterval: isHttpFetch

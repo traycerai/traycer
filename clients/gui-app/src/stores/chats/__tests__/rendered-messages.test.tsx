@@ -1525,6 +1525,69 @@ describe("useRenderedMessages", () => {
     ]);
   });
 
+  it("keeps a wakeup resume trigger even when its blockId is the immediately preceding tool segment", () => {
+    const assistant: Message = {
+      ...assistantMessage("turn-1", 2000),
+      blocks: [
+        {
+          type: "tool_call",
+          blockId: "wake-tool",
+          toolName: "ScheduleWakeup",
+          ...toolCallInputFields("ScheduleWakeup", {
+            reason: "Review the deployment",
+            prompt: "Check the health dashboard.",
+          }),
+          error: null,
+          agentMessageSend: null,
+          progress: null,
+          backgroundOutput: null,
+          backgroundTask: false,
+          stopped: false,
+          status: "completed",
+          timestamp: 2002,
+          startedAt: 2002,
+          endedAt: 2002,
+        },
+        {
+          type: "autonomous_resume",
+          blockId: "resume-1",
+          status: "completed",
+          timestamp: 2003,
+          triggers: [
+            {
+              kind: "wakeup",
+              title: "Review the deployment",
+              status: "completed",
+              summary: "Check the health dashboard.",
+              blockId: "wake-tool",
+              outputFile: null,
+            },
+          ],
+        },
+      ],
+    };
+
+    const { result } = renderHook(() =>
+      useRenderedMessages(
+        {
+          messages: [assistant],
+          events: [],
+          pendingUserMessages: [],
+          liveAssistantMessage: null,
+          activeTurn: null,
+          runStatus: "idle",
+          ...BINDING,
+        },
+        displayContext,
+      ),
+    );
+
+    expect(result.current[0]?.segments.map((segment) => segment.kind)).toEqual([
+      "tool",
+      "autonomous_resume",
+    ]);
+  });
+
   it("keeps a resume trigger whose blockId is not the immediately preceding segment", () => {
     const assistant: Message = {
       ...assistantMessage("turn-1", 2000),

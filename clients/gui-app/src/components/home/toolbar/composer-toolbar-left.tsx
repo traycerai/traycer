@@ -28,6 +28,7 @@ interface ComposerToolbarLeftProps {
    */
   harnessLabel: string | null;
   showNextTurnPermissionNote: boolean;
+  showAgentModeTooltip: boolean;
   settingsLocked: boolean;
 }
 
@@ -41,6 +42,7 @@ function ComposerToolbarLeftImpl(props: ComposerToolbarLeftProps) {
     supportedPermissionModes,
     harnessLabel,
     showNextTurnPermissionNote,
+    showAgentModeTooltip,
     settingsLocked,
   } = props;
   const inputRef = useRef<HTMLInputElement>(null);
@@ -91,6 +93,7 @@ function ComposerToolbarLeftImpl(props: ComposerToolbarLeftProps) {
       <AgentModeToggle
         value={agentMode}
         disabled={settingsLocked}
+        showTooltip={showAgentModeTooltip}
         onChange={onAgentModeChange}
       />
       {showNextTurnPermissionNote ? (

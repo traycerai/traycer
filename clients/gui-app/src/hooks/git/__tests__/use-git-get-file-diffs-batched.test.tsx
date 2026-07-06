@@ -210,7 +210,11 @@ describe("useGitGetFileDiffsBatched", () => {
             previousPath: "old-staged.ts",
             stage: "staged",
           },
-          { filePath: "unstaged.ts", previousPath: null, stage: "unstaged" },
+          {
+            filePath: "unstaged.ts",
+            previousPath: null,
+            stage: "unstaged",
+          },
         ],
         ignoreWhitespace: true,
         byteBudget: DEFAULT_GIT_FILE_DIFFS_BYTE_BUDGET,

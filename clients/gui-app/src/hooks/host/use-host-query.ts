@@ -152,7 +152,7 @@ export function useHostMutation<
   });
 }
 
-function hostClientUnavailableError(method: string): HostRpcError {
+export function hostClientUnavailableError(method: string): HostRpcError {
   return new HostRpcError({
     code: "RPC_ERROR",
     requestId: "client-unavailable",

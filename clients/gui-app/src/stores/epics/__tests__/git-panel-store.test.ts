@@ -1,21 +1,26 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  GIT_PANEL_PERSIST_KEY,
+  migrateGitPanelPersistedState,
+  selectGitPanelEpicState,
   useGitPanelStore,
   defaultEpicState,
   type GitPanelStore,
   type GitPanelEpicState,
-  type GitPanelSelectedWorktree,
+  type GitPanelSelectedRepo,
 } from "../git-panel-store";
 
 const EPIC_ID = "epic-1" as const;
 const EPIC_ID_2 = "epic-2" as const;
-const WORKTREE_1: GitPanelSelectedWorktree = {
+const REPO_1: GitPanelSelectedRepo = {
   hostId: "host-1",
-  runningDir: "/path/1",
+  rootRunningDir: "/path/1",
+  repoRoot: "/path/1",
 };
-const WORKTREE_2: GitPanelSelectedWorktree = {
+const REPO_2: GitPanelSelectedRepo = {
   hostId: "host-2",
-  runningDir: "/path/1",
+  rootRunningDir: "/path/1",
+  repoRoot: "/path/1/traycer",
 };
 
 function getEpicState(epicId: string): GitPanelEpicState {
@@ -30,6 +35,7 @@ function getEpicState(epicId: string): GitPanelEpicState {
 
 describe("git-panel-store", () => {
   beforeEach(() => {
+    window.localStorage.clear();
     useGitPanelStore.setState({ stateByEpicId: {} });
   });
 
@@ -40,22 +46,43 @@ describe("git-panel-store", () => {
 
   it("isolates state per epic", () => {
     const store = useGitPanelStore;
-    store.getState().setSelectedWorktree(EPIC_ID, WORKTREE_1);
-    store.getState().setSelectedWorktree(EPIC_ID_2, WORKTREE_2);
+    store.getState().setSelectedRepo(EPIC_ID, REPO_1);
+    store.getState().setSelectedRepo(EPIC_ID_2, REPO_2);
 
     const epic1State = getEpicState(EPIC_ID);
     const epic2State = getEpicState(EPIC_ID_2);
 
-    expect(epic1State.selectedWorktree).toEqual(WORKTREE_1);
-    expect(epic2State.selectedWorktree).toEqual(WORKTREE_2);
+    expect(epic1State.selectedRepo).toEqual(REPO_1);
+    expect(epic2State.selectedRepo).toEqual(REPO_2);
   });
 
-  it("set/get round-trip for selectedWorktree", () => {
+  it("set/get round-trip for selectedRepo", () => {
     const store = useGitPanelStore;
-    store.getState().setSelectedWorktree(EPIC_ID, WORKTREE_1);
-    expect(getEpicState(EPIC_ID).selectedWorktree).toEqual(WORKTREE_1);
-    store.getState().setSelectedWorktree(EPIC_ID, null);
-    expect(getEpicState(EPIC_ID).selectedWorktree).toBeNull();
+    store.getState().setSelectedRepo(EPIC_ID, REPO_1);
+    expect(getEpicState(EPIC_ID).selectedRepo).toEqual(REPO_1);
+    store.getState().setSelectedRepo(EPIC_ID, null);
+    expect(getEpicState(EPIC_ID).selectedRepo).toBeNull();
+  });
+
+  it("distinguishes a submodule selection from its root", () => {
+    const store = useGitPanelStore;
+    const rootSelection: GitPanelSelectedRepo = {
+      hostId: "host-1",
+      rootRunningDir: "/path/1",
+      repoRoot: "/path/1",
+    };
+    const submoduleSelection: GitPanelSelectedRepo = {
+      hostId: "host-1",
+      rootRunningDir: "/path/1",
+      repoRoot: "/path/1/traycer",
+    };
+    store.getState().setSelectedRepo(EPIC_ID, rootSelection);
+    const before = store.getState().stateByEpicId;
+    store.getState().setSelectedRepo(EPIC_ID, submoduleSelection);
+    const after = store.getState().stateByEpicId;
+    // Same root, different repoRoot: this is a real selection change.
+    expect(before === after).toBe(false);
+    expect(getEpicState(EPIC_ID).selectedRepo).toEqual(submoduleSelection);
   });
 
   it("set/get round-trip for listLayout", () => {
@@ -103,10 +130,73 @@ describe("git-panel-store", () => {
 
   it("does not mutate state on idempotent calls", () => {
     const store = useGitPanelStore;
-    store.getState().setSelectedWorktree(EPIC_ID, WORKTREE_1);
+    store.getState().setSelectedRepo(EPIC_ID, REPO_1);
     const before = store.getState().stateByEpicId;
-    store.getState().setSelectedWorktree(EPIC_ID, { ...WORKTREE_1 });
+    store.getState().setSelectedRepo(EPIC_ID, { ...REPO_1 });
     const after = store.getState().stateByEpicId;
     expect(before === after).toBe(true);
+  });
+
+  describe("v1 -> v2 persisted-state migration", () => {
+    const LEGACY_V1_ENTRY = {
+      selectedWorktree: { hostId: "host-1", runningDir: "/path/1" },
+      listLayout: "tree",
+      mergeSectionCollapsed: true,
+      stagedSectionCollapsed: false,
+      changesSectionCollapsed: false,
+    };
+
+    it("drops legacy selectedWorktree and resets selectedRepo to null", () => {
+      const migrated = migrateGitPanelPersistedState({
+        stateByEpicId: { [EPIC_ID]: LEGACY_V1_ENTRY },
+      });
+      const entry = migrated.stateByEpicId[EPIC_ID];
+      expect(entry).toEqual({
+        selectedRepo: null,
+        listLayout: "tree",
+        mergeSectionCollapsed: true,
+        stagedSectionCollapsed: false,
+        changesSectionCollapsed: false,
+      });
+      expect(Object.hasOwn(entry, "selectedWorktree")).toBe(false);
+    });
+
+    it("tolerates a corrupt or missing persisted blob", () => {
+      expect(migrateGitPanelPersistedState(null)).toEqual({
+        stateByEpicId: {},
+      });
+      expect(migrateGitPanelPersistedState({})).toEqual({ stateByEpicId: {} });
+      expect(migrateGitPanelPersistedState({ stateByEpicId: 42 })).toEqual({
+        stateByEpicId: {},
+      });
+    });
+
+    it("rehydrates a v1 blob without crashing the selector", async () => {
+      window.localStorage.setItem(
+        GIT_PANEL_PERSIST_KEY,
+        JSON.stringify({
+          state: { stateByEpicId: { [EPIC_ID]: LEGACY_V1_ENTRY } },
+          version: 1,
+        }),
+      );
+      await useGitPanelStore.persist.rehydrate();
+
+      const epicState = selectGitPanelEpicState(EPIC_ID)(
+        useGitPanelStore.getState(),
+      );
+      expect(epicState.selectedRepo).toBeNull();
+      expect(epicState.listLayout).toBe("tree");
+      expect(Object.hasOwn(getEpicState(EPIC_ID), "selectedWorktree")).toBe(
+        false,
+      );
+    });
+
+    it("selectGitPanelEpicState fills defaults for a missing epic", () => {
+      const result = selectGitPanelEpicState("nonexistent")(
+        useGitPanelStore.getState(),
+      );
+      expect(result).toEqual(defaultEpicState);
+      expect(result.selectedRepo).toBeNull();
+    });
   });
 });

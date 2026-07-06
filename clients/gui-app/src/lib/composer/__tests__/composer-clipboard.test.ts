@@ -97,6 +97,26 @@ describe("composer clipboard helpers", () => {
     );
   });
 
+  it("keeps '> '-prefixed lines for a multi-paragraph blockquote", () => {
+    const content: JsonContent = {
+      type: "doc",
+      content: [
+        {
+          type: "blockquote",
+          content: [
+            { type: "paragraph", content: [{ type: "text", text: "first" }] },
+            { type: "paragraph", content: [{ type: "text", text: "second" }] },
+          ],
+        },
+        { type: "paragraph", content: [{ type: "text", text: "reply" }] },
+      ],
+    };
+
+    expect(composerClipboardPlainText(content)).toBe(
+      ["> first", "> second", "", "reply"].join("\n"),
+    );
+  });
+
   it("round-trips structured composer content through clipboard HTML", () => {
     const plainText = composerClipboardPlainText(STRUCTURED_CONTENT);
     const html = buildComposerClipboardHtml(STRUCTURED_CONTENT, plainText);

@@ -212,7 +212,7 @@ describe("<UserMessageBody /> agent messages", () => {
   });
 
   it("omits the Show more affordance for short prompts", () => {
-    render(
+    const { container } = render(
       <UserMessageBody
         actions={null}
         message={plainUserMessage("A short prompt.")}
@@ -220,6 +220,7 @@ describe("<UserMessageBody /> agent messages", () => {
     );
 
     expect(screen.queryByRole("button", { name: "Show more" })).toBeNull();
+    expect(container.querySelector("[data-quotable]")).toBeNull();
   });
 
   it("renders compact image attachment thumbnails that still open", () => {
@@ -332,6 +333,12 @@ describe("<UserMessageBody /> agent messages", () => {
     expect(screen.getByText("Open sending agent")).toBeTruthy();
     expect(screen.getByText("reply expected")).toBeTruthy();
     expect(screen.getByText("Message")).toBeTruthy();
+    expect(
+      screen
+        .getByText("Investigate this failure.")
+        .closest(".md-prose")
+        ?.hasAttribute("data-quotable"),
+    ).toBe(false);
   });
 
   it("opens received A2A cards through the provider store", () => {

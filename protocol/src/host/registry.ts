@@ -38,6 +38,7 @@ import {
   agentGuiListModelsV10,
   chatSubscribeV10,
   chatSubscribeV11,
+  chatSubscribeV12,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -134,6 +135,8 @@ import { worktreeDeleteByPathStreamV10 } from "@traycer/protocol/host/worktree-d
 import { editorOpenPathsV10 } from "@traycer/protocol/host/editor/contracts";
 import {
   gitListChangedFilesV10,
+  gitListChangedFilesV11,
+  gitListChangedFilesUpgradeV10ToV11,
   gitGetFileDiffV10,
   gitGetFileDiffsV10,
   gitGetCapabilitiesV10,
@@ -2002,16 +2005,23 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
   },
   "git.listChangedFiles": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: gitListChangedFilesV10,
           upgradeFromPreviousVersion: null,
         },
+        1: {
+          contract: gitListChangedFilesV11,
+          upgradeFromPreviousVersion: gitListChangedFilesUpgradeV10ToV11,
+        },
       },
       downgradePathsFromLatest: {},
     },
   },
+  // `getFileDiff` / `getFileDiffs` stay v1.0-only: the submodule work needs no
+  // request changes (working-tree files diff stage-based against the submodule
+  // repo root), so there is no v1.1 for these methods.
   "git.getFileDiff": {
     1: {
       latestMinor: 0,
@@ -2577,7 +2587,7 @@ export type HostRpcRegistry = typeof hostRpcRegistry;
  * Combined streaming-RPC registry for the `/stream` WS manifest.
  *
  * One manifest per `/stream` WS: `epic.subscribe@1.0`,
- * `chat.subscribe@1.1`, `notifications.subscribe@1.0`,
+ * `chat.subscribe@1.2`, `notifications.subscribe@1.0`,
  * `terminal.subscribe@1.0`, `git.subscribeStatus@1.0`,
  * `resources.subscribe@1.0`, `agent.inbox.subscribe@1.0`,
  * `speech.dictate@1.0`, and
@@ -2610,13 +2620,16 @@ export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
   },
   "chat.subscribe": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: chatSubscribeV10,
         },
         1: {
           contract: chatSubscribeV11,
+        },
+        2: {
+          contract: chatSubscribeV12,
         },
       },
     },
