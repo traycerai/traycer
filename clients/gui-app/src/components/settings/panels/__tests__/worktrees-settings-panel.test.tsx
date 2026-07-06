@@ -1489,6 +1489,112 @@ describe("WorktreesList v1.1 signals", () => {
     screen.getByText("No worktrees match your search.");
   });
 
+  it("Task chip shows partial 'Merged 1/2' when a submodule merged but the superproject PR is still open", () => {
+    renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees: [
+        entry({
+          worktreePath: "/wt/alpha",
+          branch: "feat-alpha",
+          owners: [
+            {
+              epicId: "epic-1",
+              ownerKind: "chat",
+              ownerId: "chat-1",
+              updatedAt: 1,
+            },
+          ],
+          // Superproject gitlink-bump PR still open; owned submodule PR merged.
+          prState: "open",
+          prNumber: 10,
+          mergedHeadShaMatches: false,
+          submodules: [
+            {
+              repoIdentifier: { owner: "acme", repo: "sub" },
+              branch: "feat-alpha",
+              prState: "merged",
+              prNumber: 11,
+              prUrl: null,
+              mergedHeadShaMatches: true,
+              mergedIntoDefault: true,
+            },
+          ],
+        }),
+      ],
+      taskTitlesByEpicId: new Map([["epic-1", "Payments revamp"]]),
+    });
+    const rollup = screen.getByTestId("task-merge-rollup");
+    expect(rollup.getAttribute("data-rollup-status")).toBe("partial");
+    expect(rollup.textContent).toContain("Merged 1/2");
+  });
+
+  it("Task chip shows 'Merged' when the superproject and every owned submodule have merged PRs", () => {
+    renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees: [
+        entry({
+          worktreePath: "/wt/alpha",
+          branch: "feat-alpha",
+          owners: [
+            {
+              epicId: "epic-1",
+              ownerKind: "chat",
+              ownerId: "chat-1",
+              updatedAt: 1,
+            },
+          ],
+          prState: "merged",
+          prNumber: 20,
+          mergedHeadShaMatches: true,
+          submodules: [
+            {
+              repoIdentifier: { owner: "acme", repo: "sub" },
+              branch: "feat-alpha",
+              prState: "merged",
+              prNumber: 21,
+              prUrl: null,
+              mergedHeadShaMatches: true,
+              mergedIntoDefault: true,
+            },
+          ],
+        }),
+      ],
+      taskTitlesByEpicId: new Map([["epic-1", "Payments revamp"]]),
+    });
+    const rollup = screen.getByTestId("task-merge-rollup");
+    expect(rollup.getAttribute("data-rollup-status")).toBe("merged");
+    expect(rollup.textContent).toContain("Merged");
+    expect(rollup.textContent).not.toContain("/");
+  });
+
+  it("Task chip shows no merge rollup when there is no PR anywhere (pre-M4 / gh absent degrade)", () => {
+    renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees: [
+        entry({
+          worktreePath: "/wt/alpha",
+          branch: "feat-alpha",
+          owners: [
+            {
+              epicId: "epic-1",
+              ownerKind: "chat",
+              ownerId: "chat-1",
+              updatedAt: 1,
+            },
+          ],
+          // No PR facts, no submodules - the honest "nothing to claim" case.
+        }),
+      ],
+      taskTitlesByEpicId: new Map([["epic-1", "Payments revamp"]]),
+    });
+    // The Task title still renders; the merge-rollup badge does not.
+    screen.getByText("Payments revamp");
+    expect(screen.queryByTestId("task-merge-rollup")).toBeNull();
+  });
+
   it("orders by createdAt: Newest by default, Oldest reverses; null createdAt last", () => {
     renderList({
       hostId: "host-a",

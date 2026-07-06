@@ -39,6 +39,11 @@ import {
   classifyWorktreeTier,
   type WorktreeTier,
 } from "@/lib/worktree/classify-worktree";
+import {
+  buildTaskMergeRollups,
+  taskMergeRollupLabel,
+  type TaskMergeRollup,
+} from "@/lib/worktree/task-merge-rollup";
 import type { WorktreeEntryScripts } from "@traycer/protocol/host/worktree-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
@@ -593,6 +598,14 @@ export function WorktreesList(props: {
 }): ReactNode {
   const { hostId, worktrees, taskTitlesByEpicId, openStreamTransport } = props;
   const queryClient = useQueryClient();
+  // True-AND merge rollup per owning Task (epic), aggregated across every worktree
+  // entry the epic owns (superproject branch + each entry's owned submodules). Same
+  // map is read on every row a Task appears on, so a multi-worktree Task shows one
+  // consistent rollup.
+  const taskRollupByEpicId = useMemo(
+    () => buildTaskMergeRollups(worktrees),
+    [worktrees],
+  );
   const [searchText, setSearchText] = useState("");
   const [sortMode, setSortMode] = useState<WorktreeSortMode>("newest");
   const [tierFilters, setTierFilters] =
@@ -981,6 +994,7 @@ export function WorktreesList(props: {
                       key={entry.worktreePath}
                       entry={entry}
                       taskTitlesByEpicId={taskTitlesByEpicId}
+                      taskRollupByEpicId={taskRollupByEpicId}
                       deleteStatus={deleteStatus}
                       selected={selectedPaths.has(entry.worktreePath)}
                       canSelect={selectablePathSet.has(entry.worktreePath)}
@@ -1316,6 +1330,7 @@ function WorktreeRepoHeader(props: {
 function WorktreeRow(props: {
   readonly entry: WorktreeHostEntryV11;
   readonly taskTitlesByEpicId: ReadonlyMap<string, string>;
+  readonly taskRollupByEpicId: ReadonlyMap<string, TaskMergeRollup>;
   readonly deleteStatus: WorktreeRowDeleteStatus | null;
   readonly selected: boolean;
   readonly canSelect: boolean;
@@ -1326,6 +1341,7 @@ function WorktreeRow(props: {
   const {
     entry,
     taskTitlesByEpicId,
+    taskRollupByEpicId,
     deleteStatus,
     selected,
     canSelect,
@@ -1370,6 +1386,7 @@ function WorktreeRow(props: {
           <WorktreeTaskAssociation
             owners={entry.owners}
             taskTitlesByEpicId={taskTitlesByEpicId}
+            taskRollupByEpicId={taskRollupByEpicId}
           />
           <WorktreePathAffordance
             worktreePath={entry.worktreePath}
@@ -1525,6 +1542,7 @@ function WorktreePathAffordance(props: {
 function WorktreeTaskAssociation(props: {
   readonly owners: WorktreeHostEntryV11["owners"];
   readonly taskTitlesByEpicId: ReadonlyMap<string, string>;
+  readonly taskRollupByEpicId: ReadonlyMap<string, TaskMergeRollup>;
 }): ReactNode {
   const epicIds = [...new Set(props.owners.map((owner) => owner.epicId))];
   if (epicIds.length === 0) {
@@ -1545,14 +1563,18 @@ function WorktreeTaskAssociation(props: {
   return (
     <span className="flex flex-wrap items-center gap-1">
       {named.map((item) => (
-        <Badge
-          key={item.epicId}
-          variant="outline"
-          className="max-w-[min(60vw,16rem)] font-normal"
-          title={item.title}
-        >
-          <span className="truncate">{item.title}</span>
-        </Badge>
+        <span key={item.epicId} className="flex items-center gap-1">
+          <Badge
+            variant="outline"
+            className="max-w-[min(60vw,16rem)] font-normal"
+            title={item.title}
+          >
+            <span className="truncate">{item.title}</span>
+          </Badge>
+          <TaskMergeRollupBadge
+            rollup={props.taskRollupByEpicId.get(item.epicId) ?? null}
+          />
+        </span>
       ))}
       {unresolvedCount > 0 ? (
         <span className="text-ui-xs text-muted-foreground/70">
@@ -1560,6 +1582,44 @@ function WorktreeTaskAssociation(props: {
         </span>
       ) : null}
     </span>
+  );
+}
+
+/**
+ * True-AND Task merge rollup badge, sitting beside a resolved Task chip. `Merged`
+ * (fully-merged green) means every owned branch - the superproject binding branch
+ * and each owned submodule - has a HEAD-validated merged PR; `Merged N/M` (muted
+ * amber) is the honest partial when some but not all have landed (the classic
+ * "submodule PR merged, superproject gitlink bump still open" case). Renders
+ * nothing when there's no merged progress to claim (no PR anywhere, or a pre-M4
+ * host with no submodule/PR facts) - the chip then shows just the Task title.
+ */
+function TaskMergeRollupBadge(props: {
+  readonly rollup: TaskMergeRollup | null;
+}): ReactNode {
+  const rollup = props.rollup;
+  if (rollup === null || rollup.status === "none") return null;
+  const fullyMerged = rollup.status === "merged";
+  return (
+    <Badge
+      variant="outline"
+      className={cn(
+        "gap-1 font-medium",
+        fullyMerged
+          ? "border-emerald-600/30 bg-emerald-500/10 text-emerald-700 dark:border-emerald-400/30 dark:text-emerald-300"
+          : "border-amber-600/25 bg-amber-500/10 text-amber-700 dark:border-amber-400/25 dark:text-amber-300",
+      )}
+      data-testid="task-merge-rollup"
+      data-rollup-status={rollup.status}
+      title={
+        fullyMerged
+          ? "Every branch this Task owns has a merged PR"
+          : `${rollup.merged} of ${rollup.total} owned branches merged`
+      }
+    >
+      <GitMerge className="size-3" aria-hidden />
+      {taskMergeRollupLabel(rollup)}
+    </Badge>
   );
 }
 
