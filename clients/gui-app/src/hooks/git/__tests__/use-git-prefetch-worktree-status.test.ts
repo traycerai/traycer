@@ -6,12 +6,32 @@ import React from "react";
 import { gitQueryKeys } from "@/lib/query-keys/git-query-keys";
 import { useGitPrefetchWorktreeStatus } from "../use-git-prefetch-worktree-status";
 
-const mockClient = {
+const defaultHostClient = {
   request: vi.fn(),
+  label: "default",
 };
 
+const hostBClient = {
+  request: vi.fn(),
+  label: "host-B",
+};
+
+const directoryEntries = new Map<string, { hostId: string }>([
+  ["host-B", { hostId: "host-B" }],
+]);
+
 vi.mock("@/lib/host", () => ({
-  useHostClient: () => mockClient,
+  useHostClient: () => defaultHostClient,
+  useHostDirectory: () => ({
+    findById: (hostId: string) => directoryEntries.get(hostId) ?? null,
+  }),
+}));
+
+vi.mock("@/hooks/host/use-host-client-for", () => ({
+  buildTransientHostClient: (
+    globalClient: { label: string },
+    entry: { hostId: string },
+  ) => (entry.hostId === "host-B" ? hostBClient : globalClient),
 }));
 
 describe("useGitPrefetchWorktreeStatus", () => {
@@ -32,13 +52,13 @@ describe("useGitPrefetchWorktreeStatus", () => {
       files: [{ path: "a.ts" }, { path: "b.ts" }],
       repoMode: "normal" as const,
     };
-    mockClient.request.mockResolvedValueOnce(mockResult);
+    hostBClient.request.mockResolvedValueOnce(mockResult);
 
     const { result } = renderHook(() => useGitPrefetchWorktreeStatus(), {
       wrapper,
     });
 
-    const hostId = "host-1";
+    const hostId = "host-B";
     const runningDir = "/path/to/repo";
     const ignoreWhitespace = false;
 
@@ -48,10 +68,11 @@ describe("useGitPrefetchWorktreeStatus", () => {
       ignoreWhitespace,
     });
 
-    expect(mockClient.request).toHaveBeenCalledWith("git.listChangedFiles", {
+    expect(hostBClient.request).toHaveBeenCalledWith("git.listChangedFiles", {
       hostId,
       runningDir,
       ignoreWhitespace,
+      includeSubmodules: false,
     });
 
     // Verify cache is populated using the same key structure
@@ -64,8 +85,52 @@ describe("useGitPrefetchWorktreeStatus", () => {
     expect(cached).toEqual(mockResult);
   });
 
+  it("routes the request through the client for args.hostId, not the default host client", async () => {
+    const mockResult = { files: [], repoMode: "normal" as const };
+    hostBClient.request.mockResolvedValueOnce(mockResult);
+
+    const { result } = renderHook(() => useGitPrefetchWorktreeStatus(), {
+      wrapper,
+    });
+
+    await result.current({
+      hostId: "host-B",
+      runningDir: "/path/to/repo",
+      ignoreWhitespace: false,
+    });
+
+    expect(hostBClient.request).toHaveBeenCalledTimes(1);
+    expect(defaultHostClient.request).not.toHaveBeenCalled();
+  });
+
+  it("skips the call and writes nothing to cache when args.hostId has no reachable client", async () => {
+    const { result } = renderHook(() => useGitPrefetchWorktreeStatus(), {
+      wrapper,
+    });
+
+    const hostId = "host-unreachable";
+    const runningDir = "/path/to/repo";
+    const ignoreWhitespace = false;
+
+    await result.current({
+      hostId,
+      runningDir,
+      ignoreWhitespace,
+    });
+
+    expect(hostBClient.request).not.toHaveBeenCalled();
+    expect(defaultHostClient.request).not.toHaveBeenCalled();
+
+    const key = gitQueryKeys.listChangedFiles(
+      hostId,
+      runningDir,
+      ignoreWhitespace,
+    );
+    expect(queryClient.getQueryData(key)).toBeUndefined();
+  });
+
   it("skips fetch if already cached", async () => {
-    const hostId = "host-1";
+    const hostId = "host-B";
     const runningDir = "/path/to/repo";
     const ignoreWhitespace = false;
     const cachedResult = { files: [], repoMode: "normal" as const };
@@ -88,7 +153,7 @@ describe("useGitPrefetchWorktreeStatus", () => {
     });
 
     // Client should not be called if data is already in cache
-    expect(mockClient.request).not.toHaveBeenCalled();
+    expect(hostBClient.request).not.toHaveBeenCalled();
   });
 
   it("handles multiple prefetch calls with different params", async () => {
@@ -100,7 +165,7 @@ describe("useGitPrefetchWorktreeStatus", () => {
       files: [{ path: "b.ts" }, { path: "c.ts" }],
       repoMode: "normal" as const,
     };
-    mockClient.request
+    hostBClient.request
       .mockResolvedValueOnce(mockResult1)
       .mockResolvedValueOnce(mockResult2);
 
@@ -109,17 +174,17 @@ describe("useGitPrefetchWorktreeStatus", () => {
     });
 
     await result.current({
-      hostId: "host-1",
+      hostId: "host-B",
       runningDir: "/path/a",
       ignoreWhitespace: false,
     });
 
     await result.current({
-      hostId: "host-1",
+      hostId: "host-B",
       runningDir: "/path/b",
       ignoreWhitespace: false,
     });
 
-    expect(mockClient.request).toHaveBeenCalledTimes(2);
+    expect(hostBClient.request).toHaveBeenCalledTimes(2);
   });
 });

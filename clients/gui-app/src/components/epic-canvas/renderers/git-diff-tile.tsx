@@ -98,6 +98,11 @@ function isGitBundleDiffTileRef(
   return node.diff.kind === "bundle";
 }
 
+/** The file path a tile targets for "open in editor"; bundles have none. */
+function tileOpenFilePath(diff: GitDiffTileRef["diff"]): string | null {
+  return diff.kind === "bundle" ? null : diff.filePath;
+}
+
 export function GitDiffTile(props: GitDiffTileProps): ReactNode {
   const tabHostId = useTabHostId();
   const activeHostId = useReactiveActiveHostId();
@@ -164,9 +169,7 @@ function GitDiffTileLive(props: GitDiffTileLiveProps): ReactNode {
         <GitDiffTileToolbar
           node={props.node}
           viewTabId={props.viewTabId}
-          onOpenFile={
-            props.node.diff.kind === "file" ? props.node.diff.filePath : null
-          }
+          onOpenFile={tileOpenFilePath(props.node.diff)}
           bundleFilePaths={bundleFilePaths(
             props.node,
             subscription.data?.files ?? null,

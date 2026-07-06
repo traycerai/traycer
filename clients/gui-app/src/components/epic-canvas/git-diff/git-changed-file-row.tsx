@@ -7,11 +7,8 @@ import {
 import { WorkspaceFileIcon } from "@/components/epic-canvas/workspace-file/workspace-file-icons";
 import { Badge } from "@/components/ui/badge";
 import {
-  TRUNCATE_START_INNER_STYLE,
-  TRUNCATE_START_STYLE,
-} from "@/lib/truncate-start-style";
-import {
   splitPathMatchRanges,
+  type HighlightRange,
   type HighlightRanges,
 } from "@/lib/git/path-highlight";
 import { cn } from "@/lib/utils";
@@ -31,6 +28,7 @@ export interface GitChangedFileRowProps {
   readonly onClick: (() => void) | null;
   readonly onDoubleClick: (() => void) | undefined;
   readonly ariaExpanded: boolean | undefined;
+  readonly nested: boolean;
   readonly className: string | undefined;
 }
 
@@ -53,6 +51,73 @@ function RowStats(props: RowStatsProps): ReactNode {
           bin
         </Badge>
       ) : null}
+    </span>
+  );
+}
+
+interface FileNameParts {
+  readonly stem: string;
+  readonly extension: string | null;
+}
+
+function splitFileNameExtension(fileName: string): FileNameParts {
+  const extensionStart = fileName.lastIndexOf(".");
+  if (extensionStart <= 0 || extensionStart === fileName.length - 1) {
+    return { stem: fileName, extension: null };
+  }
+  return {
+    stem: fileName.slice(0, extensionStart),
+    extension: fileName.slice(extensionStart),
+  };
+}
+
+function rangesForTextSlice(
+  ranges: HighlightRanges,
+  sliceStart: number,
+  sliceEndExclusive: number,
+): HighlightRanges {
+  return ranges.flatMap((range) => {
+    const [rangeStart, rangeEnd] = range;
+    const clippedStart = Math.max(rangeStart, sliceStart);
+    const clippedEnd = Math.min(rangeEnd, sliceEndExclusive - 1);
+    if (clippedStart > clippedEnd) return [];
+    const shifted: HighlightRange = [
+      clippedStart - sliceStart,
+      clippedEnd - sliceStart,
+    ];
+    return [shifted];
+  });
+}
+
+function MiddleTruncatedFileName(props: {
+  readonly fileName: string;
+  readonly ranges: HighlightRanges;
+  readonly className: string;
+}): ReactNode {
+  const parts = splitFileNameExtension(props.fileName);
+  if (parts.extension === null) {
+    return (
+      <span className={cn("min-w-0 truncate font-normal", props.className)}>
+        <HighlightedText text={props.fileName} ranges={props.ranges} />
+      </span>
+    );
+  }
+  const stemRanges = rangesForTextSlice(props.ranges, 0, parts.stem.length);
+  const extensionRanges = rangesForTextSlice(
+    props.ranges,
+    parts.stem.length,
+    props.fileName.length,
+  );
+  return (
+    <span
+      className={cn("flex min-w-0 items-baseline font-normal", props.className)}
+    >
+      <span className="min-w-0 truncate">
+        <HighlightedText text={parts.stem} ranges={stemRanges} />
+      </span>
+      <span className="shrink-0">
+        <HighlightedText text={parts.extension} ranges={extensionRanges} />
+      </span>
     </span>
   );
 }
@@ -80,37 +145,46 @@ function PanelRowContent(props: {
         withNativeTitle={false}
       />
       <WorkspaceFileIcon fileName={metadata.fileName} className="size-3.5" />
-      <span
-        className={cn(
-          "min-w-0 truncate font-normal",
-          hasDirectory ? "shrink" : "flex-1",
-        )}
-      >
-        <HighlightedText text={metadata.fileName} ranges={fileNameRanges} />
-      </span>
+      <MiddleTruncatedFileName
+        fileName={metadata.fileName}
+        ranges={fileNameRanges}
+        className={hasDirectory ? "shrink" : "flex-1"}
+      />
       {hasDirectory ? (
-        // Left-ellipsis so the deepest (most distinguishing) directory
-        // segments survive width pressure; the filename keeps priority
-        // because this span's flex basis is 0 - it only ever consumes
-        // leftover row width.
-        <span
-          className="min-w-0 flex-1 text-ui-xs text-muted-foreground"
-          style={TRUNCATE_START_STYLE}
-        >
-          <span style={TRUNCATE_START_INNER_STYLE}>
-            <HighlightedText
-              text={metadata.directoryName}
-              ranges={directoryRanges}
-            />
-          </span>
+        <span className="min-w-0 flex-1 truncate text-ui-xs text-muted-foreground">
+          <HighlightedText
+            text={metadata.directoryName}
+            ranges={directoryRanges}
+          />
         </span>
       ) : null}
       {props.trailing}
       <RowStats
         file={props.file}
-        className="pointer-events-none absolute right-3 top-1/2 z-10 hidden -translate-y-1/2 rounded bg-background/95 px-1 py-0.5 shadow-sm group-hover:flex group-focus-visible:flex"
+        className="pointer-events-none absolute right-3 top-1/2 hidden -translate-y-1/2 rounded bg-background/95 px-1 py-0.5 shadow-sm group-hover:flex group-focus-visible:flex"
       />
     </>
+  );
+}
+
+function gitChangedFileRowClassName(args: {
+  readonly isPanel: boolean;
+  readonly nested: boolean;
+  readonly isConflict: boolean;
+  readonly active: boolean;
+  readonly className: string | undefined;
+}): string {
+  return cn(
+    "group relative flex w-full items-center text-left text-ui-sm",
+    args.isPanel && args.nested && "min-h-6 gap-1.5 py-0.5 pl-10 pr-3",
+    args.isPanel && !args.nested && "min-h-6 gap-1.5 px-3 py-0.5",
+    !args.isPanel && "min-h-7 gap-2 px-2 py-1",
+    args.isConflict &&
+      (args.nested
+        ? "border-l-2 border-l-destructive pl-9"
+        : "border-l-2 border-l-destructive pl-2"),
+    args.active && "bg-accent text-accent-foreground",
+    args.className,
   );
 }
 
@@ -171,13 +245,13 @@ export function GitChangedFileRow(props: GitChangedFileRowProps): ReactNode {
     />
   );
 
-  const rowClassName = cn(
-    "group relative flex w-full items-center text-left text-ui-sm",
-    isPanel ? "min-h-6 gap-1.5 px-3 py-0.5" : "min-h-7 gap-2 px-2 py-1",
-    metadata.isConflict && "border-l-2 border-l-destructive pl-2",
-    props.active && "bg-accent text-accent-foreground",
-    props.className,
-  );
+  const rowClassName = gitChangedFileRowClassName({
+    isPanel,
+    nested: props.nested,
+    isConflict: metadata.isConflict,
+    active: props.active,
+    className: props.className,
+  });
 
   const baseAriaLabel = metadata.previousFileName
     ? `${metadata.statusLabel} ${metadata.fileName} (renamed from ${metadata.previousFileName})`

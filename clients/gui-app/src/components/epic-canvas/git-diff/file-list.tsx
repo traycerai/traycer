@@ -12,6 +12,7 @@ import type { HighlightRanges } from "@/lib/git/path-highlight";
 import { FileSections } from "./file-sections";
 import { FileTree } from "./file-tree";
 import { NoMatchingFiles } from "./empty-states/no-matching-files";
+import type { GitDiffSectionCollapseController } from "./git-diff-section";
 
 export interface FileListProps {
   readonly epicId: string;
@@ -21,6 +22,9 @@ export interface FileListProps {
   readonly files: ReadonlyArray<GitChangedFile>;
   readonly query: string;
   readonly onClearQuery: () => void;
+  readonly hideEmptySections: boolean;
+  readonly sectionCollapseController: GitDiffSectionCollapseController | null;
+  readonly virtualized: boolean;
 }
 
 export function FileList(props: FileListProps): ReactNode {
@@ -70,6 +74,9 @@ export function FileList(props: FileListProps): ReactNode {
         allFiles={props.files}
         visibleFiles={visibleFiles}
         forceExpanded={queryActive}
+        hideEmptySections={props.hideEmptySections}
+        sectionCollapseController={props.sectionCollapseController}
+        virtualized={props.virtualized}
       />
     );
   }
@@ -84,6 +91,9 @@ export function FileList(props: FileListProps): ReactNode {
       visibleFiles={visibleFiles}
       pathRangesByPath={pathRangesByPath}
       forceExpanded={queryActive}
+      hideEmptySections={props.hideEmptySections}
+      sectionCollapseController={props.sectionCollapseController}
+      virtualized={props.virtualized}
     />
   );
 }

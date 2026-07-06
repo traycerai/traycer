@@ -9,6 +9,7 @@ import { useMaybeEpicTuiAgentHarnessId } from "@/lib/epic-selectors";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import {
   WORKSPACE_FILE_TAB_KIND,
+  type EpicArtifactRef,
   type EpicNodeRef,
 } from "@/stores/epics/canvas/types";
 import { WorkspaceFileIcon } from "@/components/epic-canvas/workspace-file/workspace-file-icons";
@@ -51,7 +52,11 @@ export function EpicNodeTabIcon(props: {
   }
   if (props.node.type === "terminal-agent") {
     return (
-      <TuiAgentTabIcon nodeId={props.node.id} className={props.className} />
+      <TuiAgentTabIcon
+        nodeId={props.node.id}
+        pendingTuiHarnessId={props.node.pendingTuiHarnessId}
+        className={props.className}
+      />
     );
   }
   return (
@@ -69,9 +74,11 @@ export function EpicNodeTabIcon(props: {
  */
 function TuiAgentTabIcon(props: {
   readonly nodeId: string;
+  readonly pendingTuiHarnessId: EpicArtifactRef["pendingTuiHarnessId"];
   readonly className: string;
 }) {
-  const harnessId = useMaybeEpicTuiAgentHarnessId(props.nodeId);
+  const projectedHarnessId = useMaybeEpicTuiAgentHarnessId(props.nodeId);
+  const harnessId = projectedHarnessId ?? props.pendingTuiHarnessId ?? null;
   if (harnessId === null) {
     return (
       <StaticEpicNodeIcon type="terminal-agent" className={props.className} />

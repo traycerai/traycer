@@ -309,6 +309,35 @@ describe("useGitGetFileDiffQuery", () => {
     expect(cappedKey).not.toEqual(uncappedKey);
   });
 
+  it("runningDir (repoRoot) separates a submodule diff from the parent's same-path diff", () => {
+    const parentKey = gitQueryKeys.fileDiff(
+      "host-1",
+      "/repo",
+      "src/foo.ts",
+      null,
+      "unstaged",
+      "head-sha",
+      null,
+      "wt-oid",
+      false,
+      DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET,
+    );
+    const submoduleKey = gitQueryKeys.fileDiff(
+      "host-1",
+      "/repo/traycer",
+      "src/foo.ts",
+      null,
+      "unstaged",
+      "head-sha",
+      null,
+      "wt-oid",
+      false,
+      DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET,
+    );
+
+    expect(parentKey).not.toEqual(submoduleKey);
+  });
+
   it("sets and retrieves cached file diff data", () => {
     const key = gitQueryKeys.fileDiff(
       "host-1",
