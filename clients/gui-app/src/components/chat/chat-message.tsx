@@ -1,6 +1,8 @@
 import { memo, type ReactElement } from "react";
 import { cn } from "@/lib/utils";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
+import type { JsonContent } from "@traycer/protocol/common/registry";
+import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import { AssistantMessageBody } from "./chat-message-assistant-body";
 import { chatFindSegmentUnitId } from "./chat-find";
 import { UserMessageBody } from "./chat-message-user-body";
@@ -15,6 +17,22 @@ interface ChatMessageProps {
   nextStepActions: NextStepActionHandler | null;
 }
 
+export interface ChatMessageEditing {
+  readonly initialContent: JsonContent;
+  readonly currentContent: JsonContent;
+  readonly pending: boolean;
+  readonly canSubmit: boolean;
+  readonly slashProviderId: GuiHarnessId;
+  readonly mentionRoots: ReadonlyArray<string>;
+  readonly currentEpicId: string | null;
+  readonly onSnapshot: (
+    content: JsonContent,
+    selection: { from: number; to: number },
+  ) => void;
+  readonly onSubmit: () => void;
+  readonly onCancel: () => void;
+}
+
 export interface ChatMessageForkAction {
   readonly enabled: boolean;
   readonly pending: boolean;
@@ -25,13 +43,7 @@ export interface ChatMessageUserActions {
   readonly type: "user";
   readonly enabled: boolean;
   readonly confirmingDelete: boolean;
-  /**
-   * True when this message is the target of the composer's active
-   * message-edit mode (the pencil loaded its content into the bottom
-   * composer). The bubble highlights so the composer's "Editing message"
-   * pill has a visible anchor in the transcript.
-   */
-  readonly isEditTarget: boolean;
+  readonly editing: ChatMessageEditing | null;
   readonly onEdit: () => void;
   readonly onDeleteRequest: () => void;
   readonly onDeleteConfirm: () => void;

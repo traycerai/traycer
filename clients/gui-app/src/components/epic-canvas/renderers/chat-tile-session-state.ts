@@ -1,9 +1,13 @@
 import { toast } from "sonner";
 import type { JsonContent } from "@traycer/protocol/common/registry";
-import type { ChatRunStatus } from "@traycer/protocol/host/agent/gui/subscribe";
+import type {
+  ChatRunSettings,
+  ChatRunStatus,
+} from "@traycer/protocol/host/agent/gui/subscribe";
 import type { RestoreResultEntry } from "@traycer/protocol/persistence/epic/checkpoint-manifests";
 import type { UserMessageSender } from "@traycer/protocol/persistence/epic/schemas";
 import type { AuthProfile } from "@/stores/auth/auth-store";
+import type { ChatMessageEditing } from "@/components/chat/chat-message";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import type {
   ChatSessionState,
@@ -11,18 +15,28 @@ import type {
 } from "@/stores/chats/chat-session-store";
 import { isTransientLiveAssistantMessageId } from "@/lib/chat/transient-live-assistant-message-id";
 import { extractPlainTextFromComposerJSONContent } from "@/lib/composer/tiptap-json-content";
+import { containsImageAtoms } from "@/lib/composer/image-atoms";
 import type { PendingInterviewView } from "./chat-tile-types";
 
 /**
- * An in-progress message edit. The edit surface is the BOTTOM COMPOSER (the
- * message content is loaded into it as the draft, mirroring queue-item
- * editing), so this state only carries the routing target: which persisted
- * message the next composer submit replaces. `originalMessage` keeps the
- * edited row renderable if it drops out of the rendered list mid-edit.
+ * Fallback harness id used when the inline-edit settings do not carry a
+ * resolved harness. This occurs only while the composer settings are being
+ * initialised (before the first snapshot resolves the harness from the
+ * persisted chat settings or the epic/global run-settings seed). The value
+ * "claude" matches the host's default harness so the slash-command provider
+ * in the inline editor loads the right set of slash commands in the brief
+ * window before the real harness is known.
  */
+const DEFAULT_SLASH_PROVIDER_ID = "claude";
+
 export interface InlineEditState {
   readonly targetMessageId: string;
   readonly originalMessage: ChatMessageModel;
+  readonly initialContent: JsonContent;
+  readonly currentContent: JsonContent;
+  readonly dirty: boolean;
+  readonly pendingClientActionId: string | null;
+  readonly pendingMessageId: string | null;
 }
 
 export interface ChatTileUiState {
@@ -45,6 +59,17 @@ export type ChatTileUiAction =
       readonly type: "beginInlineEdit";
       readonly targetMessageId: string;
       readonly originalMessage: ChatMessageModel;
+      readonly initialContent: JsonContent;
+    }
+  | {
+      readonly type: "updateInlineEditContent";
+      readonly content: JsonContent;
+    }
+  | {
+      readonly type: "markInlineEditPending";
+      readonly targetMessageId: string;
+      readonly clientActionId: string;
+      readonly messageId: string;
     }
   | {
       readonly type: "clearInlineEdit";
@@ -69,14 +94,9 @@ export function chatTileUiReducer(
 ): ChatTileUiState {
   switch (action.type) {
     case "setEditingQueueItemId":
-      // The composer hosts BOTH edit modes (queue item and message), so
-      // entering queue-edit mode must end an open message edit - the two
-      // would otherwise fight over the same draft.
       return {
         ...state,
         editingQueueItemId: action.editingQueueItemId,
-        inlineEdit:
-          action.editingQueueItemId === null ? state.inlineEdit : null,
       };
     case "setConfirmingDeleteMessageId":
       return {
@@ -84,15 +104,43 @@ export function chatTileUiReducer(
         confirmingDeleteMessageId: action.confirmingDeleteMessageId,
       };
     case "beginInlineEdit":
-      // Symmetric exclusivity: starting a message edit ends queue-edit mode.
       return {
         ...state,
         inlineEdit: {
           targetMessageId: action.targetMessageId,
           originalMessage: action.originalMessage,
+          initialContent: action.initialContent,
+          currentContent: action.initialContent,
+          dirty: false,
+          pendingClientActionId: null,
+          pendingMessageId: null,
         },
-        editingQueueItemId: null,
         confirmingDeleteMessageId: null,
+      };
+    case "updateInlineEditContent":
+      if (state.inlineEdit === null) return state;
+      if (state.inlineEdit.pendingClientActionId !== null) return state;
+      return {
+        ...state,
+        inlineEdit: {
+          ...state.inlineEdit,
+          currentContent: action.content,
+          dirty: true,
+          pendingClientActionId: null,
+          pendingMessageId: null,
+        },
+      };
+    case "markInlineEditPending":
+      if (state.inlineEdit?.targetMessageId !== action.targetMessageId) {
+        return state;
+      }
+      return {
+        ...state,
+        inlineEdit: {
+          ...state.inlineEdit,
+          pendingClientActionId: action.clientActionId,
+          pendingMessageId: action.messageId,
+        },
       };
     case "clearInlineEdit":
       return {
@@ -178,19 +226,40 @@ export function resolvedTurnStatus(
   return isQueueRunnable || hasVisibleBackgroundWork ? null : turnStatus;
 }
 
+export function normalizeInlineEditForSession(
+  inlineEdit: InlineEditState | null,
+  state: Pick<
+    ChatSessionState,
+    "messages" | "pendingActions" | "acceptedActions"
+  >,
+): InlineEditState | null {
+  if (inlineEdit === null) return null;
+  if (
+    inlineEdit.pendingMessageId !== null &&
+    state.messages.some(
+      (message) =>
+        message.role === "user" &&
+        message.messageId === inlineEdit.pendingMessageId,
+    )
+  ) {
+    return null;
+  }
+  if (inlineEdit.pendingClientActionId === null) return inlineEdit;
+  if (Object.hasOwn(state.pendingActions, inlineEdit.pendingClientActionId)) {
+    return inlineEdit;
+  }
+  if (Object.hasOwn(state.acceptedActions, inlineEdit.pendingClientActionId)) {
+    return null;
+  }
+  return {
+    ...inlineEdit,
+    pendingClientActionId: null,
+    pendingMessageId: null,
+  };
+}
+
 export function canModifyChatMessages(input: {
   readonly canAct: boolean;
-  /**
-   * Worktree setup for this chat is provisioning (creating / setting-up),
-   * derived from the setup card events - see {@link setupRowsInFlight}. During
-   * this window the host-owned `runStatus`/pending flags stay non-idle for the
-   * whole (slow) setup, which would otherwise keep edit disabled. Once the user
-   * stops (the host settles the turn → `activeTurn === null`) we allow editing
-   * the setup-triggering message so it can be fixed and re-run, even though the
-   * setup script is still running. Gated on `activeTurn === null` so a genuine
-   * agent turn (activeTurn set, e.g. before stop or after setup) stays blocked.
-   */
-  readonly setupInFlight: boolean;
   readonly state: Pick<
     ChatSessionState,
     | "runStatus"
@@ -201,7 +270,6 @@ export function canModifyChatMessages(input: {
   >;
 }): boolean {
   if (!input.canAct) return false;
-  if (input.setupInFlight) return input.state.activeTurn === null;
   // `runStatus` is the host-owned source of truth for an in-progress run and
   // covers windows `activeTurn` misses - the pre-turn `turnActivating` phase
   // (provider/worktree setup) and stop-during-activation both report a non-idle
@@ -338,6 +406,71 @@ export function forkableAssistantMessageId(
     return null;
   }
   return message.persistentMessageId;
+}
+
+export function inlineEditLocksMessageActions(
+  inlineEdit: InlineEditState | null,
+  persistentMessageId: string,
+): boolean {
+  if (inlineEdit === null) return false;
+  if (inlineEdit.targetMessageId === persistentMessageId) return false;
+  return inlineEdit.dirty || inlineEdit.pendingClientActionId !== null;
+}
+
+export function inlineEditForPersistentMessage(
+  inlineEdit: InlineEditState | null,
+  persistentMessageId: string,
+): InlineEditState | null {
+  if (inlineEdit === null) return null;
+  if (inlineEdit.targetMessageId !== persistentMessageId) return null;
+  return inlineEdit;
+}
+
+export function inlineEditIsPending(
+  inlineEdit: InlineEditState | null,
+): boolean {
+  return inlineEdit !== null && inlineEdit.pendingClientActionId !== null;
+}
+
+function inlineEditHasDraftContent(inlineEdit: InlineEditState): boolean {
+  return (
+    extractPlainTextFromComposerJSONContent(inlineEdit.currentContent).trim()
+      .length > 0 || containsImageAtoms(inlineEdit.currentContent)
+  );
+}
+
+export function chatMessageEditingForInlineEdit(input: {
+  readonly editing: InlineEditState | null;
+  readonly canModifyMessages: boolean;
+  readonly editSettings: ChatRunSettings | null;
+  readonly mentionRoots: ReadonlyArray<string>;
+  readonly currentEpicId: string;
+  readonly onSnapshot: (
+    content: JsonContent,
+    selection: { from: number; to: number },
+  ) => void;
+  readonly onSubmit: () => void;
+  readonly onCancel: () => void;
+}): ChatMessageEditing | null {
+  if (input.editing === null) return null;
+  const editing = input.editing;
+  const pending = inlineEditIsPending(editing);
+  return {
+    initialContent: editing.initialContent,
+    currentContent: editing.currentContent,
+    pending,
+    canSubmit:
+      input.canModifyMessages &&
+      input.editSettings !== null &&
+      editing.dirty &&
+      inlineEditHasDraftContent(editing),
+    slashProviderId: input.editSettings?.harnessId ?? DEFAULT_SLASH_PROVIDER_ID,
+    mentionRoots: input.mentionRoots,
+    currentEpicId: input.currentEpicId,
+    onSnapshot: input.onSnapshot,
+    onSubmit: input.onSubmit,
+    onCancel: input.onCancel,
+  };
 }
 
 export function chatTileCanAct(

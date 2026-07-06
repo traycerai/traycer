@@ -28,19 +28,9 @@ let composerRenderCount = 0;
 vi.mock("@/components/chat/composer/chat-composer", () => ({
   ChatComposer: (props: {
     readonly workspaceControls: import("react").ReactNode | null;
-    readonly messageEditActive: boolean;
-    readonly setupInFlight: boolean;
   }) => {
     composerRenderCount += 1;
-    return (
-      <div
-        data-testid="composer-stub"
-        data-message-edit-active={String(props.messageEditActive)}
-        data-setup-in-flight={String(props.setupInFlight)}
-      >
-        {props.workspaceControls}
-      </div>
-    );
+    return <div data-testid="composer-stub">{props.workspaceControls}</div>;
   },
 }));
 // The dock legitimately re-renders per token; stub it so the test isolates the
@@ -188,9 +178,6 @@ const COMPOSER: ChatLowerComposerState = {
     </>
   ),
   workspaceAvailability: WORKSPACE_COMPOSER_READY,
-  messageEditActive: false,
-  onCancelMessageEdit: () => undefined,
-  setupInFlight: false,
 };
 
 // ── Per-token (dock-only) inputs: fresh identity each token, like the real app ─
@@ -273,54 +260,6 @@ describe("composer isolation from per-token dock churn", () => {
     // Run status flips idle -> running: a genuine composer input change.
     rerender(<ChatLowerInteractionSurfaces {...props(TURN_RUNNING, 1)} />);
     expect(composerRenderCount).toBe(2);
-  });
-
-  it("threads message-edit mode into the composer (single edit surface)", () => {
-    const { rerender } = render(
-      <ChatLowerInteractionSurfaces {...props(TURN_IDLE, 0)} />,
-    );
-    expect(
-      screen
-        .getByTestId("composer-stub")
-        .getAttribute("data-message-edit-active"),
-    ).toBe("false");
-
-    // A message edit begins: the bottom composer becomes THE edit surface
-    // (pill + edit-routed submit) - no second input box anywhere.
-    rerender(
-      <ChatLowerInteractionSurfaces
-        {...{
-          ...props(TURN_IDLE, 1),
-          composer: { ...COMPOSER, messageEditActive: true },
-        }}
-      />,
-    );
-    expect(
-      screen
-        .getByTestId("composer-stub")
-        .getAttribute("data-message-edit-active"),
-    ).toBe("true");
-  });
-
-  it("threads setup-in-flight into the composer (blocks fresh send)", () => {
-    const { rerender } = render(
-      <ChatLowerInteractionSurfaces {...props(TURN_IDLE, 0)} />,
-    );
-    expect(
-      screen.getByTestId("composer-stub").getAttribute("data-setup-in-flight"),
-    ).toBe("false");
-
-    rerender(
-      <ChatLowerInteractionSurfaces
-        {...{
-          ...props(TURN_IDLE, 1),
-          composer: { ...COMPOSER, setupInFlight: true },
-        }}
-      />,
-    );
-    expect(
-      screen.getByTestId("composer-stub").getAttribute("data-setup-in-flight"),
-    ).toBe("true");
   });
 
   it("does not re-render the composer when the context usage leaf updates", async () => {

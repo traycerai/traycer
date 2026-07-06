@@ -347,42 +347,6 @@ function workspaceStateFor(type: ChatEvent["type"]): SetupWorkspaceState {
 }
 
 /**
- * True when the LIVE setup lifecycle is still provisioning - the open
- * (`isActive`) window has a workspace `creating` (git worktree add) or
- * `setting-up` (setup script). Keys off `row.isActive` + the per-workspace
- * state (NOT the rolled-up aggregate, which ranks `failed` above `setting-up`)
- * so a multi-repo window with one failed + one still-running repo still reads
- * as in-flight. A historical window stranded at `setting-up` (worktree vanished
- * mid-setup) is `isActive: false` and never counts. This is the authoritative
- * "worktree setup is happening now" signal - derived from the same `setup.*`
- * events as the visible setup card, so it stays in step with what the user
- * sees, unlike the host-owned `runStatus` which desyncs across the setup window.
- */
-export function setupRowsInFlight(rows: ReadonlyArray<SetupCardRow>): boolean {
-  return rows.some(
-    (row) =>
-      row.isActive &&
-      row.model.workspaces.some(
-        (workspace) =>
-          workspace.state === "creating" || workspace.state === "setting-up",
-      ),
-  );
-}
-
-/**
- * Convenience wrapper: whether this owner has a worktree setup in flight,
- * projected straight from its chat events. Callers outside the transcript
- * projection (e.g. the composer/edit gating in the chat tile) use this so they
- * read the same signal the setup card renders from.
- */
-export function worktreeSetupInFlight(
-  events: ReadonlyArray<ChatEvent>,
-  binding: SetupCardBinding,
-): boolean {
-  return setupRowsInFlight(buildSetupCardRows(events, binding));
-}
-
-/**
  * Roll the per-workspace states up to one aggregate state, most-severe-first:
  * a `failed` workspace dominates (it owns the retry call-to-action), then any
  * still-running `setting-up`, then any still-`creating` worktree (both are work

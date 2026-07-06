@@ -12,8 +12,10 @@ import type { GitListChangedFilesSubscriptionResult } from "@/hooks/git/use-git-
 import type { GitListChangedFilesWithSubmodulesResult } from "@/hooks/git/use-git-list-changed-files-with-submodules";
 import type { GitPanelSelectedRepo } from "@/stores/epics/git-panel-store";
 import { useGitPanelStore } from "@/stores/epics/git-panel-store";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { GitChangedFilesView } from "../git-changed-files-view";
 import { SelectedRepoChanges } from "../selected-repo-changes";
+import { expectModuleHeaderTooltip } from "./git-module-header-test-utils";
 
 vi.mock("../bundle-open-button", () => ({
   BundleOpenButton: (props: { readonly group: string }) => (
@@ -129,7 +131,9 @@ function renderWithClient(children: ReactNode): void {
     defaultOptions: { queries: { retry: false } },
   });
   render(
-    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>,
+    <QueryClientProvider client={queryClient}>
+      <TooltipProvider delayDuration={0}>{children}</TooltipProvider>
+    </QueryClientProvider>,
   );
 }
 
@@ -184,7 +188,7 @@ describe("<SelectedRepoChanges /> module section state", () => {
     expect(screen.getByText("src/submodule-working.ts")).toBeDefined();
   });
 
-  it("exposes module headers and module-owned sections as expanded buttons", () => {
+  it("exposes module headers and module-owned sections as expanded buttons", async () => {
     renderSelectedChanges(
       response({
         files: [
@@ -211,12 +215,11 @@ describe("<SelectedRepoChanges /> module section state", () => {
     });
     expect(rootHeader.getAttribute("aria-expanded")).toBe("true");
     expect(submoduleHeader.getAttribute("aria-expanded")).toBe("true");
-    expect(submoduleHeader.getAttribute("title")).toContain(
+    const tooltipText = await expectModuleHeaderTooltip(
+      submoduleHeader,
       "Path: /repo/traycer",
     );
-    expect(submoduleHeader.getAttribute("title")).toContain(
-      "Status: pinned commit out of date",
-    );
+    expect(tooltipText).toContain("Status: pinned commit out of date");
     expect(rootHeader.className).toContain("bg-background");
     expect(rootHeader.className).toContain("hover:bg-muted");
     expect(rootHeader.className).toContain("z-40");
