@@ -636,10 +636,13 @@ export type WorktreeBranchStatus = z.infer<typeof worktreeBranchStatusSchema>;
 
 /**
  * GitHub PR merge state for a branch, as discovered by the host's best-effort
- * local `gh` probe. `"none"` means the probe ran but found no PR for the branch;
- * the whole PR bundle goes `null` (see the entry fields) when the probe is
- * absent / unauth / failed - PR data then contributes nothing and the classifier
- * degrades to the local-ancestry and at-base signals, never an error.
+ * local `gh` probe. `"none"` is the catch-all no-green state: EITHER the probe
+ * ran and found no PR, OR the probe could not run at all (`gh` absent / unauth /
+ * timed out / errored) - the host cannot distinguish these via its string-only
+ * runner, so both collapse to `"none"` (a short-TTL negative). The entry
+ * `prState` is `null` only when the branch was NOT probed (e.g.
+ * `includeActivity: false`). Either way PR data contributes no green and the
+ * classifier degrades to the local-ancestry and at-base signals, never an error.
  */
 export const worktreePrStateSchema = z.enum([
   "merged",
@@ -707,10 +710,12 @@ export const worktreeHostEntrySchemaV11 = worktreeHostEntrySchema.extend({
   // Always populated regardless of `includeActivity` (a cheap binding read, like
   // `owners`); `null` only for imported worktrees or pre-migration bindings.
   baseSha: z.string().nullable(),
-  // Superproject PR facts from the host's best-effort `gh` probe. `prState`,
-  // `prNumber` and `prUrl` are all `null` together when the probe found nothing /
-  // was absent / `includeActivity` is false. `mergedHeadShaMatches` is the host's
-  // live-HEAD comparison (HEAD === the merged head SHA) - the pure client
+  // Superproject PR facts from the host's best-effort `gh` probe. When the
+  // branch WAS probed but no green PR resulted - no PR found, or `gh`
+  // absent/unauth/failed (indistinguishable to the host) - `prState` is `"none"`
+  // and `prNumber`/`prUrl` are `null`. `prState` is `null` only when the branch
+  // was NOT probed (`includeActivity: false`). `mergedHeadShaMatches` is the
+  // host's live-HEAD comparison (HEAD === the merged head SHA) - the pure client
   // classifier greens `Merged (PR)` on `prState === "merged" &&
   // mergedHeadShaMatches`, so it never needs the SHA. `false` whenever unproven.
   prState: worktreePrStateSchema.nullable(),
