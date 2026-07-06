@@ -335,6 +335,10 @@ adding a new preset only needs a CSS block.
 
 - **What stays pinned.** No per-tab terminal palette overrides - every terminal
   mirrors the app theme. The xterm.js stylesheet (`@xterm/xterm/css/xterm.css`)
-  is left untouched; scrollbar / search overlay use xterm defaults. Cursor
-  shape, cursor blink, scrollback size, and `allowProposedApi` are constants in
-  `terminal-tile-xterm.tsx`.
+  is left untouched; scrollbar / search overlay use xterm defaults. Scrollback
+  size and `allowProposedApi` are constants in `terminal-tile-xterm.tsx`. Cursor
+  shape and cursor blink are Settings → Appearance values
+  (`terminalCursorStyle` / `terminalCursorBlink`): captured in
+  `initialOptionsRef` for the first paint and live-synced through
+  `useTerminalAppearanceSync` (no refit/atlas clear - they don't change cell
+  geometry).

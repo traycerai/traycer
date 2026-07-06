@@ -105,6 +105,20 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     explicit value starting from what was displayed; a ghost reset button
     clears back to `null`. Kept as a separate component because its reset target
     is `null` (follow code) rather than a fixed default.
+  - **Terminal cursor
+    (`controls/terminal-cursor-style-picker.tsx` + a `Switch`).** Two rows below
+    the terminal font. `Terminal cursor` is a segmented shape picker (iTerm2
+    style - each option draws the actual glyph, block centered) backed by
+    `terminalCursorStyle` (`"block" | "bar" | "underline"`, default `block`);
+    `Blink cursor` is a `Switch` backed by `terminalCursorBlink` (default on).
+    Both are captured in the host's `initialOptionsRef` for first paint and
+    live-synced into `term.options` via `useTerminalAppearanceSync`. On blur the
+    cursor stops blinking (xterm's inactive cursor never blinks) and
+    `cursorInactiveStyle` mirrors the chosen shape via `inactiveCursorStyleFor`,
+    except `block` falls back to a hollow `outline` so an unfocused pane stays
+    visually distinct. The
+    `Terminal preview` row reflects the chosen shape/blink with a CSS-only
+    cursor so the effect is visible without an xterm instance.
   - **Installed-font enumeration.** Desktop-only, following the same chain as
     `systemPreferencesAppearance`: `RunnerHostInvoke.fontsList` IPC channel →
     `listInstalledFonts()` (`electron-main/app/installed-fonts.ts`, backed by
