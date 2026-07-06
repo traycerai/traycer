@@ -64,6 +64,7 @@ function TextSegmentPart(props: TextSegmentPartProps) {
         isStreaming={props.isStreaming}
         markdown={part.markdown}
         proseSize="normal"
+        quotable
       />
     );
   }
@@ -75,6 +76,7 @@ function TextSegmentPart(props: TextSegmentPartProps) {
           isStreaming={props.isStreaming}
           markdown={part.prose}
           proseSize="normal"
+          quotable
         />
       )}
       <NextStepsActionGroup

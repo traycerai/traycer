@@ -758,6 +758,23 @@ class StreamSession<
       return;
     }
     const details = termParse.data.details;
+    // `retryable` marks a transient, host-side rejection (e.g. the host's JWKS
+    // fetch timed out while verifying our bearer). Our credential is fine, so
+    // credential revalidation can't help and the no-progress give-up bound must
+    // not apply - treat it exactly like an ordinary transport drop and let the
+    // reconnect backoff ride until the host recovers. Checked before the
+    // `UNAUTHORIZED` branch because the host keeps the wire `code` as
+    // `UNAUTHORIZED` (so older clients still get the credential path).
+    if (details.retryable === true) {
+      // A transient host blip must not count toward the credential give-up
+      // bound, mirroring the `network-error` revalidation outcome: clear any
+      // streak left by a prior genuine `UNAUTHORIZED` episode so a later real
+      // rejection starts from a clean slate.
+      this.noProgressUnauthorizedReconnects = 0;
+      this.teardownSocket(1000, "host-retryable");
+      this.onTransportDrop();
+      return;
+    }
     // `UNAUTHORIZED` is recoverable when an auth revalidator is wired: the
     // host rejected our bearer (e.g. it expired during an overnight sleep),
     // but a single-flight revalidation may rotate a fresh one that the next

@@ -89,6 +89,7 @@ describe("ChatMessages transient Virtuoso rows", () => {
     render(
       <ChatMessages
         taskTitle="Transcript"
+        taskId="test-task"
         messages={[message]}
         backgroundItems={undefined}
         minimapItems={minimapItemsFor([message])}

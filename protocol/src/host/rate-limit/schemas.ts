@@ -59,16 +59,22 @@ export type RateLimitUsageRequestV12 = z.infer<
 export const providerRateLimitWindowSchema = z.object({
   usedPercent: z.number(),
   resetsAt: z.number().nullable(),
+  durationMinutes: z.number().nullable(),
 });
 export type ProviderRateLimitWindow = z.infer<
   typeof providerRateLimitWindowSchema
 >;
 
 // Single source of truth for "which providers report account rate limits": the
-// two available arms below tag on it, the host's reader dispatch narrows to it
+// available arms below tag on it, the host's reader dispatch narrows to it
 // (exhaustively), and the GUI derives its `RateLimitProviderId` from it - so
 // adding a provider is one edit the compiler propagates across all three.
-export const rateLimitCapableProviderIdSchema = z.enum(["codex", "claude-code"]);
+export const rateLimitCapableProviderIdSchema = z.enum([
+  "codex",
+  "claude-code",
+  "openrouter",
+  "kilocode",
+]);
 export type RateLimitCapableProviderId = z.infer<
   typeof rateLimitCapableProviderIdSchema
 >;
@@ -77,8 +83,18 @@ const codexRateLimitsSchema = z.object({
   provider: z.literal(rateLimitCapableProviderIdSchema.enum.codex),
   available: z.literal(true),
   planType: z.string().nullable(),
+  limitId: z.string().nullable(),
+  limitName: z.string().nullable(),
   primary: providerRateLimitWindowSchema.nullable(),
   secondary: providerRateLimitWindowSchema.nullable(),
+  extraWindows: z.array(
+    z.object({
+      limitId: z.string(),
+      limitName: z.string().nullable(),
+      primary: providerRateLimitWindowSchema.nullable(),
+      secondary: providerRateLimitWindowSchema.nullable(),
+    }),
+  ),
   credits: z
     .object({
       hasCredits: z.boolean(),
@@ -94,7 +110,42 @@ const codexRateLimitsSchema = z.object({
       resetsAt: z.number(),
     })
     .nullable(),
+  // Verified against a live `account/rateLimits/read` call: the real
+  // `RateLimitResetCreditsSummary` is just `{ availableCount }` - no nested
+  // `credits` array exists (the earlier sketch guessed one from partial
+  // information).
+  resetCredits: z
+    .object({
+      availableCount: z.number(),
+    })
+    .nullable(),
   rateLimitReachedType: z.string().nullable(),
+});
+
+// OpenRouter arm - httpFetch-class provider (a plain GET against OpenRouter's
+// key/credits endpoints, no subprocess). Field names are a sketch, not yet
+// verified against a live call - see the Tech Plan's "Open items".
+const openRouterRateLimitsSchema = z.object({
+  provider: z.literal(rateLimitCapableProviderIdSchema.enum.openrouter),
+  available: z.literal(true),
+  limit: z.number().nullable(),
+  limitRemaining: z.number().nullable(),
+  dailySpend: z.number().nullable(),
+  weeklySpend: z.number().nullable(),
+  monthlySpend: z.number().nullable(),
+  totalCredits: z.number().nullable(),
+  totalUsage: z.number().nullable(),
+  balance: z.number().nullable(),
+});
+
+// Kilo Code arm - httpFetch-class provider (reads its own credential file,
+// no subprocess). Field names are a sketch, not yet verified against a live
+// call - see the Tech Plan's "Open items".
+const kiloCodeRateLimitsSchema = z.object({
+  provider: z.literal(rateLimitCapableProviderIdSchema.enum.kilocode),
+  available: z.literal(true),
+  creditBalance: z.number().nullable(),
+  passState: z.string().nullable(),
 });
 
 const claudeCodeRateLimitsSchema = z.object({
@@ -133,6 +184,7 @@ export const rateLimitUnavailableReasonSchema = z.enum([
   "connection_failed",
   "rate_limits_not_available",
   "sdk_incompatible",
+  "insufficient_permissions",
 ]);
 export type RateLimitUnavailableReason = z.infer<
   typeof rateLimitUnavailableReasonSchema
@@ -159,6 +211,8 @@ const unavailableProviderRateLimitsSchema = z.object({
 export const providerRateLimitsSchema = z.union([
   codexRateLimitsSchema,
   claudeCodeRateLimitsSchema,
+  openRouterRateLimitsSchema,
+  kiloCodeRateLimitsSchema,
   unavailableProviderRateLimitsSchema,
 ]);
 export type ProviderRateLimits = z.infer<typeof providerRateLimitsSchema>;

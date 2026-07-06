@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Minus, Plus, RotateCcw } from "lucide-react";
+import { AnimatePresence } from "motion/react";
+import * as m from "motion/react-m";
 import { Button } from "@/components/ui/button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
@@ -10,6 +12,7 @@ import {
   useRunnerZoomStepOutMutation,
 } from "@/hooks/runner/use-runner-zoom";
 import { registerDynamicActionHandler } from "@/lib/keybindings/dispatch";
+import { cn } from "@/lib/utils";
 import { formatZoomPercent } from "@/lib/windows/format-zoom-percent";
 import type { DesktopZoomBridge } from "@/lib/windows/types";
 
@@ -18,6 +21,7 @@ const WHEEL_STEP_THRESHOLD_PX = 80;
 const LINE_DELTA_PX = 16;
 const PAGE_DELTA_PX = 800;
 const PINCH_STEP_RATIO = 1.08;
+const INDICATOR_TRANSITION = { duration: 0.16, ease: "easeOut" } as const;
 
 export function DesktopZoomController() {
   const zoom = useDesktopZoomBridge();
@@ -192,88 +196,96 @@ function DesktopZoomIndicator(props: {
     };
   }, [zoom]);
 
-  if (zoom === null || percent === null) {
-    return null;
-  }
-
   return (
-    <div
-      className="fixed bottom-[max(1rem,env(safe-area-inset-bottom))] left-1/2 z-[70] flex -translate-x-1/2 items-center gap-2 text-popover-foreground"
-      role="status"
-      aria-live="polite"
-      data-testid="desktop-zoom-indicator"
-    >
-      <div
-        className="flex h-10 min-w-36 items-center rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-lg"
-        data-testid="desktop-zoom-level-island"
-      >
-        <TooltipWrapper
-          label="Zoom out"
-          side="top"
-          sideOffset={8}
-          align="center"
+    <AnimatePresence initial={false}>
+      {zoom !== null && percent !== null ? (
+        <m.div
+          key="desktop-zoom-indicator"
+          initial={{ opacity: 0, y: 8, scale: 0.98 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          exit={{ opacity: 0, y: 8, scale: 0.98 }}
+          transition={INDICATOR_TRANSITION}
+          className="fixed bottom-[max(1rem,env(safe-area-inset-bottom))] left-1/2 z-[70] flex -translate-x-1/2 items-center gap-2 text-popover-foreground"
+          role="status"
+          aria-live="polite"
+          data-testid="desktop-zoom-indicator"
         >
+          <div
+            className="flex h-10 min-w-36 items-center rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-lg"
+            data-testid="desktop-zoom-level-island"
+          >
+            <TooltipWrapper
+              label="Zoom out"
+              side="top"
+              sideOffset={8}
+              align="center"
+            >
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Zoom out"
+                className="size-8 rounded-sm text-muted-foreground hover:text-foreground"
+                onClick={() => {
+                  void actions.stepOut().catch(() => undefined);
+                }}
+              >
+                <Minus aria-hidden="true" />
+              </Button>
+            </TooltipWrapper>
+            <div
+              className="flex min-w-16 flex-1 items-center justify-center px-2 text-ui-sm font-semibold tabular-nums"
+              data-testid="desktop-zoom-percent"
+            >
+              {formatZoomPercent(percent)}
+            </div>
+            <TooltipWrapper
+              label="Zoom in"
+              side="top"
+              sideOffset={8}
+              align="center"
+            >
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Zoom in"
+                className="size-8 rounded-sm text-muted-foreground hover:text-foreground"
+                onClick={() => {
+                  void actions.stepIn().catch(() => undefined);
+                }}
+              >
+                <Plus aria-hidden="true" />
+              </Button>
+            </TooltipWrapper>
+          </div>
           <Button
             type="button"
-            variant="ghost"
-            size="icon-sm"
-            aria-label="Zoom out"
-            className="size-8 rounded-sm text-muted-foreground hover:text-foreground"
+            variant="outline"
+            size="sm"
+            className={cn(
+              "h-10 rounded-md border-border bg-popover px-4 text-popover-foreground shadow-lg hover:bg-accent hover:text-accent-foreground",
+              "dark:border-border dark:bg-popover dark:hover:bg-accent",
+            )}
+            data-testid="desktop-zoom-reset-island"
+            disabled={resetPending}
             onClick={() => {
-              void actions.stepOut().catch(() => undefined);
+              void actions.reset().catch(() => undefined);
             }}
           >
-            <Minus aria-hidden="true" />
+            <RotateCcw aria-hidden="true" />
+            Reset to 100%
+            {resetPending ? (
+              <AgentSpinningDots
+                className="ml-1 text-current"
+                testId="desktop-zoom-reset-pending"
+                variant="dots2"
+              />
+            ) : null}
           </Button>
-        </TooltipWrapper>
-        <div
-          className="flex min-w-16 flex-1 items-center justify-center px-2 text-ui-sm font-semibold tabular-nums"
-          data-testid="desktop-zoom-percent"
-        >
-          {formatZoomPercent(percent)}
-        </div>
-        <TooltipWrapper
-          label="Zoom in"
-          side="top"
-          sideOffset={8}
-          align="center"
-        >
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            aria-label="Zoom in"
-            className="size-8 rounded-sm text-muted-foreground hover:text-foreground"
-            onClick={() => {
-              void actions.stepIn().catch(() => undefined);
-            }}
-          >
-            <Plus aria-hidden="true" />
-          </Button>
-        </TooltipWrapper>
-      </div>
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        className="h-10 rounded-md border-border bg-popover px-4 text-popover-foreground shadow-lg hover:bg-accent hover:text-accent-foreground"
-        data-testid="desktop-zoom-reset-island"
-        disabled={resetPending}
-        onClick={() => {
-          void actions.reset().catch(() => undefined);
-        }}
-      >
-        <RotateCcw aria-hidden="true" />
-        Reset to 100%
-        {resetPending ? (
-          <AgentSpinningDots
-            className="ml-1 text-current"
-            testId="desktop-zoom-reset-pending"
-            variant="dots2"
-          />
-        ) : null}
-      </Button>
-    </div>
+        </m.div>
+      ) : null}
+    </AnimatePresence>
   );
 }
 

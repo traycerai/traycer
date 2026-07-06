@@ -30,6 +30,7 @@ function renderMarkdown(markdown: string, host: MockRunnerHost) {
         components={null}
         remarkPlugins={null}
         rehypePlugins={null}
+        quotable={false}
         isStreaming={false}
       >
         {markdown}
@@ -80,6 +81,7 @@ describe("MarkdownAnchor", () => {
             components={null}
             remarkPlugins={null}
             rehypePlugins={null}
+            quotable={false}
             isStreaming={false}
           >
             {"[App](src/app.ts)"}
@@ -111,6 +113,7 @@ describe("MarkdownAnchor", () => {
             components={null}
             remarkPlugins={null}
             rehypePlugins={null}
+            quotable={false}
             isStreaming={false}
           >
             {"[App](file:///Users/me/My%20Project/src/app.ts)"}
@@ -141,6 +144,7 @@ describe("MarkdownAnchor", () => {
             components={null}
             remarkPlugins={null}
             rehypePlugins={null}
+            quotable={false}
             isStreaming={false}
           >
             {"[App](/a/b.ts:1177)"}
@@ -176,6 +180,7 @@ describe("MarkdownAnchor", () => {
             components={null}
             remarkPlugins={null}
             rehypePlugins={null}
+            quotable={false}
             isStreaming={false}
           >
             {"[App](C:/Users/x/app.ts:1177)"}

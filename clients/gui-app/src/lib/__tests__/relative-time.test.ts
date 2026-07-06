@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   formatRelativeTimestamp,
   formatResetCountdown,
+  formatResetDateTime,
+  isFarReset,
 } from "@/lib/relative-time";
 
 const MINUTE_MS = 60_000;
@@ -89,5 +91,31 @@ describe("formatResetCountdown", () => {
 
   it("clamps a past resetsAt to 'now' rather than a negative duration", () => {
     expect(formatResetCountdown(now - 10_000, now)).toBe("now");
+  });
+});
+
+describe("isFarReset", () => {
+  const now = Date.parse("2026-04-23T12:00:00.000Z");
+
+  it("is false for a reset under one day away, regardless of a window's nominal duration", () => {
+    expect(isFarReset(now + 23 * HOUR_MS, now)).toBe(false);
+  });
+
+  it("is true at exactly one day away and beyond", () => {
+    expect(isFarReset(now + DAY_MS, now)).toBe(true);
+    expect(isFarReset(now + 3 * DAY_MS, now)).toBe(true);
+  });
+});
+
+describe("formatResetDateTime", () => {
+  it("renders a short weekday followed by the time, with no calendar date", () => {
+    const formatted = formatResetDateTime(
+      Date.parse("2026-07-11T10:35:00.000Z"),
+    );
+    // Exact weekday/time is TZ/locale-dependent, so assert structure rather
+    // than a literal string: a three-letter weekday, then a time with an
+    // AM/PM designator, and no year/date digits leaking back in.
+    expect(formatted).toMatch(/^[A-Za-z]{3} \d{1,2}:\d{2}\s?[AP]M$/i);
+    expect(formatted).not.toContain("2026");
   });
 });

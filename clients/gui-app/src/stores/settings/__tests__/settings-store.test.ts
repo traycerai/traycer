@@ -18,6 +18,7 @@ function resetSettingsStore(): void {
     defaultEditor: "vscode",
     notifyOnChatTurnComplete: true,
     pinContextUsageBreakdown: false,
+    quoteReplyEnabled: true,
     diffViewerPreferences: DEFAULT_DIFF_VIEWER_PREFERENCES,
   });
 }
@@ -208,6 +209,51 @@ describe("useSettingsStore", () => {
     await useSettingsStore.persist.rehydrate();
 
     expect(useSettingsStore.getState().pinContextUsageBreakdown).toBe(false);
+  });
+
+  it("defaults quote reply on text selection to on", () => {
+    expect(useSettingsStore.getState().quoteReplyEnabled).toBe(true);
+  });
+
+  it("toggles quote reply on text selection off", () => {
+    useSettingsStore.getState().setQuoteReplyEnabled(false);
+
+    expect(useSettingsStore.getState().quoteReplyEnabled).toBe(false);
+  });
+
+  it("persists the quote reply preference", () => {
+    useSettingsStore.getState().setQuoteReplyEnabled(false);
+    const persisted = window.localStorage.getItem("traycer-gui-app:settings");
+
+    expect(persisted ?? "").toContain('"quoteReplyEnabled":false');
+  });
+
+  it("rehydrates the quote reply preference from persisted settings", async () => {
+    window.localStorage.setItem(
+      "traycer-gui-app:settings",
+      JSON.stringify({
+        state: { quoteReplyEnabled: false },
+        version: 1,
+      }),
+    );
+
+    await useSettingsStore.persist.rehydrate();
+
+    expect(useSettingsStore.getState().quoteReplyEnabled).toBe(false);
+  });
+
+  it("rehydrates old settings without quoteReplyEnabled to the default on", async () => {
+    window.localStorage.setItem(
+      "traycer-gui-app:settings",
+      JSON.stringify({
+        state: { artifactIconColorMode: "none" },
+        version: 1,
+      }),
+    );
+
+    await useSettingsStore.persist.rehydrate();
+
+    expect(useSettingsStore.getState().quoteReplyEnabled).toBe(true);
   });
 
   it("defaults new chats to full access permissions", () => {

@@ -671,6 +671,7 @@ function defaultToolbar() {
 function editorHandleForPrompt(prompt: string): ComposerPromptEditorHandle {
   const content = jsonContentForPrompt(prompt);
   return {
+    isReady: () => true,
     focus: () => undefined,
     focusAtEnd: () => undefined,
     getJSON: () => content,

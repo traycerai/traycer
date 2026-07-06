@@ -1,3 +1,4 @@
+import { keepPreviousData } from "@tanstack/react-query";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { EpicMentionSuggestion } from "@traycer/protocol/host/index";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -30,7 +31,7 @@ export function useEpicMentionEntries(
   const queries = useHostQueries<HostRpcRegistry, EpicMentionMethod>({
     client,
     requests: params.requests,
-    options: { staleTime: 15_000 },
+    options: { staleTime: 15_000, placeholderData: keepPreviousData },
   });
 
   return {

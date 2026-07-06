@@ -90,6 +90,8 @@ export function GeneralSettingsPanel() {
   const setPinContextUsageBreakdown = useSettingsStore(
     (s) => s.setPinContextUsageBreakdown,
   );
+  const quoteReplyEnabled = useSettingsStore((s) => s.quoteReplyEnabled);
+  const setQuoteReplyEnabled = useSettingsStore((s) => s.setQuoteReplyEnabled);
 
   return (
     <SettingsPanelShell title="General">
@@ -123,6 +125,17 @@ export function GeneralSettingsPanel() {
             checked={pinContextUsageBreakdown}
             onCheckedChange={setPinContextUsageBreakdown}
             aria-label="Pin context usage breakdown"
+          />
+        }
+      />
+      <SettingsRow
+        label="Quote reply on text selection"
+        description="Selecting assistant text shows a quote button that inserts the selection into the composer."
+        control={
+          <Switch
+            checked={quoteReplyEnabled}
+            onCheckedChange={setQuoteReplyEnabled}
+            aria-label="Quote reply on text selection"
           />
         }
       />

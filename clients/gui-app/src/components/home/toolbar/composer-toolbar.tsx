@@ -15,6 +15,7 @@ interface ComposerToolbarProps {
   store: ComposerToolbarStore;
   onAttachImages: (files: ReadonlyArray<File>) => void;
   showNextTurnPermissionNote: boolean;
+  showAgentModeTooltip: boolean;
   canSubmit: boolean;
   onSubmit: () => void;
   activeTurnStatus: ChatActiveTurn["status"] | null;
@@ -42,6 +43,7 @@ function ComposerToolbarImpl(props: ComposerToolbarProps) {
     store,
     onAttachImages,
     showNextTurnPermissionNote,
+    showAgentModeTooltip,
     canSubmit,
     onSubmit,
     activeTurnStatus,
@@ -97,6 +99,7 @@ function ComposerToolbarImpl(props: ComposerToolbarProps) {
             showNextTurnPermissionNote={
               showNextTurnPermissionNote ? !settingsLocked : false
             }
+            showAgentModeTooltip={showAgentModeTooltip}
             settingsLocked={settingsLocked}
           />
           <ComposerToolbarRight

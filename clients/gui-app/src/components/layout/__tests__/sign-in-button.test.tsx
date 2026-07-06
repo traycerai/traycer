@@ -144,6 +144,7 @@ interface MountResult {
   readonly host: MockRunnerHost;
   readonly cleanupClient: () => void;
   readonly getAuthService: () => AuthService;
+  readonly waitForAuthService: () => Promise<AuthService>;
 }
 
 function mountSignInButton(host: MockRunnerHost): MountResult {
@@ -181,6 +182,23 @@ function mountSignInButton(host: MockRunnerHost): MountResult {
       queryClient.clear();
     },
     getAuthService: () => {
+      if (authService === null) {
+        throw new Error("AuthService was not captured");
+      }
+      return authService;
+    },
+    waitForAuthService: async () => {
+      // `CaptureAuthService`'s effect runs as its own passive-effect flush,
+      // separate from the state update that clears `runtime-fallback` - a
+      // `waitFor` on the fallback disappearing can resolve (via the DOM
+      // MutationObserver microtask) before this sibling effect has committed.
+      // Wait on the capture itself instead of assuming the fallback check
+      // implies it.
+      await waitFor(() => {
+        if (authService === null) {
+          throw new Error("AuthService was not captured");
+        }
+      });
       if (authService === null) {
         throw new Error("AuthService was not captured");
       }
@@ -265,7 +283,8 @@ describe("<SignInButton />", () => {
     // Drive a device sign-in whose minted token the pre-installed 401 fetch
     // makes AuthnV3 reject, which must surface AUTH_ERROR_SIGN_IN_FAILED on the
     // header sign-in surface via the new copy.
-    await result.getAuthService().signIn();
+    const auth = await result.waitForAuthService();
+    await auth.signIn();
     result.host.deviceFlow.emitResult({
       kind: "authorized",
       token: "rejected-callback-token",
@@ -376,7 +395,8 @@ describe("<SignInButton />", () => {
       expect(screen.queryByTestId("runtime-fallback")).toBeNull();
     });
 
-    await result.getAuthService().signIn();
+    const auth = await result.waitForAuthService();
+    await auth.signIn();
     result.host.deviceFlow.emitResult({
       kind: "authorized",
       token: "valid-token",

@@ -49,6 +49,7 @@ function ReasoningContent(props: ReasoningContentProps) {
         components={null}
         remarkPlugins={null}
         rehypePlugins={null}
+        quotable={false}
         isStreaming={isStreaming}
       >
         {markdown}

@@ -1,4 +1,6 @@
 import { ChatEmptyState } from "@/components/chat/chat-empty-state";
+import { QuoteSelectionPopover } from "@/components/chat/quote/quote-selection-popover";
+import { useQuoteSelection } from "@/components/chat/quote/use-quote-selection";
 import { useChatFindController } from "@/components/chat/use-chat-find-controller";
 import { ChatMeasuredItemChangeContext } from "@/components/chat/chat-measured-item-change-context";
 import {
@@ -41,6 +43,7 @@ import { createActivityGroupOpenStore } from "@/stores/chats/activity-group-open
 import { ChatOpenStoreScopeProvider } from "@/stores/chats/open-store-scope";
 import { useSubagentOpenStore } from "@/stores/chats/subagent-open-store";
 import { useToolOpenStore } from "@/stores/chats/tool-open-store";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 import type {
   ChatMessage as ChatMessageModel,
   MessageSegment,
@@ -70,6 +73,8 @@ import {
 
 interface ChatMessagesProps {
   taskTitle: string;
+  /** Chat tab identity; keys the composer draft the quote affordance appends to. */
+  taskId: string;
   /** The full derived, pinned-todo-stripped row history to hand to Virtuoso. */
   messages: ReadonlyArray<ChatMessageModel>;
   /** Live host-owned background items; undefined means the connected host lacks support. */
@@ -244,6 +249,7 @@ function ChatMessagesInner(props: ChatMessagesProps) {
     nextStepActions,
     scrollRequest,
     scrollStateKey,
+    taskId,
     taskTitle,
     visible,
   } = props;
@@ -308,6 +314,22 @@ function ChatMessagesInner(props: ChatMessagesProps) {
   const handledScrollRequestIdRef = useRef<number | null>(null);
   const backgroundToolBlockIdsRef = useRef(backgroundToolBlockIds);
   const [activityGroupOpenStore] = useState(createActivityGroupOpenStore);
+
+  // Quote-to-composer: track selections inside the transcript wrapper below and
+  // surface the floating quote button. The hook attaches no listeners while the
+  // setting is off, so a disabled affordance costs nothing. `visible` gates
+  // too: chat surfaces are keep-alive hidden (display:none) while the popover
+  // portals to document.body, so a hidden chat must not keep tracking
+  // selections or leave a quote button floating over whichever surface
+  // replaced it.
+  const quoteReplyEnabled = useSettingsStore(
+    (state) => state.quoteReplyEnabled,
+  );
+  const transcriptContainerRef = useRef<HTMLDivElement>(null);
+  const quoteSelection = useQuoteSelection({
+    containerRef: transcriptContainerRef,
+    enabled: quoteReplyEnabled && visible,
+  });
 
   const [listDataState, setListDataState] = useState<ChatListDataState>(() =>
     createInitialChatListDataState(messages, restoredScrollState),
@@ -752,6 +774,7 @@ function ChatMessagesInner(props: ChatMessagesProps) {
         >
           <div
             {...chatMinimapClipRegionProps}
+            ref={transcriptContainerRef}
             className="relative flex-1 overflow-hidden"
           >
             <VirtuosoMessageListLicense
@@ -799,6 +822,14 @@ function ChatMessagesInner(props: ChatMessagesProps) {
               <ScrollToBottomChip
                 visible={!effectiveBottomFollowing}
                 onClick={jumpToBottom}
+              />
+            ) : null}
+            {quoteSelection.snapshot !== null ? (
+              <QuoteSelectionPopover
+                taskId={taskId}
+                snapshot={quoteSelection.snapshot}
+                onDismiss={quoteSelection.dismiss}
+                boundaryRef={transcriptContainerRef}
               />
             ) : null}
           </div>

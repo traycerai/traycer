@@ -1,5 +1,11 @@
 import "../../../../../__tests__/test-browser-apis";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderRateLimits } from "@traycer/protocol/host";
 import { formatResetDateTime } from "@/lib/relative-time";
@@ -11,6 +17,8 @@ const mocks = vi.hoisted(() => ({
   isError: false,
   isFetching: false,
   refetch: vi.fn(() => Promise.resolve({})),
+  draining: false,
+  enqueue: vi.fn((..._args: unknown[]) => Promise.resolve()),
 }));
 
 vi.mock("@/hooks/host/use-host-provider-rate-limits-query", () => ({
@@ -25,8 +33,17 @@ vi.mock("@/hooks/host/use-host-provider-rate-limits-query", () => ({
 vi.mock("@/hooks/host/use-refresh-provider-rate-limits-on-turn", () => ({
   useRefreshProviderRateLimitsOnTurn: () => {},
 }));
+vi.mock("@/hooks/host/use-refresh-provider-rate-limits-on-mount", () => ({
+  useRefreshProviderRateLimitsOnMount: () => {},
+}));
 vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
   useReactiveActiveHostId: () => "host-1",
+}));
+vi.mock("@/hooks/rate-limits/use-is-rate-limit-queue-draining", () => ({
+  useIsRateLimitQueueDraining: () => mocks.draining,
+}));
+vi.mock("@/lib/rate-limits/ephemeral-fetch-queue", () => ({
+  enqueueRateLimitFetch: (...args: unknown[]) => mocks.enqueue(...args),
 }));
 
 import { ProviderRateLimitForProvider } from "../provider-rate-limit-section";
@@ -43,10 +60,12 @@ const CLAUDE_RATE_LIMITS: ProviderRateLimits = {
   fiveHour: {
     usedPercent: 12,
     resetsAt: CLAUDE_FIVE_HOUR_RESETS_AT,
+    durationMinutes: 300,
   },
   sevenDay: {
     usedPercent: 55,
     resetsAt: CLAUDE_SEVEN_DAY_RESETS_AT,
+    durationMinutes: 10080,
   },
   sevenDayOpus: null,
   sevenDaySonnet: null,
@@ -65,14 +84,19 @@ const CODEX_RATE_LIMITS: ProviderRateLimits = {
   // settings card no longer shows it - the provider auth badge above
   // already does.
   planType: "plus",
+  limitId: null,
+  limitName: null,
   primary: {
     usedPercent: 42,
     resetsAt: CODEX_PRIMARY_RESETS_AT,
+    durationMinutes: 300,
   },
   secondary: {
     usedPercent: 80,
     resetsAt: CODEX_SECONDARY_RESETS_AT,
+    durationMinutes: 10080,
   },
+  extraWindows: [],
   credits: {
     hasCredits: true,
     unlimited: false,
@@ -84,6 +108,7 @@ const CODEX_RATE_LIMITS: ProviderRateLimits = {
     remainingPercent: 58,
     resetsAt: CODEX_SPEND_LIMIT_RESETS_AT,
   },
+  resetCredits: null,
   rateLimitReachedType: "rate_limit_reached",
 };
 
@@ -93,13 +118,15 @@ describe("ProviderRateLimitForProvider", () => {
     mocks.isPending = false;
     mocks.isError = false;
     mocks.isFetching = false;
+    mocks.draining = false;
+    mocks.enqueue = vi.fn((..._args: unknown[]) => Promise.resolve());
   });
 
   afterEach(() => {
     cleanup();
   });
 
-  it("renders nothing for a provider without native rate limits", () => {
+  it("renders nothing for a provider without native usage limits", () => {
     const { container } = render(
       <ProviderRateLimitForProvider providerId="traycer" />,
     );
@@ -110,8 +137,8 @@ describe("ProviderRateLimitForProvider", () => {
     mocks.isPending = true;
     mocks.isFetching = true;
     render(<ProviderRateLimitForProvider providerId="claude-code" />);
-    expect(screen.getByText("Rate limits")).toBeTruthy();
-    expect(screen.getByText("Loading rate limits")).toBeTruthy();
+    expect(screen.getByText("Usage limits")).toBeTruthy();
+    expect(screen.getByText("Loading usage limits")).toBeTruthy();
   });
 
   it("renders nothing (not an eternal spinner) while pending but not fetching", () => {
@@ -121,18 +148,18 @@ describe("ProviderRateLimitForProvider", () => {
     mocks.isPending = true;
     mocks.isFetching = false;
     render(<ProviderRateLimitForProvider providerId="claude-code" />);
-    expect(screen.getByText("Rate limits")).toBeTruthy();
-    expect(screen.queryByText("Loading rate limits")).toBeNull();
+    expect(screen.getByText("Usage limits")).toBeTruthy();
+    expect(screen.queryByText("Loading usage limits")).toBeNull();
   });
 
   it("renders the Claude Code rate-limit detail once loaded", () => {
     mocks.data = { providerRateLimits: CLAUDE_RATE_LIMITS };
     render(<ProviderRateLimitForProvider providerId="claude-code" />);
 
-    expect(screen.getByText("5-hour")).toBeTruthy();
+    expect(screen.getByText("Current session")).toBeTruthy();
+    expect(screen.getByText("12% used")).toBeTruthy();
     expect(screen.getByText("Weekly")).toBeTruthy();
-    expect(screen.getByText("12% / 100%")).toBeTruthy();
-    expect(screen.getByText("55% / 100%")).toBeTruthy();
+    expect(screen.getByText("55% used")).toBeTruthy();
   });
 
   it("does not show a subscription-plan badge (the provider auth badge above already shows it)", () => {
@@ -153,52 +180,62 @@ describe("ProviderRateLimitForProvider", () => {
     expect(screen.getByText(/^Resets in /)).toBeTruthy();
   });
 
-  it("colors a window's bar amber above 70% used and red above 90% used", () => {
+  it("colors a window's bar yellow at/above 60% used and red above 85% used", () => {
+    // The Settings card now shares the same four-tier severity scale as the
+    // popover (item 6 feedback: "different UX looks weird").
     mocks.data = {
       providerRateLimits: {
         ...CLAUDE_RATE_LIMITS,
-        fiveHour: { usedPercent: 75, resetsAt: CLAUDE_FIVE_HOUR_RESETS_AT },
-        sevenDay: { usedPercent: 95, resetsAt: CLAUDE_SEVEN_DAY_RESETS_AT },
+        fiveHour: {
+          usedPercent: 75,
+          resetsAt: CLAUDE_FIVE_HOUR_RESETS_AT,
+          durationMinutes: 300,
+        },
+        sevenDay: {
+          usedPercent: 95,
+          resetsAt: CLAUDE_SEVEN_DAY_RESETS_AT,
+          durationMinutes: 10080,
+        },
       },
     };
     const { container } = render(
       <ProviderRateLimitForProvider providerId="claude-code" />,
     );
 
-    expect(container.querySelectorAll(".bg-amber-500").length).toBeGreaterThan(
+    expect(container.querySelectorAll(".bg-yellow-500").length).toBeGreaterThan(
       0,
     );
-    expect(
-      container.querySelectorAll(".bg-destructive").length,
-    ).toBeGreaterThan(0);
+    expect(container.querySelectorAll(".bg-red-500").length).toBeGreaterThan(0);
   });
 
-  it("keeps the bar at the default color at or below 70% used", () => {
+  it("keeps the bar blue below the yellow threshold", () => {
     mocks.data = { providerRateLimits: CLAUDE_RATE_LIMITS };
     const { container } = render(
       <ProviderRateLimitForProvider providerId="claude-code" />,
     );
 
-    expect(container.querySelectorAll(".bg-amber-500").length).toBe(0);
-    expect(container.querySelectorAll(".bg-destructive").length).toBe(0);
-    expect(container.querySelectorAll(".bg-primary").length).toBeGreaterThan(0);
+    expect(container.querySelectorAll(".bg-yellow-500").length).toBe(0);
+    expect(container.querySelectorAll(".bg-red-500").length).toBe(0);
+    expect(container.querySelectorAll(".bg-blue-500").length).toBeGreaterThan(
+      0,
+    );
   });
 
   it("renders the Codex rate-limit detail once loaded", () => {
     mocks.data = { providerRateLimits: CODEX_RATE_LIMITS };
     render(<ProviderRateLimitForProvider providerId="codex" />);
 
-    expect(screen.getByText("5-hour")).toBeTruthy();
+    expect(screen.getByText("Current session")).toBeTruthy();
+    expect(screen.getByText("42% used")).toBeTruthy();
     expect(screen.getByText("Weekly")).toBeTruthy();
-    expect(screen.getByText("42% / 100%")).toBeTruthy();
-    expect(screen.getByText("80% / 100%")).toBeTruthy();
+    expect(screen.getByText("80% used")).toBeTruthy();
   });
 
   it("maps a rateLimitReachedType token to a destructive badge", () => {
     mocks.data = { providerRateLimits: CODEX_RATE_LIMITS };
     render(<ProviderRateLimitForProvider providerId="codex" />);
 
-    expect(screen.getByText("Rate limit reached")).toBeTruthy();
+    expect(screen.getByText("Usage limit reached")).toBeTruthy();
   });
 
   it("does not show a plan badge (the provider auth badge above already shows it)", () => {
@@ -216,21 +253,51 @@ describe("ProviderRateLimitForProvider", () => {
     expect(screen.getByText("$12.50")).toBeTruthy();
   });
 
-  it("renders the spend-control row with used/limit and a relative reset line", () => {
+  it("renders the spend-control row with used/limit and an absolute reset time", () => {
     mocks.data = { providerRateLimits: CODEX_RATE_LIMITS };
     render(<ProviderRateLimitForProvider providerId="codex" />);
 
-    // Scoped to the spend-limit row's own container: the 5-hour window above
-    // it also renders a relative "Resets in " line, so an unscoped query
-    // would match two elements.
+    // Scoped to the spend-limit row's own container: the current-session
+    // window above it also renders a reset line, so an unscoped query would
+    // match two elements.
     const spendLimitRow = screen
       .getByText("Spend limit")
       .closest("div.flex.flex-col.gap-1");
     expect(spendLimitRow).not.toBeNull();
     const spendLimitScope = within(spendLimitRow as HTMLElement);
     expect(spendLimitScope.getByText("42.00 / 100.00")).toBeTruthy();
-    // `CodexSpendControlRow` always passes `weekly={false}` to `ResetLine`,
-    // so this renders the relative countdown, not the exact date/time.
-    expect(spendLimitScope.getByText(/^Resets in /)).toBeTruthy();
+    // Regression: `CodexSpendControlRow` used to hardcode `weekly={false}`,
+    // always forcing a relative countdown regardless of the real reset time.
+    // `CODEX_SPEND_LIMIT_RESETS_AT` is 5 days out, so the reset line now
+    // correctly reads as an absolute weekday/time, not "Resets in ...".
+    expect(
+      spendLimitScope.getByText(/^Resets [A-Za-z]{3} \d{1,2}:\d{2}\s?[AP]M$/i),
+    ).toBeTruthy();
+    expect(spendLimitScope.queryByText(/^Resets in /)).toBeNull();
+  });
+
+  it("routes a Codex (ephemeralProcess) manual refresh through the shared queue with force:true, not a bare query.refetch()", () => {
+    mocks.data = { providerRateLimits: CODEX_RATE_LIMITS };
+    render(<ProviderRateLimitForProvider providerId="codex" />);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Refresh usage limits" }),
+    );
+
+    expect(mocks.enqueue).toHaveBeenCalledWith("codex", expect.anything(), {
+      force: true,
+    });
+    expect(mocks.refetch).not.toHaveBeenCalled();
+  });
+
+  it("keeps the refresh button disabled while the shared queue is draining, even once this provider's own isFetching has settled", () => {
+    mocks.data = { providerRateLimits: CODEX_RATE_LIMITS };
+    mocks.isFetching = false;
+    mocks.draining = true;
+    render(<ProviderRateLimitForProvider providerId="codex" />);
+
+    expect(
+      screen.getByRole("button", { name: "Refresh usage limits" }),
+    ).toHaveProperty("disabled", true);
   });
 });

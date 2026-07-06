@@ -94,6 +94,7 @@ function renderToolbar(
         supportedPermissionModes={null}
         harnessLabel={null}
         showNextTurnPermissionNote={false}
+        showAgentModeTooltip={false}
         settingsLocked={settingsLocked}
       />
     </TooltipProvider>,

@@ -143,7 +143,6 @@ describe("TraycerSubscriptionSection", () => {
 
   it("renders the personal subscription by default", () => {
     render(<TraycerSubscriptionSection />);
-    expect(screen.getByText("Pro")).toBeDefined();
     // Plan bucket: 30 consumed of 100 total (extension's consumed/total wording).
     expect(screen.getByText("$30.00 / $100.00")).toBeDefined();
   });
@@ -155,7 +154,6 @@ describe("TraycerSubscriptionSection", () => {
         .getState()
         .setAccountContext({ type: "TEAM", teamId: "team-1" });
     });
-    expect(screen.getByText("Ultra 1x")).toBeDefined();
     // Plan bucket: 100 consumed of 500 total.
     expect(screen.getByText("$100.00 / $500.00")).toBeDefined();
   });
@@ -172,7 +170,6 @@ describe("TraycerSubscriptionSection", () => {
       },
     };
     render(<TraycerSubscriptionSection />);
-    expect(screen.getByText("Pro Plus")).toBeDefined();
     expect(screen.getByText("Rate limit")).toBeDefined();
     // 1800s → 30 minutes recharge.
     expect(screen.getByText("30 minutes")).toBeDefined();

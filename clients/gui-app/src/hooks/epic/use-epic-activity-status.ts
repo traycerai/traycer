@@ -1,5 +1,8 @@
 import { useCallback, useSyncExternalStore } from "react";
-import { useRegisteredEpicActiveAgentIds } from "@/lib/epic-selectors";
+import {
+  useRegisteredEpicActiveAgentIds,
+  useRegisteredEpicLiveAgentIds,
+} from "@/lib/epic-selectors";
 import { getChatSessionRegistry } from "@/lib/registries/chat-session-registry";
 import { reconcileStoreSubscriptions } from "@/lib/registries/reconcile-store-subscriptions";
 import {
@@ -16,14 +19,15 @@ export function useEpicActivityStatus(
   epicId: string | null,
 ): EpicActivityStatus {
   const activeAgentIds = useRegisteredEpicActiveAgentIds(epicId);
+  const liveAgentIds = useRegisteredEpicLiveAgentIds(epicId);
   const subscribeLocalChatActivity = useCallback(
     (onChange: () => void) =>
-      subscribeEpicChatSessionActivity(epicId, onChange),
-    [epicId],
+      subscribeEpicChatSessionActivity(epicId, liveAgentIds, onChange),
+    [epicId, liveAgentIds],
   );
   const getLocalChatActivity = useCallback(
-    () => getEpicChatSessionActivity(epicId),
-    [epicId],
+    () => getEpicChatSessionActivity(epicId, liveAgentIds),
+    [epicId, liveAgentIds],
   );
   const localChatActivity = useSyncExternalStore(
     subscribeLocalChatActivity,
@@ -31,16 +35,21 @@ export function useEpicActivityStatus(
     () => "idle" as const,
   );
   if (localChatActivity === "waiting") return "waiting";
-  return activeAgentIds.size > 0 || localChatActivity === "running"
+  return hasLiveActiveAgent(activeAgentIds, liveAgentIds) ||
+    localChatActivity === "running"
     ? "running"
     : "idle";
 }
 
-function getEpicChatSessionActivity(epicId: string | null): EpicActivityStatus {
+function getEpicChatSessionActivity(
+  epicId: string | null,
+  liveAgentIds: ReadonlySet<string>,
+): EpicActivityStatus {
   if (epicId === null) return "idle";
   let hasRunningChat = false;
   for (const handle of CHAT_REGISTRY.listHandles()) {
     if (handle.epicId !== epicId) continue;
+    if (!liveAgentIds.has(handle.chatId)) continue;
     const activity = chatSessionActivity(handle.store.getState());
     if (activity === "waiting") return "waiting";
     if (activity === "running") hasRunningChat = true;
@@ -50,6 +59,7 @@ function getEpicChatSessionActivity(epicId: string | null): EpicActivityStatus {
 
 function subscribeEpicChatSessionActivity(
   epicId: string | null,
+  liveAgentIds: ReadonlySet<string>,
   onChange: () => void,
 ): () => void {
   if (epicId === null) return noopUnsubscribe;
@@ -57,7 +67,9 @@ function subscribeEpicChatSessionActivity(
 
   const resync = (): void => {
     reconcileStoreSubscriptions(
-      CHAT_REGISTRY.listHandles().filter((handle) => handle.epicId === epicId),
+      CHAT_REGISTRY.listHandles().filter(
+        (handle) => handle.epicId === epicId && liveAgentIds.has(handle.chatId),
+      ),
       handleSubs,
       (handle) => {
         let previousActivity = chatSessionActivity(handle.store.getState());
@@ -91,6 +103,13 @@ function chatSessionActivity(state: ChatSessionState): EpicActivityStatus {
     return "waiting";
   }
   return isChatRunInProgress(state.runStatus) ? "running" : "idle";
+}
+
+function hasLiveActiveAgent(
+  activeAgentIds: ReadonlySet<string>,
+  liveAgentIds: ReadonlySet<string>,
+): boolean {
+  return [...activeAgentIds].some((id) => liveAgentIds.has(id));
 }
 
 function noopUnsubscribe(): void {}

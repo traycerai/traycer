@@ -12,6 +12,7 @@ const mockState = vi.hoisted(() => ({
   }>,
   data: null as ListGuiAgentCommandsResponse | null,
   isPending: false,
+  isFetching: false,
   error: null as Error | null,
 }));
 
@@ -32,6 +33,7 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
     return {
       data: mockState.data,
       isPending: mockState.isPending,
+      isFetching: mockState.isFetching,
       error: mockState.error,
     };
   },
@@ -70,6 +72,7 @@ describe("useSlashCommands", () => {
       ],
     };
     mockState.isPending = false;
+    mockState.isFetching = false;
     mockState.error = null;
   });
 

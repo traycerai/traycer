@@ -649,6 +649,7 @@ function A2ASendToolSegment(
               isStreaming={false}
               markdown={send.message}
               proseSize="compact"
+              quotable={false}
             />
           </div>
         </div>

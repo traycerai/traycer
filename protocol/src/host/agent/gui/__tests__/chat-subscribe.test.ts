@@ -5,8 +5,10 @@ import {
   chatSubscribeServerFrameSchema,
   chatSubscribeV10,
   chatSubscribeV11,
+  chatSubscribeV12,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import { getRecordSchema } from "@traycer/protocol/framework/index";
+import { autonomousResumeTriggerSchema } from "@traycer/protocol/persistence/epic/content-blocks";
 import type {
   Chat,
   ChatEvent,
@@ -43,6 +45,7 @@ const chat: Chat = {
   isTitleEditedByUser: false,
   settings: null,
   activeSessionChain: null,
+  claudePendingWakes: [],
   messages: [userMessage],
   events: [],
 };
@@ -63,15 +66,15 @@ const event: ChatEvent = {
   metadata: null,
 };
 
-describe("chat.subscribe@1.1 open request", () => {
+describe("chat.subscribe@1.2 open request", () => {
   it("requires an epicId and chatId", () => {
-    const parsed = chatSubscribeV11.openRequestSchema.parse({
+    const parsed = chatSubscribeV12.openRequestSchema.parse({
       epicId: "epic-1",
       chatId: "chat-1",
     });
 
     expect(parsed).toEqual({ epicId: "epic-1", chatId: "chat-1" });
-    expect(() => chatSubscribeV11.openRequestSchema.parse({})).toThrow();
+    expect(() => chatSubscribeV12.openRequestSchema.parse({})).toThrow();
   });
 });
 
@@ -107,6 +110,29 @@ describe("chat.subscribe@1.0 (frozen host-v1.0.0 shape)", () => {
 });
 
 describe("chat.subscribe@1.1 server frames", () => {
+  it("does not know the v1.2 wakeup background-item kind", () => {
+    expect(
+      chatSubscribeV11.serverFrameSchema.safeParse({
+        kind: "turnStateChanged",
+        hasBinaryPayload: false,
+        epicId: "epic-1",
+        chatId: "chat-1",
+        runStatus: "running",
+        activeTurn: null,
+        backgroundItems: [
+          {
+            taskId: "wake-tool-1",
+            kind: "wakeup",
+            title: "Standup",
+            blockId: "wake-tool-1",
+          },
+        ],
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe("chat.subscribe@1.2 server frames", () => {
   it("parses queued steer-requested items with durable steer metadata", () => {
     const parsed = chatQueuedItemSchema.parse({
       queueItemId: "queue-1",
@@ -205,6 +231,14 @@ describe("chat.subscribe@1.1 server frames", () => {
       title: "bun test",
       blockId: "tool-1",
     };
+    const wakeupItem = {
+      taskId: "wake-tool-1",
+      kind: "wakeup",
+      title: "Standup",
+      blockId: "wake-tool-1",
+      parentTaskId: null,
+      scheduledFor: 123456,
+    };
     const snapshot = chatSubscribeServerFrameSchema.parse({
       kind: "snapshot",
       hasBinaryPayload: false,
@@ -226,7 +260,7 @@ describe("chat.subscribe@1.1 server frames", () => {
         worktreeBinding: null,
         missingWorktreePaths: [],
         accumulatedFileChanges: [],
-        backgroundItems: [item],
+        backgroundItems: [item, wakeupItem],
       },
     });
     const turnState = chatSubscribeServerFrameSchema.parse({
@@ -236,16 +270,95 @@ describe("chat.subscribe@1.1 server frames", () => {
       chatId: "chat-1",
       runStatus: "running",
       activeTurn: null,
-      backgroundItems: [item],
+      backgroundItems: [item, wakeupItem],
     });
 
     expect(snapshot).toMatchObject({
       kind: "snapshot",
-      snapshot: { backgroundItems: [item] },
+      snapshot: { backgroundItems: [item, wakeupItem] },
     });
     expect(turnState).toMatchObject({
       kind: "turnStateChanged",
-      backgroundItems: [item],
+      backgroundItems: [item, wakeupItem],
+    });
+  });
+
+  it("requires wakeup background items to carry a scheduled timestamp", () => {
+    const wakeupBase = {
+      taskId: "wake-tool-1",
+      kind: "wakeup",
+      title: "Standup",
+      blockId: "wake-tool-1",
+      parentTaskId: null,
+    };
+    const parseResults = [
+      wakeupBase,
+      { ...wakeupBase, scheduledFor: null },
+    ].map((wakeupItem) =>
+      chatSubscribeServerFrameSchema.safeParse({
+        kind: "turnStateChanged",
+        hasBinaryPayload: false,
+        epicId: "epic-1",
+        chatId: "chat-1",
+        runStatus: "running",
+        activeTurn: null,
+        backgroundItems: [wakeupItem],
+      }),
+    );
+
+    expect(parseResults.map((result) => result.success)).toEqual([
+      false,
+      false,
+    ]);
+  });
+
+  it("defaults new background-item metadata when parsing old-host frames", () => {
+    const parsed = chatSubscribeServerFrameSchema.parse({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      runStatus: "running",
+      activeTurn: null,
+      backgroundItems: [
+        {
+          taskId: "task-1",
+          kind: "command",
+          title: "bun test",
+          blockId: "tool-1",
+        },
+      ],
+    });
+
+    expect(parsed).toMatchObject({
+      kind: "turnStateChanged",
+      backgroundItems: [
+        {
+          taskId: "task-1",
+          parentTaskId: null,
+          scheduledFor: null,
+        },
+      ],
+    });
+  });
+
+  it("parses the pinned wakeup autonomous-resume trigger shape", () => {
+    const parsed = autonomousResumeTriggerSchema.parse({
+      kind: "wakeup",
+      title: "Standup",
+      summary: "Write the standup update.",
+      status: "completed",
+      blockId: "wake-tool-1",
+      outputFile: null,
+    });
+
+    expect(parsed).toEqual({
+      kind: "wakeup",
+      title: "Standup",
+      summary: "Write the standup update.",
+      status: "completed",
+      blockId: "wake-tool-1",
+      outputFile: null,
     });
   });
 
@@ -499,7 +612,7 @@ describe("chat.subscribe@1.1 server frames", () => {
   });
 });
 
-describe("chat.subscribe@1.1 client frames", () => {
+describe("chat.subscribe@1.2 client frames", () => {
   it("requires clientActionId on owner action frames", () => {
     expect(
       chatSubscribeClientFrameSchema.parse({

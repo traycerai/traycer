@@ -18,6 +18,20 @@ export type TerminalSessionStatus = z.infer<typeof terminalSessionStatusSchema>;
 export const terminalSessionKindSchema = z.enum(["terminal", "terminal-agent"]);
 export type TerminalSessionKind = z.infer<typeof terminalSessionKindSchema>;
 
+// Why a session's PTY ended. `process-exit` is the process ending on its
+// own; `killed` is an explicit kill (user close, stop, binding restart);
+// `reaped` is the host's idle-reap of an unwatched `terminal-agent` -
+// clients treat a reaped exit as lifecycle (revive silently), never as a
+// crash to report.
+export const terminalSessionExitReasonSchema = z.enum([
+  "process-exit",
+  "killed",
+  "reaped",
+]);
+export type TerminalSessionExitReason = z.infer<
+  typeof terminalSessionExitReasonSchema
+>;
+
 export const terminalSessionInfoSchema = z.object({
   sessionId: z.string(),
   epicId: z.string(),
@@ -29,6 +43,11 @@ export const terminalSessionInfoSchema = z.object({
   rows: z.number().int().positive(),
   status: terminalSessionStatusSchema,
   exitCode: z.number().int().nullable(),
+  // `null` while running; set alongside `exitCode` when the session exits.
+  // Optional so payloads from hosts predating the field still parse -
+  // absent is equivalent to `process-exit` (the only pre-field behavior a
+  // client could assume).
+  exitReason: terminalSessionExitReasonSchema.nullable().optional(),
   createdAt: z.number(),
   // User-supplied display title. `null` means "use the default derived
   // label (basename of cwd / shellCommand)". Lifetime is the session's -
