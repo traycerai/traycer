@@ -62,7 +62,9 @@ export function useArtifactDragSource(args: {
   const occurrenceId = useId();
   // C1 - pure resolver read reactively via a selector; `null` => non-draggable.
   const resolvedViewTabId = useEpicCanvasStore((state) =>
-    epicId === undefined || epicId.length === 0
+    providedViewTabId !== undefined ||
+    epicId === undefined ||
+    epicId.length === 0
       ? null
       : resolveTabIdForEpic(state, epicId),
   );

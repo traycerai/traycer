@@ -27,6 +27,10 @@ const canvas = vi.hoisted(() => ({
   openTilePreviewInTab: vi.fn(),
 }));
 
+const resolveTabIdForEpic = vi.hoisted(() =>
+  vi.fn((_state: typeof canvas, _epicId: string) => "resolved-tab"),
+);
+
 const dnd = vi.hoisted(() => ({
   draggables: [] as CapturedDraggable[],
   setNodeRef: vi.fn(),
@@ -41,7 +45,7 @@ vi.mock("@/lib/epic-selectors", () => ({
 vi.mock("@/stores/epics/canvas/store", () => ({
   useEpicCanvasStore: (selector: (state: typeof canvas) => unknown) =>
     selector(canvas),
-  resolveTabIdForEpic: () => "resolved-tab",
+  resolveTabIdForEpic,
 }));
 
 vi.mock("@/stores/settings/settings-store", () => ({
@@ -93,6 +97,7 @@ describe("<ArtifactChildIndex />", () => {
     projection.childIdsByParent = {};
     projection.nodesById = {};
     canvas.openTilePreviewInTab.mockClear();
+    resolveTabIdForEpic.mockClear();
     dnd.draggables = [];
     dnd.setNodeRef.mockClear();
   });
@@ -132,6 +137,7 @@ describe("<ArtifactChildIndex />", () => {
         hostId: "host-1",
       },
     });
+    expect(resolveTabIdForEpic).not.toHaveBeenCalled();
 
     fireEvent.click(row);
 
