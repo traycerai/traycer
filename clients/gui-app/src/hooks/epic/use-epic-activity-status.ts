@@ -109,10 +109,7 @@ function hasLiveActiveAgent(
   activeAgentIds: ReadonlySet<string>,
   liveAgentIds: ReadonlySet<string>,
 ): boolean {
-  for (const id of activeAgentIds) {
-    if (liveAgentIds.has(id)) return true;
-  }
-  return false;
+  return [...activeAgentIds].some((id) => liveAgentIds.has(id));
 }
 
 function noopUnsubscribe(): void {}

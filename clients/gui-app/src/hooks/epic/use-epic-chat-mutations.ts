@@ -2,11 +2,14 @@ import {
   QueryClient,
   useMutation,
   useQueryClient,
+  type UseMutationOptions,
   type UseMutationResult,
 } from "@tanstack/react-query";
 import type {
   CreateChatRequest,
   CreateChatResponse,
+  DeleteChatRequest,
+  DeleteChatResponse,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -30,6 +33,11 @@ export type CreateChatMutationInput = Omit<CreateChatRequest, "hostId">;
 interface CreateChatMutationContext {
   readonly hostId: string | null;
 }
+
+export type DeleteChatMutationOptions = Omit<
+  UseMutationOptions<DeleteChatResponse, HostRpcError, DeleteChatRequest>,
+  "mutationFn"
+>;
 
 /**
  * Mutation hook for epic.createChat.
