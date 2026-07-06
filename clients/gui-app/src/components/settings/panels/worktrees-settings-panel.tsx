@@ -420,6 +420,77 @@ function HostSelect(props: {
   );
 }
 
+/**
+ * Two-phase worktree listing. The base leg (`includeActivity: false`) paints the
+ * rows immediately - repo, branch, path, owning Task, uncommitted count - while
+ * the activity leg (`includeActivity: true`) runs the heavy per-worktree gh PR +
+ * git probes in the background and supersedes the base rows once it lands. On a
+ * host with dozens of worktrees the activity leg is seconds of network work;
+ * keeping it off first paint is the difference between an instant list and a
+ * multi-second spinner (see the `worktree.first_paint` / `worktree.list_query`
+ * perf telemetry).
+ */
+function useWorktreeListing(
+  client: HostClient<HostRpcRegistry> | null,
+  reachable: boolean,
+): {
+  readonly worktrees: readonly WorktreeHostEntryV11[];
+  readonly enriching: boolean;
+  readonly isPending: boolean;
+  readonly isError: boolean;
+  readonly errorMessage: string | null;
+  readonly isEmpty: boolean;
+  readonly refresh: () => Promise<unknown>;
+  readonly refreshing: boolean;
+} {
+  const baseQuery = useHostQuery({
+    client,
+    method: "worktree.listAllForHost",
+    params: { includeActivity: false },
+    options: { enabled: reachable },
+  });
+  const activityQuery = useHostQuery({
+    client,
+    method: "worktree.listAllForHost",
+    // Enriched fields are null-tolerant (probes yield null on failure; a v1.0
+    // host bridges up to empty `owners` / null timestamps).
+    params: { includeActivity: true },
+    options: { enabled: reachable },
+  });
+  const worktrees =
+    activityQuery.data?.worktrees ??
+    baseQuery.data?.worktrees ??
+    EMPTY_WORKTREES;
+  // Perf telemetry (gated + non-throwing). First paint tracks the BASE leg (the
+  // real time-to-usable-list); the query leg tracks the enrichment cost.
+  useWorktreeListQueryPerf({
+    fetchStatus: activityQuery.fetchStatus,
+    status: activityQuery.status,
+    worktreeCount: worktrees.length,
+    submoduleCount: worktrees.reduce(
+      (sum, entry) => sum + entry.submodules.length,
+      0,
+    ),
+    hasData: activityQuery.data !== undefined,
+  });
+  useWorktreeFirstPaintPerf({
+    painted: baseQuery.isSuccess && worktrees.length > 0,
+    rowCount: worktrees.length,
+  });
+  return {
+    worktrees,
+    // Tiers depend on the activity probes; while that leg is still in flight the
+    // pills show a pending state instead of a misleading base-only tier.
+    enriching: activityQuery.isPending,
+    isPending: baseQuery.isPending,
+    isError: baseQuery.isError,
+    errorMessage: baseQuery.error?.message ?? null,
+    isEmpty: baseQuery.isSuccess && worktrees.length === 0,
+    refresh: () => Promise.all([baseQuery.refetch(), activityQuery.refetch()]),
+    refreshing: baseQuery.isFetching || activityQuery.isFetching,
+  };
+}
+
 function WorktreesBody(props: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly openStreamTransport: (hostId: string) => DurableStreamTransport;
@@ -431,43 +502,17 @@ function WorktreesBody(props: {
   const { client, openStreamTransport, hostId, hosts, value, onChange } = props;
   const reachability = useHostReachability(hostId ?? "");
   const reachable = hostId !== null && reachability.status === "reachable";
-  const listQuery = useHostQuery({
-    client,
-    method: "worktree.listAllForHost",
-    // v1.1 with the git probes on: this is an on-demand settings surface, so the
-    // per-worktree cost of the concurrent, best-effort probes is acceptable.
-    // Every enriched field is null-tolerant (probes yield null on failure, and a
-    // v1.0 host bridges up to empty `owners` / null timestamps).
-    params: { includeActivity: true },
-    options: { enabled: reachable },
-  });
+  const listing = useWorktreeListing(client, reachable);
   // Owning-Task titles come from the cloud epic-tasks caches the app already
   // maintains (keyed by the signed-in user, any host) - no host-side title join.
-  const worktreesForRender = listQuery.data?.worktrees ?? EMPTY_WORKTREES;
-  const taskTitlesByEpicId = useWorktreeTaskTitles(worktreesForRender);
-  // Perf telemetry (gated + non-throwing): the list query leg and first paint
-  // of a non-empty list. Both derive purely from the query result.
-  useWorktreeListQueryPerf({
-    fetchStatus: listQuery.fetchStatus,
-    status: listQuery.status,
-    worktreeCount: worktreesForRender.length,
-    submoduleCount: worktreesForRender.reduce(
-      (sum, entry) => sum + entry.submodules.length,
-      0,
-    ),
-    hasData: listQuery.data !== undefined,
-  });
-  useWorktreeFirstPaintPerf({
-    painted: listQuery.isSuccess && worktreesForRender.length > 0,
-    rowCount: worktreesForRender.length,
-  });
+  const taskTitlesByEpicId = useWorktreeTaskTitles(listing.worktrees);
   const canRefresh = reachable && client !== null;
   const toolbarProps = {
     hosts,
     value,
     onChange,
-    onRefresh: () => listQuery.refetch(),
-    refreshing: listQuery.isFetching,
+    onRefresh: listing.refresh,
+    refreshing: listing.refreshing,
     canRefresh,
   };
 
@@ -498,19 +543,19 @@ function WorktreesBody(props: {
         Sign in to manage worktrees on this host.
       </WorktreesStateMessage>
     );
-  } else if (listQuery.isPending) {
+  } else if (listing.isPending) {
     content = (
       <WorktreesStateMessage tone="muted" spinner>
         Loading worktrees…
       </WorktreesStateMessage>
     );
-  } else if (listQuery.isError) {
+  } else if (listing.isError) {
     content = (
       <WorktreesStateMessage tone="error" spinner={false}>
-        {listQuery.error.message}
+        {listing.errorMessage}
       </WorktreesStateMessage>
     );
-  } else if (listQuery.data.worktrees.length === 0) {
+  } else if (listing.isEmpty) {
     content = (
       <WorktreesStateMessage tone="muted" spinner={false}>
         No worktrees created on this host.
@@ -529,7 +574,8 @@ function WorktreesBody(props: {
         key={hostId}
         openStreamTransport={openStreamTransport}
         hostId={hostId}
-        worktrees={listQuery.data.worktrees}
+        worktrees={listing.worktrees}
+        enriching={listing.enriching}
         taskTitlesByEpicId={taskTitlesByEpicId}
         toolbarProps={toolbarProps}
       />
@@ -606,6 +652,10 @@ export function WorktreesList(props: {
   readonly openStreamTransport: (hostId: string) => DurableStreamTransport;
   readonly hostId: string;
   readonly worktrees: readonly WorktreeHostEntryV11[];
+  // True while the background `includeActivity` leg is still running: the base
+  // rows are painted, but the merge-status tiers aren't known yet, so pills show
+  // a pending state instead of a base-only (misleading) tier.
+  readonly enriching: boolean;
   readonly taskTitlesByEpicId: ReadonlyMap<string, string>;
   readonly toolbarProps: {
     readonly hosts: readonly HostDirectoryEntry[];
@@ -616,7 +666,13 @@ export function WorktreesList(props: {
     readonly canRefresh: boolean;
   };
 }): ReactNode {
-  const { hostId, worktrees, taskTitlesByEpicId, openStreamTransport } = props;
+  const {
+    hostId,
+    worktrees,
+    enriching,
+    taskTitlesByEpicId,
+    openStreamTransport,
+  } = props;
   const queryClient = useQueryClient();
   // True-AND merge rollup per owning Task (epic), aggregated across every worktree
   // entry the epic owns (superproject branch + each entry's owned submodules). Same
@@ -1022,6 +1078,7 @@ export function WorktreesList(props: {
                       <WorktreeRow
                         key={entry.worktreePath}
                         entry={entry}
+                        enriching={enriching}
                         taskTitlesByEpicId={taskTitlesByEpicId}
                         taskRollupByEpicId={taskRollupByEpicId}
                         deleteStatus={deleteStatus}
@@ -1359,6 +1416,7 @@ function WorktreeRepoHeader(props: {
 
 function WorktreeRow(props: {
   readonly entry: WorktreeHostEntryV11;
+  readonly enriching: boolean;
   readonly taskTitlesByEpicId: ReadonlyMap<string, string>;
   readonly taskRollupByEpicId: ReadonlyMap<string, TaskMergeRollup>;
   readonly deleteStatus: WorktreeRowDeleteStatus | null;
@@ -1370,6 +1428,7 @@ function WorktreeRow(props: {
 }): ReactNode {
   const {
     entry,
+    enriching,
     taskTitlesByEpicId,
     taskRollupByEpicId,
     deleteStatus,
@@ -1403,7 +1462,7 @@ function WorktreeRow(props: {
       </div>
       <div className="min-w-0 flex-1 space-y-1 pr-10">
         <div className="flex flex-wrap items-center gap-2">
-          <WorktreeTierPill tier={classification.tier} />
+          <WorktreeTierPill tier={classification.tier} pending={enriching} />
           <span className="truncate text-ui-sm font-medium text-foreground">
             {branchLabel(entry)}
           </span>
@@ -1453,7 +1512,30 @@ function WorktreeRow(props: {
  * (strongest), `at-base-commit`, and `unreferenced` (quietest); `review` is
  * amber; `orphaned` and `in-use` stay neutral.
  */
-function WorktreeTierPill(props: { readonly tier: WorktreeTier }): ReactNode {
+function WorktreeTierPill(props: {
+  readonly tier: WorktreeTier;
+  readonly pending: boolean;
+}): ReactNode {
+  // While the background activity leg is still resolving, the tier isn't known
+  // yet - show a neutral "Checking…" pill rather than a base-only tier that would
+  // flip (e.g. Review -> Merged) once the probes land.
+  if (props.pending) {
+    return (
+      <Badge
+        variant="outline"
+        className="gap-1 font-medium border-border/40 bg-muted/30 text-muted-foreground"
+        data-testid="worktree-tier-pill"
+        data-tier="pending"
+      >
+        <AgentSpinningDots
+          className={undefined}
+          testId="worktree-tier-pill-pending-spinner"
+          variant={undefined}
+        />
+        Checking…
+      </Badge>
+    );
+  }
   const style = WORKTREE_TIER_PILL_STYLE[props.tier];
   return (
     <Badge

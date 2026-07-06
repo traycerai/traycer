@@ -229,6 +229,7 @@ function renderList(args: {
         openStreamTransport={() => stubOpenStreamTransport()}
         hostId={args.hostId}
         worktrees={args.worktrees}
+        enriching={false}
         taskTitlesByEpicId={args.taskTitlesByEpicId ?? new Map()}
         toolbarProps={testToolbarProps()}
       />
@@ -787,6 +788,7 @@ describe("WorktreesList delete flow", () => {
             openStreamTransport={() => stubOpenStreamTransport()}
             hostId="host-b"
             worktrees={WORKTREES}
+            enriching={false}
             taskTitlesByEpicId={new Map()}
             toolbarProps={testToolbarProps()}
           />
@@ -968,6 +970,7 @@ describe("WorktreesList delete flow", () => {
             worktrees={WORKTREES.filter(
               (worktree) => worktree.worktreePath !== "/wt/clean",
             )}
+            enriching={false}
             taskTitlesByEpicId={new Map()}
             toolbarProps={testToolbarProps()}
           />
@@ -1078,6 +1081,7 @@ describe("WorktreesList confirm-time re-check", () => {
             openStreamTransport={() => stubOpenStreamTransport()}
             hostId="host-a"
             worktrees={worktrees}
+            enriching={false}
             taskTitlesByEpicId={new Map()}
             toolbarProps={testToolbarProps()}
           />
@@ -1499,6 +1503,38 @@ describe("WorktreesList v1.1 signals", () => {
     expect(tiers).toContain("merged");
     expect(tiers).toContain("review");
     screen.getByText("2 ahead · 3 behind");
+  });
+
+  it("shows pending tier pills while the activity leg is still enriching", () => {
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <TooltipProvider>
+          <WorktreesList
+            openStreamTransport={() => stubOpenStreamTransport()}
+            hostId="host-a"
+            worktrees={[
+              entry({
+                worktreePath: "/wt/merged",
+                branch: "feat-merged",
+                branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
+              }),
+            ]}
+            enriching
+            taskTitlesByEpicId={new Map()}
+            toolbarProps={testToolbarProps()}
+          />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+    // The base row is painted immediately (branch name visible), but the tier is
+    // not classified yet - the pill reads "Checking…" (data-tier="pending"),
+    // never a base-only tier that would flip once the probes land.
+    screen.getByText("feat-merged");
+    const tiers = screen
+      .getAllByTestId("worktree-tier-pill")
+      .map((pill) => pill.getAttribute("data-tier"));
+    expect(tiers).toEqual(["pending"]);
+    screen.getByText("Checking…");
   });
 
   it("filters rows by branch, path, repo label, and resolved Task title", () => {
