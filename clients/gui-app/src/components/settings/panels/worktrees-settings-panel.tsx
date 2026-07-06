@@ -610,25 +610,6 @@ export function WorktreesList(props: {
   const [sortMode, setSortMode] = useState<WorktreeSortMode>("newest");
   const [tierFilters, setTierFilters] =
     useState<WorktreeTierFilterSet>(EMPTY_TIER_FILTER);
-  // The status filter composes with the search box (both apply) before repo
-  // grouping. Tier comes from the shared classifier, so the filter options
-  // exactly match the row pills. An empty set = no filter (show every tier); a
-  // non-empty set shows the union of the selected tiers.
-  const filteredWorktrees = useMemo(
-    () =>
-      filterWorktrees(worktrees, searchText, taskTitlesByEpicId).filter(
-        (entry) =>
-          tierFilters.size === 0 ||
-          tierFilters.has(classifyWorktreeTier(entry)),
-      ),
-    [worktrees, searchText, taskTitlesByEpicId, tierFilters],
-  );
-  const toggleTierFilter = useCallback((tier: WorktreeTier) => {
-    setTierFilters((prev) => withMemberToggled(prev, tier));
-  }, []);
-  const clearTierFilters = useCallback(() => {
-    setTierFilters(EMPTY_TIER_FILTER);
-  }, []);
   // Only offer filter options for tiers actually present in this host's list.
   const availableTiers = useMemo(() => {
     const present = new Set(
@@ -636,6 +617,30 @@ export function WorktreesList(props: {
     );
     return WORKTREE_TIER_ORDER.filter((tier) => present.has(tier));
   }, [worktrees]);
+  // The status filter composes with the search box (both apply) before repo
+  // grouping. Tier comes from the shared classifier, so the filter options
+  // exactly match the row pills. Intersect the selection with the tiers actually
+  // present (mirroring `worktreeTierFilterLabel`): a stale selection for a
+  // now-absent tier - e.g. the last Merged row was just deleted - is ignored, so
+  // the effective filter is empty and every row shows, matching the "All" the
+  // toolbar already reads. Without this the list would dead-end to empty under an
+  // "All" label.
+  const filteredWorktrees = useMemo(() => {
+    const searched = filterWorktrees(worktrees, searchText, taskTitlesByEpicId);
+    const effectiveTiers = new Set(
+      availableTiers.filter((tier) => tierFilters.has(tier)),
+    );
+    if (effectiveTiers.size === 0) return searched;
+    return searched.filter((entry) =>
+      effectiveTiers.has(classifyWorktreeTier(entry)),
+    );
+  }, [worktrees, searchText, taskTitlesByEpicId, tierFilters, availableTiers]);
+  const toggleTierFilter = useCallback((tier: WorktreeTier) => {
+    setTierFilters((prev) => withMemberToggled(prev, tier));
+  }, []);
+  const clearTierFilters = useCallback(() => {
+    setTierFilters(EMPTY_TIER_FILTER);
+  }, []);
 
   // Refresh the host-wide list plus the shared worktree/binding caches the
   // file-tree / home / create-worktree surfaces read, captured against the
@@ -2050,31 +2055,37 @@ type WorktreeDeleteClass =
   | "dirty";
 
 function worktreeDeleteClass(entry: WorktreeHostEntryV11): WorktreeDeleteClass {
+  // Derive the tier-level bucket from the ONE shared classifier so the bulk copy
+  // and the row pill can never disagree (no parallel precedence ladder). The
+  // green tiers and orphaned map 1:1; only the amber `review` tier (and an
+  // in-use row that reached here via the drop-message summary) fans out into the
+  // finer would-be-lost sub-classes for honest loss copy.
+  const tier = classifyWorktreeTier(entry);
+  if (tier === "merged") return "merged";
+  if (tier === "at-base-commit") return "at-base";
+  if (tier === "unreferenced") return "clean";
+  if (tier === "orphaned") return "orphaned";
+  return worktreeReviewLossClass(entry);
+}
+
+/**
+ * Sub-classifies a non-green, non-orphaned row into its would-be-lost bucket for
+ * the delete copy - cautionary signals first. Called only for the `review` tier
+ * (and an in-use row summarized as a confirm-time drop), so the green/orphaned
+ * cases are already handled by the shared classifier above.
+ */
+function worktreeReviewLossClass(
+  entry: WorktreeHostEntryV11,
+): WorktreeDeleteClass {
   const status = entry.branchStatus;
-  // Sourced with the SAME precedence as the shared classifier so the copy never
-  // disagrees with the row pill: PR-merged is authoritative and highest;
-  // at-base sits ABOVE local ancestry (a never-touched worktree's base is in the
-  // default, so it is also mergedIntoDefault - it must read "at base commit", not
-  // "merged"); local ancestry is the genuine-merge case.
-  const mergedByPr = entry.prState === "merged" && entry.mergedHeadShaMatches;
-  const mergedLocal = status !== null && status.mergedIntoDefault;
   if (entry.uncommittedCount > 0) return "dirty";
   if (entry.branch === null) return "detached";
-  // Proven no-loss states before the ahead-based "unmerged" bucket: a
-  // squash-merged PR is locally "ahead" of default yet proven landed, so it must
-  // read "merged", never "unmerged"; an at-base worktree lost nothing.
-  if (mergedByPr) return "merged";
-  if (entry.atBaseCommit) return "at-base";
-  if (mergedLocal) return "merged";
-  // Reaching here the row is neither merged nor at-base. Not proven at the
-  // upstream tip: real local-only commits (`ahead > 0`) OR a never-pushed branch
-  // with no upstream to prove them absent (`ahead === null`). Both are
-  // would-be-lost; only the PROVEN `ahead === 0` below is "clean". This keeps the
-  // never-pushed-diverged cohort out of the "unverified" bucket, matching Review.
+  // Not proven at the upstream tip: real local-only commits (`ahead > 0`) OR a
+  // never-pushed branch with no upstream to prove them absent (`ahead === null`).
+  // Both are would-be-lost; only the PROVEN `ahead === 0` below is "clean".
   if (status !== null && (status.ahead === null || status.ahead > 0)) {
     return "unmerged";
   }
-  if (!entry.gitRemovable) return "orphaned";
   if (status !== null && status.ahead === 0) return "clean";
   return "unverified";
 }

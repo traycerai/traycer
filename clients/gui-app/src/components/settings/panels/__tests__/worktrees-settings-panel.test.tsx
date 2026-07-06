@@ -1215,6 +1215,66 @@ describe("WorktreesList confirm-time re-check", () => {
     screen.getByRole("button", { name: "Delete worktree feat-review" });
   });
 
+  it("a stale tier filter whose tier vanishes shows all rows (no empty dead-end under 'All')", () => {
+    const queryClient = new QueryClient();
+    const reviewRow = entry({
+      worktreePath: "/wt/review",
+      branch: "feat-review",
+      branchStatus: { ahead: 2, behind: 0, mergedIntoDefault: false },
+    });
+    const rendered = render(
+      renderWith(queryClient, [merged("/wt/merged", "feat-merged"), reviewRow]),
+    );
+
+    // Filter to Merged only - the review row hides and the toolbar reads Merged.
+    fireEvent.click(screen.getByTestId("worktrees-filter-trigger"));
+    fireEvent.click(screen.getByTestId("worktrees-filter-merged"));
+    expect(
+      screen.queryByRole("button", { name: "Delete worktree feat-review" }),
+    ).toBeNull();
+    screen.getByRole("button", { name: "Filter: Merged" });
+
+    // The last Merged row is deleted out from under the filter (only review left).
+    rendered.rerender(renderWith(queryClient, [reviewRow]));
+
+    // The stale "Merged" selection is no longer available, so the effective
+    // filter is empty and every row shows - matching the "All" the toolbar now
+    // reads. The list must NOT dead-end to the empty state.
+    screen.getByRole("button", { name: "Delete worktree feat-review" });
+    expect(screen.queryByText("No worktrees match your search.")).toBeNull();
+    screen.getByRole("button", { name: "Filter: All" });
+  });
+
+  it("bulk-delete copy buckets an orphaned+dirty row as orphaned, matching its pill (shared classifier)", () => {
+    render(
+      renderWith(new QueryClient(), [
+        merged("/wt/merged", "feat-merged"),
+        entry({
+          worktreePath: "/wt/orphan",
+          branch: "feat-orphan",
+          // !gitRemovable outranks dirty in the classifier, so the pill is
+          // Orphaned; the bulk copy must agree (not bucket it as "dirty").
+          gitRemovable: false,
+          uncommittedCount: 3,
+        }),
+      ]),
+    );
+
+    // Pill agrees: the orphan row carries the orphaned tier.
+    const pills = screen.getAllByTestId("worktree-tier-pill");
+    const tiers = pills.map((pill) => pill.getAttribute("data-tier"));
+    expect(tiers).toContain("orphaned");
+
+    // Select both and open the bulk-delete dialog.
+    fireEvent.click(screen.getByTestId("worktrees-select-all"));
+    fireEvent.click(screen.getByTestId("worktrees-list-delete-selected"));
+
+    // The class summary buckets the row as orphaned (its tier), NOT dirty - the
+    // dirty LOSS is still named separately in its own caveat line.
+    screen.getByText(/1 merged, 1 orphaned/);
+    screen.getByTestId("worktree-bulk-delete-dirty-loss");
+  });
+
   it("only offers filter options for tiers present in the list", () => {
     render(
       renderWith(new QueryClient(), [
