@@ -880,6 +880,7 @@ describe("<ChatControlStrip />", () => {
         state={harness.handle.store.getState()}
         canAct
         editingQueueItemId={null}
+        onQueuePause={() => null}
         onResumeQueue={() => undefined}
         onQueueEdit={() => undefined}
         onQueueCancel={() => undefined}

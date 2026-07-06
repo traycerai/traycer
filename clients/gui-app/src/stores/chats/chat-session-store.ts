@@ -386,6 +386,7 @@ export interface ChatSessionState {
   stopTurn: () => string | null;
   stopBackgroundItem: (taskId: string) => string | null;
   stopAllBackgroundItems: () => string | null;
+  pauseQueue: () => string | null;
   resumeQueue: () => string | null;
   queueEdit: (queueItemId: string, content: JsonContent) => string | null;
   queueCancel: (queueItemId: string) => string | null;
@@ -1648,6 +1649,23 @@ export function createChatSessionStore(
           pendingBackgroundStopAll: { clientActionId: sent, taskIds },
         }));
         return sent;
+      },
+      pauseQueue: () => {
+        const clientActionId = uuidv4();
+        const frame: ChatOwnerActionFrame = {
+          kind: "pauseQueue",
+          hasBinaryPayload: false,
+          epicId: options.epicId,
+          chatId: options.chatId,
+          clientActionId,
+        };
+        return sendAction({
+          set,
+          get,
+          frame,
+          pending: basicPending(clientActionId, "pauseQueue"),
+          pendingUserMessage: null,
+        });
       },
       resumeQueue: () => {
         const clientActionId = uuidv4();
