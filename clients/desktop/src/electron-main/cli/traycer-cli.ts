@@ -159,6 +159,10 @@ export async function runTraycerCli(
         encoding: "utf8",
         maxBuffer: opts.maxBuffer,
         timeout: opts.timeoutMs,
+        // Windows: Node refuses to spawn a .cmd/.bat without shell:true
+        // (CVE-2024-27980). The dev CLI wrapper is a .cmd, so opt in.
+        shell:
+          process.platform === "win32" && /\.(cmd|bat)$/i.test(inv.command),
       },
       (err, stdout, stderr) => {
         if (err !== null) {
@@ -412,6 +416,8 @@ export async function runTraycerCliWithStdin<T>(
   return new Promise<T>((resolve, reject) => {
     const child = spawn(inv.command, allArgs, {
       stdio: ["pipe", "pipe", "pipe"],
+      shell:
+        process.platform === "win32" && /\.(cmd|bat)$/i.test(inv.command),
     });
     let stdout = "";
     let stderrTail = "";
@@ -552,6 +558,8 @@ export async function streamTraycerCliJson<T>(
     const child = spawn(inv.command, allArgs, {
       env: opts.env === null ? process.env : { ...process.env, ...opts.env },
       stdio: ["ignore", "pipe", "pipe"],
+      shell:
+        process.platform === "win32" && /\.(cmd|bat)$/i.test(inv.command),
     });
     let stdoutBuffer = "";
     let stderrTail = "";
