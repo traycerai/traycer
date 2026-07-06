@@ -3,7 +3,10 @@ export type { TraycerMarkdownProps } from "./traycer-markdown";
 
 export { MarkdownBlock } from "./markdown-block";
 export { useMarkdownBlocks } from "./use-markdown-blocks";
-export type { MarkdownBlock as MarkdownBlockToken } from "./use-markdown-blocks";
+export type {
+  MarkdownBlock as MarkdownBlockToken,
+  MarkdownBlocksResult,
+} from "./use-markdown-blocks";
 export { repairMarkdown } from "./markdown-repair";
 
 export {

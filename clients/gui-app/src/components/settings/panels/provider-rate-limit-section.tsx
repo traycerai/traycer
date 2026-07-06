@@ -53,11 +53,11 @@ function ProviderRateLimitSettingsCard({
     <div className="mb-3 flex flex-col gap-3 rounded-lg border border-border/60 p-3">
       <div className="flex items-center justify-between gap-2">
         <div className="text-ui-sm font-medium text-foreground">
-          Rate limits
+          Usage limits
         </div>
         <RefreshIconButton
           onRefresh={refresh}
-          label="Refresh rate limits"
+          label="Refresh usage limits"
           // `isRefreshing` (from useProviderRateLimitRefresh) already folds in
           // the ephemeralProcess `draining` flag, so this stays disabled for a
           // "Refresh all" round's full duration, not just this provider's slice.
@@ -66,7 +66,7 @@ function ProviderRateLimitSettingsCard({
       </div>
       <ProviderRateLimitBody
         isPending={query.isPending}
-        isFetching={query.isFetching}
+        isFetching={query.isFetching || isRefreshing}
         isError={query.isError}
         providerRateLimits={query.data?.providerRateLimits}
       />

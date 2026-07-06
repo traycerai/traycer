@@ -3,10 +3,10 @@ import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-ru
 import type { StreamAuthRevalidator } from "@traycer-clients/shared/auth/bearer-revalidator";
 
 // `openDurableStreamTransport` is the single place "durable stream = transport +
-// auth + wake" is assembled. These tests pin its two load-bearing guarantees:
-// the teardown order, and that a failure while wiring wake never leaks the
-// socket. The socket builder and wake wiring are mocked so the test is about
-// the assembly contract, not the real transport.
+// auth + bearer rotation + wake" is assembled. These tests pin its load-bearing
+// guarantees: forwarding rotations, teardown order, and that a failure while
+// wiring wake never leaks the socket. The socket builder and wake wiring are
+// mocked so the test is about the assembly contract, not the real transport.
 const mocks = vi.hoisted(() => ({
   buildHostStreamClient: vi.fn(),
   subscribeStreamWakeReconnect: vi.fn(),
@@ -43,6 +43,7 @@ function buildParams(closeWs: () => void) {
       closeWs();
     }),
     reconnectAll: vi.fn(),
+    notifyBearerRotated: vi.fn(),
   };
   mocks.buildHostStreamClient.mockReturnValue(fakeWs);
   return {
@@ -53,6 +54,11 @@ function buildParams(closeWs: () => void) {
       bearer: () => null,
       auth: AUTH,
       runnerHost: RUNNER_HOST,
+      subscribeBearerRotation: (_onRotation: () => void) => {
+        return () => {
+          order.push("bearer");
+        };
+      },
       // No endpoint ever moves in these assembly tests; return a no-op disposer.
       subscribeEndpointChange: () => () => undefined,
     },
@@ -89,12 +95,46 @@ describe("openDurableStreamTransport", () => {
 
     // Disposing wake before closing the socket avoids a wake firing
     // `reconnectAll` on a socket that is being torn down.
-    expect(order).toEqual(["wake", "ws"]);
+    expect(order).toEqual(["bearer", "wake", "ws"]);
+  });
+
+  it("forwards bearer rotations to the built socket and removes the listener before close", () => {
+    const { order, params, fakeWs } = buildParams(() => undefined);
+    const disposeWake = vi.fn(() => {
+      order.push("wake");
+    });
+    let bearerListener: (() => void) | null = null;
+    const disposeBearer = vi.fn(() => {
+      order.push("bearer");
+      bearerListener = null;
+    });
+    mocks.subscribeStreamWakeReconnect.mockReturnValue(disposeWake);
+    params.subscribeBearerRotation = (listener: () => void) => {
+      bearerListener = listener;
+      return disposeBearer;
+    };
+    const fireBearerRotation = (): void => {
+      if (bearerListener !== null) {
+        bearerListener();
+      }
+    };
+
+    const transport = openDurableStreamTransport(params);
+
+    fireBearerRotation();
+    expect(fakeWs.notifyBearerRotated).toHaveBeenCalledTimes(1);
+
+    transport.close();
+    expect(disposeBearer).toHaveBeenCalledTimes(1);
+    expect(order).toEqual(["bearer", "wake", "ws"]);
+
+    fireBearerRotation();
+    expect(fakeWs.notifyBearerRotated).toHaveBeenCalledTimes(1);
   });
 
   it("closes the half-built socket and rethrows if wiring wake throws", () => {
     const closeWs = vi.fn();
-    const { params, fakeWs } = buildParams(closeWs);
+    const { order, params, fakeWs } = buildParams(closeWs);
     const wakeError = new Error("wake wiring failed");
     mocks.subscribeStreamWakeReconnect.mockImplementation(() => {
       throw wakeError;
@@ -105,6 +145,7 @@ describe("openDurableStreamTransport", () => {
     // half-registered listener leaks for the lifetime of the window.
     expect(fakeWs.close).toHaveBeenCalledTimes(1);
     expect(closeWs).toHaveBeenCalledTimes(1);
+    expect(order).toEqual(["bearer", "ws"]);
   });
 
   it("re-dials at once when the host's dialable endpoint moves, not on benign re-emits", () => {
@@ -121,6 +162,7 @@ describe("openDurableStreamTransport", () => {
       bearer: () => null,
       auth: AUTH,
       runnerHost: RUNNER_HOST,
+      subscribeBearerRotation: () => () => undefined,
       subscribeEndpointChange: (onChange: () => void) => {
         fireDirectoryChange = onChange;
         return () => undefined;

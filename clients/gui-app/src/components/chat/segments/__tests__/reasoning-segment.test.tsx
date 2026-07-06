@@ -25,6 +25,24 @@ describe("<ReasoningSegment />", () => {
     expect(screen.getByText("Considering the options")).toBeTruthy();
   });
 
+  it("does not mark reasoning markdown as quotable", () => {
+    render(
+      <ReasoningSegment
+        findUnitId={null}
+        markdown="Considering the options"
+        isStreaming
+        durationMs={null}
+      />,
+    );
+
+    expect(
+      screen
+        .getByText("Considering the options")
+        .closest(".md-prose")
+        ?.hasAttribute("data-quotable"),
+    ).toBe(false);
+  });
+
   it("collapses to a 'Thought for Xs' summary once completed", () => {
     render(
       <ReasoningSegment

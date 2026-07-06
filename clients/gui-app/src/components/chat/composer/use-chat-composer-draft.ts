@@ -20,6 +20,8 @@ import type { ComposerPromptEditorHandle } from "./composer-prompt-editor";
 interface UseChatComposerDraftArgs {
   readonly taskId: string;
   readonly editorRef: RefObject<ComposerPromptEditorHandle | null>;
+  /** Bumped by the owner when `ComposerPromptEditor` fires `onEditorReady`. */
+  readonly editorReadyTick: number;
 }
 
 export function useChatComposerDraft(args: UseChatComposerDraftArgs) {
@@ -53,20 +55,26 @@ export function useChatComposerDraft(args: UseChatComposerDraftArgs) {
     [args.taskId, setSnapshotInStore],
   );
 
-  const applyDraftResetRef = useRef(NOOP);
+  // `resetEpoch` bumps (queue-edit restore, failed-send restore, a quote
+  // appended from elsewhere) can land while the editor is still constructing:
+  // the handle exists from the owner's first commit but its methods no-op
+  // until Tiptap's async `useEditor` resolves, so applying "into" it would
+  // silently swallow the reset. `isReady()` blocks that, and `editorReadyTick`
+  // (the owner's re-render signal for `onEditorReady`) re-runs the effect for
+  // the pending-epoch catch-up once the editor truly exists.
+  // `appliedResetEpochRef` keeps the apply idempotent per epoch; it stamps the
+  // LIVE epoch read alongside the content so a bump that lands between render
+  // and effect flush is not re-applied (which would re-fire `focus("end")`).
+  const appliedResetEpochRef = useRef(draftResetEpoch);
   useEffect(() => {
-    applyDraftResetRef.current = () => {
-      const editor = args.editorRef.current;
-      if (editor === null) return;
-      const draft = useComposerDraftStore.getState().drafts[args.taskId];
-      if (draft === undefined) return;
-      editor.setContent(draft.content, draft.selection);
-    };
-  }, [args.editorRef, args.taskId]);
-  useEffect(() => {
-    if (draftResetEpoch === 0) return;
-    applyDraftResetRef.current();
-  }, [draftResetEpoch]);
+    if (draftResetEpoch === appliedResetEpochRef.current) return;
+    const editor = args.editorRef.current;
+    if (editor === null || !editor.isReady()) return;
+    const draft = useComposerDraftStore.getState().drafts[args.taskId];
+    if (draft === undefined) return;
+    editor.setContent(draft.content, draft.selection);
+    appliedResetEpochRef.current = draft.resetEpoch;
+  }, [args.editorRef, args.taskId, args.editorReadyTick, draftResetEpoch]);
 
   return {
     initialContent,
@@ -77,5 +85,3 @@ export function useChatComposerDraft(args: UseChatComposerDraftArgs) {
     handleSnapshot,
   };
 }
-
-const NOOP = (): void => undefined;

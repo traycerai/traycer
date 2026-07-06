@@ -18,6 +18,10 @@ type TerminalDataFrame = Extract<
   TerminalSubscribeServerFrame,
   { readonly kind: "data" }
 >;
+type TerminalExitFrame = Extract<
+  TerminalSubscribeServerFrame,
+  { readonly kind: "exit" }
+>;
 
 function terminalInfoWithSize(cols: number, rows: number): TerminalSessionInfo {
   return {
@@ -157,6 +161,74 @@ describe("createTerminalSessionStore", () => {
     expect(writes.every((write) => typeof write.onAckable === "function")).toBe(
       true,
     );
+  });
+
+  it("adopts exit code and reason from a reattach snapshot of an exited session", () => {
+    const harness = createHarness();
+
+    const base = snapshot("");
+    emitSnapshot(harness.callbacks(), {
+      ...base,
+      session: {
+        ...base.session,
+        status: "exited",
+        exitCode: -1,
+        exitReason: "reaped",
+      },
+    });
+
+    expect(harness.handle.store.getState()).toMatchObject({
+      status: "exited",
+      exitCode: -1,
+      exitReason: "reaped",
+    });
+  });
+
+  it("treats a snapshot missing exitReason (host predating the field) as null", () => {
+    const harness = createHarness();
+
+    const base = snapshot("");
+    emitSnapshot(harness.callbacks(), {
+      ...base,
+      session: { ...base.session, status: "exited", exitCode: 1 },
+    });
+
+    expect(harness.handle.store.getState()).toMatchObject({
+      status: "exited",
+      exitCode: 1,
+      exitReason: null,
+    });
+  });
+
+  it("a live exit frame does not clobber a snapshot-set exitReason (snapshot is authoritative)", () => {
+    const harness = createHarness();
+
+    // Seed a non-null reason via the authoritative snapshot path first...
+    const base = snapshot("");
+    emitSnapshot(harness.callbacks(), {
+      ...base,
+      session: {
+        ...base.session,
+        status: "exited",
+        exitCode: -1,
+        exitReason: "reaped",
+      },
+    });
+
+    // ...then a live exit frame (which carries no reason) must leave it intact.
+    const frame: TerminalExitFrame = {
+      kind: "exit",
+      hasBinaryPayload: false,
+      sessionId: "terminal-1",
+      exitCode: 1,
+    };
+    harness.callbacks().onExit(frame);
+
+    expect(harness.handle.store.getState()).toMatchObject({
+      status: "exited",
+      exitCode: 1,
+      exitReason: "reaped",
+    });
   });
 
   it("marks the session lost when the stream closes before a snapshot", () => {
