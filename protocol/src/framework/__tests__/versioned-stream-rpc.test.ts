@@ -26,7 +26,7 @@ describe("validateVersionedStreamRpcRegistry", () => {
       validateVersionedStreamRpcRegistry(hostStreamRpcRegistry);
     }).not.toThrow();
     expect(hostStreamRpcRegistry["epic.subscribe"][1].latestMinor).toBe(0);
-    expect(hostStreamRpcRegistry["chat.subscribe"][1].latestMinor).toBe(1);
+    expect(hostStreamRpcRegistry["chat.subscribe"][1].latestMinor).toBe(2);
     expect(
       hostStreamRpcRegistry["notifications.subscribe"][1].latestMinor,
     ).toBe(0);
@@ -300,9 +300,9 @@ describe("stream compatibility", () => {
   // Regression guard for the release-v1.1.0 RC incident: chat.subscribe
   // bumped to a new major (dropping the v1.0 registration entirely) and broke
   // every host still running host-v1.0.0. Fixed by keeping chat.subscribe on
-  // major 1 and shipping the background-items controls as an additive 1.1
-  // minor, so a 1.1 app must still bridge to a host that only advertises 1.0.
-  it("bridges chat.subscribe@1.1 to a host still on chat.subscribe@1.0 (host-v1.0.0)", () => {
+  // major 1 and shipping the background-items controls as additive minors, so a
+  // current app must still bridge to a host that only advertises 1.0.
+  it("bridges chat.subscribe@1.2 to a host still on chat.subscribe@1.0 (host-v1.0.0)", () => {
     const currentManifest = buildStreamManifest(hostStreamRpcRegistry);
     const hostV100Manifest = {
       ...currentManifest,
@@ -318,9 +318,9 @@ describe("stream compatibility", () => {
     expect(fullConnection.ok).toBe(true);
 
     // Mirrored host-role check: host-v1.0.0 itself, running this same check
-    // from its own (older) side against a 1.1 client's manifest, must reach
-    // the same verdict - the host's own subscribe-time compatibility gate
-    // runs with `selfRole: "host"`, not "client".
+    // from its own (older) side against a 1.2 client's manifest, must reach the
+    // same verdict - the host's own subscribe-time compatibility gate runs with
+    // `selfRole: "host"`, not "client".
     const fullConnectionAsHost = checkStreamCompatibility(
       hostStreamRpcRegistry,
       hostV100Manifest,

@@ -189,6 +189,38 @@ describe("ephemeral-fetch-queue", () => {
     expect(isRateLimitQueueDraining()).toBe(false);
   });
 
+  it("a failed first read does not make a provider look fresh; an automatic enqueue retries and recovers", async () => {
+    const queryClient = newQueryClient();
+    const { request, settlers } = makeControllableRequest();
+    configureRateLimitQueue({ hostId: HOST_ID, queryClient, request });
+
+    void enqueueRateLimitFetch("claude-code", DEFAULT_ACCOUNT_CONTEXT, {
+      force: false,
+    });
+    await flush();
+    settlers[0].fail();
+    await flush();
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(
+      queryClient.getQueryState(keyFor("claude-code"))?.dataUpdatedAt,
+    ).toBe(0);
+
+    void enqueueRateLimitFetch("claude-code", DEFAULT_ACCOUNT_CONTEXT, {
+      force: false,
+    });
+    await flush();
+
+    expect(request).toHaveBeenCalledTimes(2);
+    settlers[1].ok();
+    await flush();
+    expect(queryClient.getQueryState(keyFor("claude-code"))?.data).toEqual(
+      response(),
+    );
+    expect(
+      queryClient.getQueryState(keyFor("claude-code"))?.dataUpdatedAt,
+    ).toBeGreaterThan(0);
+  });
+
   it("exposes an external-store draining signal that flips with in-flight work", async () => {
     const queryClient = newQueryClient();
     const { request, settlers } = makeControllableRequest();

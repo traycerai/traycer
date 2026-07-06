@@ -147,6 +147,7 @@ function emitSnapshot(
         isTitleEditedByUser: false,
         settings: null,
         activeSessionChain: null,
+        claudePendingWakes: [],
         messages: [...messages],
         events: [...events],
       },

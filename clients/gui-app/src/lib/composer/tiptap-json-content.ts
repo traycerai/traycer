@@ -336,7 +336,29 @@ function plainTextFromNode(node: JsonContent): string {
   }
   if (node.type === "imageAttachment") return "";
   if (node.type === "attachmentGroup") return "";
+  if (node.type === "blockquote") return blockquotePlainText(node);
   return (node.content ?? []).map((child) => plainTextFromNode(child)).join("");
+}
+
+function blockquotePlainText(node: JsonContent): string {
+  const text = (node.content ?? [])
+    .map((child) => plainTextFromNode(child))
+    .join("\n");
+  return quotePrefixLines(text);
+}
+
+/**
+ * The single markdown-quote prefix rule for every plain-text projection of a
+ * blockquote (submit `contentText` here, composer copy in
+ * `composer-clipboard.ts`). Blank lines become a bare `>` so the quote stays
+ * one contiguous block. Child serialization legitimately differs per caller;
+ * only this prefixing rule is shared.
+ */
+export function quotePrefixLines(text: string): string {
+  return text
+    .split("\n")
+    .map((line) => (line.length === 0 ? ">" : `> ${line}`))
+    .join("\n");
 }
 
 function collectMentionAttachmentsFromNodes(

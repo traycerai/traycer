@@ -68,10 +68,11 @@ describe("ChatEvent persistence schema", () => {
     ).toThrow();
   });
 
-  it("keeps existing V200 chats without events readable as an empty timeline", () => {
+  it("keeps existing V200 chats without events or wakes readable as empty arrays", () => {
     const parsed = chatSchema.parse(chatWithoutEvents);
 
-    expect(parsed.events ?? []).toEqual([]);
+    expect(parsed.events).toEqual([]);
+    expect(parsed.claudePendingWakes).toEqual([]);
   });
 
   it("accepts checkpoint events with typed metadata manifests", () => {
@@ -158,7 +159,8 @@ describe("ChatEvent persistence schema", () => {
       deletedArtifacts: {},
     });
 
-    expect(parsed.chats["chat-1"].events ?? []).toEqual([]);
+    expect(parsed.chats["chat-1"].events).toEqual([]);
+    expect(parsed.chats["chat-1"].claudePendingWakes).toEqual([]);
     expect(parsed.chats["chat-2"].events).toHaveLength(1);
   });
 });

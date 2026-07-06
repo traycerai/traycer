@@ -122,6 +122,7 @@ export function CompactionSegment(props: CompactionSegmentProps) {
             components={null}
             remarkPlugins={null}
             rehypePlugins={null}
+            quotable={false}
             isStreaming={false}
           >
             {summary}
