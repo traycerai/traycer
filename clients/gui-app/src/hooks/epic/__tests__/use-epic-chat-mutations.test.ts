@@ -29,8 +29,20 @@ vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
   useReactiveActiveHostId: () => "host-test",
 }));
 
+const { forceReleaseChatSession } = vi.hoisted(() => ({
+  forceReleaseChatSession: vi.fn(),
+}));
+vi.mock("@/lib/registries/chat-session-registry", () => ({
+  getChatSessionRegistry: () => ({
+    forceRelease: forceReleaseChatSession,
+  }),
+}));
+
 import type { CreateChatRequest } from "@traycer/protocol/host/epic/unary-schemas";
-import type { CreateChatMutationInput } from "@/hooks/epic/use-epic-chat-mutations";
+import type {
+  CreateChatMutationInput,
+  DeleteChatMutationOptions,
+} from "@/hooks/epic/use-epic-chat-mutations";
 
 interface CapturedMutationArgs {
   readonly method: string;
@@ -49,7 +61,11 @@ vi.mock("@/hooks/host/use-host-query", () => ({
 
 import { toast } from "sonner";
 import { renderHook } from "@testing-library/react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  QueryClient,
+  QueryClientProvider,
+  type MutationFunctionContext,
+} from "@tanstack/react-query";
 import {
   useEpicCreateChat,
   useEpicRenameChat,
@@ -138,6 +154,28 @@ describe("useEpicRenameChat", () => {
 });
 
 describe("useEpicDeleteChat", () => {
+  it("force-releases the deleted chat session on success", () => {
+    renderHook(() => useEpicDeleteChat());
+    const opts = getCapturedMutation("epic.deleteChat")
+      .options as DeleteChatMutationOptions;
+    if (opts.onSuccess === undefined) {
+      throw new Error("expected deleteChat success handler");
+    }
+    const mutationContext: MutationFunctionContext = {
+      client: new QueryClient(),
+      meta: undefined,
+    };
+
+    opts.onSuccess(
+      { deleted: true },
+      { epicId: "epic-1", chatId: "chat-1" },
+      undefined,
+      mutationContext,
+    );
+
+    expect(forceReleaseChatSession).toHaveBeenCalledWith("epic-1", "chat-1");
+  });
+
   it("shows fallback on error", () => {
     renderHook(() => useEpicDeleteChat());
     const opts = getCapturedMutation("epic.deleteChat").options as {
