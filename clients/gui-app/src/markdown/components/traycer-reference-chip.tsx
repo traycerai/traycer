@@ -4,9 +4,9 @@ import type {
 } from "@dnd-kit/core";
 import { type MouseEvent, type ReactNode } from "react";
 import {
-  useChatArtifactDragSource,
-  type ChatArtifactDragIdentity,
-} from "@/components/epic-canvas/dnd/use-chat-artifact-drag-source";
+  useArtifactDragSource,
+  type ArtifactDragIdentity,
+} from "@/components/epic-canvas/dnd/use-artifact-drag-source";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
 import { isEpicArtifactKind } from "@/lib/artifacts/node-display";
 import { cn } from "@/lib/utils";
@@ -79,7 +79,7 @@ function isChatArtifactDragCandidate(
 /**
  * The drag-capable variant, mounted only for same-epic spec/ticket references.
  * Delegates the canvas-store subscription (`viewTabId`) and the `useDraggable`
- * registration to the shared `useChatArtifactDragSource` hook; a non-draggable
+ * registration to the shared `useArtifactDragSource` hook; a non-draggable
  * result (e.g. no open tab for the epic) still renders the same button but
  * disables the drag surface.
  */
@@ -94,7 +94,7 @@ function DraggableReferenceChip(
   // not an artifact kind, which disables the drag surface. This component only
   // mounts for spec/ticket candidates (see `isChatArtifactDragCandidate`), so
   // the shared hook's own gate is `enabled: true`.
-  const identity: ChatArtifactDragIdentity | null =
+  const identity: ArtifactDragIdentity | null =
     sameEpicNodeRef === null || !isEpicArtifactKind(sameEpicNodeRef.type)
       ? null
       : {
@@ -104,7 +104,12 @@ function DraggableReferenceChip(
           hostId: sameEpicNodeRef.hostId,
         };
   const { isDraggable, setNodeRef, listeners, attributes, isDragging } =
-    useChatArtifactDragSource({ epicId, identity, enabled: true });
+    useArtifactDragSource({
+      epicId,
+      viewTabId: undefined,
+      identity,
+      enabled: true,
+    });
 
   return (
     <ReferenceChipButton

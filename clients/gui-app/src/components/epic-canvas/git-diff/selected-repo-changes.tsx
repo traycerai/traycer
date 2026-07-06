@@ -39,11 +39,13 @@ import {
   InputGroupButton,
   InputGroupInput,
 } from "@/components/ui/input-group";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { cn } from "@/lib/utils";
 import { StartTruncatedText } from "@/components/ui/start-truncated-text";
 import { FileList } from "./file-list";
 import { RepoStateBanner } from "./repo-state-banner";
 import { DiffLoadingSkeleton } from "./diff-loading-skeleton";
+import { NoChangesInWorktree } from "./empty-states/no-changes-in-worktree";
 import { NoMatchingFiles } from "./empty-states/no-matching-files";
 import { SubscriptionErrorState } from "./empty-states/subscription-error-state";
 import { SubmoduleUnavailable } from "./empty-states/submodule-unavailable";
@@ -281,6 +283,88 @@ function gitModuleSearchVisible(
 
 function gitSectionStickyStyle(top: string): GitSectionStickyStyle {
   return { "--git-section-sticky-top": top };
+}
+
+function ModuleHeaderTooltipContent(props: { readonly text: string }) {
+  return (
+    <span className="block whitespace-pre-line text-left leading-5">
+      {props.text}
+    </span>
+  );
+}
+
+function allModulesClean(modules: ReadonlyArray<GitModuleGroup>): boolean {
+  return modules.length > 0 && modules.every((module) => module.clean);
+}
+
+type GitModuleGroupsEmptyState = "clean-workspace" | "no-query-matches";
+
+function gitModuleGroupsNoQueryMatches(props: {
+  readonly singleRepo: GitModuleGroup | null;
+  readonly queryActive: boolean;
+  readonly visibleModuleCount: number;
+}): boolean {
+  return (
+    props.singleRepo === null &&
+    props.queryActive &&
+    props.visibleModuleCount === 0
+  );
+}
+
+function gitModuleGroupsEmptyState(props: {
+  readonly cleanWorkspace: boolean;
+  readonly noQueryMatches: boolean;
+}): GitModuleGroupsEmptyState | null {
+  if (props.cleanWorkspace) return "clean-workspace";
+  if (props.noQueryMatches) return "no-query-matches";
+  return null;
+}
+
+function GitModuleGroupsEmptyContent(props: {
+  readonly state: GitModuleGroupsEmptyState;
+  readonly lastUpdatedAtMs: number | null;
+  readonly snapshotError: HostRpcError | null;
+  readonly searchVisible: boolean;
+  readonly searchQuery: string;
+  readonly trimmedQuery: string;
+  readonly placeholder: string;
+  readonly ariaLabel: string;
+  readonly onSearchChange: (event: ChangeEvent<HTMLInputElement>) => void;
+  readonly onSearchKeyDown: (event: KeyboardEvent<HTMLInputElement>) => void;
+  readonly onClearSearch: () => void;
+}): ReactNode {
+  if (props.state === "clean-workspace") {
+    return (
+      <div className="flex min-h-0 flex-1 flex-col">
+        {props.snapshotError === null ? null : (
+          <GitSnapshotErrorBanner error={props.snapshotError} />
+        )}
+        <NoChangesInWorktree lastUpdatedAtMs={props.lastUpdatedAtMs} />
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      {props.snapshotError === null ? null : (
+        <GitSnapshotErrorBanner error={props.snapshotError} />
+      )}
+      {props.searchVisible ? (
+        <GitModuleSearch
+          searchQuery={props.searchQuery}
+          placeholder={props.placeholder}
+          ariaLabel={props.ariaLabel}
+          onSearchChange={props.onSearchChange}
+          onSearchKeyDown={props.onSearchKeyDown}
+          onClearSearch={props.onClearSearch}
+        />
+      ) : null}
+      <NoMatchingFiles
+        query={props.trimmedQuery}
+        onClear={props.onClearSearch}
+      />
+    </div>
+  );
 }
 
 export function SelectedRepoChanges(
@@ -544,25 +628,32 @@ function GitModuleGroupsView(props: {
   ]);
 
   const searchVisible = gitModuleSearchVisible(props.modules, singleRepo);
+  const cleanWorkspace = !queryActive && allModulesClean(props.modules);
+  const noQueryMatches = gitModuleGroupsNoQueryMatches({
+    singleRepo,
+    queryActive,
+    visibleModuleCount: visibleModules.length,
+  });
+  const emptyState = gitModuleGroupsEmptyState({
+    cleanWorkspace,
+    noQueryMatches,
+  });
 
-  if (singleRepo === null && queryActive && visibleModules.length === 0) {
+  if (emptyState !== null) {
     return (
-      <div className="flex min-h-0 flex-1 flex-col">
-        {props.snapshotError === null ? null : (
-          <GitSnapshotErrorBanner error={props.snapshotError} />
-        )}
-        {searchVisible ? (
-          <GitModuleSearch
-            searchQuery={searchQuery}
-            placeholder={searchCopy.placeholder}
-            ariaLabel={searchCopy.ariaLabel}
-            onSearchChange={handleSearchChange}
-            onSearchKeyDown={handleSearchKeyDown}
-            onClearSearch={handleClearSearch}
-          />
-        ) : null}
-        <NoMatchingFiles query={trimmedQuery} onClear={handleClearSearch} />
-      </div>
+      <GitModuleGroupsEmptyContent
+        state={emptyState}
+        lastUpdatedAtMs={props.lastUpdatedAtMs}
+        snapshotError={props.snapshotError}
+        searchVisible={searchVisible}
+        searchQuery={searchQuery}
+        trimmedQuery={trimmedQuery}
+        placeholder={searchCopy.placeholder}
+        ariaLabel={searchCopy.ariaLabel}
+        onSearchChange={handleSearchChange}
+        onSearchKeyDown={handleSearchKeyDown}
+        onClearSearch={handleClearSearch}
+      />
     );
   }
 
@@ -881,79 +972,84 @@ function GitModuleHeader(props: {
     [moduleKey, onHeaderRef],
   );
   return (
-    <button
-      ref={setHeaderRef}
-      type="button"
-      onClick={() => onToggle(module)}
-      className={cn(
-        "@container group sticky top-0 z-40 flex w-full min-w-0 items-start gap-2 border-b border-border/40 bg-background px-2 py-1.5 text-left transition-colors hover:bg-muted",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-        module.clean && "text-muted-foreground",
-      )}
-      aria-expanded={props.expanded}
-      aria-label={moduleHeaderAccessibleName({
-        module,
-        countLabel,
-        parentLabel,
-      })}
-      title={tooltip}
-      data-testid={`git-module-header-${moduleIdentifier(module)}`}
+    <TooltipWrapper
+      label={<ModuleHeaderTooltipContent text={tooltip} />}
+      side="right"
+      sideOffset={8}
+      align="start"
     >
-      <ChevronDown
+      <button
+        ref={setHeaderRef}
+        type="button"
+        onClick={() => onToggle(module)}
         className={cn(
-          "mt-0.5 size-3.5 shrink-0 text-muted-foreground transition-transform",
-          !props.expanded && "-rotate-90",
+          "@container group sticky top-0 z-40 flex w-full min-w-0 items-start gap-2 border-b border-border/40 bg-background px-2 py-1.5 text-left transition-colors hover:bg-muted",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          module.clean && "text-muted-foreground",
         )}
-        aria-hidden
-      />
-      <span className="min-w-0 flex-1">
-        <span className="flex min-w-0 items-center gap-2">
-          <span className="min-w-0 truncate text-ui-sm font-semibold text-foreground/90">
-            {module.label}
+        aria-expanded={props.expanded}
+        aria-label={moduleHeaderAccessibleName({
+          module,
+          countLabel,
+          parentLabel,
+        })}
+        data-testid={`git-module-header-${moduleIdentifier(module)}`}
+      >
+        <ChevronDown
+          className={cn(
+            "mt-0.5 size-3.5 shrink-0 text-muted-foreground transition-transform",
+            !props.expanded && "-rotate-90",
+          )}
+          aria-hidden
+        />
+        <span className="min-w-0 flex-1">
+          <span className="flex min-w-0 items-center gap-2">
+            <span className="min-w-0 truncate text-ui-sm font-semibold text-foreground/90">
+              {module.label}
+            </span>
+            {path === null ? null : (
+              <StartTruncatedText className="ml-auto hidden min-w-0 max-w-[45%] shrink text-ui-xs text-muted-foreground @min-[20rem]:block">
+                {path}
+              </StartTruncatedText>
+            )}
+            {showCount ? (
+              <span
+                className="shrink-0 rounded bg-muted/40 px-1.5 py-0.5 text-ui-xs tabular-nums text-muted-foreground"
+                data-testid={`git-module-count-${moduleIdentifier(module)}`}
+              >
+                {countLabel}
+              </span>
+            ) : (
+              <span
+                className="sr-only"
+                data-testid={`git-module-count-${moduleIdentifier(module)}`}
+              >
+                {countLabel}
+              </span>
+            )}
           </span>
-          {path === null ? null : (
-            <StartTruncatedText className="ml-auto hidden min-w-0 max-w-[45%] shrink text-ui-xs text-muted-foreground @min-[20rem]:block">
-              {path}
-            </StartTruncatedText>
-          )}
-          {showCount ? (
-            <span
-              className="shrink-0 rounded bg-muted/40 px-1.5 py-0.5 text-ui-xs tabular-nums text-muted-foreground"
-              data-testid={`git-module-count-${moduleIdentifier(module)}`}
-            >
-              {countLabel}
-            </span>
-          ) : (
-            <span
-              className="sr-only"
-              data-testid={`git-module-count-${moduleIdentifier(module)}`}
-            >
-              {countLabel}
-            </span>
-          )}
+          <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-ui-xs text-muted-foreground">
+            {module.kind === "submodule" ? (
+              <span className="shrink-0 rounded-sm border border-border/60 bg-muted/30 px-1.5 py-0.5 font-medium">
+                submodule
+              </span>
+            ) : null}
+            <span className="min-w-0 truncate">{module.headLabel}</span>
+            {showStatusIcon ? (
+              <span
+                className={parentReferenceStatusClassName(
+                  parentReferenceStatus,
+                  module.unavailable,
+                )}
+                data-testid={`git-module-parent-reference-${moduleIdentifier(module)}`}
+              >
+                <TriangleAlert className="size-3 shrink-0" aria-hidden />
+              </span>
+            ) : null}
+          </span>
         </span>
-        <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-ui-xs text-muted-foreground">
-          {module.kind === "submodule" ? (
-            <span className="shrink-0 rounded-sm border border-border/60 bg-muted/30 px-1.5 py-0.5 font-medium">
-              submodule
-            </span>
-          ) : null}
-          <span className="min-w-0 truncate">{module.headLabel}</span>
-          {showStatusIcon ? (
-            <span
-              className={parentReferenceStatusClassName(
-                parentReferenceStatus,
-                module.unavailable,
-              )}
-              title={module.parentReference?.summary}
-              data-testid={`git-module-parent-reference-${moduleIdentifier(module)}`}
-            >
-              <TriangleAlert className="size-3 shrink-0" aria-hidden />
-            </span>
-          ) : null}
-        </span>
-      </span>
-    </button>
+      </button>
+    </TooltipWrapper>
   );
 }
 

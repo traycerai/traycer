@@ -985,6 +985,26 @@ describe("instanceId / content-id decoupling", () => {
     expect(tab.instanceId).toBe(SPEC_A.instanceId);
     expect(pane.previewTabId).toBe(SPEC_A.instanceId);
   });
+
+  it("marks a renamed terminal tab as manually titled", () => {
+    const terminal: EpicCanvasTileRef = {
+      id: "terminal-1",
+      instanceId: "inst-terminal-1",
+      type: "terminal",
+      name: "New Terminal",
+      titleSource: "default",
+      hostId: TEST_HOST_ID,
+      cwd: "/repo",
+    };
+    const previewed = openPreview(createEmptyCanvas(), terminal);
+
+    const renamed = renameArtifact(previewed, terminal.id, "Custom shell");
+    const tab = paneTabRefs(renamed, rootPane(renamed))[0];
+    expect(tab).toMatchObject({
+      name: "Custom shell",
+      titleSource: "manual",
+    });
+  });
 });
 
 describe("openTileInPane (non-dedup, target-scoped open)", () => {

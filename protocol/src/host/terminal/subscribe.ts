@@ -1,12 +1,13 @@
 /**
- * `terminal.subscribe@1.2` - versioned streaming-RPC contract for a single
- * host-owned terminal (PTY) session. `terminal.subscribe@1.0`/`@1.1` (frozen,
- * near the bottom of this file) are the exact shapes shipped before ack-credit
- * and binary framing respectively; each minor only adds on top of the last,
- * additively, so a newer app still bridges to an older host. Streams have no
- * cross-major downgrade bridge (see `stream-compat.ts`'s `canBridgeStream()`)
- * - a major mismatch is a hard incompatibility, not a fallback - so once a
- * method ships, its major must never move again, only additive minors.
+ * `terminal.subscribe@1.3` - versioned streaming-RPC contract for a single
+ * host-owned terminal (PTY) session. `terminal.subscribe@1.0`/`@1.1`/`@1.2`
+ * (frozen, near the bottom of this file) are the exact shapes shipped before
+ * ack-credit, binary framing, and live session metadata respectively; each
+ * minor only adds on top of the last, additively, so a newer app still bridges
+ * to an older host. Streams have no cross-major downgrade bridge (see
+ * `stream-compat.ts`'s `canBridgeStream()`) - a major mismatch is a hard
+ * incompatibility, not a fallback - so once a method ships, its major must
+ * never move again, only additive minors.
  *
  * Multiple clients may attach to the same `sessionId` simultaneously. Every
  * subscriber sees the same `data`/`binaryData` fanout from the PTY. The host
@@ -52,6 +53,10 @@
  * `binarySnapshot` has no `ackCreditSupported` field: receiving it at all
  * already proves the connection negotiated `1.2`, which implies `1.1`'s
  * ack-credit support, so the sentinel would always read `true`.
+ *
+ * `sessionUpdated` (`@1.3`): a lightweight metadata push for fields that can
+ * change while the PTY keeps running, currently the host-observed foreground
+ * process name and user title. Byte streams remain on `data`/`binaryData`.
  */
 import { z } from "zod";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
@@ -160,7 +165,7 @@ const terminalSubscribeServerFrameSchemaV11 = z.discriminatedUnion("kind", [
   }),
 ]);
 
-export const terminalSubscribeServerFrameSchema = z.discriminatedUnion("kind", [
+const terminalSubscribeServerFrameSchemaV12 = z.discriminatedUnion("kind", [
   ...terminalSubscribeServerFrameSchemaV11.def.options,
   z.object({
     kind: z.literal("binarySnapshot"),
@@ -174,6 +179,16 @@ export const terminalSubscribeServerFrameSchema = z.discriminatedUnion("kind", [
     ...binaryFrameFields,
     ...sessionReferenceFields,
     // No `chunk` field - the bytes arrive as the paired binary WS frame.
+  }),
+]);
+
+export const terminalSubscribeServerFrameSchema = z.discriminatedUnion("kind", [
+  ...terminalSubscribeServerFrameSchemaV12.def.options,
+  z.object({
+    kind: z.literal("sessionUpdated"),
+    ...textFrameFields,
+    ...sessionReferenceFields,
+    session: terminalSessionInfoSchema,
   }),
 ]);
 export type TerminalSubscribeServerFrame = z.infer<
@@ -211,11 +226,19 @@ export type TerminalSubscribeClientFrame = z.infer<
   typeof terminalSubscribeClientFrameSchema
 >;
 
+export const terminalSubscribeV13 = defineStreamRpcContract({
+  method: "terminal.subscribe",
+  schemaVersion: { major: 1, minor: 3 } as const,
+  openRequestSchema: terminalSubscribeOpenRequestSchema,
+  serverFrameSchema: terminalSubscribeServerFrameSchema,
+  clientFrameSchema: terminalSubscribeClientFrameSchema,
+});
+
 export const terminalSubscribeV12 = defineStreamRpcContract({
   method: "terminal.subscribe",
   schemaVersion: { major: 1, minor: 2 } as const,
   openRequestSchema: terminalSubscribeOpenRequestSchema,
-  serverFrameSchema: terminalSubscribeServerFrameSchema,
+  serverFrameSchema: terminalSubscribeServerFrameSchemaV12,
   clientFrameSchema: terminalSubscribeClientFrameSchema,
 });
 

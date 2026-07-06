@@ -10,8 +10,12 @@ import {
 } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { DEFAULT_ACCOUNT_CONTEXT } from "@traycer/protocol/common/schemas";
 import type { ProviderRateLimits } from "@traycer/protocol/host";
-import type { AuthenticatedUser } from "@traycer/protocol/auth";
+import type {
+  AuthenticatedUser,
+  SubscriptionStatus,
+} from "@traycer/protocol/auth";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Popover, PopoverTrigger } from "@/components/ui/popover";
 import { useAccountContextStore } from "@/stores/auth/account-context-store";
@@ -19,6 +23,8 @@ import type {
   AvailableProviderRateLimits,
   ProviderRateLimitEnvelope,
 } from "@/lib/rate-limits/rate-limit-envelope";
+import { queryKeys } from "@/lib/query-keys";
+import type { HostRpcRegistry } from "@/lib/host";
 
 type QueryResult = {
   data: ProviderRateLimitEnvelope | undefined;
@@ -265,7 +271,7 @@ function baseSubscription() {
 }
 
 function authUserFixture(overrides: {
-  status: "PRO_V3" | "FREE";
+  status: SubscriptionStatus;
   withTeam: boolean;
 }): AuthenticatedUser {
   return {
@@ -349,11 +355,19 @@ function readyAuthUser(data: AuthenticatedUser): MockAuthUser {
   };
 }
 
+function traycerUsageQueryKey() {
+  return queryKeys.hostMethod<HostRpcRegistry, "host.getRateLimitUsage">(
+    "host-1",
+    "host.getRateLimitUsage",
+    { accountContext: DEFAULT_ACCOUNT_CONTEXT },
+  );
+}
+
 let onClose: () => void;
 
 function renderPopover() {
   const client = new QueryClient();
-  return render(
+  const rendered = render(
     <QueryClientProvider client={client}>
       <TooltipProvider>
         <Popover open>
@@ -363,6 +377,7 @@ function renderPopover() {
       </TooltipProvider>
     </QueryClientProvider>,
   );
+  return { ...rendered, client };
 }
 
 beforeEach(() => {
@@ -862,6 +877,55 @@ describe("<RateLimitPopover /> Refresh all", () => {
       { type: "PERSONAL" },
       { force: true },
     );
+  });
+
+  it("refetches Traycer when the synthetic Traycer entry is eligible", () => {
+    mocks.configured = [];
+    const authUser = readyAuthUser(
+      authUserFixture({ status: "PRO_V3", withTeam: false }),
+    );
+    mocks.authUser = authUser;
+    const { client } = renderPopover();
+    const invalidateSpy = vi.spyOn(client, "invalidateQueries");
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh all" }));
+
+    expect(authUser.refetch).toHaveBeenCalledTimes(1);
+    expect(invalidateSpy).not.toHaveBeenCalled();
+  });
+
+  it("invalidates the unscoped Traycer usage query for rate-limit-based Traycer plans", () => {
+    mocks.configured = [];
+    const authUser = readyAuthUser(
+      authUserFixture({ status: "PRO", withTeam: false }),
+    );
+    mocks.authUser = authUser;
+    const { client } = renderPopover();
+    const invalidateSpy = vi.spyOn(client, "invalidateQueries");
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh all" }));
+
+    expect(authUser.refetch).toHaveBeenCalledTimes(1);
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: traycerUsageQueryKey(),
+      exact: true,
+    });
+  });
+
+  it("shows Refreshing and disables Refresh all while Traycer is fetching", () => {
+    mocks.configured = [];
+    mocks.authUser = {
+      ...readyAuthUser(authUserFixture({ status: "PRO_V3", withTeam: false })),
+      isFetching: true,
+    };
+    renderPopover();
+
+    const label = screen.getByText("Refreshing");
+    expect(label).toBeTruthy();
+    expect(label.className).toContain("working-text-shimmer");
+    expect(screen.getByTestId("usage-limit-refreshing-dots")).toBeTruthy();
+    const refreshAll = screen.getByRole("button", { name: "Refresh all" });
+    expect(refreshAll.getAttribute("disabled")).not.toBeNull();
   });
 });
 

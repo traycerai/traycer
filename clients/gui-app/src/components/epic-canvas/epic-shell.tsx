@@ -18,6 +18,7 @@ import {
 import { SnapshotLoadingProvider } from "@/components/epic-canvas/snapshots/snapshot-loading-context";
 import { EpicSessionGate } from "@/providers/epic-session-gate";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
+import { ResourcesStreamMount } from "@/providers/resources-stream-mount";
 
 interface EpicShellProps {
   readonly epicId: string;
@@ -62,6 +63,7 @@ function EpicShellSessionBody(props: EpicShellProps) {
   return (
     <SnapshotLoadingProvider value={snapshotContextValue}>
       {props.active ? <EpicConnectionToasts epicId={props.epicId} /> : null}
+      <ResourcesStreamMount epicId={props.epicId} />
       <CanvasColumn
         statusRow={<EpicShellStatusRow snapshotLoaded={snapshotLoaded} />}
         canvas={<TileCanvas epicId={props.epicId} tabId={props.tabId} />}
@@ -87,7 +89,7 @@ function EpicShellStatusRow(props: EpicShellStatusRowProps) {
   return (
     <output
       data-testid="epic-shell-status-row"
-      className="flex h-10 shrink-0 items-center justify-end px-3 text-foreground"
+      className="flex h-10 shrink-0 items-center justify-end gap-3 px-3 text-foreground"
     >
       {props.snapshotLoaded ? <EpicConnectionPill /> : null}
     </output>

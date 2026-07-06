@@ -15,6 +15,7 @@ import { formatGitWorktreeLabel } from "@/lib/git/worktree-label";
 import { isVisibleRawTerminalSession } from "@/lib/terminals/terminal-session-filters";
 import {
   DEFAULT_TERMINAL_TITLE,
+  deriveTitleSourceFromSessionTitle,
   terminalSessionTitle,
 } from "@/lib/terminals/terminal-title";
 import {
@@ -65,6 +66,7 @@ function terminalFolderItem(
           instanceId: uuidv4(),
           type: "terminal",
           name: DEFAULT_TERMINAL_TITLE,
+          titleSource: "default",
           hostId: row.hostId,
           cwd: row.runningDir,
         },
@@ -126,7 +128,11 @@ export function useTerminalsOpenerItems(
         id: session.sessionId,
         instanceId: uuidv4(),
         type: "terminal",
-        name: terminalSessionTitle(session),
+        name: terminalSessionTitle({
+          title: session.title,
+          activeProcessName: session.activeProcessName,
+        }),
+        titleSource: deriveTitleSourceFromSessionTitle(session.title),
         hostId: defaultHostId,
         // Recorded so an eviction-recreate lands back in the session's
         // directory - same as the sidebar's open-existing path.

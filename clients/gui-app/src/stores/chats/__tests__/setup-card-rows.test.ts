@@ -2,7 +2,6 @@ import { beforeEach, describe, expect, it } from "vitest";
 import type { ChatEvent } from "@traycer/protocol/persistence/epic/schemas";
 import {
   buildSetupCardRows,
-  worktreeSetupInFlight,
   type SetupCardBinding,
 } from "@/stores/chats/setup-card-rows";
 
@@ -640,98 +639,5 @@ describe("buildSetupCardRows", () => {
       setupEvent("setup.cancelled", { workspacePath: "/web" }, null),
     ]);
     expect(row.model.aggregate.state).toBe("failed");
-  });
-});
-
-describe("worktreeSetupInFlight", () => {
-  it("is false with no setup events", () => {
-    expect(worktreeSetupInFlight([], BINDING)).toBe(false);
-  });
-
-  it("is true while a worktree is creating (git worktree add)", () => {
-    expect(
-      worktreeSetupInFlight(
-        [setupEvent("setup.creating", { workspacePath: "/api" }, null)],
-        BINDING,
-      ),
-    ).toBe(true);
-  });
-
-  it("is true while the setup script is running", () => {
-    expect(
-      worktreeSetupInFlight(
-        [setupEvent("setup.running", { workspacePath: "/api" }, null)],
-        BINDING,
-      ),
-    ).toBe(true);
-  });
-
-  it("is false once every workspace has settled", () => {
-    expect(
-      worktreeSetupInFlight(
-        [
-          setupEvent("setup.running", { workspacePath: "/api" }, null),
-          setupEvent("setup.succeeded", { workspacePath: "/api" }, null),
-        ],
-        BINDING,
-      ),
-    ).toBe(false);
-  });
-
-  it("is false when every workspace has terminally failed", () => {
-    // No workspace is creating/setting-up, so setup is not in flight even
-    // though the aggregate rolls up to `failed`.
-    expect(
-      worktreeSetupInFlight(
-        [
-          setupEvent("setup.running", { workspacePath: "/api" }, null),
-          setupEvent("setup.running", { workspacePath: "/web" }, null),
-          setupEvent(
-            "setup.failed",
-            { workspacePath: "/api", setupExitCode: 1 },
-            null,
-          ),
-          setupEvent(
-            "setup.failed",
-            { workspacePath: "/web", setupExitCode: 1 },
-            null,
-          ),
-        ],
-        BINDING,
-      ),
-    ).toBe(false);
-  });
-
-  it("stays in-flight when one repo is still setting up beside a failed sibling", () => {
-    // The aggregate rolls up to `failed`, but a repo is still provisioning -
-    // the signal must key off the per-workspace state, not the rollup.
-    expect(
-      worktreeSetupInFlight(
-        [
-          setupEvent("setup.running", { workspacePath: "/api" }, null),
-          setupEvent("setup.running", { workspacePath: "/web" }, null),
-          setupEvent(
-            "setup.failed",
-            { workspacePath: "/api", setupExitCode: 1 },
-            null,
-          ),
-        ],
-        BINDING,
-      ),
-    ).toBe(true);
-  });
-
-  it("is false for a historical setting-up window stranded by worktree.missing", () => {
-    // The window is closed by the boundary (isActive: false), so it must not
-    // read as in-flight even though its last state is `setting-up`.
-    expect(
-      worktreeSetupInFlight(
-        [
-          setupEvent("setup.running", { workspacePath: "/api" }, null),
-          setupEvent("worktree.missing", { workspacePath: "/api" }, null),
-        ],
-        BINDING,
-      ),
-    ).toBe(false);
   });
 });

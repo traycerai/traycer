@@ -115,6 +115,7 @@ function seedOpenTerminalTab(): void {
     instanceId: "inst-term-1",
     type: "terminal",
     name: "New Terminal",
+    titleSource: "default",
     hostId: "host-1",
     cwd: "/tmp/work",
   });
@@ -161,6 +162,18 @@ describe("terminal sidebar Close", () => {
     expect(findOpenArtifactInTab(TAB_ID, SESSION_ID)).toBeNull();
     // ...and the PTY is terminated.
     expect(killMutate).toHaveBeenCalledWith({ sessionId: SESSION_ID });
+  });
+
+  it("uses the active process name for an unnamed terminal", () => {
+    terminalSessions.value = [{ ...RUNNING_SESSION, activeProcessName: "vim" }];
+
+    const { getByTestId } = render(
+      wrapper(<TerminalsPanelBody epicId="epic-1" tabId={TAB_ID} />),
+    );
+
+    expect(
+      getByTestId(`epic-terminal-sidebar-item-${SESSION_ID}`).textContent,
+    ).toBe("vim");
   });
 
   it("shows the empty terminal panel state when there are no terminals", () => {

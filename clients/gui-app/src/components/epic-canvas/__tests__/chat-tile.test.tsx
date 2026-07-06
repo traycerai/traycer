@@ -758,7 +758,7 @@ describe("<ChatTile />", () => {
     expect(frame.fromMessageId).toBe("message-1");
   });
 
-  it("sends edit-user-message from the composer with current composer settings", async () => {
+  it("sends edit-user-message from the inline editor with current composer settings", async () => {
     useComposerRunSettingsStore.setState({
       globalLastRunSettings: QUEUED_SETTINGS,
     });
@@ -784,12 +784,8 @@ describe("<ChatTile />", () => {
 
     await waitForChatTileLoaded();
 
-    // The pencil loads the message into the BOTTOM composer (edit mode pill);
-    // the composer's own Send then submits the edit with the live toolbar
-    // settings - the full toolbar applies to an edit resubmit.
     fireEvent.click(getButtonByAriaLabel("Edit message"));
-    expect(screen.getByTestId("message-edit-draft-pill")).not.toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    fireEvent.click(getButtonByAriaLabel("Send edit"));
 
     expect(chatHarness.sent).toHaveLength(1);
     const frame = chatHarness.sent[0];
@@ -800,44 +796,46 @@ describe("<ChatTile />", () => {
     expect(frame.settings).toEqual(UPDATED_QUEUE_SETTINGS);
   });
 
-  it("ends message-edit mode once the edit frame is sent", async () => {
+  it("clears the inline editor after an edit action is accepted", async () => {
     renderChatTile();
 
     await waitForChatTileLoaded();
 
     fireEvent.click(getButtonByAriaLabel("Edit message"));
-    expect(screen.getByTestId("message-edit-draft-pill")).not.toBeNull();
+    expect(getButtonByAriaLabel("Send edit")).not.toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    fireEvent.click(getButtonByAriaLabel("Send edit"));
+    await waitFor(() => {
+      const sendEditButton = getButtonByAriaLabel("Send edit");
+      if (!(sendEditButton instanceof HTMLButtonElement)) {
+        throw new Error("expected send edit button");
+      }
+      expect(sendEditButton.disabled).toBe(true);
+    });
 
     const frame = chatHarness.sent[0];
     if (frame.kind !== "editUserMessage") {
       throw new Error("expected editUserMessage frame");
     }
 
-    // Edit mode clears as soon as the frame is on the wire (the optimistic
-    // echo and pending-action gating take over) - no lingering pill.
-    await waitFor(() => {
-      expect(screen.queryByTestId("message-edit-draft-pill")).toBeNull();
+    act(() => {
+      chatHarness.callbacks().onActionAck({
+        kind: "actionAck",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ARTIFACT.id,
+        clientActionId: frame.clientActionId,
+        action: "editUserMessage",
+        status: "accepted",
+        reason: null,
+        code: null,
+        backgroundStopTaskIds: [],
+      });
     });
-  });
 
-  it("cancelling message-edit mode keeps the composer draft", async () => {
-    renderChatTile();
-
-    await waitForChatTileLoaded();
-
-    fireEvent.click(getButtonByAriaLabel("Edit message"));
-    expect(screen.getByTestId("message-edit-draft-pill")).not.toBeNull();
-
-    fireEvent.click(getButtonByAriaLabel("Cancel message editing"));
-    expect(screen.queryByTestId("message-edit-draft-pill")).toBeNull();
-
-    // The next submit is a plain send (not an edit): the draft text stays in
-    // the composer as a normal draft.
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
-    expect(chatHarness.sent).toHaveLength(1);
-    expect(chatHarness.sent[0].kind).toBe("send");
+    await waitFor(() => {
+      expect(queryButtonByAriaLabel("Send edit")).toBeNull();
+    });
   });
 
   it("seeds composer settings from last-used local settings", async () => {
