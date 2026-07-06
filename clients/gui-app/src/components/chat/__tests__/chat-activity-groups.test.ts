@@ -592,6 +592,21 @@ describe("chat activity grouping", () => {
     expect(timeline[0]?.kind).toBe("answered_questions");
   });
 
+  it("suppresses A2A request_user_input tools even when the interview block id does not match", () => {
+    const timeline = buildCompleteTimeline([
+      toolSegment("raw-question-tool", "request_user_input", {
+        questions: [{ question: "Where?", options: [] }],
+      }),
+      {
+        ...interviewSegment("request_user_input:generated"),
+        toolName: "request_user_input",
+      },
+    ]);
+
+    expect(timeline).toHaveLength(1);
+    expect(timeline[0]?.kind).toBe("answered_questions");
+  });
+
   it("does not suppress unmatched question tools", () => {
     const timeline = buildCompleteTimeline([
       toolSegment("tool-1", "question", {
