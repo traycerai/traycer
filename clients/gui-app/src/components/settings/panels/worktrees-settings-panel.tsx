@@ -91,7 +91,6 @@ import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { useHostClientFor } from "@/hooks/host/use-host-client-for";
 import { useHostQuery } from "@/hooks/host/use-host-query";
-import { useHostQueries } from "@/hooks/host/use-host-queries";
 import { useWorktreeDeleteStreamTransportFactory } from "@/lib/host/use-worktree-delete-stream-transport";
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
 import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
@@ -110,11 +109,11 @@ import {
 } from "@/components/settings/panels/use-worktree-delete-run";
 import { WorktreeDeleteProgressModal } from "@/components/settings/panels/worktree-delete-progress-modal";
 import {
-  useWorktreeEnrichSettlePerf,
   useWorktreeFirstPaintPerf,
   useWorktreeListQueryPerf,
 } from "@/components/settings/panels/worktrees-settings-perf";
 import { WorktreeListRenderProfiler } from "@/components/settings/panels/worktree-list-render-profiler";
+import { useWorktreeActivityEnrichment } from "@/components/settings/panels/worktrees-enrichment";
 
 type WorktreeRowDeleteStatus = "deleting";
 // Per-row activity-enrichment state, driving ONLY the tier pill's presentation:
@@ -131,7 +130,6 @@ const WORKTREES_REFRESH_TIMEOUT_MS = 10_000;
 const EMPTY_REPO_KEY_SET: ReadonlySet<string> = new Set();
 const EMPTY_WORKTREES: readonly WorktreeHostEntryV11[] = [];
 const EMPTY_TASK_TITLES: ReadonlyMap<string, string> = new Map();
-const EMPTY_PATHS: readonly string[] = [];
 
 // Virtualization tuning. Row/header heights are estimates only - each rendered
 // item is measured (`virtualizer.measureElement`) so variable-height rows (a
@@ -141,11 +139,6 @@ const EMPTY_PATHS: readonly string[] = [];
 const WORKTREE_ROW_ESTIMATE_PX = 88;
 const WORKTREE_REPO_HEADER_ESTIMATE_PX = 40;
 const WORKTREE_VIRTUAL_OVERSCAN = 8;
-// Coalesce the per-viewport enrichment fetch across a scroll gesture: collect the
-// on-screen row paths for this long before firing one batched activity query for
-// the paths not already enriched. One query per settle window, bounded by the
-// viewport - never the whole list.
-const WORKTREE_ENRICH_DEBOUNCE_MS = 80;
 
 /**
  * Host-wide worktree management. Lists every git worktree under the selected
@@ -501,122 +494,6 @@ function useWorktreeListing(
   };
 }
 
-/**
- * Per-viewport lazy enrichment. The base list paints instantly with cheap fields;
- * the expensive activity probes (git ahead/behind/merged, gh PR state, submodule
- * merge facts) are fetched ONLY for the worktree paths currently on screen. Each
- * on-screen path gets its OWN `worktree.listAllForHost {includeActivity: true,
- * activityPaths: [path]}` query, so TanStack Query caches enrichment PER PATH: a
- * path is probed once, and scrolling back to it is a cache hit, never a refetch.
- * The `enrichedByPath` overlay is DERIVED from those query results each render (no
- * accumulator state, no merge effect) - it holds exactly the settled on-screen
- * paths, which is all the rows that render need.
- *
- * The reported on-screen set is debounced into `requestedPaths` (trailing edge),
- * so a fast scroll spins up one batch of per-path queries per settle window, not
- * one per frame; the number of concurrent queries is bounded by the viewport,
- * never the whole list. Entries are merged into the overlay BY PATH, never by
- * index - the response order follows the disk walk, not the request. A v1.0 host
- * ignores `activityPaths` and returns the whole list base-only; keying the overlay
- * by `worktreePath` folds those in harmlessly.
- *
- * There is no manual "clear" - a refresh invalidates the shared
- * `worktree.listAllForHost` method scope (see `WorktreesBody`), which refetches
- * the active per-path enrichment queries in place.
- */
-function useWorktreeActivityEnrichment(
-  client: HostClient<HostRpcRegistry> | null,
-  reachable: boolean,
-): {
-  readonly enrichedByPath: ReadonlyMap<string, WorktreeHostEntryV11>;
-  // Paths whose per-path enrichment query SETTLED to an error (retries exhausted).
-  // A path here is distinct from one still in flight: the row must stop reading as
-  // progress and fall back to a non-animated "Unknown" pill instead of spinning
-  // forever. Kept disjoint from `enrichedByPath` - a later successful refetch moves
-  // the path from errored to enriched.
-  readonly erroredPaths: ReadonlySet<string>;
-  readonly reportVisiblePaths: (paths: readonly string[]) => void;
-  readonly enriching: boolean;
-} {
-  const [requestedPaths, setRequestedPaths] =
-    useState<readonly string[]>(EMPTY_PATHS);
-  // The debounce coalesces every on-screen report inside one settle window into a
-  // single committed `requestedPaths` update (trailing edge), so a fast scroll
-  // fires one batch of per-path queries, not one per frame.
-  const latestVisibleRef = useRef<readonly string[]>(EMPTY_PATHS);
-  const debounceRef = useRef<number | null>(null);
-  const reportVisiblePaths = useCallback((paths: readonly string[]) => {
-    latestVisibleRef.current = paths;
-    if (debounceRef.current !== null) return;
-    debounceRef.current = window.setTimeout(() => {
-      debounceRef.current = null;
-      setRequestedPaths(latestVisibleRef.current);
-    }, WORKTREE_ENRICH_DEBOUNCE_MS);
-  }, []);
-  useEffect(
-    () => () => {
-      if (debounceRef.current !== null)
-        window.clearTimeout(debounceRef.current);
-    },
-    [],
-  );
-
-  // One enrichment query per on-screen path - so the cache identity is the path
-  // itself and each worktree is probed exactly once, cached independently.
-  const requests = useMemo(
-    () =>
-      requestedPaths.map((path) => ({
-        method: "worktree.listAllForHost" as const,
-        params: { includeActivity: true, activityPaths: [path] },
-      })),
-    [requestedPaths],
-  );
-  const results = useHostQueries({
-    client,
-    requests,
-    options: { enabled: reachable },
-  });
-
-  // The overlay is a pure projection of whatever per-path queries have settled -
-  // derived, never accumulated. `results` is index-aligned with `requestedPaths`
-  // (both come from the same `requests` array), so an errored slot maps back to its
-  // requested path. Keyed by `worktreePath` (a v1.0 host that ignores
-  // `activityPaths` returns extra entries; keying by path folds them in safely).
-  const { enrichedByPath, erroredPaths } = useMemo(() => {
-    const map = new Map<string, WorktreeHostEntryV11>();
-    const errored = new Set<string>();
-    results.forEach((result, index) => {
-      const data = result.data;
-      if (data !== undefined) {
-        for (const entry of data.worktrees) map.set(entry.worktreePath, entry);
-        return;
-      }
-      // No data AND settled to error (retries exhausted, not merely in flight):
-      // record the requested path (index-aligned with `results`) so its row can
-      // stop showing progress.
-      if (result.isError) errored.add(requestedPaths[index]);
-    });
-    return { enrichedByPath: map, erroredPaths: errored };
-  }, [results, requestedPaths]);
-
-  const enriching = results.some((result) => result.isFetching);
-  // Gated perf telemetry for the enrichment leg (invisible before - only the base
-  // leg was tracked, so a wholesale enrichment failure left no trace). Emits once
-  // per settle window with how many paths were probed and how many errored.
-  useWorktreeEnrichSettlePerf({
-    fetching: enriching,
-    pathCount: requestedPaths.length,
-    erroredCount: erroredPaths.size,
-  });
-
-  return {
-    enrichedByPath,
-    erroredPaths,
-    reportVisiblePaths,
-    enriching,
-  };
-}
-
 function WorktreesBody(props: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly openStreamTransport: (hostId: string) => DurableStreamTransport;
@@ -630,7 +507,7 @@ function WorktreesBody(props: {
   const reachability = useHostReachability(hostId ?? "");
   const reachable = hostId !== null && reachability.status === "reachable";
   const listing = useWorktreeListing(client, reachable);
-  const enrichment = useWorktreeActivityEnrichment(client, reachable);
+  const enrichment = useWorktreeActivityEnrichment(client, reachable, hostId);
   // Owning-Task titles come from the cloud epic-tasks caches the app already
   // maintains (keyed by the signed-in user, any host) - no host-side title join.
   const taskTitlesByEpicId = useWorktreeTaskTitles(listing.worktrees);
