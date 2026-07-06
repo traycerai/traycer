@@ -17,6 +17,8 @@ describe("resolveBindingRunningDir", () => {
       setupExitCode: 0,
       setupFailedAt: null,
       createdAt: Date.now(),
+      baseSha: null,
+      ownedSubmodules: [],
     };
 
     expect(resolveBindingRunningDir(entry)).toBe(
@@ -38,6 +40,8 @@ describe("resolveBindingRunningDir", () => {
       setupExitCode: null,
       setupFailedAt: null,
       createdAt: Date.now(),
+      baseSha: null,
+      ownedSubmodules: [],
     };
 
     expect(resolveBindingRunningDir(entry)).toBeNull();
@@ -57,6 +61,8 @@ describe("resolveBindingRunningDir", () => {
       setupExitCode: null,
       setupFailedAt: null,
       createdAt: Date.now(),
+      baseSha: null,
+      ownedSubmodules: [],
     };
 
     expect(resolveBindingRunningDir(entry)).toBe("/home/user/project");
@@ -76,6 +82,8 @@ describe("resolveBindingRunningDir", () => {
       setupExitCode: null,
       setupFailedAt: null,
       createdAt: Date.now(),
+      baseSha: null,
+      ownedSubmodules: [],
     };
 
     expect(resolveBindingRunningDir(entry)).toBe("/home/user/project");

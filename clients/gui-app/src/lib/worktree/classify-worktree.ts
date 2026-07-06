@@ -5,14 +5,22 @@ import type {
 
 /**
  * Evidence tier for a host worktree. Names a PROVEN fact about the worktree, not
- * a safety verdict - green (`merged`) is reserved for the one probe-proven tier;
- * `unreferenced` is a quiet-green "nothing points at it, unknown-not-proven"
- * tier; `review` is the amber catch-all for anything with unproven or would-be-
- * lost state. The same five names are shared verbatim with the Task-delete
- * dialog and the `traycer-housekeeping` skill.
+ * a safety verdict. Three green tiers each require positive, host-validated proof:
+ * `merged` (a PR merged with the live HEAD at the merged SHA, OR local ancestry
+ * proof the work landed in the default branch); `at-base-commit` (the worktree
+ * never advanced from its birth commit, so deleting loses nothing committed); and
+ * `unreferenced` (a proven upstream-tip branch nothing points at). `review` is the
+ * amber catch-all for anything unproven or with would-be-lost state; `orphaned`
+ * and `in-use` are neutral. The same names are shared verbatim with the
+ * Task-delete dialog and the `traycer-housekeeping` skill.
  */
 export type WorktreeTier =
-  "in-use" | "review" | "orphaned" | "merged" | "unreferenced";
+  | "in-use"
+  | "review"
+  | "orphaned"
+  | "merged"
+  | "at-base-commit"
+  | "unreferenced";
 
 export interface WorktreeClassification {
   readonly tier: WorktreeTier;
@@ -31,15 +39,22 @@ export const WORKTREE_TIER_LABEL: Record<WorktreeTier, string> = {
   review: "Review",
   orphaned: "Orphaned",
   merged: "Merged",
+  // Honest wording: the worktree is literally unchanged from its birth commit.
+  // Deliberately NOT "Pristine"/"Untouched" - setup may have written ignored
+  // files, so those labels would over-claim.
+  "at-base-commit": "At base commit",
   unreferenced: "Unreferenced",
 };
 
 /**
- * Safe-first display order (merged proof first, blocked `in-use` last). Rows land
- * pre-triaged in this order, stalest-first within each tier.
+ * Safe-first display order (proven-merged first, blocked `in-use` last). Rows land
+ * pre-triaged in this order, stalest-first within each tier. `at-base-commit` sits
+ * between the two stronger greens and `review`: it is proven-safe to delete but a
+ * fresher, less-consequential state than a merged branch.
  */
 export const WORKTREE_TIER_ORDER: readonly WorktreeTier[] = [
   "merged",
+  "at-base-commit",
   "unreferenced",
   "review",
   "orphaned",
@@ -52,49 +67,69 @@ export function worktreeTierRank(tier: WorktreeTier): number {
 }
 
 /**
- * The canonical evidence ladder - FIRST MATCH WINS. Order is deliberate:
+ * The canonical evidence ladder - FIRST MATCH WINS. Implements the merge-provenance
+ * plan's precedence truth table. Order is deliberate:
  *
  *  1. `inUse` → **in-use** (blocked; never a delete candidate).
- *  2. `!gitRemovable` → **orphaned**. Checked BEFORE review on purpose: an
- *     orphan's `branchStatus` is usually null, which the review gate would
- *     otherwise swallow. Both tiers stay per-row only, so this ordering only
- *     changes the LABEL, never bulk safety.
- *  3. **review** (amber) - anything unproven or with would-be-lost state:
- *     dirty, a detached HEAD (`branch === null`, ALWAYS review - force-remove
- *     can orphan detached commits), null branch status (position unprobed),
- *     referenced-and-unmerged (the `owners` gate), or not-merged with local
- *     commits that aren't proven absent (`ahead === null` - never-pushed and
- *     not contained in default - OR `ahead > 0`).
- *  4. clean + `mergedIntoDefault` → **merged** (green; proof stands regardless
- *     of owners and of any upstream - a never-pushed branch whose HEAD is
- *     contained in the default lands here. Proof beats owners: nothing is lost).
- *  5. clean + non-null status + `ahead === 0` + no owners + not merged →
- *     **unreferenced** (quiet-green; reserved for a PROVEN upstream-tip branch).
+ *  2. `!gitRemovable` → **orphaned**. Checked BEFORE the greens on purpose: an
+ *     orphan's `branchStatus` is usually null. Per-row only, so this only changes
+ *     the LABEL, never bulk safety.
+ *  3. dirty (`uncommittedCount > 0`) → **review**. Above every green: a merged or
+ *     at-base worktree with uncommitted changes still has work that would be lost.
+ *  4. detached HEAD (`branch === null`) → **review**. Kept above the greens: a
+ *     detached worktree has no branch ref, so force-remove can orphan commits. We
+ *     do NOT extend the new positive-proof greens to detached HEADs in this pass
+ *     (a conservative, never-false-green choice - see report notes).
+ *  5. `prState === "merged" && mergedHeadShaMatches` → **merged** (green, PR
+ *     provenance). The host already validated the live HEAD is the merged SHA, so
+ *     the pure client never needs the SHA. A merged PR state WITHOUT the live-HEAD
+ *     match does NOT green - it falls through.
+ *  6. `branchStatus.mergedIntoDefault === true` → **merged** (green, local
+ *     ancestry). Proof stands regardless of owners and of any upstream - a
+ *     never-pushed branch whose HEAD is contained in the default lands here.
+ *  7. `atBaseCommit === true` → **at-base-commit** (green). Host-computed:
+ *     `HEAD === baseSha && clean && no reflog commits`. Deleting loses nothing
+ *     committed. Applies regardless of owners or an open PR.
+ *  8. clean + non-null status + `ahead === 0` + no owners → **unreferenced**
+ *     (quiet-green; a PROVEN upstream-tip branch nothing references).
+ *  9. else → **review** (null status, `ahead === null`/`> 0` unmerged,
+ *     referenced-unmerged).
  *
- * `ahead === null` (no upstream) is NOT a green light: a never-pushed branch is
- * only ever Merged (proven contained) or Review (not proven) - never
- * Unreferenced. Unreferenced requires a proven `ahead === 0`.
+ * Green requires positive, host-validated proof; unknown/stale is never green.
+ * `ahead === null` (no upstream) is NOT a green light on its own: a never-pushed
+ * branch is only ever Merged (proven contained), At base commit, or Review.
  */
 export function classifyWorktreeTier(
   entry: WorktreeHostEntryV11,
 ): WorktreeTier {
   if (entry.inUse) return "in-use";
   if (!entry.gitRemovable) return "orphaned";
+  if (entry.uncommittedCount > 0) return "review";
+  if (entry.branch === null) return "review";
+  // Positive, host-validated green proofs, in precedence order.
+  if (entry.prState === "merged" && entry.mergedHeadShaMatches) return "merged";
   const status = entry.branchStatus;
-  const merged = status !== null && status.mergedIntoDefault;
-  if (
-    entry.uncommittedCount > 0 ||
-    entry.branch === null ||
-    status === null ||
-    (entry.owners.length > 0 && !merged) ||
-    (!merged && (status.ahead === null || status.ahead > 0))
-  ) {
-    return "review";
+  if (status !== null && status.mergedIntoDefault) return "merged";
+  if (entry.atBaseCommit) return "at-base-commit";
+  if (status !== null && status.ahead === 0 && entry.owners.length === 0) {
+    return "unreferenced";
   }
-  if (merged) return "merged";
-  // Everything the review gate let through that is not merged is provably a
-  // clean, non-null-status, ahead === 0, no-owners, named-branch worktree.
-  return "unreferenced";
+  return "review";
+}
+
+/**
+ * The single green / bulk-eligible predicate - one source of truth backing the
+ * pill, the Task-delete default-check, and the bulk delete copy (critique #5 - no
+ * divergent predicates). A worktree is proven-removable when the shared classifier
+ * places it in one of the three green tiers: `merged`, `at-base-commit`, or
+ * `unreferenced`. Deriving it from `classifyWorktreeTier` guarantees the pill the
+ * user sees and the bulk cohort can never disagree.
+ */
+export function provenRemovable(entry: WorktreeHostEntryV11): boolean {
+  const tier = classifyWorktreeTier(entry);
+  return (
+    tier === "merged" || tier === "at-base-commit" || tier === "unreferenced"
+  );
 }
 
 export function classifyWorktree(
@@ -108,62 +143,6 @@ export function classifyWorktree(
   };
 }
 
-/**
- * Primary one-click bulk cohort - PROVEN removable. `!inUse`, clean,
- * `gitRemovable`, non-null branch status, and either proven-merged OR
- * (no local-only commits AND unreferenced). Callers additionally exclude any
- * path with a delete already queued/running.
- */
-export function isPrimarySweepEligible(entry: WorktreeHostEntryV11): boolean {
-  const status = entry.branchStatus;
-  return (
-    !entry.inUse &&
-    entry.uncommittedCount === 0 &&
-    entry.gitRemovable &&
-    status !== null &&
-    (status.mergedIntoDefault ||
-      (status.ahead === 0 && entry.owners.length === 0))
-  );
-}
-
-/**
- * Secondary, deliberately-separate cohort - clean + unreferenced + a NAMED
- * branch whose status could not be probed (`branchStatus === null`). Removing
- * such a worktree preserves the branch ref, so committed work is recoverable -
- * but this is NEVER "safe"/"loss-free" copy: `uncommittedCount` cannot see
- * ignored files. Detached HEAD (`branch === null`) is excluded (force-remove can
- * orphan detached commits) and stays per-row review.
- */
-export function isSecondarySweepEligible(entry: WorktreeHostEntryV11): boolean {
-  return (
-    !entry.inUse &&
-    entry.uncommittedCount === 0 &&
-    entry.owners.length === 0 &&
-    entry.branch !== null &&
-    entry.branchStatus === null &&
-    entry.gitRemovable
-  );
-}
-
-/**
- * Evidence rule for a default-CHECKED Task-delete cleanup candidate: proven
- * removable = clean AND a non-null branch status that is either merged or has no
- * local-only commits. Unproven (null status) and dirty candidates default
- * UNCHECKED. Narrow-shaped so both the full listing entry and the Task-delete
- * candidate can be tested against it.
- */
-export function isEvidenceProvenRemovable(input: {
-  readonly uncommittedCount: number;
-  readonly branchStatus: WorktreeBranchStatus | null;
-}): boolean {
-  const status = input.branchStatus;
-  return (
-    input.uncommittedCount === 0 &&
-    status !== null &&
-    (status.mergedIntoDefault || status.ahead === 0)
-  );
-}
-
 function worktreeFacts(
   entry: WorktreeHostEntryV11,
   tier: WorktreeTier,
@@ -173,8 +152,9 @@ function worktreeFacts(
   // is shown on its own line, so it is deliberately NOT repeated as a fact here.
   const cleanGreen =
     entry.uncommittedCount === 0 &&
-    (tier === "merged" || tier === "unreferenced");
+    (tier === "merged" || tier === "at-base-commit" || tier === "unreferenced");
   return [
+    ...mergedProvenanceFacts(entry, tier),
     ...branchStatusFacts(entry.branchStatus),
     ...dirtinessFacts(entry.uncommittedCount),
     ...(entry.branch === null ? ["detached HEAD"] : []),
@@ -188,12 +168,38 @@ function worktreeFacts(
   ];
 }
 
+/**
+ * The row-fact hint that distinguishes HOW a `merged` worktree was proven merged:
+ * `PR #123` when the green came from a validated merged PR, or `in default` when
+ * it came from local ancestry. Only emitted on the `merged` tier - the provenance
+ * is the reassuring detail there. `PR #123` takes precedence because the
+ * classifier evaluates the PR row first.
+ */
+function mergedProvenanceFacts(
+  entry: WorktreeHostEntryV11,
+  tier: WorktreeTier,
+): string[] {
+  if (tier !== "merged") return [];
+  if (
+    entry.prState === "merged" &&
+    entry.mergedHeadShaMatches &&
+    entry.prNumber !== null
+  ) {
+    return [`PR #${entry.prNumber}`];
+  }
+  if (entry.prState === "merged" && entry.mergedHeadShaMatches) {
+    return ["merged PR"];
+  }
+  return ["in default"];
+}
+
 function branchStatusFacts(status: WorktreeBranchStatus | null): string[] {
   if (status === null) return [];
   // `ahead`/`behind` are null for a never-pushed branch (no upstream to diff);
-  // render nothing rather than a bogus "0 ahead". The merged fact still shows.
+  // render nothing rather than a bogus "0 ahead". Merged-ness is surfaced by
+  // `mergedProvenanceFacts` (as "PR #123" / "in default") on the merged tier, so
+  // it is deliberately NOT repeated here.
   return [
-    ...(status.mergedIntoDefault ? ["merged"] : []),
     ...(status.ahead !== null && status.ahead > 0
       ? [`${status.ahead} ahead`]
       : []),

@@ -25,6 +25,8 @@ function entry(
     setupExitCode: overrides.setupExitCode ?? null,
     setupFailedAt: overrides.setupFailedAt ?? null,
     createdAt: overrides.createdAt ?? 0,
+    baseSha: overrides.baseSha ?? null,
+    ownedSubmodules: overrides.ownedSubmodules ?? [],
   };
 }
 

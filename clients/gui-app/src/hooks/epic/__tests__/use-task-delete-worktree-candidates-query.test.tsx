@@ -21,8 +21,12 @@ interface StubEntry {
   readonly branch: string | null;
   readonly uncommittedCount: number;
   readonly inUse: boolean;
+  readonly gitRemovable: boolean;
   readonly owners: ReadonlyArray<StubOwner>;
   readonly branchStatus: StubBranchStatus | null;
+  readonly prState: "merged" | "open" | "closed" | "none" | null;
+  readonly mergedHeadShaMatches: boolean;
+  readonly atBaseCommit: boolean;
 }
 
 interface MockQueryResult {
@@ -52,8 +56,12 @@ function entry(over: Partial<StubEntry> & { worktreePath: string }): StubEntry {
     branch: "feat/x",
     uncommittedCount: 0,
     inUse: false,
+    gitRemovable: true,
     owners: [owner("epic-1")],
     branchStatus: null,
+    prState: null,
+    mergedHeadShaMatches: false,
+    atBaseCommit: false,
     ...over,
   };
 }
@@ -89,6 +97,56 @@ describe("useTaskDeleteWorktreeCandidates", () => {
       behind: 0,
       mergedIntoDefault: true,
     });
+    // A merged candidate is proven-removable → default-checked.
+    expect(result.current.candidates[0].provenRemovable).toBe(true);
+  });
+
+  it("computes provenRemovable against the POST-delete state (owners emptied)", () => {
+    mockQueryResult.current = {
+      data: {
+        worktrees: [
+          // Clean, at the upstream tip (ahead 0), but still owned by the Task
+          // being deleted. On the always-on list this stays out of the green
+          // tiers (owners gate), yet here - modelling the post-delete state -
+          // it is proven-removable and defaults checked.
+          entry({
+            worktreePath: "/wt/tip",
+            owners: [owner("epic-1")],
+            branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: false },
+          }),
+          // Merged via a validated PR, never pushed to a local-ancestry proof.
+          entry({
+            worktreePath: "/wt/pr",
+            owners: [owner("epic-1")],
+            prState: "merged",
+            mergedHeadShaMatches: true,
+          }),
+          // Dirty → not proven-removable, defaults unchecked.
+          entry({
+            worktreePath: "/wt/dirty",
+            owners: [owner("epic-1")],
+            uncommittedCount: 2,
+          }),
+          // Unproven branch status → defaults unchecked.
+          entry({
+            worktreePath: "/wt/unknown",
+            owners: [owner("epic-1")],
+            branchStatus: null,
+          }),
+        ],
+      },
+      isError: false,
+    };
+    const { result } = renderHook(() =>
+      useTaskDeleteWorktreeCandidates(["epic-1"]),
+    );
+    const byPath = new Map(
+      result.current.candidates.map((c) => [c.worktreePath, c.provenRemovable]),
+    );
+    expect(byPath.get("/wt/tip")).toBe(true);
+    expect(byPath.get("/wt/pr")).toBe(true);
+    expect(byPath.get("/wt/dirty")).toBe(false);
+    expect(byPath.get("/wt/unknown")).toBe(false);
   });
 
   it("excludes in-use, ownerless, and out-of-scope worktrees", () => {

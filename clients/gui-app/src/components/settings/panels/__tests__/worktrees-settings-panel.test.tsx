@@ -167,12 +167,19 @@ function entry(
     uncommittedCount: 0,
     gitRemovable: true,
     scripts: null,
-    // v1.1 staleness signals default to the "no signal / older host" shape so
-    // each test opts into only the fields it exercises.
+    // v1.1 staleness + merge-provenance signals default to the "no signal /
+    // older host" shape so each test opts into only the fields it exercises.
     owners: [],
     lastActivityAt: null,
     branchStatus: null,
     createdAt: null,
+    baseSha: null,
+    prState: null,
+    prNumber: null,
+    prUrl: null,
+    mergedHeadShaMatches: false,
+    submodules: [],
+    atBaseCommit: false,
     ...over,
   };
 }
@@ -1145,6 +1152,67 @@ describe("WorktreesList confirm-time re-check", () => {
     fireEvent.click(screen.getByTestId("worktrees-list-delete-selected"));
     fireEvent.click(screen.getByTestId("confirm-action"));
     expect(streamMock.paths).toEqual(["/wt/merged"]);
+  });
+
+  function atBase(path: string, branch: string): WorktreeHostEntryV11 {
+    return entry({ worktreePath: path, branch, atBaseCommit: true });
+  }
+
+  it("status filter is multi-select: Merged + At base commit shows their union", () => {
+    render(
+      renderWith(new QueryClient(), [
+        merged("/wt/merged", "feat-merged"),
+        atBase("/wt/base", "feat-base"),
+        entry({
+          worktreePath: "/wt/review",
+          branch: "feat-review",
+          branchStatus: { ahead: 2, behind: 0, mergedIntoDefault: false },
+        }),
+      ]),
+    );
+
+    // All three visible initially.
+    screen.getByRole("button", { name: "Delete worktree feat-review" });
+
+    // Select two tiers together - the menu stays open across toggles.
+    fireEvent.click(screen.getByTestId("worktrees-filter-trigger"));
+    fireEvent.click(screen.getByTestId("worktrees-filter-merged"));
+    fireEvent.click(screen.getByTestId("worktrees-filter-at-base-commit"));
+
+    // Union of Merged + At base commit: the review row is filtered out, the two
+    // green rows remain.
+    expect(
+      screen.queryByRole("button", { name: "Delete worktree feat-review" }),
+    ).toBeNull();
+    screen.getByRole("button", { name: "Delete worktree feat-merged" });
+    screen.getByRole("button", { name: "Delete worktree feat-base" });
+
+    // "All" clears every tier selection and restores the full list.
+    fireEvent.click(screen.getByTestId("worktrees-filter-all"));
+    screen.getByRole("button", { name: "Delete worktree feat-review" });
+  });
+
+  it("toggling a tier off restores it (multi-select membership)", () => {
+    render(
+      renderWith(new QueryClient(), [
+        merged("/wt/merged", "feat-merged"),
+        entry({
+          worktreePath: "/wt/review",
+          branch: "feat-review",
+          branchStatus: null,
+        }),
+      ]),
+    );
+
+    fireEvent.click(screen.getByTestId("worktrees-filter-trigger"));
+    // On: only merged rows.
+    fireEvent.click(screen.getByTestId("worktrees-filter-merged"));
+    expect(
+      screen.queryByRole("button", { name: "Delete worktree feat-review" }),
+    ).toBeNull();
+    // Off again: empty set means no filter, both rows return.
+    fireEvent.click(screen.getByTestId("worktrees-filter-merged"));
+    screen.getByRole("button", { name: "Delete worktree feat-review" });
   });
 
   it("only offers filter options for tiers present in the list", () => {

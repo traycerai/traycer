@@ -44,7 +44,6 @@ import {
 } from "@/components/ui/tooltip";
 import { useEpicBatchDelete } from "@/hooks/epic/use-epic-batch-delete-mutation";
 import { useTaskDeleteWorktreeCandidates } from "@/hooks/epic/use-task-delete-worktree-candidates-query";
-import { isEvidenceProvenRemovable } from "@/lib/worktree/classify-worktree";
 import { useEpicUpdateTitle } from "@/hooks/epic/use-epic-title-mutation";
 import { useInlineRename } from "@/hooks/ui/use-inline-rename";
 import { withMemberToggled } from "@/lib/immutable-set";
@@ -269,10 +268,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
       new Map(
         worktreeCandidates.map((candidate) => [
           candidate.worktreePath,
-          isEvidenceProvenRemovable({
-            uncommittedCount: candidate.uncommittedCount,
-            branchStatus: candidate.branchStatus,
-          }),
+          candidate.provenRemovable,
         ]),
       ),
     [worktreeCandidates],

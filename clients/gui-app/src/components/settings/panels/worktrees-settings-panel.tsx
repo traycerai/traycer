@@ -19,6 +19,7 @@ import {
   CopyPlus,
   FileSliders,
   FolderGit2,
+  GitCommitHorizontal,
   GitMerge,
   ListFilter,
   Minus,
@@ -103,7 +104,10 @@ import { WorktreeDeleteProgressModal } from "@/components/settings/panels/worktr
 
 type WorktreeRowDeleteStatus = "deleting";
 type WorktreeSortMode = "newest" | "oldest";
-type WorktreeTierFilter = WorktreeTier | "all";
+// Multi-select status filter. An EMPTY set means "no filter" (show every tier);
+// a non-empty set shows only the selected tiers (union). Composes with search.
+type WorktreeTierFilterSet = ReadonlySet<WorktreeTier>;
+const EMPTY_TIER_FILTER: WorktreeTierFilterSet = new Set();
 const WORKTREES_REFRESH_TIMEOUT_MS = 10_000;
 const EMPTY_REPO_KEY_SET: ReadonlySet<string> = new Set();
 const EMPTY_WORKTREES: readonly WorktreeHostEntryV11[] = [];
@@ -221,9 +225,10 @@ function WorktreesToolbar(props: {
 function WorktreesFilterControls(props: {
   readonly searchText: string;
   readonly onSearchChange: (value: string) => void;
-  readonly tierFilter: WorktreeTierFilter;
+  readonly tierFilters: WorktreeTierFilterSet;
   readonly availableTiers: readonly WorktreeTier[];
-  readonly onTierFilterChange: (filter: WorktreeTierFilter) => void;
+  readonly onToggleTier: (tier: WorktreeTier) => void;
+  readonly onClearTierFilters: () => void;
   readonly sortMode: WorktreeSortMode;
   readonly onSortModeChange: (mode: WorktreeSortMode) => void;
 }): ReactNode {
@@ -244,9 +249,10 @@ function WorktreesFilterControls(props: {
         />
       </div>
       <WorktreeFilterMenu
-        tierFilter={props.tierFilter}
+        tierFilters={props.tierFilters}
         availableTiers={props.availableTiers}
-        onChange={props.onTierFilterChange}
+        onToggleTier={props.onToggleTier}
+        onClearTierFilters={props.onClearTierFilters}
       />
       <WorktreeSortMenu
         sortMode={props.sortMode}
@@ -256,21 +262,39 @@ function WorktreesFilterControls(props: {
   );
 }
 
-function worktreeTierFilterLabel(filter: WorktreeTierFilter): string {
-  return filter === "all" ? "All" : WORKTREE_TIER_LABEL[filter];
+function worktreeTierFilterLabel(
+  tierFilters: WorktreeTierFilterSet,
+  availableTiers: readonly WorktreeTier[],
+): string {
+  // Only count selections that still exist in the list, so a stale selection for
+  // a now-absent tier does not leave the trigger reading a phantom count.
+  const active = availableTiers.filter((tier) => tierFilters.has(tier));
+  if (active.length === 0) return "All";
+  if (active.length === 1) return WORKTREE_TIER_LABEL[active[0]];
+  return `${active.length} tiers`;
 }
 
 /**
- * Standard status filter: a dropdown of "All" plus each tier actually present in
- * this host's list (zero-count tiers are not offered). Composes with the search
- * box (both apply). Tier comes from the shared classifier, so the options match
- * the row pills exactly.
+ * Status filter - now MULTI-select: "All" (clears the filter) plus each tier
+ * actually present in this host's list (zero-count tiers are not offered).
+ * Checking several tiers shows their union; composes with the search box (both
+ * apply). Tier comes from the shared classifier, so the options match the row
+ * pills exactly. Kept open across toggles (`onSelect` preventDefault) so the user
+ * can pick e.g. Merged + At base commit in one visit.
  */
 function WorktreeFilterMenu(props: {
-  readonly tierFilter: WorktreeTierFilter;
+  readonly tierFilters: WorktreeTierFilterSet;
   readonly availableTiers: readonly WorktreeTier[];
-  readonly onChange: (filter: WorktreeTierFilter) => void;
+  readonly onToggleTier: (tier: WorktreeTier) => void;
+  readonly onClearTierFilters: () => void;
 }): ReactNode {
+  const label = worktreeTierFilterLabel(
+    props.tierFilters,
+    props.availableTiers,
+  );
+  const noneSelected = props.availableTiers.every(
+    (tier) => !props.tierFilters.has(tier),
+  );
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -280,17 +304,20 @@ function WorktreeFilterMenu(props: {
           size="sm"
           className="shrink-0"
           data-testid="worktrees-filter-trigger"
-          aria-label={`Filter: ${worktreeTierFilterLabel(props.tierFilter)}`}
+          aria-label={`Filter: ${label}`}
         >
           <ListFilter className="size-4" />
-          <span>{worktreeTierFilterLabel(props.tierFilter)}</span>
+          <span>{label}</span>
           <ChevronDown className="size-4 text-muted-foreground" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
         <DropdownMenuCheckboxItem
-          checked={props.tierFilter === "all"}
-          onSelect={() => props.onChange("all")}
+          checked={noneSelected}
+          onSelect={(event) => {
+            event.preventDefault();
+            props.onClearTierFilters();
+          }}
           data-testid="worktrees-filter-all"
         >
           All
@@ -298,8 +325,11 @@ function WorktreeFilterMenu(props: {
         {props.availableTiers.map((tier) => (
           <DropdownMenuCheckboxItem
             key={tier}
-            checked={props.tierFilter === tier}
-            onSelect={() => props.onChange(tier)}
+            checked={props.tierFilters.has(tier)}
+            onSelect={(event) => {
+              event.preventDefault();
+              props.onToggleTier(tier);
+            }}
             data-testid={`worktrees-filter-${tier}`}
           >
             {WORKTREE_TIER_LABEL[tier]}
@@ -565,18 +595,27 @@ export function WorktreesList(props: {
   const queryClient = useQueryClient();
   const [searchText, setSearchText] = useState("");
   const [sortMode, setSortMode] = useState<WorktreeSortMode>("newest");
-  const [tierFilter, setTierFilter] = useState<WorktreeTierFilter>("all");
+  const [tierFilters, setTierFilters] =
+    useState<WorktreeTierFilterSet>(EMPTY_TIER_FILTER);
   // The status filter composes with the search box (both apply) before repo
   // grouping. Tier comes from the shared classifier, so the filter options
-  // exactly match the row pills.
+  // exactly match the row pills. An empty set = no filter (show every tier); a
+  // non-empty set shows the union of the selected tiers.
   const filteredWorktrees = useMemo(
     () =>
       filterWorktrees(worktrees, searchText, taskTitlesByEpicId).filter(
         (entry) =>
-          tierFilter === "all" || classifyWorktreeTier(entry) === tierFilter,
+          tierFilters.size === 0 ||
+          tierFilters.has(classifyWorktreeTier(entry)),
       ),
-    [worktrees, searchText, taskTitlesByEpicId, tierFilter],
+    [worktrees, searchText, taskTitlesByEpicId, tierFilters],
   );
+  const toggleTierFilter = useCallback((tier: WorktreeTier) => {
+    setTierFilters((prev) => withMemberToggled(prev, tier));
+  }, []);
+  const clearTierFilters = useCallback(() => {
+    setTierFilters(EMPTY_TIER_FILTER);
+  }, []);
   // Only offer filter options for tiers actually present in this host's list.
   const availableTiers = useMemo(() => {
     const present = new Set(
@@ -882,9 +921,10 @@ export function WorktreesList(props: {
           <WorktreesFilterControls
             searchText={searchText}
             onSearchChange={setSearchText}
-            tierFilter={tierFilter}
+            tierFilters={tierFilters}
             availableTiers={availableTiers}
-            onTierFilterChange={setTierFilter}
+            onToggleTier={toggleTierFilter}
+            onClearTierFilters={clearTierFilters}
             sortMode={sortMode}
             onSortModeChange={setSortMode}
           />
@@ -1362,8 +1402,9 @@ function WorktreeRow(props: {
 
 /**
  * Evidence-tier pill. Leads every row with a TEXT label (never color-only, for
- * accessibility). Green is reserved for the proven `merged` tier; `unreferenced`
- * is a quieter green; `review` is amber; `orphaned` and `in-use` stay neutral.
+ * accessibility). Green is reserved for the three proven tiers: `merged`
+ * (strongest), `at-base-commit`, and `unreferenced` (quietest); `review` is
+ * amber; `orphaned` and `in-use` stay neutral.
  */
 function WorktreeTierPill(props: { readonly tier: WorktreeTier }): ReactNode {
   const style = WORKTREE_TIER_PILL_STYLE[props.tier];
@@ -1374,12 +1415,22 @@ function WorktreeTierPill(props: { readonly tier: WorktreeTier }): ReactNode {
       data-testid="worktree-tier-pill"
       data-tier={props.tier}
     >
-      {props.tier === "merged" ? (
-        <GitMerge className="size-3" aria-hidden />
-      ) : null}
+      <WorktreeTierPillIcon tier={props.tier} />
       {WORKTREE_TIER_LABEL[props.tier]}
     </Badge>
   );
+}
+
+function WorktreeTierPillIcon(props: {
+  readonly tier: WorktreeTier;
+}): ReactNode {
+  if (props.tier === "merged") {
+    return <GitMerge className="size-3" aria-hidden />;
+  }
+  if (props.tier === "at-base-commit") {
+    return <GitCommitHorizontal className="size-3" aria-hidden />;
+  }
+  return null;
 }
 
 const WORKTREE_TIER_PILL_STYLE: Record<
@@ -1389,6 +1440,10 @@ const WORKTREE_TIER_PILL_STYLE: Record<
   merged: {
     className:
       "border-emerald-600/30 bg-emerald-500/10 text-emerald-700 dark:border-emerald-400/30 dark:text-emerald-300",
+  },
+  "at-base-commit": {
+    className:
+      "border-emerald-600/25 bg-emerald-500/8 text-emerald-700/90 dark:border-emerald-400/25 dark:text-emerald-300/85",
   },
   unreferenced: {
     className:
@@ -1926,6 +1981,7 @@ interface WorktreeBulkDeleteSummary {
 // a would-be-lost row is never mislabeled as a proven-clean one.
 type WorktreeDeleteClass =
   | "merged"
+  | "at-base"
   | "clean"
   | "unverified"
   | "unmerged"
@@ -1935,29 +1991,35 @@ type WorktreeDeleteClass =
 
 function worktreeDeleteClass(entry: WorktreeHostEntryV11): WorktreeDeleteClass {
   const status = entry.branchStatus;
-  const merged = status !== null && status.mergedIntoDefault;
+  // Merged = host-validated PR (`prState==="merged" && mergedHeadShaMatches`) OR
+  // local ancestry. Sourced the same way as the shared classifier so the copy
+  // never disagrees with the row pill.
+  const merged =
+    (entry.prState === "merged" && entry.mergedHeadShaMatches) ||
+    (status !== null && status.mergedIntoDefault);
   if (entry.uncommittedCount > 0) return "dirty";
   if (entry.branch === null) return "detached";
-  // Not merged and not proven at the upstream tip: real local-only commits
-  // (`ahead > 0`) OR a never-pushed branch with no upstream to prove them absent
-  // (`ahead === null`). Both are would-be-lost; only the PROVEN `ahead === 0`
-  // below is "clean". This keeps the never-pushed-diverged cohort out of the
-  // "unverified/unreferenced" bucket, matching its Review tier.
-  if (
-    status !== null &&
-    !merged &&
-    (status.ahead === null || status.ahead > 0)
-  ) {
+  // Proven no-loss states before the ahead-based "unmerged" bucket: a
+  // squash-merged PR is locally "ahead" of default yet proven landed, so it must
+  // read "merged", never "unmerged"; an at-base worktree lost nothing.
+  if (merged) return "merged";
+  if (entry.atBaseCommit) return "at-base";
+  // Reaching here the row is neither merged nor at-base. Not proven at the
+  // upstream tip: real local-only commits (`ahead > 0`) OR a never-pushed branch
+  // with no upstream to prove them absent (`ahead === null`). Both are
+  // would-be-lost; only the PROVEN `ahead === 0` below is "clean". This keeps the
+  // never-pushed-diverged cohort out of the "unverified" bucket, matching Review.
+  if (status !== null && (status.ahead === null || status.ahead > 0)) {
     return "unmerged";
   }
   if (!entry.gitRemovable) return "orphaned";
-  if (merged) return "merged";
   if (status !== null && status.ahead === 0) return "clean";
   return "unverified";
 }
 
 const WORKTREE_DELETE_CLASS_LABEL: Record<WorktreeDeleteClass, string> = {
   merged: "merged",
+  "at-base": "at base commit",
   clean: "clean (no local-only commits)",
   unverified: "unreferenced (branch status unverified)",
   unmerged: "unmerged (local-only commits)",
@@ -1970,6 +2032,7 @@ const WORKTREE_DELETE_CLASS_LABEL: Record<WorktreeDeleteClass, string> = {
 // exclusion line (name the reasons a row was left out first).
 const WORKTREE_DELETE_SUMMARY_ORDER: readonly WorktreeDeleteClass[] = [
   "merged",
+  "at-base",
   "clean",
   "unverified",
   "unmerged",
@@ -1984,6 +2047,7 @@ const WORKTREE_EXCLUSION_ORDER: readonly WorktreeDeleteClass[] = [
   "orphaned",
   "unverified",
   "clean",
+  "at-base",
   "merged",
 ];
 

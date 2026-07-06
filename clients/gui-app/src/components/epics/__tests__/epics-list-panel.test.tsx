@@ -105,6 +105,9 @@ interface WorktreeCleanupCandidateStub {
     readonly mergedIntoDefault: boolean;
   } | null;
   readonly ownerEpicIds: ReadonlyArray<string>;
+  // The shared-classifier verdict the hook computes (post-delete owners emptied);
+  // it drives the default-checked state. Injected directly in these dialog tests.
+  readonly provenRemovable: boolean;
 }
 
 interface DeleteEpicsVariables {
@@ -637,6 +640,7 @@ describe("<EpicsListPanel />", () => {
         uncommittedCount: 0,
         branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
         ownerEpicIds: ["epic-from-history"],
+        provenRemovable: true,
       },
       {
         // Clean but branch status unavailable (null) -> UNPROVEN -> unchecked.
@@ -646,6 +650,7 @@ describe("<EpicsListPanel />", () => {
         uncommittedCount: 0,
         branchStatus: null,
         ownerEpicIds: ["epic-from-history"],
+        provenRemovable: false,
       },
       {
         worktreePath: "/wt/dirty",
@@ -654,6 +659,7 @@ describe("<EpicsListPanel />", () => {
         uncommittedCount: 3,
         branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
         ownerEpicIds: ["epic-from-history"],
+        provenRemovable: false,
       },
     ];
     renderPanel("embedded", "/");
@@ -693,6 +699,7 @@ describe("<EpicsListPanel />", () => {
         uncommittedCount: 0,
         branchStatus: { ahead: 3, behind: 0, mergedIntoDefault: false },
         ownerEpicIds: ["epic-from-history"],
+        provenRemovable: false,
       },
     ];
     renderPanel("embedded", "/");
@@ -719,6 +726,7 @@ describe("<EpicsListPanel />", () => {
         // generic "unverified" note.
         branchStatus: { ahead: null, behind: null, mergedIntoDefault: false },
         ownerEpicIds: ["epic-from-history"],
+        provenRemovable: false,
       },
     ];
     renderPanel("embedded", "/");
@@ -740,6 +748,7 @@ describe("<EpicsListPanel />", () => {
         uncommittedCount: 2,
         branchStatus: null,
         ownerEpicIds: ["epic-from-history"],
+        provenRemovable: false,
       },
     ];
     renderPanel("embedded", "/");

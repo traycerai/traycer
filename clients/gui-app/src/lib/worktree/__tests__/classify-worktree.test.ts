@@ -7,9 +7,7 @@ import {
   WORKTREE_TIER_ORDER,
   classifyWorktree,
   classifyWorktreeTier,
-  isEvidenceProvenRemovable,
-  isPrimarySweepEligible,
-  isSecondarySweepEligible,
+  provenRemovable,
   worktreeTierRank,
   type WorktreeTier,
 } from "@/lib/worktree/classify-worktree";
@@ -41,11 +39,21 @@ function entry(over: Partial<WorktreeHostEntryV11>): WorktreeHostEntryV11 {
     lastActivityAt: null,
     branchStatus: null,
     createdAt: null,
+    // v1.1 merge-provenance fields default to the "no signal / v1.0 host" shape:
+    // a null/false bundle that greens nothing. Each test opts into the fields it
+    // exercises.
+    baseSha: null,
+    prState: null,
+    prNumber: null,
+    prUrl: null,
+    mergedHeadShaMatches: false,
+    submodules: [],
+    atBaseCommit: false,
     ...over,
   };
 }
 
-describe("classifyWorktreeTier - canonical ladder (first match wins)", () => {
+describe("classifyWorktreeTier - precedence truth table (first match wins)", () => {
   const cases: ReadonlyArray<{
     readonly name: string;
     readonly entry: WorktreeHostEntryV11;
@@ -58,12 +66,19 @@ describe("classifyWorktreeTier - canonical ladder (first match wins)", () => {
         gitRemovable: false,
         uncommittedCount: 5,
         branchStatus: status({ mergedIntoDefault: true }),
+        prState: "merged",
+        mergedHeadShaMatches: true,
+        atBaseCommit: true,
       }),
       tier: "in-use",
     },
     {
-      name: "orphan (gitRemovable:false) is checked BEFORE review, even with null status",
-      entry: entry({ gitRemovable: false, branchStatus: null }),
+      name: "orphan (gitRemovable:false) is checked BEFORE the greens, even when merged",
+      entry: entry({
+        gitRemovable: false,
+        prState: "merged",
+        mergedHeadShaMatches: true,
+      }),
       tier: "orphaned",
     },
     {
@@ -72,7 +87,16 @@ describe("classifyWorktreeTier - canonical ladder (first match wins)", () => {
       tier: "orphaned",
     },
     {
-      name: "dirty (uncommitted > 0) → review",
+      name: "dirty gate sits ABOVE every green: merged PR + dirty → review",
+      entry: entry({
+        uncommittedCount: 1,
+        prState: "merged",
+        mergedHeadShaMatches: true,
+      }),
+      tier: "review",
+    },
+    {
+      name: "dirty + local-merged → review",
       entry: entry({
         uncommittedCount: 1,
         branchStatus: status({ mergedIntoDefault: true }),
@@ -80,30 +104,68 @@ describe("classifyWorktreeTier - canonical ladder (first match wins)", () => {
       tier: "review",
     },
     {
-      name: "ahead and not merged → review",
-      entry: entry({ branchStatus: status({ ahead: 2 }) }),
+      name: "dirty + atBaseCommit → review",
+      entry: entry({ uncommittedCount: 3, atBaseCommit: true }),
       tier: "review",
     },
+    // --- Merged (PR provenance) ---
     {
-      name: "null branchStatus → review",
-      entry: entry({ branchStatus: null }),
-      tier: "review",
+      name: "prState merged AND mergedHeadShaMatches → merged (PR)",
+      entry: entry({ prState: "merged", mergedHeadShaMatches: true }),
+      tier: "merged",
     },
     {
-      name: "detached HEAD (branch === null) → review, even when merged and clean",
+      name: "prState merged WITHOUT mergedHeadShaMatches → NOT green (falls through to review)",
       entry: entry({
-        branch: null,
-        branchStatus: status({ mergedIntoDefault: true }),
+        prState: "merged",
+        mergedHeadShaMatches: false,
+        branchStatus: status({ ahead: 2 }),
       }),
       tier: "review",
     },
     {
-      name: "referenced (owners > 0), clean, ahead 0, not merged → review (owners gate)",
+      name: "prState merged, HEAD moved (ahead>0), but shaMatches false → review, never PR-green",
       entry: entry({
-        owners: [owner("epic-1")],
-        branchStatus: status({ ahead: 0, mergedIntoDefault: false }),
+        prState: "merged",
+        mergedHeadShaMatches: false,
+        prNumber: 42,
+        branchStatus: status({ ahead: 3, mergedIntoDefault: false }),
       }),
       tier: "review",
+    },
+    {
+      name: "squash-merged PR: shaMatches true even though locally ahead>0 → merged (PR beats ahead)",
+      entry: entry({
+        prState: "merged",
+        mergedHeadShaMatches: true,
+        prNumber: 7,
+        branchStatus: status({ ahead: 4, mergedIntoDefault: false }),
+      }),
+      tier: "merged",
+    },
+    {
+      name: "prState open + mergedHeadShaMatches false → no PR green",
+      entry: entry({
+        prState: "open",
+        mergedHeadShaMatches: false,
+        branchStatus: status({ ahead: 1 }),
+      }),
+      tier: "review",
+    },
+    {
+      name: "prState closed (not merged) → no PR green",
+      entry: entry({
+        prState: "closed",
+        mergedHeadShaMatches: false,
+        branchStatus: status({ ahead: 1 }),
+      }),
+      tier: "review",
+    },
+    // --- Merged (local ancestry) ---
+    {
+      name: "clean + mergedIntoDefault, no owners → merged (local)",
+      entry: entry({ branchStatus: status({ mergedIntoDefault: true }) }),
+      tier: "merged",
     },
     {
       name: "merged-but-referenced → merged (merge proof beats owners gate)",
@@ -114,36 +176,8 @@ describe("classifyWorktreeTier - canonical ladder (first match wins)", () => {
       tier: "merged",
     },
     {
-      name: "clean + merged, no owners → merged",
-      entry: entry({ branchStatus: status({ mergedIntoDefault: true }) }),
-      tier: "merged",
-    },
-    {
-      name: "never-pushed + contained (null ahead/behind, merged) → merged (the win)",
+      name: "never-pushed + contained (null ahead/behind, merged) → merged",
       entry: entry({
-        branchStatus: status({
-          ahead: null,
-          behind: null,
-          mergedIntoDefault: true,
-        }),
-      }),
-      tier: "merged",
-    },
-    {
-      name: "never-pushed + diverged (null ahead, not merged) → review, NEVER unreferenced",
-      entry: entry({
-        branchStatus: status({
-          ahead: null,
-          behind: null,
-          mergedIntoDefault: false,
-        }),
-      }),
-      tier: "review",
-    },
-    {
-      name: "never-pushed + contained but referenced → merged (proof beats owners, no upstream)",
-      entry: entry({
-        owners: [owner("epic-1")],
         branchStatus: status({
           ahead: null,
           behind: null,
@@ -159,6 +193,63 @@ describe("classifyWorktreeTier - canonical ladder (first match wins)", () => {
       }),
       tier: "merged",
     },
+    // --- At base commit ---
+    {
+      name: "atBaseCommit true (no PR, no local merge, null status) → at-base-commit",
+      entry: entry({ atBaseCommit: true, branchStatus: null }),
+      tier: "at-base-commit",
+    },
+    {
+      name: "atBaseCommit true even with owners (deletion loses nothing committed)",
+      entry: entry({ atBaseCommit: true, owners: [owner("epic-1")] }),
+      tier: "at-base-commit",
+    },
+    {
+      name: "atBaseCommit true with an OPEN PR still greens as at-base",
+      entry: entry({
+        atBaseCommit: true,
+        prState: "open",
+        mergedHeadShaMatches: false,
+      }),
+      tier: "at-base-commit",
+    },
+    {
+      name: "atBaseCommit false, no other proof → review",
+      entry: entry({ atBaseCommit: false, branchStatus: null }),
+      tier: "review",
+    },
+    {
+      name: "merged proof beats at-base when both set",
+      entry: entry({
+        atBaseCommit: true,
+        branchStatus: status({ mergedIntoDefault: true }),
+      }),
+      tier: "merged",
+    },
+    // --- Detached guard (kept above greens) ---
+    {
+      name: "detached HEAD stays review even when local-merged and clean",
+      entry: entry({
+        branch: null,
+        branchStatus: status({ mergedIntoDefault: true }),
+      }),
+      tier: "review",
+    },
+    {
+      name: "detached HEAD stays review even with a merged PR match",
+      entry: entry({
+        branch: null,
+        prState: "merged",
+        mergedHeadShaMatches: true,
+      }),
+      tier: "review",
+    },
+    {
+      name: "detached HEAD stays review even when atBaseCommit",
+      entry: entry({ branch: null, atBaseCommit: true }),
+      tier: "review",
+    },
+    // --- Unreferenced (T9, unchanged) ---
     {
       name: "clean + non-null + ahead 0 + no owners + not merged → unreferenced",
       entry: entry({ branchStatus: status({ ahead: 0 }) }),
@@ -169,6 +260,36 @@ describe("classifyWorktreeTier - canonical ladder (first match wins)", () => {
       entry: entry({ branchStatus: status({ ahead: 0, behind: 3 }) }),
       tier: "unreferenced",
     },
+    {
+      name: "referenced (owners > 0), clean, ahead 0, not merged → review (owners gate)",
+      entry: entry({
+        owners: [owner("epic-1")],
+        branchStatus: status({ ahead: 0, mergedIntoDefault: false }),
+      }),
+      tier: "review",
+    },
+    // --- Review catch-all ---
+    {
+      name: "ahead and not merged → review",
+      entry: entry({ branchStatus: status({ ahead: 2 }) }),
+      tier: "review",
+    },
+    {
+      name: "null branchStatus, no proof → review",
+      entry: entry({ branchStatus: null }),
+      tier: "review",
+    },
+    {
+      name: "never-pushed + diverged (null ahead, not merged) → review, NEVER unreferenced",
+      entry: entry({
+        branchStatus: status({
+          ahead: null,
+          behind: null,
+          mergedIntoDefault: false,
+        }),
+      }),
+      tier: "review",
+    },
   ];
 
   for (const testCase of cases) {
@@ -177,14 +298,34 @@ describe("classifyWorktreeTier - canonical ladder (first match wins)", () => {
     });
   }
 
-  it("classifyWorktree returns the matching label and facts", () => {
-    const merged = classifyWorktree(
+  it("classifyWorktree returns the matching label and provenance facts", () => {
+    const localMerged = classifyWorktree(
       entry({ branchStatus: status({ mergedIntoDefault: true }) }),
     );
-    expect(merged.tier).toBe("merged");
-    expect(merged.label).toBe("Merged");
-    expect(merged.facts).toContain("merged");
-    expect(merged.facts).toContain("clean");
+    expect(localMerged.tier).toBe("merged");
+    expect(localMerged.label).toBe("Merged");
+    // Local-ancestry provenance hint, and no stray "merged" duplicate.
+    expect(localMerged.facts).toContain("in default");
+    expect(localMerged.facts).toContain("clean");
+
+    const prMerged = classifyWorktree(
+      entry({ prState: "merged", mergedHeadShaMatches: true, prNumber: 123 }),
+    );
+    expect(prMerged.tier).toBe("merged");
+    expect(prMerged.label).toBe("Merged");
+    // PR provenance hint carries the number and never "in default".
+    expect(prMerged.facts).toContain("PR #123");
+    expect(prMerged.facts).not.toContain("in default");
+
+    const prMergedNoNumber = classifyWorktree(
+      entry({ prState: "merged", mergedHeadShaMatches: true, prNumber: null }),
+    );
+    expect(prMergedNoNumber.facts).toContain("merged PR");
+
+    const atBase = classifyWorktree(entry({ atBaseCommit: true }));
+    expect(atBase.tier).toBe("at-base-commit");
+    expect(atBase.label).toBe("At base commit");
+    expect(atBase.facts).toContain("clean");
 
     const dirty = classifyWorktree(entry({ uncommittedCount: 3 }));
     expect(dirty.tier).toBe("review");
@@ -195,40 +336,45 @@ describe("classifyWorktreeTier - canonical ladder (first match wins)", () => {
       entry({ branch: null, branchStatus: status({ ahead: 1 }) }),
     );
     expect(detached.facts).toContain("detached HEAD");
+  });
 
-    // Never-pushed + contained: the "merged" fact shows, and null ahead/behind
-    // render nothing (never "0 ahead" / NaN).
-    const neverPushedMerged = classifyWorktree(
-      entry({
-        branchStatus: status({
-          ahead: null,
-          behind: null,
-          mergedIntoDefault: true,
-        }),
-      }),
-    );
-    expect(neverPushedMerged.tier).toBe("merged");
-    expect(neverPushedMerged.facts).toContain("merged");
-    expect(neverPushedMerged.facts).toContain("clean");
-    expect(neverPushedMerged.facts.some((f) => f.includes("ahead"))).toBe(
-      false,
-    );
-    expect(neverPushedMerged.facts.some((f) => f.includes("behind"))).toBe(
-      false,
-    );
+  it("degrades to today's behavior against a v1.0 / no-PR host (all new fields null/false)", () => {
+    // With the merge-provenance bundle at its null/false defaults, only the T9
+    // local-ancestry and upstream-tip signals can green - no Merged (PR), no
+    // At base commit.
+    expect(
+      classifyWorktreeTier(
+        entry({ branchStatus: status({ mergedIntoDefault: true }) }),
+      ),
+    ).toBe("merged");
+    expect(
+      classifyWorktreeTier(entry({ branchStatus: status({ ahead: 0 }) })),
+    ).toBe("unreferenced");
+    expect(classifyWorktreeTier(entry({ branchStatus: null }))).toBe("review");
+    expect(
+      classifyWorktreeTier(entry({ branchStatus: status({ ahead: 2 }) })),
+    ).toBe("review");
+    // No at-base and no PR greens are ever produced from the null/false bundle.
+    expect(
+      classifyWorktreeTier(entry({ branchStatus: status({ ahead: 5 }) })),
+    ).not.toBe("at-base-commit");
   });
 });
 
 describe("worktree tier ordering", () => {
-  it("ranks safe-first: merged, unreferenced, review, orphaned, in-use", () => {
+  it("ranks safe-first: merged, at-base-commit, unreferenced, review, orphaned, in-use", () => {
     expect(WORKTREE_TIER_ORDER).toEqual([
       "merged",
+      "at-base-commit",
       "unreferenced",
       "review",
       "orphaned",
       "in-use",
     ]);
     expect(worktreeTierRank("merged")).toBeLessThan(
+      worktreeTierRank("at-base-commit"),
+    );
+    expect(worktreeTierRank("at-base-commit")).toBeLessThan(
       worktreeTierRank("unreferenced"),
     );
     expect(worktreeTierRank("unreferenced")).toBeLessThan(
@@ -243,186 +389,93 @@ describe("worktree tier ordering", () => {
   });
 });
 
-describe("isPrimarySweepEligible", () => {
-  it("accepts proven-merged and clean-not-ahead-unreferenced", () => {
+describe("provenRemovable - single green / bulk-eligible predicate", () => {
+  it("true for exactly the three green tiers", () => {
+    // Merged (PR)
     expect(
-      isPrimarySweepEligible(
+      provenRemovable(entry({ prState: "merged", mergedHeadShaMatches: true })),
+    ).toBe(true);
+    // Merged (local ancestry)
+    expect(
+      provenRemovable(
         entry({ branchStatus: status({ mergedIntoDefault: true }) }),
       ),
     ).toBe(true);
-    expect(
-      isPrimarySweepEligible(entry({ branchStatus: status({ ahead: 0 }) })),
-    ).toBe(true);
-    // merged proof stands regardless of owners.
-    expect(
-      isPrimarySweepEligible(
-        entry({
-          owners: [owner("epic-1")],
-          branchStatus: status({ mergedIntoDefault: true }),
-        }),
-      ),
-    ).toBe(true);
+    // At base commit
+    expect(provenRemovable(entry({ atBaseCommit: true }))).toBe(true);
+    // Unreferenced
+    expect(provenRemovable(entry({ branchStatus: status({ ahead: 0 }) }))).toBe(
+      true,
+    );
   });
 
-  it("never-pushed: contained is primary-eligible, diverged is not", () => {
+  it("false for review / orphaned / in-use and unproven greens", () => {
+    // prState merged without the live-HEAD match never greens.
     expect(
-      isPrimarySweepEligible(
+      provenRemovable(
         entry({
-          branchStatus: status({
-            ahead: null,
-            behind: null,
-            mergedIntoDefault: true,
-          }),
-        }),
-      ),
-    ).toBe(true);
-    // Null ahead is not a proven `ahead === 0`, so a diverged never-pushed
-    // branch is never bulk-swept.
-    expect(
-      isPrimarySweepEligible(
-        entry({
-          branchStatus: status({
-            ahead: null,
-            behind: null,
-            mergedIntoDefault: false,
-          }),
+          prState: "merged",
+          mergedHeadShaMatches: false,
+          branchStatus: status({ ahead: 1 }),
         }),
       ),
     ).toBe(false);
-  });
-
-  it("rejects referenced-not-merged, dirty, null status, in-use, orphan", () => {
+    // Dirty overrides a merged PR.
     expect(
-      isPrimarySweepEligible(
+      provenRemovable(
         entry({
-          owners: [owner("epic-1")],
-          branchStatus: status({ ahead: 0 }),
+          uncommittedCount: 1,
+          prState: "merged",
+          mergedHeadShaMatches: true,
         }),
       ),
     ).toBe(false);
+    expect(provenRemovable(entry({ branchStatus: null }))).toBe(false);
+    expect(provenRemovable(entry({ branchStatus: status({ ahead: 3 }) }))).toBe(
+      false,
+    );
     expect(
-      isPrimarySweepEligible(
-        entry({ uncommittedCount: 1, branchStatus: status({ ahead: 0 }) }),
-      ),
-    ).toBe(false);
-    expect(isPrimarySweepEligible(entry({ branchStatus: null }))).toBe(false);
-    expect(
-      isPrimarySweepEligible(
-        entry({
-          inUse: true,
-          branchStatus: status({ mergedIntoDefault: true }),
-        }),
-      ),
-    ).toBe(false);
-    expect(
-      isPrimarySweepEligible(
+      provenRemovable(
         entry({
           gitRemovable: false,
           branchStatus: status({ mergedIntoDefault: true }),
         }),
       ),
     ).toBe(false);
-  });
-});
-
-describe("isSecondarySweepEligible", () => {
-  it("accepts named-branch, clean, unreferenced, null status", () => {
-    expect(isSecondarySweepEligible(entry({ branchStatus: null }))).toBe(true);
-  });
-
-  it("rejects detached HEAD, referenced, dirty, non-null status, orphan, in-use", () => {
     expect(
-      isSecondarySweepEligible(entry({ branch: null, branchStatus: null })),
-    ).toBe(false);
-    expect(
-      isSecondarySweepEligible(
-        entry({ owners: [owner("epic-1")], branchStatus: null }),
-      ),
-    ).toBe(false);
-    expect(
-      isSecondarySweepEligible(
-        entry({ uncommittedCount: 2, branchStatus: null }),
-      ),
-    ).toBe(false);
-    expect(
-      isSecondarySweepEligible(entry({ branchStatus: status({ ahead: 0 }) })),
-    ).toBe(false);
-    expect(
-      isSecondarySweepEligible(
-        entry({ gitRemovable: false, branchStatus: null }),
-      ),
-    ).toBe(false);
-    expect(
-      isSecondarySweepEligible(entry({ inUse: true, branchStatus: null })),
-    ).toBe(false);
-  });
-
-  it("primary and secondary cohorts never overlap (null vs non-null status)", () => {
-    const nullStatus = entry({ branchStatus: null });
-    expect(isSecondarySweepEligible(nullStatus)).toBe(true);
-    expect(isPrimarySweepEligible(nullStatus)).toBe(false);
-    const proven = entry({ branchStatus: status({ mergedIntoDefault: true }) });
-    expect(isPrimarySweepEligible(proven)).toBe(true);
-    expect(isSecondarySweepEligible(proven)).toBe(false);
-  });
-});
-
-describe("isEvidenceProvenRemovable (Task-delete default-check rule)", () => {
-  it("true only when clean and non-null status that is merged or not ahead", () => {
-    expect(
-      isEvidenceProvenRemovable({
-        uncommittedCount: 0,
-        branchStatus: status({ mergedIntoDefault: true }),
-      }),
-    ).toBe(true);
-    expect(
-      isEvidenceProvenRemovable({
-        uncommittedCount: 0,
-        branchStatus: status({ ahead: 0 }),
-      }),
-    ).toBe(true);
-  });
-
-  it("never-pushed: contained → proven removable, diverged → not", () => {
-    // Never-pushed + contained is proven by the upstream-free merge proof.
-    expect(
-      isEvidenceProvenRemovable({
-        uncommittedCount: 0,
-        branchStatus: status({
-          ahead: null,
-          behind: null,
-          mergedIntoDefault: true,
+      provenRemovable(
+        entry({
+          inUse: true,
+          branchStatus: status({ mergedIntoDefault: true }),
         }),
-      }),
-    ).toBe(true);
-    // Never-pushed + diverged: null ahead is NOT `ahead === 0`, so unproven.
+      ),
+    ).toBe(false);
+    // Detached is never green in this pass, even with positive proof.
     expect(
-      isEvidenceProvenRemovable({
-        uncommittedCount: 0,
-        branchStatus: status({
-          ahead: null,
-          behind: null,
-          mergedIntoDefault: false,
-        }),
-      }),
+      provenRemovable(
+        entry({ branch: null, prState: "merged", mergedHeadShaMatches: true }),
+      ),
     ).toBe(false);
   });
 
-  it("false for null status (unproven), dirty, or ahead-not-merged", () => {
-    expect(
-      isEvidenceProvenRemovable({ uncommittedCount: 0, branchStatus: null }),
-    ).toBe(false);
-    expect(
-      isEvidenceProvenRemovable({
-        uncommittedCount: 2,
-        branchStatus: status({ mergedIntoDefault: true }),
-      }),
-    ).toBe(false);
-    expect(
-      isEvidenceProvenRemovable({
-        uncommittedCount: 0,
-        branchStatus: status({ ahead: 3 }),
-      }),
-    ).toBe(false);
+  it("agrees with the pill: provenRemovable ⇔ classifier is a green tier", () => {
+    const samples = [
+      entry({ prState: "merged", mergedHeadShaMatches: true }),
+      entry({ atBaseCommit: true }),
+      entry({ branchStatus: status({ ahead: 0 }) }),
+      entry({ branchStatus: status({ ahead: 2 }) }),
+      entry({ uncommittedCount: 1 }),
+      entry({ gitRemovable: false }),
+    ];
+    const greens: ReadonlySet<WorktreeTier> = new Set([
+      "merged",
+      "at-base-commit",
+      "unreferenced",
+    ]);
+    for (const sample of samples) {
+      expect(provenRemovable(sample)).toBe(
+        greens.has(classifyWorktreeTier(sample)),
+      );
+    }
   });
 });
