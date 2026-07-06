@@ -57,8 +57,11 @@ import {
   hostGetRateLimitUsageV10,
   hostGetRateLimitUsageV11,
   hostGetRateLimitUsageV12,
+  hostGetRateLimitUsageV20,
   hostGetRateLimitUsageUpgradeV10ToV11,
   hostGetRateLimitUsageUpgradeV11ToV12,
+  hostGetRateLimitUsageUpgradeV12ToV20,
+  hostGetRateLimitUsageDowngradeV2ToV1,
 } from "@traycer/protocol/host/rate-limit/contracts";
 import {
   epicBatchDeleteV10,
@@ -1091,6 +1094,16 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
         },
       },
       downgradePathsFromLatest: {},
+    },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostGetRateLimitUsageV20,
+          upgradeFromPreviousVersion: hostGetRateLimitUsageUpgradeV12ToV20,
+        },
+      },
+      downgradePathsFromLatest: { 1: hostGetRateLimitUsageDowngradeV2ToV1 },
     },
   },
   "comments.listThreads": {
