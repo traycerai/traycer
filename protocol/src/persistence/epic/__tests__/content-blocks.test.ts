@@ -268,6 +268,32 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
     timestamp: 1,
   };
 
+  it("decodes a raw pre-wakeTriggers stored block (v1.1.3 data, NO schema parse) without throwing", () => {
+    // The host's storage hot path (`decodeStoredBlock` in
+    // `chat-message-collections.ts`) calls this function on raw Yjs JSON
+    // WITHOUT a schema parse, so `.default([])` never runs: every
+    // autonomous_resume block written before the wakeTriggers key existed
+    // lacks it entirely. Regression: this exact shape crashed every chat
+    // open with "Cannot read properties of undefined (reading 'length')".
+    const rawV113Stored = {
+      ...baseFields,
+      triggers: [
+        {
+          kind: "command" as const,
+          title: "cmd",
+          status: "completed" as const,
+          summary: "ran",
+          blockId: "",
+          outputFile: null,
+        },
+      ],
+      wakeTriggers: undefined,
+    };
+    const decoded = decodeAutonomousResumeBlock(rawV113Stored);
+    expect(decoded.triggers.map((t) => t.kind)).toEqual(["command"]);
+    expect("wakeTriggers" in decoded).toBe(false);
+  });
+
   it("parses a legacy pre-fix block with kind:'wakeup' inline in triggers (rc/dev data)", () => {
     const legacy = {
       ...baseFields,

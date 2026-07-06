@@ -505,17 +505,30 @@ export type AutonomousResumeBlock = z.infer<
   typeof domainAutonomousResumeBlockSchema
 >;
 
+// The raw stored shape of an `autonomous_resume` block as read straight off a
+// Yjs doc, BEFORE any schema parse: every block written before the
+// `wakeTriggers` key existed (v1.1.3 and every earlier build) simply lacks it,
+// and the storage hot path (`decodeStoredBlock` in
+// `chat-message-collections.ts`) deliberately skips the schema parse that
+// would default it. Any function consuming stored blocks must be total over
+// this shape - `.default([])` only exists after a parse.
+export type RawStoredAutonomousResumeBlock = Omit<
+  PersistedAutonomousResumeBlock,
+  "wakeTriggers"
+> & { wakeTriggers: AutonomousResumeWakeTrigger[] | undefined };
+
 // Merges `wakeTriggers` into `triggers` (wakeup entries last, matching
 // construction order in `buildAutonomousResumeBlock`) and accepts legacy
 // stored `kind: "wakeup"` entries already inline in `triggers` unchanged.
-// Idempotent: decoding an already-domain-shaped block (no `wakeTriggers`) is a
-// no-op, since a re-parse through `persistedAutonomousResumeBlockSchema`
-// defaults the missing key to `[]`.
+// Total over every shape ever persisted: a pre-`wakeTriggers` block (absent
+// key) and an already-domain-shaped block are both returned unchanged - the
+// function itself tolerates the missing key rather than relying on a schema
+// parse the raw storage path never runs.
 export function decodeAutonomousResumeBlock(
-  stored: PersistedAutonomousResumeBlock,
+  stored: RawStoredAutonomousResumeBlock,
 ): AutonomousResumeBlock {
   const { wakeTriggers, ...rest } = stored;
-  if (wakeTriggers.length === 0) return rest;
+  if (wakeTriggers === undefined || wakeTriggers.length === 0) return rest;
   return {
     ...rest,
     triggers: [
