@@ -31,6 +31,25 @@ import { type EditorId } from "@traycer/protocol/host";
 
 export type ThemeMode = "system" | "light" | "dark";
 export type EpicNodeIconColorMode = "byType" | "none";
+// Mirrors xterm's `cursorStyle` union; kept as our own type so the settings
+// surface doesn't take a value import from `@xterm/xterm`.
+export type TerminalCursorStyle = "block" | "bar" | "underline";
+
+export const DEFAULT_TERMINAL_CURSOR_STYLE: TerminalCursorStyle = "block";
+export const DEFAULT_TERMINAL_CURSOR_BLINK = true;
+
+// Shape drawn when the terminal loses focus (xterm's `cursorInactiveStyle`,
+// which never blinks). Bar/underline mirror the chosen shape so the cursor
+// keeps its identity on blur; block falls back to a hollow outline so an
+// unfocused pane stays visually distinct from a focused non-blinking block.
+export type TerminalInactiveCursorStyle =
+  TerminalCursorStyle | "outline" | "none";
+
+export function inactiveCursorStyleFor(
+  style: TerminalCursorStyle,
+): TerminalInactiveCursorStyle {
+  return style === "block" ? "outline" : style;
+}
 
 // Default font sizes, shared with the Appearance panel so its reset-to-default
 // affordance and the store's initial state stay a single source of truth.
@@ -77,6 +96,10 @@ export interface SettingsState {
   terminalFontFamily: string | null;
   /** Chosen terminal font size, or null to follow `codeFontSize`. */
   terminalFontSize: number | null;
+  /** Cursor shape drawn in the terminal (block/bar/underline). */
+  terminalCursorStyle: TerminalCursorStyle;
+  /** Whether the terminal cursor blinks while the terminal is focused. */
+  terminalCursorBlink: boolean;
   artifactIconColorMode: EpicNodeIconColorMode;
   artifactIconColors: EpicNodeIconColors;
   defaultEditor: EditorId | null;
@@ -114,6 +137,8 @@ export interface SettingsState {
   setCodeFontFamily: (value: string | null) => void;
   setTerminalFontFamily: (value: string | null) => void;
   setTerminalFontSize: (value: number | null) => void;
+  setTerminalCursorStyle: (value: TerminalCursorStyle) => void;
+  setTerminalCursorBlink: (value: boolean) => void;
   setArtifactIconColorMode: (mode: EpicNodeIconColorMode) => void;
   setArtifactIconColor: (type: EpicNodeKind, color: string) => void;
   resetArtifactIconColors: () => void;
@@ -145,6 +170,8 @@ type PersistedSettingsState = Pick<
   | "codeFontFamily"
   | "terminalFontFamily"
   | "terminalFontSize"
+  | "terminalCursorStyle"
+  | "terminalCursorBlink"
   | "artifactIconColorMode"
   | "artifactIconColors"
   | "defaultEditor"
@@ -208,6 +235,8 @@ function partializeSettingsState(state: SettingsState): PersistedSettingsState {
     codeFontFamily: state.codeFontFamily,
     terminalFontFamily: state.terminalFontFamily,
     terminalFontSize: state.terminalFontSize,
+    terminalCursorStyle: state.terminalCursorStyle,
+    terminalCursorBlink: state.terminalCursorBlink,
     artifactIconColorMode: state.artifactIconColorMode,
     artifactIconColors: state.artifactIconColors,
     defaultEditor: state.defaultEditor,
@@ -239,6 +268,8 @@ export const useSettingsStore = create<SettingsState>()(
       codeFontFamily: null,
       terminalFontFamily: null,
       terminalFontSize: null,
+      terminalCursorStyle: DEFAULT_TERMINAL_CURSOR_STYLE,
+      terminalCursorBlink: DEFAULT_TERMINAL_CURSOR_BLINK,
       artifactIconColorMode: "byType",
       artifactIconColors: DEFAULT_EPIC_NODE_ICON_COLORS,
       defaultEditor: "vscode",
@@ -273,6 +304,8 @@ export const useSettingsStore = create<SettingsState>()(
           s.terminalFontSize === next ? s : { terminalFontSize: next },
         );
       },
+      setTerminalCursorStyle: makeSetter(set, "terminalCursorStyle"),
+      setTerminalCursorBlink: makeSetter(set, "terminalCursorBlink"),
       setArtifactIconColorMode: makeSetter(set, "artifactIconColorMode"),
       setArtifactIconColor: (type, color) => {
         const next = normalizeEpicNodeIconColor(color);
