@@ -32,6 +32,9 @@ export function buildWorktreeListCommand(
     const result = await toAgentCliError(
       callHostRpc("worktree.listAllForHost", {
         includeActivity: opts.includeActivity,
+        // Whole-list mode: the CLI lists every managed worktree, never a
+        // per-viewport slice.
+        activityPaths: null,
       }),
     );
     const parsed = parseHostResponse(

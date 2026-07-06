@@ -42,6 +42,12 @@ function entry(overrides: Partial<WorktreeHostEntryV11>): WorktreeHostEntryV11 {
     owners: [],
     branchStatus: null,
     createdAt: null,
+    prState: null,
+    prNumber: null,
+    prUrl: null,
+    mergedHeadShaMatches: false,
+    submodules: [],
+    atBaseCommit: false,
     ...overrides,
   };
 }
@@ -132,6 +138,7 @@ describe("buildWorktreeListCommand", () => {
 
     expect(rpcMock).toHaveBeenCalledWith("worktree.listAllForHost", {
       includeActivity: true,
+      activityPaths: null,
     });
     expect(result.data).toEqual({ worktrees });
     expect(result.exitCode).toBe(0);
@@ -144,6 +151,7 @@ describe("buildWorktreeListCommand", () => {
 
     expect(rpcMock).toHaveBeenCalledWith("worktree.listAllForHost", {
       includeActivity: false,
+      activityPaths: null,
     });
   });
 });
