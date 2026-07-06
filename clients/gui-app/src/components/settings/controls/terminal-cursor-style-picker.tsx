@@ -30,7 +30,6 @@ export function TerminalCursorStylePicker(
   const { value, onChange } = props;
   return (
     <div
-      role="radiogroup"
       aria-label="Terminal cursor style"
       className="inline-flex items-center gap-1 rounded-md border border-border bg-muted/30 p-0.5"
     >
@@ -40,8 +39,7 @@ export function TerminalCursorStylePicker(
           <button
             key={style.id}
             type="button"
-            role="radio"
-            aria-checked={active}
+            aria-pressed={active}
             aria-label={style.label}
             title={style.label}
             onClick={() => {
