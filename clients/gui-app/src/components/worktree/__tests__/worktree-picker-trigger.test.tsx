@@ -13,6 +13,7 @@ describe("WorktreePickerTrigger change-count badge", () => {
         worktreeLabel="traycer"
         secondaryLabel="/Users/anurag/work/traycer"
         changeCount={3}
+        trailingStatus={null}
         testId="trigger"
       />,
     );
@@ -33,6 +34,7 @@ describe("WorktreePickerTrigger change-count badge", () => {
         worktreeLabel="traycer"
         secondaryLabel="/Users/anurag/work/traycer"
         changeCount={null}
+        trailingStatus={null}
         testId="trigger"
       />,
     );

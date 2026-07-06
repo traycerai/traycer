@@ -6,65 +6,44 @@ import { GitDiffPanelActions } from "../git-diff-panel-actions";
 import { useGitPanelStore } from "@/stores/epics/git-panel-store";
 import { DEFAULT_DIFF_VIEWER_PREFERENCES } from "@/lib/diff/diff-viewer-preferences";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import { gitQueryKeys } from "@/lib/query-keys/git-query-keys";
 
-vi.mock("@/hooks/worktree/use-worktree-list-bindings-for-epic-query", () => ({
-  useWorktreeListBindingsForEpic: () => ({
-    data: {
-      rows: [
-        {
-          hostId: "host-1",
-          runningDir: "/repo",
-          isGitRepo: true,
-          disabledReason: null,
-        },
-      ],
-    },
-  }),
-}));
-
-const refreshStatus = vi.fn(() => Promise.resolve());
-vi.mock("@/hooks/git/use-git-refresh-worktree-status", () => ({
-  useGitRefreshWorktreeStatus: () => ({
-    mutateAsync: refreshStatus,
-  }),
-}));
-
-function makeWrapper() {
+function setup() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
-  return ({ children }: { readonly children: ReactNode }) => (
+  const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+  const wrapper = ({ children }: { readonly children: ReactNode }) => (
     <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
   );
+  return { invalidateSpy, wrapper };
 }
 
 describe("<GitDiffPanelActions />", () => {
   beforeEach(() => {
     cleanup();
-    refreshStatus.mockClear();
     useGitPanelStore.setState({ stateByEpicId: {} });
     useSettingsStore.setState({
       diffViewerPreferences: DEFAULT_DIFF_VIEWER_PREFERENCES,
     });
-    useGitPanelStore.getState().setSelectedWorktree("epic-1", {
+    useGitPanelStore.getState().setSelectedRepo("epic-1", {
       hostId: "host-1",
-      runningDir: "/repo",
+      rootRunningDir: "/repo",
+      repoRoot: "/repo",
     });
   });
 
   it("renders layout toggle and refresh in the panel header", () => {
-    render(<GitDiffPanelActions epicId="epic-1" tabId="tab-1" />, {
-      wrapper: makeWrapper(),
-    });
+    const { wrapper } = setup();
+    render(<GitDiffPanelActions epicId="epic-1" tabId="tab-1" />, { wrapper });
 
     expect(screen.getByTestId("git-diff-panel-layout-toggle")).toBeDefined();
     expect(screen.getByTestId("git-diff-panel-refresh")).toBeDefined();
   });
 
   it("toggles list layout from the header action", () => {
-    render(<GitDiffPanelActions epicId="epic-1" tabId="tab-1" />, {
-      wrapper: makeWrapper(),
-    });
+    const { wrapper } = setup();
+    render(<GitDiffPanelActions epicId="epic-1" tabId="tab-1" />, { wrapper });
 
     fireEvent.click(screen.getByTestId("git-diff-panel-layout-toggle"));
 
@@ -73,35 +52,37 @@ describe("<GitDiffPanelActions />", () => {
     );
   });
 
-  it("force-fetches the selected worktree status on refresh", () => {
-    render(<GitDiffPanelActions epicId="epic-1" tabId="tab-1" />, {
-      wrapper: makeWrapper(),
-    });
+  it("invalidates the active root's nested snapshot on refresh", () => {
+    const { invalidateSpy, wrapper } = setup();
+    render(<GitDiffPanelActions epicId="epic-1" tabId="tab-1" />, { wrapper });
 
     fireEvent.click(screen.getByTestId("git-diff-panel-refresh"));
 
-    expect(refreshStatus).toHaveBeenCalledWith({
-      hostId: "host-1",
-      runningDir: "/repo",
-      ignoreWhitespace: false,
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: gitQueryKeys.listChangedFilesWithSubmodules(
+        "host-1",
+        "/repo",
+        false,
+      ),
     });
   });
 
-  it("force-fetches with the global whitespace preference", () => {
+  it("refresh honors the global whitespace preference in the slot key", () => {
     useSettingsStore.getState().setDiffViewerPreferences({
       ...DEFAULT_DIFF_VIEWER_PREFERENCES,
       ignoreWhitespace: true,
     });
-    render(<GitDiffPanelActions epicId="epic-1" tabId="tab-1" />, {
-      wrapper: makeWrapper(),
-    });
+    const { invalidateSpy, wrapper } = setup();
+    render(<GitDiffPanelActions epicId="epic-1" tabId="tab-1" />, { wrapper });
 
     fireEvent.click(screen.getByTestId("git-diff-panel-refresh"));
 
-    expect(refreshStatus).toHaveBeenCalledWith({
-      hostId: "host-1",
-      runningDir: "/repo",
-      ignoreWhitespace: true,
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: gitQueryKeys.listChangedFilesWithSubmodules(
+        "host-1",
+        "/repo",
+        true,
+      ),
     });
   });
 });

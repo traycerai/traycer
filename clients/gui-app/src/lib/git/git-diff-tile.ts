@@ -40,7 +40,7 @@ export function gitStageLabel(stage: GitStage): string {
 export function gitBundleGroupLabel(group: GitDiffBundleGroup): string {
   if (group === "merge") return "Merge Changes";
   if (group === "staged") return "Staged";
-  return "Working";
+  return "Changes";
 }
 
 export function makeGitFileDiffTile(args: {

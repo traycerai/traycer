@@ -37,7 +37,7 @@ describe("<BundleOpenButton />", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Open Working" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open Changes" }));
 
     const canvas = useEpicCanvasStore.getState().canvasByTabId[tabId];
     if (canvas?.root?.kind !== "pane") throw new Error("expected pane");

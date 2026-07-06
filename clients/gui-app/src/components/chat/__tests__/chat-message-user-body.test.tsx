@@ -293,7 +293,7 @@ describe("<UserMessageBody /> agent messages", () => {
         imageAttachment("second.png"),
       ],
     };
-    const actions = editingUserActions();
+    const actions = editingUserActions(STRUCTURED_IMAGE_USER_CONTENT);
     const view = render(<UserMessageBody actions={null} message={message} />);
 
     expect(screen.getByLabelText("Attached Image#1: first.png")).not.toBeNull();
@@ -424,51 +424,6 @@ describe("<UserMessageBody /> agent messages", () => {
       clipboard.restore();
     }
   });
-
-  it("highlights the bubble of the message being edited in the composer", () => {
-    const actionsFor = (isEditTarget: boolean) => ({
-      type: "user" as const,
-      enabled: true,
-      confirmingDelete: false,
-      isEditTarget,
-      onEdit: () => undefined,
-      onDeleteRequest: () => undefined,
-      onDeleteConfirm: () => undefined,
-      onDeleteCancel: () => undefined,
-    });
-
-    const { rerender } = render(
-      <TooltipProvider>
-        <UserMessageBody
-          actions={actionsFor(false)}
-          message={{
-            ...plainUserMessage("original prompt"),
-            structuredContent: null,
-          }}
-        />
-      </TooltipProvider>,
-    );
-    const bubble = screen.getByText("original prompt").closest(".rounded-2xl");
-    expect(bubble?.className).not.toContain("ring-primary/40");
-
-    // Message-edit mode targets this message: the bubble gains the highlight
-    // ring anchoring the composer's "Editing message" pill.
-    rerender(
-      <TooltipProvider>
-        <UserMessageBody
-          actions={actionsFor(true)}
-          message={{
-            ...plainUserMessage("original prompt"),
-            structuredContent: null,
-          }}
-        />
-      </TooltipProvider>,
-    );
-    const highlighted = screen
-      .getByText("original prompt")
-      .closest(".rounded-2xl");
-    expect(highlighted?.className).toContain("ring-primary/40");
-  });
 });
 
 function agentMessage(content: string): ChatMessageModel {
@@ -539,12 +494,23 @@ function imageAttachment(name: string) {
   };
 }
 
-function editingUserActions(): ChatMessageUserActions {
+function editingUserActions(content: JsonContent): ChatMessageUserActions {
   return {
     type: "user",
     enabled: true,
     confirmingDelete: false,
-    isEditTarget: true,
+    editing: {
+      initialContent: content,
+      currentContent: content,
+      pending: false,
+      canSubmit: false,
+      slashProviderId: "claude",
+      mentionRoots: [],
+      currentEpicId: "epic-1",
+      onSnapshot: () => undefined,
+      onSubmit: () => undefined,
+      onCancel: () => undefined,
+    },
     onEdit: () => undefined,
     onDeleteRequest: () => undefined,
     onDeleteConfirm: () => undefined,

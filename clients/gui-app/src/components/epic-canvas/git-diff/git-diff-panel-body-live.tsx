@@ -2,53 +2,131 @@ import {
   useCallback,
   useEffect,
   useMemo,
-  useRef,
   useState,
-  type ChangeEvent,
-  type KeyboardEvent,
   type ReactNode,
 } from "react";
-import { useQueryClient, type QueryClient } from "@tanstack/react-query";
-import { Search, X } from "lucide-react";
+import {
+  queryOptions,
+  useQueries,
+  useQueryClient,
+} from "@tanstack/react-query";
+import type { QueryClient } from "@tanstack/react-query";
 import type {
-  GitChangedFile,
   GitListChangedFilesResponse,
+  GitListChangedFilesResponseV11,
   WorktreeBindingSelectorRow,
 } from "@traycer/protocol/host";
-import {
-  InputGroup,
-  InputGroupAddon,
-  InputGroupButton,
-  InputGroupInput,
-} from "@/components/ui/input-group";
 import { useWorktreeListBindingsForEpic } from "@/hooks/worktree/use-worktree-list-bindings-for-epic-query";
 import { useGitPrefetchWorktreeStatus } from "@/hooks/git/use-git-prefetch-worktree-status";
 import { useGitCapabilitiesQuery } from "@/hooks/git/use-git-capabilities-query";
-import {
-  useGitListChangedFilesSubscription,
-  type GitListChangedFilesSubscriptionResult,
-} from "@/hooks/git/use-git-list-changed-files-subscription";
+import { useGitListChangedFilesSubscription } from "@/hooks/git/use-git-list-changed-files-subscription";
+import { useGitListChangedFilesWithSubmodules } from "@/hooks/git/use-git-list-changed-files-with-submodules";
+import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
 import { gitQueryKeys } from "@/lib/query-keys/git-query-keys";
 import { formatGitWorktreeLabel } from "@/lib/git/worktree-label";
+import { buildSubmoduleNodes } from "@/lib/git/git-repo-tree";
+import type {
+  GitDiffRepoSwitcherRootCounts,
+  GitDiffRepoSwitcherRootInput,
+} from "@/lib/git/git-diff-repo-switcher";
+import { invalidateGitSubmoduleSnapshot } from "@/lib/git/invalidate-git-submodule-snapshot";
 import {
   selectGitPanelEpicState,
   useGitPanelStore,
+  type GitPanelSelectedRepo,
 } from "@/stores/epics/git-panel-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { worktreeRowKey } from "@/lib/worktree/worktree-row-key";
 import { isGitSelectable } from "@/lib/worktree/worktree-git-selectable";
+import { getBasename } from "@/lib/path/cross-platform-path";
+import { WorkspacePickerWithOpener } from "@/components/worktree/workspace-picker-with-opener";
+import { WorktreePickerHostSection } from "@/components/worktree/worktree-picker-host-section";
 import { CapabilityGate } from "./capability-gate";
 import { DiffLoadingSkeleton } from "./diff-loading-skeleton";
-import { FileList } from "./file-list";
+import { GitRootsUnavailable } from "./empty-states/git-roots-unavailable";
 import { NoGitWorktrees } from "./empty-states/no-git-worktrees";
-import { NoChangesInWorktree } from "./empty-states/no-changes-in-worktree";
-import { SubscriptionErrorState } from "./empty-states/subscription-error-state";
-import { PanelToolbar } from "./panel-toolbar";
-import { RepoStateBanner } from "./repo-state-banner";
+import { GitDiffRepoSwitcher } from "./git-diff-repo-switcher";
+import { SelectedRepoChanges } from "./selected-repo-changes";
+
+const GIT_REFERENCE_REFRESH_TIMEOUT_MS = 10_000;
+
+interface UnavailableRootsState {
+  readonly keys: ReadonlySet<string>;
+  readonly observedRootKey: string | null;
+  readonly observedAvailable: boolean | null;
+}
+
+interface UnavailableGitRootKeys {
+  readonly keys: ReadonlySet<string>;
+  readonly reset: () => ReadonlySet<string>;
+}
 
 export interface GitDiffPanelBodyLiveProps {
   readonly epicId: string;
   readonly tabId: string;
+}
+
+function createUnavailableRootsState(
+  keys: ReadonlySet<string>,
+  observedRootKey: string | null,
+  observedAvailable: boolean | null,
+): UnavailableRootsState {
+  return { keys, observedRootKey, observedAvailable };
+}
+
+function updateUnavailableKeys(
+  current: ReadonlySet<string>,
+  rootKey: string,
+  shouldBeUnavailable: boolean,
+): ReadonlySet<string> {
+  const isUnavailable = current.has(rootKey);
+  if (isUnavailable === shouldBeUnavailable) return current;
+  const next = new Set(current);
+  if (shouldBeUnavailable) {
+    next.add(rootKey);
+  } else {
+    next.delete(rootKey);
+  }
+  return next;
+}
+
+function useUnavailableGitRootKeys(
+  selectedRootKey: string | null,
+  selectedRootAvailable: boolean | null,
+): UnavailableGitRootKeys {
+  const [unavailableRoots, setUnavailableRoots] =
+    useState<UnavailableRootsState>(() =>
+      createUnavailableRootsState(new Set(), null, null),
+    );
+  if (
+    selectedRootKey !== null &&
+    selectedRootAvailable !== null &&
+    (unavailableRoots.observedRootKey !== selectedRootKey ||
+      unavailableRoots.observedAvailable !== selectedRootAvailable)
+  ) {
+    setUnavailableRoots(
+      createUnavailableRootsState(
+        updateUnavailableKeys(
+          unavailableRoots.keys,
+          selectedRootKey,
+          !selectedRootAvailable,
+        ),
+        selectedRootKey,
+        selectedRootAvailable,
+      ),
+    );
+  }
+
+  const reset = useCallback((): ReadonlySet<string> => {
+    const cleared = new Set<string>();
+    setUnavailableRoots(createUnavailableRootsState(cleared, null, null));
+    return cleared;
+  }, []);
+
+  return useMemo(
+    () => ({ keys: unavailableRoots.keys, reset }),
+    [reset, unavailableRoots.keys],
+  );
 }
 
 export function GitDiffPanelBodyLive(
@@ -62,94 +140,88 @@ export function GitDiffPanelBodyLive(
     () => bindingsQuery.data?.rows ?? [],
     [bindingsQuery.data?.rows],
   );
-  const selectedWorktree = useGitPanelStore(
-    (s) => selectGitPanelEpicState(props.epicId)(s).selectedWorktree,
+  const gitRows = useMemo(() => rows.filter(isGitSelectable), [rows]);
+
+  const selectedRepo = useGitPanelStore(
+    (s) => selectGitPanelEpicState(props.epicId)(s).selectedRepo,
   );
-  const setSelectedWorktree = useGitPanelStore((s) => s.setSelectedWorktree);
+  const setSelectedRepo = useGitPanelStore((s) => s.setSelectedRepo);
   const ignoreWhitespace = useSettingsStore(
     (s) => s.diffViewerPreferences.ignoreWhitespace,
   );
   const queryClient = useQueryClient();
   const prefetch = useGitPrefetchWorktreeStatus();
 
-  // Worktrees the host reports as no longer usable git repos (e.g. their
-  // directory was deleted out from under us). Tracked in a ref - not React
-  // state - so recording one never triggers a setState-in-effect cascade;
-  // keys are removed when the same worktree probes healthy again. Lazily
-  // initialized in the effect (null seed avoids rebuilding a Set every render).
-  // Resets on remount.
-  const unavailableKeysRef = useRef<Set<string> | null>(null);
+  // The root repo owning the current selection (the only root whose nested @1.1
+  // snapshot is fetched - bounded lazy fan-out).
+  const selectedRootRow = useMemo(
+    () =>
+      gitRows.find(
+        (row) =>
+          selectedRepo !== null &&
+          row.hostId === selectedRepo.hostId &&
+          row.runningDir === selectedRepo.rootRunningDir,
+      ) ?? null,
+    [gitRows, selectedRepo],
+  );
 
-  const selectedRow =
-    rows.find(
-      (row) =>
-        selectedWorktree !== null &&
-        worktreeRowKey(row) === worktreeRowKey(selectedWorktree) &&
-        isGitSelectable(row),
-    ) ?? null;
-
-  // Probe the selected worktree's git capability here (the CapabilityGate
-  // fetches the same query, deduped by key). This feeds disk-truth health back
-  // into selection: a deleted worktree resolves `available: false` and gets
-  // routed around, instead of leaving the user stuck behind the gate with no
-  // picker to escape to.
+  // Probe the selected root's git capability (deduped with the CapabilityGate).
+  // A deleted worktree resolves `available: false` and gets routed around.
   const selectedCapabilityQuery = useGitCapabilitiesQuery({
-    hostId: selectedRow === null ? null : selectedRow.hostId,
-    runningDir: selectedRow === null ? "" : selectedRow.runningDir,
-    enabled: selectedRow !== null,
+    hostId: selectedRootRow === null ? null : selectedRootRow.hostId,
+    runningDir: selectedRootRow === null ? "" : selectedRootRow.runningDir,
+    enabled: selectedRootRow !== null,
   });
-  const selectedRunningKey =
-    selectedRow === null ? null : worktreeRowKey(selectedRow);
+  const selectedRootKey =
+    selectedRootRow === null ? null : worktreeRowKey(selectedRootRow);
   const selectedCapabilityData =
-    selectedRow === null ? null : (selectedCapabilityQuery.data ?? null);
+    selectedRootRow === null ? null : (selectedCapabilityQuery.data ?? null);
+  // Worktrees the host reports as no longer usable git repos (e.g. deleted out
+  // from under us). This render-time adjustment follows React's guarded
+  // "adjust state from props" pattern so the terminal empty-state check and the
+  // default-pick effect see the same unavailable-root set before commit.
+  const unavailableGitRootKeys = useUnavailableGitRootKeys(
+    selectedRootKey,
+    selectedCapabilityData?.available ?? null,
+  );
 
   useEffect(() => {
-    for (const row of rows) {
-      if (!isGitSelectable(row)) continue;
+    gitRows.forEach((row) => {
       void prefetch({
         hostId: row.hostId,
         runningDir: row.runningDir,
         ignoreWhitespace,
       });
-    }
-  }, [ignoreWhitespace, prefetch, rows]);
+    });
+  }, [ignoreWhitespace, prefetch, gitRows]);
 
   useEffect(() => {
     if (bindingsQuery.isPending || bindingsQuery.error !== null) return;
 
-    // Record a selected worktree the host reports as gone (capability
-    // `available: false`), then treat membership like a `disabledReason` so a
-    // dead worktree is never considered "still ready" and is excluded from the
-    // default pick. Only `available: false` (not a pending/absent probe) marks
-    // it, so selection never churns on an unsettled probe.
-    const unavailable = (unavailableKeysRef.current ??= new Set<string>());
-    if (selectedRunningKey !== null && selectedCapabilityData !== null) {
-      if (selectedCapabilityData.available) {
-        unavailable.delete(selectedRunningKey);
-      } else {
-        unavailable.add(selectedRunningKey);
-      }
-    }
-
-    const selectedStillReady = rows.some(
+    const selectedRootReady = gitRows.some(
       (row) =>
-        selectedWorktree !== null &&
-        worktreeRowKey(row) === worktreeRowKey(selectedWorktree) &&
-        isGitSelectable(row) &&
-        !unavailable.has(worktreeRowKey(row)),
+        selectedRepo !== null &&
+        row.hostId === selectedRepo.hostId &&
+        row.runningDir === selectedRepo.rootRunningDir &&
+        !unavailableGitRootKeys.keys.has(worktreeRowKey(row)),
     );
-    if (selectedStillReady) return;
+    if (selectedRootReady) return;
+
     const next = pickDefaultRow(
-      rows,
+      gitRows,
       queryClient,
-      unavailable,
+      unavailableGitRootKeys.keys,
       ignoreWhitespace,
     );
-    setSelectedWorktree(
+    setSelectedRepo(
       props.epicId,
       next === null
         ? null
-        : { hostId: next.hostId, runningDir: next.runningDir },
+        : {
+            hostId: next.hostId,
+            rootRunningDir: next.runningDir,
+            repoRoot: next.runningDir,
+          },
     );
   }, [
     bindingsQuery.error,
@@ -157,205 +229,275 @@ export function GitDiffPanelBodyLive(
     props.epicId,
     ignoreWhitespace,
     queryClient,
-    rows,
-    selectedCapabilityData,
-    selectedRunningKey,
-    selectedWorktree,
-    setSelectedWorktree,
+    gitRows,
+    selectedRepo,
+    setSelectedRepo,
+    unavailableGitRootKeys.keys,
+  ]);
+
+  // Clear the probed-unavailable set and re-probe every root's capability, so a
+  // fully-degraded panel can recover once a broken worktree is restored. The
+  // retry also re-picks a root so the freshly invalidated capability query runs
+  // against a candidate again.
+  const retryUnavailableRoots = useCallback(() => {
+    const cleared = unavailableGitRootKeys.reset();
+    void queryClient.invalidateQueries({
+      predicate: (query) =>
+        gitQueryKeys.matchGitCapabilitiesQuery(query.queryKey),
+    });
+    const next = pickDefaultRow(
+      gitRows,
+      queryClient,
+      cleared,
+      ignoreWhitespace,
+    );
+    setSelectedRepo(
+      props.epicId,
+      next === null
+        ? null
+        : {
+            hostId: next.hostId,
+            rootRunningDir: next.runningDir,
+            repoRoot: next.runningDir,
+          },
+    );
+  }, [
+    gitRows,
+    ignoreWhitespace,
+    props.epicId,
+    queryClient,
+    setSelectedRepo,
+    unavailableGitRootKeys,
   ]);
 
   if (bindingsQuery.isPending) return <DiffLoadingSkeleton variant="panel" />;
   if (bindingsQuery.error !== null) return <NoGitWorktrees />;
-  if (rows.length === 0) return <NoGitWorktrees />;
+  if (gitRows.length === 0) return <NoGitWorktrees />;
+  if (selectedRepo === null || selectedRootRow === null) {
+    if (allRowsKnownUnavailable(gitRows, unavailableGitRootKeys.keys)) {
+      // Every bound root probed unavailable: an explicit, recoverable degrade -
+      // never the transient skeleton, which with zero available roots would
+      // never resolve and read as "still loading" forever.
+      return <GitRootsUnavailable onRetry={retryUnavailableRoots} />;
+    }
+    // Default-pick is resolving the initial selection (one commit).
+    return <DiffLoadingSkeleton variant="panel" />;
+  }
 
-  // The worktree picker (PanelToolbar) renders unconditionally above the gated
-  // body, so a selected worktree whose capability check fails never unmounts
-  // the only affordance for switching to a healthy worktree.
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <PanelToolbar
-        epicId={props.epicId}
-        rows={rows}
-        selectedRow={selectedRow}
-      />
-      {selectedRow === null ? (
-        <NoGitWorktrees />
-      ) : (
-        <CapabilityGate
-          hostId={selectedRow.hostId}
-          runningDir={selectedRow.runningDir}
-        >
-          <PanelContent
-            epicId={props.epicId}
-            viewTabId={props.tabId}
-            selectedRow={selectedRow}
-          />
-        </CapabilityGate>
-      )}
-    </div>
+    <GitDiffPanelLoaded
+      epicId={props.epicId}
+      viewTabId={props.tabId}
+      rows={rows}
+      selected={selectedRepo}
+      selectedRootRow={selectedRootRow}
+    />
   );
 }
 
-interface PanelContentProps {
-  readonly epicId: string;
-  readonly viewTabId: string;
-  readonly selectedRow: WorktreeBindingSelectorRow;
+function allRowsKnownUnavailable(
+  rows: ReadonlyArray<WorktreeBindingSelectorRow>,
+  unavailableKeys: ReadonlySet<string> | null,
+): boolean {
+  return (
+    unavailableKeys !== null &&
+    rows.length > 0 &&
+    rows.every((row) => unavailableKeys.has(worktreeRowKey(row)))
+  );
 }
 
-function PanelContent(props: PanelContentProps): ReactNode {
+interface GitDiffPanelLoadedProps {
+  readonly epicId: string;
+  readonly viewTabId: string;
+  /**
+   * Every binding for the epic, selectable or not - disabled rows (non-git
+   * folders, setup states) render greyed with their reason instead of
+   * silently vanishing from the panel.
+   */
+  readonly rows: ReadonlyArray<WorktreeBindingSelectorRow>;
+  readonly selected: GitPanelSelectedRepo;
+  readonly selectedRootRow: WorktreeBindingSelectorRow;
+}
+
+function GitDiffPanelLoaded(props: GitDiffPanelLoadedProps): ReactNode {
+  const { selected, selectedRootRow } = props;
+  const queryClient = useQueryClient();
+  const [repoSwitcherOpen, setRepoSwitcherOpen] = useState(false);
   const ignoreWhitespace = useSettingsStore(
     (s) => s.diffViewerPreferences.ignoreWhitespace,
   );
+  const setSelectedRepo = useGitPanelStore((s) => s.setSelectedRepo);
+
+  // Live parent status for the active root: drives the nested-snapshot refetch
+  // (its fingerprint is the change token) and the immediate pre-snapshot render.
   const subscription = useGitListChangedFilesSubscription({
-    hostId: props.selectedRow.hostId,
-    runningDir: props.selectedRow.runningDir,
+    hostId: selectedRootRow.hostId,
+    runningDir: selectedRootRow.runningDir,
     ignoreWhitespace,
     enabled: true,
   });
-  const conflictCount =
-    subscription.data?.files.filter((file) => file.stage === "conflicted")
-      .length ?? 0;
+  const snapshot = useGitListChangedFilesWithSubmodules({
+    hostId: selectedRootRow.hostId,
+    runningDir: selectedRootRow.runningDir,
+    ignoreWhitespace,
+    enabled: true,
+    changeToken: subscription.data?.fingerprint ?? null,
+  });
+  const workspaceSelected = useMemo<GitPanelSelectedRepo>(
+    () =>
+      selected.repoRoot === selected.rootRunningDir
+        ? selected
+        : {
+            hostId: selected.hostId,
+            rootRunningDir: selected.rootRunningDir,
+            repoRoot: selected.rootRunningDir,
+          },
+    [selected],
+  );
+
+  // Reactive read of every root's cached v1.0 change count for switcher badges.
+  // `combine` keeps the counts array referentially stable across unrelated
+  // re-renders, so the memoized `roots` below only rebuilds when a count changes.
+  const rootCounts = useQueries({
+    queries: props.rows.map((row) =>
+      queryOptions({
+        queryKey: gitQueryKeys.listChangedFiles(
+          row.hostId,
+          row.runningDir,
+          ignoreWhitespace,
+        ),
+        queryFn: (): Promise<GitListChangedFilesResponse | null> =>
+          Promise.resolve(null),
+        enabled: false,
+        staleTime: Infinity,
+      }),
+    ),
+    combine: (results) =>
+      results.map((result) => {
+        const data = result.data ?? null;
+        return parentStatusCounts(data);
+      }),
+  });
+  const activeRootCounts = activeRootParentCounts(
+    snapshot.data,
+    subscription.data,
+  );
+  const roots: ReadonlyArray<GitDiffRepoSwitcherRootInput> = useMemo(
+    () =>
+      props.rows.map((row, index) => {
+        const cachedCounts = rootCounts[index] ?? null;
+        const isSelectedRoot =
+          row.hostId === selectedRootRow.hostId &&
+          row.runningDir === selectedRootRow.runningDir;
+        const counts =
+          isSelectedRoot && activeRootCounts !== null
+            ? activeRootCounts
+            : cachedCounts;
+        return {
+          row,
+          fileChangeCount: counts?.fileChangeCount ?? null,
+          moduleChangeCount: counts?.moduleChangeCount ?? null,
+        };
+      }),
+    [
+      activeRootCounts,
+      props.rows,
+      rootCounts,
+      selectedRootRow.hostId,
+      selectedRootRow.runningDir,
+    ],
+  );
+
+  const submoduleNodes = useMemo(
+    () =>
+      snapshot.data === null
+        ? []
+        : buildSubmoduleNodes(snapshot.data.submodules),
+    [snapshot.data],
+  );
+
+  useEffect(() => {
+    if (selected.repoRoot === selected.rootRunningDir) return;
+    setSelectedRepo(props.epicId, {
+      hostId: selected.hostId,
+      rootRunningDir: selected.rootRunningDir,
+      repoRoot: selected.rootRunningDir,
+    });
+  }, [
+    props.epicId,
+    selected.hostId,
+    selected.repoRoot,
+    selected.rootRunningDir,
+    setSelectedRepo,
+  ]);
+
+  const handleRefresh = useCallback(
+    (): Promise<void> =>
+      invalidateGitSubmoduleSnapshot(queryClient, {
+        hostId: selectedRootRow.hostId,
+        rootRunningDir: selectedRootRow.runningDir,
+        ignoreWhitespace,
+      }),
+    [ignoreWhitespace, queryClient, selectedRootRow],
+  );
+  const referenceRefresh = useRefreshSpinner({
+    onRefresh: handleRefresh,
+    externalRefreshing: snapshot.isPending,
+    timeoutMs: GIT_REFERENCE_REFRESH_TIMEOUT_MS,
+  });
+
+  const handleSelectRoot = useCallback(
+    (row: WorktreeBindingSelectorRow) => {
+      setSelectedRepo(props.epicId, {
+        hostId: row.hostId,
+        rootRunningDir: row.runningDir,
+        repoRoot: row.runningDir,
+      });
+    },
+    [props.epicId, setSelectedRepo],
+  );
+
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      {subscription.repoState !== null &&
-      subscription.repoState.kind !== "clean" ? (
-        <RepoStateBanner
-          state={subscription.repoState}
-          repoMode={subscription.repoMode}
-          conflictCount={conflictCount}
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="shrink-0 border-b border-border/60 px-2 pt-1.5 pb-1">
+        <WorkspacePickerWithOpener
+          picker={
+            <GitDiffRepoSwitcher
+              open={repoSwitcherOpen}
+              onOpenChange={setRepoSwitcherOpen}
+              roots={roots}
+              activeRootSubmodules={submoduleNodes}
+              selected={workspaceSelected}
+              onSelectRoot={handleSelectRoot}
+              hostSection={<WorktreePickerHostSection />}
+              autoFocusSearch={repoSwitcherOpen}
+              triggerClassName={undefined}
+              contentClassName={undefined}
+              triggerTestId="git-diff-repo-switcher-trigger"
+              contentTestId="git-diff-repo-switcher-popover"
+            />
+          }
+          openTarget={{
+            workspacePath: selectedRootRow.runningDir,
+            hostId: selectedRootRow.hostId,
+          }}
         />
-      ) : null}
-      <PanelBody panel={props} subscription={subscription} />
-    </div>
-  );
-}
-
-interface PanelBodyProps {
-  readonly panel: PanelContentProps;
-  readonly subscription: GitListChangedFilesSubscriptionResult;
-}
-
-function PanelBody(props: PanelBodyProps): ReactNode {
-  const { panel, subscription } = props;
-  if (subscription.isPending) return <DiffLoadingSkeleton variant="panel" />;
-  if (subscription.error !== null) {
-    return <SubscriptionErrorState event={subscription.error} />;
-  }
-  if ((subscription.data?.files.length ?? 0) === 0) {
-    return (
-      <NoChangesInWorktree lastUpdatedAtMs={subscription.pollStartedAtMs} />
-    );
-  }
-  if (subscription.data !== null) {
-    return (
-      // Keyed by worktree so the ephemeral filter query resets when the user
-      // switches worktrees (it otherwise persists across the list/tree toggle
-      // and live status updates).
-      <GitChangedFilesView
-        key={worktreeRowKey(panel.selectedRow)}
-        epicId={panel.epicId}
-        viewTabId={panel.viewTabId}
-        hostId={panel.selectedRow.hostId}
-        runningDir={panel.selectedRow.runningDir}
-        files={subscription.data.files}
-      />
-    );
-  }
-  return null;
-}
-
-// Mirrors the file-tree explorer panel: the controlled input updates
-// immediately while the applied query (which drives filtering) is debounced.
-const GIT_PANEL_SEARCH_DEBOUNCE_MS = 150;
-
-interface GitChangedFilesViewProps {
-  readonly epicId: string;
-  readonly viewTabId: string;
-  readonly hostId: string;
-  readonly runningDir: string;
-  readonly files: ReadonlyArray<GitChangedFile>;
-}
-
-function GitChangedFilesView(props: GitChangedFilesViewProps): ReactNode {
-  const [searchQuery, setSearchQuery] = useState("");
-  const [appliedQuery, setAppliedQuery] = useState("");
-  const debounceTimerRef = useRef<number | null>(null);
-
-  const clearPendingDebounce = useCallback(() => {
-    if (debounceTimerRef.current === null) return;
-    window.clearTimeout(debounceTimerRef.current);
-    debounceTimerRef.current = null;
-  }, []);
-
-  const handleSearchChange = useCallback(
-    (event: ChangeEvent<HTMLInputElement>) => {
-      const next = event.target.value;
-      setSearchQuery(next);
-      clearPendingDebounce();
-      debounceTimerRef.current = window.setTimeout(() => {
-        debounceTimerRef.current = null;
-        setAppliedQuery(next);
-      }, GIT_PANEL_SEARCH_DEBOUNCE_MS);
-    },
-    [clearPendingDebounce],
-  );
-
-  const handleClear = useCallback(() => {
-    clearPendingDebounce();
-    setSearchQuery("");
-    setAppliedQuery("");
-  }, [clearPendingDebounce]);
-
-  const handleKeyDown = useCallback(
-    (event: KeyboardEvent<HTMLInputElement>) => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      handleClear();
-      event.currentTarget.blur();
-    },
-    [handleClear],
-  );
-
-  useEffect(() => clearPendingDebounce, [clearPendingDebounce]);
-
-  return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <div className="shrink-0 bg-background/50 px-2 py-1.5">
-        <InputGroup className="h-7 border-transparent bg-muted/25 shadow-none focus-within:bg-muted/35">
-          <InputGroupAddon align="inline-start">
-            <Search className="size-3.5" aria-hidden />
-          </InputGroupAddon>
-          <InputGroupInput
-            type="text"
-            value={searchQuery}
-            onChange={handleSearchChange}
-            onKeyDown={handleKeyDown}
-            placeholder="Filter changed files…"
-            aria-label="Filter changed files"
-            className="text-ui-sm"
-          />
-          {searchQuery.length > 0 ? (
-            <InputGroupAddon align="inline-end">
-              <InputGroupButton
-                size="icon-xs"
-                onClick={handleClear}
-                aria-label="Clear filter"
-              >
-                <X className="size-3.5" aria-hidden />
-              </InputGroupButton>
-            </InputGroupAddon>
-          ) : null}
-        </InputGroup>
       </div>
-      <FileList
-        epicId={props.epicId}
-        viewTabId={props.viewTabId}
-        hostId={props.hostId}
-        runningDir={props.runningDir}
-        files={props.files}
-        query={appliedQuery}
-        onClearQuery={handleClear}
-      />
+      <CapabilityGate
+        hostId={selectedRootRow.hostId}
+        runningDir={selectedRootRow.runningDir}
+      >
+        <SelectedRepoChanges
+          epicId={props.epicId}
+          viewTabId={props.viewTabId}
+          selected={workspaceSelected}
+          rootLabel={moduleNameForRow(selectedRootRow)}
+          subscription={subscription}
+          snapshot={snapshot}
+          onRefresh={referenceRefresh.trigger}
+          isRefreshing={referenceRefresh.refreshing}
+        />
+      </CapabilityGate>
     </div>
   );
 }
@@ -366,9 +508,7 @@ function pickDefaultRow(
   excludeKeys: ReadonlySet<string>,
   ignoreWhitespace: boolean,
 ): WorktreeBindingSelectorRow | null {
-  const ready = rows.filter(
-    (row) => isGitSelectable(row) && !excludeKeys.has(worktreeRowKey(row)),
-  );
+  const ready = rows.filter((row) => !excludeKeys.has(worktreeRowKey(row)));
   if (ready.length === 0) return null;
   return ready.toSorted((left, right) => {
     const leftCount = readCachedCount(left, queryClient, ignoreWhitespace);
@@ -392,4 +532,41 @@ function readCachedCount(
 
 function labelForRow(row: WorktreeBindingSelectorRow): string {
   return formatGitWorktreeLabel(row);
+}
+
+function moduleNameForRow(row: WorktreeBindingSelectorRow): string {
+  return row.repoIdentifier?.repo ?? getBasename(row.runningDir);
+}
+
+function activeRootParentCounts(
+  snapshotData: GitListChangedFilesResponseV11 | null,
+  subscriptionData: GitListChangedFilesResponse | null,
+): GitDiffRepoSwitcherRootCounts | null {
+  return (
+    parentStatusCounts(snapshotData) ?? parentStatusCounts(subscriptionData)
+  );
+}
+
+function parentStatusCounts(
+  data: GitListChangedFilesResponse | GitListChangedFilesResponseV11 | null,
+): GitDiffRepoSwitcherRootCounts | null {
+  if (data === null) return null;
+  const seenGitlinkPaths = new Set<string>();
+  return data.files.reduce<GitDiffRepoSwitcherRootCounts>(
+    (counts, file) => {
+      if (!("gitlink" in file) || file.gitlink === null) {
+        return {
+          fileChangeCount: (counts.fileChangeCount ?? 0) + 1,
+          moduleChangeCount: counts.moduleChangeCount,
+        };
+      }
+      if (seenGitlinkPaths.has(file.path)) return counts;
+      seenGitlinkPaths.add(file.path);
+      return {
+        fileChangeCount: counts.fileChangeCount,
+        moduleChangeCount: (counts.moduleChangeCount ?? 0) + 1,
+      };
+    },
+    { fileChangeCount: 0, moduleChangeCount: 0 },
+  );
 }
