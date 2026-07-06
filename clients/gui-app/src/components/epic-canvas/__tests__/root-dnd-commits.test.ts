@@ -99,6 +99,7 @@ const TERMINAL_TILE = {
   instanceId: "inst-term-1",
   type: "terminal",
   name: "Terminal",
+  titleSource: "manual",
   hostId: TEST_HOST_ID,
   cwd: "/repo",
 } as const;

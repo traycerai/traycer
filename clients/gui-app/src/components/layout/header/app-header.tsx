@@ -5,10 +5,12 @@ import { AppUpdateHeaderButton } from "@/components/layout/header/app-update-but
 import { HistoryButton } from "@/components/layout/header/history-button";
 import { HistoryNavButtons } from "@/components/layout/header/history-nav-buttons";
 import { RateLimitIconButton } from "@/components/layout/header/rate-limit-icon";
+import { ResourceMonitorPopover } from "@/components/resources/resource-monitor-popover";
 import { SignInButton } from "@/components/layout/header/sign-in-button";
 import { NotificationsBell } from "@/components/notifications/notifications-bell";
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 
 // Frameless-desktop detection: Electron's preload bridge exposes
 // `window.runnerHost` via `contextBridge.exposeInMainWorld`. Browser
@@ -45,6 +47,9 @@ export function AppHeader(props: AppHeaderProps): ReactNode {
   const navDisabled = variant === "host-loading";
   const showBell = variant !== "host-loading";
   const framelessDesktop = isFramelessDesktop();
+  const showGlobalResourceMonitor = useSettingsStore(
+    (state) => state.showGlobalResourceMonitor,
+  );
 
   return (
     <header
@@ -105,6 +110,9 @@ export function AppHeader(props: AppHeaderProps): ReactNode {
       >
         {!navDisabled ? <AppUpdateHeaderButton /> : null}
         {!navDisabled ? <RateLimitIconButton /> : null}
+        {!navDisabled && showGlobalResourceMonitor ? (
+          <ResourceMonitorPopover className={undefined} />
+        ) : null}
         {!navDisabled ? <HistoryButton /> : null}
         {showBell ? <HeaderNotificationsBell /> : null}
         <HeaderIdentity showAppSettings={!navDisabled} />
