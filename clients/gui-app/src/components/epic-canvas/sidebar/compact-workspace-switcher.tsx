@@ -26,6 +26,7 @@ export function CompactWorkspaceSwitcher(props: CompactWorkspaceSwitcherProps) {
           worktreeLabel={props.worktreeLabel}
           secondaryLabel={props.secondaryLabel}
           changeCount={null}
+          trailingStatus={null}
           testId={props.triggerTestId}
           className={props.triggerClassName}
           aria-haspopup="listbox"

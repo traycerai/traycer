@@ -169,6 +169,60 @@ describe("useLandingDraftStore", () => {
     resetStore();
   });
 
+  describe("localStorage rehydration sanitization", () => {
+    it("keeps a legacy draft that predates `workspace` and reads folders safely", async () => {
+      setLandingDraftDesktopProjectionBridge(null);
+      window.localStorage.setItem(
+        LANDING_DRAFT_PERSIST_KEY,
+        JSON.stringify({
+          state: {
+            drafts: [
+              {
+                id: "legacy-no-workspace",
+                content: { type: "doc", content: [{ type: "paragraph" }] },
+                selection: null,
+                lastTouchedAt: 123,
+                settings: null,
+                composerMode: "chat",
+                // no `workspace` - the pre-workspace persisted shape
+              },
+            ],
+            activeDraftId: "legacy-no-workspace",
+          },
+          version: 1,
+        }),
+      );
+      await useLandingDraftStore.persist.rehydrate();
+
+      const drafts = useLandingDraftStore.getState().drafts;
+      expect(drafts).toHaveLength(1);
+      const draft = drafts[0];
+      // The former crash site: reading `.workspace.folders` must not throw.
+      expect(draft.workspace.folders).toEqual([]);
+      expect(useLandingDraftStore.getState().activeDraftId).toBe(
+        "legacy-no-workspace",
+      );
+    });
+
+    it("drops a legacy prompt-only draft with no valid content", async () => {
+      setLandingDraftDesktopProjectionBridge(null);
+      window.localStorage.setItem(
+        LANDING_DRAFT_PERSIST_KEY,
+        JSON.stringify({
+          state: {
+            drafts: [{ id: "legacy-prompt", prompt: "hello there" }],
+            activeDraftId: "legacy-prompt",
+          },
+          version: 1,
+        }),
+      );
+      await useLandingDraftStore.persist.rehydrate();
+
+      expect(useLandingDraftStore.getState().drafts).toHaveLength(0);
+      expect(useLandingDraftStore.getState().activeDraftId).toBeNull();
+    });
+  });
+
   it("createDraft always creates a new draft and sets it active", () => {
     const { createDraft } = useLandingDraftStore.getState();
     const first = createDraft(null);

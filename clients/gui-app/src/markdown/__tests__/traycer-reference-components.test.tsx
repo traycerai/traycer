@@ -111,7 +111,7 @@ vi.mock("@/stores/epics/canvas/store", () => {
         selector(canvasState),
       { getState: () => canvasState },
     ),
-    // Standalone pure resolver: the shared `useChatArtifactDragSource` hook
+    // Standalone pure resolver: the shared `useArtifactDragSource` hook
     // reads `viewTabId` via `resolveTabIdForEpic(state, epicId)`. Delegate to the
     // same spy by `epicId` so the existing single-arg call assertion holds.
     resolveTabIdForEpic: (_state: typeof canvasState, epicId: string) =>
@@ -488,6 +488,7 @@ function renderMarkdown(markdown: string) {
       components={null}
       remarkPlugins={null}
       rehypePlugins={null}
+      quotable={false}
       isStreaming={false}
     >
       {markdown}

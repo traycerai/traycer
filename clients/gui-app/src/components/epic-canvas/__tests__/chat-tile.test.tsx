@@ -325,6 +325,7 @@ function emitChatSnapshotWithMessages(input: {
         isTitleEditedByUser: false,
         settings: input.settings,
         activeSessionChain: null,
+        claudePendingWakes: [],
         messages: [...input.messages],
         events: [],
       },

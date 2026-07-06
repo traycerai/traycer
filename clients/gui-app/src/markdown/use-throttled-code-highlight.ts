@@ -111,7 +111,20 @@ export function useThrottledCodeHighlight(
     });
   }, [isStreaming, settled, theme, language, code]);
 
-  const [streamingNodes, setStreamingNodes] = useState<ReactNode | null>(null);
+  // Seeded synchronously at mount (same render-time compute + MRU-touch
+  // contract as the settled memo above). A code block can MOUNT mid-stream
+  // with its final code already present: the quote feature's streaming-tail
+  // wrapper is removed when a block freezes, which remounts the block while
+  // the message keeps streaming. Starting from `null` there would paint an
+  // unhighlighted <pre> for up to a throttle tick - a visible flash on
+  // every fence that closes mid-message. The settle cache makes this seed a
+  // cache hit for exactly that remount.
+  const [streamingNodes, setStreamingNodes] = useState<ReactNode | null>(() =>
+    isStreaming
+      ? (computeHighlightNodes({ highlighter, theme, code, language })?.nodes ??
+        null)
+      : null,
+  );
   const lastStreamingRunAtRef = useRef(0);
 
   useEffect(() => {

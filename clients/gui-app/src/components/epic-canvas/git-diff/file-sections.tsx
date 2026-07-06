@@ -3,6 +3,7 @@ import type { GitChangedFile } from "@traycer/protocol/host";
 import { buildGitPanelFileSections } from "@/lib/git/panel-file-rendering";
 import type { HighlightRanges } from "@/lib/git/path-highlight";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
 import { GitDiffSection } from "./git-diff-section";
 import { GitFlatFileList } from "./git-flat-file-list";
 import {
@@ -10,6 +11,7 @@ import {
   useGitPanelActiveFile,
   useGitPanelRevealSection,
 } from "./use-git-panel-active-file";
+import type { GitDiffSectionCollapseController } from "./git-diff-section";
 
 // Deliberate hover dwell for the per-row path tooltips: long enough that
 // sweeping the cursor across the list never pops them, and skipDelay 0 so
@@ -25,6 +27,9 @@ export interface FileSectionsProps {
   readonly visibleFiles: ReadonlyArray<GitChangedFile>;
   readonly pathRangesByPath: ReadonlyMap<string, HighlightRanges>;
   readonly forceExpanded: boolean;
+  readonly hideEmptySections: boolean;
+  readonly sectionCollapseController: GitDiffSectionCollapseController | null;
+  readonly virtualized: boolean;
 }
 
 export function FileSections(props: FileSectionsProps): ReactNode {
@@ -46,7 +51,11 @@ export function FileSections(props: FileSectionsProps): ReactNode {
       skipDelayDuration={0}
     >
       <div
-        className="flex min-h-0 flex-1 flex-col overflow-hidden"
+        className={cn(
+          props.virtualized
+            ? "flex min-h-0 flex-1 flex-col overflow-hidden"
+            : "flex flex-col overflow-visible",
+        )}
         data-testid="git-file-sections"
       >
         {sections.map(({ group, visibleFiles, bundleFileCount }) =>
@@ -54,7 +63,9 @@ export function FileSections(props: FileSectionsProps): ReactNode {
           // otherwise keep the existing "hide the merge section when empty"
           // behavior and let staged/changes render their empty state.
           visibleFiles.length === 0 &&
-          (props.forceExpanded || group === "merge") ? null : (
+          (props.forceExpanded ||
+            props.hideEmptySections ||
+            group === "merge") ? null : (
             <GitDiffSection
               key={group}
               epicId={props.epicId}
@@ -65,6 +76,9 @@ export function FileSections(props: FileSectionsProps): ReactNode {
               visibleFiles={visibleFiles}
               bundleFileCount={bundleFileCount}
               forceExpanded={props.forceExpanded}
+              collapseController={props.sectionCollapseController}
+              fillAvailable={props.virtualized}
+              compactChrome={!props.virtualized}
             >
               <GitFlatFileList
                 epicId={props.epicId}
@@ -77,6 +91,8 @@ export function FileSections(props: FileSectionsProps): ReactNode {
                   activeFile,
                   group,
                 )}
+                virtualized={props.virtualized}
+                nestedRows={!props.virtualized}
               />
             </GitDiffSection>
           ),

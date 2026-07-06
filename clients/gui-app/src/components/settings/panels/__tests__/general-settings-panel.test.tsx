@@ -248,7 +248,12 @@ describe("GeneralSettingsPanel", () => {
     });
     useLocalSnapshotClearStore.setState({ clearedAtByScope: {} });
     useOnboardingStore.setState({ completedAt: null, step: 0 });
-    useSettingsStore.setState({ pinContextUsageBreakdown: false });
+    useSettingsStore.setState({
+      showGlobalResourceMonitor: true,
+      showNavigatorResourceStats: false,
+      pinContextUsageBreakdown: false,
+      quoteReplyEnabled: true,
+    });
   });
 
   afterEach(() => {
@@ -283,6 +288,39 @@ describe("GeneralSettingsPanel", () => {
     fireEvent.click(toggle);
 
     expect(useSettingsStore.getState().pinContextUsageBreakdown).toBe(true);
+  });
+
+  it("renders resource display rows and toggles their settings", () => {
+    renderPanel();
+
+    const globalToggle = screen.getByRole("switch", {
+      name: "Show global resources button",
+    });
+    const navigatorToggle = screen.getByRole("switch", {
+      name: "Show navigator resource stats",
+    });
+
+    expect(useSettingsStore.getState().showGlobalResourceMonitor).toBe(true);
+    expect(useSettingsStore.getState().showNavigatorResourceStats).toBe(false);
+
+    fireEvent.click(globalToggle);
+    fireEvent.click(navigatorToggle);
+
+    expect(useSettingsStore.getState().showGlobalResourceMonitor).toBe(false);
+    expect(useSettingsStore.getState().showNavigatorResourceStats).toBe(true);
+  });
+
+  it("renders the quote reply row and toggles the setting", () => {
+    renderPanel();
+
+    expect(useSettingsStore.getState().quoteReplyEnabled).toBe(true);
+    const toggle = screen.getByRole("switch", {
+      name: "Quote reply on text selection",
+    });
+
+    fireEvent.click(toggle);
+
+    expect(useSettingsStore.getState().quoteReplyEnabled).toBe(false);
   });
 
   it("navigates to replay onboarding without clearing first-run completion", () => {

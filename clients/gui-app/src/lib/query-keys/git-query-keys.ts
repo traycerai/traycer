@@ -38,9 +38,34 @@ export const gitQueryKeys = {
     ] as const,
 
   /**
+   * Query key for the submodule-aware `git.listChangedFiles@1.1` nested
+   * snapshot (parent changeset + `submodules[]`). A distinct slot from
+   * `listChangedFiles` so the frozen v1.0 `subscribeStatus` stream, which feeds
+   * the v1.0 slot, never clobbers the richer nested snapshot. The passive fetch
+   * and the manual refresh (a plain `invalidateQueries`) share this stable slot.
+   */
+  listChangedFilesWithSubmodules: (
+    hostId: string | null,
+    runningDir: string,
+    ignoreWhitespace: boolean,
+  ) =>
+    [
+      ...hostQueryKeys.scope(hostId),
+      "git",
+      "listChangedFilesWithSubmodules",
+      runningDir,
+      ignoreWhitespace,
+    ] as const,
+
+  /**
    * Query key for git.getFileDiff RPC.
    * Scope: single host, single file, with all diff parameters.
    * Parameters include running directory, file path, previous path, stage, and OIDs for cache invalidation.
+   *
+   * `runningDir` is the owning repo root (the parent worktree for ordinary files,
+   * the submodule `repoRoot` for a submodule's own files), so a submodule's own
+   * working-tree diff can never collide with the parent's - the diff is plain
+   * stage-based, run against whichever repo root `runningDir` names.
    */
   // eslint-disable-next-line max-params -- All parameters are semantically distinct and required for cache identity.
   fileDiff: (
@@ -96,5 +121,17 @@ export const gitQueryKeys = {
     if (paths === null) return true;
     const path = queryKey[prefix.length];
     return typeof path === "string" && paths.has(path);
+  },
+
+  /**
+   * Matches Git capability probes across both the legacy custom key and the
+   * generic host RPC key used by `useGitCapabilitiesQuery`.
+   */
+  matchGitCapabilitiesQuery(queryKey: ReadonlyArray<unknown>): boolean {
+    return queryKey.some(
+      (part, index) =>
+        part === "git.getCapabilities" ||
+        (part === "git" && queryKey[index + 1] === "capabilities"),
+    );
   },
 };

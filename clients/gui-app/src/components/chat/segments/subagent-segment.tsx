@@ -508,6 +508,7 @@ function SubagentResultPanel(props: {
           isStreaming={isStreaming}
           markdown={result}
           proseSize="compact"
+          quotable={false}
         />
       </div>
     </SegmentPanel>

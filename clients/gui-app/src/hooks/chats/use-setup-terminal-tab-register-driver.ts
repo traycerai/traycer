@@ -70,6 +70,7 @@ export function useSetupTerminalTabRegisterDriver(options: {
         instanceId: sessionId,
         type: "terminal",
         name: setupTerminalTitle(entry),
+        titleSource: "manual",
         hostId,
         cwd: setupTerminalCwd(entry),
       });

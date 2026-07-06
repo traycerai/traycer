@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   ChatEvent,
+  ClaudePendingWake,
   Message,
 } from "@traycer/protocol/persistence/epic/schemas";
 import type {
@@ -92,6 +93,14 @@ const FILE_APPROVAL: ChatFileEditApprovalState = {
   requestedAt: 2,
 };
 
+const PENDING_CLAUDE_WAKE: ClaudePendingWake = {
+  sessionId: "claude-session-1",
+  toolUseId: "wake-tool-1",
+  scheduledFor: 1_769_000_000_000,
+  prompt: "Write the standup update.",
+  reason: "Standup",
+};
+
 interface Harness {
   readonly handle: ChatSessionStoreHandle;
   readonly sent: ChatSubscribeClientFrame[];
@@ -169,6 +178,7 @@ interface SnapshotFrameInput {
   readonly pendingFileEditApprovals: ReadonlyArray<ChatFileEditApprovalState>;
   readonly pendingInterviews?: ReadonlyArray<ChatPendingInterviewState>;
   readonly backgroundItems?: ReadonlyArray<BackgroundItem>;
+  readonly claudePendingWakes?: ReadonlyArray<ClaudePendingWake>;
 }
 
 function emitSnapshotFrame(input: SnapshotFrameInput): void {
@@ -190,6 +200,7 @@ function emitSnapshotFrame(input: SnapshotFrameInput): void {
         isTitleEditedByUser: false,
         settings: null,
         activeSessionChain: null,
+        claudePendingWakes: [...(input.claudePendingWakes ?? [])],
         messages: [...input.messages],
         events: [],
       },
@@ -237,6 +248,7 @@ function emitSnapshotWithWorktree(
         isTitleEditedByUser: false,
         settings: null,
         activeSessionChain: null,
+        claudePendingWakes: [],
         messages: [],
         events: [...events],
       },
@@ -474,6 +486,22 @@ describe("createChatSessionStore", () => {
 
     callbacks().onConnectionStatus("open", null);
     expect(handle.store.getState().connectionStatus).toBe("open");
+  });
+
+  it("preserves pending Claude wakes from snapshot chat state", () => {
+    const harness = createHarness();
+    emitSnapshotFrame({
+      callbacks: harness.callbacks(),
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      claudePendingWakes: [PENDING_CLAUDE_WAKE],
+    });
+
+    expect(harness.handle.store.getState().chat?.claudePendingWakes).toEqual([
+      PENDING_CLAUDE_WAKE,
+    ]);
   });
 
   it("tracks send actions until actionAck and accepts host messages", () => {
@@ -1852,6 +1880,8 @@ describe("createChatSessionStore", () => {
       kind: "command",
       title: "sleep 60",
       blockId: "tool-1",
+      parentTaskId: null,
+      scheduledFor: null,
     };
     emitSnapshotFrame({
       callbacks,
@@ -1907,6 +1937,8 @@ describe("createChatSessionStore", () => {
       kind: "command",
       title: "npm run dev",
       blockId: "tool-2",
+      parentTaskId: null,
+      scheduledFor: null,
     };
     callbacks.onTurnStateChanged({
       kind: "turnStateChanged",
@@ -2118,6 +2150,7 @@ describe("createChatSessionStore", () => {
           isTitleEditedByUser: false,
           settings: null,
           activeSessionChain: null,
+          claudePendingWakes: [],
           messages: [
             {
               role: "assistant",

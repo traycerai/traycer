@@ -121,6 +121,7 @@ function chatMessagesJsx(
     <VirtuosoMessageListTestingContext.Provider value={VIRTUOSO_TEST_CONTEXT}>
       <ChatMessages
         taskTitle="Transcript"
+        taskId="test-task"
         messages={messages}
         backgroundItems={opts.backgroundItems}
         minimapItems={opts.minimapItems}
@@ -871,6 +872,8 @@ describe("ChatMessages Virtuoso renderer", () => {
           kind: "command",
           title: "sleep 60",
           blockId: "unrelated-tool",
+          parentTaskId: null,
+          scheduledFor: null,
         },
       ],
     });
@@ -913,6 +916,8 @@ describe("ChatMessages Virtuoso renderer", () => {
             kind: "command",
             title: "sleep 60",
             blockId: "tool-bg",
+            parentTaskId: null,
+            scheduledFor: null,
           },
         ],
       }),

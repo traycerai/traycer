@@ -25,6 +25,7 @@ import type {
   GitDiffTileRef,
 } from "@/stores/epics/canvas/types";
 import { GitDiffSection } from "./git-diff-section";
+import type { GitDiffSectionCollapseController } from "./git-diff-section";
 import { useGitPierreFileTreeModel } from "./use-git-pierre-file-tree-model";
 import {
   gitPanelActiveFilePathForGroup,
@@ -40,6 +41,9 @@ export interface FileTreeProps {
   readonly allFiles: ReadonlyArray<GitChangedFile>;
   readonly visibleFiles: ReadonlyArray<GitChangedFile>;
   readonly forceExpanded: boolean;
+  readonly hideEmptySections: boolean;
+  readonly sectionCollapseController: GitDiffSectionCollapseController | null;
+  readonly virtualized: boolean;
 }
 
 interface GitTreeSectionBodyProps {
@@ -72,7 +76,9 @@ export function FileTree(props: FileTreeProps): ReactNode {
     >
       {sections.map(({ group, visibleFiles, bundleFileCount }) =>
         visibleFiles.length === 0 &&
-        (props.forceExpanded || group === "merge") ? null : (
+        (props.forceExpanded ||
+          props.hideEmptySections ||
+          group === "merge") ? null : (
           <GitDiffSection
             key={group}
             epicId={props.epicId}
@@ -83,6 +89,9 @@ export function FileTree(props: FileTreeProps): ReactNode {
             visibleFiles={visibleFiles}
             bundleFileCount={bundleFileCount}
             forceExpanded={props.forceExpanded}
+            collapseController={props.sectionCollapseController}
+            fillAvailable={props.virtualized}
+            compactChrome={!props.virtualized}
           >
             <GitTreeSectionBody
               epicId={props.epicId}

@@ -18,6 +18,14 @@ type TerminalDataFrame = Extract<
   TerminalSubscribeServerFrame,
   { readonly kind: "data" }
 >;
+type TerminalSessionUpdatedFrame = Extract<
+  TerminalSubscribeServerFrame,
+  { readonly kind: "sessionUpdated" }
+>;
+type TerminalExitFrame = Extract<
+  TerminalSubscribeServerFrame,
+  { readonly kind: "exit" }
+>;
 
 function terminalInfoWithSize(cols: number, rows: number): TerminalSessionInfo {
   return {
@@ -60,6 +68,29 @@ function data(chunk: string): TerminalDataFrame {
     hasBinaryPayload: false,
     sessionId: "terminal-1",
     chunk,
+  };
+}
+
+function sessionUpdated(
+  activeProcessName: string | null,
+): TerminalSessionUpdatedFrame {
+  return {
+    kind: "sessionUpdated",
+    hasBinaryPayload: false,
+    sessionId: "terminal-1",
+    session: {
+      ...terminalInfoWithSize(80, 24),
+      activeProcessName,
+    },
+  };
+}
+
+function exit(exitCode: number): TerminalExitFrame {
+  return {
+    kind: "exit",
+    hasBinaryPayload: false,
+    sessionId: "terminal-1",
+    exitCode,
   };
 }
 
@@ -159,6 +190,74 @@ describe("createTerminalSessionStore", () => {
     );
   });
 
+  it("adopts exit code and reason from a reattach snapshot of an exited session", () => {
+    const harness = createHarness();
+
+    const base = snapshot("");
+    emitSnapshot(harness.callbacks(), {
+      ...base,
+      session: {
+        ...base.session,
+        status: "exited",
+        exitCode: -1,
+        exitReason: "reaped",
+      },
+    });
+
+    expect(harness.handle.store.getState()).toMatchObject({
+      status: "exited",
+      exitCode: -1,
+      exitReason: "reaped",
+    });
+  });
+
+  it("treats a snapshot missing exitReason (host predating the field) as null", () => {
+    const harness = createHarness();
+
+    const base = snapshot("");
+    emitSnapshot(harness.callbacks(), {
+      ...base,
+      session: { ...base.session, status: "exited", exitCode: 1 },
+    });
+
+    expect(harness.handle.store.getState()).toMatchObject({
+      status: "exited",
+      exitCode: 1,
+      exitReason: null,
+    });
+  });
+
+  it("a live exit frame does not clobber a snapshot-set exitReason (snapshot is authoritative)", () => {
+    const harness = createHarness();
+
+    // Seed a non-null reason via the authoritative snapshot path first...
+    const base = snapshot("");
+    emitSnapshot(harness.callbacks(), {
+      ...base,
+      session: {
+        ...base.session,
+        status: "exited",
+        exitCode: -1,
+        exitReason: "reaped",
+      },
+    });
+
+    // ...then a live exit frame (which carries no reason) must leave it intact.
+    const frame: TerminalExitFrame = {
+      kind: "exit",
+      hasBinaryPayload: false,
+      sessionId: "terminal-1",
+      exitCode: 1,
+    };
+    harness.callbacks().onExit(frame);
+
+    expect(harness.handle.store.getState()).toMatchObject({
+      status: "exited",
+      exitCode: 1,
+      exitReason: "reaped",
+    });
+  });
+
   it("marks the session lost when the stream closes before a snapshot", () => {
     const harness = createHarness();
 
@@ -215,6 +314,33 @@ describe("createTerminalSessionStore", () => {
         rows: 91,
       }),
     );
+  });
+
+  it("stores active process metadata from session updates", () => {
+    const harness = createHarness();
+
+    emitSnapshot(harness.callbacks(), snapshot(""));
+    harness.callbacks().onSessionUpdated(sessionUpdated("vim"));
+
+    expect(harness.handle.store.getState()).toMatchObject({
+      status: "running",
+      title: null,
+      activeProcessName: "vim",
+    });
+  });
+
+  it("clears active process metadata when the session exits", () => {
+    const harness = createHarness();
+
+    emitSnapshot(harness.callbacks(), snapshot(""));
+    harness.callbacks().onSessionUpdated(sessionUpdated("vim"));
+    harness.callbacks().onExit(exit(0));
+
+    expect(harness.handle.store.getState()).toMatchObject({
+      status: "exited",
+      exitCode: 0,
+      activeProcessName: null,
+    });
   });
 
   describe("ack-credit (terminal.subscribe@1.1)", () => {

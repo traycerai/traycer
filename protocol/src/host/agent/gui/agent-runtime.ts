@@ -321,9 +321,12 @@ export const toolCallStartedEventSchema = z.object({
   // Explicit call/task start time. Optional so older emitters remain valid; the
   // accumulator falls back to the event timestamp when absent.
   startedAt: z.number().optional(),
-  // True when this call is a backgrounded command/Monitor (Bash with
-  // `run_in_background`, or the Monitor tool). Stamped at started so the
-  // persistent block marker is set before any terminal path.
+  // True when this call gets a durable "background card" treatment: a
+  // backgrounded command/Monitor (Bash with `run_in_background`, or the
+  // Monitor tool), or a ScheduleWakeup call. Stamped at started so the
+  // persistent block marker is set before any terminal path - this is
+  // broader than the Bash/Monitor/subagent background-task FSM (ScheduleWakeup
+  // is not part of that FSM), it only governs whether the card stays promoted.
   backgroundTask: z.boolean().optional(),
 });
 export type ToolCallStartedEvent = z.infer<typeof toolCallStartedEventSchema>;

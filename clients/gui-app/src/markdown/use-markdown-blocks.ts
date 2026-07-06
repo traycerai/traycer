@@ -7,6 +7,16 @@ export interface MarkdownBlock {
   raw: string;
 }
 
+export interface MarkdownBlocksResult {
+  readonly blocks: MarkdownBlock[];
+  /**
+   * Top-level token index where the re-lexable open tail begins. Non-space
+   * blocks use their token index as `id`, so callers compare `block.id` against
+   * this boundary.
+   */
+  readonly tailStartIndex: number;
+}
+
 interface LexedToken {
   type: string;
   raw: string;
@@ -100,6 +110,7 @@ function buildCache(tokens: LexedToken[], repaired: string): LexCache {
 
 interface LexResult {
   readonly blocks: MarkdownBlock[];
+  readonly tailStartIndex: number;
   /** Cache to thread into the next call; `null` for blank content. */
   readonly cache: LexCache | null;
 }
@@ -121,7 +132,7 @@ export function lexMarkdownBlocks(
   content: string,
 ): LexResult {
   const repaired = repairMarkdown(content);
-  if (!repaired.trim()) return { blocks: [], cache: null };
+  if (!repaired.trim()) return { blocks: [], tailStartIndex: 0, cache: null };
 
   // Reuse requires: the previous lex reconstructed its source (offsets valid),
   // carried no global `def` state, exposed a blank-line boundary, and the new
@@ -146,12 +157,12 @@ export function lexMarkdownBlocks(
     ) {
       const tokens = [...prev.tokens.slice(0, prev.tailIndex - 1), ...relexed];
       const cache = buildCache(tokens, repaired);
-      return { blocks: cache.blocks, cache };
+      return { blocks: cache.blocks, tailStartIndex: cache.tailIndex, cache };
     }
   }
 
   const cache = buildCache(lexTokens(repaired), repaired);
-  return { blocks: cache.blocks, cache };
+  return { blocks: cache.blocks, tailStartIndex: cache.tailIndex, cache };
 }
 
 // Per-hook-instance lex cache, keyed on a stable identity object the caller
@@ -166,19 +177,19 @@ const lexCacheByInstance = new WeakMap<object, LexCache>();
  * Splits markdown into top-level blocks for per-block rendering + memoization,
  * incrementally during streaming. See `lexMarkdownBlocks` for the algorithm.
  */
-export function useMarkdownBlocks(content: string): MarkdownBlock[] {
+export function useMarkdownBlocks(content: string): MarkdownBlocksResult {
   // Stable identity for this hook instance's cache entry. `useState`'s lazy
   // initializer runs once and the value never changes, so it survives renders
   // without a ref (which the render-purity lint forbids writing here).
   const [cacheKey] = useState(() => ({}));
   return useMemo(() => {
     const prev = lexCacheByInstance.get(cacheKey) ?? null;
-    const { blocks, cache } = lexMarkdownBlocks(prev, content);
+    const { blocks, cache, tailStartIndex } = lexMarkdownBlocks(prev, content);
     if (cache === null) {
       lexCacheByInstance.delete(cacheKey);
     } else {
       lexCacheByInstance.set(cacheKey, cache);
     }
-    return blocks;
+    return { blocks, tailStartIndex };
   }, [content, cacheKey]);
 }

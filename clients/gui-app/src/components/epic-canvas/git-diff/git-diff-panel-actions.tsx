@@ -1,62 +1,49 @@
-import { useCallback, useMemo } from "react";
+import { useCallback } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { FolderTree, List, RotateCcw } from "lucide-react";
 import type { LeftPanelSlotProps } from "@/components/epic-canvas/sidebar/left-panel-registry";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { useWorktreeListBindingsForEpic } from "@/hooks/worktree/use-worktree-list-bindings-for-epic-query";
-import { useGitRefreshWorktreeStatus } from "@/hooks/git/use-git-refresh-worktree-status";
 import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
 import {
   selectGitPanelEpicState,
   useGitPanelStore,
 } from "@/stores/epics/git-panel-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
-import { worktreeRowKey } from "@/lib/worktree/worktree-row-key";
-import { isGitSelectable } from "@/lib/worktree/worktree-git-selectable";
+import { invalidateGitSubmoduleSnapshot } from "@/lib/git/invalidate-git-submodule-snapshot";
 
 // Safety cap so a hung host fetch can't wedge the spinning/disabled state.
 const GIT_REFRESH_TIMEOUT_MS = 10_000;
 
 export function GitDiffPanelActions(props: LeftPanelSlotProps) {
+  const queryClient = useQueryClient();
   const listLayout = useGitPanelStore(
     (s) => selectGitPanelEpicState(props.epicId)(s).listLayout,
   );
-  const selectedWorktree = useGitPanelStore(
-    (s) => selectGitPanelEpicState(props.epicId)(s).selectedWorktree,
+  const selectedRepo = useGitPanelStore(
+    (s) => selectGitPanelEpicState(props.epicId)(s).selectedRepo,
   );
   const ignoreWhitespace = useSettingsStore(
     (s) => s.diffViewerPreferences.ignoreWhitespace,
   );
-  const bindingsQuery = useWorktreeListBindingsForEpic({
-    epicId: props.epicId,
-    enabled: true,
-  });
-  const selectedRow = useMemo(() => {
-    const rows = bindingsQuery.data?.rows ?? [];
-    return (
-      rows.find(
-        (row) =>
-          selectedWorktree !== null &&
-          worktreeRowKey(row) === worktreeRowKey(selectedWorktree) &&
-          isGitSelectable(row),
-      ) ?? null
-    );
-  }, [bindingsQuery.data?.rows, selectedWorktree]);
 
   const handleToggleLayout = useCallback(() => {
     const nextLayout = listLayout === "sections" ? "tree" : "sections";
     useGitPanelStore.getState().setListLayout(props.epicId, nextLayout);
   }, [listLayout, props.epicId]);
 
-  const { mutateAsync: refreshWorktreeStatus } = useGitRefreshWorktreeStatus();
+  // Manual refresh is a plain invalidate of the active root's nested
+  // `git.listChangedFiles@1.1` slot (the panel's source of truth for parent files
+  // + submodules). The worktree-scoped @1.1 query refetches on the correct host.
+  // On an old host this refetch still degrades to a parent-only snapshot.
   const handleRefresh = useCallback(async () => {
-    if (selectedRow === null) return;
-    await refreshWorktreeStatus({
-      hostId: selectedRow.hostId,
-      runningDir: selectedRow.runningDir,
+    if (selectedRepo === null) return;
+    await invalidateGitSubmoduleSnapshot(queryClient, {
+      hostId: selectedRepo.hostId,
+      rootRunningDir: selectedRepo.rootRunningDir,
       ignoreWhitespace,
     });
-  }, [ignoreWhitespace, refreshWorktreeStatus, selectedRow]);
+  }, [ignoreWhitespace, queryClient, selectedRepo]);
 
   const refresh = useRefreshSpinner({
     onRefresh: handleRefresh,
@@ -92,7 +79,7 @@ export function GitDiffPanelActions(props: LeftPanelSlotProps) {
         size="icon-sm"
         onClick={refresh.trigger}
         aria-label="Refresh"
-        disabled={selectedRow === null || refresh.refreshing}
+        disabled={selectedRepo === null || refresh.refreshing}
         data-testid="git-diff-panel-refresh"
         className="text-muted-foreground hover:text-foreground"
       >

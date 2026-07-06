@@ -119,6 +119,28 @@ describe("openTile (pinned open)", () => {
     expectCanvasInvariants(next);
   });
 
+  it("fills an active blank 'New tab' in place instead of stacking beside it", () => {
+    // Repro for the terminal-agent "phantom New tab": a fresh epic seeds a
+    // blank "New tab" placeholder (EmptyEpicBlankRoot) while the agent tile is
+    // still loading; when the agent tile then opens via `openTile`, it must
+    // REPLACE the active blank rather than append a second tab - matching
+    // `openTileInPane`'s fill-in-place semantics (browser new-tab behavior).
+    let state = openPinned(createEmptyCanvas(), SPEC_A);
+    const paneId = rootPane(state).id;
+    state = openBlankTabInPane(state, paneId);
+    expect(rootPane(state).tabInstanceIds).toHaveLength(2);
+    expect(isBlankTileRef(paneTabRefs(state, rootPane(state))[1])).toBe(true);
+
+    state = openPinned(state, SPEC_B);
+    const pane = rootPane(state);
+
+    expect(pane.tabInstanceIds).toHaveLength(2);
+    expect(paneTabIds(state, pane)).toEqual([SPEC_A.id, SPEC_B.id]);
+    expect(isBlankTileRef(paneTabRefs(state, pane)[1])).toBe(false);
+    expect(pane.activeTabId).toBe(SPEC_B.instanceId);
+    expectCanvasInvariants(state);
+  });
+
   it("dedupes by focusing existing tab", () => {
     let state = openPinned(createEmptyCanvas(), SPEC_A);
     state = openPinned(state, SPEC_B);
@@ -962,6 +984,26 @@ describe("instanceId / content-id decoupling", () => {
     expect(tab.name).toBe("Renamed Spec");
     expect(tab.instanceId).toBe(SPEC_A.instanceId);
     expect(pane.previewTabId).toBe(SPEC_A.instanceId);
+  });
+
+  it("marks a renamed terminal tab as manually titled", () => {
+    const terminal: EpicCanvasTileRef = {
+      id: "terminal-1",
+      instanceId: "inst-terminal-1",
+      type: "terminal",
+      name: "New Terminal",
+      titleSource: "default",
+      hostId: TEST_HOST_ID,
+      cwd: "/repo",
+    };
+    const previewed = openPreview(createEmptyCanvas(), terminal);
+
+    const renamed = renameArtifact(previewed, terminal.id, "Custom shell");
+    const tab = paneTabRefs(renamed, rootPane(renamed))[0];
+    expect(tab).toMatchObject({
+      name: "Custom shell",
+      titleSource: "manual",
+    });
   });
 });
 

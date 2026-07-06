@@ -10,11 +10,17 @@ import {
 } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { DEFAULT_ACCOUNT_CONTEXT } from "@traycer/protocol/common/schemas";
 import type { ProviderRateLimits } from "@traycer/protocol/host";
-import type { AuthenticatedUser } from "@traycer/protocol/auth";
+import type {
+  AuthenticatedUser,
+  SubscriptionStatus,
+} from "@traycer/protocol/auth";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Popover, PopoverTrigger } from "@/components/ui/popover";
 import { useAccountContextStore } from "@/stores/auth/account-context-store";
+import { queryKeys } from "@/lib/query-keys";
+import type { HostRpcRegistry } from "@/lib/host";
 
 type QueryResult = {
   data: { providerRateLimits: ProviderRateLimits | null } | undefined;
@@ -214,7 +220,7 @@ function baseSubscription() {
 }
 
 function authUserFixture(overrides: {
-  status: "PRO_V3" | "FREE";
+  status: SubscriptionStatus;
   withTeam: boolean;
 }): AuthenticatedUser {
   return {
@@ -298,11 +304,19 @@ function readyAuthUser(data: AuthenticatedUser): MockAuthUser {
   };
 }
 
+function traycerUsageQueryKey() {
+  return queryKeys.hostMethod<HostRpcRegistry, "host.getRateLimitUsage">(
+    "host-1",
+    "host.getRateLimitUsage",
+    { accountContext: DEFAULT_ACCOUNT_CONTEXT },
+  );
+}
+
 let onClose: () => void;
 
 function renderPopover() {
   const client = new QueryClient();
-  return render(
+  const rendered = render(
     <QueryClientProvider client={client}>
       <TooltipProvider>
         <Popover open>
@@ -312,6 +326,7 @@ function renderPopover() {
       </TooltipProvider>
     </QueryClientProvider>,
   );
+  return { ...rendered, client };
 }
 
 beforeEach(() => {
@@ -500,7 +515,7 @@ describe("<RateLimitPopover /> Overview progressive reveal", () => {
     mocks.results = { codex: coldResult(), "claude-code": coldResult() };
     renderPopover();
 
-    expect(screen.getByText("Fetching rate limits")).toBeTruthy();
+    expect(screen.getByText("Fetching usage limits")).toBeTruthy();
     // Neither provider's own reading is visible yet - only the combined loader.
     expect(screen.queryByText("Current session")).toBeNull();
     expect(screen.queryByText("4% used")).toBeNull();
@@ -522,7 +537,7 @@ describe("<RateLimitPopover /> Overview progressive reveal", () => {
     rerender(popoverElement());
 
     // The combined loader is gone now that one provider has data...
-    expect(screen.queryByText("Fetching rate limits")).toBeNull();
+    expect(screen.queryByText("Fetching usage limits")).toBeNull();
     // ...Codex's own section is visible...
     expect(
       screen.getByText("Codex").closest('[class*="gap-4"]')?.className,
@@ -589,6 +604,19 @@ describe("<RateLimitPopover /> per-provider states", () => {
     expect(document.querySelectorAll(".opacity-60").length).toBeGreaterThan(0);
   });
 
+  it("shows Refreshing instead of an updated timestamp while a refresh is in progress", () => {
+    mocks.configured = [{ providerId: "codex", lane: "ephemeralProcess" }];
+    mocks.results = { codex: readyResult(codexReady()) };
+    mocks.draining = true;
+    renderPopover();
+
+    const label = screen.getByText("Refreshing");
+    expect(label).toBeTruthy();
+    expect(label.className).toContain("working-text-shimmer");
+    expect(screen.getByTestId("usage-limit-refreshing-dots")).toBeTruthy();
+    expect(screen.queryByText(/^Updated /)).toBeNull();
+  });
+
   it("shows a plain error message with no inline retry control when a fetch never succeeded", () => {
     mocks.configured = [{ providerId: "codex", lane: "ephemeralProcess" }];
     mocks.results = {
@@ -603,7 +631,7 @@ describe("<RateLimitPopover /> per-provider states", () => {
     };
     renderPopover();
     expect(
-      screen.getByText("Couldn't load rate limits right now."),
+      screen.getByText("Couldn't load usage limits right now."),
     ).toBeTruthy();
     // No separate "Retry" link - the header's own refresh icon already covers
     // it (feedback: "we already have a reload button"). That icon is
@@ -631,7 +659,7 @@ describe("<RateLimitPopover /> per-provider states", () => {
     };
     renderPopover();
     expect(
-      screen.getByText("Rate limits unavailable — the CLI isn't installed"),
+      screen.getByText("Usage limits unavailable — the CLI isn't installed"),
     ).toBeTruthy();
   });
 });
@@ -743,6 +771,55 @@ describe("<RateLimitPopover /> Refresh all", () => {
       { type: "PERSONAL" },
       { force: true },
     );
+  });
+
+  it("refetches Traycer when the synthetic Traycer entry is eligible", () => {
+    mocks.configured = [];
+    const authUser = readyAuthUser(
+      authUserFixture({ status: "PRO_V3", withTeam: false }),
+    );
+    mocks.authUser = authUser;
+    const { client } = renderPopover();
+    const invalidateSpy = vi.spyOn(client, "invalidateQueries");
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh all" }));
+
+    expect(authUser.refetch).toHaveBeenCalledTimes(1);
+    expect(invalidateSpy).not.toHaveBeenCalled();
+  });
+
+  it("invalidates the unscoped Traycer usage query for rate-limit-based Traycer plans", () => {
+    mocks.configured = [];
+    const authUser = readyAuthUser(
+      authUserFixture({ status: "PRO", withTeam: false }),
+    );
+    mocks.authUser = authUser;
+    const { client } = renderPopover();
+    const invalidateSpy = vi.spyOn(client, "invalidateQueries");
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh all" }));
+
+    expect(authUser.refetch).toHaveBeenCalledTimes(1);
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: traycerUsageQueryKey(),
+      exact: true,
+    });
+  });
+
+  it("shows Refreshing and disables Refresh all while Traycer is fetching", () => {
+    mocks.configured = [];
+    mocks.authUser = {
+      ...readyAuthUser(authUserFixture({ status: "PRO_V3", withTeam: false })),
+      isFetching: true,
+    };
+    renderPopover();
+
+    const label = screen.getByText("Refreshing");
+    expect(label).toBeTruthy();
+    expect(label.className).toContain("working-text-shimmer");
+    expect(screen.getByTestId("usage-limit-refreshing-dots")).toBeTruthy();
+    const refreshAll = screen.getByRole("button", { name: "Refresh all" });
+    expect(refreshAll.getAttribute("disabled")).not.toBeNull();
   });
 });
 

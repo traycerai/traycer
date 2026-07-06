@@ -65,7 +65,7 @@ const RATE_LIMIT_UNAVAILABLE_REASON_LABELS: Record<
   invalid_response: "the CLI returned an unexpected response",
   timeout: "the request timed out",
   connection_failed: "couldn't connect to the CLI",
-  sdk_incompatible: "this SDK version doesn't support rate limits",
+  sdk_incompatible: "this SDK version doesn't support usage limits",
   rate_limits_not_available: "not available for this account",
   insufficient_permissions:
     "this account doesn't have permission to view usage",
@@ -110,13 +110,13 @@ export function resolvePopoverProviderRateLimitState(
 ): PopoverProviderRateLimitState {
   const snapshot = props.providerRateLimits ?? null;
   if (snapshot === null) {
-    // Nothing usable yet. `isPending` alone stays `true` forever for a
-    // disabled query (e.g. a host that goes unreachable while this tab is
-    // open, mirroring `resolveProviderRateLimitViewState`'s same fix) - only
-    // treat it as a cold load in flight (skeleton) when a fetch is actually
-    // happening; a failed fetch, or a pending-but-not-fetching query that will
-    // never resolve on its own, both fall through to the retryable error copy.
-    return props.isPending && props.isFetching
+    // Nothing usable yet. `ephemeralProcess` queries are queue-owned and
+    // therefore disabled as query observers; before the queue starts, they can
+    // be pending-but-not-fetching without that representing a failed read.
+    // Once a queued fetch actually fails, TanStack moves the observer out of
+    // `isPending` and into `isError`, revealing retryable error content instead
+    // of staying hidden in Overview.
+    return props.isFetching || props.isPending
       ? { kind: "cold" }
       : { kind: "error" };
   }

@@ -209,6 +209,12 @@ function buildChatActivityTimelineImpl(
   promotedToolBlockIds: ReadonlySet<string>,
 ): ReadonlyArray<ChatActivityTimelineItem> {
   const matchedQuestionToolIds = buildMatchedQuestionToolIds(segments);
+  const hasQuestionInterview = segments.some(
+    (segment) =>
+      segment.kind === "interview" &&
+      segment.toolName !== null &&
+      isKnownInterviewDisplayToolName(segment.toolName),
+  );
   const out: ChatActivityTimelineItem[] = [];
   let run: ActivityGroupDetailSegment[] = [];
 
@@ -224,7 +230,13 @@ function buildChatActivityTimelineImpl(
       flushRun();
       continue;
     }
-    if (isSuppressedQuestionTool(segment, matchedQuestionToolIds)) {
+    if (
+      isSuppressedQuestionTool(
+        segment,
+        matchedQuestionToolIds,
+        hasQuestionInterview,
+      )
+    ) {
       continue;
     }
     if (segment.kind === "interview") {
@@ -533,11 +545,12 @@ function buildMatchedQuestionToolIds(
 function isSuppressedQuestionTool(
   segment: MessageSegment,
   matchedQuestionToolIds: ReadonlySet<string>,
+  hasQuestionInterview: boolean,
 ): boolean {
   return (
     segment.kind === "tool" &&
-    matchedQuestionToolIds.has(segment.id) &&
-    isKnownInterviewDisplayToolName(segment.toolName)
+    isKnownInterviewDisplayToolName(segment.toolName) &&
+    (matchedQuestionToolIds.has(segment.id) || hasQuestionInterview)
   );
 }
 
