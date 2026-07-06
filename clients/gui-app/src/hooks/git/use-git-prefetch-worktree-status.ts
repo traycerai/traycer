@@ -1,6 +1,7 @@
 import { useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useHostClient } from "@/lib/host";
+import { useHostClient, useHostDirectory } from "@/lib/host";
+import { buildTransientHostClient } from "@/hooks/host/use-host-client-for";
 import { gitQueryKeys } from "@/lib/query-keys/git-query-keys";
 import { writeGitListChangedFilesResponse } from "@/lib/git/write-list-changed-files-response";
 
@@ -12,9 +13,19 @@ import { writeGitListChangedFilesResponse } from "@/lib/git/write-list-changed-f
  * Response written to cache per Q20 lock (response-equals-state carve-out):
  * listChangedFiles RPC is the parent-level status source for the picker badges;
  * the UI projects it into typed file/module counts at the panel boundary.
+ *
+ * Called once per row across potentially many different worktree hosts (see
+ * `GitDiffPanelBodyLive`'s `gitRows.forEach`), so it cannot resolve a single
+ * client at hook-render time - `args.hostId` in the request body does not
+ * route the call (`HostClient.request()` sends through the bound messenger).
+ * Each call resolves its own transient client for `args.hostId` via the host
+ * directory, mirroring `useGitListChangedFilesWithSubmodules`. A host with no
+ * reachable client is skipped - the same as a disabled query - rather than
+ * silently falling back to the app-wide active host.
  */
 export function useGitPrefetchWorktreeStatus() {
-  const client = useHostClient();
+  const globalClient = useHostClient();
+  const directory = useHostDirectory();
   const queryClient = useQueryClient();
 
   return useCallback(
@@ -31,6 +42,13 @@ export function useGitPrefetchWorktreeStatus() {
 
       // Early exit if already cached
       if (queryClient.getQueryData(key) !== undefined) {
+        return;
+      }
+
+      const entry = directory.findById(args.hostId);
+      const client =
+        entry === null ? null : buildTransientHostClient(globalClient, entry);
+      if (client === null) {
         return;
       }
 
@@ -54,6 +72,6 @@ export function useGitPrefetchWorktreeStatus() {
         result,
       );
     },
-    [client, queryClient],
+    [directory, globalClient, queryClient],
   );
 }

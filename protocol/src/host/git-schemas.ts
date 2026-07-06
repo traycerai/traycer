@@ -374,6 +374,15 @@ const submoduleConflictShas = {
  * The same descriptor is reused as `submoduleChangesetSchema.pointer`; the client
  * joins a parent gitlink row to its submodule section by the gitlink row `path`
  * <-> `submoduleChangeset.parentPath`.
+ *
+ * UNION-EVOLUTION RULE: adding a `kind` variant is NOT an additive minor change.
+ * Minor-skew projection strips unknown object KEYS, but a discriminated union
+ * hard-rejects an unknown discriminator VALUE - a v1.1 caller re-parsing a
+ * response that carries a new `kind` fails, and the dispatcher turns that into a
+ * 500 for the ENTIRE `listChangedFiles` response (`handler.ts` caller-schema
+ * re-parse). A new variant must therefore ship as a MAJOR bump, or the newer
+ * side must explicitly project it onto one of the variants below before the
+ * payload reaches a peer negotiated at 1.1.
  */
 export const submodulePointerSchema = z.discriminatedUnion("kind", [
   z.object({
@@ -418,6 +427,14 @@ export type GitChangedFileV11 = z.infer<typeof gitChangedFileV11Schema>;
  * whole response the moment a future host widens this reason. The tolerance has a
  * deliberate side effect: `.catch` also absorbs a MISSING `reason`, defaulting it
  * to `"git-error"` instead of rejecting the payload.
+ *
+ * UNION-EVOLUTION RULE: the `.catch` tolerance covers ONLY the `reason` enum
+ * axis. Adding a `state` variant is NOT an additive minor change - a
+ * discriminated union hard-rejects an unknown discriminator VALUE, so a v1.1
+ * caller re-parsing a response carrying a new `state` fails and the whole
+ * `listChangedFiles` response 500s. A new `state` must ship as a MAJOR bump, or
+ * the newer side must explicitly project it onto `ok`/`unavailable` before the
+ * payload reaches a peer negotiated at 1.1.
  */
 export const submoduleAvailabilitySchema = z.discriminatedUnion("state", [
   z.object({ state: z.literal("ok") }),

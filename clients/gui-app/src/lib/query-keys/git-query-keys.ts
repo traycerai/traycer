@@ -122,4 +122,16 @@ export const gitQueryKeys = {
     const path = queryKey[prefix.length];
     return typeof path === "string" && paths.has(path);
   },
+
+  /**
+   * Matches Git capability probes across both the legacy custom key and the
+   * generic host RPC key used by `useGitCapabilitiesQuery`.
+   */
+  matchGitCapabilitiesQuery(queryKey: ReadonlyArray<unknown>): boolean {
+    return queryKey.some(
+      (part, index) =>
+        part === "git.getCapabilities" ||
+        (part === "git" && queryKey[index + 1] === "capabilities"),
+    );
+  },
 };

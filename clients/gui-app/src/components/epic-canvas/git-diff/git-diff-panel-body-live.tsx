@@ -242,7 +242,8 @@ export function GitDiffPanelBodyLive(
   const retryUnavailableRoots = useCallback(() => {
     const cleared = unavailableGitRootKeys.reset();
     void queryClient.invalidateQueries({
-      predicate: (query) => query.queryKey.includes("git"),
+      predicate: (query) =>
+        gitQueryKeys.matchGitCapabilitiesQuery(query.queryKey),
     });
     const next = pickDefaultRow(
       gitRows,

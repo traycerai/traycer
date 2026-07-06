@@ -10,6 +10,8 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from "react";
+import type Fuse from "fuse.js";
+import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { ChevronDown, Search, TriangleAlert, X } from "lucide-react";
 import type {
   GitChangedFile,
@@ -45,6 +47,7 @@ import { DiffLoadingSkeleton } from "./diff-loading-skeleton";
 import { NoMatchingFiles } from "./empty-states/no-matching-files";
 import { SubscriptionErrorState } from "./empty-states/subscription-error-state";
 import { SubmoduleUnavailable } from "./empty-states/submodule-unavailable";
+import { GitErrorBlock } from "./git-error-block";
 import type { GitDiffSectionCollapseController } from "./git-diff-section";
 
 const GIT_MODULE_SEARCH_DEBOUNCE_MS = 150;
@@ -222,13 +225,24 @@ function moduleHeaderStatusVisible(
 
 function moduleMatchesQuery(
   module: GitModuleGroup,
+  searchIndex: Fuse<GitChangedFile> | null,
   query: string,
   normalizedQuery: string,
 ): boolean {
   if (module.searchText.includes(normalizedQuery)) return true;
-  if (module.files.length === 0) return false;
-  const searchIndex = createGitChangedFileSearchIndex(module.files);
+  if (searchIndex === null) return false;
   return filterGitChangedFiles(module.files, searchIndex, query).length > 0;
+}
+
+function buildModuleSearchIndexes(
+  modules: ReadonlyArray<GitModuleGroup>,
+): ReadonlyMap<string, Fuse<GitChangedFile>> {
+  const indexes = new Map<string, Fuse<GitChangedFile>>();
+  modules.forEach((module) => {
+    if (module.files.length === 0) return;
+    indexes.set(module.key, createGitChangedFileSearchIndex(module.files));
+  });
+  return indexes;
 }
 
 function singleRepoModule(
@@ -292,26 +306,41 @@ export function SelectedRepoChanges(
       snapshot.data,
     ],
   );
+  const moduleModel = useMemo(
+    () =>
+      buildGitModuleGroups({
+        root: {
+          repoRoot: props.selected.rootRunningDir,
+          label: props.rootLabel,
+          branch: source.rootBranch,
+          headSha: source.rootHeadSha,
+          files: source.rootFiles,
+          repoState: source.rootRepoState,
+          repoMode: source.rootRepoMode,
+        },
+        submodules: source.submodules,
+      }),
+    [
+      props.rootLabel,
+      props.selected.rootRunningDir,
+      source.rootBranch,
+      source.rootFiles,
+      source.rootHeadSha,
+      source.rootRepoMode,
+      source.rootRepoState,
+      source.submodules,
+    ],
+  );
 
+  if (snapshot.error !== null && snapshot.data === null) {
+    return <GitErrorBlock error={snapshot.error} />;
+  }
   if (subscription.error !== null && snapshot.data === null) {
     return <SubscriptionErrorState event={subscription.error} />;
   }
   if (!source.hasLanded) {
     return <DiffLoadingSkeleton variant="panel" />;
   }
-
-  const moduleModel = buildGitModuleGroups({
-    root: {
-      repoRoot: props.selected.rootRunningDir,
-      label: props.rootLabel,
-      branch: source.rootBranch,
-      headSha: source.rootHeadSha,
-      files: source.rootFiles,
-      repoState: source.rootRepoState,
-      repoMode: source.rootRepoMode,
-    },
-    submodules: source.submodules,
-  });
 
   return (
     <GitModuleGroupsView
@@ -321,6 +350,7 @@ export function SelectedRepoChanges(
       modules={moduleModel.modules}
       hiddenCleanModuleCount={moduleModel.hiddenCleanModuleCount}
       lastUpdatedAtMs={source.lastUpdatedAtMs}
+      snapshotError={snapshot.error}
       onRefresh={props.onRefresh}
       isRefreshing={props.isRefreshing}
     />
@@ -334,6 +364,7 @@ function GitModuleGroupsView(props: {
   readonly modules: ReadonlyArray<GitModuleGroup>;
   readonly hiddenCleanModuleCount: number;
   readonly lastUpdatedAtMs: number | null;
+  readonly snapshotError: HostRpcError | null;
   readonly onRefresh: () => void;
   readonly isRefreshing: boolean;
 }): ReactNode {
@@ -467,16 +498,32 @@ function GitModuleGroupsView(props: {
     props.hiddenCleanModuleCount,
   );
   const searchCopy = gitModuleSearchCopy(singleRepo);
+  const moduleSearchIndexes = useMemo(
+    () => buildModuleSearchIndexes(props.modules),
+    [props.modules],
+  );
 
   const queryMatchByKey = useMemo(() => {
     if (singleRepo !== null || !queryActive) return new Map<string, boolean>();
     return new Map(
       props.modules.map((module) => [
         module.key,
-        moduleMatchesQuery(module, appliedQuery, normalizedQuery),
+        moduleMatchesQuery(
+          module,
+          moduleSearchIndexes.get(module.key) ?? null,
+          appliedQuery,
+          normalizedQuery,
+        ),
       ]),
     );
-  }, [appliedQuery, normalizedQuery, props.modules, queryActive, singleRepo]);
+  }, [
+    appliedQuery,
+    moduleSearchIndexes,
+    normalizedQuery,
+    props.modules,
+    queryActive,
+    singleRepo,
+  ]);
 
   const visibleModules = useMemo(() => {
     if (singleRepo !== null) return [];
@@ -501,6 +548,9 @@ function GitModuleGroupsView(props: {
   if (singleRepo === null && queryActive && visibleModules.length === 0) {
     return (
       <div className="flex min-h-0 flex-1 flex-col">
+        {props.snapshotError === null ? null : (
+          <GitSnapshotErrorBanner error={props.snapshotError} />
+        )}
         {searchVisible ? (
           <GitModuleSearch
             searchQuery={searchQuery}
@@ -518,6 +568,9 @@ function GitModuleGroupsView(props: {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
+      {props.snapshotError === null ? null : (
+        <GitSnapshotErrorBanner error={props.snapshotError} />
+      )}
       {searchVisible ? (
         <GitModuleSearch
           searchQuery={searchQuery}
@@ -601,6 +654,21 @@ function GitModuleGroupsView(props: {
           ) : null}
         </div>
       )}
+    </div>
+  );
+}
+
+function GitSnapshotErrorBanner(props: { readonly error: HostRpcError }) {
+  return (
+    <div
+      role="alert"
+      className="mx-2 mt-1.5 flex shrink-0 items-center gap-2 rounded-md border border-warning/30 bg-warning/10 px-2 py-1.5 text-ui-xs text-warning-foreground"
+      data-testid="git-snapshot-error-banner"
+    >
+      <TriangleAlert className="size-3.5 shrink-0" aria-hidden />
+      <span className="min-w-0 truncate">
+        {props.error.message || "Could not refresh git changes"}
+      </span>
     </div>
   );
 }

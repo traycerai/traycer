@@ -19,6 +19,32 @@ export interface GitFlatFileListProps {
   readonly nestedRows: boolean;
 }
 
+interface GitFlatFileListItemProps {
+  readonly epicId: string;
+  readonly viewTabId: string;
+  readonly hostId: string;
+  readonly runningDir: string;
+  readonly file: GitChangedFile;
+  readonly activeFilePath: string | null;
+  readonly pathRangesByPath: ReadonlyMap<string, HighlightRanges>;
+  readonly nestedRows: boolean;
+}
+
+function GitFlatFileListItem(props: GitFlatFileListItemProps): ReactNode {
+  return (
+    <FileRow
+      epicId={props.epicId}
+      viewTabId={props.viewTabId}
+      hostId={props.hostId}
+      runningDir={props.runningDir}
+      file={props.file}
+      active={props.file.path === props.activeFilePath}
+      pathRanges={props.pathRangesByPath.get(props.file.path) ?? NO_HIGHLIGHT}
+      nested={props.nestedRows}
+    />
+  );
+}
+
 export function GitFlatFileList(props: GitFlatFileListProps): ReactNode {
   const {
     activeFilePath,
@@ -60,15 +86,15 @@ export function GitFlatFileList(props: GitFlatFileListProps): ReactNode {
 
   const renderItem = useCallback(
     (_index: number, file: GitChangedFile) => (
-      <FileRow
+      <GitFlatFileListItem
         epicId={epicId}
         viewTabId={viewTabId}
         hostId={hostId}
         runningDir={runningDir}
         file={file}
-        active={file.path === activeFilePath}
-        pathRanges={pathRangesByPath.get(file.path) ?? NO_HIGHLIGHT}
-        nested={props.nestedRows}
+        activeFilePath={activeFilePath}
+        pathRangesByPath={pathRangesByPath}
+        nestedRows={props.nestedRows}
       />
     ),
     [
@@ -91,16 +117,16 @@ export function GitFlatFileList(props: GitFlatFileListProps): ReactNode {
     return (
       <div data-testid="git-flat-file-list">
         {files.map((file) => (
-          <FileRow
+          <GitFlatFileListItem
             key={file.path}
             epicId={epicId}
             viewTabId={viewTabId}
             hostId={hostId}
             runningDir={runningDir}
             file={file}
-            active={file.path === activeFilePath}
-            pathRanges={pathRangesByPath.get(file.path) ?? NO_HIGHLIGHT}
-            nested={props.nestedRows}
+            activeFilePath={activeFilePath}
+            pathRangesByPath={pathRangesByPath}
+            nestedRows={props.nestedRows}
           />
         ))}
       </div>

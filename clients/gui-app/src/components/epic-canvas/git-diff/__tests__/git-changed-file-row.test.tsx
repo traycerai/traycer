@@ -90,8 +90,10 @@ describe("GitChangedFileRow panel density", () => {
     expect(row.textContent).toContain("src/routes/epic");
     expect(row.textContent).toContain("+3");
     expect(row.textContent).toContain("-1");
-    expect(screen.getByText("+3").className).toContain("text-emerald");
-    expect(screen.getByText("-1").className).toContain("text-red");
+    expect(screen.getByText("+3").className).toContain("text-success");
+    expect(screen.getByText("+3").className).not.toContain("emerald");
+    expect(screen.getByText("-1").className).toContain("text-destructive");
+    expect(screen.getByText("-1").className).not.toContain("text-red");
     expect(screen.getByText("+3").parentElement?.className).toContain(
       "absolute",
     );
@@ -119,7 +121,7 @@ describe("GitChangedFileRow panel density", () => {
     expect(directory.className).toContain("truncate");
   });
 
-  it("uses conventional Git status colors", () => {
+  it("uses semantic Git status tone classes", () => {
     const added = renderRow({
       file: withStatus(
         makeFile({ path: "src/added.ts", previousPath: null }),
@@ -129,7 +131,8 @@ describe("GitChangedFileRow panel density", () => {
       active: false,
       pathRanges: NO_HIGHLIGHT,
     });
-    expect(screen.getByLabelText("Added").className).toContain("text-emerald");
+    expect(screen.getByLabelText("Added").className).toContain("text-success");
+    expect(screen.getByLabelText("Added").className).not.toContain("emerald");
     added.unmount();
 
     const modified = renderRow({
@@ -138,7 +141,10 @@ describe("GitChangedFileRow panel density", () => {
       active: false,
       pathRanges: NO_HIGHLIGHT,
     });
-    expect(screen.getByLabelText("Modified").className).toContain("text-amber");
+    expect(screen.getByLabelText("Modified").className).toContain(
+      "text-warning",
+    );
+    expect(screen.getByLabelText("Modified").className).not.toContain("amber");
     modified.unmount();
 
     renderRow({
@@ -150,7 +156,62 @@ describe("GitChangedFileRow panel density", () => {
       active: false,
       pathRanges: NO_HIGHLIGHT,
     });
-    expect(screen.getByLabelText("Deleted").className).toContain("text-red");
+    expect(screen.getByLabelText("Deleted").className).toContain(
+      "text-destructive",
+    );
+    expect(screen.getByLabelText("Deleted").className).not.toContain(
+      "text-red",
+    );
+  });
+
+  it("keeps dotfiles as one truncating filename segment", () => {
+    renderRow({
+      file: makeFile({ path: ".env", previousPath: null }),
+      density: "panel",
+      active: false,
+      pathRanges: NO_HIGHLIGHT,
+    });
+
+    expect(screen.getByText(".env").className).toContain("truncate");
+  });
+
+  it("keeps trailing-dot filenames as one truncating filename segment", () => {
+    renderRow({
+      file: makeFile({ path: "README.", previousPath: null }),
+      density: "panel",
+      active: false,
+      pathRanges: NO_HIGHLIGHT,
+    });
+
+    expect(screen.getByText("README.").className).toContain("truncate");
+  });
+
+  it("splits multi-dot filenames at the final extension", () => {
+    renderRow({
+      file: makeFile({ path: "src/vite.config.local.ts", previousPath: null }),
+      density: "panel",
+      active: false,
+      pathRanges: NO_HIGHLIGHT,
+    });
+
+    expect(screen.getByText("vite.config.local").className).toContain(
+      "truncate",
+    );
+    expect(screen.getByText(".ts").className).toContain("shrink-0");
+  });
+
+  it("highlights a filename match that spans the stem and extension", () => {
+    const { container } = renderRow({
+      file: makeFile({ path: "readme.md", previousPath: null }),
+      density: "panel",
+      active: false,
+      pathRanges: [[4, 7]],
+    });
+
+    const marked = Array.from(container.querySelectorAll("mark")).map(
+      (mark) => mark.textContent,
+    );
+    expect(marked).toEqual(["me", ".m"]);
   });
 
   it("omits the directory for repository-root files", () => {

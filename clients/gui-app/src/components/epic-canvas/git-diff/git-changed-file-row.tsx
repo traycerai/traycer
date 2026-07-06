@@ -40,10 +40,10 @@ interface RowStatsProps {
 function RowStats(props: RowStatsProps): ReactNode {
   return (
     <span className={cn("shrink-0 items-center gap-1", props.className)}>
-      <span className="shrink-0 text-ui-xs font-medium tabular-nums text-emerald-600 dark:text-emerald-400">
+      <span className="shrink-0 text-ui-xs font-medium tabular-nums text-success">
         +{props.file.insertions}
       </span>
-      <span className="shrink-0 text-ui-xs font-medium tabular-nums text-red-600 dark:text-red-400">
+      <span className="shrink-0 text-ui-xs font-medium tabular-nums text-destructive">
         -{props.file.deletions}
       </span>
       {props.file.isBinary ? (

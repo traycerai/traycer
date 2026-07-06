@@ -7,6 +7,7 @@ import {
   within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
   GitChangedFileV11,
   GitListChangedFilesResponseV11,
@@ -122,6 +123,23 @@ function snapshotResult(
   return { data, isPending: false, error: null };
 }
 
+function snapshotResultWithError(
+  data: GitListChangedFilesResponseV11 | null,
+  error: HostRpcError,
+): GitListChangedFilesWithSubmodulesResult {
+  return { data, isPending: false, error };
+}
+
+function hostRpcError(message: string): HostRpcError {
+  return new HostRpcError({
+    code: "RPC_ERROR",
+    requestId: "request-1",
+    method: "git.listChangedFiles",
+    message,
+    fatalDetails: null,
+  });
+}
+
 const rootSelected: GitPanelSelectedRepo = {
   hostId: "host-1",
   rootRunningDir: "/repo",
@@ -176,6 +194,32 @@ describe("<SelectedRepoChanges /> module groups", () => {
     expect(screen.getByTestId("file-list-/repo")).toBeDefined();
     expect(screen.getByText("src/app.ts")).toBeDefined();
     expect(screen.queryByText("Submodule reference:")).toBeNull();
+  });
+
+  it("surfaces initial nested snapshot errors through the git error state", () => {
+    renderChanges({
+      snapshot: snapshotResultWithError(
+        null,
+        hostRpcError("initial load failed"),
+      ),
+    });
+
+    expect(screen.getByText("Diff Loading Error")).toBeDefined();
+    expect(screen.getByText("initial load failed")).toBeDefined();
+  });
+
+  it("keeps stale changes visible when a nested snapshot refresh fails", () => {
+    renderChanges({
+      snapshot: snapshotResultWithError(
+        response({ files: [file("src/app.ts", null)] }),
+        hostRpcError("manual refresh failed"),
+      ),
+    });
+
+    expect(screen.queryByText("Diff Loading Error")).toBeNull();
+    expect(screen.getByTestId("git-snapshot-error-banner")).toBeDefined();
+    expect(screen.getByText("manual refresh failed")).toBeDefined();
+    expect(screen.getByText("src/app.ts")).toBeDefined();
   });
 
   it("keeps repository operation banners in single-repo mode", () => {

@@ -15,7 +15,9 @@ import type {
   SubmodulePointer,
   WorktreeBindingSelectorRow,
 } from "@traycer/protocol/host";
+import type { HostRpcRegistry } from "@/lib/host";
 import { gitQueryKeys } from "@/lib/query-keys/git-query-keys";
+import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import {
   defaultEpicState,
   useGitPanelStore,
@@ -253,7 +255,7 @@ const rootSelected: GitPanelSelectedRepo = {
   repoRoot: "/repo",
 };
 
-function renderPanel(selected: GitPanelSelectedRepo): void {
+function renderPanel(selected: GitPanelSelectedRepo): QueryClient {
   useGitPanelStore.setState({
     stateByEpicId: {
       [EPIC_ID]: {
@@ -281,6 +283,7 @@ function renderPanel(selected: GitPanelSelectedRepo): void {
       <GitDiffPanelBodyLive epicId={EPIC_ID} tabId={TAB_ID} />
     </QueryClientProvider>,
   );
+  return queryClient;
 }
 
 function openSwitcher(): void {
@@ -561,6 +564,11 @@ describe("<GitDiffPanelBodyLive /> workspace switcher integration", () => {
     expect(
       screen
         .getByTestId("git-diff-repo-switcher-trigger")
+        .getAttribute("data-unavailable"),
+    ).toBeNull();
+    expect(
+      screen
+        .getByTestId("git-diff-repo-switcher-trigger")
         .getAttribute("aria-invalid"),
     ).toBeNull();
     await waitFor(() =>
@@ -727,6 +735,59 @@ describe("<GitDiffPanelBodyLive /> workspace switcher integration", () => {
       ).toBeDefined(),
     );
     expect(screen.queryByTestId("git-roots-unavailable")).toBeNull();
+  });
+
+  it("retry invalidates host-scoped git capability queries", async () => {
+    testState.rows = [row({})];
+    testState.snapshots = new Map([["/repo", response({})]]);
+    testState.capabilities.set("/repo", {
+      available: false,
+      gitVersion: null,
+      reason: "git unavailable",
+    });
+
+    const queryClient = renderPanel(rootSelected);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("git-roots-unavailable")).toBeDefined(),
+    );
+
+    const capabilityKey = hostQueryKeys.method<
+      HostRpcRegistry,
+      "git.getCapabilities"
+    >("host-1", "git.getCapabilities", {
+      hostId: "host-1",
+      runningDir: "/repo",
+      ignoreWhitespace: false,
+    });
+    queryClient.setQueryData(capabilityKey, {
+      available: false,
+      gitVersion: null,
+      reason: "git unavailable",
+    });
+    const fileDiffKey = gitQueryKeys.fileDiff(
+      "host-1",
+      "/repo",
+      "src/app.ts",
+      null,
+      "unstaged",
+      "HEAD123",
+      null,
+      "abc123",
+      false,
+      null,
+    );
+    queryClient.setQueryData(fileDiffKey, { diff: "cached" });
+
+    testState.capabilities.set("/repo", testState.availableCapability);
+    fireEvent.click(screen.getByTestId("git-roots-unavailable-retry"));
+
+    await waitFor(() =>
+      expect(queryClient.getQueryState(capabilityKey)?.isInvalidated).toBe(
+        true,
+      ),
+    );
+    expect(queryClient.getQueryState(fileDiffKey)?.isInvalidated).toBe(false);
   });
 
   it("renders the no-changes state after the selector with no leftover tree row", () => {

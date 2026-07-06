@@ -235,6 +235,34 @@ describe("<GitDiffRepoSwitcherDropdown />", () => {
     expect(document.activeElement).toBe(search);
   });
 
+  it("marks an unavailable trigger without using aria-invalid", () => {
+    render(
+      <GitDiffRepoSwitcher
+        open={false}
+        onOpenChange={vi.fn()}
+        roots={roots()}
+        activeRootSubmodules={[]}
+        selected={selection({
+          rootRunningDir: "/missing",
+          repoRoot: "/missing",
+        })}
+        onSelectRoot={vi.fn()}
+        hostSection={null}
+        autoFocusSearch={false}
+        triggerClassName={undefined}
+        contentClassName={undefined}
+        triggerTestId="repo-switcher-trigger"
+        contentTestId="repo-switcher-content"
+      />,
+    );
+
+    const trigger = screen.getByTestId("repo-switcher-trigger");
+    expect(trigger.getAttribute("data-unavailable")).toBe("true");
+    expect(trigger.getAttribute("aria-invalid")).toBeNull();
+    expect(trigger.getAttribute("aria-label")).toContain("unavailable");
+    expect(trigger.getAttribute("title")).toContain("Status: unavailable");
+  });
+
   it("renders workspace rows only with stable path subtext", () => {
     render(
       <DropdownHarness

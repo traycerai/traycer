@@ -89,7 +89,7 @@ export function GitDiffRepoSwitcher(
           aria-haspopup="dialog"
           aria-expanded={props.open}
           aria-controls={props.open ? contentId : undefined}
-          aria-invalid={model.trigger.unavailable ? true : undefined}
+          data-unavailable={model.trigger.unavailable ? "true" : undefined}
         />
       </PopoverTrigger>
       <PopoverContent

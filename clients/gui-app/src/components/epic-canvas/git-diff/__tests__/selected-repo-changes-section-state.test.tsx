@@ -148,6 +148,13 @@ function renderSelectedChanges(snapshot: GitListChangedFilesResponseV11): void {
   );
 }
 
+function expectInputValue(element: HTMLElement, value: string): void {
+  if (!(element instanceof HTMLInputElement)) {
+    throw new Error("Expected an input element");
+  }
+  expect(element.value).toBe(value);
+}
+
 describe("<SelectedRepoChanges /> module section state", () => {
   beforeEach(() => {
     cleanup();
@@ -338,6 +345,104 @@ describe("<SelectedRepoChanges /> module section state", () => {
 
     expect(header.getAttribute("aria-expanded")).toBe("false");
     expect(container.scrollTop).toBe(20);
+  });
+
+  it("debounces changed-file filtering while keeping input updates immediate", () => {
+    vi.useFakeTimers();
+    renderWithClient(
+      <GitChangedFilesView
+        epicId="epic-search"
+        viewTabId="tab-1"
+        hostId="host-1"
+        runningDir="/repo"
+        files={[file("src/apple.ts"), file("src/banana.ts")]}
+      />,
+    );
+
+    const input = screen.getByRole("textbox", {
+      name: "Filter changed files",
+    });
+    fireEvent.change(input, { target: { value: "banana" } });
+
+    expectInputValue(input, "banana");
+    expect(screen.getByText("src/apple.ts")).toBeDefined();
+    expect(screen.getByText("src/banana.ts")).toBeDefined();
+
+    act(() => {
+      vi.advanceTimersByTime(149);
+    });
+
+    expect(screen.getByText("src/apple.ts")).toBeDefined();
+    expect(screen.getByText("src/banana.ts")).toBeDefined();
+
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+
+    expect(screen.queryByText("src/apple.ts")).toBeNull();
+    expect(screen.getByText("src/banana.ts")).toBeDefined();
+  });
+
+  it("clears the changed-file filter immediately from the clear button", () => {
+    vi.useFakeTimers();
+    renderWithClient(
+      <GitChangedFilesView
+        epicId="epic-clear"
+        viewTabId="tab-1"
+        hostId="host-1"
+        runningDir="/repo"
+        files={[file("src/apple.ts"), file("src/banana.ts")]}
+      />,
+    );
+
+    fireEvent.change(
+      screen.getByRole("textbox", { name: "Filter changed files" }),
+      { target: { value: "banana" } },
+    );
+    act(() => {
+      vi.advanceTimersByTime(150);
+    });
+    expect(screen.queryByText("src/apple.ts")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear filter" }));
+
+    expectInputValue(
+      screen.getByRole("textbox", { name: "Filter changed files" }),
+      "",
+    );
+    expect(screen.getByText("src/apple.ts")).toBeDefined();
+    expect(screen.getByText("src/banana.ts")).toBeDefined();
+    expect(screen.queryByRole("button", { name: "Clear filter" })).toBeNull();
+  });
+
+  it("clears and blurs the changed-file filter on Escape", () => {
+    vi.useFakeTimers();
+    renderWithClient(
+      <GitChangedFilesView
+        epicId="epic-escape"
+        viewTabId="tab-1"
+        hostId="host-1"
+        runningDir="/repo"
+        files={[file("src/apple.ts"), file("src/banana.ts")]}
+      />,
+    );
+
+    const input = screen.getByRole("textbox", {
+      name: "Filter changed files",
+    });
+    input.focus();
+    fireEvent.change(input, { target: { value: "banana" } });
+    act(() => {
+      vi.advanceTimersByTime(150);
+    });
+    expect(screen.queryByText("src/apple.ts")).toBeNull();
+
+    fireEvent.keyDown(input, { key: "Escape" });
+
+    expectInputValue(input, "");
+    expect(document.activeElement).not.toBe(input);
+    expect(screen.getByText("src/apple.ts")).toBeDefined();
+    expect(screen.getByText("src/banana.ts")).toBeDefined();
   });
 
   it("preserves global section collapse for normal changed-file views", () => {
