@@ -4,6 +4,7 @@ import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
+import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 
 const hookMocks = vi.hoisted(() => ({
   request: vi.fn<(method: string, payload: unknown) => Promise<unknown>>(),
@@ -472,7 +473,7 @@ describe("useCreateTuiAgent", () => {
         id: string;
         type: string;
         name: string;
-        pendingTuiHarnessId: string | undefined;
+        pendingTuiHarnessId: TuiHarnessId | undefined;
       },
     ];
     const placeholderTabId = placeholderCall[0];
