@@ -785,6 +785,73 @@ describe("WsStreamClient", () => {
     expect(observedCode).toBe("INCOMPATIBLE");
   });
 
+  it("remembers stream method support after a successful subscribe", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "t",
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+    const observed: string[] = [];
+    const unsubscribe = client.subscribeMethodSupport(() => {
+      observed.push(client.getMethodSupport("resources.subscribe"));
+    });
+
+    const session = client.subscribe("resources.subscribe", {
+      epicId: "epic-1",
+    });
+
+    await flush();
+    completeHandshake(sockets[0].socket);
+
+    expect(client.getMethodSupport("resources.subscribe")).toBe("supported");
+    expect(observed).toEqual(["supported"]);
+
+    unsubscribe();
+    session.close();
+  });
+
+  it("remembers a missing stream method as unsupported for newer-client older-host pairs", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "t",
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+    const observed: string[] = [];
+    const unsubscribe = client.subscribeMethodSupport(() => {
+      observed.push(client.getMethodSupport("resources.subscribe"));
+    });
+
+    const session = client.subscribe("resources.subscribe", {
+      epicId: "epic-1",
+    });
+
+    await flush();
+    const stub = sockets[0].socket;
+    stub.fireOpen();
+    stub.fireText({
+      kind: "openAck",
+      manifest: {
+        "epic.subscribe": { major: 1, minor: 0 },
+        "chat.subscribe": { major: 1, minor: 2 },
+        "terminal.subscribe": { major: 1, minor: 3 },
+      },
+    });
+
+    expect(client.getMethodSupport("resources.subscribe")).toBe("unsupported");
+    expect(observed).toEqual(["unsupported"]);
+
+    unsubscribe();
+    session.close();
+  });
+
   it("closes the socket after two missed pongs and triggers a reconnect", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: false });
 
