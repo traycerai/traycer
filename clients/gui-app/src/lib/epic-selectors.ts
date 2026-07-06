@@ -525,14 +525,6 @@ type EpicTabDisplayTitleNode = {
   readonly titleSource: TerminalTitleSource | undefined;
 };
 
-type EpicTabDisplayTitleInputNode = {
-  readonly id: string;
-  readonly name: string;
-  readonly type?: string | undefined;
-  readonly instanceId?: string | undefined;
-  readonly titleSource?: TerminalTitleSource | undefined;
-};
-
 type TerminalTabTitleNode = Pick<
   EpicTabDisplayTitleNode,
   "instanceId" | "name" | "titleSource" | "type"
@@ -543,25 +535,10 @@ type TerminalTabTitleHandleNode = Pick<
   "name" | "titleSource"
 >;
 
-export function useEpicTabDisplayTitle(
-  node: EpicTabDisplayTitleInputNode,
-): string {
-  const normalizedNode = normalizeEpicTabDisplayTitleNode(node);
-  const liveArtifactTitle = useEpicLiveArtifactTitle(normalizedNode.id);
-  const liveTerminalTitle = useLiveTerminalTabTitle(normalizedNode);
-  return liveArtifactTitle ?? liveTerminalTitle ?? normalizedNode.name;
-}
-
-function normalizeEpicTabDisplayTitleNode(
-  node: EpicTabDisplayTitleInputNode,
-): EpicTabDisplayTitleNode {
-  return {
-    id: node.id,
-    name: node.name,
-    type: node.type,
-    instanceId: node.instanceId,
-    titleSource: node.titleSource,
-  };
+export function useEpicTabDisplayTitle(node: EpicTabDisplayTitleNode): string {
+  const liveArtifactTitle = useEpicLiveArtifactTitle(node.id);
+  const liveTerminalTitle = useLiveTerminalTabTitle(node);
+  return liveArtifactTitle ?? liveTerminalTitle ?? node.name;
 }
 
 function useLiveTerminalTabTitle(node: TerminalTabTitleNode): string | null {

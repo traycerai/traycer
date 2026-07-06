@@ -66,7 +66,7 @@ export function ResourceUsageChip(props: ResourceUsageChipProps) {
   const cpu = formatCpuPercent(props.cpuPercent);
   const memory = formatMemoryBytes(props.rssBytes);
   const processes = formatProcessCount(props.processCount);
-  const processWord = props.processCount === 1 ? "process" : "processes";
+  const processWord = pluralize(props.processCount, "process", "processes");
   const description = `${props.label}: ${cpu} CPU, ${memory} memory, ${processes} ${processWord}`;
 
   return (
