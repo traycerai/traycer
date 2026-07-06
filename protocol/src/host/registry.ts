@@ -117,8 +117,10 @@ import {
   terminalSubscribeV10,
   terminalSubscribeV11,
   terminalSubscribeV12,
+  terminalSubscribeV13,
 } from "@traycer/protocol/host/terminal/contracts";
 import { notificationsSubscribeV10 } from "@traycer/protocol/host/notifications/contracts";
+import { resourcesSubscribeV10 } from "@traycer/protocol/host/resources/subscribe";
 import {
   speechEnsureModelV10,
   speechGetModelStatusV10,
@@ -2577,7 +2579,8 @@ export type HostRpcRegistry = typeof hostRpcRegistry;
  * One manifest per `/stream` WS: `epic.subscribe@1.0`,
  * `chat.subscribe@1.1`, `notifications.subscribe@1.0`,
  * `terminal.subscribe@1.0`, `git.subscribeStatus@1.0`,
- * `agent.inbox.subscribe@1.0`, `speech.dictate@1.0`, and
+ * `resources.subscribe@1.0`, `agent.inbox.subscribe@1.0`,
+ * `speech.dictate@1.0`, and
  * `migration.run@1.0` are negotiated from this registry. Later minors within
  * the same major line must be
  * additive; later majors must carry a real breaking change and ship without a
@@ -2630,7 +2633,7 @@ export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
   },
   "terminal.subscribe": {
     1: {
-      latestMinor: 2,
+      latestMinor: 3,
       versions: {
         0: {
           contract: terminalSubscribeV10,
@@ -2641,6 +2644,9 @@ export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
         2: {
           contract: terminalSubscribeV12,
         },
+        3: {
+          contract: terminalSubscribeV13,
+        },
       },
     },
   },
@@ -2650,6 +2656,16 @@ export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
       versions: {
         0: {
           contract: gitSubscribeStatusV10,
+        },
+      },
+    },
+  },
+  "resources.subscribe": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: resourcesSubscribeV10,
         },
       },
     },

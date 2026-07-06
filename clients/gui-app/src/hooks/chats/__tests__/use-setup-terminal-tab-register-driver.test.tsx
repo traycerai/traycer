@@ -98,6 +98,7 @@ describe("useSetupTerminalTabRegisterDriver", () => {
       instanceId: WORKTREE_ENTRY.setupTerminalSessionId,
       type: "terminal",
       name: "Setup: traycer feature/setup-title",
+      titleSource: "manual",
       hostId: HOST_ID,
       cwd: WORKTREE_ENTRY.worktreePath,
     });

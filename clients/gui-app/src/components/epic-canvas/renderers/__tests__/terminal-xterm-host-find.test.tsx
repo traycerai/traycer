@@ -278,6 +278,7 @@ function createTerminalNode(args: {
       instanceId: args.instanceId,
       type: "terminal",
       name: "Terminal",
+      titleSource: "manual",
       hostId: "host-1",
       cwd: "/tmp",
     };

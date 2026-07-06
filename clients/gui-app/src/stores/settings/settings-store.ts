@@ -57,6 +57,10 @@ export interface SettingsState {
    * prompt surfaces on the first unfocused completion.
    */
   notifyOnChatTurnComplete: boolean;
+  /** Show the app-global resource monitor button in the header. */
+  showGlobalResourceMonitor: boolean;
+  /** Show inline resource usage chips in task navigator/sidebar rows. */
+  showNavigatorResourceStats: boolean;
   /**
    * Keep the chat context-window breakdown pinned near the composer instead of
    * the compact-only chip. Global preference, default off; chats without
@@ -100,6 +104,8 @@ export interface SettingsState {
   setComposerMode: (mode: ComposerMode) => void;
   setPreventSleepWhileRunning: (value: boolean) => void;
   setNotifyOnChatTurnComplete: (value: boolean) => void;
+  setShowGlobalResourceMonitor: (value: boolean) => void;
+  setShowNavigatorResourceStats: (value: boolean) => void;
   setPinContextUsageBreakdown: (value: boolean) => void;
   setPointerCursors: (value: boolean) => void;
   setUiFontSize: (value: number) => void;
@@ -130,6 +136,8 @@ type PersistedSettingsState = Pick<
   | "composerMode"
   | "preventSleepWhileRunning"
   | "notifyOnChatTurnComplete"
+  | "showGlobalResourceMonitor"
+  | "showNavigatorResourceStats"
   | "pinContextUsageBreakdown"
   | "pointerCursors"
   | "uiFontSize"
@@ -192,6 +200,8 @@ function partializeSettingsState(state: SettingsState): PersistedSettingsState {
     composerMode: state.composerMode,
     preventSleepWhileRunning: state.preventSleepWhileRunning,
     notifyOnChatTurnComplete: state.notifyOnChatTurnComplete,
+    showGlobalResourceMonitor: state.showGlobalResourceMonitor,
+    showNavigatorResourceStats: state.showNavigatorResourceStats,
     pinContextUsageBreakdown: state.pinContextUsageBreakdown,
     pointerCursors: state.pointerCursors,
     uiFontSize: state.uiFontSize,
@@ -222,6 +232,8 @@ export const useSettingsStore = create<SettingsState>()(
       composerMode: DEFAULT_COMPOSER_MODE,
       preventSleepWhileRunning: false,
       notifyOnChatTurnComplete: true,
+      showGlobalResourceMonitor: true,
+      showNavigatorResourceStats: false,
       pinContextUsageBreakdown: false,
       pointerCursors: true,
       uiFontSize: DEFAULT_UI_FONT_SIZE,
@@ -242,6 +254,14 @@ export const useSettingsStore = create<SettingsState>()(
       setComposerMode: makeSetter(set, "composerMode"),
       setPreventSleepWhileRunning: makeSetter(set, "preventSleepWhileRunning"),
       setNotifyOnChatTurnComplete: makeSetter(set, "notifyOnChatTurnComplete"),
+      setShowGlobalResourceMonitor: makeSetter(
+        set,
+        "showGlobalResourceMonitor",
+      ),
+      setShowNavigatorResourceStats: makeSetter(
+        set,
+        "showNavigatorResourceStats",
+      ),
       setPinContextUsageBreakdown: makeSetter(set, "pinContextUsageBreakdown"),
       setPointerCursors: makeSetter(set, "pointerCursors"),
       setUiFontSize: makeClampedFontSizeSetter(

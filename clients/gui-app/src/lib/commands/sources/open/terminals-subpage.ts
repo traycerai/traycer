@@ -65,6 +65,7 @@ function terminalFolderItem(
           instanceId: uuidv4(),
           type: "terminal",
           name: DEFAULT_TERMINAL_TITLE,
+          titleSource: "default",
           hostId: row.hostId,
           cwd: row.runningDir,
         },
@@ -127,6 +128,7 @@ export function useTerminalsOpenerItems(
         instanceId: uuidv4(),
         type: "terminal",
         name: terminalSessionTitle(session),
+        titleSource: session.title === null ? "default" : "manual",
         hostId: defaultHostId,
         // Recorded so an eviction-recreate lands back in the session's
         // directory - same as the sidebar's open-existing path.
