@@ -8,11 +8,11 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderRateLimits } from "@traycer/protocol/host";
+import type { ProviderRateLimitEnvelope } from "@/lib/rate-limits/rate-limit-envelope";
 import { formatResetDateTime } from "@/lib/relative-time";
 
 const mocks = vi.hoisted(() => ({
-  data: undefined as
-    { providerRateLimits: ProviderRateLimits | null } | undefined,
+  data: undefined as ProviderRateLimitEnvelope | undefined,
   isPending: false,
   isError: false,
   isFetching: false,
@@ -20,6 +20,20 @@ const mocks = vi.hoisted(() => ({
   draining: false,
   enqueue: vi.fn((..._args: unknown[]) => Promise.resolve()),
 }));
+
+// A fresh, cold-start envelope wrapping a single response - matches what the
+// production `mapResponseToProviderRateLimitEnvelope` wrapper would produce
+// for a provider's first successful pull.
+function envelope(data: ProviderRateLimits): ProviderRateLimitEnvelope {
+  return data.available
+    ? {
+        latest: data,
+        lastGood: data,
+        lastGoodAt: Date.now(),
+        lastFailureAt: null,
+      }
+    : { latest: data, lastGood: null, lastGoodAt: null, lastFailureAt: null };
+}
 
 vi.mock("@/hooks/host/use-host-provider-rate-limits-query", () => ({
   useHostProviderRateLimitsQuery: () => ({
@@ -153,7 +167,7 @@ describe("ProviderRateLimitForProvider", () => {
   });
 
   it("renders the Claude Code rate-limit detail once loaded", () => {
-    mocks.data = { providerRateLimits: CLAUDE_RATE_LIMITS };
+    mocks.data = envelope(CLAUDE_RATE_LIMITS);
     render(<ProviderRateLimitForProvider providerId="claude-code" />);
 
     expect(screen.getByText("Current session")).toBeTruthy();
@@ -163,13 +177,13 @@ describe("ProviderRateLimitForProvider", () => {
   });
 
   it("does not show a subscription-plan badge (the provider auth badge above already shows it)", () => {
-    mocks.data = { providerRateLimits: CLAUDE_RATE_LIMITS };
+    mocks.data = envelope(CLAUDE_RATE_LIMITS);
     render(<ProviderRateLimitForProvider providerId="claude-code" />);
     expect(screen.queryByText("Max")).toBeNull();
   });
 
   it("shows an exact reset date/time for the weekly window, and a relative countdown for the 5-hour one", () => {
-    mocks.data = { providerRateLimits: CLAUDE_RATE_LIMITS };
+    mocks.data = envelope(CLAUDE_RATE_LIMITS);
     render(<ProviderRateLimitForProvider providerId="claude-code" />);
 
     expect(
@@ -183,21 +197,19 @@ describe("ProviderRateLimitForProvider", () => {
   it("colors a window's bar yellow at/above 60% used and red above 85% used", () => {
     // The Settings card now shares the same four-tier severity scale as the
     // popover (item 6 feedback: "different UX looks weird").
-    mocks.data = {
-      providerRateLimits: {
-        ...CLAUDE_RATE_LIMITS,
-        fiveHour: {
-          usedPercent: 75,
-          resetsAt: CLAUDE_FIVE_HOUR_RESETS_AT,
-          durationMinutes: 300,
-        },
-        sevenDay: {
-          usedPercent: 95,
-          resetsAt: CLAUDE_SEVEN_DAY_RESETS_AT,
-          durationMinutes: 10080,
-        },
+    mocks.data = envelope({
+      ...CLAUDE_RATE_LIMITS,
+      fiveHour: {
+        usedPercent: 75,
+        resetsAt: CLAUDE_FIVE_HOUR_RESETS_AT,
+        durationMinutes: 300,
       },
-    };
+      sevenDay: {
+        usedPercent: 95,
+        resetsAt: CLAUDE_SEVEN_DAY_RESETS_AT,
+        durationMinutes: 10080,
+      },
+    });
     const { container } = render(
       <ProviderRateLimitForProvider providerId="claude-code" />,
     );
@@ -209,7 +221,7 @@ describe("ProviderRateLimitForProvider", () => {
   });
 
   it("keeps the bar blue below the yellow threshold", () => {
-    mocks.data = { providerRateLimits: CLAUDE_RATE_LIMITS };
+    mocks.data = envelope(CLAUDE_RATE_LIMITS);
     const { container } = render(
       <ProviderRateLimitForProvider providerId="claude-code" />,
     );
@@ -222,7 +234,7 @@ describe("ProviderRateLimitForProvider", () => {
   });
 
   it("renders the Codex rate-limit detail once loaded", () => {
-    mocks.data = { providerRateLimits: CODEX_RATE_LIMITS };
+    mocks.data = envelope(CODEX_RATE_LIMITS);
     render(<ProviderRateLimitForProvider providerId="codex" />);
 
     expect(screen.getByText("Current session")).toBeTruthy();
@@ -232,21 +244,21 @@ describe("ProviderRateLimitForProvider", () => {
   });
 
   it("maps a rateLimitReachedType token to a destructive badge", () => {
-    mocks.data = { providerRateLimits: CODEX_RATE_LIMITS };
+    mocks.data = envelope(CODEX_RATE_LIMITS);
     render(<ProviderRateLimitForProvider providerId="codex" />);
 
     expect(screen.getByText("Usage limit reached")).toBeTruthy();
   });
 
   it("does not show a plan badge (the provider auth badge above already shows it)", () => {
-    mocks.data = { providerRateLimits: CODEX_RATE_LIMITS };
+    mocks.data = envelope(CODEX_RATE_LIMITS);
     render(<ProviderRateLimitForProvider providerId="codex" />);
 
     expect(screen.queryByText("Plus")).toBeNull();
   });
 
   it("renders the credits row", () => {
-    mocks.data = { providerRateLimits: CODEX_RATE_LIMITS };
+    mocks.data = envelope(CODEX_RATE_LIMITS);
     render(<ProviderRateLimitForProvider providerId="codex" />);
 
     expect(screen.getByText("Credits")).toBeTruthy();
@@ -254,7 +266,7 @@ describe("ProviderRateLimitForProvider", () => {
   });
 
   it("renders the spend-control row with used/limit and an absolute reset time", () => {
-    mocks.data = { providerRateLimits: CODEX_RATE_LIMITS };
+    mocks.data = envelope(CODEX_RATE_LIMITS);
     render(<ProviderRateLimitForProvider providerId="codex" />);
 
     // Scoped to the spend-limit row's own container: the current-session
@@ -277,7 +289,7 @@ describe("ProviderRateLimitForProvider", () => {
   });
 
   it("routes a Codex (ephemeralProcess) manual refresh through the shared queue with force:true, not a bare query.refetch()", () => {
-    mocks.data = { providerRateLimits: CODEX_RATE_LIMITS };
+    mocks.data = envelope(CODEX_RATE_LIMITS);
     render(<ProviderRateLimitForProvider providerId="codex" />);
 
     fireEvent.click(
@@ -291,7 +303,7 @@ describe("ProviderRateLimitForProvider", () => {
   });
 
   it("keeps the refresh button disabled while the shared queue is draining, even once this provider's own isFetching has settled", () => {
-    mocks.data = { providerRateLimits: CODEX_RATE_LIMITS };
+    mocks.data = envelope(CODEX_RATE_LIMITS);
     mocks.isFetching = false;
     mocks.draining = true;
     render(<ProviderRateLimitForProvider providerId="codex" />);

@@ -1,5 +1,5 @@
 import { DEFAULT_ACCOUNT_CONTEXT } from "@traycer/protocol/common/schemas";
-import type { UseHostQueryOptions } from "@/hooks/host/use-host-query";
+import type { RequestOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import {
   PROVIDER_RATE_LIMITS_STALE_TIME_MS,
@@ -15,9 +15,34 @@ import {
 const HTTP_FETCH_RATE_LIMIT_REFETCH_INTERVAL_MS = 5 * 60 * 1000;
 
 /**
- * The method/params/options `useHostProviderRateLimitsQuery` builds its query
- * from - split out so a future host-scoped variant (e.g. tab-scoped) can
- * reuse the same shape without duplicating it.
+ * The small, closed set of TanStack options every `host.getRateLimitUsage`
+ * provider-pull consumer needs. Deliberately NOT expressed as (a slice of)
+ * `UseQueryOptions<TData, ...>` - none of these six fields' types actually
+ * depend on the cached data shape, and keeping this type TData-independent is
+ * what lets the same `providerRateLimitQueryOptions` result compose with
+ * every consumer regardless of which `TData` it reads (the raw wire response
+ * for a plain `useHostQuery`, or the `ProviderRateLimitEnvelope` the
+ * envelope-aware hooks in this ticket use) without a generic-variance fight.
+ */
+export interface ProviderRateLimitTanstackOptions {
+  readonly enabled: boolean;
+  readonly retry: false;
+  readonly staleTime: number;
+  readonly refetchInterval: number | false;
+  readonly refetchIntervalInBackground: false;
+  readonly refetchOnMount: boolean;
+}
+
+export interface ProviderRateLimitQueryOptions {
+  readonly method: "host.getRateLimitUsage";
+  readonly params: RequestOfMethod<HostRpcRegistry, "host.getRateLimitUsage">;
+  readonly options: ProviderRateLimitTanstackOptions;
+}
+
+/**
+ * The method/params/options every `host.getRateLimitUsage` provider-pull
+ * consumer builds its query from - split out so a future host-scoped variant
+ * (e.g. tab-scoped) can reuse the same shape without duplicating it.
  *
  * Branches on the fetch lane for background polling:
  * - `httpFetch` (openrouter, kilocode): its own `refetchInterval`, with
@@ -42,10 +67,7 @@ const HTTP_FETCH_RATE_LIMIT_REFETCH_INTERVAL_MS = 5 * 60 * 1000;
  */
 export function providerRateLimitQueryOptions(
   providerId: RateLimitProviderId,
-): Omit<
-  UseHostQueryOptions<HostRpcRegistry, "host.getRateLimitUsage">,
-  "client"
-> {
+): ProviderRateLimitQueryOptions {
   const isHttpFetch = rateLimitFetchLane(providerId) === "httpFetch";
   return {
     method: "host.getRateLimitUsage",

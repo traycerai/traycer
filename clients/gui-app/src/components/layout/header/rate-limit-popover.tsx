@@ -20,9 +20,14 @@ import {
   type ProviderRateLimitQueryState,
 } from "@/components/settings/panels/provider-rate-limit-views";
 import { useHostProviderRateLimitsQuery } from "@/hooks/host/use-host-provider-rate-limits-query";
-import { useHostQueries } from "@/hooks/host/use-host-queries";
+import { useHostQueriesWithResponseMap } from "@/hooks/host/use-host-queries";
 import { providerRateLimitQueryOptions } from "@/hooks/host/provider-rate-limit-query-options";
+import {
+  mapResponseToProviderRateLimitEnvelope,
+  type ProviderRateLimitEnvelope,
+} from "@/lib/rate-limits/rate-limit-envelope";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import type { RateLimitUnavailableReason } from "@traycer/protocol/host";
 import {
   useConfiguredRateLimitProviders,
   type ConfiguredRateLimitProvider,
@@ -490,9 +495,10 @@ function RateLimitRefreshAllButton({
     httpFetchProviders.length === 0
       ? null
       : providerRateLimitQueryOptions(httpFetchProviders[0].providerId).options;
-  const httpFetchQueries = useHostQueries<
+  const httpFetchQueries = useHostQueriesWithResponseMap<
     HostRpcRegistry,
-    "host.getRateLimitUsage"
+    "host.getRateLimitUsage",
+    ProviderRateLimitEnvelope
   >({
     client,
     requests: httpFetchProviders.map((provider) => {
@@ -502,6 +508,7 @@ function RateLimitRefreshAllButton({
       return { method, params };
     }),
     options: httpFetchOptions,
+    mapResponse: mapResponseToProviderRateLimitEnvelope,
   });
   const refreshing =
     draining || httpFetchQueries.some((query) => query.isFetching);
@@ -589,7 +596,7 @@ function RateLimitProviderBlock({
     isPending: query.isPending,
     isFetching: isRefreshing,
     isError: query.isError,
-    providerRateLimits: query.data?.providerRateLimits,
+    envelope: query.data,
   };
   const state = resolvePopoverProviderRateLimitState(queryState);
   useEffect(() => {
@@ -631,6 +638,9 @@ function RateLimitProviderBlock({
             updatedAt={query.dataUpdatedAt}
             refreshing={isRefreshing}
             degraded={state.kind === "ready" && state.degraded}
+            degradedReason={
+              state.kind === "ready" ? state.degradedReason : null
+            }
           />
           {/* Overview has its own "Refresh all" on the rail (item 2 feedback:
               a per-provider icon there was redundant); only the single-provider
@@ -654,25 +664,37 @@ function RateLimitProviderBlock({
 }
 
 /**
- * "Updated Xm ago", only once a reading actually exists - and "· refresh
- * failed" appended when a last-known-good reading is being shown after a failed
- * poll (Core Flows degraded state).
+ * "Updated Xm ago", only once a reading actually exists - and a trailing
+ * degraded note appended when a last-known-good reading is being shown after
+ * a failed poll (Core Flows degraded state): the specific transient reason's
+ * plain-language copy (e.g. "couldn't fetch usage - will retry") when the
+ * envelope itself is why (`degradedReason` non-null), or the generic
+ * "· refresh failed" when the degrade is only a thrown query-level exception
+ * with no specific reason to report.
  */
 function UsageLimitUpdatedLabel({
   ready,
   updatedAt,
   refreshing,
   degraded,
+  degradedReason,
 }: {
   readonly ready: boolean;
   readonly updatedAt: number;
   readonly refreshing: boolean;
   readonly degraded: boolean;
+  readonly degradedReason: RateLimitUnavailableReason | null;
 }): ReactNode {
   if (!ready) return null;
   if (refreshing) return <RefreshingText />;
   if (updatedAt === 0) return null;
-  return <UpdatedAgoText updatedAt={updatedAt} degraded={degraded} />;
+  return (
+    <UpdatedAgoText
+      updatedAt={updatedAt}
+      degraded={degraded}
+      degradedReason={degradedReason}
+    />
+  );
 }
 
 function RefreshingText(): ReactNode {
@@ -701,14 +723,25 @@ function RefreshingWorkingDots(): ReactNode {
 function UpdatedAgoText({
   updatedAt,
   degraded,
+  degradedReason,
 }: {
   readonly updatedAt: number;
   readonly degraded: boolean;
+  readonly degradedReason: RateLimitUnavailableReason | null;
 }): ReactNode {
   const ago = useRelativeTimestamp(updatedAt);
+  if (!degraded) {
+    return (
+      <span className="text-ui-xs text-muted-foreground">Updated {ago}</span>
+    );
+  }
+  const note =
+    degradedReason !== null
+      ? formatUnavailableReason(degradedReason)
+      : "refresh failed";
   return (
     <span className="text-ui-xs text-muted-foreground">
-      {degraded ? `Updated ${ago} · refresh failed` : `Updated ${ago}`}
+      {`Updated ${ago} · ${note}`}
     </span>
   );
 }
@@ -842,6 +875,9 @@ function TraycerRateLimitBlock({
             updatedAt={query.dataUpdatedAt}
             refreshing={query.isFetching}
             degraded={state.kind === "ready" && state.degraded}
+            // The Traycer aperture block's state (`resolveTraycerSubscriptionState`)
+            // has no transient-reason concept of its own - always the generic note.
+            degradedReason={null}
           />
           {/* Overview has its own "Refresh all" on the rail (item 2 feedback);
               only the single-provider detail tab keeps this one. */}

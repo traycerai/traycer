@@ -15,9 +15,13 @@ import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Popover, PopoverTrigger } from "@/components/ui/popover";
 import { useAccountContextStore } from "@/stores/auth/account-context-store";
+import type {
+  AvailableProviderRateLimits,
+  ProviderRateLimitEnvelope,
+} from "@/lib/rate-limits/rate-limit-envelope";
 
 type QueryResult = {
-  data: { providerRateLimits: ProviderRateLimits | null } | undefined;
+  data: ProviderRateLimitEnvelope | undefined;
   isPending: boolean;
   isFetching: boolean;
   isError: boolean;
@@ -93,20 +97,25 @@ vi.mock("@/hooks/host/use-host-provider-rate-limits-query", () => ({
 // `RateLimitRefreshAllButton` reads each configured httpFetch provider's
 // query state directly (to fold its `isFetching` into the button's own
 // spinner) via the same fixture map every other mocked query hook here uses.
+// Production calls `useHostQueriesWithResponseMap` (not the plain
+// `useHostQueries`) for this - see that hook's own doc comment - so this mock
+// exports both names with equivalent behavior; the extra `mapResponse` field
+// production passes is irrelevant to this fixture-backed double.
+function mockUseHostQueriesImpl(args: {
+  requests: ReadonlyArray<{ params: { providerId: string } }>;
+  options: { retry: boolean | undefined } | null;
+}) {
+  mocks.lastUseHostQueriesOptions = args.options;
+  mocks.lastUseHostQueriesProviderIds = args.requests.map(
+    (request) => request.params.providerId,
+  );
+  return args.requests.map(
+    (request) => mocks.results[request.params.providerId] ?? readyResult(null),
+  );
+}
 vi.mock("@/hooks/host/use-host-queries", () => ({
-  useHostQueries: (args: {
-    requests: ReadonlyArray<{ params: { providerId: string } }>;
-    options: { retry: boolean | undefined } | null;
-  }) => {
-    mocks.lastUseHostQueriesOptions = args.options;
-    mocks.lastUseHostQueriesProviderIds = args.requests.map(
-      (request) => request.params.providerId,
-    );
-    return args.requests.map(
-      (request) =>
-        mocks.results[request.params.providerId] ?? readyResult(null),
-    );
-  },
+  useHostQueries: mockUseHostQueriesImpl,
+  useHostQueriesWithResponseMap: mockUseHostQueriesImpl,
 }));
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
@@ -143,11 +152,31 @@ import { RateLimitPopover } from "@/components/layout/header/rate-limit-popover"
 
 const NOW = Date.now();
 
+function envelopeFor(
+  providerRateLimits: ProviderRateLimits,
+): ProviderRateLimitEnvelope {
+  if (providerRateLimits.available) {
+    return {
+      latest: providerRateLimits,
+      lastGood: providerRateLimits,
+      lastGoodAt: NOW - 90_000,
+      lastFailureAt: null,
+    };
+  }
+  return {
+    latest: providerRateLimits,
+    lastGood: null,
+    lastGoodAt: null,
+    lastFailureAt: null,
+  };
+}
+
 function readyResult(
   providerRateLimits: ProviderRateLimits | null,
 ): QueryResult {
   return {
-    data: { providerRateLimits },
+    data:
+      providerRateLimits === null ? undefined : envelopeFor(providerRateLimits),
     isPending: false,
     isFetching: false,
     isError: false,
@@ -156,7 +185,29 @@ function readyResult(
   };
 }
 
-function claudeReady(): ProviderRateLimits {
+/** A `ready` result whose envelope retains `lastGood` across a transient
+ * unavailable `latest` - the "dimmed reading + specific transient message"
+ * scenario this ticket's retention treatment adds. */
+function degradedRetainedResult(
+  lastGood: AvailableProviderRateLimits,
+  reason: "usage_fetch_failed" | "timeout" | "connection_failed",
+): QueryResult {
+  return {
+    data: {
+      latest: { provider: lastGood.provider, available: false, reason },
+      lastGood,
+      lastGoodAt: NOW - 90_000,
+      lastFailureAt: NOW - 1_000,
+    },
+    isPending: false,
+    isFetching: false,
+    isError: false,
+    dataUpdatedAt: NOW - 90_000,
+    refetch: vi.fn(() => Promise.resolve({})),
+  };
+}
+
+function claudeReady(): AvailableProviderRateLimits {
   return {
     provider: "claude-code",
     available: true,
@@ -174,7 +225,7 @@ function claudeReady(): ProviderRateLimits {
   };
 }
 
-function codexReady(): ProviderRateLimits {
+function codexReady(): AvailableProviderRateLimits {
   return {
     provider: "codex",
     available: true,
@@ -587,6 +638,61 @@ describe("<RateLimitPopover /> per-provider states", () => {
     expect(screen.getByText(/· refresh failed/)).toBeTruthy();
     // PopoverContent portals to document.body, outside the render container.
     expect(document.querySelectorAll(".opacity-60").length).toBeGreaterThan(0);
+  });
+
+  it("dims the last good reading and shows the specific transient message when the envelope retains it across a usage_fetch_failed poll", () => {
+    // Distinct from the test above: this is NOT a thrown query exception
+    // (`isError`) - it's a successful RPC whose payload itself says
+    // `usage_fetch_failed`, with a `lastGood` retained from an earlier poll.
+    // The dimmed treatment is the same, but the trailing note names the
+    // specific transient reason instead of the generic "refresh failed".
+    mocks.configured = [{ providerId: "codex", lane: "ephemeralProcess" }];
+    mocks.results = {
+      codex: degradedRetainedResult(codexReady(), "usage_fetch_failed"),
+    };
+    renderPopover();
+    expect(
+      screen.getByText(/· couldn't fetch usage — will retry/),
+    ).toBeTruthy();
+    expect(screen.queryByText(/· refresh failed/)).toBeNull();
+    // The retained reading itself is still rendered (dimmed), not replaced by
+    // an error message.
+    expect(screen.getByText("4% used")).toBeTruthy();
+    expect(document.querySelectorAll(".opacity-60").length).toBeGreaterThan(0);
+  });
+
+  it("replaces the picture entirely (no dimmed data) for an authoritative unavailable reason, even with a lastGood on hand", () => {
+    // `rate_limits_not_available` (and friends) are account-capability
+    // reasons, not transient - they must never be shown alongside a stale
+    // reading the way a transient failure is.
+    mocks.configured = [{ providerId: "codex", lane: "ephemeralProcess" }];
+    mocks.results = {
+      codex: {
+        data: {
+          latest: {
+            provider: "codex",
+            available: false,
+            reason: "rate_limits_not_available",
+          },
+          lastGood: codexReady(),
+          lastGoodAt: NOW - 90_000,
+          lastFailureAt: NOW - 1_000,
+        },
+        isPending: false,
+        isFetching: false,
+        isError: false,
+        dataUpdatedAt: NOW - 90_000,
+        refetch: vi.fn(() => Promise.resolve({})),
+      },
+    };
+    renderPopover();
+    expect(
+      screen.getByText(
+        "Usage limits unavailable — not available for this account",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText("4% used")).toBeNull();
+    expect(document.querySelectorAll(".opacity-60").length).toBe(0);
   });
 
   it("shows Refreshing instead of an updated timestamp while a refresh is in progress", () => {

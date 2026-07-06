@@ -9,6 +9,7 @@ import type {
   ProviderRateLimits,
   ProviderRateLimitWindow,
 } from "@traycer/protocol/host";
+import type { ProviderRateLimitEnvelope } from "@/lib/rate-limits/rate-limit-envelope";
 import { Badge } from "@/components/ui/badge";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { MeterRow } from "@/components/settings/panels/traycer-subscription-views";
@@ -51,12 +52,21 @@ function isOverviewVariant(variant: RateLimitViewVariant): boolean {
   return variant === "popover-overview";
 }
 
-/** Shared read of a provider rate-limit query, independent of host scope. */
+/**
+ * Shared read of a provider rate-limit query, independent of host scope. The
+ * query's cached `data` is the `host.getRateLimitUsage` provider-pull
+ * envelope (`ProviderRateLimitEnvelope`) - `undefined` before a first fetch
+ * has ever landed for this observer, matching TanStack's own `data`
+ * semantics. View-state resolution (retention through a transient failure,
+ * replacement on an authoritative one) lives in
+ * `resolveProviderRateLimitViewState` / `resolvePopoverProviderRateLimitState`
+ * (`provider-rate-limit-content.ts`), not here.
+ */
 export interface ProviderRateLimitQueryState {
   readonly isPending: boolean;
   readonly isFetching: boolean;
   readonly isError: boolean;
-  readonly providerRateLimits: ProviderRateLimits | null | undefined;
+  readonly envelope: ProviderRateLimitEnvelope | null | undefined;
 }
 
 type AvailableProviderRateLimits = Extract<
