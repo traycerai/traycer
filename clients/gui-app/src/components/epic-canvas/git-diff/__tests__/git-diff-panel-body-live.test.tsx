@@ -25,6 +25,7 @@ import {
 } from "@/stores/epics/git-panel-store";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { GitDiffPanelBodyLive } from "../git-diff-panel-body-live";
+import { expectModuleHeaderTooltip } from "./git-module-header-test-utils";
 
 const testState = vi.hoisted(() => ({
   rows: [] as WorktreeBindingSelectorRow[],
@@ -287,16 +288,6 @@ function renderPanel(selected: GitPanelSelectedRepo): QueryClient {
     </QueryClientProvider>,
   );
   return queryClient;
-}
-
-async function expectModuleHeaderTooltip(
-  header: HTMLElement,
-  expected: string,
-): Promise<void> {
-  expect(header.getAttribute("title")).toBeNull();
-  fireEvent.focus(header);
-  expect((await screen.findByRole("tooltip")).textContent).toContain(expected);
-  fireEvent.blur(header);
 }
 
 function openSwitcher(): void {

@@ -628,7 +628,7 @@ function GitModuleGroupsView(props: {
   ]);
 
   const searchVisible = gitModuleSearchVisible(props.modules, singleRepo);
-  const cleanWorkspace = allModulesClean(props.modules);
+  const cleanWorkspace = !queryActive && allModulesClean(props.modules);
   const noQueryMatches = gitModuleGroupsNoQueryMatches({
     singleRepo,
     queryActive,
