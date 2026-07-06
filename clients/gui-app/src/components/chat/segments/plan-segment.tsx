@@ -278,6 +278,7 @@ function PlanModal(props: {
             components={null}
             remarkPlugins={null}
             rehypePlugins={null}
+            quotable={false}
             isStreaming={false}
           >
             {modalBody}

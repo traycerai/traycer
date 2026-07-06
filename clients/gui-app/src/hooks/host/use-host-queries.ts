@@ -34,7 +34,7 @@ export interface UseHostQueriesOptions<
       HostRpcError,
       ResponseOfMethod<Registry, Method>
     >,
-    "staleTime" | "enabled" | "gcTime" | "refetchInterval"
+    "staleTime" | "enabled" | "gcTime" | "refetchInterval" | "placeholderData"
   > | null;
 }
 

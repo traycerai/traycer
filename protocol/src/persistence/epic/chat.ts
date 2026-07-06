@@ -16,6 +16,15 @@ export function isLegacyHost(id: string): boolean {
   return id === LEGACY_HOST_ID;
 }
 
+export const claudePendingWakeSchema = z.object({
+  sessionId: z.string(),
+  toolUseId: z.string(),
+  scheduledFor: z.number(),
+  prompt: z.string(),
+  reason: z.string(),
+});
+export type ClaudePendingWake = z.infer<typeof claudePendingWakeSchema>;
+
 /**
  * Top-level chat record. On disk, `messages` is a yjs-backed Y.Array;
  * the materialized shape that the framework versions is a plain array of
@@ -41,6 +50,7 @@ export const chatSchema = z.object({
   isTitleEditedByUser: z.boolean(),
   settings: chatRunSettingsSchema.nullable().default(null),
   activeSessionChain: activeSessionChainSchema.nullable().default(null),
+  claudePendingWakes: z.array(claudePendingWakeSchema).default([]),
   messages: z.array(messageSchema),
   events: z.array(chatEventSchema).default([]),
 });

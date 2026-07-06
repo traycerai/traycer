@@ -118,13 +118,13 @@ function TabStripBody() {
       data-testid="tab-strip"
       className="relative flex min-w-0 flex-1 items-end"
     >
-      <div className="relative flex min-w-0 flex-1 items-end">
+      <div className="relative flex min-w-0 max-w-full flex-[0_1_auto] items-end">
         <LayoutGroup id="header-tabs">
           <div
             ref={trailingSlotRef}
             data-testid="header-tab-strip-scroll"
             onWheel={handleWheel}
-            className="no-scrollbar flex min-w-0 flex-1 touch-pan-x items-end overflow-x-auto overscroll-x-contain"
+            className="no-scrollbar flex min-w-0 max-w-full flex-[0_1_auto] touch-pan-x items-end overflow-x-auto overscroll-x-contain"
           >
             {allTabs.map((tab, index) => {
               const isLastTab = index === allTabs.length - 1;
@@ -151,9 +151,9 @@ function TabStripBody() {
                 />
               );
             })}
-            <TabStripNewButton onNewTab={handleNewTab} />
           </div>
         </LayoutGroup>
+        <TabStripNewButton onNewTab={handleNewTab} />
       </div>
       {closeTabFlow.unsyncedDialog}
       <UnsyncedEpicMoveDialog flow={openInNewWindowFlow.epicFlow} />

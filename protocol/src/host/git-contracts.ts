@@ -4,11 +4,16 @@
  * getCapabilities) and one streaming (subscribeStatus).
  */
 import { z } from "zod";
-import { defineRpcContract } from "@traycer/protocol/framework/index";
+import {
+  defineRpcContract,
+  defineUpgradePath,
+} from "@traycer/protocol/framework/index";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
 import {
   gitListChangedFilesRequestSchema,
+  gitListChangedFilesRequestSchemaV11,
   gitListChangedFilesResponseSchema,
+  gitListChangedFilesResponseSchemaV11,
   gitGetFileDiffRequestSchema,
   gitGetFileDiffResponseSchema,
   gitGetFileDiffsRequestSchema,
@@ -48,6 +53,52 @@ export const gitGetFileDiffsV10 = defineRpcContract({
   requestSchema: gitGetFileDiffsRequestSchema,
   responseSchema: gitGetFileDiffsResponseSchema,
 });
+
+// ---- Submodule-aware v1.1 (unary-only) ---------------------------------- //
+//
+// `git.listChangedFiles@1.1` is the ONLY minor bump - it carries the
+// host-composed nested snapshot on its response (`submodules[]` + parent-row
+// `gitlink`). `getFileDiff`/`getFileDiffs` stay v1.0-only: the submodule diff
+// path is plain stage-based (run against the submodule repo root), so they need
+// no request change and earn no v1.1. No new method names (a new name fatally
+// fails the equal-set handshake against a shipped v1.0.0 host).
+// `git.subscribeStatus` stays v1.0. The same-major minor needs no downgrade
+// path: a v1.1 peer projects onto a v1.0 host by re-parsing through the
+// (non-strict) v1.0 schema, which strips the new response fields on the wire.
+// The upgrade path below bridges a v1.0 peer UP to canonical.
+
+/**
+ * `git.listChangedFiles@1.1` - adds parent-file `gitlink` descriptors and the
+ * `submodules[]` nested snapshot on the response, plus the request-side
+ * `includeSubmodules` fan-out gate (default false - the host only spawns git
+ * into submodules when a caller asks for the nested snapshot).
+ */
+export const gitListChangedFilesV11 = defineRpcContract({
+  method: "git.listChangedFiles",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: gitListChangedFilesRequestSchemaV11,
+  responseSchema: gitListChangedFilesResponseSchemaV11,
+});
+
+// A v1.0 host knows no submodules: every parent file gains `gitlink: null` and
+// the response gains an empty `submodules[]` (parent-only view). A v1.0 request
+// never asks for the fan-out, so its upgrade pins `includeSubmodules: false`.
+export const gitListChangedFilesUpgradeV10ToV11 = defineUpgradePath<
+  typeof gitListChangedFilesV10,
+  typeof gitListChangedFilesV11
+>({
+  from: gitListChangedFilesV10.schemaVersion,
+  to: gitListChangedFilesV11.schemaVersion,
+  upgradeRequest: (request) => ({ ...request, includeSubmodules: false }),
+  upgradeResponse: (response) => ({
+    ...response,
+    files: response.files.map((file) => ({ ...file, gitlink: null })),
+    submodules: [],
+  }),
+});
+
+// `git.getFileDiff` / `git.getFileDiffs` have no v1.1 - they stay v1.0-only (see
+// the section note above). Their v1.0 contracts are defined earlier in this file.
 
 /**
  * `git.getCapabilities@1.0` - unary RPC to check if git feature is available

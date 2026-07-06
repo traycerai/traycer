@@ -698,6 +698,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   const replaceDraftContent = useComposerDraftStore(
     (state) => state.replaceDraft,
   );
+  const clearDraftContent = useComposerDraftStore((state) => state.clearDraft);
   const defaultPermission = useSettingsStore(
     (state) => state.defaultPermission,
   );
@@ -1307,6 +1308,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     handle,
     nodeId: node.id,
     replaceDraftContent,
+    clearDraftContent,
     currentComposerSettings,
     currentEpicId,
     editingQueueItemId: uiState.editingQueueItemId,
@@ -1628,6 +1630,7 @@ function ChatSessionMessagesSurface(
           >
             <ChatMessages
               taskTitle={props.node.name}
+              taskId={props.node.id}
               messages={props.messages}
               backgroundItems={props.backgroundItems}
               minimapItems={props.minimapItems}

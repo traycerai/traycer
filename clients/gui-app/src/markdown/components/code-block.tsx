@@ -75,6 +75,8 @@ function FencedCodeBlock({
 
   return (
     <div
+      data-quote-code-block=""
+      data-language={language}
       className={cn(
         "group/code relative my-3 overflow-hidden rounded-lg border border-border/60",
         "bg-[color-mix(in_oklch,var(--color-muted)_55%,transparent)]",

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { TerminalSessionInfo } from "@traycer/protocol/host/terminal/unary-schemas";
-import { isVisibleTerminalSidebarSession } from "../terminal-session-filters";
+import { isVisibleRawTerminalSession } from "../terminal-session-filters";
 
 function session(
   sessionId: string,
@@ -24,7 +24,7 @@ function session(
 }
 
 describe("terminal session filters", () => {
-  it("shows only running user terminal sessions in the terminals sidebar", () => {
+  it("keeps only running raw terminal sessions, excluding terminal-agents", () => {
     // A worktree-setup shell is a plain `terminal` that stays running after
     // setup, so it is shown like any other running terminal; exited sessions
     // (and terminal-agents) are not.
@@ -35,7 +35,7 @@ describe("terminal session filters", () => {
         session("agent-1", "terminal-agent", "running"),
         session("agent-2", "terminal-agent", "exited"),
       ]
-        .filter(isVisibleTerminalSidebarSession)
+        .filter(isVisibleRawTerminalSession)
         .map((s) => s.sessionId),
     ).toEqual(["term-1"]);
   });

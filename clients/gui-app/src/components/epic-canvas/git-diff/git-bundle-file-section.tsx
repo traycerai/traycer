@@ -96,6 +96,7 @@ export function BundleFileSection(props: BundleFileSectionProps): ReactNode {
         onClick={handleToggleCollapsed}
         onDoubleClick={undefined}
         ariaExpanded={!collapsed}
+        nested={false}
         className={undefined}
       />
     ),

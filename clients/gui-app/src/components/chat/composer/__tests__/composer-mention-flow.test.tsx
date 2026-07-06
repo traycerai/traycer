@@ -109,6 +109,7 @@ describe("composer mention flow", () => {
         description: "",
         icon: FAKE_ICON,
         action: { kind: "complete", mention: fileMention("src/foo.ts") },
+        preview: null,
       },
     });
 
@@ -147,6 +148,7 @@ describe("composer mention flow", () => {
         description: "",
         icon: FAKE_ICON,
         action: { kind: "complete", mention: fileMention("src/foo.ts") },
+        preview: null,
       },
     });
 
@@ -178,6 +180,7 @@ describe("composer mention flow", () => {
         description: "",
         icon: FAKE_ICON,
         action: { kind: "complete", mention: fileMention("platform.ts") },
+        preview: null,
       },
     });
 

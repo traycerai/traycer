@@ -10,7 +10,7 @@ import { repairMarkdown } from "@/markdown/markdown-repair";
 /** Full-lex reference: a freshly-mounted hook always takes the non-incremental path. */
 function rawsFresh(content: string): string[] {
   const { result, unmount } = renderHook(() => useMarkdownBlocks(content));
-  const raws = result.current.map((block) => block.raw);
+  const raws = result.current.blocks.map((block) => block.raw);
   unmount();
   return raws;
 }
@@ -22,6 +22,21 @@ function fullLexRaws(content: string): string[] {
   return marked
     .lexer(repaired)
     .flatMap((token) => (token.type === "space" ? [] : [token.raw]));
+}
+
+function expectedTailStartIndex(content: string): number {
+  const repaired = repairMarkdown(content);
+  if (!repaired.trim()) return 0;
+  const tokens = marked.lexer(repaired).map((token) => ({
+    type: token.type,
+    raw: token.raw,
+  }));
+  for (let index = tokens.length - 1; index >= 1; index -= 1) {
+    if (tokens[index]?.type === "space" && tokens[index - 1]?.type !== "list") {
+      return index + 1;
+    }
+  }
+  return 0;
 }
 
 /**
@@ -62,7 +77,7 @@ describe("useMarkdownBlocks", () => {
     for (let end = 1; end <= DOC.length; end += 1) {
       const prefix = DOC.slice(0, end);
       rerender({ content: prefix });
-      const incremental = result.current.map((block) => block.raw);
+      const incremental = result.current.blocks.map((block) => block.raw);
       expect(incremental).toEqual(rawsFresh(prefix));
     }
   });
@@ -74,12 +89,12 @@ describe("useMarkdownBlocks", () => {
       ({ content }: { content: string }) => useMarkdownBlocks(content),
       { initialProps: { content: stepA } },
     );
-    const firstHeadingRaw = result.current[0]?.raw;
+    const firstHeadingRaw = result.current.blocks[0]?.raw;
 
     rerender({ content: stepB });
     // The closed heading block's `raw` is the identical string instance reused
     // from the cache, so the downstream `MarkdownBlock` memo holds.
-    expect(result.current[0]?.raw).toBe(firstHeadingRaw);
+    expect(result.current.blocks[0]?.raw).toBe(firstHeadingRaw);
   });
 
   it("falls back to a full lex when content is edited rather than appended", () => {
@@ -89,12 +104,49 @@ describe("useMarkdownBlocks", () => {
     );
     const edited = DOC.replace("First paragraph", "Edited paragraph");
     rerender({ content: edited });
-    expect(result.current.map((block) => block.raw)).toEqual(rawsFresh(edited));
+    expect(result.current.blocks.map((block) => block.raw)).toEqual(
+      rawsFresh(edited),
+    );
   });
 
   it("returns no blocks for blank content", () => {
     const { result } = renderHook(() => useMarkdownBlocks("   \n  "));
-    expect(result.current).toEqual([]);
+    expect(result.current).toEqual({ blocks: [], tailStartIndex: 0 });
+  });
+
+  it("exposes the frozen-prefix boundary for a streaming append", () => {
+    const content = "# Title\n\nFirst paragraph.\n\nTail still open";
+    const { result } = renderHook(() => useMarkdownBlocks(content));
+
+    expect(result.current.tailStartIndex).toBe(expectedTailStartIndex(content));
+    expect(result.current.blocks[0]?.id).toBeLessThan(
+      result.current.tailStartIndex,
+    );
+    expect(result.current.blocks.at(-1)?.id).toBeGreaterThanOrEqual(
+      result.current.tailStartIndex,
+    );
+  });
+
+  it("moves the exposed boundary for a reshaping streaming case", () => {
+    const beforeSetext = "# H\n\nSome paragraph\n\nSetext Heading";
+    const afterSetext = `${beforeSetext}\n===\n\nmore`;
+    const { result, rerender } = renderHook(
+      ({ content }: { content: string }) => useMarkdownBlocks(content),
+      { initialProps: { content: beforeSetext } },
+    );
+
+    expect(result.current.tailStartIndex).toBe(
+      expectedTailStartIndex(beforeSetext),
+    );
+
+    rerender({ content: afterSetext });
+
+    expect(result.current.tailStartIndex).toBe(
+      expectedTailStartIndex(afterSetext),
+    );
+    expect(result.current.blocks.map((block) => block.raw)).toEqual(
+      fullLexRaws(afterSetext),
+    );
   });
 });
 

@@ -57,14 +57,19 @@ import { useTerminalKill } from "@/hooks/terminal/use-terminal-kill-mutation";
 import { useTerminalList } from "@/hooks/terminal/use-terminal-list-query";
 import { useTerminalRename } from "@/hooks/terminal/use-terminal-rename-mutation";
 import { useHostClient } from "@/lib/host";
-import { isVisibleTerminalSidebarSession } from "@/lib/terminals/terminal-session-filters";
-import { terminalSessionTitle } from "@/lib/terminals/terminal-title";
+import { isVisibleRawTerminalSession } from "@/lib/terminals/terminal-session-filters";
+import {
+  deriveTitleSourceFromSessionTitle,
+  terminalSessionTitle,
+} from "@/lib/terminals/terminal-title";
+import { OwnerResourceChip } from "@/components/resources/resource-usage-chip";
 import { cn } from "@/lib/utils";
 import {
   findOpenArtifactInTab,
   useEpicCanvasStore,
   useIsActiveEpicArtifact,
 } from "@/stores/epics/canvas/store";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 import type { EpicTerminalRef } from "@/stores/epics/canvas/types";
 
 const TERMINALS_PANEL_SKELETON = <TerminalsPanelSkeleton />;
@@ -112,7 +117,7 @@ function TerminalsPanelBodyLive(props: {
   // Host keeps exited sessions for a 60s grace window; filter so a
   // single kill click feels like "remove" instead of "mark dead".
   const sessions = (list.data?.sessions ?? []).filter(
-    isVisibleTerminalSidebarSession,
+    isVisibleRawTerminalSession,
   );
 
   return (
@@ -227,6 +232,9 @@ function TerminalRow(props: TerminalRowProps) {
   const rename = useTerminalRename();
   const renameArtifactInTab = useEpicCanvasStore((s) => s.renameArtifactInTab);
   const closeCanvasTab = useEpicCanvasStore((s) => s.closeCanvasTab);
+  const showNavigatorResourceStats = useSettingsStore(
+    (state) => state.showNavigatorResourceStats,
+  );
 
   const label = deriveTerminalLabel(session);
   const [isRenaming, setIsRenaming] = useState(false);
@@ -372,6 +380,14 @@ function TerminalRow(props: TerminalRowProps) {
               <div className="flex min-w-0 flex-1 flex-col">
                 <span className="truncate">{label}</span>
               </div>
+              {showNavigatorResourceStats ? (
+                <OwnerResourceChip
+                  epicId={epicId}
+                  kind="terminal"
+                  ownerId={session.sessionId}
+                  className={undefined}
+                />
+              ) : null}
             </button>
             <div className="absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover/term-row:opacity-100">
               <DropdownMenu>
@@ -416,7 +432,10 @@ function TerminalRow(props: TerminalRowProps) {
 }
 
 function deriveTerminalLabel(session: TerminalSessionInfo): string {
-  return terminalSessionTitle(session);
+  return terminalSessionTitle({
+    title: session.title,
+    activeProcessName: session.activeProcessName,
+  });
 }
 
 function makeTerminalRef(
@@ -429,6 +448,7 @@ function makeTerminalRef(
     instanceId,
     type: "terminal",
     name: deriveTerminalLabel(session),
+    titleSource: deriveTitleSourceFromSessionTitle(session.title),
     hostId,
     cwd: session.cwd,
   };

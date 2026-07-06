@@ -1,5 +1,6 @@
 import { HostPicker } from "@/components/layout/header/host-picker";
 import { AppUpdateToastController } from "@/components/layout/bridges/app-update-toast-controller";
+import { DesktopZoomController } from "@/components/layout/bridges/desktop-zoom-controller";
 import { HostOperationStatusListener } from "@/components/layout/bridges/host-operation-status-listener";
 import { HostRegistryUpdateListener } from "@/components/layout/bridges/host-registry-update-listener";
 import { RunnerHostBridges } from "@/components/layout/bridges/runner-host-bridges";
@@ -30,6 +31,7 @@ import { HarnessCatalogPrefetcher } from "@/providers/harness-catalog-prefetcher
 import { HistoryPruneProvider } from "@/providers/history-prune-provider";
 import { KeybindingProvider } from "@/providers/keybinding-provider";
 import { NotificationsSessionProvider } from "@/providers/notifications-session-provider";
+import { RateLimitQueueProvider } from "@/providers/rate-limit-queue-provider";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { ThemeProvider } from "@/providers/theme-provider";
 import { WindowsBridgeAuthSessionBridge } from "@/providers/windows-bridge-auth-session";
@@ -115,6 +117,7 @@ export function TraycerApp(props: TraycerAppProps): ReactNode {
             <ThemeProvider>
               <TooltipProvider>
                 <KeybindingProvider router={router}>
+                  <DesktopZoomController />
                   <HostRuntimeProvider
                     registry={props.registry}
                     messengerFactory={props.messengerFactory ?? null}
@@ -201,6 +204,7 @@ function TraycerAppRuntimeSurface(props: TraycerAppRuntimeSurfaceProps) {
       <WorktreeDeleteProgressToastBridge />
       <CliCredentialSeeder />
       <HarnessCatalogPrefetcher />
+      <RateLimitQueueProvider />
       <HistoryPruneProvider router={props.router} />
       <RouterProvider router={props.router} />
       <HostPicker />

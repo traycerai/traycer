@@ -276,6 +276,7 @@ function AgentMessageDisplayView({
               isStreaming={false}
               markdown={messageText}
               proseSize="compact"
+              quotable={false}
             />
           </div>
         </div>
@@ -591,6 +592,7 @@ function InlineUserMessageEditor({
         disabled={editing.pending}
         placeholder="Edit message"
         editorClassName="max-h-[min(60vh,18rem)] min-h-9 overflow-y-auto text-ui leading-7 text-foreground"
+        stabilizeImageAttachmentCaret={false}
         onSnapshot={onSnapshot}
         onSubmit={submit}
         onPaste={NOOP_CLIPBOARD}
@@ -599,6 +601,7 @@ function InlineUserMessageEditor({
         onKeyDown={handleEditorKeyDown}
         onFocus={NOOP}
         onBlur={NOOP}
+        onEditorReady={null}
       />
     ),
     [editing, handleEditorKeyDown, onSnapshot, pickerStore, submit],

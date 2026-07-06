@@ -79,26 +79,29 @@ describe("TerminalSessionRegistry", () => {
     const owned = createHandle("terminal-agent");
 
     registry.acquire("terminal-1", () => owned.handle);
-    owned.callbacks().onSnapshot({
-      kind: "snapshot",
-      hasBinaryPayload: false,
-      sessionId: "terminal-1",
-      scrollback: "",
-      session: {
+    owned.callbacks().onSnapshot(
+      {
+        kind: "snapshot",
+        hasBinaryPayload: false,
         sessionId: "terminal-1",
-        epicId: "epic-1",
-        sessionKind: "terminal-agent",
-        cwd: "/repo",
-        shellCommand: "zsh",
-        shellArgs: [],
-        status: "running",
-        exitCode: null,
-        cols: 80,
-        rows: 24,
-        createdAt: 1,
-        title: null,
+        scrollback: "",
+        session: {
+          sessionId: "terminal-1",
+          epicId: "epic-1",
+          sessionKind: "terminal-agent",
+          cwd: "/repo",
+          shellCommand: "zsh",
+          shellArgs: [],
+          status: "running",
+          exitCode: null,
+          cols: 80,
+          rows: 24,
+          createdAt: 1,
+          title: null,
+        },
       },
-    });
+      "",
+    );
     owned.callbacks().onConnectionStatus("closed", { kind: "caller" });
     registry.release("terminal-1");
 

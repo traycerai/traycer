@@ -12,10 +12,19 @@ describe("cn custom font-size tokens", () => {
     expect(cn("text-ui-sm", "text-accent-foreground")).toBe(
       "text-ui-sm text-accent-foreground",
     );
+    expect(cn("text-ui-md", "text-foreground")).toBe(
+      "text-ui-md text-foreground",
+    );
+    expect(cn("text-ui-lg", "text-muted-foreground")).toBe(
+      "text-ui-lg text-muted-foreground",
+    );
+    expect(cn("text-ui-base", "text-primary")).toBe(
+      "text-ui-base text-primary",
+    );
   });
 
   it("collapses two custom font sizes to the last one", () => {
-    expect(cn("text-ui-xs", "text-ui-sm")).toBe("text-ui-sm");
+    expect(cn("text-ui-xs", "text-ui-sm", "text-ui-md")).toBe("text-ui-md");
   });
 
   it("lets a built-in font size override a custom one", () => {

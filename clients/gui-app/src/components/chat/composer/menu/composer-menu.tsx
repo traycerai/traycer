@@ -29,15 +29,19 @@ import {
   mentionProviderRegistry,
   type MentionFlowStep,
 } from "@/lib/composer/mentions";
+import type { MentionPreview } from "@/lib/composer/types";
 import { cn } from "@/lib/utils";
 
-import type {
-  ComposerPickerItem,
-  ComposerPickerStore,
+import {
+  pickerItemPreview,
+  type ComposerPickerItem,
+  type ComposerPickerStore,
 } from "../picker/composer-picker-store";
 
 import { MentionMenuItem } from "./mention-menu-item";
+import { MentionPreviewPanel } from "./mention-preview-panel";
 import { SlashMenuItem } from "./slash-menu-item";
+import { ZERO_DOM_RECT } from "./zero-dom-rect";
 
 const SLASH_MENU_COPY = {
   header: "Slash commands",
@@ -51,27 +55,13 @@ const MENU_HEIGHT_ESTIMATE = 280;
 
 type LockedPlacement = Extract<Placement, "bottom-start" | "top-start">;
 
-const ZERO_RECT: DOMRect =
-  typeof DOMRect === "function"
-    ? new DOMRect(0, 0, 0, 0)
-    : {
-        x: 0,
-        y: 0,
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        width: 0,
-        height: 0,
-        toJSON: () => ({}),
-      };
-
 interface MenuSlice {
   readonly open: boolean;
   readonly kind: "mention" | "slash" | null;
   readonly items: ReadonlyArray<ComposerPickerItem>;
   readonly activeIndex: number;
   readonly loading: boolean;
+  readonly fetching: boolean;
   readonly step: MentionFlowStep;
 }
 
@@ -81,6 +71,7 @@ function selectMenuSlice(state: {
   items: ReadonlyArray<ComposerPickerItem>;
   activeIndex: number;
   loading: boolean;
+  fetching: boolean;
   step: MentionFlowStep;
 }): MenuSlice {
   return {
@@ -89,6 +80,7 @@ function selectMenuSlice(state: {
     items: state.items,
     activeIndex: state.activeIndex,
     loading: state.loading,
+    fetching: state.fetching,
     step: state.step,
   };
 }
@@ -100,7 +92,7 @@ export interface ComposerMenuProps {
 export function ComposerMenu(props: ComposerMenuProps) {
   const { pickerStore } = props;
   const slice = useStore(pickerStore, useShallow(selectMenuSlice));
-  const { open, kind, items, activeIndex, loading, step } = slice;
+  const { open, kind, items, activeIndex, loading, fetching, step } = slice;
 
   const baseMenuId = useId();
   const menuId = `${baseMenuId}-menu`;
@@ -115,6 +107,7 @@ export function ComposerMenu(props: ComposerMenuProps) {
       items={items}
       activeIndex={activeIndex}
       loading={loading}
+      fetching={fetching}
       step={step}
       menuId={menuId}
     />
@@ -127,13 +120,22 @@ interface ComposerMenuPortalProps {
   readonly items: ReadonlyArray<ComposerPickerItem>;
   readonly activeIndex: number;
   readonly loading: boolean;
+  readonly fetching: boolean;
   readonly step: MentionFlowStep;
   readonly menuId: string;
 }
 
 function ComposerMenuPortal(props: ComposerMenuPortalProps) {
-  const { pickerStore, kind, items, activeIndex, loading, step, menuId } =
-    props;
+  const {
+    pickerStore,
+    kind,
+    items,
+    activeIndex,
+    loading,
+    fetching,
+    step,
+    menuId,
+  } = props;
   const listRef = useRef<HTMLDivElement | null>(null);
   const floatingRef = useRef<HTMLDivElement | null>(null);
 
@@ -141,6 +143,11 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
     () => items.map((item, index) => renderPickerItem(item, index, menuId)),
     [items, menuId],
   );
+
+  const activePreview = useMemo<MentionPreview | null>(() => {
+    if (activeIndex < 0 || activeIndex >= items.length) return null;
+    return pickerItemPreview(items[activeIndex]);
+  }, [items, activeIndex]);
 
   const copy = useMemo(() => {
     if (kind === "mention") return mentionProviderRegistry.menuCopy(step);
@@ -168,6 +175,10 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
     timeoutMs: COMPOSER_ARTIFACT_REFRESH_TIMEOUT_MS,
   });
 
+  // MentionPreviewPanel does its own pre-paint scrollIntoView for rows that
+  // have a preview (see its layout effect), but it early-returns before
+  // that when there's no preview - this passive effect is what still
+  // scrolls the active row into view for those.
   useEffect(() => {
     const list = listRef.current;
     if (list === null) return;
@@ -184,7 +195,7 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
     const virtualReference = {
       getBoundingClientRect: (): DOMRect => {
         const rect = pickerStore.getState().clientRect?.() ?? null;
-        return rect ?? ZERO_RECT;
+        return rect ?? ZERO_DOM_RECT;
       },
     };
 
@@ -248,11 +259,20 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
         // names render in full, with a comfortable floor (min-w) and a
         // viewport-aware ceiling (max-w) past which items truncate. floating-ui's
         // shift() keeps the grown menu on-screen (CLAUDE.md sizing).
-        className="pointer-events-auto fixed top-0 left-0 z-50 w-max min-w-[min(90vw,16rem)] max-w-[min(92vw,42rem)] overflow-hidden rounded-xl border border-border/70 bg-popover text-popover-foreground shadow-lg"
+        className="pointer-events-auto fixed top-0 left-0 z-50 w-max min-w-[min(90vw,16rem)] max-w-[min(90vw,26rem)] overflow-hidden rounded-xl border border-border/70 bg-popover text-popover-foreground shadow-lg"
       >
         <div className="flex items-center justify-between gap-2 border-b border-border/60 px-3 py-1.5">
-          <div className="min-w-0 truncate text-overline font-medium uppercase text-muted-foreground/70">
-            {headerLabel}
+          <div className="flex min-w-0 items-center gap-1.5">
+            <div className="min-w-0 truncate text-overline font-medium uppercase text-muted-foreground/70">
+              {headerLabel}
+            </div>
+            {fetching && !loading ? (
+              <AgentSpinningDots
+                testId={undefined}
+                variant={undefined}
+                className="text-muted-foreground/60"
+              />
+            ) : null}
           </div>
           {refreshAvailable ? (
             <Button
@@ -296,7 +316,16 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
     </RemoveScroll>
   );
 
-  return createPortal(menu, document.body);
+  return (
+    <>
+      {createPortal(menu, document.body)}
+      <MentionPreviewPanel
+        listRef={listRef}
+        activeIndex={activeIndex}
+        preview={activePreview}
+      />
+    </>
+  );
 }
 
 function selectInitialPlacement(store: ComposerPickerStore): LockedPlacement {

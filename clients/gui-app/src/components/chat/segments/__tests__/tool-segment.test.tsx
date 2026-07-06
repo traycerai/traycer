@@ -140,6 +140,12 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
     expect(screen.getByText("Open receiving agent")).toBeTruthy();
     expect(screen.getByText("reply expected")).toBeTruthy();
     expect(screen.getByText("Please inspect the failing test.")).toBeTruthy();
+    expect(
+      screen
+        .getByText("Please inspect the failing test.")
+        .closest(".md-prose")
+        ?.hasAttribute("data-quotable"),
+    ).toBe(false);
     expect(screen.queryByText("Thread")).toBeNull();
     expect(screen.queryByText("Output")).toBeNull();
   });

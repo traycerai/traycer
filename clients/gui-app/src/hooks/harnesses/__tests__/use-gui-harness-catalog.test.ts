@@ -18,6 +18,7 @@ function response(
       {
         id: "claude",
         label: "Claude Code",
+        enabled: true,
         available,
         error: available ? null : "probe timed out",
         modes: ["gui", "tui"],

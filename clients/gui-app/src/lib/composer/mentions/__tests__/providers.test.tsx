@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type {
   ComposerMentionProviderContext,
+  MentionFlowStep,
   MentionMenuEntry,
 } from "../providers";
 import { mentionProviderRegistry, ROOT_MENTION_STEP } from "../providers";
@@ -350,6 +351,208 @@ describe("mention provider registry", () => {
     ).toMatchObject({
       method: "epic.mentionEpics",
       params: { query: "" },
+    });
+  });
+});
+
+describe("mention preview payloads", () => {
+  it("previews a file entry as a path breadcrumb tree with its absolute-path footer", () => {
+    const step: MentionFlowStep = {
+      kind: "provider",
+      providerId: "files",
+      stepId: "root",
+      workspacePath: null,
+    };
+    const entries = mentionProviderRegistry.entries(
+      step,
+      context({
+        workspaceEntries: [
+          {
+            kind: "file",
+            id: "file:/repo:src/auth.ts",
+            label: "auth.ts",
+            relPath: "src/auth.ts",
+            absolutePath: "/repo/src/auth.ts",
+            workspacePath: "/repo",
+            description: "src",
+          },
+        ],
+      }),
+    );
+    expect(entries[1].preview).toEqual({
+      kind: "path",
+      tree: {
+        rootLabel: "src",
+        midDirs: [],
+        leaf: "auth.ts",
+        leafIsFile: true,
+      },
+      footer: { text: "/repo/src/auth.ts", mono: true },
+    });
+  });
+
+  it("previews a folder entry as a path tree with leafIsFile: false", () => {
+    const step: MentionFlowStep = {
+      kind: "provider",
+      providerId: "folders",
+      stepId: "root",
+      workspacePath: null,
+    };
+    const entries = mentionProviderRegistry.entries(
+      step,
+      context({
+        workspaceEntries: [
+          {
+            kind: "folder",
+            id: "folder:/repo:src/auth/",
+            label: "auth",
+            relPath: "src/auth/",
+            absolutePath: "/repo/src/auth",
+            workspacePath: "/repo",
+            description: "src",
+          },
+        ],
+      }),
+    );
+    expect(entries[1].preview).toEqual({
+      kind: "path",
+      tree: {
+        rootLabel: "src",
+        midDirs: [],
+        leaf: "auth",
+        leafIsFile: false,
+      },
+      footer: { text: "/repo/src/auth", mono: true },
+    });
+  });
+
+  it("previews a worktree entry as a path tree built from its absolute path, with the branch as footer", () => {
+    const step: MentionFlowStep = {
+      kind: "provider",
+      providerId: "worktree",
+      stepId: "root",
+      workspacePath: null,
+    };
+    const entries = mentionProviderRegistry.entries(
+      step,
+      context({
+        workspaceEntries: [
+          {
+            kind: "worktree",
+            id: "worktree:/repo:/home/u/.traycer/worktrees/o/r/feature",
+            label: "feature",
+            worktreePath: "/home/u/.traycer/worktrees/o/r/feature",
+            workspacePath: "/repo",
+            branch: "feature",
+            isMain: false,
+            description: "/home/u/.traycer/worktrees/o/r/feature",
+          },
+        ],
+      }),
+    );
+    expect(entries[1].preview).toEqual({
+      kind: "path",
+      tree: {
+        rootLabel: "/home/u/.traycer/worktrees",
+        midDirs: ["o", "r"],
+        leaf: "feature",
+        leafIsFile: false,
+      },
+      footer: { text: "feature", mono: false },
+    });
+  });
+
+  it("previews a detached worktree (no branch) with no footer, not a duplicated path", () => {
+    const step: MentionFlowStep = {
+      kind: "provider",
+      providerId: "worktree",
+      stepId: "root",
+      workspacePath: null,
+    };
+    const entries = mentionProviderRegistry.entries(
+      step,
+      context({
+        workspaceEntries: [
+          {
+            kind: "worktree",
+            id: "worktree:/repo:/home/u/.traycer/worktrees/o/r/detached",
+            label: "detached",
+            worktreePath: "/home/u/.traycer/worktrees/o/r/detached",
+            workspacePath: "/repo",
+            branch: null,
+            isMain: false,
+            description: "/home/u/.traycer/worktrees/o/r/detached",
+          },
+        ],
+      }),
+    );
+    expect(entries[1].preview).toMatchObject({ kind: "path", footer: null });
+  });
+
+  it("previews an artifact entry with its full title and parent epic title", () => {
+    const step: MentionFlowStep = {
+      kind: "provider",
+      providerId: "spec",
+      stepId: "root",
+      workspacePath: null,
+    };
+    const entries = mentionProviderRegistry.entries(
+      step,
+      context({
+        epicEntries: [
+          {
+            kind: "epic-artifact",
+            id: "spec:epic-1:spec-1",
+            token: "spec:epic-1/spec-1",
+            epicId: "epic-1",
+            epicTitle: "Auth epic",
+            artifactId: "spec-1",
+            artifactType: "spec",
+            label: "Auth spec",
+            description: "Auth epic",
+            status: null,
+            updatedAt: 20,
+          },
+        ],
+      }),
+    );
+    expect(entries[1].preview).toEqual({
+      kind: "text",
+      primary: "Auth spec",
+      secondary: "Auth epic",
+      mono: false,
+    });
+  });
+
+  it("previews a git commit entry with its full hash and derived subject", () => {
+    const step: MentionFlowStep = {
+      kind: "provider",
+      providerId: "git",
+      stepId: "commits",
+      workspacePath: "/repo",
+    };
+    const entries = mentionProviderRegistry.entries(
+      step,
+      context({
+        workspaceEntries: [
+          {
+            kind: "git",
+            id: "git:commit:/repo:abc1234567890",
+            label: "abc1234 Fix bug in parser",
+            description: "Jane Doe - 2024-01-01 - repo",
+            workspacePath: "/repo",
+            gitType: "against_commit",
+            branchName: null,
+            commitHash: "abc1234567890",
+          },
+        ],
+      }),
+    );
+    expect(entries[1].preview).toEqual({
+      kind: "text",
+      primary: "abc1234567890",
+      secondary: "Fix bug in parser",
+      mono: true,
     });
   });
 });

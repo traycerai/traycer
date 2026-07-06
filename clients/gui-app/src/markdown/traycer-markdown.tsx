@@ -85,6 +85,7 @@ export interface TraycerMarkdownProps {
   components: Record<string, ComponentType<Record<string, unknown>>> | null;
   remarkPlugins: PluggableList | null;
   rehypePlugins: PluggableList | null;
+  quotable: boolean;
   /**
    * Whether `children` is still growing (a streaming turn). Drives the
    * streaming-aware code-block highlight path via `MarkdownStreamingContext`:
@@ -101,6 +102,7 @@ export function TraycerMarkdown({
   components,
   remarkPlugins,
   rehypePlugins,
+  quotable,
   isStreaming,
 }: TraycerMarkdownProps) {
   const mergedComponents = useMemo(
@@ -129,26 +131,38 @@ export function TraycerMarkdown({
     ];
   }, [rehypePlugins]);
 
-  const blocks = useMarkdownBlocks(String(children || ""));
+  const { blocks, tailStartIndex } = useMarkdownBlocks(String(children || ""));
 
   return (
     <MarkdownStreamingContext.Provider value={isStreaming}>
       <div
+        data-quotable={quotable ? "true" : undefined}
         className={cn(
           "prose dark:prose-invert md-prose max-w-none",
           proseSize === "normal" ? "prose-base" : "prose-sm",
           className,
         )}
       >
-        {blocks.map((block) => (
-          <MarkdownBlock
-            key={block.id}
-            raw={block.raw}
-            remarkPlugins={effectiveRemarkPlugins}
-            rehypePlugins={effectiveRehypePlugins}
-            components={mergedComponents}
-          />
-        ))}
+        {blocks.map((block) =>
+          isStreaming && block.id >= tailStartIndex ? (
+            <div key={block.id} data-md-unstable="" className="contents">
+              <MarkdownBlock
+                raw={block.raw}
+                remarkPlugins={effectiveRemarkPlugins}
+                rehypePlugins={effectiveRehypePlugins}
+                components={mergedComponents}
+              />
+            </div>
+          ) : (
+            <MarkdownBlock
+              key={block.id}
+              raw={block.raw}
+              remarkPlugins={effectiveRemarkPlugins}
+              rehypePlugins={effectiveRehypePlugins}
+              components={mergedComponents}
+            />
+          ),
+        )}
       </div>
     </MarkdownStreamingContext.Provider>
   );

@@ -11,6 +11,11 @@ import { Section } from "./section";
 import { BundleOpenButton } from "./bundle-open-button";
 import { GitSectionStatsSummary } from "./diff-tab-shell";
 
+export interface GitDiffSectionCollapseController {
+  readonly collapsed: (group: GitDiffBundleGroup) => boolean;
+  readonly toggle: (group: GitDiffBundleGroup) => void;
+}
+
 export interface GitDiffSectionProps {
   readonly epicId: string;
   readonly viewTabId: string;
@@ -26,6 +31,9 @@ export interface GitDiffSectionProps {
    * restores the user's collapse state.
    */
   readonly forceExpanded: boolean;
+  readonly collapseController: GitDiffSectionCollapseController | null;
+  readonly fillAvailable: boolean;
+  readonly compactChrome: boolean;
   readonly children: ReactNode;
 }
 
@@ -37,12 +45,23 @@ export interface GitDiffSectionProps {
  * section body unconditionally.
  */
 export function GitDiffSection(props: GitDiffSectionProps): ReactNode {
-  const collapsed = useGitPanelStore(
-    selectGitPanelSectionCollapsed(props.epicId, props.group),
+  const collapseController = props.collapseController;
+  const epicId = props.epicId;
+  const group = props.group;
+  const persistedCollapsed = useGitPanelStore(
+    selectGitPanelSectionCollapsed(epicId, group),
   );
+  const collapsed =
+    collapseController === null
+      ? persistedCollapsed
+      : collapseController.collapsed(group);
   const handleToggle = useCallback(() => {
-    useGitPanelStore.getState().toggleSection(props.epicId, props.group);
-  }, [props.epicId, props.group]);
+    if (collapseController !== null) {
+      collapseController.toggle(group);
+      return;
+    }
+    useGitPanelStore.getState().toggleSection(epicId, group);
+  }, [collapseController, epicId, group]);
   const stats = useMemo(
     () => sumGitFileStats(props.visibleFiles),
     [props.visibleFiles],
@@ -60,6 +79,8 @@ export function GitDiffSection(props: GitDiffSectionProps): ReactNode {
       }
       collapsed={props.forceExpanded ? false : collapsed}
       onToggle={handleToggle}
+      fillAvailable={props.fillAvailable}
+      compactChrome={props.compactChrome}
       actions={
         <BundleOpenButton
           epicId={props.epicId}

@@ -6,6 +6,7 @@ import {
   RunnerHostEvent,
   RunnerHostInvoke,
 } from "../../ipc-contracts/ipc-channels";
+import type { ZoomPercent } from "../../ipc-contracts/zoom-types";
 import type { DesktopLocalHostSnapshot } from "../../ipc-contracts/host-types";
 import type {
   QuitDecision,
@@ -57,6 +58,7 @@ import { registerTraycerCliIpc } from "./traycer-cli-ipc";
 import { registerPlatformIpc } from "./platform-ipc";
 import { registerPowerIpc } from "./power-ipc";
 import { registerAppUpdateIpc } from "./app-update-ipc";
+import { registerZoomIpc } from "./zoom-ipc";
 import { getAppUpdateSnapshot } from "../app/updater";
 import type { HostTrayCommand } from "../../ipc-contracts/host-management-types";
 import {
@@ -138,6 +140,15 @@ export interface IpcDesktopAuthSession {
   set(snapshot: DesktopAuthSessionSnapshot): void;
   on(event: "change", listener: IpcAuthSessionChangeListener): void;
   off(event: "change", listener: IpcAuthSessionChangeListener): void;
+}
+
+export interface IpcZoomController {
+  getZoomPercent(): ZoomPercent;
+  zoomIn(): Promise<ZoomPercent>;
+  zoomOut(): Promise<ZoomPercent>;
+  reset(): Promise<ZoomPercent>;
+  setZoomPercent(percent: number): Promise<ZoomPercent>;
+  onChange(listener: (percent: ZoomPercent) => void): () => void;
 }
 
 export interface IpcSupportService {
@@ -232,6 +243,7 @@ export interface RunnerIpcOptions {
   readonly authRedirectUri: string | null;
   readonly tray: DesktopTrayController | null;
   readonly window: IpcManagedWindow;
+  readonly zoomController: IpcZoomController | undefined;
 }
 
 export interface RunnerIpcRegistryOptions {
@@ -244,6 +256,7 @@ export interface RunnerIpcRegistryOptions {
   readonly perWindowState: IpcPerWindowState;
   readonly authSession: IpcDesktopAuthSession;
   readonly support?: IpcSupportService;
+  readonly zoomController: IpcZoomController | undefined;
 }
 
 export type RunnerIpcBridgeOptions =
@@ -267,6 +280,7 @@ export class RunnerIpcBridge {
   readonly perWindowState: IpcPerWindowState;
   readonly authSession: IpcDesktopAuthSession;
   readonly support: IpcSupportService;
+  readonly zoomController: IpcZoomController;
   readonly disposeFns: Array<() => void> = [];
   private readonly syncListeners: Array<{
     channel: string;
@@ -300,12 +314,14 @@ export class RunnerIpcBridge {
       this.perWindowState = options.perWindowState;
       this.authSession = options.authSession;
       this.support = options.support ?? new NullSupportService();
+      this.zoomController = options.zoomController ?? new NullZoomController();
     } else {
       this.windowRegistry = new SingleWindowRegistry(options.window);
       this.ownership = new NullEpicWindowOwnership();
       this.perWindowState = new NullPerWindowState();
       this.authSession = new DesktopAuthSession();
       this.support = new NullSupportService();
+      this.zoomController = options.zoomController ?? new NullZoomController();
     }
   }
 
@@ -328,6 +344,7 @@ export class RunnerIpcBridge {
     // `disposeFns` / `ipcMain.removeHandler` sweep.
     registerPlatformIpc(this);
     registerAppUpdateIpc(this);
+    registerZoomIpc(this);
     // Power IPC (renderer-driven sleep prevention) registers a `disposeFn`
     // that releases the OS power-save blocker on teardown.
     registerPowerIpc(this);
@@ -762,6 +779,11 @@ export class RunnerIpcBridge {
       RunnerHostEvent.appUpdateChange,
       getAppUpdateSnapshot(),
     );
+    this.safeSendToWindow(
+      windowId,
+      RunnerHostEvent.zoomChange,
+      this.zoomController.getZoomPercent(),
+    );
   }
 
   deliverToOwnedOrMru(
@@ -1085,5 +1107,34 @@ class NullSupportService implements IpcSupportService {
       lines: [],
       truncated: false,
     });
+  }
+}
+
+class NullZoomController implements IpcZoomController {
+  private zoomPercent: ZoomPercent = 100;
+
+  getZoomPercent(): ZoomPercent {
+    return this.zoomPercent;
+  }
+
+  zoomIn(): Promise<ZoomPercent> {
+    return this.setZoomPercent(this.zoomPercent);
+  }
+
+  zoomOut(): Promise<ZoomPercent> {
+    return this.setZoomPercent(this.zoomPercent);
+  }
+
+  reset(): Promise<ZoomPercent> {
+    return this.setZoomPercent(100);
+  }
+
+  setZoomPercent(percent: number): Promise<ZoomPercent> {
+    this.zoomPercent = percent === 100 ? 100 : this.zoomPercent;
+    return Promise.resolve(this.zoomPercent);
+  }
+
+  onChange(_listener: (percent: ZoomPercent) => void): () => void {
+    return () => undefined;
   }
 }

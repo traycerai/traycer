@@ -21,7 +21,15 @@ import "@xterm/xterm/css/xterm.css";
 import { useRegisterTileFindAdapter } from "@/components/epic-canvas/tile-find/tile-find-adapter-context";
 import { isMac } from "@/lib/keybindings/platform";
 import { translateLineEditChord } from "@/lib/terminal-line-edit";
-import { useSettingsStore } from "@/stores/settings/settings-store";
+import {
+  useSettingsStore,
+  inactiveCursorStyleFor,
+  type TerminalCursorStyle,
+} from "@/stores/settings/settings-store";
+import {
+  DEFAULT_MONO_FONT_STACK,
+  buildFontFamilyValue,
+} from "@/lib/default-font-stacks";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useTerminalTheme } from "@/lib/terminal-theme";
 import { scheduleAtlasClear } from "@/lib/terminal-theme-scheduler";
@@ -63,24 +71,25 @@ interface XtermInitialOptions extends ITerminalOptions {
   };
 }
 
-const FALLBACK_FONT_FAMILY =
-  "Menlo, Monaco, 'SF Mono', 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace";
-
 const TERMINAL_DRAG_PATH_ESCAPE_PATTERN = /([\\\s!"#$&'()*;<>?[\]^`{|}])/g;
 const getEmptyFindTargetId = (): string | null => null;
 const ignoreSearchResults = (): void => {};
 
 // xterm measures glyph cell width on a hidden canvas using the configured
-// `fontFamily`. CSS variables don't resolve in that measurement pass, so we
-// resolve `--traycer-font-mono` to its concrete CSS string here at mount,
-// fall back to a system mono stack if the variable is unset, and pin
-// `letterSpacing` / `lineHeight` on the constructed Terminal so paint and
+// `fontFamily`, so CSS variables (which don't resolve in that measurement
+// pass) are not usable here. Instead the effective terminal font is built
+// directly from settings-store values against the same default mono stack
+// `theme-provider.tsx` uses for `--traycer-font-mono` - `letterSpacing` /
+// `lineHeight` are pinned on the constructed Terminal so paint and
 // measurement agree.
-function resolveFontFamily(doc: Document): string {
-  const raw = getComputedStyle(doc.documentElement)
-    .getPropertyValue("--traycer-font-mono")
-    .trim();
-  return raw.length > 0 ? raw : FALLBACK_FONT_FAMILY;
+function resolveEffectiveFontFamily(
+  terminalFontFamily: string | null,
+  codeFontFamily: string | null,
+): string {
+  return buildFontFamilyValue(
+    terminalFontFamily ?? codeFontFamily,
+    DEFAULT_MONO_FONT_STACK,
+  );
 }
 
 export interface TerminalXtermHostProps {
@@ -172,7 +181,16 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
   // reattached engine keeps its already-synced options.
   const theme = useTerminalTheme();
   const codeFontSize = useSettingsStore((s) => s.codeFontSize);
-  const fontFamily = useMemo(() => resolveFontFamily(document), []);
+  const terminalFontSize = useSettingsStore((s) => s.terminalFontSize);
+  const codeFontFamily = useSettingsStore((s) => s.codeFontFamily);
+  const terminalFontFamily = useSettingsStore((s) => s.terminalFontFamily);
+  const cursorStyle = useSettingsStore((s) => s.terminalCursorStyle);
+  const cursorBlink = useSettingsStore((s) => s.terminalCursorBlink);
+  const effectiveFontSize = terminalFontSize ?? codeFontSize;
+  const fontFamily = resolveEffectiveFontFamily(
+    terminalFontFamily,
+    codeFontFamily,
+  );
   const runnerHost = useRunnerHost();
   // Inactive panes unregister global find ownership. They stay mounted, but
   // app-level find should only target the visible terminal.
@@ -206,11 +224,13 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
   useRegisterTileFindAdapter(tileFindAdapter);
 
   const initialOptionsRef = useRef<XtermInitialOptions>({
-    cursorBlink: true,
+    cursorStyle,
+    cursorInactiveStyle: inactiveCursorStyleFor(cursorStyle),
+    cursorBlink,
     allowProposedApi: true,
     scrollback: 5000,
     fontFamily,
-    fontSize: codeFontSize,
+    fontSize: effectiveFontSize,
     letterSpacing: 0,
     lineHeight: 1,
     theme,
@@ -345,8 +365,10 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
     controlsRef,
     canvasRef,
     theme,
-    codeFontSize,
+    fontSize: effectiveFontSize,
     fontFamily,
+    cursorStyle,
+    cursorBlink,
   });
   useVisibleTerminalRepair({
     termRef,
@@ -470,6 +492,19 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
   );
 }
 
+// RIS ("\x1bc") as raw bytes, for prepending to a `Uint8Array` snapshot chunk
+// (`terminal.subscribe@1.2`+) - see `writerProxy`'s reset-before-replay
+// comment. ASCII-only, so this is the same 2 bytes either way.
+const RESET_ESCAPE_BYTES = new Uint8Array([0x1b, 0x63]);
+
+function prependResetEscape(chunk: string | Uint8Array): string | Uint8Array {
+  if (typeof chunk === "string") return `\x1bc${chunk}`;
+  const combined = new Uint8Array(RESET_ESCAPE_BYTES.length + chunk.length);
+  combined.set(RESET_ESCAPE_BYTES, 0);
+  combined.set(chunk, RESET_ESCAPE_BYTES.length);
+  return combined;
+}
+
 /**
  * Build the long-lived xterm engine for a session: `Terminal` + addons opened
  * into a detached container element that the registry keeps alive across host
@@ -590,18 +625,26 @@ function createXtermEntry(
       // - so the snapshot's OSC preamble then re-applies the native palette,
       // exactly like a fresh open. (We use the escape, not `term.reset()`, which
       // is unbound in this xterm build.) The first snapshot on a fresh engine
-      // skips this - nothing to clear. Prepended to the chunk so it parses
-      // in-order, ahead of the redraw, inside the replay-suppression guard.
-      const replay = hasReceivedContent ? `\x1bc${write.chunk}` : write.chunk;
+      // skips this - nothing to clear. Prepended to the chunk (string or, for
+      // a `@1.2` binary connection, `Uint8Array` - see `prependResetEscape`)
+      // so it parses in-order, ahead of the redraw, inside the
+      // replay-suppression guard.
+      const replay = hasReceivedContent
+        ? prependResetEscape(write.chunk)
+        : write.chunk;
       hasReceivedContent = true;
       snapshotReplayDepth += 1;
       term.write(replay, () => {
         snapshotReplayDepth = Math.max(0, snapshotReplayDepth - 1);
+        // Ack-credit (terminal.subscribe@1.1): report the ORIGINAL
+        // `write.chunk` length the host actually counted, not the
+        // longer `replay` payload this proxy prepended the reset escape to.
+        write.onAckable();
       });
       return;
     }
     hasReceivedContent = true;
-    term.write(write.chunk);
+    term.write(write.chunk, write.onAckable);
   };
 
   // Dedupe so the host isn't spammed with identical resize frames on every
@@ -979,13 +1022,23 @@ interface TerminalAppearanceSyncInput {
   readonly controlsRef: RefObject<XtermHostControls | null>;
   readonly canvasRef: RefObject<CanvasAddon | null>;
   readonly theme: ITerminalOptions["theme"];
-  readonly codeFontSize: number;
+  readonly fontSize: number;
   readonly fontFamily: string;
+  readonly cursorStyle: TerminalCursorStyle;
+  readonly cursorBlink: boolean;
 }
 
 function useTerminalAppearanceSync(input: TerminalAppearanceSyncInput): void {
-  const { termRef, controlsRef, canvasRef, theme, codeFontSize, fontFamily } =
-    input;
+  const {
+    termRef,
+    controlsRef,
+    canvasRef,
+    theme,
+    fontSize,
+    fontFamily,
+    cursorStyle,
+    cursorBlink,
+  } = input;
 
   // Live theme switching: rebuild the xterm palette when the resolved
   // light/dark mode or active preset changes, then ask the WebGL atlas
@@ -999,13 +1052,14 @@ function useTerminalAppearanceSync(input: TerminalAppearanceSyncInput): void {
     scheduleAtlasClear(term, canvasRef.current);
   }, [termRef, theme, canvasRef]);
 
-  // Live font sync: codeFontSize is user-controlled in Settings; the mono
-  // font family is captured at mount via `useMemo([])` and stable for the
-  // tile lifetime, so this effect mainly tracks the size slider.
+  // Live font sync: `fontSize`/`fontFamily` are the effective terminal
+  // values - a Settings → Terminal override when set, else the Settings →
+  // Code value/font (see `resolveEffectiveFontFamily`) - so this effect
+  // tracks both the size slider and any font-family change.
   useLayoutEffect(() => {
     const term = termRef.current;
     if (term === null) return;
-    term.options.fontSize = codeFontSize;
+    term.options.fontSize = fontSize;
     term.options.fontFamily = fontFamily;
     scheduleAtlasClear(term, canvasRef.current);
     // A font/size change changes the cell box, so the grid must refit. Route it
@@ -1014,7 +1068,18 @@ function useTerminalAppearanceSync(input: TerminalAppearanceSyncInput): void {
     // renderer hasn't re-measured cells yet this proposes nothing; the onRender
     // propose loop refits on the next frame.
     controlsRef.current?.fitToContainer();
-  }, [codeFontSize, controlsRef, fontFamily, termRef, canvasRef]);
+  }, [fontSize, controlsRef, fontFamily, termRef, canvasRef]);
+
+  // Live cursor sync: shape and blink are pure renderer options - they don't
+  // touch cell geometry, so unlike the font effect this neither refits the grid
+  // nor clears the glyph atlas. xterm repaints the cursor on the option write.
+  useLayoutEffect(() => {
+    const term = termRef.current;
+    if (term === null) return;
+    term.options.cursorStyle = cursorStyle;
+    term.options.cursorInactiveStyle = inactiveCursorStyleFor(cursorStyle);
+    term.options.cursorBlink = cursorBlink;
+  }, [termRef, cursorStyle, cursorBlink]);
 }
 
 function useVisibleTerminalRepair(input: {

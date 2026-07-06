@@ -151,7 +151,10 @@ function MermaidRenderSession(props: {
   );
 
   return (
-    <div className="tc-node-mermaid">
+    // Excluded from quote selection: the toolbar and rendered SVG are
+    // non-prose UI inside quotable markdown - a drag across the diagram would
+    // otherwise leak SVG label/error text into the quoted blockquote.
+    <div className="tc-node-mermaid" data-quote-exclude="">
       <MermaidBlockToolbar
         editing={false}
         editable={false}

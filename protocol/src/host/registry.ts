@@ -8,7 +8,10 @@ import { defineVersionedStreamRpcRegistry } from "@traycer/protocol/framework/ve
 import {
   agentCreateV10,
   agentGetTranscriptV10,
+  agentListHarnessModelsDowngradeV2ToV1,
   agentListHarnessModelsV10,
+  agentListHarnessModelsV20,
+  agentListHarnessModelsUpgradeV1ToV2,
   agentListDowngradeV2ToV1,
   agentListUpgradeV1ToV2,
   agentListV10,
@@ -35,6 +38,7 @@ import {
   agentGuiListModelsV10,
   chatSubscribeV10,
   chatSubscribeV11,
+  chatSubscribeV12,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -52,7 +56,9 @@ import { hostGetRuntimeCapabilitiesV10 } from "@traycer/protocol/host/runtime-ca
 import {
   hostGetRateLimitUsageV10,
   hostGetRateLimitUsageV11,
+  hostGetRateLimitUsageV12,
   hostGetRateLimitUsageUpgradeV10ToV11,
+  hostGetRateLimitUsageUpgradeV11ToV12,
 } from "@traycer/protocol/host/rate-limit/contracts";
 import {
   epicBatchDeleteV10,
@@ -110,8 +116,12 @@ import {
   terminalListV10,
   terminalRenameV10,
   terminalSubscribeV10,
+  terminalSubscribeV11,
+  terminalSubscribeV12,
+  terminalSubscribeV13,
 } from "@traycer/protocol/host/terminal/contracts";
 import { notificationsSubscribeV10 } from "@traycer/protocol/host/notifications/contracts";
+import { resourcesSubscribeV10 } from "@traycer/protocol/host/resources/subscribe";
 import {
   speechEnsureModelV10,
   speechGetModelStatusV10,
@@ -125,6 +135,8 @@ import { worktreeDeleteByPathStreamV10 } from "@traycer/protocol/host/worktree-d
 import { editorOpenPathsV10 } from "@traycer/protocol/host/editor/contracts";
 import {
   gitListChangedFilesV10,
+  gitListChangedFilesV11,
+  gitListChangedFilesUpgradeV10ToV11,
   gitGetFileDiffV10,
   gitGetFileDiffsV10,
   gitGetCapabilitiesV10,
@@ -1116,7 +1128,7 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
   },
   "host.getRateLimitUsage": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: hostGetRateLimitUsageV10,
@@ -1125,6 +1137,10 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
         1: {
           contract: hostGetRateLimitUsageV11,
           upgradeFromPreviousVersion: hostGetRateLimitUsageUpgradeV10ToV11,
+        },
+        2: {
+          contract: hostGetRateLimitUsageV12,
+          upgradeFromPreviousVersion: hostGetRateLimitUsageUpgradeV11ToV12,
         },
       },
       downgradePathsFromLatest: {},
@@ -1390,6 +1406,18 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
         },
       },
       downgradePathsFromLatest: {},
+    },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentListHarnessModelsV20,
+          upgradeFromPreviousVersion: agentListHarnessModelsUpgradeV1ToV2,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentListHarnessModelsDowngradeV2ToV1,
+      },
     },
   },
   "agent.list": {
@@ -2028,16 +2056,23 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
   },
   "git.listChangedFiles": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: gitListChangedFilesV10,
           upgradeFromPreviousVersion: null,
         },
+        1: {
+          contract: gitListChangedFilesV11,
+          upgradeFromPreviousVersion: gitListChangedFilesUpgradeV10ToV11,
+        },
       },
       downgradePathsFromLatest: {},
     },
   },
+  // `getFileDiff` / `getFileDiffs` stay v1.0-only: the submodule work needs no
+  // request changes (working-tree files diff stage-based against the submodule
+  // repo root), so there is no v1.1 for these methods.
   "git.getFileDiff": {
     1: {
       latestMinor: 0,
@@ -2607,9 +2642,10 @@ export type HostRpcRegistry = typeof hostRpcRegistry;
  * Combined streaming-RPC registry for the `/stream` WS manifest.
  *
  * One manifest per `/stream` WS: `epic.subscribe@1.0`,
- * `chat.subscribe@1.1`, `notifications.subscribe@1.0`,
+ * `chat.subscribe@1.2`, `notifications.subscribe@1.0`,
  * `terminal.subscribe@1.0`, `git.subscribeStatus@1.0`,
- * `agent.inbox.subscribe@1.0`, `speech.dictate@1.0`, and
+ * `resources.subscribe@1.0`, `agent.inbox.subscribe@1.0`,
+ * `speech.dictate@1.0`, and
  * `migration.run@1.0` are negotiated from this registry. Later minors within
  * the same major line must be
  * additive; later majors must carry a real breaking change and ship without a
@@ -2639,13 +2675,16 @@ export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
   },
   "chat.subscribe": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: chatSubscribeV10,
         },
         1: {
           contract: chatSubscribeV11,
+        },
+        2: {
+          contract: chatSubscribeV12,
         },
       },
     },
@@ -2662,10 +2701,19 @@ export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
   },
   "terminal.subscribe": {
     1: {
-      latestMinor: 0,
+      latestMinor: 3,
       versions: {
         0: {
           contract: terminalSubscribeV10,
+        },
+        1: {
+          contract: terminalSubscribeV11,
+        },
+        2: {
+          contract: terminalSubscribeV12,
+        },
+        3: {
+          contract: terminalSubscribeV13,
         },
       },
     },
@@ -2676,6 +2724,16 @@ export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
       versions: {
         0: {
           contract: gitSubscribeStatusV10,
+        },
+      },
+    },
+  },
+  "resources.subscribe": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: resourcesSubscribeV10,
         },
       },
     },

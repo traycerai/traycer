@@ -18,6 +18,7 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import {
   buildContextUsageRows,
   computeEffectiveContextUsage,
+  contextUsageTone,
   formatContextWindowTokens,
   formatContextUsageRowValue,
   type ContextUsageRow,
@@ -367,12 +368,6 @@ function AnimatedPinnedInteger({
       {roundedValue}
     </m.span>
   );
-}
-
-function contextUsageTone(percent: number): string {
-  if (percent <= 10) return "text-destructive";
-  if (percent <= 25) return "text-amber-500 dark:text-amber-400";
-  return "text-muted-foreground";
 }
 
 function contextUsageMeterStyle(percent: number): ContextUsageMeterStyle {

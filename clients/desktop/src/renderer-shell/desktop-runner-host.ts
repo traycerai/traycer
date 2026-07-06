@@ -33,6 +33,7 @@ import type {
   ITrayState,
   ITraycerCli,
   IWorkspaceFoldersHost,
+  IZoomHost,
   LocalHostSnapshot,
   MigrationRunningSnapshot,
   ServiceStatusSnapshot,
@@ -50,6 +51,7 @@ import type {
   DisplaySnapshot,
   DisplayTopology,
   FileSaveInput,
+  InstalledFont,
   PendingCertificateError,
   ProcessMetricsSnapshot,
   TrustedCertificateEntry,
@@ -105,6 +107,7 @@ import type {
   SupportSnapshot,
   WindowSummary,
 } from "../ipc-contracts/window-types";
+import type { ZoomPercent } from "../ipc-contracts/zoom-types";
 
 /**
  * Shape of the `window.runnerHost` object installed by the Electron preload
@@ -177,6 +180,7 @@ export interface DesktopPreloadBridge {
   migration: DesktopMigrationBridge;
   platform: DesktopPlatformBridge;
   power: DesktopPowerBridge;
+  zoom: DesktopZoomBridge;
   hostManagement: DesktopHostManagementBridge;
   hostTray: DesktopHostTrayBridge;
 }
@@ -349,6 +353,9 @@ export interface DesktopPlatformBridge {
     getAccelerationEnabled(): Promise<boolean>;
     setAccelerationEnabled(enabled: boolean): Promise<boolean>;
   };
+  fonts: {
+    list(): Promise<readonly InstalledFont[]>;
+  };
   windowEx: {
     setOverlayIcon(image: string | null, description: string): Promise<void>;
   };
@@ -356,6 +363,18 @@ export interface DesktopPlatformBridge {
 
 export interface DesktopPowerBridge {
   setSleepBlocked(blocked: boolean): Promise<void>;
+}
+
+export interface DesktopZoomBridge {
+  readonly ladder: readonly ZoomPercent[];
+  get(): Promise<ZoomPercent>;
+  set(percent: number): Promise<ZoomPercent>;
+  stepIn(): Promise<ZoomPercent>;
+  stepOut(): Promise<ZoomPercent>;
+  reset(): Promise<ZoomPercent>;
+  onChange(handler: (percent: ZoomPercent) => void): {
+    dispose: () => void;
+  };
 }
 
 export interface DesktopTraycerCliBridge {
@@ -495,6 +514,7 @@ export class DesktopRunnerHost implements IRunnerHost {
   readonly migration: IMigrationHost;
   readonly platform: DesktopPlatformBridge;
   readonly power: DesktopPowerBridge;
+  readonly zoom: IZoomHost;
   readonly hostManagement: IHostManagement;
   readonly hostTray: IHostTray;
   readonly hostRegistryUpdates: DesktopHostRegistryUpdatesBridge;
@@ -518,6 +538,16 @@ export class DesktopRunnerHost implements IRunnerHost {
     this.support = options.bridge.support;
     this.platform = options.bridge.platform;
     this.power = options.bridge.power;
+    this.zoom = {
+      ladder: options.bridge.zoom.ladder,
+      get: () => options.bridge.zoom.get(),
+      set: (percent) => options.bridge.zoom.set(percent),
+      stepIn: () => options.bridge.zoom.stepIn(),
+      stepOut: () => options.bridge.zoom.stepOut(),
+      reset: () => options.bridge.zoom.reset(),
+      onChange: (handler) =>
+        toDisposable(options.bridge.zoom.onChange(handler)),
+    };
 
     this.bridgeSubscriptions.push(
       this.bridge.onLocalHostChange((snapshot) => {

@@ -38,61 +38,86 @@ const NO_OP_INVALIDATOR: IHostQueryInvalidator = {
 };
 
 /**
- * Builds a throwaway `HostClient` that issues RPCs against a chosen host
+ * Builds a throwaway `HostClient` that issues RPCs against `target`
  * WITHOUT `bind()`-ing it as the app-wide active host (which would reload the
- * Epic list and swap app-wide host state). Settings ▸ Worktrees uses it to
- * list / delete worktrees on whichever host the user selects.
+ * Epic list and swap app-wide host state).
  *
  * Mechanics:
  *  - A fresh `WsRpcClient` dials `target.websocketUrl` per request (the
  *    transport holds no socket across calls), so a second instance is cheap
  *    and side-effect-free.
- *  - The bearer is the **shared** `RequestContext` from the global client -
+ *  - The bearer is the **shared** `RequestContext` from `globalClient` -
  *    auth is per-user, valid across hosts - so there is no separate sign-in.
  *  - Wrapped in a `HostClient` with a NO_OP invalidator, so `bind()` /
  *    `setRequestContext()` (needed only to satisfy the request preflight)
  *    stay inert beyond this instance's own state.
  *
- * Returns `null` when there is no target, no authenticated request context, or
- * no bound user. Memoized on the target entry + auth identity so the same
- * selection yields a stable client across renders; callers should pass a
- * referentially stable `target` (e.g. memoized by host id).
+ * Returns `null` when `target` has no websocket URL, or there is no
+ * authenticated request context / bound user on `globalClient`. Plain
+ * function (no hooks) so imperative call sites - a callback or `mutationFn`
+ * invoked once per differing `hostId` - can resolve a routed client without
+ * violating the rules of hooks; `useHostClientFor` below is the memoized
+ * wrapper for render-time single-target consumers.
+ */
+export function buildTransientHostClient(
+  globalClient: HostClient<HostRpcRegistry>,
+  target: HostDirectoryEntry,
+): HostClient<HostRpcRegistry> | null {
+  if (target.websocketUrl === null) return null;
+  const requestContext = globalClient.getRequestContext();
+  // `null` when signed out or the credential lease was released - the
+  // "no bound user" gate.
+  const userId = globalClient.getRequestContextUserId();
+  if (requestContext === null || userId === null) return null;
+
+  const registry = globalClient.getRegistry();
+  const messenger = createRetryingMessenger<HostRpcRegistry>(
+    new WsRpcClient<HostRpcRegistry>({
+      registry,
+      endpoint: () => target,
+      // Read the bearer live so a credential-context replacement (not just an
+      // in-place rotation) is picked up, matching the stream sibling hook.
+      bearer: () => globalClient.getRequestContext()?.credentials ?? null,
+      requestId: uuidv4,
+      webSocketFactory: browserWebSocketFactory,
+      dialTimeoutMs: DEFAULT_DIAL_TIMEOUT_MS,
+      frameTimeoutMs: FRAME_TIMEOUT_MS,
+    }),
+    DEFAULT_TRANSPORT_RETRY_POLICY,
+  );
+  const client = new HostClient<HostRpcRegistry>({
+    registry,
+    messenger,
+    invalidator: NO_OP_INVALIDATOR,
+  });
+  client.bind(target);
+  client.setRequestContext(requestContext);
+  return client;
+}
+
+/**
+ * Memoized render-time wrapper over `buildTransientHostClient` for a single,
+ * referentially-stable `target`. Settings ▸ Worktrees uses it to list /
+ * delete worktrees on whichever host the user selects.
+ *
+ * Memoized on the target entry + auth identity so the same selection yields a
+ * stable client across renders; callers should pass a referentially stable
+ * `target` (e.g. memoized by host id).
  */
 export function useHostClientFor(
   target: HostDirectoryEntry | null,
 ): HostClient<HostRpcRegistry> | null {
   const globalClient = useHostClient();
-  const registry = globalClient.getRegistry();
   const requestContext = globalClient.getRequestContext();
-  // `null` when signed out or the credential lease was released - the
-  // "no bound user" gate.
   const userId = globalClient.getRequestContextUserId();
 
   return useMemo(() => {
-    if (target === null || target.websocketUrl === null) return null;
-    if (requestContext === null || userId === null) return null;
-
-    const messenger = createRetryingMessenger<HostRpcRegistry>(
-      new WsRpcClient<HostRpcRegistry>({
-        registry,
-        endpoint: () => target,
-        // Read the bearer live so a credential-context replacement (not just an
-        // in-place rotation) is picked up, matching the stream sibling hook.
-        bearer: () => globalClient.getRequestContext()?.credentials ?? null,
-        requestId: uuidv4,
-        webSocketFactory: browserWebSocketFactory,
-        dialTimeoutMs: DEFAULT_DIAL_TIMEOUT_MS,
-        frameTimeoutMs: FRAME_TIMEOUT_MS,
-      }),
-      DEFAULT_TRANSPORT_RETRY_POLICY,
-    );
-    const client = new HostClient<HostRpcRegistry>({
-      registry,
-      messenger,
-      invalidator: NO_OP_INVALIDATOR,
-    });
-    client.bind(target);
-    client.setRequestContext(requestContext);
-    return client;
-  }, [target, registry, requestContext, userId, globalClient]);
+    // Same gates the builder re-checks internally; read here so the memo
+    // rebuilds the client when the auth identity changes (the builder reads
+    // both imperatively off `globalClient`).
+    if (target === null || requestContext === null || userId === null) {
+      return null;
+    }
+    return buildTransientHostClient(globalClient, target);
+  }, [target, globalClient, requestContext, userId]);
 }
