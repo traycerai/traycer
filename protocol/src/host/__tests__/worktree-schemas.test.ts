@@ -198,26 +198,46 @@ describe("worktreeBranchStatusSchema (upstream-independent reshape)", () => {
 });
 
 describe("worktreeListAllForHostRequestSchemaV11", () => {
-  it("requires the includeActivity flag", () => {
+  it("requires both the includeActivity flag and activityPaths", () => {
     expect(
+      worktreeListAllForHostRequestSchemaV11.parse({
+        includeActivity: true,
+        activityPaths: null,
+      }),
+    ).toEqual({ includeActivity: true, activityPaths: null });
+    // activityPaths is nullable, never optional - a request missing it is
+    // rejected at the boundary (every caller states the mode explicitly).
+    expect(() =>
       worktreeListAllForHostRequestSchemaV11.parse({ includeActivity: true }),
-    ).toEqual({ includeActivity: true });
+    ).toThrow();
     expect(worktreeListAllForHostRequestSchema.parse({})).toEqual({});
+  });
+
+  it("accepts a per-viewport activityPaths selection (lazy-enrichment mode)", () => {
+    const parsed = worktreeListAllForHostRequestSchemaV11.parse({
+      includeActivity: false,
+      activityPaths: ["/Users/dev/.traycer/worktrees/acme__web/feature-x"],
+    });
+    expect(parsed).toEqual({
+      includeActivity: false,
+      activityPaths: ["/Users/dev/.traycer/worktrees/acme__web/feature-x"],
+    });
   });
 });
 
 describe("worktree.listAllForHost v1.0 <-> v1.1 negotiation", () => {
-  it("upgrades a v1.0 request to v1.1 with includeActivity defaulted false", () => {
+  it("upgrades a v1.0 request to v1.1 with includeActivity=false and activityPaths=null", () => {
     const upgraded = upgradeRequestToVersion(
       listAllForHostRegistry,
       V10,
       V11,
       {},
     );
-    expect(upgraded).toEqual({ includeActivity: false });
+    expect(upgraded).toEqual({ includeActivity: false, activityPaths: null });
     // And it validates against the v1.1 request schema.
     expect(worktreeListAllForHostRequestSchemaV11.parse(upgraded)).toEqual({
       includeActivity: false,
+      activityPaths: null,
     });
   });
 

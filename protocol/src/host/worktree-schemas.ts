@@ -740,10 +740,22 @@ export type WorktreeHostEntryV11 = z.infer<typeof worktreeHostEntrySchemaV11>;
  * failed probe yields `null`, never fails the listing. The flag gates ONLY
  * these git probes (`lastActivityAt`, `branchStatus`); `owners` and `createdAt`
  * are cheap and returned either way.
+ *
+ * `activityPaths` selects between two response modes, so the GUI can render the
+ * base list instantly and then lazily enrich only the rows scrolled into view
+ * instead of paying the whole-list probe cost up front:
+ *  - `activityPaths: null` (default): unchanged - return ALL worktrees, each
+ *    enriched iff `includeActivity` is true, else base-only.
+ *  - `activityPaths: [<worktreePath>, ...]`: per-viewport lazy-enrichment mode.
+ *    Return ONLY the worktrees whose path matches one of these (host-normalized
+ *    compare), each FULLY enriched - the activity probes run for them REGARDLESS
+ *    of `includeActivity`. Paths not found on disk are omitted (no error). Pass
+ *    `[]` to enrich nothing (returns no worktrees).
  */
 export const worktreeListAllForHostRequestSchemaV11 =
   worktreeListAllForHostRequestSchema.extend({
     includeActivity: z.boolean(),
+    activityPaths: z.array(z.string()).nullable(),
   });
 export type WorktreeListAllForHostRequestV11 = z.infer<
   typeof worktreeListAllForHostRequestSchemaV11
