@@ -11,6 +11,8 @@ import {
   sanitizeLogFields,
   type SafeLogFields,
 } from "../app/logger";
+import { appendPerfEvent } from "../perf/perf-telemetry-writer";
+import { parsePerfRendererLog } from "../perf/perf-renderer-log";
 import { safelyOpenExternal, installNavigationGuard } from "../app/security";
 import { installContextMenu } from "../app/spell-check";
 import { installResponsivenessListeners } from "../app/responsiveness";
@@ -138,6 +140,13 @@ export function createMainWindow(options: MainWindowOptions): BrowserWindow {
   window.webContents.on(
     "console-message",
     (details: Event<WebContentsConsoleMessageEventParams>) => {
+      // Perf-telemetry lines go ONLY to the dedicated NDJSON file, never the
+      // human log. Handle them first and return so they bypass electron-log.
+      const perfEvent = parsePerfRendererLog(details.message);
+      if (perfEvent !== null) {
+        appendPerfEvent(perfEvent);
+        return;
+      }
       const structured = parseStructuredRendererLog(details.message);
       const entry = {
         message:

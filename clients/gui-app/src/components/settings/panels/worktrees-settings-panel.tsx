@@ -106,6 +106,11 @@ import {
   type WorktreeDeleteProgressSummary,
 } from "@/components/settings/panels/use-worktree-delete-run";
 import { WorktreeDeleteProgressModal } from "@/components/settings/panels/worktree-delete-progress-modal";
+import {
+  useWorktreeFirstPaintPerf,
+  useWorktreeListQueryPerf,
+} from "@/components/settings/panels/worktrees-settings-perf";
+import { WorktreeListRenderProfiler } from "@/components/settings/panels/worktree-list-render-profiler";
 
 type WorktreeRowDeleteStatus = "deleting";
 type WorktreeSortMode = "newest" | "oldest";
@@ -438,9 +443,24 @@ function WorktreesBody(props: {
   });
   // Owning-Task titles come from the cloud epic-tasks caches the app already
   // maintains (keyed by the signed-in user, any host) - no host-side title join.
-  const taskTitlesByEpicId = useWorktreeTaskTitles(
-    listQuery.data?.worktrees ?? EMPTY_WORKTREES,
-  );
+  const worktreesForRender = listQuery.data?.worktrees ?? EMPTY_WORKTREES;
+  const taskTitlesByEpicId = useWorktreeTaskTitles(worktreesForRender);
+  // Perf telemetry (gated + non-throwing): the list query leg and first paint
+  // of a non-empty list. Both derive purely from the query result.
+  useWorktreeListQueryPerf({
+    fetchStatus: listQuery.fetchStatus,
+    status: listQuery.status,
+    worktreeCount: worktreesForRender.length,
+    submoduleCount: worktreesForRender.reduce(
+      (sum, entry) => sum + entry.submodules.length,
+      0,
+    ),
+    hasData: listQuery.data !== undefined,
+  });
+  useWorktreeFirstPaintPerf({
+    painted: listQuery.isSuccess && worktreesForRender.length > 0,
+    rowCount: worktreesForRender.length,
+  });
   const canRefresh = reachable && client !== null;
   const toolbarProps = {
     hosts,
@@ -910,148 +930,153 @@ export function WorktreesList(props: {
   };
 
   return (
-    <div className="flex flex-col">
-      {confirmed !== null && run !== null ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div
-            aria-hidden
-            className="absolute inset-0 bg-background/80 backdrop-blur-sm"
-          />
-          <div className="relative z-10 max-h-[min(80vh,40rem)] w-[min(92vw,32rem)] overflow-y-auto rounded-lg border border-border/60 bg-card shadow-lg">
-            <WorktreeDeleteProgressModal
-              target={confirmed}
-              run={run}
-              onClose={handleCloseModal}
+    <WorktreeListRenderProfiler
+      rowCount={worktrees.length}
+      visibleRowCount={visibleWorktrees.length}
+    >
+      <div className="flex flex-col">
+        {confirmed !== null && run !== null ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div
+              aria-hidden
+              className="absolute inset-0 bg-background/80 backdrop-blur-sm"
             />
+            <div className="relative z-10 max-h-[min(80vh,40rem)] w-[min(92vw,32rem)] overflow-y-auto rounded-lg border border-border/60 bg-card shadow-lg">
+              <WorktreeDeleteProgressModal
+                target={confirmed}
+                run={run}
+                onClose={handleCloseModal}
+              />
+            </div>
           </div>
-        </div>
-      ) : null}
+        ) : null}
 
-      <WorktreesToolbar
-        {...props.toolbarProps}
-        selectionControls={
-          <WorktreesRepoExpansionControl
-            allCollapsed={allReposCollapsed}
-            onToggle={toggleAllReposCollapsed}
-          />
-        }
-        filterControls={
-          <WorktreesFilterControls
-            searchText={searchText}
-            onSearchChange={setSearchText}
-            tierFilters={tierFilters}
-            availableTiers={availableTiers}
-            onToggleTier={toggleTierFilter}
-            onClearTierFilters={clearTierFilters}
-            sortMode={sortMode}
-            onSortModeChange={setSortMode}
-          />
-        }
-      />
-      <WorktreeSelectionActionBar
-        selectedCount={selectedCount}
-        onDelete={() => {
-          requestDeleteTargets(selectedTargets);
-        }}
-        onClear={clearSelection}
-      />
-      <WorktreeDeleteProgressStrip
-        summary={progressSummary}
-        onDismiss={dismissTerminalBackgrounded}
-      />
-
-      {groups.length === 0 ? (
-        <WorktreesStateMessage tone="muted" spinner={false}>
-          No worktrees match your search.
-        </WorktreesStateMessage>
-      ) : (
-        <WorktreeSelectAllHeader
-          selectableCount={selectableWorktreePaths.length}
-          selectedCount={selectedCount}
-          onToggle={toggleSelectAllVisible}
+        <WorktreesToolbar
+          {...props.toolbarProps}
+          selectionControls={
+            <WorktreesRepoExpansionControl
+              allCollapsed={allReposCollapsed}
+              onToggle={toggleAllReposCollapsed}
+            />
+          }
+          filterControls={
+            <WorktreesFilterControls
+              searchText={searchText}
+              onSearchChange={setSearchText}
+              tierFilters={tierFilters}
+              availableTiers={availableTiers}
+              onToggleTier={toggleTierFilter}
+              onClearTierFilters={clearTierFilters}
+              sortMode={sortMode}
+              onSortModeChange={setSortMode}
+            />
+          }
         />
-      )}
+        <WorktreeSelectionActionBar
+          selectedCount={selectedCount}
+          onDelete={() => {
+            requestDeleteTargets(selectedTargets);
+          }}
+          onClear={clearSelection}
+        />
+        <WorktreeDeleteProgressStrip
+          summary={progressSummary}
+          onDismiss={dismissTerminalBackgrounded}
+        />
 
-      {groups.map((group) => {
-        const collapsed = collapsedRepoKeys.has(group.key);
-        return (
-          <div
-            key={group.key}
-            className="border-b border-border/40 last:border-b-0"
-          >
-            <WorktreeRepoHeader
-              label={group.label}
-              count={group.items.length}
-              collapsed={collapsed}
-              onToggle={() => toggleRepoCollapsed(group, collapsed)}
-            />
-            {collapsed ? null : (
-              <div className="flex flex-col divide-y divide-border/30">
-                {group.items.map((entry) => {
-                  // The row carries the in-progress treatment only once the delete
-                  // is sent to the background; while the foreground modal is up
-                  // the modal alone shows progress - no duplication.
-                  const deleteStatus =
-                    backgroundedDeleteStatusByPath.get(entry.worktreePath) ??
-                    null;
-                  return (
-                    <WorktreeRow
-                      key={entry.worktreePath}
-                      entry={entry}
-                      taskTitlesByEpicId={taskTitlesByEpicId}
-                      taskRollupByEpicId={taskRollupByEpicId}
-                      deleteStatus={deleteStatus}
-                      selected={selectedPaths.has(entry.worktreePath)}
-                      canSelect={selectablePathSet.has(entry.worktreePath)}
-                      onToggleSelection={() =>
-                        toggleSelection(entry.worktreePath)
-                      }
-                      onManageScripts={() =>
-                        setPendingScriptReview({
-                          target: entry,
-                          scripts:
-                            reviewedScriptsByPath.get(entry.worktreePath) ??
-                            entry.scripts,
-                        })
-                      }
-                      onDelete={() => requestDeleteTargets([entry])}
-                    />
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        );
-      })}
+        {groups.length === 0 ? (
+          <WorktreesStateMessage tone="muted" spinner={false}>
+            No worktrees match your search.
+          </WorktreesStateMessage>
+        ) : (
+          <WorktreeSelectAllHeader
+            selectableCount={selectableWorktreePaths.length}
+            selectedCount={selectedCount}
+            onToggle={toggleSelectAllVisible}
+          />
+        )}
 
-      <ConfirmDestructiveDialog
-        open={singleDialogCopy !== null}
-        onOpenChange={(open) => {
-          if (!open) setPendingDeleteTargets(null);
-        }}
-        title={singleDialogCopy?.title ?? ""}
-        description={singleDialogCopy?.description ?? ""}
-        cascadeSummary={null}
-        actionLabel={singleDialogCopy?.actionLabel ?? "Delete"}
-        isPending={false}
-        onConfirm={handleConfirm}
-      />
-      <WorktreeBulkDeleteDialog
-        summary={bulkDeleteSummary}
-        onOpenChange={(open) => {
-          if (!open) setPendingDeleteTargets(null);
-        }}
-        onConfirm={handleConfirm}
-      />
-      <WorktreeScriptReviewDialog
-        target={pendingScriptReview?.target ?? null}
-        scriptSeed={pendingScriptReview?.scripts ?? null}
-        onOpenChange={(open) => {
-          if (!open) setPendingScriptReview(null);
-        }}
-        onSave={handleScriptReviewSave}
-      />
-    </div>
+        {groups.map((group) => {
+          const collapsed = collapsedRepoKeys.has(group.key);
+          return (
+            <div
+              key={group.key}
+              className="border-b border-border/40 last:border-b-0"
+            >
+              <WorktreeRepoHeader
+                label={group.label}
+                count={group.items.length}
+                collapsed={collapsed}
+                onToggle={() => toggleRepoCollapsed(group, collapsed)}
+              />
+              {collapsed ? null : (
+                <div className="flex flex-col divide-y divide-border/30">
+                  {group.items.map((entry) => {
+                    // The row carries the in-progress treatment only once the delete
+                    // is sent to the background; while the foreground modal is up
+                    // the modal alone shows progress - no duplication.
+                    const deleteStatus =
+                      backgroundedDeleteStatusByPath.get(entry.worktreePath) ??
+                      null;
+                    return (
+                      <WorktreeRow
+                        key={entry.worktreePath}
+                        entry={entry}
+                        taskTitlesByEpicId={taskTitlesByEpicId}
+                        taskRollupByEpicId={taskRollupByEpicId}
+                        deleteStatus={deleteStatus}
+                        selected={selectedPaths.has(entry.worktreePath)}
+                        canSelect={selectablePathSet.has(entry.worktreePath)}
+                        onToggleSelection={() =>
+                          toggleSelection(entry.worktreePath)
+                        }
+                        onManageScripts={() =>
+                          setPendingScriptReview({
+                            target: entry,
+                            scripts:
+                              reviewedScriptsByPath.get(entry.worktreePath) ??
+                              entry.scripts,
+                          })
+                        }
+                        onDelete={() => requestDeleteTargets([entry])}
+                      />
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })}
+
+        <ConfirmDestructiveDialog
+          open={singleDialogCopy !== null}
+          onOpenChange={(open) => {
+            if (!open) setPendingDeleteTargets(null);
+          }}
+          title={singleDialogCopy?.title ?? ""}
+          description={singleDialogCopy?.description ?? ""}
+          cascadeSummary={null}
+          actionLabel={singleDialogCopy?.actionLabel ?? "Delete"}
+          isPending={false}
+          onConfirm={handleConfirm}
+        />
+        <WorktreeBulkDeleteDialog
+          summary={bulkDeleteSummary}
+          onOpenChange={(open) => {
+            if (!open) setPendingDeleteTargets(null);
+          }}
+          onConfirm={handleConfirm}
+        />
+        <WorktreeScriptReviewDialog
+          target={pendingScriptReview?.target ?? null}
+          scriptSeed={pendingScriptReview?.scripts ?? null}
+          onOpenChange={(open) => {
+            if (!open) setPendingScriptReview(null);
+          }}
+          onSave={handleScriptReviewSave}
+        />
+      </div>
+    </WorktreeListRenderProfiler>
   );
 }
 
