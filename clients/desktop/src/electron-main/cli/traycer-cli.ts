@@ -1,4 +1,6 @@
 import { execFile, spawn } from "node:child_process";
+import { readFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { log } from "../app/logger";
 import {
   cliBinaryName,
@@ -108,10 +110,58 @@ export interface TraycerCliInvocation {
   readonly args: readonly string[];
 }
 
+/**
+ * On Windows the resolved dev CLI wrapper is a `.cmd`, which Node cannot spawn
+ * without `shell: true` (CVE-2024-27980) — and `shell: true` forgoes argv
+ * quoting, so a spaced path or a cmd.exe metacharacter in a user-supplied
+ * value (config env/shell set) could break or inject. Shared so the
+ * platform/extension check stays in one place across the spawn sites. Prefer
+ * `preferDirectExec` (below) to avoid the shell path entirely.
+ */
+function needsWindowsShellWrapper(command: string): boolean {
+  return process.platform === "win32" && /\.(cmd|bat)$/i.test(command);
+}
+
+/**
+ * Prefer a shell-free invocation. The dev stager (`scripts/dev-desktop.js`)
+ * drops a `dev-cli-exec.json` next to the wrapper describing the interpreter
+ * invocation it wraps (`bun <entry>`); when present, spawn that real
+ * executable with an argv array so `shell` stays false on every platform and
+ * no user input is routed through cmd.exe. Falls back to the wrapper path
+ * (guarded by `needsWindowsShellWrapper`) when the descriptor is absent or
+ * malformed.
+ */
+async function preferDirectExec(
+  binaryPath: string,
+): Promise<TraycerCliInvocation> {
+  let raw: string;
+  try {
+    raw = await readFile(join(dirname(binaryPath), "dev-cli-exec.json"), "utf8");
+  } catch {
+    return { command: binaryPath, args: [] };
+  }
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      typeof (parsed as { command?: unknown }).command === "string" &&
+      Array.isArray((parsed as { args?: unknown }).args) &&
+      (parsed as { args: unknown[] }).args.every((a) => typeof a === "string")
+    ) {
+      const desc = parsed as { command: string; args: string[] };
+      return { command: desc.command, args: desc.args };
+    }
+  } catch {
+    // Malformed descriptor — fall back to the wrapper below.
+  }
+  return { command: binaryPath, args: [] };
+}
+
 export async function resolveTraycerCliInvocation(): Promise<TraycerCliInvocation> {
   const discovered = await discoverCli();
   if (discovered.kind !== "none") {
-    return { command: discovered.binaryPath, args: [] };
+    return preferDirectExec(discovered.binaryPath);
   }
   const bundled = await resolveBundledCliPath();
   if (bundled !== null) {
@@ -159,10 +209,7 @@ export async function runTraycerCli(
         encoding: "utf8",
         maxBuffer: opts.maxBuffer,
         timeout: opts.timeoutMs,
-        // Windows: Node refuses to spawn a .cmd/.bat without shell:true
-        // (CVE-2024-27980). The dev CLI wrapper is a .cmd, so opt in.
-        shell:
-          process.platform === "win32" && /\.(cmd|bat)$/i.test(inv.command),
+        shell: needsWindowsShellWrapper(inv.command),
       },
       (err, stdout, stderr) => {
         if (err !== null) {
@@ -416,8 +463,7 @@ export async function runTraycerCliWithStdin<T>(
   return new Promise<T>((resolve, reject) => {
     const child = spawn(inv.command, allArgs, {
       stdio: ["pipe", "pipe", "pipe"],
-      shell:
-        process.platform === "win32" && /\.(cmd|bat)$/i.test(inv.command),
+      shell: needsWindowsShellWrapper(inv.command),
     });
     let stdout = "";
     let stderrTail = "";
@@ -558,8 +604,7 @@ export async function streamTraycerCliJson<T>(
     const child = spawn(inv.command, allArgs, {
       env: opts.env === null ? process.env : { ...process.env, ...opts.env },
       stdio: ["ignore", "pipe", "pipe"],
-      shell:
-        process.platform === "win32" && /\.(cmd|bat)$/i.test(inv.command),
+      shell: needsWindowsShellWrapper(inv.command),
     });
     let stdoutBuffer = "";
     let stderrTail = "";
