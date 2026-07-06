@@ -592,6 +592,57 @@ describe("chat activity grouping", () => {
     expect(timeline[0]?.kind).toBe("answered_questions");
   });
 
+  it("suppresses A2A request_user_input tools even when the interview block id does not match", () => {
+    const timeline = buildCompleteTimeline([
+      toolSegment("raw-question-tool", "request_user_input", {
+        questions: [{ question: "Where?", options: [] }],
+      }),
+      {
+        ...interviewSegment("request_user_input:generated"),
+        toolName: "request_user_input",
+      },
+    ]);
+
+    expect(timeline).toHaveLength(1);
+    expect(timeline[0]?.kind).toBe("answered_questions");
+  });
+
+  it("suppresses orphan A2A request_user_input tools when a separate completed interview exists", () => {
+    const timeline = buildCompleteTimeline([
+      toolSegment("orphan-question-tool", "request_user_input", {
+        questions: [{ question: "Which environment?", options: [] }],
+      }),
+      {
+        ...interviewSegment("request_user_input:separate"),
+        toolName: "request_user_input",
+        questions: [
+          {
+            questionId: "q1",
+            question: "Continue?",
+            header: null,
+            options: [],
+            multiSelect: false,
+          },
+        ],
+        answers: [
+          {
+            questionId: "q1",
+            question: "Continue?",
+            values: ["Yes"],
+            notes: null,
+          },
+        ],
+      },
+    ]);
+
+    expect(timeline).toHaveLength(1);
+    expect(timeline[0]?.kind).toBe("answered_questions");
+    if (timeline[0]?.kind !== "answered_questions") {
+      throw new Error("Expected answered questions item");
+    }
+    expect(timeline[0].summary).toBe("Answered 1 question");
+  });
+
   it("does not suppress unmatched question tools", () => {
     const timeline = buildCompleteTimeline([
       toolSegment("tool-1", "question", {

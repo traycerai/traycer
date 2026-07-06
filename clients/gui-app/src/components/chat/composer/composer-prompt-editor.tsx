@@ -28,6 +28,15 @@ import type { ImageAttachmentAttrs } from "./editor/extensions/image-attachment-
 import type { ComposerPickerStore } from "./picker/composer-picker-store";
 
 export interface ComposerPromptEditorHandle {
+  /**
+   * Whether the async Tiptap editor behind this handle exists yet. The handle
+   * itself is created on first commit - before `useEditor` (with
+   * `immediatelyRender: false`) has produced an editor - and every method
+   * below silently no-ops until then. Callers that must not lose a write
+   * (the draft-reset bridge) check this instead of treating a non-null handle
+   * as "ready".
+   */
+  readonly isReady: () => boolean;
   readonly focus: () => void;
   readonly focusAtEnd: () => void;
   readonly getJSON: () => JsonContent;
@@ -82,6 +91,13 @@ export interface ComposerPromptEditorProps {
   readonly onKeyDown: KeyboardEventHandler<HTMLElement> | undefined;
   readonly onFocus: () => void;
   readonly onBlur: () => void;
+  /**
+   * Fired (once per editor instance) when the async Tiptap editor is created
+   * and the handle's methods stop no-oping. Ref mutations are invisible to the
+   * owner's render cycle, so owners that must react to readiness (the
+   * draft-reset bridge's handle-ready catch-up) take this explicit signal.
+   */
+  readonly onEditorReady: (() => void) | null;
   readonly ref?: Ref<ComposerPromptEditorHandle>;
 }
 
@@ -104,6 +120,7 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
     onKeyDown,
     onFocus,
     onBlur,
+    onEditorReady,
     ref,
   } = props;
 
@@ -121,10 +138,12 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
   );
   const onSubmitRef = useRef(onSubmit);
   const onSnapshotRef = useRef(onSnapshot);
+  const onEditorReadyRef = useRef(onEditorReady);
   const initialSelectionRef = useRef(normalizedInitial.selection);
   useEffect(() => {
     onSubmitRef.current = onSubmit;
     onSnapshotRef.current = onSnapshot;
+    onEditorReadyRef.current = onEditorReady;
   });
 
   const [stableSubmitHolder] = useState<{ readonly current: () => void }>(
@@ -178,6 +197,11 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
 
   useEffect(() => {
     if (editor === null) return;
+    onEditorReadyRef.current?.();
+  }, [editor]);
+
+  useEffect(() => {
+    if (editor === null) return;
     const selection = initialSelectionRef.current;
     if (selection === null) return;
     editor.commands.setTextSelection({
@@ -211,6 +235,8 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
       editor.view.dom.setAttribute(name, value);
     });
   }, [editor, editorAttributesObject]);
+
+  const isReady = useCallback(() => editor !== null, [editor]);
 
   const focus = useCallback(() => {
     editor?.commands.focus();
@@ -342,6 +368,7 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
   useImperativeHandle(
     ref,
     () => ({
+      isReady,
       focus,
       focusAtEnd,
       getJSON,
@@ -362,6 +389,7 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
       insertImageAttachments,
       insertDictatedText,
       isEmpty,
+      isReady,
       removeImageAttachmentById,
       setContent,
     ],

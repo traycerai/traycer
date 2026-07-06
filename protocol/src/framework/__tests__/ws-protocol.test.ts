@@ -254,5 +254,45 @@ describe("ws-protocol canonical Zod schemas", () => {
       };
       expect(fatalErrorDetailsSchema.safeParse(details).success).toBe(false);
     });
+
+    it("accepts a `retryable` transient-rejection flag", () => {
+      const details = {
+        code: "UNAUTHORIZED" as const,
+        reason: "Signing key unavailable: request timed out",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+        retryable: true,
+      };
+      const parsed = fatalErrorDetailsSchema.safeParse(details);
+      expect(parsed.success).toBe(true);
+      if (parsed.success) {
+        expect(parsed.data.retryable).toBe(true);
+      }
+    });
+
+    it("reads `retryable` as undefined when an older host omits it", () => {
+      const details = {
+        code: "UNAUTHORIZED" as const,
+        reason: "Invalid token",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      };
+      const parsed = fatalErrorDetailsSchema.safeParse(details);
+      expect(parsed.success).toBe(true);
+      if (parsed.success) {
+        expect(parsed.data.retryable).toBeUndefined();
+      }
+    });
+
+    it("rejects a non-boolean `retryable`", () => {
+      const details = {
+        code: "UNAUTHORIZED",
+        reason: "bad",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+        retryable: "yes",
+      };
+      expect(fatalErrorDetailsSchema.safeParse(details).success).toBe(false);
+    });
   });
 });

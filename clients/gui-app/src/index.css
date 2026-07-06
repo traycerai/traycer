@@ -1240,6 +1240,14 @@
     color: var(--primary);
     text-decoration: underline;
   }
+  /* Matches the echoed bubble's blockquote treatment (render-profile.tsx
+     renderBlockquote) so a quoted draft looks exactly like what sends -
+     @apply of the SAME utilities guarantees identical computed styles
+     (hand-copied declarations drifted: e.g. `border-primary/60` compiles to
+     a color-mix in oklab, not oklch). */
+  [data-composer-editor] blockquote {
+    @apply my-0.5 border-l-2 border-primary/60 pl-3 leading-snug text-muted-foreground;
+  }
 }
 
 /*

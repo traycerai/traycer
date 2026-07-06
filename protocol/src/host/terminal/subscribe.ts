@@ -138,6 +138,11 @@ const terminalSubscribeServerFrameSchemaV11 = z.discriminatedUnion("kind", [
     ...textFrameFields,
     ...sessionReferenceFields,
     exitCode: z.number().int(),
+    // NB: the exit *reason* lives on the session info (snapshot), not here.
+    // A reap only fires with zero attached viewers, so a `reaped` exit is
+    // never delivered as a live exit frame - it is observed on reattach via
+    // `snapshot.session.exitReason`. Keeping the reason off the frozen
+    // stream frame avoids retroactively widening an already-shipped minor.
   }),
   z.object({
     kind: z.literal("actionAck"),

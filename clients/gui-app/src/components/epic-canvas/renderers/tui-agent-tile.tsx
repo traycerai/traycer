@@ -361,7 +361,7 @@ function TuiAgentTileLive(
     (): boolean => restartSuppressExitRef.current,
     [],
   );
-  const performRestartKill = useCallback((): void => {
+  const armRestartSuppression = useCallback((): void => {
     restartSawSessionGoneRef.current = false;
     restartSuppressExitRef.current = true;
     if (restartSuppressTimerRef.current !== null) {
@@ -371,6 +371,9 @@ function TuiAgentTileLive(
       clearRestartSuppression,
       RESTART_SUPPRESS_TIMEOUT_MS,
     );
+  }, [clearRestartSuppression]);
+  const performRestartKill = useCallback((): void => {
+    armRestartSuppression();
     killTerminalMutate(
       { sessionId },
       {
@@ -379,7 +382,16 @@ function TuiAgentTileLive(
         },
       },
     );
-  }, [clearRestartSuppression, killTerminalMutate, retryTerminal, sessionId]);
+  }, [armRestartSuppression, killTerminalMutate, retryTerminal, sessionId]);
+  // A `reaped` exit is the host's idle-reap of this unwatched agent - pure
+  // lifecycle, not a crash - and the PTY is already gone, so there is
+  // nothing to kill. Arm the same suppression a binding restart uses (no
+  // error toast, no tab close, same safety ceiling) and recreate under the
+  // same id; `prepareLaunch` resumes the conversation transparently.
+  const reviveAfterReap = useCallback((): void => {
+    armRestartSuppression();
+    retryTerminal();
+  }, [armRestartSuppression, retryTerminal]);
   // The kill must target a LIVE session. If session presence is unknown
   // (`terminal.list` refetching → `hostHasSession === null`) or already gone at
   // commit time, do NOT silently drop the rebind (the bug where Update appeared
@@ -494,6 +506,7 @@ function TuiAgentTileLive(
           createError={bootstrap.createError}
           handle={bootstrap.handle}
           onRetry={bootstrap.retry}
+          onReapedExit={reviveAfterReap}
           isActive={props.isActive}
           recovery={props.recovery}
         />
@@ -518,6 +531,8 @@ interface TerminalAgentBodyProps {
   } | null;
   readonly handle: TerminalSessionStoreHandle | null;
   readonly onRetry: () => void;
+  /** Revive (recreate + resume) after the host's idle-reap of this agent. */
+  readonly onReapedExit: () => void;
   readonly isActive: boolean;
   readonly isRestartKillSuppressed: () => boolean;
   readonly recovery: TerminalSessionRecovery;
@@ -592,6 +607,7 @@ function TerminalAgentBody(props: TerminalAgentBodyProps): React.ReactNode {
       tileId={props.tileId}
       isActive={props.isActive}
       isRestartKillSuppressed={props.isRestartKillSuppressed}
+      onReapedExit={props.onReapedExit}
       recovery={props.recovery}
     />
   );
@@ -919,6 +935,8 @@ interface TerminalAgentLiveProps {
   // the live host, and rather than the ref itself (which react-hooks/refs flags
   // when passed across the prop boundary).
   readonly isRestartKillSuppressed: () => boolean;
+  /** Revive (recreate + resume) after the host's idle-reap of this agent. */
+  readonly onReapedExit: () => void;
   readonly recovery: TerminalSessionRecovery;
 }
 
@@ -929,9 +947,14 @@ function TerminalAgentLive(props: TerminalAgentLiveProps) {
   const status = useStore(handle.store, (s) => s.status);
   const connectionStatus = useStore(handle.store, (s) => s.connectionStatus);
   const exitCode = useStore(handle.store, (s) => s.exitCode);
+  const exitReason = useStore(handle.store, (s) => s.exitReason);
   const lastOutputPreview = useStore(handle.store, (s) => s.lastOutputPreview);
   const closeCanvasTab = useEpicCanvasStore((s) => s.closeCanvasTab);
   const exitToastShownRef = useRef(false);
+  // One revive request per exit: the exit effect can re-run while the store
+  // still reports the same exited state (dep identity churn), and stacking
+  // `terminal.create` retries for one reap would race each other.
+  const reapedReviveRequestedRef = useRef(false);
 
   const isRestartKillSuppressed = props.isRestartKillSuppressed;
   const showExitToast = useCallback(() => {
@@ -940,6 +963,9 @@ function TerminalAgentLive(props: TerminalAgentLiveProps) {
     // so the latest suppression state applies to this exact exit.
     if (isRestartKillSuppressed()) return;
     if (status !== "exited") return;
+    // A `reaped` exit is the host's idle-reap of an unwatched agent -
+    // lifecycle, not a crash. The exit effect below revives it in place.
+    if (exitReason === "reaped") return;
     if (!exitToastShownRef.current && exitCode !== null && exitCode !== 0) {
       exitToastShownRef.current = true;
       toast.error("Terminal agent exited with an error.", {
@@ -948,9 +974,23 @@ function TerminalAgentLive(props: TerminalAgentLiveProps) {
           "The agent stopped before reporting a readable error. Try restarting it.",
       });
     }
-  }, [status, exitCode, lastOutputPreview, isRestartKillSuppressed]);
+  }, [
+    status,
+    exitCode,
+    exitReason,
+    lastOutputPreview,
+    isRestartKillSuppressed,
+  ]);
   useActivePaneEffect(showExitToast);
 
+  const onReapedExit = props.onReapedExit;
+  useEffect(() => {
+    if (status === "running") {
+      // A live PTY (fresh spawn or completed revive) re-arms the one-shot so
+      // a later reap - after another long unwatched stretch - revives again.
+      reapedReviveRequestedRef.current = false;
+    }
+  }, [status]);
   useEffect(() => {
     if (status !== "exited") return;
     // Don't close the tab on the kill we issued for a restart - the bootstrap is
@@ -958,6 +998,16 @@ function TerminalAgentLive(props: TerminalAgentLiveProps) {
     // dropped the terminal the instant folder edits were applied. Read on this
     // exact exit; a genuine later exit sees suppression cleared and closes.
     if (isRestartKillSuppressed()) return;
+    if (exitReason === "reaped") {
+      // Host idle-reap of an unwatched agent: keep the tab open and revive
+      // the session in place (recreate under the same id; `prepareLaunch`
+      // resumes the conversation) instead of closing on a lifecycle event.
+      if (!reapedReviveRequestedRef.current) {
+        reapedReviveRequestedRef.current = true;
+        onReapedExit();
+      }
+      return;
+    }
     // `closeCanvasTab` resolves the tile by its pane tab *instance* id
     // (`pane.tabInstanceIds`), not the content/session id. Passing
     // `handle.sessionId` (the agent record id) silently no-ops, leaving the
@@ -965,6 +1015,8 @@ function TerminalAgentLive(props: TerminalAgentLiveProps) {
     closeCanvasTab(props.viewTabId, props.tileId, props.instanceId);
   }, [
     status,
+    exitReason,
+    onReapedExit,
     props.instanceId,
     props.viewTabId,
     props.tileId,

@@ -5,9 +5,9 @@
  * per-provider refresh icon and `RateLimitRefreshAllButton` both depend on to
  * stay in sync. Uses the shared harness's real `HostClient` +
  * `MockHostMessenger` and PRODUCTION QueryClient configuration: this exact
- * flow - data freshly loaded, then a force:true enqueue - is where the
- * inherited global staleTime silently no-oped the real app's refresh while a
- * bare staleTime-0 test client passed.
+ * flow - disabled observer mounted, first snapshot loaded by the queue, then
+ * a force:true enqueue - is where the inherited global staleTime silently
+ * no-oped the real app's refresh while a bare staleTime-0 test client passed.
  */
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, renderHook, waitFor } from "@testing-library/react";
@@ -25,13 +25,19 @@ import {
   createRateLimitSharingHarness,
 } from "@/lib/rate-limits/__tests__/provider-rate-limit-sharing-harness";
 
+const EXPECTED_RATE_LIMIT_USAGE = {
+  totalTokens: 0,
+  remainingTokens: 0,
+  providerRateLimits: null,
+};
+
 describe("enqueueRateLimitFetch keeps a mounted useHostProviderRateLimitsQuery observer's isFetching in sync", () => {
   afterEach(() => {
     cleanup();
     __resetRateLimitQueueForTests();
   });
 
-  it("flips isFetching true on the observer while a force:true enqueue is in flight, then false once it settles", async () => {
+  it("populates a disabled Codex observer from the queue and reflects a later force:true enqueue's fetch state", async () => {
     const harness = createRateLimitSharingHarness();
     const { method, params, options } = providerRateLimitQueryOptions("codex");
     const rendered = renderHook(
@@ -39,9 +45,11 @@ describe("enqueueRateLimitFetch keeps a mounted useHostProviderRateLimitsQuery o
       { wrapper: createQueryClientWrapper(harness.queryClient) },
     );
 
-    // Let the initial mount fetch settle (the harness resolves it immediately).
-    await waitFor(() => expect(rendered.result.current.isPending).toBe(false));
+    // Codex is an `ephemeralProcess` provider: the mounted observer is disabled
+    // and must not start a subprocess-spawning request on its own.
+    expect(rendered.result.current.isPending).toBe(true);
     expect(rendered.result.current.isFetching).toBe(false);
+    expect(rendered.result.current.data).toBeUndefined();
 
     configureRateLimitQueue({
       hostId: mockLocalHostEntry.hostId,
@@ -51,14 +59,25 @@ describe("enqueueRateLimitFetch keeps a mounted useHostProviderRateLimitsQuery o
     });
 
     void enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
+      force: false,
+    });
+
+    await waitFor(() =>
+      expect(rendered.result.current.data).toEqual(EXPECTED_RATE_LIMIT_USAGE),
+    );
+    expect(rendered.result.current.isPending).toBe(false);
+    expect(rendered.result.current.isFetching).toBe(false);
+
+    void enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
       force: true,
     });
 
-    // The second call is the one the harness blocks - the observer mounted
-    // independently of the queue must see this as in flight.
+    // The second call is the one the harness blocks. The disabled observer,
+    // mounted independently of the queue, must still see it as in flight.
     await waitFor(() => expect(rendered.result.current.isFetching).toBe(true));
 
     harness.resolvePendingResponse();
     await waitFor(() => expect(rendered.result.current.isFetching).toBe(false));
+    expect(rendered.result.current.data).toEqual(EXPECTED_RATE_LIMIT_USAGE);
   });
 });

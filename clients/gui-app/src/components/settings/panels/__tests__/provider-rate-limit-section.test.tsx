@@ -126,7 +126,7 @@ describe("ProviderRateLimitForProvider", () => {
     cleanup();
   });
 
-  it("renders nothing for a provider without native rate limits", () => {
+  it("renders nothing for a provider without native usage limits", () => {
     const { container } = render(
       <ProviderRateLimitForProvider providerId="traycer" />,
     );
@@ -137,8 +137,8 @@ describe("ProviderRateLimitForProvider", () => {
     mocks.isPending = true;
     mocks.isFetching = true;
     render(<ProviderRateLimitForProvider providerId="claude-code" />);
-    expect(screen.getByText("Rate limits")).toBeTruthy();
-    expect(screen.getByText("Loading rate limits")).toBeTruthy();
+    expect(screen.getByText("Usage limits")).toBeTruthy();
+    expect(screen.getByText("Loading usage limits")).toBeTruthy();
   });
 
   it("renders nothing (not an eternal spinner) while pending but not fetching", () => {
@@ -148,8 +148,8 @@ describe("ProviderRateLimitForProvider", () => {
     mocks.isPending = true;
     mocks.isFetching = false;
     render(<ProviderRateLimitForProvider providerId="claude-code" />);
-    expect(screen.getByText("Rate limits")).toBeTruthy();
-    expect(screen.queryByText("Loading rate limits")).toBeNull();
+    expect(screen.getByText("Usage limits")).toBeTruthy();
+    expect(screen.queryByText("Loading usage limits")).toBeNull();
   });
 
   it("renders the Claude Code rate-limit detail once loaded", () => {
@@ -235,7 +235,7 @@ describe("ProviderRateLimitForProvider", () => {
     mocks.data = { providerRateLimits: CODEX_RATE_LIMITS };
     render(<ProviderRateLimitForProvider providerId="codex" />);
 
-    expect(screen.getByText("Rate limit reached")).toBeTruthy();
+    expect(screen.getByText("Usage limit reached")).toBeTruthy();
   });
 
   it("does not show a plan badge (the provider auth badge above already shows it)", () => {
@@ -281,7 +281,7 @@ describe("ProviderRateLimitForProvider", () => {
     render(<ProviderRateLimitForProvider providerId="codex" />);
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Refresh rate limits" }),
+      screen.getByRole("button", { name: "Refresh usage limits" }),
     );
 
     expect(mocks.enqueue).toHaveBeenCalledWith("codex", expect.anything(), {
@@ -297,7 +297,7 @@ describe("ProviderRateLimitForProvider", () => {
     render(<ProviderRateLimitForProvider providerId="codex" />);
 
     expect(
-      screen.getByRole("button", { name: "Refresh rate limits" }),
+      screen.getByRole("button", { name: "Refresh usage limits" }),
     ).toHaveProperty("disabled", true);
   });
 });

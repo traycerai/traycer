@@ -104,15 +104,26 @@ describe("<RateLimitQueueProvider />", () => {
     expect(configureSpy).toHaveBeenLastCalledWith(null);
   });
 
-  it("polls only ephemeralProcess providers each interval, and not before the first tick", () => {
+  it("enqueues only ephemeralProcess providers immediately when they are configured", () => {
     mocks.configured = [
       { providerId: "codex", lane: "ephemeralProcess" },
       { providerId: "openrouter", lane: "httpFetch" },
     ];
     render(tree());
 
-    // No immediate tick on mount - the per-provider query owns initial load.
-    expect(enqueueSpy).not.toHaveBeenCalled();
+    expect(enqueueSpy).toHaveBeenCalledTimes(1);
+    expect(enqueueSpy).toHaveBeenCalledWith("codex", DEFAULT_ACCOUNT_CONTEXT, {
+      force: false,
+    });
+  });
+
+  it("polls only ephemeralProcess providers each interval after the immediate enqueue", () => {
+    mocks.configured = [
+      { providerId: "codex", lane: "ephemeralProcess" },
+      { providerId: "openrouter", lane: "httpFetch" },
+    ];
+    render(tree());
+    enqueueSpy.mockClear();
 
     act(() => {
       vi.advanceTimersByTime(EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS);
@@ -129,6 +140,7 @@ describe("<RateLimitQueueProvider />", () => {
   it("pauses the interval while the document is hidden and resumes when visible again (guardrail 2)", () => {
     mocks.configured = [{ providerId: "codex", lane: "ephemeralProcess" }];
     render(tree());
+    enqueueSpy.mockClear();
 
     act(() => {
       changeVisibility("hidden");
@@ -152,6 +164,7 @@ describe("<RateLimitQueueProvider />", () => {
   it("keeps polling when the window loses focus but stays visible - never keys off blur (guardrail 4)", () => {
     mocks.configured = [{ providerId: "codex", lane: "ephemeralProcess" }];
     render(tree());
+    enqueueSpy.mockClear();
 
     // OS focus moves elsewhere (e.g. Traycer visible on a second monitor). The
     // document stays "visible", so nothing must pause.
@@ -170,6 +183,7 @@ describe("<RateLimitQueueProvider />", () => {
       { providerId: "claude-code", lane: "ephemeralProcess" },
     ];
     const { rerender } = render(tree());
+    enqueueSpy.mockClear();
 
     act(() => {
       vi.advanceTimersByTime(EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS);
@@ -183,6 +197,12 @@ describe("<RateLimitQueueProvider />", () => {
       mocks.configured = [{ providerId: "codex", lane: "ephemeralProcess" }];
       rerender(tree());
     });
+    expect(enqueueSpy).toHaveBeenCalledTimes(1);
+    expect(enqueueSpy).toHaveBeenCalledWith("codex", DEFAULT_ACCOUNT_CONTEXT, {
+      force: false,
+    });
+    enqueueSpy.mockClear();
+
     act(() => {
       vi.advanceTimersByTime(EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS);
     });

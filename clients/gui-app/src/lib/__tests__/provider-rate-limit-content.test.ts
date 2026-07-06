@@ -44,9 +44,19 @@ describe("resolvePopoverProviderRateLimitState", () => {
     expect(state.kind).toBe("cold");
   });
 
-  it("is an error when the first fetch failed with no data", () => {
+  it("is cold while a disabled queue-owned observer is pending without fetching", () => {
     const state = resolvePopoverProviderRateLimitState({
       isPending: true,
+      isFetching: false,
+      isError: false,
+      providerRateLimits: null,
+    });
+    expect(state.kind).toBe("cold");
+  });
+
+  it("is an error when the first fetch failed with no data", () => {
+    const state = resolvePopoverProviderRateLimitState({
+      isPending: false,
       isFetching: false,
       isError: true,
       providerRateLimits: undefined,
