@@ -532,19 +532,19 @@ export function decodeAutonomousResumeBlock(
 // `chat-message-collections.ts`) - writing a domain-shaped block verbatim
 // re-introduces `kind: "wakeup"` into persisted `triggers` and breaks v1.1.x
 // hosts again.
+function isWakeupTrigger(
+  trigger: AutonomousResumeTrigger,
+): trigger is AutonomousResumeTrigger & { kind: "wakeup" } {
+  return trigger.kind === "wakeup";
+}
+
 export function encodeAutonomousResumeBlock(
   domain: AutonomousResumeBlock,
 ): PersistedAutonomousResumeBlock {
-  const triggers: AutonomousResumeTrigger[] = [];
-  const wakeTriggers: AutonomousResumeWakeTrigger[] = [];
-  for (const trigger of domain.triggers) {
-    if (trigger.kind === "wakeup") {
-      const { kind: _kind, ...wake } = trigger;
-      wakeTriggers.push(wake);
-    } else {
-      triggers.push(trigger);
-    }
-  }
+  const triggers = domain.triggers.filter((trigger) => !isWakeupTrigger(trigger));
+  const wakeTriggers = domain.triggers
+    .filter(isWakeupTrigger)
+    .map(({ kind: _kind, ...wake }): AutonomousResumeWakeTrigger => wake);
   return { ...domain, triggers, wakeTriggers };
 }
 
