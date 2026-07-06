@@ -17,6 +17,7 @@ import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { useHostClient } from "@/lib/host/runtime";
 import { hostQueryKeys, epicMutationKeys } from "@/lib/query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
+import { getChatSessionRegistry } from "@/lib/registries/chat-session-registry";
 
 /**
  * Variables for `useEpicCreateChat.mutate`/`mutateAsync`. `hostId` is
@@ -199,6 +200,12 @@ export function useEpicDeleteChat() {
     method: "epic.deleteChat",
     mapVariables: (variables) => variables,
     options: {
+      onSuccess: (_data, variables) => {
+        getChatSessionRegistry().forceRelease(
+          variables.epicId,
+          variables.chatId,
+        );
+      },
       onError: (error) => {
         toastFromHostError(error, "Couldn't delete chat.");
       },

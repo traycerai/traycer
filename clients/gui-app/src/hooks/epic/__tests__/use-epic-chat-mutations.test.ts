@@ -29,6 +29,15 @@ vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
   useReactiveActiveHostId: () => "host-test",
 }));
 
+const { forceReleaseChatSession } = vi.hoisted(() => ({
+  forceReleaseChatSession: vi.fn(),
+}));
+vi.mock("@/lib/registries/chat-session-registry", () => ({
+  getChatSessionRegistry: () => ({
+    forceRelease: forceReleaseChatSession,
+  }),
+}));
+
 import type { CreateChatRequest } from "@traycer/protocol/host/epic/unary-schemas";
 import type { CreateChatMutationInput } from "@/hooks/epic/use-epic-chat-mutations";
 
@@ -138,6 +147,20 @@ describe("useEpicRenameChat", () => {
 });
 
 describe("useEpicDeleteChat", () => {
+  it("force-releases the deleted chat session on success", () => {
+    renderHook(() => useEpicDeleteChat());
+    const opts = getCapturedMutation("epic.deleteChat").options as {
+      onSuccess: (
+        data: unknown,
+        variables: { readonly epicId: string; readonly chatId: string },
+      ) => void;
+    };
+
+    opts.onSuccess({ deleted: true }, { epicId: "epic-1", chatId: "chat-1" });
+
+    expect(forceReleaseChatSession).toHaveBeenCalledWith("epic-1", "chat-1");
+  });
+
   it("shows fallback on error", () => {
     renderHook(() => useEpicDeleteChat());
     const opts = getCapturedMutation("epic.deleteChat").options as {
