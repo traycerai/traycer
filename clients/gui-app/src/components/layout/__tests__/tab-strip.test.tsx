@@ -17,6 +17,7 @@ import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-reg
 import { __getChatSessionRegistryForTests } from "@/lib/registries/chat-session-registry";
 import type { PermissionRole } from "@/lib/epic-collaborator-roles";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
+import { EMPTY_PROJECTED_SLICES } from "@/stores/epics/open-epic/types";
 import { createChatSessionStore } from "@/stores/chats/chat-session-store";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -90,7 +91,7 @@ function registerEpicHeader(
   permissionRole: PermissionRole,
 ): void {
   __getOpenEpicRegistryForTests().acquire(tab.id, () =>
-    buildHeaderEpicHandle(tab, permissionRole, []),
+    buildHeaderEpicHandle(tab, permissionRole, [], []),
   );
 }
 
@@ -100,7 +101,27 @@ function registerActiveEpicHeader(
   activeAgentIds: ReadonlyArray<string>,
 ): void {
   __getOpenEpicRegistryForTests().acquire(tab.id, () =>
-    buildHeaderEpicHandle(tab, permissionRole, activeAgentIds),
+    buildHeaderEpicHandle(tab, permissionRole, activeAgentIds, activeAgentIds),
+  );
+}
+
+function registerLiveEpicHeader(
+  tab: EpicTab,
+  permissionRole: PermissionRole,
+  liveAgentIds: ReadonlyArray<string>,
+): void {
+  __getOpenEpicRegistryForTests().acquire(tab.id, () =>
+    buildHeaderEpicHandle(tab, permissionRole, [], liveAgentIds),
+  );
+}
+
+function registerStaleActiveEpicHeader(
+  tab: EpicTab,
+  permissionRole: PermissionRole,
+  activeAgentIds: ReadonlyArray<string>,
+): void {
+  __getOpenEpicRegistryForTests().acquire(tab.id, () =>
+    buildHeaderEpicHandle(tab, permissionRole, activeAgentIds, []),
   );
 }
 
@@ -108,12 +129,34 @@ function buildHeaderEpicHandle(
   tab: EpicTab,
   permissionRole: PermissionRole,
   activeAgentIds: ReadonlyArray<string>,
+  liveAgentIds: ReadonlyArray<string>,
 ): OpenEpicStoreHandle {
+  const liveChatsById = Object.fromEntries(
+    liveAgentIds.map((id) => [
+      id,
+      {
+        id,
+        title: id,
+        parentId: null,
+        createdAt: 1,
+        updatedAt: 1,
+        userId: null,
+        hostId: "host-a",
+        isTitleEditedByUser: false,
+        settings: null,
+      },
+    ]),
+  );
   const state = {
+    ...EMPTY_PROJECTED_SLICES,
     epic: {
       title: tab.name,
       updatedAt: 1,
       isTitleEditedByUser: false,
+    },
+    chats: {
+      byId: liveChatsById,
+      allIds: liveAgentIds,
     },
     permissionRole,
     snapshotMeta: null,
@@ -448,9 +491,20 @@ describe("<TabStrip />", () => {
     ).toBeDefined();
   });
 
+  it("ignores stale active awareness for a deleted chat", async () => {
+    openEpicFixture(EPIC_A);
+    registerStaleActiveEpicHeader(EPIC_A, "owner", ["chat-deleted"]);
+    const router = buildRouter("/epics/e-a/e-a");
+    render(<RouterProvider router={router} />);
+
+    expect(await screen.findByTestId(`tab-epic-${EPIC_A.id}`)).toBeDefined();
+    expect(screen.queryByTestId(`header-tab-activity-${EPIC_A.id}`)).toBeNull();
+    expect(screen.queryByTestId(`header-tab-waiting-${EPIC_A.id}`)).toBeNull();
+  });
+
   it("shows a waiting spinner when a chat in the epic needs user input", async () => {
     openEpicFixture(EPIC_A);
-    registerEpicHeader(EPIC_A, "owner");
+    registerLiveEpicHeader(EPIC_A, "owner", ["chat-waiting"]);
     registerChatSession(EPIC_A.id, "chat-waiting");
     const handle = __getChatSessionRegistryForTests().peek(
       EPIC_A.id,
@@ -473,7 +527,7 @@ describe("<TabStrip />", () => {
 
   it("shows a waiting spinner when a chat in the epic needs permission approval", async () => {
     openEpicFixture(EPIC_A);
-    registerEpicHeader(EPIC_A, "owner");
+    registerLiveEpicHeader(EPIC_A, "owner", ["chat-permission"]);
     registerChatSession(EPIC_A.id, "chat-permission");
     const handle = __getChatSessionRegistryForTests().peek(
       EPIC_A.id,

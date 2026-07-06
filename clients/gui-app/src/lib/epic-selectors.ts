@@ -631,6 +631,10 @@ const activeAgentIdsCache = new WeakMap<
   Awareness,
   { readonly ids: ReadonlySet<string>; readonly key: string }
 >();
+const registeredLiveAgentIdsCache = new WeakMap<
+  OpenEpicStoreHandle,
+  { readonly ids: ReadonlySet<string>; readonly key: string }
+>();
 
 /**
  * Unions the `agentWorking` ids across every awareness entry (each host
@@ -725,6 +729,41 @@ export function useRegisteredEpicActiveAgentIds(
     getSnapshot,
     () => EMPTY_ACTIVE_AGENT_IDS,
   );
+}
+
+export function useRegisteredEpicLiveAgentIds(
+  epicId: string | null,
+): ReadonlySet<string> {
+  const registry = getOpenEpicRegistry();
+  const handle = useSyncExternalStore(
+    (listener) => registry.subscribe(listener),
+    () => (epicId === null ? null : registry.peek(epicId)),
+    () => null,
+  );
+  return useSyncExternalStore(
+    (listener) => handle?.store.subscribe(listener) ?? noopSubscribe,
+    () => liveAgentIdsSnapshot(handle),
+    () => EMPTY_ACTIVE_AGENT_IDS,
+  );
+}
+
+function liveAgentIdsSnapshot(
+  handle: OpenEpicStoreHandle | null,
+): ReadonlySet<string> {
+  if (handle === null) return EMPTY_ACTIVE_AGENT_IDS;
+  const state = handle.store.getState();
+  const key = [...state.chats.allIds, ...state.tuiAgents.allIds]
+    .sort()
+    .join(" ");
+  const cached = registeredLiveAgentIdsCache.get(handle);
+  if (cached !== undefined && cached.key === key) return cached.ids;
+  const ids = new Set<string>([
+    ...state.chats.allIds,
+    ...state.tuiAgents.allIds,
+  ]);
+  const entry = { ids, key };
+  registeredLiveAgentIdsCache.set(handle, entry);
+  return entry.ids;
 }
 
 // ─── Tree slice hooks ─────────────────────────────────────────────────────
