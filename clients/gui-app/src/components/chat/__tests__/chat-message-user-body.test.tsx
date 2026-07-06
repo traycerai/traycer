@@ -212,7 +212,7 @@ describe("<UserMessageBody /> agent messages", () => {
   });
 
   it("omits the Show more affordance for short prompts", () => {
-    render(
+    const { container } = render(
       <UserMessageBody
         actions={null}
         message={plainUserMessage("A short prompt.")}
@@ -220,6 +220,7 @@ describe("<UserMessageBody /> agent messages", () => {
     );
 
     expect(screen.queryByRole("button", { name: "Show more" })).toBeNull();
+    expect(container.querySelector("[data-quotable]")).toBeNull();
   });
 
   it("renders compact image attachment thumbnails that still open", () => {
@@ -292,7 +293,7 @@ describe("<UserMessageBody /> agent messages", () => {
         imageAttachment("second.png"),
       ],
     };
-    const actions = editingUserActions(STRUCTURED_IMAGE_USER_CONTENT);
+    const actions = editingUserActions();
     const view = render(<UserMessageBody actions={null} message={message} />);
 
     expect(screen.getByLabelText("Attached Image#1: first.png")).not.toBeNull();
@@ -332,6 +333,12 @@ describe("<UserMessageBody /> agent messages", () => {
     expect(screen.getByText("Open sending agent")).toBeTruthy();
     expect(screen.getByText("reply expected")).toBeTruthy();
     expect(screen.getByText("Message")).toBeTruthy();
+    expect(
+      screen
+        .getByText("Investigate this failure.")
+        .closest(".md-prose")
+        ?.hasAttribute("data-quotable"),
+    ).toBe(false);
   });
 
   it("opens received A2A cards through the provider store", () => {
@@ -417,6 +424,51 @@ describe("<UserMessageBody /> agent messages", () => {
       clipboard.restore();
     }
   });
+
+  it("highlights the bubble of the message being edited in the composer", () => {
+    const actionsFor = (isEditTarget: boolean) => ({
+      type: "user" as const,
+      enabled: true,
+      confirmingDelete: false,
+      isEditTarget,
+      onEdit: () => undefined,
+      onDeleteRequest: () => undefined,
+      onDeleteConfirm: () => undefined,
+      onDeleteCancel: () => undefined,
+    });
+
+    const { rerender } = render(
+      <TooltipProvider>
+        <UserMessageBody
+          actions={actionsFor(false)}
+          message={{
+            ...plainUserMessage("original prompt"),
+            structuredContent: null,
+          }}
+        />
+      </TooltipProvider>,
+    );
+    const bubble = screen.getByText("original prompt").closest(".rounded-2xl");
+    expect(bubble?.className).not.toContain("ring-primary/40");
+
+    // Message-edit mode targets this message: the bubble gains the highlight
+    // ring anchoring the composer's "Editing message" pill.
+    rerender(
+      <TooltipProvider>
+        <UserMessageBody
+          actions={actionsFor(true)}
+          message={{
+            ...plainUserMessage("original prompt"),
+            structuredContent: null,
+          }}
+        />
+      </TooltipProvider>,
+    );
+    const highlighted = screen
+      .getByText("original prompt")
+      .closest(".rounded-2xl");
+    expect(highlighted?.className).toContain("ring-primary/40");
+  });
 });
 
 function agentMessage(content: string): ChatMessageModel {
@@ -487,23 +539,12 @@ function imageAttachment(name: string) {
   };
 }
 
-function editingUserActions(content: JsonContent): ChatMessageUserActions {
+function editingUserActions(): ChatMessageUserActions {
   return {
     type: "user",
     enabled: true,
     confirmingDelete: false,
-    editing: {
-      initialContent: content,
-      currentContent: content,
-      pending: false,
-      canSubmit: false,
-      slashProviderId: "claude",
-      mentionRoots: [],
-      currentEpicId: "epic-1",
-      onSnapshot: () => undefined,
-      onSubmit: () => undefined,
-      onCancel: () => undefined,
-    },
+    isEditTarget: true,
     onEdit: () => undefined,
     onDeleteRequest: () => undefined,
     onDeleteConfirm: () => undefined,

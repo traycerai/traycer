@@ -35,7 +35,7 @@ afterEach(() => {
 describe("<RateLimitIconButton />", () => {
   it("renders a clickable icon button with an accessible name, even with no bars", () => {
     renderIcon();
-    const button = screen.getByRole("button", { name: "Rate limits" });
+    const button = screen.getByRole("button", { name: "Usage limits" });
     expect(button).toBeTruthy();
   });
 

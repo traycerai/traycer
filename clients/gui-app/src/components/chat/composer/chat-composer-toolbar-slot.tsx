@@ -68,6 +68,7 @@ function ChatComposerToolbarSlotView(props: ChatComposerToolbarSlotViewProps) {
       store={props.store}
       onAttachImages={props.onAttachImages}
       showNextTurnPermissionNote={props.showNextTurnPermissionNote}
+      showAgentModeTooltip={false}
       canSubmit={props.canSubmit}
       onSubmit={props.onSubmit}
       activeTurnStatus={props.activeTurnStatus}

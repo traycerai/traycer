@@ -4,6 +4,7 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 import {
   mentionPlainTextFromAttrs,
   numberValue,
+  quotePrefixLines,
   slashCommandPlainTextFromAttrs,
 } from "@/lib/composer/tiptap-json-content";
 import { appLogger } from "@/lib/logger";
@@ -225,7 +226,20 @@ function composerClipboardBlockPlainText(
     );
     return `\`\`\`\n${code}\n\`\`\``;
   }
+  if (node.type === "blockquote") {
+    return blockquotePlainText(node.content ?? [], ctx);
+  }
   return null;
+}
+
+function blockquotePlainText(
+  children: ReadonlyArray<JsonContent>,
+  ctx: ClipboardTextContext,
+): string {
+  const text = children
+    .map((child) => composerClipboardPlainTextFromNode(child, ctx))
+    .join("\n");
+  return quotePrefixLines(text);
 }
 
 function listPlainText(

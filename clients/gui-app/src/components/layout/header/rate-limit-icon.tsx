@@ -39,7 +39,7 @@ export function RateLimitIconButton(): ReactNode {
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <TooltipWrapper
-        label="Rate limits"
+        label="Usage limits"
         side="top"
         sideOffset={6}
         align={undefined}
@@ -49,7 +49,7 @@ export function RateLimitIconButton(): ReactNode {
             type="button"
             variant="ghost"
             size="icon-sm"
-            aria-label="Rate limits"
+            aria-label="Usage limits"
             data-testid="rate-limit-header-button"
             className={cn(
               "text-muted-foreground hover:text-foreground",

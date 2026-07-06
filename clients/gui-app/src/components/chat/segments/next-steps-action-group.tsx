@@ -43,6 +43,7 @@ export function NextStepsActionGroup(props: NextStepsActionGroupProps) {
       )}
       data-testid="traycer-next-steps"
       data-next-steps-complete={props.complete ? "true" : "false"}
+      data-quote-exclude=""
     >
       {props.options.map((option) => (
         <NextStepAction

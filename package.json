@@ -49,6 +49,7 @@
     "@tanstack/router-plugin": "^1.168.19",
     "@testing-library/react": "^16.3.2",
     "@tiptap/core": "^3.27.1",
+    "@tiptap/extension-blockquote": "^3.27.1",
     "@tiptap/extension-code-block-lowlight": "^3.27.1",
     "@tiptap/extension-collaboration": "^3.27.1",
     "@tiptap/extension-collaboration-caret": "^3.27.1",

@@ -121,6 +121,7 @@ function chatMessagesJsx(
     <VirtuosoMessageListTestingContext.Provider value={VIRTUOSO_TEST_CONTEXT}>
       <ChatMessages
         taskTitle="Transcript"
+        taskId="test-task"
         messages={messages}
         backgroundItems={opts.backgroundItems}
         minimapItems={opts.minimapItems}

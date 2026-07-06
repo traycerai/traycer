@@ -126,7 +126,7 @@ describe("useThrottledCodeHighlight", () => {
     expect(highlightCacheSizeForTests()).toBe(0);
   });
 
-  it("throttles streaming highlights to the trailing edge without cache writes", () => {
+  it("seeds a mid-stream mount synchronously, then throttles growth to the trailing edge without cache writes", () => {
     vi.useFakeTimers();
     const codeToHtml = vi.spyOn(highlighter, "codeToHtml");
     const { result, rerender } = renderHighlight({
@@ -135,19 +135,24 @@ describe("useThrottledCodeHighlight", () => {
       isStreaming: true,
     });
 
-    // Nothing is highlighted synchronously while streaming.
-    expect(result.current).toBeNull();
-    expect(codeToHtml).not.toHaveBeenCalled();
+    // Mounting mid-stream highlights synchronously: a block can mount with
+    // its code already final (the streaming-tail wrapper remount when a block
+    // freezes), and starting from null would flash an unhighlighted <pre> for
+    // up to a throttle tick. The seed never writes the cache.
+    expect(result.current).not.toBeNull();
+    expect(codeToHtml).toHaveBeenCalledTimes(1);
+    expect(highlightCacheSizeForTests()).toBe(0);
 
-    // Growth faster than the throttle: still exactly one compute when the
-    // trailing timer fires.
+    // Growth faster than the throttle: exactly one more compute, on the
+    // trailing timer, not one per rerender.
     rerender({ code: "const a = 1", language: "ts", isStreaming: true });
     rerender({ code: "const a = 1;", language: "ts", isStreaming: true });
+    expect(codeToHtml).toHaveBeenCalledTimes(1);
     act(() => {
       vi.advanceTimersByTime(STREAMING_HIGHLIGHT_THROTTLE_MS);
     });
     expect(result.current).not.toBeNull();
-    expect(codeToHtml).toHaveBeenCalledTimes(1);
+    expect(codeToHtml).toHaveBeenCalledTimes(2);
     expect(highlightCacheSizeForTests()).toBe(0);
   });
 

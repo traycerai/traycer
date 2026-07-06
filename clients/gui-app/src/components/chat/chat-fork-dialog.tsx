@@ -242,6 +242,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
                 <AgentModeToggle
                   value={agentMode}
                   disabled={createChat.isPending}
+                  showTooltip={false}
                   onChange={setAgentMode}
                 />
               </div>
