@@ -8,16 +8,21 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import { PromotableModalFrame } from "@/components/layout/dialogs/promotable-modal-frame";
-import { interactionStartedOnOverlay } from "@/components/layout/dialogs/dialog-outside-guard";
+import {
+  dialogContentInertToPointer,
+  interactionStartedOnOverlay,
+} from "@/components/layout/dialogs/dialog-outside-guard";
 
 // NOTE ON REPRODUCTION: jsdom does not drive Radix's `DismissableLayer`
-// pointer-down-outside path (its pointer-capture / event sequencing is absent), so
-// the original "click outside the open dropdown closes the whole modal" race can't
-// be reproduced by dispatching a `pointerdown` here - a bare unguarded dialog does
-// NOT dismiss on `fireEvent.pointerDown` in jsdom either. The pointer-down contract
-// is therefore pinned on the guard's pure decision function
-// (`interactionStartedOnOverlay`), and the wiring is exercised via Escape, which
-// jsdom DOES drive end-to-end.
+// pointer-down-outside path (no pointer-events hit-testing, no deferred
+// dismissable-surface click sequencing), so the real "click out of the open
+// dropdown closes the whole modal" flow can't be reproduced by dispatching a
+// `pointerdown` here - a bare unguarded dialog does NOT dismiss on
+// `fireEvent.pointerDown` in jsdom either. The pointer-down contract is therefore
+// pinned on the guard's pure decision functions (`interactionStartedOnOverlay` +
+// `dialogContentInertToPointer` - the modal may only close when the gesture
+// started on the overlay AND the content was not inert at pointerdown), and the
+// wiring is exercised via Escape, which jsdom DOES drive end-to-end.
 
 describe("interactionStartedOnOverlay (backdrop-only close decision)", () => {
   function eventWithTarget(target: EventTarget | null): Event {
@@ -62,6 +67,32 @@ describe("interactionStartedOnOverlay (backdrop-only close decision)", () => {
     expect(interactionStartedOnOverlay(eventWithTarget(overlay), null)).toBe(
       false,
     );
+  });
+});
+
+describe("dialogContentInertToPointer (nested-layer-open detection)", () => {
+  // Radix DismissableLayer puts inline `pointer-events: none` on the dialog
+  // Content exactly while a nested layer with outside-pointer-events disabled
+  // (a modal DropdownMenu) sits above it. That is the moment when the overlay is
+  // the hit-target for every click-out, so overlay-origin alone would wrongly
+  // read "backdrop click" - this probe is what keeps the modal open then.
+
+  it("returns true while Radix has made the content inert (nested dropdown open)", () => {
+    const content = document.createElement("div");
+    content.style.pointerEvents = "none";
+    expect(dialogContentInertToPointer(content)).toBe(true);
+  });
+
+  it("returns false when the content owns the pointer again (dialog is top layer)", () => {
+    const content = document.createElement("div");
+    content.style.pointerEvents = "auto";
+    expect(dialogContentInertToPointer(content)).toBe(false);
+  });
+
+  it("returns false with no inline pointer-events or no content node", () => {
+    const content = document.createElement("div");
+    expect(dialogContentInertToPointer(content)).toBe(false);
+    expect(dialogContentInertToPointer(null)).toBe(false);
   });
 });
 
