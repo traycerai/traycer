@@ -20,6 +20,7 @@ import {
   worktreeListAllForHostRequestSchema,
   worktreeListAllForHostRequestSchemaV11,
   worktreeListAllForHostResponseSchemaV11,
+  worktreeListBindingsForEpicResponseSchemaV11,
   worktreeSubmoduleMergeFactSchema,
 } from "@traycer/protocol/host/worktree-schemas";
 
@@ -336,6 +337,48 @@ describe("worktreeBindingEntrySchema (ownedSubmodules addition)", () => {
     // omits the key entirely, and that must still parse.
     const parsed = worktreeBindingEntrySchema.parse(bindingEntryBase);
     expect(parsed.ownedSubmodules).toBeUndefined();
+  });
+});
+
+describe("worktreeListBindingsForEpicResponseSchemaV11 (folderlessCwd)", () => {
+  it("accepts a non-empty folderlessCwd", () => {
+    const parsed = worktreeListBindingsForEpicResponseSchemaV11.parse({
+      rows: [],
+      folderlessCwd: "/Users/dev/.traycer/epics/epic-1",
+    });
+    expect(parsed.folderlessCwd).toBe("/Users/dev/.traycer/epics/epic-1");
+  });
+
+  it("accepts a null folderlessCwd (bridged up from a v1.0 host)", () => {
+    const parsed = worktreeListBindingsForEpicResponseSchemaV11.parse({
+      rows: [],
+      folderlessCwd: null,
+    });
+    expect(parsed.folderlessCwd).toBeNull();
+  });
+
+  it("rejects a missing folderlessCwd - the v1.1 shape is not optional", () => {
+    expect(() =>
+      worktreeListBindingsForEpicResponseSchemaV11.parse({ rows: [] }),
+    ).toThrow();
+  });
+
+  it("rejects an empty-string folderlessCwd", () => {
+    expect(() =>
+      worktreeListBindingsForEpicResponseSchemaV11.parse({
+        rows: [],
+        folderlessCwd: "",
+      }),
+    ).toThrow();
+  });
+
+  it("rejects an undefined folderlessCwd", () => {
+    expect(() =>
+      worktreeListBindingsForEpicResponseSchemaV11.parse({
+        rows: [],
+        folderlessCwd: undefined,
+      }),
+    ).toThrow();
   });
 });
 

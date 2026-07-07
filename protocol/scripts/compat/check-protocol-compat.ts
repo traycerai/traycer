@@ -38,12 +38,23 @@ function parseArgs(argv: readonly string[]): {
       continue;
     }
     if (arg === "--mine") {
-      minePath = argv[index + 1];
+      const value = argv[index + 1];
+      if (value === undefined) {
+        throw new Error(
+          "Usage: check-protocol-compat [--json] --mine <surface.json> --baseline <label>=<surface.json> [...]",
+        );
+      }
+      minePath = value;
       index += 1;
       continue;
     }
     if (arg === "--baseline") {
       const value = argv[index + 1];
+      if (value === undefined) {
+        throw new Error(
+          "Usage: check-protocol-compat [--json] --mine <surface.json> --baseline <label>=<surface.json> [...]",
+        );
+      }
       index += 1;
       const separator = value.indexOf("=");
       if (separator <= 0) {
@@ -68,7 +79,12 @@ function parseArgs(argv: readonly string[]): {
 }
 
 function readSurface(path: string) {
-  return protocolSurfaceSchema.parse(JSON.parse(readFileSync(path, "utf8")));
+  try {
+    return protocolSurfaceSchema.parse(JSON.parse(readFileSync(path, "utf8")));
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`Failed to read protocol surface at '${path}': ${detail}`);
+  }
 }
 
 function formatFinding(finding: CompatFinding): string {
@@ -103,50 +119,56 @@ if (json) {
     }),
   }));
   process.stdout.write(`${JSON.stringify({ results: perBaseline }, null, 2)}\n`);
-  process.exit(
-    perBaseline.some((result) => result.blocking.length > 0) ? 1 : 0,
-  );
-}
-
-let blockingTotal = 0;
-for (const baseline of baselines) {
-  const result = checkSurfaceCompatibility({
-    mine,
-    theirs: readSurface(baseline.path),
-    theirsLabel: baseline.label,
-    exceptions,
-  });
-  const advisory = result.findings.filter(
-    (finding) => finding.severity === "advisory",
-  ).length;
-  const excepted = result.findings.filter((finding) => finding.excepted).length;
-  if (result.findings.length === 0) {
-    console.log(`✓ ${baseline.label}: compatible`);
-    continue;
-  }
-  if (result.blocking.length === 0) {
+  // Setting exitCode (rather than calling exit()) lets the process end
+  // naturally once stdout has actually flushed - exit() can truncate a
+  // pending write when stdout is a pipe, as it is in CI.
+  process.exitCode = perBaseline.some((result) => result.blocking.length > 0)
+    ? 1
+    : 0;
+} else {
+  let blockingTotal = 0;
+  for (const baseline of baselines) {
+    const result = checkSurfaceCompatibility({
+      mine,
+      theirs: readSurface(baseline.path),
+      theirsLabel: baseline.label,
+      exceptions,
+    });
+    const advisory = result.findings.filter(
+      (finding) => finding.severity === "advisory",
+    ).length;
+    const excepted = result.findings.filter(
+      (finding) => finding.excepted,
+    ).length;
+    if (result.findings.length === 0) {
+      console.log(`✓ ${baseline.label}: compatible`);
+      continue;
+    }
+    if (result.blocking.length === 0) {
+      console.log(
+        `✓ ${baseline.label}: compatible (${advisory} advisory, ${excepted} excepted)`,
+      );
+      continue;
+    }
+    blockingTotal += result.blocking.length;
     console.log(
-      `✓ ${baseline.label}: compatible (${advisory} advisory, ${excepted} excepted)`,
+      `✗ ${baseline.label}: ${result.blocking.length} blocking finding(s) (+${advisory} advisory, +${excepted} excepted)`,
     );
-    continue;
+    for (const finding of result.blocking) {
+      console.log(formatFinding(finding));
+    }
   }
-  blockingTotal += result.blocking.length;
-  console.log(
-    `✗ ${baseline.label}: ${result.blocking.length} blocking finding(s) (+${advisory} advisory, +${excepted} excepted)`,
-  );
-  for (const finding of result.blocking) {
-    console.log(formatFinding(finding));
-  }
-}
 
-if (blockingTotal > 0) {
-  console.log(
-    `\nProtocol is INCOMPATIBLE with released peers (${blockingTotal} blocking finding(s)).\n` +
-      "A released peer would fail against this tree. Fold new capabilities into a\n" +
-      "{ major, minor } bump of an existing method (see the RPC backward-compat\n" +
-      "decision log); never add or remove handshake method names, and never change\n" +
-      "wire schemas at an already-released version.",
-  );
-  process.exit(1);
+  if (blockingTotal > 0) {
+    console.log(
+      `\nProtocol is INCOMPATIBLE with released peers (${blockingTotal} blocking finding(s)).\n` +
+        "A released peer would fail against this tree. Fold new capabilities into a\n" +
+        "{ major, minor } bump of an existing method (see the RPC backward-compat\n" +
+        "decision log); never add or remove handshake method names, and never change\n" +
+        "wire schemas at an already-released version.",
+    );
+    process.exitCode = 1;
+  } else {
+    console.log("\nProtocol surface is compatible with every checked baseline.");
+  }
 }
-console.log("\nProtocol surface is compatible with every checked baseline.");

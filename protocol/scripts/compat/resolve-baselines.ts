@@ -31,7 +31,13 @@ const floorConfig = supportFloorSchema.parse(
 const remote = process.argv[2] ?? "origin";
 const lsRemote = spawnSync("git", ["ls-remote", "--tags", remote], {
   encoding: "utf8",
+  timeout: 30_000,
+  maxBuffer: 16 * 1024 * 1024,
 });
+if (lsRemote.error !== undefined) {
+  console.error(`Failed to spawn 'git ls-remote': ${lsRemote.error.message}`);
+  process.exit(1);
+}
 if (lsRemote.status !== 0) {
   console.error(lsRemote.stderr);
   process.exit(lsRemote.status ?? 1);

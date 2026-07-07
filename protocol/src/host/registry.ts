@@ -1176,7 +1176,7 @@ export const worktreeListBindingsForEpicV11 = defineRpcContract({
   responseSchema: worktreeListBindingsForEpicResponseSchemaV11,
 });
 
-// Additive upgrade from v1.0: a host that old predates folderless workspaces,
+// Additive upgrade from v1.0: an old host that predates folderless workspaces,
 // so there is no fallback cwd to synthesize - `null` tells the picker to keep
 // its folderless launch action disabled. The newer side runs this when
 // bridging a v1.0 peer up to canonical (host: inbound v1.0 request; client:
