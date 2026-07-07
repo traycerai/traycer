@@ -94,14 +94,14 @@ export function useRelativeTimestamp(createdAt: number): string {
  * Pure future-facing countdown formatter, the mirror of
  * `formatRelativeTimestamp` for a reset time instead of a creation time.
  *
- * Buckets: "now" (<1m away) / `${n}m` / `${h}h ${m}m` (m omitted when 0) /
+ * Buckets: "0s" (<1m away) / `${n}m` / `${h}h ${m}m` (m omitted when 0) /
  * `${d}d`. A past `resetsAt` (clock skew, or the window rolled over between
- * fetch and render) clamps to "now" rather than a negative duration.
+ * fetch and render) clamps to "0s" rather than a negative duration.
  */
 export function formatResetCountdown(resetsAt: number, now: number): string {
   const diffMs = Math.max(0, resetsAt - now);
   const minutes = Math.floor(diffMs / MINUTE_MS);
-  if (minutes < 1) return "now";
+  if (minutes < 1) return "0s";
   if (minutes < 60) return `${minutes}m`;
   const hours = Math.floor(minutes / 60);
   const remainingMinutes = minutes % 60;

@@ -11,10 +11,8 @@ import {
 /**
  * Optional retry policy for the auth-aware wrapper.
  *
- * The Desktop renderer omits this: on `UNAUTHORIZED` it revalidates (rotating
- * the credential lease in place) and rethrows, leaving the retry to the query
- * layer, which re-issues the request against the rotated lease. The CLI has no
- * query layer, so it opts in: after a revalidation that actually rotated the
+ * The CLI and renderer use this when a caller must complete the refresh loop
+ * inside the transport layer: after a revalidation that actually rotated the
  * bearer, the wrapper retries the request once on the rotated value.
  *
  * Retry is gated on the bearer *changing* (compared before/after revalidation)

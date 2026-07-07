@@ -18,7 +18,7 @@ import {
 // would make the test circular and unable to catch a divergence.
 
 describe("persist key builders — output-preserving against current source", () => {
-  it("emits the current localStorage key for each of the 16 static stores", () => {
+  it("emits the current localStorage key for each of the 18 static stores", () => {
     // Source: src/stores/command-palette/command-palette-store.ts
     expect(persistKey("command-palette")).toBe(
       "traycer-gui-app:command-palette",
@@ -61,6 +61,10 @@ describe("persist key builders — output-preserving against current source", ()
     // Source: src/stores/tabs/settings-section-store.ts (NOT a divergence)
     expect(persistKey("settings-section")).toBe(
       "traycer-gui-app:settings-section",
+    );
+    // Source: src/stores/rate-limits/rate-limit-popover-store.ts
+    expect(persistKey("rate-limit-popover")).toBe(
+      "traycer-gui-app:rate-limit-popover",
     );
     // Source: src/stores/tabs/store.ts
     expect(persistKey("tabs")).toBe("traycer-gui-app:tabs");

@@ -62,7 +62,7 @@ describe("<RateLimitIconButton />", () => {
         providerId: "codex",
         windowLabel: "5h",
         usedPercent: 70,
-        severity: "yellow",
+        severity: "blue",
         degraded: false,
       },
       {
@@ -79,7 +79,7 @@ describe("<RateLimitIconButton />", () => {
     expect(hasClass(button, "opacity-[0.55]")).toBe(false);
     const fills = within(button).getAllByTestId("rate-limit-bar-fill");
     expect(fills).toHaveLength(2);
-    expect(fills[0].className).toContain("yellow-500");
+    expect(fills[0].className).toContain("blue-500");
     expect(fills[0].style.width).toBe("70%");
     expect(fills[1].className).toContain("blue-500");
     expect(fills[1].style.width).toBe("40%");
@@ -120,7 +120,7 @@ describe("<RateLimitIconButton />", () => {
         providerId: "claude-code",
         windowLabel: "5h",
         usedPercent: 65,
-        severity: "yellow",
+        severity: "blue",
         degraded: true,
       },
       {
