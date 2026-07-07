@@ -222,7 +222,7 @@ describe("worktreeListAllForHostRequestSchemaV11", () => {
     expect(worktreeListAllForHostRequestSchema.parse({})).toEqual({});
   });
 
-  it("rejects includeActivity=true with an unbounded listing", () => {
+  it("rejects includeActivity=true with an unbounded paged listing", () => {
     expect(() =>
       worktreeListAllForHostRequestSchemaV11.parse({
         includeActivity: true,
@@ -249,19 +249,39 @@ describe("worktreeListAllForHostRequestSchemaV11", () => {
     });
   });
 
-  it("accepts a per-viewport activityPaths selection (lazy-enrichment mode)", () => {
+  it("accepts selection mode with includeActivity=true and null paging fields", () => {
     const parsed = worktreeListAllForHostRequestSchemaV11.parse({
-      includeActivity: false,
+      includeActivity: true,
       activityPaths: ["/Users/dev/.traycer/worktrees/acme__web/feature-x"],
-      cursor: "/Users/dev/.traycer/worktrees/acme__api/feature-y",
-      limit: 25,
+      cursor: null,
+      limit: null,
     });
     expect(parsed).toEqual({
-      includeActivity: false,
+      includeActivity: true,
       activityPaths: ["/Users/dev/.traycer/worktrees/acme__web/feature-x"],
-      cursor: "/Users/dev/.traycer/worktrees/acme__api/feature-y",
-      limit: 25,
+      cursor: null,
+      limit: null,
     });
+  });
+
+  it("rejects selection mode with cursor or limit set", () => {
+    expect(() =>
+      worktreeListAllForHostRequestSchemaV11.parse({
+        includeActivity: true,
+        activityPaths: ["/Users/dev/.traycer/worktrees/acme__web/feature-x"],
+        cursor: "/Users/dev/.traycer/worktrees/acme__api/feature-y",
+        limit: null,
+      }),
+    ).toThrow();
+
+    expect(() =>
+      worktreeListAllForHostRequestSchemaV11.parse({
+        includeActivity: true,
+        activityPaths: ["/Users/dev/.traycer/worktrees/acme__web/feature-x"],
+        cursor: null,
+        limit: 25,
+      }),
+    ).toThrow();
   });
 });
 

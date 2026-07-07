@@ -750,11 +750,15 @@ export type WorktreeHostEntryV11 = z.infer<typeof worktreeHostEntrySchemaV11>;
  * these git probes (`lastActivityAt`, `branchStatus`); `owners` and `createdAt`
  * are cheap and returned either way.
  *
- * `cursor` and `limit` make the listing cost caller-bounded. The cursor is a
- * `worktreePath`; the host returns entries strictly after it in stable
- * path-lexicographic order. `limit: null` preserves the v1.0 bridge's full-list
- * posture, but only without activity probes: no request can buy an unbounded
- * probe pass.
+ * The request has two mutually-exclusive modes:
+ *  - Paged listing mode (`activityPaths: null`): `cursor` and `limit` apply.
+ *    The cursor is a `worktreePath`; the host returns entries strictly after it
+ *    in stable path-lexicographic order. `limit: null` preserves the v1.0
+ *    bridge's full-list posture, but only without activity probes: no request
+ *    can buy an unbounded probe pass.
+ *  - Selection mode (`activityPaths: [<worktreePath>, ...]`): probes are
+ *    bounded by the array itself, so `cursor` and `limit` must both be `null`
+ *    and the response's `nextCursor` is `null`.
  *
  * `activityPaths` selects between two response modes, so the GUI can render the
  * base list instantly and then lazily enrich only the rows scrolled into view
@@ -773,9 +777,33 @@ export const worktreeListAllForHostRequestSchemaV11 =
     activityPaths: z.array(z.string()).nullable(),
     cursor: z.string().nullable(),
     limit: z.number().finite().nullable(),
-  }).refine((request) => !request.includeActivity || request.limit !== null, {
-    message: "includeActivity requires a finite limit",
-    path: ["limit"],
+  }).superRefine((request, context) => {
+    if (request.activityPaths === null) {
+      if (request.includeActivity && request.limit === null) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "includeActivity requires a finite limit in paged listing mode",
+          path: ["limit"],
+        });
+      }
+      return;
+    }
+
+    if (request.cursor !== null) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "selection mode requires cursor to be null",
+        path: ["cursor"],
+      });
+    }
+
+    if (request.limit !== null) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "selection mode requires limit to be null",
+        path: ["limit"],
+      });
+    }
   });
 export type WorktreeListAllForHostRequestV11 = z.infer<
   typeof worktreeListAllForHostRequestSchemaV11
