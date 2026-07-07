@@ -47,6 +47,27 @@ export const WORKTREE_TIER_LABEL: Record<WorktreeTier, string> = {
 };
 
 /**
+ * Hover explanation for each tier label. Copy must stay honest to the evidence
+ * ladder in `classifyWorktreeTier`: green tiers state the PROVEN fact and why
+ * deleting is safe; `review` states what is unproven; `orphaned`/`in-use` state
+ * the neutral condition. Shown wherever the tier label renders as a pill.
+ */
+export const WORKTREE_TIER_TOOLTIP: Record<WorktreeTier, string> = {
+  "in-use":
+    "An active task or agent is currently using this worktree, so it can't be deleted.",
+  review:
+    "Not proven safe to remove: it has uncommitted changes, unmerged or unpushed commits, a detached HEAD, or unknown branch status. Review before deleting.",
+  orphaned:
+    "Git can't remove this worktree normally - its directory or metadata is missing or broken. Deleting it uses a forced cleanup.",
+  merged:
+    "The work is proven to have landed: a merged PR matching this worktree's current commit, or the branch's commits are contained in the default branch.",
+  "at-base-commit":
+    "The worktree never advanced from the commit it was created on and has no uncommitted changes - deleting it loses no committed work.",
+  unreferenced:
+    "Clean, fully pushed (0 commits ahead of its upstream), and no task or agent references it - the branch tip stays safe on the remote.",
+};
+
+/**
  * Safe-first display order (proven-merged first, blocked `in-use` last). Rows land
  * pre-triaged in this order, stalest-first within each tier. `at-base-commit` sits
  * between the two stronger greens and `review`: it is proven-safe to delete but a

@@ -37,6 +37,7 @@ import type {
 import {
   WORKTREE_TIER_LABEL,
   WORKTREE_TIER_ORDER,
+  WORKTREE_TIER_TOOLTIP,
   classifyWorktree,
   classifyWorktreeTier,
   type WorktreeTier,
@@ -1731,19 +1732,26 @@ function WorktreeTierPill(props: {
   // Review -> Merged) once the probes land.
   if (props.state === "pending") {
     return (
-      <Badge
-        variant="outline"
-        className="gap-1 font-medium border-border/40 bg-muted/30 text-muted-foreground"
-        data-testid="worktree-tier-pill"
-        data-tier="pending"
+      <TooltipWrapper
+        label="Still checking this worktree's branch and PR state."
+        side="top"
+        sideOffset={undefined}
+        align="center"
       >
-        <AgentSpinningDots
-          className={undefined}
-          testId="worktree-tier-pill-pending-spinner"
-          variant={undefined}
-        />
-        Checking…
-      </Badge>
+        <Badge
+          variant="outline"
+          className="gap-1 font-medium border-border/40 bg-muted/30 text-muted-foreground"
+          data-testid="worktree-tier-pill"
+          data-tier="pending"
+        >
+          <AgentSpinningDots
+            className={undefined}
+            testId="worktree-tier-pill-pending-spinner"
+            variant={undefined}
+          />
+          Checking…
+        </Badge>
+      </TooltipWrapper>
     );
   }
   // The probe SETTLED to an error (host unreachable, gh/git probe timed out). The
@@ -1752,29 +1760,42 @@ function WorktreeTierPill(props: {
   // upstream; a refresh or scrolling it back into view retries the probe.
   if (props.state === "unknown") {
     return (
-      <Badge
-        variant="outline"
-        className="gap-1 font-medium border-border/40 bg-muted/20 text-muted-foreground/80"
-        data-testid="worktree-tier-pill"
-        data-tier="unknown"
-        title="Activity status couldn't be loaded. Refresh or scroll to retry."
+      <TooltipWrapper
+        label="Activity status couldn't be loaded. Refresh or scroll to retry."
+        side="top"
+        sideOffset={undefined}
+        align="center"
       >
-        <HelpCircle className="size-3" aria-hidden />
-        Unknown
-      </Badge>
+        <Badge
+          variant="outline"
+          className="gap-1 font-medium border-border/40 bg-muted/20 text-muted-foreground/80"
+          data-testid="worktree-tier-pill"
+          data-tier="unknown"
+        >
+          <HelpCircle className="size-3" aria-hidden />
+          Unknown
+        </Badge>
+      </TooltipWrapper>
     );
   }
   const style = WORKTREE_TIER_PILL_STYLE[props.tier];
   return (
-    <Badge
-      variant="outline"
-      className={cn("gap-1 font-medium", style.className)}
-      data-testid="worktree-tier-pill"
-      data-tier={props.tier}
+    <TooltipWrapper
+      label={WORKTREE_TIER_TOOLTIP[props.tier]}
+      side="top"
+      sideOffset={undefined}
+      align="center"
     >
-      <WorktreeTierPillIcon tier={props.tier} />
-      {WORKTREE_TIER_LABEL[props.tier]}
-    </Badge>
+      <Badge
+        variant="outline"
+        className={cn("gap-1 font-medium", style.className)}
+        data-testid="worktree-tier-pill"
+        data-tier={props.tier}
+      >
+        <WorktreeTierPillIcon tier={props.tier} />
+        {WORKTREE_TIER_LABEL[props.tier]}
+      </Badge>
+    </TooltipWrapper>
   );
 }
 
