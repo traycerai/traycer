@@ -40,14 +40,16 @@ export interface TaskDeleteWorktreeCandidatesResult {
 }
 
 const EMPTY_CANDIDATES: ReadonlyArray<TaskDeleteWorktreeCandidate> = [];
-const TASK_DELETE_WORKTREE_PAGE_LIMIT = 200;
+const TASK_DELETE_WORKTREE_PROBED_PAGE_LIMIT = 8;
 
 /**
  * Derives the worktree-cleanup candidates for a pending Task deletion, entirely
  * client-side over `worktree.listAllForHost@1.1` (no dedicated RPC — the
- * released method-name surface is frozen). It loops probe-free pages explicitly:
- * the destructive dialog must see the complete host-wide owner set, and any page
- * error must fail closed rather than pass a partial accumulation as complete.
+ * released method-name surface is frozen). It loops finite, activity-probed
+ * pages explicitly: `provenRemovable` needs PR / at-base / ancestry proofs, and
+ * default-checked is reserved for proven-removable candidates. The destructive
+ * dialog must see the complete host-wide owner set, so any page error fails
+ * closed rather than passing a partial accumulation as complete.
  *
  * Scoped to the default-host client: candidates are computed against the
  * dialog's own host connection only. Worktrees a Task owned on OTHER hosts are
@@ -64,10 +66,10 @@ export function useTaskDeleteWorktreeCandidates(
   const client = useHostClient();
   const readiness = useReactiveHostReadiness(client);
   const queryParams = {
-    includeActivity: false,
+    includeActivity: true,
     activityPaths: null,
     cursor: null,
-    limit: TASK_DELETE_WORKTREE_PAGE_LIMIT,
+    limit: TASK_DELETE_WORKTREE_PROBED_PAGE_LIMIT,
   } as const;
   const { data, isError } = useQuery(
     queryOptions<WorktreeListAllForHostResponseV11, HostRpcError>({
@@ -131,10 +133,10 @@ async function fetchTaskDeleteWorktreePages(
     const page: WorktreeListAllForHostResponseV11 = await client.request(
       "worktree.listAllForHost",
       {
-        includeActivity: false,
+        includeActivity: true,
         activityPaths: null,
         cursor,
-        limit: TASK_DELETE_WORKTREE_PAGE_LIMIT,
+        limit: TASK_DELETE_WORKTREE_PROBED_PAGE_LIMIT,
       },
     );
     worktrees.push(...page.worktrees);

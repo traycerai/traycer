@@ -154,20 +154,20 @@ describe("useTaskDeleteWorktreeCandidates", () => {
       1,
       "worktree.listAllForHost",
       {
-        includeActivity: false,
+        includeActivity: true,
         activityPaths: null,
         cursor: null,
-        limit: 200,
+        limit: 8,
       },
     );
     expect(mockHostClient.request).toHaveBeenNthCalledWith(
       2,
       "worktree.listAllForHost",
       {
-        includeActivity: false,
+        includeActivity: true,
         activityPaths: null,
         cursor: "/wt/a",
-        limit: 200,
+        limit: 8,
       },
     );
   });
@@ -217,6 +217,15 @@ describe("useTaskDeleteWorktreeCandidates", () => {
     expect(byPath.get("/wt/pr")).toBe(true);
     expect(byPath.get("/wt/dirty")).toBe(false);
     expect(byPath.get("/wt/unknown")).toBe(false);
+    expect(mockHostClient.request).toHaveBeenCalledWith(
+      "worktree.listAllForHost",
+      {
+        includeActivity: true,
+        activityPaths: null,
+        cursor: null,
+        limit: 8,
+      },
+    );
   });
 
   it("excludes in-use, ownerless, and out-of-scope worktrees", async () => {
@@ -251,10 +260,10 @@ describe("useTaskDeleteWorktreeCandidates", () => {
         "host-1",
         "worktree.listAllForHost",
         {
-          includeActivity: false,
+          includeActivity: true,
           activityPaths: null,
           cursor: null,
-          limit: 200,
+          limit: 8,
         },
       ),
       { worktrees: [entry({ worktreePath: "/wt/a" })], nextCursor: null },

@@ -17,9 +17,9 @@ import {
 import { cliError, CLI_ERROR_CODES, toCliError } from "../runner/errors";
 import type { CommandFn } from "../runner/runner";
 
-// Matches the planned host clamp ballpark for probed pages: small enough to
-// stay below the CLI's 15s WebSocket frame timeout, large enough to auto-page
-// a typical fleet in a few requests.
+// A client-side ask, not a guarantee: the host clamps page size by request mode
+// (currently smaller for probed pages, larger for base pages). Over-asking is
+// harmless because the loop trusts `nextCursor` until exhaustion.
 const DEFAULT_WORKTREE_LIST_PAGE_LIMIT = 32;
 
 /**
