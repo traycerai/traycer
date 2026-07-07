@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createChatSessionStore } from "@/stores/chats/chat-session-store";
+import {
+  createChatSessionStore,
+  type ChatSessionStoreHandle,
+} from "@/stores/chats/chat-session-store";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
 import {
   ChatSessionRegistry,
@@ -198,21 +201,7 @@ describe("ChatSessionRegistry", () => {
       () => owned.handle,
     );
     hostIds.set(acquired, "host-original");
-    acquired.store.setState({
-      runStatus: "running",
-      activeTurn: {
-        turnId: "turn-1",
-        status: "running",
-        harnessId: "codex",
-        model: "gpt-5-codex",
-        agentMode: "regular",
-        userMessageId: "message-1",
-        startedAt: 1,
-        updatedAt: 1,
-        reasoningEffort: null,
-        serviceTier: null,
-      },
-    });
+    markRunning(acquired);
 
     // The tile lease can disappear during a transient offline/null directory
     // state. The active turn must keep the retained session handle alive past
@@ -260,21 +249,7 @@ describe("ChatSessionRegistry", () => {
       SCOPE,
       () => owned.handle,
     );
-    acquired.store.setState({
-      runStatus: "running",
-      activeTurn: {
-        turnId: "turn-1",
-        status: "running",
-        harnessId: "codex",
-        model: "gpt-5-codex",
-        agentMode: "regular",
-        userMessageId: "message-1",
-        startedAt: 1,
-        updatedAt: 1,
-        reasoningEffort: null,
-        serviceTier: null,
-      },
-    });
+    markRunning(acquired);
 
     registry.release("epic-1", "chat-1");
     vi.advanceTimersByTime(MAX_ACTIVE_CHAT_IDLE_DEFER_MS + TTL_MS);
@@ -370,6 +345,34 @@ describe("ChatSessionRegistry", () => {
     expect(registry.peek("epic-1", "chat-c")).toBe(c.handle);
   });
 
+  it("does not evict lease-free active sessions to satisfy the warm cap", () => {
+    const registry = new ChatSessionRegistry({
+      idleTtlMs: TTL_MS,
+      maxWarmSessions: 2,
+    });
+    const active = createHandle("epic-1", "chat-active");
+    const b = createHandle("epic-1", "chat-b");
+    const c = createHandle("epic-1", "chat-c");
+    registry.acquire("epic-1", "chat-active", SCOPE, () => active.handle);
+    registry.acquire("epic-1", "chat-b", SCOPE, () => b.handle);
+    registry.acquire("epic-1", "chat-c", SCOPE, () => c.handle);
+
+    markRunning(active.handle);
+
+    registry.release("epic-1", "chat-active");
+    vi.advanceTimersByTime(1_000);
+    registry.release("epic-1", "chat-b");
+    vi.advanceTimersByTime(1_000);
+    registry.release("epic-1", "chat-c");
+
+    expect(active.closeCount()).toBe(0);
+    expect(b.closeCount()).toBe(1);
+    expect(c.closeCount()).toBe(0);
+    expect(registry.peek("epic-1", "chat-active")).toBe(active.handle);
+    expect(registry.peek("epic-1", "chat-b")).toBeNull();
+    expect(registry.peek("epic-1", "chat-c")).toBe(c.handle);
+  });
+
   it("never evicts leased sessions to satisfy the warm cap", () => {
     const registry = new ChatSessionRegistry({
       idleTtlMs: TTL_MS,
@@ -425,3 +428,21 @@ describe("ChatSessionRegistry", () => {
     expect(listener).toHaveBeenCalledTimes(2);
   });
 });
+
+function markRunning(handle: ChatSessionStoreHandle): void {
+  handle.store.setState({
+    runStatus: "running",
+    activeTurn: {
+      turnId: "turn-1",
+      status: "running",
+      harnessId: "codex",
+      model: "gpt-5-codex",
+      agentMode: "regular",
+      userMessageId: "message-1",
+      startedAt: 1,
+      updatedAt: 1,
+      reasoningEffort: null,
+      serviceTier: null,
+    },
+  });
+}
