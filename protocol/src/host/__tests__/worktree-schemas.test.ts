@@ -330,10 +330,12 @@ describe("worktreeBindingEntrySchema (ownedSubmodules addition)", () => {
     expect("baseSha" in parsed).toBe(false);
   });
 
-  it("rejects an entry missing ownedSubmodules", () => {
-    // The field is required (not optional) - a pre-migration row must be
-    // backfilled by the host before it validates.
-    expect(() => worktreeBindingEntrySchema.parse(bindingEntryBase)).toThrow();
+  it("accepts an entry missing ownedSubmodules (wire compat with pre-existing released hosts)", () => {
+    // This entry shape rides several already-released response/stream
+    // payloads unversioned; a released host from before this field existed
+    // omits the key entirely, and that must still parse.
+    const parsed = worktreeBindingEntrySchema.parse(bindingEntryBase);
+    expect(parsed.ownedSubmodules).toBeUndefined();
   });
 });
 

@@ -88,9 +88,15 @@ export const worktreeBindingEntrySchema = z.object({
   createdAt: z.number(),
   // Submodule branches this worktree owns (see `worktreeOwnedSubmoduleSchema`).
   // `[]` when the repo has no submodules, or none were checked out on a branch.
-  // Not optional - the host persistence migration (binding v1 -> v2) backfills
-  // `[]` on older rows so every read carries a concrete array.
-  ownedSubmodules: z.array(worktreeOwnedSubmoduleSchema),
+  // Optional on the wire: this entry shape is embedded, unversioned, in many
+  // already-released response/stream payloads (worktree.create,
+  // worktree.getBinding, worktree.import, worktree.retrySetup,
+  // worktree.setEntryMode, workspaceBinding.removeEntry, chat.subscribe), so a
+  // released host that predates this field simply omits the key - it must not
+  // become a required-field wire break. The host's own binding-v1->v2
+  // persistence migration still backfills `[]` on every locally-read row, so a
+  // current host always produces a concrete array in practice.
+  ownedSubmodules: z.array(worktreeOwnedSubmoduleSchema).optional(),
 });
 export type WorktreeBindingEntry = z.infer<typeof worktreeBindingEntrySchema>;
 
