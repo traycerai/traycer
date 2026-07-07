@@ -4,11 +4,17 @@ import {
   cleanup,
   fireEvent,
   render,
+  renderHook,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import type { WorktreeDeleteStreamCallbacks } from "@traycer-clients/shared/host-transport/worktree-delete-stream-client";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -18,7 +24,11 @@ import {
   hostStreamRpcRegistry,
   type HostStreamRpcRegistry,
 } from "@traycer/protocol/host/registry";
-import { WorktreesList } from "@/components/settings/panels/worktrees-settings-panel";
+import {
+  WorktreesList,
+  useWorktreeListing,
+} from "@/components/settings/panels/worktrees-settings-panel";
+import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { __resetWorktreeDeleteRunForTests } from "@/components/settings/panels/use-worktree-delete-run";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { WORKTREE_BINDING_INVALIDATIONS } from "@/hooks/worktree/invalidations";
@@ -347,6 +357,75 @@ function toolbarButtonLabels(): string[] {
       return button.getAttribute("aria-label") ?? button.textContent.trim();
     });
 }
+
+describe("useWorktreeListing", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("accumulates finite base-list pages", async () => {
+    const first = entry({ worktreePath: "/wt/a", branch: "feat-a" });
+    const second = entry({ worktreePath: "/wt/b", branch: "feat-b" });
+    const requests: Array<{
+      readonly cursor: string | null;
+      readonly limit: number | null;
+      readonly activityPaths: readonly string[] | null;
+      readonly includeActivity: boolean;
+    }> = [];
+    const client = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: { invalidateHostScope: () => undefined },
+      messenger: new MockHostMessenger<HostRpcRegistry>({
+        registry: hostRpcRegistry,
+        requestId: () => "req-1",
+        handlers: {
+          "worktree.listAllForHost": (params) => {
+            requests.push(params);
+            if (params.cursor === null) {
+              return { worktrees: [first], nextCursor: first.worktreePath };
+            }
+            return { worktrees: [second], nextCursor: null };
+          },
+        },
+      }),
+    });
+    client.bind(mockLocalHostEntry);
+    client.setRequestContext(
+      createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+    );
+    const queryClient = new QueryClient();
+    const wrapper = (props: { readonly children: ReactNode }): ReactNode => (
+      <QueryClientProvider client={queryClient}>
+        {props.children}
+      </QueryClientProvider>
+    );
+
+    const { result } = renderHook(() => useWorktreeListing(client, true), {
+      wrapper,
+    });
+
+    await waitFor(() => {
+      expect(result.current.worktrees.map((item) => item.worktreePath)).toEqual([
+        "/wt/a",
+        "/wt/b",
+      ]);
+    });
+    expect(requests).toEqual([
+      {
+        includeActivity: false,
+        activityPaths: null,
+        cursor: null,
+        limit: 32,
+      },
+      {
+        includeActivity: false,
+        activityPaths: null,
+        cursor: first.worktreePath,
+        limit: 32,
+      },
+    ]);
+  });
+});
 
 describe("WorktreesList delete flow", () => {
   afterEach(() => {

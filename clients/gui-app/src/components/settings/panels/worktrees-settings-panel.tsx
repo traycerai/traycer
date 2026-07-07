@@ -7,9 +7,15 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { useQueryClient, type QueryClient } from "@tanstack/react-query";
+import {
+  type InfiniteData,
+  useInfiniteQuery,
+  useQueryClient,
+  type QueryClient,
+} from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { toast } from "sonner";
+import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   AlertTriangle,
   ArrowDownWideNarrow,
@@ -47,7 +53,10 @@ import {
   taskMergeRollupLabel,
   type TaskMergeRollup,
 } from "@/lib/worktree/task-merge-rollup";
-import type { WorktreeEntryScripts } from "@traycer/protocol/host/worktree-schemas";
+import type {
+  WorktreeEntryScripts,
+  WorktreeListAllForHostResponseV11,
+} from "@traycer/protocol/host/worktree-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { cn } from "@/lib/utils";
@@ -91,7 +100,8 @@ import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-i
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { useHostClientFor } from "@/hooks/host/use-host-client-for";
-import { useHostQuery } from "@/hooks/host/use-host-query";
+import { hostClientUnavailableError } from "@/hooks/host/use-host-query";
+import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { useWorktreeDeleteStreamTransportFactory } from "@/lib/host/use-worktree-delete-stream-transport";
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
 import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
@@ -117,6 +127,13 @@ import { WorktreeListRenderProfiler } from "@/components/settings/panels/worktre
 import { useWorktreeActivityEnrichment } from "@/components/settings/panels/worktrees-enrichment";
 
 type WorktreeRowDeleteStatus = "deleting";
+const SETTINGS_WORKTREE_LIST_PAGE_LIMIT = 32;
+const SETTINGS_WORKTREE_LIST_BASE_PARAMS = {
+  includeActivity: false,
+  activityPaths: null,
+  cursor: null,
+  limit: SETTINGS_WORKTREE_LIST_PAGE_LIMIT,
+} as const;
 // Per-row activity-enrichment state, driving ONLY the tier pill's presentation:
 // `ready` = enriched (real tier), `pending` = in flight ("Checking…" spinner),
 // `unknown` = the per-path query settled to an error (non-animated fallback, no
@@ -440,15 +457,12 @@ function HostSelect(props: {
 }
 
 /**
- * Base worktree listing - the instant, viewport-independent leg. `includeActivity:
- * false, activityPaths: null` returns EVERY row with its cheap fields (repo,
- * branch, path, owning Task, uncommitted count) and none of the per-worktree gh PR
- * + git probes, so its cost does not scale with how much activity work the host
- * has to do. The heavy activity probes are fetched lazily, only for the rows
- * scrolled into view, by {@link useWorktreeActivityEnrichment} - so first paint is
- * instant in ANY environment, no matter the total worktree count.
+ * Base worktree listing - the instant, viewport-independent leg. It walks the
+ * host-wide listing in finite pages with `includeActivity: false`, accumulating
+ * cheap rows as pages land. The heavy activity probes are fetched lazily, only
+ * for the rows scrolled into view, by {@link useWorktreeActivityEnrichment}.
  */
-function useWorktreeListing(
+export function useWorktreeListing(
   client: HostClient<HostRpcRegistry> | null,
   reachable: boolean,
 ): {
@@ -460,39 +474,87 @@ function useWorktreeListing(
   readonly refresh: () => Promise<unknown>;
   readonly refreshing: boolean;
 } {
-  const baseQuery = useHostQuery({
-    cacheKeyIdentity: undefined,
-    client,
-    method: "worktree.listAllForHost",
-    params: { includeActivity: false, activityPaths: null },
-    options: { enabled: reachable },
+  const readiness = useReactiveHostReadiness(client);
+  const enabled = reachable && client !== null && readiness.isReady;
+  const {
+    data,
+    error,
+    fetchNextPage,
+    fetchStatus,
+    hasNextPage,
+    isError,
+    isFetching,
+    isFetchingNextPage,
+    isPending,
+    isSuccess,
+    refetch,
+    status,
+  } = useInfiniteQuery<
+    WorktreeListAllForHostResponseV11,
+    HostRpcError,
+    InfiniteData<WorktreeListAllForHostResponseV11, string | null>,
+    readonly unknown[],
+    string | null
+  >({
+    queryKey: hostQueryKeys.method<HostRpcRegistry, "worktree.listAllForHost">(
+      readiness.hostId,
+      "worktree.listAllForHost",
+      SETTINGS_WORKTREE_LIST_BASE_PARAMS,
+    ),
+    queryFn: async ({ pageParam }) => {
+      if (client === null) {
+        throw hostClientUnavailableError("worktree.listAllForHost");
+      }
+      return client.request("worktree.listAllForHost", {
+        includeActivity: false,
+        activityPaths: null,
+        cursor: pageParam,
+        limit: SETTINGS_WORKTREE_LIST_PAGE_LIMIT,
+      });
+    },
+    initialPageParam: null,
+    getNextPageParam: (lastPage) => lastPage.nextCursor,
+    enabled,
   });
-  const worktrees = baseQuery.data?.worktrees ?? EMPTY_WORKTREES;
+  useEffect(() => {
+    if (!enabled) return;
+    if (!hasNextPage) return;
+    if (isFetchingNextPage || isError) return;
+    void fetchNextPage();
+  }, [
+    enabled,
+    fetchNextPage,
+    hasNextPage,
+    isError,
+    isFetchingNextPage,
+  ]);
+  const worktrees =
+    data?.pages.flatMap((page) => page.worktrees) ?? EMPTY_WORKTREES;
   // Perf telemetry (gated + non-throwing). Both legs now track the BASE query -
   // the real time-to-usable-list, which is what "snappy in any environment" means.
   useWorktreeListQueryPerf({
     includeActivity: false,
-    fetchStatus: baseQuery.fetchStatus,
-    status: baseQuery.status,
+    fetchStatus,
+    status,
     worktreeCount: worktrees.length,
     submoduleCount: worktrees.reduce(
       (sum, entry) => sum + entry.submodules.length,
       0,
     ),
-    hasData: baseQuery.data !== undefined,
+    hasData: data !== undefined,
   });
   useWorktreeFirstPaintPerf({
-    painted: baseQuery.isSuccess && worktrees.length > 0,
+    painted: isSuccess && worktrees.length > 0,
     rowCount: worktrees.length,
   });
   return {
     worktrees,
-    isPending: baseQuery.isPending,
-    isError: baseQuery.isError,
-    errorMessage: baseQuery.error?.message ?? null,
-    isEmpty: baseQuery.isSuccess && worktrees.length === 0,
-    refresh: () => baseQuery.refetch(),
-    refreshing: baseQuery.isFetching,
+    isPending,
+    isError: isError && worktrees.length === 0,
+    errorMessage: error?.message ?? null,
+    isEmpty: isSuccess && !hasNextPage && worktrees.length === 0,
+    refresh: () => refetch(),
+    refreshing: isFetching,
   };
 }
 

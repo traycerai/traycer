@@ -1,7 +1,16 @@
 import { useMemo } from "react";
-import type { WorktreeBranchStatus } from "@traycer/protocol/host/index";
-import { useHostClient } from "@/lib/host";
-import { useHostQuery } from "@/hooks/host/use-host-query";
+import { queryOptions, useQuery } from "@tanstack/react-query";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import type {
+  WorktreeBranchStatus,
+  WorktreeHostEntryV11,
+} from "@traycer/protocol/host/index";
+import type { WorktreeListAllForHostResponseV11 } from "@traycer/protocol/host/worktree-schemas";
+import { useHostClient, type HostRpcRegistry } from "@/lib/host";
+import { hostQueryKeys } from "@/lib/query-keys";
+import { hostClientUnavailableError } from "@/hooks/host/use-host-query";
+import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { provenRemovable } from "@traycer-clients/shared/worktree/classify-worktree";
 
 /**
@@ -31,15 +40,14 @@ export interface TaskDeleteWorktreeCandidatesResult {
 }
 
 const EMPTY_CANDIDATES: ReadonlyArray<TaskDeleteWorktreeCandidate> = [];
+const TASK_DELETE_WORKTREE_PAGE_LIMIT = 200;
 
 /**
  * Derives the worktree-cleanup candidates for a pending Task deletion, entirely
  * client-side over `worktree.listAllForHost@1.1` (no dedicated RPC — the
- * released method-name surface is frozen). Passes `includeActivity: true` so the
- * shared `provenRemovable` classifier can evaluate the PR / at-base / ancestry
- * proofs: default-checked is reserved for PROVEN-removable candidates; unproven
- * (null status) and dirty ones default unchecked. `owners` is populated either
- * way.
+ * released method-name surface is frozen). It loops probe-free pages explicitly:
+ * the destructive dialog must see the complete host-wide owner set, and any page
+ * error must fail closed rather than pass a partial accumulation as complete.
  *
  * Scoped to the default-host client: candidates are computed against the
  * dialog's own host connection only. Worktrees a Task owned on OTHER hosts are
@@ -54,23 +62,31 @@ export function useTaskDeleteWorktreeCandidates(
   deletedEpicIds: ReadonlyArray<string> | null,
 ): TaskDeleteWorktreeCandidatesResult {
   const client = useHostClient();
-  const query = useHostQuery({
-    cacheKeyIdentity: undefined,
-    client,
-    method: "worktree.listAllForHost",
-    // Whole-list mode (all worktrees), enriched: the candidate classifier needs
-    // every row's activity, not a viewport slice.
-    params: { includeActivity: true, activityPaths: null },
-    options: { enabled: deletedEpicIds !== null },
-  });
+  const readiness = useReactiveHostReadiness(client);
+  const queryParams = {
+    includeActivity: false,
+    activityPaths: null,
+    cursor: null,
+    limit: TASK_DELETE_WORKTREE_PAGE_LIMIT,
+  } as const;
+  const { data, isError } = useQuery(
+    queryOptions<WorktreeListAllForHostResponseV11, HostRpcError>({
+      queryKey: hostQueryKeys.method<
+        HostRpcRegistry,
+        "worktree.listAllForHost"
+      >(readiness.hostId, "worktree.listAllForHost", queryParams),
+      queryFn: () => fetchTaskDeleteWorktreePages(client),
+      enabled: deletedEpicIds !== null && client !== null && readiness.isReady,
+      retry: false,
+    }),
+  );
 
   // `listAllForHost` is the SHARED host-wide key (Settings / folder + worktree
   // pickers populate it), so React Query can retain the last successful data
   // after a failed refetch. Suppress candidates whenever the query is in an
   // error state so a failed refresh can never offer stale (possibly already
   // deleted) worktree paths - "failure -> no candidates".
-  const isError = query.isError;
-  const worktrees = query.data?.worktrees;
+  const worktrees = data?.worktrees;
   const candidates = useMemo<ReadonlyArray<TaskDeleteWorktreeCandidate>>(() => {
     if (deletedEpicIds === null || worktrees === undefined || isError) {
       return EMPTY_CANDIDATES;
@@ -101,4 +117,28 @@ export function useTaskDeleteWorktreeCandidates(
   }, [deletedEpicIds, isError, worktrees]);
 
   return { candidates, isError };
+}
+
+async function fetchTaskDeleteWorktreePages(
+  client: HostClient<HostRpcRegistry> | null,
+): Promise<WorktreeListAllForHostResponseV11> {
+  if (client === null) {
+    throw hostClientUnavailableError("worktree.listAllForHost");
+  }
+  const worktrees: WorktreeHostEntryV11[] = [];
+  let cursor: string | null = null;
+  while (true) {
+    const page: WorktreeListAllForHostResponseV11 = await client.request(
+      "worktree.listAllForHost",
+      {
+        includeActivity: false,
+        activityPaths: null,
+        cursor,
+        limit: TASK_DELETE_WORKTREE_PAGE_LIMIT,
+      },
+    );
+    worktrees.push(...page.worktrees);
+    if (page.nextCursor === null) return { worktrees, nextCursor: null };
+    cursor = page.nextCursor;
+  }
 }

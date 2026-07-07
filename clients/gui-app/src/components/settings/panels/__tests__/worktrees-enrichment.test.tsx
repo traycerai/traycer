@@ -55,11 +55,17 @@ const METHOD_SCOPE = hostQueryKeys.methodScope(
 );
 
 function perPathKey(path: string): readonly unknown[] {
-  return [...METHOD_SCOPE, { includeActivity: true, activityPaths: [path] }];
+  return [
+    ...METHOD_SCOPE,
+    { includeActivity: true, activityPaths: [path], cursor: null, limit: null },
+  ];
 }
 
 function baseKey(): readonly unknown[] {
-  return [...METHOD_SCOPE, { includeActivity: false, activityPaths: null }];
+  return [
+    ...METHOD_SCOPE,
+    { includeActivity: false, activityPaths: null, cursor: null, limit: 32 },
+  ];
 }
 
 function seedEnriched(qc: QueryClient, entry: WorktreeHostEntryV11): void {
@@ -67,6 +73,7 @@ function seedEnriched(qc: QueryClient, entry: WorktreeHostEntryV11): void {
     perPathKey(entry.worktreePath),
     {
       worktrees: [entry],
+      nextCursor: null,
     },
   );
 }
@@ -85,6 +92,7 @@ describe("useCachedWorktreeEnrichment (cache-backed overlay)", () => {
     // base-only fields instead of staying pending.
     qc.setQueryData<WorktreeListAllForHostResponseV11>(baseKey(), {
       worktrees: [enrichedEntry("/wt/b", "feat-b")],
+      nextCursor: null,
     });
 
     const { result } = renderHook(() =>
@@ -218,6 +226,7 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
                 const entry = entriesByPath.get(path);
                 return entry === undefined ? [] : [entry];
               }),
+              nextCursor: null,
             };
           },
         },

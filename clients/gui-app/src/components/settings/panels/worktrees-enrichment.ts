@@ -147,9 +147,10 @@ export function useCachedWorktreeEnrichment(
  * Per-viewport lazy enrichment. The base list paints instantly with cheap fields;
  * the expensive activity probes (git ahead/behind/merged, gh PR state, submodule
  * merge facts) are fetched ONLY for the worktree paths currently on screen. Each
- * on-screen path gets its OWN `worktree.listAllForHost {includeActivity: true,
- * activityPaths: [path]}` query, so TanStack Query caches enrichment PER PATH: a
- * path is probed once, and scrolling back to it is a cache hit, never a refetch.
+ * on-screen path gets its OWN selection-mode `worktree.listAllForHost`
+ * (`includeActivity: true`, `activityPaths: [path]`, `cursor: null`,
+ * `limit: null`) query, so TanStack Query caches enrichment PER PATH: a path is
+ * probed once, and scrolling back to it is a cache hit, never a refetch.
  *
  * The reported on-screen set is debounced into `requestedPaths` (trailing edge),
  * so a fast scroll spins up one batch of per-path queries per settle window, not
@@ -229,7 +230,12 @@ export function useWorktreeActivityEnrichment(
     () =>
       requestedPaths.map((path) => ({
         method: "worktree.listAllForHost" as const,
-        params: { includeActivity: true, activityPaths: [path] },
+        params: {
+          includeActivity: true,
+          activityPaths: [path],
+          cursor: null,
+          limit: null,
+        },
       })),
     [requestedPaths],
   );
