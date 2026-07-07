@@ -945,10 +945,20 @@ function registerWorktreeCommands(program: Command): void {
       .option(
         "--include-activity",
         "Probe each worktree for last-active time and branch ahead/behind/merged status (slower)",
+      )
+      .option(
+        "--cursor <worktreePath>",
+        "Fetch a single page strictly after this worktree path",
+      )
+      .option(
+        "--limit <n>",
+        "Fetch a single page with at most this many worktrees",
       ),
     (opts) =>
       buildWorktreeListCommand({
         includeActivity: opts.includeActivity === true,
+        cursor: typeof opts.cursor === "string" ? opts.cursor : null,
+        limit: typeof opts.limit === "string" ? opts.limit : null,
       }),
   );
 
