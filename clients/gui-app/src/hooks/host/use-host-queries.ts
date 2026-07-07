@@ -97,11 +97,6 @@ export function useHostQueriesWithResponseMap<
   const { client, requests, options, mapResponse } = args;
   const queryClient = useQueryClient();
   const readiness = useReactiveHostReadiness(client);
-  const enabledFromOptions =
-    options === null || options.enabled === undefined
-      ? true
-      : Boolean(options.enabled);
-  const enabled = enabledFromOptions && client !== null && readiness.isReady;
 
   return useQueries({
     queries: requests.map((request) => {
@@ -123,7 +118,17 @@ export function useHostQueriesWithResponseMap<
         ...(options ?? {}),
         queryKey,
         queryFn: fetcher,
-        enabled,
+        // A function-form `enabled` must still be evaluated per-query - not
+        // collapsed to a boolean up front - or a caller's dynamic condition is
+        // silently replaced by "always true" the moment a client is bound.
+        // Mirrors `useHostQueryWithResponseMap` in `use-host-query.ts`.
+        enabled: (query) => {
+          if (client === null || !readiness.isReady) return false;
+          const callerEnabled = options?.enabled;
+          return typeof callerEnabled === "function"
+            ? callerEnabled(query)
+            : (callerEnabled ?? true);
+        },
       });
     }),
   });

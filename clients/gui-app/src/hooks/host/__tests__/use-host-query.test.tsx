@@ -23,6 +23,7 @@ describe("useHostQuery auth readiness", () => {
     const rendered = renderHook(
       () =>
         useHostQuery({
+          cacheKeyIdentity: undefined,
           client: fixture.client,
           method: "host.status",
           params: {},
@@ -62,6 +63,7 @@ describe("useHostQuery auth readiness", () => {
     renderHook(
       () =>
         useHostQuery({
+          cacheKeyIdentity: undefined,
           client: fixture.client,
           method: "host.status",
           params: {},
@@ -95,6 +97,7 @@ describe("useHostQuery auth readiness", () => {
     renderHook(
       () =>
         useHostQuery({
+          cacheKeyIdentity: undefined,
           client: fixture.client,
           method: "host.status",
           params: {},
@@ -109,6 +112,7 @@ describe("useHostQuery auth readiness", () => {
     renderHook(
       () =>
         useHostQuery({
+          cacheKeyIdentity: undefined,
           client: fixture.client,
           method: "host.status",
           params: {},

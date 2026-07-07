@@ -65,9 +65,7 @@ export interface UseHostQueryWithResponseMapOptions<
 /**
  * `useHostQuery`'s options, derived from `UseHostQueryWithResponseMapOptions`
  * (dropping `mapResponse`, which `useHostQuery` fixes to the identity) so the
- * two option shapes can't drift out of sync. `cacheKeyIdentity` stays
- * optional here (unlike the required-with-`undefined` field above) to match
- * this hook's existing call sites, none of which pass it explicitly today.
+ * two option shapes can't drift out of sync.
  */
 export type UseHostQueryOptions<
   Registry extends VersionedRpcRegistry,
@@ -78,10 +76,8 @@ export type UseHostQueryOptions<
     Method,
     ResponseOfMethod<Registry, Method>
   >,
-  "mapResponse" | "cacheKeyIdentity"
-> & {
-  readonly cacheKeyIdentity?: ReadonlyArray<unknown>;
-};
+  "mapResponse"
+>;
 
 /**
  * Thin typed wrapper over TanStack `useQuery`.
@@ -105,12 +101,6 @@ export function useHostQuery<
     ResponseOfMethod<Registry, Method>
   >({
     ...args,
-    // An optional property (`UseHostQueryOptions.cacheKeyIdentity`) isn't
-    // assignable to the target's required-but-possibly-`undefined` field by
-    // spreading alone - passed through explicitly instead. The `?? []`
-    // fallback that actually handles the `undefined` case lives in
-    // `useHostQueryWithResponseMap`'s `queryKey` construction below.
-    cacheKeyIdentity: args.cacheKeyIdentity,
     mapResponse: (mapArgs) => mapArgs.response,
   });
 }

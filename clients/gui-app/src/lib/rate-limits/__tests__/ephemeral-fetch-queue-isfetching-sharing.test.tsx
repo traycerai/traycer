@@ -48,7 +48,14 @@ describe("enqueueRateLimitFetch keeps a mounted useHostProviderRateLimitsQuery o
     const harness = createRateLimitSharingHarness();
     const { method, params, options } = providerRateLimitQueryOptions("codex");
     const rendered = renderHook(
-      () => useHostQuery({ client: harness.client, method, params, options }),
+      () =>
+        useHostQuery({
+          cacheKeyIdentity: undefined,
+          client: harness.client,
+          method,
+          params,
+          options,
+        }),
       { wrapper: createQueryClientWrapper(harness.queryClient) },
     );
 

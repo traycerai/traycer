@@ -27,6 +27,7 @@ export function useWorktreeListBindingsForEpicForClient(args: {
   HostRpcError
 > {
   return useHostQuery<HostRpcRegistry, "worktree.listBindingsForEpic">({
+    cacheKeyIdentity: undefined,
     client: args.client,
     method: "worktree.listBindingsForEpic",
     params: { epicId: args.epicId },
