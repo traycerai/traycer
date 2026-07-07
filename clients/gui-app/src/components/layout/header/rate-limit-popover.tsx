@@ -5,9 +5,12 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useIsFetching, useQueryClient } from "@tanstack/react-query";
 import { Gauge, Settings } from "lucide-react";
-import { DEFAULT_ACCOUNT_CONTEXT } from "@traycer/protocol/common/schemas";
+import {
+  DEFAULT_ACCOUNT_CONTEXT,
+  type AccountContext,
+} from "@traycer/protocol/common/schemas";
 import { Badge } from "@/components/ui/badge";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { PopoverContent } from "@/components/ui/popover";
@@ -90,6 +93,43 @@ function railTabProviderId(tab: RailTabDescriptor): ProviderId {
   return tab.kind === "traycer" ? "traycer" : tab.providerId;
 }
 
+function traycerRateLimitUsageQueryKey(
+  hostId: string | null,
+  accountContext: AccountContext,
+) {
+  return queryKeys.hostMethod<HostRpcRegistry, "host.getRateLimitUsage">(
+    hostId,
+    "host.getRateLimitUsage",
+    { accountContext },
+  );
+}
+
+function useTraycerSubscription() {
+  const query = useAuthUser();
+  const storedAccountContext = useAccountContextStore((s) => s.accountContext);
+  const user = query.data ?? null;
+  const teams = user?.teamSubscriptions ?? [];
+  const teamIds = new Set(teams.map((team) => team.team.id));
+  const resolvedAccountContext = resolveAccountContext(
+    storedAccountContext,
+    teamIds,
+  );
+  const subscription = selectSubscription(user, resolvedAccountContext, teams);
+  const eligible = subscription !== null && isTraycerEligible(subscription);
+  const rateLimitBased =
+    subscription !== null &&
+    !isCreditBasedPricing(subscription.subscriptionStatus);
+  return {
+    query,
+    storedAccountContext,
+    resolvedAccountContext,
+    teams,
+    subscription,
+    eligible,
+    rateLimitBased,
+  };
+}
+
 function orderRailTabs(
   providers: ReadonlyArray<ConfiguredRateLimitProvider>,
   includeTraycer: boolean,
@@ -160,26 +200,17 @@ function RateLimitPopoverBody({
   // gated on the *selected* account being paid or credit-bundled. Recomputed
   // reactively from the auth query + account-context store, so the tab appears /
   // disappears live as either changes - not snapshotted at popover-open time.
-  const authQuery = useAuthUser();
-  const storedAccountContext = useAccountContextStore((s) => s.accountContext);
-  const traycerEligible = useMemo(() => {
-    const user = authQuery.data ?? null;
-    const teams = user?.teamSubscriptions ?? [];
-    const teamIds = new Set(teams.map((team) => team.team.id));
-    const resolved = resolveAccountContext(storedAccountContext, teamIds);
-    const subscription = selectSubscription(user, resolved, teams);
-    return subscription !== null && isTraycerEligible(subscription);
-  }, [authQuery.data, storedAccountContext]);
+  const traycerSubscription = useTraycerSubscription();
 
   const railTabs = useMemo(
-    () => orderRailTabs(providers, traycerEligible),
-    [providers, traycerEligible],
+    () => orderRailTabs(providers, traycerSubscription.eligible),
+    [providers, traycerSubscription.eligible],
   );
   const [activeTab, setActiveTab] = useState<RateLimitTab>("overview");
 
   // Zero-state only when there is genuinely nothing to show: no host-RPC
   // providers AND no eligible Traycer tab.
-  if (providers.length === 0 && !traycerEligible) {
+  if (providers.length === 0 && !traycerSubscription.eligible) {
     return <RateLimitZeroState onClose={onClose} />;
   }
 
@@ -208,6 +239,13 @@ function RateLimitPopoverBody({
       <RateLimitRail
         railTabs={railTabs}
         providers={providers}
+        traycerRefreshTarget={{
+          enabled: traycerSubscription.eligible,
+          accountContext: traycerSubscription.storedAccountContext,
+          rateLimitBased: traycerSubscription.rateLimitBased,
+          isFetching: traycerSubscription.query.isFetching,
+          refetch: traycerSubscription.query.refetch,
+        }}
         activeTab={resolvedTab}
         onSelect={setActiveTab}
         onClose={onClose}
@@ -256,12 +294,14 @@ function RateLimitDetailPane({
 function RateLimitRail({
   railTabs,
   providers,
+  traycerRefreshTarget,
   activeTab,
   onSelect,
   onClose,
 }: {
   readonly railTabs: ReadonlyArray<RailTabDescriptor>;
   readonly providers: ReadonlyArray<ConfiguredRateLimitProvider>;
+  readonly traycerRefreshTarget: TraycerRefreshTarget;
   readonly activeTab: RateLimitTab;
   readonly onSelect: (tab: RateLimitTab) => void;
   readonly onClose: () => void;
@@ -312,7 +352,10 @@ function RateLimitRail({
           ),
         )}
       </div>
-      <RateLimitRefreshAllButton providers={providers} />
+      <RateLimitRefreshAllButton
+        providers={providers}
+        traycerRefreshTarget={traycerRefreshTarget}
+      />
       <button
         type="button"
         aria-label="Provider settings"
@@ -450,29 +493,51 @@ function RateLimitOverviewLoading(): ReactNode {
   );
 }
 
+interface TraycerRefreshTarget {
+  readonly enabled: boolean;
+  readonly accountContext: AccountContext;
+  readonly rateLimitBased: boolean;
+  readonly isFetching: boolean;
+  readonly refetch: () => Promise<unknown>;
+}
+
 /**
  * The rail's icon-only "Refresh all" (Core Flows): ephemeralProcess providers
  * refresh one at a time through the shared serial queue (`force: true`), while
  * httpFetch providers refresh concurrently alongside via a direct query
- * invalidation - a plain GET has no subprocess cost to serialize. `refreshing`
- * combines both lanes' real query state - the queue's draining flag for
- * ephemeralProcess (which stays true a beat longer than any single provider's
- * `isFetching`, covering the "still waiting behind an earlier provider in the
- * queue" gap) and each configured httpFetch provider's own `isFetching` (read
- * via `useHostQueries` against the exact same query keys the invalidation
- * below targets) - so the icon spins for the whole round regardless of which
- * lane(s) are actually configured, not just when an ephemeralProcess provider
- * happens to be in the mix.
+ * invalidation - a plain GET has no subprocess cost to serialize. The synthetic
+ * Traycer entry refreshes here too: it refetches the AuthService subscription
+ * query, and rate-limit based plans additionally invalidate the unscoped
+ * aperture `host.getRateLimitUsage` query that backs the live artifact bar.
+ * `refreshing` combines all lanes' real query state - the queue's draining flag
+ * for ephemeralProcess (which stays true a beat longer than any single
+ * provider's `isFetching`, covering the "still waiting behind an earlier
+ * provider in the queue" gap), each configured httpFetch provider's own
+ * `isFetching` (read via `useHostQueries` against the exact same query keys the
+ * invalidation below targets), plus Traycer's auth/aperture fetch state - so
+ * the icon spins for the whole round regardless of which lane(s) are actually
+ * configured, not just when an ephemeralProcess provider happens to be in the
+ * mix.
  */
 function RateLimitRefreshAllButton({
   providers,
+  traycerRefreshTarget,
 }: {
   readonly providers: ReadonlyArray<ConfiguredRateLimitProvider>;
+  readonly traycerRefreshTarget: TraycerRefreshTarget;
 }): ReactNode {
   const draining = useIsRateLimitQueueDraining();
   const queryClient = useQueryClient();
   const hostId = useReactiveActiveHostId();
   const client = useHostClient();
+  const traycerRateLimitUsageFetching =
+    useIsFetching({
+      queryKey: traycerRateLimitUsageQueryKey(
+        hostId,
+        traycerRefreshTarget.accountContext,
+      ),
+      exact: true,
+    }) > 0;
   const httpFetchProviders = providers.filter(
     (provider) => provider.lane === "httpFetch",
   );
@@ -503,14 +568,21 @@ function RateLimitRefreshAllButton({
     }),
     options: httpFetchOptions,
   });
+  const traycerRefreshing =
+    traycerRefreshTarget.enabled &&
+    (traycerRefreshTarget.isFetching ||
+      (traycerRefreshTarget.rateLimitBased && traycerRateLimitUsageFetching));
   const refreshing =
-    draining || httpFetchQueries.some((query) => query.isFetching);
+    draining ||
+    httpFetchQueries.some((query) => query.isFetching) ||
+    traycerRefreshing;
 
   // Fire-and-forget, not awaited: httpFetch providers refresh concurrently via a
-  // direct invalidation while ephemeralProcess providers queue through the
-  // shared serial lane. Returns an already-resolved promise so `RefreshIconButton`
-  // gets its `() => Promise<void>` contract without gating the spinner on the
-  // fetches themselves - `refreshing` (above) owns that.
+  // direct invalidation, ephemeralProcess providers queue through the shared
+  // serial lane, and Traycer refetches its subscription/usage queries. Returns
+  // an already-resolved promise so `RefreshIconButton` gets its
+  // `() => Promise<void>` contract without gating the spinner on the fetches
+  // themselves - `refreshing` (above) owns that.
   const refreshAll = (): Promise<void> => {
     httpFetchProviders.forEach((provider) => {
       void queryClient.invalidateQueries({
@@ -532,6 +604,18 @@ function RateLimitRefreshAllButton({
           { force: true },
         );
       });
+    if (traycerRefreshTarget.enabled) {
+      void traycerRefreshTarget.refetch();
+      if (traycerRefreshTarget.rateLimitBased) {
+        void queryClient.invalidateQueries({
+          queryKey: traycerRateLimitUsageQueryKey(
+            hostId,
+            traycerRefreshTarget.accountContext,
+          ),
+          exact: true,
+        });
+      }
+    }
     return Promise.resolve();
   };
 
@@ -767,37 +851,40 @@ function TraycerRateLimitBlock({
   readonly variant: PopoverBlockVariant;
   readonly onReady: (() => void) | null;
 }): ReactNode {
-  const query = useAuthUser();
-  const storedAccountContext = useAccountContextStore((s) => s.accountContext);
+  const traycerSubscription = useTraycerSubscription();
   const setAccountContext = useAccountContextStore((s) => s.setAccountContext);
   const queryClient = useQueryClient();
   const hostId = useReactiveActiveHostId();
-
-  const user = query.data ?? null;
-  const teams = user?.teamSubscriptions ?? [];
-  const teamIds = new Set(teams.map((team) => team.team.id));
-  const resolved = resolveAccountContext(storedAccountContext, teamIds);
-  const subscription = selectSubscription(user, resolved, teams);
   const state = resolveTraycerSubscriptionState({
-    isPending: query.isPending,
-    isError: query.isError,
-    subscription,
+    isPending: traycerSubscription.query.isPending,
+    isError: traycerSubscription.query.isError,
+    subscription: traycerSubscription.subscription,
   });
   useEffect(() => {
     if (state.kind !== "cold" && onReady !== null) onReady();
   }, [state.kind, onReady]);
 
   const overview = variant === "popover-overview";
-  const rateLimitBased =
-    subscription !== null &&
-    !isCreditBasedPricing(subscription.subscriptionStatus);
+  const rateLimitUsageFetching =
+    useIsFetching({
+      queryKey: traycerRateLimitUsageQueryKey(
+        hostId,
+        traycerSubscription.storedAccountContext,
+      ),
+      exact: true,
+    }) > 0;
+  const isRefreshing =
+    traycerSubscription.query.isFetching ||
+    (traycerSubscription.rateLimitBased && rateLimitUsageFetching);
   // Chip next to the name, single-provider tab only - same scoping
   // `resolveProviderPlanLabel` uses for the host-RPC providers' plan chip.
   // Reflects whichever account (personal/team) is currently selected, since
   // `subscription` is already resolved against that selection.
   const planLabel =
-    !overview && subscription !== null
-      ? subscriptionPlanLabel(subscription.subscriptionStatus)
+    !overview && traycerSubscription.subscription !== null
+      ? subscriptionPlanLabel(
+          traycerSubscription.subscription.subscriptionStatus,
+        )
       : null;
 
   // Refetch the subscription, and - only for rate-limit-based plans, whose
@@ -806,15 +893,13 @@ function TraycerRateLimitBlock({
   // `{ accountContext }` key, never the providers' `{ accountContext, providerId }`
   // pulls (which a Traycer refresh can't have changed).
   const refresh = async (): Promise<void> => {
-    await query.refetch();
-    if (rateLimitBased) {
+    await traycerSubscription.query.refetch();
+    if (traycerSubscription.rateLimitBased) {
       void queryClient.invalidateQueries({
-        queryKey: queryKeys.hostMethod<
-          HostRpcRegistry,
-          "host.getRateLimitUsage"
-        >(hostId, "host.getRateLimitUsage", {
-          accountContext: storedAccountContext,
-        }),
+        queryKey: traycerRateLimitUsageQueryKey(
+          hostId,
+          traycerSubscription.storedAccountContext,
+        ),
         exact: true,
       });
     }
@@ -839,8 +924,8 @@ function TraycerRateLimitBlock({
         <div className="flex items-center gap-1.5">
           <UsageLimitUpdatedLabel
             ready={state.kind === "ready"}
-            updatedAt={query.dataUpdatedAt}
-            refreshing={query.isFetching}
+            updatedAt={traycerSubscription.query.dataUpdatedAt}
+            refreshing={isRefreshing}
             degraded={state.kind === "ready" && state.degraded}
           />
           {/* Overview has its own "Refresh all" on the rail (item 2 feedback);
@@ -849,7 +934,7 @@ function TraycerRateLimitBlock({
             <RefreshIconButton
               onRefresh={refresh}
               label={`Refresh ${providerDisplayName("traycer")}`}
-              refreshing={query.isFetching}
+              refreshing={isRefreshing}
             />
           ) : null}
         </div>
@@ -859,8 +944,10 @@ function TraycerRateLimitBlock({
           selection with no controls, like every other Overview block. */}
       {!overview ? (
         <TraycerAccountSelect
-          teams={teams}
-          value={accountContextValue(resolved)}
+          teams={traycerSubscription.teams}
+          value={accountContextValue(
+            traycerSubscription.resolvedAccountContext,
+          )}
           onValueChange={(value) =>
             setAccountContext(parseAccountContextValue(value))
           }

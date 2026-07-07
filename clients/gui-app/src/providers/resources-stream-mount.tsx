@@ -1,6 +1,9 @@
 import { useEffect, type ReactNode } from "react";
 import { ResourcesStreamClient } from "@traycer-clients/shared/host-transport/resources-stream-client";
-import { useWsStreamClient } from "@/lib/host/stream-runtime-context";
+import {
+  useStreamMethodSupport,
+  useWsStreamClient,
+} from "@/lib/host/stream-runtime-context";
 import { resourcesRegistry } from "@/stores/resources/resources-registry";
 import {
   createResourcesStore,
@@ -27,8 +30,11 @@ export function ResourcesStreamMount(
 ): ReactNode {
   const { epicId } = props;
   const wsStreamClient = useWsStreamClient();
+  const resourcesSupport = useStreamMethodSupport("resources.subscribe");
+  const resourcesUnsupported = resourcesSupport === "unsupported";
 
   useEffect(() => {
+    if (resourcesUnsupported) return;
     const override = getResourcesStreamClientFactoryOverride();
     if (override === null && wsStreamClient === null) return;
     // Token identifies the transport this entry is bound to; a host swap changes
@@ -55,7 +61,7 @@ export function ResourcesStreamMount(
     return () => {
       resourcesRegistry.release(epicId);
     };
-  }, [epicId, wsStreamClient]);
+  }, [epicId, resourcesUnsupported, wsStreamClient]);
 
   return null;
 }
