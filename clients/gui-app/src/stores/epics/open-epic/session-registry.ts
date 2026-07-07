@@ -164,6 +164,13 @@ export class OpenEpicSessionRegistry {
       unsubscribeAwareness: null,
       lastEligibilityKey: eligibilityKeyFor(handle),
     };
+    const handleEligibilityChange = (): void => {
+      const nextKey = eligibilityKeyFor(handle);
+      if (nextKey === entry.lastEligibilityKey) return;
+      entry.lastEligibilityKey = nextKey;
+      this.prune();
+      this.emit();
+    };
     // Subscribe to the underlying store so prune-relevant changes trigger a
     // registry-level emit. Per-keystroke `projection.revision` bumps fire
     // the subscription too; gate on an "eligibility key" so the
@@ -174,25 +181,8 @@ export class OpenEpicSessionRegistry {
     const maybeSubscribe = handle.store.subscribe;
     entry.unsubscribe =
       typeof maybeSubscribe === "function"
-        ? maybeSubscribe.call(handle.store, () => {
-            const nextKey = eligibilityKeyFor(handle);
-            if (nextKey === entry.lastEligibilityKey) return;
-            entry.lastEligibilityKey = nextKey;
-            // A tracked session's state changed (e.g. dirty/reconnecting →
-            // clean). If the registry is currently above the soft cap, the
-            // newly clean entry makes prune() able to make progress; when
-            // we're at or below the cap, prune() short-circuits.
-            this.prune();
-            this.emit();
-          })
+        ? maybeSubscribe.call(handle.store, handleEligibilityChange)
         : null;
-    const handleEligibilityChange = (): void => {
-      const nextKey = eligibilityKeyFor(handle);
-      if (nextKey === entry.lastEligibilityKey) return;
-      entry.lastEligibilityKey = nextKey;
-      this.prune();
-      this.emit();
-    };
     entry.unsubscribeAwareness =
       typeof handle.awareness.on === "function" &&
       typeof handle.awareness.off === "function"
@@ -315,12 +305,12 @@ export class OpenEpicSessionRegistry {
 
 function hasActiveAgentWork(handle: OpenEpicStoreHandle): boolean {
   if (typeof handle.awareness.getStates !== "function") return false;
-  for (const state of handle.awareness.getStates().values()) {
+  return Array.from(handle.awareness.getStates().values()).some((state) => {
     const working: unknown = state[AGENT_WORKING_AWARENESS_FIELD];
-    if (!Array.isArray(working)) continue;
-    if (working.some((id) => typeof id === "string")) return true;
-  }
-  return false;
+    return (
+      Array.isArray(working) && working.some((id) => typeof id === "string")
+    );
+  });
 }
 
 function resolveUnsyncedTitle(

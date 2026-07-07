@@ -32,8 +32,9 @@ export const MAX_ACTIVE_CHAT_IDLE_DEFER_MS = 60 * 60 * 1_000;
  * bounds retention in time; this bounds it in count, so cycling through many
  * chats inside one TTL window cannot pin an unbounded set of finished
  * transcripts and open websockets. Oldest-released inactive sessions are
- * disposed first; leased sessions and sessions with active chat work never
- * count toward (or get evicted by) the cap.
+ * disposed first. Leased sessions are outside the warm pool. Lease-free
+ * sessions with active chat work are never evicted by the cap, but they still
+ * contribute to overflow and can crowd out older inactive warm sessions.
  */
 export const DEFAULT_MAX_WARM_CHAT_SESSIONS = 6;
 
@@ -58,7 +59,8 @@ export interface ChatSessionRegistryOptions {
  * sessions are additionally count-bounded by `maxWarmSessions`
  * (oldest-released evicted first) so the TTL window alone cannot accumulate an
  * unbounded set. Idle sessions with active work are retained until the work
- * settles or the active defer cap elapses.
+ * settles or the active defer cap elapses, though they still contribute to the
+ * overflow count while selecting inactive eviction candidates.
  */
 export class ChatSessionRegistry {
   private readonly entries = new Map<string, RegistryEntry>();
