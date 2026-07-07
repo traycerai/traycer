@@ -487,23 +487,7 @@ export type ListAgentsResponseV10 = z.infer<typeof listAgentsResponseSchemaV10>;
 // v3→v1 bridges drop them for older callers. Do not add new harnesses here -
 // use the existing v3 bridge.
 export const agentSummarySchemaV20 = agentSummarySchema.extend({
-  harnessId: harnessIdSchema
-    .extract([
-      "claude",
-      "codex",
-      "opencode",
-      "traycer",
-      "cursor",
-      "grok",
-      "qwen",
-      "kiro",
-      "droid",
-      "kimi",
-      "copilot",
-      "kilocode",
-      "openrouter",
-    ])
-    .nullable(),
+  harnessId: guiHarnessIdSchemaV20.nullable(),
 });
 export const listAgentsResponseSchemaV20 = listAgentsResponseSchema.extend({
   agents: z.array(agentSummarySchemaV20),
