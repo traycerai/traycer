@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
-import type { ReactNode } from "react";
+import { StrictMode, useEffect, type ReactNode } from "react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
@@ -265,5 +265,54 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
     );
     expect(result.current.enrichedByPath.has("/wt/a")).toBe(true);
     expect(result.current.enrichedByPath.has("/wt/b")).toBe(true);
+  });
+
+  it("still enriches when the first report fires during StrictMode's mount effect cycle (regression: a cleared debounce must re-arm)", async () => {
+    // Guards the "second open never enriches" bug. With a WARM base list the
+    // panel body and list mount in the same commit, so the list's first
+    // visible-paths report fires INSIDE StrictMode's setup→cleanup→setup mount
+    // cycle. The hook's unmount cleanup cleared the debounce timer but left the
+    // timer id in the ref, permanently wedging the old "skip if a timer is
+    // pending" debounce: requestedPaths never committed, no enrichment query
+    // was ever created, and every un-cached row spun at "Checking…" forever.
+    // The debounce now clears-and-re-arms on every report, so the wedge state
+    // is unreachable by construction.
+    //
+    // HARNESS LIMITATION: this vitest/jsdom setup does not run StrictMode's
+    // double-invoked effect cycle (verified empirically - a mount effect under
+    // <StrictMode> fires exactly once here), so this test could NOT reproduce
+    // the wedge red against the old code. It stays as a canary: it exercises
+    // the exact production shape (report from a mount effect under
+    // StrictMode), and becomes a real regression net the moment the test
+    // runtime gains dev-mode double-invocation.
+    const entriesByPath = new Map<string, WorktreeHostEntryV11>([
+      ["/wt/a", enrichedEntry("/wt/a", "feat-a")],
+    ]);
+    const fixture = createFixture(entriesByPath);
+    // Mimic the list: report on-screen paths from a MOUNT EFFECT, exactly where
+    // StrictMode's double-invoked effect cycle bites.
+    function useEnrichmentReportingOnMount() {
+      const enrichment = useWorktreeActivityEnrichment(
+        fixture.client,
+        true,
+        HOST_ID,
+      );
+      const { reportVisiblePaths } = enrichment;
+      useEffect(() => {
+        reportVisiblePaths(["/wt/a"]);
+      }, [reportVisiblePaths]);
+      return enrichment;
+    }
+    const { result } = renderHook(() => useEnrichmentReportingOnMount(), {
+      wrapper: (props: { readonly children: ReactNode }): ReactNode => (
+        <StrictMode>
+          <fixture.Wrapper>{props.children}</fixture.Wrapper>
+        </StrictMode>
+      ),
+    });
+
+    await waitFor(() => {
+      expect(result.current.enrichedByPath.has("/wt/a")).toBe(true);
+    });
   });
 });

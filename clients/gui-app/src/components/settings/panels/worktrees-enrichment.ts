@@ -193,7 +193,17 @@ export function useWorktreeActivityEnrichment(
   const debounceRef = useRef<number | null>(null);
   const reportVisiblePaths = useCallback((paths: readonly string[]) => {
     latestVisibleRef.current = paths;
-    if (debounceRef.current !== null) return;
+    // Clear-and-re-arm on EVERY report (true trailing debounce), never gate on
+    // "a timer is already pending". The gate variant wedged permanently when
+    // React StrictMode's mount setup→cleanup→setup cycle ran the unmount
+    // cleanup between two reports on the SAME (surviving) hook instance: the
+    // cleanup killed the pending timer, the ref still held its id, and every
+    // later report early-returned - no commit ever happened again, so a warm
+    // second open never enriched anything (cold first opens escaped only
+    // because the list mounts seconds after the body there). Re-arming makes
+    // that state unreachable: the worst a stale id can do is clear a dead
+    // timer.
+    if (debounceRef.current !== null) window.clearTimeout(debounceRef.current);
     debounceRef.current = window.setTimeout(() => {
       debounceRef.current = null;
       setRequestedPaths(latestVisibleRef.current);
@@ -201,8 +211,13 @@ export function useWorktreeActivityEnrichment(
   }, []);
   useEffect(
     () => () => {
-      if (debounceRef.current !== null)
+      if (debounceRef.current !== null) {
         window.clearTimeout(debounceRef.current);
+        // Reset the ref, not just the timer: this cleanup also runs in
+        // StrictMode's mount effect cycle, where the hook instance (and this
+        // ref) survives - a later report must be able to re-arm cleanly.
+        debounceRef.current = null;
+      }
     },
     [],
   );
