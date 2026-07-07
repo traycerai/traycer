@@ -17,6 +17,7 @@ import {
   backgroundTaskOutputSchema,
   diffSourceSchema,
   fileEditReasonSchema,
+  workflowActivityEntrySchema,
 } from "@traycer/protocol/persistence/epic/content-blocks";
 
 export {
@@ -24,10 +25,12 @@ export {
   backgroundTaskOutputSchema,
   diffSourceSchema,
   fileEditReasonSchema,
+  workflowActivityEntrySchema,
   type AgentMessageSend,
   type BackgroundTaskOutput,
   type DiffSource,
   type FileEditReason,
+  type WorkflowActivityEntry,
 } from "@traycer/protocol/persistence/epic/content-blocks";
 import { z } from "zod";
 
@@ -579,6 +582,56 @@ export type SubAgentCompletedEvent = z.infer<
   typeof subAgentCompletedEventSchema
 >;
 
+/**
+ * `workflow.*` mirrors the `subagent.*` triple above for a Workflow tool run
+ * (a `/code-review`-style finder fleet). Inner `agent()` calls have no
+ * individually addressable identity on the wire (see the detection findings) -
+ * these events carry only the aggregate the host can observe: name/intent at
+ * spawn, one activity milestone + fleet counts + tokens per progress tick, and
+ * a terminal outcome. The accumulator dual-writes them onto a `subagent` block
+ * (base fields = degradation, `workflowMeta` = the rich data) rather than a
+ * distinct block type - see `persistence/epic/content-blocks.ts`.
+ */
+export const workflowStartedEventSchema = z.object({
+  ...baseRuntimeEventFields,
+  type: z.literal("workflow.started"),
+  name: z.string(),
+  // `meta.description` extracted from the workflow script (best-effort,
+  // never the raw script source). `null` on extraction failure.
+  intent: z.string().nullable(),
+  // The spawning `Workflow` tool_call block id - same suppression policy as
+  // `subAgentStartedEventSchema.spawnToolCallId`.
+  spawnToolCallId: z.string().optional(),
+});
+export type WorkflowStartedEvent = z.infer<typeof workflowStartedEventSchema>;
+
+export const workflowProgressEventSchema = z.object({
+  ...baseRuntimeEventFields,
+  type: z.literal("workflow.progress"),
+  // One new milestone (a phase transition or a label sighting), or `null`
+  // when this tick only refreshes counts/tokens with no new milestone.
+  activity: workflowActivityEntrySchema.nullable().default(null),
+  // Latest known fleet counts / aggregate token usage. Absent/`null` ⇒
+  // "unknown or unchanged this tick" - the accumulator preserves the prior
+  // value rather than clearing it.
+  agentsStarted: z.number().nullable().optional(),
+  agentsFinished: z.number().nullable().optional(),
+  totalTokens: z.number().nullable().optional(),
+});
+export type WorkflowProgressEvent = z.infer<typeof workflowProgressEventSchema>;
+
+export const workflowCompletedEventSchema = z.object({
+  ...baseRuntimeEventFields,
+  type: z.literal("workflow.completed"),
+  // Defaulted "completed" for the same reason as `subAgentCompletedEventSchema.
+  // outcome` - an emitter that never sets this reproduces a clean finish.
+  outcome: z.enum(["completed", "failed", "stopped"]).default("completed"),
+  result: z.string().optional(),
+});
+export type WorkflowCompletedEvent = z.infer<
+  typeof workflowCompletedEventSchema
+>;
+
 export const fileChangeStartedEventSchema = z.object({
   ...baseRuntimeEventFields,
   type: z.literal("file_change.started"),
@@ -876,7 +929,12 @@ export type ErrorEvent = z.infer<typeof errorEventSchema>;
  */
 export const AUTH_ERROR_CODE = "auth";
 
-export const runtimeEventSchema = z.discriminatedUnion("type", [
+// ─── Frozen pre-`workflow.*` runtime-event union (`chat.subscribe@1.3`) ────
+//
+// Kept so `chat.subscribe@1.3`'s frozen `blockDelta` frame schema (see
+// `subscribe.ts`) parses only events a real 1.3 peer could produce. Do not
+// add the `workflow.*` variants here - a 1.3 peer must never observe them.
+export const runtimeEventSchemaV13 = z.discriminatedUnion("type", [
   textDeltaEventSchema,
   textCompletedEventSchema,
   reasoningDeltaEventSchema,
@@ -915,5 +973,12 @@ export const runtimeEventSchema = z.discriminatedUnion("type", [
   steerSubmittedEventSchema,
   usageUpdatedEventSchema,
   errorEventSchema,
+]);
+
+export const runtimeEventSchema = z.discriminatedUnion("type", [
+  ...runtimeEventSchemaV13.def.options,
+  workflowStartedEventSchema,
+  workflowProgressEventSchema,
+  workflowCompletedEventSchema,
 ]);
 export type RuntimeEvent = z.infer<typeof runtimeEventSchema>;

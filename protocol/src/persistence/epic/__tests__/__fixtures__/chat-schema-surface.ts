@@ -2123,6 +2123,92 @@ export const chatSchemaSurfaceBaseline = {
                           "stopped": {
                             "default": false,
                             "type": "boolean"
+                          },
+                          "workflowMeta": {
+                            "default": null,
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "name": {
+                                    "type": "string"
+                                  },
+                                  "intent": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "activity": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "enum": [
+                                            "phase",
+                                            "label"
+                                          ]
+                                        },
+                                        "text": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": [
+                                        "kind",
+                                        "text"
+                                      ]
+                                    }
+                                  },
+                                  "agentsStarted": {
+                                    "anyOf": [
+                                      {
+                                        "type": "number"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "agentsFinished": {
+                                    "anyOf": [
+                                      {
+                                        "type": "number"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "totalTokens": {
+                                    "anyOf": [
+                                      {
+                                        "type": "number"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "name",
+                                  "intent",
+                                  "activity",
+                                  "agentsStarted",
+                                  "agentsFinished",
+                                  "totalTokens"
+                                ]
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           }
                         },
                         "required": [
@@ -6075,6 +6161,94 @@ export const chatSchemaSurfaceBaseline = {
                           "stopped": {
                             "default": false,
                             "type": "boolean"
+                          },
+                          "workflowMeta": {
+                            "default": null,
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "name": {
+                                    "type": "string"
+                                  },
+                                  "intent": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "activity": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "enum": [
+                                            "phase",
+                                            "label"
+                                          ]
+                                        },
+                                        "text": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": [
+                                        "kind",
+                                        "text"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "agentsStarted": {
+                                    "anyOf": [
+                                      {
+                                        "type": "number"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "agentsFinished": {
+                                    "anyOf": [
+                                      {
+                                        "type": "number"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "totalTokens": {
+                                    "anyOf": [
+                                      {
+                                        "type": "number"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "name",
+                                  "intent",
+                                  "activity",
+                                  "agentsStarted",
+                                  "agentsFinished",
+                                  "totalTokens"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           }
                         },
                         "required": [
@@ -6089,7 +6263,8 @@ export const chatSchemaSurfaceBaseline = {
                           "result",
                           "startedAt",
                           "spawnToolCallId",
-                          "stopped"
+                          "stopped",
+                          "workflowMeta"
                         ],
                         "additionalProperties": false
                       },
