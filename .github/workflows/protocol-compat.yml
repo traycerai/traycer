@@ -79,7 +79,7 @@ jobs:
               cp protocol/scripts/compat/dump-protocol-surface.ts "/tmp/baseline-${label}/protocol/scripts/compat/"
             [ -f "/tmp/baseline-${label}/protocol/src/framework/surface-build.ts" ] || \
               cp protocol/src/framework/surface-build.ts "/tmp/baseline-${label}/protocol/src/framework/"
-            (cd "/tmp/baseline-${label}" && bun install && bun run protocol/scripts/compat/dump-protocol-surface.ts) \
+            (cd "/tmp/baseline-${label}" && bun install >/dev/null && bun run protocol/scripts/compat/dump-protocol-surface.ts) \
               > "/tmp/surfaces/${label}.json"
             echo "${label}=/tmp/surfaces/${label}.json" >> /tmp/baseline-args.txt
             echo "::endgroup::"
