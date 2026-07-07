@@ -158,6 +158,7 @@ import {
   ChatLowerInteractionSurfaces,
   InertChatComposer,
 } from "./chat-tile-lower-surfaces";
+import { composerHasBlockingApprovals } from "./chat-approval-visibility";
 import {
   chatTileUiReducer,
   createInitialChatTileUiState,
@@ -1057,8 +1058,8 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   const approvalDecisionPending = Object.values(state.pendingActions).some(
     (action) => action.action === "approvalDecision",
   );
-  const stopDisabled =
-    !canAct || stopPending || composerActiveTurnStatus === "stopping";
+  const turnStopBusy = stopPending || composerActiveTurnStatus === "stopping";
+  const stopDisabled = !canAct || turnStopBusy;
   const chatActions = useChatActions(handle);
   const restoreActionPending = useMemo(
     () =>
@@ -1303,9 +1304,16 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       state.pendingUserMessages,
     ],
   );
+  const canSendNextStep =
+    canAct &&
+    !turnStopBusy &&
+    !composerHasBlockingApprovals(
+      state.pendingApprovals,
+      state.pendingFileEditApprovals.length,
+    );
   const sendNextStep = useCallback(
     (option: TraycerNextStepOption): boolean => {
-      if (!canAct) return false;
+      if (!canSendNextStep) return false;
       const sender = userMessageSenderForProfile(profile);
       if (sender === null) return false;
       const content = buildSubmittedChatJSONContent(
@@ -1315,14 +1323,14 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
         chatActions.sendMessage(content, sender, nextStepSettings) !== null
       );
     },
-    [canAct, chatActions, nextStepSettings, profile],
+    [canSendNextStep, chatActions, nextStepSettings, profile],
   );
   const nextStepActions = useMemo(
     () => ({
-      canSend: canAct,
+      canSend: canSendNextStep,
       onSend: sendNextStep,
     }),
-    [canAct, sendNextStep],
+    [canSendNextStep, sendNextStep],
   );
   const sendImplementPlanMessage = useCallback((): boolean => {
     if (!canAct) return false;
