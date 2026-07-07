@@ -576,9 +576,9 @@ function subagentBodySearchText(
   // the dual-written degradation for old readers, never shown here.
   if (workflowMeta !== null) {
     return [
-      resultText,
       workflowMeta.intent ?? "",
       ...workflowMeta.activity.map((entry) => entry.text),
+      resultText,
     ];
   }
   return [
