@@ -176,7 +176,18 @@ const claudeCodeRateLimitsSchema = z.object({
 // schema, so there's no cross-version drift risk in constraining it. Enforces
 // the host's `unavailableRateLimits` call sites and the GUI's display-label
 // map stay exhaustive at compile time instead of silently drifting.
-export const rateLimitUnavailableReasonSchema = z.enum([
+//
+// Frozen as the v1 wire enum (8 values) - the still-installed
+// `host.getRateLimitUsage@1.2` response schema keeps referencing this exact
+// export, unwidened (see `providerRateLimitsSchemaV1` below). `usage_fetch_failed`
+// (v2, below) is a new enum *value*, and the within-major skew handler is
+// key-strip only - it can't strip a value the way it strips an extra object
+// key - so the new value has to travel behind an explicit major bump
+// (`host.getRateLimitUsage@2.0`) with a downgrade bridge, instead of an
+// in-place edit here. Widening this enum in place would make the v1.2
+// contract accept and forward the new value straight through to an old GUI
+// whose baked schema only knows these eight.
+export const rateLimitUnavailableReasonSchemaV1 = z.enum([
   "cli_not_found",
   "unsupported_provider",
   "invalid_response",
@@ -186,44 +197,110 @@ export const rateLimitUnavailableReasonSchema = z.enum([
   "sdk_incompatible",
   "insufficient_permissions",
 ]);
-export type RateLimitUnavailableReason = z.infer<
-  typeof rateLimitUnavailableReasonSchema
+export type RateLimitUnavailableReasonV1 = z.infer<
+  typeof rateLimitUnavailableReasonSchemaV1
 >;
 
-// Any provider/auth combination that can't report rate limits (API-key auth,
-// not logged in, a timed-out pull, etc). Its `provider` field ranges over the
-// full `providerIdSchema` enum, which overlaps the literal `"codex"` /
-// `"claude-code"` values the two arms above use as their tag - that overlap
-// is why this union is a plain `z.union`, not a `z.discriminatedUnion`.
-// `discriminatedUnion` requires every arm's discriminator value to be
-// unique; two arms claiming `"codex"` (one via `z.literal`, one via this
-// enum) makes Zod throw a raw (non-ZodError) "Duplicate discriminator value"
-// error the first time the schema is parsed, which `safeParse` can't catch.
-const unavailableProviderRateLimitsSchema = z.object({
+// v2 adds `usage_fetch_failed`: the CLI's usage HTTP fetch failed (timeout,
+// a 401 with a failed token refresh, an unseeded 429, an empty body) - a
+// transient fetch problem, distinct from `rate_limits_not_available`, which
+// is an account/auth *capability* problem (API-key auth, not logged in,
+// missing scopes, creds not loaded when asked). The latest-type export
+// (`RateLimitUnavailableReason` below) tracks this v2 enum, so host + GUI
+// code gets the new value from the default import path; a
+// `host.getRateLimitUsage@1.2` caller keeps seeing only the frozen v1 enum,
+// via the downgrade bridge in `rate-limit/contracts.ts`.
+export const rateLimitUnavailableReasonSchemaV2 = z.enum([
+  "cli_not_found",
+  "unsupported_provider",
+  "invalid_response",
+  "timeout",
+  "connection_failed",
+  "rate_limits_not_available",
+  "sdk_incompatible",
+  "insufficient_permissions",
+  "usage_fetch_failed",
+]);
+export type RateLimitUnavailableReason = z.infer<
+  typeof rateLimitUnavailableReasonSchemaV2
+>;
+
+// Any provider/auth combination that can't report rate limits. Its
+// `provider` field ranges over the full `providerIdSchema` enum, which
+// overlaps the literal `"codex"` / `"claude-code"` values the two arms above
+// use as their tag - that overlap is why the unions below are plain
+// `z.union`s, not `z.discriminatedUnion`s. `discriminatedUnion` requires
+// every arm's discriminator value to be unique; two arms claiming `"codex"`
+// (one via `z.literal`, one via this enum) makes Zod throw a raw
+// (non-ZodError) "Duplicate discriminator value" error the first time the
+// schema is parsed, which `safeParse` can't catch.
+//
+// Two versions of this arm exist for the same reason the reason enum above
+// is split: `unavailableProviderRateLimitsSchemaV1` tags `reason` with the
+// frozen v1 enum (feeds `providerRateLimitsSchemaV1`, which only the v1.2
+// response uses); `unavailableProviderRateLimitsSchemaV2` tags it with the
+// v2 enum (feeds the latest `providerRateLimitsSchema`, which the v2.0
+// response uses).
+const unavailableProviderRateLimitsSchemaV1 = z.object({
   provider: providerIdSchema,
   available: z.literal(false),
-  reason: rateLimitUnavailableReasonSchema,
+  reason: rateLimitUnavailableReasonSchemaV1,
 });
 
-// Provider-tagged union of account rate-limit snapshots. Carries each
-// provider's full native detail (not just what today's UI renders) so the
-// schema doesn't need another version bump when the UI grows.
+const unavailableProviderRateLimitsSchemaV2 = z.object({
+  provider: providerIdSchema,
+  available: z.literal(false),
+  reason: rateLimitUnavailableReasonSchemaV2,
+});
+
+// Provider-tagged union of account rate-limit snapshots, frozen at the v1
+// reason enum. Feeds `rateLimitUsageResponseSchemaV12` only, so the
+// still-installed v1.2 response schema keeps rejecting `usage_fetch_failed`.
+export const providerRateLimitsSchemaV1 = z.union([
+  codexRateLimitsSchema,
+  claudeCodeRateLimitsSchema,
+  openRouterRateLimitsSchema,
+  kiloCodeRateLimitsSchema,
+  unavailableProviderRateLimitsSchemaV1,
+]);
+export type ProviderRateLimitsV1 = z.infer<typeof providerRateLimitsSchemaV1>;
+
+// Latest provider-tagged union of account rate-limit snapshots (v2 reason
+// enum). Carries each provider's full native detail (not just what today's
+// UI renders) so the schema doesn't need another version bump when the UI
+// grows.
 export const providerRateLimitsSchema = z.union([
   codexRateLimitsSchema,
   claudeCodeRateLimitsSchema,
   openRouterRateLimitsSchema,
   kiloCodeRateLimitsSchema,
-  unavailableProviderRateLimitsSchema,
+  unavailableProviderRateLimitsSchemaV2,
 ]);
 export type ProviderRateLimits = z.infer<typeof providerRateLimitsSchema>;
 
 // v1.2 response = v1.0/v1.1 flat aperture fields (unchanged) + a nullable
-// provider-account snapshot. Null both when the request didn't ask for a
-// provider (aperture calls) and when a v1.1 host answers a v1.2 request (see
-// the v1.1 -> v1.2 upgrade path).
-export const rateLimitUsageResponseSchemaV12 = rateLimitUsageResponseSchema.extend({
-  providerRateLimits: providerRateLimitsSchema.nullable(),
-});
+// provider-account snapshot, frozen at the v1 reason enum (see
+// `providerRateLimitsSchemaV1` above). Null both when the request didn't ask
+// for a provider (aperture calls) and when a v1.1 host answers a v1.2
+// request (see the v1.1 -> v1.2 upgrade path).
+export const rateLimitUsageResponseSchemaV12 =
+  rateLimitUsageResponseSchema.extend({
+    providerRateLimits: providerRateLimitsSchemaV1.nullable(),
+  });
 export type RateLimitUsageResponseV12 = z.infer<
   typeof rateLimitUsageResponseSchemaV12
+>;
+
+// v2.0 response - identical to v1.2 except the provider-account snapshot's
+// unavailable arm ranges over the v2 reason enum (adds `usage_fetch_failed`).
+// The request shape is unchanged from v1.2 (`accountContext` + optional
+// `providerId`), so `hostGetRateLimitUsageV20` in `contracts.ts` reuses
+// `rateLimitUsageRequestSchemaV12` directly instead of defining a new request
+// schema here.
+export const rateLimitUsageResponseSchemaV20 =
+  rateLimitUsageResponseSchema.extend({
+    providerRateLimits: providerRateLimitsSchema.nullable(),
+  });
+export type RateLimitUsageResponseV20 = z.infer<
+  typeof rateLimitUsageResponseSchemaV20
 >;

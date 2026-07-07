@@ -390,6 +390,100 @@ describe("ChatMessages Virtuoso helpers", () => {
     );
   });
 
+  it("purges item sizes and re-anchors the tail when the setup-card weave shifts retained rows while following", () => {
+    // The worktree-send shape: the pending shimmer renders after the user row,
+    // then one update weaves the setup card ABOVE the user row and drops the
+    // shimmer. The retained user row shifts index 0 -> 1, so its cached height
+    // record now describes the shimmer - without a purge every later row is
+    // painted inside the user bubble (the overlapping-messages bug).
+    const userMessage = makeMessageAt(0, "user", 100);
+    const pendingShimmer = {
+      ...makeMessageAt(1, "assistant", 200),
+      id: "assistant:live",
+    };
+    const setupCard = {
+      ...makeMessageAt(2, "system", 50),
+      id: "setup-card:tab-1:0",
+    };
+
+    expect(
+      classifyFollowingChatScrollModifier({
+        previousMessages: [userMessage, pendingShimmer],
+        nextMessages: [setupCard, userMessage],
+      }),
+    ).toEqual({
+      type: "item-location",
+      location: { index: "LAST", align: "end", behavior: "auto" },
+      purgeItemSizes: true,
+    });
+  });
+
+  it("purges item sizes and anchors the first shifted row for an unpinned reader", () => {
+    const messages = makeMessages(3);
+    const genesisCard = {
+      ...makeMessageAt(3, "system", 0),
+      id: "setup-card:tab-1:genesis",
+    };
+
+    expect(
+      classifyChatScrollModifier({
+        previousMessages: messages,
+        nextMessages: [genesisCard, ...messages],
+      }),
+    ).toEqual({
+      type: "item-location",
+      location: { index: 1, align: "start-no-overflow", behavior: "auto" },
+      purgeItemSizes: true,
+    });
+  });
+
+  it("purges item sizes at the tail when a send is coalesced with an index-shifting insertion", () => {
+    // A new user row (newest createdAt) normally rides the unconditional
+    // smooth scroll-to-tail - but when the SAME update also inserted a row
+    // above retained ones, their index-keyed size records are stale and
+    // `auto-scroll-to-bottom` cannot purge. The send must ride the
+    // tail-anchored purge instead.
+    const previousMessages = [
+      makeMessageAt(0, "user", 100),
+      makeMessageAt(1, "assistant", 200),
+    ];
+    const setupCard = {
+      ...makeMessageAt(2, "system", 50),
+      id: "setup-card:tab-1:0",
+    };
+    const newUser = makeMessageAt(3, "user", 300);
+
+    expect(
+      classifyChatScrollModifier({
+        previousMessages,
+        nextMessages: [setupCard, ...previousMessages, newUser],
+      }),
+    ).toEqual({
+      type: "item-location",
+      location: { index: "LAST", align: "end", behavior: "auto" },
+      purgeItemSizes: true,
+    });
+  });
+
+  it("purges item sizes when a non-user row is inserted mid-list", () => {
+    const [first, second, third] = makeMessages(3);
+    const insertedCard = {
+      ...makeMessageAt(3, "system", 150),
+      id: "setup-card:tab-1:1",
+    };
+
+    expect(
+      classifyChatScrollModifier({
+        previousMessages: [first, second, third],
+        nextMessages: [first, insertedCard, second, third],
+      }),
+    ).toEqual({
+      type: "item-location",
+      location: { index: 2, align: "start-no-overflow", behavior: "auto" },
+      purgeItemSizes: true,
+    });
+  });
+
   it("selects the active user id from the viewport anchor row", () => {
     const messages = [
       makeMessage(0, "user"),

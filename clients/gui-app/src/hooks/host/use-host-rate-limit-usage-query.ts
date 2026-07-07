@@ -13,6 +13,7 @@ export function useHostRateLimitUsageQuery() {
   const client = useHostClient();
   const accountContext = useAccountContextStore((s) => s.accountContext);
   return useHostQuery<HostRpcRegistry, "host.getRateLimitUsage">({
+    cacheKeyIdentity: undefined,
     client,
     method: "host.getRateLimitUsage",
     params: { accountContext },

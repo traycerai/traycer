@@ -117,11 +117,11 @@ describe("CodexRateLimitView (extended fields)", () => {
     expect(screen.getByText("68% used")).toBeTruthy();
   });
 
-  it("renders the popover variant as '% used' with a four-tier bar color", () => {
+  it("renders the popover variant as '% used' with the shared blue/red bar color", () => {
     const { container } = render(
       <CodexRateLimitView data={codex} variant="popover-detail" />,
     );
-    // primary 4% used -> blue tier; secondary 68% used -> yellow tier.
+    // primary 4% used and secondary 68% used both stay blue.
     expect(screen.getByText("Current session")).toBeTruthy();
     expect(screen.getByText("4% used")).toBeTruthy();
     expect(screen.getByText("Weekly")).toBeTruthy();
@@ -129,9 +129,7 @@ describe("CodexRateLimitView (extended fields)", () => {
     expect(container.querySelectorAll(".bg-blue-500").length).toBeGreaterThan(
       0,
     );
-    expect(container.querySelectorAll(".bg-yellow-500").length).toBeGreaterThan(
-      0,
-    );
+    expect(container.querySelectorAll(".bg-yellow-500").length).toBe(0);
   });
 
   it("draws every popover window track with a foreground-opacity fill so an empty bar stays visible", () => {
@@ -160,6 +158,13 @@ describe("CodexRateLimitView (extended fields)", () => {
     expect(screen.getByText("0% used")).toBeTruthy();
     const tracks = container.querySelectorAll(".bg-foreground\\/15");
     expect(tracks.length).toBeGreaterThan(0);
+    expect(container.querySelectorAll(".bg-green-500").length).toBe(0);
+    const fill = container.querySelector(".bg-blue-500");
+    expect(fill).toBeInstanceOf(HTMLElement);
+    if (!(fill instanceof HTMLElement)) {
+      throw new Error("Expected a blue rate-limit fill");
+    }
+    expect(fill.style.width).toBe("0%");
   });
 
   it("shows a relative countdown for a short popover window", () => {

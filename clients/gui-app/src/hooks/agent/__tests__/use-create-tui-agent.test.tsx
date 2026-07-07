@@ -156,6 +156,7 @@ describe("useCreateTuiAgent", () => {
         agentMode: "regular",
         forkSourceHarnessSessionId: null,
         onStatusChange: null,
+        workspaceMode: "inherit",
         worktreeIntent: intent,
         terminalAgentArgs: null,
       });
@@ -228,6 +229,7 @@ describe("useCreateTuiAgent", () => {
         agentMode: "regular",
         forkSourceHarnessSessionId: null,
         onStatusChange: null,
+        workspaceMode: "inherit",
         worktreeIntent: intent,
         terminalAgentArgs: "--dangerously-skip-permissions",
       });
@@ -300,6 +302,7 @@ describe("useCreateTuiAgent", () => {
         agentMode: "regular",
         forkSourceHarnessSessionId: "source-harness-session",
         onStatusChange: (nextStatus) => statuses.push(nextStatus),
+        workspaceMode: "inherit",
         worktreeIntent: null,
         terminalAgentArgs: "--allowedTools Edit",
       });
@@ -454,6 +457,7 @@ describe("useCreateTuiAgent", () => {
         agentMode: "regular",
         forkSourceHarnessSessionId: null,
         onStatusChange: null,
+        workspaceMode: "inherit",
         worktreeIntent: intent,
         terminalAgentArgs: null,
       });
@@ -535,6 +539,7 @@ describe("useCreateTuiAgent", () => {
         agentMode: "regular",
         forkSourceHarnessSessionId: null,
         onStatusChange: null,
+        workspaceMode: "inherit",
         worktreeIntent: intent,
         terminalAgentArgs: null,
       });
@@ -613,6 +618,7 @@ describe("useCreateTuiAgent", () => {
           agentMode: "regular",
           forkSourceHarnessSessionId: null,
           onStatusChange: null,
+          workspaceMode: "inherit",
           worktreeIntent: intent,
           terminalAgentArgs: null,
         });
@@ -701,6 +707,7 @@ describe("useCreateTuiAgent", () => {
           agentMode: "regular",
           forkSourceHarnessSessionId: null,
           onStatusChange: null,
+          workspaceMode: "inherit",
           worktreeIntent: intent,
           terminalAgentArgs: null,
         });
@@ -743,6 +750,7 @@ describe("useCreateTuiAgent", () => {
         agentMode: "regular",
         forkSourceHarnessSessionId: null,
         onStatusChange: null,
+        workspaceMode: "inherit",
         worktreeIntent: null,
         terminalAgentArgs: null,
       });
@@ -789,6 +797,7 @@ describe("useCreateTuiAgent", () => {
         agentMode: "regular",
         forkSourceHarnessSessionId: null,
         onStatusChange: null,
+        workspaceMode: "inherit",
         worktreeIntent: intent,
         terminalAgentArgs: null,
       });
@@ -835,6 +844,7 @@ describe("useCreateTuiAgent", () => {
         agentMode: "regular",
         forkSourceHarnessSessionId: null,
         onStatusChange: null,
+        workspaceMode: "inherit",
         worktreeIntent: intent,
         terminalAgentArgs: null,
       });
@@ -910,6 +920,7 @@ describe("useCreateTuiAgent", () => {
         agentMode: "regular",
         forkSourceHarnessSessionId: null,
         onStatusChange: null,
+        workspaceMode: "inherit",
         worktreeIntent: intent,
         terminalAgentArgs: null,
       });
@@ -998,6 +1009,7 @@ describe("useCreateTuiAgent", () => {
         agentMode: "regular",
         forkSourceHarnessSessionId: null,
         onStatusChange: null,
+        workspaceMode: "inherit",
         worktreeIntent: intent,
         terminalAgentArgs: null,
       });
@@ -1055,6 +1067,7 @@ describe("useCreateTuiAgent", () => {
         agentMode: "regular",
         forkSourceHarnessSessionId: null,
         onStatusChange: null,
+        workspaceMode: "inherit",
         worktreeIntent: intent,
         terminalAgentArgs: null,
       });

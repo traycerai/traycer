@@ -2,9 +2,14 @@ import { QueryClient } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_ACCOUNT_CONTEXT } from "@traycer/protocol/common/schemas";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
+import type {
+  ProviderRateLimits,
+  RateLimitUnavailableReason,
+} from "@traycer/protocol/host";
 import { queryKeys } from "@/lib/query-keys";
 import { createAppQueryClient } from "@/lib/query-client";
 import type { HostRpcRegistry } from "@/lib/host";
+import { PROVIDER_RATE_LIMITS_STALE_TIME_MS } from "@/lib/rate-limit-providers";
 import {
   __resetRateLimitQueueForTests,
   configureRateLimitQueue,
@@ -16,10 +21,21 @@ import {
 
 const HOST_ID = "host-1";
 
-// A minimal valid `host.getRateLimitUsage @1.2` response - only the ordering of
-// `request` calls matters to these tests, not the payload.
+// A minimal valid `host.getRateLimitUsage` response - only the ordering of
+// `request` calls matters to most of these tests, not the payload.
 function response() {
   return { totalTokens: 0, remainingTokens: 0, providerRateLimits: null };
+}
+
+// A provider-pull response reporting a specific unavailable reason - used by
+// the cool-down tests below, which DO care about the payload.
+function unavailableResponse(reason: RateLimitUnavailableReason) {
+  const providerRateLimits: ProviderRateLimits = {
+    provider: "claude-code",
+    available: false,
+    reason,
+  };
+  return { totalTokens: 0, remainingTokens: 0, providerRateLimits };
 }
 
 function keyFor(providerId: ProviderId) {
@@ -137,9 +153,15 @@ describe("ephemeral-fetch-queue", () => {
     settlers[0].ok();
     await flush();
 
-    expect(queryClient.getQueryState(keyFor("codex"))?.data).toEqual(
-      response(),
-    );
+    // The queue's queryFn wraps the raw response into the provider-pull
+    // envelope before TanStack caches it - `response()`'s `providerRateLimits:
+    // null` resolves to an envelope with nothing retained.
+    expect(queryClient.getQueryState(keyFor("codex"))?.data).toEqual({
+      latest: null,
+      lastGood: null,
+      lastGoodAt: null,
+      lastFailureAt: null,
+    });
   });
 
   it("force: false no-ops when cached data is still within the freshness floor, force: true bypasses it", async () => {
@@ -213,9 +235,12 @@ describe("ephemeral-fetch-queue", () => {
     expect(request).toHaveBeenCalledTimes(2);
     settlers[1].ok();
     await flush();
-    expect(queryClient.getQueryState(keyFor("claude-code"))?.data).toEqual(
-      response(),
-    );
+    expect(queryClient.getQueryState(keyFor("claude-code"))?.data).toEqual({
+      latest: null,
+      lastGood: null,
+      lastGoodAt: null,
+      lastFailureAt: null,
+    });
     expect(
       queryClient.getQueryState(keyFor("claude-code"))?.dataUpdatedAt,
     ).toBeGreaterThan(0);
@@ -319,5 +344,151 @@ describe("ephemeral-fetch-queue", () => {
     await flush();
     expect(request).not.toHaveBeenCalled();
     expect(isRateLimitQueueDraining()).toBe(false);
+  });
+});
+
+// Cool-down after a `usage_fetch_failed` response (PR tech plan: a server-side
+// 429 on Anthropic's usage endpoint with a multi-minute penalty window - the
+// point of this cool-down is to stop automatic polling from re-tripping it).
+// Uses fake timers (and `vi.setSystemTime`) so the tests can cross both the
+// `PROVIDER_RATE_LIMITS_STALE_TIME_MS` freshness floor (30s) AND the 5-minute
+// cool-down window deterministically, without a real 5-minute wait - and to
+// prove the cool-down is a DISTINCT gate from the freshness floor (an
+// automatic enqueue past 30s but still inside the cool-down must stay
+// suppressed).
+describe("post-usage_fetch_failed cool-down", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    // A realistic epoch, not 0: `isFresh()`'s default `dataUpdatedAt ?? 0` for
+    // a never-fetched key would otherwise sit right next to a clock started
+    // at 0, making the very first enqueue look artificially "fresh".
+    vi.setSystemTime(1_700_000_000_000);
+  });
+
+  afterEach(() => {
+    __resetRateLimitQueueForTests();
+    vi.useRealTimers();
+  });
+
+  // Fake-timer analogue of `flush()`: advances virtual time (default 0, just
+  // enough to drain already-pending microtasks/timers) without a real wait.
+  async function flushFake(ms: number): Promise<void> {
+    for (let i = 0; i < 5; i++) {
+      await vi.advanceTimersByTimeAsync(ms);
+    }
+  }
+
+  it("suppresses a later automatic enqueue for the same provider while in cool-down, past the freshness floor, but never a manual refresh", async () => {
+    const queryClient = newQueryClient();
+    const request = vi.fn<RateLimitQueueRequestFn>(() =>
+      Promise.resolve(unavailableResponse("usage_fetch_failed")),
+    );
+    configureRateLimitQueue({ hostId: HOST_ID, queryClient, request });
+
+    void enqueueRateLimitFetch("claude-code", DEFAULT_ACCOUNT_CONTEXT, {
+      force: false,
+    });
+    await flushFake(0);
+    expect(request).toHaveBeenCalledTimes(1);
+
+    // Past the 30s freshness floor, but still well inside the 5-minute
+    // cool-down - an automatic trigger (interval tick / turn completion) must
+    // still be suppressed here, proving the cool-down is a separate gate from
+    // freshness (freshness alone would already allow a re-fetch by now).
+    await flushFake(PROVIDER_RATE_LIMITS_STALE_TIME_MS + 1_000);
+    void enqueueRateLimitFetch("claude-code", DEFAULT_ACCOUNT_CONTEXT, {
+      force: false,
+    });
+    await flushFake(0);
+    expect(request).toHaveBeenCalledTimes(1);
+
+    // A manual, user-initiated refresh is never subject to the cool-down.
+    void enqueueRateLimitFetch("claude-code", DEFAULT_ACCOUNT_CONTEXT, {
+      force: true,
+    });
+    await flushFake(0);
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("resumes automatic enqueues once the cool-down window elapses", async () => {
+    const queryClient = newQueryClient();
+    const request = vi.fn<RateLimitQueueRequestFn>(() =>
+      Promise.resolve(unavailableResponse("usage_fetch_failed")),
+    );
+    configureRateLimitQueue({ hostId: HOST_ID, queryClient, request });
+
+    void enqueueRateLimitFetch("claude-code", DEFAULT_ACCOUNT_CONTEXT, {
+      force: false,
+    });
+    await flushFake(0);
+    expect(request).toHaveBeenCalledTimes(1);
+
+    // Advance past the full 5-minute cool-down window.
+    await flushFake(5 * 60 * 1000 + 1_000);
+    void enqueueRateLimitFetch("claude-code", DEFAULT_ACCOUNT_CONTEXT, {
+      force: false,
+    });
+    await flushFake(0);
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not apply the cool-down to other transient reasons (timeout, connection_failed) - only usage_fetch_failed", async () => {
+    const queryClient = newQueryClient();
+    const request = vi.fn<RateLimitQueueRequestFn>(() =>
+      Promise.resolve(unavailableResponse("timeout")),
+    );
+    configureRateLimitQueue({ hostId: HOST_ID, queryClient, request });
+
+    void enqueueRateLimitFetch("claude-code", DEFAULT_ACCOUNT_CONTEXT, {
+      force: false,
+    });
+    await flushFake(0);
+    expect(request).toHaveBeenCalledTimes(1);
+
+    // Past the freshness floor only (not the 5-minute cool-down window) - a
+    // `timeout` response must not have started this provider's cool-down, so
+    // the freshness floor alone (already elapsed) is what gates this.
+    await flushFake(PROVIDER_RATE_LIMITS_STALE_TIME_MS + 1_000);
+    void enqueueRateLimitFetch("claude-code", DEFAULT_ACCOUNT_CONTEXT, {
+      force: false,
+    });
+    await flushFake(0);
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("clears a standing cool-down once a later fetch resolves with something other than usage_fetch_failed", async () => {
+    const queryClient = newQueryClient();
+    let nextReason: RateLimitUnavailableReason | null = "usage_fetch_failed";
+    const request = vi.fn<RateLimitQueueRequestFn>(() =>
+      Promise.resolve(
+        nextReason === null ? response() : unavailableResponse(nextReason),
+      ),
+    );
+    configureRateLimitQueue({ hostId: HOST_ID, queryClient, request });
+
+    // First automatic pull trips the cool-down.
+    void enqueueRateLimitFetch("claude-code", DEFAULT_ACCOUNT_CONTEXT, {
+      force: false,
+    });
+    await flushFake(0);
+    expect(request).toHaveBeenCalledTimes(1);
+
+    // A manual refresh (never gated by the cool-down) comes back clean.
+    nextReason = null;
+    void enqueueRateLimitFetch("claude-code", DEFAULT_ACCOUNT_CONTEXT, {
+      force: true,
+    });
+    await flushFake(0);
+    expect(request).toHaveBeenCalledTimes(2);
+
+    // Past the freshness floor, well inside what would have been the original
+    // cool-down window - a subsequent automatic trigger now proceeds, because
+    // the clean read above cleared the standing cool-down.
+    await flushFake(PROVIDER_RATE_LIMITS_STALE_TIME_MS + 1_000);
+    void enqueueRateLimitFetch("claude-code", DEFAULT_ACCOUNT_CONTEXT, {
+      force: false,
+    });
+    await flushFake(0);
+    expect(request).toHaveBeenCalledTimes(3);
   });
 });

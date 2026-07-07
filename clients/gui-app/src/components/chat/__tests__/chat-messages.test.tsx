@@ -55,6 +55,7 @@ import {
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import { useTileFindStore, type TileFindAdapter } from "@/stores/tile-find";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 import type { BackgroundItem } from "@traycer/protocol/host/agent/gui/subscribe";
 
 import {
@@ -107,6 +108,72 @@ function minimapItemsFor(
     }));
 }
 
+function rectOf(x: number, y: number, width: number, height: number): DOMRect {
+  return {
+    x,
+    y,
+    width,
+    height,
+    top: y,
+    left: x,
+    right: x + width,
+    bottom: y + height,
+    toJSON: () => ({}),
+  };
+}
+
+function makeClientRects(rects: ReadonlyArray<DOMRect>): DOMRectList {
+  return Object.assign(rects.slice(), {
+    item: (index: number): DOMRect | null => rects[index] ?? null,
+  });
+}
+
+function mockPaintableQuoteSelection(): void {
+  const selectedLine = rectOf(50, 120, 200, 16);
+  vi.spyOn(Range.prototype, "getBoundingClientRect").mockReturnValue(
+    selectedLine,
+  );
+  vi.spyOn(Range.prototype, "getClientRects").mockReturnValue(
+    makeClientRects([selectedLine]),
+  );
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(
+    rectOf(0, 0, 1000, 600),
+  );
+}
+
+function makeTextAssistantMessage(): ChatMessageModel {
+  const segment: ChatMessageModel["segments"][number] = {
+    id: "assistant-text-1",
+    kind: "text",
+    markdown: "Quotable assistant text.",
+    isStreaming: false,
+  };
+  return {
+    ...makeMessage(1, "assistant"),
+    segments: [segment],
+    completedAt: 2,
+  };
+}
+
+function flushFrame(): Promise<void> {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => resolve());
+  });
+}
+
+async function dragSelectAssistantText(): Promise<void> {
+  const paragraph = screen.getByText("Quotable assistant text.");
+  const range = document.createRange();
+  range.selectNodeContents(paragraph);
+  const selection = window.getSelection();
+  selection?.removeAllRanges();
+  selection?.addRange(range);
+  await act(async () => {
+    paragraph.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+    await flushFrame();
+  });
+}
+
 function chatMessagesJsx(
   messages: ReadonlyArray<ChatMessageModel>,
   opts: {
@@ -114,6 +181,7 @@ function chatMessagesJsx(
     minimapItems: ReadonlyArray<ChatUserMinimapItem>;
     scrollStateKey: string;
     visible: boolean;
+    systemOverlayActive: boolean;
     scrollRequest: ChatMessageScrollRequest | null;
   },
 ): ReactNode {
@@ -130,6 +198,7 @@ function chatMessagesJsx(
         nextStepActions={null}
         instanceId={TILE_FIND_TEST_INSTANCE_ID}
         visible={opts.visible}
+        systemOverlayActive={opts.systemOverlayActive}
         scrollRequest={opts.scrollRequest}
       />
     </VirtuosoMessageListTestingContext.Provider>
@@ -143,6 +212,7 @@ function renderChatMessages(
     minimapItems: ReadonlyArray<ChatUserMinimapItem>;
     scrollStateKey: string;
     visible: boolean;
+    systemOverlayActive: boolean;
     scrollRequest: ChatMessageScrollRequest | null;
   },
 ) {
@@ -173,6 +243,7 @@ function chatMessagesWithTileFindJsx(
       {chatMessagesJsx(messages, {
         ...opts,
         backgroundItems: undefined,
+        systemOverlayActive: false,
         scrollRequest: null,
       })}
     </TileFindContext.Provider>
@@ -185,6 +256,7 @@ function makeDefaultOpts(
     minimapItems: ReadonlyArray<ChatUserMinimapItem>;
     scrollStateKey: string;
     visible: boolean;
+    systemOverlayActive: boolean;
     scrollRequest: ChatMessageScrollRequest | null;
   }>,
 ) {
@@ -195,6 +267,7 @@ function makeDefaultOpts(
       overrides.scrollStateKey ??
       `chat-scroll-test-key-${scrollStateKeySequence++}`,
     visible: overrides.visible ?? true,
+    systemOverlayActive: overrides.systemOverlayActive ?? false,
     scrollRequest: overrides.scrollRequest ?? null,
   };
 }
@@ -207,6 +280,7 @@ function rerenderChatMessages(
     minimapItems: ReadonlyArray<ChatUserMinimapItem>;
     scrollStateKey: string;
     visible: boolean;
+    systemOverlayActive: boolean;
     scrollRequest: ChatMessageScrollRequest | null;
   },
 ): void {
@@ -228,6 +302,8 @@ function rerenderChatMessagesWithTileFind(
 describe("ChatMessages Virtuoso renderer", () => {
   afterEach(() => {
     useTileFindStore.getState().resetForTests();
+    useSettingsStore.getState().setQuoteReplyEnabled(true);
+    window.getSelection()?.removeAllRanges();
     restoreHighlights?.();
     restoreHighlights = null;
     vi.restoreAllMocks();
@@ -250,6 +326,30 @@ describe("ChatMessages Virtuoso renderer", () => {
 
     expect(container.querySelector(".bg-linear-to-b")).toBeNull();
     expect(container.querySelector(".bg-linear-to-t")).not.toBeNull();
+  });
+
+  it("keeps the quote popover hidden while the Settings overlay is active across quote setting toggles", async () => {
+    mockPaintableQuoteSelection();
+    const message = makeTextAssistantMessage();
+    const opts = makeDefaultOpts({ minimapItems: [] });
+    const { rerender } = renderChatMessages([message], opts);
+
+    await dragSelectAssistantText();
+    expect(screen.queryByRole("button", { name: "Quote" })).not.toBeNull();
+
+    const overlayOpts = { ...opts, systemOverlayActive: true };
+    rerenderChatMessages(rerender, [message], overlayOpts);
+    expect(screen.queryByRole("button", { name: "Quote" })).toBeNull();
+
+    act(() => {
+      useSettingsStore.getState().setQuoteReplyEnabled(false);
+    });
+    expect(screen.queryByRole("button", { name: "Quote" })).toBeNull();
+
+    act(() => {
+      useSettingsStore.getState().setQuoteReplyEnabled(true);
+    });
+    expect(screen.queryByRole("button", { name: "Quote" })).toBeNull();
   });
 
   it("hides completed steer labels on user bubbles", async () => {

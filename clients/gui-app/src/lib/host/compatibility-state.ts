@@ -43,6 +43,7 @@ export function useHostCompatibility(): HostCompatibility {
 export function useHostCompatibilityProbe(): HostCompatibility {
   const client = useHostClient();
   const probe = useHostQuery<HostRpcRegistry, "host.status">({
+    cacheKeyIdentity: undefined,
     client,
     method: "host.status",
     params: HOST_STATUS_PROBE,

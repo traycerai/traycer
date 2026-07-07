@@ -19,6 +19,7 @@ export function useAgentSelectionGuideGlobalQuery(): UseQueryResult<
 > {
   const client = useHostClient();
   return useHostQuery({
+    cacheKeyIdentity: undefined,
     client,
     method: "agent.selectionGuide.getGlobal",
     params: GLOBAL_GUIDE_PARAMS,

@@ -19,7 +19,7 @@
  *           // never reads them from the doc (chat.subscribe streams Message[])
  *     tuiAgents: Y.Map<string, Y.Map<{
  *        id, title, parentId, createdAt, updatedAt, userId,
- *        hostId, harnessId, harnessSessionId, workspaceFolders,
+ *        hostId, harnessId, harnessSessionId, workspaceFolders, workspaceMode,
  *     }>>,
  *   }
  */
@@ -177,6 +177,13 @@ function readWorkspaceFolders(map: Y.Map<unknown>): readonly string[] {
   return EMPTY_ARRAY;
 }
 
+function readWorkspaceMode(
+  map: Y.Map<unknown>,
+): "inherit" | "folderless" | undefined {
+  const value = map.get("workspaceMode");
+  return value === "inherit" || value === "folderless" ? value : undefined;
+}
+
 function readTerminalShellArgs(map: Y.Map<unknown>): readonly string[] | null {
   const value = map.get("terminalShellArgs");
   if (value instanceof Y.Array) {
@@ -312,6 +319,7 @@ export function projectTerminalAgent(
     userId: readMaybeNullableString(entry, "userId"),
     hostId,
     workspaceFolders: readWorkspaceFolders(entry),
+    workspaceMode: readWorkspaceMode(entry),
     model: typeof model === "string" ? model : null,
     reasoningEffort:
       typeof reasoningEffort === "string" ? reasoningEffort : null,
@@ -420,6 +428,7 @@ export function terminalAgentProjectionsEq(
     a.updatedAt === b.updatedAt,
     a.userId === b.userId,
     a.hostId === b.hostId,
+    a.workspaceMode === b.workspaceMode,
     a.harnessSessionId === b.harnessSessionId,
     a.terminalAgentArgs === b.terminalAgentArgs,
     a.terminalShellCommand === b.terminalShellCommand,

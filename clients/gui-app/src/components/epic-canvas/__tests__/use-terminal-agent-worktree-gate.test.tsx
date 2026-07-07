@@ -47,6 +47,7 @@ describe("useTerminalAgentWorktreeGate", () => {
         model: null,
         reasoningEffort: null,
         agentMode: "regular",
+        workspaceMode: "inherit",
         worktreeIntent: null,
         terminalAgentArgs: null,
       });
@@ -62,6 +63,7 @@ describe("useTerminalAgentWorktreeGate", () => {
       model: null,
       reasoningEffort: null,
       agentMode: "regular",
+      workspaceMode: "inherit",
       worktreeIntent: null,
       terminalAgentArgs: null,
       forkSourceHarnessSessionId: null,
@@ -101,6 +103,7 @@ describe("useTerminalAgentWorktreeGate", () => {
         model: "gpt-5",
         reasoningEffort: "high",
         agentMode: "regular",
+        workspaceMode: "inherit",
         worktreeIntent: intent,
         terminalAgentArgs: "--full-auto",
       });
@@ -111,6 +114,7 @@ describe("useTerminalAgentWorktreeGate", () => {
       agentMode: "regular",
       model: "gpt-5",
       reasoningEffort: "high",
+      workspaceMode: "inherit",
       worktreeIntent: intent,
       terminalAgentArgs: "--full-auto",
     });
@@ -141,6 +145,7 @@ describe("useTerminalAgentWorktreeGate", () => {
         model: null,
         reasoningEffort: null,
         agentMode: "epic",
+        workspaceMode: "folderless",
         worktreeIntent: { entries: [] },
         terminalAgentArgs: null,
       });

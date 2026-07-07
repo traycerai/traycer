@@ -312,6 +312,29 @@ describe("<ProvidersSettingsPanel />", () => {
     });
   });
 
+  it("hides the CLI-candidates picker for Amp - a selected path is never consulted", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "amp",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+        }),
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: "Add custom path" }),
+    ).toBeNull();
+  });
+
   it("orders the provider rail by the default provider order", () => {
     providerMocks.listResult.data = {
       providers: [

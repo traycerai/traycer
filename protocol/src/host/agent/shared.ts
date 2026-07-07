@@ -58,6 +58,7 @@ export const guiHarnessIdSchema = harnessIdSchema.extract([
   "copilot",
   "kilocode",
   "openrouter",
+  "amp",
 ]);
 export type GuiHarnessId = z.infer<typeof guiHarnessIdSchema>;
 
@@ -77,6 +78,31 @@ export const guiHarnessIdSchemaV10 = harnessIdSchema.extract([
   "cursor",
 ]);
 export type GuiHarnessIdV10 = z.infer<typeof guiHarnessIdSchemaV10>;
+
+/**
+ * Frozen harness id set as shipped in protocol v2.0 (before Amp). Used only by
+ * the frozen v2.0 response schema of `agent.gui.listHarnesses` so an already-
+ * shipped v2.0 client (which predates Amp) negotiates a wire that can never
+ * carry it; the v3.0 line adds it and v3→v2 / v3→v1 downgrade bridges filter
+ * it for older callers. Do NOT add new harnesses here - extend the latest
+ * `guiHarnessIdSchema` and use the existing v3 bridge instead.
+ */
+export const guiHarnessIdSchemaV20 = harnessIdSchema.extract([
+  "claude",
+  "codex",
+  "opencode",
+  "traycer",
+  "cursor",
+  "grok",
+  "qwen",
+  "kiro",
+  "droid",
+  "kimi",
+  "copilot",
+  "kilocode",
+  "openrouter",
+]);
+export type GuiHarnessIdV20 = z.infer<typeof guiHarnessIdSchemaV20>;
 
 export const tuiHarnessIdSchema = harnessIdSchema.extract([
   "claude",
@@ -137,6 +163,7 @@ export const AGENT_FACING_HARNESS_IDS = [
   "copilot",
   "kilocode",
   "openrouter",
+  "amp",
 ] as const;
 
 export const AGENT_FACING_HARNESS_ID_LIST = AGENT_FACING_HARNESS_IDS.join(", ");
@@ -451,6 +478,21 @@ export const listAgentsResponseSchemaV10 = listAgentsResponseSchema.extend({
   agents: z.array(agentSummarySchemaV10),
 });
 export type ListAgentsResponseV10 = z.infer<typeof listAgentsResponseSchemaV10>;
+
+// ── Frozen protocol-v2.0 agent.list response (before Amp) ──────────────────
+// `agent.list` enumerates every agent in the epic - including Amp GUI harness
+// chats a newer client created - so an already-shipped v2.0 client (which
+// predates Amp) would hit a strict enum on those rows. v2.0 is frozen here as
+// actually shipped (before Amp); the v3.0 line carries Amp rows and v3→v2 /
+// v3→v1 bridges drop them for older callers. Do not add new harnesses here -
+// use the existing v3 bridge.
+export const agentSummarySchemaV20 = agentSummarySchema.extend({
+  harnessId: guiHarnessIdSchemaV20.nullable(),
+});
+export const listAgentsResponseSchemaV20 = listAgentsResponseSchema.extend({
+  agents: z.array(agentSummarySchemaV20),
+});
+export type ListAgentsResponseV20 = z.infer<typeof listAgentsResponseSchemaV20>;
 
 /**
  * `agent.sendMessage@1.0` - fire-and-forget enqueue from one agent to

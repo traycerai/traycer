@@ -61,9 +61,12 @@ export function WorkspaceFolderRows(props: {
     HostRpcRegistry,
     "worktree.listAllForHost"
   >({
+    cacheKeyIdentity: undefined,
     client: hostClient,
     method: "worktree.listAllForHost",
-    params: {},
+    // Whole-list mode (no per-viewport selection); this surface only reads the
+    // cheap base fields (uncommitted counts), so no activity enrichment.
+    params: { includeActivity: false, activityPaths: null },
     options: { enabled: hasAnyWorktrees && !props.readOnly },
   });
   const uncommittedByPath = useMemo(() => {

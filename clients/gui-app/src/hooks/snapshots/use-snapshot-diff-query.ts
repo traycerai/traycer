@@ -32,6 +32,7 @@ export function useSnapshotDiffQuery(args: {
 > {
   const client = useHostClient();
   return useHostQuery<HostRpcRegistry, "snapshots.readSnapshotDiff">({
+    cacheKeyIdentity: undefined,
     client,
     method: "snapshots.readSnapshotDiff",
     params: {
