@@ -474,6 +474,17 @@ function ProviderEnableSwitch(props: {
   );
 }
 
+// Cursor's chat runs through the `@cursor/sdk` (no CLI binary) and its
+// terminal-agent surface is hidden for now, so there's no CLI path to pick.
+// Amp's SDK always resolves and spawns its own bundled `amp` CLI ahead of any
+// override, and Amp has no terminal-agent (TUI) surface either, so a
+// selected/custom path is never consulted anywhere. Both hide the candidates
+// table and show only the API-key section rather than offer a control with no
+// effect.
+function hidesCliCandidates(providerId: ProviderCliState["providerId"]): boolean {
+  return providerId === "cursor" || providerId === "amp";
+}
+
 function ProviderDetail({
   state,
   providers,
@@ -482,18 +493,11 @@ function ProviderDetail({
   readonly providers: readonly ProviderCliState[];
 }) {
   const providerId = state.providerId;
-  // Cursor's chat runs through the `@cursor/sdk` (no CLI binary) and its
-  // terminal-agent surface is hidden for now, so there's no CLI path to pick -
-  // hide the candidates table and show only the API-key section.
-  // Amp's SDK always resolves and spawns its own bundled `amp` CLI ahead of
-  // any override, and Amp has no terminal-agent (TUI) surface either, so a
-  // selected/custom path is never consulted anywhere - hide the picker rather
-  // than offer a control with no effect.
   // Traycer/OpenRouter share the OpenCode binary path set: their tables show
   // the OpenCode candidates (or their own when present) while selection /
   // custom-path mutations target the focused provider id.
   const cliConfig = candidateConfigForProvider(state, providers);
-  const showCliCandidates = providerId !== "cursor" && providerId !== "amp";
+  const showCliCandidates = !hidesCliCandidates(providerId);
   const radioName = useId();
   const switchId = useId();
   const [adding, setAdding] = useState(false);
