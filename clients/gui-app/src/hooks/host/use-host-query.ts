@@ -20,9 +20,10 @@ import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
 import { queryKeys } from "@/lib/query-keys";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 
-export interface UseHostQueryOptions<
+export interface UseHostQueryWithResponseMapOptions<
   Registry extends VersionedRpcRegistry,
   Method extends keyof Registry & string,
+  TData,
 > {
   readonly client: HostClient<Registry> | null;
   readonly method: Method;
@@ -32,56 +33,11 @@ export interface UseHostQueryOptions<
    * request addresses a stable resource id but the cached representation must
    * vary by a newer content identity, such as a blob hash or revision.
    */
-  readonly cacheKeyIdentity?: ReadonlyArray<unknown>;
+  readonly cacheKeyIdentity: ReadonlyArray<unknown> | undefined;
   /**
    * Pass-through TanStack options (`enabled`, `staleTime`, etc.). Query key
    * and queryFn are owned by this hook so the invalidation contract holds.
    */
-  readonly options: Omit<
-    UseQueryOptions<
-      ResponseOfMethod<Registry, Method>,
-      HostRpcError,
-      ResponseOfMethod<Registry, Method>
-    >,
-    "queryKey" | "queryFn"
-  > | null;
-}
-
-/**
- * Thin typed wrapper over TanStack `useQuery`.
- *
- * Emits a request through the bound `HostClient` every time the active
- * host id changes - `["host", hostId, method, params]` is what
- * `HostClient` invalidates, so the query refetches automatically when the
- * client announces a host/auth/availability transition. When no client is
- * bound (or readiness has not yet settled) the query is disabled to avoid a
- * `HostRpcError` blast.
- */
-export function useHostQuery<
-  Registry extends VersionedRpcRegistry,
-  Method extends keyof Registry & string,
->(
-  args: UseHostQueryOptions<Registry, Method>,
-): UseQueryResult<ResponseOfMethod<Registry, Method>, HostRpcError> {
-  return useHostQueryWithResponseMap<
-    Registry,
-    Method,
-    ResponseOfMethod<Registry, Method>
-  >({
-    ...args,
-    mapResponse: (mapArgs) => mapArgs.response,
-  });
-}
-
-export interface UseHostQueryWithResponseMapOptions<
-  Registry extends VersionedRpcRegistry,
-  Method extends keyof Registry & string,
-  TData,
-> {
-  readonly client: HostClient<Registry> | null;
-  readonly method: Method;
-  readonly params: RequestOfMethod<Registry, Method>;
-  readonly cacheKeyIdentity?: ReadonlyArray<unknown>;
   readonly options: Omit<
     UseQueryOptions<TData, HostRpcError, TData>,
     "queryKey" | "queryFn"
@@ -107,6 +63,59 @@ export interface UseHostQueryWithResponseMapOptions<
 }
 
 /**
+ * `useHostQuery`'s options, derived from `UseHostQueryWithResponseMapOptions`
+ * (dropping `mapResponse`, which `useHostQuery` fixes to the identity) so the
+ * two option shapes can't drift out of sync. `cacheKeyIdentity` stays
+ * optional here (unlike the required-with-`undefined` field above) to match
+ * this hook's existing call sites, none of which pass it explicitly today.
+ */
+export type UseHostQueryOptions<
+  Registry extends VersionedRpcRegistry,
+  Method extends keyof Registry & string,
+> = Omit<
+  UseHostQueryWithResponseMapOptions<
+    Registry,
+    Method,
+    ResponseOfMethod<Registry, Method>
+  >,
+  "mapResponse" | "cacheKeyIdentity"
+> & {
+  readonly cacheKeyIdentity?: ReadonlyArray<unknown>;
+};
+
+/**
+ * Thin typed wrapper over TanStack `useQuery`.
+ *
+ * Emits a request through the bound `HostClient` every time the active
+ * host id changes - `["host", hostId, method, params]` is what
+ * `HostClient` invalidates, so the query refetches automatically when the
+ * client announces a host/auth/availability transition. When no client is
+ * bound (or readiness has not yet settled) the query is disabled to avoid a
+ * `HostRpcError` blast.
+ */
+export function useHostQuery<
+  Registry extends VersionedRpcRegistry,
+  Method extends keyof Registry & string,
+>(
+  args: UseHostQueryOptions<Registry, Method>,
+): UseQueryResult<ResponseOfMethod<Registry, Method>, HostRpcError> {
+  return useHostQueryWithResponseMap<
+    Registry,
+    Method,
+    ResponseOfMethod<Registry, Method>
+  >({
+    ...args,
+    // An optional property (`UseHostQueryOptions.cacheKeyIdentity`) isn't
+    // assignable to the target's required-but-possibly-`undefined` field by
+    // spreading alone - passed through explicitly instead. The `?? []`
+    // fallback that actually handles the `undefined` case lives in
+    // `useHostQueryWithResponseMap`'s `queryKey` construction below.
+    cacheKeyIdentity: args.cacheKeyIdentity,
+    mapResponse: (mapArgs) => mapArgs.response,
+  });
+}
+
+/**
  * `useHostQuery` generalized with a caller-supplied response-to-cache
  * transform. See `UseHostQueryWithResponseMapOptions.mapResponse` for why
  * this exists instead of a plain `select` (which never persists back into
@@ -122,10 +131,6 @@ export function useHostQueryWithResponseMap<
   const { client, method, params, mapResponse } = args;
   const queryClient = useQueryClient();
   const readiness = useReactiveHostReadiness(client);
-  const enabledFromOptions =
-    args.options === null || args.options.enabled === undefined
-      ? true
-      : Boolean(args.options.enabled);
   const baseOptions = args.options ?? {};
   const queryKey: QueryKey = [
     ...queryKeys.hostMethod<Registry, Method>(readiness.hostId, method, params),
@@ -145,7 +150,16 @@ export function useHostQueryWithResponseMap<
       ...baseOptions,
       queryKey,
       queryFn: request,
-      enabled: enabledFromOptions && client !== null && readiness.isReady,
+      // A function-form `enabled` must still be evaluated per-query - not
+      // collapsed to a boolean up front - or a caller's dynamic condition is
+      // silently replaced by "always true" the moment a client is bound.
+      enabled: (query) => {
+        if (client === null || !readiness.isReady) return false;
+        const callerEnabled = args.options?.enabled;
+        return typeof callerEnabled === "function"
+          ? callerEnabled(query)
+          : (callerEnabled ?? true);
+      },
     }),
   );
 }

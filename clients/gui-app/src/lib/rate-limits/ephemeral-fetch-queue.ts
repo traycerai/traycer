@@ -12,6 +12,7 @@ import {
   type ProviderRateLimitEnvelope,
   type RateLimitUsageResponse,
 } from "@/lib/rate-limits/rate-limit-envelope";
+import { EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS } from "@/lib/rate-limits/rate-limit-timing";
 
 /**
  * Shared serial fetch lane for the `ephemeralProcess` rate-limit providers
@@ -64,11 +65,10 @@ const drainingListeners = new Set<() => void>();
  * cause is a server-side 429 on Anthropic's usage endpoint with multi-minute
  * penalty windows; a retry-once (narrowed to the OTHER arm on the host side)
  * plus continued polling on this arm can keep re-tripping the same limit. This
- * cool-down, matching `EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS`
- * (`rate-limit-queue-provider.tsx`) by value - effectively "skip the next
- * automatic poll" - lets a tripped window drain instead. Duplicated as a
- * literal rather than imported to avoid a cross-module import cycle
- * (`rate-limit-queue-provider.tsx` already imports from this module).
+ * cool-down, sourced from `EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS`
+ * (`rate-limit-timing.ts`, shared with `rate-limit-queue-provider.tsx`'s poll
+ * interval so the two can't drift) - effectively "skip the next automatic
+ * poll" - lets a tripped window drain instead.
  *
  * Scoped to `usage_fetch_failed` specifically, NOT the other transient
  * reasons the view-state retention treatment covers (`timeout`,
@@ -79,10 +79,14 @@ const drainingListeners = new Set<() => void>();
  * always single-shot with no retry loop of its own, so it can't itself
  * re-trip a tripped limit the way continued automatic polling can.
  */
-const USAGE_FETCH_FAILURE_COOLDOWN_MS = 5 * 60 * 1000;
+const USAGE_FETCH_FAILURE_COOLDOWN_MS = EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS;
 
 // Per-provider cool-down expiry (epoch ms), set after a `usage_fetch_failed`
 // resolution and cleared once a later fetch resolves with anything else.
+// Keyed only by provider id (not host) because the queue itself only ever
+// serves one host at a time - `configureRateLimitQueue` clears this map
+// whenever the bound host actually changes, so a cool-down never survives a
+// swap to a different host's identically-named provider.
 const cooldownUntil = new Map<RateLimitProviderId, number>();
 
 /**
@@ -130,10 +134,21 @@ function notifyDraining(): void {
  * Bind (or, with `null`, unbind) the queue to the default host. Called once
  * from an app-shell `useEffect` that re-runs on default-host / client change,
  * and passes `null` on host loss so a stale client can't service an enqueue.
+ *
+ * Clears `cooldownUntil` whenever the bound host id actually changes (not on
+ * every call - a client/queryClient identity change with the same host id
+ * must not reset a live cool-down). `cooldownUntil` is keyed only by
+ * provider id, not host id, so without this a `usage_fetch_failed` cool-down
+ * picked up on one host would otherwise keep suppressing automatic polling
+ * for the same-named provider (e.g. `claude-code`) after switching to a
+ * different host.
  */
 export function configureRateLimitQueue(
   next: RateLimitQueueConfig | null,
 ): void {
+  const previousHostId = deps?.hostId ?? null;
+  const nextHostId = next?.hostId ?? null;
+  if (previousHostId !== nextHostId) cooldownUntil.clear();
   deps = next;
 }
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ProviderRateLimits } from "@traycer/protocol/host";
-import type { ProviderRateLimitEnvelope } from "@/lib/rate-limits/rate-limit-envelope";
+import { envelopeFromRateLimits } from "@/lib/rate-limits/__tests__/rate-limit-envelope-fixtures";
 import {
   formatUnavailableReason,
   resolvePopoverProviderRateLimitState,
@@ -29,10 +29,8 @@ const UNAVAILABLE: ProviderRateLimits = {
 };
 
 /** A fresh, cold-start envelope wrapping a single response - no previous fetch. */
-function envelopeOf(data: ProviderRateLimits): ProviderRateLimitEnvelope {
-  return data.available
-    ? { latest: data, lastGood: data, lastGoodAt: 1_000, lastFailureAt: null }
-    : { latest: data, lastGood: null, lastGoodAt: null, lastFailureAt: null };
+function envelopeOf(data: ProviderRateLimits) {
+  return envelopeFromRateLimits(data, 1_000);
 }
 
 describe("formatUnavailableReason", () => {

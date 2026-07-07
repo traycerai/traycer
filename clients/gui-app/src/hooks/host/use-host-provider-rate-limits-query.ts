@@ -49,6 +49,7 @@ export function useHostProviderRateLimitsQuery(
     ProviderRateLimitEnvelope
   >({
     client,
+    cacheKeyIdentity: undefined,
     ...providerRateLimitQueryOptions(providerId),
     mapResponse: mapResponseToProviderRateLimitEnvelope,
   });

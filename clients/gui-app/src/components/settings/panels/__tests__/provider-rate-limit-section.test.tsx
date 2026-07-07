@@ -9,6 +9,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderRateLimits } from "@traycer/protocol/host";
 import type { ProviderRateLimitEnvelope } from "@/lib/rate-limits/rate-limit-envelope";
+import { envelopeFromRateLimits } from "@/lib/rate-limits/__tests__/rate-limit-envelope-fixtures";
 import { formatResetDateTime } from "@/lib/relative-time";
 
 const mocks = vi.hoisted(() => ({
@@ -25,14 +26,7 @@ const mocks = vi.hoisted(() => ({
 // production `mapResponseToProviderRateLimitEnvelope` wrapper would produce
 // for a provider's first successful pull.
 function envelope(data: ProviderRateLimits): ProviderRateLimitEnvelope {
-  return data.available
-    ? {
-        latest: data,
-        lastGood: data,
-        lastGoodAt: Date.now(),
-        lastFailureAt: null,
-      }
-    : { latest: data, lastGood: null, lastGoodAt: null, lastFailureAt: null };
+  return envelopeFromRateLimits(data, Date.now());
 }
 
 vi.mock("@/hooks/host/use-host-provider-rate-limits-query", () => ({

@@ -15,6 +15,7 @@ import type {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
 import { queryKeys } from "@/lib/query-keys";
+import { hostClientUnavailableError } from "@/hooks/host/use-host-query";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 
 export interface HostRequestSpec<
@@ -111,7 +112,9 @@ export function useHostQueriesWithResponseMap<
       );
       const fetcher = async (): Promise<TData> => {
         if (client === null) {
-          return Promise.reject<TData>(new Error("Host client unavailable"));
+          return Promise.reject<TData>(
+            hostClientUnavailableError(request.method),
+          );
         }
         const response = await client.request(request.method, request.params);
         return mapResponse({ response, queryClient, queryKey });
