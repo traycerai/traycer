@@ -32,6 +32,7 @@
     "@tailwindcss/typography": "catalog:",
     "@tanstack/react-query": "catalog:",
     "@tanstack/react-router": "catalog:",
+    "@tanstack/react-virtual": "catalog:",
     "@tiptap/core": "catalog:",
     "@tiptap/extension-blockquote": "catalog:",
     "@tiptap/extension-code-block-lowlight": "catalog:",

@@ -291,6 +291,7 @@ function bindingForEntry(
         setupExitCode: null,
         setupFailedAt: null,
         createdAt: 10,
+        ownedSubmodules: [],
       },
     ],
   };

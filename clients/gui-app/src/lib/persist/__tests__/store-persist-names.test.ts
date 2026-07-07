@@ -12,6 +12,7 @@ import { useLeftPanelStore } from "@/stores/epics/left-panel-store";
 import { useFileTreeStore } from "@/stores/file-tree/file-tree-store";
 import { useHistorySearchStore } from "@/stores/home/history-search-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import { useRateLimitPopoverStore } from "@/stores/rate-limits/rate-limit-popover-store";
 import { useHostUpdateBannerStore } from "@/stores/settings/host-update-banner-store";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { useLocalSnapshotClearStore } from "@/stores/settings/local-snapshot-clear-store";
@@ -46,7 +47,7 @@ interface StorePersistHandle {
 const STORE_PERSIST_NAME_CASES: ReadonlyArray<
   [label: string, store: StorePersistHandle, expectedName: string]
 > = [
-  // ── 16 static singletons ─────────────────────────────────────────────────
+  // ── 17 static singletons ─────────────────────────────────────────────────
   [
     "useCommandPaletteStore",
     useCommandPaletteStore,
@@ -92,6 +93,11 @@ const STORE_PERSIST_NAME_CASES: ReadonlyArray<
     "useSettingsSectionStore",
     useSettingsSectionStore,
     "traycer-gui-app:settings-section",
+  ],
+  [
+    "useRateLimitPopoverStore",
+    useRateLimitPopoverStore,
+    "traycer-gui-app:rate-limit-popover",
   ],
   ["useTabsStore", useTabsStore, "traycer-gui-app:tabs"],
   [

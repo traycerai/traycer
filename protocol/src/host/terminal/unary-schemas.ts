@@ -96,22 +96,6 @@ export type CreateTerminalResponse = z.infer<
   typeof createTerminalResponseSchema
 >;
 
-// `terminal.defaultCwd@1.0` - returns the host-owned fallback cwd for raw
-// terminal launches that are not attached to a workspace row.
-export const terminalDefaultCwdRequestSchema = z.object({
-  epicId: z.string().min(1),
-});
-export type TerminalDefaultCwdRequest = z.infer<
-  typeof terminalDefaultCwdRequestSchema
->;
-
-export const terminalDefaultCwdResponseSchema = z.object({
-  cwd: z.string().min(1),
-});
-export type TerminalDefaultCwdResponse = z.infer<
-  typeof terminalDefaultCwdResponseSchema
->;
-
 // `terminal.kill@1.0` - terminates a session and evicts it from the host's
 // in-memory map. Returns `killed: false` only if the session was already
 // missing or had completed its grace period.

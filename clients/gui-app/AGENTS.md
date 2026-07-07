@@ -143,6 +143,16 @@ backend calls, no ad-hoc try/catch + `toast.error` orchestration in components.
   `@core/*`, `@traycer-clients/shared/*`, and `@traycer/protocol/*` instead of
   manual `../../..` paths.
 
+- Structured perf telemetry (separate from the human log) goes through
+  `src/lib/perf/perf-telemetry.ts` `logPerfEvent(name, fields)`. It prints a
+  `[traycer-perf]` console line the desktop shell appends to a dedicated
+  machine-parseable file, `<Electron userData>/traycer-perf.ndjson` (rotates to
+  `.ndjson.1` at ~5 MB), instead of `traycer-desktop.log`. Enable with
+  `localStorage["traycer:perf:telemetry"] = "1"` (on by default in dev, off in
+  tests, opt-in in prod). Sibling gated probes: `main-thread-block-probe.ts`
+  (`traycer:perf:mainthread`) and `terminal-load-perf.ts`
+  (`traycer:perf:terminal`).
+
 - Keep query-key management centralized. Define durable query-key builders in a
   dedicated `src/lib/query-keys/` area and expose them through a barrel export,
   rather than rebuilding key shapes ad hoc in components, hooks, or tests.

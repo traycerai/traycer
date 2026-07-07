@@ -87,7 +87,6 @@ export const releasedMethodNames: readonly string[] = [
   "speech.ensureModel",
   "speech.getModelStatus",
   "terminal.create",
-  "terminal.defaultCwd",
   "terminal.kill",
   "terminal.list",
   "terminal.rename",

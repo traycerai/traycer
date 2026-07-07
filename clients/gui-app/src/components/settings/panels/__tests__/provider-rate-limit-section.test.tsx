@@ -188,9 +188,7 @@ describe("ProviderRateLimitForProvider", () => {
     expect(screen.getByText(/^Resets in /)).toBeTruthy();
   });
 
-  it("colors a window's bar yellow at/above 60% used and red above 85% used", () => {
-    // The Settings card now shares the same four-tier severity scale as the
-    // popover (item 6 feedback: "different UX looks weird").
+  it("keeps usage blue through 85% and red above 85% used", () => {
     mocks.data = envelope({
       ...CLAUDE_RATE_LIMITS,
       fiveHour: {
@@ -208,13 +206,14 @@ describe("ProviderRateLimitForProvider", () => {
       <ProviderRateLimitForProvider providerId="claude-code" />,
     );
 
-    expect(container.querySelectorAll(".bg-yellow-500").length).toBeGreaterThan(
+    expect(container.querySelectorAll(".bg-yellow-500").length).toBe(0);
+    expect(container.querySelectorAll(".bg-blue-500").length).toBeGreaterThan(
       0,
     );
     expect(container.querySelectorAll(".bg-red-500").length).toBeGreaterThan(0);
   });
 
-  it("keeps the bar blue below the yellow threshold", () => {
+  it("keeps the bar blue below the red threshold", () => {
     mocks.data = envelope(CLAUDE_RATE_LIMITS);
     const { container } = render(
       <ProviderRateLimitForProvider providerId="claude-code" />,

@@ -56,6 +56,23 @@ export const worktreeSetupStateSchema = z.enum([
 ]);
 export type WorktreeSetupState = z.infer<typeof worktreeSetupStateSchema>;
 
+/**
+ * A submodule branch a worktree binding OWNS - recorded at creation, after the
+ * setup script checks each submodule out on a branch matching the parent
+ * worktree. This is the *owned* set (what the binding created), distinct from
+ * whatever live checkout state a later probe discovers. It exists so the Task
+ * merge-rollup can require every owned branch - the superproject binding branch
+ * AND each submodule branch - to have landed (True AND). A detached / pinned
+ * submodule with no branch is not owned and never recorded here.
+ */
+export const worktreeOwnedSubmoduleSchema = z.object({
+  repoIdentifier: repoIdentifierSchema,
+  branch: z.string(),
+});
+export type WorktreeOwnedSubmodule = z.infer<
+  typeof worktreeOwnedSubmoduleSchema
+>;
+
 export const worktreeBindingEntrySchema = z.object({
   workspacePath: z.string(),
   mode: worktreeBindingEntryModeSchema,
@@ -69,6 +86,17 @@ export const worktreeBindingEntrySchema = z.object({
   setupExitCode: z.number().int().nullable(),
   setupFailedAt: z.number().nullable(),
   createdAt: z.number(),
+  // Submodule branches this worktree owns (see `worktreeOwnedSubmoduleSchema`).
+  // `[]` when the repo has no submodules, or none were checked out on a branch.
+  // Optional on the wire: this entry shape is embedded, unversioned, in many
+  // already-released response/stream payloads (worktree.create,
+  // worktree.getBinding, worktree.import, worktree.retrySetup,
+  // worktree.setEntryMode, workspaceBinding.removeEntry, chat.subscribe), so a
+  // released host that predates this field simply omits the key - it must not
+  // become a required-field wire break. The host's own binding-v1->v2
+  // persistence migration still backfills `[]` on every locally-read row, so a
+  // current host always produces a concrete array in practice.
+  ownedSubmodules: z.array(worktreeOwnedSubmoduleSchema).optional(),
 });
 export type WorktreeBindingEntry = z.infer<typeof worktreeBindingEntrySchema>;
 
@@ -573,6 +601,195 @@ export type WorktreeListAllForHostResponse = z.infer<
 >;
 
 /**
+ * One persisted `WorktreeBindingV1` reference that points at a host worktree,
+ * joined into the v1.1 listing so callers can see WHICH epics/sessions still
+ * reference a path. An empty `owners` array on an entry means no binding
+ * references it ("unreferenced" - distinct from the disk-orphan `gitRemovable:
+ * false` signal). `updatedAt` is the binding row's last-touch stamp, one of the
+ * inputs to the derived `lastActivityAt`.
+ */
+export const worktreeHostEntryOwnerSchema = z.object({
+  epicId: z.string(),
+  ownerKind: worktreeBindingOwnerKindSchema,
+  ownerId: z.string(),
+  updatedAt: z.number(),
+});
+export type WorktreeHostEntryOwner = z.infer<
+  typeof worktreeHostEntryOwnerSchema
+>;
+
+/**
+ * Best-effort branch position for a worktree, probed only when the v1.1 request
+ * sets `includeActivity: true`. Present whenever the default branch resolves -
+ * `mergedIntoDefault` is derived from LOCAL ancestry and needs no upstream, so a
+ * never-pushed branch still gets a real object. `ahead`/`behind` are the
+ * upstream diff and go `null` when the branch has no upstream to diff against
+ * (they say nothing about merged state - read `mergedIntoDefault` for that).
+ * The whole object is `null` only when the position can't be probed at all: a
+ * detached HEAD, or an unresolvable default branch (see `branchStatus` on the
+ * v1.1 entry). A failed probe never fails the listing.
+ */
+export const worktreeBranchStatusSchema = z.object({
+  // Commits on HEAD not on its upstream / on upstream not on HEAD. `null` when
+  // the branch has no upstream (never pushed) - "unknown position", never
+  // "zero". `mergedIntoDefault` is the independent, upstream-free signal.
+  ahead: z.number().int().nonnegative().nullable(),
+  behind: z.number().int().nonnegative().nullable(),
+  // `merge-base --is-ancestor HEAD <default>`: the branch's HEAD is fully
+  // contained in the repo's default branch, so removing the worktree loses no
+  // unmerged commits. Computed from LOCAL ancestry - independent of any
+  // upstream - so it holds even for a never-pushed branch.
+  mergedIntoDefault: z.boolean(),
+});
+export type WorktreeBranchStatus = z.infer<typeof worktreeBranchStatusSchema>;
+
+/**
+ * GitHub PR merge state for a branch, as discovered by the host's best-effort
+ * local `gh` probe. `"none"` is the catch-all no-green state: EITHER the probe
+ * ran and found no PR, OR the probe could not run at all (`gh` absent / unauth /
+ * timed out / errored) - the host cannot distinguish these via its string-only
+ * runner, so both collapse to `"none"` (a short-TTL negative). The entry
+ * `prState` is `null` only when the branch was NOT probed (e.g.
+ * `includeActivity: false`). Either way PR data contributes no green and the
+ * classifier degrades to the local-ancestry and at-base signals, never an error.
+ */
+export const worktreePrStateSchema = z.enum([
+  "merged",
+  "open",
+  "closed",
+  "none",
+]);
+export type WorktreePrState = z.infer<typeof worktreePrStateSchema>;
+
+/**
+ * Per-owned-submodule merge facts, joined onto a v1.1 listing entry so the Task
+ * merge-rollup (True AND across the superproject and every owned submodule) is
+ * pure client work. Mirrors the superproject's PR fields plus the local-ancestry
+ * `mergedIntoDefault`. `mergedHeadShaMatches` is the host's live-HEAD comparison
+ * (submodule HEAD === the merged head SHA) so the pure client classifier never
+ * needs the SHA itself.
+ */
+export const worktreeSubmoduleMergeFactSchema = z.object({
+  repoIdentifier: repoIdentifierSchema,
+  branch: z.string(),
+  prState: worktreePrStateSchema.nullable(),
+  prNumber: z.number().int().nullable(),
+  prUrl: z.string().nullable(),
+  mergedHeadShaMatches: z.boolean(),
+  mergedIntoDefault: z.boolean(),
+});
+export type WorktreeSubmoduleMergeFact = z.infer<
+  typeof worktreeSubmoduleMergeFactSchema
+>;
+
+/**
+ * `worktree.listAllForHost` v1.1 entry. Adds the staleness signals the
+ * housekeeping skill and the Settings ▸ Worktrees tab use, on top of every
+ * v1.0 field.
+ *
+ * `includeActivity` gates ONLY the git probes - `lastActivityAt` and
+ * `branchStatus` - which carry the per-worktree cost; both are `null` when the
+ * flag is `false`. The other two fields are cheap and ALWAYS populated,
+ * regardless of the flag:
+ *  - `owners` - a SQLite binding-table read (the same join `ensureIndexHydrated`
+ *    already performs). Consumers rely on this being present even with
+ *    `includeActivity: false`: the Task-delete dialog derives "unreferenced"
+ *    worktrees purely from `owners` (owner set ⊆ the deleted epics, and
+ *    `!inUse`) with no activity probes at all.
+ *  - `createdAt` - a single fs stat (worktree dir birthtime).
+ */
+export const worktreeHostEntrySchemaV11 = worktreeHostEntrySchema.extend({
+  // max(git HEAD reflog last entry, binding `updatedAt` for this path).
+  // Derived, never persisted. `null` when `includeActivity` is false or no
+  // signal is available.
+  lastActivityAt: z.number().nullable(),
+  // Persisted `WorktreeBindingV1` rows (this host) whose effective directory is
+  // this worktree. `[]` = unreferenced.
+  owners: z.array(worktreeHostEntryOwnerSchema),
+  // `null` when detached / default branch unresolvable / probe failed /
+  // `includeActivity` false. A never-pushed branch is NOT null here: its
+  // `mergedIntoDefault` is proved from local ancestry (with `ahead`/`behind`
+  // null). Null therefore means "position unknown", never "no upstream".
+  branchStatus: worktreeBranchStatusSchema.nullable(),
+  // Worktree dir birthtime (fs stat) - a fallback age signal. `null` when stat
+  // is unavailable.
+  createdAt: z.number().nullable(),
+  // Superproject PR facts from the host's best-effort `gh` probe. When the
+  // branch WAS probed but no green PR resulted - no PR found, or `gh`
+  // absent/unauth/failed (indistinguishable to the host) - `prState` is `"none"`
+  // and `prNumber`/`prUrl` are `null`. `prState` is `null` only when the branch
+  // was NOT probed (`includeActivity: false`). `mergedHeadShaMatches` is the
+  // host's live-HEAD comparison (HEAD === the merged head SHA) - the pure client
+  // classifier greens `Merged (PR)` on `prState === "merged" &&
+  // mergedHeadShaMatches`, so it never needs the SHA. `false` whenever unproven.
+  prState: worktreePrStateSchema.nullable(),
+  prNumber: z.number().int().nullable(),
+  prUrl: z.string().nullable(),
+  mergedHeadShaMatches: z.boolean(),
+  // Per-owned-submodule merge facts for the True-AND Task rollup. `[]` when the
+  // worktree owns no submodule branches or `includeActivity` is false.
+  submodules: z.array(worktreeSubmoduleMergeFactSchema),
+  // Host-computed "At base commit" signal: the worktree is untouched - clean,
+  // its HEAD is contained in the default branch, and its HEAD reflog carries no
+  // authored-`commit` entry. Derived retroactively from signals available for
+  // EVERY worktree (no creation-time anchor), so it works for pre-existing and
+  // imported worktrees too:
+  //   `uncommittedCount === 0 && branchStatus.mergedIntoDefault === true &&
+  //    hasReflogCommits === false`.
+  // `mergedIntoDefault` is the REQUIRED safety floor (HEAD contained in default
+  // ⇒ deleting loses nothing); the reflog-no-`commit` guard only splits the
+  // LABEL (an untouched worktree reads "At base commit" instead of "Merged").
+  // The pure client classifier greens "At base commit" on this boolean alone.
+  // FAILS CLOSED: an unknown reflog (`null`) is NOT at-base. `false` whenever
+  // unproven: dirty, HEAD not contained in default, an authored-commit reflog
+  // entry, or `includeActivity` false (the probes are gated).
+  atBaseCommit: z.boolean(),
+});
+export type WorktreeHostEntryV11 = z.infer<typeof worktreeHostEntrySchemaV11>;
+
+/**
+ * `worktree.listAllForHost` v1.1 request. Adds `includeActivity`: the git
+ * probes (reflog, ahead/behind, merged) add per-worktree cost, so the Settings
+ * tab passes `false` (or stays on v1.0) to keep the panel snappy while the
+ * housekeeping CLI passes `true`. Probes run concurrently, best-effort - a
+ * failed probe yields `null`, never fails the listing. The flag gates ONLY
+ * these git probes (`lastActivityAt`, `branchStatus`); `owners` and `createdAt`
+ * are cheap and returned either way.
+ *
+ * `activityPaths` selects between two response modes, so the GUI can render the
+ * base list instantly and then lazily enrich only the rows scrolled into view
+ * instead of paying the whole-list probe cost up front:
+ *  - `activityPaths: null` (default): unchanged - return ALL worktrees, each
+ *    enriched iff `includeActivity` is true, else base-only.
+ *  - `activityPaths: [<worktreePath>, ...]`: per-viewport lazy-enrichment mode.
+ *    Return ONLY the worktrees whose path matches one of these (host-normalized
+ *    compare), each FULLY enriched - the activity probes run for them REGARDLESS
+ *    of `includeActivity`. Paths not found on disk are omitted (no error). Pass
+ *    `[]` to enrich nothing (returns no worktrees).
+ */
+export const worktreeListAllForHostRequestSchemaV11 =
+  worktreeListAllForHostRequestSchema.extend({
+    includeActivity: z.boolean(),
+    activityPaths: z.array(z.string()).nullable(),
+  });
+export type WorktreeListAllForHostRequestV11 = z.infer<
+  typeof worktreeListAllForHostRequestSchemaV11
+>;
+
+/**
+ * `worktree.listAllForHost` v1.1 response. Same `worktrees` field, enriched
+ * entry shape ({@link worktreeHostEntrySchemaV11}). Bridging down to a v1.0
+ * host yields the v1.0 entries with the new fields defaulted (empty `owners`,
+ * `null` timestamps / `branchStatus`).
+ */
+export const worktreeListAllForHostResponseSchemaV11 = z.object({
+  worktrees: z.array(worktreeHostEntrySchemaV11),
+});
+export type WorktreeListAllForHostResponseV11 = z.infer<
+  typeof worktreeListAllForHostResponseSchemaV11
+>;
+
+/**
  * Returns `null` when no row exists yet so a fresh terminal-agent
  * renders "not selected" without throwing.
  */
@@ -658,6 +875,23 @@ export const worktreeListBindingsForEpicResponseSchema = z.object({
 });
 export type WorktreeListBindingsForEpicResponse = z.infer<
   typeof worktreeListBindingsForEpicResponseSchema
+>;
+
+/**
+ * `worktree.listBindingsForEpic` v1.1 response. Adds `folderlessCwd` - the
+ * host-owned fallback cwd (the epic's root directory) for terminal launches on
+ * an epic with no bound workspace rows - so folderless epics need no dedicated
+ * RPC (the wire method-set must stay identical to v1.0.0; see the RPC
+ * backward-compat decision log). `null` only after bridging up from a v1.0
+ * host, which predates folderless workspaces; the picker then keeps its
+ * launch action disabled.
+ */
+export const worktreeListBindingsForEpicResponseSchemaV11 =
+  worktreeListBindingsForEpicResponseSchema.extend({
+    folderlessCwd: z.string().min(1).nullable(),
+  });
+export type WorktreeListBindingsForEpicResponseV11 = z.infer<
+  typeof worktreeListBindingsForEpicResponseSchemaV11
 >;
 
 export const worktreeSetRepoScriptsRequestSchema = z.object({

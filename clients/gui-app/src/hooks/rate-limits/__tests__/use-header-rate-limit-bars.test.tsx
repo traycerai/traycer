@@ -217,7 +217,7 @@ describe("useHeaderRateLimitBars", () => {
         providerId: "claude-code",
         windowLabel: "5h",
         usedPercent: 70,
-        severity: "yellow",
+        severity: "blue",
         degraded: false,
       },
     ]);
@@ -269,7 +269,7 @@ describe("useHeaderRateLimitBars", () => {
         providerId: "claude-code",
         windowLabel: "Weekly",
         usedPercent: 64,
-        severity: "yellow",
+        severity: "blue",
         degraded: false,
       },
     ]);
@@ -340,7 +340,7 @@ describe("useHeaderRateLimitBars", () => {
         providerId: "codex",
         windowLabel: "5h",
         usedPercent: 65,
-        severity: "yellow",
+        severity: "blue",
         degraded: true,
       },
       {
@@ -380,7 +380,7 @@ describe("useHeaderRateLimitBars", () => {
         providerId: "codex",
         windowLabel: "5h",
         usedPercent: 65,
-        severity: "yellow",
+        severity: "blue",
         degraded: true,
       },
       {

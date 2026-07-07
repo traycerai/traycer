@@ -363,6 +363,7 @@ function testWorktreeBinding(): WorktreeBinding {
         setupExitCode: null,
         setupFailedAt: null,
         createdAt: 1,
+        ownedSubmodules: [],
       },
     ],
   };
