@@ -871,6 +871,23 @@ export type WorktreeListBindingsForEpicResponse = z.infer<
   typeof worktreeListBindingsForEpicResponseSchema
 >;
 
+/**
+ * `worktree.listBindingsForEpic` v1.1 response. Adds `folderlessCwd` - the
+ * host-owned fallback cwd (the epic's root directory) for terminal launches on
+ * an epic with no bound workspace rows - so folderless epics need no dedicated
+ * RPC (the wire method-set must stay identical to v1.0.0; see the RPC
+ * backward-compat decision log). `null` only after bridging up from a v1.0
+ * host, which predates folderless workspaces; the picker then keeps its
+ * launch action disabled.
+ */
+export const worktreeListBindingsForEpicResponseSchemaV11 =
+  worktreeListBindingsForEpicResponseSchema.extend({
+    folderlessCwd: z.string().min(1).nullable(),
+  });
+export type WorktreeListBindingsForEpicResponseV11 = z.infer<
+  typeof worktreeListBindingsForEpicResponseSchemaV11
+>;
+
 export const worktreeSetRepoScriptsRequestSchema = z.object({
   epicId: z.string(),
   workspacePath: z.string(),

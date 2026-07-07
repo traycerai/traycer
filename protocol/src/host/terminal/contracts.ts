@@ -8,8 +8,6 @@ import {
   listTerminalsResponseSchema,
   renameTerminalRequestSchema,
   renameTerminalResponseSchema,
-  terminalDefaultCwdRequestSchema,
-  terminalDefaultCwdResponseSchema,
 } from "@traycer/protocol/host/terminal/unary-schemas";
 import {
   terminalSubscribeV10,
@@ -33,13 +31,6 @@ export const terminalKillV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: killTerminalRequestSchema,
   responseSchema: killTerminalResponseSchema,
-});
-
-export const terminalDefaultCwdV10 = defineRpcContract({
-  method: "terminal.defaultCwd",
-  schemaVersion: { major: 1, minor: 0 } as const,
-  requestSchema: terminalDefaultCwdRequestSchema,
-  responseSchema: terminalDefaultCwdResponseSchema,
 });
 
 export const terminalListV10 = defineRpcContract({
