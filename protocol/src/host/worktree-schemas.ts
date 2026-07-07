@@ -4,10 +4,10 @@
  * to the host (SQLite); cloud collaborators must not see another
  * collaborator's local paths or setup status.
  *
- * Per-entry `mode` is the single source of truth - the wire and persisted
- * shapes carry it on every binding entry, intent entry, and create/import
- * entry. There is no top-level "binding mode" or "primary workspace path"
- * because those values are derivable from `entries`.
+ * Per-entry `mode` is the source of truth for folder-backed bindings. The
+ * optional top-level `workspaceMode` only distinguishes an explicit no-folder
+ * owner binding from an old/null empty binding that should inherit the Epic's
+ * folders.
  */
 import { z } from "zod";
 
@@ -38,6 +38,14 @@ export type WorktreeBindingEntryMode = z.infer<
   typeof worktreeBindingEntryModeSchema
 >;
 
+export const worktreeBindingWorkspaceModeSchema = z.enum([
+  "inherit",
+  "folderless",
+]);
+export type WorktreeBindingWorkspaceMode = z.infer<
+  typeof worktreeBindingWorkspaceModeSchema
+>;
+
 export const worktreeSetupStateSchema = z.enum([
   "not_required",
   "pending",
@@ -65,6 +73,7 @@ export const worktreeBindingEntrySchema = z.object({
 export type WorktreeBindingEntry = z.infer<typeof worktreeBindingEntrySchema>;
 
 export const worktreeBindingSchema = z.object({
+  workspaceMode: worktreeBindingWorkspaceModeSchema.optional(),
   entries: z.array(worktreeBindingEntrySchema),
 });
 export type WorktreeBinding = z.infer<typeof worktreeBindingSchema>;

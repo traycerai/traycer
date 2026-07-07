@@ -22,6 +22,8 @@ import {
 } from "@/components/ui/popover";
 import { WorktreeFolderListBody } from "@/components/worktree/worktree-folder-list-body";
 import { WorktreePickerHostSection } from "@/components/worktree/worktree-picker-host-section";
+import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useTerminalDefaultCwd } from "@/hooks/terminal/use-terminal-default-cwd-query";
 import { useWorktreeListBindingsForEpic } from "@/hooks/worktree/use-worktree-list-bindings-for-epic-query";
 import { DEFAULT_TERMINAL_TITLE } from "@/lib/terminals/terminal-title";
 import { worktreeRowKey } from "@/lib/worktree/worktree-row-key";
@@ -40,6 +42,7 @@ export function NewTerminalPicker(props: NewTerminalPickerProps) {
   const [explicitRow, setExplicitRow] =
     useState<WorktreeBindingSelectorRow | null>(null);
   const openTileInTab = useEpicCanvasStore((s) => s.openTileInTab);
+  const activeHostId = useReactiveActiveHostId();
 
   // Gated on `isOpen` so the "+" button costs no RPC while idle; the query
   // becomes active only while the popover is open.
@@ -59,6 +62,26 @@ export function NewTerminalPicker(props: NewTerminalPickerProps) {
     () => resolveTerminalSelection(explicitRow, rows),
     [explicitRow, rows],
   );
+  const hasLoadedNoRows =
+    isOpen &&
+    !bindingsQuery.isPending &&
+    !bindingsQuery.isError &&
+    rows.length === 0;
+  const defaultCwdQuery = useTerminalDefaultCwd({
+    epicId: props.epicId,
+    enabled: hasLoadedNoRows,
+  });
+  const launchTarget = useMemo(
+    () =>
+      selectedRow === null
+        ? resolveFolderlessTerminalTarget(
+            hasLoadedNoRows,
+            activeHostId,
+            defaultCwdQuery.data?.cwd,
+          )
+        : { hostId: selectedRow.hostId, cwd: selectedRow.runningDir },
+    [activeHostId, defaultCwdQuery.data?.cwd, hasLoadedNoRows, selectedRow],
+  );
 
   // A double-click on the launch action fires twice before `setIsOpen(false)`
   // can unmount the popover, so each click would mint a fresh terminal id. This
@@ -73,24 +96,24 @@ export function NewTerminalPicker(props: NewTerminalPickerProps) {
   }, []);
 
   const handleLaunch = useCallback(() => {
-    if (hasLaunchedRef.current || selectedRow === null) return;
+    if (hasLaunchedRef.current || launchTarget === null) return;
     hasLaunchedRef.current = true;
     openTileInTab(props.tabId, {
       id: `term-${uuidv4()}`,
       instanceId: uuidv4(),
       type: "terminal",
       name: DEFAULT_TERMINAL_TITLE,
-      hostId: selectedRow.hostId,
-      cwd: selectedRow.runningDir,
+      hostId: launchTarget.hostId,
+      cwd: launchTarget.cwd,
     });
     setIsOpen(false);
-  }, [openTileInTab, props.tabId, selectedRow]);
+  }, [launchTarget, openTileInTab, props.tabId]);
 
   const handleSelectRow = useCallback((row: WorktreeBindingSelectorRow) => {
     setExplicitRow(row);
   }, []);
 
-  const launchDisabled = selectedRow === null;
+  const launchDisabled = launchTarget === null;
 
   return (
     <Popover open={isOpen} onOpenChange={handleOpenChange}>
@@ -175,4 +198,20 @@ function resolveTerminalSelection(
     if (live !== undefined) return live;
   }
   return pickDefaultTerminalRow(rows);
+}
+
+interface TerminalLaunchTarget {
+  readonly hostId: string;
+  readonly cwd: string;
+}
+
+function resolveFolderlessTerminalTarget(
+  enabled: boolean,
+  hostId: string | null,
+  cwd: string | undefined,
+): TerminalLaunchTarget | null {
+  if (!enabled || hostId === null || cwd === undefined || cwd.length === 0) {
+    return null;
+  }
+  return { hostId, cwd };
 }

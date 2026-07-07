@@ -142,6 +142,11 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
       stagingKey,
       fallbackIntent: target.workspaceSeed.intent,
     });
+    const workspaceMode =
+      target.workspaceSeed.workspace.folders.length === 0 ||
+      (worktreeIntent !== null && worktreeIntent.entries.length === 0)
+        ? "folderless"
+        : "inherit";
     if (worktreeIntent !== null) {
       useWorktreeIntentMemoryStore
         .getState()
@@ -163,6 +168,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
         title: trimmedTitle,
         chatId,
         settings,
+        workspaceMode,
         worktreeIntent,
         initialMessage: null,
         forkSource: {

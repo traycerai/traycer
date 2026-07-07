@@ -23,7 +23,10 @@ import {
   tuiHarnessIdSchema,
 } from "@traycer/protocol/host/agent/shared";
 import { getRecordSchema } from "@traycer/protocol/framework/index";
-import { worktreeIntentSchema } from "@traycer/protocol/host/worktree-schemas";
+import {
+  worktreeBindingWorkspaceModeSchema,
+  worktreeIntentSchema,
+} from "@traycer/protocol/host/worktree-schemas";
 import {
   chatRunSettingsSchema,
   userMessageSenderSchema,
@@ -341,6 +344,7 @@ export const createEpicChatSeedSchema = z.object({
   parentId: z.string().nullable(),
   hostId: z.string(),
   title: z.string(),
+  workspaceMode: worktreeBindingWorkspaceModeSchema.optional(),
   worktreeIntent: worktreeIntentSchema.nullable(),
   initialMessage: createChatInitialMessageSchema.nullable(),
 });
@@ -349,12 +353,7 @@ export type CreateEpicChatSeed = z.infer<typeof createEpicChatSeedSchema>;
 export const createEpicRequestSchema = z.object({
   epic: epicLightSchema,
   repoIdentifiers: z.array(taskRepoIdentifierSchema),
-  // Enforced server-side by the RPC dispatcher's request-schema parse, so a
-  // missed UI gate can never create a workspace-less epic (rejected with 400
-  // before the resolver runs).
-  workspaces: z
-    .array(createEpicWorkspaceIdentifierSchema)
-    .min(1, "epic.create requires at least one workspace."),
+  workspaces: z.array(createEpicWorkspaceIdentifierSchema),
   // The first chat, folded into the epic create so it is seeded into the same
   // in-memory Y.Doc atomically and the provider turn can be scheduled without an
   // extra create-chat round trip. Absent / `null` for epic-only creates
@@ -843,6 +842,7 @@ export const createChatRequestSchema = z.object({
   // `tuiAgentSchema.hostId` contract).
   hostId: z.string(),
   title: z.string(),
+  workspaceMode: worktreeBindingWorkspaceModeSchema.optional(),
   // Client-supplied. The host resolver is idempotent on this id.
   chatId: z.string(),
   // Optional per-chat run settings to stamp on the new chat. Existing callers
@@ -930,6 +930,7 @@ export const createTuiAgentRequestSchema = z.object({
   terminalShellArgs: z.array(z.string()).nullable().catch(null),
   hostId: z.string(),
   workspaceFolders: z.array(z.string()),
+  workspaceMode: worktreeBindingWorkspaceModeSchema.optional(),
   model: z.string().nullable(),
   reasoningEffort: z.string().nullable().default(null),
   agentMode: agentModeSchema,

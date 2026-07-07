@@ -26,6 +26,14 @@ vi.mock("@/hooks/worktree/use-worktree-list-bindings-for-epic-query", () => ({
   useWorktreeListBindingsForEpic: () => bindingsQuery.current,
 }));
 
+vi.mock("@/hooks/terminal/use-terminal-default-cwd-query", () => ({
+  useTerminalDefaultCwd: () => ({
+    data: { cwd: "/Users/tgill" },
+    isPending: false,
+    isError: false,
+  }),
+}));
+
 function stubLoadedBindings(): void {
   bindingsQuery.current = {
     data: {
@@ -237,6 +245,29 @@ describe("<NewTerminalPicker />", () => {
     expect(
       screen.getByRole("button", { name: "Launch" }).hasAttribute("disabled"),
     ).toBe(true);
+  });
+
+  it("launches a terminal in the host default cwd when no workspaces are bound", () => {
+    bindingsQuery.current = {
+      data: { rows: [] },
+      isPending: false,
+      isError: false,
+    };
+    const tabId = openPicker();
+
+    expect(screen.getByText("No worktrees found.")).toBeDefined();
+    expect(
+      screen.getByRole("button", { name: "Launch" }).hasAttribute("disabled"),
+    ).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "Launch" }));
+
+    const terminals = tabTiles(tabId).filter(
+      (tile) => tile.type === "terminal",
+    );
+    expect(terminals).toHaveLength(1);
+    expect(terminals[0].hostId).toBe("host-1");
+    expect(terminals[0].cwd).toBe("/Users/tgill");
   });
 
   it("selects a workspace without creating a terminal on a single click", () => {

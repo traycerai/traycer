@@ -163,6 +163,10 @@ function buildCreateChatRequest(
     // the empty store only while it is still empty.
     title: "",
     chatId: uuidv4(),
+    workspaceMode:
+      worktreeIntent !== null && worktreeIntent.entries.length === 0
+        ? "folderless"
+        : "inherit",
     worktreeIntent,
   };
 }

@@ -182,6 +182,11 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
         forkSourceHarnessSessionId: sourceSessionId,
         onStatusChange: setStatus,
         worktreeIntent,
+        workspaceMode:
+          target.workspaceSeed.workspace.folders.length === 0 ||
+          (worktreeIntent !== null && worktreeIntent.entries.length === 0)
+            ? "folderless"
+            : "inherit",
         terminalAgentArgs: argsTouched
           ? argsDraft
           : target.sourceAgent.terminalAgentArgs,

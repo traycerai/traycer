@@ -130,6 +130,17 @@ export function deriveResolvedWorkspaceAvailability(
   return WORKSPACE_COMPOSER_READY;
 }
 
+export function deriveFolderlessAllowedWorkspaceAvailability(
+  folders: ReadonlyArray<ResolvedFolder>,
+  isResolving: boolean,
+): WorkspaceComposerAvailability {
+  if (isResolving) return WORKSPACE_COMPOSER_CHECKING;
+  if (folders.some((folder) => folder.kind === "unresolved")) {
+    return WORKSPACE_COMPOSER_UNRESOLVED;
+  }
+  return WORKSPACE_COMPOSER_READY;
+}
+
 export function deriveWorktreeBindingWorkspaceAvailability(
   binding: WorktreeBinding | null,
   bindingResolved: boolean,
@@ -149,6 +160,9 @@ export function deriveWorktreeBindingWorkspaceAvailability(
       disabledHint: worktreeMissingComposerHint(missingWorktreePaths),
       missingWorkspacePaths: missingWorktreePaths,
     };
+  }
+  if (binding?.workspaceMode === "folderless") {
+    return WORKSPACE_COMPOSER_READY;
   }
   // An explicit per-chat binding (local or worktree) is directly runnable.
   if (binding !== null && binding.entries.length > 0) {

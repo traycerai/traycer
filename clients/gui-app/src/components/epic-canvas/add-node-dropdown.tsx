@@ -335,6 +335,11 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
       agentMode,
       terminalAgentArgs: argsTouched ? argsDraft : null,
       worktreeIntent,
+      workspaceMode:
+        workspaceSeed?.workspace.folders.length === 0 ||
+        (worktreeIntent !== null && worktreeIntent.entries.length === 0)
+          ? "folderless"
+          : "inherit",
     });
   }, [
     agentMode,

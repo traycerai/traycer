@@ -56,6 +56,7 @@ interface ChatComposerProps {
   readonly isActive: boolean;
   readonly sendDisabled: boolean | undefined;
   readonly mentionRoots: ReadonlyArray<string> | null;
+  readonly fallbackToGlobalMentionRoots: boolean;
   readonly currentEpicId: string | null;
   readonly settingsSeed: ChatRunSettings | null;
   readonly fallbackSettingsSeed: ChatRunSettings | null;
@@ -118,6 +119,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     isActive,
     sendDisabled,
     mentionRoots,
+    fallbackToGlobalMentionRoots,
     currentEpicId,
     settingsSeed,
     fallbackSettingsSeed,
@@ -137,7 +139,10 @@ function ChatComposerImpl(props: ChatComposerProps) {
     topSpacing,
     topSlot,
   } = props;
-  const resolvedMentionRoots = useWorkspaceMentionRoots(mentionRoots, true);
+  const resolvedMentionRoots = useWorkspaceMentionRoots(
+    mentionRoots,
+    fallbackToGlobalMentionRoots,
+  );
   const hostClient = useTabHostClient();
   const workspaceBlocked = !workspaceComposerCanStart(workspaceAvailability);
 

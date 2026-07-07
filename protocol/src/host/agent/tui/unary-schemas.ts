@@ -4,6 +4,7 @@ import {
   tuiHarnessIdSchema,
 } from "@traycer/protocol/host/agent/shared";
 import { GENERATE_TITLE_SOURCE_TEXT_MAX_CHARS } from "@traycer/protocol/host/epic/unary-schemas";
+import { worktreeBindingWorkspaceModeSchema } from "@traycer/protocol/host/worktree-schemas";
 
 // ─── Catalog rows (per-surface) ───────────────────────────────────────────
 //
@@ -86,6 +87,7 @@ export const prepareTuiLaunchRequestSchema = z.object({
   // the persisted per-agent value, which is either that durable override or
   // `null` when no override was captured.
   terminalAgentArgs: z.string().nullable().default(null),
+  workspaceMode: worktreeBindingWorkspaceModeSchema.optional(),
   // When non-null, prepare a fork from this upstream provider session and
   // return/open the newly forked session. This is distinct from
   // `harnessSessionId`: the source id must not be persisted on the new agent.

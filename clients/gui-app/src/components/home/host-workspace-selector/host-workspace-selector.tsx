@@ -990,12 +990,8 @@ function emitHomeRowMode(input: {
 function removeDisabledReasonFor(
   isOwnerActive: boolean,
   activeRunNotice: string,
-  isLastFolder: boolean,
 ): string | null {
   if (isOwnerActive) return activeRunNotice;
-  if (isLastFolder) {
-    return "Keep at least one folder linked — add another before removing this one.";
-  }
   return null;
 }
 
@@ -1770,16 +1766,10 @@ function InEpicSurface(props: InEpicSurfaceProps) {
           hostClient: props.hostClient,
           modeDisabled: activeRunLocksBinding,
           modeDisabledReason: activeRunLocksBinding ? activeRunNotice : null,
-          // Never let the picker empty the binding: T2's invariant is that every
-          // owner always has ≥1 folder, and T3.1's chip empty-state treats an
-          // empty list as "still loading". Removing the last row is blocked here
-          // (the host-side remove-last guard is the authoritative backstop, T4).
-          removeDisabled:
-            activeRunLocksBinding || removePending || workspaces.length <= 1,
+          removeDisabled: activeRunLocksBinding || removePending,
           removeDisabledReason: removeDisabledReasonFor(
             activeRunLocksBinding,
             activeRunNotice,
-            workspaces.length <= 1,
           ),
           removePending,
           onEmit: emit,

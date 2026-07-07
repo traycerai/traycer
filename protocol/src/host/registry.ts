@@ -112,6 +112,7 @@ import {
 } from "@traycer/protocol/host/workspace/contracts";
 import {
   terminalCreateV10,
+  terminalDefaultCwdV10,
   terminalKillV10,
   terminalListV10,
   terminalRenameV10,
@@ -2074,6 +2075,18 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
       versions: {
         0: {
           contract: terminalKillV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "terminal.defaultCwd": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: terminalDefaultCwdV10,
           upgradeFromPreviousVersion: null,
         },
       },
