@@ -132,6 +132,7 @@ import {
   type ComposerRunSettingsEntry,
 } from "@/stores/composer/composer-run-settings-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import { useAnySystemOverlayActive } from "@/stores/tabs/use-system-tab-modal";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import {
   makeSnapshotCumulativeBundleDiffTile,
@@ -483,6 +484,7 @@ function messageIdForBlock(
 function ChatTileSessionView(props: ChatTileSessionViewProps) {
   const view = useChatTileSessionViewModel(props);
   const hostId = useTabHostId();
+  const systemOverlayActive = useAnySystemOverlayActive();
   const openPreview = useEpicCanvasStore((s) => s.openTilePreviewInTab);
   const openPinned = useEpicCanvasStore((s) => s.openTileInTab);
   const [backgroundScrollRequest, setBackgroundScrollRequest] =
@@ -599,6 +601,7 @@ function ChatTileSessionView(props: ChatTileSessionViewProps) {
             minimapItems={view.minimapItems}
             scrollRequest={backgroundScrollRequest}
             surfaceVisible={view.surfaceVisible}
+            systemOverlayActive={systemOverlayActive}
             getMessageActions={view.getMessageActions}
             nextStepActions={view.nextStepActions}
             planActions={view.planActions}
@@ -1559,6 +1562,7 @@ interface ChatSessionMessagesSurfaceProps {
   readonly minimapItems: ReadonlyArray<ChatUserMinimapItem>;
   readonly scrollRequest: ChatMessageScrollRequest | null;
   readonly surfaceVisible: boolean;
+  readonly systemOverlayActive: boolean;
   readonly getMessageActions: (
     message: ChatMessageModel,
   ) => ChatMessageActions | null;
@@ -1642,6 +1646,7 @@ function ChatSessionMessagesSurface(
               nextStepActions={props.nextStepActions}
               instanceId={props.node.instanceId}
               visible={props.surfaceVisible}
+              systemOverlayActive={props.systemOverlayActive}
             />
           </ChatMarkdownLinkProvider>
         </WorkingVerbContext.Provider>

@@ -89,6 +89,8 @@ interface ChatMessagesProps {
   instanceId: string;
   /** paneVisible ∧ tab selected: drives the hide/re-show scroll restore. */
   visible: boolean;
+  /** A frontmost system modal overlays the chat; body-portaled quote UI must stay hidden. */
+  systemOverlayActive: boolean;
   scrollRequest: ChatMessageScrollRequest | null;
 }
 
@@ -249,6 +251,7 @@ function ChatMessagesInner(props: ChatMessagesProps) {
     nextStepActions,
     scrollRequest,
     scrollStateKey,
+    systemOverlayActive,
     taskId,
     taskTitle,
     visible,
@@ -321,14 +324,15 @@ function ChatMessagesInner(props: ChatMessagesProps) {
   // too: chat surfaces are keep-alive hidden (display:none) while the popover
   // portals to document.body, so a hidden chat must not keep tracking
   // selections or leave a quote button floating over whichever surface
-  // replaced it.
+  // replaced it. System overlays gate the same body portal path while Settings
+  // or History is frontmost over an otherwise-visible chat.
   const quoteReplyEnabled = useSettingsStore(
     (state) => state.quoteReplyEnabled,
   );
   const transcriptContainerRef = useRef<HTMLDivElement>(null);
   const quoteSelection = useQuoteSelection({
     containerRef: transcriptContainerRef,
-    enabled: quoteReplyEnabled && visible,
+    enabled: quoteReplyEnabled && visible && !systemOverlayActive,
   });
 
   const [listDataState, setListDataState] = useState<ChatListDataState>(() =>
