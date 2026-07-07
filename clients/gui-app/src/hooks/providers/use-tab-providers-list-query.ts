@@ -27,6 +27,7 @@ export function useTabProvidersList(
 > {
   const client = useTabHostClient();
   return useHostQuery<HostRpcRegistry, "providers.list">({
+    cacheKeyIdentity: undefined,
     client,
     method: "providers.list",
     params: {},

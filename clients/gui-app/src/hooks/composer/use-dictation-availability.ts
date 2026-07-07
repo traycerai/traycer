@@ -47,6 +47,7 @@ export function useDictationAvailability(
   const queryClient = useQueryClient();
 
   const statusQuery = useHostQuery<HostRpcRegistry, "speech.getModelStatus">({
+    cacheKeyIdentity: undefined,
     client,
     method: "speech.getModelStatus",
     params: SPEECH_MODEL_PARAMS,

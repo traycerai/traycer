@@ -210,6 +210,7 @@ function WorktreesBody(props: {
   const reachability = useHostReachability(hostId ?? "");
   const reachable = hostId !== null && reachability.status === "reachable";
   const listQuery = useHostQuery({
+    cacheKeyIdentity: undefined,
     client,
     method: "worktree.listAllForHost",
     params: {},

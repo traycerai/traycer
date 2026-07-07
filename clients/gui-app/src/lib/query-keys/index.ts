@@ -37,6 +37,7 @@ export const queryKeys = {
   hostMethodScope: hostQueryKeys.methodScope,
   hostMethod: hostQueryKeys.method,
   hostResolveArtifactByPath: hostQueryKeys.resolveArtifactByPath,
+  hostTraycerRateLimitUsage: hostQueryKeys.traycerRateLimitUsage,
   cloudEpicTasks: cloudQueryKeys.epicTasks,
   workspaceEntries: uiQueryKeys.workspaceEntries,
   hostPicker: uiQueryKeys.hostPicker,

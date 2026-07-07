@@ -47,6 +47,7 @@ export function useEpicCommentThreads(
 ): UseQueryResult<ListCommentThreadsResponse, HostRpcError> {
   const client = useHostClient();
   return useHostQuery({
+    cacheKeyIdentity: undefined,
     client,
     method: "epic.listCommentThreads",
     params: { epicId, artifactType, artifactId },

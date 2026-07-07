@@ -25,6 +25,7 @@ export function useProvidersDetectVersion(args: {
 > {
   const client = useHostClient();
   return useHostQuery<HostRpcRegistry, "providers.detectVersion">({
+    cacheKeyIdentity: undefined,
     client,
     method: "providers.detectVersion",
     params: { candidatePath: args.candidatePath },

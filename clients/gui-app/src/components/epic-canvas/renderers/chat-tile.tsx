@@ -1716,6 +1716,7 @@ function useChatMissingWorktreeFocusRefresh(args: {
 }): void {
   const client = useTabHostClient();
   const bindingQuery = useHostQuery({
+    cacheKeyIdentity: undefined,
     client,
     method: "worktree.getBinding",
     params: { epicId: args.epicId, ownerId: args.chatId, ownerKind: "chat" },
@@ -1822,6 +1823,7 @@ function useCachedCollaborators(
 ): SenderDisplayContext["collaborators"] {
   const client = useHostClient();
   const { data } = useHostQuery({
+    cacheKeyIdentity: undefined,
     client,
     method: "epic.listCollaborators",
     params: { epicId },

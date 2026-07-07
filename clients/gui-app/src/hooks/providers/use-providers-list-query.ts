@@ -18,6 +18,7 @@ export function useProvidersList(
 > {
   const client = useHostClient();
   return useHostQuery<HostRpcRegistry, "providers.list">({
+    cacheKeyIdentity: undefined,
     client,
     method: "providers.list",
     params: {},
