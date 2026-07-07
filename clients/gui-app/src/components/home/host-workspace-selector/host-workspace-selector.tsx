@@ -103,6 +103,7 @@ import {
   workspaceRunBranchLabel,
 } from "./workspace-run-item";
 import { workspaceFolderName } from "@/lib/worktree/workspace-folder-name";
+import { appLogger } from "@/lib/logger";
 
 /**
  * `home` swaps the bound directory; `chat` clones the chat on switch;
@@ -342,6 +343,7 @@ export function ActiveHostWorkspaceControls(
             Workspaces
           </DropdownMenuLabel>
           <HomeWorkspaceRows
+            activeHostId={activeHostId}
             workspaceSource={workspaceSource}
             resolvedFolders={resolved.folders}
             activeHostClient={activeHostClient}
@@ -369,6 +371,7 @@ export function ActiveHostWorkspaceControls(
   );
   return (
     <HomeWorkspaceRows
+      activeHostId={activeHostId}
       workspaceSource={workspaceSource}
       resolvedFolders={resolved.folders}
       activeHostClient={activeHostClient}
@@ -395,6 +398,7 @@ function fixedUnavailableHostEntry(
 }
 
 function HomeWorkspaceRows(props: {
+  readonly activeHostId: string | null;
   readonly workspaceSource: HomeWorkspaceSource;
   readonly resolvedFolders: ReadonlyArray<ResolvedFolder>;
   readonly activeHostClient: HostClient<HostRpcRegistry> | null;
@@ -435,10 +439,7 @@ function HomeWorkspaceRows(props: {
     return folders.length > 0;
   }, [folderActions, workspaceSource]);
   const queryableFolderPaths = useMemo<ReadonlyArray<string>>(
-    () =>
-      resolvedFolders.flatMap((entry) =>
-        entry.kind === "unresolved" ? [] : [entry.path],
-      ),
+    () => [...new Set(resolvedFolders.map((entry) => entry.path))],
     [resolvedFolders],
   );
   const summariesQuery = useWorktreeListByWorkspacePathsForClient(
@@ -460,8 +461,7 @@ function HomeWorkspaceRows(props: {
   const gitSummaries = useMemo<ReadonlyArray<WorktreeWorkspaceSummary>>(
     () =>
       resolvedFolders.flatMap((entry) => {
-        if (entry.kind === "unresolved") return [];
-        const summary = summariesByPath.get(entry.path) ?? null;
+        const summary = summaryForResolvedFolder(entry, summariesByPath);
         return summary !== null && summary.isGitRepo ? [summary] : [];
       }),
     [resolvedFolders, summariesByPath],
@@ -548,6 +548,37 @@ function HomeWorkspaceRows(props: {
     })),
     options: { enabled: true },
   });
+
+  useEffect(() => {
+    appLogger.debug("[workspace-selector] folder metadata resolution", {
+      activeHostId: props.activeHostId,
+      folderCount: resolvedFolders.length,
+      folders: resolvedFolders.map((entry) => ({
+        kind: entry.kind,
+        path: entry.path,
+        repoIdentifier: repoIdentifierLogValue(
+          repoIdentifierForResolvedFolder(entry),
+        ),
+      })),
+      queriedPaths: queryableFolderPaths,
+      summaryFetching: summariesQuery.isFetching,
+      summaryPending: summariesQuery.isPending,
+      summaries:
+        summariesQuery.data?.workspaces.map((summary) => ({
+          path: summary.workspacePath,
+          isGitRepo: summary.isGitRepo,
+          repoIdentifier: repoIdentifierLogValue(summary.repoIdentifier),
+          worktreeCount: summary.worktrees.length,
+        })) ?? [],
+    });
+  }, [
+    props.activeHostId,
+    queryableFolderPaths,
+    resolvedFolders,
+    summariesQuery.data,
+    summariesQuery.isFetching,
+    summariesQuery.isPending,
+  ]);
   const branchesByValidationPath = useMemo<
     ReadonlyMap<string, ReadonlyArray<WorktreeBranch> | null>
   >(() => {
@@ -847,6 +878,11 @@ function hostOptionLabel(host: HostDirectoryEntry): string {
   return host.status === "unavailable" ? `${label} (offline)` : label;
 }
 
+type UnresolvedWorkspaceFolder = Extract<
+  ResolvedFolder,
+  { readonly kind: "unresolved" }
+>;
+
 function workspaceRunItemForResolvedFolder(input: {
   readonly entry: ResolvedFolder;
   readonly activeHostClient: HostClient<HostRpcRegistry> | null;
@@ -861,16 +897,19 @@ function workspaceRunItemForResolvedFolder(input: {
   readonly summariesByPath: ReadonlyMap<string, WorktreeWorkspaceSummary>;
   readonly workspaceSource: HomeWorkspaceSource;
 }): WorkspaceRunItem {
+  const summary = summaryForResolvedFolder(input.entry, input.summariesByPath);
   if (input.entry.kind === "unresolved") {
-    return unresolvedWorkspaceRunItem({
-      path: input.entry.path,
-      name: input.entry.name,
+    const unresolvedItem = workspaceRunItemForUnresolvedFolder({
+      activeHostClient: input.activeHostClient,
+      entry: input.entry,
+      isFetchingSummaries: input.isFetchingSummaries,
       onLocate: input.onLocate,
-      onRemove: () => input.workspaceSource.removeFolder(input.entry.path),
+      summary,
+      workspaceSource: input.workspaceSource,
     });
+    if (unresolvedItem !== null) return unresolvedItem;
   }
 
-  const summary = input.summariesByPath.get(input.entry.path) ?? null;
   const capturedEntry = currentCapturedEntry(
     input.workspaceSource.capturedIntent,
     input.entry.path,
@@ -912,7 +951,8 @@ function workspaceRunItemForResolvedFolder(input: {
     summary,
     currentIntent: capturedEntry,
     defaultNewBranchName,
-    repoIdentifier: summary?.repoIdentifier ?? null,
+    repoIdentifier:
+      summary?.repoIdentifier ?? repoIdentifierForResolvedFolder(input.entry),
     isPrimary,
     hostClient: input.activeHostClient,
     modeDisabled: false,
@@ -937,6 +977,35 @@ function workspaceRunItemForResolvedFolder(input: {
     onLocate: null,
     onRemove: () => input.workspaceSource.removeFolder(input.entry.path),
   };
+}
+
+function workspaceRunItemForUnresolvedFolder(input: {
+  readonly activeHostClient: HostClient<HostRpcRegistry> | null;
+  readonly entry: UnresolvedWorkspaceFolder;
+  readonly isFetchingSummaries: boolean;
+  readonly onLocate: () => void;
+  readonly summary: WorktreeWorkspaceSummary | null;
+  readonly workspaceSource: HomeWorkspaceSource;
+}): WorkspaceRunItem | null {
+  if (input.summary !== null && input.summary.isGitRepo) return null;
+  const onRemove = (): void =>
+    input.workspaceSource.removeFolder(input.entry.path);
+  if (input.summary === null && input.isFetchingSummaries) {
+    return pendingWorkspaceRunItem({
+      path: input.entry.path,
+      name: input.entry.name,
+      repoIdentifier: input.entry.repoIdentifier,
+      hostClient: input.activeHostClient,
+      onRemove,
+    });
+  }
+  return unresolvedWorkspaceRunItem({
+    path: input.entry.path,
+    name: input.entry.name,
+    repoIdentifier: input.entry.repoIdentifier,
+    onLocate: input.onLocate,
+    onRemove,
+  });
 }
 
 function currentCapturedEntry(
@@ -1005,6 +1074,7 @@ function removeDisabledReasonFor(
 function unresolvedWorkspaceRunItem(input: {
   readonly path: string;
   readonly name: string;
+  readonly repoIdentifier: WorktreeWorkspaceSummary["repoIdentifier"];
   readonly onLocate: () => void;
   readonly onRemove: () => void;
 }): WorkspaceRunItem {
@@ -1024,7 +1094,7 @@ function unresolvedWorkspaceRunItem(input: {
     summary: null,
     currentIntent: null,
     defaultNewBranchName: "",
-    repoIdentifier: null,
+    repoIdentifier: input.repoIdentifier,
     isPrimary: false,
     hostClient: null,
     modeDisabled: true,
@@ -1037,6 +1107,66 @@ function unresolvedWorkspaceRunItem(input: {
     onLocate: input.onLocate,
     onRemove: input.onRemove,
   };
+}
+
+function pendingWorkspaceRunItem(input: {
+  readonly path: string;
+  readonly name: string;
+  readonly repoIdentifier: WorktreeWorkspaceSummary["repoIdentifier"];
+  readonly hostClient: HostClient<HostRpcRegistry> | null;
+  readonly onRemove: () => void;
+}): WorkspaceRunItem {
+  return {
+    key: input.path,
+    displayName: input.name,
+    displayPath: input.path,
+    unresolved: false,
+    metadataPending: true,
+    missing: false,
+    isGitRepo: false,
+    mode: "local",
+    branchLabel: "Loading",
+    hoverLabel: `${input.name} · loading`,
+    summary: null,
+    currentIntent: null,
+    defaultNewBranchName: "",
+    repoIdentifier: input.repoIdentifier,
+    isPrimary: false,
+    hostClient: input.hostClient,
+    modeDisabled: true,
+    modeDisabledReason: "Loading folder metadata",
+    removeDisabled: false,
+    removeDisabledReason: null,
+    removePending: false,
+    onSelectMode: () => undefined,
+    onEmit: () => undefined,
+    onLocate: null,
+    onRemove: input.onRemove,
+  };
+}
+
+function summaryForResolvedFolder(
+  entry: ResolvedFolder,
+  summariesByPath: ReadonlyMap<string, WorktreeWorkspaceSummary>,
+): WorktreeWorkspaceSummary | null {
+  const summary = summariesByPath.get(entry.path) ?? null;
+  if (summary === null) return null;
+  const repoIdentifier = repoIdentifierForResolvedFolder(entry);
+  if (repoIdentifier === null) return summary;
+  return { ...summary, repoIdentifier };
+}
+
+function repoIdentifierForResolvedFolder(
+  entry: ResolvedFolder,
+): WorktreeWorkspaceSummary["repoIdentifier"] {
+  return entry.kind === "local-only" ? null : entry.repoIdentifier;
+}
+
+function repoIdentifierLogValue(
+  repoIdentifier: WorktreeWorkspaceSummary["repoIdentifier"],
+): string | null {
+  if (repoIdentifier === null) return null;
+  return `${repoIdentifier.owner}/${repoIdentifier.repo}`;
 }
 
 function branchForSummary(
