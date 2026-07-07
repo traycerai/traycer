@@ -1,6 +1,9 @@
 import { useCallback } from "react";
 import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
-import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
+import type {
+  WorktreeBindingWorkspaceMode,
+  WorktreeIntent,
+} from "@traycer/protocol/host/worktree-schemas";
 import type { AgentMode } from "@/components/home/data/landing-options";
 import { useCreateTuiAgent } from "@/hooks/agent/use-create-tui-agent";
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
@@ -19,6 +22,7 @@ export interface TerminalAgentLaunchSelection {
 
 export interface TerminalAgentWorktreeCreateInput extends TerminalAgentLaunchSelection {
   readonly worktreeIntent: WorktreeIntent | null;
+  readonly workspaceMode: WorktreeBindingWorkspaceMode;
 }
 
 export interface TerminalAgentWorktreeGate {
@@ -63,6 +67,7 @@ export function useTerminalAgentWorktreeGate(
         forkSourceHarnessSessionId: null,
         onStatusChange: null,
         worktreeIntent,
+        workspaceMode: input.workspaceMode,
         terminalAgentArgs: input.terminalAgentArgs,
       });
     },

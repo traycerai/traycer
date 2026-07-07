@@ -70,6 +70,7 @@ import type { EpicNodeRef } from "@/stores/epics/canvas/types";
 import {
   mentionRootsFromWorktreeBinding,
   useWorkspaceMentionRoots,
+  worktreeBindingIsFolderless,
 } from "@/hooks/composer/use-workspace-mention-roots";
 import { useChatSessionHandle } from "@/lib/registries/chat-session-registry";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
@@ -326,6 +327,7 @@ function ChatTileFallbackComposer(props: {
       taskId={props.node.id}
       isActive={props.isActive}
       mentionRoots={EMPTY_MENTION_ROOTS}
+      fallbackToGlobalMentionRoots
       currentEpicId={props.currentEpicId}
       workspaceControls={workspaceControls}
       topSpacing="normal"
@@ -847,15 +849,18 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     () => mentionRootsFromWorktreeBinding(state.worktreeBinding),
     [state.worktreeBinding],
   );
+  const isFolderlessWorkspace = worktreeBindingIsFolderless(
+    state.worktreeBinding,
+  );
   // Roots that markdown link resolution (the chat link policy) resolves
-  // relative assistant links against. A no-binding chat runs local against the
-  // epic's workspace folders (see `deriveWorktreeBindingWorkspaceAvailability`),
-  // so `mentionRoots` is empty and a relative link like `[app](src/app.ts)`
-  // would dead-click. Mirror the composer's fallback
-  // (`useWorkspaceMentionRoots(mentionRoots, true)`) so links resolve against
-  // the same folders the composer mentions do; a bound chat returns its
-  // non-empty binding unchanged, so this is a no-op there.
-  const linkResolutionRoots = useWorkspaceMentionRoots(mentionRoots, true);
+  // relative assistant links against. In inherited workspace mode, an empty
+  // binding falls back to the Epic folders. Explicit folderless mode disables
+  // that fallback so workspace file/folder links don't resolve through unrelated
+  // global roots.
+  const linkResolutionRoots = useWorkspaceMentionRoots(
+    mentionRoots,
+    !isFolderlessWorkspace,
+  );
   // The composer is runnable when the chat carries its own folder binding OR
   // when the epic has at least one workspace folder (the chat then runs local
   // against it). The workspace selector itself stays owner-scoped to the
@@ -1472,6 +1477,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       nodeId: node.id,
       isActive,
       mentionRoots,
+      fallbackToGlobalMentionRoots: !isFolderlessWorkspace,
       currentEpicId,
       onSubmitMessage: submitMessage,
       onSettingsChange: handleComposerSettingsChange,
@@ -1485,6 +1491,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       node.id,
       isActive,
       mentionRoots,
+      isFolderlessWorkspace,
       currentEpicId,
       submitMessage,
       handleComposerSettingsChange,

@@ -116,6 +116,7 @@ export interface ChatLowerComposerState {
   readonly nodeId: string;
   readonly isActive: boolean;
   readonly mentionRoots: ReadonlyArray<string>;
+  readonly fallbackToGlobalMentionRoots: boolean;
   readonly currentEpicId: string;
   readonly onSubmitMessage: (input: ChatComposerSubmitInput) => boolean;
   readonly onSettingsChange: ((settings: ChatRunSettings) => void) | null;
@@ -387,6 +388,9 @@ function ComposerSurface(props: {
         taskId={model.composer.nodeId}
         isActive={model.composer.isActive}
         mentionRoots={model.composer.mentionRoots}
+        fallbackToGlobalMentionRoots={
+          model.composer.fallbackToGlobalMentionRoots
+        }
         currentEpicId={model.composer.currentEpicId}
         workspaceControls={model.composer.workspaceControls}
         topSpacing={layout.topSpacing}
@@ -445,6 +449,7 @@ function LiveChatComposer(props: {
       isActive={model.composer.isActive}
       sendDisabled={!model.access.canAct}
       mentionRoots={model.composer.mentionRoots}
+      fallbackToGlobalMentionRoots={model.composer.fallbackToGlobalMentionRoots}
       currentEpicId={model.composer.currentEpicId}
       settingsSeed={
         model.queue.editingItem?.settings ?? model.composer.sessionSettingsSeed
@@ -493,6 +498,7 @@ export function InertChatComposer(props: {
   readonly taskId: string;
   readonly isActive: boolean;
   readonly mentionRoots: ReadonlyArray<string>;
+  readonly fallbackToGlobalMentionRoots: boolean;
   readonly currentEpicId: string;
   readonly workspaceControls: ReactNode;
   readonly topSpacing: ChatLowerSurfaceTopSpacing;
@@ -503,6 +509,7 @@ export function InertChatComposer(props: {
       isActive={props.isActive}
       sendDisabled
       mentionRoots={props.mentionRoots}
+      fallbackToGlobalMentionRoots={props.fallbackToGlobalMentionRoots}
       currentEpicId={props.currentEpicId}
       settingsSeed={null}
       fallbackSettingsSeed={null}

@@ -72,6 +72,7 @@ export function mentionRootsFromWorktreeBinding(
   binding: WorktreeBinding | null,
 ): ReadonlyArray<string> {
   if (binding === null) return [];
+  if (binding.workspaceMode === "folderless") return [];
   // Mirror the host's `entryRunDirectory`: an empty-string worktreePath falls
   // back to the workspacePath (where the turn actually runs), so a malformed
   // worktree row doesn't drop the folder's mention root the host still uses.
@@ -84,6 +85,12 @@ export function mentionRootsFromWorktreeBinding(
         : entry.workspacePath,
     ),
   );
+}
+
+export function worktreeBindingIsFolderless(
+  binding: WorktreeBinding | null,
+): boolean {
+  return binding?.workspaceMode === "folderless";
 }
 
 export function mentionRootsFromWorktreeIntent(

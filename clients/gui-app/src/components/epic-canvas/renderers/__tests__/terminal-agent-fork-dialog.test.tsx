@@ -225,6 +225,7 @@ function sourceAgentWithTerminalArgs(
     userId: "user-test",
     hostId: "host-test",
     workspaceFolders: ["/workspace"],
+    workspaceMode: undefined,
     model: "claude-opus-4-7",
     reasoningEffort: "high",
     agentMode: "regular",
