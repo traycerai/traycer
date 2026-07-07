@@ -193,10 +193,16 @@ export class OpenEpicSessionRegistry {
       this.prune();
       this.emit();
     };
-    handle.awareness.on("change", handleEligibilityChange);
-    entry.unsubscribeAwareness = () => {
-      handle.awareness.off("change", handleEligibilityChange);
-    };
+    entry.unsubscribeAwareness =
+      typeof handle.awareness.on === "function" &&
+      typeof handle.awareness.off === "function"
+        ? () => {
+            handle.awareness.off("change", handleEligibilityChange);
+          }
+        : null;
+    if (entry.unsubscribeAwareness !== null) {
+      handle.awareness.on("change", handleEligibilityChange);
+    }
     this.entries.set(epicId, entry);
     this.prune();
     this.emit();
@@ -308,6 +314,7 @@ export class OpenEpicSessionRegistry {
 }
 
 function hasActiveAgentWork(handle: OpenEpicStoreHandle): boolean {
+  if (typeof handle.awareness.getStates !== "function") return false;
   for (const state of handle.awareness.getStates().values()) {
     const working: unknown = state[AGENT_WORKING_AWARENESS_FIELD];
     if (!Array.isArray(working)) continue;
