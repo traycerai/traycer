@@ -13,9 +13,13 @@ import {
   agentListHarnessModelsV20,
   agentListHarnessModelsUpgradeV1ToV2,
   agentListDowngradeV2ToV1,
+  agentListDowngradeV3ToV1,
+  agentListDowngradeV3ToV2,
   agentListUpgradeV1ToV2,
+  agentListUpgradeV2ToV3,
   agentListV10,
   agentListV20,
+  agentListV30,
   agentSelectionGuideV10,
   agentSelectionGuideGlobalGetV10,
   agentSelectionGuideGlobalOnboardingDraftGetV10,
@@ -32,9 +36,13 @@ import {
   agentGuiGetPlanV10,
   agentGuiListCommandsV10,
   agentGuiListHarnessesDowngradeV2ToV1,
+  agentGuiListHarnessesDowngradeV3ToV1,
+  agentGuiListHarnessesDowngradeV3ToV2,
   agentGuiListHarnessesUpgradeV1ToV2,
+  agentGuiListHarnessesUpgradeV2ToV3,
   agentGuiListHarnessesV10,
   agentGuiListHarnessesV20,
+  agentGuiListHarnessesV30,
   agentGuiListModelsV10,
   chatSubscribeV10,
   chatSubscribeV11,
@@ -205,9 +213,11 @@ import {
   providersStartLoginRequestSchema,
   providersStartLoginResponseSchema,
   providersListRequestSchema,
+  providersListResponseSchema,
   providersListResponseSchemaV10,
   providersListResponseSchemaV20,
-  downgradeProviderCliStateV20ToV10,
+  downgradeProviderCliStateToV10,
+  downgradeProviderCliStateListToV20,
   upgradeProviderCliStateV10ToV20,
   providersRemoveCustomPathRequestSchema,
   providersRemoveCustomPathRequestSchemaV10,
@@ -235,6 +245,7 @@ import {
   providersSetTerminalAgentArgsResponseSchemaV10,
   type ProviderCliState,
   type ProviderCliStateV10,
+  type ProviderCliStateV20,
 } from "@traycer/protocol/host/provider-schemas";
 
 export { hostGetRuntimeCapabilitiesV10 };
@@ -454,7 +465,7 @@ function unsupportedProviderStateDowngrade(
 function downgradeProviderStateForV10(
   state: ProviderCliState,
 ): DowngradeResult<ProviderCliStateV10> {
-  const downgraded = downgradeProviderCliStateV20ToV10(state);
+  const downgraded = downgradeProviderCliStateToV10(state);
   if (downgraded === null) {
     return unsupportedProviderStateDowngrade(state.providerId);
   }
@@ -465,20 +476,20 @@ function downgradeProviderStateListForV10(
   states: readonly ProviderCliState[],
 ): ProviderCliStateV10[] {
   return states.flatMap((state) => {
-    const downgraded = downgradeProviderCliStateV20ToV10(state);
+    const downgraded = downgradeProviderCliStateToV10(state);
     return downgraded === null ? [] : [downgraded];
   });
 }
 
 function upgradeProviderStateFromV10(
   state: ProviderCliStateV10,
-): ProviderCliState {
+): ProviderCliStateV20 {
   return upgradeProviderCliStateV10ToV20(state);
 }
 
 function upgradeProviderStateListFromV10(
   states: readonly ProviderCliStateV10[],
-): ProviderCliState[] {
+): ProviderCliStateV20[] {
   return states.map(upgradeProviderCliStateV10ToV20);
 }
 
@@ -513,6 +524,55 @@ export const providersListDowngradeV2ToV1 = defineDowngradePath<
   typeof providersListV10
 >({
   from: { major: 2, minor: 0 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV10.parse({
+      providers: downgradeProviderStateListForV10(response.providers),
+    }),
+  }),
+});
+
+export const providersListV30 = defineRpcContract({
+  method: "providers.list",
+  schemaVersion: { major: 3, minor: 0 } as const,
+  requestSchema: providersListRequestSchema,
+  responseSchema: providersListResponseSchema,
+});
+
+export const providersListUpgradeV2ToV3 = defineUpgradePath<
+  typeof providersListV20,
+  typeof providersListV30
+>({
+  from: { major: 2, minor: 0 },
+  to: { major: 3, minor: 0 },
+  // A v2.0 response without Amp is a valid v3.0 response (purely additive),
+  // and the request shape is identical - both upgrades are identity.
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const providersListDowngradeV3ToV2 = defineDowngradePath<
+  typeof providersListV30,
+  typeof providersListV20
+>({
+  from: { major: 3, minor: 0 },
+  to: { major: 2, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV20.parse({
+      providers: downgradeProviderCliStateListToV20(response.providers),
+    }),
+  }),
+});
+
+export const providersListDowngradeV3ToV1 = defineDowngradePath<
+  typeof providersListV30,
+  typeof providersListV10
+>({
+  from: { major: 3, minor: 0 },
   to: { major: 1, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => ({
@@ -1176,6 +1236,19 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
       },
       downgradePathsFromLatest: { 1: agentGuiListHarnessesDowngradeV2ToV1 },
     },
+    3: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentGuiListHarnessesV30,
+          upgradeFromPreviousVersion: agentGuiListHarnessesUpgradeV2ToV3,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentGuiListHarnessesDowngradeV3ToV1,
+        2: agentGuiListHarnessesDowngradeV3ToV2,
+      },
+    },
   },
   "agent.gui.listModels": {
     1: {
@@ -1389,6 +1462,19 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
         },
       },
       downgradePathsFromLatest: { 1: agentListDowngradeV2ToV1 },
+    },
+    3: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentListV30,
+          upgradeFromPreviousVersion: agentListUpgradeV2ToV3,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentListDowngradeV3ToV1,
+        2: agentListDowngradeV3ToV2,
+      },
     },
   },
   "agent.sendMessage": {
@@ -2275,6 +2361,19 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
         },
       },
       downgradePathsFromLatest: { 1: providersListDowngradeV2ToV1 },
+    },
+    3: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersListV30,
+          upgradeFromPreviousVersion: providersListUpgradeV2ToV3,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: providersListDowngradeV3ToV1,
+        2: providersListDowngradeV3ToV2,
+      },
     },
   },
 
