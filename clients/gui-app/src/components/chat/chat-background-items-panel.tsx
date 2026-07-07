@@ -6,6 +6,7 @@ import {
   Monitor,
   Square,
   TerminalSquare,
+  Workflow,
 } from "lucide-react";
 import type { BackgroundItem } from "@traycer/protocol/host/agent/gui/subscribe";
 import {
@@ -57,6 +58,8 @@ function backgroundKindLabel(kind: BackgroundItem["kind"]): string {
       return "Monitor";
     case "wakeup":
       return "Wake";
+    case "workflow":
+      return "Workflow";
   }
   const unreachableKind: never = kind;
   return unreachableKind;
@@ -86,6 +89,10 @@ function BackgroundKindIcon(props: { readonly kind: BackgroundItem["kind"] }) {
       return (
         <AlarmClock aria-hidden className="size-3.5 shrink-0 text-primary/80" />
       );
+    case "workflow":
+      return (
+        <Workflow aria-hidden className="size-3.5 shrink-0 text-primary/80" />
+      );
   }
   const unreachableKind: never = props.kind;
   return unreachableKind;
@@ -96,7 +103,24 @@ function itemParentTaskId(item: BackgroundItem): string | null {
 }
 
 function itemScheduledFor(item: BackgroundItem): number | null {
-  return item.scheduledFor ?? null;
+  return item.kind === "wakeup" ? item.scheduledFor : null;
+}
+
+// The workflow row's aggregate story - current phase, the most recently
+// active fleet-agent label, and finished/started counts - matching what the
+// transcript's workflow card shows in its own live line (Flow 2). Any piece
+// the host hasn't populated yet is omitted rather than shown as a placeholder.
+function workflowRowSummary(
+  item: Extract<BackgroundItem, { kind: "workflow" }>,
+): string | null {
+  const counts =
+    item.agentsFinished !== null && item.agentsStarted !== null
+      ? `${item.agentsFinished}/${item.agentsStarted} done`
+      : null;
+  const parts = [item.phase, item.activeLabel, counts].filter(
+    (part): part is string => part !== null,
+  );
+  return parts.length === 0 ? null : parts.join(" · ");
 }
 
 function rememberBackgroundItem(
@@ -125,11 +149,17 @@ function formatWakeupTime(scheduledFor: number): string {
 }
 
 function backgroundItemDisplayTitle(item: BackgroundItem): string {
-  if (item.kind !== "wakeup") return item.title;
-  const scheduledFor = itemScheduledFor(item);
-  const time =
-    scheduledFor === null ? "scheduled time" : formatWakeupTime(scheduledFor);
-  return `Waiting until ${time} · ${item.title}`;
+  if (item.kind === "wakeup") {
+    const scheduledFor = itemScheduledFor(item);
+    const time =
+      scheduledFor === null ? "scheduled time" : formatWakeupTime(scheduledFor);
+    return `Waiting until ${time} · ${item.title}`;
+  }
+  if (item.kind === "workflow") {
+    const summary = workflowRowSummary(item);
+    return summary === null ? item.title : `${item.title} — ${summary}`;
+  }
+  return item.title;
 }
 
 function BackgroundStopButton(props: {

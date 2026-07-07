@@ -39,6 +39,7 @@ import type {
   SegmentEndState,
   SegmentTodoItem,
   SubagentChildSegment,
+  SubagentSegment,
 } from "@/stores/composer/chat-store";
 import type { AgentSenderDisplay } from "@/lib/chat/sender-display";
 import type {
@@ -2173,20 +2174,25 @@ function isSubagentChildSegment(
   segment: MessageSegment,
 ): segment is SubagentChildSegment {
   // artifact_operation is intentionally excluded — artifact cards stay
-  // top-level (see the BLOCK_HANDLERS["artifact_operation"] handler).
+  // top-level (see the BLOCK_HANDLERS["artifact_operation"] handler). A nested
+  // subagent (fan-out at any depth) IS eligible - see nestSubagentChildren.
   return (
     segment.kind === "tool" ||
     segment.kind === "file_change" ||
-    segment.kind === "command"
+    segment.kind === "command" ||
+    segment.kind === "subagent"
   );
 }
 
 /**
- * Fold subagent-owned tool/file_change segments into the `children` of their
- * subagent segment so the renderer nests them under that block. Segments whose
- * `parentId` matches a subagent segment are removed from the top-level flow;
- * everything else (including subagent-owned segments with no matching block, in
- * case the subagent.started was dropped) stays top-level. Order is preserved.
+ * Fold subagent-owned segments into the `children` of their owning subagent
+ * segment so the renderer nests them under that block - RECURSIVELY, since a
+ * nested agent can itself own further nested agents (any spawn depth).
+ * Segments whose `parentId` matches a known subagent segment (top-level OR
+ * already-nested) are removed from the top-level flow; everything else -
+ * including a subagent-owned segment whose `parentId` matches no block (the
+ * subagent.started that owned it was dropped) - stays top-level rather than
+ * being silently lost. Order is preserved at every level.
  */
 function nestSubagentChildren(
   flat: ReadonlyArray<MessageSegment>,
@@ -2218,12 +2224,36 @@ function nestSubagentChildren(
   }
   if (childrenByParent.size === 0) return flat;
 
-  return topLevel.map((segment) => {
-    if (segment.kind !== "subagent") return segment;
-    const children = childrenByParent.get(segment.id);
-    if (children === undefined) return segment;
-    return { ...segment, children: coalesceSubagentChildren(children) };
-  });
+  return topLevel.map((segment) =>
+    segment.kind === "subagent"
+      ? resolveSubagentChildren(segment, childrenByParent, new Set())
+      : segment,
+  );
+}
+
+/**
+ * Recursively resolve one subagent segment's `children`, descending into any
+ * nested subagent children to resolve THEIR children too. `ancestors` guards
+ * against a `parentId` cycle (which the host invariants rule out, but a
+ * malformed/replayed chain must never hang the renderer) - a segment already
+ * on the ancestor path is left with whatever children it already has instead
+ * of recursing again.
+ */
+function resolveSubagentChildren(
+  segment: SubagentSegment,
+  childrenByParent: ReadonlyMap<string, ReadonlyArray<SubagentChildSegment>>,
+  ancestors: ReadonlySet<string>,
+): SubagentSegment {
+  if (ancestors.has(segment.id)) return segment;
+  const rawChildren = childrenByParent.get(segment.id);
+  if (rawChildren === undefined) return segment;
+  const nextAncestors = new Set(ancestors).add(segment.id);
+  const resolvedChildren = rawChildren.map((child) =>
+    child.kind === "subagent"
+      ? resolveSubagentChildren(child, childrenByParent, nextAncestors)
+      : child,
+  );
+  return { ...segment, children: coalesceSubagentChildren(resolvedChildren) };
 }
 
 /**
@@ -2335,29 +2365,47 @@ function suppressEditToolCalls<T extends MessageSegment>(
  * through the card only - the same policy `suppressEditToolCalls` applies to
  * file-edit tool calls, and parity with Codex/OpenCode which emit no separate
  * spawn tool call. The subagent block carries its spawning tool_call id as
- * `spawnToolCallId`, so a tool segment owning that id is dropped - both at the
- * top level and inside a sub-agent's nested children (the case where a sub-agent
- * itself spawned a sub-agent). Only suppresses when the card actually renders (a
- * non-rendering subagent leaves no segment, so its spawn tool stays visible as
- * the lone signal).
+ * `spawnToolCallId`, so a tool segment owning that id is dropped at ANY nesting
+ * depth: a nested agent's own spawning tool call is a sibling inside its
+ * PARENT's children (both carry the parent's `parentId`), so both the id
+ * collection and the drop must walk the already-folded tree, not just the top
+ * level and one level of children. Only suppresses when the card actually
+ * renders (a non-rendering subagent leaves no segment, so its spawn tool stays
+ * visible as the lone signal).
  */
 function suppressSubagentSpawnToolCalls(
   flat: ReadonlyArray<MessageSegment>,
 ): ReadonlyArray<MessageSegment> {
-  const spawnToolCallIds = new Set(
-    flat.flatMap((segment) =>
-      segment.kind === "subagent" && segment.spawnToolCallId !== null
-        ? [segment.spawnToolCallId]
-        : [],
-    ),
-  );
+  const spawnToolCallIds = collectSpawnToolCallIds(flat);
   if (spawnToolCallIds.size === 0) return flat;
   const shouldDrop = (toolId: string): boolean => spawnToolCallIds.has(toolId);
+  return dropSpawnToolCallsRecursively(flat, shouldDrop);
+}
+
+function collectSpawnToolCallIds(
+  segments: ReadonlyArray<MessageSegment>,
+): ReadonlySet<string> {
+  const ids = new Set<string>();
+  for (const segment of segments) {
+    if (segment.kind !== "subagent") continue;
+    if (segment.spawnToolCallId !== null) ids.add(segment.spawnToolCallId);
+    for (const id of collectSpawnToolCallIds(segment.children)) ids.add(id);
+  }
+  return ids;
+}
+
+function dropSpawnToolCallsRecursively(
+  flat: ReadonlyArray<MessageSegment>,
+  shouldDrop: (toolSegmentId: string) => boolean,
+): ReadonlyArray<MessageSegment> {
   return rejectToolSegments(flat, shouldDrop).map((segment) =>
     segment.kind === "subagent" && segment.children.length > 0
       ? {
           ...segment,
-          children: rejectToolSegments(segment.children, shouldDrop),
+          children: dropSpawnToolCallsRecursively(
+            segment.children,
+            shouldDrop,
+          ) as ReadonlyArray<SubagentChildSegment>,
         }
       : segment,
   );
@@ -2718,6 +2766,10 @@ const BLOCK_HANDLERS: {
             block.timestamp,
           ),
           spawnToolCallId: block.spawnToolCallId ?? null,
+          // Owning PARENT subagent's block id (nested fan-out), not the
+          // spawning tool call - `nestSubagentChildren` folds on this.
+          parentId: block.parentBlockId ?? null,
+          workflowMeta: block.workflowMeta,
           children: [],
         }
       : null,

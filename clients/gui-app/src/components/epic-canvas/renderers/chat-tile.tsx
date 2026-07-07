@@ -483,6 +483,52 @@ function messageIdForBlock(
   return owner?.id ?? null;
 }
 
+interface BackgroundClickTarget {
+  readonly blockId: string;
+  readonly card: ChatScrollCardKind;
+}
+
+// Both a plain agent and a workflow run render as a `subagent`-block card (a
+// workflow is a dedicated rendering of that same block, never a distinct
+// persisted type), so either kind opens via the same subagent open-store.
+function backgroundItemCardKind(
+  kind: BackgroundItem["kind"],
+): ChatScrollCardKind {
+  return kind === "subagent" || kind === "workflow" ? "subagent" : "tool";
+}
+
+/**
+ * A nested agent - and anything it owns (commands/monitors, or a workflow's
+ * fleet-attributed background work) - has no card of its own in the
+ * transcript; it only renders inside its top-level ancestor's "Sub-agents"
+ * section. Clicking its panel row must therefore scroll to and expand the
+ * ANCESTOR card, walking up `parentTaskId` until a top-level item (null
+ * parent) is reached. If the chain runs into an ancestor that already
+ * settled (no longer in the live `allItems` list, so its blockId is
+ * unknown) or a cycle, the walk stops at the deepest item it could still
+ * resolve - an honest best-effort target rather than a wrong guess.
+ */
+function resolveBackgroundClickTarget(
+  item: BackgroundItem,
+  allItems: ReadonlyArray<BackgroundItem>,
+): BackgroundClickTarget {
+  const itemsByTaskId = new Map(
+    allItems.map((entry) => [entry.taskId, entry] as const),
+  );
+  const visited = new Set<string>([item.taskId]);
+  let current = item;
+  while (current.parentTaskId !== null && !visited.has(current.parentTaskId)) {
+    const parent = itemsByTaskId.get(current.parentTaskId);
+    if (parent === undefined) break;
+    visited.add(parent.taskId);
+    current = parent;
+  }
+  return {
+    blockId: current.blockId,
+    card: backgroundItemCardKind(current.kind),
+  };
+}
+
 function ChatTileSessionView(props: ChatTileSessionViewProps) {
   const view = useChatTileSessionViewModel(props);
   const hostId = useTabHostId();
@@ -520,12 +566,13 @@ function ChatTileSessionView(props: ChatTileSessionViewProps) {
   );
   const scrollToBackgroundItem = useCallback(
     (item: BackgroundItem): void => {
-      scrollToBlock(
-        item.blockId,
-        item.kind === "subagent" ? "subagent" : "tool",
+      const target = resolveBackgroundClickTarget(
+        item,
+        view.lower.backgroundItems ?? [],
       );
+      scrollToBlock(target.blockId, target.card);
     },
-    [scrollToBlock],
+    [scrollToBlock, view.lower.backgroundItems],
   );
   // Canvas-owned implementation of the chat file-change click contract. The
   // chat components receive only inert row handlers; they do not know about
