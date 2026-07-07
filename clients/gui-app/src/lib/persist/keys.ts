@@ -95,7 +95,7 @@ export const PERSIST_STORES = [
   { camelName: "epicCanvas", leaf: "epic-canvas", kind: "scoped" },
   { camelName: "openEpic", leaf: "open-epic", kind: "scoped" },
 
-  // ── Static zustand stores (17) ───────────────────────────────────────────
+  // ── Static zustand stores (18) ───────────────────────────────────────────
   { camelName: "onboarding", leaf: "onboarding", kind: "static" },
   { camelName: "commandPalette", leaf: "command-palette", kind: "static" },
   { camelName: "composerDraft", leaf: "composer-drafts", kind: "static" },
@@ -127,6 +127,11 @@ export const PERSIST_STORES = [
   },
   { camelName: "settings", leaf: "settings", kind: "static" },
   { camelName: "settingsSection", leaf: "settings-section", kind: "static" },
+  {
+    camelName: "rateLimitPopover",
+    leaf: "rate-limit-popover",
+    kind: "static",
+  },
   { camelName: "tabs", leaf: "tabs", kind: "static" },
   {
     camelName: "workspaceFolders",

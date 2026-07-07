@@ -74,15 +74,11 @@ import {
   TraycerAccountSelect,
   TraycerSubscriptionView,
 } from "@/components/settings/panels/traycer-subscription-views";
+import {
+  useRateLimitPopoverStore,
+  type RateLimitPopoverTab,
+} from "@/stores/rate-limits/rate-limit-popover-store";
 import { cn } from "@/lib/utils";
-
-/**
- * The Overview tab (always pinned first), one tab per connected host-RPC
- * provider, and - when the account is eligible - the GUI-sourced "traycer" tab.
- * `"traycer"` is a synthetic entry: it is NOT a `RateLimitProviderId` and does
- * not flow through `useConfiguredRateLimitProviders()`.
- */
-type RateLimitTab = "overview" | RateLimitProviderId | "traycer";
 
 /**
  * A rail/Overview entry, in draw order: either a host-RPC provider or the
@@ -146,9 +142,8 @@ function orderRailTabs(
  * connected provider) and a detail pane, mirroring the composer's model-picker
  * shell (Core Flows: "same interaction family as the composer's model picker").
  * The whole body is a child of `PopoverContent`, so Radix only mounts it - and
- * runs its queries and tab state - while the popover is open; `activeTab`
- * therefore resets to Overview on every open (Core Flows: "Landing tab is
- * always Overview").
+ * runs its queries - while the popover is open. The selected tab is persisted
+ * separately so reopening restores the provider the user last inspected.
  */
 export function RateLimitPopover({
   onClose,
@@ -200,7 +195,8 @@ function RateLimitPopoverBody({
     () => orderRailTabs(providers, traycerSubscription.eligible),
     [providers, traycerSubscription.eligible],
   );
-  const [activeTab, setActiveTab] = useState<RateLimitTab>("overview");
+  const activeTab = useRateLimitPopoverStore((state) => state.activeTab);
+  const setActiveTab = useRateLimitPopoverStore((state) => state.setActiveTab);
 
   // Zero-state only when there is genuinely nothing to show: no host-RPC
   // providers AND no eligible Traycer tab.
@@ -211,13 +207,13 @@ function RateLimitPopoverBody({
   // A credential removed (or Traycer becoming ineligible) mid-session can drop
   // the active tab from the rail; fall back to Overview rather than rendering a
   // tab that no longer exists.
-  const validTabs = new Set<RateLimitTab>([
+  const validTabs = new Set<RateLimitPopoverTab>([
     "overview",
     ...railTabs.map((tab) =>
       tab.kind === "traycer" ? "traycer" : tab.providerId,
     ),
   ]);
-  const resolvedTab: RateLimitTab = validTabs.has(activeTab)
+  const resolvedTab: RateLimitPopoverTab = validTabs.has(activeTab)
     ? activeTab
     : "overview";
 
@@ -263,7 +259,7 @@ function RateLimitPopoverBody({
 function RateLimitDetailPane({
   tab,
 }: {
-  readonly tab: Exclude<RateLimitTab, "overview">;
+  readonly tab: Exclude<RateLimitPopoverTab, "overview">;
 }): ReactNode {
   return tab === "traycer" ? (
     <TraycerRateLimitBlock variant="popover-detail" onReady={null} />
@@ -296,8 +292,8 @@ function RateLimitRail({
   readonly railTabs: ReadonlyArray<RailTabDescriptor>;
   readonly providers: ReadonlyArray<ConfiguredRateLimitProvider>;
   readonly traycerRefreshTarget: TraycerRefreshTarget;
-  readonly activeTab: RateLimitTab;
-  readonly onSelect: (tab: RateLimitTab) => void;
+  readonly activeTab: RateLimitPopoverTab;
+  readonly onSelect: (tab: RateLimitPopoverTab) => void;
   readonly onClose: () => void;
 }): ReactNode {
   const { openSettings } = useSystemTabModalActions();
@@ -672,6 +668,10 @@ function RateLimitProviderBlock({
     envelope: query.data,
   };
   const state = resolvePopoverProviderRateLimitState(queryState);
+  const updatedAt =
+    state.kind === "ready"
+      ? (query.data?.lastGoodAt ?? query.dataUpdatedAt)
+      : query.dataUpdatedAt;
   useEffect(() => {
     if (state.kind !== "cold" && onReady !== null) onReady();
   }, [state.kind, onReady]);
@@ -708,7 +708,7 @@ function RateLimitProviderBlock({
         <div className="flex items-center gap-1.5">
           <UsageLimitUpdatedLabel
             ready={state.kind === "ready"}
-            updatedAt={query.dataUpdatedAt}
+            updatedAt={updatedAt}
             refreshing={isRefreshing}
             degraded={state.kind === "ready" && state.degraded}
             degradedReason={

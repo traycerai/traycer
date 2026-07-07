@@ -216,7 +216,7 @@ function CreditBreakdownView({
  * through: a header line (`label` left, a `detail` slot right - a reset line
  * plus percent for windows, a plain amount line for credit/uncapped-usage
  * buckets), then a bar spanning the row's *full* width on its own line below,
- * colored by the shared 4-tier severity scale (`window-severity.ts`).
+ * colored by the shared severity scale (`window-severity.ts`).
  *
  * The bar is deliberately on its own line rather than beside the text (as it
  * used to be): sitting the label and bar on the same line made the bar's

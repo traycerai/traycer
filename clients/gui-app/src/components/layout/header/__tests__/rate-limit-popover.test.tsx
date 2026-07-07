@@ -154,6 +154,7 @@ vi.mock("@/hooks/host/use-refresh-rate-limit-usage-on-traycer-turn", () => ({
 }));
 
 import { RateLimitPopover } from "@/components/layout/header/rate-limit-popover";
+import { useRateLimitPopoverStore } from "@/stores/rate-limits/rate-limit-popover-store";
 
 const NOW = Date.now();
 
@@ -207,7 +208,7 @@ function degradedRetainedResult(
     isPending: false,
     isFetching: false,
     isError: false,
-    dataUpdatedAt: NOW - 90_000,
+    dataUpdatedAt: NOW - 1_000,
     refetch: vi.fn(() => Promise.resolve({})),
   };
 }
@@ -385,6 +386,8 @@ beforeEach(() => {
   mocks.lastUseHostQueriesProviderIds = null;
   mocks.authUser = coldAuthUser();
   useAccountContextStore.setState({ accountContext: { type: "PERSONAL" } });
+  useRateLimitPopoverStore.setState({ activeTab: "overview" });
+  useRateLimitPopoverStore.persist.clearStorage();
   onClose = vi.fn();
 });
 
@@ -490,6 +493,41 @@ describe("<RateLimitPopover /> rail", () => {
     expect(screen.getByText("Codex")).toBeTruthy();
     // ...but the single-provider detail tab surfaces it.
     expect(screen.getByText("Pro 5x")).toBeTruthy();
+  });
+
+  it("reopens on the last selected provider tab", () => {
+    mocks.configured = [{ providerId: "codex", lane: "ephemeralProcess" }];
+    mocks.results = { codex: readyResult(codexReady()) };
+    const first = renderPopover();
+    expect(screen.queryByText("Pro 5x")).toBeNull();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Codex" }));
+    expect(screen.getByText("Pro 5x")).toBeTruthy();
+
+    first.unmount();
+    renderPopover();
+    expect(
+      screen.getByRole("tab", { name: "Codex" }).getAttribute("aria-selected"),
+    ).toBe("true");
+    expect(screen.getByText("Pro 5x")).toBeTruthy();
+  });
+
+  it("falls back to Overview when the remembered provider is not available", () => {
+    useRateLimitPopoverStore.setState({ activeTab: "claude-code" });
+    mocks.configured = [{ providerId: "codex", lane: "ephemeralProcess" }];
+    mocks.results = { codex: readyResult(codexReady()) };
+
+    renderPopover();
+
+    expect(
+      screen
+        .getByRole("tab", { name: "Overview" })
+        .getAttribute("aria-selected"),
+    ).toBe("true");
+    expect(
+      screen.getByRole("tab", { name: "Codex" }).getAttribute("aria-selected"),
+    ).toBe("false");
+    expect(screen.queryByText("Pro 5x")).toBeNull();
   });
 
   it("shows a relative countdown for a short window and an absolute date for a weekly one", () => {
@@ -664,6 +702,8 @@ describe("<RateLimitPopover /> per-provider states", () => {
     expect(
       screen.getByText(/· couldn't fetch usage — will retry/),
     ).toBeTruthy();
+    expect(screen.getByText(/^Updated \d+m ago ·/)).toBeTruthy();
+    expect(screen.queryByText(/^Updated Just now ·/)).toBeNull();
     expect(screen.queryByText(/· refresh failed/)).toBeNull();
     // The retained reading itself is still rendered (dimmed), not replaced by
     // an error message.
