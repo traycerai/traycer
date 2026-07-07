@@ -51,6 +51,21 @@ const tabNavigationMock = vi.hoisted(() => ({
 
 vi.mock("@/lib/tab-navigation", () => tabNavigationMock);
 
+vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", () => ({
+  useCloudEpicTasksQuery: () => ({
+    tasks: [
+      {
+        epic: {
+          light: {
+            id: "epic-2",
+            title: "Background Task",
+          },
+        },
+      },
+    ],
+  }),
+}));
+
 const canvasMock = vi.hoisted(() => {
   const openTileInTab = vi.fn();
   const setActiveTilePane = vi.fn();
@@ -192,13 +207,14 @@ function projection(
     app: null,
     owners: [],
     epic: null,
+    epics: [],
     ...over,
   };
 }
 
 function installStubFactory(): { emit: () => ResourcesStreamCallbacks } {
   let captured: ResourcesStreamCallbacks | null = null;
-  __setResourcesStreamClientFactoryForTests((_epicId, callbacks) => {
+  __setResourcesStreamClientFactoryForTests((_scope, callbacks) => {
     captured = callbacks;
     return { close: () => undefined };
   });
@@ -263,7 +279,20 @@ describe("ResourceMonitorPopover", () => {
       stub.emit().onSnapshot(
         projection({
           app: app(),
-          owners: [owner({})],
+          owners: [
+            owner({}),
+            owner({
+              owner: {
+                kind: "terminal",
+                hostId: "host-1",
+                epicId: "epic-2",
+                ownerId: "term-closed",
+              },
+              activeProcessName: "bun",
+              cpuPercent: 4,
+              rssBytes: 50 * 1024 * 1024,
+            }),
+          ],
         }),
       );
     });
@@ -273,12 +302,13 @@ describe("ResourceMonitorPopover", () => {
     expect(screen.getByText("Resources")).not.toBeNull();
     expect(await screen.findByText("Traycer Desktop")).not.toBeNull();
     expect(screen.getByText("Renderer")).not.toBeNull();
-    expect(getDesktopMetrics).toHaveBeenCalledTimes(1);
+    expect(getDesktopMetrics).toHaveBeenCalled();
     expect(screen.getByText("Traycer Host")).not.toBeNull();
     expect(screen.getByText("Resource Task")).not.toBeNull();
+    expect(screen.getByText("Background Task")).not.toBeNull();
     expect(screen.getByText("Terminal Alpha")).not.toBeNull();
-    expect(screen.getByText("node dev-server.js")).not.toBeNull();
-    expect(screen.getByText("1 open terminal")).not.toBeNull();
+    expect(screen.getAllByText("node dev-server.js")).toHaveLength(2);
+    expect(screen.getByText("2 open terminals")).not.toBeNull();
     expect(screen.queryByText(/terminal processes/)).toBeNull();
 
     fireEvent.click(screen.getByText("Terminal Alpha"));

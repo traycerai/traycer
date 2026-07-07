@@ -3,6 +3,7 @@ import type {
   StreamMethodSupport,
   WsStreamClient,
 } from "@traycer-clients/shared/host-transport/ws-stream-client";
+import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 
 /**
@@ -44,6 +45,29 @@ export function useStreamMethodSupport(
       return null;
     }
     return client.getMethodSupport(method);
+  }, [client, method]);
+  return useSyncExternalStore(subscribe, getSnapshot, () => null);
+}
+
+export function useStreamMethodSchemaVersion(
+  method: keyof HostStreamRpcRegistry & string,
+): SchemaVersion | null {
+  const value = use(StreamRuntimeContext);
+  const client = value?.wsStreamClient ?? null;
+  const subscribe = useCallback(
+    (callback: () => void) => {
+      if (client === null) {
+        return () => undefined;
+      }
+      return client.subscribeMethodSupport(callback);
+    },
+    [client],
+  );
+  const getSnapshot = useCallback(() => {
+    if (client === null) {
+      return null;
+    }
+    return client.getMethodSchemaVersion(method);
   }, [client, method]);
   return useSyncExternalStore(subscribe, getSnapshot, () => null);
 }

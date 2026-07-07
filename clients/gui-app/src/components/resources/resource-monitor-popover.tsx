@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState, useSyncExternalStore } from "react";
 import { useNavigate, type UseNavigateResult } from "@tanstack/react-router";
 import { v4 as uuidv4 } from "uuid";
 import { useShallow } from "zustand/react/shallow";
@@ -15,6 +15,7 @@ import type {
   ResourceOwnerKindWire,
   ResourceProcessSnapshotWire,
 } from "@traycer/protocol/host/resources/subscribe";
+import type { TaskLight } from "@traycer/protocol/host/epic/unary-schemas";
 import type { EpicNodeRecord } from "@/lib/artifacts/node-display";
 import { Button } from "@/components/ui/button";
 import {
@@ -34,6 +35,7 @@ import {
   useGlobalResourceProjection,
   type GlobalResourceEpicEntry,
 } from "@/stores/resources/resources-registry";
+import { GlobalResourcesStreamMount } from "@/providers/resources-stream-mount";
 import type {
   AppResourceUsage,
   TaskResourceSummary,
@@ -55,6 +57,7 @@ import {
   openOrFocusEpicIntent,
 } from "@/lib/tab-navigation";
 import { cn } from "@/lib/utils";
+import { useCloudEpicTasksQuery } from "@/hooks/epics/use-cloud-epic-tasks-query";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import type {
@@ -78,6 +81,10 @@ const METRIC_COLS = "flex shrink-0 items-center tabular-nums tracking-tight";
 const CPU_COL = "w-14 text-right";
 const MEM_COL = "w-20 text-right";
 const DESKTOP_RESOURCE_SAMPLE_INTERVAL_MS = 1000;
+const desktopAppResourceListeners = new Set<() => void>();
+let desktopAppResourceSnapshot: DesktopAppResourceUsage | null = null;
+let desktopAppResourceTimer: number | null = null;
+let desktopAppResourceInFlight = false;
 const EMPTY_RESOURCE_SUMMARY: TaskResourceSummary = {
   cpuPercent: 0,
   rssBytes: 0,
@@ -143,32 +150,37 @@ export function ResourceMonitorPopover(props: ResourceMonitorPopoverProps) {
   const [open, setOpen] = useState(false);
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <TooltipWrapper
-        label="Resources"
-        side="top"
-        sideOffset={6}
-        align={undefined}
-      >
-        <PopoverTrigger asChild>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            aria-label="Resources"
-            data-testid="resource-monitor-header-button"
-            className={cn(
-              "text-muted-foreground hover:text-foreground",
-              props.className,
-            )}
-          >
-            <Cpu className="size-3.5" />
-          </Button>
-        </PopoverTrigger>
-      </TooltipWrapper>
+    <>
+      <GlobalResourcesStreamMount />
+      <Popover open={open} onOpenChange={setOpen}>
+        <TooltipWrapper
+          label="Resources"
+          side="top"
+          sideOffset={6}
+          align={undefined}
+        >
+          <PopoverTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Resources"
+              data-testid="resource-monitor-header-button"
+              className={cn(
+                "text-muted-foreground hover:text-foreground",
+                props.className,
+              )}
+            >
+              <Cpu className="size-3.5" />
+            </Button>
+          </PopoverTrigger>
+        </TooltipWrapper>
 
-      {open ? <ResourceMonitorContent onClose={() => setOpen(false)} /> : null}
-    </Popover>
+        {open ? (
+          <ResourceMonitorContent onClose={() => setOpen(false)} />
+        ) : null}
+      </Popover>
+    </>
   );
 }
 
@@ -178,6 +190,7 @@ function ResourceMonitorContent(props: { readonly onClose: () => void }) {
     () => new Set(),
   );
   const projection = useGlobalResourceProjection();
+  const { tasks } = useCloudEpicTasksQuery(undefined, { enabled: true });
   const canvas = useResourceCanvasSnapshot();
   const navigate = useNavigate();
   const openTileInTab = useEpicCanvasStore((state) => state.openTileInTab);
@@ -195,6 +208,7 @@ function ResourceMonitorContent(props: { readonly onClose: () => void }) {
 
   const canvasIndex = useMemo(() => buildCanvasResourceIndex(canvas), [canvas]);
   const recordByOwner = useMemo(() => buildRecordByOwner(canvas), [canvas]);
+  const epicTitleById = useMemo(() => buildEpicTitleById(tasks), [tasks]);
   const taskRows = useMemo(
     () =>
       buildTaskRows({
@@ -202,9 +216,17 @@ function ResourceMonitorContent(props: { readonly onClose: () => void }) {
         canvas,
         canvasIndex,
         recordByOwner,
+        epicTitleById,
         sortOption,
       }),
-    [canvas, canvasIndex, projection.entries, recordByOwner, sortOption],
+    [
+      canvas,
+      canvasIndex,
+      epicTitleById,
+      projection.entries,
+      recordByOwner,
+      sortOption,
+    ],
   );
 
   const toggleOwner = (key: string): void => {
@@ -223,6 +245,7 @@ function ResourceMonitorContent(props: { readonly onClose: () => void }) {
     const opened = openResourceOwner({
       row,
       canvas,
+      epicTitleById,
       openTileInTab,
       setActiveTilePane,
       setActiveTileTab,
@@ -359,49 +382,70 @@ function ResourceMonitorContent(props: { readonly onClose: () => void }) {
 }
 
 function useDesktopAppResourceUsage(): DesktopAppResourceUsage | null {
-  const [usage, setUsage] = useState<DesktopAppResourceUsage | null>(null);
+  return useSyncExternalStore(
+    subscribeDesktopAppResourceUsage,
+    getDesktopAppResourceSnapshot,
+    getDesktopAppResourceSnapshot,
+  );
+}
 
-  useEffect(() => {
-    const bridge = getDesktopDiagnosticsBridge();
-    if (bridge === null) {
-      return;
-    }
-
-    let disposed = false;
-    let inFlight = false;
-
-    const sample = (): void => {
-      if (inFlight) return;
-      inFlight = true;
-      void bridge
-        .getMetrics()
-        .then(
-          (snapshot) => {
-            if (disposed) return;
-            setUsage(desktopAppResourceUsageFromMetrics(snapshot, Date.now()));
-          },
-          () => {
-            if (disposed) return;
-            setUsage(null);
-          },
-        )
-        .finally(() => {
-          inFlight = false;
-        });
-    };
-
-    sample();
-    const timer = window.setInterval(
-      sample,
+function subscribeDesktopAppResourceUsage(listener: () => void): () => void {
+  desktopAppResourceListeners.add(listener);
+  if (desktopAppResourceListeners.size === 1) {
+    sampleDesktopAppResourceUsage();
+    desktopAppResourceTimer = window.setInterval(
+      sampleDesktopAppResourceUsage,
       DESKTOP_RESOURCE_SAMPLE_INTERVAL_MS,
     );
-    return () => {
-      disposed = true;
-      window.clearInterval(timer);
-    };
-  }, []);
+  }
+  return () => {
+    desktopAppResourceListeners.delete(listener);
+    if (
+      desktopAppResourceListeners.size === 0 &&
+      desktopAppResourceTimer !== null
+    ) {
+      window.clearInterval(desktopAppResourceTimer);
+      desktopAppResourceTimer = null;
+    }
+  };
+}
 
-  return usage;
+function getDesktopAppResourceSnapshot(): DesktopAppResourceUsage | null {
+  return desktopAppResourceSnapshot;
+}
+
+function sampleDesktopAppResourceUsage(): void {
+  const bridge = getDesktopDiagnosticsBridge();
+  if (bridge === null) {
+    setDesktopAppResourceSnapshot(null);
+    return;
+  }
+  if (desktopAppResourceInFlight) return;
+  desktopAppResourceInFlight = true;
+  void bridge
+    .getMetrics()
+    .then(
+      (snapshot) => {
+        setDesktopAppResourceSnapshot(
+          desktopAppResourceUsageFromMetrics(snapshot, Date.now()),
+        );
+      },
+      () => {
+        setDesktopAppResourceSnapshot(null);
+      },
+    )
+    .finally(() => {
+      desktopAppResourceInFlight = false;
+    });
+}
+
+function setDesktopAppResourceSnapshot(
+  next: DesktopAppResourceUsage | null,
+): void {
+  desktopAppResourceSnapshot = next;
+  for (const listener of Array.from(desktopAppResourceListeners)) {
+    listener();
+  }
 }
 
 function useResourceCanvasSnapshot(): CanvasResourceSnapshot {
@@ -555,6 +599,20 @@ function desktopResourceSummary(
   };
 }
 
+function buildEpicTitleById(
+  tasks: readonly TaskLight[],
+): ReadonlyMap<string, string> {
+  return new Map(
+    tasks.flatMap((task): [string, string][] => {
+      const light = task.epic?.light ?? null;
+      if (light === null) return [];
+      const title = light.title.trim();
+      if (title.length === 0) return [];
+      return [[light.id, title]];
+    }),
+  );
+}
+
 function TaskResourceSection(props: {
   readonly task: TaskDisplayRow;
   readonly collapsedOwners: ReadonlySet<string>;
@@ -583,6 +641,7 @@ function TaskResourceSection(props: {
       </div>
       {props.task.owners.map((row) => {
         const key = ownerKey(
+          row.snapshot.owner.epicId,
           row.snapshot.owner.kind,
           row.snapshot.owner.ownerId,
         );
@@ -710,12 +769,17 @@ function buildTaskRows(input: {
   readonly canvas: CanvasResourceSnapshot;
   readonly canvasIndex: CanvasResourceIndex;
   readonly recordByOwner: ReadonlyMap<string, EpicNodeRecord>;
+  readonly epicTitleById: ReadonlyMap<string, string>;
   readonly sortOption: ResourceSortOption;
 }): TaskDisplayRow[] {
   const rows = input.entries.flatMap((entry): TaskDisplayRow[] => {
     if (entry.owners.length === 0) return [];
     const owners = entry.owners.map((snapshot): OwnerDisplayRow => {
-      const key = ownerKey(snapshot.owner.kind, snapshot.owner.ownerId);
+      const key = ownerKey(
+        snapshot.owner.epicId,
+        snapshot.owner.kind,
+        snapshot.owner.ownerId,
+      );
       const location = input.canvasIndex.locationByOwner.get(key) ?? null;
       const record = input.recordByOwner.get(key) ?? null;
       return {
@@ -730,7 +794,7 @@ function buildTaskRows(input: {
     return [
       {
         entry,
-        label: taskLabel(entry.epicId, input.canvas),
+        label: taskLabel(entry.epicId, input.canvas, input.epicTitleById),
         tabOrder: taskTabOrder(entry.epicId, input.canvas),
         owners: sortOwnerRows(owners, input.sortOption),
       },
@@ -756,7 +820,7 @@ function buildCanvasResourceIndex(
         const ownerKind =
           ref === undefined ? null : resourceOwnerKindForRef(ref);
         if (ref === undefined || ownerKind === null) return [];
-        const key = ownerKey(ownerKind, ref.id);
+        const key = ownerKey(tab.epicId, ownerKind, ref.id);
         return [
           {
             key,
@@ -791,12 +855,13 @@ function buildRecordByOwner(
   canvas: CanvasResourceSnapshot,
 ): ReadonlyMap<string, EpicNodeRecord> {
   return new Map(
-    Object.values(canvas.artifactTreeByEpicId).flatMap((epicRecords) =>
-      (epicRecords ?? []).flatMap((record): [string, EpicNodeRecord][] => {
-        const kind = resourceOwnerKindForNodeType(record.type);
-        if (kind === null) return [];
-        return [[ownerKey(kind, record.id), record]];
-      }),
+    Object.entries(canvas.artifactTreeByEpicId).flatMap(
+      ([epicId, epicRecords]) =>
+        (epicRecords ?? []).flatMap((record): [string, EpicNodeRecord][] => {
+          const kind = resourceOwnerKindForNodeType(record.type);
+          if (kind === null) return [];
+          return [[ownerKey(epicId, kind, record.id), record]];
+        }),
     ),
   );
 }
@@ -848,6 +913,7 @@ function sortOwnerRows(
 function openResourceOwner(args: {
   readonly row: OwnerDisplayRow;
   readonly canvas: CanvasResourceSnapshot;
+  readonly epicTitleById: ReadonlyMap<string, string>;
   readonly openTileInTab: (tabId: string, node: EpicCanvasTileRef) => void;
   readonly setActiveTilePane: (tabId: string, paneId: string) => void;
   readonly setActiveTileTab: (
@@ -886,7 +952,7 @@ function openResourceOwner(args: {
     .getState()
     .resolveTargetTabForEpic(
       snapshot.owner.epicId,
-      taskLabel(snapshot.owner.epicId, args.canvas),
+      taskLabel(snapshot.owner.epicId, args.canvas, args.epicTitleById),
     );
   args.openTileInTab(targetTabId, {
     id: record.id,
@@ -923,11 +989,17 @@ function findOwnerRecord(
   return records.find((record) => record.id === snapshot.owner.ownerId) ?? null;
 }
 
-function taskLabel(epicId: string, canvas: CanvasResourceSnapshot): string {
+function taskLabel(
+  epicId: string,
+  canvas: CanvasResourceSnapshot,
+  epicTitleById: ReadonlyMap<string, string>,
+): string {
   for (const tabId of canvas.openTabOrder) {
     const tab = canvas.tabsById[tabId];
     if (tab?.epicId === epicId && tab.name.length > 0) return tab.name;
   }
+  const title = epicTitleById.get(epicId);
+  if (title !== undefined && title.length > 0) return title;
   return "Task";
 }
 
@@ -938,8 +1010,12 @@ function taskTabOrder(epicId: string, canvas: CanvasResourceSnapshot): number {
   return index === -1 ? Number.MAX_SAFE_INTEGER : index;
 }
 
-function ownerKey(kind: ResourceOwnerKindWire, ownerId: string): string {
-  return `${kind}\x1f${ownerId}`;
+function ownerKey(
+  epicId: string,
+  kind: ResourceOwnerKindWire,
+  ownerId: string,
+): string {
+  return `${epicId}\x1f${kind}\x1f${ownerId}`;
 }
 
 function resourceOwnerKindForNodeType(
