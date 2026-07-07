@@ -17,15 +17,20 @@ import { releasedMethodNames } from "./__fixtures__/released-method-names";
  * `protocol/scripts/snapshot-released-method-names.ts`). A new capability must
  * ride a new `{ major, minor }` of an EXISTING method, never a new method name.
  *
- * Scope: this guards only the handshake-fatal class (name-set mismatch). It does
- * NOT freeze per-method schemas - shipped schemas evolve additively in this
- * codebase (a new harness/provider adds an enum value, etc.), which the handshake
- * tolerates within a version. A genuinely breaking schema change must instead
- * ride a version bump (as `host.getRateLimitUsage` now does for `accountContext`).
+ * ROLE: this test is a FAST LOCAL TRIPWIRE only. The authoritative gate is the
+ * `protocol-compat` CI workflow, which dumps every released baseline's surface
+ * from its immutable git tag (`protocol/scripts/compat/`) - a baseline no PR
+ * can edit. Editing the fixture here does NOT change what CI verifies (that
+ * edit-the-fixture path is exactly how `terminal.defaultCwd` shipped
+ * handshake-incompatible in #227), and the fixture file itself is tripwired:
+ * changing it requires the `protocol-compat-override` label.
  *
- * When this fails, either fold the capability into an existing method and version
- * it, or - for a coordinated release that drops support for the baselined host -
- * regenerate the baseline (the diff is the record of that decision).
+ * Scope: this guards only the handshake-fatal class (name-set mismatch). It does
+ * NOT freeze per-method schemas - the CI gate covers those (same-version
+ * wire-schema rules with reviewed exceptions in `compat-exceptions.json`).
+ *
+ * When this fails, fold the capability into an existing method and version it
+ * (see `worktree.listByWorkspacePaths@1.1` / `worktree.listBindingsForEpic@1.1`).
  */
 describe("released method-name set (host-v1.0.0) is frozen", () => {
   it("advertises exactly the baselined method names", () => {

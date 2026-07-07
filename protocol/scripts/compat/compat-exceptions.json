@@ -1,0 +1,4 @@
+{
+  "$comment": "Reviewed tolerances for same-version wire-schema divergences reported by the released-peer compatibility gate. Each entry names the exact finding it suppresses (family, method, version, payload, path) plus the reason it is safe. Handshake-fatal findings can never be excepted. Adding an entry requires the 'protocol-compat-override' label and protocol-owner review.",
+  "exceptions": []
+}
