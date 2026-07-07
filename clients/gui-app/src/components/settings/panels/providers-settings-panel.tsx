@@ -481,7 +481,9 @@ function ProviderEnableSwitch(props: {
 // selected/custom path is never consulted anywhere. Both hide the candidates
 // table and show only the API-key section rather than offer a control with no
 // effect.
-function hidesCliCandidates(providerId: ProviderCliState["providerId"]): boolean {
+function hidesCliCandidates(
+  providerId: ProviderCliState["providerId"],
+): boolean {
   return providerId === "cursor" || providerId === "amp";
 }
 
