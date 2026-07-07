@@ -2197,12 +2197,12 @@ function isSubagentChildSegment(
 function nestSubagentChildren(
   flat: ReadonlyArray<MessageSegment>,
 ): ReadonlyArray<MessageSegment> {
-  const subagentIds = new Set(
+  const subagentSegmentsById = new Map(
     flat.flatMap((segment) =>
-      segment.kind === "subagent" ? [segment.id] : [],
+      segment.kind === "subagent" ? [[segment.id, segment] as const] : [],
     ),
   );
-  if (subagentIds.size === 0) return flat;
+  if (subagentSegmentsById.size === 0) return flat;
 
   const childrenByParent = new Map<string, SubagentChildSegment[]>();
   const topLevel: MessageSegment[] = [];
@@ -2210,7 +2210,7 @@ function nestSubagentChildren(
     if (
       isSubagentChildSegment(segment) &&
       segment.parentId !== null &&
-      subagentIds.has(segment.parentId)
+      subagentSegmentsById.has(segment.parentId)
     ) {
       const bucket = childrenByParent.get(segment.parentId);
       if (bucket === undefined) {
@@ -2224,11 +2224,33 @@ function nestSubagentChildren(
   }
   if (childrenByParent.size === 0) return flat;
 
-  return topLevel.map((segment) =>
+  // A parentId cycle (host invariants rule it out, but a malformed/replayed
+  // chain must never hang OR disappear) buckets every member under some other
+  // member's children, so none of them ever lands in `topLevel` for
+  // `resolveSubagentChildren`'s ancestor guard to run on - the whole island
+  // would otherwise vanish silently. Walk reachability from the real
+  // top-level subagents first, then surface any subagent left unreached as
+  // its own top-level fallback.
+  const reached = new Set<string>();
+  const markReached = (id: string): void => {
+    if (reached.has(id)) return;
+    reached.add(id);
+    for (const child of childrenByParent.get(id) ?? []) {
+      if (child.kind === "subagent") markReached(child.id);
+    }
+  };
+  for (const segment of topLevel) {
+    if (segment.kind === "subagent") markReached(segment.id);
+  }
+  const fallback = [...subagentSegmentsById.entries()].flatMap(
+    ([id, segment]) => (reached.has(id) ? [] : [segment]),
+  );
+
+  const resolve = (segment: MessageSegment): MessageSegment =>
     segment.kind === "subagent"
       ? resolveSubagentChildren(segment, childrenByParent, new Set())
-      : segment,
-  );
+      : segment;
+  return [...topLevel, ...fallback].map(resolve);
 }
 
 /**
@@ -2394,18 +2416,15 @@ function collectSpawnToolCallIds(
   return ids;
 }
 
-function dropSpawnToolCallsRecursively(
-  flat: ReadonlyArray<MessageSegment>,
+function dropSpawnToolCallsRecursively<T extends MessageSegment>(
+  flat: ReadonlyArray<T>,
   shouldDrop: (toolSegmentId: string) => boolean,
-): ReadonlyArray<MessageSegment> {
+): ReadonlyArray<T> {
   return rejectToolSegments(flat, shouldDrop).map((segment) =>
     segment.kind === "subagent" && segment.children.length > 0
       ? {
           ...segment,
-          children: dropSpawnToolCallsRecursively(
-            segment.children,
-            shouldDrop,
-          ) as ReadonlyArray<SubagentChildSegment>,
+          children: dropSpawnToolCallsRecursively(segment.children, shouldDrop),
         }
       : segment,
   );

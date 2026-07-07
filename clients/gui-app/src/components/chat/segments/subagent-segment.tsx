@@ -855,10 +855,7 @@ function latestActivityText(
   activity: ReadonlyArray<WorkflowActivityEntry>,
   kind: WorkflowActivityEntry["kind"],
 ): string | null {
-  for (let index = activity.length - 1; index >= 0; index -= 1) {
-    if (activity[index].kind === kind) return activity[index].text;
-  }
-  return null;
+  return activity.filter((entry) => entry.kind === kind).at(-1)?.text ?? null;
 }
 
 /**

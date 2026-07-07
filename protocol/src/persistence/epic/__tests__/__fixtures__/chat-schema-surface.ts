@@ -2168,7 +2168,9 @@ export const chatSchemaSurfaceBaseline = {
                                   "agentsStarted": {
                                     "anyOf": [
                                       {
-                                        "type": "number"
+                                        "type": "integer",
+                                        "minimum": -9007199254740991,
+                                        "maximum": 9007199254740991
                                       },
                                       {
                                         "type": "null"
@@ -2178,7 +2180,9 @@ export const chatSchemaSurfaceBaseline = {
                                   "agentsFinished": {
                                     "anyOf": [
                                       {
-                                        "type": "number"
+                                        "type": "integer",
+                                        "minimum": -9007199254740991,
+                                        "maximum": 9007199254740991
                                       },
                                       {
                                         "type": "null"
@@ -2188,7 +2192,9 @@ export const chatSchemaSurfaceBaseline = {
                                   "totalTokens": {
                                     "anyOf": [
                                       {
-                                        "type": "number"
+                                        "type": "integer",
+                                        "minimum": -9007199254740991,
+                                        "maximum": 9007199254740991
                                       },
                                       {
                                         "type": "null"
@@ -6207,7 +6213,9 @@ export const chatSchemaSurfaceBaseline = {
                                   "agentsStarted": {
                                     "anyOf": [
                                       {
-                                        "type": "number"
+                                        "type": "integer",
+                                        "minimum": -9007199254740991,
+                                        "maximum": 9007199254740991
                                       },
                                       {
                                         "type": "null"
@@ -6217,7 +6225,9 @@ export const chatSchemaSurfaceBaseline = {
                                   "agentsFinished": {
                                     "anyOf": [
                                       {
-                                        "type": "number"
+                                        "type": "integer",
+                                        "minimum": -9007199254740991,
+                                        "maximum": 9007199254740991
                                       },
                                       {
                                         "type": "null"
@@ -6227,7 +6237,9 @@ export const chatSchemaSurfaceBaseline = {
                                   "totalTokens": {
                                     "anyOf": [
                                       {
-                                        "type": "number"
+                                        "type": "integer",
+                                        "minimum": -9007199254740991,
+                                        "maximum": 9007199254740991
                                       },
                                       {
                                         "type": "null"

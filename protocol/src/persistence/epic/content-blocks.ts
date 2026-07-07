@@ -291,9 +291,9 @@ export const workflowMetaSchema = z.object({
   // time. `null` on extraction failure - never the raw script source.
   intent: z.string().nullable(),
   activity: z.array(workflowActivityEntrySchema),
-  agentsStarted: z.number().nullable(),
-  agentsFinished: z.number().nullable(),
-  totalTokens: z.number().nullable(),
+  agentsStarted: z.number().int().nullable(),
+  agentsFinished: z.number().int().nullable(),
+  totalTokens: z.number().int().nullable(),
 });
 export type WorkflowMeta = z.infer<typeof workflowMetaSchema>;
 

@@ -569,6 +569,18 @@ function subagentBodySearchText(
   segment: SubagentSegment,
 ): ReadonlyArray<string> {
   const workflowMeta = segment.workflowMeta;
+  const resultText =
+    segment.result === null ? "" : markdownToChatSearchText(segment.result);
+  // The workflow card replaces Task/Progress with Intent/Activity, so index
+  // only what it actually renders - the base task/progressUpdates fields are
+  // the dual-written degradation for old readers, never shown here.
+  if (workflowMeta !== null) {
+    return [
+      resultText,
+      workflowMeta.intent ?? "",
+      ...workflowMeta.activity.map((entry) => entry.text),
+    ];
+  }
   return [
     cleanSubagentNotificationText(segment.task) ?? "",
     // Progress is rendered raw and adjacent-deduped; index the SAME deduped raw
@@ -576,15 +588,7 @@ function subagentBodySearchText(
     ...adjacentDedupedProgressItems(segment.progressUpdates).map(
       (item) => item.text,
     ),
-    segment.result === null ? "" : markdownToChatSearchText(segment.result),
-    // The workflow card replaces Task/Progress with Intent/Activity - index
-    // those instead so a workflow run's search text matches what it renders.
-    ...(workflowMeta === null
-      ? []
-      : [
-          workflowMeta.intent ?? "",
-          ...workflowMeta.activity.map((entry) => entry.text),
-        ]),
+    resultText,
   ];
 }
 

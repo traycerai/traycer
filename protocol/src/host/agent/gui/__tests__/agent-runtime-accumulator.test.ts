@@ -2260,6 +2260,34 @@ describe("accumulateEvent", () => {
     });
   });
 
+  it("workflow.progress with no existing block creates a dual-written SubAgentBlock with workflowMeta", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "workflow.progress",
+      blockId: "wf-1",
+      timestamp: 1,
+      activity: { kind: "phase", text: "Find" },
+      agentsStarted: 16,
+      agentsFinished: 0,
+      totalTokens: 5000,
+    });
+
+    expect(blocks).toHaveLength(1);
+    const block = blocks[0] as SubAgentBlock;
+    expect(block.type).toBe("subagent");
+    expect(block.name).toBeNull();
+    expect(block.task).toBeNull();
+    expect(block.progressUpdates).toEqual(["Find"]);
+    expect(block.workflowMeta).toEqual({
+      name: "",
+      intent: null,
+      activity: [{ kind: "phase", text: "Find" }],
+      agentsStarted: 16,
+      agentsFinished: 0,
+      totalTokens: 5000,
+    });
+  });
+
   it("workflow.completed finalizes the dual-written SubAgentBlock", () => {
     let blocks = makeBlocks();
     blocks = accumulateEvent(blocks, {
