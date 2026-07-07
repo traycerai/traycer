@@ -62,7 +62,7 @@ export function buildWorktreeListCommand(
   opts: WorktreeListCommandOpts,
 ): CommandFn {
   return async () => {
-    const explicitPaging = opts.cursor !== null || opts.limit !== null;
+    const explicitPaging = opts.limit !== null;
     const explicitLimit = parseWorktreeListLimit(opts.limit);
 
     if (explicitPaging) {
@@ -83,7 +83,7 @@ export function buildWorktreeListCommand(
     }
 
     const worktrees: WorktreeListRow[] = [];
-    let cursor: string | null = null;
+    let cursor: string | null = opts.cursor;
 
     while (true) {
       let page: WorktreeListPage;
@@ -159,7 +159,7 @@ function worktreeListResumeError(
   const resumeHint =
     resumeCursor === null
       ? "retry the command to resume from the beginning"
-      : `resume with --cursor ${resumeCursor} --limit ${DEFAULT_WORKTREE_LIST_PAGE_LIMIT}`;
+      : `resume with --cursor ${resumeCursor}`;
   return cliError({
     code: cliErr.code,
     message: `${cliErr.message} Partial worktree rows are available; ${resumeHint}.`,

@@ -948,7 +948,7 @@ function registerWorktreeCommands(program: Command): void {
       )
       .option(
         "--cursor <worktreePath>",
-        "Fetch a single page strictly after this worktree path",
+        "Start listing strictly after this worktree path",
       )
       .option(
         "--limit <n>",

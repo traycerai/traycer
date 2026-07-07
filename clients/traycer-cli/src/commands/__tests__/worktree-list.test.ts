@@ -333,6 +333,54 @@ describe("buildWorktreeListCommand", () => {
     expect(result.human).toContain("More worktrees available");
   });
 
+  it("auto-pages from an explicit cursor when no limit is provided", async () => {
+    const startCursor = "/Users/dev/.traycer/worktrees/acme__api/feature-a";
+    const first = entry({
+      worktreePath: "/Users/dev/.traycer/worktrees/acme__web/feature-b",
+      repoLabel: "acme/web",
+      branch: "feature/b",
+    });
+    const second = entry({
+      worktreePath: "/Users/dev/.traycer/worktrees/acme__web/feature-c",
+      repoLabel: "acme/web",
+      branch: "feature/c",
+    });
+    rpcMock
+      .mockResolvedValueOnce({
+        worktrees: [first],
+        nextCursor: first.worktreePath,
+      })
+      .mockResolvedValueOnce({ worktrees: [second], nextCursor: null });
+
+    const result = await buildWorktreeListCommand({
+      includeActivity: true,
+      cursor: startCursor,
+      limit: null,
+    })(ctx);
+
+    expect(rpcMock).toHaveBeenCalledTimes(2);
+    expect(rpcMock).toHaveBeenNthCalledWith(1, "worktree.listAllForHost", {
+      includeActivity: true,
+      activityPaths: null,
+      cursor: startCursor,
+      limit: 32,
+    });
+    expect(rpcMock).toHaveBeenNthCalledWith(2, "worktree.listAllForHost", {
+      includeActivity: true,
+      activityPaths: null,
+      cursor: first.worktreePath,
+      limit: 32,
+    });
+    expect(result.data).toEqual({
+      worktrees: [
+        { ...first, tier: "review" },
+        { ...second, tier: "review" },
+      ],
+      nextCursor: null,
+    });
+    expect(result.human).not.toContain("More worktrees available");
+  });
+
   it("throws a resume envelope with partial rows when auto-paging fails mid-loop", async () => {
     const first = entry({
       worktreePath: "/Users/dev/.traycer/worktrees/acme__api/feature-a",
@@ -350,6 +398,9 @@ describe("buildWorktreeListCommand", () => {
       buildWorktreeListCommand(defaultOpts)(ctx),
     ).rejects.toMatchObject({
       code: CLI_ERROR_CODES.UNEXPECTED,
+      message: expect.stringContaining(
+        `resume with --cursor ${first.worktreePath}`,
+      ),
       details: {
         worktrees: [{ ...first, tier: "review" }],
         resumeCursor: first.worktreePath,
