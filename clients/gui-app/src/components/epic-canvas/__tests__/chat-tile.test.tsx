@@ -1461,6 +1461,41 @@ describe("<ChatTile />", () => {
     expect(chatHarness.sent).toHaveLength(0);
   });
 
+  it("disables next-step sends while a stop request is pending", async () => {
+    renderChatTile();
+
+    await waitForChatTileLoaded();
+
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: SESSION_SETTINGS,
+        messages: [hostUserMessage(), nextStepsAssistantMessage()],
+        activeTurn: runningActiveTurn(),
+      });
+    });
+
+    const nextStepButton = getButtonContainingText(
+      "/implementation-validation all",
+    );
+    expect(nextStepButton.disabled).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+
+    expect(chatHarness.sent).toHaveLength(1);
+    expect(chatHarness.sent[0]?.kind).toBe("stop");
+
+    await waitFor(() => {
+      expect(nextStepButton.disabled).toBe(true);
+    });
+
+    fireEvent.click(nextStepButton);
+
+    expect(chatHarness.sent).toHaveLength(1);
+  });
+
   it("disables next-step sends while a blocking approval is pending", async () => {
     renderChatTile();
 

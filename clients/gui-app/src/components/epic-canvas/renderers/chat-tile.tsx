@@ -1306,6 +1306,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   );
   const canSendNextStep =
     canAct &&
+    !stopPending &&
     composerActiveTurnStatus !== "stopping" &&
     !composerHasBlockingApprovals(
       state.pendingApprovals,
