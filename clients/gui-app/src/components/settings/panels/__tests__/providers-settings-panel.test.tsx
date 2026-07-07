@@ -478,6 +478,53 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(screen.getByText("Checking account")).toBeDefined();
   });
 
+  it("does not render disabled attribution for providers", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        {
+          ...providerState({
+            providerId: "codex",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+          }),
+          enabled: false,
+          disabledBy: {
+            userId: "a7f4dd6c-7f20-44c2-b83b-fdc71c258b80",
+            handle: "teammate",
+            at: 1,
+          },
+        },
+        {
+          ...providerState({
+            providerId: "traycer",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+          }),
+          enabled: false,
+          disabledBy: {
+            userId: "0c8cedd2-b928-4980-bf87-fb9f948c23e5",
+            handle: null,
+            at: 1,
+          },
+        },
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(screen.queryByText(/Disabled by/)).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /Traycer/i }));
+
+    expect(screen.queryByText(/Disabled by/)).toBeNull();
+  });
+
   it("lists OpenCode CLI candidates for OpenRouter and mutates OpenRouter selection", () => {
     render(
       <TooltipProvider>
