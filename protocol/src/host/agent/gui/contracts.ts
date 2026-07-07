@@ -21,6 +21,7 @@ import {
   chatSubscribeV10,
   chatSubscribeV11,
   chatSubscribeV12,
+  chatSubscribeV13,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 
 // ─── GUI-surface catalog (`agent.gui.*`) ──────────────────────────────────
@@ -153,4 +154,9 @@ export const agentGuiGetPlanV10 = defineRpcContract({
   responseSchema: getGuiAgentPlanResponseSchema,
 });
 
-export { chatSubscribeV10, chatSubscribeV11, chatSubscribeV12 };
+export {
+  chatSubscribeV10,
+  chatSubscribeV11,
+  chatSubscribeV12,
+  chatSubscribeV13,
+};

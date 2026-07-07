@@ -1,7 +1,8 @@
-import { ChevronDown, ChevronUp, Pencil, X } from "lucide-react";
+import { ChevronDown, ChevronUp, Pause, Pencil, Play, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ChatQueuedItem } from "@traycer/protocol/host/agent/gui/subscribe";
+import { useQueuePauseState } from "@/components/chat/queued-message-utils";
 import { extractPlainTextFromComposerJSONContent } from "@/lib/composer/tiptap-json-content";
 import type { ChatSessionState } from "@/stores/chats/chat-session-store";
 
@@ -9,7 +10,8 @@ interface ChatControlStripProps {
   readonly state: Pick<ChatSessionState, "queue">;
   readonly canAct: boolean;
   readonly editingQueueItemId: string | null;
-  readonly onResumeQueue: () => void;
+  readonly onQueuePause: () => string | null;
+  readonly onResumeQueue: () => string | null;
   readonly onQueueEdit: (item: ChatQueuedItem) => void;
   readonly onQueueCancel: (item: ChatQueuedItem) => void;
   readonly onQueueReorder: (
@@ -34,6 +36,7 @@ export function ChatControlStrip(props: ChatControlStripProps) {
           status={props.state.queue.status}
           canAct={props.canAct}
           editingQueueItemId={props.editingQueueItemId}
+          onQueuePause={props.onQueuePause}
           onResumeQueue={props.onResumeQueue}
           onEdit={props.onQueueEdit}
           onCancel={props.onQueueCancel}
@@ -49,7 +52,8 @@ function QueuePanel(props: {
   readonly status: "idle" | "running" | "paused";
   readonly canAct: boolean;
   readonly editingQueueItemId: string | null;
-  readonly onResumeQueue: () => void;
+  readonly onQueuePause: () => string | null;
+  readonly onResumeQueue: () => string | null;
   readonly onEdit: (item: ChatQueuedItem) => void;
   readonly onCancel: (item: ChatQueuedItem) => void;
   readonly onReorder: (
@@ -57,6 +61,9 @@ function QueuePanel(props: {
     beforeQueueItemId: string | null,
   ) => void;
 }) {
+  const { hasPausedItems, hasPausableHumanItems } = useQueuePauseState(
+    props.items,
+  );
   if (props.items.length === 0) return null;
   return (
     <div
@@ -70,7 +77,7 @@ function QueuePanel(props: {
             {props.status}
           </span>
         </div>
-        {props.status === "paused" ? (
+        {hasPausedItems ? (
           <Button
             type="button"
             size="sm"
@@ -79,7 +86,23 @@ function QueuePanel(props: {
             onClick={props.onResumeQueue}
             data-testid="resume-queue-button"
           >
+            <Play className="size-3.5" />
             Resume queue
+          </Button>
+        ) : null}
+        {!hasPausedItems && hasPausableHumanItems ? (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={!props.canAct}
+            onClick={() => {
+              props.onQueuePause();
+            }}
+            data-testid="pause-queue-button"
+          >
+            <Pause className="size-3.5" />
+            Pause queue
           </Button>
         ) : null}
       </div>

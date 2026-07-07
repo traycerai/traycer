@@ -6,6 +6,7 @@ import {
   chatSubscribeV10,
   chatSubscribeV11,
   chatSubscribeV12,
+  chatSubscribeV13,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import { getRecordSchema } from "@traycer/protocol/framework/index";
 import { autonomousResumeTriggerSchema } from "@traycer/protocol/persistence/epic/content-blocks";
@@ -612,7 +613,7 @@ describe("chat.subscribe@1.2 server frames", () => {
   });
 });
 
-describe("chat.subscribe@1.2 client frames", () => {
+describe("chat.subscribe@1.3 client frames", () => {
   it("requires clientActionId on owner action frames", () => {
     expect(
       chatSubscribeClientFrameSchema.parse({
@@ -634,6 +635,31 @@ describe("chat.subscribe@1.2 client frames", () => {
         turnId: "turn-1",
       }),
     ).toThrow();
+  });
+
+  it("parses pause queue owner actions", () => {
+    expect(chatSubscribeV13.schemaVersion).toEqual({ major: 1, minor: 3 });
+    expect(
+      chatSubscribeV12.clientFrameSchema.safeParse({
+        kind: "pauseQueue",
+        hasBinaryPayload: false,
+        epicId: "epic-1",
+        chatId: "chat-1",
+        clientActionId: "pause-queue-action-1",
+      }).success,
+    ).toBe(false);
+    expect(
+      chatSubscribeClientFrameSchema.parse({
+        kind: "pauseQueue",
+        hasBinaryPayload: false,
+        epicId: "epic-1",
+        chatId: "chat-1",
+        clientActionId: "pause-queue-action-1",
+      }),
+    ).toMatchObject({
+      kind: "pauseQueue",
+      clientActionId: "pause-queue-action-1",
+    });
   });
 
   it("parses background-item stop owner actions", () => {
