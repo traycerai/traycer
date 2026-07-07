@@ -4,10 +4,12 @@ import {
   contentBlockSchema,
   decodeAutonomousResumeBlock,
   encodeAutonomousResumeBlock,
+  subAgentBlockSchema,
   type ApprovalBlock,
   type AutonomousResumeBlock,
   type FileChangeBlock,
   type InterviewBlock,
+  type SubAgentBlock,
   type ToolCallBlock,
 } from "@traycer/protocol/persistence/epic/content-blocks";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/index";
@@ -257,6 +259,90 @@ describe("fileChangeBlockSchema backward-compat", () => {
     expect(parsed.approvalId).toBeNull();
     expect(parsed.supersededByPlanId).toBeNull();
     expect(parsed.metadata).toBeNull();
+  });
+});
+
+describe("subAgentBlockSchema workflowMeta (no new persisted block type)", () => {
+  const workflowSubAgentBlock = {
+    type: "subagent",
+    blockId: "wf-1",
+    status: "completed",
+    timestamp: 1000,
+    name: "review",
+    agentType: null,
+    task: "Review the diff",
+    progressUpdates: ["Find: find:host-core"],
+    result: "3 findings",
+    startedAt: 900,
+    spawnToolCallId: "toolu_workflow_1",
+    stopped: false,
+    workflowMeta: {
+      name: "review",
+      intent: "Review the diff",
+      activity: [
+        { kind: "phase", text: "Find" },
+        { kind: "label", text: "find:host-core" },
+      ],
+      agentsStarted: 16,
+      agentsFinished: 16,
+      totalTokens: 120000,
+    },
+  };
+
+  it("round-trips a dual-written workflow subagent block through the current schema", () => {
+    const parsed = subAgentBlockSchema.parse(
+      workflowSubAgentBlock,
+    ) as SubAgentBlock;
+    expect(parsed.name).toBe("review");
+    expect(parsed.task).toBe("Review the diff");
+    expect(parsed.workflowMeta).toEqual(workflowSubAgentBlock.workflowMeta);
+  });
+
+  it("defaults workflowMeta to null for an ordinary (pre-workflow) subagent block", () => {
+    const { workflowMeta: _workflowMeta, ...ordinary } = workflowSubAgentBlock;
+    const parsed = subAgentBlockSchema.parse(ordinary) as SubAgentBlock;
+    expect(parsed.workflowMeta).toBeNull();
+  });
+
+  it("old-reader compat: a pre-workflowMeta subAgentBlockSchema parses a workflowMeta-bearing block, stripping the unknown key (plan invariant 6)", () => {
+    // Field-for-field copy of `subAgentBlockSchema` as it existed before
+    // `workflowMeta` was added - stands in for a released host's baked schema.
+    // Persisted bytes must stay readable by any released host (tech plan
+    // §2.2 / critique finding 1: no new block `type`, only an
+    // additive/defaulted field on the existing `subagent` block). A hard
+    // ZodError here would make a chat containing a workflow run entirely
+    // unreadable on an older host, not just degraded.
+    const preWorkflowMetaSubAgentBlockSchema = z.object({
+      blockId: z.string(),
+      status: z.enum([
+        "streaming",
+        "completed",
+        "errored",
+        "interrupted",
+        "superseded",
+      ]),
+      timestamp: z.number(),
+      parentBlockId: z.string().nullish(),
+      type: z.literal("subagent"),
+      name: z.string().nullable(),
+      agentType: z.string().nullable().default(null),
+      task: z.string().nullable(),
+      progressUpdates: z.array(z.string()),
+      result: z.string().nullable(),
+      startedAt: z.number().nullable().default(null),
+      spawnToolCallId: z.string().nullable().default(null),
+      stopped: z.boolean().default(false),
+    });
+
+    const parsed = preWorkflowMetaSubAgentBlockSchema.parse(
+      workflowSubAgentBlock,
+    );
+    expect(parsed.type).toBe("subagent");
+    expect(parsed.name).toBe("review");
+    expect(parsed.result).toBe("3 findings");
+    // The rich workflow data is not retained by the older reader - the base
+    // subagent fields are the faithful degradation.
+    expect("workflowMeta" in parsed).toBe(false);
   });
 });
 

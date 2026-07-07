@@ -88,9 +88,15 @@ export const worktreeBindingEntrySchema = z.object({
   createdAt: z.number(),
   // Submodule branches this worktree owns (see `worktreeOwnedSubmoduleSchema`).
   // `[]` when the repo has no submodules, or none were checked out on a branch.
-  // Not optional - the host persistence migration (binding v1 -> v2) backfills
-  // `[]` on older rows so every read carries a concrete array.
-  ownedSubmodules: z.array(worktreeOwnedSubmoduleSchema),
+  // Optional on the wire: this entry shape is embedded, unversioned, in many
+  // already-released response/stream payloads (worktree.create,
+  // worktree.getBinding, worktree.import, worktree.retrySetup,
+  // worktree.setEntryMode, workspaceBinding.removeEntry, chat.subscribe), so a
+  // released host that predates this field simply omits the key - it must not
+  // become a required-field wire break. The host's own binding-v1->v2
+  // persistence migration still backfills `[]` on every locally-read row, so a
+  // current host always produces a concrete array in practice.
+  ownedSubmodules: z.array(worktreeOwnedSubmoduleSchema).optional(),
 });
 export type WorktreeBindingEntry = z.infer<typeof worktreeBindingEntrySchema>;
 
@@ -908,6 +914,23 @@ export const worktreeListBindingsForEpicResponseSchema = z.object({
 });
 export type WorktreeListBindingsForEpicResponse = z.infer<
   typeof worktreeListBindingsForEpicResponseSchema
+>;
+
+/**
+ * `worktree.listBindingsForEpic` v1.1 response. Adds `folderlessCwd` - the
+ * host-owned fallback cwd (the epic's root directory) for terminal launches on
+ * an epic with no bound workspace rows - so folderless epics need no dedicated
+ * RPC (the wire method-set must stay identical to v1.0.0; see the RPC
+ * backward-compat decision log). `null` only after bridging up from a v1.0
+ * host, which predates folderless workspaces; the picker then keeps its
+ * launch action disabled.
+ */
+export const worktreeListBindingsForEpicResponseSchemaV11 =
+  worktreeListBindingsForEpicResponseSchema.extend({
+    folderlessCwd: z.string().min(1).nullable(),
+  });
+export type WorktreeListBindingsForEpicResponseV11 = z.infer<
+  typeof worktreeListBindingsForEpicResponseSchemaV11
 >;
 
 export const worktreeSetRepoScriptsRequestSchema = z.object({

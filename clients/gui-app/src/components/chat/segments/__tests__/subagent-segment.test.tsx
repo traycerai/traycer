@@ -16,6 +16,39 @@ import {
   useSetChatFindForcedOpen,
   useChatCollapsibleTileInstanceId,
 } from "@/stores/chats/chat-find-force-store-context";
+import type { SubagentSegment as SubagentSegmentModel } from "@/stores/composer/chat-store";
+
+function clickTriggerFor(text: string): void {
+  const button = screen.getByText(text).closest("button");
+  if (button === null) {
+    throw new Error(`expected a button trigger ancestor for "${text}"`);
+  }
+  fireEvent.click(button);
+}
+
+function nestedAgentFixture(
+  overrides: Partial<SubagentSegmentModel>,
+): SubagentSegmentModel {
+  return {
+    id: "nested-agent",
+    kind: "subagent",
+    name: "nested-agent",
+    agentType: null,
+    task: "Investigate nested work.",
+    progressUpdates: [],
+    result: null,
+    isStreaming: true,
+    endState: null,
+    stopped: false,
+    startedAt: null,
+    durationMs: null,
+    spawnToolCallId: null,
+    parentId: null,
+    workflowMeta: null,
+    children: [],
+    ...overrides,
+  };
+}
 
 function render(ui: ReactNode) {
   return rtlRender(
@@ -45,6 +78,8 @@ function SubagentPersistenceHarness(props: SubagentPersistenceHarnessProps) {
       startedAt={null}
       durationMs={null}
       agentType={null}
+      workflowMeta={null}
+      nested={[]}
       variant="promoted"
     />
   );
@@ -96,6 +131,8 @@ describe("<SubagentSegment /> promoted feed", () => {
         startedAt={null}
         durationMs={null}
         agentType={null}
+        workflowMeta={null}
+        nested={[]}
         variant="promoted"
       />,
     );
@@ -130,6 +167,8 @@ describe("<SubagentSegment /> promoted feed", () => {
         startedAt={null}
         durationMs={null}
         agentType={null}
+        workflowMeta={null}
+        nested={[]}
         variant="promoted"
       />,
     );
@@ -151,6 +190,8 @@ describe("<SubagentSegment /> promoted feed", () => {
         startedAt={null}
         durationMs={null}
         agentType="analysis"
+        workflowMeta={null}
+        nested={[]}
         variant="promoted"
       />,
     );
@@ -186,6 +227,8 @@ describe("<SubagentSegment /> promoted feed", () => {
           startedAt={5_000}
           durationMs={null}
           agentType={null}
+          workflowMeta={null}
+          nested={[]}
           variant="promoted"
         />,
       );
@@ -218,6 +261,8 @@ describe("<SubagentSegment /> promoted feed", () => {
         startedAt={null}
         durationMs={null}
         agentType={null}
+        workflowMeta={null}
+        nested={[]}
         variant="promoted"
       />,
     );
@@ -247,6 +292,8 @@ describe("<SubagentSegment /> promoted feed", () => {
           startedAt={5_000}
           durationMs={null}
           agentType="analysis"
+          workflowMeta={null}
+          nested={[]}
           variant="card"
         />,
       );
@@ -282,6 +329,8 @@ describe("<SubagentSegment /> promoted feed", () => {
         startedAt={null}
         durationMs={null}
         agentType={null}
+        workflowMeta={null}
+        nested={[]}
         variant="card"
       />,
     );
@@ -310,6 +359,8 @@ describe("<SubagentSegment /> promoted feed", () => {
           startedAt={null}
           durationMs={null}
           agentType={null}
+          workflowMeta={null}
+          nested={[]}
           variant="promoted"
         />
       </ChatMeasuredItemChangeContext.Provider>,
@@ -338,6 +389,8 @@ describe("<SubagentSegment /> promoted feed", () => {
           startedAt={null}
           durationMs={null}
           agentType={null}
+          workflowMeta={null}
+          nested={[]}
           variant="card"
         />
       </ChatMeasuredItemChangeContext.Provider>,
@@ -369,6 +422,8 @@ describe("<SubagentSegment /> promoted feed", () => {
         startedAt={null}
         durationMs={null}
         agentType={null}
+        workflowMeta={null}
+        nested={[]}
         variant="promoted"
       />,
     );
@@ -402,6 +457,8 @@ describe("<SubagentSegment /> promoted feed", () => {
         startedAt={null}
         durationMs={null}
         agentType={null}
+        workflowMeta={null}
+        nested={[]}
         variant="promoted"
       />,
     );
@@ -427,6 +484,8 @@ describe("<SubagentSegment /> promoted feed", () => {
         startedAt={null}
         durationMs={null}
         agentType={null}
+        workflowMeta={null}
+        nested={[]}
         variant="promoted"
       />,
     );
@@ -453,6 +512,8 @@ describe("<SubagentSegment /> promoted feed", () => {
         startedAt={null}
         durationMs={null}
         agentType={null}
+        workflowMeta={null}
+        nested={[]}
         variant="promoted"
       />,
     );
@@ -515,6 +576,8 @@ describe("<SubagentSegment /> promoted feed", () => {
           startedAt={null}
           durationMs={null}
           agentType={null}
+          workflowMeta={null}
+          nested={[]}
           variant="promoted"
         />
       </>,
@@ -555,6 +618,8 @@ describe("<SubagentSegment /> promoted feed", () => {
             startedAt={null}
             durationMs={null}
             agentType={null}
+            workflowMeta={null}
+            nested={[]}
             variant="promoted"
           />
         </ChatExpansionTestProviders>
@@ -571,6 +636,8 @@ describe("<SubagentSegment /> promoted feed", () => {
             startedAt={null}
             durationMs={null}
             agentType={null}
+            workflowMeta={null}
+            nested={[]}
             variant="promoted"
           />
         </ChatExpansionTestProviders>
@@ -599,6 +666,8 @@ describe("<SubagentSegment /> promoted feed", () => {
         stopped={false}
         startedAt={null}
         durationMs={null}
+        workflowMeta={null}
+        nested={[]}
         variant="promoted"
       />,
     );
@@ -622,6 +691,8 @@ describe("<SubagentSegment /> promoted feed", () => {
         stopped={false}
         startedAt={null}
         durationMs={null}
+        workflowMeta={null}
+        nested={[]}
         variant="promoted"
       />,
     );
@@ -655,6 +726,8 @@ describe("<SubagentSegment /> promoted feed", () => {
           stopped={false}
           startedAt={5_000}
           durationMs={null}
+          workflowMeta={null}
+          nested={[]}
           variant="promoted"
         />,
       );
@@ -679,6 +752,8 @@ describe("<SubagentSegment /> promoted feed", () => {
         stopped={false}
         startedAt={1_000}
         durationMs={7_000}
+        workflowMeta={null}
+        nested={[]}
         variant="promoted"
       />,
     );
@@ -700,6 +775,8 @@ describe("<SubagentSegment /> promoted feed", () => {
         stopped={false}
         startedAt={0}
         durationMs={7_600}
+        workflowMeta={null}
+        nested={[]}
         variant="promoted"
       />,
     );
@@ -723,6 +800,8 @@ describe("<SubagentSegment /> promoted feed", () => {
         stopped={false}
         startedAt={0}
         durationMs={300}
+        workflowMeta={null}
+        nested={[]}
         variant="promoted"
       />,
     );
@@ -745,6 +824,8 @@ describe("<SubagentSegment /> promoted feed", () => {
         stopped={false}
         startedAt={1_000}
         durationMs={null}
+        workflowMeta={null}
+        nested={[]}
         variant="promoted"
       />,
     );
@@ -772,10 +853,226 @@ describe("<SubagentSegment /> promoted feed", () => {
         stopped
         startedAt={1_000}
         durationMs={4_000}
+        workflowMeta={null}
+        nested={[]}
         variant="promoted"
       />,
     );
 
     expect(screen.getByText("stopped")).toBeTruthy();
+  });
+
+  it("renders a nested agent as a row in the Sub-agents section once expanded", () => {
+    render(
+      <SubagentSegment
+        id="test-parent"
+        name="planner"
+        agentType={null}
+        task="Plan the refactor."
+        progressUpdates={[]}
+        result={null}
+        isStreaming
+        endState={null}
+        stopped={false}
+        startedAt={null}
+        durationMs={null}
+        workflowMeta={null}
+        nested={[
+          nestedAgentFixture({ id: "nested-1", name: "callsite-sweeper" }),
+        ]}
+        variant="promoted"
+      />,
+    );
+
+    expect(screen.queryByText("Sub-agents")).toBeNull();
+    expect(screen.queryByText("callsite-sweeper")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /Subagent/ }));
+
+    expect(screen.getByText("Sub-agents")).toBeTruthy();
+    expect(screen.getByText("callsite-sweeper")).toBeTruthy();
+  });
+
+  it("does not render a Sub-agents section when there are no nested agent children", () => {
+    render(
+      <SubagentSegment
+        id="test-no-children"
+        name="planner"
+        agentType={null}
+        task="Plan the refactor."
+        progressUpdates={[]}
+        result={null}
+        isStreaming
+        endState={null}
+        stopped={false}
+        startedAt={null}
+        durationMs={null}
+        workflowMeta={null}
+        nested={[]}
+        variant="promoted"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Subagent/ }));
+
+    expect(screen.queryByText("Sub-agents")).toBeNull();
+  });
+
+  it("renders a second nesting level once the first-level row is itself expanded", () => {
+    render(
+      <SubagentSegment
+        id="test-root"
+        name="root-agent"
+        agentType={null}
+        task="Root task."
+        progressUpdates={[]}
+        result={null}
+        isStreaming
+        endState={null}
+        stopped={false}
+        startedAt={null}
+        durationMs={null}
+        workflowMeta={null}
+        nested={[
+          nestedAgentFixture({
+            id: "mid-agent",
+            name: "mid-agent",
+            children: [
+              nestedAgentFixture({ id: "leaf-agent", name: "leaf-agent" }),
+            ],
+          }),
+        ]}
+        variant="promoted"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Subagent/ }));
+
+    // The nested row's own header is visible immediately - one indent level -
+    // but its grandchild only appears once THAT row is itself expanded.
+    expect(screen.getByText("mid-agent")).toBeTruthy();
+    expect(screen.queryByText("leaf-agent")).toBeNull();
+
+    clickTriggerFor("mid-agent");
+
+    // One "Sub-agents" label per expanded level: the root's (holding
+    // mid-agent) and mid-agent's own (holding leaf-agent).
+    expect(screen.getAllByText("Sub-agents")).toHaveLength(2);
+    expect(screen.getByText("leaf-agent")).toBeTruthy();
+  });
+
+  it("renders the dedicated workflow card for a subagent segment with workflowMeta", () => {
+    render(
+      <SubagentSegment
+        id="test-workflow"
+        name="max-effort-review"
+        agentType={null}
+        task={null}
+        progressUpdates={[]}
+        result={null}
+        isStreaming
+        endState={null}
+        stopped={false}
+        startedAt={null}
+        durationMs={null}
+        workflowMeta={{
+          name: "max-effort-review",
+          intent: "Max-effort review of the refusal-handling changeset",
+          activity: [
+            { kind: "phase", text: "Phase — Find (16 agents)" },
+            { kind: "label", text: "find:host-core" },
+          ],
+          agentsStarted: 16,
+          agentsFinished: 3,
+          totalTokens: 412_000,
+        }}
+        nested={[]}
+        variant="promoted"
+      />,
+    );
+
+    expect(screen.getByText("max-effort-review")).toBeTruthy();
+    expect(screen.getByText("Workflow")).toBeTruthy();
+    // The collapsed live line composes phase + active label + fleet counts.
+    expect(screen.getByText(/Phase — Find \(16 agents\)/)).toBeTruthy();
+    expect(screen.getByText(/working on find:host-core/)).toBeTruthy();
+    expect(screen.getByText(/3 \/ 16 agents done/)).toBeTruthy();
+
+    clickTriggerFor("max-effort-review");
+
+    expect(
+      screen.getByText("Max-effort review of the refusal-handling changeset"),
+    ).toBeTruthy();
+    expect(screen.getByText("Activity")).toBeTruthy();
+    expect(screen.getByText("find:host-core")).toBeTruthy();
+  });
+
+  it("omits the Intent section for a workflow card whose intent extraction failed", () => {
+    render(
+      <SubagentSegment
+        id="test-workflow-no-intent"
+        name="mystery-workflow"
+        agentType={null}
+        task={null}
+        progressUpdates={[]}
+        result={null}
+        isStreaming={false}
+        endState={null}
+        stopped={false}
+        startedAt={1_000}
+        durationMs={5_000}
+        workflowMeta={{
+          name: "mystery-workflow",
+          intent: null,
+          activity: [],
+          agentsStarted: null,
+          agentsFinished: null,
+          totalTokens: null,
+        }}
+        nested={[]}
+        variant="promoted"
+      />,
+    );
+
+    clickTriggerFor("mystery-workflow");
+
+    expect(screen.queryByText("Intent")).toBeNull();
+  });
+
+  it("shows Result totals only once a workflow run has settled", () => {
+    render(
+      <SubagentSegment
+        id="test-workflow-totals"
+        name="settled-workflow"
+        agentType={null}
+        task={null}
+        progressUpdates={[]}
+        result="All checks passed."
+        isStreaming={false}
+        endState={null}
+        stopped={false}
+        startedAt={1_000}
+        durationMs={65_000}
+        workflowMeta={{
+          name: "settled-workflow",
+          intent: null,
+          activity: [],
+          agentsStarted: 5,
+          agentsFinished: 5,
+          totalTokens: 10_000,
+        }}
+        nested={[]}
+        variant="promoted"
+      />,
+    );
+
+    clickTriggerFor("settled-workflow");
+
+    // The result renders both as the (always-on, card-style) header summary
+    // and inside the expanded Result panel.
+    expect(screen.getAllByText("All checks passed.").length).toBeGreaterThan(0);
+    expect(
+      screen.getByText("5 agents run · 10,000 tokens · 1m 5s"),
+    ).toBeTruthy();
   });
 });

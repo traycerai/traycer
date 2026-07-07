@@ -23,7 +23,6 @@ import {
 import { WorktreeFolderListBody } from "@/components/worktree/worktree-folder-list-body";
 import { WorktreePickerHostSection } from "@/components/worktree/worktree-picker-host-section";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
-import { useTerminalDefaultCwd } from "@/hooks/terminal/use-terminal-default-cwd-query";
 import { useWorktreeListBindingsForEpic } from "@/hooks/worktree/use-worktree-list-bindings-for-epic-query";
 import { DEFAULT_TERMINAL_TITLE } from "@/lib/terminals/terminal-title";
 import { worktreeRowKey } from "@/lib/worktree/worktree-row-key";
@@ -67,29 +66,21 @@ export function NewTerminalPicker(props: NewTerminalPickerProps) {
     !bindingsQuery.isPending &&
     !bindingsQuery.isError &&
     rows.length === 0;
-  const defaultCwdQuery = useTerminalDefaultCwd({
-    epicId: props.epicId,
-    enabled: hasLoadedNoRows,
-  });
-  const folderlessCwdPending = hasLoadedNoRows && defaultCwdQuery.isPending;
-  const folderlessCwdFailed = hasLoadedNoRows && defaultCwdQuery.isError;
+  // The fallback cwd for folderless launches rides the bindings response
+  // (`worktree.listBindingsForEpic@1.1`). `null` means the host predates
+  // folderless workspaces (bridged v1.0 response), so launch stays disabled.
+  const folderlessCwd = bindingsQuery.data?.folderlessCwd ?? null;
+  const folderlessCwdFailed = hasLoadedNoRows && folderlessCwd === null;
   const launchTarget = useMemo(
     () =>
       selectedRow === null
         ? resolveFolderlessTerminalTarget(
-            hasLoadedNoRows && !folderlessCwdPending && !folderlessCwdFailed,
+            hasLoadedNoRows,
             activeHostId,
-            defaultCwdQuery.data?.cwd,
+            folderlessCwd,
           )
         : { hostId: selectedRow.hostId, cwd: selectedRow.runningDir },
-    [
-      activeHostId,
-      defaultCwdQuery.data?.cwd,
-      folderlessCwdFailed,
-      folderlessCwdPending,
-      hasLoadedNoRows,
-      selectedRow,
-    ],
+    [activeHostId, folderlessCwd, hasLoadedNoRows, selectedRow],
   );
 
   // A double-click on the launch action fires twice before `setIsOpen(false)`
@@ -125,13 +116,7 @@ export function NewTerminalPicker(props: NewTerminalPickerProps) {
 
   const launchDisabled = launchTarget === null;
   let folderlessCwdStatus: ReactNode = null;
-  if (folderlessCwdPending) {
-    folderlessCwdStatus = (
-      <span data-testid="new-terminal-folderless-cwd-pending">
-        Resolving terminal directory.
-      </span>
-    );
-  } else if (folderlessCwdFailed) {
+  if (folderlessCwdFailed) {
     folderlessCwdStatus = (
       <span
         className="text-destructive"
@@ -238,9 +223,9 @@ interface TerminalLaunchTarget {
 function resolveFolderlessTerminalTarget(
   enabled: boolean,
   hostId: string | null,
-  cwd: string | undefined,
+  cwd: string | null,
 ): TerminalLaunchTarget | null {
-  if (!enabled || hostId === null || cwd === undefined || cwd.length === 0) {
+  if (!enabled || hostId === null || cwd === null || cwd.length === 0) {
     return null;
   }
   return { hostId, cwd };

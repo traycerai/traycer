@@ -7,6 +7,7 @@ import {
   chatSubscribeV11,
   chatSubscribeV12,
   chatSubscribeV13,
+  chatSubscribeV14,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import { getRecordSchema } from "@traycer/protocol/framework/index";
 import { autonomousResumeTriggerSchema } from "@traycer/protocol/persistence/epic/content-blocks";
@@ -900,5 +901,260 @@ describe("chat.subscribe@1.3 client frames", () => {
       kind: "fileEditApprovalDecision",
       approvalId: "file-approval-1",
     });
+  });
+});
+
+describe("chat.subscribe@1.3 (frozen pre-workflow) server frames", () => {
+  it("declares schemaVersion 1.3 and stays registered for bridging", () => {
+    expect(chatSubscribeV13.schemaVersion).toEqual({ major: 1, minor: 3 });
+  });
+
+  it("does not know the v1.4 workflow background-item kind on snapshot or turn-state frames", () => {
+    const workflowItem = {
+      taskId: "wf-task-1",
+      kind: "workflow",
+      title: "review",
+      blockId: "wf-task-1",
+      parentTaskId: null,
+      phase: "Find",
+      activeLabel: "find:host-core",
+      agentsStarted: 16,
+      agentsFinished: 3,
+    };
+
+    expect(
+      chatSubscribeV13.serverFrameSchema.safeParse({
+        kind: "turnStateChanged",
+        hasBinaryPayload: false,
+        epicId: "epic-1",
+        chatId: "chat-1",
+        runStatus: "running",
+        activeTurn: null,
+        backgroundItems: [workflowItem],
+      }).success,
+    ).toBe(false);
+
+    expect(
+      chatSubscribeV13.serverFrameSchema.safeParse({
+        kind: "snapshot",
+        hasBinaryPayload: false,
+        epicId: "epic-1",
+        chatId: "chat-1",
+        snapshot: {
+          chat,
+          access: { role: "owner", ownerUserId: "user-1", canAct: true },
+          queue: { status: "idle", items: [] },
+          activeTurn: null,
+          runStatus: "idle",
+          pendingApprovals: [],
+          pendingInterviews: [],
+          pendingFileEditApprovals: [],
+          worktreeBinding: null,
+          missingWorktreePaths: [],
+          accumulatedFileChanges: [],
+          backgroundItems: [workflowItem],
+        },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("does not know the v1.4 workflow.* blockDelta events", () => {
+    const events = [
+      {
+        type: "workflow.started",
+        blockId: "wf-1",
+        timestamp: 1,
+        name: "review",
+        intent: "Review the diff",
+      },
+      {
+        type: "workflow.progress",
+        blockId: "wf-1",
+        timestamp: 2,
+        activity: { kind: "phase", text: "Find" },
+      },
+      {
+        type: "workflow.completed",
+        blockId: "wf-1",
+        timestamp: 3,
+        outcome: "completed",
+        result: "3 findings",
+      },
+    ];
+
+    for (const event of events) {
+      expect(
+        chatSubscribeV13.serverFrameSchema.safeParse({
+          kind: "blockDelta",
+          hasBinaryPayload: false,
+          epicId: "epic-1",
+          chatId: "chat-1",
+          event,
+        }).success,
+      ).toBe(false);
+    }
+  });
+
+  it("chat.subscribe@1.2 is pinned to the same frozen pre-workflow shape as 1.3", () => {
+    expect(
+      chatSubscribeV12.serverFrameSchema.safeParse({
+        kind: "blockDelta",
+        hasBinaryPayload: false,
+        epicId: "epic-1",
+        chatId: "chat-1",
+        event: {
+          type: "workflow.started",
+          blockId: "wf-1",
+          timestamp: 1,
+          name: "review",
+          intent: "Review the diff",
+        },
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe("chat.subscribe@1.4 server frames", () => {
+  it("declares schemaVersion 1.4", () => {
+    expect(chatSubscribeV14.schemaVersion).toEqual({ major: 1, minor: 4 });
+  });
+
+  it("parses a workflow background item on snapshot and turn-state frames", () => {
+    const workflowItem = {
+      taskId: "wf-task-1",
+      kind: "workflow",
+      title: "review",
+      blockId: "wf-task-1",
+      parentTaskId: null,
+      phase: "Find",
+      activeLabel: "find:host-core",
+      agentsStarted: 16,
+      agentsFinished: 3,
+    };
+
+    const snapshot = chatSubscribeV14.serverFrameSchema.parse({
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      snapshot: {
+        chat,
+        access: { role: "owner", ownerUserId: "user-1", canAct: true },
+        queue: { status: "idle", items: [] },
+        activeTurn: null,
+        runStatus: "idle",
+        pendingApprovals: [],
+        pendingInterviews: [],
+        pendingFileEditApprovals: [],
+        worktreeBinding: null,
+        missingWorktreePaths: [],
+        accumulatedFileChanges: [],
+        backgroundItems: [workflowItem],
+      },
+    });
+    expect(snapshot).toMatchObject({
+      kind: "snapshot",
+      snapshot: { backgroundItems: [workflowItem] },
+    });
+
+    const turnState = chatSubscribeV14.serverFrameSchema.parse({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      runStatus: "running",
+      activeTurn: null,
+      backgroundItems: [workflowItem],
+    });
+    expect(turnState).toMatchObject({
+      kind: "turnStateChanged",
+      backgroundItems: [workflowItem],
+    });
+  });
+
+  it("defaults new workflow background-item metadata when parsing an old-host frame", () => {
+    const parsed = chatSubscribeV14.serverFrameSchema.parse({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      runStatus: "running",
+      activeTurn: null,
+      backgroundItems: [
+        {
+          taskId: "wf-task-1",
+          kind: "workflow",
+          title: "review",
+          blockId: "wf-task-1",
+        },
+      ],
+    });
+
+    expect(parsed).toMatchObject({
+      kind: "turnStateChanged",
+      backgroundItems: [
+        {
+          taskId: "wf-task-1",
+          parentTaskId: null,
+          phase: null,
+          activeLabel: null,
+          agentsStarted: null,
+          agentsFinished: null,
+        },
+      ],
+    });
+  });
+
+  it("round-trips workflow.started / workflow.progress / workflow.completed blockDelta events", () => {
+    expect(
+      chatSubscribeV14.serverFrameSchema.parse({
+        kind: "blockDelta",
+        hasBinaryPayload: false,
+        epicId: "epic-1",
+        chatId: "chat-1",
+        event: {
+          type: "workflow.started",
+          blockId: "wf-1",
+          timestamp: 1,
+          name: "review",
+          intent: "Review the diff",
+          spawnToolCallId: "toolu_workflow_1",
+        },
+      }),
+    ).toMatchObject({ kind: "blockDelta" });
+
+    expect(
+      chatSubscribeV14.serverFrameSchema.parse({
+        kind: "blockDelta",
+        hasBinaryPayload: false,
+        epicId: "epic-1",
+        chatId: "chat-1",
+        event: {
+          type: "workflow.progress",
+          blockId: "wf-1",
+          timestamp: 2,
+          activity: { kind: "label", text: "find:host-core" },
+          agentsStarted: 16,
+          agentsFinished: 3,
+          totalTokens: 120000,
+        },
+      }),
+    ).toMatchObject({ kind: "blockDelta" });
+
+    expect(
+      chatSubscribeV14.serverFrameSchema.parse({
+        kind: "blockDelta",
+        hasBinaryPayload: false,
+        epicId: "epic-1",
+        chatId: "chat-1",
+        event: {
+          type: "workflow.completed",
+          blockId: "wf-1",
+          timestamp: 3,
+          outcome: "completed",
+          result: "3 findings",
+        },
+      }),
+    ).toMatchObject({ kind: "blockDelta" });
   });
 });

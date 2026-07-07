@@ -192,12 +192,13 @@ function timelineItemSearchUnits(
   }
   if (item.kind === "promoted_subagent") {
     const renderId = derivePromotedSubagentRenderId(item.segment.id);
-    return subagentSegmentSearchUnits(
-      item.segment,
+    return subagentSegmentSearchUnits({
+      segment: item.segment,
       renderId,
-      [],
-      deriveSubagentCollapsibleKey(tileInstanceId, renderId),
-    );
+      parentChain: [],
+      ownKey: deriveSubagentCollapsibleKey(tileInstanceId, renderId),
+      tileInstanceId,
+    });
   }
   return activityGroupSearchUnits(item.group, tileInstanceId);
 }
@@ -232,12 +233,13 @@ function activityGroupChildSearchUnits(
 ): ReadonlyArray<ChatFindUnit> {
   if (segment.kind === "subagent") {
     const renderId = segment.id;
-    return subagentSegmentSearchUnits(
+    return subagentSegmentSearchUnits({
       segment,
       renderId,
-      groupChain,
-      deriveSubagentCollapsibleKey(tileInstanceId, renderId),
-    );
+      parentChain: groupChain,
+      ownKey: deriveSubagentCollapsibleKey(tileInstanceId, renderId),
+      tileInstanceId,
+    });
   }
   if (segment.kind === "tool" && segment.agentMessageSend !== null) {
     return compactUnits([
@@ -287,12 +289,13 @@ function segmentSearchUnits(
 ): ReadonlyArray<ChatFindUnit> {
   if (segment.kind === "subagent") {
     const renderId = segment.id;
-    return subagentSegmentSearchUnits(
+    return subagentSegmentSearchUnits({
       segment,
       renderId,
-      [],
-      deriveSubagentCollapsibleKey(tileInstanceId, renderId),
-    );
+      parentChain: [],
+      ownKey: deriveSubagentCollapsibleKey(tileInstanceId, renderId),
+      tileInstanceId,
+    });
   }
   if (segment.kind === "tool" && segment.agentMessageSend !== null) {
     return compactUnits([
@@ -507,14 +510,26 @@ function commandSegmentSearchText(
 //   - header (name + agent type): always visible while the parent is open, so
 //     its owning chain is the PARENT chain - it must stay findable even when the
 //     subagent's own body is collapsed.
-//   - body (task + progress + result): inside the subagent's own collapsible, so
-//     its chain additionally includes the subagent's own key.
+//   - body (task + progress + result, or for a workflow card: intent +
+//     activity + result): inside the subagent's own collapsible, so its chain
+//     additionally includes the subagent's own key.
+// PLUS one recursive pass per nested agent child (the "Sub-agents" section) -
+// each renders as its own `row` inside THIS subagent's body, so its search
+// units chain through this subagent's body key exactly as deep as a user must
+// expand to reach it.
+interface SubagentSegmentSearchUnitsArgs {
+  readonly segment: SubagentSegment;
+  readonly renderId: string;
+  readonly parentChain: ReadonlyArray<ChatCollapsibleKey>;
+  readonly ownKey: ChatCollapsibleKey;
+  readonly tileInstanceId: string;
+}
+
 function subagentSegmentSearchUnits(
-  segment: SubagentSegment,
-  renderId: string,
-  parentChain: ReadonlyArray<ChatCollapsibleKey>,
-  ownKey: ChatCollapsibleKey,
+  args: SubagentSegmentSearchUnitsArgs,
 ): ReadonlyArray<ChatFindUnit> {
+  const { ownKey, parentChain, renderId, segment, tileInstanceId } = args;
+  const bodyChain = [...parentChain, ownKey];
   return compactUnits([
     chatFindUnit({
       unitId: chatFindSubagentHeaderUnitId(renderId),
@@ -524,9 +539,21 @@ function subagentSegmentSearchUnits(
     chatFindUnit({
       unitId: chatFindSubagentBodyUnitId(renderId),
       text: subagentBodySearchText(segment).join("\n"),
-      owningChain: [...parentChain, ownKey],
+      owningChain: bodyChain,
     }),
-  ]);
+  ]).concat(
+    segment.children.flatMap((child) =>
+      child.kind === "subagent"
+        ? subagentSegmentSearchUnits({
+            segment: child,
+            renderId: child.id,
+            parentChain: bodyChain,
+            ownKey: deriveSubagentCollapsibleKey(tileInstanceId, child.id),
+            tileInstanceId,
+          })
+        : [],
+    ),
+  );
 }
 
 // The always-visible header line: the cleaned display name (falling back to the
@@ -541,6 +568,19 @@ function subagentHeaderSearchText(segment: SubagentSegment): string {
 function subagentBodySearchText(
   segment: SubagentSegment,
 ): ReadonlyArray<string> {
+  const workflowMeta = segment.workflowMeta;
+  const resultText =
+    segment.result === null ? "" : markdownToChatSearchText(segment.result);
+  // The workflow card replaces Task/Progress with Intent/Activity, so index
+  // only what it actually renders - the base task/progressUpdates fields are
+  // the dual-written degradation for old readers, never shown here.
+  if (workflowMeta !== null) {
+    return [
+      workflowMeta.intent ?? "",
+      ...workflowMeta.activity.map((entry) => entry.text),
+      resultText,
+    ];
+  }
   return [
     cleanSubagentNotificationText(segment.task) ?? "",
     // Progress is rendered raw and adjacent-deduped; index the SAME deduped raw
@@ -548,7 +588,7 @@ function subagentBodySearchText(
     ...adjacentDedupedProgressItems(segment.progressUpdates).map(
       (item) => item.text,
     ),
-    segment.result === null ? "" : markdownToChatSearchText(segment.result),
+    resultText,
   ];
 }
 

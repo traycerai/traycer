@@ -1,0 +1,140 @@
+name: Protocol Compatibility
+
+# Released-peer compatibility gate. Guards the client⇄host wire contract
+# against every released baseline still in the field:
+#
+#  - `protocol-compat` resolves the protected set from the remote's release
+#    tags AT RUN TIME (never from a file in the tree, so a PR cannot shrink
+#    it - the only in-tree knob is `protocol/scripts/compat/support-floor.json`,
+#    guarded by the tripwire job below), dumps each baseline's protocol
+#    surface from its immutable tag in a git worktree, checks the PR tree
+#    against every one in a single combined report (two-sided handshake
+#    bridging + same-version wire-schema rules), and drives the real client
+#    transports against the baseline manifests. This is one job with a
+#    stable name that loops over baselines internally rather than fanning
+#    out a matrix job per baseline, so the required-status-check list in
+#    branch protection never has to change as new releases ship.
+#  - `guarded-files-tripwire` fails any PR that edits (not adds) the compat
+#    governance files without the `protocol-compat-override` label, making
+#    baseline regeneration a deliberate, reviewable act. This closes the
+#    failure mode that shipped `terminal.defaultCwd` (#227): the
+#    frozen-fixture test went red and was silenced by editing the fixture in
+#    the same PR.
+#
+# Both jobs must be required status checks on `main`.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: protocol-compat-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  protocol-compat:
+    runs-on: ubuntu-latest
+    # `labeled` is only needed so `guarded-files-tripwire` can re-evaluate once
+    # the override label is added, without waiting for a new push. This job
+    # doesn't read labels at all, so skip it there - otherwise every unrelated
+    # label add reruns the full multi-baseline dump/check for nothing.
+    if: github.event_name != 'pull_request' || github.event.action != 'labeled'
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: "1.3.12"
+      - name: Cache bun global install cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            bun-${{ runner.os }}-
+      - run: bun install --frozen-lockfile
+      - name: Resolve released baselines from remote tags
+        env:
+          # For fork PRs the protected tag set is the BASE repo's, not the fork's.
+          BASE_REPO_URL: ${{ github.event.pull_request.base.repo.clone_url || format('https://github.com/{0}.git', github.repository) }}
+        run: |
+          bun run protocol/scripts/compat/resolve-baselines.ts "$BASE_REPO_URL" \
+            | jq -c '.baselines' > /tmp/baselines.json
+          echo "Protected baselines:"
+          jq -r '.[] | "  " + .tags[0] + " (" + .sha + ")"' /tmp/baselines.json
+      - name: Dump the working tree's protocol surface
+        run: bun run protocol/scripts/compat/dump-protocol-surface.ts > /tmp/working-tree.json
+      - name: Dump every released baseline's protocol surface from its tag
+        run: |
+          set -e
+          mkdir -p /tmp/surfaces
+          : > /tmp/baseline-args.txt
+          while IFS=$'\t' read -r sha label; do
+            echo "::group::dump ${label} (${sha})"
+            git fetch --no-tags origin "$sha"
+            git worktree add --detach "/tmp/baseline-${label}" "$sha"
+            # Baselines that predate the compat tooling get the (self-contained)
+            # dump script injected; newer tags run their own committed copy.
+            mkdir -p "/tmp/baseline-${label}/protocol/scripts/compat" \
+                     "/tmp/baseline-${label}/protocol/src/framework"
+            [ -f "/tmp/baseline-${label}/protocol/scripts/compat/dump-protocol-surface.ts" ] || \
+              cp protocol/scripts/compat/dump-protocol-surface.ts "/tmp/baseline-${label}/protocol/scripts/compat/"
+            [ -f "/tmp/baseline-${label}/protocol/src/framework/surface-build.ts" ] || \
+              cp protocol/src/framework/surface-build.ts "/tmp/baseline-${label}/protocol/src/framework/"
+            (cd "/tmp/baseline-${label}" && bun install >/dev/null && bun run protocol/scripts/compat/dump-protocol-surface.ts) \
+              > "/tmp/surfaces/${label}.json"
+            echo "${label}=/tmp/surfaces/${label}.json" >> /tmp/baseline-args.txt
+            echo "::endgroup::"
+          done < <(jq -r '.[] | [.sha, .tags[0]] | @tsv' /tmp/baselines.json)
+      - name: Check surface compatibility against every released baseline (two-sided handshake + wire schemas)
+        run: |
+          args=()
+          while IFS= read -r pair; do
+            args+=(--baseline "$pair")
+          done < /tmp/baseline-args.txt
+          bun run protocol/scripts/compat/check-protocol-compat.ts --mine /tmp/working-tree.json "${args[@]}"
+      - name: Drive the real client transports against the released manifests
+        env:
+          PROTOCOL_BASELINE_SURFACES_DIR: /tmp/surfaces
+        run: |
+          cd clients/shared
+          bunx vitest run host-transport/__tests__/released-baseline-handshake.test.ts
+
+  guarded-files-tripwire:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Fail when compat governance files change without the override label
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.sha }}
+          HAS_OVERRIDE_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'protocol-compat-override') }}
+        run: |
+          guarded='protocol/scripts/compat/compat-exceptions.json
+          protocol/scripts/compat/support-floor.json
+          protocol/src/host/__tests__/__fixtures__/released-method-names.ts
+          .github/workflows/protocol-compat.yml'
+          # --diff-filter=MD: only files that already existed and were modified
+          # or deleted. A PR that *adds* one of these (e.g. this gate's own
+          # rollout) is not weakening anything and must not trip.
+          changed=$(git diff --name-only --diff-filter=MD "$BASE_REF"...HEAD)
+          hits=$(grep -Fxf <(echo "$guarded") <(echo "$changed") || true)
+          if [ -n "$hits" ] && [ "$HAS_OVERRIDE_LABEL" != "true" ]; then
+            echo "The following protocol-compat governance files changed without the 'protocol-compat-override' label:"
+            echo "$hits"
+            echo
+            echo "Editing these files relaxes the released-peer compatibility gate."
+            echo "If this is a deliberate, protocol-owner-reviewed decision, add the"
+            echo "'protocol-compat-override' label to this PR."
+            exit 1
+          fi
+          echo "No unguarded compat governance changes."

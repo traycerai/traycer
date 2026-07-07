@@ -2060,6 +2060,300 @@ describe("accumulateEvent", () => {
     expect(block.timestamp).toBe(2000);
     expect(block.startedAt).toBe(1000);
   });
+
+  it("subagent.started(parentBlockId=A) followed by progress/completed persists parentBlockId=A", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "subagent.started",
+      blockId: "sa-nested",
+      timestamp: 1,
+      name: "nested explorer",
+      parentBlockId: "sa-parent",
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "subagent.progress",
+      blockId: "sa-nested",
+      timestamp: 2,
+      update: "rg --files",
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "subagent.completed",
+      blockId: "sa-nested",
+      timestamp: 3,
+      outcome: "completed",
+      result: "done",
+    });
+
+    expect(blocks[0]).toMatchObject({ parentBlockId: "sa-parent" });
+  });
+
+  it("a subagent.started name re-emit without parentBlockId does not clear it", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "subagent.started",
+      blockId: "sa-nested",
+      timestamp: 1,
+      name: "Subagent",
+      parentBlockId: "sa-parent",
+    });
+    // Codex-style async nickname re-emit, carrying no parentBlockId of its own.
+    blocks = accumulateEvent(blocks, {
+      type: "subagent.started",
+      blockId: "sa-nested",
+      timestamp: 2,
+      name: "Godel (explorer)",
+    });
+
+    expect(blocks[0]).toMatchObject({
+      name: "Godel (explorer)",
+      parentBlockId: "sa-parent",
+    });
+  });
+
+  it("an explicit null parentBlockId on subagent.started clears it to top-level", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "subagent.started",
+      blockId: "sa1",
+      timestamp: 1,
+      name: "Subagent",
+      parentBlockId: "sa-parent",
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "subagent.started",
+      blockId: "sa1",
+      timestamp: 2,
+      name: "Subagent",
+      parentBlockId: null,
+    });
+
+    expect(blocks[0]).toMatchObject({ parentBlockId: null });
+  });
+
+  it("orphan subagent.progress/subagent.completed fallbacks carry parentBlockId", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "subagent.progress",
+      blockId: "sa-nested",
+      timestamp: 1,
+      update: "rg --files",
+      parentBlockId: "sa-parent",
+    });
+    expect(blocks[0]).toMatchObject({ parentBlockId: "sa-parent" });
+
+    blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "subagent.completed",
+      blockId: "sa-nested-2",
+      timestamp: 1,
+      outcome: "completed",
+      result: "done",
+      parentBlockId: "sa-parent",
+    });
+    expect(blocks[0]).toMatchObject({ parentBlockId: "sa-parent" });
+  });
+
+  // ── workflow events (dual-written onto a subagent block) ──────
+
+  it("workflow.started creates a dual-written SubAgentBlock with workflowMeta", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "workflow.started",
+      blockId: "wf-1",
+      timestamp: 1,
+      name: "review",
+      intent: "Review the diff",
+      spawnToolCallId: "toolu_workflow_1",
+    });
+
+    expect(blocks).toHaveLength(1);
+    const block = blocks[0] as SubAgentBlock;
+    expect(block.type).toBe("subagent");
+    expect(block.name).toBe("review");
+    expect(block.task).toBe("Review the diff");
+    expect(block.spawnToolCallId).toBe("toolu_workflow_1");
+    expect(block.workflowMeta).toEqual({
+      name: "review",
+      intent: "Review the diff",
+      activity: [],
+      agentsStarted: null,
+      agentsFinished: null,
+      totalTokens: null,
+    });
+  });
+
+  it("workflow.progress accumulates activity, counts, and tokens onto workflowMeta and progressUpdates", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "workflow.started",
+      blockId: "wf-1",
+      timestamp: 1,
+      name: "review",
+      intent: "Review the diff",
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "workflow.progress",
+      blockId: "wf-1",
+      timestamp: 2,
+      activity: { kind: "phase", text: "Find" },
+      agentsStarted: 16,
+      agentsFinished: 0,
+      totalTokens: 5000,
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "workflow.progress",
+      blockId: "wf-1",
+      timestamp: 3,
+      activity: { kind: "label", text: "find:host-core" },
+      agentsStarted: 16,
+      agentsFinished: 3,
+      totalTokens: 120000,
+    });
+
+    const block = blocks[0] as SubAgentBlock;
+    expect(block.progressUpdates).toEqual(["Find", "find:host-core"]);
+    expect(block.workflowMeta).toMatchObject({
+      activity: [
+        { kind: "phase", text: "Find" },
+        { kind: "label", text: "find:host-core" },
+      ],
+      agentsStarted: 16,
+      agentsFinished: 3,
+      totalTokens: 120000,
+    });
+  });
+
+  it("workflow.progress with no new activity preserves counts/tokens without re-appending", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "workflow.started",
+      blockId: "wf-1",
+      timestamp: 1,
+      name: "review",
+      intent: null,
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "workflow.progress",
+      blockId: "wf-1",
+      timestamp: 2,
+      activity: { kind: "phase", text: "Find" },
+      agentsStarted: 16,
+      agentsFinished: 0,
+      totalTokens: 1000,
+    });
+    // A later tick with no new milestone, just a token refresh.
+    blocks = accumulateEvent(blocks, {
+      type: "workflow.progress",
+      blockId: "wf-1",
+      timestamp: 3,
+      activity: null,
+      totalTokens: 2000,
+    });
+
+    const block = blocks[0] as SubAgentBlock;
+    expect(block.progressUpdates).toEqual(["Find"]);
+    expect(block.workflowMeta).toMatchObject({
+      activity: [{ kind: "phase", text: "Find" }],
+      agentsStarted: 16,
+      agentsFinished: 0,
+      totalTokens: 2000,
+    });
+  });
+
+  it("workflow.progress with no existing block creates a dual-written SubAgentBlock with workflowMeta", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "workflow.progress",
+      blockId: "wf-1",
+      timestamp: 1,
+      activity: { kind: "phase", text: "Find" },
+      agentsStarted: 16,
+      agentsFinished: 0,
+      totalTokens: 5000,
+    });
+
+    expect(blocks).toHaveLength(1);
+    const block = blocks[0] as SubAgentBlock;
+    expect(block.type).toBe("subagent");
+    expect(block.name).toBeNull();
+    expect(block.task).toBeNull();
+    expect(block.progressUpdates).toEqual(["Find"]);
+    expect(block.workflowMeta).toEqual({
+      name: "",
+      intent: null,
+      activity: [{ kind: "phase", text: "Find" }],
+      agentsStarted: 16,
+      agentsFinished: 0,
+      totalTokens: 5000,
+    });
+  });
+
+  it("workflow.completed finalizes the dual-written SubAgentBlock", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "workflow.started",
+      blockId: "wf-1",
+      timestamp: 1,
+      name: "review",
+      intent: "Review the diff",
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "workflow.completed",
+      blockId: "wf-1",
+      timestamp: 2,
+      outcome: "completed",
+      result: "3 findings",
+    });
+
+    expect(blocks).toHaveLength(1);
+    const block = blocks[0] as SubAgentBlock;
+    expect(block.status).toBe("completed");
+    expect(block.result).toBe("3 findings");
+    expect(block.workflowMeta).toMatchObject({ name: "review" });
+  });
+
+  it("workflow.completed without workflow.started creates a completed SubAgentBlock with workflowMeta", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "workflow.completed",
+      blockId: "wf-1",
+      timestamp: 1,
+      outcome: "failed",
+      result: "hit a permission error",
+    });
+
+    expect(blocks).toHaveLength(1);
+    const block = blocks[0] as SubAgentBlock;
+    expect(block.type).toBe("subagent");
+    expect(block.status).toBe("errored");
+    expect(block.result).toBe("hit a permission error");
+    expect(block.workflowMeta).not.toBeNull();
+  });
+
+  it("a workflow.started re-emit without parentBlockId does not clear a nested parentBlockId", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "workflow.started",
+      blockId: "wf-1",
+      timestamp: 1,
+      name: "review",
+      intent: "Review the diff",
+      parentBlockId: "parent-block",
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "workflow.started",
+      blockId: "wf-1",
+      timestamp: 2,
+      name: "review",
+      intent: null,
+    });
+
+    const block = blocks[0] as SubAgentBlock;
+    expect(block.parentBlockId).toBe("parent-block");
+    // A null re-emit intent does not clobber the previously known intent.
+    expect(block.task).toBe("Review the diff");
+    expect(block.workflowMeta?.intent).toBe("Review the diff");
+  });
 });
 
 describe("accumulateTurnContent", () => {

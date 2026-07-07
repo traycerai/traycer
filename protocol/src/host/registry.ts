@@ -48,6 +48,7 @@ import {
   chatSubscribeV11,
   chatSubscribeV12,
   chatSubscribeV13,
+  chatSubscribeV14,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -124,7 +125,6 @@ import {
 } from "@traycer/protocol/host/workspace/contracts";
 import {
   terminalCreateV10,
-  terminalDefaultCwdV10,
   terminalKillV10,
   terminalListV10,
   terminalRenameV10,
@@ -177,6 +177,7 @@ import {
   worktreeListByWorkspacePathsResponseSchemaV11,
   worktreeListBindingsForEpicRequestSchema,
   worktreeListBindingsForEpicResponseSchema,
+  worktreeListBindingsForEpicResponseSchemaV11,
   worktreeRetrySetupRequestSchema,
   worktreeRetrySetupResponseSchema,
   workspaceBindingRemoveEntryRequestSchema,
@@ -1167,6 +1168,37 @@ export const worktreeListBindingsForEpicV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: worktreeListBindingsForEpicRequestSchema,
   responseSchema: worktreeListBindingsForEpicResponseSchema,
+});
+
+// v1.1 adds `folderlessCwd` - the host-owned fallback cwd for terminal
+// launches on an epic with no bound workspace rows. Folded onto this existing
+// method instead of a standalone `terminal.defaultCwd` so the wire method-set
+// stays identical to v1.0.0 - a new method name fatally fails the equal-set
+// handshake against an already-shipped host. See the RPC backward-compat
+// decision log.
+export const worktreeListBindingsForEpicV11 = defineRpcContract({
+  method: "worktree.listBindingsForEpic",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: worktreeListBindingsForEpicRequestSchema,
+  responseSchema: worktreeListBindingsForEpicResponseSchemaV11,
+});
+
+// Additive upgrade from v1.0: an old host that predates folderless workspaces,
+// so there is no fallback cwd to synthesize - `null` tells the picker to keep
+// its folderless launch action disabled. The newer side runs this when
+// bridging a v1.0 peer up to canonical (host: inbound v1.0 request; client:
+// inbound v1.0 response).
+export const worktreeListBindingsForEpicUpgradeV10ToV11 = defineUpgradePath<
+  typeof worktreeListBindingsForEpicV10,
+  typeof worktreeListBindingsForEpicV11
+>({
+  from: worktreeListBindingsForEpicV10.schemaVersion,
+  to: worktreeListBindingsForEpicV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({
+    rows: response.rows,
+    folderlessCwd: null,
+  }),
 });
 
 // Note: git contract definitions are imported from git-contracts.ts above
@@ -2240,18 +2272,6 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
       downgradePathsFromLatest: {},
     },
   },
-  "terminal.defaultCwd": {
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: terminalDefaultCwdV10,
-          upgradeFromPreviousVersion: null,
-        },
-      },
-      downgradePathsFromLatest: {},
-    },
-  },
   "terminal.list": {
     1: {
       latestMinor: 0,
@@ -2728,11 +2748,15 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
   },
   "worktree.listBindingsForEpic": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: worktreeListBindingsForEpicV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: worktreeListBindingsForEpicV11,
+          upgradeFromPreviousVersion: worktreeListBindingsForEpicUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -2807,7 +2831,7 @@ export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
   },
   "chat.subscribe": {
     1: {
-      latestMinor: 3,
+      latestMinor: 4,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -2820,6 +2844,9 @@ export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
         },
         3: {
           contract: chatSubscribeV13,
+        },
+        4: {
+          contract: chatSubscribeV14,
         },
       },
     },
