@@ -8,6 +8,13 @@ const electronState = vi.hoisted(() => ({
     readonly maximizeCalls: number;
   }>,
   webContentsOnChannels: [] as string[],
+  // Captures the LATEST listener registered per channel, so a test can drive
+  // it directly (e.g. `console-message`) without wiring a real BrowserWindow.
+  webContentsListeners: new Map<string, (...args: unknown[]) => void>(),
+}));
+
+const perfTelemetryState = vi.hoisted(() => ({
+  events: [] as unknown[],
 }));
 
 // The renderer-load branch keys off the deploy slot (`config.isDevBuild`),
@@ -25,6 +32,18 @@ vi.mock("@sentry/electron/main", () => ({
   captureException: vi.fn(),
 }));
 
+vi.mock("../../perf/perf-telemetry-writer", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../perf/perf-telemetry-writer")
+  >("../../perf/perf-telemetry-writer");
+  return {
+    ...actual,
+    appendPerfEvent: (event: unknown) => {
+      perfTelemetryState.events.push(event);
+    },
+  };
+});
+
 vi.mock("electron", () => ({
   app: {
     getAppPath: (): string => electronState.appPath,
@@ -37,8 +56,9 @@ vi.mock("electron", () => ({
     readonly webContents = {
       setVisualZoomLevelLimits: vi.fn(() => Promise.resolve()),
       setWindowOpenHandler: vi.fn(),
-      on: (channel: string) => {
+      on: (channel: string, listener: (...args: unknown[]) => void) => {
         electronState.webContentsOnChannels.push(channel);
+        electronState.webContentsListeners.set(channel, listener);
       },
     };
 
@@ -135,6 +155,8 @@ describe("loadMainWindow", () => {
     electronState.browserWindowOptions = [];
     electronState.browserWindows = [];
     electronState.webContentsOnChannels = [];
+    electronState.webContentsListeners.clear();
+    perfTelemetryState.events = [];
     Object.defineProperty(process, "resourcesPath", {
       configurable: true,
       value: "/packaged/Resources",
@@ -313,6 +335,45 @@ describe("loadMainWindow", () => {
     });
 
     expect(electronState.webContentsOnChannels).not.toContain("found-in-page");
+  });
+
+  it("redacts a secret-bearing string field on a perf-telemetry console line before persisting it", () => {
+    createMainWindowForTest({
+      preloadPath: "/preload.js",
+      windowId: "window-a",
+      initialRoute: "/",
+      zoomFactor: 1,
+      placement: createFirstLaunchWindowPlacement(),
+    });
+
+    const consoleMessageListener =
+      electronState.webContentsListeners.get("console-message");
+    expect(consoleMessageListener).toBeDefined();
+
+    const perfLine = `[traycer-perf] ${JSON.stringify({
+      name: "test-event",
+      tsMs: 1_700_000_000_000,
+      fields: {
+        // A future call site could pass a user-derived string as a field -
+        // this must scrub the same way every other renderer log path does.
+        detail: "Bearer abc123secrettoken",
+        count: 3,
+      },
+    })}`;
+    consoleMessageListener?.({
+      level: "info",
+      message: perfLine,
+      lineNumber: 0,
+      sourceId: "app://renderer/",
+    });
+
+    expect(perfTelemetryState.events).toEqual([
+      {
+        name: "test-event",
+        tsMs: 1_700_000_000_000,
+        fields: { detail: "Bearer <redacted>", count: 3 },
+      },
+    ]);
   });
 
   it("honors resolution harness window bounds without changing zoom minimums", () => {

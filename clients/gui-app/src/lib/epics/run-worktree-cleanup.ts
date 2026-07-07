@@ -132,9 +132,10 @@ function deleteOneWorktree(
       );
       state.close = owned.close;
       if (state.closeRequested) owned.close();
-    } catch {
+    } catch (error) {
       appLogger.warn("[worktree-cleanup] failed to open delete stream", {
         worktreePath,
+        error: error instanceof Error ? error.message : String(error),
       });
       finish(false);
     }
