@@ -39,6 +39,11 @@ concurrency:
 jobs:
   protocol-compat:
     runs-on: ubuntu-latest
+    # `labeled` is only needed so `guarded-files-tripwire` can re-evaluate once
+    # the override label is added, without waiting for a new push. This job
+    # doesn't read labels at all, so skip it there - otherwise every unrelated
+    # label add reruns the full multi-baseline dump/check for nothing.
+    if: github.event_name != 'pull_request' || github.event.action != 'labeled'
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -116,7 +121,8 @@ jobs:
         run: |
           guarded='protocol/scripts/compat/compat-exceptions.json
           protocol/scripts/compat/support-floor.json
-          protocol/src/host/__tests__/__fixtures__/released-method-names.ts'
+          protocol/src/host/__tests__/__fixtures__/released-method-names.ts
+          .github/workflows/protocol-compat.yml'
           # --diff-filter=MD: only files that already existed and were modified
           # or deleted. A PR that *adds* one of these (e.g. this gate's own
           # rollout) is not weakening anything and must not trip.
