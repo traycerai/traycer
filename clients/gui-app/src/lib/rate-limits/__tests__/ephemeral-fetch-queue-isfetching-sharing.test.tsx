@@ -25,10 +25,17 @@ import {
   createRateLimitSharingHarness,
 } from "@/lib/rate-limits/__tests__/provider-rate-limit-sharing-harness";
 
-const EXPECTED_RATE_LIMIT_USAGE = {
-  totalTokens: 0,
-  remainingTokens: 0,
-  providerRateLimits: null,
+// The queue's queryFn now wraps the mock messenger's raw response (always
+// `providerRateLimits: null` here - see the harness's own `response()` doc
+// comment: only fetch timing matters to these tests) into the provider-pull
+// envelope before TanStack caches it - a disabled passive `useHostQuery`
+// observer of this key family sees whatever's actually in the cache, so its
+// `.data` reflects the envelope shape too.
+const EXPECTED_RATE_LIMIT_ENVELOPE = {
+  latest: null,
+  lastGood: null,
+  lastGoodAt: null,
+  lastFailureAt: null,
 };
 
 describe("enqueueRateLimitFetch keeps a mounted useHostProviderRateLimitsQuery observer's isFetching in sync", () => {
@@ -41,7 +48,14 @@ describe("enqueueRateLimitFetch keeps a mounted useHostProviderRateLimitsQuery o
     const harness = createRateLimitSharingHarness();
     const { method, params, options } = providerRateLimitQueryOptions("codex");
     const rendered = renderHook(
-      () => useHostQuery({ client: harness.client, method, params, options }),
+      () =>
+        useHostQuery({
+          cacheKeyIdentity: undefined,
+          client: harness.client,
+          method,
+          params,
+          options,
+        }),
       { wrapper: createQueryClientWrapper(harness.queryClient) },
     );
 
@@ -63,7 +77,9 @@ describe("enqueueRateLimitFetch keeps a mounted useHostProviderRateLimitsQuery o
     });
 
     await waitFor(() =>
-      expect(rendered.result.current.data).toEqual(EXPECTED_RATE_LIMIT_USAGE),
+      expect(rendered.result.current.data).toEqual(
+        EXPECTED_RATE_LIMIT_ENVELOPE,
+      ),
     );
     expect(rendered.result.current.isPending).toBe(false);
     expect(rendered.result.current.isFetching).toBe(false);
@@ -78,6 +94,6 @@ describe("enqueueRateLimitFetch keeps a mounted useHostProviderRateLimitsQuery o
 
     harness.resolvePendingResponse();
     await waitFor(() => expect(rendered.result.current.isFetching).toBe(false));
-    expect(rendered.result.current.data).toEqual(EXPECTED_RATE_LIMIT_USAGE);
+    expect(rendered.result.current.data).toEqual(EXPECTED_RATE_LIMIT_ENVELOPE);
   });
 });

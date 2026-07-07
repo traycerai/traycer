@@ -68,6 +68,7 @@ export function NewWorktreeForm(props: NewWorktreeFormProps) {
   const inputRef = useRef<HTMLInputElement>(null);
 
   const branchesQuery = useHostQuery<HostRpcRegistry, "worktree.listBranches">({
+    cacheKeyIdentity: undefined,
     client: props.hostClient,
     method: "worktree.listBranches",
     params: { workspacePath: props.workspacePath, includeRemote: true },

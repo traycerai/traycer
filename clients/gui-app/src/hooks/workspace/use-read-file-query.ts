@@ -19,6 +19,7 @@ export function useWorkspaceReadFile(
   );
 
   return useHostQuery({
+    cacheKeyIdentity: undefined,
     client,
     method: "workspace.readFile",
     params,

@@ -162,5 +162,7 @@ function agentProviderLabel(provider: GuiHarnessId): string {
       return "Copilot";
     case "kilocode":
       return "Kilo Code";
+    case "amp":
+      return "Amp";
   }
 }

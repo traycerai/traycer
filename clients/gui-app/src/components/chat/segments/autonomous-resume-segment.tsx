@@ -311,6 +311,7 @@ function useResumeOutputFileQuery(
 ) {
   const client = useTabHostClient();
   return useHostQuery<HostRpcRegistry, "workspace.readFile">({
+    cacheKeyIdentity: undefined,
     client,
     method: "workspace.readFile",
     params: {

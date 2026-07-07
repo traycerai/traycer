@@ -23,6 +23,7 @@ describe("useHostQuery auth readiness", () => {
     const rendered = renderHook(
       () =>
         useHostQuery({
+          cacheKeyIdentity: undefined,
           client: fixture.client,
           method: "host.status",
           params: {},
@@ -62,6 +63,7 @@ describe("useHostQuery auth readiness", () => {
     renderHook(
       () =>
         useHostQuery({
+          cacheKeyIdentity: undefined,
           client: fixture.client,
           method: "host.status",
           params: {},
@@ -80,6 +82,48 @@ describe("useHostQuery auth readiness", () => {
 
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(fixture.requestCount.value).toBe(1);
+  });
+
+  it("respects a function-form `enabled` rather than collapsing it to true", async () => {
+    const fixture = createHostQueryFixture();
+    fixture.client.bind(mockLocalHostEntry);
+    fixture.client.setRequestContext(
+      createRequestContextFixture({
+        origin: "renderer",
+        bearerToken: "tok-1",
+      }),
+    );
+
+    renderHook(
+      () =>
+        useHostQuery({
+          cacheKeyIdentity: undefined,
+          client: fixture.client,
+          method: "host.status",
+          params: {},
+          options: { enabled: () => false },
+        }),
+      { wrapper: fixture.Wrapper },
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(fixture.requestCount.value).toBe(0);
+
+    renderHook(
+      () =>
+        useHostQuery({
+          cacheKeyIdentity: undefined,
+          client: fixture.client,
+          method: "host.status",
+          params: {},
+          options: { enabled: () => true },
+        }),
+      { wrapper: fixture.Wrapper },
+    );
+
+    await waitFor(() => {
+      expect(fixture.requestCount.value).toBe(1);
+    });
   });
 
   it("rejects mutations without a client with a host RPC error", async () => {

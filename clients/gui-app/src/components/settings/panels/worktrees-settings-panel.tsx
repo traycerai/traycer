@@ -461,6 +461,7 @@ function useWorktreeListing(
   readonly refreshing: boolean;
 } {
   const baseQuery = useHostQuery({
+    cacheKeyIdentity: undefined,
     client,
     method: "worktree.listAllForHost",
     params: { includeActivity: false, activityPaths: null },

@@ -165,6 +165,7 @@ export function useGuiHarnessesQuery(
 ): UseQueryResult<ListGuiHarnessesResponse, HostRpcError> {
   const client = useHostBinding()?.hostClient ?? null;
   return useHostQuery<HostRpcRegistry, "agent.gui.listHarnesses">({
+    cacheKeyIdentity: undefined,
     client,
     method: "agent.gui.listHarnesses",
     params: {},
@@ -193,6 +194,7 @@ export function useGuiHarnessModelsQuery(
     [harnessId, workingDirectory],
   );
   return useHostQuery<HostRpcRegistry, "agent.gui.listModels">({
+    cacheKeyIdentity: undefined,
     client,
     method: "agent.gui.listModels",
     params,
@@ -221,6 +223,7 @@ export function useGuiHarnessCommandsQuery(
     [harnessId, workingDirectories],
   );
   return useHostQuery<HostRpcRegistry, "agent.gui.listCommands">({
+    cacheKeyIdentity: undefined,
     client,
     method: "agent.gui.listCommands",
     params,

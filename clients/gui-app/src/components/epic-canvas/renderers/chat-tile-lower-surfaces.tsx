@@ -95,6 +95,7 @@ export interface ChatLowerQueueState {
   readonly editingItem: ChatQueuedItem | null;
   readonly editingItemId: string | null;
   readonly value: ChatSessionState["queue"];
+  readonly onPause: () => string | null;
   readonly onResume: () => string | null;
   readonly onEdit: (item: ChatQueuedItem) => void;
   readonly onCancel: (item: ChatQueuedItem) => void;
@@ -298,6 +299,7 @@ export function ChatLowerInteractionSurfaces(
         editingQueueItemId={props.queue.editingItemId}
         topSpacing={pinnedStackTopSpacing}
         scrollRegionMaxHeightClass={scrollRegionMaxHeightClass}
+        onQueuePause={props.queue.onPause}
         onQueueResume={props.queue.onResume}
         onQueueEdit={props.queue.onEdit}
         onQueueCancel={props.queue.onCancel}

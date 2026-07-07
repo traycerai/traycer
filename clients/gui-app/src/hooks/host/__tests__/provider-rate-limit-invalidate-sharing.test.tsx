@@ -31,7 +31,14 @@ describe("invalidateQueries keeps a mounted useHostProviderRateLimitsQuery obser
     const { method, params, options } =
       providerRateLimitQueryOptions("openrouter");
     const rendered = renderHook(
-      () => useHostQuery({ client: harness.client, method, params, options }),
+      () =>
+        useHostQuery({
+          cacheKeyIdentity: undefined,
+          client: harness.client,
+          method,
+          params,
+          options,
+        }),
       { wrapper: createQueryClientWrapper(harness.queryClient) },
     );
 

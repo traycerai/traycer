@@ -61,6 +61,7 @@ export function WorkspaceFolderRows(props: {
     HostRpcRegistry,
     "worktree.listAllForHost"
   >({
+    cacheKeyIdentity: undefined,
     client: hostClient,
     method: "worktree.listAllForHost",
     // Whole-list mode (no per-viewport selection); this surface only reads the

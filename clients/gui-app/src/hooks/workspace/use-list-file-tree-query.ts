@@ -15,6 +15,7 @@ export function useWorkspaceListFileTree(workspacePath: string | null) {
   );
 
   return useHostQuery({
+    cacheKeyIdentity: undefined,
     client,
     method: "workspace.listFileTree",
     params,

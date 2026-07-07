@@ -55,6 +55,7 @@ export function useTaskDeleteWorktreeCandidates(
 ): TaskDeleteWorktreeCandidatesResult {
   const client = useHostClient();
   const query = useHostQuery({
+    cacheKeyIdentity: undefined,
     client,
     method: "worktree.listAllForHost",
     // Whole-list mode (all worktrees), enriched: the candidate classifier needs
