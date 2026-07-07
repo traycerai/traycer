@@ -17,6 +17,11 @@ import {
 } from "@testing-library/react";
 import * as Y from "yjs";
 import { QuitInterceptBridge } from "@/components/layout/bridges/quit-intercept-bridge";
+import {
+  setActiveDesktopPerWindowProjectionBridge,
+  type DesktopPerWindowProjectionBridge,
+} from "@/lib/windows/per-window-projection-debounce";
+import { appLogger } from "@/lib/logger";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 
@@ -240,6 +245,7 @@ describe("QuitInterceptBridge", () => {
     vi.useRealTimers();
     clearRegistry();
     clearRunnerHost();
+    setActiveDesktopPerWindowProjectionBridge(null);
   });
 
   it("is a no-op when window.runnerHost.appLifecycle is undefined", () => {
@@ -508,6 +514,117 @@ describe("QuitInterceptBridge", () => {
       vi.advanceTimersByTime(200);
     });
     expect(fake.setUnsyncedEditsSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("defers the fresh-snapshot reply until the per-window projection flush has landed in main", async () => {
+    // The quit intercept must not answer main until the debounced per-window
+    // projection (tabs/canvas/drafts) has been flushed to main, so main's
+    // subsequent `desktopStateStore.flush()` persists the latest layout.
+    const fake = installAppLifecycleFake();
+    const registry = __getOpenEpicRegistryForTests();
+    const handleA = buildHandle("eA", "Alpha");
+    registry.acquire("eA", () => handleA);
+    handleA.setDirty(true, 4);
+
+    let resolveFlush: (() => void) | null = null;
+    const flushBridge: DesktopPerWindowProjectionBridge = {
+      update: () => Promise.resolve(),
+      flush: () =>
+        new Promise<void>((resolve) => {
+          resolveFlush = resolve;
+        }),
+      dispose: () => undefined,
+    };
+    setActiveDesktopPerWindowProjectionBridge(flushBridge);
+
+    render(<QuitInterceptBridge />);
+
+    act(() => {
+      fake.emitFreshQuery({ requestId: "req-flush" });
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // Flush still pending -> the reply must NOT have gone out yet.
+    expect(fake.respondFreshUnsyncedSnapshot).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolveFlush?.();
+      await Promise.resolve();
+    });
+
+    expect(fake.respondFreshUnsyncedSnapshot).toHaveBeenCalledTimes(1);
+    expect(fake.respondFreshUnsyncedSnapshot.mock.calls[0][0].requestId).toBe(
+      "req-flush",
+    );
+  });
+
+  it("still replies to the fresh-snapshot query when the projection flush rejects", async () => {
+    // A failed projection write must not make main wait out its fresh-snapshot
+    // timeout and fall back to stale state - the reply still goes out.
+    const fake = installAppLifecycleFake();
+    const registry = __getOpenEpicRegistryForTests();
+    const handleA = buildHandle("eA", "Alpha");
+    registry.acquire("eA", () => handleA);
+    handleA.setDirty(true, 4);
+
+    const flushBridge: DesktopPerWindowProjectionBridge = {
+      update: () => Promise.resolve(),
+      flush: () => Promise.reject(new Error("projection flush failed")),
+      dispose: () => undefined,
+    };
+    setActiveDesktopPerWindowProjectionBridge(flushBridge);
+
+    render(<QuitInterceptBridge />);
+
+    act(() => {
+      fake.emitFreshQuery({ requestId: "req-reject" });
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(fake.respondFreshUnsyncedSnapshot).toHaveBeenCalledTimes(1);
+    expect(fake.respondFreshUnsyncedSnapshot.mock.calls[0][0].requestId).toBe(
+      "req-reject",
+    );
+  });
+
+  it("does not leave an unhandled rejection when the fresh-snapshot reply IPC itself rejects", async () => {
+    // `respondFreshUnsyncedSnapshot` is an `ipcRenderer.invoke` that can
+    // reject (main handler removed / sender gone). The response chain must
+    // terminate in a `.catch` rather than surfacing an unhandled rejection.
+    const errorSpy = vi
+      .spyOn(appLogger, "error")
+      .mockImplementation(() => undefined);
+    const fake = installAppLifecycleFake();
+    fake.respondFreshUnsyncedSnapshot.mockImplementation(() =>
+      Promise.reject(new Error("ipc channel closed")),
+    );
+    const registry = __getOpenEpicRegistryForTests();
+    const handleA = buildHandle("eA", "Alpha");
+    registry.acquire("eA", () => handleA);
+    handleA.setDirty(true, 4);
+
+    render(<QuitInterceptBridge />);
+
+    act(() => {
+      fake.emitFreshQuery({ requestId: "req-ipc-rejects" });
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(errorSpy).toHaveBeenCalledWith(
+      "[quit-intercept] fresh-snapshot reply failed",
+      { requestId: "req-ipc-rejects" },
+      expect.any(Error),
+    );
+    errorSpy.mockRestore();
   });
 
   it("preserves quit interception when the desktop bridge has not added fresh-query hooks yet", () => {
