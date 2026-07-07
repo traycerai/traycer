@@ -38,6 +38,7 @@ function terminalAgent(
     userId: null,
     hostId: "host-1",
     workspaceFolders: [],
+    workspaceMode: undefined,
     model: null,
     reasoningEffort: null,
     agentMode: "regular",

@@ -10,7 +10,7 @@
  * The bindings query is gated on the popover's open state so a closed "+"
  * button subscribes to nothing but its own open state.
  */
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { Plus } from "lucide-react";
 import type { WorktreeBindingSelectorRow } from "@traycer/protocol/host";
@@ -71,16 +71,25 @@ export function NewTerminalPicker(props: NewTerminalPickerProps) {
     epicId: props.epicId,
     enabled: hasLoadedNoRows,
   });
+  const folderlessCwdPending = hasLoadedNoRows && defaultCwdQuery.isPending;
+  const folderlessCwdFailed = hasLoadedNoRows && defaultCwdQuery.isError;
   const launchTarget = useMemo(
     () =>
       selectedRow === null
         ? resolveFolderlessTerminalTarget(
-            hasLoadedNoRows,
+            hasLoadedNoRows && !folderlessCwdPending && !folderlessCwdFailed,
             activeHostId,
             defaultCwdQuery.data?.cwd,
           )
         : { hostId: selectedRow.hostId, cwd: selectedRow.runningDir },
-    [activeHostId, defaultCwdQuery.data?.cwd, hasLoadedNoRows, selectedRow],
+    [
+      activeHostId,
+      defaultCwdQuery.data?.cwd,
+      folderlessCwdFailed,
+      folderlessCwdPending,
+      hasLoadedNoRows,
+      selectedRow,
+    ],
   );
 
   // A double-click on the launch action fires twice before `setIsOpen(false)`
@@ -115,6 +124,23 @@ export function NewTerminalPicker(props: NewTerminalPickerProps) {
   }, []);
 
   const launchDisabled = launchTarget === null;
+  let folderlessCwdStatus: ReactNode = null;
+  if (folderlessCwdPending) {
+    folderlessCwdStatus = (
+      <span data-testid="new-terminal-folderless-cwd-pending">
+        Resolving terminal directory.
+      </span>
+    );
+  } else if (folderlessCwdFailed) {
+    folderlessCwdStatus = (
+      <span
+        className="text-destructive"
+        data-testid="new-terminal-folderless-cwd-error"
+      >
+        Couldn't resolve terminal directory.
+      </span>
+    );
+  }
 
   return (
     <Popover open={isOpen} onOpenChange={handleOpenChange}>
@@ -149,7 +175,10 @@ export function NewTerminalPicker(props: NewTerminalPickerProps) {
           onSelect={handleSelectRow}
           autoFocusSearch
         />
-        <div className="flex justify-end border-t border-border/60 bg-muted/20 px-2.5 py-2.5">
+        <div className="flex items-center justify-between gap-3 border-t border-border/60 bg-muted/20 px-2.5 py-2.5">
+          <div className="min-w-0 text-xs text-muted-foreground">
+            {folderlessCwdStatus}
+          </div>
           <Button
             type="button"
             size="sm"

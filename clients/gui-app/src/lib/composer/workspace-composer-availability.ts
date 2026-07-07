@@ -118,27 +118,33 @@ export function workspaceComposerCanStart(
   return availability.status === "ready";
 }
 
-export function deriveResolvedWorkspaceAvailability(
+function deriveWorkspaceFoldersAvailability(
   folders: ReadonlyArray<ResolvedFolder>,
   isResolving: boolean,
+  allowEmptyFolders: boolean,
 ): WorkspaceComposerAvailability {
   if (isResolving) return WORKSPACE_COMPOSER_CHECKING;
-  if (folders.length === 0) return WORKSPACE_COMPOSER_EMPTY;
+  if (!allowEmptyFolders && folders.length === 0) {
+    return WORKSPACE_COMPOSER_EMPTY;
+  }
   if (folders.some((folder) => folder.kind === "unresolved")) {
     return WORKSPACE_COMPOSER_UNRESOLVED;
   }
   return WORKSPACE_COMPOSER_READY;
 }
 
+export function deriveResolvedWorkspaceAvailability(
+  folders: ReadonlyArray<ResolvedFolder>,
+  isResolving: boolean,
+): WorkspaceComposerAvailability {
+  return deriveWorkspaceFoldersAvailability(folders, isResolving, false);
+}
+
 export function deriveFolderlessAllowedWorkspaceAvailability(
   folders: ReadonlyArray<ResolvedFolder>,
   isResolving: boolean,
 ): WorkspaceComposerAvailability {
-  if (isResolving) return WORKSPACE_COMPOSER_CHECKING;
-  if (folders.some((folder) => folder.kind === "unresolved")) {
-    return WORKSPACE_COMPOSER_UNRESOLVED;
-  }
-  return WORKSPACE_COMPOSER_READY;
+  return deriveWorkspaceFoldersAvailability(folders, isResolving, true);
 }
 
 export function deriveWorktreeBindingWorkspaceAvailability(

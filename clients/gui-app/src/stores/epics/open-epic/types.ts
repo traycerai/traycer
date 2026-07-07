@@ -102,7 +102,7 @@ export interface TuiAgentProjection {
   readonly userId: string | null;
   readonly hostId: string;
   readonly workspaceFolders: readonly string[];
-  readonly workspaceMode?: WorktreeBindingWorkspaceMode;
+  readonly workspaceMode: WorktreeBindingWorkspaceMode | undefined;
   readonly model: string | null;
   readonly reasoningEffort: string | null;
   readonly agentMode: AgentMode;

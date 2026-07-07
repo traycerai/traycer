@@ -78,6 +78,7 @@ import {
   workspaceComposerCanStart,
 } from "@/lib/composer/workspace-composer-availability";
 import { buildForkWorkspaceSeedFromWorkspaceFolders } from "@/lib/worktree/fork-workspace-seed";
+import { deriveWorkspaceMode } from "@/lib/worktree/workspace-mode";
 import { cn } from "@/lib/utils";
 import { ActiveHostWorkspaceControls } from "@/components/home/host-workspace-selector/host-workspace-selector";
 import { ComposerBody } from "@/components/home/composer/composer-body";
@@ -644,11 +645,10 @@ function NewConversationModalBody(props: {
     const profile = useAuthStore.getState().profile;
     const userId = profile?.userId ?? null;
     const worktreeIntent = worktreeIntentForSubmit();
-    const workspaceMode =
-      draftWorkspaceFolderCount === 0 ||
-      (worktreeIntent !== null && worktreeIntent.entries.length === 0)
-        ? "folderless"
-        : "inherit";
+    const workspaceMode = deriveWorkspaceMode(
+      draftWorkspaceFolderCount,
+      worktreeIntent,
+    );
     if (worktreeIntent !== null) {
       rememberEpicIntent(epicId, worktreeIntent, now);
     }
@@ -732,11 +732,10 @@ function NewConversationModalBody(props: {
     (launch: TerminalAgentLaunch) => {
       if (!canMutate || !workspaceCanStart) return;
       const worktreeIntent = worktreeIntentForSubmit();
-      const workspaceMode =
-        draftWorkspaceFolderCount === 0 ||
-        (worktreeIntent !== null && worktreeIntent.entries.length === 0)
-          ? "folderless"
-          : "inherit";
+      const workspaceMode = deriveWorkspaceMode(
+        draftWorkspaceFolderCount,
+        worktreeIntent,
+      );
       if (worktreeIntent !== null) {
         rememberEpicIntent(epicId, worktreeIntent, Date.now());
       }

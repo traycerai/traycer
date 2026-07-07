@@ -69,6 +69,7 @@ import type {
   ReasoningLevel,
   ServiceTier,
 } from "@/components/home/data/landing-options";
+import { deriveWorkspaceMode } from "@/lib/worktree/workspace-mode";
 
 export interface LandingComposerSubmitArgs {
   readonly editor: ComposerPromptEditorHandle | null;
@@ -599,11 +600,10 @@ function readLandingWorkspaceContext(): LandingWorkspaceContext {
       workspaceFolders: activeDraft.workspace.folders,
       workspaceFolderInfoByPath: activeDraft.workspace.folderInfoByPath,
       worktreeIntent,
-      workspaceMode:
-        activeDraft.workspace.folders.length === 0 ||
-        (worktreeIntent !== null && worktreeIntent.entries.length === 0)
-          ? "folderless"
-          : "inherit",
+      workspaceMode: deriveWorkspaceMode(
+        activeDraft.workspace.folders.length,
+        worktreeIntent,
+      ),
       activeDraftId,
     };
   }
@@ -613,11 +613,7 @@ function readLandingWorkspaceContext(): LandingWorkspaceContext {
     workspaceFolderInfoByPath:
       useWorkspaceFoldersStore.getState().folderInfoByPath,
     worktreeIntent,
-    workspaceMode:
-      globalFolders.length === 0 ||
-      (worktreeIntent !== null && worktreeIntent.entries.length === 0)
-        ? "folderless"
-        : "inherit",
+    workspaceMode: deriveWorkspaceMode(globalFolders.length, worktreeIntent),
     activeDraftId: null,
   };
 }

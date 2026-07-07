@@ -18,8 +18,22 @@ interface BindingsQueryStub {
   readonly isError: boolean;
 }
 
+interface DefaultCwdQueryStub {
+  readonly data: { readonly cwd: string } | undefined;
+  readonly isPending: boolean;
+  readonly isError: boolean;
+}
+
 const bindingsQuery = vi.hoisted(() => ({
   current: null as BindingsQueryStub | null,
+}));
+
+const defaultCwdQuery: { current: DefaultCwdQueryStub } = vi.hoisted(() => ({
+  current: {
+    data: { cwd: "/Users/tgill" },
+    isPending: false,
+    isError: false,
+  },
 }));
 
 vi.mock("@/hooks/worktree/use-worktree-list-bindings-for-epic-query", () => ({
@@ -27,11 +41,7 @@ vi.mock("@/hooks/worktree/use-worktree-list-bindings-for-epic-query", () => ({
 }));
 
 vi.mock("@/hooks/terminal/use-terminal-default-cwd-query", () => ({
-  useTerminalDefaultCwd: () => ({
-    data: { cwd: "/Users/tgill" },
-    isPending: false,
-    isError: false,
-  }),
+  useTerminalDefaultCwd: () => defaultCwdQuery.current,
 }));
 
 function stubLoadedBindings(): void {
@@ -116,6 +126,11 @@ describe("<NewTerminalPicker />", () => {
     resetCanvas();
     selectById.mockClear();
     stubLoadedBindings();
+    defaultCwdQuery.current = {
+      data: { cwd: "/Users/tgill" },
+      isPending: false,
+      isError: false,
+    };
   });
 
   it("opens a popover with the host section and workspace rows", () => {
@@ -268,6 +283,60 @@ describe("<NewTerminalPicker />", () => {
     expect(terminals).toHaveLength(1);
     expect(terminals[0].hostId).toBe("host-1");
     expect(terminals[0].cwd).toBe("/Users/tgill");
+  });
+
+  it("keeps Launch disabled while folderless default cwd is loading", () => {
+    bindingsQuery.current = {
+      data: { rows: [] },
+      isPending: false,
+      isError: false,
+    };
+    defaultCwdQuery.current = {
+      data: undefined,
+      isPending: true,
+      isError: false,
+    };
+    const tabId = openPicker();
+
+    expect(
+      screen.getByTestId("new-terminal-folderless-cwd-pending"),
+    ).toBeDefined();
+    expect(
+      screen.getByRole("button", { name: "Launch" }).hasAttribute("disabled"),
+    ).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Launch" }));
+
+    const terminals = tabTiles(tabId).filter(
+      (tile) => tile.type === "terminal",
+    );
+    expect(terminals).toHaveLength(0);
+  });
+
+  it("keeps Launch disabled when folderless default cwd fails", () => {
+    bindingsQuery.current = {
+      data: { rows: [] },
+      isPending: false,
+      isError: false,
+    };
+    defaultCwdQuery.current = {
+      data: undefined,
+      isPending: false,
+      isError: true,
+    };
+    const tabId = openPicker();
+
+    expect(
+      screen.getByTestId("new-terminal-folderless-cwd-error"),
+    ).toBeDefined();
+    expect(
+      screen.getByRole("button", { name: "Launch" }).hasAttribute("disabled"),
+    ).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Launch" }));
+
+    const terminals = tabTiles(tabId).filter(
+      (tile) => tile.type === "terminal",
+    );
+    expect(terminals).toHaveLength(0);
   });
 
   it("selects a workspace without creating a terminal on a single click", () => {
