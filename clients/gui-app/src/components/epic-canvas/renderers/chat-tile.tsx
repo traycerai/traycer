@@ -1058,8 +1058,8 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   const approvalDecisionPending = Object.values(state.pendingActions).some(
     (action) => action.action === "approvalDecision",
   );
-  const stopDisabled =
-    !canAct || stopPending || composerActiveTurnStatus === "stopping";
+  const turnStopBusy = stopPending || composerActiveTurnStatus === "stopping";
+  const stopDisabled = !canAct || turnStopBusy;
   const chatActions = useChatActions(handle);
   const restoreActionPending = useMemo(
     () =>
@@ -1306,8 +1306,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   );
   const canSendNextStep =
     canAct &&
-    !stopPending &&
-    composerActiveTurnStatus !== "stopping" &&
+    !turnStopBusy &&
     !composerHasBlockingApprovals(
       state.pendingApprovals,
       state.pendingFileEditApprovals.length,
