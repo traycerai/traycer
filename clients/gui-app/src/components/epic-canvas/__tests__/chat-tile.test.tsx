@@ -101,6 +101,7 @@ import type { ChatStreamClient } from "@traycer-clients/shared/host-transport/ch
 import type { Message } from "@traycer/protocol/persistence/epic/schemas";
 import type {
   ChatActiveTurn,
+  ChatApprovalState,
   ChatPendingInterviewState,
   ChatQueuedItem,
   ChatRunSettings,
@@ -484,6 +485,29 @@ function runningActiveTurn(): ChatActiveTurn {
     updatedAt: 3,
     reasoningEffort: null,
     serviceTier: null,
+  };
+}
+
+function stoppingActiveTurn(): ChatActiveTurn {
+  return {
+    ...runningActiveTurn(),
+    status: "stopping",
+  };
+}
+
+function approvalState(
+  approvalId: string,
+  kind: ChatApprovalState["kind"],
+): ChatApprovalState {
+  return {
+    kind,
+    approvalId,
+    toolName: kind === "plan" ? "plan" : "bash",
+    description: "Review action",
+    input: null,
+    planId: kind === "plan" ? "plan-1" : null,
+    actions: [],
+    requestedAt: 4,
   };
 }
 
@@ -1382,7 +1406,12 @@ describe("<ChatTile />", () => {
       });
     });
 
-    fireEvent.click(getButtonContainingText("/implementation-validation all"));
+    const nextStepButton = getButtonContainingText(
+      "/implementation-validation all",
+    );
+    expect(nextStepButton.disabled).toBe(false);
+
+    fireEvent.click(nextStepButton);
 
     expect(chatHarness.sent).toHaveLength(1);
     const frame = chatHarness.sent[0];
@@ -1404,6 +1433,134 @@ describe("<ChatTile />", () => {
         },
       ],
     });
+  });
+
+  it("disables next-step sends while a turn is stopping", async () => {
+    renderChatTile();
+
+    await waitForChatTileLoaded();
+
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: SESSION_SETTINGS,
+        messages: [hostUserMessage(), nextStepsAssistantMessage()],
+        activeTurn: stoppingActiveTurn(),
+      });
+    });
+
+    const nextStepButton = getButtonContainingText(
+      "/implementation-validation all",
+    );
+    expect(nextStepButton.disabled).toBe(true);
+
+    fireEvent.click(nextStepButton);
+
+    expect(chatHarness.sent).toHaveLength(0);
+  });
+
+  it("disables next-step sends while a stop request is pending", async () => {
+    renderChatTile();
+
+    await waitForChatTileLoaded();
+
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: SESSION_SETTINGS,
+        messages: [hostUserMessage(), nextStepsAssistantMessage()],
+        activeTurn: runningActiveTurn(),
+      });
+    });
+
+    const nextStepButton = getButtonContainingText(
+      "/implementation-validation all",
+    );
+    expect(nextStepButton.disabled).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+
+    expect(chatHarness.sent).toHaveLength(1);
+    expect(chatHarness.sent[0]?.kind).toBe("stop");
+
+    await waitFor(() => {
+      expect(nextStepButton.disabled).toBe(true);
+    });
+
+    fireEvent.click(nextStepButton);
+
+    expect(chatHarness.sent).toHaveLength(1);
+  });
+
+  it("disables next-step sends while a blocking approval is pending", async () => {
+    renderChatTile();
+
+    await waitForChatTileLoaded();
+
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: SESSION_SETTINGS,
+        messages: [hostUserMessage(), nextStepsAssistantMessage()],
+        activeTurn: runningActiveTurn(),
+      });
+      chatHarness.callbacks().onApprovalRequested({
+        kind: "approvalRequested",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ARTIFACT.id,
+        approval: approvalState("approval-1", "tool"),
+      });
+    });
+
+    const nextStepButton = getButtonContainingText(
+      "/implementation-validation all",
+    );
+    expect(nextStepButton.disabled).toBe(true);
+
+    fireEvent.click(nextStepButton);
+
+    expect(chatHarness.sent).toHaveLength(0);
+  });
+
+  it("keeps next-step sends enabled for plan-only approvals", async () => {
+    renderChatTile();
+
+    await waitForChatTileLoaded();
+
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: SESSION_SETTINGS,
+        messages: [hostUserMessage(), nextStepsAssistantMessage()],
+        activeTurn: runningActiveTurn(),
+      });
+      chatHarness.callbacks().onApprovalRequested({
+        kind: "approvalRequested",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ARTIFACT.id,
+        approval: approvalState("approval-plan-1", "plan"),
+      });
+    });
+
+    const nextStepButton = getButtonContainingText(
+      "/implementation-validation all",
+    );
+    expect(nextStepButton.disabled).toBe(false);
+
+    fireEvent.click(nextStepButton);
+
+    expect(chatHarness.sent).toHaveLength(1);
+    expect(chatHarness.sent[0]?.kind).toBe("send");
   });
 
   it("sends active permission updates when the toolbar permission changes during a turn", async () => {
