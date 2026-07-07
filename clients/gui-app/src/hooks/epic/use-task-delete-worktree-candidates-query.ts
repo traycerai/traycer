@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import type { WorktreeBranchStatus } from "@traycer/protocol/host/index";
 import { useHostClient } from "@/lib/host";
 import { useHostQuery } from "@/hooks/host/use-host-query";
-import { provenRemovable } from "@/lib/worktree/classify-worktree";
+import { provenRemovable } from "@traycer-clients/shared/worktree/classify-worktree";
 
 /**
  * A host worktree the Task-delete dialog may offer to clean up: it has at least

@@ -15,6 +15,16 @@ interface StubBranchStatus {
   readonly mergedIntoDefault: boolean;
 }
 
+interface StubSubmoduleFact {
+  readonly repoIdentifier: { readonly owner: string; readonly repo: string };
+  readonly branch: string;
+  readonly prState: "merged" | "open" | "closed" | "none" | null;
+  readonly prNumber: number | null;
+  readonly prUrl: string | null;
+  readonly mergedHeadShaMatches: boolean;
+  readonly mergedIntoDefault: boolean;
+}
+
 interface StubEntry {
   readonly worktreePath: string;
   readonly repoLabel: string;
@@ -26,6 +36,7 @@ interface StubEntry {
   readonly branchStatus: StubBranchStatus | null;
   readonly prState: "merged" | "open" | "closed" | "none" | null;
   readonly mergedHeadShaMatches: boolean;
+  readonly submodules: ReadonlyArray<StubSubmoduleFact>;
   readonly atBaseCommit: boolean;
 }
 
@@ -61,6 +72,7 @@ function entry(over: Partial<StubEntry> & { worktreePath: string }): StubEntry {
     branchStatus: null,
     prState: null,
     mergedHeadShaMatches: false,
+    submodules: [],
     atBaseCommit: false,
     ...over,
   };

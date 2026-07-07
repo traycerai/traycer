@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type {
   WorktreeBranchStatus,
   WorktreeHostEntryV11,
+  WorktreeSubmoduleMergeFact,
 } from "@traycer/protocol/host/index";
 import {
   WORKTREE_TIER_ORDER,
@@ -10,7 +11,7 @@ import {
   provenRemovable,
   worktreeTierRank,
   type WorktreeTier,
-} from "@/lib/worktree/classify-worktree";
+} from "@traycer-clients/shared/worktree/classify-worktree";
 
 function status(over: Partial<WorktreeBranchStatus>): WorktreeBranchStatus {
   return { ahead: 0, behind: 0, mergedIntoDefault: false, ...over };
@@ -22,6 +23,21 @@ function owner(epicId: string) {
     ownerKind: "chat" as const,
     ownerId: `chat-${epicId}`,
     updatedAt: 1,
+  };
+}
+
+function subFact(
+  over: Partial<WorktreeSubmoduleMergeFact>,
+): WorktreeSubmoduleMergeFact {
+  return {
+    repoIdentifier: { owner: "acme", repo: "lib" },
+    branch: "feat/x",
+    prState: null,
+    prNumber: null,
+    prUrl: null,
+    mergedHeadShaMatches: false,
+    mergedIntoDefault: false,
+    ...over,
   };
 }
 
@@ -265,6 +281,80 @@ describe("classifyWorktreeTier - precedence truth table (first match wins)", () 
       entry: entry({ branch: null, atBaseCommit: true }),
       tier: "review",
     },
+    // --- Owned-submodule gate (blocks every green) ---
+    {
+      name: "unproven submodule blocks a merged-PR green → review",
+      entry: entry({
+        prState: "merged",
+        mergedHeadShaMatches: true,
+        submodules: [subFact({})],
+      }),
+      tier: "review",
+    },
+    {
+      name: "unproven submodule blocks at-base → review (gitlink never bumped, submodule work unmerged)",
+      entry: entry({ atBaseCommit: true, submodules: [subFact({})] }),
+      tier: "review",
+    },
+    {
+      name: "unproven submodule blocks local-ancestry merged → review",
+      entry: entry({
+        branchStatus: status({ mergedIntoDefault: true }),
+        submodules: [subFact({ prState: "open", prNumber: 12 })],
+      }),
+      tier: "review",
+    },
+    {
+      name: "unproven submodule blocks unreferenced → review",
+      entry: entry({
+        branchStatus: status({ ahead: 0 }),
+        submodules: [subFact({ prState: "closed" })],
+      }),
+      tier: "review",
+    },
+    {
+      name: "submodule proven via HEAD-validated merged PR does not block → merged",
+      entry: entry({
+        prState: "merged",
+        mergedHeadShaMatches: true,
+        submodules: [
+          subFact({ prState: "merged", mergedHeadShaMatches: true }),
+        ],
+      }),
+      tier: "merged",
+    },
+    {
+      name: "submodule proven via local ancestry does not block → at-base-commit",
+      entry: entry({
+        atBaseCommit: true,
+        submodules: [subFact({ mergedIntoDefault: true })],
+      }),
+      tier: "at-base-commit",
+    },
+    {
+      name: "one proven + one unproven submodule → review (true AND across the owned set)",
+      entry: entry({
+        prState: "merged",
+        mergedHeadShaMatches: true,
+        submodules: [subFact({ mergedIntoDefault: true }), subFact({})],
+      }),
+      tier: "review",
+    },
+    {
+      name: "submodule merged PR WITHOUT the live-HEAD match proves nothing → review",
+      entry: entry({
+        atBaseCommit: true,
+        submodules: [
+          subFact({ prState: "merged", mergedHeadShaMatches: false }),
+        ],
+      }),
+      tier: "review",
+    },
+    {
+      name: "orphan still outranks the submodule gate (label, not bulk safety)",
+      entry: entry({ gitRemovable: false, submodules: [subFact({})] }),
+      tier: "orphaned",
+    },
     // --- Unreferenced (T9, unchanged) ---
     {
       name: "clean + non-null + ahead 0 + no owners + not merged → unreferenced",
@@ -352,6 +442,34 @@ describe("classifyWorktreeTier - precedence truth table (first match wins)", () 
       entry({ branch: null, branchStatus: status({ ahead: 1 }) }),
     );
     expect(detached.facts).toContain("detached HEAD");
+
+    // Unproven submodules are named as the would-be-lost work; an open PR
+    // carries its number, proven submodules emit nothing.
+    const submoduleBlocked = classifyWorktree(
+      entry({
+        atBaseCommit: true,
+        submodules: [
+          subFact({}),
+          subFact({
+            repoIdentifier: { owner: "acme", repo: "widgets" },
+            prState: "open",
+            prNumber: 42,
+          }),
+          subFact({
+            repoIdentifier: { owner: "acme", repo: "done" },
+            mergedIntoDefault: true,
+          }),
+        ],
+      }),
+    );
+    expect(submoduleBlocked.tier).toBe("review");
+    expect(submoduleBlocked.facts).toContain("submodule acme/lib unmerged");
+    expect(submoduleBlocked.facts).toContain(
+      "submodule acme/widgets PR #42 open",
+    );
+    expect(
+      submoduleBlocked.facts.filter((fact) => fact.includes("acme/done")),
+    ).toEqual([]);
   });
 
   it("degrades to today's behavior against a v1.0 / no-PR host (all new fields null/false)", () => {
@@ -470,6 +588,16 @@ describe("provenRemovable - single green / bulk-eligible predicate", () => {
     expect(
       provenRemovable(
         entry({ branch: null, prState: "merged", mergedHeadShaMatches: true }),
+      ),
+    ).toBe(false);
+    // An unproven owned-submodule branch blocks bulk eligibility outright.
+    expect(
+      provenRemovable(
+        entry({
+          prState: "merged",
+          mergedHeadShaMatches: true,
+          submodules: [subFact({})],
+        }),
       ),
     ).toBe(false);
   });

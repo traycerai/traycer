@@ -1,13 +1,28 @@
+import { worktreeListAllForHostResponseSchemaV11 } from "@traycer/protocol/host";
+import type { WorktreeHostEntryV11 } from "@traycer/protocol/host";
 import {
-  worktreeListAllForHostResponseSchemaV11,
-  type WorktreeHostEntryV11,
-} from "@traycer/protocol/host";
+  WORKTREE_TIER_LABEL,
+  classifyWorktreeTier,
+  type WorktreeTier,
+} from "@traycer-clients/shared/worktree/classify-worktree";
 import {
   callHostRpc,
   parseHostResponse,
   toAgentCliError,
 } from "../internal/host-rpc";
 import type { CommandFn } from "../runner/runner";
+
+/**
+ * One listing row: the raw enriched host entry plus the evidence tier computed
+ * by the shared classifier (`classifyWorktreeTier` - the exact function behind
+ * the Settings ▸ Worktrees pills, so CLI and GUI can never disagree). `tier` is
+ * `null` when `--include-activity` was not passed: the activity probes are what
+ * feed the greens, so classifying unprobed entries would misread every worktree
+ * as Review. Null mirrors the probe-skipped semantics of the other fields.
+ */
+export type WorktreeListRow = WorktreeHostEntryV11 & {
+  readonly tier: WorktreeTier | null;
+};
 
 export interface WorktreeListCommandOpts {
   // `--include-activity`: opt into the host's per-worktree git probes
@@ -22,8 +37,9 @@ export interface WorktreeListCommandOpts {
  * worktree under `~/.traycer/worktrees/`. Calls `worktree.listAllForHost@1.1`;
  * the canonical (latest) request carries `includeActivity`, so a v1.0 host is
  * bridged up transparently (enriched fields default to empty `owners` / `null`
- * timestamps). Human mode renders a scannable table; `--json` hands the raw
- * enriched entries to the caller (the skill) to classify.
+ * timestamps). Human mode renders a scannable table; `--json` hands the
+ * enriched entries to the caller (the skill), each carrying the shared
+ * classifier's computed `tier` (null without `--include-activity`).
  */
 export function buildWorktreeListCommand(
   opts: WorktreeListCommandOpts,
@@ -41,9 +57,13 @@ export function buildWorktreeListCommand(
       worktreeListAllForHostResponseSchemaV11,
       result,
     );
+    const worktrees: WorktreeListRow[] = parsed.worktrees.map((entry) => ({
+      ...entry,
+      tier: opts.includeActivity ? classifyWorktreeTier(entry) : null,
+    }));
     return {
-      data: parsed,
-      human: formatWorktreeListTable(parsed.worktrees, opts.includeActivity),
+      data: { worktrees },
+      human: formatWorktreeListTable(worktrees, opts.includeActivity),
       exitCode: 0,
     };
   };
@@ -52,6 +72,7 @@ export function buildWorktreeListCommand(
 const COLUMNS = [
   "REPO",
   "BRANCH",
+  "TIER",
   "IN-USE",
   "UNCOMMITTED",
   "LAST-ACTIVE",
@@ -66,7 +87,7 @@ const COLUMNS = [
  * so the LAST-ACTIVE cell reads `-` and a trailing hint points at the flag.
  */
 export function formatWorktreeListTable(
-  worktrees: ReadonlyArray<WorktreeHostEntryV11>,
+  worktrees: ReadonlyArray<WorktreeListRow>,
   includeActivity: boolean,
 ): string {
   if (worktrees.length === 0) {
@@ -75,6 +96,7 @@ export function formatWorktreeListTable(
   const rows = worktrees.map((entry) => [
     entry.repoLabel,
     entry.branch ?? "(detached)",
+    entry.tier === null ? "-" : WORKTREE_TIER_LABEL[entry.tier],
     entry.inUse ? "yes" : "no",
     String(entry.uncommittedCount),
     formatLastActive(entry.lastActivityAt),
@@ -97,7 +119,7 @@ export function formatWorktreeListTable(
   if (!includeActivity) {
     lines.push(
       "",
-      "Pass --include-activity for last-active timestamps and branch status.",
+      "Pass --include-activity for last-active timestamps, branch status, and the computed tier.",
     );
   }
   return lines.join("\n");

@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorktreeHostEntryV11 } from "@traycer/protocol/host";
+import type { WorktreeTier } from "@traycer-clients/shared/worktree/classify-worktree";
 import {
   buildWorktreeListCommand,
   formatWorktreeListTable,
+  type WorktreeListRow,
 } from "../worktree-list";
 import { callHostRpc } from "../../internal/host-rpc";
 import type { CommandContext } from "../../runner/runner";
@@ -52,6 +54,13 @@ function entry(overrides: Partial<WorktreeHostEntryV11>): WorktreeHostEntryV11 {
   };
 }
 
+function row(
+  overrides: Partial<WorktreeHostEntryV11>,
+  tier: WorktreeTier | null,
+): WorktreeListRow {
+  return { ...entry(overrides), tier };
+}
+
 // A fake CommandContext is unnecessary for the list command (it ignores ctx),
 // but the CommandFn signature requires one.
 const ctx = {} as CommandContext;
@@ -66,32 +75,37 @@ describe("formatWorktreeListTable", () => {
   it("renders a header row and one row per worktree", () => {
     const table = formatWorktreeListTable(
       [
-        entry({
-          repoLabel: "acme/web",
-          branch: "feature/x",
-          inUse: true,
-          uncommittedCount: 3,
-          lastActivityAt: 1_700_000_000_000,
-          owners: [
-            {
-              epicId: "e1",
-              ownerKind: "chat",
-              ownerId: "c1",
-              updatedAt: 1_700_000_000_000,
-            },
-          ],
-        }),
+        row(
+          {
+            repoLabel: "acme/web",
+            branch: "feature/x",
+            inUse: true,
+            uncommittedCount: 3,
+            lastActivityAt: 1_700_000_000_000,
+            owners: [
+              {
+                epicId: "e1",
+                ownerKind: "chat",
+                ownerId: "c1",
+                updatedAt: 1_700_000_000_000,
+              },
+            ],
+          },
+          "in-use",
+        ),
       ],
       true,
     );
     const lines = table.split("\n");
     expect(lines[0]).toContain("REPO");
     expect(lines[0]).toContain("BRANCH");
+    expect(lines[0]).toContain("TIER");
     expect(lines[0]).toContain("IN-USE");
     expect(lines[0]).toContain("OWNERS");
     expect(lines[0]).toContain("PATH");
     expect(lines[1]).toContain("acme/web");
     expect(lines[1]).toContain("feature/x");
+    expect(lines[1]).toContain("In use");
     expect(lines[1]).toContain("yes");
     expect(lines[1]).toContain("2023-11-14");
     // one owner
@@ -101,34 +115,51 @@ describe("formatWorktreeListTable", () => {
     );
   });
 
-  it("shows a detached placeholder and a dash for a null last-active", () => {
+  it("renders the shared classifier's human label per tier, and a dash when unclassified", () => {
     const table = formatWorktreeListTable(
-      [entry({ branch: null, lastActivityAt: null })],
+      [
+        row({ branch: "feat/merged" }, "merged"),
+        row({ branch: "feat/base" }, "at-base-commit"),
+        row({ branch: "feat/unprobed" }, null),
+      ],
       true,
     );
-    const row = table.split("\n")[1];
-    expect(row).toContain("(detached)");
-    expect(row).toContain("-");
+    const lines = table.split("\n");
+    expect(lines[1]).toContain("Merged");
+    expect(lines[2]).toContain("At base commit");
+    expect(lines[3]).toContain("-");
+  });
+
+  it("shows a detached placeholder and a dash for a null last-active", () => {
+    const table = formatWorktreeListTable(
+      [row({ branch: null, lastActivityAt: null }, "review")],
+      true,
+    );
+    const line = table.split("\n")[1];
+    expect(line).toContain("(detached)");
+    expect(line).toContain("-");
   });
 
   it("normalises a seconds-based epoch up to a real date", () => {
     const table = formatWorktreeListTable(
-      [entry({ lastActivityAt: 1_700_000_000 })],
+      [row({ lastActivityAt: 1_700_000_000 }, "review")],
       true,
     );
     expect(table).toContain("2023-11-14");
   });
 
   it("appends the --include-activity hint only when activity was not requested", () => {
-    const withoutActivity = formatWorktreeListTable([entry({})], false);
+    const withoutActivity = formatWorktreeListTable([row({}, null)], false);
     expect(withoutActivity).toContain("--include-activity");
-    const withActivity = formatWorktreeListTable([entry({})], true);
+    const withActivity = formatWorktreeListTable([row({}, "review")], true);
     expect(withActivity).not.toContain("--include-activity");
   });
 });
 
 describe("buildWorktreeListCommand", () => {
-  it("calls listAllForHost with includeActivity and returns the raw entries as data", async () => {
+  it("calls listAllForHost with includeActivity and returns the entries with the computed tier", async () => {
+    // The default fixture is clean, on a named branch, with a null
+    // branchStatus - unproven, so the shared classifier reads it as review.
     const worktrees = [entry({})];
     rpcMock.mockResolvedValue({ worktrees });
 
@@ -140,18 +171,57 @@ describe("buildWorktreeListCommand", () => {
       includeActivity: true,
       activityPaths: null,
     });
-    expect(result.data).toEqual({ worktrees });
+    expect(result.data).toEqual({
+      worktrees: [{ ...entry({}), tier: "review" }],
+    });
     expect(result.exitCode).toBe(0);
   });
 
-  it("defaults includeActivity to false", async () => {
-    rpcMock.mockResolvedValue({ worktrees: [] });
+  it("classifies with the shared ladder: a validated merged PR rides out as merged", async () => {
+    rpcMock.mockResolvedValue({
+      worktrees: [
+        entry({ prState: "merged", mergedHeadShaMatches: true, prNumber: 7 }),
+      ],
+    });
 
-    await buildWorktreeListCommand({ includeActivity: false })(ctx);
+    const result = await buildWorktreeListCommand({ includeActivity: true })(
+      ctx,
+    );
+
+    expect(result.data).toEqual({
+      worktrees: [
+        {
+          ...entry({
+            prState: "merged",
+            mergedHeadShaMatches: true,
+            prNumber: 7,
+          }),
+          tier: "merged",
+        },
+      ],
+    });
+  });
+
+  it("emits tier null without --include-activity (unprobed entries are never classified)", async () => {
+    rpcMock.mockResolvedValue({
+      worktrees: [entry({ prState: "merged", mergedHeadShaMatches: true })],
+    });
+
+    const result = await buildWorktreeListCommand({ includeActivity: false })(
+      ctx,
+    );
 
     expect(rpcMock).toHaveBeenCalledWith("worktree.listAllForHost", {
       includeActivity: false,
       activityPaths: null,
+    });
+    expect(result.data).toEqual({
+      worktrees: [
+        {
+          ...entry({ prState: "merged", mergedHeadShaMatches: true }),
+          tier: null,
+        },
+      ],
     });
   });
 });

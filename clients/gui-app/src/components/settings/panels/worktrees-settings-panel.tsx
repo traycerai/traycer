@@ -41,7 +41,7 @@ import {
   classifyWorktree,
   classifyWorktreeTier,
   type WorktreeTier,
-} from "@/lib/worktree/classify-worktree";
+} from "@traycer-clients/shared/worktree/classify-worktree";
 import {
   buildTaskMergeRollups,
   taskMergeRollupLabel,
