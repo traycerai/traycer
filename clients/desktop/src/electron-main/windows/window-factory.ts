@@ -11,6 +11,11 @@ import {
   sanitizeLogFields,
   type SafeLogFields,
 } from "../app/logger";
+import {
+  appendPerfEvent,
+  type PerfFieldValue,
+} from "../perf/perf-telemetry-writer";
+import { parsePerfRendererLog } from "../perf/perf-renderer-log";
 import { safelyOpenExternal, installNavigationGuard } from "../app/security";
 import { installContextMenu } from "../app/spell-check";
 import { installResponsivenessListeners } from "../app/responsiveness";
@@ -169,6 +174,16 @@ export function createMainWindow(options: MainWindowOptions): BrowserWindow {
   window.webContents.on(
     "console-message",
     (details: Event<WebContentsConsoleMessageEventParams>) => {
+      // Perf-telemetry lines go ONLY to the dedicated NDJSON file, never the
+      // human log. Handle them first and return so they bypass electron-log.
+      const perfEvent = parsePerfRendererLog(details.message);
+      if (perfEvent !== null) {
+        appendPerfEvent({
+          ...perfEvent,
+          fields: redactPerfFields(perfEvent.fields),
+        });
+        return;
+      }
       const structured = parseStructuredRendererLog(details.message);
       const entry = {
         message:
@@ -267,6 +282,24 @@ function sanitizeRendererFields(
   fields: Record<string, unknown>,
 ): SafeLogFields {
   return sanitizeLogFields(fields);
+}
+
+/**
+ * Perf fields are `number | string | boolean | null` only (never a nested
+ * object/array), so this stays narrower than `sanitizeLogFields`: only string
+ * values need scrubbing through the same `redactLogText` used on every other
+ * renderer log path, so a future call site that passes a user-derived string
+ * (error message, file path) as a field can't land unredacted in the perf
+ * NDJSON sink.
+ */
+function redactPerfFields(
+  fields: Readonly<Record<string, PerfFieldValue>>,
+): Record<string, PerfFieldValue> {
+  const out: Record<string, PerfFieldValue> = {};
+  for (const [key, value] of Object.entries(fields)) {
+    out[key] = typeof value === "string" ? redactLogText(value) : value;
+  }
+  return out;
 }
 
 function logStructuredRendererEntry(

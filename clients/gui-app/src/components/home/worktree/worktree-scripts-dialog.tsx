@@ -101,7 +101,8 @@ function WorktreeScriptsDialogBody(props: {
     cacheKeyIdentity: undefined,
     client: context.hostClient,
     method: "worktree.listAllForHost",
-    params: {},
+    // Whole-list mode (no per-viewport selection); base fields only.
+    params: { includeActivity: false, activityPaths: null },
     options: { enabled: resolved.kind === "existing-worktree" },
   });
   const worktreeOwnScripts = useMemo<RepoScriptsSeed | null>(() => {
