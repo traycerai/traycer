@@ -750,6 +750,12 @@ export type WorktreeHostEntryV11 = z.infer<typeof worktreeHostEntrySchemaV11>;
  * these git probes (`lastActivityAt`, `branchStatus`); `owners` and `createdAt`
  * are cheap and returned either way.
  *
+ * `cursor` and `limit` make the listing cost caller-bounded. The cursor is a
+ * `worktreePath`; the host returns entries strictly after it in stable
+ * path-lexicographic order. `limit: null` preserves the v1.0 bridge's full-list
+ * posture, but only without activity probes: no request can buy an unbounded
+ * probe pass.
+ *
  * `activityPaths` selects between two response modes, so the GUI can render the
  * base list instantly and then lazily enrich only the rows scrolled into view
  * instead of paying the whole-list probe cost up front:
@@ -765,6 +771,11 @@ export const worktreeListAllForHostRequestSchemaV11 =
   worktreeListAllForHostRequestSchema.extend({
     includeActivity: z.boolean(),
     activityPaths: z.array(z.string()).nullable(),
+    cursor: z.string().nullable(),
+    limit: z.number().finite().nullable(),
+  }).refine((request) => !request.includeActivity || request.limit !== null, {
+    message: "includeActivity requires a finite limit",
+    path: ["limit"],
   });
 export type WorktreeListAllForHostRequestV11 = z.infer<
   typeof worktreeListAllForHostRequestSchemaV11
@@ -772,12 +783,12 @@ export type WorktreeListAllForHostRequestV11 = z.infer<
 
 /**
  * `worktree.listAllForHost` v1.1 response. Same `worktrees` field, enriched
- * entry shape ({@link worktreeHostEntrySchemaV11}). Bridging down to a v1.0
- * host yields the v1.0 entries with the new fields defaulted (empty `owners`,
- * `null` timestamps / `branchStatus`).
+ * entry shape ({@link worktreeHostEntrySchemaV11}), plus `nextCursor` for the
+ * caller to continue when more entries remain.
  */
 export const worktreeListAllForHostResponseSchemaV11 = z.object({
   worktrees: z.array(worktreeHostEntrySchemaV11),
+  nextCursor: z.string().nullable(),
 });
 export type WorktreeListAllForHostResponseV11 = z.infer<
   typeof worktreeListAllForHostResponseSchemaV11
