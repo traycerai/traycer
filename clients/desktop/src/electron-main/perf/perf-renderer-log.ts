@@ -41,21 +41,23 @@ export function parsePerfRendererLog(
   }
 }
 
+function isScalarField(value: unknown): value is PerfFieldValue {
+  return (
+    value === null ||
+    typeof value === "number" ||
+    typeof value === "string" ||
+    typeof value === "boolean"
+  );
+}
+
 function toScalarFields(
   fields: Record<string, unknown>,
 ): Record<string, PerfFieldValue> {
-  const out: Record<string, PerfFieldValue> = {};
-  for (const [key, value] of Object.entries(fields)) {
-    if (
-      value === null ||
-      typeof value === "number" ||
-      typeof value === "string" ||
-      typeof value === "boolean"
-    ) {
-      out[key] = value;
-    }
-  }
-  return out;
+  return Object.fromEntries(
+    Object.entries(fields).filter((entry): entry is [string, PerfFieldValue] =>
+      isScalarField(entry[1]),
+    ),
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

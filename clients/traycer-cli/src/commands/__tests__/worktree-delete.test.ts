@@ -14,6 +14,7 @@ const hoisted = vi.hoisted(() => ({
   ref: {
     statusHandler: null as
       ((status: string, reason: StreamCloseReason | null) => void) | null,
+    frameHandler: null as ((envelope: unknown) => void) | null,
   },
 }));
 
@@ -50,6 +51,7 @@ const ctx = {} as CommandContext;
 beforeEach(() => {
   vi.clearAllMocks();
   hoisted.ref.statusHandler = null;
+  hoisted.ref.frameHandler = null;
   resolveHostAuthMock.mockResolvedValue({
     token: "token",
     userId: "user",
@@ -60,7 +62,9 @@ beforeEach(() => {
     websocketUrl: "ws://127.0.0.1:9999/rpc",
   });
   hoisted.subscribeMock.mockImplementation(() => ({
-    onServerFrame: () => undefined,
+    onServerFrame: (handler: (envelope: unknown) => void) => {
+      hoisted.ref.frameHandler = handler;
+    },
     onStatusChange: (
       handler: (status: string, reason: StreamCloseReason | null) => void,
     ) => {
@@ -140,5 +144,128 @@ describe("buildWorktreeDeleteCommand stream-drop safety", () => {
     );
     expect(hoisted.sessionCloseMock).toHaveBeenCalled();
     expect(hoisted.clientCloseMock).toHaveBeenCalled();
+  });
+});
+
+describe("buildWorktreeDeleteCommand terminal outcomes", () => {
+  it("resolves deleted=true on a complete frame", async () => {
+    const pending = buildWorktreeDeleteCommand({
+      worktreePath: "/wt/x",
+      readonlySurface: false,
+    })(ctx);
+
+    await vi.waitFor(() => {
+      expect(hoisted.ref.frameHandler).not.toBeNull();
+    });
+
+    hoisted.ref.frameHandler?.({
+      kind: "complete",
+      deleted: true,
+      hasBinaryPayload: false,
+    });
+
+    const result = await pending;
+    expect(result.data).toEqual({ worktreePath: "/wt/x", deleted: true });
+    expect(result.exitCode).toBe(0);
+    expect(hoisted.sessionCloseMock).toHaveBeenCalled();
+    expect(hoisted.clientCloseMock).toHaveBeenCalled();
+  });
+
+  it("resolves deleted=false with a non-zero exit on a complete frame reporting no deletion", async () => {
+    const pending = buildWorktreeDeleteCommand({
+      worktreePath: "/wt/x",
+      readonlySurface: false,
+    })(ctx);
+
+    await vi.waitFor(() => {
+      expect(hoisted.ref.frameHandler).not.toBeNull();
+    });
+
+    hoisted.ref.frameHandler?.({
+      kind: "complete",
+      deleted: false,
+      hasBinaryPayload: false,
+    });
+
+    const result = await pending;
+    expect(result.data).toEqual({ worktreePath: "/wt/x", deleted: false });
+    expect(result.exitCode).toBe(1);
+  });
+
+  it("maps a failed frame to a CliError carrying the host's reason", async () => {
+    const pending = buildWorktreeDeleteCommand({
+      worktreePath: "/wt/x",
+      readonlySurface: false,
+    })(ctx);
+
+    await vi.waitFor(() => {
+      expect(hoisted.ref.frameHandler).not.toBeNull();
+    });
+
+    hoisted.ref.frameHandler?.({
+      kind: "failed",
+      reason: "worktree is busy",
+      hasBinaryPayload: false,
+    });
+
+    await expect(pending).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.UNEXPECTED,
+      exitCode: 1,
+      message: expect.stringContaining("worktree is busy"),
+    });
+    expect(hoisted.sessionCloseMock).toHaveBeenCalled();
+    expect(hoisted.clientCloseMock).toHaveBeenCalled();
+  });
+
+  it("maps an UNAUTHORIZED fatal close to an auth-rejected CliError", async () => {
+    const pending = buildWorktreeDeleteCommand({
+      worktreePath: "/wt/x",
+      readonlySurface: false,
+    })(ctx);
+
+    await vi.waitFor(() => {
+      expect(hoisted.ref.statusHandler).not.toBeNull();
+    });
+
+    hoisted.ref.statusHandler?.("closed", {
+      kind: "fatalError",
+      details: {
+        code: "UNAUTHORIZED",
+        reason: "bearer rejected",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    });
+
+    await expect(pending).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.AUTH_REJECTED,
+      exitCode: 1,
+    });
+  });
+
+  it("maps an INCOMPATIBLE fatal close to a host-incompatible CliError", async () => {
+    const pending = buildWorktreeDeleteCommand({
+      worktreePath: "/wt/x",
+      readonlySurface: false,
+    })(ctx);
+
+    await vi.waitFor(() => {
+      expect(hoisted.ref.statusHandler).not.toBeNull();
+    });
+
+    hoisted.ref.statusHandler?.("closed", {
+      kind: "fatalError",
+      details: {
+        code: "INCOMPATIBLE",
+        reason: "protocol version skew",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    });
+
+    await expect(pending).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_INCOMPATIBLE,
+      exitCode: 1,
+    });
   });
 });

@@ -264,10 +264,12 @@ function renderList(args: {
   readonly hostId: string;
   readonly queryClient: QueryClient;
   readonly worktrees: readonly WorktreeHostEntryV11[];
-  readonly enrichedByPath?: ReadonlyMap<string, WorktreeHostEntryV11>;
-  readonly erroredPaths?: ReadonlySet<string>;
-  readonly onVisiblePathsChange?: (paths: readonly string[]) => void;
-  readonly taskTitlesByEpicId?: ReadonlyMap<string, string>;
+  readonly enrichedByPath:
+    ReadonlyMap<string, WorktreeHostEntryV11> | undefined;
+  readonly erroredPaths: ReadonlySet<string> | undefined;
+  readonly onVisiblePathsChange:
+    ((paths: readonly string[]) => void) | undefined;
+  readonly taskTitlesByEpicId: ReadonlyMap<string, string> | undefined;
 }) {
   const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
     <QueryClientProvider client={args.queryClient}>
@@ -295,6 +297,10 @@ function renderDefault(): void {
     hostId: "host-a",
     queryClient: new QueryClient(),
     worktrees: WORKTREES,
+    enrichedByPath: undefined,
+    erroredPaths: undefined,
+    onVisiblePathsChange: undefined,
+    taskTitlesByEpicId: undefined,
   });
 }
 
@@ -404,6 +410,10 @@ describe("WorktreesList delete flow", () => {
       hostId: "host-a",
       queryClient: new QueryClient(),
       worktrees: multiRepoWorktrees,
+      enrichedByPath: undefined,
+      erroredPaths: undefined,
+      onVisiblePathsChange: undefined,
+      taskTitlesByEpicId: undefined,
     });
 
     screen.getByRole("button", { name: "Delete worktree feat-clean" });
@@ -435,6 +445,10 @@ describe("WorktreesList delete flow", () => {
       hostId: "host-a",
       queryClient: new QueryClient(),
       worktrees: multiRepoWorktrees,
+      enrichedByPath: undefined,
+      erroredPaths: undefined,
+      onVisiblePathsChange: undefined,
+      taskTitlesByEpicId: undefined,
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Collapse all" }));
@@ -630,6 +644,10 @@ describe("WorktreesList delete flow", () => {
       hostId: "host-a",
       queryClient,
       worktrees: multiRepoWorktrees,
+      enrichedByPath: undefined,
+      erroredPaths: undefined,
+      onVisiblePathsChange: undefined,
+      taskTitlesByEpicId: undefined,
     });
 
     selectRows(["feat-clean", "feat-dirty", "feat-api-clean"]);
@@ -707,6 +725,10 @@ describe("WorktreesList delete flow", () => {
       hostId: "host-a",
       queryClient: new QueryClient(),
       worktrees: multiRepoWorktrees,
+      enrichedByPath: undefined,
+      erroredPaths: undefined,
+      onVisiblePathsChange: undefined,
+      taskTitlesByEpicId: undefined,
     });
 
     selectRows([
@@ -828,6 +850,10 @@ describe("WorktreesList delete flow", () => {
       hostId: "host-a",
       queryClient,
       worktrees: WORKTREES,
+      enrichedByPath: undefined,
+      erroredPaths: undefined,
+      onVisiblePathsChange: undefined,
+      taskTitlesByEpicId: undefined,
     });
 
     confirmDelete("feat-clean");
@@ -899,6 +925,10 @@ describe("WorktreesList delete flow", () => {
       hostId: "host-a",
       queryClient: new QueryClient(),
       worktrees: WORKTREES,
+      enrichedByPath: undefined,
+      erroredPaths: undefined,
+      onVisiblePathsChange: undefined,
+      taskTitlesByEpicId: undefined,
     });
     confirmDelete("feat-clean");
     act(() => {
@@ -924,6 +954,10 @@ describe("WorktreesList delete flow", () => {
       hostId: "host-a",
       queryClient: new QueryClient(),
       worktrees: WORKTREES,
+      enrichedByPath: undefined,
+      erroredPaths: undefined,
+      onVisiblePathsChange: undefined,
+      taskTitlesByEpicId: undefined,
     });
     confirmDelete("feat-clean");
     act(() => {
@@ -996,6 +1030,10 @@ describe("WorktreesList delete flow", () => {
       hostId: "host-a",
       queryClient,
       worktrees: WORKTREES,
+      enrichedByPath: undefined,
+      erroredPaths: undefined,
+      onVisiblePathsChange: undefined,
+      taskTitlesByEpicId: undefined,
     });
     confirmDelete("feat-clean");
     act(() => {
@@ -1088,6 +1126,10 @@ describe("WorktreesList delete flow", () => {
       hostId: "host-a",
       queryClient: new QueryClient(),
       worktrees: WORKTREES,
+      enrichedByPath: undefined,
+      erroredPaths: undefined,
+      onVisiblePathsChange: undefined,
+      taskTitlesByEpicId: undefined,
     });
 
     selectRows(["feat-clean", "feat-dirty"]);
@@ -1523,6 +1565,9 @@ describe("WorktreesList v1.1 signals", () => {
         }),
       ],
       taskTitlesByEpicId: new Map([["epic-1", "Ship the audit"]]),
+      enrichedByPath: undefined,
+      erroredPaths: undefined,
+      onVisiblePathsChange: undefined,
     });
 
     // The resolved epic-1 renders a chip (the duplicate epic-1 owner collapses).
@@ -1537,6 +1582,10 @@ describe("WorktreesList v1.1 signals", () => {
       hostId: "host-a",
       queryClient: new QueryClient(),
       worktrees: [entry({ worktreePath: "/wt/free", branch: "feat-free" })],
+      enrichedByPath: undefined,
+      erroredPaths: undefined,
+      onVisiblePathsChange: undefined,
+      taskTitlesByEpicId: undefined,
     });
     screen.getByText("Not used by any Task");
   });
@@ -1557,6 +1606,10 @@ describe("WorktreesList v1.1 signals", () => {
           branchStatus: { ahead: 2, behind: 3, mergedIntoDefault: false },
         }),
       ],
+      enrichedByPath: undefined,
+      erroredPaths: undefined,
+      onVisiblePathsChange: undefined,
+      taskTitlesByEpicId: undefined,
     });
     // The merged row carries the proven-green "Merged" tier pill; the ahead/
     // unmerged row is amber Review, with the counts in its facts line.
@@ -1581,6 +1634,9 @@ describe("WorktreesList v1.1 signals", () => {
       ],
       // No path enriched yet: the base row paints but its tier isn't known.
       enrichedByPath: new Map(),
+      erroredPaths: undefined,
+      onVisiblePathsChange: undefined,
+      taskTitlesByEpicId: undefined,
     });
     // The base row is painted immediately (branch name visible), but the tier is
     // not classified yet - the pill reads "Checking…" (data-tier="pending"),
@@ -1618,6 +1674,9 @@ describe("WorktreesList v1.1 signals", () => {
         }),
       ],
       taskTitlesByEpicId: new Map([["epic-1", "Payments revamp"]]),
+      enrichedByPath: undefined,
+      erroredPaths: undefined,
+      onVisiblePathsChange: undefined,
     });
 
     const search = screen.getByRole("searchbox", { name: "Search worktrees" });
@@ -1675,6 +1734,9 @@ describe("WorktreesList v1.1 signals", () => {
         }),
       ],
       taskTitlesByEpicId: new Map([["epic-1", "Payments revamp"]]),
+      enrichedByPath: undefined,
+      erroredPaths: undefined,
+      onVisiblePathsChange: undefined,
     });
     const rollup = screen.getByTestId("task-merge-rollup");
     expect(rollup.getAttribute("data-rollup-status")).toBe("partial");
@@ -1714,6 +1776,9 @@ describe("WorktreesList v1.1 signals", () => {
         }),
       ],
       taskTitlesByEpicId: new Map([["epic-1", "Payments revamp"]]),
+      enrichedByPath: undefined,
+      erroredPaths: undefined,
+      onVisiblePathsChange: undefined,
     });
     const rollup = screen.getByTestId("task-merge-rollup");
     expect(rollup.getAttribute("data-rollup-status")).toBe("merged");
@@ -1741,6 +1806,9 @@ describe("WorktreesList v1.1 signals", () => {
         }),
       ],
       taskTitlesByEpicId: new Map([["epic-1", "Payments revamp"]]),
+      enrichedByPath: undefined,
+      erroredPaths: undefined,
+      onVisiblePathsChange: undefined,
     });
     // The Task title still renders; the merge-rollup badge does not.
     screen.getByText("Payments revamp");
@@ -1769,6 +1837,10 @@ describe("WorktreesList v1.1 signals", () => {
           createdAt: null,
         }),
       ],
+      enrichedByPath: undefined,
+      erroredPaths: undefined,
+      onVisiblePathsChange: undefined,
+      taskTitlesByEpicId: undefined,
     });
 
     const deleteLabel = (element: Element): string | null =>
@@ -1805,8 +1877,9 @@ describe("WorktreesList virtualization + per-viewport enrichment", () => {
   function listElement(args: {
     readonly worktrees: readonly WorktreeHostEntryV11[];
     readonly enrichedByPath: ReadonlyMap<string, WorktreeHostEntryV11>;
-    readonly erroredPaths?: ReadonlySet<string>;
-    readonly onVisiblePathsChange?: (paths: readonly string[]) => void;
+    readonly erroredPaths: ReadonlySet<string> | undefined;
+    readonly onVisiblePathsChange:
+      ((paths: readonly string[]) => void) | undefined;
   }): ReactNode {
     return (
       <QueryClientProvider client={new QueryClient()}>
@@ -1845,6 +1918,9 @@ describe("WorktreesList virtualization + per-viewport enrichment", () => {
       queryClient: new QueryClient(),
       worktrees,
       enrichedByPath: fullyEnriched(worktrees),
+      erroredPaths: undefined,
+      onVisiblePathsChange: undefined,
+      taskTitlesByEpicId: undefined,
     });
 
     const renderedRows = screen.getAllByTestId("worktree-row");
@@ -1863,6 +1939,7 @@ describe("WorktreesList virtualization + per-viewport enrichment", () => {
         worktrees,
         enrichedByPath: fullyEnriched(worktrees),
         onVisiblePathsChange,
+        erroredPaths: undefined,
       }),
     );
 
@@ -1898,6 +1975,9 @@ describe("WorktreesList virtualization + per-viewport enrichment", () => {
       queryClient: new QueryClient(),
       worktrees,
       enrichedByPath: new Map(),
+      erroredPaths: undefined,
+      onVisiblePathsChange: undefined,
+      taskTitlesByEpicId: undefined,
     });
 
     // Base fields paint immediately (branch names, delete affordances).
@@ -1922,7 +2002,12 @@ describe("WorktreesList virtualization + per-viewport enrichment", () => {
       branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
     });
     const { rerender } = render(
-      listElement({ worktrees: [merged], enrichedByPath: new Map() }),
+      listElement({
+        worktrees: [merged],
+        enrichedByPath: new Map(),
+        erroredPaths: undefined,
+        onVisiblePathsChange: undefined,
+      }),
     );
 
     // Pending first: the pill is "Checking…".
@@ -1936,6 +2021,8 @@ describe("WorktreesList virtualization + per-viewport enrichment", () => {
       listElement({
         worktrees: [merged],
         enrichedByPath: new Map([[merged.worktreePath, merged]]),
+        erroredPaths: undefined,
+        onVisiblePathsChange: undefined,
       }),
     );
     expect(
@@ -1963,6 +2050,8 @@ describe("WorktreesList virtualization + per-viewport enrichment", () => {
         worktrees: [mergedRow, pendingRow],
         // Only the merged row is enriched; the other stays pending.
         enrichedByPath: new Map([[mergedRow.worktreePath, mergedRow]]),
+        erroredPaths: undefined,
+        onVisiblePathsChange: undefined,
       }),
     );
 
@@ -1991,6 +2080,8 @@ describe("WorktreesList virtualization + per-viewport enrichment", () => {
       listElement({
         worktrees: [mergedRow, pendingReview],
         enrichedByPath: new Map([[mergedRow.worktreePath, mergedRow]]),
+        erroredPaths: undefined,
+        onVisiblePathsChange: undefined,
       }),
     );
 
@@ -2012,6 +2103,7 @@ describe("WorktreesList virtualization + per-viewport enrichment", () => {
         // Not enriched, but its per-path query SETTLED to an error.
         enrichedByPath: new Map(),
         erroredPaths: new Set([erroredRow.worktreePath]),
+        onVisiblePathsChange: undefined,
       }),
     );
 
@@ -2043,6 +2135,7 @@ describe("WorktreesList virtualization + per-viewport enrichment", () => {
         worktrees: [mergedRow, erroredRow],
         enrichedByPath: new Map([[mergedRow.worktreePath, mergedRow]]),
         erroredPaths: new Set([erroredRow.worktreePath]),
+        onVisiblePathsChange: undefined,
       }),
     );
 
@@ -2067,6 +2160,7 @@ describe("WorktreesList virtualization + per-viewport enrichment", () => {
         worktrees: [merged],
         enrichedByPath: new Map(),
         erroredPaths: new Set([merged.worktreePath]),
+        onVisiblePathsChange: undefined,
       }),
     );
 
@@ -2082,6 +2176,7 @@ describe("WorktreesList virtualization + per-viewport enrichment", () => {
         worktrees: [merged],
         enrichedByPath: new Map([[merged.worktreePath, merged]]),
         erroredPaths: new Set(),
+        onVisiblePathsChange: undefined,
       }),
     );
     expect(
