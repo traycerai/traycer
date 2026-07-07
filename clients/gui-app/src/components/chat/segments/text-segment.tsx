@@ -17,16 +17,22 @@ interface TextSegmentProps {
   nextStepActions: NextStepActionHandler | null;
 }
 
+function nextStepOptionLockKey(blockId: string, optionId: string): string {
+  return `${blockId}:${optionId}`;
+}
+
 export function TextSegment(props: TextSegmentProps) {
   const parts = useMemo(
     () => parseTraycerNextStepsMarkdown(props.markdown, props.isStreaming),
     [props.isStreaming, props.markdown],
   );
-  const [lockedBlockIds, setLockedBlockIds] = useState<ReadonlySet<string>>(
+  const [lockedOptionKeys, setLockedOptionKeys] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
-  const lockBlock = useCallback((blockId: string) => {
-    setLockedBlockIds((current) => withMemberAdded(current, blockId));
+  const lockOption = useCallback((blockId: string, optionId: string) => {
+    setLockedOptionKeys((current) =>
+      withMemberAdded(current, nextStepOptionLockKey(blockId, optionId)),
+    );
   }, []);
 
   return (
@@ -38,10 +44,10 @@ export function TextSegment(props: TextSegmentProps) {
         <TextSegmentPart
           key={part.id}
           part={part}
-          locked={lockedBlockIds.has(part.id)}
+          lockedOptionKeys={lockedOptionKeys}
           isStreaming={props.isStreaming}
           nextStepActions={props.nextStepActions}
-          onLock={lockBlock}
+          onLockOption={lockOption}
         />
       ))}
     </div>
@@ -50,10 +56,10 @@ export function TextSegment(props: TextSegmentProps) {
 
 interface TextSegmentPartProps {
   readonly part: TraycerNextStepsPart;
-  readonly locked: boolean;
+  readonly lockedOptionKeys: ReadonlySet<string>;
   readonly isStreaming: boolean;
   readonly nextStepActions: NextStepActionHandler | null;
-  readonly onLock: (blockId: string) => void;
+  readonly onLockOption: (blockId: string, optionId: string) => void;
 }
 
 function TextSegmentPart(props: TextSegmentPartProps) {
@@ -69,6 +75,14 @@ function TextSegmentPart(props: TextSegmentPartProps) {
     );
   }
 
+  const lockedOptionIds = new Set(
+    part.options
+      .filter((option) =>
+        props.lockedOptionKeys.has(nextStepOptionLockKey(part.id, option.id)),
+      )
+      .map((option) => option.id),
+  );
+
   return (
     <>
       {part.prose.length === 0 ? null : (
@@ -83,9 +97,9 @@ function TextSegmentPart(props: TextSegmentPartProps) {
         blockId={part.id}
         options={part.options}
         complete={part.complete}
-        locked={props.locked}
+        lockedOptionIds={lockedOptionIds}
         actionHandler={props.nextStepActions}
-        onLock={props.onLock}
+        onLockOption={props.onLockOption}
       />
     </>
   );

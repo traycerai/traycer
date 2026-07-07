@@ -158,6 +158,7 @@ import {
   ChatLowerInteractionSurfaces,
   InertChatComposer,
 } from "./chat-tile-lower-surfaces";
+import { composerHasBlockingApprovals } from "./chat-approval-visibility";
 import {
   chatTileUiReducer,
   createInitialChatTileUiState,
@@ -1303,9 +1304,16 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       state.pendingUserMessages,
     ],
   );
+  const canSendNextStep =
+    canAct &&
+    composerActiveTurnStatus !== "stopping" &&
+    !composerHasBlockingApprovals(
+      state.pendingApprovals,
+      state.pendingFileEditApprovals.length,
+    );
   const sendNextStep = useCallback(
     (option: TraycerNextStepOption): boolean => {
-      if (!canAct) return false;
+      if (!canSendNextStep) return false;
       const sender = userMessageSenderForProfile(profile);
       if (sender === null) return false;
       const content = buildSubmittedChatJSONContent(
@@ -1315,14 +1323,14 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
         chatActions.sendMessage(content, sender, nextStepSettings) !== null
       );
     },
-    [canAct, chatActions, nextStepSettings, profile],
+    [canSendNextStep, chatActions, nextStepSettings, profile],
   );
   const nextStepActions = useMemo(
     () => ({
-      canSend: canAct,
+      canSend: canSendNextStep,
       onSend: sendNextStep,
     }),
-    [canAct, sendNextStep],
+    [canSendNextStep, sendNextStep],
   );
   const sendImplementPlanMessage = useCallback((): boolean => {
     if (!canAct) return false;
