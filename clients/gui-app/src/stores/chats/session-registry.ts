@@ -28,11 +28,12 @@ export const DEFAULT_CHAT_IDLE_TTL_MS = 10 * 60 * 1_000;
 export const MAX_ACTIVE_CHAT_IDLE_DEFER_MS = 60 * 60 * 1_000;
 
 /**
- * Upper bound on lease-free warm sessions held at once. The idle TTL bounds
- * retention in time; this bounds it in count, so cycling through many chats
- * inside one TTL window cannot pin an unbounded set of full transcripts and
- * open websockets. Oldest-released sessions are disposed first; leased
- * sessions never count toward (and are never evicted by) the cap.
+ * Upper bound on inactive lease-free warm sessions held at once. The idle TTL
+ * bounds retention in time; this bounds it in count, so cycling through many
+ * chats inside one TTL window cannot pin an unbounded set of finished
+ * transcripts and open websockets. Oldest-released inactive sessions are
+ * disposed first; leased sessions and sessions with active chat work never
+ * count toward (or get evicted by) the cap.
  */
 export const DEFAULT_MAX_WARM_CHAT_SESSIONS = 6;
 
@@ -53,9 +54,11 @@ export interface ChatSessionRegistryOptions {
  * until it goes untouched for `idleTtlMs`, at which point it is disposed.
  * Re-opening or otherwise touching the session resets that window. Leased
  * sessions (a currently-rendered tile) never expire - only the idle clock
- * runs - so a window with many open chat tiles keeps them all. Idle sessions
- * are additionally count-bounded by `maxWarmSessions` (oldest-released
- * evicted first) so the TTL window alone cannot accumulate an unbounded set.
+ * runs - so a window with many open chat tiles keeps them all. Inactive idle
+ * sessions are additionally count-bounded by `maxWarmSessions`
+ * (oldest-released evicted first) so the TTL window alone cannot accumulate an
+ * unbounded set. Idle sessions with active work are retained until the work
+ * settles or the active defer cap elapses.
  */
 export class ChatSessionRegistry {
   private readonly entries = new Map<string, RegistryEntry>();
@@ -218,7 +221,9 @@ export class ChatSessionRegistry {
 
   /**
    * Enforces the warm cap after a release transitions an entry to lease-free.
-   * Only lease-free entries are candidates; the oldest-released go first.
+   * Only inactive lease-free entries are candidates; the oldest-released go
+   * first. Active lease-free sessions stay retained so passive tab/header
+   * progress readers still have the `runStatus` snapshot after a tile unmounts.
    */
   private evictWarmOverflow(): void {
     // Total size bounds the idle count, so an under-cap registry skips the
@@ -229,10 +234,13 @@ export class ChatSessionRegistry {
     );
     const overflow = idle.length - this.maxWarmSessions;
     if (overflow <= 0) return;
-    idle.sort((a, b) => a.lastUsedAt - b.lastUsedAt);
-    for (const entry of idle.slice(0, overflow)) {
+    const candidates = idle.filter((entry) => !hasActiveChatWork(entry.handle));
+    candidates.sort((a, b) => a.lastUsedAt - b.lastUsedAt);
+    const evicted = candidates.slice(0, overflow);
+    for (const entry of evicted) {
       this.disposeEntry(entry);
     }
+    if (evicted.length === 0) return;
     this.notify();
   }
 

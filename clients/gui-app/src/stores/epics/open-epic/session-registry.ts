@@ -1,17 +1,18 @@
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 import { appLogger } from "@/lib/logger";
 import { useSyncExternalStore } from "react";
+import { AGENT_WORKING_AWARENESS_FIELD } from "@traycer/protocol/host/epic/subscribe";
 
 /**
  * MRU registry for live Epic sessions. Keeps up to 5 open in the background
- * so tab-switching is instant; evicts the oldest **clean / synced** handle
- * once the cap is exceeded.
+ * so tab-switching is instant; evicts the oldest **clean / synced / inactive**
+ * handle once the cap is exceeded.
  *
  * Soft-cap rule: if every entry is dirty (unsynced edits pending, or still
- * reconnecting with unflushed writes), the registry temporarily stays above
- * the cap until at least one entry becomes clean, at which point it prunes
- * down to the cap. Closing an Epic tab forcibly disposes that session
- * regardless of the cap.
+ * reconnecting with unflushed writes) or has active agent work, the registry
+ * temporarily stays above the cap until at least one entry becomes clean and
+ * inactive, at which point it prunes down to the cap. Closing an Epic tab
+ * forcibly disposes that session regardless of the cap.
  */
 export const DEFAULT_MAX_LIVE_EPICS = 5;
 const loggedLiveTitleReadFailures = new Set<string>();
@@ -31,6 +32,7 @@ interface RegistryEntry {
    * the underlying session is gone.
    */
   unsubscribe: (() => void) | null;
+  unsubscribeAwareness: (() => void) | null;
   /**
    * Last-seen value of the only four store fields that affect prune
    * eligibility or the unsynced-edits projection. The zustand
@@ -45,7 +47,7 @@ interface RegistryEntry {
 function eligibilityKeyFor(handle: OpenEpicStoreHandle): string {
   const state = handle.store.getState();
   const metaTitle = state.snapshotMeta?.epicLight?.title ?? "";
-  return `${handle.isClean() ? 1 : 0}:${state.isDirty ? 1 : 0}:${state.unsyncedQueueSize}:${metaTitle}`;
+  return `${handle.isClean() ? 1 : 0}:${hasActiveAgentWork(handle) ? 1 : 0}:${state.isDirty ? 1 : 0}:${state.unsyncedQueueSize}:${metaTitle}`;
 }
 
 /**
@@ -68,7 +70,8 @@ export interface UnsyncedEditsEntry {
  *     most-recently-interacted Epic stays alive.
  *   - `release(epicId)` disposes that entry unconditionally (tab closed).
  *   - `prune()` is run after every acquire; it disposes the least-recently
- *     used clean entries until size <= maxLive, skipping dirty entries.
+ *     used clean/inactive entries until size <= maxLive, skipping dirty or
+ *     active entries.
  */
 export class OpenEpicSessionRegistry {
   private readonly entries = new Map<string, RegistryEntry>();
@@ -158,6 +161,7 @@ export class OpenEpicSessionRegistry {
       lastUsedAt: this.tick(),
       mountedRefs,
       unsubscribe: null,
+      unsubscribeAwareness: null,
       lastEligibilityKey: eligibilityKeyFor(handle),
     };
     // Subscribe to the underlying store so prune-relevant changes trigger a
@@ -182,6 +186,17 @@ export class OpenEpicSessionRegistry {
             this.emit();
           })
         : null;
+    const handleEligibilityChange = (): void => {
+      const nextKey = eligibilityKeyFor(handle);
+      if (nextKey === entry.lastEligibilityKey) return;
+      entry.lastEligibilityKey = nextKey;
+      this.prune();
+      this.emit();
+    };
+    handle.awareness.on("change", handleEligibilityChange);
+    entry.unsubscribeAwareness = () => {
+      handle.awareness.off("change", handleEligibilityChange);
+    };
     this.entries.set(epicId, entry);
     this.prune();
     this.emit();
@@ -259,9 +274,10 @@ export class OpenEpicSessionRegistry {
   }
 
   /**
-   * Evict least-recently-used clean entries until size <= maxLive. If every
-   * entry above the cap is dirty, we stop (soft cap) - the next time a
-   * dirty entry flushes, subsequent `prune()` calls will finish the job.
+   * Evict least-recently-used clean and inactive entries until size <= maxLive.
+   * If every entry above the cap is dirty or active, we stop (soft cap) - the
+   * next time a dirty entry flushes or an active entry goes idle, subsequent
+   * `prune()` calls will finish the job.
    */
   prune(): void {
     if (this.entries.size <= this.maxLive) return;
@@ -272,6 +288,7 @@ export class OpenEpicSessionRegistry {
       if (this.entries.size <= this.maxLive) return;
       if (entry.mountedRefs > 0) continue;
       if (!entry.handle.isClean()) continue;
+      if (hasActiveAgentWork(entry.handle)) continue;
       this.entries.delete(entry.epicId);
       this.disposeEntry(entry);
     }
@@ -279,6 +296,7 @@ export class OpenEpicSessionRegistry {
 
   private disposeEntry(entry: RegistryEntry): void {
     if (entry.unsubscribe !== null) entry.unsubscribe();
+    if (entry.unsubscribeAwareness !== null) entry.unsubscribeAwareness();
     entry.handle.dispose();
     this.releaseListener?.(entry.epicId);
   }
@@ -287,6 +305,15 @@ export class OpenEpicSessionRegistry {
     this.nextTick += 1;
     return this.nextTick;
   }
+}
+
+function hasActiveAgentWork(handle: OpenEpicStoreHandle): boolean {
+  for (const state of handle.awareness.getStates().values()) {
+    const working: unknown = state[AGENT_WORKING_AWARENESS_FIELD];
+    if (!Array.isArray(working)) continue;
+    if (working.some((id) => typeof id === "string")) return true;
+  }
+  return false;
 }
 
 function resolveUnsyncedTitle(
