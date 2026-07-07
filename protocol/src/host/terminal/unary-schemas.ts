@@ -53,6 +53,10 @@ export const terminalSessionInfoSchema = z.object({
   // label (basename of cwd / shellCommand)". Lifetime is the session's -
   // PTYs don't survive host restarts, so neither does the title.
   title: z.string().nullable(),
+  // Host-observed foreground process name for the PTY. `null` means the
+  // terminal is idle or the host cannot determine a foreground process.
+  // Optional so clients remain compatible with already-shipped hosts.
+  activeProcessName: z.string().nullable().optional(),
 });
 export type TerminalSessionInfo = z.infer<typeof terminalSessionInfoSchema>;
 
@@ -90,6 +94,22 @@ export const createTerminalResponseSchema = z.object({
 });
 export type CreateTerminalResponse = z.infer<
   typeof createTerminalResponseSchema
+>;
+
+// `terminal.defaultCwd@1.0` - returns the host-owned fallback cwd for raw
+// terminal launches that are not attached to a workspace row.
+export const terminalDefaultCwdRequestSchema = z.object({
+  epicId: z.string().min(1),
+});
+export type TerminalDefaultCwdRequest = z.infer<
+  typeof terminalDefaultCwdRequestSchema
+>;
+
+export const terminalDefaultCwdResponseSchema = z.object({
+  cwd: z.string().min(1),
+});
+export type TerminalDefaultCwdResponse = z.infer<
+  typeof terminalDefaultCwdResponseSchema
 >;
 
 // `terminal.kill@1.0` - terminates a session and evicts it from the host's

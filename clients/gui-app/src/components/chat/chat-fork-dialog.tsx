@@ -35,6 +35,7 @@ import {
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
 import type { ForkWorkspaceSeed } from "@/lib/worktree/fork-workspace-seed";
 import { readSeededLaunchWorktreeIntent } from "@/lib/worktree/seeded-launch-worktree-intent";
+import { deriveWorkspaceMode } from "@/lib/worktree/workspace-mode";
 
 export interface ChatForkDialogTarget {
   readonly sourceChatId: string;
@@ -142,6 +143,10 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
       stagingKey,
       fallbackIntent: target.workspaceSeed.intent,
     });
+    const workspaceMode = deriveWorkspaceMode(
+      target.workspaceSeed.workspace.folders.length,
+      worktreeIntent,
+    );
     if (worktreeIntent !== null) {
       useWorktreeIntentMemoryStore
         .getState()
@@ -163,6 +168,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
         title: trimmedTitle,
         chatId,
         settings,
+        workspaceMode,
         worktreeIntent,
         initialMessage: null,
         forkSource: {

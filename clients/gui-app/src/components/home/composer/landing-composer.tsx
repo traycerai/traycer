@@ -35,7 +35,7 @@ import {
 } from "@/stores/composer/landing-composer-store";
 import { useResolvedWorkspaceFolders } from "@/hooks/workspace/use-resolved-workspace-folders-query";
 import {
-  deriveResolvedWorkspaceAvailability,
+  deriveFolderlessAllowedWorkspaceAvailability,
   workspaceComposerCanStart,
 } from "@/lib/composer/workspace-composer-availability";
 import {
@@ -163,7 +163,7 @@ export function LandingComposer(props: LandingComposerProps) {
   );
   const workspaceAvailability = useMemo(
     () =>
-      deriveResolvedWorkspaceAvailability(
+      deriveFolderlessAllowedWorkspaceAvailability(
         resolvedWorkspace.folders,
         resolvedWorkspace.isLoading,
       ),

@@ -47,8 +47,12 @@ export function GitSectionStatsSummary(props: {
   if (props.insertions === 0 && props.deletions === 0) return null;
   return (
     <span className="flex shrink-0 items-center gap-0.5 whitespace-nowrap px-1 py-0.5 text-ui-xs tabular-nums">
-      <span className="font-medium text-success">+{props.insertions}</span>
-      <span className="font-medium text-destructive">-{props.deletions}</span>
+      <span className="font-medium text-emerald-600 dark:text-emerald-400">
+        +{props.insertions}
+      </span>
+      <span className="font-medium text-red-600 dark:text-red-400">
+        -{props.deletions}
+      </span>
     </span>
   );
 }

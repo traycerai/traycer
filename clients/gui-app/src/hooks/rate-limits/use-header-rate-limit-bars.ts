@@ -2,11 +2,20 @@ import type {
   ProviderRateLimits,
   ProviderRateLimitWindow,
 } from "@traycer/protocol/host";
-import { useHostQueries } from "@/hooks/host/use-host-queries";
-import { providerRateLimitQueryOptions } from "@/hooks/host/provider-rate-limit-query-options";
+import { useHostQueriesWithResponseMap } from "@/hooks/host/use-host-queries";
+import {
+  providerRateLimitQueryOptions,
+  type ProviderRateLimitTanstackOptions,
+} from "@/hooks/host/provider-rate-limit-query-options";
 import { useConfiguredRateLimitProviders } from "@/hooks/rate-limits/use-configured-rate-limit-providers";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
+import {
+  envelopeDegradedReason,
+  mapResponseToProviderRateLimitEnvelope,
+  resolveRetainedProviderRateLimits,
+  type ProviderRateLimitEnvelope,
+} from "@/lib/rate-limits/rate-limit-envelope";
 import {
   rateLimitWindowSeverity,
   type RateLimitWindowSeverity,
@@ -32,8 +41,8 @@ export interface HeaderRateLimitBar {
  * The only providers that ever occupy a glyph slot, in fixed draw order (codex
  * before claude-code, matching `PROVIDER_ID_ORDER`). OpenRouter and Kilo Code
  * are popover-only and never contribute a header bar. Both of these are the
- * `ephemeralProcess` fetch lane, so the glyph needs a single `useHostQueries`
- * call and no `httpFetch` plumbing at all.
+ * `ephemeralProcess` fetch lane, so the glyph needs a single
+ * `useHostQueriesWithResponseMap` call and no `httpFetch` plumbing at all.
  */
 const GLYPH_PROVIDER_IDS = ["codex", "claude-code"] as const;
 
@@ -168,12 +177,20 @@ function selectGlyphBars(
  * (popover-only). See `selectGlyphBars` for the exact selection and the
  * partial-load policy; a return of `[]` means "render the neutral placeholder".
  *
- * Mounting `useHostQueries` here drives the initial fetch-on-mount for the two
- * glyph providers (both `ephemeralProcess`); the serial queue only bounds their
- * *subsequent* background/turn/manual triggers. Because this hook no longer
- * queries the `httpFetch` lane, OpenRouter/Kilo Code are fetched lazily on
- * popover / Settings open rather than pre-fetched at app-shell mount - which is
- * fine, since nothing at the shell level displays their usage.
+ * Mounting `useHostQueriesWithResponseMap` here drives the initial
+ * fetch-on-mount for the two glyph providers (both `ephemeralProcess`); the
+ * serial queue only bounds their *subsequent* background/turn/manual
+ * triggers. Because this hook no longer queries the `httpFetch` lane,
+ * OpenRouter/Kilo Code are fetched lazily on popover / Settings open rather
+ * than pre-fetched at app-shell mount - which is fine, since nothing at the
+ * shell level displays their usage.
+ *
+ * Uses the envelope-aware `useHostQueriesWithResponseMap` (not the plain
+ * `useHostQueries`) so this passive observer's declared cache shape agrees
+ * with what `ephemeral-fetch-queue.ts` actually writes for these keys
+ * (`ProviderRateLimitEnvelope`) - both providers here are always
+ * `ephemeralProcess`, so this observer stays disabled and never issues its
+ * own fetch, but the TData type still has to match reality.
  *
  * A provider still cold (no data yet) contributes nothing - callers render the
  * neutral/placeholder glyph while this returns `[]`, never a loading state, so
@@ -189,42 +206,51 @@ export function useHeaderRateLimitBars(): ReadonlyArray<HeaderRateLimitBar> {
     configuredIds.has(id),
   );
 
-  // `useHostQueries` applies one shared `options` object to every request in
-  // the batch, so it's only safe to reuse a single glyph provider's options if
-  // every glyph provider actually resolves to the same ones (true today: both
-  // are `ephemeralProcess`, never `httpFetch`). Verified here - rather than
-  // just trusted from `GLYPH_PROVIDER_IDS`'s own comment - so a future glyph
-  // provider on a different lane falls back to `null` (TanStack's defaults)
-  // instead of silently borrowing an unrelated provider's refetch behavior.
+  // `useHostQueriesWithResponseMap` applies one shared `options` object to
+  // every request in the batch, so it's only safe to reuse a single glyph
+  // provider's options if every glyph provider actually resolves to the same
+  // ones (true today: both are `ephemeralProcess`, never `httpFetch`).
+  // Verified here - rather than just trusted from `GLYPH_PROVIDER_IDS`'s own
+  // comment - so a future glyph provider on a different lane falls back to
+  // `null` (TanStack's defaults) instead of silently borrowing an unrelated
+  // provider's refetch behavior.
   const glyphOptions = glyphProviders.map(
     (providerId) => providerRateLimitQueryOptions(providerId).options,
   );
-  const [firstGlyphOptions] = glyphOptions;
+  const firstGlyphOptions: ProviderRateLimitTanstackOptions | null =
+    glyphOptions.length > 0 ? glyphOptions[0] : null;
   const sharedGlyphOptions =
-    glyphProviders.length > 0 &&
     firstGlyphOptions !== null &&
     glyphOptions.every(
       (options) =>
-        options !== null &&
         options.refetchInterval === firstGlyphOptions.refetchInterval,
     )
       ? firstGlyphOptions
       : null;
 
-  const results = useHostQueries<HostRpcRegistry, "host.getRateLimitUsage">({
+  const results = useHostQueriesWithResponseMap<
+    HostRpcRegistry,
+    "host.getRateLimitUsage",
+    ProviderRateLimitEnvelope
+  >({
     client,
     requests: glyphProviders.map((providerId) => {
       const { method, params } = providerRateLimitQueryOptions(providerId);
       return { method, params };
     }),
     options: sharedGlyphOptions,
+    mapResponse: mapResponseToProviderRateLimitEnvelope,
   });
 
-  const readings = glyphProviders.map((providerId, index) => ({
-    providerId,
-    rateLimits: results[index].data?.providerRateLimits ?? null,
-    degraded: results[index].isError,
-  }));
+  const readings = glyphProviders.map((providerId, index) => {
+    const envelope = results[index].data ?? null;
+    return {
+      providerId,
+      rateLimits: resolveRetainedProviderRateLimits(envelope),
+      degraded:
+        results[index].isError || envelopeDegradedReason(envelope) !== null,
+    };
+  });
 
   return selectGlyphBars(readings);
 }

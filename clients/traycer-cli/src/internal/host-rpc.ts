@@ -237,9 +237,13 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
 
 /**
  * Reads the `/rpc` WebSocket endpoint from the host pid metadata file. The
- * pid file advertises the unary endpoint URL verbatim.
+ * pid file advertises the unary endpoint URL verbatim. Exported so streaming
+ * commands (`worktree delete`) that dial the shared `WsStreamClient` resolve
+ * the endpoint through the same liveness-checked path as the unary calls -
+ * an absent/dead pid surfaces as a clean `HOST_NOT_RUNNING` CliError, and the
+ * stream client maps the `/rpc` URL to `/stream` itself.
  */
-async function resolveEndpoint(): Promise<HostTransportEndpoint> {
+export async function resolveEndpoint(): Promise<HostTransportEndpoint> {
   const logger = createCliLogger(config.environment);
   const metadata = await readHostPidMetadata(config.environment);
   // Liveness check, not just presence: a stopped/crashed host can leave a

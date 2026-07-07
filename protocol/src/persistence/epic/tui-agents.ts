@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { agentModeSchema } from "./foundation";
+import { worktreeBindingWorkspaceModeSchema } from "../../host/worktree-schemas";
 
 /**
  * Per-Epic record describing a TUI agent session. Stored in a separate
@@ -50,6 +51,7 @@ const baseTuiAgentFields = {
   hostId: z.string(),
   userId: z.string(),
   workspaceFolders: z.array(z.string()),
+  workspaceMode: worktreeBindingWorkspaceModeSchema.optional(),
   model: z.string().nullable(),
   reasoningEffort: z.string().nullable().default(null),
   agentMode: agentModeSchema,

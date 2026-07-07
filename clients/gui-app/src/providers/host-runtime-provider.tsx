@@ -206,9 +206,14 @@ export function createHostRuntime<
       // failure (`RetryableTransportError`) re-dials on a short backoff before
       // the auth-aware wrapper or the query layer ever see it. The auth wrapper
       // only acts on `UNAUTHORIZED`, never a retryable transport error, so the
-      // two never contend.
+      // two never contend. When auth revalidation really rotates the bearer,
+      // retry the same RPC once against the fresh lease; some usage-limit
+      // queries intentionally disable TanStack retry, so the refresh loop must
+      // complete in the transport layer.
       const messenger: IHostMessenger<Registry> = createRetryingMessenger(
-        createAuthAwareMessenger(rawMessenger, auth, null),
+        createAuthAwareMessenger(rawMessenger, auth, {
+          retry: { bearer },
+        }),
         DEFAULT_TRANSPORT_RETRY_POLICY,
       );
 

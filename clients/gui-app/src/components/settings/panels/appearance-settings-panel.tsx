@@ -7,6 +7,7 @@ import { SettingsNumberInput } from "@/components/settings/controls/settings-num
 import { NullableFontSizeInput } from "@/components/settings/controls/nullable-font-size-input";
 import { FontPicker } from "@/components/settings/controls/font-picker";
 import { ThemeModeToggle } from "@/components/settings/controls/theme-mode-toggle";
+import { TerminalCursorStylePicker } from "@/components/settings/controls/terminal-cursor-style-picker";
 import { ThemePresetPicker } from "@/components/settings/controls/theme-preset-picker";
 import { Button } from "@/components/ui/button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -29,7 +30,9 @@ import {
   useSettingsStore,
   DEFAULT_UI_FONT_SIZE,
   DEFAULT_CODE_FONT_SIZE,
+  type TerminalCursorStyle,
 } from "@/stores/settings/settings-store";
+import { cn } from "@/lib/utils";
 import { useRunnerInstalledFontsQuery } from "@/hooks/runner/use-runner-installed-fonts-query";
 
 export function AppearanceSettingsPanel() {
@@ -60,6 +63,18 @@ export function AppearanceSettingsPanel() {
   const terminalFontSize = useSettingsStore((state) => state.terminalFontSize);
   const setTerminalFontSize = useSettingsStore(
     (state) => state.setTerminalFontSize,
+  );
+  const terminalCursorStyle = useSettingsStore(
+    (state) => state.terminalCursorStyle,
+  );
+  const setTerminalCursorStyle = useSettingsStore(
+    (state) => state.setTerminalCursorStyle,
+  );
+  const terminalCursorBlink = useSettingsStore(
+    (state) => state.terminalCursorBlink,
+  );
+  const setTerminalCursorBlink = useSettingsStore(
+    (state) => state.setTerminalCursorBlink,
   );
   const installedFontsQuery = useRunnerInstalledFontsQuery();
   const installedFonts = useMemo(
@@ -205,6 +220,27 @@ export function AppearanceSettingsPanel() {
           </div>
         }
       />
+      <SettingsRow
+        label="Terminal cursor"
+        description="Shape of the cursor in the terminal."
+        control={
+          <TerminalCursorStylePicker
+            value={terminalCursorStyle}
+            onChange={setTerminalCursorStyle}
+          />
+        }
+      />
+      <SettingsRow
+        label="Blink cursor"
+        description="Blink the terminal cursor while the terminal is focused."
+        control={
+          <Switch
+            checked={terminalCursorBlink}
+            onCheckedChange={setTerminalCursorBlink}
+            aria-label="Blink terminal cursor"
+          />
+        }
+      />
     </SettingsPanelShell>
   );
 }
@@ -296,6 +332,8 @@ function DesktopZoomSettingsRow() {
  * convey the same information textually.
  */
 function TerminalPreview() {
+  const cursorStyle = useSettingsStore((state) => state.terminalCursorStyle);
+  const cursorBlink = useSettingsStore((state) => state.terminalCursorBlink);
   return (
     <div
       className="w-full overflow-hidden rounded-md border border-border bg-background font-mono text-code-sm text-foreground"
@@ -323,10 +361,34 @@ function TerminalPreview() {
         <div className="text-[var(--term-ansi-yellow)]">
           {"  untracked: foo.txt"}
         </div>
-        <div className="rounded-sm bg-[color-mix(in_oklch,var(--primary)_30%,transparent)] px-1 py-0.5">
-          <span className="text-[var(--term-ansi-blue)]">$ npm test</span>
+        <div>
+          <span className="text-[var(--term-ansi-green)]">$</span>{" "}
+          <PreviewCursor style={cursorStyle} blink={cursorBlink} />
         </div>
       </div>
     </div>
+  );
+}
+
+// Live cursor glyph for the preview - mirrors the chosen shape/blink so the
+// setting is tangible without spinning up an xterm instance. The lit rect uses
+// the terminal foreground token so it tracks the active theme.
+const PREVIEW_CURSOR_SHAPE_CLASS: Record<TerminalCursorStyle, string> = {
+  block: "inset-0",
+  bar: "top-0 bottom-0 left-0 w-[2px]",
+  underline: "right-0 bottom-0 left-0 h-[2px]",
+};
+
+function PreviewCursor(props: { style: TerminalCursorStyle; blink: boolean }) {
+  return (
+    <span className="relative inline-block h-[1.1em] w-[0.6ch] align-text-bottom">
+      <span
+        className={cn(
+          "absolute bg-foreground",
+          PREVIEW_CURSOR_SHAPE_CLASS[props.style],
+          props.blink && "motion-safe:animate-caret-blink",
+        )}
+      />
+    </span>
   );
 }

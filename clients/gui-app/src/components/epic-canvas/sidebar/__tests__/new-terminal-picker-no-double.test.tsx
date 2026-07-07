@@ -35,6 +35,14 @@ vi.mock("@/hooks/worktree/use-worktree-list-bindings-for-epic-query", () => ({
   }),
 }));
 
+vi.mock("@/hooks/terminal/use-terminal-default-cwd-query", () => ({
+  useTerminalDefaultCwd: () => ({
+    data: { cwd: "/Users/tgill" },
+    isPending: false,
+    isError: false,
+  }),
+}));
+
 vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
   useReactiveActiveHostId: () => "host-1",
 }));

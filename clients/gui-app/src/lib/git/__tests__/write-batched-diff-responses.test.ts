@@ -110,7 +110,11 @@ describe("writeBatchedDiffResponses", () => {
       hostId,
       runningDir,
       requestFiles: [
-        { filePath: response.filePath, previousPath: null, stage },
+        {
+          filePath: response.filePath,
+          previousPath: null,
+          stage,
+        },
       ],
       ignoreWhitespace,
       diffs: [response],
@@ -229,7 +233,11 @@ describe("writeBatchedDiffResponses", () => {
       hostId,
       runningDir,
       requestFiles: [
-        { filePath: response.filePath, previousPath: null, stage },
+        {
+          filePath: response.filePath,
+          previousPath: null,
+          stage,
+        },
       ],
       ignoreWhitespace,
       diffs: [response],
@@ -285,7 +293,11 @@ describe("writeBatchedDiffResponses", () => {
       runningDir,
       requestFiles: [
         { filePath, previousPath: null, stage: "staged" },
-        { filePath, previousPath: null, stage: "unstaged" },
+        {
+          filePath,
+          previousPath: null,
+          stage: "unstaged",
+        },
       ],
       ignoreWhitespace,
       diffs: responses,

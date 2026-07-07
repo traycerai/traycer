@@ -32,6 +32,7 @@ export interface ChatLowerDockProps {
   readonly editingQueueItemId: string | null;
   readonly topSpacing: ChatPinnedStackTopSpacing;
   readonly scrollRegionMaxHeightClass: string;
+  readonly onQueuePause: () => string | null;
   readonly onQueueResume: () => string | null;
   readonly onQueueEdit: (item: ChatQueuedItem) => void;
   readonly onQueueCancel: (item: ChatQueuedItem) => void;
@@ -108,6 +109,7 @@ function QueueSection(props: {
       editingQueueItemId={dock.editingQueueItemId}
       scrollRegionMaxHeightClass={dock.scrollRegionMaxHeightClass}
       separated={false}
+      onPause={dock.onQueuePause}
       onResume={dock.onQueueResume}
       onEdit={dock.onQueueEdit}
       onCancel={dock.onQueueCancel}

@@ -1,4 +1,5 @@
 import {
+  defineDowngradePath,
   defineRpcContract,
   defineUpgradePath,
 } from "@traycer/protocol/framework/index";
@@ -9,6 +10,7 @@ import {
   rateLimitUsageRequestSchemaV12,
   rateLimitUsageResponseSchema,
   rateLimitUsageResponseSchemaV12,
+  rateLimitUsageResponseSchemaV20,
 } from "@traycer/protocol/host/rate-limit/schemas";
 
 export const hostGetRateLimitUsageV10 = defineRpcContract({
@@ -66,4 +68,64 @@ export const hostGetRateLimitUsageUpgradeV11ToV12 = defineUpgradePath<
   to: hostGetRateLimitUsageV12.schemaVersion,
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => ({ ...response, providerRateLimits: null }),
+});
+
+// v2.0 splits the conflated `rate_limits_not_available` reason: adds
+// `usage_fetch_failed` for a CLI usage-fetch failure (transient), distinct
+// from an account/auth capability problem. Shipped as a major (not a minor
+// within major 1) because the new enum *value* isn't strippable by the
+// within-major skew handler the way an extra object key is - see
+// `rateLimitUnavailableReasonSchemaV1` / `V2` in `rate-limit/schemas.ts`. The
+// request shape is unchanged from v1.2, so this reuses
+// `rateLimitUsageRequestSchemaV12` directly rather than defining a new
+// request schema.
+export const hostGetRateLimitUsageV20 = defineRpcContract({
+  method: "host.getRateLimitUsage",
+  schemaVersion: { major: 2, minor: 0 } as const,
+  requestSchema: rateLimitUsageRequestSchemaV12,
+  responseSchema: rateLimitUsageResponseSchemaV20,
+});
+
+// A v1.2 request and a v2.0 request are identical shapes (both use
+// `rateLimitUsageRequestSchemaV12`), so the upgrade is the identity. A v1.2
+// response only ever carries v1 reasons (frozen, see
+// `rateLimitUnavailableReasonSchemaV1`), which are a subset of the v2 enum,
+// so the response upgrade is the identity too - no re-parse needed.
+export const hostGetRateLimitUsageUpgradeV12ToV20 = defineUpgradePath<
+  typeof hostGetRateLimitUsageV12,
+  typeof hostGetRateLimitUsageV20
+>({
+  from: hostGetRateLimitUsageV12.schemaVersion,
+  to: hostGetRateLimitUsageV20.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+// Downgrade bridge 2.0 -> 1.2: request is identity (unchanged shape).
+// `usage_fetch_failed` (v2-only) maps down to `rate_limits_not_available` so
+// a v1.2 client's frozen enum keeps parsing; every other reason and every
+// `available: true` arm is already a valid v1.2 shape and passes through the
+// re-parse unchanged.
+export const hostGetRateLimitUsageDowngradeV2ToV1 = defineDowngradePath<
+  typeof hostGetRateLimitUsageV20,
+  typeof hostGetRateLimitUsageV12
+>({
+  from: hostGetRateLimitUsageV20.schemaVersion,
+  to: hostGetRateLimitUsageV12.schemaVersion,
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: rateLimitUsageResponseSchemaV12.parse({
+      ...response,
+      providerRateLimits:
+        response.providerRateLimits !== null &&
+        response.providerRateLimits.available === false &&
+        response.providerRateLimits.reason === "usage_fetch_failed"
+          ? {
+              ...response.providerRateLimits,
+              reason: "rate_limits_not_available",
+            }
+          : response.providerRateLimits,
+    }),
+  }),
 });

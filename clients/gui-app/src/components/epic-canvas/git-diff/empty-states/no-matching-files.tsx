@@ -10,7 +10,7 @@ export interface NoMatchingFilesProps {
 
 /**
  * Shown in place of the file list when an active filter matches no changed
- * files in either layout. The search input and worktree picker stay mounted
+ * files in either layout. The search input and repo switcher stay mounted
  * above this, so clearing the filter restores the full list.
  */
 export function NoMatchingFiles(props: NoMatchingFilesProps): ReactNode {

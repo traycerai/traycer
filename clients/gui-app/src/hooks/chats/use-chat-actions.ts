@@ -48,6 +48,7 @@ export interface ChatActions {
   readonly stopTurn: () => string | null;
   readonly stopBackgroundItem: (taskId: string) => string | null;
   readonly stopAllBackgroundItems: () => string | null;
+  readonly pauseQueue: () => string | null;
   readonly resumeQueue: () => string | null;
   readonly queueEdit: (
     queueItemId: string,
@@ -122,6 +123,7 @@ export function useChatActions(handle: ChatSessionStoreHandle): ChatActions {
         handle.store.getState().stopBackgroundItem(taskId),
       stopAllBackgroundItems: () =>
         handle.store.getState().stopAllBackgroundItems(),
+      pauseQueue: () => handle.store.getState().pauseQueue(),
       resumeQueue: () => handle.store.getState().resumeQueue(),
       queueEdit: (queueItemId, content) =>
         handle.store.getState().queueEdit(queueItemId, content),

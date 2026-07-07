@@ -35,6 +35,7 @@ export function useFocusEpicTerminalSession(
         instanceId: uuidv4(),
         type: "terminal",
         name: DEFAULT_EPIC_NODE_NAMES.terminal,
+        titleSource: "manual",
         hostId: activeHostId,
         cwd,
       });

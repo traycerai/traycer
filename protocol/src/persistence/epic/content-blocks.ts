@@ -434,6 +434,11 @@ export type AutonomousResumeOutputFile = z.infer<
 // trigger persisted before this field existed (renders as non-clickable).
 // `outputFile` points at an SDK task output file using the existing
 // workspace.readFile address shape; the GUI lazy-fetches it only on expand.
+//
+// `kind: "wakeup"` (a fired ScheduleWakeup) is never PERSISTED in this array -
+// see `autonomousResumeWakeTriggerSchema` and the block-level codec below. The
+// enum keeps the value only to accept chats already written with it inline
+// (pre-fix internal builds); the next full-block rewrite re-encodes them.
 export const autonomousResumeTriggerSchema = z.object({
   kind: z.enum(["command", "monitor", "subagent", "wakeup"]),
   title: z.string(),
@@ -446,18 +451,131 @@ export type AutonomousResumeTrigger = z.infer<
   typeof autonomousResumeTriggerSchema
 >;
 
+// A fired ScheduleWakeup that woke the agent, stored SEPARATELY from
+// `triggers` so a v1.1.3-or-earlier host - whose `triggers[].kind` enum
+// predates `"wakeup"` - can still parse the chat: an unknown defaulted key is
+// silently stripped by a strict `z.object`, whereas a new enum value would
+// fail the WHOLE chat's `chatSchema.safeParse` (see `readChatSnapshot` in
+// `chat-session-manager.ts`). Same fields as a trigger minus `kind` - the
+// field itself is the kind. Always empty for every OTHER block/trigger kind.
+export const autonomousResumeWakeTriggerSchema = z.object({
+  title: z.string(),
+  status: z.enum(["completed", "failed", "stopped"]),
+  summary: z.string(),
+  blockId: z.string().default(""),
+  outputFile: autonomousResumeOutputFileSchema.nullable().default(null),
+});
+export type AutonomousResumeWakeTrigger = z.infer<
+  typeof autonomousResumeWakeTriggerSchema
+>;
+
 // Compaction-style divider at the HEAD of an autonomous turn, explaining why
-// the turn resumed (which backgrounded command/Monitor/subagent completed). The
-// turn carries no user message, so without this the resume looks abrupt. Usually
-// one trigger; can be several if multiple settled while idle before the model
-// woke. This block is surfaced through `chat.subscribe@1.1+`; 1.2 adds the
-// wakeup trigger kind, which the host projects out for older subscribers.
-export const autonomousResumeBlockSchema = z.object({
+// the turn resumed (which backgrounded command/Monitor/subagent/wakeup
+// completed). The turn carries no user message, so without this the resume
+// looks abrupt. Usually one trigger; can be several if multiple settled while
+// idle before the model woke. This block is surfaced through
+// `chat.subscribe@1.1+`; 1.2 adds the wakeup trigger kind, which the host
+// projects out for older subscribers.
+//
+// PERSISTED shape carries wakeup triggers in the additive `wakeTriggers` key
+// instead of inline in `triggers` - the only kind of change a v1.1.x host's
+// strict `chatSchema.safeParse` can survive. The DOMAIN/wire shape (this
+// block's inferred type, used by every consumer other than the storage
+// read/write funnels) is unchanged: `triggers` alone, wakeup entries last.
+// `decodeAutonomousResumeBlock`/`encodeAutonomousResumeBlock` are exported as
+// plain functions (not just wrapped in the codec below) so the storage layer's
+// hot read/write funnels - `denormalizeMessages` / `toStoredBlock` in
+// `chat-message-collections.ts` - can normalize without a full schema parse.
+const persistedAutonomousResumeBlockSchema = z.object({
+  ...baseBlockFields,
+  type: z.literal("autonomous_resume"),
+  triggers: z.array(autonomousResumeTriggerSchema),
+  wakeTriggers: z.array(autonomousResumeWakeTriggerSchema).default([]),
+});
+export type PersistedAutonomousResumeBlock = z.infer<
+  typeof persistedAutonomousResumeBlockSchema
+>;
+
+const domainAutonomousResumeBlockSchema = z.object({
   ...baseBlockFields,
   type: z.literal("autonomous_resume"),
   triggers: z.array(autonomousResumeTriggerSchema),
 });
-export type AutonomousResumeBlock = z.infer<typeof autonomousResumeBlockSchema>;
+export type AutonomousResumeBlock = z.infer<
+  typeof domainAutonomousResumeBlockSchema
+>;
+
+// The raw stored shape of an `autonomous_resume` block as read straight off a
+// Yjs doc, BEFORE any schema parse: every block written before the
+// `wakeTriggers` key existed (v1.1.3 and every earlier build) simply lacks it,
+// and the storage hot path (`decodeStoredBlock` in
+// `chat-message-collections.ts`) deliberately skips the schema parse that
+// would default it. Any function consuming stored blocks must be total over
+// this shape - `.default([])` only exists after a parse.
+export type RawStoredAutonomousResumeBlock = Omit<
+  PersistedAutonomousResumeBlock,
+  "wakeTriggers"
+> & { wakeTriggers: AutonomousResumeWakeTrigger[] | undefined };
+
+// Merges `wakeTriggers` into `triggers` (wakeup entries last, matching
+// construction order in `buildAutonomousResumeBlock`) and accepts legacy
+// stored `kind: "wakeup"` entries already inline in `triggers` unchanged.
+// Total over every shape ever persisted: a pre-`wakeTriggers` block (absent
+// key) and an already-domain-shaped block are both returned unchanged - the
+// function itself tolerates the missing key rather than relying on a schema
+// parse the raw storage path never runs.
+export function decodeAutonomousResumeBlock(
+  stored: RawStoredAutonomousResumeBlock,
+): AutonomousResumeBlock {
+  const { wakeTriggers, ...rest } = stored;
+  if (wakeTriggers === undefined || wakeTriggers.length === 0) return rest;
+  return {
+    ...rest,
+    triggers: [
+      ...rest.triggers,
+      ...wakeTriggers.map(
+        (wake): AutonomousResumeTrigger => ({ ...wake, kind: "wakeup" }),
+      ),
+    ],
+  };
+}
+
+// Splits wakeup triggers out of `triggers` into `wakeTriggers`. Must run
+// before every raw storage write (see `toStoredBlock` in
+// `chat-message-collections.ts`) - writing a domain-shaped block verbatim
+// re-introduces `kind: "wakeup"` into persisted `triggers` and breaks v1.1.x
+// hosts again.
+function isWakeupTrigger(
+  trigger: AutonomousResumeTrigger,
+): trigger is AutonomousResumeTrigger & { kind: "wakeup" } {
+  return trigger.kind === "wakeup";
+}
+
+export function encodeAutonomousResumeBlock(
+  domain: AutonomousResumeBlock,
+): PersistedAutonomousResumeBlock {
+  const triggers = domain.triggers.filter((trigger) => !isWakeupTrigger(trigger));
+  const wakeTriggers = domain.triggers
+    .filter(isWakeupTrigger)
+    .map(({ kind: _kind, ...wake }): AutonomousResumeWakeTrigger => wake);
+  return { ...domain, triggers, wakeTriggers };
+}
+
+export const autonomousResumeBlockSchema = z.codec(
+  persistedAutonomousResumeBlockSchema,
+  domainAutonomousResumeBlockSchema,
+  {
+    decode: decodeAutonomousResumeBlock,
+    // `z.codec`'s `encode` callback receives the domain schema's INPUT shape
+    // (nested trigger defaults not yet applied) and must return the persisted
+    // schema's OUTPUT shape. Re-parsing through `domainAutonomousResumeBlockSchema`
+    // applies those defaults so `encodeAutonomousResumeBlock` itself can stay
+    // typed against the concrete, fully-defaulted `AutonomousResumeBlock` - the
+    // shape every real caller (e.g. the host storage write funnel) has.
+    encode: (domain) =>
+      encodeAutonomousResumeBlock(domainAutonomousResumeBlockSchema.parse(domain)),
+  },
+);
 
 export const steerBlockSchema = z.object({
   ...baseBlockFields,
@@ -589,3 +707,18 @@ export const contentBlockSchema = z.discriminatedUnion("type", [
   artifactOperationBlockSchema,
 ]);
 export type ContentBlock = z.infer<typeof contentBlockSchema>;
+
+// The on-disk/wire shape - identical to `ContentBlock` except
+// `autonomous_resume`, whose persisted member carries `wakeTriggers` instead
+// of inline `kind: "wakeup"` triggers. Used by the host storage layer's
+// `StoredBlock` type so raw Yjs entries are typed as what is actually on disk.
+//
+// Deliberately NOT `z.input<typeof contentBlockSchema>`: that blanket
+// derivation also reverts every OTHER member's defaulted fields to optional
+// (e.g. `reasoning.startedAt`), since `z.input` reflects pre-default shape for
+// ALL members, not just the codec one. Only `autonomous_resume` actually has a
+// different on-disk representation - every other member's persisted shape is
+// its normal (fully-defaulted) domain shape.
+export type PersistedContentBlock =
+  | Exclude<ContentBlock, AutonomousResumeBlock>
+  | PersistedAutonomousResumeBlock;

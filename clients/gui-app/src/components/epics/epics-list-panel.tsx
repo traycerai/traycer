@@ -35,7 +35,7 @@ import {
 import { UnsyncedEpicMoveDialog } from "@/components/layout/dialogs/unsynced-epic-move-dialog";
 import { Button } from "@/components/ui/button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
-import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
+import { DeleteTasksDialog } from "@/components/epics/delete-tasks-dialog";
 import {
   Tooltip,
   TooltipContent,
@@ -43,6 +43,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { useEpicBatchDelete } from "@/hooks/epic/use-epic-batch-delete-mutation";
+import { useTaskDeleteWorktreeCandidates } from "@/hooks/epic/use-task-delete-worktree-candidates-query";
 import { useEpicUpdateTitle } from "@/hooks/epic/use-epic-title-mutation";
 import { useInlineRename } from "@/hooks/ui/use-inline-rename";
 import { withMemberToggled } from "@/lib/immutable-set";
@@ -250,7 +251,50 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   const [selectionMode, setSelectionMode] = useState(false);
   const [pendingDeleteIds, setPendingDeleteIds] =
     useState<ReadonlyArray<string> | null>(null);
+  // Explicit user overrides of the per-worktree checkbox. Absent entries fall
+  // back to the default: only PROVEN-removable candidates (clean + a non-null
+  // branch status that is merged or has no local-only commits) start checked;
+  // unproven (null status) and dirty rows start unchecked. Cleared when the
+  // dialog closes so a reopened dialog starts from defaults again.
+  const [worktreeCheckOverrides, setWorktreeCheckOverrides] = useState<
+    ReadonlyMap<string, boolean>
+  >(() => new Map());
   const deleteMutation = useEpicBatchDelete();
+
+  const { candidates: worktreeCandidates } =
+    useTaskDeleteWorktreeCandidates(pendingDeleteIds);
+  const defaultCheckedByPath = useMemo(
+    () =>
+      new Map(
+        worktreeCandidates.map((candidate) => [
+          candidate.worktreePath,
+          candidate.provenRemovable,
+        ]),
+      ),
+    [worktreeCandidates],
+  );
+  const isWorktreePathChecked = useCallback(
+    (worktreePath: string): boolean => {
+      const override = worktreeCheckOverrides.get(worktreePath);
+      if (override !== undefined) return override;
+      return defaultCheckedByPath.get(worktreePath) ?? false;
+    },
+    [defaultCheckedByPath, worktreeCheckOverrides],
+  );
+  const toggleWorktreePathChecked = useCallback(
+    (worktreePath: string, checked: boolean) => {
+      setWorktreeCheckOverrides((prev) => {
+        const next = new Map(prev);
+        next.set(worktreePath, checked);
+        return next;
+      });
+    },
+    [],
+  );
+  const closeDeleteDialog = useCallback(() => {
+    setPendingDeleteIds(null);
+    setWorktreeCheckOverrides(new Map());
+  }, []);
 
   const selectableItemIds = useMemo(
     () =>
@@ -306,8 +350,20 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   const handleConfirmDelete = () => {
     if (pendingDeleteIds === null) return;
     const ids = pendingDeleteIds;
+    const approvedWorktrees = worktreeCandidates
+      .filter((candidate) => isWorktreePathChecked(candidate.worktreePath))
+      .map((candidate) => ({
+        worktreePath: candidate.worktreePath,
+        ownerEpicIds: candidate.ownerEpicIds,
+      }));
     deleteMutation.mutate(
-      { ids: [...ids] },
+      {
+        ids: [...ids],
+        worktreeCleanup:
+          approvedWorktrees.length > 0
+            ? { candidates: approvedWorktrees }
+            : null,
+      },
       {
         onSuccess: () => {
           setSelectedIds((prev) => {
@@ -320,7 +376,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
             return next ?? prev;
           });
           setSelectionMode(false);
-          setPendingDeleteIds(null);
+          closeDeleteDialog();
         },
       },
     );
@@ -412,17 +468,18 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
           />
         </div>
       </section>
-      <ConfirmDestructiveDialog
+      <DeleteTasksDialog
         open={pendingDeleteIds !== null}
         onOpenChange={(open) => {
-          if (!open) setPendingDeleteIds(null);
+          if (!open) closeDeleteDialog();
         }}
         title={describeDeleteTitle(pendingDeleteIds, items)}
         description="This action cannot be undone."
-        cascadeSummary={null}
-        actionLabel="Delete"
         isPending={deleteMutation.isPending}
         onConfirm={handleConfirmDelete}
+        candidates={worktreeCandidates}
+        isPathChecked={isWorktreePathChecked}
+        onTogglePath={toggleWorktreePathChecked}
       />
       <UnsyncedEpicMoveDialog flow={openInNewWindowFlow.epicFlow} />
     </TooltipProvider>

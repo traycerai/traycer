@@ -64,10 +64,11 @@ describe("formatRelativeTimestamp", () => {
 describe("formatResetCountdown", () => {
   const now = Date.parse("2026-04-23T12:00:00.000Z");
 
-  it("renders 'now' for deltas under one minute (regression: was unreachable under Math.ceil)", () => {
-    expect(formatResetCountdown(now, now)).toBe("now");
-    expect(formatResetCountdown(now + 5_000, now)).toBe("now");
-    expect(formatResetCountdown(now + (MINUTE_MS - 1), now)).toBe("now");
+  it("renders seconds for deltas under one minute", () => {
+    expect(formatResetCountdown(now, now)).toBe("0s");
+    expect(formatResetCountdown(now + 999, now)).toBe("1s");
+    expect(formatResetCountdown(now + 5_000, now)).toBe("5s");
+    expect(formatResetCountdown(now + (MINUTE_MS - 1), now)).toBe("59s");
   });
 
   it("renders minute buckets once a full minute away", () => {
@@ -89,8 +90,8 @@ describe("formatResetCountdown", () => {
     expect(formatResetCountdown(now + 4 * DAY_MS, now)).toBe("4d");
   });
 
-  it("clamps a past resetsAt to 'now' rather than a negative duration", () => {
-    expect(formatResetCountdown(now - 10_000, now)).toBe("now");
+  it("clamps a past resetsAt to '0s' rather than a negative duration", () => {
+    expect(formatResetCountdown(now - 10_000, now)).toBe("0s");
   });
 });
 

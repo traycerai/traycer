@@ -98,6 +98,7 @@ describe("ChatMessages transient Virtuoso rows", () => {
         nextStepActions={null}
         instanceId="test-instance"
         visible
+        systemOverlayActive={false}
         scrollRequest={null}
       />,
     );

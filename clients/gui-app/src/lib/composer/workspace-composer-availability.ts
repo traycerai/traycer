@@ -118,16 +118,33 @@ export function workspaceComposerCanStart(
   return availability.status === "ready";
 }
 
-export function deriveResolvedWorkspaceAvailability(
+function deriveWorkspaceFoldersAvailability(
   folders: ReadonlyArray<ResolvedFolder>,
   isResolving: boolean,
+  allowEmptyFolders: boolean,
 ): WorkspaceComposerAvailability {
   if (isResolving) return WORKSPACE_COMPOSER_CHECKING;
-  if (folders.length === 0) return WORKSPACE_COMPOSER_EMPTY;
+  if (!allowEmptyFolders && folders.length === 0) {
+    return WORKSPACE_COMPOSER_EMPTY;
+  }
   if (folders.some((folder) => folder.kind === "unresolved")) {
     return WORKSPACE_COMPOSER_UNRESOLVED;
   }
   return WORKSPACE_COMPOSER_READY;
+}
+
+export function deriveResolvedWorkspaceAvailability(
+  folders: ReadonlyArray<ResolvedFolder>,
+  isResolving: boolean,
+): WorkspaceComposerAvailability {
+  return deriveWorkspaceFoldersAvailability(folders, isResolving, false);
+}
+
+export function deriveFolderlessAllowedWorkspaceAvailability(
+  folders: ReadonlyArray<ResolvedFolder>,
+  isResolving: boolean,
+): WorkspaceComposerAvailability {
+  return deriveWorkspaceFoldersAvailability(folders, isResolving, true);
 }
 
 export function deriveWorktreeBindingWorkspaceAvailability(
@@ -149,6 +166,9 @@ export function deriveWorktreeBindingWorkspaceAvailability(
       disabledHint: worktreeMissingComposerHint(missingWorktreePaths),
       missingWorkspacePaths: missingWorktreePaths,
     };
+  }
+  if (binding?.workspaceMode === "folderless") {
+    return WORKSPACE_COMPOSER_READY;
   }
   // An explicit per-chat binding (local or worktree) is directly runnable.
   if (binding !== null && binding.entries.length > 0) {

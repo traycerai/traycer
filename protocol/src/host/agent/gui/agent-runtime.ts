@@ -766,6 +766,15 @@ export const kilocodeUserMessageAnchorResolvedSchema = z.object({
   kilocodeSessionId: z.string().nullable(),
 });
 
+export const ampUserMessageAnchorResolvedSchema = z.object({
+  harnessId: z.literal("amp"),
+  sessionId: z.string(),
+  // The Amp thread id (the `system`/`init` message's `session_id`) assigned for
+  // this turn. Used to resume the same Amp thread on a later turn via
+  // `execute`'s `options.continue`. Null only when it was not yet resolved.
+  ampSessionId: z.string().nullable(),
+});
+
 export const userMessageAnchorResolvedEventSchema = z.object({
   ...baseRuntimeEventFields,
   type: z.literal("user_message.anchor_resolved"),
@@ -784,6 +793,7 @@ export const userMessageAnchorResolvedEventSchema = z.object({
     kimiUserMessageAnchorResolvedSchema,
     copilotUserMessageAnchorResolvedSchema,
     kilocodeUserMessageAnchorResolvedSchema,
+    ampUserMessageAnchorResolvedSchema,
   ]),
 });
 export type UserMessageAnchorResolvedEvent = z.infer<

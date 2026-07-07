@@ -9,10 +9,13 @@ import type {
   CreateEpicWorkspaceIdentifier,
   TaskRepoIdentifier,
 } from "@traycer/protocol/host/epic/unary-schemas";
-import type { WorktreeBindingSelectorRow } from "@traycer/protocol/host/worktree-schemas";
+import type {
+  WorktreeBindingSelectorRow,
+  WorktreeBindingWorkspaceMode,
+  WorktreeIntent,
+} from "@traycer/protocol/host/worktree-schemas";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
-import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
 import { CURRENT_EPIC_VERSION } from "@traycer-clients/shared/epic/epic-version";
 
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
@@ -66,6 +69,7 @@ import type {
   ReasoningLevel,
   ServiceTier,
 } from "@/components/home/data/landing-options";
+import { deriveWorkspaceMode } from "@/lib/worktree/workspace-mode";
 
 export interface LandingComposerSubmitArgs {
   readonly editor: ComposerPromptEditorHandle | null;
@@ -220,18 +224,6 @@ export function useLandingComposerActions(): LandingComposerActions {
       const submittedContent = buildSubmittedChatJSONContent(resolvedContent);
       const profile = useAuthStore.getState().profile;
 
-      const workspaces = buildWorkspaceAssociations(
-        workspaceContext.workspaceFolders,
-        workspaceContext.workspaceFolderInfoByPath,
-      );
-      if (workspaces.length === 0) {
-        toast.error("Couldn't create epic.", {
-          description:
-            "Select at least one workspace folder to create an epic.",
-        });
-        return;
-      }
-
       const settings = buildChatRunSettings({
         selection: toolbar.selection,
         permission: toolbar.permission,
@@ -350,6 +342,7 @@ export function useLandingComposerActions(): LandingComposerActions {
           // Stored untitled; the "Untitled chat" / first-message fallback is a
           // render concern, never baked into the stored title.
           title: "",
+          workspaceMode: workspaceContext.workspaceMode,
           worktreeIntent: workspaceContext.worktreeIntent,
           initialMessage,
         },
@@ -469,18 +462,6 @@ export function useLandingComposerActions(): LandingComposerActions {
         reasoningEffort,
         terminalAgentArgs,
       } = launch;
-      const workspaces = buildWorkspaceAssociations(
-        workspaceContext.workspaceFolders,
-        workspaceContext.workspaceFolderInfoByPath,
-      );
-      if (workspaces.length === 0) {
-        toast.error("Couldn't create epic.", {
-          description:
-            "Select at least one workspace folder to create an epic.",
-        });
-        return;
-      }
-
       const epicId = uuidv4();
       const now = Date.now();
       rememberLandingWorktreeIntent(
@@ -547,6 +528,7 @@ export function useLandingComposerActions(): LandingComposerActions {
               forkSourceHarnessSessionId: null,
               onStatusChange: null,
               worktreeIntent: workspaceContext.worktreeIntent,
+              workspaceMode: workspaceContext.workspaceMode,
               terminalAgentArgs,
             }),
           // Only `epic.create` rejection reaches this arm (a later tui-agent
@@ -596,6 +578,7 @@ interface LandingWorkspaceContext {
     Record<string, WorkspaceFolderInfo>
   >;
   readonly worktreeIntent: WorktreeIntent | null;
+  readonly workspaceMode: WorktreeBindingWorkspaceMode;
   readonly activeDraftId: string | null;
 }
 
@@ -617,14 +600,20 @@ function readLandingWorkspaceContext(): LandingWorkspaceContext {
       workspaceFolders: activeDraft.workspace.folders,
       workspaceFolderInfoByPath: activeDraft.workspace.folderInfoByPath,
       worktreeIntent,
+      workspaceMode: deriveWorkspaceMode(
+        activeDraft.workspace.folders.length,
+        worktreeIntent,
+      ),
       activeDraftId,
     };
   }
+  const globalFolders = useWorkspaceFoldersStore.getState().folders;
   return {
-    workspaceFolders: useWorkspaceFoldersStore.getState().folders,
+    workspaceFolders: globalFolders,
     workspaceFolderInfoByPath:
       useWorkspaceFoldersStore.getState().folderInfoByPath,
     worktreeIntent,
+    workspaceMode: deriveWorkspaceMode(globalFolders.length, worktreeIntent),
     activeDraftId: null,
   };
 }

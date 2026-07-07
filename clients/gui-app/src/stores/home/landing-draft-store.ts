@@ -14,6 +14,7 @@ import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-s
 import type { WorkspaceFolderInfo } from "@/stores/workspace/workspace-folders-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import {
+  DEFAULT_COMPOSER_MODE,
   isComposerMode,
   type ComposerMode,
 } from "@/components/home/data/landing-options";
@@ -195,16 +196,21 @@ function isLandingDraftDocContent(value: unknown): value is JsonContent {
   );
 }
 
-function parseLandingDraftSelection(
-  value: DesktopJsonValue | null,
-): DraftSelection | null {
+function parseLandingDraftSelection(value: unknown): DraftSelection | null {
   if (!isRecord(value)) return null;
   const { from, to } = value;
-  if (typeof from !== "number" || typeof to !== "number") return null;
+  if (
+    typeof from !== "number" ||
+    typeof to !== "number" ||
+    !Number.isFinite(from) ||
+    !Number.isFinite(to)
+  ) {
+    return null;
+  }
   return { from, to };
 }
 
-function parseLandingDraftLastTouchedAt(value: DesktopJsonValue): number {
+function parseLandingDraftLastTouchedAt(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value)
     ? value
     : Date.now();
@@ -219,6 +225,60 @@ function readProjectedActiveDraftId(
   return drafts.some((draft) => draft.id === activeDraftId)
     ? activeDraftId
     : null;
+}
+
+/**
+ * Validate the localStorage-persisted `drafts` array on rehydration, mirroring
+ * `readProjectedDrafts` (the desktop-projection path): each draft is rebuilt
+ * field-by-field, a draft whose `content` fails the doc-shape guard is dropped,
+ * and a missing/invalid `workspace` becomes the empty snapshot (so
+ * `draft.workspace.folders` is always readable). Without this, the persist
+ * middleware rehydrated `drafts` verbatim, so a legacy tab (pre-`content`
+ * retype, or pre-`workspace`) crashed the landing render on `draft.workspace`.
+ */
+function parsePersistedLandingDrafts(
+  value: unknown,
+): ReadonlyArray<LandingDraftTab> {
+  if (!Array.isArray(value)) return [];
+  return uniqueLandingDrafts(
+    value.flatMap((raw) => {
+      if (!isRecord(raw)) return [];
+      const id = raw.id;
+      const content = raw.content;
+      if (typeof id !== "string" || !isLandingDraftDocContent(content)) {
+        return [];
+      }
+      return [
+        {
+          id,
+          content,
+          selection: parseLandingDraftSelection(raw.selection),
+          lastTouchedAt: parseLandingDraftLastTouchedAt(raw.lastTouchedAt),
+          settings: parseChatRunSettings(raw.settings),
+          composerMode: parsePersistedComposerMode(raw.composerMode),
+          workspace: parseLandingDraftWorkspaceSnapshot(raw.workspace),
+        },
+      ];
+    }),
+  );
+}
+
+function parsePersistedActiveDraftId(
+  value: unknown,
+  drafts: ReadonlyArray<LandingDraftTab>,
+): string | null {
+  if (typeof value !== "string") return null;
+  return drafts.some((draft) => draft.id === value) ? value : null;
+}
+
+// Rehydration-safe composer-mode parse. Unlike `parseComposerMode` (which seeds
+// a missing value from the live settings store), this stays self-contained: the
+// persist `merge` runs during synchronous module-init rehydration, so it must
+// not reach into another store, and falls back to the static default.
+function parsePersistedComposerMode(value: unknown): ComposerMode {
+  return typeof value === "string" && isComposerMode(value)
+    ? value
+    : DEFAULT_COMPOSER_MODE;
 }
 
 export const useLandingDraftStore = create<LandingDraftStoreState>()(
@@ -330,6 +390,25 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
     {
       ...basePersistOptions(LANDING_DRAFT_PERSIST_KEY),
       storage: createJSONStorage(() => landingDraftStorage),
+      // Sanitize the localStorage payload on rehydration the same way
+      // `readProjectedDrafts` sanitizes the desktop projection, so a legacy tab
+      // (pre-`content` retype / pre-`workspace`) can't rehydrate a shape whose
+      // `draft.workspace.folders` read throws. The default shallow merge took
+      // `drafts` verbatim.
+      merge: (persistedState, currentState) => {
+        const persisted: Record<string, unknown> = isRecord(persistedState)
+          ? persistedState
+          : {};
+        const drafts = parsePersistedLandingDrafts(persisted.drafts);
+        return {
+          ...currentState,
+          drafts,
+          activeDraftId: parsePersistedActiveDraftId(
+            persisted.activeDraftId,
+            drafts,
+          ),
+        };
+      },
     },
   ),
 );

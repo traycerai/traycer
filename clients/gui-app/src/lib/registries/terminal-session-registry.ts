@@ -14,7 +14,10 @@ import {
   type TerminalStreamClientFactory,
 } from "@/stores/terminals/terminal-session-store";
 import { TerminalSessionRegistry } from "@/stores/terminals/terminal-session-registry";
-import type { TerminalSessionKind } from "@traycer/protocol/host/terminal/unary-schemas";
+import type {
+  ListTerminalsResponse,
+  TerminalSessionKind,
+} from "@traycer/protocol/host/terminal/unary-schemas";
 
 const registry = new TerminalSessionRegistry();
 
@@ -196,16 +199,66 @@ export function useTerminalSessionHandle(
 
   useEffect(() => {
     if (handle === null) return;
-    let previousStatus = handle.store.getState().status;
+    const initialState = handle.store.getState();
+    let previousStatus = initialState.status;
+    let previousTitle = initialState.title;
+    let previousActiveProcessName = initialState.activeProcessName;
     return handle.store.subscribe((state) => {
-      if (state.status === previousStatus) return;
+      const statusChanged = state.status !== previousStatus;
+      const metadataChanged =
+        state.title !== previousTitle ||
+        state.activeProcessName !== previousActiveProcessName;
       previousStatus = state.status;
-      if (state.status !== "exited" && state.status !== "lost") return;
-      void queryClient.invalidateQueries({
-        queryKey: hostQueryKeys.scope(args.hostId),
-      });
+      previousTitle = state.title;
+      previousActiveProcessName = state.activeProcessName;
+      if (metadataChanged) {
+        // Patch the cached `terminal.list` rows in place - NEVER invalidate
+        // here. The stream is the authoritative source for these fields
+        // (snapshot / `sessionUpdated` frames), so a refetch adds nothing,
+        // and invalidating was actively harmful: the tile bootstrap gates
+        // this handle on `terminal.list`, so invalidate -> refetch -> handle
+        // released -> re-subscribe -> snapshot re-sets metadata -> invalidate
+        // looped forever, bouncing the PTY stream and leaving reattached
+        // terminals blank. (An explicitly justified `setQueriesData`:
+        // stream-pushed state IS the response state.)
+        queryClient.setQueriesData<ListTerminalsResponse>(
+          { queryKey: hostQueryKeys.methodScope(args.hostId, "terminal.list") },
+          (data) => {
+            if (data === undefined) return undefined;
+            const target = data.sessions.find(
+              (session) => session.sessionId === args.sessionId,
+            );
+            if (
+              target === undefined ||
+              (target.title === state.title &&
+                (target.activeProcessName ?? null) === state.activeProcessName)
+            ) {
+              return data;
+            }
+            return {
+              sessions: data.sessions.map((session) =>
+                session.sessionId === args.sessionId
+                  ? {
+                      ...session,
+                      title: state.title,
+                      activeProcessName: state.activeProcessName,
+                    }
+                  : session,
+              ),
+            };
+          },
+        );
+      }
+      if (
+        statusChanged &&
+        (state.status === "exited" || state.status === "lost")
+      ) {
+        void queryClient.invalidateQueries({
+          queryKey: hostQueryKeys.scope(args.hostId),
+        });
+      }
     });
-  }, [args.hostId, handle, queryClient]);
+  }, [args.hostId, args.sessionId, handle, queryClient]);
 
   return handle;
 }

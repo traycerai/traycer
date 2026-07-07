@@ -96,6 +96,7 @@ const API_KEY_DASHBOARD_URL: Partial<Record<ProviderId, string>> = {
   cursor: "https://cursor.com/dashboard/api?section=user-keys#user-api-keys",
   droid: "https://app.factory.ai/settings/api-keys",
   openrouter: "https://openrouter.ai/settings/keys",
+  amp: "https://ampcode.com/settings",
 };
 
 const PROVIDER_DESCRIPTIONS: Record<ProviderId, string> = {
@@ -116,6 +117,7 @@ const PROVIDER_DESCRIPTIONS: Record<ProviderId, string> = {
   copilot:
     "GitHub Copilot CLI agent via your active Copilot subscription or policy.",
   kilocode: "Kilo Code CLI agent via Kilo login or configured providers.",
+  amp: "Amp agent - Ampcode's coding CLI via your Amp account or API key.",
 };
 
 const TERMINAL_AGENT_ARGS_PLACEHOLDER: Record<
@@ -145,6 +147,7 @@ function terminalAgentArgsPlaceholder(providerId: ProviderId): string {
     case "droid":
     case "kimi":
     case "kilocode":
+    case "amp":
       return "CLI arguments (optional)";
   }
 }
@@ -471,6 +474,19 @@ function ProviderEnableSwitch(props: {
   );
 }
 
+// Cursor's chat runs through the `@cursor/sdk` (no CLI binary) and its
+// terminal-agent surface is hidden for now, so there's no CLI path to pick.
+// Amp's SDK always resolves and spawns its own bundled `amp` CLI ahead of any
+// override, and Amp has no terminal-agent (TUI) surface either, so a
+// selected/custom path is never consulted anywhere. Both hide the candidates
+// table and show only the API-key section rather than offer a control with no
+// effect.
+function hidesCliCandidates(
+  providerId: ProviderCliState["providerId"],
+): boolean {
+  return providerId === "cursor" || providerId === "amp";
+}
+
 function ProviderDetail({
   state,
   providers,
@@ -479,14 +495,11 @@ function ProviderDetail({
   readonly providers: readonly ProviderCliState[];
 }) {
   const providerId = state.providerId;
-  // Cursor's chat runs through the `@cursor/sdk` (no CLI binary) and its
-  // terminal-agent surface is hidden for now, so there's no CLI path to pick -
-  // hide the candidates table and show only the API-key section.
   // Traycer/OpenRouter share the OpenCode binary path set: their tables show
   // the OpenCode candidates (or their own when present) while selection /
   // custom-path mutations target the focused provider id.
   const cliConfig = candidateConfigForProvider(state, providers);
-  const showCliCandidates = providerId !== "cursor";
+  const showCliCandidates = !hidesCliCandidates(providerId);
   const radioName = useId();
   const switchId = useId();
   const [adding, setAdding] = useState(false);
@@ -760,6 +773,8 @@ function envNamePlaceholder(providerId: ProviderId): string {
       return "COPILOT_GITHUB_TOKEN";
     case "kilocode":
       return "KILO_API_KEY";
+    case "amp":
+      return "AMP_API_KEY";
   }
 }
 

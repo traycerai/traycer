@@ -8,11 +8,14 @@ import {
   listTerminalsResponseSchema,
   renameTerminalRequestSchema,
   renameTerminalResponseSchema,
+  terminalDefaultCwdRequestSchema,
+  terminalDefaultCwdResponseSchema,
 } from "@traycer/protocol/host/terminal/unary-schemas";
 import {
   terminalSubscribeV10,
   terminalSubscribeV11,
   terminalSubscribeV12,
+  terminalSubscribeV13,
 } from "@traycer/protocol/host/terminal/subscribe";
 
 // Terminal sessions live entirely in the host's memory; these contracts
@@ -32,6 +35,13 @@ export const terminalKillV10 = defineRpcContract({
   responseSchema: killTerminalResponseSchema,
 });
 
+export const terminalDefaultCwdV10 = defineRpcContract({
+  method: "terminal.defaultCwd",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: terminalDefaultCwdRequestSchema,
+  responseSchema: terminalDefaultCwdResponseSchema,
+});
+
 export const terminalListV10 = defineRpcContract({
   method: "terminal.list",
   schemaVersion: { major: 1, minor: 0 } as const,
@@ -46,4 +56,9 @@ export const terminalRenameV10 = defineRpcContract({
   responseSchema: renameTerminalResponseSchema,
 });
 
-export { terminalSubscribeV10, terminalSubscribeV11, terminalSubscribeV12 };
+export {
+  terminalSubscribeV10,
+  terminalSubscribeV11,
+  terminalSubscribeV12,
+  terminalSubscribeV13,
+};

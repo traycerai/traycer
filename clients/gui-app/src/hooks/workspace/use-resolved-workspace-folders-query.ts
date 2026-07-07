@@ -74,6 +74,7 @@ export function useResolvedWorkspaceFolders(
     [repoIdentifiers],
   );
   const query = useHostQuery({
+    cacheKeyIdentity: undefined,
     client,
     method: "workspace.resolvePathsByRepoIdentifiers",
     params: queryParams,

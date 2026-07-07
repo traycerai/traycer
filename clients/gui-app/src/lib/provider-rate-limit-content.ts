@@ -3,6 +3,10 @@ import type {
   RateLimitUnavailableReason,
 } from "@traycer/protocol/host";
 import type { ProviderRateLimitQueryState } from "@/components/settings/panels/provider-rate-limit-views";
+import {
+  envelopeDegradedReason,
+  resolveRetainedProviderRateLimits,
+} from "@/lib/rate-limits/rate-limit-envelope";
 
 /** The provider snapshot arms that actually carry usage detail. */
 type AvailableProviderRateLimits = Extract<
@@ -27,7 +31,14 @@ export function resolveProviderRateLimitViewState(
 ): ProviderRateLimitViewState {
   if (props.isPending && props.isFetching) return { kind: "loading" };
   if (props.isError) return { kind: "error" };
-  const data = props.providerRateLimits ?? null;
+  // Retention through a transient failure (`usage_fetch_failed`, `timeout`,
+  // `connection_failed`) resolves to the envelope's `lastGood` reading here,
+  // same as the popover - this surface just has no dimmed treatment of its
+  // own to layer on top (Settings card has no "degraded" concept today), so a
+  // retained reading renders exactly like a fresh one. An authoritative
+  // reason (`rate_limits_not_available` and friends) replaces the picture
+  // entirely, same as before.
+  const data = resolveRetainedProviderRateLimits(props.envelope ?? null);
   if (data === null) return { kind: "empty" };
   return { kind: "data", data };
 }
@@ -69,6 +80,12 @@ const RATE_LIMIT_UNAVAILABLE_REASON_LABELS: Record<
   rate_limits_not_available: "not available for this account",
   insufficient_permissions:
     "this account doesn't have permission to view usage",
+  // Transient - the CLI's own usage-HTTP fetch failed (timeout, a 401 with a
+  // failed refresh, an unseeded 429, an empty body), NOT an account/auth
+  // capability problem like `rate_limits_not_available`. Distinct wording is
+  // the point: this recovers on its own (the queue's post-failure cool-down
+  // plus the next poll), so it must never read like a permanent account issue.
+  usage_fetch_failed: "couldn't fetch usage — will retry",
 };
 
 export function formatUnavailableReason(
@@ -103,13 +120,24 @@ export type PopoverProviderRateLimitState =
       readonly kind: "ready";
       readonly data: AvailableProviderRateLimits;
       readonly degraded: boolean;
+      /**
+       * The specific transient reason driving `degraded`, when the envelope
+       * itself is the cause (a `lastGood` reading retained across
+       * `usage_fetch_failed`/`timeout`/`connection_failed`) - lets the caller
+       * show that plain-language message instead of the generic "refresh
+       * failed" text. `null` when `degraded` is `false`, or when it's `true`
+       * only because the query's own last (background) fetch attempt threw
+       * (TanStack retaining old data across a thrown exception) - that case
+       * has no specific wire reason to report.
+       */
+      readonly degradedReason: RateLimitUnavailableReason | null;
     };
 
 export function resolvePopoverProviderRateLimitState(
   props: ProviderRateLimitQueryState,
 ): PopoverProviderRateLimitState {
-  const snapshot = props.providerRateLimits ?? null;
-  if (snapshot === null) {
+  const envelope = props.envelope ?? null;
+  if (envelope === null || envelope.latest === null) {
     // Nothing usable yet. `ephemeralProcess` queries are queue-owned and
     // therefore disabled as query observers; before the queue starts, they can
     // be pending-but-not-fetching without that representing a failed read.
@@ -120,13 +148,37 @@ export function resolvePopoverProviderRateLimitState(
       ? { kind: "cold" }
       : { kind: "error" };
   }
-  if (!snapshot.available) {
-    return { kind: "unavailable", reason: snapshot.reason };
+  const data = resolveRetainedProviderRateLimits(envelope);
+  if (data === null) {
+    // Unreachable in practice (`envelope.latest !== null` was just checked
+    // above, and `resolveRetainedProviderRateLimits` only returns `null` when
+    // the envelope or its `latest` is `null`) - kept for type-safety.
+    return props.isFetching || props.isPending
+      ? { kind: "cold" }
+      : { kind: "error" };
   }
-  // A last-known-good snapshot is present. `isError` here means the most recent
-  // (background) refetch failed while retaining this data - Core Flows' degraded
-  // state, shown dimmed rather than replaced.
-  return { kind: "ready", data: snapshot, degraded: props.isError };
+  if (!data.available) {
+    // Authoritative unavailable reason (`rate_limits_not_available` and
+    // friends), or a transient reason with no retained `lastGood` yet -
+    // either way `resolveRetainedProviderRateLimits` already decided there's
+    // nothing to show dimmed, so this replaces the picture entirely.
+    return { kind: "unavailable", reason: data.reason };
+  }
+  // A last-known-good snapshot is present, either fresh (`data` came straight
+  // from `envelope.latest`) or retained across a transient failure (`data`
+  // came from `envelope.lastGood`, in which case `envelopeDegradedReason`
+  // below reports which transient reason it's standing in for). `props.isError`
+  // covers the other degrade path: the query's own most recent (background)
+  // fetch attempt threw (TanStack retaining old data across that exception) -
+  // Core Flows' degraded state, shown dimmed rather than replaced, generic
+  // copy since a thrown exception has no specific wire reason to report.
+  const reason = envelopeDegradedReason(envelope);
+  return {
+    kind: "ready",
+    data,
+    degraded: props.isError || reason !== null,
+    degradedReason: reason,
+  };
 }
 
 /**

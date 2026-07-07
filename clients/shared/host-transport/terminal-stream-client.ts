@@ -51,6 +51,12 @@ export interface TerminalStreamCallbacks {
       { readonly kind: "actionAck" }
     >,
   ) => void;
+  readonly onSessionUpdated: (
+    frame: Extract<
+      TerminalSubscribeServerFrame,
+      { readonly kind: "sessionUpdated" }
+    >,
+  ) => void;
   readonly onConnectionStatus: (
     status: StreamConnectionStatus,
     reason: StreamCloseReason | null,
@@ -170,6 +176,10 @@ export class TerminalStreamClient {
       }
       case "actionAck": {
         this.callbacks.onActionAck(frame);
+        return;
+      }
+      case "sessionUpdated": {
+        this.callbacks.onSessionUpdated(frame);
         return;
       }
       case "pong": {

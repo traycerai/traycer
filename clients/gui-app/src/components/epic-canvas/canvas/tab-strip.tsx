@@ -356,7 +356,13 @@ function TabItem(props: TabItemProps) {
     id: getArtifactTabDropId(groupId, tab.instanceId),
     data: dropData,
   });
-  const displayTitle = useEpicTabDisplayTitle(tab);
+  const displayTitle = useEpicTabDisplayTitle({
+    id: tab.id,
+    name: tab.name,
+    type: tab.type,
+    instanceId: "instanceId" in tab ? tab.instanceId : undefined,
+    titleSource: "titleSource" in tab ? tab.titleSource : undefined,
+  });
   const titleGenerationPending = useEpicLiveArtifactTitleGenerating(
     tab.type === "chat" ? tab.id : null,
   );
