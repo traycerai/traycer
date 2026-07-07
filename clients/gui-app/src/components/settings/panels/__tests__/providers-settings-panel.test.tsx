@@ -154,6 +154,22 @@ vi.mock("@/hooks/host/use-refresh-rate-limit-usage-on-traycer-turn", () => ({
   useRefreshRateLimitUsageOnTraycerTurn: () => {},
 }));
 
+// Provider rate-limit query + its refresh hook (ProviderRateLimitForProvider,
+// mounted for every codex/claude-code provider row). Same reason: no host
+// client/QueryClient in this harness.
+vi.mock("@/hooks/host/use-host-provider-rate-limits-query", () => ({
+  useHostProviderRateLimitsQuery: () => ({
+    data: undefined,
+    isPending: false,
+    isError: false,
+    isFetching: false,
+    refetch: () => Promise.resolve({}),
+  }),
+}));
+vi.mock("@/hooks/host/use-refresh-provider-rate-limits-on-turn", () => ({
+  useRefreshProviderRateLimitsOnTurn: () => {},
+}));
+
 // Host picker plumbing: a single active host and no transient client means
 // the panel renders inline (no runtime-context re-provide), and `useHostBinding`
 // returns null without a `<HostRuntimeProvider>`.

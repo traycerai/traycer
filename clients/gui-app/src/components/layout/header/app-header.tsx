@@ -4,6 +4,7 @@ import { TabStrip } from "@/components/layout/tabs/tab-strip";
 import { AppUpdateHeaderButton } from "@/components/layout/header/app-update-button";
 import { HistoryButton } from "@/components/layout/header/history-button";
 import { HistoryNavButtons } from "@/components/layout/header/history-nav-buttons";
+import { RateLimitIconButton } from "@/components/layout/header/rate-limit-icon";
 import { SignInButton } from "@/components/layout/header/sign-in-button";
 import { NotificationsBell } from "@/components/notifications/notifications-bell";
 import { cn } from "@/lib/utils";
@@ -103,6 +104,7 @@ export function AppHeader(props: AppHeaderProps): ReactNode {
         style={framelessDesktop ? NO_DRAG_STYLE : undefined}
       >
         {!navDisabled ? <AppUpdateHeaderButton /> : null}
+        {!navDisabled ? <RateLimitIconButton /> : null}
         {!navDisabled ? <HistoryButton /> : null}
         {showBell ? <HeaderNotificationsBell /> : null}
         <HeaderIdentity showAppSettings={!navDisabled} />

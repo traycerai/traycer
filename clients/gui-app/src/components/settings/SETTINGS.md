@@ -202,7 +202,7 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     pay-as-you-go). Each bar is shown only when that bucket's total > 0; amounts
     are `$`-denominated. Credit-based vs rate-limit-based is decided exactly like
     the extension (`isCreditBasedPricing` - V3 plans are credit-based); **legacy /
-    v2 (rate-limit) plans** instead render a **Rate limit** section with the
+    v2 (usage-limit) plans** instead render a **Usage limit** section with the
     recharge rate ("New artifact every N minutes", from `rechargeRateSeconds`)
     plus the Bundle bar. The extension's live "Artifact Used" bar is omitted -
     `totalTokens`/`remainingTokens` come from the inference `GetRateLimitUsage`
