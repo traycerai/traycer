@@ -125,9 +125,165 @@ export const runtimeSessionInfoSchema = z.object({
 });
 export type RuntimeSessionInfo = z.infer<typeof runtimeSessionInfoSchema>;
 
+/**
+ * Where a saved approval rule applies. `global` matches on every workspace this
+ * device runs; `workspace` is pinned to one primary-workspace path. The host
+ * resolves the concrete `path` from the trusted session — the client only
+ * picks the scope kind, so it can't forge it.
+ */
+export const approvalAllowScopeSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("global") }),
+  z.object({ kind: z.literal("workspace"), path: z.string() }),
+]);
+export type ApprovalAllowScope = z.infer<typeof approvalAllowScopeSchema>;
+
+// Back-compat alias: the scope axis is shared by every rule kind now, but the
+// original name is still imported across the host.
+export const commandAllowScopeSchema = approvalAllowScopeSchema;
+export type CommandAllowScope = ApprovalAllowScope;
+
+/**
+ * A saved "always allow" command rule. `tokens` is the derived argv prefix
+ * (Claude-style: `npm run *` → `["npm","run"]`) or the full command for
+ * `exact`; `match` says whether trailing args are allowed (`prefix`) or the
+ * lengths must be equal (`exact`, used for wrappers like `sudo`/`timeout`). The
+ * host always re-derives tokens through the fail-closed shell tokenizer — never
+ * a raw `startsWith` — so a rule can never widen to chained/redirected/
+ * substituted invocations and `npm` can never match `npmtrojan`.
+ */
+export const commandAllowRuleSchema = z.object({
+  kind: z.literal("command"),
+  tokens: z.array(z.string()),
+  match: z.enum(["prefix", "exact"]),
+  scope: approvalAllowScopeSchema,
+});
+export type CommandAllowRule = z.infer<typeof commandAllowRuleSchema>;
+
+/**
+ * A saved "always allow" MCP-tool rule. `toolName` is matched EXACTLY (Claude
+ * `mcp__github__create_issue`, Codex `mcp:deepwiki`); tool arguments are never
+ * inspected — per-tool trust is the explicit user decision, mirroring Claude's
+ * own MCP permission model. No server-wildcard form is offered.
+ */
+export const mcpAllowRuleSchema = z.object({
+  kind: z.literal("mcp"),
+  toolName: z.string(),
+  scope: approvalAllowScopeSchema,
+});
+export type McpAllowRule = z.infer<typeof mcpAllowRuleSchema>;
+
+/**
+ * Whether a tool name carries a stable MCP identity: Claude's per-tool
+ * `mcp__server__tool` or Codex's per-server `mcp:server`. OpenCode/ACP expose
+ * no MCP marker, so they never pass this gate and always prompt. Shared here
+ * because BOTH sides consult it — the host to match/derive `mcp` rules, the GUI
+ * to shape the "Always allow" affordance — and a duplicated predicate would
+ * drift.
+ */
+export function isMcpToolName(toolName: string): boolean {
+  return toolName.startsWith("mcp__") || toolName.startsWith("mcp:");
+}
+
+/**
+ * The `server` (+ optional `tool`) components of an MCP tool name, for display
+ * only. `tool` is `null` for the forms that carry no tool component: Codex's
+ * per-server `mcp:<server>` (trust is per-server — the tool is never in the
+ * name) and the server-only Claude form `mcp__<server>` (e.g. `mcp__fetch`).
+ * Returns `null` when the name has no MCP identity, so callers fall back to the
+ * raw string.
+ *
+ * The `mcp__` split takes the FIRST `__` after the prefix as the server
+ * boundary — matching how the name is constructed (`__` is the delimiter, so a
+ * server name never contains it) — and keeps the remainder as the tool, which
+ * MAY itself contain `__`. NEVER used for matching/trust, which stay on the
+ * whole opaque `toolName`.
+ */
+export function parseMcpToolName(
+  toolName: string,
+): { readonly server: string; readonly tool: string | null } | null {
+  if (toolName.startsWith("mcp__")) {
+    const rest = toolName.slice("mcp__".length);
+    const separator = rest.indexOf("__");
+    if (separator === -1) {
+      return rest.length > 0 ? { server: rest, tool: null } : null;
+    }
+    const server = rest.slice(0, separator);
+    if (server.length === 0) return null;
+    const tool = rest.slice(separator + "__".length);
+    return { server, tool: tool.length > 0 ? tool : null };
+  }
+  if (toolName.startsWith("mcp:")) {
+    const server = toolName.slice("mcp:".length);
+    return server.length > 0 ? { server, tool: null } : null;
+  }
+  return null;
+}
+
+/**
+ * Display string for an MCP tool name: `[server] tool`, or `[server]` when the
+ * name carries no tool component (Codex `mcp:<server>`, server-only Claude
+ * `mcp__<server>`). Falls back to the raw name for non-MCP identities. Shared so
+ * the host-suggested rule text and the GUI render the same shape.
+ */
+export function formatMcpToolName(toolName: string): string {
+  const parsed = parseMcpToolName(toolName);
+  if (parsed === null) return toolName;
+  return parsed.tool === null
+    ? `[${parsed.server}]`
+    : `[${parsed.server}] ${parsed.tool}`;
+}
+
+/**
+ * Whether a tool name is a shell-command tool — the kind whose "Always allow"
+ * derives tokenized `command` rules rather than a whole-tool grant. Shared for
+ * the same reason as {@link isMcpToolName}: any client-side gating must match
+ * the host's matcher exactly.
+ */
+export function isCommandToolName(toolName: string): boolean {
+  const normalized = toolName.toLowerCase();
+  return (
+    normalized === "bash" || normalized === "command" || normalized === "shell"
+  );
+}
+
+/**
+ * A saved "always allow" rule for a gated non-command, non-MCP tool (web
+ * search, web fetch, and other harness-gated tools): `toolName` matched
+ * EXACTLY, arguments never inspected — mirroring Claude Code's
+ * "don't ask again for <tool> in <project>". Workspace/global scope only in
+ * the UI, same rationale as `mcp` rules. Names with an `mcp` prefix are never
+ * eligible (e.g. Codex's identity-less `mcp_tool_call` fallback must keep
+ * prompting — a rule for it would blanket-trust every unidentified MCP call).
+ */
+export const toolAllowRuleSchema = z.object({
+  kind: z.literal("tool"),
+  toolName: z.string(),
+  scope: approvalAllowScopeSchema,
+});
+export type ToolAllowRule = z.infer<typeof toolAllowRuleSchema>;
+
+/**
+ * The saved-rule union. Scope is orthogonal to kind: any (kind × scope) pair is
+ * valid — a command rule for a workspace, an MCP tool globally. The on-disk store
+ * holds this union directly; an old entry with no `kind` is migrated to
+ * `command` at load time. File edits are governed by the `auto_accept_edits`
+ * permission mode, not a saved rule.
+ */
+export const approvalAllowRuleSchema = z.discriminatedUnion("kind", [
+  commandAllowRuleSchema,
+  mcpAllowRuleSchema,
+  toolAllowRuleSchema,
+]);
+export type ApprovalAllowRule = z.infer<typeof approvalAllowRuleSchema>;
+
 export const runtimeApprovalDecisionSchema = z.object({
   approved: z.boolean(),
   reason: z.string().optional(),
+  // Set by the GUI "Always allow" menu: approve this command AND persist a rule
+  // at the chosen scope. The client sends only the scope choice — the host
+  // derives the rule tokens from the trusted request and resolves `"workspace"`
+  // to the active primary-workspace path, so the client can't forge either.
+  remember: z.object({ scope: z.enum(["global", "workspace"]) }).optional(),
 });
 export type RuntimeApprovalDecision = z.infer<
   typeof runtimeApprovalDecisionSchema

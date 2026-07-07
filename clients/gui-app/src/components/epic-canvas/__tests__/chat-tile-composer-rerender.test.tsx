@@ -147,6 +147,7 @@ const APPROVALS: ChatLowerApprovalsState = {
   pendingApprovals: [],
   onFileEditDecision: () => undefined,
   onApprovalDecision: () => undefined,
+  onAutoAcceptEdits: () => undefined,
 };
 const QUEUE: ChatLowerQueueState = {
   editingItem: null,

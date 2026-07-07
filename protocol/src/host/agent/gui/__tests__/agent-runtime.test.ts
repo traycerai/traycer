@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  formatMcpToolName,
+  parseMcpToolName,
   runtimeAgentRunInputSchema,
   runtimeApprovalRequestSchema,
   runtimeEventSchema,
@@ -230,6 +232,53 @@ describe("agent runtime stream schema", () => {
         turnId: "turn-2",
       }),
     ).toMatchObject({ type: "turn.completed" });
+  });
+
+  it("parses Claude-style mcp names into server + tool on the first delimiter", () => {
+    expect(parseMcpToolName("mcp__github__create_issue")).toEqual({
+      server: "github",
+      tool: "create_issue",
+    });
+    // Server names may carry single underscores; only `__` is the delimiter.
+    expect(parseMcpToolName("mcp__traycer_a2a__traycer_send_message")).toEqual({
+      server: "traycer_a2a",
+      tool: "traycer_send_message",
+    });
+    // A tool name may itself contain `__` - taken as the whole remainder.
+    expect(parseMcpToolName("mcp__srv__a__b")).toEqual({
+      server: "srv",
+      tool: "a__b",
+    });
+    // Server-only Claude form has no tool component.
+    expect(parseMcpToolName("mcp__fetch")).toEqual({
+      server: "fetch",
+      tool: null,
+    });
+  });
+
+  it("parses Codex-style mcp names as server-only", () => {
+    expect(parseMcpToolName("mcp:deepwiki")).toEqual({
+      server: "deepwiki",
+      tool: null,
+    });
+  });
+
+  it("returns null for non-mcp or malformed names", () => {
+    expect(parseMcpToolName("Bash")).toBeNull();
+    expect(parseMcpToolName("mcp_tool_call")).toBeNull();
+    expect(parseMcpToolName("mcp__")).toBeNull();
+    expect(parseMcpToolName("mcp__ __tool")).toMatchObject({ server: " " });
+    expect(parseMcpToolName("mcp:")).toBeNull();
+  });
+
+  it("formats mcp names as [server] tool, or [server] when tool-less", () => {
+    expect(formatMcpToolName("mcp__github__create_issue")).toBe(
+      "[github] create_issue",
+    );
+    expect(formatMcpToolName("mcp:deepwiki")).toBe("[deepwiki]");
+    expect(formatMcpToolName("mcp__fetch")).toBe("[fetch]");
+    // Non-mcp falls back to the raw name.
+    expect(formatMcpToolName("Bash")).toBe("Bash");
   });
 
   it("rejects unknown runtime event types", () => {

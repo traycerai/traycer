@@ -255,6 +255,14 @@ import {
   type ProviderCliStateV10,
   type ProviderCliStateV20,
 } from "@traycer/protocol/host/provider-schemas";
+import {
+  commandAllowlistClearRequestSchema,
+  commandAllowlistClearResponseSchema,
+  commandAllowlistListRequestSchema,
+  commandAllowlistListResponseSchema,
+  commandAllowlistRemoveRequestSchema,
+  commandAllowlistRemoveResponseSchema,
+} from "@traycer/protocol/host/command-allowlist-schemas";
 
 export { hostGetRuntimeCapabilitiesV10 };
 export { hostGetRateLimitUsageV10 };
@@ -304,6 +312,29 @@ export const snapshotsReadSnapshotDiffV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: snapshotsReadSnapshotDiffRequestSchema,
   responseSchema: snapshotsReadSnapshotDiffResponseSchema,
+});
+
+// `commandAllowlist.*@1.0` - per-device "always allow this command" rules saved
+// from approval prompts. Schemas live in `protocol/host/command-allowlist-schemas.ts`.
+export const commandAllowlistListV10 = defineRpcContract({
+  method: "commandAllowlist.list",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: commandAllowlistListRequestSchema,
+  responseSchema: commandAllowlistListResponseSchema,
+});
+
+export const commandAllowlistRemoveV10 = defineRpcContract({
+  method: "commandAllowlist.remove",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: commandAllowlistRemoveRequestSchema,
+  responseSchema: commandAllowlistRemoveResponseSchema,
+});
+
+export const commandAllowlistClearV10 = defineRpcContract({
+  method: "commandAllowlist.clear",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: commandAllowlistClearRequestSchema,
+  responseSchema: commandAllowlistClearResponseSchema,
 });
 
 // `worktree.*@1.0` - local-only worktree binding lifecycle. Contracts land
@@ -2778,6 +2809,42 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
       versions: {
         0: {
           contract: speechEnsureModelV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "commandAllowlist.list": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: commandAllowlistListV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "commandAllowlist.remove": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: commandAllowlistRemoveV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "commandAllowlist.clear": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: commandAllowlistClearV10,
           upgradeFromPreviousVersion: null,
         },
       },

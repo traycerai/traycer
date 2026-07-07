@@ -350,6 +350,18 @@ export const chatApprovalStateSchema = z.object({
   kind: z.enum(["tool", "plan"]).default("tool"),
   planId: z.string().nullable().default(null),
   actions: z.array(runtimePlanActionSchema).default([]),
+  // For command approvals: the host-derived rule(s) an "Always allow" would save,
+  // in display form (e.g. `["npm run *", "exit 1"]` for a chained command), shown
+  // on the prompt so the user sees exactly what gets allow-listed. One entry per
+  // command segment; empty for non-command approvals or commands with a segment
+  // that can't be safely tokenized. Additive + defaulted: older clients strip it,
+  // older hosts omit it (reads back as []).
+  suggestedRules: z.array(z.string()).default([]),
+  // For command approvals: the exact command being approved (e.g. `ls -la /x`),
+  // host-resolved from the same trusted input the rule derives from, so the
+  // prompt can show *what* is being run — not just the generic tool name. Null
+  // for non-command approvals. Additive + defaulted, like `suggestedRules`.
+  commandPreview: z.string().nullable().default(null),
 });
 export type ChatApprovalState = z.infer<typeof chatApprovalStateSchema>;
 

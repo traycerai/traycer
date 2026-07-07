@@ -8,6 +8,7 @@ import type {
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { InterviewAnswer } from "@traycer/protocol/persistence/epic/schemas";
+import type { RuntimeApprovalDecision } from "@traycer/protocol/host/agent/gui/agent-runtime";
 import {
   ChatComposer,
   type ChatComposerSubmitInput,
@@ -87,8 +88,15 @@ export interface ChatLowerInterviewState {
 export interface ChatLowerApprovalsState {
   readonly pendingFileEditApprovals: ReadonlyArray<ChatFileEditApprovalState>;
   readonly pendingApprovals: ReadonlyArray<ChatApprovalState>;
-  readonly onFileEditDecision: (approvalId: string, approved: boolean) => void;
-  readonly onApprovalDecision: (approvalId: string, approved: boolean) => void;
+  readonly onFileEditDecision: (
+    approvalId: string,
+    decision: RuntimeApprovalDecision,
+  ) => void;
+  readonly onApprovalDecision: (
+    approvalId: string,
+    decision: RuntimeApprovalDecision,
+  ) => void;
+  readonly onAutoAcceptEdits: () => void;
 }
 
 export interface ChatLowerQueueState {
@@ -364,6 +372,7 @@ function RuntimeGatedApprovalSurface(props: {
         canAct={model.access.canAct}
         onFileEditDecision={model.approvals.onFileEditDecision}
         onApprovalDecision={model.approvals.onApprovalDecision}
+        onAutoAcceptEdits={model.approvals.onAutoAcceptEdits}
       />
     </ComposerSlotShell>
   );
@@ -475,8 +484,15 @@ function PendingApprovalQueues(props: {
   readonly pendingFileEditApprovals: ReadonlyArray<ChatFileEditApprovalState>;
   readonly pendingApprovals: ReadonlyArray<ChatApprovalState>;
   readonly canAct: boolean;
-  readonly onFileEditDecision: (approvalId: string, approved: boolean) => void;
-  readonly onApprovalDecision: (approvalId: string, approved: boolean) => void;
+  readonly onFileEditDecision: (
+    approvalId: string,
+    decision: RuntimeApprovalDecision,
+  ) => void;
+  readonly onApprovalDecision: (
+    approvalId: string,
+    decision: RuntimeApprovalDecision,
+  ) => void;
+  readonly onAutoAcceptEdits: () => void;
 }) {
   return (
     <div className="flex flex-col gap-2">
@@ -484,6 +500,7 @@ function PendingApprovalQueues(props: {
         approvals={props.pendingFileEditApprovals}
         canAct={props.canAct}
         onDecision={props.onFileEditDecision}
+        onAutoAcceptEdits={props.onAutoAcceptEdits}
       />
       <ComposerSlotApprovalQueue
         approvals={props.pendingApprovals}

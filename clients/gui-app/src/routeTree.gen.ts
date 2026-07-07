@@ -19,6 +19,7 @@ import { Route as SettingsWorktreesRouteImport } from "./routes/settings.worktre
 import { Route as SettingsShellRouteImport } from "./routes/settings.shell";
 import { Route as SettingsServiceRouteImport } from "./routes/settings.service";
 import { Route as SettingsProvidersRouteImport } from "./routes/settings.providers";
+import { Route as SettingsPermissionsRouteImport } from "./routes/settings.permissions";
 import { Route as SettingsKeybindingsRouteImport } from "./routes/settings.keybindings";
 import { Route as SettingsHostRouteImport } from "./routes/settings.host";
 import { Route as SettingsGeneralRouteImport } from "./routes/settings.general";
@@ -77,6 +78,11 @@ const SettingsServiceRoute = SettingsServiceRouteImport.update({
 const SettingsProvidersRoute = SettingsProvidersRouteImport.update({
   id: "/providers",
   path: "/providers",
+  getParentRoute: () => SettingsRoute,
+} as any);
+const SettingsPermissionsRoute = SettingsPermissionsRouteImport.update({
+  id: "/permissions",
+  path: "/permissions",
   getParentRoute: () => SettingsRoute,
 } as any);
 const SettingsKeybindingsRoute = SettingsKeybindingsRouteImport.update({
@@ -138,6 +144,7 @@ export interface FileRoutesByFullPath {
   "/settings/general": typeof SettingsGeneralRoute;
   "/settings/host": typeof SettingsHostRoute;
   "/settings/keybindings": typeof SettingsKeybindingsRoute;
+  "/settings/permissions": typeof SettingsPermissionsRoute;
   "/settings/providers": typeof SettingsProvidersRoute;
   "/settings/service": typeof SettingsServiceRoute;
   "/settings/shell": typeof SettingsShellRoute;
@@ -157,6 +164,7 @@ export interface FileRoutesByTo {
   "/settings/general": typeof SettingsGeneralRoute;
   "/settings/host": typeof SettingsHostRoute;
   "/settings/keybindings": typeof SettingsKeybindingsRoute;
+  "/settings/permissions": typeof SettingsPermissionsRoute;
   "/settings/providers": typeof SettingsProvidersRoute;
   "/settings/service": typeof SettingsServiceRoute;
   "/settings/shell": typeof SettingsShellRoute;
@@ -179,6 +187,7 @@ export interface FileRoutesById {
   "/settings/general": typeof SettingsGeneralRoute;
   "/settings/host": typeof SettingsHostRoute;
   "/settings/keybindings": typeof SettingsKeybindingsRoute;
+  "/settings/permissions": typeof SettingsPermissionsRoute;
   "/settings/providers": typeof SettingsProvidersRoute;
   "/settings/service": typeof SettingsServiceRoute;
   "/settings/shell": typeof SettingsShellRoute;
@@ -202,6 +211,7 @@ export interface FileRouteTypes {
     | "/settings/general"
     | "/settings/host"
     | "/settings/keybindings"
+    | "/settings/permissions"
     | "/settings/providers"
     | "/settings/service"
     | "/settings/shell"
@@ -221,6 +231,7 @@ export interface FileRouteTypes {
     | "/settings/general"
     | "/settings/host"
     | "/settings/keybindings"
+    | "/settings/permissions"
     | "/settings/providers"
     | "/settings/service"
     | "/settings/shell"
@@ -242,6 +253,7 @@ export interface FileRouteTypes {
     | "/settings/general"
     | "/settings/host"
     | "/settings/keybindings"
+    | "/settings/permissions"
     | "/settings/providers"
     | "/settings/service"
     | "/settings/shell"
@@ -332,6 +344,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof SettingsProvidersRouteImport;
       parentRoute: typeof SettingsRoute;
     };
+    "/settings/permissions": {
+      id: "/settings/permissions";
+      path: "/permissions";
+      fullPath: "/settings/permissions";
+      preLoaderRoute: typeof SettingsPermissionsRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
     "/settings/keybindings": {
       id: "/settings/keybindings";
       path: "/keybindings";
@@ -417,6 +436,7 @@ interface SettingsRouteChildren {
   SettingsGeneralRoute: typeof SettingsGeneralRoute;
   SettingsHostRoute: typeof SettingsHostRoute;
   SettingsKeybindingsRoute: typeof SettingsKeybindingsRoute;
+  SettingsPermissionsRoute: typeof SettingsPermissionsRoute;
   SettingsProvidersRoute: typeof SettingsProvidersRoute;
   SettingsServiceRoute: typeof SettingsServiceRoute;
   SettingsShellRoute: typeof SettingsShellRoute;
@@ -431,6 +451,7 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsGeneralRoute: SettingsGeneralRoute,
   SettingsHostRoute: SettingsHostRoute,
   SettingsKeybindingsRoute: SettingsKeybindingsRoute,
+  SettingsPermissionsRoute: SettingsPermissionsRoute,
   SettingsProvidersRoute: SettingsProvidersRoute,
   SettingsServiceRoute: SettingsServiceRoute,
   SettingsShellRoute: SettingsShellRoute,

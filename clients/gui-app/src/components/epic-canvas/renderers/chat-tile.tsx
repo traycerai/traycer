@@ -21,6 +21,7 @@ import type {
   BackgroundItem,
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
+import type { RuntimeApprovalDecision } from "@traycer/protocol/host/agent/gui/agent-runtime";
 import type { WorktreeBinding } from "@traycer/protocol/host/worktree-schemas";
 import {
   ChatMessages,
@@ -1198,14 +1199,14 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   // share one canonical surface. Inline rendering for pending approvals
   // is suppressed; resolved approvals stay inline as turn history.
   const dispatchApprovalDecision = useCallback(
-    (approvalId: string, approved: boolean) => {
-      chatActions.approvalDecision(approvalId, { approved });
+    (approvalId: string, decision: RuntimeApprovalDecision) => {
+      chatActions.approvalDecision(approvalId, decision);
     },
     [chatActions],
   );
   const dispatchFileEditApprovalDecision = useCallback(
-    (approvalId: string, approved: boolean) => {
-      chatActions.fileEditApprovalDecision(approvalId, { approved });
+    (approvalId: string, decision: RuntimeApprovalDecision) => {
+      chatActions.fileEditApprovalDecision(approvalId, decision);
     },
     [chatActions],
   );
@@ -1469,18 +1470,32 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     [pendingInterview, handleInterviewAnswer, handleInterviewError],
   );
 
+  // "Auto-accept edits" on a file-edit card flips this chat/epic into
+  // `auto_accept_edits` mode via the same path the composer selector uses:
+  // persisted, epic-defaulted (composer-run-settings), and applied to the live
+  // turn. One toggle covers every edit in the epic — no per-directory rule.
+  const handleAutoAcceptEdits = useCallback((): void => {
+    if (currentComposerSettings.permissionMode === "auto_accept_edits") return;
+    handleComposerSettingsChange({
+      ...currentComposerSettings,
+      permissionMode: "auto_accept_edits",
+    });
+  }, [currentComposerSettings, handleComposerSettingsChange]);
+
   const lowerApprovals = useMemo(
     () => ({
       pendingFileEditApprovals: state.pendingFileEditApprovals,
       pendingApprovals: state.pendingApprovals,
       onFileEditDecision: dispatchFileEditApprovalDecision,
       onApprovalDecision: dispatchApprovalDecision,
+      onAutoAcceptEdits: handleAutoAcceptEdits,
     }),
     [
       state.pendingFileEditApprovals,
       state.pendingApprovals,
       dispatchFileEditApprovalDecision,
       dispatchApprovalDecision,
+      handleAutoAcceptEdits,
     ],
   );
 

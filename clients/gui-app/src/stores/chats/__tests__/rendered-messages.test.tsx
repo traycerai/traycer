@@ -2771,6 +2771,8 @@ describe("useRenderedMessages", () => {
               kind: "tool",
               planId: null,
               actions: [],
+              suggestedRules: [],
+              commandPreview: null,
             },
           ],
           runStatus: "running",

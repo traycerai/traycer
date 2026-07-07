@@ -93,7 +93,8 @@ function ResolvedApprovalHeader(props: {
   decision: ApprovalDecision;
 }) {
   const { label, inputSummary, decision } = props;
-  const verdictLabel = decision.approved ? "Approved" : "Denied";
+  // Auto-approved is still an approval — a plain check reads cleaner than a
+  // shield. Only the denied case diverges to an ✕.
   const VerdictIcon = decision.approved ? Check : X;
   return (
     <>
@@ -110,7 +111,7 @@ function ResolvedApprovalHeader(props: {
           decision.approved ? "text-foreground/85" : "text-destructive",
         )}
       >
-        {verdictLabel}
+        {decision.approved ? "Approved" : "Denied"}
       </span>
       <span aria-hidden className="shrink-0 text-muted-foreground/40">
         ·
