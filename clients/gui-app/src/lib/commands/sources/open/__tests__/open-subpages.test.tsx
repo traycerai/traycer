@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, renderHook } from "@testing-library/react";
-import type { WorktreeBindingSelectorRow } from "@traycer/protocol/host";
 import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
 import type { CommandContext, CommandItem } from "@/lib/commands/types";
 import type { KeybindingRouter } from "@/lib/keybindings/dispatch";
@@ -39,27 +38,11 @@ const latestConversationWorkspaceSeedMock = vi.hoisted(() => ({
 latestConversationWorkspaceSeedMock.seed.intent =
   latestConversationWorkspaceSeedMock.intent;
 
-const terminalBindingsMock = vi.hoisted(() => ({
-  rows: [
-    {
-      hostId: "host-2",
-      runningDir: "/work/traycer-wt/feature-x",
-      workspacePath: "/work/traycer",
-      worktreePath: "/work/traycer-wt/feature-x",
-      mode: "worktree",
-      isGitRepo: true,
-      repoIdentifier: { owner: "traycer", repo: "traycer" },
-      branch: "feature-x",
-      isPrimary: false,
-      isImported: false,
-      setupState: "not_required",
-      disabledReason: null,
-      sources: [],
-    },
-  ] satisfies WorktreeBindingSelectorRow[],
-}));
-
-function chat(id: string, title: string): ChatProjection {
+function chat(
+  id: string,
+  title: string,
+  hostId: string | null,
+): ChatProjection {
   return {
     id,
     title,
@@ -67,7 +50,7 @@ function chat(id: string, title: string): ChatProjection {
     createdAt: 0,
     updatedAt: 0,
     userId: null,
-    hostId: "chat-host",
+    hostId,
     isTitleEditedByUser: false,
     settings: null,
   };
@@ -107,7 +90,16 @@ function artifact(id: string, title: string): ArtifactProjection {
 
 const FAKE_PROJECTION: EpicProjectedSlices = {
   ...EMPTY_PROJECTED_SLICES,
-  chats: { allIds: ["c1"], byId: { c1: chat("c1", "Chat One") } },
+  chats: {
+    allIds: ["c1", "c2"],
+    byId: {
+      // Lives on a different host than the active one ("default-host") -
+      // should carry a host badge.
+      c1: chat("c1", "Chat One", "chat-host"),
+      // Lives on the active host - no badge.
+      c2: chat("c2", "Chat Two", "default-host"),
+    },
+  },
   tuiAgents: { allIds: ["a1"], byId: { a1: agent("a1", "Agent One") } },
   artifacts: { allIds: ["s1"], byId: { s1: artifact("s1", "Spec One") } },
 };
@@ -139,11 +131,21 @@ vi.mock("@/hooks/worktree/use-latest-conversation-workspace-seed", () => ({
   useLatestConversationWorkspaceSeed: () =>
     latestConversationWorkspaceSeedMock.seed,
 }));
-vi.mock("@/hooks/worktree/use-worktree-list-bindings-for-epic-query", () => ({
-  useWorktreeListBindingsForEpic: () => ({
-    data: { rows: terminalBindingsMock.rows },
-    isPending: false,
-    isError: false,
+// chats-subpage resolves a mismatched chat's hostId to a friendly label; a
+// host id absent from this list (e.g. an unlisted/offline host) falls back to
+// the raw id in the badge.
+vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
+  useHostDirectoryList: () => ({
+    data: [
+      {
+        hostId: "chat-host",
+        label: "Other Mac",
+        kind: "remote",
+        websocketUrl: null,
+        version: null,
+        status: "available",
+      },
+    ],
   }),
 }));
 vi.mock("@/hooks/terminal/use-terminal-list-query", () => ({
@@ -185,6 +187,7 @@ import { useTerminalsOpenerItems } from "@/lib/commands/sources/open/terminals-s
 import { useArtifactsOpenerItems } from "@/lib/commands/sources/open/artifacts-subpage";
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
+import { useNewTerminalModalOpenStore } from "@/stores/epics/new-terminal-modal-open-store";
 
 function noopRouter(): KeybindingRouter {
   return {
@@ -226,14 +229,6 @@ function runById(items: ReadonlyArray<CommandItem>, id: string): void {
   void item.run(CTX);
 }
 
-function renderSubpageItems(item: CommandItem): ReadonlyArray<CommandItem> {
-  if (item.subpage === null) throw new Error(`${item.id} has no subpage`);
-  const subpage = item.subpage;
-  return renderHook<ReadonlyArray<CommandItem>, unknown>(() =>
-    subpage.useItems(CTX),
-  ).result.current;
-}
-
 function lastTileOpen(): OpenTileIntoTargetGroupArgs {
   const call = spies.openTileIntoTargetGroup.mock.calls.at(-1);
   if (call === undefined) throw new Error("openTileIntoTargetGroup not called");
@@ -245,6 +240,7 @@ afterEach(() => {
   vi.clearAllMocks();
   useNewConversationModalOpenStore.getState().close();
   useNewConversationModalStore.getState().resetForTests();
+  useNewTerminalModalOpenStore.getState().close();
 });
 
 describe("Chats opener sub-page", () => {
@@ -275,26 +271,44 @@ describe("Chats opener sub-page", () => {
     expect(opened.ref.id).toBe("c1");
     expect(opened.ref.type).toBe("chat");
   });
+
+  it("badges a chat whose hostId differs from the active host, using the directory label", () => {
+    const items = renderItems(useChatsOpenerItems);
+    const mismatched = items.find((i) => i.id === "open:chats:c1");
+    expect(mismatched?.hostBadge).toBe("Other Mac");
+  });
+
+  it("does not badge a chat whose hostId matches the active host", () => {
+    const items = renderItems(useChatsOpenerItems);
+    const matched = items.find((i) => i.id === "open:chats:c2");
+    expect(matched?.hostBadge).toBeUndefined();
+  });
 });
 
 describe("Terminals opener sub-page", () => {
-  it("pins New terminal first, then opens a picked folder into the target", () => {
+  it("Create new terminal opens the palette's terminal-creation dialog for the target group, instead of a folder sub-page", () => {
     const items = renderItems(useTerminalsOpenerItems);
     const newTerminal = items[0];
     expect(newTerminal.id).toBe("open:terminals:new");
-    expect(newTerminal.subpage).not.toBeNull();
-    const folderItems = renderSubpageItems(newTerminal);
-    runById(
-      folderItems,
-      "open:terminals:new:host-2:%2Fwork%2Ftraycer-wt%2Ffeature-x",
-    );
-    const created = lastTileOpen();
-    expect(created.groupId).toBe("group-1");
-    expect(created.ref.type).toBe("terminal");
-    if (created.ref.type !== "terminal") throw new Error("expected terminal");
-    expect(created.ref.hostId).toBe("host-2");
-    expect(created.ref.cwd).toBe("/work/traycer-wt/feature-x");
-    expect(created.ref.name).toBe("New Terminal");
+    expect(newTerminal.label).toBe("Create new terminal");
+    expect(newTerminal.subpage).toBeNull();
+
+    runById(items, "open:terminals:new");
+
+    expect(useNewTerminalModalOpenStore.getState().request).toEqual({
+      epicId: "epic-1",
+      tabId: "tab-1",
+      groupId: "group-1",
+    });
+  });
+
+  it("opens an existing terminal into the target group, with no host badge", () => {
+    const items = renderItems(useTerminalsOpenerItems);
+    const existingItem = items.find((i) => i.id === "open:terminals:term-1");
+    // `terminal.list` is only ever queried against the active host, so every
+    // listed session is already on it - never mismatched, never badged.
+    expect(existingItem?.hostBadge).toBeUndefined();
+
     runById(items, "open:terminals:term-1");
     const existing = lastTileOpen();
     expect(existing.ref.id).toBe("term-1");

@@ -89,13 +89,19 @@ export function openerSubpageLeaf(args: OpenerSubpageLeafArgs): CommandItem {
   };
 }
 
-/** Leaf for an already-existing tile ref: opens a fresh instance in target. */
+/**
+ * Leaf for an already-existing tile ref: opens a fresh instance in target.
+ * `hostBadge` is the row's trailing host indicator (null when the ref's
+ * resolved host matches the active host, or the category is host-agnostic) -
+ * see `CommandItem.hostBadge`.
+ */
 export function openerExistingLeaf(
   categoryId: string,
   ctx: CommandContext,
   ref: EpicCanvasTileRef,
+  hostBadge: string | null,
 ): CommandItem {
-  return openerActionLeaf({
+  const leaf = openerActionLeaf({
     // Row id is keyed on the stable content id (unique among a category's
     // existing items); the ref's instanceId is a placeholder re-minted by
     // openTileInPane on open.
@@ -109,4 +115,5 @@ export function openerExistingLeaf(
         ref,
       }),
   });
+  return hostBadge === null ? leaf : { ...leaf, hostBadge };
 }
