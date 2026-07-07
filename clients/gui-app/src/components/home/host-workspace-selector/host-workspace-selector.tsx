@@ -103,7 +103,6 @@ import {
   workspaceRunBranchLabel,
 } from "./workspace-run-item";
 import { workspaceFolderName } from "@/lib/worktree/workspace-folder-name";
-import { appLogger } from "@/lib/logger";
 
 /**
  * `home` swaps the bound directory; `chat` clones the chat on switch;
@@ -343,7 +342,6 @@ export function ActiveHostWorkspaceControls(
             Workspaces
           </DropdownMenuLabel>
           <HomeWorkspaceRows
-            activeHostId={activeHostId}
             workspaceSource={workspaceSource}
             resolvedFolders={resolved.folders}
             activeHostClient={activeHostClient}
@@ -371,7 +369,6 @@ export function ActiveHostWorkspaceControls(
   );
   return (
     <HomeWorkspaceRows
-      activeHostId={activeHostId}
       workspaceSource={workspaceSource}
       resolvedFolders={resolved.folders}
       activeHostClient={activeHostClient}
@@ -398,7 +395,6 @@ function fixedUnavailableHostEntry(
 }
 
 function HomeWorkspaceRows(props: {
-  readonly activeHostId: string | null;
   readonly workspaceSource: HomeWorkspaceSource;
   readonly resolvedFolders: ReadonlyArray<ResolvedFolder>;
   readonly activeHostClient: HostClient<HostRpcRegistry> | null;
@@ -549,36 +545,6 @@ function HomeWorkspaceRows(props: {
     options: { enabled: true },
   });
 
-  useEffect(() => {
-    appLogger.debug("[workspace-selector] folder metadata resolution", {
-      activeHostId: props.activeHostId,
-      folderCount: resolvedFolders.length,
-      folders: resolvedFolders.map((entry) => ({
-        kind: entry.kind,
-        path: entry.path,
-        repoIdentifier: repoIdentifierLogValue(
-          repoIdentifierForResolvedFolder(entry),
-        ),
-      })),
-      queriedPaths: queryableFolderPaths,
-      summaryFetching: summariesQuery.isFetching,
-      summaryPending: summariesQuery.isPending,
-      summaries:
-        summariesQuery.data?.workspaces.map((summary) => ({
-          path: summary.workspacePath,
-          isGitRepo: summary.isGitRepo,
-          repoIdentifier: repoIdentifierLogValue(summary.repoIdentifier),
-          worktreeCount: summary.worktrees.length,
-        })) ?? [],
-    });
-  }, [
-    props.activeHostId,
-    queryableFolderPaths,
-    resolvedFolders,
-    summariesQuery.data,
-    summariesQuery.isFetching,
-    summariesQuery.isPending,
-  ]);
   const branchesByValidationPath = useMemo<
     ReadonlyMap<string, ReadonlyArray<WorktreeBranch> | null>
   >(() => {
@@ -910,11 +876,16 @@ function workspaceRunItemForResolvedFolder(input: {
     if (unresolvedItem !== null) return unresolvedItem;
   }
 
-  const capturedEntry = currentCapturedEntry(
+  const capturedEntryForPath = currentCapturedEntry(
     input.workspaceSource.capturedIntent,
     input.entry.path,
   );
-  const mode = deriveHomeRowMode(capturedEntry, summary?.isGitRepo ?? false);
+  const isGitRepo = summary?.isGitRepo ?? false;
+  const capturedEntry = supportedCapturedEntryForSummary(
+    capturedEntryForPath,
+    isGitRepo,
+  );
+  const mode = deriveHomeRowMode(capturedEntry, isGitRepo);
   const defaultNewBranchName =
     input.defaultBranchByPath[input.entry.path] ?? "";
   const currentBranch = branchForSummary(summary);
@@ -939,7 +910,7 @@ function workspaceRunItemForResolvedFolder(input: {
     unresolved: false,
     metadataPending: summary === null && input.isFetchingSummaries,
     missing: false,
-    isGitRepo: summary?.isGitRepo ?? false,
+    isGitRepo,
     mode,
     branchLabel,
     hoverLabel: workspaceRunHoverLabel(
@@ -987,10 +958,10 @@ function workspaceRunItemForUnresolvedFolder(input: {
   readonly summary: WorktreeWorkspaceSummary | null;
   readonly workspaceSource: HomeWorkspaceSource;
 }): WorkspaceRunItem | null {
-  if (input.summary !== null && input.summary.isGitRepo) return null;
+  if (input.summary !== null) return null;
   const onRemove = (): void =>
     input.workspaceSource.removeFolder(input.entry.path);
-  if (input.summary === null && input.isFetchingSummaries) {
+  if (input.isFetchingSummaries) {
     return pendingWorkspaceRunItem({
       path: input.entry.path,
       name: input.entry.name,
@@ -1017,6 +988,14 @@ function currentCapturedEntry(
       (intentEntry) => intentEntry.workspacePath === workspacePath,
     ) ?? null
   );
+}
+
+function supportedCapturedEntryForSummary(
+  capturedEntry: WorktreeFolderIntent | null,
+  isGitRepo: boolean,
+): WorktreeFolderIntent | null {
+  if (isGitRepo) return capturedEntry;
+  return capturedEntry?.kind === "local" ? capturedEntry : null;
 }
 
 function emitHomeRowMode(input: {
@@ -1160,13 +1139,6 @@ function repoIdentifierForResolvedFolder(
   entry: ResolvedFolder,
 ): WorktreeWorkspaceSummary["repoIdentifier"] {
   return entry.kind === "local-only" ? null : entry.repoIdentifier;
-}
-
-function repoIdentifierLogValue(
-  repoIdentifier: WorktreeWorkspaceSummary["repoIdentifier"],
-): string | null {
-  if (repoIdentifier === null) return null;
-  return `${repoIdentifier.owner}/${repoIdentifier.repo}`;
 }
 
 function branchForSummary(
@@ -2092,7 +2064,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
 // No staged pick yet (`capturedEntry === null`): a git folder reflects the
 // default (new worktree); a non-git folder can only be Local. The seeding effect
 // stages a pick shortly after mount, so this is the transient pre-seed state. A
-// staged entry's own kind always wins.
+// supported staged entry's own kind wins.
 function deriveHomeRowMode(
   capturedEntry: WorktreeFolderIntent | null,
   isGitRepo: boolean,

@@ -95,6 +95,15 @@ const GIT_SUMMARY: WorktreeWorkspaceSummary = {
   scripts: null,
 };
 
+const NON_GIT_SUMMARY: WorktreeWorkspaceSummary = {
+  workspacePath: "/workspace/app",
+  isGitRepo: false,
+  repoIdentifier: null,
+  mainBranch: null,
+  worktrees: [],
+  scripts: null,
+};
+
 vi.mock("@/components/ui/select", () => ({
   Select: (props: { readonly children: ReactNode }) => (
     <div>{props.children}</div>
@@ -279,6 +288,40 @@ describe("landing workspace summary empty state", () => {
     expect(screen.queryByText("Unavailable")).toBeNull();
     expect(screen.getByTestId("folder-location-trigger").textContent).toContain(
       "New worktree",
+    );
+
+    queryClient.clear();
+  });
+
+  it("renders unresolved folders with non-git disk metadata as local-only folders", async () => {
+    mocks.resolvedWorkspace.current = {
+      folders: [
+        {
+          kind: "unresolved",
+          path: "/workspace/app",
+          name: "app",
+          repoIdentifier: { owner: "acme", repo: "app" },
+        },
+      ],
+    };
+    mocks.summariesQuery.current = {
+      data: { workspaces: [NON_GIT_SUMMARY] },
+      isFetching: false,
+      isPending: false,
+      isLoading: false,
+    };
+
+    const queryClient = renderControl("stacked");
+    const trigger = screen.getByTestId("folder-location-trigger");
+
+    expect(screen.queryByText("Unavailable")).toBeNull();
+    expect(screen.queryByTestId("folder-row-locate")).toBeNull();
+    expect(trigger.textContent).toContain("Local");
+    expect(trigger.getAttribute("aria-disabled")).toBe("true");
+
+    fireEvent.focus(trigger);
+    expect((await screen.findByRole("tooltip")).textContent).toContain(
+      "Worktrees require a Git repository",
     );
 
     queryClient.clear();
