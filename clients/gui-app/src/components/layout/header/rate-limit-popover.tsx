@@ -98,17 +98,6 @@ function railTabProviderId(tab: RailTabDescriptor): ProviderId {
   return tab.kind === "traycer" ? "traycer" : tab.providerId;
 }
 
-function traycerRateLimitUsageQueryKey(
-  hostId: string | null,
-  accountContext: AccountContext,
-) {
-  return queryKeys.hostMethod<HostRpcRegistry, "host.getRateLimitUsage">(
-    hostId,
-    "host.getRateLimitUsage",
-    { accountContext },
-  );
-}
-
 function useTraycerSubscription() {
   const query = useAuthUser();
   const storedAccountContext = useAccountContextStore((s) => s.accountContext);
@@ -537,7 +526,7 @@ function RateLimitRefreshAllButton({
   const client = useHostClient();
   const traycerRateLimitUsageFetching =
     useIsFetching({
-      queryKey: traycerRateLimitUsageQueryKey(
+      queryKey: queryKeys.hostTraycerRateLimitUsage(
         hostId,
         traycerRefreshTarget.accountContext,
       ),
@@ -615,7 +604,7 @@ function RateLimitRefreshAllButton({
       void traycerRefreshTarget.refetch();
       if (traycerRefreshTarget.rateLimitBased) {
         void queryClient.invalidateQueries({
-          queryKey: traycerRateLimitUsageQueryKey(
+          queryKey: queryKeys.hostTraycerRateLimitUsage(
             hostId,
             traycerRefreshTarget.accountContext,
           ),
@@ -900,7 +889,7 @@ function TraycerRateLimitBlock({
   const overview = variant === "popover-overview";
   const rateLimitUsageFetching =
     useIsFetching({
-      queryKey: traycerRateLimitUsageQueryKey(
+      queryKey: queryKeys.hostTraycerRateLimitUsage(
         hostId,
         traycerSubscription.storedAccountContext,
       ),
@@ -929,7 +918,7 @@ function TraycerRateLimitBlock({
     await traycerSubscription.query.refetch();
     if (traycerSubscription.rateLimitBased) {
       void queryClient.invalidateQueries({
-        queryKey: traycerRateLimitUsageQueryKey(
+        queryKey: queryKeys.hostTraycerRateLimitUsage(
           hostId,
           traycerSubscription.storedAccountContext,
         ),

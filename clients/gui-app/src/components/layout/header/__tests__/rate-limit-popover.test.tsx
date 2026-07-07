@@ -24,7 +24,6 @@ import type {
   ProviderRateLimitEnvelope,
 } from "@/lib/rate-limits/rate-limit-envelope";
 import { queryKeys } from "@/lib/query-keys";
-import type { HostRpcRegistry } from "@/lib/host";
 
 type QueryResult = {
   data: ProviderRateLimitEnvelope | undefined;
@@ -356,11 +355,7 @@ function readyAuthUser(data: AuthenticatedUser): MockAuthUser {
 }
 
 function traycerUsageQueryKey() {
-  return queryKeys.hostMethod<HostRpcRegistry, "host.getRateLimitUsage">(
-    "host-1",
-    "host.getRateLimitUsage",
-    { accountContext: DEFAULT_ACCOUNT_CONTEXT },
-  );
+  return queryKeys.hostTraycerRateLimitUsage("host-1", DEFAULT_ACCOUNT_CONTEXT);
 }
 
 let onClose: () => void;
