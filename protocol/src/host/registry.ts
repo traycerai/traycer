@@ -39,6 +39,7 @@ import {
   chatSubscribeV10,
   chatSubscribeV11,
   chatSubscribeV12,
+  chatSubscribeV13,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -2633,7 +2634,7 @@ export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
   },
   "chat.subscribe": {
     1: {
-      latestMinor: 2,
+      latestMinor: 3,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -2643,6 +2644,9 @@ export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
         },
         2: {
           contract: chatSubscribeV12,
+        },
+        3: {
+          contract: chatSubscribeV13,
         },
       },
     },

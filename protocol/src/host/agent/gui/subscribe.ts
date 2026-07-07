@@ -1,8 +1,8 @@
 /**
- * `chat.subscribe@1.2` - versioned streaming-RPC contract for a single
+ * `chat.subscribe@1.3` - versioned streaming-RPC contract for a single
  * host-owned GUI chat session. `chat.subscribe@1.0`/`@1.1` (frozen, near the
  * bottom of this file) are the exact shapes shipped in earlier hosts; later
- * minors only add to them, so a `1.2` app still bridges to hosts that only know
+ * minors only add to them, so a `1.3` app still bridges to hosts that only know
  * `1.0`/`1.1`. Streams have no cross-major downgrade bridge (see
  * `stream-compat.ts`'s `canBridgeStream()`), so once a method ships, its major
  * must never move again - only additive minors.
@@ -95,6 +95,7 @@ export const chatActionSchema = z.enum([
   "deleteMessageSuffix",
   "editUserMessage",
   "stop",
+  "pauseQueue",
   "resumeQueue",
   "queueEdit",
   "queueCancel",
@@ -571,7 +572,12 @@ export type ChatSubscribeServerFrame = z.infer<
   typeof chatSubscribeServerFrameSchema
 >;
 
-export const chatSubscribeClientFrameSchema = z.discriminatedUnion("kind", [
+const pauseQueueClientFrameSchema = z.object({
+  kind: z.literal("pauseQueue"),
+  ...ownerActionFrameFields,
+});
+
+const chatSubscribeClientFrameSchemaBeforeV13Options = [
   z.object({
     kind: z.literal("send"),
     ...ownerActionFrameFields,
@@ -749,7 +755,22 @@ export const chatSubscribeClientFrameSchema = z.discriminatedUnion("kind", [
     kind: z.literal("ping"),
     ...textFrameFields,
   }),
-]);
+] as const;
+
+export const chatSubscribeClientFrameSchemaBeforeV13 = z.discriminatedUnion(
+  "kind",
+  chatSubscribeClientFrameSchemaBeforeV13Options,
+);
+
+const chatSubscribeClientFrameSchemaOptions = [
+  ...chatSubscribeClientFrameSchemaBeforeV13Options,
+  pauseQueueClientFrameSchema,
+] as const;
+
+export const chatSubscribeClientFrameSchema = z.discriminatedUnion(
+  "kind",
+  chatSubscribeClientFrameSchemaOptions,
+);
 export type ChatSubscribeClientFrame = z.infer<
   typeof chatSubscribeClientFrameSchema
 >;
@@ -1141,14 +1162,24 @@ export const chatSubscribeV11 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 1 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchema,
   serverFrameSchema: chatSubscribeServerFrameSchemaV11,
-  clientFrameSchema: chatSubscribeClientFrameSchema,
+  clientFrameSchema: chatSubscribeClientFrameSchemaBeforeV13,
 });
 
-// ─── Live `chat.subscribe@1.2` contract ────────────────────────────────────
+// ─── `chat.subscribe@1.2` contract ─────────────────────────────────────────
 
 export const chatSubscribeV12 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 2 } as const,
+  openRequestSchema: chatSubscribeOpenRequestSchema,
+  serverFrameSchema: chatSubscribeServerFrameSchema,
+  clientFrameSchema: chatSubscribeClientFrameSchemaBeforeV13,
+});
+
+// ─── Live `chat.subscribe@1.3` contract ────────────────────────────────────
+
+export const chatSubscribeV13 = defineStreamRpcContract({
+  method: "chat.subscribe",
+  schemaVersion: { major: 1, minor: 3 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchema,
   serverFrameSchema: chatSubscribeServerFrameSchema,
   clientFrameSchema: chatSubscribeClientFrameSchema,
