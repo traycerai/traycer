@@ -772,6 +772,31 @@ describe("<EpicsListPanel />", () => {
     });
   });
 
+  it("surfaces a detached-HEAD warning even when branchStatus is populated", async () => {
+    testState.worktreeCandidates = [
+      {
+        worktreePath: "/wt/detached",
+        repoLabel: "owner/repo",
+        // Detached HEAD (no branch ref) can still carry a probed branchStatus
+        // (e.g. against the workspace's default branch) - the detached hint
+        // must win regardless, since removal can orphan the commit.
+        branch: null,
+        uncommittedCount: 0,
+        branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
+        ownerEpicIds: ["epic-from-history"],
+        provenRemovable: false,
+      },
+    ];
+    renderPanel("embedded", "/");
+
+    fireEvent.click(await screen.findByTestId("epics-list-row-delete"));
+    const checkbox = await screen.findByTestId(
+      "delete-tasks-worktree-checkbox",
+    );
+    expect(checkbox.getAttribute("aria-checked")).toBe("false");
+    screen.getByText(/detached head — commits could be orphaned/i);
+  });
+
   it("omits the worktree cleanup section when there are no candidates", async () => {
     renderPanel("embedded", "/");
     fireEvent.click(await screen.findByTestId("epics-list-row-delete"));

@@ -154,6 +154,16 @@ function WorktreeCleanupRow(props: {
         {candidate.uncommittedCount === 1 ? "" : "s"} will be lost
       </span>
     );
+  } else if (candidate.branch === null) {
+    // Detached HEAD has no branch ref, so removal can orphan its commits -
+    // surface this before any branchStatus hint, which a detached row can
+    // still carry (e.g. probed against the workspace's default branch).
+    hint = (
+      <span className="mt-0.5 flex items-center gap-1 text-ui-xs text-amber-600 dark:text-amber-400">
+        <AlertTriangle className="size-3 shrink-0" aria-hidden />
+        Detached HEAD — commits could be orphaned by removal
+      </span>
+    );
   } else if (
     status !== null &&
     status.ahead !== null &&
