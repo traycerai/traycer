@@ -11,7 +11,7 @@ interface ChatControlStripProps {
   readonly canAct: boolean;
   readonly editingQueueItemId: string | null;
   readonly onQueuePause: () => string | null;
-  readonly onResumeQueue: () => void;
+  readonly onResumeQueue: () => string | null;
   readonly onQueueEdit: (item: ChatQueuedItem) => void;
   readonly onQueueCancel: (item: ChatQueuedItem) => void;
   readonly onQueueReorder: (
@@ -53,7 +53,7 @@ function QueuePanel(props: {
   readonly canAct: boolean;
   readonly editingQueueItemId: string | null;
   readonly onQueuePause: () => string | null;
-  readonly onResumeQueue: () => void;
+  readonly onResumeQueue: () => string | null;
   readonly onEdit: (item: ChatQueuedItem) => void;
   readonly onCancel: (item: ChatQueuedItem) => void;
   readonly onReorder: (

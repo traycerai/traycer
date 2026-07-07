@@ -881,7 +881,7 @@ describe("<ChatControlStrip />", () => {
         canAct
         editingQueueItemId={null}
         onQueuePause={() => null}
-        onResumeQueue={() => undefined}
+        onResumeQueue={() => null}
         onQueueEdit={() => undefined}
         onQueueCancel={() => undefined}
         onQueueReorder={() => undefined}
