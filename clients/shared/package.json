@@ -8,6 +8,9 @@
     "format": "bun x prettier --write .",
     "test": "vitest run"
   },
+  "dependencies": {
+    "zod": "catalog:"
+  },
   "devDependencies": {
     "@typescript-eslint/eslint-plugin": "catalog:",
     "@typescript-eslint/parser": "catalog:",

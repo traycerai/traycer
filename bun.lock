@@ -184,6 +184,9 @@
     },
     "clients/shared": {
       "name": "@traycer-clients/shared",
+      "dependencies": {
+        "zod": "catalog:",
+      },
       "devDependencies": {
         "@typescript-eslint/eslint-plugin": "catalog:",
         "@typescript-eslint/parser": "catalog:",
