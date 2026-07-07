@@ -71,6 +71,7 @@ const NODES: ReadonlyArray<EpicCanvasTileRef> = [
     id: "terminal-1",
     instanceId: "terminal-inst",
     type: "terminal",
+    titleSource: "default",
     cwd: "/tmp",
   },
   {

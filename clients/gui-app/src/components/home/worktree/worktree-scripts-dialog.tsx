@@ -98,6 +98,7 @@ function WorktreeScriptsDialogBody(props: {
     HostRpcRegistry,
     "worktree.listAllForHost"
   >({
+    cacheKeyIdentity: undefined,
     client: context.hostClient,
     method: "worktree.listAllForHost",
     params: {},
@@ -128,6 +129,7 @@ function WorktreeScriptsDialogBody(props: {
     HostRpcRegistry,
     "worktree.listByWorkspacePaths"
   >({
+    cacheKeyIdentity: undefined,
     client: context.hostClient,
     method: "worktree.listByWorkspacePaths",
     params: {

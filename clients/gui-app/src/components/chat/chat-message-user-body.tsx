@@ -19,10 +19,23 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import type {
+  ClipboardEventHandler,
+  DragEventHandler,
+  KeyboardEvent,
+} from "react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import {
+  ComposerPromptEditor,
+  type ComposerPromptEditorHandle,
+} from "@/components/chat/composer/composer-prompt-editor";
+import { ChatComposerAttachmentsStrip } from "@/components/chat/composer/chat-composer-attachments-strip";
 import { ComposerContentRenderer } from "@/components/chat/composer/content-renderer";
+import { createComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
+import { useComposerPickerItems } from "@/components/chat/composer/picker/use-composer-picker-items";
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import {
   composerClipboardPlainText,
@@ -49,13 +62,21 @@ import {
   useChatFindForcedOpen,
   useSetChatFindForcedOpen,
 } from "@/stores/chats/chat-find-force-store-context";
-import type { ChatMessageUserActions } from "./chat-message";
+import type {
+  ChatMessageEditing,
+  ChatMessageUserActions,
+} from "./chat-message";
 import { ChatUserMessageContent } from "./chat-user-message-content";
 import { UserMessageAttachmentGallery } from "./user-message-attachment-gallery";
+import { ComposerArea } from "@/components/home/composer/composer-shell";
 import { LivePulse } from "@/components/ui/live-pulse";
 import { AgentReferenceMarkdown } from "./segments/agent-reference-markdown";
 import { SegmentCard } from "./segments/segment-card";
 import { SegmentPanel } from "./segments/segment-panel";
+
+const NOOP: () => void = () => undefined;
+const NOOP_CLIPBOARD: ClipboardEventHandler<HTMLElement> = () => undefined;
+const NOOP_DRAG: DragEventHandler<HTMLElement> = () => undefined;
 
 // Keep long prompts compact: ~3-4 lines (leading-7 ≈ 28px/line) stay visible
 // before the bubble clamps and fades, with "Show more" revealing the rest.
@@ -76,6 +97,8 @@ export function UserMessageBody({
   actions,
   message,
 }: UserBodyProps): ReactNode {
+  const editing = actions?.editing ?? null;
+
   if (message.role !== "user") {
     return (
       <>
@@ -91,6 +114,10 @@ export function UserMessageBody({
         </div>
       </>
     );
+  }
+
+  if (editing !== null) {
+    return <InlineUserMessageEditor editing={editing} />;
   }
 
   if (message.agentSenderInfo !== null) {
@@ -350,7 +377,7 @@ function UserMessageDisplayView({
         </div>
       ) : null}
       <div className="relative min-w-0 max-w-full">
-        <div className={userMessageBubbleClassName(actions)}>
+        <div className="rounded-lg border border-border/50 bg-muted/30 px-4 py-3 text-ui leading-7 text-foreground [overflow-wrap:anywhere]">
           <UserMessageAttachmentGallery
             attachments={message.attachments}
             align="start"
@@ -397,23 +424,6 @@ function UserMessageDisplayView({
         </div>
       </div>
     </div>
-  );
-}
-
-/**
- * Bubble chrome for a user prompt. Deliberately NOT input-like: a filled,
- * borderless bubble with a squared bottom-right corner (the classic sent-
- * message cue), so a short prompt sitting above the composer never reads as
- * a second text field. The edit-target variant is the transcript anchor for
- * the composer's "Editing message" pill: it highlights the message whose
- * content is currently loaded into the bottom composer.
- */
-function userMessageBubbleClassName(
-  actions: ChatMessageUserActions | null,
-): string {
-  return cn(
-    "rounded-2xl rounded-br-md bg-muted/60 px-4 py-3 text-ui leading-7 text-foreground [overflow-wrap:anywhere]",
-    actions?.isEditTarget === true && "ring-1 ring-primary/40",
   );
 }
 
@@ -483,12 +493,181 @@ function userMessageSteerBadgeLabel(badge: ChatMessageSteerBadge): string {
   return "Steered";
 }
 
+function InlineUserMessageEditor({
+  editing,
+}: {
+  editing: ChatMessageEditing;
+}): ReactNode {
+  const [pickerStore] = useState(() => createComposerPickerStore());
+  const hostClient = useTabHostClient();
+  const editorRef = useRef<ComposerPromptEditorHandle | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const focusFrameRef = useRef<number | null>(null);
+  const visibilityFrameRef = useRef<number | null>(null);
+
+  // Without this, the picker opens empty - nothing writes items into the store.
+  useComposerPickerItems({
+    pickerStore,
+    hostClient,
+    harnessId: editing.slashProviderId,
+    mentionRoots: editing.mentionRoots,
+    currentEpicId: editing.currentEpicId,
+    // The inline editor mounts only while a message is being edited - active.
+    isActive: true,
+  });
+
+  const submit = useCallback(() => {
+    if (!editing.canSubmit || editing.pending) return;
+    editing.onSubmit();
+  }, [editing]);
+
+  const cancel = useCallback(() => {
+    if (editing.pending) return;
+    editing.onCancel();
+  }, [editing]);
+
+  const removeImageAttachment = useCallback((id: string) => {
+    editorRef.current?.removeImageAttachmentById(id);
+  }, []);
+
+  const onSnapshot = useCallback(
+    (content: JsonContent, selection: { from: number; to: number }) => {
+      editing.onSnapshot(content, selection);
+      if (visibilityFrameRef.current !== null) {
+        cancelAnimationFrame(visibilityFrameRef.current);
+      }
+      visibilityFrameRef.current = requestAnimationFrame(() => {
+        visibilityFrameRef.current = null;
+        scrollIntoViewOnlyIfNeeded(containerRef.current);
+      });
+    },
+    [editing],
+  );
+
+  useLayoutEffect(() => {
+    const focusFrame = focusFrameRef;
+    const visibilityFrame = visibilityFrameRef;
+    // ComposerMenu is now caret-anchored (portal'd to body, positioned by
+    // floating-ui), so it picks the best direction at open-time on its own.
+    // No headroom-reserving scroll needed.
+    const scrollSnapshot = captureScrollSnapshot(containerRef.current);
+    let attempt = 0;
+    const focusWhenReady = (): void => {
+      editorRef.current?.focusAtEnd();
+      restoreScrollSnapshot(scrollSnapshot);
+      attempt += 1;
+      if (attempt >= 4) {
+        focusFrameRef.current = null;
+        return;
+      }
+      focusFrameRef.current = requestAnimationFrame(focusWhenReady);
+    };
+    focusWhenReady();
+    return () => {
+      if (focusFrame.current !== null) {
+        cancelAnimationFrame(focusFrame.current);
+      }
+      if (visibilityFrame.current !== null) {
+        cancelAnimationFrame(visibilityFrame.current);
+      }
+    };
+  }, []);
+  const handleEditorKeyDown = useCallback(
+    (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      cancel();
+    },
+    [cancel],
+  );
+  const editor = useMemo(
+    () => (
+      <ComposerPromptEditor
+        ref={editorRef}
+        pickerStore={pickerStore}
+        initialContent={editing.initialContent}
+        initialSelection={null}
+        slashProviderId={editing.slashProviderId}
+        isActive
+        disabled={editing.pending}
+        placeholder="Edit message"
+        editorClassName="max-h-[min(60vh,18rem)] min-h-9 overflow-y-auto text-ui leading-7 text-foreground"
+        stabilizeImageAttachmentCaret={false}
+        onSnapshot={onSnapshot}
+        onSubmit={submit}
+        onPaste={NOOP_CLIPBOARD}
+        onDragOver={NOOP_DRAG}
+        onDrop={NOOP_DRAG}
+        onKeyDown={handleEditorKeyDown}
+        onFocus={NOOP}
+        onBlur={NOOP}
+        onEditorReady={null}
+      />
+    ),
+    [editing, handleEditorKeyDown, onSnapshot, pickerStore, submit],
+  );
+  const editorSlot = useMemo(
+    () => (
+      <>
+        <ChatComposerAttachmentsStrip
+          content={editing.currentContent}
+          editingQueueItemId={null}
+          onCancelQueueEdit={null}
+          onRemoveImage={removeImageAttachment}
+        />
+        {editor}
+      </>
+    ),
+    [editing.currentContent, editor, removeImageAttachment],
+  );
+  const toolbar = useMemo(
+    () => (
+      <div className="flex justify-end gap-1 px-4 pb-3 pt-2">
+        <MessageActionButton
+          label="Cancel edit"
+          variant="secondary"
+          size="default"
+          tooltip
+          disabled={editing.pending}
+          className={undefined}
+          onClick={cancel}
+        >
+          Cancel
+        </MessageActionButton>
+        <MessageActionButton
+          label="Send edit"
+          variant="default"
+          size="default"
+          tooltip
+          disabled={!editing.canSubmit || editing.pending}
+          className={undefined}
+          onClick={submit}
+        >
+          Send
+        </MessageActionButton>
+      </div>
+    ),
+    [cancel, editing.canSubmit, editing.pending, submit],
+  );
+
+  return (
+    <div ref={containerRef} className="w-full">
+      <ComposerArea
+        pickerStore={pickerStore}
+        overlay={null}
+        editor={editorSlot}
+        toolbar={toolbar}
+      />
+    </div>
+  );
+}
+
 function MessageActionBar({
   actions,
 }: {
   actions: ChatMessageUserActions;
 }): ReactNode {
-  if (!actions.enabled) return null;
+  if (!actions.enabled && actions.editing === null) return null;
 
   if (actions.confirmingDelete) {
     return (
@@ -635,4 +814,76 @@ function MessageCopyButton({
       )}
     </MessageActionButton>
   );
+}
+
+function scrollIntoViewOnlyIfNeeded(element: HTMLElement | null): void {
+  if (element === null) return;
+  const rect = element.getBoundingClientRect();
+  const scrollContainer = nearestScrollContainer(element);
+  const containerRect = scrollContainer?.getBoundingClientRect() ?? null;
+  const viewportBottom =
+    containerRect?.bottom ??
+    window.visualViewport?.height ??
+    document.documentElement.clientHeight;
+  const viewportTop = containerRect?.top ?? 0;
+  const padding = 16;
+  if (rect.bottom > viewportBottom - padding) {
+    scrollByAmount(scrollContainer, rect.bottom - viewportBottom + padding);
+    return;
+  }
+  if (rect.top < viewportTop + padding) {
+    scrollByAmount(scrollContainer, rect.top - viewportTop - padding);
+  }
+}
+
+type ScrollSnapshot = {
+  readonly container: HTMLElement | null;
+  readonly left: number;
+  readonly top: number;
+};
+
+function captureScrollSnapshot(element: HTMLElement | null): ScrollSnapshot {
+  const scrollContainer =
+    element === null ? null : nearestScrollContainer(element);
+  if (scrollContainer === null) {
+    return { container: null, left: window.scrollX, top: window.scrollY };
+  }
+  return {
+    container: scrollContainer,
+    left: scrollContainer.scrollLeft,
+    top: scrollContainer.scrollTop,
+  };
+}
+
+function restoreScrollSnapshot(snapshot: ScrollSnapshot): void {
+  if (snapshot.container === null) {
+    window.scrollTo(snapshot.left, snapshot.top);
+    return;
+  }
+  snapshot.container.scrollLeft = snapshot.left;
+  snapshot.container.scrollTop = snapshot.top;
+}
+
+function nearestScrollContainer(element: HTMLElement): HTMLElement | null {
+  let parent = element.parentElement;
+  while (parent !== null) {
+    const overflowY = window.getComputedStyle(parent).overflowY;
+    if (
+      overflowY === "auto" ||
+      overflowY === "scroll" ||
+      overflowY === "overlay"
+    ) {
+      return parent;
+    }
+    parent = parent.parentElement;
+  }
+  return null;
+}
+
+function scrollByAmount(element: HTMLElement | null, top: number): void {
+  if (element === null) {
+    window.scrollBy({ top, behavior: "auto" });
+    return;
+  }
+  element.scrollBy({ top, behavior: "auto" });
 }

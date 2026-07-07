@@ -2,6 +2,7 @@ import "../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 
 const windowHost = window as { runnerHost?: unknown };
 
@@ -56,6 +57,12 @@ vi.mock("@/components/layout/header/rate-limit-icon", () => ({
   RateLimitIconButton: () => <div data-testid="rate-limit-header-button" />,
 }));
 
+vi.mock("@/components/resources/resource-monitor-popover", () => ({
+  ResourceMonitorPopover: () => (
+    <div data-testid="resource-monitor-header-button" />
+  ),
+}));
+
 vi.mock("@/components/auth/user-menu", () => ({
   UserMenu: () => <div data-testid="user-menu" />,
 }));
@@ -72,12 +79,14 @@ describe("<AppShell />", () => {
         { userId: "user-1", username: "test-user" },
         [],
       );
+    useSettingsStore.setState({ showGlobalResourceMonitor: true });
   });
 
   afterEach(() => {
     cleanup();
     delete windowHost.runnerHost;
     useAuthStore.getState().setSignedOut();
+    useSettingsStore.setState({ showGlobalResourceMonitor: true });
   });
 
   it("renders the signed-in app shell around routed children", () => {
@@ -88,6 +97,7 @@ describe("<AppShell />", () => {
     );
 
     expect(screen.getByTestId("user-menu")).not.toBeNull();
+    expect(screen.getByTestId("resource-monitor-header-button")).not.toBeNull();
     expect(screen.getByTestId("app-shell-child")).not.toBeNull();
     expect(screen.getByTestId("tile-find-owner-bridge")).not.toBeNull();
     expect(screen.queryByTestId("legacy-find-in-page-bar")).toBeNull();
@@ -106,5 +116,17 @@ describe("<AppShell />", () => {
     const tabRegion = screen.getByTestId("tab-strip").parentElement;
     expect(tabRegion).not.toBeNull();
     expect(tabRegion?.className).toContain("[-webkit-app-region:drag]");
+  });
+
+  it("hides the global resource monitor button when the preference is off", () => {
+    useSettingsStore.setState({ showGlobalResourceMonitor: false });
+
+    render(
+      <AppShell>
+        <div data-testid="app-shell-child" />
+      </AppShell>,
+    );
+
+    expect(screen.queryByTestId("resource-monitor-header-button")).toBeNull();
   });
 });

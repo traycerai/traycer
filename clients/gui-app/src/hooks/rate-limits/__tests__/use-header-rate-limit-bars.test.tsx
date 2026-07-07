@@ -3,12 +3,15 @@ import { cleanup, renderHook } from "@testing-library/react";
 import type {
   ProviderRateLimits,
   ProviderRateLimitWindow,
-  RateLimitUsageResponseV12,
 } from "@traycer/protocol/host";
 import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
+import type {
+  AvailableProviderRateLimits,
+  ProviderRateLimitEnvelope,
+} from "@/lib/rate-limits/rate-limit-envelope";
 
 interface MockQueryResult {
-  readonly data: RateLimitUsageResponseV12 | undefined;
+  readonly data: ProviderRateLimitEnvelope | undefined;
   readonly isError: boolean;
 }
 
@@ -31,19 +34,26 @@ vi.mock("@/lib/host", () => ({
 vi.mock("@/hooks/rate-limits/use-configured-rate-limit-providers", () => ({
   useConfiguredRateLimitProviders: () => mocks.configured,
 }));
+// Production calls `useHostQueriesWithResponseMap` (not the plain
+// `useHostQueries`) - see that hook's own doc comment - so this mock exports
+// both names with equivalent behavior; the extra `mapResponse` field
+// production passes is irrelevant to this fixture-backed double.
+function mockUseHostQueriesImpl(args: {
+  readonly requests: ReadonlyArray<{
+    readonly params: { readonly providerId: RateLimitProviderId };
+  }>;
+}) {
+  return args.requests.map(
+    (request) =>
+      mocks.results.get(request.params.providerId) ?? {
+        data: undefined,
+        isError: false,
+      },
+  );
+}
 vi.mock("@/hooks/host/use-host-queries", () => ({
-  useHostQueries: (args: {
-    readonly requests: ReadonlyArray<{
-      readonly params: { readonly providerId: RateLimitProviderId };
-    }>;
-  }) =>
-    args.requests.map(
-      (request) =>
-        mocks.results.get(request.params.providerId) ?? {
-          data: undefined,
-          isError: false,
-        },
-    ),
+  useHostQueries: mockUseHostQueriesImpl,
+  useHostQueriesWithResponseMap: mockUseHostQueriesImpl,
 }));
 
 import { useHeaderRateLimitBars } from "@/hooks/rate-limits/use-header-rate-limit-bars";
@@ -52,10 +62,18 @@ function rlWindow(usedPercent: number): ProviderRateLimitWindow {
   return { usedPercent, resetsAt: null, durationMinutes: null };
 }
 
+// A fresh, cold-start envelope wrapping a single available reading - matches
+// what production's `mapResponseToProviderRateLimitEnvelope` would produce
+// for a provider's first successful pull.
 function response(
   providerRateLimits: ProviderRateLimits,
-): RateLimitUsageResponseV12 {
-  return { totalTokens: 0, remainingTokens: 0, providerRateLimits };
+): ProviderRateLimitEnvelope {
+  return {
+    latest: providerRateLimits,
+    lastGood: providerRateLimits.available ? providerRateLimits : null,
+    lastGoodAt: providerRateLimits.available ? Date.now() : null,
+    lastFailureAt: null,
+  };
 }
 
 function setProvider(
@@ -76,7 +94,7 @@ function codexFixture(overrides: {
     primary: ProviderRateLimitWindow | null;
     secondary: ProviderRateLimitWindow | null;
   }>;
-}): ProviderRateLimits {
+}): AvailableProviderRateLimits {
   return {
     provider: "codex",
     available: true,
@@ -315,6 +333,46 @@ describe("useHeaderRateLimitBars", () => {
         codexFixture({ primary: rlWindow(65), secondary: rlWindow(15) }),
       ),
       isError: true,
+    });
+    const { result } = renderHook(() => useHeaderRateLimitBars());
+    expect(result.current).toEqual([
+      {
+        providerId: "codex",
+        windowLabel: "5h",
+        usedPercent: 65,
+        severity: "yellow",
+        degraded: true,
+      },
+      {
+        providerId: "codex",
+        windowLabel: "Weekly",
+        usedPercent: 15,
+        severity: "blue",
+        degraded: true,
+      },
+    ]);
+  });
+
+  it("shows the retained last-good reading dimmed when the envelope's latest is a transient failure (not a thrown isError)", () => {
+    // Distinct from the test above: `isError` is false here (the RPC itself
+    // succeeded) - the envelope's own `latest` reports `usage_fetch_failed`
+    // while `lastGood` retains an earlier good reading. The glyph should
+    // still show that retained reading, marked degraded.
+    setProvider("codex", "ephemeralProcess", {
+      data: {
+        latest: {
+          provider: "codex",
+          available: false,
+          reason: "usage_fetch_failed",
+        },
+        lastGood: codexFixture({
+          primary: rlWindow(65),
+          secondary: rlWindow(15),
+        }),
+        lastGoodAt: Date.now() - 90_000,
+        lastFailureAt: Date.now() - 1_000,
+      },
+      isError: false,
     });
     const { result } = renderHook(() => useHeaderRateLimitBars());
     expect(result.current).toEqual([

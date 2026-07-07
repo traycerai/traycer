@@ -26,6 +26,7 @@ export const providerIdSchema = z.enum([
   "copilot",
   "kilocode",
   "openrouter",
+  "amp",
 ]);
 export type ProviderId = z.infer<typeof providerIdSchema>;
 
@@ -44,6 +45,30 @@ export const providerIdSchemaV10 = z.enum([
 ]);
 export type ProviderIdV10 = z.infer<typeof providerIdSchemaV10>;
 
+/**
+ * Frozen provider id set as shipped in protocol v2.0 (before Amp). Used only
+ * by the frozen v2.0 `providers.list` response so an already-shipped v2.0
+ * client never receives the Amp provider; the v3.0 line adds it with a v3→v2
+ * (and v3→v1) downgrade bridge. Do not add new providers here - extend the
+ * latest `providerIdSchema` and use the existing v3 bridge instead.
+ */
+export const providerIdSchemaV20 = z.enum([
+  "claude-code",
+  "codex",
+  "opencode",
+  "cursor",
+  "traycer",
+  "grok",
+  "qwen",
+  "kiro",
+  "droid",
+  "kimi",
+  "copilot",
+  "kilocode",
+  "openrouter",
+]);
+export type ProviderIdV20 = z.infer<typeof providerIdSchemaV20>;
+
 /** Human-readable provider names, shared by the host and the GUI. */
 export const PROVIDER_DISPLAY_NAMES: Record<ProviderId, string> = {
   "claude-code": "Claude Code",
@@ -59,6 +84,7 @@ export const PROVIDER_DISPLAY_NAMES: Record<ProviderId, string> = {
   copilot: "Copilot",
   kilocode: "Kilo Code",
   openrouter: "OpenRouter",
+  amp: "Amp",
 };
 
 /**
@@ -261,28 +287,38 @@ const providerCliStateBaseShapeV10 = {
   loginCapability: providerLoginCapabilitySchema.nullable().catch(null),
 };
 
-export const providerCliStateSchemaV20 = z.object({
+export const providerCliStateSchema = z.object({
   providerId: providerIdSchema,
   ...providerCliStateBaseShape,
   auth: PROVIDER_AUTH_SCHEMA_V20,
 });
-export const providerCliStateSchema = providerCliStateSchemaV20;
-export type ProviderCliStateV20 = z.infer<typeof providerCliStateSchemaV20>;
-export type ProviderCliState = ProviderCliStateV20;
+export type ProviderCliState = z.infer<typeof providerCliStateSchema>;
 
 export const providersListRequestSchema = z.object({
   forceAuthRefresh: z.boolean().optional(),
 });
 export type ProvidersListRequest = z.infer<typeof providersListRequestSchema>;
 
+export const providersListResponseSchema = z.object({
+  providers: z.array(providerCliStateSchema),
+});
+export type ProvidersListResponse = z.infer<typeof providersListResponseSchema>;
+
+// ── Frozen protocol-v2.0 provider state + list response (before Amp) ───────
+// `providers.list` always returns every provider; v2.0 shipped without Amp, so
+// it is frozen here as actually shipped. The v3.0 line adds Amp and a v3→v2
+// (and v3→v1) downgrade bridge filters it for older callers. Do not add new
+// providers here - use the existing v3 bridge.
+export const providerCliStateSchemaV20 = providerCliStateSchema.extend({
+  providerId: providerIdSchemaV20,
+});
+export type ProviderCliStateV20 = z.infer<typeof providerCliStateSchemaV20>;
 export const providersListResponseSchemaV20 = z.object({
   providers: z.array(providerCliStateSchemaV20),
 });
-export const providersListResponseSchema = providersListResponseSchemaV20;
 export type ProvidersListResponseV20 = z.infer<
   typeof providersListResponseSchemaV20
 >;
-export type ProvidersListResponse = ProvidersListResponseV20;
 
 // Frozen protocol-v1.0 provider state + list response. The v2.0 line of
 // `providers.list` adds ACP GUI harness providers; the v2→v1 bridge filters
@@ -597,8 +633,12 @@ export function downgradeProviderAuthV20ToV10(
   }
 }
 
-export function downgradeProviderCliStateV20ToV10(
-  state: ProviderCliStateV20,
+// Accepts any latest-shaped state (v2.0 or v3.0 alike - both v2→v1 and v3→v1
+// downgrade the same way) and downgrades it to the frozen v1.0 shape. A
+// provider outside v1.0's id set (ACP GUI harnesses, Amp) simply fails the
+// `providerCliStateSchemaV10` parse below and is filtered by the caller.
+export function downgradeProviderCliStateToV10(
+  state: ProviderCliState,
 ): ProviderCliStateV10 | null {
   // `providerCliStateSchemaV10` is a `z.strictObject`, so it REJECTS any key it
   // doesn't model. Drop v2.0-only fields (here `availabilityPending`) before the
@@ -610,6 +650,20 @@ export function downgradeProviderCliStateV20ToV10(
     auth: downgradeProviderAuthV20ToV10(state.auth),
   });
   return parsed.success ? parsed.data : null;
+}
+
+// Downgrades a latest-shaped (v3.0) provider-state list to the frozen v2.0
+// shape, dropping Amp (or any future post-v2.0 provider) so an already-shipped
+// v2.0 client's strict decode never sees it. The auth-status schema is
+// unchanged between v2.0 and latest, so this is a pure filter+reparse - no
+// field remapping needed (unlike the v1.0 downgrade above).
+export function downgradeProviderCliStateListToV20(
+  states: readonly ProviderCliState[],
+): ProviderCliStateV20[] {
+  return states.flatMap((state) => {
+    const parsed = providerCliStateSchemaV20.safeParse(state);
+    return parsed.success ? [parsed.data] : [];
+  });
 }
 
 export function upgradeProviderCliStateV10ToV20(

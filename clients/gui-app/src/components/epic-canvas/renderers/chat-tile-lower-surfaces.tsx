@@ -95,6 +95,7 @@ export interface ChatLowerQueueState {
   readonly editingItem: ChatQueuedItem | null;
   readonly editingItemId: string | null;
   readonly value: ChatSessionState["queue"];
+  readonly onPause: () => string | null;
   readonly onResume: () => string | null;
   readonly onEdit: (item: ChatQueuedItem) => void;
   readonly onCancel: (item: ChatQueuedItem) => void;
@@ -122,21 +123,6 @@ export interface ChatLowerComposerState {
   /** The Location / Mode+branch / Environment chip cluster (+ context usage). */
   readonly workspaceControls: ReactNode;
   readonly workspaceAvailability: WorkspaceComposerAvailability;
-  /**
-   * True while the composer is editing a persisted message (the pencil loaded
-   * its content as the draft). The composer shows the "Editing message" pill
-   * and its submit routes to `editUserMessage` instead of a fresh send.
-   */
-  readonly messageEditActive: boolean;
-  /** Ends message-edit mode from the pill; the draft stays as typed. */
-  readonly onCancelMessageEdit: () => void;
-  /**
-   * Worktree setup is provisioning for this chat. A fresh new-message send is
-   * blocked (it would stack a second message onto the one that triggered
-   * setup); editing the pending message is still allowed. See `setupInFlight`
-   * in the chat tile.
-   */
-  readonly setupInFlight: boolean;
 }
 
 interface ComposerSurfaceModel {
@@ -314,6 +300,7 @@ export function ChatLowerInteractionSurfaces(
         editingQueueItemId={props.queue.editingItemId}
         topSpacing={pinnedStackTopSpacing}
         scrollRegionMaxHeightClass={scrollRegionMaxHeightClass}
+        onQueuePause={props.queue.onPause}
         onQueueResume={props.queue.onResume}
         onQueueEdit={props.queue.onEdit}
         onQueueCancel={props.queue.onCancel}
@@ -475,9 +462,6 @@ function LiveChatComposer(props: {
       activeTurnStatus={model.turn.activeTurnStatus}
       editingQueueItemId={model.queue.editingItem?.queueItemId ?? null}
       onCancelQueueEdit={model.queue.onCancelEdit}
-      messageEditActive={model.composer.messageEditActive}
-      onCancelMessageEdit={model.composer.onCancelMessageEdit}
-      setupInFlight={model.composer.setupInFlight}
       hasPendingApprovals={props.hasPendingApprovals}
       stopDisabled={model.turn.stopDisabled}
       onStopTurn={model.turn.onStopTurn}
@@ -536,9 +520,6 @@ export function InertChatComposer(props: {
       activeTurnStatus={null}
       editingQueueItemId={null}
       onCancelQueueEdit={null}
-      messageEditActive={false}
-      onCancelMessageEdit={NOOP_CANCEL_MESSAGE_EDIT}
-      setupInFlight={false}
       hasPendingApprovals={false}
       stopDisabled
       onStopTurn={null}
@@ -549,8 +530,6 @@ export function InertChatComposer(props: {
     />
   );
 }
-
-const NOOP_CANCEL_MESSAGE_EDIT = (): void => undefined;
 
 function ComposerSlotShell(props: {
   readonly children: ReactNode;

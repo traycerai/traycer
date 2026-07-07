@@ -247,6 +247,19 @@ export type KilocodeChatSessionAnchor = z.infer<
   typeof kilocodeChatSessionAnchorSchema
 >;
 
+// Amp resumes at thread granularity only — `execute`'s `options.continue`
+// reloads the whole Amp thread, with no per-message truncation/fork point.
+// `sessionId` is the Amp thread id.
+export const ampChatSessionAnchorSchema = z.object({
+  harnessId: z.literal("amp"),
+  hostId: z.string(),
+  sessionId: z.string(),
+  sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
+  createdAt: z.number(),
+  coveredUntilMessageId: z.string().nullable().default(null),
+});
+export type AmpChatSessionAnchor = z.infer<typeof ampChatSessionAnchorSchema>;
+
 export const chatSessionAnchorSchema = z.discriminatedUnion("harnessId", [
   claudeChatSessionAnchorSchema,
   codexChatSessionAnchorSchema,
@@ -261,5 +274,6 @@ export const chatSessionAnchorSchema = z.discriminatedUnion("harnessId", [
   kimiChatSessionAnchorSchema,
   copilotChatSessionAnchorSchema,
   kilocodeChatSessionAnchorSchema,
+  ampChatSessionAnchorSchema,
 ]);
 export type ChatSessionAnchor = z.infer<typeof chatSessionAnchorSchema>;

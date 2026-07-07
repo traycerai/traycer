@@ -18,6 +18,7 @@ export function useAgentSelectionGuideGlobalOnboardingDraftQuery(): UseQueryResu
 > {
   const client = useHostClient();
   return useHostQuery({
+    cacheKeyIdentity: undefined,
     client,
     method: "agent.selectionGuide.getGlobalOnboardingDraft",
     params: GLOBAL_ONBOARDING_DRAFT_PARAMS,

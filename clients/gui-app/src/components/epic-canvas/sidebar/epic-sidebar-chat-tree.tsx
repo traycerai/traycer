@@ -23,6 +23,8 @@ import {
 } from "@/lib/epic-tree-cascade";
 import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { cn } from "@/lib/utils";
+import { OwnerResourceChip } from "@/components/resources/resource-usage-chip";
+import type { ResourceOwnerKindWire } from "@traycer/protocol/host/resources/subscribe";
 import { ChatProgressIcon } from "@/components/chat/chat-progress-icon";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -1114,6 +1116,16 @@ interface ChatRowButtonProps {
   readonly onToggleSelection: (id: string) => void;
 }
 
+// Only chats and terminal-agents own a resource-tracked process tree; other
+// node kinds (specs, tickets, …) never carry a resource snapshot.
+function resourceOwnerKindForNode(
+  artifactType: EpicNodeKind,
+): ResourceOwnerKindWire | null {
+  if (artifactType === "chat") return "chat";
+  if (artifactType === "terminal-agent") return "terminal-agent";
+  return null;
+}
+
 function ChatRowButton(props: ChatRowButtonProps) {
   const {
     epicId,
@@ -1137,6 +1149,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
     isSelected,
     onToggleSelection,
   } = props;
+  const resourceOwnerKind = resourceOwnerKindForNode(artifactType);
   const dragData = useMemo<EpicCanvasSidebarNodeDragData>(
     () => ({
       kind: SIDEBAR_NODE_DND_TYPE,
@@ -1162,6 +1175,9 @@ function ChatRowButton(props: ChatRowButtonProps) {
       onToggle(event);
     },
     [onToggle],
+  );
+  const showNavigatorResourceStats = useSettingsStore(
+    (state) => state.showNavigatorResourceStats,
   );
 
   // A chat row's "+" (add child) and "⋯" (more menu) are both gated by canEdit
@@ -1250,6 +1266,14 @@ function ChatRowButton(props: ChatRowButtonProps) {
           iconStyle={iconStyle}
         />
         <span className="min-w-0 flex-1 truncate">{nodeName}</span>
+        {resourceOwnerKind === null || !showNavigatorResourceStats ? null : (
+          <OwnerResourceChip
+            epicId={epicId}
+            kind={resourceOwnerKind}
+            ownerId={nodeId}
+            className={undefined}
+          />
+        )}
       </span>
     </button>
   );

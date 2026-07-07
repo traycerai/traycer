@@ -53,6 +53,10 @@ export const terminalSessionInfoSchema = z.object({
   // label (basename of cwd / shellCommand)". Lifetime is the session's -
   // PTYs don't survive host restarts, so neither does the title.
   title: z.string().nullable(),
+  // Host-observed foreground process name for the PTY. `null` means the
+  // terminal is idle or the host cannot determine a foreground process.
+  // Optional so clients remain compatible with already-shipped hosts.
+  activeProcessName: z.string().nullable().optional(),
 });
 export type TerminalSessionInfo = z.infer<typeof terminalSessionInfoSchema>;
 

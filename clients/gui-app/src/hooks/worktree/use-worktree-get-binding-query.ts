@@ -25,6 +25,7 @@ export function useWorktreeGetBinding(args: {
   HostRpcError
 > {
   return useHostQuery<HostRpcRegistry, "worktree.getBinding">({
+    cacheKeyIdentity: undefined,
     client: args.client,
     method: "worktree.getBinding",
     params: {

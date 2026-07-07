@@ -22,6 +22,7 @@ const TERMINAL: EpicCanvasTileRef = {
   instanceId: "inst-term-1",
   type: "terminal",
   name: "Terminal",
+  titleSource: "manual",
   hostId: "host-A",
   cwd: "/work/repo",
 };

@@ -103,6 +103,7 @@ export function NewTerminalPicker(props: NewTerminalPickerProps) {
       instanceId: uuidv4(),
       type: "terminal",
       name: DEFAULT_TERMINAL_TITLE,
+      titleSource: "default",
       hostId: launchTarget.hostId,
       cwd: launchTarget.cwd,
     });

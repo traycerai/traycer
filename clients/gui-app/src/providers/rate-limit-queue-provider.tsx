@@ -8,6 +8,7 @@ import {
   configureRateLimitQueue,
   enqueueRateLimitFetch,
 } from "@/lib/rate-limits/ephemeral-fetch-queue";
+import { EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS } from "@/lib/rate-limits/rate-limit-timing";
 
 /**
  * Background poll cadence for the `ephemeralProcess` lane (codex, claude-code),
@@ -16,9 +17,11 @@ import {
  * same background freshness regardless of fetch cost class. Still slack
  * relative to a plain GET (subprocess spawns are expensive) - the serial
  * queue's 30s freshness floor, turn-completion enqueues, and manual refresh
- * all keep data fresher between ticks.
+ * all keep data fresher between ticks. Defined in `rate-limit-timing.ts`
+ * (shared with `ephemeral-fetch-queue.ts`'s cool-down) and re-exported here so
+ * existing importers of this module are unaffected.
  */
-export const EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS = 5 * 60 * 1000;
+export { EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS };
 
 /**
  * The long-lived app-shell owner of the rate-limit data layer (no rendered

@@ -427,6 +427,7 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
         </div>
         {isEpicArtifactKind(node.type) ? (
           <ArtifactChildIndex
+            epicId={epicId}
             parentId={node.id}
             viewTabId={viewTabId}
             hostId={node.hostId}

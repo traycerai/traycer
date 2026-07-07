@@ -1,15 +1,18 @@
 import type { QueryClient } from "@tanstack/react-query";
 import type { AccountContext } from "@traycer/protocol/common/schemas";
-import type {
-  RequestOfMethod,
-  ResponseOfMethod,
-} from "@traycer-clients/shared/host-transport/host-messenger";
+import type { RequestOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import { queryKeys } from "@/lib/query-keys";
 import {
   PROVIDER_RATE_LIMITS_STALE_TIME_MS,
   type RateLimitProviderId,
 } from "@/lib/rate-limit-providers";
+import {
+  mapResponseToProviderRateLimitEnvelope,
+  type ProviderRateLimitEnvelope,
+  type RateLimitUsageResponse,
+} from "@/lib/rate-limits/rate-limit-envelope";
+import { EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS } from "@/lib/rate-limits/rate-limit-timing";
 
 /**
  * Shared serial fetch lane for the `ephemeralProcess` rate-limit providers
@@ -35,10 +38,6 @@ type RateLimitUsageParams = RequestOfMethod<
   HostRpcRegistry,
   "host.getRateLimitUsage"
 >;
-type RateLimitUsageResponse = ResponseOfMethod<
-  HostRpcRegistry,
-  "host.getRateLimitUsage"
->;
 
 export type RateLimitQueueRequestFn = (
   hostId: string,
@@ -58,6 +57,37 @@ let deps: RateLimitQueueConfig | null = null;
 let chain: Promise<unknown> = Promise.resolve();
 let inFlightCount = 0;
 const drainingListeners = new Set<() => void>();
+
+/**
+ * Post-`usage_fetch_failed` cool-down: how long *automatic* enqueues (the
+ * interval tick, turn-completion triggers) are suppressed for the affected
+ * provider after a fetch resolves with that reason. The tech plan's root
+ * cause is a server-side 429 on Anthropic's usage endpoint with multi-minute
+ * penalty windows; a retry-once (narrowed to the OTHER arm on the host side)
+ * plus continued polling on this arm can keep re-tripping the same limit. This
+ * cool-down, sourced from `EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS`
+ * (`rate-limit-timing.ts`, shared with `rate-limit-queue-provider.tsx`'s poll
+ * interval so the two can't drift) - effectively "skip the next automatic
+ * poll" - lets a tripped window drain instead.
+ *
+ * Scoped to `usage_fetch_failed` specifically, NOT the other transient
+ * reasons the view-state retention treatment covers (`timeout`,
+ * `connection_failed`) - those are probe-level failures without the same
+ * server-side-penalty-window mechanics motivating this cool-down.
+ *
+ * A manual refresh (`force: true`) is never subject to this cool-down - it's
+ * always single-shot with no retry loop of its own, so it can't itself
+ * re-trip a tripped limit the way continued automatic polling can.
+ */
+const USAGE_FETCH_FAILURE_COOLDOWN_MS = EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS;
+
+// Per-provider cool-down expiry (epoch ms), set after a `usage_fetch_failed`
+// resolution and cleared once a later fetch resolves with anything else.
+// Keyed only by provider id (not host) because the queue itself only ever
+// serves one host at a time - `configureRateLimitQueue` clears this map
+// whenever the bound host actually changes, so a cool-down never survives a
+// swap to a different host's identically-named provider.
+const cooldownUntil = new Map<RateLimitProviderId, number>();
 
 /**
  * Dev-only (Vite HMR) self-healing for this module's singleton state. An HMR
@@ -104,10 +134,21 @@ function notifyDraining(): void {
  * Bind (or, with `null`, unbind) the queue to the default host. Called once
  * from an app-shell `useEffect` that re-runs on default-host / client change,
  * and passes `null` on host loss so a stale client can't service an enqueue.
+ *
+ * Clears `cooldownUntil` whenever the bound host id actually changes (not on
+ * every call - a client/queryClient identity change with the same host id
+ * must not reset a live cool-down). `cooldownUntil` is keyed only by
+ * provider id, not host id, so without this a `usage_fetch_failed` cool-down
+ * picked up on one host would otherwise keep suppressing automatic polling
+ * for the same-named provider (e.g. `claude-code`) after switching to a
+ * different host.
  */
 export function configureRateLimitQueue(
   next: RateLimitQueueConfig | null,
 ): void {
+  const previousHostId = deps?.hostId ?? null;
+  const nextHostId = next?.hostId ?? null;
+  if (previousHostId !== nextHostId) cooldownUntil.clear();
   deps = next;
 }
 
@@ -131,15 +172,48 @@ export function isRateLimitQueueDraining(): boolean {
 }
 
 /**
+ * Applies the post-fetch cool-down policy for `providerId` from the envelope a
+ * fetch just resolved to: sets a `USAGE_FETCH_FAILURE_COOLDOWN_MS` window on
+ * `usage_fetch_failed`, clears any standing cool-down on anything else (a good
+ * reading, or a different/authoritative reason - the condition this cool-down
+ * exists for is no longer the one in effect, so automatic polling should
+ * resume rather than keep suppressing on a stale cause).
+ */
+function applyCooldownPolicy(
+  providerId: RateLimitProviderId,
+  envelope: ProviderRateLimitEnvelope,
+): void {
+  const latest = envelope.latest;
+  if (
+    latest !== null &&
+    !latest.available &&
+    latest.reason === "usage_fetch_failed"
+  ) {
+    cooldownUntil.set(providerId, Date.now() + USAGE_FETCH_FAILURE_COOLDOWN_MS);
+    return;
+  }
+  cooldownUntil.delete(providerId);
+}
+
+function isInCooldown(providerId: RateLimitProviderId): boolean {
+  const until = cooldownUntil.get(providerId) ?? 0;
+  return Date.now() < until;
+}
+
+/**
  * Append a rate-limit pull for one `ephemeralProcess` provider to the serial
  * lane. Returns the tail of the chain so a caller ("Refresh all") can await the
  * lane draining.
  *
- * - `force: false` (interval timer, turn completion): no-op if the query's
+ * - `force: false` (interval timer, turn completion): no-ops if the query's
  *   cached data is younger than `PROVIDER_RATE_LIMITS_STALE_TIME_MS`, so
- *   automatic triggers don't re-spawn a subprocess for still-fresh data.
- * - `force: true` (user-initiated refresh): always fetches, bypassing that
- *   floor - a manual refresh must never silently no-op.
+ *   automatic triggers don't re-spawn a subprocess for still-fresh data; ALSO
+ *   no-ops while this provider is in its post-`usage_fetch_failed` cool-down
+ *   (`USAGE_FETCH_FAILURE_COOLDOWN_MS`), so a tripped server-side rate limit
+ *   drains instead of being re-tripped every poll.
+ * - `force: true` (user-initiated refresh): always fetches, bypassing both the
+ *   freshness floor and the cool-down - a manual refresh must never silently
+ *   no-op, and is always single-shot with no retry loop of its own.
  *
  * No-ops (returning the current chain) while the queue is unconfigured, mirroring
  * the host-readiness `enabled` gate the per-provider query uses.
@@ -162,14 +236,24 @@ export function enqueueRateLimitFetch(
     const updatedAt = queryClient.getQueryState(queryKey)?.dataUpdatedAt ?? 0;
     return Date.now() - updatedAt < PROVIDER_RATE_LIMITS_STALE_TIME_MS;
   };
-  if (!opts.force && isFresh()) return chain;
+  const shouldSkipAutomatic = (): boolean =>
+    !opts.force && (isFresh() || isInCooldown(providerId));
+  if (shouldSkipAutomatic()) return chain;
 
   // Named request fn (not an inline closure in `queryFn`) so the host-scoped
   // key stays the sole cache identity - `request` is stable module state, not a
   // key input, and inlining it would trip the query plugin's exhaustive-deps
   // check (mirrors `resolve-artifact-by-path.ts`).
-  const queryFn = (): Promise<RateLimitUsageResponse> =>
-    request(hostId, "host.getRateLimitUsage", params);
+  const queryFn = async (): Promise<ProviderRateLimitEnvelope> => {
+    const response = await request(hostId, "host.getRateLimitUsage", params);
+    const envelope = mapResponseToProviderRateLimitEnvelope({
+      response,
+      queryClient,
+      queryKey,
+    });
+    applyCooldownPolicy(providerId, envelope);
+    return envelope;
+  };
 
   inFlightCount += 1;
   notifyDraining();
@@ -177,9 +261,10 @@ export function enqueueRateLimitFetch(
     .then(() => {
       // Re-checked at this fetch's turn in the lane (not just at enqueue time):
       // an earlier fetch in the same round may have just refreshed this exact
-      // provider, and an automatic trigger must not re-spawn a subprocess for
-      // data that became fresh while it waited in the queue.
-      if (!opts.force && isFresh()) return undefined;
+      // provider (or just entered it into cool-down), and an automatic trigger
+      // must not re-spawn a subprocess for data that became fresh - or a
+      // provider that entered cool-down - while it waited in the queue.
+      if (shouldSkipAutomatic()) return undefined;
       // `staleTime: 0` is load-bearing: `fetchQuery` inherits the app
       // QueryClient's GLOBAL `staleTime` default (60s in `query-client.ts`)
       // and serves still-fresh cache without fetching at all. The popover's
@@ -205,11 +290,13 @@ export function enqueueRateLimitFetch(
 
 /**
  * Test-only reset of the module-global lane state so each test starts from a
- * clean queue (no bound host, empty chain, zero in-flight, no listeners).
+ * clean queue (no bound host, empty chain, zero in-flight, no listeners, no
+ * standing cool-downs).
  */
 export function __resetRateLimitQueueForTests(): void {
   deps = null;
   chain = Promise.resolve();
   inFlightCount = 0;
   drainingListeners.clear();
+  cooldownUntil.clear();
 }

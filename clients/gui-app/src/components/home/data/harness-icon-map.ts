@@ -1,4 +1,5 @@
 import {
+  AmpIcon,
   ClaudeAIIcon,
   CodexIcon,
   CopilotIcon,
@@ -35,4 +36,5 @@ export const PROVIDER_ICON_CONFIG: Record<ProviderId, HarnessIconConfig> = {
   kimi: { Icon: KimiIcon, className: "text-foreground" },
   copilot: { Icon: CopilotIcon, className: "text-foreground" },
   kilocode: { Icon: KiloCodeIcon, className: "text-foreground" },
+  amp: { Icon: AmpIcon, className: "text-foreground" },
 };

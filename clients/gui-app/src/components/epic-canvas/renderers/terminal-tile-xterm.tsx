@@ -21,7 +21,11 @@ import "@xterm/xterm/css/xterm.css";
 import { useRegisterTileFindAdapter } from "@/components/epic-canvas/tile-find/tile-find-adapter-context";
 import { isMac } from "@/lib/keybindings/platform";
 import { translateLineEditChord } from "@/lib/terminal-line-edit";
-import { useSettingsStore } from "@/stores/settings/settings-store";
+import {
+  useSettingsStore,
+  inactiveCursorStyleFor,
+  type TerminalCursorStyle,
+} from "@/stores/settings/settings-store";
 import {
   DEFAULT_MONO_FONT_STACK,
   buildFontFamilyValue,
@@ -180,6 +184,8 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
   const terminalFontSize = useSettingsStore((s) => s.terminalFontSize);
   const codeFontFamily = useSettingsStore((s) => s.codeFontFamily);
   const terminalFontFamily = useSettingsStore((s) => s.terminalFontFamily);
+  const cursorStyle = useSettingsStore((s) => s.terminalCursorStyle);
+  const cursorBlink = useSettingsStore((s) => s.terminalCursorBlink);
   const effectiveFontSize = terminalFontSize ?? codeFontSize;
   const fontFamily = resolveEffectiveFontFamily(
     terminalFontFamily,
@@ -218,7 +224,9 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
   useRegisterTileFindAdapter(tileFindAdapter);
 
   const initialOptionsRef = useRef<XtermInitialOptions>({
-    cursorBlink: true,
+    cursorStyle,
+    cursorInactiveStyle: inactiveCursorStyleFor(cursorStyle),
+    cursorBlink,
     allowProposedApi: true,
     scrollback: 5000,
     fontFamily,
@@ -359,6 +367,8 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
     theme,
     fontSize: effectiveFontSize,
     fontFamily,
+    cursorStyle,
+    cursorBlink,
   });
   useVisibleTerminalRepair({
     termRef,
@@ -1014,11 +1024,21 @@ interface TerminalAppearanceSyncInput {
   readonly theme: ITerminalOptions["theme"];
   readonly fontSize: number;
   readonly fontFamily: string;
+  readonly cursorStyle: TerminalCursorStyle;
+  readonly cursorBlink: boolean;
 }
 
 function useTerminalAppearanceSync(input: TerminalAppearanceSyncInput): void {
-  const { termRef, controlsRef, canvasRef, theme, fontSize, fontFamily } =
-    input;
+  const {
+    termRef,
+    controlsRef,
+    canvasRef,
+    theme,
+    fontSize,
+    fontFamily,
+    cursorStyle,
+    cursorBlink,
+  } = input;
 
   // Live theme switching: rebuild the xterm palette when the resolved
   // light/dark mode or active preset changes, then ask the WebGL atlas
@@ -1049,6 +1069,17 @@ function useTerminalAppearanceSync(input: TerminalAppearanceSyncInput): void {
     // propose loop refits on the next frame.
     controlsRef.current?.fitToContainer();
   }, [fontSize, controlsRef, fontFamily, termRef, canvasRef]);
+
+  // Live cursor sync: shape and blink are pure renderer options - they don't
+  // touch cell geometry, so unlike the font effect this neither refits the grid
+  // nor clears the glyph atlas. xterm repaints the cursor on the option write.
+  useLayoutEffect(() => {
+    const term = termRef.current;
+    if (term === null) return;
+    term.options.cursorStyle = cursorStyle;
+    term.options.cursorInactiveStyle = inactiveCursorStyleFor(cursorStyle);
+    term.options.cursorBlink = cursorBlink;
+  }, [termRef, cursorStyle, cursorBlink]);
 }
 
 function useVisibleTerminalRepair(input: {

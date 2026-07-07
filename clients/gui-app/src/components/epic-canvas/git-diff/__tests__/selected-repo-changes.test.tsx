@@ -1,3 +1,4 @@
+import { act } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   cleanup,
@@ -17,7 +18,9 @@ import type {
 import type { GitListChangedFilesSubscriptionResult } from "@/hooks/git/use-git-list-changed-files-subscription";
 import type { GitListChangedFilesWithSubmodulesResult } from "@/hooks/git/use-git-list-changed-files-with-submodules";
 import type { GitPanelSelectedRepo } from "@/stores/epics/git-panel-store";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { SelectedRepoChanges } from "../selected-repo-changes";
+import { expectModuleHeaderTooltip } from "./git-module-header-test-utils";
 
 vi.mock("../file-list", () => ({
   FileList: (props: {
@@ -154,24 +157,42 @@ function renderChanges(props: {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
-  return render(
+  const renderUi = (nextProps: {
+    readonly subscription?: GitListChangedFilesSubscriptionResult;
+    readonly snapshot: GitListChangedFilesWithSubmodulesResult;
+    readonly onRefresh?: () => void;
+  }) => (
     <QueryClientProvider client={queryClient}>
-      <SelectedRepoChanges
-        epicId="epic-1"
-        viewTabId="tab-1"
-        selected={rootSelected}
-        rootLabel="traycer-internal"
-        subscription={props.subscription ?? EMPTY_SUBSCRIPTION}
-        snapshot={props.snapshot}
-        onRefresh={props.onRefresh ?? vi.fn()}
-        isRefreshing={false}
-      />
-    </QueryClientProvider>,
+      <TooltipProvider delayDuration={0}>
+        <SelectedRepoChanges
+          epicId="epic-1"
+          viewTabId="tab-1"
+          selected={rootSelected}
+          rootLabel="traycer-internal"
+          subscription={nextProps.subscription ?? EMPTY_SUBSCRIPTION}
+          snapshot={nextProps.snapshot}
+          onRefresh={nextProps.onRefresh ?? vi.fn()}
+          isRefreshing={false}
+        />
+      </TooltipProvider>
+    </QueryClientProvider>
   );
+  const result = render(renderUi(props));
+  return {
+    ...result,
+    rerenderChanges: (nextProps: {
+      readonly subscription?: GitListChangedFilesSubscriptionResult;
+      readonly snapshot: GitListChangedFilesWithSubmodulesResult;
+      readonly onRefresh?: () => void;
+    }) => result.rerender(renderUi(nextProps)),
+  };
 }
 
 describe("<SelectedRepoChanges /> module groups", () => {
-  beforeEach(() => cleanup());
+  beforeEach(() => {
+    cleanup();
+    vi.useRealTimers();
+  });
 
   it("renders single-repo changes without a duplicate module header", () => {
     renderChanges({
@@ -241,20 +262,20 @@ describe("<SelectedRepoChanges /> module groups", () => {
     expect(screen.getByText("Merge in progress - 0 conflicts")).toBeDefined();
   });
 
-  it("renders single-repo no-changes state without a duplicate module header", () => {
+  it("renders the panel empty state for a clean single-repo workspace", () => {
     renderChanges({
       snapshot: snapshotResult(response({ files: [] })),
     });
 
-    expect(screen.getByTestId("git-single-repo-changes")).toBeDefined();
+    expect(screen.getByTestId("git-diff-empty-refresh")).toBeDefined();
+    expect(screen.getByText(/^Last updated/)).toBeDefined();
+    expect(screen.queryByTestId("git-single-repo-changes")).toBeNull();
     expect(screen.queryByTestId("git-module-group-root")).toBeNull();
     expect(screen.queryByRole("textbox", { name: "Filter files" })).toBeNull();
-    expect(screen.getByTestId("git-module-no-changes-root").textContent).toBe(
-      "No changes",
-    );
+    expect(screen.queryByTestId("git-module-no-changes-root")).toBeNull();
   });
 
-  it("renders dirty submodule-only changes below a clean root module", () => {
+  it("renders dirty submodule-only changes below a clean root module", async () => {
     renderChanges({
       snapshot: snapshotResult(
         response({
@@ -268,9 +289,10 @@ describe("<SelectedRepoChanges /> module groups", () => {
     expect(
       screen.getByTestId("git-module-group-submodule-traycer"),
     ).toBeDefined();
-    expect(
-      screen.getByTestId("git-module-header-traycer").getAttribute("title"),
-    ).toContain("pinned commit out of date");
+    await expectModuleHeaderTooltip(
+      screen.getByTestId("git-module-header-traycer"),
+      "pinned commit out of date",
+    );
     expect(screen.queryByText("pinned commit out of date")).toBeNull();
     expect(screen.getByTestId("file-list-/repo/traycer")).toBeDefined();
     expect(screen.getByText("src/submodule.ts")).toBeDefined();
@@ -340,7 +362,7 @@ describe("<SelectedRepoChanges /> module groups", () => {
     expect(screen.queryByTestId("file-row-/repo-traycer")).toBeNull();
   });
 
-  it("shows a parent-reference mismatch on a clean submodule working tree", () => {
+  it("shows a parent-reference mismatch on a clean submodule working tree", async () => {
     renderChanges({
       snapshot: snapshotResult(
         response({
@@ -350,9 +372,10 @@ describe("<SelectedRepoChanges /> module groups", () => {
       ),
     });
 
-    expect(
-      screen.getByTestId("git-module-header-traycer").getAttribute("title"),
-    ).toContain("pinned commit out of date");
+    await expectModuleHeaderTooltip(
+      screen.getByTestId("git-module-header-traycer"),
+      "pinned commit out of date",
+    );
     expect(screen.queryByText("pinned commit out of date")).toBeNull();
     expect(screen.getByTestId("git-module-count-traycer").textContent).toBe(
       "0 files",
@@ -361,7 +384,7 @@ describe("<SelectedRepoChanges /> module groups", () => {
     expect(screen.queryByTestId("git-clean-modules-affordance")).toBeNull();
   });
 
-  it("renders an unavailable submodule module group with refresh", () => {
+  it("renders an unavailable submodule module group with refresh", async () => {
     renderChanges({
       snapshot: snapshotResult(
         response({
@@ -380,7 +403,11 @@ describe("<SelectedRepoChanges /> module groups", () => {
     ).toBeDefined();
     const header = screen.getByTestId("git-module-header-traycer");
     expect(header.getAttribute("aria-label")).toContain("details unavailable");
-    expect(header.getAttribute("title")?.match(/Status:/g)).toHaveLength(1);
+    const tooltipText = await expectModuleHeaderTooltip(
+      header,
+      "details unavailable",
+    );
+    expect(tooltipText.match(/Status:/g)).toHaveLength(1);
     expect(screen.queryByText("details unavailable")).toBeNull();
     expect(header.querySelectorAll(".lucide-triangle-alert")).toHaveLength(1);
     expect(
@@ -389,7 +416,7 @@ describe("<SelectedRepoChanges /> module groups", () => {
     expect(screen.getByTestId("git-submodule-unavailable")).toBeDefined();
   });
 
-  it("keeps clean modules collapsed behind the clean-submodules affordance", () => {
+  it("renders the panel empty state when every discovered module is clean", () => {
     renderChanges({
       snapshot: snapshotResult(
         response({
@@ -405,20 +432,45 @@ describe("<SelectedRepoChanges /> module groups", () => {
     expect(
       screen.queryByTestId("git-module-group-submodule-traycer"),
     ).toBeNull();
-    const affordance = screen.getByTestId("git-clean-modules-affordance");
-    expect(affordance.textContent).toContain("Show 1 clean submodule");
+    expect(screen.queryByTestId("git-clean-modules-affordance")).toBeNull();
+    expect(screen.queryByTestId("git-module-no-changes-root")).toBeNull();
+    expect(screen.getByTestId("git-diff-empty-refresh")).toBeDefined();
+  });
 
-    fireEvent.click(affordance);
+  it("keeps active submodule search visible when every module becomes clean", () => {
+    vi.useFakeTimers();
+    const view = renderChanges({
+      snapshot: snapshotResult(
+        response({
+          files: [file("traycer", normalPointer)],
+          submodules: [changeset({ files: [] })],
+        }),
+      ),
+    });
 
-    const cleanModule = screen.getByTestId(
-      "git-module-group-submodule-traycer",
+    fireEvent.change(
+      screen.getByRole("textbox", { name: "Filter submodules and files" }),
+      { target: { value: "traycer" } },
     );
-    expect(cleanModule.getAttribute("data-clean")).toBe("true");
+    act(() => {
+      vi.advanceTimersByTime(150);
+    });
+
+    view.rerenderChanges({
+      snapshot: snapshotResult(
+        response({
+          submodules: [changeset({ pointer: cleanPointer })],
+        }),
+      ),
+    });
+
     expect(
-      screen
-        .getByTestId("git-module-header-traycer")
-        .getAttribute("aria-expanded"),
-    ).toBe("false");
+      screen.getByRole("textbox", { name: "Filter submodules and files" }),
+    ).toBeDefined();
+    expect(
+      screen.getByTestId("git-module-group-submodule-traycer"),
+    ).toBeDefined();
+    expect(screen.queryByTestId("git-diff-empty-refresh")).toBeNull();
   });
 
   it("turns an unmatched dirty gitlink into an unavailable module group", () => {

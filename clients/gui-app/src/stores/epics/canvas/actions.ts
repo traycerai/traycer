@@ -1302,7 +1302,13 @@ export function renameArtifact(
   return updateTilesWhere(
     state,
     (ref) => ref.id === artifactId,
-    (ref) => (ref.name === name ? ref : { ...ref, name }),
+    (ref) => {
+      if (ref.type !== "terminal") {
+        return ref.name === name ? ref : { ...ref, name };
+      }
+      if (ref.name === name && ref.titleSource === "manual") return ref;
+      return { ...ref, name, titleSource: "manual" };
+    },
   );
 }
 

@@ -18,6 +18,7 @@ export function useTerminalDefaultCwd(args: {
     client,
     method: "terminal.defaultCwd",
     params: { epicId: args.epicId },
+    cacheKeyIdentity: [args.epicId],
     options: { enabled: args.enabled, staleTime: Number.POSITIVE_INFINITY },
   });
 }
