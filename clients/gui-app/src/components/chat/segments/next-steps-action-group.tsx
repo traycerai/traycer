@@ -4,7 +4,6 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
-import { cn } from "@/lib/utils";
 import type { TraycerNextStepOption } from "@/markdown/traycer-next-steps";
 
 export interface NextStepActionHandler {
@@ -16,9 +15,9 @@ interface NextStepsActionGroupProps {
   readonly blockId: string;
   readonly options: ReadonlyArray<TraycerNextStepOption>;
   readonly complete: boolean;
-  readonly locked: boolean;
+  readonly lockedOptionIds: ReadonlySet<string>;
   readonly actionHandler: NextStepActionHandler | null;
-  readonly onLock: (blockId: string) => void;
+  readonly onLockOption: (blockId: string, optionId: string) => void;
 }
 
 const COPIED_RESET_MS = 1600;
@@ -29,33 +28,30 @@ const handleCopyError = (): void => {
 
 export function NextStepsActionGroup(props: NextStepsActionGroupProps) {
   const actionHandler = props.actionHandler;
-  const disabled =
-    !props.complete ||
-    props.locked ||
-    actionHandler === null ||
-    !actionHandler.canSend;
+  const actionsDisabled =
+    !props.complete || actionHandler === null || !actionHandler.canSend;
 
   return (
     <div
-      className={cn(
-        "not-prose mt-2 flex flex-wrap items-center gap-2",
-        props.locked && "opacity-70",
-      )}
+      className="not-prose mt-2 flex flex-wrap items-center gap-2"
       data-testid="traycer-next-steps"
       data-next-steps-complete={props.complete ? "true" : "false"}
       data-quote-exclude=""
     >
-      {props.options.map((option) => (
-        <NextStepAction
-          key={option.id}
-          option={option}
-          complete={props.complete}
-          disabled={disabled}
-          actionHandler={actionHandler}
-          blockId={props.blockId}
-          onLock={props.onLock}
-        />
-      ))}
+      {props.options.map((option) => {
+        const locked = props.lockedOptionIds.has(option.id);
+        return (
+          <NextStepAction
+            key={option.id}
+            option={option}
+            complete={props.complete}
+            disabled={actionsDisabled || locked}
+            actionHandler={actionHandler}
+            blockId={props.blockId}
+            onLockOption={props.onLockOption}
+          />
+        );
+      })}
     </div>
   );
 }
@@ -66,7 +62,7 @@ interface NextStepActionProps {
   readonly disabled: boolean;
   readonly actionHandler: NextStepActionHandler | null;
   readonly blockId: string;
-  readonly onLock: (blockId: string) => void;
+  readonly onLockOption: (blockId: string, optionId: string) => void;
 }
 
 function NextStepAction(props: NextStepActionProps) {
@@ -93,7 +89,7 @@ function NextStepAction(props: NextStepActionProps) {
         onClick={() => {
           if (props.actionHandler === null || props.disabled) return;
           if (props.actionHandler.onSend(option)) {
-            props.onLock(props.blockId);
+            props.onLockOption(props.blockId, option.id);
           }
         }}
       >

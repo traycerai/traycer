@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import {
   resourcesSubscribeClientFrameSchema,
+  resourcesSubscribeOpenRequestV11Schema,
   resourcesSubscribeServerFrameSchema,
   resourcesSubscribeV10,
+  resourcesSubscribeV11,
 } from "@traycer/protocol/host/resources/subscribe";
 
 /**
@@ -68,6 +70,32 @@ describe("resources.subscribe@1.0 open request", () => {
   });
 });
 
+describe("resources.subscribe@1.1 open request", () => {
+  it("accepts an explicit global scope", () => {
+    expect(
+      resourcesSubscribeOpenRequestV11Schema.parse({
+        epicId: "__global__",
+        scope: { kind: "global" },
+      }),
+    ).toEqual({
+      epicId: "__global__",
+      scope: { kind: "global" },
+    });
+  });
+
+  it("accepts an explicit epic scope", () => {
+    expect(
+      resourcesSubscribeOpenRequestV11Schema.parse({
+        epicId: "epic-1",
+        scope: { kind: "epic", epicId: "epic-1" },
+      }),
+    ).toEqual({
+      epicId: "epic-1",
+      scope: { kind: "epic", epicId: "epic-1" },
+    });
+  });
+});
+
 describe("resources.subscribe@1.0 server frames", () => {
   it("parses a snapshot frame carrying owners and an epic aggregate", () => {
     const parsed = resourcesSubscribeServerFrameSchema.parse({
@@ -103,6 +131,25 @@ describe("resources.subscribe@1.0 server frames", () => {
       expect(parsed.owners).toEqual([]);
       expect(parsed.epic).toBeNull();
     }
+  });
+
+  it("parses a global snapshot frame carrying all epic aggregates", () => {
+    const parsed = resourcesSubscribeServerFrameSchema.parse({
+      kind: "snapshot",
+      epicId: "__global__",
+      sampledAt: 1_000,
+      app: APP_FIXTURE,
+      owners: [OWNER_FIXTURE],
+      epic: EPIC_FIXTURE,
+      epics: [EPIC_FIXTURE, { ...EPIC_FIXTURE, epicId: "epic-2" }],
+      hasBinaryPayload: false,
+    });
+    expect(parsed.kind).toBe("snapshot");
+    if (parsed.kind !== "snapshot") throw new Error("expected snapshot");
+    expect(parsed.epics?.map((entry) => entry.epicId)).toEqual([
+      "epic-1",
+      "epic-2",
+    ]);
   });
 
   it("accepts a null activeProcessName on an owner snapshot", () => {
@@ -198,8 +245,10 @@ describe("resources.subscribe@1.0 registry membership", () => {
   it("is registered on the stream registry at major 1 / minor 0", () => {
     const entry = hostStreamRpcRegistry["resources.subscribe"];
     expect(entry).toBeDefined();
-    expect(entry[1].latestMinor).toBe(0);
+    expect(entry[1].latestMinor).toBe(1);
     expect(entry[1].versions[0].contract).toBe(resourcesSubscribeV10);
+    expect(entry[1].versions[1].contract).toBe(resourcesSubscribeV11);
     expect(resourcesSubscribeV10.schemaVersion).toEqual({ major: 1, minor: 0 });
+    expect(resourcesSubscribeV11.schemaVersion).toEqual({ major: 1, minor: 1 });
   });
 });

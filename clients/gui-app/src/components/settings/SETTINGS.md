@@ -288,20 +288,89 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     client-sequenced (`envOverrideSet` new → `envOverrideDelete` old) with an
     inline unique-key + `/^[A-Za-z_][A-Za-z0-9_]*$/` guard.
 - `Worktrees` Host-wide management of the git worktrees Traycer creates under
-  `~/.traycer/worktrees/`. A host selector (default = active host, gated on
-  `useHostReachability`) drives a disk-truth list - so orphaned worktrees
-  whose owning chat/agent was deleted still appear - grouped by repo and showing
-  branch, path, an **In use** badge, an **Orphaned** badge (no resolvable main
-  repo), and an uncommitted-change count. The selected host is reached through
-  a **transient per-host client** (`useHostClientFor`) so picking a host
-  never swaps the app-wide active host or reloads the Epic list. Backed by the
-  host `worktree.listAllForHost` / `worktree.deleteByPath` RPCs through
-  `useHostQuery` / `useHostMutation`. Delete is disabled for in-use rows
-  (server-rejected as a backstop) and requires an extra confirm that names the
-  change count when the worktree is dirty; orphan dirs git no longer tracks fall
-  back to an `fs.rm` cleanup host-side. Setup/teardown script editing is NOT
+  `~/.traycer/worktrees/`, presented as a calm inspection-and-cleanup list, not
+  a delete console. A host selector (default = active host, gated on
+  `useHostReachability`, demoted to quiet toolbar chrome rather than a
+  dominant control) drives a disk-truth list - so orphaned worktrees whose
+  owning chat/agent was deleted still appear - grouped by repo under quiet,
+  collapsible headers (`WorktreeRepoHeader`) that stay visually secondary to
+  row status. The selected host is reached through a **transient per-host
+  client** (`useHostClientFor`) so picking a host never swaps the app-wide
+  active host or reloads the Epic list. Backed by the host
+  `worktree.listAllForHost` / `worktree.deleteByPath` RPCs through
+  `useHostQuery` / `useHostMutation`. Setup/teardown script editing is NOT
   here - the create-worktree flow owns it, and scripts otherwise live in the
   committed `.traycer/environment.json`.
+  - **Evidence tiers, not a safety verdict.** Each row leads with exactly one
+    loud status pill (`WorktreeTierPill`, classification shared with the
+    Task-delete dialog and the `traycer-housekeeping` skill via
+    `classify-worktree.ts`) naming a PROVEN fact, never a generic "Safe"
+    label. **Merged**, **At base commit**, and **Unreferenced** are the three
+    green tiers - each requires positive, host-validated proof (a merged PR at
+    the live HEAD or local ancestry into the default branch; never advanced
+    from the worktree's birth commit; or clean, fully pushed, and unreferenced
+    by any Task) - and are deliberately kept distinct rather than collapsed
+    into one badge. **Review** is the amber catch-all for anything unproven or
+    with would-be-lost state (dirty, unpushed/local-only commits, a detached
+    HEAD, an unmerged owned-submodule branch, or unverified branch status).
+    **Orphaned** means git can't remove the worktree normally (missing/broken
+    metadata) and its delete routes through a forced host-side `fs.rm`
+    cleanup. **In use** means an active chat or agent references it - both
+    selection and delete are disabled, not just delete. Hovering any pill
+    shows the concrete proof or reason (`WORKTREE_TIER_TOOLTIP`), and the
+    risk-bearing facts behind a tier (uncommitted count, ahead/behind,
+    detached HEAD, unmerged submodule) render inline on the row
+    (`WorktreeSecondaryFacts`) without hover or expansion.
+  - **`Checking` and `Unknown` are enrichment states layered on top of a
+    tier, not tiers themselves.** A row's tier depends on host-probed
+    branch/PR activity that resolves after the base list loads. While that
+    probe is in flight the pill reads **Checking…** - dashed border, animated,
+    full-contrast text, never the muted/green treatment a resolved-safe pill
+    uses, because pending status must never look safe - and delete is
+    disabled with an explicit "status is still being checked" reason; the row
+    stays visible under an active status filter instead of silently matching
+    or disappearing. If the probe settles to an error (host unreachable,
+    git/gh probe timed out) the pill reads a static **Unknown** (amber,
+    dashed, a distinct icon from Review so it never reads as a confirmed risk
+    finding) - it remains deletable, but only through an explicit
+    unknown-risk confirmation (`unknownRiskDeleteDialogCopy`) that names the
+    branch/activity status as unverified, never the generic confirmation a
+    proven tier gets.
+  - **Delete is reached through a persistent row overflow**
+    (`WorktreeRowActions`: copy path, manage scripts, delete, in that order)
+    rather than a hover-only icon, so a resting row never shows a destructive
+    affordance. Confirmation copy escalates with what the row actually risks -
+    discard-N-uncommitted-changes, unpushed/local-only commits, the
+    unknown-risk copy above, forced cleanup for orphaned rows, or a plain
+    confirmation for a proven-green row (`deleteDialogCopy` /
+    `singleWorktreeDeleteDialogCopy`). On confirm the row is re-checked
+    against current state; if it became ineligible in the interim the delete
+    is skipped and the user is told why instead of proceeding on stale
+    information.
+  - **Selection and bulk delete** use always-keyboard-reachable checkboxes
+    plus a tri-state toolbar select-all toggle (`WorktreeSelectAllToggle`,
+    scoped to currently-visible selectable rows) instead of a permanent
+    header row. Selecting rows never inserts chrome above the list; a
+    contextual selection bar (`WorktreeSelectionActionBar`) floats over the
+    bottom of the list, out of flow, so entering or leaving selection never
+    shifts rows under the cursor. If any selected row is still `Checking`,
+    bulk delete is disabled with a count of how many are still pending. The
+    bulk confirmation (`WorktreeBulkDeleteDialog` /
+    `summarizeBulkWorktreeDelete`) aggregates the selected rows by class
+    (never one warning per row), names concrete dirty-loss counts, adds a
+    neutral unverified-branch-status caveat and a separate unknown-risk
+    caveat for rows whose enrichment failed, and lists what was excluded from
+    the selection (in-use, still-checking, or otherwise not selected).
+    Confirm re-checks every selected row and skips/names any that became
+    ineligible; in-use rows can never be selected or deleted, and explain why
+    inline.
+  - Background delete progress renders as a non-intrusive strip
+    (`WorktreeDeleteProgressStrip`) that stays visible through partial
+    failures until dismissed. A quiet `Task {label}` caption
+    (`TaskMergeRollupBadge`) beside a resolved Task chip reports that Task's
+    aggregate merge progress across every worktree it owns - deliberately
+    plain muted text, not a colored badge, so it never competes with or is
+    mistaken for the row's own tier pill.
 - `Host` The active host-management surface for the native-packaging flow.
   Three top-level rows - **Status** (running / stopped / not-installed, with
   version + listen URL + pid), **Actions** (Restart, or Install host when

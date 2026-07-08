@@ -770,6 +770,7 @@ describe("RunnerIpcBridge", () => {
       ownership,
       perWindowState: new PerWindowState(null),
       authSession: new DesktopAuthSession(),
+      quitState: undefined,
     });
     bridge.install();
     windowA.sentMessages.length = 0;
@@ -819,7 +820,12 @@ describe("RunnerIpcBridge", () => {
     bridge.dispose();
   });
 
-  it("removes closed windows from per-window restore state and ownership", async () => {
+  it("prunes a closed window's per-window restore state + ownership on a deliberate mid-session close (other windows remain)", async () => {
+    // Closing one of several open windows is a deliberate mid-session close, not
+    // a quit gesture: the closed window's restore snapshot must be pruned so a
+    // relaunch does not resurrect it, while the remaining window's snapshot
+    // survives untouched. (Last-window / quit-in-progress closes PRESERVE the
+    // snapshot instead - covered by the two tests below.)
     const mod = await import("../register-runner-ipc");
     const registry = new FakeWindowRegistry();
     const windowA = buildWindow();
@@ -848,6 +854,7 @@ describe("RunnerIpcBridge", () => {
       ownership,
       perWindowState,
       authSession: new DesktopAuthSession(),
+      quitState: undefined,
     });
     bridge.install();
     windowA.sentMessages.length = 0;
@@ -891,6 +898,113 @@ describe("RunnerIpcBridge", () => {
     bridge.dispose();
   });
 
+  it("preserves the per-window restore snapshot when the LAST window closes (quit/leave gesture)", async () => {
+    // Win/Linux: last-window `closed` fires this listener BEFORE
+    // `window-all-closed` -> `app.quit()`, so `quitState` is not yet set. macOS:
+    // a red-light close of the last window keeps the app alive. Either way the
+    // snapshot must survive so a later quit -> relaunch (or dock `activate`)
+    // restores it.
+    const mod = await import("../register-runner-ipc");
+    const registry = new FakeWindowRegistry();
+    const windowA = buildWindow();
+    registry.add("window-a", 101, windowA);
+    const ownership = new EpicWindowOwnership(null);
+    ownership.claim("tab-a", "epic-a", "window-a");
+    const perWindowState = new PerWindowState(null);
+    perWindowState.update("window-a", {
+      epicTabs: [{ id: "tab-a", epicId: "epic-a", name: "Alpha" }],
+      activeTabId: "tab-a",
+    });
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      windowRegistry: registry,
+      ownership,
+      perWindowState,
+      authSession: new DesktopAuthSession(),
+      quitState: undefined,
+    });
+    bridge.install();
+
+    const closeHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.windowsRequestClose,
+    );
+    if (closeHandler === undefined) {
+      throw new Error("windowsRequestClose handler missing");
+    }
+
+    await closeHandler(sender(101), "window-a");
+
+    expect(registry.closeRequests).toEqual(["window-a"]);
+    expect(registry.records()).toEqual([]);
+    // The snapshot is preserved (NOT cleared) for restore.
+    expect(perWindowState.get("window-a")).toMatchObject({
+      epicTabs: [{ id: "tab-a", epicId: "epic-a", name: "Alpha" }],
+      activeTabId: "tab-a",
+    });
+    bridge.dispose();
+  });
+
+  it("preserves closing windows while the shell is quitting, even when others remain", async () => {
+    // Defense-in-depth for the quit sequence: if a window `closed` event races
+    // the registry-change listener while more windows are still open during a
+    // quit, the snapshot must NOT be pruned - all windows' state is restored on
+    // the next launch.
+    const mod = await import("../register-runner-ipc");
+    const registry = new FakeWindowRegistry();
+    const windowA = buildWindow();
+    const windowB = buildWindow();
+    registry.add("window-a", 101, windowA);
+    registry.add("window-b", 202, windowB);
+    const ownership = new EpicWindowOwnership(null);
+    ownership.claim("tab-b", "epic-b", "window-b");
+    const perWindowState = new PerWindowState(null);
+    perWindowState.update("window-a", {
+      epicTabs: [{ id: "tab-a", epicId: "epic-a", name: "Alpha" }],
+      activeTabId: "tab-a",
+    });
+    perWindowState.update("window-b", {
+      epicTabs: [{ id: "tab-b", epicId: "epic-b", name: "Beta" }],
+      activeTabId: "tab-b",
+    });
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      windowRegistry: registry,
+      ownership,
+      perWindowState,
+      authSession: new DesktopAuthSession(),
+      quitState: { isQuitting: () => true },
+    });
+    bridge.install();
+
+    const closeHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.windowsRequestClose,
+    );
+    if (closeHandler === undefined) {
+      throw new Error("windowsRequestClose handler missing");
+    }
+
+    // window-a is closed while window-b remains open, but the shell is quitting.
+    await closeHandler(sender(101), "window-a");
+
+    expect(perWindowState.get("window-a")).toMatchObject({
+      epicTabs: [{ id: "tab-a", epicId: "epic-a", name: "Alpha" }],
+      activeTabId: "tab-a",
+    });
+    expect(perWindowState.get("window-b")).toMatchObject({
+      epicTabs: [{ id: "tab-b", epicId: "epic-b", name: "Beta" }],
+      activeTabId: "tab-b",
+    });
+    bridge.dispose();
+  });
+
   it("moves an owned Epic into a prepared new window through the canonical open-in-new-window IPC", async () => {
     const mod = await import("../register-runner-ipc");
     const registry = new FakeWindowRegistry();
@@ -917,6 +1031,7 @@ describe("RunnerIpcBridge", () => {
       ownership,
       perWindowState,
       authSession: new DesktopAuthSession(),
+      quitState: undefined,
     });
     bridge.install();
 
@@ -978,6 +1093,7 @@ describe("RunnerIpcBridge", () => {
       ownership,
       perWindowState,
       authSession: new DesktopAuthSession(),
+      quitState: undefined,
     });
     bridge.install();
 
@@ -1037,6 +1153,7 @@ describe("RunnerIpcBridge", () => {
       ownership,
       perWindowState: new PerWindowState(null),
       authSession: new DesktopAuthSession(),
+      quitState: undefined,
     });
     bridge.install();
 
@@ -1104,6 +1221,7 @@ describe("RunnerIpcBridge", () => {
       ownership: new EpicWindowOwnership(null),
       perWindowState: new PerWindowState(null),
       authSession: new DesktopAuthSession(),
+      quitState: undefined,
     });
     bridge.install();
     windowA.sentMessages.length = 0;
@@ -1147,6 +1265,7 @@ describe("RunnerIpcBridge", () => {
       ownership,
       perWindowState: new PerWindowState(null),
       authSession: new DesktopAuthSession(),
+      quitState: undefined,
     });
     bridge.install();
     windowA.sentMessages.length = 0;
@@ -1215,6 +1334,7 @@ describe("RunnerIpcBridge", () => {
       ownership: new EpicWindowOwnership(null),
       perWindowState: new PerWindowState(null),
       authSession: new DesktopAuthSession(),
+      quitState: undefined,
     });
     bridge.install();
     windowA.sentMessages.length = 0;
@@ -1298,6 +1418,7 @@ describe("RunnerIpcBridge", () => {
       ownership: new EpicWindowOwnership(null),
       perWindowState: new PerWindowState(null),
       authSession: new DesktopAuthSession(),
+      quitState: undefined,
     });
     bridge.install();
     windowA.sentMessages.length = 0;
@@ -1345,6 +1466,7 @@ describe("RunnerIpcBridge", () => {
       ownership: new EpicWindowOwnership(null),
       perWindowState: new PerWindowState(null),
       authSession: new DesktopAuthSession(),
+      quitState: undefined,
     });
     bridge.install();
 
@@ -1413,6 +1535,7 @@ describe("RunnerIpcBridge", () => {
       ownership: new EpicWindowOwnership(null),
       perWindowState: new PerWindowState(null),
       authSession: new DesktopAuthSession(),
+      quitState: undefined,
     });
     bridge.install();
 
@@ -1583,6 +1706,7 @@ describe("RunnerIpcBridge", () => {
       ownership: new EpicWindowOwnership(null),
       perWindowState: new PerWindowState(null),
       authSession: new DesktopAuthSession(),
+      quitState: undefined,
     });
     bridge.install();
 
@@ -1698,6 +1822,7 @@ describe("RunnerIpcBridge", () => {
       ownership: new EpicWindowOwnership(null),
       perWindowState,
       authSession: new DesktopAuthSession(),
+      quitState: undefined,
     });
     bridge.install();
 
@@ -1752,6 +1877,7 @@ describe("RunnerIpcBridge", () => {
       ownership: new EpicWindowOwnership(null),
       perWindowState: new PerWindowState(null),
       authSession,
+      quitState: undefined,
     });
     bridge.install();
 
@@ -2368,6 +2494,7 @@ describe("RunnerIpcBridge", () => {
       ownership: new EpicWindowOwnership(null),
       perWindowState,
       authSession,
+      quitState: undefined,
     });
     bridge.install();
     windowA.sentMessages.length = 0;

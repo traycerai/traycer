@@ -555,11 +555,6 @@ function ProviderDetail({
             {PROVIDER_DESCRIPTIONS[providerId]}
           </p>
           <ProviderAuthLine state={state} />
-          {!state.enabled && state.disabledBy !== null ? (
-            <p className="mt-0.5 text-ui-xs text-muted-foreground/80">
-              Disabled by {state.disabledBy.handle ?? state.disabledBy.userId}
-            </p>
-          ) : null}
         </div>
         <div className="flex shrink-0 items-center gap-2 text-ui-sm">
           <label htmlFor={switchId} className="text-muted-foreground">

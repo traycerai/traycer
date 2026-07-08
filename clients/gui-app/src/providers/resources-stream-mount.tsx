@@ -1,6 +1,7 @@
 import { useEffect, type ReactNode } from "react";
 import { ResourcesStreamClient } from "@traycer-clients/shared/host-transport/resources-stream-client";
 import {
+  useStreamMethodSchemaVersion,
   useStreamMethodSupport,
   useWsStreamClient,
 } from "@/lib/host/stream-runtime-context";
@@ -10,9 +11,16 @@ import {
   type ResourcesStreamClientFactory,
 } from "@/stores/resources/resources-store";
 import { getResourcesStreamClientFactoryOverride } from "@/providers/resources-stream-factory-override";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 
 export interface ResourcesStreamMountProps {
   readonly epicId: string;
+}
+
+function resourcesGlobalSupported(
+  version: { readonly major: number; readonly minor: number } | null,
+): boolean {
+  return version === null || (version.major === 1 && version.minor >= 1);
 }
 
 /**
@@ -24,6 +32,11 @@ export interface ResourcesStreamMountProps {
  *
  * Deferred until the stream client binds (`useWsStreamClient()` is `null` during
  * the initial host-hydration gap); the effect re-runs when it becomes available.
+ *
+ * Gated behind the settings that actually consume resource data (the header
+ * popover and the sidebar chips) — with both off, no consumer would ever read
+ * the entry, so the stream stays closed. Both booleans join the effect deps so
+ * toggling a setting live acquires/releases without remounting the pane.
  */
 export function ResourcesStreamMount(
   props: ResourcesStreamMountProps,
@@ -32,9 +45,16 @@ export function ResourcesStreamMount(
   const wsStreamClient = useWsStreamClient();
   const resourcesSupport = useStreamMethodSupport("resources.subscribe");
   const resourcesUnsupported = resourcesSupport === "unsupported";
+  const showGlobalResourceMonitor = useSettingsStore(
+    (state) => state.showGlobalResourceMonitor,
+  );
+  const showNavigatorResourceStats = useSettingsStore(
+    (state) => state.showNavigatorResourceStats,
+  );
+  const streamWanted = showGlobalResourceMonitor || showNavigatorResourceStats;
 
   useEffect(() => {
-    if (resourcesUnsupported) return;
+    if (resourcesUnsupported || !streamWanted) return;
     const override = getResourcesStreamClientFactoryOverride();
     if (override === null && wsStreamClient === null) return;
     // Token identifies the transport this entry is bound to; a host swap changes
@@ -43,7 +63,7 @@ export function ResourcesStreamMount(
     const streamClientFactory: ResourcesStreamClientFactory =
       override !== null
         ? override
-        : (id, callbacks) => {
+        : (scope, callbacks) => {
             if (wsStreamClient === null) {
               throw new Error(
                 "ResourcesStreamMount: WsStreamClient missing at open time.",
@@ -51,17 +71,62 @@ export function ResourcesStreamMount(
             }
             return new ResourcesStreamClient({
               wsStreamClient,
-              epicId: id,
+              scope,
               callbacks,
             });
           };
     resourcesRegistry.acquire(epicId, clientToken, () =>
-      createResourcesStore({ epicId, streamClientFactory }),
+      createResourcesStore({
+        scope: { kind: "epic", epicId },
+        streamClientFactory,
+      }),
     );
     return () => {
       resourcesRegistry.release(epicId);
     };
-  }, [epicId, resourcesUnsupported, wsStreamClient]);
+  }, [epicId, resourcesUnsupported, streamWanted, wsStreamClient]);
+
+  return null;
+}
+
+export function GlobalResourcesStreamMount(): ReactNode {
+  const wsStreamClient = useWsStreamClient();
+  const resourcesSupport = useStreamMethodSupport("resources.subscribe");
+  const resourcesVersion = useStreamMethodSchemaVersion("resources.subscribe");
+  const resourcesUnsupported =
+    resourcesSupport === "unsupported" ||
+    (resourcesVersion !== null && !resourcesGlobalSupported(resourcesVersion));
+
+  useEffect(() => {
+    if (resourcesUnsupported) return;
+    const override = getResourcesStreamClientFactoryOverride();
+    if (override === null && wsStreamClient === null) return;
+    const clientToken: unknown = override !== null ? override : wsStreamClient;
+    const streamClientFactory: ResourcesStreamClientFactory =
+      override !== null
+        ? override
+        : (scope, callbacks) => {
+            if (wsStreamClient === null) {
+              throw new Error(
+                "GlobalResourcesStreamMount: WsStreamClient missing at open time.",
+              );
+            }
+            return new ResourcesStreamClient({
+              wsStreamClient,
+              scope,
+              callbacks,
+            });
+          };
+    resourcesRegistry.acquireGlobal(clientToken, () =>
+      createResourcesStore({
+        scope: { kind: "global" },
+        streamClientFactory,
+      }),
+    );
+    return () => {
+      resourcesRegistry.releaseGlobal();
+    };
+  }, [resourcesUnsupported, wsStreamClient]);
 
   return null;
 }

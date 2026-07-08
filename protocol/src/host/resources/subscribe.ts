@@ -1,6 +1,6 @@
 /**
- * `resources.subscribe@1.0` - versioned streaming-RPC contract for live
- * process-resource snapshots, scoped to a single epic.
+ * `resources.subscribe@1.0` / `@1.1` - versioned streaming-RPC contract for
+ * live process-resource snapshots.
  *
  * Subscribing opens a per-epic view over the host's `ResourceTracker`: the
  * owner snapshots (chats, terminals, terminal-agents) whose `epicId` matches
@@ -38,12 +38,39 @@
 import { z } from "zod";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
 
-export const resourcesSubscribeOpenRequestSchema = z.object({
+export const resourcesSubscribeOpenRequestV10Schema = z.object({
   epicId: z.string(),
 });
-export type ResourcesSubscribeOpenRequest = z.infer<
-  typeof resourcesSubscribeOpenRequestSchema
+export type ResourcesSubscribeOpenRequestV10 = z.infer<
+  typeof resourcesSubscribeOpenRequestV10Schema
 >;
+
+export const resourcesSubscribeScopeSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("epic"),
+    epicId: z.string(),
+  }),
+  z.object({
+    kind: z.literal("global"),
+  }),
+]);
+export type ResourcesSubscribeScopeWire = z.infer<
+  typeof resourcesSubscribeScopeSchema
+>;
+
+export const resourcesSubscribeOpenRequestV11Schema = z.object({
+  // Kept on wire so a newer client can safely downgrade a global probe to
+  // @1.0 without failing client-side request projection.
+  epicId: z.string(),
+  scope: resourcesSubscribeScopeSchema,
+});
+export type ResourcesSubscribeOpenRequestV11 = z.infer<
+  typeof resourcesSubscribeOpenRequestV11Schema
+>;
+
+export const resourcesSubscribeOpenRequestSchema =
+  resourcesSubscribeOpenRequestV10Schema;
+export type ResourcesSubscribeOpenRequest = ResourcesSubscribeOpenRequestV10;
 
 export const resourceOwnerKindSchema = z.enum([
   "chat",
@@ -121,6 +148,7 @@ const resourcesProjectionFields = {
   sampledAt: z.number(),
   app: appResourceSnapshotSchema.nullable(),
   owners: z.array(ownerResourceSnapshotSchema),
+  epics: z.array(epicResourceSnapshotSchema).optional(),
   // `null` when the epic has no tracked owner roots - "not currently tracked",
   // distinct from an aggregate whose totals happen to be zero.
   epic: epicResourceSnapshotSchema.nullable(),
@@ -164,7 +192,15 @@ export type ResourcesSubscribeClientFrame = z.infer<
 export const resourcesSubscribeV10 = defineStreamRpcContract({
   method: "resources.subscribe",
   schemaVersion: { major: 1, minor: 0 } as const,
-  openRequestSchema: resourcesSubscribeOpenRequestSchema,
+  openRequestSchema: resourcesSubscribeOpenRequestV10Schema,
+  serverFrameSchema: resourcesSubscribeServerFrameSchema,
+  clientFrameSchema: resourcesSubscribeClientFrameSchema,
+});
+
+export const resourcesSubscribeV11 = defineStreamRpcContract({
+  method: "resources.subscribe",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  openRequestSchema: resourcesSubscribeOpenRequestV11Schema,
   serverFrameSchema: resourcesSubscribeServerFrameSchema,
   clientFrameSchema: resourcesSubscribeClientFrameSchema,
 });

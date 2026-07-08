@@ -65,6 +65,9 @@ import { DesktopAuthSession } from "../auth/desktop-auth-session";
 import { DesktopSupportService } from "../app/support";
 import { MenuController } from "../menu/menu-controller";
 import { initialRouteForWindowSnapshot } from "./window-initial-route";
+import { ShellQuitState } from "./shell-quit-state";
+import { planActivateWithoutLiveWindow } from "./activate-window-plan";
+import type { RestorableWindowEntry } from "../windows/desktop-state-store";
 import { readResolutionTestDisplay } from "../windows/resolution-test-env";
 import { installNotificationActivationHandler } from "../notifications";
 import {
@@ -118,6 +121,20 @@ import { installHostWakeRecovery } from "./host-wake-recovery";
 import { DESKTOP_APP_NAME } from "../../config";
 
 const APP_DISPLAY_NAME = DESKTOP_APP_NAME;
+
+// Per-window fresh-snapshot query budget during `before-quit`. Each renderer,
+// on receiving `getFreshUnsyncedSnapshot`, first AWAITS its debounced per-window
+// projection flush (open epic tabs / pane layout / drafts -> main's
+// `PerWindowState`) and only then replies. So by the time this query resolves,
+// main's per-window state - and thus the subsequent `desktopStateStore.flush()`
+// - already reflects the latest layout. 200ms comfortably covers the two local
+// IPC round-trips (projection `update`, then the fresh-snapshot reply) a
+// responsive renderer needs - they are same-machine calls over a small JSON
+// payload, typically well under ~20ms combined. It is deliberately NOT larger:
+// the ceiling exists to bound how long quit hangs when a renderer is frozen
+// (where no timeout would help), and the cached ambient snapshot is the
+// fail-safe fallback on timeout.
+const QUIT_FRESH_UNSYNCED_SNAPSHOT_TIMEOUT_MS = 200;
 
 /**
  * Phased desktop boot.
@@ -372,6 +389,11 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
 
   const tray = await createTraySafe(createMruWindowProxy(windowRegistry));
 
+  // Flipped once `before-quit` fires (any quit path). The windows registry-change
+  // listener reads it so a `closed` event that is part of a quit never prunes the
+  // per-window restore snapshot.
+  const shellQuitState = new ShellQuitState();
+
   log.debug("[desktop] authn base URL", { authnBaseUrl: config.authnBaseUrl });
   const bridge = new RunnerIpcBridge({
     host,
@@ -387,6 +409,7 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
     authSession,
     support,
     zoomController: createdZoomController,
+    quitState: shellQuitState,
   });
   bridge.install();
   state.bridge = bridge;
@@ -444,6 +467,7 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
     tray,
     desktopStateStore,
     windowGeometryPersistence,
+    quitState: shellQuitState,
   });
 
   return { host, menu, windowRegistry, zoomController: createdZoomController };
@@ -662,6 +686,7 @@ interface LifecycleServices {
   readonly tray: DesktopTrayController | null;
   readonly desktopStateStore: DesktopStateStore;
   readonly windowGeometryPersistence: WindowGeometryPersistence;
+  readonly quitState: ShellQuitState;
 }
 
 function wireAppLifecycle(state: BootState, services: LifecycleServices): void {
@@ -674,6 +699,20 @@ function wireAppLifecycle(state: BootState, services: LifecycleServices): void {
 
   app.on("activate", () => {
     if (services.windowRegistry.focusMru()) {
+      return;
+    }
+    // No live window to focus (e.g. macOS red-light close of the last window
+    // left the app running). Restore the preserved window snapshot(s) rather
+    // than minting a blank window, so a close-then-reopen keeps the user's tabs,
+    // canvas, and drafts. Falls back to a blank window when nothing restorable
+    // survives.
+    const plan = planActivateWithoutLiveWindow(
+      services.desktopStateStore.getRestorableWindowEntries(),
+    );
+    if (plan.kind === "restore") {
+      for (const entry of plan.entries) {
+        restorePreservedWindowOnActivate(services, entry);
+      }
       return;
     }
     void services.windowRegistry.create({
@@ -715,6 +754,11 @@ function wireAppLifecycle(state: BootState, services: LifecycleServices): void {
   };
 
   app.on("before-quit", (event) => {
+    // Mark the shell as quitting on the FIRST pass, before any preventDefault or
+    // async work, so the windows registry-change listener preserves every
+    // closing window's restore snapshot for the remainder of the quit - even the
+    // non-last windows a Cmd+Q closes. Idempotent across the multi-pass quit.
+    services.quitState.markQuitting();
     if (quitAuthorized) {
       teardownShellObservers();
       return;
@@ -777,6 +821,7 @@ function wireAppLifecycle(state: BootState, services: LifecycleServices): void {
             log.info(
               "[desktop] before-quit - install failed during reconcile, staying open",
             );
+            services.quitState.resetQuitting();
             return;
           }
           authorizeQuitAfterFlush();
@@ -786,7 +831,7 @@ function wireAppLifecycle(state: BootState, services: LifecycleServices): void {
 
     event.preventDefault();
     void activeBridge
-      .requestFreshUnsyncedSnapshot(200)
+      .requestFreshUnsyncedSnapshot(QUIT_FRESH_UNSYNCED_SNAPSHOT_TIMEOUT_MS)
       .then((snapshot) => {
         if (!activeBridge.hasUnsyncedEdits()) {
           log.info(
@@ -808,11 +853,33 @@ function wireAppLifecycle(state: BootState, services: LifecycleServices): void {
           })
           .catch((err) => {
             log.warn("[desktop] quit decision failed - staying alive", err);
+            services.quitState.resetQuitting();
           });
       })
       .catch((err) => {
         log.warn("[desktop] fresh-snapshot query failed - staying alive", err);
+        services.quitState.resetQuitting();
       });
+  });
+}
+
+// Recreate a preserved window on macOS `activate`, reusing its original id so
+// the in-memory + on-disk per-window snapshot rebinds to it (the renderer reads
+// its snapshot by window id). Mirrors the startup restore path.
+function restorePreservedWindowOnActivate(
+  services: LifecycleServices,
+  entry: RestorableWindowEntry,
+): void {
+  services.windowRegistry.createWithId({
+    windowId: entry.windowId,
+    initialRoute: initialRouteForWindowSnapshot(entry.snapshot),
+    beforeLoad: null,
+  });
+  void services.windowRegistry.loadById(entry.windowId).catch((err) => {
+    log.warn("[desktop] activate restore window load failed", {
+      windowId: entry.windowId,
+      err,
+    });
   });
 }
 

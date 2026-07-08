@@ -109,7 +109,7 @@ describe("TextSegment next steps rendering", () => {
     expect((button as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it("locks every option in the block after a successful send", () => {
+  it("keeps unsent options enabled after a successful send", () => {
     const onSend = vi.fn(() => true);
     render(
       <TextSegment
@@ -136,7 +136,15 @@ describe("TextSegment next steps rendering", () => {
       screen.getByRole<HTMLButtonElement>("button", {
         name: "Review the changed files with /review-files",
       }).disabled,
-    ).toBe(true);
+    ).toBe(false);
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Review the changed files with /review-files",
+      }),
+    );
+
+    expect(onSend).toHaveBeenCalledTimes(2);
   });
 
   it("copies a prompt from the trailing next step copy button", () => {

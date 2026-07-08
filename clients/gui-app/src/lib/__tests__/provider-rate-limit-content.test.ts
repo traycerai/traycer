@@ -48,7 +48,7 @@ describe("formatUnavailableReason", () => {
 
   it("maps the transient usage-fetch-failed reason to retry-oriented copy, distinct from the account-capability wording", () => {
     expect(formatUnavailableReason("usage_fetch_failed")).toBe(
-      "couldn't fetch usage — will retry",
+      "failed to fetch usage",
     );
     expect(formatUnavailableReason("usage_fetch_failed")).not.toBe(
       formatUnavailableReason("rate_limits_not_available"),
