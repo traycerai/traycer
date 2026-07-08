@@ -59,6 +59,16 @@ export const ChatSlashCommandNode = TiptapNode.create({
 
 const slashLeadingGuardKey = new PluginKey("composer-slash-leading-guard");
 
+/**
+ * Stable key for the `/` command suggestion plugin. Exported (and pinned via the
+ * Suggestion config below) so code outside the editor can imperatively exit an
+ * open suggestion by dispatching `setMeta(slashSuggestionPluginKey, { exit: true })`
+ * - see the editor's `dismissActiveSuggestion` handle.
+ */
+export const slashSuggestionPluginKey = new PluginKey(
+  "composer-slash-suggestion",
+);
+
 function slashLeadingGuardPlugin(): Plugin {
   return new Plugin({
     key: slashLeadingGuardKey,
@@ -80,9 +90,9 @@ function slashLeadingGuardPlugin(): Plugin {
 
 function collectIllegalSlashPositions(state: EditorState): number[] {
   const positions: number[] = [];
-  state.doc.descendants((node, pos, parent, index) => {
+  state.doc.descendants((node, pos) => {
     if (node.type.name !== "slashCommand") return true;
-    if (!isLeadingPosition(state.doc, parent, index)) {
+    if (!isLeadingSlashPosition(state.doc, pos)) {
       positions.push(pos);
     }
     return false;
@@ -90,15 +100,13 @@ function collectIllegalSlashPositions(state: EditorState): number[] {
   return positions;
 }
 
-function isLeadingPosition(
-  doc: ProseMirrorNode,
-  parent: ProseMirrorNode | null,
-  index: number,
-): boolean {
-  if (parent === null) return false;
-  if (index !== 0) return false;
-  if (doc.firstChild === null) return false;
-  return doc.firstChild === parent;
+function isLeadingSlashPosition(doc: ProseMirrorNode, pos: number): boolean {
+  return leadingTokenBefore(doc, pos) === null;
+}
+
+interface LeadingToken {
+  readonly node: ProseMirrorNode;
+  readonly pos: number;
 }
 
 export interface SlashSuggestionExtensionDeps {
@@ -115,6 +123,7 @@ export function createSlashSuggestionExtension(
       return [
         Suggestion({
           editor: this.editor,
+          pluginKey: slashSuggestionPluginKey,
           char: "/",
           allowSpaces: false,
           startOfLine: true,
@@ -143,15 +152,86 @@ export function isLeadingRange(
   from: number,
   _to: number,
 ): boolean {
-  const doc = state.doc;
-  const firstChild = doc.firstChild;
-  if (firstChild === null) return false;
-  const paragraphStart = 1;
-  if (from > paragraphStart) {
-    const before = doc.textBetween(paragraphStart, from);
-    if (before.length > 0) return false;
+  return leadingTokenBefore(state.doc, from) === null;
+}
+
+export function leadingTokenBefore(
+  doc: ProseMirrorNode,
+  pos: number,
+): ProseMirrorNode | null {
+  return leadingTokenBeforePosition(doc, pos)?.node ?? null;
+}
+
+export function leadingTokenInDocument(
+  doc: ProseMirrorNode,
+): LeadingToken | null {
+  let childPos = 0;
+  for (let index = 0; index < doc.childCount; index += 1) {
+    const child = doc.child(index);
+    if (isIgnoredLeadingLeaf(child)) {
+      childPos += child.nodeSize;
+      continue;
+    }
+
+    const token = leadingTokenInRange(doc, childPos, childPos + child.nodeSize);
+    return token ?? { node: child, pos: childPos };
   }
-  return true;
+  return null;
+}
+
+function leadingTokenBeforePosition(
+  doc: ProseMirrorNode,
+  pos: number,
+): LeadingToken | null {
+  const clampedPos = Math.min(Math.max(0, pos), doc.content.size);
+  const $pos = doc.resolve(clampedPos);
+  const topLevelIndex = $pos.index(0);
+  for (let index = 0; index < topLevelIndex; index += 1) {
+    const child = doc.child(index);
+    if (!isIgnoredLeadingLeaf(child)) {
+      return { node: child, pos: childOffsetBefore(doc, index) };
+    }
+  }
+  if ($pos.depth === 0) return null;
+  return leadingTokenInRange(doc, $pos.before(1), clampedPos);
+}
+
+function leadingTokenInRange(
+  doc: ProseMirrorNode,
+  from: number,
+  to: number,
+): LeadingToken | null {
+  let token: LeadingToken | null = null;
+  doc.nodesBetween(from, to, (node, pos) => {
+    if (token !== null) return false;
+    if (isIgnoredLeadingLeaf(node)) return false;
+    if (isTransparentLeadingContainer(node)) return true;
+    if (node.isText && node.textContent.length === 0) return false;
+    if (node.isText || node.isAtom || node.isLeaf) {
+      token = { node, pos };
+      return false;
+    }
+    return true;
+  });
+  return token;
+}
+
+function childOffsetBefore(doc: ProseMirrorNode, index: number): number {
+  let offset = 0;
+  for (let childIndex = 0; childIndex < index; childIndex += 1) {
+    offset += doc.child(childIndex).nodeSize;
+  }
+  return offset;
+}
+
+function isIgnoredLeadingLeaf(node: ProseMirrorNode): boolean {
+  return (
+    node.type.name === "attachmentGroup" || node.type.name === "imageAttachment"
+  );
+}
+
+function isTransparentLeadingContainer(node: ProseMirrorNode): boolean {
+  return !node.isText && !node.isLeaf && !node.isAtom;
 }
 
 function commitSlashInsertion(

@@ -10,7 +10,7 @@
 
 export const PERSIST_PREFIX = "traycer-gui-app";
 
-// Five stores bucket their key by the signed-in identity; an absent/empty
+// Six stores bucket their key by the signed-in identity; an absent/empty
 // identity collapses to the shared anonymous bucket. Preserved verbatim from
 // the per-store `ANONYMOUS_USER_KEY = "anon"` + `value.length > 0` logic.
 export const scopeBucket = (value: string | null): string =>
@@ -32,6 +32,9 @@ export const scopedPersistKey = (name: string, ...segments: string[]): string =>
 
 export const composerRunSettingsKey = (email: string | null): string =>
   scopedPersistKey("composer-run-settings", scopeBucket(email));
+
+export const composerHarnessMemoryKey = (email: string | null): string =>
+  scopedPersistKey("composer-harness-memory", scopeBucket(email));
 
 export const worktreeIntentMemoryKey = (email: string | null): string =>
   scopedPersistKey("worktree-intent-memory", scopeBucket(email));
@@ -68,10 +71,15 @@ export interface PersistStoreEntry {
 }
 
 export const PERSIST_STORES = [
-  // ── Scoped zustand stores (5) ────────────────────────────────────────────
+  // ── Scoped zustand stores (6) ────────────────────────────────────────────
   {
     camelName: "composerRunSettings",
     leaf: "composer-run-settings",
+    kind: "scoped",
+  },
+  {
+    camelName: "composerHarnessMemory",
+    leaf: "composer-harness-memory",
     kind: "scoped",
   },
   {
@@ -87,7 +95,7 @@ export const PERSIST_STORES = [
   { camelName: "epicCanvas", leaf: "epic-canvas", kind: "scoped" },
   { camelName: "openEpic", leaf: "open-epic", kind: "scoped" },
 
-  // ── Static zustand stores (17) ───────────────────────────────────────────
+  // ── Static zustand stores (18) ───────────────────────────────────────────
   { camelName: "onboarding", leaf: "onboarding", kind: "static" },
   { camelName: "commandPalette", leaf: "command-palette", kind: "static" },
   { camelName: "composerDraft", leaf: "composer-drafts", kind: "static" },
@@ -119,6 +127,11 @@ export const PERSIST_STORES = [
   },
   { camelName: "settings", leaf: "settings", kind: "static" },
   { camelName: "settingsSection", leaf: "settings-section", kind: "static" },
+  {
+    camelName: "rateLimitPopover",
+    leaf: "rate-limit-popover",
+    kind: "static",
+  },
   { camelName: "tabs", leaf: "tabs", kind: "static" },
   {
     camelName: "workspaceFolders",

@@ -15,7 +15,9 @@ import {
   ChevronDown,
   Inbox,
   ListOrdered,
+  Pause,
   Pencil,
+  Play,
   SendHorizontal,
   Trash2,
   Undo2,
@@ -49,11 +51,15 @@ import type {
 import { QueuedMessageContentPreview } from "@/components/chat/queued-message-content-preview";
 import { isReceivedAgentResponse } from "@/components/chat/chat-queue-utils";
 import {
+  QUEUED_MESSAGE_DND_MODIFIERS,
   useQueuedMessageReorderDnd,
   useQueuedMessageRowSortable,
   type QueuedMessageDropPreview,
 } from "@/components/chat/queued-message-reorder-dnd";
-import { queueItemSteerLocked } from "@/components/chat/queued-message-utils";
+import {
+  queueItemSteerLocked,
+  useQueuePauseState,
+} from "@/components/chat/queued-message-utils";
 import type { ChatSessionState } from "@/stores/chats/chat-session-store";
 import { isOptimisticQueuedItem } from "@/stores/chats/optimistic-queue";
 import { mergeRefs } from "@/lib/merge-refs";
@@ -91,6 +97,7 @@ export interface QueuedMessagePanelProps {
   readonly editingQueueItemId: string | null;
   readonly scrollRegionMaxHeightClass: string;
   readonly separated?: boolean;
+  readonly onPause: () => string | null;
   readonly onResume: () => string | null;
   readonly onEdit: (item: ChatQueuedItem) => void;
   readonly onCancel: (item: ChatQueuedItem) => void;
@@ -121,6 +128,7 @@ export function QueuedMessagePanel(props: QueuedMessagePanelProps) {
     () => items.some((item) => queueItemSteerLocked(item)),
     [items],
   );
+  const { hasPausableHumanItems, hasPausedItems } = useQueuePauseState(items);
   const reorderDnd = useQueuedMessageReorderDnd({
     items,
     onReorder: props.onReorder,
@@ -170,8 +178,11 @@ export function QueuedMessagePanel(props: QueuedMessagePanelProps) {
         open={open}
         count={items.length}
         queueStatus={queueStatus}
+        canPauseQueue={hasPausableHumanItems}
+        canResumeQueue={hasPausedItems}
         canAct={props.canAct}
         readOnly={props.readOnly}
+        onPause={props.onPause}
         onResume={props.onResume}
       />
       <CollapsibleContent>
@@ -184,7 +195,9 @@ export function QueuedMessagePanel(props: QueuedMessagePanelProps) {
         >
           <DndContext
             sensors={sensors}
+            autoScroll={false}
             collisionDetection={reorderDnd.collisionDetection}
+            modifiers={QUEUED_MESSAGE_DND_MODIFIERS}
             onDragStart={reorderDnd.handleDragStart}
             onDragMove={reorderDnd.handleDragMove}
             onDragOver={reorderDnd.handleDragOver}
@@ -229,13 +242,21 @@ export function QueuedMessagePanel(props: QueuedMessagePanelProps) {
   );
 }
 
-function queueHeaderTooltip(
-  queueStatus: ChatSessionState["queue"]["status"],
-): string | null {
-  if (queueStatus === "running") {
+function queueHeaderTooltip(input: {
+  readonly queueStatus: ChatSessionState["queue"]["status"];
+  readonly showPauseQueueButton: boolean;
+  readonly showResumeQueueButton: boolean;
+}): string | null {
+  if (input.showResumeQueueButton) {
+    return "Resume held queued messages";
+  }
+  if (input.showPauseQueueButton) {
+    return "Pause human queued messages";
+  }
+  if (input.queueStatus === "running") {
     return "Queued prompts run after the active turn unless a frozen row is being steered into it";
   }
-  if (queueStatus === "paused") {
+  if (input.queueStatus === "paused") {
     return "Resume to continue sending queued messages";
   }
   return null;
@@ -245,15 +266,38 @@ function QueuedMessageHeader(props: {
   readonly open: boolean;
   readonly count: number;
   readonly queueStatus: ChatSessionState["queue"]["status"];
+  readonly canPauseQueue: boolean;
+  readonly canResumeQueue: boolean;
   readonly canAct: boolean;
   readonly readOnly: boolean;
+  readonly onPause: () => string | null;
   readonly onResume: () => string | null;
 }) {
-  const { count, queueStatus, canAct, readOnly, onResume, open } = props;
+  const {
+    count,
+    queueStatus,
+    canPauseQueue,
+    canResumeQueue,
+    canAct,
+    readOnly,
+    onPause,
+    onResume,
+    open,
+  } = props;
+  const handlePause = useCallback(() => {
+    onPause();
+  }, [onPause]);
   const handleResume = useCallback(() => {
     onResume();
   }, [onResume]);
-  const tooltip = queueHeaderTooltip(queueStatus);
+  const showResumeQueueButton = canResumeQueue && !readOnly;
+  const showPauseQueueButton =
+    !showResumeQueueButton && canPauseQueue && !readOnly;
+  const tooltip = queueHeaderTooltip({
+    queueStatus,
+    showPauseQueueButton,
+    showResumeQueueButton,
+  });
 
   const header = (
     <div
@@ -304,18 +348,35 @@ function QueuedMessageHeader(props: {
           Owner manages queue
         </span>
       ) : null}
-      {queueStatus === "paused" && !readOnly ? (
+      {showResumeQueueButton ? (
         <div className="flex shrink-0 items-center pr-1.5">
           <Button
             type="button"
             size="sm"
             variant="outline"
-            className="h-7 shrink-0 px-2 text-ui-xs"
+            className="h-7 shrink-0 gap-1.5 px-2 text-ui-xs"
             disabled={!canAct}
             onClick={handleResume}
             data-testid="resume-queue-button"
           >
+            <Play className="size-3.5" />
             Resume
+          </Button>
+        </div>
+      ) : null}
+      {showPauseQueueButton ? (
+        <div className="flex shrink-0 items-center pr-1.5">
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-7 shrink-0 gap-1.5 px-2 text-ui-xs"
+            disabled={!canAct}
+            onClick={handlePause}
+            data-testid="pause-queue-button"
+          >
+            <Pause className="size-3.5" />
+            Pause
           </Button>
         </div>
       ) : null}

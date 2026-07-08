@@ -22,7 +22,10 @@ import {
   loadEffectiveShellConfig,
   migrateCliConfig,
   readCliConfig,
+  readLogLevels,
+  readLogLevelsSync,
   setEnvOverride,
+  setLogLevels,
   setShell,
   writeCliConfig,
 } from "../store";
@@ -48,9 +51,70 @@ describe("cli config store", () => {
       version: 1 as const,
       shell: { path: "/bin/fish", args: ["-l"] },
       envOverrides: { FOO: "bar" },
+      logs: { cliLogLevel: "info" as const, hostLogLevel: "info" as const },
     };
     await writeCliConfig(cfg);
     expect(await readCliConfig()).toEqual(cfg);
+  });
+
+  it("defaults both log levels to info when the file omits them", async () => {
+    await writeRaw(
+      JSON.stringify({
+        version: 1,
+        shell: { path: null, args: null },
+        envOverrides: {},
+      }),
+    );
+    expect(await readLogLevels()).toEqual({
+      cliLogLevel: "info",
+      hostLogLevel: "info",
+    });
+  });
+
+  it("persists explicit client + host log levels", async () => {
+    await setLogLevels("debug", "warn");
+    expect(await readLogLevels()).toEqual({
+      cliLogLevel: "debug",
+      hostLogLevel: "warn",
+    });
+  });
+
+  it("preserves log levels across an unrelated shell write", async () => {
+    await setLogLevels("trace", "debug");
+    await setShell("/bin/fish", ["-l"]);
+    expect(await readLogLevels()).toEqual({
+      cliLogLevel: "trace",
+      hostLogLevel: "debug",
+    });
+  });
+
+  it("preserves log levels across an env-override write", async () => {
+    await setLogLevels("warn", "error");
+    await setEnvOverride("FOO", "bar");
+    expect(await readLogLevels()).toEqual({
+      cliLogLevel: "warn",
+      hostLogLevel: "error",
+    });
+  });
+
+  it("readLogLevelsSync falls back to info defaults on a missing or corrupt file", async () => {
+    expect(readLogLevelsSync()).toEqual({
+      cliLogLevel: "info",
+      hostLogLevel: "info",
+    });
+    await writeRaw("{ not json");
+    expect(readLogLevelsSync()).toEqual({
+      cliLogLevel: "info",
+      hostLogLevel: "info",
+    });
+  });
+
+  it("readLogLevelsSync reads persisted levels", async () => {
+    await setLogLevels("debug", "trace");
+    expect(readLogLevelsSync()).toEqual({
+      cliLogLevel: "debug",
+      hostLogLevel: "trace",
+    });
   });
 
   it("stores explicit unsets as null env overrides", async () => {
@@ -121,6 +185,7 @@ describe("cli config store", () => {
       version: CLI_CONFIG_VERSION,
       shell: { path: "/bin/zsh", args: null },
       envOverrides: {},
+      logs: { cliLogLevel: "info", hostLogLevel: "info" },
     });
   });
 

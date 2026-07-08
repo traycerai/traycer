@@ -13,15 +13,31 @@ import type {
 import type { WsStreamClient } from "./ws-stream-client";
 
 /**
- * Typed handlers for a `terminal.subscribe@1.0` session. The renderer's
- * terminal store binds these so raw stream envelopes do not leak into React.
+ * Typed handlers for a `terminal.subscribe` session. The renderer's terminal
+ * store binds these so raw stream envelopes do not leak into React.
+ *
+ * `onSnapshot`/`onData` take the content as a separate `string | Uint8Array`
+ * parameter rather than reading it off the frame: a `@1.2`+ connection
+ * receives `binarySnapshot`/`binaryData` instead of `snapshot`/`data`, whose
+ * payload arrives out-of-band as the paired binary WS frame rather than a
+ * JSON string field (see `subscribe.ts`'s file-level doc comment). This
+ * lets the store handle either encoding uniformly without knowing which
+ * minor negotiated.
  */
 export interface TerminalStreamCallbacks {
   readonly onSnapshot: (
-    frame: Extract<TerminalSubscribeServerFrame, { readonly kind: "snapshot" }>,
+    frame: Extract<
+      TerminalSubscribeServerFrame,
+      { readonly kind: "snapshot" | "binarySnapshot" }
+    >,
+    scrollback: string | Uint8Array,
   ) => void;
   readonly onData: (
-    frame: Extract<TerminalSubscribeServerFrame, { readonly kind: "data" }>,
+    frame: Extract<
+      TerminalSubscribeServerFrame,
+      { readonly kind: "data" | "binaryData" }
+    >,
+    chunk: string | Uint8Array,
   ) => void;
   readonly onResized: (
     frame: Extract<TerminalSubscribeServerFrame, { readonly kind: "resized" }>,
@@ -33,6 +49,12 @@ export interface TerminalStreamCallbacks {
     frame: Extract<
       TerminalSubscribeServerFrame,
       { readonly kind: "actionAck" }
+    >,
+  ) => void;
+  readonly onSessionUpdated: (
+    frame: Extract<
+      TerminalSubscribeServerFrame,
+      { readonly kind: "sessionUpdated" }
     >,
   ) => void;
   readonly onConnectionStatus: (
@@ -91,19 +113,57 @@ export class TerminalStreamClient {
     envelope: StreamFrameEnvelope,
     binaryPayload: Uint8Array | null,
   ): void {
-    if (binaryPayload !== null) return;
     const parsed = terminalSubscribeServerFrameSchema.safeParse(envelope);
     if (!parsed.success) {
+      // Schema mismatch: a version-skewed host/client or a genuine wire bug.
+      // Log the envelope kind and issue paths only - never `parsed.error` or
+      // the raw envelope, which may carry user terminal content
+      // (scrollback/chunk) inside whichever field failed to validate.
+      const issuePaths = parsed.error.issues
+        .map((issue) =>
+          issue.path.length > 0 ? issue.path.join(".") : "(root)",
+        )
+        .join(", ");
+      console.warn(
+        `[stream] terminal.subscribe frame failed schema validation (kind=${envelope.kind}, issues=[${issuePaths}]); dropping frame`,
+      );
       return;
     }
     const frame: TerminalSubscribeServerFrame = parsed.data;
     switch (frame.kind) {
       case "snapshot": {
-        this.callbacks.onSnapshot(frame);
+        this.callbacks.onSnapshot(frame, frame.scrollback);
+        return;
+      }
+      case "binarySnapshot": {
+        if (binaryPayload === null) {
+          // Protocol violation: `hasBinaryPayload: true` promises a paired
+          // binary WS frame right behind this envelope (see subscribe.ts's
+          // file-level doc comment). Losing it here means the transport's
+          // envelope/binary-frame pairing broke somewhere below this class -
+          // surface it rather than silently dropping the snapshot.
+          console.warn(
+            `[stream] binarySnapshot for terminal.subscribe (sessionId=${frame.sessionId}) arrived without its paired binary payload; dropping frame`,
+          );
+          return;
+        }
+        this.callbacks.onSnapshot(frame, binaryPayload);
         return;
       }
       case "data": {
-        this.callbacks.onData(frame);
+        this.callbacks.onData(frame, frame.chunk);
+        return;
+      }
+      case "binaryData": {
+        if (binaryPayload === null) {
+          // Same protocol violation as `binarySnapshot` above, for the live
+          // data frame.
+          console.warn(
+            `[stream] binaryData for terminal.subscribe (sessionId=${frame.sessionId}) arrived without its paired binary payload; dropping frame`,
+          );
+          return;
+        }
+        this.callbacks.onData(frame, binaryPayload);
         return;
       }
       case "resized": {
@@ -116,6 +176,10 @@ export class TerminalStreamClient {
       }
       case "actionAck": {
         this.callbacks.onActionAck(frame);
+        return;
+      }
+      case "sessionUpdated": {
+        this.callbacks.onSessionUpdated(frame);
         return;
       }
       case "pong": {

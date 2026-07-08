@@ -16,6 +16,7 @@ import type {
   MenuManagedWindow,
   MenuWindowRecord,
   MenuWindowRegistry,
+  MenuZoomController,
 } from "../menu-controller";
 
 interface CapturedMenuItem {
@@ -203,6 +204,77 @@ class FakeWindowRegistry extends EventEmitter implements MenuWindowRegistry {
   }
 }
 
+class FakeZoomController implements MenuZoomController {
+  readonly requests: string[] = [];
+
+  zoomIn(): Promise<number> {
+    this.requests.push("in");
+    return Promise.resolve(110);
+  }
+
+  zoomOut(): Promise<number> {
+    this.requests.push("out");
+    return Promise.resolve(90);
+  }
+
+  reset(): Promise<number> {
+    this.requests.push("reset");
+    return Promise.resolve(100);
+  }
+}
+
+class EmptyWindowRegistry extends EventEmitter implements MenuWindowRegistry {
+  readonly createRequests: Array<{
+    readonly initialRoute: string | null;
+    readonly beforeLoad: ((windowId: string) => void) | null;
+  }> = [];
+  private readonly createError: Error | null;
+
+  constructor(createError: Error | null) {
+    super();
+    this.createError = createError;
+  }
+
+  async create(options: {
+    readonly initialRoute: string | null;
+    readonly beforeLoad: ((windowId: string) => void) | null;
+  }): Promise<string> {
+    this.createRequests.push(options);
+    if (this.createError !== null) {
+      throw this.createError;
+    }
+    return "window-created";
+  }
+
+  closeById(_windowId: string): Promise<void> {
+    return Promise.resolve();
+  }
+
+  minimizeById(_windowId: string): Promise<void> {
+    return Promise.resolve();
+  }
+
+  zoomById(_windowId: string): Promise<void> {
+    return Promise.resolve();
+  }
+
+  focusById(_windowId: string): boolean {
+    return false;
+  }
+
+  list(): readonly WindowSummary[] {
+    return [];
+  }
+
+  records(): readonly MenuWindowRecord[] {
+    return [];
+  }
+
+  mostRecentlyFocusedId(): string | null {
+    return null;
+  }
+}
+
 class MultiWindowRegistry extends EventEmitter implements MenuWindowRegistry {
   readonly windowA = new FakeWindow();
   readonly windowB = new FakeWindow();
@@ -294,6 +366,7 @@ function createController(options: {
     authSession: options.authSession,
     perWindowState: options.perWindowState,
     tray: null,
+    zoomController: new FakeZoomController(),
     dispatchRendererCommand: options.dispatchRendererCommand,
     checkForUpdates: () => Promise.resolve(),
   });
@@ -418,6 +491,120 @@ describe("MenuController", () => {
     controller.dispose();
   });
 
+  it("dispatches Restart Host through the renderer confirmation path", () => {
+    const host = new FakeHost();
+    const registry = new FakeWindowRegistry();
+    const dispatchRendererCommand = vi.fn(() => true);
+    const controller = createController({
+      registry,
+      host,
+      authSession: new DesktopAuthSession(),
+      perWindowState: new PerWindowState(null),
+      dispatchRendererCommand,
+    });
+
+    controller.install();
+    runControllerCommand(controller, "host.restart", null);
+
+    expect(dispatchRendererCommand).toHaveBeenCalledWith("host.restart");
+    expect(host.respawnCalls).toBe(0);
+    expect(registry.createRequests).toEqual([]);
+    controller.dispose();
+  });
+
+  it("opens a window and retries Restart Host when no renderer is available", async () => {
+    const host = new FakeHost();
+    const registry = new EmptyWindowRegistry(null);
+    const dispatchRendererCommand = vi
+      .fn<(_command: MenuCommandId) => boolean>()
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(true);
+    const controller = createController({
+      registry,
+      host,
+      authSession: new DesktopAuthSession(),
+      perWindowState: new PerWindowState(null),
+      dispatchRendererCommand,
+    });
+
+    controller.install();
+    runControllerCommand(controller, "host.restart", null);
+    await Promise.resolve();
+
+    expect(registry.createRequests).toEqual([
+      { initialRoute: null, beforeLoad: null },
+    ]);
+    expect(dispatchRendererCommand).toHaveBeenCalledTimes(2);
+    expect(dispatchRendererCommand).toHaveBeenNthCalledWith(1, "host.restart");
+    expect(dispatchRendererCommand).toHaveBeenNthCalledWith(2, "host.restart");
+    expect(host.respawnCalls).toBe(0);
+    controller.dispose();
+  });
+
+  it("logs when Restart Host opens a window but still has no renderer target", async () => {
+    const host = new FakeHost();
+    const registry = new EmptyWindowRegistry(null);
+    const dispatchRendererCommand = vi.fn(() => false);
+    const controller = createController({
+      registry,
+      host,
+      authSession: new DesktopAuthSession(),
+      perWindowState: new PerWindowState(null),
+      dispatchRendererCommand,
+    });
+
+    controller.install();
+    vi.mocked(log.warn).mockClear();
+    runControllerCommand(controller, "host.restart", null);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(registry.createRequests).toEqual([
+      { initialRoute: null, beforeLoad: null },
+    ]);
+    expect(dispatchRendererCommand).toHaveBeenCalledTimes(2);
+    expect(dispatchRendererCommand).toHaveBeenNthCalledWith(1, "host.restart");
+    expect(dispatchRendererCommand).toHaveBeenNthCalledWith(2, "host.restart");
+    expect(host.respawnCalls).toBe(0);
+    expect(log.warn).toHaveBeenCalledWith(
+      "[menu] host.restart had no renderer after opening window",
+      { command: "host.restart" },
+    );
+    controller.dispose();
+  });
+
+  it("logs when Restart Host cannot open a renderer window", async () => {
+    const createError = new Error("create failed");
+    const host = new FakeHost();
+    const registry = new EmptyWindowRegistry(createError);
+    const dispatchRendererCommand = vi.fn(() => false);
+    const controller = createController({
+      registry,
+      host,
+      authSession: new DesktopAuthSession(),
+      perWindowState: new PerWindowState(null),
+      dispatchRendererCommand,
+    });
+
+    controller.install();
+    vi.mocked(log.warn).mockClear();
+    runControllerCommand(controller, "host.restart", null);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(registry.createRequests).toEqual([
+      { initialRoute: null, beforeLoad: null },
+    ]);
+    expect(dispatchRendererCommand).toHaveBeenCalledTimes(1);
+    expect(dispatchRendererCommand).toHaveBeenCalledWith("host.restart");
+    expect(host.respawnCalls).toBe(0);
+    expect(log.warn).toHaveBeenCalledWith(
+      "[menu] host.restart window creation failed",
+      createError,
+    );
+    controller.dispose();
+  });
+
   it("uses the main-process close path for Close Window", () => {
     const registry = new FakeWindowRegistry();
     const dispatchRendererCommand = vi.fn(() => true);
@@ -454,6 +641,33 @@ describe("MenuController", () => {
 
     expect(registry.minimizeRequests).toEqual(["window-a"]);
     expect(registry.zoomRequests).toEqual(["window-a"]);
+    expect(dispatchRendererCommand).not.toHaveBeenCalled();
+    controller.dispose();
+  });
+
+  it("routes View zoom commands through the zoom controller", async () => {
+    const zoomController = new FakeZoomController();
+    const dispatchRendererCommand = vi.fn(() => true);
+    const controller = new MenuController({
+      appName: "Traycer",
+      platform: "darwin",
+      windowRegistry: new FakeWindowRegistry(),
+      host: new FakeHost(),
+      authSession: new DesktopAuthSession(),
+      perWindowState: new PerWindowState(null),
+      tray: null,
+      zoomController,
+      dispatchRendererCommand,
+      checkForUpdates: () => Promise.resolve(),
+    });
+
+    controller.install();
+    runControllerCommand(controller, "view.zoomIn", null);
+    runControllerCommand(controller, "view.zoomOut", null);
+    runControllerCommand(controller, "view.resetZoom", null);
+    await Promise.resolve();
+
+    expect(zoomController.requests).toEqual(["in", "out", "reset"]);
     expect(dispatchRendererCommand).not.toHaveBeenCalled();
     controller.dispose();
   });

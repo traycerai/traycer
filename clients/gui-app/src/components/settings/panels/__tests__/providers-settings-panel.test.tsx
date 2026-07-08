@@ -1,10 +1,17 @@
 import "../../../../../__tests__/test-browser-apis";
 import type {
+  ProviderAuth,
   ProviderCliCandidate,
   ProviderCliState,
   ProviderSelection,
 } from "@traycer/protocol/host/provider-schemas";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const providerMocks = vi.hoisted(() => ({
@@ -147,6 +154,22 @@ vi.mock("@/hooks/host/use-refresh-rate-limit-usage-on-traycer-turn", () => ({
   useRefreshRateLimitUsageOnTraycerTurn: () => {},
 }));
 
+// Provider rate-limit query + its refresh hook (ProviderRateLimitForProvider,
+// mounted for every codex/claude-code provider row). Same reason: no host
+// client/QueryClient in this harness.
+vi.mock("@/hooks/host/use-host-provider-rate-limits-query", () => ({
+  useHostProviderRateLimitsQuery: () => ({
+    data: undefined,
+    isPending: false,
+    isError: false,
+    isFetching: false,
+    refetch: () => Promise.resolve({}),
+  }),
+}));
+vi.mock("@/hooks/host/use-refresh-provider-rate-limits-on-turn", () => ({
+  useRefreshProviderRateLimitsOnTurn: () => {},
+}));
+
 // Host picker plumbing: a single active host and no transient client means
 // the panel renders inline (no runtime-context re-provide), and `useHostBinding`
 // returns null without a `<HostRuntimeProvider>`.
@@ -215,7 +238,21 @@ function providerState(input: {
     terminalAgentArgs: "",
     envOverrides: [...input.envOverrides],
     loginCapability: null,
+    availabilityPending: false,
   };
+}
+
+function providerStateWithAuth(
+  input: {
+    readonly providerId: ProviderCliState["providerId"];
+    readonly selected: ProviderSelection;
+    readonly candidates: readonly ProviderCliCandidate[];
+    readonly envOverrides: ProviderCliState["envOverrides"];
+  },
+  auth: ProviderAuth,
+  authPending: boolean,
+): ProviderCliState {
+  return { ...providerState(input), auth, authPending };
 }
 
 describe("<ProvidersSettingsPanel />", () => {
@@ -230,6 +267,12 @@ describe("<ProvidersSettingsPanel />", () => {
         }),
         providerState({
           providerId: "traycer",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+        }),
+        providerState({
+          providerId: "openrouter",
           selected: { kind: "bundled" },
           candidates: [],
           envOverrides: [],
@@ -265,6 +308,242 @@ describe("<ProvidersSettingsPanel />", () => {
 
     expect(providerMocks.setSelectionMutate).toHaveBeenCalledWith({
       providerId: "traycer",
+      selection: { kind: "path" },
+    });
+  });
+
+  it("hides the CLI-candidates picker for Amp - a selected path is never consulted", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "amp",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+        }),
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: "Add custom path" }),
+    ).toBeNull();
+  });
+
+  it("orders the provider rail by the default provider order", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "openrouter",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+        }),
+        providerState({
+          providerId: "qwen",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+        }),
+        providerState({
+          providerId: "codex",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+        }),
+        providerState({
+          providerId: "cursor",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+        }),
+        providerState({
+          providerId: "droid",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+        }),
+        providerState({
+          providerId: "kilocode",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+        }),
+        providerState({
+          providerId: "claude-code",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+        }),
+        providerState({
+          providerId: "copilot",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+        }),
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    const nav = screen.getByRole("navigation", { name: "Providers" });
+    expect(
+      within(nav)
+        .getAllByRole("button")
+        .map((button) => button.getAttribute("aria-label")),
+    ).toEqual([
+      "Codex",
+      "Claude Code",
+      "OpenRouter",
+      "Droid",
+      "Cursor",
+      "Copilot",
+      "Kilo Code",
+      "Qwen Code",
+    ]);
+  });
+
+  it("renders configured, unavailable, and pending auth statuses", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        providerStateWithAuth(
+          {
+            providerId: "codex",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+          },
+          {
+            status: "configured",
+            badgeText: "Codex API Key",
+            label: null,
+            detail: null,
+          },
+          false,
+        ),
+        providerStateWithAuth(
+          {
+            providerId: "cursor",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+          },
+          {
+            status: "unavailable",
+            badgeText: null,
+            label: null,
+            detail: "network failed",
+          },
+          false,
+        ),
+        providerStateWithAuth(
+          {
+            providerId: "qwen",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+          },
+          {
+            status: "authenticated",
+            badgeText: null,
+            label: "Authenticated as qwen@example.test",
+            detail: null,
+          },
+          true,
+        ),
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(screen.getByText("Configured, not verified")).toBeDefined();
+
+    fireEvent.click(screen.getByRole("button", { name: "Cursor" }));
+    expect(screen.getByText("Could not check account status")).toBeDefined();
+
+    fireEvent.click(screen.getByRole("button", { name: "Qwen Code" }));
+    expect(screen.getByText("Checking account")).toBeDefined();
+  });
+
+  it("does not render disabled attribution for providers", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        {
+          ...providerState({
+            providerId: "codex",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+          }),
+          enabled: false,
+          disabledBy: {
+            userId: "a7f4dd6c-7f20-44c2-b83b-fdc71c258b80",
+            handle: "teammate",
+            at: 1,
+          },
+        },
+        {
+          ...providerState({
+            providerId: "traycer",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+          }),
+          enabled: false,
+          disabledBy: {
+            userId: "0c8cedd2-b928-4980-bf87-fb9f948c23e5",
+            handle: null,
+            at: 1,
+          },
+        },
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(screen.queryByText(/Disabled by/)).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /Traycer/i }));
+
+    expect(screen.queryByText(/Disabled by/)).toBeNull();
+  });
+
+  it("lists OpenCode CLI candidates for OpenRouter and mutates OpenRouter selection", () => {
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /OpenRouter/i }));
+
+    expect(screen.getByText("/usr/local/bin/opencode")).toBeDefined();
+
+    fireEvent.click(
+      screen.getByRole("radio", {
+        name: "Select /usr/local/bin/opencode",
+      }),
+    );
+
+    expect(providerMocks.setSelectionMutate).toHaveBeenCalledWith({
+      providerId: "openrouter",
       selection: { kind: "path" },
     });
   });

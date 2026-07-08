@@ -186,7 +186,9 @@ export function createOutput(runtime: RuntimeContext): Output {
           progressOpen = true;
           return;
         }
-        const decile = Math.floor(Math.max(0, Math.min(100, info.percent)) / 10);
+        const decile = Math.floor(
+          Math.max(0, Math.min(100, info.percent)) / 10,
+        );
         if (decile === lastNonTtyDecile) return;
         lastNonTtyDecile = decile;
         if (info.message !== null) {

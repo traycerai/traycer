@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ProviderAuth,
   ProviderCliState,
+  ProviderId,
 } from "@traycer/protocol/host/provider-schemas";
 
 // The gate's only collaborators are the tab-scoped providers query and its
@@ -49,9 +50,12 @@ const UNKNOWN: ProviderAuth = {
   detail: null,
 };
 
-function claudeState(auth: ProviderAuth): ProviderCliState {
+function providerState(
+  providerId: ProviderId,
+  auth: ProviderAuth,
+): ProviderCliState {
   return {
-    providerId: "claude-code",
+    providerId,
     enabled: true,
     disabledBy: null,
     selected: { kind: "bundled" },
@@ -63,7 +67,12 @@ function claudeState(auth: ProviderAuth): ProviderCliState {
     terminalAgentArgs: "",
     envOverrides: [],
     loginCapability: null,
+    availabilityPending: false,
   };
+}
+
+function claudeState(auth: ProviderAuth): ProviderCliState {
+  return providerState("claude-code", auth);
 }
 
 describe("useProviderReauthGate", () => {
@@ -83,6 +92,16 @@ describe("useProviderReauthGate", () => {
     const { result } = renderHook(() => useProviderReauthGate("claude", true));
     expect(result.current.signedOut).toBe(true);
     expect(result.current.providerId).toBe("claude-code");
+  });
+
+  it("maps OpenRouter to its API-key provider state", () => {
+    mocks.providers = [providerState("openrouter", UNAUTH)];
+    const { result } = renderHook(() =>
+      useProviderReauthGate("openrouter", true),
+    );
+    expect(result.current.signedOut).toBe(true);
+    expect(result.current.providerId).toBe("openrouter");
+    expect(mocks.toastError).toHaveBeenCalledWith("OpenRouter is signed out");
   });
 
   it("does NOT flag signedOut on a transient unknown probe", () => {

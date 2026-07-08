@@ -38,25 +38,26 @@ import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { TraycerMarkdown } from "@/markdown";
 import { useResolvedTheme } from "@/providers/use-resolved-theme";
 import type { PlanSegmentModel } from "@/stores/composer/chat-store";
-import { STATUS_ICON_TONE } from "@/lib/chat/todo-status-tones";
+import {
+  STATUS_ICON_TONE,
+  segmentStepLabel,
+} from "@/lib/chat/todo-status-tones";
+import {
+  PLAN_PREVIEW_STEP_LIMIT,
+  PLAN_STATUS_LABELS,
+  planCardSubtitle,
+  planFallbackMarkdown,
+  planHeadline,
+} from "./plan-display";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
 interface PlanSegmentProps {
   readonly segment: PlanSegmentModel;
+  readonly findUnitId: string | null;
 }
 
-const PREVIEW_STEP_LIMIT = 4;
 const COPIED_RESET_MS = 1600;
-
-const STATUS_LABELS: Record<PlanSegmentModel["planStatus"], string> = {
-  drafting: "Drafting",
-  ready: "Ready",
-  awaiting_approval: "Awaiting approval",
-  approved: "Approved",
-  rejected: "Rejected",
-  superseded: "Superseded",
-};
 
 const STATUS_ICONS: Record<PlanSegmentModel["planStatus"], LucideIcon> = {
   drafting: Loader2,
@@ -72,7 +73,7 @@ const handleCopyError = (): void => {
 };
 
 export function PlanSegment(props: PlanSegmentProps) {
-  const { segment } = props;
+  const { findUnitId, segment } = props;
   const [open, setOpen] = useState(false);
   const planActions = useChatPlanActions();
   const markdownFallback = useMemo(
@@ -96,6 +97,7 @@ export function PlanSegment(props: PlanSegmentProps) {
     <>
       <PlanCard
         segment={segment}
+        findUnitId={findUnitId ?? null}
         cardHeadline={cardHeadline}
         actionsVisible={actionsVisible}
         actionsDisabled={actionsDisabled}
@@ -118,6 +120,7 @@ export function PlanSegment(props: PlanSegmentProps) {
 
 function PlanCard(props: {
   readonly segment: PlanSegmentModel;
+  readonly findUnitId: string | null;
   readonly cardHeadline: string;
   readonly actionsVisible: boolean;
   readonly actionsDisabled: boolean;
@@ -133,6 +136,7 @@ function PlanCard(props: {
         planCardTone(segment.planStatus),
       )}
       data-testid="plan-segment"
+      data-chat-find-unit={props.findUnitId ?? undefined}
     >
       <div className="flex flex-col gap-3">
         <div className="flex flex-wrap items-start justify-between gap-2">
@@ -169,7 +173,7 @@ function PlanCard(props: {
             {segment.steps.length > 0 ? (
               <ul className="m-0 flex flex-col gap-1.5 p-0">
                 {segment.steps
-                  .slice(0, PREVIEW_STEP_LIMIT)
+                  .slice(0, PLAN_PREVIEW_STEP_LIMIT)
                   .map((step, index) => (
                     <PlanStepRow
                       key={step.id ?? `${segment.id}:step:${index}`}
@@ -189,10 +193,7 @@ function PlanStepRow(props: {
   readonly step: PlanSegmentModel["steps"][number];
 }) {
   const { step } = props;
-  const label =
-    step.status === "in_progress" && step.activeForm !== null
-      ? step.activeForm
-      : step.text;
+  const label = segmentStepLabel(step);
   return (
     <li className="flex min-w-0 items-start gap-2 text-foreground/85">
       <CircleDashed
@@ -277,6 +278,7 @@ function PlanModal(props: {
             components={null}
             remarkPlugins={null}
             rehypePlugins={null}
+            quotable={false}
             isStreaming={false}
           >
             {modalBody}
@@ -295,15 +297,6 @@ function PlanModal(props: {
       </DialogContent>
     </Dialog>
   );
-}
-
-function planCardSubtitle(
-  segment: PlanSegmentModel,
-  cardHeadline: string,
-): string | null {
-  const summary = segment.summary?.trim() ?? "";
-  if (summary.length > 0 && summary !== cardHeadline) return summary;
-  return null;
 }
 
 function resolvePlanModalContent(
@@ -355,7 +348,7 @@ function PlanStatusBadge(props: {
         )}
         aria-hidden
       />
-      <span className="truncate">{STATUS_LABELS[props.planStatus]}</span>
+      <span className="truncate">{PLAN_STATUS_LABELS[props.planStatus]}</span>
     </span>
   );
 }
@@ -456,41 +449,6 @@ function statusBadgeTone(status: PlanSegmentModel["planStatus"]): string {
   return "border-border/50 bg-muted/40 text-muted-foreground";
 }
 
-function planTitle(segment: PlanSegmentModel): string {
-  if (segment.title !== null && segment.title.trim().length > 0) {
-    return segment.title.trim();
-  }
-  return "Implementation Plan";
-}
-
-function firstMeaningfulLine(markdown: string): string {
-  const line = markdown
-    .split("\n")
-    .map((part) =>
-      part
-        .replace(/^#+\s*/, "")
-        .replace(/^[-*]\s*/, "")
-        .trim(),
-    )
-    .find((part) => part.length > 0);
-  return line ?? "Review the proposed plan before continuing.";
-}
-
-const GENERIC_PLAN_TITLES = new Set(["plan", "implementation plan"]);
-
-function isGenericPlanTitle(title: string): boolean {
-  return GENERIC_PLAN_TITLES.has(title.trim().toLowerCase());
-}
-
-// The single title to show for a plan: the harness-provided title when it is
-// specific, else the plan's own first heading/line. A generic "Plan" title is
-// dropped so the card/modal don't echo the "Plan" label the header already shows.
-function planHeadline(segment: PlanSegmentModel, markdown: string): string {
-  const title = segment.title?.trim() ?? "";
-  if (title.length > 0 && !isGenericPlanTitle(title)) return title;
-  return firstMeaningfulLine(markdown);
-}
-
 // Drop the leading markdown heading from the modal body ONLY when it duplicates
 // the headline shown as the DialogTitle, so the title appears once, not twice.
 function stripRedundantTitleHeading(
@@ -509,20 +467,4 @@ function stripRedundantTitleHeading(
     lines.splice(index, 1);
   }
   return lines.join("\n").trim();
-}
-
-function planFallbackMarkdown(segment: PlanSegmentModel): string {
-  if (segment.markdownPreview.trim().length > 0) return segment.markdownPreview;
-  const parts = [`# ${planTitle(segment)}`];
-  if (segment.summary !== null && segment.summary.trim().length > 0) {
-    parts.push(segment.summary.trim());
-  }
-  if (segment.steps.length > 0) {
-    parts.push(
-      segment.steps
-        .map((step) => `- ${step.activeForm ?? step.text}`)
-        .join("\n"),
-    );
-  }
-  return parts.join("\n\n");
 }

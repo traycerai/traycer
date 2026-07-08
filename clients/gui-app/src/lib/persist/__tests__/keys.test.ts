@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   PERSIST_STORES,
+  composerHarnessMemoryKey,
   composerRunSettingsKey,
   epicCanvasKey,
   openEpicKey,
@@ -17,7 +18,9 @@ import {
 // would make the test circular and unable to catch a divergence.
 
 describe("persist key builders — output-preserving against current source", () => {
-  it("emits the current localStorage key for each of the 16 static stores", () => {
+  it("emits the current localStorage key for each of the 18 static stores", () => {
+    // Source: src/stores/onboarding/onboarding-store.ts
+    expect(persistKey("onboarding")).toBe("traycer-gui-app:onboarding");
     // Source: src/stores/command-palette/command-palette-store.ts
     expect(persistKey("command-palette")).toBe(
       "traycer-gui-app:command-palette",
@@ -61,6 +64,10 @@ describe("persist key builders — output-preserving against current source", ()
     expect(persistKey("settings-section")).toBe(
       "traycer-gui-app:settings-section",
     );
+    // Source: src/stores/rate-limits/rate-limit-popover-store.ts
+    expect(persistKey("rate-limit-popover")).toBe(
+      "traycer-gui-app:rate-limit-popover",
+    );
     // Source: src/stores/tabs/store.ts
     expect(persistKey("tabs")).toBe("traycer-gui-app:tabs");
     // Source: src/stores/workspace/workspace-folders-store.ts
@@ -69,7 +76,7 @@ describe("persist key builders — output-preserving against current source", ()
     );
   });
 
-  it("emits the current localStorage key for each of the 5 scoped stores", () => {
+  it("emits the current localStorage key for each of the 6 scoped stores", () => {
     // Source: src/stores/composer/composer-run-settings-store.ts
     // (`composerRunSettingsPersistKey`).
     expect(composerRunSettingsKey(null)).toBe(
@@ -77,6 +84,14 @@ describe("persist key builders — output-preserving against current source", ()
     );
     expect(composerRunSettingsKey("a@b.com")).toBe(
       "traycer-gui-app:composer-run-settings:a@b.com",
+    );
+    // Source: src/stores/composer/composer-harness-memory-store.ts
+    // (`composerHarnessMemoryKey`).
+    expect(composerHarnessMemoryKey(null)).toBe(
+      "traycer-gui-app:composer-harness-memory:anon",
+    );
+    expect(composerHarnessMemoryKey("a@b.com")).toBe(
+      "traycer-gui-app:composer-harness-memory:a@b.com",
     );
     // Source: src/stores/worktree/worktree-intent-memory-store.ts
     // (`worktreeIntentMemoryPersistKey`).

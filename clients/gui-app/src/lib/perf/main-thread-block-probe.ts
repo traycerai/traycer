@@ -1,5 +1,6 @@
-/* eslint-disable no-console -- console is the intended diagnostic sink for
-   this profiling-only probe; there is no telemetry pipeline in gui-app yet. */
+import { appLogger } from "@/lib/logger";
+import { logPerfEvent } from "@/lib/perf/perf-telemetry";
+
 /**
  * Renderer main-thread block probe.
  *
@@ -61,6 +62,22 @@ function attributionLabel(entry: PerformanceEntry): string {
 }
 
 /**
+ * Cheap active-surface tag so a block can be tied to a specific page (e.g. the
+ * Worktrees settings panel). The Long Tasks API's `attribution` usually only
+ * names the container ("window unknown"), so the route path is what makes a
+ * stall actionable. Read defensively - `location` access can throw in some
+ * sandboxed contexts.
+ */
+function activeSurface(): string {
+  if (typeof window === "undefined") return "unknown";
+  try {
+    return window.location.pathname;
+  } catch {
+    return "unknown";
+  }
+}
+
+/**
  * Starts the probe. Idempotent and safe to call from a module side-effect
  * import; no-ops when disabled or when the Long Tasks API is unavailable.
  */
@@ -75,14 +92,29 @@ export function startMainThreadBlockProbe(): void {
       if (entry.duration < REPORT_THRESHOLD_MS) continue;
       const blockedMs = Math.round(entry.duration);
       const atMs = Math.round(entry.startTime);
-      console.warn(
-        `[main-thread-block] ${blockedMs}ms blocked at ${atMs}ms (${attributionLabel(entry)})`,
-      );
+      const attribution = attributionLabel(entry);
+      appLogger.warn("[main-thread-block] renderer main thread blocked", {
+        blockedMs,
+        atMs,
+        attribution,
+      });
+      // Also route to the dedicated perf file with a surface tag, so a stall can
+      // be attributed to the route it happened on (fixes the container-only
+      // "window unknown" blind spot). Keeps the human-log warn above intact.
+      logPerfEvent("main_thread_block", {
+        blockedMs,
+        atMs,
+        attribution,
+        surface: activeSurface(),
+      });
     }
   });
   try {
     observer.observe({ entryTypes: ["longtask"] });
-  } catch {
+  } catch (error) {
+    appLogger.warn("[main-thread-block] observer start failed", {
+      error: error instanceof Error ? error.name : typeof error,
+    });
     // `longtask` not observable in this engine; leave the probe inert.
     started = false;
   }

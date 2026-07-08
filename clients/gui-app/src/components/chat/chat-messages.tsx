@@ -1,4 +1,7 @@
 import { ChatEmptyState } from "@/components/chat/chat-empty-state";
+import { QuoteSelectionPopover } from "@/components/chat/quote/quote-selection-popover";
+import { useQuoteSelection } from "@/components/chat/quote/use-quote-selection";
+import { useChatFindController } from "@/components/chat/use-chat-find-controller";
 import { ChatMeasuredItemChangeContext } from "@/components/chat/chat-measured-item-change-context";
 import {
   ChatMessage,
@@ -21,6 +24,7 @@ import {
   type SavedChatScrollState,
 } from "@/components/chat/chat-scroll-state-cache";
 import { ChatUserMessageMinimap } from "@/components/chat/chat-user-message-minimap";
+import { buildChatActivityTimeline } from "@/components/chat/chat-activity-groups";
 import {
   chatMinimapClipRegionProps,
   type ChatUserMinimapItem,
@@ -33,11 +37,23 @@ import { VIRTUOSO_MESSAGE_LIST_LICENSE_KEY } from "@/lib/virtuoso-license";
 import type { ScrollRestorationAdapter } from "@/hooks/scroll/scroll-restoration-adapter";
 import { useScrollRestoration } from "@/hooks/scroll/use-scroll-restoration";
 import { ActivityGroupOpenStoreProvider } from "@/stores/chats/activity-group-open-store";
-import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
+import { A2AOpenStoreProvider } from "@/stores/chats/a2a-open-store";
+import { ChatFindForceStoreProvider } from "@/stores/chats/chat-find-force-store";
+import { createActivityGroupOpenStore } from "@/stores/chats/activity-group-open-store-core";
+import { ChatOpenStoreScopeProvider } from "@/stores/chats/open-store-scope";
+import { useSubagentOpenStore } from "@/stores/chats/subagent-open-store";
+import { useToolOpenStore } from "@/stores/chats/tool-open-store";
+import { useSettingsStore } from "@/stores/settings/settings-store";
+import type {
+  ChatMessage as ChatMessageModel,
+  MessageSegment,
+} from "@/stores/composer/chat-store";
+import type { BackgroundItem } from "@traycer/protocol/host/agent/gui/subscribe";
 import {
   VirtuosoMessageList,
   VirtuosoMessageListLicense,
   type DataWithScrollModifier,
+  type ItemLocation,
   type ListScrollLocation,
   type ScrollModifier,
   type VirtuosoMessageListMethods,
@@ -57,8 +73,12 @@ import {
 
 interface ChatMessagesProps {
   taskTitle: string;
+  /** Chat tab identity; keys the composer draft the quote affordance appends to. */
+  taskId: string;
   /** The full derived, pinned-todo-stripped row history to hand to Virtuoso. */
   messages: ReadonlyArray<ChatMessageModel>;
+  /** Live host-owned background items; undefined means the connected host lacks support. */
+  backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
   /** User rows for the minimap rail, derived from the same rendered rows. */
   minimapItems: ReadonlyArray<ChatUserMinimapItem>;
   /** Stable per-tile key used to restore reading position across layout remounts. */
@@ -69,11 +89,21 @@ interface ChatMessagesProps {
   instanceId: string;
   /** paneVisible ∧ tab selected: drives the hide/re-show scroll restore. */
   visible: boolean;
+  /** A frontmost system modal overlays the chat; body-portaled quote UI must stay hidden. */
+  systemOverlayActive: boolean;
+  scrollRequest: ChatMessageScrollRequest | null;
+}
+
+export interface ChatMessageScrollRequest {
+  readonly messageId: string;
+  readonly blockId: string;
+  readonly requestId: number;
 }
 
 interface ChatListContext {
   readonly taskTitle: string;
   readonly hasContent: boolean;
+  readonly backgroundToolBlockIds: ReadonlySet<string>;
   readonly getMessageActions: (
     message: ChatMessageModel,
   ) => ChatMessageActions | null;
@@ -86,6 +116,46 @@ interface ChatListContext {
 const INCREASE_VIEWPORT_BY_PX = 320;
 const SCROLLBAR_POINTER_HIT_SLOP_PX = 24;
 const TOUCH_SCROLL_DIRECTION_THRESHOLD_PX = 4;
+const EMPTY_BACKGROUND_TOOL_BLOCK_IDS: ReadonlySet<string> = new Set();
+
+function segmentContainsBlockId(
+  segment: MessageSegment,
+  blockId: string,
+): boolean {
+  if (segment.id === blockId) return true;
+  if (segment.kind === "subagent") {
+    return segment.children.some((child) => child.id === blockId);
+  }
+  if (segment.kind === "file_change_group") {
+    return segment.files.some((file) => file.id === blockId);
+  }
+  return false;
+}
+
+function activityGroupIdForBlock(
+  messages: ReadonlyArray<ChatMessageModel>,
+  messageId: string,
+  blockId: string,
+  promotedToolBlockIds: ReadonlySet<string>,
+): string | null {
+  const message = messages.find((candidate) => candidate.id === messageId);
+  if (message === undefined) return null;
+  const timeline = buildChatActivityTimeline(message.segments, {
+    turnState: message.completedAt === null ? "active" : "complete",
+    promotedToolBlockIds,
+  });
+  for (const item of timeline) {
+    if (item.kind !== "activity_group") continue;
+    if (
+      item.group.segments.some((segment) =>
+        segmentContainsBlockId(segment, blockId),
+      )
+    ) {
+      return item.group.id;
+    }
+  }
+  return null;
+}
 
 type ChatVirtuosoProps = VirtuosoMessageListProps<
   ChatVirtuosoItem,
@@ -136,6 +206,7 @@ const ChatItemContent: ChatVirtuosoProps["ItemContent"] = ({
       <ChatMessage
         message={message}
         actions={context.getMessageActions(message)}
+        backgroundToolBlockIds={context.backgroundToolBlockIds}
         nextStepActions={context.nextStepActions}
       />
     </div>
@@ -161,13 +232,27 @@ const ChatListEmptyPlaceholder: ChatVirtuosoProps["EmptyPlaceholder"] = ({
  * `chat-messages-virtuoso-helpers.ts`.
  */
 export function ChatMessages(props: ChatMessagesProps) {
+  return (
+    <A2AOpenStoreProvider>
+      <ChatFindForceStoreProvider tileInstanceId={props.instanceId}>
+        <ChatMessagesInner {...props} />
+      </ChatFindForceStoreProvider>
+    </A2AOpenStoreProvider>
+  );
+}
+
+function ChatMessagesInner(props: ChatMessagesProps) {
   const {
     getMessageActions,
+    backgroundItems,
     instanceId,
     messages,
     minimapItems,
     nextStepActions,
+    scrollRequest,
     scrollStateKey,
+    systemOverlayActive,
+    taskId,
     taskTitle,
     visible,
   } = props;
@@ -179,6 +264,10 @@ export function ChatMessages(props: ChatMessagesProps) {
   );
   const virtuosoRef =
     useRef<VirtuosoMessageListMethods<ChatVirtuosoItem, ChatListContext>>(null);
+  // The find controller triggers a measured-item change on reveal/reconcile;
+  // the concrete callback lives in this component, so the hook reads it lazily
+  // through this ref (set in a layout effect below).
+  const requestMeasuredItemChangeRef = useRef<() => void>(() => undefined);
 
   // "Following latest" is user intent. Virtuoso's `isAtBottom` is only a
   // strict measurement signal, so streaming markdown height drift must not be
@@ -209,10 +298,42 @@ export function ChatMessages(props: ChatMessagesProps) {
     useState<string | null>(restoredScrollState.activeUserMessageId);
 
   const hasContent = messages.length > 0;
+  const backgroundToolBlockIds = useMemo<ReadonlySet<string>>(() => {
+    if (backgroundItems === undefined || backgroundItems.length === 0) {
+      return EMPTY_BACKGROUND_TOOL_BLOCK_IDS;
+    }
+    return new Set(
+      backgroundItems
+        .filter((item) => item.kind !== "subagent")
+        .map((item) => item.blockId),
+    );
+  }, [backgroundItems]);
   const messageIndexById = useMemo(
     () => buildMessageIdToIndex(messages),
     [messages],
   );
+  const messageIndexByIdRef = useRef(messageIndexById);
+  const scrollRequestRef = useRef(scrollRequest);
+  const handledScrollRequestIdRef = useRef<number | null>(null);
+  const backgroundToolBlockIdsRef = useRef(backgroundToolBlockIds);
+  const [activityGroupOpenStore] = useState(createActivityGroupOpenStore);
+
+  // Quote-to-composer: track selections inside the transcript wrapper below and
+  // surface the floating quote button. The hook attaches no listeners while the
+  // setting is off, so a disabled affordance costs nothing. `visible` gates
+  // too: chat surfaces are keep-alive hidden (display:none) while the popover
+  // portals to document.body, so a hidden chat must not keep tracking
+  // selections or leave a quote button floating over whichever surface
+  // replaced it. System overlays gate the same body portal path while Settings
+  // or History is frontmost over an otherwise-visible chat.
+  const quoteReplyEnabled = useSettingsStore(
+    (state) => state.quoteReplyEnabled,
+  );
+  const transcriptContainerRef = useRef<HTMLDivElement>(null);
+  const quoteSelection = useQuoteSelection({
+    containerRef: transcriptContainerRef,
+    enabled: quoteReplyEnabled && visible && !systemOverlayActive,
+  });
 
   const [listDataState, setListDataState] = useState<ChatListDataState>(() =>
     createInitialChatListDataState(messages, restoredScrollState),
@@ -221,6 +342,23 @@ export function ChatMessages(props: ChatMessagesProps) {
   useLayoutEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
+
+  useLayoutEffect(() => {
+    messageIndexByIdRef.current = messageIndexById;
+  }, [messageIndexById]);
+
+  useLayoutEffect(() => {
+    scrollRequestRef.current = scrollRequest;
+  }, [scrollRequest]);
+
+  useLayoutEffect(() => {
+    backgroundToolBlockIdsRef.current = backgroundToolBlockIds;
+  }, [backgroundToolBlockIds]);
+
+  useLayoutEffect(() => {
+    useToolOpenStore.getState().reset(instanceId);
+    useSubagentOpenStore.getState().reset(instanceId);
+  }, [instanceId]);
 
   let effectiveBottomFollowing = bottomFollowing;
   let listData = listDataState.value;
@@ -312,10 +450,17 @@ export function ChatMessages(props: ChatMessagesProps) {
     () => ({
       taskTitle,
       hasContent,
+      backgroundToolBlockIds,
       getMessageActions,
       nextStepActions,
     }),
-    [getMessageActions, hasContent, nextStepActions, taskTitle],
+    [
+      backgroundToolBlockIds,
+      getMessageActions,
+      hasContent,
+      nextStepActions,
+      taskTitle,
+    ],
   );
 
   // Preserve/restore the reading position across keep-alive hiding and full
@@ -529,6 +674,36 @@ export function ChatMessages(props: ChatMessagesProps) {
     });
   }, [cancelScrollRestorationRetry, setBottomFollowingIfChanged]);
 
+  const getScroller = useCallback(
+    (): HTMLElement | null => virtuosoRef.current?.scrollerElement() ?? null,
+    [],
+  );
+
+  const scrollToItem = useCallback((location: ItemLocation): void => {
+    virtuosoRef.current?.scrollToItem(location);
+  }, []);
+
+  const resetScrollGesture = useCallback((): void => {
+    lastScrollGestureRef.current = null;
+  }, []);
+
+  const {
+    scheduleMountedHighlightSync: scheduleChatFindHighlightSync,
+    onRenderedDataChange: onChatFindRenderedDataChange,
+  } = useChatFindController({
+    instanceId,
+    messages,
+    messagesRef,
+    messageIndexByIdRef,
+    getScroller,
+    scrollToItem,
+    requestMeasuredItemChangeRef,
+    setBottomFollowingIfChanged,
+    setScrolledActiveUserMessageIdIfChanged,
+    cancelScrollRestorationRetry,
+    resetScrollGesture,
+  });
+
   const requestMeasuredItemChange = useCallback((): void => {
     const shouldFollowOutput = bottomFollowRef.current;
     setListDataState((current) => ({
@@ -539,9 +714,14 @@ export function ChatMessages(props: ChatMessagesProps) {
         scrollModifier: measuredItemChangeScrollModifier(shouldFollowOutput),
       },
     }));
-  }, []);
+    scheduleChatFindHighlightSync();
+  }, [scheduleChatFindHighlightSync]);
 
-  const onMinimapItemClick = useCallback(
+  useLayoutEffect(() => {
+    requestMeasuredItemChangeRef.current = requestMeasuredItemChange;
+  }, [requestMeasuredItemChange]);
+
+  const navigateToMessage = useCallback(
     (messageId: string): void => {
       // This navigation is programmatic. If it parks inside the bottom
       // tolerance band, emitted scroll events must not read as user intent to
@@ -553,76 +733,113 @@ export function ChatMessages(props: ChatMessagesProps) {
       // minimap target resolves; pending/live rows may briefly miss.
       const location = chatScrollLocationForMessage(
         messageId,
-        messageIndexById,
+        messageIndexByIdRef.current,
         "smooth",
       );
       if (location === null) return;
       virtuosoRef.current?.scrollToItem(location);
     },
-    [
-      messageIndexById,
-      setBottomFollowingIfChanged,
-      setScrolledActiveUserMessageIdIfChanged,
-    ],
+    [setBottomFollowingIfChanged, setScrolledActiveUserMessageIdIfChanged],
   );
 
+  const handleRenderedDataChangeWithFind = useCallback((): void => {
+    handleRenderedDataChange();
+    onChatFindRenderedDataChange();
+  }, [handleRenderedDataChange, onChatFindRenderedDataChange]);
+
+  const onMinimapItemClick = useCallback(
+    (messageId: string): void => navigateToMessage(messageId),
+    [navigateToMessage],
+  );
+
+  useLayoutEffect(() => {
+    const request = scrollRequestRef.current;
+    if (request === null) return;
+    if (handledScrollRequestIdRef.current === request.requestId) return;
+    handledScrollRequestIdRef.current = request.requestId;
+    const activityGroupId = activityGroupIdForBlock(
+      messagesRef.current,
+      request.messageId,
+      request.blockId,
+      backgroundToolBlockIdsRef.current,
+    );
+    if (activityGroupId !== null) {
+      activityGroupOpenStore.getState().setOpen(activityGroupId, true);
+    }
+    navigateToMessage(request.messageId);
+    scrollRequestRef.current = null;
+  }, [activityGroupOpenStore, navigateToMessage, scrollRequest?.requestId]);
+
   return (
-    <ActivityGroupOpenStoreProvider>
-      <ChatMeasuredItemChangeContext.Provider value={requestMeasuredItemChange}>
-        <div
-          {...chatMinimapClipRegionProps}
-          className="relative flex-1 overflow-hidden"
+    <ChatOpenStoreScopeProvider value={instanceId}>
+      <ActivityGroupOpenStoreProvider store={activityGroupOpenStore}>
+        <ChatMeasuredItemChangeContext.Provider
+          value={requestMeasuredItemChange}
         >
-          <VirtuosoMessageListLicense
-            licenseKey={VIRTUOSO_MESSAGE_LIST_LICENSE_KEY}
-          >
-            <VirtuosoMessageList<ChatVirtuosoItem, ChatListContext>
-              ref={virtuosoRef}
-              data={listData}
-              context={context}
-              computeItemKey={chatComputeItemKey}
-              itemIdentity={chatItemIdentity}
-              shortSizeAlign="top"
-              increaseViewportBy={INCREASE_VIEWPORT_BY_PX}
-              ItemContent={ChatItemContent}
-              Header={ChatListHeader}
-              Footer={ChatListFooter}
-              EmptyPlaceholder={ChatListEmptyPlaceholder}
-              className="chat-scrollbar-native-thin mr-1 h-full overflow-y-auto"
-              data-testid="chat-messages-scroll"
-              onScroll={handleScroll}
-              onWheelCapture={handleWheelCapture}
-              onKeyDownCapture={handleKeyDownCapture}
-              onPointerDownCapture={handlePointerDownCapture}
-              onPointerUpCapture={handlePointerUpCapture}
-              onPointerCancelCapture={handlePointerUpCapture}
-              onTouchStartCapture={handleTouchStartCapture}
-              onTouchMoveCapture={handleTouchMoveCapture}
-              onTouchEndCapture={handleTouchEndCapture}
-              onTouchCancelCapture={handleTouchEndCapture}
-              onRenderedDataChange={handleRenderedDataChange}
-            />
-          </VirtuosoMessageListLicense>
           <div
-            aria-hidden="true"
-            className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-linear-to-t from-background to-transparent"
-          />
-          {hasContent ? (
-            <ChatUserMessageMinimap
-              items={minimapItems}
-              activeMessageId={activeUserMessageId}
-              onItemClick={onMinimapItemClick}
+            {...chatMinimapClipRegionProps}
+            ref={transcriptContainerRef}
+            className="relative flex-1 overflow-hidden"
+          >
+            <VirtuosoMessageListLicense
+              licenseKey={VIRTUOSO_MESSAGE_LIST_LICENSE_KEY}
+            >
+              <VirtuosoMessageList<ChatVirtuosoItem, ChatListContext>
+                ref={virtuosoRef}
+                data={listData}
+                context={context}
+                computeItemKey={chatComputeItemKey}
+                itemIdentity={chatItemIdentity}
+                shortSizeAlign="top"
+                increaseViewportBy={INCREASE_VIEWPORT_BY_PX}
+                ItemContent={ChatItemContent}
+                Header={ChatListHeader}
+                Footer={ChatListFooter}
+                EmptyPlaceholder={ChatListEmptyPlaceholder}
+                className="chat-scrollbar-native-thin mr-1 h-full overflow-y-auto"
+                data-testid="chat-messages-scroll"
+                onScroll={handleScroll}
+                onWheelCapture={handleWheelCapture}
+                onKeyDownCapture={handleKeyDownCapture}
+                onPointerDownCapture={handlePointerDownCapture}
+                onPointerUpCapture={handlePointerUpCapture}
+                onPointerCancelCapture={handlePointerUpCapture}
+                onTouchStartCapture={handleTouchStartCapture}
+                onTouchMoveCapture={handleTouchMoveCapture}
+                onTouchEndCapture={handleTouchEndCapture}
+                onTouchCancelCapture={handleTouchEndCapture}
+                onRenderedDataChange={handleRenderedDataChangeWithFind}
+              />
+            </VirtuosoMessageListLicense>
+            <div
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-linear-to-t from-background to-transparent"
             />
-          ) : null}
-          {hasContent ? (
-            <ScrollToBottomChip
-              visible={!effectiveBottomFollowing}
-              onClick={jumpToBottom}
-            />
-          ) : null}
-        </div>
-      </ChatMeasuredItemChangeContext.Provider>
-    </ActivityGroupOpenStoreProvider>
+            {hasContent ? (
+              <ChatUserMessageMinimap
+                items={minimapItems}
+                activeMessageId={activeUserMessageId}
+                onItemClick={onMinimapItemClick}
+              />
+            ) : null}
+            {hasContent ? (
+              <ScrollToBottomChip
+                visible={!effectiveBottomFollowing}
+                onClick={jumpToBottom}
+              />
+            ) : null}
+            {quoteSelection.snapshot !== null ? (
+              <QuoteSelectionPopover
+                taskId={taskId}
+                snapshot={quoteSelection.snapshot}
+                onDismiss={quoteSelection.dismiss}
+                boundaryRef={transcriptContainerRef}
+              />
+            ) : null}
+          </div>
+        </ChatMeasuredItemChangeContext.Provider>
+      </ActivityGroupOpenStoreProvider>
+    </ChatOpenStoreScopeProvider>
   );
 }
 

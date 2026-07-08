@@ -1,32 +1,20 @@
 import {
-  PROVIDER_DISPLAY_NAMES,
   type ProviderCliState,
   type ProviderId,
 } from "@traycer/protocol/host/provider-schemas";
-import type { GuiHarnessId } from "@traycer/protocol/host/agent/shared";
-import { HarnessIcon } from "@/components/home/pickers/harness-icon";
+import type { ReactNode } from "react";
+import { ProviderList } from "@/components/providers/provider-list";
+import type { ProviderListRow } from "@/components/providers/provider-list";
 import { Switch } from "@/components/ui/switch";
 import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
 import { useProvidersSetEnabled } from "@/hooks/providers/use-providers-set-enabled-mutation";
+import {
+  ORDERED_PROVIDERS,
+  providerDisplayName,
+} from "@/lib/provider-ordering";
 import { cn } from "@/lib/utils";
 
-const TOUR_PROVIDERS: ReadonlyArray<{
-  id: ProviderId;
-  harnessId: GuiHarnessId;
-}> = [
-  { id: "traycer", harnessId: "traycer" },
-  { id: "claude-code", harnessId: "claude" },
-  { id: "codex", harnessId: "codex" },
-  { id: "opencode", harnessId: "opencode" },
-  { id: "cursor", harnessId: "cursor" },
-];
-
 type InstallState = "detected" | "missing" | "pending";
-
-function providerDisplayName(providerId: ProviderId): string {
-  if (providerId === "traycer") return "Traycer Inference";
-  return PROVIDER_DISPLAY_NAMES[providerId];
-}
 
 function installStateFor(state: ProviderCliState | undefined): InstallState {
   if (state === undefined) return "pending";
@@ -62,13 +50,27 @@ function accountLineFor(state: ProviderCliState): AccountLine {
   }
   if (!state.enabled) return { text: "Disabled", tone: "muted", title: null };
   const { auth } = state;
-  if (state.authPending && auth.status === "unknown") {
+  if (state.authPending) {
     return { text: "Checking account…", tone: "muted", title: null };
   }
   if (auth.status === "authenticated") {
     return {
       text: auth.label ?? "Signed in",
       tone: "good",
+      title: auth.detail,
+    };
+  }
+  if (auth.status === "configured") {
+    return {
+      text: "Configured, not verified",
+      tone: "muted",
+      title: auth.detail,
+    };
+  }
+  if (auth.status === "unavailable") {
+    return {
+      text: "Status check failed",
+      tone: "muted",
       title: auth.detail,
     };
   }
@@ -89,6 +91,57 @@ function installLabelFor(
   if (traycerProvider) return "Built in";
   if (hostUnavailable) return "Unavailable";
   return INSTALL_LABELS[installState];
+}
+
+function providerStateFor(
+  providers: readonly ProviderCliState[] | undefined,
+  providerId: ProviderId,
+): ProviderCliState | undefined {
+  return providers?.find((provider) => provider.providerId === providerId);
+}
+
+function enabledForProvider(state: ProviderCliState | undefined): boolean {
+  return state?.enabled ?? false;
+}
+
+function disablingLastEnabledFor(
+  state: ProviderCliState | undefined,
+  enabled: boolean,
+  enabledProviderCount: number,
+): boolean {
+  if (state === undefined) return false;
+  return enabled && enabledProviderCount <= 1;
+}
+
+function installBadge(
+  installDetected: boolean,
+  installLabel: string,
+): ReactNode {
+  return (
+    <span
+      className={cn(
+        "font-mono text-overline uppercase tracking-wider",
+        installDetected ? "text-[#7fd6a4]" : "text-white/40",
+      )}
+    >
+      {installLabel}
+    </span>
+  );
+}
+
+function accountDescription(state: ProviderCliState | undefined): ReactNode {
+  if (state === undefined) return null;
+  const account = accountLineFor(state);
+  return (
+    <span
+      title={account.title ?? undefined}
+      className={cn(
+        account.tone === "good" ? "text-[#7fd6a4]" : "text-white/45",
+      )}
+    >
+      {account.text}
+    </span>
+  );
 }
 
 function ProviderEnableSwitch(props: {
@@ -126,84 +179,6 @@ function ProviderEnableSwitch(props: {
   );
 }
 
-function ProviderRow(props: {
-  readonly tourProvider: {
-    readonly id: ProviderId;
-    readonly harnessId: GuiHarnessId;
-  };
-  readonly state: ProviderCliState | undefined;
-  readonly hostUnavailable: boolean;
-  readonly enabledProviderCount: number;
-  readonly isSettingEnabled: boolean;
-  readonly onSetEnabled: (providerId: ProviderId, enabled: boolean) => void;
-}) {
-  const {
-    tourProvider,
-    state,
-    hostUnavailable,
-    enabledProviderCount,
-    isSettingEnabled,
-    onSetEnabled,
-  } = props;
-  const enabled = state?.enabled ?? false;
-  const traycerProvider = tourProvider.id === "traycer";
-  const installState = traycerProvider ? "detected" : installStateFor(state);
-  const account = state === undefined ? null : accountLineFor(state);
-  const dim = state !== undefined && !enabled;
-  const installLabel = installLabelFor(
-    traycerProvider,
-    hostUnavailable,
-    installState,
-  );
-  const installDetected =
-    traycerProvider || (!hostUnavailable && installState === "detected");
-  const disablingLastEnabled =
-    state !== undefined && enabled && enabledProviderCount <= 1;
-  const name = providerDisplayName(tourProvider.id);
-
-  return (
-    <li className="flex flex-col gap-1">
-      <div className="flex items-center gap-2.5">
-        <HarnessIcon
-          harnessId={tourProvider.harnessId}
-          className={cn("size-4", dim ? "text-white/35" : "text-white/85")}
-        />
-        <span
-          className={cn("text-ui-sm", dim ? "text-white/40" : "text-white/85")}
-        >
-          {name}
-        </span>
-        <span
-          className={cn(
-            "font-mono text-overline uppercase tracking-wider",
-            installDetected ? "text-[#7fd6a4]" : "text-white/40",
-          )}
-        >
-          {installLabel}
-        </span>
-        {state !== undefined ? (
-          <ProviderEnableSwitch
-            providerId={state.providerId}
-            name={name}
-            enabled={enabled}
-            disablingLastEnabled={disablingLastEnabled}
-            isSettingEnabled={isSettingEnabled}
-            onSetEnabled={onSetEnabled}
-          />
-        ) : null}
-      </div>
-      {account !== null ? (
-        <p
-          title={account.title ?? undefined}
-          className="min-w-0 truncate pl-[1.625rem] text-ui-xs text-white/45"
-        >
-          {account.text}
-        </p>
-      ) : null}
-    </li>
-  );
-}
-
 /**
  * The agents act's provider panel. Once past sign-in the host's
  * `providers.list` returns real state, so each row shows the CLI, its
@@ -229,22 +204,52 @@ export function OnboardingDetectedAgents() {
   const handleSetEnabled = (providerId: ProviderId, enabled: boolean): void => {
     setEnabled.mutate({ providerId, enabled });
   };
+  const rows = ORDERED_PROVIDERS.map(({ providerId }): ProviderListRow => {
+    const state = providerStateFor(providers, providerId);
+    const enabled = enabledForProvider(state);
+    const traycerProvider = providerId === "traycer";
+    const installState = traycerProvider ? "detected" : installStateFor(state);
+    const installLabel = installLabelFor(
+      traycerProvider,
+      hostUnavailable,
+      installState,
+    );
+    const installDetected =
+      traycerProvider || (!hostUnavailable && installState === "detected");
+    const disablingLastEnabled = disablingLastEnabledFor(
+      state,
+      enabled,
+      enabledProviderCount,
+    );
+    const name = providerDisplayName(providerId);
+    return {
+      providerId,
+      active: false,
+      dimmed: state !== undefined && !enabled,
+      enabled: state?.enabled ?? null,
+      badge: installBadge(installDetected, installLabel),
+      description: accountDescription(state),
+      trailing:
+        state === undefined ? null : (
+          <ProviderEnableSwitch
+            providerId={state.providerId}
+            name={name}
+            enabled={enabled}
+            disablingLastEnabled={disablingLastEnabled}
+            isSettingEnabled={setEnabled.isPending}
+            onSetEnabled={handleSetEnabled}
+          />
+        ),
+      onSelect: null,
+    };
+  });
 
   return (
-    <ul aria-label="Coding agent CLIs" className="flex flex-col gap-2.5">
-      {TOUR_PROVIDERS.map((tourProvider) => (
-        <ProviderRow
-          key={tourProvider.id}
-          tourProvider={tourProvider}
-          state={providers?.find(
-            (provider) => provider.providerId === tourProvider.id,
-          )}
-          hostUnavailable={hostUnavailable}
-          enabledProviderCount={enabledProviderCount}
-          isSettingEnabled={setEnabled.isPending}
-          onSetEnabled={handleSetEnabled}
-        />
-      ))}
-    </ul>
+    <ProviderList
+      ariaLabel="Coding agent CLIs"
+      variant="onboarding"
+      rows={rows}
+      className="my-auto flex max-h-full min-h-0 w-full flex-col gap-2.5 overflow-y-auto overscroll-contain pr-2"
+    />
   );
 }

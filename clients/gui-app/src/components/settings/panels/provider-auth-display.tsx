@@ -10,7 +10,12 @@ export function ProviderAuthBadge({
   readonly state: ProviderCliState;
 }): ReactNode {
   const auth = state.auth;
-  if (!state.enabled || auth.status !== "authenticated") return null;
+  if (
+    !state.enabled ||
+    (auth.status !== "authenticated" && auth.status !== "configured")
+  ) {
+    return null;
+  }
   if (auth.badgeText === null) return null;
 
   return (
@@ -31,7 +36,7 @@ export function ProviderAuthLine({
   if (!state.enabled) return null;
   const auth = state.auth;
 
-  if (state.authPending && auth.status === "unknown") {
+  if (state.authPending) {
     return (
       <p className="mt-0.5 flex items-center gap-1.5 text-ui-xs text-muted-foreground/80">
         <MutedAgentSpinner />
@@ -55,6 +60,29 @@ export function ProviderAuthLine({
         align="start"
       >
         {line}
+      </TooltipWrapper>
+    );
+  }
+
+  if (auth.status === "configured") {
+    return (
+      <p className="mt-0.5 text-ui-xs text-muted-foreground/80">
+        Configured, not verified
+      </p>
+    );
+  }
+
+  if (auth.status === "unavailable") {
+    return (
+      <TooltipWrapper
+        label={auth.detail}
+        side="top"
+        sideOffset={6}
+        align="start"
+      >
+        <p className="mt-0.5 text-ui-xs text-muted-foreground/80">
+          Could not check account status
+        </p>
       </TooltipWrapper>
     );
   }

@@ -6,6 +6,7 @@ import { useDesktopAppUpdates } from "@/hooks/runner/use-desktop-app-updates";
 import { useEpicOpenInNewWindowFlow } from "@/components/layout/hooks/use-epic-open-in-new-window";
 import { UnsyncedEpicMoveDialog } from "@/components/layout/dialogs/unsynced-epic-move-dialog";
 import { RestartUpdateDialog } from "@/components/layout/dialogs/restart-update-dialog";
+import { InstallGuidanceDialog } from "@/components/layout/dialogs/install-guidance-dialog";
 import { AboutDetailsDialog } from "./desktop/about-details-dialog";
 import { LogsChooserDialog } from "./desktop/logs-chooser-dialog";
 import { OpenEpicInNewWindowDialog } from "./desktop/open-epic-in-new-window-dialog";
@@ -35,6 +36,18 @@ export function DesktopDialogHost(): ReactNode {
       close();
     }
   }, [activeDialog, appUpdateSnapshot.status, close]);
+
+  // Mirrors the guard above: if guidance disappears while the dialog is open
+  // (defensive - there's no normal flow that clears it mid-display), don't
+  // leave a stale dialog with no content behind it.
+  useEffect(() => {
+    if (
+      activeDialog === "install-guidance" &&
+      appUpdateSnapshot.installGuidance === null
+    ) {
+      close();
+    }
+  }, [activeDialog, appUpdateSnapshot.installGuidance, close]);
 
   return (
     <>
@@ -87,6 +100,16 @@ export function DesktopDialogHost(): ReactNode {
           onConfirm={() => {
             void appUpdatesBridge.installUpdate();
           }}
+        />
+      ) : null}
+      {activeDialog === "install-guidance" &&
+      appUpdateSnapshot.installGuidance !== null ? (
+        <InstallGuidanceDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) close();
+          }}
+          guidance={appUpdateSnapshot.installGuidance}
         />
       ) : null}
       <UnsyncedEpicMoveDialog flow={openEpicInNewWindowFlow} />

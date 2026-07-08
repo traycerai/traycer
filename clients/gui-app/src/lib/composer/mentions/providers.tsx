@@ -1,44 +1,40 @@
-import {
-  CornerUpLeft,
-  File,
-  Folder,
-  FolderGit2,
-  GitBranch,
-  Layers,
-  type LucideIcon,
-} from "lucide-react";
+import { CornerUpLeft, File } from "lucide-react";
 import type { ReactElement } from "react";
 import { isSubsequence } from "@traycer/protocol/utils/text/fuzzy";
-import { MaterialFileIcon } from "@/components/material-file-icon";
-import {
-  EPIC_NODE_ICONS,
-  EPIC_NODE_LABELS,
-} from "@/lib/artifacts/node-display";
+import { EPIC_NODE_LABELS } from "@/lib/artifacts/node-display";
 import type {
   EpicChatMentionEntry,
   EpicMentionEntry,
   MentionAttachment,
+  MentionPreview,
   WorkspaceEntry,
 } from "@/lib/composer/types";
-import { basenameOfPath, dirnameOfPath } from "@/lib/path";
+import { basenameOfPath } from "@/lib/path";
 import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import type { RequestOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import { mentionAttachmentFromSuggestion } from "./attachments";
+import {
+  artifactIcon,
+  descriptionForSuggestion,
+  detailForSuggestion,
+  epicIcon,
+  epicNodeIcon,
+  folderIcon,
+  gitIcon,
+  iconForSuggestion,
+  MENU_ICON_CLASS,
+  previewForSuggestion,
+  worktreeIcon,
+} from "./mention-entry-display";
+import { taskMentionQueryForRequest } from "./task-mention-helpers";
 
-const MENU_ICON_CLASS = "size-4 shrink-0 text-muted-foreground";
 const EMPTY_MENU_ENTRIES: ReadonlyArray<MentionMenuEntry> = [];
 const EMPTY_WORKSPACE_REQUESTS: ReadonlyArray<MentionWorkspaceRequest> = [];
 const EMPTY_EPIC_REQUESTS: ReadonlyArray<MentionEpicRequest> = [];
 
 export type MentionProviderId =
-  | "files"
-  | "folders"
-  | "worktree"
-  | "git"
-  | "epic"
-  | "chat"
-  | EpicArtifactKind;
+  "files" | "folders" | "worktree" | "git" | "epic" | "chat" | EpicArtifactKind;
 
 export interface MentionMenuCopy {
   readonly header: string;
@@ -66,6 +62,11 @@ export interface MentionMenuEntry {
   readonly description: string;
   readonly icon: ReactElement;
   readonly action: MentionMenuAction;
+  /**
+   * Full, untruncated preview content for the side preview panel. `null` for
+   * `Back` and category-navigate rows, which have nothing to preview.
+   */
+  readonly preview: MentionPreview | null;
 }
 
 export type WorkspacePathMentionMethod =
@@ -79,8 +80,7 @@ export type WorkspaceGitMentionMethod =
   | "workspace.mentionGitCommits";
 
 export type WorkspaceMentionMethod =
-  | WorkspacePathMentionMethod
-  | WorkspaceGitMentionMethod;
+  WorkspacePathMentionMethod | WorkspaceGitMentionMethod;
 
 export type EpicMentionMethod =
   | "epic.mentionEpics"
@@ -474,8 +474,8 @@ class GitMentionProvider extends ComposerMentionProvider {
 class EpicMentionProvider extends ComposerMentionProvider {
   readonly id = "epic" as const;
   readonly rootOrder = 40;
-  protected readonly label = "Epic";
-  protected readonly description = "Accessible epics";
+  protected readonly label = "Task";
+  protected readonly description = "Accessible tasks";
 
   rootEntry(_context: ComposerMentionProviderContext): MentionMenuEntry | null {
     return providerEntry({
@@ -496,16 +496,16 @@ class EpicMentionProvider extends ComposerMentionProvider {
   }
 
   rootEpicRequests(
-    _context: ComposerMentionProviderContext,
+    context: ComposerMentionProviderContext,
   ): ReadonlyArray<MentionEpicRequest> {
-    return EMPTY_EPIC_REQUESTS;
+    return [epicTaskRequest(context)];
   }
 
   epicRequests(
     _step: MentionFlowStep,
-    _context: ComposerMentionProviderContext,
+    context: ComposerMentionProviderContext,
   ): ReadonlyArray<MentionEpicRequest> {
-    return EMPTY_EPIC_REQUESTS;
+    return this.rootEpicRequests(context);
   }
 
   stepEntries(
@@ -521,7 +521,7 @@ class EpicMentionProvider extends ComposerMentionProvider {
   }
 
   menuCopy(_step: MentionFlowStep): MentionMenuCopy {
-    return { header: "Epics", empty: "No matching epics" };
+    return { header: "Tasks", empty: "No matching tasks" };
   }
 }
 
@@ -529,7 +529,7 @@ class ChatMentionProvider extends ComposerMentionProvider {
   readonly id = "chat" as const;
   readonly rootOrder = 45;
   protected readonly label = "Chat";
-  protected readonly description = "Epic chats";
+  protected readonly description = "Task chats";
 
   rootEntry(context: ComposerMentionProviderContext): MentionMenuEntry | null {
     if (context.currentEpicId === null) return null;
@@ -792,6 +792,7 @@ function navigateEntry(args: NavigateEntryArgs): MentionMenuEntry {
     description: args.description,
     icon: args.icon,
     action: { kind: "navigate", step: args.step },
+    preview: null,
   };
 }
 
@@ -803,6 +804,7 @@ function backEntry(description: string): MentionMenuEntry {
     description,
     icon: <CornerUpLeft className={MENU_ICON_CLASS} aria-hidden />,
     action: { kind: "back" },
+    preview: null,
   };
 }
 
@@ -819,6 +821,7 @@ function suggestionEntry(
       description: descriptionForSuggestion(entry),
       icon: iconForSuggestion(entry),
       action: { kind: "complete", mention },
+      preview: previewForSuggestion(entry),
     },
   ];
 }
@@ -916,72 +919,24 @@ function epicRequest(
   };
 }
 
+function epicTaskRequest(
+  context: ComposerMentionProviderContext,
+): MentionEpicRequest {
+  return {
+    method: "epic.mentionEpics",
+    params: {
+      query: taskMentionQueryForRequest(context.query),
+      limit: context.limit,
+    },
+  };
+}
+
 function gitMethodForStep(stepId: string): WorkspaceGitMentionMethod {
   if (stepId === "branches") return "workspace.mentionGitBranches";
   if (stepId === "commits") return "workspace.mentionGitCommits";
   return "workspace.mentionGitRoot";
 }
 
-function detailForSuggestion(entry: WorkspaceEntry | EpicMentionEntry): string {
-  if (entry.kind === "file" || entry.kind === "folder") {
-    return dirnameOfPath(entry.relPath);
-  }
-  if (entry.kind === "epic-chat") return entry.epicTitle;
-  if (entry.kind === "epic-artifact") return entry.epicTitle;
-  return "";
-}
-
-function descriptionForSuggestion(
-  entry: WorkspaceEntry | EpicMentionEntry,
-): string {
-  if (entry.kind === "epic-artifact" && entry.description === entry.epicTitle) {
-    return "";
-  }
-  if (entry.kind === "epic-chat" && entry.description === entry.epicTitle) {
-    return "";
-  }
-  return entry.description;
-}
-
-function iconForSuggestion(
-  entry: WorkspaceEntry | EpicMentionEntry,
-): ReactElement {
-  if (entry.kind === "file") {
-    return <MaterialFileIcon filename={entry.relPath} className="size-4" />;
-  }
-  if (entry.kind === "folder") return folderIcon();
-  if (entry.kind === "worktree") return worktreeIcon();
-  if (entry.kind === "epic") return epicIcon();
-  if (entry.kind === "epic-artifact") return artifactIcon(entry.artifactType);
-  if (entry.kind === "epic-chat") return epicNodeIcon("chat");
-  return gitIcon();
-}
-
 function fileIcon(): ReactElement {
   return <File className={MENU_ICON_CLASS} aria-hidden />;
-}
-
-function folderIcon(): ReactElement {
-  return <Folder className={MENU_ICON_CLASS} aria-hidden />;
-}
-
-function gitIcon(): ReactElement {
-  return <GitBranch className={MENU_ICON_CLASS} aria-hidden />;
-}
-
-function worktreeIcon(): ReactElement {
-  return <FolderGit2 className={MENU_ICON_CLASS} aria-hidden />;
-}
-
-function epicIcon(): ReactElement {
-  return <Layers className={MENU_ICON_CLASS} aria-hidden />;
-}
-
-function artifactIcon(kind: EpicArtifactKind): ReactElement {
-  return epicNodeIcon(kind);
-}
-
-function epicNodeIcon(kind: "chat" | EpicArtifactKind): ReactElement {
-  const Icon: LucideIcon = EPIC_NODE_ICONS[kind];
-  return <Icon className={MENU_ICON_CLASS} aria-hidden />;
 }

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildLoginCommand } from "../login";
 import type { CommandContext } from "../../runner/runner";
 import type { RuntimeContext } from "../../runner/runtime";
+import { noopLogger } from "../../logger";
 import { CLI_ERROR_CODES, CliError } from "../../runner/errors";
 import { validateAuthTokenViaHttp } from "../../../../shared/auth/auth-validation";
 import { readCredentials, writeCredentials } from "../../store/credentials";
@@ -27,6 +28,7 @@ function makeRuntime(overrides: Partial<RuntimeContext>): RuntimeContext {
     noBootstrap: false,
     nonInteractive: false,
     environment: "production",
+    logger: noopLogger,
     ...overrides,
   };
 }
@@ -87,7 +89,11 @@ describe("buildLoginCommand with --token", () => {
     const fn = buildLoginCommand({ token: "-" });
     const result = await fn(makeCtx(makeRuntime({})));
 
-    expect(validateMock).toHaveBeenCalledWith(expect.any(String), "captured-bearer", "");
+    expect(validateMock).toHaveBeenCalledWith(
+      expect.any(String),
+      "captured-bearer",
+      "",
+    );
     expect(writeMock).toHaveBeenCalledTimes(1);
     expect(writeMock.mock.calls[0][0].token).toBe("captured-bearer");
     expect(writeMock.mock.calls[0][0].user).toEqual({
@@ -120,7 +126,9 @@ describe("buildLoginCommand with --token", () => {
     validateMock.mockResolvedValue(validProfile);
     stubStdin({
       isTTY: false,
-      chunks: [JSON.stringify({ token: "bearer", refreshToken: "new-refresh" })],
+      chunks: [
+        JSON.stringify({ token: "bearer", refreshToken: "new-refresh" }),
+      ],
     });
     const fn = buildLoginCommand({ token: "-" });
     await fn(makeCtx(makeRuntime({})));
@@ -197,7 +205,11 @@ describe("buildLoginCommand with --token", () => {
     const fn = buildLoginCommand({ token: "-" });
     await fn(makeCtx(makeRuntime({})));
     // Trailing newline is trimmed before validation.
-    expect(validateMock).toHaveBeenCalledWith(expect.any(String), "piped-bearer", "");
+    expect(validateMock).toHaveBeenCalledWith(
+      expect.any(String),
+      "piped-bearer",
+      "",
+    );
   });
 
   it("rejects --token - with no piped input (INVALID_ARGUMENT)", async () => {

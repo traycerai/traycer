@@ -9,10 +9,13 @@ import type {
   CreateEpicWorkspaceIdentifier,
   TaskRepoIdentifier,
 } from "@traycer/protocol/host/epic/unary-schemas";
-import type { WorktreeBindingSelectorRow } from "@traycer/protocol/host/worktree-schemas";
+import type {
+  WorktreeBindingSelectorRow,
+  WorktreeBindingWorkspaceMode,
+  WorktreeIntent,
+} from "@traycer/protocol/host/worktree-schemas";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
-import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
 import { CURRENT_EPIC_VERSION } from "@traycer-clients/shared/epic/epic-version";
 
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
@@ -34,6 +37,10 @@ import { useInitialChatHandoffStore } from "@/stores/epics/initial-chat-handoff-
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import {
+  markEpicCreatedThisSession,
+  unmarkEpicCreatedThisSession,
+} from "@/lib/epics/session-created-epics";
+import {
   existingEpicTabIntent,
   navigateToTabIntent,
 } from "@/lib/tab-navigation";
@@ -42,6 +49,7 @@ import {
   extractPlainTextFromComposerJSONContent,
   stringValue,
 } from "@/lib/composer/tiptap-json-content";
+import { normalizeComposerContent } from "@/lib/composer/composer-content-normalizer";
 import {
   collectImageAtoms,
   containsImageAtoms,
@@ -61,6 +69,7 @@ import type {
   ReasoningLevel,
   ServiceTier,
 } from "@/components/home/data/landing-options";
+import { deriveWorkspaceMode } from "@/lib/worktree/workspace-mode";
 
 export interface LandingComposerSubmitArgs {
   readonly editor: ComposerPromptEditorHandle | null;
@@ -215,18 +224,6 @@ export function useLandingComposerActions(): LandingComposerActions {
       const submittedContent = buildSubmittedChatJSONContent(resolvedContent);
       const profile = useAuthStore.getState().profile;
 
-      const workspaces = buildWorkspaceAssociations(
-        workspaceContext.workspaceFolders,
-        workspaceContext.workspaceFolderInfoByPath,
-      );
-      if (workspaces.length === 0) {
-        toast.error("Couldn't create epic.", {
-          description:
-            "Select at least one workspace folder to create an epic.",
-        });
-        return;
-      }
-
       const settings = buildChatRunSettings({
         selection: toolbar.selection,
         permission: toolbar.permission,
@@ -291,6 +288,9 @@ export function useLandingComposerActions(): LandingComposerActions {
       const tabId = useEpicCanvasStore
         .getState()
         .openEpicTab(epicId, epicTitle);
+      // Mark before navigation so the epic-tab existence reconciler never
+      // force-closes this tab while `epic.listTasks` still lags `epic.create`.
+      markEpicCreatedThisSession(epicId);
       // Spinner anchor is the pre-generation title (empty here); it clears once
       // a non-empty title is projected or the backstop fires.
       useEpicCanvasStore.getState().markEpicTitlePending(epicId, epicTitle);
@@ -342,6 +342,7 @@ export function useLandingComposerActions(): LandingComposerActions {
           // Stored untitled; the "Untitled chat" / first-message fallback is a
           // render concern, never baked into the stored title.
           title: "",
+          workspaceMode: workspaceContext.workspaceMode,
           worktreeIntent: workspaceContext.worktreeIntent,
           initialMessage,
         },
@@ -361,6 +362,9 @@ export function useLandingComposerActions(): LandingComposerActions {
           }
         })
         .catch(() => {
+          // The epic never landed on the host: drop the create marker so its
+          // orphaned tab is no longer exempt from existence reconciliation.
+          unmarkEpicCreatedThisSession(epicId);
           useComposerRunSettingsStore.getState().clearEpicRunSettings([epicId]);
           useEpicCanvasStore.getState().clearEpicTitlePending(epicId);
           useEpicCanvasStore.getState().clearChatTitlePending(chatId);
@@ -383,7 +387,7 @@ export function useLandingComposerActions(): LandingComposerActions {
       const { editor } = args;
       if (editor === null) return;
 
-      const editorContent = editor.getJSON();
+      const editorContent = normalizeComposerContent(editor.getJSON());
       const text = extractPlainTextFromComposerJSONContent(editorContent);
       const hasImages = containsImageAtoms(editorContent);
       if (text.trim().length === 0 && !hasImages) return;
@@ -458,18 +462,6 @@ export function useLandingComposerActions(): LandingComposerActions {
         reasoningEffort,
         terminalAgentArgs,
       } = launch;
-      const workspaces = buildWorkspaceAssociations(
-        workspaceContext.workspaceFolders,
-        workspaceContext.workspaceFolderInfoByPath,
-      );
-      if (workspaces.length === 0) {
-        toast.error("Couldn't create epic.", {
-          description:
-            "Select at least one workspace folder to create an epic.",
-        });
-        return;
-      }
-
       const epicId = uuidv4();
       const now = Date.now();
       rememberLandingWorktreeIntent(
@@ -491,6 +483,10 @@ export function useLandingComposerActions(): LandingComposerActions {
       const tabId = useEpicCanvasStore
         .getState()
         .openEpicTab(epicId, epicTitle);
+      // Terminal-agent create registers no initial-chat handoff, so this
+      // synchronous marker is what keeps the existence reconciler from
+      // force-closing the tab before `epic.listTasks` reflects the new epic.
+      markEpicCreatedThisSession(epicId);
       const activeDraftId = useLandingDraftStore.getState().activeDraftId;
       if (activeDraftId !== null) {
         useLandingDraftStore.getState().closeDraft(activeDraftId);
@@ -517,22 +513,32 @@ export function useLandingComposerActions(): LandingComposerActions {
         now,
         chat: null,
       })
-        .then(() =>
-          terminalAgentCreateFn({
-            epicId,
-            tabId,
-            parentId: null,
-            title: "",
-            placement: { kind: "active-tile" },
-            harnessId,
-            model,
-            reasoningEffort,
-            agentMode,
-            forkSourceHarnessSessionId: null,
-            onStatusChange: null,
-            worktreeIntent: workspaceContext.worktreeIntent,
-            terminalAgentArgs,
-          }),
+        .then(
+          () =>
+            terminalAgentCreateFn({
+              epicId,
+              tabId,
+              parentId: null,
+              title: "",
+              placement: { kind: "active-tile" },
+              harnessId,
+              model,
+              reasoningEffort,
+              agentMode,
+              forkSourceHarnessSessionId: null,
+              onStatusChange: null,
+              worktreeIntent: workspaceContext.worktreeIntent,
+              workspaceMode: workspaceContext.workspaceMode,
+              terminalAgentArgs,
+            }),
+          // Only `epic.create` rejection reaches this arm (a later tui-agent
+          // failure goes to the trailing `.catch`). The epic never landed, so
+          // drop the create marker to let the reconciler prune the orphan tab.
+          // A downstream tui-agent failure leaves the marker in place - the epic
+          // exists, so it must stay protected until `epic.listTasks` reflects it.
+          () => {
+            unmarkEpicCreatedThisSession(epicId);
+          },
         )
         .catch(() => undefined);
     },
@@ -572,6 +578,7 @@ interface LandingWorkspaceContext {
     Record<string, WorkspaceFolderInfo>
   >;
   readonly worktreeIntent: WorktreeIntent | null;
+  readonly workspaceMode: WorktreeBindingWorkspaceMode;
   readonly activeDraftId: string | null;
 }
 
@@ -593,14 +600,20 @@ function readLandingWorkspaceContext(): LandingWorkspaceContext {
       workspaceFolders: activeDraft.workspace.folders,
       workspaceFolderInfoByPath: activeDraft.workspace.folderInfoByPath,
       worktreeIntent,
+      workspaceMode: deriveWorkspaceMode(
+        activeDraft.workspace.folders.length,
+        worktreeIntent,
+      ),
       activeDraftId,
     };
   }
+  const globalFolders = useWorkspaceFoldersStore.getState().folders;
   return {
-    workspaceFolders: useWorkspaceFoldersStore.getState().folders,
+    workspaceFolders: globalFolders,
     workspaceFolderInfoByPath:
       useWorkspaceFoldersStore.getState().folderInfoByPath,
     worktreeIntent,
+    workspaceMode: deriveWorkspaceMode(globalFolders.length, worktreeIntent),
     activeDraftId: null,
   };
 }

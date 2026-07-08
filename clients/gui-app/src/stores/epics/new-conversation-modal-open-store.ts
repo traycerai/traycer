@@ -17,6 +17,14 @@ export interface NewConversationModalOpenRequest {
   readonly epicId: string;
   readonly tabId: string;
   readonly placement: ConversationTilePlacement;
+  /**
+   * Parent conversation id when the modal was opened to create a CHILD chat
+   * (the per-row `+` in the chats tree). `null` for a top-level chat (sidebar
+   * panel `+`, ⌘K palette, in-pane PaneOpener). The body threads this into
+   * `epic.createChat` and seeds the workspace from the parent's binding so a
+   * child inherits the parent's worktree.
+   */
+  readonly parentId: string | null;
 }
 
 interface NewConversationModalOpenStore {

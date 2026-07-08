@@ -48,6 +48,7 @@ const TERMINAL_TILE_SOURCE_DATA = {
     instanceId: "inst-term-1",
     type: "terminal",
     name: "Terminal",
+    titleSource: "manual",
     hostId: "host-1",
     cwd: "/repo",
   },

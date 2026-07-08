@@ -78,6 +78,7 @@ export function useEpicCollaboratorsQuery(
   const refetchInterval = options?.refetchInterval ?? false;
   const client = useHostClient();
   const query = useHostQuery({
+    cacheKeyIdentity: undefined,
     client,
     method: "epic.listCollaborators",
     params: { epicId },

@@ -43,10 +43,7 @@ export async function resolvePortConflict(
     // Linux fallback: `ss -ltnp sport = :<port>` is available on systemd
     // distros where lsof is not.
     if (deps.platform === "linux") {
-      const ss = await deps.runCommand("ss", [
-        "-ltnpH",
-        `sport = :${port}`,
-      ]);
+      const ss = await deps.runCommand("ss", ["-ltnpH", `sport = :${port}`]);
       const parsedSs = ss !== null ? parseSs(ss.stdout) : null;
       if (parsedSs !== null && !ignorePids.has(parsedSs.pid)) return parsedSs;
     }
@@ -54,8 +51,7 @@ export async function resolvePortConflict(
   }
   if (deps.platform === "win32") {
     const netstat = await deps.runCommand("netstat", ["-ano", "-p", "tcp"]);
-    const parsed =
-      netstat !== null ? parseNetstat(netstat.stdout, port) : null;
+    const parsed = netstat !== null ? parseNetstat(netstat.stdout, port) : null;
     if (parsed === null) return null;
     if (ignorePids.has(parsed.pid)) return null;
     // Resolve PID → process name via tasklist (best effort).
@@ -66,8 +62,7 @@ export async function resolvePortConflict(
       "CSV",
       "/NH",
     ]);
-    const name =
-      tasklist !== null ? parseTasklist(tasklist.stdout) : null;
+    const name = tasklist !== null ? parseTasklist(tasklist.stdout) : null;
     return { pid: parsed.pid, processName: name ?? "(unknown)" };
   }
   return null;
@@ -121,7 +116,10 @@ export function parseSs(stdout: string): PortConflictInfo | null {
 
 // netstat -ano -p tcp rows on Windows look like:
 //   TCP    127.0.0.1:7300   0.0.0.0:0   LISTENING   1234
-export function parseNetstat(stdout: string, port: number): { pid: number } | null {
+export function parseNetstat(
+  stdout: string,
+  port: number,
+): { pid: number } | null {
   for (const line of stdout.split(/\r?\n/)) {
     const trimmed = line.trim();
     if (!trimmed.startsWith("TCP")) continue;
@@ -141,7 +139,7 @@ export function parseTasklist(stdout: string): string | null {
   const firstLine = stdout.split(/\r?\n/).find((l) => l.trim().length > 0);
   if (firstLine === undefined) return null;
   const match = firstLine.match(/^"([^"]+)"/);
-  return match !== null ? match[1] ?? null : null;
+  return match !== null ? (match[1] ?? null) : null;
 }
 
 export function createRealRunCommand(): ResolvePortConflictDeps["runCommand"] {

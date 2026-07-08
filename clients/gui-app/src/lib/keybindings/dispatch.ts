@@ -6,6 +6,8 @@ import { getSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
 import { isSettingsPath } from "@/stores/tabs/kinds/settings";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { duplicateEpicTab, openNewEpic } from "@/lib/commands/actions";
+import { openActiveTileFindWithReplace } from "@/lib/commands/tile-find";
+import { toggleActiveModelPicker } from "@/lib/commands/active-model-picker-registry";
 import { focusActiveComposer } from "@/lib/composer/composer-focus-registry";
 import { tabMatchesPath, tabResolveIntent } from "@/stores/tabs/registry";
 import type { TabNavigationIntent } from "@/lib/tab-navigation/intents";
@@ -40,6 +42,9 @@ import {
   type SettingsSectionId,
 } from "@/lib/settings-sections";
 
+const GROUP_EDITOR_FOCUS_TARGET_SELECTOR =
+  "[data-composer-editor], [data-artifact-editor]";
+
 // ---------------------------------------------------------------------------
 // Narrow router adapter - decouples dispatch from `@tanstack/react-router`'s
 // full `AppRouter` type so tests can supply a tiny fake without reaching for
@@ -63,6 +68,25 @@ export interface KeybindingRouter {
    * click - see `lib/tab-navigation.ts`.
    */
   readonly navigateToTabIntent: (intent: TabNavigationIntent) => void;
+  /**
+   * In-app history back/forward. Delegate to the shared
+   * `goBack`/`goForward` actions on the CURRENT router (the live
+   * instance in `<RouterProvider>`), so keybinding, mouse, header, and
+   * palette all walk the same persistent history. No-op when the current
+   * history carries no controller brand (browser/web build).
+   */
+  readonly goBack: () => void;
+  readonly goForward: () => void;
+  /**
+   * History-navigation availability + boundary state, read off the
+   * CURRENT router's persistent-history controller. The palette source
+   * gates on `isHistoryNavAvailable` (desktop-only feature signal) and
+   * reads through this seam instead of TanStack `useRouter()`, since the
+   * palette mounts ABOVE `<RouterProvider>` where router context is null.
+   */
+  readonly isHistoryNavAvailable: () => boolean;
+  readonly canGoBack: () => boolean;
+  readonly canGoForward: () => boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -117,11 +141,9 @@ export interface DigitActionMatch {
   readonly digit: number;
   readonly run: () => boolean;
   readonly dispatchSequence:
-    | ((digits: ReadonlyArray<number>) => boolean)
-    | null;
+    ((digits: ReadonlyArray<number>) => boolean) | null;
   readonly sequenceState:
-    | ((digits: ReadonlyArray<number>) => LeaderDigitSequenceState)
-    | null;
+    ((digits: ReadonlyArray<number>) => LeaderDigitSequenceState) | null;
 }
 
 export function matchDigitAction(
@@ -303,6 +325,7 @@ const STATIC_HANDLERS: Readonly<Partial<Record<ActionId, StaticHandler>>> = {
   "group.focus.left": (r) => focusGroupInDirection(r, "left"),
   "group.focus.right": (r) => focusGroupInDirection(r, "right"),
   "group.focus-editor": (r) => focusActiveGroupEditor(r),
+  "tile.find.replace": () => openActiveTileFindWithReplace(),
   "app.history.open": (r) => {
     r.navigateToEpicList();
     return true;
@@ -311,6 +334,14 @@ const STATIC_HANDLERS: Readonly<Partial<Record<ActionId, StaticHandler>>> = {
     r.navigateSettings();
     return true;
   },
+  // Composer-scoped, but routed centrally (not externally-handled): the active
+  // composer's picker registers a controller; here we just toggle the top one.
+  // No-op (false) when no composer is active, matching the "hidden/disabled"
+  // surfaces.
+  "composer.model-picker.toggle": () => toggleActiveModelPicker(),
+  // No `nav.back` / `nav.forward` entries: in-app back/forward has no keyboard
+  // chord (see ACTION_META). The palette + header buttons call the shared
+  // `goBack`/`goForward` actions directly via the router seam.
 };
 
 export function dispatchAction(
@@ -338,6 +369,18 @@ const EXTERNALLY_HANDLED_ACTIONS: ReadonlySet<ActionId> = new Set([
 
 export function isExternallyHandled(id: ActionId): boolean {
   return EXTERNALLY_HANDLED_ACTIONS.has(id);
+}
+
+// Actions whose chord must fire once per physical press, never on OS key-repeat.
+// A toggle (e.g. the model picker) would otherwise flip open/closed rapidly
+// while the chord is held. The provider still reserves the chord on repeat
+// (preventDefault) but skips re-dispatch.
+const REPEAT_SENSITIVE_ACTIONS: ReadonlySet<ActionId> = new Set([
+  "composer.model-picker.toggle",
+]);
+
+export function isRepeatSensitiveAction(id: ActionId): boolean {
+  return REPEAT_SENSITIVE_ACTIONS.has(id);
 }
 
 // ---------------------------------------------------------------------------
@@ -576,26 +619,37 @@ function focusGroupInDirection(
   const nextId = findNeighbor(active, rects, dir);
   if (nextId === null) return false;
   useEpicCanvasStore.getState().setActiveTilePane(tab.tabId, nextId);
+  focusGroupEditor(nextId);
+  return true;
+}
+
+function focusGroupEditor(groupId: string): boolean {
+  if (typeof document === "undefined") return false;
+  const group = document.querySelector<HTMLElement>(groupIdSelector(groupId));
+  const editor = group?.querySelector<HTMLElement>(
+    GROUP_EDITOR_FOCUS_TARGET_SELECTOR,
+  );
+  if (editor === undefined || editor === null) return false;
+  editor.focus({ preventScroll: true });
   return true;
 }
 
 function focusActiveGroupEditor(router: KeybindingRouter): boolean {
-  if (typeof document === "undefined") return false;
   const tab = getActiveTab(router);
   if (tab !== null) {
     const target = getActiveGroupAndTab(tab.tabId);
-    if (target !== null) {
-      const group = document.querySelector<HTMLElement>(
-        `[data-group-id="${CSS.escape(target.groupId)}"]`,
-      );
-      const editor = group?.querySelector<HTMLElement>(
-        "[data-composer-editor]",
-      );
-      if (editor) {
-        editor.focus();
-        return true;
-      }
-    }
+    if (target !== null && focusGroupEditor(target.groupId)) return true;
   }
   return focusActiveComposer();
+}
+
+function groupIdSelector(groupId: string): string {
+  return `[data-group-id="${escapeAttributeSelectorValue(groupId)}"]`;
+}
+
+function escapeAttributeSelectorValue(value: string): string {
+  if (typeof CSS !== "undefined" && typeof CSS.escape === "function") {
+    return CSS.escape(value);
+  }
+  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }

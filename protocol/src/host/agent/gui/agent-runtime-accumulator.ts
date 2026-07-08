@@ -14,6 +14,8 @@ import type {
   PlanStep,
   ToolInputDetail,
   TodoItem,
+  WorkflowActivityEntry,
+  WorkflowMeta,
 } from "@traycer/protocol/persistence/epic/schemas";
 import { deriveToolInputDetail } from "@traycer/protocol/host/agent/gui/tool-input-detail";
 import { deriveToolInputSummary } from "@traycer/protocol/host/agent/gui/tool-input-summary";
@@ -135,10 +137,10 @@ export function finalizeStreamingActionBlocks(
       block.type !== "interview"
     ) {
       hasUpdates = true;
-      // For tool_call/command, `timestamp` is the START anchor the GUI reads as
-      // `startedAt` (the elapsed heartbeat) - advancing it to turn-end would
-      // give a force-finalized (e.g. interrupted) call a start time equal to the
-      // turn end. Flip status only, keep the start.
+      // For tool_call/command, keep the start timestamp stable. Tool calls also
+      // carry immutable `startedAt`; `timestamp` advances only when their own
+      // terminal event arrives, which lets background command cards derive a
+      // post-completion duration.
       if (block.type === "tool_call" || block.type === "command") {
         return { ...block, status: actionStatus };
       }
@@ -170,6 +172,60 @@ export function finalizeStreamingActionBlocks(
   });
 
   return hasUpdates ? finalizedBlocks : blocks;
+}
+
+// Option B (backgrounded work): restore any subagent/background-tool block that
+// `finalizeStreamingActionBlocks` just finalized but was "streaming" before, to
+// its pre-finalize (streaming) state. Detached work still streaming at a CLEAN
+// turn end outlives the turn that spawned it, so its card must keep reading
+// "running" until its OWN completion finalizes it (the host's detached
+// execution). Other turn-scoped action blocks (ordinary tool_call/command/
+// file_change) stay finalized. Only applied on `turn.completed` - a
+// stopped/interrupted turn DOES finalize still-running detached work.
+export function reopenStreamingSubagentBlocks(
+  before: ContentBlock[],
+  finalized: ContentBlock[],
+): ContentBlock[] {
+  if (finalized === before) return finalized;
+  const streamingDetachedIds = streamingDetachedBlockIds(before);
+  if (streamingDetachedIds.size === 0) return finalized;
+  const beforeById = new Map(before.map((block) => [block.blockId, block]));
+  return finalized.map((block) =>
+    streamingDetachedIds.has(block.blockId)
+      ? (beforeById.get(block.blockId) ?? block)
+      : block,
+  );
+}
+
+function streamingDetachedBlockIds(
+  blocks: ContentBlock[],
+): ReadonlySet<string> {
+  const ids = new Set(
+    blocks
+      .filter(
+        (block) =>
+          block.status === "streaming" &&
+          (block.type === "subagent" ||
+            (block.type === "tool_call" && block.backgroundTask)),
+      )
+      .map((block) => block.blockId),
+  );
+  if (ids.size === 0) return ids;
+
+  let changed = true;
+  while (changed) {
+    changed = false;
+    blocks.forEach((block) => {
+      if (block.status !== "streaming") return;
+      const parentBlockId = block.parentBlockId ?? null;
+      if (parentBlockId === null) return;
+      if (!ids.has(parentBlockId) || ids.has(block.blockId)) return;
+      ids.add(block.blockId);
+      changed = true;
+    });
+  }
+
+  return ids;
 }
 
 function finalizeBlock(
@@ -226,12 +282,14 @@ function taskTodoItemsFromInput(
 
 // One construction point for a freshly-opened sub-agent block, shared by the
 // `subagent.started` open and the `progress`/`completed` orphan fallbacks (a
-// block created when its `started` was dropped or arrived out of order). Keeps
+// block created when its `started` was dropped or arrived out of order), and
+// by the `workflow.*` triple's dual-write onto this same block shape. Keeps
 // the block shape - and the `type` discriminant - defined once.
 function makeSubAgentBlock(fields: {
   blockId: string;
-  status: "streaming" | "completed";
+  status: "streaming" | "completed" | "errored";
   timestamp: number;
+  parentBlockId: string | null;
   startedAt: number | null;
   name: string | null;
   agentType: string | null;
@@ -239,14 +297,56 @@ function makeSubAgentBlock(fields: {
   progressUpdates: string[];
   result: string | null;
   spawnToolCallId: string | null;
+  stopped: boolean;
+  workflowMeta: WorkflowMeta | null;
 }): Extract<ContentBlock, { type: "subagent" }> {
   return { type: "subagent", ...fields };
+}
+
+// Appends a new workflow activity entry, skipping a consecutive duplicate
+// (the same aggregate `task_progress` line can re-arrive on repeated polls
+// with no new milestone) so the persisted timeline reads as distinct steps.
+function appendWorkflowActivity(
+  activity: WorkflowActivityEntry[],
+  entry: WorkflowActivityEntry | null,
+): WorkflowActivityEntry[] {
+  if (entry === null) return activity;
+  const last = activity[activity.length - 1];
+  if (last !== undefined && last.kind === entry.kind && last.text === entry.text) {
+    return activity;
+  }
+  return [...activity, entry];
+}
+
+function emptyWorkflowMeta(name: string | null): WorkflowMeta {
+  return {
+    name: name ?? "",
+    intent: null,
+    activity: [],
+    agentsStarted: null,
+    agentsFinished: null,
+    totalTokens: null,
+  };
 }
 
 function nullableMetadata(
   value: Record<string, unknown> | undefined,
 ): Record<string, unknown> | null {
   return value ?? null;
+}
+
+// Sticky-OR with a third "not yet known" state: only an explicit `true` ever
+// changes the marker. `existing: null` ("unknown so far") and an `incoming`
+// that doesn't confirm either way leave it `null`, rather than collapsing to a
+// committed `false` - a later event (the SDK's own retroactive confirmation,
+// or simply more of the streamed input parsing) can still resolve it to
+// `true`, but nothing ever downgrades a `true` once set.
+function mergeBackgroundTaskMarker(
+  existing: boolean | null,
+  incoming: boolean | undefined,
+): boolean | null {
+  if (existing === true || incoming === true) return true;
+  return existing;
 }
 
 function normalizeApprovalDecision(
@@ -483,9 +583,25 @@ export function accumulateEvent(
         },
       ];
 
-    case "turn.completed":
+    case "turn.completed": {
+      const finalized = finalizeStreamingActionBlocks(
+        blocks,
+        event.timestamp,
+        finalizeStatusForTerminalEvent(event),
+      );
+      // Keep still-streaming detached work (backgrounded subagent/tool card)
+      // "running" ONLY on a CLEAN completion. A degraded ending
+      // (`event.reason` set - e.g. max_tokens, refusal) is a real termination:
+      // the host does NOT keep the query alive for it, so detached work will not
+      // continue. Finalize its card here rather than leaving a lying "running".
+      return event.reason === undefined
+        ? reopenStreamingSubagentBlocks(blocks, finalized)
+        : finalized;
+    }
     case "turn.stopped":
     case "turn.interrupted":
+      // A cut-short turn finalizes everything still streaming, subagents
+      // included - they cannot keep running once the turn is torn down.
       return finalizeStreamingActionBlocks(
         blocks,
         event.timestamp,
@@ -546,6 +662,7 @@ export function accumulateEvent(
       return finalizeBlock(blocks, event.blockId, "reasoning", event.timestamp);
 
     case "tool_call.started": {
+      const startedAt = event.startedAt ?? event.timestamp;
       const existing = findBlockOfType(blocks, event.blockId, "tool_call");
       if (existing) {
         const updated = {
@@ -564,7 +681,13 @@ export function accumulateEvent(
               }),
           parentBlockId: resolveParentBlockId(event, existing),
           timestamp: event.timestamp,
+          startedAt: event.startedAt ?? existing.startedAt ?? startedAt,
+          endedAt: existing.endedAt,
           agentMessageSend: event.agentMessageSend ?? existing.agentMessageSend,
+          backgroundTask: mergeBackgroundTaskMarker(
+            existing.backgroundTask,
+            event.backgroundTask,
+          ),
         };
         return replaceBlock(blocks, event.blockId, updated);
       }
@@ -582,6 +705,11 @@ export function accumulateEvent(
           error: null,
           agentMessageSend: event.agentMessageSend,
           progress: null,
+          backgroundOutput: null,
+          startedAt,
+          endedAt: null,
+          backgroundTask: event.backgroundTask ?? null,
+          stopped: false,
         },
       ];
     }
@@ -595,6 +723,13 @@ export function accumulateEvent(
           parentBlockId: resolveParentBlockId(event, existing),
           timestamp: event.timestamp,
           agentMessageSend: event.agentMessageSend ?? existing.agentMessageSend,
+          backgroundOutput: event.backgroundOutput ?? existing.backgroundOutput,
+          startedAt: event.backgroundStartedAt ?? existing.startedAt,
+          endedAt: event.timestamp,
+          backgroundTask: mergeBackgroundTaskMarker(
+            existing.backgroundTask,
+            event.backgroundTask,
+          ),
         };
         return replaceBlock(blocks, event.blockId, updated);
       }
@@ -613,6 +748,11 @@ export function accumulateEvent(
           error: null,
           agentMessageSend: event.agentMessageSend,
           progress: null,
+          backgroundOutput: event.backgroundOutput ?? null,
+          startedAt: event.backgroundStartedAt ?? null,
+          endedAt: event.timestamp,
+          backgroundTask: event.backgroundTask ?? null,
+          stopped: false,
         },
       ];
     }
@@ -623,10 +763,18 @@ export function accumulateEvent(
         const updated = {
           ...existing,
           status: "errored" as const,
+          stopped: event.terminationReason === "stopped",
           error: event.error,
           parentBlockId: resolveParentBlockId(event, existing),
           timestamp: event.timestamp,
           agentMessageSend: event.agentMessageSend ?? existing.agentMessageSend,
+          backgroundOutput: event.backgroundOutput ?? existing.backgroundOutput,
+          startedAt: event.backgroundStartedAt ?? existing.startedAt,
+          endedAt: event.timestamp,
+          backgroundTask: mergeBackgroundTaskMarker(
+            existing.backgroundTask,
+            event.backgroundTask,
+          ),
         };
         return replaceBlock(blocks, event.blockId, updated);
       }
@@ -645,16 +793,22 @@ export function accumulateEvent(
           error: event.error,
           agentMessageSend: event.agentMessageSend,
           progress: null,
+          backgroundOutput: event.backgroundOutput ?? null,
+          startedAt: event.backgroundStartedAt ?? null,
+          endedAt: event.timestamp,
+          backgroundTask: event.backgroundTask ?? null,
+          stopped: event.terminationReason === "stopped",
         },
       ];
     }
 
     case "tool_call.progress": {
       // Replace-latest: stamp the most recent progress line onto the owning
-      // tool_call block. Deliberately does NOT advance `timestamp` - the GUI
-      // derives the elapsed heartbeat from the block's start time, which must
-      // stay anchored across progress updates. Progress for a tool_call that
-      // doesn't exist (or a block of another type) is meaningless - drop it.
+      // tool_call block. Deliberately does NOT advance `timestamp`; while the
+      // block streams, timestamp still matches immutable `startedAt`, and once
+      // finalized timestamp becomes the completion time for duration derivation.
+      // Progress for a tool_call that doesn't exist (or a block of another
+      // type) is meaningless - drop it.
       const existing = findBlockOfType(blocks, event.blockId, "tool_call");
       if (!existing) return blocks;
       return replaceBlock(blocks, event.blockId, {
@@ -1211,7 +1365,9 @@ export function accumulateEvent(
               ? event.beforeHash
               : existing.beforeHash,
           afterHash:
-            event.afterHash !== undefined ? event.afterHash : existing.afterHash,
+            event.afterHash !== undefined
+              ? event.afterHash
+              : existing.afterHash,
         });
       }
       return [
@@ -1289,6 +1445,7 @@ export function accumulateEvent(
           // preserve the prior value when a re-emit omits it.
           agentType: event.agentType ?? existing.agentType,
           task: nullableString(event.task) ?? existing.task,
+          parentBlockId: resolveParentBlockId(event, existing),
           // Advance `timestamp` only while still streaming. Codex re-emits
           // `subagent.started` (async nickname fetch) which can land AFTER the
           // sub-agent already completed; bumping a terminal block's timestamp
@@ -1310,6 +1467,7 @@ export function accumulateEvent(
           blockId: event.blockId,
           status: "streaming",
           timestamp: event.timestamp,
+          parentBlockId: resolveParentBlockId(event, undefined),
           startedAt: event.timestamp,
           name: event.name,
           agentType: event.agentType ?? null,
@@ -1317,6 +1475,8 @@ export function accumulateEvent(
           progressUpdates: [],
           result: null,
           spawnToolCallId: event.spawnToolCallId ?? null,
+          stopped: false,
+          workflowMeta: null,
         }),
       ];
     }
@@ -1327,6 +1487,7 @@ export function accumulateEvent(
         const updated = {
           ...existing,
           progressUpdates: [...existing.progressUpdates, event.update],
+          parentBlockId: resolveParentBlockId(event, existing),
           timestamp: event.timestamp,
         };
         return replaceBlock(blocks, event.blockId, updated);
@@ -1337,6 +1498,7 @@ export function accumulateEvent(
           blockId: event.blockId,
           status: "streaming",
           timestamp: event.timestamp,
+          parentBlockId: resolveParentBlockId(event, undefined),
           // First signal we have for this card; the true spawn is earlier but
           // unknown, so anchor the live timer here.
           startedAt: event.timestamp,
@@ -1346,17 +1508,27 @@ export function accumulateEvent(
           progressUpdates: [event.update],
           result: null,
           spawnToolCallId: null,
+          stopped: false,
+          workflowMeta: null,
         }),
       ];
     }
 
     case "subagent.completed": {
       const existing = findBlockOfType(blocks, event.blockId, "subagent");
+      // `outcome` is defaulted "completed" on the wire (see agent-runtime.ts),
+      // so an old emitter that never sets it reproduces today's shipped
+      // behavior exactly. Only "failed"/"stopped" diverge from "completed".
+      const status: "completed" | "errored" =
+        event.outcome === "completed" ? "completed" : "errored";
+      const stopped = event.outcome === "stopped";
       if (existing) {
         const updated = {
           ...existing,
-          status: "completed" as const,
+          status,
+          stopped,
           result: event.result ?? existing.result,
+          parentBlockId: resolveParentBlockId(event, existing),
           timestamp: event.timestamp,
         };
         return replaceBlock(blocks, event.blockId, updated);
@@ -1365,8 +1537,10 @@ export function accumulateEvent(
         ...blocks,
         makeSubAgentBlock({
           blockId: event.blockId,
-          status: "completed",
+          status,
+          stopped,
           timestamp: event.timestamp,
+          parentBlockId: resolveParentBlockId(event, undefined),
           // No `started` was seen, so the spawn time is unknown. Leave it null
           // (rather than the completion time) so the card shows no duration
           // instead of a misleading "0s" total.
@@ -1377,6 +1551,152 @@ export function accumulateEvent(
           progressUpdates: [],
           result: nullableString(event.result),
           spawnToolCallId: null,
+          workflowMeta: null,
+        }),
+      ];
+    }
+
+    case "workflow.started": {
+      // Mirrors `subagent.started`: update the open card in place on a
+      // re-emit (never clearing `parentBlockId`/`spawnToolCallId`), otherwise
+      // open a fresh dual-written subagent block.
+      const existing = findBlockOfType(blocks, event.blockId, "subagent");
+      if (existing) {
+        const meta = existing.workflowMeta ?? emptyWorkflowMeta(event.name);
+        // A re-emit's `intent` is a required key but not necessarily a
+        // meaningful one - only a genuine non-null value overwrites, mirroring
+        // the preserve-on-omit policy every other re-emittable field here uses.
+        const intent = event.intent ?? meta.intent;
+        return replaceBlock(blocks, event.blockId, {
+          ...existing,
+          name: event.name,
+          task: intent ?? existing.task,
+          parentBlockId: resolveParentBlockId(event, existing),
+          timestamp:
+            existing.status === "streaming"
+              ? event.timestamp
+              : existing.timestamp,
+          spawnToolCallId:
+            existing.spawnToolCallId ?? event.spawnToolCallId ?? null,
+          workflowMeta: {
+            ...meta,
+            name: event.name,
+            intent,
+          },
+        });
+      }
+      return [
+        ...blocks,
+        makeSubAgentBlock({
+          blockId: event.blockId,
+          status: "streaming",
+          timestamp: event.timestamp,
+          parentBlockId: resolveParentBlockId(event, undefined),
+          startedAt: event.timestamp,
+          name: event.name,
+          agentType: null,
+          task: event.intent,
+          progressUpdates: [],
+          result: null,
+          spawnToolCallId: event.spawnToolCallId ?? null,
+          stopped: false,
+          workflowMeta: {
+            ...emptyWorkflowMeta(event.name),
+            intent: event.intent,
+          },
+        }),
+      ];
+    }
+
+    case "workflow.progress": {
+      const existing = findBlockOfType(blocks, event.blockId, "subagent");
+      const progressLine =
+        event.activity !== null ? event.activity.text : null;
+      if (existing) {
+        const meta = existing.workflowMeta ?? emptyWorkflowMeta(existing.name);
+        const updated = {
+          ...existing,
+          progressUpdates:
+            progressLine !== null
+              ? [...existing.progressUpdates, progressLine]
+              : existing.progressUpdates,
+          parentBlockId: resolveParentBlockId(event, existing),
+          timestamp: event.timestamp,
+          workflowMeta: {
+            ...meta,
+            activity: appendWorkflowActivity(meta.activity, event.activity),
+            agentsStarted: event.agentsStarted ?? meta.agentsStarted,
+            agentsFinished: event.agentsFinished ?? meta.agentsFinished,
+            totalTokens: event.totalTokens ?? meta.totalTokens,
+          },
+        };
+        return replaceBlock(blocks, event.blockId, updated);
+      }
+      const meta = emptyWorkflowMeta(null);
+      return [
+        ...blocks,
+        makeSubAgentBlock({
+          blockId: event.blockId,
+          status: "streaming",
+          timestamp: event.timestamp,
+          parentBlockId: resolveParentBlockId(event, undefined),
+          // First signal we have for this card; the true spawn is earlier but
+          // unknown, so anchor the live timer here.
+          startedAt: event.timestamp,
+          name: null,
+          agentType: null,
+          task: null,
+          progressUpdates: progressLine !== null ? [progressLine] : [],
+          result: null,
+          spawnToolCallId: null,
+          stopped: false,
+          workflowMeta: {
+            ...meta,
+            activity: appendWorkflowActivity(meta.activity, event.activity),
+            agentsStarted: event.agentsStarted ?? null,
+            agentsFinished: event.agentsFinished ?? null,
+            totalTokens: event.totalTokens ?? null,
+          },
+        }),
+      ];
+    }
+
+    case "workflow.completed": {
+      const existing = findBlockOfType(blocks, event.blockId, "subagent");
+      // `outcome` is defaulted "completed", mirroring `subagent.completed`.
+      const status: "completed" | "errored" =
+        event.outcome === "completed" ? "completed" : "errored";
+      const stopped = event.outcome === "stopped";
+      if (existing) {
+        const updated = {
+          ...existing,
+          status,
+          stopped,
+          result: event.result ?? existing.result,
+          parentBlockId: resolveParentBlockId(event, existing),
+          timestamp: event.timestamp,
+        };
+        return replaceBlock(blocks, event.blockId, updated);
+      }
+      return [
+        ...blocks,
+        makeSubAgentBlock({
+          blockId: event.blockId,
+          status,
+          stopped,
+          timestamp: event.timestamp,
+          parentBlockId: resolveParentBlockId(event, undefined),
+          // No `started` was seen, so the spawn time is unknown. Leave it null
+          // (rather than the completion time) so the card shows no duration
+          // instead of a misleading "0s" total.
+          startedAt: null,
+          name: null,
+          agentType: null,
+          task: null,
+          progressUpdates: [],
+          result: nullableString(event.result),
+          spawnToolCallId: null,
+          workflowMeta: emptyWorkflowMeta(null),
         }),
       ];
     }

@@ -106,7 +106,7 @@ function viewModel(
 function renderCard(model: SetupCardViewModel) {
   return render(
     <TooltipProvider>
-      <SetupCardSegment model={model} viewTabId={VIEW_TAB_ID} />
+      <SetupCardSegment model={model} viewTabId={VIEW_TAB_ID} variant="card" />
     </TooltipProvider>,
   );
 }

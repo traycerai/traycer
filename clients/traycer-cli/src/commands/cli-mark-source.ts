@@ -11,6 +11,7 @@ import {
 import type { CommandFn, CommandResult } from "../runner/runner";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import { withCliLock } from "../store/cli-lock";
+import { errorFromUnknown } from "../logger";
 
 // `traycer cli mark-source` - internal, hidden command. Package-manager
 // install hooks (Homebrew formula post_install, winget/Scoop post-install
@@ -28,10 +29,12 @@ import { withCliLock } from "../store/cli-lock";
 // Allowed sources here are the PM hooks + the special `desktop` slot.
 // `manual` is explicitly excluded - re-anchoring a manual install is the
 // `cli re-anchor` command's job.
-const PM_HOOK_SOURCES: ReadonlySet<CliInstallSource> = new Set<CliInstallSource>([
+const PM_HOOK_SOURCE_VALUES: readonly CliInstallSource[] = [
   "desktop",
   ...PACKAGE_MANAGER_CLI_SOURCES,
-]);
+];
+const PM_HOOK_SOURCES: ReadonlySet<CliInstallSource> =
+  new Set<CliInstallSource>(PM_HOOK_SOURCE_VALUES);
 
 export interface CliMarkSourceArgs {
   readonly source: string;
@@ -39,11 +42,19 @@ export interface CliMarkSourceArgs {
   readonly version: string;
 }
 
-export function buildCliMarkSourceCommand(
-  args: CliMarkSourceArgs,
-): CommandFn {
+export function buildCliMarkSourceCommand(args: CliMarkSourceArgs): CommandFn {
   return async (ctx): Promise<CommandResult> => {
+    const source = parsePmHookSource(args.source);
+    ctx.runtime.logger.info("CLI mark-source command started", {
+      environment: ctx.runtime.environment,
+      isKnownSource: source !== null,
+      hasBinaryPath: args.binaryPath.length > 0,
+      hasVersion: args.version.length > 0,
+    });
     if (args.source === "manual") {
+      ctx.runtime.logger.warn("CLI mark-source rejected manual source", {
+        environment: ctx.runtime.environment,
+      });
       throw cliError({
         code: CLI_ERROR_CODES.INVALID_ARGUMENT,
         message:
@@ -53,7 +64,11 @@ export function buildCliMarkSourceCommand(
         exitCode: 1,
       });
     }
-    if (!PM_HOOK_SOURCES.has(args.source as CliInstallSource)) {
+    if (source === null) {
+      ctx.runtime.logger.warn("CLI mark-source rejected invalid source", {
+        environment: ctx.runtime.environment,
+        isKnownSource: false,
+      });
       throw cliError({
         code: CLI_ERROR_CODES.INVALID_ARGUMENT,
         message: `cli mark-source: invalid source '${args.source}'; expected one of ${[...PM_HOOK_SOURCES].join(", ")}`,
@@ -63,12 +78,19 @@ export function buildCliMarkSourceCommand(
     }
     return writeMarkSource({
       ctx,
-      source: args.source as CliInstallSource,
+      source: source,
       binaryPath: args.binaryPath,
       version: args.version,
       reason: "cli-mark-source",
     });
   };
+}
+
+function parsePmHookSource(value: string): CliInstallSource | null {
+  for (const source of PM_HOOK_SOURCE_VALUES) {
+    if (source === value) return source;
+  }
+  return null;
 }
 
 // Shared internal: validates the binary path + version and writes the
@@ -81,7 +103,22 @@ export async function writeMarkSource(opts: {
   readonly version: string;
   readonly reason: "cli-mark-source" | "cli-re-anchor";
 }): Promise<CommandResult> {
+  opts.ctx.runtime.logger.info("CLI install source write started", {
+    environment: opts.ctx.runtime.environment,
+    reason: opts.reason,
+    source: opts.source,
+    hasBinaryPath: opts.binaryPath.length > 0,
+    hasVersion: opts.version.length > 0,
+  });
   if (!VALID_CLI_INSTALL_SOURCES.has(opts.source)) {
+    opts.ctx.runtime.logger.warn(
+      "CLI install source write rejected invalid source",
+      {
+        environment: opts.ctx.runtime.environment,
+        reason: opts.reason,
+        source: opts.source,
+      },
+    );
     throw cliError({
       code: CLI_ERROR_CODES.INVALID_ARGUMENT,
       message: `${opts.reason}: invalid source '${opts.source}'`,
@@ -92,7 +129,17 @@ export async function writeMarkSource(opts: {
   let binaryStat: Stats;
   try {
     binaryStat = await stat(opts.binaryPath);
-  } catch {
+  } catch (err) {
+    const error = errorFromUnknown(err);
+    opts.ctx.runtime.logger.warn(
+      "CLI install source write binary path missing",
+      {
+        environment: opts.ctx.runtime.environment,
+        reason: opts.reason,
+        errorName: error.name,
+        errorCode: readErrorCode(err),
+      },
+    );
     throw cliError({
       code: CLI_ERROR_CODES.INVALID_ARGUMENT,
       message: `${opts.reason}: binary path does not exist: ${opts.binaryPath}`,
@@ -101,6 +148,13 @@ export async function writeMarkSource(opts: {
     });
   }
   if (!binaryStat.isFile()) {
+    opts.ctx.runtime.logger.warn(
+      "CLI install source write rejected non-file binary path",
+      {
+        environment: opts.ctx.runtime.environment,
+        reason: opts.reason,
+      },
+    );
     throw cliError({
       code: CLI_ERROR_CODES.INVALID_ARGUMENT,
       message: `${opts.reason}: binary path is not a regular file: ${opts.binaryPath}`,
@@ -109,6 +163,13 @@ export async function writeMarkSource(opts: {
     });
   }
   if (opts.version.length === 0) {
+    opts.ctx.runtime.logger.warn(
+      "CLI install source write rejected empty version",
+      {
+        environment: opts.ctx.runtime.environment,
+        reason: opts.reason,
+      },
+    );
     throw cliError({
       code: CLI_ERROR_CODES.INVALID_ARGUMENT,
       message: `${opts.reason}: --installed-version is required and must be non-empty`,
@@ -125,6 +186,15 @@ export async function writeMarkSource(opts: {
     },
     async () => {
       const previous = await readCliManifest(opts.ctx.runtime.environment);
+      opts.ctx.runtime.logger.debug(
+        "CLI install source write read previous manifest",
+        {
+          environment: opts.ctx.runtime.environment,
+          reason: opts.reason,
+          hadPreviousManifest: previous !== null,
+          previousSource: previous?.source ?? null,
+        },
+      );
       const next: CliInstallManifest = {
         version: opts.version,
         installedAt: new Date().toISOString(),
@@ -136,6 +206,13 @@ export async function writeMarkSource(opts: {
         pendingUpgrade: null,
       };
       await writeCliManifest(opts.ctx.runtime.environment, next);
+      opts.ctx.runtime.logger.info("CLI install source manifest written", {
+        environment: opts.ctx.runtime.environment,
+        reason: opts.reason,
+        source: opts.source,
+        hasVersion: opts.version.length > 0,
+        hadPreviousManifest: previous !== null,
+      });
       return {
         data: {
           previous,
@@ -148,4 +225,10 @@ export async function writeMarkSource(opts: {
       };
     },
   );
+}
+
+function readErrorCode(error: unknown): string | null {
+  if (error === null || typeof error !== "object") return null;
+  const code = Reflect.get(error, "code");
+  return typeof code === "string" ? code : null;
 }

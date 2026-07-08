@@ -6,14 +6,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { SPEECH_INPUT_SAMPLE_RATE } from "@traycer/protocol/host/speech/schemas";
 import { SpeechStreamClient } from "@traycer-clients/shared/host-transport/speech-stream-client";
 import { useWsStreamClient } from "@/lib/host/stream-runtime-context";
+import { appLogger, describeLogError } from "@/lib/logger";
 import { useRunnerHost } from "@/providers/use-runner-host";
 
 export type VoiceDictationState =
-  | "idle"
-  | "requesting"
-  | "recording"
-  | "transcribing"
-  | "error";
+  "idle" | "requesting" | "recording" | "transcribing" | "error";
 
 export interface UseVoiceDictationArgs {
   readonly language: string;
@@ -110,7 +107,13 @@ export function useVoiceDictation(
     mediaStreamRef.current = null;
     const ctx = audioContextRef.current;
     audioContextRef.current = null;
-    if (ctx !== null) void ctx.close().catch(() => undefined);
+    if (ctx !== null) {
+      void ctx.close().catch((error: unknown) => {
+        appLogger.warn("[voice-dictation] audio context close failed", {
+          error: describeLogError(error),
+        });
+      });
+    }
   }, []);
 
   const teardownAll = useCallback(() => {
@@ -191,6 +194,13 @@ export function useVoiceDictation(
       } catch (error) {
         const denied =
           error instanceof Error && error.name === "NotAllowedError";
+        appLogger.warn(
+          "[voice-dictation] microphone stream acquisition failed",
+          {
+            denied,
+            error: describeLogError(error),
+          },
+        );
         if (denied) setPermissionDenied(true);
         fail(
           denied
@@ -220,7 +230,11 @@ export function useVoiceDictation(
       }
       mediaStreamRef.current = stream;
       if (ctx.state === "suspended") {
-        await ctx.resume().catch(() => undefined);
+        await ctx.resume().catch((error: unknown) => {
+          appLogger.warn("[voice-dictation] audio context resume failed", {
+            error: describeLogError(error),
+          });
+        });
         if (generation !== startGenerationRef.current) return;
       }
       if (ctx.state !== "running") {
@@ -285,10 +299,17 @@ export function useVoiceDictation(
     let ctx: AudioContext;
     try {
       ctx = new AudioContext({ sampleRate: SPEECH_INPUT_SAMPLE_RATE });
-    } catch {
+    } catch (error) {
+      appLogger.warn("[voice-dictation] requested sample rate unsupported", {
+        sampleRate: SPEECH_INPUT_SAMPLE_RATE,
+        error: describeLogError(error),
+      });
       try {
         ctx = new AudioContext();
       } catch (error) {
+        appLogger.warn("[voice-dictation] audio context creation failed", {
+          error: describeLogError(error),
+        });
         fail(
           `Could not start audio capture: ${
             error instanceof Error ? error.message : String(error)

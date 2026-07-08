@@ -16,6 +16,7 @@ import { actionsSource } from "@/lib/commands/sources/actions.source";
 import { composerSource } from "@/lib/commands/sources/composer.source";
 import { epicsSource } from "@/lib/commands/sources/epics.source";
 import { helpSource } from "@/lib/commands/sources/help.source";
+import { historyNavigationSource } from "@/lib/commands/sources/history-navigation.source";
 import { navigationSource } from "@/lib/commands/sources/navigation.source";
 import type { CommandContext, CommandItem } from "@/lib/commands/types";
 
@@ -28,6 +29,7 @@ export function useCommandItems(ctx: CommandContext): UseCommandItemsResult {
   const syncItems = useMemo(() => getAllItems(ctx), [ctx]);
   const actionItems = actionsSource.useItems(ctx);
   const navItems = navigationSource.useItems(ctx);
+  const historyNavItems = historyNavigationSource.useItems(ctx);
   const epicItems = epicsSource.useItems(ctx);
   const composerItems = composerSource.useItems(ctx);
   const helpItems = helpSource.useItems(ctx);
@@ -37,11 +39,20 @@ export function useCommandItems(ctx: CommandContext): UseCommandItemsResult {
       ...syncItems,
       ...actionItems,
       ...navItems,
+      ...historyNavItems,
       ...epicItems,
       ...composerItems,
       ...helpItems,
     ],
-    [syncItems, actionItems, navItems, epicItems, composerItems, helpItems],
+    [
+      syncItems,
+      actionItems,
+      navItems,
+      historyNavItems,
+      epicItems,
+      composerItems,
+      helpItems,
+    ],
   );
 
   return { items, loading: false };

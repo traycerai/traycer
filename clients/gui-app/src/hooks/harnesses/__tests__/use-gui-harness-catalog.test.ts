@@ -9,12 +9,16 @@ const FIFTEEN_MIN_MS = 15 * 60 * 1000;
 const RETRY_MIN_MS = 30 * 1000;
 const RETRY_MAX_MS = 5 * 60 * 1000;
 
-function response(available: boolean): ListGuiHarnessesResponse {
+function response(
+  available: boolean,
+  availabilityPending: boolean,
+): ListGuiHarnessesResponse {
   return {
     harnesses: [
       {
         id: "claude",
         label: "Claude Code",
+        enabled: true,
         available,
         error: available ? null : "probe timed out",
         modes: ["gui", "tui"],
@@ -24,10 +28,13 @@ function response(available: boolean): ListGuiHarnessesResponse {
           "auto_accept_edits",
           "full_access",
         ],
+        availabilityPending,
       },
     ],
   };
 }
+
+const PENDING_REFRESH_MS = 800;
 
 describe("nextHarnessAvailabilityRefetchInterval", () => {
   it("keeps the steady-state interval before any data arrives", () => {
@@ -45,9 +52,19 @@ describe("nextHarnessAvailabilityRefetchInterval", () => {
       nextHarnessAvailabilityRefetchInterval({
         queryHash: "all-available",
         dataUpdateCount: 1,
-        data: response(true),
+        data: response(true, false),
       }),
     ).toBe(FIFTEEN_MIN_MS);
+  });
+
+  it("fast-polls at 800ms when any harness has availabilityPending", () => {
+    expect(
+      nextHarnessAvailabilityRefetchInterval({
+        queryHash: "pending",
+        dataUpdateCount: 1,
+        data: response(false, true),
+      }),
+    ).toBe(PENDING_REFRESH_MS);
   });
 
   it("retries at the host-cache TTL on the first unavailable result", () => {
@@ -55,7 +72,7 @@ describe("nextHarnessAvailabilityRefetchInterval", () => {
       nextHarnessAvailabilityRefetchInterval({
         queryHash: "first-unavailable",
         dataUpdateCount: 1,
-        data: response(false),
+        data: response(false, false),
       }),
     ).toBe(RETRY_MIN_MS);
   });
@@ -66,7 +83,7 @@ describe("nextHarnessAvailabilityRefetchInterval", () => {
       nextHarnessAvailabilityRefetchInterval({
         queryHash: hash,
         dataUpdateCount,
-        data: response(false),
+        data: response(false, false),
       }),
     );
     expect(intervals).toEqual([
@@ -84,12 +101,12 @@ describe("nextHarnessAvailabilityRefetchInterval", () => {
     const first = nextHarnessAvailabilityRefetchInterval({
       queryHash: hash,
       dataUpdateCount: 7,
-      data: response(false),
+      data: response(false, false),
     });
     const second = nextHarnessAvailabilityRefetchInterval({
       queryHash: hash,
       dataUpdateCount: 7,
-      data: response(false),
+      data: response(false, false),
     });
     expect(first).toBe(RETRY_MIN_MS);
     expect(second).toBe(RETRY_MIN_MS);
@@ -100,18 +117,18 @@ describe("nextHarnessAvailabilityRefetchInterval", () => {
     nextHarnessAvailabilityRefetchInterval({
       queryHash: hash,
       dataUpdateCount: 1,
-      data: response(false),
+      data: response(false, false),
     });
     nextHarnessAvailabilityRefetchInterval({
       queryHash: hash,
       dataUpdateCount: 2,
-      data: response(false),
+      data: response(false, false),
     });
     expect(
       nextHarnessAvailabilityRefetchInterval({
         queryHash: hash,
         dataUpdateCount: 3,
-        data: response(true),
+        data: response(true, false),
       }),
     ).toBe(FIFTEEN_MIN_MS);
     // A later drop starts the backoff over from the host-cache TTL.
@@ -119,7 +136,7 @@ describe("nextHarnessAvailabilityRefetchInterval", () => {
       nextHarnessAvailabilityRefetchInterval({
         queryHash: hash,
         dataUpdateCount: 4,
-        data: response(false),
+        data: response(false, false),
       }),
     ).toBe(RETRY_MIN_MS);
   });

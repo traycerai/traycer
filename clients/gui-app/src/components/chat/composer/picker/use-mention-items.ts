@@ -31,6 +31,7 @@ import {
   type MentionWorkspaceRequest,
 } from "@/lib/composer/mentions";
 import { buildEpicMentionSuggestionsFromTasks } from "@/lib/composer/mentions/local-epic-suggestions";
+import { taskMentionTitleFromRawTitle } from "@/lib/composer/mentions/task-mention-helpers";
 import { displayTitle } from "@/lib/display-title";
 import type {
   EpicChatMentionEntry,
@@ -195,33 +196,46 @@ export function useMentionItems(params: UseMentionItemsParams): void {
     [active, debouncedRequestContext, step],
   );
 
-  const { data: workspaceEntries, isLoading: workspaceLoading } =
-    useWorkspaceEntries({ requests: workspaceRequests, client: hostClient });
-  const { data: artifactEpicEntries, isLoading: epicLoading } =
-    useEpicMentionEntries({
-      requests: epicRequests,
-    });
+  const {
+    data: workspaceEntries,
+    isLoading: workspaceLoading,
+    isFetching: workspaceFetching,
+  } = useWorkspaceEntries({ requests: workspaceRequests, client: hostClient });
+  const {
+    data: remoteEpicEntries,
+    isLoading: epicLoading,
+    isFetching: epicFetching,
+  } = useEpicMentionEntries({
+    requests: epicRequests,
+  });
   const epicTitleByIdFromCache = useMemo(() => {
     if (cachedEpicTasks.length === 0) return EMPTY_TITLE_MAP;
     const titles = new Map<string, string>();
     for (const task of cachedEpicTasks) {
       const light = task.epic?.light;
       if (light === null || light === undefined) continue;
-      if (light.title.length === 0) continue;
       titles.set(light.id, light.title);
     }
     return titles;
   }, [cachedEpicTasks]);
-  const enrichedArtifactEntries = useMemo<
+  const enrichedRemoteEpicEntries = useMemo<
     ReadonlyArray<EpicMentionEntry>
   >(() => {
-    const enrichedCloud = artifactEpicEntries.map((entry) => {
-      if (entry.kind !== "epic-artifact") return entry;
+    const enrichedCloud = remoteEpicEntries.map((entry) => {
+      const normalizedEntry = normalizeTaskMentionEntry(entry);
+      if (normalizedEntry.kind !== "epic-artifact") return normalizedEntry;
       const cachedTitle = epicTitleByIdFromCache.get(entry.epicId);
-      if (cachedTitle === undefined || entry.epicTitle === cachedTitle) {
-        return entry;
-      }
-      return { ...entry, epicTitle: cachedTitle };
+      if (cachedTitle === undefined) return normalizedEntry;
+      const epicTitle = taskMentionTitle(cachedTitle);
+      if (normalizedEntry.epicTitle === epicTitle) return normalizedEntry;
+      return {
+        ...normalizedEntry,
+        epicTitle,
+        description:
+          normalizedEntry.description === normalizedEntry.epicTitle
+            ? epicTitle
+            : normalizedEntry.description,
+      };
     });
     if (currentEpicId === null) {
       return enrichedCloud.length === 0 ? EMPTY_EPIC_ENTRIES : enrichedCloud;
@@ -233,16 +247,17 @@ export function useMentionItems(params: UseMentionItemsParams): void {
     );
     return merged.length === 0 ? EMPTY_EPIC_ENTRIES : merged;
   }, [
-    artifactEpicEntries,
+    remoteEpicEntries,
     epicTitleByIdFromCache,
     currentEpicId,
     localArtifactEntries,
   ]);
   const epicEntries = useMemo<ReadonlyArray<EpicMentionEntry>>(() => {
-    if (localEpicSuggestions.length === 0) return enrichedArtifactEntries;
-    if (enrichedArtifactEntries.length === 0) return localEpicSuggestions;
-    return [...localEpicSuggestions, ...enrichedArtifactEntries];
-  }, [enrichedArtifactEntries, localEpicSuggestions]);
+    return mergeTaskAndArtifactMentionEntries(
+      localEpicSuggestions,
+      enrichedRemoteEpicEntries,
+    );
+  }, [enrichedRemoteEpicEntries, localEpicSuggestions]);
 
   const resolvedContext = useMemo<ComposerMentionProviderContext>(
     () => ({
@@ -290,6 +305,11 @@ export function useMentionItems(params: UseMentionItemsParams): void {
     ((workspaceRequests.length > 0 && workspaceLoading) ||
       (epicRequests.length > 0 && epicLoading));
 
+  const fetching =
+    active &&
+    ((workspaceRequests.length > 0 && workspaceFetching) ||
+      (epicRequests.length > 0 && epicFetching));
+
   useEffect(() => {
     if (!active) return;
     pickerStore.getState().setItems({
@@ -300,6 +320,11 @@ export function useMentionItems(params: UseMentionItemsParams): void {
       loading,
     });
   }, [active, items, loading, pickerStore, query, step]);
+
+  useEffect(() => {
+    if (!active) return;
+    pickerStore.getState().setFetching(fetching);
+  }, [active, fetching, pickerStore]);
 }
 
 const EMPTY_CHAT_ENTRIES: ReadonlyArray<EpicChatMentionEntry> = [];
@@ -337,7 +362,7 @@ export function epicChatMentionEntriesFromChats(
   rawEpicTitle: string,
 ): ReadonlyArray<EpicChatMentionEntry> {
   if (chats.allIds.length === 0) return EMPTY_CHAT_ENTRIES;
-  const epicTitle = displayTitle(rawEpicTitle, "epic");
+  const epicTitle = taskMentionTitle(rawEpicTitle);
   const entries = chats.allIds.flatMap((id) => {
     if (!Object.hasOwn(chats.byId, id)) return [];
     const chat = chats.byId[id];
@@ -401,7 +426,7 @@ export function buildCurrentEpicArtifactMentionEntries(
 ): ReadonlyArray<EpicMentionArtifactSuggestion> {
   if (artifacts.allIds.length === 0) return EMPTY_ARTIFACT_ENTRIES;
   const normalizedQuery = query.trim().toLowerCase();
-  const epicTitle = displayTitle(rawEpicTitle, "epic");
+  const epicTitle = taskMentionTitle(rawEpicTitle);
   const entries = artifacts.allIds.flatMap((id) => {
     if (!Object.hasOwn(artifacts.byId, id)) return [];
     const artifact = artifacts.byId[id];
@@ -447,4 +472,43 @@ export function mergeCurrentEpicArtifactMentions(
       .filter((entry) => !isCurrentEpicArtifact(entry))
       .toSorted(byRecency),
   ];
+}
+
+export function mergeTaskAndArtifactMentionEntries(
+  localTaskEntries: ReadonlyArray<EpicMentionEntry>,
+  cloudAndArtifactEntries: ReadonlyArray<EpicMentionEntry>,
+): ReadonlyArray<EpicMentionEntry> {
+  if (localTaskEntries.length === 0 && cloudAndArtifactEntries.length === 0) {
+    return EMPTY_EPIC_ENTRIES;
+  }
+
+  const normalizedLocalEntries = localTaskEntries.map(
+    normalizeTaskMentionEntry,
+  );
+  const seenTaskIds = normalizedLocalEntries.reduce((ids, entry) => {
+    if (entry.kind === "epic") ids.add(entry.id);
+    return ids;
+  }, new Set<string>());
+  const normalizedCloudEntries = cloudAndArtifactEntries
+    .map(normalizeTaskMentionEntry)
+    .filter((entry) => {
+      if (entry.kind !== "epic") return true;
+      if (seenTaskIds.has(entry.id)) return false;
+      seenTaskIds.add(entry.id);
+      return true;
+    });
+
+  const merged: ReadonlyArray<EpicMentionEntry> = [
+    ...normalizedLocalEntries,
+    ...normalizedCloudEntries,
+  ];
+  return merged.length === 0 ? EMPTY_EPIC_ENTRIES : merged;
+}
+
+function normalizeTaskMentionEntry(entry: EpicMentionEntry): EpicMentionEntry {
+  return entry;
+}
+
+function taskMentionTitle(rawTitle: string): string {
+  return taskMentionTitleFromRawTitle(rawTitle);
 }

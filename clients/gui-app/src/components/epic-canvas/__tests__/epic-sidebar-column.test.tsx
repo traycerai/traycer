@@ -78,6 +78,11 @@ const KEYBINDING_ROUTER: KeybindingRouter = {
   navigateToEpicList: () => undefined,
   navigateSettingsSection: () => undefined,
   navigateToTabIntent: () => undefined,
+  goBack: () => undefined,
+  goForward: () => undefined,
+  isHistoryNavAvailable: () => false,
+  canGoBack: () => false,
+  canGoForward: () => false,
 };
 
 // A REAL per-Epic store handle on a no-op stream client (the same factory

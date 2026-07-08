@@ -2,7 +2,6 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/figtree";
-@import "@fontsource-variable/geist";
 @import "./editor-core/styles/editor.css";
 @import "./styles/terminal-themes.css";
 
@@ -288,6 +287,15 @@
 }
 
 /*
+ * Wide panes and modals may intentionally give markdown room for tables,
+ * diagrams, and code. Cap only prose-bearing blocks so plain paragraphs do not
+ * stretch into uncomfortable 4K line lengths while wide media remains usable.
+ */
+.md-prose :where(p, ul, ol, blockquote, h1, h2, h3, h4, h5, h6) {
+  max-width: 72ch;
+}
+
+/*
  * Table cells must NOT inherit `.md-prose { word-break: break-word }`.
  *
  * `word-break: break-word` is a legacy keyword defined as `word-break: normal`
@@ -309,7 +317,7 @@
   --traycer-font-ui:
     "Figtree Variable", "Figtree", ui-sans-serif, system-ui, -apple-system,
     BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --traycer-font-heading: "Geist Variable", "Geist", var(--traycer-font-ui);
+  --traycer-font-heading: var(--traycer-font-ui);
   --traycer-font-pixel:
     "Geist Pixel Square", "Geist Mono", var(--traycer-font-heading);
   --traycer-font-mono:
@@ -336,6 +344,8 @@
   --accent-foreground: oklch(0.205 0 0);
   --destructive: oklch(0.577 0.245 27.325);
   --success: oklch(0.58 0.13 142);
+  --warning: oklch(0.68 0.16 75);
+  --warning-foreground: oklch(0.38 0.11 65);
   --border: oklch(0.922 0 0);
   --input: oklch(0.922 0 0);
   --ring: oklch(0.708 0 0);
@@ -367,6 +377,8 @@
   --accent-foreground: oklch(0.985 0 0);
   --destructive: oklch(0.704 0.191 22.216);
   --success: oklch(0.72 0.14 142);
+  --warning: oklch(0.78 0.14 80);
+  --warning-foreground: oklch(0.9 0.08 85);
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
   --ring: oklch(0.556 0 0);
@@ -937,9 +949,21 @@
   --text-ui-sm--line-height: 1.25rem;
   --text-ui-sm--letter-spacing: 0;
 
+  --text-ui-md: 0.9375rem;
+  --text-ui-md--line-height: 1.375rem;
+  --text-ui-md--letter-spacing: 0;
+
   --text-ui: 1rem;
   --text-ui--line-height: 1.5rem;
   --text-ui--letter-spacing: 0;
+
+  --text-ui-base: var(--text-ui);
+  --text-ui-base--line-height: var(--text-ui--line-height);
+  --text-ui-base--letter-spacing: var(--text-ui--letter-spacing);
+
+  --text-ui-lg: 1.125rem;
+  --text-ui-lg--line-height: 1.625rem;
+  --text-ui-lg--letter-spacing: 0;
 
   --text-title-xs: 0.875rem;
   --text-title-xs--line-height: 1.125rem;
@@ -986,6 +1010,9 @@
   --color-ring: var(--ring);
   --color-input: var(--input);
   --color-border: var(--border);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-warning: var(--warning);
+  --color-success: var(--success);
   --color-destructive: var(--destructive);
   --color-accent-foreground: var(--accent-foreground);
   --color-accent: var(--accent);
@@ -1018,6 +1045,32 @@
   scrollbar-width: none;
   &::-webkit-scrollbar {
     display: none;
+  }
+}
+
+@utility compact-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklch, var(--muted-foreground) 35%, transparent)
+    transparent;
+
+  &::-webkit-scrollbar {
+    width: 2px !important;
+    height: 2px !important;
+  }
+
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    min-height: 1.25rem;
+    border: 0;
+    border-radius: 9999px;
+    background: color-mix(in oklch, var(--muted-foreground) 35%, transparent);
+  }
+
+  &::-webkit-scrollbar-thumb:hover {
+    background: color-mix(in oklch, var(--muted-foreground) 55%, transparent);
   }
 }
 
@@ -1086,6 +1139,50 @@
  * for the composer's contenteditable root.
  */
 @layer components {
+  .header-tab-trailing-slot {
+    width: 0;
+    opacity: 0;
+  }
+
+  /* The close button is inert by default and only becomes clickable once the
+     tab is wide enough and hovered / keyboard-focused. Keep BOTH the `none`
+     default and the `auto` reveal in this same @layer so the reveal wins by
+     specificity. Do NOT put a `pointer-events-none` Tailwind utility on the
+     button: it lands in Tailwind's `utilities` layer, declared after
+     `components`, so it would beat this reveal in every state and leave the
+     button permanently unclickable. */
+  .header-tab-close-button {
+    pointer-events: none;
+  }
+
+  /* Reveal on hover, or keyboard focus - NOT :focus-within. A mouse-drag reorder
+     focuses the tab div, and dnd-kit swallows the trailing click so the tab is
+     never activated; with :focus-within the reveal (slot width + close button)
+     would stay stuck lit on that inactive tab until focus moved away.
+     Keyboard focus is expressed as :focus-visible (mouse focus doesn't match it,
+     so a drag doesn't stick) across two selectors:
+       - `:focus-visible` for the tab wrapper itself (Tab lands on the tab), and
+       - `:has(:focus-visible)` for a focused descendant - the close button is a
+         SEPARATE tab stop, and when Tab moves onto it the wrapper is no longer
+         :focus-visible, so without this the slot would collapse and hide the
+         very button the user just focused.
+     Keep in sync with the accent chrome's `group-focus-visible/tab` +
+     `group-has-[:focus-visible]/tab` gates in tab-strip-item.tsx. */
+  @container (min-width: 7rem) {
+    .group\/tab:hover .header-tab-trailing-slot,
+    .group\/tab:focus-visible .header-tab-trailing-slot,
+    .group\/tab:has(:focus-visible) .header-tab-trailing-slot {
+      width: 1.25rem;
+      opacity: 1;
+    }
+
+    .group\/tab:hover .header-tab-close-button,
+    .group\/tab:focus-visible .header-tab-close-button,
+    .group\/tab:has(:focus-visible) .header-tab-close-button {
+      pointer-events: auto;
+    }
+  }
+
   [data-composer-editor] ul {
     list-style: disc;
     padding-left: 1.5rem;
@@ -1112,6 +1209,11 @@
   }
   [data-composer-editor] s {
     text-decoration: line-through;
+  }
+  /* Inline atom node views need a zero-width inline edge so the caret can sit
+     after a terminal image chip on the same visual line. */
+  [data-composer-editor] [data-composer-image-atom]::after {
+    content: "\200B";
   }
   [data-composer-editor] :where(:not(pre) > code) {
     background: color-mix(in oklch, currentColor 10%, transparent);
@@ -1144,6 +1246,14 @@
   [data-composer-editor] a {
     color: var(--primary);
     text-decoration: underline;
+  }
+  /* Matches the echoed bubble's blockquote treatment (render-profile.tsx
+     renderBlockquote) so a quoted draft looks exactly like what sends -
+     @apply of the SAME utilities guarantees identical computed styles
+     (hand-copied declarations drifted: e.g. `border-primary/60` compiles to
+     a color-mix in oklab, not oklch). */
+  [data-composer-editor] blockquote {
+    @apply my-0.5 border-l-2 border-primary/60 pl-3 leading-snug text-muted-foreground;
   }
 }
 

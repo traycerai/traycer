@@ -22,6 +22,7 @@ import {
 import { UNTITLED_EPIC_TITLE } from "@/lib/display-title";
 import { createEpicName } from "@/lib/epic-name";
 import type {
+  DesktopJsonValue,
   DesktopPerWindowSnapshot,
   DesktopPerWindowStatePatch,
 } from "@/lib/windows/types";
@@ -77,6 +78,7 @@ import {
   projectCanvasByTabIdForDesktop,
   projectTabsForDesktop,
 } from "@/stores/epics/canvas/canvas-desktop-projection";
+import { serializeEpicCanvasState } from "@/stores/epics/canvas/migrate-canvas";
 import {
   chatTitleTimers,
   clearAllScheduledTitlePending,
@@ -370,6 +372,33 @@ export { createEpicName } from "@/lib/epic-name";
 let localPersistenceEnabled = true;
 let desktopProjectionBridge: DesktopPerWindowProjectionBridge | null = null;
 let applyingDesktopProjection = false;
+const serializedCanvasByReference = new WeakMap<
+  EpicCanvasState,
+  DesktopJsonValue
+>();
+
+function serializeCanvasForLocalPersist(
+  canvas: EpicCanvasState,
+): DesktopJsonValue {
+  const cached = serializedCanvasByReference.get(canvas);
+  if (cached !== undefined) return cached;
+  const serialized = serializeEpicCanvasState(canvas);
+  serializedCanvasByReference.set(canvas, serialized);
+  return serialized;
+}
+
+function serializeCanvasByTabIdForLocalPersist(
+  canvasByTabId: Readonly<Record<string, EpicCanvasState | undefined>>,
+): Readonly<Record<string, DesktopJsonValue>> {
+  if (!localPersistenceEnabled) return {};
+  return Object.fromEntries(
+    Object.entries(canvasByTabId).flatMap(([tabId, canvas]) =>
+      canvas === undefined
+        ? []
+        : [[tabId, serializeCanvasForLocalPersist(canvas)]],
+    ),
+  );
+}
 
 const epicCanvasStorage: StateStorage = {
   getItem: (name) => window.localStorage.getItem(name),
@@ -1552,7 +1581,9 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
       storage: createJSONStorage(() => epicCanvasStorage),
       partialize: (state) => ({
         tabsById: state.tabsById,
-        canvasByTabId: state.canvasByTabId,
+        canvasByTabId: serializeCanvasByTabIdForLocalPersist(
+          state.canvasByTabId,
+        ),
         openTabOrder: state.openTabOrder,
         activeTabId: state.activeTabId,
         mostRecentTabIdByEpicId: state.mostRecentTabIdByEpicId,

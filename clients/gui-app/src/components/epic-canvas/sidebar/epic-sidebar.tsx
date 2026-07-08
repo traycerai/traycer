@@ -121,7 +121,11 @@ import {
   type EpicTuiAgentProjection,
   type EpicTreeRecord,
 } from "@/lib/epic-selectors";
-import { isEditableRole } from "@/lib/epic-permissions";
+import { isEditableRole, mutationDisabledHint } from "@/lib/epic-permissions";
+import {
+  ARIA_DISABLED_TRIGGER_CLASS,
+  resolveDisabledPresentation,
+} from "@/lib/disabled-presentation";
 import { displayTitle, tuiAgentDisplayTitle } from "@/lib/display-title";
 import { useEpicDeleteChat } from "@/hooks/epic/use-epic-chat-mutations";
 import {
@@ -685,7 +689,7 @@ function GroupedPanelBody(props: {
 /**
  * Synthetic group id for the section run's resize handles; the commit
  * callback maps fractions straight back to panel weights, so the id is only
- * surfaced on the handle's `data-group-id` for tests.
+ * surfaced on the handle's `data-resize-group-id` for tests.
  */
 const SECTION_RUN_GROUP_ID = "epic-left-panel-sections";
 /** Old `minSize="2rem"` floor, now enforced by the custom handle. */
@@ -1690,6 +1694,17 @@ function TreePanelActions(props: TreePanelActionsProps) {
     ],
   );
 
+  const artifactsDisabledTooltip = mutationDisabledHint(
+    permissionRole,
+    isDisconnected,
+    "create artifacts",
+  );
+  const artifactsAddDisabled = !canMutate || addIsPending;
+  const artifactsPresentation = resolveDisabledPresentation(
+    artifactsAddDisabled,
+    artifactsDisabledTooltip,
+  );
+
   return (
     <div className="flex items-center gap-0.5">
       <Button
@@ -1708,18 +1723,24 @@ function TreePanelActions(props: TreePanelActionsProps) {
       >
         <CopyMinus className="size-4" />
       </Button>
-      {canEdit && props.panelId === "chats" ? (
+      {props.panelId === "chats" ? (
         <NewConversationModalAction
           epicId={props.epicId}
           tabId={props.tabId}
+          parentId={null}
+          size="icon-sm"
           disabled={!canMutate || addIsPending}
-          disabledTooltip={isDisconnected ? "Reconnect to make changes." : null}
+          disabledTooltip={mutationDisabledHint(
+            permissionRole,
+            isDisconnected,
+            "create chats",
+          )}
           triggerLabel={props.addLabel}
           triggerTestId={props.triggerTestId}
           actionRevealClassName=""
         />
       ) : null}
-      {canEdit && props.panelId !== "chats" ? (
+      {props.panelId !== "chats" ? (
         <AddNodeDropdown
           open={undefined}
           onOpenChange={undefined}
@@ -1736,19 +1757,23 @@ function TreePanelActions(props: TreePanelActionsProps) {
           tuiAgentPending={undefined}
           excludeTypes={props.excludeTypes}
           disabledTypes={undefined}
-          disabled={!canMutate || addIsPending}
-          disabledTooltip={
-            isDisconnected ? "Reconnect to make changes." : undefined
-          }
+          disabled={artifactsAddDisabled}
+          disabledTooltip={artifactsDisabledTooltip}
         >
           <Button
             type="button"
             variant="ghost"
             size="icon-sm"
             aria-label={props.addLabel}
+            aria-disabled={
+              artifactsPresentation.ariaDisabled ? true : undefined
+            }
             data-testid={props.triggerTestId}
-            className="text-muted-foreground hover:text-foreground"
-            disabled={!canMutate || addIsPending}
+            className={cn(
+              "text-muted-foreground hover:text-foreground",
+              ARIA_DISABLED_TRIGGER_CLASS,
+            )}
+            disabled={artifactsPresentation.nativeDisabled}
           >
             {addIsPending ? (
               <AgentSpinningDots
@@ -1834,8 +1859,6 @@ function MarkAllArtifactsReadButton(props: {
     });
   }, [markRead, props.epicId, unreadArtifacts]);
 
-  if (unreadArtifacts.length === 0) return null;
-
   return (
     <Button
       type="button"
@@ -1845,7 +1868,7 @@ function MarkAllArtifactsReadButton(props: {
       aria-label="Mark all unread artifacts as read"
       title="Mark all unread artifacts as read"
       data-testid="epic-sidebar-mark-all-artifacts-read"
-      disabled={props.collapsed}
+      disabled={props.collapsed || unreadArtifacts.length === 0}
       className={cn(
         "text-muted-foreground hover:text-foreground",
         PANEL_HEADER_ACTION_REVEAL_CLASS,

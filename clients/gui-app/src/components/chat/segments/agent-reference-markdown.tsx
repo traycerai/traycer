@@ -34,10 +34,12 @@ export function AgentReferenceMarkdown({
   isStreaming,
   markdown,
   proseSize,
+  quotable,
 }: {
   readonly isStreaming: boolean;
   readonly markdown: string;
   readonly proseSize: "compact" | "normal";
+  readonly quotable: boolean;
 }): ReactNode {
   if (markdown.length === 0) return null;
   return (
@@ -47,6 +49,7 @@ export function AgentReferenceMarkdown({
       components={AGENT_REFERENCE_MARKDOWN_COMPONENTS}
       remarkPlugins={null}
       rehypePlugins={AGENT_REFERENCE_REHYPE_PLUGINS}
+      quotable={quotable}
       isStreaming={isStreaming}
     >
       {markdown}

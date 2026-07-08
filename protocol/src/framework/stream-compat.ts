@@ -57,6 +57,38 @@ export function checkStreamCompatibility(
   selfRole: CompatibilityRole,
 ): StreamCompatibilityResult {
   const methodNames = collectManifestMethods(myManifest, theirManifest);
+  return checkStreamCompatibilityForMethods(
+    registry,
+    myManifest,
+    theirManifest,
+    selfRole,
+    methodNames,
+  );
+}
+
+export function checkStreamMethodCompatibility(
+  registry: VersionedStreamRpcRegistry,
+  myManifest: ConnectionManifest,
+  theirManifest: ConnectionManifest,
+  selfRole: CompatibilityRole,
+  method: string,
+): StreamCompatibilityResult {
+  return checkStreamCompatibilityForMethods(
+    registry,
+    myManifest,
+    theirManifest,
+    selfRole,
+    [method],
+  );
+}
+
+function checkStreamCompatibilityForMethods(
+  registry: VersionedStreamRpcRegistry,
+  myManifest: ConnectionManifest,
+  theirManifest: ConnectionManifest,
+  selfRole: CompatibilityRole,
+  methodNames: readonly string[],
+): StreamCompatibilityResult {
   const incompatibleMethods: IncompatibleMethodDetails[] = [];
 
   for (const method of methodNames) {

@@ -8,6 +8,7 @@ import {
   type Mock,
 } from "vitest";
 import type { RuntimeContext } from "../../runner/runtime";
+import { noopLogger } from "../../logger";
 
 // Pin Ticket a440ec2d: auto-bootstrap must distinguish "host already
 // installed but service missing" (service-only repair) from "no host
@@ -59,6 +60,10 @@ vi.mock("../../store/cli-lock", () => ({
   withCliLock: mocks.withCliLockMock,
 }));
 
+vi.mock("../busy-check", () => ({
+  assertHostNotBusy: vi.fn(async () => undefined),
+}));
+
 const {
   installHostMock,
   resolveBundledHostArchiveMock,
@@ -70,10 +75,7 @@ const {
   withCliLockMock,
 } = mocks;
 
-import {
-  evaluateAutoBootstrap,
-  maybeAutoBootstrap,
-} from "../auto-bootstrap";
+import { evaluateAutoBootstrap, maybeAutoBootstrap } from "../auto-bootstrap";
 import { config } from "../../config";
 
 function makeRuntime(overrides: Partial<RuntimeContext>): RuntimeContext {
@@ -84,6 +86,7 @@ function makeRuntime(overrides: Partial<RuntimeContext>): RuntimeContext {
     noBootstrap: false,
     nonInteractive: false,
     environment: "production",
+    logger: noopLogger,
     ...overrides,
   };
 }
@@ -141,11 +144,13 @@ beforeEach(() => {
   vi.clearAllMocks();
   config.supportedHostVersion = null;
   resolveBundledHostArchiveMock.mockResolvedValue(null);
-  serviceLabelForMock.mockImplementation((environment: "production" | "dev") => ({
-    id: environment === "dev" ? "ai.traycer.host.dev" : "ai.traycer.host",
-    displayName: "Traycer Host",
-    environment,
-  }));
+  serviceLabelForMock.mockImplementation(
+    (environment: "production" | "dev") => ({
+      id: environment === "dev" ? "ai.traycer.host.dev" : "ai.traycer.host",
+      displayName: "Traycer Host",
+      environment,
+    }),
+  );
   resolveServiceCliInvocationMock.mockReturnValue({
     command: "/usr/local/bin/traycer",
     args: [],

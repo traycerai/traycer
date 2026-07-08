@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { appLogger, describeLogError } from "@/lib/logger";
 
 const DELETED_EPIC_NOTIFICATION_CHANNEL =
   "traycer-gui-app:deleted-epic-events:v1";
@@ -71,6 +72,11 @@ export function publishDeletedEpicNotification(
     epicIds,
     epicTitlesById: titlesForEpicIds(epicIds, input.epicTitlesById),
   };
+  appLogger.debug("[deleted-epic-events] publishing notification", {
+    hostId: input.hostId,
+    epicCount: epicIds.length,
+    sequence,
+  });
   postBroadcastNotification(notification);
   writeStorageNotification(notification);
 }
@@ -113,7 +119,13 @@ function teardownDeletedEpicNotificationTransport(): void {
 
 function handleBroadcastMessage(event: MessageEvent<unknown>): void {
   const notification = parseDeletedEpicNotification(event.data);
-  if (notification === null) return;
+  if (notification === null) {
+    appLogger.warn(
+      "[deleted-epic-events] ignored malformed broadcast message",
+      {},
+    );
+    return;
+  }
   emitIncomingNotification(notification);
 }
 
@@ -121,7 +133,13 @@ function handleStorageEvent(event: StorageEvent): void {
   if (event.key !== DELETED_EPIC_NOTIFICATION_STORAGE_KEY) return;
   if (event.newValue === null) return;
   const notification = parseDeletedEpicNotificationJson(event.newValue);
-  if (notification === null) return;
+  if (notification === null) {
+    appLogger.warn(
+      "[deleted-epic-events] ignored malformed storage message",
+      {},
+    );
+    return;
+  }
   emitIncomingNotification(notification);
 }
 
@@ -177,7 +195,11 @@ function writeStorageNotification(notification: DeletedEpicNotification): void {
       DELETED_EPIC_NOTIFICATION_STORAGE_KEY,
       JSON.stringify(notification),
     );
-  } catch {
+  } catch (error) {
+    appLogger.warn("[deleted-epic-events] storage notification write failed", {
+      epicCount: notification.epicIds.length,
+      error: describeLogError(error),
+    });
     // localStorage can be unavailable in hardened browser contexts. The
     // BroadcastChannel path above is enough when supported.
   }
@@ -195,7 +217,13 @@ function parseDeletedEpicNotificationJson(
 ): DeletedEpicNotification | null {
   try {
     return parseDeletedEpicNotification(JSON.parse(value));
-  } catch {
+  } catch (error) {
+    appLogger.warn(
+      "[deleted-epic-events] storage notification JSON parse failed",
+      {
+        error: describeLogError(error),
+      },
+    );
     return null;
   }
 }

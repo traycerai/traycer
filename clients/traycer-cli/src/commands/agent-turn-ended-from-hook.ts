@@ -13,10 +13,7 @@ import { readEpicId, readTuiAgentId } from "../internal/agent-context";
 import { CliError, CLI_ERROR_CODES } from "../runner/errors";
 import type { CommandFn } from "../runner/runner";
 
-type NoopReason =
-  | "missing-context"
-  | "unknown-provider"
-  | "host-unreachable";
+type NoopReason = "missing-context" | "unknown-provider" | "host-unreachable";
 
 /**
  * `traycer agent turn-ended-from-hook --provider <provider>` - invoked by

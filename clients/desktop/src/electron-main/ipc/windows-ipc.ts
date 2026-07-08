@@ -105,17 +105,30 @@ export function registerWindowsIpc(bridge: RunnerIpcBridge): void {
     const nextLiveWindowIds = new Set(
       bridge.windowRegistry.records().map((record) => record.windowId),
     );
+    // Only a deliberate mid-session close (other windows still open, not
+    // quitting) prunes the durable per-window restore snapshot. A close that is
+    // really a quit/leave gesture must preserve it - see
+    // `shouldPreserveClosedWindowSnapshot`.
+    const preserveClosedSnapshots = shouldPreserveClosedWindowSnapshot({
+      quitting: bridge.quitState.isQuitting(),
+      remainingWindowCount: nextLiveWindowIds.size,
+    });
     for (const windowId of liveWindowIds) {
       if (nextLiveWindowIds.has(windowId)) {
         continue;
       }
+      // Ownership is regenerated from the restored window snapshots at startup
+      // (`reconcileRestoredWindows`), so releasing it here is safe for restore
+      // and keeps live-session ownership consistent with the closed window.
       bridge.ownership.releaseWindow(windowId);
-      bridge.perWindowState.clear(windowId);
+      if (!preserveClosedSnapshots) {
+        bridge.perWindowState.clear(windowId);
+      }
     }
     liveWindowIds = nextLiveWindowIds;
     bridge.pruneClosedWindowState();
     bridge.fanOut(RunnerHostEvent.windowsChange, bridge.windowRegistry.list());
-    bridge.flushPendingAuthCallbacks();
+    bridge.flushPendingAuthReturnSignal();
   };
   bridge.windowRegistry.on("change", onWindowRegistryChange);
   bridge.disposeFns.push(() => {
@@ -123,6 +136,32 @@ export function registerWindowsIpc(bridge: RunnerIpcBridge): void {
   });
 
   bridge.fanOut(RunnerHostEvent.windowsChange, bridge.windowRegistry.list());
+}
+
+/**
+ * Decides whether a window that just vanished from the registry should KEEP its
+ * durable per-window restore snapshot (open epic tabs, pane layout, drafts).
+ *
+ * Preserve when the close is really a quit/leave gesture:
+ *  - `quitting` - the shell has begun quitting (Cmd+Q / "Quit Traycer" / the
+ *    auto-update install re-quit). During quit no close should destroy state,
+ *    so ALL closing windows are preserved regardless of how many remain.
+ *  - `remainingWindowCount === 0` - this was the last remaining window. On
+ *    Win/Linux the native `closed` event (and this listener) fire BEFORE
+ *    `window-all-closed` -> `app.quit()` -> `before-quit`, so the `quitting`
+ *    flag is not yet set on that path; the last-window check covers the race.
+ *    On macOS a red-light close of the last window keeps the app alive, and the
+ *    snapshot must survive so a later quit -> relaunch, or a dock `activate`,
+ *    restores it.
+ *
+ * Prune only a deliberate mid-session close: another window is still open and
+ * the shell is not quitting, so relaunch must not resurrect the closed window.
+ */
+export function shouldPreserveClosedWindowSnapshot(input: {
+  readonly quitting: boolean;
+  readonly remainingWindowCount: number;
+}): boolean {
+  return input.quitting || input.remainingWindowCount === 0;
 }
 
 async function openEpicInNewWindow(

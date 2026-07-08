@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => ({
   awaitLoginMutate: vi.fn(),
   cancelLoginMutate: vi.fn(),
   setEnvOverrideMutate: vi.fn(),
+  setApiKeyMutate: vi.fn(),
   refreshProviders: vi.fn(() => Promise.resolve()),
   openExternalLink: vi.fn(),
   hostKind: "local",
@@ -64,6 +65,12 @@ vi.mock("@/hooks/providers/use-providers-set-env-override-mutation", () => ({
     isPending: false,
   }),
 }));
+vi.mock("@/hooks/providers/use-providers-set-api-key-mutation", () => ({
+  useProvidersSetApiKey: () => ({
+    mutate: mocks.setApiKeyMutate,
+    isPending: false,
+  }),
+}));
 vi.mock("@/hooks/providers/use-tab-refresh-providers", () => ({
   useTabRefreshProviders: () => mocks.refreshProviders,
 }));
@@ -92,6 +99,14 @@ const CLAUDE_CAP: ProviderLoginCapability = {
   token: { vars: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"] },
 };
 
+// Droid has no headless login subcommand (bare `droid` is an interactive TUI
+// that can't browser-OAuth over piped stdio), so it advertises no OAuth args -
+// reauth is the FACTORY_API_KEY paste form only.
+const DROID_CAP: ProviderLoginCapability = {
+  oauthArgs: null,
+  token: { vars: ["FACTORY_API_KEY"] },
+};
+
 function claudeState(
   loginCapability: ProviderLoginCapability | null,
 ): ProviderCliState {
@@ -113,6 +128,7 @@ function claudeState(
     terminalAgentArgs: "",
     envOverrides: [],
     loginCapability,
+    availabilityPending: false,
   };
 }
 
@@ -136,6 +152,30 @@ function cursorState(): ProviderCliState {
     envOverrides: [],
     // API-key-only provider: no OAuth session to reconnect → no banner capability.
     loginCapability: null,
+    availabilityPending: false,
+  };
+}
+
+function droidState(): ProviderCliState {
+  return {
+    providerId: "droid",
+    enabled: true,
+    disabledBy: null,
+    selected: { kind: "bundled" },
+    candidates: [],
+    auth: {
+      status: "unauthenticated",
+      badgeText: null,
+      label: null,
+      detail: null,
+    },
+    authPending: false,
+    checkedAt: null,
+    apiKey: { supported: true, configured: false, source: null },
+    terminalAgentArgs: "",
+    envOverrides: [],
+    loginCapability: DROID_CAP,
+    availabilityPending: false,
   };
 }
 
@@ -145,6 +185,7 @@ describe("<ProviderReauthBanner />", () => {
     mocks.awaitLoginMutate.mockClear();
     mocks.cancelLoginMutate.mockClear();
     mocks.setEnvOverrideMutate.mockClear();
+    mocks.setApiKeyMutate.mockClear();
     mocks.refreshProviders.mockClear();
     mocks.hostKind = "local";
   });
@@ -162,6 +203,37 @@ describe("<ProviderReauthBanner />", () => {
     );
 
     expect(screen.getByRole("button", { name: /Authenticate/ })).toBeDefined();
+  });
+
+  it("offers only the token paste form (no Authenticate) for a CLI with no headless login (Droid)", () => {
+    render(<ProviderReauthBanner providerId="droid" state={droidState()} />);
+
+    // Droid has no spawnable OAuth login, so no Authenticate button is offered -
+    // it would only hang on "Waiting for browser sign-in…".
+    expect(screen.queryByRole("button", { name: /Authenticate/ })).toBeNull();
+    // The FACTORY_API_KEY paste form is the reconnect path instead.
+    expect(
+      screen.getByPlaceholderText("Paste your FACTORY_API_KEY"),
+    ).toBeDefined();
+    expect(screen.getByRole("button", { name: "Save" })).toBeDefined();
+    expect(mocks.startLoginMutate).not.toHaveBeenCalled();
+  });
+
+  it("stores a pasted Droid key as the encrypted API-key secret, not an env override", () => {
+    render(<ProviderReauthBanner providerId="droid" state={droidState()} />);
+
+    const input = screen.getByPlaceholderText("Paste your FACTORY_API_KEY");
+    fireEvent.change(input, { target: { value: "  fk-droid-123  " } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    // Droid has an encrypted host-side key store, so the banner persists the key
+    // as that secret (`providers.setApiKey`) — exactly like Settings > Providers —
+    // rather than a plaintext env override.
+    expect(mocks.setApiKeyMutate).toHaveBeenCalledWith(
+      { providerId: "droid", apiKey: "fk-droid-123" },
+      expect.anything(),
+    );
+    expect(mocks.setEnvOverrideMutate).not.toHaveBeenCalled();
   });
 
   it("re-checks sign-in status via the manual Refresh button", () => {
@@ -308,12 +380,20 @@ describe("<ProviderReauthBanner />", () => {
     expect(screen.getByRole("button", { name: "Save" })).toBeDefined();
   });
 
-  it("shows a no-method stub for an API-key-only provider (Cursor) with no OAuth", () => {
+  it("offers the paste form for an API-key-only provider (Cursor) with no OAuth", () => {
     render(<ProviderReauthBanner providerId="cursor" state={cursorState()} />);
 
-    // No paste form, no OAuth button - keys are configured in Settings.
-    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    expect(screen.getByPlaceholderText("Paste your API key")).toBeDefined();
+    expect(screen.getByRole("button", { name: "Save" })).toBeDefined();
     expect(screen.queryByRole("button", { name: /Authenticate/ })).toBeNull();
-    expect(screen.getByText(/Reconnect .* from its CLI/)).toBeDefined();
+
+    fireEvent.change(screen.getByPlaceholderText("Paste your API key"), {
+      target: { value: "  cursor-key  " },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(mocks.setApiKeyMutate).toHaveBeenCalledWith(
+      { providerId: "cursor", apiKey: "cursor-key" },
+      expect.anything(),
+    );
   });
 });

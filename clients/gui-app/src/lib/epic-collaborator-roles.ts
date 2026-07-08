@@ -21,7 +21,3 @@ export const EPIC_COLLABORATOR_ROLE_LABELS: Readonly<
   editor: "Editor",
   viewer: "Viewer",
 };
-
-export function isEditablePermissionRole(role: PermissionRole | null): boolean {
-  return role === "owner" || role === "editor";
-}

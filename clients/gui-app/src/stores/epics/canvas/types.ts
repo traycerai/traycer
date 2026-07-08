@@ -2,6 +2,7 @@ import type { EpicNodeKind } from "@/lib/artifacts/node-display";
 import { makeLiteralGuard } from "@/lib/type-guard";
 import type { SnapshotSourceBlockIds } from "@/lib/chat/snapshot-source-block-ids";
 import type { GitStage } from "@traycer/protocol/host";
+import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 import type {
   EdgeDropPosition,
   SizesByGroupId,
@@ -55,6 +56,7 @@ export const isRecordBackedEpicNodeKind =
 export const WORKSPACE_FILE_TAB_KIND = "workspace-file" as const;
 export type WorkspaceFileTabKind = typeof WORKSPACE_FILE_TAB_KIND;
 export type OpenableCanvasTabKind = OpenableEpicNodeKind | WorkspaceFileTabKind;
+export type TerminalTitleSource = "default" | "manual";
 
 /**
  * Reference to a record-backed epic artifact as it lives inside a tab.
@@ -79,6 +81,12 @@ export interface EpicArtifactRef {
   readonly type: RecordBackedEpicNodeKind;
   readonly name: string;
   readonly hostId: string;
+  /**
+   * Optimistic terminal-agent placeholders can render the provider brand before
+   * the durable tui-agent record projects. The persisted record remains the
+   * authority once available.
+   */
+  readonly pendingTuiHarnessId?: TuiHarnessId;
 }
 
 /**
@@ -97,6 +105,7 @@ export interface EpicTerminalRef {
   readonly instanceId: string;
   readonly type: "terminal";
   readonly name: string;
+  readonly titleSource: TerminalTitleSource;
   readonly hostId: string;
   readonly cwd: string;
 }
@@ -205,8 +214,7 @@ export interface SnapshotHashDiffTilePayload {
 }
 
 export type GitDiffTilePayload =
-  | GitDiffFileTilePayload
-  | GitDiffBundleTilePayload;
+  GitDiffFileTilePayload | GitDiffBundleTilePayload;
 
 export type SnapshotDiffTilePayload =
   | SnapshotSegmentDiffTilePayload
@@ -249,10 +257,7 @@ export interface BlankTileRef {
 }
 
 export type EpicCanvasTileRef =
-  | EpicNodeRef
-  | GitDiffTileRef
-  | SnapshotDiffTileRef
-  | BlankTileRef;
+  EpicNodeRef | GitDiffTileRef | SnapshotDiffTileRef | BlankTileRef;
 
 export function isBlankTileRef(
   value: EpicCanvasTileRef,

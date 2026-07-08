@@ -1,7 +1,8 @@
 import { useStore } from "zustand";
 
 import { Popover, PopoverTrigger } from "@/components/ui/popover";
-import { NarrowOnlyTooltip } from "@/components/home/toolbar/narrow-only-tooltip";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { Kbd } from "@/components/ui/kbd";
 import { HarnessModelTrigger } from "@/components/home/pickers/harness-model-trigger";
 import {
   findReasoningOptionsForModel,
@@ -11,6 +12,7 @@ import {
 } from "@/components/home/data/landing-options";
 import { useSurfaceActivity } from "@/components/home/composer/surface-activity-hooks";
 import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
+import { commitSelection } from "@/stores/composer/commit-selection";
 import {
   useGuiHarnessCatalog,
   useGuiHarnessModelsQuery,
@@ -22,7 +24,6 @@ import {
   createModelRowSearchIndex,
   filterModelRows,
   flattenModelRowSections,
-  modelRowToSelection,
   sectionModelRowsByProviderRank,
   selectedModelRowId,
   type HarnessModelRow,
@@ -39,7 +40,10 @@ import {
 } from "react";
 import { HarnessModelPickerPanel } from "@/components/home/pickers/harness-model-picker-panel";
 import { useHarnessModelPickerState } from "@/components/home/pickers/harness-model-picker-state";
-import { visibleRailHarnesses } from "@/components/home/pickers/harness-rail-providers";
+import {
+  railHarnessDegraded,
+  visibleRailHarnesses,
+} from "@/components/home/pickers/harness-rail-providers";
 import { usePickerLeaderScope } from "@/components/home/pickers/use-picker-leader-scope";
 import { handleHarnessModelPickerKeyDown } from "@/components/home/pickers/harness-model-picker-keyboard";
 import { deriveHarnessModelPickerPresentation } from "@/components/home/pickers/harness-model-picker-presentation";
@@ -48,10 +52,21 @@ import type {
   ServiceTierFooterConfig,
 } from "@/components/home/pickers/harness-model-picker-footers";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
+import { useRegisterActiveModelPicker } from "@/hooks/command-palette/use-register-active-model-picker";
+import { useBindingForAction } from "@/stores/settings/keybinding-store";
+import { formatChordForDisplay } from "@/lib/keybindings/chord";
+import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
+import type { GuiHarnessId } from "@traycer/protocol/host/index";
+import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
+import {
+  providerIdToGuiHarnessId,
+  sortGuiHarnessesByProviderOrder,
+} from "@/lib/provider-ordering";
 
 export type { ReasoningFooterConfig, ServiceTierFooterConfig };
 
 const EMPTY_MODELS: ReadonlyArray<ModelOption> = [];
+const EMPTY_DEGRADED_HARNESS_IDS: ReadonlySet<GuiHarnessId> = new Set();
 
 interface HarnessModelPickerProps {
   /** Per-composer toolbar store; the picker subscribes to the selection /
@@ -70,16 +85,30 @@ interface HarnessModelPickerProps {
   tuiOnly: boolean;
   lockedHarnessId: ProviderId | null;
   disabled: boolean;
+  /**
+   * When true, this picker registers as the active composer's toggle target
+   * (the `composer.model-picker.toggle` shortcut + the palette's "Change model…"
+   * command act on it) while its surface is active and it isn't disabled. The
+   * main composer toolbar and the terminal launcher pass `true`; fork / add-node
+   * dialog pickers pass `false` so the global shortcut never targets them.
+   */
+  registerActivation: boolean;
 }
 
 function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
-  const { store, withServiceTier, tuiOnly, lockedHarnessId, disabled } = props;
+  const {
+    store,
+    withServiceTier,
+    tuiOnly,
+    lockedHarnessId,
+    disabled,
+    registerActivation,
+  } = props;
   const activityEnabled = useSurfaceActivity();
   const selection = useStore(store, (s) => s.selection);
   const selectedModel = useStore(store, (s) => s.selectedModel);
   const reasoning = useStore(store, (s) => s.reasoning);
   const serviceTier = useStore(store, (s) => s.serviceTier);
-  const onSelectionChange = useStore(store, (s) => s.setSelection);
   const setReasoning = useStore(store, (s) => s.setReasoning);
   const setServiceTier = useStore(store, (s) => s.setServiceTier);
   // The footer configs were previously assembled (identically) by both the
@@ -150,12 +179,26 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     enabled: activityEnabled,
     subscribed: activityEnabled,
   });
+  const providersQuery = useProvidersList({
+    enabled: activityEnabled,
+    subscribed: activityEnabled,
+  });
+  const degradedHarnessIds = useMemo(
+    () =>
+      providersQuery.data === undefined
+        ? EMPTY_DEGRADED_HARNESS_IDS
+        : degradedHarnessIdsFromProviderStates(providersQuery.data.providers),
+    [providersQuery.data],
+  );
   const harnesses = useMemo(
     () =>
       activityEnabled && harnessesQuery.data !== undefined
-        ? restrictToTui(harnessesQuery.data.harnesses, tuiOnly)
+        ? orderModelPickerHarnesses(
+            restrictToTui(harnessesQuery.data.harnesses, tuiOnly),
+            degradedHarnessIds,
+          )
         : [],
-    [activityEnabled, harnessesQuery.data, tuiOnly],
+    [activityEnabled, degradedHarnessIds, harnessesQuery.data, tuiOnly],
   );
   const selectedHarness = harnesses.find(
     (harness) => harness.id === selection.harnessId,
@@ -177,8 +220,12 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   // providers (e.g. `traycer`) are filtered out of the catalog up front so every
   // derived structure (active provider, rows, rail) inherits the restriction.
   const catalogHarnesses = useMemo(
-    () => restrictToTui(catalog.harnesses, tuiOnly),
-    [catalog.harnesses, tuiOnly],
+    () =>
+      orderModelPickerHarnesses(
+        restrictToTui(catalog.harnesses, tuiOnly),
+        degradedHarnessIds,
+      ),
+    [catalog.harnesses, degradedHarnessIds, tuiOnly],
   );
   const refreshCatalog = useRefreshHarnessCatalog();
   const selectedModels = selectedModelsQuery.data?.models ?? EMPTY_MODELS;
@@ -214,8 +261,15 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         catalogHarnesses,
         activeProviderId,
         selection.harnessId,
+        degradedHarnessIds,
       ),
-    [activeProviderId, catalogHarnesses, lockedHarnessId, selection.harnessId],
+    [
+      activeProviderId,
+      catalogHarnesses,
+      degradedHarnessIds,
+      lockedHarnessId,
+      selection.harnessId,
+    ],
   );
   const activeProvider =
     catalogHarnesses.find(
@@ -274,18 +328,42 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         closeOnly();
         return;
       }
+      // Commit the picked model through the memory-aware funnel (restores that
+      // (harness, model)'s remembered effort/tier, or the model's defaults).
       // Selecting a model keeps the picker open; it only closes on an outside
       // click / escape (handled by Popover's onOpenChange -> closeOnly).
-      onSelectionChange(modelRowToSelection(row));
+      commitSelection(store, row.harnessId, row.value);
     },
-    [closeOnly, disabled, onSelectionChange],
+    [closeOnly, disabled, store],
   );
   const handleProviderChange = useCallback(
     (providerId: ProviderId) => {
+      // Locked fork (terminal): the harness is immovable - never switch off it.
       if (lockedHarnessId !== null && providerId !== lockedHarnessId) return;
+      // Only an AVAILABLE, non-degraded provider commits a switch (restoring its
+      // remembered model/effort/tier). A degraded / unavailable provider just
+      // browses the rail - the panel shows its reauth / setup CTA, no commit.
+      const harness =
+        catalogHarnesses.find((option) => option.id === providerId) ??
+        harnesses.find((option) => option.id === providerId) ??
+        null;
+      if (
+        harness !== null &&
+        harness.available &&
+        !railHarnessDegraded(harness, degradedHarnessIds)
+      ) {
+        commitSelection(store, providerId, null);
+      }
       setActiveProviderId(providerId);
     },
-    [lockedHarnessId, setActiveProviderId],
+    [
+      catalogHarnesses,
+      degradedHarnessIds,
+      harnesses,
+      lockedHarnessId,
+      setActiveProviderId,
+      store,
+    ],
   );
 
   const handleKeyDown = useCallback(
@@ -330,8 +408,8 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   // the badges. Both handlers are pure state writes, so the search input keeps
   // focus and the user can keep typing after switching.
   const railHarnesses = useMemo(
-    () => visibleRailHarnesses(catalogHarnesses, harnesses),
-    [catalogHarnesses, harnesses],
+    () => visibleRailHarnesses(catalogHarnesses, harnesses, degradedHarnessIds),
+    [catalogHarnesses, degradedHarnessIds, harnesses],
   );
   // ⌥-reasoning is armed whenever the selected model exposes thinking levels.
   // The footer always reflects the selected model (not the browsed rail), so
@@ -346,9 +424,48 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     reasoningActionable,
   });
 
+  // Active-composer registration: while this picker's surface is active and it
+  // isn't disabled, expose its open/close toggle + current-selection summary to
+  // the `composer.model-picker.toggle` shortcut and the palette's "Change model…"
+  // command. `registerActivation` keeps fork / add-node dialog pickers out; the
+  // registration hook ref-parks the controller, so per-render identity churn is
+  // harmless.
+  const modelPickerChord = useBindingForAction("composer.model-picker.toggle");
+  const activationController = useMemo(
+    () => ({
+      toggle: () => handleOpenChange(!visibleOpen),
+      getSelectionSummary: () =>
+        modelPickerSelectionSummary(
+          presentation.label,
+          presentation.reasoningLabel,
+        ),
+    }),
+    [handleOpenChange, visibleOpen, presentation],
+  );
+  useRegisterActiveModelPicker(
+    registerActivation && activityEnabled && !disabled,
+    activationController,
+  );
+
+  const tooltipLabel = (
+    <span className="flex items-center gap-2">
+      <span className="truncate">{presentation.label}</span>
+      {modelPickerChord !== null ? (
+        <Kbd className="text-code-xs">
+          {formatChordForDisplay(modelPickerChord)}
+        </Kbd>
+      ) : null}
+    </span>
+  );
+
   return (
     <Popover open={visibleOpen} onOpenChange={handleOpenChange}>
-      <NarrowOnlyTooltip label={presentation.label}>
+      <TooltipWrapper
+        label={tooltipLabel}
+        side="top"
+        sideOffset={undefined}
+        align={undefined}
+      >
         <PopoverTrigger asChild>
           <HarnessModelTrigger
             selection={selection}
@@ -360,7 +477,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
             disabled={disabled}
           />
         </PopoverTrigger>
-      </NarrowOnlyTooltip>
+      </TooltipWrapper>
       <HarnessModelPickerPanel
         trimmedQuery={trimmedQuery}
         hasQuery={hasQuery}
@@ -376,6 +493,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         fallbackHarnesses={harnesses}
         resolvedActiveProviderId={resolvedActiveProviderId}
         lockedHarnessId={lockedHarnessId}
+        degradedHarnessIds={degradedHarnessIds}
         catalogHarnessesLoading={catalog.harnessesLoading}
         onProviderChange={handleProviderChange}
         onRefreshCatalog={refreshCatalog}
@@ -401,6 +519,17 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
 
 export const HarnessModelPicker = memo(HarnessModelPickerImpl);
 
+// Short current-selection summary for the palette's "Change model…" subtitle.
+// Null while the model label is still resolving so the row shows no stale copy.
+function modelPickerSelectionSummary(
+  label: string,
+  reasoningLabel: string | null,
+): string | null {
+  if (label.length === 0) return null;
+  if (reasoningLabel === null) return label;
+  return `${label} · Thinking ${reasoningLabel}`;
+}
+
 // Restrict to harnesses whose adapter advertises a TUI surface. This is the
 // runtime capability (`modes`), not the schema id: Cursor is a TUI harness at
 // the schema level but its adapter currently advertises only `gui`, so it stays
@@ -420,13 +549,45 @@ function restrictToTui<T extends HarnessOption>(
   return tuiOnly ? harnesses.filter(isTuiCapable) : harnesses;
 }
 
+function orderModelPickerHarnesses<T extends HarnessOption>(
+  harnesses: ReadonlyArray<T>,
+  degradedHarnessIds: ReadonlySet<GuiHarnessId>,
+): ReadonlyArray<T> {
+  return sortGuiHarnessesByProviderOrder(harnesses).toSorted(
+    (left, right) =>
+      Number(railHarnessDegraded(left, degradedHarnessIds)) -
+      Number(railHarnessDegraded(right, degradedHarnessIds)),
+  );
+}
+
+function degradedHarnessIdsFromProviderStates(
+  providers: ReadonlyArray<ProviderCliState>,
+): ReadonlySet<GuiHarnessId> {
+  return new Set(
+    providers.flatMap((provider) =>
+      providerNeedsPickerReauth(provider)
+        ? [providerIdToGuiHarnessId(provider.providerId)]
+        : [],
+    ),
+  );
+}
+
+function providerNeedsPickerReauth(provider: ProviderCliState): boolean {
+  return (
+    provider.enabled &&
+    (provider.auth.status === "unauthenticated" ||
+      (provider.apiKey.supported && !provider.apiKey.configured))
+  );
+}
+
 function resolveActiveProviderId(
   harnesses: ReadonlyArray<HarnessOption>,
   activeProviderId: ProviderId,
   selectedProviderId: ProviderId,
+  degradedHarnessIds: ReadonlySet<GuiHarnessId>,
 ): ProviderId {
   const selectable = (harness: HarnessOption): boolean =>
-    harness.available || harness.requiresApiKey;
+    harness.available || railHarnessDegraded(harness, degradedHarnessIds);
   if (
     harnesses.some(
       (harness) => harness.id === activeProviderId && selectable(harness),

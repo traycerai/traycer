@@ -25,6 +25,7 @@ export function useTerminalListFor(
   HostRpcError
 > {
   return useHostQuery<HostRpcRegistry, "terminal.list">({
+    cacheKeyIdentity: undefined,
     client,
     method: "terminal.list",
     params: { epicId },

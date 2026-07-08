@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { open, readFile, stat, unlink } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import { hostname as osHostname } from "node:os";
@@ -61,6 +62,10 @@ export interface CliLockMetadata {
   readonly reason: string;
   readonly startedAt: string;
   readonly hostname: string | null;
+  // Per-acquisition nonce so `release()` can verify it still owns the file
+  // before unlinking (see `tryAcquireOnce`). `null` only for a lock written
+  // by a pre-token CLI version - never written by this code.
+  readonly token: string | null;
 }
 
 export interface CliLockHandle {
@@ -90,6 +95,17 @@ const MIN_POLL_MS = 25;
 // land within milliseconds of the open(), so any empty lock file older
 // than this grace window has no live owner and is safe to break.
 const EMPTY_LOCK_GRACE_MS = 5000;
+
+// `isProcessAlive` only proves *some* process currently owns the recorded
+// PID, not that it's the same process that wrote the lock - the OS is free
+// to recycle a PID onto an unrelated process once the original holder
+// exits, and that impostor would otherwise be read as "alive" forever
+// (silently for a same-user reuse, or via the EPERM conservative branch for
+// a different-user reuse). This ceiling is the backstop: no matter how the
+// PID check reads, a lock older than this is force-broken. Generous enough
+// to cover a slow host install (no download timeout today) while still
+// bounding a truly stuck lock to a tolerable wait.
+const MAX_LOCK_AGE_MS = 10 * 60 * 1000;
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -139,6 +155,12 @@ async function readLockMetadata(path: string): Promise<CliLockMetadata | null> {
     reason: obj.reason,
     startedAt: obj.startedAt,
     hostname: typeof obj.hostname === "string" ? obj.hostname : null,
+    // Deliberately not required above alongside pid/reason/startedAt: a
+    // lock written by a pre-token CLI version (e.g. mid self-upgrade with
+    // mixed versions momentarily on disk) must still parse as a valid,
+    // live-checkable holder rather than be swept as "corrupt" on the
+    // 5-second empty-lock grace window.
+    token: typeof obj.token === "string" ? obj.token : null,
   };
 }
 
@@ -210,7 +232,22 @@ async function tryAcquireOnce(
       } catch {
         // Closing twice is a no-op for callers; ignore.
       }
+      // Compare-and-delete: only unlink if the file still carries the token
+      // this handle wrote. If a staleness check (this bug, or a future
+      // false positive) ever broke this lock and someone else re-acquired
+      // it while we were still alive, blindly unlinking here would delete
+      // *their* lock out from under them. A file with no token at all is a
+      // pre-token-version lock (never written by this code) - fall back to
+      // the old unconditional unlink, since there is nothing to compare.
       try {
+        const current = await readLockMetadata(path);
+        if (
+          current !== null &&
+          current.token !== null &&
+          current.token !== meta.token
+        ) {
+          return;
+        }
         await unlink(path);
       } catch {
         // If the file already vanished (e.g. swept by another tool), that's fine.
@@ -233,6 +270,7 @@ export async function acquireCliLock(
     reason: opts.reason,
     startedAt: nowIso(),
     hostname: hostnameSafe(),
+    token: randomUUID(),
   };
   const pollMs = Math.max(MIN_POLL_MS, opts.pollIntervalMs);
   const deadline = Date.now() + Math.max(0, opts.waitMs);
@@ -241,7 +279,26 @@ export async function acquireCliLock(
     if (attempt !== "held") return attempt;
     const holder = await readLockMetadata(path);
     if (holder !== null) {
-      if (!holderAlive(holder.pid)) {
+      // Age is checked regardless of what the PID check concludes - a
+      // recycled-PID impostor would otherwise be read as "alive" forever
+      // (see MAX_LOCK_AGE_MS above), so no amount of PID-liveness confidence
+      // exempts a lock from this ceiling. `startedAt` is holder-supplied,
+      // not a trusted clock - an unparseable or future value (corruption,
+      // clock skew) would otherwise make ageMs NaN or negative, which never
+      // satisfies `>=` and silently defeats the ceiling. Fall back to the
+      // lock file's own mtime in that case, since the filesystem - not the
+      // holder - controls that timestamp.
+      const now = Date.now();
+      const startedAtMs = new Date(holder.startedAt).getTime();
+      const ageMs =
+        Number.isFinite(startedAtMs) && startedAtMs <= now
+          ? now - startedAtMs
+          : await lockFileAgeMs(path);
+      if (
+        !holderAlive(holder.pid) ||
+        ageMs === null ||
+        ageMs >= MAX_LOCK_AGE_MS
+      ) {
         await breakStaleLock(path);
         continue;
       }

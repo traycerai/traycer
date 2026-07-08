@@ -28,6 +28,7 @@ import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
 import { AuthService } from "@/lib/auth/auth-service";
 import { HostDirectoryService } from "@/lib/host/host-directory-service";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import { appLogger } from "@/lib/logger";
 import { useRunnerHost } from "@/providers/use-runner-host";
 
 export interface HostRuntimeBinding<Registry extends VersionedRpcRegistry> {
@@ -205,9 +206,14 @@ export function createHostRuntime<
       // failure (`RetryableTransportError`) re-dials on a short backoff before
       // the auth-aware wrapper or the query layer ever see it. The auth wrapper
       // only acts on `UNAUTHORIZED`, never a retryable transport error, so the
-      // two never contend.
+      // two never contend. When auth revalidation really rotates the bearer,
+      // retry the same RPC once against the fresh lease; some usage-limit
+      // queries intentionally disable TanStack retry, so the refresh loop must
+      // complete in the transport layer.
       const messenger: IHostMessenger<Registry> = createRetryingMessenger(
-        createAuthAwareMessenger(rawMessenger, auth, null),
+        createAuthAwareMessenger(rawMessenger, auth, {
+          retry: { bearer },
+        }),
         DEFAULT_TRANSPORT_RETRY_POLICY,
       );
 
@@ -222,29 +228,52 @@ export function createHostRuntime<
 
       const activeRuntime = runtime;
       void (async () => {
-        await auth.start();
-        if (isDisposed()) {
+        let phase = "auth.start";
+        try {
+          appLogger.info("[host-runtime] startup begin", {
+            hasCustomMessenger: messengerFactory !== null,
+            hasRemoteFetcher: remoteFetcher !== null,
+          });
+          await auth.start();
+          if (isDisposed()) {
+            auth.dispose();
+            activeRuntime.dispose();
+            directory.dispose();
+            return;
+          }
+          phase = "directory.start";
+          await directory.start();
+          if (isDisposed()) {
+            auth.dispose();
+            activeRuntime.dispose();
+            directory.dispose();
+            return;
+          }
+          phase = "runtime.start";
+          activeRuntime.start();
+          const nextBinding = {
+            runtime: activeRuntime,
+            hostClient: activeRuntime.hostClient,
+            directory,
+            auth,
+          };
+          setLatestBindingSnapshot(nextBinding);
+          setBinding(nextBinding);
+          appLogger.info("[host-runtime] startup complete", {
+            hostCardinality: directory.getCardinality(),
+            hasLocalHost: directory.getLocalEntry() !== null,
+          });
+        } catch (error) {
+          appLogger.error("[host-runtime] startup failed", { phase }, error);
           auth.dispose();
           activeRuntime.dispose();
           directory.dispose();
+          if (!isDisposed()) {
+            setLatestBindingSnapshot(null);
+            setBinding(null);
+          }
           return;
         }
-        await directory.start();
-        if (isDisposed()) {
-          auth.dispose();
-          activeRuntime.dispose();
-          directory.dispose();
-          return;
-        }
-        activeRuntime.start();
-        const nextBinding = {
-          runtime: activeRuntime,
-          hostClient: activeRuntime.hostClient,
-          directory,
-          auth,
-        };
-        setLatestBindingSnapshot(nextBinding);
-        setBinding(nextBinding);
       })();
 
       return () => {

@@ -3,14 +3,13 @@ import {
   RunnerHostInvoke,
 } from "../../ipc-contracts/ipc-channels";
 import {
-  exchangeCodeForTokens,
+  refreshAuthTokenViaHttp,
   validateAuthTokenIdentityViaHttp,
   validateAuthTokenViaHttp,
 } from "@traycer-clients/shared/auth/auth-validation";
 import type { DesktopAuthSessionSnapshot } from "../../ipc-contracts/window-types";
 import { assertString, parseDesktopAuthSession } from "./ipc-parsers";
 import type { RunnerIpcBridge } from "./runner-ipc-bridge";
-import { log } from "../app/logger";
 
 /**
  * Auth IPC handlers for token *validation* against the authn service - credential
@@ -48,26 +47,16 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
   );
 
   bridge.handleInvoke(
-    RunnerHostInvoke.exchangeAuthCode,
-    async (_event, code: unknown, codeVerifier: unknown) => {
-      assertString(code, "exchangeAuthCode");
-      assertString(codeVerifier, "exchangeAuthCode.codeVerifier");
-      // Run in main so renderer-origin CORS does not decide the exchange.
-      const result = await exchangeCodeForTokens(
+    RunnerHostInvoke.refreshAuthToken,
+    async (_event, token: unknown, refreshToken: unknown) => {
+      assertString(token, "refreshAuthToken");
+      assertString(refreshToken, "refreshAuthToken.refreshToken");
+      // Run in main so renderer-origin CORS does not block the authn refresh.
+      return refreshAuthTokenViaHttp(
         bridge.options.authnBaseUrl,
-        code,
-        codeVerifier,
+        token,
+        refreshToken,
       );
-      if (result.kind !== "exchanged") {
-        // `rejected` = authn returned 400/401/403/404 (bad/expired/reused code
-        // or PKCE verifier↔challenge mismatch); `network-error` = the request
-        // never got a usable response (proxy/TLS/DNS, or a non-2xx status).
-        // Logged without code/verifier/token values so the cause is diagnosable
-        // from the app log without leaking secrets.
-        log.warn("[auth] code exchange failed", { reason: result.kind });
-        return null;
-      }
-      return { token: result.token, refreshToken: result.refreshToken };
     },
   );
 

@@ -22,12 +22,10 @@ interface TabStripTestState {
   droppableInputs: CapturedDroppableInput[];
 }
 
-const testState = vi.hoisted(
-  (): TabStripTestState => ({
-    draggableInputs: [],
-    droppableInputs: [],
-  }),
-);
+const testState = vi.hoisted((): TabStripTestState => ({
+  draggableInputs: [],
+  droppableInputs: [],
+}));
 
 vi.mock("@dnd-kit/core", () => ({
   useDraggable: (input: CapturedDraggableInput) => {
@@ -90,6 +88,7 @@ function seedActivePreviewTab(): void {
           tabInstanceIds: [TAB.instanceId],
           activeTabId: TAB.instanceId,
           previewTabId: TAB.instanceId,
+          activationHistory: [TAB.instanceId],
         },
         tilesByInstanceId: { [TAB.instanceId]: TAB },
         sizesByGroupId: {},

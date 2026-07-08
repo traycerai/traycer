@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { AGENT_WORKING_AWARENESS_FIELD } from "@traycer/protocol/host/epic/subscribe";
 import { OpenEpicSessionRegistry } from "@/stores/epics/open-epic/session-registry";
 import {
   createOpenEpicStore,
@@ -144,6 +145,45 @@ describe("OpenEpicSessionRegistry", () => {
     expect(mountedB.disposed).toBe(false);
   });
 
+  it("does not evict clean sessions with active agent work", () => {
+    const registry = new OpenEpicSessionRegistry({ maxLive: 2 });
+    const active = buildTestHandle("active", true);
+    const inactiveA = buildTestHandle("inactive-a", true);
+    const inactiveB = buildTestHandle("inactive-b", true);
+
+    markAgentWorking(active, "chat-active");
+    registry.acquire("active", () => h(active));
+    registry.acquire("inactive-a", () => h(inactiveA));
+    registry.acquire("inactive-b", () => h(inactiveB));
+
+    expect(registry.size()).toBe(2);
+    expect(active.disposed).toBe(false);
+    expect(inactiveA.disposed).toBe(true);
+    expect(inactiveB.disposed).toBe(false);
+    expect(registry.get("active")).not.toBeNull();
+  });
+
+  it("auto-prunes overflow when active agent work clears", () => {
+    const registry = new OpenEpicSessionRegistry({ maxLive: 1 });
+    const activeA = buildTestHandle("active-a", true);
+    const activeB = buildTestHandle("active-b", true);
+
+    markAgentWorking(activeA, "chat-a");
+    markAgentWorking(activeB, "chat-b");
+    registry.acquire("active-a", () => h(activeA));
+    registry.acquire("active-b", () => h(activeB));
+
+    expect(registry.size()).toBe(2);
+    expect(activeA.disposed).toBe(false);
+    expect(activeB.disposed).toBe(false);
+
+    clearAgentWorking(activeA);
+
+    expect(registry.size()).toBe(1);
+    expect(activeA.disposed).toBe(true);
+    expect(activeB.disposed).toBe(false);
+  });
+
   it("does not evict dirty entries even when above the cap (soft-cap overflow)", () => {
     const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
     const handles: TestHandle[] = [];
@@ -267,3 +307,15 @@ describe("OpenEpicSessionRegistry", () => {
     expect(registry.get("e0")).toBeNull();
   });
 });
+
+function markAgentWorking(handle: TestHandle, agentId: string): void {
+  handle.handle.awareness.setLocalState({
+    [AGENT_WORKING_AWARENESS_FIELD]: [agentId],
+  });
+}
+
+function clearAgentWorking(handle: TestHandle): void {
+  handle.handle.awareness.setLocalState({
+    [AGENT_WORKING_AWARENESS_FIELD]: [],
+  });
+}

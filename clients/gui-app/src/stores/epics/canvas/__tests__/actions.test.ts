@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  closeAllTabs,
+  closeOtherTabs,
+  closePane,
+  closeRightTabs,
   closeTab,
   paneTabRefs,
   cloneEpicCanvasState,
@@ -13,6 +17,7 @@ import {
   promotePreview,
   renameArtifact,
   resizeSplit,
+  setActivePane,
   setActiveTab,
   splitPaneAtEdge,
   splitPaneEmpty,
@@ -22,6 +27,7 @@ import {
 } from "@/stores/epics/canvas/actions";
 import { createEmptyCanvas } from "@/stores/epics/canvas/canvas-state";
 import { collectPanes, findPaneById } from "@/stores/epics/canvas/tile-tree";
+import type { TilePane } from "@/stores/epics/canvas/tile-tree";
 import type {
   EpicCanvasState,
   EpicCanvasTileRef,
@@ -34,6 +40,7 @@ import {
   GIT_FILE_A,
   GIT_FILE_A_DUP,
   GIT_FILE_B,
+  CHAT_A,
   SNAPSHOT_BUNDLE_CHANGES,
   SPEC_A,
   SPEC_B,
@@ -71,6 +78,25 @@ function getTreeDepthOf(state: EpicCanvasState): number {
   return state.root === null ? 0 : depth(state.root);
 }
 
+function paneById(state: EpicCanvasState, paneId: string) {
+  const pane = findPaneById(state.root, paneId);
+  if (pane === null) throw new Error(`expected pane ${paneId}`);
+  return pane;
+}
+
+function activationContentIds(
+  state: EpicCanvasState,
+  pane: TilePane,
+): ReadonlyArray<string> {
+  return pane.activationHistory.map((instanceId) => {
+    const ref = state.tilesByInstanceId[instanceId];
+    if (ref === undefined) {
+      throw new Error(`missing tile payload for ${instanceId}`);
+    }
+    return ref.id;
+  });
+}
+
 describe("openTile (pinned open)", () => {
   it("seeds a root pane when canvas is empty", () => {
     const next = openPinned(createEmptyCanvas(), SPEC_A);
@@ -89,7 +115,30 @@ describe("openTile (pinned open)", () => {
     expect(pane.tabInstanceIds).toHaveLength(2);
     expect(pane.previewTabId).toBeNull();
     expect(pane.activeTabId).toBe(SPEC_B.instanceId);
+    expect(activationContentIds(next, pane)).toEqual([SPEC_B.id, SPEC_A.id]);
     expectCanvasInvariants(next);
+  });
+
+  it("fills an active blank 'New tab' in place instead of stacking beside it", () => {
+    // Repro for the terminal-agent "phantom New tab": a fresh epic seeds a
+    // blank "New tab" placeholder (EmptyEpicBlankRoot) while the agent tile is
+    // still loading; when the agent tile then opens via `openTile`, it must
+    // REPLACE the active blank rather than append a second tab - matching
+    // `openTileInPane`'s fill-in-place semantics (browser new-tab behavior).
+    let state = openPinned(createEmptyCanvas(), SPEC_A);
+    const paneId = rootPane(state).id;
+    state = openBlankTabInPane(state, paneId);
+    expect(rootPane(state).tabInstanceIds).toHaveLength(2);
+    expect(isBlankTileRef(paneTabRefs(state, rootPane(state))[1])).toBe(true);
+
+    state = openPinned(state, SPEC_B);
+    const pane = rootPane(state);
+
+    expect(pane.tabInstanceIds).toHaveLength(2);
+    expect(paneTabIds(state, pane)).toEqual([SPEC_A.id, SPEC_B.id]);
+    expect(isBlankTileRef(paneTabRefs(state, pane)[1])).toBe(false);
+    expect(pane.activeTabId).toBe(SPEC_B.instanceId);
+    expectCanvasInvariants(state);
   });
 
   it("dedupes by focusing existing tab", () => {
@@ -100,7 +149,78 @@ describe("openTile (pinned open)", () => {
     const pane = rootPane(next);
     expect(pane.tabInstanceIds).toHaveLength(2);
     expect(pane.activeTabId).toBe(SPEC_A.instanceId);
+    expect(activationContentIds(next, pane)).toEqual([SPEC_A.id, SPEC_B.id]);
     expect(pane.id).toBe(beforeId);
+  });
+
+  it("records an existing tab focus when the tab was only synthetically active", () => {
+    let state = openPinned(createEmptyCanvas(), SPEC_A);
+    const sourcePaneId = rootPane(state).id;
+    state = openTileInBackgroundTab(state, SPEC_B);
+    state = openTileInBackgroundTab(state, SPEC_C);
+    state = splitPaneAtEdge(state, sourcePaneId, "right", {
+      kind: "node",
+      node: CHAT_A,
+    });
+    const targetPaneId = state.activePaneId;
+    if (targetPaneId === null) throw new Error("expected target pane");
+    state = dropOnTabStrip(
+      state,
+      {
+        kind: "tab",
+        sourcePaneId,
+        tabId: SPEC_A.instanceId,
+        node: SPEC_A,
+      },
+      targetPaneId,
+      1,
+    );
+    expect(paneById(state, sourcePaneId).activationHistory).toEqual([]);
+
+    const next = openPinned(state, SPEC_B);
+    const sourcePane = paneById(next, sourcePaneId);
+
+    expect(next.activePaneId).toBe(sourcePaneId);
+    expect(sourcePane.activeTabId).toBe(SPEC_B.instanceId);
+    expect(activationContentIds(next, sourcePane)).toEqual([SPEC_B.id]);
+    expectCanvasInvariants(next);
+  });
+
+  it("records a same-pane focus when the tab was only synthetically active", () => {
+    let state = openPinned(createEmptyCanvas(), SPEC_A);
+    const sourcePaneId = rootPane(state).id;
+    state = openTileInBackgroundTab(state, SPEC_B);
+    state = openTileInBackgroundTab(state, SPEC_C);
+    state = splitPaneAtEdge(state, sourcePaneId, "right", {
+      kind: "node",
+      node: CHAT_A,
+    });
+    const targetPaneId = state.activePaneId;
+    if (targetPaneId === null) throw new Error("expected target pane");
+    state = dropOnTabStrip(
+      state,
+      {
+        kind: "tab",
+        sourcePaneId,
+        tabId: SPEC_A.instanceId,
+        node: SPEC_A,
+      },
+      targetPaneId,
+      1,
+    );
+    state = setActivePane(state, sourcePaneId);
+    const beforeRoot = state.root;
+    expect(paneById(state, sourcePaneId).activeTabId).toBe(SPEC_B.instanceId);
+    expect(paneById(state, sourcePaneId).activationHistory).toEqual([]);
+
+    const next = openPinned(state, SPEC_B);
+    const sourcePane = paneById(next, sourcePaneId);
+
+    expect(next.root).not.toBe(beforeRoot);
+    expect(next.activePaneId).toBe(sourcePaneId);
+    expect(sourcePane.activeTabId).toBe(SPEC_B.instanceId);
+    expect(activationContentIds(next, sourcePane)).toEqual([SPEC_B.id]);
+    expectCanvasInvariants(next);
   });
 });
 
@@ -113,6 +233,7 @@ describe("openTileInBackgroundTab", () => {
     const pane = rootPane(next);
     expect(paneTabIds(next, pane)).toEqual([SPEC_A.id, SPEC_B.id]);
     expect(pane.activeTabId).toBe(SPEC_A.instanceId);
+    expect(activationContentIds(next, pane)).toEqual([SPEC_A.id]);
     expect(next.activePaneId).toBe(pane.id);
     expectCanvasInvariants(next);
   });
@@ -145,6 +266,7 @@ describe("openTile (preview open)", () => {
     expect(pane.tabInstanceIds).toHaveLength(1);
     expect(pane.previewTabId).toBe(SPEC_B.instanceId);
     expect(pane.activeTabId).toBe(SPEC_B.instanceId);
+    expect(activationContentIds(b, pane)).toEqual([SPEC_B.id]);
     // The evicted preview's payload is gone too.
     expect(b.tilesByInstanceId[SPEC_A.instanceId]).toBeUndefined();
     expectCanvasInvariants(b);
@@ -244,6 +366,52 @@ describe("git diff tiles", () => {
 });
 
 describe("closeTab cascade", () => {
+  it("falls back to the most recently activated surviving tab, not the strip neighbor", () => {
+    let state = openPinned(createEmptyCanvas(), SPEC_A);
+    state = openPinned(state, SPEC_B);
+    state = openPinned(state, SPEC_C);
+    const paneId = rootPane(state).id;
+    state = setActiveTab(state, paneId, SPEC_A.instanceId);
+
+    const next = closeTab(state, paneId, SPEC_A.instanceId);
+    const pane = rootPane(next);
+
+    expect(pane.activeTabId).toBe(SPEC_C.instanceId);
+    expect(activationContentIds(next, pane)).toEqual([SPEC_C.id, SPEC_B.id]);
+    expectCanvasInvariants(next);
+  });
+
+  it("repeated active closes walk the activation stack without recording synthetic fallback", () => {
+    let state = openPinned(createEmptyCanvas(), SPEC_A);
+    state = openPinned(state, SPEC_B);
+    state = openPinned(state, SPEC_C);
+    const paneId = rootPane(state).id;
+    state = setActiveTab(state, paneId, SPEC_A.instanceId);
+
+    state = closeTab(state, paneId, SPEC_A.instanceId);
+    state = closeTab(state, paneId, SPEC_C.instanceId);
+    const pane = rootPane(state);
+
+    expect(pane.activeTabId).toBe(SPEC_B.instanceId);
+    expect(activationContentIds(state, pane)).toEqual([SPEC_B.id]);
+    expectCanvasInvariants(state);
+  });
+
+  it("prunes a non-active close without changing the active tab", () => {
+    let state = openPinned(createEmptyCanvas(), SPEC_A);
+    state = openPinned(state, SPEC_B);
+    state = openPinned(state, SPEC_C);
+    const paneId = rootPane(state).id;
+    state = setActiveTab(state, paneId, SPEC_A.instanceId);
+
+    const next = closeTab(state, paneId, SPEC_B.instanceId);
+    const pane = rootPane(next);
+
+    expect(pane.activeTabId).toBe(SPEC_A.instanceId);
+    expect(activationContentIds(next, pane)).toEqual([SPEC_A.id, SPEC_C.id]);
+    expectCanvasInvariants(next);
+  });
+
   it("removes a non-last tab without collapsing the pane", () => {
     let state = openPinned(createEmptyCanvas(), SPEC_A);
     state = openPinned(state, SPEC_B);
@@ -262,6 +430,7 @@ describe("closeTab cascade", () => {
     const next = closeTab(state, paneId, SPEC_A.instanceId);
     const pane = rootPane(next);
     expect(pane.tabInstanceIds).toHaveLength(0);
+    expect(pane.activationHistory).toEqual([]);
     expect(next.activePaneId).toBe(pane.id);
     expectCanvasInvariants(next);
   });
@@ -279,6 +448,85 @@ describe("closeTab cascade", () => {
     // Single surviving child dissolves the group back to a bare pane.
     const pane = rootPane(next);
     expect(paneTabIds(next, pane)[0]).toBe(SPEC_A.id);
+    expectCanvasInvariants(next);
+  });
+});
+
+describe("close-family activation history", () => {
+  it("closeOtherTabs records the kept context target", () => {
+    let state = openPinned(createEmptyCanvas(), SPEC_A);
+    state = openPinned(state, SPEC_B);
+    state = openPinned(state, SPEC_C);
+    const paneId = rootPane(state).id;
+    state = setActiveTab(state, paneId, SPEC_A.instanceId);
+
+    const next = closeOtherTabs(state, paneId, SPEC_B.instanceId);
+    const pane = rootPane(next);
+
+    expect(paneTabIds(next, pane)).toEqual([SPEC_B.id]);
+    expect(pane.activeTabId).toBe(SPEC_B.instanceId);
+    expect(activationContentIds(next, pane)).toEqual([SPEC_B.id]);
+    expectCanvasInvariants(next);
+  });
+
+  it("closeRightTabs prunes removed ids without recording when the active tab is kept", () => {
+    let state = openPinned(createEmptyCanvas(), SPEC_A);
+    state = openPinned(state, SPEC_B);
+    state = openPinned(state, SPEC_C);
+    const paneId = rootPane(state).id;
+    state = setActiveTab(state, paneId, SPEC_A.instanceId);
+
+    const next = closeRightTabs(state, paneId, SPEC_B.instanceId);
+    const pane = rootPane(next);
+
+    expect(paneTabIds(next, pane)).toEqual([SPEC_A.id, SPEC_B.id]);
+    expect(pane.activeTabId).toBe(SPEC_A.instanceId);
+    expect(activationContentIds(next, pane)).toEqual([SPEC_A.id, SPEC_B.id]);
+    expectCanvasInvariants(next);
+  });
+
+  it("closeRightTabs records the context target when the active tab is removed", () => {
+    let state = openPinned(createEmptyCanvas(), SPEC_A);
+    state = openPinned(state, SPEC_B);
+    state = openPinned(state, SPEC_C);
+    const paneId = rootPane(state).id;
+    state = setActiveTab(state, paneId, SPEC_A.instanceId);
+    state = setActiveTab(state, paneId, SPEC_C.instanceId);
+
+    const next = closeRightTabs(state, paneId, SPEC_B.instanceId);
+    const pane = rootPane(next);
+
+    expect(paneTabIds(next, pane)).toEqual([SPEC_A.id, SPEC_B.id]);
+    expect(pane.activeTabId).toBe(SPEC_B.instanceId);
+    expect(activationContentIds(next, pane)).toEqual([SPEC_B.id, SPEC_A.id]);
+    expectCanvasInvariants(next);
+  });
+
+  it("closeAllTabs leaves a root drop pane with empty activation history", () => {
+    let state = openPinned(createEmptyCanvas(), SPEC_A);
+    state = openPinned(state, SPEC_B);
+    const paneId = rootPane(state).id;
+
+    const next = closeAllTabs(state, paneId);
+    const pane = rootPane(next);
+
+    expect(pane.tabInstanceIds).toEqual([]);
+    expect(pane.activeTabId).toBeNull();
+    expect(pane.activationHistory).toEqual([]);
+    expectCanvasInvariants(next);
+  });
+
+  it("closePane replaces the root pane with empty activation history", () => {
+    let state = openPinned(createEmptyCanvas(), SPEC_A);
+    state = openPinned(state, SPEC_B);
+    const paneId = rootPane(state).id;
+
+    const next = closePane(state, paneId);
+    const pane = rootPane(next);
+
+    expect(pane.tabInstanceIds).toEqual([]);
+    expect(pane.activeTabId).toBeNull();
+    expect(pane.activationHistory).toEqual([]);
     expectCanvasInvariants(next);
   });
 });
@@ -341,7 +589,36 @@ describe("splitPaneAtEdge", () => {
     expect(original === null ? null : paneTabIds(next, original)).toEqual([
       SPEC_A.id,
     ]);
+    if (original === null) throw new Error("expected original pane");
+    expect(activationContentIds(next, original)).toEqual([SPEC_A.id]);
+    const movedHistory =
+      moved === null ? null : activationContentIds(next, moved.pane);
+    expect(movedHistory).toEqual([SPEC_B.id]);
     expect(next.activePaneId).toBe(moved?.pane.id);
+    expectCanvasInvariants(next);
+  });
+
+  it("prunes split-source history and leaves source fallback unrecorded", () => {
+    let state = openPinned(createEmptyCanvas(), SPEC_A);
+    const sourcePaneId = rootPane(state).id;
+    state = openTileInBackgroundTab(state, SPEC_B);
+    state = openTileInBackgroundTab(state, SPEC_C);
+
+    const next = splitPaneAtEdge(state, sourcePaneId, "right", {
+      kind: "tab",
+      sourcePaneId,
+      tabId: SPEC_A.instanceId,
+      node: SPEC_A,
+    });
+    const sourcePane = paneById(next, sourcePaneId);
+    const moved = findPaneTabByContentId(next, SPEC_A.id);
+
+    expect(sourcePane.activeTabId).toBe(SPEC_B.instanceId);
+    expect(sourcePane.activationHistory).toEqual([]);
+    expect(moved?.pane.id).not.toBe(sourcePaneId);
+    const movedHistory =
+      moved === null ? null : activationContentIds(next, moved.pane);
+    expect(movedHistory).toEqual([SPEC_A.id]);
     expectCanvasInvariants(next);
   });
 
@@ -452,6 +729,39 @@ describe("dropOnTabStrip", () => {
     expectCanvasInvariants(next);
   });
 
+  it("prunes cross-pane source history and leaves source fallback unrecorded", () => {
+    let state = openPinned(createEmptyCanvas(), SPEC_A);
+    const sourcePaneId = rootPane(state).id;
+    state = openTileInBackgroundTab(state, SPEC_B);
+    state = openTileInBackgroundTab(state, SPEC_C);
+    state = splitPaneAtEdge(state, sourcePaneId, "right", {
+      kind: "node",
+      node: CHAT_A,
+    });
+    const targetPaneId = state.activePaneId;
+    if (targetPaneId === null) throw new Error("expected target pane");
+
+    const next = dropOnTabStrip(
+      state,
+      {
+        kind: "tab",
+        sourcePaneId,
+        tabId: SPEC_A.instanceId,
+        node: SPEC_A,
+      },
+      targetPaneId,
+      1,
+    );
+    const sourcePane = paneById(next, sourcePaneId);
+    const targetPane = paneById(next, targetPaneId);
+
+    expect(sourcePane.activeTabId).toBe(SPEC_B.instanceId);
+    expect(sourcePane.activationHistory).toEqual([]);
+    expect(activationContentIds(next, targetPane)[0]).toBe(SPEC_A.id);
+    expect(next.activePaneId).toBe(targetPaneId);
+    expectCanvasInvariants(next);
+  });
+
   it("reorders an already-open sidebar node inside the target strip", () => {
     let state = openPinned(createEmptyCanvas(), SPEC_A);
     state = openPinned(state, SPEC_B);
@@ -536,7 +846,31 @@ describe("setActiveTab", () => {
     const next = setActiveTab(state, paneId, SPEC_A.instanceId);
     const pane = findPaneById(next.root, paneId);
     expect(pane?.activeTabId).toBe(SPEC_A.instanceId);
+    if (pane === null) throw new Error("expected pane");
+    expect(activationContentIds(next, pane)).toEqual([SPEC_A.id, SPEC_B.id]);
     expect(next.activePaneId).toBe(paneId);
+  });
+});
+
+describe("setActivePane", () => {
+  it("focuses a pane without recording a tab activation", () => {
+    let state = openPinned(createEmptyCanvas(), SPEC_A);
+    const firstPaneId = rootPane(state).id;
+    state = splitPaneAtEdge(state, firstPaneId, "right", {
+      kind: "node",
+      node: SPEC_B,
+    });
+    const before = collectPanes(state.root).map((pane) =>
+      activationContentIds(state, pane),
+    );
+
+    const next = setActivePane(state, firstPaneId);
+
+    expect(next.activePaneId).toBe(firstPaneId);
+    expect(
+      collectPanes(next.root).map((pane) => activationContentIds(next, pane)),
+    ).toEqual(before);
+    expectCanvasInvariants(next);
   });
 });
 
@@ -567,6 +901,24 @@ describe("cloneEpicCanvasState", () => {
       collectPanes(cloned.root).flatMap((pane) => paneTabIds(cloned, pane)),
     ).toEqual(
       collectPanes(state.root).flatMap((pane) => paneTabIds(state, pane)),
+    );
+    expect(
+      collectPanes(cloned.root).map((pane) =>
+        pane.activationHistory.map(
+          (instanceId) => cloned.tilesByInstanceId[instanceId]?.id,
+        ),
+      ),
+    ).toEqual(
+      collectPanes(state.root).map((pane) =>
+        pane.activationHistory.map(
+          (instanceId) => state.tilesByInstanceId[instanceId]?.id,
+        ),
+      ),
+    );
+    expect(
+      collectPanes(cloned.root).flatMap((pane) => [...pane.activationHistory]),
+    ).not.toEqual(
+      collectPanes(state.root).flatMap((pane) => [...pane.activationHistory]),
     );
     // activePaneId remapped (not preserved, not null).
     expect(cloned.activePaneId).not.toBe(state.activePaneId);
@@ -632,6 +984,26 @@ describe("instanceId / content-id decoupling", () => {
     expect(tab.name).toBe("Renamed Spec");
     expect(tab.instanceId).toBe(SPEC_A.instanceId);
     expect(pane.previewTabId).toBe(SPEC_A.instanceId);
+  });
+
+  it("marks a renamed terminal tab as manually titled", () => {
+    const terminal: EpicCanvasTileRef = {
+      id: "terminal-1",
+      instanceId: "inst-terminal-1",
+      type: "terminal",
+      name: "New Terminal",
+      titleSource: "default",
+      hostId: TEST_HOST_ID,
+      cwd: "/repo",
+    };
+    const previewed = openPreview(createEmptyCanvas(), terminal);
+
+    const renamed = renameArtifact(previewed, terminal.id, "Custom shell");
+    const tab = paneTabRefs(renamed, rootPane(renamed))[0];
+    expect(tab).toMatchObject({
+      name: "Custom shell",
+      titleSource: "manual",
+    });
   });
 });
 
@@ -702,6 +1074,7 @@ describe("openBlankTabInPane", () => {
     expect(isBlankTileRef(blank)).toBe(true);
     expect(blank.name).toBe("New tab");
     expect(pane.activeTabId).toBe(blank.instanceId);
+    expect(activationContentIds(state, pane)).toEqual([blank.id, SPEC_A.id]);
     expect(state.activePaneId).toBe(paneId);
     expectCanvasInvariants(state);
   });
@@ -743,6 +1116,7 @@ describe("openTileInPane fill-in-place (blank replacement)", () => {
     const replaced = paneTabRefs(state, pane)[blankIndex];
     expect(isBlankTileRef(replaced)).toBe(false);
     expect(pane.activeTabId).toBe(replaced.instanceId);
+    expect(activationContentIds(state, pane)).toEqual([SPEC_B.id, SPEC_A.id]);
     expectCanvasInvariants(state);
   });
 
@@ -857,6 +1231,7 @@ describe("openTile no-op short-circuits (same reference)", () => {
     expect(state.activePaneId).not.toBe(holdingPaneId);
     const next = openTile(state, SPEC_A, false);
     expect(next).not.toBe(state);
+    expect(next.root).toBe(state.root);
     expect(next.activePaneId).toBe(holdingPaneId);
   });
 });

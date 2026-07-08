@@ -8,6 +8,7 @@ import {
   type ReactElement,
   type ReactNode,
 } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type {
   BootstrapMarkerEntry,
@@ -19,16 +20,19 @@ import type {
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { AppHeader } from "@/components/layout/header/app-header";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useRunnerRequestHostRespawn } from "@/hooks/runner/use-runner-request-host-respawn-mutation";
 import { useRunnerEnsureHost } from "@/hooks/runner/use-runner-ensure-host-mutation";
+import { useRunnerHostRemovalStateQuery } from "@/hooks/runner/use-runner-host-removal-state-query";
 import { useRunnerTraycerHostStatusQuery } from "@/hooks/runner/use-runner-traycer-host-status-query";
-import { useHostQuery } from "@/hooks/host/use-host-query";
-import { useHostClient, type HostRpcRegistry } from "@/lib/host";
-import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
-import { RetryableTransportError } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  describeHostCompatibilityError,
+  useHostCompatibility,
+} from "@/lib/host";
 import { requestAppQuit } from "@/lib/desktop-app-lifecycle";
+import { runnerQueryKeys } from "@/lib/query-keys";
 import { cn } from "@/lib/utils";
 
 /**
@@ -142,8 +146,8 @@ export function LocalHostGate(props: LocalHostGateProps) {
     isReady,
   });
 
-  // Reinstall-progress node, reused by the busy-keep restart branch and the
-  // normal provisioning branch.
+  // Reinstall-progress node, reused by the busy-keep forced update branch and
+  // the normal provisioning branch.
   const provisioningLoadingNode =
     props.provisioningLoading !== null
       ? cloneElement(props.provisioningLoading, {
@@ -157,19 +161,25 @@ export function LocalHostGate(props: LocalHostGateProps) {
 
   // host-busy keep path: the CLI kept a running host that has work in
   // progress. This state is LATCHED (it survives the surfaced host flipping
-  // the snapshot to `ready`, and survives Retry/Force `reset()`), and it takes
+  // the snapshot to `ready`, and survives Retry/forced update `reset()`), and it takes
   // precedence over `isReady` so children never connect to an unprobed busy
-  // host. `HostBusyGate` is isolated in its own component because the compat
+  // host. `HostCompatibilityGate` is isolated in its own component because the compat
   // probe calls `useHostClient`, valid only below the host runtime
-  // provider. A Retry/Force restart in flight shows its progress, not the panel.
+  // provider. A Retry/forced update in flight shows its progress, not the panel.
   if (provisioning.hostBusy) {
     if (provisioning.isProvisioning) {
       return <>{provisioningLoadingNode}</>;
     }
     return (
-      <HostBusyGate onRetry={provisioning.retry} onForce={provisioning.force}>
+      <HostCompatibilityGate
+        source="busy-keep"
+        checking={props.loading}
+        onRefreshBusy={provisioning.retry}
+        onForce={provisioning.canManageHost ? provisioning.force : null}
+        restartError={provisioning.error}
+      >
         {props.children}
-      </HostBusyGate>
+      </HostCompatibilityGate>
     );
   }
 
@@ -193,7 +203,17 @@ export function LocalHostGate(props: LocalHostGateProps) {
   }
 
   if (isReady) {
-    return <>{props.children}</>;
+    return (
+      <HostCompatibilityGate
+        source="normal-ready"
+        checking={props.loading}
+        onRefreshBusy={null}
+        onForce={provisioning.canManageHost ? provisioning.force : null}
+        restartError={provisioning.error}
+      >
+        {props.children}
+      </HostCompatibilityGate>
+    );
   }
 
   // Provisioning failed - show the error with a Retry that re-runs ensure.
@@ -253,9 +273,10 @@ interface HostProvisioning {
   // Traycer's background components on this device, so the desktop refused to
   // reinstall. The gate shows the removed surface instead of spinning.
   readonly removed: boolean;
+  readonly canManageHost: boolean;
   readonly retry: () => void;
-  // Force restart: re-run ensure with `force`, skipping the busy check, to
-  // reinstall + restart onto this build (ends the in-progress work).
+  // Forced update: re-run ensure with `force`, skipping the busy check, to
+  // reinstall + restart onto this build (can end in-progress work).
   readonly force: () => void;
   // Reinstall escape hatch from the removed surface: clear the removal
   // sentinel, then re-run ensure to provision the host again.
@@ -271,6 +292,7 @@ function useHostProvisioning(args: {
   readonly isReady: boolean;
 }): HostProvisioning {
   const runnerHost = useRunnerHost();
+  const queryClient = useQueryClient();
   const ensure = useRunnerEnsureHost();
   const attemptedRef = useRef(false);
   const [progress, setProgress] = useState<HostProgressEvent | null>(null);
@@ -280,24 +302,46 @@ function useHostProvisioning(args: {
   const hasManagement = runnerHost.hostManagement !== null;
   const { mutate, reset } = ensure;
 
+  // Kept in sync so the stable `markBusyKeep` callback below can read the
+  // latest management instance without widening its dependency array (see
+  // that callback's comment on why it must stay stable).
+  const hostManagementRef = useRef(runnerHost.hostManagement);
+  useEffect(() => {
+    hostManagementRef.current = runnerHost.hostManagement;
+  }, [runnerHost.hostManagement]);
+
   // Latch the busy-keep flow from the settled mutation RESULT (a mutation
   // event, not a render effect or a ref read), so it survives the surfaced
-  // host flipping `isReady` true and survives Retry/Force `reset()` (which
+  // host flipping `isReady` true and survives Retry/forced update `reset()` (which
   // clears `ensure.data`). A `host-busy` result enters the flow; any other
   // success exits it. An ERROR deliberately leaves the latch untouched: a
-  // failed Retry/Force must keep us in the busy flow (so we never fall through
+  // failed Retry/forced update must keep us in the busy flow (so we never fall through
   // to rendering children against the still-unprobed busy host), and a failed
   // initial provision leaves the latch at its `false` default (normal error
   // path). Stable handler keeps the provision effect from re-running.
-  const markBusyKeep = useCallback((result: HostEnsureResult): void => {
-    setInBusyKeepFlow(result.action === "host-busy");
-    // The desktop refused to reinstall a user-removed host; latch the removed
-    // surface. Any other settled result (provisioned/already-ready after a
-    // reinstall) clears it.
-    setRemoved(result.action === "removed");
-  }, []);
+  const markBusyKeep = useCallback(
+    (result: HostEnsureResult): void => {
+      setInBusyKeepFlow(result.action === "host-busy");
+      // The desktop refused to reinstall a user-removed host; latch the removed
+      // surface. Any other settled result (provisioned/already-ready after a
+      // reinstall) clears it.
+      setRemoved(result.action === "removed");
+      // `ensureHost`'s own removal check is the freshest possible truth, so
+      // write it straight into the removal-state query cache too - a
+      // response-equals-state cache write (not a guess) that keeps the
+      // direct removal-sentinel query (below) from re-asserting a stale
+      // `true` it fetched before this settle.
+      const management = hostManagementRef.current;
+      if (management !== null) {
+        queryClient.setQueryData(runnerQueryKeys.hostRemovalState(management), {
+          removedByUser: result.action === "removed",
+        });
+      }
+    },
+    [queryClient],
+  );
 
-  // Retry/Force: clear any prior error/progress, then re-run ensure. Only
+  // Retry/forced update: clear any prior error/progress, then re-run ensure. Only
   // `onSuccess` transitions the busy-keep latch; an error leaves it untouched
   // (see markBusyKeep).
   const run = (force: boolean): void => {
@@ -317,8 +361,13 @@ function useHostProvisioning(args: {
     const management = runnerHost.hostManagement;
     if (management === null) return;
     // Optimistically drop the removed latch so the surface flips to the
-    // provisioning spinner immediately.
+    // provisioning spinner immediately. Also mirror it into the removal-state
+    // query cache - otherwise a `true` it fetched before this click would
+    // still OR back in below and hold the surface on `removed`.
     setRemoved(false);
+    queryClient.setQueryData(runnerQueryKeys.hostRemovalState(management), {
+      removedByUser: false,
+    });
     void management.clearRemoval().then(
       () => run(false),
       () => {
@@ -326,6 +375,9 @@ function useHostProvisioning(args: {
         // back to `removed`. Restore the removed surface instead of flashing a
         // spinner through a wasted round-trip; the user can retry Reinstall.
         setRemoved(true);
+        queryClient.setQueryData(runnerQueryKeys.hostRemovalState(management), {
+          removedByUser: true,
+        });
       },
     );
   };
@@ -341,11 +393,26 @@ function useHostProvisioning(args: {
     );
   }, [canProvision, args.isReady, mutate, markBusyKeep]);
 
+  // Direct removal-sentinel check, independent of the one-shot `ensureHost`
+  // effect above. That effect never re-fires once `attemptedRef` is set -
+  // typically right after the very first sign-in, long before the user ever
+  // visits Settings -> Danger Zone - so it cannot notice a removal that
+  // happens later in the same session. The query re-activates on every
+  // not-ready transition (see its `enabled`), and its result is read directly
+  // below (derived, not synced into state) so it short-circuits straight to
+  // the removed surface per `getRemovalState`'s contract instead of falling
+  // through to the generic unavailable/Retry card until a reload re-mounts
+  // this hook and resets `attemptedRef`.
+  const removalState = useRunnerHostRemovalStateQuery({
+    enabled: canProvision && !args.isReady,
+  });
+  const isRemoved = removed || removalState.data?.removedByUser === true;
+
   return {
     // Report provisioning/error whenever this shell manages the host - NOT
     // gated on `canProvision`, which collapses to false the instant a busy
     // host is surfaced (its snapshot flips `isReady` true). Gating on
-    // `canProvision` would hide Retry/Force restart progress and swallow their
+    // `canProvision` would hide Retry/forced update progress and swallow their
     // errors. `ensure.isPending`/`ensure.error` are only meaningful after a
     // mutation that already required management, so `hasManagement` is the
     // correct gate.
@@ -353,207 +420,147 @@ function useHostProvisioning(args: {
     error: hasManagement ? ensure.error : null,
     progress,
     hostBusy: hasManagement && inBusyKeepFlow,
-    removed: hasManagement && removed,
+    removed: hasManagement && isRemoved,
+    canManageHost: hasManagement,
     retry: () => run(false),
     force: () => run(true),
     reinstall,
   };
 }
 
-type CompatProbeStatus = "checking" | "compatible" | "incompatible";
-
-const HOST_STATUS_PROBE = {};
-
-// After this long stuck on "checking" (the surfaced host never bound, or the
-// probe kept failing transiently), the checking surface reveals a manual
-// Retry/Force escape so the user is never trapped on the spinner with no way
-// out. Sits above the typical sub-second probe so a healthy keep never flashes
-// the buttons.
-const COMPAT_CHECK_ESCAPE_THRESHOLD_MS = 12_000;
-
-// Terminal handshake verdicts: the host's manifest is genuinely incompatible
-// with this build, so retrying the probe cannot change the answer. Every other
-// error (a transient RPC/connection blip) is non-terminal and is retried.
-function isTerminalCompatError(error: HostRpcError): boolean {
-  return (
-    error.code === "INCOMPATIBLE" || error.code === "DOWNGRADE_UNSUPPORTED"
-  );
-}
-
-// Compat probe for the host-busy keep path (D4). Reuses the existing manifest
-// handshake: calling `host.status` (a pure-local RPC - no cloud I/O) against
-// the surfaced default host either succeeds (compatible) or throws
-// `HostRpcError{INCOMPATIBLE | DOWNGRADE_UNSUPPORTED}` from the openAck
-// negotiation. `host.status` is deliberate (not a cloud-backed method) so a
-// compatible-but-cloud-degraded host still reads "compatible". Until the
-// host binds the underlying query stays disabled and we report "checking"; a
-// transient error is retried (so a network blip never reads as incompatible),
-// and the checking surface reveals a manual Retry/Force escape if it stays
-// stuck, so a never-binding or repeatedly-failing probe is not a dead-end.
+// Shared compat verdict for host-backed launch. The provider owns the
+// `host.status` probe above routed UI and startup warmups; this gate consumes
+// the verdict to either continue into host-backed UI or convert the existing
+// initializing-host surface into an update-required card.
 interface HostBusyGateProps {
   readonly children: ReactNode;
-  readonly onRetry: () => void;
-  readonly onForce: () => void;
+  readonly source: HostCompatibilityGateSource;
+  readonly checking: ReactNode;
+  readonly onRefreshBusy: (() => void) | null;
+  readonly onForce: (() => void) | null;
+  readonly restartError: Error | null;
 }
 
-// Rendered only while the CLI kept a busy host (D4 keep path). Probes the
-// surfaced host's compatibility and renders the keep / checking / prompt
-// outcome. Isolated so `useHostClient` (valid only below the host runtime
-// provider) is never reached from the gate's other states.
-function HostBusyGate(props: HostBusyGateProps) {
-  const compat = useHostCompatProbe();
-  if (compat === "incompatible") {
+type HostCompatibilityGateSource = "busy-keep" | "normal-ready";
+
+// Rendered once a local host is reachable and the host runtime is mounted.
+// Blocks host-backed children until the shared `/rpc` manifest handshake
+// succeeds. The same gate handles both normal launch and the older busy-host
+// keep flow; only retry copy/wiring differs.
+function HostCompatibilityGate(props: HostBusyGateProps) {
+  const compat = useHostCompatibility();
+  if (compat.status === "incompatible") {
     return (
-      <GateIncompatibleBusy onRetry={props.onRetry} onForce={props.onForce} />
+      <GateIncompatibleHost
+        source={props.source}
+        reason={describeHostCompatibilityError(compat.error)}
+        onRefreshBusy={props.onRefreshBusy}
+        onForce={props.onForce}
+        restartError={props.restartError}
+      />
     );
   }
-  if (compat === "compatible") {
+  if (compat.status === "failed") {
+    return (
+      <GateProvisioningError
+        message={`Could not verify host compatibility. ${compat.error.message}`}
+        onRetry={compat.retry}
+        isRetrying={compat.retrying}
+      />
+    );
+  }
+  if (compat.status === "compatible") {
     return <>{props.children}</>;
   }
-  return <GateCompatChecking onRetry={props.onRetry} onForce={props.onForce} />;
-}
-
-function useHostCompatProbe(): CompatProbeStatus {
-  const client = useHostClient();
-  const probe = useHostQuery<HostRpcRegistry, "host.status">({
-    client,
-    method: "host.status",
-    params: HOST_STATUS_PROBE,
-    options: {
-      // Retry a transient failure a couple of times so a momentary blip never
-      // reads as incompatible, but fail fast on a terminal compat verdict
-      // (retrying an INCOMPATIBLE handshake cannot change the answer) and on a
-      // `RetryableTransportError`, which the transport layer has already retried
-      // to exhaustion - retrying here would stack dial-timeout costs and block
-      // the gate far longer.
-      retry: (failureCount, error) =>
-        !isTerminalCompatError(error) &&
-        !(error instanceof RetryableTransportError) &&
-        failureCount < 2,
-      // A compatible verdict must not bounce back to "checking": Infinity keeps
-      // the success cached with no background refetch, so children stay mounted
-      // even if the host connection later churns. The query key is host-id
-      // scoped, so a genuine host swap still re-probes.
-      staleTime: Infinity,
-    },
-  });
-  if (probe.isSuccess) {
-    return "compatible";
-  }
-  if (probe.error !== null && isTerminalCompatError(probe.error)) {
-    return "incompatible";
-  }
-  return "checking";
-}
-
-interface GateCompatCheckingProps {
-  readonly onRetry: () => void;
-  readonly onForce: () => void;
-}
-
-// "Host is busy — checking compatibility…" surface, shown while the compat
-// probe is in flight or the surfaced host has not yet bound. If it stays
-// stuck past COMPAT_CHECK_ESCAPE_THRESHOLD_MS (the host never bound, or the
-// probe kept failing transiently), it reveals a manual Retry/Force escape so
-// the user is never trapped on the spinner with no way out.
-function GateCompatChecking(props: GateCompatCheckingProps) {
-  const [showEscape, setShowEscape] = useState(false);
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setShowEscape(true);
-    }, COMPAT_CHECK_ESCAPE_THRESHOLD_MS);
-    return () => {
-      clearTimeout(timer);
-    };
-  }, []);
-  return (
-    <div
-      data-testid="local-host-compat-checking"
-      className="flex min-h-svh w-full items-center justify-center bg-background p-6 text-foreground"
-    >
-      <Card className="w-full max-w-md">
-        <CardContent className="flex flex-col items-center gap-3 py-6 text-ui-sm">
-          <AgentSpinningDots
-            className={undefined}
-            testId="local-host-compat-checking-spinner"
-            variant={undefined}
-          />
-          <p className="text-center">
-            Your host is busy — checking whether this update can keep using it…
-          </p>
-          {showEscape ? (
-            <div className="flex flex-wrap justify-center gap-2">
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                onClick={props.onRetry}
-                data-testid="local-host-compat-checking-retry"
-              >
-                Retry
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant="destructive"
-                onClick={props.onForce}
-                data-testid="local-host-compat-checking-force"
-              >
-                Force restart (ends running work)
-              </Button>
-            </div>
-          ) : null}
-        </CardContent>
-      </Card>
-    </div>
-  );
+  return <>{props.checking}</>;
 }
 
 interface GateIncompatibleBusyProps {
-  readonly onRetry: () => void;
-  readonly onForce: () => void;
+  readonly source: HostCompatibilityGateSource;
+  readonly reason: string;
+  readonly onRefreshBusy: (() => void) | null;
+  readonly onForce: (() => void) | null;
+  readonly restartError: Error | null;
 }
 
-// Shown when the kept busy host is incompatible with this build: Retry
-// re-checks busy, Force reinstalls + restarts (ending the running work).
-function GateIncompatibleBusy(props: GateIncompatibleBusyProps) {
+// Shown when the reachable host is incompatible with this build. Compatible
+// hosts continue automatically; incompatible hosts have one meaningful action:
+// update the local host to the app-compatible version.
+function GateIncompatibleHost(props: GateIncompatibleBusyProps) {
+  const isBusyKeep = props.source === "busy-keep";
   return (
     <div
-      data-testid="local-host-incompatible-busy"
-      className="flex min-h-svh w-full items-center justify-center bg-background p-6 text-foreground"
+      data-testid={
+        isBusyKeep ? "local-host-incompatible-busy" : "local-host-incompatible"
+      }
+      className="flex min-h-svh w-full flex-col bg-background text-foreground"
     >
-      <Card className="w-full max-w-md">
-        <CardContent className="flex flex-col gap-4 py-6 text-ui-sm">
-          <div className="flex flex-col gap-1 text-center">
-            <p className="font-medium">Update paused</p>
-            <p className="text-muted-foreground">
-              Your host has work in progress and is not compatible with this
-              update. Retry the restart, or force a restart now — Force ends the
-              running work.
-            </p>
-          </div>
-          <div className="flex flex-wrap justify-center gap-2">
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              onClick={props.onRetry}
-              data-testid="local-host-incompatible-busy-retry"
+      <AppHeader variant="host-loading" />
+      <div className="flex flex-1 items-center justify-center p-6">
+        <Card className="w-full max-w-md shadow-sm">
+          <CardContent className="flex flex-col items-center gap-4 py-6 text-center text-ui-sm">
+            <div className="flex flex-col gap-2">
+              <p className="text-ui font-medium text-foreground">
+                Host update required
+              </p>
+              <p className="text-muted-foreground">
+                {isBusyKeep
+                  ? "The running host has work in progress and is not compatible with this app update. Refresh to check again, or force update the host. Running work may be interrupted."
+                  : "This Traycer app update is not compatible with the running host. Update the local host before continuing."}
+              </p>
+              <p
+                className="max-w-full break-words rounded-md bg-muted/50 px-3 py-2 text-left text-ui-xs text-muted-foreground"
+                data-testid="local-host-incompatible-reason"
+              >
+                Reason: {props.reason}
+              </p>
+              {props.restartError !== null ? (
+                <p
+                  className="max-w-full break-words text-ui-xs text-destructive"
+                  data-testid="local-host-incompatible-restart-error"
+                >
+                  {props.restartError.message}
+                </p>
+              ) : null}
+            </div>
+            <div
+              className={cn(
+                "grid w-full gap-2",
+                isBusyKeep ? "sm:grid-cols-2" : "sm:flex sm:justify-center",
+              )}
             >
-              Retry restart
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant="destructive"
-              onClick={props.onForce}
-              data-testid="local-host-incompatible-busy-force"
-            >
-              Force restart (ends running work)
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
+              {isBusyKeep && props.onRefreshBusy !== null ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="w-full"
+                  onClick={props.onRefreshBusy}
+                  data-testid="local-host-incompatible-busy-refresh"
+                >
+                  Refresh
+                </Button>
+              ) : null}
+              {props.onForce !== null ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={isBusyKeep ? "destructive" : "default"}
+                  className={cn("w-full", !isBusyKeep && "sm:w-auto")}
+                  onClick={props.onForce}
+                  data-testid={
+                    isBusyKeep
+                      ? "local-host-incompatible-busy-force-update"
+                      : "local-host-incompatible-update"
+                  }
+                >
+                  {isBusyKeep ? "Force update host" : "Update host"}
+                </Button>
+              ) : null}
+            </div>
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }

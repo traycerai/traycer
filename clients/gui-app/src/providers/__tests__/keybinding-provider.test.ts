@@ -26,7 +26,7 @@ import type { SettingsSectionId } from "@/lib/settings-sections";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
 
 interface NavigateCall {
-  readonly kind: "home" | "settings" | "epic" | "section";
+  readonly kind: "home" | "settings" | "epic" | "section" | "back" | "forward";
   readonly epicId: string | null;
   readonly sectionId: SettingsSectionId | null;
 }
@@ -115,6 +115,15 @@ function buildRouter(initialPath: string): MockRouter {
         pathname = `/settings/${intent.section}`;
       }
     },
+    goBack: () => {
+      calls.push({ kind: "back", epicId: null, sectionId: null });
+    },
+    goForward: () => {
+      calls.push({ kind: "forward", epicId: null, sectionId: null });
+    },
+    isHistoryNavAvailable: () => false,
+    canGoBack: () => false,
+    canGoForward: () => false,
   };
   const setPath = (next: string) => {
     pathname = next;
@@ -130,6 +139,8 @@ describe("dispatchAction", () => {
   });
 
   afterEach(() => {
+    document.body.innerHTML = "";
+    vi.restoreAllMocks();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
     setSystemTabModalApi(null);
@@ -212,6 +223,38 @@ describe("dispatchAction", () => {
     expect(calls.length).toBe(0);
     expect(useEpicCanvasStore.getState().activeTabId).toBe(beforeHeaderTabId);
     expect(canvasTabIds(tabId)).toEqual(["spec-a", "spec-b"]);
+  });
+
+  it("focuses the target pane editor after directional group focus", () => {
+    const tabId = useEpicCanvasStore
+      .getState()
+      .openEpicTab("epic-pane-focus", "Pane Focus");
+    useEpicCanvasStore.getState().openTileInTab(tabId, specRef("spec-a"));
+    const sourcePaneId =
+      useEpicCanvasStore.getState().canvasByTabId[tabId]?.activePaneId ?? null;
+    if (sourcePaneId === null) throw new Error("expected source pane");
+
+    useEpicCanvasStore
+      .getState()
+      .splitPaneWithNode(tabId, sourcePaneId, "right", specRef("spec-b"));
+    const canvas = useEpicCanvasStore.getState().canvasByTabId[tabId];
+    const targetPaneId =
+      collectPanes(canvas?.root ?? null).find(
+        (pane) => pane.id !== sourcePaneId,
+      )?.id ?? null;
+    if (targetPaneId === null) throw new Error("expected target pane");
+    useEpicCanvasStore.getState().setActiveTilePane(tabId, sourcePaneId);
+
+    appendFocusPane(sourcePaneId, [0, 0, 500, 600]);
+    const targetEditor = appendFocusPane(targetPaneId, [500, 0, 500, 600]);
+
+    const { router } = buildRouter(`/epics/epic-pane-focus/${tabId}`);
+
+    expect(dispatchAction("group.focus.right", router)).toBe(true);
+    expect(
+      useEpicCanvasStore.getState().canvasByTabId[tabId]?.activePaneId,
+    ).toBe(targetPaneId);
+    expect(document.activeElement).toBe(targetEditor);
   });
 
   it("does not close hidden epic canvas tabs while a non-detail route is active", () => {
@@ -299,6 +342,25 @@ describe("dispatchAction", () => {
     expect(canvasTabIds(tabId)).toEqual(["spec-a"]);
   });
 });
+
+function appendFocusPane(
+  paneId: string,
+  box: [number, number, number, number],
+): HTMLElement {
+  const [x, y, width, height] = box;
+  const pane = document.createElement("div");
+  pane.setAttribute("data-group-id", paneId);
+  document.body.append(pane);
+  vi.spyOn(pane, "getBoundingClientRect").mockReturnValue(
+    new DOMRect(x, y, width, height),
+  );
+
+  const editor = document.createElement("button");
+  editor.type = "button";
+  editor.setAttribute("data-artifact-editor", "");
+  pane.append(editor);
+  return editor;
+}
 
 // Fire a leader digit through the base scopes, the way the provider's keydown
 // handler does: register the scopes for this router, match a synthetic

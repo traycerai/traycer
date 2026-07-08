@@ -6,6 +6,7 @@
  * terminal / workspace-file are not.
  */
 import type { DesktopJsonValue } from "@/lib/windows/types";
+import { DEFAULT_TERMINAL_TITLE } from "@/lib/terminals/terminal-title";
 import {
   WORKSPACE_FILE_TAB_KIND,
   isRecordBackedEpicNodeKind,
@@ -19,6 +20,14 @@ import { readTileInstanceId } from "./instance-id";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function parseTerminalTitleSource(
+  value: unknown,
+  name: string,
+): EpicTerminalRef["titleSource"] {
+  if (value === "manual" || value === "default") return value;
+  return name === DEFAULT_TERMINAL_TITLE ? "default" : "manual";
 }
 
 export function parseEpicNodeRef(value: unknown): EpicNodeRef | null {
@@ -58,6 +67,7 @@ export function parseEpicNodeRef(value: unknown): EpicNodeRef | null {
       instanceId,
       type: "terminal",
       name: value.name,
+      titleSource: parseTerminalTitleSource(value.titleSource, value.name),
       hostId: value.hostId,
       cwd: value.cwd,
     };
@@ -92,6 +102,7 @@ function serializeEpicNodeRef(node: EpicNodeRef): DesktopJsonValue {
       instanceId: node.instanceId,
       type: node.type,
       name: node.name,
+      titleSource: node.titleSource,
       hostId: node.hostId,
       cwd: node.cwd,
     };

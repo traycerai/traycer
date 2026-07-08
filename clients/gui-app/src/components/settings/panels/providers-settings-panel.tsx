@@ -34,8 +34,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { FilePathTooltip } from "@/components/file-path-tooltip";
 import { StartTruncatedText } from "@/components/ui/start-truncated-text";
-import { HarnessIcon } from "@/components/home/pickers/harness-icon";
-import type { ProviderId as HarnessIconId } from "@/components/home/data/landing-options";
+import { ProviderList } from "@/components/providers/provider-list";
 import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
 import { useProvidersSetSelection } from "@/hooks/providers/use-providers-set-selection-mutation";
 import { useProvidersAddCustomPath } from "@/hooks/providers/use-providers-add-custom-path-mutation";
@@ -59,9 +58,14 @@ import type { HostRpcRegistry } from "@/lib/host";
 import { HostRuntimeContext, useHostBinding } from "@/lib/host/runtime";
 import { useRelativeTimestamp } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
+import {
+  providerIdToGuiHarnessId,
+  sortProviderStatesByProviderOrder,
+} from "@/lib/provider-ordering";
 import { ProviderAuthBadge, ProviderAuthLine } from "./provider-auth-display";
 import { EnvOverrideEditor } from "./env-override-editor";
 import { TraycerSubscriptionSection } from "./traycer-subscription-section";
+import { ProviderRateLimitForProvider } from "./provider-rate-limit-section";
 
 type ProviderId = ProviderCliState["providerId"];
 type ProvidersListQuery = UseQueryResult<
@@ -70,7 +74,7 @@ type ProvidersListQuery = UseQueryResult<
 >;
 
 // The provider to select on mount: the deep-link focus target (mapped from its
-// GUI harness id via `HARNESS_ICON_ID`) when one was requested and is present,
+// GUI harness id) when one was requested and is present,
 // otherwise the first provider in the list.
 function initialActiveProviderId(
   providers: readonly ProviderCliState[],
@@ -78,7 +82,7 @@ function initialActiveProviderId(
   const focusHarnessId = useProvidersFocusStore.getState().focusHarnessId;
   if (focusHarnessId !== null) {
     const match = providers.find(
-      (p) => HARNESS_ICON_ID[p.providerId] === focusHarnessId,
+      (p) => providerIdToGuiHarnessId(p.providerId) === focusHarnessId,
     );
     if (match !== undefined) return match.providerId;
   }
@@ -90,6 +94,9 @@ function initialActiveProviderId(
 // the provider's dashboard.
 const API_KEY_DASHBOARD_URL: Partial<Record<ProviderId, string>> = {
   cursor: "https://cursor.com/dashboard/api?section=user-keys#user-api-keys",
+  droid: "https://app.factory.ai/settings/api-keys",
+  openrouter: "https://openrouter.ai/settings/keys",
+  amp: "https://ampcode.com/settings",
 };
 
 const PROVIDER_DESCRIPTIONS: Record<ProviderId, string> = {
@@ -99,6 +106,18 @@ const PROVIDER_DESCRIPTIONS: Record<ProviderId, string> = {
   cursor:
     "Cursor agent - SDK-driven chats authenticated with your Cursor API key.",
   traycer: "Traycer's managed harness uses the selected OpenCode CLI binary.",
+  openrouter:
+    "OpenRouter - OpenAI-compatible gateway authenticated with your OpenRouter API key.",
+  grok: "Grok agent - xAI's coding CLI via your SuperGrok / X subscription.",
+  qwen: "Qwen Code CLI agent.",
+  kiro: "Kiro agent - Kiro's coding CLI via login or KIRO_API_KEY.",
+  droid:
+    "Droid agent - Factory's coding CLI via your Factory account or API key.",
+  kimi: "Kimi agent - MoonshotAI's coding CLI via your Kimi account.",
+  copilot:
+    "GitHub Copilot CLI agent via your active Copilot subscription or policy.",
+  kilocode: "Kilo Code CLI agent via Kilo login or configured providers.",
+  amp: "Amp agent - Ampcode's coding CLI via your Amp account or API key.",
 };
 
 const TERMINAL_AGENT_ARGS_PLACEHOLDER: Record<
@@ -120,17 +139,18 @@ function terminalAgentArgsPlaceholder(providerId: ProviderId): string {
       return TERMINAL_AGENT_ARGS_PLACEHOLDER.opencode;
     case "cursor":
     case "traycer":
+    case "openrouter":
+    case "grok":
+    case "qwen":
+    case "kiro":
+    case "copilot":
+    case "droid":
+    case "kimi":
+    case "kilocode":
+    case "amp":
       return "CLI arguments (optional)";
   }
 }
-
-const HARNESS_ICON_ID: Record<ProviderId, HarnessIconId> = {
-  "claude-code": "claude",
-  codex: "codex",
-  opencode: "opencode",
-  cursor: "cursor",
-  traycer: "traycer",
-};
 
 // Grid keeps the columns aligned across header + rows; `minmax(0,1fr)` on
 // the Path column guarantees it shrinks/truncates instead of pushing the
@@ -147,7 +167,9 @@ function candidateConfigForProvider(
   state: ProviderCliState,
   providers: readonly ProviderCliState[],
 ): ProviderCandidateConfig {
-  if (state.providerId !== "traycer" || state.candidates.length > 0) {
+  const usesOpenCodeCandidates =
+    state.providerId === "traycer" || state.providerId === "openrouter";
+  if (!usesOpenCodeCandidates || state.candidates.length > 0) {
     return { selected: state.selected, candidates: state.candidates };
   }
 
@@ -355,18 +377,23 @@ function ProvidersRailLayout({
 }: {
   readonly providers: readonly ProviderCliState[];
 }) {
+  const orderedProviders = useMemo(
+    () => sortProviderStatesByProviderOrder(providers),
+    [providers],
+  );
   // A deep-link entry point (e.g. the model picker's "Add API key" CTA) can ask
   // the panel to open on a specific provider via the focus store. Read it once
   // for the initial selection, then clear it so a later manual open starts on
   // the first provider again.
   const [activeId, setActiveId] = useState<ProviderId>(() =>
-    initialActiveProviderId(providers),
+    initialActiveProviderId(orderedProviders),
   );
   useEffect(() => {
     useProvidersFocusStore.getState().clearFocusHarnessId();
   }, []);
   const active =
-    providers.find((p) => p.providerId === activeId) ?? providers[0];
+    orderedProviders.find((p) => p.providerId === activeId) ??
+    orderedProviders[0];
 
   return (
     // Fill the panel body (the shell stretches it to the settings scroll
@@ -375,38 +402,31 @@ function ProvidersRailLayout({
     // overlay - owns the scroll. Height follows the viewport: on shorter
     // screens it shrinks to fit the modal instead of overflowing it.
     <div className="flex h-full">
-      <nav className="flex w-[clamp(10rem,22vw,14rem)] shrink-0 flex-col gap-1 overflow-y-auto border-r border-border/60 p-2">
-        {providers.map((state) => {
-          const selected = state.providerId === active.providerId;
-          return (
-            <button
-              key={state.providerId}
-              type="button"
-              data-active={selected}
-              onClick={() => setActiveId(state.providerId)}
-              className={cn(
-                "flex items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-ui-sm transition-colors",
-                selected
-                  ? "bg-accent text-accent-foreground"
-                  : "text-foreground/70 hover:bg-accent/60 hover:text-accent-foreground",
-              )}
-            >
-              <HarnessIcon harnessId={HARNESS_ICON_ID[state.providerId]} />
-              <span className="flex-1 truncate">
-                {PROVIDER_DISPLAY_NAMES[state.providerId]}
-              </span>
-              {state.enabled ? null : (
-                <span className="size-1.5 shrink-0 rounded-full bg-muted-foreground/50" />
-              )}
-            </button>
-          );
-        })}
+      <nav
+        aria-label="Providers"
+        className="flex w-[clamp(10rem,22vw,14rem)] shrink-0 flex-col gap-1 overflow-y-auto border-r border-border/60 p-2"
+      >
+        <ProviderList
+          ariaLabel="Providers"
+          variant="settings"
+          className="gap-1"
+          rows={orderedProviders.map((state) => ({
+            providerId: state.providerId,
+            active: state.providerId === active.providerId,
+            dimmed: false,
+            enabled: state.enabled,
+            badge: null,
+            description: null,
+            trailing: null,
+            onSelect: setActiveId,
+          }))}
+        />
       </nav>
       <div className="min-h-0 min-w-0 flex-1 overflow-y-auto p-5">
         <ProviderDetail
           key={active.providerId}
           state={active}
-          providers={providers}
+          providers={orderedProviders}
         />
       </div>
     </div>
@@ -454,6 +474,19 @@ function ProviderEnableSwitch(props: {
   );
 }
 
+// Cursor's chat runs through the `@cursor/sdk` (no CLI binary) and its
+// terminal-agent surface is hidden for now, so there's no CLI path to pick.
+// Amp's SDK always resolves and spawns its own bundled `amp` CLI ahead of any
+// override, and Amp has no terminal-agent (TUI) surface either, so a
+// selected/custom path is never consulted anywhere. Both hide the candidates
+// table and show only the API-key section rather than offer a control with no
+// effect.
+function hidesCliCandidates(
+  providerId: ProviderCliState["providerId"],
+): boolean {
+  return providerId === "cursor" || providerId === "amp";
+}
+
 function ProviderDetail({
   state,
   providers,
@@ -462,14 +495,11 @@ function ProviderDetail({
   readonly providers: readonly ProviderCliState[];
 }) {
   const providerId = state.providerId;
-  // Cursor's chat runs through the `@cursor/sdk` (no CLI binary) and its
-  // terminal-agent surface is hidden for now, so there's no CLI path to pick -
-  // hide the candidates table and show only the API-key section. Traycer shares
-  // the OpenCode binary path set: its table shows the OpenCode candidates (or
-  // Traycer's own when present) while selection / custom-path mutations target
-  // the Traycer provider id.
+  // Traycer/OpenRouter share the OpenCode binary path set: their tables show
+  // the OpenCode candidates (or their own when present) while selection /
+  // custom-path mutations target the focused provider id.
   const cliConfig = candidateConfigForProvider(state, providers);
-  const showCliCandidates = providerId !== "cursor";
+  const showCliCandidates = !hidesCliCandidates(providerId);
   const radioName = useId();
   const switchId = useId();
   const [adding, setAdding] = useState(false);
@@ -525,11 +555,6 @@ function ProviderDetail({
             {PROVIDER_DESCRIPTIONS[providerId]}
           </p>
           <ProviderAuthLine state={state} />
-          {!state.enabled && state.disabledBy !== null ? (
-            <p className="mt-0.5 text-ui-xs text-muted-foreground/80">
-              Disabled by {state.disabledBy.handle ?? state.disabledBy.userId}
-            </p>
-          ) : null}
         </div>
         <div className="flex shrink-0 items-center gap-2 text-ui-sm">
           <label htmlFor={switchId} className="text-muted-foreground">
@@ -549,6 +574,7 @@ function ProviderDetail({
       </div>
 
       <TraycerSubscriptionForProvider providerId={providerId} />
+      <ProviderRateLimitForProvider providerId={providerId} />
 
       <div
         className={cn(
@@ -724,8 +750,26 @@ function envNamePlaceholder(providerId: ProviderId): string {
     case "opencode":
     case "traycer":
       return "ANTHROPIC_API_KEY";
+    case "openrouter":
+      return "OPENROUTER_API_KEY";
     case "cursor":
       return "CURSOR_API_KEY";
+    case "grok":
+      return "XAI_API_KEY";
+    case "qwen":
+      return "OPENAI_API_KEY";
+    case "kiro":
+      return "KIRO_API_KEY";
+    case "droid":
+      return "FACTORY_API_KEY";
+    case "kimi":
+      return "KIMI_API_KEY";
+    case "copilot":
+      return "COPILOT_GITHUB_TOKEN";
+    case "kilocode":
+      return "KILO_API_KEY";
+    case "amp":
+      return "AMP_API_KEY";
   }
 }
 
@@ -749,7 +793,7 @@ function TerminalAgentArgsSection({
   const saved = state.terminalAgentArgs;
   const [draft, setDraft] = useState(saved);
 
-  const harnessId = HARNESS_ICON_ID[providerId];
+  const harnessId = providerIdToGuiHarnessId(providerId);
   const supportsTerminalAgent =
     harnessesQuery.data?.harnesses.some(
       (harness) => harness.id === harnessId && harness.modes.includes("tui"),
@@ -859,7 +903,7 @@ function ApiKeySection({ state }: { readonly state: ProviderCliState }) {
           placeholder={
             state.apiKey.source === "stored"
               ? "Replace stored key…"
-              : "Paste your Cursor API key"
+              : `Paste your ${PROVIDER_DISPLAY_NAMES[providerId]} API key`
           }
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
@@ -893,8 +937,8 @@ function ApiKeySection({ state }: { readonly state: ProviderCliState }) {
       </div>
       <p className="text-ui-xs text-muted-foreground">
         {state.apiKey.source === "env"
-          ? "Using CURSOR_API_KEY from your shell environment. Save a key here to override it."
-          : "Stored encrypted on this device. Falls back to CURSOR_API_KEY from your shell when unset."}
+          ? `Using ${envNamePlaceholder(providerId)} from your shell environment. Save a key here to override it.`
+          : `Stored encrypted on this device. Falls back to ${envNamePlaceholder(providerId)} from your shell when unset.`}
       </p>
     </div>
   );

@@ -50,7 +50,7 @@ import {
   useLeftPanelStore,
   type LeftPanelId,
 } from "@/stores/epics/left-panel-store";
-import { isEditablePermissionRole } from "@/lib/epic-collaborator-roles";
+import { isEditableRole } from "@/lib/epic-permissions";
 
 interface TabGroupViewProps {
   readonly epicId: string;
@@ -114,7 +114,7 @@ export const TabGroupView = memo(function TabGroupView(
   );
   const renameTab = useRenameCanvasTab(epicId, tabId);
   const permissionRole = useEpicPermissionRole();
-  const canRenameTabs = isEditablePermissionRole(permissionRole);
+  const canRenameTabs = isEditableRole(permissionRole);
 
   // Per-pane boolean (not the raw `activePaneId`) so switching the active
   // pane re-renders only the two panes whose active state flips, not all of
@@ -468,10 +468,7 @@ interface ComputeIsRemoteDeletedArgs {
   readonly snapshotLoaded: boolean;
   readonly leafArtifact: EpicNodeRef | null;
   readonly liveArtifact:
-    | EpicArtifactProjection
-    | EpicChatProjection
-    | EpicTuiAgentProjection
-    | null;
+    EpicArtifactProjection | EpicChatProjection | EpicTuiAgentProjection | null;
   readonly isSelfDeleted: boolean;
   /**
    * Symmetric counterpart to `isSelfDeleted`: the local user just initiated

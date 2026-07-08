@@ -24,6 +24,7 @@ import {
   promptTouchID,
 } from "../app/system-prefs";
 import { readAccessibilityTheme } from "../app/resilience";
+import { listInstalledFonts } from "../app/installed-fonts";
 import {
   clearProxyCredentials,
   listKnownProxyCredentials,
@@ -39,26 +40,28 @@ import {
   trustCertificate,
   untrustCertificate,
 } from "../app/cert-trust";
-import {
-  handleFindInPage,
-  handleStopFindInPage,
-  installFindResultForwarder,
-} from "../app/find-in-page";
 import { readDisplayTopology } from "../app/screen-monitor";
 import {
   getHardwareAccelerationPreference,
   setHardwareAccelerationPreference,
 } from "../app/gpu-acceleration";
-import {
-  RunnerHostEvent,
-  RunnerHostInvoke,
-} from "../../ipc-contracts/ipc-channels";
+import { RunnerHostInvoke } from "../../ipc-contracts/ipc-channels";
 import type { FileSaveInput } from "../../ipc-contracts/platform-types";
 import { app, BrowserWindow, dialog, type ProxyConfig } from "electron";
 import { randomUUID } from "node:crypto";
 import { copyFile, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { RunnerIpcBridge } from "./runner-ipc-bridge";
+import {
+  getDesktopLogLevel,
+  setDesktopLogLevel,
+} from "../app/desktop-log-level";
+import { readLogLevels, setLogLevels } from "@traycer/protocol/config/store";
+import { isLogLevel, type LogLevel } from "@traycer/protocol/config/log-level";
+import type {
+  LogLevelScope,
+  LogLevelsSnapshot,
+} from "../../ipc-contracts/platform-types";
 
 /**
  * Registers IPC handlers that expose platform-integration primitives to the
@@ -350,20 +353,6 @@ export function registerPlatformIpc(bridge: RunnerIpcBridge): void {
   );
 
   bridge.handleInvoke(
-    RunnerHostInvoke.windowFindInPage,
-    (event, text: unknown, options: unknown) => {
-      return handleFindInPage(event, text, options);
-    },
-  );
-
-  bridge.handleInvoke(
-    RunnerHostInvoke.windowStopFindInPage,
-    (event, action: unknown) => {
-      handleStopFindInPage(event, action);
-    },
-  );
-
-  bridge.handleInvoke(
     RunnerHostInvoke.windowSetOverlayIcon,
     (event, image: unknown, description: unknown) => {
       handleSetOverlayIcon(event, image, description);
@@ -384,6 +373,62 @@ export function registerPlatformIpc(bridge: RunnerIpcBridge): void {
       return setHardwareAccelerationPreference(enabled !== false);
     },
   );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.logLevelsGet,
+    (): Promise<LogLevelsSnapshot> => readLogLevelsSnapshot(),
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.logLevelsSet,
+    async (_event, input: unknown): Promise<LogLevelsSnapshot> => {
+      const { scope, level } = parseLogLevelsSetInput(input);
+      if (scope === "desktop") {
+        await setDesktopLogLevel(level);
+      } else {
+        const levels = await readLogLevels();
+        await setLogLevels(
+          scope === "cli" ? level : levels.cliLogLevel,
+          scope === "host" ? level : levels.hostLogLevel,
+        );
+      }
+      return readLogLevelsSnapshot();
+    },
+  );
+
+  bridge.handleInvoke(RunnerHostInvoke.fontsList, () => {
+    return listInstalledFonts();
+  });
+}
+
+async function readLogLevelsSnapshot(): Promise<LogLevelsSnapshot> {
+  const [levels, desktopLogLevel] = await Promise.all([
+    readLogLevels(),
+    getDesktopLogLevel(),
+  ]);
+  return {
+    cliLogLevel: levels.cliLogLevel,
+    hostLogLevel: levels.hostLogLevel,
+    desktopLogLevel,
+  };
+}
+
+function parseLogLevelsSetInput(input: unknown): {
+  readonly scope: LogLevelScope;
+  readonly level: LogLevel;
+} {
+  if (!isRecord(input)) {
+    throw new Error("logLevels:set requires an object payload");
+  }
+  const scope = input.scope;
+  if (scope !== "cli" && scope !== "host" && scope !== "desktop") {
+    throw new Error("logLevels:set requires scope cli|host|desktop");
+  }
+  const level = input.level;
+  if (!isLogLevel(level)) {
+    throw new Error("logLevels:set requires a valid log level");
+  }
+  return { scope, level };
 }
 
 interface TemporaryDroppedFileInput {
@@ -508,18 +553,4 @@ function sanitizedDroppedFileBase(value: string): string {
     .replace(/^-+|-+$/g, "")
     .slice(0, 80);
   return cleaned.length > 0 ? cleaned : "dropped-file";
-}
-
-/**
- * Per-window setup that depends on the bridge. Wires the find-in-page
- * result forwarder so Chromium's `found-in-page` events reach the
- * renderer's search UI. Called from window-factory when the window is
- * created.
- */
-export function installPerWindowPlatformHooks(
-  webContents: Electron.WebContents,
-): void {
-  installFindResultForwarder(webContents, (snapshot) => {
-    webContents.send(RunnerHostEvent.findInPageResult, snapshot);
-  });
 }

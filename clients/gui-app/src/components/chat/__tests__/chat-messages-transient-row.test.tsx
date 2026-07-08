@@ -89,13 +89,17 @@ describe("ChatMessages transient Virtuoso rows", () => {
     render(
       <ChatMessages
         taskTitle="Transcript"
+        taskId="test-task"
         messages={[message]}
+        backgroundItems={undefined}
         minimapItems={minimapItemsFor([message])}
         scrollStateKey="transient-row-test"
         getMessageActions={() => null}
         nextStepActions={null}
         instanceId="test-instance"
         visible
+        systemOverlayActive={false}
+        scrollRequest={null}
       />,
     );
 
@@ -112,6 +116,7 @@ function minimapItemsFor(
     .map((message) => ({
       id: message.id,
       content: message.content,
+      structuredContent: message.structuredContent,
       attachments: message.attachments,
     }));
 }

@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   ChatEvent,
+  ClaudePendingWake,
   Message,
 } from "@traycer/protocol/persistence/epic/schemas";
 import type {
+  BackgroundItem,
   ChatFileEditApprovalState,
   ChatPendingInterviewState,
   ChatQueueState,
@@ -91,6 +93,14 @@ const FILE_APPROVAL: ChatFileEditApprovalState = {
   requestedAt: 2,
 };
 
+const PENDING_CLAUDE_WAKE: ClaudePendingWake = {
+  sessionId: "claude-session-1",
+  toolUseId: "wake-tool-1",
+  scheduledFor: 1_769_000_000_000,
+  prompt: "Write the standup update.",
+  reason: "Standup",
+};
+
 interface Harness {
   readonly handle: ChatSessionStoreHandle;
   readonly sent: ChatSubscribeClientFrame[];
@@ -142,6 +152,7 @@ function acceptLastAction(harness: Harness): string {
     status: "accepted",
     reason: null,
     code: null,
+    backgroundStopTaskIds: [],
   });
   return frame.clientActionId;
 }
@@ -166,6 +177,8 @@ interface SnapshotFrameInput {
   readonly queue: ChatQueueState;
   readonly pendingFileEditApprovals: ReadonlyArray<ChatFileEditApprovalState>;
   readonly pendingInterviews?: ReadonlyArray<ChatPendingInterviewState>;
+  readonly backgroundItems?: ReadonlyArray<BackgroundItem>;
+  readonly claudePendingWakes?: ReadonlyArray<ClaudePendingWake>;
 }
 
 function emitSnapshotFrame(input: SnapshotFrameInput): void {
@@ -187,6 +200,7 @@ function emitSnapshotFrame(input: SnapshotFrameInput): void {
         isTitleEditedByUser: false,
         settings: null,
         activeSessionChain: null,
+        claudePendingWakes: [...(input.claudePendingWakes ?? [])],
         messages: [...input.messages],
         events: [],
       },
@@ -204,6 +218,9 @@ function emitSnapshotFrame(input: SnapshotFrameInput): void {
       missingWorktreePaths: [],
       pendingFileEditApprovals: [...input.pendingFileEditApprovals],
       accumulatedFileChanges: [],
+      ...(input.backgroundItems === undefined
+        ? {}
+        : { backgroundItems: [...input.backgroundItems] }),
     },
   });
 }
@@ -231,6 +248,7 @@ function emitSnapshotWithWorktree(
         isTitleEditedByUser: false,
         settings: null,
         activeSessionChain: null,
+        claudePendingWakes: [],
         messages: [],
         events: [...events],
       },
@@ -273,6 +291,7 @@ function bindingForEntry(
         setupExitCode: null,
         setupFailedAt: null,
         createdAt: 10,
+        ownedSubmodules: [],
       },
     ],
   };
@@ -470,6 +489,22 @@ describe("createChatSessionStore", () => {
     expect(handle.store.getState().connectionStatus).toBe("open");
   });
 
+  it("preserves pending Claude wakes from snapshot chat state", () => {
+    const harness = createHarness();
+    emitSnapshotFrame({
+      callbacks: harness.callbacks(),
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      claudePendingWakes: [PENDING_CLAUDE_WAKE],
+    });
+
+    expect(harness.handle.store.getState().chat?.claudePendingWakes).toEqual([
+      PENDING_CLAUDE_WAKE,
+    ]);
+  });
+
   it("tracks send actions until actionAck and accepts host messages", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
@@ -497,6 +532,7 @@ describe("createChatSessionStore", () => {
       status: "accepted",
       reason: null,
       code: null,
+      backgroundStopTaskIds: [],
     });
     expect(harness.handle.store.getState().pendingActions).toEqual({});
     expect(harness.handle.store.getState().pendingUserMessages).toEqual([
@@ -627,6 +663,7 @@ describe("createChatSessionStore", () => {
       status: "accepted",
       reason: null,
       code: null,
+      backgroundStopTaskIds: [],
     });
 
     expect(
@@ -750,6 +787,25 @@ describe("createChatSessionStore", () => {
       harness.handle.store.getState().acceptedActions[secondActionId],
     ).toMatchObject({
       action: "resumeQueue",
+    });
+  });
+
+  it("sends pause queue owner actions", () => {
+    const harness = createHarness();
+    emitSnapshot(harness.callbacks(), "owner");
+
+    const clientActionId = harness.handle.store.getState().pauseQueue();
+
+    expect(clientActionId).not.toBeNull();
+    expect(harness.sent).toHaveLength(1);
+    const frame = harness.sent[0];
+    if (frame.kind !== "pauseQueue") {
+      throw new Error("Expected pauseQueue frame");
+    }
+    expect(
+      harness.handle.store.getState().pendingActions[frame.clientActionId],
+    ).toMatchObject({
+      action: "pauseQueue",
     });
   });
 
@@ -895,6 +951,7 @@ describe("createChatSessionStore", () => {
       status: "accepted",
       reason: null,
       code: null,
+      backgroundStopTaskIds: [],
     });
     callbacks.onMessageAccepted({
       kind: "messageAccepted",
@@ -987,6 +1044,7 @@ describe("createChatSessionStore", () => {
       status: "rejected",
       reason: "Attachment upload failed.",
       code: "ATTACHMENT_UPLOAD_FAILED",
+      backgroundStopTaskIds: [],
     });
 
     expect(harness.handle.store.getState().queue.items).toEqual([]);
@@ -1233,6 +1291,7 @@ describe("createChatSessionStore", () => {
       status: "rejected",
       reason: "Only the chat owner can perform this action.",
       code: "NOT_OWNER",
+      backgroundStopTaskIds: [],
     });
 
     expect(harness.handle.store.getState().failedSendRestoration).toMatchObject(
@@ -1308,6 +1367,7 @@ describe("createChatSessionStore", () => {
       status: "rejected",
       reason: "Rejected edit.",
       code: "EDIT_REJECTED",
+      backgroundStopTaskIds: [],
     });
 
     expect(harness.handle.store.getState().failedSendRestoration).toBeNull();
@@ -1616,6 +1676,7 @@ describe("createChatSessionStore", () => {
       status: "rejected",
       reason: "Interview answer rejected.",
       code: "INTERVIEW_REJECTED",
+      backgroundStopTaskIds: [],
     });
     expect(harness.handle.store.getState().pendingInterviews).toEqual([
       { blockId: "question-answer", requestedAt: 2 },
@@ -1636,6 +1697,7 @@ describe("createChatSessionStore", () => {
       status: "accepted",
       reason: null,
       code: null,
+      backgroundStopTaskIds: [],
     });
     expect(harness.handle.store.getState().pendingInterviews).toEqual([
       { blockId: "question-answer", requestedAt: 2 },
@@ -1830,6 +1892,137 @@ describe("createChatSessionStore", () => {
     expect(state.liveAssistantMessage?.blocksVersion).toBe(1);
   });
 
+  it("converts accepted stop-all background tasks into per-task pending state", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const backgroundItem: BackgroundItem = {
+      taskId: "task-1",
+      kind: "command",
+      title: "sleep 60",
+      blockId: "tool-1",
+      parentTaskId: null,
+      scheduledFor: null,
+    };
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      backgroundItems: [backgroundItem],
+    });
+
+    const sent = harness.handle.store.getState().stopAllBackgroundItems();
+    expect(sent).not.toBeNull();
+    expect(
+      harness.handle.store.getState().pendingBackgroundStopAll,
+    ).not.toBeNull();
+
+    const frame = harness.sent.at(-1);
+    if (frame === undefined || frame.kind === "ping") {
+      throw new Error("Expected stop-all frame");
+    }
+    callbacks.onActionAck({
+      kind: "actionAck",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      clientActionId: frame.clientActionId,
+      action: frame.kind,
+      status: "accepted",
+      reason: null,
+      code: null,
+      backgroundStopTaskIds: ["task-1"],
+    });
+    expect(harness.handle.store.getState().pendingBackgroundStopAll).toBeNull();
+    expect(harness.handle.store.getState().pendingBackgroundStops).toEqual({
+      "task-1": frame.clientActionId,
+    });
+
+    callbacks.onTurnStateChanged({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      runStatus: "idle",
+      activeTurn: null,
+      backgroundItems: [backgroundItem],
+    });
+    expect(harness.handle.store.getState().pendingBackgroundStops).toEqual({
+      "task-1": frame.clientActionId,
+    });
+
+    const newBackgroundItem: BackgroundItem = {
+      taskId: "task-2",
+      kind: "command",
+      title: "npm run dev",
+      blockId: "tool-2",
+      parentTaskId: null,
+      scheduledFor: null,
+    };
+    callbacks.onTurnStateChanged({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      runStatus: "idle",
+      activeTurn: null,
+      backgroundItems: [backgroundItem, newBackgroundItem],
+    });
+    expect(harness.handle.store.getState().pendingBackgroundStops).toEqual({
+      "task-1": frame.clientActionId,
+    });
+
+    callbacks.onTurnStateChanged({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      runStatus: "idle",
+      activeTurn: null,
+      backgroundItems: [],
+    });
+    expect(harness.handle.store.getState().pendingBackgroundStops).toEqual({});
+  });
+
+  it("does not apply an ownerless detached background tool terminal to the active turn", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    startRunningTurn(callbacks);
+    callbacks.onBlockDelta({
+      kind: "blockDelta",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      event: {
+        type: "text.delta",
+        blockId: "active-text",
+        timestamp: 4,
+        delta: "Active turn",
+      },
+    });
+
+    callbacks.onBlockDelta({
+      kind: "blockDelta",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      event: {
+        type: "tool_call.completed",
+        blockId: "detached-tool",
+        timestamp: 5,
+        toolName: "Bash",
+        agentMessageSend: null,
+        backgroundTask: true,
+      },
+    });
+
+    const blocks = harness.handle.store.getState().liveAssistantMessage?.blocks;
+    expect(blocks).toEqual([
+      expect.objectContaining({ type: "text", blockId: "active-text" }),
+    ]);
+  });
+
   it("keeps a completed live assistant visible when the next turn starts", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
@@ -1977,6 +2170,7 @@ describe("createChatSessionStore", () => {
           isTitleEditedByUser: false,
           settings: null,
           activeSessionChain: null,
+          claudePendingWakes: [],
           messages: [
             {
               role: "assistant",
@@ -2389,6 +2583,7 @@ describe("createChatSessionStore", () => {
       status: "accepted",
       reason: null,
       code: null,
+      backgroundStopTaskIds: [],
     });
     callbacks.onMessageAccepted({
       kind: "messageAccepted",

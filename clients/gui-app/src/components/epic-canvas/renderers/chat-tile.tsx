@@ -17,9 +17,15 @@ import type {
   UserMessageSender,
 } from "@traycer/protocol/persistence/epic/schemas";
 import type { TokenUsage } from "@traycer/protocol/persistence/epic/foundation";
-import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
+import type {
+  BackgroundItem,
+  ChatRunSettings,
+} from "@traycer/protocol/host/agent/gui/subscribe";
 import type { WorktreeBinding } from "@traycer/protocol/host/worktree-schemas";
-import { ChatMessages } from "@/components/chat/chat-messages";
+import {
+  ChatMessages,
+  type ChatMessageScrollRequest,
+} from "@/components/chat/chat-messages";
 import { ChatMarkdownLinkProvider } from "@/components/chat/chat-markdown-link-provider";
 import {
   ChatForkDialog,
@@ -29,6 +35,10 @@ import {
   ChatDiffTargetContext,
   type ChatSnapshotDiffOpener,
 } from "@/components/chat/chat-diff-target";
+import {
+  ChatScrollToBlockContext,
+  type ChatScrollCardKind,
+} from "@/components/chat/chat-scroll-to-block";
 import {
   ChatPlanActionsContext,
   type ChatPlanActionsContextValue,
@@ -60,14 +70,20 @@ import type { EpicNodeRef } from "@/stores/epics/canvas/types";
 import {
   mentionRootsFromWorktreeBinding,
   useWorkspaceMentionRoots,
+  worktreeBindingIsFolderless,
 } from "@/hooks/composer/use-workspace-mention-roots";
 import { useChatSessionHandle } from "@/lib/registries/chat-session-registry";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
-import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
+import type {
+  ChatMessage as ChatMessageModel,
+  MessageSegment,
+} from "@/stores/composer/chat-store";
 import type {
   ChatSessionState,
   ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
+import { useSubagentOpenStore } from "@/stores/chats/subagent-open-store";
+import { useToolOpenStore } from "@/stores/chats/tool-open-store";
 import {
   useRenderedMessages,
   type RenderedMessagesDisplayContext,
@@ -117,6 +133,7 @@ import {
   type ComposerRunSettingsEntry,
 } from "@/stores/composer/composer-run-settings-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import { useAnySystemOverlayActive } from "@/stores/tabs/use-system-tab-modal";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import {
   makeSnapshotCumulativeBundleDiffTile,
@@ -141,6 +158,7 @@ import {
   ChatLowerInteractionSurfaces,
   InertChatComposer,
 } from "./chat-tile-lower-surfaces";
+import { composerHasBlockingApprovals } from "./chat-approval-visibility";
 import {
   chatTileUiReducer,
   createInitialChatTileUiState,
@@ -151,6 +169,7 @@ import {
   userMessageSenderForProfile,
   plainTextPromptContent,
   composerTurnStatus,
+  resolvedTurnStatus,
   chatTileCanAct,
   findPendingInterview,
 } from "./chat-tile-session-state";
@@ -159,6 +178,7 @@ import { SurfaceActivityProvider } from "@/components/home/composer/surface-acti
 
 const EMPTY_MENTION_ROOTS: ReadonlyArray<string> = [];
 const EMPTY_WORKSPACE_PATH_SET: ReadonlySet<string> = new Set();
+const EMPTY_BACKGROUND_STOP_TASK_IDS: ReadonlySet<string> = new Set();
 
 interface ChatTileProps {
   node: EpicNodeRef;
@@ -292,6 +312,7 @@ function ChatTileFallbackComposer(props: {
           ownerId: props.node.id,
           binding: null,
           isOwnerActive: false,
+          hasActiveTurn: false,
           // Pre-subscribe setup state: no binding resolved yet, so the chip shows
           // its loading affordance (never a "no folders" terminal state).
           missingWorktreePaths: [],
@@ -307,6 +328,7 @@ function ChatTileFallbackComposer(props: {
       taskId={props.node.id}
       isActive={props.isActive}
       mentionRoots={EMPTY_MENTION_ROOTS}
+      fallbackToGlobalMentionRoots
       currentEpicId={props.currentEpicId}
       workspaceControls={workspaceControls}
       topSpacing="normal"
@@ -409,11 +431,150 @@ function chatTileAccessFlags(
   };
 }
 
+type BackgroundBlockSearchNode =
+  | MessageSegment
+  | {
+      readonly id: string;
+      readonly children: ReadonlyArray<BackgroundBlockSearchNode>;
+    }
+  | {
+      readonly id: string;
+      readonly files: ReadonlyArray<BackgroundBlockSearchNode>;
+    }
+  | {
+      readonly id: string;
+      readonly segments: ReadonlyArray<BackgroundBlockSearchNode>;
+    }
+  | {
+      readonly id: string;
+      readonly group: {
+        readonly segments: ReadonlyArray<BackgroundBlockSearchNode>;
+      };
+    };
+
+function segmentContainsBackgroundBlock(
+  segment: BackgroundBlockSearchNode,
+  blockId: string,
+): boolean {
+  if (segment.id === blockId) return true;
+  return backgroundBlockSearchChildren(segment).some((child) =>
+    segmentContainsBackgroundBlock(child, blockId),
+  );
+}
+
+function backgroundBlockSearchChildren(
+  segment: BackgroundBlockSearchNode,
+): ReadonlyArray<BackgroundBlockSearchNode> {
+  if ("children" in segment) return segment.children;
+  if ("files" in segment) return segment.files;
+  if ("segments" in segment) return segment.segments;
+  if ("group" in segment) return segment.group.segments;
+  return [];
+}
+
+function messageIdForBlock(
+  messages: ReadonlyArray<ChatMessageModel>,
+  blockId: string,
+): string | null {
+  const owner = messages.find((message) =>
+    message.segments.some((segment) =>
+      segmentContainsBackgroundBlock(segment, blockId),
+    ),
+  );
+  return owner?.id ?? null;
+}
+
+interface BackgroundClickTarget {
+  readonly blockId: string;
+  readonly card: ChatScrollCardKind;
+}
+
+// Both a plain agent and a workflow run render as a `subagent`-block card (a
+// workflow is a dedicated rendering of that same block, never a distinct
+// persisted type), so either kind opens via the same subagent open-store.
+function backgroundItemCardKind(
+  kind: BackgroundItem["kind"],
+): ChatScrollCardKind {
+  return kind === "subagent" || kind === "workflow" ? "subagent" : "tool";
+}
+
+/**
+ * A nested agent - and anything it owns (commands/monitors, or a workflow's
+ * fleet-attributed background work) - has no card of its own in the
+ * transcript; it only renders inside its top-level ancestor's "Sub-agents"
+ * section. Clicking its panel row must therefore scroll to and expand the
+ * ANCESTOR card, walking up `parentTaskId` until a top-level item (null
+ * parent) is reached. If the chain runs into an ancestor that already
+ * settled (no longer in the live `allItems` list, so its blockId is
+ * unknown) or a cycle, the walk stops at the deepest item it could still
+ * resolve - an honest best-effort target rather than a wrong guess.
+ */
+function resolveBackgroundClickTarget(
+  item: BackgroundItem,
+  allItems: ReadonlyArray<BackgroundItem>,
+): BackgroundClickTarget {
+  const itemsByTaskId = new Map(
+    allItems.map((entry) => [entry.taskId, entry] as const),
+  );
+  const visited = new Set<string>([item.taskId]);
+  let current = item;
+  while (current.parentTaskId !== null && !visited.has(current.parentTaskId)) {
+    const parent = itemsByTaskId.get(current.parentTaskId);
+    if (parent === undefined) break;
+    visited.add(parent.taskId);
+    current = parent;
+  }
+  return {
+    blockId: current.blockId,
+    card: backgroundItemCardKind(current.kind),
+  };
+}
+
 function ChatTileSessionView(props: ChatTileSessionViewProps) {
   const view = useChatTileSessionViewModel(props);
   const hostId = useTabHostId();
+  const systemOverlayActive = useAnySystemOverlayActive();
   const openPreview = useEpicCanvasStore((s) => s.openTilePreviewInTab);
   const openPinned = useEpicCanvasStore((s) => s.openTileInTab);
+  const [backgroundScrollRequest, setBackgroundScrollRequest] =
+    useState<ChatMessageScrollRequest | null>(null);
+  const backgroundScrollRequestIdRef = useRef(0);
+  // Shared transcript jump: resolve the owning message, expand the card via its
+  // open-store, and bump the scroll request the messages surface watches. Both
+  // the Background panel rows and the autonomous-resume marker route through
+  // here so the two navigations behave identically.
+  const scrollToBlock = useCallback(
+    (blockId: string, card: ChatScrollCardKind): void => {
+      const messageId = messageIdForBlock(view.messages, blockId);
+      if (messageId === null) return;
+      if (card === "subagent") {
+        useSubagentOpenStore
+          .getState()
+          .setOpen(props.node.instanceId, blockId, true);
+      } else {
+        useToolOpenStore
+          .getState()
+          .setOpen(props.node.instanceId, blockId, true);
+      }
+      backgroundScrollRequestIdRef.current += 1;
+      setBackgroundScrollRequest({
+        messageId,
+        blockId,
+        requestId: backgroundScrollRequestIdRef.current,
+      });
+    },
+    [props.node.instanceId, view.messages],
+  );
+  const scrollToBackgroundItem = useCallback(
+    (item: BackgroundItem): void => {
+      const target = resolveBackgroundClickTarget(
+        item,
+        view.lower.backgroundItems ?? [],
+      );
+      scrollToBlock(target.blockId, target.card);
+    },
+    [scrollToBlock, view.lower.backgroundItems],
+  );
   // Canvas-owned implementation of the chat file-change click contract. The
   // chat components receive only inert row handlers; they do not know about
   // canvas stores, tab ids, or tile factories.
@@ -470,74 +631,85 @@ function ChatTileSessionView(props: ChatTileSessionViewProps) {
 
   return (
     <ChatDiffTargetContext.Provider value={diffOpener}>
-      <div
-        data-testid="chat-tile"
-        data-node-id={view.node.id}
-        className="flex h-full min-h-0 flex-col"
-      >
-        <ChatSessionMessagesSurface
-          snapshotLoaded={view.snapshotLoaded}
-          fatalClose={view.fatalClose}
-          onRetry={view.onChatRetry}
-          restoreContext={view.restoreContext}
-          node={view.node}
-          viewTabId={view.viewTabId}
-          tabHostId={view.tabHostId}
-          workspaceRoots={view.linkResolutionRoots}
-          messages={view.messages}
-          minimapItems={view.minimapItems}
-          surfaceVisible={view.surfaceVisible}
-          getMessageActions={view.getMessageActions}
-          nextStepActions={view.nextStepActions}
-          planActions={view.planActions}
-        />
-        <ChatTileErrorNoticeToasts handle={view.handle} />
-        {/*
-         * SurfaceActivityProvider narrows catalog/provider query subscriptions
-         * to the pane+tab that is actually visible. Hidden keep-alive chat panes
-         * (surfaceVisible = false) mark their harness-catalog and model-list
-         * queries as subscribed:false, releasing their cache observer slots. The
-         * queries remain in the cache and refetch on resubscribe (i.e. when the
-         * pane becomes visible again), so the composer never shows stale data on
-         * return. Providers compose by narrowing only — the context can never
-         * widen past the parent.
-         */}
-        <SurfaceActivityProvider active={view.surfaceVisible}>
-          <ChatLowerInteractionSurfaces
-            epicId={view.currentEpicId}
-            chatId={view.node.id}
-            runtime={view.lower.runtime}
-            access={view.lower.access}
-            turn={view.lower.turn}
-            interview={view.lower.interview}
-            approvals={view.lower.approvals}
-            queue={view.lower.queue}
-            composer={view.lower.composer}
-            todo={view.todo}
+      <ChatScrollToBlockContext.Provider value={scrollToBlock}>
+        <div
+          data-testid="chat-tile"
+          data-node-id={view.node.id}
+          className="flex h-full min-h-0 flex-col"
+        >
+          <ChatSessionMessagesSurface
+            snapshotLoaded={view.snapshotLoaded}
+            fatalClose={view.fatalClose}
+            onRetry={view.onChatRetry}
             restoreContext={view.restoreContext}
+            node={view.node}
+            viewTabId={view.viewTabId}
+            tabHostId={view.tabHostId}
+            workspaceRoots={view.linkResolutionRoots}
+            messages={view.messages}
+            backgroundItems={view.lower.backgroundItems}
+            minimapItems={view.minimapItems}
+            scrollRequest={backgroundScrollRequest}
+            surfaceVisible={view.surfaceVisible}
+            systemOverlayActive={systemOverlayActive}
+            getMessageActions={view.getMessageActions}
+            nextStepActions={view.nextStepActions}
+            planActions={view.planActions}
           />
-        </SurfaceActivityProvider>
-        <RevertOnEditDialog
-          open={view.revertOnEdit.open}
-          onOpenChange={view.revertOnEdit.onOpenChange}
-          onRevert={view.revertOnEdit.onRevert}
-          onDontRevert={view.revertOnEdit.onDontRevert}
-          artifactCount={view.revertOnEdit.artifactCount}
-        />
-        <SteerSettingsConflictDialog
-          open={view.steerRestart.open}
-          onOpenChange={view.steerRestart.onOpenChange}
-          onRestart={view.steerRestart.onRestart}
-          changed={view.steerRestart.changed}
-        />
-        <ChatForkDialog
-          open={view.fork.open}
-          target={view.fork.target}
-          epicId={view.currentEpicId}
-          tabId={view.viewTabId}
-          onOpenChange={view.fork.onOpenChange}
-        />
-      </div>
+          <ChatTileErrorNoticeToasts handle={view.handle} />
+          {/*
+           * SurfaceActivityProvider narrows catalog/provider query subscriptions
+           * to the pane+tab that is actually visible. Hidden keep-alive chat panes
+           * (surfaceVisible = false) mark their harness-catalog and model-list
+           * queries as subscribed:false, releasing their cache observer slots. The
+           * queries remain in the cache and refetch on resubscribe (i.e. when the
+           * pane becomes visible again), so the composer never shows stale data on
+           * return. Providers compose by narrowing only — the context can never
+           * widen past the parent.
+           */}
+          <SurfaceActivityProvider active={view.surfaceVisible}>
+            <ChatLowerInteractionSurfaces
+              epicId={view.currentEpicId}
+              chatId={view.node.id}
+              runtime={view.lower.runtime}
+              access={view.lower.access}
+              turn={view.lower.turn}
+              interview={view.lower.interview}
+              approvals={view.lower.approvals}
+              queue={view.lower.queue}
+              composer={view.lower.composer}
+              todo={view.todo}
+              restoreContext={view.restoreContext}
+              backgroundItems={view.lower.backgroundItems}
+              backgroundStopPendingTaskIds={
+                view.lower.backgroundStopPendingTaskIds
+              }
+              backgroundStopAllPending={view.lower.backgroundStopAllPending}
+              onBackgroundItemClick={scrollToBackgroundItem}
+            />
+          </SurfaceActivityProvider>
+          <RevertOnEditDialog
+            open={view.revertOnEdit.open}
+            onOpenChange={view.revertOnEdit.onOpenChange}
+            onRevert={view.revertOnEdit.onRevert}
+            onDontRevert={view.revertOnEdit.onDontRevert}
+            artifactCount={view.revertOnEdit.artifactCount}
+          />
+          <SteerSettingsConflictDialog
+            open={view.steerRestart.open}
+            onOpenChange={view.steerRestart.onOpenChange}
+            onRestart={view.steerRestart.onRestart}
+            changed={view.steerRestart.changed}
+          />
+          <ChatForkDialog
+            open={view.fork.open}
+            target={view.fork.target}
+            epicId={view.currentEpicId}
+            tabId={view.viewTabId}
+            onOpenChange={view.fork.onOpenChange}
+          />
+        </div>
+      </ChatScrollToBlockContext.Provider>
     </ChatDiffTargetContext.Provider>
   );
 }
@@ -579,6 +751,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   const replaceDraftContent = useComposerDraftStore(
     (state) => state.replaceDraft,
   );
+  const clearDraftContent = useComposerDraftStore((state) => state.clearDraft);
   const defaultPermission = useSettingsStore(
     (state) => state.defaultPermission,
   );
@@ -660,10 +833,14 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       queue: s.queue,
       runStatus: s.runStatus,
       activeTurn: s.activeTurn,
+      turnInProgress: s.turnInProgress,
       pendingApprovals: s.pendingApprovals,
       pendingFileEditApprovals: s.pendingFileEditApprovals,
       pendingInterviews: s.pendingInterviews,
       accumulatedFileChanges: s.accumulatedFileChanges,
+      backgroundItems: s.backgroundItems,
+      pendingBackgroundStops: s.pendingBackgroundStops,
+      pendingBackgroundStopAll: s.pendingBackgroundStopAll,
       restore: s.restore,
       pendingActions: s.pendingActions,
       acceptedActions: s.acceptedActions,
@@ -720,15 +897,18 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     () => mentionRootsFromWorktreeBinding(state.worktreeBinding),
     [state.worktreeBinding],
   );
+  const isFolderlessWorkspace = worktreeBindingIsFolderless(
+    state.worktreeBinding,
+  );
   // Roots that markdown link resolution (the chat link policy) resolves
-  // relative assistant links against. A no-binding chat runs local against the
-  // epic's workspace folders (see `deriveWorktreeBindingWorkspaceAvailability`),
-  // so `mentionRoots` is empty and a relative link like `[app](src/app.ts)`
-  // would dead-click. Mirror the composer's fallback
-  // (`useWorkspaceMentionRoots(mentionRoots, true)`) so links resolve against
-  // the same folders the composer mentions do; a bound chat returns its
-  // non-empty binding unchanged, so this is a no-op there.
-  const linkResolutionRoots = useWorkspaceMentionRoots(mentionRoots, true);
+  // relative assistant links against. In inherited workspace mode, an empty
+  // binding falls back to the Epic folders. Explicit folderless mode disables
+  // that fallback so workspace file/folder links don't resolve through unrelated
+  // global roots.
+  const linkResolutionRoots = useWorkspaceMentionRoots(
+    mentionRoots,
+    !isFolderlessWorkspace,
+  );
   // The composer is runnable when the chat carries its own folder binding OR
   // when the epic has at least one workspace folder (the chat then runs local
   // against it). The workspace selector itself stays owner-scoped to the
@@ -770,6 +950,21 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     [displayContext],
   );
   const activeTurnId = state.activeTurn?.turnId ?? null;
+  // In-progress UI (restore gating, owner-active, the per-row "Working…" /
+  // "Stopping…" indicator below) is driven by the host-owned chat
+  // `runStatus` - the single source of truth that covers the first turn and
+  // every multi-turn send and flips to `stopping` the moment a stop is
+  // requested. We map it onto the composer's turn-status prop shape
+  // (`running`/`stopping`/null).
+  const activeTurnStatus = composerTurnStatus(state.runStatus);
+  // Several consumers below (the row indicator, the composer Stop/Send
+  // toggle, restore gating) need a narrower question than the label above:
+  // `runStatus` also reads "running" while a queued item is pending or
+  // visible background work outlives the turn (Bash `run_in_background` / a
+  // subagent / Monitor) - neither of which corresponds to an active turn
+  // they can act on or attribute an indicator to. See
+  // `resolvedTurnStatus`'s doc comment for the exact derivation.
+  const composerActiveTurnStatus = resolvedTurnStatus(state, activeTurnStatus);
   const renderedMessages = useRenderedMessages(
     {
       messages: state.messages,
@@ -780,7 +975,12 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       pendingApprovals: state.pendingApprovals,
       pendingFileEditApprovals: state.pendingFileEditApprovals,
       pendingInterviews: state.pendingInterviews,
-      runStatus: state.runStatus,
+      // Narrowed, not the raw `state.runStatus`: this drives the per-row
+      // "Working…"/"Stopping…" indicator, which belongs to a genuinely
+      // active turn - passing the raw value synthesizes a duplicate, live
+      // indicator row during background-only phase (no active turn) even
+      // after the real row has already settled to its "done" footer.
+      runStatus: composerActiveTurnStatus ?? "idle",
       // Binding identity for the in-transcript setup card (replaces the old
       // strip's mount-time tuple): epic + chat owner route the retry mutation
       // and scope the terminal-liveness query; `viewTabId` rides the synthetic
@@ -858,14 +1058,8 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   const approvalDecisionPending = Object.values(state.pendingActions).some(
     (action) => action.action === "approvalDecision",
   );
-  // In-progress UI (composer stop button, restore gating, owner-active) is
-  // driven by the host-owned chat `runStatus` - the single source of truth
-  // that covers the first turn and every multi-turn send and flips to
-  // `stopping` the moment a stop is requested. We map it onto the composer's
-  // turn-status prop shape (`running`/`stopping`/null).
-  const activeTurnStatus = composerTurnStatus(state.runStatus);
-  const stopDisabled =
-    !canAct || stopPending || activeTurnStatus === "stopping";
+  const turnStopBusy = stopPending || composerActiveTurnStatus === "stopping";
+  const stopDisabled = !canAct || turnStopBusy;
   const chatActions = useChatActions(handle);
   const restoreActionPending = useMemo(
     () =>
@@ -894,7 +1088,15 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       accessRole: state.access?.role ?? null,
       currentUserId,
       activeHostId,
-      activeTurnStatus,
+      // Restoring/reverting files while a turn is actively writing is unsafe,
+      // but that's a turn-scoped concern, same as the composer's Stop button -
+      // `runStatus` alone also reads non-idle during background-only phase
+      // (Bash `run_in_background` / a subagent / Monitor with no active
+      // turn), which restore/revert can't conflict with. Use the same
+      // narrowed value the Stop button uses instead of the raw one, or this
+      // would show "Wait for the active turn to finish" and block restore
+      // during a window where nothing is actually running against it.
+      activeTurnStatus: composerActiveTurnStatus,
       localSnapshotsClearedAt: localSnapshotClearMarker,
       restore: state.restore,
       restoreActionPending,
@@ -905,7 +1107,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     [
       accumulatedFileChanges,
       activeHostId,
-      activeTurnStatus,
+      composerActiveTurnStatus,
       chatActions.restoreCheckpoint,
       chatActions.revertFileChanges,
       currentUserId,
@@ -1102,9 +1304,16 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       state.pendingUserMessages,
     ],
   );
+  const canSendNextStep =
+    canAct &&
+    !turnStopBusy &&
+    !composerHasBlockingApprovals(
+      state.pendingApprovals,
+      state.pendingFileEditApprovals.length,
+    );
   const sendNextStep = useCallback(
     (option: TraycerNextStepOption): boolean => {
-      if (!canAct) return false;
+      if (!canSendNextStep) return false;
       const sender = userMessageSenderForProfile(profile);
       if (sender === null) return false;
       const content = buildSubmittedChatJSONContent(
@@ -1114,14 +1323,14 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
         chatActions.sendMessage(content, sender, nextStepSettings) !== null
       );
     },
-    [canAct, chatActions, nextStepSettings, profile],
+    [canSendNextStep, chatActions, nextStepSettings, profile],
   );
   const nextStepActions = useMemo(
     () => ({
-      canSend: canAct,
+      canSend: canSendNextStep,
       onSend: sendNextStep,
     }),
-    [canAct, sendNextStep],
+    [canSendNextStep, sendNextStep],
   );
   const sendImplementPlanMessage = useCallback((): boolean => {
     if (!canAct) return false;
@@ -1162,6 +1371,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     handle,
     nodeId: node.id,
     replaceDraftContent,
+    clearDraftContent,
     currentComposerSettings,
     currentEpicId,
     editingQueueItemId: uiState.editingQueueItemId,
@@ -1189,6 +1399,14 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
           ownerId: node.id,
           binding: state.worktreeBinding,
           isOwnerActive: activeTurnStatus !== null,
+          // Distinguishes WHY the owner reads active, for the disabled-remove
+          // tooltip wording only (the disable decision itself stays on the
+          // broader `isOwnerActive`, unchanged - a live background Bash/Monitor
+          // could still be reading or writing in the folder even with no
+          // foreground turn active). `false` here means it's active purely
+          // because of visible background work, not a turn the "stop" wording
+          // would make sense for.
+          hasActiveTurn: composerActiveTurnStatus !== null,
           missingWorktreePaths: effectiveMissingPaths,
           bindingResolved: state.snapshotLoaded,
           onBindingCommitted: clearMissingPathsAfterBindingCommit,
@@ -1203,6 +1421,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       effectiveMissingPaths,
       state.snapshotLoaded,
       activeTurnStatus,
+      composerActiveTurnStatus,
       clearMissingPathsAfterBindingCommit,
       viewTabId,
     ],
@@ -1211,14 +1430,15 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     () => <ContextUsageChipForChat handle={handle} />,
     [handle],
   );
-  // Composer v3 cluster: host select + Workspace rail picker on the left, the
-  // context-usage indicator pushed to the right edge of the row. Per-folder
-  // Environment config lives inside the selected Workspace panel.
+  // Composer v3 cluster: host select + Workspace rail picker on the left, with
+  // the context-usage leaf owning its trailing chip and optional full-width
+  // pinned strip. Per-folder Environment config lives inside the selected
+  // Workspace panel.
   const workspaceControls = useMemo(
     () => (
       <>
         <div className="min-w-0 overflow-hidden">{hostWorkspaceSelector}</div>
-        <div className="min-w-0 justify-self-end">{usageChip}</div>
+        {usageChip}
       </>
     ),
     [hostWorkspaceSelector, usageChip],
@@ -1241,11 +1461,11 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
 
   const lowerTurn = useMemo(
     () => ({
-      activeTurnStatus,
+      activeTurnStatus: composerActiveTurnStatus,
       stopDisabled,
       onStopTurn: chatActions.stopTurn,
     }),
-    [activeTurnStatus, stopDisabled, chatActions.stopTurn],
+    [composerActiveTurnStatus, stopDisabled, chatActions.stopTurn],
   );
 
   const lowerInterview = useMemo(
@@ -1277,11 +1497,14 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       editingItem: editingQueueItem,
       editingItemId: activeEditingQueueItemId,
       value: state.queue,
+      onPause: chatActions.pauseQueue,
       onResume: chatActions.resumeQueue,
       onEdit: editQueuedItem,
       onCancel: cancelQueuedItem,
       onAbortSteer: abortSteerQueuedItem,
       onCancelEdit: cancelQueueEditMode,
+      onStopBackgroundItem: chatActions.stopBackgroundItem,
+      onStopAllBackgroundItems: chatActions.stopAllBackgroundItems,
       onReorder: reorderQueuedItem,
       onSteerNow: steerQueuedItemNow,
     }),
@@ -1289,11 +1512,14 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       editingQueueItem,
       activeEditingQueueItemId,
       state.queue,
+      chatActions.pauseQueue,
       chatActions.resumeQueue,
       editQueuedItem,
       cancelQueuedItem,
       abortSteerQueuedItem,
       cancelQueueEditMode,
+      chatActions.stopBackgroundItem,
+      chatActions.stopAllBackgroundItems,
       reorderQueuedItem,
       steerQueuedItemNow,
     ],
@@ -1306,6 +1532,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       nodeId: node.id,
       isActive,
       mentionRoots,
+      fallbackToGlobalMentionRoots: !isFolderlessWorkspace,
       currentEpicId,
       onSubmitMessage: submitMessage,
       onSettingsChange: handleComposerSettingsChange,
@@ -1319,6 +1546,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       node.id,
       isActive,
       mentionRoots,
+      isFolderlessWorkspace,
       currentEpicId,
       submitMessage,
       handleComposerSettingsChange,
@@ -1326,6 +1554,17 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       workspaceAvailability,
     ],
   );
+
+  const backgroundStopPendingTaskIds = useMemo<ReadonlySet<string>>(() => {
+    const taskIds = [
+      ...Object.keys(state.pendingBackgroundStops),
+      ...(state.pendingBackgroundStopAll === null
+        ? []
+        : Array.from(state.pendingBackgroundStopAll.taskIds)),
+    ];
+    if (taskIds.length === 0) return EMPTY_BACKGROUND_STOP_TASK_IDS;
+    return new Set(taskIds);
+  }, [state.pendingBackgroundStopAll, state.pendingBackgroundStops]);
 
   return {
     handle,
@@ -1353,6 +1592,11 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       approvals: lowerApprovals,
       queue: lowerQueue,
       composer: lowerComposer,
+      backgroundItems: state.backgroundItems,
+      backgroundStopPendingTaskIds,
+      backgroundStopAllPending:
+        state.pendingBackgroundStopAll !== null ||
+        backgroundStopPendingTaskIds.size > 0,
     },
     todo: pinnedTodoRenderState.todo,
     revertOnEdit,
@@ -1376,8 +1620,11 @@ interface ChatSessionMessagesSurfaceProps {
   readonly tabHostId: string | null;
   readonly workspaceRoots: ReadonlyArray<string>;
   readonly messages: ReadonlyArray<ChatMessageModel>;
+  readonly backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
   readonly minimapItems: ReadonlyArray<ChatUserMinimapItem>;
+  readonly scrollRequest: ChatMessageScrollRequest | null;
   readonly surfaceVisible: boolean;
+  readonly systemOverlayActive: boolean;
   readonly getMessageActions: (
     message: ChatMessageModel,
   ) => ChatMessageActions | null;
@@ -1451,13 +1698,17 @@ function ChatSessionMessagesSurface(
           >
             <ChatMessages
               taskTitle={props.node.name}
+              taskId={props.node.id}
               messages={props.messages}
+              backgroundItems={props.backgroundItems}
               minimapItems={props.minimapItems}
+              scrollRequest={props.scrollRequest}
               scrollStateKey={props.node.instanceId}
               getMessageActions={props.getMessageActions}
               nextStepActions={props.nextStepActions}
               instanceId={props.node.instanceId}
               visible={props.surfaceVisible}
+              systemOverlayActive={props.systemOverlayActive}
             />
           </ChatMarkdownLinkProvider>
         </WorkingVerbContext.Provider>
@@ -1532,6 +1783,7 @@ function useChatMissingWorktreeFocusRefresh(args: {
 }): void {
   const client = useTabHostClient();
   const bindingQuery = useHostQuery({
+    cacheKeyIdentity: undefined,
     client,
     method: "worktree.getBinding",
     params: { epicId: args.epicId, ownerId: args.chatId, ownerKind: "chat" },
@@ -1638,6 +1890,7 @@ function useCachedCollaborators(
 ): SenderDisplayContext["collaborators"] {
   const client = useHostClient();
   const { data } = useHostQuery({
+    cacheKeyIdentity: undefined,
     client,
     method: "epic.listCollaborators",
     params: { epicId },

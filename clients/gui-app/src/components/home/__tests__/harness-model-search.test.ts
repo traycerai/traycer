@@ -19,31 +19,61 @@ import { ALL_PERMISSION_MODES } from "@traycer/protocol/persistence/epic/foundat
 const CODEX_HARNESS: HarnessOption = {
   id: "codex",
   label: "Codex",
+  enabled: true,
   available: true,
   error: null,
   modes: ["gui", "tui"],
   requiresApiKey: false,
   supportedPermissionModes: [...ALL_PERMISSION_MODES],
+  availabilityPending: false,
 };
 
 const CLAUDE_HARNESS: HarnessOption = {
   id: "claude",
   label: "Claude",
+  enabled: true,
   available: true,
   error: null,
   modes: ["gui", "tui"],
   requiresApiKey: false,
   supportedPermissionModes: [...ALL_PERMISSION_MODES],
+  availabilityPending: false,
 };
 
 const OPENCODE_HARNESS: HarnessOption = {
   id: "opencode",
   label: "OpenCode",
+  enabled: true,
   available: true,
   error: null,
   modes: ["gui", "tui"],
   requiresApiKey: false,
   supportedPermissionModes: [...ALL_PERMISSION_MODES],
+  availabilityPending: false,
+};
+
+const OPENROUTER_HARNESS: HarnessOption = {
+  id: "openrouter",
+  label: "OpenRouter",
+  enabled: true,
+  available: true,
+  error: null,
+  modes: ["gui"],
+  requiresApiKey: true,
+  supportedPermissionModes: [...ALL_PERMISSION_MODES],
+  availabilityPending: false,
+};
+
+const KILOCODE_HARNESS: HarnessOption = {
+  id: "kilocode",
+  label: "Kilo Code",
+  enabled: true,
+  available: true,
+  error: null,
+  modes: ["gui", "tui"],
+  requiresApiKey: false,
+  supportedPermissionModes: [...ALL_PERMISSION_MODES],
+  availabilityPending: false,
 };
 
 function model(overrides: Partial<ModelOption>): ModelOption {
@@ -58,6 +88,7 @@ function model(overrides: Partial<ModelOption>): ModelOption {
     supportedReasoningEfforts: [],
     defaultServiceTier: null,
     supportedServiceTiers: [],
+    deprecationNotice: null,
     metadata: {},
   };
   return {
@@ -343,6 +374,156 @@ describe("harness model search", () => {
     ]);
   });
 
+  it("groups OpenRouter models by vendor and trims the redundant vendor prefix from rows", () => {
+    const models = [
+      model({
+        harnessId: "openrouter",
+        slug: "openrouter:anthropic/claude-opus",
+        label: "Anthropic: Claude Opus",
+        metadata: {
+          openCodeProviderId: "anthropic",
+          openCodeProviderLabel: "Anthropic",
+        },
+      }),
+      model({
+        harnessId: "openrouter",
+        slug: "openrouter:~openai/gpt-latest",
+        label: "OpenAI GPT Latest",
+        metadata: {
+          openCodeProviderId: "openai",
+          openCodeProviderLabel: "OpenAI",
+        },
+      }),
+      model({
+        harnessId: "openrouter",
+        slug: "openrouter:openrouter/owl-alpha",
+        label: "Owl Alpha",
+        metadata: {
+          openCodeProviderId: "openrouter",
+          openCodeProviderLabel: "OpenRouter",
+        },
+      }),
+      model({
+        harnessId: "openrouter",
+        slug: "openrouter:z-ai/glm-4.6",
+        label: "Z.ai: GLM 4.6",
+        metadata: {
+          openCodeProviderId: "z-ai",
+          openCodeProviderLabel: "Z.ai",
+        },
+      }),
+    ];
+    const rows = buildHarnessModelRows(OPENROUTER_HARNESS, models);
+
+    // Harness-agnostic grouping off the host-declared metadata, by vendor label.
+    // browseLabel drops the vendor prefix the name carries: ": " for normal names
+    // ("Z.ai: GLM 4.6" -> "GLM 4.6"), " " for the "latest" aliases ("OpenAI GPT
+    // Latest" -> "GPT Latest"); a label with no vendor prefix ("Owl Alpha") is
+    // left untouched.
+    expect(
+      rows.map((row) => [row.providerGroupLabel, row.browseLabel]),
+    ).toEqual([
+      ["Anthropic", "Claude Opus"],
+      ["OpenAI", "GPT Latest"],
+      ["OpenRouter", "Owl Alpha"],
+      ["Z.ai", "GLM 4.6"],
+    ]);
+    // The full vendor-qualified label is preserved for search.
+    expect(rows[3]?.label).toBe("Z.ai: GLM 4.6");
+    // The collapsed trigger shows the trimmed name.
+    expect(
+      findModelLabel(models, {
+        harnessId: "openrouter",
+        modelSlug: "openrouter:z-ai/glm-4.6",
+      }),
+    ).toBe("GLM 4.6");
+    expect(
+      findModelLabel(models, {
+        harnessId: "openrouter",
+        modelSlug: "openrouter:openrouter/owl-alpha",
+      }),
+    ).toBe("Owl Alpha");
+  });
+
+  it("groups Kilo Code models by provider and trims the '/' provider prefix from rows", () => {
+    const models = [
+      model({
+        harnessId: "kilocode",
+        slug: "kilo/amazon/nova-pro-v1",
+        label: "Kilo Gateway/Amazon: Nova Pro 1.0",
+        metadata: {
+          openCodeProviderId: "kilo",
+          openCodeProviderLabel: "Kilo Gateway",
+        },
+      }),
+      model({
+        harnessId: "kilocode",
+        slug: "openrouter/anthropic/claude-3-haiku",
+        label: "OpenRouter/Claude 3 Haiku",
+        metadata: {
+          openCodeProviderId: "openrouter",
+          openCodeProviderLabel: "OpenRouter",
+        },
+      }),
+      model({
+        harnessId: "kilocode",
+        slug: "google-vertex/gemini-2.5-pro",
+        label: "Vertex/Gemini 2.5 Pro",
+        metadata: {
+          openCodeProviderId: "google-vertex",
+          openCodeProviderLabel: "Vertex",
+        },
+      }),
+    ];
+    const rows = buildHarnessModelRows(KILOCODE_HARNESS, models);
+
+    // Grouped off the host-declared provider; browseLabel drops the
+    // "<Provider>/" prefix Kilo's names carry (the "/" separator).
+    expect(
+      rows.map((row) => [row.providerGroupLabel, row.browseLabel]),
+    ).toEqual([
+      ["Kilo Gateway", "Amazon: Nova Pro 1.0"],
+      ["OpenRouter", "Claude 3 Haiku"],
+      ["Vertex", "Gemini 2.5 Pro"],
+    ]);
+    // The full "<Provider>/<Model>" name is preserved for search.
+    expect(rows[0]?.label).toBe("Kilo Gateway/Amazon: Nova Pro 1.0");
+    // The collapsed trigger shows the trimmed name.
+    expect(
+      findModelLabel(models, {
+        harnessId: "kilocode",
+        modelSlug: "google-vertex/gemini-2.5-pro",
+      }),
+    ).toBe("Gemini 2.5 Pro");
+  });
+
+  it("keeps host order when only some models carry group metadata (partial rollout)", () => {
+    const rows = buildHarnessModelRows(OPENROUTER_HARNESS, [
+      model({
+        harnessId: "openrouter",
+        slug: "openrouter:z-ai/glm-4.6",
+        label: "Z.ai: GLM 4.6",
+        metadata: {
+          openCodeProviderId: "z-ai",
+          openCodeProviderLabel: "Z.ai",
+        },
+      }),
+      model({
+        harnessId: "openrouter",
+        slug: "openrouter:unannotated",
+        label: "Unannotated",
+        metadata: {},
+      }),
+    ]);
+
+    // Mixed annotated/unannotated: not reordered (sorting by group would float
+    // the empty-group model to the top), so the host-preferred order is kept.
+    expect(rows.map((row) => row.value)).toEqual([
+      "openrouter:z-ai/glm-4.6",
+      "openrouter:unannotated",
+    ]);
+  });
+
   it("adds capacity metadata on model rows", () => {
     const rows = buildHarnessModelRows(CLAUDE_HARNESS, [
       model({
@@ -356,5 +537,24 @@ describe("harness model search", () => {
 
     expect(rows[0]?.capacityLabel).toBe("200k ctx · 64k out");
     expect(rows[0]?.harnessLabel).toBe("Claude");
+  });
+
+  it("carries a model's deprecation notice onto its row, and null when absent", () => {
+    const rows = buildHarnessModelRows(CLAUDE_HARNESS, [
+      model({
+        harnessId: "claude",
+        slug: "claude-sonnet-4-6",
+        label: "Claude Sonnet 4.6",
+        deprecationNotice: "Switch to Claude Sonnet 5.",
+      }),
+      model({
+        harnessId: "claude",
+        slug: "claude-sonnet-5",
+        label: "Claude Sonnet 5",
+      }),
+    ]);
+
+    expect(rows[0]?.deprecationNotice).toBe("Switch to Claude Sonnet 5.");
+    expect(rows[1]?.deprecationNotice).toBeNull();
   });
 });

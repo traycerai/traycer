@@ -27,6 +27,7 @@ import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useProvidersCancelLogin } from "@/hooks/providers/use-providers-cancel-login-mutation";
 import { useProvidersSetEnvOverride } from "@/hooks/providers/use-providers-set-env-override-mutation";
+import { useProvidersSetApiKey } from "@/hooks/providers/use-providers-set-api-key-mutation";
 import { useProvidersStartLogin } from "@/hooks/providers/use-providers-start-login-mutation";
 import { useProvidersAwaitLogin } from "@/hooks/providers/use-providers-await-login-mutation";
 import { useTabRefreshProviders } from "@/hooks/providers/use-tab-refresh-providers";
@@ -99,7 +100,9 @@ function BannerRefreshButton() {
 
 // The reconnect methods to offer a signed-out (web-login) provider. `canOauth`
 // requires a local host (the `<cli> auth login` loopback runs on the host's
-// machine) plus advertised OAuth args; `envVars` are the credential vars the
+// machine) plus a real (non-empty) OAuth login command (an empty `oauthArgs`
+// would spawn the bare binary, which can't browser-OAuth headlessly); `envVars`
+// are the credential vars the
 // paste form can write (an API key / OAuth token) via `providers.setEnvOverride`,
 // which works on any host. Both are reconnect affordances - distinct from a
 // *rejected* credential, which never reaches here (it surfaces as a generic error
@@ -118,6 +121,10 @@ function deriveLoginOptions(
       ? loginCapability.token.vars
       : [];
   const oauthArgs = loginCapability !== null ? loginCapability.oauthArgs : null;
+  // A real login needs a non-empty subcommand. `null` = no OAuth; `[]` is also
+  // inert because the host would spawn the bare binary under piped stdio, which
+  // for an interactive-TUI CLI (e.g. droid) opens no browser and hangs the
+  // banner on "Waiting for browser sign-in…".
   const canOauth = isLocalHost && oauthArgs !== null && oauthArgs.length > 0;
   return { envVars, canOauth };
 }
@@ -200,11 +207,15 @@ function ReauthBannerInner({
 }) {
   const providerLabel = PROVIDER_DISPLAY_NAMES[providerId];
   const { envVars, canOauth } = deriveLoginOptions(state, isLocalHost);
+  // Providers with a host-side encrypted API-key store (Cursor / Droid) save the
+  // pasted key as that secret (`providers.setApiKey`) rather than a plaintext env
+  // override, matching how Settings > Providers stores it.
+  const apiKeySupported = state?.apiKey.supported ?? false;
 
   // No reconnect method available from here: a provider with no web login, or an
   // OAuth-only provider on a remote host (loopback unreachable) with no paste
   // vars. Direct the user to the CLI.
-  if (!canOauth && envVars.length === 0) {
+  if (!canOauth && envVars.length === 0 && !apiKeySupported) {
     return (
       <ReauthBannerShell
         icon={BANNER_HEADER_ICON}
@@ -230,11 +241,12 @@ function ReauthBannerInner({
           providerLabel={providerLabel}
         />
       ) : null}
-      {envVars.length > 0 ? (
+      {envVars.length > 0 || apiKeySupported ? (
         <TokenReauthForm
           providerId={providerId}
           envVars={envVars}
           secondary={canOauth}
+          apiKeySupported={apiKeySupported}
         />
       ) : null}
     </ReauthBannerShell>
@@ -334,20 +346,28 @@ function OAuthReauthForm({
   );
 }
 
-// Paste a fresh credential (API key / OAuth token) into one of the provider's
-// supported env vars, written via `providers.setEnvOverride` on the tab host,
-// then immediately force-probes auth. If the probe returns authenticated the gate
-// unmounts this banner; if still unauthenticated (bad token) we stay mounted and
-// show an inline error so the user can try again without a page reload.
+// Paste a fresh credential into the provider's reconnect path, then immediately
+// force-probe auth. Providers with a host-side encrypted API-key store (Cursor /
+// Droid) save it as that secret via `providers.setApiKey` — the same path as
+// Settings > Providers; OAuth-token providers (Claude Code / Grok) write the
+// chosen credential var via `providers.setEnvOverride`. If the probe returns
+// authenticated the gate unmounts this banner; if still unauthenticated (bad
+// token) we stay mounted and show an inline error so the user can retry without a
+// page reload.
 function TokenReauthForm({
   providerId,
   envVars,
   secondary,
+  apiKeySupported,
 }: {
   readonly providerId: ProviderId;
   readonly envVars: ReadonlyArray<string>;
   // True when rendered beneath the OAuth button as the fallback option.
   readonly secondary: boolean;
+  // True when the provider has an encrypted host-side API-key store (Cursor /
+  // Droid), so the pasted key is saved as that secret instead of a plaintext env
+  // override.
+  readonly apiKeySupported: boolean;
 }) {
   const inputId = useId();
   const [draft, setDraft] = useState("");
@@ -355,6 +375,7 @@ function TokenReauthForm({
   const [probing, setProbing] = useState(false);
   const [tokenError, setTokenError] = useState<string | null>(null);
   const setEnvOverride = useProvidersSetEnvOverride();
+  const setApiKey = useProvidersSetApiKey();
   const refreshProviders = useTabRefreshProviders();
   const queryClient = useQueryClient();
   const tabHostId = useTabHostId();
@@ -365,56 +386,70 @@ function TokenReauthForm({
     pickedVar !== "" && envVars.includes(pickedVar)
       ? pickedVar
       : (envVars[0] ?? "");
+  const activeCredentialLabel = activeVar === "" ? "API key" : activeVar;
 
-  const busy = setEnvOverride.isPending || probing;
+  const busy = setEnvOverride.isPending || setApiKey.isPending || probing;
+
+  // Shared post-write step: force-probe auth after the credential is stored.
+  // `useTabRefreshProviders` writes the fresh probe result into the query cache
+  // synchronously in its `onSuccess` before `mutateAsync` resolves, so by the
+  // time the `.then()` runs the cache already holds the updated auth status. Read
+  // it directly rather than using `finally` (which fires on both success and
+  // failure, causing a false "not accepted" flash when the token is valid and the
+  // gate is about to unmount this component).
+  const afterWrite = (): void => {
+    setDraft("");
+    setProbing(true);
+    void refreshProviders()
+      .then(() => {
+        setProbing(false);
+        const data = queryClient.getQueryData<
+          ResponseOfMethod<HostRpcRegistry, "providers.list">
+        >(
+          hostQueryKeys.method<HostRpcRegistry, "providers.list">(
+            tabHostId,
+            "providers.list",
+            {},
+          ),
+        );
+        const providerState = data?.providers.find(
+          (p) => p.providerId === providerId,
+        );
+        if (providerState?.auth.status === "unauthenticated") {
+          setTokenError("Token not accepted — double-check and try again.");
+        }
+        // If authenticated, the gate reads the updated cache and unmounts this
+        // banner. No action needed here.
+      })
+      .catch(() => {
+        setProbing(false);
+        setTokenError("Couldn't verify token — please try again.");
+      });
+  };
 
   const onSave = (): void => {
     const trimmed = draft.trim();
-    if (trimmed.length === 0 || activeVar === "" || busy) return;
+    if (
+      trimmed.length === 0 ||
+      (!apiKeySupported && activeVar === "") ||
+      busy
+    ) {
+      return;
+    }
     setTokenError(null);
-    setEnvOverride.mutate(
-      { providerId, key: activeVar, value: trimmed },
-      {
-        onSuccess: () => {
-          setDraft("");
-          setProbing(true);
-          // Force-probe after the override is written. `useTabRefreshProviders`
-          // writes the fresh probe result into the query cache synchronously in
-          // its `onSuccess` before `mutateAsync` resolves, so by the time the
-          // `.then()` runs below the cache already holds the updated auth status.
-          // Read it directly rather than using `finally` (which fires on both
-          // success and failure, causing a false "not accepted" flash when the
-          // token is valid and the gate is about to unmount this component).
-          void refreshProviders()
-            .then(() => {
-              setProbing(false);
-              const data = queryClient.getQueryData<
-                ResponseOfMethod<HostRpcRegistry, "providers.list">
-              >(
-                hostQueryKeys.method<HostRpcRegistry, "providers.list">(
-                  tabHostId,
-                  "providers.list",
-                  {},
-                ),
-              );
-              const providerState = data?.providers.find(
-                (p) => p.providerId === providerId,
-              );
-              if (providerState?.auth.status === "unauthenticated") {
-                setTokenError(
-                  "Token not accepted — double-check and try again.",
-                );
-              }
-              // If authenticated, the gate reads the updated cache and unmounts
-              // this banner. No action needed here.
-            })
-            .catch(() => {
-              setProbing(false);
-              setTokenError("Couldn't verify token — please try again.");
-            });
-        },
-      },
-    );
+    if (apiKeySupported) {
+      // Cursor / Droid: store as the encrypted host-side secret, exactly like
+      // Settings > Providers.
+      setApiKey.mutate(
+        { providerId, apiKey: trimmed },
+        { onSuccess: afterWrite },
+      );
+    } else {
+      setEnvOverride.mutate(
+        { providerId, key: activeVar, value: trimmed },
+        { onSuccess: afterWrite },
+      );
+    }
   };
 
   return (
@@ -455,7 +490,7 @@ function TokenReauthForm({
           type="password"
           autoComplete="off"
           className="min-w-0 flex-1 font-mono text-ui-sm"
-          placeholder={`Paste your ${activeVar}`}
+          placeholder={`Paste your ${activeCredentialLabel}`}
           value={draft}
           onChange={(e) => {
             setDraft(e.target.value);

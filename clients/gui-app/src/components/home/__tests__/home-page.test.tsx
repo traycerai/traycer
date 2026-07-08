@@ -490,6 +490,7 @@ describe("<HomePage />", () => {
 function editorHandleForPrompt(prompt: string): ComposerPromptEditorHandle {
   const content = jsonContentForPrompt(prompt);
   return {
+    isReady: () => true,
     focus: () => undefined,
     focusAtEnd: () => undefined,
     getJSON: () => content,
@@ -499,6 +500,7 @@ function editorHandleForPrompt(prompt: string): ComposerPromptEditorHandle {
     insertImageAttachments: () => undefined,
     removeImageAttachmentById: () => undefined,
     insertDictatedText: () => undefined,
+    dismissActiveSuggestion: () => false,
   };
 }
 

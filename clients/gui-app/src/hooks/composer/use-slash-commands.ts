@@ -1,13 +1,21 @@
 import { useMemo } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type { GuiHarnessId } from "@traycer/protocol/host/index";
+import type {
+  GuiAgentCommandOption,
+  GuiHarnessId,
+} from "@traycer/protocol/host/index";
 import { useGuiHarnessCommandsQuery } from "@/hooks/harnesses/use-gui-harness-catalog";
 import type { HostRpcRegistry } from "@/lib/host";
-import type { ProviderSlashCommand, SlashCommand } from "@/lib/composer/types";
+import type {
+  MentionPreview,
+  ProviderSlashCommand,
+  SlashCommand,
+} from "@/lib/composer/types";
 
 export interface UseSlashCommandsResult {
   data: ReadonlyArray<SlashCommand>;
   isLoading: boolean;
+  isFetching: boolean;
   error: Error | null;
 }
 
@@ -50,12 +58,11 @@ export function useSlashCommands(
   const allCommands = useMemo<ReadonlyArray<SlashCommand>>(() => {
     const providerCommands: ReadonlyArray<ProviderSlashCommand> = (
       commandsQuery.data?.commands ?? []
-    ).map(
-      (command): ProviderSlashCommand => ({
-        ...command,
-        source: "provider",
-      }),
-    );
+    ).map((command): ProviderSlashCommand => ({
+      ...command,
+      source: "provider",
+      preview: slashCommandPreview(command),
+    }));
     return dedupeSlashCommands(providerCommands).toSorted(compareCommandNames);
   }, [commandsQuery.data?.commands]);
   const data = useMemo<ReadonlyArray<SlashCommand>>(() => {
@@ -79,7 +86,25 @@ export function useSlashCommands(
   return {
     data,
     isLoading: params.enabled && commandsQuery.isPending,
+    isFetching: params.enabled && commandsQuery.isFetching,
     error: commandsQuery.error,
+  };
+}
+
+/**
+ * The full command description plus its usage hint (when the command takes
+ * arguments), as the preview panel's single named field for a slash entry.
+ */
+function slashCommandPreview(command: GuiAgentCommandOption): MentionPreview {
+  const usage = command.argumentHint;
+  return {
+    kind: "text",
+    primary:
+      usage === null || usage.length === 0
+        ? command.description
+        : `${command.description} ${usage}`,
+    secondary: null,
+    mono: false,
   };
 }
 

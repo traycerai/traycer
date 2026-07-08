@@ -23,7 +23,10 @@ import {
 } from "@/lib/epic-tree-cascade";
 import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { cn } from "@/lib/utils";
+import { OwnerResourceChip } from "@/components/resources/resource-usage-chip";
+import type { ResourceOwnerKindWire } from "@traycer/protocol/host/resources/subscribe";
 import { ChatProgressIcon } from "@/components/chat/chat-progress-icon";
+import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
@@ -76,6 +79,7 @@ import {
   useEpicPermissionRole,
   useEpicTreeIndex,
   useEpicTreeNode,
+  useMaybeEpicTuiAgentHarnessId,
 } from "@/lib/epic-selectors";
 import { isEditableRole } from "@/lib/epic-permissions";
 import { useSettingsStore } from "@/stores/settings/settings-store";
@@ -104,6 +108,7 @@ import {
   INDENT_PX,
   anyMutationPending,
   nodePadRightClass,
+  rowAddControlRevealClass,
 } from "./epic-sidebar-tree-shared";
 import { TreeGroupGuide } from "./epic-sidebar-tree-guide";
 import {
@@ -125,11 +130,7 @@ import {
   type EpicCanvasSidebarNodeDragData,
 } from "@/components/epic-canvas/dnd/dnd";
 import { SidebarReparentRowDropWrapper } from "@/components/epic-canvas/sidebar/sidebar-reparent-row-drop-wrapper";
-import { ChatAddChildButton } from "@/components/epic-canvas/sidebar/chat-add-child-button";
-import {
-  useChatRowChildCreate,
-  type ChatRowChildCreate,
-} from "@/components/epic-canvas/sidebar/use-chat-row-child-create";
+import { NewConversationModalAction } from "@/components/epic-canvas/sidebar/new-conversation-modal";
 import { SidebarPanelEmptyState } from "@/components/epic-canvas/sidebar/sidebar-panel-empty-state";
 
 interface ChatTreePanelBodyProps {
@@ -440,16 +441,9 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
     selectedIds,
     onToggleSelection,
   } = props;
-  const { expandedIds, toggleExpanded, ensureExpanded } = expansion;
+  const { expandedIds, toggleExpanded } = expansion;
   const node = useEpicTreeNode(nodeId);
   const childIds = useFilteredPanelChildIds(nodeId, treeFilter);
-  const childCreate = useChatRowChildCreate({
-    epicId,
-    tabId,
-    nodeId,
-    canMutate,
-    ensureExpanded,
-  });
   const openTileInTab = useEpicCanvasStore((s) => s.openTileInTab);
   const closeCanvasTab = useEpicCanvasStore((s) => s.closeCanvasTab);
   const openTilePreviewInTab = useEpicCanvasStore(
@@ -715,7 +709,6 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
       treeFilter={treeFilter}
       onStartRename={startRename}
       onPerformDelete={performDelete}
-      childCreate={childCreate}
       confirmDeleteOpen={confirmDeleteOpen}
       onConfirmDeleteOpenChange={setConfirmDeleteOpen}
       cascadeSummary={cascadeSummary}
@@ -761,7 +754,6 @@ interface ChatNodeShellProps {
   readonly onDoubleClick: () => void;
   readonly onStartRename: () => void;
   readonly onPerformDelete: () => void;
-  readonly childCreate: ChatRowChildCreate;
   readonly confirmDeleteOpen: boolean;
   readonly onConfirmDeleteOpenChange: (open: boolean) => void;
   readonly cascadeSummary: string | null;
@@ -806,7 +798,6 @@ function ChatNodeShell(props: ChatNodeShellProps) {
     onDoubleClick,
     onStartRename,
     onPerformDelete,
-    childCreate,
     confirmDeleteOpen,
     onConfirmDeleteOpenChange,
     cascadeSummary,
@@ -818,6 +809,10 @@ function ChatNodeShell(props: ChatNodeShellProps) {
     selectedIds,
     onToggleSelection,
   } = props;
+
+  // The row `+` (child-create trigger) reserves right padding and is offered
+  // whenever the epic is editable and we are not bulk-selecting.
+  const showAddChild = canEdit && !selectionMode;
 
   return (
     <li
@@ -858,7 +853,6 @@ function ChatNodeShell(props: ChatNodeShellProps) {
             depth={depth}
             isActive={isActive}
             canEdit={canEdit}
-            showAddChild={!childCreate.hostUnavailable}
             hasChildren={hasChildren}
             expanded={expanded}
             onToggle={onToggle}
@@ -870,28 +864,29 @@ function ChatNodeShell(props: ChatNodeShellProps) {
             selectionMode={selectionMode}
             isSelected={isSelected}
             onToggleSelection={onToggleSelection}
+            showAddChild={showAddChild}
           />
         )}
 
         {canEdit && !isRenaming && !selectionMode ? (
-          <ChatAddChildButton
+          // Same trigger + modal as the chats-panel `+`, seeded as a child of
+          // this row. No dropdown: the modal's switcher is the one way to pick a
+          // chat vs a terminal agent.
+          <NewConversationModalAction
             epicId={epicId}
-            nodeId={nodeId}
-            canMutate={canMutate}
-            addChildIsPending={childCreate.addChildIsPending}
-            tuiAgentPending={childCreate.tuiAgentPending}
-            isDisconnected={isDisconnected}
-            childHostUnavailable={childCreate.hostUnavailable}
-            workspaceInheritanceBlocked={
-              childCreate.workspaceInheritanceBlocked
+            tabId={tabId}
+            parentId={nodeId}
+            size="icon-xs"
+            disabled={!canMutate}
+            disabledTooltip={
+              isDisconnected ? "Reconnect to make changes." : null
             }
-            addMenuOpen={childCreate.addMenuOpen}
-            onAddMenuOpenChange={childCreate.onAddMenuOpenChange}
-            onAdd={childCreate.onAddChild}
-            onAddTerminalAgent={childCreate.onAddTerminalAgent}
-            terminalAgentWorkspaceSeed={childCreate.terminalAgentWorkspaceSeed}
-            terminalAgentHostScope={childCreate.terminalAgentHostScope}
-            terminalAgentStagingKey={childCreate.terminalAgentStagingKey}
+            triggerLabel="Add child chat or agent"
+            triggerTestId={`epic-sidebar-add-${nodeId}`}
+            actionRevealClassName={cn(
+              "absolute right-7 top-1/2 -translate-y-1/2",
+              rowAddControlRevealClass(false),
+            )}
           />
         ) : null}
 
@@ -906,9 +901,8 @@ function ChatNodeShell(props: ChatNodeShellProps) {
         ) : null}
       </SidebarReparentRowDropWrapper>
       <ChatNodeChildren
-        visible={showChildren || childCreate.addChildIsPending}
+        visible={showChildren}
         childIds={childIds}
-        pendingChildName={childCreate.pendingChildName}
         epicId={epicId}
         tabId={tabId}
         depth={depth}
@@ -950,7 +944,6 @@ function NodeChevron(props: NodeChevronProps) {
 interface ChatNodeChildrenProps {
   visible: boolean;
   childIds: readonly string[];
-  pendingChildName: string | null;
   epicId: string;
   tabId: string;
   depth: number;
@@ -969,12 +962,6 @@ function ChatNodeChildren(props: ChatNodeChildrenProps) {
   return (
     <ul role="group" className="relative space-y-0.5">
       <TreeGroupGuide parentDepth={props.depth} />
-      {props.pendingChildName !== null && (
-        <PendingCreateRow
-          depth={props.depth + 1}
-          name={props.pendingChildName}
-        />
-      )}
       {props.childIds.map((childId) => (
         <ChatNode
           key={childId}
@@ -1129,6 +1116,16 @@ interface ChatRowButtonProps {
   readonly onToggleSelection: (id: string) => void;
 }
 
+// Only chats and terminal-agents own a resource-tracked process tree; other
+// node kinds (specs, tickets, …) never carry a resource snapshot.
+function resourceOwnerKindForNode(
+  artifactType: EpicNodeKind,
+): ResourceOwnerKindWire | null {
+  if (artifactType === "chat") return "chat";
+  if (artifactType === "terminal-agent") return "terminal-agent";
+  return null;
+}
+
 function ChatRowButton(props: ChatRowButtonProps) {
   const {
     epicId,
@@ -1152,6 +1149,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
     isSelected,
     onToggleSelection,
   } = props;
+  const resourceOwnerKind = resourceOwnerKindForNode(artifactType);
   const dragData = useMemo<EpicCanvasSidebarNodeDragData>(
     () => ({
       kind: SIDEBAR_NODE_DND_TYPE,
@@ -1177,6 +1175,9 @@ function ChatRowButton(props: ChatRowButtonProps) {
       onToggle(event);
     },
     [onToggle],
+  );
+  const showNavigatorResourceStats = useSettingsStore(
+    (state) => state.showNavigatorResourceStats,
   );
 
   // A chat row's "+" (add child) and "⋯" (more menu) are both gated by canEdit
@@ -1265,6 +1266,14 @@ function ChatRowButton(props: ChatRowButtonProps) {
           iconStyle={iconStyle}
         />
         <span className="min-w-0 flex-1 truncate">{nodeName}</span>
+        {resourceOwnerKind === null || !showNavigatorResourceStats ? null : (
+          <OwnerResourceChip
+            epicId={epicId}
+            kind={resourceOwnerKind}
+            ownerId={nodeId}
+            className={undefined}
+          />
+        )}
       </span>
     </button>
   );
@@ -1324,7 +1333,17 @@ function TerminalAgentProgressIcon(props: {
   readonly iconStyle: { color: string | undefined } | undefined;
 }) {
   const isActive = useEpicActiveAgentIds().has(props.nodeId);
+  const harnessId = useMaybeEpicTuiAgentHarnessId(props.nodeId);
   if (!isActive) {
+    // The underlying harness's brand mark (Claude, Codex, …) so the row reads
+    // as the tool driving the agent. Brand marks keep their own colors and
+    // intentionally don't follow the per-type icon-color customization; the
+    // generic bot glyph is the fallback for unresolved/legacy records.
+    if (harnessId !== null) {
+      return (
+        <HarnessIcon harnessId={harnessId} className="size-3.5 shrink-0" />
+      );
+    }
     return (
       <StaticSidebarNodeIcon
         Icon={props.Icon}

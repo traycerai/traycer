@@ -112,6 +112,7 @@ export function pane(
     tabInstanceIds,
     activeTabId: tabInstanceIds[0] ?? null,
     previewTabId: null,
+    activationHistory: tabInstanceIds.length === 0 ? [] : [tabInstanceIds[0]],
   };
 }
 
@@ -151,14 +152,6 @@ export function asPane(node: TileLayoutNode | null): TilePane {
   return node;
 }
 
-/** Narrow a layout node to a group. */
-export function asGroup(node: TileLayoutNode | null): TileGroup {
-  if (node === null || node.kind !== "group") {
-    throw new Error("expected group node");
-  }
-  return node;
-}
-
 /** Content ids of a pane's tabs, in strip order. */
 export function paneTabIds(
   state: EpicCanvasState,
@@ -193,6 +186,8 @@ function allGroupIds(node: TileLayoutNode | null): ReadonlyArray<string> {
  * 3. `sizesByGroupId` holds entries only for live group ids.
  * 4. `activePaneId` resolves to an existing pane (and is null only for the
  *    empty canvas).
+ * 5. Pane activation histories contain unique live tab ids with matching
+ *    payload entries.
  */
 export function expectCanvasInvariants(state: EpicCanvasState): void {
   const reachable = reachableInstanceIds(state);
@@ -200,6 +195,9 @@ export function expectCanvasInvariants(state: EpicCanvasState): void {
   expect([...reachable].toSorted()).toEqual(
     Object.keys(state.tilesByInstanceId).toSorted(),
   );
+  for (const [instanceId, ref] of Object.entries(state.tilesByInstanceId)) {
+    expect(ref?.instanceId).toBe(instanceId);
+  }
   const liveGroupIds = new Set(allGroupIds(state.root));
   for (const groupId of Object.keys(state.sizesByGroupId)) {
     expect(liveGroupIds.has(groupId)).toBe(true);
@@ -208,7 +206,15 @@ export function expectCanvasInvariants(state: EpicCanvasState): void {
     expect(state.activePaneId).toBeNull();
     return;
   }
-  expect(collectPanes(state.root).map((p) => p.id)).toContain(
-    state.activePaneId,
-  );
+  const panes = collectPanes(state.root);
+  expect(panes.map((p) => p.id)).toContain(state.activePaneId);
+  for (const pane of panes) {
+    expect(new Set(pane.activationHistory).size).toBe(
+      pane.activationHistory.length,
+    );
+    for (const instanceId of pane.activationHistory) {
+      expect(pane.tabInstanceIds).toContain(instanceId);
+      expect(state.tilesByInstanceId[instanceId]?.instanceId).toBe(instanceId);
+    }
+  }
 }

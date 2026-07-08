@@ -18,13 +18,25 @@ import type { GuiHarnessId } from "@traycer/protocol/host/index";
 
 import { cn } from "@/lib/utils";
 import { registerComposerFocus } from "@/lib/composer/composer-focus-registry";
+import { normalizeComposerContentWithSelection } from "@/lib/composer/composer-content-normalizer";
 
 import { buildComposerExtensions } from "./editor/editor-config";
+import { mentionSuggestionPluginKey } from "./editor/extensions/mention-extension";
+import { slashSuggestionPluginKey } from "./editor/extensions/slash-command-extension";
 import { insertImageAttachmentsCommand } from "@/hooks/composer/use-composer-paste";
 import type { ImageAttachmentAttrs } from "./editor/extensions/image-attachment-extension";
 import type { ComposerPickerStore } from "./picker/composer-picker-store";
 
 export interface ComposerPromptEditorHandle {
+  /**
+   * Whether the async Tiptap editor behind this handle exists yet. The handle
+   * itself is created on first commit - before `useEditor` (with
+   * `immediatelyRender: false`) has produced an editor - and every method
+   * below silently no-ops until then. Callers that must not lose a write
+   * (the draft-reset bridge) check this instead of treating a non-null handle
+   * as "ready".
+   */
+  readonly isReady: () => boolean;
   readonly focus: () => void;
   readonly focusAtEnd: () => void;
   readonly getJSON: () => JsonContent;
@@ -45,6 +57,14 @@ export interface ComposerPromptEditorHandle {
    * sequential segments append cleanly.
    */
   readonly insertDictatedText: (text: string) => void;
+  /**
+   * Fully exit whichever `@`/`/` suggestion picker is currently open (clearing
+   * the plugin's active range/decoration and closing the picker menu), and
+   * report whether one was open. Lets a surrounding surface (e.g. a dialog)
+   * treat Escape as "close the picker" without the editor's own keydown - see
+   * the New Conversation modal, where Radix would otherwise swallow the Escape.
+   */
+  readonly dismissActiveSuggestion: () => boolean;
 }
 
 export interface ComposerPromptEditorProps {
@@ -56,6 +76,7 @@ export interface ComposerPromptEditorProps {
   readonly pickerStore: ComposerPickerStore;
   readonly placeholder: string;
   readonly editorClassName: string | undefined;
+  readonly stabilizeImageAttachmentCaret: boolean;
   readonly isActive: boolean;
   readonly disabled: boolean;
   readonly slashProviderId: GuiHarnessId;
@@ -70,6 +91,13 @@ export interface ComposerPromptEditorProps {
   readonly onKeyDown: KeyboardEventHandler<HTMLElement> | undefined;
   readonly onFocus: () => void;
   readonly onBlur: () => void;
+  /**
+   * Fired (once per editor instance) when the async Tiptap editor is created
+   * and the handle's methods stop no-oping. Ref mutations are invisible to the
+   * owner's render cycle, so owners that must react to readiness (the
+   * draft-reset bridge's handle-ready catch-up) take this explicit signal.
+   */
+  readonly onEditorReady: (() => void) | null;
   readonly ref?: Ref<ComposerPromptEditorHandle>;
 }
 
@@ -80,6 +108,7 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
     pickerStore,
     placeholder,
     editorClassName,
+    stabilizeImageAttachmentCaret,
     isActive,
     disabled,
     slashProviderId,
@@ -91,6 +120,7 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
     onKeyDown,
     onFocus,
     onBlur,
+    onEditorReady,
     ref,
   } = props;
 
@@ -101,12 +131,19 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
   // latest-value-ref usage (closure into a static external library plugin) -
   // do not "fix" it by adding the callbacks to the editor deps; that would
   // rebuild Tiptap on every keystroke.
+  const normalizedInitial = useMemo(
+    () =>
+      normalizeComposerContentWithSelection(initialContent, initialSelection),
+    [initialContent, initialSelection],
+  );
   const onSubmitRef = useRef(onSubmit);
   const onSnapshotRef = useRef(onSnapshot);
-  const initialSelectionRef = useRef(initialSelection);
+  const onEditorReadyRef = useRef(onEditorReady);
+  const initialSelectionRef = useRef(normalizedInitial.selection);
   useEffect(() => {
     onSubmitRef.current = onSubmit;
     onSnapshotRef.current = onSnapshot;
+    onEditorReadyRef.current = onEditorReady;
   });
 
   const [stableSubmitHolder] = useState<{ readonly current: () => void }>(
@@ -132,11 +169,10 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
     () => editorAttributes(placeholder, editorClassName),
     [editorClassName, placeholder],
   );
-
   const editor = useEditor(
     {
       extensions,
-      content: initialContent,
+      content: normalizedInitial.content,
       autofocus: isActive ? "end" : false,
       immediatelyRender: false,
       editable: !disabled,
@@ -158,6 +194,11 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
     },
     [],
   );
+
+  useEffect(() => {
+    if (editor === null) return;
+    onEditorReadyRef.current?.();
+  }, [editor]);
 
   useEffect(() => {
     if (editor === null) return;
@@ -195,6 +236,8 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
     });
   }, [editor, editorAttributesObject]);
 
+  const isReady = useCallback(() => editor !== null, [editor]);
+
   const focus = useCallback(() => {
     editor?.commands.focus();
   }, [editor]);
@@ -204,9 +247,9 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
   }, [editor]);
 
   const getJSON = useCallback((): JsonContent => {
-    if (editor === null) return initialContent;
+    if (editor === null) return normalizedInitial.content;
     return editor.getJSON();
-  }, [editor, initialContent]);
+  }, [editor, normalizedInitial.content]);
 
   const isEmpty = useCallback((): boolean => {
     if (editor === null) return true;
@@ -224,11 +267,15 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
       selection: { readonly from: number; readonly to: number } | null,
     ) => {
       if (editor === null) return;
-      editor.commands.setContent(content);
-      if (selection !== null) {
+      const normalized = normalizeComposerContentWithSelection(
+        content,
+        selection,
+      );
+      editor.commands.setContent(normalized.content);
+      if (normalized.selection !== null) {
         editor.commands.setTextSelection({
-          from: selection.from,
-          to: selection.to,
+          from: normalized.selection.from,
+          to: normalized.selection.to,
         });
       } else {
         editor.commands.focus("end");
@@ -237,12 +284,33 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
     [editor],
   );
 
+  const handleDrop = useCallback<DragEventHandler<HTMLElement>>(
+    (event) => {
+      const hasFiles = Array.from(event.dataTransfer.types).includes("Files");
+      if (editor !== null && hasFiles) {
+        const dropPos = editor.view.posAtCoords({
+          left: event.clientX,
+          top: event.clientY,
+        });
+        if (dropPos !== null) {
+          editor.commands.setTextSelection(dropPos.pos);
+        }
+      }
+      onDrop(event);
+    },
+    [editor, onDrop],
+  );
+
   const insertImageAttachments = useCallback(
     (attrs: ReadonlyArray<ImageAttachmentAttrs>) => {
       if (editor === null) return;
-      insertImageAttachmentsCommand(editor, attrs);
+      insertImageAttachmentsCommand(
+        editor,
+        attrs,
+        stabilizeImageAttachmentCaret,
+      );
     },
-    [editor],
+    [editor, stabilizeImageAttachmentCaret],
   );
 
   const removeImageAttachmentById = useCallback(
@@ -281,9 +349,26 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
     [editor],
   );
 
+  const dismissActiveSuggestion = useCallback((): boolean => {
+    if (editor === null) return false;
+    // The store's `open` flips with the suggestion plugin's active state (the
+    // render's onStart/onExit drive it), so this gates on a picker actually
+    // showing. Dispatch the suggestion-exit meta to both plugin keys; the
+    // active one transitions to "stopped" - clearing its range/decoration and
+    // firing onExit, which closes the menu - and the inactive one ignores it.
+    if (!pickerStore.getState().open) return false;
+    editor.view.dispatch(
+      editor.state.tr
+        .setMeta(mentionSuggestionPluginKey, { exit: true })
+        .setMeta(slashSuggestionPluginKey, { exit: true }),
+    );
+    return true;
+  }, [editor, pickerStore]);
+
   useImperativeHandle(
     ref,
     () => ({
+      isReady,
       focus,
       focusAtEnd,
       getJSON,
@@ -293,15 +378,18 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
       insertImageAttachments,
       removeImageAttachmentById,
       insertDictatedText,
+      dismissActiveSuggestion,
     }),
     [
       clear,
+      dismissActiveSuggestion,
       focus,
       focusAtEnd,
       getJSON,
       insertImageAttachments,
       insertDictatedText,
       isEmpty,
+      isReady,
       removeImageAttachmentById,
       setContent,
     ],
@@ -315,7 +403,7 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
       className="relative flex-1"
       onPaste={onPaste}
       onDragOver={onDragOver}
-      onDrop={onDrop}
+      onDrop={handleDrop}
       onKeyDown={onKeyDown}
       onFocus={onFocus}
       onBlur={onBlur}

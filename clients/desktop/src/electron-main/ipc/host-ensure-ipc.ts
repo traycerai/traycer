@@ -7,6 +7,7 @@ import { resolveBundledCliPath } from "../cli/cli-discovery";
 import { RunnerHostInvoke } from "../../ipc-contracts/ipc-channels";
 import {
   getActiveEnvironment,
+  LONG_OP_TIMEOUT_MS,
   optionalBoolean,
   optionalString,
   streamCliWithProgress,
@@ -130,7 +131,7 @@ async function ensureHost(
         version: serviceStatus.version,
       };
     }
-    log.info(
+    log.debug(
       "[host-ensure] service status file points at an unreachable endpoint - ensuring",
       { listenUrl: serviceStatus.listenUrl },
     );
@@ -166,7 +167,13 @@ async function ensureHost(
 
   let payload: unknown;
   try {
-    payload = await streamCliWithProgress(args, operationId, bridge);
+    payload = await streamCliWithProgress(
+      args,
+      operationId,
+      "ensure",
+      LONG_OP_TIMEOUT_MS,
+      bridge,
+    );
   } catch (err) {
     const categorized = categorizeHostCliError(err);
     if (categorized.kind === "host-busy" && serviceStatus.version !== null) {

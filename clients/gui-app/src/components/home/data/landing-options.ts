@@ -88,7 +88,7 @@ export const PERMISSION_OPTIONS: ReadonlyArray<PermissionOption> = [
   FULL_ACCESS_PERMISSION_OPTION,
 ];
 
-export const DEFAULT_PERMISSION: PermissionMode = "supervised";
+export const DEFAULT_PERMISSION: PermissionMode = "full_access";
 
 export function findPermissionLabel(mode: PermissionMode): string {
   return findPermissionOption(mode).label;
@@ -246,7 +246,9 @@ export function findModelLabel(
 }
 
 export function modelDisplayLabel(model: ModelOption): string {
-  if (model.harnessId !== "opencode") return model.label;
+  // Harness-agnostic: strip the group prefix the label may carry when the host
+  // declared a group (OpenCode `Anthropic: Claude` -> `Claude`). OpenRouter
+  // labels carry no such prefix, so this is a no-op for them.
   const providerLabel = modelMetadataString(
     model.metadata.openCodeProviderLabel,
   );
@@ -281,8 +283,15 @@ export function modelMetadataString(value: unknown): string {
 }
 
 function stripProviderPrefix(label: string, providerLabel: string): string {
-  const prefix = `${providerLabel}: `;
-  return label.startsWith(prefix) ? label.slice(prefix.length) : label;
+  // Names carry the provider/vendor as a prefix - "Z.ai: GLM 5.2", OpenRouter's
+  // "latest" aliases "Anthropic Claude Haiku Latest", or Kilo's "OpenRouter/Aion
+  // -1.0". Trim it (": ", " ", or "/" separator) since the provider is already
+  // shown as the group header.
+  for (const separator of [": ", " ", "/"]) {
+    const prefix = `${providerLabel}${separator}`;
+    if (label.startsWith(prefix)) return label.slice(prefix.length);
+  }
+  return label;
 }
 
 const NO_REASONING_OPTIONS: ReadonlyArray<ReasoningLevelOption> = [];

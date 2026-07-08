@@ -1,12 +1,12 @@
 import { ipcMain, type IpcMainEvent, type IpcMainInvokeEvent } from "electron";
 import { randomUUID } from "node:crypto";
-import { log } from "../app/logger";
+import { describeLogError, log } from "../app/logger";
 import type { DesktopTrayController } from "../tray/tray";
 import {
   RunnerHostEvent,
   RunnerHostInvoke,
 } from "../../ipc-contracts/ipc-channels";
-import type { AuthCallbackParseResult } from "../auth/deep-link";
+import type { ZoomPercent } from "../../ipc-contracts/zoom-types";
 import type { DesktopLocalHostSnapshot } from "../../ipc-contracts/host-types";
 import type {
   QuitDecision,
@@ -44,6 +44,7 @@ import {
   uniquePerWindowTabs,
 } from "./landing-draft-helpers";
 import { registerAuthIpc } from "./auth-ipc";
+import { registerDeviceFlowIpc } from "./device-flow-ipc";
 import { registerTrayIpc } from "./tray-ipc";
 import { registerWindowsIpc } from "./windows-ipc";
 import { registerOwnershipIpc } from "./ownership-ipc";
@@ -57,6 +58,7 @@ import { registerTraycerCliIpc } from "./traycer-cli-ipc";
 import { registerPlatformIpc } from "./platform-ipc";
 import { registerPowerIpc } from "./power-ipc";
 import { registerAppUpdateIpc } from "./app-update-ipc";
+import { registerZoomIpc } from "./zoom-ipc";
 import { getAppUpdateSnapshot } from "../app/updater";
 import type { HostTrayCommand } from "../../ipc-contracts/host-management-types";
 import {
@@ -129,6 +131,16 @@ export interface IpcPerWindowState {
   off(event: "change", listener: (change: PerWindowStateChange) => void): void;
 }
 
+/**
+ * Read-only view of the shell's quit lifecycle. The concrete `ShellQuitState`
+ * (main-process startup) structurally satisfies this. The windows registry-change
+ * listener consults it so a `closed` event that is part of a quit does not prune
+ * the per-window restore snapshot.
+ */
+export interface IpcShellQuitState {
+  isQuitting(): boolean;
+}
+
 type IpcAuthSessionChangeListener = (
   snapshot: DesktopAuthSessionSnapshot,
 ) => void;
@@ -138,6 +150,15 @@ export interface IpcDesktopAuthSession {
   set(snapshot: DesktopAuthSessionSnapshot): void;
   on(event: "change", listener: IpcAuthSessionChangeListener): void;
   off(event: "change", listener: IpcAuthSessionChangeListener): void;
+}
+
+export interface IpcZoomController {
+  getZoomPercent(): ZoomPercent;
+  zoomIn(): Promise<ZoomPercent>;
+  zoomOut(): Promise<ZoomPercent>;
+  reset(): Promise<ZoomPercent>;
+  setZoomPercent(percent: number): Promise<ZoomPercent>;
+  onChange(listener: (percent: ZoomPercent) => void): () => void;
 }
 
 export interface IpcSupportService {
@@ -232,6 +253,7 @@ export interface RunnerIpcOptions {
   readonly authRedirectUri: string | null;
   readonly tray: DesktopTrayController | null;
   readonly window: IpcManagedWindow;
+  readonly zoomController: IpcZoomController | undefined;
 }
 
 export interface RunnerIpcRegistryOptions {
@@ -244,11 +266,12 @@ export interface RunnerIpcRegistryOptions {
   readonly perWindowState: IpcPerWindowState;
   readonly authSession: IpcDesktopAuthSession;
   readonly support?: IpcSupportService;
+  readonly zoomController: IpcZoomController | undefined;
+  readonly quitState?: IpcShellQuitState;
 }
 
 export type RunnerIpcBridgeOptions =
-  | RunnerIpcOptions
-  | RunnerIpcRegistryOptions;
+  RunnerIpcOptions | RunnerIpcRegistryOptions;
 
 interface FreshSnapshotWaiter {
   readonly windowId: string;
@@ -268,13 +291,18 @@ export class RunnerIpcBridge {
   readonly perWindowState: IpcPerWindowState;
   readonly authSession: IpcDesktopAuthSession;
   readonly support: IpcSupportService;
+  readonly zoomController: IpcZoomController;
+  readonly quitState: IpcShellQuitState;
   readonly disposeFns: Array<() => void> = [];
   private readonly syncListeners: Array<{
     channel: string;
     listener: (event: IpcMainEvent, ...args: unknown[]) => void;
   }> = [];
   private hostPickerOpen = false;
-  readonly pendingAuthCallbacks: AuthCallbackParseResult[] = [];
+  // Set when a browser-return deep link arrives before any renderer window
+  // exists; drained to the MRU window once one registers. Coalesced to a single
+  // flag - the signal is a payload-free nudge, so repeated arrivals collapse.
+  pendingAuthReturnSignal = false;
   readonly appLifecycleReadyWindowIds = new Set<string>();
   readonly unsyncedEditsSnapshots = new Map<string, UnsyncedEditsSnapshot>();
   /**
@@ -298,17 +326,22 @@ export class RunnerIpcBridge {
       this.perWindowState = options.perWindowState;
       this.authSession = options.authSession;
       this.support = options.support ?? new NullSupportService();
+      this.zoomController = options.zoomController ?? new NullZoomController();
+      this.quitState = options.quitState ?? new NeverQuittingShellState();
     } else {
       this.windowRegistry = new SingleWindowRegistry(options.window);
       this.ownership = new NullEpicWindowOwnership();
       this.perWindowState = new NullPerWindowState();
       this.authSession = new DesktopAuthSession();
       this.support = new NullSupportService();
+      this.zoomController = options.zoomController ?? new NullZoomController();
+      this.quitState = new NeverQuittingShellState();
     }
   }
 
   install(): void {
     registerAuthIpc(this);
+    registerDeviceFlowIpc(this);
     registerTrayIpc(this);
     registerLifecycleIpc(this);
     registerWindowsIpc(this);
@@ -325,6 +358,7 @@ export class RunnerIpcBridge {
     // `disposeFns` / `ipcMain.removeHandler` sweep.
     registerPlatformIpc(this);
     registerAppUpdateIpc(this);
+    registerZoomIpc(this);
     // Power IPC (renderer-driven sleep prevention) registers a `disposeFn`
     // that releases the OS power-save blocker on teardown.
     registerPowerIpc(this);
@@ -340,21 +374,26 @@ export class RunnerIpcBridge {
   }
 
   /**
-   * Forwards a parsed auth-callback result to the renderer bridge. Delivery
-   * targets the MRU renderer because OAuth callbacks are process-global and
-   * not Epic-scoped. If no window exists, the result is queued until the next
-   * registry change exposes a target.
+   * Handles a browser-return deep link: focuses the MRU renderer (so the user
+   * lands back in the app) and forwards the payload-free return signal so the
+   * renderer nudges its in-flight device poll. Targets the MRU window because
+   * the signal is process-global, not Epic-scoped. If no window exists yet, the
+   * signal is coalesced into a pending flag and drained on the next registry
+   * change. It carries no token - that always arrives over the device poll.
    */
-  deliverAuthCallback(result: AuthCallbackParseResult): void {
+  deliverAuthReturnSignal(): void {
     const target = this.windowRegistry.getMruRecord();
     if (target === null) {
-      this.pendingAuthCallbacks.push(result);
+      this.pendingAuthReturnSignal = true;
       return;
+    }
+    if (!target.window.isFocused()) {
+      this.windowRegistry.focusById(target.windowId);
     }
     this.safeSendToWindow(
       target.windowId,
       RunnerHostEvent.authCallback,
-      result,
+      undefined,
     );
   }
 
@@ -548,7 +587,23 @@ export class RunnerIpcBridge {
         });
         throw new Error(`IPC sender not trusted for channel ${channel}`);
       }
-      return handler(event, ...args);
+      try {
+        return Promise.resolve(handler(event, ...args)).catch(
+          (err: unknown) => {
+            log.warn("[runner-ipc] invoke handler failed", {
+              channel,
+              error: describeLogError(err),
+            });
+            throw err;
+          },
+        );
+      } catch (err) {
+        log.warn("[runner-ipc] invoke handler threw", {
+          channel,
+          error: describeLogError(err),
+        });
+        throw err;
+      }
     });
   }
 
@@ -620,6 +675,12 @@ export class RunnerIpcBridge {
         if (settled) return;
         settled = true;
         this.freshSnapshotWaiters.delete(requestId);
+        log.warn("[runner-ipc] fresh unsynced snapshot timed out", {
+          windowId: record.windowId,
+          timeoutMs,
+          fallbackCount:
+            this.unsyncedEditsSnapshots.get(record.windowId)?.length ?? 0,
+        });
         resolve(this.unsyncedEditsSnapshots.get(record.windowId) ?? []);
       }, timeoutMs);
       this.freshSnapshotWaiters.set(requestId, {
@@ -644,6 +705,11 @@ export class RunnerIpcBridge {
         settled = true;
         clearTimeout(timer);
         this.freshSnapshotWaiters.delete(requestId);
+        log.warn("[runner-ipc] fresh unsynced snapshot request not delivered", {
+          windowId: record.windowId,
+          fallbackCount:
+            this.unsyncedEditsSnapshots.get(record.windowId)?.length ?? 0,
+        });
         resolve(this.unsyncedEditsSnapshots.get(record.windowId) ?? []);
       }
     });
@@ -677,21 +743,23 @@ export class RunnerIpcBridge {
     }
   }
 
-  flushPendingAuthCallbacks(): void {
-    if (this.pendingAuthCallbacks.length === 0) {
+  flushPendingAuthReturnSignal(): void {
+    if (!this.pendingAuthReturnSignal) {
       return;
     }
     const target = this.windowRegistry.getMruRecord();
     if (target === null) {
       return;
     }
-    for (const result of this.pendingAuthCallbacks.splice(0)) {
-      this.safeSendToWindow(
-        target.windowId,
-        RunnerHostEvent.authCallback,
-        result,
-      );
+    this.pendingAuthReturnSignal = false;
+    if (!target.window.isFocused()) {
+      this.windowRegistry.focusById(target.windowId);
     }
+    this.safeSendToWindow(
+      target.windowId,
+      RunnerHostEvent.authCallback,
+      undefined,
+    );
   }
 
   replayCurrentStateToWindow(windowId: string): void {
@@ -725,6 +793,11 @@ export class RunnerIpcBridge {
       RunnerHostEvent.appUpdateChange,
       getAppUpdateSnapshot(),
     );
+    this.safeSendToWindow(
+      windowId,
+      RunnerHostEvent.zoomChange,
+      this.zoomController.getZoomPercent(),
+    );
   }
 
   deliverToOwnedOrMru(
@@ -739,10 +812,20 @@ export class RunnerIpcBridge {
         ? this.windowRegistry.getMruRecord()
         : this.windowRegistry.getRecordById(ownerWindowId);
     if (target === null) {
+      log.warn("[runner-ipc] no renderer target for event", {
+        channel,
+        hasEpicId: epicId !== null,
+        ownerWindowId,
+      });
       return;
     }
     this.windowRegistry.focusById(target.windowId);
-    this.safeSendToWindow(target.windowId, channel, payload);
+    if (!this.safeSendToWindow(target.windowId, channel, payload)) {
+      log.warn("[runner-ipc] renderer event delivery failed", {
+        channel,
+        windowId: target.windowId,
+      });
+    }
   }
 
   private resolveRendererHostedCommandTarget(
@@ -903,6 +986,16 @@ class SingleWindowRegistry implements IpcWindowRegistry {
   off(_event: "change", _listener: IpcWindowRegistryChangeListener): void {}
 }
 
+// Default quit-state for the single-window `window:` bridge variant (and any
+// registry-mode caller that omits `quitState`): the shell is never quitting, so
+// the registry-change listener falls back to the "last remaining window"
+// heuristic alone.
+class NeverQuittingShellState implements IpcShellQuitState {
+  isQuitting(): boolean {
+    return false;
+  }
+}
+
 class NullEpicWindowOwnership implements IpcEpicWindowOwnership {
   getOwner(_tabId: string): string | null {
     return null;
@@ -1038,5 +1131,34 @@ class NullSupportService implements IpcSupportService {
       lines: [],
       truncated: false,
     });
+  }
+}
+
+class NullZoomController implements IpcZoomController {
+  private zoomPercent: ZoomPercent = 100;
+
+  getZoomPercent(): ZoomPercent {
+    return this.zoomPercent;
+  }
+
+  zoomIn(): Promise<ZoomPercent> {
+    return this.setZoomPercent(this.zoomPercent);
+  }
+
+  zoomOut(): Promise<ZoomPercent> {
+    return this.setZoomPercent(this.zoomPercent);
+  }
+
+  reset(): Promise<ZoomPercent> {
+    return this.setZoomPercent(100);
+  }
+
+  setZoomPercent(percent: number): Promise<ZoomPercent> {
+    this.zoomPercent = percent === 100 ? 100 : this.zoomPercent;
+    return Promise.resolve(this.zoomPercent);
+  }
+
+  onChange(_listener: (percent: ZoomPercent) => void): () => void {
+    return () => undefined;
   }
 }

@@ -11,13 +11,25 @@ import {
 import { Terminal, type ITerminalOptions } from "@xterm/xterm";
 import { ClipboardAddon } from "@xterm/addon-clipboard";
 import { FitAddon } from "@xterm/addon-fit";
-import { SearchAddon, type ISearchOptions } from "@xterm/addon-search";
+import {
+  SearchAddon,
+  type ISearchResultChangeEvent,
+} from "@xterm/addon-search";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { CanvasAddon } from "@xterm/addon-canvas";
 import "@xterm/xterm/css/xterm.css";
+import { useRegisterTileFindAdapter } from "@/components/epic-canvas/tile-find/tile-find-adapter-context";
 import { isMac } from "@/lib/keybindings/platform";
 import { translateLineEditChord } from "@/lib/terminal-line-edit";
-import { useSettingsStore } from "@/stores/settings/settings-store";
+import {
+  useSettingsStore,
+  inactiveCursorStyleFor,
+  type TerminalCursorStyle,
+} from "@/stores/settings/settings-store";
+import {
+  DEFAULT_MONO_FONT_STACK,
+  buildFontFamilyValue,
+} from "@/lib/default-font-stacks";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useTerminalTheme } from "@/lib/terminal-theme";
 import { scheduleAtlasClear } from "@/lib/terminal-theme-scheduler";
@@ -36,6 +48,13 @@ import {
   type XtermHostEntry,
   type XtermHostLiveCallbacks,
 } from "@/components/epic-canvas/renderers/xterm-host-registry";
+import {
+  createTerminalTileFindAdapter,
+  runTerminalXtermSearch,
+  type TerminalSearchResultSource,
+  type TerminalTileFindAdapter,
+  type TerminalTileFindKind,
+} from "@/components/epic-canvas/renderers/terminal-tile-find-adapter";
 
 const RESIZE_DEBOUNCE_MS = 50;
 const XTERM_STARTUP_DISPOSE_DELAY_MS = 0;
@@ -52,29 +71,25 @@ interface XtermInitialOptions extends ITerminalOptions {
   };
 }
 
-const FALLBACK_FONT_FAMILY =
-  "Menlo, Monaco, 'SF Mono', 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace";
-
-const TERMINAL_SEARCH_DECORATIONS: ISearchOptions["decorations"] = {
-  matchBackground: "#854d0e",
-  matchOverviewRuler: "#f59e0b",
-  activeMatchBackground: "#facc15",
-  activeMatchColorOverviewRuler: "#facc15",
-};
-
 const TERMINAL_DRAG_PATH_ESCAPE_PATTERN = /([\\\s!"#$&'()*;<>?[\]^`{|}])/g;
+const getEmptyFindTargetId = (): string | null => null;
+const ignoreSearchResults = (): void => {};
 
 // xterm measures glyph cell width on a hidden canvas using the configured
-// `fontFamily`. CSS variables don't resolve in that measurement pass, so we
-// resolve `--traycer-font-mono` to its concrete CSS string here at mount,
-// fall back to a system mono stack if the variable is unset, and pin
-// `letterSpacing` / `lineHeight` on the constructed Terminal so paint and
+// `fontFamily`, so CSS variables (which don't resolve in that measurement
+// pass) are not usable here. Instead the effective terminal font is built
+// directly from settings-store values against the same default mono stack
+// `theme-provider.tsx` uses for `--traycer-font-mono` - `letterSpacing` /
+// `lineHeight` are pinned on the constructed Terminal so paint and
 // measurement agree.
-function resolveFontFamily(doc: Document): string {
-  const raw = getComputedStyle(doc.documentElement)
-    .getPropertyValue("--traycer-font-mono")
-    .trim();
-  return raw.length > 0 ? raw : FALLBACK_FONT_FAMILY;
+function resolveEffectiveFontFamily(
+  terminalFontFamily: string | null,
+  codeFontFamily: string | null,
+): string {
+  return buildFontFamilyValue(
+    terminalFontFamily ?? codeFontFamily,
+    DEFAULT_MONO_FONT_STACK,
+  );
 }
 
 export interface TerminalXtermHostProps {
@@ -84,6 +99,7 @@ export interface TerminalXtermHostProps {
    * tile and session store report into.
    */
   readonly sessionId: string;
+  readonly tileKind: TerminalTileFindKind;
   /**
    * Per-tab instance id this host's persistent xterm engine is cached under in
    * `xterm-host-registry`. Keying by `instanceId` (not `sessionId`) lets two
@@ -145,6 +161,8 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
   const canvasRef = useRef<CanvasAddon | null>(null);
   const controlsRef = useRef<XtermHostControls | null>(null);
   const findTargetIdRef = useRef(props.findTargetId);
+  const terminalSearchResultSourceRef =
+    useRef<TerminalSearchResultSource | null>(null);
   const dragDepthRef = useRef(0);
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   // Stable for the host's lifetime; held in a ref so the acquire effect can tag
@@ -163,18 +181,56 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
   // reattached engine keeps its already-synced options.
   const theme = useTerminalTheme();
   const codeFontSize = useSettingsStore((s) => s.codeFontSize);
-  const fontFamily = useMemo(() => resolveFontFamily(document), []);
+  const terminalFontSize = useSettingsStore((s) => s.terminalFontSize);
+  const codeFontFamily = useSettingsStore((s) => s.codeFontFamily);
+  const terminalFontFamily = useSettingsStore((s) => s.terminalFontFamily);
+  const cursorStyle = useSettingsStore((s) => s.terminalCursorStyle);
+  const cursorBlink = useSettingsStore((s) => s.terminalCursorBlink);
+  const effectiveFontSize = terminalFontSize ?? codeFontSize;
+  const fontFamily = resolveEffectiveFontFamily(
+    terminalFontFamily,
+    codeFontFamily,
+  );
   const runnerHost = useRunnerHost();
   // Inactive panes unregister global find ownership. They stay mounted, but
   // app-level find should only target the visible terminal.
   const activeFindTargetId = useVisiblePaneValue(props.findTargetId, null);
+  const markSearchResultSource = useCallback(
+    (source: TerminalSearchResultSource): void => {
+      terminalSearchResultSourceRef.current = source;
+    },
+    [],
+  );
+  const tileFindAdapter = useMemo(
+    () =>
+      createTerminalTileFindAdapter({
+        tileInstanceId: props.instanceId,
+        tileKind: props.tileKind,
+      }),
+    [props.instanceId, props.tileKind],
+  );
+  const tileFindAdapterRef = useRef<TerminalTileFindAdapter>(tileFindAdapter);
+  useEffect(() => {
+    tileFindAdapterRef.current = tileFindAdapter;
+  }, [tileFindAdapter]);
+  useEffect(() => {
+    tileFindAdapter.setSearchAddon(searchAddonRef.current);
+    tileFindAdapter.setSearchResultSourceSink(markSearchResultSource);
+    return () => {
+      tileFindAdapter.setSearchAddon(null);
+      tileFindAdapter.setSearchResultSourceSink(null);
+    };
+  }, [markSearchResultSource, tileFindAdapter]);
+  useRegisterTileFindAdapter(tileFindAdapter);
 
   const initialOptionsRef = useRef<XtermInitialOptions>({
-    cursorBlink: true,
+    cursorStyle,
+    cursorInactiveStyle: inactiveCursorStyleFor(cursorStyle),
+    cursorBlink,
     allowProposedApi: true,
     scrollback: 5000,
     fontFamily,
-    fontSize: codeFontSize,
+    fontSize: effectiveFontSize,
     letterSpacing: 0,
     lineHeight: 1,
     theme,
@@ -248,10 +304,22 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
     entry.live.openExternalLink = (uri) => {
       void runnerHostRef.current.openExternalLink(uri);
     };
-    entry.live.getFindTargetId = () => findTargetIdRef.current;
+    const getFindTargetId = () => findTargetIdRef.current;
+    const onSearchResults = (result: ISearchResultChangeEvent): void => {
+      const source = terminalSearchResultSourceRef.current;
+      if (source === "tile") {
+        tileFindAdapterRef.current.publishResults(result);
+      }
+      if (source === "legacy" && getFindTargetId() !== null) {
+        publishLegacyTerminalSearchResult(result);
+      }
+    };
+    entry.live.getFindTargetId = getFindTargetId;
+    entry.live.onSearchResults = onSearchResults;
 
     termRef.current = entry.term;
     searchAddonRef.current = entry.searchAddon;
+    tileFindAdapterRef.current.setSearchAddon(entry.searchAddon);
     canvasRef.current = entry.canvasAddon;
     controlsRef.current = entry.controls;
 
@@ -268,6 +336,14 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
       }
       termRef.current = null;
       searchAddonRef.current = null;
+      tileFindAdapterRef.current.setSearchAddon(null);
+      terminalSearchResultSourceRef.current = null;
+      if (entry.live.getFindTargetId === getFindTargetId) {
+        entry.live.getFindTargetId = getEmptyFindTargetId;
+      }
+      if (entry.live.onSearchResults === onSearchResults) {
+        entry.live.onSearchResults = ignoreSearchResults;
+      }
       canvasRef.current = null;
       controlsRef.current = null;
       // Keep the engine cached for a still-live session; dispose it otherwise.
@@ -277,7 +353,11 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
     };
   }, []);
 
-  useTerminalFindRegistration(activeFindTargetId, searchAddonRef);
+  useTerminalFindRegistration(
+    activeFindTargetId,
+    searchAddonRef,
+    markSearchResultSource,
+  );
   useTerminalResizeSync(termRef, props.effectiveCols, props.effectiveRows);
   useHostGridReconcile(controlsRef, props.effectiveCols, props.effectiveRows);
   useTerminalAppearanceSync({
@@ -285,16 +365,16 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
     controlsRef,
     canvasRef,
     theme,
-    codeFontSize,
+    fontSize: effectiveFontSize,
     fontFamily,
+    cursorStyle,
+    cursorBlink,
   });
   useVisibleTerminalRepair({
     termRef,
     controlsRef,
     canvasRef,
     theme,
-    effectiveCols: props.effectiveCols,
-    effectiveRows: props.effectiveRows,
   });
   useActiveTerminalFocus(termRef, props.shouldFocusOnActivePane);
 
@@ -306,7 +386,7 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
       dragDepthRef.current += 1;
       setIsDraggingFiles(true);
     },
-    [],
+    [setIsDraggingFiles],
   );
 
   const handleDragOver = useCallback(
@@ -317,7 +397,7 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
       event.dataTransfer.dropEffect = "copy";
       setIsDraggingFiles(true);
     },
-    [],
+    [setIsDraggingFiles],
   );
 
   const handleDragLeave = useCallback(
@@ -330,7 +410,7 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
         setIsDraggingFiles(false);
       }
     },
-    [],
+    [setIsDraggingFiles],
   );
 
   const handleDrop = useCallback(
@@ -371,7 +451,7 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
         })
         .catch(() => undefined);
     },
-    [runnerHost.fileDrops],
+    [runnerHost.fileDrops, setIsDraggingFiles],
   );
 
   // `absolute inset-0` sidesteps the percentage-height chain (`h-full` →
@@ -412,6 +492,19 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
   );
 }
 
+// RIS ("\x1bc") as raw bytes, for prepending to a `Uint8Array` snapshot chunk
+// (`terminal.subscribe@1.2`+) - see `writerProxy`'s reset-before-replay
+// comment. ASCII-only, so this is the same 2 bytes either way.
+const RESET_ESCAPE_BYTES = new Uint8Array([0x1b, 0x63]);
+
+function prependResetEscape(chunk: string | Uint8Array): string | Uint8Array {
+  if (typeof chunk === "string") return `\x1bc${chunk}`;
+  const combined = new Uint8Array(RESET_ESCAPE_BYTES.length + chunk.length);
+  combined.set(RESET_ESCAPE_BYTES, 0);
+  combined.set(chunk, RESET_ESCAPE_BYTES.length);
+  return combined;
+}
+
 /**
  * Build the long-lived xterm engine for a session: `Terminal` + addons opened
  * into a detached container element that the registry keeps alive across host
@@ -427,7 +520,8 @@ function createXtermEntry(
     onUserInput: () => {},
     onContainerResize: () => {},
     openExternalLink: () => {},
-    getFindTargetId: () => null,
+    getFindTargetId: getEmptyFindTargetId,
+    onSearchResults: ignoreSearchResults,
   };
 
   const containerEl = document.createElement("div");
@@ -486,27 +580,16 @@ function createXtermEntry(
   );
 
   let snapshotReplayDepth = 0;
+  // True once this kept-alive engine has had ANY output written to it. A second
+  // snapshot (transport reconnect / reopen of a kept-alive engine) then arrives
+  // for a buffer that already holds pre-disconnect content: see `writerProxy`.
+  let hasReceivedContent = false;
   const dataDisposable = term.onData((d) => {
     if (snapshotReplayDepth > 0) return;
     live.onUserInput(d);
   });
   const searchResultsDisposable = searchAddon.onDidChangeResults((result) => {
-    if (live.getFindTargetId() === null) return;
-    if (result.resultCount === 0) {
-      useFindInPageStore.getState().setMatches({ current: 0, total: 0 });
-      return;
-    }
-    if (result.resultIndex < 0) {
-      useFindInPageStore.getState().setMatches({
-        current: 0,
-        total: result.resultCount,
-      });
-      return;
-    }
-    useFindInPageStore.getState().setMatches({
-      current: result.resultIndex + 1,
-      total: result.resultCount,
-    });
+    live.onSearchResults(result);
   });
 
   const writerProxy: TerminalDataWriter = (write) => {
@@ -528,13 +611,40 @@ function createXtermEntry(
       ) {
         term.resize(write.cols, write.rows);
       }
+      // Reset before replaying a snapshot into an engine that already holds
+      // content. A snapshot is always the host's AUTHORITATIVE full-screen state
+      // (serialized emulator screen + scrollback + OSC colour preamble), so it
+      // must land on a clean buffer. On a transport reconnect / reopen the
+      // engine is kept alive and still shows pre-disconnect content; replaying
+      // the serialized redraw on top of it collides with the stale
+      // cursor/content - dropping the tail (the "last few output chars lost on
+      // resume" bug) and leaving the native OSC theme un-rasterized until a tab
+      // switch forces a repaint ("theme lost, comes back on tab switch"). RIS
+      // (`ESC c`) is a full reset through the parser - clears buffer + scrollback
+      // and restores default colours while preserving the grid size we just set
+      // - so the snapshot's OSC preamble then re-applies the native palette,
+      // exactly like a fresh open. (We use the escape, not `term.reset()`, which
+      // is unbound in this xterm build.) The first snapshot on a fresh engine
+      // skips this - nothing to clear. Prepended to the chunk (string or, for
+      // a `@1.2` binary connection, `Uint8Array` - see `prependResetEscape`)
+      // so it parses in-order, ahead of the redraw, inside the
+      // replay-suppression guard.
+      const replay = hasReceivedContent
+        ? prependResetEscape(write.chunk)
+        : write.chunk;
+      hasReceivedContent = true;
       snapshotReplayDepth += 1;
-      term.write(write.chunk, () => {
+      term.write(replay, () => {
         snapshotReplayDepth = Math.max(0, snapshotReplayDepth - 1);
+        // Ack-credit (terminal.subscribe@1.1): report the ORIGINAL
+        // `write.chunk` length the host actually counted, not the
+        // longer `replay` payload this proxy prepended the reset escape to.
+        write.onAckable();
       });
       return;
     }
-    term.write(write.chunk);
+    hasReceivedContent = true;
+    term.write(write.chunk, write.onAckable);
   };
 
   // Dedupe so the host isn't spammed with identical resize frames on every
@@ -835,33 +945,39 @@ function escapeTerminalDragPath(path: string): string {
 function useTerminalFindRegistration(
   activeFindTargetId: string | null,
   searchAddonRef: RefObject<SearchAddon | null>,
+  markSearchResultSource: (source: TerminalSearchResultSource) => void,
 ): void {
   useEffect(() => {
     const findTargetId = activeFindTargetId;
     if (findTargetId === null) return;
     return registerActiveTerminalFindController({
       id: findTargetId,
-      findNext: (query, matchCase, incremental) =>
-        runTerminalSearch({
+      findNext: (query, matchCase, incremental) => {
+        markSearchResultSource("legacy");
+        return runLegacyTerminalSearch({
           addon: searchAddonRef.current,
           query,
           matchCase,
           forward: true,
           incremental,
-        }),
-      findPrevious: (query, matchCase) =>
-        runTerminalSearch({
+        });
+      },
+      findPrevious: (query, matchCase) => {
+        markSearchResultSource("legacy");
+        return runLegacyTerminalSearch({
           addon: searchAddonRef.current,
           query,
           matchCase,
           forward: false,
           incremental: false,
-        }),
+        });
+      },
       clear: () => {
+        markSearchResultSource("legacy");
         searchAddonRef.current?.clearDecorations();
       },
     });
-  }, [activeFindTargetId, searchAddonRef]);
+  }, [activeFindTargetId, markSearchResultSource, searchAddonRef]);
 }
 
 function useTerminalResizeSync(
@@ -906,13 +1022,23 @@ interface TerminalAppearanceSyncInput {
   readonly controlsRef: RefObject<XtermHostControls | null>;
   readonly canvasRef: RefObject<CanvasAddon | null>;
   readonly theme: ITerminalOptions["theme"];
-  readonly codeFontSize: number;
+  readonly fontSize: number;
   readonly fontFamily: string;
+  readonly cursorStyle: TerminalCursorStyle;
+  readonly cursorBlink: boolean;
 }
 
 function useTerminalAppearanceSync(input: TerminalAppearanceSyncInput): void {
-  const { termRef, controlsRef, canvasRef, theme, codeFontSize, fontFamily } =
-    input;
+  const {
+    termRef,
+    controlsRef,
+    canvasRef,
+    theme,
+    fontSize,
+    fontFamily,
+    cursorStyle,
+    cursorBlink,
+  } = input;
 
   // Live theme switching: rebuild the xterm palette when the resolved
   // light/dark mode or active preset changes, then ask the WebGL atlas
@@ -926,13 +1052,14 @@ function useTerminalAppearanceSync(input: TerminalAppearanceSyncInput): void {
     scheduleAtlasClear(term, canvasRef.current);
   }, [termRef, theme, canvasRef]);
 
-  // Live font sync: codeFontSize is user-controlled in Settings; the mono
-  // font family is captured at mount via `useMemo([])` and stable for the
-  // tile lifetime, so this effect mainly tracks the size slider.
+  // Live font sync: `fontSize`/`fontFamily` are the effective terminal
+  // values - a Settings → Terminal override when set, else the Settings →
+  // Code value/font (see `resolveEffectiveFontFamily`) - so this effect
+  // tracks both the size slider and any font-family change.
   useLayoutEffect(() => {
     const term = termRef.current;
     if (term === null) return;
-    term.options.fontSize = codeFontSize;
+    term.options.fontSize = fontSize;
     term.options.fontFamily = fontFamily;
     scheduleAtlasClear(term, canvasRef.current);
     // A font/size change changes the cell box, so the grid must refit. Route it
@@ -941,7 +1068,18 @@ function useTerminalAppearanceSync(input: TerminalAppearanceSyncInput): void {
     // renderer hasn't re-measured cells yet this proposes nothing; the onRender
     // propose loop refits on the next frame.
     controlsRef.current?.fitToContainer();
-  }, [codeFontSize, controlsRef, fontFamily, termRef, canvasRef]);
+  }, [fontSize, controlsRef, fontFamily, termRef, canvasRef]);
+
+  // Live cursor sync: shape and blink are pure renderer options - they don't
+  // touch cell geometry, so unlike the font effect this neither refits the grid
+  // nor clears the glyph atlas. xterm repaints the cursor on the option write.
+  useLayoutEffect(() => {
+    const term = termRef.current;
+    if (term === null) return;
+    term.options.cursorStyle = cursorStyle;
+    term.options.cursorInactiveStyle = inactiveCursorStyleFor(cursorStyle);
+    term.options.cursorBlink = cursorBlink;
+  }, [termRef, cursorStyle, cursorBlink]);
 }
 
 function useVisibleTerminalRepair(input: {
@@ -949,25 +1087,8 @@ function useVisibleTerminalRepair(input: {
   readonly controlsRef: RefObject<XtermHostControls | null>;
   readonly canvasRef: RefObject<CanvasAddon | null>;
   readonly theme: ITerminalOptions["theme"];
-  readonly effectiveCols: number;
-  readonly effectiveRows: number;
 }): void {
-  const {
-    termRef,
-    controlsRef,
-    canvasRef,
-    theme,
-    effectiveCols,
-    effectiveRows,
-  } = input;
-  // Read the host's effective grid through a ref so a live resize doesn't churn
-  // the `refitVisiblePane` callback identity (which would re-run the full
-  // atlas-clear + repaint below on every resize step). The visible-transition
-  // recovery only needs whatever the effective grid is at the moment it fires.
-  const effectiveRef = useRef({ cols: effectiveCols, rows: effectiveRows });
-  useEffect(() => {
-    effectiveRef.current = { cols: effectiveCols, rows: effectiveRows };
-  }, [effectiveCols, effectiveRows]);
+  const { termRef, controlsRef, canvasRef, theme } = input;
   // Repaint when this pane becomes visible again. A tab switch never unmounts
   // the tile (the pane is hidden via `visibility:hidden` / `display:none` and
   // kept mounted so xterm scrollback survives), so the Traycer Host reattach pulse
@@ -995,16 +1116,16 @@ function useVisibleTerminalRepair(input: {
     if (term === null) return;
     const controls = controlsRef.current;
     if (controls !== null) {
-      // Refit to the box this pane now occupies, then reconcile against the
-      // host's grid: the shared min-size grid can have drifted to a stale/tiny
-      // value while we were hidden (effective never changed for us, so the
-      // effective-keyed reconcile won't fire), and re-reporting our natural size
-      // from the now-visible, healthy box releases that latch.
+      // Refit to the box this pane now occupies. This re-reports only when the
+      // measured grid differs from what we last sent (the `fitToContainer`
+      // dedupe), so an ordinary tab switch with an unchanged box sends nothing.
+      // We deliberately do NOT `reconcileWithHost` here: it compares natural
+      // dims against the host's effective grid (not lastSent), which legitimately
+      // differ under "smaller-pane-wins"/rounding, so it re-reported on every
+      // pane-show and caused the spurious resize-on-tab-switch. Recovery from a
+      // genuinely stale shared grid is left to `useHostGridReconcile`, which
+      // fires on an actual effective-size change, not on visibility.
       controls.fitToContainer();
-      controls.reconcileWithHost(
-        effectiveRef.current.cols,
-        effectiveRef.current.rows,
-      );
     }
     term.options.theme = theme;
     clearTerminalAtlasSafely(canvasRef.current);
@@ -1039,32 +1160,41 @@ function useActiveTerminalFocus(
   useActivePaneEffect(focusVisibleTerminal);
 }
 
-interface RunTerminalSearchInput {
+function runLegacyTerminalSearch(input: {
   readonly addon: SearchAddon | null;
   readonly query: string;
   readonly matchCase: boolean;
   readonly forward: boolean;
   readonly incremental: boolean;
-}
-
-function runTerminalSearch(input: RunTerminalSearchInput): boolean {
-  const { addon, query, matchCase, forward, incremental } = input;
-  if (addon === null) return false;
-  if (query.length === 0) {
-    addon.clearDecorations();
+}): boolean {
+  const result = runTerminalXtermSearch(input);
+  if (!result.attempted) return false;
+  if (result.cleared) {
     useFindInPageStore.getState().setMatches(null);
     return true;
   }
-  const options: ISearchOptions = {
-    caseSensitive: matchCase,
-    incremental,
-    decorations: TERMINAL_SEARCH_DECORATIONS,
-  };
-  const found = forward
-    ? addon.findNext(query, options)
-    : addon.findPrevious(query, options);
-  if (!found) {
+  if (!result.found) {
     useFindInPageStore.getState().setMatches({ current: 0, total: 0 });
   }
   return true;
+}
+
+function publishLegacyTerminalSearchResult(
+  result: ISearchResultChangeEvent,
+): void {
+  if (result.resultCount === 0) {
+    useFindInPageStore.getState().setMatches({ current: 0, total: 0 });
+    return;
+  }
+  if (result.resultIndex < 0) {
+    useFindInPageStore.getState().setMatches({
+      current: 0,
+      total: result.resultCount,
+    });
+    return;
+  }
+  useFindInPageStore.getState().setMatches({
+    current: result.resultIndex + 1,
+    total: result.resultCount,
+  });
 }

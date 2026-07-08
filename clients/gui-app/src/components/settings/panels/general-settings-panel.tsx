@@ -84,6 +84,26 @@ export function GeneralSettingsPanel() {
   const setNotifyOnChatTurnComplete = useSettingsStore(
     (s) => s.setNotifyOnChatTurnComplete,
   );
+  const showGlobalResourceMonitor = useSettingsStore(
+    (s) => s.showGlobalResourceMonitor,
+  );
+  const setShowGlobalResourceMonitor = useSettingsStore(
+    (s) => s.setShowGlobalResourceMonitor,
+  );
+  const showNavigatorResourceStats = useSettingsStore(
+    (s) => s.showNavigatorResourceStats,
+  );
+  const setShowNavigatorResourceStats = useSettingsStore(
+    (s) => s.setShowNavigatorResourceStats,
+  );
+  const pinContextUsageBreakdown = useSettingsStore(
+    (s) => s.pinContextUsageBreakdown,
+  );
+  const setPinContextUsageBreakdown = useSettingsStore(
+    (s) => s.setPinContextUsageBreakdown,
+  );
+  const quoteReplyEnabled = useSettingsStore((s) => s.quoteReplyEnabled);
+  const setQuoteReplyEnabled = useSettingsStore((s) => s.setQuoteReplyEnabled);
 
   return (
     <SettingsPanelShell title="General">
@@ -106,6 +126,50 @@ export function GeneralSettingsPanel() {
             checked={preventSleepWhileRunning}
             onCheckedChange={setPreventSleepWhileRunning}
             aria-label="Prevent sleep while running"
+          />
+        }
+      />
+      <SettingsRow
+        label="Show global resources button"
+        description="Show the app-wide resource monitor in the header."
+        control={
+          <Switch
+            checked={showGlobalResourceMonitor}
+            onCheckedChange={setShowGlobalResourceMonitor}
+            aria-label="Show global resources button"
+          />
+        }
+      />
+      <SettingsRow
+        label="Show navigator resource stats"
+        description="Show compact live CPU and memory chips in task navigator rows."
+        control={
+          <Switch
+            checked={showNavigatorResourceStats}
+            onCheckedChange={setShowNavigatorResourceStats}
+            aria-label="Show navigator resource stats"
+          />
+        }
+      />
+      <SettingsRow
+        label="Pin context usage breakdown"
+        description="Keep the context window breakdown visible near the chat composer when usage data is available."
+        control={
+          <Switch
+            checked={pinContextUsageBreakdown}
+            onCheckedChange={setPinContextUsageBreakdown}
+            aria-label="Pin context usage breakdown"
+          />
+        }
+      />
+      <SettingsRow
+        label="Quote reply on text selection"
+        description="Selecting assistant text shows a quote button that inserts the selection into the composer."
+        control={
+          <Switch
+            checked={quoteReplyEnabled}
+            onCheckedChange={setQuoteReplyEnabled}
+            aria-label="Quote reply on text selection"
           />
         }
       />
@@ -278,6 +342,7 @@ function SettingsFileEditSnapshotsSection() {
     HostRpcRegistry,
     "snapshots.getLocalStorageSize"
   >({
+    cacheKeyIdentity: undefined,
     client,
     method: "snapshots.getLocalStorageSize",
     params: SNAPSHOTS_LOCAL_STORAGE_PARAMS,

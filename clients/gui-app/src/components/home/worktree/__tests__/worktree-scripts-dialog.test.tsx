@@ -42,21 +42,21 @@ const mocks = vi.hoisted(() => ({
       readonly isSuccess: boolean;
     }
   >(() => ({ data: undefined, isSuccess: false })),
-  // The source-branch scripts read (`worktree.readScriptsAtRef`). Defaults to
-  // "settled, no committed scripts" so most tests fall through to summary.scripts
-  // exactly as the create path does.
+  // The source-branch scripts read. Defaults to "settled, no committed scripts"
+  // so most tests fall through to summary.scripts exactly as the create path does.
+  // The dialog now fetches this via `worktree.listByWorkspacePaths` v1.1; the
+  // useHostQuery mock below adapts this single-ref fixture into that shape.
   readScriptsAtRef: vi.fn<
     () => {
       readonly data:
-        | { readonly scripts: WorktreeEntryScripts | null }
-        | undefined;
+        { readonly scripts: WorktreeEntryScripts | null } | undefined;
       readonly isSuccess: boolean;
       readonly isError: boolean;
     }
   >(() => ({ data: { scripts: null }, isSuccess: true, isError: false })),
-  // Captures the git ref the dialog requests for worktree.readScriptsAtRef, so
+  // Captures the git ref the dialog requests in its `scriptRefs` point-read, so
   // tests can pin that the SOURCE branch (new) / checkout branch is read - not
-  // just that the method fired.
+  // just that the query fired.
   lastReadScriptsRef: { current: "" },
 }));
 
@@ -77,11 +77,60 @@ vi.mock("@/hooks/worktree/use-worktree-set-repo-scripts-mutation", () => ({
 vi.mock("@/hooks/host/use-host-query", () => ({
   useHostQuery: (opts: {
     readonly method: string;
-    readonly params: { readonly ref: string };
+    // `scriptRefs` is required: the v1.1 request always carries it (empty when
+    // there is no source ref). Reading it without optional chaining below makes a
+    // regression where the dialog stops sending the field fail loudly instead of
+    // silently degrading to an empty request.
+    readonly params: {
+      readonly workspacePaths: ReadonlyArray<string>;
+      readonly scriptRefs: ReadonlyArray<{
+        readonly workspacePath: string;
+        readonly ref: string;
+      }>;
+    };
   }) => {
-    if (opts.method === "worktree.readScriptsAtRef") {
-      mocks.lastReadScriptsRef.current = opts.params.ref;
-      return mocks.readScriptsAtRef();
+    // The source-branch preview rides `worktree.listByWorkspacePaths` v1.1 as a
+    // point-read (`scriptRefs: [{ workspacePath, ref }]` -> `scriptsAtRefs`).
+    // Adapt the single-ref `readScriptsAtRef` fixture into that response shape so
+    // the existing per-test fixtures keep working unchanged.
+    if (opts.method === "worktree.listByWorkspacePaths") {
+      // The preview is a pure point-read: it must list NO workspaces (empty
+      // `workspacePaths`) and carry the scripts read on `scriptRefs`. Fail loudly
+      // if the dialog ever regresses to a workspace-summary list.
+      if (opts.params.workspacePaths.length > 0) {
+        throw new Error(
+          `worktree.listByWorkspacePaths preview must send workspacePaths: [], got ${JSON.stringify(
+            opts.params.workspacePaths,
+          )}`,
+        );
+      }
+      // `.at(0)` (not `[0]`) so an empty `scriptRefs` yields `undefined` while a
+      // missing `scriptRefs` field still throws - the required-field assertion.
+      const entry = opts.params.scriptRefs.at(0);
+      mocks.lastReadScriptsRef.current = entry?.ref ?? "";
+      const result = mocks.readScriptsAtRef();
+      if (result.data === undefined) {
+        return {
+          data: undefined,
+          isSuccess: result.isSuccess,
+          isError: result.isError,
+        };
+      }
+      const scriptsAtRefs =
+        entry === undefined
+          ? []
+          : [
+              {
+                workspacePath: entry.workspacePath,
+                ref: entry.ref,
+                scripts: result.data.scripts,
+              },
+            ];
+      return {
+        data: { workspaces: [], scriptsAtRefs },
+        isSuccess: result.isSuccess,
+        isError: result.isError,
+      };
     }
     return mocks.listAllForHost();
   },
@@ -192,6 +241,7 @@ function liveWorktreeBinding(): WorktreeBinding {
         setupExitCode: 1,
         setupFailedAt: 0,
         createdAt: 0,
+        ownedSubmodules: [],
       },
     ],
   };

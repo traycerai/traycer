@@ -21,6 +21,7 @@ export function useGitCapabilitiesQuery(args: {
 > {
   const client = useHostClient();
   return useHostQuery<HostRpcRegistry, "git.getCapabilities">({
+    cacheKeyIdentity: undefined,
     client,
     method: "git.getCapabilities",
     params: {

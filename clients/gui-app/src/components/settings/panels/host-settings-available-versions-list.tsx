@@ -111,6 +111,7 @@ function renderVersionRow(props: {
   readonly onInstallVersion: (version: string) => void;
 }) {
   const { entry, isInstalled, isLatest, anyPending, onInstallVersion } = props;
+  const unavailableReason = platformUnavailableReason(entry);
   return (
     <li
       key={entry.version}
@@ -136,6 +137,11 @@ function renderVersionRow(props: {
         <span className="text-ui-xs text-muted-foreground">
           {formatInstallDate(entry.releasedAt)}
         </span>
+        {unavailableReason !== null ? (
+          <span className="text-ui-xs text-muted-foreground">
+            {unavailableReason}
+          </span>
+        ) : null}
       </div>
       <Button
         variant="secondary"
@@ -144,12 +150,28 @@ function renderVersionRow(props: {
           anyPending ||
           isInstalled ||
           entry.yanked ||
-          entry.platformAsset === null
+          unavailableReason !== null
         }
+        title={unavailableReason === null ? undefined : unavailableReason}
         onClick={() => onInstallVersion(entry.version)}
       >
         Install
       </Button>
     </li>
   );
+}
+
+function platformUnavailableReason(
+  entry: HostAvailableVersionEntry,
+): string | null {
+  if (entry.platformAsset === null) {
+    return "No asset for this platform.";
+  }
+  if (entry.platformAsset.available) {
+    return null;
+  }
+  const reason = entry.platformAsset.unavailableReason?.trim();
+  return reason === undefined || reason.length === 0
+    ? "Unavailable on this platform."
+    : reason;
 }

@@ -56,12 +56,12 @@ interface ChatComposerProps {
   readonly isActive: boolean;
   readonly sendDisabled: boolean | undefined;
   readonly mentionRoots: ReadonlyArray<string> | null;
+  readonly fallbackToGlobalMentionRoots: boolean;
   readonly currentEpicId: string | null;
   readonly settingsSeed: ChatRunSettings | null;
   readonly fallbackSettingsSeed: ChatRunSettings | null;
   readonly onSubmitMessage:
-    | ((input: ChatComposerSubmitInput) => boolean)
-    | null;
+    ((input: ChatComposerSubmitInput) => boolean) | null;
   readonly onSettingsChange: ((settings: ChatRunSettings) => void) | null;
   readonly activeTurnStatus: ChatActiveTurn["status"] | null;
   readonly editingQueueItemId: string | null;
@@ -101,6 +101,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     isActive,
     sendDisabled,
     mentionRoots,
+    fallbackToGlobalMentionRoots,
     currentEpicId,
     settingsSeed,
     fallbackSettingsSeed,
@@ -117,11 +118,22 @@ function ChatComposerImpl(props: ChatComposerProps) {
     topSpacing,
     topSlot,
   } = props;
-  const resolvedMentionRoots = useWorkspaceMentionRoots(mentionRoots, true);
+  const resolvedMentionRoots = useWorkspaceMentionRoots(
+    mentionRoots,
+    fallbackToGlobalMentionRoots,
+  );
   const hostClient = useTabHostClient();
   const workspaceBlocked = !workspaceComposerCanStart(workspaceAvailability);
 
   const editorRef = useRef<ComposerPromptEditorHandle | null>(null);
+  // Counts editor-ready transitions (a counter, not a boolean, so a torn-down
+  // and re-created editor re-fires). The draft-reset bridge keys its
+  // handle-ready catch-up on this - a ref flip alone never re-renders us.
+  const [editorReadyTick, setEditorReadyTick] = useState(0);
+  const handleEditorReady = useCallback(
+    () => setEditorReadyTick((tick) => tick + 1),
+    [],
+  );
   const [pickerStore] = useState(() => createComposerPickerStore());
 
   // The mention/slash menu renders through a body portal, so a left-open menu
@@ -149,6 +161,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
   } = useChatComposerDraft({
     taskId,
     editorRef,
+    editorReadyTick,
   });
 
   const { dictationControl, dictationPreparing } = useComposerDictation({
@@ -276,6 +289,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
                 onPaste={onPaste}
                 onDragOver={onDragOver}
                 onDrop={onDrop}
+                onEditorReady={handleEditorReady}
               />
             }
             toolbar={

@@ -1,5 +1,6 @@
 import { mergeAttributes, type Editor } from "@tiptap/core";
 import Mention from "@tiptap/extension-mention";
+import { PluginKey } from "@tiptap/pm/state";
 import { ReactNodeViewRenderer } from "@tiptap/react";
 
 import {
@@ -19,6 +20,17 @@ import { dataAttributeMap, MENTION_ATTRIBUTE_NAMES } from "./attribute-helpers";
 export interface MentionExtensionDeps {
   readonly pickerStore: ComposerPickerStore;
 }
+
+/**
+ * Stable key for the `@` mention suggestion plugin. Exported (and pinned via the
+ * suggestion config below, overriding extension-mention's auto-generated key) so
+ * code outside the editor can imperatively exit an open suggestion by
+ * dispatching `setMeta(mentionSuggestionPluginKey, { exit: true })` - see the
+ * editor's `dismissActiveSuggestion` handle.
+ */
+export const mentionSuggestionPluginKey = new PluginKey(
+  "composer-mention-suggestion",
+);
 
 export function createMentionExtension(deps: MentionExtensionDeps) {
   const ChatMention = Mention.extend({
@@ -60,6 +72,7 @@ export function createMentionExtension(deps: MentionExtensionDeps) {
     deleteTriggerWithBackspace: true,
     HTMLAttributes: { "data-composer-mention": "" },
     suggestion: {
+      pluginKey: mentionSuggestionPluginKey,
       char: "@",
       allowSpaces: false,
       allowedPrefixes: null,

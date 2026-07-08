@@ -13,6 +13,7 @@ describe("<ReasoningSegment />", () => {
   it("shows the live 'Thinking' label and tail preview while streaming", () => {
     render(
       <ReasoningSegment
+        findUnitId={null}
         markdown="Considering the options"
         isStreaming
         durationMs={null}
@@ -24,9 +25,28 @@ describe("<ReasoningSegment />", () => {
     expect(screen.getByText("Considering the options")).toBeTruthy();
   });
 
+  it("does not mark reasoning markdown as quotable", () => {
+    render(
+      <ReasoningSegment
+        findUnitId={null}
+        markdown="Considering the options"
+        isStreaming
+        durationMs={null}
+      />,
+    );
+
+    expect(
+      screen
+        .getByText("Considering the options")
+        .closest(".md-prose")
+        ?.hasAttribute("data-quotable"),
+    ).toBe(false);
+  });
+
   it("collapses to a 'Thought for Xs' summary once completed", () => {
     render(
       <ReasoningSegment
+        findUnitId={null}
         markdown="Considering the options"
         isStreaming={false}
         durationMs={12000}
@@ -41,6 +61,7 @@ describe("<ReasoningSegment />", () => {
   it("falls back to 'Thought' when no duration is known", () => {
     render(
       <ReasoningSegment
+        findUnitId={null}
         markdown="Considering the options"
         isStreaming={false}
         durationMs={null}
@@ -53,6 +74,7 @@ describe("<ReasoningSegment />", () => {
   it("expands the full trace on click", () => {
     render(
       <ReasoningSegment
+        findUnitId={null}
         markdown="Detailed chain of thought"
         isStreaming={false}
         durationMs={3000}
@@ -67,6 +89,7 @@ describe("<ReasoningSegment />", () => {
   it("expands the streaming preview when the block body (not just the chevron) is clicked", () => {
     render(
       <ReasoningSegment
+        findUnitId={null}
         markdown="Considering the options"
         isStreaming
         durationMs={null}
@@ -84,6 +107,7 @@ describe("<ReasoningSegment />", () => {
   it("collapses again when the expanded trace body is re-clicked", () => {
     render(
       <ReasoningSegment
+        findUnitId={null}
         markdown="Detailed chain of thought"
         isStreaming={false}
         durationMs={3000}
@@ -101,6 +125,7 @@ describe("<ReasoningSegment />", () => {
   it("does not collapse when the click ends a text selection (click-drag)", () => {
     render(
       <ReasoningSegment
+        findUnitId={null}
         markdown="Detailed chain of thought"
         isStreaming={false}
         durationMs={3000}
@@ -129,6 +154,7 @@ describe("<ReasoningSegment />", () => {
       <div>
         <p data-testid="outside">unrelated selectable text</p>
         <ReasoningSegment
+          findUnitId={null}
           markdown="Detailed chain of thought"
           isStreaming={false}
           durationMs={3000}
@@ -155,6 +181,7 @@ describe("<ReasoningSegment />", () => {
   it("links the header to the body region via aria-controls only when shown", () => {
     render(
       <ReasoningSegment
+        findUnitId={null}
         markdown="Detailed chain of thought"
         isStreaming={false}
         durationMs={3000}
@@ -173,6 +200,7 @@ describe("<ReasoningSegment />", () => {
   it("rolls a multi-hour reasoning duration up to 'Xh Ym Zs'", () => {
     render(
       <ReasoningSegment
+        findUnitId={null}
         markdown="Considering the options"
         isStreaming={false}
         durationMs={3_661_000}

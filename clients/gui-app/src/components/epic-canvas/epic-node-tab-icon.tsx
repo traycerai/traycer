@@ -1,12 +1,15 @@
 import { cn } from "@/lib/utils";
 import { ChatProgressIcon } from "@/components/chat/chat-progress-icon";
+import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import {
   EPIC_NODE_ICONS,
   type EpicNodeKind,
 } from "@/lib/artifacts/node-display";
+import { useMaybeEpicTuiAgentHarnessId } from "@/lib/epic-selectors";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import {
   WORKSPACE_FILE_TAB_KIND,
+  type EpicArtifactRef,
   type EpicNodeRef,
 } from "@/stores/epics/canvas/types";
 import { WorkspaceFileIcon } from "@/components/epic-canvas/workspace-file/workspace-file-icons";
@@ -47,9 +50,41 @@ export function EpicNodeTabIcon(props: {
       />
     );
   }
+  if (props.node.type === "terminal-agent") {
+    return (
+      <TuiAgentTabIcon
+        nodeId={props.node.id}
+        pendingTuiHarnessId={props.node.pendingTuiHarnessId}
+        className={props.className}
+      />
+    );
+  }
   return (
     <StaticEpicNodeIcon type={props.node.type} className={props.className} />
   );
+}
+
+/**
+ * TUI-agent tab/node icon: the underlying harness's brand mark (Claude, Codex,
+ * …) so a terminal agent reads as the tool driving it rather than a generic
+ * bot. Falls back to the static bot glyph when the harness can't be resolved -
+ * a legacy record, or the provider-less drag overlay (see
+ * {@link useMaybeEpicTuiAgentHarnessId}). Brand marks render in their own
+ * colors; they intentionally don't follow the per-type icon-color customization.
+ */
+function TuiAgentTabIcon(props: {
+  readonly nodeId: string;
+  readonly pendingTuiHarnessId: EpicArtifactRef["pendingTuiHarnessId"];
+  readonly className: string;
+}) {
+  const projectedHarnessId = useMaybeEpicTuiAgentHarnessId(props.nodeId);
+  const harnessId = projectedHarnessId ?? props.pendingTuiHarnessId ?? null;
+  if (harnessId === null) {
+    return (
+      <StaticEpicNodeIcon type="terminal-agent" className={props.className} />
+    );
+  }
+  return <HarnessIcon harnessId={harnessId} className={props.className} />;
 }
 
 export function StaticEpicNodeIcon(props: {

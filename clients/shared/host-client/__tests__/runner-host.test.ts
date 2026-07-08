@@ -100,7 +100,7 @@ describe("MockRunnerHost - IRunnerHost contract", () => {
     expect(handler).not.toHaveBeenCalled();
   });
 
-  it("delivers both token and error auth-callback results", () => {
+  it("fans out the payload-free browser-return signal to every subscriber", () => {
     const host = new MockRunnerHost({
       signInUrl: "https://auth.traycer.invalid/sign-in",
       authnBaseUrl: "http://localhost:5005",
@@ -114,11 +114,13 @@ describe("MockRunnerHost - IRunnerHost contract", () => {
     const handler = vi.fn();
     host.onAuthCallback(handler);
 
-    host.emitAuthCallback({ code: "abc123" });
-    host.emitAuthCallback({ error: "user_cancelled" });
+    host.emitAuthCallback();
+    host.emitAuthCallback();
 
-    expect(handler).toHaveBeenNthCalledWith(1, { code: "abc123" });
-    expect(handler).toHaveBeenNthCalledWith(2, { error: "user_cancelled" });
+    // Payload-free: it only signals "the browser returned"; the device poll
+    // carries the token, not this callback.
+    expect(handler).toHaveBeenCalledTimes(2);
+    expect(handler).toHaveBeenNthCalledWith(1);
   });
 
   it("tracks hostPicker open/close/onChange transitions", () => {

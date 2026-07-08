@@ -11,9 +11,14 @@ import {
 } from "./next-steps-action-group";
 
 interface TextSegmentProps {
+  findUnitId: string | null;
   markdown: string;
   isStreaming: boolean;
   nextStepActions: NextStepActionHandler | null;
+}
+
+function nextStepOptionLockKey(blockId: string, optionId: string): string {
+  return `${blockId}:${optionId}`;
 }
 
 export function TextSegment(props: TextSegmentProps) {
@@ -21,23 +26,28 @@ export function TextSegment(props: TextSegmentProps) {
     () => parseTraycerNextStepsMarkdown(props.markdown, props.isStreaming),
     [props.isStreaming, props.markdown],
   );
-  const [lockedBlockIds, setLockedBlockIds] = useState<ReadonlySet<string>>(
+  const [lockedOptionKeys, setLockedOptionKeys] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
-  const lockBlock = useCallback((blockId: string) => {
-    setLockedBlockIds((current) => withMemberAdded(current, blockId));
+  const lockOption = useCallback((blockId: string, optionId: string) => {
+    setLockedOptionKeys((current) =>
+      withMemberAdded(current, nextStepOptionLockKey(blockId, optionId)),
+    );
   }, []);
 
   return (
-    <div className="text-ui leading-7 text-foreground">
+    <div
+      data-chat-find-unit={props.findUnitId ?? undefined}
+      className="text-ui leading-7 text-foreground"
+    >
       {parts.map((part) => (
         <TextSegmentPart
           key={part.id}
           part={part}
-          locked={lockedBlockIds.has(part.id)}
+          lockedOptionKeys={lockedOptionKeys}
           isStreaming={props.isStreaming}
           nextStepActions={props.nextStepActions}
-          onLock={lockBlock}
+          onLockOption={lockOption}
         />
       ))}
     </div>
@@ -46,10 +56,10 @@ export function TextSegment(props: TextSegmentProps) {
 
 interface TextSegmentPartProps {
   readonly part: TraycerNextStepsPart;
-  readonly locked: boolean;
+  readonly lockedOptionKeys: ReadonlySet<string>;
   readonly isStreaming: boolean;
   readonly nextStepActions: NextStepActionHandler | null;
-  readonly onLock: (blockId: string) => void;
+  readonly onLockOption: (blockId: string, optionId: string) => void;
 }
 
 function TextSegmentPart(props: TextSegmentPartProps) {
@@ -60,9 +70,18 @@ function TextSegmentPart(props: TextSegmentPartProps) {
         isStreaming={props.isStreaming}
         markdown={part.markdown}
         proseSize="normal"
+        quotable
       />
     );
   }
+
+  const lockedOptionIds = new Set(
+    part.options
+      .filter((option) =>
+        props.lockedOptionKeys.has(nextStepOptionLockKey(part.id, option.id)),
+      )
+      .map((option) => option.id),
+  );
 
   return (
     <>
@@ -71,15 +90,16 @@ function TextSegmentPart(props: TextSegmentPartProps) {
           isStreaming={props.isStreaming}
           markdown={part.prose}
           proseSize="normal"
+          quotable
         />
       )}
       <NextStepsActionGroup
         blockId={part.id}
         options={part.options}
         complete={part.complete}
-        locked={props.locked}
+        lockedOptionIds={lockedOptionIds}
         actionHandler={props.nextStepActions}
-        onLock={props.onLock}
+        onLockOption={props.onLockOption}
       />
     </>
   );

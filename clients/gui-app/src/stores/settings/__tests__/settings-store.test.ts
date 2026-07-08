@@ -1,6 +1,9 @@
 import "../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { DEFAULT_AGENT_MODE } from "@/components/home/data/landing-options";
+import {
+  DEFAULT_AGENT_MODE,
+  DEFAULT_PERMISSION,
+} from "@/components/home/data/landing-options";
 import { DEFAULT_EPIC_NODE_ICON_COLORS } from "@/lib/artifacts/node-display";
 import { DEFAULT_DIFF_VIEWER_PREFERENCES } from "@/lib/diff/diff-viewer-preferences";
 import { useSettingsStore } from "@/stores/settings/settings-store";
@@ -10,10 +13,14 @@ function resetSettingsStore(): void {
   useSettingsStore.setState({
     artifactIconColorMode: "byType",
     artifactIconColors: DEFAULT_EPIC_NODE_ICON_COLORS,
-    defaultPermission: "supervised",
+    defaultPermission: DEFAULT_PERMISSION,
     defaultAgentMode: DEFAULT_AGENT_MODE,
     defaultEditor: "vscode",
     notifyOnChatTurnComplete: true,
+    showGlobalResourceMonitor: true,
+    showNavigatorResourceStats: false,
+    pinContextUsageBreakdown: false,
+    quoteReplyEnabled: true,
     diffViewerPreferences: DEFAULT_DIFF_VIEWER_PREFERENCES,
   });
 }
@@ -161,8 +168,150 @@ describe("useSettingsStore", () => {
     expect(useSettingsStore.getState().notifyOnChatTurnComplete).toBe(false);
   });
 
-  it("defaults new chats to supervised permissions", () => {
-    expect(useSettingsStore.getState().defaultPermission).toBe("supervised");
+  it("defaults the global resource monitor button to on", () => {
+    expect(useSettingsStore.getState().showGlobalResourceMonitor).toBe(true);
+  });
+
+  it("toggles and persists the global resource monitor button preference", () => {
+    useSettingsStore.getState().setShowGlobalResourceMonitor(false);
+    const persisted = window.localStorage.getItem("traycer-gui-app:settings");
+
+    expect(useSettingsStore.getState().showGlobalResourceMonitor).toBe(false);
+    expect(persisted ?? "").toContain('"showGlobalResourceMonitor":false');
+  });
+
+  it("rehydrates the global resource monitor button preference", async () => {
+    window.localStorage.setItem(
+      "traycer-gui-app:settings",
+      JSON.stringify({
+        state: { showGlobalResourceMonitor: false },
+        version: 1,
+      }),
+    );
+
+    await useSettingsStore.persist.rehydrate();
+
+    expect(useSettingsStore.getState().showGlobalResourceMonitor).toBe(false);
+  });
+
+  it("defaults navigator resource stats to off", () => {
+    expect(useSettingsStore.getState().showNavigatorResourceStats).toBe(false);
+  });
+
+  it("toggles and persists navigator resource stats", () => {
+    useSettingsStore.getState().setShowNavigatorResourceStats(true);
+    const persisted = window.localStorage.getItem("traycer-gui-app:settings");
+
+    expect(useSettingsStore.getState().showNavigatorResourceStats).toBe(true);
+    expect(persisted ?? "").toContain('"showNavigatorResourceStats":true');
+  });
+
+  it("rehydrates navigator resource stats from persisted settings", async () => {
+    window.localStorage.setItem(
+      "traycer-gui-app:settings",
+      JSON.stringify({
+        state: { showNavigatorResourceStats: true },
+        version: 1,
+      }),
+    );
+
+    await useSettingsStore.persist.rehydrate();
+
+    expect(useSettingsStore.getState().showNavigatorResourceStats).toBe(true);
+  });
+
+  it("defaults the pinned context usage breakdown to off", () => {
+    expect(useSettingsStore.getState().pinContextUsageBreakdown).toBe(false);
+  });
+
+  it("toggles the pinned context usage breakdown on", () => {
+    useSettingsStore.getState().setPinContextUsageBreakdown(true);
+
+    expect(useSettingsStore.getState().pinContextUsageBreakdown).toBe(true);
+  });
+
+  it("persists the pinned context usage breakdown preference", () => {
+    useSettingsStore.getState().setPinContextUsageBreakdown(true);
+    const persisted = window.localStorage.getItem("traycer-gui-app:settings");
+
+    expect(persisted ?? "").toContain('"pinContextUsageBreakdown":true');
+  });
+
+  it("rehydrates the pinned context usage breakdown from persisted settings", async () => {
+    window.localStorage.setItem(
+      "traycer-gui-app:settings",
+      JSON.stringify({
+        state: { pinContextUsageBreakdown: true },
+        version: 1,
+      }),
+    );
+
+    await useSettingsStore.persist.rehydrate();
+
+    expect(useSettingsStore.getState().pinContextUsageBreakdown).toBe(true);
+  });
+
+  it("rehydrates old settings without the field to the default off", async () => {
+    window.localStorage.setItem(
+      "traycer-gui-app:settings",
+      JSON.stringify({
+        state: { artifactIconColorMode: "none" },
+        version: 1,
+      }),
+    );
+
+    await useSettingsStore.persist.rehydrate();
+
+    expect(useSettingsStore.getState().pinContextUsageBreakdown).toBe(false);
+  });
+
+  it("defaults quote reply on text selection to on", () => {
+    expect(useSettingsStore.getState().quoteReplyEnabled).toBe(true);
+  });
+
+  it("toggles quote reply on text selection off", () => {
+    useSettingsStore.getState().setQuoteReplyEnabled(false);
+
+    expect(useSettingsStore.getState().quoteReplyEnabled).toBe(false);
+  });
+
+  it("persists the quote reply preference", () => {
+    useSettingsStore.getState().setQuoteReplyEnabled(false);
+    const persisted = window.localStorage.getItem("traycer-gui-app:settings");
+
+    expect(persisted ?? "").toContain('"quoteReplyEnabled":false');
+  });
+
+  it("rehydrates the quote reply preference from persisted settings", async () => {
+    window.localStorage.setItem(
+      "traycer-gui-app:settings",
+      JSON.stringify({
+        state: { quoteReplyEnabled: false },
+        version: 1,
+      }),
+    );
+
+    await useSettingsStore.persist.rehydrate();
+
+    expect(useSettingsStore.getState().quoteReplyEnabled).toBe(false);
+  });
+
+  it("rehydrates old settings without quoteReplyEnabled to the default on", async () => {
+    window.localStorage.setItem(
+      "traycer-gui-app:settings",
+      JSON.stringify({
+        state: { artifactIconColorMode: "none" },
+        version: 1,
+      }),
+    );
+
+    await useSettingsStore.persist.rehydrate();
+
+    expect(useSettingsStore.getState().quoteReplyEnabled).toBe(true);
+  });
+
+  it("defaults new chats to full access permissions", () => {
+    expect(useSettingsStore.getState().defaultPermission).toBe("full_access");
   });
 
   it("defaults new runs to epic mode", () => {

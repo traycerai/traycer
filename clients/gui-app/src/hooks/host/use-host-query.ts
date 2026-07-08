@@ -2,6 +2,9 @@ import {
   queryOptions,
   useMutation,
   useQuery,
+  useQueryClient,
+  type QueryClient,
+  type QueryKey,
   type UseMutationOptions,
   type UseMutationResult,
   type UseQueryOptions,
@@ -17,9 +20,10 @@ import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
 import { queryKeys } from "@/lib/query-keys";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 
-export interface UseHostQueryOptions<
+export interface UseHostQueryWithResponseMapOptions<
   Registry extends VersionedRpcRegistry,
   Method extends keyof Registry & string,
+  TData,
 > {
   readonly client: HostClient<Registry> | null;
   readonly method: Method;
@@ -29,20 +33,51 @@ export interface UseHostQueryOptions<
    * request addresses a stable resource id but the cached representation must
    * vary by a newer content identity, such as a blob hash or revision.
    */
-  readonly cacheKeyIdentity?: ReadonlyArray<unknown>;
+  readonly cacheKeyIdentity: ReadonlyArray<unknown> | undefined;
   /**
    * Pass-through TanStack options (`enabled`, `staleTime`, etc.). Query key
    * and queryFn are owned by this hook so the invalidation contract holds.
    */
   readonly options: Omit<
-    UseQueryOptions<
-      ResponseOfMethod<Registry, Method>,
-      HostRpcError,
-      ResponseOfMethod<Registry, Method>
-    >,
+    UseQueryOptions<TData, HostRpcError, TData>,
     "queryKey" | "queryFn"
   > | null;
+  /**
+   * Transforms the raw RPC response into what TanStack caches/returns for
+   * this query. Runs inside the queryFn, so its return value - not the raw
+   * response - is what ends up in the cache. `queryClient`/`queryKey` are
+   * handed in (the exact key this hook computed for this call) so a caller
+   * can fold the fresh response into an accumulator that also reads this
+   * same slot's previous value via `queryClient.getQueryData(queryKey)` -
+   * e.g. the `host.getRateLimitUsage` provider-pull envelope
+   * (`mapResponseToProviderRateLimitEnvelope`), which needs every lane that
+   * writes that key family to agree on the cached shape. `useHostQuery` is
+   * this function with `mapResponse` fixed to the identity; reach for this
+   * only when the cached shape must differ from the raw wire response.
+   */
+  readonly mapResponse: (args: {
+    readonly response: ResponseOfMethod<Registry, Method>;
+    readonly queryClient: QueryClient;
+    readonly queryKey: QueryKey;
+  }) => TData;
 }
+
+/**
+ * `useHostQuery`'s options, derived from `UseHostQueryWithResponseMapOptions`
+ * (dropping `mapResponse`, which `useHostQuery` fixes to the identity) so the
+ * two option shapes can't drift out of sync.
+ */
+export type UseHostQueryOptions<
+  Registry extends VersionedRpcRegistry,
+  Method extends keyof Registry & string,
+> = Omit<
+  UseHostQueryWithResponseMapOptions<
+    Registry,
+    Method,
+    ResponseOfMethod<Registry, Method>
+  >,
+  "mapResponse"
+>;
 
 /**
  * Thin typed wrapper over TanStack `useQuery`.
@@ -60,36 +95,61 @@ export function useHostQuery<
 >(
   args: UseHostQueryOptions<Registry, Method>,
 ): UseQueryResult<ResponseOfMethod<Registry, Method>, HostRpcError> {
-  const { client, method, params } = args;
-  const readiness = useReactiveHostReadiness(client);
-  const enabledFromOptions =
-    args.options === null || args.options.enabled === undefined
-      ? true
-      : Boolean(args.options.enabled);
-  const baseOptions = args.options ?? {};
+  return useHostQueryWithResponseMap<
+    Registry,
+    Method,
+    ResponseOfMethod<Registry, Method>
+  >({
+    ...args,
+    mapResponse: (mapArgs) => mapArgs.response,
+  });
+}
 
-  const request = (): Promise<ResponseOfMethod<Registry, Method>> => {
+/**
+ * `useHostQuery` generalized with a caller-supplied response-to-cache
+ * transform. See `UseHostQueryWithResponseMapOptions.mapResponse` for why
+ * this exists instead of a plain `select` (which never persists back into
+ * the shared cache entry other observers of the same key read).
+ */
+export function useHostQueryWithResponseMap<
+  Registry extends VersionedRpcRegistry,
+  Method extends keyof Registry & string,
+  TData,
+>(
+  args: UseHostQueryWithResponseMapOptions<Registry, Method, TData>,
+): UseQueryResult<TData, HostRpcError> {
+  const { client, method, params, mapResponse } = args;
+  const queryClient = useQueryClient();
+  const readiness = useReactiveHostReadiness(client);
+  const baseOptions = args.options ?? {};
+  const queryKey: QueryKey = [
+    ...queryKeys.hostMethod<Registry, Method>(readiness.hostId, method, params),
+    ...(args.cacheKeyIdentity ?? []),
+  ];
+
+  const request = async (): Promise<TData> => {
     if (client === null) {
-      return Promise.reject<ResponseOfMethod<Registry, Method>>(
-        hostClientUnavailableError(method),
-      );
+      return Promise.reject<TData>(hostClientUnavailableError(method));
     }
-    return client.request(method, params);
+    const response = await client.request(method, params);
+    return mapResponse({ response, queryClient, queryKey });
   };
 
-  return useQuery<
-    ResponseOfMethod<Registry, Method>,
-    HostRpcError,
-    ResponseOfMethod<Registry, Method>
-  >(
-    hostQueryOptions<Registry, Method>({
-      hostId: readiness.hostId,
-      method,
-      params,
-      request,
-      cacheKeyIdentity: args.cacheKeyIdentity ?? [],
-      enabled: enabledFromOptions && client !== null && readiness.isReady,
-      baseOptions,
+  return useQuery<TData, HostRpcError, TData>(
+    queryOptions<TData, HostRpcError, TData>({
+      ...baseOptions,
+      queryKey,
+      queryFn: request,
+      // A function-form `enabled` must still be evaluated per-query - not
+      // collapsed to a boolean up front - or a caller's dynamic condition is
+      // silently replaced by "always true" the moment a client is bound.
+      enabled: (query) => {
+        if (client === null || !readiness.isReady) return false;
+        const callerEnabled = args.options?.enabled;
+        return typeof callerEnabled === "function"
+          ? callerEnabled(query)
+          : (callerEnabled ?? true);
+      },
     }),
   );
 }
@@ -152,60 +212,12 @@ export function useHostMutation<
   });
 }
 
-function hostClientUnavailableError(method: string): HostRpcError {
+export function hostClientUnavailableError(method: string): HostRpcError {
   return new HostRpcError({
     code: "RPC_ERROR",
     requestId: "client-unavailable",
     method,
     message: "Host client unavailable",
     fatalDetails: null,
-  });
-}
-
-interface HostQueryOptionsArgs<
-  Registry extends VersionedRpcRegistry,
-  Method extends keyof Registry & string,
-> {
-  readonly hostId: string | null;
-  readonly method: Method;
-  readonly params: RequestOfMethod<Registry, Method>;
-  readonly request: () => Promise<ResponseOfMethod<Registry, Method>>;
-  readonly cacheKeyIdentity: ReadonlyArray<unknown>;
-  readonly enabled: boolean;
-  readonly baseOptions: Omit<
-    UseQueryOptions<
-      ResponseOfMethod<Registry, Method>,
-      HostRpcError,
-      ResponseOfMethod<Registry, Method>
-    >,
-    "queryKey" | "queryFn"
-  >;
-}
-
-function hostQueryOptions<
-  Registry extends VersionedRpcRegistry,
-  Method extends keyof Registry & string,
->(args: HostQueryOptionsArgs<Registry, Method>) {
-  const {
-    hostId,
-    method,
-    params,
-    request,
-    cacheKeyIdentity,
-    enabled,
-    baseOptions,
-  } = args;
-  return queryOptions<
-    ResponseOfMethod<Registry, Method>,
-    HostRpcError,
-    ResponseOfMethod<Registry, Method>
-  >({
-    ...baseOptions,
-    queryKey: [
-      ...queryKeys.hostMethod<Registry, Method>(hostId, method, params),
-      ...cacheKeyIdentity,
-    ],
-    queryFn: request,
-    enabled: enabled && hostId !== null,
   });
 }

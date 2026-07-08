@@ -98,9 +98,11 @@ function WorktreeScriptsDialogBody(props: {
     HostRpcRegistry,
     "worktree.listAllForHost"
   >({
+    cacheKeyIdentity: undefined,
     client: context.hostClient,
     method: "worktree.listAllForHost",
-    params: {},
+    // Whole-list mode (no per-viewport selection); base fields only.
+    params: { includeActivity: false, activityPaths: null },
     options: { enabled: resolved.kind === "existing-worktree" },
   });
   const worktreeOwnScripts = useMemo<RepoScriptsSeed | null>(() => {
@@ -116,16 +118,29 @@ function WorktreeScriptsDialogBody(props: {
   // file (`summary.scripts`). Preview the source branch's scripts by reading
   // them at the ref. `null` for non-worktree targets disables the read.
   const sourceRef = sourceRefForStagedEntry(stagedEntry);
+  // Preview the SOURCE branch's committed scripts. There is no dedicated
+  // `worktree.readScriptsAtRef` method - a new method name would break the wire
+  // method-set against an older host - so the read rides `listByWorkspacePaths`
+  // v1.1 as a pure point-read: empty `workspacePaths` + a single `scriptRefs`
+  // entry, so the host runs exactly one `git show` and returns a tiny payload (no
+  // branch list, regardless of repo branch count). An older host bridges the
+  // request down and returns `scriptsAtRefs: []`, so the preview falls back to the
+  // primary checkout's scripts.
   const branchScriptsQuery = useHostQuery<
     HostRpcRegistry,
-    "worktree.readScriptsAtRef"
+    "worktree.listByWorkspacePaths"
   >({
+    cacheKeyIdentity: undefined,
     client: context.hostClient,
-    method: "worktree.readScriptsAtRef",
-    params: { workspacePath, ref: sourceRef ?? "" },
+    method: "worktree.listByWorkspacePaths",
+    params: {
+      workspacePaths: [],
+      scriptRefs: sourceRef !== null ? [{ workspacePath, ref: sourceRef }] : [],
+    },
     options: { enabled: sourceRef !== null },
   });
-  const branchScripts = branchScriptsQuery.data?.scripts ?? null;
+  const branchScripts =
+    branchScriptsQuery.data?.scriptsAtRefs[0]?.scripts ?? null;
   // The source-branch read is "settled" once it succeeds or errors; until then
   // (and only when no staged edit already supplies the seed) the dialog shows a
   // spinner instead of flashing the primary checkout's scripts.

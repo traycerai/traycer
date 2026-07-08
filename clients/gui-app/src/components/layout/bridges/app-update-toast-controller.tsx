@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { useDesktopAppUpdates } from "@/hooks/runner/use-desktop-app-updates";
@@ -9,6 +9,7 @@ import type {
 } from "@/lib/windows/types";
 
 const APP_UPDATE_TOAST_ID = "traycer-app-update";
+const APP_UPDATE_TRANSIENT_TOAST_DURATION_MS = 4000;
 
 export function AppUpdateToastController(): null {
   const { bridge, snapshot } = useDesktopAppUpdates();
@@ -17,6 +18,9 @@ export function AppUpdateToastController(): null {
   );
   const openConfirmRestartUpdate = useDesktopDialogStore(
     (state) => state.openConfirmRestartUpdate,
+  );
+  const openInstallGuidance = useDesktopDialogStore(
+    (state) => state.openInstallGuidance,
   );
   const handledSequenceRef = useRef(0);
   const bridgeRef = useRef<DesktopAppUpdatesBridge | null | undefined>(
@@ -49,8 +53,15 @@ export function AppUpdateToastController(): null {
       },
       onRestart: openConfirmRestartUpdate,
       onReportIssue: openReportIssue,
+      onViewInstructions: openInstallGuidance,
     });
-  }, [bridge, snapshot, openReportIssue, openConfirmRestartUpdate]);
+  }, [
+    bridge,
+    snapshot,
+    openReportIssue,
+    openConfirmRestartUpdate,
+    openInstallGuidance,
+  ]);
 
   return null;
 }
@@ -59,6 +70,7 @@ interface AppUpdateToastActions {
   readonly onDownload: () => void;
   readonly onRestart: () => void;
   readonly onReportIssue: () => void;
+  readonly onViewInstructions: () => void;
 }
 
 function showAppUpdateToast(
@@ -70,6 +82,8 @@ function showAppUpdateToast(
       if (snapshot.lastCheckIntent === "manual") {
         toast.info("Checking for Traycer updates...", {
           id: APP_UPDATE_TOAST_ID,
+          description: null,
+          duration: APP_UPDATE_TRANSIENT_TOAST_DURATION_MS,
         });
       }
       return;
@@ -82,26 +96,25 @@ function showAppUpdateToast(
         toast("Update available", {
           id: APP_UPDATE_TOAST_ID,
           description: snapshot.installBlockedReason,
+          duration: APP_UPDATE_TRANSIENT_TOAST_DURATION_MS,
         });
         return;
       }
       // A quiet, dismissible heads-up - the header button is the persistent
       // fallback once it's dismissed.
-      toast("Update available", {
-        id: APP_UPDATE_TOAST_ID,
-        description: updateAvailableDescription(snapshot.latestVersion),
-        duration: Infinity,
-        action: {
-          label: "Download",
-          onClick: actions.onDownload,
+      toast(
+        <AppUpdateActionToastContent
+          title="Update available"
+          description={updateAvailableDescription(snapshot.latestVersion)}
+          actionLabel="Download"
+          onAction={actions.onDownload}
+        />,
+        {
+          id: APP_UPDATE_TOAST_ID,
+          description: null,
+          duration: Infinity,
         },
-        cancel: {
-          label: "Later",
-          onClick: () => {
-            toast.dismiss(APP_UPDATE_TOAST_ID);
-          },
-        },
-      });
+      );
       return;
     case "downloading":
       toast.loading("Downloading update…", {
@@ -114,21 +127,31 @@ function showAppUpdateToast(
       });
       return;
     case "ready":
-      toast("Update ready to install", {
-        id: APP_UPDATE_TOAST_ID,
-        description: "Restart Traycer to finish updating.",
-        duration: Infinity,
-        action: {
-          label: "Restart",
-          onClick: actions.onRestart,
+      // Linux deb/rpm where silent install can't/didn't work: the download
+      // succeeded, but "Restart" would trigger the same doomed install
+      // attempt. Point at the step-by-step dialog instead.
+      toast(
+        snapshot.installGuidance === null ? (
+          <AppUpdateActionToastContent
+            title="Update ready to install"
+            description="Restart Traycer to finish updating."
+            actionLabel="Restart"
+            onAction={actions.onRestart}
+          />
+        ) : (
+          <AppUpdateActionToastContent
+            title="Update downloaded"
+            description="One manual step finishes installing it."
+            actionLabel="View instructions"
+            onAction={actions.onViewInstructions}
+          />
+        ),
+        {
+          id: APP_UPDATE_TOAST_ID,
+          description: null,
+          duration: Infinity,
         },
-        cancel: {
-          label: "Later",
-          onClick: () => {
-            toast.dismiss(APP_UPDATE_TOAST_ID);
-          },
-        },
-      });
+      );
       return;
     case "error":
       toast.error("Couldn't update Traycer", {
@@ -137,6 +160,11 @@ function showAppUpdateToast(
           <AppUpdateErrorToastDescription
             message={snapshot.errorMessage}
             onReportIssue={actions.onReportIssue}
+            onViewInstructions={
+              snapshot.installGuidance === null
+                ? null
+                : actions.onViewInstructions
+            }
           />
         ),
         duration: Infinity,
@@ -147,13 +175,16 @@ function showAppUpdateToast(
         id: APP_UPDATE_TOAST_ID,
         description:
           snapshot.currentVersion.length === 0
-            ? undefined
+            ? null
             : `Current version: v${snapshot.currentVersion}`,
+        duration: APP_UPDATE_TRANSIENT_TOAST_DURATION_MS,
       });
       return;
     case "unavailable":
       toast.info("Updates are not available for this build.", {
         id: APP_UPDATE_TOAST_ID,
+        description: null,
+        duration: APP_UPDATE_TRANSIENT_TOAST_DURATION_MS,
       });
       return;
     case "idle":
@@ -195,16 +226,78 @@ function isManualFeedbackSnapshot(snapshot: DesktopAppUpdateSnapshot): boolean {
   );
 }
 
+function AppUpdateActionToastContent(props: {
+  readonly title: string;
+  readonly description: string;
+  readonly actionLabel: string;
+  readonly onAction: () => void;
+}) {
+  const actionHandledRef = useRef(false);
+  const [actionHandled, setActionHandled] = useState(false);
+
+  function handleAction(): void {
+    if (actionHandledRef.current) return;
+    actionHandledRef.current = true;
+    setActionHandled(true);
+    toast.dismiss(APP_UPDATE_TOAST_ID);
+    props.onAction();
+  }
+
+  return (
+    <div className="flex items-center gap-4">
+      <div className="min-w-0 flex-1">
+        <div className="font-medium">{props.title}</div>
+        <div className="mt-1 text-muted-foreground">{props.description}</div>
+      </div>
+      <div className="grid shrink-0 grid-cols-1 gap-1.5">
+        <Button
+          type="button"
+          size="sm"
+          className="w-full min-w-max"
+          disabled={actionHandled}
+          onClick={handleAction}
+        >
+          {props.actionLabel}
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="secondary"
+          className="w-full min-w-max"
+          onClick={() => {
+            toast.dismiss(APP_UPDATE_TOAST_ID);
+          }}
+        >
+          Later
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function AppUpdateErrorToastDescription(props: {
   readonly message: string | null;
   readonly onReportIssue: () => void;
+  readonly onViewInstructions: (() => void) | null;
 }) {
   return (
     <div className="flex flex-col items-start gap-3">
       {props.message === null ? null : <span>{props.message}</span>}
-      <Button type="button" size="sm" onClick={props.onReportIssue}>
-        Report an issue
-      </Button>
+      <div className="flex gap-2">
+        {props.onViewInstructions === null ? null : (
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            onClick={props.onViewInstructions}
+          >
+            View instructions
+          </Button>
+        )}
+        <Button type="button" size="sm" onClick={props.onReportIssue}>
+          Report an issue
+        </Button>
+      </div>
     </div>
   );
 }

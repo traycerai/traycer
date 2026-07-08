@@ -17,13 +17,11 @@ interface TestState {
   readonly deferredClicks: Map<string, number>;
 }
 
-const testState = vi.hoisted(
-  (): TestState => ({
-    mounts: new Map(),
-    unmounts: new Map(),
-    deferredClicks: new Map(),
-  }),
-);
+const testState = vi.hoisted((): TestState => ({
+  mounts: new Map(),
+  unmounts: new Map(),
+  deferredClicks: new Map(),
+}));
 
 vi.mock("@dnd-kit/core", () => ({
   useDraggable: () => ({
@@ -47,6 +45,7 @@ vi.mock("@/lib/epic-selectors", () => ({
   useEpicLiveArtifactTitleGenerating: () => false,
   useEpicPermissionRole: () => "owner",
   useEpicSnapshotLoaded: () => true,
+  useMaybeEpicTuiAgentHarnessId: () => null,
 }));
 
 vi.mock("@/components/epic-canvas/renderers/epic-node-tile", async () => {
@@ -124,6 +123,7 @@ function pane(
     tabInstanceIds: tabs.map((tab) => tab.instanceId),
     activeTabId,
     previewTabId: null,
+    activationHistory: [activeTabId],
   };
 }
 

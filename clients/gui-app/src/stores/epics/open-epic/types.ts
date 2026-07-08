@@ -22,6 +22,7 @@ import type {
   ChatRunSettings,
   TuiHarnessId,
 } from "@traycer/protocol/persistence/epic/schemas";
+import type { WorktreeBindingWorkspaceMode } from "@traycer/protocol/host/worktree-schemas";
 
 export type EpicTreeNodeType = "chat" | "terminal-agent" | EpicArtifactKind;
 
@@ -101,6 +102,7 @@ export interface TuiAgentProjection {
   readonly userId: string | null;
   readonly hostId: string;
   readonly workspaceFolders: readonly string[];
+  readonly workspaceMode: WorktreeBindingWorkspaceMode | undefined;
   readonly model: string | null;
   readonly reasoningEffort: string | null;
   readonly agentMode: AgentMode;

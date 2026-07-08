@@ -20,7 +20,6 @@ import type {
 import { buildApplicationMenu } from "./menu-builder";
 import { toMenuHostPresentation, type MenuState } from "./menu-state";
 import { log } from "../app/logger";
-import { respawnHost } from "../app/host-respawn";
 
 export interface MenuManagedWindow {
   isDestroyed(): boolean;
@@ -49,6 +48,12 @@ export interface MenuWindowRegistry {
   off(event: "change", listener: () => void): void;
 }
 
+export interface MenuZoomController {
+  zoomIn(): Promise<number>;
+  zoomOut(): Promise<number>;
+  reset(): Promise<number>;
+}
+
 export interface MenuControllerOptions {
   readonly appName: string;
   readonly platform: NodeJS.Platform;
@@ -57,6 +62,7 @@ export interface MenuControllerOptions {
   readonly authSession: IpcDesktopAuthSession;
   readonly perWindowState: IpcPerWindowState;
   readonly tray: DesktopTrayController | null;
+  readonly zoomController: MenuZoomController;
   readonly dispatchRendererCommand: (command: MenuCommandId) => boolean;
   readonly checkForUpdates: () => Promise<void>;
 }
@@ -201,16 +207,29 @@ export class MenuController {
       return;
     }
     if (command === "host.restart") {
-      // Route through the shared respawn entrypoint, NOT `host.respawn`
-      // directly - on macOS shipped builds, `host.respawn` shells to
-      // `traycer host restart` (launchctl kickstart) which cannot
-      // refresh BTM's cached LWCR and would silently no-op for the very
-      // bug this surface exists to recover from. `respawnHost` picks
-      // the SMAppService cycle when the host owns the login item, and
-      // falls back to the CLI path otherwise.
-      void respawnHost(this.options.host).catch((err) => {
-        log.warn("[menu] host.restart failed", err);
-      });
+      // The renderer owns the confirmation modal. Once confirmed, it calls
+      // runnerHost.requestHostRespawn(), which routes back through the shared
+      // main-process respawn entrypoint.
+      if (this.options.dispatchRendererCommand(command)) return;
+
+      void this.options.windowRegistry
+        .create({
+          initialRoute: null,
+          beforeLoad: null,
+        })
+        .then(() => {
+          if (!this.options.dispatchRendererCommand(command)) {
+            log.warn(
+              "[menu] host.restart had no renderer after opening window",
+              {
+                command,
+              },
+            );
+          }
+        })
+        .catch((err) => {
+          log.warn("[menu] host.restart window creation failed", err);
+        });
       return;
     }
     if (command === "host.installUpdate") {
@@ -259,6 +278,24 @@ export class MenuController {
       }
       void this.options.windowRegistry.minimizeById(windowId).catch((err) => {
         log.warn("[menu] window.minimizeWindow failed", err);
+      });
+      return;
+    }
+    if (command === "view.zoomIn") {
+      void this.options.zoomController.zoomIn().catch((err) => {
+        log.warn("[menu] view.zoomIn failed", err);
+      });
+      return;
+    }
+    if (command === "view.zoomOut") {
+      void this.options.zoomController.zoomOut().catch((err) => {
+        log.warn("[menu] view.zoomOut failed", err);
+      });
+      return;
+    }
+    if (command === "view.resetZoom") {
+      void this.options.zoomController.reset().catch((err) => {
+        log.warn("[menu] view.resetZoom failed", err);
       });
       return;
     }

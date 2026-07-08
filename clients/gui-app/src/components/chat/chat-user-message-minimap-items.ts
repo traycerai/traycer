@@ -1,5 +1,6 @@
 import type { Attachment } from "@/lib/composer/types";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
+import type { JsonContent } from "@traycer/protocol/common/registry";
 
 // Contract between the chat scroll region (producer) and the minimap overlay
 // (consumer): the expanded overlay caps its size to the marked region so it
@@ -23,6 +24,7 @@ export const CHAT_MINIMAP_CLIP_REGION_SELECTOR = `[${CHAT_MINIMAP_CLIP_REGION_AT
 export interface ChatUserMinimapItem {
   readonly id: string;
   readonly content: string;
+  readonly structuredContent: JsonContent | null;
   readonly attachments: ReadonlyArray<Attachment>;
 }
 
@@ -38,6 +40,7 @@ export function buildChatUserMessageMinimapItems(
     items.push({
       id: message.id,
       content: message.content,
+      structuredContent: message.structuredContent,
       attachments: message.attachments,
     });
   }

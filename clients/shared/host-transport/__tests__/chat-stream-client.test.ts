@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import { buildStreamManifest } from "@traycer/protocol/framework/stream-compat";
 import type { ChatSubscribeClientFrame } from "@traycer/protocol/host/agent/gui/subscribe";
 import {
   createRequestContext,
@@ -185,10 +186,14 @@ describe("ChatStreamClient", () => {
     });
     completeHandshake(sockets[0]);
 
+    // The advertised version tracks the registry's canonical chat.subscribe
+    // line - a literal here rots every time a minor lands.
     expect(parseText(sockets[0].textSent[1])).toEqual({
       kind: "subscribe",
       method: "chat.subscribe",
-      schemaVersion: { major: 1, minor: 0 },
+      schemaVersion: buildStreamManifest(hostStreamRpcRegistry)[
+        "chat.subscribe"
+      ],
       params: { epicId: "epic-1", chatId: "chat-1" },
     });
 
@@ -245,6 +250,7 @@ describe("ChatStreamClient", () => {
             setupExitCode: null,
             setupFailedAt: null,
             createdAt: 10,
+            ownedSubmodules: [],
           },
         ],
       },

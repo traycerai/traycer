@@ -519,15 +519,13 @@ function buildTeamRows(
     ...(includeUnsharedTeams
       ? shareableTeams
           .filter((team) => !sharedIds.has(team.teamId))
-          .map(
-            (team): TeamRow => ({
-              kind: "unshared",
-              key: `unshared-${team.teamId}`,
-              teamId: team.teamId,
-              name: team.slug,
-              avatarUrl: team.avatarUrl,
-            }),
-          )
+          .map((team): TeamRow => ({
+            kind: "unshared",
+            key: `unshared-${team.teamId}`,
+            teamId: team.teamId,
+            name: team.slug,
+            avatarUrl: team.avatarUrl,
+          }))
       : []),
   ];
 }

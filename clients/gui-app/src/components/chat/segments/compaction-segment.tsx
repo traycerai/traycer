@@ -13,6 +13,7 @@ interface CompactionSegmentProps {
   durationMs: number | null;
   summary: string | null;
   error: string | null;
+  findUnitId: string | null;
 }
 
 function formatTokens(n: number): string {
@@ -28,16 +29,15 @@ function formatDuration(ms: number): string {
   return `${minutes}m ${remainder}s`;
 }
 
-export function CompactionSegment(props: CompactionSegmentProps) {
-  const { status, preTokens, postTokens, durationMs, summary, error } = props;
-  const isStreaming = status === "streaming";
-  const [expanded, setExpanded] = useState(false);
-  const toggleExpanded = useChatMeasuredBooleanToggle(setExpanded);
-
-  // Pre-compaction token count is intentionally NOT shown on its own - a bare
-  // "before" number reads like a result/savings when it is not. Only the real
-  // before→after pair (when a harness reports both) or a standalone post count
-  // are meaningful enough to surface.
+// Pre-compaction token count is intentionally NOT shown on its own - a bare
+// "before" number reads like a result/savings when it is not. Only the real
+// before→after pair (when a harness reports both) or a standalone post count
+// are meaningful enough to surface.
+function compactionMetricText(
+  preTokens: number | null,
+  postTokens: number | null,
+  durationMs: number | null,
+): string {
   const metricParts: string[] = [];
   if (preTokens !== null && postTokens !== null) {
     metricParts.push(
@@ -49,8 +49,16 @@ export function CompactionSegment(props: CompactionSegmentProps) {
   if (durationMs !== null) {
     metricParts.push(formatDuration(durationMs));
   }
-  const metricText =
-    metricParts.length === 0 ? "" : ` · ${metricParts.join(" · ")}`;
+  return metricParts.length === 0 ? "" : ` · ${metricParts.join(" · ")}`;
+}
+
+export function CompactionSegment(props: CompactionSegmentProps) {
+  const { status, preTokens, postTokens, durationMs, summary, error } = props;
+  const isStreaming = status === "streaming";
+  const [expanded, setExpanded] = useState(false);
+  const toggleExpanded = useChatMeasuredBooleanToggle(setExpanded);
+
+  const metricText = compactionMetricText(preTokens, postTokens, durationMs);
 
   const hasSummary = !isStreaming && summary !== null && summary.length > 0;
   const ExpandIcon = expanded ? ChevronDown : ChevronRight;
@@ -78,7 +86,10 @@ export function CompactionSegment(props: CompactionSegmentProps) {
   );
 
   return (
-    <div className="flex w-full flex-col gap-1">
+    <div
+      data-chat-find-unit={props.findUnitId ?? undefined}
+      className="flex w-full flex-col gap-1"
+    >
       <div className="flex items-center gap-3">
         <span aria-hidden className="h-px flex-1 bg-border/60" />
         {hasSummary ? (
@@ -111,6 +122,7 @@ export function CompactionSegment(props: CompactionSegmentProps) {
             components={null}
             remarkPlugins={null}
             rehypePlugins={null}
+            quotable={false}
             isStreaming={false}
           >
             {summary}

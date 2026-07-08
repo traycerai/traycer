@@ -2,7 +2,8 @@ import { contextBridge } from "electron";
 import { RunnerHostSync } from "../ipc-contracts/ipc-channels";
 import { config } from "../config";
 import { readInitialRouteArg } from "../ipc-contracts/window-bootstrap";
-import { buildAuthBridge, type AuthCallbackBridgeResult } from "./auth-bridge";
+import { buildAuthBridge } from "./auth-bridge";
+import { buildDeviceFlowBridge } from "./device-flow-bridge";
 import { buildHostBridge } from "./host-bridge";
 import {
   buildHostManagementBridge,
@@ -20,6 +21,7 @@ import { buildTraycerCliBridge } from "./traycer-cli-bridge";
 import { buildPlatformBridge } from "./platform-bridge";
 import { buildPowerBridge } from "./power-bridge";
 import { buildFileDropsBridge } from "./file-drops-bridge";
+import { buildZoomBridge } from "./zoom-bridge";
 import { readSyncString } from "./sync-bootstrap";
 
 /**
@@ -37,8 +39,6 @@ import { readSyncString } from "./sync-bootstrap";
  * `runnerHost` object.
  */
 
-export type { AuthCallbackBridgeResult };
-
 const windowId = readSyncString(RunnerHostSync.windowId, "primary");
 const sentryRendererDsn = readSyncString(RunnerHostSync.sentryRendererDsn, "");
 const initialRoute = readInitialRouteArg(process.argv);
@@ -52,6 +52,7 @@ contextBridge.exposeInMainWorld("runnerHost", {
   initialRoute,
   sentryRendererDsn,
   ...buildAuthBridge(),
+  deviceFlow: buildDeviceFlowBridge(),
   ...buildHostBridge(),
   ...buildTrayBridge(),
   ...buildWindowsBridge(windowId),
@@ -65,6 +66,7 @@ contextBridge.exposeInMainWorld("runnerHost", {
   migration: buildMigrationBridge(),
   platform: buildPlatformBridge(),
   power: buildPowerBridge(),
+  ...buildZoomBridge(),
   hostManagement: buildHostManagementBridge(),
   hostTray: buildHostTrayCommandSubscriber(),
 });

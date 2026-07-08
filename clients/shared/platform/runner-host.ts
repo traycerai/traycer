@@ -81,18 +81,18 @@ export interface IRunnerHost {
   ): Promise<AuthIdentityValidationResult>;
 
   /**
-   * Exchanges a one-time PKCE `code` (from the sign-in callback) + the
-   * `codeVerifier` the renderer generated at sign-in start for the real token
-   * pair. Like `validateAuthToken`, desktop shells perform this in Electron
-   * main so renderer-origin CORS does not block the authn call; browser-only
-   * shells may call the shared `exchangeCodeForTokens` helper directly.
-   * Returns `null` when the exchange fails (bad/expired/used code, PKCE
-   * mismatch, or a transport error).
+   * Force-refreshes the access token against authn's `POST /api/v3/auth/refresh`
+   * WITHOUT a prior `/api/v3/user` validation, rotating both the bearer and the
+   * refresh token. The proactive refresh scheduler calls this shortly before the
+   * ~4h TTL so a long-open session never carries a dead bearer into a live host
+   * call. Desktop shells run this in Electron main so renderer-origin CORS does
+   * not block the authn request; browser/test shells may call the shared
+   * `refreshAuthTokenViaHttp` helper directly.
    */
-  exchangeAuthCode(
-    code: string,
-    codeVerifier: string,
-  ): Promise<StoredAuthTokens | null>;
+  refreshAuthToken(
+    token: string,
+    refreshToken: string,
+  ): Promise<AuthTokenRefreshResult>;
 
   openExternalLink(url: string): Promise<void>;
 
@@ -141,11 +141,28 @@ export interface IRunnerHost {
   beginAuthAttempt(): void;
 
   /**
-   * Subscribes to auth-callback results delivered by the shell. The handler
-   * receives a discriminated union so `gui-app` can treat success and
-   * error uniformly without parsing URIs.
+   * Subscribes to the browser-return signal the shell delivers when the user
+   * comes back from the device-approval browser tab (the `traycer://` deep
+   * link on desktop). The signal is **payload-free**: device flow is the only
+   * interactive login, so the shell carries no token or code here - it only
+   * tells the renderer "the browser returned" so the in-flight device poll can
+   * fire immediately instead of waiting out its interval. The token always
+   * arrives through the device-flow poll (`IDeviceFlowHost`), never here, and
+   * sign-in still completes poll-only if this never fires.
    */
-  onAuthCallback(handler: (result: AuthCallbackResult) => void): Disposable;
+  onAuthCallback(handler: () => void): Disposable;
+
+  /**
+   * OAuth 2.0 Device Authorization Grant (RFC 8628) controller, owned by the
+   * shell's privileged process. On desktop the authorize call AND the
+   * `/device/token` poll loop run in Electron main so they are CORS-safe (the
+   * authn endpoints don't allow the renderer origin) and survive renderer
+   * window close / sleep - the renderer only observes the terminal outcome.
+   * Shells with no device-flow
+   * backend (mobile, web, in-browser dev) install a no-op whose `start()`
+   * resolves `null`. Always present; callers never branch on `null`.
+   */
+  readonly deviceFlow: IDeviceFlowHost;
 
   readonly secureStorage: ISecureStorage;
   readonly notifications: INotificationHost;
@@ -153,6 +170,11 @@ export interface IRunnerHost {
   readonly hostPicker: IHostPicker;
   readonly workspaceFolders: IWorkspaceFoldersHost;
   readonly fileDrops: IFileDropHost;
+  /**
+   * Desktop display-zoom surface. Present on desktop shells and `null` on
+   * shells that do not own a native app-scale control.
+   */
+  readonly zoom: IZoomHost | null;
 
   /**
    * Typed token-storage capability shared across shells. Always present -
@@ -282,6 +304,20 @@ export interface IFileDropHost {
   copyDroppedFilePaths(paths: readonly string[]): Promise<readonly string[]>;
 }
 
+/**
+ * Native app display-zoom capability. Desktop exposes this through Electron
+ * IPC; unsupported shells set `IRunnerHost.zoom` to `null`.
+ */
+export interface IZoomHost {
+  readonly ladder: readonly number[];
+  get(): Promise<number>;
+  set(percent: number): Promise<number>;
+  stepIn(): Promise<number>;
+  stepOut(): Promise<number>;
+  reset(): Promise<number>;
+  onChange(handler: (percent: number) => void): Disposable;
+}
+
 export interface MigrationRunningSnapshot {
   readonly running: boolean;
   readonly originWindowId: string | null;
@@ -331,11 +367,7 @@ export interface TraycerPidMetadata {
 }
 
 export type BootstrapPhase =
-  | "starting"
-  | "exited"
-  | "crashed"
-  | "killed"
-  | "failed-to-spawn";
+  "starting" | "exited" | "crashed" | "killed" | "failed-to-spawn";
 
 export interface BootstrapMarkerEntry {
   readonly timestamp: string;
@@ -454,16 +486,78 @@ export interface IServiceHost {
 }
 
 /**
- * Discriminated result delivered by `onAuthCallback`. Success carries the
- * one-time PKCE `code` from the redirect; the shell exchanges it (with the
- * `code_verifier` it kept in-memory from sign-in start) for the token pair via
- * `exchangeCodeForTokens`. Tokens no longer travel in the callback URL. Failure
- * carries a shell-provided error string so `gui-app` can render a stable
- * message.
+ * Authorization details returned by `/device/authorize`, surfaced to the GUI so
+ * it can display the human-handled `userCode` + `verificationUri` (or rely on
+ * the shell opening `verificationUriComplete`) and show poll progress / expiry.
+ * `expiresInSeconds` is the device_code TTL; the GUI scopes its device-attempt
+ * timeout to it.
  */
-export type AuthCallbackResult =
-  | { readonly code: string }
-  | { readonly error: string };
+export interface DeviceFlowAuthorization {
+  readonly userCode: string;
+  readonly verificationUri: string;
+  readonly verificationUriComplete: string;
+  readonly expiresInSeconds: number;
+  readonly intervalSeconds: number;
+}
+
+/**
+ * Terminal outcome of a device-flow attempt, emitted once by the shell's
+ * controller after its poll loop settles:
+ *   - `authorized` carries the minted `{ token, refreshToken }` pair.
+ *   - `denied`     the user denied the request in the browser.
+ *   - `expired`    the device_code TTL elapsed before approval.
+ *   - `error`      a terminal/unrecoverable failure (invalid grant, or the
+ *                  loop gave up after persistent network/5xx failures).
+ * Non-terminal poll states (`authorization-pending` / `slow-down`) are handled
+ * entirely inside the controller and never surface here.
+ */
+export type DeviceFlowResult =
+  | {
+      readonly kind: "authorized";
+      readonly token: string;
+      readonly refreshToken: string;
+    }
+  | { readonly kind: "denied" }
+  | { readonly kind: "expired" }
+  | { readonly kind: "error" };
+
+/**
+ * Handle to a single in-flight device-flow attempt. `authorization` is the
+ * `/device/authorize` response (already resolved by the time the session
+ * exists). `onResult` fires exactly once with the terminal `DeviceFlowResult`;
+ * implementations replay a result that settled before the subscription so a
+ * fast poll can't be missed. `pollNow()` nudges the shell-side loop to poll
+ * `/device/token` immediately rather than waiting out the current interval -
+ * the GUI calls it on the browser-return signal so approval is picked up at
+ * once. `cancel()` stops the shell-side poll loop and frees its resources - the
+ * GUI calls it when the attempt is superseded (retry), on sign-out, and on
+ * dispose; it must never invoke `onResult` synchronously, so a caller can safely
+ * cancel from inside a teardown path without re-entering its own finalizer.
+ */
+export interface DeviceFlowSession {
+  readonly authorization: DeviceFlowAuthorization;
+  onResult(handler: (result: DeviceFlowResult) => void): Disposable;
+  /**
+   * Nudges the shell-side poll loop to dispatch a `/device/token` poll
+   * immediately (collapsing the remaining interval wait). Best-effort and
+   * idempotent: it never delivers a token itself - the result still arrives
+   * through `onResult` - and is a no-op once the attempt has settled.
+   */
+  pollNow(): void;
+  cancel(): void;
+}
+
+export interface IDeviceFlowHost {
+  /**
+   * Starts a device-authorization attempt: the shell runs `/device/authorize`
+   * and immediately begins the `/device/token` poll loop in its privileged
+   * process. Resolves with a `DeviceFlowSession` once authorization succeeds,
+   * or `null` when authorization itself fails (network/5xx) or the shell has no
+   * device-flow backend - the caller surfaces a launch-style failure and may
+   * retry. The shell supplies its own `client_id` (`"desktop"`) and host label.
+   */
+  start(): Promise<DeviceFlowSession | null>;
+}
 
 export interface AuthValidationProfile {
   readonly userId: string;
@@ -487,6 +581,22 @@ export type AuthTokenValidResult =
 
 export type AuthTokenValidationResult =
   | AuthTokenValidResult
+  | { readonly kind: "rejected" }
+  | { readonly kind: "network-error" };
+
+/**
+ * Outcome of a forced access-token refresh (`POST /api/v3/auth/refresh`),
+ * independent of any `/api/v3/user` validation. `refreshed` rotates BOTH the
+ * bearer and the refresh token; `rejected` means the refresh credential is dead
+ * (revoked / expired) and the session must sign out; `network-error` is
+ * transient and leaves the current credential untouched so a retry can follow.
+ */
+export type AuthTokenRefreshResult =
+  | {
+      readonly kind: "refreshed";
+      readonly token: string;
+      readonly refreshToken: string;
+    }
   | { readonly kind: "rejected" }
   | { readonly kind: "network-error" };
 
@@ -598,6 +708,30 @@ export interface HostProgressEvent {
   readonly bytes: number | null;
   readonly totalBytes: number | null;
   readonly message: string | null;
+}
+
+export type HostOperationKind =
+  "install" | "update" | "register-service" | "ensure";
+
+/**
+ * Canonical cross-surface snapshot of the single host mutation currently
+ * running (if any), mirrored from Desktop main to every renderer window via
+ * `hostOperationStatusChange`. Unlike `HostProgressEvent` - which is scoped to
+ * the `operationId` of the caller that started it - this is the single source
+ * of truth every UI surface (landing-page banner, Settings → Host, a second
+ * window) reads to disable its trigger and render progress, regardless of
+ * which surface (or the background auto-update reconciler) started the
+ * operation. `null` means no host mutation is in flight.
+ */
+export interface HostOperationStatus {
+  readonly operationId: string;
+  readonly kind: HostOperationKind;
+  readonly stage: string | null;
+  readonly percent: number | null;
+  readonly bytes: number | null;
+  readonly totalBytes: number | null;
+  readonly message: string | null;
+  readonly startedAt: string;
 }
 
 export interface HostInstallSourceTag {
@@ -852,6 +986,11 @@ export interface IHostManagement {
   readonly registryCheck: (input: {
     readonly force: boolean;
   }) => Promise<HostRegistryUpdateState>;
+  // Current cross-surface host operation status (or `null` when idle), read
+  // once on mount to prime the shared query cache; live updates arrive via
+  // the desktop-only `hostOperationStatus` push bridge (see
+  // `HostOperationStatusListener`).
+  readonly getOperationStatus: () => Promise<HostOperationStatus | null>;
   readonly freePortAndRestart: (
     input: FreePortAndRestartInput,
   ) => Promise<FreePortAndRestartInput>;

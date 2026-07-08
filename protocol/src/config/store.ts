@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { constants as fsConstants } from "node:fs";
+import { constants as fsConstants, readFileSync } from "node:fs";
 import {
   access,
   mkdir,
@@ -19,7 +19,9 @@ import {
   type DetectedShell,
   type EnvOverrideValue,
   type EffectiveShellConfig,
+  type LogsConfig,
 } from "./schema";
+import { DEFAULT_LOG_LEVEL, type LogLevel } from "./log-level";
 
 /**
  * Filesystem-backed config store for `~/.traycer/cli/config.json`, shared
@@ -286,6 +288,7 @@ export async function setShell(
     version: CLI_CONFIG_VERSION,
     shell: { path: nextPath, args: nextArgs },
     envOverrides: current.envOverrides,
+    logs: current.logs,
   });
   return { path: nextPath, args: nextArgs };
 }
@@ -296,7 +299,48 @@ export async function resetShell(): Promise<void> {
     version: CLI_CONFIG_VERSION,
     shell: { path: null, args: null },
     envOverrides: current.envOverrides,
+    logs: current.logs,
   });
+}
+
+/**
+ * Persists the client + host log thresholds, preserving the user's shell and
+ * env-override config. Reads-modify-writes through the schema like every other
+ * mutator, so the rest of `config.json` round-trips untouched.
+ */
+export async function setLogLevels(
+  cliLogLevel: LogLevel,
+  hostLogLevel: LogLevel,
+): Promise<void> {
+  const current = await readCliConfig();
+  await writeCliConfig({
+    version: CLI_CONFIG_VERSION,
+    shell: current.shell,
+    envOverrides: current.envOverrides,
+    logs: { cliLogLevel, hostLogLevel },
+  });
+}
+
+/** The configured client + host log thresholds (defaults when unset). */
+export async function readLogLevels(): Promise<LogsConfig> {
+  return (await readCliConfig()).logs;
+}
+
+/**
+ * Best-effort synchronous read of just the log thresholds, for logger
+ * construction on the hot path. Never throws — any missing/corrupt/invalid
+ * config resolves to the `info` defaults, so a logger can always cheaply decide
+ * its threshold at startup without awaiting or risking a crash.
+ */
+export function readLogLevelsSync(): LogsConfig {
+  try {
+    const raw = readFileSync(cliConfigPath(), "utf8");
+    const result = cliConfigSchema.safeParse(migrateCliConfig(JSON.parse(raw)));
+    if (result.success) return result.data.logs;
+  } catch {
+    // A logger must never crash on a config read — fall through to defaults.
+  }
+  return { cliLogLevel: DEFAULT_LOG_LEVEL, hostLogLevel: DEFAULT_LOG_LEVEL };
 }
 
 export async function listEnvOverrides(): Promise<
@@ -320,6 +364,7 @@ export async function setEnvOverride(
     version: CLI_CONFIG_VERSION,
     shell: current.shell,
     envOverrides: { ...current.envOverrides, [key]: value },
+    logs: current.logs,
   });
 }
 
@@ -334,6 +379,7 @@ export async function deleteEnvOverride(key: string): Promise<boolean> {
     version: CLI_CONFIG_VERSION,
     shell: current.shell,
     envOverrides: nextOverrides,
+    logs: current.logs,
   });
   return true;
 }

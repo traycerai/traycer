@@ -28,6 +28,7 @@ import type { CommandFn } from "../runner/runner";
 export function buildAgentCreateCommand(opts: {
   readonly epicId: string | null;
   readonly senderAgentId: string | null;
+  readonly name: string | null;
   readonly surface: string | null;
   readonly harness: string | null;
   readonly model: string | null;
@@ -48,6 +49,7 @@ export function buildAgentCreateCommand(opts: {
     const request = parseUserInput(createAgentRequestSchema, {
       senderAgentId,
       epicId,
+      name: opts.name,
       surface: opts.surface,
       harnessId: opts.harness,
       model: opts.model,
@@ -60,9 +62,7 @@ export function buildAgentCreateCommand(opts: {
         workspaceEntries: opts.workspaceEntries,
       }),
     });
-    const result = await toAgentCliError(
-      callHostRpc("agent.create", request),
-    );
+    const result = await toAgentCliError(callHostRpc("agent.create", request));
     const { agentId, warnings } = parseHostResponse(
       createAgentResponseSchema,
       result,
@@ -98,7 +98,9 @@ export function parseAgentCreateWorkspace(input: {
   return { entries: deduped };
 }
 
-function pathOnlyEntries(paths: readonly string[]): CreateAgentWorkspaceEntry[] {
+function pathOnlyEntries(
+  paths: readonly string[],
+): CreateAgentWorkspaceEntry[] {
   return paths.map((rawPath) => {
     const resolvedPath = requireAbsolutePath(rawPath, "--cwd/--workspace-path");
     return { path: resolvedPath, workspacePath: null };
@@ -126,9 +128,8 @@ function structuredEntries(
   });
 }
 
-type CreateAgentWorkspaceEntry = NonNullable<
-  CreateAgentWorkspace
->["entries"][number];
+type CreateAgentWorkspaceEntry =
+  NonNullable<CreateAgentWorkspace>["entries"][number];
 
 function requireAbsolutePath(rawPath: string, label: string): string {
   const trimmed = rawPath.trim();

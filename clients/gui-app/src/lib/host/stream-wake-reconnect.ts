@@ -3,6 +3,7 @@ import type { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-s
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import { onWakeReconnect } from "@/lib/host/wake-reconnect";
+import { appLogger } from "@/lib/logger";
 import { useRunnerHost } from "@/providers/use-runner-host";
 
 /**
@@ -17,10 +18,16 @@ export function subscribeStreamWakeReconnect(
   runnerHost: IRunnerHost,
 ): () => void {
   const offOnline = onWakeReconnect(() => {
+    appLogger.debug("[stream] wake reconnect requested", {
+      reason: "wake-online",
+    });
     client.reconnectAll("wake-online");
   });
   try {
     const resumeSubscription = runnerHost.onSystemResumed(() => {
+      appLogger.debug("[stream] wake reconnect requested", {
+        reason: "wake-resume",
+      });
       client.reconnectAll("wake-resume");
     });
     return () => {
@@ -28,6 +35,7 @@ export function subscribeStreamWakeReconnect(
       resumeSubscription.dispose();
     };
   } catch (cause) {
+    appLogger.error("[stream] wake reconnect subscription failed", {}, cause);
     // Roll back the already-registered 'online' listener if wiring the OS-resume
     // subscription throws, so a failed open never leaks a dangling reconnect
     // callback (the disposer is never returned to the caller in that case).

@@ -1,10 +1,4 @@
-import {
-  copyFile,
-  cp,
-  mkdir,
-  readdir,
-  stat,
-} from "node:fs/promises";
+import { copyFile, cp, mkdir, readdir, stat } from "node:fs/promises";
 import { basename, extname, isAbsolute, join, normalize, sep } from "node:path";
 import { x as tarExtract } from "tar";
 import StreamZip from "node-stream-zip";
@@ -62,7 +56,10 @@ export async function extractHostSource(opts: ExtractOptions): Promise<void> {
   await copyFile(opts.source, join(opts.targetDir, basename(opts.source)));
 }
 
-async function copyDirectoryShallow(source: string, target: string): Promise<void> {
+async function copyDirectoryShallow(
+  source: string,
+  target: string,
+): Promise<void> {
   await mkdir(target, { recursive: true });
   await cp(source, target, { recursive: true });
 }
@@ -73,7 +70,10 @@ async function copyDirectoryShallow(source: string, target: string): Promise<voi
 // but skipping is too quiet on a hostile archive (the caller still sees
 // "extract succeeded"). We instead throw from `onwarn` (mapped via a
 // captured flag) so the install fails closed.
-async function extractTarArchive(source: string, targetDir: string): Promise<void> {
+async function extractTarArchive(
+  source: string,
+  targetDir: string,
+): Promise<void> {
   let rejected: { entry: string; reason: string } | null = null;
   await tarExtract({
     file: source,
@@ -116,7 +116,10 @@ async function extractTarArchive(source: string, targetDir: string): Promise<voi
   }
 }
 
-async function extractZipArchive(source: string, targetDir: string): Promise<void> {
+async function extractZipArchive(
+  source: string,
+  targetDir: string,
+): Promise<void> {
   const zip = new StreamZip.async({ file: source });
   try {
     const entries = await zip.entries();
@@ -143,7 +146,10 @@ async function extractZipArchive(source: string, targetDir: string): Promise<voi
 
 // Returns null if the entry path/linkpath is safe to extract under any
 // target dir, or a human-readable reason string if it must be rejected.
-function unsafeEntryReason(entryPath: string, linkPath: string | null): string | null {
+function unsafeEntryReason(
+  entryPath: string,
+  linkPath: string | null,
+): string | null {
   if (entryPath.length === 0) return "entry name is empty";
   if (isAbsolute(entryPath)) return "entry name is an absolute path";
   if (entryPath.startsWith("/") || entryPath.startsWith("\\")) {
@@ -160,7 +166,9 @@ function unsafeEntryReason(entryPath: string, linkPath: string | null): string |
   if (linkPath !== null) {
     if (isAbsolute(linkPath)) return "symlink target is absolute";
     const normalisedLink = normalize(linkPath);
-    const linkSegments = normalisedLink.split(/[\\/]/).filter((s) => s.length > 0);
+    const linkSegments = normalisedLink
+      .split(/[\\/]/)
+      .filter((s) => s.length > 0);
     if (linkSegments.some((segment) => segment === "..")) {
       return "symlink target escapes the target directory";
     }

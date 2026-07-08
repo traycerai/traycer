@@ -41,6 +41,12 @@ const HARNESS_AVAILABILITY_REFRESH_MS = 15 * 60 * 1000;
 // rather than re-spawning the heavy Claude probe every half-minute. Once every
 // harness reports available we drop back to the long steady-state interval and
 // stop polling.
+//
+// `availabilityPending` rows are different: the host returned immediately (no
+// probe complete yet) and is actively working in the background. Poll fast —
+// matching the authPending / versionPending cadence — until all pending flags
+// clear, then fall to the normal unavailable backoff or steady-state interval.
+const HARNESS_AVAILABILITY_PENDING_REFRESH_MS = 800;
 const HARNESS_AVAILABILITY_RETRY_MIN_MS = 30 * 1000;
 const HARNESS_AVAILABILITY_RETRY_MAX_MS = 5 * 60 * 1000;
 const HARNESS_MODEL_ERROR_RETRY_MIN_MS = 30 * 1000;
@@ -71,6 +77,12 @@ export function nextHarnessAvailabilityRefetchInterval(args: {
   if (data === undefined) {
     unavailableStreaks.delete(queryHash);
     return HARNESS_AVAILABILITY_REFRESH_MS;
+  }
+  // Poll fast while the host is still running availability probes in the
+  // background. Once all pending flags clear, fall through to the normal
+  // unavailable backoff or steady-state interval.
+  if (data.harnesses.some((harness) => harness.availabilityPending)) {
+    return HARNESS_AVAILABILITY_PENDING_REFRESH_MS;
   }
   if (data.harnesses.every((harness) => harness.available)) {
     unavailableStreaks.delete(queryHash);
@@ -153,6 +165,7 @@ export function useGuiHarnessesQuery(
 ): UseQueryResult<ListGuiHarnessesResponse, HostRpcError> {
   const client = useHostBinding()?.hostClient ?? null;
   return useHostQuery<HostRpcRegistry, "agent.gui.listHarnesses">({
+    cacheKeyIdentity: undefined,
     client,
     method: "agent.gui.listHarnesses",
     params: {},
@@ -181,6 +194,7 @@ export function useGuiHarnessModelsQuery(
     [harnessId, workingDirectory],
   );
   return useHostQuery<HostRpcRegistry, "agent.gui.listModels">({
+    cacheKeyIdentity: undefined,
     client,
     method: "agent.gui.listModels",
     params,
@@ -209,6 +223,7 @@ export function useGuiHarnessCommandsQuery(
     [harnessId, workingDirectories],
   );
   return useHostQuery<HostRpcRegistry, "agent.gui.listCommands">({
+    cacheKeyIdentity: undefined,
     client,
     method: "agent.gui.listCommands",
     params,

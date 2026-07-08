@@ -1,6 +1,7 @@
 import { config } from "../config";
 import type { InstallSourceArg } from "../installer";
 import { resolveBundledHostArchive } from "../installer/bundled-host";
+import { errorFromUnknown } from "../logger";
 import { readHostInstallRecord } from "../manifest/host-install";
 import { CliError } from "../runner/errors";
 import type { ProgressInfo } from "../runner/output";
@@ -8,6 +9,7 @@ import type { RuntimeContext } from "../runner/runtime";
 import { createServiceController, serviceLabelFor } from "../service";
 import { provisionHost, type HostProvisionResult } from "./provision";
 import { defaultRegistryHostVersionRequest } from "./supported-host-version";
+import { installSourceLogFields } from "./install-source-log-fields";
 
 // Centralized auto-bootstrap for the standalone CLI. Per Core Flow 7
 // (Standalone CLI First-Run), commands like `traycer login` and any
@@ -40,11 +42,7 @@ export type AutoBootstrapReason =
   | "service-registration-warning";
 
 export type AutoBootstrapStatus =
-  | "skipped"
-  | "ready"
-  | "installed"
-  | "service-registered"
-  | "failed";
+  "skipped" | "ready" | "installed" | "service-registered" | "failed";
 
 export interface AutoBootstrapDecision {
   readonly status: AutoBootstrapStatus;
@@ -66,16 +64,19 @@ export interface AutoBootstrapOptions {
   readonly onProgress: ((info: ProgressInfo) => void) | null;
 }
 
-export async function detectBootstrapState(
-  runtime: RuntimeContext,
-): Promise<{
+export async function detectBootstrapState(runtime: RuntimeContext): Promise<{
   readonly hostInstalled: boolean;
   readonly serviceRegistered: boolean;
 }> {
   let hostInstalled = false;
   try {
     hostInstalled = (await readHostInstallRecord(runtime.environment)) !== null;
-  } catch {
+  } catch (err) {
+    runtime.logger.warn("Auto-bootstrap install record probe failed", {
+      environment: runtime.environment,
+      errorName: errorFromUnknown(err).name,
+      errorMessage: errorFromUnknown(err).message,
+    });
     hostInstalled = false;
   }
 
@@ -84,10 +85,20 @@ export async function detectBootstrapState(
     const label = serviceLabelFor(runtime.environment);
     const status = await createServiceController().status(label);
     serviceRegistered = status.state !== "not-installed";
-  } catch {
+  } catch (err) {
+    runtime.logger.warn("Auto-bootstrap service status probe failed", {
+      environment: runtime.environment,
+      errorName: errorFromUnknown(err).name,
+      errorMessage: errorFromUnknown(err).message,
+    });
     serviceRegistered = false;
   }
 
+  runtime.logger.debug("Auto-bootstrap state detected", {
+    environment: runtime.environment,
+    hostInstalled,
+    serviceRegistered,
+  });
   return { hostInstalled, serviceRegistered };
 }
 
@@ -98,9 +109,19 @@ export async function detectBootstrapState(
 export async function evaluateAutoBootstrap(
   opts: AutoBootstrapOptions,
 ): Promise<AutoBootstrapDecision> {
+  opts.runtime.logger.debug("Auto-bootstrap evaluation started", {
+    environment: opts.runtime.environment,
+    trigger: opts.trigger,
+    noBootstrap: opts.runtime.noBootstrap,
+    nonInteractive: opts.runtime.nonInteractive,
+  });
   const state = await detectBootstrapState(opts.runtime);
 
   if (state.hostInstalled && state.serviceRegistered) {
+    opts.runtime.logger.debug("Auto-bootstrap skipped; host already ready", {
+      environment: opts.runtime.environment,
+      trigger: opts.trigger,
+    });
     return {
       status: "ready",
       reason: "already-installed",
@@ -113,6 +134,12 @@ export async function evaluateAutoBootstrap(
   }
 
   if (opts.runtime.noBootstrap) {
+    opts.runtime.logger.debug("Auto-bootstrap skipped by flag", {
+      environment: opts.runtime.environment,
+      trigger: opts.trigger,
+      hostInstalled: state.hostInstalled,
+      serviceRegistered: state.serviceRegistered,
+    });
     return {
       status: "skipped",
       reason: "explicit-no-bootstrap",
@@ -125,6 +152,15 @@ export async function evaluateAutoBootstrap(
   }
 
   if (opts.runtime.nonInteractive) {
+    opts.runtime.logger.debug(
+      "Auto-bootstrap skipped in non-interactive runtime",
+      {
+        environment: opts.runtime.environment,
+        trigger: opts.trigger,
+        hostInstalled: state.hostInstalled,
+        serviceRegistered: state.serviceRegistered,
+      },
+    );
     return {
       status: "skipped",
       reason: "noninteractive-cannot-prompt",
@@ -141,6 +177,10 @@ export async function evaluateAutoBootstrap(
   // `maybeAutoBootstrap` so the shared core actually fires; this evaluator
   // stays pure.
   if (state.hostInstalled && !state.serviceRegistered) {
+    opts.runtime.logger.info("Auto-bootstrap selected service repair", {
+      environment: opts.runtime.environment,
+      trigger: opts.trigger,
+    });
     return {
       status: "service-registered",
       reason: "service-registered",
@@ -153,6 +193,12 @@ export async function evaluateAutoBootstrap(
   }
 
   // "would proceed to a full install" placeholder.
+  opts.runtime.logger.info("Auto-bootstrap selected full install", {
+    environment: opts.runtime.environment,
+    trigger: opts.trigger,
+    hostInstalled: state.hostInstalled,
+    serviceRegistered: state.serviceRegistered,
+  });
   return {
     status: "installed",
     reason: "installed",
@@ -177,8 +223,17 @@ export async function maybeAutoBootstrap(
   opts: AutoBootstrapOptions,
 ): Promise<AutoBootstrapDecision> {
   const decision = await evaluateAutoBootstrap(opts);
-  if (decision.status !== "service-registered" && decision.status !== "installed") {
+  if (
+    decision.status !== "service-registered" &&
+    decision.status !== "installed"
+  ) {
     // "skipped" or "ready" - nothing to do.
+    opts.runtime.logger.debug("Auto-bootstrap returning without provisioning", {
+      environment: opts.runtime.environment,
+      trigger: opts.trigger,
+      status: decision.status,
+      reason: decision.reason,
+    });
     return decision;
   }
   const isServiceOnly = decision.status === "service-registered";
@@ -189,6 +244,12 @@ export async function maybeAutoBootstrap(
     // registry fallback uses the CLI's stamped supported host version when
     // present.
     const source = await resolveAutoBootstrapSource();
+    opts.runtime.logger.debug("Auto-bootstrap source resolved", {
+      environment: opts.runtime.environment,
+      trigger: opts.trigger,
+      serviceOnly: isServiceOnly,
+      ...installSourceLogFields(source),
+    });
     const isOwnBuild = source.kind === "local-file";
     const targetVersion =
       source.kind === "registry" && source.versionRequest !== "latest"
@@ -221,8 +282,28 @@ export async function maybeAutoBootstrap(
       force: false,
       onProgress: opts.onProgress,
     });
-    return projectProvisionResult(result);
+    const projected = projectProvisionResult(result);
+    opts.runtime.logger.info("Auto-bootstrap provisioning completed", {
+      environment: opts.runtime.environment,
+      trigger: opts.trigger,
+      status: projected.status,
+      reason: projected.reason,
+      action: result.action,
+      hostInstalled: projected.hostInstalled,
+      serviceRegistered: projected.serviceRegistered,
+      hasPostSwapError: projected.postSwapError !== null,
+    });
+    return projected;
   } catch (cause) {
+    opts.runtime.logger.error(
+      "Auto-bootstrap provisioning failed",
+      {
+        environment: opts.runtime.environment,
+        trigger: opts.trigger,
+        serviceOnly: isServiceOnly,
+      },
+      errorFromUnknown(cause),
+    );
     const post = await detectBootstrapState(opts.runtime);
     const error = toErrorPayload(cause);
     return {

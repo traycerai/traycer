@@ -1,4 +1,5 @@
 import { buildChatActivityTimeline } from "@/components/chat/chat-activity-groups";
+import { chatFindSegmentUnitId } from "@/components/chat/chat-find";
 import {
   WorkingVerbContext,
   pickWorkingVerb,
@@ -23,6 +24,7 @@ import { ResolvedApprovalSegment } from "./segments/approval-segment";
 import { ArtifactCardSegment } from "./segments/artifact-card-segment";
 import { CommandSegment } from "./segments/command-segment";
 import { CompactionSegment } from "./segments/compaction-segment";
+import { AutonomousResumeSegment } from "./segments/autonomous-resume-segment";
 import { ErrorSegment } from "./segments/error-segment";
 import { FileChangeGroupSegment } from "./segments/file-change-group-segment";
 import { FileChangeSegment } from "./segments/file-change-segment";
@@ -58,6 +60,7 @@ function collectAssistantReplyText(
 
 interface AssistantBodyProps {
   segments: ReadonlyArray<MessageSegment>;
+  backgroundToolBlockIds: ReadonlySet<string>;
   /**
    * Host-owned run state of this turn. Non-null only for the active turn;
    * drives the in-progress indicator that persists for the whole turn (first
@@ -93,6 +96,7 @@ interface AssistantBodyProps {
 
 export function AssistantMessageBody({
   segments,
+  backgroundToolBlockIds,
   runState,
   messageId,
   createdAt,
@@ -108,8 +112,9 @@ export function AssistantMessageBody({
     () =>
       buildChatActivityTimeline(segments, {
         turnState: activityTimelineTurnState,
+        promotedToolBlockIds: backgroundToolBlockIds,
       }),
-    [activityTimelineTurnState, segments],
+    [activityTimelineTurnState, backgroundToolBlockIds, segments],
   );
   const replyText = useMemo(
     () => collectAssistantReplyText(segments),
@@ -141,6 +146,7 @@ export function AssistantMessageBody({
           return (
             <InterviewSegment
               key={item.id}
+              findUnitId={chatFindSegmentUnitId(item.segment.id)}
               status={item.segment.status}
               toolName={item.segment.toolName}
               title={item.segment.title}
@@ -163,8 +169,11 @@ export function AssistantMessageBody({
               result={item.segment.result}
               isStreaming={item.segment.isStreaming}
               endState={item.segment.endState}
+              stopped={item.segment.stopped}
               startedAt={item.segment.startedAt}
               durationMs={item.segment.durationMs}
+              workflowMeta={item.segment.workflowMeta}
+              nested={item.segment.children}
               variant="promoted"
             />
           );
@@ -174,6 +183,7 @@ export function AssistantMessageBody({
             key={item.id}
             id={item.id}
             segment={item.segment}
+            backgroundToolBlockIds={backgroundToolBlockIds}
             nextStepActions={nextStepActions}
           />
         );
@@ -587,12 +597,15 @@ function WorkingDots() {
 interface AssistantSegmentProps {
   id: string;
   segment: MessageSegment;
+  backgroundToolBlockIds: ReadonlySet<string>;
   nextStepActions: NextStepActionHandler | null;
 }
 
 function ApprovalSegmentCard({
+  findUnitId,
   segment,
 }: {
+  findUnitId: string;
   segment: Extract<MessageSegment, { kind: "approval" }>;
 }) {
   // Pending approvals are routed to the composer-slot queue by the timeline
@@ -602,9 +615,11 @@ function ApprovalSegmentCard({
     <ResolvedApprovalSegment
       toolName={segment.toolName}
       description={segment.description}
+      inputSummary={segment.inputSummary}
       inputDetail={segment.inputDetail}
       decision={segment.decision}
       variant="card"
+      headerFindUnitId={findUnitId}
     />
   );
 }
@@ -615,12 +630,15 @@ function ApprovalSegmentCard({
 function AssistantSegment({
   id,
   segment,
+  backgroundToolBlockIds,
   nextStepActions,
 }: AssistantSegmentProps) {
+  const findUnitId = chatFindSegmentUnitId(id);
   switch (segment.kind) {
     case "text":
       return (
         <TextSegment
+          findUnitId={findUnitId}
           markdown={segment.markdown}
           isStreaming={segment.isStreaming}
           nextStepActions={nextStepActions}
@@ -629,28 +647,45 @@ function AssistantSegment({
     case "reasoning":
       return (
         <ReasoningSegment
+          findUnitId={findUnitId}
           markdown={segment.markdown}
           isStreaming={segment.isStreaming}
           durationMs={segment.durationMs}
         />
       );
-    case "tool":
+    case "tool": {
+      const isBackgroundRunning = backgroundToolBlockIds.has(segment.id);
       return (
         <ToolSegment
+          id={segment.id}
           toolName={segment.toolName}
           inputSummary={segment.inputSummary}
           inputDetail={segment.inputDetail}
           error={segment.error}
           agentMessageSend={segment.agentMessageSend}
-          isStreaming={segment.isStreaming}
-          endState={segment.endState}
+          isStreaming={segment.isStreaming || isBackgroundRunning}
+          endState={isBackgroundRunning ? null : segment.endState}
+          stopped={segment.stopped}
           progress={segment.progress}
+          backgroundOutput={segment.backgroundOutput}
+          backgroundTask={segment.backgroundTask}
           startedAt={segment.startedAt}
+          durationMs={segment.durationMs}
           variant="card"
+          headerFindUnitId={
+            segment.agentMessageSend === null ? findUnitId : null
+          }
         />
       );
+    }
     case "file_change":
-      return <FileChangeSegment segment={segment} variant="card" />;
+      return (
+        <FileChangeSegment
+          segment={segment}
+          variant="card"
+          headerFindUnitId={findUnitId}
+        />
+      );
     case "file_change_group":
       return (
         <FileChangeGroupSegment
@@ -658,6 +693,7 @@ function AssistantSegment({
           artifacts={segment.artifacts}
           checkpointManifest={segment.checkpointManifest}
           hasLaterOverlappingChanges={segment.hasLaterOverlappingChanges}
+          findUnitId={findUnitId}
         />
       );
     case "command":
@@ -671,6 +707,7 @@ function AssistantSegment({
           progress={segment.progress}
           startedAt={segment.startedAt}
           variant="card"
+          headerFindUnitId={findUnitId}
         />
       );
     case "subagent":
@@ -684,13 +721,16 @@ function AssistantSegment({
           result={segment.result}
           isStreaming={segment.isStreaming}
           endState={segment.endState}
+          stopped={segment.stopped}
           startedAt={segment.startedAt}
           durationMs={segment.durationMs}
+          workflowMeta={segment.workflowMeta}
+          nested={segment.children}
           variant="card"
         />
       );
     case "approval":
-      return <ApprovalSegmentCard segment={segment} />;
+      return <ApprovalSegmentCard segment={segment} findUnitId={findUnitId} />;
     case "artifact_operation":
       return (
         <ArtifactCardSegment
@@ -699,14 +739,21 @@ function AssistantSegment({
           artifactId={segment.artifactId}
           title={segment.title}
           change={segment.change}
+          findUnitId={findUnitId}
         />
       );
     case "todo":
-      return <TodoSegment items={segment.items} />;
+      return <TodoSegment items={segment.items} findUnitId={findUnitId} />;
     case "plan":
-      return <PlanSegment segment={segment} />;
+      return <PlanSegment segment={segment} findUnitId={findUnitId} />;
     case "error":
-      return <ErrorSegment message={segment.message} code={segment.code} />;
+      return (
+        <ErrorSegment
+          message={segment.message}
+          code={segment.code}
+          findUnitId={findUnitId}
+        />
+      );
     case "compaction":
       return (
         <CompactionSegment
@@ -717,11 +764,15 @@ function AssistantSegment({
           durationMs={segment.durationMs}
           summary={segment.summary}
           error={segment.error}
+          findUnitId={findUnitId}
         />
       );
+    case "autonomous_resume":
+      return <AutonomousResumeSegment triggers={segment.triggers} />;
     case "interview":
       return (
         <InterviewSegment
+          findUnitId={findUnitId}
           status={segment.status}
           toolName={segment.toolName}
           title={segment.title}

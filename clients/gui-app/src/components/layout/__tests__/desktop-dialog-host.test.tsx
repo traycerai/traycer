@@ -167,13 +167,14 @@ function createBaseRunnerHost(): IRunnerHost {
     validateAuthToken: () => Promise.resolve({ kind: "rejected" as const }),
     validateAuthTokenIdentity: () =>
       Promise.resolve({ kind: "rejected" as const }),
-    exchangeAuthCode: () => Promise.resolve(null),
+    refreshAuthToken: () => Promise.resolve({ kind: "network-error" as const }),
     openExternalLink: () => Promise.resolve(),
     getRegisteredUrlSchemes: () => Promise.resolve([]),
     requestMicrophoneAccess: () => Promise.resolve("granted" as const),
     openMicrophoneSettings: () => Promise.resolve(),
     beginAuthAttempt: () => undefined,
     onAuthCallback: () => ({ dispose: () => undefined }),
+    deviceFlow: { start: () => Promise.resolve(null) },
     secureStorage: {
       get: () => Promise.resolve(null),
       set: () => Promise.resolve(),
@@ -216,6 +217,7 @@ function createBaseRunnerHost(): IRunnerHost {
     migration: null,
     hostManagement: null,
     hostTray: null,
+    zoom: null,
   };
 }
 

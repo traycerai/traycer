@@ -137,6 +137,13 @@ export const parsedTaskTodoSchema = z.object({
 });
 export type ParsedTaskTodoPersisted = z.infer<typeof parsedTaskTodoSchema>;
 
+export const backgroundTaskOutputSchema = z.object({
+  stdout: z.string(),
+  stderr: z.string(),
+  truncated: z.boolean(),
+});
+export type BackgroundTaskOutput = z.infer<typeof backgroundTaskOutputSchema>;
+
 export const toolCallBlockSchema = z.object({
   ...baseBlockFields,
   status: actionBlockStatus,
@@ -163,6 +170,40 @@ export const toolCallBlockSchema = z.object({
   // never an append-log). Shown by the GUI only while `status === "streaming"`.
   // Nullable + defaulted so blocks persisted before this field parse cleanly.
   progress: z.string().nullable().default(null),
+  // Capped terminal output for a backgrounded command/monitor, populated from
+  // the SDK's terminal task notification when available. Completion-only by
+  // design: this is not a persisted streaming stdout log.
+  backgroundOutput: backgroundTaskOutputSchema.nullable().default(null),
+  // Wall-clock start of the call. Immutable across progress/completion - unlike
+  // `timestamp`, which becomes the completion time once the block finalizes - so
+  // background command/Monitor cards can preserve their final elapsed duration.
+  // Nullable for blocks persisted before this field existed.
+  startedAt: z.number().nullable().default(null),
+  // Wall-clock end of the call once a real terminal event arrives. Kept
+  // separate from `timestamp` so background command/Monitor duration is always
+  // derived from explicit task timing, not from whichever lifecycle event last
+  // touched the block. Nullable/defaulted for persisted blocks from older
+  // protocol versions.
+  endedAt: z.number().nullable().default(null),
+  // Persistent marker: true once this tool_call is identified as a backgrounded
+  // command/Monitor (stamped at started time from `run_in_background` / the
+  // Monitor tool, and reinforced by the terminal task notification). Unlike the
+  // transient host `backgroundItems` list (removed at completion) or
+  // `backgroundOutput` (only set on some terminal paths), this survives EVERY
+  // terminal path and reload - so the GUI keeps rendering it as a standalone
+  // background card after it completes/stops/errors instead of collapsing into
+  // the generic activity group. `null` means "not yet known" (the classifier
+  // hasn't seen enough of the streamed input to tell) - distinct from a
+  // confirmed `false`, so a brief mid-stream gap is never misrendered as a
+  // definitive "not background." Defaulted to `false` (not `null`) for blocks
+  // persisted before this field existed, since backgrounding didn't exist as a
+  // concept then.
+  backgroundTask: z.boolean().nullable().default(false),
+  // Set alongside `status: "errored"` when the terminal outcome was an
+  // explicit stop (deadline-killed Monitor, user-stopped command) rather than
+  // a genuine failure. `status` itself is unchanged - this only adds the
+  // finer distinction. Defaulted so pre-existing blocks parse cleanly.
+  stopped: z.boolean().default(false),
 });
 export type ToolCallBlock = z.infer<typeof toolCallBlockSchema>;
 
@@ -228,6 +269,34 @@ export const commandBlockSchema = z.object({
 });
 export type CommandBlock = z.infer<typeof commandBlockSchema>;
 
+// One milestone in a workflow run's activity timeline: a phase transition
+// (`"Find"`, `"Verify"`, ...) or a fleet-agent label sighting (`"find:host-core"`),
+// parsed from the workflow task's rotating `task_progress` line. Order in
+// `WorkflowMeta.activity` is chronological; consecutive duplicate labels are
+// not re-appended (see the accumulator).
+export const workflowActivityEntrySchema = z.object({
+  kind: z.enum(["phase", "label"]),
+  text: z.string(),
+});
+export type WorkflowActivityEntry = z.infer<typeof workflowActivityEntrySchema>;
+
+// Rich workflow data riding a `subagent` block (see `subAgentBlockSchema.
+// workflowMeta` below) - deliberately NOT a new persisted block `type`, so any
+// released host/GUI can still read a chat containing a workflow run (the base
+// `subagent` fields are the faithful degradation; this is the enrichment an
+// old reader silently strips).
+export const workflowMetaSchema = z.object({
+  name: z.string(),
+  // The workflow script's `meta.description`, extracted best-effort at spawn
+  // time. `null` on extraction failure - never the raw script source.
+  intent: z.string().nullable(),
+  activity: z.array(workflowActivityEntrySchema),
+  agentsStarted: z.number().int().nullable(),
+  agentsFinished: z.number().int().nullable(),
+  totalTokens: z.number().int().nullable(),
+});
+export type WorkflowMeta = z.infer<typeof workflowMetaSchema>;
+
 export const subAgentBlockSchema = z.object({
   ...baseBlockFields,
   status: actionBlockStatus,
@@ -252,6 +321,17 @@ export const subAgentBlockSchema = z.object({
   // `task` part) and therefore emit no separate tool call. Defaulted so blocks
   // persisted before this field parse cleanly.
   spawnToolCallId: z.string().nullable().default(null),
+  // Set alongside `status: "errored"` when the subagent's terminal outcome
+  // was an explicit stop rather than a genuine failure - mirrors
+  // `toolCallBlockSchema.stopped`. Defaulted so pre-existing blocks parse
+  // cleanly.
+  stopped: z.boolean().default(false),
+  // Present iff this card is a workflow run's dual-written card (see
+  // `workflow.*` runtime events) - the rich data an old reader can't render.
+  // `null` ⇒ an ordinary subagent block. Additive + defaulted so blocks
+  // persisted before workflow support existed - and a workflow block read by
+  // an old host/GUI that strips this key - both parse cleanly.
+  workflowMeta: workflowMetaSchema.nullable().default(null),
 });
 export type SubAgentBlock = z.infer<typeof subAgentBlockSchema>;
 
@@ -369,6 +449,167 @@ export const compactionBlockSchema = z.object({
   error: z.string().nullable(),
 });
 export type CompactionBlock = z.infer<typeof compactionBlockSchema>;
+
+export const autonomousResumeOutputFileSchema = z.object({
+  workspacePath: z.string(),
+  filePath: z.string(),
+});
+export type AutonomousResumeOutputFile = z.infer<
+  typeof autonomousResumeOutputFileSchema
+>;
+
+// One background task whose terminal settle contributed to waking the agent
+// into an autonomous (no-user-message) turn. `kind` mirrors the live
+// BackgroundItem vocabulary, while `status` is the terminal outcome; `title` is
+// the same human label; `summary` is the task notification's summary / a short
+// result line. `blockId` is the
+// originating card's block id (the spawning tool_call / subagent block) so the
+// resume marker can scroll back to it; defaulted for back-compat with any
+// trigger persisted before this field existed (renders as non-clickable).
+// `outputFile` points at an SDK task output file using the existing
+// workspace.readFile address shape; the GUI lazy-fetches it only on expand.
+//
+// `kind: "wakeup"` (a fired ScheduleWakeup) is never PERSISTED in this array -
+// see `autonomousResumeWakeTriggerSchema` and the block-level codec below. The
+// enum keeps the value only to accept chats already written with it inline
+// (pre-fix internal builds); the next full-block rewrite re-encodes them.
+export const autonomousResumeTriggerSchema = z.object({
+  kind: z.enum(["command", "monitor", "subagent", "wakeup"]),
+  title: z.string(),
+  status: z.enum(["completed", "failed", "stopped"]),
+  summary: z.string(),
+  blockId: z.string().default(""),
+  outputFile: autonomousResumeOutputFileSchema.nullable().default(null),
+});
+export type AutonomousResumeTrigger = z.infer<
+  typeof autonomousResumeTriggerSchema
+>;
+
+// A fired ScheduleWakeup that woke the agent, stored SEPARATELY from
+// `triggers` so a v1.1.3-or-earlier host - whose `triggers[].kind` enum
+// predates `"wakeup"` - can still parse the chat: an unknown defaulted key is
+// silently stripped by a strict `z.object`, whereas a new enum value would
+// fail the WHOLE chat's `chatSchema.safeParse` (see `readChatSnapshot` in
+// `chat-session-manager.ts`). Same fields as a trigger minus `kind` - the
+// field itself is the kind. Always empty for every OTHER block/trigger kind.
+export const autonomousResumeWakeTriggerSchema = z.object({
+  title: z.string(),
+  status: z.enum(["completed", "failed", "stopped"]),
+  summary: z.string(),
+  blockId: z.string().default(""),
+  outputFile: autonomousResumeOutputFileSchema.nullable().default(null),
+});
+export type AutonomousResumeWakeTrigger = z.infer<
+  typeof autonomousResumeWakeTriggerSchema
+>;
+
+// Compaction-style divider at the HEAD of an autonomous turn, explaining why
+// the turn resumed (which backgrounded command/Monitor/subagent/wakeup
+// completed). The turn carries no user message, so without this the resume
+// looks abrupt. Usually one trigger; can be several if multiple settled while
+// idle before the model woke. This block is surfaced through
+// `chat.subscribe@1.1+`; 1.2 adds the wakeup trigger kind, which the host
+// projects out for older subscribers.
+//
+// PERSISTED shape carries wakeup triggers in the additive `wakeTriggers` key
+// instead of inline in `triggers` - the only kind of change a v1.1.x host's
+// strict `chatSchema.safeParse` can survive. The DOMAIN/wire shape (this
+// block's inferred type, used by every consumer other than the storage
+// read/write funnels) is unchanged: `triggers` alone, wakeup entries last.
+// `decodeAutonomousResumeBlock`/`encodeAutonomousResumeBlock` are exported as
+// plain functions (not just wrapped in the codec below) so the storage layer's
+// hot read/write funnels - `denormalizeMessages` / `toStoredBlock` in
+// `chat-message-collections.ts` - can normalize without a full schema parse.
+const persistedAutonomousResumeBlockSchema = z.object({
+  ...baseBlockFields,
+  type: z.literal("autonomous_resume"),
+  triggers: z.array(autonomousResumeTriggerSchema),
+  wakeTriggers: z.array(autonomousResumeWakeTriggerSchema).default([]),
+});
+export type PersistedAutonomousResumeBlock = z.infer<
+  typeof persistedAutonomousResumeBlockSchema
+>;
+
+const domainAutonomousResumeBlockSchema = z.object({
+  ...baseBlockFields,
+  type: z.literal("autonomous_resume"),
+  triggers: z.array(autonomousResumeTriggerSchema),
+});
+export type AutonomousResumeBlock = z.infer<
+  typeof domainAutonomousResumeBlockSchema
+>;
+
+// The raw stored shape of an `autonomous_resume` block as read straight off a
+// Yjs doc, BEFORE any schema parse: every block written before the
+// `wakeTriggers` key existed (v1.1.3 and every earlier build) simply lacks it,
+// and the storage hot path (`decodeStoredBlock` in
+// `chat-message-collections.ts`) deliberately skips the schema parse that
+// would default it. Any function consuming stored blocks must be total over
+// this shape - `.default([])` only exists after a parse.
+export type RawStoredAutonomousResumeBlock = Omit<
+  PersistedAutonomousResumeBlock,
+  "wakeTriggers"
+> & { wakeTriggers: AutonomousResumeWakeTrigger[] | undefined };
+
+// Merges `wakeTriggers` into `triggers` (wakeup entries last, matching
+// construction order in `buildAutonomousResumeBlock`) and accepts legacy
+// stored `kind: "wakeup"` entries already inline in `triggers` unchanged.
+// Total over every shape ever persisted: a pre-`wakeTriggers` block (absent
+// key) and an already-domain-shaped block are both returned unchanged - the
+// function itself tolerates the missing key rather than relying on a schema
+// parse the raw storage path never runs.
+export function decodeAutonomousResumeBlock(
+  stored: RawStoredAutonomousResumeBlock,
+): AutonomousResumeBlock {
+  const { wakeTriggers, ...rest } = stored;
+  if (wakeTriggers === undefined || wakeTriggers.length === 0) return rest;
+  return {
+    ...rest,
+    triggers: [
+      ...rest.triggers,
+      ...wakeTriggers.map(
+        (wake): AutonomousResumeTrigger => ({ ...wake, kind: "wakeup" }),
+      ),
+    ],
+  };
+}
+
+// Splits wakeup triggers out of `triggers` into `wakeTriggers`. Must run
+// before every raw storage write (see `toStoredBlock` in
+// `chat-message-collections.ts`) - writing a domain-shaped block verbatim
+// re-introduces `kind: "wakeup"` into persisted `triggers` and breaks v1.1.x
+// hosts again.
+function isWakeupTrigger(
+  trigger: AutonomousResumeTrigger,
+): trigger is AutonomousResumeTrigger & { kind: "wakeup" } {
+  return trigger.kind === "wakeup";
+}
+
+export function encodeAutonomousResumeBlock(
+  domain: AutonomousResumeBlock,
+): PersistedAutonomousResumeBlock {
+  const triggers = domain.triggers.filter((trigger) => !isWakeupTrigger(trigger));
+  const wakeTriggers = domain.triggers
+    .filter(isWakeupTrigger)
+    .map(({ kind: _kind, ...wake }): AutonomousResumeWakeTrigger => wake);
+  return { ...domain, triggers, wakeTriggers };
+}
+
+export const autonomousResumeBlockSchema = z.codec(
+  persistedAutonomousResumeBlockSchema,
+  domainAutonomousResumeBlockSchema,
+  {
+    decode: decodeAutonomousResumeBlock,
+    // `z.codec`'s `encode` callback receives the domain schema's INPUT shape
+    // (nested trigger defaults not yet applied) and must return the persisted
+    // schema's OUTPUT shape. Re-parsing through `domainAutonomousResumeBlockSchema`
+    // applies those defaults so `encodeAutonomousResumeBlock` itself can stay
+    // typed against the concrete, fully-defaulted `AutonomousResumeBlock` - the
+    // shape every real caller (e.g. the host storage write funnel) has.
+    encode: (domain) =>
+      encodeAutonomousResumeBlock(domainAutonomousResumeBlockSchema.parse(domain)),
+  },
+);
 
 export const steerBlockSchema = z.object({
   ...baseBlockFields,
@@ -494,8 +735,24 @@ export const contentBlockSchema = z.discriminatedUnion("type", [
   planBlockSchema,
   errorBlockSchema,
   compactionBlockSchema,
+  autonomousResumeBlockSchema,
   steerBlockSchema,
   interviewBlockSchema,
   artifactOperationBlockSchema,
 ]);
 export type ContentBlock = z.infer<typeof contentBlockSchema>;
+
+// The on-disk/wire shape - identical to `ContentBlock` except
+// `autonomous_resume`, whose persisted member carries `wakeTriggers` instead
+// of inline `kind: "wakeup"` triggers. Used by the host storage layer's
+// `StoredBlock` type so raw Yjs entries are typed as what is actually on disk.
+//
+// Deliberately NOT `z.input<typeof contentBlockSchema>`: that blanket
+// derivation also reverts every OTHER member's defaulted fields to optional
+// (e.g. `reasoning.startedAt`), since `z.input` reflects pre-default shape for
+// ALL members, not just the codec one. Only `autonomous_resume` actually has a
+// different on-disk representation - every other member's persisted shape is
+// its normal (fully-defaulted) domain shape.
+export type PersistedContentBlock =
+  | Exclude<ContentBlock, AutonomousResumeBlock>
+  | PersistedAutonomousResumeBlock;

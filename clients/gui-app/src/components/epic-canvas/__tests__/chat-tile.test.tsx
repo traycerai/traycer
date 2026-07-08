@@ -86,6 +86,7 @@ import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
+import { useComposerHarnessMemoryStore } from "@/stores/composer/composer-harness-memory-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import {
@@ -100,6 +101,7 @@ import type { ChatStreamClient } from "@traycer-clients/shared/host-transport/ch
 import type { Message } from "@traycer/protocol/persistence/epic/schemas";
 import type {
   ChatActiveTurn,
+  ChatApprovalState,
   ChatPendingInterviewState,
   ChatQueuedItem,
   ChatRunSettings,
@@ -127,6 +129,24 @@ const QUEUED_CONTENT: JsonContent = {
     {
       type: "paragraph",
       content: [{ type: "text", text: "Queued prompt" }],
+    },
+  ],
+};
+const SECOND_QUEUED_CONTENT: JsonContent = {
+  type: "doc",
+  content: [
+    {
+      type: "paragraph",
+      content: [{ type: "text", text: "Second queued prompt" }],
+    },
+  ],
+};
+const PENDING_DRAFT_CONTENT: JsonContent = {
+  type: "doc",
+  content: [
+    {
+      type: "paragraph",
+      content: [{ type: "text", text: "pending message" }],
     },
   ],
 };
@@ -306,6 +326,7 @@ function emitChatSnapshotWithMessages(input: {
         isTitleEditedByUser: false,
         settings: input.settings,
         activeSessionChain: null,
+        claudePendingWakes: [],
         messages: [...input.messages],
         events: [],
       },
@@ -343,6 +364,7 @@ function testWorktreeBinding(): WorktreeBinding {
         setupExitCode: null,
         setupFailedAt: null,
         createdAt: 1,
+        ownedSubmodules: [],
       },
     ],
   };
@@ -466,6 +488,29 @@ function runningActiveTurn(): ChatActiveTurn {
   };
 }
 
+function stoppingActiveTurn(): ChatActiveTurn {
+  return {
+    ...runningActiveTurn(),
+    status: "stopping",
+  };
+}
+
+function approvalState(
+  approvalId: string,
+  kind: ChatApprovalState["kind"],
+): ChatApprovalState {
+  return {
+    kind,
+    approvalId,
+    toolName: kind === "plan" ? "plan" : "bash",
+    description: "Review action",
+    input: null,
+    planId: kind === "plan" ? "plan-1" : null,
+    actions: [],
+    requestedAt: 4,
+  };
+}
+
 function renderChatTile() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
@@ -578,21 +623,14 @@ describe("<ChatTile />", () => {
     useComposerDraftStore.setState({
       drafts: {
         [CHAT_ARTIFACT.id]: {
-          content: {
-            type: "doc",
-            content: [
-              {
-                type: "paragraph",
-                content: [{ type: "text", text: "pending message" }],
-              },
-            ],
-          },
+          content: PENDING_DRAFT_CONTENT,
           selection: null,
           resetEpoch: 0,
         },
       },
     });
     useComposerRunSettingsStore.getState().resetForTests();
+    useComposerHarnessMemoryStore.getState().resetForTests();
     // The composer gates Send on a resolved (non-empty) model slug. Without a
     // host binding the catalog never resolves the empty default, so seed a
     // concrete default model so the composer reaches a sendable state.
@@ -615,6 +653,7 @@ describe("<ChatTile />", () => {
       drafts: {},
     });
     useComposerRunSettingsStore.getState().resetForTests();
+    useComposerHarnessMemoryStore.getState().resetForTests();
     useAuthStore.setState({
       status: "signed-out",
       profile: null,
@@ -758,10 +797,10 @@ describe("<ChatTile />", () => {
     }
 
     act(() => {
-      focusedComposer.controls.setSelection({
-        harnessId: UPDATED_QUEUE_SETTINGS.harnessId,
-        modelSlug: UPDATED_QUEUE_SETTINGS.model,
-      });
+      focusedComposer.controls.selectModel(
+        UPDATED_QUEUE_SETTINGS.harnessId,
+        UPDATED_QUEUE_SETTINGS.model,
+      );
       focusedComposer.controls.setPermission("full_access");
       focusedComposer.controls.setReasoning(
         UPDATED_QUEUE_SETTINGS.reasoningEffort ?? "",
@@ -815,6 +854,7 @@ describe("<ChatTile />", () => {
         status: "accepted",
         reason: null,
         code: null,
+        backgroundStopTaskIds: [],
       });
     });
 
@@ -871,7 +911,7 @@ describe("<ChatTile />", () => {
     // The toolbar stays editable mid-turn; the note only appears once the user
     // actually changes permission (live-mirror + steer reconcile the change).
     await waitFor(() => {
-      expect(getButtonByAriaLabel("Supervised").disabled).toBe(false);
+      expect(getButtonByAriaLabel("Full access").disabled).toBe(false);
       expect(
         screen.queryByText("New mode applies to the next turn"),
       ).toBeNull();
@@ -889,7 +929,7 @@ describe("<ChatTile />", () => {
     });
 
     await waitFor(() => {
-      expect(getButtonByAriaLabel("Supervised").disabled).toBe(false);
+      expect(getButtonByAriaLabel("Full access").disabled).toBe(false);
       expect(
         screen.queryByText("New mode applies to the next turn"),
       ).toBeNull();
@@ -1000,7 +1040,7 @@ describe("<ChatTile />", () => {
 
     // Approval-pending is still turn-in-progress, but the toolbar stays editable.
     await waitFor(() => {
-      expect(getButtonByAriaLabel("Supervised").disabled).toBe(false);
+      expect(getButtonByAriaLabel("Full access").disabled).toBe(false);
       expect(
         screen.queryByText("New mode applies to the next turn"),
       ).toBeNull();
@@ -1056,7 +1096,10 @@ describe("<ChatTile />", () => {
           approvalId: "approval-1",
           toolName: "bash",
           description: "Run tests",
-          input: null,
+          input: {
+            metadata: { command: "bun test | head -50" },
+            pattern: ["bun test", "head -50"],
+          },
           planId: null,
           actions: [],
           requestedAt: 3,
@@ -1072,6 +1115,9 @@ describe("<ChatTile />", () => {
     ).not.toBe(0);
     expect(within(fileQueue).getByText("/repo/src/app.ts")).not.toBeNull();
     expect(within(fileQueue).getByText("Edit")).not.toBeNull();
+    expect(
+      within(genericQueue).getByText("bun test | head -50"),
+    ).not.toBeNull();
 
     fireEvent.click(within(fileQueue).getByRole("button", { name: "Approve" }));
 
@@ -1265,10 +1311,10 @@ describe("<ChatTile />", () => {
     }
 
     act(() => {
-      focusedComposer.controls.setSelection({
-        harnessId: QUEUED_SETTINGS.harnessId,
-        modelSlug: QUEUED_SETTINGS.model,
-      });
+      focusedComposer.controls.selectModel(
+        QUEUED_SETTINGS.harnessId,
+        QUEUED_SETTINGS.model,
+      );
       focusedComposer.controls.setPermission(QUEUED_SETTINGS.permissionMode);
       focusedComposer.controls.setReasoning(
         QUEUED_SETTINGS.reasoningEffort ?? "",
@@ -1298,10 +1344,10 @@ describe("<ChatTile />", () => {
     }
 
     act(() => {
-      focusedComposer.controls.setSelection({
-        harnessId: UPDATED_QUEUE_SETTINGS.harnessId,
-        modelSlug: UPDATED_QUEUE_SETTINGS.model,
-      });
+      focusedComposer.controls.selectModel(
+        UPDATED_QUEUE_SETTINGS.harnessId,
+        UPDATED_QUEUE_SETTINGS.model,
+      );
       focusedComposer.controls.setPermission(
         UPDATED_QUEUE_SETTINGS.permissionMode,
       );
@@ -1333,10 +1379,10 @@ describe("<ChatTile />", () => {
     }
 
     act(() => {
-      focusedComposer.controls.setSelection({
-        harnessId: UPDATED_QUEUE_SETTINGS.harnessId,
-        modelSlug: UPDATED_QUEUE_SETTINGS.model,
-      });
+      focusedComposer.controls.selectModel(
+        UPDATED_QUEUE_SETTINGS.harnessId,
+        UPDATED_QUEUE_SETTINGS.model,
+      );
       focusedComposer.controls.setPermission(
         UPDATED_QUEUE_SETTINGS.permissionMode,
       );
@@ -1360,7 +1406,12 @@ describe("<ChatTile />", () => {
       });
     });
 
-    fireEvent.click(getButtonContainingText("/implementation-validation all"));
+    const nextStepButton = getButtonContainingText(
+      "/implementation-validation all",
+    );
+    expect(nextStepButton.disabled).toBe(false);
+
+    fireEvent.click(nextStepButton);
 
     expect(chatHarness.sent).toHaveLength(1);
     const frame = chatHarness.sent[0];
@@ -1382,6 +1433,134 @@ describe("<ChatTile />", () => {
         },
       ],
     });
+  });
+
+  it("disables next-step sends while a turn is stopping", async () => {
+    renderChatTile();
+
+    await waitForChatTileLoaded();
+
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: SESSION_SETTINGS,
+        messages: [hostUserMessage(), nextStepsAssistantMessage()],
+        activeTurn: stoppingActiveTurn(),
+      });
+    });
+
+    const nextStepButton = getButtonContainingText(
+      "/implementation-validation all",
+    );
+    expect(nextStepButton.disabled).toBe(true);
+
+    fireEvent.click(nextStepButton);
+
+    expect(chatHarness.sent).toHaveLength(0);
+  });
+
+  it("disables next-step sends while a stop request is pending", async () => {
+    renderChatTile();
+
+    await waitForChatTileLoaded();
+
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: SESSION_SETTINGS,
+        messages: [hostUserMessage(), nextStepsAssistantMessage()],
+        activeTurn: runningActiveTurn(),
+      });
+    });
+
+    const nextStepButton = getButtonContainingText(
+      "/implementation-validation all",
+    );
+    expect(nextStepButton.disabled).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+
+    expect(chatHarness.sent).toHaveLength(1);
+    expect(chatHarness.sent[0]?.kind).toBe("stop");
+
+    await waitFor(() => {
+      expect(nextStepButton.disabled).toBe(true);
+    });
+
+    fireEvent.click(nextStepButton);
+
+    expect(chatHarness.sent).toHaveLength(1);
+  });
+
+  it("disables next-step sends while a blocking approval is pending", async () => {
+    renderChatTile();
+
+    await waitForChatTileLoaded();
+
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: SESSION_SETTINGS,
+        messages: [hostUserMessage(), nextStepsAssistantMessage()],
+        activeTurn: runningActiveTurn(),
+      });
+      chatHarness.callbacks().onApprovalRequested({
+        kind: "approvalRequested",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ARTIFACT.id,
+        approval: approvalState("approval-1", "tool"),
+      });
+    });
+
+    const nextStepButton = getButtonContainingText(
+      "/implementation-validation all",
+    );
+    expect(nextStepButton.disabled).toBe(true);
+
+    fireEvent.click(nextStepButton);
+
+    expect(chatHarness.sent).toHaveLength(0);
+  });
+
+  it("keeps next-step sends enabled for plan-only approvals", async () => {
+    renderChatTile();
+
+    await waitForChatTileLoaded();
+
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: SESSION_SETTINGS,
+        messages: [hostUserMessage(), nextStepsAssistantMessage()],
+        activeTurn: runningActiveTurn(),
+      });
+      chatHarness.callbacks().onApprovalRequested({
+        kind: "approvalRequested",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ARTIFACT.id,
+        approval: approvalState("approval-plan-1", "plan"),
+      });
+    });
+
+    const nextStepButton = getButtonContainingText(
+      "/implementation-validation all",
+    );
+    expect(nextStepButton.disabled).toBe(false);
+
+    fireEvent.click(nextStepButton);
+
+    expect(chatHarness.sent).toHaveLength(1);
+    expect(chatHarness.sent[0]?.kind).toBe("send");
   });
 
   it("sends active permission updates when the toolbar permission changes during a turn", async () => {
@@ -1499,6 +1678,7 @@ describe("<ChatTile />", () => {
         status: "accepted",
         reason: null,
         code: null,
+        backgroundStopTaskIds: [],
       });
     });
 
@@ -1541,6 +1721,7 @@ describe("<ChatTile />", () => {
         status: "rejected",
         reason: "Only the chat owner can perform this action.",
         code: "NOT_OWNER",
+        backgroundStopTaskIds: [],
       });
     });
 
@@ -1816,10 +1997,10 @@ describe("<ChatTile />", () => {
     }
 
     act(() => {
-      focusedComposer.controls.setSelection({
-        harnessId: UPDATED_QUEUE_SETTINGS.harnessId,
-        modelSlug: UPDATED_QUEUE_SETTINGS.model,
-      });
+      focusedComposer.controls.selectModel(
+        UPDATED_QUEUE_SETTINGS.harnessId,
+        UPDATED_QUEUE_SETTINGS.model,
+      );
       focusedComposer.controls.setPermission("full_access");
       focusedComposer.controls.setReasoning(
         UPDATED_QUEUE_SETTINGS.reasoningEffort ?? "",
@@ -1843,7 +2024,8 @@ describe("<ChatTile />", () => {
     expect(settingsFrame?.settings).toEqual(UPDATED_QUEUE_SETTINGS);
   });
 
-  it("cancels queued edit mode from the composer without clearing the draft", async () => {
+  it("cancels queued edit mode from the composer and clears the queued content when there was no previous draft", async () => {
+    useComposerDraftStore.setState({ drafts: {} });
     chatHarness.teardown();
     chatHarness.install("owner", [
       {
@@ -1874,6 +2056,9 @@ describe("<ChatTile />", () => {
       screen.getByRole("button", { name: "Edit queued message" }),
     );
     expect(screen.getByTestId("queue-edit-draft-pill")).not.toBeNull();
+    expect(screen.getByTestId("composer-editor").textContent).toBe(
+      "Queued prompt",
+    );
 
     fireEvent.click(
       screen.getByRole("button", {
@@ -1884,13 +2069,151 @@ describe("<ChatTile />", () => {
     await waitFor(() => {
       expect(screen.queryByTestId("queue-edit-draft-pill")).toBeNull();
     });
+    expect(screen.getByTestId("composer-editor").textContent).toBe("");
+
+    const sendButton = screen.getByRole("button", { name: "Send" });
+    if (!(sendButton instanceof HTMLButtonElement)) {
+      throw new Error("expected send button");
+    }
+    expect(sendButton.disabled).toBe(true);
+    expect(chatHarness.sent).toHaveLength(0);
+  });
+
+  it("cancels queued edit mode from the composer and restores the previous draft", async () => {
+    chatHarness.teardown();
+    chatHarness.install("owner", [
+      {
+        queueItemId: "queue-1",
+        messageId: "message-queue-1",
+        message: {
+          kind: "user",
+          content: QUEUED_CONTENT,
+        },
+        sender: { type: "user", userId: "owner-1" },
+        settings: QUEUED_SETTINGS,
+        accountContext: { type: "PERSONAL" as const },
+        delivery: "next_turn",
+        status: "pending",
+        targetTurnId: null,
+        steerRequest: null,
+        fallbackReason: null,
+        createdAt: 2,
+        updatedAt: 2,
+      },
+    ]);
+
+    renderChatTile();
+
+    await waitForChatTileLoaded();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Edit queued message" }),
+    );
+    expect(screen.getByTestId("queue-edit-draft-pill")).not.toBeNull();
+    expect(screen.getByTestId("composer-editor").textContent).toBe(
+      "Queued prompt",
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Cancel queued message editing",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("queue-edit-draft-pill")).toBeNull();
+    });
+    expect(screen.getByTestId("composer-editor").textContent).toBe(
+      "pending message",
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
     expect(chatHarness.sent).toHaveLength(1);
     const frame = chatHarness.sent[0];
     if (frame.kind !== "send") throw new Error("expected send frame");
-    expect(frame.content).toEqual(QUEUED_CONTENT);
+    expect(frame.content).toEqual(PENDING_DRAFT_CONTENT);
+  });
+
+  it("keeps the original draft snapshot when switching queued items before cancelling edit", async () => {
+    chatHarness.teardown();
+    chatHarness.install("owner", [
+      {
+        queueItemId: "queue-1",
+        messageId: "message-queue-1",
+        message: {
+          kind: "user",
+          content: QUEUED_CONTENT,
+        },
+        sender: { type: "user", userId: "owner-1" },
+        settings: QUEUED_SETTINGS,
+        accountContext: { type: "PERSONAL" as const },
+        delivery: "next_turn",
+        status: "pending",
+        targetTurnId: null,
+        steerRequest: null,
+        fallbackReason: null,
+        createdAt: 2,
+        updatedAt: 2,
+      },
+      {
+        queueItemId: "queue-2",
+        messageId: "message-queue-2",
+        message: {
+          kind: "user",
+          content: SECOND_QUEUED_CONTENT,
+        },
+        sender: { type: "user", userId: "owner-1" },
+        settings: QUEUED_SETTINGS,
+        accountContext: { type: "PERSONAL" as const },
+        delivery: "next_turn",
+        status: "pending",
+        targetTurnId: null,
+        steerRequest: null,
+        fallbackReason: null,
+        createdAt: 3,
+        updatedAt: 3,
+      },
+    ]);
+
+    renderChatTile();
+
+    await waitForChatTileLoaded();
+
+    const editButtons = screen.getAllByRole("button", {
+      name: "Edit queued message",
+    });
+    const firstEditButton = editButtons[0];
+    const secondEditButton = editButtons[1];
+    if (
+      !(firstEditButton instanceof HTMLButtonElement) ||
+      !(secondEditButton instanceof HTMLButtonElement)
+    ) {
+      throw new Error("expected queued edit buttons");
+    }
+
+    fireEvent.click(firstEditButton);
+    expect(screen.getByTestId("composer-editor").textContent).toBe(
+      "Queued prompt",
+    );
+
+    fireEvent.click(secondEditButton);
+    expect(screen.getByTestId("composer-editor").textContent).toBe(
+      "Second queued prompt",
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Cancel queued message editing",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("queue-edit-draft-pill")).toBeNull();
+    });
+    expect(screen.getByTestId("composer-editor").textContent).toBe(
+      "pending message",
+    );
   });
 
   // The composer render-count proof lives in `chat-tile-composer-rerender.test.tsx`

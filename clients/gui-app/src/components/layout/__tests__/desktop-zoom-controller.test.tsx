@@ -1,0 +1,242 @@
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { LazyMotion, domAnimation } from "motion/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ReactNode } from "react";
+import { DesktopZoomController } from "@/components/layout/bridges/desktop-zoom-controller";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import {
+  dispatchAction,
+  type KeybindingRouter,
+} from "@/lib/keybindings/dispatch";
+import type { DesktopZoomBridge } from "@/lib/windows/types";
+
+const zoomState: {
+  bridge: FakeZoomBridge | null;
+} = {
+  bridge: null,
+};
+let queryClient: QueryClient;
+
+vi.mock("@/hooks/runner/use-desktop-zoom-bridge", () => ({
+  useDesktopZoomBridge: () => zoomState.bridge,
+}));
+
+class FakeZoomBridge implements DesktopZoomBridge {
+  readonly ladder = [67, 75, 80, 90, 100, 110, 125, 150];
+  readonly stepIn = vi.fn(() => Promise.resolve(110));
+  readonly stepOut = vi.fn(() => Promise.resolve(90));
+  readonly reset = vi.fn(() => Promise.resolve(100));
+  readonly set = vi.fn((percent: number) => Promise.resolve(percent));
+  private percent = 100;
+  private readonly handlers = new Set<(percent: number) => void>();
+
+  get(): Promise<number> {
+    return Promise.resolve(this.percent);
+  }
+
+  onChange(handler: (percent: number) => void): { dispose: () => void } {
+    this.handlers.add(handler);
+    return {
+      dispose: () => {
+        this.handlers.delete(handler);
+      },
+    };
+  }
+
+  emit(percent: number): void {
+    this.percent = percent;
+    for (const handler of this.handlers) {
+      handler(percent);
+    }
+  }
+}
+
+const router: KeybindingRouter = {
+  getPathname: () => "/",
+  navigateHome: () => undefined,
+  navigateSettings: () => undefined,
+  navigateToEpic: () => undefined,
+  navigateToEpicTab: () => undefined,
+  navigateToEpicList: () => undefined,
+  navigateSettingsSection: () => undefined,
+  navigateToTabIntent: () => undefined,
+  goBack: () => undefined,
+  goForward: () => undefined,
+  isHistoryNavAvailable: () => false,
+  canGoBack: () => false,
+  canGoForward: () => false,
+};
+
+describe("<DesktopZoomController />", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    zoomState.bridge = new FakeZoomBridge();
+    queryClient = createQueryClient();
+  });
+
+  afterEach(() => {
+    queryClient.clear();
+    cleanup();
+    vi.useRealTimers();
+    zoomState.bridge = null;
+  });
+
+  it("registers dynamic zoom keybinding handlers", async () => {
+    const bridge = zoomState.bridge;
+    renderWithQueryClient(<DesktopZoomController />);
+
+    expect(dispatchAction("app.zoom.in", router)).toBe(true);
+    expect(dispatchAction("app.zoom.out", router)).toBe(true);
+    expect(dispatchAction("app.zoom.reset", router)).toBe(true);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(bridge?.stepIn).toHaveBeenCalledTimes(1);
+    expect(bridge?.stepOut).toHaveBeenCalledTimes(1);
+    expect(bridge?.reset).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves trackpad zoom gestures to the focused content", async () => {
+    const bridge = zoomState.bridge;
+    renderWithQueryClient(<DesktopZoomController />);
+
+    const wheelIn = createWheelEvent(-100);
+    const wheelOut = createWheelEvent(100);
+    const gestureStart = createGestureEvent("gesturestart", 1);
+    const gestureIn = createGestureEvent("gesturechange", 1.12);
+    const gestureOut = createGestureEvent("gesturechange", 0.88);
+
+    expect(window.dispatchEvent(wheelIn)).toBe(true);
+    expect(window.dispatchEvent(wheelOut)).toBe(true);
+    expect(window.dispatchEvent(gestureStart)).toBe(true);
+    expect(window.dispatchEvent(gestureIn)).toBe(true);
+    expect(window.dispatchEvent(gestureOut)).toBe(true);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(bridge?.stepIn).not.toHaveBeenCalled();
+    expect(bridge?.stepOut).not.toHaveBeenCalled();
+    expect(wheelIn.defaultPrevented).toBe(false);
+    expect(wheelOut.defaultPrevented).toBe(false);
+    expect(gestureStart.defaultPrevented).toBe(false);
+    expect(gestureIn.defaultPrevented).toBe(false);
+    expect(gestureOut.defaultPrevented).toBe(false);
+  });
+
+  it("shows the first observed zoom change", () => {
+    const bridge = zoomState.bridge;
+    renderWithQueryClient(<DesktopZoomController />);
+
+    act(() => {
+      bridge?.emit(125);
+    });
+
+    expect(screen.getByTestId("desktop-zoom-percent").textContent).toBe("125%");
+  });
+
+  it("shows a transient indicator and reset affordance on user zoom changes", async () => {
+    const bridge = zoomState.bridge;
+    renderWithQueryClient(<DesktopZoomController />);
+
+    act(() => {
+      bridge?.emit(125);
+    });
+
+    const indicator = screen.getByTestId("desktop-zoom-indicator");
+    const zoomIsland = screen.getByTestId("desktop-zoom-level-island");
+    const percent = screen.getByTestId("desktop-zoom-percent");
+    const resetButton = screen.getByRole("button", {
+      name: /Reset to 100%/i,
+    });
+    const resetIsland = screen.getByTestId("desktop-zoom-reset-island");
+    const zoomInButton = screen.getByRole("button", { name: "Zoom in" });
+    const zoomOutButton = screen.getByRole("button", { name: "Zoom out" });
+
+    expect(indicator.contains(zoomIsland)).toBe(true);
+    expect(indicator.contains(percent)).toBe(true);
+    expect(indicator.contains(resetIsland)).toBe(true);
+    expect(resetIsland).toBe(resetButton);
+    expect(zoomIsland.contains(percent)).toBe(true);
+    expect(zoomIsland.contains(zoomInButton)).toBe(true);
+    expect(zoomIsland.contains(zoomOutButton)).toBe(true);
+    expect(zoomIsland.contains(resetButton)).toBe(false);
+    expect(percent.textContent).toBe("125%");
+    expect(resetButton.className).toContain("bg-popover");
+    expect(resetButton.className).toContain("dark:bg-popover");
+    expect(resetButton.className).not.toMatch(/dark:bg-input/);
+
+    fireEvent.click(zoomOutButton);
+    fireEvent.click(zoomInButton);
+    fireEvent.click(resetButton);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(bridge?.stepOut).toHaveBeenCalledTimes(1);
+    expect(bridge?.stepIn).toHaveBeenCalledTimes(1);
+    expect(bridge?.reset).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      vi.advanceTimersByTime(2_000);
+    });
+    expect(screen.getByTestId("desktop-zoom-indicator")).toBeTruthy();
+
+    act(() => {
+      vi.advanceTimersByTime(2_000);
+    });
+    // Still mounted during the AnimatePresence exit (not removed instantly), with
+    // an inline style Motion drives toward the exit target. Assert the animated
+    // properties are present rather than Motion's exact serialization, which can
+    // change across versions.
+    const exitingIndicator = screen.getByTestId("desktop-zoom-indicator");
+    const exitStyle = exitingIndicator.getAttribute("style") ?? "";
+    expect(exitStyle).toMatch(/opacity/);
+    expect(exitStyle).toMatch(/transform/);
+  });
+});
+
+function createQueryClient(): QueryClient {
+  return new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  });
+}
+
+function renderWithQueryClient(children: ReactNode): void {
+  render(
+    <QueryClientProvider client={queryClient}>
+      <TooltipProvider>
+        <LazyMotion features={domAnimation}>{children}</LazyMotion>
+      </TooltipProvider>
+    </QueryClientProvider>,
+  );
+}
+
+function createGestureEvent(type: string, scale: number): Event {
+  const event = new Event(type, { bubbles: true, cancelable: true });
+  Object.defineProperty(event, "scale", { value: scale });
+  return event;
+}
+
+function createWheelEvent(deltaY: number): WheelEvent {
+  return new WheelEvent("wheel", {
+    bubbles: true,
+    cancelable: true,
+    ctrlKey: true,
+    deltaMode: 0,
+    deltaY,
+  });
+}

@@ -8,76 +8,35 @@ const PROTOCOL_SCHEME = DESKTOP_PROTOCOL_SCHEME;
 const AUTH_CALLBACK_PATH = "auth/callback";
 
 /**
- * Result of parsing a `traycer://auth/callback` deep link. Mirrors the shared
- * `AuthCallbackResult` union from `@traycer-clients/shared/platform/runner-host`
- * - duplicated here so the Electron main process does not depend on the
- * shared module at runtime (main runs as CommonJS outside the shared module
- * resolution graph).
+ * Fired when the user returns from the device-approval browser tab via a
+ * `traycer://auth/callback` deep link. It is a pure, payload-free signal: the
+ * handler focuses the window and nudges the in-flight device poll (see
+ * `runner-ipc-bridge.deliverAuthReturnSignal`). It parses no query string and
+ * drives no token exchange - device flow is the only login, and the token
+ * always arrives over the `/device/token` poll, so the deep link is just an
+ * optimization. Login still completes poll-only if it never fires.
  */
-export type AuthCallbackParseResult =
-  | { readonly code: string }
-  | { readonly error: string };
-
-export type AuthCallbackHandler = (result: AuthCallbackParseResult) => void;
+export type AuthReturnSignalHandler = () => void;
 
 /**
- * Maps the query string of an auth-callback URL to an `AuthCallbackParseResult`.
- * Shared by the custom-scheme deep link (`parseAuthCallback`) and the loopback
- * HTTP server (`loopback-callback-server.ts`) so both surfaces apply identical
- * code / error semantics.
- *
- * Success requires a non-empty PKCE `code` parameter (tokens no longer travel
- * in the callback URL). An explicit `error` parameter, or the absence of a
- * usable code, collapses to the `{ error }` branch so callers never handle a
- * third "indeterminate" case.
+ * Whether `uri` is a `traycer://auth/callback` deep link (ignoring any query).
+ * A stray legacy `?code=…` is tolerated - we never read it. Other traycer
+ * deep links (e.g. session links) and non-traycer URIs return `false`.
  */
-export function parseAuthCallbackParams(
-  params: URLSearchParams,
-): AuthCallbackParseResult {
-  const explicitError = params.get("error");
-  if (explicitError !== null && explicitError.length > 0) {
-    return { error: explicitError };
-  }
-
-  const code = params.get("code");
-  if (code === null || code.length === 0) {
-    return { error: "missing code in auth callback" };
-  }
-
-  return { code };
-}
-
-/**
- * Parses a deep-link URI into an `AuthCallbackParseResult`. Returns `null`
- * when the URI is not a `traycer://auth/callback` deep link at all (so
- * non-auth traycer deep links can be ignored without being mis-reported as
- * an auth failure).
- *
- * Success requires a non-empty `traycer-tokens` query parameter. Anything
- * else (an explicit `error` parameter, a malformed URL, or a well-formed URL
- * without a usable token) collapses to the `{ error }` branch so callers
- * never need to handle a third "indeterminate" case.
- */
-export function parseAuthCallback(uri: string): AuthCallbackParseResult | null {
+function isAuthCallbackUri(uri: string): boolean {
   if (!uri.startsWith(`${PROTOCOL_SCHEME}://`)) {
-    return null;
+    return false;
   }
-
   let parsed: URL;
   try {
     parsed = new URL(uri);
   } catch {
-    return { error: "malformed auth callback URI" };
+    return false;
   }
-
   const path = `${parsed.host}${parsed.pathname}`
     .replace(/^\/+/, "")
     .replace(/\/+$/, "");
-  if (path !== AUTH_CALLBACK_PATH) {
-    return null;
-  }
-
-  return parseAuthCallbackParams(parsed.searchParams);
+  return path === AUTH_CALLBACK_PATH;
 }
 
 /**
@@ -91,13 +50,14 @@ export function parseAuthCallback(uri: string): AuthCallbackParseResult | null {
  *   - Early CLI argv scan catches links delivered on cold start before any
  *     window exists.
  *
- * Auth-callback deep links are parsed in the main process and delivered to
- * the handler as a discriminated `AuthCallbackParseResult`. The handler is
- * responsible for queueing if no renderer is ready yet (see `main/index.ts`).
- * Non-auth traycer URIs are ignored; malformed callbacks collapse to the
- * error branch.
+ * The protocol registration is unchanged from the redirect era; only the
+ * handler is demoted. A `traycer://auth/callback` deep link fires the
+ * payload-free `AuthReturnSignalHandler` (focus + poll-nudge); it parses no
+ * payload and drives no exchange. Non-auth traycer URIs are ignored.
  */
-export function registerDeepLinkHandling(handler: AuthCallbackHandler): void {
+export function registerDeepLinkHandling(
+  handler: AuthReturnSignalHandler,
+): void {
   if (process.defaultApp) {
     if (process.argv.length >= 2) {
       app.setAsDefaultProtocolClient(PROTOCOL_SCHEME, process.execPath, [
@@ -109,21 +69,11 @@ export function registerDeepLinkHandling(handler: AuthCallbackHandler): void {
   }
 
   const deliver = (uri: string): void => {
-    const result = parseAuthCallback(uri);
-    if (result === null) {
+    if (!isAuthCallbackUri(uri)) {
       return;
     }
-    // Log the parse outcome (never the code itself) so a "sign-in failed" report
-    // can be traced: "received a code" followed by no `[auth] code exchange`
-    // line means the renderer never reached the exchange (e.g. a missing PKCE
-    // verifier on a cold-start callback), vs an exchange line that names the
-    // authn-side failure.
-    if ("error" in result) {
-      log.warn("[deep-link] auth callback error", { error: result.error });
-    } else {
-      log.info("[deep-link] auth callback delivered a code to the renderer");
-    }
-    handler(result);
+    log.info("[deep-link] auth return signal - nudging the device poll");
+    handler();
   };
 
   app.on("open-url", (event, url) => {
@@ -151,10 +101,8 @@ export function registerDeepLinkHandling(handler: AuthCallbackHandler): void {
 
 /**
  * Strips the query string (and anything after it) from a deep-link URL before
- * logging. The auth callback carries the bearer + refresh tokens as query
- * params (`traycer-tokens`, `traycer-refresh-token`), so logging the raw URL
- * would persist those secrets to the host/app log. Keep only the
- * scheme/host/path for diagnostics.
+ * logging. A legacy redirect callback could still carry a stray `?code=…`, so
+ * keep only the scheme/host/path for diagnostics rather than logging it.
  */
 function redactDeepLinkUrl(rawUrl: string): string {
   try {

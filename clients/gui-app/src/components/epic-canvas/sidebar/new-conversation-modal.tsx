@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import { v4 as uuidv4 } from "uuid";
@@ -16,6 +24,7 @@ import {
   NO_SESSION_OBJECT_URL,
 } from "@/components/chat/composer/attachments/attachment-strip";
 import { useEpicImageFetcher } from "@/lib/attachments/use-attachment-blob-src";
+import { DialogOverlayBoundaryContext } from "@/providers/dialog-overlay-boundary-context";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import { createComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
 import { useComposerPickerItems } from "@/components/chat/composer/picker/use-composer-picker-items";
@@ -32,6 +41,7 @@ import {
   type TuiAgentPlacement,
 } from "@/hooks/agent/use-create-tui-agent";
 import { useComposerDictation } from "@/hooks/composer/use-composer-dictation";
+import { useLeaderScopeAbsorber } from "@/hooks/keybindings/use-leader-scope-absorber";
 import { useComposerPaste } from "@/hooks/composer/use-composer-paste";
 import {
   mentionRootsFromWorktreeIntent,
@@ -44,21 +54,31 @@ import {
   useLatestConversationWorkspaceSeed,
   type LatestConversationWorkspaceSeed,
 } from "@/hooks/worktree/use-latest-conversation-workspace-seed";
+import { useOwnerWorkspaceInheritanceSeed } from "@/hooks/worktree/use-owner-workspace-inheritance-seed";
 import { useEpicStore } from "@/hooks/use-epic-store";
 import { useHostClient } from "@/lib/host";
+import { LEADER_SCOPE_NEW_CONVERSATION_MODAL } from "@/lib/keybindings/leader-scope";
 import {
   useEpicConnectionStatus,
+  useEpicNodeOwnerKind,
+  useEpicNodeWorkspaceFolders,
   useEpicPermissionRole,
 } from "@/lib/epic-selectors";
-import { isEditableRole } from "@/lib/epic-permissions";
+import { displayTitle } from "@/lib/display-title";
+import { isEditableRole, mutationDisabledHint } from "@/lib/epic-permissions";
+import {
+  ARIA_DISABLED_TRIGGER_CLASS,
+  resolveDisabledPresentation,
+} from "@/lib/disabled-presentation";
 import { buildChatRunSettings } from "@/lib/composer/chat-run-settings";
 import { contentIsSubmittable } from "@/lib/composer/composer-content";
 import { buildSubmittedChatJSONContent } from "@/lib/composer/tiptap-json-content";
 import {
-  deriveResolvedWorkspaceAvailability,
+  deriveFolderlessAllowedWorkspaceAvailability,
   workspaceComposerCanStart,
 } from "@/lib/composer/workspace-composer-availability";
 import { buildForkWorkspaceSeedFromWorkspaceFolders } from "@/lib/worktree/fork-workspace-seed";
+import { deriveWorkspaceMode } from "@/lib/worktree/workspace-mode";
 import { cn } from "@/lib/utils";
 import { ActiveHostWorkspaceControls } from "@/components/home/host-workspace-selector/host-workspace-selector";
 import { ComposerBody } from "@/components/home/composer/composer-body";
@@ -97,16 +117,6 @@ import {
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
 
 /**
- * Compact, bounded editor sizing for the dialog. The base composer editor grows
- * unbounded (see `COMPOSER_EDITOR_CLASSNAME`); the modal caps it so a long
- * prompt scrolls inside the dialog rather than stretching it.
- */
-const NEW_CONVERSATION_EDITOR_CLASSNAME = cn(
-  COMPOSER_EDITOR_CLASSNAME,
-  "max-h-[4.5rem]",
-);
-
-/**
  * Isolated subscriber for the live draft content. The editor rewrites content
  * on every keystroke; keeping that subscription here (rather than in
  * `NewConversationModalBody`) means only the attachment strip re-renders while
@@ -135,6 +145,10 @@ function NewConversationModalAttachmentStrip(props: {
 interface NewConversationModalActionProps {
   readonly epicId: string;
   readonly tabId: string;
+  // `null` for a top-level conversation (chats-panel `+`, ⌘K); a chat id when
+  // adding a CHILD (per-row `+` in the chats tree). Both use this one trigger.
+  readonly parentId: string | null;
+  readonly size: "icon-xs" | "icon-sm";
   readonly disabled: boolean;
   readonly disabledTooltip: string | null;
   readonly triggerLabel: string;
@@ -142,16 +156,20 @@ interface NewConversationModalActionProps {
   readonly actionRevealClassName: string;
 }
 
+/**
+ * The single "+" trigger for the New Conversation modal, shared by the chats
+ * panel header (top-level) and each chat row (child). It always opens in chat
+ * mode; the modal's own switcher is the one way to flip to a terminal agent, so
+ * there are no per-trigger dropdowns. Forcing chat mode here overrides the
+ * projection-derived seed default and prevents a previously-dismissed
+ * terminal/PaneOpener draft from leaking its mode in.
+ */
 export function NewConversationModalAction(
   props: NewConversationModalActionProps,
 ) {
   const openModal = useNewConversationModalOpenStore((state) => state.open);
   const handleOpen = useCallback((): void => {
     if (props.disabled) return;
-    // Sidebar `+` is the chats-panel "new chat" button: always open in chat
-    // mode (the modal's switcher still offers terminal). Forcing the mode here
-    // both overrides the projection-derived seed default and prevents a
-    // previously-dismissed terminal/PaneOpener draft from leaking its mode in.
     useNewConversationModalStore
       .getState()
       .setComposerMode(props.epicId, "chat");
@@ -159,23 +177,33 @@ export function NewConversationModalAction(
       epicId: props.epicId,
       tabId: props.tabId,
       placement: ACTIVE_TILE_PLACEMENT,
+      parentId: props.parentId,
     });
-  }, [openModal, props.disabled, props.epicId, props.tabId]);
+  }, [openModal, props.disabled, props.epicId, props.parentId, props.tabId]);
+  // Activation while aria-disabled stays blocked via `handleOpen`'s early
+  // return; see `disabled-presentation.ts` for why native `disabled` can't
+  // carry the tooltip.
+  const { ariaDisabled, nativeDisabled } = resolveDisabledPresentation(
+    props.disabled,
+    props.disabledTooltip,
+  );
   const trigger = (
     <Button
       type="button"
       variant="ghost"
-      size="icon-sm"
+      size={props.size}
       aria-label={props.triggerLabel}
+      aria-disabled={ariaDisabled ? true : undefined}
       data-testid={props.triggerTestId}
       className={cn(
         "text-muted-foreground hover:text-foreground",
+        ARIA_DISABLED_TRIGGER_CLASS,
         props.actionRevealClassName,
       )}
-      disabled={props.disabled}
+      disabled={nativeDisabled}
       onClick={handleOpen}
     >
-      <Plus className="size-4" />
+      <Plus className={props.size === "icon-xs" ? "size-3" : "size-4"} />
     </Button>
   );
 
@@ -233,6 +261,7 @@ export function NewConversationModalHost(props: {
       epicId={props.epicId}
       tabId={props.tabId}
       placement={isOpen ? request.placement : ACTIVE_TILE_PLACEMENT}
+      parentId={isOpen ? request.parentId : null}
       open={isOpen}
       onOpenChange={(next) => {
         if (!next) closeModal();
@@ -245,15 +274,49 @@ function NewConversationModalDialog(props: {
   readonly epicId: string;
   readonly tabId: string;
   readonly placement: ConversationTilePlacement;
+  readonly parentId: string | null;
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
 }) {
+  // Opt this modal out of the keybinding provider's dialog block so the nested
+  // model picker's ⌘/⌥ leader-digit shortcuts and hints fire while it's open
+  // (see `isAnyDialogOpen` in keybinding-provider.tsx). The modal owns no leader
+  // shortcuts itself, so an absorber scope claims both leaders while open -
+  // closed-picker leader digits are swallowed here instead of switching the
+  // tabs behind the modal, and the picker's own scope layers on top when open.
+  useLeaderScopeAbsorber(props.open, LEADER_SCOPE_NEW_CONVERSATION_MODAL);
+  // The composer's @/slash picker (see `ComposerMenu`) is a plain portalled
+  // floating menu, not a Radix dismissable layer, so Radix can't coordinate
+  // Escape with it. Radix's escape listener runs first (document, capture) and
+  // dismisses the dialog; preventing that needs `preventDefault`, but that also
+  // suppresses ProseMirror's keydown (it ignores defaultPrevented events), so
+  // the picker's own Escape-close never fires. The body publishes an imperative
+  // dismiss here: while a picker is open we close it ourselves and preventDefault
+  // (first Escape closes only the picker); once it's closed the call returns
+  // false and Escape falls through to dismiss the dialog (second Escape).
+  const dismissPickerRef = useRef<(() => boolean) | null>(null);
+  // The workspace controls' nested Branch/Location popovers portal to
+  // `document.body` by default, landing as a DOM sibling of this dialog - the
+  // dialog's scroll-lock then swallows wheel input over their scrollable
+  // lists even though the lists themselves scroll fine (see
+  // `DialogOverlayBoundaryContext`). Publishing this dialog's own content node
+  // lets those nested overlays portal inside it instead, so the lock
+  // recognizes their content as its own.
+  const [overlayBoundaryEl, setOverlayBoundaryEl] =
+    useState<HTMLElement | null>(null);
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
       <DialogContent
+        ref={setOverlayBoundaryEl}
         className="w-[min(92vw,48rem)] max-w-[min(92vw,48rem)] gap-3 p-4 sm:max-w-[min(92vw,48rem)]"
         data-testid="epic-sidebar-new-conversation-modal"
+        data-leader-scope={LEADER_SCOPE_NEW_CONVERSATION_MODAL}
         showCloseButton={false}
+        onEscapeKeyDown={(event) => {
+          if (dismissPickerRef.current?.() === true) {
+            event.preventDefault();
+          }
+        }}
       >
         <DialogClose asChild>
           <Button
@@ -270,17 +333,70 @@ function NewConversationModalDialog(props: {
           New chat or terminal agent
         </DialogTitle>
         {props.open ? (
-          <SurfaceActivityProvider active>
-            <NewConversationModalBody
-              epicId={props.epicId}
-              tabId={props.tabId}
-              placement={props.placement}
-              onSubmitted={() => props.onOpenChange(false)}
-            />
-          </SurfaceActivityProvider>
+          <DialogOverlayBoundaryContext.Provider value={overlayBoundaryEl}>
+            <SurfaceActivityProvider active>
+              <NewConversationModalBody
+                epicId={props.epicId}
+                tabId={props.tabId}
+                placement={props.placement}
+                parentId={props.parentId}
+                dismissPickerRef={dismissPickerRef}
+                onSubmitted={() => props.onOpenChange(false)}
+              />
+            </SurfaceActivityProvider>
+          </DialogOverlayBoundaryContext.Provider>
         ) : null}
       </DialogContent>
     </Dialog>
+  );
+}
+
+/**
+ * Modal title row. The chat/terminal switcher is always shown (it is the single
+ * way to flip between a chat and a terminal agent, for both top-level and child
+ * creation). When adding a child (`parentId !== null`) a muted subtext names the
+ * parent (chat or terminal agent), and tracks the current mode ("child chat" vs
+ * "child terminal agent") so it stays accurate as the user switches.
+ */
+function NewConversationModalHeader(props: {
+  readonly composerMode: ComposerMode;
+  readonly parentId: string | null;
+  readonly switcher: ReactNode;
+}) {
+  const { composerMode, parentId, switcher } = props;
+  const isChildChat = parentId !== null;
+  // The parent can be a chat or a terminal agent (both live in the chats tree);
+  // resolve its display title from the right projection slice.
+  const parentTitle = useEpicStore((state) => {
+    if (parentId === null) return null;
+    if (Object.hasOwn(state.chats.byId, parentId)) {
+      return displayTitle(state.chats.byId[parentId].title, "chat");
+    }
+    if (Object.hasOwn(state.tuiAgents.byId, parentId)) {
+      return displayTitle(
+        state.tuiAgents.byId[parentId].title,
+        "terminal-agent",
+      );
+    }
+    return null;
+  });
+  return (
+    <div className="flex min-w-0 flex-col gap-0.5">
+      <div className="flex min-w-0 items-center justify-between">
+        <span className="text-sm font-medium text-foreground">
+          {composerMode === "chat"
+            ? "Start a new chat"
+            : "Start a new terminal agent"}
+        </span>
+        {switcher}
+      </div>
+      {isChildChat ? (
+        <span className="truncate text-ui-xs text-muted-foreground">
+          Creating a child {composerMode === "chat" ? "chat" : "terminal agent"}{" "}
+          from {parentTitle ?? displayTitle("", "chat")}
+        </span>
+      ) : null}
+    </div>
   );
 }
 
@@ -288,16 +404,31 @@ function NewConversationModalBody(props: {
   readonly epicId: string;
   readonly tabId: string;
   readonly placement: ConversationTilePlacement;
+  readonly parentId: string | null;
+  readonly dismissPickerRef: RefObject<(() => boolean) | null>;
   readonly onSubmitted: () => void;
 }) {
-  const { epicId, tabId, placement, onSubmitted } = props;
+  const { epicId, tabId, placement, parentId, dismissPickerRef, onSubmitted } =
+    props;
   const permissionRole = useEpicPermissionRole();
   const connectionStatus = useEpicConnectionStatus();
   const isDisconnected = connectionStatus === "closed";
   const canMutate = isEditableRole(permissionRole) && !isDisconnected;
   const editorRef = useRef<ComposerPromptEditorHandle | null>(null);
   const [pickerStore] = useState(() => createComposerPickerStore());
-  const latestWorkspaceSeed = useLatestConversationWorkspaceSeed(epicId);
+  // Bridge the editor's imperative picker dismiss up to the dialog's Escape
+  // handler (see `NewConversationModalDialog`). Returns true when a picker was
+  // open and got closed, so the dialog keeps itself open for that Escape.
+  // Cleared on unmount so a stale closure can never block dismissing the dialog.
+  useEffect(() => {
+    dismissPickerRef.current = () =>
+      editorRef.current?.dismissActiveSuggestion() ?? false;
+    return () => {
+      dismissPickerRef.current = null;
+    };
+  }, [dismissPickerRef]);
+  const hostClient = useHostClient();
+  const latestWorkspaceSeed = useModalWorkspaceSeed(epicId, parentId);
   const seed = useNewConversationModalSeed(epicId, latestWorkspaceSeed);
   // Subscribe to the NON-content draft fields only. `content` is rewritten on
   // every keystroke (see `handleSnapshot`); subscribing to the whole patch here
@@ -328,8 +459,8 @@ function NewConversationModalBody(props: {
         ?.content ?? seed.content,
   );
   const stagingKey = useMemo(
-    () => newConversationModalStagingKey(epicId),
-    [epicId],
+    () => newConversationModalStagingKey(epicId, parentId),
+    [epicId, parentId],
   );
   const stagingKeyId = worktreeStagingKeyString(stagingKey);
   const stagedIntent = useWorktreeIntentStagingStore(
@@ -371,7 +502,6 @@ function NewConversationModalBody(props: {
     toolbarStore,
     (state) => state.selection.harnessId,
   );
-  const hostClient = useHostClient();
   const mentionIntent = useMemo(
     () =>
       effectiveWorktreeIntent({
@@ -407,17 +537,18 @@ function NewConversationModalBody(props: {
   );
   const workspaceAvailability = useMemo(
     () =>
-      deriveResolvedWorkspaceAvailability(
+      deriveFolderlessAllowedWorkspaceAvailability(
         resolvedWorkspace.folders,
         resolvedWorkspace.isLoading,
       ),
     [resolvedWorkspace.folders, resolvedWorkspace.isLoading],
   );
   const workspaceCanStart = workspaceComposerCanStart(workspaceAvailability);
+  const draftWorkspaceFolderCount = draftWorkspace.folders.length;
   const canSubmit =
     canMutate && !isSubmitting && workspaceCanStart && hasSubmittableContent;
   const composerDisabledHint =
-    mutationDisabledHint(canMutate, isDisconnected) ??
+    mutationDisabledHint(permissionRole, isDisconnected, "make changes") ??
     workspaceAvailability.disabledHint;
   const paste = useComposerPaste(editorRef);
   const { dictationControl, dictationPreparing } = useComposerDictation({
@@ -451,14 +582,11 @@ function NewConversationModalBody(props: {
     </button>
   );
   const header = (
-    <div className="flex min-w-0 items-center justify-between">
-      <span className="text-sm font-medium text-foreground">
-        {draftComposerMode === "chat"
-          ? "Start a new chat"
-          : "Start a new terminal agent"}
-      </span>
-      {switcher}
-    </div>
+    <NewConversationModalHeader
+      composerMode={draftComposerMode}
+      parentId={parentId}
+      switcher={switcher}
+    />
   );
   const cleanupAfterSubmit = useCallback((): void => {
     clearDraft(epicId);
@@ -517,6 +645,10 @@ function NewConversationModalBody(props: {
     const profile = useAuthStore.getState().profile;
     const userId = profile?.userId ?? null;
     const worktreeIntent = worktreeIntentForSubmit();
+    const workspaceMode = deriveWorkspaceMode(
+      draftWorkspaceFolderCount,
+      worktreeIntent,
+    );
     if (worktreeIntent !== null) {
       rememberEpicIntent(epicId, worktreeIntent, now);
     }
@@ -550,10 +682,11 @@ function NewConversationModalBody(props: {
     createChat.mutate(
       {
         epicId,
-        parentId: null,
+        parentId,
         title: "",
         chatId,
         settings,
+        workspaceMode,
         worktreeIntent,
         initialMessage,
       },
@@ -584,8 +717,10 @@ function NewConversationModalBody(props: {
     canSubmit,
     cleanupAfterSubmit,
     createChat,
+    draftWorkspaceFolderCount,
     epicId,
     hostClient,
+    parentId,
     placement,
     rememberEpicIntent,
     setEpicRunSettings,
@@ -597,6 +732,10 @@ function NewConversationModalBody(props: {
     (launch: TerminalAgentLaunch) => {
       if (!canMutate || !workspaceCanStart) return;
       const worktreeIntent = worktreeIntentForSubmit();
+      const workspaceMode = deriveWorkspaceMode(
+        draftWorkspaceFolderCount,
+        worktreeIntent,
+      );
       if (worktreeIntent !== null) {
         rememberEpicIntent(epicId, worktreeIntent, Date.now());
       }
@@ -605,7 +744,7 @@ function NewConversationModalBody(props: {
         .create({
           epicId,
           tabId,
-          parentId: null,
+          parentId,
           title: "",
           placement: toTuiPlacement(placement),
           harnessId: launch.harnessId,
@@ -615,6 +754,7 @@ function NewConversationModalBody(props: {
           forkSourceHarnessSessionId: null,
           onStatusChange: null,
           worktreeIntent,
+          workspaceMode,
           terminalAgentArgs: launch.terminalAgentArgs,
         })
         .catch(() => undefined);
@@ -622,7 +762,9 @@ function NewConversationModalBody(props: {
     [
       canMutate,
       cleanupAfterSubmit,
+      draftWorkspaceFolderCount,
       epicId,
+      parentId,
       placement,
       rememberEpicIntent,
       tabId,
@@ -647,7 +789,7 @@ function NewConversationModalBody(props: {
       toolbarStore={toolbarStore}
       composerMode={draftComposerMode}
       chatEditorIsActive={chatComposerActive}
-      editorClassName={NEW_CONVERSATION_EDITOR_CLASSNAME}
+      editorClassName={COMPOSER_EDITOR_CLASSNAME}
       initialContent={initialContent}
       initialSelection={null}
       canSubmit={canSubmit}
@@ -670,6 +812,61 @@ function NewConversationModalBody(props: {
       onSnapshot={handleSnapshot}
     />
   );
+}
+
+/**
+ * Workspace seed that drives the modal's workspace controls + submit intent.
+ * For a child (per-row `+`, `parentId !== null`) it inherits the PARENT's
+ * binding so the child lands in the parent's worktree. The parent may be a chat
+ * OR a terminal agent (both live in the chats tree), so its real owner kind
+ * drives the binding lookup. Read on the active host (the modal always creates
+ * there); an unbound/remote parent falls back to an empty workspace the user can
+ * adjust via the controls. For a top-level chat it uses the latest-conversation
+ * seed.
+ */
+function useModalWorkspaceSeed(
+  epicId: string,
+  parentId: string | null,
+): LatestConversationWorkspaceSeed | null {
+  const hostClient = useHostClient();
+  // Only read the latest-conversation seed for a top-level chat; a child must
+  // never inherit an unrelated conversation's worktree (see below), so skip the
+  // binding read entirely when adding a child.
+  const latestConversationSeed = useLatestConversationWorkspaceSeed(
+    parentId === null ? epicId : null,
+  );
+  // The parent can be a chat or a terminal agent; read its real kind so the
+  // binding lookup matches. Defaulting to "chat" would miss a terminal-agent
+  // parent's binding and seed the child from the wrong/empty workspace.
+  const parentOwnerKind = useEpicNodeOwnerKind(parentId ?? "");
+  const parentWorkspaceFolders = useEpicNodeWorkspaceFolders(parentId ?? "");
+  const parentInheritance = useOwnerWorkspaceInheritanceSeed({
+    client: hostClient,
+    epicId,
+    ownerId: parentId ?? "",
+    ownerKind: parentOwnerKind,
+    enabled: parentId !== null,
+    fallbackWorkspaceFolders: parentWorkspaceFolders,
+  });
+  return useMemo<LatestConversationWorkspaceSeed | null>(() => {
+    // Top-level: seed from the latest conversation.
+    if (parentId === null) return latestConversationSeed;
+    // Child: inherit ONLY from the parent's binding. When that resolves empty
+    // (an unbound parent) return null so the modal falls back to the
+    // empty/global workspace the user can adjust - never the latest-conversation
+    // seed, which would drop the child into an unrelated worktree.
+    if (parentInheritance.seed === null) return null;
+    return {
+      ...parentInheritance.seed,
+      sourceOwnerId: parentId,
+      sourceOwnerKind: parentOwnerKind ?? "chat",
+    };
+  }, [
+    latestConversationSeed,
+    parentId,
+    parentInheritance.seed,
+    parentOwnerKind,
+  ]);
 }
 
 function useNewConversationModalSeed(
@@ -777,15 +974,6 @@ function toTuiPlacement(
     return { kind: "target-group", groupId: placement.groupId };
   }
   return { kind: "active-tile" };
-}
-
-function mutationDisabledHint(
-  canMutate: boolean,
-  isDisconnected: boolean,
-): string | null {
-  if (canMutate) return null;
-  if (isDisconnected) return "Reconnect to make changes.";
-  return "You don't have permission to make changes.";
 }
 
 function effectiveWorktreeIntent(input: {

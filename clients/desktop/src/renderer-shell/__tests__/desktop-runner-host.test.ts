@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type {
-  AuthCallbackResult,
   AuthTokenValidationResult,
+  HostRegistryUpdateState,
   LocalHostSnapshot,
   TrayEpic,
   TrayIndicatorState,
@@ -82,15 +82,18 @@ function buildFakeBridge(
       },
     }),
     validateAuthTokenIdentity: async () => ({ kind: "rejected" as const }),
-    exchangeAuthCode: async () => null,
+    refreshAuthToken: async () => ({ kind: "network-error" as const }),
     openExternalLink: async () => undefined,
     getRegisteredUrlSchemes: async () => [],
     requestMicrophoneAccess: async () => "granted" as const,
     openMicrophoneSettings: async () => undefined,
     beginAuthAttempt: () => undefined,
-    onAuthCallback: (_handler: (result: AuthCallbackResult) => void) => ({
+    onAuthCallback: (_handler: () => void) => ({
       dispose: () => undefined,
     }),
+    deviceFlow: {
+      start: async () => null,
+    },
     notifications: {
       show: async () => undefined,
       onClick: (_handler: (payload: unknown) => void) => ({
@@ -168,6 +171,7 @@ function buildFakeBridge(
         latestVersion: null,
         downloadProgress: null,
         installBlockedReason: null,
+        installGuidance: null,
         errorMessage: null,
         lastCheckedAt: null,
         lastCheckIntent: null,
@@ -179,6 +183,7 @@ function buildFakeBridge(
         latestVersion: null,
         downloadProgress: null,
         installBlockedReason: null,
+        installGuidance: null,
         errorMessage: null,
         lastCheckedAt: null,
         lastCheckIntent: "manual",
@@ -190,6 +195,7 @@ function buildFakeBridge(
         latestVersion: "1.2.3",
         downloadProgress: 0,
         installBlockedReason: null,
+        installGuidance: null,
         errorMessage: null,
         lastCheckedAt: null,
         lastCheckIntent: "manual",
@@ -201,6 +207,7 @@ function buildFakeBridge(
         latestVersion: null,
         downloadProgress: null,
         installBlockedReason: null,
+        installGuidance: null,
         errorMessage: null,
         lastCheckedAt: null,
         lastCheckIntent: null,
@@ -380,11 +387,6 @@ function buildFakeBridge(
         showSystemDialog: async () => false,
         onPending: () => ({ dispose: () => undefined }),
       },
-      find: {
-        inPage: async () => null,
-        stop: async () => undefined,
-        onResult: () => ({ dispose: () => undefined }),
-      },
       display: {
         list: async () => ({ displays: [], primaryId: 0 }),
         onTopologyChange: () => ({ dispose: () => undefined }),
@@ -393,12 +395,24 @@ function buildFakeBridge(
         getAccelerationEnabled: async () => true,
         setAccelerationEnabled: async (enabled: boolean) => enabled,
       },
+      fonts: {
+        list: async () => [],
+      },
       windowEx: {
         setOverlayIcon: async () => undefined,
       },
     },
     power: {
       setSleepBlocked: async () => undefined,
+    },
+    zoom: {
+      ladder: [100] as const,
+      get: async () => 100,
+      set: async () => 100,
+      stepIn: async () => 100,
+      stepOut: async () => 100,
+      reset: async () => 100,
+      onChange: (_handler) => ({ dispose: () => undefined }),
     },
     hostManagement: {
       installHost: async () => {
@@ -437,6 +451,9 @@ function buildFakeBridge(
         reachable: false,
         errorMessage: null,
       }),
+      onRegistryUpdateState: () => ({ dispose: () => undefined }),
+      getOperationStatus: async () => null,
+      onOperationStatus: () => ({ dispose: () => undefined }),
       freePortAndRestart: async (input) => input,
       cliManifest: async () => null,
       getHostName: async () => ({
@@ -681,6 +698,25 @@ describe("DesktopRunnerHost.onLocalHostChange", () => {
     // The fake bridge increments its internal counter - observable via a
     // subsequent respawn not throwing and the await resolving.
     expect(host.authnBaseUrl).toBe("http://localhost:5005");
+  });
+
+  it("passes host registry update subscriptions through to host management", () => {
+    const fake = buildFakeBridge(null);
+    const disposer = { dispose: vi.fn() };
+    const onRegistryUpdateState = vi.fn(
+      (_handler: (state: HostRegistryUpdateState) => void) => disposer,
+    );
+    fake.bridge.hostManagement.onRegistryUpdateState = onRegistryUpdateState;
+    const host = new DesktopRunnerHost({
+      bridge: fake.bridge,
+      signInUrl: "https://auth.example.invalid/sign-in",
+    });
+    const handler = vi.fn();
+
+    const subscription = host.hostRegistryUpdates.onChange(handler);
+
+    expect(onRegistryUpdateState).toHaveBeenCalledWith(handler);
+    expect(subscription).toBe(disposer);
   });
 
   it("forwards workspace folder picking to the bridge", async () => {

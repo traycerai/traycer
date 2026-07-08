@@ -1,4 +1,6 @@
 import { platform as osPlatform } from "node:os";
+import { config } from "../config";
+import { createCliLogger } from "../logger";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type { CliInvocation } from "./cli-binary";
 import type { ServiceLabel } from "./label";
@@ -63,9 +65,37 @@ export function formatServiceLifecycleWarning(
 // so callers don't re-resolve per call.
 export function createServiceController(): ServiceController {
   const platform = osPlatform();
-  if (platform === "darwin") return createMacosController(null);
-  if (platform === "linux") return createLinuxController(null);
-  if (platform === "win32") return createWindowsController(null);
+  const logger = createCliLogger(config.environment);
+  logger.debug("Service controller resolving platform backend", {
+    environment: config.environment,
+    platform,
+  });
+  if (platform === "darwin") {
+    logger.debug("Service controller selected macOS backend", {
+      environment: config.environment,
+    });
+    return createMacosController(null);
+  }
+  if (platform === "linux") {
+    logger.debug("Service controller selected Linux backend", {
+      environment: config.environment,
+    });
+    return createLinuxController(null);
+  }
+  if (platform === "win32") {
+    logger.debug("Service controller selected Windows backend", {
+      environment: config.environment,
+    });
+    return createWindowsController(null);
+  }
+  logger.error(
+    "Service controller unsupported platform",
+    {
+      environment: config.environment,
+      platform,
+    },
+    null,
+  );
   throw cliError({
     code: CLI_ERROR_CODES.SERVICE_UNSUPPORTED_PLATFORM,
     message: `service controller: unsupported platform '${platform}' (expected darwin|linux|win32)`,

@@ -44,11 +44,13 @@ vi.mock("electron", () => ({
 vi.mock("electron-log", () => ({
   default: {
     transports: { file: { level: "info", resolvePathFn: vi.fn() } },
+    debug: vi.fn(),
     info: vi.fn(),
     warn: vi.fn(),
     error: vi.fn(),
   },
   transports: { file: { level: "info", resolvePathFn: vi.fn() } },
+  debug: vi.fn(),
   info: vi.fn(),
   warn: vi.fn(),
   error: vi.fn(),
@@ -133,6 +135,7 @@ interface FakeBridge {
     (event: unknown, raw: unknown) => Promise<unknown>
   >;
   readonly fanOut: Mock;
+  readonly disposeFns: Array<() => void>;
   readonly options: {
     readonly host: {
       readonly reloadSnapshotFromDisk: Mock;
@@ -152,6 +155,7 @@ function makeBridge(): FakeBridge {
   return {
     handlers,
     fanOut: vi.fn(),
+    disposeFns: [],
     options: {
       host: {
         reloadSnapshotFromDisk: vi.fn(() => Promise.resolve(null)),
@@ -763,5 +767,270 @@ describe("host-management IPC - verify-disabled normalisation for dev builds", (
     // buildUpdateState yields updateAvailable=false.
     expect(result.latestVersion).toBe("DEV-1.0.0");
     expect(result.installedVersion).toBe("DEV-1.0.0");
+  });
+});
+
+// Ticket: host-update-race-conditions. The banner and Settings → Host each
+// run their own independent `useMutation`, so two near-simultaneous clicks
+// used to spawn two `traycer host …` subprocesses that raced the CLI's
+// file lock - the loser waited 30s then surfaced `CLI_LOCK_BUSY` while the
+// winner's UI kept spinning. Main is now the single-flight serializer: a
+// second concurrent install/update/register-service call is rejected
+// synchronously, before a second subprocess is ever spawned, and every
+// surface (any open window) observes the same canonical
+// `hostOperationStatusChange` broadcast regardless of which one triggered it.
+function installFakeCliWithDeferredStream(): {
+  readonly calls: RecordedCall[];
+  readonly resolveStream: (data: unknown) => void;
+  readonly rejectStream: (err: unknown) => void;
+} {
+  const calls: RecordedCall[] = [];
+  let resolveStream: (data: unknown) => void = () => undefined;
+  let rejectStream: (err: unknown) => void = () => undefined;
+  vi.doMock("../../cli/traycer-cli", () => ({
+    runTraycerCliJson: vi.fn((args: readonly string[]) => {
+      calls.push({ kind: "run", args: [...args] });
+      return Promise.resolve({});
+    }),
+    streamTraycerCliJson: vi.fn(
+      ({
+        args,
+        onEvent,
+      }: {
+        readonly args: readonly string[];
+        readonly onEvent: (event: unknown) => void;
+      }) => {
+        calls.push({ kind: "stream", args: [...args] });
+        return new Promise((resolve, reject) => {
+          resolveStream = (data: unknown) => {
+            onEvent({
+              type: "progress",
+              stage: "download",
+              percent: 50,
+              bytes: 50,
+              totalBytes: 100,
+              message: "downloading",
+            });
+            resolve({ data });
+          };
+          rejectStream = reject;
+        });
+      },
+    ),
+    TraycerCliError: class extends Error {},
+  }));
+  return {
+    calls,
+    resolveStream: (data) => resolveStream(data),
+    rejectStream: (err) => rejectStream(err),
+  };
+}
+
+// Both `traycerHostUpdate` et al. and `trackHostOperation`'s single-flight
+// check are separated by an `await clearHostRemovalIfSet()`, so a call's
+// promise being created doesn't guarantee the guard has run yet. Poll for the
+// CLI subprocess call landing (proof the guard already ran) before treating a
+// call as "in flight" - asserting or firing a second call any earlier would
+// be racing the same microtask ordering these tests exist to pin down.
+async function waitForStreamCallCount(
+  fake: { readonly calls: RecordedCall[] },
+  count: number,
+): Promise<void> {
+  await vi.waitFor(() => {
+    if (fake.calls.filter((c) => c.kind === "stream").length < count) {
+      throw new Error("stream call not reached yet");
+    }
+  });
+}
+
+describe("host-management IPC - single-flight guard on concurrent host mutations", () => {
+  it("rejects a second concurrent host update without spawning a second CLI subprocess", async () => {
+    const fake = installFakeCliWithDeferredStream();
+    const mgmt = await import("../host-management-ipc");
+    mgmt.setActiveEnvironment("production");
+    const { RunnerHostInvoke } =
+      await import("../../../ipc-contracts/ipc-channels");
+    const bridge = makeBridge();
+    mgmt.registerHostManagementIpc(bridge as never);
+    const updateHandler = bridge.handlers.get(
+      RunnerHostInvoke.traycerHostUpdate,
+    )!;
+
+    const first = updateHandler(null, { operationId: "op-first" });
+    await waitForStreamCallCount(fake, 1);
+    // The first call's `streamTraycerCliJson` is still pending (deferred),
+    // so a second call landing now is exactly the banner-then-Settings race.
+    await expect(
+      updateHandler(null, { operationId: "op-second" }),
+    ).rejects.toThrow(/already in progress/i);
+
+    // Only ONE CLI subprocess was ever spawned - the second click never
+    // reached the CLI lock at all.
+    expect(fake.calls.filter((c) => c.kind === "stream")).toHaveLength(1);
+
+    fake.resolveStream({
+      version: "1.7.0",
+      installedAt: "2026-05-15T00:00:00Z",
+      executablePath: "/opt/traycer/host",
+      source: { kind: "registry", value: "1.7.0" },
+      archiveSha256: "a".repeat(64),
+      signatureKeyId: "k",
+      sizeBytes: 0,
+    });
+    await first;
+  });
+
+  it("blocks an install while an update is in flight (the lock is not scoped per-kind)", async () => {
+    const fake = installFakeCliWithDeferredStream();
+    const mgmt = await import("../host-management-ipc");
+    mgmt.setActiveEnvironment("production");
+    const { RunnerHostInvoke } =
+      await import("../../../ipc-contracts/ipc-channels");
+    const bridge = makeBridge();
+    mgmt.registerHostManagementIpc(bridge as never);
+
+    const updatePromise = bridge.handlers.get(
+      RunnerHostInvoke.traycerHostUpdate,
+    )!(null, { operationId: "op-update" });
+    await waitForStreamCallCount(fake, 1);
+    await expect(
+      bridge.handlers.get(RunnerHostInvoke.traycerHostInstall)!(null, {
+        version: "latest",
+        operationId: "op-install",
+      }),
+    ).rejects.toThrow(/already in progress/i);
+
+    fake.resolveStream({
+      version: "1.7.0",
+      installedAt: "2026-05-15T00:00:00Z",
+      executablePath: "/opt/traycer/host",
+      source: { kind: "registry", value: "1.7.0" },
+      archiveSha256: "a".repeat(64),
+      signatureKeyId: "k",
+      sizeBytes: 0,
+    });
+    await updatePromise;
+  });
+
+  it("broadcasts hostOperationStatusChange on start, on progress, and clears it to null on settle", async () => {
+    const fake = installFakeCliWithDeferredStream();
+    const mgmt = await import("../host-management-ipc");
+    mgmt.setActiveEnvironment("production");
+    const { RunnerHostInvoke, RunnerHostEvent } =
+      await import("../../../ipc-contracts/ipc-channels");
+    const bridge = makeBridge();
+    mgmt.registerHostManagementIpc(bridge as never);
+
+    const updatePromise = bridge.handlers.get(
+      RunnerHostInvoke.traycerHostUpdate,
+    )!(null, { operationId: "op-update" });
+    await waitForStreamCallCount(fake, 1);
+
+    // Started: broadcast with no progress yet.
+    const statusCalls = () =>
+      bridge.fanOut.mock.calls.filter(
+        ([channel]) => channel === RunnerHostEvent.hostOperationStatusChange,
+      );
+    expect(statusCalls()[0]?.[1]).toMatchObject({
+      kind: "update",
+      percent: null,
+    });
+    expect(mgmt.getHostOperationStatus()).toMatchObject({ kind: "update" });
+
+    fake.resolveStream({
+      version: "1.7.0",
+      installedAt: "2026-05-15T00:00:00Z",
+      executablePath: "/opt/traycer/host",
+      source: { kind: "registry", value: "1.7.0" },
+      archiveSha256: "a".repeat(64),
+      signatureKeyId: "k",
+      sizeBytes: 0,
+    });
+    await updatePromise;
+
+    // The deferred stream fixture fires one progress tick right before
+    // resolving - assert it landed before the terminal null.
+    const afterSettle = statusCalls();
+    const progressCall = afterSettle.find(
+      ([, payload]) =>
+        payload !== null &&
+        typeof payload === "object" &&
+        (payload as { percent: number | null }).percent === 50,
+    );
+    expect(progressCall).toBeDefined();
+    expect(afterSettle[afterSettle.length - 1]?.[1]).toBeNull();
+    expect(mgmt.getHostOperationStatus()).toBeNull();
+  });
+
+  it("a failed operation still clears the status so a retry isn't permanently blocked", async () => {
+    const fake = installFakeCliWithDeferredStream();
+    const mgmt = await import("../host-management-ipc");
+    mgmt.setActiveEnvironment("production");
+    const { RunnerHostInvoke } =
+      await import("../../../ipc-contracts/ipc-channels");
+    const bridge = makeBridge();
+    mgmt.registerHostManagementIpc(bridge as never);
+
+    const updatePromise = bridge.handlers.get(
+      RunnerHostInvoke.traycerHostUpdate,
+    )!(null, { operationId: "op-update" });
+    await waitForStreamCallCount(fake, 1);
+    fake.rejectStream(new Error("network unreachable"));
+    await expect(updatePromise).rejects.toThrow(/network unreachable/);
+
+    expect(mgmt.getHostOperationStatus()).toBeNull();
+    // A subsequent attempt is allowed through - the failed op didn't wedge
+    // the guard. Reuses the same fake CLI: each `streamTraycerCliJson` call
+    // creates a fresh deferred promise, so `resolveStream` below settles
+    // THIS retry, not the already-rejected first attempt.
+    const retryHandler = bridge.handlers.get(
+      RunnerHostInvoke.traycerHostUpdate,
+    )!;
+    const retry = retryHandler(null, { operationId: "op-retry" });
+    await waitForStreamCallCount(fake, 2);
+    expect(mgmt.getHostOperationStatus()).toMatchObject({ kind: "update" });
+    fake.resolveStream({
+      version: "1.7.0",
+      installedAt: "2026-05-15T00:00:00Z",
+      executablePath: "/opt/traycer/host",
+      source: { kind: "registry", value: "1.7.0" },
+      archiveSha256: "a".repeat(64),
+      signatureKeyId: "k",
+      sizeBytes: 0,
+    });
+    await retry;
+  });
+
+  it("traycerHostOperationStatusGet reflects the in-flight operation for a component that mounts mid-operation", async () => {
+    const fake = installFakeCliWithDeferredStream();
+    const mgmt = await import("../host-management-ipc");
+    mgmt.setActiveEnvironment("production");
+    const { RunnerHostInvoke } =
+      await import("../../../ipc-contracts/ipc-channels");
+    const bridge = makeBridge();
+    mgmt.registerHostManagementIpc(bridge as never);
+
+    const statusHandler = bridge.handlers.get(
+      RunnerHostInvoke.traycerHostOperationStatusGet,
+    )!;
+    expect(await statusHandler(null, null)).toBeNull();
+
+    const updatePromise = bridge.handlers.get(
+      RunnerHostInvoke.traycerHostUpdate,
+    )!(null, { operationId: "op-update" });
+    await waitForStreamCallCount(fake, 1);
+    expect(await statusHandler(null, null)).toMatchObject({ kind: "update" });
+
+    fake.resolveStream({
+      version: "1.7.0",
+      installedAt: "2026-05-15T00:00:00Z",
+      executablePath: "/opt/traycer/host",
+      source: { kind: "registry", value: "1.7.0" },
+      archiveSha256: "a".repeat(64),
+      signatureKeyId: "k",
+      sizeBytes: 0,
+    });
+    await updatePromise;
+    expect(await statusHandler(null, null)).toBeNull();
   });
 });

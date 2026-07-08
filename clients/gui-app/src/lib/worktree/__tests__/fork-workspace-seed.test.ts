@@ -26,6 +26,7 @@ function bindingEntry(
     setupExitCode: null,
     setupFailedAt: null,
     createdAt: 0,
+    ownedSubmodules: [],
     ...overrides,
   };
 }

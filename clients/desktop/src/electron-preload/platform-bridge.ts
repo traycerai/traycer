@@ -7,8 +7,10 @@ import type {
   AccessibilityThemeSnapshot,
   BackgroundMaterial,
   DisplayTopology,
-  FindInPageStopAction,
-  FindResultSnapshot,
+  InstalledFont,
+  LogLevel,
+  LogLevelScope,
+  LogLevelsSnapshot,
   PendingCertificateError,
   ProcessMetricsSnapshot,
   TrustedCertificateEntry,
@@ -21,8 +23,7 @@ export type {
   BackgroundMaterial,
   DisplaySnapshot,
   DisplayTopology,
-  FindInPageStopAction,
-  FindResultSnapshot,
+  InstalledFont,
   PendingCertificateError,
   ProcessMetricsSnapshot,
   TrustedCertificateEntry,
@@ -89,26 +90,12 @@ export interface PlatformBridgeSurface {
     showSystemDialog(certificate: unknown, message: string): Promise<boolean>;
     onPending(handler: Listener<PendingCertificateError>): Disposable;
   };
-  find: {
-    inPage(
-      text: string,
-      options: {
-        readonly forward: boolean | undefined;
-        readonly findNext: boolean | undefined;
-        readonly matchCase: boolean | undefined;
-      },
-    ): Promise<number | null>;
-    stop(action: FindInPageStopAction): Promise<void>;
-    onResult(handler: Listener<FindResultSnapshot>): Disposable;
-  };
   display: {
     list(): Promise<DisplayTopology>;
     onTopologyChange(
       handler: Listener<{
         readonly reason:
-          | "display-added"
-          | "display-removed"
-          | "display-metrics-changed";
+          "display-added" | "display-removed" | "display-metrics-changed";
         readonly topology: DisplayTopology;
       }>,
     ): Disposable;
@@ -116,6 +103,13 @@ export interface PlatformBridgeSurface {
   gpu: {
     getAccelerationEnabled(): Promise<boolean>;
     setAccelerationEnabled(enabled: boolean): Promise<boolean>;
+  };
+  logLevels: {
+    get(): Promise<LogLevelsSnapshot>;
+    set(scope: LogLevelScope, level: LogLevel): Promise<LogLevelsSnapshot>;
+  };
+  fonts: {
+    list(): Promise<readonly InstalledFont[]>;
   };
   windowEx: {
     setOverlayIcon(image: string | null, description: string): Promise<void>;
@@ -274,21 +268,6 @@ export function buildPlatformBridge(): PlatformBridgeSurface {
       onPending: (handler) =>
         subscribe(RunnerHostEvent.certificateErrorPending, handler),
     },
-    find: {
-      inPage: (text, options) =>
-        ipcRenderer.invoke(
-          RunnerHostInvoke.windowFindInPage,
-          text,
-          options,
-        ) as Promise<number | null>,
-      stop: (action) =>
-        ipcRenderer.invoke(
-          RunnerHostInvoke.windowStopFindInPage,
-          action,
-        ) as Promise<void>,
-      onResult: (handler) =>
-        subscribe(RunnerHostEvent.findInPageResult, handler),
-    },
     display: {
       list: () =>
         ipcRenderer.invoke(
@@ -307,6 +286,23 @@ export function buildPlatformBridge(): PlatformBridgeSurface {
           RunnerHostInvoke.gpuAccelerationSet,
           enabled,
         ) as Promise<boolean>,
+    },
+    logLevels: {
+      get: () =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.logLevelsGet,
+        ) as Promise<LogLevelsSnapshot>,
+      set: (scope, level) =>
+        ipcRenderer.invoke(RunnerHostInvoke.logLevelsSet, {
+          scope,
+          level,
+        }) as Promise<LogLevelsSnapshot>,
+    },
+    fonts: {
+      list: () =>
+        ipcRenderer.invoke(RunnerHostInvoke.fontsList) as Promise<
+          readonly InstalledFont[]
+        >,
     },
     windowEx: {
       setOverlayIcon: (image, description) =>

@@ -30,6 +30,7 @@ interface ChatComposerEditorSlotProps {
   readonly onPaste: ClipboardEventHandler<HTMLElement>;
   readonly onDragOver: DragEventHandler<HTMLElement>;
   readonly onDrop: DragEventHandler<HTMLElement>;
+  readonly onEditorReady: (() => void) | null;
 }
 
 /**
@@ -50,6 +51,7 @@ export function ChatComposerEditorSlot(props: ChatComposerEditorSlotProps) {
     onPaste,
     onDragOver,
     onDrop,
+    onEditorReady,
   } = props;
   const isNarrow = useIsComposerNarrow();
   return (
@@ -62,7 +64,8 @@ export function ChatComposerEditorSlot(props: ChatComposerEditorSlotProps) {
       isActive={isActive}
       disabled={false}
       placeholder={isNarrow ? NARROW_PLACEHOLDER : PLACEHOLDER}
-      editorClassName="min-h-9"
+      editorClassName="max-h-[3.5lh] min-h-9"
+      stabilizeImageAttachmentCaret
       onSnapshot={onSnapshot}
       onSubmit={onSubmit}
       onPaste={onPaste}
@@ -71,6 +74,7 @@ export function ChatComposerEditorSlot(props: ChatComposerEditorSlotProps) {
       onKeyDown={undefined}
       onFocus={NOOP}
       onBlur={NOOP}
+      onEditorReady={onEditorReady}
     />
   );
 }

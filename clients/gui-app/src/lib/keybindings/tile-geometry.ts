@@ -121,21 +121,38 @@ export function findNeighbor(
 }
 
 /**
- * Read the current tab-group layout from the DOM. Groups are rendered
+ * Read the current tab-group layout from the DOM. Panes are rendered
  * with `data-group-id` by `tab-group-view.tsx`; we query globally
  * within `root`.
+ *
+ * Invariant: every `data-group-id` value is a leaf PANE id. The pane wrapper
+ * plus its pane-scoped children (`tab-strip.tsx`, `pane-opener.tsx`) all reuse
+ * the owning pane's id, so normalize duplicates down to the largest observed
+ * rect for that id. Split resize handles must NOT use `data-group-id` - their
+ * id is a split-GROUP id that no pane matches, so a handle on the seam would
+ * win the `findNeighbor` search and make `setActivePane` silently no-op.
+ * Handles therefore carry `data-resize-group-id` instead
+ * (see `resize-handle.tsx`) and are excluded.
  */
 export function readTileRects(root: ParentNode): Array<TileRect> {
   const nodes = root.querySelectorAll<HTMLElement>("[data-group-id]");
-  const result: Array<TileRect> = [];
+  const byId = new Map<string, TileRect>();
   nodes.forEach((node) => {
     const id = node.getAttribute("data-group-id");
     if (id === null || id.length === 0) return;
     const r = node.getBoundingClientRect();
-    result.push({
+    const next = {
       id,
       rect: { x: r.x, y: r.y, width: r.width, height: r.height },
-    });
+    };
+    const current = byId.get(id);
+    if (current === undefined || rectArea(next) > rectArea(current)) {
+      byId.set(id, next);
+    }
   });
-  return result;
+  return Array.from(byId.values());
+}
+
+function rectArea(tileRect: TileRect): number {
+  return tileRect.rect.width * tileRect.rect.height;
 }

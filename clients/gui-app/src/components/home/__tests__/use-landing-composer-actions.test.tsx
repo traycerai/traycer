@@ -65,11 +65,13 @@ const imageStoreMocks = vi.hoisted(() => ({
   getImageBytes: vi.fn<(hash: string) => Promise<Uint8Array | undefined>>(() =>
     Promise.resolve(undefined),
   ),
+  imageHashKeys: vi.fn<() => Promise<string[]>>(() => Promise.resolve([])),
 }));
 
 vi.mock("@/lib/composer/landing-image-store", () => ({
   sessionImageBytes: imageStoreMocks.sessionImageBytes,
   getImageBytes: imageStoreMocks.getImageBytes,
+  imageHashKeys: imageStoreMocks.imageHashKeys,
 }));
 
 const SUBMITTED_PROMPT = "Plan the host chat bootstrap";
@@ -133,7 +135,7 @@ describe("useLandingComposerActions", () => {
     });
   });
 
-  it("blocks epic creation without a selected workspace folder", () => {
+  it("creates a folderless epic without a selected workspace folder", async () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
@@ -148,16 +150,30 @@ describe("useLandingComposerActions", () => {
       });
     });
 
-    expect(landingMocks.request).not.toHaveBeenCalled();
-    expect(landingMocks.navigate).not.toHaveBeenCalled();
-    expect(toast.error).toHaveBeenCalledWith("Couldn't create epic.", {
-      description: "Select at least one workspace folder to create an epic.",
+    await waitFor(() => {
+      expect(
+        landingMocks.request.mock.calls.some((c) => c[0] === "epic.create"),
+      ).toBe(true);
     });
+
+    const createEpicCall = landingMocks.request.mock.calls.find(
+      (c) => c[0] === "epic.create",
+    );
+    expect(createEpicCall?.[1]).toMatchObject({
+      repoIdentifiers: [],
+      workspaces: [],
+      chat: {
+        workspaceMode: "folderless",
+        worktreeIntent: null,
+      },
+    });
+    expect(landingMocks.navigate).toHaveBeenCalledTimes(1);
+    expect(toast.error).not.toHaveBeenCalled();
 
     queryClient.clear();
   });
 
-  it("blocks terminal-agent epic creation without a selected workspace folder", () => {
+  it("creates a folderless terminal-agent epic without a selected workspace folder", async () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
@@ -175,11 +191,31 @@ describe("useLandingComposerActions", () => {
       });
     });
 
-    expect(landingMocks.request).not.toHaveBeenCalled();
-    expect(landingMocks.navigate).not.toHaveBeenCalled();
-    expect(toast.error).toHaveBeenCalledWith("Couldn't create epic.", {
-      description: "Select at least one workspace folder to create an epic.",
+    await waitFor(() => {
+      expect(
+        landingMocks.request.mock.calls.some((c) => c[0] === "epic.create"),
+      ).toBe(true);
     });
+    await waitFor(() => {
+      expect(landingMocks.createTerminalAgent).toHaveBeenCalledTimes(1);
+    });
+
+    const createEpicCall = landingMocks.request.mock.calls.find(
+      (c) => c[0] === "epic.create",
+    );
+    expect(createEpicCall?.[1]).toMatchObject({
+      repoIdentifiers: [],
+      workspaces: [],
+      chat: null,
+    });
+    expect(landingMocks.createTerminalAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceMode: "folderless",
+        worktreeIntent: null,
+      }),
+    );
+    expect(landingMocks.navigate).toHaveBeenCalledTimes(1);
+    expect(toast.error).not.toHaveBeenCalled();
 
     queryClient.clear();
   });
@@ -671,6 +707,7 @@ function defaultToolbar() {
 function editorHandleForPrompt(prompt: string): ComposerPromptEditorHandle {
   const content = jsonContentForPrompt(prompt);
   return {
+    isReady: () => true,
     focus: () => undefined,
     focusAtEnd: () => undefined,
     getJSON: () => content,
@@ -680,6 +717,7 @@ function editorHandleForPrompt(prompt: string): ComposerPromptEditorHandle {
     insertImageAttachments: () => undefined,
     removeImageAttachmentById: () => undefined,
     insertDictatedText: () => undefined,
+    dismissActiveSuggestion: () => false,
   };
 }
 
@@ -709,7 +747,7 @@ function editorHandleForHashImage(
     type: "doc",
     content: [
       {
-        type: "attachmentGroup",
+        type: "paragraph",
         content: [
           {
             type: "imageAttachment",
@@ -721,11 +759,8 @@ function editorHandleForHashImage(
               size: 5,
             },
           },
+          { type: "text", text: prompt },
         ],
-      },
-      {
-        type: "paragraph",
-        content: [{ type: "text", text: prompt }],
       },
     ],
   };

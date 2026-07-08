@@ -1,6 +1,8 @@
 export interface LowerScrollBudgetInput {
   readonly pinnedStackVisible: boolean;
   readonly queueVisible: boolean;
+  readonly backgroundVisible: boolean;
+  readonly activeAgentsVisible: boolean;
   readonly approvalVisible: boolean;
 }
 
@@ -8,7 +10,10 @@ export function lowerScrollRegionMaxHeightClass(
   input: LowerScrollBudgetInput,
 ): string {
   const scrollRegions =
-    Number(input.pinnedStackVisible) + Number(input.queueVisible);
+    Number(input.pinnedStackVisible) +
+    Number(input.queueVisible) +
+    Number(input.backgroundVisible) +
+    Number(input.activeAgentsVisible);
   const pressure = scrollRegions + Number(input.approvalVisible);
 
   if (pressure >= 3) {

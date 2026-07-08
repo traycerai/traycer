@@ -30,7 +30,10 @@ function expectCommand(program: Command, path: readonly string[]): Command {
   let cursor: Command = program;
   for (const segment of path) {
     const next = findSubcommand(cursor, segment);
-    expect(next, `expected command '${path.join(" ")}' to be registered`).not.toBeNull();
+    expect(
+      next,
+      `expected command '${path.join(" ")}' to be registered`,
+    ).not.toBeNull();
     if (next === null) {
       throw new Error(`unreachable: command '${path.join(" ")}' not found`);
     }
@@ -42,9 +45,10 @@ function expectCommand(program: Command, path: readonly string[]): Command {
 function expectRunnerFlags(cmd: Command, label: string): void {
   const flags = cmd.options.map((o) => o.long);
   for (const expected of ["--json", "--no-progress"]) {
-    expect(flags, `'${label}' is missing the shared runner flag '${expected}'`).toContain(
-      expected,
-    );
+    expect(
+      flags,
+      `'${label}' is missing the shared runner flag '${expected}'`,
+    ).toContain(expected);
   }
 }
 
@@ -187,6 +191,13 @@ describe("traycer CLI entrypoint registration", () => {
     expectCommand(program, ["agent", "turn-ended-from-hook"]);
   });
 
+  it("agent create exposes --name for a child agent display name", () => {
+    const program = buildProgram();
+    const cmd = expectCommand(program, ["agent", "create"]);
+    const flags = cmd.options.map((o) => o.long);
+    expect(flags).toContain("--name");
+  });
+
   it("limits readonly agent CLI help to inspection commands", () => {
     const originalSurface = process.env.TRAYCER_AGENT_CLI_SURFACE;
     process.env.TRAYCER_AGENT_CLI_SURFACE = "readonly";
@@ -198,6 +209,7 @@ describe("traycer CLI entrypoint registration", () => {
       expect(help).toContain("transcript [options]");
       expect(help).not.toContain("create [options]");
       expect(help).not.toContain("selection-guide [options]");
+      expect(help).not.toContain("list-harnesses [options]");
       expect(help).not.toContain("list-harness-models [options]");
       expect(help).not.toContain("send [options]");
       expect(help).not.toContain("inbox [options]");
@@ -209,6 +221,19 @@ describe("traycer CLI entrypoint registration", () => {
         process.env.TRAYCER_AGENT_CLI_SURFACE = originalSurface;
       }
     }
+  });
+
+  it("registers agent harness catalog commands with current harness help", () => {
+    const program = buildProgram();
+    const agent = expectCommand(program, ["agent"]);
+    const create = expectCommand(program, ["agent", "create"]);
+    const listHarnesses = expectCommand(program, ["agent", "list-harnesses"]);
+    const listModels = expectCommand(program, ["agent", "list-harness-models"]);
+
+    expect(create.helpInformation()).toContain("openrouter");
+    expect(findSubcommand(agent, "list-harnesses")).toBe(listHarnesses);
+    expect(listModels.helpInformation()).toContain("openrouter");
+    expect(listModels.helpInformation()).toContain("<harness>");
   });
 
   it("host free-port-and-restart exposes --pid and --port so Doctor's free-port fix can be invoked", () => {
@@ -253,10 +278,9 @@ describe("traycer CLI entrypoint registration", () => {
     });
     let thrown: unknown = null;
     try {
-      await program.parseAsync(
-        ["host", "start", "--bundle", "/tmp/main.mjs"],
-        { from: "user" },
-      );
+      await program.parseAsync(["host", "start", "--bundle", "/tmp/main.mjs"], {
+        from: "user",
+      });
     } catch (err) {
       thrown = err;
     }
@@ -273,10 +297,9 @@ describe("traycer CLI entrypoint registration", () => {
     });
     let thrown: unknown = null;
     try {
-      await program.parseAsync(
-        ["host", "start", "--environment", "dev"],
-        { from: "user" },
-      );
+      await program.parseAsync(["host", "start", "--environment", "dev"], {
+        from: "user",
+      });
     } catch (err) {
       thrown = err;
     }

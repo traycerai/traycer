@@ -12,6 +12,7 @@ import { useIsMutating } from "@tanstack/react-query";
 import { workspaceMutationKeys } from "@/lib/query-keys";
 import { DropdownMenuLabel } from "@/components/ui/dropdown-menu";
 import { HostSection } from "./host-section";
+import { activeRunNoticeFor } from "./active-run-notice";
 import type {
   WorktreeBinding,
   WorktreeBindingEntry,
@@ -121,6 +122,13 @@ type BoundOwnerSurface = {
   readonly ownerId: string;
   readonly binding: WorktreeBinding | null;
   readonly isOwnerActive: boolean;
+  // Narrower than `isOwnerActive`: is the owner active specifically because
+  // of a genuinely running/activating turn, as opposed to visible background
+  // work (Bash `run_in_background` / a subagent / Monitor) outliving an
+  // already-completed turn? Drives ONLY the disabled-remove tooltip wording -
+  // `isOwnerActive` still decides whether removal is disabled at all (a live
+  // background process could still be touching the folder either way).
+  readonly hasActiveTurn: boolean;
   // The `workspacePath`s whose bound directory is gone on disk (host-computed,
   // delivered on the chat snapshot / `worktreeStateChanged` for chat and on
   // `worktree.getBinding` for terminal-agents). Drives the per-folder "missing"
@@ -134,8 +142,7 @@ type BoundOwnerSurface = {
   // host — a real terminal state, not an indefinite spinner).
   readonly bindingResolved: boolean;
   readonly onBindingCommitted:
-    | ((changedWorkspacePaths: ReadonlyArray<string>) => void)
-    | null;
+    ((changedWorkspacePaths: ReadonlyArray<string>) => void) | null;
 };
 
 const EMPTY_BINDING_ENTRIES: ReadonlyArray<WorktreeBindingEntry> = [];
@@ -428,10 +435,7 @@ function HomeWorkspaceRows(props: {
     return folders.length > 0;
   }, [folderActions, workspaceSource]);
   const queryableFolderPaths = useMemo<ReadonlyArray<string>>(
-    () =>
-      resolvedFolders.flatMap((entry) =>
-        entry.kind === "unresolved" ? [] : [entry.path],
-      ),
+    () => [...new Set(resolvedFolders.map((entry) => entry.path))],
     [resolvedFolders],
   );
   const summariesQuery = useWorktreeListByWorkspacePathsForClient(
@@ -453,8 +457,7 @@ function HomeWorkspaceRows(props: {
   const gitSummaries = useMemo<ReadonlyArray<WorktreeWorkspaceSummary>>(
     () =>
       resolvedFolders.flatMap((entry) => {
-        if (entry.kind === "unresolved") return [];
-        const summary = summariesByPath.get(entry.path) ?? null;
+        const summary = summaryForResolvedFolder(entry, summariesByPath);
         return summary !== null && summary.isGitRepo ? [summary] : [];
       }),
     [resolvedFolders, summariesByPath],
@@ -541,6 +544,7 @@ function HomeWorkspaceRows(props: {
     })),
     options: { enabled: true },
   });
+
   const branchesByValidationPath = useMemo<
     ReadonlyMap<string, ReadonlyArray<WorktreeBranch> | null>
   >(() => {
@@ -840,6 +844,11 @@ function hostOptionLabel(host: HostDirectoryEntry): string {
   return host.status === "unavailable" ? `${label} (offline)` : label;
 }
 
+type UnresolvedWorkspaceFolder = Extract<
+  ResolvedFolder,
+  { readonly kind: "unresolved" }
+>;
+
 function workspaceRunItemForResolvedFolder(input: {
   readonly entry: ResolvedFolder;
   readonly activeHostClient: HostClient<HostRpcRegistry> | null;
@@ -854,21 +863,29 @@ function workspaceRunItemForResolvedFolder(input: {
   readonly summariesByPath: ReadonlyMap<string, WorktreeWorkspaceSummary>;
   readonly workspaceSource: HomeWorkspaceSource;
 }): WorkspaceRunItem {
+  const summary = summaryForResolvedFolder(input.entry, input.summariesByPath);
   if (input.entry.kind === "unresolved") {
-    return unresolvedWorkspaceRunItem({
-      path: input.entry.path,
-      name: input.entry.name,
+    const unresolvedItem = workspaceRunItemForUnresolvedFolder({
+      activeHostClient: input.activeHostClient,
+      entry: input.entry,
+      isFetchingSummaries: input.isFetchingSummaries,
       onLocate: input.onLocate,
-      onRemove: () => input.workspaceSource.removeFolder(input.entry.path),
+      summary,
+      workspaceSource: input.workspaceSource,
     });
+    if (unresolvedItem !== null) return unresolvedItem;
   }
 
-  const summary = input.summariesByPath.get(input.entry.path) ?? null;
-  const capturedEntry = currentCapturedEntry(
+  const capturedEntryForPath = currentCapturedEntry(
     input.workspaceSource.capturedIntent,
     input.entry.path,
   );
-  const mode = deriveHomeRowMode(capturedEntry, summary?.isGitRepo ?? false);
+  const isGitRepo = summary?.isGitRepo ?? false;
+  const capturedEntry = supportedCapturedEntryForSummary(
+    capturedEntryForPath,
+    isGitRepo,
+  );
+  const mode = deriveHomeRowMode(capturedEntry, isGitRepo);
   const defaultNewBranchName =
     input.defaultBranchByPath[input.entry.path] ?? "";
   const currentBranch = branchForSummary(summary);
@@ -893,7 +910,7 @@ function workspaceRunItemForResolvedFolder(input: {
     unresolved: false,
     metadataPending: summary === null && input.isFetchingSummaries,
     missing: false,
-    isGitRepo: summary?.isGitRepo ?? false,
+    isGitRepo,
     mode,
     branchLabel,
     hoverLabel: workspaceRunHoverLabel(
@@ -905,7 +922,8 @@ function workspaceRunItemForResolvedFolder(input: {
     summary,
     currentIntent: capturedEntry,
     defaultNewBranchName,
-    repoIdentifier: summary?.repoIdentifier ?? null,
+    repoIdentifier:
+      summary?.repoIdentifier ?? repoIdentifierForResolvedFolder(input.entry),
     isPrimary,
     hostClient: input.activeHostClient,
     modeDisabled: false,
@@ -932,6 +950,35 @@ function workspaceRunItemForResolvedFolder(input: {
   };
 }
 
+function workspaceRunItemForUnresolvedFolder(input: {
+  readonly activeHostClient: HostClient<HostRpcRegistry> | null;
+  readonly entry: UnresolvedWorkspaceFolder;
+  readonly isFetchingSummaries: boolean;
+  readonly onLocate: () => void;
+  readonly summary: WorktreeWorkspaceSummary | null;
+  readonly workspaceSource: HomeWorkspaceSource;
+}): WorkspaceRunItem | null {
+  if (input.summary !== null) return null;
+  const onRemove = (): void =>
+    input.workspaceSource.removeFolder(input.entry.path);
+  if (input.isFetchingSummaries) {
+    return pendingWorkspaceRunItem({
+      path: input.entry.path,
+      name: input.entry.name,
+      repoIdentifier: input.entry.repoIdentifier,
+      hostClient: input.activeHostClient,
+      onRemove,
+    });
+  }
+  return unresolvedWorkspaceRunItem({
+    path: input.entry.path,
+    name: input.entry.name,
+    repoIdentifier: input.entry.repoIdentifier,
+    onLocate: input.onLocate,
+    onRemove,
+  });
+}
+
 function currentCapturedEntry(
   capturedIntent: WorktreeIntent | null,
   workspacePath: string,
@@ -941,6 +988,14 @@ function currentCapturedEntry(
       (intentEntry) => intentEntry.workspacePath === workspacePath,
     ) ?? null
   );
+}
+
+function supportedCapturedEntryForSummary(
+  capturedEntry: WorktreeFolderIntent | null,
+  isGitRepo: boolean,
+): WorktreeFolderIntent | null {
+  if (isGitRepo) return capturedEntry;
+  return capturedEntry?.kind === "local" ? capturedEntry : null;
 }
 
 function emitHomeRowMode(input: {
@@ -983,12 +1038,8 @@ function emitHomeRowMode(input: {
 function removeDisabledReasonFor(
   isOwnerActive: boolean,
   activeRunNotice: string,
-  isLastFolder: boolean,
 ): string | null {
   if (isOwnerActive) return activeRunNotice;
-  if (isLastFolder) {
-    return "Keep at least one folder linked — add another before removing this one.";
-  }
   return null;
 }
 
@@ -1002,6 +1053,7 @@ function removeDisabledReasonFor(
 function unresolvedWorkspaceRunItem(input: {
   readonly path: string;
   readonly name: string;
+  readonly repoIdentifier: WorktreeWorkspaceSummary["repoIdentifier"];
   readonly onLocate: () => void;
   readonly onRemove: () => void;
 }): WorkspaceRunItem {
@@ -1021,7 +1073,7 @@ function unresolvedWorkspaceRunItem(input: {
     summary: null,
     currentIntent: null,
     defaultNewBranchName: "",
-    repoIdentifier: null,
+    repoIdentifier: input.repoIdentifier,
     isPrimary: false,
     hostClient: null,
     modeDisabled: true,
@@ -1034,6 +1086,59 @@ function unresolvedWorkspaceRunItem(input: {
     onLocate: input.onLocate,
     onRemove: input.onRemove,
   };
+}
+
+function pendingWorkspaceRunItem(input: {
+  readonly path: string;
+  readonly name: string;
+  readonly repoIdentifier: WorktreeWorkspaceSummary["repoIdentifier"];
+  readonly hostClient: HostClient<HostRpcRegistry> | null;
+  readonly onRemove: () => void;
+}): WorkspaceRunItem {
+  return {
+    key: input.path,
+    displayName: input.name,
+    displayPath: input.path,
+    unresolved: false,
+    metadataPending: true,
+    missing: false,
+    isGitRepo: false,
+    mode: "local",
+    branchLabel: "Loading",
+    hoverLabel: `${input.name} · loading`,
+    summary: null,
+    currentIntent: null,
+    defaultNewBranchName: "",
+    repoIdentifier: input.repoIdentifier,
+    isPrimary: false,
+    hostClient: input.hostClient,
+    modeDisabled: true,
+    modeDisabledReason: "Loading folder metadata",
+    removeDisabled: false,
+    removeDisabledReason: null,
+    removePending: false,
+    onSelectMode: () => undefined,
+    onEmit: () => undefined,
+    onLocate: null,
+    onRemove: input.onRemove,
+  };
+}
+
+function summaryForResolvedFolder(
+  entry: ResolvedFolder,
+  summariesByPath: ReadonlyMap<string, WorktreeWorkspaceSummary>,
+): WorktreeWorkspaceSummary | null {
+  const summary = summariesByPath.get(entry.path) ?? null;
+  if (summary === null) return null;
+  const repoIdentifier = repoIdentifierForResolvedFolder(entry);
+  if (repoIdentifier === null) return summary;
+  return { ...summary, repoIdentifier };
+}
+
+function repoIdentifierForResolvedFolder(
+  entry: ResolvedFolder,
+): WorktreeWorkspaceSummary["repoIdentifier"] {
+  return entry.kind === "local-only" ? null : entry.repoIdentifier;
 }
 
 function branchForSummary(
@@ -1580,10 +1685,10 @@ function InEpicSurface(props: InEpicSurfaceProps) {
           (entry) => entry.hostId === pendingCloneHostId,
         ) ?? null);
 
-  const activeRunNotice =
-    surface.kind === "terminal-agent"
-      ? "Terminal will restart after rebinding"
-      : "Stop the active run before rebinding";
+  const activeRunNotice = activeRunNoticeFor(
+    surface.kind,
+    surface.hasActiveTurn,
+  );
   const activeRunLocksBinding =
     surface.kind === "chat" && surface.isOwnerActive;
 
@@ -1763,16 +1868,10 @@ function InEpicSurface(props: InEpicSurfaceProps) {
           hostClient: props.hostClient,
           modeDisabled: activeRunLocksBinding,
           modeDisabledReason: activeRunLocksBinding ? activeRunNotice : null,
-          // Never let the picker empty the binding: T2's invariant is that every
-          // owner always has ≥1 folder, and T3.1's chip empty-state treats an
-          // empty list as "still loading". Removing the last row is blocked here
-          // (the host-side remove-last guard is the authoritative backstop, T4).
-          removeDisabled:
-            activeRunLocksBinding || removePending || workspaces.length <= 1,
+          removeDisabled: activeRunLocksBinding || removePending,
           removeDisabledReason: removeDisabledReasonFor(
             activeRunLocksBinding,
             activeRunNotice,
-            workspaces.length <= 1,
           ),
           removePending,
           onEmit: emit,
@@ -1965,7 +2064,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
 // No staged pick yet (`capturedEntry === null`): a git folder reflects the
 // default (new worktree); a non-git folder can only be Local. The seeding effect
 // stages a pick shortly after mount, so this is the transient pre-seed state. A
-// staged entry's own kind always wins.
+// supported staged entry's own kind wins.
 function deriveHomeRowMode(
   capturedEntry: WorktreeFolderIntent | null,
   isGitRepo: boolean,

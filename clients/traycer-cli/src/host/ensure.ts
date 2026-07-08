@@ -3,11 +3,9 @@ import type { InstallSourceArg } from "../installer";
 import { resolveBundledHostArchive } from "../installer/bundled-host";
 import type { ProgressInfo } from "../runner/output";
 import type { RuntimeContext } from "../runner/runtime";
-import {
-  provisionHost,
-  type HostProvisionResult,
-} from "./provision";
+import { provisionHost, type HostProvisionResult } from "./provision";
 import { defaultRegistryHostVersionRequest } from "./supported-host-version";
+import { installSourceLogFields } from "./install-source-log-fields";
 
 // `host ensure` - the desktop's post-auth provisioning call. A thin
 // source-resolving wrapper over the shared `provisionHost` core
@@ -46,6 +44,15 @@ export interface EnsureHostOptions {
 export async function ensureHost(
   opts: EnsureHostOptions,
 ): Promise<HostEnsureResult> {
+  opts.runtime.logger.info("Host ensure started", {
+    environment: opts.runtime.environment,
+    hasExplicitVersion: opts.versionRequest !== null,
+    hasFromPath: opts.fromPath !== null,
+    enableLinger: opts.enableLinger,
+    allowSelfInvocation: opts.allowSelfInvocation,
+    noServiceRegister: opts.noServiceRegister,
+    force: opts.force,
+  });
   // Resolve the source up front (a cheap path probe - no network/download)
   // so we can key idempotency on it. Our own bundled host resolves to a
   // local-file; it shares this build's `config.version`, so we stamp that as
@@ -54,13 +61,24 @@ export async function ensureHost(
   // while an unchanged build is a no-op. An explicit `--release <semver>`
   // resolves to a registry source and keeps the real semver as its target.
   const source = await resolveEnsureSource(opts);
+  opts.runtime.logger.debug("Host ensure source resolved", {
+    environment: opts.runtime.environment,
+    ...installSourceLogFields(source),
+  });
   const isOwnBuild = source.kind === "local-file";
   const targetVersion = isOwnBuild
     ? config.version
     : source.kind === "registry" && source.versionRequest !== "latest"
       ? source.versionRequest
       : null;
-  return provisionHost({
+  opts.runtime.logger.debug("Host ensure provisioning target computed", {
+    environment: opts.runtime.environment,
+    sourceKind: source.kind,
+    targetVersion: targetVersion ?? "presence-only",
+    recordVersionOverride: isOwnBuild ? "cli-build-version" : "none",
+    registerService: !opts.noServiceRegister,
+  });
+  const result = await provisionHost({
     runtime: opts.runtime,
     resolveInstallSource: () => Promise.resolve(source),
     targetVersion,
@@ -72,6 +90,15 @@ export async function ensureHost(
     force: opts.force,
     onProgress: opts.onProgress,
   });
+  opts.runtime.logger.info("Host ensure completed", {
+    environment: opts.runtime.environment,
+    action: result.action,
+    installed: result.installed,
+    registered: result.registered,
+    running: result.running,
+    hasPostSwapError: result.postSwapError !== null,
+  });
+  return result;
 }
 
 async function resolveEnsureSource(

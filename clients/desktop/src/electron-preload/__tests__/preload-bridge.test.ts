@@ -4,7 +4,6 @@ import {
   RunnerHostInvoke,
   RunnerHostSync,
 } from "../../ipc-contracts/ipc-channels";
-import type { AuthCallbackBridgeResult } from "../preload-bridge";
 import type { AuthTokenValidationResult } from "@traycer-clients/shared/platform/runner-host";
 import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/auth-validation-types";
 
@@ -133,7 +132,7 @@ interface PreloadBridge {
   validateAuthTokenIdentity(
     token: string,
   ): Promise<AuthIdentityValidationResult>;
-  onAuthCallback(handler: (result: AuthCallbackBridgeResult) => void): {
+  onAuthCallback(handler: () => void): {
     dispose: () => void;
   };
   tokenStore: {
@@ -228,7 +227,7 @@ describe("preload auth-callback replay", () => {
     vi.unstubAllGlobals();
   });
 
-  it("replays the cached auth-callback result to subscribers that arrive after the IPC event fired", async () => {
+  it("replays the cached browser-return signal to subscribers that arrive after the IPC event fired", async () => {
     const bridge = await loadPreload({
       authnApiUrl: undefined,
       desktopDev: undefined,
@@ -237,23 +236,19 @@ describe("preload auth-callback replay", () => {
       sendSyncFn: undefined,
     });
 
-    fakeElectron.emit(RunnerHostEvent.authCallback, {
-      token: "early-token",
-      refreshToken: "early-token-refresh",
+    // The browser-return signal is payload-free - the IPC event carries no body.
+    fakeElectron.emit(RunnerHostEvent.authCallback, undefined);
+
+    let observed = 0;
+    const subscription = bridge.onAuthCallback(() => {
+      observed += 1;
     });
 
-    const observed: AuthCallbackBridgeResult[] = [];
-    const subscription = bridge.onAuthCallback((result) => {
-      observed.push(result);
-    });
-
-    expect(observed).toEqual([
-      { token: "early-token", refreshToken: "early-token-refresh" },
-    ]);
+    expect(observed).toBe(1);
     subscription.dispose();
   });
 
-  it("fans out subsequent auth-callback IPC events to every live subscriber", async () => {
+  it("fans out subsequent browser-return IPC events to every live subscriber", async () => {
     const bridge = await loadPreload({
       authnApiUrl: undefined,
       desktopDev: undefined,
@@ -262,32 +257,23 @@ describe("preload auth-callback replay", () => {
       sendSyncFn: undefined,
     });
 
-    const a: AuthCallbackBridgeResult[] = [];
-    const b: AuthCallbackBridgeResult[] = [];
-    bridge.onAuthCallback((result) => {
-      a.push(result);
+    let a = 0;
+    let b = 0;
+    bridge.onAuthCallback(() => {
+      a += 1;
     });
-    bridge.onAuthCallback((result) => {
-      b.push(result);
+    bridge.onAuthCallback(() => {
+      b += 1;
     });
 
-    fakeElectron.emit(RunnerHostEvent.authCallback, {
-      token: "t1",
-      refreshToken: "t1-refresh",
-    });
-    fakeElectron.emit(RunnerHostEvent.authCallback, { error: "denied" });
+    fakeElectron.emit(RunnerHostEvent.authCallback, undefined);
+    fakeElectron.emit(RunnerHostEvent.authCallback, undefined);
 
-    expect(a).toEqual([
-      { token: "t1", refreshToken: "t1-refresh" },
-      { error: "denied" },
-    ]);
-    expect(b).toEqual([
-      { token: "t1", refreshToken: "t1-refresh" },
-      { error: "denied" },
-    ]);
+    expect(a).toBe(2);
+    expect(b).toBe(2);
   });
 
-  it("does not invoke a subscriber synchronously when no auth callback has fired yet", async () => {
+  it("does not invoke a subscriber synchronously when no browser-return signal has fired yet", async () => {
     const bridge = await loadPreload({
       authnApiUrl: undefined,
       desktopDev: undefined,
@@ -296,20 +282,15 @@ describe("preload auth-callback replay", () => {
       sendSyncFn: undefined,
     });
 
-    const observed: AuthCallbackBridgeResult[] = [];
-    bridge.onAuthCallback((result) => {
-      observed.push(result);
+    let observed = 0;
+    bridge.onAuthCallback(() => {
+      observed += 1;
     });
 
-    expect(observed).toEqual([]);
+    expect(observed).toBe(0);
 
-    fakeElectron.emit(RunnerHostEvent.authCallback, {
-      token: "t-late",
-      refreshToken: "t-late-refresh",
-    });
-    expect(observed).toEqual([
-      { token: "t-late", refreshToken: "t-late-refresh" },
-    ]);
+    fakeElectron.emit(RunnerHostEvent.authCallback, undefined);
+    expect(observed).toBe(1);
   });
 });
 

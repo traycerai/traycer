@@ -1,10 +1,8 @@
 import { readFile, rename, unlink, writeFile } from "node:fs/promises";
 import type { Environment } from "../runner/environment";
+import { createCliLogger, errorFromUnknown } from "../logger";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
-import {
-  hostInstallRecordPath,
-  ensureHostInstallDir,
-} from "../store/paths";
+import { hostInstallRecordPath, ensureHostInstallDir } from "../store/paths";
 
 // HostInstallRecord - the single authoritative record describing the
 // host currently installed at ~/.traycer/host[/dev]/install/. Written
@@ -92,17 +90,35 @@ function parseSource(value: unknown, path: string): HostInstallSource {
 export async function readHostInstallRecord(
   environment: Environment,
 ): Promise<HostInstallRecord | null> {
+  const logger = createCliLogger(environment);
+  logger.debug("Host install record read started", {
+    environment,
+  });
   const path = hostInstallRecordPath(environment);
   let raw: string;
   try {
     raw = await readFile(path, "utf8");
-  } catch {
+  } catch (err) {
+    if (readErrorCode(err) !== "ENOENT") {
+      throw err;
+    }
+    logger.debug("Host install record read returned absent", {
+      environment,
+      errorName: errorFromUnknown(err).name,
+    });
     return null;
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
-  } catch {
+  } catch (err) {
+    logger.error(
+      "Host install record JSON parse failed",
+      {
+        environment,
+      },
+      errorFromUnknown(err),
+    );
     throw cliError({
       code: CLI_ERROR_CODES.HOST_INSTALL_RECORD_INVALID,
       message: `host install record ${path} is not valid JSON; refusing to overwrite`,
@@ -197,7 +213,7 @@ export async function readHostInstallRecord(
       exitCode: 1,
     });
   }
-  return {
+  const record = {
     version: obj.version,
     platform: obj.platform,
     arch: obj.arch,
@@ -209,12 +225,35 @@ export async function readHostInstallRecord(
     sizeBytes: obj.sizeBytes,
     executablePath: obj.executablePath,
   };
+  logger.debug("Host install record read completed", {
+    environment,
+    version: record.version,
+    platform: record.platform,
+    arch: record.arch,
+    sourceKind: record.source.kind,
+    hasArchiveSha256: record.archiveSha256 !== null,
+  });
+  return record;
+}
+
+function readErrorCode(error: unknown): string | null {
+  if (error === null || typeof error !== "object") return null;
+  const code = Reflect.get(error, "code");
+  return typeof code === "string" ? code : null;
 }
 
 export async function writeHostInstallRecord(
   environment: Environment,
   record: HostInstallRecord,
 ): Promise<void> {
+  const logger = createCliLogger(environment);
+  logger.debug("Host install record write started", {
+    environment,
+    version: record.version,
+    platform: record.platform,
+    arch: record.arch,
+    sourceKind: record.source.kind,
+  });
   await ensureHostInstallDir(environment);
   const target = hostInstallRecordPath(environment);
   const tmp = `${target}.tmp`;
@@ -223,15 +262,30 @@ export async function writeHostInstallRecord(
     mode: 0o600,
   });
   await rename(tmp, target);
+  logger.info("Host install record write completed", {
+    environment,
+    version: record.version,
+  });
 }
 
 export async function deleteHostInstallRecord(
   environment: Environment,
 ): Promise<boolean> {
+  const logger = createCliLogger(environment);
   try {
     await unlink(hostInstallRecordPath(environment));
+    logger.info("Host install record deleted", {
+      environment,
+      deleted: true,
+    });
     return true;
-  } catch {
+  } catch (err) {
+    logger.debug("Host install record delete skipped or failed", {
+      environment,
+      deleted: false,
+      errorName: errorFromUnknown(err).name,
+      errorMessage: errorFromUnknown(err).message,
+    });
     return false;
   }
 }

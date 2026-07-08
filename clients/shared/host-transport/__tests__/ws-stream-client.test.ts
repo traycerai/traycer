@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import { buildStreamManifest } from "@traycer/protocol/framework/stream-compat";
+import {
+  defineStreamRpcContract,
+  defineVersionedStreamRpcRegistry,
+} from "@traycer/protocol/framework/versioned-stream-rpc";
 import {
   createRequestContext,
   identityFromAuthenticatedUser,
@@ -166,6 +171,35 @@ function makeRequestContext(bearer: string): RequestContext {
   });
 }
 
+/**
+ * A client whose bearer can be rotated in place via the returned `ctx`, so
+ * `credentialUpdate` tests can refresh the credential and assert what the client
+ * pushes onto the open session.
+ */
+function makeRotatableClient(
+  factory: IStreamWebSocketFactory,
+  bearer: string,
+): {
+  readonly client: WsStreamClient<typeof hostStreamRpcRegistry>;
+  readonly ctx: RequestContext;
+} {
+  const ctx = makeRequestContext(bearer);
+  const client = new WsStreamClient({
+    registry: hostStreamRpcRegistry,
+    endpoint: () => mockLocalHostEntry,
+    bearer: () => ctx.credentials,
+    auth: null,
+    webSocketFactory: factory,
+    dialTimeoutMs: 1000,
+    openAckTimeoutMs: 1000,
+    pingIntervalMs: 25_000,
+    pongTimeoutMs: 50_000,
+    initialBackoffMs: 10,
+    maxBackoffMs: 1_000,
+  });
+  return { client, ctx };
+}
+
 async function flush(): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, 0));
 }
@@ -237,12 +271,20 @@ describe("WsStreamClient", () => {
     const openFrame = parseText(stub.textSent[0]);
     expect(openFrame.kind).toBe("open");
     expect(openFrame.token).toBe("token-abc");
-    // Derived from the live registry so the assertion can't go stale as stream
-    // methods are added (the open frame advertises the full canonical manifest).
-    const expectedManifest = buildStreamManifest(hostStreamRpcRegistry);
-    expect(openFrame.manifest).toEqual(expectedManifest);
+    // The open frame's manifest is the client's raw canonical - no per-method
+    // substitution needed. A same-major minor skew (e.g. host-v1.0.0's
+    // chat.subscribe@1.0 vs this client's @1.1) is safe for the old host's own
+    // full-manifest check: `canBridgeStream` trusts an older peer receiving a
+    // newer minor unconditionally (additive minors), so it never poisons an
+    // unrelated method's open handshake the way the old major bump once did.
+    expect(openFrame.manifest).toEqual(
+      buildStreamManifest(hostStreamRpcRegistry),
+    );
 
-    stub.fireText({ kind: "openAck", manifest: expectedManifest });
+    stub.fireText({
+      kind: "openAck",
+      manifest: buildStreamManifest(hostStreamRpcRegistry),
+    });
 
     expect(stub.textSent).toHaveLength(2);
     const subscribeFrame = parseText(stub.textSent[1]);
@@ -254,6 +296,299 @@ describe("WsStreamClient", () => {
     });
 
     expect(statuses).toContain("open");
+
+    session.close();
+  });
+
+  it("subscribes to a compatible method even when an unrelated method has major skew", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "token-abc",
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+
+    await flush();
+    const stub = sockets[0].socket;
+    stub.fireOpen();
+
+    // A hypothetical peer on some future, unbridgeable chat.subscribe major -
+    // exercises method isolation, independent of chat.subscribe's real,
+    // currently-bridgeable version history.
+    const skewedManifest = {
+      ...buildStreamManifest(hostStreamRpcRegistry),
+      "chat.subscribe": { major: 2, minor: 0 },
+    };
+    stub.fireText({ kind: "openAck", manifest: skewedManifest });
+
+    expect(stub.textSent).toHaveLength(2);
+    expect(parseText(stub.textSent[1])).toEqual({
+      kind: "subscribe",
+      method: "epic.subscribe",
+      schemaVersion: { major: 1, minor: 0 },
+      params: { epicId: "epic-1" },
+    });
+
+    session.close();
+  });
+
+  it("advertises the canonical chat stream version for chat subscriptions", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "token-abc",
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+
+    const session = client.subscribe("chat.subscribe", {
+      epicId: "epic-1",
+      chatId: "chat-1",
+    });
+    await flush();
+
+    sockets[0].socket.fireOpen();
+    const openFrame = parseText(sockets[0].socket.textSent[0]);
+    expect(openFrame.manifest).toEqual(
+      buildStreamManifest(hostStreamRpcRegistry),
+    );
+
+    session.close();
+  });
+
+  // Regression test for the release-v1.1.0 RC incident: the compatibility
+  // check correctly determined chat.subscribe@1.1 bridges to a host still on
+  // @1.0, but the subscribe frame kept declaring this client's own canonical
+  // (1.1) regardless - a version host-v1.0.0's dispatch table has never heard
+  // of, so it rejected the subscribe outright even though the handshake
+  // passed. The client must downgrade what it declares to the version the
+  // host actually advertised.
+  it("declares the host's own chat.subscribe version when the host is still on 1.0", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "token-abc",
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+
+    const session = client.subscribe("chat.subscribe", {
+      epicId: "epic-1",
+      chatId: "chat-1",
+    });
+    await flush();
+
+    const stub = sockets[0].socket;
+    stub.fireOpen();
+
+    const hostV100Manifest = {
+      ...buildStreamManifest(hostStreamRpcRegistry),
+      "chat.subscribe": { major: 1, minor: 0 },
+    };
+    stub.fireText({ kind: "openAck", manifest: hostV100Manifest });
+
+    expect(stub.textSent).toHaveLength(2);
+    expect(parseText(stub.textSent[1])).toEqual({
+      kind: "subscribe",
+      method: "chat.subscribe",
+      schemaVersion: { major: 1, minor: 0 },
+      params: { epicId: "epic-1", chatId: "chat-1" },
+    });
+
+    session.close();
+  });
+
+  // chat.subscribe's own openRequestSchema never changed across 1.0/1.1, so
+  // the test above can't prove `prepareStreamSubscribeRequest` actually
+  // reprojects params through the older contract - only that it downgrades
+  // the declared version. A synthetic method with a genuinely different
+  // open-request shape per minor closes that gap.
+  it("rewrites the subscribe params onto the host's older contract when the open-request shape changed", async () => {
+    const openRequestSchemaV10 = z.object({ id: z.string() });
+    const openRequestSchemaV11 = z.object({
+      id: z.string(),
+      locale: z.string().nullable(),
+    });
+    const frameSchemas = {
+      serverFrameSchema: z.discriminatedUnion("kind", [
+        z.object({
+          kind: z.literal("snapshot"),
+          hasBinaryPayload: z.literal(false),
+          id: z.string(),
+        }),
+      ]),
+      clientFrameSchema: z.discriminatedUnion("kind", [
+        z.object({
+          kind: z.literal("noop"),
+          hasBinaryPayload: z.literal(false),
+        }),
+      ]),
+    };
+    const versionSkewRegistry = defineVersionedStreamRpcRegistry({
+      "version-skew.subscribe": {
+        1: {
+          latestMinor: 1,
+          versions: {
+            0: {
+              contract: defineStreamRpcContract({
+                method: "version-skew.subscribe",
+                schemaVersion: { major: 1, minor: 0 } as const,
+                openRequestSchema: openRequestSchemaV10,
+                ...frameSchemas,
+              }),
+            },
+            1: {
+              contract: defineStreamRpcContract({
+                method: "version-skew.subscribe",
+                schemaVersion: { major: 1, minor: 1 } as const,
+                openRequestSchema: openRequestSchemaV11,
+                ...frameSchemas,
+              }),
+            },
+          },
+        },
+      },
+    });
+
+    const { factory, sockets } = makeFactory();
+    const client = new WsStreamClient({
+      registry: versionSkewRegistry,
+      endpoint: () => mockLocalHostEntry,
+      bearer: () => makeRequestContext("t")?.credentials ?? null,
+      auth: null,
+      webSocketFactory: factory,
+      dialTimeoutMs: 1000,
+      openAckTimeoutMs: 1000,
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+
+    const session = client.subscribe("version-skew.subscribe", {
+      id: "item-1",
+      locale: "en-US",
+    });
+    await flush();
+
+    const stub = sockets[0].socket;
+    stub.fireOpen();
+
+    stub.fireText({
+      kind: "openAck",
+      manifest: { "version-skew.subscribe": { major: 1, minor: 0 } },
+    });
+
+    expect(stub.textSent).toHaveLength(2);
+    expect(parseText(stub.textSent[1])).toEqual({
+      kind: "subscribe",
+      method: "version-skew.subscribe",
+      schemaVersion: { major: 1, minor: 0 },
+      // `locale` is stripped - the 1.0 contract the host actually has never
+      // declared that field, so the params get reprojected onto it.
+      params: { id: "item-1" },
+    });
+
+    session.close();
+  });
+
+  it("pushes a credentialUpdate frame on bearer rotation when the host advertises support", async () => {
+    const { factory, sockets } = makeFactory();
+    const { client, ctx } = makeRotatableClient(factory, "token-1");
+
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+    await flush();
+    const stub = sockets[0].socket;
+    stub.fireOpen();
+    stub.fireText({
+      kind: "openAck",
+      manifest: buildStreamManifest(hostStreamRpcRegistry),
+      capabilities: ["credentialUpdate"],
+    });
+    const sentBeforeRotation = stub.textSent.length;
+
+    ctx.credentials.rotateBearerToken({
+      userId: ctx.identity.userId,
+      bearerToken: "token-2",
+    });
+    client.notifyBearerRotated();
+
+    expect(stub.textSent).toHaveLength(sentBeforeRotation + 1);
+    expect(parseText(stub.textSent[sentBeforeRotation])).toEqual({
+      kind: "credentialUpdate",
+      token: "token-2",
+    });
+
+    session.close();
+  });
+
+  it("does not push a credentialUpdate frame when the host did not advertise support", async () => {
+    const { factory, sockets } = makeFactory();
+    const { client, ctx } = makeRotatableClient(factory, "token-1");
+
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+    await flush();
+    const stub = sockets[0].socket;
+    stub.fireOpen();
+    // Older host: openAck omits `capabilities` (schema defaults it to []).
+    stub.fireText({
+      kind: "openAck",
+      manifest: buildStreamManifest(hostStreamRpcRegistry),
+    });
+    const sentBeforeRotation = stub.textSent.length;
+
+    ctx.credentials.rotateBearerToken({
+      userId: ctx.identity.userId,
+      bearerToken: "token-2",
+    });
+    client.notifyBearerRotated();
+
+    expect(stub.textSent).toHaveLength(sentBeforeRotation);
+
+    session.close();
+  });
+
+  it("reconciles a bearer rotation that happened during the handshake (before openAck)", async () => {
+    const { factory, sockets } = makeFactory();
+    const { client, ctx } = makeRotatableClient(factory, "token-1");
+
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+    await flush();
+    const stub = sockets[0].socket;
+    stub.fireOpen();
+    // The open frame carried token-1. Rotate BEFORE the openAck arrives: the
+    // session isn't subscribed yet, so this push is dropped at the time.
+    ctx.credentials.rotateBearerToken({
+      userId: ctx.identity.userId,
+      bearerToken: "token-2",
+    });
+    client.notifyBearerRotated();
+    const credentialUpdatesBeforeAck = stub.textSent.filter(
+      (raw) => parseText(raw).kind === "credentialUpdate",
+    );
+    expect(credentialUpdatesBeforeAck).toHaveLength(0);
+
+    // openAck (capability-advertising) → on becoming subscribed the client
+    // reconciles the missed rotation and pushes exactly one credentialUpdate.
+    stub.fireText({
+      kind: "openAck",
+      manifest: buildStreamManifest(hostStreamRpcRegistry),
+      capabilities: ["credentialUpdate"],
+    });
+
+    const credentialUpdates = stub.textSent
+      .map((raw) => parseText(raw))
+      .filter((frame) => frame.kind === "credentialUpdate");
+    expect(credentialUpdates).toHaveLength(1);
+    expect(credentialUpdates[0].token).toBe("token-2");
 
     session.close();
   });
@@ -448,6 +783,73 @@ describe("WsStreamClient", () => {
     const emittedFrame = parseText(emitted);
     expect(emittedFrame.kind).toBe("fatalError");
     expect(observedCode).toBe("INCOMPATIBLE");
+  });
+
+  it("remembers stream method support after a successful subscribe", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "t",
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+    const observed: string[] = [];
+    const unsubscribe = client.subscribeMethodSupport(() => {
+      observed.push(client.getMethodSupport("resources.subscribe"));
+    });
+
+    const session = client.subscribe("resources.subscribe", {
+      epicId: "epic-1",
+    });
+
+    await flush();
+    completeHandshake(sockets[0].socket);
+
+    expect(client.getMethodSupport("resources.subscribe")).toBe("supported");
+    expect(observed).toEqual(["supported"]);
+
+    unsubscribe();
+    session.close();
+  });
+
+  it("remembers a missing stream method as unsupported for newer-client older-host pairs", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "t",
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+    const observed: string[] = [];
+    const unsubscribe = client.subscribeMethodSupport(() => {
+      observed.push(client.getMethodSupport("resources.subscribe"));
+    });
+
+    const session = client.subscribe("resources.subscribe", {
+      epicId: "epic-1",
+    });
+
+    await flush();
+    const stub = sockets[0].socket;
+    stub.fireOpen();
+    stub.fireText({
+      kind: "openAck",
+      manifest: {
+        "epic.subscribe": { major: 1, minor: 0 },
+        "chat.subscribe": { major: 1, minor: 2 },
+        "terminal.subscribe": { major: 1, minor: 3 },
+      },
+    });
+
+    expect(client.getMethodSupport("resources.subscribe")).toBe("unsupported");
+    expect(observed).toEqual(["unsupported"]);
+
+    unsubscribe();
+    session.close();
   });
 
   it("closes the socket after two missed pongs and triggers a reconnect", async () => {
@@ -1005,6 +1407,19 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
       upgradeGuidance: null,
     },
   } as const;
+  // A transient, host-side rejection (e.g. the host's JWKS fetch timed out): the
+  // wire `code` stays `UNAUTHORIZED` for older clients, but `retryable: true`
+  // tells a newer client the credential is fine and to just reconnect.
+  const RETRYABLE_FATAL = {
+    kind: "fatalError",
+    details: {
+      code: "UNAUTHORIZED",
+      reason: "Signing key unavailable: request timed out",
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+      retryable: true,
+    },
+  } as const;
 
   function wait(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -1169,6 +1584,94 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
     if (fatalClose?.kind === "fatalError") {
       expect(fatalClose.details.code).toBe("CHAT_INVALID");
     }
+    session.close();
+  });
+
+  it("treats a `retryable` transient rejection as a transport drop: reconnects, never revalidates, never gives up", async () => {
+    const { factory, sockets } = makeFactory();
+    // Even though authn would report the credential current ("rotated"), a
+    // retryable host-side rejection must skip credential recovery entirely.
+    const revalidator = makeAuthRevalidator([
+      "rotated",
+      "rotated",
+      "rotated",
+      "rotated",
+      "rotated",
+    ]);
+    const client = makeAuthClient(factory, revalidator.auth, 5);
+    const statuses: StreamConnectionStatus[] = [];
+    const session = client.subscribe("epic.subscribe", { epicId: "e1" });
+    session.onStatusChange((status) => statuses.push(status));
+
+    await flush();
+    // Drive MORE consecutive rejections than the no-progress bound (3): a
+    // transient host-side rejection must never terminate the session.
+    for (let cycle = 0; cycle < 5; cycle += 1) {
+      const socket = sockets[sockets.length - 1].socket;
+      socket.fireOpen();
+      socket.fireText(RETRYABLE_FATAL);
+      await wait(50);
+    }
+
+    // Credential recovery is never engaged for a host-side transient rejection.
+    expect(revalidator.calls.count).toBe(0);
+    // Recoverable throughout - reconnecting, never terminal.
+    expect(statuses).toContain("reconnecting");
+    expect(statuses).not.toContain("closed");
+    // Reconnected well past the no-progress bound (3) that a misclassified
+    // UNAUTHORIZED would have hit - proof the transient path never gives up.
+    expect(sockets.length).toBeGreaterThan(4);
+    session.close();
+  });
+
+  it("clears the no-progress streak on a retryable interlude so a later genuine UNAUTHORIZED still gets the full bound", async () => {
+    const { factory, sockets } = makeFactory();
+    // Every revalidation reports the same never-rotated bearer ("rotated"),
+    // the no-progress case. Enough entries for a 2-cycle then a 3-cycle episode;
+    // the retryable interlude between them never revalidates.
+    const revalidator = makeAuthRevalidator([
+      "rotated",
+      "rotated",
+      "rotated",
+      "rotated",
+      "rotated",
+    ]);
+    // Tiny initial backoff: this episode drives ~5 reconnects and the shared
+    // `reconnectAttempt` escalates the delay each time, so keep it well under
+    // the per-cycle wait so every reconnected socket is live before the next.
+    const client = makeAuthClient(factory, revalidator.auth, 1);
+    const statuses: StreamConnectionStatus[] = [];
+    const session = client.subscribe("epic.subscribe", { epicId: "e1" });
+    session.onStatusChange((status) => statuses.push(status));
+
+    const driveFatal = async (frame: typeof UNAUTHORIZED_FATAL) => {
+      const socket = sockets[sockets.length - 1].socket;
+      socket.fireOpen();
+      socket.fireText(frame);
+      await wait(50);
+    };
+
+    await flush();
+    // Two genuine UNAUTHORIZED cycles: streak climbs to 2 (both re-dial).
+    await driveFatal(UNAUTHORIZED_FATAL);
+    await driveFatal(UNAUTHORIZED_FATAL);
+    expect(statuses).not.toContain("closed");
+
+    // A transient interlude clears the streak back to 0 (and re-dials).
+    await driveFatal(RETRYABLE_FATAL);
+
+    // With the streak cleared, the next two genuine cycles are 1 and 2 - still
+    // recoverable. WITHOUT the reset the first of these would hit 3 and go
+    // terminal here; this is the regression guard for the reset.
+    await driveFatal(UNAUTHORIZED_FATAL);
+    await driveFatal(UNAUTHORIZED_FATAL);
+    expect(statuses).not.toContain("closed");
+
+    // The third post-interlude cycle reaches the bound (3) and goes terminal.
+    await driveFatal(UNAUTHORIZED_FATAL);
+    expect(statuses).toContain("closed");
+    // 2 pre + 3 post revalidations; the retryable interlude never revalidates.
+    expect(revalidator.calls.count).toBe(5);
     session.close();
   });
 

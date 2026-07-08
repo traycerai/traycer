@@ -110,15 +110,26 @@ export function useTerminalTileBootstrap(
   const list = useTerminalList(epicId, hostClient);
   const create = useTerminalCreate(hostClient);
 
+  // The last SETTLED list's verdict on the session, kept stable across
+  // background refetches (TanStack keeps previous `data` while refetching).
+  // The session HANDLE gate below derives from this, NOT from
+  // `hostHasSession`: `hostHasSession` degrades to `null` while
+  // `terminal.list` is in flight, and gating the handle on that tore down the
+  // live PTY stream on every list invalidation - a subscribe whose snapshot
+  // changed store metadata touching the list cache then re-subscribed,
+  // re-snapshotted, and invalidated again, bouncing the subscription forever
+  // and leaving reattached terminals blank.
+  const sessionListedRunning =
+    list.data !== undefined &&
+    list.data.sessions.some(
+      (s) =>
+        s.sessionId === input.sessionId &&
+        s.sessionKind === input.sessionKind &&
+        s.status === "running",
+    );
+
   const hostHasSession =
-    list.data === undefined || list.isFetching
-      ? null
-      : list.data.sessions.some(
-          (s) =>
-            s.sessionId === input.sessionId &&
-            s.sessionKind === input.sessionKind &&
-            s.status === "running",
-        );
+    list.data === undefined || list.isFetching ? null : sessionListedRunning;
 
   // The host still reports a session it has seen EXIT for ~60s (its
   // grace window) with `status: "exited"`. For a plain terminal that is
@@ -227,9 +238,13 @@ export function useTerminalTileBootstrap(
     preparePayload,
   ]);
 
-  const reattachMode: TerminalReattachMode =
-    hostHasSession === true ? "live" : "fresh";
-  const sessionReady = hostHasSession === true || create.isSuccess;
+  // Immune to background refetches by design (see `sessionListedRunning`):
+  // a live handle is only released when a SETTLED list shows the session
+  // gone or exited, never because a refetch is merely in flight.
+  const reattachMode: TerminalReattachMode = sessionListedRunning
+    ? "live"
+    : "fresh";
+  const sessionReady = sessionListedRunning || create.isSuccess;
 
   const handle = useTerminalSessionHandle({
     hostId: input.hostId,

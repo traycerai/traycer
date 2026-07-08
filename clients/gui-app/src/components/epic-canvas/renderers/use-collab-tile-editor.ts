@@ -94,6 +94,7 @@ export function useCollabTileEditor(
       editorProps: {
         attributes: {
           class: ARTIFACT_EDITOR_CONTENT_CLASS,
+          "data-artifact-editor": "",
         },
       },
     },

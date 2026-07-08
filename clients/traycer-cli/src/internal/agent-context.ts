@@ -18,10 +18,7 @@ function readEnvOrFlag(flag: string | null, envKey: string): string | null {
   return value;
 }
 
-function requireValue(
-  value: string | null,
-  missingMessage: string,
-): string {
+function requireValue(value: string | null, missingMessage: string): string {
   if (value === null) {
     throw cliError({
       code: CLI_ERROR_CODES.INVALID_ARGUMENT,

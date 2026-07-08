@@ -29,20 +29,13 @@ import {
   ComposerPromptEditor,
   type ComposerPromptEditorHandle,
 } from "@/components/chat/composer/composer-prompt-editor";
+import { ChatComposerAttachmentsStrip } from "@/components/chat/composer/chat-composer-attachments-strip";
 import { ComposerContentRenderer } from "@/components/chat/composer/content-renderer";
 import { createComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
 import { useComposerPickerItems } from "@/components/chat/composer/picker/use-composer-picker-items";
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
-import {
-  Dialog,
-  DialogContent,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog";
-import type { Attachment, ImageAttachment } from "@/lib/composer/types";
-import { useAttachmentBlobSrc } from "@/lib/attachments/use-attachment-blob-src";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import {
   composerClipboardPlainText,
@@ -51,15 +44,30 @@ import {
 import { useEpicArtifact, useOpenEpicId } from "@/lib/epic-selectors";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { cn, formatSingleLine } from "@/lib/utils";
+import { deriveA2AReceivedCollapsibleKey } from "@/components/chat/chat-collapsible-key";
+import {
+  chatFindA2AReceivedBodyUnitId,
+  chatFindMessageContentUnitId,
+} from "@/components/chat/chat-find";
 import type {
   ChatMessage as ChatMessageModel,
   ChatMessageSteerBadge,
 } from "@/stores/composer/chat-store";
+import {
+  useA2AReceivedOpen,
+  useSetA2AReceivedOpen,
+} from "@/stores/chats/a2a-open-store-context";
+import {
+  useChatCollapsibleTileInstanceId,
+  useChatFindForcedOpen,
+  useSetChatFindForcedOpen,
+} from "@/stores/chats/chat-find-force-store-context";
 import type {
   ChatMessageEditing,
   ChatMessageUserActions,
 } from "./chat-message";
 import { ChatUserMessageContent } from "./chat-user-message-content";
+import { UserMessageAttachmentGallery } from "./user-message-attachment-gallery";
 import { ComposerArea } from "@/components/home/composer/composer-shell";
 import { LivePulse } from "@/components/ui/live-pulse";
 import { AgentReferenceMarkdown } from "./segments/agent-reference-markdown";
@@ -70,7 +78,9 @@ const NOOP: () => void = () => undefined;
 const NOOP_CLIPBOARD: ClipboardEventHandler<HTMLElement> = () => undefined;
 const NOOP_DRAG: DragEventHandler<HTMLElement> = () => undefined;
 
-const DISPLAY_MAX_HEIGHT_PX = 300;
+// Keep long prompts compact: ~3-4 lines (leading-7 ≈ 28px/line) stay visible
+// before the bubble clamps and fades, with "Show more" revealing the rest.
+const DISPLAY_MAX_HEIGHT_PX = 120;
 
 const COPIED_RESET_MS = 1600;
 
@@ -92,7 +102,10 @@ export function UserMessageBody({
   if (message.role !== "user") {
     return (
       <>
-        <AttachmentGallery attachments={message.attachments} />
+        <UserMessageAttachmentGallery
+          attachments={message.attachments}
+          align="end"
+        />
         <div className="w-full rounded-lg border border-border/40 bg-muted/20 px-4 py-3 text-ui leading-7 text-muted-foreground">
           <ChatUserMessageContent
             content={message.content}
@@ -110,8 +123,12 @@ export function UserMessageBody({
   if (message.agentSenderInfo !== null) {
     return (
       <>
-        <AttachmentGallery attachments={message.attachments} />
+        <UserMessageAttachmentGallery
+          attachments={message.attachments}
+          align="end"
+        />
         <AgentMessageDisplayView
+          messageId={message.id}
           messageText={message.content}
           agentMessage={message.agentMessage}
           agentSenderInfo={message.agentSenderInfo}
@@ -120,12 +137,7 @@ export function UserMessageBody({
     );
   }
 
-  return (
-    <>
-      <AttachmentGallery attachments={message.attachments} />
-      <UserMessageDisplayView message={message} actions={actions} />
-    </>
-  );
+  return <UserMessageDisplayView message={message} actions={actions} />;
 }
 
 /**
@@ -134,15 +146,34 @@ export function UserMessageBody({
  * user bubble; the visible body is the structured message body only.
  */
 function AgentMessageDisplayView({
+  messageId,
   messageText,
   agentMessage,
   agentSenderInfo,
 }: {
+  messageId: string;
   messageText: string;
   agentMessage: ChatMessageModel["agentMessage"];
   agentSenderInfo: NonNullable<ChatMessageModel["agentSenderInfo"]>;
 }): ReactNode {
-  const [open, setOpen] = useState(false);
+  const tileInstanceId = useChatCollapsibleTileInstanceId();
+  const collapsibleKey = useMemo(
+    () => deriveA2AReceivedCollapsibleKey(tileInstanceId, messageId),
+    [messageId, tileInstanceId],
+  );
+  const bodyFindUnitId = chatFindA2AReceivedBodyUnitId(messageId);
+  const userOpen = useA2AReceivedOpen(messageId);
+  const findForcedOpen = useChatFindForcedOpen(collapsibleKey);
+  const open = userOpen || findForcedOpen;
+  const setOpen = useSetA2AReceivedOpen();
+  const setFindForcedOpen = useSetChatFindForcedOpen();
+  const handleOpenChange = useCallback(
+    (next: boolean) => {
+      setOpen(messageId, next);
+      if (!next) setFindForcedOpen(collapsibleKey, false);
+    },
+    [collapsibleKey, messageId, setFindForcedOpen, setOpen],
+  );
 
   const epicId = useOpenEpicId();
   const senderNode = useEpicArtifact(agentSenderInfo.agentId);
@@ -240,11 +271,14 @@ function AgentMessageDisplayView({
         className={undefined}
       >
         <div className="max-h-[min(40vh,24rem)] overflow-auto px-3 py-2">
-          <AgentReferenceMarkdown
-            isStreaming={false}
-            markdown={messageText}
-            proseSize="compact"
-          />
+          <div data-chat-find-unit={bodyFindUnitId}>
+            <AgentReferenceMarkdown
+              isStreaming={false}
+              markdown={messageText}
+              proseSize="compact"
+              quotable={false}
+            />
+          </div>
         </div>
       </SegmentPanel>
     </div>
@@ -254,7 +288,7 @@ function AgentMessageDisplayView({
     <div className="w-full max-w-[min(100%,48rem)]">
       <SegmentCard
         open={open}
-        onOpenChange={setOpen}
+        onOpenChange={handleOpenChange}
         header={header}
         headerAction={null}
         collapsedPreview={preview}
@@ -263,6 +297,8 @@ function AgentMessageDisplayView({
         headerPosition="normal"
         bodyOverflow="hidden"
         expandable
+        headerFindUnitId={null}
+        bodyFindUnitId={null}
         className={undefined}
       />
     </div>
@@ -299,7 +335,12 @@ function UserMessageDisplayView({
 
   const body =
     message.structuredContent !== null ? (
-      <ComposerContentRenderer content={message.structuredContent} />
+      <ComposerContentRenderer
+        content={message.structuredContent}
+        variant={undefined}
+        className={undefined}
+        testId={undefined}
+      />
     ) : (
       <ChatUserMessageContent
         content={message.content}
@@ -316,6 +357,7 @@ function UserMessageDisplayView({
   // bottom fade so the full prompt is readable in place. The overflow probe
   // keeps measuring the (now uncapped) content, so the toggle stays visible.
   const clamped = isOverflowing && !expanded;
+  const findUnitId = chatFindMessageContentUnitId(message.id);
   const copyText = useMemo(
     () =>
       message.structuredContent === null
@@ -325,7 +367,10 @@ function UserMessageDisplayView({
   );
 
   return (
-    <div className="group/user-message flex min-w-0 max-w-[85%] flex-col items-end">
+    <div
+      className="group/user-message flex min-w-0 max-w-[min(100%,48rem)] flex-col items-end"
+      data-user-message-display=""
+    >
       {visibleSteerBadge !== null ? (
         <div className="mb-1.5">
           <UserMessageSteerBadge badge={visibleSteerBadge} />
@@ -333,14 +378,19 @@ function UserMessageDisplayView({
       ) : null}
       <div className="relative min-w-0 max-w-full">
         <div className="rounded-lg border border-border/50 bg-muted/30 px-4 py-3 text-ui leading-7 text-foreground [overflow-wrap:anywhere]">
+          <UserMessageAttachmentGallery
+            attachments={message.attachments}
+            align="start"
+          />
           <div
             ref={contentRef}
+            data-chat-find-unit={findUnitId}
             style={clamped ? { maxHeight: DISPLAY_MAX_HEIGHT_PX } : undefined}
             className={cn(
               "min-w-0",
               clamped && [
                 "overflow-hidden",
-                "[mask-image:linear-gradient(to_bottom,black_calc(100%-4rem),transparent)]",
+                "[mask-image:linear-gradient(to_bottom,black_calc(100%-3rem),transparent)]",
               ],
             )}
           >
@@ -476,6 +526,10 @@ function InlineUserMessageEditor({
     editing.onCancel();
   }, [editing]);
 
+  const removeImageAttachment = useCallback((id: string) => {
+    editorRef.current?.removeImageAttachmentById(id);
+  }, []);
+
   const onSnapshot = useCallback(
     (content: JsonContent, selection: { from: number; to: number }) => {
       editing.onSnapshot(content, selection);
@@ -538,6 +592,7 @@ function InlineUserMessageEditor({
         disabled={editing.pending}
         placeholder="Edit message"
         editorClassName="max-h-[min(60vh,18rem)] min-h-9 overflow-y-auto text-ui leading-7 text-foreground"
+        stabilizeImageAttachmentCaret={false}
         onSnapshot={onSnapshot}
         onSubmit={submit}
         onPaste={NOOP_CLIPBOARD}
@@ -546,9 +601,24 @@ function InlineUserMessageEditor({
         onKeyDown={handleEditorKeyDown}
         onFocus={NOOP}
         onBlur={NOOP}
+        onEditorReady={null}
       />
     ),
     [editing, handleEditorKeyDown, onSnapshot, pickerStore, submit],
+  );
+  const editorSlot = useMemo(
+    () => (
+      <>
+        <ChatComposerAttachmentsStrip
+          content={editing.currentContent}
+          editingQueueItemId={null}
+          onCancelQueueEdit={null}
+          onRemoveImage={removeImageAttachment}
+        />
+        {editor}
+      </>
+    ),
+    [editing.currentContent, editor, removeImageAttachment],
   );
   const toolbar = useMemo(
     () => (
@@ -585,7 +655,7 @@ function InlineUserMessageEditor({
       <ComposerArea
         pickerStore={pickerStore}
         overlay={null}
-        editor={editor}
+        editor={editorSlot}
         toolbar={toolbar}
       />
     </div>
@@ -743,98 +813,6 @@ function MessageCopyButton({
         <Copy className="size-3.5" aria-hidden />
       )}
     </MessageActionButton>
-  );
-}
-
-function AttachmentGallery({
-  attachments,
-}: {
-  attachments: ReadonlyArray<Attachment>;
-}): ReactNode {
-  const images = attachments.flatMap((attachment) =>
-    attachment.kind === "image"
-      ? [{ key: imageAttachmentRenderKey(attachment), attachment }]
-      : [],
-  );
-  if (images.length === 0) return null;
-  return (
-    <div className="mb-2 flex w-full flex-wrap justify-end gap-1.5">
-      {images.map((image) => (
-        <ImageAttachmentThumb key={image.key} attachment={image.attachment} />
-      ))}
-    </div>
-  );
-}
-
-function imageAttachmentRenderKey(attachment: ImageAttachment): string {
-  return [
-    attachment.name ?? "image",
-    attachment.size ?? 0,
-    attachment.hash ?? attachment.dataUrl?.slice(-64) ?? "",
-  ].join(":");
-}
-
-/**
- * Resolves the image source: persisted images (`hash`) stream their bytes from
- * the epic doc's attachments map into a shared blob URL via the content-addressed
- * cache; draft/optimistic images render their inline `dataUrl` directly. Returns
- * null while a persisted image's blob is still loading.
- */
-function useImageAttachmentSrc(attachment: ImageAttachment): string | null {
-  return useAttachmentBlobSrc(
-    attachment.hash,
-    attachment.mediaType,
-    attachment.dataUrl,
-  );
-}
-
-function ImageAttachmentThumb({
-  attachment,
-}: {
-  attachment: ImageAttachment;
-}): ReactNode {
-  const alt = attachment.name || "Image attachment";
-  const src = useImageAttachmentSrc(attachment);
-  return (
-    <Dialog>
-      <DialogTrigger asChild>
-        <button
-          type="button"
-          aria-label={`Open ${alt}`}
-          className="group relative size-12 overflow-hidden rounded-md border border-border/70 bg-muted/40 outline-none transition-colors hover:border-foreground/40 focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          {src === null ? (
-            <div className="size-full animate-pulse bg-muted/60" aria-hidden />
-          ) : (
-            <img
-              src={src}
-              alt={alt}
-              className="size-full object-cover transition-transform group-hover:scale-[1.02]"
-              draggable={false}
-            />
-          )}
-        </button>
-      </DialogTrigger>
-      <DialogContent
-        className="w-[min(95vw,80rem)] max-w-[min(95vw,80rem)] sm:max-w-[min(95vw,80rem)] bg-popover/95 p-2"
-        showCloseButton
-      >
-        <DialogTitle className="sr-only">{alt}</DialogTitle>
-        {src === null ? (
-          <div
-            className="aspect-video w-full animate-pulse rounded-lg bg-muted/60"
-            aria-hidden
-          />
-        ) : (
-          <img
-            src={src}
-            alt={alt}
-            className="block w-full rounded-lg object-contain max-h-[min(90vh,52rem)]"
-            draggable={false}
-          />
-        )}
-      </DialogContent>
-    </Dialog>
   );
 }
 

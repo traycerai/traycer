@@ -9,6 +9,19 @@ import {
 import { DIFF_PANEL_UNSAFE_CSS } from "@/lib/git/diff-tokens-css";
 import { cn } from "@/lib/utils";
 
+const DIFF_FIND_UNSAFE_CSS = `
+  [data-traycer-diff-find-match] {
+    --diffs-line-bg: color-mix(in srgb, var(--primary) 22%, var(--diffs-computed-diff-line-bg));
+  }
+  [data-traycer-diff-find-active] {
+    --diffs-line-bg: color-mix(in srgb, var(--primary) 52%, var(--diffs-computed-diff-line-bg));
+    outline: 1px solid color-mix(in srgb, var(--primary) 70%, transparent);
+    outline-offset: -1px;
+  }
+`;
+
+const DIFF_PANEL_WITH_FIND_UNSAFE_CSS = `${DIFF_PANEL_UNSAFE_CSS}\n${DIFF_FIND_UNSAFE_CSS}`;
+
 export interface DiffContentPrimitiveProps {
   readonly patch: string;
   readonly cacheScope: string;
@@ -24,8 +37,7 @@ export interface DiffContentFrameProps {
   readonly sizing: "fill" | "content";
   readonly banner: ReactNode | null;
   readonly scrollContainerRef:
-    | ((element: HTMLDivElement | null) => void)
-    | null;
+    ((element: HTMLDivElement | null) => void) | null;
   readonly onScroll: ((event: UIEvent<HTMLDivElement>) => void) | null;
   readonly children: ReactNode;
 }
@@ -94,7 +106,7 @@ export function DiffContentPrimitive(
               overflow: pierreOverflow,
               theme: resolveDiffThemeName(resolvedTheme),
               themeType: resolvedTheme,
-              unsafeCSS: DIFF_PANEL_UNSAFE_CSS,
+              unsafeCSS: DIFF_PANEL_WITH_FIND_UNSAFE_CSS,
             }}
           />
         )),

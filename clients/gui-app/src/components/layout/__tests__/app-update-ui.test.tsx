@@ -14,11 +14,13 @@ import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-ru
 import { AppUpdateToastController } from "@/components/layout/bridges/app-update-toast-controller";
 import { AppUpdateHeaderButton } from "@/components/layout/header/app-update-button";
 import { RestartUpdateDialog } from "@/components/layout/dialogs/restart-update-dialog";
+import { InstallGuidanceDialog } from "@/components/layout/dialogs/install-guidance-dialog";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import type {
   DesktopAppUpdateCheckIntent,
+  DesktopAppUpdateGuidance,
   DesktopAppUpdateSnapshot,
   DesktopAppUpdatesBridge,
 } from "@/lib/windows/types";
@@ -36,7 +38,10 @@ type ToastOptions = {
   cancel?: ToastAction;
 };
 
-type ToastCall = (message: string, options: ToastOptions | undefined) => void;
+type ToastCall = (
+  message: ReactNode,
+  options: ToastOptions | undefined,
+) => void;
 
 const toastMock = vi.hoisted(() => {
   const actions: {
@@ -67,9 +72,21 @@ const IDLE_SNAPSHOT: DesktopAppUpdateSnapshot = {
   latestVersion: null,
   downloadProgress: null,
   installBlockedReason: null,
+  installGuidance: null,
   errorMessage: null,
   lastCheckedAt: null,
   lastCheckIntent: null,
+};
+
+const READY_GUIDANCE: DesktopAppUpdateGuidance = {
+  summary: "Traycer downloaded v1.2.3, but this install needs one manual step.",
+  steps: [
+    "Open a terminal.",
+    "Run the command below to install the update.",
+    "Restart Traycer once it completes.",
+  ],
+  command: 'sudo dpkg -i "/home/user/.cache/updater/pending/traycer.deb"',
+  releaseUrl: "https://github.com/traycerai/traycer/releases",
 };
 
 class FakeAppUpdatesBridge implements DesktopAppUpdatesBridge {
@@ -119,8 +136,7 @@ class FakeAppUpdatesBridge implements DesktopAppUpdatesBridge {
 
 class DelayedSnapshotAppUpdatesBridge extends FakeAppUpdatesBridge {
   private resolveSnapshot:
-    | ((snapshot: DesktopAppUpdateSnapshot) => void)
-    | null = null;
+    ((snapshot: DesktopAppUpdateSnapshot) => void) | null = null;
 
   override getSnapshot(): Promise<DesktopAppUpdateSnapshot> {
     return new Promise((resolve) => {
@@ -146,6 +162,7 @@ function readySnapshot(sequence: number): DesktopAppUpdateSnapshot {
     latestVersion: "1.2.3",
     downloadProgress: null,
     installBlockedReason: null,
+    installGuidance: null,
     errorMessage: null,
     lastCheckedAt: "2026-06-15T00:00:00.000Z",
     lastCheckIntent: "automatic",
@@ -302,19 +319,111 @@ describe("desktop app update UI", () => {
     );
   });
 
+  it("opens install guidance instead of the restart confirmation when the ready update needs a manual step", async () => {
+    const bridge = new FakeAppUpdatesBridge({
+      ...readySnapshot(1),
+      installGuidance: READY_GUIDANCE,
+    });
+    renderWithHost(<AppUpdateHeaderButton />, bridge);
+
+    const button = await screen.findByRole("button", {
+      name: /Finish update/i,
+    });
+    // Unlike the blocked-location case, this button stays enabled - the
+    // update can still be applied, just not fully automatically.
+    expect(button.hasAttribute("disabled")).toBe(false);
+    expect(useDesktopDialogStore.getState().activeDialog).toBeNull();
+
+    fireEvent.click(button);
+
+    expect(useDesktopDialogStore.getState().activeDialog).toBe(
+      "install-guidance",
+    );
+  });
+
   it("runs the restart action only after the modal is confirmed", () => {
     const onConfirm = vi.fn();
-    render(
+    const onOpenChange = vi.fn();
+    const { rerender } = render(
       <RestartUpdateDialog
         open
-        onOpenChange={() => undefined}
+        onOpenChange={onOpenChange}
         latestVersion="1.2.3"
         onConfirm={onConfirm}
       />,
     );
 
-    fireEvent.click(screen.getByTestId("restart-update-confirm"));
+    fireEvent.click(screen.getByRole("button", { name: /Restart now/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Restart now/i }));
     expect(onConfirm).toHaveBeenCalledTimes(1);
+    expect(
+      screen
+        .getByRole("button", { name: /Restart now/i })
+        .hasAttribute("disabled"),
+    ).toBe(true);
+    expect(
+      screen.getByRole("status", {
+        name: /Restart request in progress/i,
+      }),
+    ).toBeTruthy();
+    rerender(
+      <RestartUpdateDialog
+        open={false}
+        onOpenChange={onOpenChange}
+        latestVersion="1.2.3"
+        onConfirm={onConfirm}
+      />,
+    );
+    rerender(
+      <RestartUpdateDialog
+        open
+        onOpenChange={onOpenChange}
+        latestVersion="1.2.3"
+        onConfirm={onConfirm}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Later" }).hasAttribute("disabled"),
+    ).toBe(false);
+    expect(
+      screen
+        .getByRole("button", { name: /Restart now/i })
+        .hasAttribute("disabled"),
+    ).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: /Restart now/i }));
+    expect(onConfirm).toHaveBeenCalledTimes(2);
+  });
+
+  it("renders the manual-install steps and command, and opens the release page", () => {
+    const host = makeHost(new FakeAppUpdatesBridge(readySnapshot(1)));
+    const openExternalLink = vi
+      .spyOn(host, "openExternalLink")
+      .mockResolvedValue(undefined);
+    const onOpenChange = vi.fn();
+    render(
+      <RunnerHostProvider runnerHost={host}>
+        <TooltipProvider>
+          <InstallGuidanceDialog
+            open
+            onOpenChange={onOpenChange}
+            guidance={READY_GUIDANCE}
+          />
+        </TooltipProvider>
+      </RunnerHostProvider>,
+    );
+
+    screen.getByText(READY_GUIDANCE.summary);
+    for (const step of READY_GUIDANCE.steps) {
+      screen.getByText(step);
+    }
+    screen.getByText(READY_GUIDANCE.command ?? "");
+
+    fireEvent.click(screen.getByRole("button", { name: "View release page" }));
+    expect(openExternalLink).toHaveBeenCalledWith(READY_GUIDANCE.releaseUrl);
+
+    fireEvent.click(screen.getByRole("button", { name: "Got it" }));
+    expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
   it("shares one desktop update subscription across update UI consumers", async () => {
@@ -369,7 +478,7 @@ describe("desktop app update UI", () => {
     await waitFor(() => {
       expect(toastMock.info).toHaveBeenCalledWith(
         "Checking for Traycer updates...",
-        { id: "traycer-app-update" },
+        { id: "traycer-app-update", description: null, duration: 4000 },
       );
     });
 
@@ -396,17 +505,31 @@ describe("desktop app update UI", () => {
     });
     await waitFor(() => {
       expect(toastMock).toHaveBeenCalledWith(
-        "Update available",
+        expect.anything(),
         expect.objectContaining({ id: "traycer-app-update" }),
       );
     });
 
-    const download = toastMock.actions.action;
-    if (download === null) {
-      throw new Error("Expected a Download action");
+    const [message, options] = toastMock.mock.lastCall ?? [];
+    if (message === undefined || options === undefined) {
+      throw new Error("Expected update available toast content");
     }
-    download();
+    expect(options.action).toBeUndefined();
+    expect(options.cancel).toBeUndefined();
+    render(<>{message}</>);
+    screen.getByText("Update available");
+    screen.getByText("Version 1.2.3 is ready to download.");
+
+    const downloadButton = screen.getByRole("button", {
+      name: "Download",
+    });
+    const laterButton = screen.getByRole("button", { name: "Later" });
+    fireEvent.click(downloadButton);
+    fireEvent.click(downloadButton);
     expect(bridge.downloadUpdate).toHaveBeenCalledTimes(1);
+    expect(downloadButton.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(laterButton);
+    expect(toastMock.dismiss).toHaveBeenCalledWith("traycer-app-update");
   });
 
   it("explains why a blocked update can't be installed instead of offering Download", async () => {
@@ -460,6 +583,40 @@ describe("desktop app update UI", () => {
     });
   });
 
+  it("clears stale download progress copy when the update becomes ready", async () => {
+    const bridge = new FakeAppUpdatesBridge(IDLE_SNAPSHOT);
+    renderWithHost(<AppUpdateToastController />, bridge);
+    await waitFor(() => {
+      expect(bridge.subscriptionCount()).toBe(1);
+    });
+
+    act(() => {
+      bridge.emit(downloadingSnapshot(1, 0));
+    });
+    await waitFor(() => {
+      expect(toastMock.loading).toHaveBeenCalledWith(
+        "Downloading update…",
+        expect.objectContaining({
+          id: "traycer-app-update",
+          description: "0% complete",
+        }),
+      );
+    });
+
+    act(() => {
+      bridge.emit(readySnapshot(2));
+    });
+    await waitFor(() => {
+      expect(toastMock).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          id: "traycer-app-update",
+          description: null,
+        }),
+      );
+    });
+  });
+
   it("offers Restart on the ready toast, opening the confirmation modal", async () => {
     const bridge = new FakeAppUpdatesBridge(IDLE_SNAPSHOT);
     renderWithHost(<AppUpdateToastController />, bridge);
@@ -472,19 +629,60 @@ describe("desktop app update UI", () => {
     });
     await waitFor(() => {
       expect(toastMock).toHaveBeenCalledWith(
-        "Update ready to install",
+        expect.anything(),
         expect.objectContaining({ id: "traycer-app-update" }),
       );
     });
 
-    const restart = toastMock.actions.action;
-    if (restart === null) {
-      throw new Error("Expected a Restart action");
+    const [message, options] = toastMock.mock.lastCall ?? [];
+    if (message === undefined || options === undefined) {
+      throw new Error("Expected update ready toast content");
     }
+    expect(options.action).toBeUndefined();
+    expect(options.cancel).toBeUndefined();
+    render(<>{message}</>);
+    screen.getByText("Update ready to install");
+    screen.getByText("Restart Traycer to finish updating.");
+
+    const restart = screen.getByRole("button", { name: "Restart" });
     expect(useDesktopDialogStore.getState().activeDialog).toBeNull();
-    restart();
+    fireEvent.click(restart);
     expect(useDesktopDialogStore.getState().activeDialog).toBe(
       "confirm-restart-update",
+    );
+  });
+
+  it("offers View instructions on the ready toast when a manual step is needed", async () => {
+    const bridge = new FakeAppUpdatesBridge(IDLE_SNAPSHOT);
+    renderWithHost(<AppUpdateToastController />, bridge);
+    await waitFor(() => {
+      expect(bridge.subscriptionCount()).toBe(1);
+    });
+
+    act(() => {
+      bridge.emit({ ...readySnapshot(1), installGuidance: READY_GUIDANCE });
+    });
+    await waitFor(() => {
+      expect(toastMock).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ id: "traycer-app-update" }),
+      );
+    });
+
+    const [message] = toastMock.mock.lastCall ?? [];
+    if (message === undefined) {
+      throw new Error("Expected update ready toast content");
+    }
+    render(<>{message}</>);
+    screen.getByText("Update downloaded");
+
+    const viewInstructions = screen.getByRole("button", {
+      name: "View instructions",
+    });
+    expect(useDesktopDialogStore.getState().activeDialog).toBeNull();
+    fireEvent.click(viewInstructions);
+    expect(useDesktopDialogStore.getState().activeDialog).toBe(
+      "install-guidance",
     );
   });
 
@@ -524,6 +722,39 @@ describe("desktop app update UI", () => {
     expect(useDesktopDialogStore.getState().activeDialog).toBeNull();
     fireEvent.click(reportButton);
     expect(useDesktopDialogStore.getState().activeDialog).toBe("report-issue");
+  });
+
+  it("offers View instructions alongside Report an issue when a live install failure has guidance", async () => {
+    const bridge = new FakeAppUpdatesBridge(IDLE_SNAPSHOT);
+    renderWithHost(<AppUpdateToastController />, bridge);
+    await waitFor(() => {
+      expect(bridge.subscriptionCount()).toBe(1);
+    });
+
+    act(() => {
+      bridge.emit({ ...errorSnapshot(1), installGuidance: READY_GUIDANCE });
+    });
+    await waitFor(() => {
+      expect(toastMock.error).toHaveBeenCalledWith(
+        "Couldn't update Traycer",
+        expect.objectContaining({ id: "traycer-app-update" }),
+      );
+    });
+
+    const [, options] = toastMock.error.mock.lastCall ?? [];
+    if (options === undefined) {
+      throw new Error("Expected update error toast options");
+    }
+    render(<>{options.description}</>);
+    const viewInstructions = screen.getByRole("button", {
+      name: "View instructions",
+    });
+    screen.getByRole("button", { name: "Report an issue" });
+    expect(useDesktopDialogStore.getState().activeDialog).toBeNull();
+    fireEvent.click(viewInstructions);
+    expect(useDesktopDialogStore.getState().activeDialog).toBe(
+      "install-guidance",
+    );
   });
 
   it("does not replay stale manual-check results in a newly opened window", async () => {

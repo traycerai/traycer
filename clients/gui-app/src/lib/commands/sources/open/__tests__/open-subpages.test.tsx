@@ -83,6 +83,7 @@ function agent(id: string, title: string): TuiAgentProjection {
     userId: null,
     hostId: "agent-host",
     workspaceFolders: [],
+    workspaceMode: undefined,
     model: null,
     reasoningEffort: null,
     agentMode: "regular",
@@ -150,7 +151,13 @@ vi.mock("@/hooks/terminal/use-terminal-list-query", () => ({
   useTerminalList: () => ({
     data: {
       sessions: [
-        { sessionId: "term-1", title: "shell one", cwd: "/work/repo" },
+        {
+          sessionId: "term-1",
+          sessionKind: "terminal",
+          status: "running",
+          title: "shell one",
+          cwd: "/work/repo",
+        },
       ],
     },
   }),
@@ -190,6 +197,11 @@ function noopRouter(): KeybindingRouter {
     navigateToEpicList: () => undefined,
     navigateSettingsSection: () => undefined,
     navigateToTabIntent: () => undefined,
+    goBack: () => undefined,
+    goForward: () => undefined,
+    isHistoryNavAvailable: () => false,
+    canGoBack: () => false,
+    canGoForward: () => false,
   };
 }
 
@@ -251,6 +263,7 @@ describe("Chats opener sub-page", () => {
       epicId: "epic-1",
       tabId: "tab-1",
       placement: { kind: "target-group", groupId: "group-1" },
+      parentId: null,
     });
     expect(
       useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"]
@@ -327,6 +340,7 @@ describe("TUI opener sub-page", () => {
       epicId: "epic-1",
       tabId: "tab-1",
       placement: { kind: "target-group", groupId: "group-1" },
+      parentId: null,
     });
     expect(
       useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"]

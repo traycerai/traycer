@@ -1,3 +1,8 @@
+import type {
+  HostOperationStatus,
+  HostRegistryUpdateState,
+} from "@traycer-clients/shared/platform/runner-host";
+
 export type DesktopJsonPrimitive = string | number | boolean | null;
 export type DesktopJsonValue =
   | DesktopJsonPrimitive
@@ -18,8 +23,7 @@ export interface DesktopOwnershipEntry {
 }
 
 export type DesktopOwnershipClaimResult =
-  | { readonly ok: true }
-  | { readonly ok: false; readonly currentOwner: string };
+  { readonly ok: true } | { readonly ok: false; readonly currentOwner: string };
 
 export interface DesktopPerWindowEpicViewTab {
   readonly id: string;
@@ -60,9 +64,7 @@ export interface DesktopPerWindowStatePatch {
 }
 
 export type DesktopAuthSessionStatus =
-  | "signed-out"
-  | "signing-in"
-  | "signed-in";
+  "signed-out" | "signing-in" | "signed-in";
 
 export interface DesktopAuthSessionProfile {
   readonly userId: string;
@@ -106,14 +108,20 @@ export interface DesktopMenuCommandPayload {
   readonly windowId: string;
 }
 
+export interface DesktopZoomBridge {
+  readonly ladder: readonly number[];
+  get(): Promise<number>;
+  set(percent: number): Promise<number>;
+  stepIn(): Promise<number>;
+  stepOut(): Promise<number>;
+  reset(): Promise<number>;
+  onChange(handler: (percent: number) => void): { dispose: () => void };
+}
+
 export type DesktopSupportLogTarget = "desktop" | "host";
 
 export type DesktopSupportLinkId =
-  | "website"
-  | "documentation"
-  | "release-notes"
-  | "discord"
-  | "support";
+  "website" | "documentation" | "release-notes" | "discord" | "support";
 
 export interface DesktopSupportLinkDescriptor {
   readonly id: DesktopSupportLinkId;
@@ -183,6 +191,20 @@ export type DesktopAppUpdateStatus =
 
 export type DesktopAppUpdateCheckIntent = "automatic" | "manual";
 
+// Linux deb/rpm only: shown when a privileged install can't be applied for
+// the user automatically (WSL, or an install the package manager doesn't own
+// at the path we're running from) and the renderer needs actual steps to
+// follow, not just a tooltip label. `command` is the exact shell command to
+// run against the file already downloaded to `installerPath`-equivalent
+// storage; null only if guidance is somehow requested before a download
+// completed.
+export interface DesktopAppUpdateGuidance {
+  readonly summary: string;
+  readonly steps: readonly string[];
+  readonly command: string | null;
+  readonly releaseUrl: string;
+}
+
 export interface DesktopAppUpdateSnapshot {
   readonly sequence: number;
   readonly status: DesktopAppUpdateStatus;
@@ -195,6 +217,12 @@ export interface DesktopAppUpdateSnapshot {
   // app running outside /Applications). Carries the user-facing reason; the
   // renderer disables the download affordance and shows it as a tooltip.
   readonly installBlockedReason: string | null;
+  // Non-null when a Linux deb/rpm install needs a manual step to finish
+  // (see `DesktopAppUpdateGuidance`). Unlike `installBlockedReason`, the
+  // renderer keeps the download/restart affordance clickable and opens a
+  // dialog with the steps instead of disabling it - the update can still be
+  // applied, just not fully automatically.
+  readonly installGuidance: DesktopAppUpdateGuidance | null;
   readonly errorMessage: string | null;
   readonly lastCheckedAt: string | null;
   readonly lastCheckIntent: DesktopAppUpdateCheckIntent | null;
@@ -208,6 +236,18 @@ export interface DesktopAppUpdatesBridge {
   downloadUpdate(): Promise<DesktopAppUpdateSnapshot>;
   installUpdate(): Promise<DesktopAppUpdateSnapshot>;
   onChange(handler: (snapshot: DesktopAppUpdateSnapshot) => void): {
+    dispose(): void;
+  };
+}
+
+export interface DesktopHostRegistryUpdatesBridge {
+  onChange(handler: (state: HostRegistryUpdateState) => void): {
+    dispose(): void;
+  };
+}
+
+export interface DesktopHostOperationStatusBridge {
+  onChange(handler: (status: HostOperationStatus | null) => void): {
     dispose(): void;
   };
 }
@@ -240,30 +280,6 @@ export interface DesktopSupportBridge {
 
 export interface DesktopPowerBridge {
   setSleepBlocked(blocked: boolean): Promise<void>;
-}
-
-export interface DesktopFindResultSnapshot {
-  readonly requestId: number;
-  readonly activeMatchOrdinal: number;
-  readonly matches: number;
-  readonly finalUpdate: boolean;
-}
-
-export interface DesktopPlatformFindBridge {
-  inPage(
-    text: string,
-    options: {
-      readonly forward: boolean | undefined;
-      readonly findNext: boolean | undefined;
-      readonly matchCase: boolean | undefined;
-    },
-  ): Promise<number | null>;
-  stop(
-    action: "clearSelection" | "keepSelection" | "activateSelection",
-  ): Promise<void>;
-  onResult(handler: (snapshot: DesktopFindResultSnapshot) => void): {
-    dispose(): void;
-  };
 }
 
 export interface DesktopWindowsBridge {

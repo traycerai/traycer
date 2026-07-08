@@ -5,22 +5,16 @@ import type {
   WorkspaceMentionSuggestion,
 } from "@traycer/protocol/host/index";
 import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
+import type { MentionPathTree } from "@/lib/path";
 
 export type PathKind = "file" | "folder";
 export type EntityMentionContextType =
-  | "epic"
-  | "chat"
-  | EpicArtifactKind
-  | "user";
+  "epic" | "chat" | EpicArtifactKind | "user";
 export type MentionContextType =
-  | PathKind
-  | "git"
-  | "worktree"
-  | EntityMentionContextType;
+  PathKind | "git" | "worktree" | EntityMentionContextType;
 
 export type ComposerPromptSegment =
-  | { type: "text"; text: string }
-  | { type: "mention"; path: string };
+  { type: "text"; text: string } | { type: "mention"; path: string };
 
 export type WorkspaceEntry = WorkspaceMentionSuggestion;
 export interface EpicChatMentionEntry {
@@ -121,8 +115,37 @@ export type MentionAttachment =
   | EntityMentionAttachment;
 export type Attachment = ImageAttachment | MentionAttachment;
 
+/**
+ * Full, untruncated preview content for a picker row - the side preview panel
+ * reads this instead of the (possibly CSS-truncated) `label`/`detail`/
+ * `description` the row renders.
+ *
+ * `kind: "path"` covers real filesystem paths (file/folder/worktree): `tree`
+ * is the breadcrumb hierarchy and `footer` is the muted line underneath it
+ * (the absolute path for file/folder; the branch name for a worktree, since
+ * its tree already IS the absolute path). `kind: "text"` covers everything
+ * else (git branch/commit, epic, artifact, chat, slash) - `secondary` carries
+ * a second value only for kinds that have one (parent epic title, commit
+ * subject), otherwise `null`. `mono` is set at the source (git hashes/branch
+ * names) rather than inferred from `primary`'s shape, so a title containing a
+ * slash (e.g. "UI/UX") never gets mistaken for a path.
+ */
+export type MentionPreview =
+  | {
+      readonly kind: "path";
+      readonly tree: MentionPathTree;
+      readonly footer: { readonly text: string; readonly mono: boolean } | null;
+    }
+  | {
+      readonly kind: "text";
+      readonly primary: string;
+      readonly secondary: string | null;
+      readonly mono: boolean;
+    };
+
 export type ProviderSlashCommand = GuiAgentCommandOption & {
   source: "provider";
+  preview: MentionPreview;
 };
 
 export type SlashCommand = ProviderSlashCommand;

@@ -1,6 +1,7 @@
 import "../../../__tests__/test-browser-apis";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createMemoryHistory } from "@tanstack/react-router";
 import { createAppRouter, type AppRouter } from "@/router";
 import { getDefaultBindings } from "@/lib/keybindings/actions";
 import type { KeybindingRouterSource } from "@/lib/keybindings/router-adapter";
@@ -75,29 +76,24 @@ function renderProbeWithExtra(
 function buildMutableRouterSource(
   initialPathname: string,
 ): MutableRouterSource {
-  let pathname = normalizeProbeRoute(initialPathname);
-  const listeners = new Set<() => void>();
+  // A real (unbranded) memory history so the source satisfies the widened
+  // `KeybindingRouterSource.history: RouterHistory`. Carrying no controller
+  // brand keeps in-app history nav inert here, which these leader-hint tests
+  // do not exercise.
+  const history = createMemoryHistory({
+    initialEntries: [normalizeProbeRoute(initialPathname)],
+  });
   const navigate: KeybindingRouterSource["navigate"] = () => Promise.resolve();
   return {
     router: {
       get state() {
-        return { location: { pathname } };
+        return { location: { pathname: history.location.pathname } };
       },
-      history: {
-        subscribe: (callback) => {
-          listeners.add(callback);
-          return () => {
-            listeners.delete(callback);
-          };
-        },
-      },
+      history,
       navigate,
     },
     setPathname: (next) => {
-      pathname = next;
-      for (const listener of listeners) {
-        listener();
-      }
+      history.push(next);
     },
   };
 }

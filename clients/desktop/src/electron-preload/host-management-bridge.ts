@@ -13,6 +13,7 @@ import type {
   HostInstalledRecord,
   HostLogsTailResult,
   HostNameSettings,
+  HostOperationStatus,
   HostProgressEvent,
   HostRegistryUpdateState,
   HostRemovalState,
@@ -63,6 +64,13 @@ export interface HostManagementBridgeSurface {
   registryCheck(input: {
     readonly force: boolean;
   }): Promise<HostRegistryUpdateState>;
+  onRegistryUpdateState(handler: (state: HostRegistryUpdateState) => void): {
+    dispose: () => void;
+  };
+  getOperationStatus(): Promise<HostOperationStatus | null>;
+  onOperationStatus(handler: (status: HostOperationStatus | null) => void): {
+    dispose: () => void;
+  };
   freePortAndRestart(
     input: FreePortAndRestartInput,
   ): Promise<FreePortAndRestartInput>;
@@ -183,6 +191,38 @@ export function buildHostManagementBridge(): HostManagementBridgeSurface {
       ipcRenderer.invoke(RunnerHostInvoke.traycerRegistryCheck, {
         force,
       }) as Promise<HostRegistryUpdateState>,
+    onRegistryUpdateState(handler) {
+      const listener = (_event: IpcRendererEvent, payload: unknown): void => {
+        if (!isHostRegistryUpdateState(payload)) return;
+        handler(payload);
+      };
+      ipcRenderer.on(RunnerHostEvent.hostRegistryUpdateStateChange, listener);
+      return {
+        dispose: () =>
+          ipcRenderer.removeListener(
+            RunnerHostEvent.hostRegistryUpdateStateChange,
+            listener,
+          ),
+      };
+    },
+    getOperationStatus: () =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.traycerHostOperationStatusGet,
+      ) as Promise<HostOperationStatus | null>,
+    onOperationStatus(handler) {
+      const listener = (_event: IpcRendererEvent, payload: unknown): void => {
+        if (!isHostOperationStatusOrNull(payload)) return;
+        handler(payload);
+      };
+      ipcRenderer.on(RunnerHostEvent.hostOperationStatusChange, listener);
+      return {
+        dispose: () =>
+          ipcRenderer.removeListener(
+            RunnerHostEvent.hostOperationStatusChange,
+            listener,
+          ),
+      };
+    },
     freePortAndRestart: (input) =>
       ipcRenderer.invoke(
         RunnerHostInvoke.traycerFreePortAndRestart,
@@ -201,6 +241,51 @@ export function buildHostManagementBridge(): HostManagementBridgeSurface {
         customName,
       }) as Promise<HostNameSettings>,
   };
+}
+
+function isHostRegistryUpdateState(
+  value: unknown,
+): value is HostRegistryUpdateState {
+  if (value === null || typeof value !== "object") return false;
+  const candidate = value as Record<string, unknown>;
+  const checkedAt = candidate.checkedAt;
+  const latestVersion = candidate.latestVersion;
+  const installedVersion = candidate.installedVersion;
+  const errorMessage = candidate.errorMessage;
+  return (
+    (typeof checkedAt === "string" || checkedAt === null) &&
+    (typeof latestVersion === "string" || latestVersion === null) &&
+    (typeof installedVersion === "string" || installedVersion === null) &&
+    typeof candidate.updateAvailable === "boolean" &&
+    typeof candidate.reachable === "boolean" &&
+    (typeof errorMessage === "string" || errorMessage === null)
+  );
+}
+
+function isHostOperationStatusOrNull(
+  value: unknown,
+): value is HostOperationStatus | null {
+  if (value === null) return true;
+  if (typeof value !== "object") return false;
+  const candidate = value as Record<string, unknown>;
+  const stage = candidate.stage;
+  const percent = candidate.percent;
+  const bytes = candidate.bytes;
+  const totalBytes = candidate.totalBytes;
+  const message = candidate.message;
+  return (
+    typeof candidate.operationId === "string" &&
+    (candidate.kind === "install" ||
+      candidate.kind === "update" ||
+      candidate.kind === "register-service" ||
+      candidate.kind === "ensure") &&
+    (typeof stage === "string" || stage === null) &&
+    (typeof percent === "number" || percent === null) &&
+    (typeof bytes === "number" || bytes === null) &&
+    (typeof totalBytes === "number" || totalBytes === null) &&
+    (typeof message === "string" || message === null) &&
+    typeof candidate.startedAt === "string"
+  );
 }
 
 /**

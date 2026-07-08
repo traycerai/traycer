@@ -2,6 +2,7 @@ import "../../../../__tests__/test-browser-apis";
 import { describe, expect, it } from "vitest";
 import { useCommandPaletteStore } from "@/stores/command-palette/command-palette-store";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
+import { useComposerHarnessMemoryStore } from "@/stores/composer/composer-harness-memory-store";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import { useArtifactReadStateStore } from "@/stores/epics/artifact-read-state-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -11,6 +12,7 @@ import { useLeftPanelStore } from "@/stores/epics/left-panel-store";
 import { useFileTreeStore } from "@/stores/file-tree/file-tree-store";
 import { useHistorySearchStore } from "@/stores/home/history-search-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import { useRateLimitPopoverStore } from "@/stores/rate-limits/rate-limit-popover-store";
 import { useHostUpdateBannerStore } from "@/stores/settings/host-update-banner-store";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { useLocalSnapshotClearStore } from "@/stores/settings/local-snapshot-clear-store";
@@ -28,10 +30,11 @@ import { useWorktreeIntentStagingStore } from "@/stores/worktree/worktree-intent
 // to catch a divergence. A wrong leaf, a typo'd STORE_KEYS access, or a store
 // that stops routing through the catalog must fail HERE.
 //
-// The four scoped singletons (composer-run-settings, worktree-intent-memory,
-// worktree-intent-staging, epic-canvas) are constructed at module load in their
-// initial `anon` bucket; the persist lifecycle bridges retarget them at runtime.
-// The construction-time name asserted here is therefore the `anon` one.
+// The five scoped singletons (composer-run-settings, composer-harness-memory,
+// worktree-intent-memory, worktree-intent-staging, epic-canvas) are constructed
+// at module load in their initial `anon` bucket; the persist lifecycle bridges
+// retarget them at runtime. The construction-time name asserted here is
+// therefore the `anon` one.
 
 // The persist middleware's `getOptions()` returns a `Partial<PersistOptions>`,
 // so `name` is structurally optional here even though every store configures it.
@@ -44,7 +47,7 @@ interface StorePersistHandle {
 const STORE_PERSIST_NAME_CASES: ReadonlyArray<
   [label: string, store: StorePersistHandle, expectedName: string]
 > = [
-  // ── 16 static singletons ─────────────────────────────────────────────────
+  // ── 17 static singletons ─────────────────────────────────────────────────
   [
     "useCommandPaletteStore",
     useCommandPaletteStore,
@@ -91,6 +94,11 @@ const STORE_PERSIST_NAME_CASES: ReadonlyArray<
     useSettingsSectionStore,
     "traycer-gui-app:settings-section",
   ],
+  [
+    "useRateLimitPopoverStore",
+    useRateLimitPopoverStore,
+    "traycer-gui-app:rate-limit-popover",
+  ],
   ["useTabsStore", useTabsStore, "traycer-gui-app:tabs"],
   [
     "useWorkspaceFoldersStore",
@@ -98,11 +106,16 @@ const STORE_PERSIST_NAME_CASES: ReadonlyArray<
     "traycer-gui-app:workspace-folders",
   ],
 
-  // ── 4 scoped singletons (initial `anon` bucket at construction) ───────────
+  // ── 5 scoped singletons (initial `anon` bucket at construction) ───────────
   [
     "useComposerRunSettingsStore",
     useComposerRunSettingsStore,
     "traycer-gui-app:composer-run-settings:anon",
+  ],
+  [
+    "useComposerHarnessMemoryStore",
+    useComposerHarnessMemoryStore,
+    "traycer-gui-app:composer-harness-memory:anon",
   ],
   [
     "useWorktreeIntentMemoryStore",

@@ -10,11 +10,25 @@ import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import { useTabProvidersList } from "@/hooks/providers/use-tab-providers-list-query";
 
 // The harness id set is a superset of the provider-CLI id set (it also carries
-// `traycer`, which has no provider-CLI login). Only CLI harnesses gate.
-function providerIdForHarness(harnessId: GuiHarnessId): ProviderId | null {
-  return harnessId === "traycer"
-    ? null
-    : TUI_HARNESS_ID_TO_PROVIDER_ID[harnessId];
+// `traycer`, which has no provider-CLI login). Only CLI harnesses gate. Grok,
+// Qwen, Kiro, Kimi, Droid, Copilot, and Kilo Code are GUI-only (not in the TUI map)
+// but DO gate through their CLI login providers, mirroring the host's
+// `harnessIdToProviderId`. Exported so other harness->provider derivations
+// (e.g. the chat provider rate-limit selector) share this single mapping.
+export function providerIdForHarness(
+  harnessId: GuiHarnessId,
+): ProviderId | null {
+  if (harnessId === "traycer") return null;
+  if (harnessId === "openrouter") return "openrouter";
+  if (harnessId === "grok") return "grok";
+  if (harnessId === "qwen") return "qwen";
+  if (harnessId === "kiro") return "kiro";
+  if (harnessId === "droid") return "droid";
+  if (harnessId === "kimi") return "kimi";
+  if (harnessId === "copilot") return "copilot";
+  if (harnessId === "kilocode") return "kilocode";
+  if (harnessId === "amp") return "amp";
+  return TUI_HARNESS_ID_TO_PROVIDER_ID[harnessId];
 }
 
 export interface ProviderReauthGate {

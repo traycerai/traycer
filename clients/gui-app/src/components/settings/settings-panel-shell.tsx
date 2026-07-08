@@ -35,12 +35,14 @@ export function SettingsPanelShell(props: SettingsPanelShellProps) {
       )}
     >
       <header className="mb-8 flex items-start justify-between gap-4">
-        <div className="space-y-2">
+        <div className="min-w-0 space-y-2">
           <h1 className="text-title-lg font-semibold text-foreground">
             {title}
           </h1>
           {description ? (
-            <p className="text-ui-sm text-muted-foreground">{description}</p>
+            <p className="max-w-[72ch] text-ui-sm text-muted-foreground">
+              {description}
+            </p>
           ) : null}
         </div>
         {headerAction === undefined ? null : (

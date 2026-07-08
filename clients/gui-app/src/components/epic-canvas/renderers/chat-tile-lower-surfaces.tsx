@@ -1,5 +1,6 @@
 import { memo, useCallback, useMemo, useState, type ReactNode } from "react";
 import type {
+  BackgroundItem,
   ChatActiveTurn,
   ChatApprovalState,
   ChatFileEditApprovalState,
@@ -53,6 +54,10 @@ export interface ChatLowerInteractionSurfacesProps {
   readonly composer: ChatLowerComposerState;
   readonly todo: PinnedTodoSnapshot | null;
   readonly restoreContext: ChatRestoreContextValue;
+  readonly backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
+  readonly backgroundStopPendingTaskIds: ReadonlySet<string>;
+  readonly backgroundStopAllPending: boolean;
+  readonly onBackgroundItemClick: (item: BackgroundItem) => void;
 }
 
 export interface ChatLowerRuntimeState {
@@ -90,11 +95,14 @@ export interface ChatLowerQueueState {
   readonly editingItem: ChatQueuedItem | null;
   readonly editingItemId: string | null;
   readonly value: ChatSessionState["queue"];
+  readonly onPause: () => string | null;
   readonly onResume: () => string | null;
   readonly onEdit: (item: ChatQueuedItem) => void;
   readonly onCancel: (item: ChatQueuedItem) => void;
   readonly onAbortSteer: (item: ChatQueuedItem) => void;
   readonly onCancelEdit: () => void;
+  readonly onStopBackgroundItem: (taskId: string) => string | null;
+  readonly onStopAllBackgroundItems: () => string | null;
   readonly onReorder: (
     item: ChatQueuedItem,
     beforeQueueItemId: string | null,
@@ -108,6 +116,7 @@ export interface ChatLowerComposerState {
   readonly nodeId: string;
   readonly isActive: boolean;
   readonly mentionRoots: ReadonlyArray<string>;
+  readonly fallbackToGlobalMentionRoots: boolean;
   readonly currentEpicId: string;
   readonly onSubmitMessage: (input: ChatComposerSubmitInput) => boolean;
   readonly onSettingsChange: ((settings: ChatRunSettings) => void) | null;
@@ -191,6 +200,10 @@ export function ChatLowerInteractionSurfaces(
   // Show the queue surface whenever it holds anything - user-typed sends and
   // received A2A responses alike (the latter render read-only).
   const queueVisible = props.queue.value.items.length > 0;
+  const backgroundVisible =
+    props.backgroundItems !== undefined && props.backgroundItems.length > 0;
+  const activeAgentsVisible =
+    stopControls.self !== null && activeAgents.length > 0;
   const approvalVisible = approvalSurfaceVisible(
     props.runtime.snapshotLoaded,
     props.access.isViewer,
@@ -199,10 +212,15 @@ export function ChatLowerInteractionSurfaces(
   const scrollRegionMaxHeightClass = lowerScrollRegionMaxHeightClass({
     pinnedStackVisible,
     queueVisible,
+    backgroundVisible,
+    activeAgentsVisible,
     approvalVisible,
   });
   const lowerSurfaceTopSpacing: ChatLowerSurfaceTopSpacing =
-    pinnedStackVisible || queueVisible || activeAgents.length > 0
+    pinnedStackVisible ||
+    queueVisible ||
+    activeAgents.length > 0 ||
+    backgroundVisible
       ? "connected"
       : "normal";
   const pinnedStackTopSpacing: ChatPinnedStackTopSpacing = approvalVisible
@@ -273,18 +291,25 @@ export function ChatLowerInteractionSurfaces(
         todo={props.todo}
         restore={props.restoreContext}
         queue={props.queue.value}
+        backgroundItems={props.backgroundItems}
+        backgroundStopPendingTaskIds={props.backgroundStopPendingTaskIds}
+        backgroundStopAllPending={props.backgroundStopAllPending}
         activeTurnStatus={props.turn.activeTurnStatus}
         canAct={props.access.canAct}
         readOnly={props.access.isViewer}
         editingQueueItemId={props.queue.editingItemId}
         topSpacing={pinnedStackTopSpacing}
         scrollRegionMaxHeightClass={scrollRegionMaxHeightClass}
+        onQueuePause={props.queue.onPause}
         onQueueResume={props.queue.onResume}
         onQueueEdit={props.queue.onEdit}
         onQueueCancel={props.queue.onCancel}
         onQueueAbortSteer={props.queue.onAbortSteer}
         onQueueReorder={props.queue.onReorder}
         onQueueSteerNow={props.queue.onSteerNow}
+        onBackgroundItemClick={props.onBackgroundItemClick}
+        onBackgroundItemStop={props.queue.onStopBackgroundItem}
+        onBackgroundItemsStopAll={props.queue.onStopAllBackgroundItems}
       />
       <ChatComposerRegion model={composerModel} layout={composerLayout} />
       <StopChildrenDialog
@@ -363,6 +388,9 @@ function ComposerSurface(props: {
         taskId={model.composer.nodeId}
         isActive={model.composer.isActive}
         mentionRoots={model.composer.mentionRoots}
+        fallbackToGlobalMentionRoots={
+          model.composer.fallbackToGlobalMentionRoots
+        }
         currentEpicId={model.composer.currentEpicId}
         workspaceControls={model.composer.workspaceControls}
         topSpacing={layout.topSpacing}
@@ -421,6 +449,7 @@ function LiveChatComposer(props: {
       isActive={model.composer.isActive}
       sendDisabled={!model.access.canAct}
       mentionRoots={model.composer.mentionRoots}
+      fallbackToGlobalMentionRoots={model.composer.fallbackToGlobalMentionRoots}
       currentEpicId={model.composer.currentEpicId}
       settingsSeed={
         model.queue.editingItem?.settings ?? model.composer.sessionSettingsSeed
@@ -469,6 +498,7 @@ export function InertChatComposer(props: {
   readonly taskId: string;
   readonly isActive: boolean;
   readonly mentionRoots: ReadonlyArray<string>;
+  readonly fallbackToGlobalMentionRoots: boolean;
   readonly currentEpicId: string;
   readonly workspaceControls: ReactNode;
   readonly topSpacing: ChatLowerSurfaceTopSpacing;
@@ -479,6 +509,7 @@ export function InertChatComposer(props: {
       isActive={props.isActive}
       sendDisabled
       mentionRoots={props.mentionRoots}
+      fallbackToGlobalMentionRoots={props.fallbackToGlobalMentionRoots}
       currentEpicId={props.currentEpicId}
       settingsSeed={null}
       fallbackSettingsSeed={null}

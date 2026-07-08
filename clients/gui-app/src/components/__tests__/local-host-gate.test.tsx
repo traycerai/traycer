@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
   cleanup,
@@ -16,6 +16,11 @@ import type {
 } from "@traycer-clients/shared/platform/runner-host";
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import {
+  HostRpcError,
+  type ResponseOfMethod,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import {
   LOCAL_HOST_SLOW_START_THRESHOLD_MS,
@@ -24,6 +29,20 @@ import {
 } from "@/components/local-host-gate";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import {
+  HostCompatibilityProvider,
+  hostRpcRegistry,
+  HostRuntimeProvider,
+  useHostClient,
+  type HostRpcRegistry,
+  type MessengerFactory,
+} from "@/lib/host";
+import { useHostQuery } from "@/hooks/host/use-host-query";
+import {
+  CURRENT_EPIC_VERSION,
+  CURRENT_PHASE_VERSION,
+} from "@traycer-clients/shared/epic/epic-version";
+import { TooltipProvider } from "@/components/ui/tooltip";
 
 const validSnapshot: LocalHostSnapshot = {
   hostId: "desktop-pid-1",
@@ -51,6 +70,18 @@ const remoteEntry: HostDirectoryEntry = {
   version: "1.2.3",
   status: "available",
 };
+
+type HostStatusResponse = ResponseOfMethod<HostRpcRegistry, "host.status">;
+type HostStatusHandler = () => Promise<HostStatusResponse> | HostStatusResponse;
+
+const compatibleHostStatus: HostStatusResponse = {
+  ready: true,
+  hostVersion: "1.2.3",
+  protocolVersion: { major: 1, minor: 0 },
+};
+
+let activeMessenger: MockHostMessenger<HostRpcRegistry> | null = null;
+let restoreFetch: () => void = () => undefined;
 
 function makeHost(snapshot: LocalHostSnapshot | null): MockRunnerHost {
   return new MockRunnerHost({
@@ -85,6 +116,7 @@ function makeHostManagement(
     ensureHost,
     deregisterService: notImplemented("deregisterService"),
     registryCheck: notImplemented("registryCheck"),
+    getOperationStatus: () => Promise.resolve(null),
     freePortAndRestart: (input) => Promise.resolve(input),
     cliManifest: () => Promise.resolve(null),
     getHostName: () =>
@@ -157,6 +189,33 @@ function withQueryClient(children: ReactNode): ReactNode {
   );
 }
 
+function seedStoredToken(host: MockRunnerHost): void {
+  void host.tokenStore.set({
+    token: "test-token",
+    refreshToken: "test-refresh-token",
+  });
+}
+
+function buildMessengerFactory(
+  hostStatus: HostStatusHandler,
+): MessengerFactory<HostRpcRegistry> {
+  return (args) => {
+    const messenger = new MockHostMessenger<HostRpcRegistry>({
+      registry: args.registry,
+      requestId: () => `req-${Math.random().toString(36).slice(2, 8)}`,
+      handlers: {
+        "host.status": () => hostStatus(),
+        "epic.listTasks": () => ({
+          tasks: [],
+          hasMore: false,
+        }),
+      },
+    });
+    activeMessenger = messenger;
+    return messenger;
+  };
+}
+
 function mountGate(
   host: MockRunnerHost,
   selectedEntry: HostDirectoryEntry | null,
@@ -178,6 +237,69 @@ function mountGate(
       </RunnerHostProvider>,
     ),
   );
+}
+
+function mountGateWithRuntime(
+  host: MockRunnerHost,
+  selectedEntry: HostDirectoryEntry | null,
+  hostStatus: HostStatusHandler,
+  children: ReactNode,
+): void {
+  if (useAuthStore.getState().status === "signed-in") {
+    seedStoredToken(host);
+  }
+  render(
+    <RunnerHostProvider runnerHost={host}>
+      <QueryClientProvider client={buildQueryClient()}>
+        <TooltipProvider>
+          <HostRuntimeProvider
+            registry={hostRpcRegistry}
+            messengerFactory={buildMessengerFactory(hostStatus)}
+            invalidator={null}
+            requestId={null}
+            remoteFetcher={() => Promise.resolve([])}
+            fallback={<div data-testid="runtime-fallback">runtime loading</div>}
+          >
+            <HostCompatibilityProvider>
+              <LocalHostGate
+                bypass={false}
+                selectedEntry={selectedEntry}
+                loading={
+                  <div data-testid="gate-loading">
+                    Starting local Traycer Host…
+                  </div>
+                }
+                provisioningLoading={null}
+                unavailable={
+                  <div data-testid="gate-unavailable">unavailable</div>
+                }
+              >
+                {children}
+              </LocalHostGate>
+            </HostCompatibilityProvider>
+          </HostRuntimeProvider>
+        </TooltipProvider>
+      </QueryClientProvider>
+    </RunnerHostProvider>,
+  );
+}
+
+function HostBackedTasksProbe(): ReactNode {
+  const client = useHostClient();
+  useHostQuery<HostRpcRegistry, "epic.listTasks">({
+    cacheKeyIdentity: undefined,
+    client,
+    method: "epic.listTasks",
+    params: {
+      limit: 20,
+      filters: null,
+      sort: "recent",
+      extensionPhaseVersion: String(CURRENT_PHASE_VERSION),
+      extensionEpicVersion: String(CURRENT_EPIC_VERSION),
+    },
+    options: null,
+  });
+  return <div data-testid="gate-children">children</div>;
 }
 
 function mountGateWithRealUnavailable(
@@ -211,11 +333,80 @@ function advancePastSlowStartThreshold(): void {
   });
 }
 
+function installAuthFetch(): () => void {
+  const originalFetch: unknown = (globalThis as { fetch?: unknown }).fetch;
+  Object.defineProperty(globalThis, "fetch", {
+    configurable: true,
+    writable: true,
+    value: (input: unknown): Promise<Response> => {
+      const url = typeof input === "string" ? input : String(input);
+      if (url.endsWith("/api/v3/user")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              user: {
+                id: "user-1",
+                name: "Test User",
+                providerId: "gh-1",
+                providerHandle: "test-user",
+                providerType: "GITHUB",
+                email: "test@example.com",
+                avatarUrl: null,
+                activatedAt: null,
+                createdAt: "2024-01-01T00:00:00.000Z",
+                updatedAt: "2024-01-01T00:00:00.000Z",
+                lastSeenAt: null,
+                privacyMode: false,
+                isLearningEnabled: true,
+              },
+              userSubscription: {
+                id: "sub-1",
+                userID: "user-1",
+                orgID: null,
+                teamID: null,
+                customerId: "cus-1",
+                createdAt: "2024-01-01T00:00:00.000Z",
+                updatedAt: "2024-01-01T00:00:00.000Z",
+                subscriptionExpiry: null,
+                trialEndsAt: null,
+                subscriptionStatus: "FREE",
+                hasPaymentMethod: false,
+                isInTrial: false,
+                rechargeRateSeconds: 0,
+              },
+              teamSubscriptions: [],
+              payAsYouGoUsage: { allowPayAsYouGo: false },
+            }),
+            { status: 200 },
+          ),
+        );
+      }
+      return Promise.reject(
+        new Error(`unexpected fetch in local-host-gate test: ${url}`),
+      );
+    },
+  });
+  return () => {
+    Object.defineProperty(globalThis, "fetch", {
+      configurable: true,
+      writable: true,
+      value: originalFetch,
+    });
+  };
+}
+
 describe("LocalHostGate", () => {
+  beforeEach(() => {
+    activeMessenger = null;
+    restoreFetch = installAuthFetch();
+  });
+
   afterEach(() => {
     cleanup();
     useAuthStore.getState().setSignedOut();
     vi.useRealTimers();
+    vi.restoreAllMocks();
+    restoreFetch();
   });
 
   it("passes children through when the user is signed out, even on a null snapshot", () => {
@@ -275,13 +466,12 @@ describe("LocalHostGate", () => {
       { userId: "test-user", username: "Test User" },
       [],
     );
-    const ensureHost = vi.fn(
-      (): Promise<HostEnsureResult> =>
-        Promise.resolve({
-          action: "provisioned",
-          running: true,
-          version: "1.2.3",
-        }),
+    const ensureHost = vi.fn((): Promise<HostEnsureResult> =>
+      Promise.resolve({
+        action: "provisioned",
+        running: true,
+        version: "1.2.3",
+      }),
     );
     const host = new DeferredInitialSnapshotHost(
       null,
@@ -336,8 +526,7 @@ describe("LocalHostGate", () => {
     });
   });
 
-  it("auto-transitions from Stage 1 loading to children when a valid snapshot arrives before the threshold", () => {
-    vi.useFakeTimers();
+  it("auto-transitions from Stage 1 loading to children when a valid snapshot arrives", async () => {
     useAuthStore.getState().setSignedIn(
       {
         userId: "test-user",
@@ -348,31 +537,25 @@ describe("LocalHostGate", () => {
       [],
     );
     const host = makeHost(null);
-    mountGateWithRealUnavailable(host, localEntry);
+    mountGateWithRuntime(
+      host,
+      localEntry,
+      () => compatibleHostStatus,
+      <div data-testid="gate-children">children</div>,
+    );
 
-    expect(screen.queryByTestId("gate-loading")).not.toBeNull();
-    expect(screen.queryByTestId("local-host-retry")).toBeNull();
-
-    // Partial advance - still within the loading window.
-    act(() => {
-      vi.advanceTimersByTime(
-        Math.floor(LOCAL_HOST_SLOW_START_THRESHOLD_MS / 2),
-      );
+    await waitFor(() => {
+      expect(screen.queryByTestId("gate-loading")).not.toBeNull();
     });
-    expect(screen.queryByTestId("gate-loading")).not.toBeNull();
-    expect(screen.queryByTestId("local-host-retry")).toBeNull();
 
     act(() => {
       host.setLocalHost(validSnapshot);
     });
 
-    expect(screen.queryByTestId("gate-children")).not.toBeNull();
+    await waitFor(() => {
+      expect(screen.queryByTestId("gate-children")).not.toBeNull();
+    });
     expect(screen.queryByTestId("gate-loading")).toBeNull();
-    expect(screen.queryByTestId("local-host-unavailable")).toBeNull();
-
-    // Advancing further must not flip children back to unavailable.
-    advancePastSlowStartThreshold();
-    expect(screen.queryByTestId("gate-children")).not.toBeNull();
     expect(screen.queryByTestId("local-host-unavailable")).toBeNull();
   });
 
@@ -386,15 +569,283 @@ describe("LocalHostGate", () => {
       { userId: "test-user", username: "Test User" },
       [],
     );
-    mountGate(makeHost(validSnapshot), localEntry);
+    mountGateWithRuntime(
+      makeHost(validSnapshot),
+      localEntry,
+      () => compatibleHostStatus,
+      <div data-testid="gate-children">children</div>,
+    );
 
     await waitFor(() => {
       expect(screen.queryByTestId("gate-children")).not.toBeNull();
     });
   });
 
-  it("flips from children to Stage 1 loading, then Stage 2 unavailable, when a previously-valid snapshot becomes null", () => {
-    vi.useFakeTimers();
+  it("keeps the initializing host card while the initial compatibility probe is pending", async () => {
+    useAuthStore.getState().setSignedIn(
+      {
+        userId: "test-user",
+        userName: "Test User",
+        email: "test@example.com",
+      },
+      { userId: "test-user", username: "Test User" },
+      [],
+    );
+    mountGateWithRuntime(
+      makeHost(validSnapshot),
+      localEntry,
+      () => new Promise<HostStatusResponse>(() => undefined),
+      <div data-testid="gate-children">children</div>,
+    );
+
+    expect(await screen.findByTestId("gate-loading")).not.toBeNull();
+    expect(screen.queryByTestId("local-host-compat-checking")).toBeNull();
+    expect(screen.queryByTestId("local-host-incompatible")).toBeNull();
+    expect(screen.queryByTestId("gate-children")).toBeNull();
+  });
+
+  it("blocks children and shows the protocol reason when the initial host is incompatible", async () => {
+    useAuthStore.getState().setSignedIn(
+      {
+        userId: "test-user",
+        userName: "Test User",
+        email: "test@example.com",
+      },
+      { userId: "test-user", username: "Test User" },
+      [],
+    );
+    mountGateWithRuntime(
+      makeHost(validSnapshot),
+      localEntry,
+      () => {
+        throw new HostRpcError({
+          code: "INCOMPATIBLE",
+          message: "Incompatible methods: worktree.readScriptsAtRef",
+          requestId: "req-status",
+          method: "host.status",
+          fatalDetails: null,
+        });
+      },
+      <HostBackedTasksProbe />,
+    );
+
+    expect(await screen.findByTestId("local-host-incompatible")).not.toBeNull();
+    expect(
+      screen.getByTestId("local-host-incompatible-reason").textContent,
+    ).toContain("Incompatible methods: worktree.readScriptsAtRef");
+    expect(screen.queryByText(/Force restart/i)).toBeNull();
+    expect(screen.queryByText(/Force update/i)).toBeNull();
+    expect(screen.queryByText(/Retry check/i)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Update host" })).toBeNull();
+    expect(screen.queryByTestId("gate-children")).toBeNull();
+    expect(activeMessenger?.calls.map((entry) => entry.method)).not.toContain(
+      "epic.listTasks",
+    );
+  });
+
+  it("shows a retryable error when the compatibility probe fails after retries", async () => {
+    useAuthStore.getState().setSignedIn(
+      {
+        userId: "test-user",
+        userName: "Test User",
+        email: "test@example.com",
+      },
+      { userId: "test-user", username: "Test User" },
+      [],
+    );
+    mountGateWithRuntime(
+      makeHost(validSnapshot),
+      localEntry,
+      () => {
+        throw new HostRpcError({
+          code: "RPC_ERROR",
+          message: "status probe failed",
+          requestId: "req-status",
+          method: "host.status",
+          fatalDetails: null,
+        });
+      },
+      <div data-testid="gate-children">children</div>,
+    );
+
+    expect(
+      await screen.findByText(
+        "Could not verify host compatibility. status probe failed",
+      ),
+    ).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Retry" })).not.toBeNull();
+    expect(screen.queryByTestId("gate-children")).toBeNull();
+  });
+
+  it("treats downgrade-unsupported as a terminal normal-launch compatibility failure", async () => {
+    useAuthStore.getState().setSignedIn(
+      {
+        userId: "test-user",
+        userName: "Test User",
+        email: "test@example.com",
+      },
+      { userId: "test-user", username: "Test User" },
+      [],
+    );
+    mountGateWithRuntime(
+      makeHost(validSnapshot),
+      localEntry,
+      () => {
+        throw new HostRpcError({
+          code: "DOWNGRADE_UNSUPPORTED",
+          message: "No downgrade bridge for called method",
+          requestId: "req-status",
+          method: "host.status",
+          fatalDetails: null,
+        });
+      },
+      <div data-testid="gate-children">children</div>,
+    );
+
+    expect(await screen.findByTestId("local-host-incompatible")).not.toBeNull();
+    expect(
+      screen.getByTestId("local-host-incompatible-reason").textContent,
+    ).toContain("No downgrade bridge for called method");
+    expect(screen.queryByTestId("gate-children")).toBeNull();
+  });
+
+  it("normal-launch Update host calls ensureHost with force=true", async () => {
+    useAuthStore.getState().setSignedIn(
+      {
+        userId: "test-user",
+        userName: "Test User",
+        email: "test@example.com",
+      },
+      { userId: "test-user", username: "Test User" },
+      [],
+    );
+    const ensureHost = vi.fn((): Promise<HostEnsureResult> =>
+      Promise.resolve({
+        action: "provisioned",
+        running: true,
+        version: "1.2.4",
+      }),
+    );
+    mountGateWithRuntime(
+      new MockRunnerHost({
+        signInUrl: "https://auth.traycer.invalid/sign-in",
+        authnBaseUrl: "http://localhost:5005",
+        localHost: validSnapshot,
+        hosts: [],
+        workspaceFolderPickerPaths: undefined,
+        hasLocalHost: undefined,
+        traycerCli: undefined,
+        hostManagement: makeHostManagement(ensureHost),
+      }),
+      localEntry,
+      () => {
+        throw new HostRpcError({
+          code: "INCOMPATIBLE",
+          message: "Incompatible methods",
+          requestId: "req-status",
+          method: "host.status",
+          fatalDetails: null,
+        });
+      },
+      <div data-testid="gate-children">children</div>,
+    );
+
+    const update = await screen.findByRole("button", { name: "Update host" });
+    fireEvent.click(update);
+
+    await waitFor(() => {
+      expect(ensureHost).toHaveBeenCalledWith(
+        expect.objectContaining({ force: true }),
+      );
+    });
+  });
+
+  it("busy incompatible host can refresh busy status or force update", async () => {
+    useAuthStore.getState().setSignedIn(
+      {
+        userId: "test-user",
+        userName: "Test User",
+        email: "test@example.com",
+      },
+      { userId: "test-user", username: "Test User" },
+      [],
+    );
+    const hostRef: { current: MockRunnerHost | null } = { current: null };
+    const ensureHost = vi.fn((): Promise<HostEnsureResult> => {
+      const currentHost = hostRef.current;
+      if (currentHost === null) {
+        return Promise.reject(new Error("host not mounted"));
+      }
+      currentHost.setLocalHost(validSnapshot);
+      return Promise.resolve({
+        action: "host-busy",
+        running: true,
+        version: "1.2.3",
+      });
+    });
+    const host = new MockRunnerHost({
+      signInUrl: "https://auth.traycer.invalid/sign-in",
+      authnBaseUrl: "http://localhost:5005",
+      localHost: null,
+      hosts: [],
+      workspaceFolderPickerPaths: undefined,
+      hasLocalHost: undefined,
+      traycerCli: undefined,
+      hostManagement: makeHostManagement(ensureHost),
+    });
+    hostRef.current = host;
+
+    mountGateWithRuntime(
+      host,
+      localEntry,
+      () => {
+        throw new HostRpcError({
+          code: "INCOMPATIBLE",
+          message: "Incompatible methods: epic.listTasks",
+          requestId: "req-status",
+          method: "host.status",
+          fatalDetails: null,
+        });
+      },
+      <div data-testid="gate-children">children</div>,
+    );
+
+    expect(
+      await screen.findByTestId("local-host-incompatible-busy"),
+    ).not.toBeNull();
+    expect(
+      screen.getByTestId("local-host-incompatible-reason").textContent,
+    ).toContain("Incompatible methods: epic.listTasks");
+    const refresh = screen.getByRole("button", { name: "Refresh" });
+    expect(
+      screen.getByRole("button", { name: "Force update host" }),
+    ).not.toBeNull();
+    expect(screen.queryByText(/Force restart/i)).toBeNull();
+    expect(screen.queryByText(/Retry update/i)).toBeNull();
+
+    fireEvent.click(refresh);
+
+    await waitFor(() => {
+      expect(ensureHost).toHaveBeenCalledTimes(2);
+    });
+    expect(ensureHost).toHaveBeenLastCalledWith(
+      expect.objectContaining({ force: false }),
+    );
+
+    const forceUpdate = await screen.findByRole("button", {
+      name: "Force update host",
+    });
+    fireEvent.click(forceUpdate);
+
+    await waitFor(() => {
+      expect(ensureHost).toHaveBeenCalledTimes(3);
+    });
+    expect(ensureHost).toHaveBeenLastCalledWith(
+      expect.objectContaining({ force: true }),
+    );
+  });
+
+  it("flips from children to Stage 1 loading, then Stage 2 unavailable, when a previously-valid snapshot becomes null", async () => {
     const host = makeHost(validSnapshot);
     useAuthStore.getState().setSignedIn(
       {
@@ -405,9 +856,18 @@ describe("LocalHostGate", () => {
       { userId: "test-user", username: "Test User" },
       [],
     );
-    mountGate(host, localEntry);
+    mountGateWithRuntime(
+      host,
+      localEntry,
+      () => compatibleHostStatus,
+      <div data-testid="gate-children">children</div>,
+    );
 
-    expect(screen.queryByTestId("gate-children")).not.toBeNull();
+    await waitFor(() => {
+      expect(screen.queryByTestId("gate-children")).not.toBeNull();
+    });
+
+    vi.useFakeTimers();
 
     act(() => {
       host.setLocalHost(null);
@@ -472,7 +932,12 @@ describe("LocalHostGate", () => {
       return originalSubscribe(handler);
     };
 
-    mountGate(host, localEntry);
+    mountGateWithRuntime(
+      host,
+      localEntry,
+      () => compatibleHostStatus,
+      <div data-testid="gate-children">children</div>,
+    );
 
     await waitFor(() => {
       expect(screen.queryByTestId("gate-children")).not.toBeNull();
@@ -521,7 +986,12 @@ describe("LocalHostGate", () => {
       { userId: "test-user", username: "Test User" },
       [],
     );
-    mountGate(makeHost(validSnapshot), null);
+    mountGateWithRuntime(
+      makeHost(validSnapshot),
+      null,
+      () => compatibleHostStatus,
+      <div data-testid="gate-children">children</div>,
+    );
 
     await waitFor(() => {
       expect(screen.queryByTestId("gate-children")).not.toBeNull();

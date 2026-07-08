@@ -5,20 +5,41 @@ import {
 } from "electron";
 import { canOpenDevTools, isDevBuild } from "../../config";
 import { createInitialRouteArg } from "../../ipc-contracts/window-bootstrap";
-import { log } from "../app/logger";
+import {
+  log,
+  redactLogText,
+  sanitizeLogFields,
+  type SafeLogFields,
+} from "../app/logger";
+import {
+  appendPerfEvent,
+  type PerfFieldValue,
+} from "../perf/perf-telemetry-writer";
+import { parsePerfRendererLog } from "../perf/perf-renderer-log";
 import { safelyOpenExternal, installNavigationGuard } from "../app/security";
 import { installContextMenu } from "../app/spell-check";
 import { installResponsivenessListeners } from "../app/responsiveness";
 import { buildAppUrl } from "../app/app-protocol";
-import { installPerWindowPlatformHooks } from "../ipc/platform-ipc";
+import { minimumWindowSize } from "./window-layout";
+import {
+  placementToBrowserWindowBounds,
+  type WindowGeometryPlacement,
+} from "./window-geometry";
+import {
+  readResolutionTestWindowConfig,
+  shouldUseBuiltRendererForResolutionTest,
+} from "./resolution-test-env";
 
 // Vite dev server served by the `make dev-desktop` orchestrator.
 const DEV_RENDERER_URL = "http://localhost:5173";
+const STRUCTURED_RENDERER_LOG_PREFIX = "[traycer-gui]";
 
 export interface MainWindowOptions {
   readonly preloadPath: string;
   readonly windowId: string;
   readonly initialRoute: string | null;
+  readonly zoomFactor: number;
+  readonly placement: WindowGeometryPlacement;
 }
 
 /**
@@ -34,11 +55,24 @@ export interface MainWindowOptions {
 export function createMainWindow(options: MainWindowOptions): BrowserWindow {
   const isMac = process.platform === "darwin";
   const isWindows = process.platform === "win32";
+  const minSize = minimumWindowSize();
+  const resolutionTest = readResolutionTestWindowConfig(process.env);
+  const placementBounds =
+    resolutionTest.bounds === null
+      ? placementToBrowserWindowBounds(options.placement)
+      : {
+          width: resolutionTest.bounds.width,
+          height: resolutionTest.bounds.height,
+          x: undefined,
+          y: undefined,
+        };
   const window = new BrowserWindow({
-    width: 1280,
-    height: 800,
-    minWidth: 960,
-    minHeight: 600,
+    width: placementBounds.width,
+    height: placementBounds.height,
+    x: placementBounds.x,
+    y: placementBounds.y,
+    minWidth: minSize.width,
+    minHeight: minSize.height,
     show: false,
     // Background-paint color before the renderer paints - eliminates the
     // white flash on launch. Matches the renderer's dark surface color.
@@ -78,7 +112,12 @@ export function createMainWindow(options: MainWindowOptions): BrowserWindow {
       // `process.argv`), so the flip is mechanical. All OS-touching work
       // already lives in main behind IPC.
       sandbox: true,
+      zoomFactor: options.zoomFactor,
     },
+  });
+
+  void window.webContents.setVisualZoomLevelLimits(1, 1).catch((err) => {
+    log.warn("[window] failed to lock visual zoom limits", err);
   });
 
   window.webContents.setWindowOpenHandler(({ url }) => {
@@ -89,13 +128,14 @@ export function createMainWindow(options: MainWindowOptions): BrowserWindow {
   installNavigationGuard(window.webContents);
   installContextMenu(window.webContents);
   installResponsivenessListeners(window.webContents);
-  installPerWindowPlatformHooks(window.webContents);
 
   window.once("ready-to-show", () => {
     // Open filling the screen's work area (full width/height minus OS
     // taskbar/menu). `maximize()` keeps native window chrome + the snap/restore
     // affordance, unlike fullscreen which hides the menu bar.
-    window.maximize();
+    if (options.placement.maximized && !resolutionTest.disableMaximize) {
+      window.maximize();
+    }
     window.show();
   });
 
@@ -134,11 +174,30 @@ export function createMainWindow(options: MainWindowOptions): BrowserWindow {
   window.webContents.on(
     "console-message",
     (details: Event<WebContentsConsoleMessageEventParams>) => {
+      // Perf-telemetry lines go ONLY to the dedicated NDJSON file, never the
+      // human log. Handle them first and return so they bypass electron-log.
+      const perfEvent = parsePerfRendererLog(details.message);
+      if (perfEvent !== null) {
+        appendPerfEvent({
+          ...perfEvent,
+          fields: redactPerfFields(perfEvent.fields),
+        });
+        return;
+      }
+      const structured = parseStructuredRendererLog(details.message);
       const entry = {
-        message: details.message,
+        message:
+          structured === null
+            ? redactLogText(details.message)
+            : structured.message,
         line: details.lineNumber,
-        source: details.sourceId,
+        source: sanitizeRendererSource(details.sourceId),
+        ...(structured === null ? {} : { fields: structured.fields }),
       };
+      if (structured !== null) {
+        logStructuredRendererEntry(structured.level, entry);
+        return;
+      }
       if (canOpenDevTools) {
         log.info("[renderer]", { level: details.level, ...entry });
         return;
@@ -161,7 +220,7 @@ export async function loadMainWindow(
   // server with HMR. DevTools are NOT auto-opened - use the View menu's
   // "Toggle Developer Tools" when policy exposes it. Shipped builds fall
   // through to the privileged `app://` scheme below.
-  if (isDevBuild) {
+  if (isDevBuild && !shouldUseBuiltRendererForResolutionTest(process.env)) {
     log.info("[window] loading dev renderer", { devUrl: DEV_RENDERER_URL });
     try {
       await window.loadURL(DEV_RENDERER_URL);
@@ -182,4 +241,108 @@ export async function loadMainWindow(
 
 export interface MainWindowLoadTarget {
   loadURL(url: string): Promise<void>;
+}
+
+type StructuredRendererLogLevel = "debug" | "info" | "warn" | "error";
+
+interface StructuredRendererLog {
+  readonly level: StructuredRendererLogLevel;
+  readonly message: string;
+  readonly fields: SafeLogFields;
+}
+
+function parseStructuredRendererLog(
+  message: string,
+): StructuredRendererLog | null {
+  if (!message.startsWith(STRUCTURED_RENDERER_LOG_PREFIX)) {
+    return null;
+  }
+  const rawJson = message.slice(STRUCTURED_RENDERER_LOG_PREFIX.length).trim();
+  try {
+    const parsed: unknown = JSON.parse(rawJson);
+    if (!isRecord(parsed)) return null;
+    const level = parsed.level;
+    const logMessage = parsed.message;
+    if (!isRendererLogLevel(level) || typeof logMessage !== "string") {
+      return null;
+    }
+    return {
+      level,
+      message: redactLogText(logMessage),
+      fields: isRecord(parsed.fields)
+        ? sanitizeRendererFields(parsed.fields)
+        : {},
+    };
+  } catch {
+    return null;
+  }
+}
+
+function sanitizeRendererFields(
+  fields: Record<string, unknown>,
+): SafeLogFields {
+  return sanitizeLogFields(fields);
+}
+
+/**
+ * Perf fields are `number | string | boolean | null` only (never a nested
+ * object/array), so this stays narrower than `sanitizeLogFields`: only string
+ * values need scrubbing through the same `redactLogText` used on every other
+ * renderer log path, so a future call site that passes a user-derived string
+ * (error message, file path) as a field can't land unredacted in the perf
+ * NDJSON sink.
+ */
+function redactPerfFields(
+  fields: Readonly<Record<string, PerfFieldValue>>,
+): Record<string, PerfFieldValue> {
+  const out: Record<string, PerfFieldValue> = {};
+  for (const [key, value] of Object.entries(fields)) {
+    out[key] = typeof value === "string" ? redactLogText(value) : value;
+  }
+  return out;
+}
+
+function logStructuredRendererEntry(
+  level: StructuredRendererLogLevel,
+  entry: SafeLogFields,
+): void {
+  if (level === "error") {
+    log.error("[renderer]", entry);
+    return;
+  }
+  if (level === "warn") {
+    log.warn("[renderer]", entry);
+    return;
+  }
+  if (level === "info") {
+    log.info("[renderer]", entry);
+    return;
+  }
+  log.debug("[renderer]", entry);
+}
+
+function sanitizeRendererSource(sourceId: string): string {
+  try {
+    const url = new URL(sourceId);
+    url.search = "";
+    url.hash = "";
+    return redactLogText(url.toString());
+  } catch {
+    return redactLogText(sourceId);
+  }
+}
+
+function isRendererLogLevel(
+  value: unknown,
+): value is StructuredRendererLogLevel {
+  return (
+    value === "debug" ||
+    value === "info" ||
+    value === "warn" ||
+    value === "error"
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }

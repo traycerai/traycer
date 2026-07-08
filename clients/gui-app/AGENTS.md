@@ -143,6 +143,16 @@ backend calls, no ad-hoc try/catch + `toast.error` orchestration in components.
   `@core/*`, `@traycer-clients/shared/*`, and `@traycer/protocol/*` instead of
   manual `../../..` paths.
 
+- Structured perf telemetry (separate from the human log) goes through
+  `src/lib/perf/perf-telemetry.ts` `logPerfEvent(name, fields)`. It prints a
+  `[traycer-perf]` console line the desktop shell appends to a dedicated
+  machine-parseable file, `<Electron userData>/traycer-perf.ndjson` (rotates to
+  `.ndjson.1` at ~5 MB), instead of `traycer-desktop.log`. Enable with
+  `localStorage["traycer:perf:telemetry"] = "1"` (on by default in dev, off in
+  tests, opt-in in prod). Sibling gated probes: `main-thread-block-probe.ts`
+  (`traycer:perf:mainthread`) and `terminal-load-perf.ts`
+  (`traycer:perf:terminal`).
+
 - Keep query-key management centralized. Define durable query-key builders in a
   dedicated `src/lib/query-keys/` area and expose them through a barrel export,
   rather than rebuilding key shapes ad hoc in components, hooks, or tests.
@@ -323,13 +333,22 @@ adding a new preset only needs a CSS block.
   `<Suspense fallback={<TerminalLoadingSkeleton />}>`. The ~150 KB of `@xterm/*`
   is deferred until first terminal mount per session.
 
-- **Font.** `fontSize` follows `useSettingsStore(s => s.codeFontSize)`;
-  `fontFamily` is resolved once at mount from `--traycer-font-mono` and cached
-  via `useMemo([])`. Live size changes trigger a `fitAddon.fit()` refit
-  alongside the atlas clear.
+- **Font.** `fontSize` and `fontFamily` are the effective terminal values from
+  the settings store: `terminalFontSize ?? codeFontSize` and
+  `terminalFontFamily ?? codeFontFamily` prepended to the shared default mono
+  stack (`src/lib/default-font-stacks.ts`). The font-family string is built
+  from store values rather than read from `--traycer-font-mono`, because xterm
+  can't resolve CSS variables in its canvas measurement pass and a
+  `getComputedStyle` read would race the `ThemeProvider` effect that writes
+  the variable's inline override. Live size or family changes trigger a
+  `fitAddon.fit()` refit alongside the atlas clear.
 
 - **What stays pinned.** No per-tab terminal palette overrides - every terminal
   mirrors the app theme. The xterm.js stylesheet (`@xterm/xterm/css/xterm.css`)
-  is left untouched; scrollbar / search overlay use xterm defaults. Cursor
-  shape, cursor blink, scrollback size, and `allowProposedApi` are constants in
-  `terminal-tile-xterm.tsx`.
+  is left untouched; scrollbar / search overlay use xterm defaults. Scrollback
+  size and `allowProposedApi` are constants in `terminal-tile-xterm.tsx`. Cursor
+  shape and cursor blink are Settings → Appearance values
+  (`terminalCursorStyle` / `terminalCursorBlink`): captured in
+  `initialOptionsRef` for the first paint and live-synced through
+  `useTerminalAppearanceSync` (no refit/atlas clear - they don't change cell
+  geometry).

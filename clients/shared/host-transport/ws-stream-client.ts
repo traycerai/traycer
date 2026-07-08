@@ -1,7 +1,11 @@
-import type { VersionedStreamRpcRegistry } from "@traycer/protocol/framework/versioned-stream-rpc";
+import type {
+  SchemaVersion,
+  StreamMethodVersionRegistry,
+  VersionedStreamRpcRegistry,
+} from "@traycer/protocol/framework/versioned-stream-rpc";
 import {
   buildStreamManifest,
-  checkStreamCompatibility,
+  checkStreamMethodCompatibility,
 } from "@traycer/protocol/framework/stream-compat";
 import {
   extractBearerForOpenFrame,
@@ -18,9 +22,11 @@ import {
   hostStreamOpenAckFrameSchema,
   hostStreamFatalErrorFrameSchema,
   streamMethodFrameEnvelopeSchema,
+  STREAM_CAPABILITY_CREDENTIAL_UPDATE,
   type ClientStreamOpenFrame,
   type ClientStreamSubscribeFrame,
   type ClientStreamFatalErrorFrame,
+  type ClientStreamCredentialUpdateFrame,
 } from "@traycer/protocol/framework/stream-ws-protocol";
 import type {
   IStreamSession,
@@ -80,7 +86,7 @@ export interface WsStreamClientOptions<
  *
  * Per-session lifecycle (mirrors the tech plan's decision #3 handshake):
  *   dial → send `open { token, manifest }` → await `openAck { manifest }`
- *        → run client-side `checkStreamCompatibility` mirror
+ *        → run client-side subscribed-method compatibility mirror
  *        → send `subscribe { method, schemaVersion, params }`
  *        → enter the bidirectional frame loop
  *        → ping/pong heartbeat every `pingIntervalMs`
@@ -109,6 +115,8 @@ const INERT_STREAM_SESSION: IStreamSession = {
 export class WsStreamClient<Registry extends VersionedStreamRpcRegistry> {
   private readonly options: WsStreamClientOptions<Registry>;
   private readonly ownedSessions = new Set<StreamSession<Registry>>();
+  private readonly methodSupport = new Map<string, StreamMethodSupport>();
+  private readonly methodSupportListeners = new Set<() => void>();
   private closed = false;
 
   constructor(options: WsStreamClientOptions<Registry>) {
@@ -157,6 +165,9 @@ export class WsStreamClient<Registry extends VersionedStreamRpcRegistry> {
       initialBackoffMs: this.options.initialBackoffMs,
       maxBackoffMs: this.options.maxBackoffMs,
       onDispose: () => removeSession(),
+      onMethodSupport: (nextMethod, support) => {
+        this.setMethodSupport(nextMethod, support);
+      },
     });
     removeSession = () => {
       this.ownedSessions.delete(session);
@@ -186,6 +197,19 @@ export class WsStreamClient<Registry extends VersionedStreamRpcRegistry> {
     return this.closed;
   }
 
+  getMethodSupport<Method extends keyof Registry & string>(
+    method: Method,
+  ): StreamMethodSupport {
+    return this.methodSupport.get(method) ?? "unknown";
+  }
+
+  subscribeMethodSupport(listener: () => void): () => void {
+    this.methodSupportListeners.add(listener);
+    return () => {
+      this.methodSupportListeners.delete(listener);
+    };
+  }
+
   /**
    * Proactively drops and re-dials every open session immediately. Driven by a
    * device-wake / network-online signal: after an OS sleep the sockets can be
@@ -195,17 +219,45 @@ export class WsStreamClient<Registry extends VersionedStreamRpcRegistry> {
    * host re-run its subscribe handler (re-registering the live request
    * context) within seconds of wake. No-op on a closed client.
    */
+  /**
+   * Pushes the freshly-rotated bearer onto every open session so each host
+   * connection updates its credential lease IN PLACE, with no reconnect. Called
+   * by the owner right after a proactive (or reactive) token refresh rotates the
+   * lease. Sessions that are mid-reconnect - or whose host did not advertise
+   * `credentialUpdate` support - simply skip; their next open frame already
+   * carries the fresh bearer. No-op on a closed client.
+   */
+  notifyBearerRotated(): void {
+    if (this.closed) {
+      return;
+    }
+    for (const session of Array.from(this.ownedSessions)) {
+      session.pushCredentialUpdate();
+    }
+  }
+
   reconnectAll(reason: string): void {
     if (this.closed) {
       return;
     }
     // Wake-recovery trace (piped to the desktop log via the renderer-console
     // bridge): proves the wake signal arrived and how many sessions re-dialed.
-    console.info(
+    console.debug(
       `[stream] reconnectAll reason=${reason} sessions=${this.ownedSessions.size}`,
     );
     for (const session of Array.from(this.ownedSessions)) {
       session.forceReconnect(reason);
+    }
+  }
+
+  private setMethodSupport(method: string, support: StreamMethodSupport): void {
+    const previous = this.methodSupport.get(method) ?? "unknown";
+    if (previous === support) {
+      return;
+    }
+    this.methodSupport.set(method, support);
+    for (const listener of Array.from(this.methodSupportListeners)) {
+      listener();
     }
   }
 }
@@ -218,6 +270,8 @@ export type ParamsOf<
   Registry extends VersionedStreamRpcRegistry,
   Method extends keyof Registry & string,
 > = ExtractOpenRequest<Registry[Method]>;
+
+export type StreamMethodSupport = "unknown" | "supported" | "unsupported";
 
 type ExtractOpenRequest<MethodRegistry> =
   MethodRegistry extends Readonly<Record<number, infer Line>>
@@ -251,6 +305,10 @@ interface StreamSessionOptions<Registry extends VersionedStreamRpcRegistry> {
   readonly initialBackoffMs: number;
   readonly maxBackoffMs: number;
   readonly onDispose: () => void;
+  readonly onMethodSupport: (
+    method: keyof Registry & string,
+    support: StreamMethodSupport,
+  ) => void;
 }
 
 /**
@@ -297,6 +355,10 @@ class StreamSession<
 
   private activeSocket: StreamWebSocketLike | null = null;
   private openFrameToken: string | null = null;
+  // Whether the host advertised `credentialUpdate` support in the current
+  // connection's openAck. Gates `pushCredentialUpdate`; reset on every
+  // reconnect and re-read from the next openAck.
+  private supportsCredentialUpdate = false;
   private phase: SessionPhase = "idle";
   private pendingBinaryEnvelope: StreamFrameEnvelope | null = null;
   private dialTimer: TimerHandle | null = null;
@@ -369,6 +431,37 @@ class StreamSession<
     this.reconnectAttempt = 0;
     this.slowClientReconnectStreak = 0;
     this.onTransportDrop();
+  }
+
+  /**
+   * Pushes the current bearer onto this open connection so the host rotates its
+   * credential lease in place - no reconnect. No-op unless the session is fully
+   * `subscribed` AND the host advertised `credentialUpdate` support in its
+   * openAck; a mid-reconnect session just carries the fresh bearer in its next
+   * open frame. Called by `WsStreamClient.notifyBearerRotated`.
+   */
+  pushCredentialUpdate(): void {
+    if (this.disposed) {
+      return;
+    }
+    if (this.phase !== "subscribed" || !this.supportsCredentialUpdate) {
+      return;
+    }
+    const socket = this.activeSocket;
+    if (socket === null) {
+      return;
+    }
+    const token = this.currentBearerToken();
+    if (token === null) {
+      return;
+    }
+    const frame: ClientStreamCredentialUpdateFrame = {
+      kind: "credentialUpdate",
+      token,
+    };
+    if (!this.sendControlText(socket, frame)) {
+      this.onSendFailure(socket);
+    }
   }
 
   // ---- Internal wiring -------------------------------------------------- //
@@ -619,13 +712,17 @@ class StreamSession<
       clearTimeout(this.openAckTimer);
       this.openAckTimer = null;
     }
+    this.supportsCredentialUpdate = ackParse.data.capabilities.includes(
+      STREAM_CAPABILITY_CREDENTIAL_UPDATE,
+    );
 
     const myManifest = buildStreamManifest(this.config.registry);
-    const compat = checkStreamCompatibility(
+    const compat = checkStreamMethodCompatibility(
       this.config.registry,
       myManifest,
       ackParse.data.manifest,
       "client",
+      this.config.method,
     );
 
     const socket = this.activeSocket;
@@ -634,6 +731,7 @@ class StreamSession<
     }
 
     if (!compat.ok) {
+      this.config.onMethodSupport(this.config.method, "unsupported");
       const terminalFrame: ClientStreamFatalErrorFrame = {
         kind: "fatalError",
         details: compat.details,
@@ -651,22 +749,42 @@ class StreamSession<
       return;
     }
 
+    const prepared = prepareStreamSubscribeRequest(
+      this.config.registry,
+      this.config.method,
+      myManifest[this.config.method],
+      ackParse.data.manifest[this.config.method],
+      this.config.params,
+    );
     const subscribeFrame: ClientStreamSubscribeFrame = {
       kind: "subscribe",
       method: this.config.method,
-      schemaVersion: myManifest[this.config.method],
-      params: this.config.params,
+      schemaVersion: prepared.onWireVersion,
+      params: prepared.onWirePayload,
     };
     if (!this.sendControlText(socket, subscribeFrame)) {
       this.onSendFailure(socket);
       return;
     }
+    this.config.onMethodSupport(this.config.method, "supported");
     this.phase = "subscribed";
     this.reconnectAttempt = 0;
     this.noProgressUnauthorizedReconnects = 0;
     this.lastPongAt = Date.now();
     this.startHeartbeat();
     this.transitionTo("open", null);
+    // If the bearer rotated DURING the handshake - after the open frame was sent
+    // but before we became `subscribed` - that rotation's `notifyBearerRotated`
+    // was dropped (we weren't subscribed yet) and the open frame carried the now
+    // stale token. Reconcile once here so the host still gets the fresh bearer in
+    // place. No-op on the common path where the bearer is unchanged.
+    if (
+      this.supportsCredentialUpdate &&
+      this.openFrameToken !== null &&
+      this.currentBearerToken() !== this.openFrameToken
+    ) {
+      this.pushCredentialUpdate();
+    }
   }
 
   private handleFatalErrorFrame(parsed: object): void {
@@ -677,6 +795,23 @@ class StreamSession<
       return;
     }
     const details = termParse.data.details;
+    // `retryable` marks a transient, host-side rejection (e.g. the host's JWKS
+    // fetch timed out while verifying our bearer). Our credential is fine, so
+    // credential revalidation can't help and the no-progress give-up bound must
+    // not apply - treat it exactly like an ordinary transport drop and let the
+    // reconnect backoff ride until the host recovers. Checked before the
+    // `UNAUTHORIZED` branch because the host keeps the wire `code` as
+    // `UNAUTHORIZED` (so older clients still get the credential path).
+    if (details.retryable === true) {
+      // A transient host blip must not count toward the credential give-up
+      // bound, mirroring the `network-error` revalidation outcome: clear any
+      // streak left by a prior genuine `UNAUTHORIZED` episode so a later real
+      // rejection starts from a clean slate.
+      this.noProgressUnauthorizedReconnects = 0;
+      this.teardownSocket(1000, "host-retryable");
+      this.onTransportDrop();
+      return;
+    }
     // `UNAUTHORIZED` is recoverable when an auth revalidator is wired: the
     // host rejected our bearer (e.g. it expired during an overnight sleep),
     // but a single-flight revalidation may rotate a fresh one that the next
@@ -734,7 +869,7 @@ class StreamSession<
     }
     // Wake-recovery trace: which way the overnight-expired-bearer revalidation
     // resolved, so an on-device wake shows whether the fresh bearer landed.
-    console.info(
+    console.debug(
       `[stream] UNAUTHORIZED revalidate outcome=${outcome} method=${String(
         this.config.method,
       )}`,
@@ -926,6 +1061,7 @@ class StreamSession<
     }
     this.activeSocket = null;
     this.openFrameToken = null;
+    this.supportsCredentialUpdate = false;
     this.phase = "idle";
     this.pendingBinaryEnvelope = null;
     this.transitionTo("reconnecting", null);
@@ -996,7 +1132,8 @@ class StreamSession<
     frame:
       | ClientStreamOpenFrame
       | ClientStreamSubscribeFrame
-      | ClientStreamFatalErrorFrame,
+      | ClientStreamFatalErrorFrame
+      | ClientStreamCredentialUpdateFrame,
   ): boolean {
     try {
       socket.send(JSON.stringify(frame));
@@ -1066,6 +1203,50 @@ class StreamSession<
     this.config.onDispose();
     return true;
   }
+}
+
+interface PreparedStreamSubscribeRequest {
+  readonly onWireVersion: SchemaVersion;
+  readonly onWirePayload: unknown;
+}
+
+/**
+ * Computes what the `subscribe` control frame should actually declare on the
+ * wire - the streaming analog of `ws-rpc-client.ts`'s `prepareRequestPayload`.
+ *
+ * `checkStreamMethodCompatibility` already proved `mine`/`theirs` are
+ * bridgeable before this runs. For a same-major minor skew that only ever
+ * means one thing: MY OWN registry carries a contract at the peer's exact
+ * (older) minor - that's what made `canBridgeStream()` return `true`. Per the
+ * framework's asymmetric contract, the older side never transforms, so the
+ * newer side is the one that must downgrade what it declares: sending my own
+ * canonical here would declare a minor the older peer's dispatch table has
+ * never heard of, even though the abstract compatibility check passed (this
+ * is what broke `chat.subscribe@1.1` against host-v1.0.0 - the compat check
+ * passed, but the client still declared `1.1`, which host-v1.0.0's registry
+ * has no contract for). Cross-major skew never reaches here: streams have no
+ * cross-major bridge, so `compat.ok` would already be `false`.
+ */
+function prepareStreamSubscribeRequest(
+  registry: VersionedStreamRpcRegistry,
+  method: string,
+  myCanonical: SchemaVersion,
+  theirCanonical: SchemaVersion,
+  params: unknown,
+): PreparedStreamSubscribeRequest {
+  if (
+    myCanonical.major !== theirCanonical.major ||
+    myCanonical.minor <= theirCanonical.minor
+  ) {
+    return { onWireVersion: myCanonical, onWirePayload: params };
+  }
+  const methodRegistry = registry[method] as StreamMethodVersionRegistry;
+  const olderLine = methodRegistry[myCanonical.major];
+  const olderEntry = olderLine.versions[theirCanonical.minor];
+  return {
+    onWireVersion: theirCanonical,
+    onWirePayload: olderEntry.contract.openRequestSchema.parse(params),
+  };
 }
 
 type SessionPhase = "idle" | "dialing" | "awaitingOpenAck" | "subscribed";

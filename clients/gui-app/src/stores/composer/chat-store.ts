@@ -16,15 +16,18 @@ import type {
 import type {
   AgentMessageSend,
   ArtifactOperationAction,
+  BackgroundTaskOutput,
   ContentBlock,
   DiffSource,
   FileEditReason,
   PlanAction,
   PlanContentRef,
+  AutonomousResumeTrigger,
   PlanSource,
   PlanStatus,
   PlanStep,
   ToolInputDetail,
+  WorkflowMeta,
 } from "@traycer/protocol/persistence/epic/content-blocks";
 import type { ParsedTaskTodo } from "@traycer/protocol/host/agent/gui/task-todo-tools";
 
@@ -104,22 +107,37 @@ export interface ToolSegment {
   isStreaming: boolean;
   // Terminal outcome when the turn ended mid-flight (else null). See SegmentEndState.
   endState: SegmentEndState;
+  // True when `status === "errored"` was an explicit stop (deadline-killed
+  // Monitor, user-stopped command) rather than a genuine failure. Drives a
+  // neutral "stopped" badge in place of the destructive error treatment.
+  stopped: boolean;
   // Latest intermediate progress line for an in-flight call (replace-latest;
   // null when the harness reports none). Shown only while streaming.
   progress: string | null;
-  // Wall-clock start of the call (block timestamp; stays anchored while
-  // streaming since progress events don't advance it). Drives the elapsed
-  // heartbeat shown while the call runs.
+  // Capped terminal output from a backgrounded command/monitor once it settles.
+  backgroundOutput: BackgroundTaskOutput | null;
+  // Persistent: true for a backgrounded command/Monitor (Bash run_in_background
+  // or the Monitor tool). Drives standalone-card promotion across the whole
+  // lifecycle - running -> completed/stopped/errored -> reload - so it never
+  // collapses back into the generic activity group. `null` means "not yet
+  // known" (mid-stream, before the classifier has seen enough input) -
+  // consumers treat it like `false` (no promotion) without treating it as a
+  // confirmed negative.
+  backgroundTask: boolean | null;
+  // Wall-clock start of the call. Drives the elapsed heartbeat while running.
   startedAt: number;
+  // Completed background command/Monitor duration; null while streaming, for
+  // non-background tools, or when persisted data predates immutable tool start.
+  durationMs: number | null;
   // Owning subagent block id when this call was made by a subagent (nests under
   // that subagent block). Null for top-level / main-agent tool calls.
   parentId: string | null;
 }
 
+// Recursive: a subagent's own children can themselves be nested subagent
+// cards (any spawn depth), not just their tool/file_change/command activity.
 export type SubagentChildSegment =
-  | ToolSegment
-  | FileChangeSegment
-  | CommandSegment;
+  ToolSegment | FileChangeSegment | CommandSegment | SubagentSegment;
 
 export interface ReasoningSegment {
   id: string;
@@ -163,6 +181,10 @@ export interface SubagentSegment {
   isStreaming: boolean;
   // Terminal outcome when the turn ended mid-flight (else null). See SegmentEndState.
   endState: SegmentEndState;
+  // True when `status === "errored"` was an explicit stop rather than a
+  // genuine failure - mirrors ToolSegment.stopped. Drives a neutral "stopped"
+  // badge in place of the destructive error treatment.
+  stopped: boolean;
   // Immutable spawn time, driving the live elapsed heartbeat on the card while
   // running. Null for blocks persisted before this field existed.
   startedAt: number | null;
@@ -174,8 +196,19 @@ export interface SubagentSegment {
   // builder drops the matching top-level tool segment so the card is the sole
   // representation. Null for harnesses that emit no separate spawn tool call.
   spawnToolCallId: string | null;
-  // The subagent's own activity (tool calls + file changes) nested under this
-  // block, keyed off each child segment's `parentId === this.id`.
+  // Owning subagent block id when this agent was itself spawned by another
+  // agent (nests under that parent's card, any depth). Null for a top-level
+  // agent.
+  parentId: string | null;
+  // Present iff this card is a workflow run's dual-written card - the rich
+  // fleet data (intent, activity timeline, fleet counts, tokens) an old reader
+  // can't render. Null for an ordinary agent card.
+  workflowMeta: WorkflowMeta | null;
+  // The subagent's own activity nested under this block, keyed off each child
+  // segment's `parentId === this.id` - tool calls, file changes, commands, AND
+  // nested agent cards (any depth). Only the `subagent`-kind entries render
+  // (the "Sub-agents" section); the rest ride along for spawn-tool-call
+  // suppression.
   children: ReadonlyArray<SubagentChildSegment>;
 }
 
@@ -296,6 +329,11 @@ export type MessageSegment =
       durationMs: number | null;
       summary: string | null;
       error: string | null;
+    }
+  | {
+      id: string;
+      kind: "autonomous_resume";
+      triggers: ReadonlyArray<AutonomousResumeTrigger>;
     }
   | InterviewSegment
   | {

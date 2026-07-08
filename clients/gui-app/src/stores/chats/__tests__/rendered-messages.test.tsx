@@ -19,7 +19,10 @@ import {
   type RenderedMessagesDisplayContext,
   type RenderedMessagesInput,
 } from "@/stores/chats/rendered-messages";
-import type { SubagentSegment } from "@/stores/composer/chat-store";
+import type {
+  SubagentSegment,
+  ToolSegment,
+} from "@/stores/composer/chat-store";
 import { deriveToolInputDetail } from "@traycer/protocol/host/agent/gui/tool-input-detail";
 import { deriveToolInputSummary } from "@traycer/protocol/host/agent/gui/tool-input-summary";
 import {
@@ -737,6 +740,7 @@ describe("useRenderedMessages", () => {
         codexTurnId: "turn-1",
         codexUserMessageId: "codex-user-1",
         createdAt: 1000,
+        coveredUntilMessageId: null,
       },
     };
 
@@ -1412,8 +1416,13 @@ describe("useRenderedMessages", () => {
           error: null,
           agentMessageSend: null,
           progress: null,
+          backgroundOutput: null,
+          backgroundTask: false,
+          stopped: false,
           status: "completed",
           timestamp: 2002,
+          startedAt: 2002,
+          endedAt: 2002,
         },
         {
           type: "command",
@@ -1449,6 +1458,283 @@ describe("useRenderedMessages", () => {
     ]);
   });
 
+  it("drops a resume trigger whose blockId is the immediately preceding tool segment", () => {
+    const assistant: Message = {
+      ...assistantMessage("turn-1", 2000),
+      blocks: [
+        {
+          type: "tool_call",
+          blockId: "tool-1",
+          toolName: "Bash",
+          ...toolCallInputFields("Bash", { command: "bun run compile" }),
+          error: null,
+          agentMessageSend: null,
+          progress: null,
+          backgroundOutput: null,
+          backgroundTask: true,
+          stopped: false,
+          status: "completed",
+          timestamp: 2002,
+          startedAt: 2002,
+          endedAt: 2002,
+        },
+        {
+          type: "autonomous_resume",
+          blockId: "resume-1",
+          status: "completed",
+          timestamp: 2003,
+          triggers: [
+            {
+              kind: "command",
+              title: "bun run compile",
+              status: "completed",
+              summary: "Command finished",
+              blockId: "tool-1",
+              outputFile: null,
+            },
+          ],
+        },
+        {
+          type: "text",
+          blockId: "text-1",
+          text: "Now let's type-check.",
+          status: "completed",
+          timestamp: 2004,
+        },
+      ],
+    };
+
+    const { result } = renderHook(() =>
+      useRenderedMessages(
+        {
+          messages: [assistant],
+          events: [],
+          pendingUserMessages: [],
+          liveAssistantMessage: null,
+          activeTurn: null,
+          runStatus: "idle",
+          ...BINDING,
+        },
+        displayContext,
+      ),
+    );
+
+    expect(result.current[0]?.segments.map((segment) => segment.kind)).toEqual([
+      "tool",
+      "text",
+    ]);
+  });
+
+  it("keeps a wakeup resume trigger even when its blockId is the immediately preceding tool segment", () => {
+    const assistant: Message = {
+      ...assistantMessage("turn-1", 2000),
+      blocks: [
+        {
+          type: "tool_call",
+          blockId: "wake-tool",
+          toolName: "ScheduleWakeup",
+          ...toolCallInputFields("ScheduleWakeup", {
+            reason: "Review the deployment",
+            prompt: "Check the health dashboard.",
+          }),
+          error: null,
+          agentMessageSend: null,
+          progress: null,
+          backgroundOutput: null,
+          backgroundTask: false,
+          stopped: false,
+          status: "completed",
+          timestamp: 2002,
+          startedAt: 2002,
+          endedAt: 2002,
+        },
+        {
+          type: "autonomous_resume",
+          blockId: "resume-1",
+          status: "completed",
+          timestamp: 2003,
+          triggers: [
+            {
+              kind: "wakeup",
+              title: "Review the deployment",
+              status: "completed",
+              summary: "Check the health dashboard.",
+              blockId: "wake-tool",
+              outputFile: null,
+            },
+          ],
+        },
+      ],
+    };
+
+    const { result } = renderHook(() =>
+      useRenderedMessages(
+        {
+          messages: [assistant],
+          events: [],
+          pendingUserMessages: [],
+          liveAssistantMessage: null,
+          activeTurn: null,
+          runStatus: "idle",
+          ...BINDING,
+        },
+        displayContext,
+      ),
+    );
+
+    expect(result.current[0]?.segments.map((segment) => segment.kind)).toEqual([
+      "tool",
+      "autonomous_resume",
+    ]);
+  });
+
+  it("keeps a resume trigger whose blockId is not the immediately preceding segment", () => {
+    const assistant: Message = {
+      ...assistantMessage("turn-1", 2000),
+      blocks: [
+        {
+          type: "tool_call",
+          blockId: "tool-1",
+          toolName: "Bash",
+          ...toolCallInputFields("Bash", { command: "bun run compile" }),
+          error: null,
+          agentMessageSend: null,
+          progress: null,
+          backgroundOutput: null,
+          backgroundTask: true,
+          stopped: false,
+          status: "completed",
+          timestamp: 2002,
+          startedAt: 2002,
+          endedAt: 2002,
+        },
+        {
+          type: "text",
+          blockId: "text-1",
+          text: "Now let's also check this other thing.",
+          status: "completed",
+          timestamp: 2003,
+        },
+        {
+          type: "autonomous_resume",
+          blockId: "resume-1",
+          status: "completed",
+          timestamp: 2004,
+          triggers: [
+            {
+              kind: "command",
+              title: "bun run compile",
+              status: "completed",
+              summary: "Command finished",
+              blockId: "tool-1",
+              outputFile: null,
+            },
+          ],
+        },
+      ],
+    };
+
+    const { result } = renderHook(() =>
+      useRenderedMessages(
+        {
+          messages: [assistant],
+          events: [],
+          pendingUserMessages: [],
+          liveAssistantMessage: null,
+          activeTurn: null,
+          runStatus: "idle",
+          ...BINDING,
+        },
+        displayContext,
+      ),
+    );
+
+    expect(result.current[0]?.segments.map((segment) => segment.kind)).toEqual([
+      "tool",
+      "text",
+      "autonomous_resume",
+    ]);
+  });
+
+  it("drops a resume trigger for a subagent whose last raw child segment differs from the visible parent card", () => {
+    const assistant: Message = {
+      ...assistantMessage("turn-1", 2000),
+      blocks: [
+        {
+          type: "subagent",
+          agentType: null,
+          blockId: "agent-1",
+          name: "Investigate lifecycle",
+          task: "Investigate the lifecycle.",
+          progressUpdates: [],
+          result: "Done.",
+          status: "completed",
+          timestamp: 2001,
+          startedAt: 2000,
+          spawnToolCallId: null,
+          stopped: false,
+          workflowMeta: null,
+        },
+        {
+          type: "tool_call",
+          blockId: "child-tool-1",
+          parentBlockId: "agent-1",
+          toolName: "read_file",
+          ...toolCallInputFields("read_file", { path: "/repo/src/app.ts" }),
+          error: null,
+          agentMessageSend: null,
+          progress: null,
+          backgroundOutput: null,
+          backgroundTask: false,
+          stopped: false,
+          status: "completed",
+          timestamp: 2002,
+          startedAt: 2002,
+          endedAt: 2002,
+        },
+        {
+          // The resume trigger's blockId targets the subagent itself, but in
+          // raw block order the immediately preceding block is the child tool
+          // call nested under it - the scenario suppressRedundantResumeMarkers
+          // must catch by comparing against the visible (post-nesting) order.
+          type: "autonomous_resume",
+          blockId: "resume-1",
+          status: "completed",
+          timestamp: 2003,
+          triggers: [
+            {
+              kind: "subagent",
+              title: "Investigate lifecycle",
+              status: "completed",
+              summary: "Subagent finished",
+              blockId: "agent-1",
+              outputFile: null,
+            },
+          ],
+        },
+      ],
+    };
+
+    const { result } = renderHook(() =>
+      useRenderedMessages(
+        {
+          messages: [assistant],
+          events: [],
+          pendingUserMessages: [],
+          liveAssistantMessage: null,
+          activeTurn: null,
+          runStatus: "idle",
+          ...BINDING,
+        },
+        displayContext,
+      ),
+    );
+
+    expect(result.current[0]?.segments.map((segment) => segment.kind)).toEqual([
+      "subagent",
+    ]);
+  });
+
   it("drops prompt-less subagent blocks from background command tasks", () => {
     const assistant: Message = {
       ...assistantMessage("turn-1", 2000),
@@ -1465,6 +1751,8 @@ describe("useRenderedMessages", () => {
           timestamp: 2001,
           startedAt: 2001,
           spawnToolCallId: null,
+          stopped: false,
+          workflowMeta: null,
         },
         {
           type: "subagent",
@@ -1478,6 +1766,8 @@ describe("useRenderedMessages", () => {
           timestamp: 2002,
           startedAt: 2002,
           spawnToolCallId: null,
+          stopped: false,
+          workflowMeta: null,
         },
       ],
     };
@@ -1521,8 +1811,13 @@ describe("useRenderedMessages", () => {
           error: null,
           agentMessageSend: null,
           progress: null,
+          backgroundOutput: null,
+          backgroundTask: false,
+          stopped: false,
           status: "streaming",
           timestamp: 2001,
+          startedAt: 2001,
+          endedAt: null,
         },
         {
           type: "subagent",
@@ -1536,6 +1831,8 @@ describe("useRenderedMessages", () => {
           timestamp: 2002,
           startedAt: 2001,
           spawnToolCallId: "toolu_1",
+          stopped: false,
+          workflowMeta: null,
         },
       ],
     };
@@ -1583,6 +1880,8 @@ describe("useRenderedMessages", () => {
           timestamp: 5000,
           startedAt: 2000,
           spawnToolCallId: null,
+          stopped: false,
+          workflowMeta: null,
         },
         {
           type: "subagent",
@@ -1596,6 +1895,8 @@ describe("useRenderedMessages", () => {
           timestamp: 9000,
           startedAt: 2000,
           spawnToolCallId: null,
+          stopped: false,
+          workflowMeta: null,
         },
       ],
     };
@@ -1629,6 +1930,148 @@ describe("useRenderedMessages", () => {
     expect(interrupted?.durationMs).toBeNull();
   });
 
+  it("computes background tool durationMs only from explicit start and end", () => {
+    const assistant: Message = {
+      ...assistantMessage("turn-1", 2000),
+      blocks: [
+        {
+          type: "tool_call",
+          blockId: "background-done",
+          status: "completed",
+          timestamp: 6_000,
+          toolName: "Bash",
+          ...toolCallInputFields("Bash", {
+            command: "sleep 60",
+            run_in_background: true,
+          }),
+          error: null,
+          agentMessageSend: null,
+          progress: null,
+          backgroundOutput: { stdout: "", stderr: "", truncated: false },
+          backgroundTask: true,
+          stopped: false,
+          startedAt: 5_000,
+          endedAt: 70_000,
+        },
+        {
+          type: "tool_call",
+          blockId: "background-old",
+          status: "completed",
+          timestamp: 5000,
+          toolName: "Bash",
+          ...toolCallInputFields("Bash", {
+            command: "true",
+            run_in_background: true,
+          }),
+          error: null,
+          agentMessageSend: null,
+          progress: null,
+          backgroundOutput: { stdout: "", stderr: "", truncated: false },
+          backgroundTask: true,
+          stopped: false,
+          startedAt: null,
+          endedAt: 70_000,
+        },
+        {
+          type: "tool_call",
+          blockId: "background-stopped",
+          status: "errored",
+          timestamp: 70_000,
+          toolName: "Bash",
+          ...toolCallInputFields("Bash", {
+            command: "sleep 60",
+            run_in_background: true,
+          }),
+          error: "stopped: user requested stop",
+          agentMessageSend: null,
+          progress: null,
+          backgroundOutput: null,
+          backgroundTask: true,
+          // Modeling a block persisted before `stopped` existed - the legacy
+          // string-prefix error is the only signal, parsed false per the
+          // schema default. Exercises the GUI's fallback sniff.
+          stopped: false,
+          startedAt: 5_000,
+          endedAt: 70_000,
+        },
+        {
+          type: "tool_call",
+          blockId: "background-failed",
+          status: "errored",
+          timestamp: 67_000,
+          toolName: "Bash",
+          ...toolCallInputFields("Bash", {
+            command: "sleep 60",
+            run_in_background: true,
+          }),
+          error: "failed: command exited with code 1",
+          agentMessageSend: null,
+          progress: null,
+          backgroundOutput: null,
+          backgroundTask: true,
+          stopped: false,
+          startedAt: 5_000,
+          endedAt: 67_000,
+        },
+        {
+          type: "tool_call",
+          blockId: "regular-tool",
+          status: "completed",
+          timestamp: 5000,
+          toolName: "Bash",
+          ...toolCallInputFields("Bash", { command: "pwd" }),
+          error: null,
+          agentMessageSend: null,
+          progress: null,
+          backgroundOutput: null,
+          backgroundTask: false,
+          stopped: false,
+          startedAt: 2000,
+          endedAt: 5000,
+        },
+      ],
+    };
+
+    const { result } = renderHook(() =>
+      useRenderedMessages(
+        {
+          messages: [assistant],
+          events: [],
+          pendingUserMessages: [],
+          liveAssistantMessage: null,
+          activeTurn: null,
+          runStatus: "running",
+          ...BINDING,
+        },
+        displayContext,
+      ),
+    );
+
+    const tools = (result.current[0]?.segments ?? []).filter(
+      (segment): segment is ToolSegment => segment.kind === "tool",
+    );
+    const backgroundDone = tools.find(
+      (segment) => segment.id === "background-done",
+    );
+    const backgroundOld = tools.find(
+      (segment) => segment.id === "background-old",
+    );
+    const backgroundStopped = tools.find(
+      (segment) => segment.id === "background-stopped",
+    );
+    const backgroundFailed = tools.find(
+      (segment) => segment.id === "background-failed",
+    );
+    const regularTool = tools.find((segment) => segment.id === "regular-tool");
+
+    expect(backgroundDone?.startedAt).toBe(5_000);
+    expect(backgroundDone?.durationMs).toBe(65_000);
+    expect(backgroundOld?.durationMs).toBeNull();
+    expect(backgroundStopped?.durationMs).toBe(65_000);
+    expect(backgroundFailed?.durationMs).toBe(62_000);
+    expect(regularTool?.durationMs).toBeNull();
+  });
+
   it("nests a subagent's command under its block via parentBlockId", () => {
     const assistant: Message = {
       ...assistantMessage("turn-1", 2000),
@@ -1645,6 +2088,8 @@ describe("useRenderedMessages", () => {
           timestamp: 2001,
           startedAt: 2001,
           spawnToolCallId: null,
+          stopped: false,
+          workflowMeta: null,
         },
         {
           type: "command",
@@ -1687,6 +2132,377 @@ describe("useRenderedMessages", () => {
       throw new Error("expected a command child");
     }
     expect(child.command).toBe("rg TODO");
+  });
+
+  it("folds a depth-3 nested subagent chain via parentBlockId", () => {
+    const assistant: Message = {
+      ...assistantMessage("turn-1", 2000),
+      blocks: [
+        {
+          type: "subagent",
+          agentType: null,
+          blockId: "agent-1",
+          name: "root",
+          task: "Plan the refactor.",
+          progressUpdates: [],
+          result: null,
+          status: "streaming",
+          timestamp: 2001,
+          startedAt: 2001,
+          spawnToolCallId: null,
+          stopped: false,
+          workflowMeta: null,
+        },
+        {
+          type: "subagent",
+          agentType: null,
+          blockId: "agent-2",
+          name: "mid",
+          task: "Sweep call sites.",
+          progressUpdates: [],
+          result: null,
+          status: "streaming",
+          timestamp: 2002,
+          startedAt: 2002,
+          spawnToolCallId: null,
+          stopped: false,
+          workflowMeta: null,
+          parentBlockId: "agent-1",
+        },
+        {
+          type: "subagent",
+          agentType: null,
+          blockId: "agent-3",
+          name: "leaf",
+          task: "Check fixtures.",
+          progressUpdates: [],
+          result: "All good.",
+          status: "completed",
+          timestamp: 2003,
+          startedAt: 2003,
+          spawnToolCallId: null,
+          stopped: false,
+          workflowMeta: null,
+          parentBlockId: "agent-2",
+        },
+      ],
+    };
+
+    const { result } = renderHook(() =>
+      useRenderedMessages(
+        {
+          messages: [assistant],
+          events: [],
+          pendingUserMessages: [],
+          liveAssistantMessage: null,
+          activeTurn: null,
+          runStatus: "idle",
+          ...BINDING,
+        },
+        displayContext,
+      ),
+    );
+
+    const top = result.current[0]?.segments ?? [];
+    expect(top.map((segment) => segment.kind)).toEqual(["subagent"]);
+    const root = top[0];
+    if (root.kind !== "subagent") {
+      throw new Error("expected a subagent segment");
+    }
+    expect(root.id).toBe("agent-1");
+    expect(root.children.map((child) => child.id)).toEqual(["agent-2"]);
+    const mid = root.children[0];
+    if (mid.kind !== "subagent") {
+      throw new Error("expected a nested subagent segment");
+    }
+    expect(mid.children.map((child) => child.id)).toEqual(["agent-3"]);
+    const leaf = mid.children[0];
+    if (leaf.kind !== "subagent") {
+      throw new Error("expected a nested subagent segment");
+    }
+    expect(leaf.result).toBe("All good.");
+    expect(leaf.children).toEqual([]);
+  });
+
+  it("keeps a nested subagent top-level when its parentBlockId doesn't resolve", () => {
+    const assistant: Message = {
+      ...assistantMessage("turn-1", 2000),
+      blocks: [
+        {
+          type: "subagent",
+          agentType: null,
+          blockId: "agent-1",
+          name: "root",
+          task: "Plan the refactor.",
+          progressUpdates: [],
+          result: null,
+          status: "streaming",
+          timestamp: 2001,
+          startedAt: 2001,
+          spawnToolCallId: null,
+          stopped: false,
+          workflowMeta: null,
+        },
+        {
+          type: "subagent",
+          agentType: null,
+          blockId: "agent-orphan",
+          name: "orphan",
+          task: "Investigate stray work.",
+          progressUpdates: [],
+          result: null,
+          status: "streaming",
+          timestamp: 2002,
+          startedAt: 2002,
+          spawnToolCallId: null,
+          stopped: false,
+          workflowMeta: null,
+          // References a parent id never present in this turn's blocks (the
+          // owning subagent.started was dropped/never arrived) - the fallback
+          // is honest top-level placement, never vanishing or misattaching.
+          parentBlockId: "agent-missing",
+        },
+      ],
+    };
+
+    const { result } = renderHook(() =>
+      useRenderedMessages(
+        {
+          messages: [assistant],
+          events: [],
+          pendingUserMessages: [],
+          liveAssistantMessage: null,
+          activeTurn: null,
+          runStatus: "idle",
+          ...BINDING,
+        },
+        displayContext,
+      ),
+    );
+
+    const top = result.current[0]?.segments ?? [];
+    expect(top.map((segment) => segment.kind)).toEqual([
+      "subagent",
+      "subagent",
+    ]);
+    expect(top.map((segment) => segment.id)).toEqual([
+      "agent-1",
+      "agent-orphan",
+    ]);
+    const root = top[0];
+    if (root.kind !== "subagent") {
+      throw new Error("expected a subagent segment");
+    }
+    expect(root.children).toEqual([]);
+  });
+
+  it("keeps a nested child attached across a parent name re-emit", () => {
+    // `timestamp` must advance with the rename, exactly as a real host re-emit
+    // always bumps it - otherwise the per-turn render cache (keyed on each
+    // block's blockId/type/status/timestamp) reuses the stale model and the
+    // test would pass or fail for the wrong reason.
+    const buildAssistant = (
+      parentName: string,
+      timestamp: number,
+    ): Message => ({
+      ...assistantMessage("turn-1", 2000),
+      blocks: [
+        {
+          type: "subagent",
+          agentType: null,
+          blockId: "agent-1",
+          name: parentName,
+          task: "Plan the refactor.",
+          progressUpdates: [],
+          result: null,
+          status: "streaming",
+          timestamp,
+          startedAt: 2001,
+          spawnToolCallId: null,
+          stopped: false,
+          workflowMeta: null,
+        },
+        {
+          type: "subagent",
+          agentType: null,
+          blockId: "agent-2",
+          name: "child",
+          task: "Sweep call sites.",
+          progressUpdates: [],
+          result: null,
+          status: "streaming",
+          timestamp: 2002,
+          startedAt: 2002,
+          spawnToolCallId: null,
+          stopped: false,
+          workflowMeta: null,
+          parentBlockId: "agent-1",
+        },
+      ],
+    });
+    const inputFor = (
+      parentName: string,
+      timestamp: number,
+    ): RenderedMessagesInput => ({
+      messages: [buildAssistant(parentName, timestamp)],
+      events: [],
+      pendingUserMessages: [],
+      liveAssistantMessage: null,
+      activeTurn: null,
+      runStatus: "idle",
+      ...BINDING,
+    });
+
+    const { result, rerender } = renderHook(
+      ({ value }: { value: RenderedMessagesInput }) =>
+        useRenderedMessages(value, displayContext),
+      { initialProps: { value: inputFor("root", 2001) } },
+    );
+
+    const before = result.current[0]?.segments ?? [];
+    expect(before.map((segment) => segment.kind)).toEqual(["subagent"]);
+
+    rerender({ value: inputFor("root (renamed)", 2005) });
+
+    const after = result.current[0]?.segments ?? [];
+    expect(after.map((segment) => segment.kind)).toEqual(["subagent"]);
+    const root = after[0];
+    if (root.kind !== "subagent") {
+      throw new Error("expected a subagent segment");
+    }
+    expect(root.name).toBe("root (renamed)");
+    expect(root.children.map((child) => child.id)).toEqual(["agent-2"]);
+  });
+
+  it("builds the workflow card model from a workflowMeta-bearing subagent block, suppressing its spawn tool row", () => {
+    const assistant: Message = {
+      ...assistantMessage("turn-1", 2000),
+      blocks: [
+        {
+          type: "tool_call",
+          blockId: "toolu_workflow",
+          toolName: "Workflow",
+          ...toolCallInputFields("Workflow", { script: "..." }),
+          error: null,
+          agentMessageSend: null,
+          progress: null,
+          backgroundOutput: null,
+          backgroundTask: false,
+          stopped: false,
+          status: "completed",
+          timestamp: 2000,
+          startedAt: 2000,
+          endedAt: 2000,
+        },
+        {
+          type: "subagent",
+          agentType: null,
+          blockId: "workflow-1",
+          name: "max-effort-review",
+          task: "Max-effort review of the refusal-handling changeset",
+          progressUpdates: ["Phase: Find", "find:host-core"],
+          result: null,
+          status: "streaming",
+          timestamp: 2001,
+          startedAt: 2001,
+          spawnToolCallId: "toolu_workflow",
+          stopped: false,
+          workflowMeta: {
+            name: "max-effort-review",
+            intent: "Max-effort review of the refusal-handling changeset",
+            activity: [
+              { kind: "phase", text: "Phase — Find (16 agents)" },
+              { kind: "label", text: "find:host-core" },
+            ],
+            agentsStarted: 16,
+            agentsFinished: 3,
+            totalTokens: 412_000,
+          },
+        },
+      ],
+    };
+
+    const { result } = renderHook(() =>
+      useRenderedMessages(
+        {
+          messages: [assistant],
+          events: [],
+          pendingUserMessages: [],
+          liveAssistantMessage: null,
+          activeTurn: null,
+          runStatus: "running",
+          ...BINDING,
+        },
+        displayContext,
+      ),
+    );
+
+    const segments = result.current[0]?.segments ?? [];
+    const workflow = segments.find((segment) => segment.kind === "subagent");
+    if (workflow === undefined) {
+      throw new Error("expected a subagent segment");
+    }
+    expect(workflow.workflowMeta).not.toBeNull();
+    expect(workflow.workflowMeta?.agentsStarted).toBe(16);
+    expect(workflow.workflowMeta?.agentsFinished).toBe(3);
+    expect(workflow.workflowMeta?.totalTokens).toBe(412_000);
+    expect(workflow.workflowMeta?.activity).toEqual([
+      { kind: "phase", text: "Phase — Find (16 agents)" },
+      { kind: "label", text: "find:host-core" },
+    ]);
+    // The spawning Workflow tool call is suppressed via spawnToolCallId - the
+    // same policy the plain subagent card already uses.
+    expect(
+      segments.some(
+        (segment) => segment.kind === "tool" && segment.id === "toolu_workflow",
+      ),
+    ).toBe(false);
+  });
+
+  it("leaves a plain subagent block's workflowMeta null", () => {
+    const assistant: Message = {
+      ...assistantMessage("turn-1", 2000),
+      blocks: [
+        {
+          type: "subagent",
+          agentType: null,
+          blockId: "agent-1",
+          name: "explorer",
+          task: "Investigate the bug.",
+          progressUpdates: [],
+          result: null,
+          status: "streaming",
+          timestamp: 2001,
+          startedAt: 2001,
+          spawnToolCallId: null,
+          stopped: false,
+          workflowMeta: null,
+        },
+      ],
+    };
+
+    const { result } = renderHook(() =>
+      useRenderedMessages(
+        {
+          messages: [assistant],
+          events: [],
+          pendingUserMessages: [],
+          liveAssistantMessage: null,
+          activeTurn: null,
+          runStatus: "idle",
+          ...BINDING,
+        },
+        displayContext,
+      ),
+    );
+
+    const segment = (result.current[0]?.segments ?? []).find(
+      (candidate) => candidate.kind === "subagent",
+    );
+    if (segment === undefined) {
+      throw new Error("expected a subagent segment");
+    }
+    expect(segment.workflowMeta).toBeNull();
   });
 
   it("drops the live assistant when the persisted assistant for the same turn exists", () => {
@@ -2276,8 +3092,13 @@ describe("useRenderedMessages", () => {
           error: null,
           agentMessageSend: null,
           progress: null,
+          backgroundOutput: null,
+          backgroundTask: false,
+          stopped: false,
           status: "completed",
           timestamp: 2001,
+          startedAt: 2001,
+          endedAt: 2001,
         },
         {
           type: "file_change",
@@ -2335,8 +3156,13 @@ describe("useRenderedMessages", () => {
           error: "Permission denied by user",
           agentMessageSend: null,
           progress: null,
+          backgroundOutput: null,
+          backgroundTask: false,
+          stopped: false,
           status: "errored",
           timestamp: 2001,
+          startedAt: 2001,
+          endedAt: 2001,
         },
         {
           type: "file_change",

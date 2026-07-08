@@ -49,7 +49,12 @@ export function buildHostLogsCommand(args: HostLogsArgs): CommandFn {
     // terminal event.
     if (ctx.runtime.json) {
       return {
-        data: { path, tail: tailContent, follow: false, reason: "json-mode-no-follow" },
+        data: {
+          path,
+          tail: tailContent,
+          follow: false,
+          reason: "json-mode-no-follow",
+        },
         human: null,
         exitCode: 0,
       };

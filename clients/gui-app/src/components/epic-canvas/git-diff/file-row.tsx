@@ -23,6 +23,7 @@ export interface FileRowProps {
   readonly active: boolean;
   /** Filter match ranges into `file.path`; empty when no filter is active. */
   readonly pathRanges: HighlightRanges;
+  readonly nested: boolean;
 }
 
 export function FileRow(props: FileRowProps): ReactNode {
@@ -80,6 +81,7 @@ export function FileRow(props: FileRowProps): ReactNode {
           onClick={onClick}
           onDoubleClick={onDoubleClick}
           ariaExpanded={undefined}
+          nested={props.nested}
           className={undefined}
         />
       </div>

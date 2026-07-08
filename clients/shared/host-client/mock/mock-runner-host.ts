@@ -1,7 +1,11 @@
 import type { Disposable } from "../../platform/uri-callback";
 import type {
-  AuthCallbackResult,
+  AuthTokenRefreshResult,
   AuthTokenValidationResult,
+  DeviceFlowAuthorization,
+  DeviceFlowResult,
+  DeviceFlowSession,
+  IDeviceFlowHost,
   IHostPicker,
   IHostManagement,
   INotificationHost,
@@ -22,6 +26,7 @@ import type {
   TrayIndicatorState,
 } from "../../platform/runner-host";
 import {
+  refreshAuthTokenViaHttp,
   validateAuthTokenIdentityViaHttp,
   validateAuthTokenViaHttp,
 } from "../../auth/auth-validation";
@@ -78,9 +83,7 @@ export class MockRunnerHost implements IRunnerHost {
   workspaceFolderPickerPaths: readonly string[];
   hosts: readonly HostDirectoryEntry[];
 
-  private readonly authCallbackHandlers = new Set<
-    (result: AuthCallbackResult) => void
-  >();
+  private readonly authCallbackHandlers = new Set<() => void>();
   private readonly localHostHandlers = new Set<
     (snapshot: LocalHostSnapshot | null) => void
   >();
@@ -115,6 +118,8 @@ export class MockRunnerHost implements IRunnerHost {
   readonly migration: null = null;
   readonly hostManagement: IHostManagement | null;
   readonly hostTray: null = null;
+  readonly zoom: null = null;
+  readonly deviceFlow: MockDeviceFlowHost = new MockDeviceFlowHost();
 
   /**
    * Test/dev counter - how many times `beginAuthAttempt()` has been invoked.
@@ -169,19 +174,11 @@ export class MockRunnerHost implements IRunnerHost {
     );
   }
 
-  /** Last (code, verifier) passed to exchangeAuthCode, for test assertions. */
-  lastExchange: { code: string; codeVerifier: string } | null = null;
-
-  async exchangeAuthCode(
-    code: string,
-    codeVerifier: string,
-  ): Promise<StoredAuthTokens | null> {
-    this.lastExchange = { code, codeVerifier };
-    // Deterministic test double: treat the code as the bearer so a test that
-    // emits `{ code: "X" }` ends up signed in with token "X" (the same shape
-    // the pre-PKCE `{ token: "X" }` callback produced). The real HTTP exchange
-    // is covered by the shared/authn tests.
-    return { token: code, refreshToken: `${code}-refresh` };
+  refreshAuthToken(
+    token: string,
+    refreshToken: string,
+  ): Promise<AuthTokenRefreshResult> {
+    return refreshAuthTokenViaHttp(this.authnBaseUrl, token, refreshToken);
   }
 
   async openExternalLink(url: string): Promise<void> {
@@ -203,7 +200,7 @@ export class MockRunnerHost implements IRunnerHost {
     // No-op: no OS settings pane in the in-memory host.
   }
 
-  onAuthCallback(handler: (result: AuthCallbackResult) => void): Disposable {
+  onAuthCallback(handler: () => void): Disposable {
     this.authCallbackHandlers.add(handler);
     return {
       dispose: () => {
@@ -283,11 +280,14 @@ export class MockRunnerHost implements IRunnerHost {
 
   // ---- Test/dev helpers (not part of IRunnerHost) ---------------------- //
 
-  // Test convenience: `refreshToken` defaults so existing `{ token }` call sites
-  // stay valid while the real `AuthCallbackResult` requires both fields.
-  emitAuthCallback(result: AuthCallbackResult): void {
+  /**
+   * Fires the payload-free browser-return signal to every `onAuthCallback`
+   * subscriber, modelling the shell delivering the `traycer://` deep link when
+   * the user comes back from the device-approval tab.
+   */
+  emitAuthCallback(): void {
     for (const handler of this.authCallbackHandlers) {
-      handler(result);
+      handler();
     }
   }
 
@@ -445,6 +445,106 @@ export class MockTraycerCli implements ITraycerCli {
   async cliLogout(): Promise<void> {
     this.lastLoginToken = null;
     this.lastLoginRefreshToken = null;
+  }
+}
+
+/**
+ * Default `/device/authorize` response handed back by `MockDeviceFlowHost`.
+ * `user_code` is the plan's grouped Crockford shape; the URIs/timings are
+ * representative so progress/expiry UI and timeout scoping can be exercised.
+ */
+const MOCK_DEVICE_AUTHORIZATION: DeviceFlowAuthorization = {
+  userCode: "ABCDE-FGHIJ",
+  verificationUri: "https://app.traycer.ai/device",
+  verificationUriComplete:
+    "https://app.traycer.ai/device?user_code=ABCDE-FGHIJ",
+  expiresInSeconds: 600,
+  intervalSeconds: 5,
+};
+
+/**
+ * In-memory `IDeviceFlowHost`. `start()` hands back a `MockDeviceFlowSession`
+ * carrying `nextAuthorization`; set `nextAuthorization = null` to simulate an
+ * authorize failure (the real shell returns `null` on network/5xx). Tests drive
+ * the terminal outcome with `emitResult(...)` and assert supersede behaviour via
+ * `lastSession.cancelled`.
+ */
+export class MockDeviceFlowHost implements IDeviceFlowHost {
+  startCalls = 0;
+  nextAuthorization: DeviceFlowAuthorization | null = MOCK_DEVICE_AUTHORIZATION;
+  readonly sessions: MockDeviceFlowSession[] = [];
+
+  async start(): Promise<DeviceFlowSession | null> {
+    this.startCalls += 1;
+    if (this.nextAuthorization === null) {
+      return null;
+    }
+    const session = new MockDeviceFlowSession(this.nextAuthorization);
+    this.sessions.push(session);
+    return session;
+  }
+
+  get lastSession(): MockDeviceFlowSession | null {
+    return this.sessions.length === 0
+      ? null
+      : this.sessions[this.sessions.length - 1];
+  }
+
+  /** Test helper: emit the terminal result to the most recent session. */
+  emitResult(result: DeviceFlowResult): void {
+    this.lastSession?.emit(result);
+  }
+}
+
+export class MockDeviceFlowSession implements DeviceFlowSession {
+  readonly authorization: DeviceFlowAuthorization;
+  cancelled = false;
+  /** Test counter: how many times the browser-return nudge poked this poll. */
+  pollNowCalls = 0;
+  // The terminal result is cached for the session's lifetime so every
+  // subscriber - late or repeat - replays it, matching the
+  // `DeviceFlowSession.onResult` contract (the desktop preload caches likewise).
+  private settledResult: DeviceFlowResult | null = null;
+  private readonly handlers = new Set<(result: DeviceFlowResult) => void>();
+
+  constructor(authorization: DeviceFlowAuthorization) {
+    this.authorization = authorization;
+  }
+
+  pollNow(): void {
+    this.pollNowCalls += 1;
+  }
+
+  onResult(handler: (result: DeviceFlowResult) => void): Disposable {
+    // Replay the settled result to a subscription that arrives after the
+    // attempt has already concluded (cached, not consumed - a second
+    // subscriber still sees it).
+    if (this.settledResult !== null) {
+      handler(this.settledResult);
+      return { dispose: () => undefined };
+    }
+    this.handlers.add(handler);
+    return {
+      dispose: () => {
+        this.handlers.delete(handler);
+      },
+    };
+  }
+
+  cancel(): void {
+    this.cancelled = true;
+    this.handlers.clear();
+  }
+
+  emit(result: DeviceFlowResult): void {
+    if (this.cancelled || this.settledResult !== null) {
+      return;
+    }
+    this.settledResult = result;
+    for (const handler of this.handlers) {
+      handler(result);
+    }
+    this.handlers.clear();
   }
 }
 

@@ -4,8 +4,13 @@ import {
   chatSubscribeClientFrameSchema,
   chatSubscribeServerFrameSchema,
   chatSubscribeV10,
+  chatSubscribeV11,
+  chatSubscribeV12,
+  chatSubscribeV13,
+  chatSubscribeV14,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import { getRecordSchema } from "@traycer/protocol/framework/index";
+import { autonomousResumeTriggerSchema } from "@traycer/protocol/persistence/epic/content-blocks";
 import type {
   Chat,
   ChatEvent,
@@ -42,6 +47,7 @@ const chat: Chat = {
   isTitleEditedByUser: false,
   settings: null,
   activeSessionChain: null,
+  claudePendingWakes: [],
   messages: [userMessage],
   events: [],
 };
@@ -62,19 +68,73 @@ const event: ChatEvent = {
   metadata: null,
 };
 
-describe("chat.subscribe@1.0 open request", () => {
+describe("chat.subscribe@1.2 open request", () => {
   it("requires an epicId and chatId", () => {
-    const parsed = chatSubscribeV10.openRequestSchema.parse({
+    const parsed = chatSubscribeV12.openRequestSchema.parse({
       epicId: "epic-1",
       chatId: "chat-1",
     });
 
     expect(parsed).toEqual({ epicId: "epic-1", chatId: "chat-1" });
-    expect(() => chatSubscribeV10.openRequestSchema.parse({})).toThrow();
+    expect(() => chatSubscribeV12.openRequestSchema.parse({})).toThrow();
   });
 });
 
-describe("chat.subscribe@1.0 server frames", () => {
+describe("chat.subscribe@1.0 (frozen host-v1.0.0 shape)", () => {
+  it("parses the actionAck shape host-v1.0.0 actually emits, before background-items existed", () => {
+    expect(
+      chatSubscribeV10.serverFrameSchema.parse({
+        kind: "actionAck",
+        hasBinaryPayload: false,
+        epicId: "epic-1",
+        chatId: "chat-1",
+        clientActionId: "action-1",
+        action: "send",
+        status: "accepted",
+        reason: null,
+        code: null,
+      }),
+    ).toMatchObject({ kind: "actionAck", status: "accepted" });
+  });
+
+  it("does not know the v1.1 background-stop client actions - host-v1.0.0 never learned them", () => {
+    expect(
+      chatSubscribeV10.clientFrameSchema.safeParse({
+        kind: "stopBackgroundItem",
+        hasBinaryPayload: false,
+        epicId: "epic-1",
+        chatId: "chat-1",
+        clientActionId: "action-1",
+        taskId: "task-1",
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe("chat.subscribe@1.1 server frames", () => {
+  it("does not know the v1.2 wakeup background-item kind", () => {
+    expect(
+      chatSubscribeV11.serverFrameSchema.safeParse({
+        kind: "turnStateChanged",
+        hasBinaryPayload: false,
+        epicId: "epic-1",
+        chatId: "chat-1",
+        runStatus: "running",
+        activeTurn: null,
+        backgroundItems: [
+          {
+            taskId: "wake-tool-1",
+            kind: "wakeup",
+            title: "Standup",
+            blockId: "wake-tool-1",
+          },
+        ],
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe("chat.subscribe@1.2 server frames", () => {
   it("parses queued steer-requested items with durable steer metadata", () => {
     const parsed = chatQueuedItemSchema.parse({
       queueItemId: "queue-1",
@@ -162,7 +222,146 @@ describe("chat.subscribe@1.0 server frames", () => {
       expect(parsed.snapshot.pendingApprovals).toHaveLength(1);
       expect(parsed.snapshot.pendingInterviews).toHaveLength(1);
       expect(parsed.snapshot.pendingFileEditApprovals).toHaveLength(1);
+      expect(parsed.snapshot.backgroundItems).toBeUndefined();
     }
+  });
+
+  it("parses background items on snapshots and turn-state deltas", () => {
+    const item = {
+      taskId: "task-1",
+      kind: "command",
+      title: "bun test",
+      blockId: "tool-1",
+    };
+    const wakeupItem = {
+      taskId: "wake-tool-1",
+      kind: "wakeup",
+      title: "Standup",
+      blockId: "wake-tool-1",
+      parentTaskId: null,
+      scheduledFor: 123456,
+    };
+    const snapshot = chatSubscribeServerFrameSchema.parse({
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      snapshot: {
+        chat,
+        access: {
+          role: "owner",
+          ownerUserId: "user-1",
+          canAct: true,
+        },
+        queue: { status: "idle", items: [] },
+        activeTurn: null,
+        runStatus: "idle",
+        pendingApprovals: [],
+        pendingInterviews: [],
+        pendingFileEditApprovals: [],
+        worktreeBinding: null,
+        missingWorktreePaths: [],
+        accumulatedFileChanges: [],
+        backgroundItems: [item, wakeupItem],
+      },
+    });
+    const turnState = chatSubscribeServerFrameSchema.parse({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      runStatus: "running",
+      activeTurn: null,
+      backgroundItems: [item, wakeupItem],
+    });
+
+    expect(snapshot).toMatchObject({
+      kind: "snapshot",
+      snapshot: { backgroundItems: [item, wakeupItem] },
+    });
+    expect(turnState).toMatchObject({
+      kind: "turnStateChanged",
+      backgroundItems: [item, wakeupItem],
+    });
+  });
+
+  it("requires wakeup background items to carry a scheduled timestamp", () => {
+    const wakeupBase = {
+      taskId: "wake-tool-1",
+      kind: "wakeup",
+      title: "Standup",
+      blockId: "wake-tool-1",
+      parentTaskId: null,
+    };
+    const parseResults = [
+      wakeupBase,
+      { ...wakeupBase, scheduledFor: null },
+    ].map((wakeupItem) =>
+      chatSubscribeServerFrameSchema.safeParse({
+        kind: "turnStateChanged",
+        hasBinaryPayload: false,
+        epicId: "epic-1",
+        chatId: "chat-1",
+        runStatus: "running",
+        activeTurn: null,
+        backgroundItems: [wakeupItem],
+      }),
+    );
+
+    expect(parseResults.map((result) => result.success)).toEqual([
+      false,
+      false,
+    ]);
+  });
+
+  it("defaults new background-item metadata when parsing old-host frames", () => {
+    const parsed = chatSubscribeServerFrameSchema.parse({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      runStatus: "running",
+      activeTurn: null,
+      backgroundItems: [
+        {
+          taskId: "task-1",
+          kind: "command",
+          title: "bun test",
+          blockId: "tool-1",
+        },
+      ],
+    });
+
+    expect(parsed).toMatchObject({
+      kind: "turnStateChanged",
+      backgroundItems: [
+        {
+          taskId: "task-1",
+          parentTaskId: null,
+          scheduledFor: null,
+        },
+      ],
+    });
+  });
+
+  it("parses the pinned wakeup autonomous-resume trigger shape", () => {
+    const parsed = autonomousResumeTriggerSchema.parse({
+      kind: "wakeup",
+      title: "Standup",
+      summary: "Write the standup update.",
+      status: "completed",
+      blockId: "wake-tool-1",
+      outputFile: null,
+    });
+
+    expect(parsed).toEqual({
+      kind: "wakeup",
+      title: "Standup",
+      summary: "Write the standup update.",
+      status: "completed",
+      blockId: "wake-tool-1",
+      outputFile: null,
+    });
   });
 
   it("parses action acknowledgements for accepted and rejected owner actions", () => {
@@ -177,6 +376,7 @@ describe("chat.subscribe@1.0 server frames", () => {
         status: "accepted",
         reason: null,
         code: null,
+        backgroundStopTaskIds: [],
       }),
     ).toMatchObject({ kind: "actionAck", status: "accepted" });
 
@@ -191,6 +391,7 @@ describe("chat.subscribe@1.0 server frames", () => {
         status: "rejected",
         reason: "Only the chat owner can stop a turn.",
         code: "NOT_OWNER",
+        backgroundStopTaskIds: [],
       }),
     ).toMatchObject({ kind: "actionAck", status: "rejected" });
 
@@ -205,6 +406,7 @@ describe("chat.subscribe@1.0 server frames", () => {
         status: "accepted",
         reason: null,
         code: null,
+        backgroundStopTaskIds: [],
       }),
     ).toMatchObject({ kind: "actionAck", action: "editUserMessage" });
 
@@ -219,6 +421,7 @@ describe("chat.subscribe@1.0 server frames", () => {
         status: "accepted",
         reason: null,
         code: null,
+        backgroundStopTaskIds: [],
       }),
     ).toMatchObject({ kind: "actionAck", action: "restoreCheckpoint" });
 
@@ -233,11 +436,30 @@ describe("chat.subscribe@1.0 server frames", () => {
         status: "accepted",
         reason: null,
         code: null,
+        backgroundStopTaskIds: [],
       }),
     ).toMatchObject({
       kind: "actionAck",
       action: "fileEditApprovalDecision",
     });
+  });
+
+  it("defaults backgroundStopTaskIds to [] on a chat.subscribe@1.0-shaped ack (host-v1.0.0 never sends it)", () => {
+    expect(
+      chatSubscribeServerFrameSchema.parse({
+        kind: "actionAck",
+        hasBinaryPayload: false,
+        epicId: "epic-1",
+        chatId: "chat-1",
+        clientActionId: "action-1",
+        action: "send",
+        status: "accepted",
+        reason: null,
+        code: null,
+        // backgroundStopTaskIds omitted - the exact shape a chat.subscribe@1.0
+        // host emits, since it predates background-items support entirely.
+      }),
+    ).toMatchObject({ kind: "actionAck", backgroundStopTaskIds: [] });
   });
 
   it("parses durable event and live block delta frames separately", () => {
@@ -392,7 +614,7 @@ describe("chat.subscribe@1.0 server frames", () => {
   });
 });
 
-describe("chat.subscribe@1.0 client frames", () => {
+describe("chat.subscribe@1.3 client frames", () => {
   it("requires clientActionId on owner action frames", () => {
     expect(
       chatSubscribeClientFrameSchema.parse({
@@ -414,6 +636,59 @@ describe("chat.subscribe@1.0 client frames", () => {
         turnId: "turn-1",
       }),
     ).toThrow();
+  });
+
+  it("parses pause queue owner actions", () => {
+    expect(chatSubscribeV13.schemaVersion).toEqual({ major: 1, minor: 3 });
+    expect(
+      chatSubscribeV12.clientFrameSchema.safeParse({
+        kind: "pauseQueue",
+        hasBinaryPayload: false,
+        epicId: "epic-1",
+        chatId: "chat-1",
+        clientActionId: "pause-queue-action-1",
+      }).success,
+    ).toBe(false);
+    expect(
+      chatSubscribeClientFrameSchema.parse({
+        kind: "pauseQueue",
+        hasBinaryPayload: false,
+        epicId: "epic-1",
+        chatId: "chat-1",
+        clientActionId: "pause-queue-action-1",
+      }),
+    ).toMatchObject({
+      kind: "pauseQueue",
+      clientActionId: "pause-queue-action-1",
+    });
+  });
+
+  it("parses background-item stop owner actions", () => {
+    expect(
+      chatSubscribeClientFrameSchema.parse({
+        kind: "stopBackgroundItem",
+        hasBinaryPayload: false,
+        epicId: "epic-1",
+        chatId: "chat-1",
+        clientActionId: "stop-bg-action-1",
+        taskId: "task-1",
+      }),
+    ).toMatchObject({
+      kind: "stopBackgroundItem",
+      taskId: "task-1",
+    });
+
+    expect(
+      chatSubscribeClientFrameSchema.parse({
+        kind: "stopAllBackgroundItems",
+        hasBinaryPayload: false,
+        epicId: "epic-1",
+        chatId: "chat-1",
+        clientActionId: "stop-all-bg-action-1",
+      }),
+    ).toMatchObject({
+      kind: "stopAllBackgroundItems",
+    });
   });
 
   it("parses send frames with Tiptap JSONContent attachment mentions", () => {
@@ -626,5 +901,260 @@ describe("chat.subscribe@1.0 client frames", () => {
       kind: "fileEditApprovalDecision",
       approvalId: "file-approval-1",
     });
+  });
+});
+
+describe("chat.subscribe@1.3 (frozen pre-workflow) server frames", () => {
+  it("declares schemaVersion 1.3 and stays registered for bridging", () => {
+    expect(chatSubscribeV13.schemaVersion).toEqual({ major: 1, minor: 3 });
+  });
+
+  it("does not know the v1.4 workflow background-item kind on snapshot or turn-state frames", () => {
+    const workflowItem = {
+      taskId: "wf-task-1",
+      kind: "workflow",
+      title: "review",
+      blockId: "wf-task-1",
+      parentTaskId: null,
+      phase: "Find",
+      activeLabel: "find:host-core",
+      agentsStarted: 16,
+      agentsFinished: 3,
+    };
+
+    expect(
+      chatSubscribeV13.serverFrameSchema.safeParse({
+        kind: "turnStateChanged",
+        hasBinaryPayload: false,
+        epicId: "epic-1",
+        chatId: "chat-1",
+        runStatus: "running",
+        activeTurn: null,
+        backgroundItems: [workflowItem],
+      }).success,
+    ).toBe(false);
+
+    expect(
+      chatSubscribeV13.serverFrameSchema.safeParse({
+        kind: "snapshot",
+        hasBinaryPayload: false,
+        epicId: "epic-1",
+        chatId: "chat-1",
+        snapshot: {
+          chat,
+          access: { role: "owner", ownerUserId: "user-1", canAct: true },
+          queue: { status: "idle", items: [] },
+          activeTurn: null,
+          runStatus: "idle",
+          pendingApprovals: [],
+          pendingInterviews: [],
+          pendingFileEditApprovals: [],
+          worktreeBinding: null,
+          missingWorktreePaths: [],
+          accumulatedFileChanges: [],
+          backgroundItems: [workflowItem],
+        },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("does not know the v1.4 workflow.* blockDelta events", () => {
+    const events = [
+      {
+        type: "workflow.started",
+        blockId: "wf-1",
+        timestamp: 1,
+        name: "review",
+        intent: "Review the diff",
+      },
+      {
+        type: "workflow.progress",
+        blockId: "wf-1",
+        timestamp: 2,
+        activity: { kind: "phase", text: "Find" },
+      },
+      {
+        type: "workflow.completed",
+        blockId: "wf-1",
+        timestamp: 3,
+        outcome: "completed",
+        result: "3 findings",
+      },
+    ];
+
+    for (const event of events) {
+      expect(
+        chatSubscribeV13.serverFrameSchema.safeParse({
+          kind: "blockDelta",
+          hasBinaryPayload: false,
+          epicId: "epic-1",
+          chatId: "chat-1",
+          event,
+        }).success,
+      ).toBe(false);
+    }
+  });
+
+  it("chat.subscribe@1.2 is pinned to the same frozen pre-workflow shape as 1.3", () => {
+    expect(
+      chatSubscribeV12.serverFrameSchema.safeParse({
+        kind: "blockDelta",
+        hasBinaryPayload: false,
+        epicId: "epic-1",
+        chatId: "chat-1",
+        event: {
+          type: "workflow.started",
+          blockId: "wf-1",
+          timestamp: 1,
+          name: "review",
+          intent: "Review the diff",
+        },
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe("chat.subscribe@1.4 server frames", () => {
+  it("declares schemaVersion 1.4", () => {
+    expect(chatSubscribeV14.schemaVersion).toEqual({ major: 1, minor: 4 });
+  });
+
+  it("parses a workflow background item on snapshot and turn-state frames", () => {
+    const workflowItem = {
+      taskId: "wf-task-1",
+      kind: "workflow",
+      title: "review",
+      blockId: "wf-task-1",
+      parentTaskId: null,
+      phase: "Find",
+      activeLabel: "find:host-core",
+      agentsStarted: 16,
+      agentsFinished: 3,
+    };
+
+    const snapshot = chatSubscribeV14.serverFrameSchema.parse({
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      snapshot: {
+        chat,
+        access: { role: "owner", ownerUserId: "user-1", canAct: true },
+        queue: { status: "idle", items: [] },
+        activeTurn: null,
+        runStatus: "idle",
+        pendingApprovals: [],
+        pendingInterviews: [],
+        pendingFileEditApprovals: [],
+        worktreeBinding: null,
+        missingWorktreePaths: [],
+        accumulatedFileChanges: [],
+        backgroundItems: [workflowItem],
+      },
+    });
+    expect(snapshot).toMatchObject({
+      kind: "snapshot",
+      snapshot: { backgroundItems: [workflowItem] },
+    });
+
+    const turnState = chatSubscribeV14.serverFrameSchema.parse({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      runStatus: "running",
+      activeTurn: null,
+      backgroundItems: [workflowItem],
+    });
+    expect(turnState).toMatchObject({
+      kind: "turnStateChanged",
+      backgroundItems: [workflowItem],
+    });
+  });
+
+  it("defaults new workflow background-item metadata when parsing an old-host frame", () => {
+    const parsed = chatSubscribeV14.serverFrameSchema.parse({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      runStatus: "running",
+      activeTurn: null,
+      backgroundItems: [
+        {
+          taskId: "wf-task-1",
+          kind: "workflow",
+          title: "review",
+          blockId: "wf-task-1",
+        },
+      ],
+    });
+
+    expect(parsed).toMatchObject({
+      kind: "turnStateChanged",
+      backgroundItems: [
+        {
+          taskId: "wf-task-1",
+          parentTaskId: null,
+          phase: null,
+          activeLabel: null,
+          agentsStarted: null,
+          agentsFinished: null,
+        },
+      ],
+    });
+  });
+
+  it("round-trips workflow.started / workflow.progress / workflow.completed blockDelta events", () => {
+    expect(
+      chatSubscribeV14.serverFrameSchema.parse({
+        kind: "blockDelta",
+        hasBinaryPayload: false,
+        epicId: "epic-1",
+        chatId: "chat-1",
+        event: {
+          type: "workflow.started",
+          blockId: "wf-1",
+          timestamp: 1,
+          name: "review",
+          intent: "Review the diff",
+          spawnToolCallId: "toolu_workflow_1",
+        },
+      }),
+    ).toMatchObject({ kind: "blockDelta" });
+
+    expect(
+      chatSubscribeV14.serverFrameSchema.parse({
+        kind: "blockDelta",
+        hasBinaryPayload: false,
+        epicId: "epic-1",
+        chatId: "chat-1",
+        event: {
+          type: "workflow.progress",
+          blockId: "wf-1",
+          timestamp: 2,
+          activity: { kind: "label", text: "find:host-core" },
+          agentsStarted: 16,
+          agentsFinished: 3,
+          totalTokens: 120000,
+        },
+      }),
+    ).toMatchObject({ kind: "blockDelta" });
+
+    expect(
+      chatSubscribeV14.serverFrameSchema.parse({
+        kind: "blockDelta",
+        hasBinaryPayload: false,
+        epicId: "epic-1",
+        chatId: "chat-1",
+        event: {
+          type: "workflow.completed",
+          blockId: "wf-1",
+          timestamp: 3,
+          outcome: "completed",
+          result: "3 findings",
+        },
+      }),
+    ).toMatchObject({ kind: "blockDelta" });
   });
 });

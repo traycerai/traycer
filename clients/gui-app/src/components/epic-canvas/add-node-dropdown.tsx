@@ -49,6 +49,7 @@ import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
 import type { ForkWorkspaceSeed } from "@/lib/worktree/fork-workspace-seed";
 import type { TerminalAgentWorktreeCreateInput } from "@/components/epic-canvas/hooks/use-terminal-agent-worktree-gate";
 import { readSeededLaunchWorktreeIntent } from "@/lib/worktree/seeded-launch-worktree-intent";
+import { deriveWorkspaceMode } from "@/lib/worktree/workspace-mode";
 
 export interface AddArtifactDropdownProps {
   children: ReactNode;
@@ -71,8 +72,7 @@ export interface AddArtifactDropdownProps {
    * dropdown cleanup cannot clear the binding before the dispatcher sees it.
    */
   onAddTerminalAgent:
-    | ((input: TerminalAgentWorktreeCreateInput) => void)
-    | undefined;
+    ((input: TerminalAgentWorktreeCreateInput) => void) | undefined;
   /**
    * Optional seed copied from the latest chat's visible workspace binding.
    * Terminal-agent submenu uses it both for the initial folder rows and for the
@@ -102,8 +102,8 @@ export interface AddArtifactDropdownProps {
    */
   tuiAgentPending: boolean | undefined;
   disabled: boolean | undefined;
-  /** Tooltip text to show when disabled. Omit when no special message needed. */
-  disabledTooltip: string | undefined;
+  /** Tooltip text to show when disabled. `null` when no special message needed. */
+  disabledTooltip: string | null;
   disabledTypes: ReadonlyArray<EpicNodeKind> | undefined;
   /**
    * Optional set of kinds to omit from the dropdown.
@@ -158,7 +158,7 @@ export function AddNodeDropdown(props: AddArtifactDropdownProps) {
   if (disabled) {
     return (
       <TooltipWrapper
-        label={disabledTooltip ?? null}
+        label={disabledTooltip}
         side="top"
         sideOffset={undefined}
         align={undefined}
@@ -336,6 +336,10 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
       agentMode,
       terminalAgentArgs: argsTouched ? argsDraft : null,
       worktreeIntent,
+      workspaceMode: deriveWorkspaceMode(
+        workspaceSeed?.workspace.folders.length ?? 1,
+        worktreeIntent,
+      ),
     });
   }, [
     agentMode,
@@ -382,11 +386,13 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
             tuiOnly
             lockedHarnessId={null}
             disabled={tuiAgentPending}
+            registerActivation={false}
           />
           <div className="shrink-0">
             <AgentModeToggle
               value={agentMode}
               disabled={tuiAgentPending}
+              showTooltip={false}
               onChange={setAgentMode}
             />
           </div>

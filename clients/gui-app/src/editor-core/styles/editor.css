@@ -444,6 +444,38 @@
   cursor: inherit;
 }
 
+.tc-artifact-find-match {
+  border-radius: 0.125rem;
+  background: color-mix(
+    in oklab,
+    var(--color-chart-4, hsl(43 74% 66%)) 34%,
+    transparent
+  );
+  box-shadow: 0 0 0 1px
+    color-mix(in oklab, var(--color-chart-4, hsl(43 74% 66%)) 34%, transparent);
+}
+
+.tc-artifact-find-match-current {
+  background: color-mix(
+    in oklab,
+    var(--color-primary, hsl(221 83% 53%)) 28%,
+    transparent
+  );
+  box-shadow:
+    0 0 0 1px
+      color-mix(
+        in oklab,
+        var(--color-primary, hsl(221 83% 53%)) 62%,
+        transparent
+      ),
+    0 0 0 0.18rem
+      color-mix(
+        in oklab,
+        var(--color-primary, hsl(221 83% 53%)) 14%,
+        transparent
+      );
+}
+
 [data-comment-anchor="true"] {
   /*
    * This should read as a document annotation, not selected text. Keep the
@@ -581,6 +613,25 @@
   pointer-events: none;
   height: 0;
   float: left;
+}
+
+[data-composer-editor].is-editor-empty,
+[data-composer-editor] .is-editor-empty:first-child {
+  position: relative;
+}
+
+[data-composer-editor].is-editor-empty::before,
+[data-composer-editor] .is-editor-empty:first-child::before {
+  position: absolute;
+  inset-inline: 0;
+  top: 0;
+  display: block;
+  width: 100%;
+  height: auto;
+  float: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /*

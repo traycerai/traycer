@@ -236,9 +236,7 @@ interface BuildTaskXmlOptions {
 // extra) and those before the closing quote we append, leaving interior path
 // separators like the ones in `C:\Users\foo` untouched.
 function quoteWindowsArg(arg: string): string {
-  const escaped = arg
-    .replace(/(\\*)"/g, '$1$1\\"')
-    .replace(/(\\+)$/, "$1$1");
+  const escaped = arg.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/, "$1$1");
   return `"${escaped}"`;
 }
 
@@ -246,11 +244,7 @@ function buildTaskXml(options: BuildTaskXmlOptions): string {
   // <Command> takes a single executable; <Arguments> takes the rest as
   // a single string. schtasks parses the latter with shell rules, so
   // quote each token explicitly.
-  const argv = [
-    ...options.cli.args,
-    "host",
-    "start",
-  ];
+  const argv = [...options.cli.args, "host", "start"];
   const argumentsLine = argv.map(quoteWindowsArg).join(" ");
   const userId = resolveTaskUserId();
   return `<?xml version="1.0" encoding="UTF-16"?>

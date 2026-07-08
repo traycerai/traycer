@@ -12,6 +12,7 @@ export { gitQueryKeys } from "@/lib/query-keys/git-query-keys";
 export { gitMutationKeys } from "@/lib/query-keys/git-mutation-keys";
 export { workspaceMutationKeys } from "@/lib/query-keys/workspace-mutation-keys";
 export { authQueryKeys } from "@/lib/query-keys/auth-query-keys";
+export { authMutationKeys } from "@/lib/query-keys/auth-mutation-keys";
 export {
   runnerMutationKeys,
   runnerQueryKeys,
@@ -36,6 +37,7 @@ export const queryKeys = {
   hostMethodScope: hostQueryKeys.methodScope,
   hostMethod: hostQueryKeys.method,
   hostResolveArtifactByPath: hostQueryKeys.resolveArtifactByPath,
+  hostTraycerRateLimitUsage: hostQueryKeys.traycerRateLimitUsage,
   cloudEpicTasks: cloudQueryKeys.epicTasks,
   workspaceEntries: uiQueryKeys.workspaceEntries,
   hostPicker: uiQueryKeys.hostPicker,

@@ -33,6 +33,7 @@ import {
 } from "@/lib/epic-selectors";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useAnchorPositionsStore } from "@/stores/comments/anchor-positions-store";
+import { useRegisterTileFindAdapter } from "@/components/epic-canvas/tile-find/tile-find-adapter-context";
 import {
   useActiveThreadId,
   useCommentThreadsStore,
@@ -54,6 +55,7 @@ import {
   resolveArtifactEditorBackgroundFocusPosition,
   shouldHandleArtifactEditorBackgroundFocus,
 } from "./artifact-editor-background-focus";
+import { createArtifactEditorFindAdapter } from "../tile-find/artifact-editor-find-adapter";
 import { useCollabTileEditor } from "./use-collab-tile-editor";
 
 interface CollabTileBodyProps {
@@ -409,6 +411,9 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
       <div className="mx-auto flex w-full max-w-3xl flex-col gap-4">
         <div className="tc-editor-surface">
           <div className="tc-editor-body">
+            {editor !== null && isEpicArtifactKind(node.type) ? (
+              <ArtifactFindAdapterRegistration editor={editor} node={node} />
+            ) : null}
             <EditorContent editor={editor} />
           </div>
           {editor !== null ? (
@@ -422,6 +427,7 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
         </div>
         {isEpicArtifactKind(node.type) ? (
           <ArtifactChildIndex
+            epicId={epicId}
             parentId={node.id}
             viewTabId={viewTabId}
             hostId={node.hostId}
@@ -450,4 +456,23 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
       ) : null}
     </div>
   );
+}
+
+function ArtifactFindAdapterRegistration(props: {
+  readonly editor: Editor;
+  readonly node: EpicNodeRef;
+}) {
+  const { editor, node } = props;
+  const adapter = useMemo(
+    () =>
+      createArtifactEditorFindAdapter({
+        editor,
+        tileInstanceId: node.instanceId,
+        tileKind: node.type,
+        activeUnitId: node.id,
+      }),
+    [editor, node.id, node.instanceId, node.type],
+  );
+  useRegisterTileFindAdapter(adapter);
+  return null;
 }

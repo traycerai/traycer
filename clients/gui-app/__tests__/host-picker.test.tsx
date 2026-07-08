@@ -110,11 +110,18 @@ describe("<HostPicker /> directory-change reactivity", () => {
       const signInButton = await screen.findByRole("button", {
         name: "Sign in",
       });
-      // Click to start the PKCE attempt (sets the in-memory verifier) before
-      // the callback delivers the code; otherwise the exchange has no verifier.
+      // Start the device-flow attempt, then drive its poll to the authorized
+      // terminal so the app lands signed-in.
       fireEvent.click(signInButton);
+      await waitFor(() => {
+        expect(host.deviceFlow.lastSession).not.toBeNull();
+      });
       act(() => {
-        host.emitAuthCallback({ code: "test-token" });
+        host.deviceFlow.emitResult({
+          kind: "authorized",
+          token: "test-token",
+          refreshToken: "test-token-refresh",
+        });
       });
 
       act(() => {
@@ -156,11 +163,18 @@ describe("<HostPicker /> directory-change reactivity", () => {
       const signInButton = await screen.findByRole("button", {
         name: "Sign in",
       });
-      // Click to start the PKCE attempt (sets the in-memory verifier) before
-      // the callback delivers the code; otherwise the exchange has no verifier.
+      // Start the device-flow attempt, then drive its poll to the authorized
+      // terminal so the app lands signed-in.
       fireEvent.click(signInButton);
+      await waitFor(() => {
+        expect(host.deviceFlow.lastSession).not.toBeNull();
+      });
       act(() => {
-        host.emitAuthCallback({ code: "test-token" });
+        host.deviceFlow.emitResult({
+          kind: "authorized",
+          token: "test-token",
+          refreshToken: "test-token-refresh",
+        });
       });
 
       act(() => {
@@ -213,11 +227,18 @@ describe("<HostPicker /> directory-change reactivity", () => {
       const signInButton = await screen.findByRole("button", {
         name: "Sign in",
       });
-      // Click to start the PKCE attempt (sets the in-memory verifier) before
-      // the callback delivers the code; otherwise the exchange has no verifier.
+      // Start the device-flow attempt, then drive its poll to the authorized
+      // terminal so the app lands signed-in.
       fireEvent.click(signInButton);
+      await waitFor(() => {
+        expect(host.deviceFlow.lastSession).not.toBeNull();
+      });
       act(() => {
-        host.emitAuthCallback({ code: "test-token" });
+        host.deviceFlow.emitResult({
+          kind: "authorized",
+          token: "test-token",
+          refreshToken: "test-token-refresh",
+        });
       });
 
       act(() => {

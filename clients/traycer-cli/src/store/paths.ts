@@ -34,6 +34,7 @@ const HOST_INSTALL_SUBDIR = "install";
 // from the host root. Named "install-staging" for clarity.
 const HOST_STAGING_SUBDIR = "install-staging";
 const HOST_INSTALL_RECORD_FILENAME = "install.json";
+const CLI_LOG_FILENAME = "cli.log";
 const HOST_LOG_FILENAME = "host.log";
 const HOST_PID_FILENAME = "pid.json";
 
@@ -73,6 +74,9 @@ export function cliManifestPath(environment: Environment): string {
 }
 export function cliLockPath(environment: Environment): string {
   return join(cliHomeDir(environment), ".lock");
+}
+export function cliLogPath(environment: Environment): string {
+  return join(cliHomeDir(environment), CLI_LOG_FILENAME);
 }
 // Marker the detached pending-CLI-upgrade finalize helper writes after
 // it attempts the live-binary swap. The next CLI invocation (Doctor,

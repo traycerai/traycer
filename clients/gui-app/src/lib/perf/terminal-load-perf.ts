@@ -1,5 +1,5 @@
-/* eslint-disable no-console -- console is the intended diagnostic sink for
-   this profiling-only module; there is no telemetry pipeline in gui-app yet. */
+import { appLogger } from "@/lib/logger";
+
 /**
  * First-time load instrumentation for terminal and TUI (terminal-agent) tiles.
  *
@@ -24,13 +24,12 @@
  *
  * Each phase is recorded once (the first occurrence) per session, keyed by
  * `sessionId`, so re-renders and reattach frames don't perturb the numbers.
- * On `first-render` the timeline is logged as a console table of per-phase
- * deltas and a `performance.measure` is emitted for each span so the spans
- * also show up in the browser Performance panel.
+ * On `first-render` the timeline is logged as a structured renderer event and
+ * a `performance.measure` is emitted for each span so the spans also show up in
+ * the browser Performance panel.
  *
  * Gating: on by default in dev, off under test, and opt-in for production
- * builds via `localStorage["traycer:perf:terminal"] = "1"`. No telemetry sink
- * exists in this app yet, so console is the established diagnostic surface.
+ * builds via `localStorage["traycer:perf:terminal"] = "1"`.
  */
 
 // Ordered so the summary table and the adjacent-span measures read top-to-bottom
@@ -143,7 +142,13 @@ function finishTerminalLoad(
           markName(sessionId, previousPhase),
           markName(sessionId, phase),
         );
-      } catch {
+      } catch (error) {
+        appLogger.debug("[terminal-perf] span measure skipped", {
+          sessionId,
+          fromPhase: previousPhase,
+          toPhase: phase,
+          error: error instanceof Error ? error.name : typeof error,
+        });
         // A mark may be missing if a phase was skipped; the table still
         // reports the spans we did capture.
       }
@@ -153,11 +158,12 @@ function finishTerminalLoad(
   }
 
   const totalMs = roundMs(previous - timeline.startedAt);
-  console.groupCollapsed(
-    `[terminal-perf] ${timeline.kind} ${sessionId} first paint in ${totalMs}ms`,
-  );
-  console.table(table);
-  console.groupEnd();
+  appLogger.debug("[terminal-perf] first paint measured", {
+    sessionId,
+    kind: timeline.kind,
+    totalMs,
+    phases: table,
+  });
 }
 
 /**
@@ -169,7 +175,7 @@ export function markXtermChunkLoad(durationMs: number): void {
   if (!instrumentationEnabled()) return;
   if (chunkLoadLogged) return;
   chunkLoadLogged = true;
-  console.info(
-    `[terminal-perf] xterm chunk loaded in ${roundMs(durationMs)}ms (first terminal only)`,
-  );
+  appLogger.debug("[terminal-perf] xterm chunk loaded", {
+    durationMs: roundMs(durationMs),
+  });
 }

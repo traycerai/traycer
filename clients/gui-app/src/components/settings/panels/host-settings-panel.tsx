@@ -6,6 +6,7 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { RestartHostConfirmDialog } from "@/components/host/restart-host-confirm-dialog";
 import { ActionsRow } from "@/components/settings/panels/host-settings-actions-row";
 import { AdvancedDisclosure } from "@/components/settings/panels/host-settings-advanced-disclosure";
 import { DoctorSheet } from "@/components/settings/panels/host-settings-doctor-sheet";
@@ -17,7 +18,6 @@ import {
   deriveStatus,
   extractErrorMessage,
   findReleasedAt,
-  type HostProgressKind,
   type HostProgressState,
 } from "@/components/settings/panels/host-settings-panel-model";
 import { HostProgressBanner } from "@/components/settings/panels/host-settings-progress-banner";
@@ -42,7 +42,7 @@ import type {
   HostAvailableSnapshot,
   HostInstalledRecord,
   HostNameSettings,
-  HostProgressEvent,
+  HostOperationStatus,
   HostRegistryUpdateState,
   IHostManagement,
   IRunnerHost,
@@ -164,18 +164,43 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
   const queryClient = useQueryClient();
   const nowMs = useNowMs();
   const [doctorOpen, setDoctorOpen] = useState(false);
-  const [progress, setProgress] = useState<HostProgressState | null>(null);
   const [hostNameDraftOverride, setHostNameDraftOverride] = useState<
     string | null
   >(null);
+  const [restartConfirmOpen, setRestartConfirmOpen] = useState<boolean>(false);
   const [includePreReleases, setIncludePreReleases] = useState(false);
   const localHost = useLocalHostSnapshot(runnerHost);
 
-  const makeProgressHandler = (
-    kind: HostProgressKind,
-  ): ((event: HostProgressEvent) => void) => {
-    return (event) => setProgress({ kind, event });
-  };
+  // Canonical cross-surface "is a host mutation running" status (Ticket:
+  // host-update-race-conditions), shared with the landing-page banner and any
+  // other open window via the same query key. Drives the progress banner and
+  // the disable-gating below regardless of which surface (or the background
+  // auto-update reconciler) actually started the operation - so this panel no
+  // longer needs its own per-mutation `onProgress` callback or local
+  // `progress` state.
+  const { data: operationStatus } = useQuery(
+    queryOptions<HostOperationStatus | null>({
+      queryKey: runnerQueryKeys.hostOperationStatus(management),
+      queryFn: () => management.getOperationStatus(),
+      staleTime: Infinity,
+    }),
+  );
+  const sharedOperationActive =
+    operationStatus !== undefined && operationStatus !== null;
+  const progress: HostProgressState | null =
+    operationStatus !== undefined && operationStatus !== null
+      ? {
+          kind: operationStatus.kind,
+          event: {
+            operationId: operationStatus.operationId,
+            stage: operationStatus.stage ?? "",
+            percent: operationStatus.percent,
+            bytes: operationStatus.bytes,
+            totalBytes: operationStatus.totalBytes,
+            message: operationStatus.message,
+          },
+        }
+      : null;
 
   const {
     data: availableSnapshot,
@@ -246,12 +271,8 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
   const installMutation = useMutation({
     mutationKey: runnerMutationKeys.hostInstall(),
     mutationFn: (version: string | null) =>
-      management.installHost({
-        version,
-        onProgress: makeProgressHandler("install"),
-      }),
+      management.installHost({ version, onProgress: null }),
     onSuccess: (data) => {
-      setProgress(null);
       toast.success(`Installed host v${data.version}`);
       useHostUpdateBannerStore.getState().clearSnooze(data.version);
       void queryClient.invalidateQueries({
@@ -260,17 +281,14 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
       invalidate();
     },
     onError: (err) => {
-      setProgress(null);
       toastFromRunnerError(err, "Couldn't install host");
     },
   });
 
   const updateMutation = useMutation({
     mutationKey: runnerMutationKeys.hostUpdate(),
-    mutationFn: () =>
-      management.updateHost({ onProgress: makeProgressHandler("update") }),
+    mutationFn: () => management.updateHost({ onProgress: null }),
     onSuccess: (data) => {
-      setProgress(null);
       toast.success(`Updated host to v${data.version}`);
       useHostUpdateBannerStore.getState().clearSnooze(data.version);
       void queryClient.invalidateQueries({
@@ -279,7 +297,6 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
       invalidate();
     },
     onError: (err) => {
-      setProgress(null);
       toastFromRunnerError(err, "Couldn't update host");
     },
   });
@@ -288,23 +305,23 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
     mutationKey: runnerMutationKeys.hostRestart(),
     mutationFn: () => management.restartHost(),
     onSuccess: () => {
+      setRestartConfirmOpen(false);
       toast.success("Host restart requested");
       void queryClient.invalidateQueries({
         queryKey: runnerQueryKeys.hostInstalledRecord(management),
       });
       invalidate();
     },
-    onError: (err) => toastFromRunnerError(err, "Couldn't restart host"),
+    onError: (err) => {
+      setRestartConfirmOpen(false);
+      toastFromRunnerError(err, "Couldn't restart host");
+    },
   });
 
   const registerServiceMutation = useMutation({
     mutationKey: runnerMutationKeys.hostRegisterService(),
-    mutationFn: () =>
-      management.registerService({
-        onProgress: makeProgressHandler("register-service"),
-      }),
+    mutationFn: () => management.registerService({ onProgress: null }),
     onSuccess: () => {
-      setProgress(null);
       toast.success("Service registered");
       void queryClient.invalidateQueries({
         queryKey: runnerQueryKeys.hostInstalledRecord(management),
@@ -312,7 +329,6 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
       invalidate();
     },
     onError: (err) => {
-      setProgress(null);
       toastFromRunnerError(err, "Couldn't register service");
     },
   });
@@ -363,7 +379,27 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
     updateMutation.isPending ||
     restartMutation.isPending ||
     registerServiceMutation.isPending ||
-    deregisterServiceMutation.isPending;
+    deregisterServiceMutation.isPending ||
+    // A mutation started from another surface (the landing-page banner, a
+    // second window, or the background auto-update reconciler) - none of
+    // this panel's own mutations are pending, but the CLI lock is still
+    // held, so every trigger here must stay disabled too.
+    sharedOperationActive;
+  const installPending =
+    installMutation.isPending ||
+    (operationStatus !== undefined &&
+      operationStatus !== null &&
+      operationStatus.kind === "install");
+  const updatePending =
+    updateMutation.isPending ||
+    (operationStatus !== undefined &&
+      operationStatus !== null &&
+      operationStatus.kind === "update");
+  const registerPending =
+    registerServiceMutation.isPending ||
+    (operationStatus !== undefined &&
+      operationStatus !== null &&
+      operationStatus.kind === "register-service");
 
   const status = deriveStatus(localHost, installedRecord);
   const statusPending = status === undefined;
@@ -407,11 +443,19 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
         status={status}
         pending={statusPending}
         anyPending={anyPending}
-        installPending={installMutation.isPending}
+        installPending={installPending}
         restartPending={restartMutation.isPending}
         onInstall={() => installMutation.mutate(null)}
-        onRestart={() => restartMutation.mutate()}
+        onRestart={() => setRestartConfirmOpen(true)}
         onOpenDoctor={() => setDoctorOpen(true)}
+      />
+      <RestartHostConfirmDialog
+        open={restartConfirmOpen}
+        onOpenChange={(open) => {
+          if (!open) setRestartConfirmOpen(false);
+        }}
+        isPending={restartMutation.isPending}
+        onConfirm={() => restartMutation.mutate()}
       />
       {status?.state === "not-installed" ? null : (
         <UpdatesRow
@@ -420,7 +464,7 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
             registryFetching || refreshRegistryMutation.isPending
           }
           anyPending={anyPending}
-          updatePending={updateMutation.isPending}
+          updatePending={updatePending}
           latestReleasedAt={latestReleasedAt}
           nowMs={nowMs}
           onUpdate={() => updateMutation.mutate()}
@@ -445,7 +489,7 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
         registryState={registryState}
         statusState={status?.state}
         anyPending={anyPending}
-        registerPending={registerServiceMutation.isPending}
+        registerPending={registerPending}
         deregisterPending={deregisterServiceMutation.isPending}
         onInstallVersion={(version) => installMutation.mutate(version)}
         onRegisterService={() => registerServiceMutation.mutate()}

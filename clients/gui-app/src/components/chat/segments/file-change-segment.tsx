@@ -28,6 +28,7 @@ import { SegmentEndStateBadge } from "./segment-end-state-badge";
 interface FileChangeSegmentProps {
   segment: FileChangeSegmentModel;
   variant: "card" | "row";
+  headerFindUnitId: string | null;
 }
 
 export function FileChangeSegment(props: FileChangeSegmentProps) {
@@ -78,6 +79,8 @@ export function FileChangeSegment(props: FileChangeSegmentProps) {
         tone="default"
         stickyHeader
         expandable
+        headerFindUnitId={props.headerFindUnitId}
+        bodyFindUnitId={null}
         className={undefined}
         footer={null}
       />
@@ -95,6 +98,8 @@ export function FileChangeSegment(props: FileChangeSegmentProps) {
       headerPosition="sticky"
       bodyOverflow="visible"
       expandable
+      headerFindUnitId={props.headerFindUnitId}
+      bodyFindUnitId={null}
       className={undefined}
     />
   );
@@ -316,7 +321,7 @@ export function FileChangeHeader(props: FileChangeHeaderProps) {
           className={undefined}
         />
       ) : null}
-      <SegmentEndStateBadge endState={endState} />
+      <SegmentEndStateBadge endState={endState} stopped={false} />
     </>
   );
 }

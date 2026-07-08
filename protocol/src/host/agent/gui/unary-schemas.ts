@@ -1,5 +1,9 @@
 import { z } from "zod";
-import { guiHarnessIdSchema } from "@traycer/protocol/host/agent/shared";
+import {
+  guiHarnessIdSchema,
+  guiHarnessIdSchemaV10,
+  guiHarnessIdSchemaV20,
+} from "@traycer/protocol/host/agent/shared";
 import {
   ALL_PERMISSION_MODES,
   permissionModeSchema,
@@ -26,6 +30,10 @@ export type HarnessSurface = z.infer<typeof harnessSurfaceSchema>;
 export const guiHarnessOptionSchema = z.object({
   id: guiHarnessIdSchema,
   label: z.string(),
+  // Controls whether the harness is included in downstream filtering and shown
+  // in the CLI. This is distinct from `available` and `availabilityPending`,
+  // which describe the current host-side availability probe state.
+  enabled: z.boolean().default(true),
   available: z.boolean(),
   error: z.string().nullable(),
   modes: z.array(harnessSurfaceSchema),
@@ -47,6 +55,13 @@ export const guiHarnessOptionSchema = z.object({
   supportedPermissionModes: z
     .array(permissionModeSchema)
     .default([...ALL_PERMISSION_MODES]),
+  // True while the host's availability probe for this harness is still running
+  // in the background (e.g. the cold interactive-shell PATH probe). The client
+  // re-fetches until it flips false. A pending row always carries
+  // `available: false` so an old app that doesn't understand this field errs on
+  // the side of hiding the harness and retrying via its normal unavailable
+  // backoff. `.catch(false)` tolerates old host builds that omit the field.
+  availabilityPending: z.boolean().catch(false),
 });
 export type GuiHarnessOption = z.infer<typeof guiHarnessOptionSchema>;
 
@@ -95,6 +110,18 @@ export const guiAgentModelOptionSchema = z.object({
   // side ChatRunSettings.serviceTier - same protocol-skew rationale).
   defaultServiceTier: z.string().nullable().default(null),
   supportedServiceTiers: z.array(agentServiceTierOptionSchema).default([]),
+  // Human-readable sunset notice for a model an adapter is keeping around only
+  // for backward compatibility with sessions/integrations still pinned to it
+  // (currently only the Traycer harness's catalog uses this - see
+  // SONNET_4_6_SUNSET_DATE in traycer-server's inference catalog). `.optional()`
+  // rather than `.default(null)` like the service-tier fields above: this is a
+  // Traycer-catalog-specific concept, so making it required would force every
+  // other adapter (Claude, Codex, OpenCode, Cursor, ...) to explicitly null it
+  // out for a field that will never apply to them. Absent and `null` are
+  // treated identically downstream, so an older host that hasn't shipped this
+  // field - or any adapter that never will - degrades cleanly to "not
+  // deprecated" instead of failing to parse.
+  deprecationNotice: z.string().nullable().optional(),
   metadata: z.record(z.string(), z.unknown()),
 });
 export type GuiAgentModelOption = z.infer<typeof guiAgentModelOptionSchema>;
@@ -122,6 +149,29 @@ export type ListGuiHarnessesRequest = z.infer<
 
 export const listGuiHarnessesResponseSchema = z.object({
   harnesses: z.array(guiHarnessOptionSchema),
+});
+
+// ── Frozen protocol-v1.0 catalog row + response ────────────────────────────
+// A v1.0 client predates the ACP GUI harnesses; the v2.0 line of
+// `agent.gui.listHarnesses` adds them, and the v2→v1 downgrade bridge filters
+// them out for v1.0 callers so their strict decode never sees a value it can't
+// parse.
+export const guiHarnessOptionSchemaV10 = guiHarnessOptionSchema.extend({
+  id: guiHarnessIdSchemaV10,
+});
+export const listGuiHarnessesResponseSchemaV10 = z.object({
+  harnesses: z.array(guiHarnessOptionSchemaV10),
+});
+
+// ── Frozen protocol-v2.0 catalog row + response (before Amp) ────────────────
+// v2.0 shipped without Amp; the v3.0 line of `agent.gui.listHarnesses` adds
+// it, and the v3→v2 downgrade bridge filters it out for already-shipped v2.0
+// callers so their strict decode never sees a value it can't parse.
+export const guiHarnessOptionSchemaV20 = guiHarnessOptionSchema.extend({
+  id: guiHarnessIdSchemaV20,
+});
+export const listGuiHarnessesResponseSchemaV20 = z.object({
+  harnesses: z.array(guiHarnessOptionSchemaV20),
 });
 export type ListGuiHarnessesResponse = z.infer<
   typeof listGuiHarnessesResponseSchema

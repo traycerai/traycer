@@ -1,4 +1,5 @@
 import type { ChordString } from "@/lib/keybindings/chord";
+import { isMac } from "@/lib/keybindings/platform";
 
 /**
  * Stable identifiers for every keyboard-bindable action in the app. Adding
@@ -38,12 +39,17 @@ export const ACTION_IDS = [
   "group.focus.left",
   "group.focus.right",
   "group.focus-editor",
+  "tile.find.replace",
   "app.sidebar.toggle",
   "app.history.open",
   "app.settings.open",
   "app.settings.section.byDigit",
   "app.palette.open",
+  "app.zoom.in",
+  "app.zoom.out",
+  "app.zoom.reset",
   "composer.dictation.toggle",
+  "composer.model-picker.toggle",
   "model.provider.byDigit",
   "model.reasoning.byDigit",
 ] as const;
@@ -54,13 +60,33 @@ export type ActionCategory = "epics" | "tabs" | "groups" | "app";
 
 export type ActionKind = "chord" | "digit";
 
+/**
+ * An action's default chord. A bare string (or `null` for "unbound") is the
+ * same on every platform. A `{ mac, other }` pair declares per-platform
+ * defaults, resolved through `resolveActionDefaultChord` - used when a chord
+ * must differ by OS (e.g. ⌃⌥M on macOS vs an AltGr-safe Alt+Shift+M elsewhere).
+ */
+export type ActionDefaultChord =
+  | ChordString
+  | null
+  | { readonly mac: ChordString; readonly other: ChordString };
+
 export interface ActionMeta {
   readonly id: ActionId;
   readonly label: string;
   readonly description: string;
   readonly category: ActionCategory;
   readonly kind: ActionKind;
-  readonly defaultChord: ChordString | null;
+  readonly defaultChord: ActionDefaultChord;
+}
+
+/** The platform-effective default chord for an action (`null` when unbound). */
+export function resolveActionDefaultChord(
+  meta: ActionMeta,
+): ChordString | null {
+  const def = meta.defaultChord;
+  if (def === null || typeof def === "string") return def;
+  return isMac() ? def.mac : def.other;
 }
 
 export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
@@ -254,6 +280,15 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     kind: "chord",
     defaultChord: "mod+l",
   },
+  "tile.find.replace": {
+    id: "tile.find.replace",
+    label: "Find and replace in active tile",
+    description:
+      "Open the active tile's find bar and expand the Replace row when the tile supports replacement.",
+    category: "app",
+    kind: "chord",
+    defaultChord: "mod+alt+f",
+  },
   "app.sidebar.toggle": {
     id: "app.sidebar.toggle",
     label: "Toggle left panel",
@@ -296,6 +331,30 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     kind: "chord",
     defaultChord: "mod+k",
   },
+  "app.zoom.in": {
+    id: "app.zoom.in",
+    label: "Zoom in",
+    description: "Increase the whole-app display zoom.",
+    category: "app",
+    kind: "chord",
+    defaultChord: "mod+=",
+  },
+  "app.zoom.out": {
+    id: "app.zoom.out",
+    label: "Zoom out",
+    description: "Decrease the whole-app display zoom.",
+    category: "app",
+    kind: "chord",
+    defaultChord: "mod+-",
+  },
+  "app.zoom.reset": {
+    id: "app.zoom.reset",
+    label: "Reset zoom",
+    description: "Reset whole-app display zoom to 100%.",
+    category: "app",
+    kind: "chord",
+    defaultChord: "mod+0",
+  },
   "composer.dictation.toggle": {
     id: "composer.dictation.toggle",
     label: "Voice input",
@@ -307,6 +366,18 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     // macOS), avoiding the Command-based conflicts: ⌘Space (Spotlight),
     // ⌘⇧Space (window summon), ⌘⇧V (split group vertically).
     defaultChord: "ctrl+shift+m",
+  },
+  "composer.model-picker.toggle": {
+    id: "composer.model-picker.toggle",
+    label: "Toggle model picker",
+    description:
+      "Open or close the model picker for the composer you're editing. Default ⌃⌥M on macOS; Alt+Shift+M on Windows/Linux (Alt+Shift dodges the Ctrl+Alt=AltGr trap).",
+    category: "app",
+    kind: "chord",
+    // Per-platform: ⌃⌥M keeps Control distinct from ⌘ on macOS (so it matches
+    // via the Control-aware encoder), while Alt+Shift+M avoids the Windows/Linux
+    // Ctrl+Alt=AltGr conflict and doesn't collide with dictation's ⌃⇧M.
+    defaultChord: { mac: "ctrl+alt+m", other: "alt+shift+m" },
   },
   "model.provider.byDigit": {
     id: "model.provider.byDigit",
@@ -326,10 +397,19 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     kind: "digit",
     defaultChord: "alt",
   },
+  // In-app back/forward (`nav.back` / `nav.forward`) intentionally has NO
+  // keyboard chord: `mod`/`alt`+Arrow both collide with native text-editing
+  // caret movement inside the always-focused chat composer. Back/forward are
+  // explicit affordances only — the header arrow buttons, the command palette
+  // ("Go back" / "Go forward"), and mouse buttons 3/4 — all routed through the
+  // shared `goBack`/`goForward` actions.
 };
 export function getDefaultBindings(): Readonly<
   Record<ActionId, ChordString | null>
 > {
-  const entries = ACTION_IDS.map((id) => [id, ACTION_META[id].defaultChord]);
+  const entries = ACTION_IDS.map((id) => [
+    id,
+    resolveActionDefaultChord(ACTION_META[id]),
+  ]);
   return Object.fromEntries(entries) as Record<ActionId, ChordString | null>;
 }

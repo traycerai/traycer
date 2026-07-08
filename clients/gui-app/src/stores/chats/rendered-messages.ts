@@ -39,6 +39,7 @@ import type {
   SegmentEndState,
   SegmentTodoItem,
   SubagentChildSegment,
+  SubagentSegment,
 } from "@/stores/composer/chat-store";
 import type { AgentSenderDisplay } from "@/lib/chat/sender-display";
 import type {
@@ -99,9 +100,18 @@ export interface RenderedMessagesInput {
   readonly pendingFileEditApprovals?: ReadonlyArray<ChatFileEditApprovalState>;
   readonly pendingInterviews?: ReadonlyArray<ChatPendingInterviewState>;
   /**
-   * Host-owned chat run state. Drives the in-progress indicator on the
-   * active assistant turn's row (`running` → "Working…", `stopping` →
-   * "Stopping…"). `idle` leaves every row indicator-free.
+   * Drives the in-progress indicator on the active assistant turn's row
+   * (`running` → "Working…", `stopping` → "Stopping…"). `idle` leaves every
+   * row indicator-free.
+   *
+   * NOT the raw host `runStatus` - that also reads `"running"` while a
+   * queued item is pending or visible background work (Bash
+   * `run_in_background` / a subagent / Monitor) outlives the turn, neither of
+   * which this indicator belongs to. Passing it raw synthesizes a duplicate,
+   * live "Working…" row alongside the real turn's already-settled "done"
+   * footer. Pass the caller's narrowed turn-status derivation instead (see
+   * `resolvedTurnStatus` in `chat-tile-session-state.ts`), mapping its
+   * `null` to `"idle"`.
    */
   readonly runStatus: ChatRunStatus;
   /**
@@ -2109,7 +2119,7 @@ function buildAssistantSegments(
       flat.push(segment);
     }
   }
-  const nested = nestSubagentChildren(flat);
+  const nested = suppressRedundantResumeMarkers(nestSubagentChildren(flat));
   const visible = suppressAuthErrors(
     suppressEditToolCalls(suppressSubagentSpawnToolCalls(nested)),
   );
@@ -2164,30 +2174,35 @@ function isSubagentChildSegment(
   segment: MessageSegment,
 ): segment is SubagentChildSegment {
   // artifact_operation is intentionally excluded — artifact cards stay
-  // top-level (see the BLOCK_HANDLERS["artifact_operation"] handler).
+  // top-level (see the BLOCK_HANDLERS["artifact_operation"] handler). A nested
+  // subagent (fan-out at any depth) IS eligible - see nestSubagentChildren.
   return (
     segment.kind === "tool" ||
     segment.kind === "file_change" ||
-    segment.kind === "command"
+    segment.kind === "command" ||
+    segment.kind === "subagent"
   );
 }
 
 /**
- * Fold subagent-owned tool/file_change segments into the `children` of their
- * subagent segment so the renderer nests them under that block. Segments whose
- * `parentId` matches a subagent segment are removed from the top-level flow;
- * everything else (including subagent-owned segments with no matching block, in
- * case the subagent.started was dropped) stays top-level. Order is preserved.
+ * Fold subagent-owned segments into the `children` of their owning subagent
+ * segment so the renderer nests them under that block - RECURSIVELY, since a
+ * nested agent can itself own further nested agents (any spawn depth).
+ * Segments whose `parentId` matches a known subagent segment (top-level OR
+ * already-nested) are removed from the top-level flow; everything else -
+ * including a subagent-owned segment whose `parentId` matches no block (the
+ * subagent.started that owned it was dropped) - stays top-level rather than
+ * being silently lost. Order is preserved at every level.
  */
 function nestSubagentChildren(
   flat: ReadonlyArray<MessageSegment>,
 ): ReadonlyArray<MessageSegment> {
-  const subagentIds = new Set(
+  const subagentSegmentsById = new Map(
     flat.flatMap((segment) =>
-      segment.kind === "subagent" ? [segment.id] : [],
+      segment.kind === "subagent" ? [[segment.id, segment] as const] : [],
     ),
   );
-  if (subagentIds.size === 0) return flat;
+  if (subagentSegmentsById.size === 0) return flat;
 
   const childrenByParent = new Map<string, SubagentChildSegment[]>();
   const topLevel: MessageSegment[] = [];
@@ -2195,7 +2210,7 @@ function nestSubagentChildren(
     if (
       isSubagentChildSegment(segment) &&
       segment.parentId !== null &&
-      subagentIds.has(segment.parentId)
+      subagentSegmentsById.has(segment.parentId)
     ) {
       const bucket = childrenByParent.get(segment.parentId);
       if (bucket === undefined) {
@@ -2209,12 +2224,58 @@ function nestSubagentChildren(
   }
   if (childrenByParent.size === 0) return flat;
 
-  return topLevel.map((segment) => {
-    if (segment.kind !== "subagent") return segment;
-    const children = childrenByParent.get(segment.id);
-    if (children === undefined) return segment;
-    return { ...segment, children: coalesceSubagentChildren(children) };
-  });
+  // A parentId cycle (host invariants rule it out, but a malformed/replayed
+  // chain must never hang OR disappear) buckets every member under some other
+  // member's children, so none of them ever lands in `topLevel` for
+  // `resolveSubagentChildren`'s ancestor guard to run on - the whole island
+  // would otherwise vanish silently. Walk reachability from the real
+  // top-level subagents first, then surface any subagent left unreached as
+  // its own top-level fallback.
+  const reached = new Set<string>();
+  const markReached = (id: string): void => {
+    if (reached.has(id)) return;
+    reached.add(id);
+    for (const child of childrenByParent.get(id) ?? []) {
+      if (child.kind === "subagent") markReached(child.id);
+    }
+  };
+  for (const segment of topLevel) {
+    if (segment.kind === "subagent") markReached(segment.id);
+  }
+  const fallback = [...subagentSegmentsById.entries()].flatMap(
+    ([id, segment]) => (reached.has(id) ? [] : [segment]),
+  );
+
+  const resolve = (segment: MessageSegment): MessageSegment =>
+    segment.kind === "subagent"
+      ? resolveSubagentChildren(segment, childrenByParent, new Set())
+      : segment;
+  return [...topLevel, ...fallback].map(resolve);
+}
+
+/**
+ * Recursively resolve one subagent segment's `children`, descending into any
+ * nested subagent children to resolve THEIR children too. `ancestors` guards
+ * against a `parentId` cycle (which the host invariants rule out, but a
+ * malformed/replayed chain must never hang the renderer) - a segment already
+ * on the ancestor path is left with whatever children it already has instead
+ * of recursing again.
+ */
+function resolveSubagentChildren(
+  segment: SubagentSegment,
+  childrenByParent: ReadonlyMap<string, ReadonlyArray<SubagentChildSegment>>,
+  ancestors: ReadonlySet<string>,
+): SubagentSegment {
+  if (ancestors.has(segment.id)) return segment;
+  const rawChildren = childrenByParent.get(segment.id);
+  if (rawChildren === undefined) return segment;
+  const nextAncestors = new Set(ancestors).add(segment.id);
+  const resolvedChildren = rawChildren.map((child) =>
+    child.kind === "subagent"
+      ? resolveSubagentChildren(child, childrenByParent, nextAncestors)
+      : child,
+  );
+  return { ...segment, children: coalesceSubagentChildren(resolvedChildren) };
 }
 
 /**
@@ -2267,6 +2328,40 @@ function rejectToolSegments<T extends MessageSegment>(
 }
 
 /**
+ * When a backgrounded command/monitor/subagent settles while its own turn is
+ * still streaming, the host appends the resume trigger right after that
+ * block's own segment (see chat-session-manager.ts
+ * `appendAutonomousResumeNotificationToActiveTurn`). With nothing else
+ * streamed in between, the "X completed" marker lands directly under the
+ * card that already shows its own completed status - pure duplication. Drop
+ * a trigger whose blockId is the immediately preceding segment.
+ *
+ * Must run on the post-`nestSubagentChildren` (visible) order, not the raw
+ * flat block order: a subagent's own trigger's `blockId` targets the
+ * subagent segment itself, but in raw order the block right before the
+ * trigger is often the subagent's *last child* (its own activity streamed
+ * after the subagent block started). Comparing against that child would
+ * never match the subagent's id, so the redundant marker would leak through
+ * under the parent card the user actually sees. A resume segment left with
+ * zero triggers is removed outright.
+ */
+function suppressRedundantResumeMarkers(
+  nested: ReadonlyArray<MessageSegment>,
+): ReadonlyArray<MessageSegment> {
+  return nested.flatMap((segment, index): MessageSegment[] => {
+    if (segment.kind !== "autonomous_resume") return [segment];
+    const previousId = index > 0 ? (nested.at(index - 1)?.id ?? null) : null;
+    if (previousId === null) return [segment];
+    const triggers = segment.triggers.filter(
+      (trigger) => trigger.kind === "wakeup" || trigger.blockId !== previousId,
+    );
+    if (triggers.length === segment.triggers.length) return [segment];
+    if (triggers.length === 0) return [];
+    return [{ ...segment, triggers }];
+  });
+}
+
+/**
  * A file-edit tool produces both a `tool_call` block (the raw Edit/Write/
  * apply_patch invocation) and a `file_change` block (the rendered diff /
  * status). We surface the edit through the `file_change` only - uniform across
@@ -2292,29 +2387,44 @@ function suppressEditToolCalls<T extends MessageSegment>(
  * through the card only - the same policy `suppressEditToolCalls` applies to
  * file-edit tool calls, and parity with Codex/OpenCode which emit no separate
  * spawn tool call. The subagent block carries its spawning tool_call id as
- * `spawnToolCallId`, so a tool segment owning that id is dropped - both at the
- * top level and inside a sub-agent's nested children (the case where a sub-agent
- * itself spawned a sub-agent). Only suppresses when the card actually renders (a
- * non-rendering subagent leaves no segment, so its spawn tool stays visible as
- * the lone signal).
+ * `spawnToolCallId`, so a tool segment owning that id is dropped at ANY nesting
+ * depth: a nested agent's own spawning tool call is a sibling inside its
+ * PARENT's children (both carry the parent's `parentId`), so both the id
+ * collection and the drop must walk the already-folded tree, not just the top
+ * level and one level of children. Only suppresses when the card actually
+ * renders (a non-rendering subagent leaves no segment, so its spawn tool stays
+ * visible as the lone signal).
  */
 function suppressSubagentSpawnToolCalls(
   flat: ReadonlyArray<MessageSegment>,
 ): ReadonlyArray<MessageSegment> {
-  const spawnToolCallIds = new Set(
-    flat.flatMap((segment) =>
-      segment.kind === "subagent" && segment.spawnToolCallId !== null
-        ? [segment.spawnToolCallId]
-        : [],
-    ),
-  );
+  const spawnToolCallIds = collectSpawnToolCallIds(flat);
   if (spawnToolCallIds.size === 0) return flat;
   const shouldDrop = (toolId: string): boolean => spawnToolCallIds.has(toolId);
+  return dropSpawnToolCallsRecursively(flat, shouldDrop);
+}
+
+function collectSpawnToolCallIds(
+  segments: ReadonlyArray<MessageSegment>,
+): ReadonlySet<string> {
+  const ids = new Set<string>();
+  for (const segment of segments) {
+    if (segment.kind !== "subagent") continue;
+    if (segment.spawnToolCallId !== null) ids.add(segment.spawnToolCallId);
+    for (const id of collectSpawnToolCallIds(segment.children)) ids.add(id);
+  }
+  return ids;
+}
+
+function dropSpawnToolCallsRecursively<T extends MessageSegment>(
+  flat: ReadonlyArray<T>,
+  shouldDrop: (toolSegmentId: string) => boolean,
+): ReadonlyArray<T> {
   return rejectToolSegments(flat, shouldDrop).map((segment) =>
     segment.kind === "subagent" && segment.children.length > 0
       ? {
           ...segment,
-          children: rejectToolSegments(segment.children, shouldDrop),
+          children: dropSpawnToolCallsRecursively(segment.children, shouldDrop),
         }
       : segment,
   );
@@ -2548,6 +2658,16 @@ function completedDurationMs(
   return Math.max(0, timestamp - startedAt);
 }
 
+function backgroundToolDurationMs(
+  block: Extract<ContentBlock, { type: "tool_call" }>,
+): number | null {
+  if (!block.backgroundTask) return null;
+  if (block.status !== "completed" && block.status !== "errored") return null;
+  if (block.startedAt === null || block.endedAt === null) return null;
+  const durationMs = block.endedAt - block.startedAt;
+  return durationMs > 0 ? durationMs : null;
+}
+
 /**
  * Todo-block → item mapping for the rendered todo segment, including the
  * synthetic `${blockId}:item:${index}` id fallback for items persisted
@@ -2607,8 +2727,12 @@ const BLOCK_HANDLERS: {
     agentMessageSend: block.agentMessageSend,
     isStreaming: block.status === "streaming",
     endState: segmentEndState(block.status),
+    stopped: block.stopped,
     progress: block.progress,
-    startedAt: block.timestamp,
+    backgroundOutput: block.backgroundOutput,
+    backgroundTask: block.backgroundTask,
+    startedAt: block.startedAt ?? block.timestamp,
+    durationMs: backgroundToolDurationMs(block),
     parentId: block.parentBlockId ?? null,
   }),
   file_change: (block) => ({
@@ -2649,6 +2773,7 @@ const BLOCK_HANDLERS: {
           result: block.result,
           isStreaming: block.status === "streaming",
           endState: segmentEndState(block.status),
+          stopped: block.stopped,
           startedAt: block.startedAt,
           // While streaming the card ticks live from `startedAt`; once cleanly
           // completed it shows the spawn->completion total. An interrupted/
@@ -2660,6 +2785,10 @@ const BLOCK_HANDLERS: {
             block.timestamp,
           ),
           spawnToolCallId: block.spawnToolCallId ?? null,
+          // Owning PARENT subagent's block id (nested fan-out), not the
+          // spawning tool call - `nestSubagentChildren` folds on this.
+          parentId: block.parentBlockId ?? null,
+          workflowMeta: block.workflowMeta,
           children: [],
         }
       : null,
@@ -2711,6 +2840,10 @@ const BLOCK_HANDLERS: {
     durationMs: block.durationMs,
     summary: block.summary,
     error: block.error,
+  }),
+  autonomous_resume: (block) => ({
+    kind: "autonomous_resume",
+    triggers: block.triggers,
   }),
   interview: (block) => ({
     kind: "interview",
@@ -2766,8 +2899,7 @@ function planContentIdentity(
 
 function blockToSegment(block: ContentBlock): MessageSegment | null {
   const handler = BLOCK_HANDLERS[block.type] as
-    | ((b: ContentBlock) => Omit<MessageSegment, "id"> | null)
-    | undefined;
+    ((b: ContentBlock) => Omit<MessageSegment, "id"> | null) | undefined;
   if (handler === undefined) {
     // Forward-compat: a newer host may emit a block.type the current GUI
     // bundle does not know about. Drop it instead of crashing the chat.

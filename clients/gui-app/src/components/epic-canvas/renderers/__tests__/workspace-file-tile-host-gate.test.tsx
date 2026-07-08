@@ -23,21 +23,19 @@ interface GateTestState {
   };
 }
 
-const state = vi.hoisted(
-  (): GateTestState => ({
-    activeHostId: "host-A",
-    reachability: {
-      status: "reachable",
-      hostLabel: "Host A",
-    },
-    readFile: {
-      data: undefined,
-      isLoading: true,
-      isError: false,
-      error: null,
-    },
-  }),
-);
+const state = vi.hoisted((): GateTestState => ({
+  activeHostId: "host-A",
+  reachability: {
+    status: "reachable",
+    hostLabel: "Host A",
+  },
+  readFile: {
+    data: undefined,
+    isLoading: true,
+    isError: false,
+    error: null,
+  },
+}));
 
 vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
   useReactiveActiveHostId: () => state.activeHostId,

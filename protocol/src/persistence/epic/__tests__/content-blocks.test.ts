@@ -1,11 +1,18 @@
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 import {
   contentBlockSchema,
+  decodeAutonomousResumeBlock,
+  encodeAutonomousResumeBlock,
+  subAgentBlockSchema,
   type ApprovalBlock,
+  type AutonomousResumeBlock,
   type FileChangeBlock,
   type InterviewBlock,
+  type SubAgentBlock,
   type ToolCallBlock,
 } from "@traycer/protocol/persistence/epic/content-blocks";
+import { hostStreamRpcRegistry } from "@traycer/protocol/host/index";
 
 describe("fileChangeBlockSchema backward-compat", () => {
   it("parses a pre-compaction file_change block (no hashes/counts) via defaults", () => {
@@ -57,6 +64,7 @@ describe("fileChangeBlockSchema backward-compat", () => {
     expect(block.inputSummary).toBeNull();
     expect(block.inputDetail).toBeNull();
     expect(block.taskTodoItems).toBeNull();
+    expect(block.endedAt).toBeNull();
     // The dropped raw input - the bloat carrier - is not retained.
     expect("input" in block).toBe(false);
   });
@@ -69,7 +77,10 @@ describe("fileChangeBlockSchema backward-compat", () => {
       timestamp: 2,
       toolName: "TaskUpdate",
       inputSummary: "1",
-      inputDetail: { kind: "fields", entries: [{ key: "id", label: "Id", value: "1" }] },
+      inputDetail: {
+        kind: "fields",
+        entries: [{ key: "id", label: "Id", value: "1" }],
+      },
       taskTodoItems: [
         {
           id: "1",
@@ -248,5 +259,314 @@ describe("fileChangeBlockSchema backward-compat", () => {
     expect(parsed.approvalId).toBeNull();
     expect(parsed.supersededByPlanId).toBeNull();
     expect(parsed.metadata).toBeNull();
+  });
+});
+
+describe("subAgentBlockSchema workflowMeta (no new persisted block type)", () => {
+  const workflowSubAgentBlock = {
+    type: "subagent",
+    blockId: "wf-1",
+    status: "completed",
+    timestamp: 1000,
+    name: "review",
+    agentType: null,
+    task: "Review the diff",
+    progressUpdates: ["Find: find:host-core"],
+    result: "3 findings",
+    startedAt: 900,
+    spawnToolCallId: "toolu_workflow_1",
+    stopped: false,
+    workflowMeta: {
+      name: "review",
+      intent: "Review the diff",
+      activity: [
+        { kind: "phase", text: "Find" },
+        { kind: "label", text: "find:host-core" },
+      ],
+      agentsStarted: 16,
+      agentsFinished: 16,
+      totalTokens: 120000,
+    },
+  };
+
+  it("round-trips a dual-written workflow subagent block through the current schema", () => {
+    const parsed = subAgentBlockSchema.parse(
+      workflowSubAgentBlock,
+    ) as SubAgentBlock;
+    expect(parsed.name).toBe("review");
+    expect(parsed.task).toBe("Review the diff");
+    expect(parsed.workflowMeta).toEqual(workflowSubAgentBlock.workflowMeta);
+  });
+
+  it("defaults workflowMeta to null for an ordinary (pre-workflow) subagent block", () => {
+    const { workflowMeta: _workflowMeta, ...ordinary } = workflowSubAgentBlock;
+    const parsed = subAgentBlockSchema.parse(ordinary) as SubAgentBlock;
+    expect(parsed.workflowMeta).toBeNull();
+  });
+
+  it("old-reader compat: a pre-workflowMeta subAgentBlockSchema parses a workflowMeta-bearing block, stripping the unknown key (plan invariant 6)", () => {
+    // Field-for-field copy of `subAgentBlockSchema` as it existed before
+    // `workflowMeta` was added - stands in for a released host's baked schema.
+    // Persisted bytes must stay readable by any released host (tech plan
+    // §2.2 / critique finding 1: no new block `type`, only an
+    // additive/defaulted field on the existing `subagent` block). A hard
+    // ZodError here would make a chat containing a workflow run entirely
+    // unreadable on an older host, not just degraded.
+    const preWorkflowMetaSubAgentBlockSchema = z.object({
+      blockId: z.string(),
+      status: z.enum([
+        "streaming",
+        "completed",
+        "errored",
+        "interrupted",
+        "superseded",
+      ]),
+      timestamp: z.number(),
+      parentBlockId: z.string().nullish(),
+      type: z.literal("subagent"),
+      name: z.string().nullable(),
+      agentType: z.string().nullable().default(null),
+      task: z.string().nullable(),
+      progressUpdates: z.array(z.string()),
+      result: z.string().nullable(),
+      startedAt: z.number().nullable().default(null),
+      spawnToolCallId: z.string().nullable().default(null),
+      stopped: z.boolean().default(false),
+    });
+
+    const parsed = preWorkflowMetaSubAgentBlockSchema.parse(
+      workflowSubAgentBlock,
+    );
+    expect(parsed.type).toBe("subagent");
+    expect(parsed.name).toBe("review");
+    expect(parsed.result).toBe("3 findings");
+    // The rich workflow data is not retained by the older reader - the base
+    // subagent fields are the faithful degradation.
+    expect("workflowMeta" in parsed).toBe(false);
+  });
+});
+
+describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
+  const baseFields = {
+    type: "autonomous_resume" as const,
+    blockId: "resume-1",
+    status: "completed" as const,
+    timestamp: 1,
+  };
+
+  it("decodes a raw pre-wakeTriggers stored block (v1.1.3 data, NO schema parse) without throwing", () => {
+    // The host's storage hot path (`decodeStoredBlock` in
+    // `chat-message-collections.ts`) calls this function on raw Yjs JSON
+    // WITHOUT a schema parse, so `.default([])` never runs: every
+    // autonomous_resume block written before the wakeTriggers key existed
+    // lacks it entirely. Regression: this exact shape crashed every chat
+    // open with "Cannot read properties of undefined (reading 'length')".
+    const rawV113Stored = {
+      ...baseFields,
+      triggers: [
+        {
+          kind: "command" as const,
+          title: "cmd",
+          status: "completed" as const,
+          summary: "ran",
+          blockId: "",
+          outputFile: null,
+        },
+      ],
+      wakeTriggers: undefined,
+    };
+    const decoded = decodeAutonomousResumeBlock(rawV113Stored);
+    expect(decoded.triggers.map((t) => t.kind)).toEqual(["command"]);
+    expect("wakeTriggers" in decoded).toBe(false);
+  });
+
+  it("parses a legacy pre-fix block with kind:'wakeup' inline in triggers (rc/dev data)", () => {
+    const legacy = {
+      ...baseFields,
+      triggers: [
+        {
+          kind: "wakeup",
+          title: "legacy wake",
+          status: "completed",
+          summary: "s",
+        },
+      ],
+    };
+    const parsed = contentBlockSchema.parse(legacy);
+    if (parsed.type !== "autonomous_resume") {
+      throw new Error("Expected parsed block to be autonomous_resume");
+    }
+    expect(parsed.triggers).toEqual([
+      {
+        kind: "wakeup",
+        title: "legacy wake",
+        status: "completed",
+        summary: "s",
+        blockId: "",
+        outputFile: null,
+      },
+    ]);
+    expect("wakeTriggers" in parsed).toBe(false);
+  });
+
+  it("merges the additive wakeTriggers field into triggers, appended after task triggers", () => {
+    const stored = {
+      ...baseFields,
+      triggers: [
+        {
+          kind: "command",
+          title: "cmd",
+          status: "completed",
+          summary: "ran",
+        },
+      ],
+      wakeTriggers: [{ title: "wake1", status: "completed", summary: "woke" }],
+    };
+    const parsed = contentBlockSchema.parse(stored);
+    if (parsed.type !== "autonomous_resume") {
+      throw new Error("Expected parsed block to be autonomous_resume");
+    }
+    expect(parsed.triggers.map((t) => t.kind)).toEqual(["command", "wakeup"]);
+    expect(parsed.triggers[1]).toEqual({
+      kind: "wakeup",
+      title: "wake1",
+      status: "completed",
+      summary: "woke",
+      blockId: "",
+      outputFile: null,
+    });
+    expect("wakeTriggers" in parsed).toBe(false);
+  });
+
+  it("v1.1.3 hosts would strip the unknown wakeTriggers key and still parse (empty-marker degradation)", () => {
+    // Simulates the OLD closed enum (no "wakeup") plus the absence of the
+    // wakeTriggers key entirely - what a v1.1.3 `chatSchema.safeParse` sees
+    // once new-host writes have gone through `encodeAutonomousResumeBlock`.
+    const oldEnumTriggerSchema = z.object({
+      kind: z.enum(["command", "monitor", "subagent"]),
+      title: z.string(),
+      status: z.enum(["completed", "failed", "stopped"]),
+      summary: z.string(),
+      blockId: z.string().default(""),
+      outputFile: z
+        .object({ workspacePath: z.string(), filePath: z.string() })
+        .nullable()
+        .default(null),
+    });
+    const oldBlockSchema = z.object({
+      type: z.literal("autonomous_resume"),
+      blockId: z.string(),
+      status: z.enum(["streaming", "completed", "errored"]),
+      timestamp: z.number(),
+      triggers: z.array(oldEnumTriggerSchema),
+    });
+
+    const domain: AutonomousResumeBlock = {
+      ...baseFields,
+      triggers: [
+        {
+          kind: "wakeup",
+          title: "wake1",
+          status: "completed",
+          summary: "woke",
+          blockId: "",
+          outputFile: null,
+        },
+      ],
+    };
+    const encoded = encodeAutonomousResumeBlock(domain);
+
+    const result = oldBlockSchema.safeParse(encoded);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.triggers).toEqual([]);
+    }
+  });
+
+  it("round-trips encode -> decode for a mixed trigger set (canonical order: task triggers, then wakeup)", () => {
+    const domain: AutonomousResumeBlock = {
+      ...baseFields,
+      triggers: [
+        {
+          kind: "subagent",
+          title: "sub",
+          status: "completed",
+          summary: "done",
+          blockId: "sub-block",
+          outputFile: null,
+        },
+        {
+          kind: "wakeup",
+          title: "wake1",
+          status: "completed",
+          summary: "woke",
+          blockId: "",
+          outputFile: null,
+        },
+      ],
+    };
+
+    const encoded = encodeAutonomousResumeBlock(domain);
+    expect(encoded.triggers).toHaveLength(1);
+    expect(encoded.triggers[0]?.kind).toBe("subagent");
+    expect(encoded.wakeTriggers).toEqual([
+      { title: "wake1", status: "completed", summary: "woke", blockId: "", outputFile: null },
+    ]);
+
+    const decoded = decodeAutonomousResumeBlock(encoded);
+    expect(decoded).toEqual(domain);
+  });
+
+  it("decode is idempotent - re-decoding an already-domain-shaped block is a no-op", () => {
+    const domain: AutonomousResumeBlock = {
+      ...baseFields,
+      triggers: [
+        {
+          kind: "wakeup",
+          title: "wake1",
+          status: "completed",
+          summary: "woke",
+          blockId: "",
+          outputFile: null,
+        },
+      ],
+    };
+    const reparsed = contentBlockSchema.parse(domain);
+    expect(reparsed).toEqual(domain);
+  });
+
+  it("z.encode on the full contentBlockSchema union splits wakeup triggers into wakeTriggers", () => {
+    const domain: AutonomousResumeBlock = {
+      ...baseFields,
+      triggers: [
+        {
+          kind: "wakeup",
+          title: "wake1",
+          status: "completed",
+          summary: "woke",
+          blockId: "",
+          outputFile: null,
+        },
+      ],
+    };
+    const encoded = z.encode(contentBlockSchema, domain);
+    if (encoded.type !== "autonomous_resume") {
+      throw new Error("Expected encoded block to be autonomous_resume");
+    }
+    expect(encoded.triggers).toEqual([]);
+    expect(encoded.wakeTriggers).toEqual([
+      { title: "wake1", status: "completed", summary: "woke", blockId: "", outputFile: null },
+    ]);
+  });
+
+  it("importing hostStreamRpcRegistry succeeds and both JSON-schema IO modes generate without throwing", () => {
+    // Regression guard for the actual bug this codec fixes: a plain
+    // `.transform()` here would make `hostStreamRpcRegistry`'s module-load-time
+    // validation throw "Transforms cannot be represented in JSON Schema" the
+    // moment any `chat.subscribe` contract (which embeds `chatSchema`, which
+    // embeds this block) gets its fields JSON-schema-serialized.
+    expect(Object.keys(hostStreamRpcRegistry)).toContain("chat.subscribe");
+    expect(() => z.toJSONSchema(contentBlockSchema)).not.toThrow();
+    expect(() => z.toJSONSchema(contentBlockSchema, { io: "input" })).not.toThrow();
   });
 });

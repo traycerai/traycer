@@ -60,6 +60,7 @@ describe("TextSegment next steps rendering", () => {
   it("renders prose and prompt options as action buttons", () => {
     render(
       <TextSegment
+        findUnitId={null}
         markdown={COMPLETE_BLOCK}
         isStreaming={false}
         nextStepActions={{ canSend: true, onSend: () => true }}
@@ -73,6 +74,12 @@ describe("TextSegment next steps rendering", () => {
         .closest(".md-prose")
         ?.classList.contains("prose-base"),
     ).toBe(true);
+    expect(
+      screen
+        .getByText("Implementation is complete.")
+        .closest(".md-prose")
+        ?.getAttribute("data-quotable"),
+    ).toBe("true");
     expect(
       screen.getByRole("button", {
         name: "Use /implementation-validation to validate the work",
@@ -89,6 +96,7 @@ describe("TextSegment next steps rendering", () => {
   it("disables action buttons while a next steps block is still streaming", () => {
     render(
       <TextSegment
+        findUnitId={null}
         markdown={COMPLETE_BLOCK.replace("\n</TRAYCER_NEXT_STEPS>", "")}
         isStreaming
         nextStepActions={{ canSend: true, onSend: () => true }}
@@ -101,10 +109,11 @@ describe("TextSegment next steps rendering", () => {
     expect((button as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it("locks every option in the block after a successful send", () => {
+  it("keeps unsent options enabled after a successful send", () => {
     const onSend = vi.fn(() => true);
     render(
       <TextSegment
+        findUnitId={null}
         markdown={COMPLETE_BLOCK}
         isStreaming={false}
         nextStepActions={{ canSend: true, onSend }}
@@ -127,13 +136,22 @@ describe("TextSegment next steps rendering", () => {
       screen.getByRole<HTMLButtonElement>("button", {
         name: "Review the changed files with /review-files",
       }).disabled,
-    ).toBe(true);
+    ).toBe(false);
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Review the changed files with /review-files",
+      }),
+    );
+
+    expect(onSend).toHaveBeenCalledTimes(2);
   });
 
   it("copies a prompt from the trailing next step copy button", () => {
     const onSend = vi.fn(() => true);
     render(
       <TextSegment
+        findUnitId={null}
         markdown={COMPLETE_BLOCK}
         isStreaming={false}
         nextStepActions={{ canSend: true, onSend }}
@@ -155,6 +173,7 @@ describe("TextSegment next steps rendering", () => {
   it("renders blocks without prompt options as normal markdown without raw wrapper tags", () => {
     render(
       <TextSegment
+        findUnitId={null}
         markdown={[
           "<TRAYCER_NEXT_STEPS>",
           "Readable prose survives.",
@@ -172,9 +191,27 @@ describe("TextSegment next steps rendering", () => {
     expect(screen.queryByText(/TRAYCER_NEXT_STEPS/)).toBeNull();
   });
 
+  it("excludes next-step action groups from quote selection", () => {
+    render(
+      <TextSegment
+        findUnitId={null}
+        markdown={COMPLETE_BLOCK}
+        isStreaming={false}
+        nextStepActions={{ canSend: true, onSend: () => true }}
+      />,
+    );
+
+    expect(
+      screen
+        .getByTestId("traycer-next-steps")
+        .getAttribute("data-quote-exclude"),
+    ).toBe("");
+  });
+
   it("does not leak partial wrapper tags while streaming", () => {
     render(
       <TextSegment
+        findUnitId={null}
         markdown="<TRAYCER_NEXT_STEPS"
         isStreaming
         nextStepActions={{ canSend: true, onSend: () => true }}
@@ -187,6 +224,7 @@ describe("TextSegment next steps rendering", () => {
   it("renders known agent ids as agent reference chips", () => {
     render(
       <TextSegment
+        findUnitId={null}
         markdown={[
           `Replied to agent \`${KNOWN_AGENT_ID}\` with the repo orientation.`,
           "",

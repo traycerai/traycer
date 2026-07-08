@@ -26,6 +26,7 @@ import {
 } from "@/hooks/agent/use-create-tui-agent";
 import { tuiAgentDisplayTitle } from "@/lib/display-title";
 import { readSeededLaunchWorktreeIntent } from "@/lib/worktree/seeded-launch-worktree-intent";
+import { deriveWorkspaceMode } from "@/lib/worktree/workspace-mode";
 import {
   pendingForkTerminalAgentStagingKey,
   useWorktreeIntentStagingStore,
@@ -182,6 +183,10 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
         forkSourceHarnessSessionId: sourceSessionId,
         onStatusChange: setStatus,
         worktreeIntent,
+        workspaceMode: deriveWorkspaceMode(
+          target.workspaceSeed.workspace.folders.length,
+          worktreeIntent,
+        ),
         terminalAgentArgs: argsTouched
           ? argsDraft
           : target.sourceAgent.terminalAgentArgs,
@@ -243,11 +248,13 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
                 tuiOnly
                 lockedHarnessId={target?.sourceAgent.harnessId ?? null}
                 disabled={busy}
+                registerActivation={false}
               />
               <div className="shrink-0">
                 <AgentModeToggle
                   value={agentMode}
                   disabled={busy}
+                  showTooltip={false}
                   onChange={setAgentMode}
                 />
               </div>

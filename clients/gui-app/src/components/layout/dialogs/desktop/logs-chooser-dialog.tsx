@@ -2,6 +2,7 @@ import { useEffect, useReducer, useState, type ReactNode } from "react";
 import { queryOptions, useQuery } from "@tanstack/react-query";
 import { ChevronDown, ChevronUp, FolderOpen } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { CopyTextButton } from "@/components/copy-text-button";
 import { StartTruncatedText } from "@/components/ui/start-truncated-text";
 import {
   Dialog,
@@ -297,11 +298,21 @@ function LogTailView(props: { readonly state: LogTailState }): ReactNode {
     }
     return (
       <div className="grid gap-1">
-        {props.state.result.truncated ? (
-          <p className="text-ui-xs text-muted-foreground">
-            Showing last {SUPPORT_LOG_TAIL_LINES} lines.
-          </p>
-        ) : null}
+        <div className="flex items-center justify-between gap-2">
+          {props.state.result.truncated ? (
+            <p className="text-ui-xs text-muted-foreground">
+              Showing last {SUPPORT_LOG_TAIL_LINES} lines.
+            </p>
+          ) : (
+            <span aria-hidden />
+          )}
+          <CopyTextButton
+            value={content}
+            label={null}
+            ariaLabel="Copy log output"
+            disabled={false}
+          />
+        </div>
         <pre className="max-h-72 w-full overflow-auto rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-left font-mono text-code-xs text-muted-foreground">
           {content}
         </pre>

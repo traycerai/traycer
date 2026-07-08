@@ -150,13 +150,14 @@ function createBaseRunnerHost(): IRunnerHost {
     validateAuthToken: () => Promise.resolve({ kind: "rejected" as const }),
     validateAuthTokenIdentity: () =>
       Promise.resolve({ kind: "rejected" as const }),
-    exchangeAuthCode: () => Promise.resolve(null),
+    refreshAuthToken: () => Promise.resolve({ kind: "network-error" as const }),
     openExternalLink: () => Promise.resolve(),
     getRegisteredUrlSchemes: () => Promise.resolve([]),
     requestMicrophoneAccess: () => Promise.resolve("granted" as const),
     openMicrophoneSettings: () => Promise.resolve(),
     beginAuthAttempt: () => undefined,
     onAuthCallback: () => ({ dispose: () => undefined }),
+    deviceFlow: { start: () => Promise.resolve(null) },
     secureStorage: {
       get: () => Promise.resolve(null),
       set: () => Promise.resolve(),
@@ -202,6 +203,7 @@ function createBaseRunnerHost(): IRunnerHost {
     migration: null,
     hostManagement: null,
     hostTray: null,
+    zoom: null,
   } satisfies IRunnerHost;
 }
 
@@ -380,6 +382,36 @@ describe("<WindowsBridgeProvider />", () => {
         "hydrated",
       );
     });
+  });
+
+  it("still marks hydration complete when the per-window snapshot fetch rejects", async () => {
+    const fake = createDesktopWindowsBridge();
+    const failingBridge = {
+      ...fake.bridge,
+      perWindowState: {
+        ...fake.bridge.perWindowState,
+        get: () => Promise.reject(new Error("perWindowState.get failed")),
+      },
+    } satisfies DesktopWindowsBridge;
+
+    render(
+      <RunnerHostProvider
+        runnerHost={createRunnerHostWithWindows(failingBridge)}
+      >
+        <WindowsBridgeProvider>
+          <HydrationProbe />
+        </WindowsBridgeProvider>
+      </RunnerHostProvider>,
+    );
+
+    expect(screen.getByTestId("hydration-state").textContent).toBe("pending");
+
+    await waitFor(() => {
+      expect(screen.getByTestId("hydration-state").textContent).toBe(
+        "hydrated",
+      );
+    });
+    expect(fake.perWindowUpdates).toEqual([]);
   });
 
   it("does not write the restored per-window snapshot back during first hydration", async () => {

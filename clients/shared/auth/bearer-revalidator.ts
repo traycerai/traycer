@@ -26,13 +26,36 @@ export interface AuthRevalidator {
  * is shared across sibling processes and the Desktop re-seeding it, so a
  * concurrently-rotated token must be adopted rather than clobbered.
  */
+/**
+ * What `BearerStore.read()` surfaces: the persisted pair plus the identity it
+ * belongs to. Adoption of a concurrently-written token is gated on this
+ * `userId` matching the active lease's, so a different account re-seeding the
+ * shared store cannot rotate this process into a foreign session - mirroring
+ * the GUI `AuthService`'s deliberate refusal to blind-adopt the shell token.
+ */
+export interface StoredBearer extends StoredAuthTokens {
+  readonly userId: string;
+}
+
 export interface BearerStore {
-  read(): Promise<StoredAuthTokens | null>;
+  read(): Promise<StoredBearer | null>;
   write(tokens: StoredAuthTokens): Promise<void>;
   clear(): Promise<void>;
 }
 
 export type RevalidateOutcome = "rotated" | "rejected" | "network-error";
+
+/**
+ * Reject re-read poll cadence. After a refresh is rejected we re-read the store
+ * a few times before treating the credential as dead: a sibling that won the
+ * same single-use rotation may have just persisted a fresh pair to the shared
+ * store. The reject's own round-trip usually already gives the winner enough
+ * time, so the first re-read typically suffices; these bound a slightly-delayed
+ * sibling write (~`POLL_INTERVAL_MS * (ATTEMPTS - 1)` worst case) without
+ * letting a genuine reject hang.
+ */
+export const REJECT_REREAD_POLL_INTERVAL_MS = 100;
+export const REJECT_REREAD_ATTEMPTS = 5;
 
 /**
  * Stream-side auth recovery hook the `/stream` transport invokes after the
@@ -88,16 +111,31 @@ export async function rotateAndPersistBearer(args: {
  *      writing: if a sibling rotated *during* the round trip, adopt theirs
  *      rather than clobbering it; else persist our rotation.
  *   3. Rotate the active lease to whichever token we settled on.
+ *   4. If the refresh is *rejected*, re-read the store once more (a short bounded
+ *      poll). A sibling that won the same single-use rotation outside the
+ *      server's grace window - or while Redis was down / before that coordination
+ *      shipped - may have already persisted a fresh token. If the store now holds
+ *      a token different from `current`, adopt it and report `rotated` rather than
+ *      signing the user out. Only a store still pinned to `current` is a genuine
+ *      reject. (A store whose access token *equals* `current` but whose refresh
+ *      token is stale is a separate staleness case handled by full-pair
+ *      re-provision, not here.)
  *
  * `clearOnReject` controls whether a rejected refresh wipes the store: the
  * renderer signs the user out (true); the CLI leaves credentials in place so a
  * transient authn outage doesn't force a re-login (false).
+ *
+ * `delay` is the awaitable sleep between reject re-read polls, injected so the
+ * poll is deterministic in tests and environment-agnostic in production (mirrors
+ * the proactive scheduler's timer injection); real callers back it with
+ * `setTimeout`.
  */
 export function createBearerRevalidator(args: {
   readonly authnBaseUrl: string;
   readonly lease: BearerLease;
   readonly store: BearerStore;
   readonly clearOnReject: boolean;
+  readonly delay: (ms: number) => Promise<void>;
 }): AuthRevalidator & {
   revalidateCurrentContext(): Promise<RevalidateOutcome>;
 } {
@@ -109,12 +147,18 @@ export function createBearerRevalidator(args: {
       // without a try/catch and without risking an unhandled rejection.
       try {
         const current = args.lease.getBearerToken();
+        // Adopt a concurrently-written token only when it belongs to the SAME
+        // user as this lease. The shared credentials file can be rewritten by a
+        // different account (a sibling `traycer login`), and blind-adopting that
+        // would rotate this process into a foreign session.
+        const leaseUserId = args.lease.identity.userId;
 
         const before = await args.store.read();
         if (
           before !== null &&
           before.token.length > 0 &&
-          before.token !== current
+          before.token !== current &&
+          before.userId === leaseUserId
         ) {
           args.lease.rotate(before.token);
           return "rotated";
@@ -140,6 +184,38 @@ export function createBearerRevalidator(args: {
           return "network-error";
         }
         if (result.kind === "rejected") {
+          // A loser of a concurrent rotation can be rejected even though the
+          // winner already persisted a fresh token to the shared store. Re-read
+          // before treating the credential as dead; a bounded poll covers a
+          // slightly-delayed sibling write. Adopt any non-empty token that
+          // differs from `current` (same shape as the pre-/post-refresh adopt
+          // branches) and never clear - clearing would clobber the winner's pair
+          // and sign the user out. This is a sequential read/wait loop, not an
+          // array transform, so an explicit bounded loop reads clearest.
+          let adopted: string | null = null;
+          for (
+            let attempt = 0;
+            attempt < REJECT_REREAD_ATTEMPTS;
+            attempt += 1
+          ) {
+            const persisted = await args.store.read();
+            if (
+              persisted !== null &&
+              persisted.token.length > 0 &&
+              persisted.token !== current &&
+              persisted.userId === leaseUserId
+            ) {
+              adopted = persisted.token;
+              break;
+            }
+            if (attempt < REJECT_REREAD_ATTEMPTS - 1) {
+              await args.delay(REJECT_REREAD_POLL_INTERVAL_MS);
+            }
+          }
+          if (adopted !== null) {
+            args.lease.rotate(adopted);
+            return "rotated";
+          }
           if (args.clearOnReject) {
             await args.store.clear();
           }
@@ -156,7 +232,8 @@ export function createBearerRevalidator(args: {
           latest !== null &&
           latest.token.length > 0 &&
           latest.token !== current &&
-          latest.token !== result.token;
+          latest.token !== result.token &&
+          latest.userId === leaseUserId;
         if (siblingRotated) {
           args.lease.rotate(latest.token);
           return "rotated";

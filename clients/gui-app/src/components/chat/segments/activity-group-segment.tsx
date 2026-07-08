@@ -1,11 +1,16 @@
 import { Box, ChevronRight } from "lucide-react";
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { useChatMeasuredOpenChange } from "@/components/chat/chat-measured-item-change-context";
+import { deriveActivityGroupCollapsibleKey } from "@/components/chat/chat-collapsible-key";
+import {
+  chatFindActivityGroupChildHeaderUnitId,
+  chatFindActivityGroupSummaryUnitId,
+} from "@/components/chat/chat-find";
 import type {
   ActivityGroupModel,
   ActivityGroupDetailSegment,
@@ -16,6 +21,11 @@ import {
   useActivityGroupOpen,
   useSetActivityGroupOpen,
 } from "@/stores/chats/activity-group-open-store-context";
+import {
+  useChatCollapsibleTileInstanceId,
+  useChatFindForcedOpen,
+  useSetChatFindForcedOpen,
+} from "@/stores/chats/chat-find-force-store-context";
 import { ResolvedApprovalSegment } from "./approval-segment";
 import { CommandSegment } from "./command-segment";
 import { FileChangeSegment } from "./file-change-segment";
@@ -29,11 +39,23 @@ interface ActivityGroupSegmentProps {
 
 export function ActivityGroupSegment(props: ActivityGroupSegmentProps) {
   const { group } = props;
-  const open = useActivityGroupOpen(group.id);
+  const tileInstanceId = useChatCollapsibleTileInstanceId();
+  const collapsibleKey = useMemo(
+    () => deriveActivityGroupCollapsibleKey(tileInstanceId, group.id),
+    [group.id, tileInstanceId],
+  );
+  const userOpen = useActivityGroupOpen(group.id);
+  const summaryFindUnitId = chatFindActivityGroupSummaryUnitId(group.id);
+  const findForcedOpen = useChatFindForcedOpen(collapsibleKey);
+  const open = userOpen || findForcedOpen;
   const setOpen = useSetActivityGroupOpen();
+  const setFindForcedOpen = useSetChatFindForcedOpen();
   const updateOpen = useCallback(
-    (next: boolean) => setOpen(group.id, next),
-    [group.id, setOpen],
+    (next: boolean) => {
+      setOpen(group.id, next);
+      if (!next) setFindForcedOpen(collapsibleKey, false);
+    },
+    [collapsibleKey, group.id, setFindForcedOpen, setOpen],
   );
   const handleOpenChange = useChatMeasuredOpenChange(updateOpen);
 
@@ -44,6 +66,9 @@ export function ActivityGroupSegment(props: ActivityGroupSegmentProps) {
       className="text-ui-sm text-muted-foreground"
     >
       <CollapsibleTrigger
+        data-find-include="true"
+        data-chat-find-unit={summaryFindUnitId}
+        aria-label={group.label}
         className={cn(
           "group/activity flex max-w-full items-center gap-2 overflow-hidden rounded-sm py-1 pr-1 text-left text-muted-foreground transition-colors",
           "hover:text-foreground focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
@@ -71,7 +96,9 @@ export function ActivityGroupSegment(props: ActivityGroupSegmentProps) {
           </span>
         )}
         {group.isActive && group.activeStartedAt !== null ? (
-          <LiveElapsed startedAt={group.activeStartedAt} />
+          <span data-find-skip className="contents">
+            <LiveElapsed startedAt={group.activeStartedAt} />
+          </span>
         ) : null}
         <ChevronRight
           className={cn(
@@ -86,7 +113,11 @@ export function ActivityGroupSegment(props: ActivityGroupSegmentProps) {
       <CollapsibleContent>
         <div className="mt-0.5 ml-5 flex flex-col gap-0.5 border-l border-border/35 pl-3">
           {group.segments.map((segment) => (
-            <ActivityChildSegment key={segment.id} segment={segment} />
+            <ActivityChildSegment
+              key={segment.id}
+              groupId={group.id}
+              segment={segment}
+            />
           ))}
         </div>
       </CollapsibleContent>
@@ -95,15 +126,21 @@ export function ActivityGroupSegment(props: ActivityGroupSegmentProps) {
 }
 
 interface ActivityChildSegmentProps {
+  readonly groupId: string;
   readonly segment: ActivityGroupDetailSegment;
 }
 
 function ActivityChildSegment(props: ActivityChildSegmentProps) {
-  const { segment } = props;
+  const { groupId, segment } = props;
+  const headerFindUnitId = chatFindActivityGroupChildHeaderUnitId(
+    groupId,
+    segment.id,
+  );
   switch (segment.kind) {
     case "tool":
       return (
         <ToolSegment
+          id={segment.id}
           toolName={segment.toolName}
           inputSummary={segment.inputSummary}
           inputDetail={segment.inputDetail}
@@ -111,9 +148,16 @@ function ActivityChildSegment(props: ActivityChildSegmentProps) {
           agentMessageSend={segment.agentMessageSend}
           isStreaming={segment.isStreaming}
           endState={segment.endState}
+          stopped={segment.stopped}
           progress={segment.progress}
+          backgroundOutput={segment.backgroundOutput}
+          backgroundTask={segment.backgroundTask}
           startedAt={segment.startedAt}
+          durationMs={segment.durationMs}
           variant="row"
+          headerFindUnitId={
+            segment.agentMessageSend === null ? headerFindUnitId : null
+          }
         />
       );
     case "command":
@@ -127,10 +171,17 @@ function ActivityChildSegment(props: ActivityChildSegmentProps) {
           progress={segment.progress}
           startedAt={segment.startedAt}
           variant="row"
+          headerFindUnitId={headerFindUnitId}
         />
       );
     case "file_change":
-      return <FileChangeSegment segment={segment} variant="row" />;
+      return (
+        <FileChangeSegment
+          segment={segment}
+          variant="row"
+          headerFindUnitId={headerFindUnitId}
+        />
+      );
     case "subagent":
       return (
         <SubagentSegment
@@ -142,8 +193,11 @@ function ActivityChildSegment(props: ActivityChildSegmentProps) {
           result={segment.result}
           isStreaming={segment.isStreaming}
           endState={segment.endState}
+          stopped={segment.stopped}
           startedAt={segment.startedAt}
           durationMs={segment.durationMs}
+          workflowMeta={segment.workflowMeta}
+          nested={segment.children}
           variant="row"
         />
       );
@@ -153,9 +207,11 @@ function ActivityChildSegment(props: ActivityChildSegmentProps) {
         <ResolvedApprovalSegment
           toolName={segment.toolName}
           description={segment.description}
+          inputSummary={segment.inputSummary}
           inputDetail={segment.inputDetail}
           decision={segment.decision}
           variant="row"
+          headerFindUnitId={headerFindUnitId}
         />
       );
     default: {

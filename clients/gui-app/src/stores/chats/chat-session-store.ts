@@ -41,9 +41,11 @@ import { AUTH_ERROR_CODE } from "@traycer/protocol/host/agent/gui/agent-runtime"
 import {
   accumulateTurnContent,
   finalizeStreamingActionBlocks,
+  reopenStreamingSubagentBlocks,
   type FinalizedActionStatus,
 } from "@traycer/protocol/host/agent/gui/agent-runtime-accumulator";
 import type {
+  BackgroundItem,
   ChatAccess,
   ChatAccumulatedFileChange,
   ChatActiveTurn,
@@ -87,6 +89,7 @@ type ChatOwnerActionFrame = Exclude<
   ChatSubscribeClientFrame,
   { readonly kind: "ping" }
 >;
+type ChatActionAckFrame = Parameters<ChatStreamCallbacks["onActionAck"]>[0];
 type ChatSessionSetState = StoreApi<ChatSessionState>["setState"];
 type ChatSessionGetState = StoreApi<ChatSessionState>["getState"];
 type SendActionInput = {
@@ -249,10 +252,42 @@ export interface ChatSessionState {
    */
   readonly runStatus: ChatRunStatus;
   readonly activeTurn: ChatActiveTurn | null;
+  /**
+   * The host's own `isTurnInProgress()`: is a turn genuinely active or
+   * activating right now? Narrower than `runStatus !== "idle"`, which also
+   * reads "running" for a pending queued item or visible background work
+   * outliving the turn - neither of which this corresponds to. `undefined`
+   * means an older host that predates this field; consumers should fall back
+   * to their own `runStatus`/`activeTurn`/`queue`/`backgroundItems`-derived
+   * approximation (see `chat-tile-session-state.ts`) rather than treat a
+   * missing value as a fixed true/false for the whole session.
+   */
+  readonly turnInProgress: boolean | undefined;
   readonly pendingApprovals: ReadonlyArray<ChatApprovalState>;
   readonly pendingFileEditApprovals: ReadonlyArray<ChatFileEditApprovalState>;
   readonly pendingInterviews: ReadonlyArray<ChatPendingInterviewState>;
   readonly accumulatedFileChanges: ReadonlyArray<ChatAccumulatedFileChange>;
+  readonly backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
+  /**
+   * In-flight per-item background stops, keyed by `taskId` → the
+   * `clientActionId` of the stop frame that was sent. An entry exists from the
+   * moment its Stop frame is dispatched until the host either removes that item
+   * from {@link backgroundItems} (its terminal) or rejects the stop. Drives
+   * per-row Stop disabling and the no-duplicate-frame guard - a repeat stop for
+   * an already-stopping task is a no-op.
+   */
+  readonly pendingBackgroundStops: Readonly<Record<string, string>>;
+  /**
+   * The in-flight "Stop all" background request (its `clientActionId`), or
+   * null. Used only while the stop-all frame is outstanding before its ack; the
+   * matching ack clears it. Accepted task ids from that ack move into
+   * `pendingBackgroundStops`, which then owns per-row disabling until those
+   * tasks leave the running list.
+   */
+  readonly pendingBackgroundStopAll: {
+    readonly clientActionId: string;
+    readonly taskIds: ReadonlySet<string>;
+  } | null;
   readonly restore: ChatRestoreSlot | null;
   readonly pendingActions: Readonly<Record<string, PendingChatAction>>;
   readonly acceptedActions: Readonly<Record<string, AcceptedChatAction>>;
@@ -349,6 +384,9 @@ export interface ChatSessionState {
     revertArtifacts: boolean,
   ) => string | null;
   stopTurn: () => string | null;
+  stopBackgroundItem: (taskId: string) => string | null;
+  stopAllBackgroundItems: () => string | null;
+  pauseQueue: () => string | null;
   resumeQueue: () => string | null;
   queueEdit: (queueItemId: string, content: JsonContent) => string | null;
   queueCancel: (queueItemId: string) => string | null;
@@ -692,10 +730,23 @@ export function createChatSessionStore(
             ),
             runStatus: frame.snapshot.runStatus,
             activeTurn: frame.snapshot.activeTurn,
+            turnInProgress: frame.snapshot.turnInProgress,
             pendingApprovals: frame.snapshot.pendingApprovals,
             pendingFileEditApprovals: frame.snapshot.pendingFileEditApprovals,
             pendingInterviews: frame.snapshot.pendingInterviews,
             accumulatedFileChanges: frame.snapshot.accumulatedFileChanges,
+            backgroundItems: frame.snapshot.backgroundItems,
+            // Drop per-item stops whose task has left the running-only list
+            // (its terminal landed) and clear the stop-all flag once nothing
+            // is left running, so settled rows never stay disabled.
+            pendingBackgroundStops: reconcileBackgroundStops(
+              state.pendingBackgroundStops,
+              frame.snapshot.backgroundItems,
+            ),
+            pendingBackgroundStopAll: reconcileBackgroundStopAll(
+              state.pendingBackgroundStopAll,
+              frame.snapshot.backgroundItems,
+            ),
             pendingActions: pending.pendingActions,
             acceptedActions: pruneAcceptedActions(
               {
@@ -754,11 +805,14 @@ export function createChatSessionStore(
               : state.pendingUserMessages.filter(
                   (message) => message.clientActionId !== frame.clientActionId,
                 );
+          const backgroundStopAck = reconcileBackgroundStopAck(state, frame);
           if (frame.status === "accepted") {
             if (pending === null) {
               return {
                 pendingActions: nextPending,
                 pendingUserMessages: nextPendingUsers,
+                pendingBackgroundStops: backgroundStopAck.pendingStops,
+                pendingBackgroundStopAll: backgroundStopAck.pendingStopAll,
               };
             }
             return {
@@ -769,11 +823,15 @@ export function createChatSessionStore(
                 Date.now(),
               ),
               pendingUserMessages: nextPendingUsers,
+              pendingBackgroundStops: backgroundStopAck.pendingStops,
+              pendingBackgroundStopAll: backgroundStopAck.pendingStopAll,
             };
           }
           return {
             pendingActions: nextPending,
             pendingUserMessages: nextPendingUsers,
+            pendingBackgroundStops: backgroundStopAck.pendingStops,
+            pendingBackgroundStopAll: backgroundStopAck.pendingStopAll,
             queue: removeOptimisticQueuedItemByClientActionId(
               state.queue,
               frame.clientActionId,
@@ -881,10 +939,25 @@ export function createChatSessionStore(
           const previousTurnId = state.activeTurn?.turnId ?? null;
           const nextTurnId = frame.activeTurn?.turnId ?? null;
           const turnIdChanged = previousTurnId !== nextTurnId;
+          const nextBackgroundItems =
+            frame.backgroundItems ?? state.backgroundItems;
           return {
             messages: nextMessages,
             runStatus: frame.runStatus,
             activeTurn: frame.activeTurn,
+            turnInProgress: frame.turnInProgress ?? state.turnInProgress,
+            backgroundItems: nextBackgroundItems,
+            // Keep background-stop pending state in lockstep with the
+            // running-only list: a task that has left the list settled, so its
+            // Stop is no longer in flight.
+            pendingBackgroundStops: reconcileBackgroundStops(
+              state.pendingBackgroundStops,
+              nextBackgroundItems,
+            ),
+            pendingBackgroundStopAll: reconcileBackgroundStopAll(
+              state.pendingBackgroundStopAll,
+              nextBackgroundItems,
+            ),
             liveAssistantMessage: liveAssistantForTurnStateFrame({
               current: state.liveAssistantMessage,
               previousTurnId,
@@ -1210,10 +1283,14 @@ export function createChatSessionStore(
       queue: EMPTY_QUEUE,
       runStatus: "idle",
       activeTurn: null,
+      turnInProgress: undefined,
       pendingApprovals: [],
       pendingFileEditApprovals: [],
       pendingInterviews: [],
       accumulatedFileChanges: [],
+      backgroundItems: undefined,
+      pendingBackgroundStops: {},
+      pendingBackgroundStopAll: null,
       restore: null,
       pendingActions: {},
       acceptedActions: {},
@@ -1503,6 +1580,90 @@ export function createChatSessionStore(
             settings: null,
             createdAt: Date.now(),
           },
+          pendingUserMessage: null,
+        });
+      },
+      stopBackgroundItem: (taskId) => {
+        const state = get();
+        const items = state.backgroundItems;
+        // Unsupported by this provider (sentinel), a stop-all already in
+        // flight, this task already stopping, or the task no longer in the
+        // host's running-only list: no-op, so no duplicate stop frame is sent.
+        if (items === undefined) return null;
+        if (state.pendingBackgroundStopAll !== null) return null;
+        if (Object.hasOwn(state.pendingBackgroundStops, taskId)) return null;
+        if (!items.some((item) => item.taskId === taskId)) return null;
+        const clientActionId = uuidv4();
+        const frame: ChatOwnerActionFrame = {
+          kind: "stopBackgroundItem",
+          hasBinaryPayload: false,
+          epicId: options.epicId,
+          chatId: options.chatId,
+          clientActionId,
+          taskId,
+        };
+        const sent = sendAction({
+          set,
+          get,
+          frame,
+          pending: basicPending(clientActionId, "stopBackgroundItem"),
+          pendingUserMessage: null,
+        });
+        if (sent === null) return null;
+        set((current) => ({
+          pendingBackgroundStops: {
+            ...current.pendingBackgroundStops,
+            [taskId]: sent,
+          },
+        }));
+        return sent;
+      },
+      stopAllBackgroundItems: () => {
+        const state = get();
+        const items = state.backgroundItems;
+        // Unsupported sentinel, a stop-all already in flight, an accepted row
+        // stop still pending, or nothing running: ignore so a rapid repeat does
+        // not enqueue duplicate stop frames.
+        if (items === undefined) return null;
+        if (state.pendingBackgroundStopAll !== null) return null;
+        if (Object.keys(state.pendingBackgroundStops).length > 0) return null;
+        if (items.length === 0) return null;
+        const taskIds = new Set(items.map((item) => item.taskId));
+        const clientActionId = uuidv4();
+        const frame: ChatOwnerActionFrame = {
+          kind: "stopAllBackgroundItems",
+          hasBinaryPayload: false,
+          epicId: options.epicId,
+          chatId: options.chatId,
+          clientActionId,
+        };
+        const sent = sendAction({
+          set,
+          get,
+          frame,
+          pending: basicPending(clientActionId, "stopAllBackgroundItems"),
+          pendingUserMessage: null,
+        });
+        if (sent === null) return null;
+        set(() => ({
+          pendingBackgroundStopAll: { clientActionId: sent, taskIds },
+        }));
+        return sent;
+      },
+      pauseQueue: () => {
+        const clientActionId = uuidv4();
+        const frame: ChatOwnerActionFrame = {
+          kind: "pauseQueue",
+          hasBinaryPayload: false,
+          epicId: options.epicId,
+          chatId: options.chatId,
+          clientActionId,
+        };
+        return sendAction({
+          set,
+          get,
+          frame,
+          pending: basicPending(clientActionId, "pauseQueue"),
           pendingUserMessage: null,
         });
       },
@@ -1933,6 +2094,122 @@ function pendingActionForId(
   return pendingActions[clientActionId];
 }
 
+// The `taskId` whose in-flight stop carries `clientActionId`, or null. Used by
+// the ack handler to clear the right per-item pending entry.
+function backgroundStopTaskIdForActionId(
+  pendingBackgroundStops: Readonly<Record<string, string>>,
+  clientActionId: string,
+): string | null {
+  for (const taskId of Object.keys(pendingBackgroundStops)) {
+    if (pendingBackgroundStops[taskId] === clientActionId) return taskId;
+  }
+  return null;
+}
+
+function reconcileBackgroundStopAck(
+  state: ChatSessionState,
+  frame: ChatActionAckFrame,
+): {
+  readonly pendingStops: Readonly<Record<string, string>>;
+  readonly pendingStopAll: ChatSessionState["pendingBackgroundStopAll"];
+} {
+  // A stop stays "in flight" until the host running-only list drops the item(s),
+  // so accepted acks keep disabled state tied to stream truth instead of ack
+  // timing. Rejected acks clear only the failed request's pending state.
+  const ackTaskId = backgroundStopTaskIdForActionId(
+    state.pendingBackgroundStops,
+    frame.clientActionId,
+  );
+  const stopAllAcked =
+    state.pendingBackgroundStopAll?.clientActionId === frame.clientActionId;
+  const basePendingStops =
+    ackTaskId !== null && frame.status === "rejected"
+      ? withoutRecordKey(state.pendingBackgroundStops, ackTaskId)
+      : state.pendingBackgroundStops;
+  const pendingStops = stopAllAcked
+    ? withBackgroundStopTaskIds(
+        basePendingStops,
+        frame.backgroundStopTaskIds,
+        frame.clientActionId,
+      )
+    : basePendingStops;
+  return {
+    pendingStops,
+    pendingStopAll: stopAllAcked ? null : state.pendingBackgroundStopAll,
+  };
+}
+
+function withoutRecordKey(
+  record: Readonly<Record<string, string>>,
+  key: string,
+): Readonly<Record<string, string>> {
+  if (!Object.hasOwn(record, key)) return record;
+  const next = { ...record };
+  delete next[key];
+  return next;
+}
+
+function withBackgroundStopTaskIds(
+  record: Readonly<Record<string, string>>,
+  taskIds: ReadonlyArray<string>,
+  clientActionId: string,
+): Readonly<Record<string, string>> {
+  if (taskIds.length === 0) return record;
+  return {
+    ...record,
+    ...Object.fromEntries(taskIds.map((taskId) => [taskId, clientActionId])),
+  };
+}
+
+// Keep only the per-item stops whose task is still in the host's running-only
+// list; a task that has left the list reached its terminal and is no longer
+// stopping. Returns the same reference when nothing changes so zustand skips a
+// redundant notification.
+function reconcileBackgroundStops(
+  pendingBackgroundStops: Readonly<Record<string, string>>,
+  items: ReadonlyArray<BackgroundItem> | undefined,
+): Readonly<Record<string, string>> {
+  const taskIds = Object.keys(pendingBackgroundStops);
+  if (taskIds.length === 0) return pendingBackgroundStops;
+  const running =
+    items === undefined ? null : new Set(items.map((i) => i.taskId));
+  const kept = taskIds.filter(
+    (taskId) => running !== null && running.has(taskId),
+  );
+  if (kept.length === taskIds.length) return pendingBackgroundStops;
+  return Object.fromEntries(
+    kept.map((taskId) => [taskId, pendingBackgroundStops[taskId]]),
+  );
+}
+
+// The stop-all flag clears once the running list has fully drained (or the
+// provider stopped reporting one); otherwise it persists until its ack.
+function reconcileBackgroundStopAll(
+  pendingBackgroundStopAll: {
+    readonly clientActionId: string;
+    readonly taskIds: ReadonlySet<string>;
+  } | null,
+  items: ReadonlyArray<BackgroundItem> | undefined,
+): {
+  readonly clientActionId: string;
+  readonly taskIds: ReadonlySet<string>;
+} | null {
+  if (pendingBackgroundStopAll === null) return null;
+  if (items === undefined || items.length === 0) return null;
+  const running = new Set(items.map((item) => item.taskId));
+  const covered = Array.from(pendingBackgroundStopAll.taskIds).filter(
+    (taskId) => running.has(taskId),
+  );
+  if (covered.length === 0) return null;
+  if (covered.length === pendingBackgroundStopAll.taskIds.size) {
+    return pendingBackgroundStopAll;
+  }
+  return {
+    clientActionId: pendingBackgroundStopAll.clientActionId,
+    taskIds: new Set(covered),
+  };
+}
+
 /**
  * Resolves the restorable `send` record for a `messageId` across either
  * the `pendingActions` or `acceptedActions` map. Returns the matched
@@ -2147,6 +2424,95 @@ function applyBlockDelta(
   return applyContentBlockDelta(state, event);
 }
 
+// The block id whose OWNING message a detached backgrounded-subagent event
+// targets, plus whether routing to that owner is MANDATORY:
+//   - `subagent.*`             → the subagent block (`event.blockId`).
+//   - a terminal `tool_call.*` → its non-empty `parentBlockId` when it is a
+//     subagent CHILD; otherwise its own `blockId` (a genuinely top-level
+//     background command/Monitor terminal).
+//   - any other nested event  → its `parentBlockId`.
+// `mandatory` is set whenever the owner comes from `parentBlockId` or from a
+// parentless background tool terminal: such an event belongs to an older row
+// and must NEVER fall through to the active turn, where the accumulator would
+// mint a duplicate top-level card for it.
+// Null for everything else (text/reasoning/top-level tool deltas), so the
+// common high-frequency path skips the owner lookup.
+function detachedSubagentOwnerTarget(
+  event: RuntimeEvent,
+): { readonly ownerBlockId: string; readonly mandatory: boolean } | null {
+  const parentBlockId =
+    "parentBlockId" in event &&
+    typeof event.parentBlockId === "string" &&
+    event.parentBlockId.length > 0
+      ? event.parentBlockId
+      : null;
+  if (
+    event.type === "subagent.started" ||
+    event.type === "subagent.progress" ||
+    event.type === "subagent.completed"
+  ) {
+    return { ownerBlockId: event.blockId, mandatory: false };
+  }
+  if (
+    event.type === "tool_call.completed" ||
+    event.type === "tool_call.errored"
+  ) {
+    if (parentBlockId !== null) {
+      return { ownerBlockId: parentBlockId, mandatory: true };
+    }
+    return {
+      ownerBlockId: event.blockId,
+      mandatory: "backgroundTask" in event && event.backgroundTask === true,
+    };
+  }
+  if (parentBlockId !== null) {
+    return { ownerBlockId: parentBlockId, mandatory: true };
+  }
+  return null;
+}
+
+function assistantMessageOwnsBlock(message: Message, blockId: string): boolean {
+  return (
+    message.role === "assistant" &&
+    message.blocks.some((block) => block.blockId === blockId)
+  );
+}
+
+// Apply a detached backgrounded-subagent event to the SETTLED message that owns
+// its card (its spawning turn already ended), so the card keeps updating instead
+// of being dropped (no active turn) or mis-applied to a later turn's row. Returns
+// null when no message owns the block (caller falls back to active-turn routing).
+function applyEventToOwningMessage(
+  state: ChatSessionState,
+  event: RuntimeEvent,
+  ownerBlockId: string,
+): Partial<ChatSessionState> | null {
+  const index = state.messages.findIndex((message) =>
+    assistantMessageOwnsBlock(message, ownerBlockId),
+  );
+  if (index < 0) return null;
+  const target = state.messages[index];
+  if (target.role !== "assistant") return null;
+  const content = accumulateTurnContent(
+    { blocks: target.blocks, blocksVersion: target.blocksVersion ?? 0 },
+    event,
+  );
+  if (content.blocks === target.blocks) return {};
+  const next = state.messages.slice();
+  next[index] = {
+    ...target,
+    blocks: content.blocks,
+    ...(target.blocksVersion === undefined
+      ? {}
+      : { blocksVersion: content.blocksVersion }),
+    // Preserve the settled row's `timestamp` (its completed-at). A detached
+    // subagent's later activity must NOT advance the turn's completed-at / cache
+    // token - the host detached writer only replaces blocks/blocksVersion, and
+    // this mirrors it so the turn doesn't appear to "complete later".
+  };
+  return { messages: next };
+}
+
 // Reduces a single runtime delta event onto the session state. The branches map
 // one-to-one to the distinct block/delta kinds; flattening that mapping is
 // clearer than threading the dispatch through extra indirection.
@@ -2159,6 +2525,34 @@ function applyContentBlockDelta(
     state.messages,
     state.activeTurn?.turnId ?? state.liveAssistantMessage?.turnId ?? null,
   );
+  // Detached backgrounded-subagent activity: its card lives in an earlier,
+  // already-settled message. Route the event to that message when the active
+  // turn's row does not own the block, so the card keeps updating live. Gated to
+  // subagent-context events; the active turn's own subagent skips this.
+  const detachedTarget = detachedSubagentOwnerTarget(event);
+  if (
+    detachedTarget !== null &&
+    !(
+      assistantIndex >= 0 &&
+      assistantMessageOwnsBlock(
+        state.messages[assistantIndex],
+        detachedTarget.ownerBlockId,
+      )
+    )
+  ) {
+    const routed = applyEventToOwningMessage(
+      state,
+      event,
+      detachedTarget.ownerBlockId,
+    );
+    if (routed !== null) return routed;
+    // A parented (subagent-child) event whose owning message is gone must NOT
+    // fall through to the active turn: the accumulator would append its
+    // terminal as a duplicate top-level card on an unrelated turn. The settled
+    // subagent owner is its only legitimate target, so drop it (identity =
+    // no-op) instead.
+    if (detachedTarget.mandatory) return state;
+  }
   if (assistantIndex >= 0) {
     const target = state.messages[assistantIndex];
     if (target.role !== "assistant") {
@@ -2340,6 +2734,22 @@ function assistantMessageFromLiveAssistant(
   liveAssistant: LiveAssistantMessage,
   fallbackStatus: FinalizedActionStatus,
 ): Extract<Message, { role: "assistant" }> {
+  // Spread converts the readonly live blocks to the mutable array the accumulator
+  // signature takes (it does not mutate in place).
+  const liveBlocks = [...liveAssistant.blocks];
+  // Finalize the row's streaming blocks for this transient safety-net placeholder,
+  // but keep a still-`streaming` (backgrounded) subagent card "running" - mirroring
+  // the accumulator's terminal handling. Force-finalizing it to `interrupted` here
+  // would briefly flicker a legitimately-running detached subagent until the host's
+  // authoritative snapshot (which carries the real status) replaces this row.
+  const finalizedBlocks = reopenStreamingSubagentBlocks(
+    liveBlocks,
+    finalizeStreamingActionBlocks(
+      liveBlocks,
+      liveAssistant.timestamp,
+      fallbackStatus,
+    ),
+  );
   return {
     role: "assistant",
     // This frozen row is a transient safety-net placeholder that the host's
@@ -2347,13 +2757,7 @@ function assistantMessageFromLiveAssistant(
     // wait for a durable assistant message id from persistence.
     messageId: transientLiveAssistantMessageId(liveAssistant.turnId),
     sender: liveAssistant.sender,
-    // Spread converts the readonly live blocks to the mutable array the
-    // accumulator signature takes (it does not mutate in place).
-    blocks: finalizeStreamingActionBlocks(
-      [...liveAssistant.blocks],
-      liveAssistant.timestamp,
-      fallbackStatus,
-    ),
+    blocks: finalizedBlocks,
     startedAt: liveAssistant.startedAt,
     blocksVersion: liveAssistant.blocksVersion,
     timestamp: liveAssistant.timestamp,

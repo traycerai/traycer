@@ -10,6 +10,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { preserveWhenNestedOverlay } from "./preserve-when-nested-overlay";
+import { useDialogOverlayBoundaryEl } from "@/providers/dialog-overlay-boundary-context";
 import {
   AddFolderButton,
   type AddFolderHandler,
@@ -55,6 +56,12 @@ export function WorkspaceFolderSummaryControl(props: {
   // overlay (stacked above) from the host dialog (an ancestor) - see
   // preserveWhenNestedOverlay.
   const contentRef = useRef<HTMLDivElement>(null);
+  // Non-null only inside a modal dialog (the New Conversation modal) - see
+  // `DialogOverlayBoundaryContext`. Containing this popover inside the
+  // dialog's own DOM (instead of the default `document.body` portal) keeps it
+  // - and the branch/location popovers nested inside it - within the
+  // dialog's scroll-lock boundary, so wheel scrolling their lists works.
+  const dialogBoundaryEl = useDialogOverlayBoundaryEl();
 
   const handleExternalAddFolder = async (): Promise<boolean> => {
     setOverlayState({
@@ -163,6 +170,7 @@ export function WorkspaceFolderSummaryControl(props: {
         side={props.popoverSide}
         align="start"
         collisionPadding={12}
+        container={dialogBoundaryEl ?? undefined}
         className="w-fit max-w-[min(92vw,40rem)] max-h-[min(var(--radix-popover-content-available-height),32rem)] gap-0 overflow-y-auto p-3"
         data-testid={props.popoverTestId}
         onInteractOutside={(event) =>
@@ -181,7 +189,7 @@ export function WorkspaceFolderSummaryControl(props: {
           updatePending={props.updatePending}
           onEditEnvironment={props.onEditEnvironment}
           readOnly={false}
-          nestedInPopover={false}
+          nestedInPopover={dialogBoundaryEl !== null}
           bindingResolved={props.bindingResolved}
         />
       </PopoverContent>

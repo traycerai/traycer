@@ -23,6 +23,7 @@ interface CommandSegmentProps {
   // Wall-clock start (epoch ms) driving the elapsed heartbeat while streaming.
   startedAt: number;
   variant: "card" | "row";
+  headerFindUnitId: string | null;
 }
 
 export function CommandSegment(props: CommandSegmentProps) {
@@ -86,7 +87,7 @@ export function CommandSegment(props: CommandSegmentProps) {
         />
       ) : null}
       {exitBadge}
-      <SegmentEndStateBadge endState={endState} />
+      <SegmentEndStateBadge endState={endState} stopped={false} />
     </>
   );
 
@@ -119,6 +120,8 @@ export function CommandSegment(props: CommandSegmentProps) {
         tone={errored ? "destructive" : "default"}
         stickyHeader
         expandable
+        headerFindUnitId={props.headerFindUnitId}
+        bodyFindUnitId={null}
         className={undefined}
         footer={streamingFooter}
       />
@@ -138,6 +141,8 @@ export function CommandSegment(props: CommandSegmentProps) {
       headerPosition="normal"
       bodyOverflow="hidden"
       expandable
+      headerFindUnitId={props.headerFindUnitId}
+      bodyFindUnitId={null}
       className={undefined}
     />
   );

@@ -9,6 +9,7 @@ import {
 } from "vitest";
 import type { CommandContext } from "../../runner/runner";
 import type { RuntimeContext } from "../../runner/runtime";
+import { noopLogger } from "../../logger";
 import type { AutoBootstrapDecision } from "../../host/auto-bootstrap";
 
 // Pin Core Flow 7 wiring: `traycer login` and `traycer host status`
@@ -25,7 +26,7 @@ vi.mock("../../host/auto-bootstrap", () => {
 });
 
 vi.mock("../../auth/login-flow", () => ({
-  runLoginFlow: vi.fn(),
+  runDeviceAuthFlow: vi.fn(),
 }));
 
 vi.mock("../../host/pid-metadata", () => ({
@@ -49,6 +50,7 @@ function makeRuntime(overrides: Partial<RuntimeContext>): RuntimeContext {
     noBootstrap: false,
     nonInteractive: false,
     environment: "production",
+    logger: noopLogger,
     ...overrides,
   };
 }
@@ -124,7 +126,7 @@ describe("loginCommand", () => {
     const autoBootstrap = await import("../../host/auto-bootstrap");
     const loginFlow = await import("../../auth/login-flow");
 
-    (loginFlow.runLoginFlow as Mock).mockResolvedValue({
+    (loginFlow.runDeviceAuthFlow as Mock).mockResolvedValue({
       token: "t",
       user: { id: "u", email: "a@b", name: "A" },
       authnBaseUrl: "https://authn",
@@ -136,7 +138,7 @@ describe("loginCommand", () => {
 
     // Sign-in must NOT trigger a host download/install as a side effect.
     expect(autoBootstrap.maybeAutoBootstrap).not.toHaveBeenCalled();
-    expect(loginFlow.runLoginFlow).toHaveBeenCalled();
+    expect(loginFlow.runDeviceAuthFlow).toHaveBeenCalledWith(ctx);
     const data = result.data as { bootstrap: null; user: { id: string } };
     expect(data.bootstrap).toBeNull();
     expect(data.user.id).toBe("u");
@@ -146,7 +148,7 @@ describe("loginCommand", () => {
   it("reports the signed-in user in human mode", async () => {
     const loginFlow = await import("../../auth/login-flow");
 
-    (loginFlow.runLoginFlow as Mock).mockResolvedValue({
+    (loginFlow.runDeviceAuthFlow as Mock).mockResolvedValue({
       token: "t",
       user: { id: "u", email: "a@b", name: "A" },
       authnBaseUrl: "https://authn",
@@ -178,7 +180,10 @@ describe("hostStatusCommand auto-bootstrap wiring", () => {
     expect(autoBootstrap.maybeAutoBootstrap).toHaveBeenCalledWith(
       expect.objectContaining({ trigger: "host-status" }),
     );
-    const data = result.data as { bootstrap: AutoBootstrapDecision; running: boolean };
+    const data = result.data as {
+      bootstrap: AutoBootstrapDecision;
+      running: boolean;
+    };
     expect(data.bootstrap.status).toBe("installed");
     expect(data.bootstrap.installedVersion).toBe("1.5.0");
   });
@@ -188,9 +193,7 @@ describe("hostStatusCommand auto-bootstrap wiring", () => {
     const pid = await import("../../host/pid-metadata");
     const log = await import("../../host/bootstrap-log");
 
-    (autoBootstrap.maybeAutoBootstrap as Mock).mockResolvedValue(
-      decisionReady,
-    );
+    (autoBootstrap.maybeAutoBootstrap as Mock).mockResolvedValue(decisionReady);
     (pid.readHostPidMetadata as Mock).mockResolvedValue({
       // Use the live test-process pid so the status command's liveness
       // check (isProcessAlive) sees the host as actually running, not
@@ -207,7 +210,10 @@ describe("hostStatusCommand auto-bootstrap wiring", () => {
     const { hostStatusCommand } = await import("../host-status");
     const ctx = makeCtx(makeRuntime({}));
     const result = await hostStatusCommand(ctx);
-    const data = result.data as { bootstrap: AutoBootstrapDecision; running: boolean };
+    const data = result.data as {
+      bootstrap: AutoBootstrapDecision;
+      running: boolean;
+    };
     expect(data.bootstrap.status).toBe("ready");
     expect(data.running).toBe(true);
   });

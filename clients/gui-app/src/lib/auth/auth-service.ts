@@ -1,6 +1,7 @@
 import type {
   IRunnerHost,
-  AuthCallbackResult,
+  DeviceFlowResult,
+  DeviceFlowSession,
   StoredAuthTokens,
 } from "@traycer-clients/shared/platform/runner-host";
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
@@ -15,10 +16,11 @@ import {
 } from "@traycer-clients/shared/auth/request-context-provider";
 import { rotateAndPersistBearer } from "@traycer-clients/shared/auth/bearer-revalidator";
 import {
-  CODE_CHALLENGE_METHOD,
-  deriveCodeChallenge,
-  generateCodeVerifier,
-} from "@traycer-clients/shared/auth/pkce";
+  createProactiveRefreshScheduler,
+  DEFAULT_REFRESH_LEAD_MS,
+  DEFAULT_REFRESH_MIN_DELAY_MS,
+  type ProactiveRefreshScheduler,
+} from "@traycer-clients/shared/auth/token-refresh-scheduler";
 import { usernameFromAuthenticatedUser } from "@traycer/protocol/auth/request-context";
 import {
   useAuthStore,
@@ -28,6 +30,8 @@ import {
 } from "@/stores/auth/auth-store";
 import { normalizeAvatarUrl } from "@/lib/avatar-url";
 import { projectShareableTeams } from "@/hooks/epic/use-epic-shareable-teams";
+import { onWakeReconnect } from "@/lib/host/wake-reconnect";
+import { appLogger, describeLogError } from "@/lib/logger";
 import { AuthTokenStore } from "./auth-token-store";
 
 export interface AuthServiceOptions {
@@ -82,24 +86,10 @@ export type ExternalSession =
   | { readonly status: "signed-out" };
 
 /**
- * Maximum time the GUI will wait for a shell-delivered auth callback after
- * `signIn()` before returning to signed-out with an `auth-timeout` error.
- * Exposed so tests can reference the same value and callers can reason about
- * expected behavior.
- */
-export const AUTH_CALLBACK_TIMEOUT_MS = 120_000;
-
-/**
- * Stable error identifier emitted when the shell never delivers a callback
- * before the client-side timeout fires.
- */
-export const AUTH_ERROR_TIMEOUT = "auth-timeout";
-
-/**
- * Stable error identifier emitted when the runner host rejects the attempt to
- * open the external sign-in URL (e.g. the shell cannot launch a browser).
- * This must fail the flow immediately rather than waiting for the callback
- * timeout, since no callback will ever arrive.
+ * Stable error identifier emitted when the device-authorization request itself
+ * fails (network/5xx, or the shell has no device-flow backend) so no poll loop
+ * ever starts. This must fail the flow immediately - there is no browser tab to
+ * wait on - so the UI shows a retry CTA.
  */
 export const AUTH_ERROR_LAUNCH_FAILED = "auth-launch-failed";
 
@@ -121,15 +111,70 @@ export const AUTH_ERROR_SESSION_EXPIRED = "session-expired";
  */
 export const AUTH_ERROR_SIGN_IN_FAILED = "sign-in-failed";
 
+function classifyAuthFailureForLog(error: string): string {
+  if (
+    error === AUTH_ERROR_LAUNCH_FAILED ||
+    error === AUTH_ERROR_SESSION_EXPIRED ||
+    error === AUTH_ERROR_SIGN_IN_FAILED ||
+    error === AUTH_ERROR_DEVICE_DENIED ||
+    error === AUTH_ERROR_DEVICE_EXPIRED
+  ) {
+    return error;
+  }
+  return "external-callback-error";
+}
+
 /**
- * Secure-storage key holding the in-flight PKCE `code_verifier`. Persisted at
- * `signIn()` and consumed at the callback exchange so a cold-start callback
- * replay (e.g. mobile re-delivering `getLaunchUrl()` after a process restart
- * between `signIn()` and the redirect) can still redeem the one-time code. The
- * verifier is single-use: it is deleted the moment the code is exchanged, and
- * on timeout / sign-out so a stale secret never lingers in the keychain.
+ * Stable error identifier emitted when the user denies a device-flow request in
+ * the browser. Distinct from `AUTH_ERROR_SIGN_IN_FAILED` so the device-code
+ * surface can render "Request denied" copy.
  */
-const PKCE_VERIFIER_STORAGE_KEY = "traycer.auth.pkce-code-verifier";
+export const AUTH_ERROR_DEVICE_DENIED = "device-denied";
+
+/**
+ * Stable error identifier emitted when a device-flow attempt's `device_code`
+ * TTL elapses before approval (the controller's terminal `expired`, or the
+ * epoch+kind-scoped attempt timeout). Distinct so the device surface can render
+ * "The code expired - start again" copy.
+ */
+export const AUTH_ERROR_DEVICE_EXPIRED = "device-expired";
+
+/**
+ * Record of the single in-flight sign-in attempt. Device flow is now the only
+ * interactive login, so there is one completion channel and one stale guard:
+ * the monotonically-increasing `epoch`. A finalizer (the device poll result, or
+ * the expiry timeout) only acts while `activeAttempt?.epoch` still matches the
+ * epoch it captured, so a superseded attempt's late result is dropped. The
+ * `abortController` is aborted on supersede/sign-out/dispose; `deviceSession` is
+ * the main-process poll handle, cancelled on supersede so no ~10-minute poll
+ * leaks and nudged (`pollNow`) on the browser-return signal.
+ */
+interface Attempt {
+  readonly epoch: number;
+  readonly abortController: AbortController;
+  deviceSession: DeviceFlowSession | null;
+  // Subscription to the device session's terminal result. Retained so it can be
+  // disposed when the attempt is superseded, torn down, or finished - otherwise
+  // the `onResult` closure (and the IPC listener behind it) leaks.
+  resultDisposable: Disposable | null;
+}
+
+/**
+ * Projected device-flow progress for the GUI: the human-handled `userCode` +
+ * the verification URIs to show, and the absolute expiry so the surface can
+ * render a countdown instead of a silent spinner. `null` whenever no device
+ * attempt is in flight.
+ */
+export interface DeviceFlowProgress {
+  readonly userCode: string;
+  readonly verificationUri: string;
+  readonly verificationUriComplete: string;
+  readonly expiresAtMs: number;
+}
+
+export type DeviceFlowProgressListener = (
+  progress: DeviceFlowProgress | null,
+) => void;
 
 type ValidationOutcome = AuthIdentityValidationResult;
 
@@ -150,6 +195,11 @@ type ValidationOutcome = AuthIdentityValidationResult;
  * returns the FULL `AuthenticatedUser` so the minted `RequestContext`
  * carries the same identity shape that host-minted contexts already carry.
  *
+ * Interactive sign-in is the OAuth 2.0 Device Authorization Grant (RFC 8628):
+ * `signIn()` opens the browser to the device-approval page and the shell's
+ * main-process controller polls `/device/token`; the terminal `authorized`
+ * result converges on the same `applyTokenInternal` tail as a rehydrated token.
+ *
  * Two distinct failure paths drive distinct `lastError` codes so the UI
  * copy can match the flow the user was actually in:
  *
@@ -158,9 +208,8 @@ type ValidationOutcome = AuthIdentityValidationResult;
  *      The validation helper has already attempted refresh before
  *      returning a terminal failure, so startup clears the stored token
  *      and asks the user to sign in again.
- *   2. The OAuth callback path - invoked by `handleCallback` when the shell
- *      delivers an OAuth success result. A `rejected` or `network-error`
- *      validation outcome surfaces `AUTH_ERROR_SIGN_IN_FAILED` ("Sign-in
+ *   2. The device-flow poll path - a minted token that AuthnV3 then `rejected`
+ *      (or a `network-error`) surfaces `AUTH_ERROR_SIGN_IN_FAILED` ("Sign-in
  *      failed - please try again") and clears any persisted token.
  */
 export class AuthService {
@@ -186,27 +235,30 @@ export class AuthService {
   private callbackDisposable: Disposable | null = null;
   private pendingTimeoutHandle: number | null = null;
   private currentRevalidation: Promise<ValidationOutcome | null> | null = null;
+  // Single-flight guard for the proactive force-refresh path so the refresh
+  // scheduler can't stack overlapping `/api/v3/auth/refresh` rotations.
+  private currentForceRefresh: Promise<void> | null = null;
+  // Proactively rotates the bearer shortly before its ~4h TTL so a long-open
+  // session never carries a dead token into a live host call. Constructed in the
+  // constructor; armed on every bearer (re)assignment, stopped on sign-out.
+  private readonly refreshScheduler: ProactiveRefreshScheduler;
+  // Teardown hooks for the OS-wake refresh listeners, released in `dispose()`.
+  private readonly wakeDisposers: Array<() => void> = [];
   private disposed = false;
-  // PKCE verifier generated at `signIn()` start, held in memory AND mirrored to
-  // secure storage (`PKCE_VERIFIER_STORAGE_KEY`) until the matching callback
-  // exchanges the one-time code for it. The in-memory copy serves the common
-  // same-process callback; the persisted copy serves a cold-start callback
-  // replay after a process restart. Overwritten by a retry/new `signIn()`; the
-  // callback exchange is the only consumer and clears both copies.
-  private pendingCodeVerifier: string | null = null;
-  // Monotonically increasing counter used to tag every OAuth attempt. A
-  // non-zero value means at least one `signIn()` has been invoked since this
-  // `AuthService` was constructed, which lets `handleCallback` distinguish a
-  // cold-start replay (no local attempt) from a stale callback that belongs
-  // to a superseded / already-consumed OAuth attempt.
+  // Monotonically increasing counter used to tag every sign-in attempt, so a
+  // finalizer (device poll result / expiry timeout) can detect that a newer
+  // `signIn()` has superseded the attempt it captured and drop its stale result.
   private nextEpoch: number = 0;
-  // Identifier of the currently in-flight OAuth attempt. Set by `signIn()`
-  // before the shell is asked to launch the browser, cleared by:
-  //   - a matching `handleCallback` once it has fully projected the outcome,
-  //     and
-  //   - `handleSignInTimeout` / launch-failure so the same attempt cannot
-  //     be resurrected by a stale replay after it has been terminated.
-  private activeOAuthEpoch: number | null = null;
+  // The single in-flight sign-in attempt, or null when no attempt is live. Holds
+  // the main-process device poll handle so superseding the attempt cancels it.
+  // Set before the shell is asked to start the device poll; cleared by a
+  // matching finalizer, by `handleAttemptTimeout`, or by an authorize failure so
+  // the same attempt cannot be resurrected by a stale result.
+  private activeAttempt: Attempt | null = null;
+  // Projected device-flow progress (null unless a device attempt is in flight).
+  private deviceProgress: DeviceFlowProgress | null = null;
+  private readonly deviceProgressListeners =
+    new Set<DeviceFlowProgressListener>();
 
   private static readonly scheduleTimeout: (
     handler: () => void,
@@ -215,16 +267,15 @@ export class AuthService {
 
   private static readonly cancelTimeout: (handle: number) => void = (handle) =>
     window.clearTimeout(handle);
-  // True while `start()` is awaiting `tokenStore.load()`. Any replayed auth
-  // callback or sign-in timeout that fires during this window must be treated
-  // as authoritative over the persisted-token rehydration that runs after the
-  // load resolves.
+  // True while `start()` is awaiting `tokenStore.load()`. A device-flow result
+  // or expiry that resolves during this window must be treated as authoritative
+  // over the persisted-token rehydration that runs after the load resolves.
   private starting: boolean = false;
-  // Set when a callback (`{ token }` or `{ error }`) or the sign-in timeout
-  // has deterministically decided the auth state during `start()`. When true,
-  // `start()` skips its "rehydrate persisted token" branch so a stale token
-  // cannot resurrect signed-in state after a failure has already projected
-  // signed-out.
+  // Set when a device-flow outcome (sign-in success or terminal failure) or the
+  // expiry timeout has deterministically decided the auth state during
+  // `start()`. When true, `start()` skips its "rehydrate persisted token" branch
+  // so a stale token cannot resurrect signed-in state after a failure has
+  // already projected signed-out.
   private authResolvedDuringStart: boolean = false;
 
   constructor(options: AuthServiceOptions) {
@@ -233,6 +284,17 @@ export class AuthService {
     this.contextProvider = new DefaultRequestContextProvider({
       origin: "renderer",
     });
+    this.refreshScheduler = createProactiveRefreshScheduler<number>({
+      getToken: () => this.currentBearer,
+      revalidate: () => this.forceRefresh(),
+      now: () => Date.now(),
+      setTimer: (handler, ms) => AuthService.scheduleTimeout(handler, ms),
+      clearTimer: (handle) => AuthService.cancelTimeout(handle),
+      leadMs: DEFAULT_REFRESH_LEAD_MS,
+      minDelayMs: DEFAULT_REFRESH_MIN_DELAY_MS,
+      onDiagnostic: null,
+    });
+    this.installWakeRefreshListeners();
     const initialAuth = useAuthStore.getState();
     this.lastEmittedStatus = initialAuth.status;
     // Watch the public auth store ONLY to relay status transitions to
@@ -243,6 +305,32 @@ export class AuthService {
     this.authStoreUnsubscribe = useAuthStore.subscribe((state) => {
       this.emit(state.status);
     });
+  }
+
+  /**
+   * Refresh the bearer on device wake, since the scheduler's `setTimeout` is
+   * frozen during sleep and would otherwise rot the token past its TTL. Mirrors
+   * `subscribeStreamWakeReconnect`'s two triggers: `window 'online'` (network
+   * back) and `onSystemResumed` (Electron resume). `notifyResumed` is a no-op
+   * while signed out; the resume wiring is best-effort so it can't wedge
+   * construction, leaving the `online` listener as the fallback.
+   */
+  private installWakeRefreshListeners(): void {
+    this.wakeDisposers.push(
+      onWakeReconnect(() => {
+        this.refreshScheduler.notifyResumed();
+      }),
+    );
+    try {
+      const resume = this.runnerHost.onSystemResumed(() => {
+        this.refreshScheduler.notifyResumed();
+      });
+      this.wakeDisposers.push(() => resume.dispose());
+    } catch (error) {
+      appLogger.warn("[auth] OS-resume wake refresh unavailable", {
+        error: describeLogError(error),
+      });
+    }
   }
 
   /**
@@ -319,13 +407,13 @@ export class AuthService {
     }
     this.starting = true;
     this.authResolvedDuringStart = false;
-    // Subscribe to auth callbacks BEFORE awaiting the token load so a
-    // shell-delivered callback that arrives during the `tokenStore.load()`
-    // microtask is not missed. Replay-safe runner hosts (desktop preload,
-    // mobile app-url listener) will deliver the most recent cached result
-    // synchronously on subscribe.
-    this.callbackDisposable = this.runnerHost.onAuthCallback((result) => {
-      this.handleCallback(result);
+    // Subscribe to the browser-return signal BEFORE awaiting the token load so a
+    // shell-delivered nudge that arrives during the `tokenStore.load()` microtask
+    // is not missed. The signal is payload-free - it only pokes an in-flight
+    // device poll - so on a cold start with no live attempt it is a harmless
+    // no-op.
+    this.callbackDisposable = this.runnerHost.onAuthCallback(() => {
+      this.handleReturnSignal();
     });
 
     try {
@@ -355,6 +443,9 @@ export class AuthService {
         this.applySignedIn(accepted.token, outcome.user, undefined);
         return;
       }
+      appLogger.warn("[auth] stored session validation failed during startup", {
+        outcome: outcome.kind,
+      });
       await this.clearStoredAuthForStart();
       if (this.shouldStopStartFlow()) {
         return;
@@ -374,75 +465,102 @@ export class AuthService {
     return this.disposed;
   }
 
+  /**
+   * Primary (and only) interactive sign-in: the OAuth 2.0 Device Authorization
+   * Grant (RFC 8628). `beginAttempt` first supersedes any in-flight attempt (a
+   * stalled retry the user is abandoning) - aborting it and cancelling its
+   * main-process device poll - so a stale poll resolving later is dropped by
+   * epoch. The shell's privileged process owns `/device/authorize` + the
+   * `/device/token` poll loop (CORS-safe, survives renderer close/sleep); the
+   * terminal `authorized` outcome arrives via `session.onResult` and converges
+   * on the SAME `applyTokenInternal` tail a rehydrated token uses. Sign-in
+   * completes from the poll alone - the browser-return deep link only nudges the
+   * poll to fire sooner (see `handleReturnSignal`) and never delivers a token.
+   */
   async signIn(): Promise<void> {
     if (this.disposed) {
       return;
     }
     this.setLastError(null);
-    this.clearPendingTimeout();
-    // Create the new OAuth attempt epoch BEFORE scheduling the callback
-    // timeout, `beginAuthAttempt()`, or `openExternalLink(...)`. Any callback
-    // delivered on this attempt must be able to observe a non-null active
-    // epoch the moment it is dispatched; any callback delivered after this
-    // attempt is superseded (paste) or consumed (matching callback) must see
-    // `activeOAuthEpoch === null` AND `nextEpoch > 0` and be ignored.
-    const epoch = ++this.nextEpoch;
-    this.activeOAuthEpoch = epoch;
+    const attempt = this.beginAttempt();
     useAuthStore.getState().setSigningIn();
-    this.pendingTimeoutHandle = AuthService.scheduleTimeout(() => {
-      this.handleSignInTimeout();
-    }, AUTH_CALLBACK_TIMEOUT_MS);
-    // Close the previous attempt window before asking the shell to launch the
-    // external sign-in surface. After this call, any shell-delivered auth
-    // callback is unambiguously part of the new attempt, so the runner host
-    // can deterministically distinguish a stale OS-level replay of the
-    // previous attempt from a genuine retry callback without a timing window.
     this.runnerHost.beginAuthAttempt();
-    // PKCE: generate a fresh verifier, keep it in memory for the callback
-    // exchange, and send only its S256 challenge in the sign-in URL so the
-    // redirect carries a code (not tokens) the interceptor can't redeem.
-    const verifier = generateCodeVerifier();
-    this.pendingCodeVerifier = verifier;
-    // Mirror to secure storage before launching the browser so a callback that
-    // arrives after a process restart can still recover the verifier. Persist
-    // failures are non-fatal: the in-memory copy still serves the same-process
-    // callback, so we degrade rather than block sign-in.
-    await this.runnerHost.secureStorage
-      .set(PKCE_VERIFIER_STORAGE_KEY, verifier)
-      .catch(() => {});
+    let session: DeviceFlowSession | null;
     try {
-      const signInUrl = new URL(this.runnerHost.signInUrl);
-      signInUrl.searchParams.set(
-        "code_challenge",
-        await deriveCodeChallenge(verifier),
-      );
-      signInUrl.searchParams.set(
-        "code_challenge_method",
-        CODE_CHALLENGE_METHOD,
-      );
-      await this.runnerHost.openExternalLink(signInUrl.toString());
+      session = await this.runnerHost.deviceFlow.start();
     } catch {
-      // The shell could not open the external sign-in URL. No callback will
-      // arrive, so cancel the pending callback timeout and fail immediately
-      // through the same path shell-delivered failures use. This keeps the
-      // UI's visible retry CTA consistent with every other failure mode.
-      this.clearPendingTimeout();
-      if (this.activeOAuthEpoch === epoch) {
-        this.activeOAuthEpoch = null;
+      // A rejected `start()` (host/IPC failure) must route to the SAME
+      // launch-failed cleanup as a `null` return - otherwise the UI stays stuck
+      // in `signing-in` with a live attempt that never settles. Guard on the
+      // attempt still being current so a superseded/disposed attempt is left
+      // alone.
+      if (this.activeAttempt === attempt) {
+        this.activeAttempt = null;
+        if (this.starting) {
+          this.authResolvedDuringStart = true;
+        }
+        await this.applyFailure(AUTH_ERROR_LAUNCH_FAILED);
       }
+      return;
+    }
+    if (this.isDisposed()) {
+      session?.cancel();
+      return;
+    }
+    // A newer attempt may have superseded this one while `/device/authorize`
+    // was in flight - drop the session rather than adopt it.
+    if (this.activeAttempt !== attempt) {
+      session?.cancel();
+      return;
+    }
+    if (session === null) {
+      // `/device/authorize` failed (network/5xx) or the shell has no device
+      // backend. Fail like a launch failure so the UI shows a retry CTA.
+      this.activeAttempt = null;
       if (this.starting) {
         this.authResolvedDuringStart = true;
       }
       await this.applyFailure(AUTH_ERROR_LAUNCH_FAILED);
+      return;
     }
+    attempt.deviceSession = session;
+    const authorization = session.authorization;
+    this.setDeviceProgress({
+      userCode: authorization.userCode,
+      verificationUri: authorization.verificationUri,
+      verificationUriComplete: authorization.verificationUriComplete,
+      expiresAtMs: Date.now() + authorization.expiresInSeconds * 1000,
+    });
+    // The attempt times out at the `device_code` TTL (`expires_in`); the handler
+    // is epoch-scoped so a superseded attempt's timer can't kill a newer one.
+    // This is a backstop - the controller also emits a terminal `expired`.
+    this.scheduleAttemptTimeout(
+      attempt.epoch,
+      authorization.expiresInSeconds * 1000,
+    );
+    // Best-effort: open the pre-filled verification page so the user does not
+    // have to type the code. Failure is non-fatal (the code + URI are shown).
+    void this.runnerHost
+      .openExternalLink(authorization.verificationUriComplete)
+      .catch(() => {});
+    attempt.resultDisposable = session.onResult((result) => {
+      void this.finalizeDeviceResult(result, attempt.epoch);
+    });
   }
 
   async signOut(): Promise<void> {
     if (this.disposed) {
       return;
     }
+    // Stop the proactive refresh timer up front: `clearStoredAuth()` below is
+    // awaited (storage clear + CLI deprovision), and a timer firing during that
+    // window would race a `forceRefresh` against the credential removal.
+    // `applySignedOut()` stops it again, idempotently.
+    this.refreshScheduler.stop();
     this.clearPendingTimeout();
-    this.clearPendingCodeVerifier();
+    // Tear down any in-flight attempt: abort it and cancel its main-process
+    // device poll so no ~10-minute poll leaks.
+    this.discardActiveAttempt();
     await this.clearStoredAuth();
     this.setLastError(null);
     this.applySignedOut();
@@ -548,6 +666,7 @@ export class AuthService {
           session.user.userSubscription.subscriptionStatus,
         );
       this.emitSessionSnapshot();
+      this.refreshScheduler.start();
       return;
     }
     this.applySignedIn(session.token, session.user, session.profile);
@@ -578,13 +697,34 @@ export class AuthService {
     if (this.currentRevalidation !== null) {
       return this.currentRevalidation;
     }
-    const revalidation = this.revalidateCurrentContextOnce().finally(() => {
-      if (this.currentRevalidation === revalidation) {
-        this.currentRevalidation = null;
-      }
-    });
+    const revalidation = this.revalidateAfterPendingForceRefresh().finally(
+      () => {
+        if (this.currentRevalidation === revalidation) {
+          this.currentRevalidation = null;
+        }
+      },
+    );
     this.currentRevalidation = revalidation;
     return revalidation;
+  }
+
+  /**
+   * Serializes against an in-flight proactive force-refresh before revalidating.
+   * Both paths spend the same single-use refresh token, so overlapping would
+   * double-spend it and sign the user out on the loser path. `forceRefreshOnce`
+   * awaits us in reverse, making the lock mutual. Deadlock-free: each path checks
+   * the other's flag once, synchronously, so only the later starter ever waits.
+   * Runs inside the `currentRevalidation` single-flight, so concurrent callers
+   * coalesce onto this one promise.
+   */
+  private async revalidateAfterPendingForceRefresh(): Promise<ValidationOutcome | null> {
+    if (this.currentForceRefresh !== null) {
+      await this.currentForceRefresh;
+      if (this.isDisposed()) {
+        return null;
+      }
+    }
+    return this.revalidateCurrentContextOnce();
   }
 
   /**
@@ -697,88 +837,234 @@ export class AuthService {
           );
         this.currentProfile = profile;
         this.emitSessionSnapshot();
+        this.refreshScheduler.start();
+        // Re-provision the FULL pair to the machine-local CLI/host credentials.
+        // The snapshot emit above drives `CliCredentialSeeder`, which re-seeds
+        // the bearer ONLY (empty refresh token), so the file would keep the
+        // now-spent refresh token beside the fresh bearer and later host/CLI
+        // refreshes would fail. Mirrors the proactive path's full-pair
+        // re-provision; best-effort and a no-op on shells without a local CLI.
+        await this.ensureLocalProvisioning(
+          accepted.token,
+          accepted.refreshToken,
+          () => this.isDisposed() || this.currentBearer !== accepted.token,
+        );
       }
       return outcome;
     }
     if (outcome.kind === "rejected") {
+      appLogger.warn("[auth] current session rejected during revalidation", {});
       await this.clearStoredAuth();
       this.setLastError(AUTH_ERROR_SESSION_EXPIRED);
       this.applySignedOut();
+    }
+    if (outcome.kind === "network-error") {
+      appLogger.warn(
+        "[auth] current session revalidation hit network error",
+        {},
+      );
     }
     return outcome;
   }
 
   /**
-   * OAuth-callback entrypoint. Invoked from `handleCallback` when the shell
-   * delivers an `{ token }` result. A `rejected` or `network-error`
-   * validation outcome surfaces `AUTH_ERROR_SIGN_IN_FAILED` so the header
-   * sign-in surface renders "Sign-in failed - please try again" instead of
-   * the "Session expired" copy that belongs to the rehydration path.
+   * Proactively rotates the access token ahead of its TTL. Driven by the
+   * refresh scheduler shortly before `exp`.
    *
-   * The callback is only applied if the OAuth attempt it belongs to is still
-   * the active one. A callback captured for epoch `E` is dropped silently if
-   * `activeOAuthEpoch` has been advanced by a new `signIn()` between dispatch
-   * and final projection.
+   * Unlike `revalidateCurrentContext` - which validates against `/api/v3/user`
+   * and only refreshes on a 401 - this ALWAYS force-refreshes against
+   * `/api/v3/auth/refresh`, so a still-valid-but-soon-to-expire bearer is
+   * renewed before the host's connection-captured copy can go stale (the
+   * overnight-session 401). Identity is unchanged on success, so it rotates the
+   * live lease in place (observably silent on the provider) and persists,
+   * without re-fetching the full user. Single-flight, and serialized against the
+   * reactive `revalidateCurrentContext` path so the two can't double-spend the
+   * single-use refresh token; a no-op when signed out or when no refresh
+   * credential is available.
    */
-  /**
-   * Exchanges the one-time PKCE `code` from the sign-in callback for the token
-   * pair (via the runner-host boundary, so desktop renderer CORS is bypassed),
-   * then applies it like any other callback token. A missing verifier (a code
-   * with no matching in-process attempt, e.g. a cold-start replay) or a failed
-   * exchange surfaces `AUTH_ERROR_SIGN_IN_FAILED` through the same stale-epoch-
-   * safe error path callback tokens use.
-   */
-  private async exchangeAndApplyCode(
-    code: string,
-    verifier: string | null,
-    expectedEpoch: number | null,
-  ): Promise<void> {
-    // Same-process callbacks carry the verifier directly; a cold-start replay
-    // (no in-process attempt) recovers it from secure storage.
-    const resolvedVerifier =
-      verifier ??
-      (await this.runnerHost.secureStorage
-        .get(PKCE_VERIFIER_STORAGE_KEY)
-        .catch(() => null));
-    if (resolvedVerifier === null) {
-      // No in-process attempt (cold-start callback) and nothing in secure
-      // storage to recover - the code can't be exchanged. Warn so the failure
-      // is visible in the shipped app log (renderer console is forwarded to the
-      // file on warning/error) rather than only manifesting as "Sign-in failed".
-      console.warn(
-        "[auth] sign-in failed: PKCE code verifier missing (cold-start callback with no recoverable verifier)",
-      );
-      await this.applyOAuthCallbackError(
-        AUTH_ERROR_SIGN_IN_FAILED,
-        expectedEpoch,
-      );
+  private forceRefresh(): Promise<void> {
+    if (this.currentForceRefresh !== null) {
+      return this.currentForceRefresh;
+    }
+    const op = this.forceRefreshOnce().finally(() => {
+      if (this.currentForceRefresh === op) {
+        this.currentForceRefresh = null;
+      }
+    });
+    this.currentForceRefresh = op;
+    return op;
+  }
+
+  private async forceRefreshOnce(): Promise<void> {
+    if (this.isDisposed()) {
       return;
     }
-    // The code is one-time and consumed atomically server-side, so the verifier
-    // is spent the moment we attempt the exchange - drop both copies up front so
-    // it can never be replayed, regardless of the exchange outcome.
-    this.clearPendingCodeVerifier();
-    const tokens = await this.runnerHost.exchangeAuthCode(
-      code,
-      resolvedVerifier,
+    // Defer to an in-flight reactive revalidation. Both paths draw on the same
+    // single-use refresh token, so running concurrently would double-spend it
+    // and leave whichever loses holding a dead credential (and, for this path,
+    // wrongly signing the user out). Awaiting here serializes the proactive and
+    // reactive refreshes within this window - the "shared lock" the two paths
+    // were missing. Cross-window siblings (separate `AuthService` instances)
+    // can't be awaited; the store re-reads below cover that race instead.
+    if (this.currentRevalidation !== null) {
+      await this.currentRevalidation;
+      if (this.isDisposed()) {
+        return;
+      }
+    }
+    const ctx = this.contextProvider.current();
+    if (ctx === null || this.currentBearer === null) {
+      return;
+    }
+    const userId = ctx.identity.userId;
+    const currentToken = this.currentBearer;
+    const stored = await this.tokenStore.load();
+    if (this.isDisposed()) {
+      return;
+    }
+    const refreshToken = stored?.refreshToken ?? "";
+    if (refreshToken.length === 0) {
+      // No refresh credential to rotate against - leave the bearer for the
+      // reactive 401 path to handle at actual expiry.
+      return;
+    }
+    // The persisted bearer already moved on from ours: a sibling window or the
+    // reactive 401 path rotated it. Do NOT adopt it here - the GUI's shell token
+    // slot is shared across windows and can hold a DIFFERENT user's bearer (a
+    // window that signed in before its session snapshot projected to us), so
+    // blind-rotating this context's lease to it under the current `userId` would
+    // bind a foreign identity. Leave reconciliation to the validated cross-window
+    // projection path (`ingestProjectedSessionSnapshot`), which confirms the
+    // token maps to the same user before applying it.
+    if (stored !== null && stored.token !== currentToken) {
+      return;
+    }
+    const result = await this.runnerHost.refreshAuthToken(
+      currentToken,
+      refreshToken,
     );
     if (this.isDisposed()) {
       return;
     }
-    if (tokens === null) {
-      await this.applyOAuthCallbackError(
-        AUTH_ERROR_SIGN_IN_FAILED,
-        expectedEpoch,
-      );
+    if (result.kind === "network-error") {
+      // Transient; the scheduler retries on its floor delay.
       return;
     }
-    await this.applyTokenInternal(
-      tokens.token,
-      tokens.refreshToken,
-      expectedEpoch,
+    if (result.kind === "rejected") {
+      await this.signOutIfRefreshCredentialDead(currentToken);
+      return;
+    }
+    await this.applyProactiveRefresh(
+      userId,
+      currentToken,
+      result.token,
+      result.refreshToken,
     );
   }
 
+  /**
+   * Reject handler for the proactive refresh. Our single-use refresh token was
+   * rejected; sign out ONLY if this is a genuine expiry. If the persisted bearer
+   * has moved on from `refreshedAgainst`, a sibling (the reactive 401 path or
+   * another window) already rotated successfully and merely spent the refresh
+   * token first - the session is alive, so leave it intact and let the validated
+   * projection path adopt the winner's bearer. Only a store still holding our
+   * now-dead token is a real expiry that must sign out.
+   */
+  private async signOutIfRefreshCredentialDead(
+    refreshedAgainst: string,
+  ): Promise<void> {
+    const afterReject = await this.tokenStore.load();
+    if (this.isDisposed()) {
+      return;
+    }
+    if (
+      afterReject !== null &&
+      afterReject.token.length > 0 &&
+      afterReject.token !== refreshedAgainst
+    ) {
+      return;
+    }
+    await this.clearStoredAuth();
+    this.setLastError(AUTH_ERROR_SESSION_EXPIRED);
+    this.applySignedOut();
+  }
+
+  /**
+   * Success handler for the proactive refresh: persist + rotate to the freshly
+   * minted bearer, unless a concurrent winner intervened. A sign-out / cross-user
+   * transition during the round trip, or a sibling that rotated the shared store
+   * mid-refresh (a token differing from both `refreshedAgainst` and the one we
+   * just minted), both abort our write - we neither clobber the winner nor
+   * blind-adopt it (the shared shell slot can hold a different user); the
+   * validated projection path reconciles instead.
+   */
+  private async applyProactiveRefresh(
+    userId: string,
+    refreshedAgainst: string,
+    newToken: string,
+    newRefreshToken: string,
+  ): Promise<void> {
+    const live = this.contextProvider.current();
+    if (live === null || live.identity.userId !== userId) {
+      return;
+    }
+    const latest = await this.tokenStore.load();
+    if (this.isDisposed()) {
+      return;
+    }
+    if (
+      latest !== null &&
+      latest.token.length > 0 &&
+      latest.token !== refreshedAgainst &&
+      latest.token !== newToken
+    ) {
+      return;
+    }
+    await rotateAndPersistBearer({
+      newTokens: { token: newToken, refreshToken: newRefreshToken },
+      persist: (tokens) => this.tokenStore.save(tokens),
+      rotate: (token) => {
+        if (this.isDisposed()) {
+          return;
+        }
+        this.contextProvider.rotateCurrentBearer({
+          userId,
+          bearerToken: token,
+        });
+      },
+    });
+    if (this.isDisposed()) {
+      return;
+    }
+    this.currentBearer = newToken;
+    this.emitSessionSnapshot();
+    this.refreshScheduler.start();
+    // Propagate the rotated pair to the machine-local CLI/host credentials. On
+    // the proactive path the renderer is the SOLE refresher (the host hasn't
+    // 401'd, so its own revalidator hasn't run), so without this the local
+    // credential file keeps the now-spent token pair and later host/CLI flows
+    // fail to refresh. Best-effort, mirroring sign-in provisioning; a no-op on
+    // shells without a local CLI.
+    await this.ensureLocalProvisioning(
+      newToken,
+      newRefreshToken,
+      () => this.isDisposed() || this.currentBearer !== newToken,
+    );
+  }
+
+  /**
+   * Shared token-application tail. Invoked by the device-flow finalizer with a
+   * minted `{ token, refreshToken }` pair. Validates against AuthnV3, then on
+   * `valid` persists, provisions the local CLI, and projects signed-in; a
+   * `rejected`/`network-error` outcome surfaces `AUTH_ERROR_SIGN_IN_FAILED` so
+   * the header sign-in surface renders "Sign-in failed - please try again"
+   * instead of the "Session expired" copy that belongs to the rehydration path.
+   *
+   * Only applied while the attempt it belongs to is still active: a pair
+   * captured for epoch `E` is dropped silently if a fresh `signIn()` replaced
+   * the active attempt between dispatch and final projection.
+   */
   private async applyTokenInternal(
     token: string,
     refreshToken: string,
@@ -788,15 +1074,25 @@ export class AuthService {
       return false;
     }
     if (token.length === 0) {
-      if (!this.isOAuthEpochCurrent(expectedOAuthEpoch)) {
+      if (!this.isAttemptCurrent(expectedOAuthEpoch)) {
+        appLogger.debug(
+          "[auth] ignored empty token from stale OAuth callback",
+          {
+            expectedEpoch: expectedOAuthEpoch ?? "cold-start",
+          },
+        );
         return false;
       }
+      appLogger.warn("[auth] OAuth callback delivered an empty token", {});
       this.clearPendingTimeout();
-      this.activeOAuthEpoch = null;
+      this.clearActiveAttempt();
       await this.applyFailure(AUTH_ERROR_SIGN_IN_FAILED);
       return false;
     }
-    if (!this.isOAuthEpochCurrent(expectedOAuthEpoch)) {
+    if (!this.isAttemptCurrent(expectedOAuthEpoch)) {
+      appLogger.debug("[auth] ignored stale OAuth callback before validation", {
+        expectedEpoch: expectedOAuthEpoch ?? "cold-start",
+      });
       return false;
     }
     this.clearPendingTimeout();
@@ -806,16 +1102,18 @@ export class AuthService {
     }
 
     // After the async validation, the state machine may have moved on: a
-    // fresh `signIn()` could have minted a new epoch. In that case this
-    // callback is stale and must not mutate state.
-    if (!this.isOAuthEpochCurrent(expectedOAuthEpoch)) {
+    // fresh `signIn()` could have minted a new attempt. In that case this
+    // result is stale and must not mutate state.
+    if (!this.isAttemptCurrent(expectedOAuthEpoch)) {
+      appLogger.debug("[auth] ignored stale OAuth callback after validation", {
+        expectedEpoch: expectedOAuthEpoch ?? "cold-start",
+      });
       return false;
     }
     if (outcome.kind === "valid") {
-      // Consume the epoch so a subsequent cached replay (e.g. desktop
-      // preload re-emitting `cachedAuthCallback` on re-subscribe) cannot
-      // re-apply the same callback.
-      this.activeOAuthEpoch = null;
+      // Consume the attempt so a subsequent replayed device result cannot
+      // re-apply the same token.
+      this.clearActiveAttempt();
       const accepted = this.acceptedToken(outcome, { token, refreshToken });
       await this.tokenStore.save(accepted);
       if (this.isDisposed()) {
@@ -829,7 +1127,11 @@ export class AuthService {
       // closes the race where early RPCs are rejected as UNAUTHORIZED, which
       // would burn single-use refresh tokens and can trip a refresh-reuse
       // sign-out. No-op on shells without a local CLI.
-      await this.ensureLocalProvisioning(accepted.token, accepted.refreshToken);
+      await this.ensureLocalProvisioning(
+        accepted.token,
+        accepted.refreshToken,
+        () => this.isDisposed(),
+      );
       if (this.isDisposed()) {
         return false;
       }
@@ -840,9 +1142,47 @@ export class AuthService {
     }
     // Validation `rejected` OR `network-error`: do not persist. Surface
     // `sign-in-failed` so the header sign-in surface renders a retry CTA.
-    this.activeOAuthEpoch = null;
+    appLogger.warn("[auth] OAuth token validation failed", {
+      outcome: outcome.kind,
+    });
+    this.clearActiveAttempt();
     await this.applyFailure(AUTH_ERROR_SIGN_IN_FAILED);
     return false;
+  }
+
+  /**
+   * Device-flow terminal finalizer. Applies a device poll outcome ONLY if the
+   * live attempt is still the one with this epoch - so a result for a superseded
+   * attempt (a newer `signIn()` took over) is dropped. The `authorized` path
+   * converges on the shared `applyTokenInternal` tail; terminal failures surface
+   * a kind-specific error.
+   */
+  private async finalizeDeviceResult(
+    result: DeviceFlowResult,
+    expectedEpoch: number,
+  ): Promise<void> {
+    if (this.disposed) {
+      return;
+    }
+    const attempt = this.activeAttempt;
+    if (attempt === null || attempt.epoch !== expectedEpoch) {
+      return;
+    }
+    if (result.kind === "authorized") {
+      await this.applyTokenInternal(
+        result.token,
+        result.refreshToken,
+        expectedEpoch,
+      );
+      return;
+    }
+    // Terminal device failure (denied / expired / unrecoverable error).
+    this.clearPendingTimeout();
+    this.clearActiveAttempt();
+    if (this.starting) {
+      this.authResolvedDuringStart = true;
+    }
+    await this.applyFailure(deviceFailureError(result));
   }
 
   /**
@@ -861,17 +1201,27 @@ export class AuthService {
   private async ensureLocalProvisioning(
     token: string,
     refreshToken: string,
+    isStale: () => boolean,
   ): Promise<void> {
     const cli = this.runnerHost.traycerCli;
     if (cli === null) {
       return;
     }
-    await this.retryLocalCredentialCommand(
-      () => cli.cliLogin(token, refreshToken),
-      "[auth] local credential provisioning failed; the host may be " +
-        "unreachable until the next token refresh",
-      1,
-    );
+    // Serialize behind any in-flight deprovision (sign-out) so a provisioning
+    // retry can't land AFTER a logout and re-authenticate the host owner gate.
+    // Re-check staleness once we hold the chain: a sign-out (or a newer
+    // rotation) queued ahead of us makes this write stale - skip it.
+    await this.enqueueCredentialOp(async () => {
+      if (isStale()) {
+        return;
+      }
+      await this.retryLocalCredentialCommand(
+        () => cli.cliLogin(token, refreshToken),
+        "[auth] local credential provisioning failed; the host may be " +
+          "unreachable until the next token refresh",
+        1,
+      );
+    });
   }
 
   private async clearStoredAuth(): Promise<void> {
@@ -901,12 +1251,34 @@ export class AuthService {
     if (cli === null) {
       return;
     }
-    await this.retryLocalCredentialCommand(
-      () => cli.cliLogout(),
-      "[auth] local credential deprovisioning failed; the host may " +
-        "remain bound to the prior owner until its credentials are cleared",
-      1,
+    // Same chain as provisioning so a sign-out's logout and a refresh's login
+    // can never interleave - whichever is queued last wins the file.
+    await this.enqueueCredentialOp(() =>
+      this.retryLocalCredentialCommand(
+        () => cli.cliLogout(),
+        "[auth] local credential deprovisioning failed; the host may " +
+          "remain bound to the prior owner until its credentials are cleared",
+        1,
+      ),
     );
+  }
+
+  /** Single chain that serializes local credential provision/deprovision ops. */
+  private credentialOpChain: Promise<void> = Promise.resolve();
+
+  /**
+   * Runs `op` after any in-flight credential op completes, so a provisioning
+   * retry can never interleave with - and land after - a concurrent sign-out's
+   * deprovision (which would re-authenticate the host owner gate post-sign-out).
+   * Errors are swallowed into the chain so one failed op can't poison the next.
+   */
+  private enqueueCredentialOp(op: () => Promise<void>): Promise<void> {
+    const run = this.credentialOpChain.then(op, op);
+    this.credentialOpChain = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
   }
 
   private async retryLocalCredentialCommand(
@@ -924,7 +1296,7 @@ export class AuthService {
     if (attempt === maxAttempts) {
       // Deliberately omit the raw rejection value: a CLI-spawn failure can
       // carry stderr / request context that may include auth material.
-      console.warn(warningMessage);
+      appLogger.warn(warningMessage, { attempts: maxAttempts });
       return;
     }
     await new Promise<void>((resolve) => setTimeout(resolve, attempt * 200));
@@ -933,12 +1305,60 @@ export class AuthService {
 
   /**
    * Epoch-currency check used by async finalization paths. Returns true iff
-   * the captured epoch still matches the live `activeOAuthEpoch`. Cold-start
-   * replay (no `signIn()` ever invoked) captures `null` and expects `null`;
-   * an in-flight attempt captures a number and expects that same number.
+   * the captured epoch still matches the live attempt's epoch. A finalizer that
+   * captured epoch `E` no-ops once a newer `signIn()` has replaced the active
+   * attempt (or it was already consumed/torn down, leaving `null`).
    */
-  private isOAuthEpochCurrent(expectedEpoch: number | null): boolean {
-    return this.activeOAuthEpoch === expectedEpoch;
+  private isAttemptCurrent(expectedEpoch: number | null): boolean {
+    return (this.activeAttempt?.epoch ?? null) === expectedEpoch;
+  }
+
+  /**
+   * Supersedes (or tears down) the live attempt: aborts its controller so an
+   * in-flight device fetch is discarded, and cancels its main-process device
+   * poll so no ~10-minute poll leaks. Leaves `activeAttempt === null`.
+   */
+  private discardActiveAttempt(): void {
+    const attempt = this.activeAttempt;
+    if (attempt === null) {
+      return;
+    }
+    attempt.abortController.abort();
+    attempt.resultDisposable?.dispose();
+    if (attempt.deviceSession !== null) {
+      attempt.deviceSession.cancel();
+    }
+    this.setDeviceProgress(null);
+    this.activeAttempt = null;
+  }
+
+  /**
+   * Concludes the active attempt from a terminal finalizer: disposes its
+   * device-result subscription (releasing the `onResult`/IPC closure) and clears
+   * it. Unlike `discardActiveAttempt`, it does NOT abort/cancel - the attempt
+   * has already settled, so there is nothing to tear down.
+   */
+  private clearActiveAttempt(): void {
+    this.activeAttempt?.resultDisposable?.dispose();
+    this.activeAttempt = null;
+  }
+
+  /**
+   * Discards the current attempt (see `discardActiveAttempt`) and starts a new
+   * one with a fresh, globally-unique epoch.
+   */
+  private beginAttempt(): Attempt {
+    this.clearPendingTimeout();
+    this.discardActiveAttempt();
+    const epoch = ++this.nextEpoch;
+    const attempt: Attempt = {
+      epoch,
+      abortController: new AbortController(),
+      deviceSession: null,
+      resultDisposable: null,
+    };
+    this.activeAttempt = attempt;
+    return attempt;
   }
 
   onChange(listener: AuthListener): Disposable {
@@ -976,7 +1396,20 @@ export class AuthService {
       return;
     }
     this.disposed = true;
+    this.refreshScheduler.stop();
+    for (const disposeWake of this.wakeDisposers) {
+      disposeWake();
+    }
+    this.wakeDisposers.length = 0;
     this.clearPendingTimeout();
+    // Tear down any in-flight attempt so a device poll loop in the shell's main
+    // process doesn't keep running after this service is gone.
+    if (this.activeAttempt !== null) {
+      this.activeAttempt.abortController.abort();
+      this.activeAttempt.resultDisposable?.dispose();
+      this.activeAttempt.deviceSession?.cancel();
+      this.activeAttempt = null;
+    }
     if (this.callbackDisposable !== null) {
       this.callbackDisposable.dispose();
       this.callbackDisposable = null;
@@ -988,88 +1421,74 @@ export class AuthService {
     this.listeners.clear();
     this.errorListeners.clear();
     this.sessionSnapshotListeners.clear();
-  }
-
-  private handleCallback(result: AuthCallbackResult): void {
-    if (this.disposed) {
-      return;
-    }
-    // Capture the epoch the callback will be attributed to. If at least one
-    // OAuth attempt has been initiated locally (`nextEpoch > 0`) but the
-    // active epoch is null, the attempt has already been consumed by a prior
-    // matching callback, or terminated by timeout/launch failure - any such
-    // callback (success or error) is stale and must not mutate state.
-    // Callbacks delivered before
-    // any `signIn()` was invoked (cold-start replay through the shell's
-    // cached-result channel) still flow through the legacy path so an
-    // already-completed OAuth handshake from a prior process lifetime can
-    // hydrate the signed-in state on the next launch.
-    const callbackEpoch = this.activeOAuthEpoch;
-    if (this.nextEpoch > 0 && callbackEpoch === null) {
-      return;
-    }
-    if ("code" in result) {
-      if (result.code.length === 0) {
-        return;
-      }
-      this.clearPendingTimeout();
-      if (this.starting) {
-        this.authResolvedDuringStart = true;
-      }
-      // Capture the verifier synchronously: a later retry `signIn()` would
-      // overwrite `pendingCodeVerifier`, and this callback must exchange against
-      // the verifier from the attempt it belongs to.
-      const verifier = this.pendingCodeVerifier;
-      void this.exchangeAndApplyCode(result.code, verifier, callbackEpoch);
-      return;
-    }
-    // Error path: clear any persisted token and return to signed-out so
-    // the sign-in button can be pressed again. Shell-provided error
-    // message is retained for diagnostic surfaces.
-    this.clearPendingTimeout();
-    if (this.starting) {
-      this.authResolvedDuringStart = true;
-    }
-    void this.applyOAuthCallbackError(result.error, callbackEpoch);
+    this.deviceProgressListeners.clear();
   }
 
   /**
-   * Error-callback finalizer. Separate from `applyFailure` so it can re-check
-   * the OAuth epoch after any awaited work and silently drop stale errors
-   * (e.g. a `user_cancelled` replay after a superseding pasted session).
+   * Browser-return signal handler. The shell delivers a payload-free nudge when
+   * the user comes back from the device-approval tab (the `traycer://` deep
+   * link). It carries no token or code: it only pokes the in-flight device poll
+   * to fire immediately so approval is picked up without waiting out the poll
+   * interval. With no live attempt (a cold-start replay, or one already
+   * settled) there is nothing to nudge, so it is a no-op. The token always
+   * arrives through `finalizeDeviceResult`, never here.
    */
-  private async applyOAuthCallbackError(
-    error: string,
-    expectedEpoch: number | null,
-  ): Promise<void> {
+  private handleReturnSignal(): void {
     if (this.disposed) {
       return;
     }
-    if (!this.isOAuthEpochCurrent(expectedEpoch)) {
-      return;
-    }
-    this.activeOAuthEpoch = null;
-    // The attempt is ending in failure; drop any persisted verifier so a later
-    // replay can't resurrect it. (Stale errors returned above, so this only
-    // fires for the attempt that genuinely owns the verifier.)
-    this.clearPendingCodeVerifier();
-    await this.applyFailure(error);
+    this.activeAttempt?.deviceSession?.pollNow();
   }
 
-  private handleSignInTimeout(): void {
+  /**
+   * Epoch-scoped attempt timeout. Fires the expiry failure ONLY when the live
+   * attempt is still the exact attempt the timer was scheduled for, so a stray
+   * timer from a superseded attempt can never kill a newer one (e.g. a timer
+   * from an abandoned attempt firing after the user retried). The attempt times
+   * out at the `device_code` TTL (`expires_in`).
+   */
+  private handleAttemptTimeout(epoch: number): void {
     if (this.disposed) {
       return;
     }
     this.pendingTimeoutHandle = null;
-    if (useAuthStore.getState().status !== "signing-in") {
+    const attempt = this.activeAttempt;
+    if (attempt === null || attempt.epoch !== epoch) {
       return;
     }
-    this.activeOAuthEpoch = null;
-    this.clearPendingCodeVerifier();
+    if (useAuthStore.getState().status !== "signing-in") {
+      appLogger.debug(
+        "[auth] sign-in timeout ignored outside signing-in state",
+        {
+          status: useAuthStore.getState().status,
+        },
+      );
+      return;
+    }
+    // Dispose the result subscription (via clearActiveAttempt) BEFORE cancelling
+    // the session, mirroring discardActiveAttempt's dispose-before-cancel order:
+    // even if a session's cancel() ever delivered the terminal result
+    // synchronously, there is no live onResult handler left to re-enter this
+    // finalizer.
+    this.clearActiveAttempt();
+    attempt.deviceSession?.cancel();
+    this.setDeviceProgress(null);
     if (this.starting) {
       this.authResolvedDuringStart = true;
     }
-    void this.applyFailure(AUTH_ERROR_TIMEOUT);
+    void this.applyFailure(AUTH_ERROR_DEVICE_EXPIRED);
+  }
+
+  /**
+   * Schedules the single in-flight attempt timer. Only one attempt is ever live
+   * at a time, so a single handle suffices; the captured `epoch` makes the
+   * handler a no-op if the attempt has been superseded by the time it fires.
+   */
+  private scheduleAttemptTimeout(epoch: number, durationMs: number): void {
+    this.clearPendingTimeout();
+    this.pendingTimeoutHandle = AuthService.scheduleTimeout(() => {
+      this.handleAttemptTimeout(epoch);
+    }, durationMs);
   }
 
   /**
@@ -1121,6 +1540,7 @@ export class AuthService {
     if (this.disposed) {
       return;
     }
+    this.setDeviceProgress(null);
     this.contextProvider.setSignedIn({
       user,
       bearerToken,
@@ -1138,6 +1558,7 @@ export class AuthService {
       .getState()
       .setSubscriptionStatus(user.userSubscription.subscriptionStatus);
     this.emitSessionSnapshot();
+    this.refreshScheduler.start();
   }
 
   /**
@@ -1149,6 +1570,8 @@ export class AuthService {
     if (this.disposed) {
       return;
     }
+    this.setDeviceProgress(null);
+    this.refreshScheduler.stop();
     this.contextProvider.signOut();
     this.currentBearer = null;
     this.currentProfile = null;
@@ -1166,6 +1589,9 @@ export class AuthService {
     if (this.disposed) {
       return;
     }
+    appLogger.warn("[auth] applying auth failure", {
+      errorCode: classifyAuthFailureForLog(error),
+    });
     this.setLastError(error);
     this.applySignedOut();
     await this.clearStoredAuth();
@@ -1197,17 +1623,49 @@ export class AuthService {
   }
 
   /**
-   * Drops the in-flight PKCE verifier from both memory and secure storage.
-   * Called when the verifier is consumed (code exchange) or the attempt ends
-   * without one (timeout, sign-out) so a spent/abandoned secret never lingers.
-   * The persisted delete is best-effort: the in-memory clear is what gates a
-   * replay within this process.
+   * Subscribes to device-flow progress transitions (user code / verification
+   * URIs / expiry). Fires synchronously on subscribe with the current value,
+   * then on every change. `null` whenever no device attempt is in flight.
    */
-  private clearPendingCodeVerifier(): void {
-    this.pendingCodeVerifier = null;
-    void this.runnerHost.secureStorage
-      .delete(PKCE_VERIFIER_STORAGE_KEY)
+  onDeviceProgressChange(handler: DeviceFlowProgressListener): Disposable {
+    this.deviceProgressListeners.add(handler);
+    handler(this.deviceProgress);
+    return {
+      dispose: () => {
+        this.deviceProgressListeners.delete(handler);
+      },
+    };
+  }
+
+  getDeviceProgress(): DeviceFlowProgress | null {
+    return this.deviceProgress;
+  }
+
+  /**
+   * Re-opens the pre-filled approval page (`verification_uri_complete`, with the
+   * user code embedded) for the in-flight device attempt. Backs the sign-in
+   * surface's one-click "open approval page" affordance so the user never has to
+   * type the code if the initial auto-open was missed. Best-effort; no-op when
+   * no attempt is in flight.
+   */
+  openVerificationPage(): void {
+    const progress = this.deviceProgress;
+    if (progress === null) {
+      return;
+    }
+    void this.runnerHost
+      .openExternalLink(progress.verificationUriComplete)
       .catch(() => {});
+  }
+
+  private setDeviceProgress(next: DeviceFlowProgress | null): void {
+    if (this.deviceProgress === next) {
+      return;
+    }
+    this.deviceProgress = next;
+    for (const handler of this.deviceProgressListeners) {
+      handler(next);
+    }
   }
 
   private setLastError(next: string | null): void {
@@ -1238,5 +1696,23 @@ export class AuthService {
     for (const handler of this.sessionSnapshotListeners) {
       handler(snapshot);
     }
+  }
+}
+
+/**
+ * Maps a terminal (non-`authorized`) device-flow result to the stable error id
+ * the device surface renders. `error` (invalid grant / exhausted retries) reuses
+ * the generic sign-in-failed copy.
+ */
+function deviceFailureError(
+  result: Exclude<DeviceFlowResult, { kind: "authorized" }>,
+): string {
+  switch (result.kind) {
+    case "denied":
+      return AUTH_ERROR_DEVICE_DENIED;
+    case "expired":
+      return AUTH_ERROR_DEVICE_EXPIRED;
+    default:
+      return AUTH_ERROR_SIGN_IN_FAILED;
   }
 }

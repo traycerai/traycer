@@ -30,11 +30,19 @@ import {
   setEpicCanvasDesktopProjectionBridge,
   useEpicCanvasStore,
 } from "@/stores/epics/canvas/store";
+import { useFindInPageStore } from "@/stores/find-in-page/find-in-page-store";
 import {
   emptyLandingDraftWorkspaceSnapshot,
   setLandingDraftDesktopProjectionBridge,
   useLandingDraftStore,
 } from "@/stores/home/landing-draft-store";
+import {
+  createUnavailableTileFindAdapter,
+  useTileFindStore,
+  type TileFindAdapter,
+  type TileFindCapability,
+  type TileFindStateSnapshot,
+} from "@/stores/tile-find";
 import { useTabsStore } from "@/stores/tabs/store";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import type { DesktopMenuCommandPayload } from "@/lib/windows/types";
@@ -131,13 +139,15 @@ function createRunnerHost(menu: FakeDesktopMenu): FakeRunnerHost {
       validateAuthToken: () => Promise.resolve({ kind: "rejected" as const }),
       validateAuthTokenIdentity: () =>
         Promise.resolve({ kind: "rejected" as const }),
-      exchangeAuthCode: () => Promise.resolve(null),
+      refreshAuthToken: () =>
+        Promise.resolve({ kind: "network-error" as const }),
       openExternalLink: () => Promise.resolve(),
       getRegisteredUrlSchemes: () => Promise.resolve([]),
       requestMicrophoneAccess: () => Promise.resolve("granted" as const),
       openMicrophoneSettings: () => Promise.resolve(),
       beginAuthAttempt: () => undefined,
       onAuthCallback: () => ({ dispose: () => undefined }),
+      deviceFlow: { start: () => Promise.resolve(null) },
       secureStorage: {
         get: () => Promise.resolve(null),
         set: () => Promise.resolve(),
@@ -174,12 +184,13 @@ function createRunnerHost(menu: FakeDesktopMenu): FakeRunnerHost {
       },
       onLocalHostChange: () => ({ dispose: () => undefined }),
       onSystemResumed: () => ({ dispose: () => undefined }),
-      requestHostRespawn: () => Promise.resolve(),
+      requestHostRespawn: vi.fn(() => Promise.resolve()),
       service: null,
       traycerCli: null,
       migration: null,
       hostManagement: null,
       hostTray: null,
+      zoom: null,
     } satisfies IRunnerHost,
     {
       menu,
@@ -217,6 +228,8 @@ function resetStores(): void {
     stripOrder: [],
     systemTabs: { history: null, settings: null },
   });
+  useFindInPageStore.setState(useFindInPageStore.getInitialState(), true);
+  useTileFindStore.getState().resetForTests();
   __getOpenEpicRegistryForTests().disposeAll();
 }
 
@@ -242,6 +255,77 @@ function buildDirtyHandle(epicId: string): OpenEpicStoreHandle {
     requestFreshSnapshot: () => undefined,
     isClean: () => false,
   };
+}
+
+const FIND_CAPABILITY = new Set<TileFindCapability>(["find"]);
+
+interface MenuFindAdapter extends TileFindAdapter {
+  readonly nextMock: Mock<() => void>;
+  readonly previousMock: Mock<() => void>;
+}
+
+function createTileFindSnapshot(tileInstanceId: string): TileFindStateSnapshot {
+  return {
+    requestId: 0,
+    status: "idle",
+    capabilities: FIND_CAPABILITY,
+    query: "",
+    matchCase: false,
+    replaceText: "",
+    current: 0,
+    total: 0,
+    coverageMessage: null,
+    errorMessage: null,
+    activeUnitId: tileInstanceId,
+    exactHighlight: "none",
+  };
+}
+
+function createMenuFindAdapter(
+  tileInstanceId: string,
+  tileKind: TileFindAdapter["tileKind"],
+): MenuFindAdapter {
+  const nextMock = vi.fn();
+  const previousMock = vi.fn();
+  return {
+    tileInstanceId,
+    tileKind,
+    getSnapshot: () => createTileFindSnapshot(tileInstanceId),
+    subscribe: () => () => undefined,
+    search: vi.fn(),
+    next: nextMock,
+    previous: previousMock,
+    clear: vi.fn(),
+    replace: null,
+    nextMock,
+    previousMock,
+  };
+}
+
+function registerMenuFindTarget(
+  adapter: TileFindAdapter,
+  isEligible: boolean,
+): void {
+  useTileFindStore.getState().registerTarget({
+    tileInstanceId: adapter.tileInstanceId,
+    contentId: `${adapter.tileInstanceId}-content`,
+    viewTabId: "view-1",
+    tileId: `${adapter.tileInstanceId}-pane`,
+    epicId: "epic-1",
+    tileKind: adapter.tileKind,
+    isEligible,
+    adapter,
+  });
+}
+
+function renderMenuCommandListener(menu: FakeDesktopMenu): void {
+  render(
+    <QueryClientProvider client={makeQueryClient()}>
+      <RunnerHostProvider runnerHost={createRunnerHost(menu)}>
+        <MenuCommandListener />
+      </RunnerHostProvider>
+    </QueryClientProvider>,
+  );
 }
 
 describe("<MenuCommandListener />", () => {
@@ -307,6 +391,85 @@ describe("<MenuCommandListener />", () => {
     });
 
     expect(runnerHost.windows.requestClose).toHaveBeenCalledWith("window-1");
+  });
+
+  it("routes find commands to the active tile-find owner", () => {
+    const menu = createMenu();
+    const activeAdapter = createMenuFindAdapter("active-tile", "ticket");
+    const hiddenAdapter = createMenuFindAdapter("hidden-tile", "chat");
+    registerMenuFindTarget(activeAdapter, true);
+    registerMenuFindTarget(hiddenAdapter, false);
+
+    renderMenuCommandListener(menu);
+
+    act(() => {
+      menu.emit("view.findInPage");
+      menu.emit("view.findNext");
+      menu.emit("view.findPrevious");
+    });
+
+    expect(
+      useTileFindStore.getState().uiByTileInstanceId["active-tile"]?.isOpen,
+    ).toBe(true);
+    expect(
+      useTileFindStore.getState().uiByTileInstanceId["hidden-tile"]?.isOpen,
+    ).toBe(false);
+    expect(activeAdapter.nextMock.mock.calls).toHaveLength(1);
+    expect(activeAdapter.previousMock.mock.calls).toHaveLength(1);
+    expect(hiddenAdapter.nextMock.mock.calls).toHaveLength(0);
+    expect(hiddenAdapter.previousMock.mock.calls).toHaveLength(0);
+    expect(useFindInPageStore.getState().isOpen).toBe(false);
+    expect(useFindInPageStore.getState().advanceForwardNonce).toBe(0);
+    expect(useFindInPageStore.getState().advanceBackwardNonce).toBe(0);
+  });
+
+  it("opens an unavailable tile-local bar without touching global find state", () => {
+    const menu = createMenu();
+    const unavailableAdapter = createUnavailableTileFindAdapter({
+      tileInstanceId: "blank-tile",
+      tileKind: "blank",
+      message: null,
+    });
+    registerMenuFindTarget(unavailableAdapter, true);
+
+    renderMenuCommandListener(menu);
+
+    act(() => {
+      menu.emit("view.findInPage");
+    });
+
+    const blankUi =
+      useTileFindStore.getState().uiByTileInstanceId["blank-tile"];
+    expect(blankUi?.isOpen).toBe(true);
+    expect(blankUi?.lastSnapshot.status).toBe("unavailable");
+    expect(blankUi?.lastSnapshot.coverageMessage).toBe(
+      "Open a tile before using find.",
+    );
+    expect(useFindInPageStore.getState().isOpen).toBe(false);
+  });
+
+  it("respects owner blockers and does not fall back to legacy find", () => {
+    const menu = createMenu();
+    const activeAdapter = createMenuFindAdapter("blocked-tile", "spec");
+    registerMenuFindTarget(activeAdapter, true);
+    useTileFindStore.getState().setOwnerBlocker({
+      reason: "app-dialog",
+      ownerId: "app-dialog",
+    });
+
+    renderMenuCommandListener(menu);
+
+    act(() => {
+      menu.emit("view.findInPage");
+      menu.emit("view.findNext");
+    });
+
+    expect(
+      useTileFindStore.getState().uiByTileInstanceId["blocked-tile"]?.isOpen,
+    ).toBe(false);
+    expect(activeAdapter.nextMock.mock.calls).toHaveLength(0);
+    expect(useFindInPageStore.getState().isOpen).toBe(false);
+    expect(useFindInPageStore.getState().advanceForwardNonce).toBe(0);
   });
 
   it("closes a clean active Epic tab from the native menu command", () => {
@@ -402,6 +565,7 @@ describe("<MenuCommandListener />", () => {
       ),
       deregisterService: vi.fn(() => Promise.resolve()),
       registryCheck: vi.fn(() => Promise.reject(new Error("not used"))),
+      getOperationStatus: vi.fn(() => Promise.resolve(null)),
       freePortAndRestart: vi.fn(() => Promise.reject(new Error("not used"))),
       cliManifest: vi.fn(() => Promise.resolve(null)),
       getHostName: vi.fn(() =>
@@ -440,6 +604,36 @@ describe("<MenuCommandListener />", () => {
       expect(updateHost).toHaveBeenCalledTimes(1);
     });
     expect(updateHost).toHaveBeenCalledWith({ onProgress: null });
+  });
+
+  it("opens a confirmation dialog for host.restart and only respawns after confirm", async () => {
+    const menu = createMenu();
+    const requestHostRespawn = vi.fn(() => Promise.resolve());
+    const runnerHost = Object.assign(createRunnerHost(menu), {
+      requestHostRespawn,
+    });
+
+    render(
+      <QueryClientProvider client={makeQueryClient()}>
+        <RunnerHostProvider runnerHost={runnerHost}>
+          <MenuCommandListener />
+        </RunnerHostProvider>
+      </QueryClientProvider>,
+    );
+
+    act(() => {
+      menu.emit("host.restart");
+    });
+
+    const dialog = await screen.findByTestId("confirm-destructive-dialog");
+    expect(dialog.textContent).toContain("Restarting will stop");
+    expect(requestHostRespawn).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    await waitFor(() => {
+      expect(requestHostRespawn).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("closes the landing draft from the native menu command", () => {

@@ -5,7 +5,8 @@ export type DesktopDialogKind =
   | "logs"
   | "open-epic-in-new-window"
   | "report-issue"
-  | "confirm-restart-update";
+  | "confirm-restart-update"
+  | "install-guidance";
 
 export interface DesktopDialogState {
   readonly activeDialog: DesktopDialogKind | null;
@@ -14,6 +15,7 @@ export interface DesktopDialogState {
   readonly openEpicInNewWindow: () => void;
   readonly openReportIssue: () => void;
   readonly openConfirmRestartUpdate: () => void;
+  readonly openInstallGuidance: () => void;
   readonly close: () => void;
 }
 
@@ -33,6 +35,9 @@ export const useDesktopDialogStore = create<DesktopDialogState>((set) => ({
   },
   openConfirmRestartUpdate: () => {
     set({ activeDialog: "confirm-restart-update" });
+  },
+  openInstallGuidance: () => {
+    set({ activeDialog: "install-guidance" });
   },
   close: () => {
     set({ activeDialog: null });

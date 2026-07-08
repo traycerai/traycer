@@ -11,7 +11,18 @@
 export const RunnerHostInvoke = {
   validateAuthToken: "runnerHost:auth:validateToken",
   validateAuthTokenIdentity: "runnerHost:auth:validateTokenIdentity",
-  exchangeAuthCode: "runnerHost:auth:exchangeAuthCode",
+  // Device Authorization Grant (RFC 8628) - the only interactive login. `start`
+  // runs `/device/authorize` + the `/device/token` poll loop in main (CORS-safe,
+  // resilient to renderer sleep) and returns the authorization; the terminal
+  // outcome is pushed on `deviceFlowResult`. The attempt is owned by the window
+  // that started it: when that `webContents` is destroyed the attempt is
+  // cancelled, so closing a window mid device-flow never leaks the poll loop.
+  // `pollNow` nudges the named attempt's loop to poll immediately (the
+  // browser-return deep link uses it). `cancel` aborts the named attempt's loop.
+  deviceFlowStart: "runnerHost:auth:deviceFlowStart",
+  deviceFlowPollNow: "runnerHost:auth:deviceFlowPollNow",
+  deviceFlowCancel: "runnerHost:auth:deviceFlowCancel",
+  refreshAuthToken: "runnerHost:auth:refreshToken",
   openExternalLink: "runnerHost:openExternalLink",
   getRegisteredUrlSchemes: "runnerHost:getRegisteredUrlSchemes",
   requestMicrophoneAccess: "runnerHost:requestMicrophoneAccess",
@@ -116,12 +127,15 @@ export const RunnerHostInvoke = {
   certTrustListPending: "runnerHost:cert:listPending",
   certTrustDismissPending: "runnerHost:cert:dismissPending",
   certTrustSystemDialog: "runnerHost:cert:systemDialog",
-  windowFindInPage: "runnerHost:window:findInPage",
-  windowStopFindInPage: "runnerHost:window:stopFindInPage",
   windowSetOverlayIcon: "runnerHost:window:setOverlayIcon",
   displayList: "runnerHost:display:list",
   gpuAccelerationGet: "runnerHost:gpu:get",
   gpuAccelerationSet: "runnerHost:gpu:set",
+  logLevelsGet: "runnerHost:logLevels:get",
+  logLevelsSet: "runnerHost:logLevels:set",
+  // Enumerates fonts installed on this machine for the Appearance font
+  // pickers (Settings → Appearance → UI/Code/Terminal font).
+  fontsList: "runnerHost:fonts:list",
   // Renderer-driven sleep prevention. The renderer recomputes
   // `preventSleepWhileRunning && anyLocalAgentActive` and pushes the boolean
   // here; main holds a single `powerSaveBlocker` while any window wants it.
@@ -155,14 +169,27 @@ export const RunnerHostInvoke = {
   traycerServiceRegister: "runnerHost:traycer:service:register",
   traycerServiceDeregister: "runnerHost:traycer:service:deregister",
   traycerRegistryCheck: "runnerHost:traycer:registry:check",
+  // Reads the current cross-surface host operation status (or null when
+  // idle) once on mount, so a component that mounts mid-operation (e.g.
+  // Settings opened after the banner already started an update) sees it
+  // immediately instead of waiting for the next `hostOperationStatusChange`.
+  traycerHostOperationStatusGet: "runnerHost:traycer:host:operationStatus:get",
   traycerFreePortAndRestart: "runnerHost:traycer:freePortAndRestart",
   traycerCliManifestRead: "runnerHost:traycer:cli:manifestRead",
   traycerHostNameGet: "runnerHost:traycer:host:name:get",
   traycerHostNameSet: "runnerHost:traycer:host:name:set",
+  zoomGet: "runnerHost:zoom:get",
+  zoomSet: "runnerHost:zoom:set",
+  zoomStepIn: "runnerHost:zoom:stepIn",
+  zoomStepOut: "runnerHost:zoom:stepOut",
+  zoomReset: "runnerHost:zoom:reset",
 } as const;
 
 export const RunnerHostEvent = {
   authCallback: "runnerHost:event:authCallback",
+  // Terminal outcome of a device-flow attempt, keyed by `attemptId` so a
+  // superseded attempt's late result can't be mistaken for the live one.
+  deviceFlowResult: "runnerHost:event:deviceFlowResult",
   localHostChange: "runnerHost:event:localHostChange",
   // OS wake pulse (powerMonitor `resume` / `unlock-screen`) bridged to the
   // renderer so it force-reconnects its host streams - re-registering the
@@ -184,7 +211,6 @@ export const RunnerHostEvent = {
   certificateErrorPending: "runnerHost:event:cert:errorPending",
   appUpdateChange: "runnerHost:event:appUpdate:change",
   displayTopologyChange: "runnerHost:event:display:topologyChange",
-  findInPageResult: "runnerHost:event:findInPage:result",
   // Progress events emitted by long-running host-management invokes
   // (install / update / register-service). The preload bridge filters by
   // `operationId` so concurrent operations don't cross-contaminate.
@@ -193,6 +219,19 @@ export const RunnerHostEvent = {
   // `HostTrayCommandListener`. Payloads match the shared
   // `HostTrayCommand` union.
   hostTrayCommand: "runnerHost:event:host:trayCommand",
+  // Main-process registry refreshes (launch probe, auto-update reconcile,
+  // renderer forced checks) fan out here so already-mounted renderer update
+  // surfaces can keep their TanStack Query cache in lockstep.
+  hostRegistryUpdateStateChange:
+    "runnerHost:event:host:registryUpdateStateChange",
+  // Canonical cross-surface "is a host mutation running" broadcast (see
+  // `HostOperationStatus`). Fired on start, every progress tick, and settle
+  // (success/error) of any install/update/register-service/ensure
+  // operation, whether triggered by a renderer surface or the background
+  // auto-update reconciler, so every open window's banner/Settings stay in
+  // lockstep without racing the CLI's cross-process lock file.
+  hostOperationStatusChange: "runnerHost:event:host:operationStatusChange",
+  zoomChange: "runnerHost:event:zoom:change",
 } as const;
 
 /**

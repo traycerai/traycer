@@ -56,6 +56,7 @@ function makeToolbarStore() {
       {
         id: "claude",
         label: "Claude Code",
+        enabled: true,
         available: true,
         error: null,
         modes: ["gui", "tui"],
@@ -65,10 +66,12 @@ function makeToolbarStore() {
           "auto_accept_edits",
           "full_access",
         ],
+        availabilityPending: false,
       },
     ],
     modelsHarnessId: "claude",
     models: [],
+    modelsLoaded: true,
     tuiOnly: true,
   });
   return store;
@@ -95,15 +98,18 @@ function makeGuiOnlyToolbarStore() {
       {
         id: "cursor",
         label: "Cursor",
+        enabled: true,
         available: true,
         error: null,
         modes: ["gui"],
         requiresApiKey: false,
         supportedPermissionModes: ["supervised", "full_access"],
+        availabilityPending: false,
       },
     ],
     modelsHarnessId: "cursor",
     models: [],
+    modelsLoaded: true,
     tuiOnly: true,
   });
   return store;

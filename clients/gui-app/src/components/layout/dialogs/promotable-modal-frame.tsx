@@ -1,8 +1,12 @@
-import { type ReactNode } from "react";
+import { useRef, type ReactNode } from "react";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import { SquareArrowOutUpRight, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import {
+  dialogContentInertToPointer,
+  interactionStartedOnOverlay,
+} from "@/components/layout/dialogs/dialog-outside-guard";
 
 interface PromotableModalFrameProps {
   readonly icon: ReactNode;
@@ -33,16 +37,53 @@ const FRAME_CONTENT_CLASS =
 export function PromotableModalFrame(
   props: PromotableModalFrameProps,
 ): ReactNode {
+  const overlayRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  // Sampled in the overlay's onPointerDown: while a nested layer (the
+  // tier-filter/sort dropdown) is open, the dialog Content is pointer-events:none,
+  // so the overlay is the hit-target for EVERY click-out - and the dialog's
+  // outside-dismissal is deferred to the subsequent click, after the dropdown has
+  // already closed. Only this pointerdown-time sample can tell "dismissing the
+  // dropdown" apart from a genuine backdrop click; see dialog-outside-guard.ts.
+  const nestedLayerOwnedPointerDownRef = useRef(false);
+  // A genuine backdrop click still closes the modal; any outside-dismissal whose
+  // gesture did not start on the overlay, or started while a nested layer held
+  // the pointer, is left to that inner layer - it must not close the whole modal.
+  // Escape is deliberately NOT guarded: Radix routes it to the top layer, so the
+  // first Escape closes an open dropdown and the next closes the modal.
+  const preventUnlessGenuineBackdropGesture = (event: {
+    readonly detail: { readonly originalEvent: Event };
+    readonly preventDefault: () => void;
+  }): void => {
+    if (
+      nestedLayerOwnedPointerDownRef.current ||
+      !interactionStartedOnOverlay(
+        event.detail.originalEvent,
+        overlayRef.current,
+      )
+    ) {
+      event.preventDefault();
+    }
+  };
   return (
     <DialogPrimitive.Portal>
       <DialogPrimitive.Overlay
+        ref={overlayRef}
         data-slot="dialog-overlay"
         className="fixed inset-0 isolate z-50 bg-black/30 duration-100 supports-backdrop-filter:backdrop-blur-xs data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0"
+        onPointerDown={() => {
+          nestedLayerOwnedPointerDownRef.current = dialogContentInertToPointer(
+            contentRef.current,
+          );
+        }}
       />
       <DialogPrimitive.Content
+        ref={contentRef}
         data-slot="dialog-content"
         aria-describedby={undefined}
         className={cn(FRAME_CONTENT_CLASS, props.contentClassName)}
+        onPointerDownOutside={preventUnlessGenuineBackdropGesture}
+        onInteractOutside={preventUnlessGenuineBackdropGesture}
         {...props.dataAttributes}
       >
         <header className="flex shrink-0 items-center gap-2 border-b border-border/60 bg-secondary px-4 py-2">

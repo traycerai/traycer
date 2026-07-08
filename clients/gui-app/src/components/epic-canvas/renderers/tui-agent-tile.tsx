@@ -56,6 +56,8 @@ import {
 } from "@/components/ui/popover";
 import { HostWorkspaceSelector } from "@/components/home/host-workspace-selector/host-workspace-selector";
 import { useWorktreeGetBinding } from "@/hooks/worktree/use-worktree-get-binding-query";
+import { SetupCardSegment } from "@/components/chat/segments/setup-card-segment";
+import { buildTuiAgentSetupCardModel } from "@/stores/chats/tui-agent-setup-card-model";
 import { AgentModeReadonlyLabel } from "@/components/home/pickers/agent-mode-toggle";
 import type { AgentMode } from "@/components/home/data/landing-options";
 import { useAgentStopControls } from "@/hooks/agent/use-agent-stop-controls";
@@ -175,12 +177,17 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
   }
   if (reachability.status === "checking") {
     return (
-      <div
-        className="flex h-full w-full items-center justify-center bg-canvas"
-        data-testid={`terminal-agent-tile-${props.tileId}`}
-      >
-        <TerminalLoadingSkeleton />
-      </div>
+      <TerminalAgentTileShell tileId={props.tileId}>
+        <TerminalAgentWorktreeNotice
+          hostId={hostId}
+          agentId={sessionId}
+          viewTabId={props.viewTabId}
+          layout="bar"
+        />
+        <div className="flex min-h-0 flex-1 items-center justify-center">
+          <TerminalLoadingSkeleton />
+        </div>
+      </TerminalAgentTileShell>
     );
   }
   // Keyed on `recoverNonce`: a recovery remounts the bootstrap subtree, which
@@ -254,6 +261,7 @@ function TuiAgentTileLive(
         // Raw per-agent override: `null` keeps provider Settings as the
         // fallback, while `""` and non-empty strings are durable overrides.
         terminalAgentArgs: agent.terminalAgentArgs,
+        workspaceMode: agent.workspaceMode,
       });
       if (
         session.terminalShellCommand === null ||
@@ -354,7 +362,7 @@ function TuiAgentTileLive(
     (): boolean => restartSuppressExitRef.current,
     [],
   );
-  const performRestartKill = useCallback((): void => {
+  const armRestartSuppression = useCallback((): void => {
     restartSawSessionGoneRef.current = false;
     restartSuppressExitRef.current = true;
     if (restartSuppressTimerRef.current !== null) {
@@ -364,6 +372,9 @@ function TuiAgentTileLive(
       clearRestartSuppression,
       RESTART_SUPPRESS_TIMEOUT_MS,
     );
+  }, [clearRestartSuppression]);
+  const performRestartKill = useCallback((): void => {
+    armRestartSuppression();
     killTerminalMutate(
       { sessionId },
       {
@@ -372,7 +383,16 @@ function TuiAgentTileLive(
         },
       },
     );
-  }, [clearRestartSuppression, killTerminalMutate, retryTerminal, sessionId]);
+  }, [armRestartSuppression, killTerminalMutate, retryTerminal, sessionId]);
+  // A `reaped` exit is the host's idle-reap of this unwatched agent - pure
+  // lifecycle, not a crash - and the PTY is already gone, so there is
+  // nothing to kill. Arm the same suppression a binding restart uses (no
+  // error toast, no tab close, same safety ceiling) and recreate under the
+  // same id; `prepareLaunch` resumes the conversation transparently.
+  const reviveAfterReap = useCallback((): void => {
+    armRestartSuppression();
+    retryTerminal();
+  }, [armRestartSuppression, retryTerminal]);
   // The kill must target a LIVE session. If session presence is unknown
   // (`terminal.list` refetching → `hostHasSession === null`) or already gone at
   // commit time, do NOT silently drop the rebind (the bug where Update appeared
@@ -438,13 +458,21 @@ function TuiAgentTileLive(
     // Same stable skeleton the reachability-check, pre-launch, and xterm
     // suspense states use, so the create→ready transition reads as one
     // continuous loading state instead of a sequence of placeholder strings.
+    // The worktree-setup notice still rides on top (it keys off the tab/node
+    // id, not the pending agent projection), so a just-created worktree agent
+    // shows its notice before the record lands.
     return (
-      <div
-        className="flex h-full w-full items-center justify-center bg-canvas"
-        data-testid={`terminal-agent-tile-${props.tileId}`}
-      >
-        <TerminalLoadingSkeleton />
-      </div>
+      <TerminalAgentTileShell tileId={props.tileId}>
+        <TerminalAgentWorktreeNotice
+          hostId={hostId}
+          agentId={props.node.id}
+          viewTabId={props.viewTabId}
+          layout="bar"
+        />
+        <div className="flex min-h-0 flex-1 items-center justify-center">
+          <TerminalLoadingSkeleton />
+        </div>
+      </TerminalAgentTileShell>
     );
   }
 
@@ -456,10 +484,7 @@ function TuiAgentTileLive(
   // underneath swaps between pre-launch placeholders and the live xterm host
   // based on session readiness.
   return (
-    <div
-      className="flex h-full w-full min-h-0 flex-col bg-canvas"
-      data-testid={`terminal-agent-tile-${props.tileId}`}
-    >
+    <TerminalAgentTileShell tileId={props.tileId}>
       <TerminalAgentPreLaunchToolbar
         hostId={hostId}
         hostClient={hostClient}
@@ -482,11 +507,12 @@ function TuiAgentTileLive(
           createError={bootstrap.createError}
           handle={bootstrap.handle}
           onRetry={bootstrap.retry}
+          onReapedExit={reviveAfterReap}
           isActive={props.isActive}
           recovery={props.recovery}
         />
       </div>
-    </div>
+    </TerminalAgentTileShell>
   );
 }
 
@@ -506,6 +532,8 @@ interface TerminalAgentBodyProps {
   } | null;
   readonly handle: TerminalSessionStoreHandle | null;
   readonly onRetry: () => void;
+  /** Revive (recreate + resume) after the host's idle-reap of this agent. */
+  readonly onReapedExit: () => void;
   readonly isActive: boolean;
   readonly isRestartKillSuppressed: () => boolean;
   readonly recovery: TerminalSessionRecovery;
@@ -580,6 +608,7 @@ function TerminalAgentBody(props: TerminalAgentBodyProps): React.ReactNode {
       tileId={props.tileId}
       isActive={props.isActive}
       isRestartKillSuppressed={props.isRestartKillSuppressed}
+      onReapedExit={props.onReapedExit}
       recovery={props.recovery}
     />
   );
@@ -688,6 +717,11 @@ function TerminalAgentPreLaunchToolbar(
           ownerId: props.agent.id,
           binding,
           isOwnerActive: props.isOwnerActive,
+          // Terminal agents have no background-work-outlives-the-turn concept
+          // distinct from PTY output (unlike chat), so there's no narrower
+          // signal to distinguish - this field is unread for this surface kind
+          // (the notice text is fixed regardless), kept equal for consistency.
+          hasActiveTurn: props.isOwnerActive,
           // Surfaced on the chip as a per-folder "missing on disk" indicator.
           // The host-computed signal on `worktree.getBinding` — the actual
           // launch gate is the `prepareLaunch` WORKTREE_MISSING reject, but this
@@ -714,10 +748,21 @@ function TerminalAgentPreLaunchToolbar(
         <GitFork aria-hidden className="size-3.5" />
         Fork
       </Button>
-      <TerminalAgentHeaderControls
-        epicId={props.epicId}
-        tuiAgentId={props.agent.id}
-      />
+      {/* Right-aligned status-bar group: the worktree-creation notice sits
+          beside the agent controls. The notice's expanded detail opens as a
+          downward Popover overlay, so it never reflows the terminal below. */}
+      <div className="ml-auto flex shrink-0 items-center gap-2">
+        <TerminalAgentWorktreeNotice
+          hostId={props.hostId}
+          agentId={props.agent.id}
+          viewTabId={props.viewTabId}
+          layout="chip"
+        />
+        <TerminalAgentHeaderControls
+          epicId={props.epicId}
+          tuiAgentId={props.agent.id}
+        />
+      </div>
       <TerminalAgentForkDialog
         open={forkDialogOpen}
         target={forkTarget}
@@ -727,6 +772,93 @@ function TerminalAgentPreLaunchToolbar(
         hostClient={props.hostClient}
         onOpenChange={setForkDialogOpen}
       />
+    </div>
+  );
+}
+
+/**
+ * Worktree-creation notice for a terminal agent - the TUI analog of the chat
+ * setup card. Reuses the exact `SetupCardSegment` a chat renders (in its
+ * `inline` variant), fed a view-model projected from this agent's
+ * `worktree.getBinding` (the same unary read the toolbar chip already uses, so
+ * this shares its TanStack cache - no extra request). Renders nothing unless
+ * the agent runs in a worktree it CREATED, so Local / imported bindings show no
+ * card. Retry / Open-terminal route by `ownerKind: "terminal-agent"` as in chat.
+ *
+ * Self-resolves the epic + tab-host client from `hostId` (rather than taking
+ * them as props) so it can render in EVERY tile state - reachability-checking,
+ * agent-projection-pending, and live - not only once the PTY toolbar mounts;
+ * `agentId` is the tab/node id, always known before the agent record projects.
+ *
+ * `layout`:
+ *  - `"chip"` - just the compact trigger, placed by the caller inside the live
+ *    status-bar toolbar.
+ *  - `"bar"` - the trigger wrapped in a standalone status-bar strip, for the
+ *    pre-launch (checking / projection-pending) states where no toolbar exists
+ *    yet. Returns null (no empty strip) when there is no notice to show.
+ */
+function TerminalAgentWorktreeNotice(props: {
+  readonly hostId: string;
+  readonly agentId: string;
+  readonly viewTabId: string;
+  readonly layout: "chip" | "bar";
+}) {
+  const epicId = useOpenEpicId();
+  const hostEntry = useHostDirectoryEntry(props.hostId);
+  const hostClient = useHostClientFor(hostEntry);
+  const paneVisible = usePaneVisible();
+  const bindingQuery = useWorktreeGetBinding({
+    client: hostClient,
+    epicId,
+    ownerId: props.agentId,
+    ownerKind: "terminal-agent",
+    enabled: true,
+    // Mirror the toolbar chip's query options so the two observers share one
+    // request and refresh together (re-check the binding on focus while the
+    // pane is visible, so a completed setup flips the card without a reopen).
+    staleTime: 0,
+    refetchOnWindowFocus: paneVisible,
+  });
+  const binding = bindingQuery.data?.binding ?? null;
+  const model = useMemo(
+    () =>
+      buildTuiAgentSetupCardModel(binding, { epicId, ownerId: props.agentId }),
+    [binding, epicId, props.agentId],
+  );
+  if (model === null) return null;
+  const card = (
+    <SetupCardSegment
+      model={model}
+      viewTabId={props.viewTabId}
+      variant="inline"
+    />
+  );
+  if (props.layout === "chip") return card;
+  return (
+    <div
+      className="flex min-w-0 shrink-0 items-center justify-end border-b border-canvas-border/70 px-3 py-1.5"
+      data-testid="terminal-agent-worktree-setup-notice"
+    >
+      {card}
+    </div>
+  );
+}
+
+/**
+ * The terminal-agent tile's outer chrome: a full-height `bg-canvas` column with
+ * the tile test id. State-specific content (status bar + skeleton, or the live
+ * shell) is provided as children.
+ */
+function TerminalAgentTileShell(props: {
+  readonly tileId: string;
+  readonly children: React.ReactNode;
+}) {
+  return (
+    <div
+      className="flex h-full w-full min-h-0 flex-col bg-canvas"
+      data-testid={`terminal-agent-tile-${props.tileId}`}
+    >
+      {props.children}
     </div>
   );
 }
@@ -759,7 +891,7 @@ function TerminalAgentHeaderControls(props: {
   const runningCount = controls.descendants.length + (self.active ? 1 : 0);
 
   return (
-    <div className="ml-auto flex shrink-0 items-center gap-1">
+    <div className="flex shrink-0 items-center gap-1">
       <Popover>
         <PopoverTrigger asChild>
           <Button
@@ -804,6 +936,8 @@ interface TerminalAgentLiveProps {
   // the live host, and rather than the ref itself (which react-hooks/refs flags
   // when passed across the prop boundary).
   readonly isRestartKillSuppressed: () => boolean;
+  /** Revive (recreate + resume) after the host's idle-reap of this agent. */
+  readonly onReapedExit: () => void;
   readonly recovery: TerminalSessionRecovery;
 }
 
@@ -814,9 +948,14 @@ function TerminalAgentLive(props: TerminalAgentLiveProps) {
   const status = useStore(handle.store, (s) => s.status);
   const connectionStatus = useStore(handle.store, (s) => s.connectionStatus);
   const exitCode = useStore(handle.store, (s) => s.exitCode);
+  const exitReason = useStore(handle.store, (s) => s.exitReason);
   const lastOutputPreview = useStore(handle.store, (s) => s.lastOutputPreview);
   const closeCanvasTab = useEpicCanvasStore((s) => s.closeCanvasTab);
   const exitToastShownRef = useRef(false);
+  // One revive request per exit: the exit effect can re-run while the store
+  // still reports the same exited state (dep identity churn), and stacking
+  // `terminal.create` retries for one reap would race each other.
+  const reapedReviveRequestedRef = useRef(false);
 
   const isRestartKillSuppressed = props.isRestartKillSuppressed;
   const showExitToast = useCallback(() => {
@@ -825,6 +964,9 @@ function TerminalAgentLive(props: TerminalAgentLiveProps) {
     // so the latest suppression state applies to this exact exit.
     if (isRestartKillSuppressed()) return;
     if (status !== "exited") return;
+    // A `reaped` exit is the host's idle-reap of an unwatched agent -
+    // lifecycle, not a crash. The exit effect below revives it in place.
+    if (exitReason === "reaped") return;
     if (!exitToastShownRef.current && exitCode !== null && exitCode !== 0) {
       exitToastShownRef.current = true;
       toast.error("Terminal agent exited with an error.", {
@@ -833,9 +975,23 @@ function TerminalAgentLive(props: TerminalAgentLiveProps) {
           "The agent stopped before reporting a readable error. Try restarting it.",
       });
     }
-  }, [status, exitCode, lastOutputPreview, isRestartKillSuppressed]);
+  }, [
+    status,
+    exitCode,
+    exitReason,
+    lastOutputPreview,
+    isRestartKillSuppressed,
+  ]);
   useActivePaneEffect(showExitToast);
 
+  const onReapedExit = props.onReapedExit;
+  useEffect(() => {
+    if (status === "running") {
+      // A live PTY (fresh spawn or completed revive) re-arms the one-shot so
+      // a later reap - after another long unwatched stretch - revives again.
+      reapedReviveRequestedRef.current = false;
+    }
+  }, [status]);
   useEffect(() => {
     if (status !== "exited") return;
     // Don't close the tab on the kill we issued for a restart - the bootstrap is
@@ -843,6 +999,16 @@ function TerminalAgentLive(props: TerminalAgentLiveProps) {
     // dropped the terminal the instant folder edits were applied. Read on this
     // exact exit; a genuine later exit sees suppression cleared and closes.
     if (isRestartKillSuppressed()) return;
+    if (exitReason === "reaped") {
+      // Host idle-reap of an unwatched agent: keep the tab open and revive
+      // the session in place (recreate under the same id; `prepareLaunch`
+      // resumes the conversation) instead of closing on a lifecycle event.
+      if (!reapedReviveRequestedRef.current) {
+        reapedReviveRequestedRef.current = true;
+        onReapedExit();
+      }
+      return;
+    }
     // `closeCanvasTab` resolves the tile by its pane tab *instance* id
     // (`pane.tabInstanceIds`), not the content/session id. Passing
     // `handle.sessionId` (the agent record id) silently no-ops, leaving the
@@ -850,6 +1016,8 @@ function TerminalAgentLive(props: TerminalAgentLiveProps) {
     closeCanvasTab(props.viewTabId, props.tileId, props.instanceId);
   }, [
     status,
+    exitReason,
+    onReapedExit,
     props.instanceId,
     props.viewTabId,
     props.tileId,
@@ -902,6 +1070,7 @@ function TerminalAgentLive(props: TerminalAgentLiveProps) {
       <Suspense fallback={<TerminalLoadingSkeleton />}>
         <TerminalXtermHost
           sessionId={handle.sessionId}
+          tileKind="terminal-agent"
           instanceId={props.instanceId}
           effectiveCols={effectiveCols}
           effectiveRows={effectiveRows}

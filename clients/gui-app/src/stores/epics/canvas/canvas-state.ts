@@ -14,6 +14,7 @@ import {
   pruneSizes,
   replacePane,
 } from "./tile-tree";
+import { pruneActivationHistory } from "./activation-history";
 
 export const EMPTY_CANVAS: EpicCanvasState = {
   root: null,
@@ -76,7 +77,16 @@ export function reconcileCanvasInvariants(
     const kept = pane.tabInstanceIds.filter((id) =>
       Object.hasOwn(state.tilesByInstanceId, id),
     );
-    if (kept.length === pane.tabInstanceIds.length) continue;
+    const activationHistory = pruneActivationHistory(
+      pane.activationHistory,
+      kept,
+    );
+    if (
+      kept.length === pane.tabInstanceIds.length &&
+      activationHistory.length === pane.activationHistory.length
+    ) {
+      continue;
+    }
     root = replacePane(root, pane.id, (current) => ({
       ...current,
       tabInstanceIds: kept,
@@ -88,6 +98,7 @@ export function reconcileCanvasInvariants(
         current.previewTabId !== null && kept.includes(current.previewTabId)
           ? current.previewTabId
           : null,
+      activationHistory,
     }));
   }
 

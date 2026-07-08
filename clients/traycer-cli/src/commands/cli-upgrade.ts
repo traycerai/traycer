@@ -28,6 +28,7 @@ import {
 import type { Environment } from "../runner/environment";
 import type { CommandFn, CommandResult } from "../runner/runner";
 import { CLI_ERROR_CODES, CliError, cliError } from "../runner/errors";
+import { createCliLogger, errorFromUnknown, type ILogger } from "../logger";
 import { withCliLock } from "../store/cli-lock";
 
 // `traycer cli upgrade` - self-upgrade the installed CLI binary.
@@ -77,6 +78,11 @@ const UPGRADE_HINT_FOR_SOURCE: Record<CliInstallSource, string> = {
 
 export function buildCliUpgradeCommand(args: CliUpgradeArgs): CommandFn {
   return async (ctx): Promise<CommandResult> => {
+    ctx.runtime.logger.info("CLI upgrade command started", {
+      environment: ctx.runtime.environment,
+      dryRun: args.dryRun,
+      hasTargetVersionOverride: args.targetVersion !== null,
+    });
     return withCliLock(
       {
         environment: ctx.runtime.environment,
@@ -87,6 +93,12 @@ export function buildCliUpgradeCommand(args: CliUpgradeArgs): CommandFn {
       async () => {
         const manifest = await readCliManifest(ctx.runtime.environment);
         if (manifest === null) {
+          ctx.runtime.logger.warn(
+            "CLI upgrade refused because manifest is missing",
+            {
+              environment: ctx.runtime.environment,
+            },
+          );
           throw cliError({
             code: CLI_ERROR_CODES.CLI_UPGRADE_NO_MANIFEST,
             message:
@@ -103,6 +115,14 @@ export function buildCliUpgradeCommand(args: CliUpgradeArgs): CommandFn {
         // the ownership contract spelled out in the Tech Plan.
         if (PACKAGE_MANAGER_CLI_SOURCES.has(manifest.source)) {
           const hint = UPGRADE_HINT_FOR_SOURCE[manifest.source];
+          ctx.runtime.logger.warn(
+            "CLI upgrade refused package-manager-owned install",
+            {
+              environment: ctx.runtime.environment,
+              source: manifest.source,
+              currentVersion: manifest.version,
+            },
+          );
           throw cliError({
             code: CLI_ERROR_CODES.CLI_UPGRADE_PACKAGE_MANAGER_OWNED,
             message: `cli upgrade: CLI is installed via ${manifest.source}; self-upgrade is disabled to keep package-manager ownership intact. ${hint}`,
@@ -125,7 +145,18 @@ export function buildCliUpgradeCommand(args: CliUpgradeArgs): CommandFn {
         });
         const versions = await fetchCliVersions();
         const targetVersion = args.targetVersion ?? versions.latest;
+        ctx.runtime.logger.info("CLI upgrade target resolved", {
+          environment: ctx.runtime.environment,
+          currentVersion: manifest.version,
+          targetVersion,
+          source: manifest.source,
+          latestVersion: versions.latest,
+        });
         if (manifest.version === targetVersion) {
+          ctx.runtime.logger.info("CLI upgrade no-op; already current", {
+            environment: ctx.runtime.environment,
+            version: targetVersion,
+          });
           return {
             data: {
               status: "already-current",
@@ -142,6 +173,12 @@ export function buildCliUpgradeCommand(args: CliUpgradeArgs): CommandFn {
         const platformKey = currentCliPlatformKey();
         const asset = resolveCliAsset(versions, platformKey);
         if (args.dryRun) {
+          ctx.runtime.logger.info("CLI upgrade dry-run completed", {
+            environment: ctx.runtime.environment,
+            currentVersion: manifest.version,
+            targetVersion,
+            platformKey,
+          });
           return {
             data: {
               status: "dry-run",
@@ -161,9 +198,16 @@ export function buildCliUpgradeCommand(args: CliUpgradeArgs): CommandFn {
         // tempdir if the install directory isn't writable (e.g. desktop
         // staged the CLI under a system path).
         const installDir = dirname(manifest.binaryPath);
-        const stagingRoot = (await directoryWritable(installDir))
+        const installDirWritable = await directoryWritable(installDir);
+        const stagingRoot = installDirWritable
           ? installDir
           : await mkdtemp(join(tmpdir(), "traycer-cli-upgrade-"));
+        ctx.runtime.logger.info("CLI upgrade staging root selected", {
+          environment: ctx.runtime.environment,
+          installDirWritable,
+          stagingInInstallDir: installDirWritable,
+          platformKey,
+        });
         const stagedBinaryPath = join(
           stagingRoot,
           `traycer-${targetVersion}-${platformKey}${binaryExtension()}`,
@@ -196,7 +240,19 @@ export function buildCliUpgradeCommand(args: CliUpgradeArgs): CommandFn {
             signal: null,
           });
         } catch (cause) {
-          if (cause instanceof Error && (cause as { code?: string }).code !== undefined) {
+          ctx.runtime.logger.error(
+            "CLI upgrade download failed",
+            {
+              environment: ctx.runtime.environment,
+              targetVersion,
+              platformKey,
+            },
+            errorFromUnknown(cause),
+          );
+          if (
+            cause instanceof Error &&
+            (cause as { code?: string }).code !== undefined
+          ) {
             throw cause;
           }
           throw cliError({
@@ -211,6 +267,12 @@ export function buildCliUpgradeCommand(args: CliUpgradeArgs): CommandFn {
         if (process.platform !== "win32") {
           await chmod(stagedBinaryPath, 0o755);
         }
+        ctx.runtime.logger.info("CLI upgrade staged binary ready", {
+          environment: ctx.runtime.environment,
+          targetVersion,
+          platformKey,
+          sizeBytes: asset.sizeBytes,
+        });
 
         ctx.progress({
           stage: "swap",
@@ -220,9 +282,11 @@ export function buildCliUpgradeCommand(args: CliUpgradeArgs): CommandFn {
           totalBytes: null,
         });
         const swap = await tryReplaceLiveBinary({
+          environment: ctx.runtime.environment,
           stagedBinaryPath,
           livePath: manifest.binaryPath,
           expectedSha256: asset.sha256,
+          logger: ctx.runtime.logger,
         });
         if (swap.status === "replaced") {
           await updateCliManifest(ctx.runtime.environment, {
@@ -230,6 +294,12 @@ export function buildCliUpgradeCommand(args: CliUpgradeArgs): CommandFn {
             binaryPath: manifest.binaryPath,
             installedAt: new Date().toISOString(),
             pendingUpgrade: null,
+          });
+          ctx.runtime.logger.info("CLI upgrade replaced live binary", {
+            environment: ctx.runtime.environment,
+            previousVersion: manifest.version,
+            currentVersion: targetVersion,
+            source: manifest.source,
           });
           return {
             data: {
@@ -251,6 +321,13 @@ export function buildCliUpgradeCommand(args: CliUpgradeArgs): CommandFn {
             stagedAt: new Date().toISOString(),
             reason: "binary-locked",
           },
+        });
+        ctx.runtime.logger.warn("CLI upgrade staged pending upgrade", {
+          environment: ctx.runtime.environment,
+          previousVersion: manifest.version,
+          targetVersion,
+          source: manifest.source,
+          reason: "binary-locked",
         });
         return {
           data: {
@@ -278,6 +355,7 @@ interface ReplaceResult {
 }
 
 async function tryReplaceLiveBinary(opts: {
+  readonly environment: Environment;
   readonly stagedBinaryPath: string;
   readonly livePath: string;
   // Optional digest the live path is expected to hold after a
@@ -288,6 +366,7 @@ async function tryReplaceLiveBinary(opts: {
   // helper callers that don't have the asset manifest in scope may pass
   // `null` to skip the check - the rename path doesn't touch bytes.
   readonly expectedSha256: string | null;
+  readonly logger: ILogger;
 }): Promise<ReplaceResult> {
   // On Windows the rename will fail with EBUSY/EPERM if the live binary
   // is mapped into a running process. We catch those, treat them as
@@ -296,13 +375,31 @@ async function tryReplaceLiveBinary(opts: {
   // is open, but EACCES from a read-only filesystem still indicates
   // "we can't swap, keep it staged".
   try {
+    opts.logger.info("CLI upgrade attempting live binary replacement", {
+      environment: opts.environment,
+      expectedSha256: opts.expectedSha256 !== null,
+    });
     await rename(opts.stagedBinaryPath, opts.livePath);
+    opts.logger.info("CLI upgrade live binary replacement succeeded", {
+      environment: opts.environment,
+      strategy: "rename",
+    });
     return { status: "replaced", errorMessage: null };
   } catch (err) {
-    const code = err !== null && typeof err === "object" && "code" in err
-      ? String((err as { code: unknown }).code)
-      : null;
-    if (code === "EBUSY" || code === "EPERM" || code === "EACCES" || code === "ETXTBSY") {
+    const code =
+      err !== null && typeof err === "object" && "code" in err
+        ? String((err as { code: unknown }).code)
+        : null;
+    if (
+      code === "EBUSY" ||
+      code === "EPERM" ||
+      code === "EACCES" ||
+      code === "ETXTBSY"
+    ) {
+      opts.logger.warn("CLI upgrade live binary is locked", {
+        environment: opts.environment,
+        errorCode: code,
+      });
       return {
         status: "locked",
         errorMessage: err instanceof Error ? err.message : String(err),
@@ -312,6 +409,10 @@ async function tryReplaceLiveBinary(opts: {
     // operator's intent (replace the binary) still completes when the
     // staging dir isn't on the same volume.
     if (code === "EXDEV") {
+      opts.logger.info("CLI upgrade falling back to cross-device copy", {
+        environment: opts.environment,
+        expectedSha256: opts.expectedSha256 !== null,
+      });
       try {
         await copyFile(opts.stagedBinaryPath, opts.livePath);
         // Re-verify the destination digest. A partial-write or a hostile
@@ -321,6 +422,13 @@ async function tryReplaceLiveBinary(opts: {
         if (opts.expectedSha256 !== null) {
           const actual = await hashFileSha256(opts.livePath);
           if (actual !== opts.expectedSha256) {
+            opts.logger.error(
+              "CLI upgrade post-copy hash mismatch",
+              {
+                environment: opts.environment,
+              },
+              null,
+            );
             try {
               await unlink(opts.livePath);
             } catch {
@@ -341,24 +449,57 @@ async function tryReplaceLiveBinary(opts: {
         }
         try {
           await unlink(opts.stagedBinaryPath);
-        } catch {
+        } catch (unlinkErr) {
+          opts.logger.warn(
+            "CLI upgrade failed to remove staged copy after fallback",
+            {
+              environment: opts.environment,
+              errorName: errorFromUnknown(unlinkErr).name,
+              errorMessage: errorFromUnknown(unlinkErr).message,
+            },
+          );
           // Staged copy is harmless if it lingers.
         }
+        opts.logger.info("CLI upgrade live binary replacement succeeded", {
+          environment: opts.environment,
+          strategy: "copy",
+        });
         return { status: "replaced", errorMessage: null };
       } catch (copyErr) {
         if (copyErr instanceof CliError) throw copyErr;
+        opts.logger.error(
+          "CLI upgrade cross-device copy failed",
+          {
+            environment: opts.environment,
+          },
+          errorFromUnknown(copyErr),
+        );
         throw cliError({
           code: CLI_ERROR_CODES.CLI_UPGRADE_REPLACE_FAILED,
           message: `cli upgrade: cross-device fallback copy failed: ${copyErr instanceof Error ? copyErr.message : String(copyErr)}`,
-          details: { livePath: opts.livePath, stagedBinaryPath: opts.stagedBinaryPath },
+          details: {
+            livePath: opts.livePath,
+            stagedBinaryPath: opts.stagedBinaryPath,
+          },
           exitCode: 1,
         });
       }
     }
+    opts.logger.error(
+      "CLI upgrade live binary replacement failed",
+      {
+        environment: opts.environment,
+        errorCode: code ?? "unknown",
+      },
+      errorFromUnknown(err),
+    );
     throw cliError({
       code: CLI_ERROR_CODES.CLI_UPGRADE_REPLACE_FAILED,
       message: `cli upgrade: replace failed: ${err instanceof Error ? err.message : String(err)}`,
-      details: { livePath: opts.livePath, stagedBinaryPath: opts.stagedBinaryPath },
+      details: {
+        livePath: opts.livePath,
+        stagedBinaryPath: opts.stagedBinaryPath,
+      },
       exitCode: 1,
     });
   }
@@ -426,21 +567,47 @@ export type FinalizePendingCliUpgradeOutcome =
 export async function finalizePendingCliUpgrade(opts: {
   readonly environment: Environment;
 }): Promise<FinalizePendingCliUpgradeOutcome> {
+  const logger = createCliLogger(opts.environment);
+  logger.info("CLI pending upgrade finalization started", {
+    environment: opts.environment,
+  });
   const manifest = await readCliManifest(opts.environment);
-  if (manifest === null) return { status: "no-manifest" };
+  if (manifest === null) {
+    logger.info("CLI pending upgrade finalization skipped; no manifest", {
+      environment: opts.environment,
+    });
+    return { status: "no-manifest" };
+  }
   const pending = manifest.pendingUpgrade;
-  if (pending === null) return { status: "no-pending" };
+  if (pending === null) {
+    logger.info(
+      "CLI pending upgrade finalization skipped; no pending upgrade",
+      {
+        environment: opts.environment,
+        currentVersion: manifest.version,
+        source: manifest.source,
+      },
+    );
+    return { status: "no-pending" };
+  }
   if (
     !(await pendingUpgradeFinalisable({
       stagedBinaryPath: pending.stagedBinaryPath,
     }))
   ) {
+    logger.warn("CLI pending upgrade staged binary missing", {
+      environment: opts.environment,
+      currentVersion: manifest.version,
+      pendingVersion: pending.version,
+      reason: pending.reason,
+    });
     return {
       status: "staged-binary-missing",
       stagedBinaryPath: pending.stagedBinaryPath,
     };
   }
   const swap = await tryReplaceLiveBinary({
+    environment: opts.environment,
     stagedBinaryPath: pending.stagedBinaryPath,
     livePath: manifest.binaryPath,
     // The manifest doesn't preserve the asset digest after `cli upgrade`
@@ -449,8 +616,14 @@ export async function finalizePendingCliUpgrade(opts: {
     // the rename path is byte-for-byte safe, and an EXDEV fallback in
     // the helper is rare (staging dir is sibling to the live binary).
     expectedSha256: null,
+    logger,
   });
   if (swap.status === "locked") {
+    logger.warn("CLI pending upgrade still locked", {
+      environment: opts.environment,
+      currentVersion: manifest.version,
+      pendingVersion: pending.version,
+    });
     return {
       status: "still-locked",
       stagedBinaryPath: pending.stagedBinaryPath,
@@ -463,6 +636,11 @@ export async function finalizePendingCliUpgrade(opts: {
     version: pending.version,
     binaryPath: manifest.binaryPath,
     installedAt,
+  });
+  logger.info("CLI pending upgrade finalized", {
+    environment: opts.environment,
+    previousVersion: manifest.version,
+    version: pending.version,
   });
   return {
     status: "finalised",
@@ -483,8 +661,22 @@ export async function readPendingCliUpgrade(opts: {
   readonly binaryPath: string;
   readonly source: CliInstallSource;
 } | null> {
+  const logger = createCliLogger(opts.environment);
   const manifest = await readCliManifest(opts.environment);
-  if (manifest === null || manifest.pendingUpgrade === null) return null;
+  if (manifest === null || manifest.pendingUpgrade === null) {
+    logger.debug("CLI pending upgrade read found nothing pending", {
+      environment: opts.environment,
+      hasManifest: manifest !== null,
+    });
+    return null;
+  }
+  logger.info("CLI pending upgrade read found pending upgrade", {
+    environment: opts.environment,
+    currentVersion: manifest.version,
+    pendingVersion: manifest.pendingUpgrade.version,
+    source: manifest.source,
+    reason: manifest.pendingUpgrade.reason,
+  });
   return {
     pending: manifest.pendingUpgrade,
     currentVersion: manifest.version,

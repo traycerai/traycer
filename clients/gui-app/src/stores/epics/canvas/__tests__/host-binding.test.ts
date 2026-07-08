@@ -49,6 +49,7 @@ const TERMINAL_REF: EpicNodeRef = {
   instanceId: "inst-term-1",
   type: "terminal",
   name: "shell",
+  titleSource: "manual",
   hostId: SOURCE_HOST,
   cwd: "/work/repo",
 };

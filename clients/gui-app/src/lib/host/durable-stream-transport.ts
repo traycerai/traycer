@@ -6,6 +6,7 @@ import type { StreamAuthRevalidator } from "@traycer-clients/shared/auth/bearer-
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import { buildHostStreamClient } from "@/hooks/host/use-host-stream-client-for";
 import { subscribeStreamWakeReconnect } from "@/lib/host/stream-wake-reconnect";
+import { appLogger } from "@/lib/logger";
 
 export interface DurableStreamTransport {
   readonly wsStreamClient: WsStreamClient<HostStreamRpcRegistry>;
@@ -30,6 +31,9 @@ export interface DurableStreamTransport {
  *    new `websocketUrl` while the session is warm (no tile mounted to recompute
  *    a memo) reconnects to the new address instead of retrying the dead one.
  *  - `bearer` + `auth` provide UNAUTHORIZED revalidate+reconnect.
+ *  - bearer-rotation forwarding pushes `credentialUpdate` frames to already-open
+ *    sessions after same-user token refresh, so long-lived streams do not keep
+ *    stale host-side request contexts.
  *  - wake re-dial (`window 'online'` + OS resume) is wired here.
  *  - endpoint-change re-dial: when the bound host moves to a NEW dialable
  *    endpoint while the app is awake (a Settings-page restart / re-provision -
@@ -50,6 +54,12 @@ export function openDurableStreamTransport(params: {
   readonly auth: StreamAuthRevalidator;
   readonly runnerHost: IRunnerHost;
   /**
+   * Subscribes to same-user bearer rotations. The durable transport forwards the
+   * event to its owned stream client so open host connections rotate credentials
+   * in place via `credentialUpdate`.
+   */
+  readonly subscribeBearerRotation: (onRotation: () => void) => () => void;
+  /**
    * Subscribes to host-directory changes for the bound host, returning a
    * disposer. The callback fires on ANY directory change; this module filters it
    * down to a genuine dialable-endpoint move before re-dialing.
@@ -61,8 +71,16 @@ export function openDurableStreamTransport(params: {
     bearer: params.bearer,
     auth: params.auth,
   });
+  appLogger.debug("[stream] durable transport opened", {
+    hasEndpoint: params.endpoint() !== null,
+  });
   const disposers: Array<() => void> = [];
   try {
+    disposers.push(
+      params.subscribeBearerRotation(() => {
+        wsStreamClient.notifyBearerRotated();
+      }),
+    );
     disposers.push(
       subscribeStreamWakeReconnect(wsStreamClient, params.runnerHost),
     );
@@ -74,6 +92,7 @@ export function openDurableStreamTransport(params: {
       ),
     );
   } catch (cause) {
+    appLogger.error("[stream] durable transport wiring failed", {}, cause);
     // Roll back every subscription wired so far, then close the socket, so a
     // throw mid-wiring leaves nothing dangling.
     disposers.forEach((dispose) => dispose());
@@ -118,6 +137,7 @@ function subscribeEndpointRedial(
     }
     lastWebsocketUrl = nextWebsocketUrl;
     if (nextWebsocketUrl !== null) {
+      appLogger.debug("[stream] durable endpoint changed - reconnecting", {});
       client.reconnectAll("host-endpoint-change");
     }
   });

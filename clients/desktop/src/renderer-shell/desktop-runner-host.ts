@@ -1,7 +1,9 @@
 import type {
-  AuthCallbackResult,
+  AuthTokenRefreshResult,
   AuthTokenValidationResult,
   CliInstallManifestSnapshot,
+  DeviceFlowSession,
+  IDeviceFlowHost,
   HostAvailableSnapshot,
   HostAvailableVersionsInput,
   HostDoctorReport,
@@ -10,6 +12,7 @@ import type {
   HostInstalledRecord,
   HostLogsTailResult,
   HostNameSettings,
+  HostOperationStatus,
   HostProgressEvent,
   HostRegistryUpdateState,
   HostRemovalState,
@@ -30,10 +33,10 @@ import type {
   ITrayState,
   ITraycerCli,
   IWorkspaceFoldersHost,
+  IZoomHost,
   LocalHostSnapshot,
   MigrationRunningSnapshot,
   ServiceStatusSnapshot,
-  StoredAuthTokens,
   TrayEpic,
   TrayIndicatorState,
   TraycerHostStatusSnapshot,
@@ -48,7 +51,7 @@ import type {
   DisplaySnapshot,
   DisplayTopology,
   FileSaveInput,
-  FindResultSnapshot,
+  InstalledFont,
   PendingCertificateError,
   ProcessMetricsSnapshot,
   TrustedCertificateEntry,
@@ -65,7 +68,6 @@ export type {
   BackgroundMaterial as DesktopBackgroundMaterial,
   DisplaySnapshot,
   DisplayTopology,
-  FindResultSnapshot,
   PendingCertificateError,
   ProcessMetricsSnapshot,
   TrustedCertificateEntry,
@@ -105,6 +107,7 @@ import type {
   SupportSnapshot,
   WindowSummary,
 } from "../ipc-contracts/window-types";
+import type { ZoomPercent } from "../ipc-contracts/zoom-types";
 
 /**
  * Shape of the `window.runnerHost` object installed by the Electron preload
@@ -126,10 +129,10 @@ export interface DesktopPreloadBridge {
     token: string,
     refreshToken: string,
   ): Promise<AuthIdentityValidationResult>;
-  exchangeAuthCode(
-    code: string,
-    codeVerifier: string,
-  ): Promise<StoredAuthTokens | null>;
+  refreshAuthToken(
+    token: string,
+    refreshToken: string,
+  ): Promise<AuthTokenRefreshResult>;
   openExternalLink(url: string): Promise<void>;
   getRegisteredUrlSchemes(
     schemes: readonly string[],
@@ -137,8 +140,11 @@ export interface DesktopPreloadBridge {
   requestMicrophoneAccess(): Promise<"granted" | "denied">;
   openMicrophoneSettings(): Promise<void>;
   beginAuthAttempt(): void;
-  onAuthCallback(handler: (result: AuthCallbackResult) => void): {
+  onAuthCallback(handler: () => void): {
     dispose: () => void;
+  };
+  deviceFlow: {
+    start(): Promise<DeviceFlowSession | null>;
   };
   notifications: {
     show(title: string, body: string, payload: unknown): Promise<void>;
@@ -174,6 +180,7 @@ export interface DesktopPreloadBridge {
   migration: DesktopMigrationBridge;
   platform: DesktopPlatformBridge;
   power: DesktopPowerBridge;
+  zoom: DesktopZoomBridge;
   hostManagement: DesktopHostManagementBridge;
   hostTray: DesktopHostTrayBridge;
 }
@@ -227,6 +234,13 @@ export interface DesktopHostManagementBridge {
   registryCheck(input: {
     readonly force: boolean;
   }): Promise<HostRegistryUpdateState>;
+  onRegistryUpdateState(handler: (state: HostRegistryUpdateState) => void): {
+    dispose: () => void;
+  };
+  getOperationStatus(): Promise<HostOperationStatus | null>;
+  onOperationStatus(handler: (status: HostOperationStatus | null) => void): {
+    dispose: () => void;
+  };
   freePortAndRestart(
     input: FreePortAndRestartInput,
   ): Promise<FreePortAndRestartInput>;
@@ -239,6 +253,18 @@ export interface DesktopHostManagementBridge {
 
 export interface DesktopHostTrayBridge {
   onCommand(handler: (command: HostTrayCommand) => void): {
+    dispose: () => void;
+  };
+}
+
+export interface DesktopHostRegistryUpdatesBridge {
+  onChange(handler: (state: HostRegistryUpdateState) => void): {
+    dispose: () => void;
+  };
+}
+
+export interface DesktopHostOperationStatusBridge {
+  onChange(handler: (status: HostOperationStatus | null) => void): {
     dispose: () => void;
   };
 }
@@ -313,30 +339,12 @@ export interface DesktopPlatformBridge {
       dispose: () => void;
     };
   };
-  find: {
-    inPage(
-      text: string,
-      options: {
-        readonly forward: boolean | undefined;
-        readonly findNext: boolean | undefined;
-        readonly matchCase: boolean | undefined;
-      },
-    ): Promise<number | null>;
-    stop(
-      action: "clearSelection" | "keepSelection" | "activateSelection",
-    ): Promise<void>;
-    onResult(handler: (snapshot: FindResultSnapshot) => void): {
-      dispose: () => void;
-    };
-  };
   display: {
     list(): Promise<DisplayTopology>;
     onTopologyChange(
       handler: (event: {
         readonly reason:
-          | "display-added"
-          | "display-removed"
-          | "display-metrics-changed";
+          "display-added" | "display-removed" | "display-metrics-changed";
         readonly topology: DisplayTopology;
       }) => void,
     ): { dispose: () => void };
@@ -345,6 +353,9 @@ export interface DesktopPlatformBridge {
     getAccelerationEnabled(): Promise<boolean>;
     setAccelerationEnabled(enabled: boolean): Promise<boolean>;
   };
+  fonts: {
+    list(): Promise<readonly InstalledFont[]>;
+  };
   windowEx: {
     setOverlayIcon(image: string | null, description: string): Promise<void>;
   };
@@ -352,6 +363,18 @@ export interface DesktopPlatformBridge {
 
 export interface DesktopPowerBridge {
   setSleepBlocked(blocked: boolean): Promise<void>;
+}
+
+export interface DesktopZoomBridge {
+  readonly ladder: readonly ZoomPercent[];
+  get(): Promise<ZoomPercent>;
+  set(percent: number): Promise<ZoomPercent>;
+  stepIn(): Promise<ZoomPercent>;
+  stepOut(): Promise<ZoomPercent>;
+  reset(): Promise<ZoomPercent>;
+  onChange(handler: (percent: ZoomPercent) => void): {
+    dispose: () => void;
+  };
 }
 
 export interface DesktopTraycerCliBridge {
@@ -491,8 +514,12 @@ export class DesktopRunnerHost implements IRunnerHost {
   readonly migration: IMigrationHost;
   readonly platform: DesktopPlatformBridge;
   readonly power: DesktopPowerBridge;
+  readonly zoom: IZoomHost;
   readonly hostManagement: IHostManagement;
   readonly hostTray: IHostTray;
+  readonly hostRegistryUpdates: DesktopHostRegistryUpdatesBridge;
+  readonly hostOperationStatus: DesktopHostOperationStatusBridge;
+  readonly deviceFlow: IDeviceFlowHost;
 
   private readonly bridge: DesktopPreloadBridge;
   private cachedLocalHost: LocalHostSnapshot | null = null;
@@ -511,6 +538,16 @@ export class DesktopRunnerHost implements IRunnerHost {
     this.support = options.bridge.support;
     this.platform = options.bridge.platform;
     this.power = options.bridge.power;
+    this.zoom = {
+      ladder: options.bridge.zoom.ladder,
+      get: () => options.bridge.zoom.get(),
+      set: (percent) => options.bridge.zoom.set(percent),
+      stepIn: () => options.bridge.zoom.stepIn(),
+      stepOut: () => options.bridge.zoom.stepOut(),
+      reset: () => options.bridge.zoom.reset(),
+      onChange: (handler) =>
+        toDisposable(options.bridge.zoom.onChange(handler)),
+    };
 
     this.bridgeSubscriptions.push(
       this.bridge.onLocalHostChange((snapshot) => {
@@ -636,14 +673,27 @@ export class DesktopRunnerHost implements IRunnerHost {
       ensureHost: (input) => managementBridge.ensureHost(input),
       deregisterService: () => managementBridge.deregisterService(),
       registryCheck: (input) => managementBridge.registryCheck(input),
+      getOperationStatus: () => managementBridge.getOperationStatus(),
       freePortAndRestart: (input) => managementBridge.freePortAndRestart(input),
       cliManifest: () => managementBridge.cliManifest(),
       getHostName: () => managementBridge.getHostName(),
       setHostName: (input) => managementBridge.setHostName(input),
     };
+    this.hostRegistryUpdates = {
+      onChange: (handler) => managementBridge.onRegistryUpdateState(handler),
+    };
+    this.hostOperationStatus = {
+      onChange: (handler) => managementBridge.onOperationStatus(handler),
+    };
     this.hostTray = {
       onCommand: (handler) =>
         toDisposable(this.bridge.hostTray.onCommand(handler)),
+    };
+    // The preload bridge already returns a `DeviceFlowSession`-shaped handle
+    // (authorize result + per-attempt `onResult` + `cancel`), so this forwards
+    // straight through - the CORS-safe authorize + poll loop lives in main.
+    this.deviceFlow = {
+      start: () => this.bridge.deviceFlow.start(),
     };
   }
 
@@ -679,18 +729,18 @@ export class DesktopRunnerHost implements IRunnerHost {
     return this.bridge.validateAuthTokenIdentity(token, refreshToken);
   }
 
-  exchangeAuthCode(
-    code: string,
-    codeVerifier: string,
-  ): Promise<StoredAuthTokens | null> {
-    return this.bridge.exchangeAuthCode(code, codeVerifier);
+  refreshAuthToken(
+    token: string,
+    refreshToken: string,
+  ): Promise<AuthTokenRefreshResult> {
+    return this.bridge.refreshAuthToken(token, refreshToken);
   }
 
   beginAuthAttempt(): void {
     this.bridge.beginAuthAttempt();
   }
 
-  onAuthCallback(handler: (result: AuthCallbackResult) => void): Disposable {
+  onAuthCallback(handler: () => void): Disposable {
     return toDisposable(this.bridge.onAuthCallback(handler));
   }
 

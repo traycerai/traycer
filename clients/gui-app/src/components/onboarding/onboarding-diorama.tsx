@@ -34,8 +34,10 @@ import { AgentSelectionGuideEditorSurface } from "@/components/agent-selection-g
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { OnboardingClaudeTui } from "@/components/onboarding/onboarding-claude-tui";
 import { OnboardingOpencodeTui } from "@/components/onboarding/onboarding-opencode-tui";
+import { ProviderList } from "@/components/providers/provider-list";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import type { GuiHarnessId } from "@traycer/protocol/host/agent/shared";
+import { ORDERED_PROVIDERS } from "@/lib/provider-ordering";
 import { cn } from "@/lib/utils";
 
 interface OnboardingDioramaProps {
@@ -54,13 +56,7 @@ export interface OnboardingAgentGuideState {
 }
 
 type NodeKind =
-  | "chat"
-  | "terminal-agent"
-  | "spec"
-  | "ticket"
-  | "review"
-  | "file"
-  | "diff";
+  "chat" | "terminal-agent" | "spec" | "ticket" | "review" | "file" | "diff";
 
 type SceneId =
   | "task-tabs"
@@ -70,7 +66,6 @@ type SceneId =
   | "agent-guide"
   | "command-theme";
 
-type CapabilityId = "gui" | "terminal";
 type NavigationPhase = "single" | "drag-1" | "split-1" | "drag-2" | "split-2";
 type MeshAgentId = "gui" | "claude" | "opencode";
 type SpotlightRegion =
@@ -98,22 +93,22 @@ const NODE_META: Readonly<
 };
 
 const TASKS = [
-  "Team rate limits",
+  "Team usage limits",
   "Billing service",
   "Usage sync audit",
 ] as const;
 
 const TASK_SCENES = [
   {
-    chat: "Team rate limits",
+    chat: "Team usage limits",
     terminal: "billing-service run",
     terminalHarness: "claude",
     secondChat: "Grace-period plan",
-    spec: "rate-limits.spec",
+    spec: "usage-limits.spec",
     ticket: "Grace-period rollout",
     review: "Risk review",
-    canvas: "Team rate limits",
-    preview: "rate-limits.spec",
+    canvas: "Team usage limits",
+    preview: "usage-limits.spec",
   },
   {
     chat: "Billing service",
@@ -200,7 +195,7 @@ const STORY_STEPS = [
   {
     pane: "gui",
     kind: "user",
-    text: "We need team rate limits without locking existing customers out.",
+    text: "We need team usage limits without locking existing customers out.",
     to: null,
   },
   {
@@ -209,14 +204,14 @@ const STORY_STEPS = [
     text: "I'll split this into implementation, verification, and risk review.",
     to: null,
   },
-  { pane: "gui", kind: "spec", text: "rate-limits.spec", to: null },
+  { pane: "gui", kind: "spec", text: "usage-limits.spec", to: null },
   {
     pane: "gui",
     kind: "handoff",
-    text: "Claude Code, implement the billing-service check from rate-limits.spec.",
+    text: "Claude Code, implement the billing-service check from usage-limits.spec.",
     to: "claude",
   },
-  { pane: "claude", kind: "term", text: "reading rate-limits.spec", to: null },
+  { pane: "claude", kind: "term", text: "reading usage-limits.spec", to: null },
   {
     pane: "claude",
     kind: "blocked",
@@ -306,44 +301,6 @@ const SIDEBAR_PANEL_RAIL_ITEMS: ReadonlyArray<{
 function taskSceneFor(index: number): TaskScene {
   return TASK_SCENES[index] ?? TASK_SCENES[0];
 }
-
-const PROVIDERS: ReadonlyArray<{
-  readonly harnessId: GuiHarnessId;
-  readonly label: string;
-  readonly status: string;
-  readonly capabilities: ReadonlyArray<CapabilityId>;
-}> = [
-  {
-    harnessId: "traycer",
-    label: "Traycer Inference",
-    status: "Built in · ready",
-    capabilities: ["gui"],
-  },
-  {
-    harnessId: "claude",
-    label: "Claude Code",
-    status: "Installed · signed in",
-    capabilities: ["gui", "terminal"],
-  },
-  {
-    harnessId: "codex",
-    label: "Codex",
-    status: "Installed · signed in",
-    capabilities: ["gui", "terminal"],
-  },
-  {
-    harnessId: "opencode",
-    label: "OpenCode",
-    status: "Installed",
-    capabilities: ["gui", "terminal"],
-  },
-  {
-    harnessId: "cursor",
-    label: "Cursor",
-    status: "API key set",
-    capabilities: ["gui"],
-  },
-];
 
 const PALETTE_ROWS = [
   { label: "New task", hint: "Cmd N" },
@@ -1172,7 +1129,7 @@ function ChatPane(props: {
   const userCopy =
     props.scene === "task-tabs"
       ? `Continue ${TASKS[props.activeTaskIndex].toLowerCase()}`
-      : "Let's ship team rate limits.";
+      : "Let's ship team usage limits.";
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex min-h-0 flex-1 flex-col justify-end gap-2 p-3">
@@ -1241,31 +1198,26 @@ function OpenHarnessPicker() {
       <div className="border-b border-border px-2.5 py-1.5 text-overline uppercase tracking-wider text-muted-foreground">
         Select harness
       </div>
-      <ul className="flex flex-col p-1">
-        {PROVIDERS.map((provider) => {
-          const active = provider.harnessId === "claude";
-          return (
-            <li
-              key={provider.harnessId}
-              className={cn(
-                "flex items-center gap-2 rounded px-2 py-1 text-ui-xs",
-                active
-                  ? "bg-accent text-accent-foreground"
-                  : "text-foreground/80",
-              )}
-            >
-              <HarnessIcon
-                harnessId={provider.harnessId}
-                className="size-3.5 shrink-0"
-              />
-              <span className="min-w-0 flex-1 truncate">{provider.label}</span>
-              {active ? (
-                <Check className="size-3 shrink-0 text-[var(--term-ansi-green)]" />
-              ) : null}
-            </li>
-          );
+      <ProviderList
+        ariaLabel="Diorama harness options"
+        variant="diorama"
+        className="p-1"
+        rows={ORDERED_PROVIDERS.map(({ providerId }) => {
+          const active = providerId === "claude-code";
+          return {
+            providerId,
+            active,
+            dimmed: false,
+            enabled: null,
+            badge: null,
+            description: null,
+            trailing: active ? (
+              <Check className="size-3 shrink-0 text-[var(--term-ansi-green)]" />
+            ) : null,
+            onSelect: null,
+          };
         })}
-      </ul>
+      />
     </div>
   );
 }

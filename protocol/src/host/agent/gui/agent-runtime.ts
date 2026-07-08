@@ -14,17 +14,23 @@ import {
 import {
   agentMessageSendSchema,
   artifactOperationActionSchema,
+  backgroundTaskOutputSchema,
   diffSourceSchema,
   fileEditReasonSchema,
+  workflowActivityEntrySchema,
 } from "@traycer/protocol/persistence/epic/content-blocks";
 
 export {
   agentMessageSendSchema,
+  backgroundTaskOutputSchema,
   diffSourceSchema,
   fileEditReasonSchema,
+  workflowActivityEntrySchema,
   type AgentMessageSend,
+  type BackgroundTaskOutput,
   type DiffSource,
   type FileEditReason,
+  type WorkflowActivityEntry,
 } from "@traycer/protocol/persistence/epic/content-blocks";
 import { z } from "zod";
 
@@ -315,6 +321,16 @@ export const toolCallStartedEventSchema = z.object({
   toolName: z.string(),
   input: z.unknown().optional(),
   agentMessageSend: agentMessageSendSchema.nullable().default(null),
+  // Explicit call/task start time. Optional so older emitters remain valid; the
+  // accumulator falls back to the event timestamp when absent.
+  startedAt: z.number().optional(),
+  // True when this call gets a durable "background card" treatment: a
+  // backgrounded command/Monitor (Bash with `run_in_background`, or the
+  // Monitor tool), or a ScheduleWakeup call. Stamped at started so the
+  // persistent block marker is set before any terminal path - this is
+  // broader than the Bash/Monitor/subagent background-task FSM (ScheduleWakeup
+  // is not part of that FSM), it only governs whether the card stays promoted.
+  backgroundTask: z.boolean().optional(),
 });
 export type ToolCallStartedEvent = z.infer<typeof toolCallStartedEventSchema>;
 
@@ -323,6 +339,13 @@ export const toolCallCompletedEventSchema = z.object({
   type: z.literal("tool_call.completed"),
   toolName: z.string(),
   agentMessageSend: agentMessageSendSchema.nullable().default(null),
+  backgroundOutput: backgroundTaskOutputSchema.nullable().optional(),
+  // For detached background command/Monitor completion, this is the SDK task's
+  // own start time from BackgroundItem, not the short foreground spawn call.
+  backgroundStartedAt: z.number().optional(),
+  // Reinforces the persistent background marker at terminal (the runtime now
+  // knows for certain this was a backgrounded task). Optional/preserved.
+  backgroundTask: z.boolean().optional(),
 });
 export type ToolCallCompletedEvent = z.infer<
   typeof toolCallCompletedEventSchema
@@ -333,7 +356,18 @@ export const toolCallErroredEventSchema = z.object({
   type: z.literal("tool_call.errored"),
   toolName: z.string(),
   error: z.string(),
+  // Distinguishes an explicit stop (deadline-killed Monitor, user-stopped
+  // command) from a genuine failure. Optional/defaulted: an old emitter that
+  // never sends this reproduces today's shipped behavior exactly - every
+  // terminal failure rendered as a plain error.
+  terminationReason: z.enum(["error", "stopped"]).default("error"),
   agentMessageSend: agentMessageSendSchema.nullable().default(null),
+  backgroundOutput: backgroundTaskOutputSchema.nullable().optional(),
+  // For detached background command/Monitor failure/stop, this is the SDK
+  // task's own start time from BackgroundItem when available.
+  backgroundStartedAt: z.number().optional(),
+  // Reinforces the persistent background marker at terminal. Optional/preserved.
+  backgroundTask: z.boolean().optional(),
 });
 export type ToolCallErroredEvent = z.infer<typeof toolCallErroredEventSchema>;
 
@@ -537,10 +571,65 @@ export type SubAgentProgressEvent = z.infer<typeof subAgentProgressEventSchema>;
 export const subAgentCompletedEventSchema = z.object({
   ...baseRuntimeEventFields,
   type: z.literal("subagent.completed"),
+  // Defaulted to "completed" so an old emitter that never sends this
+  // reproduces today's shipped (if imprecise) behavior exactly, rather than
+  // failing to parse. Only an emitter that knows the real outcome sets this
+  // explicitly to "failed"/"stopped".
+  outcome: z.enum(["completed", "failed", "stopped"]).default("completed"),
   result: z.string().optional(),
 });
 export type SubAgentCompletedEvent = z.infer<
   typeof subAgentCompletedEventSchema
+>;
+
+/**
+ * `workflow.*` mirrors the `subagent.*` triple above for a Workflow tool run
+ * (a `/code-review`-style finder fleet). Inner `agent()` calls have no
+ * individually addressable identity on the wire (see the detection findings) -
+ * these events carry only the aggregate the host can observe: name/intent at
+ * spawn, one activity milestone + fleet counts + tokens per progress tick, and
+ * a terminal outcome. The accumulator dual-writes them onto a `subagent` block
+ * (base fields = degradation, `workflowMeta` = the rich data) rather than a
+ * distinct block type - see `persistence/epic/content-blocks.ts`.
+ */
+export const workflowStartedEventSchema = z.object({
+  ...baseRuntimeEventFields,
+  type: z.literal("workflow.started"),
+  name: z.string(),
+  // `meta.description` extracted from the workflow script (best-effort,
+  // never the raw script source). `null` on extraction failure.
+  intent: z.string().nullable(),
+  // The spawning `Workflow` tool_call block id - same suppression policy as
+  // `subAgentStartedEventSchema.spawnToolCallId`.
+  spawnToolCallId: z.string().optional(),
+});
+export type WorkflowStartedEvent = z.infer<typeof workflowStartedEventSchema>;
+
+export const workflowProgressEventSchema = z.object({
+  ...baseRuntimeEventFields,
+  type: z.literal("workflow.progress"),
+  // One new milestone (a phase transition or a label sighting), or `null`
+  // when this tick only refreshes counts/tokens with no new milestone.
+  activity: workflowActivityEntrySchema.nullable().default(null),
+  // Latest known fleet counts / aggregate token usage. Absent/`null` ⇒
+  // "unknown or unchanged this tick" - the accumulator preserves the prior
+  // value rather than clearing it.
+  agentsStarted: z.number().nullable().optional(),
+  agentsFinished: z.number().nullable().optional(),
+  totalTokens: z.number().nullable().optional(),
+});
+export type WorkflowProgressEvent = z.infer<typeof workflowProgressEventSchema>;
+
+export const workflowCompletedEventSchema = z.object({
+  ...baseRuntimeEventFields,
+  type: z.literal("workflow.completed"),
+  // Defaulted "completed" for the same reason as `subAgentCompletedEventSchema.
+  // outcome` - an emitter that never sets this reproduces a clean finish.
+  outcome: z.enum(["completed", "failed", "stopped"]).default("completed"),
+  result: z.string().optional(),
+});
+export type WorkflowCompletedEvent = z.infer<
+  typeof workflowCompletedEventSchema
 >;
 
 export const fileChangeStartedEventSchema = z.object({
@@ -667,6 +756,78 @@ export const traycerUserMessageAnchorResolvedSchema = z.object({
   opencodeUserMessageId: z.string(),
 });
 
+export const openRouterUserMessageAnchorResolvedSchema = z.object({
+  harnessId: z.literal("openrouter"),
+  sessionId: z.string(),
+  opencodeUserMessageId: z.string(),
+});
+
+export const grokUserMessageAnchorResolvedSchema = z.object({
+  harnessId: z.literal("grok"),
+  sessionId: z.string(),
+  // The ACP session id the `grok agent stdio` process assigned for this turn.
+  // Null until `session/new` resolves; used to resume the same ACP session.
+  grokSessionId: z.string().nullable(),
+});
+
+export const qwenUserMessageAnchorResolvedSchema = z.object({
+  harnessId: z.literal("qwen"),
+  sessionId: z.string(),
+  // The ACP session id the `qwen --acp` process assigned for this turn. Null
+  // until `session/new` resolves; used to resume the same ACP session.
+  qwenSessionId: z.string().nullable(),
+});
+
+export const kiroUserMessageAnchorResolvedSchema = z.object({
+  harnessId: z.literal("kiro"),
+  sessionId: z.string(),
+  // The ACP session id the `kiro-cli acp` process assigned for this turn.
+  // Null until `session/new` resolves; used to resume the same ACP session.
+  kiroSessionId: z.string().nullable(),
+});
+
+export const droidUserMessageAnchorResolvedSchema = z.object({
+  harnessId: z.literal("droid"),
+  sessionId: z.string(),
+  // The native Droid session id (`@factory/droid-sdk` exec session) assigned for
+  // this turn. Used to resume the same Droid session on a later turn via the
+  // SDK's `resumeSession`. Null only when the session id was not yet resolved.
+  droidSessionId: z.string().nullable(),
+});
+
+export const kimiUserMessageAnchorResolvedSchema = z.object({
+  harnessId: z.literal("kimi"),
+  sessionId: z.string(),
+  // The ACP session id the `kimi acp` process assigned for this turn.
+  // Null until `session/new` resolves; used to resume the same ACP session.
+  kimiSessionId: z.string().nullable(),
+});
+
+export const copilotUserMessageAnchorResolvedSchema = z.object({
+  harnessId: z.literal("copilot"),
+  sessionId: z.string(),
+  // The ACP session id the `copilot --acp` process assigned for this turn.
+  // Null until `session/new` resolves; used to resume the same ACP session.
+  copilotSessionId: z.string().nullable(),
+});
+
+export const kilocodeUserMessageAnchorResolvedSchema = z.object({
+  harnessId: z.literal("kilocode"),
+  sessionId: z.string(),
+  // The ACP session id the `kilo acp` process assigned for this turn.
+  // Null until `session/new` resolves; used to resume the same ACP session.
+  kilocodeSessionId: z.string().nullable(),
+});
+
+export const ampUserMessageAnchorResolvedSchema = z.object({
+  harnessId: z.literal("amp"),
+  sessionId: z.string(),
+  // The Amp thread id (the `system`/`init` message's `session_id`) assigned for
+  // this turn. Used to resume the same Amp thread on a later turn via
+  // `execute`'s `options.continue`. Null only when it was not yet resolved.
+  ampSessionId: z.string().nullable(),
+});
+
 export const userMessageAnchorResolvedEventSchema = z.object({
   ...baseRuntimeEventFields,
   type: z.literal("user_message.anchor_resolved"),
@@ -677,6 +838,15 @@ export const userMessageAnchorResolvedEventSchema = z.object({
     openCodeUserMessageAnchorResolvedSchema,
     cursorUserMessageAnchorResolvedSchema,
     traycerUserMessageAnchorResolvedSchema,
+    openRouterUserMessageAnchorResolvedSchema,
+    grokUserMessageAnchorResolvedSchema,
+    qwenUserMessageAnchorResolvedSchema,
+    kiroUserMessageAnchorResolvedSchema,
+    droidUserMessageAnchorResolvedSchema,
+    kimiUserMessageAnchorResolvedSchema,
+    copilotUserMessageAnchorResolvedSchema,
+    kilocodeUserMessageAnchorResolvedSchema,
+    ampUserMessageAnchorResolvedSchema,
   ]),
 });
 export type UserMessageAnchorResolvedEvent = z.infer<
@@ -759,7 +929,12 @@ export type ErrorEvent = z.infer<typeof errorEventSchema>;
  */
 export const AUTH_ERROR_CODE = "auth";
 
-export const runtimeEventSchema = z.discriminatedUnion("type", [
+// ─── Frozen pre-`workflow.*` runtime-event union (`chat.subscribe@1.3`) ────
+//
+// Kept so `chat.subscribe@1.3`'s frozen `blockDelta` frame schema (see
+// `subscribe.ts`) parses only events a real 1.3 peer could produce. Do not
+// add the `workflow.*` variants here - a 1.3 peer must never observe them.
+export const runtimeEventSchemaV13 = z.discriminatedUnion("type", [
   textDeltaEventSchema,
   textCompletedEventSchema,
   reasoningDeltaEventSchema,
@@ -798,5 +973,12 @@ export const runtimeEventSchema = z.discriminatedUnion("type", [
   steerSubmittedEventSchema,
   usageUpdatedEventSchema,
   errorEventSchema,
+]);
+
+export const runtimeEventSchema = z.discriminatedUnion("type", [
+  ...runtimeEventSchemaV13.def.options,
+  workflowStartedEventSchema,
+  workflowProgressEventSchema,
+  workflowCompletedEventSchema,
 ]);
 export type RuntimeEvent = z.infer<typeof runtimeEventSchema>;

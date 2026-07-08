@@ -9,7 +9,7 @@ import {
   parseUserInput,
   toAgentCliError,
 } from "../internal/host-rpc";
-import { resolveEpicId, resolveSenderAgentId } from "../internal/agent-context";
+import { readEpicId, readTuiAgentId } from "../internal/agent-context";
 import type { CommandFn } from "../runner/runner";
 
 export function buildAgentListHarnessModelsCommand(opts: {
@@ -18,19 +18,12 @@ export function buildAgentListHarnessModelsCommand(opts: {
   readonly harnessId: string;
 }): CommandFn {
   return async () => {
-    const epicId = resolveEpicId(opts.epicId);
-    const senderAgentId = resolveSenderAgentId(opts.senderAgentId);
-    const request = parseUserInput(listHarnessModelsRequestSchema, {
+    const epicId = readEpicId(opts.epicId);
+    const senderAgentId = readTuiAgentId(opts.senderAgentId);
+    const response = await listSingleHarnessModels(
+      opts.harnessId,
       epicId,
       senderAgentId,
-      harnessId: opts.harnessId,
-    });
-    const result = await toAgentCliError(
-      callHostRpc("agent.listHarnessModels", request),
-    );
-    const response = parseHostResponse(
-      listHarnessModelsResponseSchema,
-      result,
     );
     return {
       data: response,
@@ -38,4 +31,20 @@ export function buildAgentListHarnessModelsCommand(opts: {
       exitCode: 0,
     };
   };
+}
+
+async function listSingleHarnessModels(
+  harnessId: string,
+  epicId: string | null,
+  senderAgentId: string | null,
+) {
+  const request = parseUserInput(listHarnessModelsRequestSchema, {
+    epicId,
+    senderAgentId,
+    harnessId,
+  });
+  const result = await toAgentCliError(
+    callHostRpc("agent.listHarnessModels", request),
+  );
+  return parseHostResponse(listHarnessModelsResponseSchema, result);
 }

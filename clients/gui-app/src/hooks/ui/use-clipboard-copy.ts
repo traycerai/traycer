@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { appLogger } from "@/lib/logger";
 
 interface UseClipboardCopyOptions {
   resetMs: number;
@@ -24,7 +25,12 @@ export function useClipboardCopy(
       let writePromise: Promise<void>;
       try {
         writePromise = write();
-      } catch {
+      } catch (error) {
+        appLogger.error(
+          "[clipboard] copy action threw synchronously",
+          {},
+          error,
+        );
         setCopied(false);
         if (onError !== null) onError();
         return;
@@ -36,7 +42,8 @@ export function useClipboardCopy(
           timerRef.current = window.setTimeout(() => setCopied(false), resetMs);
           if (onSuccess !== null) onSuccess();
         },
-        () => {
+        (error: unknown) => {
+          appLogger.error("[clipboard] copy action failed", {}, error);
           setCopied(false);
           if (onError !== null) onError();
         },

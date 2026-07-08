@@ -50,8 +50,59 @@ export const guiHarnessIdSchema = harnessIdSchema.extract([
   "opencode",
   "traycer",
   "cursor",
+  "grok",
+  "qwen",
+  "kiro",
+  "droid",
+  "kimi",
+  "copilot",
+  "kilocode",
+  "openrouter",
+  "amp",
 ]);
 export type GuiHarnessId = z.infer<typeof guiHarnessIdSchema>;
+
+/**
+ * Frozen harness id set as shipped in protocol v1.0. Used only by the frozen
+ * v1.0 response schema of `agent.gui.listHarnesses` so a v1.0 client (which
+ * predates the ACP GUI harnesses) negotiates a wire that can never carry them;
+ * the v2.0 line adds them and a v2→v1 downgrade bridge filters them for v1.0
+ * callers. Do NOT add new harnesses here - extend the latest
+ * `guiHarnessIdSchema` and use the existing v2 bridge instead.
+ */
+export const guiHarnessIdSchemaV10 = harnessIdSchema.extract([
+  "claude",
+  "codex",
+  "opencode",
+  "traycer",
+  "cursor",
+]);
+export type GuiHarnessIdV10 = z.infer<typeof guiHarnessIdSchemaV10>;
+
+/**
+ * Frozen harness id set as shipped in protocol v2.0 (before Amp). Used only by
+ * the frozen v2.0 response schema of `agent.gui.listHarnesses` so an already-
+ * shipped v2.0 client (which predates Amp) negotiates a wire that can never
+ * carry it; the v3.0 line adds it and v3→v2 / v3→v1 downgrade bridges filter
+ * it for older callers. Do NOT add new harnesses here - extend the latest
+ * `guiHarnessIdSchema` and use the existing v3 bridge instead.
+ */
+export const guiHarnessIdSchemaV20 = harnessIdSchema.extract([
+  "claude",
+  "codex",
+  "opencode",
+  "traycer",
+  "cursor",
+  "grok",
+  "qwen",
+  "kiro",
+  "droid",
+  "kimi",
+  "copilot",
+  "kilocode",
+  "openrouter",
+]);
+export type GuiHarnessIdV20 = z.infer<typeof guiHarnessIdSchemaV20>;
 
 export const tuiHarnessIdSchema = harnessIdSchema.extract([
   "claude",
@@ -98,12 +149,27 @@ export function canParticipateInA2A(target: {
 // renderer routes to the right UI. Other RPCs address the agent by id and
 // resolve `surface` from storage; they do not carry it on the wire.
 
-export const agentFacingHarnessIdSchema = harnessIdSchema.extract([
+export const AGENT_FACING_HARNESS_IDS = [
   "claude",
   "codex",
   "opencode",
   "traycer",
   "cursor",
+  "grok",
+  "qwen",
+  "kiro",
+  "droid",
+  "kimi",
+  "copilot",
+  "kilocode",
+  "openrouter",
+  "amp",
+] as const;
+
+export const AGENT_FACING_HARNESS_ID_LIST = AGENT_FACING_HARNESS_IDS.join(", ");
+
+export const agentFacingHarnessIdSchema = harnessIdSchema.extract([
+  ...AGENT_FACING_HARNESS_IDS,
 ]);
 export type AgentFacingHarnessId = z.infer<typeof agentFacingHarnessIdSchema>;
 
@@ -156,6 +222,7 @@ export type CreateAgentWorkspace = z.infer<typeof createAgentWorkspaceSchema>;
 export const createAgentRequestSchema = z.object({
   senderAgentId: z.string(),
   epicId: z.string(),
+  name: z.string().min(1).nullable().default(null),
   surface: z.enum(["gui", "tui"]).nullable(),
   harnessId: agentFacingHarnessIdSchema.nullable(),
   model: z.string().nullable(),
@@ -285,13 +352,23 @@ export type AgentSelectionGuideGlobalResetResponse = z.infer<
   typeof agentSelectionGuideGlobalResetResponseSchema
 >;
 
-export const listHarnessModelsRequestSchema = z.object({
+export const listHarnessModelsRequestSchemaV10 = z.object({
   epicId: z.string(),
   senderAgentId: z.string(),
   harnessId: agentFacingHarnessIdSchema,
 });
+export type ListHarnessModelsRequestV10 = z.infer<
+  typeof listHarnessModelsRequestSchemaV10
+>;
+
+export const listHarnessModelsRequestSchemaV20 = z.object({
+  epicId: z.string().nullable().default(null),
+  senderAgentId: z.string().nullable().default(null),
+  harnessId: agentFacingHarnessIdSchema,
+});
+export const listHarnessModelsRequestSchema = listHarnessModelsRequestSchemaV20;
 export type ListHarnessModelsRequest = z.infer<
-  typeof listHarnessModelsRequestSchema
+  typeof listHarnessModelsRequestSchemaV20
 >;
 
 export const harnessModelSummarySchema = z.object({
@@ -385,6 +462,37 @@ export const listAgentsResponseSchema = z.object({
   agents: z.array(agentSummarySchema),
 });
 export type ListAgentsResponse = z.infer<typeof listAgentsResponseSchema>;
+
+// ── Frozen protocol-v1.0 agent.list response ───────────────────────────────
+// `agent.list` enumerates every agent in the epic - including ACP GUI harness
+// chats a newer client created - and the `traycer` CLI inlines the protocol at
+// build time, so an old CLI would hit a strict enum on those rows. v1.0 is
+// frozen; the v2.0 line carries them and a v2→v1 bridge drops them for v1.0
+// callers. Do not add new harnesses here - use the existing v2 bridge.
+export const agentSummarySchemaV10 = agentSummarySchema.extend({
+  harnessId: harnessIdSchema
+    .extract(["claude", "codex", "opencode", "traycer", "cursor"])
+    .nullable(),
+});
+export const listAgentsResponseSchemaV10 = listAgentsResponseSchema.extend({
+  agents: z.array(agentSummarySchemaV10),
+});
+export type ListAgentsResponseV10 = z.infer<typeof listAgentsResponseSchemaV10>;
+
+// ── Frozen protocol-v2.0 agent.list response (before Amp) ──────────────────
+// `agent.list` enumerates every agent in the epic - including Amp GUI harness
+// chats a newer client created - so an already-shipped v2.0 client (which
+// predates Amp) would hit a strict enum on those rows. v2.0 is frozen here as
+// actually shipped (before Amp); the v3.0 line carries Amp rows and v3→v2 /
+// v3→v1 bridges drop them for older callers. Do not add new harnesses here -
+// use the existing v3 bridge.
+export const agentSummarySchemaV20 = agentSummarySchema.extend({
+  harnessId: guiHarnessIdSchemaV20.nullable(),
+});
+export const listAgentsResponseSchemaV20 = listAgentsResponseSchema.extend({
+  agents: z.array(agentSummarySchemaV20),
+});
+export type ListAgentsResponseV20 = z.infer<typeof listAgentsResponseSchemaV20>;
 
 /**
  * `agent.sendMessage@1.0` - fire-and-forget enqueue from one agent to

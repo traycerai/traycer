@@ -110,7 +110,9 @@ export async function restartWithPendingCliUpgradeFinalize(
 
   // 2. Try the in-process finalize. On POSIX this almost always works
   //    once the host supervisor releases the binary.
-  const finalize = await finalizePendingCliUpgrade({ environment: args.environment });
+  const finalize = await finalizePendingCliUpgrade({
+    environment: args.environment,
+  });
 
   // 3. Windows-specific: if the live binary is still locked after stop
   //    (because the *current CLI process* holds its own .exe), hand
@@ -174,9 +176,7 @@ function humanForRestart(
   }
 }
 
-function describeMarkerReconcile(
-  reconcile: ReconcileOutcome | null,
-): string {
+function describeMarkerReconcile(reconcile: ReconcileOutcome | null): string {
   if (reconcile === null) return "";
   switch (reconcile.status) {
     case "applied-swapped":

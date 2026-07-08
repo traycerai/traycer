@@ -1,11 +1,16 @@
 import { HostPicker } from "@/components/layout/header/host-picker";
 import { AppUpdateToastController } from "@/components/layout/bridges/app-update-toast-controller";
+import { DesktopZoomController } from "@/components/layout/bridges/desktop-zoom-controller";
+import { HostOperationStatusListener } from "@/components/layout/bridges/host-operation-status-listener";
+import { HostRegistryUpdateListener } from "@/components/layout/bridges/host-registry-update-listener";
 import { RunnerHostBridges } from "@/components/layout/bridges/runner-host-bridges";
+import { WorktreeDeleteProgressToastBridge } from "@/components/layout/bridges/worktree-delete-progress-toast-bridge";
 import { CenteredCard } from "@/components/centered-card";
 import { RootErrorBoundary } from "@/components/errors/root-error-boundary";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
+  HostCompatibilityProvider,
   HostRuntimeProvider,
   type HostRpcRegistry,
   type MessengerFactory,
@@ -16,14 +21,17 @@ import { EpicSessionLifecycleBridge } from "@/providers/auth-lifecycle-bridge";
 import { AuthSessionExpiredToastBridge } from "@/providers/auth-session-expired-toast-bridge";
 import { CommandPaletteProvider } from "@/providers/command-palette-provider";
 import { ComposerRunSettingsPersistLifecycleBridge } from "@/providers/composer-run-settings-persist-lifecycle-bridge";
+import { ComposerHarnessMemoryPersistLifecycleBridge } from "@/providers/composer-harness-memory-persist-lifecycle-bridge";
 import { WorktreeIntentMemoryPersistLifecycleBridge } from "@/providers/worktree-intent-memory-persist-lifecycle-bridge";
 import { WorktreeIntentStagingPersistLifecycleBridge } from "@/providers/worktree-intent-staging-persist-lifecycle-bridge";
 import { EpicCanvasPersistLifecycleBridge } from "@/providers/epic-canvas-persist-lifecycle-bridge";
 import { EpicTabExistenceReconciler } from "@/providers/epic-tab-existence-reconciler";
 import { CliCredentialSeeder } from "@/providers/cli-credential-seeder";
 import { HarnessCatalogPrefetcher } from "@/providers/harness-catalog-prefetcher";
+import { HistoryPruneProvider } from "@/providers/history-prune-provider";
 import { KeybindingProvider } from "@/providers/keybinding-provider";
 import { NotificationsSessionProvider } from "@/providers/notifications-session-provider";
+import { RateLimitQueueProvider } from "@/providers/rate-limit-queue-provider";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { ThemeProvider } from "@/providers/theme-provider";
 import { WindowsBridgeAuthSessionBridge } from "@/providers/windows-bridge-auth-session";
@@ -75,9 +83,9 @@ export interface TraycerAppProps {
  *
  * Mounts the documented provider stack - outer to inner -
  *   RunnerHostProvider → QueryClientProvider → ThemeProvider →
- *   TooltipProvider → HostRuntimeProvider → auth-scoped lifecycle providers
- *   → RunnerHostBridges → LocalHostGate → RouterProvider → HostPicker
- *   → Toaster.
+ *   TooltipProvider → HostRuntimeProvider → HostCompatibilityProvider →
+ *   auth-scoped lifecycle providers → RunnerHostBridges → LocalHostGate →
+ *   RouterProvider → HostPicker → Toaster.
  *
  * Concrete shells (Electron, Capacitor, gui-app-dev preview) construct a
  * `IRunnerHost` at bootstrap and pass it alongside the shared
@@ -109,6 +117,7 @@ export function TraycerApp(props: TraycerAppProps): ReactNode {
             <ThemeProvider>
               <TooltipProvider>
                 <KeybindingProvider router={router}>
+                  <DesktopZoomController />
                   <HostRuntimeProvider
                     registry={props.registry}
                     messengerFactory={props.messengerFactory ?? null}
@@ -117,9 +126,11 @@ export function TraycerApp(props: TraycerAppProps): ReactNode {
                     remoteFetcher={props.remoteFetcher}
                     fallback={hostRuntimeFallback}
                   >
-                    <RootErrorBoundary router={router}>
-                      <TraycerAuthenticatedRuntime router={router} />
-                    </RootErrorBoundary>
+                    <HostCompatibilityProvider>
+                      <RootErrorBoundary router={router}>
+                        <TraycerAuthenticatedRuntime router={router} />
+                      </RootErrorBoundary>
+                    </HostCompatibilityProvider>
                   </HostRuntimeProvider>
                 </KeybindingProvider>
               </TooltipProvider>
@@ -154,18 +165,20 @@ function TraycerAuthenticatedRuntime(props: TraycerAuthenticatedRuntimeProps) {
         <AuthSessionExpiredToastBridge />
         <EpicSessionLifecycleBridge>
           <ComposerRunSettingsPersistLifecycleBridge>
-            <WorktreeIntentMemoryPersistLifecycleBridge>
-              <WorktreeIntentStagingPersistLifecycleBridge>
-                <EpicCanvasPersistLifecycleBridge>
-                  <EpicTabExistenceReconciler />
-                  <HostStreamProvider>
-                    <NotificationsSessionProvider>
-                      <TraycerAppRuntimeSurface router={props.router} />
-                    </NotificationsSessionProvider>
-                  </HostStreamProvider>
-                </EpicCanvasPersistLifecycleBridge>
-              </WorktreeIntentStagingPersistLifecycleBridge>
-            </WorktreeIntentMemoryPersistLifecycleBridge>
+            <ComposerHarnessMemoryPersistLifecycleBridge>
+              <WorktreeIntentMemoryPersistLifecycleBridge>
+                <WorktreeIntentStagingPersistLifecycleBridge>
+                  <EpicCanvasPersistLifecycleBridge>
+                    <EpicTabExistenceReconciler />
+                    <HostStreamProvider>
+                      <NotificationsSessionProvider>
+                        <TraycerAppRuntimeSurface router={props.router} />
+                      </NotificationsSessionProvider>
+                    </HostStreamProvider>
+                  </EpicCanvasPersistLifecycleBridge>
+                </WorktreeIntentStagingPersistLifecycleBridge>
+              </WorktreeIntentMemoryPersistLifecycleBridge>
+            </ComposerHarnessMemoryPersistLifecycleBridge>
           </ComposerRunSettingsPersistLifecycleBridge>
         </EpicSessionLifecycleBridge>
       </WindowsBridgeAuthSessionBridge>
@@ -185,9 +198,14 @@ function TraycerAppRuntimeSurface(props: TraycerAppRuntimeSurfaceProps) {
   return (
     <>
       <RunnerHostBridges />
+      <HostRegistryUpdateListener />
+      <HostOperationStatusListener />
       <AppUpdateToastController />
+      <WorktreeDeleteProgressToastBridge />
       <CliCredentialSeeder />
       <HarnessCatalogPrefetcher />
+      <RateLimitQueueProvider />
+      <HistoryPruneProvider router={props.router} />
       <RouterProvider router={props.router} />
       <HostPicker />
       <Toaster />

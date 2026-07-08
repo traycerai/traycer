@@ -9,6 +9,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { RefreshCwIcon } from "lucide-react";
+import { RemoveScroll } from "react-remove-scroll";
 import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import {
@@ -28,15 +29,19 @@ import {
   mentionProviderRegistry,
   type MentionFlowStep,
 } from "@/lib/composer/mentions";
+import type { MentionPreview } from "@/lib/composer/types";
 import { cn } from "@/lib/utils";
 
-import type {
-  ComposerPickerItem,
-  ComposerPickerStore,
+import {
+  pickerItemPreview,
+  type ComposerPickerItem,
+  type ComposerPickerStore,
 } from "../picker/composer-picker-store";
 
 import { MentionMenuItem } from "./mention-menu-item";
+import { MentionPreviewPanel } from "./mention-preview-panel";
 import { SlashMenuItem } from "./slash-menu-item";
+import { ZERO_DOM_RECT } from "./zero-dom-rect";
 
 const SLASH_MENU_COPY = {
   header: "Slash commands",
@@ -50,27 +55,13 @@ const MENU_HEIGHT_ESTIMATE = 280;
 
 type LockedPlacement = Extract<Placement, "bottom-start" | "top-start">;
 
-const ZERO_RECT: DOMRect =
-  typeof DOMRect === "function"
-    ? new DOMRect(0, 0, 0, 0)
-    : {
-        x: 0,
-        y: 0,
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        width: 0,
-        height: 0,
-        toJSON: () => ({}),
-      };
-
 interface MenuSlice {
   readonly open: boolean;
   readonly kind: "mention" | "slash" | null;
   readonly items: ReadonlyArray<ComposerPickerItem>;
   readonly activeIndex: number;
   readonly loading: boolean;
+  readonly fetching: boolean;
   readonly step: MentionFlowStep;
 }
 
@@ -80,6 +71,7 @@ function selectMenuSlice(state: {
   items: ReadonlyArray<ComposerPickerItem>;
   activeIndex: number;
   loading: boolean;
+  fetching: boolean;
   step: MentionFlowStep;
 }): MenuSlice {
   return {
@@ -88,6 +80,7 @@ function selectMenuSlice(state: {
     items: state.items,
     activeIndex: state.activeIndex,
     loading: state.loading,
+    fetching: state.fetching,
     step: state.step,
   };
 }
@@ -99,7 +92,7 @@ export interface ComposerMenuProps {
 export function ComposerMenu(props: ComposerMenuProps) {
   const { pickerStore } = props;
   const slice = useStore(pickerStore, useShallow(selectMenuSlice));
-  const { open, kind, items, activeIndex, loading, step } = slice;
+  const { open, kind, items, activeIndex, loading, fetching, step } = slice;
 
   const baseMenuId = useId();
   const menuId = `${baseMenuId}-menu`;
@@ -114,6 +107,7 @@ export function ComposerMenu(props: ComposerMenuProps) {
       items={items}
       activeIndex={activeIndex}
       loading={loading}
+      fetching={fetching}
       step={step}
       menuId={menuId}
     />
@@ -126,13 +120,22 @@ interface ComposerMenuPortalProps {
   readonly items: ReadonlyArray<ComposerPickerItem>;
   readonly activeIndex: number;
   readonly loading: boolean;
+  readonly fetching: boolean;
   readonly step: MentionFlowStep;
   readonly menuId: string;
 }
 
 function ComposerMenuPortal(props: ComposerMenuPortalProps) {
-  const { pickerStore, kind, items, activeIndex, loading, step, menuId } =
-    props;
+  const {
+    pickerStore,
+    kind,
+    items,
+    activeIndex,
+    loading,
+    fetching,
+    step,
+    menuId,
+  } = props;
   const listRef = useRef<HTMLDivElement | null>(null);
   const floatingRef = useRef<HTMLDivElement | null>(null);
 
@@ -140,6 +143,11 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
     () => items.map((item, index) => renderPickerItem(item, index, menuId)),
     [items, menuId],
   );
+
+  const activePreview = useMemo<MentionPreview | null>(() => {
+    if (activeIndex < 0 || activeIndex >= items.length) return null;
+    return pickerItemPreview(items[activeIndex]);
+  }, [items, activeIndex]);
 
   const copy = useMemo(() => {
     if (kind === "mention") return mentionProviderRegistry.menuCopy(step);
@@ -167,6 +175,10 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
     timeoutMs: COMPOSER_ARTIFACT_REFRESH_TIMEOUT_MS,
   });
 
+  // MentionPreviewPanel does its own pre-paint scrollIntoView for rows that
+  // have a preview (see its layout effect), but it early-returns before
+  // that when there's no preview - this passive effect is what still
+  // scrolls the active row into view for those.
   useEffect(() => {
     const list = listRef.current;
     if (list === null) return;
@@ -183,7 +195,7 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
     const virtualReference = {
       getBoundingClientRect: (): DOMRect => {
         const rect = pickerStore.getState().clientRect?.() ?? null;
-        return rect ?? ZERO_RECT;
+        return rect ?? ZERO_DOM_RECT;
       },
     };
 
@@ -208,65 +220,112 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
 
   const headerLabel = copy.header;
   const emptyLabel = copy.empty;
+  const dialogContentShard = useMemo(() => activeDialogContentShard(), []);
+  const removeScrollShards = useMemo(
+    () => (dialogContentShard === null ? [] : [dialogContentShard]),
+    [dialogContentShard],
+  );
+  const isolateOutsideScroll = dialogContentShard !== null;
 
+  // The menu portals to `document.body`, so it lives OUTSIDE the Radix modal
+  // Dialog's scroll-lock subtree (the Dialog's `react-remove-scroll` node and
+  // its `contentRef` shard). That lock installs a document-level, non-passive
+  // wheel/touch listener that `preventDefault()`s any scroll whose target is
+  // neither the lock node nor a shard - so without intervention this list can't
+  // scroll while the new-conversation modal is open. Giving the menu its own
+  // lock pushes it to the top of react-remove-scroll's `lockStack` while open,
+  // so its own overflow region is honored and the Dialog's lock is suspended -
+  // the same way nested Radix modal popovers coexist with a modal Dialog.
+  // When opened from inside a Dialog, the Dialog content is registered as a
+  // shard so modal scroll containment still applies outside both the menu and
+  // the modal content. Inline composers keep `noIsolation`, preserving their
+  // background/page scroll behavior. `removeScrollBar={false}` avoids
+  // re-managing the scrollbar the Dialog already owns.
   const menu = (
-    <div
+    <RemoveScroll
       ref={floatingRef}
-      role="presentation"
-      data-slot="composer-menu"
-      // top-0/left-0 so floating-ui's translate3d is the source of truth.
-      // Width fits content (w-max) so short menus stay compact and long command
-      // names render in full, with a comfortable floor (min-w) and a
-      // viewport-aware ceiling (max-w) past which items truncate. floating-ui's
-      // shift() keeps the grown menu on-screen (CLAUDE.md sizing).
-      className="pointer-events-auto fixed top-0 left-0 z-50 w-max min-w-[min(90vw,16rem)] max-w-[min(92vw,42rem)] overflow-hidden rounded-xl border border-border/70 bg-popover text-popover-foreground shadow-lg"
+      forwardProps
+      enabled
+      noIsolation={!isolateOutsideScroll}
+      shards={removeScrollShards}
+      removeScrollBar={false}
+      allowPinchZoom
     >
-      <div className="flex items-center justify-between gap-2 border-b border-border/60 px-3 py-1.5">
-        <div className="min-w-0 truncate text-overline font-medium uppercase text-muted-foreground/70">
-          {headerLabel}
-        </div>
-        {refreshAvailable ? (
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-xs"
-            aria-label="Refresh artifacts"
-            title="Refresh artifacts"
-            className="-my-1 text-muted-foreground/70 hover:text-foreground"
-            disabled={artifactRefresh.refreshing}
-            onMouseDown={(event) => {
-              event.preventDefault();
-            }}
-            onClick={artifactRefresh.trigger}
-          >
-            <RefreshCwIcon
-              className={cn(
-                "size-3.5",
-                artifactRefresh.refreshing && "animate-spin",
-              )}
-            />
-          </Button>
-        ) : null}
-      </div>
       <div
-        ref={listRef}
-        id={menuId}
-        role="listbox"
-        className="max-h-[min(50vh,12rem)] overflow-y-auto py-1"
+        role="presentation"
+        data-slot="composer-menu"
+        // top-0/left-0 so floating-ui's translate3d is the source of truth.
+        // Width fits content (w-max) so short menus stay compact and long command
+        // names render in full, with a comfortable floor (min-w) and a
+        // viewport-aware ceiling (max-w) past which items truncate. floating-ui's
+        // shift() keeps the grown menu on-screen (CLAUDE.md sizing).
+        className="pointer-events-auto fixed top-0 left-0 z-50 w-max min-w-[min(90vw,16rem)] max-w-[min(90vw,26rem)] overflow-hidden rounded-xl border border-border/70 bg-popover text-popover-foreground shadow-lg"
       >
-        <ComposerMenuBody
-          renderedItems={renderedItems}
-          loading={loading}
-          emptyLabel={emptyLabel}
-          showEmptyLabelWithItems={showEmptyLabelWithItems}
-          activeIndex={activeIndex}
-          pickerStore={pickerStore}
-        />
+        <div className="flex items-center justify-between gap-2 border-b border-border/60 px-3 py-1.5">
+          <div className="flex min-w-0 items-center gap-1.5">
+            <div className="min-w-0 truncate text-overline font-medium uppercase text-muted-foreground/70">
+              {headerLabel}
+            </div>
+            {fetching && !loading ? (
+              <AgentSpinningDots
+                testId={undefined}
+                variant={undefined}
+                className="text-muted-foreground/60"
+              />
+            ) : null}
+          </div>
+          {refreshAvailable ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              aria-label="Refresh artifacts"
+              title="Refresh artifacts"
+              className="-my-1 text-muted-foreground/70 hover:text-foreground"
+              disabled={artifactRefresh.refreshing}
+              onMouseDown={(event) => {
+                event.preventDefault();
+              }}
+              onClick={artifactRefresh.trigger}
+            >
+              <RefreshCwIcon
+                className={cn(
+                  "size-3.5",
+                  artifactRefresh.refreshing && "animate-spin",
+                )}
+              />
+            </Button>
+          ) : null}
+        </div>
+        <div
+          ref={listRef}
+          id={menuId}
+          role="listbox"
+          className="max-h-[min(50vh,12rem)] overflow-y-auto py-1"
+        >
+          <ComposerMenuBody
+            renderedItems={renderedItems}
+            loading={loading}
+            emptyLabel={emptyLabel}
+            showEmptyLabelWithItems={showEmptyLabelWithItems}
+            activeIndex={activeIndex}
+            pickerStore={pickerStore}
+          />
+        </div>
       </div>
-    </div>
+    </RemoveScroll>
   );
 
-  return createPortal(menu, document.body);
+  return (
+    <>
+      {createPortal(menu, document.body)}
+      <MentionPreviewPanel
+        listRef={listRef}
+        activeIndex={activeIndex}
+        preview={activePreview}
+      />
+    </>
+  );
 }
 
 function selectInitialPlacement(store: ComposerPickerStore): LockedPlacement {
@@ -279,6 +338,22 @@ function selectInitialPlacement(store: ComposerPickerStore): LockedPlacement {
   if (spaceBelow >= MENU_HEIGHT_ESTIMATE) return "bottom-start";
   if (spaceAbove >= MENU_HEIGHT_ESTIMATE) return "top-start";
   return spaceBelow >= spaceAbove ? "bottom-start" : "top-start";
+}
+
+function activeDialogContentShard(): HTMLElement | null {
+  const activeElement = document.activeElement;
+  if (activeElement instanceof HTMLElement) {
+    const activeDialog = activeElement.closest<HTMLElement>(
+      '[data-slot="dialog-content"]',
+    );
+    if (activeDialog !== null) return activeDialog;
+  }
+
+  const dialogs = document.querySelectorAll<HTMLElement>(
+    '[data-slot="dialog-content"]',
+  );
+  if (dialogs.length === 0) return null;
+  return dialogs[dialogs.length - 1];
 }
 
 interface RenderedItem {

@@ -147,6 +147,7 @@ function emitSnapshot(
         isTitleEditedByUser: false,
         settings: null,
         activeSessionChain: null,
+        claudePendingWakes: [],
         messages: [...messages],
         events: [...events],
       },
@@ -319,6 +320,7 @@ describe("useChatSetupFailureRestoreDriver", () => {
         status: "accepted",
         reason: null,
         code: null,
+        backgroundStopTaskIds: [],
       });
       harness.callbacks().onMessageAccepted({
         kind: "messageAccepted",
@@ -878,7 +880,8 @@ describe("<ChatControlStrip />", () => {
         state={harness.handle.store.getState()}
         canAct
         editingQueueItemId={null}
-        onResumeQueue={() => undefined}
+        onQueuePause={() => null}
+        onResumeQueue={() => null}
         onQueueEdit={() => undefined}
         onQueueCancel={() => undefined}
         onQueueReorder={() => undefined}
