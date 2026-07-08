@@ -129,7 +129,7 @@ export function LocalHostGate(props: LocalHostGateProps) {
   // signed-out users, non-local-host shells, non-local selections, and
   // bypass routes (e.g. /settings/shell). Anything else is a signed-in
   // local-host route that must hold until the host is reachable.
-  const passThrough = shouldPassThroughGate({
+  const { passThrough, bypassEligible } = computeGateEligibility({
     authStatus,
     hasLocalHost: runnerHost.hasLocalHost,
     selectedEntry: props.selectedEntry,
@@ -156,7 +156,14 @@ export function LocalHostGate(props: LocalHostGateProps) {
       : props.loading;
 
   if (passThrough) {
-    return <>{props.children}</>;
+    return renderPassThroughGate({
+      bypassEligible,
+      children: props.children,
+      loading: props.loading,
+      canManageHost: provisioning.canManageHost,
+      force: provisioning.force,
+      restartError: provisioning.error,
+    });
   }
 
   // host-busy keep path: the CLI kept a running host that has work in
@@ -172,6 +179,7 @@ export function LocalHostGate(props: LocalHostGateProps) {
     }
     return (
       <HostCompatibilityGate
+        bypass={false}
         source="busy-keep"
         checking={props.loading}
         onRefreshBusy={provisioning.retry}
@@ -205,6 +213,7 @@ export function LocalHostGate(props: LocalHostGateProps) {
   if (isReady) {
     return (
       <HostCompatibilityGate
+        bypass={false}
         source="normal-ready"
         checking={props.loading}
         onRefreshBusy={null}
@@ -240,21 +249,78 @@ export function LocalHostGate(props: LocalHostGateProps) {
   return <>{props.loading}</>;
 }
 
-// True when the gate should render children without requiring a ready
-// host: signed-out users, shells without a local host (mobile/web),
-// explicit non-local selections, and caller-declared bypass routes.
-function shouldPassThroughGate(args: {
+interface PassThroughGateArgs {
+  // `passThrough` is true ONLY because of the `/settings` bypass flag - the
+  // same signed-in, local-host-capable population that also reaches
+  // `isReady` in `LocalHostGate`. That's the boundary this stabilizes:
+  // `bypass` flips on every epic<->settings crossing while the host stays
+  // ready, so THIS population renders through the SAME `HostCompatibilityGate`
+  // chain as `isReady` (`bypass` forcing it to render children outright) so
+  // the two share one element type/tree depth instead of remounting the
+  // whole gated subtree on every crossing. `useHostCompatibility()` is safe
+  // here: `HostCompatibilityProvider` sits above `RouterProvider` and is
+  // always mounted for a signed-in, local-host-capable session by the time
+  // any routed page exists.
+  //
+  // The other `passThrough` reasons (signed-out, no local host, non-local
+  // selection) never depend on `bypass` and never need to match `isReady`'s
+  // tree shape, so they keep the plain short-circuit - which also keeps them
+  // independent of `HostCompatibilityProvider` ever mounting (e.g. a
+  // signed-out user renders immediately).
+  readonly bypassEligible: boolean;
+  readonly children: ReactNode;
+  readonly loading: ReactNode;
+  readonly canManageHost: boolean;
+  readonly force: () => void;
+  readonly restartError: Error | null;
+}
+
+function renderPassThroughGate(args: PassThroughGateArgs): ReactNode {
+  if (!args.bypassEligible) {
+    return <>{args.children}</>;
+  }
+  return (
+    <HostCompatibilityGate
+      bypass
+      source="normal-ready"
+      checking={args.loading}
+      onRefreshBusy={null}
+      onForce={args.canManageHost ? args.force : null}
+      restartError={args.restartError}
+    >
+      {args.children}
+    </HostCompatibilityGate>
+  );
+}
+
+interface GateEligibility {
+  // True when the gate should render children without requiring a ready
+  // host: signed-out users, shells without a local host (mobile/web),
+  // explicit non-local selections, and caller-declared bypass routes.
+  readonly passThrough: boolean;
+  // True for the signed-in, local-host-capable population that can also
+  // reach `isReady` - i.e. `bypass` is the only reason `passThrough` might
+  // be true. `false` for the other short-circuits (signed-out, no local
+  // host, non-local selection), which never depend on `bypass`.
+  readonly bypassEligible: boolean;
+}
+
+function computeGateEligibility(args: {
   readonly authStatus: string;
   readonly hasLocalHost: boolean;
   readonly selectedEntry: HostDirectoryEntry | null;
   readonly bypass: boolean;
-}): boolean {
-  if (args.authStatus !== "signed-in") return true;
-  if (!args.hasLocalHost) return true;
-  if (args.selectedEntry !== null && args.selectedEntry.kind !== "local") {
-    return true;
+}): GateEligibility {
+  if (args.authStatus !== "signed-in") {
+    return { passThrough: true, bypassEligible: false };
   }
-  return args.bypass;
+  if (!args.hasLocalHost) {
+    return { passThrough: true, bypassEligible: false };
+  }
+  if (args.selectedEntry !== null && args.selectedEntry.kind !== "local") {
+    return { passThrough: true, bypassEligible: false };
+  }
+  return { passThrough: args.bypass, bypassEligible: true };
 }
 
 interface ProvisioningLoadingProps {
@@ -439,6 +505,15 @@ interface HostBusyGateProps {
   readonly onRefreshBusy: (() => void) | null;
   readonly onForce: (() => void) | null;
   readonly restartError: Error | null;
+  /**
+   * When `true`, renders `children` outright regardless of `compat.status` -
+   * used by `LocalHostGate`'s `passThrough` branch so it can share this
+   * component's tree shape with the `isReady` branch (see the call site
+   * comment) instead of returning a structurally different element. The
+   * compat hook is still called unconditionally to keep hook order stable
+   * across the bypass flip.
+   */
+  readonly bypass: boolean;
 }
 
 type HostCompatibilityGateSource = "busy-keep" | "normal-ready";
@@ -449,6 +524,9 @@ type HostCompatibilityGateSource = "busy-keep" | "normal-ready";
 // keep flow; only retry copy/wiring differs.
 function HostCompatibilityGate(props: HostBusyGateProps) {
   const compat = useHostCompatibility();
+  if (props.bypass) {
+    return <>{props.children}</>;
+  }
   if (compat.status === "incompatible") {
     return (
       <GateIncompatibleHost

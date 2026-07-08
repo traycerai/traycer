@@ -530,17 +530,32 @@ export function createPersistentMemoryHistory(
       entries[index] = path;
       states[index] = state;
       // Collapse an adjacent byte-identical entry created by an in-place
-      // replace. Two identical adjacent entries are always a dead back step
-      // (`go(-1)` moves the cursor but not the rendered href), so dropping the
-      // redundant current entry and stepping the cursor back onto its identical
+      // replace, on EITHER side of the current entry. Two identical adjacent
+      // entries are always a dead back/forward step (`go(-1)`/`go(1)` moves
+      // the cursor but not the rendered href), so dropping the redundant
       // neighbour is correct for ANY replace - this is a general
-      // adjacent-duplicate guard, not overlay-specific. (Its common producer is
-      // the settings/history overlay, whose entry is pushed onto the same path
-      // and differs only by a search-param flag that this `replace` then clears.)
+      // adjacent-duplicate guard, not overlay-specific. The BEHIND case's
+      // common producer is the settings/history overlay, whose entry is
+      // pushed onto the same path and differs only by a search-param flag
+      // that this `replace` then clears. The AHEAD case's producer is a
+      // cold-load redirect replacing a current overlay entry when the route
+      // it redirects to already sits one step ahead in a restored stack
+      // (`use-system-tab-modal.ts`'s focus-tab-first branches) - left
+      // uncollapsed, `canGoForward()` would stay true over a byte-identical
+      // dead forward step.
+      let collapsedNeighbour = false;
       if (index > 0 && entries[index - 1] === path) {
         entries.splice(index, 1);
         states.splice(index, 1);
         index -= 1;
+        collapsedNeighbour = true;
+      }
+      if (index < entries.length - 1 && entries[index + 1] === path) {
+        entries.splice(index + 1, 1);
+        states.splice(index + 1, 1);
+        collapsedNeighbour = true;
+      }
+      if (collapsedNeighbour) {
         restampIndices(states);
       }
       persistState(windowId, entries, index);

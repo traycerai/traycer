@@ -611,6 +611,114 @@ describe("PersistentHistoryController", () => {
     expect(history.location.state.__TSR_index).toBe(2);
   });
 
+  it("collapses an adjacent duplicate AHEAD created by an in-place replace (no dead forward step)", () => {
+    // Mirrors a cold-load redirect: the current entry is replaced with a path
+    // that already sits ONE STEP AHEAD in the stack (e.g. the guard
+    // replacing a restored overlay entry with the tab route it redirects to,
+    // when that tab route was already the next persisted entry).
+    const history = seedStack("window-a", [
+      "/epics/epic-a/tab-a",
+      "/epics/epic-b/tab-b?settingsOverlay=true",
+      "/settings/general",
+    ]);
+    const controller = controllerOf(history);
+
+    history.back();
+    expect(controller.getIndex()).toBe(1);
+
+    history.replace("/settings/general");
+
+    // The forward duplicate is dropped; the cursor stays on the (now sole)
+    // settings entry instead of leaving a dead forward step ahead of it.
+    expect(controller.getEntries()).toEqual([
+      "/epics/epic-a/tab-a",
+      "/settings/general",
+    ]);
+    expect(controller.getIndex()).toBe(1);
+    expect(controller.canGoForward()).toBe(false);
+    expect(history.location.pathname).toBe("/settings/general");
+
+    // Proof the dead step is gone: canGoForward is false, so a `go(1)` at the
+    // boundary is a guarded no-op in the app's `goForward` helper - but the
+    // controller-level state itself must already reflect no forward entry.
+    expect(controller.getEntries().length).toBe(2);
+  });
+
+  it("restamps __TSR_index contiguously after an ahead-collapse", () => {
+    const history = seedStack("window-a", [
+      "/epics/epic-a/tab-a",
+      "/epics/epic-b/tab-b?settingsOverlay=true",
+      "/settings/general",
+      "/epics/epic-c/tab-c",
+    ]);
+    const controller = controllerOf(history);
+
+    history.go(-2);
+    expect(controller.getIndex()).toBe(1);
+
+    history.replace("/settings/general");
+
+    expect(controller.getEntries()).toEqual([
+      "/epics/epic-a/tab-a",
+      "/settings/general",
+      "/epics/epic-c/tab-c",
+    ]);
+    expect(controller.getIndex()).toBe(1);
+
+    // Walk forward and back across the shifted tail entry; a stale
+    // `__TSR_index` would land `go(n)` on the wrong array position.
+    history.go(1);
+    expect(controller.getIndex()).toBe(2);
+    expect(history.location.pathname).toBe("/epics/epic-c/tab-c");
+    expect(history.location.state.__TSR_index).toBe(2);
+
+    history.back();
+    expect(controller.getIndex()).toBe(1);
+    expect(history.location.pathname).toBe("/settings/general");
+    expect(history.location.state.__TSR_index).toBe(1);
+  });
+
+  it("collapses duplicates on BOTH sides of a single replace", () => {
+    // Current entry sits between two neighbours that both become identical to
+    // it once replaced - the whole run must collapse to a single entry.
+    const history = seedStack("window-a", [
+      "/epics/epic-a/tab-a",
+      "/epics/epic-b/tab-b",
+      "/epics/epic-a/tab-a",
+    ]);
+    const controller = controllerOf(history);
+
+    history.back();
+    expect(controller.getIndex()).toBe(1);
+
+    history.replace("/epics/epic-a/tab-a");
+
+    expect(controller.getEntries()).toEqual(["/epics/epic-a/tab-a"]);
+    expect(controller.getIndex()).toBe(0);
+    expect(controller.canGoBack()).toBe(false);
+    expect(controller.canGoForward()).toBe(false);
+    expect(history.location.state.__TSR_index).toBe(0);
+  });
+
+  it("persists the collapsed stack after an ahead-deduping replace", () => {
+    const history = seedStack("window-a", [
+      "/epics/epic-a/tab-a",
+      "/epics/epic-b/tab-b?historyOverlay=true",
+      "/epics/epic-b/tab-b",
+    ]);
+    const controller = controllerOf(history);
+
+    history.back();
+    expect(controller.getIndex()).toBe(1);
+
+    history.replace("/epics/epic-b/tab-b");
+
+    expect(readPersisted("window-a")).toEqual({
+      entries: ["/epics/epic-a/tab-a", "/epics/epic-b/tab-b"],
+      index: 1,
+    });
+  });
+
   it("persists the collapsed stack after a deduping replace", () => {
     const history = seedStack("window-a", [
       "/epics/epic-a/tab-a",
