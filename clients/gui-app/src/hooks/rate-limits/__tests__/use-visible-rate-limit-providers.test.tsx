@@ -166,6 +166,24 @@ describe("useVisibleRateLimitProviders", () => {
     ]);
   });
 
+  it("includes a configured provider even when no usage cache entry exists", () => {
+    mocks.providers = [
+      providerState({
+        providerId: "codex",
+        status: "authenticated",
+        enabled: true,
+        authPending: false,
+        availabilityPending: false,
+      }),
+    ];
+
+    const { result } = renderHook(() => useVisibleRateLimitProviders());
+
+    expect(result.current).toEqual([
+      { providerId: "codex", lane: "ephemeralProcess" },
+    ]);
+  });
+
   it("includes a signed-in provider with a cached fetch error so the popover can show refreshable error state", () => {
     mocks.providers = [
       providerState({
