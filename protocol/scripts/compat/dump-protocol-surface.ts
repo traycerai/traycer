@@ -17,10 +17,28 @@ import {
 } from "../../src/host/index";
 import { buildProtocolSurface } from "../../src/framework/surface-build";
 
+async function resolveUnaryFloorMethodNames(): Promise<readonly string[]> {
+  try {
+    const floorModule = await import("../../src/host/released-floor");
+    return floorModule.releasedFloorMethodNames;
+  } catch (error) {
+    if (!String(error).includes("Cannot find module")) {
+      throw error;
+    }
+    // Backfill path: this script is copied into older released tags that do
+    // not have the production floor module yet. Those tags predate the
+    // optional channel, so their full unary registry is their legacy surface.
+    return Object.keys(hostRpcRegistry).sort();
+  }
+}
+
+const unaryFloorMethodNames = await resolveUnaryFloorMethodNames();
+
 process.stdout.write(
   `${JSON.stringify(
     buildProtocolSurface({
       unary: hostRpcRegistry,
+      unaryFloorMethodNames,
       stream: hostStreamRpcRegistry,
     }),
     null,
