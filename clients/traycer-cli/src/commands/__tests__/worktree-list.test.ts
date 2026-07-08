@@ -134,7 +134,7 @@ describe("formatWorktreeListTable", () => {
       null,
     );
     const lines = table.split("\n");
-    expect(lines[1]).toContain("Merged");
+    expect(lines[1]).toContain("Landed");
     expect(lines[2]).toContain("At base commit");
     expect(lines[3]).toContain("-");
   });

@@ -1337,7 +1337,7 @@ describe("WorktreesList confirm-time re-check", () => {
     expect(toastMock.messages.join("\n")).toContain("1 dirty");
   });
 
-  it("filter → Merged then select-all picks only the Merged rows (fast path)", () => {
+  it("filter → Landed then select-all picks only the Landed rows (fast path)", () => {
     render(
       renderWith(new QueryClient(), [
         merged("/wt/merged", "feat-merged"),
@@ -1351,13 +1351,13 @@ describe("WorktreesList confirm-time re-check", () => {
 
     // Both rows visible initially; select-all would take both.
     screen.getByRole("button", { name: "Delete worktree feat-unref" });
-    // Narrow to the Merged tier via the standard status filter.
+    // Narrow to the Landed tier via the standard status filter.
     fireEvent.click(screen.getByTestId("worktrees-filter-merged"));
     expect(
       screen.queryByRole("button", { name: "Delete worktree feat-unref" }),
     ).toBeNull();
 
-    // Standard select-all now acts only on the visible (Merged) row.
+    // Standard select-all now acts only on the visible (Landed) row.
     fireEvent.click(screen.getByTestId("worktrees-select-all"));
     expect(screen.getByText("1 selected")).not.toBeNull();
     fireEvent.click(screen.getByTestId("worktrees-list-delete-selected"));
@@ -1369,7 +1369,7 @@ describe("WorktreesList confirm-time re-check", () => {
     return entry({ worktreePath: path, branch, atBaseCommit: true });
   }
 
-  it("status filter is multi-select: Merged + At base commit shows their union", () => {
+  it("status filter is multi-select: Landed + At base commit shows their union", () => {
     render(
       renderWith(new QueryClient(), [
         merged("/wt/merged", "feat-merged"),
@@ -1390,7 +1390,7 @@ describe("WorktreesList confirm-time re-check", () => {
     fireEvent.click(screen.getByTestId("worktrees-filter-merged"));
     fireEvent.click(screen.getByTestId("worktrees-filter-at-base-commit"));
 
-    // Union of Merged + At base commit: the review row is filtered out, the two
+    // Union of Landed + At base commit: the review row is filtered out, the two
     // green rows remain.
     expect(
       screen.queryByRole("button", { name: "Delete worktree feat-review" }),
@@ -1437,18 +1437,18 @@ describe("WorktreesList confirm-time re-check", () => {
       renderWith(queryClient, [merged("/wt/merged", "feat-merged"), reviewRow]),
     );
 
-    // Filter to Merged only - the review row hides and the toolbar reads Merged.
+    // Filter to Landed only - the review row hides and the toolbar reads Landed.
     fireEvent.click(screen.getByTestId("worktrees-filter-trigger"));
     fireEvent.click(screen.getByTestId("worktrees-filter-merged"));
     expect(
       screen.queryByRole("button", { name: "Delete worktree feat-review" }),
     ).toBeNull();
-    screen.getByRole("button", { name: "Filter: Merged" });
+    screen.getByRole("button", { name: "Filter: Landed" });
 
-    // The last Merged row is deleted out from under the filter (only review left).
+    // The last Landed row is deleted out from under the filter (only review left).
     rendered.rerender(renderWith(queryClient, [reviewRow]));
 
-    // The stale "Merged" selection is no longer available, so the effective
+    // The stale "Landed" selection is no longer available, so the effective
     // filter is empty and every row shows - matching the "All" the toolbar now
     // reads. The list must NOT dead-end to the empty state.
     screen.getByRole("button", { name: "Delete worktree feat-review" });
@@ -1822,27 +1822,36 @@ describe("WorktreesList v1.1 signals", () => {
       onVisiblePathsChange: undefined,
     });
 
+    const prChips = screen.getAllByTestId("worktree-pr-chip");
+    expect(prChips.map((chip) => chip.getAttribute("data-pr-state"))).toEqual([
+      "merged",
+      "open",
+      "closed",
+      "merged",
+      "unmerged",
+    ]);
+    expect(prChips[0]?.className).toContain("text-purple-700");
+    expect(prChips[1]?.className).toContain("text-green-700");
+    expect(prChips[2]?.className).toContain("text-red-700");
+    expect(prChips[4]?.className).toContain("text-muted-foreground");
     expect(
       screen
-        .getAllByTestId("worktree-pr-chip")
-        .map((chip) => chip.getAttribute("data-pr-state")),
-    ).toEqual(["merged", "open", "closed", "merged"]);
-    expect(
-      screen.getByRole("link", { name: "Open PR #10" }).getAttribute("href"),
+        .getByRole("link", { name: "Open PR #10 Merged" })
+        .getAttribute("href"),
     ).toBe("https://github.com/acme/app/pull/10");
     expect(
       screen
-        .getByRole("link", { name: "Open open-sub PR #11" })
+        .getByRole("link", { name: "Open open-sub PR #11 Open" })
         .getAttribute("href"),
     ).toBe("https://github.com/acme/open-sub/pull/11");
     expect(
       screen
-        .getByRole("link", { name: "Open closed-sub PR #12" })
+        .getByRole("link", { name: "Open closed-sub PR #12 Closed" })
         .getAttribute("href"),
     ).toBe("https://github.com/acme/closed-sub/pull/12");
     expect(
       screen
-        .getByRole("link", { name: "Open merged-sub PR #13" })
+        .getByRole("link", { name: "Open merged-sub PR #13 Merged" })
         .getAttribute("href"),
     ).toBe("https://github.com/acme/merged-sub/pull/13");
     expect(
@@ -1851,9 +1860,10 @@ describe("WorktreesList v1.1 signals", () => {
     expect(
       screen.queryByRole("link", { name: "Open cold-sub PR #15" }),
     ).toBeNull();
+    screen.getByText("none-sub · unmerged");
   });
 
-  it("keeps submodule PR facts as plain text now that chips carry the links", () => {
+  it("hides PR facts from the row facts line now that chips carry the links", () => {
     renderList({
       hostId: "host-a",
       queryClient: new QueryClient(),
@@ -1880,15 +1890,11 @@ describe("WorktreesList v1.1 signals", () => {
       onVisiblePathsChange: undefined,
     });
 
-    const factLine = screen.getByText((_content, element) => {
-      return (
-        element?.tagName.toLowerCase() === "p" &&
-        element.textContent?.includes("submodule acme/sub PR #22 open") === true
-      );
-    });
-    expect(within(factLine).queryByRole("link")).toBeNull();
+    expect(screen.queryByText("submodule acme/sub PR #22 open")).toBeNull();
     expect(
-      screen.getByRole("link", { name: "Open sub PR #22" }).getAttribute("href"),
+      screen
+        .getByRole("link", { name: "Open sub PR #22 Open" })
+        .getAttribute("href"),
     ).toBe("https://github.com/acme/sub/pull/22");
   });
 
@@ -1905,7 +1911,7 @@ describe("WorktreesList v1.1 signals", () => {
     screen.getByText("Not used by any Task");
   });
 
-  it("leads merged rows with a green Merged pill and shows ahead/behind facts", () => {
+  it("leads landed rows with a green Landed pill and shows ahead/behind facts", () => {
     renderList({
       hostId: "host-a",
       queryClient: new QueryClient(),
@@ -1926,13 +1932,18 @@ describe("WorktreesList v1.1 signals", () => {
       onVisiblePathsChange: undefined,
       taskTitlesByEpicId: undefined,
     });
-    // The merged row carries the proven-green "Merged" tier pill; the ahead/
+    // The merged row carries the proven-green "Landed" tier pill; the ahead/
     // unmerged row is amber Review, with the counts in its facts line.
     const tiers = screen
       .getAllByTestId("worktree-tier-pill")
       .map((pill) => pill.getAttribute("data-tier"));
     expect(tiers).toContain("merged");
     expect(tiers).toContain("review");
+    expect(
+      screen
+        .getAllByTestId("worktree-tier-pill")
+        .some((pill) => pill.textContent === "Landed"),
+    ).toBe(true);
     screen.getByText("2 ahead · 3 behind");
   });
 
@@ -2347,7 +2358,7 @@ describe("WorktreesList virtualization + per-viewport enrichment", () => {
   });
 
   it("keeps a still-pending row under an active tier filter (no dead-end)", () => {
-    // One enriched Merged row + one still-pending row. Filtering to Merged must
+    // One enriched Landed row + one still-pending row. Filtering to Landed must
     // keep the pending row visible (its tier is unknown, so it can't be excluded
     // yet) so it can enrich, instead of dead-ending the filtered view to empty.
     const mergedRow = entry({
@@ -2370,10 +2381,10 @@ describe("WorktreesList virtualization + per-viewport enrichment", () => {
       }),
     );
 
-    // Merged is the only known tier, so it is the only filter option offered.
+    // Landed is the only known tier, so it is the only filter option offered.
     fireEvent.click(screen.getByTestId("worktrees-filter-merged"));
 
-    // The enriched Merged row stays; the still-pending row is KEPT (shown as
+    // The enriched Landed row stays; the still-pending row is KEPT (shown as
     // "Checking…"), not dropped.
     screen.getByRole("button", { name: "Delete worktree feat-merged" });
     screen.getByRole("button", { name: "Delete worktree feat-pending" });

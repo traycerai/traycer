@@ -337,7 +337,7 @@ function worktreeTierFilterLabel(
  * Checking several tiers shows their union; composes with the search box (both
  * apply). Tier comes from the shared classifier, so the options match the row
  * pills exactly. Kept open across toggles (`onSelect` preventDefault) so the user
- * can pick e.g. Merged + At base commit in one visit.
+ * can pick e.g. Landed + At base commit in one visit.
  */
 function WorktreeFilterMenu(props: {
   readonly tierFilters: WorktreeTierFilterSet;
@@ -1764,7 +1764,7 @@ function WorktreeRow(props: {
           </span>
         </div>
         <WorktreeSecondaryFacts
-          facts={classification.facts}
+          facts={classification.nonPrFacts}
           lastActivityAt={entry.lastActivityAt}
         />
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -1815,7 +1815,7 @@ function WorktreeTierPill(props: {
 }): ReactNode {
   // While the activity probe is still in flight the tier isn't known yet - show a
   // neutral "Checking…" spinner rather than a base-only tier that would flip (e.g.
-  // Review -> Merged) once the probes land.
+  // Review -> Landed) once the probes land.
   if (props.state === "pending") {
     return (
       <TooltipWrapper
@@ -1957,20 +1957,34 @@ interface WorktreePrChipModel {
   readonly prUrl: string;
 }
 
+interface WorktreeMutedPrChipModel {
+  readonly key: string;
+  readonly label: string;
+}
+
 function WorktreePrChips(props: {
   readonly entry: WorktreeHostEntryV11;
 }): ReactNode {
   const chips = worktreePrChips(props.entry);
   if (chips.length === 0) return null;
-  return chips.map((chip) => <WorktreePrChip key={chip.key} chip={chip} />);
+  return chips.map((chip) =>
+    "prUrl" in chip ? (
+      <WorktreePrChip key={chip.key} chip={chip} />
+    ) : (
+      <WorktreeMutedPrChip key={chip.key} chip={chip} />
+    ),
+  );
 }
 
 function worktreePrChips(
   entry: WorktreeHostEntryV11,
-): readonly WorktreePrChipModel[] {
+): readonly (WorktreePrChipModel | WorktreeMutedPrChipModel)[] {
   return [
     ...superprojectPrChip(entry),
-    ...entry.submodules.flatMap((submodule) => submodulePrChip(submodule)),
+    ...entry.submodules.flatMap((submodule) => [
+      ...submodulePrChip(submodule),
+      ...submoduleUnmergedChip(submodule),
+    ]),
   ];
 }
 
@@ -1984,8 +1998,8 @@ function superprojectPrChip(
   return [
     {
       key: `superproject:${entry.prNumber}:${entry.prUrl}`,
-      label: `PR #${entry.prNumber}`,
-      ariaLabel: `Open PR #${entry.prNumber}`,
+      label: `#${entry.prNumber} ${WORKTREE_PR_STATE_LABEL[prState]}`,
+      ariaLabel: `Open PR #${entry.prNumber} ${WORKTREE_PR_STATE_LABEL[prState]}`,
       prState,
       prUrl: entry.prUrl,
     },
@@ -2007,15 +2021,33 @@ function submodulePrChip(
   return [
     {
       key: `submodule:${submodule.repoIdentifier.owner}/${repoName}:${submodule.branch}:${submodule.prNumber}:${submodule.prUrl}`,
-      label: `${repoName} PR #${submodule.prNumber}`,
-      ariaLabel: `Open ${repoName} PR #${submodule.prNumber}`,
+      label: `${repoName} #${submodule.prNumber} ${WORKTREE_PR_STATE_LABEL[prState]}`,
+      ariaLabel: `Open ${repoName} PR #${submodule.prNumber} ${WORKTREE_PR_STATE_LABEL[prState]}`,
       prState,
       prUrl: submodule.prUrl,
     },
   ];
 }
 
+function submoduleUnmergedChip(
+  submodule: WorktreeSubmoduleMergeFact,
+): readonly WorktreeMutedPrChipModel[] {
+  if (submodule.prState !== "none" || submodule.mergedIntoDefault) return [];
+  return [
+    {
+      key: `submodule-unmerged:${submodule.repoIdentifier.owner}/${submodule.repoIdentifier.repo}:${submodule.branch}`,
+      label: `${submodule.repoIdentifier.repo} · unmerged`,
+    },
+  ];
+}
+
 type WorktreeDisplayedPrState = "open" | "closed" | "merged";
+
+const WORKTREE_PR_STATE_LABEL: Record<WorktreeDisplayedPrState, string> = {
+  open: "Open",
+  closed: "Closed",
+  merged: "Merged",
+};
 
 function WorktreePrChip(props: {
   readonly chip: WorktreePrChipModel;
@@ -2056,17 +2088,34 @@ const WORKTREE_PR_PILL_STYLE: Record<
 > = {
   open: {
     className:
-      "border-sky-600/30 bg-sky-500/10 text-sky-700 dark:border-sky-400/30 dark:text-sky-300",
+      "border-green-600/30 bg-green-500/10 text-green-700 dark:border-green-400/30 dark:text-green-300",
   },
   closed: {
     className:
-      "border-rose-600/25 bg-rose-500/10 text-rose-700 dark:border-rose-400/25 dark:text-rose-300",
+      "border-red-600/25 bg-red-500/10 text-red-700 dark:border-red-400/25 dark:text-red-300",
   },
   merged: {
     className:
-      "border-emerald-600/30 bg-emerald-500/10 text-emerald-700 dark:border-emerald-400/30 dark:text-emerald-300",
+      "border-purple-600/30 bg-purple-500/10 text-purple-700 dark:border-purple-400/30 dark:text-purple-300",
   },
 };
+
+function WorktreeMutedPrChip(props: {
+  readonly chip: WorktreeMutedPrChipModel;
+}): ReactNode {
+  return (
+    <Badge
+      variant="outline"
+      className="gap-1 border-border/40 bg-muted/30 font-medium text-muted-foreground"
+      data-testid="worktree-pr-chip"
+      data-pr-state="unmerged"
+    >
+      <span className="max-w-[min(60vw,16rem)] truncate">
+        {props.chip.label}
+      </span>
+    </Badge>
+  );
+}
 
 function WorktreePrAnchor(props: {
   readonly href: string;
