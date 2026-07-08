@@ -33,6 +33,57 @@ export function leadingDocTitle(editor: Editor): string | null {
 }
 
 /**
+ * Pure decision for one editor update: given the current leading heading text
+ * and the accumulated follow state, decide whether the artifact should be
+ * renamed and what the tracked "last heading" becomes.
+ *
+ * The title *follows the doc* while it is empty, still the create-flow default
+ * ("New <kind>"), or equal to the last heading text this reducer tracked (i.e.
+ * the title was derived from the doc). An explicit rename (sidebar, another
+ * client) makes `artifactTitle` diverge from all three, permanently breaking
+ * the link so a deliberate title is never clobbered.
+ *
+ * `lastDocTitle` only ever advances to a NON-NULL heading: clearing the heading
+ * (`nextDocTitle === null`) preserves it, so clearing then retyping still reads
+ * as "following the doc" and renames again - the bug a naive
+ * `lastDocTitle = nextDocTitle` on every update would introduce (the tracked
+ * value goes null on clear and never matches `artifactTitle` on retype).
+ */
+export function nextTitleFollow(params: {
+  readonly nextDocTitle: string | null;
+  readonly lastDocTitle: string | null;
+  readonly artifactTitle: string;
+  readonly defaultTitle: string;
+  readonly createdManually: boolean;
+}): { readonly renameTo: string | null; readonly lastDocTitle: string | null } {
+  const {
+    nextDocTitle,
+    lastDocTitle,
+    artifactTitle,
+    defaultTitle,
+    createdManually,
+  } = params;
+  // Heading cleared or not a leading H1: keep the last title (never rename to
+  // empty) AND keep `lastDocTitle` so a later retype still follows.
+  if (nextDocTitle === null) return { renameTo: null, lastDocTitle };
+  if (nextDocTitle === lastDocTitle) return { renameTo: null, lastDocTitle };
+  // Heading text genuinely changed - this is now the tracked value regardless
+  // of whether we end up renaming.
+  if (!createdManually) return { renameTo: null, lastDocTitle: nextDocTitle };
+  if (artifactTitle === nextDocTitle) {
+    return { renameTo: null, lastDocTitle: nextDocTitle };
+  }
+  const titleFollowsDoc =
+    artifactTitle.length === 0 ||
+    artifactTitle === defaultTitle ||
+    artifactTitle === lastDocTitle;
+  return {
+    renameTo: titleFollowsDoc ? nextDocTitle : null,
+    lastDocTitle: nextDocTitle,
+  };
+}
+
+/**
  * Notion-style title inheritance for hand-created artifacts: while the
  * artifact's title still *follows* the document, editing the doc's leading
  * `# ` heading renames the artifact, so the canvas tab / sidebar / breadcrumb
@@ -98,24 +149,22 @@ export function useArtifactDocTitleFollow(params: {
 
     const onUpdate = ({ transaction }: EditorEvents["update"]): void => {
       if (!transaction.docChanged) return;
-      const nextDocTitle = leadingDocTitle(editor);
-      const prevDocTitle = lastDocTitle;
-      lastDocTitle = nextDocTitle;
-      if (nextDocTitle === null || nextDocTitle === prevDocTitle) return;
       const state = handle.store.getState();
       const artifact = Object.hasOwn(state.artifacts.byId, artifactId)
         ? state.artifacts.byId[artifactId]
         : null;
-      if (artifact === null || !artifact.createdManually) return;
-      if (artifact.title === nextDocTitle) return;
-      const titleFollowsDoc =
-        artifact.title.length === 0 ||
-        artifact.title === defaultTitle ||
-        artifact.title === prevDocTitle;
-      if (!titleFollowsDoc) return;
-      state.renameArtifact(artifactId, nextDocTitle);
-      renameArtifactInTab(viewTabId, artifactId, nextDocTitle);
-      pendingPersistTitle = nextDocTitle;
+      const result = nextTitleFollow({
+        nextDocTitle: leadingDocTitle(editor),
+        lastDocTitle,
+        artifactTitle: artifact?.title ?? "",
+        defaultTitle,
+        createdManually: artifact?.createdManually ?? false,
+      });
+      lastDocTitle = result.lastDocTitle;
+      if (result.renameTo === null) return;
+      state.renameArtifact(artifactId, result.renameTo);
+      renameArtifactInTab(viewTabId, artifactId, result.renameTo);
+      pendingPersistTitle = result.renameTo;
       if (persistTimer !== null) window.clearTimeout(persistTimer);
       persistTimer = window.setTimeout(
         flushPersist,
