@@ -104,6 +104,7 @@ function artifact(id: string, title: string): ArtifactProjection {
     createdAt: 0,
     updatedAt: 0,
     status: null,
+    createdManually: false,
   };
 }
 

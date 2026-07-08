@@ -56,7 +56,16 @@ import {
   shouldHandleArtifactEditorBackgroundFocus,
 } from "./artifact-editor-background-focus";
 import { createArtifactEditorFindAdapter } from "../tile-find/artifact-editor-find-adapter";
+import { seedArtifactTitleHeading } from "./artifact-editor-seed";
+import { useArtifactDocTitleFollow } from "./use-artifact-doc-title-follow";
 import { useCollabTileEditor } from "./use-collab-tile-editor";
+
+/**
+ * Hint shown inside the empty leading title heading of a freshly seeded
+ * hand-created artifact. Kind-agnostic - the body hint below already carries
+ * the per-kind guidance.
+ */
+const ARTIFACT_TITLE_PLACEHOLDER = "Untitled";
 
 interface CollabTileBodyProps {
   readonly node: EpicNodeRef;
@@ -244,21 +253,38 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
     onCommentShortcut,
     anchorScope: commentsSupported ? { epicId, artifactId: node.id } : null,
     placeholderText: hasChildren ? "" : kindPlaceholder,
+    titlePlaceholderText: ARTIFACT_TITLE_PLACEHOLDER,
   });
 
-  // One-shot focus handoff from the create flows: when this tile exists
-  // because the user just created an empty spec/ticket/story/review, drop
-  // the caret at the start of the placeholder line as soon as the editor
-  // mounts. Gated on `isActive` so a user who tabbed away mid-create doesn't
-  // get focus yanked. Emptiness is checked BEFORE consuming the token:
-  // content can land in the Y.Doc ahead of this effect, and a doc that
-  // already has content must not silently burn the request.
+  // Notion-style title inheritance: a hand-created artifact whose title still
+  // follows the doc renames itself from the leading `# ` heading as the user
+  // types, so the tab / sidebar title mirrors the document title.
+  useArtifactDocTitleFollow({
+    editor,
+    epicId,
+    node,
+    viewTabId,
+    editable,
+  });
+
+  // One-shot handoff from the create flows: when this tile exists because the
+  // user just hand-created an empty spec/ticket/story/review, seed the
+  // Notion-style title line (an empty `# ` heading + body paragraph) and drop
+  // the caret into the title so the user types a title first - which the tab
+  // then follows via `useArtifactDocTitleFollow`. Gated on `isActive` so a
+  // user who tabbed away mid-create doesn't get focus yanked. Emptiness is
+  // checked BEFORE consuming the token: content can land in the Y.Doc ahead
+  // of this effect, and a doc that already has content must not silently burn
+  // the request (nor get a stray heading prepended). The token is set only by
+  // the manual "+" create flow on the creating client, so no collaborator
+  // races in a second heading.
   useEffect(() => {
     if (editor === null) return;
     if (!isActive || !editable) return;
     if (!isEpicArtifactKind(node.type)) return;
     if (!editor.isEmpty) return;
     if (!consumeArtifactEditorFocus(node.id, node.instanceId)) return;
+    seedArtifactTitleHeading(editor);
     editor.commands.focus("start");
   }, [editor, isActive, editable, node.id, node.instanceId, node.type]);
 

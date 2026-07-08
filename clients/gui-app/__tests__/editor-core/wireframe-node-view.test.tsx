@@ -32,6 +32,7 @@ function mountWireframeEditor(opts: {
       user,
       onCommentShortcut: null,
       placeholderText: "Start writing…",
+      titlePlaceholderText: "Untitled",
     }),
   });
   editor.commands.insertContent({
