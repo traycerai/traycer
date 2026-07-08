@@ -438,9 +438,15 @@ async function executeFallbackMethodDegrade<
     });
   }
 
-  const targetClientCanonical = clientManifest[targetMethod];
+  const targetClientCanonical = {
+    major: degrade.to.major,
+    minor: degrade.to.minor,
+  };
   const targetHostCanonical = hostManifest[targetMethod];
-  if (targetClientCanonical === undefined || targetHostCanonical === undefined) {
+  if (
+    clientManifest[targetMethod] === undefined ||
+    targetHostCanonical === undefined
+  ) {
     throw new HostRpcError({
       code: "RPC_ERROR",
       message: `Fallback for method '${method}' targets unavailable floor method '${targetMethod}'`,

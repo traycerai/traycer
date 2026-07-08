@@ -196,9 +196,10 @@ function expectTerminalFrame(frame: ClientFrame): ClientFatalErrorFrame {
   return frame;
 }
 
-function openAckWithOptionalHostEcho(
-  version: { readonly major: number; readonly minor: number },
-): HostFrame {
+function openAckWithOptionalHostEcho(version: {
+  readonly major: number;
+  readonly minor: number;
+}): HostFrame {
   return {
     kind: "openAck",
     manifest: {
@@ -210,9 +211,10 @@ function openAckWithOptionalHostEcho(
   };
 }
 
-function openAckWithOnlyOptionalHostEcho(
-  version: { readonly major: number; readonly minor: number },
-): HostFrame {
+function openAckWithOnlyOptionalHostEcho(version: {
+  readonly major: number;
+  readonly minor: number;
+}): HostFrame {
   return {
     kind: "openAck",
     manifest: {},
@@ -906,9 +908,202 @@ describe("WsRpcClient", () => {
         error.fatalDetails?.upgradeGuidance?.hostShouldUpgrade === true
       );
     });
-    expect(sockets[0].sent.map((frame) => frame.kind)).not.toContain(
-      "request",
+    expect(sockets[0].sent.map((frame) => frame.kind)).not.toContain("request");
+  });
+
+  describe("fallback degrade version anchoring", () => {
+    const statusSkewV11 = defineRpcContract({
+      method: "host.status",
+      schemaVersion: { major: 1, minor: 1 } as const,
+      requestSchema: z.object({ verbose: z.boolean() }),
+      responseSchema: z.object({ ready: z.boolean(), detail: z.string() }),
+    });
+
+    const fallbackSkewV10 = defineRpcContract({
+      method: "host.syntheticSkewFallback",
+      schemaVersion: { major: 1, minor: 0 } as const,
+      requestSchema: z.object({ label: z.string() }),
+      responseSchema: z.object({
+        summary: z.string(),
+        detailSeen: z.boolean(),
+      }),
+    });
+
+    const upgradeStatusV10ToV11 = defineUpgradePath<
+      typeof statusV10,
+      typeof statusSkewV11
+    >({
+      from: statusV10.schemaVersion,
+      to: statusSkewV11.schemaVersion,
+      upgradeRequest: () => ({ verbose: false }),
+      upgradeResponse: (response) => ({
+        ready: response.ready,
+        detail: "upgraded",
+      }),
+    });
+
+    const fallbackSkewRegistry = defineFloorAwareVersionedRpcRegistry(
+      ["host.status"] as const,
+      {
+        "host.status": {
+          1: {
+            latestMinor: 1,
+            versions: {
+              0: { contract: statusV10, upgradeFromPreviousVersion: null },
+              1: {
+                contract: statusSkewV11,
+                upgradeFromPreviousVersion: upgradeStatusV10ToV11,
+              },
+            },
+            downgradePathsFromLatest: {},
+          },
+        },
+        "host.syntheticSkewFallback": {
+          degrade: defineFallbackMethodDegrade<
+            typeof fallbackSkewV10,
+            typeof statusV10,
+            "host.status"
+          >({
+            kind: "fallback",
+            to: { method: "host.status", major: 1, minor: 0 },
+            adaptRequest: () => ({}),
+            adaptResponse: (response) => ({
+              summary: response.ready ? "ready" : "not-ready",
+              detailSeen: Object.prototype.hasOwnProperty.call(
+                response,
+                "detail",
+              ),
+            }),
+          }),
+          1: {
+            latestMinor: 0,
+            versions: {
+              0: {
+                contract: fallbackSkewV10,
+                upgradeFromPreviousVersion: null,
+              },
+            },
+            downgradePathsFromLatest: {},
+          },
+        },
+      },
     );
+
+    function makeFallbackSkewClient(options: {
+      readonly factory: IWebSocketFactory;
+      readonly requestId: string;
+    }): WsRpcClient<typeof fallbackSkewRegistry> {
+      const ctx = makeRequestContext("t");
+      return new WsRpcClient<typeof fallbackSkewRegistry>({
+        registry: fallbackSkewRegistry,
+        endpoint: () => mockLocalHostEntry,
+        bearer: () => ctx.credentials,
+        requestId: () => options.requestId,
+        webSocketFactory: options.factory,
+        dialTimeoutMs: 1000,
+        frameTimeoutMs: 1000,
+      });
+    }
+
+    it("anchors fallback at degrade.to when the host has the older target minor", async () => {
+      const { factory, sockets } = makeFactory();
+      const client = makeFallbackSkewClient({
+        factory,
+        requestId: "req-fallback-skew-old-host",
+      });
+
+      const pending = client.request("host.syntheticSkewFallback", {
+        label: "x",
+      });
+      await flush();
+      sockets[0].socket.fireOpen();
+      await flush();
+
+      const openFrame = expectOpenFrame(sockets[0].sent[0]);
+      expect(openFrame.manifest).toEqual({
+        "host.status": { major: 1, minor: 1 },
+      });
+      expect(openFrame.optionalManifest).toEqual({
+        "host.syntheticSkewFallback": { major: 1, minor: 0 },
+      });
+
+      sockets[0].socket.fireMessage({
+        kind: "openAck",
+        manifest: {
+          "host.status": { major: 1, minor: 0 },
+        },
+      });
+      await flush();
+
+      const requestFrame = expectRequestFrame(sockets[0].sent[1]);
+      expect(requestFrame).toEqual({
+        kind: "request",
+        requestId: "req-fallback-skew-old-host",
+        method: "host.status",
+        schemaVersion: { major: 1, minor: 0 },
+        params: {},
+      });
+
+      sockets[0].socket.fireMessage({
+        kind: "response",
+        requestId: "req-fallback-skew-old-host",
+        method: "host.status",
+        schemaVersion: { major: 1, minor: 0 },
+        result: { ready: true },
+        error: null,
+      });
+
+      await expect(pending).resolves.toEqual({
+        summary: "ready",
+        detailSeen: false,
+      });
+    });
+
+    it("anchors fallback at degrade.to when the host has the newer floor minor", async () => {
+      const { factory, sockets } = makeFactory();
+      const client = makeFallbackSkewClient({
+        factory,
+        requestId: "req-fallback-skew-new-host",
+      });
+
+      const pending = client.request("host.syntheticSkewFallback", {
+        label: "x",
+      });
+      await flush();
+      sockets[0].socket.fireOpen();
+      await flush();
+
+      sockets[0].socket.fireMessage({
+        kind: "openAck",
+        manifest: {
+          "host.status": { major: 1, minor: 1 },
+        },
+      });
+      await flush();
+
+      const requestFrame = expectRequestFrame(sockets[0].sent[1]);
+      expect(requestFrame).toEqual({
+        kind: "request",
+        requestId: "req-fallback-skew-new-host",
+        method: "host.status",
+        schemaVersion: { major: 1, minor: 0 },
+        params: {},
+      });
+
+      sockets[0].socket.fireMessage({
+        kind: "response",
+        requestId: "req-fallback-skew-new-host",
+        method: "host.status",
+        schemaVersion: { major: 1, minor: 0 },
+        result: { ready: true },
+        error: null,
+      });
+
+      await expect(pending).resolves.toEqual({
+        summary: "ready",
+        detailSeen: false,
+      });
+    });
   });
 
   // ---- Asymmetric per-method version-on-wire ---------------------------- //

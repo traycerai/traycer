@@ -217,7 +217,6 @@ function completeHandshake(socket: StubStreamWebSocket): void {
     readonly kind: "open";
     readonly token: string;
     readonly manifest: Record<string, { major: number; minor: number }>;
-    readonly optionalManifest?: Record<string, { major: number; minor: number }>;
   };
   socket.fireText({
     kind: "openAck",

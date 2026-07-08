@@ -8,9 +8,6 @@ import {
   checkStreamMethodCompatibility,
 } from "@traycer/protocol/framework/stream-compat";
 import {
-  mergeConnectionManifests,
-} from "@traycer/protocol/framework/index";
-import {
   extractBearerForOpenFrame,
   MissingBearerTokenForOpenFrameError,
   type HostEndpointProvider,
@@ -754,10 +751,7 @@ class StreamSession<
     );
 
     const myManifest = buildStreamManifest(this.config.registry);
-    const theirManifest = mergeConnectionManifests(
-      ackParse.data.manifest,
-      ackParse.data.optionalManifest,
-    );
+    const theirManifest = ackParse.data.manifest;
     const compat = checkStreamMethodCompatibility(
       this.config.registry,
       myManifest,

@@ -122,12 +122,10 @@ function completeHandshake(socket: StubStreamWebSocket): void {
   socket.fireOpen();
   const openParsed = JSON.parse(socket.textSent[0]) as {
     readonly manifest: Record<string, { major: number; minor: number }>;
-    readonly optionalManifest: Record<string, { major: number; minor: number }>;
   };
   socket.fireText({
     kind: "openAck",
     manifest: openParsed.manifest,
-    optionalManifest: openParsed.optionalManifest,
   });
 }
 
