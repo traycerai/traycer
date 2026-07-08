@@ -114,6 +114,11 @@ function formatProviderCurrency(value: number): string {
   return `$${value.toFixed(2)}`;
 }
 
+/** Claude Code reports extra-usage spend/limit values in cents. */
+function formatClaudeExtraUsageCents(value: number): string {
+  return formatProviderCurrency(value / 100);
+}
+
 /** Relative countdown ("Resets in 4h 7m") - ticks on the shared 60s clock. */
 function RelativeResetLine({
   resetsAt,
@@ -588,7 +593,7 @@ function ClaudeExtraUsageRow({
       <MeterRow
         label="Extra usage"
         usedPercent={usedPercent}
-        detail={`${extraUsage.usedCredits.toFixed(2)} / ${extraUsage.monthlyLimit.toFixed(2)}`}
+        detail={`${formatClaudeExtraUsageCents(extraUsage.usedCredits)} / ${formatClaudeExtraUsageCents(extraUsage.monthlyLimit)}`}
       />
     );
   }
