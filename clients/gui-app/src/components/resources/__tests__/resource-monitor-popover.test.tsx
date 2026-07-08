@@ -383,12 +383,25 @@ describe("ResourceMonitorPopover", () => {
                 epicId: "epic-1",
                 ownerId: "term-idle",
               },
-              rootPids: [],
+              rootPids: [900],
               activeProcessName: "idle-shell",
-              processCount: 0,
+              processCount: 1,
               cpuPercent: 77,
               rssBytes: 900 * 1024 * 1024,
-              processes: [],
+              // A bare shell with nothing running under it: its whole tree is a
+              // single process, so the terminal owner row is hidden entirely
+              // while its metrics still fold into the aggregate below.
+              processes: [
+                resourceProcess({
+                  pid: 900,
+                  parentPid: null,
+                  rootPid: 900,
+                  name: "zsh",
+                  command: "/usr/bin/idle-zsh",
+                  cpuPercent: 0,
+                  rssBytes: 4 * 1024 * 1024,
+                }),
+              ],
             }),
           ],
         }),
@@ -398,7 +411,10 @@ describe("ResourceMonitorPopover", () => {
     fireEvent.click(screen.getByRole("button", { name: "Resources" }));
 
     expect(screen.getByText("Terminal Alpha")).not.toBeNull();
+    // The whole terminal owner row is hidden - neither its label nor its lone
+    // shell process renders.
     expect(screen.queryByText("idle-shell")).toBeNull();
+    expect(screen.queryByText("/usr/bin/idle-zsh")).toBeNull();
     expect(screen.getByText("2 open terminals")).not.toBeNull();
     expect(screen.getAllByText("89%").length).toBeGreaterThan(0);
     expect(screen.getAllByText("1000 MB").length).toBeGreaterThan(0);

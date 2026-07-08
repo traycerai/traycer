@@ -733,7 +733,8 @@ function OwnerTreeRow(props: {
   readonly onToggle: () => void;
   readonly onOpen: () => void;
 }) {
-  const hasProcesses = props.row.snapshot.processes.length > 0;
+  const processRows = buildProcessRows(props.row.snapshot.processes);
+  const hasProcesses = processRows.length > 0;
   return (
     <div>
       <div className="group flex items-center transition-colors hover:bg-muted/50">
@@ -784,7 +785,7 @@ function OwnerTreeRow(props: {
       </div>
       {props.collapsed
         ? null
-        : buildProcessRows(props.row.snapshot.processes).map((processRow) => (
+        : processRows.map((processRow) => (
             <ProcessLeafRow
               key={`${processRow.process.rootPid}:${processRow.process.pid}`}
               processRow={processRow}
@@ -1141,7 +1142,10 @@ function ownerKey(
 
 function shouldShowOwnerRow(snapshot: OwnerResourceSnapshotWire): boolean {
   if (snapshot.owner.kind !== "terminal") return true;
-  return snapshot.processCount > 0 || snapshot.processes.length > 0;
+  // A terminal always carries its own shell, so "has a process" is always true
+  // and never filters anything. Show a terminal only once it has a sub-process
+  // worth rendering - an idle shell adds no signal over the aggregate metrics.
+  return buildProcessRows(snapshot.processes).length > 0;
 }
 
 function resourceOwnerKindForNodeType(
@@ -1227,6 +1231,11 @@ function processLeafLabel(
 function buildProcessRows(
   processes: readonly ResourceProcessSnapshotWire[],
 ): ProcessDisplayRow[] {
+  // A lone process - a terminal shell with nothing running under it, or an owner
+  // whose whole tree is a single process - is fully described by its owner row,
+  // so it adds no signal as a child row. Render nothing (and no expand chevron)
+  // and let the owner row stand alone.
+  if (processes.length <= 1) return [];
   const byPid = processByPid(processes);
   return processes.flatMap((process): ProcessDisplayRow[] => {
     const depth = processDepth(process, byPid);
