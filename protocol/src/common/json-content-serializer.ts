@@ -139,8 +139,27 @@ function renderableMarks(
  * node's mark set, regardless of its position there: ProseMirror stores
  * marks sorted by schema rank, so `[italic]` followed by `[bold, italic]`
  * is a continuous italic span gaining bold, not an italic/bold swap.
+ *
+ * Newly opened marks nest by continuation length - a mark that spans more
+ * of the remaining run opens first (outermost). Without this, `_**b** i_`
+ * would open bold outside italic (schema-rank order), and bold ending
+ * after "b" would force italic closed and reopened, doubling delimiters.
  */
 function serializeTextRun(nodes: JsonContent[]): string {
+  const textNodes = nodes.filter((node) => Boolean(node.text));
+  const nodeMarks = textNodes.map((node) => renderableMarks(node.marks));
+
+  const continuation = (key: string, start: number): number => {
+    let end = start;
+    while (
+      end < nodeMarks.length &&
+      nodeMarks[end].some((mark) => mark.key === key)
+    ) {
+      end++;
+    }
+    return end - start;
+  };
+
   let out = "";
   let open: RenderableMark[] = [];
 
@@ -151,9 +170,8 @@ function serializeTextRun(nodes: JsonContent[]): string {
     open = open.slice(0, depth);
   };
 
-  for (const node of nodes) {
-    if (!node.text) continue;
-    const marks = renderableMarks(node.marks);
+  textNodes.forEach((node, index) => {
+    const marks = nodeMarks[index];
     const nextKeys = new Set(marks.map((mark) => mark.key));
 
     let keep = 0;
@@ -171,14 +189,22 @@ function serializeTextRun(nodes: JsonContent[]): string {
     }
 
     closeDownTo(keep);
-    for (const mark of marks) {
-      if (!keptKeys.has(mark.key)) {
-        out += mark.open;
-        open.push(mark);
-      }
+
+    const toOpen = marks
+      .filter((mark) => !keptKeys.has(mark.key))
+      .sort(
+        (a, b) => continuation(b.key, index) - continuation(a.key, index),
+      );
+    const ordered = [
+      ...toOpen.filter((mark) => mark.type !== "code"),
+      ...toOpen.filter((mark) => mark.type === "code"),
+    ];
+    for (const mark of ordered) {
+      out += mark.open;
+      open.push(mark);
     }
-    out += node.text;
-  }
+    out += node.text ?? "";
+  });
 
   closeDownTo(0);
   return out;

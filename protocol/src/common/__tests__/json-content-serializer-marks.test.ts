@@ -83,6 +83,30 @@ describe("inline mark serialization across text-node boundaries", () => {
     expect(toMarkdown(doc)).toBe("*a **b `c` d** e*");
   });
 
+  it("keeps an inner mark open when an outer mark ends before it", () => {
+    // `_**b** i_`: bold ends after "b" but italic continues. Continuation
+    // ordering opens italic outermost, so bold closes without forcing an
+    // italic close/reopen (which would double the delimiters).
+    const doc = paragraphDoc([
+      text("b", [{ type: "bold" }, { type: "italic" }]),
+      text(" i", [{ type: "italic" }]),
+    ]);
+
+    expect(toMarkdown(doc)).toBe("***b** i*");
+  });
+
+  it("keeps a link continuous when a nested bold ends before it", () => {
+    const doc = paragraphDoc([
+      text("b", [
+        { type: "bold" },
+        { type: "link", attrs: { href: "http://example.com" } },
+      ]),
+      text(" i", [{ type: "link", attrs: { href: "http://example.com" } }]),
+    ]);
+
+    expect(toMarkdown(doc)).toBe("[**b** i](http://example.com)");
+  });
+
   it("closes and reopens a code mark when a new mark starts inside it", () => {
     // Nothing may open inside inline code - markdown renders nested
     // delimiters literally - so the code mark closes and reopens innermost.
