@@ -164,6 +164,57 @@ describe("buildAgentActivityFromHookCommand", () => {
     });
   });
 
+  it("reads stdin for an env-identified opencode hook (root-session form)", async () => {
+    stubStdin({
+      isTTY: false,
+      chunks: [JSON.stringify({ session_id: "ses-oc-live-2" })],
+    });
+    const fn = buildAgentActivityFromHookCommand({
+      provider: "opencode",
+      event: "start",
+      epicId: null,
+      agentId: null,
+      harnessSessionId: null,
+    });
+    await fn(makeCtx());
+
+    expect(rpcMock).toHaveBeenCalledWith("agent.tui.recordActivity", {
+      epicId: "epic-1",
+      tuiAgentId: "agent-1",
+      harnessSessionId: null,
+      harnessId: "opencode",
+      event: "start",
+      observedHarnessSessionId: "ses-oc-live-2",
+    });
+  });
+
+  it("never reads stdin for a session-id-keyed opencode hook", async () => {
+    // The shared-server plugin instance identifies the agent by session id and
+    // never pipes a payload; a stray one must not become an observed id (the
+    // host refuses resyncs from session-id-keyed requests anyway).
+    stubStdin({
+      isTTY: false,
+      chunks: [JSON.stringify({ session_id: "should-be-ignored" })],
+    });
+    const fn = buildAgentActivityFromHookCommand({
+      provider: "opencode",
+      event: "stop",
+      epicId: null,
+      agentId: null,
+      harnessSessionId: "ses-oc-1",
+    });
+    await fn(makeCtx());
+
+    expect(rpcMock).toHaveBeenCalledWith("agent.tui.recordActivity", {
+      epicId: null,
+      tuiAgentId: null,
+      harnessSessionId: "ses-oc-1",
+      harnessId: "opencode",
+      event: "stop",
+      observedHarnessSessionId: null,
+    });
+  });
+
   it("sends a null observed id when the payload has no session_id", async () => {
     stubStdin({
       isTTY: false,

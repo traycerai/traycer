@@ -164,13 +164,37 @@ describe("buildAgentSessionObservedFromHookCommand", () => {
     expect(result.data).toEqual({ accepted: false, reason: "no-session" });
   });
 
-  it("noops for a non-claude provider without reading its stdin payload", async () => {
+  it("resyncs the observed opencode root-session id too", async () => {
+    stubStdin({
+      isTTY: false,
+      chunks: [JSON.stringify({ session_id: "ses-oc-fresh-1" })],
+    });
+    const fn = buildAgentSessionObservedFromHookCommand({
+      provider: "opencode",
+      epicId: null,
+      agentId: null,
+    });
+    const result = await fn(makeCtx());
+
+    expect(rpcMock).toHaveBeenCalledWith("agent.tui.recordActivity", {
+      epicId: "epic-1",
+      tuiAgentId: "agent-1",
+      harnessSessionId: null,
+      harnessId: "opencode",
+      event: "resync",
+      observedHarnessSessionId: "ses-oc-fresh-1",
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.data).toEqual({ accepted: true, reason: null });
+  });
+
+  it("noops for a non-resync provider without reading its stdin payload", async () => {
     stubStdin({
       isTTY: false,
       chunks: [JSON.stringify({ session_id: "ignored" })],
     });
     const fn = buildAgentSessionObservedFromHookCommand({
-      provider: "opencode",
+      provider: "codex",
       epicId: null,
       agentId: null,
     });

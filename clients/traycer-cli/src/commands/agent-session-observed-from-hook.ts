@@ -24,25 +24,27 @@ type NoopReason =
 
 /**
  * `traycer agent session-observed-from-hook --provider <provider>` - invoked
- * by the Claude Code `SessionStart` hook. It reports the live `session_id`
- * (stamped on the hook's stdin payload) to the host so the stored
- * `harnessSessionId` resyncs to whatever the user currently sees in the PTY.
+ * by the Claude Code `SessionStart` hook and by the OpenCode plugin when the
+ * TUI's sighted root session changes. It reports the live session id (stamped
+ * on the hook's stdin payload) to the host so the stored `harnessSessionId`
+ * resyncs to whatever the user currently sees in the PTY.
  *
  * This closes the gap the `start`/`stop` activity hooks leave open: when the
- * user rewinds/forks (Esc-Esc, `/clear`, fork-after-`/btw`) then immediately
- * closes or forks the tab WITHOUT another prompt, `SessionStart` still fires at
- * the drift moment and pushes the fresh id. It is deliberately NOT an activity
- * edge - it rides `agent.tui.recordActivity@1.1` with `event: "resync"`, which
- * the host resolver treats as a pure session write-back that never touches the
- * activity oracle. (A dedicated CLI command keeps the activity command clean; a
- * new RPC method name is impossible - it would fatally break the frozen `/rpc`
- * handshake against a shipped v1.0 host.)
+ * user rewinds/forks/switches sessions then immediately closes or forks the
+ * tab WITHOUT another prompt, this still fires at the drift moment and pushes
+ * the fresh id. It is deliberately NOT an activity edge - it rides
+ * `agent.tui.recordActivity@1.1` with `event: "resync"`, which the host
+ * resolver treats as a pure session write-back that never touches the
+ * activity oracle. (A dedicated CLI command keeps the activity command clean;
+ * a new RPC method name is impossible - it would fatally break the frozen
+ * `/rpc` handshake against a shipped v1.0 host.)
  *
  * Like the other hook commands it is intentionally lenient: an unknown
  * provider, missing `TRAYCER_EPIC_ID` / `TRAYCER_AGENT_ID`, an unreadable
  * `session_id`, or a host-not-running condition all exit cleanly (exit 0,
- * `accepted: false`) with no stderr noise. Only Claude drives resync, so a
- * non-Claude provider reads no id and no-ops.
+ * `accepted: false`) with no stderr noise. Only Claude and OpenCode drive
+ * resync (Codex ships no hook surface), so other providers read no id and
+ * no-op.
  */
 export function buildAgentSessionObservedFromHookCommand(opts: {
   readonly provider: string;
@@ -60,11 +62,14 @@ export function buildAgentSessionObservedFromHookCommand(opts: {
       return noop("missing-context");
     }
 
-    // Resync is Claude-only (only Claude stamps a resumable id and only its
-    // record is registry-safe to rewrite). For any other provider there is
-    // nothing to observe, so we skip the stdin read and no-op.
+    // Resync providers: Claude (SessionStart pipes the live id) and OpenCode
+    // (the per-TUI plugin pipes the sighted root-session id; the host rekeys
+    // its session registry in lockstep). Codex ships no hook surface; for any
+    // other provider there is nothing to observe, so skip the read and no-op.
     const observedHarnessSessionId =
-      harnessId === "claude" ? await readObservedHarnessSessionId() : null;
+      harnessId === "claude" || harnessId === "opencode"
+        ? await readObservedHarnessSessionId()
+        : null;
     if (observedHarnessSessionId === null) {
       return noop("no-session");
     }
