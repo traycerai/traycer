@@ -1,4 +1,10 @@
-import { useMemo, useRef, useState, useSyncExternalStore } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import type { MouseEvent, PointerEvent } from "react";
 import { useNavigate, type UseNavigateResult } from "@tanstack/react-router";
 import { v4 as uuidv4 } from "uuid";
@@ -36,6 +42,7 @@ import {
   useGlobalResourceProjection,
   type GlobalResourceEpicEntry,
 } from "@/stores/resources/resources-registry";
+import { useTitleBarDragStore } from "@/stores/layout/title-bar-drag-store";
 import { GlobalResourcesStreamMount } from "@/providers/resources-stream-mount";
 import type {
   AppResourceUsage,
@@ -165,6 +172,15 @@ interface HiddenProcessRow {
 
 export function ResourceMonitorPopover(props: ResourceMonitorPopoverProps) {
   const [open, setOpen] = useState(false);
+  const setTitleBarDragSuppressed = useTitleBarDragStore(
+    (state) => state.setSuppressed,
+  );
+  // While the panel is open, let the header drop its title-bar drag regions so a
+  // click on the (otherwise event-swallowing) drag area dismisses the popover.
+  useEffect(() => {
+    setTitleBarDragSuppressed("resource-monitor", open);
+    return () => setTitleBarDragSuppressed("resource-monitor", false);
+  }, [open, setTitleBarDragSuppressed]);
 
   return (
     <>

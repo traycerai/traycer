@@ -20,6 +20,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { ResourcesStreamMount } from "@/providers/resources-stream-mount";
 import { __setResourcesStreamClientFactoryForTests } from "@/providers/resources-stream-factory-override";
 import { resourcesRegistry } from "@/stores/resources/resources-registry";
+import { useTitleBarDragStore } from "@/stores/layout/title-bar-drag-store";
 
 type MockEpicIntentInput = Readonly<Record<string, unknown>>;
 type MockEpicIntent = MockEpicIntentInput & { readonly kind: "epic" };
@@ -257,6 +258,7 @@ afterEach(() => {
   canvasMock.resolveTargetTabForEpic.mockClear();
   __setResourcesStreamClientFactoryForTests(null);
   resourcesRegistry.disposeAll();
+  useTitleBarDragStore.setState({ suppressors: new Set() });
 });
 
 describe("ResourceMonitorPopover", () => {
@@ -418,6 +420,32 @@ describe("ResourceMonitorPopover", () => {
     expect(screen.getByText("2 open terminals")).not.toBeNull();
     expect(screen.getAllByText("89%").length).toBeGreaterThan(0);
     expect(screen.getAllByText("1000 MB").length).toBeGreaterThan(0);
+  });
+
+  it("suppresses title-bar dragging only while the panel is open", () => {
+    const stub = installStubFactory();
+
+    render(
+      <TooltipProvider>
+        <ResourcesStreamMount epicId="epic-1" />
+        <ResourceMonitorPopover className={undefined} />
+      </TooltipProvider>,
+    );
+
+    act(() => {
+      stub.emit().onSnapshot(projection({ owners: [owner({})] }));
+    });
+
+    const isSuppressed = () =>
+      useTitleBarDragStore.getState().suppressors.has("resource-monitor");
+
+    expect(isSuppressed()).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    expect(isSuppressed()).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    expect(isSuppressed()).toBe(false);
   });
 
   it("keeps the resources panel open when clicking inside it to dismiss the sort menu", async () => {
