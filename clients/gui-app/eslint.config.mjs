@@ -13,7 +13,10 @@ import pluginQuery from "@tanstack/eslint-plugin-query";
 import pluginRouter from "@tanstack/eslint-plugin-router";
 import { traycerTypeSafetyRestrictions } from "../../eslint/traycer-type-safety-rules.mjs";
 import { traycerClientsImportBoundaryRestrictions } from "../../eslint/traycer-clients-import-boundary-rules.mjs";
-import { nestedFocusBoundaryRestrictions } from "../../eslint/traycer-nested-focus-boundary-rules.mjs";
+import {
+  nestedFocusBoundaryRestrictions,
+  tabNavigationStoreActionRestrictions,
+} from "../../eslint/traycer-nested-focus-boundary-rules.mjs";
 
 // Do not subscribe to the entire Zustand store - reused across the base rules
 // and the overrides that still need to ban it.
@@ -55,23 +58,12 @@ const reactForwardRefCallBan = {
   message:
     "React 19 treats refs as regular props. Type and destructure a `ref` prop instead of wrapping the component in React.forwardRef.",
 };
-const setActiveTabDirectCallBan = {
-  selector:
-    "CallExpression[callee.type='MemberExpression'][callee.property.name='setActiveTab']",
-  message:
-    "Do not call setActiveTab directly - route through navigateToTabIntent in lib/tab-navigation.ts so every entry point performs the same activate-then-navigate dance.",
-};
-const setActiveDraftDirectCallBan = {
-  selector:
-    "CallExpression[callee.type='MemberExpression'][callee.property.name='setActiveDraft']",
-  message:
-    "Do not call setActiveDraft directly - route through navigateToTabIntent in lib/tab-navigation.ts so every entry point performs the same activate-then-navigate dance.",
-};
 const epicTabRouteConstructionBan = {
   selector: "CallExpression[callee.name='epicTabRoute']",
   message:
     "Do not construct epicTabRoute() at the call site - pass an `existingEpicTabIntent({...})` (or similar TabNavigationIntent) to navigateToTabIntent; the route shape is owned by lib/tab-navigation.ts and lib/routes.ts.",
 };
+const tabNavigationStoreActionBans = tabNavigationStoreActionRestrictions([]);
 
 // Every general-purpose app file gets these regardless of the nested-focus-
 // boundary allowlist below - overrides that scope out a boundary action must
@@ -83,8 +75,7 @@ const generalCustomSyntaxRestrictions = [
   forwardRefImportBan,
   forwardRefCallBan,
   reactForwardRefCallBan,
-  setActiveTabDirectCallBan,
-  setActiveDraftDirectCallBan,
+  ...tabNavigationStoreActionBans,
   epicTabRouteConstructionBan,
 ];
 
@@ -244,6 +235,27 @@ export default tseslint.config(
         "error",
         ...traycerTypeSafetyRestrictions,
         noFullStoreSubscription,
+      ],
+    },
+  },
+  {
+    // Router -> store synchronization direction for an already-committed epic
+    // route. This is the inverse of navigateToTabIntent's entry-point seam,
+    // so it may read the store action directly while the rest of the app may
+    // not.
+    files: ["src/routes/epic-tab-route-components.tsx"],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        ...traycerTypeSafetyRestrictions,
+        noFullStoreSubscription,
+        ...generalCustomSyntaxRestrictions.filter(
+          (restriction) => !tabNavigationStoreActionBans.includes(restriction),
+        ),
+        ...tabNavigationStoreActionRestrictions([
+          "useEpicCanvasStore.setActiveTab",
+        ]),
+        ...nestedFocusBoundaryRestrictions([]),
       ],
     },
   },

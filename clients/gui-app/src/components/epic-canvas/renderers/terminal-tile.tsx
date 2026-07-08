@@ -9,13 +9,11 @@ import {
   type TerminalCreatePayload,
 } from "@/hooks/agent/use-terminal-tile-bootstrap";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
-import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import {
   useTerminalSessionRecovery,
   type TerminalSessionRecovery,
 } from "@/hooks/terminal/use-terminal-session-recovery";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
-import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type {
   TerminalDataWriter,
   TerminalSessionStoreHandle,
@@ -25,6 +23,7 @@ import { TerminalDeadTileBanner } from "./dead-tile-banner";
 import { TerminalConnectionOverlay } from "./terminal-connection-overlay";
 import { resolveTerminalOverlayState } from "./terminal-connection-overlay-state";
 import { Button } from "@/components/ui/button";
+import { useCloseCanvasTileWithNestedFocus } from "./use-close-canvas-tile-with-nested-focus";
 
 export interface TerminalTileProps {
   readonly node: EpicTerminalRef;
@@ -272,33 +271,4 @@ function TerminalLive(props: TerminalLiveProps) {
       </div>
     </div>
   );
-}
-
-function useCloseCanvasTileWithNestedFocus(
-  viewTabId: string,
-  paneId: string,
-  tileInstanceId: string,
-): () => void {
-  const navigateNested = useEpicNestedFocusNavigation();
-  const prepareCloseCanvasTabFocusTarget = useEpicCanvasStore(
-    (s) => s.prepareCloseCanvasTabFocusTarget,
-  );
-
-  return useCallback(() => {
-    const epicId =
-      useEpicCanvasStore.getState().tabsById[viewTabId]?.epicId ?? null;
-    const prepare = () =>
-      prepareCloseCanvasTabFocusTarget(viewTabId, paneId, tileInstanceId);
-    if (epicId === null) {
-      prepare();
-      return;
-    }
-    navigateNested(epicId, viewTabId, prepare);
-  }, [
-    navigateNested,
-    paneId,
-    prepareCloseCanvasTabFocusTarget,
-    tileInstanceId,
-    viewTabId,
-  ]);
 }

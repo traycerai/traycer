@@ -28,10 +28,7 @@ export const Route = createFileRoute("/epics/$epicId/$tabId")({
       to: "/epics/$epicId/$tabId",
       params: { epicId: params.epicId, tabId: fallback },
       search: {
-        focusedAt: search.focusedAt,
-        focusArtifactId: search.focusArtifactId,
-        focusThreadId: search.focusThreadId,
-        migrationSource: search.migrationSource,
+        ...search,
         focusPaneId: undefined,
         focusTileInstanceId: undefined,
       },

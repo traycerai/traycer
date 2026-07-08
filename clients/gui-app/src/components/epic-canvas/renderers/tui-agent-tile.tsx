@@ -24,13 +24,11 @@ import {
   type TerminalCreatePayload,
 } from "@/hooks/agent/use-terminal-tile-bootstrap";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
-import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import {
   useTerminalSessionRecovery,
   type TerminalSessionRecovery,
 } from "@/hooks/terminal/use-terminal-session-recovery";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
-import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { beginTerminalLoad } from "@/lib/perf/terminal-load-perf";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { useAgentStartTerminalSession } from "@/hooks/agent/use-prepare-tui-launch-mutation";
@@ -75,6 +73,7 @@ import {
   type WorktreeStagingKey,
 } from "@/stores/worktree/worktree-intent-staging-store";
 import { TerminalAgentForkDialog } from "./terminal-agent-fork-dialog";
+import { useCloseCanvasTileWithNestedFocus } from "./use-close-canvas-tile-with-nested-focus";
 
 const WORKTREE_SETUP_ERROR_CODES: ReadonlyArray<string> = [
   "WORKTREE_SETUP_FAILED",
@@ -1104,33 +1103,4 @@ function TerminalAgentLive(props: TerminalAgentLiveProps) {
       ) : null}
     </>
   );
-}
-
-function useCloseCanvasTileWithNestedFocus(
-  viewTabId: string,
-  paneId: string,
-  tileInstanceId: string,
-): () => void {
-  const navigateNested = useEpicNestedFocusNavigation();
-  const prepareCloseCanvasTabFocusTarget = useEpicCanvasStore(
-    (s) => s.prepareCloseCanvasTabFocusTarget,
-  );
-
-  return useCallback(() => {
-    const epicId =
-      useEpicCanvasStore.getState().tabsById[viewTabId]?.epicId ?? null;
-    const prepare = () =>
-      prepareCloseCanvasTabFocusTarget(viewTabId, paneId, tileInstanceId);
-    if (epicId === null) {
-      prepare();
-      return;
-    }
-    navigateNested(epicId, viewTabId, prepare);
-  }, [
-    navigateNested,
-    paneId,
-    prepareCloseCanvasTabFocusTarget,
-    tileInstanceId,
-    viewTabId,
-  ]);
 }

@@ -107,13 +107,7 @@ export function useEpicRouteSynchronization(
     resolvedNestedRouteTarget,
     currentNestedTarget,
   );
-  const routeCanHonorLegacyArtifactFocus =
-    !nestedFocusEnabled ||
-    nestedRouteTarget === null ||
-    (focusArtifactId !== undefined &&
-      nestedRouteTargetApplied &&
-      activeArtifactId === focusArtifactId);
-  const routeCanHonorLegacyThreadFocus =
+  const legacyFocusHonorableAfterArtifactActivation =
     !nestedFocusEnabled ||
     nestedRouteTarget === null ||
     (focusArtifactId !== undefined &&
@@ -215,7 +209,10 @@ export function useEpicRouteSynchronization(
 
   useEffect(() => {
     if (!snapshotLoaded) return;
-    if (focusArtifactId !== undefined && !routeCanHonorLegacyArtifactFocus) {
+    if (
+      focusArtifactId !== undefined &&
+      !legacyFocusHonorableAfterArtifactActivation
+    ) {
       return;
     }
     const target = focusArtifactId ?? persistedFocus;
@@ -226,7 +223,7 @@ export function useEpicRouteSynchronization(
     focusArtifactId,
     focusedAt,
     persistedFocus,
-    routeCanHonorLegacyArtifactFocus,
+    legacyFocusHonorableAfterArtifactActivation,
     handle,
     epicId,
     tabId,
@@ -237,7 +234,7 @@ export function useEpicRouteSynchronization(
   useEffect(() => {
     if (!snapshotLoaded) return;
     if (focusThreadId === undefined) return;
-    if (!routeCanHonorLegacyThreadFocus) {
+    if (!legacyFocusHonorableAfterArtifactActivation) {
       return;
     }
     handle.store.getState().setLastFocusedThreadId(focusThreadId);
@@ -245,7 +242,7 @@ export function useEpicRouteSynchronization(
     snapshotLoaded,
     focusThreadId,
     focusedAt,
-    routeCanHonorLegacyThreadFocus,
+    legacyFocusHonorableAfterArtifactActivation,
     handle,
     epicId,
     tabId,
@@ -267,7 +264,7 @@ export function useEpicRouteSynchronization(
     if (!snapshotLoaded) return;
     if (focusThreadId === undefined) return;
     if (focusArtifactId === undefined) return;
-    if (!routeCanHonorLegacyThreadFocus) return;
+    if (!legacyFocusHonorableAfterArtifactActivation) return;
     if (activeArtifactId !== focusArtifactId) return;
     const key = `${epicId}|${focusedAt ?? ""}|${focusThreadId}`;
     if (lastDeepLinkRef.current === key) return;
@@ -281,7 +278,7 @@ export function useEpicRouteSynchronization(
     focusArtifactId,
     focusedAt,
     activeArtifactId,
-    routeCanHonorLegacyThreadFocus,
+    legacyFocusHonorableAfterArtifactActivation,
     epicId,
     tabId,
   ]);

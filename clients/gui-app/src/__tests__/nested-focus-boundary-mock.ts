@@ -1,7 +1,7 @@
 import { vi } from "vitest";
-import type { NestedFocusTarget } from "@/lib/epic-nested-focus-route";
+import type { PrepareNestedFocusTarget } from "@/lib/epic-nested-focus-navigation";
 
-export type PrepareNestedFocusTarget = () => NestedFocusTarget | null;
+export type { PrepareNestedFocusTarget };
 
 /**
  * Shared mock for the nested-focus-opener boundary

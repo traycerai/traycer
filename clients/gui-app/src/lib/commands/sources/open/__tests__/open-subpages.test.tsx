@@ -5,6 +5,7 @@ import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
 import type { CommandContext, CommandItem } from "@/lib/commands/types";
 import type { KeybindingRouter } from "@/lib/keybindings/dispatch";
 import type { OpenTileIntoTargetGroupArgs } from "@/lib/commands/actions/open-into-target";
+import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
 import {
   EMPTY_PROJECTED_SLICES,
   type ArtifactProjection,
@@ -187,7 +188,7 @@ import { useArtifactsOpenerItems } from "@/lib/commands/sources/open/artifacts-s
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
 
-const navigateNestedFocusSpy = vi.fn();
+const navigateNestedFocusSpy = vi.fn<NavigateNestedFocus>();
 
 function noopRouter(): KeybindingRouter {
   return {

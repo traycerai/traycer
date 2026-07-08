@@ -134,4 +134,33 @@ describe("navigateNestedFocus", () => {
     expect(target).toBeNull();
     expect(navigate).not.toHaveBeenCalled();
   });
+
+  it("prepares and returns the target without navigating when the current route does not match the tab", () => {
+    const history = createPersistentMemoryHistory(
+      "/epics/epic-1/tab-1",
+      "nested-focus-navigation-cross-route",
+    );
+    const navigate = vi.fn();
+    let prepareCalled = false;
+
+    const target = navigateNestedFocus(
+      {
+        history,
+        navigate,
+        getLocation: (): NestedFocusLocation => ({
+          pathname: "/epics/epic-2/tab-2",
+          search: {},
+        }),
+      },
+      { epicId: "epic-1", tabId: "tab-1" },
+      () => {
+        prepareCalled = true;
+        return { paneId: "pane-1", tileInstanceId: "tile-1" };
+      },
+    );
+
+    expect(prepareCalled).toBe(true);
+    expect(target).toEqual({ paneId: "pane-1", tileInstanceId: "tile-1" });
+    expect(navigate).not.toHaveBeenCalled();
+  });
 });

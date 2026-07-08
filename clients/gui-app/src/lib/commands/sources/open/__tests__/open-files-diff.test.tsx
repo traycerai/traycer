@@ -9,6 +9,7 @@ import type {
 import type { CommandContext, CommandItem } from "@/lib/commands/types";
 import type { KeybindingRouter } from "@/lib/keybindings/dispatch";
 import type { OpenTileIntoTargetGroupArgs } from "@/lib/commands/actions/open-into-target";
+import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
 import { DEFAULT_DIFF_VIEWER_PREFERENCES } from "@/lib/diff/diff-viewer-preferences";
 import { getBasename } from "@/lib/path/cross-platform-path";
 import { useSettingsStore } from "@/stores/settings/settings-store";
@@ -76,7 +77,7 @@ vi.mock("@/stores/command-palette/command-palette-store", () => ({
 import { useFilesOpenerItems } from "@/lib/commands/sources/open/files-subpage";
 import { useDiffOpenerItems } from "@/lib/commands/sources/open/diff-subpage";
 
-const navigateNestedFocusSpy = vi.fn();
+const navigateNestedFocusSpy = vi.fn<NavigateNestedFocus>();
 
 function noopRouter(): KeybindingRouter {
   return {

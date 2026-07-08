@@ -161,6 +161,7 @@ const ROWS: ReadonlyArray<OpenerFixtureRow> = [
       fireEvent.click(row);
     },
     assertFocusWritten: (search) => {
+      expect(search.focusPaneId).toEqual(expect.any(String));
       expect(search.focusTileInstanceId).toEqual(expect.any(String));
     },
   },
@@ -178,6 +179,7 @@ const ROWS: ReadonlyArray<OpenerFixtureRow> = [
       fireEvent.click(button);
     },
     assertFocusWritten: (search) => {
+      expect(search.focusPaneId).toEqual(expect.any(String));
       expect(search.focusTileInstanceId).toEqual(expect.any(String));
     },
   },
@@ -202,6 +204,7 @@ const ROWS: ReadonlyArray<OpenerFixtureRow> = [
       fireEvent.click(row);
     },
     assertFocusWritten: (search) => {
+      expect(search.focusPaneId).toEqual(expect.any(String));
       expect(search.focusTileInstanceId).toEqual(expect.any(String));
     },
   },
@@ -228,6 +231,7 @@ const ROWS: ReadonlyArray<OpenerFixtureRow> = [
       fireEvent.click(button);
     },
     assertFocusWritten: (search) => {
+      expect(search.focusPaneId).toEqual(expect.any(String));
       expect(search.focusTileInstanceId).toEqual(expect.any(String));
     },
   },
