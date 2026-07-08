@@ -920,7 +920,7 @@ function ProcessTreeRow(props: {
     <button
       type="button"
       aria-expanded={expanded}
-      aria-label={expanded ? "Collapse sub-processes" : "Expand sub-processes"}
+      aria-label={`${expanded ? "Collapse" : "Expand"} sub-processes of ${processLabel(process)}`}
       onClick={() => props.onToggleExpand(processRowKey(process))}
       className={cn(
         rowClassName,
