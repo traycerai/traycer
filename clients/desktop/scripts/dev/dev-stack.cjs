@@ -46,6 +46,11 @@ function main() {
     },
   );
 
+  child.on("error", (err) => {
+    console.error(`[dev-stack] failed to start dev stack: ${err.message}`);
+    process.exit(1);
+  });
+
   child.on("exit", (code, signal) => {
     if (signal !== null) {
       process.kill(process.pid, signal);

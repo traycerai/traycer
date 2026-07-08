@@ -95,12 +95,15 @@ if (!existsSync(devSeedPreloadEntry)) {
 
 // Reset the bundle outputs so a stale file from a previous tsc-based build
 // can't shadow the new bundle.
-rmSync(path.dirname(mainOutFile), { recursive: true, force: true });
-rmSync(path.dirname(preloadOutFile), { recursive: true, force: true });
-rmSync(path.dirname(devSeedPreloadOutFile), { recursive: true, force: true });
-mkdirSync(path.dirname(mainOutFile), { recursive: true });
-mkdirSync(path.dirname(preloadOutFile), { recursive: true });
-mkdirSync(path.dirname(devSeedPreloadOutFile), { recursive: true });
+const outDirs = [mainOutFile, preloadOutFile, devSeedPreloadOutFile].map(
+  (outfile) => path.dirname(outfile),
+);
+for (const dir of outDirs) {
+  rmSync(dir, { recursive: true, force: true });
+}
+for (const dir of outDirs) {
+  mkdirSync(dir, { recursive: true });
+}
 
 const sharedConfig = {
   bundle: true,

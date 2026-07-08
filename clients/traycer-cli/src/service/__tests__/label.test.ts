@@ -1,20 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { serviceLabelFor, windowsTaskName } from "../label";
-import { DEV_DESKTOP_SLOT_ENV } from "../../store/dev-desktop-slot";
-
-function withDevDesktopSlot(slot: string, fn: () => void): void {
-  const previous = process.env[DEV_DESKTOP_SLOT_ENV];
-  process.env[DEV_DESKTOP_SLOT_ENV] = slot;
-  try {
-    fn();
-  } finally {
-    if (previous === undefined) {
-      delete process.env[DEV_DESKTOP_SLOT_ENV];
-    } else {
-      process.env[DEV_DESKTOP_SLOT_ENV] = previous;
-    }
-  }
-}
+import { withDevDesktopSlot } from "@traycer-clients/shared/test-fixtures/dev-desktop-slot";
 
 describe("serviceLabelFor", () => {
   it("uses the production service label for production", () => {
@@ -24,6 +10,7 @@ describe("serviceLabelFor", () => {
       id: "ai.traycer.host",
       displayName: "Traycer Host",
       environment: "production",
+      devSlot: null,
     });
     expect(windowsTaskName(label)).toBe("\\Traycer\\Host");
   });
@@ -35,6 +22,7 @@ describe("serviceLabelFor", () => {
       id: "ai.traycer.host.dev",
       displayName: "Traycer Host (Dev)",
       environment: "dev",
+      devSlot: null,
     });
     expect(windowsTaskName(label)).toBe("\\Traycer\\Host-Dev");
   });
@@ -47,6 +35,7 @@ describe("serviceLabelFor", () => {
         id: "ai.traycer.host.dev.worktree-slot",
         displayName: "Traycer Host (Dev worktree-slot)",
         environment: "dev",
+        devSlot: "worktree-slot",
       });
       expect(windowsTaskName(label)).toBe("\\Traycer\\Host-Dev-Worktree-slot");
     });
@@ -59,6 +48,7 @@ describe("serviceLabelFor", () => {
       id: "ai.traycer.host.staging",
       displayName: "Traycer Host (Staging)",
       environment: "staging",
+      devSlot: null,
     });
     expect(windowsTaskName(label)).toBe("\\Traycer\\Host-Staging");
   });

@@ -3,7 +3,7 @@ import { shell, session, type Session, type WebContents } from "electron";
 import { log } from "./logger";
 import { CONTENT_SECURITY_POLICY } from "../../shared/content-security-policy";
 import { isDevBuild } from "../../config";
-import { devRendererOriginFromEnv } from "../dev-desktop-runtime";
+import { devRendererOriginFromEnv } from "../../ipc-contracts/dev-renderer-origin";
 
 const ALLOWED_EXTERNAL_SCHEMES: ReadonlySet<string> = new Set([
   "http:",

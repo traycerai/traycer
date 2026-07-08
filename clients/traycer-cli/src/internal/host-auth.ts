@@ -113,12 +113,12 @@ export const cliBearerStore: BearerStore = {
     });
   },
   clear: async () => {
+    await deleteCredentials();
     const logger = createCliLogger(config.environment);
     const devDesktopSlot = devDesktopSlotForEnvironment(
       config.environment,
       process.env,
     );
-    await deleteCredentials();
     logger.warn("Bearer store cleared credentials", {
       environment: config.environment,
       devDesktopSlot,

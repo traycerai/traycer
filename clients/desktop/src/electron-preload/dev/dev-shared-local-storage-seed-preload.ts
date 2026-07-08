@@ -1,5 +1,5 @@
 import { ipcRenderer } from "electron";
-import { devRendererOriginFromEnv } from "../../electron-main/dev-desktop-runtime";
+import { devRendererOriginFromEnv } from "../../ipc-contracts/dev-renderer-origin";
 import {
   DEV_SHARED_LOCAL_STORAGE_SEEDED_MARKER_KEY,
   DEV_SHARED_LOCAL_STORAGE_SYNC_CHANNEL,

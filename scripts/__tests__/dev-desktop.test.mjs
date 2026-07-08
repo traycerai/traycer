@@ -163,22 +163,30 @@ describe("dev-desktop same-slot live guard", () => {
     const fs = await import("node:fs");
     const os = await import("node:os");
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dev-desktop-hosthome-"));
-    expect(devDesktop.readHostPidMetadata(dir)).toBeNull();
-    fs.writeFileSync(path.join(dir, "pid.json"), "not json");
-    expect(devDesktop.readHostPidMetadata(dir)).toBeNull();
-    fs.rmSync(dir, { recursive: true, force: true });
+    try {
+      expect(devDesktop.readHostPidMetadata(dir)).toBeNull();
+      fs.writeFileSync(path.join(dir, "pid.json"), "not json");
+      expect(devDesktop.readHostPidMetadata(dir)).toBeNull();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("readHostPidMetadata returns the parsed pid when present and well-formed", async () => {
     const fs = await import("node:fs");
     const os = await import("node:os");
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dev-desktop-hosthome-"));
-    fs.writeFileSync(
-      path.join(dir, "pid.json"),
-      JSON.stringify({ pid: process.pid }),
-    );
-    expect(devDesktop.readHostPidMetadata(dir)).toEqual({ pid: process.pid });
-    fs.rmSync(dir, { recursive: true, force: true });
+    try {
+      fs.writeFileSync(
+        path.join(dir, "pid.json"),
+        JSON.stringify({ pid: process.pid }),
+      );
+      expect(devDesktop.readHostPidMetadata(dir)).toEqual({
+        pid: process.pid,
+      });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("assertSlotNotActive is a no-op when no pid.json exists", () => {
@@ -191,25 +199,33 @@ describe("dev-desktop same-slot live guard", () => {
     const fs = await import("node:fs");
     const os = await import("node:os");
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dev-desktop-hosthome-"));
-    fs.writeFileSync(
-      path.join(dir, "pid.json"),
-      JSON.stringify({ pid: 2147483647 }),
-    );
-    expect(() => devDesktop.assertSlotNotActive("my-slot", dir)).not.toThrow();
-    fs.rmSync(dir, { recursive: true, force: true });
+    try {
+      fs.writeFileSync(
+        path.join(dir, "pid.json"),
+        JSON.stringify({ pid: 2147483647 }),
+      );
+      expect(() =>
+        devDesktop.assertSlotNotActive("my-slot", dir),
+      ).not.toThrow();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("assertSlotNotActive throws a clear, actionable error when the slot's host is live", async () => {
     const fs = await import("node:fs");
     const os = await import("node:os");
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dev-desktop-hosthome-"));
-    fs.writeFileSync(
-      path.join(dir, "pid.json"),
-      JSON.stringify({ pid: process.pid }),
-    );
-    expect(() => devDesktop.assertSlotNotActive("my-slot", dir)).toThrow(
-      /already active for slot "my-slot".*--slot/s,
-    );
-    fs.rmSync(dir, { recursive: true, force: true });
+    try {
+      fs.writeFileSync(
+        path.join(dir, "pid.json"),
+        JSON.stringify({ pid: process.pid }),
+      );
+      expect(() => devDesktop.assertSlotNotActive("my-slot", dir)).toThrow(
+        /already active for slot "my-slot".*--slot/s,
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

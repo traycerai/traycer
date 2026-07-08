@@ -6,6 +6,7 @@ import {
   cliHomeDir,
   cliInstallHomeDir,
   cliLockPath,
+  cliLogPath,
   cliManifestPath,
   cliPostFinalizeMarkerPath,
   cliSharedHomeDir,
@@ -17,25 +18,11 @@ import {
   hostStagingRoot,
   traycerHomeDir,
 } from "../paths";
-import { DEV_DESKTOP_SLOT_ENV } from "../dev-desktop-slot";
+import { withDevDesktopSlot } from "@traycer-clients/shared/test-fixtures/dev-desktop-slot";
 
 const TRAYCER_HOME = join(homedir(), ".traycer");
 const CLI_HOME = join(TRAYCER_HOME, "cli");
 const HOST_HOME = join(TRAYCER_HOME, "host");
-
-function withDevDesktopSlot(slot: string, fn: () => void): void {
-  const previous = process.env[DEV_DESKTOP_SLOT_ENV];
-  process.env[DEV_DESKTOP_SLOT_ENV] = slot;
-  try {
-    fn();
-  } finally {
-    if (previous === undefined) {
-      delete process.env[DEV_DESKTOP_SLOT_ENV];
-    } else {
-      process.env[DEV_DESKTOP_SLOT_ENV] = previous;
-    }
-  }
-}
 
 describe("store/paths host helpers", () => {
   it("anchors all paths under the single ~/.traycer root", () => {
@@ -144,6 +131,7 @@ describe("store/paths CLI helpers", () => {
       expect(cliInstallHomeDir("dev")).toBe(slotRoot);
       expect(cliManifestPath("dev")).toBe(join(slotRoot, "manifest.json"));
       expect(cliLockPath("dev")).toBe(join(slotRoot, ".lock"));
+      expect(cliLogPath("dev")).toBe(join(slotRoot, "cli.log"));
       expect(cliPostFinalizeMarkerPath("dev")).toBe(
         join(slotRoot, "post-finalize.json"),
       );

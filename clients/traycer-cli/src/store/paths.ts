@@ -72,8 +72,8 @@ export { cliCredentialsPath } from "@traycer/protocol/config/paths";
 export function cliHomeDir(environment: Environment | undefined): string {
   // Existing non-environment callers (config-store, credentials) treat the
   // CLI home as a shared root. Environment-aware callers (manifest, lock,
-  // post-finalize marker) use `cliInstallHomeDir` below so multi-run dev can
-  // isolate install surfaces without moving shared auth/config state.
+  // log, post-finalize marker) use `cliInstallHomeDir` below so multi-run dev
+  // can isolate install surfaces without moving shared auth/config state.
   if (environment === undefined) return CLI_HOME;
   return environmentSubdir(CLI_HOME, environment);
 }

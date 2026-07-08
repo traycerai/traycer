@@ -13,7 +13,7 @@ import {
 } from "../host-start";
 import type { HostInstallRecord } from "../../manifest/host-install";
 import { hostHomeDir } from "../../store/paths";
-import { DEV_DESKTOP_SLOT_ENV } from "../../store/dev-desktop-slot";
+import { withDevDesktopSlotAsync as withDevDesktopSlot } from "@traycer-clients/shared/test-fixtures/dev-desktop-slot";
 
 // `traycer host start --environment <ch>` is the single supervisor entry
 // point. There is one launch path: read the environment's
@@ -37,23 +37,6 @@ function sampleRecord(executablePath: string): HostInstallRecord {
     sizeBytes: 1234,
     executablePath,
   };
-}
-
-async function withDevDesktopSlot(
-  slot: string,
-  fn: () => Promise<void>,
-): Promise<void> {
-  const previous = process.env[DEV_DESKTOP_SLOT_ENV];
-  process.env[DEV_DESKTOP_SLOT_ENV] = slot;
-  try {
-    await fn();
-  } finally {
-    if (previous === undefined) {
-      delete process.env[DEV_DESKTOP_SLOT_ENV];
-    } else {
-      process.env[DEV_DESKTOP_SLOT_ENV] = previous;
-    }
-  }
 }
 
 describe("resolveHostStartTarget", () => {

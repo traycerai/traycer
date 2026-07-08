@@ -118,4 +118,19 @@ describe("cliBearerStore", () => {
     await cliBearerStore.clear();
     expect(deleteMock).toHaveBeenCalledTimes(1);
   });
+
+  it("regression: still deletes credentials when DEV_DESKTOP_SLOT sanitizes to an unusable slot", async () => {
+    // `devDesktopSlotForEnvironment` throws when DEV_DESKTOP_SLOT is set but
+    // sanitizes to empty - and `createCliLogger` hits that same throw via
+    // `cliLogPath`. Before the fix, both ran before deleting credentials, so
+    // this throw skipped the delete entirely - the one case a caller most
+    // wants `clear()` to succeed on: it never received a usable bearer to
+    // sign out from in the first place.
+    process.env[DEV_DESKTOP_SLOT_ENV] = "!!!";
+    deleteMock.mockResolvedValue(true);
+    await expect(cliBearerStore.clear()).rejects.toThrow(
+      "must contain a usable slot name",
+    );
+    expect(deleteMock).toHaveBeenCalledTimes(1);
+  });
 });

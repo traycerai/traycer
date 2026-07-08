@@ -2,21 +2,7 @@ import { describe, expect, it } from "vitest";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { getHostFsLayout, labelForEnvironment } from "../host-paths";
-import { DEV_DESKTOP_SLOT_ENV } from "../dev-desktop-slot";
-
-function withDevDesktopSlot(slot: string, fn: () => void): void {
-  const previous = process.env[DEV_DESKTOP_SLOT_ENV];
-  process.env[DEV_DESKTOP_SLOT_ENV] = slot;
-  try {
-    fn();
-  } finally {
-    if (previous === undefined) {
-      delete process.env[DEV_DESKTOP_SLOT_ENV];
-    } else {
-      process.env[DEV_DESKTOP_SLOT_ENV] = previous;
-    }
-  }
-}
+import { withDevDesktopSlot } from "@traycer-clients/shared/test-fixtures/dev-desktop-slot";
 
 /**
  * Pin the cross-workspace contract: the desktop runner MUST look for the

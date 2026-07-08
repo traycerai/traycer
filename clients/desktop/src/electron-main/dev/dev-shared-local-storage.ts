@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { ipcMain, session, type WebFrameMain } from "electron";
 import type { Environment } from "../../config";
-import { devRendererOriginFromEnv } from "../dev-desktop-runtime";
+import { devRendererOriginFromEnv } from "../../ipc-contracts/dev-renderer-origin";
 import { devDesktopSlotForEnvironment } from "../host/dev-desktop-slot";
 import { log } from "../app/logger";
 import {

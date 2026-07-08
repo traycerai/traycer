@@ -20,7 +20,7 @@ import { safelyOpenExternal, installNavigationGuard } from "../app/security";
 import { installContextMenu } from "../app/spell-check";
 import { installResponsivenessListeners } from "../app/responsiveness";
 import { buildAppUrl } from "../app/app-protocol";
-import { devRendererUrlFromEnv } from "../dev-desktop-runtime";
+import { devRendererUrlFromEnv } from "../../ipc-contracts/dev-renderer-origin";
 import { minimumWindowSize } from "./window-layout";
 import {
   placementToBrowserWindowBounds,
