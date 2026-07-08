@@ -20,6 +20,7 @@ import { buildAgentSelectionGuideCommand } from "./commands/agent-selection-guid
 import { buildAgentSendCommand } from "./commands/agent-send";
 import { buildAgentTitleFromHookCommand } from "./commands/agent-title-from-hook";
 import { buildAgentTurnEndedFromHookCommand } from "./commands/agent-turn-ended-from-hook";
+import { buildAgentSessionObservedFromHookCommand } from "./commands/agent-session-observed-from-hook";
 import { buildAgentTranscriptCommand } from "./commands/agent-transcript";
 import { buildAgentInboxCommand } from "./commands/agent-inbox";
 import { buildWorkspaceListCommand } from "./commands/workspace-list";
@@ -1305,6 +1306,32 @@ function registerAgentCommands(program: Command): void {
       ),
     (opts) =>
       buildAgentTurnEndedFromHookCommand({
+        provider: typeof opts.provider === "string" ? opts.provider : "",
+        epicId: typeof opts.epicId === "string" ? opts.epicId : null,
+        agentId: typeof opts.agentId === "string" ? opts.agentId : null,
+      }),
+  );
+
+  withRunner(
+    agent
+      .command("session-observed-from-hook", { hidden: true })
+      .description(
+        "Report the live provider session id (read as hook JSON on stdin) so the host resyncs the stored harness session id (Claude SessionStart hook).",
+      )
+      .requiredOption(
+        "--provider <provider>",
+        "Provider hook firing this call: 'claude', 'codex', or 'opencode'",
+      )
+      .option(
+        "--epic-id <id>",
+        "Epic the agent lives in (defaults to $TRAYCER_EPIC_ID)",
+      )
+      .option(
+        "--agent-id <id>",
+        "TUI agent id whose session id to resync (defaults to $TRAYCER_AGENT_ID)",
+      ),
+    (opts) =>
+      buildAgentSessionObservedFromHookCommand({
         provider: typeof opts.provider === "string" ? opts.provider : "",
         epicId: typeof opts.epicId === "string" ? opts.epicId : null,
         agentId: typeof opts.agentId === "string" ? opts.agentId : null,

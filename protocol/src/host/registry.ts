@@ -56,6 +56,8 @@ import {
   agentTuiListHarnessesV10,
   agentTuiPrepareLaunchV10,
   agentTuiRecordActivityV10,
+  agentTuiRecordActivityV11,
+  agentTuiRecordActivityUpgradeV10ToV11,
 } from "@traycer/protocol/host/agent/tui/contracts";
 import {
   commentsListThreadsV10,
@@ -1434,11 +1436,15 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
   },
   "agent.tui.recordActivity": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: agentTuiRecordActivityV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: agentTuiRecordActivityV11,
+          upgradeFromPreviousVersion: agentTuiRecordActivityUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},

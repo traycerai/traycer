@@ -186,9 +186,11 @@ describe("traycer CLI entrypoint registration", () => {
     expect(help).not.toContain("title-from-hook");
     expect(help).not.toContain("activity-from-hook");
     expect(help).not.toContain("turn-ended-from-hook");
+    expect(help).not.toContain("session-observed-from-hook");
     expectCommand(program, ["agent", "title-from-hook"]);
     expectCommand(program, ["agent", "activity-from-hook"]);
     expectCommand(program, ["agent", "turn-ended-from-hook"]);
+    expectCommand(program, ["agent", "session-observed-from-hook"]);
   });
 
   it("agent create exposes --name for a child agent display name", () => {

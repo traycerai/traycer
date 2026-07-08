@@ -1,5 +1,5 @@
 import {
-  recordTuiAgentActivityRequestSchema,
+  recordTuiAgentActivityRequestSchemaV11,
   recordTuiAgentActivityResponseSchema,
 } from "@traycer/protocol/host/agent/tui/unary-schemas";
 import { tuiHarnessIdSchema } from "@traycer/protocol/host/agent/shared";
@@ -10,6 +10,7 @@ import {
   toAgentCliError,
 } from "../internal/host-rpc";
 import { readEpicId, readTuiAgentId } from "../internal/agent-context";
+import { readObservedHarnessSessionId } from "../internal/hook-stdin";
 import { CliError, CLI_ERROR_CODES } from "../runner/errors";
 import type { CommandFn } from "../runner/runner";
 
@@ -21,6 +22,13 @@ type NoopReason =
 /**
  * `traycer agent activity-from-hook` - invoked by provider TUI lifecycle
  * hooks. It reports provider-native turn start/stop edges to the host.
+ *
+ * For Claude, it also piggybacks the live `session_id` (stamped on the hook's
+ * stdin payload) as `observedHarnessSessionId` so the host can resync the
+ * stored `harnessSessionId` when Claude implicitly re-ids its session (Esc-Esc
+ * rewind, `/clear`, fork-after-`/btw`, …). Only Claude stamps a usable id, so
+ * stdin is read for that provider alone; a missing/slow/garbage payload yields
+ * `null` and never fails the hook.
  *
  * Like the title hook command, this is intentionally quiet: hooks can fire
  * outside Traycer-managed sessions, and their stdout may be surfaced back into
@@ -50,12 +58,21 @@ export function buildAgentActivityFromHookCommand(opts: {
       return noop("missing-context");
     }
 
-    const request = parseUserInput(recordTuiAgentActivityRequestSchema, {
+    // Only Claude stamps a resumable `session_id` on its hook stdin; for other
+    // providers there is nothing to resync, so we skip the read entirely
+    // (avoids blocking on a stream they don't pipe a payload to).
+    const observedHarnessSessionId =
+      parsedHarness.data === "claude"
+        ? await readObservedHarnessSessionId()
+        : null;
+
+    const request = parseUserInput(recordTuiAgentActivityRequestSchemaV11, {
       epicId,
       tuiAgentId,
       harnessSessionId,
       harnessId: parsedHarness.data,
       event,
+      observedHarnessSessionId,
     });
     const rpcResult = await toAgentCliError(
       callHostRpcFastFail("agent.tui.recordActivity", request),

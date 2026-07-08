@@ -1,0 +1,339 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildAgentSessionObservedFromHookCommand } from "../agent-session-observed-from-hook";
+import type { CommandContext } from "../../runner/runner";
+import type { RuntimeContext } from "../../runner/runtime";
+import { noopLogger } from "../../logger";
+import { callHostRpcFastFail } from "../../internal/host-rpc";
+import { cliError, CLI_ERROR_CODES } from "../../runner/errors";
+import { HostRpcError } from "../../../../shared/host-transport/host-messenger";
+
+vi.mock("../../internal/host-rpc", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../internal/host-rpc")
+  >("../../internal/host-rpc");
+  return {
+    ...actual,
+    callHostRpcFastFail: vi.fn(),
+  };
+});
+
+const rpcMock = vi.mocked(callHostRpcFastFail);
+
+function makeRuntime(): RuntimeContext {
+  return {
+    json: false,
+    quiet: false,
+    noProgress: false,
+    noBootstrap: false,
+    nonInteractive: false,
+    environment: "production",
+    logger: noopLogger,
+  };
+}
+
+function makeCtx(): CommandContext {
+  return {
+    runtime: makeRuntime(),
+    output: {
+      progress: vi.fn(),
+      human: vi.fn(),
+      humanRequired: vi.fn(),
+      emitResult: vi.fn(),
+      emitError: vi.fn(),
+    },
+    progress: vi.fn(),
+  };
+}
+
+const realStdin = Object.getOwnPropertyDescriptor(process, "stdin");
+
+function stubStdin(value: {
+  isTTY: boolean;
+  chunks: ReadonlyArray<string>;
+}): void {
+  Object.defineProperty(process, "stdin", {
+    configurable: true,
+    value: {
+      isTTY: value.isTTY,
+      async *[Symbol.asyncIterator]() {
+        for (const chunk of value.chunks) yield Buffer.from(chunk);
+      },
+    },
+  });
+}
+
+const PREV_ENV = {
+  epic: process.env.TRAYCER_EPIC_ID,
+  agent: process.env.TRAYCER_AGENT_ID,
+};
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  rpcMock.mockResolvedValue({ accepted: true });
+  process.env.TRAYCER_EPIC_ID = "epic-1";
+  process.env.TRAYCER_AGENT_ID = "agent-1";
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+  vi.clearAllMocks();
+  if (realStdin !== undefined) {
+    Object.defineProperty(process, "stdin", realStdin);
+  }
+  if (PREV_ENV.epic === undefined) delete process.env.TRAYCER_EPIC_ID;
+  else process.env.TRAYCER_EPIC_ID = PREV_ENV.epic;
+  if (PREV_ENV.agent === undefined) delete process.env.TRAYCER_AGENT_ID;
+  else process.env.TRAYCER_AGENT_ID = PREV_ENV.agent;
+});
+
+describe("buildAgentSessionObservedFromHookCommand", () => {
+  it("resyncs the observed id via a recordActivity resync edge", async () => {
+    stubStdin({
+      isTTY: false,
+      chunks: [
+        JSON.stringify({ session_id: "sess-fresh-1", source: "resume" }),
+      ],
+    });
+    const fn = buildAgentSessionObservedFromHookCommand({
+      provider: "claude",
+      epicId: null,
+      agentId: null,
+    });
+    const result = await fn(makeCtx());
+
+    expect(rpcMock).toHaveBeenCalledTimes(1);
+    expect(rpcMock).toHaveBeenCalledWith("agent.tui.recordActivity", {
+      epicId: "epic-1",
+      tuiAgentId: "agent-1",
+      harnessSessionId: null,
+      harnessId: "claude",
+      event: "resync",
+      observedHarnessSessionId: "sess-fresh-1",
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.data).toEqual({ accepted: true, reason: null });
+  });
+
+  it("prefers --epic-id and --agent-id flags over env", async () => {
+    stubStdin({
+      isTTY: false,
+      chunks: [JSON.stringify({ session_id: "sess-flag" })],
+    });
+    const fn = buildAgentSessionObservedFromHookCommand({
+      provider: "claude",
+      epicId: "epic-flag",
+      agentId: "agent-flag",
+    });
+    await fn(makeCtx());
+
+    expect(rpcMock).toHaveBeenCalledWith("agent.tui.recordActivity", {
+      epicId: "epic-flag",
+      tuiAgentId: "agent-flag",
+      harnessSessionId: null,
+      harnessId: "claude",
+      event: "resync",
+      observedHarnessSessionId: "sess-flag",
+    });
+  });
+
+  it("noops when the payload has no session id (nothing to resync)", async () => {
+    stubStdin({ isTTY: false, chunks: [JSON.stringify({ source: "clear" })] });
+    const fn = buildAgentSessionObservedFromHookCommand({
+      provider: "claude",
+      epicId: null,
+      agentId: null,
+    });
+    const result = await fn(makeCtx());
+
+    expect(rpcMock).not.toHaveBeenCalled();
+    expect(result.data).toEqual({ accepted: false, reason: "no-session" });
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("noops on empty stdin", async () => {
+    stubStdin({ isTTY: false, chunks: [] });
+    const fn = buildAgentSessionObservedFromHookCommand({
+      provider: "claude",
+      epicId: null,
+      agentId: null,
+    });
+    const result = await fn(makeCtx());
+
+    expect(rpcMock).not.toHaveBeenCalled();
+    expect(result.data).toEqual({ accepted: false, reason: "no-session" });
+  });
+
+  it("noops for a non-claude provider without reading its stdin payload", async () => {
+    stubStdin({
+      isTTY: false,
+      chunks: [JSON.stringify({ session_id: "ignored" })],
+    });
+    const fn = buildAgentSessionObservedFromHookCommand({
+      provider: "opencode",
+      epicId: null,
+      agentId: null,
+    });
+    const result = await fn(makeCtx());
+
+    expect(rpcMock).not.toHaveBeenCalled();
+    expect(result.data).toEqual({ accepted: false, reason: "no-session" });
+  });
+
+  it("noops with exit 0 on unknown provider", async () => {
+    const stderrSpy = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true);
+    stubStdin({
+      isTTY: false,
+      chunks: [JSON.stringify({ session_id: "s" })],
+    });
+    const fn = buildAgentSessionObservedFromHookCommand({
+      provider: "bogus",
+      epicId: null,
+      agentId: null,
+    });
+    const result = await fn(makeCtx());
+
+    expect(rpcMock).not.toHaveBeenCalled();
+    expect(result.data).toEqual({
+      accepted: false,
+      reason: "unknown-provider",
+    });
+    expect(stderrSpy).not.toHaveBeenCalled();
+  });
+
+  it("noops when identity context is missing", async () => {
+    delete process.env.TRAYCER_AGENT_ID;
+    stubStdin({
+      isTTY: false,
+      chunks: [JSON.stringify({ session_id: "s" })],
+    });
+    const fn = buildAgentSessionObservedFromHookCommand({
+      provider: "claude",
+      epicId: null,
+      agentId: null,
+    });
+    const result = await fn(makeCtx());
+
+    expect(rpcMock).not.toHaveBeenCalled();
+    expect(result.data).toEqual({
+      accepted: false,
+      reason: "missing-context",
+    });
+  });
+
+  it("noops (host-too-old) when the request cannot project onto an older host", async () => {
+    // A newer CLI negotiated recordActivity@1.1, but the running host only
+    // speaks @1.0, whose event enum has no "resync": the transport fails to
+    // project the request locally (before sending) and raises this RPC_ERROR.
+    const stderrSpy = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true);
+    rpcMock.mockRejectedValueOnce(
+      new HostRpcError({
+        code: "RPC_ERROR",
+        message:
+          "Failed to project request params onto 1.0: Invalid enum value.",
+        requestId: "req-x",
+        method: "agent.tui.recordActivity",
+        fatalDetails: null,
+      }),
+    );
+    stubStdin({
+      isTTY: false,
+      chunks: [JSON.stringify({ session_id: "sess-x" })],
+    });
+    const fn = buildAgentSessionObservedFromHookCommand({
+      provider: "claude",
+      epicId: null,
+      agentId: null,
+    });
+    const result = await fn(makeCtx());
+
+    expect(rpcMock).toHaveBeenCalledTimes(1);
+    expect(result.exitCode).toBe(0);
+    expect(result.data).toEqual({
+      accepted: false,
+      reason: "host-too-old",
+    });
+    expect(stderrSpy).not.toHaveBeenCalled();
+  });
+
+  it("still surfaces a genuine host RPC_ERROR (distinct from a projection miss)", async () => {
+    // A real host-side RPC_ERROR (e.g. resolver failure) must NOT be swallowed
+    // as host-too-old - only the specific request-projection message is benign.
+    rpcMock.mockRejectedValueOnce(
+      new HostRpcError({
+        code: "RPC_ERROR",
+        message: "terminal agent not found",
+        requestId: "req-y",
+        method: "agent.tui.recordActivity",
+        fatalDetails: null,
+      }),
+    );
+    stubStdin({
+      isTTY: false,
+      chunks: [JSON.stringify({ session_id: "sess-y" })],
+    });
+    const fn = buildAgentSessionObservedFromHookCommand({
+      provider: "claude",
+      epicId: null,
+      agentId: null,
+    });
+    await expect(fn(makeCtx())).rejects.toThrow(/terminal agent not found/);
+  });
+
+  it("noops with exit 0 when the host is not running", async () => {
+    const stderrSpy = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true);
+    rpcMock.mockRejectedValueOnce(
+      cliError({
+        code: CLI_ERROR_CODES.HOST_NOT_RUNNING,
+        message: "traycer: host not running",
+        details: null,
+        exitCode: 1,
+      }),
+    );
+    stubStdin({
+      isTTY: false,
+      chunks: [JSON.stringify({ session_id: "sess-x" })],
+    });
+    const fn = buildAgentSessionObservedFromHookCommand({
+      provider: "claude",
+      epicId: null,
+      agentId: null,
+    });
+    const result = await fn(makeCtx());
+
+    expect(rpcMock).toHaveBeenCalledTimes(1);
+    expect(result.exitCode).toBe(0);
+    expect(result.data).toEqual({
+      accepted: false,
+      reason: "host-unreachable",
+    });
+    expect(stderrSpy).not.toHaveBeenCalled();
+  });
+
+  it("still surfaces non-benign host errors (e.g. auth rejected)", async () => {
+    rpcMock.mockRejectedValueOnce(
+      cliError({
+        code: CLI_ERROR_CODES.AUTH_REJECTED,
+        message: "traycer: bearer rejected",
+        details: null,
+        exitCode: 1,
+      }),
+    );
+    stubStdin({
+      isTTY: false,
+      chunks: [JSON.stringify({ session_id: "sess-x" })],
+    });
+    const fn = buildAgentSessionObservedFromHookCommand({
+      provider: "claude",
+      epicId: null,
+      agentId: null,
+    });
+    await expect(fn(makeCtx())).rejects.toThrow(/bearer rejected/);
+  });
+});
