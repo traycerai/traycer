@@ -1,0 +1,140 @@
+import { useEffect } from "react";
+import {
+  type InfiniteData,
+  infiniteQueryOptions,
+  useInfiniteQuery,
+} from "@tanstack/react-query";
+import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { WorktreeHostEntryV11 } from "@traycer/protocol/host/index";
+import type { WorktreeListAllForHostResponseV11 } from "@traycer/protocol/host/worktree-schemas";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { type HostRpcRegistry } from "@/lib/host";
+import { hostQueryKeys } from "@/lib/query-keys";
+import { hostClientUnavailableError } from "@/hooks/host/use-host-query";
+import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
+import {
+  useWorktreeFirstPaintPerf,
+  useWorktreeListQueryPerf,
+} from "@/components/settings/panels/worktrees-settings-perf";
+
+const SETTINGS_WORKTREE_LIST_PAGE_LIMIT = 32;
+const SETTINGS_WORKTREE_LIST_BASE_PARAMS = {
+  includeActivity: false,
+  activityPaths: null,
+  cursor: null,
+  limit: SETTINGS_WORKTREE_LIST_PAGE_LIMIT,
+} as const;
+const EMPTY_WORKTREES: readonly WorktreeHostEntryV11[] = [];
+
+/**
+ * Base worktree listing - the instant, viewport-independent leg. It walks the
+ * host-wide listing in finite pages with `includeActivity: false`, accumulating
+ * cheap rows as pages land. The heavy activity probes are fetched lazily, only
+ * for the rows scrolled into view, by
+ * {@link import("@/components/settings/panels/worktrees-enrichment").useWorktreeActivityEnrichment}.
+ */
+export function useWorktreeListing(
+  client: HostClient<HostRpcRegistry> | null,
+  reachable: boolean,
+): {
+  readonly worktrees: readonly WorktreeHostEntryV11[];
+  readonly isPending: boolean;
+  readonly isError: boolean;
+  readonly errorMessage: string | null;
+  readonly isEmpty: boolean;
+  readonly refresh: () => Promise<unknown>;
+  readonly refreshing: boolean;
+} {
+  const readiness = useReactiveHostReadiness(client);
+  const enabled = reachable && client !== null && readiness.isReady;
+  const fetchWorktreeListPage = async ({
+    pageParam,
+  }: {
+    readonly pageParam: string | null;
+  }): Promise<WorktreeListAllForHostResponseV11> => {
+    if (client === null) {
+      throw hostClientUnavailableError("worktree.listAllForHost");
+    }
+    return client.request("worktree.listAllForHost", {
+      includeActivity: false,
+      activityPaths: null,
+      cursor: pageParam,
+      limit: SETTINGS_WORKTREE_LIST_PAGE_LIMIT,
+    });
+  };
+  const {
+    data,
+    error,
+    fetchNextPage,
+    fetchStatus,
+    hasNextPage,
+    isError,
+    isFetching,
+    isFetchingNextPage,
+    isPending,
+    isSuccess,
+    refetch,
+    status,
+  } = useInfiniteQuery(
+    infiniteQueryOptions<
+      WorktreeListAllForHostResponseV11,
+      HostRpcError,
+      InfiniteData<WorktreeListAllForHostResponseV11, string | null>,
+      readonly unknown[],
+      string | null
+    >({
+      queryKey: hostQueryKeys.method<
+        HostRpcRegistry,
+        "worktree.listAllForHost"
+      >(
+        readiness.hostId,
+        "worktree.listAllForHost",
+        SETTINGS_WORKTREE_LIST_BASE_PARAMS,
+      ),
+      queryFn: fetchWorktreeListPage,
+      initialPageParam: null,
+      getNextPageParam: (lastPage) => lastPage.nextCursor,
+      enabled,
+    }),
+  );
+  useEffect(() => {
+    if (!enabled) return;
+    if (!hasNextPage) return;
+    if (isFetchingNextPage || isError) return;
+    void fetchNextPage();
+  }, [
+    enabled,
+    fetchNextPage,
+    hasNextPage,
+    isError,
+    isFetchingNextPage,
+  ]);
+  const worktrees =
+    data?.pages.flatMap((page) => page.worktrees) ?? EMPTY_WORKTREES;
+  // Perf telemetry (gated + non-throwing). Both legs now track the BASE query -
+  // the real time-to-usable-list, which is what "snappy in any environment" means.
+  useWorktreeListQueryPerf({
+    includeActivity: false,
+    fetchStatus,
+    status,
+    worktreeCount: worktrees.length,
+    submoduleCount: worktrees.reduce(
+      (sum, entry) => sum + entry.submodules.length,
+      0,
+    ),
+    hasData: data !== undefined,
+  });
+  useWorktreeFirstPaintPerf({
+    painted: isSuccess && worktrees.length > 0,
+    rowCount: worktrees.length,
+  });
+  return {
+    worktrees,
+    isPending,
+    isError: isError && worktrees.length === 0,
+    errorMessage: error?.message ?? null,
+    isEmpty: isSuccess && !hasNextPage && worktrees.length === 0,
+    refresh: () => refetch(),
+    refreshing: isFetching,
+  };
+}

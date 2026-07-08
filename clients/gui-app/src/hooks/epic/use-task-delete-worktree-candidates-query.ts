@@ -1,6 +1,5 @@
 import { useMemo } from "react";
 import { queryOptions, useQuery } from "@tanstack/react-query";
-import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
   WorktreeBranchStatus,
@@ -9,7 +8,6 @@ import type {
 import type { WorktreeListAllForHostResponseV11 } from "@traycer/protocol/host/worktree-schemas";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys";
-import { hostClientUnavailableError } from "@/hooks/host/use-host-query";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { provenRemovable } from "@traycer-clients/shared/worktree/classify-worktree";
 
@@ -71,14 +69,33 @@ export function useTaskDeleteWorktreeCandidates(
     cursor: null,
     limit: TASK_DELETE_WORKTREE_PROBED_PAGE_LIMIT,
   } as const;
+  const fetchWorktreePages =
+    async (): Promise<WorktreeListAllForHostResponseV11> => {
+      const worktrees: WorktreeHostEntryV11[] = [];
+      let cursor: string | null = null;
+      for (;;) {
+        const page: WorktreeListAllForHostResponseV11 = await client.request(
+          "worktree.listAllForHost",
+          {
+            includeActivity: true,
+            activityPaths: null,
+            cursor,
+            limit: TASK_DELETE_WORKTREE_PROBED_PAGE_LIMIT,
+          },
+        );
+        worktrees.push(...page.worktrees);
+        if (page.nextCursor === null) return { worktrees, nextCursor: null };
+        cursor = page.nextCursor;
+      }
+    };
   const { data, isError } = useQuery(
     queryOptions<WorktreeListAllForHostResponseV11, HostRpcError>({
       queryKey: hostQueryKeys.method<
         HostRpcRegistry,
         "worktree.listAllForHost"
       >(readiness.hostId, "worktree.listAllForHost", queryParams),
-      queryFn: () => fetchTaskDeleteWorktreePages(client),
-      enabled: deletedEpicIds !== null && client !== null && readiness.isReady,
+      queryFn: fetchWorktreePages,
+      enabled: deletedEpicIds !== null && readiness.isReady,
       retry: false,
     }),
   );
@@ -119,28 +136,4 @@ export function useTaskDeleteWorktreeCandidates(
   }, [deletedEpicIds, isError, worktrees]);
 
   return { candidates, isError };
-}
-
-async function fetchTaskDeleteWorktreePages(
-  client: HostClient<HostRpcRegistry> | null,
-): Promise<WorktreeListAllForHostResponseV11> {
-  if (client === null) {
-    throw hostClientUnavailableError("worktree.listAllForHost");
-  }
-  const worktrees: WorktreeHostEntryV11[] = [];
-  let cursor: string | null = null;
-  while (true) {
-    const page: WorktreeListAllForHostResponseV11 = await client.request(
-      "worktree.listAllForHost",
-      {
-        includeActivity: true,
-        activityPaths: null,
-        cursor,
-        limit: TASK_DELETE_WORKTREE_PROBED_PAGE_LIMIT,
-      },
-    );
-    worktrees.push(...page.worktrees);
-    if (page.nextCursor === null) return { worktrees, nextCursor: null };
-    cursor = page.nextCursor;
-  }
 }

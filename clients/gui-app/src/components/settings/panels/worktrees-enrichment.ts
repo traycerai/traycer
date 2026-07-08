@@ -273,7 +273,6 @@ export function useWorktreeActivityEnrichment(
 
     results.forEach((result, index) => {
       const path = requestedPaths[index];
-      if (path === undefined) return;
       const state = coldPrRefetchStateRef.current.get(path) ?? {
         attempts: 0,
         timer: null,

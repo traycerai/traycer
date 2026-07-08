@@ -24,10 +24,8 @@ import {
   hostStreamRpcRegistry,
   type HostStreamRpcRegistry,
 } from "@traycer/protocol/host/registry";
-import {
-  WorktreesList,
-  useWorktreeListing,
-} from "@/components/settings/panels/worktrees-settings-panel";
+import { WorktreesList } from "@/components/settings/panels/worktrees-settings-panel";
+import { useWorktreeListing } from "@/components/settings/panels/worktrees-listing-query";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { __resetWorktreeDeleteRunForTests } from "@/components/settings/panels/use-worktree-delete-run";
 import { hostQueryKeys } from "@/lib/query-keys";
