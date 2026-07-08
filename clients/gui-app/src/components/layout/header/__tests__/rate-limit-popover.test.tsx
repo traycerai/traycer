@@ -91,6 +91,7 @@ const mocks = vi.hoisted<MockState>(() => ({
 
 vi.mock("@/hooks/rate-limits/use-configured-rate-limit-providers", () => ({
   useConfiguredRateLimitProviders: () => mocks.configured,
+  useVisibleRateLimitProviders: () => mocks.configured,
 }));
 vi.mock("@/hooks/rate-limits/use-is-rate-limit-queue-draining", () => ({
   useIsRateLimitQueueDraining: () => mocks.draining,
