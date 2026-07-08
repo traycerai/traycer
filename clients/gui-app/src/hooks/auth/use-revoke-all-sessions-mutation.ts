@@ -32,7 +32,7 @@ function unwrapRevokeAllSessionsResult(
 export function useRevokeAllSessions(): UseMutationResult<
   RevokeAllSessionsResponse,
   Error,
-  string,
+  void,
   RevokeAllSessionsMutationContext
 > {
   const binding = useHostBinding();
@@ -43,13 +43,11 @@ export function useRevokeAllSessions(): UseMutationResult<
     onMutate: (): RevokeAllSessionsMutationContext => ({
       auth: binding === null ? null : binding.auth,
     }),
-    mutationFn: async (
-      stepUpAccessToken: string,
-    ): Promise<RevokeAllSessionsResponse> => {
+    mutationFn: async (): Promise<RevokeAllSessionsResponse> => {
       if (binding === null) {
         throw new Error("Sign in to manage sessions.");
       }
-      const result = await binding.auth.revokeAllSessions(stepUpAccessToken);
+      const result = await binding.auth.revokeAllSessions();
       return unwrapRevokeAllSessionsResult(result);
     },
     onSuccess: (_data, _variables, context) => {

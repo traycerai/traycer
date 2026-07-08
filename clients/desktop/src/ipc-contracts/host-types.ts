@@ -34,10 +34,10 @@ export type DesktopTrayIndicatorState = "idle" | "active" | "attention";
 export type { HostListFetchResult } from "@traycer-clients/shared/host-client/remote-fetcher";
 export type {
   ListUserSessionsFetchResult,
+  RetainedStepUpVerifyFetchResult,
   RevokeAllSessionsFetchResult,
   RevokeUserSessionFetchResult,
   StepUpChallengeFetchResult,
-  StepUpVerifyFetchResult,
 } from "@traycer-clients/shared/auth/devices-sessions-fetcher";
 export type {
   UpdateHostVersionPolicyFetchResult,

@@ -8,10 +8,10 @@ import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/
 import type {
   HostListFetchResult,
   ListUserSessionsFetchResult,
+  RetainedStepUpVerifyFetchResult,
   RevokeAllSessionsFetchResult,
   RevokeUserSessionFetchResult,
   StepUpChallengeFetchResult,
-  StepUpVerifyFetchResult,
   UpdateHostVersionPolicyFetchResult,
   UpdateHostVersionPolicyInput,
 } from "../ipc-contracts/host-types";
@@ -78,6 +78,7 @@ export interface AuthBridgeSurface {
   revokeUserSession(
     bearerToken: string,
     familyId: string,
+    useStepUpCredential: boolean,
   ): Promise<RevokeUserSessionFetchResult>;
   revokeAllSessions(bearerToken: string): Promise<RevokeAllSessionsFetchResult>;
   requestStepUpChallenge(
@@ -86,7 +87,7 @@ export interface AuthBridgeSurface {
   verifyStepUpChallenge(
     bearerToken: string,
     code: string,
-  ): Promise<StepUpVerifyFetchResult>;
+  ): Promise<RetainedStepUpVerifyFetchResult>;
   updateHostVersionPolicy(
     bearerToken: string,
     hostId: string,
@@ -131,11 +132,12 @@ export function buildAuthBridge(): AuthBridgeSurface {
         bearerToken,
       ) as Promise<ListUserSessionsFetchResult>,
 
-    revokeUserSession: (bearerToken, familyId) =>
+    revokeUserSession: (bearerToken, familyId, useStepUpCredential) =>
       ipcRenderer.invoke(
         RunnerHostInvoke.revokeUserSession,
         bearerToken,
         familyId,
+        useStepUpCredential,
       ) as Promise<RevokeUserSessionFetchResult>,
 
     revokeAllSessions: (bearerToken) =>
@@ -155,7 +157,7 @@ export function buildAuthBridge(): AuthBridgeSurface {
         RunnerHostInvoke.verifyStepUpChallenge,
         bearerToken,
         code,
-      ) as Promise<StepUpVerifyFetchResult>,
+      ) as Promise<RetainedStepUpVerifyFetchResult>,
 
     updateHostVersionPolicy: (bearerToken, hostId, input) =>
       ipcRenderer.invoke(

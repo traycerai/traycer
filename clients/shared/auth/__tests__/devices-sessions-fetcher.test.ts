@@ -3,6 +3,7 @@ import {
   listUserSessionsViaHttp,
   revokeAllSessionsViaHttp,
   revokeUserSessionViaHttp,
+  toRetainedStepUpVerifyResult,
   verifyStepUpChallengeViaHttp,
 } from "../devices-sessions-fetcher";
 
@@ -100,5 +101,21 @@ describe("devices/sessions authn fetcher", () => {
     const result = await verifyStepUpChallengeViaHttp(AUTHN, "jwt", "123456");
 
     expect(result.kind).toBe("network-error");
+  });
+
+  it("strips the raw step-up bearer from retained verify results", () => {
+    expect(
+      toRetainedStepUpVerifyResult({
+        kind: "ok",
+        response: {
+          access_token: "step-up-secret",
+          token_type: "Bearer",
+          expires_in: 900,
+        },
+      }),
+    ).toEqual({
+      kind: "ok",
+      response: { expires_in: 900 },
+    });
   });
 });

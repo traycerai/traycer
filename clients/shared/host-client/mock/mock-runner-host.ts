@@ -30,12 +30,13 @@ import {
   requestStepUpChallengeViaHttp,
   revokeAllSessionsViaHttp,
   revokeUserSessionViaHttp,
+  toRetainedStepUpVerifyResult,
   verifyStepUpChallengeViaHttp,
   type ListUserSessionsFetchResult,
+  type RetainedStepUpVerifyFetchResult,
   type RevokeAllSessionsFetchResult,
   type RevokeUserSessionFetchResult,
   type StepUpChallengeFetchResult,
-  type StepUpVerifyFetchResult,
 } from "../../auth/devices-sessions-fetcher";
 import {
   refreshAuthTokenViaHttp,
@@ -78,6 +79,12 @@ export interface MockRunnerHostOptions {
 }
 
 const MOCK_TOKEN_STORE_KEY = "traycer.token";
+const STEP_UP_EXPIRY_SKEW_MS = 5_000;
+
+interface RetainedStepUpCredential {
+  readonly accessToken: string;
+  readonly expiresAtMs: number;
+}
 
 /**
  * In-memory `IRunnerHost` used by `gui-app` dev/preview and shared tests.
@@ -117,6 +124,7 @@ export class MockRunnerHost implements IRunnerHost {
   >();
   private readonly systemResumedHandlers = new Set<() => void>();
   private localHost: LocalHostSnapshot | null;
+  private retainedStepUpCredential: RetainedStepUpCredential | null = null;
 
   readonly tray: MockTrayState = new MockTrayState();
   readonly hostPicker: MockHostPicker = new MockHostPicker();
@@ -220,14 +228,27 @@ export class MockRunnerHost implements IRunnerHost {
   revokeUserSession(
     bearerToken: string,
     familyId: string,
+    useStepUpCredential: boolean,
   ): Promise<RevokeUserSessionFetchResult> {
-    return revokeUserSessionViaHttp(this.authnBaseUrl, bearerToken, familyId);
+    const stepUpToken = useStepUpCredential
+      ? this.activeRetainedStepUpToken()
+      : null;
+    return revokeUserSessionViaHttp(
+      this.authnBaseUrl,
+      stepUpToken ?? bearerToken,
+      familyId,
+    );
   }
 
-  revokeAllSessions(
+  async revokeAllSessions(
     bearerToken: string,
   ): Promise<RevokeAllSessionsFetchResult> {
-    return revokeAllSessionsViaHttp(this.authnBaseUrl, bearerToken);
+    const result = await revokeAllSessionsViaHttp(
+      this.authnBaseUrl,
+      this.activeRetainedStepUpToken() ?? bearerToken,
+    );
+    this.retainedStepUpCredential = null;
+    return result;
   }
 
   requestStepUpChallenge(
@@ -236,11 +257,38 @@ export class MockRunnerHost implements IRunnerHost {
     return requestStepUpChallengeViaHttp(this.authnBaseUrl, bearerToken);
   }
 
-  verifyStepUpChallenge(
+  async verifyStepUpChallenge(
     bearerToken: string,
     code: string,
-  ): Promise<StepUpVerifyFetchResult> {
-    return verifyStepUpChallengeViaHttp(this.authnBaseUrl, bearerToken, code);
+  ): Promise<RetainedStepUpVerifyFetchResult> {
+    const result = await verifyStepUpChallengeViaHttp(
+      this.authnBaseUrl,
+      bearerToken,
+      code,
+    );
+    if (result.kind === "ok") {
+      this.retainedStepUpCredential = {
+        accessToken: result.response.access_token,
+        expiresAtMs:
+          Date.now() +
+          Math.max(
+            0,
+            result.response.expires_in * 1_000 - STEP_UP_EXPIRY_SKEW_MS,
+          ),
+      };
+    }
+    return toRetainedStepUpVerifyResult(result);
+  }
+
+  private activeRetainedStepUpToken(): string | null {
+    if (this.retainedStepUpCredential === null) {
+      return null;
+    }
+    if (this.retainedStepUpCredential.expiresAtMs <= Date.now()) {
+      this.retainedStepUpCredential = null;
+      return null;
+    }
+    return this.retainedStepUpCredential.accessToken;
   }
 
   updateHostVersionPolicy(

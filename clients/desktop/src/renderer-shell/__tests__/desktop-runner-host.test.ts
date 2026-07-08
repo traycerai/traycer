@@ -705,9 +705,9 @@ describe("DesktopRunnerHost.onLocalHostChange", () => {
       kind: "network-error",
     });
     await expect(
-      host.revokeUserSession("step-up-jwt", "family-1"),
+      host.revokeUserSession("jwt", "family-1", true),
     ).resolves.toEqual({ kind: "network-error" });
-    await expect(host.revokeAllSessions("step-up-jwt")).resolves.toEqual({
+    await expect(host.revokeAllSessions("jwt")).resolves.toEqual({
       kind: "network-error",
     });
     await expect(host.requestStepUpChallenge("jwt")).resolves.toEqual({
@@ -718,8 +718,8 @@ describe("DesktopRunnerHost.onLocalHostChange", () => {
     });
 
     expect(listUserSessions).toHaveBeenCalledWith("jwt");
-    expect(revokeUserSession).toHaveBeenCalledWith("step-up-jwt", "family-1");
-    expect(revokeAllSessions).toHaveBeenCalledWith("step-up-jwt");
+    expect(revokeUserSession).toHaveBeenCalledWith("jwt", "family-1", true);
+    expect(revokeAllSessions).toHaveBeenCalledWith("jwt");
     expect(requestStepUpChallenge).toHaveBeenCalledWith("jwt");
     expect(verifyStepUpChallenge).toHaveBeenCalledWith("jwt", "123456");
   });

@@ -5,7 +5,7 @@ import type {
   RevokeAllSessionsFetchResult,
   RevokeUserSessionFetchResult,
   StepUpChallengeFetchResult,
-  StepUpVerifyFetchResult,
+  RetainedStepUpVerifyFetchResult,
 } from "../auth/devices-sessions-fetcher";
 import type { HostListFetchResult } from "../host-client/remote-fetcher";
 import type {
@@ -136,20 +136,21 @@ export interface IRunnerHost {
   listUserSessions(bearerToken: string): Promise<ListUserSessionsFetchResult>;
 
   /**
-   * Revokes one session family. The bearer may be either the user's normal
-   * session bearer or a short-TTL step-up credential minted by
-   * `verifyStepUpChallenge`; callers handle `step-up-required` by asking the
-   * user for an email OTP and retrying exactly once.
+   * Revokes one session family. Callers pass the user's normal session bearer
+   * plus whether the runner-host boundary should attach its retained step-up
+   * credential. Renderer callers never pass the raw step-up bearer.
    */
   revokeUserSession(
     bearerToken: string,
     familyId: string,
+    useStepUpCredential: boolean,
   ): Promise<RevokeUserSessionFetchResult>;
 
   /**
    * Revokes all other sessions and broadcasts host/session invalidation. This
-   * is the panic lever: callers obtain a fresh step-up credential for every
-   * invocation rather than reusing the per-session cleanup batch credential.
+   * is the panic lever: callers verify a fresh step-up challenge for every
+   * invocation, then the runner-host boundary attaches the retained step-up
+   * credential internally.
    */
   revokeAllSessions(bearerToken: string): Promise<RevokeAllSessionsFetchResult>;
 
@@ -161,13 +162,14 @@ export interface IRunnerHost {
   ): Promise<StepUpChallengeFetchResult>;
 
   /**
-   * Verifies a step-up OTP and returns the short-TTL bearer credential used for
-   * session revocation retries.
+   * Verifies a step-up OTP and retains the short-TTL bearer credential inside
+   * the runner-host boundary. Returns only expiry metadata for renderer batch
+   * window logic.
    */
   verifyStepUpChallenge(
     bearerToken: string,
     code: string,
-  ): Promise<StepUpVerifyFetchResult>;
+  ): Promise<RetainedStepUpVerifyFetchResult>;
 
   /**
    * Applies a version-policy write for one host with the user bearer

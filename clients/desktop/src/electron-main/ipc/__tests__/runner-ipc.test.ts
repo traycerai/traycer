@@ -371,6 +371,13 @@ function bareEvent(): {
   return sender(0);
 }
 
+function jsonResponse(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+}
+
 function readQuitRequestId(message: SentMessage | undefined): string {
   if (message === undefined) {
     throw new Error("quitRequested message missing");
@@ -1793,6 +1800,66 @@ describe("RunnerIpcBridge", () => {
     expect(windowB.sentMessages).toEqual([
       { channel: RunnerHostEvent.authSessionChange, payload: signedIn },
     ]);
+    bridge.dispose();
+  });
+
+  it("retains step-up credentials in main and returns only expiry metadata to the renderer", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init) => {
+      const url = input.toString();
+      if (url.endsWith("/api/v3/user/step-up/verify")) {
+        return jsonResponse(200, {
+          access_token: "step-up-secret",
+          token_type: "Bearer",
+          expires_in: 900,
+        });
+      }
+      if (url.endsWith("/api/v3/user/sessions/family-1")) {
+        expect((init?.headers as Record<string, string>).Authorization).toBe(
+          "Bearer step-up-secret",
+        );
+        return jsonResponse(200, {
+          familyId: "family-1",
+          revoked: true,
+        });
+      }
+      throw new Error(`unexpected authn URL ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const mod = await import("../register-runner-ipc");
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      window: buildWindow(),
+    });
+    bridge.install();
+
+    const verifyHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.verifyStepUpChallenge,
+    );
+    const revokeHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.revokeUserSession,
+    );
+    if (verifyHandler === undefined || revokeHandler === undefined) {
+      throw new Error("step-up handlers missing");
+    }
+
+    await expect(
+      verifyHandler(bareEvent(), "user-jwt", "123456"),
+    ).resolves.toEqual({
+      kind: "ok",
+      response: { expires_in: 900 },
+    });
+    await expect(
+      revokeHandler(bareEvent(), "user-jwt", "family-1", true),
+    ).resolves.toEqual({
+      kind: "ok",
+      response: { familyId: "family-1", revoked: true },
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     bridge.dispose();
   });
 

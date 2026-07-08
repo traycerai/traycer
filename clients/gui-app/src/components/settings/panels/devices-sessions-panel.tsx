@@ -40,7 +40,6 @@ import {
 import { useUserSessions } from "@/hooks/auth/use-user-sessions-query";
 import {
   createStepUpCredential,
-  getActiveStepUpCredential,
   isStepUpRequiredError,
   runStepUpProtectedAction,
   type StepUpCredential,
@@ -233,17 +232,17 @@ export function DevicesSessionsPanel() {
       setActiveSessionFamilyId(session.familyId);
       try {
         await runStepUpProtectedAction({
-          getCredential: () =>
-            getActiveStepUpCredential(stepUpCredentialRef.current, Date.now()),
+          getCredential: () => stepUpCredentialRef.current,
           setCredential: (credential) => {
             stepUpCredentialRef.current = credential;
           },
           requestCredential: () => requestStepUpCredential("session-revoke"),
-          action: (stepUpAccessToken) =>
+          action: (useStepUpCredential) =>
             mutation.mutateAsync({
               familyId: session.familyId,
-              stepUpAccessToken,
+              useStepUpCredential,
             }),
+          nowMs: () => Date.now(),
         });
         if (session.current && binding !== null) {
           await binding.auth.signOut();
@@ -263,15 +262,15 @@ export function DevicesSessionsPanel() {
     }
     setActionError(null);
     try {
-      const credential = await requestStepUpCredential("global-revoke");
+      await requestStepUpCredential("global-revoke");
       try {
-        await revokeAllSessions.mutateAsync(credential.accessToken);
+        await revokeAllSessions.mutateAsync(undefined);
       } catch (error) {
         if (!isStepUpRequiredError(error)) {
           throw error;
         }
-        const retryCredential = await requestStepUpCredential("global-revoke");
-        await revokeAllSessions.mutateAsync(retryCredential.accessToken);
+        await requestStepUpCredential("global-revoke");
+        await revokeAllSessions.mutateAsync(undefined);
       }
       await binding.auth.signOut();
     } catch (error) {

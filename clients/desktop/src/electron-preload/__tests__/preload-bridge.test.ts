@@ -133,7 +133,11 @@ interface PreloadBridge {
     token: string,
   ): Promise<AuthIdentityValidationResult>;
   listUserSessions(bearerToken: string): Promise<unknown>;
-  revokeUserSession(bearerToken: string, familyId: string): Promise<unknown>;
+  revokeUserSession(
+    bearerToken: string,
+    familyId: string,
+    useStepUpCredential: boolean,
+  ): Promise<unknown>;
   revokeAllSessions(bearerToken: string): Promise<unknown>;
   requestStepUpChallenge(bearerToken: string): Promise<unknown>;
   verifyStepUpChallenge(bearerToken: string, code: string): Promise<unknown>;
@@ -384,8 +388,8 @@ describe("preload new-capability wiring", () => {
     });
 
     await bridge.listUserSessions("jwt");
-    await bridge.revokeUserSession("jwt", "family-1");
-    await bridge.revokeAllSessions("step-up-jwt");
+    await bridge.revokeUserSession("jwt", "family-1", true);
+    await bridge.revokeAllSessions("jwt");
     await bridge.requestStepUpChallenge("jwt");
     await bridge.verifyStepUpChallenge("jwt", "123456");
 
@@ -397,10 +401,11 @@ describe("preload new-capability wiring", () => {
       RunnerHostInvoke.revokeUserSession,
       "jwt",
       "family-1",
+      true,
     );
     expect(invokeFn).toHaveBeenCalledWith(
       RunnerHostInvoke.revokeAllSessions,
-      "step-up-jwt",
+      "jwt",
     );
     expect(invokeFn).toHaveBeenCalledWith(
       RunnerHostInvoke.requestStepUpChallenge,

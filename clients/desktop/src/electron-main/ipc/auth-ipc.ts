@@ -7,6 +7,7 @@ import {
   requestStepUpChallengeViaHttp,
   revokeAllSessionsViaHttp,
   revokeUserSessionViaHttp,
+  toRetainedStepUpVerifyResult,
   verifyStepUpChallengeViaHttp,
 } from "@traycer-clients/shared/auth/devices-sessions-fetcher";
 import {
@@ -24,6 +25,32 @@ import {
 } from "./ipc-parsers";
 import type { RunnerIpcBridge } from "./runner-ipc-bridge";
 
+const STEP_UP_EXPIRY_SKEW_MS = 5_000;
+
+interface RetainedStepUpCredential {
+  readonly accessToken: string;
+  readonly expiresAtMs: number;
+}
+
+function assertBoolean(
+  value: unknown,
+  context: string,
+): asserts value is boolean {
+  if (typeof value !== "boolean") {
+    throw new Error(`${context} requires a boolean argument`);
+  }
+}
+
+function activeRetainedStepUpToken(
+  credential: RetainedStepUpCredential | null,
+  nowMs: number,
+): string | null {
+  if (credential === null) {
+    return null;
+  }
+  return credential.expiresAtMs > nowMs ? credential.accessToken : null;
+}
+
 /**
  * Auth IPC handlers for token *validation* against the authn service - credential
  * persistence is now fully renderer-side (`encrypt-storage` on top of
@@ -33,6 +60,8 @@ import type { RunnerIpcBridge } from "./runner-ipc-bridge";
  * "enter login password" prompt on every unsigned local install.
  */
 export function registerAuthIpc(bridge: RunnerIpcBridge): void {
+  let retainedStepUpCredential: RetainedStepUpCredential | null = null;
+
   bridge.handleInvoke(
     RunnerHostInvoke.validateAuthToken,
     async (_event, token: unknown, refreshToken: unknown) => {
@@ -96,14 +125,30 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
 
   bridge.handleInvoke(
     RunnerHostInvoke.revokeUserSession,
-    async (_event, bearerToken: unknown, familyId: unknown) => {
+    async (
+      _event,
+      bearerToken: unknown,
+      familyId: unknown,
+      useStepUpCredential: unknown,
+    ) => {
       assertString(bearerToken, "revokeUserSession.bearerToken");
       assertString(familyId, "revokeUserSession.familyId");
-      return revokeUserSessionViaHttp(
+      assertBoolean(
+        useStepUpCredential,
+        "revokeUserSession.useStepUpCredential",
+      );
+      const stepUpToken = useStepUpCredential
+        ? activeRetainedStepUpToken(retainedStepUpCredential, Date.now())
+        : null;
+      const result = await revokeUserSessionViaHttp(
         bridge.options.authnBaseUrl,
-        bearerToken,
+        stepUpToken ?? bearerToken,
         familyId,
       );
+      if (result.kind === "step-up-required" && useStepUpCredential) {
+        retainedStepUpCredential = null;
+      }
+      return result;
     },
   );
 
@@ -111,7 +156,16 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
     RunnerHostInvoke.revokeAllSessions,
     async (_event, bearerToken: unknown) => {
       assertString(bearerToken, "revokeAllSessions.bearerToken");
-      return revokeAllSessionsViaHttp(bridge.options.authnBaseUrl, bearerToken);
+      const stepUpToken = activeRetainedStepUpToken(
+        retainedStepUpCredential,
+        Date.now(),
+      );
+      const result = await revokeAllSessionsViaHttp(
+        bridge.options.authnBaseUrl,
+        stepUpToken ?? bearerToken,
+      );
+      retainedStepUpCredential = null;
+      return result;
     },
   );
 
@@ -131,11 +185,23 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
     async (_event, bearerToken: unknown, code: unknown) => {
       assertString(bearerToken, "verifyStepUpChallenge.bearerToken");
       assertString(code, "verifyStepUpChallenge.code");
-      return verifyStepUpChallengeViaHttp(
+      const result = await verifyStepUpChallengeViaHttp(
         bridge.options.authnBaseUrl,
         bearerToken,
         code,
       );
+      if (result.kind === "ok") {
+        retainedStepUpCredential = {
+          accessToken: result.response.access_token,
+          expiresAtMs:
+            Date.now() +
+            Math.max(
+              0,
+              result.response.expires_in * 1_000 - STEP_UP_EXPIRY_SKEW_MS,
+            ),
+        };
+      }
+      return toRetainedStepUpVerifyResult(result);
     },
   );
 
@@ -167,6 +233,7 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
   );
 
   const onAuthSessionChange = (snapshot: DesktopAuthSessionSnapshot): void => {
+    retainedStepUpCredential = null;
     bridge.fanOut(RunnerHostEvent.authSessionChange, snapshot);
   };
   bridge.authSession.on("change", onAuthSessionChange);
