@@ -217,11 +217,25 @@ function completeHandshake(socket: StubStreamWebSocket): void {
     readonly kind: "open";
     readonly token: string;
     readonly manifest: Record<string, { major: number; minor: number }>;
+    readonly optionalManifest: Record<string, { major: number; minor: number }>;
   };
   socket.fireText({
     kind: "openAck",
     manifest: openParsed.manifest,
+    optionalManifest: openParsed.optionalManifest,
   });
+}
+
+function streamOpenAck(
+  manifest: Record<string, { major: number; minor: number }>,
+  capabilities: readonly string[] | undefined,
+): Record<string, unknown> {
+  return {
+    kind: "openAck",
+    manifest: {},
+    optionalManifest: manifest,
+    ...(capabilities === undefined ? {} : { capabilities }),
+  };
 }
 
 function parseText(raw: string): Record<string, unknown> {
@@ -277,14 +291,14 @@ describe("WsStreamClient", () => {
     // full-manifest check: `canBridgeStream` trusts an older peer receiving a
     // newer minor unconditionally (additive minors), so it never poisons an
     // unrelated method's open handshake the way the old major bump once did.
-    expect(openFrame.manifest).toEqual(
+    expect(openFrame.manifest).toEqual({});
+    expect(openFrame.optionalManifest).toEqual(
       buildStreamManifest(hostStreamRpcRegistry),
     );
 
-    stub.fireText({
-      kind: "openAck",
-      manifest: buildStreamManifest(hostStreamRpcRegistry),
-    });
+    stub.fireText(
+      streamOpenAck(buildStreamManifest(hostStreamRpcRegistry), undefined),
+    );
 
     expect(stub.textSent).toHaveLength(2);
     const subscribeFrame = parseText(stub.textSent[1]);
@@ -323,7 +337,7 @@ describe("WsStreamClient", () => {
       ...buildStreamManifest(hostStreamRpcRegistry),
       "chat.subscribe": { major: 2, minor: 0 },
     };
-    stub.fireText({ kind: "openAck", manifest: skewedManifest });
+    stub.fireText(streamOpenAck(skewedManifest, undefined));
 
     expect(stub.textSent).toHaveLength(2);
     expect(parseText(stub.textSent[1])).toEqual({
@@ -355,7 +369,8 @@ describe("WsStreamClient", () => {
 
     sockets[0].socket.fireOpen();
     const openFrame = parseText(sockets[0].socket.textSent[0]);
-    expect(openFrame.manifest).toEqual(
+    expect(openFrame.manifest).toEqual({});
+    expect(openFrame.optionalManifest).toEqual(
       buildStreamManifest(hostStreamRpcRegistry),
     );
 
@@ -393,7 +408,7 @@ describe("WsStreamClient", () => {
       ...buildStreamManifest(hostStreamRpcRegistry),
       "chat.subscribe": { major: 1, minor: 0 },
     };
-    stub.fireText({ kind: "openAck", manifest: hostV100Manifest });
+    stub.fireText(streamOpenAck(hostV100Manifest, undefined));
 
     expect(stub.textSent).toHaveLength(2);
     expect(parseText(stub.textSent[1])).toEqual({
@@ -482,10 +497,12 @@ describe("WsStreamClient", () => {
     const stub = sockets[0].socket;
     stub.fireOpen();
 
-    stub.fireText({
-      kind: "openAck",
-      manifest: { "version-skew.subscribe": { major: 1, minor: 0 } },
-    });
+    stub.fireText(
+      streamOpenAck(
+        { "version-skew.subscribe": { major: 1, minor: 0 } },
+        undefined,
+      ),
+    );
 
     expect(stub.textSent).toHaveLength(2);
     expect(parseText(stub.textSent[1])).toEqual({
@@ -508,11 +525,11 @@ describe("WsStreamClient", () => {
     await flush();
     const stub = sockets[0].socket;
     stub.fireOpen();
-    stub.fireText({
-      kind: "openAck",
-      manifest: buildStreamManifest(hostStreamRpcRegistry),
-      capabilities: ["credentialUpdate"],
-    });
+    stub.fireText(
+      streamOpenAck(buildStreamManifest(hostStreamRpcRegistry), [
+        "credentialUpdate",
+      ]),
+    );
     const sentBeforeRotation = stub.textSent.length;
 
     ctx.credentials.rotateBearerToken({
@@ -539,10 +556,9 @@ describe("WsStreamClient", () => {
     const stub = sockets[0].socket;
     stub.fireOpen();
     // Older host: openAck omits `capabilities` (schema defaults it to []).
-    stub.fireText({
-      kind: "openAck",
-      manifest: buildStreamManifest(hostStreamRpcRegistry),
-    });
+    stub.fireText(
+      streamOpenAck(buildStreamManifest(hostStreamRpcRegistry), undefined),
+    );
     const sentBeforeRotation = stub.textSent.length;
 
     ctx.credentials.rotateBearerToken({
@@ -578,11 +594,11 @@ describe("WsStreamClient", () => {
 
     // openAck (capability-advertising) → on becoming subscribed the client
     // reconciles the missed rotation and pushes exactly one credentialUpdate.
-    stub.fireText({
-      kind: "openAck",
-      manifest: buildStreamManifest(hostStreamRpcRegistry),
-      capabilities: ["credentialUpdate"],
-    });
+    stub.fireText(
+      streamOpenAck(buildStreamManifest(hostStreamRpcRegistry), [
+        "credentialUpdate",
+      ]),
+    );
 
     const credentialUpdates = stub.textSent
       .map((raw) => parseText(raw))
@@ -772,7 +788,8 @@ describe("WsStreamClient", () => {
     // its own fatalError before closing.
     stub.fireText({
       kind: "openAck",
-      manifest: {
+      manifest: {},
+      optionalManifest: {
         "epic.subscribe": { major: 2, minor: 0 },
         "chat.subscribe": { major: 1, minor: 0 },
         "notifications.subscribe": { major: 1, minor: 0 },
@@ -838,7 +855,8 @@ describe("WsStreamClient", () => {
     stub.fireOpen();
     stub.fireText({
       kind: "openAck",
-      manifest: {
+      manifest: {},
+      optionalManifest: {
         "epic.subscribe": { major: 1, minor: 0 },
         "chat.subscribe": { major: 1, minor: 2 },
         "terminal.subscribe": { major: 1, minor: 3 },

@@ -3,10 +3,12 @@ import type {
   StreamMethodVersionRegistry,
   VersionedStreamRpcRegistry,
 } from "@traycer/protocol/framework/versioned-stream-rpc";
+import { checkStreamMethodCompatibility } from "@traycer/protocol/framework/stream-compat";
 import {
-  buildStreamManifest,
-  checkStreamMethodCompatibility,
-} from "@traycer/protocol/framework/stream-compat";
+  mergeConnectionManifests,
+  splitConnectionManifest,
+} from "@traycer/protocol/framework/index";
+import { releasedMethodNames } from "@traycer/protocol/host/__tests__/__fixtures__/released-method-names";
 import {
   extractBearerForOpenFrame,
   MissingBearerTokenForOpenFrameError,
@@ -605,11 +607,15 @@ class StreamSession<
       this.onTransportDrop();
       return;
     }
-    const manifest = buildStreamManifest(this.config.registry);
+    const manifest = splitConnectionManifest(
+      this.config.registry,
+      releasedMethodNames,
+    );
     const openFrame: ClientStreamOpenFrame = {
       kind: "open",
       token,
-      manifest,
+      manifest: manifest.manifest,
+      optionalManifest: manifest.optionalManifest,
     };
     if (!this.sendControlText(socket, openFrame)) {
       this.onSendFailure(socket);
@@ -750,11 +756,22 @@ class StreamSession<
       STREAM_CAPABILITY_CREDENTIAL_UPDATE,
     );
 
-    const myManifest = buildStreamManifest(this.config.registry);
+    const splitManifest = splitConnectionManifest(
+      this.config.registry,
+      releasedMethodNames,
+    );
+    const myManifest = mergeConnectionManifests(
+      splitManifest.manifest,
+      splitManifest.optionalManifest,
+    );
+    const theirManifest = mergeConnectionManifests(
+      ackParse.data.manifest,
+      ackParse.data.optionalManifest,
+    );
     const compat = checkStreamMethodCompatibility(
       this.config.registry,
       myManifest,
-      ackParse.data.manifest,
+      theirManifest,
       "client",
       this.config.method,
     );
@@ -787,7 +804,7 @@ class StreamSession<
       this.config.registry,
       this.config.method,
       myManifest[this.config.method],
-      ackParse.data.manifest[this.config.method],
+      theirManifest[this.config.method],
       this.config.params,
     );
     const subscribeFrame: ClientStreamSubscribeFrame = {
