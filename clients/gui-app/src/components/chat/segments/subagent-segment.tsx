@@ -21,6 +21,7 @@ import {
   type ChatCollapsibleKey,
 } from "@/components/chat/chat-collapsible-key";
 import {
+  chatFindSegmentUnitId,
   chatFindSubagentBodyUnitId,
   chatFindSubagentHeaderUnitId,
 } from "@/components/chat/chat-find";
@@ -39,6 +40,7 @@ import {
   type ProgressUpdateItem,
 } from "./subagent-display";
 import { AgentReferenceMarkdown } from "./agent-reference-markdown";
+import { ProviderNoticeSegment } from "./provider-notice-segment";
 import { SubagentAvatar } from "./subagent-avatar";
 import { ElapsedTime } from "./segment-elapsed";
 import { SegmentCard } from "./segment-card";
@@ -231,6 +233,7 @@ function CompactSubagentSegment(props: CompactSubagentSegmentProps) {
           </ul>
         </div>
       ) : null}
+      <SubagentChildProviderNotices nested={nested} />
       <SubagentChildrenSection nested={nested} />
       {result !== null ? (
         <SubagentResultPanel result={result} isStreaming={isStreaming} />
@@ -520,6 +523,7 @@ function SubagentDetails(props: SubagentDetailsProps) {
           />
         </div>
       ) : null}
+      <SubagentChildProviderNotices nested={nested} />
       <SubagentChildrenSection nested={nested} />
       {result !== null ? (
         <SubagentResultPanel result={result} isStreaming={isStreaming} />
@@ -574,6 +578,39 @@ function SubagentChildrenSection(props: {
           />
         ))}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Provider notices (Codex model reroute / safety verification / buffering,
+ * etc.) that arrived on THIS subagent's thread - unlike the tool/file_change/
+ * command entries in `nested`, these DO render as visible rows, right where
+ * the notice actually happened for this sub-agent.
+ */
+function SubagentChildProviderNotices(props: {
+  readonly nested: ReadonlyArray<SubagentChildSegment>;
+}) {
+  const notices = props.nested.filter(
+    (
+      child,
+    ): child is Extract<SubagentChildSegment, { kind: "provider_notice" }> =>
+      child.kind === "provider_notice",
+  );
+  if (notices.length === 0) return null;
+  return (
+    <div className="flex flex-col gap-1">
+      {notices.map((notice) => (
+        <ProviderNoticeSegment
+          key={notice.id}
+          status={notice.status}
+          tone={notice.tone}
+          title={notice.title}
+          message={notice.message}
+          details={notice.details}
+          findUnitId={chatFindSegmentUnitId(notice.id)}
+        />
+      ))}
     </div>
   );
 }
@@ -800,6 +837,7 @@ function WorkflowCardSegment(props: WorkflowCardSegmentProps) {
           />
         </div>
       ) : null}
+      <SubagentChildProviderNotices nested={nested} />
       <SubagentChildrenSection nested={nested} />
       {result !== null ? (
         <>

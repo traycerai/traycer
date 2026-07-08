@@ -1,10 +1,9 @@
 /**
- * `chat.subscribe@1.4` - versioned streaming-RPC contract for a single
- * host-owned GUI chat session. `chat.subscribe@1.0`/`@1.1`/`@1.3` (frozen, near
- * the bottom of this file) are the exact shapes shipped in earlier hosts -
- * `@1.2` has always been byte-identical to `@1.3` in this codebase; later
- * minors only add to them, so a `1.4` app still bridges to hosts that only know
- * `1.0`/`1.1`/`1.2`/`1.3`. Streams have no cross-major downgrade bridge (see
+ * `chat.subscribe@1.3` - versioned streaming-RPC contract for a single
+ * host-owned GUI chat session. `chat.subscribe@1.0`/`@1.1`/`@1.2` (frozen, near
+ * the bottom of this file) are the exact shapes shipped in earlier hosts; later
+ * minors only add to them, so a `1.3` app still bridges to hosts that only know
+ * `1.0`/`1.1`/`1.2`. Streams have no cross-major downgrade bridge (see
  * `stream-compat.ts`'s `canBridgeStream()`), so once a method ships, its major
  * must never move again - only additive minors.
  *
@@ -47,7 +46,7 @@ import {
   chatQueueSteerModeSchema,
   runtimeApprovalDecisionSchema,
   runtimeEventSchema,
-  runtimeEventSchemaV13,
+  runtimeEventSchemaV12,
   runtimeInterviewAnswerSchema,
   runtimePlanActionSchema,
 } from "@traycer/protocol/host/agent/gui/agent-runtime";
@@ -152,7 +151,7 @@ export type ChatAccumulatedFileChange = z.infer<
 /**
  * One currently-running background work item in this chat - a backgrounded
  * subagent, a `run_in_background` command, a Monitor, a scheduled wakeup, or
- * (from `chat.subscribe@1.4`) a workflow run. The host is the only
+ * (from `chat.subscribe@1.3`) a workflow run. The host is the only
  * correctness source for the running set: it removes an item in the same update
  * cycle that finalizes the originating transcript card. Surfaced so the
  * renderer can list running items above the composer, scroll to / expand the
@@ -173,12 +172,12 @@ const backgroundItemBaseFields = {
   parentTaskId: z.string().nullable().default(null),
 } as const;
 
-// ─── Frozen `chat.subscribe@1.3` background-item shapes (pre-`workflow`) ───
+// ─── Frozen `chat.subscribe@1.2` background-item shapes (pre-`workflow`) ───
 //
-// Kept so `chat.subscribe@1.4`'s frozen snapshot/turnStateChanged frame
-// schemas (below) parse only shapes a real 1.3 peer could produce. Do not add
-// the 1.4-only `workflow` kind here - a 1.3 peer must never observe it.
-export const backgroundItemKindSchemaV13 = z.enum([
+// Kept so frozen snapshot/turnStateChanged frame schemas parse only shapes a
+// real 1.2 peer could produce. Do not add the 1.3-only `workflow` kind here -
+// a 1.2 peer must never observe it.
+export const backgroundItemKindSchemaV12 = z.enum([
   "subagent",
   "command",
   "monitor",
@@ -207,12 +206,12 @@ const wakeupBackgroundItemSchema = z.object({
   scheduledFor: z.number(),
 });
 
-export const backgroundItemSchemaV13 = z.discriminatedUnion("kind", [
+export const backgroundItemSchemaV12 = z.discriminatedUnion("kind", [
   runningBackgroundItemSchema,
   wakeupBackgroundItemSchema,
 ]);
 
-// One currently-running WORKFLOW background item (`chat.subscribe@1.4`) - the
+// One currently-running WORKFLOW background item (`chat.subscribe@1.3`) - the
 // aggregate view of a Workflow tool run, not a per-fleet-agent row (inner
 // `agent()` calls have no individually addressable identity on the wire - see
 // the detection findings). `phase`/`activeLabel` mirror the rotating
@@ -229,13 +228,13 @@ const workflowBackgroundItemSchema = z.object({
 });
 
 export const backgroundItemKindSchema = z.enum([
-  ...backgroundItemKindSchemaV13.options,
+  ...backgroundItemKindSchemaV12.options,
   "workflow",
 ]);
 export type BackgroundItemKind = z.infer<typeof backgroundItemKindSchema>;
 
 export const backgroundItemSchema = z.discriminatedUnion("kind", [
-  ...backgroundItemSchemaV13.def.options,
+  ...backgroundItemSchemaV12.def.options,
   workflowBackgroundItemSchema,
 ]);
 export type BackgroundItem = z.infer<typeof backgroundItemSchema>;
@@ -464,8 +463,8 @@ const chatSubscribeTurnStateChangedServerFrameSchema = z.object({
 
 // `blockDelta`'s `event` schema is the one shared-frame shape that changes
 // incompatibly across `chat.subscribe` minors (`runtimeEventSchema` gained
-// `workflow.*` in `1.4`), so it is versioned separately from the rest of the
-// shared frames via this factory - see `chatSubscribeSharedServerFrameSchemasV13`
+// `workflow.*` in `1.3`), so it is versioned separately from the rest of the
+// shared frames via this factory - see `chatSubscribeSharedServerFrameSchemasV12`
 // (frozen) vs `chatSubscribeSharedServerFrameSchemas` (live) below.
 function blockDeltaServerFrameSchema<EventSchema extends z.ZodType>(
   eventSchema: EventSchema,
@@ -607,12 +606,10 @@ const chatSubscribeCommonServerFrameSchemas = [
   }),
 ];
 
-// Frozen for `chat.subscribe@1.3` and earlier (`1.1`, `1.2` have always been
-// byte-identical to `1.3` in this codebase - see the frozen-1.3 section near
-// the bottom of this file).
-const chatSubscribeSharedServerFrameSchemasV13 = [
+// Frozen for `chat.subscribe@1.2` and earlier.
+const chatSubscribeSharedServerFrameSchemasV12 = [
   ...chatSubscribeCommonServerFrameSchemas,
-  blockDeltaServerFrameSchema(runtimeEventSchemaV13),
+  blockDeltaServerFrameSchema(runtimeEventSchemaV12),
 ];
 
 const chatSubscribeSharedServerFrameSchemas = [
@@ -1208,15 +1205,15 @@ const chatSubscribeTurnStateChangedServerFrameSchemaV11 = z.object({
   turnInProgress: z.boolean().optional(),
 });
 
-// `1.1`'s shared frames are pinned to the frozen `1.3` set (not the live one)
+// `1.1`'s shared frames are pinned to the frozen `1.2` set (not the live one)
 // so this frozen contract can never silently absorb a construct added on a
-// later minor - see `chatSubscribeSharedServerFrameSchemasV13` above. This is
-// a pure pin, not a behavior change: until `1.4` added `workflow.*`, the live
+// later minor - see `chatSubscribeSharedServerFrameSchemasV12` above. This is
+// a pure pin, not a behavior change: until `1.3` added `workflow.*`, the live
 // and frozen sets were byte-identical.
 const chatSubscribeServerFrameSchemaV11 = z.discriminatedUnion("kind", [
   chatSubscribeSnapshotServerFrameSchemaV11,
   chatSubscribeTurnStateChangedServerFrameSchemaV11,
-  ...chatSubscribeSharedServerFrameSchemasV13,
+  ...chatSubscribeSharedServerFrameSchemasV12,
 ]);
 
 export const chatSubscribeV11 = defineStreamRpcContract({
@@ -1227,16 +1224,14 @@ export const chatSubscribeV11 = defineStreamRpcContract({
   clientFrameSchema: chatSubscribeClientFrameSchemaBeforeV13,
 });
 
-// ─── Frozen `chat.subscribe@1.3` shape (pre-`workflow`) ────────────────────
+// ─── Frozen `chat.subscribe@1.2` shape (host-v1.1.4, as shipped) ──────────
 //
-// Kept so `chat.subscribe@1.4` clients can still bridge to a host that only
-// advertises `1.3`, and so the in-repo `1.2`/`1.3` contract tests can't
-// silently absorb a `1.4`-only construct (`workflow` background items,
-// `workflow.*` blockDelta events - see `backgroundItemSchemaV13` /
-// `runtimeEventSchemaV13` above). `1.2` and `1.3` have always been
-// byte-identical in this codebase, so both contracts below share this one
-// frozen shape - do not add the `1.4`-only `workflow` kind/fields here.
-const chatSnapshotSchemaV13 = z.object({
+// Kept so `chat.subscribe@1.3` clients can still bridge to a host that only
+// advertises `1.2`, and so the in-repo `1.2` contract tests can't silently
+// absorb a `1.3`-only construct (`pauseQueue` client frames, `workflow`
+// background items, `workflow.*` blockDelta events). Do not add post-1.2
+// fields or variants here.
+const chatSnapshotSchemaV12 = z.object({
   chat: chatSchema,
   access: chatAccessSchema,
   queue: chatQueueStateSchema,
@@ -1248,31 +1243,31 @@ const chatSnapshotSchemaV13 = z.object({
   missingWorktreePaths: z.array(z.string()),
   pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchema),
   accumulatedFileChanges: z.array(chatAccumulatedFileChangeSchema),
-  backgroundItems: z.array(backgroundItemSchemaV13).optional(),
+  backgroundItems: z.array(backgroundItemSchemaV12).optional(),
   turnInProgress: z.boolean().optional(),
 });
 
-const chatSubscribeSnapshotServerFrameSchemaV13 = z.object({
+const chatSubscribeSnapshotServerFrameSchemaV12 = z.object({
   kind: z.literal("snapshot"),
   ...textFrameFields,
   ...chatReferenceFields,
-  snapshot: chatSnapshotSchemaV13,
+  snapshot: chatSnapshotSchemaV12,
 });
 
-const chatSubscribeTurnStateChangedServerFrameSchemaV13 = z.object({
+const chatSubscribeTurnStateChangedServerFrameSchemaV12 = z.object({
   kind: z.literal("turnStateChanged"),
   ...textFrameFields,
   ...chatReferenceFields,
   runStatus: chatRunStatusSchema,
   activeTurn: chatActiveTurnSchema.nullable(),
-  backgroundItems: z.array(backgroundItemSchemaV13).optional(),
+  backgroundItems: z.array(backgroundItemSchemaV12).optional(),
   turnInProgress: z.boolean().optional(),
 });
 
-const chatSubscribeServerFrameSchemaV13 = z.discriminatedUnion("kind", [
-  chatSubscribeSnapshotServerFrameSchemaV13,
-  chatSubscribeTurnStateChangedServerFrameSchemaV13,
-  ...chatSubscribeSharedServerFrameSchemasV13,
+const chatSubscribeServerFrameSchemaV12 = z.discriminatedUnion("kind", [
+  chatSubscribeSnapshotServerFrameSchemaV12,
+  chatSubscribeTurnStateChangedServerFrameSchemaV12,
+  ...chatSubscribeSharedServerFrameSchemasV12,
 ]);
 
 // ─── `chat.subscribe@1.2` contract ─────────────────────────────────────────
@@ -1281,25 +1276,15 @@ export const chatSubscribeV12 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 2 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchema,
-  serverFrameSchema: chatSubscribeServerFrameSchemaV13,
+  serverFrameSchema: chatSubscribeServerFrameSchemaV12,
   clientFrameSchema: chatSubscribeClientFrameSchemaBeforeV13,
 });
 
-// ─── `chat.subscribe@1.3` contract (frozen pre-`workflow`) ─────────────────
+// ─── Live `chat.subscribe@1.3` contract ────────────────────────────────────
 
 export const chatSubscribeV13 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 3 } as const,
-  openRequestSchema: chatSubscribeOpenRequestSchema,
-  serverFrameSchema: chatSubscribeServerFrameSchemaV13,
-  clientFrameSchema: chatSubscribeClientFrameSchema,
-});
-
-// ─── Live `chat.subscribe@1.4` contract ────────────────────────────────────
-
-export const chatSubscribeV14 = defineStreamRpcContract({
-  method: "chat.subscribe",
-  schemaVersion: { major: 1, minor: 4 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchema,
   serverFrameSchema: chatSubscribeServerFrameSchema,
   clientFrameSchema: chatSubscribeClientFrameSchema,

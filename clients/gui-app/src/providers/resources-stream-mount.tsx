@@ -10,6 +10,7 @@ import {
   type ResourcesStreamClientFactory,
 } from "@/stores/resources/resources-store";
 import { getResourcesStreamClientFactoryOverride } from "@/providers/resources-stream-factory-override";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 
 export interface ResourcesStreamMountProps {
   readonly epicId: string;
@@ -24,6 +25,11 @@ export interface ResourcesStreamMountProps {
  *
  * Deferred until the stream client binds (`useWsStreamClient()` is `null` during
  * the initial host-hydration gap); the effect re-runs when it becomes available.
+ *
+ * Gated behind the settings that actually consume resource data (the header
+ * popover and the sidebar chips) — with both off, no consumer would ever read
+ * the entry, so the stream stays closed. Both booleans join the effect deps so
+ * toggling a setting live acquires/releases without remounting the pane.
  */
 export function ResourcesStreamMount(
   props: ResourcesStreamMountProps,
@@ -32,9 +38,16 @@ export function ResourcesStreamMount(
   const wsStreamClient = useWsStreamClient();
   const resourcesSupport = useStreamMethodSupport("resources.subscribe");
   const resourcesUnsupported = resourcesSupport === "unsupported";
+  const showGlobalResourceMonitor = useSettingsStore(
+    (state) => state.showGlobalResourceMonitor,
+  );
+  const showNavigatorResourceStats = useSettingsStore(
+    (state) => state.showNavigatorResourceStats,
+  );
+  const streamWanted = showGlobalResourceMonitor || showNavigatorResourceStats;
 
   useEffect(() => {
-    if (resourcesUnsupported) return;
+    if (resourcesUnsupported || !streamWanted) return;
     const override = getResourcesStreamClientFactoryOverride();
     if (override === null && wsStreamClient === null) return;
     // Token identifies the transport this entry is bound to; a host swap changes
@@ -61,7 +74,7 @@ export function ResourcesStreamMount(
     return () => {
       resourcesRegistry.release(epicId);
     };
-  }, [epicId, resourcesUnsupported, wsStreamClient]);
+  }, [epicId, resourcesUnsupported, streamWanted, wsStreamClient]);
 
   return null;
 }

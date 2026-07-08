@@ -17,6 +17,10 @@ import {
   backgroundTaskOutputSchema,
   diffSourceSchema,
   fileEditReasonSchema,
+  providerNoticeDetailSchema,
+  providerNoticeKindSchema,
+  providerNoticeNormalizedMetadataSchema,
+  providerNoticeToneSchema,
   workflowActivityEntrySchema,
 } from "@traycer/protocol/persistence/epic/content-blocks";
 
@@ -25,11 +29,19 @@ export {
   backgroundTaskOutputSchema,
   diffSourceSchema,
   fileEditReasonSchema,
+  providerNoticeDetailSchema,
+  providerNoticeKindSchema,
+  providerNoticeNormalizedMetadataSchema,
+  providerNoticeToneSchema,
   workflowActivityEntrySchema,
   type AgentMessageSend,
   type BackgroundTaskOutput,
   type DiffSource,
   type FileEditReason,
+  type ProviderNoticeDetail,
+  type ProviderNoticeKind,
+  type ProviderNoticeNormalizedMetadata,
+  type ProviderNoticeTone,
   type WorkflowActivityEntry,
 } from "@traycer/protocol/persistence/epic/content-blocks";
 import { z } from "zod";
@@ -632,6 +644,36 @@ export type WorkflowCompletedEvent = z.infer<
   typeof workflowCompletedEventSchema
 >;
 
+/**
+ * Upserts a durable provider-generated notice (Codex model reroute / safety
+ * verification / buffering, and future equivalents) - see the tech plan.
+ * `chat.subscribe@1.3`-only, like `workflow.*` above. The accumulator writes
+ * this onto a compatibility-safe persisted `text` block (`text: fallbackText`
+ * + `providerNotice` enrichment) rather than a new `ContentBlock.type`, so
+ * older same-major readers still parse the chat - see
+ * `persistence/epic/content-blocks.ts`'s `providerNotice` field. Repeated
+ * events for the same `blockId` replace the rendered fields and fallback
+ * text; this is NOT a content boundary (see
+ * `completionEventsBeforeRuntimeEvent`), so an interleaved notice never
+ * finalizes an active text/reasoning stream.
+ */
+export const providerNoticeUpsertEventSchema = z.object({
+  ...baseRuntimeEventFields,
+  type: z.literal("provider_notice.upsert"),
+  harnessId: guiHarnessIdSchema,
+  noticeKind: providerNoticeKindSchema,
+  tone: providerNoticeToneSchema,
+  status: z.enum(["streaming", "completed"]),
+  title: z.string(),
+  message: z.string().nullable(),
+  details: z.array(providerNoticeDetailSchema),
+  fallbackText: z.string().min(1),
+  metadata: providerNoticeNormalizedMetadataSchema.nullable(),
+});
+export type ProviderNoticeUpsertEvent = z.infer<
+  typeof providerNoticeUpsertEventSchema
+>;
+
 export const fileChangeStartedEventSchema = z.object({
   ...baseRuntimeEventFields,
   type: z.literal("file_change.started"),
@@ -929,12 +971,12 @@ export type ErrorEvent = z.infer<typeof errorEventSchema>;
  */
 export const AUTH_ERROR_CODE = "auth";
 
-// ─── Frozen pre-`workflow.*` runtime-event union (`chat.subscribe@1.3`) ────
+// ─── Frozen pre-`workflow.*` runtime-event union (`chat.subscribe@1.2`) ────
 //
-// Kept so `chat.subscribe@1.3`'s frozen `blockDelta` frame schema (see
-// `subscribe.ts`) parses only events a real 1.3 peer could produce. Do not
-// add the `workflow.*` variants here - a 1.3 peer must never observe them.
-export const runtimeEventSchemaV13 = z.discriminatedUnion("type", [
+// Kept so `chat.subscribe@1.2`'s frozen `blockDelta` frame schema (see
+// `subscribe.ts`) parses only events a real 1.2 peer could produce. Do not
+// add the `workflow.*` variants here - a 1.2 peer must never observe them.
+export const runtimeEventSchemaV12 = z.discriminatedUnion("type", [
   textDeltaEventSchema,
   textCompletedEventSchema,
   reasoningDeltaEventSchema,
@@ -976,9 +1018,10 @@ export const runtimeEventSchemaV13 = z.discriminatedUnion("type", [
 ]);
 
 export const runtimeEventSchema = z.discriminatedUnion("type", [
-  ...runtimeEventSchemaV13.def.options,
+  ...runtimeEventSchemaV12.def.options,
   workflowStartedEventSchema,
   workflowProgressEventSchema,
   workflowCompletedEventSchema,
+  providerNoticeUpsertEventSchema,
 ]);
 export type RuntimeEvent = z.infer<typeof runtimeEventSchema>;

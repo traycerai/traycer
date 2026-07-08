@@ -370,6 +370,8 @@ function segmentSearchText(segment: MessageSegment): ReadonlyArray<string> {
           ),
         ),
       ];
+    case "provider_notice":
+      return providerNoticeSegmentSearchText(segment);
     case "interview":
       return interviewSegmentSearchText(segment);
     case "forked-chat-link":
@@ -505,6 +507,20 @@ function commandSegmentSearchText(
   return [normalizeSearchableText(segment.command)];
 }
 
+function providerNoticeSegmentSearchText(
+  segment: Extract<MessageSegment, { kind: "provider_notice" }>,
+): ReadonlyArray<string> {
+  return [
+    normalizeSearchableText(
+      [
+        segment.title,
+        segment.message ?? "",
+        ...segment.details.flatMap((detail) => [detail.label, detail.value]),
+      ].join(" "),
+    ),
+  ];
+}
+
 // A subagent renders TWO independently-visible regions, so it projects to two
 // find units:
 //   - header (name + agent type): always visible while the parent is open, so
@@ -542,17 +558,31 @@ function subagentSegmentSearchUnits(
       owningChain: bodyChain,
     }),
   ]).concat(
-    segment.children.flatMap((child) =>
-      child.kind === "subagent"
-        ? subagentSegmentSearchUnits({
-            segment: child,
-            renderId: child.id,
-            parentChain: bodyChain,
-            ownKey: deriveSubagentCollapsibleKey(tileInstanceId, child.id),
-            tileInstanceId,
-          })
-        : [],
-    ),
+    segment.children.flatMap((child) => {
+      if (child.kind === "subagent") {
+        return subagentSegmentSearchUnits({
+          segment: child,
+          renderId: child.id,
+          parentChain: bodyChain,
+          ownKey: deriveSubagentCollapsibleKey(tileInstanceId, child.id),
+          tileInstanceId,
+        });
+      }
+      // A nested provider notice renders as a visible row inside this
+      // subagent's own body (see `SubagentChildProviderNotices`), so its
+      // owning chain opens the SAME body key as the subagent's other content
+      // - not a further-nested key of its own.
+      if (child.kind === "provider_notice") {
+        return compactUnits([
+          chatFindUnit({
+            unitId: chatFindSegmentUnitId(child.id),
+            text: segmentSearchText(child).join("\n"),
+            owningChain: bodyChain,
+          }),
+        ]);
+      }
+      return [];
+    }),
   );
 }
 
