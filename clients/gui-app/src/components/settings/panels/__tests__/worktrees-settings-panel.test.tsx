@@ -444,6 +444,59 @@ describe("useWorktreeListing", () => {
       },
     ]);
   });
+
+  it("flags a truncated list as partial instead of hiding the failed page", async () => {
+    const first = entry({ worktreePath: "/wt/a", branch: "feat-a" });
+    let secondPageCalls = 0;
+    const client = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: { invalidateHostScope: () => undefined },
+      messenger: new MockHostMessenger<HostRpcRegistry>({
+        registry: hostRpcRegistry,
+        requestId: () => "req-1",
+        handlers: {
+          "worktree.listAllForHost": (params) => {
+            if (params.cursor === null) {
+              return { worktrees: [first], nextCursor: first.worktreePath };
+            }
+            secondPageCalls += 1;
+            throw new Error("host unreachable");
+          },
+        },
+      }),
+    });
+    client.bind(mockLocalHostEntry);
+    client.setRequestContext(
+      createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+    );
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const wrapper = (props: { readonly children: ReactNode }): ReactNode => (
+      <QueryClientProvider client={queryClient}>
+        {props.children}
+      </QueryClientProvider>
+    );
+
+    const { result } = renderHook(() => useWorktreeListing(client, true), {
+      wrapper,
+    });
+
+    await waitFor(() => {
+      expect(secondPageCalls).toBeGreaterThan(0);
+    });
+    await waitFor(() => {
+      expect(result.current.isPartial).toBe(true);
+    });
+    // The earlier page's data survives - a truncated list is still useful,
+    // and must never be reported as `isError`/`isEmpty` (both would hide it).
+    expect(result.current.worktrees.map((item) => item.worktreePath)).toEqual([
+      "/wt/a",
+    ]);
+    expect(result.current.isError).toBe(false);
+    expect(result.current.isEmpty).toBe(false);
+    expect(result.current.errorMessage).not.toBeNull();
+  });
 });
 
 describe("WorktreesList delete flow", () => {

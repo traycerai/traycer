@@ -630,7 +630,43 @@ function WorktreesBody(props: {
           filterControls={null}
         />
       ) : null}
+      {listing.isPartial ? (
+        <WorktreesPartialListingBanner
+          message={listing.errorMessage}
+          onRetry={listing.refresh}
+        />
+      ) : null}
       {content}
+    </div>
+  );
+}
+
+/**
+ * A later listing page failed after earlier pages already landed - `worktrees`
+ * is real but an INCOMPLETE prefix of the host's full list. The list still
+ * renders below (partial data is useful), but this banner is the only signal
+ * that it is truncated, so it must never be dropped silently.
+ */
+function WorktreesPartialListingBanner(props: {
+  readonly message: string | null;
+  readonly onRetry: () => Promise<unknown>;
+}): ReactNode {
+  return (
+    <div className="flex items-center gap-2 border-b border-border/60 bg-amber-500/10 px-4 py-2 text-ui-sm text-amber-700 dark:text-amber-300">
+      <AlertTriangle className="size-4 shrink-0" aria-hidden />
+      <span className="min-w-0 flex-1 wrap-anywhere">
+        Some worktrees could not be loaded
+        {props.message !== null ? `: ${props.message}` : ""}. The list below
+        is incomplete.
+      </span>
+      <Button
+        variant="ghost"
+        size="sm"
+        className="h-7 shrink-0 px-2 text-amber-700 hover:text-amber-800 dark:text-amber-300 dark:hover:text-amber-200"
+        onClick={() => void props.onRetry()}
+      >
+        Retry
+      </Button>
     </div>
   );
 }

@@ -42,6 +42,14 @@ export function useWorktreeListing(
   readonly isError: boolean;
   readonly errorMessage: string | null;
   readonly isEmpty: boolean;
+  /**
+   * A later page failed after earlier pages already landed, so `worktrees` is
+   * a real but INCOMPLETE prefix of the host's full list - `isError` stays
+   * false (there is usable data to show), so this is the only signal that the
+   * list is truncated. Callers must not present `worktrees` as the complete
+   * set while this is true; surface it and let the user retry.
+   */
+  readonly isPartial: boolean;
   readonly refresh: () => Promise<unknown>;
   readonly refreshing: boolean;
 } {
@@ -128,6 +136,7 @@ export function useWorktreeListing(
     isError: isError && worktrees.length === 0,
     errorMessage: error?.message ?? null,
     isEmpty: isSuccess && !hasNextPage && worktrees.length === 0,
+    isPartial: isError && worktrees.length > 0,
     refresh: () => refetch(),
     refreshing: isFetching,
   };
