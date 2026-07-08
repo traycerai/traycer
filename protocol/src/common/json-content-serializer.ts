@@ -192,9 +192,7 @@ function serializeTextRun(nodes: JsonContent[]): string {
 
     const toOpen = marks
       .filter((mark) => !keptKeys.has(mark.key))
-      .sort(
-        (a, b) => continuation(b.key, index) - continuation(a.key, index),
-      );
+      .sort((a, b) => continuation(b.key, index) - continuation(a.key, index));
     const ordered = [
       ...toOpen.filter((mark) => mark.type !== "code"),
       ...toOpen.filter((mark) => mark.type === "code"),
