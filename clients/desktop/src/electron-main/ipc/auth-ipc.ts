@@ -2,6 +2,13 @@ import {
   RunnerHostEvent,
   RunnerHostInvoke,
 } from "../../ipc-contracts/ipc-channels";
+import {
+  listUserSessionsViaHttp,
+  requestStepUpChallengeViaHttp,
+  revokeAllSessionsViaHttp,
+  revokeUserSessionViaHttp,
+  verifyStepUpChallengeViaHttp,
+} from "@traycer-clients/shared/auth/devices-sessions-fetcher";
 import { validateAuthTokenIdentityAccessOnly } from "@traycer-clients/shared/auth/auth-validation";
 import type { DesktopAuthSessionSnapshot } from "../../ipc-contracts/window-types";
 import {
@@ -82,6 +89,59 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
   });
   bridge.disposeFns.push(unsubscribeTokenStore);
   bridge.disposeFns.push(() => bridge.authTokenStore.dispose());
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.listUserSessions,
+    async (_event, bearerToken: unknown) => {
+      assertString(bearerToken, "listUserSessions.bearerToken");
+      return listUserSessionsViaHttp(bridge.options.authnBaseUrl, bearerToken);
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.revokeUserSession,
+    async (_event, bearerToken: unknown, familyId: unknown) => {
+      assertString(bearerToken, "revokeUserSession.bearerToken");
+      assertString(familyId, "revokeUserSession.familyId");
+      return revokeUserSessionViaHttp(
+        bridge.options.authnBaseUrl,
+        bearerToken,
+        familyId,
+      );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.revokeAllSessions,
+    async (_event, bearerToken: unknown) => {
+      assertString(bearerToken, "revokeAllSessions.bearerToken");
+      return revokeAllSessionsViaHttp(bridge.options.authnBaseUrl, bearerToken);
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.requestStepUpChallenge,
+    async (_event, bearerToken: unknown) => {
+      assertString(bearerToken, "requestStepUpChallenge.bearerToken");
+      return requestStepUpChallengeViaHttp(
+        bridge.options.authnBaseUrl,
+        bearerToken,
+      );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.verifyStepUpChallenge,
+    async (_event, bearerToken: unknown, code: unknown) => {
+      assertString(bearerToken, "verifyStepUpChallenge.bearerToken");
+      assertString(code, "verifyStepUpChallenge.code");
+      return verifyStepUpChallengeViaHttp(
+        bridge.options.authnBaseUrl,
+        bearerToken,
+        code,
+      );
+    },
+  );
 
   bridge.handleInvoke(RunnerHostInvoke.authSessionGet, () => {
     return bridge.authSession.get();

@@ -77,6 +77,13 @@ export type {
 };
 
 import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/auth-validation-types";
+import type {
+  ListUserSessionsFetchResult,
+  RevokeAllSessionsFetchResult,
+  RevokeUserSessionFetchResult,
+  StepUpChallengeFetchResult,
+  StepUpVerifyFetchResult,
+} from "@traycer-clients/shared/auth/devices-sessions-fetcher";
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
 import type {
   DesktopAppUpdateCheckIntent,
@@ -126,6 +133,19 @@ export interface DesktopPreloadBridge {
   // Credentials-file token store (tech plan §3): an IPC client of the main
   // `FileTokenStore`. Replaces the renderer-local encrypt-storage token slots.
   tokenStore: ITokenStore;
+  listUserSessions(bearerToken: string): Promise<ListUserSessionsFetchResult>;
+  revokeUserSession(
+    bearerToken: string,
+    familyId: string,
+  ): Promise<RevokeUserSessionFetchResult>;
+  revokeAllSessions(bearerToken: string): Promise<RevokeAllSessionsFetchResult>;
+  requestStepUpChallenge(
+    bearerToken: string,
+  ): Promise<StepUpChallengeFetchResult>;
+  verifyStepUpChallenge(
+    bearerToken: string,
+    code: string,
+  ): Promise<StepUpVerifyFetchResult>;
   openExternalLink(url: string): Promise<void>;
   getRegisteredUrlSchemes(
     schemes: readonly string[],
@@ -719,6 +739,36 @@ export class DesktopRunnerHost implements IRunnerHost {
     token: string,
   ): Promise<AuthIdentityValidationResult> {
     return this.bridge.validateAuthTokenIdentity(token);
+  }
+
+  listUserSessions(bearerToken: string): Promise<ListUserSessionsFetchResult> {
+    return this.bridge.listUserSessions(bearerToken);
+  }
+
+  revokeUserSession(
+    bearerToken: string,
+    familyId: string,
+  ): Promise<RevokeUserSessionFetchResult> {
+    return this.bridge.revokeUserSession(bearerToken, familyId);
+  }
+
+  revokeAllSessions(
+    bearerToken: string,
+  ): Promise<RevokeAllSessionsFetchResult> {
+    return this.bridge.revokeAllSessions(bearerToken);
+  }
+
+  requestStepUpChallenge(
+    bearerToken: string,
+  ): Promise<StepUpChallengeFetchResult> {
+    return this.bridge.requestStepUpChallenge(bearerToken);
+  }
+
+  verifyStepUpChallenge(
+    bearerToken: string,
+    code: string,
+  ): Promise<StepUpVerifyFetchResult> {
+    return this.bridge.verifyStepUpChallenge(bearerToken, code);
   }
 
   beginAuthAttempt(): void {

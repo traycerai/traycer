@@ -30,6 +30,13 @@ export const RunnerHostInvoke = {
   authTokenStoreRotate: "runnerHost:auth:tokenStore:rotate",
   authTokenStoreDelete: "runnerHost:auth:tokenStore:delete",
   authTokenStoreMigrateLegacy: "runnerHost:auth:tokenStore:migrateLegacy",
+  // Devices & Sessions account-security surface. These authn-v3 calls run in
+  // main for the same renderer-origin CORS reason as token validation.
+  listUserSessions: "runnerHost:auth:sessions:list",
+  revokeUserSession: "runnerHost:auth:sessions:revoke",
+  revokeAllSessions: "runnerHost:auth:sessions:revokeAll",
+  requestStepUpChallenge: "runnerHost:auth:stepUp:challenge",
+  verifyStepUpChallenge: "runnerHost:auth:stepUp:verify",
   openExternalLink: "runnerHost:openExternalLink",
   getRegisteredUrlSchemes: "runnerHost:getRegisteredUrlSchemes",
   requestMicrophoneAccess: "runnerHost:requestMicrophoneAccess",

@@ -1,5 +1,12 @@
 import type { Disposable } from "./uri-callback";
 import type { AuthIdentityValidationResult } from "../auth/auth-validation-types";
+import type {
+  ListUserSessionsFetchResult,
+  RevokeAllSessionsFetchResult,
+  RevokeUserSessionFetchResult,
+  StepUpChallengeFetchResult,
+  StepUpVerifyFetchResult,
+} from "../auth/devices-sessions-fetcher";
 import type { StoredCredentials } from "@traycer/protocol/config/credentials";
 
 export type { StoredCredentials } from "@traycer/protocol/config/credentials";
@@ -68,6 +75,25 @@ export interface IRunnerHost {
   validateAuthTokenIdentity(
     token: string,
   ): Promise<AuthIdentityValidationResult>;
+
+  /**
+   * Fetches the signed-in user's account sessions from authn-v3. Desktop shells
+   * run this in Electron main for the same renderer-origin CORS reason as token
+   * validation. Never throws: transport failures collapse into the result.
+   */
+  listUserSessions(bearerToken: string): Promise<ListUserSessionsFetchResult>;
+  revokeUserSession(
+    bearerToken: string,
+    familyId: string,
+  ): Promise<RevokeUserSessionFetchResult>;
+  revokeAllSessions(bearerToken: string): Promise<RevokeAllSessionsFetchResult>;
+  requestStepUpChallenge(
+    bearerToken: string,
+  ): Promise<StepUpChallengeFetchResult>;
+  verifyStepUpChallenge(
+    bearerToken: string,
+    code: string,
+  ): Promise<StepUpVerifyFetchResult>;
 
   openExternalLink(url: string): Promise<void>;
 

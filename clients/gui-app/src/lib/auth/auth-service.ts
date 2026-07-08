@@ -11,6 +11,13 @@ import type {
 import { shouldWipeLegacyCredentials } from "@traycer-clients/shared/platform/runner-host";
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
+import type { ListUserSessionsResponse } from "@traycer/protocol/auth/devices-sessions";
+import type {
+  RevokeAllSessionsFetchResult,
+  RevokeUserSessionFetchResult,
+  StepUpChallengeFetchResult,
+  StepUpVerifyFetchResult,
+} from "@traycer-clients/shared/auth/devices-sessions-fetcher";
 import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/auth-validation";
 import { credentialsIdentityFromAuthenticatedUser } from "@traycer-clients/shared/auth/auth-validation";
 import {
@@ -1066,6 +1073,66 @@ export class AuthService {
     // so TanStack Query surfaces a retryable error on the panel (refresh button)
     // instead of a misleading "no subscription" empty state.
     throw new Error("Couldn't reach Traycer to load your subscription.");
+  }
+
+  /**
+   * Fetches the signed-in user's device/session list via authn-v3. The raw
+   * bearer remains inside this auth boundary; callers consume a parsed DTO from
+   * TanStack Query and render signed-out as an empty state.
+   */
+  async fetchUserSessions(): Promise<ListUserSessionsResponse | null> {
+    if (this.currentBearer === null) {
+      return null;
+    }
+    const result = await this.runnerHost.listUserSessions(this.currentBearer);
+    if (result.kind === "unauthorized") {
+      return null;
+    }
+    if (result.kind === "network-error") {
+      throw new Error("Couldn't reach Traycer to load your sessions.");
+    }
+    return result.response;
+  }
+
+  /**
+   * Revokes one session family. `stepUpAccessToken` is null for the first
+   * attempt; if authn responds `step-up-required`, the UI verifies an OTP and
+   * retries with the short-TTL step-up bearer.
+   */
+  async revokeUserSession(
+    familyId: string,
+    stepUpAccessToken: string | null,
+  ): Promise<RevokeUserSessionFetchResult> {
+    const bearer = stepUpAccessToken ?? this.currentBearer;
+    if (bearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.revokeUserSession(bearer, familyId);
+  }
+
+  /**
+   * Global sign-out is intentionally tighter than per-session cleanup: callers
+   * pass a freshly minted step-up token for each invocation instead of reusing
+   * the cached batch credential.
+   */
+  async revokeAllSessions(
+    stepUpAccessToken: string,
+  ): Promise<RevokeAllSessionsFetchResult> {
+    return this.runnerHost.revokeAllSessions(stepUpAccessToken);
+  }
+
+  async requestStepUpChallenge(): Promise<StepUpChallengeFetchResult> {
+    if (this.currentBearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.requestStepUpChallenge(this.currentBearer);
+  }
+
+  async verifyStepUpChallenge(code: string): Promise<StepUpVerifyFetchResult> {
+    if (this.currentBearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.verifyStepUpChallenge(this.currentBearer, code);
   }
 
   private async revalidateCurrentContextOnce(

@@ -31,6 +31,18 @@ import type {
 } from "../../platform/runner-host";
 import { defaultShellArgs } from "@traycer/protocol/config/shell-family";
 import {
+  listUserSessionsViaHttp,
+  requestStepUpChallengeViaHttp,
+  revokeAllSessionsViaHttp,
+  revokeUserSessionViaHttp,
+  verifyStepUpChallengeViaHttp,
+  type ListUserSessionsFetchResult,
+  type RevokeAllSessionsFetchResult,
+  type RevokeUserSessionFetchResult,
+  type StepUpChallengeFetchResult,
+  type StepUpVerifyFetchResult,
+} from "../../auth/devices-sessions-fetcher";
+import {
   credentialsIdentityFromAuthenticatedUser,
   refreshOnceAbortable,
   validateAuthTokenIdentityAccessOnceAbortable,
@@ -183,6 +195,38 @@ export class MockRunnerHost implements IRunnerHost {
     // Access-only (§3): the mock mirrors the desktop IPC, which no longer
     // refreshes on a failed lookup — the spend routes through `tokenStore.rotate`.
     return validateAuthTokenIdentityAccessOnly(this.authnBaseUrl, token);
+  }
+
+  listUserSessions(bearerToken: string): Promise<ListUserSessionsFetchResult> {
+    // The in-memory shell has no CORS boundary, so it calls the shared HTTP
+    // helper directly (browser/dev parity with the auth validators above).
+    return listUserSessionsViaHttp(this.authnBaseUrl, bearerToken);
+  }
+
+  revokeUserSession(
+    bearerToken: string,
+    familyId: string,
+  ): Promise<RevokeUserSessionFetchResult> {
+    return revokeUserSessionViaHttp(this.authnBaseUrl, bearerToken, familyId);
+  }
+
+  revokeAllSessions(
+    bearerToken: string,
+  ): Promise<RevokeAllSessionsFetchResult> {
+    return revokeAllSessionsViaHttp(this.authnBaseUrl, bearerToken);
+  }
+
+  requestStepUpChallenge(
+    bearerToken: string,
+  ): Promise<StepUpChallengeFetchResult> {
+    return requestStepUpChallengeViaHttp(this.authnBaseUrl, bearerToken);
+  }
+
+  verifyStepUpChallenge(
+    bearerToken: string,
+    code: string,
+  ): Promise<StepUpVerifyFetchResult> {
+    return verifyStepUpChallengeViaHttp(this.authnBaseUrl, bearerToken, code);
   }
 
   async openExternalLink(url: string): Promise<void> {
