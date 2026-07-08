@@ -13,6 +13,7 @@ import {
   useQueryClient,
   type QueryClient,
 } from "@tanstack/react-query";
+import { useNavigate } from "@tanstack/react-router";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { toast } from "sonner";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -125,6 +126,10 @@ import {
 } from "@/components/settings/panels/worktrees-settings-perf";
 import { WorktreeListRenderProfiler } from "@/components/settings/panels/worktree-list-render-profiler";
 import { useWorktreeActivityEnrichment } from "@/components/settings/panels/worktrees-enrichment";
+import {
+  navigateToTabIntent,
+  openOrFocusEpicIntent,
+} from "@/lib/tab-navigation";
 
 type WorktreeRowDeleteStatus = "deleting";
 const SETTINGS_WORKTREE_LIST_PAGE_LIMIT = 32;
@@ -1715,6 +1720,16 @@ function WorktreeRow(props: {
   const deleting = deleteStatus !== null;
   const selectedForDelete = selected && canSelect;
   const classification = classifyWorktree(entry);
+  const navigate = useNavigate();
+  const openTask = useCallback(
+    (epicId: string): void => {
+      navigateToTabIntent(
+        navigate,
+        openOrFocusEpicIntent({ epicId, focus: undefined }),
+      );
+    },
+    [navigate],
+  );
   return (
     <div
       aria-busy={deleting}
@@ -1750,6 +1765,7 @@ function WorktreeRow(props: {
             owners={entry.owners}
             taskTitlesByEpicId={taskTitlesByEpicId}
             taskRollupByEpicId={taskRollupByEpicId}
+            onOpenTask={openTask}
           />
           <WorktreePathAffordance
             worktreePath={entry.worktreePath}
@@ -1967,6 +1983,7 @@ function WorktreeTaskAssociation(props: {
   readonly owners: WorktreeHostEntryV11["owners"];
   readonly taskTitlesByEpicId: ReadonlyMap<string, string>;
   readonly taskRollupByEpicId: ReadonlyMap<string, TaskMergeRollup>;
+  readonly onOpenTask: (epicId: string) => void;
 }): ReactNode {
   const epicIds = [...new Set(props.owners.map((owner) => owner.epicId))];
   if (epicIds.length === 0) {
@@ -1989,11 +2006,21 @@ function WorktreeTaskAssociation(props: {
       {named.map((item) => (
         <span key={item.epicId} className="flex items-center gap-1">
           <Badge
+            asChild
             variant="outline"
-            className="max-w-[min(60vw,16rem)] font-normal"
-            title={item.title}
+            className="max-w-[min(60vw,16rem)] cursor-pointer font-normal hover:bg-muted hover:text-muted-foreground"
           >
-            <span className="truncate">{item.title}</span>
+            <button
+              type="button"
+              title={item.title}
+              aria-label={`Open Task ${item.title}`}
+              onClick={(event) => {
+                event.stopPropagation();
+                props.onOpenTask(item.epicId);
+              }}
+            >
+              <span className="truncate">{item.title}</span>
+            </button>
           </Badge>
           <TaskMergeRollupBadge
             rollup={props.taskRollupByEpicId.get(item.epicId) ?? null}

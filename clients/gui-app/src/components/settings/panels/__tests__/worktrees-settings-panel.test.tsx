@@ -57,6 +57,29 @@ vi.mock("sonner", () => ({
   },
 }));
 
+const routerMock = vi.hoisted(() => ({ navigate: vi.fn() }));
+vi.mock("@tanstack/react-router", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@tanstack/react-router")>()),
+  useNavigate: () => routerMock.navigate,
+}));
+
+const tabNavigationMock = vi.hoisted(() => ({
+  navigateToTabIntent: vi.fn(),
+  openOrFocusEpicIntent: vi.fn(
+    (input: { readonly epicId: string; readonly focus: unknown }) => ({
+      kind: "epic",
+      epicId: input.epicId,
+      tabId: `tab-${input.epicId}`,
+      focus: input.focus,
+    }),
+  ),
+}));
+vi.mock("@/lib/tab-navigation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/tab-navigation")>()),
+  navigateToTabIntent: tabNavigationMock.navigateToTabIntent,
+  openOrFocusEpicIntent: tabNavigationMock.openOrFocusEpicIntent,
+}));
+
 // Render the Radix dropdown menus inline + always-open so tests can assert /
 // click the Select and Sort menu items without fighting pointer-open semantics
 // in jsdom (mirrors the established mock in folder-controls.test).
@@ -1611,6 +1634,9 @@ describe("WorktreesList v1.1 signals", () => {
   afterEach(() => {
     cleanup();
     __resetWorktreeDeleteRunForTests();
+    routerMock.navigate.mockClear();
+    tabNavigationMock.navigateToTabIntent.mockClear();
+    tabNavigationMock.openOrFocusEpicIntent.mockClear();
   });
 
   it("renders a Task chip per owning epic, resolving titles from the cache", () => {
@@ -1649,11 +1675,84 @@ describe("WorktreesList v1.1 signals", () => {
       onVisiblePathsChange: undefined,
     });
 
-    // The resolved epic-1 renders a chip (the duplicate epic-1 owner collapses).
-    screen.getByText("Ship the audit");
+    // The resolved epic-1 renders a button chip (the duplicate epic-1 owner collapses).
+    screen.getByRole("button", { name: "Open Task Ship the audit" });
     // epic-2 has no cached title -> demoted muted "Owner unresolved" text, not a
     // prominent chip.
     screen.getByText("Owner unresolved");
+  });
+
+  it("opens the owning Task epic when a resolved Task chip is clicked", () => {
+    renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees: [
+        entry({
+          worktreePath: "/wt/owned",
+          branch: "feat-owned",
+          owners: [
+            {
+              epicId: "epic-1",
+              ownerKind: "chat",
+              ownerId: "chat-1",
+              updatedAt: 10,
+            },
+          ],
+        }),
+      ],
+      taskTitlesByEpicId: new Map([["epic-1", "Ship the audit"]]),
+      enrichedByPath: undefined,
+      erroredPaths: undefined,
+      onVisiblePathsChange: undefined,
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open Task Ship the audit" }),
+    );
+
+    expect(tabNavigationMock.openOrFocusEpicIntent).toHaveBeenCalledTimes(1);
+    expect(tabNavigationMock.openOrFocusEpicIntent).toHaveBeenCalledWith({
+      epicId: "epic-1",
+      focus: undefined,
+    });
+    expect(tabNavigationMock.navigateToTabIntent).toHaveBeenCalledTimes(1);
+    expect(tabNavigationMock.navigateToTabIntent).toHaveBeenCalledWith(
+      routerMock.navigate,
+      {
+        kind: "epic",
+        epicId: "epic-1",
+        tabId: "tab-epic-1",
+        focus: undefined,
+      },
+    );
+  });
+
+  it("keeps unresolved owners non-interactive", () => {
+    renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees: [
+        entry({
+          worktreePath: "/wt/owned",
+          branch: "feat-owned",
+          owners: [
+            {
+              epicId: "epic-unknown",
+              ownerKind: "chat",
+              ownerId: "chat-1",
+              updatedAt: 10,
+            },
+          ],
+        }),
+      ],
+      taskTitlesByEpicId: new Map(),
+      enrichedByPath: undefined,
+      erroredPaths: undefined,
+      onVisiblePathsChange: undefined,
+    });
+
+    screen.getByText("Owner unresolved");
+    expect(screen.queryByRole("button", { name: /Open Task/i })).toBeNull();
   });
 
   it("labels a worktree with no owners as not used by any Task", () => {
