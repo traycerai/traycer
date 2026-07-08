@@ -137,13 +137,19 @@ export function useWorktreeListing(
     painted: isSuccess && worktrees.length > 0,
     rowCount: worktrees.length,
   });
+  // `data !== undefined` - not `worktrees.length > 0` - is what distinguishes
+  // "a page has landed" from "no page has landed yet": a host with zero
+  // worktrees legitimately has an empty first page, and a later background
+  // error on that host must still read as partial/empty, never as the hard
+  // error state (which would hide the fact that the empty result was real).
+  const hasLoadedData = data !== undefined;
   return {
     worktrees,
     isPending,
-    isError: isError && worktrees.length === 0,
+    isError: isError && !hasLoadedData,
     errorMessage: error?.message ?? null,
     isEmpty: isSuccess && !hasNextPage && worktrees.length === 0,
-    isPartial: isError && worktrees.length > 0,
+    isPartial: isError && hasLoadedData,
     refresh: () => refetch(),
     retryPartial: () => fetchNextPage(),
     refreshing: isFetching,

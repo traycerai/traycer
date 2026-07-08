@@ -131,6 +131,7 @@ import {
   openOrFocusEpicIntent,
 } from "@/lib/tab-navigation";
 import { RunnerHostContext } from "@/providers/runner-host-context";
+import { useOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
 
 type WorktreeRowDeleteStatus = "deleting";
 // Per-row activity-enrichment state, driving ONLY the tier pill's presentation:
@@ -2375,19 +2376,17 @@ function WorktreePrAnchor(props: {
   readonly children: ReactNode;
 }): ReactNode {
   const runnerHost = use(RunnerHostContext);
+  const openExternalLink = useOpenExternalLink();
   const openExternal = useCallback(
     (event: MouseEvent<HTMLAnchorElement>): void => {
       event.stopPropagation();
+      // No RunnerHost bound (e.g. web): let the browser handle the anchor
+      // natively, preserving modifier-click/middle-click tab semantics.
       if (runnerHost === null) return;
       event.preventDefault();
-      // If the RunnerHost call rejects, fall back to a plain browser open so
-      // the click never goes dead - preventDefault() already blocked native
-      // navigation, so this is the only remaining path to the link.
-      runnerHost.openExternalLink(props.href).catch(() => {
-        window.open(props.href, "_blank", "noreferrer");
-      });
+      openExternalLink.mutate(props.href);
     },
-    [props.href, runnerHost],
+    [props.href, runnerHost, openExternalLink],
   );
   return (
     <a
