@@ -615,6 +615,23 @@
   float: left;
 }
 
+/*
+ * Per-node placeholder for the CURRENT empty block (Tiptap's `Placeholder`
+ * flags it `.is-empty` with `showOnlyCurrent`, the default). Powers the
+ * Notion-style empty title line ("Untitled") and the body hint on the focused
+ * empty paragraph of a freshly seeded hand-created artifact - see
+ * `seedArtifactTitleHeading` / `resolveArtifactPlaceholderText`. Excludes the
+ * whole-empty-editor first child, which the rule above already renders.
+ */
+.tc-editor-prose .is-empty:not(.is-editor-empty)::before {
+  content: attr(data-placeholder);
+  color: var(--color-muted-foreground, hsl(0 0% 45%));
+  opacity: 0.6;
+  pointer-events: none;
+  height: 0;
+  float: left;
+}
+
 [data-composer-editor].is-editor-empty,
 [data-composer-editor] .is-editor-empty:first-child {
   position: relative;
