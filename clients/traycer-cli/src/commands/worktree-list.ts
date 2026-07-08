@@ -193,7 +193,8 @@ export function formatWorktreeListTable(
   includeActivity: boolean,
   nextCursor: string | null,
 ): string {
-  if (worktrees.length === 0) return formatWorktreeListTailHints([], nextCursor);
+  if (worktrees.length === 0)
+    return formatWorktreeListTailHints([], nextCursor);
   const rows = worktrees.map((entry) => [
     entry.repoLabel,
     entry.branch ?? "(detached)",

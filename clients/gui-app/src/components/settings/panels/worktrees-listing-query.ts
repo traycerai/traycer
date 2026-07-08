@@ -102,13 +102,7 @@ export function useWorktreeListing(
     if (!hasNextPage) return;
     if (isFetchingNextPage || isError) return;
     void fetchNextPage();
-  }, [
-    enabled,
-    fetchNextPage,
-    hasNextPage,
-    isError,
-    isFetchingNextPage,
-  ]);
+  }, [enabled, fetchNextPage, hasNextPage, isError, isFetchingNextPage]);
   const worktrees =
     data?.pages.flatMap((page) => page.worktrees) ?? EMPTY_WORKTREES;
   // Perf telemetry (gated + non-throwing). Both legs now track the BASE query -

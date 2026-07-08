@@ -425,10 +425,9 @@ describe("useWorktreeListing", () => {
     });
 
     await waitFor(() => {
-      expect(result.current.worktrees.map((item) => item.worktreePath)).toEqual([
-        "/wt/a",
-        "/wt/b",
-      ]);
+      expect(result.current.worktrees.map((item) => item.worktreePath)).toEqual(
+        ["/wt/a", "/wt/b"],
+      );
     });
     expect(requests).toEqual([
       {
