@@ -375,6 +375,42 @@ describe("ResourceMonitorPopover", () => {
               activeProcessName: "bun",
               cpuPercent: 4,
               rssBytes: 50 * 1024 * 1024,
+              // Distinct pids from the first owner: a host never reuses a pid
+              // across owners, so per-node expansion must not collide.
+              rootPids: [200],
+              processes: [
+                resourceProcess({
+                  pid: 200,
+                  rootPid: 200,
+                  name: "zsh",
+                  command: "/bin/zsh",
+                  rssBytes: 40 * 1024 * 1024,
+                }),
+                resourceProcess({
+                  pid: 201,
+                  parentPid: 200,
+                  rootPid: 200,
+                  name: "node",
+                  command: "node dev-server.js",
+                  rssBytes: 60 * 1024 * 1024,
+                }),
+                resourceProcess({
+                  pid: 202,
+                  parentPid: 201,
+                  rootPid: 200,
+                  name: "sh",
+                  command: "/bin/sh",
+                  rssBytes: 2 * 1024 * 1024,
+                }),
+                resourceProcess({
+                  pid: 203,
+                  parentPid: 202,
+                  rootPid: 200,
+                  name: "make",
+                  command: "make",
+                  rssBytes: 4 * 1024 * 1024,
+                }),
+              ],
             }),
           ],
         }),
@@ -403,15 +439,34 @@ describe("ResourceMonitorPopover", () => {
       .getAllByText("node dev-server.js (2 sub-processes)")[0]
       .closest("button");
     if (cappedProcessRow === null) {
-      throw new Error("Expected capped process row to be a focusable button");
+      throw new Error("Expected capped process row to be an expand button");
     }
-    fireEvent.focus(cappedProcessRow);
-    const tooltip = await screen.findByRole("tooltip");
-    expect(tooltip.textContent).toContain("/bin/sh");
-    expect(tooltip.textContent).toContain("make");
-    // The collapsed sub-tree carries the same CPU/memory columns as the tree.
-    expect(tooltip.textContent).toContain("2.0 MB");
-    expect(tooltip.textContent).toContain("4.0 MB");
+    // Clicking the boundary reveals its whole sub-tree (to the leaves) inline,
+    // with each revealed row carrying its own CPU/memory columns.
+    fireEvent.click(cappedProcessRow);
+    expect(screen.getByText("/bin/sh")).not.toBeNull();
+    expect(screen.getByText("make")).not.toBeNull();
+    expect(screen.getAllByText("2.0 MB").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("4.0 MB").length).toBeGreaterThan(0);
+    // The expanded row drops its "(N sub-processes)" summary; the other owner's
+    // tree stays collapsed (expansion is per-node, and multiple may be open).
+    expect(screen.getByText("node dev-server.js")).not.toBeNull();
+    expect(
+      screen.getAllByText("node dev-server.js (2 sub-processes)"),
+    ).toHaveLength(1);
+
+    // Clicking again collapses it back to the summarized boundary.
+    const expandedRow = screen
+      .getByText("node dev-server.js")
+      .closest("button");
+    if (expandedRow === null) {
+      throw new Error("Expected expanded row to be a collapse button");
+    }
+    fireEvent.click(expandedRow);
+    expect(screen.queryByText("/bin/sh")).toBeNull();
+    expect(
+      screen.getAllByText("node dev-server.js (2 sub-processes)"),
+    ).toHaveLength(2);
   });
 
   it("commits an already-open owner in the CURRENT tab through the same-route boundary", async () => {
@@ -601,6 +656,28 @@ describe("ResourceMonitorPopover", () => {
     ).toHaveBeenCalledWith(
       expect.objectContaining({ tabId: "tab-2", nestedFocus: null }),
     );
+  });
+
+  it("pins root section headers to the top of the scroll region", () => {
+    const stub = installStubFactory();
+    render(
+      <TooltipProvider>
+        <ResourcesStreamMount epicId="epic-1" />
+        <ResourceMonitorPopover className={undefined} />
+      </TooltipProvider>,
+    );
+
+    act(() => {
+      stub.emit().onSnapshot(projection({ app: app(), owners: [owner({})] }));
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+
+    // The section root ("Traycer Host") header sticks so it stays visible as its
+    // rows scroll under it; the current header swaps per section (not stacked).
+    const hostHeader = screen.getByText("Traycer Host").closest(".sticky");
+    expect(hostHeader).not.toBeNull();
+    expect(hostHeader?.className).toContain("top-0");
   });
 
   it("hides terminal rows with no subprocesses while keeping aggregate metrics", () => {

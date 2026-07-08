@@ -42,8 +42,6 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
-import { Tooltip, TooltipTrigger } from "@/components/ui/tooltip";
-import { Tooltip as TooltipPrimitive } from "radix-ui";
 import {
   useGlobalResourceProjection,
   type GlobalResourceEpicEntry,
@@ -102,11 +100,11 @@ const SORT_LABELS: Record<ResourceSortOption, string> = {
 const METRIC_COLS = "flex shrink-0 items-center tabular-nums tracking-tight";
 const CPU_COL = "w-14 text-right";
 const MEM_COL = "w-20 text-right";
-// The collapsed sub-tree tooltip is a mini-panel mirroring the process tree, so
-// it rides the light popover surface rather than the default inverted (dark)
-// tooltip chip - matching the popover it extends.
-const HIDDEN_SUBPROCESS_TOOLTIP_SURFACE =
-  "z-50 w-fit max-w-[min(90vw,22rem)] origin-(--radix-tooltip-content-transform-origin) rounded-lg bg-popover p-1.5 text-popover-foreground shadow-md ring-1 ring-foreground/10 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=delayed-open]:animate-in data-[state=delayed-open]:fade-in-0 data-[state=delayed-open]:zoom-in-95 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95";
+// The current root section pins to the top of the scroll region and swaps to the
+// next section as it scrolls into view (a single sticky header, not a stack).
+// Opaque background so scrolled rows slide cleanly underneath it.
+const STICKY_SECTION_HEADER =
+  "sticky top-0 z-20 border-b border-border/50 bg-popover";
 const DESKTOP_RESOURCE_SAMPLE_INTERVAL_MS = 1000;
 const desktopAppResourceListeners = new Set<() => void>();
 let desktopAppResourceSnapshot: DesktopAppResourceUsage | null = null;
@@ -179,15 +177,20 @@ interface DesktopResourceSummary {
 interface ProcessDisplayRow {
   readonly process: ResourceProcessSnapshotWire;
   readonly depth: number;
-  readonly hiddenDescendants: readonly HiddenProcessRow[];
+  // A row at the visible-depth cap that still has descendants is an expand
+  // boundary: clicking it reveals its whole sub-tree (to the leaves) inline.
+  readonly canExpand: boolean;
+  readonly expanded: boolean;
+  // Descendant count, shown as "(N sub-processes)" while the boundary is closed.
+  readonly hiddenCount: number;
 }
 
-interface HiddenProcessRow {
-  readonly process: ResourceProcessSnapshotWire;
-  // Depth relative to the capped row (the first hidden level is 1) so the
-  // tooltip can indent the collapsed sub-tree the same way the main tree does.
-  readonly depth: number;
-}
+// No process is expanded; used where visibility (not expansion) is all that
+// matters, e.g. deciding whether an owner row has any process rows to show.
+const NO_EXPANDED_PROCESSES: ReadonlySet<string> = new Set();
+
+// For process rows that can never expand (e.g. the host's single root process).
+function noProcessToggle(): void {}
 
 export function ResourceMonitorPopover(props: ResourceMonitorPopoverProps) {
   const [open, setOpen] = useState(false);
@@ -240,6 +243,9 @@ function ResourceMonitorContent(props: { readonly onClose: () => void }) {
   const [sortOption, setSortOption] = useState<ResourceSortOption>("memory");
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
   const [collapsedOwners, setCollapsedOwners] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [expandedProcesses, setExpandedProcesses] = useState<Set<string>>(
     () => new Set(),
   );
   const panelRef = useRef<HTMLDivElement | null>(null);
@@ -296,6 +302,18 @@ function ResourceMonitorContent(props: { readonly onClose: () => void }) {
 
   const toggleOwner = (key: string): void => {
     setCollapsedOwners((previous) => {
+      const next = new Set(previous);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  };
+
+  const toggleProcess = (key: string): void => {
+    setExpandedProcesses((previous) => {
       const next = new Set(previous);
       if (next.has(key)) {
         next.delete(key);
@@ -486,7 +504,9 @@ function ResourceMonitorContent(props: { readonly onClose: () => void }) {
                     key={task.entry.epicId}
                     task={task}
                     collapsedOwners={collapsedOwners}
+                    expandedProcesses={expandedProcesses}
                     onToggleOwner={toggleOwner}
+                    onToggleProcess={toggleProcess}
                     onOpenOwner={openOwner}
                   />
                 ))
@@ -623,7 +643,12 @@ function DesktopAppResourceSection(props: {
 
   return (
     <div className="border-b border-border/60 py-1">
-      <div className="flex items-center justify-between px-3.5 py-1.5">
+      <div
+        className={cn(
+          "flex items-center justify-between px-3.5 py-1.5",
+          STICKY_SECTION_HEADER,
+        )}
+      >
         <div className="flex min-w-0 items-center gap-1.5">
           <Monitor className="size-3.5 shrink-0 text-muted-foreground/80" />
           <span className="min-w-0 truncate text-ui-sm font-medium text-foreground">
@@ -666,7 +691,12 @@ function DesktopAppProcessGroupRow(props: {
 function HostAppResourceSection(props: { readonly app: AppResourceUsage }) {
   return (
     <div className="border-b border-border/60 py-1">
-      <div className="flex items-center justify-between px-3.5 py-1.5">
+      <div
+        className={cn(
+          "flex items-center justify-between px-3.5 py-1.5",
+          STICKY_SECTION_HEADER,
+        )}
+      >
         <div className="flex min-w-0 items-center gap-1.5">
           <Server className="size-3.5 shrink-0 text-muted-foreground/80" />
           <span className="min-w-0 truncate text-ui-sm font-medium text-foreground">
@@ -680,12 +710,15 @@ function HostAppResourceSection(props: { readonly app: AppResourceUsage }) {
         />
       </div>
       {props.app.process === null ? null : (
-        <ProcessLeafRow
+        <ProcessTreeRow
           processRow={{
             process: props.app.process,
             depth: 1,
-            hiddenDescendants: [],
+            canExpand: false,
+            expanded: false,
+            hiddenCount: 0,
           }}
+          onToggleExpand={noProcessToggle}
         />
       )}
     </div>
@@ -740,12 +773,19 @@ function buildEpicTitleById(
 function TaskResourceSection(props: {
   readonly task: TaskDisplayRow;
   readonly collapsedOwners: ReadonlySet<string>;
+  readonly expandedProcesses: ReadonlySet<string>;
   readonly onToggleOwner: (key: string) => void;
+  readonly onToggleProcess: (key: string) => void;
   readonly onOpenOwner: (row: OwnerDisplayRow) => void;
 }) {
   return (
     <div className="border-b border-border/50 py-1 last:border-b-0">
-      <div className="flex items-center justify-between px-3.5 py-1.5">
+      <div
+        className={cn(
+          "flex items-center justify-between px-3.5 py-1.5",
+          STICKY_SECTION_HEADER,
+        )}
+      >
         <span className="min-w-0 truncate text-ui-xs font-semibold uppercase tracking-wide text-muted-foreground">
           {props.task.label}
         </span>
@@ -766,7 +806,9 @@ function TaskResourceSection(props: {
             key={key}
             row={row}
             collapsed={props.collapsedOwners.has(key)}
+            expandedProcesses={props.expandedProcesses}
             onToggle={() => props.onToggleOwner(key)}
+            onToggleProcess={props.onToggleProcess}
             onOpen={() => props.onOpenOwner(row)}
           />
         );
@@ -778,10 +820,15 @@ function TaskResourceSection(props: {
 function OwnerTreeRow(props: {
   readonly row: OwnerDisplayRow;
   readonly collapsed: boolean;
+  readonly expandedProcesses: ReadonlySet<string>;
   readonly onToggle: () => void;
+  readonly onToggleProcess: (key: string) => void;
   readonly onOpen: () => void;
 }) {
-  const processRows = buildProcessRows(props.row.snapshot.processes);
+  const processRows = buildProcessRows(
+    props.row.snapshot.processes,
+    props.expandedProcesses,
+  );
   const hasProcesses = processRows.length > 0;
   return (
     <div>
@@ -834,40 +881,60 @@ function OwnerTreeRow(props: {
       {props.collapsed
         ? null
         : processRows.map((processRow) => (
-            <ProcessLeafRow
-              key={`${processRow.process.rootPid}:${processRow.process.pid}`}
+            <ProcessTreeRow
+              key={processRowKey(processRow.process)}
               processRow={processRow}
+              onToggleExpand={props.onToggleProcess}
             />
           ))}
     </div>
   );
 }
 
-function ProcessLeafRow(props: { readonly processRow: ProcessDisplayRow }) {
-  const hiddenCount = props.processRow.hiddenDescendants.length;
+function ProcessRowMarker(props: {
+  readonly canExpand: boolean;
+  readonly expanded: boolean;
+}) {
+  if (!props.canExpand) {
+    return (
+      <span className="size-1 shrink-0 rounded-full bg-muted-foreground/40" />
+    );
+  }
+  return props.expanded ? (
+    <ChevronDown className="size-3 shrink-0 text-muted-foreground/70" />
+  ) : (
+    <ChevronRight className="size-3 shrink-0 text-muted-foreground/70" />
+  );
+}
+
+function ProcessTreeRow(props: {
+  readonly processRow: ProcessDisplayRow;
+  readonly onToggleExpand: (key: string) => void;
+}) {
+  const { process, depth, canExpand, expanded, hiddenCount } = props.processRow;
   const rowClassName =
     "flex w-full items-center justify-between gap-3 px-3.5 py-1 text-left text-muted-foreground transition-colors hover:bg-muted/40";
-  const rowStyle = {
-    paddingLeft: `calc(1.25rem + ${props.processRow.depth} * 1rem)`,
-  };
+  const rowStyle = { paddingLeft: `calc(1.25rem + ${depth} * 1rem)` };
   const inner = (
     <>
       <div className="flex min-w-0 items-center gap-1.5">
-        <span className="size-1 shrink-0 rounded-full bg-muted-foreground/40" />
+        <ProcessRowMarker canExpand={canExpand} expanded={expanded} />
         <span className="min-w-0 truncate text-ui-xs">
-          {processLeafLabel(props.processRow.process, hiddenCount)}
+          {expanded
+            ? processLabel(process)
+            : processLeafLabel(process, hiddenCount)}
         </span>
       </div>
       <MetricPair
-        cpuPercent={props.processRow.process.cpuPercent}
-        rssBytes={props.processRow.process.rssBytes}
+        cpuPercent={process.cpuPercent}
+        rssBytes={process.rssBytes}
         className="text-ui-xs text-muted-foreground/80"
       />
     </>
   );
-  // Leaf rows are static; only a capped row reveals more (its hidden sub-tree),
-  // so it is the one focusable, keyboard-reachable trigger for that tooltip.
-  if (hiddenCount === 0) {
+  // Leaf and non-boundary rows are static; only an expand boundary is an
+  // interactive, keyboard-reachable toggle that reveals its sub-tree inline.
+  if (!canExpand) {
     return (
       <div className={rowClassName} style={rowStyle}>
         {inner}
@@ -875,59 +942,19 @@ function ProcessLeafRow(props: { readonly processRow: ProcessDisplayRow }) {
     );
   }
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <button
-          type="button"
-          className={cn(
-            rowClassName,
-            "cursor-default outline-none focus-visible:bg-muted/40 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring",
-          )}
-          style={rowStyle}
-        >
-          {inner}
-        </button>
-      </TooltipTrigger>
-      <TooltipPrimitive.Portal>
-        <TooltipPrimitive.Content
-          side="right"
-          align="start"
-          sideOffset={8}
-          className={HIDDEN_SUBPROCESS_TOOLTIP_SURFACE}
-        >
-          <HiddenSubprocessTooltip rows={props.processRow.hiddenDescendants} />
-          <TooltipPrimitive.Arrow className="size-2.5 translate-y-[calc(-50%_-_2px)] rotate-45 rounded-xs bg-popover fill-popover" />
-        </TooltipPrimitive.Content>
-      </TooltipPrimitive.Portal>
-    </Tooltip>
-  );
-}
-
-function HiddenSubprocessTooltip(props: {
-  readonly rows: readonly HiddenProcessRow[];
-}) {
-  return (
-    <div className="flex max-h-[min(40vh,18rem)] min-w-0 flex-col overflow-y-auto text-left">
-      {props.rows.map((row) => (
-        <div
-          key={`${row.process.rootPid}:${row.process.pid}`}
-          className="flex items-center justify-between gap-3 py-1 text-muted-foreground"
-          style={{ paddingLeft: `calc(${row.depth} * 1rem)` }}
-        >
-          <div className="flex min-w-0 items-center gap-1.5">
-            <span className="size-1 shrink-0 rounded-full bg-muted-foreground/40" />
-            <span className="min-w-0 truncate text-ui-xs">
-              {processLabel(row.process)}
-            </span>
-          </div>
-          <MetricPair
-            cpuPercent={row.process.cpuPercent}
-            rssBytes={row.process.rssBytes}
-            className="text-ui-xs text-muted-foreground/80"
-          />
-        </div>
-      ))}
-    </div>
+    <button
+      type="button"
+      aria-expanded={expanded}
+      aria-label={`${expanded ? "Collapse" : "Expand"} sub-processes of ${processLabel(process)}`}
+      onClick={() => props.onToggleExpand(processRowKey(process))}
+      className={cn(
+        rowClassName,
+        "outline-none focus-visible:bg-muted/40 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring",
+      )}
+      style={rowStyle}
+    >
+      {inner}
+    </button>
   );
 }
 
@@ -1277,7 +1304,8 @@ function shouldShowOwnerRow(snapshot: OwnerResourceSnapshotWire): boolean {
   // A terminal always carries its own shell, so "has a process" is always true
   // and never filters anything. Show a terminal only once it has a sub-process
   // worth rendering - an idle shell adds no signal over the aggregate metrics.
-  return buildProcessRows(snapshot.processes).length > 0;
+  // Visibility depends only on the always-visible rows, not on expansion state.
+  return buildProcessRows(snapshot.processes, NO_EXPANDED_PROCESSES).length > 0;
 }
 
 function resourceOwnerKindForNodeType(
@@ -1360,86 +1388,72 @@ function processLeafLabel(
   return `${label} (${countLabel(hiddenCount, "sub-process", "sub-processes")})`;
 }
 
+function processRowKey(process: ResourceProcessSnapshotWire): string {
+  return `${process.rootPid}:${process.pid}`;
+}
+
 function buildProcessRows(
   processes: readonly ResourceProcessSnapshotWire[],
+  expandedKeys: ReadonlySet<string>,
 ): ProcessDisplayRow[] {
   // A lone process - a terminal shell with nothing running under it, or an owner
   // whose whole tree is a single process - is fully described by its owner row,
-  // so it adds no signal as a child row. Render nothing (and no expand chevron)
-  // and let the owner row stand alone.
+  // so it adds no signal as a child row.
   if (processes.length <= 1) return [];
-  const byPid = processByPid(processes);
-  return processes.flatMap((process): ProcessDisplayRow[] => {
-    const depth = processDepth(process, byPid);
-    if (depth > MAX_VISIBLE_PROCESS_DEPTH) return [];
-    return [
-      {
-        process,
-        depth,
-        hiddenDescendants:
-          depth === MAX_VISIBLE_PROCESS_DEPTH
-            ? hiddenProcessDescendants(process, processes, byPid)
-            : [],
-      },
-    ];
-  });
-}
 
-function processDepth(
-  process: ResourceProcessSnapshotWire,
-  byPid: ReadonlyMap<number, ResourceProcessSnapshotWire>,
-): number {
-  let depth = process.pid === process.rootPid ? 1 : 2;
-  let cursor = process;
-  const visited = new Set<number>([process.pid]);
-  while (cursor.parentPid !== null && cursor.parentPid !== process.rootPid) {
-    const parent = byPid.get(cursor.parentPid);
-    if (parent === undefined || visited.has(parent.pid)) break;
-    visited.add(parent.pid);
-    cursor = parent;
-    depth += 1;
+  const childrenByParent = new Map<number, ResourceProcessSnapshotWire[]>();
+  for (const process of processes) {
+    if (process.parentPid === null || process.pid === process.rootPid) continue;
+    const siblings = childrenByParent.get(process.parentPid) ?? [];
+    siblings.push(process);
+    childrenByParent.set(process.parentPid, siblings);
   }
-  return depth;
-}
 
-function processByPid(
-  processes: readonly ResourceProcessSnapshotWire[],
-): ReadonlyMap<number, ResourceProcessSnapshotWire> {
-  return new Map(processes.map((entry) => [entry.pid, entry]));
-}
-
-function hiddenProcessDescendants(
-  process: ResourceProcessSnapshotWire,
-  processes: readonly ResourceProcessSnapshotWire[],
-  byPid: ReadonlyMap<number, ResourceProcessSnapshotWire>,
-): HiddenProcessRow[] {
-  return processes.flatMap((candidate): HiddenProcessRow[] => {
-    const depth = processDepth(candidate, byPid);
-    if (
-      depth <= MAX_VISIBLE_PROCESS_DEPTH ||
-      !isProcessDescendantOf(candidate, process.pid, byPid)
-    ) {
-      return [];
+  const countDescendants = (pid: number, seen: Set<number>): number => {
+    let total = 0;
+    for (const child of childrenByParent.get(pid) ?? []) {
+      if (seen.has(child.pid)) continue;
+      seen.add(child.pid);
+      total += 1 + countDescendants(child.pid, seen);
     }
-    return [{ process: candidate, depth: depth - MAX_VISIBLE_PROCESS_DEPTH }];
-  });
-}
+    return total;
+  };
 
-function isProcessDescendantOf(
-  process: ResourceProcessSnapshotWire,
-  ancestorPid: number,
-  byPid: ReadonlyMap<number, ResourceProcessSnapshotWire>,
-): boolean {
-  let cursor = process;
-  const visited = new Set<number>([process.pid]);
-  while (cursor.parentPid !== null) {
-    if (cursor.parentPid === ancestorPid) return true;
-    const parent = byPid.get(cursor.parentPid);
-    if (parent === undefined || visited.has(parent.pid)) break;
-    visited.add(parent.pid);
-    cursor = parent;
+  const rows: ProcessDisplayRow[] = [];
+  const walk = (
+    process: ResourceProcessSnapshotWire,
+    depth: number,
+    revealed: boolean,
+    seen: Set<number>,
+  ): void => {
+    const children = childrenByParent.get(process.pid) ?? [];
+    // Only the deepest always-visible level acts as an expand boundary; once it
+    // is expanded (or an ancestor boundary is), the sub-tree renders to leaves.
+    const atBoundary =
+      depth === MAX_VISIBLE_PROCESS_DEPTH && children.length > 0;
+    const expanded = atBoundary && expandedKeys.has(processRowKey(process));
+    rows.push({
+      process,
+      depth,
+      canExpand: atBoundary,
+      expanded,
+      hiddenCount: atBoundary
+        ? countDescendants(process.pid, new Set([process.pid]))
+        : 0,
+    });
+    if (depth >= MAX_VISIBLE_PROCESS_DEPTH && !expanded && !revealed) return;
+    for (const child of children) {
+      if (seen.has(child.pid)) continue;
+      seen.add(child.pid);
+      walk(child, depth + 1, expanded || revealed, seen);
+    }
+  };
+
+  for (const root of processes) {
+    if (root.pid !== root.rootPid) continue;
+    walk(root, 1, false, new Set([root.pid]));
   }
-  return false;
+  return rows;
 }
 
 function countLabel(count: number, singular: string, plural: string): string {
