@@ -133,7 +133,10 @@ import {
   terminalSubscribeV13,
 } from "@traycer/protocol/host/terminal/contracts";
 import { notificationsSubscribeV10 } from "@traycer/protocol/host/notifications/contracts";
-import { resourcesSubscribeV10 } from "@traycer/protocol/host/resources/subscribe";
+import {
+  resourcesSubscribeV10,
+  resourcesSubscribeV11,
+} from "@traycer/protocol/host/resources/subscribe";
 import {
   speechEnsureModelV10,
   speechGetModelStatusV10,
@@ -2882,10 +2885,13 @@ export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
   },
   "resources.subscribe": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: resourcesSubscribeV10,
+        },
+        1: {
+          contract: resourcesSubscribeV11,
         },
       },
     },

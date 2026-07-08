@@ -77,13 +77,14 @@ function projection(
     app: null,
     owners: [],
     epic: null,
+    epics: [],
     ...over,
   };
 }
 
 function installStubFactory(): { emit: () => ResourcesStreamCallbacks } {
   let captured: ResourcesStreamCallbacks | null = null;
-  __setResourcesStreamClientFactoryForTests((_epicId, callbacks) => {
+  __setResourcesStreamClientFactoryForTests((_scope, callbacks) => {
     captured = callbacks;
     return { close: () => undefined };
   });
