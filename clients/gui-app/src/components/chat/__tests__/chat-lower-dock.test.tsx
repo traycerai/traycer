@@ -186,6 +186,7 @@ function renderDock(input: {
         editingQueueItemId={null}
         topSpacing="normal"
         scrollRegionMaxHeightClass="max-h-96"
+        onQueuePause={() => null}
         onQueueResume={() => null}
         onQueueEdit={vi.fn()}
         onQueueCancel={vi.fn()}

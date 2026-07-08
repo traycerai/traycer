@@ -173,6 +173,8 @@ export function AssistantMessageBody({
               stopped={item.segment.stopped}
               startedAt={item.segment.startedAt}
               durationMs={item.segment.durationMs}
+              workflowMeta={item.segment.workflowMeta}
+              nested={item.segment.children}
               variant="promoted"
             />
           );
@@ -755,6 +757,8 @@ function AssistantSegment({
           stopped={segment.stopped}
           startedAt={segment.startedAt}
           durationMs={segment.durationMs}
+          workflowMeta={segment.workflowMeta}
+          nested={segment.children}
           variant="card"
         />
       );

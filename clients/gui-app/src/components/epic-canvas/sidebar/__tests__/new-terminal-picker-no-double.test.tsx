@@ -29,7 +29,7 @@ const ROW: WorktreeBindingSelectorRow = {
 
 vi.mock("@/hooks/worktree/use-worktree-list-bindings-for-epic-query", () => ({
   useWorktreeListBindingsForEpic: () => ({
-    data: { rows: [ROW] },
+    data: { rows: [ROW], folderlessCwd: "/Users/tgill" },
     isPending: false,
     isError: false,
   }),

@@ -23,7 +23,9 @@ import {
   useGitPanelStore,
   type GitPanelSelectedRepo,
 } from "@/stores/epics/git-panel-store";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { GitDiffPanelBodyLive } from "../git-diff-panel-body-live";
+import { expectModuleHeaderTooltip } from "./git-module-header-test-utils";
 
 const testState = vi.hoisted(() => ({
   rows: [] as WorktreeBindingSelectorRow[],
@@ -280,7 +282,9 @@ function renderPanel(selected: GitPanelSelectedRepo): QueryClient {
 
   render(
     <QueryClientProvider client={queryClient}>
-      <GitDiffPanelBodyLive epicId={EPIC_ID} tabId={TAB_ID} />
+      <TooltipProvider delayDuration={0}>
+        <GitDiffPanelBodyLive epicId={EPIC_ID} tabId={TAB_ID} />
+      </TooltipProvider>
     </QueryClientProvider>,
   );
   return queryClient;
@@ -473,7 +477,7 @@ describe("<GitDiffPanelBodyLive /> workspace switcher integration", () => {
     expect(screen.getByTestId("git-module-no-changes-root")).toBeDefined();
   });
 
-  it("renders a parent-reference-only submodule as a module group", () => {
+  it("renders a parent-reference-only submodule as a module group", async () => {
     testState.snapshots.set(
       "/repo",
       response({
@@ -487,9 +491,10 @@ describe("<GitDiffPanelBodyLive /> workspace switcher integration", () => {
     expect(
       screen.getByTestId("git-module-group-submodule-traycer"),
     ).toBeDefined();
-    expect(
-      screen.getByTestId("git-module-header-traycer").getAttribute("title"),
-    ).toContain("pinned commit out of date");
+    await expectModuleHeaderTooltip(
+      screen.getByTestId("git-module-header-traycer"),
+      "pinned commit out of date",
+    );
     expect(screen.queryByText("pinned commit out of date")).toBeNull();
     expect(screen.getByTestId("git-module-no-changes-traycer")).toBeDefined();
     expect(
@@ -502,7 +507,7 @@ describe("<GitDiffPanelBodyLive /> workspace switcher integration", () => {
     expect(screen.queryByText("Submodule reference:")).toBeNull();
   });
 
-  it("keeps all-clean modules collapsed behind the clean-submodule affordance", () => {
+  it("renders the panel empty state when all modules are clean", () => {
     testState.snapshots.set(
       "/repo",
       response({
@@ -512,8 +517,9 @@ describe("<GitDiffPanelBodyLive /> workspace switcher integration", () => {
 
     renderPanel(rootSelected);
 
-    expect(screen.getByTestId("git-module-no-changes-root")).toBeDefined();
-    expect(screen.getByTestId("git-clean-modules-affordance")).toBeDefined();
+    expect(screen.getByTestId("git-diff-empty-refresh")).toBeDefined();
+    expect(screen.queryByTestId("git-module-no-changes-root")).toBeNull();
+    expect(screen.queryByTestId("git-clean-modules-affordance")).toBeNull();
     expect(
       screen.queryByTestId("git-module-group-submodule-traycer"),
     ).toBeNull();
@@ -796,6 +802,8 @@ describe("<GitDiffPanelBodyLive /> workspace switcher integration", () => {
     const trigger = screen.getByTestId("git-diff-repo-switcher-trigger");
     const noChanges = screen.getByText("No changes");
     expect(screen.queryByTestId("git-repo-tree")).toBeNull();
+    expect(screen.getByTestId("git-diff-empty-refresh")).toBeDefined();
+    expect(screen.queryByTestId("git-module-no-changes-root")).toBeNull();
     expect(
       Boolean(
         trigger.compareDocumentPosition(noChanges) &

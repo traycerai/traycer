@@ -74,10 +74,11 @@ import { buildChatRunSettings } from "@/lib/composer/chat-run-settings";
 import { contentIsSubmittable } from "@/lib/composer/composer-content";
 import { buildSubmittedChatJSONContent } from "@/lib/composer/tiptap-json-content";
 import {
-  deriveResolvedWorkspaceAvailability,
+  deriveFolderlessAllowedWorkspaceAvailability,
   workspaceComposerCanStart,
 } from "@/lib/composer/workspace-composer-availability";
 import { buildForkWorkspaceSeedFromWorkspaceFolders } from "@/lib/worktree/fork-workspace-seed";
+import { deriveWorkspaceMode } from "@/lib/worktree/workspace-mode";
 import { cn } from "@/lib/utils";
 import { ActiveHostWorkspaceControls } from "@/components/home/host-workspace-selector/host-workspace-selector";
 import { ComposerBody } from "@/components/home/composer/composer-body";
@@ -536,13 +537,14 @@ function NewConversationModalBody(props: {
   );
   const workspaceAvailability = useMemo(
     () =>
-      deriveResolvedWorkspaceAvailability(
+      deriveFolderlessAllowedWorkspaceAvailability(
         resolvedWorkspace.folders,
         resolvedWorkspace.isLoading,
       ),
     [resolvedWorkspace.folders, resolvedWorkspace.isLoading],
   );
   const workspaceCanStart = workspaceComposerCanStart(workspaceAvailability);
+  const draftWorkspaceFolderCount = draftWorkspace.folders.length;
   const canSubmit =
     canMutate && !isSubmitting && workspaceCanStart && hasSubmittableContent;
   const composerDisabledHint =
@@ -644,6 +646,10 @@ function NewConversationModalBody(props: {
     const profile = useAuthStore.getState().profile;
     const userId = profile?.userId ?? null;
     const worktreeIntent = worktreeIntentForSubmit();
+    const workspaceMode = deriveWorkspaceMode(
+      draftWorkspaceFolderCount,
+      worktreeIntent,
+    );
     if (worktreeIntent !== null) {
       rememberEpicIntent(epicId, worktreeIntent, now);
     }
@@ -681,6 +687,7 @@ function NewConversationModalBody(props: {
         title: "",
         chatId,
         settings,
+        workspaceMode,
         worktreeIntent,
         initialMessage,
       },
@@ -711,6 +718,7 @@ function NewConversationModalBody(props: {
     canSubmit,
     cleanupAfterSubmit,
     createChat,
+    draftWorkspaceFolderCount,
     epicId,
     hostClient,
     parentId,
@@ -725,6 +733,10 @@ function NewConversationModalBody(props: {
     (launch: TerminalAgentLaunch) => {
       if (!canMutate || !workspaceCanStart) return;
       const worktreeIntent = worktreeIntentForSubmit();
+      const workspaceMode = deriveWorkspaceMode(
+        draftWorkspaceFolderCount,
+        worktreeIntent,
+      );
       if (worktreeIntent !== null) {
         rememberEpicIntent(epicId, worktreeIntent, Date.now());
       }
@@ -743,6 +755,7 @@ function NewConversationModalBody(props: {
           forkSourceHarnessSessionId: null,
           onStatusChange: null,
           worktreeIntent,
+          workspaceMode,
           terminalAgentArgs: launch.terminalAgentArgs,
         })
         .catch(() => undefined);
@@ -750,6 +763,7 @@ function NewConversationModalBody(props: {
     [
       canMutate,
       cleanupAfterSubmit,
+      draftWorkspaceFolderCount,
       epicId,
       parentId,
       placement,

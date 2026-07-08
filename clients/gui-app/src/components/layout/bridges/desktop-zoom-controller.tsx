@@ -17,10 +17,6 @@ import { formatZoomPercent } from "@/lib/windows/format-zoom-percent";
 import type { DesktopZoomBridge } from "@/lib/windows/types";
 
 const INDICATOR_DISMISS_MS = 4_000;
-const WHEEL_STEP_THRESHOLD_PX = 80;
-const LINE_DELTA_PX = 16;
-const PAGE_DELTA_PX = 800;
-const PINCH_STEP_RATIO = 1.08;
 const INDICATOR_TRANSITION = { duration: 0.16, ease: "easeOut" } as const;
 
 export function DesktopZoomController() {
@@ -38,7 +34,6 @@ export function DesktopZoomController() {
     [reset, stepIn, stepOut],
   );
   useZoomKeybindings(zoom, actions);
-  useZoomGestures(zoom, actions);
   return (
     <DesktopZoomIndicator
       zoom={zoom}
@@ -76,88 +71,6 @@ function useZoomKeybindings(
       unregisterIn();
       unregisterOut();
       unregisterReset();
-    };
-  }, [actions, zoom]);
-}
-
-function useZoomGestures(
-  zoom: DesktopZoomBridge | null,
-  actions: ZoomActions,
-): void {
-  const pendingWheelDeltaRef = useRef(0);
-  const previousGestureScaleRef = useRef(1);
-  const queueRef = useRef<Promise<void> | null>(null);
-
-  useEffect(() => {
-    pendingWheelDeltaRef.current = 0;
-    previousGestureScaleRef.current = 1;
-    queueRef.current = null;
-    if (zoom === null) return;
-
-    const enqueue = (direction: 1 | -1) => {
-      const currentQueue = queueRef.current ?? Promise.resolve();
-      queueRef.current = currentQueue
-        .then(() => (direction > 0 ? actions.stepIn() : actions.stepOut()))
-        .then(() => undefined)
-        .catch(() => undefined);
-    };
-
-    const handleWheel = (event: WheelEvent) => {
-      if (!event.ctrlKey) return;
-      event.preventDefault();
-      event.stopPropagation();
-      pendingWheelDeltaRef.current += wheelDeltaToPixels(event);
-      while (
-        Math.abs(pendingWheelDeltaRef.current) >= WHEEL_STEP_THRESHOLD_PX
-      ) {
-        if (pendingWheelDeltaRef.current < 0) {
-          enqueue(1);
-          pendingWheelDeltaRef.current += WHEEL_STEP_THRESHOLD_PX;
-        } else {
-          enqueue(-1);
-          pendingWheelDeltaRef.current -= WHEEL_STEP_THRESHOLD_PX;
-        }
-      }
-    };
-
-    const handleGestureStart = (event: Event) => {
-      event.preventDefault();
-      previousGestureScaleRef.current = readGestureScale(event) ?? 1;
-    };
-
-    const handleGestureChange = (event: Event) => {
-      const scale = readGestureScale(event);
-      if (scale === null) return;
-      event.preventDefault();
-      event.stopPropagation();
-      const previous = previousGestureScaleRef.current;
-      if (scale >= previous * PINCH_STEP_RATIO) {
-        enqueue(1);
-        previousGestureScaleRef.current = scale;
-      } else if (scale <= previous / PINCH_STEP_RATIO) {
-        enqueue(-1);
-        previousGestureScaleRef.current = scale;
-      }
-    };
-
-    window.addEventListener("wheel", handleWheel, {
-      capture: true,
-      passive: false,
-    });
-    window.addEventListener("gesturestart", handleGestureStart, {
-      capture: true,
-    });
-    window.addEventListener("gesturechange", handleGestureChange, {
-      capture: true,
-    });
-    return () => {
-      window.removeEventListener("wheel", handleWheel, { capture: true });
-      window.removeEventListener("gesturestart", handleGestureStart, {
-        capture: true,
-      });
-      window.removeEventListener("gesturechange", handleGestureChange, {
-        capture: true,
-      });
     };
   }, [actions, zoom]);
 }
@@ -287,19 +200,4 @@ function DesktopZoomIndicator(props: {
       ) : null}
     </AnimatePresence>
   );
-}
-
-function wheelDeltaToPixels(event: WheelEvent): number {
-  if (event.deltaMode === WheelEvent.DOM_DELTA_LINE) {
-    return event.deltaY * LINE_DELTA_PX;
-  }
-  if (event.deltaMode === WheelEvent.DOM_DELTA_PAGE) {
-    return event.deltaY * PAGE_DELTA_PX;
-  }
-  return event.deltaY;
-}
-
-function readGestureScale(event: Event): number | null {
-  const scale: unknown = Reflect.get(event, "scale");
-  return typeof scale === "number" && Number.isFinite(scale) ? scale : null;
 }

@@ -23,6 +23,7 @@ import { displayTitle } from "@/lib/display-title";
 import type { CreateChatMutationInput } from "@/hooks/epic/use-epic-chat-mutations";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { deriveWorkspaceMode } from "@/lib/worktree/workspace-mode";
 
 const CHAT_PROJECTION_WAIT_MS = 30_000;
 
@@ -163,6 +164,7 @@ function buildCreateChatRequest(
     // the empty store only while it is still empty.
     title: "",
     chatId: uuidv4(),
+    workspaceMode: deriveWorkspaceMode(1, worktreeIntent),
     worktreeIntent,
   };
 }

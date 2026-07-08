@@ -1673,6 +1673,7 @@ describe("useRenderedMessages", () => {
           startedAt: 2000,
           spawnToolCallId: null,
           stopped: false,
+          workflowMeta: null,
         },
         {
           type: "tool_call",
@@ -1751,6 +1752,7 @@ describe("useRenderedMessages", () => {
           startedAt: 2001,
           spawnToolCallId: null,
           stopped: false,
+          workflowMeta: null,
         },
         {
           type: "subagent",
@@ -1765,6 +1767,7 @@ describe("useRenderedMessages", () => {
           startedAt: 2002,
           spawnToolCallId: null,
           stopped: false,
+          workflowMeta: null,
         },
       ],
     };
@@ -1829,6 +1832,7 @@ describe("useRenderedMessages", () => {
           startedAt: 2001,
           spawnToolCallId: "toolu_1",
           stopped: false,
+          workflowMeta: null,
         },
       ],
     };
@@ -1877,6 +1881,7 @@ describe("useRenderedMessages", () => {
           startedAt: 2000,
           spawnToolCallId: null,
           stopped: false,
+          workflowMeta: null,
         },
         {
           type: "subagent",
@@ -1891,6 +1896,7 @@ describe("useRenderedMessages", () => {
           startedAt: 2000,
           spawnToolCallId: null,
           stopped: false,
+          workflowMeta: null,
         },
       ],
     };
@@ -2083,6 +2089,7 @@ describe("useRenderedMessages", () => {
           startedAt: 2001,
           spawnToolCallId: null,
           stopped: false,
+          workflowMeta: null,
         },
         {
           type: "command",
@@ -2125,6 +2132,377 @@ describe("useRenderedMessages", () => {
       throw new Error("expected a command child");
     }
     expect(child.command).toBe("rg TODO");
+  });
+
+  it("folds a depth-3 nested subagent chain via parentBlockId", () => {
+    const assistant: Message = {
+      ...assistantMessage("turn-1", 2000),
+      blocks: [
+        {
+          type: "subagent",
+          agentType: null,
+          blockId: "agent-1",
+          name: "root",
+          task: "Plan the refactor.",
+          progressUpdates: [],
+          result: null,
+          status: "streaming",
+          timestamp: 2001,
+          startedAt: 2001,
+          spawnToolCallId: null,
+          stopped: false,
+          workflowMeta: null,
+        },
+        {
+          type: "subagent",
+          agentType: null,
+          blockId: "agent-2",
+          name: "mid",
+          task: "Sweep call sites.",
+          progressUpdates: [],
+          result: null,
+          status: "streaming",
+          timestamp: 2002,
+          startedAt: 2002,
+          spawnToolCallId: null,
+          stopped: false,
+          workflowMeta: null,
+          parentBlockId: "agent-1",
+        },
+        {
+          type: "subagent",
+          agentType: null,
+          blockId: "agent-3",
+          name: "leaf",
+          task: "Check fixtures.",
+          progressUpdates: [],
+          result: "All good.",
+          status: "completed",
+          timestamp: 2003,
+          startedAt: 2003,
+          spawnToolCallId: null,
+          stopped: false,
+          workflowMeta: null,
+          parentBlockId: "agent-2",
+        },
+      ],
+    };
+
+    const { result } = renderHook(() =>
+      useRenderedMessages(
+        {
+          messages: [assistant],
+          events: [],
+          pendingUserMessages: [],
+          liveAssistantMessage: null,
+          activeTurn: null,
+          runStatus: "idle",
+          ...BINDING,
+        },
+        displayContext,
+      ),
+    );
+
+    const top = result.current[0]?.segments ?? [];
+    expect(top.map((segment) => segment.kind)).toEqual(["subagent"]);
+    const root = top[0];
+    if (root.kind !== "subagent") {
+      throw new Error("expected a subagent segment");
+    }
+    expect(root.id).toBe("agent-1");
+    expect(root.children.map((child) => child.id)).toEqual(["agent-2"]);
+    const mid = root.children[0];
+    if (mid.kind !== "subagent") {
+      throw new Error("expected a nested subagent segment");
+    }
+    expect(mid.children.map((child) => child.id)).toEqual(["agent-3"]);
+    const leaf = mid.children[0];
+    if (leaf.kind !== "subagent") {
+      throw new Error("expected a nested subagent segment");
+    }
+    expect(leaf.result).toBe("All good.");
+    expect(leaf.children).toEqual([]);
+  });
+
+  it("keeps a nested subagent top-level when its parentBlockId doesn't resolve", () => {
+    const assistant: Message = {
+      ...assistantMessage("turn-1", 2000),
+      blocks: [
+        {
+          type: "subagent",
+          agentType: null,
+          blockId: "agent-1",
+          name: "root",
+          task: "Plan the refactor.",
+          progressUpdates: [],
+          result: null,
+          status: "streaming",
+          timestamp: 2001,
+          startedAt: 2001,
+          spawnToolCallId: null,
+          stopped: false,
+          workflowMeta: null,
+        },
+        {
+          type: "subagent",
+          agentType: null,
+          blockId: "agent-orphan",
+          name: "orphan",
+          task: "Investigate stray work.",
+          progressUpdates: [],
+          result: null,
+          status: "streaming",
+          timestamp: 2002,
+          startedAt: 2002,
+          spawnToolCallId: null,
+          stopped: false,
+          workflowMeta: null,
+          // References a parent id never present in this turn's blocks (the
+          // owning subagent.started was dropped/never arrived) - the fallback
+          // is honest top-level placement, never vanishing or misattaching.
+          parentBlockId: "agent-missing",
+        },
+      ],
+    };
+
+    const { result } = renderHook(() =>
+      useRenderedMessages(
+        {
+          messages: [assistant],
+          events: [],
+          pendingUserMessages: [],
+          liveAssistantMessage: null,
+          activeTurn: null,
+          runStatus: "idle",
+          ...BINDING,
+        },
+        displayContext,
+      ),
+    );
+
+    const top = result.current[0]?.segments ?? [];
+    expect(top.map((segment) => segment.kind)).toEqual([
+      "subagent",
+      "subagent",
+    ]);
+    expect(top.map((segment) => segment.id)).toEqual([
+      "agent-1",
+      "agent-orphan",
+    ]);
+    const root = top[0];
+    if (root.kind !== "subagent") {
+      throw new Error("expected a subagent segment");
+    }
+    expect(root.children).toEqual([]);
+  });
+
+  it("keeps a nested child attached across a parent name re-emit", () => {
+    // `timestamp` must advance with the rename, exactly as a real host re-emit
+    // always bumps it - otherwise the per-turn render cache (keyed on each
+    // block's blockId/type/status/timestamp) reuses the stale model and the
+    // test would pass or fail for the wrong reason.
+    const buildAssistant = (
+      parentName: string,
+      timestamp: number,
+    ): Message => ({
+      ...assistantMessage("turn-1", 2000),
+      blocks: [
+        {
+          type: "subagent",
+          agentType: null,
+          blockId: "agent-1",
+          name: parentName,
+          task: "Plan the refactor.",
+          progressUpdates: [],
+          result: null,
+          status: "streaming",
+          timestamp,
+          startedAt: 2001,
+          spawnToolCallId: null,
+          stopped: false,
+          workflowMeta: null,
+        },
+        {
+          type: "subagent",
+          agentType: null,
+          blockId: "agent-2",
+          name: "child",
+          task: "Sweep call sites.",
+          progressUpdates: [],
+          result: null,
+          status: "streaming",
+          timestamp: 2002,
+          startedAt: 2002,
+          spawnToolCallId: null,
+          stopped: false,
+          workflowMeta: null,
+          parentBlockId: "agent-1",
+        },
+      ],
+    });
+    const inputFor = (
+      parentName: string,
+      timestamp: number,
+    ): RenderedMessagesInput => ({
+      messages: [buildAssistant(parentName, timestamp)],
+      events: [],
+      pendingUserMessages: [],
+      liveAssistantMessage: null,
+      activeTurn: null,
+      runStatus: "idle",
+      ...BINDING,
+    });
+
+    const { result, rerender } = renderHook(
+      ({ value }: { value: RenderedMessagesInput }) =>
+        useRenderedMessages(value, displayContext),
+      { initialProps: { value: inputFor("root", 2001) } },
+    );
+
+    const before = result.current[0]?.segments ?? [];
+    expect(before.map((segment) => segment.kind)).toEqual(["subagent"]);
+
+    rerender({ value: inputFor("root (renamed)", 2005) });
+
+    const after = result.current[0]?.segments ?? [];
+    expect(after.map((segment) => segment.kind)).toEqual(["subagent"]);
+    const root = after[0];
+    if (root.kind !== "subagent") {
+      throw new Error("expected a subagent segment");
+    }
+    expect(root.name).toBe("root (renamed)");
+    expect(root.children.map((child) => child.id)).toEqual(["agent-2"]);
+  });
+
+  it("builds the workflow card model from a workflowMeta-bearing subagent block, suppressing its spawn tool row", () => {
+    const assistant: Message = {
+      ...assistantMessage("turn-1", 2000),
+      blocks: [
+        {
+          type: "tool_call",
+          blockId: "toolu_workflow",
+          toolName: "Workflow",
+          ...toolCallInputFields("Workflow", { script: "..." }),
+          error: null,
+          agentMessageSend: null,
+          progress: null,
+          backgroundOutput: null,
+          backgroundTask: false,
+          stopped: false,
+          status: "completed",
+          timestamp: 2000,
+          startedAt: 2000,
+          endedAt: 2000,
+        },
+        {
+          type: "subagent",
+          agentType: null,
+          blockId: "workflow-1",
+          name: "max-effort-review",
+          task: "Max-effort review of the refusal-handling changeset",
+          progressUpdates: ["Phase: Find", "find:host-core"],
+          result: null,
+          status: "streaming",
+          timestamp: 2001,
+          startedAt: 2001,
+          spawnToolCallId: "toolu_workflow",
+          stopped: false,
+          workflowMeta: {
+            name: "max-effort-review",
+            intent: "Max-effort review of the refusal-handling changeset",
+            activity: [
+              { kind: "phase", text: "Phase — Find (16 agents)" },
+              { kind: "label", text: "find:host-core" },
+            ],
+            agentsStarted: 16,
+            agentsFinished: 3,
+            totalTokens: 412_000,
+          },
+        },
+      ],
+    };
+
+    const { result } = renderHook(() =>
+      useRenderedMessages(
+        {
+          messages: [assistant],
+          events: [],
+          pendingUserMessages: [],
+          liveAssistantMessage: null,
+          activeTurn: null,
+          runStatus: "running",
+          ...BINDING,
+        },
+        displayContext,
+      ),
+    );
+
+    const segments = result.current[0]?.segments ?? [];
+    const workflow = segments.find((segment) => segment.kind === "subagent");
+    if (workflow === undefined) {
+      throw new Error("expected a subagent segment");
+    }
+    expect(workflow.workflowMeta).not.toBeNull();
+    expect(workflow.workflowMeta?.agentsStarted).toBe(16);
+    expect(workflow.workflowMeta?.agentsFinished).toBe(3);
+    expect(workflow.workflowMeta?.totalTokens).toBe(412_000);
+    expect(workflow.workflowMeta?.activity).toEqual([
+      { kind: "phase", text: "Phase — Find (16 agents)" },
+      { kind: "label", text: "find:host-core" },
+    ]);
+    // The spawning Workflow tool call is suppressed via spawnToolCallId - the
+    // same policy the plain subagent card already uses.
+    expect(
+      segments.some(
+        (segment) => segment.kind === "tool" && segment.id === "toolu_workflow",
+      ),
+    ).toBe(false);
+  });
+
+  it("leaves a plain subagent block's workflowMeta null", () => {
+    const assistant: Message = {
+      ...assistantMessage("turn-1", 2000),
+      blocks: [
+        {
+          type: "subagent",
+          agentType: null,
+          blockId: "agent-1",
+          name: "explorer",
+          task: "Investigate the bug.",
+          progressUpdates: [],
+          result: null,
+          status: "streaming",
+          timestamp: 2001,
+          startedAt: 2001,
+          spawnToolCallId: null,
+          stopped: false,
+          workflowMeta: null,
+        },
+      ],
+    };
+
+    const { result } = renderHook(() =>
+      useRenderedMessages(
+        {
+          messages: [assistant],
+          events: [],
+          pendingUserMessages: [],
+          liveAssistantMessage: null,
+          activeTurn: null,
+          runStatus: "idle",
+          ...BINDING,
+        },
+        displayContext,
+      ),
+    );
+
+    const segment = (result.current[0]?.segments ?? []).find(
+      (candidate) => candidate.kind === "subagent",
+    );
+    if (segment === undefined) {
+      throw new Error("expected a subagent segment");
+    }
+    expect(segment.workflowMeta).toBeNull();
   });
 
   it("drops the live assistant when the persisted assistant for the same turn exists", () => {

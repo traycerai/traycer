@@ -98,9 +98,11 @@ function WorktreeScriptsDialogBody(props: {
     HostRpcRegistry,
     "worktree.listAllForHost"
   >({
+    cacheKeyIdentity: undefined,
     client: context.hostClient,
     method: "worktree.listAllForHost",
-    params: {},
+    // Whole-list mode (no per-viewport selection); base fields only.
+    params: { includeActivity: false, activityPaths: null },
     options: { enabled: resolved.kind === "existing-worktree" },
   });
   const worktreeOwnScripts = useMemo<RepoScriptsSeed | null>(() => {
@@ -128,6 +130,7 @@ function WorktreeScriptsDialogBody(props: {
     HostRpcRegistry,
     "worktree.listByWorkspacePaths"
   >({
+    cacheKeyIdentity: undefined,
     client: context.hostClient,
     method: "worktree.listByWorkspacePaths",
     params: {

@@ -1,0 +1,5 @@
+{
+  "$comment": "Oldest released version (per component tag family host-v*/cli-v*/desktop-v*) the protocol must stay wire-compatible with. Raising this drops support for peers in the field - it must ship as a deliberate, CODEOWNERS-reviewed change with the 'protocol-compat-override' label.",
+  "supportFloor": "1.0.0",
+  "includeReleaseCandidates": false
+}

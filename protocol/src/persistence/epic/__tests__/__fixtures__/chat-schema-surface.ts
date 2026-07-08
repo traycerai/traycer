@@ -57,7 +57,8 @@ export const chatSchemaSurfaceBaseline = {
                   "kimi",
                   "copilot",
                   "kilocode",
-                  "openrouter"
+                  "openrouter",
+                  "amp"
                 ]
               },
               "model": {
@@ -135,7 +136,8 @@ export const chatSchemaSurfaceBaseline = {
                   "kimi",
                   "copilot",
                   "kilocode",
-                  "openrouter"
+                  "openrouter",
+                  "amp"
                 ]
               },
               "sessionId": {
@@ -272,7 +274,8 @@ export const chatSchemaSurfaceBaseline = {
                             "kimi",
                             "copilot",
                             "kilocode",
-                            "openrouter"
+                            "openrouter",
+                            "amp"
                           ]
                         },
                         "agentId": {
@@ -1243,6 +1246,65 @@ export const chatSchemaSurfaceBaseline = {
                             "sessionWorkspaceSnapshot",
                             "createdAt"
                           ]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "harnessId": {
+                              "type": "string",
+                              "const": "amp"
+                            },
+                            "hostId": {
+                              "type": "string"
+                            },
+                            "sessionId": {
+                              "type": "string"
+                            },
+                            "sessionWorkspaceSnapshot": {
+                              "type": "object",
+                              "properties": {
+                                "workspaceKind": {
+                                  "type": "string",
+                                  "const": "session-snapshot"
+                                },
+                                "primaryWorkspace": {
+                                  "type": "string"
+                                },
+                                "secondaryWorkspaces": {
+                                  "default": [],
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  }
+                                }
+                              },
+                              "required": [
+                                "workspaceKind",
+                                "primaryWorkspace"
+                              ]
+                            },
+                            "createdAt": {
+                              "type": "number"
+                            },
+                            "coveredUntilMessageId": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "harnessId",
+                            "hostId",
+                            "sessionId",
+                            "sessionWorkspaceSnapshot",
+                            "createdAt"
+                          ]
                         }
                       ]
                     },
@@ -1294,7 +1356,8 @@ export const chatSchemaSurfaceBaseline = {
                         "kimi",
                         "copilot",
                         "kilocode",
-                        "openrouter"
+                        "openrouter",
+                        "amp"
                       ]
                     },
                     "agentId": {
@@ -2060,6 +2123,98 @@ export const chatSchemaSurfaceBaseline = {
                           "stopped": {
                             "default": false,
                             "type": "boolean"
+                          },
+                          "workflowMeta": {
+                            "default": null,
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "name": {
+                                    "type": "string"
+                                  },
+                                  "intent": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "activity": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "enum": [
+                                            "phase",
+                                            "label"
+                                          ]
+                                        },
+                                        "text": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": [
+                                        "kind",
+                                        "text"
+                                      ]
+                                    }
+                                  },
+                                  "agentsStarted": {
+                                    "anyOf": [
+                                      {
+                                        "type": "integer",
+                                        "minimum": -9007199254740991,
+                                        "maximum": 9007199254740991
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "agentsFinished": {
+                                    "anyOf": [
+                                      {
+                                        "type": "integer",
+                                        "minimum": -9007199254740991,
+                                        "maximum": 9007199254740991
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "totalTokens": {
+                                    "anyOf": [
+                                      {
+                                        "type": "integer",
+                                        "minimum": -9007199254740991,
+                                        "maximum": 9007199254740991
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "name",
+                                  "intent",
+                                  "activity",
+                                  "agentsStarted",
+                                  "agentsFinished",
+                                  "totalTokens"
+                                ]
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           }
                         },
                         "required": [
@@ -2395,7 +2550,8 @@ export const chatSchemaSurfaceBaseline = {
                               "kimi",
                               "copilot",
                               "kilocode",
-                              "openrouter"
+                              "openrouter",
+                              "amp"
                             ]
                           },
                           "source": {
@@ -2416,7 +2572,8 @@ export const chatSchemaSurfaceBaseline = {
                                   "kimi",
                                   "copilot",
                                   "kilocode",
-                                  "openrouter"
+                                  "openrouter",
+                                  "amp"
                                 ]
                               },
                               "sessionId": {
@@ -3558,7 +3715,8 @@ export const chatSchemaSurfaceBaseline = {
                             "kimi",
                             "copilot",
                             "kilocode",
-                            "openrouter"
+                            "openrouter",
+                            "amp"
                           ]
                         },
                         "agentId": {
@@ -3840,7 +3998,8 @@ export const chatSchemaSurfaceBaseline = {
                   "kimi",
                   "copilot",
                   "kilocode",
-                  "openrouter"
+                  "openrouter",
+                  "amp"
                 ]
               },
               "model": {
@@ -3920,7 +4079,8 @@ export const chatSchemaSurfaceBaseline = {
                   "kimi",
                   "copilot",
                   "kilocode",
-                  "openrouter"
+                  "openrouter",
+                  "amp"
                 ]
               },
               "sessionId": {
@@ -4063,7 +4223,8 @@ export const chatSchemaSurfaceBaseline = {
                             "kimi",
                             "copilot",
                             "kilocode",
-                            "openrouter"
+                            "openrouter",
+                            "amp"
                           ]
                         },
                         "agentId": {
@@ -5094,6 +5255,69 @@ export const chatSchemaSurfaceBaseline = {
                             "coveredUntilMessageId"
                           ],
                           "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "harnessId": {
+                              "type": "string",
+                              "const": "amp"
+                            },
+                            "hostId": {
+                              "type": "string"
+                            },
+                            "sessionId": {
+                              "type": "string"
+                            },
+                            "sessionWorkspaceSnapshot": {
+                              "type": "object",
+                              "properties": {
+                                "workspaceKind": {
+                                  "type": "string",
+                                  "const": "session-snapshot"
+                                },
+                                "primaryWorkspace": {
+                                  "type": "string"
+                                },
+                                "secondaryWorkspaces": {
+                                  "default": [],
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  }
+                                }
+                              },
+                              "required": [
+                                "workspaceKind",
+                                "primaryWorkspace",
+                                "secondaryWorkspaces"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "createdAt": {
+                              "type": "number"
+                            },
+                            "coveredUntilMessageId": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "harnessId",
+                            "hostId",
+                            "sessionId",
+                            "sessionWorkspaceSnapshot",
+                            "createdAt",
+                            "coveredUntilMessageId"
+                          ],
+                          "additionalProperties": false
                         }
                       ]
                     },
@@ -5146,7 +5370,8 @@ export const chatSchemaSurfaceBaseline = {
                         "kimi",
                         "copilot",
                         "kilocode",
-                        "openrouter"
+                        "openrouter",
+                        "amp"
                       ]
                     },
                     "agentId": {
@@ -5942,6 +6167,100 @@ export const chatSchemaSurfaceBaseline = {
                           "stopped": {
                             "default": false,
                             "type": "boolean"
+                          },
+                          "workflowMeta": {
+                            "default": null,
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "name": {
+                                    "type": "string"
+                                  },
+                                  "intent": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "activity": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "enum": [
+                                            "phase",
+                                            "label"
+                                          ]
+                                        },
+                                        "text": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": [
+                                        "kind",
+                                        "text"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "agentsStarted": {
+                                    "anyOf": [
+                                      {
+                                        "type": "integer",
+                                        "minimum": -9007199254740991,
+                                        "maximum": 9007199254740991
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "agentsFinished": {
+                                    "anyOf": [
+                                      {
+                                        "type": "integer",
+                                        "minimum": -9007199254740991,
+                                        "maximum": 9007199254740991
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "totalTokens": {
+                                    "anyOf": [
+                                      {
+                                        "type": "integer",
+                                        "minimum": -9007199254740991,
+                                        "maximum": 9007199254740991
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "name",
+                                  "intent",
+                                  "activity",
+                                  "agentsStarted",
+                                  "agentsFinished",
+                                  "totalTokens"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           }
                         },
                         "required": [
@@ -5956,7 +6275,8 @@ export const chatSchemaSurfaceBaseline = {
                           "result",
                           "startedAt",
                           "spawnToolCallId",
-                          "stopped"
+                          "stopped",
+                          "workflowMeta"
                         ],
                         "additionalProperties": false
                       },
@@ -6291,7 +6611,8 @@ export const chatSchemaSurfaceBaseline = {
                               "kimi",
                               "copilot",
                               "kilocode",
-                              "openrouter"
+                              "openrouter",
+                              "amp"
                             ]
                           },
                           "source": {
@@ -6312,7 +6633,8 @@ export const chatSchemaSurfaceBaseline = {
                                   "kimi",
                                   "copilot",
                                   "kilocode",
-                                  "openrouter"
+                                  "openrouter",
+                                  "amp"
                                 ]
                               },
                               "sessionId": {
@@ -7440,7 +7762,8 @@ export const chatSchemaSurfaceBaseline = {
                             "kimi",
                             "copilot",
                             "kilocode",
-                            "openrouter"
+                            "openrouter",
+                            "amp"
                           ]
                         },
                         "agentId": {

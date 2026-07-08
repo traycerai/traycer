@@ -2,6 +2,7 @@ import { z } from "zod";
 import {
   guiHarnessIdSchema,
   guiHarnessIdSchemaV10,
+  guiHarnessIdSchemaV20,
 } from "@traycer/protocol/host/agent/shared";
 import {
   ALL_PERMISSION_MODES,
@@ -160,6 +161,17 @@ export const guiHarnessOptionSchemaV10 = guiHarnessOptionSchema.extend({
 });
 export const listGuiHarnessesResponseSchemaV10 = z.object({
   harnesses: z.array(guiHarnessOptionSchemaV10),
+});
+
+// ── Frozen protocol-v2.0 catalog row + response (before Amp) ────────────────
+// v2.0 shipped without Amp; the v3.0 line of `agent.gui.listHarnesses` adds
+// it, and the v3→v2 downgrade bridge filters it out for already-shipped v2.0
+// callers so their strict decode never sees a value it can't parse.
+export const guiHarnessOptionSchemaV20 = guiHarnessOptionSchema.extend({
+  id: guiHarnessIdSchemaV20,
+});
+export const listGuiHarnessesResponseSchemaV20 = z.object({
+  harnesses: z.array(guiHarnessOptionSchemaV20),
 });
 export type ListGuiHarnessesResponse = z.infer<
   typeof listGuiHarnessesResponseSchema

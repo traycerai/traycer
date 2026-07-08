@@ -70,11 +70,15 @@ interface ChatScrollPolicy {
 /**
  * Single coherent scroll policy for the chat list, expressed only through
  * Virtuoso Message List scroll modifiers. The list receives the FULL rendered
- * history - Virtuoso virtualizes the mounted DOM, not the data - so the only
- * data changes that reach this classifier are: snapshots replacing the array
- * wholesale, sends/streams appending rows or rewriting the trailing turn, and
- * branch edits (edit/delete of an earlier message) removing a suffix. Rows
- * are never prepended or trimmed from the front. The list is bottom-anchored:
+ * history - Virtuoso virtualizes the mounted DOM, not the data - so the data
+ * changes that reach this classifier are: snapshots replacing the array
+ * wholesale, sends/streams appending rows or rewriting the trailing turn,
+ * branch edits (edit/delete of an earlier message) removing a suffix, and
+ * NON-TAIL insertions from the transcript weave - the worktree setup card
+ * anchors ABOVE its triggering user message (often while the same update drops
+ * the pre-turn pending row), the genesis card pins to the very top, and
+ * late-arriving rows can sort before already-rendered ones by `createdAt`.
+ * The list is bottom-anchored:
  * programmatic tail targets are `end`-aligned, and history navigation uses
  * `start-no-overflow` so Virtuoso never reserves forced bottom padding that
  * the next bottom-follow update strips again.
@@ -107,6 +111,18 @@ interface ChatScrollPolicy {
  *     when there is not (never forced padding). The old suffix no longer
  *     represents the next list's measurements, so retaining those heights can
  *     create phantom scroll space.
+ *  7. Any remaining change that moves a RETAINED row to a new index (the
+ *     setup-card weave, a genesis-card pin, an out-of-order arrival) purges
+ *     the item size cache. Virtuoso keys measured heights by INDEX and only
+ *     remaps them for its explicit "prepend"/"remove-from-start" modifiers; a
+ *     plain data swap leaves the tree behind, and a shifted row never
+ *     re-reports (its DOM node - keyed by message id - did not change size),
+ *     so every row below it is painted at a stale offset, overlapping its
+ *     neighbours until something else forces a remeasure. Sends (cases 2-3)
+ *     keep their smooth scroll-to-tail modifier for pure appends, but a send
+ *     whose update ALSO shifted retained rows (a send coalesced with a weave)
+ *     rides the same tail-anchored purge - `auto-scroll-to-bottom` cannot
+ *     carry `purgeItemSizes`.
  */
 export function classifyChatScrollPolicy(
   input: ChatScrollClassificationInput,
@@ -150,7 +166,7 @@ export function classifyChatScrollPolicy(
   const newerUserIndex = newerUserMessageIndex(previousMessages, nextMessages);
   if (newerUserIndex !== null) {
     return {
-      scrollModifier: submittedUserMessageScrollModifier(),
+      scrollModifier: sendScrollModifier(previousMessages, nextMessages),
       bottomFollowIntent: true,
     };
   }
@@ -160,7 +176,7 @@ export function classifyChatScrollPolicy(
   );
   if (replacementIndex !== null) {
     return {
-      scrollModifier: submittedUserMessageScrollModifier(),
+      scrollModifier: sendScrollModifier(previousMessages, nextMessages),
       bottomFollowIntent: true,
     };
   }
@@ -174,6 +190,19 @@ export function classifyChatScrollPolicy(
     return {
       scrollModifier:
         trailingAssistantItemsChangeScrollModifier(shouldFollowOutput),
+      bottomFollowIntent: null,
+    };
+  }
+  const shiftedAnchorIndex = firstShiftedRetainedIndex(
+    previousMessages,
+    nextMessages,
+  );
+  if (shiftedAnchorIndex !== null) {
+    return {
+      scrollModifier: shiftedRetainedRowsScrollModifier(
+        shiftedAnchorIndex,
+        shouldFollowOutput,
+      ),
       bottomFollowIntent: null,
     };
   }
@@ -402,6 +431,25 @@ function removedMessageSuffixScrollModifier(
   };
 }
 
+/**
+ * Scroll modifier for an explicit send (a new user row or a user-action
+ * replacement). Normally the unconditional smooth scroll-to-tail; but when the
+ * SAME update also moved retained rows to new indexes (a send coalesced with a
+ * setup-card weave or another non-tail insertion), Virtuoso's index-keyed size
+ * cache is stale for every shifted row (case 7 above), and
+ * `auto-scroll-to-bottom` cannot carry `purgeItemSizes` - so the tail jump
+ * rides the tail-anchored purge instead.
+ */
+function sendScrollModifier(
+  previousMessages: ReadonlyArray<ChatMessageModel>,
+  nextMessages: ReadonlyArray<ChatMessageModel>,
+): ScrollModifier {
+  if (firstShiftedRetainedIndex(previousMessages, nextMessages) === null) {
+    return submittedUserMessageScrollModifier();
+  }
+  return tailAnchoredPurgeScrollModifier();
+}
+
 function submittedUserMessageScrollModifier(): ScrollModifier {
   // A send is an explicit "take me to the tail" action, so this scroll is
   // unconditional (no live-intent gate: the submit itself just set the
@@ -500,6 +548,62 @@ function trailingAssistantItemsChangeScrollModifier(
 ): ScrollModifier {
   if (shouldFollowOutput) return bottomFollowScrollModifier("smooth");
   return measuredOnlyScrollModifier("smooth");
+}
+
+/**
+ * New index of the first RETAINED row (present in both lists) whose index
+ * changed, or `null` when every shared row kept its position. A shifted
+ * retained row invalidates Virtuoso's index-keyed size cache for itself and
+ * every row after it - see case 7 in `classifyChatScrollPolicy`. Runs only
+ * after the append-only / trailing-change fast paths have already returned,
+ * so streaming updates never pay for the scan.
+ */
+function firstShiftedRetainedIndex(
+  previousMessages: ReadonlyArray<ChatMessageModel>,
+  nextMessages: ReadonlyArray<ChatMessageModel>,
+): number | null {
+  const previousIndexById = buildMessageIdToIndex(previousMessages);
+  const shiftedIndex = nextMessages.findIndex((message, index) => {
+    const previousIndex = previousIndexById.get(message.id);
+    return previousIndex !== undefined && previousIndex !== index;
+  });
+  return shiftedIndex === -1 ? null : shiftedIndex;
+}
+
+/**
+ * Stale measurements MUST be purged (Virtuoso only remaps sizes for its
+ * "prepend"/"remove-from-start" modifiers, and `purgeItemSizes` rides only on
+ * `item-location`), and a purge needs an explicit anchor. Pinned readers
+ * re-anchor at the tail; unpinned readers anchor on the first shifted row -
+ * the insertion boundary - since the classifier is render-pure and cannot
+ * probe which row the viewport is actually on.
+ */
+function shiftedRetainedRowsScrollModifier(
+  anchorIndex: number,
+  shouldFollowOutput: boolean,
+): ScrollModifier {
+  if (shouldFollowOutput) return tailAnchoredPurgeScrollModifier();
+  return {
+    type: "item-location",
+    location: {
+      index: anchorIndex,
+      align: "start-no-overflow",
+      behavior: "auto",
+    },
+    purgeItemSizes: true,
+  };
+}
+
+function tailAnchoredPurgeScrollModifier(): ScrollModifier {
+  return {
+    type: "item-location",
+    location: {
+      index: "LAST",
+      align: "end",
+      behavior: "auto",
+    },
+    purgeItemSizes: true,
+  };
 }
 
 function measuredOnlyScrollModifier(behavior: ScrollBehavior): ScrollModifier {

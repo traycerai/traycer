@@ -269,6 +269,34 @@ export const commandBlockSchema = z.object({
 });
 export type CommandBlock = z.infer<typeof commandBlockSchema>;
 
+// One milestone in a workflow run's activity timeline: a phase transition
+// (`"Find"`, `"Verify"`, ...) or a fleet-agent label sighting (`"find:host-core"`),
+// parsed from the workflow task's rotating `task_progress` line. Order in
+// `WorkflowMeta.activity` is chronological; consecutive duplicate labels are
+// not re-appended (see the accumulator).
+export const workflowActivityEntrySchema = z.object({
+  kind: z.enum(["phase", "label"]),
+  text: z.string(),
+});
+export type WorkflowActivityEntry = z.infer<typeof workflowActivityEntrySchema>;
+
+// Rich workflow data riding a `subagent` block (see `subAgentBlockSchema.
+// workflowMeta` below) - deliberately NOT a new persisted block `type`, so any
+// released host/GUI can still read a chat containing a workflow run (the base
+// `subagent` fields are the faithful degradation; this is the enrichment an
+// old reader silently strips).
+export const workflowMetaSchema = z.object({
+  name: z.string(),
+  // The workflow script's `meta.description`, extracted best-effort at spawn
+  // time. `null` on extraction failure - never the raw script source.
+  intent: z.string().nullable(),
+  activity: z.array(workflowActivityEntrySchema),
+  agentsStarted: z.number().int().nullable(),
+  agentsFinished: z.number().int().nullable(),
+  totalTokens: z.number().int().nullable(),
+});
+export type WorkflowMeta = z.infer<typeof workflowMetaSchema>;
+
 export const subAgentBlockSchema = z.object({
   ...baseBlockFields,
   status: actionBlockStatus,
@@ -298,6 +326,12 @@ export const subAgentBlockSchema = z.object({
   // `toolCallBlockSchema.stopped`. Defaulted so pre-existing blocks parse
   // cleanly.
   stopped: z.boolean().default(false),
+  // Present iff this card is a workflow run's dual-written card (see
+  // `workflow.*` runtime events) - the rich data an old reader can't render.
+  // `null` ⇒ an ordinary subagent block. Additive + defaulted so blocks
+  // persisted before workflow support existed - and a workflow block read by
+  // an old host/GUI that strips this key - both parse cleanly.
+  workflowMeta: workflowMetaSchema.nullable().default(null),
 });
 export type SubAgentBlock = z.infer<typeof subAgentBlockSchema>;
 

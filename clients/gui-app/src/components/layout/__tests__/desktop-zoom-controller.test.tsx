@@ -105,20 +105,34 @@ describe("<DesktopZoomController />", () => {
     expect(bridge?.reset).toHaveBeenCalledTimes(1);
   });
 
-  it("steps ctrl-wheel gestures through the zoom bridge", async () => {
+  it("leaves trackpad zoom gestures to the focused content", async () => {
     const bridge = zoomState.bridge;
     renderWithQueryClient(<DesktopZoomController />);
 
-    fireEvent.wheel(window, { ctrlKey: true, deltaY: -100, deltaMode: 0 });
-    fireEvent.wheel(window, { ctrlKey: true, deltaY: 100, deltaMode: 0 });
+    const wheelIn = createWheelEvent(-100);
+    const wheelOut = createWheelEvent(100);
+    const gestureStart = createGestureEvent("gesturestart", 1);
+    const gestureIn = createGestureEvent("gesturechange", 1.12);
+    const gestureOut = createGestureEvent("gesturechange", 0.88);
+
+    expect(window.dispatchEvent(wheelIn)).toBe(true);
+    expect(window.dispatchEvent(wheelOut)).toBe(true);
+    expect(window.dispatchEvent(gestureStart)).toBe(true);
+    expect(window.dispatchEvent(gestureIn)).toBe(true);
+    expect(window.dispatchEvent(gestureOut)).toBe(true);
 
     await act(async () => {
       await Promise.resolve();
       await Promise.resolve();
     });
 
-    expect(bridge?.stepIn).toHaveBeenCalledTimes(1);
-    expect(bridge?.stepOut).toHaveBeenCalledTimes(1);
+    expect(bridge?.stepIn).not.toHaveBeenCalled();
+    expect(bridge?.stepOut).not.toHaveBeenCalled();
+    expect(wheelIn.defaultPrevented).toBe(false);
+    expect(wheelOut.defaultPrevented).toBe(false);
+    expect(gestureStart.defaultPrevented).toBe(false);
+    expect(gestureIn.defaultPrevented).toBe(false);
+    expect(gestureOut.defaultPrevented).toBe(false);
   });
 
   it("shows the first observed zoom change", () => {
@@ -209,4 +223,20 @@ function renderWithQueryClient(children: ReactNode): void {
       </TooltipProvider>
     </QueryClientProvider>,
   );
+}
+
+function createGestureEvent(type: string, scale: number): Event {
+  const event = new Event(type, { bubbles: true, cancelable: true });
+  Object.defineProperty(event, "scale", { value: scale });
+  return event;
+}
+
+function createWheelEvent(deltaY: number): WheelEvent {
+  return new WheelEvent("wheel", {
+    bubbles: true,
+    cancelable: true,
+    ctrlKey: true,
+    deltaMode: 0,
+    deltaY,
+  });
 }

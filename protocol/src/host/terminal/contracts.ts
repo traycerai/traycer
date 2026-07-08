@@ -13,6 +13,7 @@ import {
   terminalSubscribeV10,
   terminalSubscribeV11,
   terminalSubscribeV12,
+  terminalSubscribeV13,
 } from "@traycer/protocol/host/terminal/subscribe";
 
 // Terminal sessions live entirely in the host's memory; these contracts
@@ -46,4 +47,9 @@ export const terminalRenameV10 = defineRpcContract({
   responseSchema: renameTerminalResponseSchema,
 });
 
-export { terminalSubscribeV10, terminalSubscribeV11, terminalSubscribeV12 };
+export {
+  terminalSubscribeV10,
+  terminalSubscribeV11,
+  terminalSubscribeV12,
+  terminalSubscribeV13,
+};

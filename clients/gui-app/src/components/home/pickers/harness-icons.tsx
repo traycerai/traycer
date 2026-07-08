@@ -41,6 +41,27 @@ export const OpenRouterIcon: HarnessIcon = (props) => (
 );
 export const KimiIcon: HarnessIcon = (props) => <KimiMono {...props} />;
 
+// Amp (Ampcode / Sourcegraph) has no lobehub entry — the official brand mark
+// (three ascending bars) from coder/registry's `sourcegraph-amp.svg`. Painted in
+// Amp's brand red so it keeps its identity in both light and dark themes, like
+// the Claude colored sunburst.
+export const AmpIcon: HarnessIcon = (props) => (
+  <svg {...props} viewBox="0 0 19 19" fill="none">
+    <path
+      fill="#F34E3F"
+      d="M3.41508 17.2983L7.88484 12.7653L9.51146 18.9412L11.8745 18.2949L9.52018 9.32758L0.69527 6.93747L0.066864 9.35199L6.13926 11.0015L1.68806 15.5279L3.41508 17.2983Z"
+    />
+    <path
+      fill="#F34E3F"
+      d="M16.3044 12.0436L18.6675 11.3973L16.3132 2.43003L7.48824 0.0399246L6.85984 2.45444L14.312 4.47881L16.3044 12.0436Z"
+    />
+    <path
+      fill="#F34E3F"
+      d="M12.9126 15.4902L15.2756 14.8439L12.9213 5.87659L4.09639 3.48648L3.46799 5.901L10.9201 7.92537L12.9126 15.4902Z"
+    />
+  </svg>
+);
+
 // Traycer does not have a lobehub entry — hand-rolled from the brand mark.
 export const TraycerIcon: HarnessIcon = (props) => (
   <svg {...props} viewBox="0 0 211 218" fill="currentColor">

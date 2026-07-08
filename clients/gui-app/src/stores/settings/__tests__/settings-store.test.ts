@@ -17,6 +17,8 @@ function resetSettingsStore(): void {
     defaultAgentMode: DEFAULT_AGENT_MODE,
     defaultEditor: "vscode",
     notifyOnChatTurnComplete: true,
+    showGlobalResourceMonitor: true,
+    showNavigatorResourceStats: false,
     pinContextUsageBreakdown: false,
     quoteReplyEnabled: true,
     diffViewerPreferences: DEFAULT_DIFF_VIEWER_PREFERENCES,
@@ -164,6 +166,58 @@ describe("useSettingsStore", () => {
     await useSettingsStore.persist.rehydrate();
 
     expect(useSettingsStore.getState().notifyOnChatTurnComplete).toBe(false);
+  });
+
+  it("defaults the global resource monitor button to on", () => {
+    expect(useSettingsStore.getState().showGlobalResourceMonitor).toBe(true);
+  });
+
+  it("toggles and persists the global resource monitor button preference", () => {
+    useSettingsStore.getState().setShowGlobalResourceMonitor(false);
+    const persisted = window.localStorage.getItem("traycer-gui-app:settings");
+
+    expect(useSettingsStore.getState().showGlobalResourceMonitor).toBe(false);
+    expect(persisted ?? "").toContain('"showGlobalResourceMonitor":false');
+  });
+
+  it("rehydrates the global resource monitor button preference", async () => {
+    window.localStorage.setItem(
+      "traycer-gui-app:settings",
+      JSON.stringify({
+        state: { showGlobalResourceMonitor: false },
+        version: 1,
+      }),
+    );
+
+    await useSettingsStore.persist.rehydrate();
+
+    expect(useSettingsStore.getState().showGlobalResourceMonitor).toBe(false);
+  });
+
+  it("defaults navigator resource stats to off", () => {
+    expect(useSettingsStore.getState().showNavigatorResourceStats).toBe(false);
+  });
+
+  it("toggles and persists navigator resource stats", () => {
+    useSettingsStore.getState().setShowNavigatorResourceStats(true);
+    const persisted = window.localStorage.getItem("traycer-gui-app:settings");
+
+    expect(useSettingsStore.getState().showNavigatorResourceStats).toBe(true);
+    expect(persisted ?? "").toContain('"showNavigatorResourceStats":true');
+  });
+
+  it("rehydrates navigator resource stats from persisted settings", async () => {
+    window.localStorage.setItem(
+      "traycer-gui-app:settings",
+      JSON.stringify({
+        state: { showNavigatorResourceStats: true },
+        version: 1,
+      }),
+    );
+
+    await useSettingsStore.persist.rehydrate();
+
+    expect(useSettingsStore.getState().showNavigatorResourceStats).toBe(true);
   });
 
   it("defaults the pinned context usage breakdown to off", () => {

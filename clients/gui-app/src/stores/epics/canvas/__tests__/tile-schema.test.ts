@@ -83,10 +83,34 @@ describe("parseTileRef / serializeTileRef", () => {
       instanceId: "inst-term-1",
       type: "terminal",
       name: "wt-a",
+      titleSource: "default",
       hostId: HOST,
       cwd: "/repo/wt-a",
     };
     expect(parseTileRef(serializeTileRef(withCwd))).toEqual(withCwd);
+  });
+
+  it("derives terminal title source for legacy refs", () => {
+    expect(
+      parseTileRef({
+        id: "term-default",
+        instanceId: "inst-term-default",
+        type: "terminal",
+        name: "New Terminal",
+        hostId: HOST,
+        cwd: "/repo",
+      }),
+    ).toMatchObject({ titleSource: "default" });
+    expect(
+      parseTileRef({
+        id: "term-manual",
+        instanceId: "inst-term-manual",
+        type: "terminal",
+        name: "shell",
+        hostId: HOST,
+        cwd: "/repo",
+      }),
+    ).toMatchObject({ titleSource: "manual" });
   });
 
   it("rejects a terminal ref without a cwd key", () => {
@@ -188,6 +212,7 @@ describe("isTileRefRecordBacked", () => {
       instanceId: "inst-t",
       type: "terminal",
       name: "Terminal",
+      titleSource: "manual",
       hostId: HOST,
       cwd: "/repo",
     };

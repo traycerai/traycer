@@ -199,6 +199,8 @@ describe("chat find projection", () => {
           startedAt: 1,
           durationMs: 1200,
           spawnToolCallId: null,
+          parentId: null,
+          workflowMeta: null,
           children: [],
         },
       ],
@@ -227,6 +229,57 @@ describe("chat find projection", () => {
     expect(bodyUnit?.text).toContain("All clear.");
   });
 
+  it("indexes a workflow card's Intent/Activity/Result in the same order the card renders them", () => {
+    const subagentId = "workflow-projection";
+    const assistant: ChatMessageModel = {
+      ...makeMessage(6, "assistant"),
+      segments: [
+        {
+          id: subagentId,
+          kind: "subagent",
+          name: "review",
+          agentType: null,
+          // The dual-written base fields must never surface here - only
+          // workflowMeta's own intent/activity, in card order.
+          task: "must not be indexed",
+          progressUpdates: ["must not be indexed"],
+          result: "3 findings",
+          isStreaming: false,
+          endState: null,
+          stopped: false,
+          startedAt: 1,
+          durationMs: 1200,
+          spawnToolCallId: null,
+          parentId: null,
+          workflowMeta: {
+            name: "review",
+            intent: "Review the diff",
+            activity: [{ kind: "phase", text: "Find" }],
+            agentsStarted: 1,
+            agentsFinished: 1,
+            totalTokens: 500,
+          },
+          children: [],
+        },
+      ],
+    };
+
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID)[0];
+    const renderId = derivePromotedSubagentRenderId(subagentId);
+    const bodyUnit = row.units.find(
+      (unit) => unit.unitId === chatFindSubagentBodyUnitId(renderId),
+    );
+
+    expect(bodyUnit?.text).not.toContain("must not be indexed");
+    const text = bodyUnit?.text ?? "";
+    const intentIndex = text.indexOf("Review the diff");
+    const activityIndex = text.indexOf("Find");
+    const resultIndex = text.indexOf("3 findings");
+    expect(intentIndex).toBeGreaterThanOrEqual(0);
+    expect(activityIndex).toBeGreaterThan(intentIndex);
+    expect(resultIndex).toBeGreaterThan(activityIndex);
+  });
+
   it("falls back to the rendered Subagent placeholder when the name is null", () => {
     const subagentId = "subagent-unnamed";
     const assistant: ChatMessageModel = {
@@ -246,6 +299,8 @@ describe("chat find projection", () => {
           startedAt: null,
           durationMs: null,
           spawnToolCallId: null,
+          parentId: null,
+          workflowMeta: null,
           children: [],
         },
       ],

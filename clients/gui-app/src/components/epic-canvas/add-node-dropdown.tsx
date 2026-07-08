@@ -49,6 +49,7 @@ import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
 import type { ForkWorkspaceSeed } from "@/lib/worktree/fork-workspace-seed";
 import type { TerminalAgentWorktreeCreateInput } from "@/components/epic-canvas/hooks/use-terminal-agent-worktree-gate";
 import { readSeededLaunchWorktreeIntent } from "@/lib/worktree/seeded-launch-worktree-intent";
+import { deriveWorkspaceMode } from "@/lib/worktree/workspace-mode";
 
 export interface AddArtifactDropdownProps {
   children: ReactNode;
@@ -335,6 +336,10 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
       agentMode,
       terminalAgentArgs: argsTouched ? argsDraft : null,
       worktreeIntent,
+      workspaceMode: deriveWorkspaceMode(
+        workspaceSeed?.workspace.folders.length ?? 1,
+        worktreeIntent,
+      ),
     });
   }, [
     agentMode,

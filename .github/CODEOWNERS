@@ -4,6 +4,14 @@
 *                                 @traycerai/maintainers
 
 /protocol/                        @traycerai/maintainers
+
+# Released-peer compatibility governance. These files relax or re-baseline the
+# protocol-compat CI gate; changes to them also require the
+# 'protocol-compat-override' PR label (enforced by the guarded-files-tripwire
+# job in .github/workflows/protocol-compat.yml).
+/protocol/scripts/compat/support-floor.json        @traycerai/maintainers
+/protocol/scripts/compat/compat-exceptions.json    @traycerai/maintainers
+/protocol/src/host/__tests__/__fixtures__/released-method-names.ts @traycerai/maintainers
 /clients/traycer-cli/     @traycerai/maintainers
 /clients/shared/          @traycerai/maintainers
 /clients/gui-app/         @traycerai/maintainers

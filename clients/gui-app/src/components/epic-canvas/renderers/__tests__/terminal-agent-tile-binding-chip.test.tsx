@@ -236,6 +236,7 @@ describe("<TuiAgentTile /> worktree chip binding wiring", () => {
           setupExitCode: 0,
           setupFailedAt: null,
           createdAt: 0,
+          ownedSubmodules: [],
         },
       ],
     };
@@ -348,6 +349,7 @@ describe("<TuiAgentTile /> worktree chip binding wiring", () => {
           setupExitCode: null,
           setupFailedAt: null,
           createdAt: 0,
+          ownedSubmodules: [],
         },
       ],
     };
@@ -511,6 +513,7 @@ describe("<TuiAgentTile /> worktree chip binding wiring", () => {
           setupExitCode: 0,
           setupFailedAt: null,
           createdAt: 0,
+          ownedSubmodules: [],
         },
       ],
     };

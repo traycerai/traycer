@@ -18,6 +18,7 @@ export function useWorktreeListByWorkspacePathsForClient(
   HostRpcError
 > {
   return useHostQuery<HostRpcRegistry, "worktree.listByWorkspacePaths">({
+    cacheKeyIdentity: undefined,
     client,
     method: "worktree.listByWorkspacePaths",
     // This summary-listing path never previews ref scripts; the per-ref read is a

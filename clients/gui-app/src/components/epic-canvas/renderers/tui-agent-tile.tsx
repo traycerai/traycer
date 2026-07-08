@@ -261,6 +261,7 @@ function TuiAgentTileLive(
         // Raw per-agent override: `null` keeps provider Settings as the
         // fallback, while `""` and non-empty strings are durable overrides.
         terminalAgentArgs: agent.terminalAgentArgs,
+        workspaceMode: agent.workspaceMode,
       });
       if (
         session.terminalShellCommand === null ||

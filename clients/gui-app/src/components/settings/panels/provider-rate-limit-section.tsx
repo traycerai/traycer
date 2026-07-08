@@ -68,7 +68,7 @@ function ProviderRateLimitSettingsCard({
         isPending={query.isPending}
         isFetching={query.isFetching || isRefreshing}
         isError={query.isError}
-        providerRateLimits={query.data?.providerRateLimits}
+        envelope={query.data}
       />
     </div>
   );

@@ -27,6 +27,7 @@ import type {
   PlanStatus,
   PlanStep,
   ToolInputDetail,
+  WorkflowMeta,
 } from "@traycer/protocol/persistence/epic/content-blocks";
 import type { ParsedTaskTodo } from "@traycer/protocol/host/agent/gui/task-todo-tools";
 
@@ -133,8 +134,10 @@ export interface ToolSegment {
   parentId: string | null;
 }
 
+// Recursive: a subagent's own children can themselves be nested subagent
+// cards (any spawn depth), not just their tool/file_change/command activity.
 export type SubagentChildSegment =
-  ToolSegment | FileChangeSegment | CommandSegment;
+  ToolSegment | FileChangeSegment | CommandSegment | SubagentSegment;
 
 export interface ReasoningSegment {
   id: string;
@@ -193,8 +196,19 @@ export interface SubagentSegment {
   // builder drops the matching top-level tool segment so the card is the sole
   // representation. Null for harnesses that emit no separate spawn tool call.
   spawnToolCallId: string | null;
-  // The subagent's own activity (tool calls + file changes) nested under this
-  // block, keyed off each child segment's `parentId === this.id`.
+  // Owning subagent block id when this agent was itself spawned by another
+  // agent (nests under that parent's card, any depth). Null for a top-level
+  // agent.
+  parentId: string | null;
+  // Present iff this card is a workflow run's dual-written card - the rich
+  // fleet data (intent, activity timeline, fleet counts, tokens) an old reader
+  // can't render. Null for an ordinary agent card.
+  workflowMeta: WorkflowMeta | null;
+  // The subagent's own activity nested under this block, keyed off each child
+  // segment's `parentId === this.id` - tool calls, file changes, commands, AND
+  // nested agent cards (any depth). Only the `subagent`-kind entries render
+  // (the "Sub-agents" section); the rest ride along for spawn-tool-call
+  // suppression.
   children: ReadonlyArray<SubagentChildSegment>;
 }
 

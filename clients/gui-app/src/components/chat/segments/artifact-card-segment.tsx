@@ -18,7 +18,7 @@ import { artifactOperationVerb } from "@/lib/chat/artifact-operation-verb";
 import { cn } from "@/lib/utils";
 import type { ArtifactSegmentChange } from "@/stores/composer/chat-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import { useChatArtifactDragSource } from "@/components/epic-canvas/dnd/use-chat-artifact-drag-source";
+import { useArtifactDragSource } from "@/components/epic-canvas/dnd/use-artifact-drag-source";
 import { OpenFullDiffControl } from "./open-full-diff-control";
 import { SnapshotHashInlineDiff } from "./snapshot-hash-inline-diff";
 
@@ -517,8 +517,9 @@ function ArtifactCardSegmentContent(props: ArtifactCardSegmentProps) {
     setNodeRef: dragRef,
     listeners: dragListeners,
     isDragging,
-  } = useChatArtifactDragSource({
+  } = useArtifactDragSource({
     epicId,
+    viewTabId: undefined,
     identity:
       activeHostId === null
         ? null

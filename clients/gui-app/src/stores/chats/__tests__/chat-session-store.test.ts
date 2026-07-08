@@ -291,6 +291,7 @@ function bindingForEntry(
         setupExitCode: null,
         setupFailedAt: null,
         createdAt: 10,
+        ownedSubmodules: [],
       },
     ],
   };
@@ -786,6 +787,25 @@ describe("createChatSessionStore", () => {
       harness.handle.store.getState().acceptedActions[secondActionId],
     ).toMatchObject({
       action: "resumeQueue",
+    });
+  });
+
+  it("sends pause queue owner actions", () => {
+    const harness = createHarness();
+    emitSnapshot(harness.callbacks(), "owner");
+
+    const clientActionId = harness.handle.store.getState().pauseQueue();
+
+    expect(clientActionId).not.toBeNull();
+    expect(harness.sent).toHaveLength(1);
+    const frame = harness.sent[0];
+    if (frame.kind !== "pauseQueue") {
+      throw new Error("Expected pauseQueue frame");
+    }
+    expect(
+      harness.handle.store.getState().pendingActions[frame.clientActionId],
+    ).toMatchObject({
+      action: "pauseQueue",
     });
   });
 

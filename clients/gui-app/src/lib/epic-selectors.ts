@@ -34,9 +34,11 @@ import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta
 import { AGENT_WORKING_AWARENESS_FIELD } from "@traycer/protocol/host/epic/subscribe";
 import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
 import { displayTitle, tuiAgentDisplayTitle } from "@/lib/display-title";
+import { terminalSessionTitle } from "@/lib/terminals/terminal-title";
 import { useEpicStore } from "@/hooks/use-epic-store";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
+import { getTerminalSessionRegistry } from "@/lib/registries/terminal-session-registry";
 import {
   useMaybeOpenEpicHandle,
   useOpenEpicHandle,
@@ -48,8 +50,10 @@ import {
 } from "@/stores/epics/canvas/store";
 import {
   isOpenableEpicNodeKind,
+  type TerminalTitleSource,
   type EpicNodeRef,
 } from "@/stores/epics/canvas/types";
+import type { TerminalSessionStoreHandle } from "@/stores/terminals/terminal-session-store";
 import type {
   EpicMigrationSlice,
   OpenEpicState,
@@ -109,6 +113,7 @@ const EMPTY_NODES_AS_ARTIFACTS: ReadonlyArray<ArtifactProjection> =
   Object.freeze([]);
 const EMPTY_TREE_ID_ARRAY: readonly string[] = EMPTY_ARRAY;
 const EMPTY_TREE_ID_SET: ReadonlySet<string> = new Set<string>();
+const TERMINAL_SESSION_REGISTRY = getTerminalSessionRegistry();
 
 export { EMPTY_TREE_ID_ARRAY, EMPTY_TREE_ID_SET };
 
@@ -512,11 +517,64 @@ export function useEpicLiveArtifactTitle(
  * MUST read through this hook - never the raw `node.name` - so the resolve
  * cannot be forgotten in one place.
  */
-export function useEpicTabDisplayTitle(node: {
+type EpicTabDisplayTitleNode = {
   readonly id: string;
   readonly name: string;
-}): string {
-  return useEpicLiveArtifactTitle(node.id) ?? node.name;
+  readonly type: string | undefined;
+  readonly instanceId: string | undefined;
+  readonly titleSource: TerminalTitleSource | undefined;
+};
+
+type TerminalTabTitleNode = Pick<
+  EpicTabDisplayTitleNode,
+  "instanceId" | "name" | "titleSource" | "type"
+>;
+
+type TerminalTabTitleHandleNode = Pick<
+  EpicTabDisplayTitleNode,
+  "name" | "titleSource"
+>;
+
+export function useEpicTabDisplayTitle(node: EpicTabDisplayTitleNode): string {
+  const liveArtifactTitle = useEpicLiveArtifactTitle(node.id);
+  const liveTerminalTitle = useLiveTerminalTabTitle(node);
+  return liveArtifactTitle ?? liveTerminalTitle ?? node.name;
+}
+
+function useLiveTerminalTabTitle(node: TerminalTabTitleNode): string | null {
+  const terminalInstanceId =
+    node.type === "terminal" && node.instanceId !== undefined
+      ? node.instanceId
+      : null;
+  const handle = useSyncExternalStore(
+    (listener) =>
+      terminalInstanceId === null
+        ? noopSubscribe()
+        : TERMINAL_SESSION_REGISTRY.subscribe(listener),
+    () =>
+      terminalInstanceId === null
+        ? null
+        : TERMINAL_SESSION_REGISTRY.get(terminalInstanceId),
+    () => null,
+  );
+  return useSyncExternalStore(
+    (listener) => handle?.store.subscribe(listener) ?? noopSubscribe(),
+    () => terminalTabTitleFromHandle(handle, node),
+    () => null,
+  );
+}
+
+function terminalTabTitleFromHandle(
+  handle: TerminalSessionStoreHandle | null,
+  node: TerminalTabTitleHandleNode,
+): string | null {
+  if (node.titleSource === "manual") return node.name;
+  if (handle === null) return null;
+  const state = handle.store.getState();
+  return terminalSessionTitle({
+    title: state.title,
+    activeProcessName: state.activeProcessName,
+  });
 }
 
 export function useEpicLiveArtifactTitleGenerating(

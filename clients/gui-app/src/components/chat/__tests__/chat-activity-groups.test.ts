@@ -884,6 +884,8 @@ function subagentSegment(
     startedAt: null,
     durationMs: null,
     spawnToolCallId: null,
+    parentId: null,
+    workflowMeta: null,
     children: [],
   };
 }

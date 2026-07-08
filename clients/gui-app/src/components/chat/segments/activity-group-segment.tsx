@@ -196,6 +196,8 @@ function ActivityChildSegment(props: ActivityChildSegmentProps) {
           stopped={segment.stopped}
           startedAt={segment.startedAt}
           durationMs={segment.durationMs}
+          workflowMeta={segment.workflowMeta}
+          nested={segment.children}
           variant="row"
         />
       );

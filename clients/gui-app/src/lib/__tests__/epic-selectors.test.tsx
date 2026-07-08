@@ -126,6 +126,7 @@ function tuiAgent(id: string, harnessId: TuiHarnessId): TuiAgentProjection {
     userId: null,
     hostId: "host-a",
     workspaceFolders: [],
+    workspaceMode: undefined,
     model: null,
     reasoningEffort: null,
     agentMode: "regular",

@@ -9,7 +9,10 @@ import type {
   AgentMode,
   TuiHarnessId,
 } from "@traycer/protocol/persistence/epic/schemas";
-import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
+import type {
+  WorktreeBindingWorkspaceMode,
+  WorktreeIntent,
+} from "@traycer/protocol/host/worktree-schemas";
 import { useEpicCreateTuiAgentForClient } from "@/hooks/epic/use-epic-tui-agent-mutations";
 import { useAgentStartTerminalSession } from "@/hooks/agent/use-prepare-tui-launch-mutation";
 import { useWorktreeCreateForClient } from "@/hooks/worktree/use-worktree-create-mutation";
@@ -162,6 +165,7 @@ export interface CreateTuiAgentInput {
    * the harness so the explicit binding exists before the resolver reads it.
    */
   readonly worktreeIntent: WorktreeIntent | null;
+  readonly workspaceMode: WorktreeBindingWorkspaceMode;
   /**
    * Launch-time CLI args for this terminal agent. A string (pre-filled from the
    * provider's Settings default in the picker, editable per launch) is the
@@ -297,6 +301,7 @@ export function useCreateTuiAgentForClient(
           harnessSessionId: null,
           forkSourceHarnessSessionId: input.forkSourceHarnessSessionId,
           terminalAgentArgs: input.terminalAgentArgs,
+          workspaceMode: input.workspaceMode,
         });
         if (
           opensAfterSessionPrepared &&
@@ -329,6 +334,7 @@ export function useCreateTuiAgentForClient(
               : [...session.terminalShellArgs],
           hostId: session.hostId,
           workspaceFolders: [...session.workspaceFolders],
+          workspaceMode: input.workspaceMode,
           model: input.model,
           reasoningEffort: input.reasoningEffort,
           agentMode: input.agentMode,
