@@ -1755,6 +1755,97 @@ describe("WorktreesList v1.1 signals", () => {
     expect(screen.queryByRole("button", { name: /Open Task/i })).toBeNull();
   });
 
+  it("renders linked PR pills for open, closed, and merged PR states only", () => {
+    renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees: [
+        entry({
+          worktreePath: "/wt/open",
+          branch: "feat-open",
+          prState: "open",
+          prNumber: 10,
+          prUrl: "https://github.com/acme/app/pull/10",
+        }),
+        entry({
+          worktreePath: "/wt/closed",
+          branch: "feat-closed",
+          prState: "closed",
+          prNumber: 11,
+          prUrl: "https://github.com/acme/app/pull/11",
+        }),
+        entry({
+          worktreePath: "/wt/merged",
+          branch: "feat-merged",
+          prState: "merged",
+          prNumber: 12,
+          prUrl: "https://github.com/acme/app/pull/12",
+        }),
+        entry({
+          worktreePath: "/wt/none",
+          branch: "feat-none",
+          prState: "none",
+          prNumber: null,
+          prUrl: null,
+        }),
+      ],
+      taskTitlesByEpicId: undefined,
+      enrichedByPath: undefined,
+      erroredPaths: undefined,
+      onVisiblePathsChange: undefined,
+    });
+
+    expect(
+      screen
+        .getAllByTestId("worktree-pr-pill")
+        .map((pill) => pill.getAttribute("data-pr-state")),
+    ).toEqual(["open", "closed", "merged"]);
+    expect(
+      screen.getByRole("link", { name: "Open PR #10" }).getAttribute("href"),
+    ).toBe("https://github.com/acme/app/pull/10");
+    expect(
+      screen.getByRole("link", { name: "Open PR #11" }).getAttribute("href"),
+    ).toBe("https://github.com/acme/app/pull/11");
+    expect(
+      screen.getByRole("link", { name: "Open PR #12" }).getAttribute("href"),
+    ).toBe("https://github.com/acme/app/pull/12");
+    expect(screen.queryByRole("link", { name: "Open PR #13" })).toBeNull();
+  });
+
+  it("links submodule PR fragments when the fact has a PR URL", () => {
+    renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees: [
+        entry({
+          worktreePath: "/wt/submodule-open",
+          branch: "feat-submodule-open",
+          submodules: [
+            {
+              repoIdentifier: { owner: "acme", repo: "sub" },
+              branch: "feat-submodule-open",
+              prState: "open",
+              prNumber: 22,
+              prUrl: "https://github.com/acme/sub/pull/22",
+              mergedHeadShaMatches: false,
+              mergedIntoDefault: false,
+            },
+          ],
+        }),
+      ],
+      taskTitlesByEpicId: undefined,
+      enrichedByPath: undefined,
+      erroredPaths: undefined,
+      onVisiblePathsChange: undefined,
+    });
+
+    expect(
+      screen
+        .getByRole("link", { name: "Open submodule PR #22" })
+        .getAttribute("href"),
+    ).toBe("https://github.com/acme/sub/pull/22");
+  });
+
   it("labels a worktree with no owners as not used by any Task", () => {
     renderList({
       hostId: "host-a",
@@ -1796,7 +1887,8 @@ describe("WorktreesList v1.1 signals", () => {
       .map((pill) => pill.getAttribute("data-tier"));
     expect(tiers).toContain("merged");
     expect(tiers).toContain("review");
-    screen.getByText("2 ahead · 3 behind");
+    screen.getByText("2 ahead");
+    screen.getByText("3 behind");
   });
 
   it("shows a pending tier pill for a row not yet enriched (empty overlay)", () => {

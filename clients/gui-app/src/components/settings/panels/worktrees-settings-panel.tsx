@@ -1,10 +1,13 @@
 import {
+  Fragment,
+  use,
   useCallback,
   useEffect,
   useMemo,
   useReducer,
   useRef,
   useState,
+  type MouseEvent,
   type ReactNode,
 } from "react";
 import {
@@ -25,6 +28,7 @@ import {
   ChevronRight,
   CopyMinus,
   CopyPlus,
+  ExternalLink,
   FileSliders,
   FolderGit2,
   GitCommitHorizontal,
@@ -57,6 +61,8 @@ import {
 import type {
   WorktreeEntryScripts,
   WorktreeListAllForHostResponseV11,
+  WorktreePrState,
+  WorktreeSubmoduleMergeFact,
 } from "@traycer/protocol/host/worktree-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
@@ -130,6 +136,7 @@ import {
   navigateToTabIntent,
   openOrFocusEpicIntent,
 } from "@/lib/tab-navigation";
+import { RunnerHostContext } from "@/providers/runner-host-context";
 
 type WorktreeRowDeleteStatus = "deleting";
 const SETTINGS_WORKTREE_LIST_PAGE_LIMIT = 32;
@@ -1752,12 +1759,18 @@ function WorktreeRow(props: {
       <div className="min-w-0 flex-1 space-y-1 pr-10">
         <div className="flex flex-wrap items-center gap-2">
           <WorktreeTierPill tier={classification.tier} state={enrichment} />
+          <WorktreePrPill
+            prState={entry.prState}
+            prNumber={entry.prNumber}
+            prUrl={entry.prUrl}
+          />
           <span className="truncate text-ui-sm font-medium text-foreground">
             {branchLabel(entry)}
           </span>
         </div>
         <WorktreeSecondaryFacts
           facts={classification.facts}
+          submodules={entry.submodules}
           lastActivityAt={entry.lastActivityAt}
         />
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -1925,13 +1938,21 @@ const WORKTREE_TIER_PILL_STYLE: Record<
  */
 function WorktreeSecondaryFacts(props: {
   readonly facts: readonly string[];
+  readonly submodules: readonly WorktreeSubmoduleMergeFact[];
   readonly lastActivityAt: number | null;
 }): ReactNode {
   const hasFacts = props.facts.length > 0;
   if (!hasFacts && props.lastActivityAt === null) return null;
   return (
     <p className="flex flex-wrap items-center gap-x-1 text-ui-xs text-muted-foreground">
-      {hasFacts ? <span>{props.facts.join(" · ")}</span> : null}
+      {hasFacts
+        ? props.facts.map((fact, index) => (
+            <Fragment key={fact}>
+              {index > 0 ? <span aria-hidden>·</span> : null}
+              <span>{renderWorktreeFact(fact, props.submodules)}</span>
+            </Fragment>
+          ))
+        : null}
       {hasFacts && props.lastActivityAt !== null ? (
         <span aria-hidden>·</span>
       ) : null}
@@ -1939,6 +1960,163 @@ function WorktreeSecondaryFacts(props: {
         <WorktreeLastActiveLabel lastActivityAt={props.lastActivityAt} />
       ) : null}
     </p>
+  );
+}
+
+function renderWorktreeFact(
+  fact: string,
+  submodules: readonly WorktreeSubmoduleMergeFact[],
+): ReactNode {
+  const submodulePr = submodulePrLinkForFact(fact, submodules);
+  if (submodulePr === null) return fact;
+  return (
+    <>
+      submodule {submodulePr.repoName}{" "}
+      <WorktreePrAnchor
+        href={submodulePr.prUrl}
+        ariaLabel={`Open submodule PR #${submodulePr.prNumber}`}
+        className="font-medium text-primary underline-offset-2 hover:underline"
+      >
+        PR #{submodulePr.prNumber}
+      </WorktreePrAnchor>{" "}
+      open
+    </>
+  );
+}
+
+interface SubmodulePrLink {
+  readonly repoName: string;
+  readonly prNumber: number;
+  readonly prUrl: string;
+}
+
+function submodulePrLinkForFact(
+  fact: string,
+  submodules: readonly WorktreeSubmoduleMergeFact[],
+): SubmodulePrLink | null {
+  const submodule = submodules.find((item) => {
+    if (
+      item.prState !== "open" ||
+      item.prNumber === null ||
+      item.prUrl === null
+    ) {
+      return false;
+    }
+    const repoName = `${item.repoIdentifier.owner}/${item.repoIdentifier.repo}`;
+    return fact === `submodule ${repoName} PR #${item.prNumber} open`;
+  });
+  if (
+    submodule === undefined ||
+    submodule.prNumber === null ||
+    submodule.prUrl === null
+  ) {
+    return null;
+  }
+  return {
+    repoName: `${submodule.repoIdentifier.owner}/${submodule.repoIdentifier.repo}`,
+    prNumber: submodule.prNumber,
+    prUrl: submodule.prUrl,
+  };
+}
+
+type WorktreeDisplayedPrState = "open" | "closed" | "merged";
+
+function WorktreePrPill(props: {
+  readonly prState: WorktreePrState | null;
+  readonly prNumber: number | null;
+  readonly prUrl: string | null;
+}): ReactNode {
+  const runnerHost = use(RunnerHostContext);
+  const openExternal = useCallback(
+    (event: MouseEvent<HTMLAnchorElement>): void => {
+      event.stopPropagation();
+      if (runnerHost === null || props.prUrl === null) return;
+      event.preventDefault();
+      void runnerHost.openExternalLink(props.prUrl);
+    },
+    [props.prUrl, runnerHost],
+  );
+  const prState = displayedPrState(props.prState);
+  if (prState === null || props.prNumber === null || props.prUrl === null) {
+    return null;
+  }
+  const style = WORKTREE_PR_PILL_STYLE[prState];
+  return (
+    <Badge
+      asChild
+      variant="outline"
+      className={cn("gap-1 font-medium", style.className)}
+      data-testid="worktree-pr-pill"
+      data-pr-state={prState}
+    >
+      <a
+        href={props.prUrl}
+        target="_blank"
+        rel="noreferrer"
+        aria-label={`Open PR #${props.prNumber}`}
+        onClick={openExternal}
+      >
+        <span>PR #{props.prNumber}</span>
+        <ExternalLink className="size-3" aria-hidden />
+      </a>
+    </Badge>
+  );
+}
+
+function displayedPrState(
+  prState: WorktreePrState | null,
+): WorktreeDisplayedPrState | null {
+  if (prState === "open" || prState === "closed" || prState === "merged") {
+    return prState;
+  }
+  return null;
+}
+
+const WORKTREE_PR_PILL_STYLE: Record<
+  WorktreeDisplayedPrState,
+  { readonly className: string }
+> = {
+  open: {
+    className:
+      "border-sky-600/30 bg-sky-500/10 text-sky-700 dark:border-sky-400/30 dark:text-sky-300",
+  },
+  closed: {
+    className:
+      "border-rose-600/25 bg-rose-500/10 text-rose-700 dark:border-rose-400/25 dark:text-rose-300",
+  },
+  merged: {
+    className:
+      "border-emerald-600/30 bg-emerald-500/10 text-emerald-700 dark:border-emerald-400/30 dark:text-emerald-300",
+  },
+};
+
+function WorktreePrAnchor(props: {
+  readonly href: string;
+  readonly ariaLabel: string;
+  readonly className: string | undefined;
+  readonly children: ReactNode;
+}): ReactNode {
+  const runnerHost = use(RunnerHostContext);
+  const openExternal = useCallback(
+    (event: MouseEvent<HTMLAnchorElement>): void => {
+      event.stopPropagation();
+      if (runnerHost === null) return;
+      event.preventDefault();
+      void runnerHost.openExternalLink(props.href);
+    },
+    [props.href, runnerHost],
+  );
+  return (
+    <a
+      href={props.href}
+      target="_blank"
+      rel="noreferrer"
+      aria-label={props.ariaLabel}
+      className={props.className}
+      onClick={openExternal}
+    >
+      {props.children}
+    </a>
   );
 }
 

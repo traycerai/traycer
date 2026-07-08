@@ -26,6 +26,13 @@ const EMPTY_ENRICHED: ReadonlyMap<string, WorktreeHostEntryV11> = new Map();
 // queries for the paths not already cached. One batch per settle window, bounded
 // by the viewport - never the whole list.
 const WORKTREE_ENRICH_DEBOUNCE_MS = 80;
+const WORKTREE_COLD_PR_REFETCH_MAX_ATTEMPTS = 3;
+const WORKTREE_COLD_PR_REFETCH_BASE_MS = 750;
+
+interface ColdPrRefetchState {
+  readonly attempts: number;
+  readonly timer: number | null;
+}
 
 // A `worktree.listAllForHost` query key is `["host", hostId, method, params]`
 // (see `hostQueryKeys.method`). The panel's per-path enrichment queries are the
@@ -244,6 +251,66 @@ export function useWorktreeActivityEnrichment(
     requests,
     options: { enabled: reachable },
   });
+  const coldPrRefetchStateRef = useRef<Map<string, ColdPrRefetchState>>(
+    new Map(),
+  );
+  useEffect(
+    () => () => {
+      for (const state of coldPrRefetchStateRef.current.values()) {
+        if (state.timer !== null) window.clearTimeout(state.timer);
+      }
+      coldPrRefetchStateRef.current.clear();
+    },
+    [],
+  );
+  useEffect(() => {
+    const activePaths = new Set(requestedPaths);
+    for (const [path, state] of coldPrRefetchStateRef.current.entries()) {
+      if (activePaths.has(path)) continue;
+      if (state.timer !== null) window.clearTimeout(state.timer);
+      coldPrRefetchStateRef.current.delete(path);
+    }
+
+    results.forEach((result, index) => {
+      const path = requestedPaths[index];
+      if (path === undefined) return;
+      const state = coldPrRefetchStateRef.current.get(path) ?? {
+        attempts: 0,
+        timer: null,
+      };
+      const hasColdPrState =
+        result.data?.worktrees.some((entry) => entry.prState === null) ?? false;
+      if (!hasColdPrState) {
+        if (state.timer !== null) window.clearTimeout(state.timer);
+        coldPrRefetchStateRef.current.delete(path);
+        return;
+      }
+      if (
+        result.isFetching ||
+        state.timer !== null ||
+        state.attempts >= WORKTREE_COLD_PR_REFETCH_MAX_ATTEMPTS
+      ) {
+        coldPrRefetchStateRef.current.set(path, state);
+        return;
+      }
+
+      const nextAttempts = state.attempts + 1;
+      const timer = window.setTimeout(() => {
+        const latest = coldPrRefetchStateRef.current.get(path);
+        if (latest !== undefined) {
+          coldPrRefetchStateRef.current.set(path, {
+            attempts: latest.attempts,
+            timer: null,
+          });
+        }
+        void result.refetch();
+      }, WORKTREE_COLD_PR_REFETCH_BASE_MS * nextAttempts);
+      coldPrRefetchStateRef.current.set(path, {
+        attempts: nextAttempts,
+        timer,
+      });
+    });
+  }, [requestedPaths, results]);
 
   // Overlay from the cache (monotonic, remount-warm) - NOT from `results`.
   const enrichedByPath = useCachedWorktreeEnrichment(queryClient, hostId);
