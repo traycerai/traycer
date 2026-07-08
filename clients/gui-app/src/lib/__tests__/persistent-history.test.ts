@@ -644,6 +644,34 @@ describe("PersistentHistoryController", () => {
     expect(controller.getEntries().length).toBe(2);
   });
 
+  it("keeps the replacement state (not the collapsed neighbour's) on a behind-collapse", () => {
+    const history = seedStack("window-a", [
+      "/epics/epic-a/tab-a",
+      "/epics/epic-b/tab-b",
+      "/epics/epic-b/tab-b?settingsOverlay=true",
+    ]);
+    const controller = controllerOf(history);
+
+    // Record the OLD state key of the entry the collapse will merge into.
+    history.back();
+    const oldNeighbourKey = history.location.state.key;
+    history.forward();
+    expect(controller.getIndex()).toBe(2);
+
+    history.replace("/epics/epic-b/tab-b");
+
+    // The neighbour was dropped and the just-replaced entry survived: the
+    // surviving location carries the state THIS replace minted, not the old
+    // neighbour's - matching the location TanStack caches after a replace.
+    expect(controller.getEntries()).toEqual([
+      "/epics/epic-a/tab-a",
+      "/epics/epic-b/tab-b",
+    ]);
+    expect(controller.getIndex()).toBe(1);
+    expect(history.location.state.key).not.toBe(oldNeighbourKey);
+    expect(history.location.state.__TSR_index).toBe(1);
+  });
+
   it("restamps __TSR_index contiguously after an ahead-collapse", () => {
     const history = seedStack("window-a", [
       "/epics/epic-a/tab-a",

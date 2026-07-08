@@ -543,10 +543,14 @@ export function createPersistentMemoryHistory(
       // (`use-system-tab-modal.ts`'s focus-tab-first branches) - left
       // uncollapsed, `canGoForward()` would stay true over a byte-identical
       // dead forward step.
+      // Either collapse drops the NEIGHBOUR and keeps the just-replaced entry,
+      // so the state passed to THIS replace survives - the stack stays in
+      // agreement with the location TanStack caches after a replace, instead
+      // of diverging until the next real navigation.
       let collapsedNeighbour = false;
       if (index > 0 && entries[index - 1] === path) {
-        entries.splice(index, 1);
-        states.splice(index, 1);
+        entries.splice(index - 1, 1);
+        states.splice(index - 1, 1);
         index -= 1;
         collapsedNeighbour = true;
       }
