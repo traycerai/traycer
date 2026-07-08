@@ -324,6 +324,29 @@ describe("ClaudeRateLimitView", () => {
       0,
     );
   });
+
+  it("formats extra usage cents as dollar amounts", () => {
+    const claude: ClaudeRateLimits = {
+      provider: "claude-code",
+      available: true,
+      subscriptionType: "max",
+      fiveHour: null,
+      sevenDay: null,
+      sevenDayOpus: null,
+      sevenDaySonnet: null,
+      modelScoped: [],
+      extraUsage: {
+        isEnabled: true,
+        monthlyLimit: 10000,
+        usedCredits: 2360,
+        utilization: 24,
+      },
+    };
+    render(<ClaudeRateLimitView data={claude} variant="settings" />);
+    expect(screen.getByText("Extra usage")).toBeTruthy();
+    expect(screen.getByText("$23.60 / $100.00")).toBeTruthy();
+    expect(screen.queryByText("2360.00 / 10000.00")).toBeNull();
+  });
 });
 
 describe("OpenRouterRateLimitView", () => {
