@@ -13,10 +13,10 @@ import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import type { ListUserSessionsResponse } from "@traycer/protocol/auth/devices-sessions";
 import type {
+  RetainedStepUpVerifyFetchResult,
   RevokeAllSessionsFetchResult,
   RevokeUserSessionFetchResult,
   StepUpChallengeFetchResult,
-  StepUpVerifyFetchResult,
 } from "@traycer-clients/shared/auth/devices-sessions-fetcher";
 import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/auth-validation";
 import { credentialsIdentityFromAuthenticatedUser } from "@traycer-clients/shared/auth/auth-validation";
@@ -1095,30 +1095,35 @@ export class AuthService {
   }
 
   /**
-   * Revokes one session family. `stepUpAccessToken` is null for the first
+   * Revokes one session family. `useStepUpCredential` is false for the first
    * attempt; if authn responds `step-up-required`, the UI verifies an OTP and
-   * retries with the short-TTL step-up bearer.
+   * retries by asking the runner-host boundary to attach its retained step-up
+   * bearer internally.
    */
   async revokeUserSession(
     familyId: string,
-    stepUpAccessToken: string | null,
+    useStepUpCredential: boolean,
   ): Promise<RevokeUserSessionFetchResult> {
-    const bearer = stepUpAccessToken ?? this.currentBearer;
-    if (bearer === null) {
+    if (this.currentBearer === null) {
       return { kind: "unauthorized" };
     }
-    return this.runnerHost.revokeUserSession(bearer, familyId);
+    return this.runnerHost.revokeUserSession(
+      this.currentBearer,
+      familyId,
+      useStepUpCredential,
+    );
   }
 
   /**
    * Global sign-out is intentionally tighter than per-session cleanup: callers
-   * pass a freshly minted step-up token for each invocation instead of reusing
-   * the cached batch credential.
+   * verify a fresh step-up challenge for each invocation, then the runner-host
+   * boundary attaches and clears the retained step-up bearer internally.
    */
-  async revokeAllSessions(
-    stepUpAccessToken: string,
-  ): Promise<RevokeAllSessionsFetchResult> {
-    return this.runnerHost.revokeAllSessions(stepUpAccessToken);
+  async revokeAllSessions(): Promise<RevokeAllSessionsFetchResult> {
+    if (this.currentBearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.revokeAllSessions(this.currentBearer);
   }
 
   async requestStepUpChallenge(): Promise<StepUpChallengeFetchResult> {
@@ -1128,7 +1133,9 @@ export class AuthService {
     return this.runnerHost.requestStepUpChallenge(this.currentBearer);
   }
 
-  async verifyStepUpChallenge(code: string): Promise<StepUpVerifyFetchResult> {
+  async verifyStepUpChallenge(
+    code: string,
+  ): Promise<RetainedStepUpVerifyFetchResult> {
     if (this.currentBearer === null) {
       return { kind: "unauthorized" };
     }

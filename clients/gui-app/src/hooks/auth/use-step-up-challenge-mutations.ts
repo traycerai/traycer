@@ -1,11 +1,9 @@
 import { useMutation, type UseMutationResult } from "@tanstack/react-query";
+import type { StepUpChallengeResponse } from "@traycer/protocol/auth/devices-sessions";
 import type {
-  StepUpChallengeResponse,
-  VerifyStepUpResponse,
-} from "@traycer/protocol/auth/devices-sessions";
-import type {
+  RetainedStepUpVerifyResponse,
   StepUpChallengeFetchResult,
-  StepUpVerifyFetchResult,
+  RetainedStepUpVerifyFetchResult,
 } from "@traycer-clients/shared/auth/devices-sessions-fetcher";
 import { useHostBinding } from "@/lib/host";
 import { authMutationKeys } from "@/lib/query-keys";
@@ -23,8 +21,8 @@ function unwrapStepUpChallengeResult(
 }
 
 function unwrapStepUpVerifyResult(
-  result: StepUpVerifyFetchResult,
-): VerifyStepUpResponse {
+  result: RetainedStepUpVerifyFetchResult,
+): RetainedStepUpVerifyResponse {
   if (result.kind === "ok") {
     return result.response;
   }
@@ -57,14 +55,14 @@ export function useRequestStepUpChallenge(): UseMutationResult<
 }
 
 export function useVerifyStepUpChallenge(): UseMutationResult<
-  VerifyStepUpResponse,
+  RetainedStepUpVerifyResponse,
   Error,
   string
 > {
   const binding = useHostBinding();
   return useMutation({
     mutationKey: authMutationKeys.verifyStepUpChallenge(),
-    mutationFn: async (code: string): Promise<VerifyStepUpResponse> => {
+    mutationFn: async (code: string): Promise<RetainedStepUpVerifyResponse> => {
       if (binding === null) {
         throw new Error("Sign in again to verify this action.");
       }

@@ -82,7 +82,7 @@ import type {
   RevokeAllSessionsFetchResult,
   RevokeUserSessionFetchResult,
   StepUpChallengeFetchResult,
-  StepUpVerifyFetchResult,
+  RetainedStepUpVerifyFetchResult,
 } from "@traycer-clients/shared/auth/devices-sessions-fetcher";
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
 import type {
@@ -137,6 +137,7 @@ export interface DesktopPreloadBridge {
   revokeUserSession(
     bearerToken: string,
     familyId: string,
+    useStepUpCredential: boolean,
   ): Promise<RevokeUserSessionFetchResult>;
   revokeAllSessions(bearerToken: string): Promise<RevokeAllSessionsFetchResult>;
   requestStepUpChallenge(
@@ -145,7 +146,7 @@ export interface DesktopPreloadBridge {
   verifyStepUpChallenge(
     bearerToken: string,
     code: string,
-  ): Promise<StepUpVerifyFetchResult>;
+  ): Promise<RetainedStepUpVerifyFetchResult>;
   openExternalLink(url: string): Promise<void>;
   getRegisteredUrlSchemes(
     schemes: readonly string[],
@@ -748,8 +749,13 @@ export class DesktopRunnerHost implements IRunnerHost {
   revokeUserSession(
     bearerToken: string,
     familyId: string,
+    useStepUpCredential: boolean,
   ): Promise<RevokeUserSessionFetchResult> {
-    return this.bridge.revokeUserSession(bearerToken, familyId);
+    return this.bridge.revokeUserSession(
+      bearerToken,
+      familyId,
+      useStepUpCredential,
+    );
   }
 
   revokeAllSessions(
@@ -767,7 +773,7 @@ export class DesktopRunnerHost implements IRunnerHost {
   verifyStepUpChallenge(
     bearerToken: string,
     code: string,
-  ): Promise<StepUpVerifyFetchResult> {
+  ): Promise<RetainedStepUpVerifyFetchResult> {
     return this.bridge.verifyStepUpChallenge(bearerToken, code);
   }
 

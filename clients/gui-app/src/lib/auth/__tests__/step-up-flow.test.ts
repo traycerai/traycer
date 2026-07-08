@@ -10,12 +10,11 @@ import {
 describe("gui-app step-up flow helper", () => {
   it("uses an active cached credential without requesting a new challenge", async () => {
     const cached: StepUpCredential = {
-      accessToken: "step-up-cached",
       expiresAtMs: Date.now() + 60_000,
     };
     let stored: StepUpCredential | null = cached;
-    const action = vi.fn((accessToken: string | null) =>
-      Promise.resolve(accessToken),
+    const action = vi.fn((useStepUpCredential: boolean) =>
+      Promise.resolve(useStepUpCredential),
     );
     const requestCredential = vi.fn(() =>
       Promise.reject(new Error("unexpected challenge")),
@@ -29,8 +28,9 @@ describe("gui-app step-up flow helper", () => {
         },
         requestCredential,
         action,
+        nowMs: () => Date.now(),
       }),
-    ).resolves.toBe("step-up-cached");
+    ).resolves.toBe(true);
 
     expect(requestCredential).not.toHaveBeenCalled();
     expect(action).toHaveBeenCalledTimes(1);
@@ -38,18 +38,18 @@ describe("gui-app step-up flow helper", () => {
 
   it("re-challenges once when the server rejects the cached credential as stale", async () => {
     let stored: StepUpCredential | null = {
-      accessToken: "step-up-stale",
       expiresAtMs: Date.now() + 60_000,
     };
     const fresh: StepUpCredential = {
-      accessToken: "step-up-fresh",
       expiresAtMs: Date.now() + 120_000,
     };
-    const action = vi.fn((accessToken: string | null) => {
-      if (accessToken === "step-up-stale") {
+    let attempts = 0;
+    const action = vi.fn((useStepUpCredential: boolean) => {
+      attempts += 1;
+      if (attempts === 1 && useStepUpCredential) {
         return Promise.reject(new StepUpRequiredError());
       }
-      return Promise.resolve(accessToken);
+      return Promise.resolve(useStepUpCredential);
     });
 
     await expect(
@@ -60,8 +60,9 @@ describe("gui-app step-up flow helper", () => {
         },
         requestCredential: () => Promise.resolve(fresh),
         action,
+        nowMs: () => Date.now(),
       }),
-    ).resolves.toBe("step-up-fresh");
+    ).resolves.toBe(true);
 
     expect(action).toHaveBeenCalledTimes(2);
     expect(stored).toBe(fresh);
@@ -69,7 +70,6 @@ describe("gui-app step-up flow helper", () => {
 
   it("does not loop if a retry also requires step-up", async () => {
     let stored: StepUpCredential | null = {
-      accessToken: "step-up-stale",
       expiresAtMs: Date.now() + 60_000,
     };
     const action = vi.fn(() => Promise.reject(new StepUpRequiredError()));
@@ -82,10 +82,10 @@ describe("gui-app step-up flow helper", () => {
         },
         requestCredential: () =>
           Promise.resolve({
-            accessToken: "step-up-fresh",
             expiresAtMs: Date.now() + 120_000,
           }),
         action,
+        nowMs: () => Date.now(),
       }),
     ).rejects.toBeInstanceOf(StepUpRequiredError);
 
@@ -97,21 +97,37 @@ describe("gui-app step-up flow helper", () => {
     expect(
       createStepUpCredential(
         {
-          access_token: "step-up",
-          token_type: "Bearer",
           expires_in: 17,
         },
         1_000,
       ),
-    ).toEqual({ accessToken: "step-up", expiresAtMs: 18_000 });
+    ).toEqual({ expiresAtMs: 13_000 });
   });
 
-  it("treats credentials inside the expiry skew as inactive", () => {
+  it("treats expired credentials as inactive", () => {
     expect(
-      getActiveStepUpCredential(
-        { accessToken: "step-up", expiresAtMs: 10_000 },
-        6_000,
-      ),
+      getActiveStepUpCredential({ expiresAtMs: 10_000 }, 10_000),
     ).toBeNull();
+  });
+
+  it("filters stale credentials inside the helper before running the action", async () => {
+    let stored: StepUpCredential | null = { expiresAtMs: 10_000 };
+    const action = vi.fn((useStepUpCredential: boolean) =>
+      Promise.resolve(useStepUpCredential),
+    );
+
+    await expect(
+      runStepUpProtectedAction({
+        getCredential: () => stored,
+        setCredential: (credential) => {
+          stored = credential;
+        },
+        requestCredential: () => Promise.reject(new Error("unexpected")),
+        action,
+        nowMs: () => 10_000,
+      }),
+    ).resolves.toBe(false);
+
+    expect(action).toHaveBeenCalledWith(false);
   });
 });

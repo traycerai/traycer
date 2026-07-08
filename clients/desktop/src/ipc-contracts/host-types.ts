@@ -32,8 +32,8 @@ export type DesktopTrayIndicatorState = "idle" | "active" | "attention";
  */
 export type {
   ListUserSessionsFetchResult,
+  RetainedStepUpVerifyFetchResult,
   RevokeAllSessionsFetchResult,
   RevokeUserSessionFetchResult,
   StepUpChallengeFetchResult,
-  StepUpVerifyFetchResult,
 } from "@traycer-clients/shared/auth/devices-sessions-fetcher";

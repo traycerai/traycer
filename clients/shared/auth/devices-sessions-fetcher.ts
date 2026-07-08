@@ -44,6 +44,16 @@ export type StepUpVerifyFetchResult =
   | { readonly kind: "unauthorized" }
   | { readonly kind: "network-error" };
 
+export type RetainedStepUpVerifyResponse = {
+  readonly expires_in: number;
+};
+
+export type RetainedStepUpVerifyFetchResult =
+  | { readonly kind: "ok"; readonly response: RetainedStepUpVerifyResponse }
+  | { readonly kind: "invalid" }
+  | { readonly kind: "unauthorized" }
+  | { readonly kind: "network-error" };
+
 function authnApiUrl(authnBaseUrl: string, path: string): string {
   return new URL(
     path.replace(/^\/+/, ""),
@@ -254,4 +264,16 @@ export async function verifyStepUpChallengeViaHttp(
   return parsed === null
     ? { kind: "network-error" }
     : { kind: "ok", response: parsed };
+}
+
+export function toRetainedStepUpVerifyResult(
+  result: StepUpVerifyFetchResult,
+): RetainedStepUpVerifyFetchResult {
+  if (result.kind === "ok") {
+    return {
+      kind: "ok",
+      response: { expires_in: result.response.expires_in },
+    };
+  }
+  return result;
 }

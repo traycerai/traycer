@@ -1,4 +1,4 @@
-import type { VerifyStepUpResponse } from "@traycer/protocol/auth/devices-sessions";
+import type { RetainedStepUpVerifyResponse } from "@traycer-clients/shared/auth/devices-sessions-fetcher";
 
 const STEP_UP_EXPIRY_SKEW_MS = 5_000;
 
@@ -10,7 +10,6 @@ export class StepUpRequiredError extends Error {
 }
 
 export interface StepUpCredential {
-  readonly accessToken: string;
   readonly expiresAtMs: number;
 }
 
@@ -21,12 +20,15 @@ export function isStepUpRequiredError(error: unknown): boolean {
 }
 
 export function createStepUpCredential(
-  response: VerifyStepUpResponse,
+  response: RetainedStepUpVerifyResponse,
   issuedAtMs: number,
 ): StepUpCredential {
+  const usableTtlMs = Math.max(
+    0,
+    response.expires_in * 1_000 - STEP_UP_EXPIRY_SKEW_MS,
+  );
   return {
-    accessToken: response.access_token,
-    expiresAtMs: issuedAtMs + response.expires_in * 1_000,
+    expiresAtMs: issuedAtMs + usableTtlMs,
   };
 }
 
@@ -37,20 +39,22 @@ export function getActiveStepUpCredential(
   if (credential === null) {
     return null;
   }
-  return credential.expiresAtMs - STEP_UP_EXPIRY_SKEW_MS > nowMs
-    ? credential
-    : null;
+  return credential.expiresAtMs > nowMs ? credential : null;
 }
 
 export async function runStepUpProtectedAction<T>(input: {
   readonly getCredential: () => StepUpCredential | null;
   readonly setCredential: (credential: StepUpCredential | null) => void;
   readonly requestCredential: StepUpCredentialProvider;
-  readonly action: (accessToken: string | null) => Promise<T>;
+  readonly action: (useStepUpCredential: boolean) => Promise<T>;
+  readonly nowMs: () => number;
 }): Promise<T> {
-  const activeCredential = input.getCredential();
+  const activeCredential = getActiveStepUpCredential(
+    input.getCredential(),
+    input.nowMs(),
+  );
   try {
-    return await input.action(activeCredential?.accessToken ?? null);
+    return await input.action(activeCredential !== null);
   } catch (error) {
     if (!isStepUpRequiredError(error)) {
       throw error;
@@ -61,7 +65,7 @@ export async function runStepUpProtectedAction<T>(input: {
   const credential = await input.requestCredential();
   input.setCredential(credential);
   try {
-    return await input.action(credential.accessToken);
+    return await input.action(true);
   } catch (error) {
     if (isStepUpRequiredError(error)) {
       input.setCredential(null);

@@ -14,10 +14,10 @@ import type {
 } from "../ipc-contracts/auth-types";
 import type {
   ListUserSessionsFetchResult,
+  RetainedStepUpVerifyFetchResult,
   RevokeAllSessionsFetchResult,
   RevokeUserSessionFetchResult,
   StepUpChallengeFetchResult,
-  StepUpVerifyFetchResult,
 } from "../ipc-contracts/host-types";
 import type { DesktopAuthSessionSnapshot } from "../ipc-contracts/window-types";
 import { subscribe, type Disposable, type Listener } from "./subscribe";
@@ -71,6 +71,7 @@ export interface AuthBridgeSurface {
   revokeUserSession(
     bearerToken: string,
     familyId: string,
+    useStepUpCredential: boolean,
   ): Promise<RevokeUserSessionFetchResult>;
   revokeAllSessions(bearerToken: string): Promise<RevokeAllSessionsFetchResult>;
   requestStepUpChallenge(
@@ -79,7 +80,7 @@ export interface AuthBridgeSurface {
   verifyStepUpChallenge(
     bearerToken: string,
     code: string,
-  ): Promise<StepUpVerifyFetchResult>;
+  ): Promise<RetainedStepUpVerifyFetchResult>;
   beginAuthAttempt(): void;
   onAuthCallback(handler: Listener<void>): Disposable;
 }
@@ -98,11 +99,12 @@ export function buildAuthBridge(): AuthBridgeSurface {
         bearerToken,
       ) as Promise<ListUserSessionsFetchResult>,
 
-    revokeUserSession: (bearerToken, familyId) =>
+    revokeUserSession: (bearerToken, familyId, useStepUpCredential) =>
       ipcRenderer.invoke(
         RunnerHostInvoke.revokeUserSession,
         bearerToken,
         familyId,
+        useStepUpCredential,
       ) as Promise<RevokeUserSessionFetchResult>,
 
     revokeAllSessions: (bearerToken) =>
@@ -122,7 +124,7 @@ export function buildAuthBridge(): AuthBridgeSurface {
         RunnerHostInvoke.verifyStepUpChallenge,
         bearerToken,
         code,
-      ) as Promise<StepUpVerifyFetchResult>,
+      ) as Promise<RetainedStepUpVerifyFetchResult>,
 
     // Desktop does not dedupe browser-return signals on URL identity, so the
     // attempt-boundary hook is a renderer-local no-op. It still exists to

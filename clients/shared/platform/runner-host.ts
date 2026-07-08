@@ -5,7 +5,7 @@ import type {
   RevokeAllSessionsFetchResult,
   RevokeUserSessionFetchResult,
   StepUpChallengeFetchResult,
-  StepUpVerifyFetchResult,
+  RetainedStepUpVerifyFetchResult,
 } from "../auth/devices-sessions-fetcher";
 import type { StoredCredentials } from "@traycer/protocol/config/credentials";
 
@@ -82,18 +82,38 @@ export interface IRunnerHost {
    * validation. Never throws: transport failures collapse into the result.
    */
   listUserSessions(bearerToken: string): Promise<ListUserSessionsFetchResult>;
+
+  /**
+   * Revokes one session family. Callers pass the user's normal session bearer
+   * plus whether the runner-host boundary should attach its retained step-up
+   * credential. Renderer callers never pass the raw step-up bearer.
+   */
   revokeUserSession(
     bearerToken: string,
     familyId: string,
+    useStepUpCredential: boolean,
   ): Promise<RevokeUserSessionFetchResult>;
+
+  /**
+   * Revokes all other sessions and broadcasts host/session invalidation. This
+   * is the panic lever: callers verify a fresh step-up challenge for every
+   * invocation, then the runner-host boundary attaches the retained step-up
+   * credential internally.
+   */
   revokeAllSessions(bearerToken: string): Promise<RevokeAllSessionsFetchResult>;
   requestStepUpChallenge(
     bearerToken: string,
   ): Promise<StepUpChallengeFetchResult>;
+
+  /**
+   * Verifies a step-up OTP and retains the short-TTL bearer credential inside
+   * the runner-host boundary. Returns only expiry metadata for renderer batch
+   * window logic.
+   */
   verifyStepUpChallenge(
     bearerToken: string,
     code: string,
-  ): Promise<StepUpVerifyFetchResult>;
+  ): Promise<RetainedStepUpVerifyFetchResult>;
 
   openExternalLink(url: string): Promise<void>;
 

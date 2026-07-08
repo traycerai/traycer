@@ -12,7 +12,7 @@ import { authMutationKeys, authQueryKeys } from "@/lib/query-keys";
 
 export interface RevokeUserSessionInput {
   readonly familyId: string;
-  readonly stepUpAccessToken: string | null;
+  readonly useStepUpCredential: boolean;
 }
 
 interface RevokeUserSessionMutationContext {
@@ -61,7 +61,7 @@ export function useRevokeUserSession(
       }
       const result = await binding.auth.revokeUserSession(
         input.familyId,
-        input.stepUpAccessToken,
+        input.useStepUpCredential,
       );
       return unwrapRevokeUserSessionResult(result);
     },
