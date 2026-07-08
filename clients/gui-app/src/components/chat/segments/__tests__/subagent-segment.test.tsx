@@ -918,6 +918,44 @@ describe("<SubagentSegment /> promoted feed", () => {
     expect(screen.queryByText("Sub-agents")).toBeNull();
   });
 
+  it("renders a nested provider notice as a compact row once the card is expanded", () => {
+    render(
+      <SubagentSegment
+        id="test-parent-notice"
+        name="planner"
+        agentType={null}
+        task="Plan the refactor."
+        progressUpdates={[]}
+        result={null}
+        isStreaming
+        endState={null}
+        stopped={false}
+        startedAt={null}
+        durationMs={null}
+        workflowMeta={null}
+        nested={[
+          {
+            id: "notice-1",
+            kind: "provider_notice",
+            status: "completed",
+            tone: "warning",
+            title: "Model changed",
+            message: "Codex switched from gpt-5 to gpt-5-safe.",
+            details: [],
+            parentId: "test-parent-notice",
+          },
+        ]}
+        variant="promoted"
+      />,
+    );
+
+    expect(screen.queryByText("Model changed")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /Subagent/ }));
+
+    expect(screen.getByText("Model changed")).toBeTruthy();
+  });
+
   it("renders a second nesting level once the first-level row is itself expanded", () => {
     render(
       <SubagentSegment
