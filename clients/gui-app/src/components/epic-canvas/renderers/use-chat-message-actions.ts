@@ -2,8 +2,14 @@ import { useCallback, useMemo, useRef } from "react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { WorktreeBinding } from "@traycer/protocol/host/worktree-schemas";
-import type { ChatMessageActions } from "@/components/chat/chat-message";
-import { buildForkWorkspaceSeed } from "@/lib/worktree/fork-workspace-seed";
+import type {
+  ChatForkMode,
+  ChatMessageActions,
+} from "@/components/chat/chat-message";
+import {
+  buildAbForkWorkspaceSeed,
+  buildForkWorkspaceSeed,
+} from "@/lib/worktree/fork-workspace-seed";
 import {
   pendingForkChatStagingKey,
   readStagedWorktreeIntent,
@@ -27,12 +33,14 @@ import type { ChatActions } from "@/hooks/chats/use-chat-actions";
 import {
   editablePersistentMessageId,
   forkableAssistantMessageId,
+  forkableDuringInterviewAssistantMessageId,
   userMessageSenderForProfile,
 } from "./chat-tile-session-state";
 import type {
   ChatTileUiAction,
   InlineEditState,
 } from "./chat-tile-session-state";
+import type { PendingInterviewView } from "./chat-tile-types";
 
 /** A composer submit captured for the message-edit path. */
 export interface MessageEditSubmission {
@@ -66,6 +74,11 @@ export interface ChatMessageActionsInput {
   readonly chatActions: ChatActions;
   readonly confirmingDeleteMessageId: string | null;
   readonly setForkTarget: (target: ChatForkDialogTarget | null) => void;
+  // The chat's currently host-pending interview, if any. Enables forking during
+  // Q&A: while the assistant is asking a question, the fork affordance is
+  // offered on the interview-owning message (and the interview card) so the user
+  // can branch off and cross-question the assistant.
+  readonly pendingInterview: PendingInterviewView | null;
   // The source chat's live binding, used to seed the fork dialog's workspace
   // picker so a fork starts from the same folders / worktree modes.
   readonly worktreeBinding: WorktreeBinding | null;
@@ -87,6 +100,18 @@ export interface ChatMessageActionsResult {
   readonly messageActionsFor: (
     message: ChatMessageModel,
   ) => ChatMessageActions | null;
+  /**
+   * Opens the fork dialog to branch the chat through the given assistant
+   * message, pre-configured for the chosen fork mode ("cross-question" =
+   * source binding verbatim + carried questions settled as reference;
+   * "ab-worktree" = new worktrees carrying the working tree + carried
+   * questions re-opened as answerable). Used by the pending-interview card's
+   * actions; the per-message fork buttons route through the same seed.
+   */
+  readonly forkAtAssistantMessage: (
+    assistantMessageId: string,
+    mode: ChatForkMode,
+  ) => void;
   /**
    * Routes a bottom-composer submit into the active message edit. Returns
    * true when the edit frame was sent (the composer should clear); false when
@@ -138,6 +163,7 @@ export function useChatMessageActions(
     chatActions,
     confirmingDeleteMessageId,
     setForkTarget,
+    pendingInterview,
     worktreeBinding,
     replaceDraftContent,
   } = input;
@@ -272,9 +298,77 @@ export function useChatMessageActions(
     [canModifyMessages, chatActions, dispatchUi],
   );
 
+  // Open the fork dialog seeded to branch the source chat through
+  // `assistantMessageId`. Shared by the per-message fork buttons and the
+  // pending interview card's actions so all entry points seed identically.
+  // Cross Question seeds the source binding VERBATIM (same working copy:
+  // local stays local, an existing worktree is adopted — matching the "+ chat"
+  // defaults in a Task) and settles carried questions as reference. A/B Fork
+  // REBASES each folder to the chat's actual working-copy directory (a
+  // worktree-bound folder's base becomes the origin worktree path) and
+  // pre-selects a new worktree off that base's working tree; carried questions
+  // re-open as answerable.
+  const forkAtAssistantMessage = useCallback(
+    (assistantMessageId: string, mode: ChatForkMode) => {
+      const sourceStagingKey: WorktreeStagingKey = {
+        surface: "owner",
+        epicId: currentEpicId,
+        ownerKind: "chat",
+        ownerId: node.id,
+      };
+      const seedInput = {
+        binding: worktreeBinding,
+        stagedIntent: readStagedWorktreeIntent(sourceStagingKey),
+      };
+      const workspaceSeed =
+        mode === "ab-worktree"
+          ? buildAbForkWorkspaceSeed(seedInput)
+          : buildForkWorkspaceSeed(seedInput);
+      // Seed the fork dialog's picker from the source chat's currently visible
+      // workspace (its binding overlaid with any unsent staged choices) so it
+      // opens exactly where the source chat's composer is. The dialog applies
+      // this through the shared seedIntent -> seedEntryForFolder path the
+      // terminal-agent launcher also uses; only the source owner differs (here,
+      // the chat being forked).
+      useWorktreeIntentStagingStore
+        .getState()
+        .clear(pendingForkChatStagingKey(currentEpicId));
+      setForkTarget({
+        sourceChatId: node.id,
+        sourceChatTitle: chatTitle ?? node.name,
+        assistantMessageId,
+        parentId: chatParentId,
+        settingsSeed: currentComposerSettings,
+        workspaceSeed,
+        seedIntentOverride:
+          mode === "ab-worktree" ? "worktree-carry" : null,
+        // Cross Question forks want the carried question as inert reference
+        // with a free composer; A/B forks re-open it as an answerable card so
+        // the user can answer differently and proceed.
+        carriedInterviews: mode === "cross-question" ? "settled" : "pending",
+        forkMode: mode,
+      });
+    },
+    [
+      chatParentId,
+      chatTitle,
+      currentComposerSettings,
+      currentEpicId,
+      node.id,
+      node.name,
+      setForkTarget,
+      worktreeBinding,
+    ],
+  );
+
   const messageActionsFor = useCallback(
     (message: ChatMessageModel): ChatMessageActions | null => {
-      const assistantMessageId = forkableAssistantMessageId(message);
+      // Ordinary fork (completed assistant message) OR fork during Q&A: while a
+      // pending interview is open, the in-flight message that owns it is also a
+      // valid fork boundary so the user can branch off to cross-question.
+      const assistantMessageId =
+        forkableAssistantMessageId(message) ??
+        forkableDuringInterviewAssistantMessageId(message, pendingInterview);
       if (assistantMessageId !== null) {
         if (!canAct) return null;
         return {
@@ -282,35 +376,8 @@ export function useChatMessageActions(
           fork: {
             enabled: true,
             pending: false,
-            onFork: () => {
-              const sourceStagingKey: WorktreeStagingKey = {
-                surface: "owner",
-                epicId: currentEpicId,
-                ownerKind: "chat",
-                ownerId: node.id,
-              };
-              const workspaceSeed = buildForkWorkspaceSeed({
-                binding: worktreeBinding,
-                stagedIntent: readStagedWorktreeIntent(sourceStagingKey),
-              });
-              // Seed the fork dialog's picker from the source chat's currently
-              // visible workspace (its binding overlaid with any unsent staged
-              // choices) so it opens exactly where the source chat's composer is.
-              // The dialog applies this through the shared seedIntent ->
-              // seedEntryForFolder path the terminal-agent launcher also uses;
-              // only the source owner differs (here, the chat being forked).
-              useWorktreeIntentStagingStore
-                .getState()
-                .clear(pendingForkChatStagingKey(currentEpicId));
-              setForkTarget({
-                sourceChatId: node.id,
-                sourceChatTitle: chatTitle ?? node.name,
-                assistantMessageId,
-                parentId: chatParentId,
-                settingsSeed: currentComposerSettings,
-                workspaceSeed,
-              });
-            },
+            onFork: (mode: ChatForkMode) =>
+              forkAtAssistantMessage(assistantMessageId, mode),
           },
         };
       }
@@ -347,17 +414,11 @@ export function useChatMessageActions(
       beginMessageEdit,
       canAct,
       canModifyMessages,
-      chatParentId,
-      chatTitle,
       confirmingDeleteMessageId,
-      currentComposerSettings,
-      currentEpicId,
       deleteMessageSuffix,
       dispatchUi,
-      node.id,
-      node.name,
-      setForkTarget,
-      worktreeBinding,
+      forkAtAssistantMessage,
+      pendingInterview,
     ],
   );
 
@@ -382,6 +443,7 @@ export function useChatMessageActions(
 
   return {
     messageActionsFor,
+    forkAtAssistantMessage,
     submitActiveMessageEdit,
     cancelActiveMessageEdit,
     revertOnEdit: {

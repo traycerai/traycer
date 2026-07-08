@@ -559,6 +559,7 @@ function NewConversationModalBody(props: {
       layout="inline"
       workspaceSeed={draftWorkspace}
       seedIntent={latestWorkspaceSeed?.intent ?? null}
+      seedIntentOverride={null}
       hostScope={{ kind: "active" }}
     />
   );

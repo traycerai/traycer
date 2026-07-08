@@ -15,10 +15,26 @@ interface ChatMessageProps {
   nextStepActions: NextStepActionHandler | null;
 }
 
+/**
+ * The two ways to branch a chat:
+ *
+ *  - `cross-question` - fork on the SAME working copy as this chat (its
+ *    binding verbatim: local folders stay local, worktree folders adopt the
+ *    existing worktree - the same defaults "+ chat" seeds in a Task) to
+ *    interrogate the assistant. Any question pending at the boundary is
+ *    carried as inline reference and the fork's composer is immediately free.
+ *  - `ab-worktree` - fork into NEW worktrees off each folder's current branch
+ *    carrying uncommitted + staged changes, to proceed down an alternate path
+ *    in parallel. A question pending at the boundary re-opens in the fork as
+ *    an answerable card.
+ */
+export type ChatForkMode = "cross-question" | "ab-worktree";
+
 export interface ChatMessageForkAction {
   readonly enabled: boolean;
   readonly pending: boolean;
-  readonly onFork: () => void;
+  /** Opens the fork dialog pre-configured for the chosen {@link ChatForkMode}. */
+  readonly onFork: (mode: ChatForkMode) => void;
 }
 
 export interface ChatMessageUserActions {

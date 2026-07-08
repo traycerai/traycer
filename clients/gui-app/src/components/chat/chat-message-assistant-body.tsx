@@ -11,14 +11,14 @@ import type {
   ChatMessageRunState,
   MessageSegment,
 } from "@/stores/composer/chat-store";
-import { Check, Copy, GitBranch, Sparkles } from "lucide-react";
-import { use, useCallback, useMemo } from "react";
+import { Check, Copy, MessageSquareQuote, Sparkles, Split } from "lucide-react";
+import { use, useCallback, useMemo, type ReactElement } from "react";
 import { toast } from "sonner";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { useElapsedSeconds } from "@/hooks/use-elapsed-seconds";
 import { formatClockDuration } from "@/lib/format-duration";
 import { cn } from "@/lib/utils";
-import type { ChatMessageForkAction } from "./chat-message";
+import type { ChatForkMode, ChatMessageForkAction } from "./chat-message";
 import { ActivityGroupSegment } from "./segments/activity-group-segment";
 import { ResolvedApprovalSegment } from "./segments/approval-segment";
 import { ArtifactCardSegment } from "./segments/artifact-card-segment";
@@ -154,6 +154,7 @@ export function AssistantMessageBody({
               questions={item.segment.questions}
               answers={item.segment.answers}
               error={item.segment.error}
+              forkedWithoutAnswer={item.segment.forkedWithoutAnswer}
             />
           );
         }
@@ -339,7 +340,39 @@ function AssistantForkButton({
 }: {
   readonly action: ChatMessageForkAction;
 }) {
-  const label = "Fork conversation";
+  return (
+    <>
+      <AssistantForkVariantButton
+        action={action}
+        mode="cross-question"
+        label="Cross Question — fork on this chat's workspace"
+        testId="assistant-fork-chat"
+        icon={<MessageSquareQuote className="size-3.5" aria-hidden />}
+      />
+      <AssistantForkVariantButton
+        action={action}
+        mode="ab-worktree"
+        label="A/B Fork — new worktrees carrying your working tree"
+        testId="assistant-fork-ab"
+        icon={<Split className="size-3.5 rotate-90" aria-hidden />}
+      />
+    </>
+  );
+}
+
+function AssistantForkVariantButton({
+  action,
+  mode,
+  label,
+  testId,
+  icon,
+}: {
+  readonly action: ChatMessageForkAction;
+  readonly mode: ChatForkMode;
+  readonly label: string;
+  readonly testId: string;
+  readonly icon: ReactElement;
+}) {
   return (
     <TooltipWrapper
       label={label}
@@ -350,9 +383,9 @@ function AssistantForkButton({
       <button
         type="button"
         aria-label={label}
-        data-testid="assistant-fork-chat"
+        data-testid={testId}
         disabled={!action.enabled || action.pending}
-        onClick={action.onFork}
+        onClick={() => action.onFork(mode)}
         className={cn(
           "inline-flex size-6 shrink-0 items-center justify-center rounded-md",
           "text-muted-foreground/60 transition-colors",
@@ -361,7 +394,7 @@ function AssistantForkButton({
           "disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent disabled:hover:text-muted-foreground/60",
         )}
       >
-        <GitBranch className="size-3.5" aria-hidden />
+        {icon}
       </button>
     </TooltipWrapper>
   );
@@ -776,6 +809,7 @@ function AssistantSegment({
           questions={segment.questions}
           answers={segment.answers}
           error={segment.error}
+          forkedWithoutAnswer={segment.forkedWithoutAnswer}
         />
       );
     case "setup-card":

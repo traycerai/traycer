@@ -128,6 +128,7 @@ function renderControl() {
         stagingKey={{ surface: "landing", draftId: null }}
         workspaceSeed={null}
         seedIntent={null}
+        seedIntentOverride={null}
         layout="inline"
         hostScope={{ kind: "active" }}
       />

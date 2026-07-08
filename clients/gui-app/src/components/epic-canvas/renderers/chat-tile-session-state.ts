@@ -340,6 +340,45 @@ export function forkableAssistantMessageId(
   return message.persistentMessageId;
 }
 
+// Fork boundary for a message that is CURRENTLY asking a question. Unlike
+// `forkableAssistantMessageId` it does NOT require the turn to be finished
+// (`completedAt`/`runState`) — forking during Q&A is the whole point. The host
+// copies history through this in-flight message and settles the carried
+// interview. Still requires a stable, non-transient persistent id, since a
+// transient live id is not a durable fork boundary.
+function forkableInterviewAssistantMessageId(
+  message: ChatMessageModel,
+): string | null {
+  if (message.role !== "assistant") return null;
+  if (message.persistentMessageId === null) return null;
+  if (isTransientLiveAssistantMessageId(message.persistentMessageId)) {
+    return null;
+  }
+  return message.persistentMessageId;
+}
+
+// The per-slice fork gate used by `messageActionsFor` while a pending interview
+// is open. An assistant turn renders as multiple slice rows sharing one
+// `persistentMessageId`; anchor the fork affordance to the exact slice that
+// carries the pending question so the button does not appear on every slice.
+export function forkableDuringInterviewAssistantMessageId(
+  message: ChatMessageModel,
+  pendingInterview: PendingInterviewView | null,
+): string | null {
+  if (pendingInterview === null) return null;
+  if (pendingInterview.assistantMessageId === null) return null;
+  if (message.role !== "assistant") return null;
+  if (message.persistentMessageId !== pendingInterview.assistantMessageId) {
+    return null;
+  }
+  const ownsPendingSegment = message.segments.some(
+    (segment) =>
+      segment.kind === "interview" && segment.id === pendingInterview.blockId,
+  );
+  if (!ownsPendingSegment) return null;
+  return pendingInterview.assistantMessageId;
+}
+
 export function chatTileCanAct(
   connectionStatus: string,
   canAct: boolean,
@@ -369,6 +408,7 @@ export function findPendingInterview(
         title: segment.title,
         description: segment.description,
         questions: segment.questions,
+        assistantMessageId: forkableInterviewAssistantMessageId(message),
       };
     }
   }

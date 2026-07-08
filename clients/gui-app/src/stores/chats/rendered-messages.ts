@@ -2768,6 +2768,7 @@ const BLOCK_HANDLERS: {
     questions: block.questions,
     answers: block.answers,
     error: block.error,
+    forkedWithoutAnswer: block.metadata?.["forkedWithoutAnswer"] === true,
   }),
   // Artifact-operation cards render top-level regardless of the authoring agent
   // (main or subagent) and are intentionally NOT folded into a subagent's
