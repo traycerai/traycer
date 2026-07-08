@@ -137,6 +137,18 @@ async function stageDevCliWrapper() {
   await fsp.mkdir(DEV_CLI_BIN_DIR, { recursive: true });
   const bunBin = resolveBinary("bun");
   const bunBinDir = path.dirname(bunBin);
+  // Emit a shell-free invocation descriptor next to the wrapper so the desktop
+  // can spawn the interpreter directly (`bun <entry>`) with an argv array. On
+  // Windows this sidesteps Node's refusal to spawn a `.cmd` without
+  // `shell: true` (CVE-2024-27980) and the argv-quoting/injection hazards
+  // `shell: true` reintroduces (a spaced path splits; a cmd.exe metacharacter
+  // in a user-supplied value is interpreted). The wrapper script stays for the
+  // OS service and bare-`traycer` PATH use.
+  await fsp.writeFile(
+    path.join(DEV_CLI_BIN_DIR, "dev-cli-exec.json"),
+    `${JSON.stringify({ command: bunBin, args: [CLI_ENTRY] }, null, 2)}\n`,
+    "utf8",
+  );
   if (process.platform === "win32") {
     const wrapperPath = path.join(
       DEV_CLI_BIN_DIR,
