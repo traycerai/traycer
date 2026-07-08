@@ -58,10 +58,94 @@ const artifactKindSchema = getRecordSchema(
   "latest",
 );
 
+// Durable provider-generated notice (Codex model reroute / safety
+// verification / buffering, and future equivalents from other harnesses),
+// carried as an ADDITIVE enrichment on `textBlockSchema` rather than a new
+// `ContentBlock.type` - see `providerNotice` below for why. `harnessId` uses
+// the persistence-layer's broad `harnessIdSchema`, not the host layer's
+// narrower `GuiHarnessId` (persistence cannot import that layer - the
+// dependency runs host -> persistence); mirrors `planSourceSchema.harnessId`.
+export const providerNoticeKindSchema = z.enum([
+  "model_rerouted",
+  "model_verification",
+  "safety_buffering",
+]);
+export type ProviderNoticeKind = z.infer<typeof providerNoticeKindSchema>;
+
+export const providerNoticeToneSchema = z.enum(["info", "warning"]);
+export type ProviderNoticeTone = z.infer<typeof providerNoticeToneSchema>;
+
+export const providerNoticeDetailSchema = z.object({
+  label: z.string(),
+  value: z.string(),
+});
+export type ProviderNoticeDetail = z.infer<typeof providerNoticeDetailSchema>;
+
+// Narrow, JSON-serializable per-notice-kind facts - normalized from the raw
+// provider payload at conversion time. Never carries the raw payload or user
+// code; only the specific fields each notice kind needs to render/search.
+export const providerNoticeNormalizedMetadataSchema = z.discriminatedUnion(
+  "type",
+  [
+    z.object({
+      type: z.literal("model_rerouted"),
+      fromModel: z.string(),
+      toModel: z.string(),
+      reason: z.string(),
+    }),
+    z.object({
+      type: z.literal("model_verification"),
+      verifications: z.array(z.string()),
+    }),
+    z.object({
+      type: z.literal("safety_buffering"),
+      model: z.string(),
+      fasterModel: z.string().nullable(),
+      useCases: z.array(z.string()),
+      reasons: z.array(z.string()),
+      terminalReason: z.string().nullable(),
+    }),
+  ],
+);
+export type ProviderNoticeNormalizedMetadata = z.infer<
+  typeof providerNoticeNormalizedMetadataSchema
+>;
+
+export const providerNoticeMetadataSchema = z
+  .object({
+    harnessId: harnessIdSchema,
+    noticeKind: providerNoticeKindSchema,
+    tone: providerNoticeToneSchema,
+    title: z.string(),
+    message: z.string().nullable(),
+    details: z.array(providerNoticeDetailSchema),
+    metadata: providerNoticeNormalizedMetadataSchema.nullable(),
+  })
+  .superRefine((notice, ctx) => {
+    if (notice.metadata !== null && notice.noticeKind !== notice.metadata.type) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "noticeKind must match metadata.type",
+        path: ["metadata", "type"],
+      });
+    }
+  });
+export type ProviderNoticeMetadata = z.infer<typeof providerNoticeMetadataSchema>;
+
 export const textBlockSchema = z.object({
   ...baseBlockFields,
   type: z.literal("text"),
   text: z.string(),
+  // Additive enrichment: when set, this text block is a durable provider
+  // notice (Codex model reroute / safety verification / buffering) and a
+  // `chat.subscribe@1.3`+ reader projects it to a compact provider-notice
+  // segment. `text` always carries a concise fallback rendering, so a reader
+  // that strips or predates this key still renders plain assistant text -
+  // this is NOT a new persisted `ContentBlock.type`. Nullable + defaulted so
+  // blocks persisted before this field parse cleanly, and so pre-1.3 stream
+  // subscribers can be projected down to the fallback text (see
+  // `chat-frame-projection.ts`).
+  providerNotice: providerNoticeMetadataSchema.nullable().default(null),
 });
 export type TextBlock = z.infer<typeof textBlockSchema>;
 

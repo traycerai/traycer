@@ -48,7 +48,6 @@ import {
   chatSubscribeV11,
   chatSubscribeV12,
   chatSubscribeV13,
-  chatSubscribeV14,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -2792,7 +2791,7 @@ export type HostRpcRegistry = typeof hostRpcRegistry;
  * Combined streaming-RPC registry for the `/stream` WS manifest.
  *
  * One manifest per `/stream` WS: `epic.subscribe@1.0`,
- * `chat.subscribe@1.2`, `notifications.subscribe@1.0`,
+ * `chat.subscribe@1.3`, `notifications.subscribe@1.0`,
  * `terminal.subscribe@1.0`, `git.subscribeStatus@1.0`,
  * `resources.subscribe@1.0`, `agent.inbox.subscribe@1.0`,
  * `speech.dictate@1.0`, and
@@ -2825,7 +2824,7 @@ export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
   },
   "chat.subscribe": {
     1: {
-      latestMinor: 4,
+      latestMinor: 3,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -2838,9 +2837,6 @@ export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
         },
         3: {
           contract: chatSubscribeV13,
-        },
-        4: {
-          contract: chatSubscribeV14,
         },
       },
     },

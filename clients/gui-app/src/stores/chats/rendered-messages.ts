@@ -208,7 +208,7 @@ function blockContentVersion(block: ContentBlock): number {
   // — this signature runs once per block per render during streaming.
   switch (block.type) {
     case "text":
-      return block.text.length;
+      return textBlockContentVersion(block);
     case "reasoning":
       return block.content.length;
     case "steer":
@@ -218,6 +218,26 @@ function blockContentVersion(block: ContentBlock): number {
     default:
       return 0;
   }
+}
+
+/**
+ * A provider-notice text block is upserted atomically (its rendered fields
+ * replace in place, they never append), so `text.length` alone can't catch a
+ * same-length title/message/detail update. Hash the rendered fields instead;
+ * an ordinary text block (no notice) keeps the cheap length signature.
+ */
+function textBlockContentVersion(
+  block: Extract<ContentBlock, { type: "text" }>,
+): number {
+  const notice = block.providerNotice;
+  if (notice === null) return block.text.length;
+  let hash = hashStringField(TURN_SIGNATURE_HASH_OFFSET, notice.tone);
+  hash = hashStringField(hash, notice.title);
+  hash = hashStringField(hash, notice.message ?? "");
+  return notice.details.reduce((next, detail) => {
+    const withLabel = hashStringField(next, detail.label);
+    return hashStringField(withLabel, detail.value);
+  }, hash);
 }
 
 function planBlockContentVersion(
@@ -2176,11 +2196,15 @@ function isSubagentChildSegment(
   // artifact_operation is intentionally excluded — artifact cards stay
   // top-level (see the BLOCK_HANDLERS["artifact_operation"] handler). A nested
   // subagent (fan-out at any depth) IS eligible - see nestSubagentChildren.
+  // provider_notice IS eligible too - a notice on a subagent's own thread
+  // nests under that card instead of interrupting the top-level transcript;
+  // one with no matching parent (or none) falls through to topLevel below.
   return (
     segment.kind === "tool" ||
     segment.kind === "file_change" ||
     segment.kind === "command" ||
-    segment.kind === "subagent"
+    segment.kind === "subagent" ||
+    segment.kind === "provider_notice"
   );
 }
 
@@ -2694,14 +2718,27 @@ const BLOCK_HANDLERS: {
     block: Extract<ContentBlock, { type: K }>,
   ) => Omit<MessageSegment, "id"> | null;
 } = {
-  text: (block) =>
-    block.text.length === 0
+  text: (block) => {
+    const notice = block.providerNotice;
+    if (notice !== null) {
+      return {
+        kind: "provider_notice",
+        status: block.status,
+        tone: notice.tone,
+        title: notice.title,
+        message: notice.message,
+        details: notice.details,
+        parentId: block.parentBlockId ?? null,
+      };
+    }
+    return block.text.length === 0
       ? null
       : {
           kind: "text",
           markdown: block.text,
           isStreaming: block.status === "streaming",
-        },
+        };
+  },
   reasoning: (block) =>
     block.content.length === 0
       ? null
