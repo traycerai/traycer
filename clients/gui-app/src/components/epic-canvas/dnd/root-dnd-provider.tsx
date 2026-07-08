@@ -62,6 +62,7 @@ import {
   existingEpicTabIntent,
   navigateToTabIntent,
 } from "@/lib/tab-navigation";
+import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useTabsStore } from "@/stores/tabs/store";
 import {
@@ -205,6 +206,7 @@ interface RootDndProviderProps {
 
 export function RootDndProvider(props: RootDndProviderProps) {
   const navigate = useNavigate();
+  const navigateNested = useEpicNestedFocusNavigation();
   const lastResolvedDropRef = useRef<ResolvedEpicCanvasDrop | null>(null);
   const lastReparentDropRef = useRef<LastReparentDrop | null>(null);
   const springLoadRef = useRef<SpringLoadEntry | null>(null);
@@ -325,7 +327,7 @@ export function RootDndProvider(props: RootDndProviderProps) {
         } else {
           const drop = lastResolvedDropRef.current;
           if (drop !== null) {
-            commitResolvedCanvasDrop(drop);
+            commitResolvedCanvasDrop(drop, navigateNested);
           }
         }
       } else {
@@ -344,7 +346,7 @@ export function RootDndProvider(props: RootDndProviderProps) {
       clearLastCollisionPointerPoint();
       useEpicDndStore.getState().dragEnded();
     },
-    [navigate, updateDropPreview],
+    [navigate, navigateNested, updateDropPreview],
   );
 
   const handleDragCancel = useCallback(() => {

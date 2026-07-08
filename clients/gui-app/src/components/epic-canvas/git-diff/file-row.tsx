@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { useDraggable } from "@dnd-kit/core";
 import type { GitChangedFile } from "@traycer/protocol/host";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { makeGitFileDiffTileForFile } from "@/lib/git/git-diff-tile";
 import { gitChangedFileTooltipContent } from "@/lib/git/panel-file-rendering";
 import type { HighlightRanges } from "@/lib/git/path-highlight";
@@ -27,8 +28,13 @@ export interface FileRowProps {
 }
 
 export function FileRow(props: FileRowProps): ReactNode {
-  const openPreview = useEpicCanvasStore((s) => s.openTilePreviewInTab);
-  const openPinned = useEpicCanvasStore((s) => s.openTileInTab);
+  const navigateNested = useEpicNestedFocusNavigation();
+  const prepareOpenTilePreviewInTabFocusTarget = useEpicCanvasStore(
+    (s) => s.prepareOpenTilePreviewInTabFocusTarget,
+  );
+  const prepareOpenTileInTabFocusTarget = useEpicCanvasStore(
+    (s) => s.prepareOpenTileInTabFocusTarget,
+  );
   const tile = useMemo(
     () =>
       makeGitFileDiffTileForFile({
@@ -40,12 +46,28 @@ export function FileRow(props: FileRowProps): ReactNode {
   );
 
   const onClick = useCallback(() => {
-    openPreview(props.viewTabId, tile);
-  }, [openPreview, props.viewTabId, tile]);
+    navigateNested(props.epicId, props.viewTabId, () =>
+      prepareOpenTilePreviewInTabFocusTarget(props.viewTabId, tile),
+    );
+  }, [
+    navigateNested,
+    prepareOpenTilePreviewInTabFocusTarget,
+    props.epicId,
+    props.viewTabId,
+    tile,
+  ]);
 
   const onDoubleClick = useCallback(() => {
-    openPinned(props.viewTabId, tile);
-  }, [openPinned, props.viewTabId, tile]);
+    navigateNested(props.epicId, props.viewTabId, () =>
+      prepareOpenTileInTabFocusTarget(props.viewTabId, tile),
+    );
+  }, [
+    navigateNested,
+    prepareOpenTileInTabFocusTarget,
+    props.epicId,
+    props.viewTabId,
+    tile,
+  ]);
 
   const dragData = useMemo<EpicCanvasGitDiffTileDragData>(
     () => ({

@@ -13,6 +13,7 @@ import {
   useEpicSnapshotLoaded,
 } from "@/lib/epic-selectors";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -57,19 +58,28 @@ export function useInitialChatHandoff(epicId: string, tabId: string): void {
   // epic chats. The chat tab is eager-opened (canvas state) + marked
   // pending-create so it survives until this projection catches up.
   const chatRecords = useEpicChatRecords();
-  const openTileInTab = useEpicCanvasStore((s) => s.openTileInTab);
-  const openTileInPane = useEpicCanvasStore((s) => s.openTileInPane);
-  const splitPaneWithNode = useEpicCanvasStore((s) => s.splitPaneWithNode);
+  const navigateNested = useEpicNestedFocusNavigation();
+  const prepareOpenTileInTabFocusTarget = useEpicCanvasStore(
+    (s) => s.prepareOpenTileInTabFocusTarget,
+  );
+  const prepareOpenTileInPaneFocusTarget = useEpicCanvasStore(
+    (s) => s.prepareOpenTileInPaneFocusTarget,
+  );
+  const prepareSplitPaneWithNodeFocusTarget = useEpicCanvasStore(
+    (s) => s.prepareSplitPaneWithNodeFocusTarget,
+  );
   const markArtifactPendingCreate = useEpicCanvasStore(
     (s) => s.markArtifactPendingCreate,
   );
   const unmarkArtifactPendingCreate = useEpicCanvasStore(
     (s) => s.unmarkArtifactPendingCreate,
   );
-  // Opener placements (target-group / split) bypass dedup, so the eager-open
-  // must fire exactly once per chat even as the handoff effect re-runs across
-  // status transitions. The active-tile path is dedup-aware and intentionally
-  // re-opens (keeps the tab label tracking the projected title).
+  // Every placement kind (active-tile, target-group, split) opens exactly
+  // once per chat, even as the handoff effect re-runs across status/
+  // projection transitions. The tab label tracks the projected title live
+  // via `useEpicTabDisplayTitle`'s `liveArtifactTitle` fallback, so
+  // re-opening on each transition is unnecessary and would re-navigate /
+  // steal focus from whatever the user is looking at.
   const openedChatIdRef = useRef<string | null>(null);
   // The chatId whose pending-create mark this hook currently owns. A second
   // in-epic create registers a new handoff under the same {host,user,epic}
@@ -132,9 +142,26 @@ export function useInitialChatHandoff(epicId: string, tabId: string): void {
       handoffStatus,
       handoffPlacement,
       markArtifactPendingCreate,
-      openTileInTab,
-      openTileInPane,
-      splitPaneWithNode,
+      openTileInTab: (targetTabId, node) => {
+        navigateNested(epicId, targetTabId, () =>
+          prepareOpenTileInTabFocusTarget(targetTabId, node),
+        );
+      },
+      openTileInPane: (targetTabId, paneId, node) => {
+        navigateNested(epicId, targetTabId, () =>
+          prepareOpenTileInPaneFocusTarget(targetTabId, paneId, node),
+        );
+      },
+      splitPaneWithNode: (targetTabId, targetPaneId, position, node) => {
+        navigateNested(epicId, targetTabId, () =>
+          prepareSplitPaneWithNodeFocusTarget(
+            targetTabId,
+            targetPaneId,
+            position,
+            node,
+          ),
+        );
+      },
       openedChatIdRef,
       markedChatIdRef,
       projectedChatId,
@@ -149,9 +176,11 @@ export function useInitialChatHandoff(epicId: string, tabId: string): void {
     handoffStatus,
     handoffPlacement,
     markArtifactPendingCreate,
-    openTileInTab,
-    openTileInPane,
-    splitPaneWithNode,
+    epicId,
+    navigateNested,
+    prepareOpenTileInPaneFocusTarget,
+    prepareOpenTileInTabFocusTarget,
+    prepareSplitPaneWithNodeFocusTarget,
     projectedChatId,
     projectedChatTitle,
     scope,
@@ -263,24 +292,24 @@ function runCanvasHandoffTransition(input: CanvasHandoffTransitionInput): void {
     hostId: input.activeHostId ?? UNKNOWN_HOST_PLACEHOLDER,
   };
   const placement = input.handoffPlacement;
-  if (placement.kind === "active-tile") {
-    // Dedup-aware: re-open on each transition so the tab label tracks the
-    // projected title as it lands.
-    input.openTileInTab(input.tabId, node);
-  } else if (
+  // Latch every placement kind once per handoffChatId. The ref guards
+  // re-fires within a session; `tabContainsTile` also guards a reload, where
+  // the canvas layout persists the tile but the ref does not (without it
+  // each reload would stack a duplicate).
+  if (
     input.openedChatIdRef.current !== input.handoffChatId &&
     !tabContainsTile(input.tabId, input.handoffChatId)
   ) {
-    // Opener placements (target-group / split) bypass dedup - open once. The
-    // ref guards re-fires within a session; `tabContainsTile` also guards a
-    // reload, where the canvas layout persists the tile but the ref does not
-    // (without it each reload would stack a duplicate). If the target group is
-    // gone (closed mid-compose, or a stale id rehydrated on reload), fall back
-    // to the active tile so the chat always surfaces instead of vanishing.
     input.openedChatIdRef.current = input.handoffChatId;
-    const effectivePlacement = tabContainsPane(input.tabId, placement.groupId)
-      ? placement
-      : ACTIVE_TILE_PLACEMENT;
+    // Opener placements (target-group / split) bypass dedup. If the target
+    // group is gone (closed mid-compose, or a stale id rehydrated on
+    // reload), fall back to the active tile so the chat always surfaces
+    // instead of vanishing.
+    const effectivePlacement =
+      placement.kind === "active-tile" ||
+      tabContainsPane(input.tabId, placement.groupId)
+        ? placement
+        : ACTIVE_TILE_PLACEMENT;
     openChatNodeWithPlacement(
       {
         openTileInTab: input.openTileInTab,

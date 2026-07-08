@@ -70,6 +70,7 @@ function terminalFolderItem(
           hostId: row.hostId,
           cwd: row.runningDir,
         },
+        navigateNestedFocus: ctx.router.navigateNestedFocus,
       });
     },
   });

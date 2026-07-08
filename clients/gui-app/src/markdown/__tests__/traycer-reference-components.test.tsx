@@ -75,12 +75,14 @@ vi.mock("@/lib/epic-selectors", () => ({
 // non-side-effecting resolver the chip reads for its `viewTabId` (constraint
 // C1), returning a tab id for the open epic and `null` otherwise.
 const {
+  openTilePreviewInEpic,
   openTilePreviewInTab,
   resolveTargetTabForEpic,
   resolveTabIdForEpic,
   useDraggableSpy,
   setNodeRefSpy,
 } = vi.hoisted(() => ({
+  openTilePreviewInEpic: vi.fn(),
   openTilePreviewInTab: vi.fn(),
   resolveTargetTabForEpic: vi.fn(() => "tab-for-open-epic"),
   resolveTabIdForEpic: vi.fn((epicId: string) =>
@@ -98,8 +100,9 @@ const {
   setNodeRefSpy: vi.fn<(element: HTMLElement | null) => void>(),
 }));
 
-// `useEpicCanvasStore` is used both as a selector hook (the chip) and via
-// `.getState()` (the open handler), so the mock is a callable with `getState`.
+// `useEpicCanvasStore` is used as a selector hook by the chip's drag source, so
+// the mock is a callable with `getState` for compatibility with callers that
+// still read the store imperatively.
 vi.mock("@/stores/epics/canvas/store", () => {
   const canvasState = {
     resolveTargetTabForEpic,
@@ -118,6 +121,15 @@ vi.mock("@/stores/epics/canvas/store", () => {
       resolveTabIdForEpic(epicId),
   };
 });
+
+vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
+  useEpicTileNavigation: () => ({
+    openTilePreviewInEpic,
+    openTilePreviewInTab: vi.fn(),
+    openTileInTab: vi.fn(),
+    openTileInEpic: vi.fn(),
+  }),
+}));
 
 vi.mock("@dnd-kit/core", () => ({
   useDraggable: (args: { id: string; disabled: boolean; data: unknown }) => {
@@ -169,6 +181,7 @@ beforeEach(() => {
   mockActiveHostId = "active-host-1";
   navigate.mockClear();
   epicNodeRefForNodeId.mockClear();
+  openTilePreviewInEpic.mockClear();
   openTilePreviewInTab.mockClear();
   resolveTargetTabForEpic.mockClear();
   resolveTabIdForEpic.mockClear();
@@ -198,11 +211,8 @@ describe("legacy traycer-* reference components", () => {
 
     clickRef("Spec One");
 
-    expect(resolveTargetTabForEpic).toHaveBeenCalledWith(
-      OPEN_EPIC_ID,
-      undefined,
-    );
-    expect(openTilePreviewInTab).toHaveBeenCalledWith("tab-for-open-epic", {
+    expect(resolveTargetTabForEpic).not.toHaveBeenCalled();
+    expect(openTilePreviewInEpic).toHaveBeenCalledWith(OPEN_EPIC_ID, {
       id: "spec-1",
       instanceId: "inst-spec",
       type: "spec",
@@ -221,7 +231,7 @@ describe("legacy traycer-* reference components", () => {
 
     clickRef("Chat One");
 
-    expect(openTilePreviewInTab).toHaveBeenCalledWith("tab-for-open-epic", {
+    expect(openTilePreviewInEpic).toHaveBeenCalledWith(OPEN_EPIC_ID, {
       id: "chat-1",
       instanceId: "inst-chat",
       type: "chat",
@@ -243,7 +253,7 @@ describe("legacy traycer-* reference components", () => {
 
     clickRef("Ticket Nine");
 
-    expect(openTilePreviewInTab).not.toHaveBeenCalled();
+    expect(openTilePreviewInEpic).not.toHaveBeenCalled();
     expect(navigateToTabIntent).toHaveBeenCalledTimes(1);
     expect(openOrFocusEpicIntent).toHaveBeenCalledTimes(1);
     const arg = openOrFocusEpicIntent.mock.calls[0][0];
@@ -282,7 +292,7 @@ describe("legacy traycer-* reference components", () => {
 
     clickRef("Some Epic");
 
-    expect(openTilePreviewInTab).not.toHaveBeenCalled();
+    expect(openTilePreviewInEpic).not.toHaveBeenCalled();
     expect(navigateToTabIntent).toHaveBeenCalledTimes(1);
     const arg = openOrFocusEpicIntent.mock.calls[0][0];
     expect(arg.epicId).toBe("epic-other");
@@ -383,7 +393,7 @@ describe("same-epic spec/ticket chips are canvas drag sources", () => {
     ).toBe(true);
     // Drag is purely additive - the pill still opens on click.
     clickRef("Spec One");
-    expect(openTilePreviewInTab).toHaveBeenCalledTimes(1);
+    expect(openTilePreviewInEpic).toHaveBeenCalledTimes(1);
   });
 
   it("a same-epic ticket chip registers a draggable, emits the payload, and wires the drag surface", () => {
@@ -432,7 +442,7 @@ describe("same-epic spec/ticket chips are canvas drag sources", () => {
     // Click semantics are unchanged - it still navigates.
     clickRef("Ticket Nine");
     expect(navigateToTabIntent).toHaveBeenCalledTimes(1);
-    expect(openTilePreviewInTab).not.toHaveBeenCalled();
+    expect(openTilePreviewInEpic).not.toHaveBeenCalled();
   });
 
   it("an inert (none) reference registers no draggable and stays plain text", () => {
@@ -462,7 +472,7 @@ describe("same-epic spec/ticket chips are canvas drag sources", () => {
     expect(button.getAttribute("data-dnd-attached")).toBeNull();
     // Click still opens the same-epic chat tile.
     clickRef("Chat One");
-    expect(openTilePreviewInTab).toHaveBeenCalledTimes(1);
+    expect(openTilePreviewInEpic).toHaveBeenCalledTimes(1);
   });
 
   it("an epic reference registers no draggable (navigate-only)", () => {
@@ -504,8 +514,8 @@ describe("DEFAULT_COMPONENTS wires the legacy reference tags", () => {
 
     clickRef("Spec One");
 
-    expect(openTilePreviewInTab).toHaveBeenCalledWith(
-      "tab-for-open-epic",
+    expect(openTilePreviewInEpic).toHaveBeenCalledWith(
+      OPEN_EPIC_ID,
       expect.objectContaining({ id: "spec-1", type: "spec" }),
     );
   });

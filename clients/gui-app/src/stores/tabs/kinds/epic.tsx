@@ -4,6 +4,7 @@ import {
   epicHasUnsyncedEdits,
   releaseOpenEpicSessionIfUnused,
 } from "@/lib/registries/epic-session-registry";
+import { buildNestedFocusSearchPatch } from "@/lib/epic-nested-focus-route";
 import { epicPathname, epicTabRoute } from "@/lib/routes";
 import { existingEpicTabIntent } from "@/lib/tab-navigation/intents";
 import { duplicateEpicTab } from "@/lib/commands/actions/duplicate-tab";
@@ -47,7 +48,16 @@ export const epicTabModule: TabKindModule<"epic", EpicViewTab> = {
       }),
     routeOptions: (intent) => ({
       ...epicTabRoute({ epicId: intent.epicId, tabId: intent.tabId }),
-      search: intent.focus,
+      // `nestedFocus` is `null` for every plain tab-switch intent, in which
+      // case `buildNestedFocusSearchPatch` contributes `undefined` for both
+      // fields - identical to the old `search: intent.focus` literal, so
+      // wipe-then-canonicalize behavior is unchanged for ordinary switches.
+      // Only `existingEpicTabIntentWithNestedFocus` (cross-route openers)
+      // sets a real target, committing it in this same navigation.
+      search: {
+        ...intent.focus,
+        ...buildNestedFocusSearchPatch(intent.nestedFocus),
+      },
     }),
     activate: (intent) => {
       useLandingDraftStore.getState().clearActiveDraft();

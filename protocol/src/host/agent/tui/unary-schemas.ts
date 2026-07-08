@@ -214,3 +214,40 @@ export const recordTuiAgentActivityResponseSchema = z.object({
 export type RecordTuiAgentActivityResponse = z.infer<
   typeof recordTuiAgentActivityResponseSchema
 >;
+
+// ─── `agent.tui.recordActivity@1.1` - + observed session-id resync ────────
+//
+// Additive minor bump over v1.0. Two changes, both driven by the Claude TUI
+// session-id resync (Claude implicitly re-ids its session on Esc-Esc rewind,
+// `/clear`, fork-after-`/btw`, etc.; the stored `harnessSessionId` must follow
+// what the user currently sees in the PTY):
+//
+//   • `observedHarnessSessionId` - the live `session_id` Claude stamps on every
+//     hook's stdin payload. The resolver writes it back onto the record's
+//     `harnessSessionId` when it drifts (claude-gated). This is DISTINCT from
+//     the existing `harnessSessionId` request field, which stays an OpenCode
+//     match-or-reject identity guard - never overloaded here. `null` (the
+//     v1.0-upgraded default) means "no observed id / nothing to resync".
+//
+//   • `event: "resync"` - a pure resync edge that is NOT an activity edge: the
+//     resolver performs the session write-back but does NOT touch the activity
+//     oracle. Fired by the Claude `SessionStart` hook (a dedicated CLI command),
+//     which reports the fresh id at the drift moment even when the user rewinds
+//     then immediately closes/forks the tab without another prompt. The existing
+//     `start`/`stop` edges (UserPromptSubmit/Stop) also carry
+//     `observedHarnessSessionId`, so drift on a normal turn resyncs too.
+//
+// A new capability MUST ride a new `{ major, minor }` of an existing method,
+// never a new method name (a new name fatally fails the equal-set `/rpc`
+// handshake against a shipped v1.0.0 host). Adding the `"resync"` enum value is
+// additive-advisory growth: a v1.0 host only ever meets it via the new
+// SessionStart flow it does not have.
+
+export const recordTuiAgentActivityRequestSchemaV11 =
+  recordTuiAgentActivityRequestSchema.extend({
+    event: z.enum(["start", "stop", "resync"]),
+    observedHarnessSessionId: z.string().nullable().default(null),
+  });
+export type RecordTuiAgentActivityRequestV11 = z.infer<
+  typeof recordTuiAgentActivityRequestSchemaV11
+>;

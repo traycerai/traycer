@@ -29,7 +29,6 @@ import {
   type TerminalSessionRecovery,
 } from "@/hooks/terminal/use-terminal-session-recovery";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
-import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { beginTerminalLoad } from "@/lib/perf/terminal-load-perf";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { useAgentStartTerminalSession } from "@/hooks/agent/use-prepare-tui-launch-mutation";
@@ -74,6 +73,7 @@ import {
   type WorktreeStagingKey,
 } from "@/stores/worktree/worktree-intent-staging-store";
 import { TerminalAgentForkDialog } from "./terminal-agent-fork-dialog";
+import { useCloseCanvasTileWithNestedFocus } from "./use-close-canvas-tile-with-nested-focus";
 
 const WORKTREE_SETUP_ERROR_CODES: ReadonlyArray<string> = [
   "WORKTREE_SETUP_FAILED",
@@ -148,7 +148,11 @@ export interface TuiAgentTileProps {
 export function TuiAgentTile(props: TuiAgentTileProps) {
   const hostId = useTabHostId();
   const reachability = useHostReachability(hostId);
-  const closeCanvasTab = useEpicCanvasStore((s) => s.closeCanvasTab);
+  const closeCanvasTile = useCloseCanvasTileWithNestedFocus(
+    props.viewTabId,
+    props.tileId,
+    props.node.instanceId,
+  );
   // Owns the recovery budget + nonce above the bootstrap subtree so they survive
   // the `recoverNonce`-keyed remount the recovery performs.
   const recovery = useTerminalSessionRecovery({
@@ -168,9 +172,7 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
     return (
       <TerminalDeadTileBanner
         hostLabel={reachability.hostLabel}
-        onClose={() =>
-          closeCanvasTab(props.viewTabId, props.tileId, props.node.instanceId)
-        }
+        onClose={closeCanvasTile}
         testId={`terminal-agent-tile-${props.tileId}`}
       />
     );
@@ -950,7 +952,11 @@ function TerminalAgentLive(props: TerminalAgentLiveProps) {
   const exitCode = useStore(handle.store, (s) => s.exitCode);
   const exitReason = useStore(handle.store, (s) => s.exitReason);
   const lastOutputPreview = useStore(handle.store, (s) => s.lastOutputPreview);
-  const closeCanvasTab = useEpicCanvasStore((s) => s.closeCanvasTab);
+  const closeCanvasTile = useCloseCanvasTileWithNestedFocus(
+    props.viewTabId,
+    props.tileId,
+    props.instanceId,
+  );
   const exitToastShownRef = useRef(false);
   // One revive request per exit: the exit effect can re-run while the store
   // still reports the same exited state (dep identity churn), and stacking
@@ -1013,15 +1019,12 @@ function TerminalAgentLive(props: TerminalAgentLiveProps) {
     // (`pane.tabInstanceIds`), not the content/session id. Passing
     // `handle.sessionId` (the agent record id) silently no-ops, leaving the
     // tab open after the harness TUI exits (e.g. Ctrl+C). Use the instance id.
-    closeCanvasTab(props.viewTabId, props.tileId, props.instanceId);
+    closeCanvasTile();
   }, [
     status,
     exitReason,
     onReapedExit,
-    props.instanceId,
-    props.viewTabId,
-    props.tileId,
-    closeCanvasTab,
+    closeCanvasTile,
     isRestartKillSuppressed,
   ]);
 
