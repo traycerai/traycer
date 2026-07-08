@@ -820,14 +820,13 @@ function OwnerTreeRow(props: {
 
 function ProcessLeafRow(props: { readonly processRow: ProcessDisplayRow }) {
   const hiddenCount = props.processRow.hiddenDescendants.length;
-  const content = (
-    <div
-      tabIndex={hiddenCount === 0 ? undefined : 0}
-      className="flex items-center justify-between gap-3 px-3.5 py-1 text-muted-foreground transition-colors hover:bg-muted/40"
-      style={{
-        paddingLeft: `calc(1.25rem + ${props.processRow.depth} * 1rem)`,
-      }}
-    >
+  const rowClassName =
+    "flex w-full items-center justify-between gap-3 px-3.5 py-1 text-left text-muted-foreground transition-colors hover:bg-muted/40";
+  const rowStyle = {
+    paddingLeft: `calc(1.25rem + ${props.processRow.depth} * 1rem)`,
+  };
+  const inner = (
+    <>
       <div className="flex min-w-0 items-center gap-1.5">
         <span className="size-1 shrink-0 rounded-full bg-muted-foreground/40" />
         <span className="min-w-0 truncate text-ui-xs">
@@ -839,12 +838,31 @@ function ProcessLeafRow(props: { readonly processRow: ProcessDisplayRow }) {
         rssBytes={props.processRow.process.rssBytes}
         className="text-ui-xs text-muted-foreground/80"
       />
-    </div>
+    </>
   );
-  if (hiddenCount === 0) return content;
+  // Leaf rows are static; only a capped row reveals more (its hidden sub-tree),
+  // so it is the one focusable, keyboard-reachable trigger for that tooltip.
+  if (hiddenCount === 0) {
+    return (
+      <div className={rowClassName} style={rowStyle}>
+        {inner}
+      </div>
+    );
+  }
   return (
     <Tooltip>
-      <TooltipTrigger asChild>{content}</TooltipTrigger>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          className={cn(
+            rowClassName,
+            "cursor-default outline-none focus-visible:bg-muted/40 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring",
+          )}
+          style={rowStyle}
+        >
+          {inner}
+        </button>
+      </TooltipTrigger>
       <TooltipPrimitive.Portal>
         <TooltipPrimitive.Content
           side="right"

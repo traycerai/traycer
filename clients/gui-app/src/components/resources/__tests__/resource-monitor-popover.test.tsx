@@ -337,9 +337,9 @@ describe("ResourceMonitorPopover", () => {
 
     const cappedProcessRow = screen
       .getAllByText("node dev-server.js (2 sub-processes)")[0]
-      .closest("[tabindex='0']");
+      .closest("button");
     if (cappedProcessRow === null) {
-      throw new Error("Expected capped process row to be focusable");
+      throw new Error("Expected capped process row to be a focusable button");
     }
     fireEvent.focus(cappedProcessRow);
     const tooltip = await screen.findByRole("tooltip");
