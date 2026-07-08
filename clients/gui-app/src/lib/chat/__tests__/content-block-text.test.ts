@@ -46,7 +46,6 @@ describe("contentBlocksText", () => {
     const text = contentBlocksText(blocks);
     expect(text).toContain("Model changed");
     expect(text).toContain("Codex switched from gpt-5 to gpt-5-safe.");
-    expect(text).toContain("Reason");
-    expect(text).toContain("highRiskCyberActivity");
+    expect(text).toContain("Reason: highRiskCyberActivity");
   });
 });

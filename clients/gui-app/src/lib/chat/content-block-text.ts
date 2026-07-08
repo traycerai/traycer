@@ -66,10 +66,17 @@ function providerNoticeText(
     Extract<ContentBlock, { type: "text" }>["providerNotice"]
   >,
 ): string {
+  const detailParts = (detail: (typeof notice.details)[number]) => {
+    const parts = [detail.label, detail.value].filter(
+      (part) => part.length > 0,
+    );
+    return parts.length === 0 ? [] : [parts.join(": ")];
+  };
+
   return [
     notice.title,
     notice.message ?? "",
-    ...notice.details.flatMap((detail) => [detail.label, detail.value]),
+    ...notice.details.flatMap(detailParts),
   ]
     .filter((part) => part.length > 0)
     .join(" · ");

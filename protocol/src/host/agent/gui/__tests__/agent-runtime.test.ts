@@ -266,6 +266,31 @@ describe("agent runtime stream schema", () => {
     expect(runtimeEventSchemaV12.safeParse(event).success).toBe(false);
   });
 
+  it("rejects a provider_notice.upsert event with an empty legacy fallback text", () => {
+    expect(
+      runtimeEventSchema.safeParse({
+        type: "provider_notice.upsert",
+        blockId: "provider-notice:codex:turn-1:model-rerouted",
+        timestamp: 1,
+        parentBlockId: null,
+        harnessId: "codex",
+        noticeKind: "model_rerouted",
+        tone: "warning",
+        status: "completed",
+        title: "Model changed",
+        message: "Codex switched from gpt-5 to gpt-5-safe.",
+        details: [{ label: "Reason", value: "highRiskCyberActivity" }],
+        fallbackText: "",
+        metadata: {
+          type: "model_rerouted",
+          fromModel: "gpt-5",
+          toModel: "gpt-5-safe",
+          reason: "highRiskCyberActivity",
+        },
+      }).success,
+    ).toBe(false);
+  });
+
   it("rejects unknown runtime event types", () => {
     expect(() =>
       runtimeEventSchema.parse({

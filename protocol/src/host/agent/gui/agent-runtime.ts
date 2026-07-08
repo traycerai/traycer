@@ -667,7 +667,7 @@ export const providerNoticeUpsertEventSchema = z.object({
   title: z.string(),
   message: z.string().nullable(),
   details: z.array(providerNoticeDetailSchema),
-  fallbackText: z.string(),
+  fallbackText: z.string().min(1),
   metadata: providerNoticeNormalizedMetadataSchema.nullable(),
 });
 export type ProviderNoticeUpsertEvent = z.infer<

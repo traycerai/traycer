@@ -111,15 +111,25 @@ export type ProviderNoticeNormalizedMetadata = z.infer<
   typeof providerNoticeNormalizedMetadataSchema
 >;
 
-export const providerNoticeMetadataSchema = z.object({
-  harnessId: harnessIdSchema,
-  noticeKind: providerNoticeKindSchema,
-  tone: providerNoticeToneSchema,
-  title: z.string(),
-  message: z.string().nullable(),
-  details: z.array(providerNoticeDetailSchema),
-  metadata: providerNoticeNormalizedMetadataSchema.nullable(),
-});
+export const providerNoticeMetadataSchema = z
+  .object({
+    harnessId: harnessIdSchema,
+    noticeKind: providerNoticeKindSchema,
+    tone: providerNoticeToneSchema,
+    title: z.string(),
+    message: z.string().nullable(),
+    details: z.array(providerNoticeDetailSchema),
+    metadata: providerNoticeNormalizedMetadataSchema.nullable(),
+  })
+  .superRefine((notice, ctx) => {
+    if (notice.metadata !== null && notice.noticeKind !== notice.metadata.type) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "noticeKind must match metadata.type",
+        path: ["metadata", "type"],
+      });
+    }
+  });
 export type ProviderNoticeMetadata = z.infer<typeof providerNoticeMetadataSchema>;
 
 export const textBlockSchema = z.object({

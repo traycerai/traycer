@@ -728,6 +728,23 @@ describe("textBlockSchema providerNotice (no new persisted block type)", () => {
     expect(result.success).toBe(false);
   });
 
+  it("rejects provider notice metadata whose type does not match noticeKind", () => {
+    const result = providerNoticeMetadataSchema.safeParse({
+      harnessId: "codex",
+      noticeKind: "model_rerouted",
+      tone: "warning",
+      title: "Model changed",
+      message: null,
+      details: [],
+      metadata: {
+        type: "model_verification",
+        verifications: ["trustedAccessForCyber"],
+      },
+    });
+
+    expect(result.success).toBe(false);
+  });
+
   it("rejects non-JSON-serializable values on normalized metadata fields", () => {
     const result = providerNoticeNormalizedMetadataSchema.safeParse({
       type: "model_rerouted",
