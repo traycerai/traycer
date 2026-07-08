@@ -211,6 +211,101 @@ describe("createPersistentMemoryHistory", () => {
 
     expect(secondWindow.location.pathname).toBe("/draft/shared");
   });
+
+  it("preserves the full remembered stack and cursor on a cold restore whose shell override matches the current entry", () => {
+    // Simulates the Bug 2 cold restore: a full quit wiped sessionStorage (so the
+    // consumed-marker is absent and the override applies), and main derives the
+    // initial route from the SAME snapshot the stack was persisted under - so the
+    // override equals the persisted current entry. The deep back/forward history
+    // must survive rather than collapse to a single entry.
+    const entries = [
+      "/epics/epic-a/tab-a",
+      "/epics/epic-b/tab-b",
+      "/draft/draft-a",
+      "/epics/epic-c/tab-c",
+      "/draft/draft-b",
+      "/epics/epic-d/tab-d",
+      "/draft/552a2b55",
+    ];
+    window.localStorage.setItem(
+      storageKey("window-a"),
+      JSON.stringify({ entries, index: 6 }),
+    );
+
+    const history = createPersistentMemoryHistory(
+      "/draft/552a2b55",
+      "window-a",
+    );
+    const controller = controllerOf(history);
+
+    expect(controller.getEntries()).toEqual(entries);
+    expect(controller.getIndex()).toBe(6);
+    expect(history.location.pathname).toBe("/draft/552a2b55");
+    expect(readPersisted("window-a")).toEqual({ entries, index: 6 });
+  });
+
+  it("appends the shell override and truncates forward history when it differs from the current entry", () => {
+    // Cursor sits back-deep in the stack; the override is a route not equal to
+    // the current entry. It is treated like a fresh navigation: forward entries
+    // are dropped, the override is appended, and back history up to the previous
+    // current entry survives.
+    window.localStorage.setItem(
+      storageKey("window-a"),
+      JSON.stringify({
+        entries: [
+          "/epics/epic-a/tab-a",
+          "/epics/epic-b/tab-b",
+          "/epics/epic-c/tab-c",
+          "/epics/epic-d/tab-d",
+        ],
+        index: 1,
+      }),
+    );
+
+    const history = createPersistentMemoryHistory("/draft/draft-z", "window-a");
+    const controller = controllerOf(history);
+
+    expect(controller.getEntries()).toEqual([
+      "/epics/epic-a/tab-a",
+      "/epics/epic-b/tab-b",
+      "/draft/draft-z",
+    ]);
+    expect(controller.getIndex()).toBe(2);
+    expect(history.location.pathname).toBe("/draft/draft-z");
+  });
+
+  it("caps an oversized remembered stack around the cursor when the override matches the current entry", () => {
+    // A legacy/oversized persisted stack (200 entries) whose cursor is the tail.
+    // The matching override keeps the full stack, then `capStackInPlace` bounds
+    // it to MAX_ENTRIES around the cursor without dropping the current entry.
+    const oversized = Array.from(
+      { length: 200 },
+      (_unused, i) => `/epics/epic-${i}/tab-${i}`,
+    );
+    const current = oversized[oversized.length - 1];
+    window.localStorage.setItem(
+      storageKey("window-a"),
+      JSON.stringify({ entries: oversized, index: oversized.length - 1 }),
+    );
+
+    const history = createPersistentMemoryHistory(current, "window-a");
+    const controller = controllerOf(history);
+
+    expect(controller.getEntries().length).toBe(100);
+    expect(controller.getEntries()[controller.getIndex()]).toBe(current);
+    expect(history.location.pathname).toBe(current);
+  });
+
+  it("seeds the override alone on a fresh window with nothing remembered", () => {
+    const history = createPersistentMemoryHistory(
+      "/epics/epic-a/tab-a",
+      "window-a",
+    );
+    const controller = controllerOf(history);
+
+    expect(controller.getEntries()).toEqual(["/epics/epic-a/tab-a"]);
+    expect(controller.getIndex()).toBe(0);
+  });
 });
 
 describe("getHistoryController", () => {
