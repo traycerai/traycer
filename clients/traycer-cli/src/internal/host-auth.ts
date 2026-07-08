@@ -1,8 +1,10 @@
 import type { BearerStore } from "../../../shared/auth/bearer-revalidator";
 import { config } from "../config";
 import { createCliLogger } from "../logger";
+import { devDesktopSlotForEnvironment } from "../store/dev-desktop-slot";
 import {
   deleteCredentials,
+  effectiveAuthnBaseUrl,
   readCredentials,
   writeCredentials,
 } from "../store/credentials";
@@ -52,7 +54,7 @@ export async function resolveHostAuth(): Promise<HostAuth | null> {
   });
   return {
     token: stored.token,
-    authnBaseUrl: stored.authnBaseUrl,
+    authnBaseUrl: effectiveAuthnBaseUrl(stored.authnBaseUrl),
     userId: stored.user.id,
   };
 }
@@ -112,9 +114,25 @@ export const cliBearerStore: BearerStore = {
   },
   clear: async () => {
     const logger = createCliLogger(config.environment);
+    const devDesktopSlot = devDesktopSlotForEnvironment(
+      config.environment,
+      process.env,
+    );
     await deleteCredentials();
     logger.warn("Bearer store cleared credentials", {
       environment: config.environment,
+      devDesktopSlot,
     });
+    if (devDesktopSlot !== null) {
+      // Dev credentials are a single file shared by every `make dev-desktop`
+      // run (see the shared-data decision). This run's refresh failure just
+      // logged out every sibling run sharing this worktree's dev
+      // credentials - loud on purpose so a "why am I suddenly signed out in
+      // my OTHER dev-desktop window" report has an obvious cause in the logs.
+      logger.warn(
+        "Dev credentials are shared across all make dev-desktop runs; this clear signs out every sibling run",
+        { devDesktopSlot },
+      );
+    }
   },
 };

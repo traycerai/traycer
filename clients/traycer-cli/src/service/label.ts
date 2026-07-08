@@ -1,6 +1,7 @@
 import { homedir, platform as osPlatform } from "node:os";
 import { join } from "node:path";
 import type { Environment } from "../runner/environment";
+import { devDesktopSlotForEnvironment } from "../store/dev-desktop-slot";
 
 // A `ServiceLabel` namespaces an OS-service registration (LaunchAgent /
 // systemd unit / Scheduled Task) so hosts for different environments can
@@ -45,6 +46,14 @@ function capitalizeEnvironment(environment: Environment): string {
 
 export function serviceLabelFor(environment: Environment): ServiceLabel {
   if (environment === "production") return PRODUCTION_LABEL;
+  const devSlot = devDesktopSlotForEnvironment(environment, process.env);
+  if (devSlot !== null) {
+    return {
+      id: `ai.traycer.host.dev.${devSlot}`,
+      displayName: `Traycer Host (Dev ${devSlot})`,
+      environment,
+    };
+  }
   return {
     id: `ai.traycer.host.${environment}`,
     displayName: `Traycer Host (${capitalizeEnvironment(environment)})`,
@@ -73,5 +82,9 @@ export function serviceManifestPath(label: ServiceLabel): string {
 // `Host-Staging`).
 export function windowsTaskName(label: ServiceLabel): string {
   if (label.environment === "production") return "\\Traycer\\Host";
+  const devPrefix = "ai.traycer.host.dev.";
+  if (label.id.startsWith(devPrefix)) {
+    return `\\Traycer\\Host-Dev-${capitalizeEnvironment(label.id.slice(devPrefix.length))}`;
+  }
   return `\\Traycer\\Host-${capitalizeEnvironment(label.environment)}`;
 }

@@ -452,6 +452,25 @@ describe("loadMainWindow", () => {
     // no devtools hook to call.
     expect(target.loadedUrls).toEqual(["http://localhost:5173"]);
   });
+
+  it("loads the dynamic Vite dev renderer URL when provided", async () => {
+    configState.isDevBuild = true;
+    process.env.TRAYCER_DESKTOP_DEV_URL = "http://localhost:21005";
+    const target = createLoadTarget();
+
+    await loadMainWindow(target);
+
+    expect(target.loadedUrls).toEqual(["http://localhost:21005"]);
+  });
+
+  it("rejects non-loopback dev renderer URLs", async () => {
+    configState.isDevBuild = true;
+    process.env.TRAYCER_DESKTOP_DEV_URL = "http://example.com:21005";
+    const target = createLoadTarget();
+
+    await expect(loadMainWindow(target)).rejects.toThrow(/loopback/);
+    expect(target.loadedUrls).toEqual([]);
+  });
 });
 
 function createLoadTarget(): MainWindowLoadTarget & {

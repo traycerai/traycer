@@ -2,6 +2,21 @@ import { describe, expect, it } from "vitest";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { getHostFsLayout, labelForEnvironment } from "../host-paths";
+import { DEV_DESKTOP_SLOT_ENV } from "../dev-desktop-slot";
+
+function withDevDesktopSlot(slot: string, fn: () => void): void {
+  const previous = process.env[DEV_DESKTOP_SLOT_ENV];
+  process.env[DEV_DESKTOP_SLOT_ENV] = slot;
+  try {
+    fn();
+  } finally {
+    if (previous === undefined) {
+      delete process.env[DEV_DESKTOP_SLOT_ENV];
+    } else {
+      process.env[DEV_DESKTOP_SLOT_ENV] = previous;
+    }
+  }
+}
 
 /**
  * Pin the cross-workspace contract: the desktop runner MUST look for the
@@ -74,6 +89,26 @@ describe("getHostFsLayout", () => {
       join(homedir(), ".traycer", "host", "dev", "install", "install.json"),
     );
   });
+
+  it("uses a per-run dev host root when DEV_DESKTOP_SLOT is set", () => {
+    withDevDesktopSlot("Worktree Slot", () => {
+      const layout = getHostFsLayout("dev");
+      const root = join(
+        homedir(),
+        ".traycer",
+        "host",
+        "dev-runs",
+        "worktree-slot",
+      );
+      expect(layout.environment).toBe("dev");
+      expect(layout.rootDir).toBe(root);
+      expect(layout.pidMetadataFile).toBe(join(root, "pid.json"));
+      expect(layout.logFile).toBe(join(root, "host.log"));
+      expect(layout.installRecordFile).toBe(
+        join(root, "install", "install.json"),
+      );
+    });
+  });
 });
 
 /**
@@ -95,6 +130,15 @@ describe("labelForEnvironment", () => {
     const label = labelForEnvironment("dev");
     expect(label.id).toBe("ai.traycer.host.dev");
     expect(label.appSupportDirName).toBe("Traycer-Dev");
+  });
+
+  it("uses a per-run dev service label when DEV_DESKTOP_SLOT is set", () => {
+    withDevDesktopSlot("Worktree Slot", () => {
+      const label = labelForEnvironment("dev");
+      expect(label.id).toBe("ai.traycer.host.dev.worktree-slot");
+      expect(label.displayName).toBe("Traycer Host (Dev worktree-slot)");
+      expect(label.appSupportDirName).toBe("Traycer-Dev-worktree-slot");
+    });
   });
 
   it("gives the internal staging slot its OWN ai.traycer.host.staging id (never the dev slot's)", () => {
