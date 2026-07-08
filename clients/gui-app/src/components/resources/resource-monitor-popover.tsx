@@ -153,7 +153,14 @@ interface DesktopResourceSummary {
 interface ProcessDisplayRow {
   readonly process: ResourceProcessSnapshotWire;
   readonly depth: number;
-  readonly hiddenDescendants: readonly ResourceProcessSnapshotWire[];
+  readonly hiddenDescendants: readonly HiddenProcessRow[];
+}
+
+interface HiddenProcessRow {
+  readonly process: ResourceProcessSnapshotWire;
+  // Depth relative to the capped row (the first hidden level is 1) so the
+  // tooltip can indent the collapsed sub-tree the same way the main tree does.
+  readonly depth: number;
 }
 
 export function ResourceMonitorPopover(props: ResourceMonitorPopoverProps) {
@@ -814,9 +821,7 @@ function ProcessLeafRow(props: { readonly processRow: ProcessDisplayRow }) {
   return (
     <TooltipWrapper
       label={
-        <HiddenSubprocessTooltip
-          processes={props.processRow.hiddenDescendants}
-        />
+        <HiddenSubprocessTooltip rows={props.processRow.hiddenDescendants} />
       }
       side="right"
       sideOffset={8}
@@ -828,16 +833,27 @@ function ProcessLeafRow(props: { readonly processRow: ProcessDisplayRow }) {
 }
 
 function HiddenSubprocessTooltip(props: {
-  readonly processes: readonly ResourceProcessSnapshotWire[];
+  readonly rows: readonly HiddenProcessRow[];
 }) {
   return (
-    <div className="flex max-h-[min(40vh,18rem)] min-w-0 flex-col gap-1 overflow-y-auto text-left">
-      {props.processes.map((process) => (
+    <div className="flex max-h-[min(40vh,18rem)] min-w-0 flex-col overflow-y-auto text-left">
+      {props.rows.map((row) => (
         <div
-          key={`${process.rootPid}:${process.pid}`}
-          className="max-w-full truncate"
+          key={`${row.process.rootPid}:${row.process.pid}`}
+          className="flex items-center justify-between gap-3 py-1 text-muted-foreground"
+          style={{ paddingLeft: `calc(${row.depth} * 1rem)` }}
         >
-          {processLabel(process)}
+          <div className="flex min-w-0 items-center gap-1.5">
+            <span className="size-1 shrink-0 rounded-full bg-muted-foreground/40" />
+            <span className="min-w-0 truncate text-ui-xs">
+              {processLabel(row.process)}
+            </span>
+          </div>
+          <MetricPair
+            cpuPercent={row.process.cpuPercent}
+            rssBytes={row.process.rssBytes}
+            className="text-ui-xs text-muted-foreground/80"
+          />
         </div>
       ))}
     </div>
@@ -1255,12 +1271,17 @@ function hiddenProcessDescendants(
   process: ResourceProcessSnapshotWire,
   processes: readonly ResourceProcessSnapshotWire[],
   byPid: ReadonlyMap<number, ResourceProcessSnapshotWire>,
-): ResourceProcessSnapshotWire[] {
-  return processes.filter(
-    (candidate) =>
-      processDepth(candidate, byPid) > MAX_VISIBLE_PROCESS_DEPTH &&
-      isProcessDescendantOf(candidate, process.pid, byPid),
-  );
+): HiddenProcessRow[] {
+  return processes.flatMap((candidate): HiddenProcessRow[] => {
+    const depth = processDepth(candidate, byPid);
+    if (
+      depth <= MAX_VISIBLE_PROCESS_DEPTH ||
+      !isProcessDescendantOf(candidate, process.pid, byPid)
+    ) {
+      return [];
+    }
+    return [{ process: candidate, depth: depth - MAX_VISIBLE_PROCESS_DEPTH }];
+  });
 }
 
 function isProcessDescendantOf(
@@ -1279,7 +1300,6 @@ function isProcessDescendantOf(
   }
   return false;
 }
-
 
 function countLabel(count: number, singular: string, plural: string): string {
   return `${formatProcessCount(count)} ${count === 1 ? singular : plural}`;

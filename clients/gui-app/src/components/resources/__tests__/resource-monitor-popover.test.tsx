@@ -340,10 +340,12 @@ describe("ResourceMonitorPopover", () => {
       throw new Error("Expected capped process row to be focusable");
     }
     fireEvent.focus(cappedProcessRow);
-    expect((await screen.findByRole("tooltip")).textContent).toContain(
-      "/bin/sh",
-    );
-    expect(screen.getByRole("tooltip").textContent).toContain("make");
+    const tooltip = await screen.findByRole("tooltip");
+    expect(tooltip.textContent).toContain("/bin/sh");
+    expect(tooltip.textContent).toContain("make");
+    // The collapsed sub-tree carries the same CPU/memory columns as the tree.
+    expect(tooltip.textContent).toContain("2.0 MB");
+    expect(tooltip.textContent).toContain("4.0 MB");
 
     fireEvent.click(screen.getByText("Terminal Alpha"));
     expect(canvasMock.setActiveTilePane).toHaveBeenCalledWith(
