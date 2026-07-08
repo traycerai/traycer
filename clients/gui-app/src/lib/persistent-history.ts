@@ -143,20 +143,27 @@ function buildConsumedInitialRouteKey(
   return `${CONSUMED_INITIAL_ROUTE_KEY_PREFIX}:${windowId ?? "unknown"}:${initialRoute}`;
 }
 
-function loadPersistedState(windowId: string | null): PersistedState {
-  if (typeof window === "undefined") return { entries: ["/"], index: 0 };
-  if (windowId === null) return { entries: ["/"], index: 0 };
+/**
+ * Loads this window's remembered stack, or `null` when nothing usable is
+ * stored (no key, rejected shape, or read failure). Returning `null` - rather
+ * than a `{ entries: ["/"], index: 0 }` default - lets the seed logic tell a
+ * genuinely empty window apart from one whose current entry happens to be `/`,
+ * which matters when merging a shell override into the remembered stack.
+ */
+function loadPersistedState(windowId: string | null): PersistedState | null {
+  if (typeof window === "undefined") return null;
+  if (windowId === null) return null;
   const storageKey = buildStorageKey(windowId);
   try {
     const raw = window.localStorage.getItem(storageKey);
-    if (raw === null) return { entries: ["/"], index: 0 };
+    if (raw === null) return null;
     const parsed: unknown = JSON.parse(raw);
     if (!isPersistedState(parsed)) {
       appLogger.warn("[history] persisted route state rejected", {
         windowId,
       });
       removePersistedState(storageKey);
-      return { entries: ["/"], index: 0 };
+      return null;
     }
     const safeIndex = Math.min(
       Math.max(parsed.index, 0),
@@ -169,7 +176,7 @@ function loadPersistedState(windowId: string | null): PersistedState {
       error: describeLogError(error),
     });
     removePersistedState(storageKey);
-    return { entries: ["/"], index: 0 };
+    return null;
   }
 }
 
@@ -357,10 +364,53 @@ function capStackInPlace(
 }
 
 /**
- * Creates a router history seeded from the explicit `initialRoute` override,
- * or from this window's `localStorage` history when the shell provides no
- * route. Intended for the Electron renderer only - the browser web app should
- * use TanStack's default browser history.
+ * Resolves the seed stack (entries + cursor) from the remembered stack and the
+ * shell override. The override is MERGED into the remembered stack rather than
+ * replacing it, so a cold restore keeps the window's back/forward history:
+ *
+ * - No override → restore the remembered stack verbatim (or the bare landing
+ *   when nothing is stored).
+ * - Bare-`/` override → landing seed; the caller has already cleared any
+ *   remembered stack (see `createPersistentMemoryHistory`).
+ * - Override with nothing stored → seed the override alone (fresh window).
+ * - Override equals the remembered current entry → keep the full remembered
+ *   stack + cursor unchanged. This is the restored-launch common case: main
+ *   derives the initial route FROM the same snapshot the stack was persisted
+ *   under, so the two agree and the deep back-history survives. (Bug fix: the
+ *   old code reset to `[override], index 0`, collapsing the stack on every cold
+ *   restore because the sessionStorage consumed-marker never survives a quit.)
+ * - Override differs from the remembered current entry → treat it like a fresh
+ *   navigation: drop forward entries beyond the cursor, append the override,
+ *   and point the cursor at it. Back history up to the previous current entry
+ *   survives.
+ */
+function computeSeededStack(
+  persisted: PersistedState | null,
+  shellOverride: string | null,
+): { entries: string[]; index: number } {
+  if (shellOverride === null) {
+    if (persisted === null) return { entries: ["/"], index: 0 };
+    return { entries: [...persisted.entries], index: persisted.index };
+  }
+  if (shellOverride === "/") return { entries: ["/"], index: 0 };
+  if (persisted === null) return { entries: [shellOverride], index: 0 };
+  if (persisted.entries[persisted.index] === shellOverride) {
+    return { entries: [...persisted.entries], index: persisted.index };
+  }
+  return {
+    entries: [
+      ...persisted.entries.slice(0, persisted.index + 1),
+      shellOverride,
+    ],
+    index: persisted.index + 1,
+  };
+}
+
+/**
+ * Creates a router history seeded from the explicit `initialRoute` override
+ * merged into this window's `localStorage` history, or from that history alone
+ * when the shell provides no route. Intended for the Electron renderer only -
+ * the browser web app should use TanStack's default browser history.
  */
 export function createPersistentMemoryHistory(
   initialRoute: string | null,
@@ -369,15 +419,22 @@ export function createPersistentMemoryHistory(
   const persisted = loadPersistedState(windowId);
   const shellOverride = consumeShellOverride(initialRoute, windowId);
   if (shellOverride === "/") {
+    // A bare-`/` shell override is the deliberate "start at the landing" signal:
+    // the zero-restorable-windows cold start and the auth-fallback redirect both
+    // funnel through it. Discard the remembered stack rather than merging - the
+    // landing is meant to be a clean start, not the tail of a deep back-history
+    // to routes the snapshot no longer references. `persistState` already refuses
+    // to write a `/` current entry, so the immediate persist below leaves
+    // localStorage cleared.
     clearPersistedState(windowId);
   }
 
-  const entries: string[] =
-    shellOverride !== null ? [shellOverride] : [...persisted.entries];
+  const seed = computeSeededStack(persisted, shellOverride);
+  const entries: string[] = seed.entries;
   const states: LocationState[] = entries.map((_entry, i) =>
     makeInitialState(i),
   );
-  let index = shellOverride !== null ? 0 : persisted.index;
+  let index = seed.index;
   // Bound a legacy/oversized seed before anything reads the stack.
   index = capStackInPlace(entries, states, index);
 

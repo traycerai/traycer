@@ -7,6 +7,7 @@ import {
 import { WindowsBridgeContext } from "@/providers/windows-bridge-context";
 import type { WindowsBridgeContextValue } from "@/providers/windows-bridge-context";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
+import { appLogger } from "@/lib/logger";
 import {
   applyEpicCanvasDesktopProjection,
   setEpicCanvasDesktopProjectionBridge,
@@ -146,6 +147,18 @@ function installDesktopWindowsBridge(
     bridge.perWindowState,
     DESKTOP_PER_WINDOW_PROJECTION_DEBOUNCE_MS,
   );
+  // Best-effort flush on document teardown (reload / navigation / a window close
+  // that does NOT route through the quit intercept). Unlike the `before-quit`
+  // fresh-snapshot path - which AWAITS this same flush before answering main -
+  // unload handlers cannot await a promise, so we can only kick the flush and
+  // return. `flush()` enqueues the pending patch's `perWindowState.update` IPC
+  // send on the microtask queue, which the browser drains before it proceeds
+  // with the unload, so the send does leave the renderer. Residual gap: if a
+  // prior projection `update` is still in flight when this fires, the new patch
+  // is chained behind it and may not send before teardown; and main is not
+  // guaranteed to finish processing an in-flight send before the renderer dies.
+  // The deliberate quit path (Cmd+Q / "Quit Traycer") does not rely on this - it
+  // uses the awaited fresh-snapshot flush - so this remains a fallback only.
   const flushProjection = (): void => {
     void projectionBridge.flush();
   };
@@ -166,9 +179,22 @@ function installDesktopWindowsBridge(
 
   void (async () => {
     if (isCancelled()) return;
-    const snapshot = await bridge.perWindowState.get();
-    if (isCancelled()) return;
-    applyPerWindowSnapshot(snapshot);
+    try {
+      const snapshot = await bridge.perWindowState.get();
+      if (isCancelled()) return;
+      applyPerWindowSnapshot(snapshot);
+    } catch (error) {
+      if (isCancelled()) return;
+      // Fall back to not applying a snapshot (empty/absent snapshot
+      // semantics) rather than leaving hydration permanently pending - a
+      // route gated on `useWindowsBridgeHydrated()` (e.g. `/draft/new`) would
+      // otherwise spin forever.
+      appLogger.error(
+        "[windows-bridge] per-window snapshot hydration failed",
+        {},
+        error,
+      );
+    }
     queueMicrotask(() => {
       if (!lifecycle.cancelled) {
         completeWindowsBridgeHydration(hydrationRequest);
