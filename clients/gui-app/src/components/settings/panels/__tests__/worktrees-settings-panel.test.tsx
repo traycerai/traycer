@@ -1755,38 +1755,65 @@ describe("WorktreesList v1.1 signals", () => {
     expect(screen.queryByRole("button", { name: /Open Task/i })).toBeNull();
   });
 
-  it("renders linked PR pills for open, closed, and merged PR states only", () => {
+  it("renders linked PR chips for the superproject and every displayable submodule PR", () => {
     renderList({
       hostId: "host-a",
       queryClient: new QueryClient(),
       worktrees: [
         entry({
-          worktreePath: "/wt/open",
-          branch: "feat-open",
-          prState: "open",
+          worktreePath: "/wt/prs",
+          branch: "feat-prs",
+          prState: "merged",
           prNumber: 10,
           prUrl: "https://github.com/acme/app/pull/10",
-        }),
-        entry({
-          worktreePath: "/wt/closed",
-          branch: "feat-closed",
-          prState: "closed",
-          prNumber: 11,
-          prUrl: "https://github.com/acme/app/pull/11",
-        }),
-        entry({
-          worktreePath: "/wt/merged",
-          branch: "feat-merged",
-          prState: "merged",
-          prNumber: 12,
-          prUrl: "https://github.com/acme/app/pull/12",
-        }),
-        entry({
-          worktreePath: "/wt/none",
-          branch: "feat-none",
-          prState: "none",
-          prNumber: null,
-          prUrl: null,
+          mergedHeadShaMatches: true,
+          submodules: [
+            {
+              repoIdentifier: { owner: "acme", repo: "open-sub" },
+              branch: "feat-prs",
+              prState: "open",
+              prNumber: 11,
+              prUrl: "https://github.com/acme/open-sub/pull/11",
+              mergedHeadShaMatches: false,
+              mergedIntoDefault: false,
+            },
+            {
+              repoIdentifier: { owner: "acme", repo: "closed-sub" },
+              branch: "feat-prs",
+              prState: "closed",
+              prNumber: 12,
+              prUrl: "https://github.com/acme/closed-sub/pull/12",
+              mergedHeadShaMatches: false,
+              mergedIntoDefault: false,
+            },
+            {
+              repoIdentifier: { owner: "acme", repo: "merged-sub" },
+              branch: "feat-prs",
+              prState: "merged",
+              prNumber: 13,
+              prUrl: "https://github.com/acme/merged-sub/pull/13",
+              mergedHeadShaMatches: true,
+              mergedIntoDefault: true,
+            },
+            {
+              repoIdentifier: { owner: "acme", repo: "none-sub" },
+              branch: "feat-prs",
+              prState: "none",
+              prNumber: 14,
+              prUrl: "https://github.com/acme/none-sub/pull/14",
+              mergedHeadShaMatches: false,
+              mergedIntoDefault: false,
+            },
+            {
+              repoIdentifier: { owner: "acme", repo: "cold-sub" },
+              branch: "feat-prs",
+              prState: null,
+              prNumber: 15,
+              prUrl: "https://github.com/acme/cold-sub/pull/15",
+              mergedHeadShaMatches: false,
+              mergedIntoDefault: false,
+            },
+          ],
         }),
       ],
       taskTitlesByEpicId: undefined,
@@ -1797,22 +1824,36 @@ describe("WorktreesList v1.1 signals", () => {
 
     expect(
       screen
-        .getAllByTestId("worktree-pr-pill")
-        .map((pill) => pill.getAttribute("data-pr-state")),
-    ).toEqual(["open", "closed", "merged"]);
+        .getAllByTestId("worktree-pr-chip")
+        .map((chip) => chip.getAttribute("data-pr-state")),
+    ).toEqual(["merged", "open", "closed", "merged"]);
     expect(
       screen.getByRole("link", { name: "Open PR #10" }).getAttribute("href"),
     ).toBe("https://github.com/acme/app/pull/10");
     expect(
-      screen.getByRole("link", { name: "Open PR #11" }).getAttribute("href"),
-    ).toBe("https://github.com/acme/app/pull/11");
+      screen
+        .getByRole("link", { name: "Open open-sub PR #11" })
+        .getAttribute("href"),
+    ).toBe("https://github.com/acme/open-sub/pull/11");
     expect(
-      screen.getByRole("link", { name: "Open PR #12" }).getAttribute("href"),
-    ).toBe("https://github.com/acme/app/pull/12");
-    expect(screen.queryByRole("link", { name: "Open PR #13" })).toBeNull();
+      screen
+        .getByRole("link", { name: "Open closed-sub PR #12" })
+        .getAttribute("href"),
+    ).toBe("https://github.com/acme/closed-sub/pull/12");
+    expect(
+      screen
+        .getByRole("link", { name: "Open merged-sub PR #13" })
+        .getAttribute("href"),
+    ).toBe("https://github.com/acme/merged-sub/pull/13");
+    expect(
+      screen.queryByRole("link", { name: "Open none-sub PR #14" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("link", { name: "Open cold-sub PR #15" }),
+    ).toBeNull();
   });
 
-  it("links submodule PR fragments when the fact has a PR URL", () => {
+  it("keeps submodule PR facts as plain text now that chips carry the links", () => {
     renderList({
       hostId: "host-a",
       queryClient: new QueryClient(),
@@ -1839,10 +1880,15 @@ describe("WorktreesList v1.1 signals", () => {
       onVisiblePathsChange: undefined,
     });
 
+    const factLine = screen.getByText((_content, element) => {
+      return (
+        element?.tagName.toLowerCase() === "p" &&
+        element.textContent?.includes("submodule acme/sub PR #22 open") === true
+      );
+    });
+    expect(within(factLine).queryByRole("link")).toBeNull();
     expect(
-      screen
-        .getByRole("link", { name: "Open submodule PR #22" })
-        .getAttribute("href"),
+      screen.getByRole("link", { name: "Open sub PR #22" }).getAttribute("href"),
     ).toBe("https://github.com/acme/sub/pull/22");
   });
 
@@ -1887,8 +1933,7 @@ describe("WorktreesList v1.1 signals", () => {
       .map((pill) => pill.getAttribute("data-tier"));
     expect(tiers).toContain("merged");
     expect(tiers).toContain("review");
-    screen.getByText("2 ahead");
-    screen.getByText("3 behind");
+    screen.getByText("2 ahead · 3 behind");
   });
 
   it("shows a pending tier pill for a row not yet enriched (empty overlay)", () => {

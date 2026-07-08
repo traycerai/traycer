@@ -1,5 +1,4 @@
 import {
-  Fragment,
   use,
   useCallback,
   useEffect,
@@ -1759,18 +1758,13 @@ function WorktreeRow(props: {
       <div className="min-w-0 flex-1 space-y-1 pr-10">
         <div className="flex flex-wrap items-center gap-2">
           <WorktreeTierPill tier={classification.tier} state={enrichment} />
-          <WorktreePrPill
-            prState={entry.prState}
-            prNumber={entry.prNumber}
-            prUrl={entry.prUrl}
-          />
+          <WorktreePrChips entry={entry} />
           <span className="truncate text-ui-sm font-medium text-foreground">
             {branchLabel(entry)}
           </span>
         </div>
         <WorktreeSecondaryFacts
           facts={classification.facts}
-          submodules={entry.submodules}
           lastActivityAt={entry.lastActivityAt}
         />
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -1938,21 +1932,13 @@ const WORKTREE_TIER_PILL_STYLE: Record<
  */
 function WorktreeSecondaryFacts(props: {
   readonly facts: readonly string[];
-  readonly submodules: readonly WorktreeSubmoduleMergeFact[];
   readonly lastActivityAt: number | null;
 }): ReactNode {
   const hasFacts = props.facts.length > 0;
   if (!hasFacts && props.lastActivityAt === null) return null;
   return (
     <p className="flex flex-wrap items-center gap-x-1 text-ui-xs text-muted-foreground">
-      {hasFacts
-        ? props.facts.map((fact, index) => (
-            <Fragment key={fact}>
-              {index > 0 ? <span aria-hidden>·</span> : null}
-              <span>{renderWorktreeFact(fact, props.submodules)}</span>
-            </Fragment>
-          ))
-        : null}
+      {hasFacts ? <span>{props.facts.join(" · ")}</span> : null}
       {hasFacts && props.lastActivityAt !== null ? (
         <span aria-hidden>·</span>
       ) : null}
@@ -1963,102 +1949,94 @@ function WorktreeSecondaryFacts(props: {
   );
 }
 
-function renderWorktreeFact(
-  fact: string,
-  submodules: readonly WorktreeSubmoduleMergeFact[],
-): ReactNode {
-  const submodulePr = submodulePrLinkForFact(fact, submodules);
-  if (submodulePr === null) return fact;
-  return (
-    <>
-      submodule {submodulePr.repoName}{" "}
-      <WorktreePrAnchor
-        href={submodulePr.prUrl}
-        ariaLabel={`Open submodule PR #${submodulePr.prNumber}`}
-        className="font-medium text-primary underline-offset-2 hover:underline"
-      >
-        PR #{submodulePr.prNumber}
-      </WorktreePrAnchor>{" "}
-      open
-    </>
-  );
-}
-
-interface SubmodulePrLink {
-  readonly repoName: string;
-  readonly prNumber: number;
+interface WorktreePrChipModel {
+  readonly key: string;
+  readonly label: string;
+  readonly ariaLabel: string;
+  readonly prState: WorktreeDisplayedPrState;
   readonly prUrl: string;
 }
 
-function submodulePrLinkForFact(
-  fact: string,
-  submodules: readonly WorktreeSubmoduleMergeFact[],
-): SubmodulePrLink | null {
-  const submodule = submodules.find((item) => {
-    if (
-      item.prState !== "open" ||
-      item.prNumber === null ||
-      item.prUrl === null
-    ) {
-      return false;
-    }
-    const repoName = `${item.repoIdentifier.owner}/${item.repoIdentifier.repo}`;
-    return fact === `submodule ${repoName} PR #${item.prNumber} open`;
-  });
+function WorktreePrChips(props: {
+  readonly entry: WorktreeHostEntryV11;
+}): ReactNode {
+  const chips = worktreePrChips(props.entry);
+  if (chips.length === 0) return null;
+  return chips.map((chip) => <WorktreePrChip key={chip.key} chip={chip} />);
+}
+
+function worktreePrChips(
+  entry: WorktreeHostEntryV11,
+): readonly WorktreePrChipModel[] {
+  return [
+    ...superprojectPrChip(entry),
+    ...entry.submodules.flatMap((submodule) => submodulePrChip(submodule)),
+  ];
+}
+
+function superprojectPrChip(
+  entry: WorktreeHostEntryV11,
+): readonly WorktreePrChipModel[] {
+  const prState = displayedPrState(entry.prState);
+  if (prState === null || entry.prNumber === null || entry.prUrl === null) {
+    return [];
+  }
+  return [
+    {
+      key: `superproject:${entry.prNumber}:${entry.prUrl}`,
+      label: `PR #${entry.prNumber}`,
+      ariaLabel: `Open PR #${entry.prNumber}`,
+      prState,
+      prUrl: entry.prUrl,
+    },
+  ];
+}
+
+function submodulePrChip(
+  submodule: WorktreeSubmoduleMergeFact,
+): readonly WorktreePrChipModel[] {
+  const prState = displayedPrState(submodule.prState);
   if (
-    submodule === undefined ||
+    prState === null ||
     submodule.prNumber === null ||
     submodule.prUrl === null
   ) {
-    return null;
+    return [];
   }
-  return {
-    repoName: `${submodule.repoIdentifier.owner}/${submodule.repoIdentifier.repo}`,
-    prNumber: submodule.prNumber,
-    prUrl: submodule.prUrl,
-  };
+  const repoName = submodule.repoIdentifier.repo;
+  return [
+    {
+      key: `submodule:${submodule.repoIdentifier.owner}/${repoName}:${submodule.branch}:${submodule.prNumber}:${submodule.prUrl}`,
+      label: `${repoName} PR #${submodule.prNumber}`,
+      ariaLabel: `Open ${repoName} PR #${submodule.prNumber}`,
+      prState,
+      prUrl: submodule.prUrl,
+    },
+  ];
 }
 
 type WorktreeDisplayedPrState = "open" | "closed" | "merged";
 
-function WorktreePrPill(props: {
-  readonly prState: WorktreePrState | null;
-  readonly prNumber: number | null;
-  readonly prUrl: string | null;
+function WorktreePrChip(props: {
+  readonly chip: WorktreePrChipModel;
 }): ReactNode {
-  const runnerHost = use(RunnerHostContext);
-  const openExternal = useCallback(
-    (event: MouseEvent<HTMLAnchorElement>): void => {
-      event.stopPropagation();
-      if (runnerHost === null || props.prUrl === null) return;
-      event.preventDefault();
-      void runnerHost.openExternalLink(props.prUrl);
-    },
-    [props.prUrl, runnerHost],
-  );
-  const prState = displayedPrState(props.prState);
-  if (prState === null || props.prNumber === null || props.prUrl === null) {
-    return null;
-  }
-  const style = WORKTREE_PR_PILL_STYLE[prState];
+  const style = WORKTREE_PR_PILL_STYLE[props.chip.prState];
   return (
     <Badge
       asChild
       variant="outline"
       className={cn("gap-1 font-medium", style.className)}
-      data-testid="worktree-pr-pill"
-      data-pr-state={prState}
     >
-      <a
-        href={props.prUrl}
-        target="_blank"
-        rel="noreferrer"
-        aria-label={`Open PR #${props.prNumber}`}
-        onClick={openExternal}
+      <WorktreePrAnchor
+        href={props.chip.prUrl}
+        ariaLabel={props.chip.ariaLabel}
+        className="max-w-[min(60vw,16rem)]"
+        testId="worktree-pr-chip"
+        prState={props.chip.prState}
       >
-        <span>PR #{props.prNumber}</span>
+        <span className="truncate">{props.chip.label}</span>
         <ExternalLink className="size-3" aria-hidden />
-      </a>
+      </WorktreePrAnchor>
     </Badge>
   );
 }
@@ -2094,6 +2072,8 @@ function WorktreePrAnchor(props: {
   readonly href: string;
   readonly ariaLabel: string;
   readonly className: string | undefined;
+  readonly testId: string | undefined;
+  readonly prState: WorktreeDisplayedPrState | undefined;
   readonly children: ReactNode;
 }): ReactNode {
   const runnerHost = use(RunnerHostContext);
@@ -2113,6 +2093,8 @@ function WorktreePrAnchor(props: {
       rel="noreferrer"
       aria-label={props.ariaLabel}
       className={props.className}
+      data-testid={props.testId}
+      data-pr-state={props.prState}
       onClick={openExternal}
     >
       {props.children}
