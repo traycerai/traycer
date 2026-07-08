@@ -6,17 +6,27 @@
  */
 import { DEV_DESKTOP_SLOT_ENV } from "../platform/dev-desktop-slot";
 
-export function withDevDesktopSlot(slot: string, fn: () => void): void {
+// Sets the slot and returns a restore callback - the one piece of state
+// (previous value, present or not) both the sync and async variants below
+// need to save/set/restore identically.
+function setDevDesktopSlotEnv(slot: string): () => void {
   const previous = process.env[DEV_DESKTOP_SLOT_ENV];
   process.env[DEV_DESKTOP_SLOT_ENV] = slot;
-  try {
-    fn();
-  } finally {
+  return () => {
     if (previous === undefined) {
       delete process.env[DEV_DESKTOP_SLOT_ENV];
     } else {
       process.env[DEV_DESKTOP_SLOT_ENV] = previous;
     }
+  };
+}
+
+export function withDevDesktopSlot(slot: string, fn: () => void): void {
+  const restore = setDevDesktopSlotEnv(slot);
+  try {
+    fn();
+  } finally {
+    restore();
   }
 }
 
@@ -24,15 +34,10 @@ export async function withDevDesktopSlotAsync(
   slot: string,
   fn: () => Promise<void>,
 ): Promise<void> {
-  const previous = process.env[DEV_DESKTOP_SLOT_ENV];
-  process.env[DEV_DESKTOP_SLOT_ENV] = slot;
+  const restore = setDevDesktopSlotEnv(slot);
   try {
     await fn();
   } finally {
-    if (previous === undefined) {
-      delete process.env[DEV_DESKTOP_SLOT_ENV];
-    } else {
-      process.env[DEV_DESKTOP_SLOT_ENV] = previous;
-    }
+    restore();
   }
 }

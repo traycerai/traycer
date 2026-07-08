@@ -158,7 +158,11 @@ function isTrustedDevRendererSender(
 ): boolean {
   if (senderFrame === null) return false;
   if (senderFrame !== senderFrame.top) return false;
-  return new URL(senderFrame.url).origin === expectedOrigin;
+  try {
+    return new URL(senderFrame.url).origin === expectedOrigin;
+  } catch {
+    return false;
+  }
 }
 
 // Registration is the only slot-gated entry point: with no active

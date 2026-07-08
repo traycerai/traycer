@@ -242,6 +242,12 @@ describe("registerDevSharedLocalStorage", () => {
     const noSenderFrame = fakeSyncEvent(null);
     listener(noSenderFrame);
     expect(noSenderFrame.returnValue).toBeNull();
+
+    // Regression: an unparsable frame URL (`new URL("/")` throws) must fail
+    // closed rather than crash the ipcMain listener.
+    const unparsableUrl = fakeSyncEvent(frameWithSelfTop(""));
+    expect(() => listener(unparsableUrl)).not.toThrow();
+    expect(unparsableUrl.returnValue).toBeNull();
   });
 
   it("flush() writes the dumped localStorage minus the seeded marker, skips a null webContents", async () => {

@@ -76,6 +76,12 @@ describe("resolveHostAuth", () => {
     readMock.mockResolvedValue({ ...storedCreds, token: "" });
     expect(await resolveHostAuth()).toBeNull();
   });
+
+  it("regression: returns null instead of throwing when DEV_DESKTOP_SLOT sanitizes to an unusable slot", async () => {
+    process.env[DEV_DESKTOP_SLOT_ENV] = "!!!";
+    readMock.mockResolvedValue(storedCreds);
+    expect(await resolveHostAuth()).toBeNull();
+  });
 });
 
 describe("cliBearerStore", () => {

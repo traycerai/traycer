@@ -36,6 +36,17 @@ export interface HostAuth {
  * host with an empty bearer.
  */
 export async function resolveHostAuth(): Promise<HostAuth | null> {
+  // Both `createCliLogger` (via `cliLogPath`) and `effectiveAuthnBaseUrl`
+  // below resolve the dev-desktop slot, which throws on a malformed
+  // `DEV_DESKTOP_SLOT`. Pre-check it here so that failure surfaces as "no
+  // usable host auth" (matching this function's `HostAuth | null` contract)
+  // instead of an uncaught throw - the same slot value, so if this doesn't
+  // throw, neither downstream call will.
+  try {
+    devDesktopSlotForEnvironment(config.environment, process.env);
+  } catch {
+    return null;
+  }
   const logger = createCliLogger(config.environment);
   const stored = await readCredentials();
   if (stored === null || stored.token.length === 0) {
