@@ -217,12 +217,11 @@ function completeHandshake(socket: StubStreamWebSocket): void {
     readonly kind: "open";
     readonly token: string;
     readonly manifest: Record<string, { major: number; minor: number }>;
-    readonly optionalManifest: Record<string, { major: number; minor: number }>;
+    readonly optionalManifest?: Record<string, { major: number; minor: number }>;
   };
   socket.fireText({
     kind: "openAck",
     manifest: openParsed.manifest,
-    optionalManifest: openParsed.optionalManifest,
   });
 }
 
@@ -232,8 +231,7 @@ function streamOpenAck(
 ): Record<string, unknown> {
   return {
     kind: "openAck",
-    manifest: {},
-    optionalManifest: manifest,
+    manifest,
     ...(capabilities === undefined ? {} : { capabilities }),
   };
 }
@@ -291,10 +289,10 @@ describe("WsStreamClient", () => {
     // full-manifest check: `canBridgeStream` trusts an older peer receiving a
     // newer minor unconditionally (additive minors), so it never poisons an
     // unrelated method's open handshake the way the old major bump once did.
-    expect(openFrame.manifest).toEqual({});
-    expect(openFrame.optionalManifest).toEqual(
+    expect(openFrame.manifest).toEqual(
       buildStreamManifest(hostStreamRpcRegistry),
     );
+    expect(openFrame).not.toHaveProperty("optionalManifest");
 
     stub.fireText(
       streamOpenAck(buildStreamManifest(hostStreamRpcRegistry), undefined),
@@ -369,10 +367,55 @@ describe("WsStreamClient", () => {
 
     sockets[0].socket.fireOpen();
     const openFrame = parseText(sockets[0].socket.textSent[0]);
-    expect(openFrame.manifest).toEqual({});
-    expect(openFrame.optionalManifest).toEqual(
+    expect(openFrame.manifest).toEqual(
       buildStreamManifest(hostStreamRpcRegistry),
     );
+    expect(openFrame).not.toHaveProperty("optionalManifest");
+
+    session.close();
+  });
+
+  it("subscribes to shipped hosts that ack the legacy manifest intersection", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "token-abc",
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+    await flush();
+
+    const stub = sockets[0].socket;
+    stub.fireOpen();
+
+    const openFrame = parseText(stub.textSent[0]);
+    expect(openFrame.manifest).toEqual(
+      buildStreamManifest(hostStreamRpcRegistry),
+    );
+    expect(openFrame).not.toHaveProperty("optionalManifest");
+
+    // Shipped stream hosts do not run a fatal open-time manifest check. They
+    // acknowledge the intersection of their manifest with the client's legacy
+    // advertised entries, without an optional channel.
+    stub.fireText({
+      kind: "openAck",
+      manifest: {
+        "epic.subscribe": buildStreamManifest(hostStreamRpcRegistry)[
+          "epic.subscribe"
+        ],
+      },
+    });
+
+    expect(parseText(stub.textSent[1])).toEqual({
+      kind: "subscribe",
+      method: "epic.subscribe",
+      schemaVersion: { major: 1, minor: 0 },
+      params: { epicId: "epic-1" },
+    });
 
     session.close();
   });
@@ -788,8 +831,7 @@ describe("WsStreamClient", () => {
     // its own fatalError before closing.
     stub.fireText({
       kind: "openAck",
-      manifest: {},
-      optionalManifest: {
+      manifest: {
         "epic.subscribe": { major: 2, minor: 0 },
         "chat.subscribe": { major: 1, minor: 0 },
         "notifications.subscribe": { major: 1, minor: 0 },
@@ -855,8 +897,7 @@ describe("WsStreamClient", () => {
     stub.fireOpen();
     stub.fireText({
       kind: "openAck",
-      manifest: {},
-      optionalManifest: {
+      manifest: {
         "epic.subscribe": { major: 1, minor: 0 },
         "chat.subscribe": { major: 1, minor: 2 },
         "terminal.subscribe": { major: 1, minor: 3 },

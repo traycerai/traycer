@@ -3,12 +3,13 @@ import type {
   StreamMethodVersionRegistry,
   VersionedStreamRpcRegistry,
 } from "@traycer/protocol/framework/versioned-stream-rpc";
-import { checkStreamMethodCompatibility } from "@traycer/protocol/framework/stream-compat";
+import {
+  buildStreamManifest,
+  checkStreamMethodCompatibility,
+} from "@traycer/protocol/framework/stream-compat";
 import {
   mergeConnectionManifests,
-  splitConnectionManifest,
 } from "@traycer/protocol/framework/index";
-import { releasedMethodNames } from "@traycer/protocol/host/__tests__/__fixtures__/released-method-names";
 import {
   extractBearerForOpenFrame,
   MissingBearerTokenForOpenFrameError,
@@ -607,15 +608,11 @@ class StreamSession<
       this.onTransportDrop();
       return;
     }
-    const manifest = splitConnectionManifest(
-      this.config.registry,
-      releasedMethodNames,
-    );
+    const manifest = buildStreamManifest(this.config.registry);
     const openFrame: ClientStreamOpenFrame = {
       kind: "open",
       token,
-      manifest: manifest.manifest,
-      optionalManifest: manifest.optionalManifest,
+      manifest,
     };
     if (!this.sendControlText(socket, openFrame)) {
       this.onSendFailure(socket);
@@ -756,14 +753,7 @@ class StreamSession<
       STREAM_CAPABILITY_CREDENTIAL_UPDATE,
     );
 
-    const splitManifest = splitConnectionManifest(
-      this.config.registry,
-      releasedMethodNames,
-    );
-    const myManifest = mergeConnectionManifests(
-      splitManifest.manifest,
-      splitManifest.optionalManifest,
-    );
+    const myManifest = buildStreamManifest(this.config.registry);
     const theirManifest = mergeConnectionManifests(
       ackParse.data.manifest,
       ackParse.data.optionalManifest,

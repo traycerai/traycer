@@ -215,6 +215,19 @@ function readBaselineManifests(surfacePath: string): {
   };
 }
 
+function intersectManifests(
+  hostManifest: Readonly<Record<string, { major: number; minor: number }>>,
+  clientManifest: Readonly<Record<string, { major: number; minor: number }>>,
+): Record<string, { major: number; minor: number }> {
+  const intersection: Record<string, { major: number; minor: number }> = {};
+  for (const [method, version] of Object.entries(hostManifest)) {
+    if (clientManifest[method] !== undefined) {
+      intersection[method] = version;
+    }
+  }
+  return intersection;
+}
+
 describe.skipIf(baselines.length === 0)(
   "released-baseline handshake smoke (real transports vs released manifests)",
   () => {
@@ -437,11 +450,22 @@ describe.skipIf(baselines.length === 0)(
         const stub = sockets[0];
         stub.fireOpen();
         expect(stub.textSent).toHaveLength(1);
+        const open = JSON.parse(stub.textSent[0]) as {
+          readonly kind: string;
+          readonly manifest: Record<string, { major: number; minor: number }>;
+          readonly optionalManifest?: Record<
+            string,
+            { major: number; minor: number }
+          >;
+        };
+        expect(open.kind).toBe("open");
+        expect(open.manifest).toEqual(buildStreamManifest(hostStreamRpcRegistry));
+        expect(open.optionalManifest).toBeUndefined();
 
+        const ackManifest = intersectManifests(stream, open.manifest);
         stub.fireText({
           kind: "openAck",
-          manifest: {},
-          optionalManifest: stream,
+          manifest: ackManifest,
         });
 
         // A compatible released manifest yields a subscribe frame for the
