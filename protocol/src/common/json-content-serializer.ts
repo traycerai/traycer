@@ -70,39 +70,142 @@ function escapeXmlContent(str: string): string {
   return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-function serializeTextWithMarks(
-  text: string,
-  marks: JsonContent["marks"] | undefined,
-): string {
-  if (!marks || marks.length === 0) return text;
+interface RenderableMark {
+  key: string;
+  type: string;
+  open: string;
+  close: string;
+}
 
-  let result = text;
-  const reversedMarks = [...marks].reverse();
-
-  for (const mark of reversedMarks) {
-    switch (mark.type) {
-      case "bold":
-        result = `**${result}**`;
-        break;
-      case "italic":
-        result = `*${result}*`;
-        break;
-      case "code":
-        result = `\`${result}\``;
-        break;
-      case "strike":
-        result = `~~${result}~~`;
-        break;
-      case "link": {
-        const href = mark.attrs?.href;
-        if (typeof href === "string" && href.length > 0) {
-          result = `[${result}](${href})`;
-        }
-        break;
+function markDelimiters(mark: {
+  type: string;
+  attrs?: Record<string, unknown>;
+}): { open: string; close: string } | null {
+  switch (mark.type) {
+    case "bold":
+      return { open: "**", close: "**" };
+    case "italic":
+      return { open: "*", close: "*" };
+    case "code":
+      return { open: "`", close: "`" };
+    case "strike":
+      return { open: "~~", close: "~~" };
+    case "link": {
+      const href = mark.attrs?.href;
+      if (typeof href === "string" && href.length > 0) {
+        return { open: "[", close: `](${href})` };
       }
+      return null;
     }
+    default:
+      return null;
   }
-  return result;
+}
+
+// Maps a node's marks to the delimiters the serializer can render, keeping
+// the stored order except `code`, which is forced innermost: markdown
+// renders formatting delimiters inside inline code literally, so the
+// backticks must hug the text.
+function renderableMarks(
+  marks: JsonContent["marks"] | undefined,
+): RenderableMark[] {
+  if (!marks || marks.length === 0) return [];
+  const rendered = marks.flatMap((mark) => {
+    const delimiters = markDelimiters(mark);
+    if (!delimiters) return [];
+    return [
+      {
+        key: `${mark.type}:${JSON.stringify(mark.attrs ?? {})}`,
+        type: mark.type,
+        ...delimiters,
+      },
+    ];
+  });
+  return [
+    ...rendered.filter((mark) => mark.type !== "code"),
+    ...rendered.filter((mark) => mark.type === "code"),
+  ];
+}
+
+/**
+ * Serializes a run of consecutive inline text nodes, emitting mark
+ * delimiters only where the mark set changes between nodes. Wrapping each
+ * node independently corrupts continuous marks that contain nested marks:
+ * `**bold `code` bold**` splits into three text nodes and would serialize
+ * as `**bold **` + `` **`code`** `` + `** bold**`, whose doubled `****`
+ * runs re-parse as literal asterisks.
+ *
+ * A mark stays open across a boundary when it is still present in the next
+ * node's mark set, regardless of its position there: ProseMirror stores
+ * marks sorted by schema rank, so `[italic]` followed by `[bold, italic]`
+ * is a continuous italic span gaining bold, not an italic/bold swap.
+ *
+ * Newly opened marks nest by continuation length - a mark that spans more
+ * of the remaining run opens first (outermost). Without this, `_**b** i_`
+ * would open bold outside italic (schema-rank order), and bold ending
+ * after "b" would force italic closed and reopened, doubling delimiters.
+ */
+function serializeTextRun(nodes: JsonContent[]): string {
+  const textNodes = nodes.filter((node) => Boolean(node.text));
+  const nodeMarks = textNodes.map((node) => renderableMarks(node.marks));
+
+  const continuation = (key: string, start: number): number => {
+    let end = start;
+    while (
+      end < nodeMarks.length &&
+      nodeMarks[end].some((mark) => mark.key === key)
+    ) {
+      end++;
+    }
+    return end - start;
+  };
+
+  let out = "";
+  let open: RenderableMark[] = [];
+
+  const closeDownTo = (depth: number): void => {
+    for (let i = open.length - 1; i >= depth; i--) {
+      out += open[i].close;
+    }
+    open = open.slice(0, depth);
+  };
+
+  textNodes.forEach((node, index) => {
+    const marks = nodeMarks[index];
+    const nextKeys = new Set(marks.map((mark) => mark.key));
+
+    let keep = 0;
+    while (keep < open.length && nextKeys.has(open[keep].key)) {
+      keep++;
+    }
+    // Inline code renders nested delimiters literally, so nothing may open
+    // inside a kept code mark - close it and reopen it innermost instead.
+    // A kept code mark is always at the top of the stack (code sorts last).
+    const keptKeys = new Set(open.slice(0, keep).map((mark) => mark.key));
+    const hasNewMarks = marks.some((mark) => !keptKeys.has(mark.key));
+    if (hasNewMarks && keep > 0 && open[keep - 1].type === "code") {
+      keep--;
+      keptKeys.delete(open[keep].key);
+    }
+
+    closeDownTo(keep);
+
+    const toOpen = marks
+      .filter((mark) => !keptKeys.has(mark.key))
+      .sort((a, b) => continuation(b.key, index) - continuation(a.key, index));
+    const ordered = [
+      ...toOpen.filter((mark) => mark.type !== "code"),
+      ...toOpen.filter((mark) => mark.type === "code"),
+    ];
+    for (const mark of ordered) {
+      out += mark.open;
+      open.push(mark);
+    }
+    out += node.text ?? "";
+  });
+
+  closeDownTo(0);
+  return out;
 }
 
 function getValidationMarker(nodeId: string, ctx: SerializerContext): string {
@@ -383,7 +486,7 @@ function serializeSlashCommand(
 
 function serializeText(node: JsonContent): string {
   if (node.type !== "text" || !node.text) return "";
-  return serializeTextWithMarks(node.text, node.marks);
+  return serializeTextRun([node]);
 }
 
 function serializeHardBreak(): string {
@@ -634,10 +737,28 @@ function serializeChildren(
 ): string {
   if (!content) return "";
 
+  // Consecutive text nodes serialize as one run so mark delimiters land only
+  // where the mark set actually changes; non-text inline nodes (mention,
+  // hardBreak, …) end the run and close any open marks.
   const parts: string[] = [];
+  let textRun: JsonContent[] = [];
+  const flushTextRun = (): void => {
+    if (textRun.length > 0) {
+      parts.push(serializeTextRun(textRun));
+      textRun = [];
+    }
+  };
+
   for (const child of content) {
-    parts.push(serializeNode(child, ctx));
+    if (child.type === "text") {
+      textRun.push(child);
+    } else {
+      flushTextRun();
+      parts.push(serializeNode(child, ctx));
+    }
   }
+  flushTextRun();
+
   return parts.join("");
 }
 
