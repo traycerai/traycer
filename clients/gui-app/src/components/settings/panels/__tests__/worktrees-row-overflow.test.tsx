@@ -9,6 +9,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { WorktreeHostEntryV11 } from "@traycer/protocol/host/index";
 import { WorktreesList } from "@/components/settings/panels/worktrees-settings-panel";
+import { installWorktreeVirtualizerOffsetHeight } from "./worktrees-virtualizer-test-utils";
 
 function entry(
   over: Partial<WorktreeHostEntryV11> & {
@@ -37,35 +38,17 @@ function entry(
   };
 }
 
-// jsdom has no layout, so the virtualizer's `offsetHeight` reads would all be
-// zero and window the single test row out of the DOM. Mirrors the same shim
-// worktrees-settings-panel.test.tsx installs.
-let offsetHeightDescriptor: PropertyDescriptor | undefined;
+let restoreOffsetHeight: (() => void) | null = null;
 
 beforeEach(() => {
-  offsetHeightDescriptor = Object.getOwnPropertyDescriptor(
-    HTMLElement.prototype,
-    "offsetHeight",
-  );
-  Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
-    configurable: true,
-    get(this: HTMLElement): number {
-      if (this.dataset.testid === "worktrees-virtual-scroll") return 100_000;
-      if (this.hasAttribute("data-index")) return 80;
-      return 0;
-    },
-  });
+  restoreOffsetHeight = installWorktreeVirtualizerOffsetHeight(() => 100_000);
 });
 
 afterEach(() => {
-  if (offsetHeightDescriptor !== undefined) {
-    Object.defineProperty(
-      HTMLElement.prototype,
-      "offsetHeight",
-      offsetHeightDescriptor,
-    );
+  if (restoreOffsetHeight !== null) {
+    restoreOffsetHeight();
   }
-  offsetHeightDescriptor = undefined;
+  restoreOffsetHeight = null;
   cleanup();
 });
 

@@ -78,12 +78,9 @@ vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", () => ({
 }));
 
 import { WorktreesSettingsPanel } from "@/components/settings/panels/worktrees-settings-panel";
+import { installWorktreeVirtualizerOffsetHeight } from "./worktrees-virtualizer-test-utils";
 
-// jsdom has no layout, so `@tanstack/react-virtual` (which sizes the scroll
-// viewport and measures items via `offsetHeight`) sees zero everywhere and
-// would window the populated-list scenario down to nothing. Feed it a real
-// height, mirroring `worktrees-settings-panel.test.tsx`.
-let offsetHeightDescriptor: PropertyDescriptor | undefined;
+let restoreOffsetHeight: (() => void) | null = null;
 
 function host(
   over: Partial<HostDirectoryEntry> & { hostId: string },
@@ -113,18 +110,7 @@ function renderPanel(): void {
 }
 
 beforeEach(() => {
-  offsetHeightDescriptor = Object.getOwnPropertyDescriptor(
-    HTMLElement.prototype,
-    "offsetHeight",
-  );
-  Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
-    configurable: true,
-    get(this: HTMLElement): number {
-      if (this.dataset.testid === "worktrees-virtual-scroll") return 100_000;
-      if (this.hasAttribute("data-index")) return 80;
-      return 0;
-    },
-  });
+  restoreOffsetHeight = installWorktreeVirtualizerOffsetHeight(() => 100_000);
   state.activeHostId = null;
   state.hosts = [];
   state.reachability = { status: "reachable", hostLabel: "Host A" };
@@ -150,14 +136,10 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
-  if (offsetHeightDescriptor !== undefined) {
-    Object.defineProperty(
-      HTMLElement.prototype,
-      "offsetHeight",
-      offsetHeightDescriptor,
-    );
+  if (restoreOffsetHeight !== null) {
+    restoreOffsetHeight();
   }
-  offsetHeightDescriptor = undefined;
+  restoreOffsetHeight = null;
 });
 
 describe("WorktreesSettingsPanel host-scoped states", () => {

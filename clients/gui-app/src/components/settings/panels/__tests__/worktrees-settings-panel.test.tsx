@@ -22,6 +22,10 @@ import { WorktreesList } from "@/components/settings/panels/worktrees-settings-p
 import { __resetWorktreeDeleteRunForTests } from "@/components/settings/panels/use-worktree-delete-run";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { WORKTREE_BINDING_INVALIDATIONS } from "@/hooks/worktree/invalidations";
+import {
+  installWorktreeVirtualizerOffsetHeight,
+  WORKTREE_TEST_VIRTUAL_ITEM_HEIGHT,
+} from "./worktrees-virtualizer-test-utils";
 
 // The delete is a stream: mock the wrapper so a test can drive server frames
 // (started / phase / output / complete / failed) and assert the modal + cache
@@ -229,44 +233,21 @@ const WORKTREES: WorktreeHostEntryV11[] = [
   entry({ worktreePath: "/wt/busy", branch: "feat-busy", inUse: true }),
 ];
 
-// jsdom has no layout, so `@tanstack/react-virtual` (which sizes the scroll
-// viewport and measures items via `offsetHeight`) sees zero everywhere and would
-// window down to nothing. Feed it a real height for the scroll element
-// (`worktrees-virtual-scroll`) and a fixed height per measured virtual item
-// (`data-index`); everything else keeps jsdom's zero. A tall default viewport
-// renders every row (so the behavioural tests still find their rows); the
-// windowing test shrinks `virtualViewportHeight` to force a real window.
-const VIRTUAL_ITEM_TEST_HEIGHT = 80;
 let virtualViewportHeight = 100_000;
-let offsetHeightDescriptor: PropertyDescriptor | undefined;
+let restoreOffsetHeight: (() => void) | null = null;
 
 beforeEach(() => {
   virtualViewportHeight = 100_000;
-  offsetHeightDescriptor = Object.getOwnPropertyDescriptor(
-    HTMLElement.prototype,
-    "offsetHeight",
+  restoreOffsetHeight = installWorktreeVirtualizerOffsetHeight(
+    () => virtualViewportHeight,
   );
-  Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
-    configurable: true,
-    get(this: HTMLElement): number {
-      if (this.dataset.testid === "worktrees-virtual-scroll") {
-        return virtualViewportHeight;
-      }
-      if (this.hasAttribute("data-index")) return VIRTUAL_ITEM_TEST_HEIGHT;
-      return 0;
-    },
-  });
 });
 
 afterEach(() => {
-  if (offsetHeightDescriptor !== undefined) {
-    Object.defineProperty(
-      HTMLElement.prototype,
-      "offsetHeight",
-      offsetHeightDescriptor,
-    );
+  if (restoreOffsetHeight !== null) {
+    restoreOffsetHeight();
   }
-  offsetHeightDescriptor = undefined;
+  restoreOffsetHeight = null;
 });
 
 // Treat every passed worktree as already-enriched (its base entry IS its enriched
@@ -863,6 +844,7 @@ describe("WorktreesList delete flow", () => {
     // unverified caveat instead of a single stacked warning.
     screen.getByText("Delete 2 worktrees?");
     screen.getByTestId("worktree-bulk-delete-dirty-loss");
+    screen.getByText("1 not selected: 1 in use");
     fireEvent.click(screen.getByTestId("confirm-action"));
 
     expect(streamMock.paths).toEqual(["/wt/clean", "/wt/dirty"]);
@@ -1481,10 +1463,10 @@ describe("WorktreesList confirm-time re-check", () => {
 
     fireEvent.click(screen.getByTestId("confirm-action"));
 
-    // The now-ineligible row is excluded from the started delete and named in the
-    // class-summarized drop toast (its freshest class is dirty).
+    // The now-ineligible row is excluded from the started delete and named by the
+    // lock reason instead of by its underlying git facts.
     expect(streamMock.paths).toEqual(["/wt/a", "/wt/b"]);
-    expect(toastMock.messages.join("\n")).toContain("1 dirty");
+    expect(toastMock.messages.join("\n")).toContain("1 in use");
   });
 
   it("filter → Merged then select-all picks only the Merged rows (fast path)", () => {
@@ -2354,7 +2336,7 @@ describe("WorktreesList virtualization + per-viewport enrichment", () => {
 
   it("renders only a windowed subset of a large list, not every row", () => {
     // A short viewport forces a real window: far fewer rows mount than exist.
-    virtualViewportHeight = 3 * VIRTUAL_ITEM_TEST_HEIGHT;
+    virtualViewportHeight = 3 * WORKTREE_TEST_VIRTUAL_ITEM_HEIGHT;
     const worktrees = manyWorktrees(60);
     renderList({
       hostId: "host-a",
@@ -2374,7 +2356,7 @@ describe("WorktreesList virtualization + per-viewport enrichment", () => {
   });
 
   it("reports only the on-screen worktree paths (drives the per-visible query)", () => {
-    virtualViewportHeight = 3 * VIRTUAL_ITEM_TEST_HEIGHT;
+    virtualViewportHeight = 3 * WORKTREE_TEST_VIRTUAL_ITEM_HEIGHT;
     const worktrees = manyWorktrees(60);
     const onVisiblePathsChange = vi.fn<(paths: readonly string[]) => void>();
     render(

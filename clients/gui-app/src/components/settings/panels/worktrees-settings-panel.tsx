@@ -2793,6 +2793,7 @@ interface WorktreeBulkDeleteSummary {
 // Buckets a worktree into exactly one delete class, cautionary signals first so
 // a would-be-lost row is never mislabeled as a proven-clean one.
 type WorktreeDeleteClass =
+  | "in-use"
   | "merged"
   | "at-base"
   | "clean"
@@ -2803,11 +2804,13 @@ type WorktreeDeleteClass =
   | "dirty";
 
 function worktreeDeleteClass(entry: WorktreeHostEntryV11): WorktreeDeleteClass {
+  if (entry.inUse) return "in-use";
   // Derive the tier-level bucket from the ONE shared classifier so the bulk copy
   // and the row pill can never disagree (no parallel precedence ladder). The
-  // green tiers and orphaned map 1:1; only the amber `review` tier (and an
-  // in-use row that reached here via the drop-message summary) fans out into the
-  // finer would-be-lost sub-classes for honest loss copy.
+  // green tiers and orphaned map 1:1; in-use is a lock reason, so it is named as
+  // such when a row is excluded or dropped rather than bucketed by its git facts.
+  // Only the amber `review` tier fans out into finer would-be-lost sub-classes
+  // for honest loss copy.
   const tier = classifyWorktreeTier(entry);
   if (tier === "merged") return "merged";
   if (tier === "at-base-commit") return "at-base";
@@ -2819,8 +2822,7 @@ function worktreeDeleteClass(entry: WorktreeHostEntryV11): WorktreeDeleteClass {
 /**
  * Sub-classifies a non-green, non-orphaned row into its would-be-lost bucket for
  * the delete copy - cautionary signals first. Called only for the `review` tier
- * (and an in-use row summarized as a confirm-time drop), so the green/orphaned
- * cases are already handled by the shared classifier above.
+ * now that green, orphaned, and in-use cases are already handled above.
  */
 function worktreeReviewLossClass(
   entry: WorktreeHostEntryV11,
@@ -2839,6 +2841,7 @@ function worktreeReviewLossClass(
 }
 
 const WORKTREE_DELETE_CLASS_LABEL: Record<WorktreeDeleteClass, string> = {
+  "in-use": "in use",
   merged: "merged",
   "at-base": "at base commit",
   clean: "clean (no local-only commits)",
@@ -2860,8 +2863,10 @@ const WORKTREE_DELETE_SUMMARY_ORDER: readonly WorktreeDeleteClass[] = [
   "detached",
   "orphaned",
   "dirty",
+  "in-use",
 ];
 const WORKTREE_EXCLUSION_ORDER: readonly WorktreeDeleteClass[] = [
+  "in-use",
   "dirty",
   "unmerged",
   "detached",
@@ -2937,7 +2942,7 @@ function summarizeBulkWorktreeDelete(
           unknownTargets.length === 1 ? "" : "s"
         } could not be checked. Traycer cannot confirm those are safe to remove or free of unpushed work. Commit, stash, or push anything you want to keep first.`;
   const excluded = visible.filter(
-    (entry) => !entry.inUse && !targetPaths.has(entry.worktreePath),
+    (entry) => !targetPaths.has(entry.worktreePath),
   );
   const exclusionSummary =
     excluded.length === 0
