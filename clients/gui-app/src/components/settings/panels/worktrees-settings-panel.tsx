@@ -656,8 +656,8 @@ function WorktreesPartialListingBanner(props: {
       <AlertTriangle className="size-4 shrink-0" aria-hidden />
       <span className="min-w-0 flex-1 wrap-anywhere">
         Some worktrees could not be loaded
-        {props.message !== null ? `: ${props.message}` : ""}. The list below
-        is incomplete.
+        {props.message !== null ? `: ${props.message}` : ""}. The list below is
+        incomplete.
       </span>
       <Button
         variant="ghost"
