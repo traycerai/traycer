@@ -24,7 +24,7 @@ export function contentBlocksText(blocks: ReadonlyArray<ContentBlock>): string {
 function contentBlockText(block: ContentBlock): string {
   switch (block.type) {
     case "text":
-      return block.text;
+      return textBlockText(block);
     case "reasoning":
       return `Reasoning\n${block.content}`;
     case "tool_call":
@@ -54,6 +54,25 @@ function contentBlockText(block: ContentBlock): string {
     case "artifact_operation":
       return artifactOperationBlockText(block);
   }
+}
+
+function textBlockText(block: Extract<ContentBlock, { type: "text" }>): string {
+  const notice = block.providerNotice;
+  return notice === null ? block.text : providerNoticeText(notice);
+}
+
+function providerNoticeText(
+  notice: NonNullable<
+    Extract<ContentBlock, { type: "text" }>["providerNotice"]
+  >,
+): string {
+  return [
+    notice.title,
+    notice.message ?? "",
+    ...notice.details.flatMap((detail) => [detail.label, detail.value]),
+  ]
+    .filter((part) => part.length > 0)
+    .join(" · ");
 }
 
 function autonomousResumeBlockText(
