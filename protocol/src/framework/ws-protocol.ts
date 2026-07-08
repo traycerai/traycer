@@ -87,6 +87,7 @@ export type ClientOpenFrame = {
   readonly kind: "open";
   readonly token: string;
   readonly manifest: ConnectionManifest;
+  readonly optionalManifest?: ConnectionManifest;
 };
 
 /**
@@ -128,6 +129,7 @@ export type ClientFrame =
 export type HostOpenAckFrame = {
   readonly kind: "openAck";
   readonly manifest: ConnectionManifest;
+  readonly optionalManifest?: ConnectionManifest;
 };
 
 /**
@@ -221,6 +223,7 @@ export const clientOpenFrameSchema = z.object({
   kind: z.literal("open"),
   token: z.string(),
   manifest: connectionManifestSchema,
+  optionalManifest: connectionManifestSchema.optional(),
 });
 
 /** Canonical schema for the client `request` frame. */
@@ -253,6 +256,7 @@ export const clientFrameSchema = z.discriminatedUnion("kind", [
 export const hostOpenAckFrameSchema = z.object({
   kind: z.literal("openAck"),
   manifest: connectionManifestSchema,
+  optionalManifest: connectionManifestSchema.optional(),
 });
 
 /**

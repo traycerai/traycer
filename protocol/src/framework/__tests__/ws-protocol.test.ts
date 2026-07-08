@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 import {
   clientFrameSchema,
   clientOpenFrameSchema,
@@ -43,6 +44,66 @@ describe("ws-protocol canonical Zod schemas", () => {
       if (unionParse.success) {
         expect(unionParse.data.kind).toBe("open");
       }
+    });
+
+    it("pins current `open` frame wire bytes", () => {
+      const frame = {
+        kind: "open" as const,
+        token: "t-0",
+        manifest: {
+          "host.status": { major: 1, minor: 0 },
+          "worktree.listAllForHost": { major: 1, minor: 1 },
+        },
+      };
+
+      const parsed = clientOpenFrameSchema.parse(frame);
+
+      expect(JSON.stringify(parsed)).toBe(
+        '{"kind":"open","token":"t-0","manifest":{"host.status":{"major":1,"minor":0},"worktree.listAllForHost":{"major":1,"minor":1}}}',
+      );
+    });
+
+    it("accepts an `open` frame with an optional manifest channel", () => {
+      const frame = {
+        kind: "open" as const,
+        token: "t-0",
+        manifest: {
+          "host.status": { major: 1, minor: 0 },
+        },
+        optionalManifest: {
+          "future.method": { major: 1, minor: 0 },
+        },
+      };
+
+      expect(clientOpenFrameSchema.parse(frame)).toEqual(frame);
+      expect(clientFrameSchema.safeParse(frame).success).toBe(true);
+    });
+
+    it("models a shipped client `open` parser stripping future additive keys", () => {
+      const legacyClientOpenFrameSchema = z.object({
+        kind: z.literal("open"),
+        token: z.string(),
+        manifest: z.record(
+          z.string(),
+          z.object({
+            major: z.number().int().nonnegative(),
+            minor: z.number().int().nonnegative(),
+          }),
+        ),
+      });
+
+      const parsed = legacyClientOpenFrameSchema.parse({
+        kind: "open",
+        token: "t-0",
+        manifest: { "host.status": { major: 1, minor: 0 } },
+        optionalManifest: { "future.method": { major: 1, minor: 0 } },
+      });
+
+      expect(parsed).toEqual({
+        kind: "open",
+        token: "t-0",
+        manifest: { "host.status": { major: 1, minor: 0 } },
+      });
     });
 
     it("accepts a `request` frame carrying the dispatch envelope", () => {
@@ -154,6 +215,61 @@ describe("ws-protocol canonical Zod schemas", () => {
       if (unionParse.success) {
         expect(unionParse.data.kind).toBe("openAck");
       }
+    });
+
+    it("pins current `openAck` frame wire bytes", () => {
+      const frame = {
+        kind: "openAck" as const,
+        manifest: {
+          "host.status": { major: 1, minor: 0 },
+          "worktree.listAllForHost": { major: 1, minor: 1 },
+        },
+      };
+
+      const parsed = hostOpenAckFrameSchema.parse(frame);
+
+      expect(JSON.stringify(parsed)).toBe(
+        '{"kind":"openAck","manifest":{"host.status":{"major":1,"minor":0},"worktree.listAllForHost":{"major":1,"minor":1}}}',
+      );
+    });
+
+    it("accepts an `openAck` frame with an optional manifest channel", () => {
+      const frame = {
+        kind: "openAck" as const,
+        manifest: {
+          "host.status": { major: 1, minor: 0 },
+        },
+        optionalManifest: {
+          "future.method": { major: 1, minor: 0 },
+        },
+      };
+
+      expect(hostOpenAckFrameSchema.parse(frame)).toEqual(frame);
+      expect(hostFrameSchema.safeParse(frame).success).toBe(true);
+    });
+
+    it("models a shipped client `openAck` parser stripping future additive keys", () => {
+      const legacyHostOpenAckFrameSchema = z.object({
+        kind: z.literal("openAck"),
+        manifest: z.record(
+          z.string(),
+          z.object({
+            major: z.number().int().nonnegative(),
+            minor: z.number().int().nonnegative(),
+          }),
+        ),
+      });
+
+      const parsed = legacyHostOpenAckFrameSchema.parse({
+        kind: "openAck",
+        manifest: { "host.status": { major: 1, minor: 0 } },
+        optionalManifest: { "future.method": { major: 1, minor: 0 } },
+      });
+
+      expect(parsed).toEqual({
+        kind: "openAck",
+        manifest: { "host.status": { major: 1, minor: 0 } },
+      });
     });
 
     it("accepts a `response` frame carrying a successful result", () => {

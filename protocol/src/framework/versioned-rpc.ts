@@ -16,9 +16,11 @@ import type {
   ContractForInstalledVersion,
   DowngradePath,
   DowngradeResult,
+  FallbackMethodDegrade,
   InstalledSchemaVersion,
   LatestContract,
   MethodVersionRegistry,
+  MethodDegradeDeclaration,
   RequestOf,
   ResponseOf,
   RuntimeDowngradePath,
@@ -26,6 +28,7 @@ import type {
   SchemaVersion,
   UncheckedVersionedRpcRegistry,
   UpgradePath,
+  ValidateVersionedRpcRegistryDegrades,
   ValidateVersionedRpcRegistry,
   VersionedRpcRegistry,
 } from "./versioned-rpc-types";
@@ -41,6 +44,7 @@ export type {
   InstalledSchemaVersion,
   LatestContract,
   MajorVersionLine,
+  MethodDegradeDeclaration,
   MethodVersionRegistry,
   RequestOf,
   ResponseOf,
@@ -55,6 +59,8 @@ export type {
   UncheckedMethodVersionRegistry,
   UncheckedVersionedRpcRegistry,
   UpgradePath,
+  UnsupportedMethodDegrade,
+  FallbackMethodDegrade,
   VersionEntry,
   VersionedRpcRegistry,
 } from "./versioned-rpc-types";
@@ -106,6 +112,16 @@ export function defineDowngradePath<
   return path;
 }
 
+export function defineFallbackMethodDegrade<
+  Canonical extends AnyRpcContract,
+  Fallback extends AnyRpcContract,
+  const FloorMethod extends string,
+>(
+  degrade: FallbackMethodDegrade<Canonical, Fallback, FloorMethod>,
+): FallbackMethodDegrade<Canonical, Fallback, FloorMethod> {
+  return degrade;
+}
+
 /**
  * Preferred authoring path for registries declared in source code.
  *
@@ -121,6 +137,24 @@ export function defineVersionedRpcRegistry(
   registry: UncheckedVersionedRpcRegistry,
 ): VersionedRpcRegistry {
   validateVersionedRpcRegistry(registry);
+  return registry as VersionedRpcRegistry;
+}
+
+export function defineFloorAwareVersionedRpcRegistry<
+  const FloorMethod extends string,
+  const Registry extends UncheckedVersionedRpcRegistry,
+>(
+  floorMethodNames: readonly FloorMethod[],
+  registry: Registry &
+    ValidateVersionedRpcRegistry<Registry> &
+    ValidateVersionedRpcRegistryDegrades<Registry, FloorMethod>,
+): VersionedRpcRegistry<Registry>;
+export function defineFloorAwareVersionedRpcRegistry(
+  floorMethodNames: readonly string[],
+  registry: UncheckedVersionedRpcRegistry,
+): VersionedRpcRegistry {
+  validateVersionedRpcRegistry(registry);
+  validateVersionedRpcRegistryDegrades(registry, floorMethodNames);
   return registry as VersionedRpcRegistry;
 }
 
@@ -280,6 +314,86 @@ export function validateVersionedRpcRegistry<
   // surface of the first pass stays strictly structural - callers can rely on
   // structural messages landing before any JSON Schema complaint.
   assertSchemaCompatibility(registry);
+}
+
+export function validateVersionedRpcRegistryDegrades<
+  Registry extends UncheckedVersionedRpcRegistry,
+>(registry: Registry, floorMethodNames: readonly string[]): void {
+  const floorMethods = new Set(floorMethodNames);
+
+  for (const method of Object.keys(registry)) {
+    if (floorMethods.has(method)) {
+      continue;
+    }
+
+    const degrade = registry[method].degrade;
+    if (degrade === undefined) {
+      throw new Error(
+        `Non-floor method '${method}' must declare a degrade strategy`,
+      );
+    }
+
+    if (degrade.kind === "unsupported") {
+      continue;
+    }
+
+    if (degrade.kind !== "fallback") {
+      throw new Error(
+        `Non-floor method '${method}' has an unknown degrade strategy`,
+      );
+    }
+
+    validateFallbackDegrade(method, registry, floorMethods, degrade);
+  }
+}
+
+function validateFallbackDegrade(
+  method: string,
+  registry: UncheckedVersionedRpcRegistry,
+  floorMethods: ReadonlySet<string>,
+  degrade: MethodDegradeDeclaration,
+): void {
+  if (degrade.kind !== "fallback") {
+    return;
+  }
+
+  if (!floorMethods.has(degrade.to.method)) {
+    throw new Error(
+      `Fallback degrade for method '${method}' must target a floor method, got '${degrade.to.method}'`,
+    );
+  }
+
+  const targetRegistry = registry[degrade.to.method];
+  if (targetRegistry === undefined) {
+    throw new Error(
+      `Fallback degrade for method '${method}' targets unknown floor method '${degrade.to.method}'`,
+    );
+  }
+
+  if (!hasOwnNumberKey(targetRegistry, degrade.to.major)) {
+    throw new Error(
+      `Fallback degrade for method '${method}' targets missing major ${degrade.to.major} on floor method '${degrade.to.method}'`,
+    );
+  }
+
+  const targetLine = targetRegistry[degrade.to.major];
+  if (!hasOwnNumberKey(targetLine.versions, degrade.to.minor)) {
+    throw new Error(
+      `Fallback degrade for method '${method}' targets missing version ${degrade.to.major}.${degrade.to.minor} on floor method '${degrade.to.method}'`,
+    );
+  }
+
+  if (typeof degrade.adaptRequest !== "function") {
+    throw new Error(
+      `Fallback degrade for method '${method}' must declare adaptRequest`,
+    );
+  }
+
+  if (typeof degrade.adaptResponse !== "function") {
+    throw new Error(
+      `Fallback degrade for method '${method}' must declare adaptResponse`,
+    );
+  }
 }
 
 function assertSchemaCompatibility(
@@ -685,6 +799,7 @@ function getSortedNumberKeys<Value>(
 ): number[] {
   return Object.keys(values)
     .map((key) => Number(key))
+    .filter((key) => Number.isInteger(key))
     .sort((left, right) => left - right);
 }
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import {
+  clientStreamOpenFrameSchema,
   hostStreamOpenAckFrameSchema,
   clientStreamCredentialUpdateFrameSchema,
   STREAM_CAPABILITY_CREDENTIAL_UPDATE,
@@ -19,6 +20,48 @@ import {
  */
 describe("stream-ws-protocol cross-version compatibility", () => {
   const manifest = { "epic.subscribe": { major: 1, minor: 0 } };
+  const optionalManifest = {
+    "future.subscribe": { major: 1, minor: 0 },
+  };
+
+  describe("clientStreamOpenFrame (client -> host)", () => {
+    it("accepts an optional manifest channel", () => {
+      const parsed = clientStreamOpenFrameSchema.safeParse({
+        kind: "open",
+        token: "bearer",
+        manifest,
+        optionalManifest,
+      });
+
+      expect(parsed.success).toBe(true);
+      if (parsed.success) {
+        expect(parsed.data.optionalManifest).toEqual(optionalManifest);
+      }
+    });
+
+    it("models an older host open schema stripping a newer client's optional manifest", () => {
+      const legacyOpen = z.object({
+        kind: z.literal("open"),
+        token: z.string(),
+        manifest: z.record(
+          z.string(),
+          z.object({ major: z.number(), minor: z.number() }),
+        ),
+      });
+
+      const parsed = legacyOpen.safeParse({
+        kind: "open",
+        token: "bearer",
+        manifest,
+        optionalManifest,
+      });
+
+      expect(parsed.success).toBe(true);
+      if (parsed.success) {
+        expect("optionalManifest" in parsed.data).toBe(false);
+      }
+    });
+  });
 
   describe("hostStreamOpenAckFrame (host -> client)", () => {
     it("strips unknown keys instead of rejecting (older client tolerates a newer host's additive fields)", () => {
@@ -61,6 +104,20 @@ describe("stream-ws-protocol cross-version compatibility", () => {
       }
     });
 
+    it("accepts an optional manifest channel", () => {
+      const parsed = hostStreamOpenAckFrameSchema.safeParse({
+        kind: "openAck",
+        manifest,
+        optionalManifest,
+        capabilities: [STREAM_CAPABILITY_CREDENTIAL_UPDATE],
+      });
+
+      expect(parsed.success).toBe(true);
+      if (parsed.success) {
+        expect(parsed.data.optionalManifest).toEqual(optionalManifest);
+      }
+    });
+
     it("models an older client's openAck schema (kind + manifest only) accepting a newer host's ack", () => {
       // Reconstruct the pre-capabilities schema a previously-shipped client
       // carries, and prove a newer host's ack (with `capabilities`) still parses.
@@ -74,9 +131,13 @@ describe("stream-ws-protocol cross-version compatibility", () => {
       const parsed = legacyOpenAck.safeParse({
         kind: "openAck",
         manifest,
+        optionalManifest,
         capabilities: [STREAM_CAPABILITY_CREDENTIAL_UPDATE],
       });
       expect(parsed.success).toBe(true);
+      if (parsed.success) {
+        expect("optionalManifest" in parsed.data).toBe(false);
+      }
     });
   });
 

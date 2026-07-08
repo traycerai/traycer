@@ -49,6 +49,7 @@ export type ClientStreamOpenFrame = {
   readonly kind: "open";
   readonly token: string;
   readonly manifest: ConnectionManifest;
+  readonly optionalManifest?: ConnectionManifest;
 };
 
 /**
@@ -89,6 +90,7 @@ export type ClientStreamFatalErrorFrame = {
 export type HostStreamOpenAckFrame = {
   readonly kind: "openAck";
   readonly manifest: ConnectionManifest;
+  readonly optionalManifest?: ConnectionManifest;
   /**
    * Optional, additive control-frame capabilities (e.g.
    * `credentialUpdate`). A client only uses a capability it finds here; an
@@ -108,6 +110,7 @@ export const clientStreamOpenFrameSchema = z.object({
   kind: z.literal("open"),
   token: z.string(),
   manifest: connectionManifestSchema,
+  optionalManifest: connectionManifestSchema.optional(),
 });
 
 export const clientStreamSubscribeFrameSchema = z.object({
@@ -130,6 +133,7 @@ export const clientStreamFatalErrorFrameSchema = z.object({
 export const hostStreamOpenAckFrameSchema = z.object({
   kind: z.literal("openAck"),
   manifest: connectionManifestSchema,
+  optionalManifest: connectionManifestSchema.optional(),
   // Backward-compat: an older host omits `capabilities`; default to none so a
   // newer client parsing an older host's ack still succeeds and treats every
   // capability as unsupported.

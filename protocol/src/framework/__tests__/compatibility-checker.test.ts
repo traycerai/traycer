@@ -313,4 +313,60 @@ describe("CompatibilityChecker.check", () => {
       hostShouldUpgrade: true,
     });
   });
+
+  it("pins current full-manifest verdicts for added method names", () => {
+    const hostSeesClientMissingAddedMethod = check(
+      registryWithPing,
+      { echo: { major: 1, minor: 1 }, ping: { major: 1, minor: 0 } },
+      { echo: { major: 1, minor: 1 } },
+      "host",
+    );
+
+    expect(hostSeesClientMissingAddedMethod).toEqual({
+      ok: false,
+      details: {
+        code: "INCOMPATIBLE",
+        reason: "Incompatible methods: ping",
+        incompatibleMethods: [
+          {
+            method: "ping",
+            clientCanonical: null,
+            hostCanonical: { major: 1, minor: 0 },
+            blocking: "client-missing-method",
+          },
+        ],
+        upgradeGuidance: {
+          clientShouldUpgrade: true,
+          hostShouldUpgrade: false,
+        },
+      },
+    });
+
+    const clientSeesHostMissingAddedMethod = check(
+      registryWithStatus,
+      { echo: { major: 1, minor: 1 }, status: { major: 1, minor: 0 } },
+      { echo: { major: 1, minor: 1 } },
+      "client",
+    );
+
+    expect(clientSeesHostMissingAddedMethod).toEqual({
+      ok: false,
+      details: {
+        code: "INCOMPATIBLE",
+        reason: "Incompatible methods: status",
+        incompatibleMethods: [
+          {
+            method: "status",
+            clientCanonical: { major: 1, minor: 0 },
+            hostCanonical: null,
+            blocking: "host-missing-method",
+          },
+        ],
+        upgradeGuidance: {
+          clientShouldUpgrade: false,
+          hostShouldUpgrade: true,
+        },
+      },
+    });
+  });
 });

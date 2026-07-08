@@ -17,6 +17,7 @@ export const RPC_ERROR_CODES = [
   "INCOMPATIBLE",
   "UNAUTHORIZED",
   "FORBIDDEN",
+  "E_HOST_UNSUPPORTED",
   "WORKTREE_BUSY",
   "WORKTREE_REBIND_BLOCKED",
   "WORKTREE_SETUP_FAILED",
@@ -135,6 +136,56 @@ export type DowngradePath<
       }
     : never;
 
+export type UnsupportedMethodDegrade = {
+  readonly kind: "unsupported";
+};
+
+export type FallbackMethodDegrade<
+  Canonical extends AnyRpcContract,
+  Fallback extends AnyRpcContract,
+  FloorMethod extends string,
+> = {
+  readonly kind: "fallback";
+  readonly to: {
+    readonly method: FloorMethod;
+    readonly major: Fallback["schemaVersion"]["major"];
+    readonly minor: Fallback["schemaVersion"]["minor"];
+  };
+  readonly adaptRequest: (request: RequestOf<Canonical>) => RequestOf<Fallback>;
+  readonly adaptResponse: (
+    response: ResponseOf<Fallback>,
+  ) => ResponseOf<Canonical>;
+};
+
+export type MethodDegradeDeclaration<
+  Canonical extends AnyRpcContract = AnyRpcContract,
+  Fallback extends AnyRpcContract = AnyRpcContract,
+  FloorMethod extends string = string,
+> =
+  | UnsupportedMethodDegrade
+  | FallbackMethodDegrade<Canonical, Fallback, FloorMethod>;
+
+type ErasedFallbackMethodDegrade<
+  Canonical extends AnyRpcContract,
+  FloorMethod extends string,
+> = {
+  readonly kind: "fallback";
+  readonly to: {
+    readonly method: FloorMethod;
+    readonly major: number;
+    readonly minor: number;
+  };
+  readonly adaptRequest: (request: RequestOf<Canonical>) => unknown;
+  readonly adaptResponse: (response: never) => ResponseOf<Canonical>;
+};
+
+type ErasedMethodDegradeDeclaration<
+  Canonical extends AnyRpcContract,
+  FloorMethod extends string,
+> =
+  | UnsupportedMethodDegrade
+  | ErasedFallbackMethodDegrade<Canonical, FloorMethod>;
+
 /**
  * Erased bridge shape used by registry storage and traversal internals.
  *
@@ -200,7 +251,9 @@ type AnyMajorVersionLine = MajorVersionLine<
  */
 export type UncheckedMethodVersionRegistry = Readonly<
   Record<number, AnyMajorVersionLine>
->;
+> & {
+  readonly degrade?: MethodDegradeDeclaration;
+};
 
 /**
  * Validated method registry required by the traversal helpers.
@@ -509,6 +562,20 @@ export type ValidateVersionedRpcRegistry<
     Method,
     Registry[Method]
   >;
+};
+
+export type ValidateVersionedRpcRegistryDegrades<
+  Registry extends UncheckedVersionedRpcRegistry,
+  FloorMethod extends string,
+> = {
+  readonly [Method in keyof Registry & string]: Method extends FloorMethod
+    ? unknown
+    : {
+        readonly degrade: ErasedMethodDegradeDeclaration<
+          LatestContractFromUncheckedRegistry<Registry[Method]>,
+          FloorMethod
+        >;
+      };
 };
 
 type RegistryContractValue<Registry extends MethodVersionRegistry> = {
