@@ -8,6 +8,7 @@ import {
   useArtifactDragSource,
   type ArtifactDragIdentity,
 } from "@/components/epic-canvas/dnd/use-artifact-drag-source";
+import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import {
   EPIC_NODE_ICONS,
   isEpicArtifactKind,
@@ -19,7 +20,6 @@ import {
   isOpenableEpicNodeKind,
   makeOpenableNodeRef,
 } from "@/stores/epics/canvas/types";
-import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { appLogger } from "@/lib/logger";
 
@@ -78,9 +78,7 @@ function ChildIndexRow(props: {
 }) {
   const { epicId, childId, viewTabId, hostId } = props;
   const treeNode = useTreeNodeById(childId);
-  const openTilePreviewInTab = useEpicCanvasStore(
-    (s) => s.openTilePreviewInTab,
-  );
+  const tileNavigation = useEpicTileNavigation();
   const iconColorMode = useSettingsStore((s) => s.artifactIconColorMode);
   const iconColors = useSettingsStore((s) => s.artifactIconColors);
   const type = treeNode?.type ?? null;
@@ -108,7 +106,7 @@ function ChildIndexRow(props: {
 
   const open = useCallback(() => {
     if (type === null || !isOpenableEpicNodeKind(type)) return;
-    openTilePreviewInTab(
+    tileNavigation.openTilePreviewInTab(
       viewTabId,
       makeOpenableNodeRef({
         id: childId,
@@ -118,7 +116,7 @@ function ChildIndexRow(props: {
         hostId,
       }),
     );
-  }, [type, title, childId, viewTabId, hostId, openTilePreviewInTab]);
+  }, [type, title, childId, viewTabId, hostId, tileNavigation]);
 
   // Children of an artifact are themselves artifacts; the guard keeps the row
   // type-safe and quietly drops any non-artifact node that ever appears here.

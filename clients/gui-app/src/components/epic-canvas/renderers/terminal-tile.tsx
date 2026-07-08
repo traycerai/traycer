@@ -9,6 +9,7 @@ import {
   type TerminalCreatePayload,
 } from "@/hooks/agent/use-terminal-tile-bootstrap";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
+import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import {
   useTerminalSessionRecovery,
   type TerminalSessionRecovery,
@@ -35,7 +36,11 @@ export interface TerminalTileProps {
 export function TerminalTile(props: TerminalTileProps) {
   const hostId = useTabHostId();
   const reachability = useHostReachability(hostId);
-  const closeCanvasTab = useEpicCanvasStore((s) => s.closeCanvasTab);
+  const closeCanvasTile = useCloseCanvasTileWithNestedFocus(
+    props.viewTabId,
+    props.tileId,
+    props.node.instanceId,
+  );
   // Owns the recovery budget + nonce above the bootstrap subtree so they survive
   // the `recoverNonce`-keyed remount the recovery performs.
   const recovery = useTerminalSessionRecovery({
@@ -55,9 +60,7 @@ export function TerminalTile(props: TerminalTileProps) {
     return (
       <TerminalDeadTileBanner
         hostLabel={reachability.hostLabel}
-        onClose={() =>
-          closeCanvasTab(props.viewTabId, props.tileId, props.node.instanceId)
-        }
+        onClose={closeCanvasTile}
         testId={`terminal-tile-${props.tileId}`}
       />
     );
@@ -170,7 +173,11 @@ function TerminalLive(props: TerminalLiveProps) {
   const connectionStatus = useStore(handle.store, (s) => s.connectionStatus);
   const effectiveCols = useStore(handle.store, (s) => s.effectiveCols);
   const effectiveRows = useStore(handle.store, (s) => s.effectiveRows);
-  const closeCanvasTab = useEpicCanvasStore((s) => s.closeCanvasTab);
+  const closeCanvasTile = useCloseCanvasTileWithNestedFocus(
+    props.viewTabId,
+    props.tileId,
+    props.instanceId,
+  );
 
   const { onSessionLost, onSessionHealthy } = props.recovery;
   // Drive automatic recovery off the lifecycle status. "lost" is the dead-end a
@@ -194,8 +201,8 @@ function TerminalLive(props: TerminalLiveProps) {
     // `closeCanvasTab` resolves the tile by its pane tab *instance* id
     // (`pane.tabInstanceIds`), not the content/session id. Passing
     // `handle.sessionId` silently no-ops, leaving the tab open after exit.
-    closeCanvasTab(props.viewTabId, props.tileId, props.instanceId);
-  }, [status, props.instanceId, props.viewTabId, props.tileId, closeCanvasTab]);
+    closeCanvasTile();
+  }, [status, closeCanvasTile]);
 
   const overlayState = resolveTerminalOverlayState({
     status,
@@ -265,4 +272,33 @@ function TerminalLive(props: TerminalLiveProps) {
       </div>
     </div>
   );
+}
+
+function useCloseCanvasTileWithNestedFocus(
+  viewTabId: string,
+  paneId: string,
+  tileInstanceId: string,
+): () => void {
+  const navigateNested = useEpicNestedFocusNavigation();
+  const prepareCloseCanvasTabFocusTarget = useEpicCanvasStore(
+    (s) => s.prepareCloseCanvasTabFocusTarget,
+  );
+
+  return useCallback(() => {
+    const epicId =
+      useEpicCanvasStore.getState().tabsById[viewTabId]?.epicId ?? null;
+    const prepare = () =>
+      prepareCloseCanvasTabFocusTarget(viewTabId, paneId, tileInstanceId);
+    if (epicId === null) {
+      prepare();
+      return;
+    }
+    navigateNested(epicId, viewTabId, prepare);
+  }, [
+    navigateNested,
+    paneId,
+    prepareCloseCanvasTabFocusTarget,
+    tileInstanceId,
+    viewTabId,
+  ]);
 }

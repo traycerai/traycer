@@ -1,7 +1,8 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { useEffect, useMemo, useRef, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, type ReactNode } from "react";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { useHostClient } from "@/lib/host";
 import { useOpenEpicId } from "@/lib/epic-selectors";
 import {
@@ -9,8 +10,8 @@ import {
   type MarkdownLinkPolicy,
 } from "@/markdown/links/markdown-link-context";
 import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
-import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { buildChatLinkPolicy } from "@/components/chat/build-chat-link-policy";
+import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 
 interface ChatMarkdownLinkProviderProps {
   /** The chat tab whose group a file link opens its new tab into. */
@@ -37,8 +38,12 @@ export function ChatMarkdownLinkProvider({
   workspaceRoots,
   children,
 }: ChatMarkdownLinkProviderProps) {
-  const openTilePreviewInTab = useEpicCanvasStore(
-    (s) => s.openTilePreviewInTab,
+  const tileNavigation = useEpicTileNavigation();
+  const previewTileInTab = useCallback(
+    (targetTabId: string, node: EpicCanvasTileRef): void => {
+      tileNavigation.openTilePreviewInTab(targetTabId, node);
+    },
+    [tileNavigation],
   );
   const queryClient = useQueryClient();
   const client = useHostClient();
@@ -80,7 +85,7 @@ export function ChatMarkdownLinkProvider({
         queryClient,
         client,
         navigate,
-        openTilePreviewInTab,
+        previewTileInTab,
       }),
     [
       activeHostId,
@@ -89,7 +94,7 @@ export function ChatMarkdownLinkProvider({
       hostId,
       navigate,
       openEpicId,
-      openTilePreviewInTab,
+      previewTileInTab,
       queryClient,
       tabId,
       workspaceRoots,

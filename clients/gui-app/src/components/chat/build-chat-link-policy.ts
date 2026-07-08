@@ -40,10 +40,7 @@ export interface ChatLinkPolicyDeps {
   readonly queryClient: QueryClient;
   readonly client: HostClient<HostRpcRegistry>;
   readonly navigate: UseNavigateResult<string>;
-  readonly openTilePreviewInTab: (
-    tabId: string,
-    node: EpicCanvasTileRef,
-  ) => void;
+  readonly previewTileInTab: (tabId: string, node: EpicCanvasTileRef) => void;
 }
 
 /**
@@ -193,7 +190,7 @@ function resolveAndOpenArtifactLink(
             tabId: deps.tabId,
             nodeId: artifact.artifactId,
             fallbackHostId: resolveHostId,
-            openTileInTab: deps.openTilePreviewInTab,
+            openTileInTab: deps.previewTileInTab,
             onBeforeOpen: null,
             onOpened: () => {
               lifecycle.setPendingProjectedOpenCancel(null);
@@ -288,6 +285,6 @@ function openChatWorkspaceFilePreview(
   if (link.line !== null) {
     setWorkspaceFileRevealTarget(deps.tabId, ref.id, link.line, link.col);
   }
-  deps.openTilePreviewInTab(deps.tabId, ref);
+  deps.previewTileInTab(deps.tabId, ref);
   return true;
 }

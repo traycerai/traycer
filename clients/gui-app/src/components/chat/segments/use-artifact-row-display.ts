@@ -2,9 +2,9 @@ import { v4 as uuidv4 } from "uuid";
 import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
 import type { CheckpointFileOperation } from "@traycer/protocol/persistence/epic/checkpoint-manifests";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { EPIC_NODE_LABELS } from "@/lib/artifacts/node-display";
 import { useArtifactById, useOpenEpicId } from "@/lib/epic-selectors";
-import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 
 function nonEmpty(value: string | null | undefined): string | null {
   return value !== null && value !== undefined && value.length > 0
@@ -35,6 +35,7 @@ export function useArtifactRowDisplay(input: {
   const live = useArtifactById(input.artifactId);
   const epicId = useOpenEpicId();
   const activeHostId = useReactiveActiveHostId();
+  const tileNavigation = useEpicTileNavigation();
 
   const displayKind: EpicArtifactKind =
     live?.kind ?? input.artifactKind ?? "spec";
@@ -49,9 +50,7 @@ export function useArtifactRowDisplay(input: {
     if (live === null || activeHostId === null || input.artifactId === null) {
       return;
     }
-    const canvas = useEpicCanvasStore.getState();
-    const tabId = canvas.resolveTargetTabForEpic(epicId, undefined);
-    canvas.openTileInTab(tabId, {
+    tileNavigation.openTileInEpic(epicId, {
       id: input.artifactId,
       instanceId: uuidv4(),
       type: displayKind,

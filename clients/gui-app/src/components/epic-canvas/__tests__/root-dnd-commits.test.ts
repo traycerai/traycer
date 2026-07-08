@@ -15,6 +15,7 @@ import {
 } from "@/stores/epics/left-panel-store";
 import { useEpicSidebarExpansionStore } from "@/stores/epics/epic-sidebar-expansion-store";
 import { makeGitFileDiffTile } from "@/lib/git/git-diff-tile";
+import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
 
 interface TabStripMoveArgs {
   readonly sourcePaneId: string;
@@ -32,11 +33,42 @@ interface TabSplitArgs {
 
 interface TestCanvasStore {
   promotePreviewInTab: () => void;
-  openTileInTab: () => void;
-  insertNodeOnTabStrip: () => void;
+  openTileInTab: (viewTabId: string, node: unknown) => void;
+  prepareOpenTileInTabFocusTarget: (viewTabId: string, node: unknown) => null;
+  insertNodeOnTabStrip: (
+    viewTabId: string,
+    groupId: string,
+    index: number,
+    node: unknown,
+  ) => void;
+  prepareInsertNodeOnTabStripFocusTarget: (
+    viewTabId: string,
+    groupId: string,
+    index: number,
+    node: unknown,
+  ) => null;
   moveTabOnTabStrip: (viewTabId: string, args: TabStripMoveArgs) => void;
-  splitPaneWithNode: () => void;
+  prepareMoveActiveTabOnTabStripFocusTarget: (
+    viewTabId: string,
+    args: TabStripMoveArgs,
+  ) => null;
+  splitPaneWithNode: (
+    viewTabId: string,
+    groupId: string,
+    position: string,
+    node: unknown,
+  ) => void;
+  prepareSplitPaneWithNodeFocusTarget: (
+    viewTabId: string,
+    groupId: string,
+    position: string,
+    node: unknown,
+  ) => null;
   splitPaneWithTab: (viewTabId: string, args: TabSplitArgs) => void;
+  prepareSplitPaneWithTabFocusTarget: (
+    viewTabId: string,
+    args: TabSplitArgs,
+  ) => null;
   openTileInNewTab: (
     epicId: string,
     node: unknown,
@@ -55,11 +87,49 @@ const testState = vi.hoisted(() => ({
   canvasStore: {
     promotePreviewInTab: vi.fn(),
     openTileInTab: vi.fn(),
+    prepareOpenTileInTabFocusTarget: vi.fn((viewTabId, node) => {
+      testState.canvasStore.openTileInTab(viewTabId, node);
+      return null;
+    }),
     insertNodeOnTabStrip: vi.fn(),
+    prepareInsertNodeOnTabStripFocusTarget: vi.fn(
+      (viewTabId, groupId, index, node) => {
+        testState.canvasStore.insertNodeOnTabStrip(
+          viewTabId,
+          groupId,
+          index,
+          node,
+        );
+        return null;
+      },
+    ),
     moveTabOnTabStrip:
       vi.fn<(viewTabId: string, args: TabStripMoveArgs) => void>(),
+    prepareMoveActiveTabOnTabStripFocusTarget: vi.fn(
+      (viewTabId: string, args: TabStripMoveArgs) => {
+        testState.canvasStore.moveTabOnTabStrip(viewTabId, args);
+        return null;
+      },
+    ),
     splitPaneWithNode: vi.fn(),
+    prepareSplitPaneWithNodeFocusTarget: vi.fn(
+      (viewTabId, groupId, position, node) => {
+        testState.canvasStore.splitPaneWithNode(
+          viewTabId,
+          groupId,
+          position,
+          node,
+        );
+        return null;
+      },
+    ),
     splitPaneWithTab: vi.fn<(viewTabId: string, args: TabSplitArgs) => void>(),
+    prepareSplitPaneWithTabFocusTarget: vi.fn(
+      (viewTabId: string, args: TabSplitArgs) => {
+        testState.canvasStore.splitPaneWithTab(viewTabId, args);
+        return null;
+      },
+    ),
     openTileInNewTab: vi.fn<
       (
         epicId: string,
@@ -103,6 +173,9 @@ const TERMINAL_TILE = {
   hostId: TEST_HOST_ID,
   cwd: "/repo",
 } as const;
+
+const rawNestedFocus: NavigateNestedFocus = (_epicId, _tabId, prepare) =>
+  prepare();
 
 function railSource(
   panelId: "artifacts" | "git-diff" | "file-tree",
@@ -180,7 +253,7 @@ describe("root dnd commits - left panel", () => {
     });
 
     expect(isLeftPanelDropNoop(source, preview)).toBe(false);
-    commitResolvedCanvasDrop({ source, target, preview });
+    commitResolvedCanvasDrop({ source, target, preview }, rawNestedFocus);
 
     expect(useLeftPanelStore.getState().getPanelGroups()).toEqual([
       { panelIds: ["chats"] },
@@ -256,7 +329,7 @@ describe("root dnd commits - left panel", () => {
       activeRect: null,
     });
 
-    commitResolvedCanvasDrop({ source, target, preview });
+    commitResolvedCanvasDrop({ source, target, preview }, rawNestedFocus);
 
     expect(useLeftPanelStore.getState().getPanelGroups()).toEqual([
       { panelIds: ["chats", "file-tree"] },
@@ -298,7 +371,7 @@ describe("root dnd commits - left panel", () => {
       activeRect: null,
     });
 
-    commitResolvedCanvasDrop({ source, target, preview });
+    commitResolvedCanvasDrop({ source, target, preview }, rawNestedFocus);
 
     expect(useLeftPanelStore.getState().getPanelGroups()).toEqual([
       { panelIds: ["chats", "git-diff", "artifacts"] },
@@ -457,11 +530,14 @@ describe("root dnd commits - left panel drop resolver", () => {
     } as const;
 
     expect(isLeftPanelDropNoop(source, preview)).toBe(true);
-    commitResolvedCanvasDrop({
-      source,
-      target: { kind: "left-panel-rail-item", panelId: "chats" },
-      preview,
-    });
+    commitResolvedCanvasDrop(
+      {
+        source,
+        target: { kind: "left-panel-rail-item", panelId: "chats" },
+        preview,
+      },
+      rawNestedFocus,
+    );
 
     expect(useLeftPanelStore.getState().panelGroups).toBe(before);
   });
@@ -481,16 +557,19 @@ describe("root dnd commits - artifact tab commit routing", () => {
   } as const;
 
   it("routes strip previews to moveTabOnTabStrip at the preview index", () => {
-    commitResolvedCanvasDrop({
-      source: ARTIFACT_TAB_SOURCE,
-      target: {
-        kind: "artifact-tab-strip-end",
-        viewTabId: VIEW_TAB_ID,
-        groupId: "group-b",
-        index: 2,
+    commitResolvedCanvasDrop(
+      {
+        source: ARTIFACT_TAB_SOURCE,
+        target: {
+          kind: "artifact-tab-strip-end",
+          viewTabId: VIEW_TAB_ID,
+          groupId: "group-b",
+          index: 2,
+        },
+        preview: { kind: "artifact-tab-strip", groupId: "group-b", index: 2 },
       },
-      preview: { kind: "artifact-tab-strip", groupId: "group-b", index: 2 },
-    });
+      rawNestedFocus,
+    );
 
     expect(testState.canvasStore.moveTabOnTabStrip).toHaveBeenCalledWith(
       VIEW_TAB_ID,
@@ -505,20 +584,23 @@ describe("root dnd commits - artifact tab commit routing", () => {
   });
 
   it("routes body-center previews to moveTabOnTabStrip at the target tab count", () => {
-    commitResolvedCanvasDrop({
-      source: ARTIFACT_TAB_SOURCE,
-      target: {
-        kind: "artifact-tab-group-body",
-        viewTabId: VIEW_TAB_ID,
-        groupId: "group-b",
-        tabCount: 3,
+    commitResolvedCanvasDrop(
+      {
+        source: ARTIFACT_TAB_SOURCE,
+        target: {
+          kind: "artifact-tab-group-body",
+          viewTabId: VIEW_TAB_ID,
+          groupId: "group-b",
+          tabCount: 3,
+        },
+        preview: {
+          kind: "artifact-tab-group-body",
+          groupId: "group-b",
+          position: "center",
+        },
       },
-      preview: {
-        kind: "artifact-tab-group-body",
-        groupId: "group-b",
-        position: "center",
-      },
-    });
+      rawNestedFocus,
+    );
 
     expect(testState.canvasStore.moveTabOnTabStrip).toHaveBeenCalledWith(
       VIEW_TAB_ID,
@@ -533,20 +615,23 @@ describe("root dnd commits - artifact tab commit routing", () => {
   });
 
   it("routes body-edge previews to splitPaneWithTab", () => {
-    commitResolvedCanvasDrop({
-      source: ARTIFACT_TAB_SOURCE,
-      target: {
-        kind: "artifact-tab-group-body",
-        viewTabId: VIEW_TAB_ID,
-        groupId: "group-b",
-        tabCount: 3,
+    commitResolvedCanvasDrop(
+      {
+        source: ARTIFACT_TAB_SOURCE,
+        target: {
+          kind: "artifact-tab-group-body",
+          viewTabId: VIEW_TAB_ID,
+          groupId: "group-b",
+          tabCount: 3,
+        },
+        preview: {
+          kind: "artifact-tab-group-body",
+          groupId: "group-b",
+          position: "right",
+        },
       },
-      preview: {
-        kind: "artifact-tab-group-body",
-        groupId: "group-b",
-        position: "right",
-      },
-    });
+      rawNestedFocus,
+    );
 
     expect(testState.canvasStore.splitPaneWithTab).toHaveBeenCalledWith(
       VIEW_TAB_ID,
@@ -561,11 +646,18 @@ describe("root dnd commits - artifact tab commit routing", () => {
   });
 
   it("commits nothing for an empty-shell preview from a tab source", () => {
-    commitResolvedCanvasDrop({
-      source: ARTIFACT_TAB_SOURCE,
-      target: { kind: "empty-shell", epicId: EPIC_ID, viewTabId: VIEW_TAB_ID },
-      preview: { kind: "empty-shell" },
-    });
+    commitResolvedCanvasDrop(
+      {
+        source: ARTIFACT_TAB_SOURCE,
+        target: {
+          kind: "empty-shell",
+          epicId: EPIC_ID,
+          viewTabId: VIEW_TAB_ID,
+        },
+        preview: { kind: "empty-shell" },
+      },
+      rawNestedFocus,
+    );
 
     expect(testState.canvasStore.moveTabOnTabStrip).not.toHaveBeenCalled();
     expect(testState.canvasStore.splitPaneWithTab).not.toHaveBeenCalled();
@@ -577,16 +669,23 @@ describe("root dnd commits - tile source commit routing", () => {
   afterEach(resetStores);
 
   it("opens a dragged terminal tile on an empty canvas", () => {
-    commitResolvedCanvasDrop({
-      source: {
-        kind: "terminal-tile",
-        epicId: EPIC_ID,
-        viewTabId: VIEW_TAB_ID,
-        tile: TERMINAL_TILE,
+    commitResolvedCanvasDrop(
+      {
+        source: {
+          kind: "terminal-tile",
+          epicId: EPIC_ID,
+          viewTabId: VIEW_TAB_ID,
+          tile: TERMINAL_TILE,
+        },
+        target: {
+          kind: "empty-shell",
+          epicId: EPIC_ID,
+          viewTabId: VIEW_TAB_ID,
+        },
+        preview: { kind: "empty-shell" },
       },
-      target: { kind: "empty-shell", epicId: EPIC_ID, viewTabId: VIEW_TAB_ID },
-      preview: { kind: "empty-shell" },
-    });
+      rawNestedFocus,
+    );
 
     expect(testState.canvasStore.openTileInTab).toHaveBeenCalledWith(
       VIEW_TAB_ID,

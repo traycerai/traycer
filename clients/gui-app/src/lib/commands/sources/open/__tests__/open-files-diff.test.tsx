@@ -76,6 +76,8 @@ vi.mock("@/stores/command-palette/command-palette-store", () => ({
 import { useFilesOpenerItems } from "@/lib/commands/sources/open/files-subpage";
 import { useDiffOpenerItems } from "@/lib/commands/sources/open/diff-subpage";
 
+const navigateNestedFocusSpy = vi.fn();
+
 function noopRouter(): KeybindingRouter {
   return {
     getPathname: () => "/",
@@ -91,6 +93,7 @@ function noopRouter(): KeybindingRouter {
     isHistoryNavAvailable: () => false,
     canGoBack: () => false,
     canGoForward: () => false,
+    navigateNestedFocus: navigateNestedFocusSpy,
   };
 }
 
@@ -228,6 +231,9 @@ describe("Files opener sub-page", () => {
     runById(fileItems, "open:files:/ws/alpha:src/a.ts");
     const opened = lastTileOpen();
     expect(opened.groupId).toBe("group-1");
+    // Proves the opener leaf threads the ctx.router navigation seam through
+    // to openTileIntoTargetGroup instead of bypassing it.
+    expect(opened.navigateNestedFocus).toBe(navigateNestedFocusSpy);
     expect(opened.ref.type).toBe("workspace-file");
     expect(opened.ref.id).toContain("src%2Fa.ts");
   });
@@ -331,6 +337,9 @@ describe("Diff opener sub-page", () => {
     runById(diffItems, "open:diff:/ws/alpha:src/changed.ts:unstaged");
     const opened = lastTileOpen();
     expect(opened.groupId).toBe("group-1");
+    // Proves the opener leaf threads the ctx.router navigation seam through
+    // to openTileIntoTargetGroup instead of bypassing it.
+    expect(opened.navigateNestedFocus).toBe(navigateNestedFocusSpy);
     expect(opened.ref.type).toBe("git-diff");
   });
 

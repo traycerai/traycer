@@ -208,6 +208,8 @@ describe("app route tab-strip navigation", () => {
         focusArtifactId: undefined,
         focusThreadId: undefined,
         migrationSource: undefined,
+        focusPaneId: undefined,
+        focusTileInstanceId: undefined,
       },
     });
     await flushNav();
@@ -224,6 +226,8 @@ describe("app route tab-strip navigation", () => {
         focusArtifactId: undefined,
         focusThreadId: undefined,
         migrationSource: undefined,
+        focusPaneId: undefined,
+        focusTileInstanceId: undefined,
       },
     });
     await flushNav();

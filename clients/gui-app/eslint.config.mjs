@@ -13,6 +13,7 @@ import pluginQuery from "@tanstack/eslint-plugin-query";
 import pluginRouter from "@tanstack/eslint-plugin-router";
 import { traycerTypeSafetyRestrictions } from "../../eslint/traycer-type-safety-rules.mjs";
 import { traycerClientsImportBoundaryRestrictions } from "../../eslint/traycer-clients-import-boundary-rules.mjs";
+import { nestedFocusBoundaryRestrictions } from "../../eslint/traycer-nested-focus-boundary-rules.mjs";
 
 // Do not subscribe to the entire Zustand store - reused across the base rules
 // and the overrides that still need to ban it.
@@ -22,6 +23,70 @@ const noFullStoreSubscription = {
   message:
     "Do not subscribe to the entire Zustand store. Pass a granular selector: useXxxStore((s) => s.specificField).",
 };
+
+// Named individually (rather than left inline in the base rule array) so
+// per-file overrides can recompose the full set minus one entry, instead of
+// silently dropping all of them the way a from-scratch override array would.
+const jsxKeyNullishCoalesceLiteral = {
+  selector:
+    "JSXAttribute[name.name='key'] > JSXExpressionContainer > LogicalExpression[operator='??'][right.type='Literal']",
+  message:
+    "Do not add literal nullish-coalescing fallbacks to JSX keys. Let the key be undefined unless you need a real identity fallback.",
+};
+const jsxKeyNullishCoalesceTemplate = {
+  selector:
+    "JSXAttribute[name.name='key'] > JSXExpressionContainer > LogicalExpression[operator='??'][right.type='TemplateLiteral'][right.expressions.length=0]",
+  message:
+    "Do not add literal nullish-coalescing fallbacks to JSX keys. Let the key be undefined unless you need a real identity fallback.",
+};
+const forwardRefImportBan = {
+  selector: "ImportSpecifier[imported.name='forwardRef']",
+  message:
+    "React 19 treats refs as regular props. Type and destructure a `ref` prop instead of importing forwardRef.",
+};
+const forwardRefCallBan = {
+  selector: "CallExpression[callee.name='forwardRef']",
+  message:
+    "React 19 treats refs as regular props. Type and destructure a `ref` prop instead of wrapping the component in forwardRef.",
+};
+const reactForwardRefCallBan = {
+  selector:
+    "CallExpression[callee.type='MemberExpression'][callee.object.name='React'][callee.property.name='forwardRef']",
+  message:
+    "React 19 treats refs as regular props. Type and destructure a `ref` prop instead of wrapping the component in React.forwardRef.",
+};
+const setActiveTabDirectCallBan = {
+  selector:
+    "CallExpression[callee.type='MemberExpression'][callee.property.name='setActiveTab']",
+  message:
+    "Do not call setActiveTab directly - route through navigateToTabIntent in lib/tab-navigation.ts so every entry point performs the same activate-then-navigate dance.",
+};
+const setActiveDraftDirectCallBan = {
+  selector:
+    "CallExpression[callee.type='MemberExpression'][callee.property.name='setActiveDraft']",
+  message:
+    "Do not call setActiveDraft directly - route through navigateToTabIntent in lib/tab-navigation.ts so every entry point performs the same activate-then-navigate dance.",
+};
+const epicTabRouteConstructionBan = {
+  selector: "CallExpression[callee.name='epicTabRoute']",
+  message:
+    "Do not construct epicTabRoute() at the call site - pass an `existingEpicTabIntent({...})` (or similar TabNavigationIntent) to navigateToTabIntent; the route shape is owned by lib/tab-navigation.ts and lib/routes.ts.",
+};
+
+// Every general-purpose app file gets these regardless of the nested-focus-
+// boundary allowlist below - overrides that scope out a boundary action must
+// still spread this array back in, not drop it by writing a from-scratch
+// `no-restricted-syntax` value.
+const generalCustomSyntaxRestrictions = [
+  jsxKeyNullishCoalesceLiteral,
+  jsxKeyNullishCoalesceTemplate,
+  forwardRefImportBan,
+  forwardRefCallBan,
+  reactForwardRefCallBan,
+  setActiveTabDirectCallBan,
+  setActiveDraftDirectCallBan,
+  epicTabRouteConstructionBan,
+];
 
 export default tseslint.config(
   { ignores: [...commonIgnores, "src/routeTree.gen.ts"] },
@@ -119,51 +184,8 @@ export default tseslint.config(
         "error",
         ...traycerTypeSafetyRestrictions,
         noFullStoreSubscription,
-        {
-          selector:
-            "JSXAttribute[name.name='key'] > JSXExpressionContainer > LogicalExpression[operator='??'][right.type='Literal']",
-          message:
-            "Do not add literal nullish-coalescing fallbacks to JSX keys. Let the key be undefined unless you need a real identity fallback.",
-        },
-        {
-          selector:
-            "JSXAttribute[name.name='key'] > JSXExpressionContainer > LogicalExpression[operator='??'][right.type='TemplateLiteral'][right.expressions.length=0]",
-          message:
-            "Do not add literal nullish-coalescing fallbacks to JSX keys. Let the key be undefined unless you need a real identity fallback.",
-        },
-        {
-          selector: "ImportSpecifier[imported.name='forwardRef']",
-          message:
-            "React 19 treats refs as regular props. Type and destructure a `ref` prop instead of importing forwardRef.",
-        },
-        {
-          selector: "CallExpression[callee.name='forwardRef']",
-          message:
-            "React 19 treats refs as regular props. Type and destructure a `ref` prop instead of wrapping the component in forwardRef.",
-        },
-        {
-          selector:
-            "CallExpression[callee.type='MemberExpression'][callee.object.name='React'][callee.property.name='forwardRef']",
-          message:
-            "React 19 treats refs as regular props. Type and destructure a `ref` prop instead of wrapping the component in React.forwardRef.",
-        },
-        {
-          selector:
-            "CallExpression[callee.type='MemberExpression'][callee.property.name='setActiveTab']",
-          message:
-            "Do not call setActiveTab directly - route through navigateToTabIntent in lib/tab-navigation.ts so every entry point performs the same activate-then-navigate dance.",
-        },
-        {
-          selector:
-            "CallExpression[callee.type='MemberExpression'][callee.property.name='setActiveDraft']",
-          message:
-            "Do not call setActiveDraft directly - route through navigateToTabIntent in lib/tab-navigation.ts so every entry point performs the same activate-then-navigate dance.",
-        },
-        {
-          selector: "CallExpression[callee.name='epicTabRoute']",
-          message:
-            "Do not construct epicTabRoute() at the call site - pass an `existingEpicTabIntent({...})` (or similar TabNavigationIntent) to navigateToTabIntent; the route shape is owned by lib/tab-navigation.ts and lib/routes.ts.",
-        },
+        ...generalCustomSyntaxRestrictions,
+        ...nestedFocusBoundaryRestrictions([]),
       ],
 
       // ── ESLint core: code quality ───────────────────────────────────────────
@@ -222,6 +244,83 @@ export default tseslint.config(
         "error",
         ...traycerTypeSafetyRestrictions,
         noFullStoreSubscription,
+      ],
+    },
+  },
+
+  // ── Nested-focus-opener boundary allowlist ──────────────────────────────────
+  // See eslint/traycer-nested-focus-boundary-rules.mjs for the contract this
+  // enforces. Every entry below is a verified, empirical exception (grep the
+  // codebase for the two banned AST shapes before adding another) - not a
+  // restatement of the original audit brief, which over-listed several files
+  // that turned out to already be boundary-backed.
+  {
+    // Route -> store sync direction: applies an already-resolved/committed
+    // route target into the canvas (the inverse of the boundary, which goes
+    // store -> route), plus the legacy pre-nested-focus auto-open/cleanup
+    // paths that only run when there is no nested route target yet.
+    files: [
+      "src/components/epic-canvas/hooks/use-epic-route-synchronization.ts",
+    ],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        ...traycerTypeSafetyRestrictions,
+        noFullStoreSubscription,
+        ...generalCustomSyntaxRestrictions,
+        ...nestedFocusBoundaryRestrictions([
+          "openTileInTab",
+          "closeCanvasTab",
+          "applyNestedRouteFocus",
+        ]),
+      ],
+    },
+  },
+  {
+    // Blank-root bootstrap: seeds the first and only tile of a brand-new
+    // empty canvas root. There is no prior focus to disambiguate, so there
+    // is nothing meaningful to write to the route.
+    files: ["src/components/epic-canvas/canvas/tile-canvas.tsx"],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        ...traycerTypeSafetyRestrictions,
+        noFullStoreSubscription,
+        ...generalCustomSyntaxRestrictions,
+        ...nestedFocusBoundaryRestrictions(["openTileInTab"]),
+      ],
+    },
+  },
+  {
+    // Registers a server-created terminal as a saved background tab without
+    // activating it - prepareOpenTileInBackgroundTabFocusTarget always
+    // returns a null focus delta, so this call never needs a route write.
+    files: ["src/hooks/chats/use-setup-terminal-tab-register-driver.ts"],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        ...traycerTypeSafetyRestrictions,
+        noFullStoreSubscription,
+        ...generalCustomSyntaxRestrictions,
+        ...nestedFocusBoundaryRestrictions(["openTileInBackgroundTab"]),
+      ],
+    },
+  },
+  {
+    // Bulk-delete batches N raw closeCanvasTab calls inside a hand-rolled
+    // `prepare` closure passed to navigateNested, then commits ONE aggregate
+    // post-batch focus target - the same raw-then-diff shape the store's own
+    // prepare*FocusTarget wrappers use internally, just batched. Owned by a
+    // sibling agent's in-progress bulk-delete fixup; re-verify this
+    // classification if that implementation changes shape.
+    files: ["src/components/epic-canvas/sidebar/epic-sidebar.tsx"],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        ...traycerTypeSafetyRestrictions,
+        noFullStoreSubscription,
+        ...generalCustomSyntaxRestrictions,
+        ...nestedFocusBoundaryRestrictions(["closeCanvasTab"]),
       ],
     },
   },

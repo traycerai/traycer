@@ -1,10 +1,20 @@
 import "../../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import type { ReactNode } from "react";
 import { create } from "zustand";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { collectPanes } from "@/stores/epics/canvas/tile-tree";
+import type { EpicNodeRef } from "@/stores/epics/canvas/types";
+import type { NestedFocusTarget } from "@/lib/epic-nested-focus-route";
 
 // A terminal-agent tile auto-closes when the harness TUI exits (e.g. the user
 // presses Ctrl+C and the process terminates). The close must target the pane
@@ -12,7 +22,14 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 // `pane.tabInstanceIds`, so passing the content/session id silently no-ops and
 // the dead tab lingers. This test pins that contract.
 
-const closeCanvasTab = vi.fn();
+const testState = vi.hoisted(() => ({
+  reachability: {
+    status: "reachable",
+    hostLabel: "Host A",
+  },
+  navigateResults: [] as Array<NestedFocusTarget | null>,
+  navigateNested: vi.fn(),
+}));
 
 const exitedHandle = {
   epicId: "epic-test",
@@ -20,7 +37,9 @@ const exitedHandle = {
   dispose: () => undefined,
   store: create(() => ({
     status: "exited" as const,
+    connectionStatus: "open" as const,
     exitCode: 0,
+    exitReason: null,
     effectiveCols: 80,
     effectiveRows: 24,
     lastOutputPreview: null,
@@ -29,6 +48,14 @@ const exitedHandle = {
     setWriter: () => undefined,
   })),
 };
+
+vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
+  useEpicNestedFocusNavigation: () => testState.navigateNested,
+}));
+
+vi.mock("@/hooks/agent/use-host-reachability", () => ({
+  useHostReachability: () => testState.reachability,
+}));
 
 vi.mock("@/hooks/agent/use-terminal-tile-bootstrap", () => ({
   TerminalXtermHost: () => null,
@@ -123,17 +150,15 @@ vi.mock("@/hooks/agent/use-prepare-tui-launch-mutation", () => ({
   }),
 }));
 
-vi.mock("@/stores/epics/canvas/store", () => ({
-  useEpicCanvasStore: (selector: (s: unknown) => unknown) =>
-    selector({ closeCanvasTab }),
-}));
-
 vi.mock("@/hooks/worktree/use-worktree-get-binding-query", () => ({
   useWorktreeGetBinding: () => ({ data: { binding: null } }),
 }));
 
 import { TuiAgentTile } from "../tui-agent-tile";
 import { TabHostProvider } from "../../tab-host-provider";
+
+const EPIC_ID = "epic-1";
+const HOST_ID = "test-host";
 
 function withQueryClient(node: ReactNode): ReactNode {
   const queryClient = new QueryClient({
@@ -148,41 +173,149 @@ function withQueryClient(node: ReactNode): ReactNode {
   );
 }
 
+function resetNavigationSpy(): void {
+  testState.navigateResults = [];
+  testState.navigateNested.mockReset();
+  testState.navigateNested.mockImplementation(
+    (
+      _epicId: string,
+      _tabId: string,
+      prepare: () => NestedFocusTarget | null,
+    ) => {
+      const target = prepare();
+      testState.navigateResults.push(target);
+      return target;
+    },
+  );
+}
+
+function agentNode(id: string, instanceId: string): EpicNodeRef {
+  return {
+    id,
+    instanceId,
+    type: "terminal-agent",
+    name: "claude",
+    hostId: HOST_ID,
+  };
+}
+
+function openAgentFixture(inactiveClose: boolean): {
+  readonly viewTabId: string;
+  readonly paneId: string;
+  readonly closingNode: EpicNodeRef;
+  readonly activeNode: EpicNodeRef;
+} {
+  const store = useEpicCanvasStore.getState();
+  const viewTabId = store.openEpicTab(EPIC_ID, "Epic");
+  const closingNode = agentNode("agent-1", "inst-agent-1");
+  store.openTileInTab(viewTabId, closingNode);
+  const activeNode = inactiveClose
+    ? agentNode("agent-2", "inst-agent-2")
+    : closingNode;
+  if (inactiveClose) store.openTileInTab(viewTabId, activeNode);
+  const canvas = useEpicCanvasStore.getState().canvasByTabId[viewTabId];
+  if (canvas === undefined) throw new Error("expected view tab canvas");
+  const pane = collectPanes(canvas.root)[0];
+  return { viewTabId, paneId: pane.id, closingNode, activeNode };
+}
+
+function expectTileClosed(viewTabId: string, closedInstanceId: string): void {
+  const canvas = useEpicCanvasStore.getState().canvasByTabId[viewTabId];
+  if (canvas === undefined) throw new Error("expected view tab canvas");
+  expect(canvas.tilesByInstanceId[closedInstanceId]).toBeUndefined();
+}
+
 describe("<TuiAgentTile /> exit close", () => {
   beforeEach(() => {
-    closeCanvasTab.mockClear();
+    cleanup();
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    testState.reachability = { status: "reachable", hostLabel: "Host A" };
+    resetNavigationSpy();
   });
 
   afterEach(() => {
     cleanup();
   });
 
-  it("closes the canvas tab by instance id when the harness TUI exits", async () => {
+  it("routes unreachable-banner close for an active tile through the nested-focus boundary", () => {
+    testState.reachability = { status: "unreachable", hostLabel: "Host A" };
+    const fixture = openAgentFixture(false);
+
     render(
       withQueryClient(
         <TuiAgentTile
-          viewTabId="tab-test"
-          node={{
-            id: "agent-1",
-            instanceId: "inst-agent-1",
-            type: "terminal-agent",
-            name: "claude",
-            hostId: "test-host",
-          }}
-          tileId="pane-1"
+          viewTabId={fixture.viewTabId}
+          node={fixture.closingNode}
+          tileId={fixture.paneId}
+          isActive
+        />,
+      ),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Close tab" }));
+
+    // A revert to raw `closeCanvasTab` would still close the tab but would not
+    // invoke this boundary spy, so this assertion catches the regression.
+    expect(testState.navigateNested).toHaveBeenCalledWith(
+      EPIC_ID,
+      fixture.viewTabId,
+      expect.any(Function),
+    );
+    expect(testState.navigateResults[0]).not.toBeNull();
+    expect(testState.navigateResults[0]?.tileInstanceId).toBeUndefined();
+    expectTileClosed(fixture.viewTabId, fixture.closingNode.instanceId);
+  });
+
+  it("routes harness-exit close for an active tile through the nested-focus boundary", async () => {
+    const fixture = openAgentFixture(false);
+
+    render(
+      withQueryClient(
+        <TuiAgentTile
+          viewTabId={fixture.viewTabId}
+          node={fixture.closingNode}
+          tileId={fixture.paneId}
           isActive
         />,
       ),
     );
 
     await waitFor(() => {
-      expect(closeCanvasTab).toHaveBeenCalled();
+      expect(testState.navigateNested).toHaveBeenCalledWith(
+        EPIC_ID,
+        fixture.viewTabId,
+        expect.any(Function),
+      );
     });
-    // Third arg is the tab *instance* id, not the agent record / session id.
-    expect(closeCanvasTab).toHaveBeenCalledWith(
-      "tab-test",
-      "pane-1",
-      "inst-agent-1",
+    expect(testState.navigateResults[0]).not.toBeNull();
+    expect(testState.navigateResults[0]?.tileInstanceId).toBeUndefined();
+    expectTileClosed(fixture.viewTabId, fixture.closingNode.instanceId);
+  });
+
+  it("closes an inactive exited tile without producing a route-write target", async () => {
+    const fixture = openAgentFixture(true);
+
+    render(
+      withQueryClient(
+        <TuiAgentTile
+          viewTabId={fixture.viewTabId}
+          node={fixture.closingNode}
+          tileId={fixture.paneId}
+          isActive={false}
+        />,
+      ),
     );
+
+    await waitFor(() => {
+      expect(testState.navigateNested).toHaveBeenCalled();
+    });
+    expect(testState.navigateResults[0]).toBeNull();
+    expectTileClosed(fixture.viewTabId, fixture.closingNode.instanceId);
+
+    const canvas =
+      useEpicCanvasStore.getState().canvasByTabId[fixture.viewTabId];
+    if (canvas === undefined) throw new Error("expected view tab canvas");
+    const pane = collectPanes(canvas.root)[0];
+    expect(pane.activeTabId).toBe(fixture.activeNode.instanceId);
   });
 });

@@ -13,6 +13,7 @@ import {
 import { GIT_PANEL_PIERRE_FILE_TREE_THEME_STYLE } from "@/components/epic-canvas/pierre-tree-theme";
 import { extractPierreItemPathFromEvent } from "@/components/epic-canvas/pierre-tree-adapter";
 import { usePierreCanvasDragBridge } from "@/components/epic-canvas/dnd/use-pierre-canvas-drag-bridge";
+import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import {
   GIT_DIFF_TILE_DND_TYPE,
   getGitDiffTileDragId,
@@ -24,6 +25,7 @@ import type {
   GitDiffBundleGroup,
   GitDiffTileRef,
 } from "@/stores/epics/canvas/types";
+import type { NestedFocusTarget } from "@/lib/epic-nested-focus-route";
 import { GitDiffSection } from "./git-diff-section";
 import type { GitDiffSectionCollapseController } from "./git-diff-section";
 import { useGitPierreFileTreeModel } from "./use-git-pierre-file-tree-model";
@@ -116,8 +118,13 @@ function isDirectoryHandle(
 }
 
 function GitTreeSectionBody(props: GitTreeSectionBodyProps): ReactNode {
-  const openPreview = useEpicCanvasStore((s) => s.openTilePreviewInTab);
-  const openPinned = useEpicCanvasStore((s) => s.openTileInTab);
+  const navigateNested = useEpicNestedFocusNavigation();
+  const prepareOpenTilePreviewInTabFocusTarget = useEpicCanvasStore(
+    (s) => s.prepareOpenTilePreviewInTabFocusTarget,
+  );
+  const prepareOpenTileInTabFocusTarget = useEpicCanvasStore(
+    (s) => s.prepareOpenTileInTabFocusTarget,
+  );
   const { model, fileByPath } = useGitPierreFileTreeModel(props.files);
 
   // Mirror the canvas's focused diff tile into Pierre's selection, expanding
@@ -160,30 +167,35 @@ function GitTreeSectionBody(props: GitTreeSectionBodyProps): ReactNode {
   );
 
   const openFile = useCallback(
-    (treePath: string, open: (tabId: string, tile: GitDiffTileRef) => void) => {
+    (
+      treePath: string,
+      open: (tabId: string, tile: GitDiffTileRef) => NestedFocusTarget | null,
+    ) => {
       const tile = tileForTreePath(treePath);
       if (tile === null) return;
-      open(props.viewTabId, tile);
+      navigateNested(props.epicId, props.viewTabId, () =>
+        open(props.viewTabId, tile),
+      );
     },
-    [tileForTreePath, props.viewTabId],
+    [navigateNested, props.epicId, props.viewTabId, tileForTreePath],
   );
 
   const previewFileFromTreeRow = useCallback(
     (event: MouseEvent<HTMLElement>) => {
       const treePath = extractPierreItemPathFromEvent(event);
       if (treePath === null) return;
-      openFile(treePath, openPreview);
+      openFile(treePath, prepareOpenTilePreviewInTabFocusTarget);
     },
-    [openFile, openPreview],
+    [openFile, prepareOpenTilePreviewInTabFocusTarget],
   );
 
   const pinFileFromTreeRow = useCallback(
     (event: MouseEvent<HTMLElement>) => {
       const treePath = extractPierreItemPathFromEvent(event);
       if (treePath === null) return;
-      openFile(treePath, openPinned);
+      openFile(treePath, prepareOpenTileInTabFocusTarget);
     },
-    [openFile, openPinned],
+    [openFile, prepareOpenTileInTabFocusTarget],
   );
 
   // Bridge Pierre's shadow-DOM rows into the canvas dnd-kit drag flow. The row

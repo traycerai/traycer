@@ -1,5 +1,9 @@
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import {
+  parseNestedFocusTargetFromHref,
+  resolveNestedFocusTarget,
+} from "@/lib/epic-nested-focus-route";
 import { hrefPathname } from "@/lib/routes";
 
 /**
@@ -15,11 +19,12 @@ import { hrefPathname } from "@/lib/routes";
  * Two route shapes are prunable, read from the SAME stores the route
  * `beforeLoad` / committed-effect guards consult:
  *
- * - `/epics/$epicId/$tabId` — alive while the exact tab maps to `epicId`; once
- *   that tab is gone, dead ONLY when `resolveTabIdForEpic(epicId)` is null (no
- *   sibling tab). This mirrors the epic route's `beforeLoad`, which redirects a
- *   stale tab to a sibling of the same epic when one exists, so a back step to
- *   it still lands somewhere valid (`src/routes/epics.$epicId.$tabId.tsx`).
+ * - `/epics/$epicId/$tabId` — top-level entries without nested pane/tile params
+ *   are alive while the exact tab maps to `epicId`; once that tab is gone, dead
+ *   ONLY when `resolveTabIdForEpic(epicId)` is null (no sibling tab). Nested
+ *   pane/tile entries are exact session-local targets: they are alive only while
+ *   the original tab maps to the epic and the target resolves in that tab's
+ *   canvas. Sibling tabs must not salvage nested targets.
  * - `/draft/$draftId` — dead when `draftId` is absent from the landing-draft
  *   store (`src/routes/draft-route-components.tsx` redirects to `/` on the same
  *   condition). `/draft/new` is a distinct route and is always kept.
@@ -30,16 +35,30 @@ import { hrefPathname } from "@/lib/routes";
 export function isHistoryEntryDead(href: string): boolean {
   const segments = parsePathSegments(href);
 
-  // /epics/$epicId/$tabId — alive while the exact tab maps to epicId. Once that
-  // tab is gone, dead ONLY when the epic has no resolvable tab: the route's
-  // `beforeLoad` redirects a stale tab to a sibling of the same epic via
-  // `resolveTabIdForEpic`, so a back step there still lands somewhere valid.
+  // /epics/$epicId/$tabId — nested pane/tile targets are exact to this tab's
+  // canvas. Only top-level entries without nested params keep the legacy
+  // sibling-salvage behavior.
   if (segments.length === 3 && segments[0] === "epics") {
     const epicId = segments[1];
     const tabId = segments[2];
+    const nestedTarget = parseNestedFocusTargetFromHref(href);
     const state = useEpicCanvasStore.getState();
-    if (state.tabsById[tabId]?.epicId === epicId) return false;
-    return state.resolveTabIdForEpic(epicId) === null;
+    if (state.tabsById[tabId]?.epicId === epicId) {
+      if (nestedTarget === null) {
+        return false;
+      }
+      const canvas = state.canvasByTabId[tabId];
+      if (canvas === undefined) {
+        return true;
+      }
+      const resolved = resolveNestedFocusTarget(canvas, nestedTarget);
+      return resolved === null;
+    }
+    if (nestedTarget !== null) {
+      return true;
+    }
+    const sibling = state.resolveTabIdForEpic(epicId);
+    return sibling === null;
   }
 
   // /draft/$draftId — dead when the draft id is gone. `/draft/new` is kept.
