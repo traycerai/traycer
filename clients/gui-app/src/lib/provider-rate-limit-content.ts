@@ -85,7 +85,7 @@ const RATE_LIMIT_UNAVAILABLE_REASON_LABELS: Record<
   // capability problem like `rate_limits_not_available`. Distinct wording is
   // the point: this recovers on its own (the queue's post-failure cool-down
   // plus the next poll), so it must never read like a permanent account issue.
-  usage_fetch_failed: "couldn't fetch usage — will retry",
+  usage_fetch_failed: "failed to fetch usage",
 };
 
 export function formatUnavailableReason(

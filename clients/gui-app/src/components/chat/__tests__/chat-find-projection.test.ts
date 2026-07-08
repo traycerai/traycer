@@ -3,6 +3,7 @@ import "../../../../__tests__/test-browser-apis";
 import { describe, expect, it } from "vitest";
 import {
   buildChatFindRows,
+  chatFindSegmentUnitId,
   chatFindSubagentBodyUnitId,
   chatFindSubagentHeaderUnitId,
   markdownToChatSearchText,
@@ -462,6 +463,97 @@ describe("chat find projection", () => {
     // (bodyFindUnitId=null). Before the fix both projection sites indexed it,
     // counting a phantom match that can never paint; it must now find nothing.
     expect(joined).not.toContain(descriptionOnly);
+  });
+
+  it("indexes a top-level provider notice's title/message/detail text, ungated by any activity group", () => {
+    const assistant: ChatMessageModel = {
+      ...makeMessage(22, "assistant"),
+      segments: [
+        {
+          id: "notice-top",
+          kind: "provider_notice",
+          status: "completed",
+          tone: "warning",
+          title: "Model changed",
+          message: "Codex switched from gpt-5 to gpt-5-safe.",
+          details: [{ label: "Reason", value: "highRiskCyberActivity" }],
+          parentId: null,
+        },
+      ],
+    };
+
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID)[0];
+    const noticeUnit = row.units.find(
+      (unit) => unit.unitId === chatFindSegmentUnitId("notice-top"),
+    );
+
+    expect(noticeUnit?.text).toContain("Model changed");
+    expect(noticeUnit?.text).toContain(
+      "Codex switched from gpt-5 to gpt-5-safe.",
+    );
+    expect(noticeUnit?.text).toContain("Reason");
+    expect(noticeUnit?.text).toContain("highRiskCyberActivity");
+    // Not gated behind any collapsible key - it never folds into an activity
+    // group's collapse state.
+    expect(noticeUnit?.owningChain).toEqual([]);
+  });
+
+  it("indexes a nested provider notice inside a sub-agent card, opening the same chain as the sub-agent's own body", () => {
+    const subagentId = "subagent-with-notice";
+    const assistant: ChatMessageModel = {
+      ...makeMessage(23, "assistant"),
+      segments: [
+        {
+          id: subagentId,
+          kind: "subagent",
+          name: "Researcher",
+          agentType: null,
+          task: "Investigate the reroute",
+          progressUpdates: [],
+          result: null,
+          isStreaming: false,
+          endState: null,
+          stopped: false,
+          startedAt: 1,
+          durationMs: null,
+          spawnToolCallId: null,
+          parentId: null,
+          workflowMeta: null,
+          children: [
+            {
+              id: "notice-nested",
+              kind: "provider_notice",
+              status: "completed",
+              tone: "info",
+              title: "Model verification active",
+              message: "Trusted access verification enabled.",
+              details: [
+                { label: "Verifications", value: "trustedAccessForCyber" },
+              ],
+              parentId: subagentId,
+            },
+          ],
+        },
+      ],
+    };
+
+    const row = buildChatFindRows([assistant], TILE_INSTANCE_ID)[0];
+    const renderId = derivePromotedSubagentRenderId(subagentId);
+    const bodyUnit = row.units.find(
+      (unit) => unit.unitId === chatFindSubagentBodyUnitId(renderId),
+    );
+    const noticeUnit = row.units.find(
+      (unit) => unit.unitId === chatFindSegmentUnitId("notice-nested"),
+    );
+
+    expect(noticeUnit?.text).toContain("Model verification active");
+    expect(noticeUnit?.text).toContain("Trusted access verification enabled.");
+    expect(noticeUnit?.text).toContain("Verifications");
+    expect(noticeUnit?.text).toContain("trustedAccessForCyber");
+    // The nested notice opens with the SAME chain as the sub-agent's own
+    // body - expanding the card reveals the notice alongside it.
+    expect(noticeUnit?.owningChain).toEqual(bodyUnit?.owningChain);
+    expect(noticeUnit?.owningChain).toHaveLength(1);
   });
 });
 

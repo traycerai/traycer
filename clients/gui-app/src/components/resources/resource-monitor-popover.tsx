@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
+import type { MouseEvent, PointerEvent } from "react";
 import { useNavigate, type UseNavigateResult } from "@tanstack/react-router";
 import { v4 as uuidv4 } from "uuid";
 import { useShallow } from "zustand/react/shallow";
@@ -15,6 +22,7 @@ import type {
   ResourceOwnerKindWire,
   ResourceProcessSnapshotWire,
 } from "@traycer/protocol/host/resources/subscribe";
+import type { TaskLight } from "@traycer/protocol/host/epic/unary-schemas";
 import type { EpicNodeRecord } from "@/lib/artifacts/node-display";
 import { Button } from "@/components/ui/button";
 import {
@@ -30,10 +38,14 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { Tooltip, TooltipTrigger } from "@/components/ui/tooltip";
+import { Tooltip as TooltipPrimitive } from "radix-ui";
 import {
   useGlobalResourceProjection,
   type GlobalResourceEpicEntry,
 } from "@/stores/resources/resources-registry";
+import { useTitleBarDragStore } from "@/stores/layout/title-bar-drag-store";
+import { GlobalResourcesStreamMount } from "@/providers/resources-stream-mount";
 import type {
   AppResourceUsage,
   TaskResourceSummary,
@@ -55,6 +67,7 @@ import {
   openOrFocusEpicIntent,
 } from "@/lib/tab-navigation";
 import { cn } from "@/lib/utils";
+import { useCloudEpicTasksQuery } from "@/hooks/epics/use-cloud-epic-tasks-query";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import type {
@@ -77,7 +90,17 @@ const SORT_LABELS: Record<ResourceSortOption, string> = {
 const METRIC_COLS = "flex shrink-0 items-center tabular-nums tracking-tight";
 const CPU_COL = "w-14 text-right";
 const MEM_COL = "w-20 text-right";
+// The collapsed sub-tree tooltip is a mini-panel mirroring the process tree, so
+// it rides the light popover surface rather than the default inverted (dark)
+// tooltip chip - matching the popover it extends.
+const HIDDEN_SUBPROCESS_TOOLTIP_SURFACE =
+  "z-50 w-fit max-w-[min(90vw,22rem)] origin-(--radix-tooltip-content-transform-origin) rounded-lg bg-popover p-1.5 text-popover-foreground shadow-md ring-1 ring-foreground/10 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=delayed-open]:animate-in data-[state=delayed-open]:fade-in-0 data-[state=delayed-open]:zoom-in-95 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95";
 const DESKTOP_RESOURCE_SAMPLE_INTERVAL_MS = 1000;
+const desktopAppResourceListeners = new Set<() => void>();
+let desktopAppResourceSnapshot: DesktopAppResourceUsage | null = null;
+let desktopAppResourceTimer: number | null = null;
+let desktopAppResourceInFlight = false;
+const MAX_VISIBLE_PROCESS_DEPTH = 2;
 const EMPTY_RESOURCE_SUMMARY: TaskResourceSummary = {
   cpuPercent: 0,
   rssBytes: 0,
@@ -130,6 +153,8 @@ interface TaskDisplayRow {
   readonly entry: GlobalResourceEpicEntry;
   readonly label: string;
   readonly tabOrder: number;
+  readonly cpuPercent: number;
+  readonly rssBytes: number;
   readonly owners: readonly OwnerDisplayRow[];
 }
 
@@ -139,45 +164,77 @@ interface DesktopResourceSummary {
   readonly processCount: number;
 }
 
+interface ProcessDisplayRow {
+  readonly process: ResourceProcessSnapshotWire;
+  readonly depth: number;
+  readonly hiddenDescendants: readonly HiddenProcessRow[];
+}
+
+interface HiddenProcessRow {
+  readonly process: ResourceProcessSnapshotWire;
+  // Depth relative to the capped row (the first hidden level is 1) so the
+  // tooltip can indent the collapsed sub-tree the same way the main tree does.
+  readonly depth: number;
+}
+
 export function ResourceMonitorPopover(props: ResourceMonitorPopoverProps) {
   const [open, setOpen] = useState(false);
+  const setTitleBarDragSuppressed = useTitleBarDragStore(
+    (state) => state.setSuppressed,
+  );
+  // While the panel is open, let the header drop its title-bar drag regions so a
+  // click on the (otherwise event-swallowing) drag area dismisses the popover.
+  useEffect(() => {
+    setTitleBarDragSuppressed("resource-monitor", open);
+    return () => setTitleBarDragSuppressed("resource-monitor", false);
+  }, [open, setTitleBarDragSuppressed]);
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <TooltipWrapper
-        label="Resources"
-        side="top"
-        sideOffset={6}
-        align={undefined}
-      >
-        <PopoverTrigger asChild>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            aria-label="Resources"
-            data-testid="resource-monitor-header-button"
-            className={cn(
-              "text-muted-foreground hover:text-foreground",
-              props.className,
-            )}
-          >
-            <Cpu className="size-3.5" />
-          </Button>
-        </PopoverTrigger>
-      </TooltipWrapper>
+    <>
+      <GlobalResourcesStreamMount />
+      <Popover open={open} onOpenChange={setOpen}>
+        <TooltipWrapper
+          label="Resources"
+          side="top"
+          sideOffset={6}
+          align={undefined}
+        >
+          <PopoverTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Resources"
+              data-testid="resource-monitor-header-button"
+              className={cn(
+                "text-muted-foreground hover:text-foreground",
+                props.className,
+              )}
+            >
+              <Cpu className="size-3.5" />
+            </Button>
+          </PopoverTrigger>
+        </TooltipWrapper>
 
-      {open ? <ResourceMonitorContent onClose={() => setOpen(false)} /> : null}
-    </Popover>
+        {open ? (
+          <ResourceMonitorContent onClose={() => setOpen(false)} />
+        ) : null}
+      </Popover>
+    </>
   );
 }
 
 function ResourceMonitorContent(props: { readonly onClose: () => void }) {
   const [sortOption, setSortOption] = useState<ResourceSortOption>("memory");
+  const [sortMenuOpen, setSortMenuOpen] = useState(false);
   const [collapsedOwners, setCollapsedOwners] = useState<Set<string>>(
     () => new Set(),
   );
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const sortTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const dismissingSortMenuRef = useRef(false);
   const projection = useGlobalResourceProjection();
+  const { tasks } = useCloudEpicTasksQuery(undefined, { enabled: true });
   const canvas = useResourceCanvasSnapshot();
   const navigate = useNavigate();
   const openTileInTab = useEpicCanvasStore((state) => state.openTileInTab);
@@ -195,6 +252,7 @@ function ResourceMonitorContent(props: { readonly onClose: () => void }) {
 
   const canvasIndex = useMemo(() => buildCanvasResourceIndex(canvas), [canvas]);
   const recordByOwner = useMemo(() => buildRecordByOwner(canvas), [canvas]);
+  const epicTitleById = useMemo(() => buildEpicTitleById(tasks), [tasks]);
   const taskRows = useMemo(
     () =>
       buildTaskRows({
@@ -202,9 +260,17 @@ function ResourceMonitorContent(props: { readonly onClose: () => void }) {
         canvas,
         canvasIndex,
         recordByOwner,
+        epicTitleById,
         sortOption,
       }),
-    [canvas, canvasIndex, projection.entries, recordByOwner, sortOption],
+    [
+      canvas,
+      canvasIndex,
+      epicTitleById,
+      projection.entries,
+      recordByOwner,
+      sortOption,
+    ],
   );
 
   const toggleOwner = (key: string): void => {
@@ -223,6 +289,7 @@ function ResourceMonitorContent(props: { readonly onClose: () => void }) {
     const opened = openResourceOwner({
       row,
       canvas,
+      epicTitleById,
       openTileInTab,
       setActiveTilePane,
       setActiveTileTab,
@@ -238,6 +305,29 @@ function ResourceMonitorContent(props: { readonly onClose: () => void }) {
       ? (summary.rssBytes / projection.app.hostTotalMemoryBytes) * 100
       : 0;
 
+  const dismissSortMenuFromPanelClick = (
+    event: PointerEvent<HTMLDivElement>,
+  ): void => {
+    if (!sortMenuOpen) return;
+    if (!(event.target instanceof Node)) return;
+    if (sortTriggerRef.current?.contains(event.target) === true) return;
+
+    dismissingSortMenuRef.current = true;
+    setSortMenuOpen(false);
+    event.preventDefault();
+    event.stopPropagation();
+  };
+
+  const swallowDismissedSortMenuClick = (
+    event: MouseEvent<HTMLDivElement>,
+  ): void => {
+    if (!dismissingSortMenuRef.current) return;
+
+    dismissingSortMenuRef.current = false;
+    event.preventDefault();
+    event.stopPropagation();
+  };
+
   return (
     <PopoverContent
       align="end"
@@ -247,161 +337,208 @@ function ResourceMonitorContent(props: { readonly onClose: () => void }) {
       aria-label="Resources"
       className="w-[min(92vw,34rem)] gap-0 overflow-hidden rounded-xl p-0"
       onOpenAutoFocus={(event) => event.preventDefault()}
+      // Keep the panel open when focus moves elsewhere (switching tabs, a task
+      // finishing load and autofocusing its content, a terminal grabbing
+      // focus). Only a genuine outside pointer click or Escape should dismiss
+      // it; those go through onPointerDownOutside / onEscapeKeyDown, not here.
+      onFocusOutside={(event) => event.preventDefault()}
+      onInteractOutside={(event) => {
+        if (!sortMenuOpen) return;
+        if (!(event.target instanceof Node)) return;
+        if (panelRef.current?.contains(event.target) === true) {
+          event.preventDefault();
+        }
+      }}
     >
-      <div className="border-b border-border/60 px-3.5 pb-3 pt-3">
-        <div className="flex items-center justify-between gap-3">
-          <h4 className="truncate text-ui-sm font-medium text-foreground">
-            Resources
-          </h4>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button
-                type="button"
-                className="flex h-6 items-center gap-1 rounded-sm px-1.5 text-ui-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                aria-label="Sort resource rows"
+      <div
+        ref={panelRef}
+        className="min-w-0"
+        onPointerDownCapture={dismissSortMenuFromPanelClick}
+        onClickCapture={swallowDismissedSortMenuClick}
+      >
+        <div className="border-b border-border/60 px-3.5 pb-3 pt-3">
+          <div className="flex items-center justify-between gap-3">
+            <h4 className="truncate text-ui-sm font-medium text-foreground">
+              Resources
+            </h4>
+            <DropdownMenu
+              modal={false}
+              open={sortMenuOpen}
+              onOpenChange={setSortMenuOpen}
+            >
+              <DropdownMenuTrigger asChild>
+                <button
+                  ref={sortTriggerRef}
+                  type="button"
+                  className="flex h-6 items-center gap-1 rounded-sm px-1.5 text-ui-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                  aria-label="Sort resource rows"
+                >
+                  <ArrowDownNarrowWide className="size-3.5" />
+                  <span>{SORT_LABELS[sortOption]}</span>
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-40">
+                <DropdownMenuRadioGroup
+                  value={sortOption}
+                  onValueChange={(value) => {
+                    if (isResourceSortOption(value)) setSortOption(value);
+                  }}
+                >
+                  <DropdownMenuRadioItem value="memory">
+                    Memory
+                  </DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="cpu">CPU</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="name">
+                    Name
+                  </DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="tab">
+                    Tab order
+                  </DropdownMenuRadioItem>
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+
+          {summary === null ? (
+            <div className="mt-4 text-ui-xs text-muted-foreground">
+              Waiting for resource data.
+            </div>
+          ) : (
+            <>
+              <div className="mt-3 grid grid-cols-3 divide-x divide-border/50">
+                <MetricBlock
+                  label="CPU"
+                  value={formatCpuPercent(summary.cpuPercent)}
+                />
+                <MetricBlock
+                  label="Memory"
+                  value={formatMemoryBytes(summary.rssBytes)}
+                />
+                <MetricBlock
+                  label="RAM share"
+                  value={formatCpuPercent(memorySharePercent)}
+                />
+              </div>
+              <div
+                className="mt-3 h-1 w-full overflow-hidden rounded-full bg-muted/60"
+                role="progressbar"
+                aria-label="Tracked RAM share"
+                aria-valuenow={Math.round(memorySharePercent)}
+                aria-valuemin={0}
+                aria-valuemax={100}
               >
-                <ArrowDownNarrowWide className="size-3.5" />
-                <span>{SORT_LABELS[sortOption]}</span>
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-40">
-              <DropdownMenuRadioGroup
-                value={sortOption}
-                onValueChange={(value) => {
-                  if (isResourceSortOption(value)) setSortOption(value);
-                }}
-              >
-                <DropdownMenuRadioItem value="memory">
-                  Memory
-                </DropdownMenuRadioItem>
-                <DropdownMenuRadioItem value="cpu">CPU</DropdownMenuRadioItem>
-                <DropdownMenuRadioItem value="name">Name</DropdownMenuRadioItem>
-                <DropdownMenuRadioItem value="tab">
-                  Tab order
-                </DropdownMenuRadioItem>
-              </DropdownMenuRadioGroup>
-            </DropdownMenuContent>
-          </DropdownMenu>
+                <div
+                  className={cn(
+                    "h-full rounded-full transition-[width] duration-300",
+                    memoryShareBarClass(memorySharePercent),
+                  )}
+                  style={{
+                    width: `${Math.min(100, Math.max(0, memorySharePercent))}%`,
+                  }}
+                />
+              </div>
+              <ResourceCounts summary={summary} />
+            </>
+          )}
         </div>
 
-        {summary === null ? (
-          <div className="mt-4 text-ui-xs text-muted-foreground">
-            Waiting for resource data.
-          </div>
-        ) : (
-          <>
-            <div className="mt-3 grid grid-cols-3 divide-x divide-border/50">
-              <MetricBlock
-                label="CPU"
-                value={formatCpuPercent(summary.cpuPercent)}
-              />
-              <MetricBlock
-                label="Memory"
-                value={formatMemoryBytes(summary.rssBytes)}
-              />
-              <MetricBlock
-                label="RAM share"
-                value={formatCpuPercent(memorySharePercent)}
-              />
+        <div className="max-h-[min(58vh,36rem)] overflow-y-auto">
+          {desktopApp === null ? null : (
+            <DesktopAppResourceSection app={desktopApp} />
+          )}
+          {projection.app === null ? null : (
+            <HostAppResourceSection app={projection.app} />
+          )}
+          {summary === null ? null : (
+            <div className="py-1">
+              {taskRows.length === 0 ? (
+                <div className="px-3.5 py-4 text-center text-ui-xs text-muted-foreground">
+                  No active task process trees.
+                </div>
+              ) : (
+                taskRows.map((task) => (
+                  <TaskResourceSection
+                    key={task.entry.epicId}
+                    task={task}
+                    collapsedOwners={collapsedOwners}
+                    onToggleOwner={toggleOwner}
+                    onOpenOwner={openOwner}
+                  />
+                ))
+              )}
             </div>
-            <div
-              className="mt-3 h-1 w-full overflow-hidden rounded-full bg-muted/60"
-              role="progressbar"
-              aria-label="Tracked RAM share"
-              aria-valuenow={Math.round(memorySharePercent)}
-              aria-valuemin={0}
-              aria-valuemax={100}
-            >
-              <div
-                className={cn(
-                  "h-full rounded-full transition-[width] duration-300",
-                  memoryShareBarClass(memorySharePercent),
-                )}
-                style={{
-                  width: `${Math.min(100, Math.max(0, memorySharePercent))}%`,
-                }}
-              />
-            </div>
-            <ResourceCounts summary={summary} />
-          </>
-        )}
-      </div>
-
-      <div className="max-h-[min(58vh,36rem)] overflow-y-auto">
-        {desktopApp === null ? null : (
-          <DesktopAppResourceSection app={desktopApp} />
-        )}
-        {projection.app === null ? null : (
-          <HostAppResourceSection app={projection.app} />
-        )}
-        {summary === null ? null : (
-          <div className="py-1">
-            {taskRows.length === 0 ? (
-              <div className="px-3.5 py-4 text-center text-ui-xs text-muted-foreground">
-                No active task process trees.
-              </div>
-            ) : (
-              taskRows.map((task) => (
-                <TaskResourceSection
-                  key={task.entry.epicId}
-                  task={task}
-                  collapsedOwners={collapsedOwners}
-                  onToggleOwner={toggleOwner}
-                  onOpenOwner={openOwner}
-                />
-              ))
-            )}
-          </div>
-        )}
+          )}
+        </div>
       </div>
     </PopoverContent>
   );
 }
 
 function useDesktopAppResourceUsage(): DesktopAppResourceUsage | null {
-  const [usage, setUsage] = useState<DesktopAppResourceUsage | null>(null);
+  return useSyncExternalStore(
+    subscribeDesktopAppResourceUsage,
+    getDesktopAppResourceSnapshot,
+    getDesktopAppResourceSnapshot,
+  );
+}
 
-  useEffect(() => {
-    const bridge = getDesktopDiagnosticsBridge();
-    if (bridge === null) {
-      return;
-    }
-
-    let disposed = false;
-    let inFlight = false;
-
-    const sample = (): void => {
-      if (inFlight) return;
-      inFlight = true;
-      void bridge
-        .getMetrics()
-        .then(
-          (snapshot) => {
-            if (disposed) return;
-            setUsage(desktopAppResourceUsageFromMetrics(snapshot, Date.now()));
-          },
-          () => {
-            if (disposed) return;
-            setUsage(null);
-          },
-        )
-        .finally(() => {
-          inFlight = false;
-        });
-    };
-
-    sample();
-    const timer = window.setInterval(
-      sample,
+function subscribeDesktopAppResourceUsage(listener: () => void): () => void {
+  desktopAppResourceListeners.add(listener);
+  if (desktopAppResourceListeners.size === 1) {
+    sampleDesktopAppResourceUsage();
+    desktopAppResourceTimer = window.setInterval(
+      sampleDesktopAppResourceUsage,
       DESKTOP_RESOURCE_SAMPLE_INTERVAL_MS,
     );
-    return () => {
-      disposed = true;
-      window.clearInterval(timer);
-    };
-  }, []);
+  }
+  return () => {
+    desktopAppResourceListeners.delete(listener);
+    if (
+      desktopAppResourceListeners.size === 0 &&
+      desktopAppResourceTimer !== null
+    ) {
+      window.clearInterval(desktopAppResourceTimer);
+      desktopAppResourceTimer = null;
+    }
+  };
+}
 
-  return usage;
+function getDesktopAppResourceSnapshot(): DesktopAppResourceUsage | null {
+  return desktopAppResourceSnapshot;
+}
+
+function sampleDesktopAppResourceUsage(): void {
+  const bridge = getDesktopDiagnosticsBridge();
+  if (bridge === null) {
+    setDesktopAppResourceSnapshot(null);
+    return;
+  }
+  if (desktopAppResourceInFlight) return;
+  desktopAppResourceInFlight = true;
+  void bridge
+    .getMetrics()
+    .then(
+      (snapshot) => {
+        setDesktopAppResourceSnapshot(
+          desktopAppResourceUsageFromMetrics(snapshot, Date.now()),
+        );
+      },
+      () => {
+        setDesktopAppResourceSnapshot(null);
+      },
+    )
+    .finally(() => {
+      desktopAppResourceInFlight = false;
+    });
+}
+
+function setDesktopAppResourceSnapshot(
+  next: DesktopAppResourceUsage | null,
+): void {
+  desktopAppResourceSnapshot = next;
+  for (const listener of Array.from(desktopAppResourceListeners)) {
+    listener();
+  }
 }
 
 function useResourceCanvasSnapshot(): CanvasResourceSnapshot {
@@ -518,7 +655,13 @@ function HostAppResourceSection(props: { readonly app: AppResourceUsage }) {
         />
       </div>
       {props.app.process === null ? null : (
-        <ProcessLeafRow process={props.app.process} depth={1} />
+        <ProcessLeafRow
+          processRow={{
+            process: props.app.process,
+            depth: 1,
+            hiddenDescendants: [],
+          }}
+        />
       )}
     </div>
   );
@@ -555,20 +698,26 @@ function desktopResourceSummary(
   };
 }
 
+function buildEpicTitleById(
+  tasks: readonly TaskLight[],
+): ReadonlyMap<string, string> {
+  return new Map(
+    tasks.flatMap((task): [string, string][] => {
+      const light = task.epic?.light ?? null;
+      if (light === null) return [];
+      const title = light.title.trim();
+      if (title.length === 0) return [];
+      return [[light.id, title]];
+    }),
+  );
+}
+
 function TaskResourceSection(props: {
   readonly task: TaskDisplayRow;
   readonly collapsedOwners: ReadonlySet<string>;
   readonly onToggleOwner: (key: string) => void;
   readonly onOpenOwner: (row: OwnerDisplayRow) => void;
 }) {
-  const ownerCpu = props.task.owners.reduce(
-    (sum, row) => sum + row.snapshot.cpuPercent,
-    0,
-  );
-  const ownerRss = props.task.owners.reduce(
-    (sum, row) => sum + row.snapshot.rssBytes,
-    0,
-  );
   return (
     <div className="border-b border-border/50 py-1 last:border-b-0">
       <div className="flex items-center justify-between px-3.5 py-1.5">
@@ -576,13 +725,14 @@ function TaskResourceSection(props: {
           {props.task.label}
         </span>
         <MetricPair
-          cpuPercent={ownerCpu}
-          rssBytes={ownerRss}
+          cpuPercent={props.task.cpuPercent}
+          rssBytes={props.task.rssBytes}
           className="text-ui-sm text-foreground/90"
         />
       </div>
       {props.task.owners.map((row) => {
         const key = ownerKey(
+          row.snapshot.owner.epicId,
           row.snapshot.owner.kind,
           row.snapshot.owner.ownerId,
         );
@@ -606,7 +756,8 @@ function OwnerTreeRow(props: {
   readonly onToggle: () => void;
   readonly onOpen: () => void;
 }) {
-  const hasProcesses = props.row.snapshot.processes.length > 0;
+  const processRows = buildProcessRows(props.row.snapshot.processes);
+  const hasProcesses = processRows.length > 0;
   return (
     <div>
       <div className="group flex items-center transition-colors hover:bg-muted/50">
@@ -657,37 +808,100 @@ function OwnerTreeRow(props: {
       </div>
       {props.collapsed
         ? null
-        : props.row.snapshot.processes.map((process) => (
+        : processRows.map((processRow) => (
             <ProcessLeafRow
-              key={`${process.rootPid}:${process.pid}`}
-              process={process}
-              depth={processDepth(process, props.row.snapshot.processes)}
+              key={`${processRow.process.rootPid}:${processRow.process.pid}`}
+              processRow={processRow}
             />
           ))}
     </div>
   );
 }
 
-function ProcessLeafRow(props: {
-  readonly process: ResourceProcessSnapshotWire;
-  readonly depth: number;
-}) {
-  return (
-    <div
-      className="flex items-center justify-between gap-3 px-3.5 py-1 text-muted-foreground transition-colors hover:bg-muted/40"
-      style={{ paddingLeft: `calc(1.25rem + ${props.depth} * 1rem)` }}
-    >
+function ProcessLeafRow(props: { readonly processRow: ProcessDisplayRow }) {
+  const hiddenCount = props.processRow.hiddenDescendants.length;
+  const rowClassName =
+    "flex w-full items-center justify-between gap-3 px-3.5 py-1 text-left text-muted-foreground transition-colors hover:bg-muted/40";
+  const rowStyle = {
+    paddingLeft: `calc(1.25rem + ${props.processRow.depth} * 1rem)`,
+  };
+  const inner = (
+    <>
       <div className="flex min-w-0 items-center gap-1.5">
         <span className="size-1 shrink-0 rounded-full bg-muted-foreground/40" />
         <span className="min-w-0 truncate text-ui-xs">
-          {processLabel(props.process)}
+          {processLeafLabel(props.processRow.process, hiddenCount)}
         </span>
       </div>
       <MetricPair
-        cpuPercent={props.process.cpuPercent}
-        rssBytes={props.process.rssBytes}
+        cpuPercent={props.processRow.process.cpuPercent}
+        rssBytes={props.processRow.process.rssBytes}
         className="text-ui-xs text-muted-foreground/80"
       />
+    </>
+  );
+  // Leaf rows are static; only a capped row reveals more (its hidden sub-tree),
+  // so it is the one focusable, keyboard-reachable trigger for that tooltip.
+  if (hiddenCount === 0) {
+    return (
+      <div className={rowClassName} style={rowStyle}>
+        {inner}
+      </div>
+    );
+  }
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          className={cn(
+            rowClassName,
+            "cursor-default outline-none focus-visible:bg-muted/40 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring",
+          )}
+          style={rowStyle}
+        >
+          {inner}
+        </button>
+      </TooltipTrigger>
+      <TooltipPrimitive.Portal>
+        <TooltipPrimitive.Content
+          side="right"
+          align="start"
+          sideOffset={8}
+          className={HIDDEN_SUBPROCESS_TOOLTIP_SURFACE}
+        >
+          <HiddenSubprocessTooltip rows={props.processRow.hiddenDescendants} />
+          <TooltipPrimitive.Arrow className="size-2.5 translate-y-[calc(-50%_-_2px)] rotate-45 rounded-xs bg-popover fill-popover" />
+        </TooltipPrimitive.Content>
+      </TooltipPrimitive.Portal>
+    </Tooltip>
+  );
+}
+
+function HiddenSubprocessTooltip(props: {
+  readonly rows: readonly HiddenProcessRow[];
+}) {
+  return (
+    <div className="flex max-h-[min(40vh,18rem)] min-w-0 flex-col overflow-y-auto text-left">
+      {props.rows.map((row) => (
+        <div
+          key={`${row.process.rootPid}:${row.process.pid}`}
+          className="flex items-center justify-between gap-3 py-1 text-muted-foreground"
+          style={{ paddingLeft: `calc(${row.depth} * 1rem)` }}
+        >
+          <div className="flex min-w-0 items-center gap-1.5">
+            <span className="size-1 shrink-0 rounded-full bg-muted-foreground/40" />
+            <span className="min-w-0 truncate text-ui-xs">
+              {processLabel(row.process)}
+            </span>
+          </div>
+          <MetricPair
+            cpuPercent={row.process.cpuPercent}
+            rssBytes={row.process.rssBytes}
+            className="text-ui-xs text-muted-foreground/80"
+          />
+        </div>
+      ))}
     </div>
   );
 }
@@ -710,28 +924,45 @@ function buildTaskRows(input: {
   readonly canvas: CanvasResourceSnapshot;
   readonly canvasIndex: CanvasResourceIndex;
   readonly recordByOwner: ReadonlyMap<string, EpicNodeRecord>;
+  readonly epicTitleById: ReadonlyMap<string, string>;
   readonly sortOption: ResourceSortOption;
 }): TaskDisplayRow[] {
   const rows = input.entries.flatMap((entry): TaskDisplayRow[] => {
     if (entry.owners.length === 0) return [];
-    const owners = entry.owners.map((snapshot): OwnerDisplayRow => {
-      const key = ownerKey(snapshot.owner.kind, snapshot.owner.ownerId);
-      const location = input.canvasIndex.locationByOwner.get(key) ?? null;
-      const record = input.recordByOwner.get(key) ?? null;
-      return {
-        snapshot,
-        label: ownerLabel(snapshot, location, record),
-        canOpen: canOpenOwner(snapshot, location, record),
-        tabOrder:
-          input.canvasIndex.tabOrderByOwner.get(key) ?? Number.MAX_SAFE_INTEGER,
-        location,
-      };
-    });
+    const owners = entry.owners
+      .filter(shouldShowOwnerRow)
+      .map((snapshot): OwnerDisplayRow => {
+        const key = ownerKey(
+          snapshot.owner.epicId,
+          snapshot.owner.kind,
+          snapshot.owner.ownerId,
+        );
+        const location = input.canvasIndex.locationByOwner.get(key) ?? null;
+        const record = input.recordByOwner.get(key) ?? null;
+        return {
+          snapshot,
+          label: ownerLabel(snapshot, location, record),
+          canOpen: canOpenOwner(snapshot, location, record),
+          tabOrder:
+            input.canvasIndex.tabOrderByOwner.get(key) ??
+            Number.MAX_SAFE_INTEGER,
+          location,
+        };
+      });
+    if (owners.length === 0) return [];
     return [
       {
         entry,
-        label: taskLabel(entry.epicId, input.canvas),
+        label: taskLabel(entry.epicId, input.canvas, input.epicTitleById),
         tabOrder: taskTabOrder(entry.epicId, input.canvas),
+        cpuPercent: entry.owners.reduce(
+          (sum, snapshot) => sum + snapshot.cpuPercent,
+          0,
+        ),
+        rssBytes: entry.owners.reduce(
+          (sum, snapshot) => sum + snapshot.rssBytes,
+          0,
+        ),
         owners: sortOwnerRows(owners, input.sortOption),
       },
     ];
@@ -756,7 +987,7 @@ function buildCanvasResourceIndex(
         const ownerKind =
           ref === undefined ? null : resourceOwnerKindForRef(ref);
         if (ref === undefined || ownerKind === null) return [];
-        const key = ownerKey(ownerKind, ref.id);
+        const key = ownerKey(tab.epicId, ownerKind, ref.id);
         return [
           {
             key,
@@ -791,12 +1022,13 @@ function buildRecordByOwner(
   canvas: CanvasResourceSnapshot,
 ): ReadonlyMap<string, EpicNodeRecord> {
   return new Map(
-    Object.values(canvas.artifactTreeByEpicId).flatMap((epicRecords) =>
-      (epicRecords ?? []).flatMap((record): [string, EpicNodeRecord][] => {
-        const kind = resourceOwnerKindForNodeType(record.type);
-        if (kind === null) return [];
-        return [[ownerKey(kind, record.id), record]];
-      }),
+    Object.entries(canvas.artifactTreeByEpicId).flatMap(
+      ([epicId, epicRecords]) =>
+        (epicRecords ?? []).flatMap((record): [string, EpicNodeRecord][] => {
+          const kind = resourceOwnerKindForNodeType(record.type);
+          if (kind === null) return [];
+          return [[ownerKey(epicId, kind, record.id), record]];
+        }),
     ),
   );
 }
@@ -808,10 +1040,10 @@ function sortTaskRows(
   const sorted = [...rows];
   switch (sortOption) {
     case "memory":
-      sorted.sort((a, b) => ownerRss(b.owners) - ownerRss(a.owners));
+      sorted.sort((a, b) => b.rssBytes - a.rssBytes);
       break;
     case "cpu":
-      sorted.sort((a, b) => ownerCpu(b.owners) - ownerCpu(a.owners));
+      sorted.sort((a, b) => b.cpuPercent - a.cpuPercent);
       break;
     case "name":
       sorted.sort((a, b) => a.label.localeCompare(b.label));
@@ -848,6 +1080,7 @@ function sortOwnerRows(
 function openResourceOwner(args: {
   readonly row: OwnerDisplayRow;
   readonly canvas: CanvasResourceSnapshot;
+  readonly epicTitleById: ReadonlyMap<string, string>;
   readonly openTileInTab: (tabId: string, node: EpicCanvasTileRef) => void;
   readonly setActiveTilePane: (tabId: string, paneId: string) => void;
   readonly setActiveTileTab: (
@@ -886,7 +1119,7 @@ function openResourceOwner(args: {
     .getState()
     .resolveTargetTabForEpic(
       snapshot.owner.epicId,
-      taskLabel(snapshot.owner.epicId, args.canvas),
+      taskLabel(snapshot.owner.epicId, args.canvas, args.epicTitleById),
     );
   args.openTileInTab(targetTabId, {
     id: record.id,
@@ -923,11 +1156,17 @@ function findOwnerRecord(
   return records.find((record) => record.id === snapshot.owner.ownerId) ?? null;
 }
 
-function taskLabel(epicId: string, canvas: CanvasResourceSnapshot): string {
+function taskLabel(
+  epicId: string,
+  canvas: CanvasResourceSnapshot,
+  epicTitleById: ReadonlyMap<string, string>,
+): string {
   for (const tabId of canvas.openTabOrder) {
     const tab = canvas.tabsById[tabId];
     if (tab?.epicId === epicId && tab.name.length > 0) return tab.name;
   }
+  const title = epicTitleById.get(epicId);
+  if (title !== undefined && title.length > 0) return title;
   return "Task";
 }
 
@@ -938,8 +1177,20 @@ function taskTabOrder(epicId: string, canvas: CanvasResourceSnapshot): number {
   return index === -1 ? Number.MAX_SAFE_INTEGER : index;
 }
 
-function ownerKey(kind: ResourceOwnerKindWire, ownerId: string): string {
-  return `${kind}\x1f${ownerId}`;
+function ownerKey(
+  epicId: string,
+  kind: ResourceOwnerKindWire,
+  ownerId: string,
+): string {
+  return `${epicId}\x1f${kind}\x1f${ownerId}`;
+}
+
+function shouldShowOwnerRow(snapshot: OwnerResourceSnapshotWire): boolean {
+  if (snapshot.owner.kind !== "terminal") return true;
+  // A terminal always carries its own shell, so "has a process" is always true
+  // and never filters anything. Show a terminal only once it has a sub-process
+  // worth rendering - an idle shell adds no signal over the aggregate metrics.
+  return buildProcessRows(snapshot.processes).length > 0;
 }
 
 function resourceOwnerKindForNodeType(
@@ -1013,13 +1264,46 @@ function processLabel(process: ResourceProcessSnapshotWire): string {
   return `${process.name} (${process.pid})`;
 }
 
+function processLeafLabel(
+  process: ResourceProcessSnapshotWire,
+  hiddenCount: number,
+): string {
+  const label = processLabel(process);
+  if (hiddenCount === 0) return label;
+  return `${label} (${countLabel(hiddenCount, "sub-process", "sub-processes")})`;
+}
+
+function buildProcessRows(
+  processes: readonly ResourceProcessSnapshotWire[],
+): ProcessDisplayRow[] {
+  // A lone process - a terminal shell with nothing running under it, or an owner
+  // whose whole tree is a single process - is fully described by its owner row,
+  // so it adds no signal as a child row. Render nothing (and no expand chevron)
+  // and let the owner row stand alone.
+  if (processes.length <= 1) return [];
+  const byPid = processByPid(processes);
+  return processes.flatMap((process): ProcessDisplayRow[] => {
+    const depth = processDepth(process, byPid);
+    if (depth > MAX_VISIBLE_PROCESS_DEPTH) return [];
+    return [
+      {
+        process,
+        depth,
+        hiddenDescendants:
+          depth === MAX_VISIBLE_PROCESS_DEPTH
+            ? hiddenProcessDescendants(process, processes, byPid)
+            : [],
+      },
+    ];
+  });
+}
+
 function processDepth(
   process: ResourceProcessSnapshotWire,
-  processes: readonly ResourceProcessSnapshotWire[],
+  byPid: ReadonlyMap<number, ResourceProcessSnapshotWire>,
 ): number {
   let depth = process.pid === process.rootPid ? 1 : 2;
   let cursor = process;
-  const byPid = new Map(processes.map((entry) => [entry.pid, entry]));
   const visited = new Set<number>([process.pid]);
   while (cursor.parentPid !== null && cursor.parentPid !== process.rootPid) {
     const parent = byPid.get(cursor.parentPid);
@@ -1031,12 +1315,44 @@ function processDepth(
   return depth;
 }
 
-function ownerCpu(rows: readonly OwnerDisplayRow[]): number {
-  return rows.reduce((sum, row) => sum + row.snapshot.cpuPercent, 0);
+function processByPid(
+  processes: readonly ResourceProcessSnapshotWire[],
+): ReadonlyMap<number, ResourceProcessSnapshotWire> {
+  return new Map(processes.map((entry) => [entry.pid, entry]));
 }
 
-function ownerRss(rows: readonly OwnerDisplayRow[]): number {
-  return rows.reduce((sum, row) => sum + row.snapshot.rssBytes, 0);
+function hiddenProcessDescendants(
+  process: ResourceProcessSnapshotWire,
+  processes: readonly ResourceProcessSnapshotWire[],
+  byPid: ReadonlyMap<number, ResourceProcessSnapshotWire>,
+): HiddenProcessRow[] {
+  return processes.flatMap((candidate): HiddenProcessRow[] => {
+    const depth = processDepth(candidate, byPid);
+    if (
+      depth <= MAX_VISIBLE_PROCESS_DEPTH ||
+      !isProcessDescendantOf(candidate, process.pid, byPid)
+    ) {
+      return [];
+    }
+    return [{ process: candidate, depth: depth - MAX_VISIBLE_PROCESS_DEPTH }];
+  });
+}
+
+function isProcessDescendantOf(
+  process: ResourceProcessSnapshotWire,
+  ancestorPid: number,
+  byPid: ReadonlyMap<number, ResourceProcessSnapshotWire>,
+): boolean {
+  let cursor = process;
+  const visited = new Set<number>([process.pid]);
+  while (cursor.parentPid !== null) {
+    if (cursor.parentPid === ancestorPid) return true;
+    const parent = byPid.get(cursor.parentPid);
+    if (parent === undefined || visited.has(parent.pid)) break;
+    visited.add(parent.pid);
+    cursor = parent;
+  }
+  return false;
 }
 
 function countLabel(count: number, singular: string, plural: string): string {

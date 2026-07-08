@@ -3,6 +3,7 @@ import {
   runtimeAgentRunInputSchema,
   runtimeApprovalRequestSchema,
   runtimeEventSchema,
+  runtimeEventSchemaV12,
   runtimePermissionModeSchema,
 } from "@traycer/protocol/host/agent/gui/agent-runtime";
 
@@ -230,6 +231,64 @@ describe("agent runtime stream schema", () => {
         turnId: "turn-2",
       }),
     ).toMatchObject({ type: "turn.completed" });
+  });
+
+  it("accepts a provider_notice.upsert event on the live minor only (chat.subscribe@1.3+)", () => {
+    const event = {
+      type: "provider_notice.upsert",
+      blockId: "provider-notice:codex:turn-1:model-rerouted",
+      timestamp: 1,
+      parentBlockId: null,
+      harnessId: "codex",
+      noticeKind: "model_rerouted",
+      tone: "warning",
+      status: "completed",
+      title: "Model changed",
+      message: "Codex switched from gpt-5 to gpt-5-safe.",
+      details: [{ label: "Reason", value: "highRiskCyberActivity" }],
+      fallbackText: "Codex switched from gpt-5 to gpt-5-safe (highRiskCyberActivity).",
+      metadata: {
+        type: "model_rerouted",
+        fromModel: "gpt-5",
+        toModel: "gpt-5-safe",
+        reason: "highRiskCyberActivity",
+      },
+    };
+
+    expect(runtimeEventSchema.parse(event)).toMatchObject({
+      type: "provider_notice.upsert",
+      noticeKind: "model_rerouted",
+    });
+
+    // The frozen pre-1.3 union must never accept this event - a real 1.2
+    // peer can never produce it, and the wire projection relies on this
+    // rejection staying true (see chat-frame-projection.ts).
+    expect(runtimeEventSchemaV12.safeParse(event).success).toBe(false);
+  });
+
+  it("rejects a provider_notice.upsert event with an empty legacy fallback text", () => {
+    expect(
+      runtimeEventSchema.safeParse({
+        type: "provider_notice.upsert",
+        blockId: "provider-notice:codex:turn-1:model-rerouted",
+        timestamp: 1,
+        parentBlockId: null,
+        harnessId: "codex",
+        noticeKind: "model_rerouted",
+        tone: "warning",
+        status: "completed",
+        title: "Model changed",
+        message: "Codex switched from gpt-5 to gpt-5-safe.",
+        details: [{ label: "Reason", value: "highRiskCyberActivity" }],
+        fallbackText: "",
+        metadata: {
+          type: "model_rerouted",
+          fromModel: "gpt-5",
+          toModel: "gpt-5-safe",
+          reason: "highRiskCyberActivity",
+        },
+      }).success,
+    ).toBe(false);
   });
 
   it("rejects unknown runtime event types", () => {

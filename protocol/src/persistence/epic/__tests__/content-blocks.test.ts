@@ -4,12 +4,16 @@ import {
   contentBlockSchema,
   decodeAutonomousResumeBlock,
   encodeAutonomousResumeBlock,
+  providerNoticeMetadataSchema,
+  providerNoticeNormalizedMetadataSchema,
   subAgentBlockSchema,
+  textBlockSchema,
   type ApprovalBlock,
   type AutonomousResumeBlock,
   type FileChangeBlock,
   type InterviewBlock,
   type SubAgentBlock,
+  type TextBlock,
   type ToolCallBlock,
 } from "@traycer/protocol/persistence/epic/content-blocks";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/index";
@@ -568,5 +572,206 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
     expect(Object.keys(hostStreamRpcRegistry)).toContain("chat.subscribe");
     expect(() => z.toJSONSchema(contentBlockSchema)).not.toThrow();
     expect(() => z.toJSONSchema(contentBlockSchema, { io: "input" })).not.toThrow();
+  });
+});
+
+describe("textBlockSchema providerNotice (no new persisted block type)", () => {
+  const modelReroutedBlock = {
+    type: "text",
+    blockId: "notice-1",
+    status: "completed",
+    timestamp: 1000,
+    text: "Codex switched from gpt-5 to gpt-5-safe (highRiskCyberActivity).",
+    providerNotice: {
+      harnessId: "codex",
+      noticeKind: "model_rerouted",
+      tone: "warning",
+      title: "Model changed",
+      message: "Codex switched from gpt-5 to gpt-5-safe.",
+      details: [
+        { label: "Reason", value: "highRiskCyberActivity" },
+        { label: "From", value: "gpt-5" },
+        { label: "To", value: "gpt-5-safe" },
+      ],
+      metadata: {
+        type: "model_rerouted",
+        fromModel: "gpt-5",
+        toModel: "gpt-5-safe",
+        reason: "highRiskCyberActivity",
+      },
+    },
+  };
+
+  it("defaults providerNotice to null for a legacy text block (no providerNotice key)", () => {
+    const { providerNotice: _providerNotice, ...legacy } = modelReroutedBlock;
+    const parsed = contentBlockSchema.parse(legacy) as TextBlock;
+    expect(parsed.type).toBe("text");
+    expect(parsed.providerNotice).toBeNull();
+  });
+
+  it("round-trips a model_rerouted provider notice text block", () => {
+    const parsed = contentBlockSchema.parse(modelReroutedBlock) as TextBlock;
+    expect(parsed.type).toBe("text");
+    expect(parsed.text).toBe(modelReroutedBlock.text);
+    expect(parsed.providerNotice).toEqual(modelReroutedBlock.providerNotice);
+  });
+
+  it("round-trips a model_verification provider notice text block", () => {
+    const block = {
+      type: "text",
+      blockId: "notice-2",
+      status: "completed",
+      timestamp: 1001,
+      text: "Model verification active (trustedAccessForCyber).",
+      providerNotice: {
+        harnessId: "codex",
+        noticeKind: "model_verification",
+        tone: "info",
+        title: "Model verification active",
+        message: "trustedAccessForCyber",
+        details: [{ label: "Verifications", value: "trustedAccessForCyber" }],
+        metadata: {
+          type: "model_verification",
+          verifications: ["trustedAccessForCyber"],
+        },
+      },
+    };
+    const parsed = contentBlockSchema.parse(block) as TextBlock;
+    expect(parsed.providerNotice?.metadata).toEqual({
+      type: "model_verification",
+      verifications: ["trustedAccessForCyber"],
+    });
+  });
+
+  it("round-trips a safety_buffering provider notice text block, including a null terminalReason while streaming", () => {
+    const block = {
+      type: "text",
+      blockId: "notice-3",
+      status: "streaming",
+      timestamp: 1002,
+      text: "Safety check in progress.",
+      providerNotice: {
+        harnessId: "codex",
+        noticeKind: "safety_buffering",
+        tone: "info",
+        title: "Safety check in progress",
+        message: "Running gpt-5, may fall back to gpt-5-fast.",
+        details: [
+          { label: "Model", value: "gpt-5" },
+          { label: "Faster model", value: "gpt-5-fast" },
+        ],
+        metadata: {
+          type: "safety_buffering",
+          model: "gpt-5",
+          fasterModel: "gpt-5-fast",
+          useCases: ["cyber"],
+          reasons: ["highRiskCyberActivity"],
+          terminalReason: null,
+        },
+      },
+    };
+    const parsed = contentBlockSchema.parse(block) as TextBlock;
+    expect(parsed.providerNotice?.metadata).toMatchObject({
+      type: "safety_buffering",
+      terminalReason: null,
+    });
+  });
+
+  it("old-reader compat: a pre-providerNotice textBlockSchema parses a providerNotice-bearing block, stripping the unknown key", () => {
+    // Field-for-field copy of `textBlockSchema` as it existed before
+    // `providerNotice` was added - stands in for a released host's baked
+    // schema. A provider-notice text block must stay readable by any
+    // released host as plain assistant text (tech plan: compatibility-safe
+    // persisted shape, no new `ContentBlock.type`).
+    const preProviderNoticeTextBlockSchema = z.object({
+      blockId: z.string(),
+      status: z.enum(["streaming", "completed", "errored"]),
+      timestamp: z.number(),
+      parentBlockId: z.string().nullish(),
+      type: z.literal("text"),
+      text: z.string(),
+    });
+
+    const parsed = preProviderNoticeTextBlockSchema.parse(modelReroutedBlock);
+    expect(parsed.type).toBe("text");
+    expect(parsed.text).toBe(modelReroutedBlock.text);
+    // The enrichment is not retained by the older reader - the base text
+    // field is the faithful degradation.
+    expect("providerNotice" in parsed).toBe(false);
+  });
+
+  it("rejects an unknown normalized-metadata discriminant", () => {
+    const result = providerNoticeNormalizedMetadataSchema.safeParse({
+      type: "unknown_kind",
+      value: "x",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a raw/nested provider payload shape outside the normalized metadata union", () => {
+    // The generated Codex payload shape (raw threadId/turnId/verifications
+    // envelope) must never be accepted as-is - only the normalized,
+    // per-notice-kind facts are allowed.
+    const result = providerNoticeMetadataSchema.safeParse({
+      harnessId: "codex",
+      noticeKind: "model_verification",
+      tone: "info",
+      title: "Model verification active",
+      message: null,
+      details: [],
+      metadata: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        verifications: ["trustedAccessForCyber"],
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects provider notice metadata whose type does not match noticeKind", () => {
+    const result = providerNoticeMetadataSchema.safeParse({
+      harnessId: "codex",
+      noticeKind: "model_rerouted",
+      tone: "warning",
+      title: "Model changed",
+      message: null,
+      details: [],
+      metadata: {
+        type: "model_verification",
+        verifications: ["trustedAccessForCyber"],
+      },
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects non-JSON-serializable values on normalized metadata fields", () => {
+    const result = providerNoticeNormalizedMetadataSchema.safeParse({
+      type: "model_rerouted",
+      fromModel: "gpt-5",
+      toModel: "gpt-5-safe",
+      reason: () => "highRiskCyberActivity",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("textBlockSchema rejects a providerNotice missing required metadata fields", () => {
+    const result = textBlockSchema.safeParse({
+      type: "text",
+      blockId: "notice-invalid",
+      status: "completed",
+      timestamp: 1,
+      text: "fallback",
+      providerNotice: {
+        harnessId: "codex",
+        noticeKind: "model_rerouted",
+        tone: "warning",
+        // title is required and missing.
+        message: null,
+        details: [],
+        metadata: null,
+      },
+    });
+    expect(result.success).toBe(false);
   });
 });

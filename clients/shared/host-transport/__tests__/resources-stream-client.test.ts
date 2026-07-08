@@ -180,7 +180,7 @@ describe("ResourcesStreamClient", () => {
 
     const client = new ResourcesStreamClient({
       wsStreamClient: makeWsStreamClient(factory),
-      epicId: "epic-1",
+      scope: { kind: "epic", epicId: "epic-1" },
       callbacks,
     });
     completeHandshake(sockets[0]);
@@ -188,8 +188,11 @@ describe("ResourcesStreamClient", () => {
     expect(parseText(sockets[0].textSent[1])).toEqual({
       kind: "subscribe",
       method: "resources.subscribe",
-      schemaVersion: { major: 1, minor: 0 },
-      params: { epicId: "epic-1" },
+      schemaVersion: { major: 1, minor: 1 },
+      params: {
+        epicId: "epic-1",
+        scope: { kind: "epic", epicId: "epic-1" },
+      },
     });
 
     sockets[0].fireText({
@@ -216,6 +219,7 @@ describe("ResourcesStreamClient", () => {
     expect(snapshots[0].owners[0].owner.ownerId).toBe("s1");
     expect(snapshots[0].owners[0].processes[0].command).toBe("/bin/bash");
     expect(snapshots[0].epic?.epicId).toBe("epic-1");
+    expect(snapshots[0].epics).toEqual([]);
     expect(updates).toHaveLength(1);
     expect(updates[0].owners[0].cpuPercent).toBe(55);
     expect(updates[0].sampledAt).toBe(2_000);
@@ -229,7 +233,7 @@ describe("ResourcesStreamClient", () => {
     const updates: ResourcesProjectionPayload[] = [];
     const client = new ResourcesStreamClient({
       wsStreamClient: makeWsStreamClient(factory),
-      epicId: "epic-1",
+      scope: { kind: "epic", epicId: "epic-1" },
       callbacks: {
         onSnapshot: (p) => snapshots.push(p),
         onUpdate: (p) => updates.push(p),
