@@ -14,10 +14,11 @@
     "build:renderer": "vite build --config vite.renderer.config.ts",
     "build:app": "bun run clean && bun run build:main && bun run build:renderer",
     "prepack:check-cli": "bun scripts/prepack/check-cli-resource.cjs",
+    "prepack:check-icons": "bun scripts/prepack/check-bundle-icons.cjs",
     "prepack:check-tray": "bun scripts/prepack/check-tray-assets.cjs",
     "build": "bun run build:app",
-    "package": "bun run build:app && bun run prepack:check-cli && bun run prepack:check-tray && bun x electron-builder --publish never",
-    "package:dir": "bun run build:app && bun run prepack:check-cli && bun run prepack:check-tray && bun x electron-builder --dir --publish never",
+    "package": "bun run build:app && bun run prepack:check-cli && bun run prepack:check-icons && bun run prepack:check-tray && bun x electron-builder --publish never",
+    "package:dir": "bun run build:app && bun run prepack:check-cli && bun run prepack:check-icons && bun run prepack:check-tray && bun x electron-builder --dir --publish never",
     "dev:renderer": "vite --config vite.renderer.config.ts",
     "dev:main": "bun run build:main && bun scripts/dev/dev-main.cjs",
     "dev": "bun x concurrently -k -n renderer,main -c blue,magenta \"bun run dev:renderer\" \"bun x wait-on tcp:5173 && bun run dev:main\"",
@@ -164,6 +165,7 @@
     },
     "win": {
       "artifactName": "traycer-desktop-windows-${arch}.${ext}",
+      "icon": "icon.ico",
       "target": [
         {
           "target": "nsis",
