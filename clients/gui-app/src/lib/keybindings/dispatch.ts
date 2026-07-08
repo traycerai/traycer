@@ -11,6 +11,10 @@ import { toggleActiveModelPicker } from "@/lib/commands/active-model-picker-regi
 import { focusActiveComposer } from "@/lib/composer/composer-focus-registry";
 import { tabMatchesPath, tabResolveIntent } from "@/stores/tabs/registry";
 import type { TabNavigationIntent } from "@/lib/tab-navigation/intents";
+import type {
+  NavigateNestedFocus,
+  PrepareNestedFocusTarget,
+} from "@/lib/epic-nested-focus-navigation";
 import type { EpicViewTab } from "@/stores/epics/canvas/types";
 import {
   ACTION_IDS,
@@ -68,6 +72,7 @@ export interface KeybindingRouter {
    * click - see `lib/tab-navigation.ts`.
    */
   readonly navigateToTabIntent: (intent: TabNavigationIntent) => void;
+  readonly navigateNestedFocus?: NavigateNestedFocus;
   /**
    * In-app history back/forward. Delegate to the shared
    * `goBack`/`goForward` actions on the CURRENT router (the live
@@ -439,6 +444,15 @@ function getActiveTab(router: KeybindingRouter): EpicViewTab | null {
   return useEpicCanvasStore.getState().tabsById[tabId] ?? null;
 }
 
+function runNestedFocus(
+  router: KeybindingRouter,
+  tab: { readonly epicId: string; readonly tabId: string },
+  prepare: PrepareNestedFocusTarget,
+) {
+  if (router.navigateNestedFocus === undefined) return prepare();
+  return router.navigateNestedFocus(tab.epicId, tab.tabId, prepare);
+}
+
 function duplicateActiveEpicTab(router: KeybindingRouter): boolean {
   const tabId = getActiveEpicTabId(router);
   if (tabId === null) return false;
@@ -493,12 +507,19 @@ function closeActiveTab(router: KeybindingRouter): boolean {
   if (target.activeTabId === null) {
     if (target.tabInstanceIds.length > 0) return false;
     if (root.kind !== "group") return false;
-    useEpicCanvasStore.getState().closeCanvasPane(tab.tabId, target.id);
+    runNestedFocus(router, tab, () =>
+      useEpicCanvasStore
+        .getState()
+        .prepareCloseCanvasPaneFocusTarget(tab.tabId, target.id),
+    );
     return true;
   }
-  useEpicCanvasStore
-    .getState()
-    .closeCanvasTab(tab.tabId, target.id, target.activeTabId);
+  const activeTabId = target.activeTabId;
+  runNestedFocus(router, tab, () =>
+    useEpicCanvasStore
+      .getState()
+      .prepareCloseCanvasTabFocusTarget(tab.tabId, target.id, activeTabId),
+  );
   return true;
 }
 
@@ -507,9 +528,16 @@ function closeOtherTabsInActive(router: KeybindingRouter): boolean {
   if (tab === null) return false;
   const target = getActiveGroupAndTab(tab.tabId);
   if (target === null || target.tabId === null) return false;
-  useEpicCanvasStore
-    .getState()
-    .closeOtherCanvasTabs(tab.tabId, target.groupId, target.tabId);
+  const targetTabId = target.tabId;
+  runNestedFocus(router, tab, () =>
+    useEpicCanvasStore
+      .getState()
+      .prepareCloseOtherCanvasTabsFocusTarget(
+        tab.tabId,
+        target.groupId,
+        targetTabId,
+      ),
+  );
   return true;
 }
 
@@ -518,9 +546,16 @@ function closeRightTabsInActive(router: KeybindingRouter): boolean {
   if (tab === null) return false;
   const target = getActiveGroupAndTab(tab.tabId);
   if (target === null || target.tabId === null) return false;
-  useEpicCanvasStore
-    .getState()
-    .closeRightCanvasTabs(tab.tabId, target.groupId, target.tabId);
+  const targetTabId = target.tabId;
+  runNestedFocus(router, tab, () =>
+    useEpicCanvasStore
+      .getState()
+      .prepareCloseRightCanvasTabsFocusTarget(
+        tab.tabId,
+        target.groupId,
+        targetTabId,
+      ),
+  );
   return true;
 }
 
@@ -529,7 +564,11 @@ function closeAllTabsInActive(router: KeybindingRouter): boolean {
   if (tab === null) return false;
   const groupId = getActiveGroupId(tab.tabId);
   if (groupId === null) return false;
-  useEpicCanvasStore.getState().closeAllCanvasTabs(tab.tabId, groupId);
+  runNestedFocus(router, tab, () =>
+    useEpicCanvasStore
+      .getState()
+      .prepareCloseAllCanvasTabsFocusTarget(tab.tabId, groupId),
+  );
   return true;
 }
 
@@ -547,9 +586,11 @@ function moveTabFocus(router: KeybindingRouter, delta: number): boolean {
   if (idx === -1) return false;
   const count = pane.tabInstanceIds.length;
   const nextInstanceId = pane.tabInstanceIds[(idx + delta + count) % count];
-  useEpicCanvasStore
-    .getState()
-    .setActiveTileTab(tab.tabId, pane.id, nextInstanceId);
+  runNestedFocus(router, tab, () =>
+    useEpicCanvasStore
+      .getState()
+      .prepareSetActiveTileTabFocusTarget(tab.tabId, pane.id, nextInstanceId),
+  );
   return true;
 }
 
@@ -565,9 +606,11 @@ function switchActivePaneTabByIndex(
   if (pane === null) return false;
   if (index < 0 || index >= pane.tabInstanceIds.length) return false;
   const nextInstanceId = pane.tabInstanceIds[index];
-  useEpicCanvasStore
-    .getState()
-    .setActiveTileTab(tab.tabId, pane.id, nextInstanceId);
+  runNestedFocus(router, tab, () =>
+    useEpicCanvasStore
+      .getState()
+      .prepareSetActiveTileTabFocusTarget(tab.tabId, pane.id, nextInstanceId),
+  );
   return true;
 }
 
@@ -578,7 +621,11 @@ function openBlankTabInActiveGroup(router: KeybindingRouter): boolean {
   if (groupId === null) return false;
   // Reuse-if-active-is-blank is handled in the store action, so repeated
   // presses just re-focus the existing blank tab.
-  useEpicCanvasStore.getState().openBlankTabInPane(tab.tabId, groupId);
+  runNestedFocus(router, tab, () =>
+    useEpicCanvasStore
+      .getState()
+      .prepareOpenBlankTabInPaneFocusTarget(tab.tabId, groupId),
+  );
   return true;
 }
 
@@ -591,7 +638,11 @@ function splitActiveGroup(
   const groupId = getActiveGroupId(tab.tabId);
   if (groupId === null) return false;
   // The new empty pane self-renders the inline opener (PaneOpener); no trigger.
-  useEpicCanvasStore.getState().splitPaneEmptyInTab(tab.tabId, groupId, axis);
+  runNestedFocus(router, tab, () =>
+    useEpicCanvasStore
+      .getState()
+      .prepareSplitPaneEmptyFocusTarget(tab.tabId, groupId, axis),
+  );
   return true;
 }
 
@@ -600,7 +651,11 @@ function splitActiveGroupRight(router: KeybindingRouter): boolean {
   if (tab === null) return false;
   const groupId = getActiveGroupId(tab.tabId);
   if (groupId === null) return false;
-  useEpicCanvasStore.getState().splitPaneEmptyRightInTab(tab.tabId, groupId);
+  runNestedFocus(router, tab, () =>
+    useEpicCanvasStore
+      .getState()
+      .prepareSplitPaneEmptyFocusTarget(tab.tabId, groupId, "horizontal"),
+  );
   return true;
 }
 
@@ -618,7 +673,11 @@ function focusGroupInDirection(
   if (active === undefined) return false;
   const nextId = findNeighbor(active, rects, dir);
   if (nextId === null) return false;
-  useEpicCanvasStore.getState().setActiveTilePane(tab.tabId, nextId);
+  runNestedFocus(router, tab, () =>
+    useEpicCanvasStore
+      .getState()
+      .prepareSetActiveTilePaneFocusTarget(tab.tabId, nextId),
+  );
   focusGroupEditor(nextId);
   return true;
 }

@@ -17,6 +17,7 @@ function createEditor(): Editor {
       user,
       onCommentShortcut: null,
       placeholderText: "Start writing…",
+      titlePlaceholderText: "Untitled",
     }),
   });
 }

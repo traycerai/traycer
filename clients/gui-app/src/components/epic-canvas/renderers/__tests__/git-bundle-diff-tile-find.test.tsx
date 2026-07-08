@@ -16,6 +16,12 @@ import {
   useTileFindStore,
   type TileFindStateSnapshot,
 } from "@/stores/tile-find";
+import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
+import {
+  createOpenEpicStore,
+  type EpicStreamClientFactory,
+  type OpenEpicStoreHandle,
+} from "@/stores/epics/open-epic/store";
 import { GitDiffTile } from "../git-diff-tile";
 
 interface VirtuosoMockProps {
@@ -154,6 +160,19 @@ const NODE = makeGitBundleDiffTile({
   bundleGroup: "changes",
 });
 
+const EPIC_ID = "epic-1";
+
+let epicSessionHandle: OpenEpicStoreHandle;
+
+const fakeStreamClientFactory: EpicStreamClientFactory = () => ({
+  applyUpdate: () => undefined,
+  awareness: () => undefined,
+  applyArtifactRoomUpdate: () => undefined,
+  artifactRoomAwareness: () => undefined,
+  retryMigration: () => undefined,
+  close: () => undefined,
+});
+
 describe("<GitDiffTile /> bundle find", () => {
   beforeEach(() => {
     state.renderRows = true;
@@ -161,11 +180,18 @@ describe("<GitDiffTile /> bundle find", () => {
     useSettingsStore.setState({
       diffViewerPreferences: DEFAULT_DIFF_VIEWER_PREFERENCES,
     });
+    epicSessionHandle = createOpenEpicStore({
+      epicId: EPIC_ID,
+      userId: null,
+      streamClientFactory: fakeStreamClientFactory,
+      onAuthError: null,
+    });
   });
 
   afterEach(() => {
     cleanup();
     useTileFindStore.getState().resetForTests();
+    epicSessionHandle.dispose();
     vi.restoreAllMocks();
   });
 
@@ -205,22 +231,24 @@ function tileElement(): ReactNode {
   });
   return (
     <QueryClientProvider client={queryClient}>
-      <TabHostProvider hostId="host-1">
-        <TileFindScope
-          node={NODE}
-          viewTabId="view-1"
-          tileId="tile-1"
-          epicId="epic-1"
-          isActive
-        >
-          <GitDiffTile
+      <EpicSessionContext.Provider value={epicSessionHandle}>
+        <TabHostProvider hostId="host-1">
+          <TileFindScope
             node={NODE}
             viewTabId="view-1"
             tileId="tile-1"
+            epicId={EPIC_ID}
             isActive
-          />
-        </TileFindScope>
-      </TabHostProvider>
+          >
+            <GitDiffTile
+              node={NODE}
+              viewTabId="view-1"
+              tileId="tile-1"
+              isActive
+            />
+          </TileFindScope>
+        </TabHostProvider>
+      </EpicSessionContext.Provider>
     </QueryClientProvider>
   );
 }

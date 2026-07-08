@@ -42,10 +42,13 @@ export interface PersistentHistoryController {
   canGoBack(): boolean; // index > 0 over the live stack
   canGoForward(): boolean; // index < entries.length - 1
   /**
-   * Removes every NON-current entry for which `isDead(href)` is true, remaps the
-   * index to the surviving current entry, re-stamps `__TSR_index` contiguously,
-   * persists, and notifies CONTROLLER subscribers only. Returns whether the
-   * stack changed.
+   * Removes every NON-current entry for which `isDead(href)` is true, then
+   * collapses any adjacent byte-identical entries the removal left behind (or
+   * that were already present) so no two neighbouring entries ever share an
+   * href - two adjacent identical hrefs are always a dead back/forward step.
+   * Remaps the index to the surviving current entry, re-stamps `__TSR_index`
+   * contiguously, persists, and notifies CONTROLLER subscribers only. Returns
+   * whether the stack changed, including a collapse-only change.
    *
    * Critically load-free: it never calls `history.notify()` and so never drives
    * `router.load()`. The current entry is never pruned.
@@ -363,6 +366,38 @@ function capStackInPlace(
   return index - start;
 }
 
+interface PruneSurvivor {
+  readonly href: string;
+  readonly state: LocationState;
+  readonly wasCurrent: boolean;
+}
+
+/**
+ * Collapses adjacent byte-identical entries in a `prune`-filtered survivor
+ * list. Two adjacent identical hrefs are always a dead back/forward step
+ * (`go(-1)`/`go(1)` moves the cursor but not the rendered location), so this
+ * runs unconditionally over the whole list - not just over runs the dead-entry
+ * filter just made adjacent. When the current entry is part of a collapsed
+ * run, the surviving slot inherits the current marker so the cursor keeps
+ * pointing at the same href (mirrors the current-preserving collapse in
+ * `replaceState`).
+ */
+function collapseAdjacentDuplicates(
+  survivors: ReadonlyArray<PruneSurvivor>,
+): PruneSurvivor[] {
+  return survivors.reduce<PruneSurvivor[]>((collapsed, entry) => {
+    if (collapsed.length === 0) return [entry];
+    const previous = collapsed[collapsed.length - 1];
+    if (previous.href !== entry.href) {
+      return [...collapsed, entry];
+    }
+    if (entry.wasCurrent) {
+      collapsed[collapsed.length - 1] = { ...previous, wasCurrent: true };
+    }
+    return collapsed;
+  }, []);
+}
+
 /**
  * Resolves the seed stack (entries + cursor) from the remembered stack and the
  * shell override. The override is MERGED into the remembered stack rather than
@@ -464,6 +499,19 @@ export function createPersistentMemoryHistory(
         entries.splice(index + 1);
         states.splice(index + 1);
       }
+      // The pushed href can land byte-identical to the entry the cursor now
+      // sits on (e.g. a pane close's prepared fallback-focus push re-deriving
+      // the tab it came from). Two adjacent identical hrefs are always a dead
+      // back step, so treat this as landing on the existing entry instead of
+      // manufacturing a duplicate - general adjacent-duplicate guard, mirrors
+      // the collapse in `replaceState`.
+      if (entries[index] === path) {
+        states[index] = state;
+        restampIndices(states);
+        persistState(windowId, entries, index);
+        notifyController();
+        return;
+      }
       entries.push(path);
       states.push(state);
       index = entries.length - 1;
@@ -482,17 +530,36 @@ export function createPersistentMemoryHistory(
       entries[index] = path;
       states[index] = state;
       // Collapse an adjacent byte-identical entry created by an in-place
-      // replace. Two identical adjacent entries are always a dead back step
-      // (`go(-1)` moves the cursor but not the rendered href), so dropping the
-      // redundant current entry and stepping the cursor back onto its identical
+      // replace, on EITHER side of the current entry. Two identical adjacent
+      // entries are always a dead back/forward step (`go(-1)`/`go(1)` moves
+      // the cursor but not the rendered href), so dropping the redundant
       // neighbour is correct for ANY replace - this is a general
-      // adjacent-duplicate guard, not overlay-specific. (Its common producer is
-      // the settings/history overlay, whose entry is pushed onto the same path
-      // and differs only by a search-param flag that this `replace` then clears.)
+      // adjacent-duplicate guard, not overlay-specific. The BEHIND case's
+      // common producer is the settings/history overlay, whose entry is
+      // pushed onto the same path and differs only by a search-param flag
+      // that this `replace` then clears. The AHEAD case's producer is a
+      // cold-load redirect replacing a current overlay entry when the route
+      // it redirects to already sits one step ahead in a restored stack
+      // (`use-system-tab-modal.ts`'s focus-tab-first branches) - left
+      // uncollapsed, `canGoForward()` would stay true over a byte-identical
+      // dead forward step.
+      // Either collapse drops the NEIGHBOUR and keeps the just-replaced entry,
+      // so the state passed to THIS replace survives - the stack stays in
+      // agreement with the location TanStack caches after a replace, instead
+      // of diverging until the next real navigation.
+      let collapsedNeighbour = false;
       if (index > 0 && entries[index - 1] === path) {
-        entries.splice(index, 1);
-        states.splice(index, 1);
+        entries.splice(index - 1, 1);
+        states.splice(index - 1, 1);
         index -= 1;
+        collapsedNeighbour = true;
+      }
+      if (index < entries.length - 1 && entries[index + 1] === path) {
+        entries.splice(index + 1, 1);
+        states.splice(index + 1, 1);
+        collapsedNeighbour = true;
+      }
+      if (collapsedNeighbour) {
         restampIndices(states);
       }
       persistState(windowId, entries, index);
@@ -531,12 +598,25 @@ export function createPersistentMemoryHistory(
       // so the index can be remapped after filtering.
       const survivors = entries
         .map((href, i) => ({ href, state: states[i], wasCurrent: i === index }))
-        .filter((entry) => entry.wasCurrent || !isDead(entry.href));
+        .filter((entry) => {
+          if (entry.wasCurrent) {
+            return true;
+          }
+          return !isDead(entry.href);
+        });
 
-      // Current is never pruned, so a same-length result means nothing changed.
-      if (survivors.length === entries.length) return false;
+      // Collapse any adjacent byte-identical entries the dead-entry removal
+      // left behind (or that were already present), so the stack never ends
+      // up with two neighbouring entries that render the same location - a
+      // dead back/forward step.
+      const collapsed = collapseAdjacentDuplicates(survivors);
 
-      const nextIndex = survivors.findIndex((entry) => entry.wasCurrent);
+      // Current is never pruned, and a collapse never drops the sole
+      // surviving current marker, so an unchanged length means nothing
+      // changed at all (neither dead-entry removal nor collapse).
+      if (collapsed.length === entries.length) return false;
+
+      const nextIndex = collapsed.findIndex((entry) => entry.wasCurrent);
       // Mutate the closed-over arrays in place so `getLocation` keeps reading the
       // same references the history was created with, then re-stamp `__TSR_index`
       // contiguously so the next real `go(n)` lands on a location whose `state`
@@ -544,9 +624,9 @@ export function createPersistentMemoryHistory(
       entries.splice(
         0,
         entries.length,
-        ...survivors.map((entry) => entry.href),
+        ...collapsed.map((entry) => entry.href),
       );
-      states.splice(0, states.length, ...survivors.map((entry) => entry.state));
+      states.splice(0, states.length, ...collapsed.map((entry) => entry.state));
       restampIndices(states);
       index = nextIndex;
 

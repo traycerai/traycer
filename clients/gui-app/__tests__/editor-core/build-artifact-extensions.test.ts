@@ -20,6 +20,7 @@ function createArtifactEditor(): Editor {
       user,
       onCommentShortcut: null,
       placeholderText: "Start writing…",
+      titlePlaceholderText: "Untitled",
     }),
   });
 }
@@ -187,6 +188,7 @@ describe("buildArtifactExtensions", () => {
         user,
         onCommentShortcut: null,
         placeholderText: "Start writing…",
+        titlePlaceholderText: "Untitled",
       }),
     });
 
@@ -234,6 +236,7 @@ describe("buildArtifactExtensions", () => {
         user,
         onCommentShortcut: null,
         placeholderText: "Start writing…",
+        titlePlaceholderText: "Untitled",
       }),
     });
     editorA.commands.setContent("# H\n\n- [ ] todo\n\n```js\nfoo();\n```\n", {
@@ -256,6 +259,7 @@ describe("buildArtifactExtensions", () => {
         user,
         onCommentShortcut: null,
         placeholderText: "Start writing…",
+        titlePlaceholderText: "Untitled",
       }),
     });
 
