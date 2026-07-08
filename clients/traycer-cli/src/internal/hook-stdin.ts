@@ -27,13 +27,6 @@ export async function readStdinJson(): Promise<unknown | "timeout"> {
     }
     return Buffer.concat(chunks).toString("utf8");
   })();
-  // When the timeout branch wins and we call `process.stdin.destroy()`,
-  // the still-pending `for await` iterator above rejects. Attach a
-  // no-op catch so that rejection doesn't bubble up as an unhandled
-  // promise rejection - the timeout outcome is already wired through
-  // `wrappedRead` / `timeout` below.
-  read.catch(() => {});
-
   let timer: NodeJS.Timeout | undefined;
   type Outcome = { kind: "ok"; raw: string } | { kind: "timeout" };
   const timeout = new Promise<Outcome>((resolve) => {
@@ -42,7 +35,17 @@ export async function readStdinJson(): Promise<unknown | "timeout"> {
       STDIN_READ_TIMEOUT_MS,
     );
   });
-  const wrappedRead = read.then((raw): Outcome => ({ kind: "ok", raw }));
+  // `wrappedRead` must never reject: any stdin stream failure - including the
+  // `for await` iterator rejecting when the timeout branch calls
+  // `process.stdin.destroy()` - degrades to the same quiet no-op as an empty
+  // stream (`raw: ""` -> `null`). This is what upholds the "never throws"
+  // contract of `readObservedHarnessSessionId`; a hook must not fail on a
+  // stdin error. It also handles `read`'s rejection, so no separate
+  // unhandled-rejection catch is needed.
+  const wrappedRead = read.then(
+    (raw): Outcome => ({ kind: "ok", raw }),
+    (): Outcome => ({ kind: "ok", raw: "" }),
+  );
 
   const winner = await Promise.race([wrappedRead, timeout]);
   if (timer !== undefined) clearTimeout(timer);

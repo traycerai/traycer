@@ -1,10 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildAgentActivityFromHookCommand } from "../agent-activity-from-hook";
-import type { CommandContext } from "../../runner/runner";
-import type { RuntimeContext } from "../../runner/runtime";
-import { noopLogger } from "../../logger";
 import { callHostRpcFastFail } from "../../internal/host-rpc";
 import { cliError, CLI_ERROR_CODES } from "../../runner/errors";
+import {
+  makeCtx,
+  restoreAgentIdentityEnv,
+  restoreStdin,
+  setAgentIdentityEnv,
+  stubStdin,
+} from "./hook-test-helpers";
 
 vi.mock("../../internal/host-rpc", async () => {
   const actual = await vi.importActual<
@@ -18,72 +22,18 @@ vi.mock("../../internal/host-rpc", async () => {
 
 const rpcMock = vi.mocked(callHostRpcFastFail);
 
-function makeRuntime(): RuntimeContext {
-  return {
-    json: false,
-    quiet: false,
-    noProgress: false,
-    noBootstrap: false,
-    nonInteractive: false,
-    environment: "production",
-    logger: noopLogger,
-  };
-}
-
-function makeCtx(): CommandContext {
-  return {
-    runtime: makeRuntime(),
-    output: {
-      progress: vi.fn(),
-      human: vi.fn(),
-      humanRequired: vi.fn(),
-      emitResult: vi.fn(),
-      emitError: vi.fn(),
-    },
-    progress: vi.fn(),
-  };
-}
-
-const realStdin = Object.getOwnPropertyDescriptor(process, "stdin");
-
-function stubStdin(value: {
-  isTTY: boolean;
-  chunks: ReadonlyArray<string>;
-}): void {
-  Object.defineProperty(process, "stdin", {
-    configurable: true,
-    value: {
-      isTTY: value.isTTY,
-      async *[Symbol.asyncIterator]() {
-        for (const chunk of value.chunks) yield Buffer.from(chunk);
-      },
-    },
-  });
-}
-
-const PREV_ENV = {
-  epic: process.env.TRAYCER_EPIC_ID,
-  agent: process.env.TRAYCER_AGENT_ID,
-};
-
 beforeEach(() => {
   vi.clearAllMocks();
   rpcMock.mockResolvedValue({ accepted: true });
-  process.env.TRAYCER_EPIC_ID = "epic-1";
-  process.env.TRAYCER_AGENT_ID = "agent-1";
+  setAgentIdentityEnv();
 });
 
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
   vi.clearAllMocks();
-  if (realStdin !== undefined) {
-    Object.defineProperty(process, "stdin", realStdin);
-  }
-  if (PREV_ENV.epic === undefined) delete process.env.TRAYCER_EPIC_ID;
-  else process.env.TRAYCER_EPIC_ID = PREV_ENV.epic;
-  if (PREV_ENV.agent === undefined) delete process.env.TRAYCER_AGENT_ID;
-  else process.env.TRAYCER_AGENT_ID = PREV_ENV.agent;
+  restoreStdin();
+  restoreAgentIdentityEnv();
 });
 
 describe("buildAgentActivityFromHookCommand", () => {
