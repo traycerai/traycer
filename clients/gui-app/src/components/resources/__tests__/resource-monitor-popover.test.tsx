@@ -519,6 +519,45 @@ describe("ResourceMonitorPopover", () => {
     expect(screen.queryByRole("dialog", { name: "Resources" })).toBeNull();
   });
 
+  it("keeps the resources panel open when selecting a sort option", async () => {
+    const stub = installStubFactory();
+    render(
+      <TooltipProvider>
+        <ResourcesStreamMount epicId="epic-1" />
+        <ResourceMonitorPopover className={undefined} />
+      </TooltipProvider>,
+    );
+
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          app: app(),
+          owners: [owner({})],
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    expect(await screen.findByText("Traycer Host")).not.toBeNull();
+
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Sort resource rows" }),
+      { button: 0, ctrlKey: false, pointerType: "mouse" },
+    );
+    const cpuItem = screen.getByRole("menuitemradio", { name: "CPU" });
+
+    // Choosing a sort option closes the menu but must leave the Resources
+    // dialog (and its tray content) intact, and apply the selected sort.
+    fireEvent.click(cpuItem);
+
+    expect(screen.queryByRole("menuitemradio", { name: "CPU" })).toBeNull();
+    expect(screen.getByRole("dialog", { name: "Resources" })).not.toBeNull();
+    expect(screen.getByText("Traycer Host")).not.toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Sort resource rows" }).textContent,
+    ).toContain("CPU");
+  });
+
   it("stays open when focus moves to newly loaded content outside the panel", async () => {
     const stub = installStubFactory();
     const outside = document.createElement("input");
