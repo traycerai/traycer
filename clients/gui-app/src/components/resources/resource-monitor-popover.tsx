@@ -307,6 +307,11 @@ function ResourceMonitorContent(props: { readonly onClose: () => void }) {
       aria-label="Resources"
       className="w-[min(92vw,34rem)] gap-0 overflow-hidden rounded-xl p-0"
       onOpenAutoFocus={(event) => event.preventDefault()}
+      // Keep the panel open when focus moves elsewhere (switching tabs, a task
+      // finishing load and autofocusing its content, a terminal grabbing
+      // focus). Only a genuine outside pointer click or Escape should dismiss
+      // it; those go through onPointerDownOutside / onEscapeKeyDown, not here.
+      onFocusOutside={(event) => event.preventDefault()}
       onInteractOutside={(event) => {
         if (!sortMenuOpen) return;
         if (!(event.target instanceof Node)) return;

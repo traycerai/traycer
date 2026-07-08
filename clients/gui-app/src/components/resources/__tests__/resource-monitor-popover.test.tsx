@@ -472,4 +472,41 @@ describe("ResourceMonitorPopover", () => {
     expect(screen.queryByRole("menuitemradio", { name: "CPU" })).toBeNull();
     expect(screen.queryByRole("dialog", { name: "Resources" })).toBeNull();
   });
+
+  it("stays open when focus moves to newly loaded content outside the panel", async () => {
+    const stub = installStubFactory();
+    const outside = document.createElement("input");
+    document.body.appendChild(outside);
+
+    render(
+      <TooltipProvider>
+        <ResourcesStreamMount epicId="epic-1" />
+        <ResourceMonitorPopover className={undefined} />
+      </TooltipProvider>,
+    );
+
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          app: app(),
+          owners: [owner({})],
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    expect(await screen.findByText("Traycer Host")).not.toBeNull();
+
+    // A task finishing load autofocuses its content: focus lands on an element
+    // outside the popover, which Radix reports as a focus-outside dismissal.
+    act(() => {
+      outside.focus();
+      fireEvent.focusIn(outside);
+    });
+
+    expect(screen.getByRole("dialog", { name: "Resources" })).not.toBeNull();
+    expect(screen.getByText("Traycer Host")).not.toBeNull();
+
+    outside.remove();
+  });
 });
