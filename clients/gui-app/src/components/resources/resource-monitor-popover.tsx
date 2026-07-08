@@ -38,6 +38,8 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { Tooltip, TooltipTrigger } from "@/components/ui/tooltip";
+import { Tooltip as TooltipPrimitive } from "radix-ui";
 import {
   useGlobalResourceProjection,
   type GlobalResourceEpicEntry,
@@ -88,6 +90,11 @@ const SORT_LABELS: Record<ResourceSortOption, string> = {
 const METRIC_COLS = "flex shrink-0 items-center tabular-nums tracking-tight";
 const CPU_COL = "w-14 text-right";
 const MEM_COL = "w-20 text-right";
+// The collapsed sub-tree tooltip is a mini-panel mirroring the process tree, so
+// it rides the light popover surface rather than the default inverted (dark)
+// tooltip chip - matching the popover it extends.
+const HIDDEN_SUBPROCESS_TOOLTIP_SURFACE =
+  "z-50 w-fit max-w-[min(90vw,22rem)] origin-(--radix-tooltip-content-transform-origin) rounded-lg bg-popover p-1.5 text-popover-foreground shadow-md ring-1 ring-foreground/10 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=delayed-open]:animate-in data-[state=delayed-open]:fade-in-0 data-[state=delayed-open]:zoom-in-95 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95";
 const DESKTOP_RESOURCE_SAMPLE_INTERVAL_MS = 1000;
 const desktopAppResourceListeners = new Set<() => void>();
 let desktopAppResourceSnapshot: DesktopAppResourceUsage | null = null;
@@ -836,16 +843,20 @@ function ProcessLeafRow(props: { readonly processRow: ProcessDisplayRow }) {
   );
   if (hiddenCount === 0) return content;
   return (
-    <TooltipWrapper
-      label={
-        <HiddenSubprocessTooltip rows={props.processRow.hiddenDescendants} />
-      }
-      side="right"
-      sideOffset={8}
-      align="start"
-    >
-      {content}
-    </TooltipWrapper>
+    <Tooltip>
+      <TooltipTrigger asChild>{content}</TooltipTrigger>
+      <TooltipPrimitive.Portal>
+        <TooltipPrimitive.Content
+          side="right"
+          align="start"
+          sideOffset={8}
+          className={HIDDEN_SUBPROCESS_TOOLTIP_SURFACE}
+        >
+          <HiddenSubprocessTooltip rows={props.processRow.hiddenDescendants} />
+          <TooltipPrimitive.Arrow className="size-2.5 translate-y-[calc(-50%_-_2px)] rotate-45 rounded-xs bg-popover fill-popover" />
+        </TooltipPrimitive.Content>
+      </TooltipPrimitive.Portal>
+    </Tooltip>
   );
 }
 
