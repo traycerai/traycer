@@ -1,4 +1,5 @@
-import { useMemo, useState, useSyncExternalStore } from "react";
+import { useMemo, useRef, useState, useSyncExternalStore } from "react";
+import type { MouseEvent, PointerEvent } from "react";
 import { useNavigate, type UseNavigateResult } from "@tanstack/react-router";
 import { v4 as uuidv4 } from "uuid";
 import { useShallow } from "zustand/react/shallow";
@@ -85,6 +86,7 @@ const desktopAppResourceListeners = new Set<() => void>();
 let desktopAppResourceSnapshot: DesktopAppResourceUsage | null = null;
 let desktopAppResourceTimer: number | null = null;
 let desktopAppResourceInFlight = false;
+const MAX_VISIBLE_PROCESS_DEPTH = 2;
 const EMPTY_RESOURCE_SUMMARY: TaskResourceSummary = {
   cpuPercent: 0,
   rssBytes: 0,
@@ -137,6 +139,8 @@ interface TaskDisplayRow {
   readonly entry: GlobalResourceEpicEntry;
   readonly label: string;
   readonly tabOrder: number;
+  readonly cpuPercent: number;
+  readonly rssBytes: number;
   readonly owners: readonly OwnerDisplayRow[];
 }
 
@@ -144,6 +148,12 @@ interface DesktopResourceSummary {
   readonly cpuPercent: number;
   readonly rssBytes: number;
   readonly processCount: number;
+}
+
+interface ProcessDisplayRow {
+  readonly process: ResourceProcessSnapshotWire;
+  readonly depth: number;
+  readonly hiddenDescendants: readonly ResourceProcessSnapshotWire[];
 }
 
 export function ResourceMonitorPopover(props: ResourceMonitorPopoverProps) {
@@ -186,9 +196,13 @@ export function ResourceMonitorPopover(props: ResourceMonitorPopoverProps) {
 
 function ResourceMonitorContent(props: { readonly onClose: () => void }) {
   const [sortOption, setSortOption] = useState<ResourceSortOption>("memory");
+  const [sortMenuOpen, setSortMenuOpen] = useState(false);
   const [collapsedOwners, setCollapsedOwners] = useState<Set<string>>(
     () => new Set(),
   );
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const sortTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const dismissingSortMenuRef = useRef(false);
   const projection = useGlobalResourceProjection();
   const { tasks } = useCloudEpicTasksQuery(undefined, { enabled: true });
   const canvas = useResourceCanvasSnapshot();
@@ -261,6 +275,29 @@ function ResourceMonitorContent(props: { readonly onClose: () => void }) {
       ? (summary.rssBytes / projection.app.hostTotalMemoryBytes) * 100
       : 0;
 
+  const dismissSortMenuFromPanelClick = (
+    event: PointerEvent<HTMLDivElement>,
+  ): void => {
+    if (!sortMenuOpen) return;
+    if (!(event.target instanceof Node)) return;
+    if (sortTriggerRef.current?.contains(event.target) === true) return;
+
+    dismissingSortMenuRef.current = true;
+    setSortMenuOpen(false);
+    event.preventDefault();
+    event.stopPropagation();
+  };
+
+  const swallowDismissedSortMenuClick = (
+    event: MouseEvent<HTMLDivElement>,
+  ): void => {
+    if (!dismissingSortMenuRef.current) return;
+
+    dismissingSortMenuRef.current = false;
+    event.preventDefault();
+    event.stopPropagation();
+  };
+
   return (
     <PopoverContent
       align="end"
@@ -270,112 +307,133 @@ function ResourceMonitorContent(props: { readonly onClose: () => void }) {
       aria-label="Resources"
       className="w-[min(92vw,34rem)] gap-0 overflow-hidden rounded-xl p-0"
       onOpenAutoFocus={(event) => event.preventDefault()}
+      onInteractOutside={(event) => {
+        if (!sortMenuOpen) return;
+        if (!(event.target instanceof Node)) return;
+        if (panelRef.current?.contains(event.target) === true) {
+          event.preventDefault();
+        }
+      }}
     >
-      <div className="border-b border-border/60 px-3.5 pb-3 pt-3">
-        <div className="flex items-center justify-between gap-3">
-          <h4 className="truncate text-ui-sm font-medium text-foreground">
-            Resources
-          </h4>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button
-                type="button"
-                className="flex h-6 items-center gap-1 rounded-sm px-1.5 text-ui-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                aria-label="Sort resource rows"
+      <div
+        ref={panelRef}
+        className="min-w-0"
+        onPointerDownCapture={dismissSortMenuFromPanelClick}
+        onClickCapture={swallowDismissedSortMenuClick}
+      >
+        <div className="border-b border-border/60 px-3.5 pb-3 pt-3">
+          <div className="flex items-center justify-between gap-3">
+            <h4 className="truncate text-ui-sm font-medium text-foreground">
+              Resources
+            </h4>
+            <DropdownMenu
+              modal={false}
+              open={sortMenuOpen}
+              onOpenChange={setSortMenuOpen}
+            >
+              <DropdownMenuTrigger asChild>
+                <button
+                  ref={sortTriggerRef}
+                  type="button"
+                  className="flex h-6 items-center gap-1 rounded-sm px-1.5 text-ui-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                  aria-label="Sort resource rows"
+                >
+                  <ArrowDownNarrowWide className="size-3.5" />
+                  <span>{SORT_LABELS[sortOption]}</span>
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-40">
+                <DropdownMenuRadioGroup
+                  value={sortOption}
+                  onValueChange={(value) => {
+                    if (isResourceSortOption(value)) setSortOption(value);
+                  }}
+                >
+                  <DropdownMenuRadioItem value="memory">
+                    Memory
+                  </DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="cpu">CPU</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="name">
+                    Name
+                  </DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="tab">
+                    Tab order
+                  </DropdownMenuRadioItem>
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+
+          {summary === null ? (
+            <div className="mt-4 text-ui-xs text-muted-foreground">
+              Waiting for resource data.
+            </div>
+          ) : (
+            <>
+              <div className="mt-3 grid grid-cols-3 divide-x divide-border/50">
+                <MetricBlock
+                  label="CPU"
+                  value={formatCpuPercent(summary.cpuPercent)}
+                />
+                <MetricBlock
+                  label="Memory"
+                  value={formatMemoryBytes(summary.rssBytes)}
+                />
+                <MetricBlock
+                  label="RAM share"
+                  value={formatCpuPercent(memorySharePercent)}
+                />
+              </div>
+              <div
+                className="mt-3 h-1 w-full overflow-hidden rounded-full bg-muted/60"
+                role="progressbar"
+                aria-label="Tracked RAM share"
+                aria-valuenow={Math.round(memorySharePercent)}
+                aria-valuemin={0}
+                aria-valuemax={100}
               >
-                <ArrowDownNarrowWide className="size-3.5" />
-                <span>{SORT_LABELS[sortOption]}</span>
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-40">
-              <DropdownMenuRadioGroup
-                value={sortOption}
-                onValueChange={(value) => {
-                  if (isResourceSortOption(value)) setSortOption(value);
-                }}
-              >
-                <DropdownMenuRadioItem value="memory">
-                  Memory
-                </DropdownMenuRadioItem>
-                <DropdownMenuRadioItem value="cpu">CPU</DropdownMenuRadioItem>
-                <DropdownMenuRadioItem value="name">Name</DropdownMenuRadioItem>
-                <DropdownMenuRadioItem value="tab">
-                  Tab order
-                </DropdownMenuRadioItem>
-              </DropdownMenuRadioGroup>
-            </DropdownMenuContent>
-          </DropdownMenu>
+                <div
+                  className={cn(
+                    "h-full rounded-full transition-[width] duration-300",
+                    memoryShareBarClass(memorySharePercent),
+                  )}
+                  style={{
+                    width: `${Math.min(100, Math.max(0, memorySharePercent))}%`,
+                  }}
+                />
+              </div>
+              <ResourceCounts summary={summary} />
+            </>
+          )}
         </div>
 
-        {summary === null ? (
-          <div className="mt-4 text-ui-xs text-muted-foreground">
-            Waiting for resource data.
-          </div>
-        ) : (
-          <>
-            <div className="mt-3 grid grid-cols-3 divide-x divide-border/50">
-              <MetricBlock
-                label="CPU"
-                value={formatCpuPercent(summary.cpuPercent)}
-              />
-              <MetricBlock
-                label="Memory"
-                value={formatMemoryBytes(summary.rssBytes)}
-              />
-              <MetricBlock
-                label="RAM share"
-                value={formatCpuPercent(memorySharePercent)}
-              />
+        <div className="max-h-[min(58vh,36rem)] overflow-y-auto">
+          {desktopApp === null ? null : (
+            <DesktopAppResourceSection app={desktopApp} />
+          )}
+          {projection.app === null ? null : (
+            <HostAppResourceSection app={projection.app} />
+          )}
+          {summary === null ? null : (
+            <div className="py-1">
+              {taskRows.length === 0 ? (
+                <div className="px-3.5 py-4 text-center text-ui-xs text-muted-foreground">
+                  No active task process trees.
+                </div>
+              ) : (
+                taskRows.map((task) => (
+                  <TaskResourceSection
+                    key={task.entry.epicId}
+                    task={task}
+                    collapsedOwners={collapsedOwners}
+                    onToggleOwner={toggleOwner}
+                    onOpenOwner={openOwner}
+                  />
+                ))
+              )}
             </div>
-            <div
-              className="mt-3 h-1 w-full overflow-hidden rounded-full bg-muted/60"
-              role="progressbar"
-              aria-label="Tracked RAM share"
-              aria-valuenow={Math.round(memorySharePercent)}
-              aria-valuemin={0}
-              aria-valuemax={100}
-            >
-              <div
-                className={cn(
-                  "h-full rounded-full transition-[width] duration-300",
-                  memoryShareBarClass(memorySharePercent),
-                )}
-                style={{
-                  width: `${Math.min(100, Math.max(0, memorySharePercent))}%`,
-                }}
-              />
-            </div>
-            <ResourceCounts summary={summary} />
-          </>
-        )}
-      </div>
-
-      <div className="max-h-[min(58vh,36rem)] overflow-y-auto">
-        {desktopApp === null ? null : (
-          <DesktopAppResourceSection app={desktopApp} />
-        )}
-        {projection.app === null ? null : (
-          <HostAppResourceSection app={projection.app} />
-        )}
-        {summary === null ? null : (
-          <div className="py-1">
-            {taskRows.length === 0 ? (
-              <div className="px-3.5 py-4 text-center text-ui-xs text-muted-foreground">
-                No active task process trees.
-              </div>
-            ) : (
-              taskRows.map((task) => (
-                <TaskResourceSection
-                  key={task.entry.epicId}
-                  task={task}
-                  collapsedOwners={collapsedOwners}
-                  onToggleOwner={toggleOwner}
-                  onOpenOwner={openOwner}
-                />
-              ))
-            )}
-          </div>
-        )}
+          )}
+        </div>
       </div>
     </PopoverContent>
   );
@@ -562,7 +620,13 @@ function HostAppResourceSection(props: { readonly app: AppResourceUsage }) {
         />
       </div>
       {props.app.process === null ? null : (
-        <ProcessLeafRow process={props.app.process} depth={1} />
+        <ProcessLeafRow
+          processRow={{
+            process: props.app.process,
+            depth: 1,
+            hiddenDescendants: [],
+          }}
+        />
       )}
     </div>
   );
@@ -619,14 +683,6 @@ function TaskResourceSection(props: {
   readonly onToggleOwner: (key: string) => void;
   readonly onOpenOwner: (row: OwnerDisplayRow) => void;
 }) {
-  const ownerCpu = props.task.owners.reduce(
-    (sum, row) => sum + row.snapshot.cpuPercent,
-    0,
-  );
-  const ownerRss = props.task.owners.reduce(
-    (sum, row) => sum + row.snapshot.rssBytes,
-    0,
-  );
   return (
     <div className="border-b border-border/50 py-1 last:border-b-0">
       <div className="flex items-center justify-between px-3.5 py-1.5">
@@ -634,8 +690,8 @@ function TaskResourceSection(props: {
           {props.task.label}
         </span>
         <MetricPair
-          cpuPercent={ownerCpu}
-          rssBytes={ownerRss}
+          cpuPercent={props.task.cpuPercent}
+          rssBytes={props.task.rssBytes}
           className="text-ui-sm text-foreground/90"
         />
       </div>
@@ -716,37 +772,69 @@ function OwnerTreeRow(props: {
       </div>
       {props.collapsed
         ? null
-        : props.row.snapshot.processes.map((process) => (
+        : buildProcessRows(props.row.snapshot.processes).map((processRow) => (
             <ProcessLeafRow
-              key={`${process.rootPid}:${process.pid}`}
-              process={process}
-              depth={processDepth(process, props.row.snapshot.processes)}
+              key={`${processRow.process.rootPid}:${processRow.process.pid}`}
+              processRow={processRow}
             />
           ))}
     </div>
   );
 }
 
-function ProcessLeafRow(props: {
-  readonly process: ResourceProcessSnapshotWire;
-  readonly depth: number;
-}) {
-  return (
+function ProcessLeafRow(props: { readonly processRow: ProcessDisplayRow }) {
+  const hiddenCount = props.processRow.hiddenDescendants.length;
+  const content = (
     <div
+      tabIndex={hiddenCount === 0 ? undefined : 0}
       className="flex items-center justify-between gap-3 px-3.5 py-1 text-muted-foreground transition-colors hover:bg-muted/40"
-      style={{ paddingLeft: `calc(1.25rem + ${props.depth} * 1rem)` }}
+      style={{
+        paddingLeft: `calc(1.25rem + ${props.processRow.depth} * 1rem)`,
+      }}
     >
       <div className="flex min-w-0 items-center gap-1.5">
         <span className="size-1 shrink-0 rounded-full bg-muted-foreground/40" />
         <span className="min-w-0 truncate text-ui-xs">
-          {processLabel(props.process)}
+          {processLeafLabel(props.processRow.process, hiddenCount)}
         </span>
       </div>
       <MetricPair
-        cpuPercent={props.process.cpuPercent}
-        rssBytes={props.process.rssBytes}
+        cpuPercent={props.processRow.process.cpuPercent}
+        rssBytes={props.processRow.process.rssBytes}
         className="text-ui-xs text-muted-foreground/80"
       />
+    </div>
+  );
+  if (hiddenCount === 0) return content;
+  return (
+    <TooltipWrapper
+      label={
+        <HiddenSubprocessTooltip
+          processes={props.processRow.hiddenDescendants}
+        />
+      }
+      side="right"
+      sideOffset={8}
+      align="start"
+    >
+      {content}
+    </TooltipWrapper>
+  );
+}
+
+function HiddenSubprocessTooltip(props: {
+  readonly processes: readonly ResourceProcessSnapshotWire[];
+}) {
+  return (
+    <div className="flex max-h-[min(40vh,18rem)] min-w-0 flex-col gap-1 overflow-y-auto text-left">
+      {props.processes.map((process) => (
+        <div
+          key={`${process.rootPid}:${process.pid}`}
+          className="max-w-full truncate"
+        >
+          {processLabel(process)}
+        </div>
+      ))}
     </div>
   );
 }
@@ -774,28 +862,40 @@ function buildTaskRows(input: {
 }): TaskDisplayRow[] {
   const rows = input.entries.flatMap((entry): TaskDisplayRow[] => {
     if (entry.owners.length === 0) return [];
-    const owners = entry.owners.map((snapshot): OwnerDisplayRow => {
-      const key = ownerKey(
-        snapshot.owner.epicId,
-        snapshot.owner.kind,
-        snapshot.owner.ownerId,
-      );
-      const location = input.canvasIndex.locationByOwner.get(key) ?? null;
-      const record = input.recordByOwner.get(key) ?? null;
-      return {
-        snapshot,
-        label: ownerLabel(snapshot, location, record),
-        canOpen: canOpenOwner(snapshot, location, record),
-        tabOrder:
-          input.canvasIndex.tabOrderByOwner.get(key) ?? Number.MAX_SAFE_INTEGER,
-        location,
-      };
-    });
+    const owners = entry.owners
+      .filter(shouldShowOwnerRow)
+      .map((snapshot): OwnerDisplayRow => {
+        const key = ownerKey(
+          snapshot.owner.epicId,
+          snapshot.owner.kind,
+          snapshot.owner.ownerId,
+        );
+        const location = input.canvasIndex.locationByOwner.get(key) ?? null;
+        const record = input.recordByOwner.get(key) ?? null;
+        return {
+          snapshot,
+          label: ownerLabel(snapshot, location, record),
+          canOpen: canOpenOwner(snapshot, location, record),
+          tabOrder:
+            input.canvasIndex.tabOrderByOwner.get(key) ??
+            Number.MAX_SAFE_INTEGER,
+          location,
+        };
+      });
+    if (owners.length === 0) return [];
     return [
       {
         entry,
         label: taskLabel(entry.epicId, input.canvas, input.epicTitleById),
         tabOrder: taskTabOrder(entry.epicId, input.canvas),
+        cpuPercent: entry.owners.reduce(
+          (sum, snapshot) => sum + snapshot.cpuPercent,
+          0,
+        ),
+        rssBytes: entry.owners.reduce(
+          (sum, snapshot) => sum + snapshot.rssBytes,
+          0,
+        ),
         owners: sortOwnerRows(owners, input.sortOption),
       },
     ];
@@ -873,10 +973,10 @@ function sortTaskRows(
   const sorted = [...rows];
   switch (sortOption) {
     case "memory":
-      sorted.sort((a, b) => ownerRss(b.owners) - ownerRss(a.owners));
+      sorted.sort((a, b) => b.rssBytes - a.rssBytes);
       break;
     case "cpu":
-      sorted.sort((a, b) => ownerCpu(b.owners) - ownerCpu(a.owners));
+      sorted.sort((a, b) => b.cpuPercent - a.cpuPercent);
       break;
     case "name":
       sorted.sort((a, b) => a.label.localeCompare(b.label));
@@ -1018,6 +1118,11 @@ function ownerKey(
   return `${epicId}\x1f${kind}\x1f${ownerId}`;
 }
 
+function shouldShowOwnerRow(snapshot: OwnerResourceSnapshotWire): boolean {
+  if (snapshot.owner.kind !== "terminal") return true;
+  return snapshot.processCount > 0 || snapshot.processes.length > 0;
+}
+
 function resourceOwnerKindForNodeType(
   type: string,
 ): ResourceOwnerKindWire | null {
@@ -1089,13 +1194,41 @@ function processLabel(process: ResourceProcessSnapshotWire): string {
   return `${process.name} (${process.pid})`;
 }
 
+function processLeafLabel(
+  process: ResourceProcessSnapshotWire,
+  hiddenCount: number,
+): string {
+  const label = processLabel(process);
+  if (hiddenCount === 0) return label;
+  return `${label} (${countLabel(hiddenCount, "sub-process", "sub-processes")})`;
+}
+
+function buildProcessRows(
+  processes: readonly ResourceProcessSnapshotWire[],
+): ProcessDisplayRow[] {
+  const byPid = processByPid(processes);
+  return processes.flatMap((process): ProcessDisplayRow[] => {
+    const depth = processDepth(process, byPid);
+    if (depth > MAX_VISIBLE_PROCESS_DEPTH) return [];
+    return [
+      {
+        process,
+        depth,
+        hiddenDescendants:
+          depth === MAX_VISIBLE_PROCESS_DEPTH
+            ? hiddenProcessDescendants(process, processes, byPid)
+            : [],
+      },
+    ];
+  });
+}
+
 function processDepth(
   process: ResourceProcessSnapshotWire,
-  processes: readonly ResourceProcessSnapshotWire[],
+  byPid: ReadonlyMap<number, ResourceProcessSnapshotWire>,
 ): number {
   let depth = process.pid === process.rootPid ? 1 : 2;
   let cursor = process;
-  const byPid = new Map(processes.map((entry) => [entry.pid, entry]));
   const visited = new Set<number>([process.pid]);
   while (cursor.parentPid !== null && cursor.parentPid !== process.rootPid) {
     const parent = byPid.get(cursor.parentPid);
@@ -1107,13 +1240,41 @@ function processDepth(
   return depth;
 }
 
-function ownerCpu(rows: readonly OwnerDisplayRow[]): number {
-  return rows.reduce((sum, row) => sum + row.snapshot.cpuPercent, 0);
+function processByPid(
+  processes: readonly ResourceProcessSnapshotWire[],
+): ReadonlyMap<number, ResourceProcessSnapshotWire> {
+  return new Map(processes.map((entry) => [entry.pid, entry]));
 }
 
-function ownerRss(rows: readonly OwnerDisplayRow[]): number {
-  return rows.reduce((sum, row) => sum + row.snapshot.rssBytes, 0);
+function hiddenProcessDescendants(
+  process: ResourceProcessSnapshotWire,
+  processes: readonly ResourceProcessSnapshotWire[],
+  byPid: ReadonlyMap<number, ResourceProcessSnapshotWire>,
+): ResourceProcessSnapshotWire[] {
+  return processes.filter(
+    (candidate) =>
+      processDepth(candidate, byPid) > MAX_VISIBLE_PROCESS_DEPTH &&
+      isProcessDescendantOf(candidate, process.pid, byPid),
+  );
 }
+
+function isProcessDescendantOf(
+  process: ResourceProcessSnapshotWire,
+  ancestorPid: number,
+  byPid: ReadonlyMap<number, ResourceProcessSnapshotWire>,
+): boolean {
+  let cursor = process;
+  const visited = new Set<number>([process.pid]);
+  while (cursor.parentPid !== null) {
+    if (cursor.parentPid === ancestorPid) return true;
+    const parent = byPid.get(cursor.parentPid);
+    if (parent === undefined || visited.has(parent.pid)) break;
+    visited.add(parent.pid);
+    cursor = parent;
+  }
+  return false;
+}
+
 
 function countLabel(count: number, singular: string, plural: string): string {
   return `${formatProcessCount(count)} ${count === 1 ? singular : plural}`;

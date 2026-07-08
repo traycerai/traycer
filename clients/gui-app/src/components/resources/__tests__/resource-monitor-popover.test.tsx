@@ -193,6 +193,24 @@ function owner(
         cpuPercent: 10,
         rssBytes: 60 * 1024 * 1024,
       }),
+      resourceProcess({
+        pid: 102,
+        parentPid: 101,
+        rootPid: 100,
+        name: "sh",
+        command: "/bin/sh",
+        cpuPercent: 0,
+        rssBytes: 2 * 1024 * 1024,
+      }),
+      resourceProcess({
+        pid: 103,
+        parentPid: 102,
+        rootPid: 100,
+        name: "make",
+        command: "make",
+        cpuPercent: 1,
+        rssBytes: 4 * 1024 * 1024,
+      }),
     ],
     ...over,
   };
@@ -307,9 +325,25 @@ describe("ResourceMonitorPopover", () => {
     expect(screen.getByText("Resource Task")).not.toBeNull();
     expect(screen.getByText("Background Task")).not.toBeNull();
     expect(screen.getByText("Terminal Alpha")).not.toBeNull();
-    expect(screen.getAllByText("node dev-server.js")).toHaveLength(2);
+    expect(
+      screen.getAllByText("node dev-server.js (2 sub-processes)"),
+    ).toHaveLength(2);
+    expect(screen.queryByText("/bin/sh")).toBeNull();
+    expect(screen.queryByText("make")).toBeNull();
     expect(screen.getByText("2 open terminals")).not.toBeNull();
     expect(screen.queryByText(/terminal processes/)).toBeNull();
+
+    const cappedProcessRow = screen
+      .getAllByText("node dev-server.js (2 sub-processes)")[0]
+      .closest("[tabindex='0']");
+    if (cappedProcessRow === null) {
+      throw new Error("Expected capped process row to be focusable");
+    }
+    fireEvent.focus(cappedProcessRow);
+    expect((await screen.findByRole("tooltip")).textContent).toContain(
+      "/bin/sh",
+    );
+    expect(screen.getByRole("tooltip").textContent).toContain("make");
 
     fireEvent.click(screen.getByText("Terminal Alpha"));
     expect(canvasMock.setActiveTilePane).toHaveBeenCalledWith(
@@ -323,5 +357,119 @@ describe("ResourceMonitorPopover", () => {
     );
     expect(tabNavigationMock.navigateToTabIntent).toHaveBeenCalledTimes(1);
     expect(canvasMock.openTileInTab).not.toHaveBeenCalled();
+  });
+
+  it("hides terminal rows with no subprocesses while keeping aggregate metrics", () => {
+    const stub = installStubFactory();
+
+    render(
+      <TooltipProvider>
+        <ResourcesStreamMount epicId="epic-1" />
+        <ResourceMonitorPopover className={undefined} />
+      </TooltipProvider>,
+    );
+
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [
+            owner({}),
+            owner({
+              owner: {
+                kind: "terminal",
+                hostId: "host-1",
+                epicId: "epic-1",
+                ownerId: "term-idle",
+              },
+              rootPids: [],
+              activeProcessName: "idle-shell",
+              processCount: 0,
+              cpuPercent: 77,
+              rssBytes: 900 * 1024 * 1024,
+              processes: [],
+            }),
+          ],
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+
+    expect(screen.getByText("Terminal Alpha")).not.toBeNull();
+    expect(screen.queryByText("idle-shell")).toBeNull();
+    expect(screen.getByText("2 open terminals")).not.toBeNull();
+    expect(screen.getAllByText("89%").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("1000 MB").length).toBeGreaterThan(0);
+  });
+
+  it("keeps the resources panel open when clicking inside it to dismiss the sort menu", async () => {
+    const stub = installStubFactory();
+    render(
+      <TooltipProvider>
+        <ResourcesStreamMount epicId="epic-1" />
+        <ResourceMonitorPopover className={undefined} />
+      </TooltipProvider>,
+    );
+
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          app: app(),
+          owners: [owner({})],
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    expect(await screen.findByText("Traycer Host")).not.toBeNull();
+
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Sort resource rows" }),
+      {
+        button: 0,
+        ctrlKey: false,
+        pointerType: "mouse",
+      },
+    );
+    expect(screen.getByRole("menuitemradio", { name: "CPU" })).not.toBeNull();
+
+    fireEvent.pointerDown(screen.getByText("Traycer Host"), {
+      button: 0,
+      pointerType: "mouse",
+    });
+    fireEvent.mouseDown(screen.getByText("Traycer Host"), { button: 0 });
+    fireEvent.pointerUp(screen.getByText("Traycer Host"), {
+      button: 0,
+      pointerType: "mouse",
+    });
+    fireEvent.click(screen.getByText("Traycer Host"));
+
+    expect(screen.queryByRole("menuitemradio", { name: "CPU" })).toBeNull();
+    expect(screen.getByRole("dialog", { name: "Resources" })).not.toBeNull();
+    expect(screen.getByText("Traycer Host")).not.toBeNull();
+
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Sort resource rows" }),
+      {
+        button: 0,
+        ctrlKey: false,
+        pointerType: "mouse",
+      },
+    );
+    expect(screen.getByRole("menuitemradio", { name: "CPU" })).not.toBeNull();
+
+    fireEvent.pointerDown(document.body, {
+      button: 0,
+      pointerType: "mouse",
+    });
+    fireEvent.mouseDown(document.body, { button: 0 });
+    fireEvent.pointerUp(document.body, {
+      button: 0,
+      pointerType: "mouse",
+    });
+    fireEvent.click(document.body);
+
+    expect(screen.queryByRole("menuitemradio", { name: "CPU" })).toBeNull();
+    expect(screen.queryByRole("dialog", { name: "Resources" })).toBeNull();
   });
 });
