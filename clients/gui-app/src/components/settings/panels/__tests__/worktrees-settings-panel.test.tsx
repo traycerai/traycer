@@ -447,6 +447,7 @@ describe("useWorktreeListing", () => {
 
   it("flags a truncated list as partial instead of hiding the failed page", async () => {
     const first = entry({ worktreePath: "/wt/a", branch: "feat-a" });
+    let firstPageCalls = 0;
     let secondPageCalls = 0;
     const client = new HostClient<HostRpcRegistry>({
       registry: hostRpcRegistry,
@@ -457,6 +458,7 @@ describe("useWorktreeListing", () => {
         handlers: {
           "worktree.listAllForHost": (params) => {
             if (params.cursor === null) {
+              firstPageCalls += 1;
               return { worktrees: [first], nextCursor: first.worktreePath };
             }
             secondPageCalls += 1;
@@ -496,6 +498,16 @@ describe("useWorktreeListing", () => {
     expect(result.current.isError).toBe(false);
     expect(result.current.isEmpty).toBe(false);
     expect(result.current.errorMessage).not.toBeNull();
+
+    const firstPageCallsBeforeRetry = firstPageCalls;
+    const secondPageCallsBeforeRetry = secondPageCalls;
+    await act(async () => {
+      await result.current.retryPartial();
+    });
+    // Retrying resumes only the failed page - the already-landed first page
+    // must not be re-requested.
+    expect(firstPageCalls).toBe(firstPageCallsBeforeRetry);
+    expect(secondPageCalls).toBe(secondPageCallsBeforeRetry + 1);
   });
 });
 

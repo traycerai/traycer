@@ -51,6 +51,13 @@ export function useWorktreeListing(
    */
   readonly isPartial: boolean;
   readonly refresh: () => Promise<unknown>;
+  /**
+   * Resumes a truncated list by re-requesting only the page that failed - via
+   * the same `fetchNextPage`/`getNextPageParam` path auto-pagination already
+   * uses - instead of `refresh`'s full `refetch()`, which would re-request
+   * every already-landed page too.
+   */
+  readonly retryPartial: () => Promise<unknown>;
   readonly refreshing: boolean;
 } {
   const readiness = useReactiveHostReadiness(client);
@@ -138,6 +145,7 @@ export function useWorktreeListing(
     isEmpty: isSuccess && !hasNextPage && worktrees.length === 0,
     isPartial: isError && worktrees.length > 0,
     refresh: () => refetch(),
+    retryPartial: () => fetchNextPage(),
     refreshing: isFetching,
   };
 }

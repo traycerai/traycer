@@ -633,7 +633,7 @@ function WorktreesBody(props: {
       {listing.isPartial ? (
         <WorktreesPartialListingBanner
           message={listing.errorMessage}
-          onRetry={listing.refresh}
+          onRetry={listing.retryPartial}
         />
       ) : null}
       {content}
@@ -652,7 +652,11 @@ function WorktreesPartialListingBanner(props: {
   readonly onRetry: () => Promise<unknown>;
 }): ReactNode {
   return (
-    <div className="flex items-center gap-2 border-b border-border/60 bg-amber-500/10 px-4 py-2 text-ui-sm text-amber-700 dark:text-amber-300">
+    <div
+      role="status"
+      aria-live="polite"
+      className="flex items-center gap-2 border-b border-border/60 bg-amber-500/10 px-4 py-2 text-ui-sm text-amber-700 dark:text-amber-300"
+    >
       <AlertTriangle className="size-4 shrink-0" aria-hidden />
       <span className="min-w-0 flex-1 wrap-anywhere">
         Some worktrees could not be loaded
@@ -2376,7 +2380,12 @@ function WorktreePrAnchor(props: {
       event.stopPropagation();
       if (runnerHost === null) return;
       event.preventDefault();
-      void runnerHost.openExternalLink(props.href);
+      // If the RunnerHost call rejects, fall back to a plain browser open so
+      // the click never goes dead - preventDefault() already blocked native
+      // navigation, so this is the only remaining path to the link.
+      runnerHost.openExternalLink(props.href).catch(() => {
+        window.open(props.href, "_blank", "noreferrer");
+      });
     },
     [props.href, runnerHost],
   );
