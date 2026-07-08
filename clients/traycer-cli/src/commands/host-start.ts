@@ -278,6 +278,7 @@ export async function runHostStart(
       cwd: target.cwd,
       env,
       stdio: ["ignore", logFd, logFd],
+      windowsHide: process.platform === "win32",
       ...(launch.windowsVerbatimArguments
         ? { windowsVerbatimArguments: true }
         : {}),

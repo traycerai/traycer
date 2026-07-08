@@ -1,6 +1,6 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { readHostPidMetadata } from "../../host/pid-metadata";
 import { CLI_ERROR_CODES, cliError } from "../../runner/errors";
 import { isProcessAlive } from "../../store/cli-lock";
@@ -8,6 +8,7 @@ import type { CliInvocation } from "../cli-binary";
 import { escapeXml } from "../escape-xml";
 import { windowsTaskName, type ServiceLabel } from "../label";
 import { ProcessRunError, runCommand } from "../process-runner";
+import { cliHomeDir } from "../../store/paths";
 import type {
   InstallServiceOptions,
   ServiceController,
@@ -52,6 +53,7 @@ async function installService(options: InstallServiceOptions): Promise<void> {
   // built-in `utf16le` encoder paired with a leading U+FEFF BOM
   // handles surrogate pairs / non-BMP code points (emoji, etc.) that
   // the hand-rolled writeUInt16LE-per-char loop would corrupt.
+  await writeHiddenHostLauncher(options);
   const xmlBody = buildTaskXml({ label: options.label, cli: options.cli });
   await writeFile(xmlPath, Buffer.from(`﻿${xmlBody}`, "utf16le"));
   try {
@@ -104,6 +106,7 @@ async function uninstallService(
     timeoutMs: 30_000,
     tolerateNonZeroExit: true,
   });
+  await rm(hiddenHostLauncherPath(options.label), { force: true });
 }
 
 async function statusService(label: ServiceLabel): Promise<ServiceStatus> {
@@ -230,6 +233,11 @@ interface BuildTaskXmlOptions {
   readonly cli: CliInvocation;
 }
 
+interface TaskExecAction {
+  readonly command: string;
+  readonly argumentsLine: string;
+}
+
 // Quote a single token for a Windows command line the way CommandLineToArgvW
 // parses it: a backslash is literal unless it runs up to a `"`. So we double
 // only the backslashes immediately before a quote (escaping the quote with one
@@ -240,12 +248,57 @@ function quoteWindowsArg(arg: string): string {
   return `"${escaped}"`;
 }
 
+function quoteVbsString(value: string): string {
+  return `"${value.replace(/"/g, '""')}"`;
+}
+
+function hiddenHostLauncherPath(label: ServiceLabel): string {
+  return join(cliHomeDir(label.environment), "host-start-hidden.vbs");
+}
+
+function buildHiddenHostLauncher(cli: CliInvocation): string {
+  const commandLine = [cli.command, ...cli.args, "host", "start"]
+    .map(quoteWindowsArg)
+    .join(" ");
+  return [
+    "Option Explicit",
+    "Dim shell",
+    "Dim exitCode",
+    'Set shell = CreateObject("WScript.Shell")',
+    `exitCode = shell.Run(${quoteVbsString(commandLine)}, 0, True)`,
+    "WScript.Quit exitCode",
+    "",
+  ].join("\r\n");
+}
+
+async function writeHiddenHostLauncher(
+  options: BuildTaskXmlOptions,
+): Promise<void> {
+  const launcherPath = hiddenHostLauncherPath(options.label);
+  await mkdir(dirname(launcherPath), { recursive: true });
+  const body = buildHiddenHostLauncher(options.cli);
+  await writeFile(launcherPath, Buffer.from(`\uFEFF${body}`, "utf16le"));
+}
+
+function windowsSystemExecutable(filename: string): string {
+  const root =
+    process.env.SystemRoot ?? process.env.SYSTEMROOT ?? "C:\\Windows";
+  return `${root.replace(/[\\/]+$/, "")}\\System32\\${filename}`;
+}
+
+function buildTaskAction(label: ServiceLabel): TaskExecAction {
+  const argv = ["//B", "//Nologo", hiddenHostLauncherPath(label)];
+  return {
+    command: windowsSystemExecutable("wscript.exe"),
+    argumentsLine: argv.map(quoteWindowsArg).join(" "),
+  };
+}
+
 function buildTaskXml(options: BuildTaskXmlOptions): string {
-  // <Command> takes a single executable; <Arguments> takes the rest as
-  // a single string. schtasks parses the latter with shell rules, so
-  // quote each token explicitly.
-  const argv = [...options.cli.args, "host", "start"];
-  const argumentsLine = argv.map(quoteWindowsArg).join(" ");
+  // Task Scheduler shows console-subsystem executables launched directly from
+  // an interactive task. Use the GUI Windows Script Host as the root process,
+  // then have the generated launcher run the CLI hidden.
+  const action = buildTaskAction(options.label);
   const userId = resolveTaskUserId();
   return `<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
@@ -278,7 +331,7 @@ function buildTaskXml(options: BuildTaskXmlOptions): string {
     </IdleSettings>
     <AllowStartOnDemand>true</AllowStartOnDemand>
     <Enabled>true</Enabled>
-    <Hidden>false</Hidden>
+    <Hidden>true</Hidden>
     <RunOnlyIfIdle>false</RunOnlyIfIdle>
     <DisallowStartOnRemoteAppSession>false</DisallowStartOnRemoteAppSession>
     <UseUnifiedSchedulingEngine>true</UseUnifiedSchedulingEngine>
@@ -292,8 +345,8 @@ function buildTaskXml(options: BuildTaskXmlOptions): string {
   </Settings>
   <Actions Context="Author">
     <Exec>
-      <Command>${escapeXml(options.cli.command)}</Command>
-      <Arguments>${escapeXml(argumentsLine)}</Arguments>
+      <Command>${escapeXml(action.command)}</Command>
+      <Arguments>${escapeXml(action.argumentsLine)}</Arguments>
     </Exec>
   </Actions>
 </Task>
@@ -336,4 +389,7 @@ function resolveTaskUserId(): string {
   });
 }
 
-export { buildTaskXml as buildScheduledTaskXml };
+export {
+  buildTaskXml as buildScheduledTaskXml,
+  buildHiddenHostLauncher as buildWindowsHiddenHostLauncher,
+};

@@ -157,6 +157,7 @@ interface Recorded {
     cwd: string | undefined;
     env: Record<string, string | undefined>;
     stdio: unknown;
+    windowsHide: boolean | undefined;
   }>;
 }
 
@@ -196,6 +197,7 @@ function makeRunStubs(
         cwd: typeof options.cwd === "string" ? options.cwd : undefined,
         env: (options.env ?? {}) as Record<string, string | undefined>,
         stdio: options.stdio,
+        windowsHide: options.windowsHide,
       });
       return childAsProcess;
     },
@@ -278,6 +280,7 @@ describe("runHostStart - installed-record launch path", () => {
     expect(call?.env.EXTRA_FROM_OVERRIDE).toBe("1");
     expect(call?.env.TRAYCER_TEST_UNSET).toBeUndefined();
     expect(call?.env.TERM_PROGRAM).toBe("traycer");
+    expect(call?.windowsHide).toBe(process.platform === "win32");
     // Production launch must NOT route through a shell - the spawn
     // command must be the executable itself.
     expect(call?.command.endsWith("/sh")).toBe(false);
@@ -475,8 +478,8 @@ describe("service manifests invoke `host start` (slot from config.environment) w
     expect(unit).not.toContain("--node-bin");
   });
 
-  it("Windows scheduled task XML invokes `host start` without --environment/--bundle", async () => {
-    const { buildScheduledTaskXml } =
+  it("Windows scheduled task XML invokes the hidden launcher, which runs `host start` without --environment/--bundle", async () => {
+    const { buildScheduledTaskXml, buildWindowsHiddenHostLauncher } =
       await import("../../service/platforms/windows");
     const prevUsername = process.env.USERNAME;
     process.env.USERNAME = "testuser";
@@ -485,22 +488,36 @@ describe("service manifests invoke `host start` (slot from config.environment) w
       else process.env.USERNAME = prevUsername;
     };
     try {
+      const cli = {
+        command: "C:\\Users\\test\\.traycer\\cli\\bin\\traycer.exe",
+        args: [],
+      };
       const xml = buildScheduledTaskXml({
         label: {
           id: "ai.traycer.host.prod",
           displayName: "Traycer Host",
           environment: "production",
         } as never,
-        cli: {
-          command: "C:\\Users\\test\\.traycer\\cli\\bin\\traycer.exe",
-          args: [],
-        },
+        cli,
       });
-      expect(xml).toContain("host");
-      expect(xml).toContain("start");
-      expect(xml).not.toContain("--environment");
-      expect(xml).not.toContain("--bundle");
-      expect(xml).not.toContain("--node-bin");
+      const launcher = buildWindowsHiddenHostLauncher(cli);
+      expect(xml).toContain("<Hidden>true</Hidden>");
+      expect(xml).toContain("wscript.exe");
+      expect(xml).toContain("host-start-hidden.vbs");
+      expect(xml).not.toContain(
+        "<Command>C:\\Users\\test\\.traycer\\cli\\bin\\traycer.exe</Command>",
+      );
+      expect(launcher).toContain('Set shell = CreateObject("WScript.Shell")');
+      expect(launcher).toContain("shell.Run");
+      expect(launcher).toContain(", 0, True)");
+      expect(launcher).toContain(
+        "C:\\Users\\test\\.traycer\\cli\\bin\\traycer.exe",
+      );
+      expect(launcher).toContain("host");
+      expect(launcher).toContain("start");
+      expect(`${xml}\n${launcher}`).not.toContain("--environment");
+      expect(`${xml}\n${launcher}`).not.toContain("--bundle");
+      expect(`${xml}\n${launcher}`).not.toContain("--node-bin");
     } finally {
       restoreUsername();
     }

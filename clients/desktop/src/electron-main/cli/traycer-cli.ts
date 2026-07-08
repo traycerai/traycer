@@ -159,6 +159,7 @@ export async function runTraycerCli(
         encoding: "utf8",
         maxBuffer: opts.maxBuffer,
         timeout: opts.timeoutMs,
+        windowsHide: true,
       },
       (err, stdout, stderr) => {
         if (err !== null) {
@@ -412,6 +413,7 @@ export async function runTraycerCliWithStdin<T>(
   return new Promise<T>((resolve, reject) => {
     const child = spawn(inv.command, allArgs, {
       stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
     });
     let stdout = "";
     let stderrTail = "";
@@ -552,6 +554,7 @@ export async function streamTraycerCliJson<T>(
     const child = spawn(inv.command, allArgs, {
       env: opts.env === null ? process.env : { ...process.env, ...opts.env },
       stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
     });
     let stdoutBuffer = "";
     let stderrTail = "";
