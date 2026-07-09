@@ -2,6 +2,7 @@ import { mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Environment } from "../runner/environment";
+import { devDesktopSlotForEnvironment } from "./dev-desktop-slot";
 
 // ~/.traycer/ is the single Traycer root. Per the Native Packaging
 // tech plan, prod and dev *components* are siblings inside it rather
@@ -14,18 +15,21 @@ import type { Environment } from "../runner/environment";
 //   ~/.traycer/cli/manifest.json               - prod install manifest
 //   ~/.traycer/cli/.lock                       - prod mutation lock
 //   ~/.traycer/cli/post-finalize.json          - prod pending-upgrade helper marker
-//   ~/.traycer/cli/dev/manifest.json           - dev install manifest
-//   ~/.traycer/cli/dev/.lock                   - dev mutation lock
-//   ~/.traycer/cli/dev/post-finalize.json      - dev pending-upgrade helper marker
+//   ~/.traycer/cli/dev/                        - shared dev CLI home/config scope
+//   ~/.traycer/cli/dev/manifest.json           - legacy/no-slot dev install manifest
+//   ~/.traycer/cli/dev-runs/<slot>/manifest.json      - multi-run dev install manifest
+//   ~/.traycer/cli/dev-runs/<slot>/.lock              - multi-run dev mutation lock
+//   ~/.traycer/cli/dev-runs/<slot>/post-finalize.json - multi-run dev upgrade marker
 //   ~/.traycer/host/                         - prod host runtime root
 //   ~/.traycer/host/host.log               - prod host stdout + bootstrap markers
 //   ~/.traycer/host/pid.json                 - prod host pid metadata
 //   ~/.traycer/host/install/                 - prod host install dir (atomic-swap target)
 //   ~/.traycer/host/install/install.json     - prod host install record
 //   ~/.traycer/host/staging/                 - prod host staging root (verify-before-replace)
-//   ~/.traycer/host/dev/                     - dev host runtime root (parallel layout)
-//   ~/.traycer/host/dev/install/install.json - dev host install record
-//   ~/.traycer/host/dev/staging/             - dev host staging root
+//   ~/.traycer/host/dev/                     - legacy/no-slot dev host runtime root
+//   ~/.traycer/host/dev-runs/<slot>/         - multi-run dev host runtime root
+//   ~/.traycer/host/dev-runs/<slot>/install/install.json - multi-run dev install record
+//   ~/.traycer/host/dev-runs/<slot>/install-staging/     - multi-run dev staging root
 const TRAYCER_HOME = join(homedir(), ".traycer");
 const CLI_HOME = join(TRAYCER_HOME, "cli");
 const HOST_HOME = join(TRAYCER_HOME, "host");
@@ -44,6 +48,10 @@ function environmentSubdir(base: string, environment: Environment): string {
   return environment === "production" ? base : join(base, environment);
 }
 
+function devRunSubdir(base: string, slot: string): string {
+  return join(base, "dev-runs", slot);
+}
+
 export const traycerHomeDir = (): string => TRAYCER_HOME;
 // Shared (non-environment) config surface. `cliConfigPath`
 // (~/.traycer/cli/config.json) holds machine-local shell/env config that is
@@ -60,23 +68,30 @@ export const cliSharedHomeDir = (): string => CLI_HOME;
 // for the CLI's existing callers.
 export { cliCredentialsPath } from "@traycer/protocol/config/paths";
 
-// Environment-aware CLI paths.
+// Environment-aware shared CLI paths.
 export function cliHomeDir(environment: Environment | undefined): string {
   // Existing non-environment callers (config-store, credentials) treat the
   // CLI home as a shared root. Environment-aware callers (manifest, lock,
-  // post-finalize marker) pass an explicit environment and we resolve to
-  // the per-environment subdir.
+  // log, post-finalize marker) use `cliInstallHomeDir` below so multi-run dev
+  // can isolate install surfaces without moving shared auth/config state.
   if (environment === undefined) return CLI_HOME;
   return environmentSubdir(CLI_HOME, environment);
 }
+
+export function cliInstallHomeDir(environment: Environment): string {
+  const devSlot = devDesktopSlotForEnvironment(environment, process.env);
+  if (devSlot !== null) return devRunSubdir(CLI_HOME, devSlot);
+  return cliHomeDir(environment);
+}
+
 export function cliManifestPath(environment: Environment): string {
-  return join(cliHomeDir(environment), "manifest.json");
+  return join(cliInstallHomeDir(environment), "manifest.json");
 }
 export function cliLockPath(environment: Environment): string {
-  return join(cliHomeDir(environment), ".lock");
+  return join(cliInstallHomeDir(environment), ".lock");
 }
 export function cliLogPath(environment: Environment): string {
-  return join(cliHomeDir(environment), CLI_LOG_FILENAME);
+  return join(cliInstallHomeDir(environment), CLI_LOG_FILENAME);
 }
 // Marker the detached pending-CLI-upgrade finalize helper writes after
 // it attempts the live-binary swap. The next CLI invocation (Doctor,
@@ -84,7 +99,7 @@ export function cliLogPath(environment: Environment): string {
 // manifest and clears `pendingUpgrade` on swap success - see
 // upgrade/finalize-helper.ts.
 export function cliPostFinalizeMarkerPath(environment: Environment): string {
-  return join(cliHomeDir(environment), "post-finalize.json");
+  return join(cliInstallHomeDir(environment), "post-finalize.json");
 }
 
 // Environment-aware host paths. All environments are rooted under
@@ -94,6 +109,8 @@ export function cliPostFinalizeMarkerPath(environment: Environment): string {
 // production-only, so environment is not threaded through that flow.
 export function hostHomeDir(environment: Environment | undefined): string {
   if (environment === undefined) return HOST_HOME;
+  const devSlot = devDesktopSlotForEnvironment(environment, process.env);
+  if (devSlot !== null) return devRunSubdir(HOST_HOME, devSlot);
   return environmentSubdir(HOST_HOME, environment);
 }
 
@@ -165,4 +182,10 @@ export async function ensureCliHomeDir(
   // even if the file's own mode is later relaxed. Environment subdir
   // inherits these permissions.
   await mkdir(cliHomeDir(environment), { recursive: true, mode: 0o700 });
+}
+
+export async function ensureCliInstallHomeDir(
+  environment: Environment,
+): Promise<void> {
+  await mkdir(cliInstallHomeDir(environment), { recursive: true, mode: 0o700 });
 }

@@ -4,7 +4,9 @@ import { describe, expect, it } from "vitest";
 import {
   bootstrapLogPath,
   cliHomeDir,
+  cliInstallHomeDir,
   cliLockPath,
+  cliLogPath,
   cliManifestPath,
   cliPostFinalizeMarkerPath,
   cliSharedHomeDir,
@@ -16,6 +18,7 @@ import {
   hostStagingRoot,
   traycerHomeDir,
 } from "../paths";
+import { withDevDesktopSlot } from "@traycer-clients/shared/test-fixtures/dev-desktop-slot";
 
 const TRAYCER_HOME = join(homedir(), ".traycer");
 const CLI_HOME = join(TRAYCER_HOME, "cli");
@@ -28,6 +31,19 @@ describe("store/paths host helpers", () => {
     expect(hostHomeDir(undefined)).toBe(HOST_HOME);
     expect(hostHomeDir("production")).toBe(HOST_HOME);
     expect(hostHomeDir("dev")).toBe(join(HOST_HOME, "dev"));
+  });
+
+  it("uses a per-run host root for dev-desktop slots", () => {
+    withDevDesktopSlot("My Slot", () => {
+      expect(hostHomeDir("production")).toBe(HOST_HOME);
+      expect(hostHomeDir("dev")).toBe(join(HOST_HOME, "dev-runs", "my-slot"));
+      expect(hostPidMetadataPath("dev")).toBe(
+        join(HOST_HOME, "dev-runs", "my-slot", "pid.json"),
+      );
+      expect(hostLogPath("dev")).toBe(
+        join(HOST_HOME, "dev-runs", "my-slot", "host.log"),
+      );
+    });
   });
 
   it("resolves host runtime files to the environment root", () => {
@@ -92,6 +108,7 @@ describe("store/paths CLI helpers", () => {
     expect(cliHomeDir(undefined)).toBe(CLI_HOME);
     expect(cliHomeDir("production")).toBe(CLI_HOME);
     expect(cliHomeDir("dev")).toBe(join(CLI_HOME, "dev"));
+    expect(cliInstallHomeDir("dev")).toBe(join(CLI_HOME, "dev"));
   });
 
   it("places per-environment manifest/lock/post-finalize markers under the environment CLI dir", () => {
@@ -105,5 +122,19 @@ describe("store/paths CLI helpers", () => {
     expect(cliPostFinalizeMarkerPath("dev")).toBe(
       join(CLI_HOME, "dev", "post-finalize.json"),
     );
+  });
+
+  it("moves only dev CLI install surfaces into the dev-desktop run slot", () => {
+    withDevDesktopSlot("Example Slot", () => {
+      const slotRoot = join(CLI_HOME, "dev-runs", "example-slot");
+      expect(cliHomeDir("dev")).toBe(join(CLI_HOME, "dev"));
+      expect(cliInstallHomeDir("dev")).toBe(slotRoot);
+      expect(cliManifestPath("dev")).toBe(join(slotRoot, "manifest.json"));
+      expect(cliLockPath("dev")).toBe(join(slotRoot, ".lock"));
+      expect(cliLogPath("dev")).toBe(join(slotRoot, "cli.log"));
+      expect(cliPostFinalizeMarkerPath("dev")).toBe(
+        join(slotRoot, "post-finalize.json"),
+      );
+    });
   });
 });

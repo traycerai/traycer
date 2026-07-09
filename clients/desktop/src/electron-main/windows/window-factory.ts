@@ -20,6 +20,7 @@ import { safelyOpenExternal, installNavigationGuard } from "../app/security";
 import { installContextMenu } from "../app/spell-check";
 import { installResponsivenessListeners } from "../app/responsiveness";
 import { buildAppUrl } from "../app/app-protocol";
+import { devRendererUrlFromEnv } from "../../ipc-contracts/dev-renderer-origin";
 import { minimumWindowSize } from "./window-layout";
 import {
   placementToBrowserWindowBounds,
@@ -30,8 +31,6 @@ import {
   shouldUseBuiltRendererForResolutionTest,
 } from "./resolution-test-env";
 
-// Vite dev server served by the `make dev-desktop` orchestrator.
-const DEV_RENDERER_URL = "http://localhost:5173";
 const STRUCTURED_RENDERER_LOG_PREFIX = "[traycer-gui]";
 
 export interface MainWindowOptions {
@@ -46,8 +45,8 @@ export interface MainWindowOptions {
  * Creates the single top-level `BrowserWindow`.
  *
  * Loading strategy is configuration-driven (derived from `config.isDevBuild`):
- *   - On the dev slot, load the Vite dev server at `DEV_RENDERER_URL`
- *     (`http://localhost:5173`) so HMR-enabled renderer assets are served.
+ *   - On the dev slot, load the Vite dev server at the loopback
+ *     `TRAYCER_DESKTOP_DEV_URL` so HMR-enabled renderer assets are served.
  *   - Otherwise, load the renderer through the privileged `app://` scheme
  *     registered in `app-protocol.ts`. The protocol handler serves files
  *     from `<process.resourcesPath>/renderer` (packaged builds).
@@ -221,9 +220,10 @@ export async function loadMainWindow(
   // "Toggle Developer Tools" when policy exposes it. Shipped builds fall
   // through to the privileged `app://` scheme below.
   if (isDevBuild && !shouldUseBuiltRendererForResolutionTest(process.env)) {
-    log.info("[window] loading dev renderer", { devUrl: DEV_RENDERER_URL });
+    const devRendererUrl = devRendererUrlFromEnv(process.env);
+    log.info("[window] loading dev renderer", { devUrl: devRendererUrl });
     try {
-      await window.loadURL(DEV_RENDERER_URL);
+      await window.loadURL(devRendererUrl);
       return;
     } catch (err) {
       log.error("[window] dev renderer load failed", err);
