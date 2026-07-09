@@ -778,39 +778,44 @@ export type WorktreeHostEntryV11 = z.infer<typeof worktreeHostEntrySchemaV11>;
  *    `[]` to enrich nothing (returns no worktrees).
  */
 export const worktreeListAllForHostRequestSchemaV11 =
-  worktreeListAllForHostRequestSchema.extend({
-    includeActivity: z.boolean(),
-    activityPaths: z.array(z.string()).nullable(),
-    cursor: z.string().nullable(),
-    limit: z.number().finite().nullable(),
-  }).superRefine((request, context) => {
-    if (request.activityPaths === null) {
-      if (request.includeActivity && request.limit === null) {
+  worktreeListAllForHostRequestSchema
+    .extend({
+      includeActivity: z.boolean(),
+      activityPaths: z.array(z.string()).nullable(),
+      cursor: z.string().nullable(),
+      // A page size is a count: reject 0, negatives, and fractions. `null` still
+      // means "no limit" (the v1.0 full-list posture, allowed only without probes).
+      limit: z.number().int().positive().nullable(),
+    })
+    .superRefine((request, context) => {
+      if (request.activityPaths === null) {
+        if (request.includeActivity && request.limit === null) {
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            message:
+              "includeActivity requires a finite limit in paged listing mode",
+            path: ["limit"],
+          });
+        }
+        return;
+      }
+
+      if (request.cursor !== null) {
         context.addIssue({
           code: z.ZodIssueCode.custom,
-          message: "includeActivity requires a finite limit in paged listing mode",
+          message: "selection mode requires cursor to be null",
+          path: ["cursor"],
+        });
+      }
+
+      if (request.limit !== null) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "selection mode requires limit to be null",
           path: ["limit"],
         });
       }
-      return;
-    }
-
-    if (request.cursor !== null) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "selection mode requires cursor to be null",
-        path: ["cursor"],
-      });
-    }
-
-    if (request.limit !== null) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "selection mode requires limit to be null",
-        path: ["limit"],
-      });
-    }
-  });
+    });
 export type WorktreeListAllForHostRequestV11 = z.infer<
   typeof worktreeListAllForHostRequestSchemaV11
 >;

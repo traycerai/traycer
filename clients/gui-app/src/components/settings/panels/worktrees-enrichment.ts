@@ -254,6 +254,13 @@ export function useWorktreeActivityEnrichment(
   const coldPrRefetchStateRef = useRef<Map<string, ColdPrRefetchState>>(
     new Map(),
   );
+  // Cold-PR retry bookkeeping is scoped to the live host connection, so a
+  // client/host swap or a reachability drop must RESET it, not just wipe it on
+  // unmount: a pending `result.refetch()` would otherwise resume the PREVIOUS
+  // scope, and the per-path attempt budget would leak into the next host for
+  // the same path. Keying the cleanup on [client, hostId, reachable] clears the
+  // timers and the map on every such change (and still on teardown), so each
+  // host starts from a clean retry ledger.
   useEffect(
     () => () => {
       for (const state of coldPrRefetchStateRef.current.values()) {
@@ -261,7 +268,7 @@ export function useWorktreeActivityEnrichment(
       }
       coldPrRefetchStateRef.current.clear();
     },
-    [],
+    [client, hostId, reachable],
   );
   useEffect(() => {
     const activePaths = new Set(requestedPaths);

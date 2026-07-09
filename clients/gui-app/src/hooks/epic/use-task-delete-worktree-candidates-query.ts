@@ -39,6 +39,10 @@ export interface TaskDeleteWorktreeCandidatesResult {
 
 const EMPTY_CANDIDATES: ReadonlyArray<TaskDeleteWorktreeCandidate> = [];
 const TASK_DELETE_WORKTREE_PROBED_PAGE_LIMIT = 8;
+// Hard ceiling on pages walked in one probe pass. At 8 probed rows/page this
+// still covers thousands of worktrees - far beyond any real host - while a
+// stale/cyclic `nextCursor` fails closed here instead of looping forever.
+const TASK_DELETE_WORKTREE_MAX_PAGES = 256;
 
 /**
  * Derives the worktree-cleanup candidates for a pending Task deletion, entirely
@@ -72,21 +76,35 @@ export function useTaskDeleteWorktreeCandidates(
   const fetchWorktreePages =
     async (): Promise<WorktreeListAllForHostResponseV11> => {
       const worktrees: WorktreeHostEntryV11[] = [];
+      // A repeated cursor means the host is cycling; a run past the page cap
+      // means it is handing out fresh cursors without ever terminating. Either
+      // way the destructive dialog must fail closed (an error yields zero
+      // candidates) rather than probe forever.
+      const seenCursors = new Set<string>();
       let cursor: string | null = null;
-      for (;;) {
-        const page: WorktreeListAllForHostResponseV11 = await client.request(
-          "worktree.listAllForHost",
-          {
+      for (let page = 0; page < TASK_DELETE_WORKTREE_MAX_PAGES; page += 1) {
+        const response: WorktreeListAllForHostResponseV11 =
+          await client.request("worktree.listAllForHost", {
             includeActivity: true,
             activityPaths: null,
             cursor,
             limit: TASK_DELETE_WORKTREE_PROBED_PAGE_LIMIT,
-          },
-        );
-        worktrees.push(...page.worktrees);
-        if (page.nextCursor === null) return { worktrees, nextCursor: null };
-        cursor = page.nextCursor;
+          });
+        worktrees.push(...response.worktrees);
+        if (response.nextCursor === null) {
+          return { worktrees, nextCursor: null };
+        }
+        if (seenCursors.has(response.nextCursor)) {
+          throw new Error(
+            "worktree.listAllForHost returned a repeated pagination cursor",
+          );
+        }
+        seenCursors.add(response.nextCursor);
+        cursor = response.nextCursor;
       }
+      throw new Error(
+        "worktree.listAllForHost exceeded the maximum pagination page count",
+      );
     };
   const { data, isError } = useQuery(
     queryOptions<WorktreeListAllForHostResponseV11, HostRpcError>({
