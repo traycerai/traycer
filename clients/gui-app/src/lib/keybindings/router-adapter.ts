@@ -23,12 +23,18 @@ import {
   navigateToTabIntent,
   openOrFocusEpicIntent,
 } from "@/lib/tab-navigation";
+import { navigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
 import type { SettingsSectionId } from "@/lib/settings-sections";
 import { getSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
 import { routeIntentViaModalBridge } from "@/stores/tabs/system-overlay-registry";
 
 export interface KeybindingRouterSource {
-  readonly state: { readonly location: { readonly pathname: string } };
+  readonly state: {
+    readonly location: {
+      readonly pathname: string;
+      readonly search?: Readonly<Record<string, unknown>>;
+    };
+  };
   // Full `RouterHistory` (not just `subscribe`): the history-navigation seam
   // reads the persistent-history controller brand off it (`getHistoryController`)
   // and walks it via the shared `goBack`/`goForward` actions.
@@ -91,6 +97,19 @@ export function routerAdapterFor(
       }
       navigateToTabIntent(router.navigate, intent);
     },
+    navigateNestedFocus: (epicId, tabId, prepare) =>
+      navigateNestedFocus(
+        {
+          history: router.history,
+          navigate: router.navigate,
+          getLocation: () => ({
+            pathname: router.state.location.pathname,
+            search: router.state.location.search ?? {},
+          }),
+        },
+        { epicId, tabId },
+        prepare,
+      ),
     // Walk the CURRENT router's persistent history; the shared actions no-op
     // when the history carries no controller brand (browser/web build).
     goBack: () => goBackAction(router),

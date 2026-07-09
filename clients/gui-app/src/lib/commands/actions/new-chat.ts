@@ -24,6 +24,7 @@ import type { CreateChatMutationInput } from "@/hooks/epic/use-epic-chat-mutatio
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { deriveWorkspaceMode } from "@/lib/worktree/workspace-mode";
+import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
 
 const CHAT_PROJECTION_WAIT_MS = 30_000;
 
@@ -79,6 +80,11 @@ export type OpenWhenProjected = (intent: CreatedChatOpenIntent) => CancelFn;
 
 export type CancelFn = () => void;
 
+export interface OpenCreatedChatWhenProjectedWithNavigationArgs {
+  readonly intent: CreatedChatOpenIntent;
+  readonly navigateNestedFocus: NavigateNestedFocus;
+}
+
 export interface OpenNewChatInActiveTileArgs {
   readonly epicId: string;
   readonly tabId: string;
@@ -127,7 +133,23 @@ export function openNewChatInActiveTile(
 export function openCreatedChatWhenProjected(
   intent: CreatedChatOpenIntent,
 ): CancelFn {
-  if (openProjectedChat(intent)) return noop;
+  return openCreatedChatWhenProjectedInternal(intent, rawNestedFocus);
+}
+
+export function openCreatedChatWhenProjectedWithNavigation(
+  args: OpenCreatedChatWhenProjectedWithNavigationArgs,
+): CancelFn {
+  return openCreatedChatWhenProjectedInternal(
+    args.intent,
+    args.navigateNestedFocus,
+  );
+}
+
+function openCreatedChatWhenProjectedInternal(
+  intent: CreatedChatOpenIntent,
+  navigateNestedFocus: NavigateNestedFocus,
+): CancelFn {
+  if (openProjectedChat(intent, navigateNestedFocus)) return noop;
   const handle = getOpenEpicRegistry().get(intent.epicId);
   if (handle === null) return noop;
 
@@ -144,12 +166,15 @@ export function openCreatedChatWhenProjected(
   };
   const unsubscribe = handle.store.subscribe(() => {
     if (cancelled) return;
-    if (!openProjectedChat(intent)) return;
+    if (!openProjectedChat(intent, navigateNestedFocus)) return;
     cleanup();
   });
   timeoutId = window.setTimeout(cleanup, CHAT_PROJECTION_WAIT_MS);
   return cleanup;
 }
+
+const rawNestedFocus: NavigateNestedFocus = (_epicId, _tabId, prepare) =>
+  prepare();
 
 function buildCreateChatRequest(
   epicId: string,
@@ -169,7 +194,10 @@ function buildCreateChatRequest(
   };
 }
 
-function openProjectedChat(intent: CreatedChatOpenIntent): boolean {
+function openProjectedChat(
+  intent: CreatedChatOpenIntent,
+  navigateNestedFocus: NavigateNestedFocus,
+): boolean {
   const handle = getOpenEpicRegistry().get(intent.epicId);
   if (handle === null) return false;
   const state = handle.store.getState();
@@ -186,18 +214,28 @@ function openProjectedChat(intent: CreatedChatOpenIntent): boolean {
   };
   const canvas = useEpicCanvasStore.getState();
   if (intent.kind === "active-tile") {
-    canvas.openTileInTab(intent.tabId, node);
+    navigateNestedFocus(intent.epicId, intent.tabId, () =>
+      canvas.prepareOpenTileInTabFocusTarget(intent.tabId, node),
+    );
     return true;
   }
   if (intent.kind === "target-group") {
-    canvas.openTileInPane(intent.tabId, intent.groupId, node);
+    navigateNestedFocus(intent.epicId, intent.tabId, () =>
+      canvas.prepareOpenTileInPaneFocusTarget(
+        intent.tabId,
+        intent.groupId,
+        node,
+      ),
+    );
     return true;
   }
-  canvas.splitPaneWithNode(
-    intent.tabId,
-    intent.targetGroupId,
-    intent.position,
-    node,
+  navigateNestedFocus(intent.epicId, intent.tabId, () =>
+    canvas.prepareSplitPaneWithNodeFocusTarget(
+      intent.tabId,
+      intent.targetGroupId,
+      intent.position,
+      node,
+    ),
   );
   return true;
 }

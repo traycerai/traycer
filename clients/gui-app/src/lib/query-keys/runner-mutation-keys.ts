@@ -40,6 +40,7 @@ export const runnerMutationKeys = {
   // reloads. Keyed so the destructive action dedups and shows in devtools.
   clearAllLocalData: () => ["runner.clearAllLocalData"] as const,
   mermaidPngDownload: () => ["runner.mermaidPngDownload"] as const,
+  openExternalLink: () => ["runner.openExternalLink"] as const,
   zoomSet: (scope: string | null) => ["runner.zoom.set", scope] as const,
   zoomStepIn: (scope: string | null) => ["runner.zoom.stepIn", scope] as const,
   zoomStepOut: (scope: string | null) =>

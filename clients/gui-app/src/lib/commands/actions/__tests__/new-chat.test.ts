@@ -12,11 +12,14 @@ import {
 import type { CreateChatMutationInput } from "@/hooks/epic/use-epic-chat-mutations";
 import {
   openCreatedChatWhenProjected,
+  openCreatedChatWhenProjectedWithNavigation,
   openNewChatInActiveTile,
   type CreateChatCommand,
   type CreateChatCommandCallbacks,
   type CreatedChatOpenIntent,
 } from "@/lib/commands/actions";
+import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
+import type { NestedFocusTarget } from "@/lib/epic-nested-focus-route";
 import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
 import { paneTabRefs } from "@/stores/epics/canvas/actions";
 import { collectPanes, findPaneById } from "@/stores/epics/canvas/tile-tree";
@@ -152,6 +155,31 @@ function openIntentsRecorder(): {
   };
 }
 
+interface NestedFocusCall {
+  readonly epicId: string;
+  readonly tabId: string;
+  readonly target: NestedFocusTarget | null;
+}
+
+function nestedFocusRecorder(): {
+  readonly calls: NestedFocusCall[];
+  readonly navigateNestedFocus: NavigateNestedFocus;
+} {
+  const calls: NestedFocusCall[] = [];
+  return {
+    calls,
+    navigateNestedFocus: (epicId, tabId, prepare) => {
+      const target = prepare();
+      calls.push({
+        epicId,
+        tabId,
+        target,
+      });
+      return target;
+    },
+  };
+}
+
 describe("new chat command actions", () => {
   beforeEach(() => {
     resetCanvasStore();
@@ -250,6 +278,48 @@ describe("new chat command actions", () => {
     expect(useEpicCanvasStore.getState().artifactTreeByEpicId[EPIC_ID]).toEqual(
       [],
     );
+  });
+
+  it("routes projected chat opens through supplied nested focus navigation", () => {
+    const activeGroupId = seedActiveGroup();
+    const navigation = nestedFocusRecorder();
+
+    openCreatedChatWhenProjectedWithNavigation({
+      intent: {
+        kind: "active-tile",
+        epicId: EPIC_ID,
+        tabId: TAB_ID,
+        chatId: "host-chat",
+        hostId: "test-host",
+      },
+      navigateNestedFocus: navigation.navigateNestedFocus,
+    });
+
+    expect(navigation.calls).toHaveLength(0);
+
+    registryMock.projectChat({ id: "host-chat", title: "Host chat" });
+
+    expect(navigation.calls).toHaveLength(1);
+    const call = navigation.calls[0];
+    expect(call.epicId).toBe(EPIC_ID);
+    expect(call.tabId).toBe(TAB_ID);
+    expect(call.target?.paneId).toBe(activeGroupId);
+    expect(typeof call.target?.tileInstanceId).toBe("string");
+    const target = call.target;
+    const canvas = useEpicCanvasStore.getState().canvasByTabId[TAB_ID];
+    if (
+      target === null ||
+      target.tileInstanceId === undefined ||
+      canvas === undefined
+    ) {
+      throw new Error("expected route-aware projection to open a chat tile");
+    }
+    expect(canvas.tilesByInstanceId[target.tileInstanceId]).toMatchObject({
+      id: "host-chat",
+      type: "chat",
+      name: "Host chat",
+      hostId: "test-host",
+    });
   });
 
   describe("caller-owned cancellation", () => {

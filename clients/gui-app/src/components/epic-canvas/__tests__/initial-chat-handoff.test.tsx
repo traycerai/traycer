@@ -52,6 +52,9 @@ const HANDOFF_SETTINGS = {
 const testState = vi.hoisted(() => ({
   request: vi.fn((_method: string) => Promise.resolve<unknown>({})),
   events: [] as string[],
+  navigateNested: vi.fn(
+    (_epicId: string, _tabId: string, prepare: () => unknown) => prepare(),
+  ),
 }));
 
 vi.mock("@tanstack/react-router", async (importOriginal) => {
@@ -62,6 +65,17 @@ vi.mock("@tanstack/react-router", async (importOriginal) => {
     useNavigate: () => () => undefined,
   };
 });
+
+// The handoff's canvas opens are routed through the nested-focus navigation
+// boundary. Mocking it to synchronously invoke `prepare()` (mirroring
+// `bundle-open-button.test.tsx`) keeps the real canvas-store mutation while
+// letting these tests count navigation attempts directly - the observable
+// signal for the re-entrant re-open regression (the underlying canvas
+// mutation is itself idempotent when the tile is already open, so asserting
+// on canvas state alone cannot detect a duplicate open/navigate attempt).
+vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
+  useEpicNestedFocusNavigation: () => testState.navigateNested,
+}));
 
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => null,
@@ -222,6 +236,7 @@ describe("initial chat handoff route coordinator", () => {
     callbacks = null;
     testState.events.length = 0;
     testState.request.mockClear();
+    testState.navigateNested.mockClear();
     testState.request.mockImplementation((method: string) => {
       testState.events.push(method);
       return Promise.resolve({});
@@ -381,6 +396,99 @@ describe("initial chat handoff route coordinator", () => {
 
     await Promise.resolve();
     expect(handoffStatus()).toBe("pending");
+    queryClient.clear();
+  });
+
+  it("latches the active-tile open once per handoffChatId across multiple projection transitions", async () => {
+    registerPendingHandoff();
+    const queryClient = renderWithProviders(
+      <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+        <EpicSessionGate fallback={null}>
+          <CoordinatorOnly epicId={EPIC_ID} tabId={EPIC_ID} />
+        </EpicSessionGate>
+      </EpicSessionProvider>,
+    );
+    if (callbacks === null) throw new Error("expected epic callbacks");
+    const epicCallbacks = callbacks;
+
+    // The coordinator's first transition opens the tile as soon as it
+    // mounts (handoffChatId is registered pre-render) - through the
+    // injected opener exactly once, via the nested-focus navigation
+    // boundary.
+    await waitFor(() => {
+      expect(testState.navigateNested).toHaveBeenCalledTimes(1);
+    });
+    expect(testState.navigateNested).toHaveBeenCalledWith(
+      EPIC_ID,
+      EPIC_ID,
+      expect.any(Function),
+    );
+    expect(canvasChatTabs().filter((tab) => tab.id === CHAT_ID)).toHaveLength(
+      1,
+    );
+
+    // Landing the chat's projection drives further transitions of the
+    // canvas-handoff effect: the projection itself (projectedChatId /
+    // projectedChatTitle change) and the follow-on pending -> waitingChat
+    // status advance. Neither may re-open / re-navigate the already-open
+    // tile.
+    const donor = new Y.Doc();
+    seedDocWithChat(donor);
+    act(() => {
+      epicCallbacks.onConnectionStatus("open", null);
+      epicCallbacks.onSnapshot(makeMeta("owner"), Y.encodeStateAsUpdate(donor));
+    });
+
+    await waitFor(() => {
+      expect(handoffStatus()).toBe("waitingChat");
+    });
+
+    expect(testState.navigateNested).toHaveBeenCalledTimes(1);
+    expect(canvasChatTabs().filter((tab) => tab.id === CHAT_ID)).toHaveLength(
+      1,
+    );
+
+    queryClient.clear();
+  });
+
+  it("reload-style: ref cleared but tile already in the tab skips a duplicate open", async () => {
+    // Simulate a reload: the canvas layout already carries the handoff
+    // chat's tile (persisted from a prior session) before this fresh
+    // coordinator instance mounts - a fresh mount always starts with a
+    // null `openedChatIdRef`.
+    useEpicCanvasStore.getState().openTileInTab(EPIC_ID, {
+      id: CHAT_ID,
+      instanceId: "preexisting-instance",
+      type: "chat",
+      name: "New chat",
+      hostId: HOST_ID,
+    });
+    registerPendingHandoff();
+
+    const queryClient = renderWithProviders(
+      <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+        <EpicSessionGate fallback={null}>
+          <CoordinatorOnly epicId={EPIC_ID} tabId={EPIC_ID} />
+        </EpicSessionGate>
+      </EpicSessionProvider>,
+    );
+    if (callbacks === null) throw new Error("expected epic callbacks");
+
+    // Wait for the coordinator to mount and its canvas-handoff effect to
+    // run at least once - the pending-create mark fires regardless of
+    // whether the tile-open guard trips, so it is a reliable "mounted and
+    // ran" signal independent of the behavior under test.
+    await waitFor(() => {
+      expect(
+        useEpicCanvasStore.getState().pendingCreateArtifactIds.has(CHAT_ID),
+      ).toBe(true);
+    });
+
+    expect(testState.navigateNested).not.toHaveBeenCalled();
+    expect(canvasChatTabs().filter((tab) => tab.id === CHAT_ID)).toHaveLength(
+      1,
+    );
+
     queryClient.clear();
   });
 });

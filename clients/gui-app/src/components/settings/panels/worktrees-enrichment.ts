@@ -26,6 +26,13 @@ const EMPTY_ENRICHED: ReadonlyMap<string, WorktreeHostEntryV11> = new Map();
 // queries for the paths not already cached. One batch per settle window, bounded
 // by the viewport - never the whole list.
 const WORKTREE_ENRICH_DEBOUNCE_MS = 80;
+const WORKTREE_COLD_PR_REFETCH_MAX_ATTEMPTS = 3;
+const WORKTREE_COLD_PR_REFETCH_BASE_MS = 750;
+
+interface ColdPrRefetchState {
+  readonly attempts: number;
+  readonly timer: number | null;
+}
 
 // A `worktree.listAllForHost` query key is `["host", hostId, method, params]`
 // (see `hostQueryKeys.method`). The panel's per-path enrichment queries are the
@@ -147,9 +154,10 @@ export function useCachedWorktreeEnrichment(
  * Per-viewport lazy enrichment. The base list paints instantly with cheap fields;
  * the expensive activity probes (git ahead/behind/merged, gh PR state, submodule
  * merge facts) are fetched ONLY for the worktree paths currently on screen. Each
- * on-screen path gets its OWN `worktree.listAllForHost {includeActivity: true,
- * activityPaths: [path]}` query, so TanStack Query caches enrichment PER PATH: a
- * path is probed once, and scrolling back to it is a cache hit, never a refetch.
+ * on-screen path gets its OWN selection-mode `worktree.listAllForHost`
+ * (`includeActivity: true`, `activityPaths: [path]`, `cursor: null`,
+ * `limit: null`) query, so TanStack Query caches enrichment PER PATH: a path is
+ * probed once, and scrolling back to it is a cache hit, never a refetch.
  *
  * The reported on-screen set is debounced into `requestedPaths` (trailing edge),
  * so a fast scroll spins up one batch of per-path queries per settle window, not
@@ -229,7 +237,12 @@ export function useWorktreeActivityEnrichment(
     () =>
       requestedPaths.map((path) => ({
         method: "worktree.listAllForHost" as const,
-        params: { includeActivity: true, activityPaths: [path] },
+        params: {
+          includeActivity: true,
+          activityPaths: [path],
+          cursor: null,
+          limit: null,
+        },
       })),
     [requestedPaths],
   );
@@ -238,6 +251,72 @@ export function useWorktreeActivityEnrichment(
     requests,
     options: { enabled: reachable },
   });
+  const coldPrRefetchStateRef = useRef<Map<string, ColdPrRefetchState>>(
+    new Map(),
+  );
+  // Cold-PR retry bookkeeping is scoped to the live host connection, so a
+  // client/host swap or a reachability drop must RESET it, not just wipe it on
+  // unmount: a pending `result.refetch()` would otherwise resume the PREVIOUS
+  // scope, and the per-path attempt budget would leak into the next host for
+  // the same path. Keying the cleanup on [client, hostId, reachable] clears the
+  // timers and the map on every such change (and still on teardown), so each
+  // host starts from a clean retry ledger.
+  useEffect(
+    () => () => {
+      for (const state of coldPrRefetchStateRef.current.values()) {
+        if (state.timer !== null) window.clearTimeout(state.timer);
+      }
+      coldPrRefetchStateRef.current.clear();
+    },
+    [client, hostId, reachable],
+  );
+  useEffect(() => {
+    const activePaths = new Set(requestedPaths);
+    for (const [path, state] of coldPrRefetchStateRef.current.entries()) {
+      if (activePaths.has(path)) continue;
+      if (state.timer !== null) window.clearTimeout(state.timer);
+      coldPrRefetchStateRef.current.delete(path);
+    }
+
+    results.forEach((result, index) => {
+      const path = requestedPaths[index];
+      const state = coldPrRefetchStateRef.current.get(path) ?? {
+        attempts: 0,
+        timer: null,
+      };
+      const hasColdPrState =
+        result.data?.worktrees.some((entry) => entry.prState === null) ?? false;
+      if (!hasColdPrState) {
+        if (state.timer !== null) window.clearTimeout(state.timer);
+        coldPrRefetchStateRef.current.delete(path);
+        return;
+      }
+      if (
+        result.isFetching ||
+        state.timer !== null ||
+        state.attempts >= WORKTREE_COLD_PR_REFETCH_MAX_ATTEMPTS
+      ) {
+        coldPrRefetchStateRef.current.set(path, state);
+        return;
+      }
+
+      const nextAttempts = state.attempts + 1;
+      const timer = window.setTimeout(() => {
+        const latest = coldPrRefetchStateRef.current.get(path);
+        if (latest !== undefined) {
+          coldPrRefetchStateRef.current.set(path, {
+            attempts: latest.attempts,
+            timer: null,
+          });
+        }
+        void result.refetch();
+      }, WORKTREE_COLD_PR_REFETCH_BASE_MS * nextAttempts);
+      coldPrRefetchStateRef.current.set(path, {
+        attempts: nextAttempts,
+        timer,
+      });
+    });
+  }, [requestedPaths, results]);
 
   // Overlay from the cache (monotonic, remount-warm) - NOT from `results`.
   const enrichedByPath = useCachedWorktreeEnrichment(queryClient, hostId);

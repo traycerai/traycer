@@ -1,14 +1,21 @@
 import {
+  use,
+  memo,
   useCallback,
+  useDeferredValue,
   useEffect,
   useMemo,
   useReducer,
   useRef,
   useState,
+  useSyncExternalStore,
+  type MouseEvent,
   type ReactNode,
+  type RefCallback,
 } from "react";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
-import { useVirtualizer } from "@tanstack/react-virtual";
+import { useNavigate } from "@tanstack/react-router";
+import { defaultRangeExtractor, useVirtualizer } from "@tanstack/react-virtual";
 import { toast } from "sonner";
 import {
   AlertTriangle,
@@ -16,8 +23,10 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  Copy,
   CopyMinus,
   CopyPlus,
+  ExternalLink,
   FileSliders,
   FolderGit2,
   GitCommitHorizontal,
@@ -25,6 +34,7 @@ import {
   HelpCircle,
   ListFilter,
   Minus,
+  MoreHorizontal,
   RefreshCw,
   Search,
   Trash2,
@@ -47,7 +57,11 @@ import {
   taskMergeRollupLabel,
   type TaskMergeRollup,
 } from "@/lib/worktree/task-merge-rollup";
-import type { WorktreeEntryScripts } from "@traycer/protocol/host/worktree-schemas";
+import type {
+  WorktreeEntryScripts,
+  WorktreePrState,
+  WorktreeSubmoduleMergeFact,
+} from "@traycer/protocol/host/worktree-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { cn } from "@/lib/utils";
@@ -70,6 +84,7 @@ import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
+  DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Badge } from "@/components/ui/badge";
@@ -84,14 +99,13 @@ import {
 } from "@/components/ui/dialog";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
-import { CopyTextButton } from "@/components/copy-text-button";
 import { ScriptsReviewDialog } from "@/components/workspaces/scripts-review-dialog";
 import { type RepoScriptsSeed } from "@/components/workspaces/repo-scripts-form";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { useHostClientFor } from "@/hooks/host/use-host-client-for";
-import { useHostQuery } from "@/hooks/host/use-host-query";
+import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { useWorktreeDeleteStreamTransportFactory } from "@/lib/host/use-worktree-delete-stream-transport";
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
 import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
@@ -109,12 +123,15 @@ import {
   type WorktreeDeleteProgressSummary,
 } from "@/components/settings/panels/use-worktree-delete-run";
 import { WorktreeDeleteProgressModal } from "@/components/settings/panels/worktree-delete-progress-modal";
-import {
-  useWorktreeFirstPaintPerf,
-  useWorktreeListQueryPerf,
-} from "@/components/settings/panels/worktrees-settings-perf";
 import { WorktreeListRenderProfiler } from "@/components/settings/panels/worktree-list-render-profiler";
 import { useWorktreeActivityEnrichment } from "@/components/settings/panels/worktrees-enrichment";
+import { useWorktreeListing } from "@/components/settings/panels/worktrees-listing-query";
+import {
+  navigateToTabIntent,
+  openOrFocusEpicIntent,
+} from "@/lib/tab-navigation";
+import { RunnerHostContext } from "@/providers/runner-host-context";
+import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
 
 type WorktreeRowDeleteStatus = "deleting";
 // Per-row activity-enrichment state, driving ONLY the tier pill's presentation:
@@ -129,7 +146,6 @@ type WorktreeTierFilterSet = ReadonlySet<WorktreeTier>;
 const EMPTY_TIER_FILTER: WorktreeTierFilterSet = new Set();
 const WORKTREES_REFRESH_TIMEOUT_MS = 10_000;
 const EMPTY_REPO_KEY_SET: ReadonlySet<string> = new Set();
-const EMPTY_WORKTREES: readonly WorktreeHostEntryV11[] = [];
 const EMPTY_TASK_TITLES: ReadonlyMap<string, string> = new Map();
 
 // Virtualization tuning. Row/header heights are estimates only - each rendered
@@ -140,6 +156,53 @@ const EMPTY_TASK_TITLES: ReadonlyMap<string, string> = new Map();
 const WORKTREE_ROW_ESTIMATE_PX = 88;
 const WORKTREE_REPO_HEADER_ESTIMATE_PX = 40;
 const WORKTREE_VIRTUAL_OVERSCAN = 8;
+
+// Scroll-viewport clearance for the floating selection action bar (see
+// `WorktreeSelectionActionBar`). The bar's real height is measured live via
+// `useObservedHeight` so a wrapped bar (narrow width, or the `Checking`
+// notice pushing it to two lines) still gets full clearance. `GAP_PX` covers
+// the bar's own `bottom-4` offset plus breathing room above it; `MIN_PX`
+// matches the bar's normal single-line height and only seeds the very first
+// frame, before the observer reports a real measurement.
+const WORKTREE_ACTION_BAR_GAP_PX = 32;
+const WORKTREE_ACTION_BAR_MIN_CLEARANCE_PX = 64;
+
+/**
+ * Live element-height observer: a callback ref plus `useSyncExternalStore` over
+ * a `ResizeObserver`, so the caller reads the CURRENT rendered height of
+ * whatever DOM node the ref attaches to - re-rendering exactly when that height
+ * changes (including back to 0 once the node unmounts). Mirrors the
+ * `useComposerNarrowObserver` pattern in
+ * `src/components/home/composer/composer-narrow-hooks.ts`; kept local here
+ * because nothing else in the app needs it yet.
+ */
+function useObservedHeight(): {
+  readonly ref: RefCallback<HTMLDivElement>;
+  readonly height: number;
+} {
+  const [element, setElement] = useState<HTMLDivElement | null>(null);
+  const ref = useCallback((nextElement: HTMLDivElement | null) => {
+    setElement(nextElement);
+  }, []);
+  const subscribe = useCallback(
+    (onStoreChange: () => void) => {
+      if (element === null) return () => {};
+      const observer = new ResizeObserver(onStoreChange);
+      observer.observe(element);
+      return () => observer.disconnect();
+    },
+    [element],
+  );
+  const getSnapshot = useCallback(() => {
+    if (element === null) return 0;
+    return element.getBoundingClientRect().height;
+  }, [element]);
+  const getServerSnapshot = useCallback(() => 0, []);
+  return {
+    ref,
+    height: useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot),
+  };
+}
 
 /**
  * Host-wide worktree management. Lists every git worktree under the selected
@@ -223,7 +286,7 @@ function WorktreesToolbar(props: {
   });
 
   return (
-    <div className="flex flex-col gap-2 border-b border-border/40 bg-muted/20 px-5 py-3">
+    <div className="flex flex-col gap-2 border-b border-border/40 px-5 py-2.5">
       <div className="flex items-center justify-between gap-2">
         <HostSelect hosts={hosts} value={value} onChange={onChange} />
         <div
@@ -309,7 +372,7 @@ function worktreeTierFilterLabel(
  * Checking several tiers shows their union; composes with the search box (both
  * apply). Tier comes from the shared classifier, so the options match the row
  * pills exactly. Kept open across toggles (`onSelect` preventDefault) so the user
- * can pick e.g. Merged + At base commit in one visit.
+ * can pick e.g. Landed + At base commit in one visit.
  */
 function WorktreeFilterMenu(props: {
   readonly tierFilters: WorktreeTierFilterSet;
@@ -418,6 +481,13 @@ function WorktreeSortMenu(props: {
   );
 }
 
+/**
+ * Host picker - visible so the user always knows which host they're managing,
+ * but deliberately lower-emphasis than the search/filter/sort/refresh cluster:
+ * no border or filled background at rest, muted text, only gaining contrast on
+ * hover/open. It stays a real `Select` (keyboard-reachable, same interaction
+ * model), just styled to read as ambient context rather than a primary action.
+ */
 function HostSelect(props: {
   readonly hosts: readonly HostDirectoryEntry[];
   readonly value: string | null;
@@ -425,7 +495,12 @@ function HostSelect(props: {
 }): ReactNode {
   return (
     <Select value={props.value ?? undefined} onValueChange={props.onChange}>
-      <SelectTrigger size="sm" className="w-[min(60vw,15rem)]">
+      <SelectTrigger
+        size="sm"
+        aria-label="Select a host"
+        data-testid="worktrees-host-select"
+        className="w-[min(60vw,15rem)] border-transparent bg-transparent px-2 text-muted-foreground shadow-none hover:bg-accent/40 hover:text-foreground data-[state=open]:bg-accent/40 data-[state=open]:text-foreground dark:bg-transparent dark:hover:bg-accent/40"
+      >
         <SelectValue placeholder="Select a host" />
       </SelectTrigger>
       <SelectContent>
@@ -437,63 +512,6 @@ function HostSelect(props: {
       </SelectContent>
     </Select>
   );
-}
-
-/**
- * Base worktree listing - the instant, viewport-independent leg. `includeActivity:
- * false, activityPaths: null` returns EVERY row with its cheap fields (repo,
- * branch, path, owning Task, uncommitted count) and none of the per-worktree gh PR
- * + git probes, so its cost does not scale with how much activity work the host
- * has to do. The heavy activity probes are fetched lazily, only for the rows
- * scrolled into view, by {@link useWorktreeActivityEnrichment} - so first paint is
- * instant in ANY environment, no matter the total worktree count.
- */
-function useWorktreeListing(
-  client: HostClient<HostRpcRegistry> | null,
-  reachable: boolean,
-): {
-  readonly worktrees: readonly WorktreeHostEntryV11[];
-  readonly isPending: boolean;
-  readonly isError: boolean;
-  readonly errorMessage: string | null;
-  readonly isEmpty: boolean;
-  readonly refresh: () => Promise<unknown>;
-  readonly refreshing: boolean;
-} {
-  const baseQuery = useHostQuery({
-    cacheKeyIdentity: undefined,
-    client,
-    method: "worktree.listAllForHost",
-    params: { includeActivity: false, activityPaths: null },
-    options: { enabled: reachable },
-  });
-  const worktrees = baseQuery.data?.worktrees ?? EMPTY_WORKTREES;
-  // Perf telemetry (gated + non-throwing). Both legs now track the BASE query -
-  // the real time-to-usable-list, which is what "snappy in any environment" means.
-  useWorktreeListQueryPerf({
-    includeActivity: false,
-    fetchStatus: baseQuery.fetchStatus,
-    status: baseQuery.status,
-    worktreeCount: worktrees.length,
-    submoduleCount: worktrees.reduce(
-      (sum, entry) => sum + entry.submodules.length,
-      0,
-    ),
-    hasData: baseQuery.data !== undefined,
-  });
-  useWorktreeFirstPaintPerf({
-    painted: baseQuery.isSuccess && worktrees.length > 0,
-    rowCount: worktrees.length,
-  });
-  return {
-    worktrees,
-    isPending: baseQuery.isPending,
-    isError: baseQuery.isError,
-    errorMessage: baseQuery.error?.message ?? null,
-    isEmpty: baseQuery.isSuccess && worktrees.length === 0,
-    refresh: () => baseQuery.refetch(),
-    refreshing: baseQuery.isFetching,
-  };
 }
 
 function WorktreesBody(props: {
@@ -613,7 +631,47 @@ function WorktreesBody(props: {
           filterControls={null}
         />
       ) : null}
+      {listing.isPartial ? (
+        <WorktreesPartialListingBanner
+          message={listing.errorMessage}
+          onRetry={listing.retryPartial}
+        />
+      ) : null}
       {content}
+    </div>
+  );
+}
+
+/**
+ * A later listing page failed after earlier pages already landed - `worktrees`
+ * is real but an INCOMPLETE prefix of the host's full list. The list still
+ * renders below (partial data is useful), but this banner is the only signal
+ * that it is truncated, so it must never be dropped silently.
+ */
+function WorktreesPartialListingBanner(props: {
+  readonly message: string | null;
+  readonly onRetry: () => Promise<unknown>;
+}): ReactNode {
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className="flex items-center gap-2 border-b border-border/60 bg-amber-500/10 px-4 py-2 text-ui-sm text-amber-700 dark:text-amber-300"
+    >
+      <AlertTriangle className="size-4 shrink-0" aria-hidden />
+      <span className="min-w-0 flex-1 wrap-anywhere">
+        Some worktrees could not be loaded
+        {props.message !== null ? `: ${props.message}` : ""}. The list below is
+        incomplete.
+      </span>
+      <Button
+        variant="ghost"
+        size="sm"
+        className="h-7 shrink-0 px-2 text-amber-700 hover:text-amber-800 dark:text-amber-300 dark:hover:text-amber-200"
+        onClick={() => void props.onRetry()}
+      >
+        Retry
+      </Button>
     </div>
   );
 }
@@ -795,9 +853,14 @@ export function WorktreesList(props: {
     [mergedWorktrees],
   );
   const [searchText, setSearchText] = useState("");
+  const deferredSearchText = useDeferredValue(searchText);
   const [sortMode, setSortMode] = useState<WorktreeSortMode>("newest");
   const [tierFilters, setTierFilters] =
     useState<WorktreeTierFilterSet>(EMPTY_TIER_FILTER);
+  const searchHaystackByPath = useMemo(
+    () => buildWorktreeSearchHaystackByPath(worktrees, taskTitlesByEpicId),
+    [worktrees, taskTitlesByEpicId],
+  );
   // Only offer filter options for tiers actually present in this host's list.
   // Un-enriched rows have no known tier, so they cannot contribute an option -
   // the menu grows as rows scroll into view and enrich.
@@ -825,8 +888,8 @@ export function WorktreesList(props: {
   const filteredWorktrees = useMemo(() => {
     const searched = filterWorktrees(
       mergedWorktrees,
-      searchText,
-      taskTitlesByEpicId,
+      deferredSearchText,
+      searchHaystackByPath,
     );
     const effectiveTiers = new Set(
       availableTiers.filter((tier) => tierFilters.has(tier)),
@@ -839,8 +902,8 @@ export function WorktreesList(props: {
     );
   }, [
     mergedWorktrees,
-    searchText,
-    taskTitlesByEpicId,
+    deferredSearchText,
+    searchHaystackByPath,
     tierFilters,
     availableTiers,
     isPending,
@@ -906,16 +969,16 @@ export function WorktreesList(props: {
       ),
     [collapsedRepoKeys, groups],
   );
-  const visibleWorktreePathSet = useMemo(
-    () => new Set(mergedWorktrees.map((entry) => entry.worktreePath)),
-    [mergedWorktrees],
+  const listedWorktreePathSet = useMemo(
+    () => new Set(worktrees.map((entry) => entry.worktreePath)),
+    [worktrees],
   );
   useEffect(() => {
-    clearCompletedDeletedMissingFromList(visibleWorktreePathSet);
+    clearCompletedDeletedMissingFromList(listedWorktreePathSet);
   }, [
     backgrounded,
     clearCompletedDeletedMissingFromList,
-    visibleWorktreePathSet,
+    listedWorktreePathSet,
   ]);
   const backgroundedDeleteStatusByPath = useMemo(
     () =>
@@ -952,6 +1015,28 @@ export function WorktreesList(props: {
     [selectablePathSet, selectedPaths, visibleWorktrees],
   );
   const selectedCount = selectedTargets.length;
+  // Live-measured height of the floating selection action bar (see
+  // `WorktreeSelectionActionBar` / `WORKTREE_ACTION_BAR_GAP_PX`), so the scroll
+  // viewport's bottom clearance tracks the bar's REAL rendered height - including
+  // a wrapped two-line bar (narrow width, or the `Checking` notice) - instead of
+  // a fixed padding that can undershoot it.
+  const actionBarHeightObserver = useObservedHeight();
+  const actionBarClearancePx =
+    selectedCount > 0
+      ? Math.max(
+          actionBarHeightObserver.height + WORKTREE_ACTION_BAR_GAP_PX,
+          WORKTREE_ACTION_BAR_MIN_CLEARANCE_PX,
+        )
+      : 0;
+  // Selected rows whose tier isn't known yet - bulk delete is disabled while
+  // any exist (mirrors the single-row guard: pending status is not safe).
+  const checkingSelectedCount = useMemo(
+    () =>
+      selectedTargets.filter(
+        (entry) => enrichmentStateFor(entry.worktreePath) === "pending",
+      ).length,
+    [selectedTargets, enrichmentStateFor],
+  );
   // Freshest listing keyed by path, so a pending delete captured at dialog-open
   // is always re-resolved to its CURRENT entry (a background refresh may have
   // made a row in-use / mid-delete since the dialog opened).
@@ -961,11 +1046,14 @@ export function WorktreesList(props: {
   );
   // Re-resolve the pending targets against the freshest listing and split into
   // the rows still eligible to delete vs. the ones dropped (gone from the list,
-  // or now in-use / mid-delete). All selection is user-driven now, so the only
-  // confirm-time gate is "still selectable"; a hand-picked dirty / ahead row
-  // proceeds with its FRESHEST loss copy (per-row opt-in is intentional). Both
-  // the dialog copy and the confirm action read from this, so what the user sees
-  // is what gets deleted.
+  // now in-use / mid-delete, or regressed to `Checking`). All selection is
+  // user-driven now, so the remaining confirm-time gates are "still selectable"
+  // and "not Checking"; a hand-picked dirty / ahead row proceeds with its
+  // FRESHEST loss copy (per-row opt-in is intentional). Both the dialog copy
+  // and the confirm action read from this, so what the user sees is what gets
+  // deleted - a row that opened confirmation while ready/unknown but becomes
+  // `Checking` before confirm (e.g. a refresh re-arms its enrichment) must not
+  // delete, matching the rule that `Checking` rows are never deletable.
   const pendingResolution = useMemo(() => {
     if (pendingDeleteTargets === null) return null;
     const kept: WorktreeHostEntryV11[] = [];
@@ -976,20 +1064,59 @@ export function WorktreesList(props: {
         dropped.push(captured);
         continue;
       }
-      if (selectablePathSet.has(fresh.worktreePath)) kept.push(fresh);
+      const stillEligible =
+        selectablePathSet.has(fresh.worktreePath) &&
+        enrichmentStateFor(fresh.worktreePath) !== "pending";
+      if (stillEligible) kept.push(fresh);
       else dropped.push(fresh);
     }
     return { kept, dropped };
-  }, [pendingDeleteTargets, selectablePathSet, worktreesByPath]);
+  }, [
+    pendingDeleteTargets,
+    selectablePathSet,
+    worktreesByPath,
+    enrichmentStateFor,
+  ]);
   const keptDeleteTargets = pendingResolution?.kept ?? null;
-  const singleDialogCopy =
+  const singleDeleteTarget =
     keptDeleteTargets !== null && keptDeleteTargets.length === 1
-      ? deleteDialogCopy(keptDeleteTargets[0])
+      ? keptDeleteTargets[0]
       : null;
+  const singleDialogCopy =
+    singleDeleteTarget === null
+      ? null
+      : singleWorktreeDeleteDialogCopy(
+          singleDeleteTarget,
+          enrichmentStateFor(singleDeleteTarget.worktreePath),
+        );
   const bulkDeleteSummary =
     keptDeleteTargets !== null && keptDeleteTargets.length > 1
-      ? summarizeBulkWorktreeDelete(keptDeleteTargets, visibleWorktrees)
+      ? summarizeBulkWorktreeDelete(
+          keptDeleteTargets,
+          visibleWorktrees,
+          erroredPaths,
+        )
       : null;
+  // A non-null resolution that drops EVERY pending target (most commonly
+  // because they all regressed to `Checking`) never renders a dialog -
+  // `singleDialogCopy` and `bulkDeleteSummary` are both null for zero kept
+  // targets - so nothing else clears `pendingDeleteTargets`. Left alone, that
+  // stale intent would silently reopen the old confirmation once the rows
+  // settle back to ready/unknown, without the user choosing Delete again.
+  // Clear it and tell the user why, using the same skipped-row message the
+  // confirm-time drop path uses.
+  useEffect(() => {
+    if (pendingResolution === null) return;
+    const { kept, dropped } = pendingResolution;
+    if (kept.length > 0 || dropped.length === 0) return;
+    toast.message(
+      worktreeDropMessage(
+        dropped,
+        (worktreePath) => enrichmentStateFor(worktreePath) === "pending",
+      ),
+    );
+    setPendingDeleteTargets(null);
+  }, [pendingResolution, enrichmentStateFor]);
   const progressSummary = useMemo(
     () => summarizeWorktreeDeleteRuns(runs),
     [runs],
@@ -1058,14 +1185,35 @@ export function WorktreesList(props: {
   }, [allReposCollapsed, repoKeys]);
   const requestDeleteTargets = useCallback(
     (targets: ReadonlyArray<WorktreeHostEntryV11>) => {
-      const deletableTargets = targets.filter((entry) =>
-        selectablePathSet.has(entry.worktreePath),
+      // A `Checking` row's tier isn't known yet, so it never opens a delete
+      // confirmation - not even a generic one - until enrichment settles.
+      const deletableTargets = targets.filter(
+        (entry) =>
+          selectablePathSet.has(entry.worktreePath) &&
+          enrichmentStateFor(entry.worktreePath) !== "pending",
       );
       if (deletableTargets.length === 0) return;
       setPendingDeleteTargets(deletableTargets);
     },
-    [selectablePathSet],
+    [selectablePathSet, enrichmentStateFor],
   );
+  const requestDeleteTarget = useCallback(
+    (target: WorktreeHostEntryV11) => {
+      requestDeleteTargets([target]);
+    },
+    [requestDeleteTargets],
+  );
+  const requestDeleteSelectedTargets = useCallback(() => {
+    requestDeleteTargets(selectedTargets);
+  }, [requestDeleteTargets, selectedTargets]);
+  const openScriptReviewFor = useCallback((target: WorktreeHostEntryV11) => {
+    const reviewedScriptsByPath = reviewedScriptsByPathRef.current;
+    setPendingScriptReview({
+      target,
+      scripts:
+        reviewedScriptsByPath?.get(target.worktreePath) ?? target.scripts,
+    });
+  }, []);
 
   const clearSelectionForTargets = (
     targets: ReadonlyArray<WorktreeHostEntryV11>,
@@ -1077,11 +1225,17 @@ export function WorktreesList(props: {
   const handleConfirm = (): void => {
     if (pendingResolution === null || pendingDeleteTargets === null) return;
     // `pendingResolution` already re-resolved each pending path to its freshest
-    // entry and split kept vs. dropped (gone from the list, or now in-use /
-    // mid-delete). Start the run on the FRESHEST kept entries, and name the drops.
+    // entry and split kept vs. dropped (gone from the list, now in-use / mid-
+    // delete, or regressed to Checking). Start the run on the FRESHEST kept
+    // entries, and name the drops.
     const { kept, dropped } = pendingResolution;
     if (dropped.length > 0) {
-      toast.message(worktreeDropMessage(dropped));
+      toast.message(
+        worktreeDropMessage(
+          dropped,
+          (worktreePath) => enrichmentStateFor(worktreePath) === "pending",
+        ),
+      );
     }
     if (kept.length === 1) {
       start(kept[0], reviewedScriptsByPath.get(kept[0].worktreePath) ?? null);
@@ -1128,22 +1282,58 @@ export function WorktreesList(props: {
     () => buildWorktreeFlatItems(groups, collapsedRepoKeys),
     [groups, collapsedRepoKeys],
   );
+  const stickyHeaderIndexes = useMemo(
+    () =>
+      flatItems.flatMap((item, index) =>
+        item.kind === "header" ? [index] : [],
+      ),
+    [flatItems],
+  );
   const scrollParentRef = useRef<HTMLDivElement>(null);
+  const getScrollElement = useCallback(() => scrollParentRef.current, []);
+  const estimateVirtualItemSize = useCallback(
+    (index: number) =>
+      flatItems[index].kind === "header"
+        ? WORKTREE_REPO_HEADER_ESTIMATE_PX
+        : WORKTREE_ROW_ESTIMATE_PX,
+    [flatItems],
+  );
+  const getVirtualItemKey = useCallback(
+    (index: number) => worktreeFlatItemKey(flatItems[index]),
+    [flatItems],
+  );
+  const activeStickyHeaderIndexRef = useRef<number | null>(null);
+  const extractWorktreeVirtualRange = useCallback<typeof defaultRangeExtractor>(
+    (range) => {
+      if (stickyHeaderIndexes.length === 0) {
+        activeStickyHeaderIndexRef.current = null;
+        return defaultRangeExtractor(range);
+      }
+      const activeHeaderIndex = stickyHeaderIndexes.reduce(
+        (latest, index) => (index <= range.startIndex ? index : latest),
+        stickyHeaderIndexes[0],
+      );
+      activeStickyHeaderIndexRef.current = activeHeaderIndex;
+      return [
+        ...new Set([activeHeaderIndex, ...defaultRangeExtractor(range)]),
+      ].sort((left, right) => left - right);
+    },
+    [stickyHeaderIndexes],
+  );
   // `useVirtualizer` returns fresh function identities each render; the React
   // Compiler already skips memoizing this component for it, and this component
   // memoizes its own derived data with `useMemo`, so the compat warning is noise.
   // eslint-disable-next-line react-hooks/incompatible-library
   const virtualizer = useVirtualizer({
     count: flatItems.length,
-    getScrollElement: () => scrollParentRef.current,
-    estimateSize: (index) =>
-      flatItems[index].kind === "header"
-        ? WORKTREE_REPO_HEADER_ESTIMATE_PX
-        : WORKTREE_ROW_ESTIMATE_PX,
-    getItemKey: (index) => worktreeFlatItemKey(flatItems[index]),
+    getScrollElement,
+    estimateSize: estimateVirtualItemSize,
+    getItemKey: getVirtualItemKey,
+    rangeExtractor: extractWorktreeVirtualRange,
     overscan: WORKTREE_VIRTUAL_OVERSCAN,
   });
   const virtualItems = virtualizer.getVirtualItems();
+  const isVirtualizerScrolling = virtualizer.isScrolling;
   // The worktree paths actually on screen right now - the driver of per-viewport
   // enrichment. Repo-header items carry no path. Keyed by the joined string so the
   // report fires only when the on-screen SET changes, not on every scroll tick
@@ -1162,10 +1352,16 @@ export function WorktreesList(props: {
   const onScreenPathsKey = onScreenPaths.join("\n");
   const lastReportedPathsRef = useRef<string | null>(null);
   useEffect(() => {
+    if (isVirtualizerScrolling) return;
     if (lastReportedPathsRef.current === onScreenPathsKey) return;
     lastReportedPathsRef.current = onScreenPathsKey;
     onVisiblePathsChange(onScreenPaths);
-  }, [onScreenPathsKey, onScreenPaths, onVisiblePathsChange]);
+  }, [
+    isVirtualizerScrolling,
+    onScreenPathsKey,
+    onScreenPaths,
+    onVisiblePathsChange,
+  ]);
 
   return (
     <WorktreeListRenderProfiler
@@ -1192,10 +1388,17 @@ export function WorktreesList(props: {
         <WorktreesToolbar
           {...props.toolbarProps}
           selectionControls={
-            <WorktreesRepoExpansionControl
-              allCollapsed={allReposCollapsed}
-              onToggle={toggleAllReposCollapsed}
-            />
+            <>
+              <WorktreeSelectAllToggle
+                selectableCount={selectableWorktreePaths.length}
+                selectedCount={selectedCount}
+                onToggle={toggleSelectAllVisible}
+              />
+              <WorktreesRepoExpansionControl
+                allCollapsed={allReposCollapsed}
+                onToggle={toggleAllReposCollapsed}
+              />
+            </>
           }
           filterControls={
             <WorktreesFilterControls
@@ -1210,108 +1413,126 @@ export function WorktreesList(props: {
             />
           }
         />
-        <WorktreeSelectionActionBar
-          selectedCount={selectedCount}
-          onDelete={() => {
-            requestDeleteTargets(selectedTargets);
-          }}
-          onClear={clearSelection}
-        />
         <WorktreeDeleteProgressStrip
           summary={progressSummary}
           onDismiss={dismissTerminalBackgrounded}
         />
 
-        {groups.length === 0 ? null : (
-          <WorktreeSelectAllHeader
-            selectableCount={selectableWorktreePaths.length}
-            selectedCount={selectedCount}
-            onToggle={toggleSelectAllVisible}
-          />
-        )}
-
-        <div
-          ref={scrollParentRef}
-          data-testid="worktrees-virtual-scroll"
-          className="min-h-0 flex-1 overflow-y-auto"
-        >
-          {groups.length === 0 ? (
-            <WorktreesStateMessage tone="muted" spinner={false}>
-              No worktrees match your search.
-            </WorktreesStateMessage>
-          ) : (
-            <div
-              className="relative w-full"
-              style={{ height: `${virtualizer.getTotalSize()}px` }}
-            >
-              {virtualItems.map((virtualItem) => {
-                const item = flatItems[virtualItem.index];
-                return (
-                  <div
-                    key={virtualItem.key}
-                    data-index={virtualItem.index}
-                    ref={virtualizer.measureElement}
-                    className="absolute top-0 left-0 w-full"
-                    style={{ transform: `translateY(${virtualItem.start}px)` }}
-                  >
-                    {item.kind === "header" ? (
-                      <div
-                        className={cn(
-                          item.showDivider && "border-t border-border/40",
-                        )}
-                      >
-                        <WorktreeRepoHeader
-                          label={item.group.label}
-                          count={item.group.items.length}
-                          collapsed={item.collapsed}
-                          onToggle={() =>
-                            toggleRepoCollapsed(item.group, item.collapsed)
-                          }
-                        />
-                      </div>
-                    ) : (
-                      <div
-                        className={cn(
-                          !item.firstInGroup && "border-t border-border/30",
-                        )}
-                      >
-                        <WorktreeRow
-                          entry={item.entry}
-                          enrichment={enrichmentStateFor(
-                            item.entry.worktreePath,
+        {/*
+         * Relatively-positioned wrapper so the contextual selection bar can be
+         * anchored to the bottom of the list as an ABSOLUTELY-positioned
+         * overlay. Being out of flow means its mount/unmount when a selection
+         * starts or clears never shifts the scroll region or the rows inside
+         * it - the "no inserted top bar" product rule holds regardless of
+         * selection state.
+         */}
+        <div className="relative min-h-0 flex-1">
+          <div
+            ref={scrollParentRef}
+            data-testid="worktrees-virtual-scroll"
+            className="absolute inset-0 overflow-y-auto"
+            style={
+              actionBarClearancePx > 0
+                ? { paddingBottom: actionBarClearancePx }
+                : undefined
+            }
+          >
+            {groups.length === 0 ? (
+              <WorktreesStateMessage tone="muted" spinner={false}>
+                No worktrees match your search.
+              </WorktreesStateMessage>
+            ) : (
+              <div
+                className="relative w-full"
+                style={{ height: `${virtualizer.getTotalSize()}px` }}
+              >
+                {virtualItems.map((virtualItem) => {
+                  const item = flatItems[virtualItem.index];
+                  const isStickyHeader =
+                    item.kind === "header" &&
+                    virtualItem.index === activeStickyHeaderIndexRef.current;
+                  return (
+                    <div
+                      key={virtualItem.key}
+                      data-index={virtualItem.index}
+                      ref={virtualizer.measureElement}
+                      className={cn(
+                        "left-0 w-full",
+                        isStickyHeader
+                          ? "sticky top-0 z-30 bg-background"
+                          : "absolute top-0",
+                      )}
+                      style={
+                        isStickyHeader
+                          ? undefined
+                          : {
+                              transform: `translateY(${virtualItem.start}px)`,
+                            }
+                      }
+                    >
+                      {item.kind === "header" ? (
+                        <div
+                          className={cn(
+                            "bg-background",
+                            item.showDivider && "border-t border-border/40",
                           )}
-                          taskTitlesByEpicId={taskTitlesByEpicId}
-                          taskRollupByEpicId={taskRollupByEpicId}
-                          deleteStatus={
-                            backgroundedDeleteStatusByPath.get(
+                        >
+                          <WorktreeRepoHeader
+                            group={item.group}
+                            collapsed={item.collapsed}
+                            onToggle={toggleRepoCollapsed}
+                          />
+                        </div>
+                      ) : (
+                        <div
+                          className={cn(
+                            !item.firstInGroup && "border-t border-border/30",
+                          )}
+                        >
+                          <WorktreeRow
+                            entry={item.entry}
+                            enrichment={enrichmentStateFor(
                               item.entry.worktreePath,
-                            ) ?? null
-                          }
-                          selected={selectedPaths.has(item.entry.worktreePath)}
-                          canSelect={selectablePathSet.has(
-                            item.entry.worktreePath,
-                          )}
-                          onToggleSelection={() =>
-                            toggleSelection(item.entry.worktreePath)
-                          }
-                          onManageScripts={() =>
-                            setPendingScriptReview({
-                              target: item.entry,
-                              scripts:
-                                reviewedScriptsByPath.get(
-                                  item.entry.worktreePath,
-                                ) ?? item.entry.scripts,
-                            })
-                          }
-                          onDelete={() => requestDeleteTargets([item.entry])}
-                        />
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
+                            )}
+                            taskTitlesByEpicId={taskTitlesByEpicId}
+                            taskRollupByEpicId={taskRollupByEpicId}
+                            deleteStatus={
+                              backgroundedDeleteStatusByPath.get(
+                                item.entry.worktreePath,
+                              ) ?? null
+                            }
+                            selected={selectedPaths.has(
+                              item.entry.worktreePath,
+                            )}
+                            canSelect={selectablePathSet.has(
+                              item.entry.worktreePath,
+                            )}
+                            onToggleSelection={toggleSelection}
+                            onManageScripts={openScriptReviewFor}
+                            onDelete={requestDeleteTarget}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+          {selectedCount > 0 ? (
+            <div
+              ref={actionBarHeightObserver.ref}
+              className="absolute inset-x-8 bottom-4 z-30 flex flex-wrap items-center gap-3 rounded-lg border border-border/80 bg-popover px-5 py-3 shadow-2xl ring-1 ring-foreground/10"
+              data-testid="worktrees-selection-action-bar"
+            >
+              <WorktreeSelectionActionBar
+                selectedCount={selectedCount}
+                checkingCount={checkingSelectedCount}
+                onDelete={requestDeleteSelectedTargets}
+                onClear={clearSelection}
+              />
             </div>
-          )}
+          ) : null}
         </div>
 
         <ConfirmDestructiveDialog
@@ -1381,14 +1602,16 @@ function WorktreeDeleteProgressStrip(props: {
 }
 
 /**
- * Standard tri-state global select-all header - one row above the list, its
- * checkbox aligned with the row checkboxes. Selects/deselects every CURRENTLY-
- * VISIBLE, selectable row (post-filter + post-search, across all repo groups).
- * Indeterminate when some-but-not-all are selected; disabled when nothing
- * selectable. In-use / mid-delete rows keep disabled row checkboxes and are
- * excluded here (standard table behavior).
+ * Standard tri-state select-all - lives as a quiet toggle in the persistent
+ * toolbar action group (next to Collapse/Expand all and Refresh) instead of a
+ * dedicated header row above the list, so there is no permanent chrome bar
+ * sitting before the content. Selects/deselects every CURRENTLY-VISIBLE,
+ * selectable row (post-filter + post-search, across all repo groups, minus
+ * collapsed groups). Indeterminate when some-but-not-all are selected;
+ * disabled when nothing is selectable. In-use / mid-delete rows are excluded
+ * from the selectable count (standard table behavior).
  */
-function WorktreeSelectAllHeader(props: {
+function WorktreeSelectAllToggle(props: {
   readonly selectableCount: number;
   readonly selectedCount: number;
   readonly onToggle: () => void;
@@ -1401,29 +1624,37 @@ function WorktreeSelectAllHeader(props: {
   let indicator: ReactNode = null;
   if (allSelected) indicator = <Check className="size-3" />;
   else if (indeterminate) indicator = <Minus className="size-3" />;
+  const label = "Select all visible worktrees";
   return (
-    <div className="flex items-center gap-3 border-b border-border/40 bg-muted/10 px-5 py-1.5">
-      <div className="flex w-5 shrink-0 items-center justify-center">
-        <button
-          type="button"
-          role="checkbox"
-          aria-checked={ariaChecked}
-          aria-label="Select all worktrees"
-          data-testid="worktrees-select-all"
-          disabled={props.selectableCount === 0}
-          onClick={props.onToggle}
-          className={cn(
-            "flex size-4 items-center justify-center rounded-sm border transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-40",
-            allSelected || indeterminate
-              ? "border-primary bg-primary text-primary-foreground"
-              : "border-border bg-background text-transparent hover:border-foreground",
-          )}
-        >
-          {indicator}
-        </button>
-      </div>
-      <span className="text-ui-xs text-muted-foreground">Select all</span>
-    </div>
+    <button
+      type="button"
+      role="checkbox"
+      aria-checked={ariaChecked}
+      aria-label={label}
+      title={label}
+      data-testid="worktrees-select-all"
+      disabled={props.selectableCount === 0}
+      onClick={props.onToggle}
+      className={cn(
+        "flex h-7 shrink-0 items-center gap-1.5 rounded-sm border px-2 text-ui-xs font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-40",
+        allSelected || indeterminate
+          ? "border-border bg-muted text-foreground"
+          : "border-border bg-background text-muted-foreground hover:border-foreground hover:bg-muted hover:text-foreground",
+      )}
+    >
+      <span
+        aria-hidden
+        className={cn(
+          "flex size-3.5 items-center justify-center rounded-[0.1875rem] border",
+          allSelected || indeterminate
+            ? "border-foreground/70 bg-foreground text-background"
+            : "border-muted-foreground/50",
+        )}
+      >
+        {indicator}
+      </span>
+      <span>Select all</span>
+    </button>
   );
 }
 
@@ -1437,24 +1668,55 @@ function worktreeSelectAllAriaChecked(
 }
 
 /**
- * Contextual action bar - present ONLY while a selection is active (empty =
- * absent, so the page has no permanent selection chrome). Shows the count, a
- * destructive "Delete N…" primary action, and a "Clear".
+ * Contextual action bar content - present ONLY while a selection is active
+ * (empty = absent, so the page has no permanent selection chrome). The caller
+ * (`WorktreesList`) wraps this in the absolutely-positioned overlay div that
+ * floats over the BOTTOM of the list (out of flow, so mounting/unmounting
+ * while selecting/clearing never shifts row positions) and owns the ref that
+ * measures that wrapper's real height - see `useObservedHeight` and
+ * `WORKTREE_ACTION_BAR_GAP_PX`. Shows the count, a destructive "Delete N…"
+ * primary action, and a "Clear". While one or more selected rows are still
+ * `Checking` their tier isn't known yet, so bulk delete is disabled and a
+ * notice names how many are still pending - the same "pending status is not
+ * safe" rule the single-row delete button enforces.
  */
 function WorktreeSelectionActionBar(props: {
   readonly selectedCount: number;
+  readonly checkingCount: number;
   readonly onDelete: () => void;
   readonly onClear: () => void;
 }): ReactNode {
-  if (props.selectedCount === 0) return null;
-  return (
-    <div
-      className="flex flex-wrap items-center gap-3 border-b border-border/40 bg-muted/20 px-5 py-2"
-      data-testid="worktrees-selection-action-bar"
+  const blockedByChecking = props.checkingCount > 0;
+  const selectedWorktreeNoun =
+    props.selectedCount === 1 ? "worktree" : "worktrees";
+  const deleteButton = (
+    <Button
+      type="button"
+      variant="destructive"
+      size="sm"
+      disabled={blockedByChecking}
+      onClick={props.onDelete}
+      aria-label={`Delete ${props.selectedCount} selected ${selectedWorktreeNoun}`}
+      data-testid="worktrees-list-delete-selected"
+      className="shrink-0 whitespace-nowrap"
     >
+      <Trash2 className="size-4" />
+      Delete {props.selectedCount} {selectedWorktreeNoun}
+    </Button>
+  );
+  return (
+    <>
       <span className="text-ui-sm font-medium text-foreground">
         {props.selectedCount} selected
       </span>
+      {blockedByChecking ? (
+        <span
+          className="text-ui-xs text-muted-foreground"
+          data-testid="worktrees-selection-checking-notice"
+        >
+          {worktreeCheckingNoticeText(props.checkingCount)}
+        </span>
+      ) : null}
       <div className="ml-auto flex items-center gap-1">
         <Button
           type="button"
@@ -1466,20 +1728,26 @@ function WorktreeSelectionActionBar(props: {
           <X className="size-4" />
           Clear
         </Button>
-        <Button
-          type="button"
-          variant="destructive"
-          size="sm"
-          onClick={props.onDelete}
-          aria-label={`Delete ${props.selectedCount} selected worktrees`}
-          data-testid="worktrees-list-delete-selected"
-        >
-          <Trash2 className="size-4" />
-          Delete {props.selectedCount}…
-        </Button>
+        {blockedByChecking ? (
+          <TooltipWrapper
+            label={worktreeCheckingNoticeText(props.checkingCount)}
+            side="top"
+            sideOffset={undefined}
+            align="end"
+          >
+            <span className="inline-flex shrink-0">{deleteButton}</span>
+          </TooltipWrapper>
+        ) : (
+          deleteButton
+        )}
       </div>
-    </div>
+    </>
   );
+}
+
+function worktreeCheckingNoticeText(checkingCount: number): string {
+  const plural = checkingCount === 1 ? "worktree is" : "worktrees are";
+  return `${checkingCount} selected ${plural} still checking status`;
 }
 
 /**
@@ -1529,6 +1797,14 @@ function WorktreeBulkDeleteDialog(props: {
                     data-testid="worktree-bulk-delete-caveat"
                   >
                     {summary.unverifiedCaveat}
+                  </p>
+                ) : null}
+                {summary.unknownRiskCaveat !== null ? (
+                  <p
+                    className="text-ui-sm leading-relaxed text-amber-700 dark:text-amber-400"
+                    data-testid="worktree-bulk-delete-unknown-caveat"
+                  >
+                    {summary.unknownRiskCaveat}
                   </p>
                 ) : null}
                 {summary.exclusions !== null ? (
@@ -1590,40 +1866,68 @@ type WorktreeScriptReviewDraft = {
   readonly scripts: RepoScriptsSeed | null;
 };
 
-function WorktreeRepoHeader(props: {
-  readonly label: string;
-  readonly count: number;
+/**
+ * Repo group header - a quiet sticky divider, not a second status row: no
+ * filled high-emphasis background, and muted/regular-weight text so it never
+ * competes with a row's bold branch name or colored tier pill. Collapse/expand
+ * stays a full-width button for a generous hit target; the chevron carries the
+ * only state-change affordance.
+ */
+const WorktreeRepoHeader = memo(function WorktreeRepoHeader(props: {
+  readonly group: WorktreeRepoGroup;
   readonly collapsed: boolean;
-  readonly onToggle: () => void;
+  readonly onToggle: (group: WorktreeRepoGroup, collapsed: boolean) => void;
 }): ReactNode {
-  const action = props.collapsed ? "Expand" : "Collapse";
+  const { collapsed, group, onToggle } = props;
+  const handleToggle = useCallback(() => {
+    onToggle(group, collapsed);
+  }, [onToggle, group, collapsed]);
+  const action = collapsed ? "Expand" : "Collapse";
   return (
     <button
       type="button"
-      aria-expanded={!props.collapsed}
-      aria-label={`${action} ${props.label}`}
-      className="flex w-full min-w-0 items-center gap-2 bg-muted/30 px-5 py-2 text-left transition-colors hover:bg-accent/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50"
-      onClick={props.onToggle}
+      aria-expanded={!collapsed}
+      aria-label={`${action} ${group.label}`}
+      data-testid="worktree-repo-header"
+      className="flex w-full min-w-0 items-center gap-2 border-b border-border/40 bg-background px-5 py-1.5 text-left transition-colors hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50"
+      onClick={handleToggle}
     >
       <ChevronRight
         className={cn(
           "size-3.5 shrink-0 text-muted-foreground transition-transform",
-          !props.collapsed && "rotate-90",
+          !collapsed && "rotate-90",
         )}
         aria-hidden
       />
-      <FolderGit2 className="size-4 shrink-0 text-muted-foreground" />
-      <span className="min-w-0 flex-1 truncate text-ui-sm font-medium text-foreground">
-        {props.label}
+      <FolderGit2 className="size-3.5 shrink-0 text-muted-foreground" />
+      <span className="min-w-0 flex-1 truncate text-ui-sm font-normal text-muted-foreground">
+        {group.label}
       </span>
       <span className="shrink-0 text-ui-xs text-muted-foreground">
-        {props.count}
+        {group.items.length}
       </span>
     </button>
   );
+});
+
+/**
+ * Why a row's delete affordance is disabled, if at all - `in-use` takes
+ * priority (it also blocks selection), then `checking` (a `Checking` row's
+ * tier isn't known yet, so its delete confirmation can't be trusted). An
+ * `Unknown` row (settled enrichment error) is NOT disabled here - it is still
+ * deletable, just through the unknown-risk confirmation instead of the
+ * generic one.
+ */
+function worktreeDeleteDisabledReason(
+  entry: WorktreeHostEntryV11,
+  enrichment: WorktreeEnrichmentState,
+): "in-use" | "checking" | null {
+  if (entry.inUse) return "in-use";
+  if (enrichment === "pending") return "checking";
+  return null;
 }
 
-function WorktreeRow(props: {
+const WorktreeRow = memo(function WorktreeRow(props: {
   readonly entry: WorktreeHostEntryV11;
   // This row's activity-enrichment state, driving the tier pill: `pending` (still
   // in flight → "Checking…"), `unknown` (settled to error → non-animated fallback),
@@ -1634,9 +1938,9 @@ function WorktreeRow(props: {
   readonly deleteStatus: WorktreeRowDeleteStatus | null;
   readonly selected: boolean;
   readonly canSelect: boolean;
-  readonly onToggleSelection: () => void;
-  readonly onManageScripts: () => void;
-  readonly onDelete: () => void;
+  readonly onToggleSelection: (worktreePath: string) => void;
+  readonly onManageScripts: (target: WorktreeHostEntryV11) => void;
+  readonly onDelete: (target: WorktreeHostEntryV11) => void;
 }): ReactNode {
   const {
     entry,
@@ -1653,6 +1957,33 @@ function WorktreeRow(props: {
   const deleting = deleteStatus !== null;
   const selectedForDelete = selected && canSelect;
   const classification = classifyWorktree(entry);
+  const navigate = useNavigate();
+  const openTask = useCallback(
+    (epicId: string): void => {
+      navigateToTabIntent(
+        navigate,
+        openOrFocusEpicIntent({ epicId, focus: undefined }),
+      );
+    },
+    [navigate],
+  );
+  const toggleSelection = useCallback(() => {
+    onToggleSelection(entry.worktreePath);
+  }, [onToggleSelection, entry.worktreePath]);
+  const manageScripts = useCallback(() => {
+    onManageScripts(entry);
+  }, [onManageScripts, entry]);
+  const deleteWorktree = useCallback(() => {
+    onDelete(entry);
+  }, [onDelete, entry]);
+  const { copy: copyToClipboard } = useClipboardCopy({
+    resetMs: 2000,
+    onSuccess: () => toast.success("Copied worktree path"),
+    onError: () => toast.error("Couldn't copy path to clipboard."),
+  });
+  const copyPath = useCallback(() => {
+    copyToClipboard(entry.worktreePath);
+  }, [copyToClipboard, entry.worktreePath]);
   return (
     <div
       aria-busy={deleting}
@@ -1660,7 +1991,7 @@ function WorktreeRow(props: {
       className={cn(
         "group/worktree-row relative flex items-center gap-3 px-5 py-3 transition-colors",
         deleting ? "pointer-events-none opacity-50" : "hover:bg-accent/30",
-        selectedForDelete && "bg-accent/40 ring-1 ring-inset ring-primary/40",
+        selectedForDelete && "bg-muted/25",
       )}
     >
       <div className="flex w-5 shrink-0 items-center justify-center">
@@ -1669,18 +2000,19 @@ function WorktreeRow(props: {
           selected={selected}
           canSelect={canSelect}
           deleting={deleting}
-          onToggleSelection={onToggleSelection}
+          onToggleSelection={toggleSelection}
         />
       </div>
       <div className="min-w-0 flex-1 space-y-1 pr-10">
         <div className="flex flex-wrap items-center gap-2">
           <WorktreeTierPill tier={classification.tier} state={enrichment} />
+          <WorktreePrChips entry={entry} />
           <span className="truncate text-ui-sm font-medium text-foreground">
             {branchLabel(entry)}
           </span>
         </div>
         <WorktreeSecondaryFacts
-          facts={classification.facts}
+          facts={classification.nonPrFacts}
           lastActivityAt={entry.lastActivityAt}
         />
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -1688,10 +2020,7 @@ function WorktreeRow(props: {
             owners={entry.owners}
             taskTitlesByEpicId={taskTitlesByEpicId}
             taskRollupByEpicId={taskRollupByEpicId}
-          />
-          <WorktreePathAffordance
-            worktreePath={entry.worktreePath}
-            disabled={deleting}
+            onOpenTask={openTask}
           />
         </div>
       </div>
@@ -1707,16 +2036,18 @@ function WorktreeRow(props: {
       ) : null}
       {!deleting ? (
         <WorktreeRowActions
-          inUse={entry.inUse}
-          onManageScripts={onManageScripts}
-          onDelete={onDelete}
+          deleteDisabledReason={worktreeDeleteDisabledReason(entry, enrichment)}
+          onCopyPath={copyPath}
+          onManageScripts={manageScripts}
+          onDelete={deleteWorktree}
+          triggerLabel={`Worktree actions for ${branchLabel(entry)}`}
           label={`Delete worktree ${branchLabel(entry)}`}
-          scriptsLabel={`Manage scripts for worktree ${branchLabel(entry)}`}
+          scriptsLabel="Manage script"
         />
       ) : null}
     </div>
   );
-}
+});
 
 /**
  * Evidence-tier pill. Leads every row with a TEXT label (never color-only, for
@@ -1728,9 +2059,10 @@ function WorktreeTierPill(props: {
   readonly tier: WorktreeTier;
   readonly state: WorktreeEnrichmentState;
 }): ReactNode {
-  // While the activity probe is still in flight the tier isn't known yet - show a
-  // neutral "Checking…" spinner rather than a base-only tier that would flip (e.g.
-  // Review -> Merged) once the probes land.
+  // While the activity probe is still in flight the tier isn't known yet. A
+  // dashed border + full-contrast text (never the muted/faded treatment a
+  // resolved-safe pill would use) reads as "still resolving", not "quiet and
+  // fine" - pending status is not safe, so it must not look neutral-safe.
   if (props.state === "pending") {
     return (
       <TooltipWrapper
@@ -1741,7 +2073,7 @@ function WorktreeTierPill(props: {
       >
         <Badge
           variant="outline"
-          className="gap-1 font-medium border-border/40 bg-muted/30 text-muted-foreground"
+          className="gap-1 font-medium border-dashed border-border bg-muted/40 text-foreground"
           data-testid="worktree-tier-pill"
           data-tier="pending"
         >
@@ -1758,7 +2090,10 @@ function WorktreeTierPill(props: {
   // The probe SETTLED to an error (host unreachable, gh/git probe timed out). The
   // tier stays unknowable, so read a static "Unknown" - NEVER an infinite spinner.
   // Like a pending row, this row is excluded from the green / tier-filtered cohorts
-  // upstream; a refresh or scrolling it back into view retries the probe.
+  // upstream; a refresh or scrolling it back into view retries the probe. Styled in
+  // the same caution family the unknown-risk delete confirmation already uses
+  // (amber), but with a dashed border and a distinct icon/label so it never reads
+  // as the proven "Review" tier - this is unresolved, not a confirmed risk finding.
   if (props.state === "unknown") {
     return (
       <TooltipWrapper
@@ -1769,7 +2104,7 @@ function WorktreeTierPill(props: {
       >
         <Badge
           variant="outline"
-          className="gap-1 font-medium border-border/40 bg-muted/20 text-muted-foreground/80"
+          className="gap-1 font-medium border-dashed border-amber-600/40 bg-amber-500/5 text-amber-700 dark:border-amber-400/40 dark:text-amber-300/90"
           data-testid="worktree-tier-pill"
           data-tier="unknown"
         >
@@ -1864,31 +2199,208 @@ function WorktreeSecondaryFacts(props: {
   );
 }
 
-/**
- * The full worktree path leaves the scan line (it is long and low-signal) but
- * stays one hover/click away: a copy-path affordance whose tooltip is the full
- * path. Confirmation dialogs still list full paths - delete is path-addressed.
- */
-function WorktreePathAffordance(props: {
-  readonly worktreePath: string;
-  readonly disabled: boolean;
+interface WorktreePrChipModel {
+  readonly key: string;
+  readonly label: string;
+  readonly ariaLabel: string;
+  readonly prState: WorktreeDisplayedPrState;
+  readonly prUrl: string;
+}
+
+interface WorktreeMutedPrChipModel {
+  readonly key: string;
+  readonly label: string;
+}
+
+function WorktreePrChips(props: {
+  readonly entry: WorktreeHostEntryV11;
+}): ReactNode {
+  const chips = worktreePrChips(props.entry);
+  if (chips.length === 0) return null;
+  return chips.map((chip) =>
+    "prUrl" in chip ? (
+      <WorktreePrChip key={chip.key} chip={chip} />
+    ) : (
+      <WorktreeMutedPrChip key={chip.key} chip={chip} />
+    ),
+  );
+}
+
+function worktreePrChips(
+  entry: WorktreeHostEntryV11,
+): readonly (WorktreePrChipModel | WorktreeMutedPrChipModel)[] {
+  return [
+    ...superprojectPrChip(entry),
+    ...entry.submodules.flatMap((submodule) => [
+      ...submodulePrChip(submodule),
+      ...submoduleUnmergedChip(submodule),
+    ]),
+  ];
+}
+
+function superprojectPrChip(
+  entry: WorktreeHostEntryV11,
+): readonly WorktreePrChipModel[] {
+  const prState = displayedPrState(entry.prState);
+  if (prState === null || entry.prNumber === null || entry.prUrl === null) {
+    return [];
+  }
+  return [
+    {
+      key: `superproject:${entry.prNumber}:${entry.prUrl}`,
+      label: `#${entry.prNumber} ${WORKTREE_PR_STATE_LABEL[prState]}`,
+      ariaLabel: `Open PR #${entry.prNumber} ${WORKTREE_PR_STATE_LABEL[prState]}`,
+      prState,
+      prUrl: entry.prUrl,
+    },
+  ];
+}
+
+function submodulePrChip(
+  submodule: WorktreeSubmoduleMergeFact,
+): readonly WorktreePrChipModel[] {
+  const prState = displayedPrState(submodule.prState);
+  if (
+    prState === null ||
+    submodule.prNumber === null ||
+    submodule.prUrl === null
+  ) {
+    return [];
+  }
+  const repoName = submodule.repoIdentifier.repo;
+  return [
+    {
+      key: `submodule:${submodule.repoIdentifier.owner}/${repoName}:${submodule.branch}:${submodule.prNumber}:${submodule.prUrl}`,
+      label: `${repoName} #${submodule.prNumber} ${WORKTREE_PR_STATE_LABEL[prState]}`,
+      ariaLabel: `Open ${repoName} PR #${submodule.prNumber} ${WORKTREE_PR_STATE_LABEL[prState]}`,
+      prState,
+      prUrl: submodule.prUrl,
+    },
+  ];
+}
+
+function submoduleUnmergedChip(
+  submodule: WorktreeSubmoduleMergeFact,
+): readonly WorktreeMutedPrChipModel[] {
+  if (submodule.prState !== "none" || submodule.mergedIntoDefault) return [];
+  return [
+    {
+      key: `submodule-unmerged:${submodule.repoIdentifier.owner}/${submodule.repoIdentifier.repo}:${submodule.branch}`,
+      label: `${submodule.repoIdentifier.repo} · unmerged`,
+    },
+  ];
+}
+
+type WorktreeDisplayedPrState = "open" | "closed" | "merged";
+
+const WORKTREE_PR_STATE_LABEL: Record<WorktreeDisplayedPrState, string> = {
+  open: "Open",
+  closed: "Closed",
+  merged: "Merged",
+};
+
+function WorktreePrChip(props: {
+  readonly chip: WorktreePrChipModel;
+}): ReactNode {
+  const style = WORKTREE_PR_PILL_STYLE[props.chip.prState];
+  return (
+    <Badge
+      asChild
+      variant="outline"
+      className={cn("gap-1 font-medium", style.className)}
+    >
+      <WorktreePrAnchor
+        href={props.chip.prUrl}
+        ariaLabel={props.chip.ariaLabel}
+        className="max-w-[min(60vw,16rem)]"
+        testId="worktree-pr-chip"
+        prState={props.chip.prState}
+      >
+        <span className="truncate">{props.chip.label}</span>
+        <ExternalLink className="size-3" aria-hidden />
+      </WorktreePrAnchor>
+    </Badge>
+  );
+}
+
+function displayedPrState(
+  prState: WorktreePrState | null,
+): WorktreeDisplayedPrState | null {
+  if (prState === "open" || prState === "closed" || prState === "merged") {
+    return prState;
+  }
+  return null;
+}
+
+const WORKTREE_PR_PILL_STYLE: Record<
+  WorktreeDisplayedPrState,
+  { readonly className: string }
+> = {
+  open: {
+    className:
+      "border-green-600/30 bg-green-500/10 text-green-700 dark:border-green-400/30 dark:text-green-300",
+  },
+  closed: {
+    className:
+      "border-red-600/25 bg-red-500/10 text-red-700 dark:border-red-400/25 dark:text-red-300",
+  },
+  merged: {
+    className:
+      "border-purple-600/30 bg-purple-500/10 text-purple-700 dark:border-purple-400/30 dark:text-purple-300",
+  },
+};
+
+function WorktreeMutedPrChip(props: {
+  readonly chip: WorktreeMutedPrChipModel;
 }): ReactNode {
   return (
-    <TooltipWrapper
-      label={props.worktreePath}
-      side="top"
-      sideOffset={undefined}
-      align="start"
+    <Badge
+      variant="outline"
+      className="gap-1 border-border/40 bg-muted/30 font-medium text-muted-foreground"
+      data-testid="worktree-pr-chip"
+      data-pr-state="unmerged"
     >
-      <span className="inline-flex shrink-0">
-        <CopyTextButton
-          value={props.worktreePath}
-          label={null}
-          ariaLabel={`Copy path ${props.worktreePath}`}
-          disabled={props.disabled}
-        />
+      <span className="max-w-[min(60vw,16rem)] truncate">
+        {props.chip.label}
       </span>
-    </TooltipWrapper>
+    </Badge>
+  );
+}
+
+function WorktreePrAnchor(props: {
+  readonly href: string;
+  readonly ariaLabel: string;
+  readonly className: string | undefined;
+  readonly testId: string | undefined;
+  readonly prState: WorktreeDisplayedPrState | undefined;
+  readonly children: ReactNode;
+}): ReactNode {
+  const runnerHost = use(RunnerHostContext);
+  const openExternalLink = useRunnerOpenExternalLink();
+  const openExternal = useCallback(
+    (event: MouseEvent<HTMLAnchorElement>): void => {
+      event.stopPropagation();
+      // No RunnerHost bound (e.g. web): let the browser handle the anchor
+      // natively, preserving modifier-click/middle-click tab semantics.
+      if (runnerHost === null) return;
+      event.preventDefault();
+      openExternalLink.mutate(props.href);
+    },
+    [props.href, runnerHost, openExternalLink],
+  );
+  return (
+    <a
+      href={props.href}
+      target="_blank"
+      rel="noreferrer"
+      aria-label={props.ariaLabel}
+      className={props.className}
+      data-testid={props.testId}
+      data-pr-state={props.prState}
+      onClick={openExternal}
+    >
+      {props.children}
+    </a>
   );
 }
 
@@ -1905,6 +2417,7 @@ function WorktreeTaskAssociation(props: {
   readonly owners: WorktreeHostEntryV11["owners"];
   readonly taskTitlesByEpicId: ReadonlyMap<string, string>;
   readonly taskRollupByEpicId: ReadonlyMap<string, TaskMergeRollup>;
+  readonly onOpenTask: (epicId: string) => void;
 }): ReactNode {
   const epicIds = [...new Set(props.owners.map((owner) => owner.epicId))];
   if (epicIds.length === 0) {
@@ -1927,11 +2440,21 @@ function WorktreeTaskAssociation(props: {
       {named.map((item) => (
         <span key={item.epicId} className="flex items-center gap-1">
           <Badge
+            asChild
             variant="outline"
-            className="max-w-[min(60vw,16rem)] font-normal"
-            title={item.title}
+            className="max-w-[min(60vw,16rem)] cursor-pointer font-normal hover:bg-muted hover:text-muted-foreground"
           >
-            <span className="truncate">{item.title}</span>
+            <button
+              type="button"
+              title={item.title}
+              aria-label={`Open Task ${item.title}`}
+              onClick={(event) => {
+                event.stopPropagation();
+                props.onOpenTask(item.epicId);
+              }}
+            >
+              <span className="truncate">{item.title}</span>
+            </button>
           </Badge>
           <TaskMergeRollupBadge
             rollup={props.taskRollupByEpicId.get(item.epicId) ?? null}
@@ -1948,13 +2471,19 @@ function WorktreeTaskAssociation(props: {
 }
 
 /**
- * True-AND Task merge rollup badge, sitting beside a resolved Task chip. `Merged`
- * (fully-merged green) means every owned branch - the superproject binding branch
- * and each owned submodule - has a HEAD-validated merged PR; `Merged N/M` (muted
- * amber) is the honest partial when some but not all have landed (the classic
- * "submodule PR merged, superproject gitlink bump still open" case). Renders
- * nothing when there's no merged progress to claim (no PR anywhere, or a pre-M4
- * host with no submodule/PR facts) - the chip then shows just the Task title.
+ * True-AND Task merge rollup - a QUIET caption beside a resolved Task chip, never
+ * a colored Badge: the row's own worktree tier pill is the row's one loud signal,
+ * and this rollup speaks to the Task's aggregate progress across every worktree it
+ * owns, a different scope that must not compete with or be mistaken for that pill
+ * (it previously reused the tier pill's exact green/GitMerge treatment for
+ * `merged`, which read as a second worktree-tier signal). Plain muted text, no
+ * icon, no border/background, and a "Task" prefix carries the distinction instead.
+ * `Merged` means every owned branch - the superproject binding branch and each
+ * owned submodule - has a HEAD-validated merged PR; `Merged N/M` is the honest
+ * partial when some but not all have landed (the classic "submodule PR merged,
+ * superproject gitlink bump still open" case). Renders nothing when there's no
+ * merged progress to claim (no PR anywhere, or a pre-M4 host with no submodule/PR
+ * facts) - the chip then shows just the Task title.
  */
 function TaskMergeRollupBadge(props: {
   readonly rollup: TaskMergeRollup | null;
@@ -1963,14 +2492,8 @@ function TaskMergeRollupBadge(props: {
   if (rollup === null || rollup.status === "none") return null;
   const fullyMerged = rollup.status === "merged";
   return (
-    <Badge
-      variant="outline"
-      className={cn(
-        "gap-1 font-medium",
-        fullyMerged
-          ? "border-emerald-600/30 bg-emerald-500/10 text-emerald-700 dark:border-emerald-400/30 dark:text-emerald-300"
-          : "border-amber-600/25 bg-amber-500/10 text-amber-700 dark:border-amber-400/25 dark:text-amber-300",
-      )}
+    <span
+      className="text-ui-xs text-muted-foreground"
       data-testid="task-merge-rollup"
       data-rollup-status={rollup.status}
       title={
@@ -1979,9 +2502,8 @@ function TaskMergeRollupBadge(props: {
           : `${rollup.merged} of ${rollup.total} owned branches merged`
       }
     >
-      <GitMerge className="size-3" aria-hidden />
-      {taskMergeRollupLabel(rollup)}
-    </Badge>
+      Task {taskMergeRollupLabel(rollup)}
+    </span>
   );
 }
 
@@ -2048,7 +2570,7 @@ function WorktreeSelectionControl(props: {
         }),
         props.canSelect ? "cursor-pointer" : "cursor-not-allowed",
         props.selected && props.canSelect
-          ? "border-primary bg-primary text-primary-foreground"
+          ? "border-foreground/70 bg-foreground text-background"
           : "border-border bg-background text-transparent hover:border-foreground",
       )}
       onClick={(event) => {
@@ -2072,84 +2594,90 @@ function WorktreeSelectionControl(props: {
   );
 }
 
+const WORKTREE_DELETE_DISABLED_COPY: Record<
+  "in-use" | "checking",
+  { readonly ariaLabel: string }
+> = {
+  "in-use": {
+    ariaLabel: "Delete worktree (in use by an active chat or agent)",
+  },
+  checking: {
+    ariaLabel: "Delete worktree (status is still being checked)",
+  },
+};
+
+/**
+ * Persistent row-end actions: one quiet overflow trigger at rest. Utilities and
+ * destructive delete live together inside the compact menu; delete stays visually
+ * destructive and still carries branch-specific accessible copy.
+ */
 function WorktreeRowActions(props: {
-  readonly inUse: boolean;
+  readonly deleteDisabledReason: "in-use" | "checking" | null;
+  readonly onCopyPath: () => void;
   readonly onManageScripts: () => void;
   readonly onDelete: () => void;
+  readonly triggerLabel: string;
   readonly label: string;
   readonly scriptsLabel: string;
 }): ReactNode {
+  const deleteDisabled = props.deleteDisabledReason !== null;
+  const deleteLabel =
+    props.deleteDisabledReason === null
+      ? props.label
+      : WORKTREE_DELETE_DISABLED_COPY[props.deleteDisabledReason].ariaLabel;
   return (
-    <div className="absolute right-5 top-1/2 flex -translate-y-1/2 items-center gap-1 opacity-0 transition-opacity group-hover/worktree-row:opacity-100 focus-within:opacity-100">
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon-sm"
-        aria-label={props.scriptsLabel}
-        aria-haspopup="dialog"
-        onClick={props.onManageScripts}
-        className="text-muted-foreground hover:bg-muted hover:text-foreground"
-      >
-        <FileSliders className="size-4" />
-      </Button>
-      <WorktreeDeleteButton
-        inUse={props.inUse}
-        onDelete={props.onDelete}
-        label={props.label}
-      />
+    <div className="absolute right-4 top-1/2 flex -translate-y-1/2 items-center gap-1">
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label={props.triggerLabel}
+            data-testid="worktree-row-actions-trigger"
+            className="text-muted-foreground hover:bg-muted hover:text-foreground"
+          >
+            <MoreHorizontal className="size-4" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent
+          align="end"
+          className="w-max min-w-32 max-w-[min(80vw,14rem)] p-1.5"
+          data-testid="worktree-row-actions-menu"
+        >
+          <DropdownMenuItem
+            data-testid="worktree-row-copy-path"
+            onSelect={props.onCopyPath}
+            className="gap-2 px-2 py-2"
+          >
+            <Copy className="size-3.5" aria-hidden />
+            Copy path
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            data-testid="worktree-row-manage-scripts"
+            aria-haspopup="dialog"
+            onSelect={props.onManageScripts}
+            className="items-start gap-2 whitespace-normal px-2 py-2 text-left leading-snug"
+          >
+            <FileSliders className="size-3.5" aria-hidden />
+            {props.scriptsLabel}
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            data-testid="worktree-row-delete"
+            variant="destructive"
+            aria-label={deleteLabel}
+            title={deleteLabel}
+            disabled={deleteDisabled}
+            onSelect={props.onDelete}
+            className="gap-2 px-2 py-2"
+          >
+            <Trash2 className="size-3.5" aria-hidden />
+            Delete worktree
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
   );
-}
-
-function WorktreeDeleteButton(props: {
-  readonly inUse: boolean;
-  readonly onDelete: () => void;
-  readonly label: string;
-}): ReactNode {
-  if (props.inUse) {
-    const button = (
-      <button
-        type="button"
-        aria-disabled="true"
-        aria-label="Delete worktree (in use by an active chat or agent)"
-        className={cn(
-          "inline-flex size-7 cursor-not-allowed items-center justify-center rounded-sm text-muted-foreground/50 outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
-        )}
-        onClick={(event) => {
-          event.preventDefault();
-          event.stopPropagation();
-        }}
-      >
-        <Trash2 className="size-4" />
-      </button>
-    );
-    return (
-      <TooltipWrapper
-        label="In use by an active chat or agent"
-        side="top"
-        sideOffset={undefined}
-        align="end"
-      >
-        {button}
-      </TooltipWrapper>
-    );
-  }
-  const button = (
-    <Button
-      type="button"
-      variant="ghost"
-      size="icon-sm"
-      aria-label={props.label}
-      aria-haspopup="dialog"
-      onClick={props.onDelete}
-      className={cn(
-        "text-muted-foreground hover:bg-destructive/10 hover:text-destructive",
-      )}
-    >
-      <Trash2 className="size-4" />
-    </Button>
-  );
-  return button;
 }
 
 function WorktreeScriptReviewDialog(props: {
@@ -2307,12 +2835,24 @@ function compareByCreatedAt(
 function filterWorktrees(
   worktrees: readonly WorktreeHostEntryV11[],
   searchText: string,
-  taskTitlesByEpicId: ReadonlyMap<string, string>,
+  searchHaystackByPath: ReadonlyMap<string, string>,
 ): readonly WorktreeHostEntryV11[] {
   const needle = searchText.trim().toLowerCase();
   if (needle.length === 0) return worktrees;
   return worktrees.filter((entry) =>
-    worktreeSearchHaystack(entry, taskTitlesByEpicId).includes(needle),
+    (searchHaystackByPath.get(entry.worktreePath) ?? "").includes(needle),
+  );
+}
+
+function buildWorktreeSearchHaystackByPath(
+  worktrees: readonly WorktreeHostEntryV11[],
+  taskTitlesByEpicId: ReadonlyMap<string, string>,
+): ReadonlyMap<string, string> {
+  return new Map(
+    worktrees.map((entry) => [
+      entry.worktreePath,
+      worktreeSearchHaystack(entry, taskTitlesByEpicId),
+    ]),
   );
 }
 
@@ -2378,14 +2918,84 @@ function deleteDialogCopy(entry: WorktreeHostEntryV11): {
 }
 
 /**
+ * Confirmation copy for an `Unknown` row - its enrichment settled to an error,
+ * so none of the honest-loss facts `deleteDialogCopy` relies on (ahead/behind,
+ * merge state) were ever proven. Names that explicitly instead of falling back
+ * to the generic "clean" copy, which would understate the risk. `uncommittedCount`
+ * is a cheap base-listing field available even when activity enrichment failed,
+ * so a dirty Unknown row still leads with the known, stronger dirty-loss
+ * warning - the unknown-risk caveat is ADDED, never substituted for it.
+ */
+function unknownRiskDeleteDialogCopy(entry: WorktreeHostEntryV11): {
+  readonly title: string;
+  readonly description: string;
+  readonly actionLabel: string;
+} {
+  const branch = branchLabel(entry);
+  if (entry.uncommittedCount > 0) {
+    const count = entry.uncommittedCount;
+    const plural = count === 1 ? "" : "s";
+    return {
+      title: `Discard ${count} uncommitted change${plural}?`,
+      description: `${branch} has ${count} uncommitted change${plural} that will be permanently lost. Its branch and activity status also could not be verified, so Traycer cannot confirm the rest of this worktree is safe to remove either. Traycer runs the repo's teardown script, then force-removes ${entry.worktreePath}.`,
+      actionLabel: "Delete and discard",
+    };
+  }
+  return {
+    title: "Delete worktree with unknown status?",
+    description: `${branch}'s branch and activity status could not be verified, so Traycer cannot confirm this worktree is safe to remove or free of unpushed work. Traycer runs the repo's teardown script, then removes ${entry.worktreePath}.`,
+    actionLabel: "Delete anyway",
+  };
+}
+
+/**
+ * Single-row delete confirmation copy. An `Unknown` row (settled enrichment
+ * error) is deletable, but only through explicit unknown-risk copy - never the
+ * generic confirmation, which would understate that its branch/activity
+ * status was never proven.
+ */
+function singleWorktreeDeleteDialogCopy(
+  entry: WorktreeHostEntryV11,
+  enrichment: WorktreeEnrichmentState,
+): {
+  readonly title: string;
+  readonly description: string;
+  readonly actionLabel: string;
+} {
+  if (enrichment === "unknown") return unknownRiskDeleteDialogCopy(entry);
+  return deleteDialogCopy(entry);
+}
+
+/**
  * Toast copy when confirm-time re-check drops rows that stopped qualifying,
  * class-summarized to stay consistent with the confirmation's exclusion line.
+ * A row that regressed to `Checking` (a refresh/retry re-armed its enrichment
+ * between dialog-open and confirm) is named separately - `worktreeDeleteClass`
+ * only sees the base, un-enriched fields for such a row and would otherwise
+ * mislabel it (e.g. "unreferenced (branch status unverified)") instead of
+ * naming the real reason it was dropped.
  */
-function worktreeDropMessage(dropped: readonly WorktreeHostEntryV11[]): string {
-  const summary = countWorktreeClasses(dropped, WORKTREE_EXCLUSION_ORDER);
+function worktreeDropMessage(
+  dropped: readonly WorktreeHostEntryV11[],
+  isChecking: (worktreePath: string) => boolean,
+): string {
+  const checkingDropped = dropped.filter((entry) =>
+    isChecking(entry.worktreePath),
+  );
+  const otherDropped = dropped.filter(
+    (entry) => !isChecking(entry.worktreePath),
+  );
+  const parts = [
+    ...(checkingDropped.length === 0
+      ? []
+      : [`${checkingDropped.length} still checking status`]),
+    ...(otherDropped.length === 0
+      ? []
+      : [countWorktreeClasses(otherDropped, WORKTREE_EXCLUSION_ORDER)]),
+  ];
   const plural = dropped.length === 1 ? "" : "s";
   const verb = dropped.length === 1 ? "was" : "were";
-  return `${dropped.length} worktree${plural} became ineligible and ${verb} skipped: ${summary}.`;
+  return `${dropped.length} worktree${plural} became ineligible and ${verb} skipped: ${parts.join(", ")}.`;
 }
 
 interface WorktreeBulkDeleteSummary {
@@ -2395,6 +3005,7 @@ interface WorktreeBulkDeleteSummary {
   readonly classSummary: string;
   readonly dirtyLoss: string | null;
   readonly unverifiedCaveat: string | null;
+  readonly unknownRiskCaveat: string | null;
   readonly exclusions: string | null;
   readonly paths: readonly string[];
 }
@@ -2402,6 +3013,7 @@ interface WorktreeBulkDeleteSummary {
 // Buckets a worktree into exactly one delete class, cautionary signals first so
 // a would-be-lost row is never mislabeled as a proven-clean one.
 type WorktreeDeleteClass =
+  | "in-use"
   | "merged"
   | "at-base"
   | "clean"
@@ -2412,11 +3024,13 @@ type WorktreeDeleteClass =
   | "dirty";
 
 function worktreeDeleteClass(entry: WorktreeHostEntryV11): WorktreeDeleteClass {
+  if (entry.inUse) return "in-use";
   // Derive the tier-level bucket from the ONE shared classifier so the bulk copy
   // and the row pill can never disagree (no parallel precedence ladder). The
-  // green tiers and orphaned map 1:1; only the amber `review` tier (and an
-  // in-use row that reached here via the drop-message summary) fans out into the
-  // finer would-be-lost sub-classes for honest loss copy.
+  // green tiers and orphaned map 1:1; in-use is a lock reason, so it is named as
+  // such when a row is excluded or dropped rather than bucketed by its git facts.
+  // Only the amber `review` tier fans out into finer would-be-lost sub-classes
+  // for honest loss copy.
   const tier = classifyWorktreeTier(entry);
   if (tier === "merged") return "merged";
   if (tier === "at-base-commit") return "at-base";
@@ -2428,8 +3042,7 @@ function worktreeDeleteClass(entry: WorktreeHostEntryV11): WorktreeDeleteClass {
 /**
  * Sub-classifies a non-green, non-orphaned row into its would-be-lost bucket for
  * the delete copy - cautionary signals first. Called only for the `review` tier
- * (and an in-use row summarized as a confirm-time drop), so the green/orphaned
- * cases are already handled by the shared classifier above.
+ * now that green, orphaned, and in-use cases are already handled above.
  */
 function worktreeReviewLossClass(
   entry: WorktreeHostEntryV11,
@@ -2448,6 +3061,7 @@ function worktreeReviewLossClass(
 }
 
 const WORKTREE_DELETE_CLASS_LABEL: Record<WorktreeDeleteClass, string> = {
+  "in-use": "in use",
   merged: "merged",
   "at-base": "at base commit",
   clean: "clean (no local-only commits)",
@@ -2469,8 +3083,10 @@ const WORKTREE_DELETE_SUMMARY_ORDER: readonly WorktreeDeleteClass[] = [
   "detached",
   "orphaned",
   "dirty",
+  "in-use",
 ];
 const WORKTREE_EXCLUSION_ORDER: readonly WorktreeDeleteClass[] = [
+  "in-use",
   "dirty",
   "unmerged",
   "detached",
@@ -2504,13 +3120,17 @@ function countWorktreeClasses(
  * Confirmation copy for a multi-worktree delete. Aggregates the SELECTED targets
  * by class (never 38 stacked warnings), names concrete loss for dirty rows, and
  * — for the null-status cohort — uses deliberately NEUTRAL caveat wording (never
- * "safe" / "loss-free"). Also names what was left out of the selection so the
- * exclusion is transparent. Full paths are carried for the expandable list;
- * delete is path-addressed.
+ * "safe" / "loss-free"). Separately, `unknownPaths` (rows whose enrichment
+ * settled to an error - the pill reads "Unknown") get their own unknown-risk
+ * caveat: unlike the unverified-branch-status cohort, these rows carry NO
+ * proven facts at all, not even a classified tier. Also names what was left
+ * out of the selection so the exclusion is transparent. Full paths are carried
+ * for the expandable list; delete is path-addressed.
  */
 function summarizeBulkWorktreeDelete(
   targets: ReadonlyArray<WorktreeHostEntryV11>,
   visible: readonly WorktreeHostEntryV11[],
+  unknownPaths: ReadonlySet<string>,
 ): WorktreeBulkDeleteSummary {
   const targetPaths = new Set(targets.map((entry) => entry.worktreePath));
   const dirtyTargets = targets.filter((entry) => entry.uncommittedCount > 0);
@@ -2532,8 +3152,17 @@ function summarizeBulkWorktreeDelete(
   const unverifiedCaveat = hasUnverified
     ? "For the worktrees with unverified branch status: branch status was unavailable, the branch refs are expected to remain, and unpushed work is not proven. Commit, stash, or push anything you want to keep first."
     : null;
+  const unknownTargets = targets.filter((entry) =>
+    unknownPaths.has(entry.worktreePath),
+  );
+  const unknownRiskCaveat =
+    unknownTargets.length === 0
+      ? null
+      : `Activity status for ${unknownTargets.length} worktree${
+          unknownTargets.length === 1 ? "" : "s"
+        } could not be checked. Traycer cannot confirm those are safe to remove or free of unpushed work. Commit, stash, or push anything you want to keep first.`;
   const excluded = visible.filter(
-    (entry) => !entry.inUse && !targetPaths.has(entry.worktreePath),
+    (entry) => !targetPaths.has(entry.worktreePath),
   );
   const exclusionSummary =
     excluded.length === 0
@@ -2547,6 +3176,7 @@ function summarizeBulkWorktreeDelete(
     classSummary: countWorktreeClasses(targets, WORKTREE_DELETE_SUMMARY_ORDER),
     dirtyLoss,
     unverifiedCaveat,
+    unknownRiskCaveat,
     exclusions:
       exclusionSummary === null
         ? null

@@ -1,10 +1,25 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { paneTabRefs } from "@/stores/epics/canvas/actions";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
+import type { NestedFocusTarget } from "@/lib/epic-nested-focus-route";
 import { ForkedChatLinkSegment } from "@/components/chat/segments/forked-chat-link-segment";
+
+const testState = vi.hoisted(() => ({
+  navigateNested: vi.fn(
+    (
+      _epicId: string,
+      _tabId: string,
+      prepare: () => NestedFocusTarget | null,
+    ) => prepare(),
+  ),
+}));
+
+vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
+  useEpicNestedFocusNavigation: () => testState.navigateNested,
+}));
 
 const SOURCE_CHAT: EpicNodeRef = {
   id: "source-chat-1",
@@ -26,6 +41,7 @@ describe("<ForkedChatLinkSegment />", () => {
   beforeEach(() => {
     window.localStorage.clear();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    testState.navigateNested.mockClear();
   });
 
   afterEach(() => {
@@ -53,6 +69,11 @@ describe("<ForkedChatLinkSegment />", () => {
       }),
     );
 
+    expect(testState.navigateNested).toHaveBeenCalledWith(
+      "epic-1",
+      viewTabId,
+      expect.any(Function),
+    );
     const state = useEpicCanvasStore.getState();
     expect(state.openTabOrder).toEqual([viewTabId]);
     expect(Object.keys(state.tabsById)).toEqual([viewTabId]);

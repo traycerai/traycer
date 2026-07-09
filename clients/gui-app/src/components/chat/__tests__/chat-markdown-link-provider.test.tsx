@@ -9,8 +9,11 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { use, type ReactNode } from "react";
 import { ChatMarkdownLinkProvider } from "@/components/chat/chat-markdown-link-provider";
+import { AgentReferenceMarkdown } from "@/components/chat/segments/agent-reference-markdown";
 import { workspaceFileRefFromLinkPath } from "@/components/epic-canvas/workspace-file/workspace-file-link-ref";
 import { workspaceFileTabId } from "@/components/epic-canvas/workspace-file/workspace-file-ref";
+import * as epicTileNavigationModule from "@/hooks/epic/use-epic-tile-navigation";
+import type { EpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { MarkdownLinkContext } from "@/markdown/links/markdown-link-context";
 import type { MarkdownFileLink } from "@/markdown/links/markdown-link-context";
 import type { FetchResolveArtifactByPathArgs } from "@/lib/host/resolve-artifact-by-path";
@@ -55,6 +58,7 @@ interface EpicRouteFocusLike {
 
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => mocks.navigate,
+  useRouter: () => null,
 }));
 
 vi.mock("@/lib/host", () => ({
@@ -195,6 +199,44 @@ function expectedWorkspaceFileContentId(linkPath: string): string {
 }
 
 describe("ChatMarkdownLinkProvider", () => {
+  it("routes rendered markdown file links through the shared tile navigation hook", () => {
+    const openTilePreviewInTab = vi.fn<
+      EpicTileNavigation["openTilePreviewInTab"]
+    >(() => null);
+    const hookSpy = vi
+      .spyOn(epicTileNavigationModule, "useEpicTileNavigation")
+      .mockReturnValue({
+        openTileInTab: vi.fn(() => null),
+        openTilePreviewInTab,
+        openTileInEpic: vi.fn(() => null),
+        openTilePreviewInEpic: vi.fn(() => null),
+      });
+    const tabId = useEpicCanvasStore.getState().openEpicTab("epic-1", "Epic 1");
+
+    try {
+      renderProvider(
+        tabId,
+        <AgentReferenceMarkdown
+          isStreaming={false}
+          markdown="[Open app](src/app.ts)"
+          proseSize="compact"
+          quotable={false}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole("link", { name: "Open app" }));
+
+      expect(openTilePreviewInTab).toHaveBeenCalledWith(
+        tabId,
+        expect.objectContaining({
+          id: workspaceFileTabId(HOST_ID, "/repo", "src/app.ts"),
+        }),
+      );
+    } finally {
+      hookSpy.mockRestore();
+    }
+  });
+
   it("opens chat file links as replaceable preview tabs", () => {
     const store = useEpicCanvasStore.getState();
     const tabId = store.openEpicTab("epic-1", "Epic 1");
@@ -280,9 +322,6 @@ describe("ChatMarkdownLinkProvider", () => {
       kind: "spec",
     });
     const tabId = useEpicCanvasStore.getState().openEpicTab("epic-1", "Epic 1");
-    const openTilePreviewInTab =
-      useEpicCanvasStore.getState().openTilePreviewInTab;
-
     renderProvider(
       tabId,
       <LinkButton
@@ -317,16 +356,12 @@ describe("ChatMarkdownLinkProvider", () => {
         mocks.openProjectedSidebarNodeInTabWhenAvailable,
       ).toHaveBeenCalledTimes(1);
     });
-    expect(
-      mocks.openProjectedSidebarNodeInTabWhenAvailable,
-    ).toHaveBeenCalledWith(
-      expect.objectContaining({
-        tabId,
-        nodeId: "artifact-same",
-        fallbackHostId: ACTIVE_HOST_ID,
-        openTileInTab: openTilePreviewInTab,
-      }),
-    );
+    const openArgs =
+      mocks.openProjectedSidebarNodeInTabWhenAvailable.mock.calls[0][0];
+    expect(openArgs.tabId).toBe(tabId);
+    expect(openArgs.nodeId).toBe("artifact-same");
+    expect(openArgs.fallbackHostId).toBe(ACTIVE_HOST_ID);
+    expect(typeof openArgs.openTileInTab).toBe("function");
     expect(mocks.navigate).not.toHaveBeenCalled();
     // It claimed the click without falling through to a file preview.
     expect(previewTabId(tabId)).toBeNull();

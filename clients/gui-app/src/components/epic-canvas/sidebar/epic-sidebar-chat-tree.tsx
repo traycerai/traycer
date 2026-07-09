@@ -5,6 +5,7 @@
 import { useDraggable } from "@dnd-kit/core";
 import { v4 as uuidv4 } from "uuid";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import {
   useEpicDeleteChat,
   useEpicRenameChat,
@@ -444,10 +445,15 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   const { expandedIds, toggleExpanded } = expansion;
   const node = useEpicTreeNode(nodeId);
   const childIds = useFilteredPanelChildIds(nodeId, treeFilter);
-  const openTileInTab = useEpicCanvasStore((s) => s.openTileInTab);
-  const closeCanvasTab = useEpicCanvasStore((s) => s.closeCanvasTab);
-  const openTilePreviewInTab = useEpicCanvasStore(
-    (s) => s.openTilePreviewInTab,
+  const navigateNested = useEpicNestedFocusNavigation();
+  const prepareOpenTileInTabFocusTarget = useEpicCanvasStore(
+    (s) => s.prepareOpenTileInTabFocusTarget,
+  );
+  const prepareOpenTilePreviewInTabFocusTarget = useEpicCanvasStore(
+    (s) => s.prepareOpenTilePreviewInTabFocusTarget,
+  );
+  const prepareCloseCanvasTabFocusTarget = useEpicCanvasStore(
+    (s) => s.prepareCloseCanvasTabFocusTarget,
   );
   const promotePreviewInTab = useEpicCanvasStore((s) => s.promotePreviewInTab);
   const markArtifactSelfDeleted = useEpicCanvasStore(
@@ -508,20 +514,24 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   const selectChatNode = useCallback(() => {
     if (isRenaming) return;
     if (openableType === null) return;
-    openTilePreviewInTab(tabId, {
-      id: nodeId,
-      instanceId: uuidv4(),
-      type: openableType,
-      name: nodeName,
-      hostId: activeHostId,
-    });
+    navigateNested(epicId, tabId, () =>
+      prepareOpenTilePreviewInTabFocusTarget(tabId, {
+        id: nodeId,
+        instanceId: uuidv4(),
+        type: openableType,
+        name: nodeName,
+        hostId: activeHostId,
+      }),
+    );
   }, [
     activeHostId,
+    epicId,
     isRenaming,
+    navigateNested,
     nodeName,
     nodeId,
-    openTilePreviewInTab,
     openableType,
+    prepareOpenTilePreviewInTabFocusTarget,
     tabId,
   ]);
 
@@ -530,23 +540,33 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
     if (openableType === null) return;
     const found = findOpenArtifactInTab(tabId, nodeId);
     if (found !== null) {
-      promotePreviewInTab(tabId, found.paneId);
-    } else {
-      openTileInTab(tabId, {
-        id: nodeId,
-        instanceId: uuidv4(),
-        type: openableType,
-        name: nodeName,
-        hostId: activeHostId,
+      navigateNested(epicId, tabId, () => {
+        promotePreviewInTab(tabId, found.paneId);
+        return {
+          paneId: found.paneId,
+          tileInstanceId: found.instanceId,
+        };
       });
+    } else {
+      navigateNested(epicId, tabId, () =>
+        prepareOpenTileInTabFocusTarget(tabId, {
+          id: nodeId,
+          instanceId: uuidv4(),
+          type: openableType,
+          name: nodeName,
+          hostId: activeHostId,
+        }),
+      );
     }
   }, [
     activeHostId,
+    epicId,
     isRenaming,
+    navigateNested,
     nodeId,
     nodeName,
     openableType,
-    openTileInTab,
+    prepareOpenTileInTabFocusTarget,
     promotePreviewInTab,
     tabId,
   ]);
@@ -641,7 +661,13 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
       setConfirmDeleteOpen(false);
       const found = findOpenArtifactInTab(tabId, nodeId);
       if (found !== null) {
-        closeCanvasTab(tabId, found.paneId, found.instanceId);
+        navigateNested(epicId, tabId, () =>
+          prepareCloseCanvasTabFocusTarget(
+            tabId,
+            found.paneId,
+            found.instanceId,
+          ),
+        );
       }
     };
     const handleDeleteError = () => {

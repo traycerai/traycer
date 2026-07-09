@@ -22,7 +22,7 @@ import type {
   ChatProjection,
   TuiAgentProjection,
 } from "@/stores/epics/open-epic/types";
-import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { cn, formatSingleLine } from "@/lib/utils";
 import { AgentReferenceMarkdown } from "./agent-reference-markdown";
 import { SegmentCard } from "./segment-card";
@@ -570,13 +570,12 @@ function A2ASendToolSegment(
   const receiverNode = useEpicArtifact(send.receiverAgentId);
   const activeHostId = useReactiveActiveHostId();
   const epicId = useOpenEpicId();
+  const tileNavigation = useEpicTileNavigation();
   const receiverName = receiverDisplayName(receiverNode, send.receiverAgentId);
   const openTarget = receiverOpenTarget(receiverNode, activeHostId);
   const openReceiverTab = () => {
     if (openTarget === null) return;
-    const canvas = useEpicCanvasStore.getState();
-    const tabId = canvas.resolveTargetTabForEpic(epicId, undefined);
-    canvas.openTileInTab(tabId, {
+    tileNavigation.openTileInEpic(epicId, {
       id: send.receiverAgentId,
       instanceId: uuidv4(),
       type: openTarget.type,

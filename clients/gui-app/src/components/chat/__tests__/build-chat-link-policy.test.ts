@@ -91,7 +91,7 @@ vi.mock(
 let pendingCancel: (() => void) | null = null;
 let disposed = false;
 let clickToken = 0;
-const openTilePreviewInTab = vi.fn();
+const previewTileInTab = vi.fn();
 
 function makeDeps(overrides: Partial<ChatLinkPolicyDeps>): ChatLinkPolicyDeps {
   return {
@@ -105,7 +105,7 @@ function makeDeps(overrides: Partial<ChatLinkPolicyDeps>): ChatLinkPolicyDeps {
     queryClient: {} as never,
     client: {} as never,
     navigate: (() => undefined) as never,
-    openTilePreviewInTab,
+    previewTileInTab,
     ...overrides,
   };
 }
@@ -139,7 +139,7 @@ beforeEach(() => {
   pendingCancel = null;
   disposed = false;
   clickToken = 0;
-  openTilePreviewInTab.mockReset();
+  previewTileInTab.mockReset();
   mocks.resolveArtifactByPath.mockReset();
   mocks.openProjectedSidebarNodeInTabWhenAvailable.mockReset();
   mocks.openProjectedSidebarNodeInTabWhenAvailable.mockReturnValue(
@@ -165,7 +165,7 @@ describe("buildChatLinkPolicy", () => {
     const run = buildChatLinkPolicy(makeDeps({}));
     expect(run(fileLink({ isDirectory: true }), lifecycle)).toBe(false);
     expect(mocks.resolveArtifactByPath).not.toHaveBeenCalled();
-    expect(openTilePreviewInTab).not.toHaveBeenCalled();
+    expect(previewTileInTab).not.toHaveBeenCalled();
   });
 
   it("opens a non-artifact path as a workspace-file preview without the RPC", () => {
@@ -177,7 +177,7 @@ describe("buildChatLinkPolicy", () => {
       ["/repo"],
       "src/app.ts",
     );
-    expect(openTilePreviewInTab).toHaveBeenCalledWith(TAB_ID, {
+    expect(previewTileInTab).toHaveBeenCalledWith(TAB_ID, {
       id: "content-1",
     });
   });
@@ -191,7 +191,7 @@ describe("buildChatLinkPolicy", () => {
       42,
       7,
     );
-    expect(openTilePreviewInTab).toHaveBeenCalledTimes(1);
+    expect(previewTileInTab).toHaveBeenCalledTimes(1);
   });
 
   it("resolves a same-epic artifact link and opens it via the projection waiter", async () => {
@@ -220,7 +220,7 @@ describe("buildChatLinkPolicy", () => {
         tabId: TAB_ID,
         nodeId: "artifact-same",
         fallbackHostId: ACTIVE_HOST_ID,
-        openTileInTab: openTilePreviewInTab,
+        openTileInTab: previewTileInTab,
       }),
     );
     // The cancel handle is retained so an unmount can tear the wait down.
@@ -284,13 +284,13 @@ describe("buildChatLinkPolicy", () => {
     run(fileLink({ path: SAME_EPIC_ARTIFACT_PATH }), lifecycle);
     await flush();
 
-    expect(openTilePreviewInTab).toHaveBeenCalledTimes(1);
+    expect(previewTileInTab).toHaveBeenCalledTimes(1);
   });
 
   it("drops the rejected artifact fallback when a newer click has superseded it", async () => {
     // First click's resolve is held open so a newer click can supersede it
     // before it rejects; the second resolves to an artifact (opening via the
-    // projection waiter, not openTilePreviewInTab).
+    // projection waiter, not previewTileInTab).
     let rejectFirstClick: (reason: Error) => void = () => undefined;
     const firstResolve = new Promise<ResolveArtifactByPathResult>(
       (_resolve, reject) => {
@@ -311,7 +311,7 @@ describe("buildChatLinkPolicy", () => {
     rejectFirstClick(new Error("transport"));
     await flush();
 
-    expect(openTilePreviewInTab).not.toHaveBeenCalled();
+    expect(previewTileInTab).not.toHaveBeenCalled();
     expect(
       mocks.openProjectedSidebarNodeInTabWhenAvailable,
     ).toHaveBeenCalledTimes(1);
@@ -336,7 +336,7 @@ describe("buildChatLinkPolicy", () => {
     expect(
       mocks.openProjectedSidebarNodeInTabWhenAvailable,
     ).not.toHaveBeenCalled();
-    expect(openTilePreviewInTab).not.toHaveBeenCalled();
+    expect(previewTileInTab).not.toHaveBeenCalled();
   });
 
   it("treats an artifact path as a plain file when there is no active host", () => {
@@ -345,7 +345,7 @@ describe("buildChatLinkPolicy", () => {
       true,
     );
     expect(mocks.resolveArtifactByPath).not.toHaveBeenCalled();
-    expect(openTilePreviewInTab).toHaveBeenCalledTimes(1);
+    expect(previewTileInTab).toHaveBeenCalledTimes(1);
   });
 
   it("cancels a prior same-epic projection wait on a superseding plain-file click, without re-opening the prior link", async () => {
@@ -372,8 +372,8 @@ describe("buildChatLinkPolicy", () => {
     expect(run(fileLink({ path: "src/app.ts" }), lifecycle)).toBe(true);
     expect(cancelPriorWait).toHaveBeenCalledTimes(1);
     expect(pendingCancel).toBeNull();
-    expect(openTilePreviewInTab).toHaveBeenCalledTimes(1);
-    expect(openTilePreviewInTab).toHaveBeenLastCalledWith(TAB_ID, {
+    expect(previewTileInTab).toHaveBeenCalledTimes(1);
+    expect(previewTileInTab).toHaveBeenLastCalledWith(TAB_ID, {
       id: "content-1",
     });
   });
@@ -433,7 +433,7 @@ describe("buildChatLinkPolicy", () => {
       CHAT_HOST_ID,
       skillPath,
     );
-    expect(openTilePreviewInTab).toHaveBeenCalledWith(TAB_ID, {
+    expect(previewTileInTab).toHaveBeenCalledWith(TAB_ID, {
       id: "abs-content",
     });
   });
@@ -450,6 +450,6 @@ describe("buildChatLinkPolicy", () => {
     await flush();
 
     expect(mocks.workspaceFileRefFromAbsoluteFilePath).not.toHaveBeenCalled();
-    expect(openTilePreviewInTab).not.toHaveBeenCalled();
+    expect(previewTileInTab).not.toHaveBeenCalled();
   });
 });
