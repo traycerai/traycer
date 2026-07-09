@@ -12,36 +12,34 @@
  *
  * Imperative module-load installer (mirrors `theme-applier.ts` and
  * `window-controls-overlay.ts`): it subscribes outside React so the native
- * controls update in lockstep with the DOM cascade. On the browser shell (no
- * `window.runnerHost`) and on macOS/Linux (no overlay-color surface) the push
- * target is absent, so the module no-ops.
+ * controls update in lockstep with the DOM cascade. The whole bridge is
+ * Windows-only - macOS draws OS-native traffic lights, Linux uses default
+ * chrome, and main drops the push off `win32` - so the installer short-circuits
+ * on any other OS instead of emitting IPC main would ignore. On the browser
+ * shell there is no `window.runnerHost`, so the push target is absent and the
+ * module no-ops there too.
  */
 
 import { deriveTitleBarOverlayColors } from "@/lib/title-bar-overlay-colors";
+import { isWindows } from "@/lib/keybindings/platform";
 import { subscribeResolvedTheme } from "@/lib/theme-applier";
 
 interface TitleBarOverlaySink {
   setTitleBarOverlay(color: string, symbolColor: string): void;
 }
 
-interface RunnerHostWithOverlay {
-  readonly platform?: {
-    readonly windowEx?: Partial<TitleBarOverlaySink>;
-  };
+// Structural view of the desktop preload's `runnerHost.platform.windowEx`
+// surface, typed locally so gui-app stays browser-safe and doesn't import from
+// the desktop package (mirrors the sibling `desktop-*.ts` host bridges).
+interface RunnerHostWindowShape {
+  readonly platform:
+    { readonly windowEx: TitleBarOverlaySink | undefined } | undefined;
 }
 
 function getOverlaySink(): TitleBarOverlaySink | null {
-  if (typeof window === "undefined") return null;
-  const runnerHost = (window as { runnerHost?: RunnerHostWithOverlay })
+  const host = (globalThis as { runnerHost?: RunnerHostWindowShape })
     .runnerHost;
-  const windowEx = runnerHost?.platform?.windowEx;
-  if (
-    windowEx === undefined ||
-    typeof windowEx.setTitleBarOverlay !== "function"
-  ) {
-    return null;
-  }
-  return windowEx as TitleBarOverlaySink;
+  return host?.platform?.windowEx ?? null;
 }
 
 let installed = false;
@@ -50,6 +48,9 @@ function install(): void {
   if (installed) return;
   installed = true;
   if (typeof document === "undefined") return;
+  // Only Windows draws its controls from `titleBarOverlay`; elsewhere the push
+  // is a no-op in main, so skip the subscription rather than churn IPC.
+  if (!isWindows()) return;
   const sink = getOverlaySink();
   if (sink === null) return;
   const push = (): void => {
