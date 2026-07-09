@@ -603,7 +603,13 @@ function runDeferred(state: BootState, services: AppServices): void {
   // bootstrap so the initial 60s readiness wait can't register as an outage.
   if (process.platform === "win32") {
     void hostReady.then(() => {
-      const healthMonitor = startHostHealthMonitor({ host: services.host });
+      const healthMonitor = startHostHealthMonitor({
+        host: services.host,
+        intervalMs: undefined,
+        probe: undefined,
+        readMetadata: undefined,
+        respawn: undefined,
+      });
       state.bridge?.disposeFns.push(() => healthMonitor.dispose());
     });
   }

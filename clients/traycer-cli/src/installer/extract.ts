@@ -178,10 +178,8 @@ function unsafeEntryReason(
 
 // Locate the host executable inside a staged install directory.
 // Strategy:
-//   1. Look for `traycer-host` (or `traycer-host.exe` on Windows)
-//      at the top level.
-//   2. Otherwise pick the first executable file at the top level.
-//   3. Otherwise descend one level - registry tarballs typically wrap
+//   1. Look for an expected executable name at the top level.
+//   2. Otherwise descend one level - registry tarballs typically wrap
 //      the binary in a versioned subdirectory.
 export async function resolveHostExecutable(
   installDir: string,
@@ -203,13 +201,6 @@ export async function resolveHostExecutable(
   }
 
   const entries = await readdir(installDir, { withFileTypes: true });
-  for (const name of expectedNames) {
-    for (const entry of entries) {
-      if (entry.isFile() && entry.name === name) {
-        return join(installDir, name);
-      }
-    }
-  }
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     for (const name of expectedNames) {

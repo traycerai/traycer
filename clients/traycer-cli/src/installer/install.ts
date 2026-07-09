@@ -600,9 +600,19 @@ async function atomicSwap(opts: AtomicSwapOptions): Promise<void> {
       },
       errorFromUnknown(cause),
     );
-    // Restore the previous install if the rename of the new one fails.
+    // Restore the previous install if the rename of the new one fails. The
+    // same transient Windows lock that failed the swap can also fail the
+    // restore, so it gets the same retry; if it still fails we log rather
+    // than mask the swap error about to be thrown - but a silent failure
+    // here would leave no install at all with nothing pointing at why.
     if (targetExists) {
-      await rename(trash, target).catch(() => undefined);
+      await renameWithRetry(trash, target).catch((restoreCause) => {
+        logger.error(
+          "Host install rollback failed - previous install left aside",
+          { target, trash },
+          errorFromUnknown(restoreCause),
+        );
+      });
     }
     throw cliError({
       code: CLI_ERROR_CODES.HOST_INSTALL_FAILED,

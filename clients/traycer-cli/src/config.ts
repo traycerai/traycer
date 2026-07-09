@@ -19,9 +19,9 @@ export const config = {
   // with the host + desktop built in the same install. `host ensure`
   // records this as the install version and reinstalls when the installed
   // host's stamp differs.
-  version: "staging.1783581575647.bb8c937d9",
-  authnBaseUrl: "https://authn.dev.traycer.ai",
-  cloudUiBaseUrl: "https://platform.dev.traycer.ai",
+  version: "0.0.0-dev",
+  authnBaseUrl: "https://authn.traycer.ai",
+  cloudUiBaseUrl: "https://platform.traycer.ai",
   // GitHub owner/repo hosting released-host-versions, cli-manifest, host-v*,
   // cli-v*, and desktop-v* releases. Release workflows stamp this from
   // RELEASE_REPO so forked/relocated builds fetch from the same repo they

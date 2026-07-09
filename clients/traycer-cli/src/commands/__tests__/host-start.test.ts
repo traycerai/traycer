@@ -517,7 +517,8 @@ describe("service manifests invoke `host start` (slot from config.environment) w
           id: "ai.traycer.host.prod",
           displayName: "Traycer Host",
           environment: "production",
-        } as never,
+          devSlot: null,
+        },
         cli,
       });
       const launcher = buildWindowsHiddenHostLauncher(cli);

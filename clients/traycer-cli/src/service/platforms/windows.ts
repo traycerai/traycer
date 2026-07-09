@@ -11,7 +11,7 @@ import type { CliInvocation } from "../cli-binary";
 import { escapeXml } from "../escape-xml";
 import { windowsTaskName, type ServiceLabel } from "../label";
 import { ProcessRunError, runCommand } from "../process-runner";
-import { cliHomeDir, hostHomeDir } from "../../store/paths";
+import { cliInstallHomeDir, hostHomeDir } from "../../store/paths";
 import type {
   InstallServiceOptions,
   ServiceController,
@@ -110,6 +110,10 @@ async function uninstallService(
     tolerateNonZeroExit: true,
   });
   await rm(hiddenHostLauncherPath(options.label), { force: true });
+  // Same rationale as stopService: the force-kill above skips the host's
+  // graceful pid.json cleanup, and metadata surviving an uninstall reads as
+  // a crashed (rather than removed) host to anything that finds it later.
+  await removeHostPidMetadata(options.label.environment);
 }
 
 async function statusService(label: ServiceLabel): Promise<ServiceStatus> {
@@ -167,17 +171,21 @@ async function stopService(
 // child `node` process orphaned - Task Scheduler does not job-object the tree,
 // so a wrapper -> node chain survives. A stale host keeps serving its port, and
 // (worse) its CWD stays open inside the install dir, so the next install-swap
-// rename fails with EBUSY. Force-kill the recorded host pid and its children
-// after ending the task. If pid.json was already purged, fall back to a
-// slot-scoped process scan so uninstall/install can recover from partial cleanup.
+// rename fails with EBUSY. Kill the processes a slot-scoped scan verifies by
+// exe path/command line - that covers the recorded pid.json host too, when it
+// is genuinely still the host. The raw recorded pid is used only when the scan
+// itself is unavailable: a host that died without cleanup leaves pid.json
+// behind, and Windows may have recycled that pid for an unrelated process an
+// unverified `taskkill /T /F` would take down.
 async function killHostProcessTree(
   label: ServiceLabel,
   run: ProcessRunner,
 ): Promise<void> {
-  const pidMetadata = await readHostPidMetadata(label.environment);
-  const metadataPids = pidMetadata === null ? [] : [pidMetadata.pid];
   const scannedPids = await findSlotProcessIds(label, run);
-  const pids = uniqueProcessIds([...metadataPids, ...scannedPids]);
+  const pidMetadata =
+    scannedPids === null ? await readHostPidMetadata(label.environment) : null;
+  const fallbackPids = pidMetadata === null ? [] : [pidMetadata.pid];
+  const pids = uniqueProcessIds(scannedPids ?? fallbackPids);
   await Promise.all(
     pids.map((pid) =>
       run("taskkill", ["/T", "/F", "/PID", String(pid)], {
@@ -250,10 +258,13 @@ function describeCause(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
 }
 
+// Returns null (rather than an empty list) when the scan could not run at
+// all, so the caller can distinguish "verified: nothing to kill" from
+// "unknown: PowerShell unavailable".
 async function findSlotProcessIds(
   label: ServiceLabel,
   run: ProcessRunner,
-): Promise<readonly number[]> {
+): Promise<readonly number[] | null> {
   try {
     const result = await run(
       "powershell.exe",
@@ -275,7 +286,7 @@ async function findSlotProcessIds(
     );
     return parseProcessIdJson(result.stdout);
   } catch {
-    return [];
+    return null;
   }
 }
 
@@ -382,7 +393,11 @@ function quoteVbsString(value: string): string {
 }
 
 function hiddenHostLauncherPath(label: ServiceLabel): string {
-  return join(cliHomeDir(label.environment), "host-start-hidden.vbs");
+  // Install-scoped (not the shared environment home): each dev slot registers
+  // its own Scheduled Task with its own CliInvocation, so the launcher must be
+  // per-slot too - a shared path would let one slot's install overwrite the
+  // launcher another slot's task runs.
+  return join(cliInstallHomeDir(label.environment), "host-start-hidden.vbs");
 }
 
 function buildHiddenHostLauncher(cli: CliInvocation): string {
