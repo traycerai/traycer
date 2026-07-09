@@ -17,10 +17,7 @@ vi.mock("electron-log", () => ({
   },
 }));
 
-import {
-  renameCliBinaryAside,
-  sweepAsideCliBinaries,
-} from "../cli-discovery";
+import { renameCliBinaryAside, sweepAsideCliBinaries } from "../cli-discovery";
 
 describe("rename-aside CLI binary install (Windows lock workaround)", () => {
   let dir: string;

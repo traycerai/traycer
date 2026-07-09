@@ -691,7 +691,9 @@ export async function sweepAsideCliBinaries(stablePath: string): Promise<void> {
   await Promise.all(
     names
       .filter((name) => name.startsWith(prefix))
-      .map((name) => rm(join(dir, name), { force: true }).catch(() => undefined)),
+      .map((name) =>
+        rm(join(dir, name), { force: true }).catch(() => undefined),
+      ),
   );
 }
 

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type Mock } from "vitest";
 
 const electronMock = vi.hoisted(() => ({
   on: vi.fn(),
@@ -43,8 +43,8 @@ describe("findJumplistCommandInArgv", () => {
 
 describe("registerJumplistCommandHandling", () => {
   function installAndFire(argv: readonly string[]): {
-    dispatch: ReturnType<typeof vi.fn>;
-    focusMainWindow: ReturnType<typeof vi.fn>;
+    dispatch: Mock;
+    focusMainWindow: Mock;
   } {
     electronMock.on.mockReset();
     const sink = { dispatch: vi.fn(), focusMainWindow: vi.fn() };

@@ -324,7 +324,10 @@ async function resolveWindowsBundledHostArchive(): Promise<string | null> {
   // No native Windows arm64 host - arm64 runs the x64 runtime (mirrors
   // resolveBundledHostArchive in the CLI).
   const arch = process.arch === "arm64" ? "x64" : process.arch;
-  const archive = join(dirname(bundledCli), `host-runtime-win32-${arch}.tar.gz`);
+  const archive = join(
+    dirname(bundledCli),
+    `host-runtime-win32-${arch}.tar.gz`,
+  );
   try {
     await access(archive, constants.R_OK);
     return archive;
