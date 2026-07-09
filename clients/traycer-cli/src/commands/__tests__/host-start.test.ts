@@ -26,6 +26,7 @@ import { hostHomeDir } from "../../store/paths";
 function sampleRecord(executablePath: string): HostInstallRecord {
   return {
     version: "1.0.0",
+    runtimeVersion: null,
     platform: "darwin",
     arch: "arm64",
     installedAt: "2026-05-15T00:00:00.000Z",

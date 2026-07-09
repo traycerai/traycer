@@ -12,16 +12,16 @@
 export type Environment = string;
 
 export const config = {
-  environment: "dev" as Environment,
+  environment: "staging" as Environment,
   // Concrete per-build identity, stamped at install time by the deploy
   // script (alongside `environment`). `0.0.0-dev` in source / after
   // `--restore`; a real install bakes `<target>.<epochMs>.<gitSha>`, shared
   // with the host + desktop built in the same install. `host ensure`
   // records this as the install version and reinstalls when the installed
   // host's stamp differs.
-  version: "0.0.0-dev",
-  authnBaseUrl: "https://authn.traycer.ai",
-  cloudUiBaseUrl: "https://platform.traycer.ai",
+  version: "staging.1783581575647.bb8c937d9",
+  authnBaseUrl: "https://authn.dev.traycer.ai",
+  cloudUiBaseUrl: "https://platform.dev.traycer.ai",
   // GitHub owner/repo hosting released-host-versions, cli-manifest, host-v*,
   // cli-v*, and desktop-v* releases. Release workflows stamp this from
   // RELEASE_REPO so forked/relocated builds fetch from the same repo they

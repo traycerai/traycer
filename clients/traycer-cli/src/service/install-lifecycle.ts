@@ -92,6 +92,8 @@ export function createServiceInstallLifecycle(
       if (status.state === "running") {
         await controller.stop(label);
         state.stoppedBeforeSwap = true;
+      } else if (process.platform === "win32") {
+        await controller.stop(label);
       }
     },
     afterSwap: async () => {

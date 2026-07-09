@@ -24,15 +24,15 @@
 export type Environment = string;
 
 export const config = {
-  environment: "dev" as Environment,
+  environment: "staging" as Environment,
   // Concrete per-build identity, stamped at install time by the deploy
   // script (alongside `environment`). `0.0.0-dev` in source / after
   // `--restore`; a real install bakes `<target>.<epochMs>.<gitSha>` into the
   // Desktop and bundled CLI from the same release. Desktop bundles only the
   // CLI; the CLI subprocess owns host install/update/restart decisions.
-  version: "0.0.0-dev",
-  authnBaseUrl: "https://authn.traycer.ai",
-  cloudUiBaseUrl: "https://platform.traycer.ai",
+  version: "staging.1783581575647.bb8c937d9",
+  authnBaseUrl: "https://authn.dev.traycer.ai",
+  cloudUiBaseUrl: "https://platform.dev.traycer.ai",
   // Sentry crash-reporting DSN for the main process. Empty for local
   // (reporting disabled); the deploy script bakes the staging/production DSN.
   sentryDsn: "",
@@ -46,9 +46,9 @@ export const config = {
   // script stamps the shipped values for a packaged build. Keeping each slot's
   // identity distinct is what lets separate builds coexist without stealing one
   // another's lock/state.
-  appName: "Traycer Dev",
-  protocolScheme: "traycer-dev",
-  appId: "ai.traycer.desktop",
+  appName: "Traycer Staging",
+  protocolScheme: "traycer-staging",
+  appId: "ai.traycer.desktop.staging",
 };
 
 // Single derived discriminator for "development build vs shipped build",

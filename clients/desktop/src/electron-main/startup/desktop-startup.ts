@@ -3,6 +3,10 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { initLogger, log } from "../app/logger";
 import { configureNativeAboutPanel } from "../app/about";
+import {
+  findJumplistCommandInArgv,
+  registerJumplistCommandHandling,
+} from "../app/jumplist-commands";
 import { registerDeepLinkHandling } from "../auth/deep-link";
 import { createMainWindow, loadMainWindow } from "../windows/window-factory";
 import {
@@ -118,6 +122,7 @@ import {
   type DesktopConfig,
 } from "../config/desktop-config";
 import { installHostWakeRecovery } from "./host-wake-recovery";
+import { startHostHealthMonitor } from "../host/host-health-monitor";
 import { DESKTOP_APP_NAME } from "../../config";
 
 const APP_DISPLAY_NAME = DESKTOP_APP_NAME;
@@ -440,6 +445,25 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
   });
   menu.install();
 
+  registerJumplistCommandHandling({
+    dispatch: (command) => menu.dispatchShellCommand(command),
+    focusMainWindow: () => {
+      const record = windowRegistry.getMruRecord();
+      if (record !== null) {
+        windowRegistry.focusById(record.windowId);
+      }
+    },
+  });
+  // Cold-start jump-list launch: `--new-epic` is satisfied by the window
+  // startup opens anyway; `--open-settings` must wait for the first renderer
+  // to load before it can host the settings surface.
+  if (findJumplistCommandInArgv(process.argv) === "app.openSettings") {
+    const settingsTarget = windowRegistry.records()[0];
+    settingsTarget?.window.webContents.once("did-finish-load", () => {
+      menu.dispatchShellCommand("app.openSettings");
+    });
+  }
+
   // Drain a browser-return signal captured before the bridge was ready, once
   // the first startup renderer has installed its listeners.
   if (state.pendingAuthReturnSignal) {
@@ -544,6 +568,22 @@ function runDeferred(state: BootState, services: AppServices): void {
     });
     return services.host.bootstrap();
   });
+
+  // Windows-only watchdog for a host that dies without rewriting pid.json
+  // (external kill/crash): the pid-file watcher never fires for those, and
+  // the Scheduled Task cannot restart-on-failure (its hidden-launcher action
+  // detaches the host and exits, so the task completes long before the host
+  // can die). On macOS/Linux the service manager itself supervises the host
+  // (launchd KeepAlive / systemd Restart) and respawns it within seconds -
+  // a desktop-side watchdog there would be redundant at best and, on macOS,
+  // could auto-fire the SMAppService re-register cycle. Started after
+  // bootstrap so the initial 60s readiness wait can't register as an outage.
+  if (process.platform === "win32") {
+    void hostReady.then(() => {
+      const healthMonitor = startHostHealthMonitor({ host: services.host });
+      state.bridge?.disposeFns.push(() => healthMonitor.dispose());
+    });
+  }
 
   void timed("deferred", "registry-probe", async () => {
     // `force: true` - matches the app's own `checkForUpdatesNow` on launch

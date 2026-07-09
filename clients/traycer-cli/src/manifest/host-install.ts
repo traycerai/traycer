@@ -28,6 +28,16 @@ export interface HostInstallSource {
 
 export interface HostInstallRecord {
   readonly version: string;
+  // The archive's own baked build stamp, read from its `version.json` after
+  // extraction - the same value the running host later publishes in
+  // pid.json. Kept SEPARATE from `version`, which stays whatever the caller
+  // recorded (registry version / caller's `config.version` override /
+  // filename fallback) because the desktop's ensure no-op check compares
+  // `version` against its own build stamp; repointing it at the archive
+  // truth would break that idempotency whenever the two builds drift - the
+  // exact situation this field exists to make visible. `null` for archives
+  // predating the version.json sidecar.
+  readonly runtimeVersion: string | null;
   readonly platform: HostInstallPlatform;
   readonly arch: HostInstallArch;
   readonly installedAt: string;
@@ -215,6 +225,10 @@ export async function readHostInstallRecord(
   }
   const record = {
     version: obj.version,
+    // Tolerant read: records written before the field existed carry no
+    // `runtimeVersion` key; treat anything but a string as absent.
+    runtimeVersion:
+      typeof obj.runtimeVersion === "string" ? obj.runtimeVersion : null,
     platform: obj.platform,
     arch: obj.arch,
     installedAt: obj.installedAt,

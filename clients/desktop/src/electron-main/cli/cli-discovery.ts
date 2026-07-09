@@ -1,13 +1,17 @@
 import { execFile } from "node:child_process";
-import { constants } from "node:fs";
+import { createHash } from "node:crypto";
+import { constants, createReadStream } from "node:fs";
 import {
   access,
   chmod,
   copyFile,
   mkdir,
+  readdir,
   readFile,
   realpath,
+  rename,
   rm,
+  stat,
   symlink,
   writeFile,
 } from "node:fs/promises";
@@ -582,12 +586,23 @@ export async function installBundledCli(opts: {
 }): Promise<string> {
   await mkdir(CLI_BIN_DIR, { recursive: true, mode: 0o755 });
   const stablePath = stableCliBinaryPath();
-  // Clear any prior staged binary/symlink so symlink() doesn't EEXIST and a
-  // stale copy never lingers next to a fresh symlink.
-  await rm(stablePath, { force: true });
   if (platform() === "win32") {
+    // The slot binary is essentially ALWAYS running on Windows - the host's
+    // Scheduled Task launcher (`traycer host start`) executes from this exact
+    // path and restarts at every logon, so `rm` would hit the running-image
+    // delete lock and permanently wedge the upgrade in the `pendingUpgrade
+    // (binary-locked)` loop. Windows does allow RENAMING a running image, so
+    // move it aside and copy the new binary into the now-free name; the live
+    // supervisor keeps executing the renamed image and the next host start
+    // picks up the new bytes. Renamed leftovers are swept once their process
+    // exits (same trash pattern as the host installer's `atomicSwap`).
+    await sweepAsideCliBinaries(stablePath);
+    await renameCliBinaryAside(stablePath);
     await copyFile(opts.bundledCliPath, stablePath);
   } else {
+    // Clear any prior staged binary/symlink so symlink() doesn't EEXIST and a
+    // stale copy never lingers next to a fresh symlink.
+    await rm(stablePath, { force: true });
     await symlink(opts.bundledCliPath, stablePath);
   }
   const manifest: CliInstallManifest = {
@@ -605,6 +620,46 @@ export async function installBundledCli(opts: {
     source: opts.source,
   });
   return stablePath;
+}
+
+/**
+ * Move the (possibly running) slot binary out of the stable name so a new
+ * copy can take its place. A missing binary (fresh install, self-heal after
+ * deletion) is not an error. Anything else - e.g. an AV scanner holding the
+ * file without delete sharing, which blocks rename too - propagates to the
+ * caller, where the reconcile's existing `binary-locked` staging path takes
+ * over as the fallback.
+ */
+export async function renameCliBinaryAside(stablePath: string): Promise<void> {
+  try {
+    await rename(stablePath, `${stablePath}.old-${Date.now()}`);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw err;
+  }
+}
+
+/**
+ * Best-effort sweep of `<binary>.old-<ts>` leftovers from previous
+ * rename-aside installs. Deletion fails while a renamed image is still
+ * executing (the host supervisor from before the swap) - those unlock once
+ * the host restarts onto the new binary, so each install pass retries the
+ * whole set and the trash never outlives one host generation by much.
+ */
+export async function sweepAsideCliBinaries(stablePath: string): Promise<void> {
+  const dir = dirname(stablePath);
+  const prefix = `${parse(stablePath).base}.old-`;
+  let names: string[];
+  try {
+    names = await readdir(dir);
+  } catch {
+    return;
+  }
+  await Promise.all(
+    names
+      .filter((name) => name.startsWith(prefix))
+      .map((name) => rm(join(dir, name), { force: true }).catch(() => undefined)),
+  );
 }
 
 /**
@@ -658,6 +713,49 @@ export async function isExecutable(path: string): Promise<boolean> {
 }
 
 /**
+ * True for the `0.0.0*` local-dev placeholder family (see
+ * {@link readBundledCliVersion}): every dogfood/local build stamps it, so
+ * two different local builds are version-indistinguishable. Callers that
+ * need to order two sentinel builds must compare something else (the
+ * reconciler compares binary content - {@link cliBinariesDiffer}).
+ */
+export function isLocalSentinelVersion(version: string): boolean {
+  return version.startsWith("0.0.0");
+}
+
+/**
+ * Content comparison for two CLI binaries, for the one case version
+ * comparison cannot settle: both sides stamped with the local-dev
+ * sentinel. Size mismatch short-circuits; equal sizes fall through to a
+ * streamed sha256 so two ~100MB SEA binaries never load into memory.
+ */
+export async function cliBinariesDiffer(
+  installedPath: string,
+  bundledPath: string,
+): Promise<boolean> {
+  const [installedStat, bundledStat] = await Promise.all([
+    stat(installedPath),
+    stat(bundledPath),
+  ]);
+  if (installedStat.size !== bundledStat.size) return true;
+  const [installedDigest, bundledDigest] = await Promise.all([
+    sha256File(installedPath),
+    sha256File(bundledPath),
+  ]);
+  return installedDigest !== bundledDigest;
+}
+
+function sha256File(path: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const hash = createHash("sha256");
+    const stream = createReadStream(path);
+    stream.once("error", reject);
+    stream.on("data", (chunk) => hash.update(chunk));
+    stream.once("end", () => resolve(hash.digest("hex")));
+  });
+}
+
+/**
  * SemVer-ish comparison: returns 1 if `a` > `b`, -1 if `a` < `b`, 0 if
  * equal or unparseable. Used to decide "PATH CLI newer than bundled,
  * trust it". Pre-release suffixes are stripped - channel discrimination
@@ -674,9 +772,8 @@ export async function isExecutable(path: string): Promise<boolean> {
  * against a real semver but ties with another `0.0.0`-prefixed value.
  */
 export function compareSemver(a: string, b: string): number {
-  const isLocalSentinel = (v: string): boolean => v.startsWith("0.0.0");
-  const aLocal = isLocalSentinel(a);
-  const bLocal = isLocalSentinel(b);
+  const aLocal = isLocalSentinelVersion(a);
+  const bLocal = isLocalSentinelVersion(b);
   if (aLocal && bLocal) return 0;
   if (aLocal) return -1;
   if (bLocal) return 1;

@@ -3,6 +3,7 @@ import {
   mkdir,
   mkdtemp,
   readdir,
+  readFile,
   rename,
   rm,
   stat,
@@ -173,6 +174,17 @@ export async function installHost(
       staging.stagingDir,
       osPlatform(),
     );
+
+    // The archive's own build stamp - the same value the running host will
+    // publish in pid.json. The sidecar sits beside the executable (the
+    // build emits it into the runtime dir root), so anchor the read there
+    // rather than guessing the archive's top-level layout. Recorded
+    // alongside (never instead of) the caller-derived `version` so the
+    // record describes the bytes it actually installed even when the
+    // installing CLI is an older build (see HostInstallRecord.runtimeVersion).
+    const runtimeVersion = await readExtractedRuntimeVersion(
+      dirname(executablePath),
+    );
     logger.debug("Host install executable resolved", {
       environment: opts.environment,
       version: staging.version,
@@ -221,6 +233,7 @@ export async function installHost(
 
     const record: HostInstallRecord = {
       version: staging.version,
+      runtimeVersion,
       platform,
       arch,
       installedAt: new Date().toISOString(),
@@ -601,6 +614,31 @@ async function atomicSwap(opts: AtomicSwapOptions): Promise<void> {
   if (targetExists) {
     await rm(trash, { recursive: true, force: true });
   }
+}
+
+// Reads the `version.json` sidecar the host build emits into the archive
+// root (traycer-host/scripts/build-host-sea.cjs, writeRuntimeVersionJson).
+// Absent or malformed (archives predating the sidecar, hand-rolled trees)
+// degrades to null - the record then simply carries no runtime stamp.
+export async function readExtractedRuntimeVersion(
+  extractedDir: string,
+): Promise<string | null> {
+  let raw: string;
+  try {
+    raw = await readFile(join(extractedDir, "version.json"), "utf8");
+  } catch {
+    return null;
+  }
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed !== null && typeof parsed === "object") {
+      const version = (parsed as Record<string, unknown>).version;
+      if (typeof version === "string" && version.length > 0) return version;
+    }
+  } catch {
+    // fall through
+  }
+  return null;
 }
 
 function deriveLocalVersion(sourcePath: string): string {
