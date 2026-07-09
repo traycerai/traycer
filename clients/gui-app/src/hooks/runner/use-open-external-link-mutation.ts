@@ -9,7 +9,11 @@ import { runnerMutationKeys } from "@/lib/query-keys";
  * RunnerHost call itself rejects - a click must never go dead just because
  * the platform bridge failed.
  */
-export function useOpenExternalLink(): UseMutationResult<void, Error, string> {
+export function useRunnerOpenExternalLink(): UseMutationResult<
+  void,
+  Error,
+  string
+> {
   const runnerHost = use(RunnerHostContext);
   return useMutation<void, Error, string>({
     mutationKey: runnerMutationKeys.openExternalLink(),

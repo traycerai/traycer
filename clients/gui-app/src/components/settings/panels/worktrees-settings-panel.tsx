@@ -131,7 +131,7 @@ import {
   openOrFocusEpicIntent,
 } from "@/lib/tab-navigation";
 import { RunnerHostContext } from "@/providers/runner-host-context";
-import { useOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
+import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
 
 type WorktreeRowDeleteStatus = "deleting";
 // Per-row activity-enrichment state, driving ONLY the tier pill's presentation:
@@ -2376,7 +2376,7 @@ function WorktreePrAnchor(props: {
   readonly children: ReactNode;
 }): ReactNode {
   const runnerHost = use(RunnerHostContext);
-  const openExternalLink = useOpenExternalLink();
+  const openExternalLink = useRunnerOpenExternalLink();
   const openExternal = useCallback(
     (event: MouseEvent<HTMLAnchorElement>): void => {
       event.stopPropagation();
