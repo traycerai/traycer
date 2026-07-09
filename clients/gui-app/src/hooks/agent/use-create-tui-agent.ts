@@ -17,6 +17,7 @@ import { useEpicCreateTuiAgentForClient } from "@/hooks/epic/use-epic-tui-agent-
 import { useAgentStartTerminalSession } from "@/hooks/agent/use-prepare-tui-launch-mutation";
 import { useWorktreeCreateForClient } from "@/hooks/worktree/use-worktree-create-mutation";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { type HostRpcRegistry, useHostClient } from "@/lib/host";
 import { tuiAgentDisplayTitle } from "@/lib/display-title";
@@ -201,8 +202,13 @@ export function useCreateTuiAgentForClient(
   const startSession = useAgentStartTerminalSession(hostClient);
   const createTuiAgent = useEpicCreateTuiAgentForClient(hostClient);
   const worktreeCreate = useWorktreeCreateForClient(hostClient);
-  const openTileInTab = useEpicCanvasStore((s) => s.openTileInTab);
-  const openTileInPane = useEpicCanvasStore((s) => s.openTileInPane);
+  const navigateNested = useEpicNestedFocusNavigation();
+  const prepareOpenTileInTabFocusTarget = useEpicCanvasStore(
+    (s) => s.prepareOpenTileInTabFocusTarget,
+  );
+  const prepareOpenTileInPaneFocusTarget = useEpicCanvasStore(
+    (s) => s.prepareOpenTileInPaneFocusTarget,
+  );
   const markArtifactPendingCreate = useEpicCanvasStore(
     (s) => s.markArtifactPendingCreate,
   );
@@ -249,9 +255,18 @@ export function useCreateTuiAgentForClient(
           pendingTuiHarnessId: input.harnessId,
         };
         if (input.placement.kind === "target-group") {
-          openTileInPane(input.tabId, input.placement.groupId, placeholderRef);
+          const groupId = input.placement.groupId;
+          navigateNested(input.epicId, input.tabId, () =>
+            prepareOpenTileInPaneFocusTarget(
+              input.tabId,
+              groupId,
+              placeholderRef,
+            ),
+          );
         } else {
-          openTileInTab(input.tabId, placeholderRef);
+          navigateNested(input.epicId, input.tabId, () =>
+            prepareOpenTileInTabFocusTarget(input.tabId, placeholderRef),
+          );
         }
       };
 
@@ -360,8 +375,9 @@ export function useCreateTuiAgentForClient(
     [
       startSession,
       createTuiAgent,
-      openTileInTab,
-      openTileInPane,
+      navigateNested,
+      prepareOpenTileInTabFocusTarget,
+      prepareOpenTileInPaneFocusTarget,
       markArtifactPendingCreate,
       unmarkArtifactPendingCreate,
       placeholderHostId,

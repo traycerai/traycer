@@ -2,6 +2,12 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ArtifactChildIndex } from "@/components/epic-canvas/renderers/artifact-child-index";
 import { readEpicCanvasDragSourceData } from "@/components/epic-canvas/dnd/dnd";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import type {
+  EpicCanvasTileRef,
+  EpicNodeRef,
+} from "@/stores/epics/canvas/types";
+import type { NestedFocusTarget } from "@/lib/epic-nested-focus-route";
 
 type TestTreeNode = {
   readonly type: string | null;
@@ -23,17 +29,16 @@ const projection = vi.hoisted<{
   nodesById: {},
 }));
 
-const canvas = vi.hoisted(() => ({
-  openTilePreviewInTab: vi.fn(),
-}));
-
-const resolveTabIdForEpic = vi.hoisted(() =>
-  vi.fn((_state: typeof canvas, _epicId: string) => "resolved-tab"),
-);
-
 const dnd = vi.hoisted(() => ({
   draggables: [] as CapturedDraggable[],
   setNodeRef: vi.fn(),
+}));
+
+const navigation = vi.hoisted(() => ({
+  openTilePreviewInTab: vi.fn(
+    (_tabId: string, _node: EpicCanvasTileRef): NestedFocusTarget | null =>
+      null,
+  ),
 }));
 
 vi.mock("@/lib/epic-selectors", () => ({
@@ -42,10 +47,13 @@ vi.mock("@/lib/epic-selectors", () => ({
   useTreeNodeById: (nodeId: string) => projection.nodesById[nodeId] ?? null,
 }));
 
-vi.mock("@/stores/epics/canvas/store", () => ({
-  useEpicCanvasStore: (selector: (state: typeof canvas) => unknown) =>
-    selector(canvas),
-  resolveTabIdForEpic,
+vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
+  useEpicTileNavigation: () => ({
+    openTilePreviewInTab: navigation.openTilePreviewInTab,
+    openTileInTab: vi.fn(),
+    openTileInEpic: vi.fn(),
+    openTilePreviewInEpic: vi.fn(),
+  }),
 }));
 
 vi.mock("@/stores/settings/settings-store", () => ({
@@ -94,10 +102,17 @@ vi.mock("@dnd-kit/core", async (importOriginal) => {
 
 describe("<ArtifactChildIndex />", () => {
   beforeEach(() => {
+    window.localStorage.clear();
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    navigation.openTilePreviewInTab.mockImplementation(
+      (tabId: string, node: EpicCanvasTileRef): NestedFocusTarget | null =>
+        useEpicCanvasStore
+          .getState()
+          .prepareOpenTilePreviewInTabFocusTarget(tabId, node),
+    );
     projection.childIdsByParent = {};
     projection.nodesById = {};
-    canvas.openTilePreviewInTab.mockClear();
-    resolveTabIdForEpic.mockClear();
+    navigation.openTilePreviewInTab.mockClear();
     dnd.draggables = [];
     dnd.setNodeRef.mockClear();
   });
@@ -105,6 +120,9 @@ describe("<ArtifactChildIndex />", () => {
   afterEach(cleanup);
 
   it("emits a draggable artifact payload while preserving click-to-preview", () => {
+    const viewTabId = useEpicCanvasStore
+      .getState()
+      .openEpicTab("epic-1", "Epic");
     projection.childIdsByParent.parent = ["child-story"];
     projection.nodesById["child-story"] = {
       type: "story",
@@ -116,7 +134,7 @@ describe("<ArtifactChildIndex />", () => {
       <ArtifactChildIndex
         epicId="epic-1"
         parentId="parent"
-        viewTabId="view-tab-1"
+        viewTabId={viewTabId}
         hostId="host-1"
       />,
     );
@@ -129,7 +147,7 @@ describe("<ArtifactChildIndex />", () => {
     expect(readEpicCanvasDragSourceData(dnd.draggables[0].data)).toEqual({
       kind: "chat-artifact",
       epicId: "epic-1",
-      viewTabId: "view-tab-1",
+      viewTabId,
       artifact: {
         id: "child-story",
         type: "story",
@@ -137,12 +155,13 @@ describe("<ArtifactChildIndex />", () => {
         hostId: "host-1",
       },
     });
-    expect(resolveTabIdForEpic).not.toHaveBeenCalled();
 
     fireEvent.click(row);
 
-    expect(canvas.openTilePreviewInTab).toHaveBeenCalledWith(
-      "view-tab-1",
+    // A revert to a raw canvas `openTilePreviewInTab` call would still mutate
+    // the store, but would not hit this route-aware boundary spy.
+    expect(navigation.openTilePreviewInTab).toHaveBeenCalledWith(
+      viewTabId,
       expect.objectContaining({
         id: "child-story",
         type: "story",
@@ -150,9 +169,22 @@ describe("<ArtifactChildIndex />", () => {
         hostId: "host-1",
       }),
     );
+    const canvas = useEpicCanvasStore.getState().canvasByTabId[viewTabId];
+    if (canvas?.root?.kind !== "pane") throw new Error("expected pane");
+    const activeTile =
+      canvas.tilesByInstanceId[canvas.root.activeTabId ?? ""] ?? null;
+    expect(activeTile).toMatchObject({
+      id: "child-story",
+      type: "story",
+      name: "Child Story",
+      hostId: "host-1",
+    } satisfies Partial<EpicNodeRef>);
   });
 
   it("does not render or enable drag for non-artifact child nodes", () => {
+    const viewTabId = useEpicCanvasStore
+      .getState()
+      .openEpicTab("epic-1", "Epic");
     projection.childIdsByParent.parent = ["child-chat"];
     projection.nodesById["child-chat"] = {
       type: "chat",
@@ -164,7 +196,7 @@ describe("<ArtifactChildIndex />", () => {
       <ArtifactChildIndex
         epicId="epic-1"
         parentId="parent"
-        viewTabId="view-tab-1"
+        viewTabId={viewTabId}
         hostId="host-1"
       />,
     );

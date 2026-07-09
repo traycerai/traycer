@@ -24,6 +24,7 @@ import { WorktreeFolderListBody } from "@/components/worktree/worktree-folder-li
 import { WorktreePickerHostSection } from "@/components/worktree/worktree-picker-host-section";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { useWorktreeListBindingsForEpic } from "@/hooks/worktree/use-worktree-list-bindings-for-epic-query";
+import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { DEFAULT_TERMINAL_TITLE } from "@/lib/terminals/terminal-title";
 import { worktreeRowKey } from "@/lib/worktree/worktree-row-key";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -40,8 +41,11 @@ export function NewTerminalPicker(props: NewTerminalPickerProps) {
   // written into state via an effect.
   const [explicitRow, setExplicitRow] =
     useState<WorktreeBindingSelectorRow | null>(null);
-  const openTileInTab = useEpicCanvasStore((s) => s.openTileInTab);
   const activeHostId = useReactiveActiveHostId();
+  const navigateNested = useEpicNestedFocusNavigation();
+  const prepareOpenTileInTabFocusTarget = useEpicCanvasStore(
+    (s) => s.prepareOpenTileInTabFocusTarget,
+  );
 
   // Gated on `isOpen` so the "+" button costs no RPC while idle; the query
   // becomes active only while the popover is open.
@@ -98,17 +102,25 @@ export function NewTerminalPicker(props: NewTerminalPickerProps) {
   const handleLaunch = useCallback(() => {
     if (hasLaunchedRef.current || launchTarget === null) return;
     hasLaunchedRef.current = true;
-    openTileInTab(props.tabId, {
-      id: `term-${uuidv4()}`,
-      instanceId: uuidv4(),
-      type: "terminal",
-      name: DEFAULT_TERMINAL_TITLE,
-      titleSource: "default",
-      hostId: launchTarget.hostId,
-      cwd: launchTarget.cwd,
-    });
+    navigateNested(props.epicId, props.tabId, () =>
+      prepareOpenTileInTabFocusTarget(props.tabId, {
+        id: `term-${uuidv4()}`,
+        instanceId: uuidv4(),
+        type: "terminal",
+        name: DEFAULT_TERMINAL_TITLE,
+        titleSource: "default",
+        hostId: launchTarget.hostId,
+        cwd: launchTarget.cwd,
+      }),
+    );
     setIsOpen(false);
-  }, [launchTarget, openTileInTab, props.tabId]);
+  }, [
+    navigateNested,
+    prepareOpenTileInTabFocusTarget,
+    props.epicId,
+    props.tabId,
+    launchTarget,
+  ]);
 
   const handleSelectRow = useCallback((row: WorktreeBindingSelectorRow) => {
     setExplicitRow(row);

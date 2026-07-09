@@ -12,12 +12,16 @@ import {
 } from "@tanstack/react-router";
 import {
   canPopOverlayEntry,
+  resetSystemTabModalColdLoadForTests,
   useSystemTabModalActions,
   useSystemTabModalController,
   useSystemTabModalRefreshGuard,
   type SystemTabModalApi,
 } from "@/stores/tabs/use-system-tab-modal";
-import { createPersistentMemoryHistory } from "@/lib/persistent-history";
+import {
+  createPersistentMemoryHistory,
+  getHistoryController,
+} from "@/lib/persistent-history";
 import { useSettingsSectionStore } from "@/stores/tabs/settings-section-store";
 import { useTabsStore } from "@/stores/tabs/store";
 import { systemTabOverlaySearchSchema } from "@/lib/system-tab-overlay-search";
@@ -28,7 +32,10 @@ function GuardedRoot() {
 }
 
 function buildRouter(initialPath: string) {
-  const rootRoute = createRootRoute({ component: GuardedRoot });
+  const rootRoute = createRootRoute({
+    validateSearch: (raw) => systemTabOverlaySearchSchema.parse(raw),
+    component: GuardedRoot,
+  });
   const epicRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: "/epics/$epicId/$tabId",
@@ -42,6 +49,32 @@ function buildRouter(initialPath: string) {
   return createRouter({
     routeTree: rootRoute.addChildren([epicRoute, settingsRoute]),
     history: createMemoryHistory({ initialEntries: [initialPath] }),
+  });
+}
+
+// Same route tree as `buildRouter`, backed by the real persistent history
+// (`createPersistentMemoryHistory`) instead of a plain in-memory one, so
+// tests can assert on `getHistoryController(...)`'s live stack/cursor - the
+// cold-load redirect's `replace` semantics only interact with adjacent-
+// duplicate collapse on the persistent controller, not on `createMemoryHistory`.
+function buildPersistentRouter(windowId: string) {
+  const rootRoute = createRootRoute({
+    validateSearch: (raw) => systemTabOverlaySearchSchema.parse(raw),
+    component: GuardedRoot,
+  });
+  const epicRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/epics/$epicId/$tabId",
+    component: () => <div data-testid="epic-route" />,
+  });
+  const settingsRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/settings/general",
+    component: () => <div data-testid="settings-route" />,
+  });
+  return createRouter({
+    routeTree: rootRoute.addChildren([epicRoute, settingsRoute]),
+    history: createPersistentMemoryHistory(null, windowId),
   });
 }
 
@@ -167,8 +200,17 @@ describe("settings section is store-backed, not URL-backed", () => {
 });
 
 describe("useSystemTabModalRefreshGuard", () => {
+  beforeEach(() => {
+    // The cold-load latch is module-scoped ("once per renderer boot"), not
+    // per-hook-instance, so tests must reset it explicitly between cases -
+    // otherwise a prior test's boot consumes it and the redirect below never
+    // gets to fire.
+    resetSystemTabModalColdLoadForTests();
+    useTabsStore.setState({ systemTabs: { history: null, settings: null } });
+  });
   afterEach(() => {
     cleanup();
+    useTabsStore.setState({ systemTabs: { history: null, settings: null } });
   });
 
   it("does not issue a second navigation when no system modal overlay is open", async () => {
@@ -185,6 +227,108 @@ describe("useSystemTabModalRefreshGuard", () => {
     });
 
     expect(navigateSpy).toHaveBeenCalledOnce();
+  });
+
+  it("fires the focus-tab-first redirect exactly once on cold load, using replace", async () => {
+    // Simulates a genuine cold boot: the persisted/restored URL carries an
+    // overlay flag, but the settings tab is already open (e.g. restored from
+    // a prior session). The guard's first-ever effect pass must redirect
+    // straight to the tab and drop the overlay param.
+    useTabsStore.setState({
+      systemTabs: {
+        history: null,
+        settings: {
+          id: "settings",
+          kind: "settings",
+          name: "Settings",
+          lastPath: "/settings/general",
+        },
+      },
+    });
+    const router = buildRouter("/epics/epic-1/tab-1?settingsOverlay=true");
+    const navigateSpy = vi.spyOn(router, "navigate");
+    render(<RouterProvider router={router} />);
+
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe("/settings/general");
+    });
+    expect(router.state.location.search).not.toHaveProperty("settingsOverlay");
+    expect(navigateSpy).toHaveBeenCalledTimes(1);
+    expect(navigateSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ replace: true }),
+    );
+
+    // A later in-app crossing back onto an overlay-flagged URL must NOT
+    // re-trigger the cold-load-only redirect. Unlike the old per-instance
+    // ref (which reset on any ancestor remount), the module-scoped latch
+    // stays consumed for the rest of the renderer's life, so this can only
+    // land back on `/settings/general` if the redirect incorrectly re-fires.
+    navigateSpy.mockClear();
+    await router.navigate({
+      to: "/epics/$epicId/$tabId",
+      params: { epicId: "epic-1", tabId: "tab-1" },
+      search: {
+        focusedAt: undefined,
+        focusArtifactId: undefined,
+        focusThreadId: undefined,
+        migrationSource: undefined,
+        focusPaneId: undefined,
+        focusTileInstanceId: undefined,
+        settingsOverlay: true,
+      },
+    });
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe("/epics/epic-1/tab-1");
+    });
+  });
+
+  it("cold boot onto an overlay entry with the tab route already ahead leaves no dead forward step", async () => {
+    // A restored stack where the redirect target is ALREADY the next
+    // persisted entry (e.g. the user promoted the overlay to a tab in a
+    // prior session, then quit with the cursor back on the overlay entry).
+    // The cold-load redirect's `replace` must collapse that forward
+    // duplicate, not just land on it and leave a dead forward step.
+    useTabsStore.setState({
+      systemTabs: {
+        history: null,
+        settings: {
+          id: "settings",
+          kind: "settings",
+          name: "Settings",
+          lastPath: "/settings/general",
+        },
+      },
+    });
+    const windowId = "cold-boot-overlay-ahead";
+    window.localStorage.setItem(
+      `traycer-gui-app:last-route:${windowId}`,
+      JSON.stringify({
+        entries: [
+          "/epics/epic-1/tab-1",
+          "/epics/epic-1/tab-1?settingsOverlay=true",
+          "/settings/general",
+        ],
+        index: 1,
+      }),
+    );
+    const router = buildPersistentRouter(windowId);
+    render(<RouterProvider router={router} />);
+
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe("/settings/general");
+    });
+    expect(router.state.location.search).not.toHaveProperty("settingsOverlay");
+
+    const controller = getHistoryController(router.history);
+    if (controller === null) {
+      throw new Error("expected a persistent controller");
+    }
+    expect(controller.getEntries()).toEqual([
+      "/epics/epic-1/tab-1",
+      "/settings/general",
+    ]);
+    expect(controller.getIndex()).toBe(1);
+    expect(controller.canGoForward()).toBe(false);
   });
 });
 

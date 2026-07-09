@@ -56,6 +56,7 @@ import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { useTerminalKill } from "@/hooks/terminal/use-terminal-kill-mutation";
 import { useTerminalList } from "@/hooks/terminal/use-terminal-list-query";
 import { useTerminalRename } from "@/hooks/terminal/use-terminal-rename-mutation";
+import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { useHostClient } from "@/lib/host";
 import { isVisibleRawTerminalSession } from "@/lib/terminals/terminal-session-filters";
 import {
@@ -96,22 +97,43 @@ function TerminalsPanelBodyLive(props: {
   const { epicId, tabId } = props;
   const hostClient = useHostClient();
   const list = useTerminalList(epicId, hostClient);
-  const openTileInTab = useEpicCanvasStore((s) => s.openTileInTab);
-  const setActiveTileTab = useEpicCanvasStore((s) => s.setActiveTileTab);
-  const setActiveTilePane = useEpicCanvasStore((s) => s.setActiveTilePane);
+  const navigateNested = useEpicNestedFocusNavigation();
+  const prepareOpenTileInTabFocusTarget = useEpicCanvasStore(
+    (s) => s.prepareOpenTileInTabFocusTarget,
+  );
+  const prepareSetActiveTileTabFocusTarget = useEpicCanvasStore(
+    (s) => s.prepareSetActiveTileTabFocusTarget,
+  );
   const activeHostId = useReactiveActiveHostId() ?? UNKNOWN_HOST_PLACEHOLDER;
 
   const openExisting = useCallback(
     (session: TerminalSessionInfo) => {
       const found = findOpenArtifactInTab(tabId, session.sessionId);
       if (found !== null) {
-        setActiveTilePane(tabId, found.paneId);
-        setActiveTileTab(tabId, found.paneId, found.instanceId);
+        navigateNested(epicId, tabId, () =>
+          prepareSetActiveTileTabFocusTarget(
+            tabId,
+            found.paneId,
+            found.instanceId,
+          ),
+        );
         return;
       }
-      openTileInTab(tabId, makeTerminalRef(session, activeHostId, uuidv4()));
+      navigateNested(epicId, tabId, () =>
+        prepareOpenTileInTabFocusTarget(
+          tabId,
+          makeTerminalRef(session, activeHostId, uuidv4()),
+        ),
+      );
     },
-    [activeHostId, openTileInTab, setActiveTilePane, setActiveTileTab, tabId],
+    [
+      activeHostId,
+      epicId,
+      navigateNested,
+      prepareOpenTileInTabFocusTarget,
+      prepareSetActiveTileTabFocusTarget,
+      tabId,
+    ],
   );
 
   // Host keeps exited sessions for a 60s grace window; filter so a
@@ -231,7 +253,10 @@ function TerminalRow(props: TerminalRowProps) {
   const kill = useTerminalKill();
   const rename = useTerminalRename();
   const renameArtifactInTab = useEpicCanvasStore((s) => s.renameArtifactInTab);
-  const closeCanvasTab = useEpicCanvasStore((s) => s.closeCanvasTab);
+  const navigateNested = useEpicNestedFocusNavigation();
+  const prepareCloseCanvasTabFocusTarget = useEpicCanvasStore(
+    (s) => s.prepareCloseCanvasTabFocusTarget,
+  );
   const showNavigatorResourceStats = useSettingsStore(
     (state) => state.showNavigatorResourceStats,
   );
@@ -324,10 +349,19 @@ function TerminalRow(props: TerminalRowProps) {
     if (kill.isPending) return;
     const found = findOpenArtifactInTab(tabId, session.sessionId);
     if (found !== null) {
-      closeCanvasTab(tabId, found.paneId, found.instanceId);
+      navigateNested(epicId, tabId, () =>
+        prepareCloseCanvasTabFocusTarget(tabId, found.paneId, found.instanceId),
+      );
     }
     kill.mutate({ sessionId: session.sessionId });
-  }, [closeCanvasTab, kill, session.sessionId, tabId]);
+  }, [
+    epicId,
+    kill,
+    navigateNested,
+    prepareCloseCanvasTabFocusTarget,
+    session.sessionId,
+    tabId,
+  ]);
 
   const handleDoubleClick = useCallback(() => {
     if (isRenaming) return;

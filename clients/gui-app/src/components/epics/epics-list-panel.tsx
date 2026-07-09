@@ -1045,6 +1045,8 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
         focusArtifactId: undefined,
         focusThreadId: undefined,
         migrationSource: isPhase ? "phase" : undefined,
+        focusPaneId: undefined,
+        focusTileInstanceId: undefined,
       }}
       onClick={openEpicRow}
       aria-label={`Open task ${displayTitle}`}

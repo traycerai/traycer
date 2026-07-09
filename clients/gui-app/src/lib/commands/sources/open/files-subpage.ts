@@ -67,6 +67,7 @@ function fileLeaves(args: FileLeavesArgs): ReadonlyArray<CommandItem> {
           tabId: ctx.activeTabId,
           groupId: ctx.targetGroupId,
           ref,
+          navigateNestedFocus: ctx.router.navigateNestedFocus,
         });
       },
     }),

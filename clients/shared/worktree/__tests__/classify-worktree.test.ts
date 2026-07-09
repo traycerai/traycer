@@ -123,7 +123,7 @@ describe("classifyWorktreeTier - precedence truth table (first match wins)", () 
       entry: entry({ uncommittedCount: 3, atBaseCommit: true }),
       tier: "review",
     },
-    // --- Merged (PR provenance) ---
+    // --- Landed (PR provenance) ---
     {
       name: "prState merged AND mergedHeadShaMatches → merged (PR)",
       entry: entry({ prState: "merged", mergedHeadShaMatches: true }),
@@ -176,7 +176,7 @@ describe("classifyWorktreeTier - precedence truth table (first match wins)", () 
       }),
       tier: "review",
     },
-    // --- Merged (local ancestry) --- (worked-then-merged: NOT at base)
+    // --- Landed (local ancestry) --- (worked-then-merged: NOT at base)
     {
       name: "clean + mergedIntoDefault, no owners, NOT at base → merged (local)",
       entry: entry({
@@ -239,8 +239,8 @@ describe("classifyWorktreeTier - precedence truth table (first match wins)", () 
     {
       // PRECEDENCE PIN: the common never-touched worktree. Its base is in the
       // default branch, so `mergedIntoDefault` is ALSO true - at-base MUST win so
-      // it reads the honest "At base commit", never the "Merged" misnomer.
-      name: "at-base beats merged(local) when both set → at-base-commit (never Merged)",
+      // it reads the honest "At base commit", never the stronger "Landed" label.
+      name: "at-base beats merged(local) when both set → at-base-commit (never Landed)",
       entry: entry({
         atBaseCommit: true,
         branchStatus: status({ mergedIntoDefault: true }),
@@ -409,24 +409,31 @@ describe("classifyWorktreeTier - precedence truth table (first match wins)", () 
       entry({ branchStatus: status({ mergedIntoDefault: true }) }),
     );
     expect(localMerged.tier).toBe("merged");
-    expect(localMerged.label).toBe("Merged");
+    expect(localMerged.label).toBe("Landed");
     // Local-ancestry provenance hint, and no stray "merged" duplicate.
     expect(localMerged.facts).toContain("in default");
+    expect(localMerged.prFacts).toContain("in default");
+    expect(localMerged.nonPrFacts).not.toContain("in default");
     expect(localMerged.facts).toContain("clean");
+    expect(localMerged.nonPrFacts).toContain("clean");
 
     const prMerged = classifyWorktree(
       entry({ prState: "merged", mergedHeadShaMatches: true, prNumber: 123 }),
     );
     expect(prMerged.tier).toBe("merged");
-    expect(prMerged.label).toBe("Merged");
+    expect(prMerged.label).toBe("Landed");
     // PR provenance hint carries the number and never "in default".
     expect(prMerged.facts).toContain("PR #123");
+    expect(prMerged.prFacts).toContain("PR #123");
+    expect(prMerged.nonPrFacts).not.toContain("PR #123");
     expect(prMerged.facts).not.toContain("in default");
 
     const prMergedNoNumber = classifyWorktree(
       entry({ prState: "merged", mergedHeadShaMatches: true, prNumber: null }),
     );
     expect(prMergedNoNumber.facts).toContain("merged PR");
+    expect(prMergedNoNumber.prFacts).toContain("merged PR");
+    expect(prMergedNoNumber.nonPrFacts).not.toContain("merged PR");
 
     const atBase = classifyWorktree(entry({ atBaseCommit: true }));
     expect(atBase.tier).toBe("at-base-commit");
@@ -464,7 +471,17 @@ describe("classifyWorktreeTier - precedence truth table (first match wins)", () 
     );
     expect(submoduleBlocked.tier).toBe("review");
     expect(submoduleBlocked.facts).toContain("submodule acme/lib unmerged");
+    expect(submoduleBlocked.prFacts).toContain("submodule acme/lib unmerged");
+    expect(submoduleBlocked.nonPrFacts).not.toContain(
+      "submodule acme/lib unmerged",
+    );
     expect(submoduleBlocked.facts).toContain(
+      "submodule acme/widgets PR #42 open",
+    );
+    expect(submoduleBlocked.prFacts).toContain(
+      "submodule acme/widgets PR #42 open",
+    );
+    expect(submoduleBlocked.nonPrFacts).not.toContain(
       "submodule acme/widgets PR #42 open",
     );
     expect(
@@ -474,7 +491,7 @@ describe("classifyWorktreeTier - precedence truth table (first match wins)", () 
 
   it("degrades to today's behavior against a v1.0 / no-PR host (all new fields null/false)", () => {
     // With the merge-provenance bundle at its null/false defaults, only the T9
-    // local-ancestry and upstream-tip signals can green - no Merged (PR), no
+    // local-ancestry and upstream-tip signals can green - no Landed (PR), no
     // At base commit.
     expect(
       classifyWorktreeTier(
@@ -525,11 +542,11 @@ describe("worktree tier ordering", () => {
 
 describe("provenRemovable - single green / bulk-eligible predicate", () => {
   it("true for exactly the three green tiers", () => {
-    // Merged (PR)
+    // Landed (PR)
     expect(
       provenRemovable(entry({ prState: "merged", mergedHeadShaMatches: true })),
     ).toBe(true);
-    // Merged (local ancestry)
+    // Landed (local ancestry)
     expect(
       provenRemovable(
         entry({ branchStatus: status({ mergedIntoDefault: true }) }),

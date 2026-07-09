@@ -13,6 +13,7 @@ import {
 } from "../host-start";
 import type { HostInstallRecord } from "../../manifest/host-install";
 import { hostHomeDir } from "../../store/paths";
+import { withDevDesktopSlotAsync as withDevDesktopSlot } from "@traycer-clients/shared/test-fixtures/dev-desktop-slot";
 
 // `traycer host start --environment <ch>` is the single supervisor entry
 // point. There is one launch path: read the environment's
@@ -308,6 +309,24 @@ describe("runHostStart - installed-record launch path", () => {
       hostHomeDir("dev"),
     ]);
     expect(recorded.spawnCalls[0]?.env.TRAYCER_CHANNEL).toBeUndefined();
+  });
+
+  it("passes the dev-desktop run host root to the host when a slot is set", async () => {
+    await withDevDesktopSlot("Worktree Slot", async () => {
+      const exec = "/opt/traycer/host/dev/install/traycer-host";
+      const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+      const invoke = () =>
+        runHostStart({ environment: "dev", cwd: null }, deps);
+      setTimeout(() => child.emit("exit", 0, null));
+      await runUntilExit(invoke, recorded);
+      expect(recorded.spawnCalls[0]?.args).toEqual([
+        "--host-data-dir",
+        hostHomeDir("dev"),
+      ]);
+      expect(hostHomeDir("dev")).toMatch(
+        /[\\/]\.traycer[\\/]host[\\/]dev-runs[\\/]worktree-slot$/,
+      );
+    });
   });
 
   it("dev wrapper-script executablePath spawns through the same code path", async () => {

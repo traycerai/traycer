@@ -46,6 +46,7 @@ import {
   type Environment,
   type HostFsLayout,
 } from "../host/host-paths";
+import { devDesktopSlotForEnvironment } from "../host/dev-desktop-slot";
 import {
   readHostNameSettings,
   writeHostNameSettings,
@@ -107,6 +108,13 @@ function activeLayout(): HostFsLayout {
   return getHostFsLayout(activeEnvironment);
 }
 
+function cliSlotRootForEnvironment(environment: Environment): string {
+  const cliRoot = join(homedir(), ".traycer", "cli");
+  const devSlot = devDesktopSlotForEnvironment(environment, process.env);
+  if (devSlot !== null) return join(cliRoot, "dev-runs", devSlot);
+  return environmentSubdir(cliRoot, environment);
+}
+
 interface DevWrapperPaths {
   readonly segments: readonly string[];
   readonly filenamePosix: string;
@@ -163,17 +171,16 @@ const devWrapperPaths: DevWrapperPaths =
  * to a stable executable path even though the dev environment has no
  * packaged SEA binary on disk.
  *
- * The path segments + per-platform filename live in
- * `cli/dev-wrapper-paths.json` so this module and `scripts/dev-desktop.js`
- * share a single source of truth (review item 9) - changing the layout
- * means updating one file, not two implementations.
+ * The run slot selects the CLI root; `dev-wrapper-paths.json` supplies the
+ * platform filename so this module and `scripts/dev-desktop.js` stay in
+ * lockstep on the wrapper executable name.
  */
 function devCliWrapperPath(): string {
   const filename =
     process.platform === "win32"
       ? devWrapperPaths.filenameWin32
       : devWrapperPaths.filenamePosix;
-  return join(homedir(), ...devWrapperPaths.segments, filename);
+  return join(cliSlotRootForEnvironment(activeEnvironment), "bin", filename);
 }
 
 /**
@@ -197,10 +204,9 @@ function isUnderTraycerHome(candidate: string): boolean {
 
 /**
  * Extra args for the dev-slot `host service install` so reregister resolves
- * the dev CLI wrapper that `make dev-desktop` staged at
- * `~/.traycer/cli/dev/bin/traycer`. Production
- * (`activeEnvironment === "production"`) returns an empty list so packaged
- * Desktop keeps using the CLI install manifest at
+ * the dev CLI wrapper that `make dev-desktop` staged under this run's CLI bin
+ * dir. Production (`activeEnvironment === "production"`) returns an empty list
+ * so packaged Desktop keeps using the CLI install manifest at
  * `~/.traycer/cli/manifest.json`.
  *
  * The CLI's `resolveServiceCliInvocation` discovers that wrapper via the
@@ -475,10 +481,11 @@ function projectDoctorReport(raw: unknown): HostDoctorReport {
 /**
  * Locates the installed-host record on disk for the active environment.
  *
- * The CLI installer writes `install.json` to the environment-scoped host
- * install dir - `~/.traycer/host/install/install.json` for prod and
- * `~/.traycer/host/dev/install/install.json` for dev (see
- * `hostInstallRecordPath` in `traycer-cli/src/store/paths.ts`).
+ * The CLI installer writes `install.json` to the environment/run-scoped host
+ * install dir - `~/.traycer/host/install/install.json` for prod,
+ * `~/.traycer/host/dev/install/install.json` for legacy/no-slot dev, and
+ * `~/.traycer/host/dev-runs/<slot>/install/install.json` for multi-run dev
+ * (see `hostInstallRecordPath` in `traycer-cli/src/store/paths.ts`).
  * Desktop reads the environment-matching record directly so:
  *
  *   - Packaged Desktop (prod environment) sees the production install
@@ -1150,7 +1157,7 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
       await clearHostRemovalIfSet();
       const operationId = optionalString(raw, "operationId") ?? randomUUID();
       // Dev environment needs the staged wrapper / self-invocation flags so
-      // service reregister works without a `~/.traycer/cli/dev/manifest.json`
+      // service reregister works without a per-run dev manifest
       // (Ticket f0ae4530). Prod returns []; this never widens prod's
       // host service install argv.
       const args = [
@@ -1222,12 +1229,12 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
     // Desktop never reads the prod manifest (and vice versa). Layout
     // mirrors `cliManifestPath()` in
     // `clients/traycer-cli/src/store/paths.ts`:
-    //   prod → ~/.traycer/cli/manifest.json
-    //   dev  → ~/.traycer/cli/dev/manifest.json
+    //   prod    → ~/.traycer/cli/manifest.json
+    //   dev     → ~/.traycer/cli/dev/manifest.json
+    //   dev run → ~/.traycer/cli/dev-runs/<slot>/manifest.json
     // The desktop-reconcile sidecar is Desktop-owned and lives next to
     // the manifest, so it follows the same environment layout.
-    const cliRoot = join(homedir(), ".traycer", "cli");
-    const cliSlotRoot = environmentSubdir(cliRoot, activeEnvironment);
+    const cliSlotRoot = cliSlotRootForEnvironment(activeEnvironment);
     const manifestPath = join(cliSlotRoot, "manifest.json");
     const reconcilePath = join(cliSlotRoot, "desktop-reconcile.json");
     const reconcile = await readReconcileSidecar(reconcilePath);

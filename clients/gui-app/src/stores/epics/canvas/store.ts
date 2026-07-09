@@ -19,6 +19,12 @@ import {
   type EpicNodeKind,
   type EpicNodeRecord,
 } from "@/lib/artifacts/node-display";
+import {
+  areNestedFocusTargetsEqual,
+  getCurrentNestedFocusTarget,
+  resolveNestedFocusTarget,
+  type NestedFocusTarget,
+} from "@/lib/epic-nested-focus-route";
 import { UNTITLED_EPIC_TITLE } from "@/lib/display-title";
 import { createEpicName } from "@/lib/epic-name";
 import type {
@@ -223,17 +229,29 @@ export interface EpicCanvasStore {
    * this one action.
    */
   openTileInTab: (tabId: string, node: EpicCanvasTileRef) => void;
+  prepareOpenTileInTabFocusTarget: (
+    tabId: string,
+    node: EpicCanvasTileRef,
+  ) => NestedFocusTarget | null;
   /**
    * Open a tile in preview mode (italic tab), replacing the destination
    * pane's existing preview. Same dedup as `openTileInTab`.
    */
   openTilePreviewInTab: (tabId: string, node: EpicCanvasTileRef) => void;
+  prepareOpenTilePreviewInTabFocusTarget: (
+    tabId: string,
+    node: EpicCanvasTileRef,
+  ) => NestedFocusTarget | null;
   /**
    * Add `node` as a tab in the active pane without changing the active
    * tab/pane (persists a server-created terminal as a saved tab without
    * stealing focus). Idempotent.
    */
   openTileInBackgroundTab: (tabId: string, node: EpicCanvasTileRef) => void;
+  prepareOpenTileInBackgroundTabFocusTarget: (
+    tabId: string,
+    node: EpicCanvasTileRef,
+  ) => NestedFocusTarget | null;
   /**
    * Opener-only path: open `ref` into the explicit `paneId` as a fresh tab
    * instance, bypassing dedup. A second view of an already-open content id is
@@ -244,12 +262,21 @@ export interface EpicCanvasStore {
     paneId: string,
     ref: EpicCanvasTileRef,
   ) => void;
+  prepareOpenTileInPaneFocusTarget: (
+    tabId: string,
+    paneId: string,
+    ref: EpicCanvasTileRef,
+  ) => NestedFocusTarget | null;
   /**
    * Open a blank "New tab" in `paneId`, made active. Reuse-if-active-is-blank:
    * a no-op-ish focus when the pane's active tab is already blank.
    * See {@link openBlankTabInPaneCanvas}.
    */
   openBlankTabInPane: (tabId: string, paneId: string) => void;
+  prepareOpenBlankTabInPaneFocusTarget: (
+    tabId: string,
+    paneId: string,
+  ) => NestedFocusTarget | null;
   updateGitDiffTileViewInTab: (
     tabId: string,
     tileId: string,
@@ -271,22 +298,52 @@ export interface EpicCanvasStore {
     filePath: string,
   ) => void;
   promotePreviewInTab: (tabId: string, paneId: string) => void;
+  applyNestedRouteFocus: (tabId: string, target: NestedFocusTarget) => void;
   setActiveTileTab: (tabId: string, paneId: string, tileTabId: string) => void;
+  prepareSetActiveTileTabFocusTarget: (
+    tabId: string,
+    paneId: string,
+    tileTabId: string,
+  ) => NestedFocusTarget | null;
   setActiveTilePane: (tabId: string, paneId: string) => void;
+  prepareSetActiveTilePaneFocusTarget: (
+    tabId: string,
+    paneId: string,
+  ) => NestedFocusTarget | null;
   insertNodeOnTabStrip: (
     tabId: string,
     targetPaneId: string,
     targetIndex: number,
     node: EpicCanvasTileRef,
   ) => void;
+  prepareInsertNodeOnTabStripFocusTarget: (
+    tabId: string,
+    targetPaneId: string,
+    targetIndex: number,
+    node: EpicCanvasTileRef,
+  ) => NestedFocusTarget | null;
   moveTabOnTabStrip: (tabId: string, args: TabMoveArgs) => void;
+  prepareMoveActiveTabOnTabStripFocusTarget: (
+    tabId: string,
+    args: TabMoveArgs,
+  ) => NestedFocusTarget | null;
   splitPaneWithNode: (
     tabId: string,
     targetPaneId: string,
     position: EdgeDropPosition,
     node: EpicCanvasTileRef,
   ) => void;
+  prepareSplitPaneWithNodeFocusTarget: (
+    tabId: string,
+    targetPaneId: string,
+    position: EdgeDropPosition,
+    node: EpicCanvasTileRef,
+  ) => NestedFocusTarget | null;
   splitPaneWithTab: (tabId: string, args: TabSplitArgs) => void;
+  prepareSplitPaneWithTabFocusTarget: (
+    tabId: string,
+    args: TabSplitArgs,
+  ) => NestedFocusTarget | null;
   /**
    * Split into a trailing empty pane. Returns the new empty pane's id (which
    * `splitPaneEmpty` makes active) so callers can bind the opener to it, or
@@ -297,30 +354,63 @@ export interface EpicCanvasStore {
     targetPaneId: string,
     direction: SplitDirection,
   ) => string | null;
+  prepareSplitPaneEmptyFocusTarget: (
+    tabId: string,
+    targetPaneId: string,
+    direction: SplitDirection,
+  ) => NestedFocusTarget | null;
   /** Convenience for the explicit far-right split button (horizontal). */
   splitPaneEmptyRightInTab: (
     tabId: string,
     targetPaneId: string,
   ) => string | null;
   closeCanvasTab: (tabId: string, paneId: string, tileTabId: string) => void;
+  prepareCloseCanvasTabFocusTarget: (
+    tabId: string,
+    paneId: string,
+    tileTabId: string,
+  ) => NestedFocusTarget | null;
   closeOtherCanvasTabs: (
     tabId: string,
     paneId: string,
     tileTabId: string,
   ) => void;
+  prepareCloseOtherCanvasTabsFocusTarget: (
+    tabId: string,
+    paneId: string,
+    tileTabId: string,
+  ) => NestedFocusTarget | null;
   closeRightCanvasTabs: (
     tabId: string,
     paneId: string,
     tileTabId: string,
   ) => void;
+  prepareCloseRightCanvasTabsFocusTarget: (
+    tabId: string,
+    paneId: string,
+    tileTabId: string,
+  ) => NestedFocusTarget | null;
   closeAllCanvasTabs: (tabId: string, paneId: string) => void;
+  prepareCloseAllCanvasTabsFocusTarget: (
+    tabId: string,
+    paneId: string,
+  ) => NestedFocusTarget | null;
   closeCanvasPane: (tabId: string, paneId: string) => void;
+  prepareCloseCanvasPaneFocusTarget: (
+    tabId: string,
+    paneId: string,
+  ) => NestedFocusTarget | null;
   /** Commit a group's child fractions (clamped + normalized) on pointer-up. */
   resizeSplitInTab: (
     tabId: string,
     groupId: string,
     sizes: ReadonlyArray<number>,
   ) => void;
+  prepareResizeSplitFocusTarget: (
+    tabId: string,
+    groupId: string,
+    sizes: ReadonlyArray<number>,
+  ) => NestedFocusTarget | null;
   renameArtifactInTab: (
     tabId: string,
     artifactId: string,
@@ -632,6 +722,46 @@ function updateTabCanvas(
       [tabId]: next,
     },
   };
+}
+
+function canvasForExistingTab(
+  state: EpicCanvasStore,
+  tabId: string,
+): EpicCanvasState | null {
+  if (state.tabsById[tabId] === undefined) return null;
+  return state.canvasByTabId[tabId] ?? EMPTY_CANVAS;
+}
+
+function currentNestedFocusTargetForTab(
+  state: EpicCanvasStore,
+  tabId: string,
+): NestedFocusTarget | null {
+  const canvas = canvasForExistingTab(state, tabId);
+  return canvas === null ? null : getCurrentNestedFocusTarget(canvas);
+}
+
+function exactNestedFocusTargetForTab(
+  state: EpicCanvasStore,
+  tabId: string,
+  target: NestedFocusTarget,
+): NestedFocusTarget | null {
+  const canvas = canvasForExistingTab(state, tabId);
+  return canvas === null ? null : resolveNestedFocusTarget(canvas, target);
+}
+
+function changedNestedFocusTarget(
+  before: NestedFocusTarget | null,
+  after: NestedFocusTarget | null,
+): NestedFocusTarget | null {
+  return areNestedFocusTargetsEqual(before, after) ? null : after;
+}
+
+function changedCanvasFocusTarget(
+  before: EpicCanvasState | null,
+  after: EpicCanvasState | null,
+): NestedFocusTarget | null {
+  if (before === null || after === null || before === after) return null;
+  return getCurrentNestedFocusTarget(after);
 }
 
 interface AppendArtifactRecordArgs {
@@ -1043,12 +1173,24 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
         );
       },
 
+      prepareOpenTileInTabFocusTarget: (tabId, node) => {
+        get().openTileInTab(tabId, node);
+        const after = currentNestedFocusTargetForTab(get(), tabId);
+        return after;
+      },
+
       openTilePreviewInTab: (tabId, node) => {
         set((state) =>
           updateTabCanvas(state, tabId, (canvas) =>
             openTile(canvas, node, true),
           ),
         );
+      },
+
+      prepareOpenTilePreviewInTabFocusTarget: (tabId, node) => {
+        get().openTilePreviewInTab(tabId, node);
+        const after = currentNestedFocusTargetForTab(get(), tabId);
+        return after;
       },
 
       openTileInBackgroundTab: (tabId, node) => {
@@ -1059,6 +1201,11 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
         );
       },
 
+      prepareOpenTileInBackgroundTabFocusTarget: (tabId, node) => {
+        get().openTileInBackgroundTab(tabId, node);
+        return null;
+      },
+
       openTileInPane: (tabId, paneId, ref) => {
         set((state) =>
           updateTabCanvas(state, tabId, (canvas) =>
@@ -1067,12 +1214,32 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
         );
       },
 
+      prepareOpenTileInPaneFocusTarget: (tabId, paneId, ref) => {
+        const before = canvasForExistingTab(get(), tabId);
+        const targetPane =
+          before === null ? null : findPaneById(before.root, paneId);
+        get().openTileInPane(tabId, paneId, ref);
+        const after = currentNestedFocusTargetForTab(get(), tabId);
+        const target = targetPane === null ? null : after;
+        return target;
+      },
+
       openBlankTabInPane: (tabId, paneId) => {
         set((state) =>
           updateTabCanvas(state, tabId, (canvas) =>
             openBlankTabInPaneCanvas(canvas, paneId),
           ),
         );
+      },
+
+      prepareOpenBlankTabInPaneFocusTarget: (tabId, paneId) => {
+        const before = canvasForExistingTab(get(), tabId);
+        const targetPane =
+          before === null ? null : findPaneById(before.root, paneId);
+        get().openBlankTabInPane(tabId, paneId);
+        const after = currentNestedFocusTargetForTab(get(), tabId);
+        const target = targetPane === null ? null : after;
+        return target;
       },
 
       updateGitDiffTileViewInTab: (tabId, tileId, view) => {
@@ -1115,6 +1282,20 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
         );
       },
 
+      applyNestedRouteFocus: (tabId, target) => {
+        set((state) =>
+          updateTabCanvas(state, tabId, (canvas) =>
+            target.tileInstanceId === undefined
+              ? setActivePane(canvas, target.paneId)
+              : setActiveTileTabCanvas(
+                  canvas,
+                  target.paneId,
+                  target.tileInstanceId,
+                ),
+          ),
+        );
+      },
+
       setActiveTileTab: (tabId, paneId, tileTabId) => {
         set((state) =>
           updateTabCanvas(state, tabId, (canvas) =>
@@ -1123,12 +1304,28 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
         );
       },
 
+      prepareSetActiveTileTabFocusTarget: (tabId, paneId, tileTabId) => {
+        get().setActiveTileTab(tabId, paneId, tileTabId);
+        const target = exactNestedFocusTargetForTab(get(), tabId, {
+          paneId,
+          tileInstanceId: tileTabId,
+        });
+        return target;
+      },
+
       setActiveTilePane: (tabId, paneId) => {
         set((state) =>
           updateTabCanvas(state, tabId, (canvas) =>
             setActivePane(canvas, paneId),
           ),
         );
+      },
+
+      prepareSetActiveTilePaneFocusTarget: (tabId, paneId) => {
+        get().setActiveTilePane(tabId, paneId);
+        const target = currentNestedFocusTargetForTab(get(), tabId);
+        const returned = target?.paneId === paneId ? target : null;
+        return returned;
       },
 
       insertNodeOnTabStrip: (tabId, targetPaneId, targetIndex, node) => {
@@ -1142,6 +1339,21 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
             ),
           ),
         );
+      },
+
+      prepareInsertNodeOnTabStripFocusTarget: (
+        tabId,
+        targetPaneId,
+        targetIndex,
+        node,
+      ) => {
+        const before = canvasForExistingTab(get(), tabId);
+        const targetPane =
+          before === null ? null : findPaneById(before.root, targetPaneId);
+        get().insertNodeOnTabStrip(tabId, targetPaneId, targetIndex, node);
+        const after = currentNestedFocusTargetForTab(get(), tabId);
+        const target = targetPane === null ? null : after;
+        return target;
       },
 
       moveTabOnTabStrip: (tabId, args) => {
@@ -1165,6 +1377,22 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
         );
       },
 
+      prepareMoveActiveTabOnTabStripFocusTarget: (tabId, args) => {
+        const beforeCanvas = canvasForExistingTab(get(), tabId);
+        const before = currentNestedFocusTargetForTab(get(), tabId);
+        get().moveTabOnTabStrip(tabId, args);
+        const afterCanvas = canvasForExistingTab(get(), tabId);
+        const after = currentNestedFocusTargetForTab(get(), tabId);
+        const target =
+          before?.tileInstanceId !== args.tabId ||
+          beforeCanvas === null ||
+          afterCanvas === null ||
+          beforeCanvas === afterCanvas
+            ? null
+            : changedNestedFocusTarget(before, after);
+        return target;
+      },
+
       splitPaneWithNode: (tabId, targetPaneId, position, node) => {
         set((state) =>
           updateTabCanvas(state, tabId, (canvas) =>
@@ -1174,6 +1402,19 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
             }),
           ),
         );
+      },
+
+      prepareSplitPaneWithNodeFocusTarget: (
+        tabId,
+        targetPaneId,
+        position,
+        node,
+      ) => {
+        const before = canvasForExistingTab(get(), tabId);
+        get().splitPaneWithNode(tabId, targetPaneId, position, node);
+        const after = canvasForExistingTab(get(), tabId);
+        const target = changedCanvasFocusTarget(before, after);
+        return target;
       },
 
       splitPaneWithTab: (tabId, args) => {
@@ -1190,6 +1431,14 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
             });
           }),
         );
+      },
+
+      prepareSplitPaneWithTabFocusTarget: (tabId, args) => {
+        const before = canvasForExistingTab(get(), tabId);
+        get().splitPaneWithTab(tabId, args);
+        const after = canvasForExistingTab(get(), tabId);
+        const target = changedCanvasFocusTarget(before, after);
+        return target;
       },
 
       splitPaneEmptyInTab: (tabId, targetPaneId, direction) => {
@@ -1209,6 +1458,17 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
           };
         });
         return newPaneId;
+      },
+
+      prepareSplitPaneEmptyFocusTarget: (tabId, targetPaneId, direction) => {
+        const paneId = get().splitPaneEmptyInTab(
+          tabId,
+          targetPaneId,
+          direction,
+        );
+        const target =
+          paneId === null ? null : { paneId, tileInstanceId: undefined };
+        return target;
       },
 
       splitPaneEmptyRightInTab: (tabId, targetPaneId) =>
@@ -1237,6 +1497,22 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
         });
       },
 
+      prepareCloseCanvasTabFocusTarget: (tabId, paneId, tileTabId) => {
+        const before = currentNestedFocusTargetForTab(get(), tabId);
+        get().closeCanvasTab(tabId, paneId, tileTabId);
+        const after = currentNestedFocusTargetForTab(get(), tabId);
+        const target = changedNestedFocusTarget(before, after);
+        return target;
+      },
+
+      prepareCloseOtherCanvasTabsFocusTarget: (tabId, paneId, tileTabId) => {
+        const before = currentNestedFocusTargetForTab(get(), tabId);
+        get().closeOtherCanvasTabs(tabId, paneId, tileTabId);
+        const after = currentNestedFocusTargetForTab(get(), tabId);
+        const target = changedNestedFocusTarget(before, after);
+        return target;
+      },
+
       closeOtherCanvasTabs: (tabId, paneId, tileTabId) => {
         set((state) =>
           updateTabCanvas(state, tabId, (canvas) =>
@@ -1253,6 +1529,14 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
         );
       },
 
+      prepareCloseRightCanvasTabsFocusTarget: (tabId, paneId, tileTabId) => {
+        const before = currentNestedFocusTargetForTab(get(), tabId);
+        get().closeRightCanvasTabs(tabId, paneId, tileTabId);
+        const after = currentNestedFocusTargetForTab(get(), tabId);
+        const target = changedNestedFocusTarget(before, after);
+        return target;
+      },
+
       closeAllCanvasTabs: (tabId, paneId) => {
         set((state) =>
           updateTabCanvas(state, tabId, (canvas) =>
@@ -1261,10 +1545,26 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
         );
       },
 
+      prepareCloseAllCanvasTabsFocusTarget: (tabId, paneId) => {
+        const before = currentNestedFocusTargetForTab(get(), tabId);
+        get().closeAllCanvasTabs(tabId, paneId);
+        const after = currentNestedFocusTargetForTab(get(), tabId);
+        const target = changedNestedFocusTarget(before, after);
+        return target;
+      },
+
       closeCanvasPane: (tabId, paneId) => {
         set((state) =>
           updateTabCanvas(state, tabId, (canvas) => closePane(canvas, paneId)),
         );
+      },
+
+      prepareCloseCanvasPaneFocusTarget: (tabId, paneId) => {
+        const before = currentNestedFocusTargetForTab(get(), tabId);
+        get().closeCanvasPane(tabId, paneId);
+        const after = currentNestedFocusTargetForTab(get(), tabId);
+        const target = changedNestedFocusTarget(before, after);
+        return target;
       },
 
       resizeSplitInTab: (tabId, groupId, sizes) => {
@@ -1273,6 +1573,11 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
             resizeSplit(canvas, groupId, sizes),
           ),
         );
+      },
+
+      prepareResizeSplitFocusTarget: (tabId, groupId, sizes) => {
+        get().resizeSplitInTab(tabId, groupId, sizes);
+        return null;
       },
 
       renameArtifactInTab: (tabId, artifactId, name) => {

@@ -26,11 +26,13 @@ function expectCommand(program: Command, path: readonly string[]): Command {
 }
 
 describe("worktree list / delete registration", () => {
-  it("registers `worktree list` with --include-activity and the runner flags", () => {
+  it("registers `worktree list` with paging, activity, and runner flags", () => {
     const program = buildProgram();
     const cmd = expectCommand(program, ["worktree", "list"]);
     const flags = cmd.options.map((o) => o.long);
     expect(flags).toContain("--include-activity");
+    expect(flags).toContain("--cursor");
+    expect(flags).toContain("--limit");
     expect(flags).toContain("--json");
     expect(flags).toContain("--no-progress");
   });

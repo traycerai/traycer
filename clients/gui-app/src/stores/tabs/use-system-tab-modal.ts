@@ -329,17 +329,35 @@ export function useAnySystemOverlayActive(): boolean {
   });
 }
 
+// Module-scoped: "once per renderer boot," not once per component instance.
+// A component-instance ref would reset every time an ancestor remounts the
+// tree this hook lives in (e.g. a structurally unstable gate flipping across
+// a route boundary), re-arming the focus-tab-first redirect below on every
+// such remount instead of just on genuine app boot / refresh / deep-link.
+// See `resetSystemTabModalColdLoadForTests` for the test-only reset seam.
+let systemTabModalColdLoadReconciled = false;
+
+/** Test-only: resets the module-scoped cold-load latch between test cases. */
+export function resetSystemTabModalColdLoadForTests(): void {
+  systemTabModalColdLoadReconciled = false;
+}
+
 /**
  * Refresh / deep-link guard + path-change auto-close. Mounted once
  * inside `<SystemTabModalHost />`. Two responsibilities:
  *  1. Focus-tab-first, **cold load only**: when the *restored* URL carries an
  *     overlay flag but a strip tab of that kind is already open, navigate to the
- *     tab's route and drop the overlay search params. This runs once, on the
- *     guard's first effect pass (app boot / refresh / deep-link), and never
- *     again. It must NOT fire on later in-app navigations - an overlay entry
- *     left in history (e.g. after promoting the modal to a tab) would otherwise
- *     become a redirect trap that bounces every Back press onto it straight back
- *     to the tab, making the back button look enabled-but-dead.
+ *     tab's route and drop the overlay search params. This runs once per
+ *     renderer boot (app boot / refresh / deep-link), and never again. It
+ *     must NOT fire on later in-app navigations - an overlay entry left in
+ *     history (e.g. after promoting the modal to a tab) would otherwise
+ *     become a redirect trap that bounces every Back press onto it straight
+ *     back to the tab, making the back button look enabled-but-dead. The
+ *     redirect also navigates with `replace`, so even if it were ever to
+ *     fire again it sheds the stale overlay entry in place (the persistent
+ *     history's replace-collapse cleans up an identical neighbor) instead of
+ *     pushing over the same stack - defense in depth alongside the
+ *     once-per-boot latch above.
  *  2. When the underlying path changes while the modal is open, clear
  *     the overlay flags so the modal dismisses.
  */
@@ -350,13 +368,10 @@ export function useSystemTabModalRefreshGuard(): void {
   });
   const router = useRouter();
   const lastPathnameRef = useRef<string>(pathname);
-  // Flipped on the first effect pass so focus-tab-first reconciliation (below)
-  // is a one-time cold-load step, not a reactive redirect.
-  const coldLoadReconciledRef = useRef<boolean>(false);
 
   useEffect(() => {
-    const isColdLoad = !coldLoadReconciledRef.current;
-    coldLoadReconciledRef.current = true;
+    const isColdLoad = !systemTabModalColdLoadReconciled;
+    systemTabModalColdLoadReconciled = true;
 
     if (!overlay.settingsOverlay && !overlay.historyOverlay) {
       lastPathnameRef.current = pathname;
@@ -371,6 +386,7 @@ export function useSystemTabModalRefreshGuard(): void {
       tabActivate(target);
       void router.navigate({
         ...tabRouteOptions(target),
+        replace: true,
         search: (prev) => withOverlayCleared(prev),
       });
       return;
@@ -380,6 +396,7 @@ export function useSystemTabModalRefreshGuard(): void {
       tabActivate(target);
       void router.navigate({
         ...tabRouteOptions(target),
+        replace: true,
         search: (prev) => withOverlayCleared(prev),
       });
       return;

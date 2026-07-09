@@ -28,6 +28,7 @@ import {
 import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { requestArtifactEditorFocus } from "@/lib/artifacts/pending-editor-focus";
 import { openProjectedSidebarNodeInTabWhenAvailable } from "@/components/epic-canvas/sidebar/open-projected-sidebar-node";
+import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { cn } from "@/lib/utils";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -665,10 +666,15 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
   const { expandedIds, toggleExpanded, ensureExpanded } = expansion;
   const node = useEpicTreeNode(nodeId);
   const childIds = useFilteredPanelChildIds(nodeId, treeFilter);
-  const openTileInTab = useEpicCanvasStore((s) => s.openTileInTab);
-  const closeCanvasTab = useEpicCanvasStore((s) => s.closeCanvasTab);
-  const openTilePreviewInTab = useEpicCanvasStore(
-    (s) => s.openTilePreviewInTab,
+  const navigateNested = useEpicNestedFocusNavigation();
+  const prepareOpenTileInTabFocusTarget = useEpicCanvasStore(
+    (s) => s.prepareOpenTileInTabFocusTarget,
+  );
+  const prepareCloseCanvasTabFocusTarget = useEpicCanvasStore(
+    (s) => s.prepareCloseCanvasTabFocusTarget,
+  );
+  const prepareOpenTilePreviewInTabFocusTarget = useEpicCanvasStore(
+    (s) => s.prepareOpenTilePreviewInTabFocusTarget,
   );
   const promotePreviewInTab = useEpicCanvasStore((s) => s.promotePreviewInTab);
   const markArtifactSelfDeleted = useEpicCanvasStore(
@@ -764,7 +770,11 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
           tabId,
           nodeId: projectedNodeId,
           fallbackHostId: activeHostId,
-          openTileInTab,
+          openTileInTab: (targetTabId, nodeRef) => {
+            navigateNested(epicId, targetTabId, () =>
+              prepareOpenTileInTabFocusTarget(targetTabId, nodeRef),
+            );
+          },
           onBeforeOpen,
           onOpened: () => {
             pendingProjectedOpenCancelRef.current = null;
@@ -781,7 +791,14 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
           onCleanup: null,
         });
     },
-    [activeHostId, epicHandle, openTileInTab, tabId],
+    [
+      activeHostId,
+      epicHandle,
+      epicId,
+      navigateNested,
+      prepareOpenTileInTabFocusTarget,
+      tabId,
+    ],
   );
 
   const clearPendingChildCreate = useCallback(() => {
@@ -795,20 +812,24 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
   const selectArtifactNode = useCallback(() => {
     if (isRenaming) return;
     if (openableType === null) return;
-    openTilePreviewInTab(tabId, {
-      id: nodeId,
-      instanceId: uuidv4(),
-      type: openableType,
-      name: nodeName,
-      hostId: activeHostId,
-    });
+    navigateNested(epicId, tabId, () =>
+      prepareOpenTilePreviewInTabFocusTarget(tabId, {
+        id: nodeId,
+        instanceId: uuidv4(),
+        type: openableType,
+        name: nodeName,
+        hostId: activeHostId,
+      }),
+    );
   }, [
     activeHostId,
+    epicId,
     isRenaming,
+    navigateNested,
     nodeName,
     nodeId,
-    openTilePreviewInTab,
     openableType,
+    prepareOpenTilePreviewInTabFocusTarget,
     tabId,
   ]);
 
@@ -817,23 +838,33 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
     if (openableType === null) return;
     const found = findOpenArtifactInTab(tabId, nodeId);
     if (found !== null) {
-      promotePreviewInTab(tabId, found.paneId);
-    } else {
-      openTileInTab(tabId, {
-        id: nodeId,
-        instanceId: uuidv4(),
-        type: openableType,
-        name: nodeName,
-        hostId: activeHostId,
+      navigateNested(epicId, tabId, () => {
+        promotePreviewInTab(tabId, found.paneId);
+        return {
+          paneId: found.paneId,
+          tileInstanceId: found.instanceId,
+        };
       });
+    } else {
+      navigateNested(epicId, tabId, () =>
+        prepareOpenTileInTabFocusTarget(tabId, {
+          id: nodeId,
+          instanceId: uuidv4(),
+          type: openableType,
+          name: nodeName,
+          hostId: activeHostId,
+        }),
+      );
     }
   }, [
     activeHostId,
+    epicId,
     isRenaming,
+    navigateNested,
     nodeId,
     nodeName,
     openableType,
-    openTileInTab,
+    prepareOpenTileInTabFocusTarget,
     promotePreviewInTab,
     tabId,
   ]);
@@ -954,7 +985,13 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
       setConfirmDeleteOpen(false);
       const found = findOpenArtifactInTab(tabId, nodeId);
       if (found !== null) {
-        closeCanvasTab(tabId, found.paneId, found.instanceId);
+        navigateNested(epicId, tabId, () =>
+          prepareCloseCanvasTabFocusTarget(
+            tabId,
+            found.paneId,
+            found.instanceId,
+          ),
+        );
       }
     };
     const handleDeleteError = () => {

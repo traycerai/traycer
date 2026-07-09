@@ -15,8 +15,10 @@
  *    main-process SDK; without it renderer errors silently fail to report.
  *  - `img-src https:` lets remote user avatars (e.g. GitHub
  *    `avatars.githubusercontent.com`) load.
- *  - `http://localhost:5173` / `ws://localhost:5173` are the Vite dev server;
- *    loopback `ws:` covers the local host WebSocket.
+ *  - The localhost entries cover the default Vite dev server. Multi-run
+ *    `make dev-desktop` can use another loopback port; the renderer page is
+ *    served from that origin, so `'self'` covers its own assets and `ws:`
+ *    covers HMR / local host WebSockets.
  *
  * Intentionally restrictive - extend deliberately when a new remote origin is
  * genuinely required.

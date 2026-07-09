@@ -3,6 +3,7 @@ import { chmod, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { config } from "../config";
 import { createCliLogger, errorFromUnknown } from "../logger";
 import { cliCredentialsPath, ensureCliHomeDir } from "./paths";
+import { devDesktopSlotForEnvironment } from "./dev-desktop-slot";
 
 // ~/.traycer/cli/credentials shape. Stored as JSON with mode 0600 so other
 // users on shared machines can't read the bearer token. The `user` block is
@@ -20,6 +21,32 @@ export interface StoredCredentials {
     readonly id: string;
     readonly email: string;
     readonly name: string;
+  };
+}
+
+// Dev credentials are shared across every `make dev-desktop` run (worktree),
+// but each run's local authn stack listens on its own allocated port. Only
+// override the serialized URL when THIS process is actually inside a
+// dev-desktop run slot (`DEV_DESKTOP_SLOT` set) - a plain from-source `dev`
+// CLI invocation outside dev-desktop has no local stack and must keep using
+// whatever authn URL is actually stored (matches the config.ts committed
+// default, or a prior explicit login), or every unrelated dev CLI call would
+// start validating tokens against the wrong backend.
+export function effectiveAuthnBaseUrl(storedAuthnBaseUrl: string): string {
+  if (devDesktopSlotForEnvironment(config.environment, process.env) !== null) {
+    return config.authnBaseUrl;
+  }
+  return storedAuthnBaseUrl;
+}
+
+export function credentialsWithEffectiveAuthnBaseUrl(
+  creds: StoredCredentials,
+): StoredCredentials {
+  const authnBaseUrl = effectiveAuthnBaseUrl(creds.authnBaseUrl);
+  if (authnBaseUrl === creds.authnBaseUrl) return creds;
+  return {
+    ...creds,
+    authnBaseUrl,
   };
 }
 

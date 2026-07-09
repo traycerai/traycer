@@ -21,7 +21,7 @@
     "package:dir": "bun run build:app && bun run prepack:check-cli && bun run prepack:check-icons && bun run prepack:check-tray && bun x electron-builder --dir --publish never",
     "dev:renderer": "vite --config vite.renderer.config.ts",
     "dev:main": "bun run build:main && bun scripts/dev/dev-main.cjs",
-    "dev": "bun x concurrently -k -n renderer,main -c blue,magenta \"bun run dev:renderer\" \"bun x wait-on tcp:5173 && bun run dev:main\"",
+    "dev": "bun scripts/dev/dev-stack.cjs",
     "lint": "eslint . --cache --fix --max-warnings 0",
     "format": "bun x prettier --write .",
     "test": "vitest run",

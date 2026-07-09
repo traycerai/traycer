@@ -9,12 +9,16 @@ describe("normalizeEpicFocusSearch", () => {
         focusArtifactId: "   ",
         focusThreadId: "\t",
         migrationSource: "phase",
+        focusPaneId: " ",
+        focusTileInstanceId: "\n",
       }),
     ).toEqual({
       focusedAt: undefined,
       focusArtifactId: undefined,
       focusThreadId: undefined,
       migrationSource: "phase",
+      focusPaneId: undefined,
+      focusTileInstanceId: undefined,
     });
   });
 
@@ -25,12 +29,27 @@ describe("normalizeEpicFocusSearch", () => {
         focusArtifactId: " artifact-1 ",
         focusThreadId: " thread-1 ",
         migrationSource: undefined,
+        focusPaneId: " pane-1 ",
+        focusTileInstanceId: " tile-1 ",
       }),
     ).toEqual({
       focusedAt: 42,
       focusArtifactId: "artifact-1",
       focusThreadId: "thread-1",
       migrationSource: undefined,
+      focusPaneId: "pane-1",
+      focusTileInstanceId: "tile-1",
+    });
+  });
+
+  it("defaults absent nested focus params to undefined", () => {
+    expect(normalizeEpicFocusSearch({})).toEqual({
+      focusedAt: undefined,
+      focusArtifactId: undefined,
+      focusThreadId: undefined,
+      migrationSource: undefined,
+      focusPaneId: undefined,
+      focusTileInstanceId: undefined,
     });
   });
 });

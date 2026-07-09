@@ -1,9 +1,9 @@
 import { workspaceFileRefFromWorkspaceMarkdownLink } from "@/components/epic-canvas/workspace-file/workspace-file-link-ref";
+import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import {
   MarkdownLinkContext,
   type MarkdownLinkPolicy,
 } from "@/markdown/links/markdown-link-context";
-import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useMemo, type ReactNode } from "react";
 
 interface WorkspaceMarkdownLinkProviderProps {
@@ -22,9 +22,7 @@ interface WorkspaceMarkdownLinkProviderProps {
 export function WorkspaceMarkdownLinkProvider(
   props: WorkspaceMarkdownLinkProviderProps,
 ) {
-  const openTilePreviewInTab = useEpicCanvasStore(
-    (s) => s.openTilePreviewInTab,
-  );
+  const tileNavigation = useEpicTileNavigation();
   const linkPolicy = useMemo<MarkdownLinkPolicy>(
     () => ({
       openFileLink: (link) => {
@@ -41,16 +39,16 @@ export function WorkspaceMarkdownLinkProvider(
           link.path,
         );
         if (ref === null) return false;
-        openTilePreviewInTab(props.tabId, ref);
+        tileNavigation.openTilePreviewInTab(props.tabId, ref);
         return true;
       },
     }),
     [
-      openTilePreviewInTab,
       props.hostId,
       props.filePath,
       props.tabId,
       props.workspacePath,
+      tileNavigation,
     ],
   );
 

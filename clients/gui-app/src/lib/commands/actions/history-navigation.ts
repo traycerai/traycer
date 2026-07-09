@@ -27,7 +27,12 @@ export interface HistoryNavRouter {
  */
 export function goBack(router: HistoryNavRouter): void {
   const controller = getHistoryController(router.history);
-  if (controller === null || !controller.canGoBack()) return;
+  if (controller === null) {
+    return;
+  }
+  if (!controller.canGoBack()) {
+    return;
+  }
   router.history.go(-1);
   trackHistoryNavigationUsed("back");
 }
@@ -40,7 +45,12 @@ export function goBack(router: HistoryNavRouter): void {
  */
 export function goForward(router: HistoryNavRouter): void {
   const controller = getHistoryController(router.history);
-  if (controller === null || !controller.canGoForward()) return;
+  if (controller === null) {
+    return;
+  }
+  if (!controller.canGoForward()) {
+    return;
+  }
   router.history.go(1);
   trackHistoryNavigationUsed("forward");
 }

@@ -229,6 +229,7 @@ export function projectArtifact(
     createdAt: readMaybeNumber(entry, "createdAt"),
     updatedAt: readMaybeNumber(entry, "updatedAt"),
     status,
+    createdManually: readMaybeBoolean(entry, "createdManually"),
   };
 }
 
@@ -361,7 +362,8 @@ export function artifactProjectionsEq(
     a.artifactRoomId === b.artifactRoomId &&
     a.createdAt === b.createdAt &&
     a.updatedAt === b.updatedAt &&
-    a.status === b.status
+    a.status === b.status &&
+    a.createdManually === b.createdManually
   );
 }
 

@@ -28,18 +28,26 @@ export interface WorktreeClassification {
   /** Human tier label ("In use" / "Review" / …). */
   readonly label: string;
   /**
-   * Ordered, relevance-gated evidence facts for the row's secondary line and the
-   * skill's report - only non-default signals, most-relevant first. Never a time
-   * string (that is a render concern the caller appends).
+   * Ordered, relevance-gated evidence facts for non-chip consumers such as CLI
+   * and skill reports. This is the full set: PR provenance facts first, then
+   * non-PR facts. Never a time string (that is a render concern the caller
+   * appends).
    */
   readonly facts: readonly string[];
+  /**
+   * PR/provenance facts that GUI chip surfaces may choose to hide structurally
+   * rather than by matching rendered fact text.
+   */
+  readonly prFacts: readonly string[];
+  /** Evidence facts unrelated to PR/provenance chip presentation. */
+  readonly nonPrFacts: readonly string[];
 }
 
 export const WORKTREE_TIER_LABEL: Record<WorktreeTier, string> = {
   "in-use": "In use",
   review: "Review",
   orphaned: "Orphaned",
-  merged: "Merged",
+  merged: "Landed",
   // Honest wording: the worktree is literally unchanged from its birth commit.
   // Deliberately NOT "Pristine"/"Untouched" - setup may have written ignored
   // files, so those labels would over-claim.
@@ -120,9 +128,10 @@ export function worktreeTierRank(tier: WorktreeTier): number {
  *     default (mergedIntoDefault) && no authored-commit reflog entry` ⇒ untouched.
  *     Checked BEFORE local ancestry ON PURPOSE: an untouched worktree is contained
  *     in the default, so `mergedIntoDefault` is ALSO true. Ordering at-base first
- *     makes the common untouched worktree read the honest "At base commit" instead
- *     of the misnomer "Merged". The reflog guard is the only thing splitting the
- *     two labels - both share the `mergedIntoDefault` safety floor. Applies
+ *     makes the common untouched worktree read the honest "At base commit"
+ *     instead of the stronger "Landed" label. The reflog guard is the only thing
+ *     splitting the two labels - both share the `mergedIntoDefault` safety
+ *     floor. Applies
  *     regardless of owners or an open PR; deleting loses nothing committed.
  *  8. `branchStatus.mergedIntoDefault === true` → **merged** (green, local
  *     ancestry). Now correctly rare: only a branch that actually ADVANCED from its
@@ -135,7 +144,7 @@ export function worktreeTierRank(tier: WorktreeTier): number {
  *
  * Green requires positive, host-validated proof; unknown/stale is never green.
  * `ahead === null` (no upstream) is NOT a green light on its own: a never-pushed
- * branch is only ever Merged (proven contained), At base commit, or Review.
+ * branch is only ever Landed (proven contained), At base commit, or Review.
  */
 export function classifyWorktreeTier(
   entry: WorktreeHostEntryV11,
@@ -153,7 +162,7 @@ export function classifyWorktreeTier(
   // Positive, host-validated green proofs, in precedence order. `atBaseCommit`
   // sits ABOVE local ancestry so a never-touched worktree (whose base is in the
   // default, making `mergedIntoDefault` also true) reads the honest "At base
-  // commit", not "Merged". A validated merged PR still wins over both.
+  // commit", not "Landed". A validated merged PR still wins over both.
   if (entry.prState === "merged" && entry.mergedHeadShaMatches) return "merged";
   if (entry.atBaseCommit) return "at-base-commit";
   const status = entry.branchStatus;
@@ -195,37 +204,49 @@ export function classifyWorktree(
   entry: WorktreeHostEntryV11,
 ): WorktreeClassification {
   const tier = classifyWorktreeTier(entry);
+  const facts = worktreeFacts(entry, tier);
   return {
     tier,
     label: WORKTREE_TIER_LABEL[tier],
-    facts: worktreeFacts(entry, tier),
+    facts: [...facts.prFacts, ...facts.nonPrFacts],
+    prFacts: facts.prFacts,
+    nonPrFacts: facts.nonPrFacts,
   };
+}
+
+interface WorktreeFacts {
+  readonly prFacts: readonly string[];
+  readonly nonPrFacts: readonly string[];
 }
 
 function worktreeFacts(
   entry: WorktreeHostEntryV11,
   tier: WorktreeTier,
-): readonly string[] {
+): WorktreeFacts {
   // "clean" only reads as reassuring on the green-leaning tiers; elsewhere it is
   // noise against the louder signals already listed. The owner/reference state
   // is shown on its own line, so it is deliberately NOT repeated as a fact here.
   const cleanGreen =
     entry.uncommittedCount === 0 &&
     (tier === "merged" || tier === "at-base-commit" || tier === "unreferenced");
-  return [
-    ...mergedProvenanceFacts(entry, tier),
-    ...unprovenSubmoduleFacts(entry.submodules),
-    ...branchStatusFacts(entry.branchStatus),
-    ...dirtinessFacts(entry.uncommittedCount),
-    ...(entry.branch === null ? ["detached HEAD"] : []),
-    ...(entry.gitRemovable ? [] : ["git can't remove"]),
-    ...(entry.branchStatus === null &&
-    entry.gitRemovable &&
-    entry.branch !== null
-      ? ["branch status unknown"]
-      : []),
-    ...(cleanGreen ? ["clean"] : []),
-  ];
+  return {
+    prFacts: [
+      ...mergedProvenanceFacts(entry, tier),
+      ...unprovenSubmoduleFacts(entry.submodules),
+    ],
+    nonPrFacts: [
+      ...branchStatusFacts(entry.branchStatus),
+      ...dirtinessFacts(entry.uncommittedCount),
+      ...(entry.branch === null ? ["detached HEAD"] : []),
+      ...(entry.gitRemovable ? [] : ["git can't remove"]),
+      ...(entry.branchStatus === null &&
+      entry.gitRemovable &&
+      entry.branch !== null
+        ? ["branch status unknown"]
+        : []),
+      ...(cleanGreen ? ["clean"] : []),
+    ],
+  };
 }
 
 /**
@@ -277,9 +298,9 @@ function unprovenSubmoduleFacts(
 function branchStatusFacts(status: WorktreeBranchStatus | null): string[] {
   if (status === null) return [];
   // `ahead`/`behind` are null for a never-pushed branch (no upstream to diff);
-  // render nothing rather than a bogus "0 ahead". Merged-ness is surfaced by
+  // render nothing rather than a bogus "0 ahead". Landed-ness is surfaced by
   // `mergedProvenanceFacts` (as "PR #123" / "in default") on the merged tier, so
-  // it is deliberately NOT repeated here.
+  // landed status is deliberately NOT repeated here.
   return [
     ...(status.ahead !== null && status.ahead > 0
       ? [`${status.ahead} ahead`]
