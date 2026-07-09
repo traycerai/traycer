@@ -15,6 +15,7 @@ export type UserSessionListItem = {
   displayLabel: string | null;
   platform: string | null;
   appVersion: string | null;
+  location: string | null;
   createdAt: string;
   lastSeenAt: string;
   revoked: boolean;
@@ -59,6 +60,7 @@ export const userSessionListItemSchema: z.ZodType<UserSessionListItem> = z
     displayLabel: z.string().nullable(),
     platform: z.string().nullable(),
     appVersion: z.string().nullable(),
+    location: z.string().nullable(),
     createdAt: z.string(),
     lastSeenAt: z.string(),
     revoked: z.boolean(),
