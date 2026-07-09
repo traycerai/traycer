@@ -2,6 +2,8 @@ import { validateAuthTokenViaHttp } from "../../../shared/auth/auth-validation";
 import { config } from "../config";
 import { createCliLogger } from "../logger";
 import {
+  credentialsWithEffectiveAuthnBaseUrl,
+  effectiveAuthnBaseUrl,
   readCredentials,
   writeCredentials,
   type StoredCredentials,
@@ -33,8 +35,9 @@ export async function validateStoredCredentials(): Promise<ValidationOutcome> {
     hasToken: stored.token.length > 0,
     hasRefreshToken: stored.refreshToken.length > 0,
   });
+  const authnBaseUrl = effectiveAuthnBaseUrl(stored.authnBaseUrl);
   const result = await validateAuthTokenViaHttp(
-    stored.authnBaseUrl,
+    authnBaseUrl,
     stored.token,
     stored.refreshToken,
   );
@@ -85,5 +88,8 @@ export async function validateStoredCredentials(): Promise<ValidationOutcome> {
     userChanged,
     credentialsPersisted: refreshed !== stored,
   });
-  return { kind: "valid", credentials: refreshed };
+  return {
+    kind: "valid",
+    credentials: credentialsWithEffectiveAuthnBaseUrl(refreshed),
+  };
 }

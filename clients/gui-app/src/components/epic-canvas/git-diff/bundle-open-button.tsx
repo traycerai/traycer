@@ -8,12 +8,13 @@ import {
   gitBundleGroupLabel,
   makeGitBundleDiffTile,
 } from "@/lib/git/git-diff-tile";
+import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { GitDiffBundleGroup } from "@/stores/epics/canvas/types";
 import { useDraggable } from "@dnd-kit/core";
 import { FileDiff } from "lucide-react";
 import type { ReactNode } from "react";
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 
 export interface BundleOpenButtonProps {
   readonly epicId: string;
@@ -25,7 +26,10 @@ export interface BundleOpenButtonProps {
 }
 
 export function BundleOpenButton(props: BundleOpenButtonProps): ReactNode {
-  const openTileInTab = useEpicCanvasStore((s) => s.openTileInTab);
+  const navigateNested = useEpicNestedFocusNavigation();
+  const prepareOpenTileInTabFocusTarget = useEpicCanvasStore(
+    (s) => s.prepareOpenTileInTabFocusTarget,
+  );
   const tile = useMemo(
     () =>
       makeGitBundleDiffTile({
@@ -49,6 +53,17 @@ export function BundleOpenButton(props: BundleOpenButtonProps): ReactNode {
     data: dragData,
     disabled: props.disabled,
   });
+  const openBundle = useCallback(() => {
+    navigateNested(props.epicId, props.viewTabId, () =>
+      prepareOpenTileInTabFocusTarget(props.viewTabId, tile),
+    );
+  }, [
+    navigateNested,
+    prepareOpenTileInTabFocusTarget,
+    props.epicId,
+    props.viewTabId,
+    tile,
+  ]);
 
   return (
     <Button
@@ -59,7 +74,7 @@ export function BundleOpenButton(props: BundleOpenButtonProps): ReactNode {
       size="icon-sm"
       aria-label={`Open ${gitBundleGroupLabel(props.group)}`}
       disabled={props.disabled}
-      onClick={() => openTileInTab(props.viewTabId, tile)}
+      onClick={openBundle}
       className="text-muted-foreground hover:text-foreground"
     >
       <FileDiff className="size-4" />

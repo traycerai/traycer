@@ -5,6 +5,7 @@ import type {
 } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type {
   ResourcesProjectionPayload,
+  ResourcesStreamScope,
   ResourcesStreamCallbacks,
   ResourcesStreamClient,
 } from "@traycer-clients/shared/host-transport/resources-stream-client";
@@ -31,7 +32,7 @@ import type {
 export type ResourcesStreamClientHandle = Pick<ResourcesStreamClient, "close">;
 
 export type ResourcesStreamClientFactory = (
-  epicId: string,
+  scope: ResourcesStreamScope,
   callbacks: ResourcesStreamCallbacks,
 ) => ResourcesStreamClientHandle;
 
@@ -56,8 +57,16 @@ export function resourceOwnerKey(
   return `${kind}\x1f${ownerId}`;
 }
 
+export function globalResourceOwnerKey(
+  epicId: string,
+  kind: ResourceOwnerKindWire,
+  ownerId: string,
+): string {
+  return `${epicId}\x1f${kind}\x1f${ownerId}`;
+}
+
 export interface ResourcesState {
-  readonly epicId: string;
+  readonly key: string;
   readonly connectionStatus: StreamConnectionStatus;
   /** `null` until the first projection lands. */
   readonly sampledAt: number | null;
@@ -71,6 +80,7 @@ export interface ResourcesState {
   readonly app: AppResourceSnapshotWire | null;
   /** `null` when the epic has no tracked owner roots (a valid quiet state). */
   readonly epic: EpicResourceSnapshotWire | null;
+  readonly epics: ReadonlyMap<string, EpicResourceSnapshotWire>;
   /**
    * Renderer-derived task-level summary for the live owner projection. `null`
    * means no tracked owner snapshots are present, not zero usage.
@@ -80,17 +90,19 @@ export interface ResourcesState {
 }
 
 export interface ResourcesStoreOptions {
-  readonly epicId: string;
+  readonly scope: ResourcesStreamScope;
   readonly streamClientFactory: ResourcesStreamClientFactory;
 }
 
 export interface ResourcesStoreHandle {
-  readonly epicId: string;
+  readonly key: string;
+  readonly scope: ResourcesStreamScope;
   readonly store: UseBoundStore<StoreApi<ResourcesState>>;
   readonly dispose: () => void;
 }
 
 const EMPTY_OWNERS: ReadonlyMap<string, OwnerResourceSnapshotWire> = new Map();
+const EMPTY_EPICS: ReadonlyMap<string, EpicResourceSnapshotWire> = new Map();
 
 // Compare only the fields a chip renders. `sampledAt`/`rootPids` move on every
 // host tick even when nothing displayable changed, so excluding them lets an
@@ -178,11 +190,19 @@ function appUsageEqual(
 function mergeOwners(
   previous: ReadonlyMap<string, OwnerResourceSnapshotWire>,
   payload: ResourcesProjectionPayload,
+  scope: ResourcesStreamScope,
 ): ReadonlyMap<string, OwnerResourceSnapshotWire> {
   if (payload.owners.length === 0) return EMPTY_OWNERS;
   const next = new Map<string, OwnerResourceSnapshotWire>();
   for (const owner of payload.owners) {
-    const key = resourceOwnerKey(owner.owner.kind, owner.owner.ownerId);
+    const key =
+      scope.kind === "global"
+        ? globalResourceOwnerKey(
+            owner.owner.epicId,
+            owner.owner.kind,
+            owner.owner.ownerId,
+          )
+        : resourceOwnerKey(owner.owner.kind, owner.owner.ownerId);
     const existing = previous.get(key);
     next.set(
       key,
@@ -244,6 +264,27 @@ function mergeEpic(
   return next;
 }
 
+function mergeEpics(
+  previous: ReadonlyMap<string, EpicResourceSnapshotWire>,
+  payload: ResourcesProjectionPayload,
+): ReadonlyMap<string, EpicResourceSnapshotWire> {
+  if (payload.epics.length === 0) {
+    if (payload.epic === null) return EMPTY_EPICS;
+    return new Map([[payload.epic.epicId, payload.epic]]);
+  }
+  const next = new Map<string, EpicResourceSnapshotWire>();
+  for (const epic of payload.epics) {
+    const existing = previous.get(epic.epicId);
+    next.set(
+      epic.epicId,
+      existing !== undefined && epicUsageEqual(existing, epic)
+        ? existing
+        : epic,
+    );
+  }
+  return next;
+}
+
 function mergeApp(
   previous: AppResourceSnapshotWire | null,
   next: AppResourceSnapshotWire | null,
@@ -268,15 +309,18 @@ export function createResourcesStore(
 ): ResourcesStoreHandle {
   let disposed = false;
   let streamClient: ResourcesStreamClientHandle | null = null;
+  const key =
+    options.scope.kind === "global" ? "__global__" : options.scope.epicId;
 
   const store = create<ResourcesState>()((set) => {
     const applyProjection = (payload: ResourcesProjectionPayload): void => {
       if (disposed) return;
       set((state) => ({
         sampledAt: payload.sampledAt,
-        owners: mergeOwners(state.owners, payload),
+        owners: mergeOwners(state.owners, payload, options.scope),
         app: mergeApp(state.app, payload.app),
         epic: mergeEpic(state.epic, payload.epic),
+        epics: mergeEpics(state.epics, payload),
         taskSummary: mergeTaskSummary(state.taskSummary, payload),
       }));
     };
@@ -293,15 +337,16 @@ export function createResourcesStore(
       },
     };
 
-    streamClient = options.streamClientFactory(options.epicId, callbacks);
+    streamClient = options.streamClientFactory(options.scope, callbacks);
 
     return {
-      epicId: options.epicId,
+      key,
       connectionStatus: "connecting",
       sampledAt: null,
       owners: EMPTY_OWNERS,
       app: null,
       epic: null,
+      epics: EMPTY_EPICS,
       taskSummary: null,
       dispose: () => {
         if (disposed) return;
@@ -315,7 +360,8 @@ export function createResourcesStore(
   });
 
   return {
-    epicId: options.epicId,
+    key,
+    scope: options.scope,
     store,
     dispose: () => {
       store.getState().dispose();

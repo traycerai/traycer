@@ -611,6 +611,142 @@ describe("PersistentHistoryController", () => {
     expect(history.location.state.__TSR_index).toBe(2);
   });
 
+  it("collapses an adjacent duplicate AHEAD created by an in-place replace (no dead forward step)", () => {
+    // Mirrors a cold-load redirect: the current entry is replaced with a path
+    // that already sits ONE STEP AHEAD in the stack (e.g. the guard
+    // replacing a restored overlay entry with the tab route it redirects to,
+    // when that tab route was already the next persisted entry).
+    const history = seedStack("window-a", [
+      "/epics/epic-a/tab-a",
+      "/epics/epic-b/tab-b?settingsOverlay=true",
+      "/settings/general",
+    ]);
+    const controller = controllerOf(history);
+
+    history.back();
+    expect(controller.getIndex()).toBe(1);
+
+    history.replace("/settings/general");
+
+    // The forward duplicate is dropped; the cursor stays on the (now sole)
+    // settings entry instead of leaving a dead forward step ahead of it.
+    expect(controller.getEntries()).toEqual([
+      "/epics/epic-a/tab-a",
+      "/settings/general",
+    ]);
+    expect(controller.getIndex()).toBe(1);
+    expect(controller.canGoForward()).toBe(false);
+    expect(history.location.pathname).toBe("/settings/general");
+
+    // Proof the dead step is gone: canGoForward is false, so a `go(1)` at the
+    // boundary is a guarded no-op in the app's `goForward` helper - but the
+    // controller-level state itself must already reflect no forward entry.
+    expect(controller.getEntries().length).toBe(2);
+  });
+
+  it("keeps the replacement state (not the collapsed neighbour's) on a behind-collapse", () => {
+    const history = seedStack("window-a", [
+      "/epics/epic-a/tab-a",
+      "/epics/epic-b/tab-b",
+      "/epics/epic-b/tab-b?settingsOverlay=true",
+    ]);
+    const controller = controllerOf(history);
+
+    // Record the OLD state key of the entry the collapse will merge into.
+    history.back();
+    const oldNeighbourKey = history.location.state.key;
+    history.forward();
+    expect(controller.getIndex()).toBe(2);
+
+    history.replace("/epics/epic-b/tab-b");
+
+    // The neighbour was dropped and the just-replaced entry survived: the
+    // surviving location carries the state THIS replace minted, not the old
+    // neighbour's - matching the location TanStack caches after a replace.
+    expect(controller.getEntries()).toEqual([
+      "/epics/epic-a/tab-a",
+      "/epics/epic-b/tab-b",
+    ]);
+    expect(controller.getIndex()).toBe(1);
+    expect(history.location.state.key).not.toBe(oldNeighbourKey);
+    expect(history.location.state.__TSR_index).toBe(1);
+  });
+
+  it("restamps __TSR_index contiguously after an ahead-collapse", () => {
+    const history = seedStack("window-a", [
+      "/epics/epic-a/tab-a",
+      "/epics/epic-b/tab-b?settingsOverlay=true",
+      "/settings/general",
+      "/epics/epic-c/tab-c",
+    ]);
+    const controller = controllerOf(history);
+
+    history.go(-2);
+    expect(controller.getIndex()).toBe(1);
+
+    history.replace("/settings/general");
+
+    expect(controller.getEntries()).toEqual([
+      "/epics/epic-a/tab-a",
+      "/settings/general",
+      "/epics/epic-c/tab-c",
+    ]);
+    expect(controller.getIndex()).toBe(1);
+
+    // Walk forward and back across the shifted tail entry; a stale
+    // `__TSR_index` would land `go(n)` on the wrong array position.
+    history.go(1);
+    expect(controller.getIndex()).toBe(2);
+    expect(history.location.pathname).toBe("/epics/epic-c/tab-c");
+    expect(history.location.state.__TSR_index).toBe(2);
+
+    history.back();
+    expect(controller.getIndex()).toBe(1);
+    expect(history.location.pathname).toBe("/settings/general");
+    expect(history.location.state.__TSR_index).toBe(1);
+  });
+
+  it("collapses duplicates on BOTH sides of a single replace", () => {
+    // Current entry sits between two neighbours that both become identical to
+    // it once replaced - the whole run must collapse to a single entry.
+    const history = seedStack("window-a", [
+      "/epics/epic-a/tab-a",
+      "/epics/epic-b/tab-b",
+      "/epics/epic-a/tab-a",
+    ]);
+    const controller = controllerOf(history);
+
+    history.back();
+    expect(controller.getIndex()).toBe(1);
+
+    history.replace("/epics/epic-a/tab-a");
+
+    expect(controller.getEntries()).toEqual(["/epics/epic-a/tab-a"]);
+    expect(controller.getIndex()).toBe(0);
+    expect(controller.canGoBack()).toBe(false);
+    expect(controller.canGoForward()).toBe(false);
+    expect(history.location.state.__TSR_index).toBe(0);
+  });
+
+  it("persists the collapsed stack after an ahead-deduping replace", () => {
+    const history = seedStack("window-a", [
+      "/epics/epic-a/tab-a",
+      "/epics/epic-b/tab-b?historyOverlay=true",
+      "/epics/epic-b/tab-b",
+    ]);
+    const controller = controllerOf(history);
+
+    history.back();
+    expect(controller.getIndex()).toBe(1);
+
+    history.replace("/epics/epic-b/tab-b");
+
+    expect(readPersisted("window-a")).toEqual({
+      entries: ["/epics/epic-a/tab-a", "/epics/epic-b/tab-b"],
+      index: 1,
+    });
+  });
+
   it("persists the collapsed stack after a deduping replace", () => {
     const history = seedStack("window-a", [
       "/epics/epic-a/tab-a",
@@ -697,5 +833,278 @@ describe("PersistentHistoryController", () => {
     if (persisted === null) throw new Error("expected persisted stack");
     expect(persisted.entries.length).toBe(100);
     expect(persisted.entries[persisted.index]).toBe(current);
+  });
+
+  describe("adjacent-duplicate collapse on prune", () => {
+    it("collapses entries that become adjacent duplicates after a dead-entry prune (split -> close -> prune)", () => {
+      const focusedTab =
+        "/epics/epic-a/tab-a?focusPaneId=3f92d763&focusTileInstanceId=54fbf184";
+      const splitPane = "/epics/epic-a/tab-a?focusPaneId=c2bd4f75";
+
+      // Splitting an empty pane pushes a pane-only entry.
+      const history = seedStack("window-a", [focusedTab, splitPane]);
+      const controller = controllerOf(history);
+
+      // Closing that pane re-derives the same fallback focus as the original
+      // tab, so its push lands on an href byte-identical to `focusedTab` -
+      // but it is not yet ADJACENT to it (the pane-only entry sits between).
+      history.push(focusedTab);
+      expect(controller.getEntries()).toEqual([
+        focusedTab,
+        splitPane,
+        focusedTab,
+      ]);
+      expect(controller.getIndex()).toBe(2);
+
+      // The eager liveness pruner kills the now-dead pane-only entry, which
+      // makes the two `focusedTab` entries adjacent.
+      const changed = controller.prune((href) => href === splitPane);
+
+      expect(changed).toBe(true);
+      expect(controller.getEntries()).toEqual([focusedTab]);
+      expect(controller.getIndex()).toBe(0);
+      expect(controller.canGoBack()).toBe(false);
+      expect(controller.canGoForward()).toBe(false);
+    });
+
+    it("keeps back/forward free of dead clicks across a collapsed pair (current is the LATER duplicate)", () => {
+      const history = seedStack("window-a", [
+        "/epics/epic-z/tab-z",
+        "/epics/epic-a/tab-a",
+        "/draft/dead-pane",
+      ]);
+      const controller = controllerOf(history);
+
+      // Land back on a duplicate of an earlier entry, with a dead entry
+      // between them.
+      history.push("/epics/epic-a/tab-a");
+      expect(controller.getEntries()).toEqual([
+        "/epics/epic-z/tab-z",
+        "/epics/epic-a/tab-a",
+        "/draft/dead-pane",
+        "/epics/epic-a/tab-a",
+      ]);
+      expect(controller.getIndex()).toBe(3);
+
+      const changed = controller.prune((href) => href === "/draft/dead-pane");
+
+      expect(changed).toBe(true);
+      expect(controller.getEntries()).toEqual([
+        "/epics/epic-z/tab-z",
+        "/epics/epic-a/tab-a",
+      ]);
+      expect(controller.getIndex()).toBe(1);
+      expect(controller.canGoBack()).toBe(true);
+      expect(controller.canGoForward()).toBe(false);
+
+      // A real back step must land on a genuinely different location, not a
+      // dead click that only moves the cursor.
+      history.back();
+      expect(controller.getIndex()).toBe(0);
+      expect(history.location.pathname).toBe("/epics/epic-z/tab-z");
+      expect(history.location.state.__TSR_index).toBe(0);
+
+      history.go(1);
+      expect(controller.getIndex()).toBe(1);
+      expect(history.location.pathname).toBe("/epics/epic-a/tab-a");
+      expect(history.location.state.__TSR_index).toBe(1);
+    });
+
+    it("collapses when the current entry is the EARLIER of two adjacent duplicates", () => {
+      const history = seedStack("window-a", [
+        "/epics/epic-a/tab-a",
+        "/draft/dead-forward",
+        "/epics/epic-a/tab-a",
+      ]);
+      const controller = controllerOf(history);
+
+      // Step back onto the first occurrence; the duplicate and the dead
+      // entry are now forward history.
+      history.go(-2);
+      expect(controller.getIndex()).toBe(0);
+
+      const changed = controller.prune(
+        (href) => href === "/draft/dead-forward",
+      );
+
+      expect(changed).toBe(true);
+      expect(controller.getEntries()).toEqual(["/epics/epic-a/tab-a"]);
+      expect(controller.getIndex()).toBe(0);
+      expect(controller.canGoBack()).toBe(false);
+      expect(controller.canGoForward()).toBe(false);
+    });
+
+    it("persists the collapsed stack", () => {
+      const history = seedStack("window-a", [
+        "/epics/epic-a/tab-a",
+        "/draft/dead-pane",
+      ]);
+      history.push("/epics/epic-a/tab-a");
+
+      const controller = controllerOf(history);
+      controller.prune((href) => href === "/draft/dead-pane");
+
+      expect(readPersisted("window-a")).toEqual({
+        entries: ["/epics/epic-a/tab-a"],
+        index: 0,
+      });
+    });
+
+    it("returns true for a collapse-only prune when no entry is dead but the stack already has adjacent duplicates", () => {
+      // Simulates a legacy persisted stack seeded directly (bypassing the
+      // push/replace collapse guards), already carrying an adjacent
+      // duplicate pair unrelated to any dead entry.
+      window.localStorage.setItem(
+        storageKey("window-a"),
+        JSON.stringify({
+          entries: [
+            "/epics/epic-a/tab-a",
+            "/epics/epic-x/tab-x",
+            "/epics/epic-x/tab-x",
+            "/epics/epic-b/tab-b",
+          ],
+          index: 3,
+        }),
+      );
+
+      const history = createPersistentMemoryHistory(null, "window-a");
+      const controller = controllerOf(history);
+      expect(controller.getEntries()).toEqual([
+        "/epics/epic-a/tab-a",
+        "/epics/epic-x/tab-x",
+        "/epics/epic-x/tab-x",
+        "/epics/epic-b/tab-b",
+      ]);
+      expect(controller.getIndex()).toBe(3);
+
+      // Nothing is dead - the collapse alone must still report a change.
+      const changed = controller.prune(() => false);
+
+      expect(changed).toBe(true);
+      expect(controller.getEntries()).toEqual([
+        "/epics/epic-a/tab-a",
+        "/epics/epic-x/tab-x",
+        "/epics/epic-b/tab-b",
+      ]);
+      expect(controller.getIndex()).toBe(2);
+    });
+
+    it("collapses a run of more than two adjacent duplicates into a single entry, current marker included", () => {
+      window.localStorage.setItem(
+        storageKey("window-a"),
+        JSON.stringify({
+          entries: [
+            "/epics/epic-a/tab-a",
+            "/epics/epic-a/tab-a",
+            "/epics/epic-a/tab-a",
+          ],
+          index: 1,
+        }),
+      );
+
+      const history = createPersistentMemoryHistory(null, "window-a");
+      const controller = controllerOf(history);
+      expect(controller.getIndex()).toBe(1);
+
+      const changed = controller.prune(() => false);
+
+      expect(changed).toBe(true);
+      expect(controller.getEntries()).toEqual(["/epics/epic-a/tab-a"]);
+      expect(controller.getIndex()).toBe(0);
+      expect(controller.canGoBack()).toBe(false);
+      expect(controller.canGoForward()).toBe(false);
+    });
+
+    it("is a no-op when no entry is dead and no adjacent duplicates exist", () => {
+      const history = seedStack("window-a", [
+        "/epics/epic-a/tab-a",
+        "/epics/epic-b/tab-b",
+      ]);
+      const controller = controllerOf(history);
+
+      const changed = controller.prune(() => false);
+
+      expect(changed).toBe(false);
+      expect(controller.getEntries()).toEqual([
+        "/epics/epic-a/tab-a",
+        "/epics/epic-b/tab-b",
+      ]);
+      expect(controller.getIndex()).toBe(1);
+    });
+  });
+
+  describe("adjacent-duplicate collapse on pushState", () => {
+    it("does not create a duplicate entry when the pushed href matches the cursor's entry", () => {
+      const history = seedStack("window-a", [
+        "/epics/epic-a/tab-a",
+        "/epics/epic-b/tab-b",
+      ]);
+      const controller = controllerOf(history);
+
+      history.push("/epics/epic-b/tab-b");
+
+      expect(controller.getEntries()).toEqual([
+        "/epics/epic-a/tab-a",
+        "/epics/epic-b/tab-b",
+      ]);
+      expect(controller.getIndex()).toBe(1);
+      expect(history.location.pathname).toBe("/epics/epic-b/tab-b");
+      expect(history.location.state.__TSR_index).toBe(1);
+
+      expect(readPersisted("window-a")).toEqual({
+        entries: ["/epics/epic-a/tab-a", "/epics/epic-b/tab-b"],
+        index: 1,
+      });
+    });
+
+    it("does not create a duplicate entry when pushing the same href as the very first entry", () => {
+      const history = seedStack("window-a", ["/epics/epic-a/tab-a"]);
+      const controller = controllerOf(history);
+
+      history.push("/epics/epic-a/tab-a");
+
+      expect(controller.getEntries()).toEqual(["/epics/epic-a/tab-a"]);
+      expect(controller.getIndex()).toBe(0);
+      expect(history.location.state.__TSR_index).toBe(0);
+    });
+
+    it("does not create a duplicate when pushing onto a truncated tail at a mid-stack index", () => {
+      const history = seedStack("window-a", [
+        "/epics/epic-a/tab-a",
+        "/epics/epic-b/tab-b",
+        "/epics/epic-c/tab-c",
+      ]);
+      const controller = controllerOf(history);
+
+      // Walk back to the middle entry, then push its own href again - the
+      // forward entry gets truncated as usual, and the push must land on the
+      // (now-tail) existing entry rather than duplicating it.
+      history.back();
+      expect(controller.getIndex()).toBe(1);
+
+      history.push("/epics/epic-b/tab-b");
+
+      expect(controller.getEntries()).toEqual([
+        "/epics/epic-a/tab-a",
+        "/epics/epic-b/tab-b",
+      ]);
+      expect(controller.getIndex()).toBe(1);
+      expect(controller.canGoForward()).toBe(false);
+      expect(history.location.pathname).toBe("/epics/epic-b/tab-b");
+      expect(history.location.state.__TSR_index).toBe(1);
+    });
+
+    it("still pushes a new entry when the href differs from the cursor's entry", () => {
+      const history = seedStack("window-a", ["/epics/epic-a/tab-a"]);
+      const controller = controllerOf(history);
+
+      history.push("/epics/epic-b/tab-b");
+
+      expect(controller.getEntries()).toEqual([
+        "/epics/epic-a/tab-a",
+        "/epics/epic-b/tab-b",
+      ]);
+      expect(controller.getIndex()).toBe(1);
+    });
   });
 });

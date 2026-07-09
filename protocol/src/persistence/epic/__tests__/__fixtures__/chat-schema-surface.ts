@@ -1453,6 +1453,199 @@ export const chatSchemaSurfaceBaseline = {
                           },
                           "text": {
                             "type": "string"
+                          },
+                          "providerNotice": {
+                            "default": null,
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "harnessId": {
+                                    "type": "string",
+                                    "enum": [
+                                      "claude",
+                                      "codex",
+                                      "opencode",
+                                      "traycer",
+                                      "cursor",
+                                      "grok",
+                                      "qwen",
+                                      "kiro",
+                                      "droid",
+                                      "kimi",
+                                      "copilot",
+                                      "kilocode",
+                                      "openrouter",
+                                      "amp"
+                                    ]
+                                  },
+                                  "noticeKind": {
+                                    "type": "string",
+                                    "enum": [
+                                      "model_rerouted",
+                                      "model_verification",
+                                      "safety_buffering"
+                                    ]
+                                  },
+                                  "tone": {
+                                    "type": "string",
+                                    "enum": [
+                                      "info",
+                                      "warning"
+                                    ]
+                                  },
+                                  "title": {
+                                    "type": "string"
+                                  },
+                                  "message": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "details": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "label": {
+                                          "type": "string"
+                                        },
+                                        "value": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": [
+                                        "label",
+                                        "value"
+                                      ]
+                                    }
+                                  },
+                                  "metadata": {
+                                    "anyOf": [
+                                      {
+                                        "oneOf": [
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "type": {
+                                                "type": "string",
+                                                "const": "model_rerouted"
+                                              },
+                                              "fromModel": {
+                                                "type": "string"
+                                              },
+                                              "toModel": {
+                                                "type": "string"
+                                              },
+                                              "reason": {
+                                                "type": "string"
+                                              }
+                                            },
+                                            "required": [
+                                              "type",
+                                              "fromModel",
+                                              "toModel",
+                                              "reason"
+                                            ]
+                                          },
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "type": {
+                                                "type": "string",
+                                                "const": "model_verification"
+                                              },
+                                              "verifications": {
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "string"
+                                                }
+                                              }
+                                            },
+                                            "required": [
+                                              "type",
+                                              "verifications"
+                                            ]
+                                          },
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "type": {
+                                                "type": "string",
+                                                "const": "safety_buffering"
+                                              },
+                                              "model": {
+                                                "type": "string"
+                                              },
+                                              "fasterModel": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "string"
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              },
+                                              "useCases": {
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "string"
+                                                }
+                                              },
+                                              "reasons": {
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "string"
+                                                }
+                                              },
+                                              "terminalReason": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "string"
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              }
+                                            },
+                                            "required": [
+                                              "type",
+                                              "model",
+                                              "fasterModel",
+                                              "useCases",
+                                              "reasons",
+                                              "terminalReason"
+                                            ]
+                                          }
+                                        ]
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "harnessId",
+                                  "noticeKind",
+                                  "tone",
+                                  "title",
+                                  "message",
+                                  "details",
+                                  "metadata"
+                                ]
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           }
                         },
                         "required": [
@@ -5471,6 +5664,204 @@ export const chatSchemaSurfaceBaseline = {
                           },
                           "text": {
                             "type": "string"
+                          },
+                          "providerNotice": {
+                            "default": null,
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "harnessId": {
+                                    "type": "string",
+                                    "enum": [
+                                      "claude",
+                                      "codex",
+                                      "opencode",
+                                      "traycer",
+                                      "cursor",
+                                      "grok",
+                                      "qwen",
+                                      "kiro",
+                                      "droid",
+                                      "kimi",
+                                      "copilot",
+                                      "kilocode",
+                                      "openrouter",
+                                      "amp"
+                                    ]
+                                  },
+                                  "noticeKind": {
+                                    "type": "string",
+                                    "enum": [
+                                      "model_rerouted",
+                                      "model_verification",
+                                      "safety_buffering"
+                                    ]
+                                  },
+                                  "tone": {
+                                    "type": "string",
+                                    "enum": [
+                                      "info",
+                                      "warning"
+                                    ]
+                                  },
+                                  "title": {
+                                    "type": "string"
+                                  },
+                                  "message": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "details": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "label": {
+                                          "type": "string"
+                                        },
+                                        "value": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": [
+                                        "label",
+                                        "value"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "metadata": {
+                                    "anyOf": [
+                                      {
+                                        "oneOf": [
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "type": {
+                                                "type": "string",
+                                                "const": "model_rerouted"
+                                              },
+                                              "fromModel": {
+                                                "type": "string"
+                                              },
+                                              "toModel": {
+                                                "type": "string"
+                                              },
+                                              "reason": {
+                                                "type": "string"
+                                              }
+                                            },
+                                            "required": [
+                                              "type",
+                                              "fromModel",
+                                              "toModel",
+                                              "reason"
+                                            ],
+                                            "additionalProperties": false
+                                          },
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "type": {
+                                                "type": "string",
+                                                "const": "model_verification"
+                                              },
+                                              "verifications": {
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "string"
+                                                }
+                                              }
+                                            },
+                                            "required": [
+                                              "type",
+                                              "verifications"
+                                            ],
+                                            "additionalProperties": false
+                                          },
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "type": {
+                                                "type": "string",
+                                                "const": "safety_buffering"
+                                              },
+                                              "model": {
+                                                "type": "string"
+                                              },
+                                              "fasterModel": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "string"
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              },
+                                              "useCases": {
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "string"
+                                                }
+                                              },
+                                              "reasons": {
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "string"
+                                                }
+                                              },
+                                              "terminalReason": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "string"
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              }
+                                            },
+                                            "required": [
+                                              "type",
+                                              "model",
+                                              "fasterModel",
+                                              "useCases",
+                                              "reasons",
+                                              "terminalReason"
+                                            ],
+                                            "additionalProperties": false
+                                          }
+                                        ]
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "harnessId",
+                                  "noticeKind",
+                                  "tone",
+                                  "title",
+                                  "message",
+                                  "details",
+                                  "metadata"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           }
                         },
                         "required": [
@@ -5478,7 +5869,8 @@ export const chatSchemaSurfaceBaseline = {
                           "status",
                           "timestamp",
                           "type",
-                          "text"
+                          "text",
+                          "providerNotice"
                         ],
                         "additionalProperties": false
                       },

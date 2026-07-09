@@ -3,6 +3,8 @@ export interface EpicFocusSearch {
   readonly focusArtifactId: string | undefined;
   readonly focusThreadId: string | undefined;
   readonly migrationSource: "phase" | undefined;
+  readonly focusPaneId: string | undefined;
+  readonly focusTileInstanceId: string | undefined;
 }
 
 export function normalizeEpicFocusSearch(
@@ -13,6 +15,8 @@ export function normalizeEpicFocusSearch(
     focusArtifactId: normalizeString(search.focusArtifactId),
     focusThreadId: normalizeString(search.focusThreadId),
     migrationSource: normalizeMigrationSource(search.migrationSource),
+    focusPaneId: normalizeString(search.focusPaneId),
+    focusTileInstanceId: normalizeString(search.focusTileInstanceId),
   };
 }
 

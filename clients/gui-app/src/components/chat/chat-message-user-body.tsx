@@ -37,12 +37,12 @@ import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
+import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import {
   composerClipboardPlainText,
   copyComposerContentToClipboard,
 } from "@/lib/composer/composer-clipboard";
 import { useEpicArtifact, useOpenEpicId } from "@/lib/epic-selectors";
-import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { cn, formatSingleLine } from "@/lib/utils";
 import { deriveA2AReceivedCollapsibleKey } from "@/components/chat/chat-collapsible-key";
 import {
@@ -176,6 +176,7 @@ function AgentMessageDisplayView({
   );
 
   const epicId = useOpenEpicId();
+  const tileNavigation = useEpicTileNavigation();
   const senderNode = useEpicArtifact(agentSenderInfo.agentId);
   // Resolve the live sender from the epic projection. A chat or
   // terminal-agent is openable as a tab; an absent node (e.g. a
@@ -207,16 +208,14 @@ function AgentMessageDisplayView({
 
   const openSenderTab = useCallback(() => {
     if (openTarget === null) return;
-    const canvas = useEpicCanvasStore.getState();
-    const tabId = canvas.resolveTargetTabForEpic(epicId, undefined);
-    canvas.openTileInTab(tabId, {
+    tileNavigation.openTileInEpic(epicId, {
       id: agentSenderInfo.agentId,
       instanceId: uuidv4(),
       type: openTarget.type,
       name: senderName,
       hostId: openTarget.hostId,
     });
-  }, [openTarget, epicId, agentSenderInfo.agentId, senderName]);
+  }, [agentSenderInfo.agentId, epicId, openTarget, senderName, tileNavigation]);
 
   const header = (
     <>

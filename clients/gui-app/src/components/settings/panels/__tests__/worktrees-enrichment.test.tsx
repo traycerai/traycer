@@ -55,11 +55,17 @@ const METHOD_SCOPE = hostQueryKeys.methodScope(
 );
 
 function perPathKey(path: string): readonly unknown[] {
-  return [...METHOD_SCOPE, { includeActivity: true, activityPaths: [path] }];
+  return [
+    ...METHOD_SCOPE,
+    { includeActivity: true, activityPaths: [path], cursor: null, limit: null },
+  ];
 }
 
 function baseKey(): readonly unknown[] {
-  return [...METHOD_SCOPE, { includeActivity: false, activityPaths: null }];
+  return [
+    ...METHOD_SCOPE,
+    { includeActivity: false, activityPaths: null, cursor: null, limit: 32 },
+  ];
 }
 
 function seedEnriched(qc: QueryClient, entry: WorktreeHostEntryV11): void {
@@ -67,6 +73,7 @@ function seedEnriched(qc: QueryClient, entry: WorktreeHostEntryV11): void {
     perPathKey(entry.worktreePath),
     {
       worktrees: [entry],
+      nextCursor: null,
     },
   );
 }
@@ -85,6 +92,7 @@ describe("useCachedWorktreeEnrichment (cache-backed overlay)", () => {
     // base-only fields instead of staying pending.
     qc.setQueryData<WorktreeListAllForHostResponseV11>(baseKey(), {
       worktrees: [enrichedEntry("/wt/b", "feat-b")],
+      nextCursor: null,
     });
 
     const { result } = renderHook(() =>
@@ -192,11 +200,13 @@ describe("useWorktreeActivityEnrichment (window-independent overlay)", () => {
 
 describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () => {
   afterEach(() => {
+    vi.useRealTimers();
     cleanup();
   });
 
   function createFixture(
     entriesByPath: ReadonlyMap<string, WorktreeHostEntryV11>,
+    onPathRequest: ((path: string) => void) | null,
   ) {
     const queryClient = new QueryClient();
     const client = new HostClient<HostRpcRegistry>({
@@ -216,8 +226,10 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
             return {
               worktrees: paths.flatMap((path) => {
                 const entry = entriesByPath.get(path);
+                if (onPathRequest !== null) onPathRequest(path);
                 return entry === undefined ? [] : [entry];
               }),
+              nextCursor: null,
             };
           },
         },
@@ -240,7 +252,7 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
       ["/wt/a", enrichedEntry("/wt/a", "feat-a")],
       ["/wt/b", enrichedEntry("/wt/b", "feat-b")],
     ]);
-    const fixture = createFixture(entriesByPath);
+    const fixture = createFixture(entriesByPath, null);
     const { result } = renderHook(
       () => useWorktreeActivityEnrichment(fixture.client, true, HOST_ID),
       { wrapper: fixture.Wrapper },
@@ -288,7 +300,7 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
     const entriesByPath = new Map<string, WorktreeHostEntryV11>([
       ["/wt/a", enrichedEntry("/wt/a", "feat-a")],
     ]);
-    const fixture = createFixture(entriesByPath);
+    const fixture = createFixture(entriesByPath, null);
     // Mimic the list: report on-screen paths from a MOUNT EFFECT, exactly where
     // StrictMode's double-invoked effect cycle bites.
     function useEnrichmentReportingOnMount() {
@@ -314,5 +326,83 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
     await waitFor(() => {
       expect(result.current.enrichedByPath.has("/wt/a")).toBe(true);
     });
+  });
+
+  it("refetches cold null PR state and stops after it resolves", async () => {
+    vi.useFakeTimers();
+    const coldEntry = enrichedEntry("/wt/a", "feat-a");
+    const resolvedEntry: WorktreeHostEntryV11 = {
+      ...coldEntry,
+      prState: "open",
+      prNumber: 42,
+      prUrl: "https://github.com/acme/app/pull/42",
+    };
+    const entriesByPath = new Map<string, WorktreeHostEntryV11>([
+      ["/wt/a", coldEntry],
+    ]);
+    const requests: string[] = [];
+    const fixture = createFixture(entriesByPath, (path) => {
+      requests.push(path);
+      if (requests.length === 1) entriesByPath.set(path, resolvedEntry);
+    });
+    const { result } = renderHook(
+      () => useWorktreeActivityEnrichment(fixture.client, true, HOST_ID),
+      { wrapper: fixture.Wrapper },
+    );
+
+    await act(async () => {
+      result.current.reportVisiblePaths(["/wt/a"]);
+      await vi.advanceTimersByTimeAsync(WORKTREE_DEBOUNCE_SETTLE_MS);
+    });
+    expect(requests).toHaveLength(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(requests).toHaveLength(2);
+    expect(result.current.enrichedByPath.get("/wt/a")?.prState).toBe("open");
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(requests).toHaveLength(2);
+  });
+
+  it("stops cold PR refetching after the bounded retry budget", async () => {
+    vi.useFakeTimers();
+    const entriesByPath = new Map<string, WorktreeHostEntryV11>([
+      ["/wt/a", enrichedEntry("/wt/a", "feat-a")],
+    ]);
+    const requests: string[] = [];
+    const fixture = createFixture(entriesByPath, (path) => {
+      requests.push(path);
+    });
+    const { result } = renderHook(
+      () => useWorktreeActivityEnrichment(fixture.client, true, HOST_ID),
+      { wrapper: fixture.Wrapper },
+    );
+
+    await act(async () => {
+      result.current.reportVisiblePaths(["/wt/a"]);
+      await vi.advanceTimersByTimeAsync(WORKTREE_DEBOUNCE_SETTLE_MS);
+    });
+    expect(requests).toHaveLength(1);
+
+    const retrySteps = [
+      { advanceMs: 800, expectedCount: 2 },
+      { advanceMs: 1_600, expectedCount: 3 },
+      { advanceMs: 2_300, expectedCount: 4 },
+    ];
+    for (const step of retrySteps) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(step.advanceMs);
+      });
+      expect(requests).toHaveLength(step.expectedCount);
+    }
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(requests).toHaveLength(4);
   });
 });

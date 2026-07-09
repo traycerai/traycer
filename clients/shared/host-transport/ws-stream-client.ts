@@ -116,6 +116,7 @@ export class WsStreamClient<Registry extends VersionedStreamRpcRegistry> {
   private readonly options: WsStreamClientOptions<Registry>;
   private readonly ownedSessions = new Set<StreamSession<Registry>>();
   private readonly methodSupport = new Map<string, StreamMethodSupport>();
+  private readonly methodSchemaVersions = new Map<string, SchemaVersion>();
   private readonly methodSupportListeners = new Set<() => void>();
   private closed = false;
 
@@ -165,8 +166,8 @@ export class WsStreamClient<Registry extends VersionedStreamRpcRegistry> {
       initialBackoffMs: this.options.initialBackoffMs,
       maxBackoffMs: this.options.maxBackoffMs,
       onDispose: () => removeSession(),
-      onMethodSupport: (nextMethod, support) => {
-        this.setMethodSupport(nextMethod, support);
+      onMethodSupport: (nextMethod, support, schemaVersion) => {
+        this.setMethodSupport(nextMethod, support, schemaVersion);
       },
     });
     removeSession = () => {
@@ -201,6 +202,12 @@ export class WsStreamClient<Registry extends VersionedStreamRpcRegistry> {
     method: Method,
   ): StreamMethodSupport {
     return this.methodSupport.get(method) ?? "unknown";
+  }
+
+  getMethodSchemaVersion<Method extends keyof Registry & string>(
+    method: Method,
+  ): SchemaVersion | null {
+    return this.methodSchemaVersions.get(method) ?? null;
   }
 
   subscribeMethodSupport(listener: () => void): () => void {
@@ -250,9 +257,27 @@ export class WsStreamClient<Registry extends VersionedStreamRpcRegistry> {
     }
   }
 
-  private setMethodSupport(method: string, support: StreamMethodSupport): void {
+  private setMethodSupport(
+    method: string,
+    support: StreamMethodSupport,
+    schemaVersion: SchemaVersion | null,
+  ): void {
     const previous = this.methodSupport.get(method) ?? "unknown";
-    if (previous === support) {
+    const previousVersion = this.methodSchemaVersions.get(method) ?? null;
+    if (
+      schemaVersion === null ||
+      support === "unsupported" ||
+      support === "unknown"
+    ) {
+      this.methodSchemaVersions.delete(method);
+    } else {
+      this.methodSchemaVersions.set(method, schemaVersion);
+    }
+    const nextVersion = this.methodSchemaVersions.get(method) ?? null;
+    if (
+      previous === support &&
+      schemaVersionEqual(previousVersion, nextVersion)
+    ) {
       return;
     }
     this.methodSupport.set(method, support);
@@ -272,6 +297,14 @@ export type ParamsOf<
 > = ExtractOpenRequest<Registry[Method]>;
 
 export type StreamMethodSupport = "unknown" | "supported" | "unsupported";
+
+function schemaVersionEqual(
+  a: SchemaVersion | null,
+  b: SchemaVersion | null,
+): boolean {
+  if (a === null || b === null) return a === b;
+  return a.major === b.major && a.minor === b.minor;
+}
 
 type ExtractOpenRequest<MethodRegistry> =
   MethodRegistry extends Readonly<Record<number, infer Line>>
@@ -308,6 +341,7 @@ interface StreamSessionOptions<Registry extends VersionedStreamRpcRegistry> {
   readonly onMethodSupport: (
     method: keyof Registry & string,
     support: StreamMethodSupport,
+    schemaVersion: SchemaVersion | null,
   ) => void;
 }
 
@@ -731,7 +765,7 @@ class StreamSession<
     }
 
     if (!compat.ok) {
-      this.config.onMethodSupport(this.config.method, "unsupported");
+      this.config.onMethodSupport(this.config.method, "unsupported", null);
       const terminalFrame: ClientStreamFatalErrorFrame = {
         kind: "fatalError",
         details: compat.details,
@@ -766,7 +800,11 @@ class StreamSession<
       this.onSendFailure(socket);
       return;
     }
-    this.config.onMethodSupport(this.config.method, "supported");
+    this.config.onMethodSupport(
+      this.config.method,
+      "supported",
+      ackParse.data.manifest[this.config.method],
+    );
     this.phase = "subscribed";
     this.reconnectAttempt = 0;
     this.noProgressUnauthorizedReconnects = 0;

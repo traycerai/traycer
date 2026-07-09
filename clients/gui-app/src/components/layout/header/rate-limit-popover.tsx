@@ -32,7 +32,7 @@ import {
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import type { RateLimitUnavailableReason } from "@traycer/protocol/host";
 import {
-  useConfiguredRateLimitProviders,
+  useVisibleRateLimitProviders,
   type ConfiguredRateLimitProvider,
 } from "@/hooks/rate-limits/use-configured-rate-limit-providers";
 import { useIsRateLimitQueueDraining } from "@/hooks/rate-limits/use-is-rate-limit-queue-draining";
@@ -178,11 +178,11 @@ function RateLimitPopoverBody({
 }: {
   readonly onClose: () => void;
 }): ReactNode {
-  const configured = useConfiguredRateLimitProviders();
+  const displayProviders = useVisibleRateLimitProviders();
   // Rail order matches the app's standard provider order everywhere else.
   const providers = useMemo(
-    () => sortProviderStatesByProviderOrder(configured),
-    [configured],
+    () => sortProviderStatesByProviderOrder(displayProviders),
+    [displayProviders],
   );
 
   // Traycer is a GUI-only rail entry (AuthService subscription, not a host RPC),

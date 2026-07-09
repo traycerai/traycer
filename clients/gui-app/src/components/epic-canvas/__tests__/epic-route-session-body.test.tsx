@@ -48,6 +48,8 @@ const BODY_PROPS = {
   focusedAt: 123,
   focusArtifactId: "artifact-a",
   focusThreadId: "thread-a",
+  focusPaneId: "pane-a",
+  focusTileInstanceId: "tile-a",
 };
 
 describe("<EpicRouteSessionBody />", () => {

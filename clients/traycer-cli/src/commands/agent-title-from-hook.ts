@@ -12,10 +12,9 @@ import {
   toAgentCliError,
 } from "../internal/host-rpc";
 import { readEpicId, readTuiAgentId } from "../internal/agent-context";
+import { readStdinJson } from "../internal/hook-stdin";
 import { CliError, CLI_ERROR_CODES } from "../runner/errors";
 import type { CommandFn } from "../runner/runner";
-
-const STDIN_READ_TIMEOUT_MS = 5_000;
 
 /**
  * Provider hook payloads we accept on stdin. Each provider hands us a
@@ -172,65 +171,4 @@ function extractPrompt(
   // Cursor TUI exists in the schema but ships no hook payload contract
   // yet; treat as a quiet no-op rather than failing the hook.
   return null;
-}
-
-/**
- * Read stdin as JSON, with a hard timeout. Returns:
- *   - `"timeout"` if the read didn't finish in time (caller noops);
- *   - `null` for an empty stream, unparsable JSON, or a TTY stdin;
- *   - the parsed JSON value otherwise.
- *
- * On timeout we explicitly `destroy()` stdin to release the async iterator
- * and let the event loop exit cleanly. (Without this, `for await (chunk of
- * process.stdin)` keeps the loop alive even after we've resolved.)
- */
-async function readStdinJson(): Promise<unknown | "timeout"> {
-  if (process.stdin.isTTY === true) return null;
-
-  const read = (async (): Promise<string> => {
-    const chunks: Buffer[] = [];
-    for await (const chunk of process.stdin) {
-      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-    }
-    return Buffer.concat(chunks).toString("utf8");
-  })();
-  // When the timeout branch wins and we call `process.stdin.destroy()`,
-  // the still-pending `for await` iterator above rejects. Attach a
-  // no-op catch so that rejection doesn't bubble up as an unhandled
-  // promise rejection - the timeout outcome is already wired through
-  // `wrappedRead` / `timeout` below.
-  read.catch(() => {});
-
-  let timer: NodeJS.Timeout | undefined;
-  type Outcome = { kind: "ok"; raw: string } | { kind: "timeout" };
-  const timeout = new Promise<Outcome>((resolve) => {
-    timer = setTimeout(
-      () => resolve({ kind: "timeout" }),
-      STDIN_READ_TIMEOUT_MS,
-    );
-  });
-  const wrappedRead = read.then((raw): Outcome => ({ kind: "ok", raw }));
-
-  const winner = await Promise.race([wrappedRead, timeout]);
-  if (timer !== undefined) clearTimeout(timer);
-  if (winner.kind === "timeout") {
-    // Release the async iterator so the process can exit promptly.
-    try {
-      process.stdin.destroy();
-    } catch {
-      // best-effort
-    }
-    return "timeout";
-  }
-  const raw = winner.raw;
-  if (raw.trim().length === 0) return null;
-  return safeJsonParse(raw);
-}
-
-function safeJsonParse(raw: string): unknown {
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return null;
-  }
 }

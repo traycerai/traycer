@@ -2774,3 +2774,188 @@ describe("accumulateEvent - artifact_operation", () => {
     expect(expectArtifactOpBlock(blocks[0]).parentBlockId).toBe("subagent-1");
   });
 });
+
+describe("accumulateEvent - provider_notice.upsert", () => {
+  function expectProviderNoticeTextBlock(
+    block: ContentBlock | undefined,
+  ): TextBlock {
+    if (block?.type !== "text") {
+      throw new Error("Expected a text block");
+    }
+    return block;
+  }
+
+  it("creates a compatibility-safe text block carrying the fallback text and providerNotice enrichment", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "provider_notice.upsert",
+      blockId: "provider-notice:codex:turn-1:model-rerouted",
+      timestamp: 10,
+      parentBlockId: null,
+      harnessId: "codex",
+      noticeKind: "model_rerouted",
+      tone: "warning",
+      status: "completed",
+      title: "Model changed",
+      message: "Codex switched from gpt-5 to gpt-5-safe.",
+      details: [{ label: "Reason", value: "highRiskCyberActivity" }],
+      fallbackText: "Codex switched from gpt-5 to gpt-5-safe (highRiskCyberActivity).",
+      metadata: {
+        type: "model_rerouted",
+        fromModel: "gpt-5",
+        toModel: "gpt-5-safe",
+        reason: "highRiskCyberActivity",
+      },
+    });
+
+    expect(blocks).toHaveLength(1);
+    const block = expectProviderNoticeTextBlock(blocks[0]);
+    expect(block.blockId).toBe("provider-notice:codex:turn-1:model-rerouted");
+    expect(block.status).toBe("completed");
+    expect(block.timestamp).toBe(10);
+    expect(block.text).toBe(
+      "Codex switched from gpt-5 to gpt-5-safe (highRiskCyberActivity).",
+    );
+    expect(block.providerNotice).toEqual({
+      harnessId: "codex",
+      noticeKind: "model_rerouted",
+      tone: "warning",
+      title: "Model changed",
+      message: "Codex switched from gpt-5 to gpt-5-safe.",
+      details: [{ label: "Reason", value: "highRiskCyberActivity" }],
+      metadata: {
+        type: "model_rerouted",
+        fromModel: "gpt-5",
+        toModel: "gpt-5-safe",
+        reason: "highRiskCyberActivity",
+      },
+    });
+  });
+
+  it("replaces the rendered fields and fallback text in place on a repeat upsert for the same blockId (no duplicate row)", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "provider_notice.upsert",
+      blockId: "provider-notice:codex:turn-2:safety-buffering",
+      timestamp: 1,
+      parentBlockId: null,
+      harnessId: "codex",
+      noticeKind: "safety_buffering",
+      tone: "info",
+      status: "streaming",
+      title: "Safety check in progress",
+      message: "Buffering with gpt-5.",
+      details: [{ label: "Model", value: "gpt-5" }],
+      fallbackText: "Codex is running a safety check.",
+      metadata: {
+        type: "safety_buffering",
+        model: "gpt-5",
+        fasterModel: null,
+        useCases: ["cyber"],
+        reasons: ["trustedAccessForCyber"],
+        terminalReason: null,
+      },
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "provider_notice.upsert",
+      blockId: "provider-notice:codex:turn-2:safety-buffering",
+      timestamp: 2,
+      parentBlockId: null,
+      harnessId: "codex",
+      noticeKind: "safety_buffering",
+      tone: "info",
+      status: "completed",
+      title: "Safety check complete",
+      message: null,
+      details: [{ label: "Model", value: "gpt-5" }],
+      fallbackText: "Codex completed a safety check.",
+      metadata: {
+        type: "safety_buffering",
+        model: "gpt-5",
+        fasterModel: null,
+        useCases: ["cyber"],
+        reasons: ["trustedAccessForCyber"],
+        terminalReason: "showBufferingUi=false",
+      },
+    });
+
+    expect(blocks).toHaveLength(1);
+    const block = expectProviderNoticeTextBlock(blocks[0]);
+    expect(block.status).toBe("completed");
+    expect(block.timestamp).toBe(2);
+    expect(block.text).toBe("Codex completed a safety check.");
+    expect(block.providerNotice?.title).toBe("Safety check complete");
+    expect(block.providerNotice?.message).toBeNull();
+    expect(block.providerNotice?.metadata).toEqual({
+      type: "safety_buffering",
+      model: "gpt-5",
+      fasterModel: null,
+      useCases: ["cyber"],
+      reasons: ["trustedAccessForCyber"],
+      terminalReason: "showBufferingUi=false",
+    });
+  });
+
+  it("nests under a parent block when parentBlockId is set (sub-agent thread)", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "provider_notice.upsert",
+      blockId: "provider-notice:codex:turn-3:model-verification",
+      timestamp: 1,
+      parentBlockId: "subagent-1",
+      harnessId: "codex",
+      noticeKind: "model_verification",
+      tone: "info",
+      status: "completed",
+      title: "Model verification active",
+      message: "Trusted access for cyber.",
+      details: [{ label: "Verifications", value: "trustedAccessForCyber" }],
+      fallbackText: "Model verification active: trustedAccessForCyber.",
+      metadata: {
+        type: "model_verification",
+        verifications: ["trustedAccessForCyber"],
+      },
+    });
+
+    expect(expectProviderNoticeTextBlock(blocks[0]).parentBlockId).toBe(
+      "subagent-1",
+    );
+  });
+
+  it("is not treated as an action block: a still-streaming provider notice completes (never interrupted/superseded) on turn end", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "provider_notice.upsert",
+      blockId: "provider-notice:codex:turn-4:safety-buffering",
+      timestamp: 1,
+      parentBlockId: null,
+      harnessId: "codex",
+      noticeKind: "safety_buffering",
+      tone: "info",
+      status: "streaming",
+      title: "Safety check in progress",
+      message: null,
+      details: [],
+      fallbackText: "Codex is running a safety check.",
+      metadata: null,
+    });
+
+    blocks = accumulateEvent(blocks, {
+      type: "turn.interrupted",
+      blockId: "turn",
+      timestamp: 5,
+      turnId: "turn",
+      reason: "Turn interrupted to run a queued steering request.",
+      code: "STEER_RESTART",
+      recoverable: true,
+    });
+
+    const block = expectProviderNoticeTextBlock(blocks[0]);
+    // text/reasoning content is always finalized "completed" regardless of the
+    // terminal turn outcome - a provider notice must never surface as a
+    // misleading "interrupted"/"superseded" action status.
+    expect(block.status).toBe("completed");
+    expect(block.timestamp).toBe(5);
+    expect(block.providerNotice).not.toBeNull();
+  });
+});

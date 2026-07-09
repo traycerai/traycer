@@ -38,6 +38,7 @@ import {
 } from "@/components/epic-canvas/sidebar/epic-sidebar-filter-menu";
 import { FileTreeWorkspacePicker } from "@/components/epic-canvas/sidebar/file-tree-workspace-picker";
 import { WorkspacePickerWithOpener } from "@/components/worktree/workspace-picker-with-opener";
+import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { PIERRE_FILE_TREE_THEME_STYLE } from "@/components/epic-canvas/pierre-tree-theme";
 import { useWorkspaceListFileTree } from "@/hooks/workspace/use-list-file-tree-query";
 import { useWorktreeListBindingsForEpic } from "@/hooks/worktree/use-worktree-list-bindings-for-epic-query";
@@ -53,6 +54,11 @@ import {
 import type { WorkspaceFileTreeNode } from "@traycer/protocol/host/workspace/unary-schemas";
 import { extractPierreItemPathFromEvent } from "@/components/epic-canvas/pierre-tree-adapter";
 import { type GitStatusEntry } from "@pierre/trees";
+import {
+  getCurrentNestedFocusTarget,
+  type NestedFocusTarget,
+} from "@/lib/epic-nested-focus-route";
+import { EMPTY_CANVAS } from "@/stores/epics/canvas/canvas-state";
 import { PanelGroupSectionHeader } from "@/components/epic-canvas/sidebar/epic-sidebar-header";
 import { PANEL_HEADER_ACTION_REVEAL_CLASS } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
 import { ChatTreePanelBody } from "@/components/epic-canvas/sidebar/epic-sidebar-chat-tree";
@@ -1102,10 +1108,13 @@ function FileTreePanelBodyForWorkspace(props: {
     [files],
   );
 
-  const openTilePreviewInTab = useEpicCanvasStore(
-    (s) => s.openTilePreviewInTab,
+  const navigateNested = useEpicNestedFocusNavigation();
+  const prepareOpenTilePreviewInTabFocusTarget = useEpicCanvasStore(
+    (s) => s.prepareOpenTilePreviewInTabFocusTarget,
   );
-  const openTileInTab = useEpicCanvasStore((s) => s.openTileInTab);
+  const prepareOpenTileInTabFocusTarget = useEpicCanvasStore(
+    (s) => s.prepareOpenTileInTabFocusTarget,
+  );
 
   // Single source of truth for "tree row path -> workspace file ref". Reused by
   // the open handlers and the drag bridge so a row that is not an openable file
@@ -1136,23 +1145,25 @@ function FileTreePanelBodyForWorkspace(props: {
   useEffect(() => {
     const openInTab = (
       treePath: string,
-      open: (tabId: string, ref: WorkspaceFileRef) => void,
+      open: (tabId: string, ref: WorkspaceFileRef) => NestedFocusTarget | null,
     ) => {
       const ref = workspaceFileRefForTreePath(treePath);
       if (ref === null) return;
-      open(props.tabId, ref);
+      navigateNested(props.epicId, props.tabId, () => open(props.tabId, ref));
     };
     handlersRef.current.onSelect = (treePath) => {
-      openInTab(treePath, openTilePreviewInTab);
+      openInTab(treePath, prepareOpenTilePreviewInTabFocusTarget);
     };
     handlersRef.current.onOpen = (treePath) => {
-      openInTab(treePath, openTileInTab);
+      openInTab(treePath, prepareOpenTileInTabFocusTarget);
     };
   }, [
+    navigateNested,
     workspaceFileRefForTreePath,
+    props.epicId,
     props.tabId,
-    openTilePreviewInTab,
-    openTileInTab,
+    prepareOpenTilePreviewInTabFocusTarget,
+    prepareOpenTileInTabFocusTarget,
   ]);
 
   const { model } = useFileTree({
@@ -1335,6 +1346,7 @@ function SidebarBulkDeleteController(props: {
   const liveRecords = useEpicArtifactRecords();
   const tree = useEpicTreeIndex();
   const epicHandle = useOpenEpicHandle();
+  const navigateNested = useEpicNestedFocusNavigation();
   const closeCanvasTab = useEpicCanvasStore((s) => s.closeCanvasTab);
   const markArtifactSelfDeleted = useEpicCanvasStore(
     (s) => s.markArtifactSelfDeleted,
@@ -1406,11 +1418,27 @@ function SidebarBulkDeleteController(props: {
         const failedIds = targets.flatMap((target, index) =>
           results[index].status === "rejected" ? [target.id] : [],
         );
-        successfulIds.forEach((id) => {
+        // Closing several tabs is one focus-relevant change, not N: closing
+        // each through its own `prepareCloseCanvasTabFocusTarget` call would
+        // let an intermediate iteration's fallback focus (e.g. the next
+        // still-being-deleted tab) get pushed as a route entry. Instead,
+        // close every successfully-deleted open tab raw, then compute and
+        // commit the post-batch focus target exactly once.
+        const openTargets = successfulIds.flatMap((id) => {
           const found = findOpenArtifactInTab(props.tabId, id);
-          if (found === null) return;
-          closeCanvasTab(props.tabId, found.paneId, found.instanceId);
+          return found === null ? [] : [found];
         });
+        if (openTargets.length > 0) {
+          navigateNested(props.epicId, props.tabId, () => {
+            openTargets.forEach((found) => {
+              closeCanvasTab(props.tabId, found.paneId, found.instanceId);
+            });
+            const canvas =
+              useEpicCanvasStore.getState().canvasByTabId[props.tabId] ??
+              EMPTY_CANVAS;
+            return getCurrentNestedFocusTarget(canvas);
+          });
+        }
         failedIds.forEach((id) => {
           unmarkArtifactSelfDeleted(id);
         });
@@ -1435,6 +1463,7 @@ function SidebarBulkDeleteController(props: {
     deleteTerminalAgent,
     epicHandle,
     markArtifactSelfDeleted,
+    navigateNested,
     pendingDeleteIds,
     props.epicId,
     props.tabId,
@@ -1568,7 +1597,10 @@ function TreePanelActions(props: TreePanelActionsProps) {
   const canMutate = canEdit && !isDisconnected;
   const epicHandle = useOpenEpicHandle();
   const activeHostId = useReactiveActiveHostId() ?? UNKNOWN_HOST_PLACEHOLDER;
-  const openTileInTab = useEpicCanvasStore((s) => s.openTileInTab);
+  const navigateNested = useEpicNestedFocusNavigation();
+  const prepareOpenTileInTabFocusTarget = useEpicCanvasStore(
+    (s) => s.prepareOpenTileInTabFocusTarget,
+  );
   const createArtifact = useEpicCreateArtifact();
   const setLocalRootCreatePending = useEpicLeftPanelStore(
     (s) => s.setLocalRootCreatePending,
@@ -1598,7 +1630,11 @@ function TreePanelActions(props: TreePanelActionsProps) {
         tabId: props.tabId,
         nodeId,
         fallbackHostId: activeHostId,
-        openTileInTab,
+        openTileInTab: (targetTabId, nodeRef) => {
+          navigateNested(props.epicId, targetTabId, () =>
+            prepareOpenTileInTabFocusTarget(targetTabId, nodeRef),
+          );
+        },
         onBeforeOpen,
         onOpened: () => {
           clearAcknowledgedRootCreatePending(props.epicId, props.panelId);
@@ -1616,7 +1652,8 @@ function TreePanelActions(props: TreePanelActionsProps) {
       activeHostId,
       clearAcknowledgedRootCreatePending,
       epicHandle,
-      openTileInTab,
+      navigateNested,
+      prepareOpenTileInTabFocusTarget,
       projectedOpenCancels,
       props.epicId,
       props.panelId,

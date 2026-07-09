@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Environment } from "../../config";
+import { devDesktopSlotForEnvironment } from "./dev-desktop-slot";
 // Re-export so the desktop's host consumers can import the deploy-slot type
 // from a single place alongside the layout helpers.
 export type { Environment } from "../../config";
@@ -41,6 +42,14 @@ export const DEV_LABEL: ServiceLabel = {
 // plist the installer ships - derive from `environment` so new slots can't drift.
 export function labelForEnvironment(environment: Environment): ServiceLabel {
   if (environment === "production") return PRODUCTION_LABEL;
+  const devSlot = devDesktopSlotForEnvironment(environment, process.env);
+  if (devSlot !== null) {
+    return {
+      id: `ai.traycer.host.dev.${devSlot}`,
+      displayName: `Traycer Host (Dev ${devSlot})`,
+      appSupportDirName: `Traycer-Dev-${devSlot}`,
+    };
+  }
   if (environment === "dev") return DEV_LABEL;
   const titled = capitalizeEnvironment(environment);
   return {
@@ -63,11 +72,12 @@ function capitalizeEnvironment(environment: Environment): string {
  *
  * `pidMetadataFile` is the on-disk coordination point with the host.
  * For the prod environment the canonical path is `~/.traycer/host/pid.json`;
- * for the dev environment it is `~/.traycer/host/dev/pid.json`. The path is
- * a JSON document matching `HostPidMetadata`, written by the host (the
- * external Traycer Host). The host writes it on bind and unlinks it
- * on graceful shutdown; this runner reads it to discover a live local host
- * and its localhost `websocketUrl`.
+ * for the dev environment it is `~/.traycer/host/dev/pid.json`, or
+ * `~/.traycer/host/dev-runs/<slot>/pid.json` when `DEV_DESKTOP_SLOT` is set.
+ * The path is a JSON document matching `HostPidMetadata`, written by the host
+ * (the external Traycer Host). The host writes it on bind and unlinks it on
+ * graceful shutdown; this runner reads it to discover a live local host and
+ * its localhost `websocketUrl`.
  *
  * The dev/prod split mirrors the CLI's
  * `clients/traycer-cli/src/store/paths.ts` and the layout used by the host
@@ -101,9 +111,15 @@ export function environmentSubdir(
   return environment === "production" ? base : join(base, environment);
 }
 
+function hostSlotRoot(base: string, environment: Environment): string {
+  const devSlot = devDesktopSlotForEnvironment(environment, process.env);
+  if (devSlot !== null) return join(base, "dev-runs", devSlot);
+  return environmentSubdir(base, environment);
+}
+
 export function getHostFsLayout(environment: Environment): HostFsLayout {
   const base = join(homedir(), ".traycer", "host");
-  const rootDir = environmentSubdir(base, environment);
+  const rootDir = hostSlotRoot(base, environment);
   const installDir = join(rootDir, "install");
   return {
     rootDir,

@@ -8,7 +8,15 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
+import {
+  Outlet,
+  RouterProvider,
+  createRootRoute,
+  createRoute,
+  createRouter,
+  useRouterState,
+} from "@tanstack/react-router";
 import type {
   HostEnsureResult,
   IHostManagement,
@@ -23,6 +31,7 @@ import {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import {
+  GATE_BYPASS_PATH_PREFIX,
   LOCAL_HOST_SLOW_START_THRESHOLD_MS,
   LocalHostGate,
   LocalHostUnavailable,
@@ -43,6 +52,20 @@ import {
   CURRENT_PHASE_VERSION,
 } from "@traycer-clients/shared/epic/epic-version";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import {
+  createPersistentMemoryHistory,
+  getHistoryController,
+} from "@/lib/persistent-history";
+import { goBack, goForward } from "@/lib/commands/actions/history-navigation";
+import {
+  resetSystemTabModalColdLoadForTests,
+  useSystemTabModalController,
+  useSystemTabModalRefreshGuard,
+  type SystemTabModalApi,
+} from "@/stores/tabs/use-system-tab-modal";
+import { systemTabOverlaySearchSchema } from "@/lib/system-tab-overlay-search";
+import { useSettingsSectionStore } from "@/stores/tabs/settings-section-store";
+import { useTabsStore } from "@/stores/tabs/store";
 
 const validSnapshot: LocalHostSnapshot = {
   hostId: "desktop-pid-1",
@@ -1026,6 +1049,303 @@ describe("LocalHostGate", () => {
     expect(screen.queryByTestId("gate-children")).not.toBeNull();
     expect(screen.queryByTestId("gate-unavailable")).toBeNull();
     expect(screen.queryByTestId("gate-loading")).toBeNull();
+  });
+});
+
+describe("LocalHostGate structural stability across the /settings bypass boundary", () => {
+  beforeEach(() => {
+    restoreFetch = installAuthFetch();
+  });
+
+  afterEach(() => {
+    cleanup();
+    useAuthStore.getState().setSignedOut();
+    vi.restoreAllMocks();
+    restoreFetch();
+  });
+
+  it("does not remount children when bypass flips true<->false while the host stays ready", async () => {
+    // Regression coverage for the back-navigation trap: LocalHostGate used to
+    // return `<>{children}</>` on bypass but `<HostCompatibilityGate>
+    // {children}</HostCompatibilityGate>` when ready - different element
+    // types at the same tree position, so React remounted every descendant
+    // (including SystemTabModalHost) on every epic<->settings crossing. Both
+    // branches must now share one element type/tree depth for a signed-in,
+    // ready local host.
+    useAuthStore.getState().setSignedIn(
+      {
+        userId: "test-user",
+        userName: "Test User",
+        email: "test@example.com",
+      },
+      { userId: "test-user", username: "Test User" },
+      [],
+    );
+    const host = makeHost(validSnapshot);
+    seedStoredToken(host);
+    // Stable across rerenders: `HostRuntimeProvider` re-runs its startup
+    // effect (tearing down and rebuilding the whole binding) whenever
+    // `messengerFactory` / `remoteFetcher` change identity, which would mask
+    // the very remount this test checks for.
+    const messengerFactory = buildMessengerFactory(() => compatibleHostStatus);
+    const remoteFetcher = () => Promise.resolve([]);
+    const queryClient = buildQueryClient();
+
+    const mountLog: string[] = [];
+    function MountLogProbe(): ReactNode {
+      useEffect(() => {
+        mountLog.push("mounted");
+        return () => {
+          mountLog.push("unmounted");
+        };
+      }, []);
+      return <div data-testid="gate-children">children</div>;
+    }
+
+    function Harness(props: { readonly bypass: boolean }): ReactNode {
+      return (
+        <RunnerHostProvider runnerHost={host}>
+          <QueryClientProvider client={queryClient}>
+            <TooltipProvider>
+              <HostRuntimeProvider
+                registry={hostRpcRegistry}
+                messengerFactory={messengerFactory}
+                invalidator={null}
+                requestId={null}
+                remoteFetcher={remoteFetcher}
+                fallback={
+                  <div data-testid="runtime-fallback">runtime loading</div>
+                }
+              >
+                <HostCompatibilityProvider>
+                  <LocalHostGate
+                    bypass={props.bypass}
+                    selectedEntry={localEntry}
+                    loading={<div data-testid="gate-loading">loading</div>}
+                    provisioningLoading={null}
+                    unavailable={
+                      <div data-testid="gate-unavailable">unavailable</div>
+                    }
+                  >
+                    <MountLogProbe />
+                  </LocalHostGate>
+                </HostCompatibilityProvider>
+              </HostRuntimeProvider>
+            </TooltipProvider>
+          </QueryClientProvider>
+        </RunnerHostProvider>
+      );
+    }
+
+    const { rerender } = render(<Harness bypass={false} />);
+    await waitFor(() => {
+      expect(screen.queryByTestId("gate-children")).not.toBeNull();
+    });
+    expect(mountLog).toEqual(["mounted"]);
+
+    rerender(<Harness bypass />);
+    await waitFor(() => {
+      expect(screen.queryByTestId("gate-children")).not.toBeNull();
+    });
+    expect(mountLog).toEqual(["mounted"]);
+
+    rerender(<Harness bypass={false} />);
+    await waitFor(() => {
+      expect(screen.queryByTestId("gate-children")).not.toBeNull();
+    });
+    expect(mountLog).toEqual(["mounted"]);
+
+    rerender(<Harness bypass />);
+    await waitFor(() => {
+      expect(screen.queryByTestId("gate-children")).not.toBeNull();
+    });
+    expect(mountLog).toEqual(["mounted"]);
+  });
+});
+
+describe("LocalHostGate + system tab modal guard integration", () => {
+  beforeEach(() => {
+    restoreFetch = installAuthFetch();
+    resetSystemTabModalColdLoadForTests();
+    useSettingsSectionStore.setState({ section: null });
+    useTabsStore.setState({ systemTabs: { history: null, settings: null } });
+  });
+
+  afterEach(() => {
+    cleanup();
+    useAuthStore.getState().setSignedOut();
+    vi.restoreAllMocks();
+    restoreFetch();
+    window.localStorage.clear();
+  });
+
+  it("one Back click after promoting the settings overlay leaves settings AND collapses the overlay entry", async () => {
+    // Closes the gap the promotion regression test (which deliberately keeps
+    // a REMOUNTING synthetic gate to isolate layers 2+3) leaves uncovered:
+    // with the REAL fixed LocalHostGate (layer 1) driving `bypass`, back
+    // click #1 from the promoted tab must both leave settings AND collapse
+    // the stray overlay entry in one click - the pre-fix "no bug" behavior
+    // the root-cause artifact's proof section describes for the
+    // non-remounting case.
+    useAuthStore.getState().setSignedIn(
+      {
+        userId: "test-user",
+        userName: "Test User",
+        email: "test@example.com",
+      },
+      { userId: "test-user", username: "Test User" },
+      [],
+    );
+    const host = makeHost(validSnapshot);
+    seedStoredToken(host);
+    const messengerFactory = buildMessengerFactory(() => compatibleHostStatus);
+    const remoteFetcher = () => Promise.resolve([]);
+    const queryClient = buildQueryClient();
+
+    const modalProbe: { current: SystemTabModalApi | null } = { current: null };
+    function ModalHostLike(): ReactNode {
+      useSystemTabModalRefreshGuard();
+      const api = useSystemTabModalController();
+      useEffect(() => {
+        modalProbe.current = api;
+      });
+      return null;
+    }
+
+    function GuardedRootWithRealGate(): ReactNode {
+      const pathname = useRouterState({ select: (s) => s.location.pathname });
+      const bypass = pathname.startsWith(GATE_BYPASS_PATH_PREFIX);
+      return (
+        <LocalHostGate
+          bypass={bypass}
+          selectedEntry={localEntry}
+          loading={<div data-testid="gate-loading">loading</div>}
+          provisioningLoading={null}
+          unavailable={<div data-testid="gate-unavailable">unavailable</div>}
+        >
+          <ModalHostLike />
+          <Outlet />
+        </LocalHostGate>
+      );
+    }
+
+    const windowId = "real-gate-promote-back";
+    window.localStorage.setItem(
+      `traycer-gui-app:last-route:${windowId}`,
+      JSON.stringify({ entries: ["/epics/e/t0", "/epics/e/t1"], index: 1 }),
+    );
+
+    const rootRoute = createRootRoute({
+      validateSearch: (raw) => systemTabOverlaySearchSchema.parse(raw),
+      component: GuardedRootWithRealGate,
+    });
+    const epicRoute = createRoute({
+      getParentRoute: () => rootRoute,
+      path: "/epics/$epicId/$tabId",
+      component: () => <div data-testid="epic-route" />,
+    });
+    const settingsRoute = createRoute({
+      getParentRoute: () => rootRoute,
+      path: "/settings/general",
+      component: () => <div data-testid="settings-route" />,
+    });
+    const router = createRouter({
+      routeTree: rootRoute.addChildren([epicRoute, settingsRoute]),
+      history: createPersistentMemoryHistory(null, windowId),
+    });
+
+    render(
+      <RunnerHostProvider runnerHost={host}>
+        <QueryClientProvider client={queryClient}>
+          <TooltipProvider>
+            <HostRuntimeProvider
+              registry={hostRpcRegistry}
+              messengerFactory={messengerFactory}
+              invalidator={null}
+              requestId={null}
+              remoteFetcher={remoteFetcher}
+              fallback={
+                <div data-testid="runtime-fallback">runtime loading</div>
+              }
+            >
+              <HostCompatibilityProvider>
+                <RouterProvider router={router} />
+              </HostCompatibilityProvider>
+            </HostRuntimeProvider>
+          </TooltipProvider>
+        </QueryClientProvider>
+      </RunnerHostProvider>,
+    );
+
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe("/epics/e/t1");
+    });
+    await waitFor(() => expect(modalProbe.current).not.toBeNull());
+
+    act(() => {
+      modalProbe.current?.openSettings({
+        section: null,
+        resetToGeneral: false,
+      });
+    });
+    await waitFor(() =>
+      expect(router.state.location.search).toMatchObject({
+        settingsOverlay: true,
+      }),
+    );
+
+    act(() => {
+      modalProbe.current?.close();
+    });
+    await waitFor(() =>
+      expect(router.state.location.search).not.toHaveProperty(
+        "settingsOverlay",
+      ),
+    );
+
+    act(() => {
+      goForward(router);
+    });
+    await waitFor(() =>
+      expect(router.state.location.search).toMatchObject({
+        settingsOverlay: true,
+      }),
+    );
+
+    act(() => {
+      modalProbe.current?.promoteToTab();
+    });
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe("/settings/general");
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+
+    act(() => {
+      goBack(router);
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    });
+
+    // One click: leaves settings AND the overlay entry is fully collapsed -
+    // no lingering search flag, no dead forward/back step remains.
+    expect(router.state.location.pathname).toBe("/epics/e/t1");
+    expect(router.state.location.search).not.toHaveProperty("settingsOverlay");
+
+    const controller = getHistoryController(router.history);
+    if (controller === null) {
+      throw new Error("expected a persistent controller");
+    }
+    expect(controller.getEntries()).toEqual([
+      "/epics/e/t0",
+      "/epics/e/t1",
+      "/settings/general",
+    ]);
+    expect(controller.getIndex()).toBe(1);
+    expect(controller.canGoBack()).toBe(true);
+    expect(controller.canGoForward()).toBe(true);
   });
 });
 

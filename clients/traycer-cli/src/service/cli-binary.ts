@@ -3,22 +3,23 @@ import { join } from "node:path";
 import type { Environment } from "../runner/environment";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import { readCliManifest } from "../manifest/cli-manifest";
-import { cliHomeDir } from "../store/paths";
+import { cliInstallHomeDir } from "../store/paths";
 
 // Resolve the stable per-user CLI binary that OS service manifests
 // should invoke. Discovery order:
 //
-//   1. CLI manifest at `<cliHomeDir>/manifest.json` - written by the
+//   1. CLI manifest at `<cliInstallHomeDir>/manifest.json` - written by the
 //      Desktop bootstrap + package-manager install hooks. Source of
 //      truth when present.
-//   2. Environment-scoped bin dir at `<cliHomeDir>/bin/traycer` - the
+//   2. Install-scoped bin dir at `<cliInstallHomeDir>/bin/traycer` - the
 //      well-known staging location every install path drops a binary
 //      (or wrapper script) into BEFORE invoking `traycer host
 //      install`. Used by:
 //        - Desktop's setup splash (stages bundled CLI at
 //          `~/.traycer/cli/bin/traycer` before host-bootstrap)
 //        - The dev orchestrator (`scripts/dev-desktop.js` stages a
-//          bun wrapper at `~/.traycer/cli/dev/bin/traycer`)
+//          bun wrapper at `~/.traycer/cli/dev-runs/<slot>/bin/traycer`
+//          when `DEV_DESKTOP_SLOT` is present)
 //      Lets the orchestrator hand off to the CLI without any
 //      explicit flag or env-var coupling - convention over
 //      configuration.
@@ -126,12 +127,12 @@ export async function resolveServiceCliInvocation(
 }
 
 function wellKnownCliBinaryPath(environment: Environment): string {
-  // Mirrors what Desktop's `cliBinDir(environment)` / `cliBinaryName()`
-  // helpers and the dev orchestrator's `DEV_CLI_BIN_DIR` agree on.
-  // Windows uses `.exe` for SEA binaries; `.cmd` wrappers (dev
-  // orchestrator on Windows) are NOT included here - Windows
-  // service registration goes through Scheduled Tasks via
+  // Mirrors what Desktop's `cliBinDir()` / `cliBinaryName()` helpers and the
+  // dev orchestrator's per-run `cliBinDir` (scripts/dev-desktop.js,
+  // `buildDevDesktopRunPaths`) agree on. Windows uses `.exe` for SEA
+  // binaries; `.cmd` wrappers (dev orchestrator on Windows) are NOT included
+  // here - Windows service registration goes through Scheduled Tasks via
   // `windows.ts`, which has its own convention.
   const binaryName = process.platform === "win32" ? "traycer.exe" : "traycer";
-  return join(cliHomeDir(environment), "bin", binaryName);
+  return join(cliInstallHomeDir(environment), "bin", binaryName);
 }

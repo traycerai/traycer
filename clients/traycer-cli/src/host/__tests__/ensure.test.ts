@@ -129,6 +129,7 @@ beforeEach(() => {
       id: environment === "dev" ? "ai.traycer.host.dev" : "ai.traycer.host",
       displayName: "Traycer Host",
       environment,
+      devSlot: null,
     }),
   );
   resolveServiceCliInvocationMock.mockResolvedValue({

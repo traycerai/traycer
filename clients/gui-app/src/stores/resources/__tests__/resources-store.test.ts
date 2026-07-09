@@ -95,6 +95,7 @@ function projection(
     app: null,
     owners: [],
     epic: null,
+    epics: [],
     ...over,
   };
 }
@@ -109,7 +110,7 @@ function makeFakeClient(): FakeClient {
   let captured: ResourcesStreamCallbacks | null = null;
   let closed = false;
   return {
-    factory: (_epicId, callbacks) => {
+    factory: (_scope, callbacks) => {
       captured = callbacks;
       return {
         close: () => {
@@ -129,7 +130,7 @@ describe("createResourcesStore", () => {
   it("populates owners + epic + sampledAt from the initial snapshot", () => {
     const fake = makeFakeClient();
     const handle = createResourcesStore({
-      epicId: "epic-1",
+      scope: { kind: "epic", epicId: "epic-1" },
       streamClientFactory: fake.factory,
     });
 
@@ -157,7 +158,7 @@ describe("createResourcesStore", () => {
   it("treats a missing owner as absent (undefined), not zero", () => {
     const fake = makeFakeClient();
     const handle = createResourcesStore({
-      epicId: "epic-1",
+      scope: { kind: "epic", epicId: "epic-1" },
       streamClientFactory: fake.factory,
     });
 
@@ -179,7 +180,7 @@ describe("createResourcesStore", () => {
   it("derives a task summary from the live owner projection", () => {
     const fake = makeFakeClient();
     const handle = createResourcesStore({
-      epicId: "epic-1",
+      scope: { kind: "epic", epicId: "epic-1" },
       streamClientFactory: fake.factory,
     });
 
@@ -228,7 +229,7 @@ describe("createResourcesStore", () => {
   it("includes host app usage in the task summary totals", () => {
     const fake = makeFakeClient();
     const handle = createResourcesStore({
-      epicId: "epic-1",
+      scope: { kind: "epic", epicId: "epic-1" },
       streamClientFactory: fake.factory,
     });
 
@@ -259,7 +260,7 @@ describe("createResourcesStore", () => {
   it("replaces the epic aggregate on update", () => {
     const fake = makeFakeClient();
     const handle = createResourcesStore({
-      epicId: "epic-1",
+      scope: { kind: "epic", epicId: "epic-1" },
       streamClientFactory: fake.factory,
     });
 
@@ -279,7 +280,7 @@ describe("createResourcesStore", () => {
   it("preserves owner object identity when only sampledAt moves, and swaps it when metrics change", () => {
     const fake = makeFakeClient();
     const handle = createResourcesStore({
-      epicId: "epic-1",
+      scope: { kind: "epic", epicId: "epic-1" },
       streamClientFactory: fake.factory,
     });
     const key = resourceOwnerKey("terminal", "s1");
@@ -320,7 +321,7 @@ describe("createResourcesStore", () => {
   it("tracks connection status and closes the client on dispose", () => {
     const fake = makeFakeClient();
     const handle = createResourcesStore({
-      epicId: "epic-1",
+      scope: { kind: "epic", epicId: "epic-1" },
       streamClientFactory: fake.factory,
     });
 
@@ -344,7 +345,7 @@ describe("resourcesRegistry", () => {
     const acquire = () =>
       resourcesRegistry.acquire(token.id, token, () =>
         createResourcesStore({
-          epicId: token.id,
+          scope: { kind: "epic", epicId: token.id },
           streamClientFactory: fake.factory,
         }),
       );
@@ -368,13 +369,13 @@ describe("resourcesRegistry", () => {
 
     const handleA = resourcesRegistry.acquire("epic-1", "token-a", () =>
       createResourcesStore({
-        epicId: "epic-1",
+        scope: { kind: "epic", epicId: "epic-1" },
         streamClientFactory: first.factory,
       }),
     );
     const handleB = resourcesRegistry.acquire("epic-1", "token-b", () =>
       createResourcesStore({
-        epicId: "epic-1",
+        scope: { kind: "epic", epicId: "epic-1" },
         streamClientFactory: second.factory,
       }),
     );
@@ -389,13 +390,13 @@ describe("resourcesRegistry", () => {
     const second = makeFakeClient();
     resourcesRegistry.acquire("epic-1", "token-a", () =>
       createResourcesStore({
-        epicId: "epic-1",
+        scope: { kind: "epic", epicId: "epic-1" },
         streamClientFactory: first.factory,
       }),
     );
     resourcesRegistry.acquire("epic-2", "token-b", () =>
       createResourcesStore({
-        epicId: "epic-2",
+        scope: { kind: "epic", epicId: "epic-2" },
         streamClientFactory: second.factory,
       }),
     );

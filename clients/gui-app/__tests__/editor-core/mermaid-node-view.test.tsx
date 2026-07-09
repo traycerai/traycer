@@ -85,6 +85,7 @@ function mountMermaidEditor(opts: {
       user,
       onCommentShortcut: null,
       placeholderText: "Start writing…",
+      titlePlaceholderText: "Untitled",
     }),
   });
   // Insert a mermaidBlock directly so we don't go through markdown parse.

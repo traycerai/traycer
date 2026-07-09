@@ -18,6 +18,7 @@ import {
   makeSelectTabActivation,
   useEpicCanvasStore,
 } from "@/stores/epics/canvas/store";
+import { isBlankTileRef } from "@/stores/epics/canvas/types";
 import { epicCanvasKey } from "@/lib/persist";
 import type {
   EpicCanvasState,
@@ -26,6 +27,10 @@ import type {
   TilePane,
 } from "@/stores/epics/canvas/types";
 import type { DesktopPerWindowSnapshot } from "@/lib/windows/types";
+import {
+  getCurrentNestedFocusTarget,
+  type NestedFocusTarget,
+} from "@/lib/epic-nested-focus-route";
 import { SPEC_A, SPEC_B, SPEC_C, TEST_HOST_ID } from "./canvas-test-fixtures";
 
 // Resolve a pane's tab payloads in strip order via tilesByInstanceId.
@@ -74,6 +79,12 @@ function requirePane(canvas: EpicCanvasState, paneId: string): TilePane {
   const pane = findPaneById(canvas.root, paneId);
   if (pane === null) throw new Error(`Expected pane ${paneId}`);
   return pane;
+}
+
+function requireNestedFocusTarget(tabId: string): NestedFocusTarget {
+  const target = getCurrentNestedFocusTarget(requireCanvas(tabId));
+  if (target === null) throw new Error(`Expected focus target for ${tabId}`);
+  return target;
 }
 
 function requirePersistedCanvasByTabId(): Readonly<Record<string, unknown>> {
@@ -574,6 +585,244 @@ describe("epic canvas store header tabs", () => {
     const afterPane = requirePane(after, paneId);
     expect(afterPane.activeTabId).toBe(SPEC_B.instanceId);
     expect(afterPane.activationHistory).toEqual([SPEC_B.instanceId]);
+  });
+
+  it("applies nested route focus without opening a new canvas tile", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-route-focus", "Epic Route Focus");
+    store.openTileInTab(tabId, SPEC_A);
+    store.openTileInTab(tabId, SPEC_B);
+
+    const before = requireCanvas(tabId);
+    const paneId = before.activePaneId;
+    if (paneId === null) throw new Error("expected active pane");
+    expect(requirePane(before, paneId).activeTabId).toBe(SPEC_B.instanceId);
+    expect(allTabIds(before)).toEqual([SPEC_A.id, SPEC_B.id]);
+
+    store.applyNestedRouteFocus(tabId, {
+      paneId,
+      tileInstanceId: SPEC_A.instanceId,
+    });
+
+    const after = requireCanvas(tabId);
+    expect(requirePane(after, paneId).activeTabId).toBe(SPEC_A.instanceId);
+    expect(after.activePaneId).toBe(paneId);
+    expect(allTabIds(after)).toEqual([SPEC_A.id, SPEC_B.id]);
+  });
+
+  it("prepares exact targets for selecting tabs and focusing panes", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-prepare-select", "Prepare Select");
+    store.openTileInTab(tabId, SPEC_A);
+    store.openTileInTab(tabId, SPEC_B);
+    const sourcePaneId = requireCanvas(tabId).activePaneId;
+    if (sourcePaneId === null) throw new Error("expected source pane");
+
+    expect(
+      store.prepareSetActiveTileTabFocusTarget(
+        tabId,
+        sourcePaneId,
+        SPEC_A.instanceId,
+      ),
+    ).toEqual({ paneId: sourcePaneId, tileInstanceId: SPEC_A.instanceId });
+    expect(
+      store.prepareSetActiveTileTabFocusTarget(
+        tabId,
+        sourcePaneId,
+        SPEC_A.instanceId,
+      ),
+    ).toEqual({ paneId: sourcePaneId, tileInstanceId: SPEC_A.instanceId });
+
+    const emptyTarget = store.prepareSplitPaneEmptyFocusTarget(
+      tabId,
+      sourcePaneId,
+      "horizontal",
+    );
+    if (emptyTarget === null) throw new Error("expected empty pane target");
+    expect(emptyTarget.tileInstanceId).toBeUndefined();
+    expect(
+      store.prepareSetActiveTilePaneFocusTarget(tabId, sourcePaneId),
+    ).toEqual({ paneId: sourcePaneId, tileInstanceId: SPEC_A.instanceId });
+    expect(
+      store.prepareSetActiveTilePaneFocusTarget(tabId, emptyTarget.paneId),
+    ).toEqual(emptyTarget);
+  });
+
+  it("prepares open targets for dedup, preview promotion, blank reuse, and fill-in-place", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-prepare-open", "Prepare Open");
+    store.openTileInTab(tabId, SPEC_A);
+    store.openTileInTab(tabId, SPEC_B);
+    const paneId = requireCanvas(tabId).activePaneId;
+    if (paneId === null) throw new Error("expected pane");
+
+    expect(store.prepareOpenTileInTabFocusTarget(tabId, SPEC_A)).toEqual({
+      paneId,
+      tileInstanceId: SPEC_A.instanceId,
+    });
+
+    const previewTabId = store.openEpicTab(
+      "epic-prepare-preview",
+      "Prepare Preview",
+    );
+    store.openTilePreviewInTab(previewTabId, SPEC_A);
+    const previewPaneId = requireCanvas(previewTabId).activePaneId;
+    if (previewPaneId === null) throw new Error("expected preview pane");
+    expect(
+      requirePane(requireCanvas(previewTabId), previewPaneId).previewTabId,
+    ).toBe(SPEC_A.instanceId);
+    expect(store.prepareOpenTileInTabFocusTarget(previewTabId, SPEC_A)).toEqual(
+      { paneId: previewPaneId, tileInstanceId: SPEC_A.instanceId },
+    );
+    expect(
+      requirePane(requireCanvas(previewTabId), previewPaneId).previewTabId,
+    ).toBeNull();
+
+    const firstBlankTarget = store.prepareOpenBlankTabInPaneFocusTarget(
+      tabId,
+      paneId,
+    );
+    if (firstBlankTarget === null) throw new Error("expected blank target");
+    const blankInstanceId = firstBlankTarget.tileInstanceId;
+    if (blankInstanceId === undefined) throw new Error("expected blank tile");
+    const blankRef = requireCanvas(tabId).tilesByInstanceId[blankInstanceId];
+    if (blankRef === undefined) throw new Error("expected blank ref");
+    expect(isBlankTileRef(blankRef)).toBe(true);
+    expect(store.prepareOpenBlankTabInPaneFocusTarget(tabId, paneId)).toEqual(
+      firstBlankTarget,
+    );
+
+    const fillTarget = store.prepareOpenTileInPaneFocusTarget(
+      tabId,
+      paneId,
+      SPEC_C,
+    );
+    if (fillTarget === null || fillTarget.tileInstanceId === undefined) {
+      throw new Error("expected fill-in-place target");
+    }
+    expect(fillTarget.tileInstanceId).not.toBe(blankInstanceId);
+    expect(
+      requireCanvas(tabId).tilesByInstanceId[fillTarget.tileInstanceId]?.id,
+    ).toBe(SPEC_C.id);
+    expect(
+      store.prepareOpenTileInPaneFocusTarget(tabId, "missing-pane", SPEC_A),
+    ).toBeNull();
+  });
+
+  it("prepares split and active-move targets", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-prepare-split", "Prepare Split");
+    store.openTileInTab(tabId, SPEC_A);
+    const sourcePaneId = requireCanvas(tabId).activePaneId;
+    if (sourcePaneId === null) throw new Error("expected source pane");
+
+    const splitTarget = store.prepareSplitPaneWithNodeFocusTarget(
+      tabId,
+      sourcePaneId,
+      "right",
+      SPEC_B,
+    );
+    if (splitTarget === null || splitTarget.tileInstanceId === undefined) {
+      throw new Error("expected split target");
+    }
+    expect(splitTarget.paneId).not.toBe(sourcePaneId);
+    expect(
+      requireCanvas(tabId).tilesByInstanceId[splitTarget.tileInstanceId]?.id,
+    ).toBe(SPEC_B.id);
+
+    const emptyTarget = store.prepareSplitPaneEmptyFocusTarget(
+      tabId,
+      splitTarget.paneId,
+      "horizontal",
+    );
+    if (emptyTarget === null) throw new Error("expected empty split target");
+    expect(emptyTarget.tileInstanceId).toBeUndefined();
+
+    store.setActiveTileTab(
+      tabId,
+      splitTarget.paneId,
+      splitTarget.tileInstanceId,
+    );
+    const movedTarget = store.prepareMoveActiveTabOnTabStripFocusTarget(tabId, {
+      sourcePaneId: splitTarget.paneId,
+      tabId: splitTarget.tileInstanceId,
+      targetPaneId: emptyTarget.paneId,
+      targetIndex: 0,
+    });
+
+    expect(movedTarget).toEqual({
+      paneId: emptyTarget.paneId,
+      tileInstanceId: splitTarget.tileInstanceId,
+    });
+  });
+
+  it("prepares close fallbacks for active targets and null for inactive close", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-prepare-close", "Prepare Close");
+    store.openTileInTab(tabId, SPEC_A);
+    store.openTileInTab(tabId, SPEC_B);
+    const paneId = requireCanvas(tabId).activePaneId;
+    if (paneId === null) throw new Error("expected pane");
+
+    expect(
+      store.prepareCloseCanvasTabFocusTarget(tabId, paneId, SPEC_B.instanceId),
+    ).toEqual({ paneId, tileInstanceId: SPEC_A.instanceId });
+
+    store.openTileInTab(tabId, SPEC_B);
+    store.setActiveTileTab(tabId, paneId, SPEC_A.instanceId);
+
+    expect(
+      store.prepareCloseCanvasTabFocusTarget(tabId, paneId, SPEC_B.instanceId),
+    ).toBeNull();
+    expect(allTabIds(requireCanvas(tabId))).toEqual([SPEC_A.id]);
+
+    const inactivePaneTarget = store.prepareSplitPaneWithNodeFocusTarget(
+      tabId,
+      paneId,
+      "right",
+      SPEC_C,
+    );
+    if (inactivePaneTarget === null) {
+      throw new Error("expected inactive pane setup");
+    }
+    store.setActiveTilePane(tabId, paneId);
+    expect(
+      store.prepareCloseCanvasPaneFocusTarget(tabId, inactivePaneTarget.paneId),
+    ).toBeNull();
+
+    const emptyFallback = store.prepareCloseAllCanvasTabsFocusTarget(
+      tabId,
+      paneId,
+    );
+    if (emptyFallback === null) {
+      throw new Error("expected empty fallback target");
+    }
+    expect(emptyFallback.paneId).not.toBe(paneId);
+    expect(emptyFallback.tileInstanceId).toBeUndefined();
+    expect(requireNestedFocusTarget(tabId)).toEqual(emptyFallback);
+  });
+
+  it("prepares null for resize layout updates while preserving the raw mutation", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-prepare-resize", "Prepare Resize");
+    store.openTileInTab(tabId, SPEC_A);
+    const paneId = requireCanvas(tabId).activePaneId;
+    if (paneId === null) throw new Error("expected pane");
+    store.splitPaneWithNode(tabId, paneId, "right", SPEC_B);
+    const canvas = requireCanvas(tabId);
+    if (canvas.root === null || canvas.root.kind !== "group") {
+      throw new Error("expected split group");
+    }
+
+    expect(
+      store.prepareResizeSplitFocusTarget(tabId, canvas.root.id, [0.25, 0.75]),
+    ).toBeNull();
+    expect(requireCanvas(tabId).sizesByGroupId[canvas.root.id]).toEqual([
+      0.25, 0.75,
+    ]);
+    expect(requireNestedFocusTarget(tabId)).toEqual(
+      getCurrentNestedFocusTarget(requireCanvas(tabId)),
+    );
   });
 
   it("keeps a freshly-created untitled (empty-name) tab through a projection round-trip", () => {
