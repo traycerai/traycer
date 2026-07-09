@@ -178,6 +178,14 @@ export function useEpicRouteSynchronization(
     applyNestedRouteFocus,
   ]);
 
+  // The nested-route target we last moved DOM focus to. This effect re-runs on
+  // every canvas mutation - a title rename gives `useEpicCanvas` a new identity
+  // while the applied target stays byte-for-byte the same - and the restore is
+  // only meant to service genuine pane/tab navigation. Gating on an actual
+  // target change keeps a bare rename from re-focusing the tile, which would
+  // eject a user typing in the body or paint a stray selection ring after a
+  // tab-strip rename.
+  const lastRestoredNestedTargetRef = useRef<NestedFocusTarget | null>(null);
   useEffect(() => {
     if (!snapshotLoaded) return;
     if (!nestedFocusEnabled) return;
@@ -189,8 +197,18 @@ export function useEpicRouteSynchronization(
     if (!nestedRouteTargetApplied) {
       return;
     }
+    if (
+      areNestedFocusTargetsEqual(
+        lastRestoredNestedTargetRef.current,
+        resolvedNestedRouteTarget,
+      )
+    ) {
+      return;
+    }
+    const targetToFocus = resolvedNestedRouteTarget;
     const frame = window.requestAnimationFrame(() => {
-      focusNestedRouteTarget(resolvedNestedRouteTarget);
+      lastRestoredNestedTargetRef.current = targetToFocus;
+      focusNestedRouteTarget(targetToFocus);
     });
     return () => {
       window.cancelAnimationFrame(frame);
