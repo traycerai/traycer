@@ -112,6 +112,26 @@ export function handleSetContentProtection(
 }
 
 /**
+ * Windows-only: repaints the native window controls (min/max/close) drawn by
+ * Chromium's Window Controls Overlay. The `BrowserWindow`'s `titleBarOverlay`
+ * colors are static after creation, so the renderer pushes theme-derived
+ * colors here on every theme change to keep the controls in sync with the
+ * active theme / light-dark mode. macOS draws OS-native traffic lights and
+ * Linux uses default chrome, so both are no-ops.
+ */
+export function handleSetTitleBarOverlay(
+  event: IpcMainInvokeEvent,
+  color: unknown,
+  symbolColor: unknown,
+): void {
+  if (process.platform !== "win32") return;
+  if (typeof color !== "string" || typeof symbolColor !== "string") return;
+  const resolved = resolveSenderWindow(event);
+  if (resolved === null) return;
+  resolved.window.setTitleBarOverlay({ color, symbolColor });
+}
+
+/**
  * Windows-only: places a 16×16 overlay on the bottom-right corner of the
  * taskbar button (e.g., a red dot for "needs attention", a number badge,
  * or a checkmark for "task complete"). Renderer passes a data-URL or

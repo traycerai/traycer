@@ -62,6 +62,7 @@ import type { HostInstallRecord } from "../../manifest/host-install";
 function sampleRecord(version: string): HostInstallRecord {
   return {
     version,
+    runtimeVersion: null,
     platform: "darwin",
     arch: "arm64",
     installedAt: "2026-01-01T00:00:00.000Z",

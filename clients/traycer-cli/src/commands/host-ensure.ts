@@ -40,6 +40,7 @@ export function buildHostEnsureCommand(args: HostEnsureArgs): CommandFn {
         registered: result.registered,
         running: result.running,
         version: result.version,
+        runtimeVersion: result.runtimeVersion,
         action: result.action,
         serviceLifecycle: result.serviceLifecycle,
         postSwapError: result.postSwapError,
@@ -59,7 +60,11 @@ function buildHuman(result: HostEnsureResult): string {
 }
 
 function describeAction(result: HostEnsureResult): string {
-  const version = result.version ?? "unknown";
+  // Prefer the archive's own build stamp: `version` is the caller's
+  // idempotency identity and can lag the installed bytes when an older CLI
+  // installs a newer archive (the echo then names a build that isn't the
+  // one that just started).
+  const version = result.runtimeVersion ?? result.version ?? "unknown";
   switch (result.action) {
     case "noop":
       return `host already ready (version=${version})`;

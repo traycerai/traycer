@@ -56,6 +56,7 @@ import {
 function sampleRecord(version: string): HostInstallRecord {
   return {
     version,
+    runtimeVersion: null,
     platform: "darwin",
     arch: "arm64",
     installedAt: "2026-05-15T00:00:00.000Z",
@@ -106,6 +107,31 @@ describe("manifest/host-install - install record I/O", () => {
     await writeHostInstallRecord("production", record);
     const read = await readHostInstallRecord("production");
     expect(read).toEqual(record);
+  });
+
+  it("round-trips a populated runtimeVersion", async () => {
+    const record = {
+      ...sampleRecord("1.2.3"),
+      runtimeVersion: "staging.1783550586518.bb8c937d9",
+    };
+    await writeHostInstallRecord("production", record);
+    expect((await readHostInstallRecord("production"))?.runtimeVersion).toBe(
+      "staging.1783550586518.bb8c937d9",
+    );
+  });
+
+  it("reads legacy records without runtimeVersion as null (tolerant read)", async () => {
+    const legacy: Record<string, unknown> = { ...sampleRecord("1.2.3") };
+    delete legacy.runtimeVersion;
+    mkdirSync(paths.hostInstallDir("production"), { recursive: true });
+    writeFileSync(
+      paths.hostInstallRecordPath("production"),
+      JSON.stringify(legacy),
+      "utf8",
+    );
+    const read = await readHostInstallRecord("production");
+    expect(read?.version).toBe("1.2.3");
+    expect(read?.runtimeVersion).toBeNull();
   });
 
   it("returns null when no record exists for the environment", async () => {
