@@ -12,7 +12,7 @@
 export type Environment = string;
 
 export const config = {
-  environment: "staging" as Environment,
+  environment: "dev" as Environment,
   // Concrete per-build identity, stamped at install time by the deploy
   // script (alongside `environment`). `0.0.0-dev` in source / after
   // `--restore`; a real install bakes `<target>.<epochMs>.<gitSha>`, shared
