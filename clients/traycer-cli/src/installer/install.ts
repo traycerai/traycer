@@ -3,6 +3,7 @@ import {
   mkdir,
   mkdtemp,
   readdir,
+  readFile,
   rename,
   rm,
   stat,
@@ -173,6 +174,17 @@ export async function installHost(
       staging.stagingDir,
       osPlatform(),
     );
+
+    // The archive's own build stamp - the same value the running host will
+    // publish in pid.json. The sidecar sits beside the executable (the
+    // build emits it into the runtime dir root), so anchor the read there
+    // rather than guessing the archive's top-level layout. Recorded
+    // alongside (never instead of) the caller-derived `version` so the
+    // record describes the bytes it actually installed even when the
+    // installing CLI is an older build (see HostInstallRecord.runtimeVersion).
+    const runtimeVersion = await readExtractedRuntimeVersion(
+      dirname(executablePath),
+    );
     logger.debug("Host install executable resolved", {
       environment: opts.environment,
       version: staging.version,
@@ -221,6 +233,7 @@ export async function installHost(
 
     const record: HostInstallRecord = {
       version: staging.version,
+      runtimeVersion,
       platform,
       arch,
       installedAt: new Date().toISOString(),
@@ -518,6 +531,32 @@ async function stageRegistry(opts: StageRegistryOptions): Promise<StageResult> {
   };
 }
 
+// Windows releases a terminated process's directory/file handles
+// asynchronously, so a rename issued right after the OS service stop
+// (which force-kills the host tree) can still observe EBUSY/EPERM for a
+// brief window even though the host is already dead. Retry a few times with
+// a short backoff (~2.5s total). POSIX renames don't raise these codes, so
+// this is a no-op there.
+const RENAME_RETRY_CODES = new Set(["EBUSY", "EPERM", "EACCES", "ENOTEMPTY"]);
+async function renameWithRetry(from: string, to: string): Promise<void> {
+  const delaysMs = [50, 100, 200, 400, 800, 1000];
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await rename(from, to);
+      return;
+    } catch (cause) {
+      const code =
+        cause && typeof cause === "object" && "code" in cause
+          ? String((cause as { code?: unknown }).code)
+          : "";
+      if (attempt >= delaysMs.length || !RENAME_RETRY_CODES.has(code)) {
+        throw cause;
+      }
+      await new Promise((resolve) => setTimeout(resolve, delaysMs[attempt]));
+    }
+  }
+}
+
 interface AtomicSwapOptions {
   readonly environment: Environment;
   readonly stagingDir: string;
@@ -548,10 +587,10 @@ async function atomicSwap(opts: AtomicSwapOptions): Promise<void> {
     // so the rename target is empty. We delete the trash copy after
     // the new install is in place - there is no rollback cache by
     // design.
-    await rename(target, trash);
+    await renameWithRetry(target, trash);
   }
   try {
-    await rename(opts.stagingDir, target);
+    await renameWithRetry(opts.stagingDir, target);
   } catch (cause) {
     logger.error(
       "Host install atomic swap failed",
@@ -561,9 +600,19 @@ async function atomicSwap(opts: AtomicSwapOptions): Promise<void> {
       },
       errorFromUnknown(cause),
     );
-    // Restore the previous install if the rename of the new one fails.
+    // Restore the previous install if the rename of the new one fails. The
+    // same transient Windows lock that failed the swap can also fail the
+    // restore, so it gets the same retry; if it still fails we log rather
+    // than mask the swap error about to be thrown - but a silent failure
+    // here would leave no install at all with nothing pointing at why.
     if (targetExists) {
-      await rename(trash, target).catch(() => undefined);
+      await renameWithRetry(trash, target).catch((restoreCause) => {
+        logger.error(
+          "Host install rollback failed - previous install left aside",
+          { target, trash },
+          errorFromUnknown(restoreCause),
+        );
+      });
     }
     throw cliError({
       code: CLI_ERROR_CODES.HOST_INSTALL_FAILED,
@@ -575,6 +624,31 @@ async function atomicSwap(opts: AtomicSwapOptions): Promise<void> {
   if (targetExists) {
     await rm(trash, { recursive: true, force: true });
   }
+}
+
+// Reads the `version.json` sidecar the host build emits into the archive
+// root (traycer-host/scripts/build-host-sea.cjs, writeRuntimeVersionJson).
+// Absent or malformed (archives predating the sidecar, hand-rolled trees)
+// degrades to null - the record then simply carries no runtime stamp.
+export async function readExtractedRuntimeVersion(
+  extractedDir: string,
+): Promise<string | null> {
+  let raw: string;
+  try {
+    raw = await readFile(join(extractedDir, "version.json"), "utf8");
+  } catch {
+    return null;
+  }
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed !== null && typeof parsed === "object") {
+      const version = (parsed as Record<string, unknown>).version;
+      if (typeof version === "string" && version.length > 0) return version;
+    }
+  } catch {
+    // fall through
+  }
+  return null;
 }
 
 function deriveLocalVersion(sourcePath: string): string {

@@ -1,4 +1,8 @@
-import { installHost, type InstallSourceArg } from "../installer";
+import {
+  installHost,
+  type InstallHostLifecycle,
+  type InstallSourceArg,
+} from "../installer";
 import { readHostInstallRecord } from "../manifest/host-install";
 import type { ProgressInfo } from "../runner/output";
 import type { RuntimeContext } from "../runner/runtime";
@@ -40,6 +44,10 @@ export interface HostProvisionResult {
   readonly registered: boolean;
   readonly running: boolean;
   readonly version: string | null;
+  // The installed archive's own build stamp (install record
+  // `runtimeVersion`) - what the running host will actually report. Display
+  // truth only; `version` remains the idempotency identity.
+  readonly runtimeVersion: string | null;
   readonly action: HostProvisionAction;
   // Present only for the full-install branch; null for noop / start /
   // service-only so the caller can tell which path ran.
@@ -82,6 +90,7 @@ interface ProvisionState {
   readonly registered: boolean;
   readonly running: boolean;
   readonly version: string | null;
+  readonly runtimeVersion: string | null;
 }
 
 export async function provisionHost(
@@ -268,9 +277,9 @@ async function runInstall(
     bytes: null,
     totalBytes: null,
   });
-  // When the host owns service registration, install the bytes with an
-  // inert lifecycle that never touches the OS service. Otherwise bootstrap
-  // the service post-swap (clean-machine register + start).
+  // When the host owns service registration, install the bytes without service
+  // bootstrap. On Windows, still stop the slot first so stale processes do not
+  // keep the install directory open during the swap.
   const handle = opts.registerService
     ? createServiceInstallLifecycle({
         environment: opts.runtime.environment,
@@ -280,9 +289,14 @@ async function runInstall(
         },
       })
     : null;
+  const lifecycle =
+    handle !== null
+      ? handle.lifecycle
+      : buildBytesOnlyInstallLifecycle(controller, label);
   opts.runtime.logger.debug("Host provisioning install lifecycle prepared", {
     environment: opts.runtime.environment,
     lifecycleEnabled: handle !== null,
+    preSwapCleanupEnabled: handle === null && process.platform === "win32",
   });
   // Already inside the per-environment CLI lock - call installHost directly
   // (it expects the caller to hold the lock).
@@ -290,7 +304,7 @@ async function runInstall(
     environment: opts.runtime.environment,
     source,
     onProgress: progress,
-    lifecycle: handle !== null ? handle.lifecycle : INERT_LIFECYCLE,
+    lifecycle,
     recordVersionOverride: opts.recordVersionOverride,
   });
   const post = await readProvisionState(controller, label, opts.runtime);
@@ -308,6 +322,7 @@ async function runInstall(
     registered: post.registered,
     running: post.running,
     version: result.record.version,
+    runtimeVersion: result.record.runtimeVersion,
     action: "installed",
     serviceLifecycle:
       handle !== null
@@ -322,12 +337,16 @@ async function runInstall(
   };
 }
 
-// Lifecycle that leaves the OS service entirely untouched - the host
-// (desktop SMAppService) owns registration + start.
-const INERT_LIFECYCLE = {
-  beforeSwap: (): Promise<void> => Promise.resolve(),
-  afterSwap: (): Promise<void> => Promise.resolve(),
-};
+function buildBytesOnlyInstallLifecycle(
+  controller: ServiceController,
+  label: ServiceLabel,
+): InstallHostLifecycle {
+  return {
+    beforeSwap: (): Promise<void> =>
+      process.platform === "win32" ? controller.stop(label) : Promise.resolve(),
+    afterSwap: (): Promise<void> => Promise.resolve(),
+  };
+}
 
 async function runServiceRegister(
   opts: ProvisionHostOptions,
@@ -371,6 +390,7 @@ async function runServiceRegister(
     registered: post.registered,
     running: post.running,
     version: post.version,
+    runtimeVersion: post.runtimeVersion,
     action: "service-registered",
     serviceLifecycle: null,
     postSwapError: null,
@@ -403,6 +423,7 @@ async function runStart(
     registered: post.registered,
     running: post.running,
     version: state.version,
+    runtimeVersion: state.runtimeVersion,
     action: "started",
     serviceLifecycle: null,
     postSwapError: null,
@@ -417,12 +438,14 @@ async function readProvisionState(
   // A malformed install record (or status probe failure) is treated as
   // "not present" so provisioning self-heals rather than wedging.
   let recordVersion: string | null = null;
+  let recordRuntimeVersion: string | null = null;
   let installed = false;
   try {
     const record = await readHostInstallRecord(runtime.environment);
     if (record !== null) {
       installed = true;
       recordVersion = record.version;
+      recordRuntimeVersion = record.runtimeVersion;
     }
   } catch (err) {
     runtime.logger.warn("Host provisioning install record probe failed", {
@@ -447,7 +470,13 @@ async function readProvisionState(
     registered = false;
     running = false;
   }
-  return { installed, registered, running, version: recordVersion };
+  return {
+    installed,
+    registered,
+    running,
+    version: recordVersion,
+    runtimeVersion: recordRuntimeVersion,
+  };
 }
 
 // "latest", `--from`, and the packaged archive carry synthetic local
@@ -484,6 +513,7 @@ function noopResult(state: ProvisionState): HostProvisionResult {
     registered: state.registered,
     running: state.running,
     version: state.version,
+    runtimeVersion: state.runtimeVersion,
     action: "noop",
     serviceLifecycle: null,
     postSwapError: null,
