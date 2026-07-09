@@ -178,6 +178,14 @@ export function useEpicRouteSynchronization(
     applyNestedRouteFocus,
   ]);
 
+  // The nested-route target we last moved DOM focus to. This effect re-runs on
+  // every canvas mutation - a title rename gives `useEpicCanvas` a new identity
+  // while the applied target stays byte-for-byte the same - and the restore is
+  // only meant to service genuine pane/tab navigation. Gating on an actual
+  // target change keeps a bare rename from re-focusing the tile, which would
+  // eject a user typing in the body or paint a stray selection ring after a
+  // tab-strip rename.
+  const lastRestoredNestedTargetRef = useRef<NestedFocusTarget | null>(null);
   useEffect(() => {
     if (!snapshotLoaded) return;
     if (!nestedFocusEnabled) return;
@@ -189,8 +197,18 @@ export function useEpicRouteSynchronization(
     if (!nestedRouteTargetApplied) {
       return;
     }
+    if (
+      areNestedFocusTargetsEqual(
+        lastRestoredNestedTargetRef.current,
+        resolvedNestedRouteTarget,
+      )
+    ) {
+      return;
+    }
+    const targetToFocus = resolvedNestedRouteTarget;
     const frame = window.requestAnimationFrame(() => {
-      focusNestedRouteTarget(resolvedNestedRouteTarget);
+      lastRestoredNestedTargetRef.current = targetToFocus;
+      focusNestedRouteTarget(targetToFocus);
     });
     return () => {
       window.cancelAnimationFrame(frame);
@@ -479,6 +497,15 @@ function focusNestedRouteTarget(target: NestedFocusTarget): void {
       ? findActivePaneElement(target.paneId)
       : findSelectedTileElement(target.tileInstanceId);
   if (element === null) {
+    return;
+  }
+  // The pane / tab container is an ancestor of the tile's editing surface, and
+  // this effect re-runs on every canvas mutation (a title rename, for one). If
+  // focus already lives inside the target, moving it up to the container would
+  // blur that deeper element - ejecting a user mid-type from the artifact body.
+  // Only pull focus up when it is currently elsewhere, i.e. a genuine
+  // pane/tab switch that this restore is meant to service.
+  if (element.contains(document.activeElement)) {
     return;
   }
   element.focus({ preventScroll: true });
