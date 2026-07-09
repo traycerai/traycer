@@ -56,6 +56,19 @@ vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => MOCK_HOST_CLIENT,
 }));
 
+// HarnessModelPickerImpl (mounted inside the tile tree via the composer
+// toolbar) resolves the create-profile gate's client through
+// useHostClientForHostId, which unconditionally calls useHostClientFor,
+// which calls useHostClient from @/lib/host/runtime directly (same barrel
+// bypass as useTabHostClient above). Stub the hook directly, mirroring
+// harness-model-picker.test.tsx's convention for this exact hook - null is a
+// production-legitimate value (useProvidersListForClient/useHostQuery own the
+// client === null disabled gate) so no consumer downstream needs a real
+// client here.
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => null,
+}));
+
 // The chat registry now OWNS its transport (built in its factory) and drives
 // tests through the `__setChatStreamClientFactoryForTests` override, so it no
 // longer consumes these per-tile hooks. They're stubbed only so any other
