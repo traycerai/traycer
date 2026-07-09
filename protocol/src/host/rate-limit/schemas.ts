@@ -45,9 +45,19 @@ export type RateLimitUsageResponse = z.infer<
 // aperture the v1.0/v1.1 fields describe. Added as a minor (NOT an in-place
 // edit to v1.1) so a shipped v1.1 host still negotiates: `providerId` is
 // optional, so an unset field leaves today's aperture behavior unchanged.
+//
+// Also carries `profileId`: which of `providerId`'s logged-in profiles
+// (subscriptions) to read usage for. `null` = the ambient/host login (or, on
+// a host build that predates profiles, the only login there is). Added as a
+// bare additive/defaulted field rather than another minor bump - it is safe
+// in both directions (an old host ignores the extra key and answers with
+// ambient-only usage; an old client's omitted key resolves to `null` here) -
+// see the released-peer compat gate's "added optional properties are safe"
+// rule.
 export const rateLimitUsageRequestSchemaV12 =
   rateLimitUsageRequestSchemaV11.extend({
     providerId: providerIdSchema.optional(),
+    profileId: z.string().nullable().default(null),
   });
 export type RateLimitUsageRequestV12 = z.infer<
   typeof rateLimitUsageRequestSchemaV12

@@ -92,6 +92,14 @@ export const prepareTuiLaunchRequestSchema = z.object({
   // return/open the newly forked session. This is distinct from
   // `harnessSessionId`: the source id must not be persisted on the new agent.
   forkSourceHarnessSessionId: z.string().nullable().default(null),
+  // Which of the harness's logged-in profiles (subscriptions) to spawn this
+  // launch's adapter with. `null` = the ambient/host login, so older clients
+  // that predate profiles keep today's exact behavior. Carried here (rather
+  // than only read from the persisted `tuiAgents` record) because a brand-new
+  // agent's *first* prepareLaunch fires before `epic.createTuiAgent` persists
+  // that record - the resolver has nothing to look up yet. See the
+  // multi-profile decision log.
+  profileId: z.string().nullable().default(null),
 });
 export type PrepareTuiLaunchRequest = z.infer<
   typeof prepareTuiLaunchRequestSchema

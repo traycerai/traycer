@@ -100,6 +100,17 @@ export const chatSchemaSurfaceBaseline = {
                   "regular",
                   "epic"
                 ]
+              },
+              "profileId": {
+                "default": null,
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               }
             },
             "required": [
@@ -167,6 +178,17 @@ export const chatSchemaSurfaceBaseline = {
                 ]
               },
               "coveredUntilMessageId": {
+                "default": null,
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "profileId": {
                 "default": null,
                 "anyOf": [
                   {
@@ -490,6 +512,39 @@ export const chatSchemaSurfaceBaseline = {
                                   "type": "null"
                                 }
                               ]
+                            },
+                            "profileId": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "labelSnapshot": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "accountUuid": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
                           "required": [
@@ -563,6 +618,39 @@ export const chatSchemaSurfaceBaseline = {
                                   "type": "null"
                                 }
                               ]
+                            },
+                            "profileId": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "labelSnapshot": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "accountUuid": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
                           "required": [
@@ -618,6 +706,39 @@ export const chatSchemaSurfaceBaseline = {
                               "type": "number"
                             },
                             "coveredUntilMessageId": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "profileId": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "labelSnapshot": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "accountUuid": {
                               "default": null,
                               "anyOf": [
                                 {
@@ -697,6 +818,39 @@ export const chatSchemaSurfaceBaseline = {
                                   "type": "null"
                                 }
                               ]
+                            },
+                            "profileId": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "labelSnapshot": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "accountUuid": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
                           "required": [
@@ -751,6 +905,39 @@ export const chatSchemaSurfaceBaseline = {
                               "type": "number"
                             },
                             "coveredUntilMessageId": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "profileId": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "labelSnapshot": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "accountUuid": {
                               "default": null,
                               "anyOf": [
                                 {
@@ -823,6 +1010,39 @@ export const chatSchemaSurfaceBaseline = {
                                   "type": "null"
                                 }
                               ]
+                            },
+                            "profileId": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "labelSnapshot": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "accountUuid": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
                           "required": [
@@ -874,6 +1094,39 @@ export const chatSchemaSurfaceBaseline = {
                               "type": "number"
                             },
                             "coveredUntilMessageId": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "profileId": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "labelSnapshot": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "accountUuid": {
                               "default": null,
                               "anyOf": [
                                 {
@@ -942,6 +1195,39 @@ export const chatSchemaSurfaceBaseline = {
                                   "type": "null"
                                 }
                               ]
+                            },
+                            "profileId": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "labelSnapshot": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "accountUuid": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
                           "required": [
@@ -992,6 +1278,39 @@ export const chatSchemaSurfaceBaseline = {
                               "type": "number"
                             },
                             "coveredUntilMessageId": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "profileId": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "labelSnapshot": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "accountUuid": {
                               "default": null,
                               "anyOf": [
                                 {
@@ -1060,6 +1379,39 @@ export const chatSchemaSurfaceBaseline = {
                                   "type": "null"
                                 }
                               ]
+                            },
+                            "profileId": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "labelSnapshot": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "accountUuid": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
                           "required": [
@@ -1110,6 +1462,39 @@ export const chatSchemaSurfaceBaseline = {
                               "type": "number"
                             },
                             "coveredUntilMessageId": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "profileId": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "labelSnapshot": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "accountUuid": {
                               "default": null,
                               "anyOf": [
                                 {
@@ -1178,6 +1563,39 @@ export const chatSchemaSurfaceBaseline = {
                                   "type": "null"
                                 }
                               ]
+                            },
+                            "profileId": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "labelSnapshot": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "accountUuid": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
                           "required": [
@@ -1237,6 +1655,39 @@ export const chatSchemaSurfaceBaseline = {
                                   "type": "null"
                                 }
                               ]
+                            },
+                            "profileId": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "labelSnapshot": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "accountUuid": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
                           "required": [
@@ -1287,6 +1738,39 @@ export const chatSchemaSurfaceBaseline = {
                               "type": "number"
                             },
                             "coveredUntilMessageId": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "profileId": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "labelSnapshot": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "accountUuid": {
                               "default": null,
                               "anyOf": [
                                 {
@@ -4041,6 +4525,17 @@ export const chatSchemaSurfaceBaseline = {
                   "regular",
                   "epic"
                 ]
+              },
+              "profileId": {
+                "default": null,
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               }
             },
             "required": [
@@ -4049,7 +4544,8 @@ export const chatSchemaSurfaceBaseline = {
               "permissionMode",
               "reasoningEffort",
               "serviceTier",
-              "agentMode"
+              "agentMode",
+              "profileId"
             ],
             "additionalProperties": false
           },
@@ -4121,13 +4617,25 @@ export const chatSchemaSurfaceBaseline = {
                     "type": "null"
                   }
                 ]
+              },
+              "profileId": {
+                "default": null,
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               }
             },
             "required": [
               "harnessId",
               "sessionId",
               "sessionWorkspaceSnapshot",
-              "coveredUntilMessageId"
+              "coveredUntilMessageId",
+              "profileId"
             ],
             "additionalProperties": false
           },
@@ -4449,6 +4957,39 @@ export const chatSchemaSurfaceBaseline = {
                                   "type": "null"
                                 }
                               ]
+                            },
+                            "profileId": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "labelSnapshot": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "accountUuid": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
                           "required": [
@@ -4458,7 +4999,10 @@ export const chatSchemaSurfaceBaseline = {
                             "sessionWorkspaceSnapshot",
                             "claudeMessageUuid",
                             "createdAt",
-                            "coveredUntilMessageId"
+                            "coveredUntilMessageId",
+                            "profileId",
+                            "labelSnapshot",
+                            "accountUuid"
                           ],
                           "additionalProperties": false
                         },
@@ -4526,6 +5070,39 @@ export const chatSchemaSurfaceBaseline = {
                                   "type": "null"
                                 }
                               ]
+                            },
+                            "profileId": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "labelSnapshot": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "accountUuid": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
                           "required": [
@@ -4536,7 +5113,10 @@ export const chatSchemaSurfaceBaseline = {
                             "codexTurnId",
                             "codexUserMessageId",
                             "createdAt",
-                            "coveredUntilMessageId"
+                            "coveredUntilMessageId",
+                            "profileId",
+                            "labelSnapshot",
+                            "accountUuid"
                           ],
                           "additionalProperties": false
                         },
@@ -4594,6 +5174,39 @@ export const chatSchemaSurfaceBaseline = {
                                   "type": "null"
                                 }
                               ]
+                            },
+                            "profileId": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "labelSnapshot": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "accountUuid": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
                           "required": [
@@ -4603,7 +5216,10 @@ export const chatSchemaSurfaceBaseline = {
                             "sessionWorkspaceSnapshot",
                             "opencodeUserMessageId",
                             "createdAt",
-                            "coveredUntilMessageId"
+                            "coveredUntilMessageId",
+                            "profileId",
+                            "labelSnapshot",
+                            "accountUuid"
                           ],
                           "additionalProperties": false
                         },
@@ -4668,6 +5284,39 @@ export const chatSchemaSurfaceBaseline = {
                                   "type": "null"
                                 }
                               ]
+                            },
+                            "profileId": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "labelSnapshot": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "accountUuid": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
                           "required": [
@@ -4677,7 +5326,10 @@ export const chatSchemaSurfaceBaseline = {
                             "sessionWorkspaceSnapshot",
                             "cursorRunId",
                             "createdAt",
-                            "coveredUntilMessageId"
+                            "coveredUntilMessageId",
+                            "profileId",
+                            "labelSnapshot",
+                            "accountUuid"
                           ],
                           "additionalProperties": false
                         },
@@ -4735,6 +5387,39 @@ export const chatSchemaSurfaceBaseline = {
                                   "type": "null"
                                 }
                               ]
+                            },
+                            "profileId": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "labelSnapshot": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "accountUuid": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
                           "required": [
@@ -4744,7 +5429,10 @@ export const chatSchemaSurfaceBaseline = {
                             "sessionWorkspaceSnapshot",
                             "opencodeUserMessageId",
                             "createdAt",
-                            "coveredUntilMessageId"
+                            "coveredUntilMessageId",
+                            "profileId",
+                            "labelSnapshot",
+                            "accountUuid"
                           ],
                           "additionalProperties": false
                         },
@@ -4802,6 +5490,39 @@ export const chatSchemaSurfaceBaseline = {
                                   "type": "null"
                                 }
                               ]
+                            },
+                            "profileId": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "labelSnapshot": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "accountUuid": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
                           "required": [
@@ -4811,7 +5532,10 @@ export const chatSchemaSurfaceBaseline = {
                             "sessionWorkspaceSnapshot",
                             "opencodeUserMessageId",
                             "createdAt",
-                            "coveredUntilMessageId"
+                            "coveredUntilMessageId",
+                            "profileId",
+                            "labelSnapshot",
+                            "accountUuid"
                           ],
                           "additionalProperties": false
                         },
@@ -4866,6 +5590,39 @@ export const chatSchemaSurfaceBaseline = {
                                   "type": "null"
                                 }
                               ]
+                            },
+                            "profileId": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "labelSnapshot": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "accountUuid": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
                           "required": [
@@ -4874,7 +5631,10 @@ export const chatSchemaSurfaceBaseline = {
                             "sessionId",
                             "sessionWorkspaceSnapshot",
                             "createdAt",
-                            "coveredUntilMessageId"
+                            "coveredUntilMessageId",
+                            "profileId",
+                            "labelSnapshot",
+                            "accountUuid"
                           ],
                           "additionalProperties": false
                         },
@@ -4929,6 +5689,39 @@ export const chatSchemaSurfaceBaseline = {
                                   "type": "null"
                                 }
                               ]
+                            },
+                            "profileId": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "labelSnapshot": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "accountUuid": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
                           "required": [
@@ -4937,7 +5730,10 @@ export const chatSchemaSurfaceBaseline = {
                             "sessionId",
                             "sessionWorkspaceSnapshot",
                             "createdAt",
-                            "coveredUntilMessageId"
+                            "coveredUntilMessageId",
+                            "profileId",
+                            "labelSnapshot",
+                            "accountUuid"
                           ],
                           "additionalProperties": false
                         },
@@ -4992,6 +5788,39 @@ export const chatSchemaSurfaceBaseline = {
                                   "type": "null"
                                 }
                               ]
+                            },
+                            "profileId": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "labelSnapshot": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "accountUuid": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
                           "required": [
@@ -5000,7 +5829,10 @@ export const chatSchemaSurfaceBaseline = {
                             "sessionId",
                             "sessionWorkspaceSnapshot",
                             "createdAt",
-                            "coveredUntilMessageId"
+                            "coveredUntilMessageId",
+                            "profileId",
+                            "labelSnapshot",
+                            "accountUuid"
                           ],
                           "additionalProperties": false
                         },
@@ -5055,6 +5887,39 @@ export const chatSchemaSurfaceBaseline = {
                                   "type": "null"
                                 }
                               ]
+                            },
+                            "profileId": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "labelSnapshot": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "accountUuid": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
                           "required": [
@@ -5063,7 +5928,10 @@ export const chatSchemaSurfaceBaseline = {
                             "sessionId",
                             "sessionWorkspaceSnapshot",
                             "createdAt",
-                            "coveredUntilMessageId"
+                            "coveredUntilMessageId",
+                            "profileId",
+                            "labelSnapshot",
+                            "accountUuid"
                           ],
                           "additionalProperties": false
                         },
@@ -5118,6 +5986,39 @@ export const chatSchemaSurfaceBaseline = {
                                   "type": "null"
                                 }
                               ]
+                            },
+                            "profileId": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "labelSnapshot": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "accountUuid": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
                           "required": [
@@ -5126,7 +6027,10 @@ export const chatSchemaSurfaceBaseline = {
                             "sessionId",
                             "sessionWorkspaceSnapshot",
                             "createdAt",
-                            "coveredUntilMessageId"
+                            "coveredUntilMessageId",
+                            "profileId",
+                            "labelSnapshot",
+                            "accountUuid"
                           ],
                           "additionalProperties": false
                         },
@@ -5181,6 +6085,39 @@ export const chatSchemaSurfaceBaseline = {
                                   "type": "null"
                                 }
                               ]
+                            },
+                            "profileId": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "labelSnapshot": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "accountUuid": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
                           "required": [
@@ -5189,7 +6126,10 @@ export const chatSchemaSurfaceBaseline = {
                             "sessionId",
                             "sessionWorkspaceSnapshot",
                             "createdAt",
-                            "coveredUntilMessageId"
+                            "coveredUntilMessageId",
+                            "profileId",
+                            "labelSnapshot",
+                            "accountUuid"
                           ],
                           "additionalProperties": false
                         },
@@ -5244,6 +6184,39 @@ export const chatSchemaSurfaceBaseline = {
                                   "type": "null"
                                 }
                               ]
+                            },
+                            "profileId": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "labelSnapshot": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "accountUuid": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
                           "required": [
@@ -5252,7 +6225,10 @@ export const chatSchemaSurfaceBaseline = {
                             "sessionId",
                             "sessionWorkspaceSnapshot",
                             "createdAt",
-                            "coveredUntilMessageId"
+                            "coveredUntilMessageId",
+                            "profileId",
+                            "labelSnapshot",
+                            "accountUuid"
                           ],
                           "additionalProperties": false
                         },
@@ -5307,6 +6283,39 @@ export const chatSchemaSurfaceBaseline = {
                                   "type": "null"
                                 }
                               ]
+                            },
+                            "profileId": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "labelSnapshot": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "accountUuid": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
                           "required": [
@@ -5315,7 +6324,10 @@ export const chatSchemaSurfaceBaseline = {
                             "sessionId",
                             "sessionWorkspaceSnapshot",
                             "createdAt",
-                            "coveredUntilMessageId"
+                            "coveredUntilMessageId",
+                            "profileId",
+                            "labelSnapshot",
+                            "accountUuid"
                           ],
                           "additionalProperties": false
                         }
