@@ -172,6 +172,11 @@
     "win": {
       "artifactName": "traycer-desktop-windows-${arch}.${ext}",
       "icon": "icon.ico",
+      "signtoolOptions": {
+        "signingHashAlgorithms": [
+          "sha256"
+        ]
+      },
       "target": [
         {
           "target": "nsis",
