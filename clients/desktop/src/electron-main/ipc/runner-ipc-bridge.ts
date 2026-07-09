@@ -35,7 +35,7 @@ import {
   type PerWindowStateChange,
 } from "../windows/per-window-state";
 import {
-  isDialogHostedMenuCommand,
+  isMruFallbackMenuCommand,
   readEpicId,
   readSenderWebContentsId,
 } from "./ipc-parsers";
@@ -129,6 +129,16 @@ export interface IpcPerWindowState {
   clear(windowId: string): void;
   on(event: "change", listener: (change: PerWindowStateChange) => void): void;
   off(event: "change", listener: (change: PerWindowStateChange) => void): void;
+}
+
+/**
+ * Read-only view of the shell's quit lifecycle. The concrete `ShellQuitState`
+ * (main-process startup) structurally satisfies this. The windows registry-change
+ * listener consults it so a `closed` event that is part of a quit does not prune
+ * the per-window restore snapshot.
+ */
+export interface IpcShellQuitState {
+  isQuitting(): boolean;
 }
 
 type IpcAuthSessionChangeListener = (
@@ -257,6 +267,7 @@ export interface RunnerIpcRegistryOptions {
   readonly authSession: IpcDesktopAuthSession;
   readonly support?: IpcSupportService;
   readonly zoomController: IpcZoomController | undefined;
+  readonly quitState?: IpcShellQuitState;
 }
 
 export type RunnerIpcBridgeOptions =
@@ -281,6 +292,7 @@ export class RunnerIpcBridge {
   readonly authSession: IpcDesktopAuthSession;
   readonly support: IpcSupportService;
   readonly zoomController: IpcZoomController;
+  readonly quitState: IpcShellQuitState;
   readonly disposeFns: Array<() => void> = [];
   private readonly syncListeners: Array<{
     channel: string;
@@ -315,6 +327,7 @@ export class RunnerIpcBridge {
       this.authSession = options.authSession;
       this.support = options.support ?? new NullSupportService();
       this.zoomController = options.zoomController ?? new NullZoomController();
+      this.quitState = options.quitState ?? new NeverQuittingShellState();
     } else {
       this.windowRegistry = new SingleWindowRegistry(options.window);
       this.ownership = new NullEpicWindowOwnership();
@@ -322,6 +335,7 @@ export class RunnerIpcBridge {
       this.authSession = new DesktopAuthSession();
       this.support = new NullSupportService();
       this.zoomController = options.zoomController ?? new NullZoomController();
+      this.quitState = new NeverQuittingShellState();
     }
   }
 
@@ -406,7 +420,7 @@ export class RunnerIpcBridge {
     if (target === null) {
       return false;
     }
-    if (isDialogHostedMenuCommand(command) && !target.window.isFocused()) {
+    if (isMruFallbackMenuCommand(command) && !target.window.isFocused()) {
       this.windowRegistry.focusById(target.windowId);
     }
     return this.safeSendToWindow(target.windowId, RunnerHostEvent.menuCommand, {
@@ -825,7 +839,7 @@ export class RunnerIpcBridge {
     if (focused !== undefined) {
       return focused;
     }
-    if (isDialogHostedMenuCommand(command)) {
+    if (isMruFallbackMenuCommand(command)) {
       return this.windowRegistry.getMruRecord();
     }
     return null;
@@ -970,6 +984,16 @@ class SingleWindowRegistry implements IpcWindowRegistry {
   on(_event: "change", _listener: IpcWindowRegistryChangeListener): void {}
 
   off(_event: "change", _listener: IpcWindowRegistryChangeListener): void {}
+}
+
+// Default quit-state for the single-window `window:` bridge variant (and any
+// registry-mode caller that omits `quitState`): the shell is never quitting, so
+// the registry-change listener falls back to the "last remaining window"
+// heuristic alone.
+class NeverQuittingShellState implements IpcShellQuitState {
+  isQuitting(): boolean {
+    return false;
+  }
 }
 
 class NullEpicWindowOwnership implements IpcEpicWindowOwnership {

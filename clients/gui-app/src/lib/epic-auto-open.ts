@@ -13,18 +13,22 @@ export interface AutoOpenRecord {
 
 interface AutoOpenTarget {
   readonly id: string;
-  readonly type: "chat" | "spec" | "ticket" | "story" | "review";
+  readonly type:
+    "chat" | "terminal-agent" | "spec" | "ticket" | "story" | "review";
   readonly name: string;
   readonly hostId: string;
 }
 
-// Terminals are renderer-only and never live in the cloud-backed records
-// auto-open consumes. Exclude them so the narrow target type stays sound.
+// Plain terminals are renderer-only and never live in the cloud-backed records
+// auto-open consumes, so they stay excluded. Terminal-agents (TUI agents) ARE
+// record-backed and openable, so focusing one - e.g. from the resource monitor -
+// must resolve to that agent rather than falling back to an arbitrary chat.
 function isAutoOpenableKind(
   type: EpicNodeKind,
 ): type is AutoOpenTarget["type"] {
   return (
     type === "chat" ||
+    type === "terminal-agent" ||
     type === "spec" ||
     type === "ticket" ||
     type === "story" ||

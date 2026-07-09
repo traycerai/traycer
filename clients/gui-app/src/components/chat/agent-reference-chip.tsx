@@ -2,12 +2,12 @@ import { Bot } from "lucide-react";
 import { useCallback } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import {
   useEpicArtifactRecords,
   useOpenEpicId,
   type EpicTreeRecord,
 } from "@/lib/epic-selectors";
-import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { cn } from "@/lib/utils";
 
 export function AgentReferenceChip(props: {
@@ -42,17 +42,16 @@ function AgentReferenceButton(props: {
   readonly agent: EpicTreeRecord;
   readonly epicId: string;
 }) {
+  const tileNavigation = useEpicTileNavigation();
   const openAgent = useCallback(() => {
-    const canvas = useEpicCanvasStore.getState();
-    const tabId = canvas.resolveTargetTabForEpic(props.epicId, undefined);
-    canvas.openTileInTab(tabId, {
+    tileNavigation.openTileInEpic(props.epicId, {
       id: props.agent.id,
       instanceId: uuidv4(),
       type: props.agent.type,
       name: props.agent.name,
       hostId: props.agent.hostId,
     });
-  }, [props.agent, props.epicId]);
+  }, [props.agent, props.epicId, tileNavigation]);
 
   return (
     <button

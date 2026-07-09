@@ -1,13 +1,17 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { readHostPidMetadata } from "../../host/pid-metadata";
+import { dirname, join } from "node:path";
+import {
+  readHostPidMetadata,
+  removeHostPidMetadata,
+} from "../../host/pid-metadata";
 import { CLI_ERROR_CODES, cliError } from "../../runner/errors";
 import { isProcessAlive } from "../../store/cli-lock";
 import type { CliInvocation } from "../cli-binary";
 import { escapeXml } from "../escape-xml";
 import { windowsTaskName, type ServiceLabel } from "../label";
 import { ProcessRunError, runCommand } from "../process-runner";
+import { cliInstallHomeDir, hostHomeDir } from "../../store/paths";
 import type {
   InstallServiceOptions,
   ServiceController,
@@ -20,22 +24,21 @@ import type {
 // fall back to user-only and surface a doctor message rather than
 // prompting for UAC.
 
-// Pluggable runner shape kept consistent with macOS so the three
-// platform-controller factories expose the same signature. Windows
-// currently doesn't thread the runner through; production calls
-// `runCommand` directly. Tests pass `null`.
+// Pluggable runner shape kept consistent with macOS so tests can exercise the
+// controller without touching schtasks/taskkill.
 export type ProcessRunner = typeof runCommand;
 
 export function createWindowsController(
-  _runner: ProcessRunner | null,
+  runner: ProcessRunner | null,
 ): ServiceController {
+  const run = runner ?? runCommand;
   return {
     install: (options) => installService(options),
-    uninstall: (options) => uninstallService(options),
+    uninstall: (options) => uninstallService(options, run),
     status: (label) => statusService(label),
-    stop: (label) => stopService(label),
+    stop: (label) => stopService(label, run),
     start: (label) => startService(label),
-    restart: (label) => restartService(label),
+    restart: (label) => restartService(label, run),
   };
 }
 
@@ -52,6 +55,7 @@ async function installService(options: InstallServiceOptions): Promise<void> {
   // built-in `utf16le` encoder paired with a leading U+FEFF BOM
   // handles surrogate pairs / non-BMP code points (emoji, etc.) that
   // the hand-rolled writeUInt16LE-per-char loop would corrupt.
+  await writeHiddenHostLauncher(options);
   const xmlBody = buildTaskXml({ label: options.label, cli: options.cli });
   await writeFile(xmlPath, Buffer.from(`﻿${xmlBody}`, "utf16le"));
   try {
@@ -87,20 +91,29 @@ async function installService(options: InstallServiceOptions): Promise<void> {
 
 async function uninstallService(
   options: UninstallServiceOptions,
+  run: ProcessRunner,
 ): Promise<void> {
   const taskName = windowsTaskName(options.label);
-  await runCommand("schtasks", ["/End", "/TN", taskName], {
+  await run("schtasks", ["/End", "/TN", taskName], {
     env: undefined,
     cwd: undefined,
     timeoutMs: 30_000,
     tolerateNonZeroExit: true,
   });
-  await runCommand("schtasks", ["/Delete", "/TN", taskName, "/F"], {
+  // Reap the orphaned host tree so the host doesn't keep running (and serving
+  // its port) after the task is deleted.
+  await killHostProcessTree(options.label, run);
+  await run("schtasks", ["/Delete", "/TN", taskName, "/F"], {
     env: undefined,
     cwd: undefined,
     timeoutMs: 30_000,
     tolerateNonZeroExit: true,
   });
+  await rm(hiddenHostLauncherPath(options.label), { force: true });
+  // Same rationale as stopService: the force-kill above skips the host's
+  // graceful pid.json cleanup, and metadata surviving an uninstall reads as
+  // a crashed (rather than removed) host to anything that finds it later.
+  await removeHostPidMetadata(options.label.environment);
 }
 
 async function statusService(label: ServiceLabel): Promise<ServiceStatus> {
@@ -136,13 +149,53 @@ async function statusService(label: ServiceLabel): Promise<ServiceStatus> {
   return { state: "stopped", version: null, listenUrl: null, pid: null };
 }
 
-async function stopService(label: ServiceLabel): Promise<void> {
-  await runCommand("schtasks", ["/End", "/TN", windowsTaskName(label)], {
+async function stopService(
+  label: ServiceLabel,
+  run: ProcessRunner,
+): Promise<void> {
+  await run("schtasks", ["/End", "/TN", windowsTaskName(label)], {
     env: undefined,
     cwd: undefined,
     timeoutMs: 30_000,
     tolerateNonZeroExit: true,
   });
+  await killHostProcessTree(label, run);
+  // The force-kill above never lets the host honor its "remove pid.json on
+  // graceful shutdown" contract, and metadata left behind makes this
+  // deliberate stop indistinguishable from a crash - the desktop's health
+  // watchdog would resurrect the host the user just stopped.
+  await removeHostPidMetadata(label.environment);
+}
+
+// `schtasks /End` terminates the task's root process but can leave the host's
+// child `node` process orphaned - Task Scheduler does not job-object the tree,
+// so a wrapper -> node chain survives. A stale host keeps serving its port, and
+// (worse) its CWD stays open inside the install dir, so the next install-swap
+// rename fails with EBUSY. Kill the processes a slot-scoped scan verifies by
+// exe path/command line - that covers the recorded pid.json host too, when it
+// is genuinely still the host. The raw recorded pid is used only when the scan
+// itself is unavailable: a host that died without cleanup leaves pid.json
+// behind, and Windows may have recycled that pid for an unrelated process an
+// unverified `taskkill /T /F` would take down.
+async function killHostProcessTree(
+  label: ServiceLabel,
+  run: ProcessRunner,
+): Promise<void> {
+  const scannedPids = await findSlotProcessIds(label, run);
+  const pidMetadata =
+    scannedPids === null ? await readHostPidMetadata(label.environment) : null;
+  const fallbackPids = pidMetadata === null ? [] : [pidMetadata.pid];
+  const pids = uniqueProcessIds(scannedPids ?? fallbackPids);
+  await Promise.all(
+    pids.map((pid) =>
+      run("taskkill", ["/T", "/F", "/PID", String(pid)], {
+        env: undefined,
+        cwd: undefined,
+        timeoutMs: 30_000,
+        tolerateNonZeroExit: true,
+      }).catch(() => undefined),
+    ),
+  );
 }
 
 async function startService(label: ServiceLabel): Promise<void> {
@@ -163,16 +216,22 @@ async function startService(label: ServiceLabel): Promise<void> {
   }
 }
 
-async function restartService(label: ServiceLabel): Promise<void> {
+async function restartService(
+  label: ServiceLabel,
+  run: ProcessRunner,
+): Promise<void> {
   const taskName = windowsTaskName(label);
-  await runCommand("schtasks", ["/End", "/TN", taskName], {
+  await run("schtasks", ["/End", "/TN", taskName], {
     env: undefined,
     cwd: undefined,
     timeoutMs: 30_000,
     tolerateNonZeroExit: true,
   });
+  // Reap the orphaned host tree before re-running, otherwise the old node keeps
+  // its port + install dir and the fresh task races a stale host.
+  await killHostProcessTree(label, run);
   try {
-    await runCommand("schtasks", ["/Run", "/TN", taskName], {
+    await run("schtasks", ["/Run", "/TN", taskName], {
       env: undefined,
       cwd: undefined,
       timeoutMs: 30_000,
@@ -199,9 +258,129 @@ function describeCause(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
 }
 
+// Returns null (rather than an empty list) when the scan could not run at
+// all, so the caller can distinguish "verified: nothing to kill" from
+// "unknown: PowerShell unavailable".
+async function findSlotProcessIds(
+  label: ServiceLabel,
+  run: ProcessRunner,
+): Promise<readonly number[] | null> {
+  try {
+    const result = await run(
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        buildSlotProcessScanScript({
+          hostHome: hostHomeDir(label.environment),
+          currentPid: process.pid,
+        }),
+      ],
+      {
+        env: undefined,
+        cwd: undefined,
+        timeoutMs: 10_000,
+        tolerateNonZeroExit: true,
+      },
+    );
+    return parseProcessIdJson(result.stdout);
+  } catch {
+    return null;
+  }
+}
+
+interface SlotProcessScanOptions {
+  readonly hostHome: string;
+  readonly currentPid: number;
+}
+
+function buildSlotProcessScanScript(options: SlotProcessScanOptions): string {
+  const hostPaths = powershellStringArray(
+    slotHostProcessPaths(options.hostHome),
+  );
+  return [
+    "$ErrorActionPreference = 'SilentlyContinue'",
+    `$excluded = @(${options.currentPid}, $PID)`,
+    `$hostPaths = @(${hostPaths})`,
+    "$matches = Get-CimInstance Win32_Process | Where-Object {",
+    "  $pidValue = [int]$_.ProcessId",
+    "  if ($excluded -contains $pidValue) {",
+    "    $false",
+    "  } else {",
+    "    $exe = ([string]$_.ExecutablePath).ToLowerInvariant().Replace('/', '\\')",
+    "    $cmd = ([string]$_.CommandLine).ToLowerInvariant().Replace('/', '\\')",
+    '    $text = $exe + "`n" + $cmd',
+    "    $hostMatch = $false",
+    "    foreach ($path in $hostPaths) {",
+    "      if ($text.Contains($path)) { $hostMatch = $true; break }",
+    "    }",
+    "    $hostMatch",
+    "  }",
+    "}",
+    "@($matches | Select-Object -ExpandProperty ProcessId) | ConvertTo-Json -Compress",
+  ].join("\n");
+}
+
+function slotHostProcessPaths(hostHome: string): readonly string[] {
+  return [
+    processPathPrefix(join(hostHome, "install")),
+    processPathPrefix(join(hostHome, "install-staging")),
+    processPath(join(hostHome, "install.old-")),
+    processPath(join(hostHome, "host.log")),
+    processPath(join(hostHome, "pid.json")),
+  ];
+}
+
+function processPath(value: string): string {
+  return value
+    .replace(/[\\/]+$/, "")
+    .toLowerCase()
+    .replace(/\//g, "\\");
+}
+
+function processPathPrefix(value: string): string {
+  return `${processPath(value)}\\`;
+}
+
+function powershellStringArray(values: readonly string[]): string {
+  return values.map((value) => `'${value.replace(/'/g, "''")}'`).join(", ");
+}
+
+function parseProcessIdJson(stdout: string): readonly number[] {
+  const trimmed = stdout.trim();
+  if (trimmed.length === 0) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return [];
+  }
+  const values = Array.isArray(parsed) ? parsed : [parsed];
+  return values.filter(isKillableProcessId);
+}
+
+function uniqueProcessIds(values: readonly number[]): readonly number[] {
+  return Array.from(new Set(values.filter(isKillableProcessId)));
+}
+
+function isKillableProcessId(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isInteger(value) &&
+    value > 0 &&
+    value !== process.pid
+  );
+}
+
 interface BuildTaskXmlOptions {
   readonly label: ServiceLabel;
   readonly cli: CliInvocation;
+}
+
+interface TaskExecAction {
+  readonly command: string;
+  readonly argumentsLine: string;
 }
 
 // Quote a single token for a Windows command line the way CommandLineToArgvW
@@ -214,12 +393,67 @@ function quoteWindowsArg(arg: string): string {
   return `"${escaped}"`;
 }
 
+function quoteVbsString(value: string): string {
+  return `"${value.replace(/"/g, '""')}"`;
+}
+
+function hiddenHostLauncherPath(label: ServiceLabel): string {
+  // Install-scoped (not the shared environment home): each dev slot registers
+  // its own Scheduled Task with its own CliInvocation, so the launcher must be
+  // per-slot too - a shared path would let one slot's install overwrite the
+  // launcher another slot's task runs.
+  return join(cliInstallHomeDir(label.environment), "host-start-hidden.vbs");
+}
+
+function buildHiddenHostLauncher(cli: CliInvocation): string {
+  const commandLine = [cli.command, ...cli.args, "host", "start"]
+    .map(quoteWindowsArg)
+    .join(" ");
+  return [
+    "Option Explicit",
+    "Dim shell",
+    "Dim exitCode",
+    'Set shell = CreateObject("WScript.Shell")',
+    `exitCode = shell.Run(${quoteVbsString(commandLine)}, 0, True)`,
+    "WScript.Quit exitCode",
+    "",
+  ].join("\r\n");
+}
+
+async function writeHiddenHostLauncher(
+  options: BuildTaskXmlOptions,
+): Promise<void> {
+  const launcherPath = hiddenHostLauncherPath(options.label);
+  await mkdir(dirname(launcherPath), { recursive: true });
+  const body = buildHiddenHostLauncher(options.cli);
+  await writeFile(launcherPath, Buffer.from(`\uFEFF${body}`, "utf16le"));
+}
+
+function windowsSystemExecutable(filename: string): string {
+  const root =
+    process.env.SystemRoot ?? process.env.SYSTEMROOT ?? "C:\\Windows";
+  return `${root.replace(/[\\/]+$/, "")}\\System32\\${filename}`;
+}
+
+function buildTaskAction(label: ServiceLabel): TaskExecAction {
+  const argv = ["//B", "//Nologo", hiddenHostLauncherPath(label)];
+  return {
+    command: windowsSystemExecutable("wscript.exe"),
+    argumentsLine: argv.map(quoteWindowsArg).join(" "),
+  };
+}
+
 function buildTaskXml(options: BuildTaskXmlOptions): string {
-  // <Command> takes a single executable; <Arguments> takes the rest as
-  // a single string. schtasks parses the latter with shell rules, so
-  // quote each token explicitly.
-  const argv = [...options.cli.args, "host", "start"];
-  const argumentsLine = argv.map(quoteWindowsArg).join(" ");
+  // Task Scheduler shows console-subsystem executables launched directly from
+  // an interactive task. Use the GUI Windows Script Host as the root process,
+  // then have the generated launcher run the CLI hidden.
+  //
+  // `Priority: 4` (Normal band) instead of Task Scheduler's default 7 (Below
+  // Normal CPU + Low I/O priority) - the host does latency-sensitive RPC work
+  // and its priority class is inherited by every child it spawns (git,
+  // provider CLIs), so the throttled band starved the whole app. Windows
+  // counterpart of the macOS LaunchAgent ProcessType Background->Standard fix.
+  const action = buildTaskAction(options.label);
   const userId = resolveTaskUserId();
   return `<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
@@ -252,13 +486,13 @@ function buildTaskXml(options: BuildTaskXmlOptions): string {
     </IdleSettings>
     <AllowStartOnDemand>true</AllowStartOnDemand>
     <Enabled>true</Enabled>
-    <Hidden>false</Hidden>
+    <Hidden>true</Hidden>
     <RunOnlyIfIdle>false</RunOnlyIfIdle>
     <DisallowStartOnRemoteAppSession>false</DisallowStartOnRemoteAppSession>
     <UseUnifiedSchedulingEngine>true</UseUnifiedSchedulingEngine>
     <WakeToRun>false</WakeToRun>
     <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
-    <Priority>7</Priority>
+    <Priority>4</Priority>
     <RestartOnFailure>
       <Interval>PT1M</Interval>
       <Count>3</Count>
@@ -266,8 +500,8 @@ function buildTaskXml(options: BuildTaskXmlOptions): string {
   </Settings>
   <Actions Context="Author">
     <Exec>
-      <Command>${escapeXml(options.cli.command)}</Command>
-      <Arguments>${escapeXml(argumentsLine)}</Arguments>
+      <Command>${escapeXml(action.command)}</Command>
+      <Arguments>${escapeXml(action.argumentsLine)}</Arguments>
     </Exec>
   </Actions>
 </Task>
@@ -310,4 +544,9 @@ function resolveTaskUserId(): string {
   });
 }
 
-export { buildTaskXml as buildScheduledTaskXml };
+export {
+  buildTaskXml as buildScheduledTaskXml,
+  buildHiddenHostLauncher as buildWindowsHiddenHostLauncher,
+  buildSlotProcessScanScript as buildWindowsSlotProcessScanScript,
+  parseProcessIdJson as parseWindowsProcessIdJson,
+};

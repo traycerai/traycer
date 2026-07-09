@@ -5,6 +5,7 @@ import { ArtifactCardSegment } from "@/components/chat/segments/artifact-card-se
 import { readEpicCanvasDragSourceData } from "@/components/epic-canvas/dnd/dnd";
 import { commitResolvedCanvasDrop } from "@/components/epic-canvas/dnd/root-dnd-commits";
 import type { EpicArtifactRef } from "@/stores/epics/canvas/types";
+import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
 
 type TestArtifactProjection = {
   readonly id: string;
@@ -46,9 +47,25 @@ const projection = vi.hoisted<TestProjectionState>(() => ({
 }));
 
 const canvas = vi.hoisted(() => ({
+  tabsById: {
+    "tab-1": {
+      tabId: "tab-1",
+      epicId: "epic-1",
+      name: "Epic 1",
+    },
+  },
   resolveTargetTabForEpic: vi.fn(() => "tab-1"),
   openTileInTab: vi.fn<(tabId: string, node: EpicArtifactRef) => void>(),
+  prepareOpenTileInTabFocusTarget: vi.fn(
+    (tabId: string, node: EpicArtifactRef) => {
+      canvas.openTileInTab(tabId, node);
+      return null;
+    },
+  ),
 }));
+
+const rawNestedFocus: NavigateNestedFocus = (_epicId, _tabId, prepare) =>
+  prepare();
 
 const dnd = vi.hoisted(() => ({
   draggables: [] as CapturedDraggable[],
@@ -542,11 +559,14 @@ describe("<ArtifactCardSegment />", () => {
     const source = readEpicCanvasDragSourceData(drag.data);
     expect(source).not.toBeNull();
     if (source === null) return;
-    commitResolvedCanvasDrop({
-      source,
-      target: { kind: "empty-shell", epicId: "epic-1", viewTabId: "tab-1" },
-      preview: { kind: "empty-shell" },
-    });
+    commitResolvedCanvasDrop(
+      {
+        source,
+        target: { kind: "empty-shell", epicId: "epic-1", viewTabId: "tab-1" },
+        preview: { kind: "empty-shell" },
+      },
+      rawNestedFocus,
+    );
 
     expect(canvas.openTileInTab).toHaveBeenCalledTimes(1);
     const [tabId, node] = canvas.openTileInTab.mock.calls[0];

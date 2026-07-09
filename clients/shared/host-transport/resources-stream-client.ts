@@ -3,6 +3,7 @@ import {
   type AppResourceSnapshotWire,
   type EpicResourceSnapshotWire,
   type OwnerResourceSnapshotWire,
+  type ResourcesSubscribeOpenRequestV11,
   type ResourcesSubscribeServerFrame,
 } from "@traycer/protocol/host/resources/subscribe";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
@@ -26,6 +27,33 @@ export interface ResourcesProjectionPayload {
   readonly app: AppResourceSnapshotWire | null;
   readonly owners: readonly OwnerResourceSnapshotWire[];
   readonly epic: EpicResourceSnapshotWire | null;
+  readonly epics: readonly EpicResourceSnapshotWire[];
+}
+
+export type ResourcesStreamScope =
+  | {
+      readonly kind: "epic";
+      readonly epicId: string;
+    }
+  | {
+      readonly kind: "global";
+    };
+
+const GLOBAL_RESOURCES_EPIC_ID = "__global__";
+
+function openRequestForScope(
+  scope: ResourcesStreamScope,
+): ResourcesSubscribeOpenRequestV11 {
+  if (scope.kind === "epic") {
+    return {
+      epicId: scope.epicId,
+      scope,
+    };
+  }
+  return {
+    epicId: GLOBAL_RESOURCES_EPIC_ID,
+    scope,
+  };
 }
 
 /**
@@ -51,14 +79,14 @@ export interface ResourcesStreamCallbacks {
 
 export interface ResourcesStreamClientOptions {
   readonly wsStreamClient: WsStreamClient<HostStreamRpcRegistry>;
-  readonly epicId: string;
+  readonly scope: ResourcesStreamScope;
   readonly callbacks: ResourcesStreamCallbacks;
 }
 
 /**
  * Typed wrapper over `WsStreamClient` for `resources.subscribe@1.0`.
  *
- * Opens exactly one session on construction (bound to a single `epicId`),
+ * Opens exactly one session on construction (bound to an epic or global scope),
  * binds the callback surface, and exposes `close`. Zod-parses each inbound
  * envelope and dispatches to the typed callback for its `kind`. There are no
  * upstream application frames; closing the session detaches the host-side
@@ -73,9 +101,10 @@ export class ResourcesStreamClient {
     this.callbacks = options.callbacks;
     this.closed = false;
 
-    this.session = options.wsStreamClient.subscribe("resources.subscribe", {
-      epicId: options.epicId,
-    });
+    this.session = options.wsStreamClient.subscribe(
+      "resources.subscribe",
+      openRequestForScope(options.scope),
+    );
     this.session.onServerFrame((envelope, binaryPayload) => {
       this.handleServerFrame(envelope, binaryPayload);
     });
@@ -133,5 +162,6 @@ function toPayload(
     app: frame.app,
     owners: frame.owners,
     epic: frame.epic,
+    epics: frame.epics ?? [],
   };
 }

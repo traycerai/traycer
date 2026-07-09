@@ -7,6 +7,7 @@ import type { ArtifactOperationAction } from "@traycer/protocol/persistence/epic
 import { StaticEpicNodeIcon } from "@/components/epic-canvas/epic-node-tab-icon";
 import { STATUS_LABELS } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { EPIC_NODE_LABELS } from "@/lib/artifacts/node-display";
 import {
   useArtifactById,
@@ -17,7 +18,6 @@ import { artifactDiffRenderable } from "@/lib/chat/artifact-diff-renderable";
 import { artifactOperationVerb } from "@/lib/chat/artifact-operation-verb";
 import { cn } from "@/lib/utils";
 import type { ArtifactSegmentChange } from "@/stores/composer/chat-store";
-import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useArtifactDragSource } from "@/components/epic-canvas/dnd/use-artifact-drag-source";
 import { OpenFullDiffControl } from "./open-full-diff-control";
 import { SnapshotHashInlineDiff } from "./snapshot-hash-inline-diff";
@@ -469,6 +469,7 @@ function ArtifactCardSegmentContent(props: ArtifactCardSegmentProps) {
   const tombstone = useEpicDeletedArtifact(artifactId);
   const epicId = useOpenEpicId();
   const activeHostId = useReactiveActiveHostId();
+  const tileNavigation = useEpicTileNavigation();
   const [diffOpen, setDiffOpen] = useState(false);
 
   // Prefer the tombstone for a delete (the live entry is already gone); else the
@@ -535,9 +536,7 @@ function ArtifactCardSegmentContent(props: ArtifactCardSegmentProps) {
   const openArtifact = (): void => {
     // Re-check the raw conditions so the host id narrows to a non-null string.
     if (isDeleted || live === null || activeHostId === null) return;
-    const canvas = useEpicCanvasStore.getState();
-    const tabId = canvas.resolveTargetTabForEpic(epicId, undefined);
-    canvas.openTileInTab(tabId, {
+    tileNavigation.openTileInEpic(epicId, {
       id: artifactId,
       instanceId: uuidv4(),
       type: displayKind,

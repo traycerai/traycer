@@ -54,6 +54,34 @@ export interface BuildArtifactExtensionsParams {
    * `.tc-editor-prose .is-editor-empty::before` rule in `styles/editor.css`.
    */
   readonly placeholderText: string;
+  /**
+   * Hint rendered inside an empty leading level-1 heading - the Notion-style
+   * "title line" a hand-created artifact opens on (see
+   * `seedArtifactTitleHeading`). Distinct from `placeholderText` (the body
+   * hint) so the title line prompts for a title, not a description.
+   */
+  readonly titlePlaceholderText: string;
+}
+
+/**
+ * Placeholder text for a given empty node: the title hint for the doc's
+ * leading level-1 heading (the "title line"), else the body hint. Exported for
+ * unit tests; the live wiring passes this to `Placeholder`'s function form.
+ */
+export function resolveArtifactPlaceholderText(params: {
+  readonly nodeTypeName: string;
+  readonly headingLevel: number | null;
+  readonly pos: number;
+  readonly titlePlaceholderText: string;
+  readonly placeholderText: string;
+}): string {
+  const isLeadingTitleHeading =
+    params.pos === 0 &&
+    params.nodeTypeName === "heading" &&
+    params.headingLevel === 1;
+  return isLeadingTitleHeading
+    ? params.titlePlaceholderText
+    : params.placeholderText;
 }
 
 /**
@@ -78,8 +106,15 @@ const lowlight = createLowlight(common);
 export function buildArtifactExtensions(
   params: BuildArtifactExtensionsParams,
 ): AnyExtension[] {
-  const { doc, fragment, awareness, user, onCommentShortcut, placeholderText } =
-    params;
+  const {
+    doc,
+    fragment,
+    awareness,
+    user,
+    onCommentShortcut,
+    placeholderText,
+    titlePlaceholderText,
+  } = params;
   const provider: ArtifactAwarenessProvider = { awareness };
 
   return [
@@ -136,7 +171,17 @@ export function buildArtifactExtensions(
     // selection. Mounted on every artifact editor; tiles that don't support
     // comments pass `onCommentShortcut: null` so the keystroke is a no-op.
     CommentShortcutExtension.configure({ onTrigger: onCommentShortcut }),
-    Placeholder.configure({ placeholder: placeholderText }),
+    Placeholder.configure({
+      placeholder: ({ node, pos }) =>
+        resolveArtifactPlaceholderText({
+          nodeTypeName: node.type.name,
+          headingLevel:
+            typeof node.attrs.level === "number" ? node.attrs.level : null,
+          pos,
+          titlePlaceholderText,
+          placeholderText,
+        }),
+    }),
   ];
 }
 

@@ -323,6 +323,11 @@ export class DesktopTrayController {
     if (this.onCommand === null) {
       return;
     }
+    // Tray commands fire while the app is backgrounded or hidden, and the
+    // renderer that handles them lives in the main window - surface it so
+    // the user sees the result (settings pane, sign-in screen, confirm
+    // modal) instead of it landing in an invisible window.
+    this.showMainWindow();
     this.onCommand(command);
   }
 }

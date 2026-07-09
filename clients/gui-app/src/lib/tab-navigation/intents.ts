@@ -8,6 +8,7 @@
  * `tabRouteOptions`) that themselves need the descriptor registry.
  */
 import type { SettingsSectionId } from "@/lib/settings-sections";
+import type { NestedFocusTarget } from "@/lib/epic-nested-focus-route";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 
 export interface EpicRouteFocus {
@@ -23,6 +24,16 @@ export type TabNavigationIntent =
       readonly epicId: string;
       readonly tabId: string;
       readonly focus: EpicRouteFocus;
+      /**
+       * Store-prepared pane/tile target for a CROSS-ROUTE opener that already
+       * mutated the target tab's canvas before navigating (the canvas store
+       * is global and keyed by tabId, so preparing a background tab is
+       * valid). `null` for every plain tab-switch intent (duplicate, close,
+       * command palette, etc.) - those intentionally wipe nested search and
+       * let route-sync canonicalization refill it from the tab's own current
+       * focus. Only `existingEpicTabIntentWithNestedFocus` sets this.
+       */
+      readonly nestedFocus: NestedFocusTarget | null;
     }
   | { readonly kind: "draft"; readonly draftId: string }
   | { readonly kind: "history" }
@@ -45,6 +56,31 @@ export function existingEpicTabIntent(input: {
     epicId: input.epicId,
     tabId: input.tabId,
     focus: input.focus ?? DEFAULT_EPIC_FOCUS,
+    nestedFocus: null,
+  };
+}
+
+/**
+ * Cross-route variant of `existingEpicTabIntent`: carries a store-prepared
+ * nested focus target (pane/tile) so a single top-level navigation commits
+ * both the header-tab switch and the canvas focus atomically, instead of
+ * wiping nested search and relying on route-sync canonicalization to
+ * self-heal it back in on a later pass. Callers already sitting on the
+ * target epic/tab route should use `useEpicNestedFocusNavigation` directly
+ * instead of this factory.
+ */
+export function existingEpicTabIntentWithNestedFocus(input: {
+  readonly epicId: string;
+  readonly tabId: string;
+  readonly focus: EpicRouteFocus | undefined;
+  readonly nestedFocus: NestedFocusTarget | null;
+}): Extract<TabNavigationIntent, { kind: "epic" }> {
+  return {
+    kind: "epic",
+    epicId: input.epicId,
+    tabId: input.tabId,
+    focus: input.focus ?? DEFAULT_EPIC_FOCUS,
+    nestedFocus: input.nestedFocus,
   };
 }
 

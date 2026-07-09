@@ -3,6 +3,10 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { initLogger, log } from "../app/logger";
 import { configureNativeAboutPanel } from "../app/about";
+import {
+  findJumplistCommandInArgv,
+  registerJumplistCommandHandling,
+} from "../app/jumplist-commands";
 import { registerDeepLinkHandling } from "../auth/deep-link";
 import { createMainWindow, loadMainWindow } from "../windows/window-factory";
 import {
@@ -65,6 +69,9 @@ import { DesktopAuthSession } from "../auth/desktop-auth-session";
 import { DesktopSupportService } from "../app/support";
 import { MenuController } from "../menu/menu-controller";
 import { initialRouteForWindowSnapshot } from "./window-initial-route";
+import { ShellQuitState } from "./shell-quit-state";
+import { planActivateWithoutLiveWindow } from "./activate-window-plan";
+import type { RestorableWindowEntry } from "../windows/desktop-state-store";
 import { readResolutionTestDisplay } from "../windows/resolution-test-env";
 import { installNotificationActivationHandler } from "../notifications";
 import {
@@ -115,9 +122,29 @@ import {
   type DesktopConfig,
 } from "../config/desktop-config";
 import { installHostWakeRecovery } from "./host-wake-recovery";
+import { startHostHealthMonitor } from "../host/host-health-monitor";
 import { DESKTOP_APP_NAME } from "../../config";
+import {
+  registerDevSharedLocalStorage,
+  resolveDevSharedLocalStorageFilePath,
+  type DevSharedLocalStorageHandle,
+} from "../dev/dev-shared-local-storage";
 
 const APP_DISPLAY_NAME = DESKTOP_APP_NAME;
+
+// Per-window fresh-snapshot query budget during `before-quit`. Each renderer,
+// on receiving `getFreshUnsyncedSnapshot`, first AWAITS its debounced per-window
+// projection flush (open epic tabs / pane layout / drafts -> main's
+// `PerWindowState`) and only then replies. So by the time this query resolves,
+// main's per-window state - and thus the subsequent `desktopStateStore.flush()`
+// - already reflects the latest layout. 200ms comfortably covers the two local
+// IPC round-trips (projection `update`, then the fresh-snapshot reply) a
+// responsive renderer needs - they are same-machine calls over a small JSON
+// payload, typically well under ~20ms combined. It is deliberately NOT larger:
+// the ceiling exists to bound how long quit hangs when a renderer is frozen
+// (where no timeout would help), and the cached ambient snapshot is the
+// fail-safe fallback on timeout.
+const QUIT_FRESH_UNSYNCED_SNAPSHOT_TIMEOUT_MS = 200;
 
 /**
  * Phased desktop boot.
@@ -140,6 +167,7 @@ export async function runDesktopStartup(): Promise<void> {
     config,
     pendingAuthReturnSignal: false,
     bridge: null,
+    devSharedLocalStorage: null,
   };
 
   runPreReady(state);
@@ -153,6 +181,9 @@ export async function runDesktopStartup(): Promise<void> {
   });
 
   const services = await runWindowPhase(state);
+  state.devSharedLocalStorage?.startPolling(
+    () => services.windowRegistry.getMruRecord()?.window.webContents ?? null,
+  );
 
   runDeferred(state, services);
 }
@@ -164,6 +195,9 @@ interface BootState {
   // a payload-free nudge, so repeated cold-start arrivals collapse.
   pendingAuthReturnSignal: boolean;
   bridge: RunnerIpcBridge | null;
+  // Non-null only when a `DEV_DESKTOP_SLOT` is active (see `runOnReady`);
+  // registration itself (not just polling) is the slot gate.
+  devSharedLocalStorage: DevSharedLocalStorageHandle | null;
 }
 
 // Single delivery path for the browser-return signal: focus + nudge the
@@ -231,6 +265,17 @@ async function runOnReady(state: BootState): Promise<void> {
   setActiveEnvironment(state.config.environment);
 
   await Promise.all([
+    timed("on-ready", "dev-shared-local-storage", () => {
+      // Must register (the extra preload + the ipcMain sync handler) before
+      // the window phase creates the first window - a page's own module-load
+      // scripts (theme-applier.ts, the auth bootstrap) read localStorage at
+      // that point, and the seed preload has to have already run.
+      state.devSharedLocalStorage = registerDevSharedLocalStorage({
+        environment: state.config.environment,
+        env: process.env,
+        filePath: resolveDevSharedLocalStorageFilePath(),
+      });
+    }),
     timed("on-ready", "app-protocol", () => installAppProtocolHandler()),
     timed("on-ready", "app-identity", () =>
       configureAppIdentity(state.config.iconPath),
@@ -372,6 +417,11 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
 
   const tray = await createTraySafe(createMruWindowProxy(windowRegistry));
 
+  // Flipped once `before-quit` fires (any quit path). The windows registry-change
+  // listener reads it so a `closed` event that is part of a quit never prunes the
+  // per-window restore snapshot.
+  const shellQuitState = new ShellQuitState();
+
   log.debug("[desktop] authn base URL", { authnBaseUrl: config.authnBaseUrl });
   const bridge = new RunnerIpcBridge({
     host,
@@ -387,6 +437,7 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
     authSession,
     support,
     zoomController: createdZoomController,
+    quitState: shellQuitState,
   });
   bridge.install();
   state.bridge = bridge;
@@ -417,6 +468,25 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
   });
   menu.install();
 
+  registerJumplistCommandHandling({
+    dispatch: (command) => menu.dispatchShellCommand(command),
+    focusMainWindow: () => {
+      const record = windowRegistry.getMruRecord();
+      if (record !== null) {
+        windowRegistry.focusById(record.windowId);
+      }
+    },
+  });
+  // Cold-start jump-list launch: `--new-epic` is satisfied by the window
+  // startup opens anyway; `--open-settings` must wait for the first renderer
+  // to load before it can host the settings surface.
+  if (findJumplistCommandInArgv(process.argv) === "app.openSettings") {
+    const settingsTarget = windowRegistry.records()[0];
+    settingsTarget?.window.webContents.once("did-finish-load", () => {
+      menu.dispatchShellCommand("app.openSettings");
+    });
+  }
+
   // Drain a browser-return signal captured before the bridge was ready, once
   // the first startup renderer has installed its listeners.
   if (state.pendingAuthReturnSignal) {
@@ -444,6 +514,7 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
     tray,
     desktopStateStore,
     windowGeometryPersistence,
+    quitState: shellQuitState,
   });
 
   return { host, menu, windowRegistry, zoomController: createdZoomController };
@@ -520,6 +591,28 @@ function runDeferred(state: BootState, services: AppServices): void {
     });
     return services.host.bootstrap();
   });
+
+  // Windows-only watchdog for a host that dies without rewriting pid.json
+  // (external kill/crash): the pid-file watcher never fires for those, and
+  // the Scheduled Task cannot restart-on-failure (its hidden-launcher action
+  // detaches the host and exits, so the task completes long before the host
+  // can die). On macOS/Linux the service manager itself supervises the host
+  // (launchd KeepAlive / systemd Restart) and respawns it within seconds -
+  // a desktop-side watchdog there would be redundant at best and, on macOS,
+  // could auto-fire the SMAppService re-register cycle. Started after
+  // bootstrap so the initial 60s readiness wait can't register as an outage.
+  if (process.platform === "win32") {
+    void hostReady.then(() => {
+      const healthMonitor = startHostHealthMonitor({
+        host: services.host,
+        intervalMs: undefined,
+        probe: undefined,
+        readMetadata: undefined,
+        respawn: undefined,
+      });
+      state.bridge?.disposeFns.push(() => healthMonitor.dispose());
+    });
+  }
 
   void timed("deferred", "registry-probe", async () => {
     // `force: true` - matches the app's own `checkForUpdatesNow` on launch
@@ -662,6 +755,7 @@ interface LifecycleServices {
   readonly tray: DesktopTrayController | null;
   readonly desktopStateStore: DesktopStateStore;
   readonly windowGeometryPersistence: WindowGeometryPersistence;
+  readonly quitState: ShellQuitState;
 }
 
 function wireAppLifecycle(state: BootState, services: LifecycleServices): void {
@@ -674,6 +768,20 @@ function wireAppLifecycle(state: BootState, services: LifecycleServices): void {
 
   app.on("activate", () => {
     if (services.windowRegistry.focusMru()) {
+      return;
+    }
+    // No live window to focus (e.g. macOS red-light close of the last window
+    // left the app running). Restore the preserved window snapshot(s) rather
+    // than minting a blank window, so a close-then-reopen keeps the user's tabs,
+    // canvas, and drafts. Falls back to a blank window when nothing restorable
+    // survives.
+    const plan = planActivateWithoutLiveWindow(
+      services.desktopStateStore.getRestorableWindowEntries(),
+    );
+    if (plan.kind === "restore") {
+      for (const entry of plan.entries) {
+        restorePreservedWindowOnActivate(services, entry);
+      }
       return;
     }
     void services.windowRegistry.create({
@@ -697,6 +805,14 @@ function wireAppLifecycle(state: BootState, services: LifecycleServices): void {
       services.windowGeometryPersistence.flushLatest().catch((err) => {
         log.warn("[desktop] window-geometry flush failed", err);
       }),
+      (
+        state.devSharedLocalStorage?.flush(
+          () =>
+            services.windowRegistry.getMruRecord()?.window.webContents ?? null,
+        ) ?? Promise.resolve()
+      ).catch((err) => {
+        log.warn("[desktop] dev-shared-local-storage flush failed", err);
+      }),
     ]);
   };
 
@@ -705,6 +821,7 @@ function wireAppLifecycle(state: BootState, services: LifecycleServices): void {
     services.menu.dispose();
     services.bridge.dispose();
     services.tray?.dispose();
+    state.devSharedLocalStorage?.stopPolling();
   };
 
   const authorizeQuitAfterFlush = (): void => {
@@ -715,6 +832,11 @@ function wireAppLifecycle(state: BootState, services: LifecycleServices): void {
   };
 
   app.on("before-quit", (event) => {
+    // Mark the shell as quitting on the FIRST pass, before any preventDefault or
+    // async work, so the windows registry-change listener preserves every
+    // closing window's restore snapshot for the remainder of the quit - even the
+    // non-last windows a Cmd+Q closes. Idempotent across the multi-pass quit.
+    services.quitState.markQuitting();
     if (quitAuthorized) {
       teardownShellObservers();
       return;
@@ -777,6 +899,7 @@ function wireAppLifecycle(state: BootState, services: LifecycleServices): void {
             log.info(
               "[desktop] before-quit - install failed during reconcile, staying open",
             );
+            services.quitState.resetQuitting();
             return;
           }
           authorizeQuitAfterFlush();
@@ -786,7 +909,7 @@ function wireAppLifecycle(state: BootState, services: LifecycleServices): void {
 
     event.preventDefault();
     void activeBridge
-      .requestFreshUnsyncedSnapshot(200)
+      .requestFreshUnsyncedSnapshot(QUIT_FRESH_UNSYNCED_SNAPSHOT_TIMEOUT_MS)
       .then((snapshot) => {
         if (!activeBridge.hasUnsyncedEdits()) {
           log.info(
@@ -808,11 +931,33 @@ function wireAppLifecycle(state: BootState, services: LifecycleServices): void {
           })
           .catch((err) => {
             log.warn("[desktop] quit decision failed - staying alive", err);
+            services.quitState.resetQuitting();
           });
       })
       .catch((err) => {
         log.warn("[desktop] fresh-snapshot query failed - staying alive", err);
+        services.quitState.resetQuitting();
       });
+  });
+}
+
+// Recreate a preserved window on macOS `activate`, reusing its original id so
+// the in-memory + on-disk per-window snapshot rebinds to it (the renderer reads
+// its snapshot by window id). Mirrors the startup restore path.
+function restorePreservedWindowOnActivate(
+  services: LifecycleServices,
+  entry: RestorableWindowEntry,
+): void {
+  services.windowRegistry.createWithId({
+    windowId: entry.windowId,
+    initialRoute: initialRouteForWindowSnapshot(entry.snapshot),
+    beforeLoad: null,
+  });
+  void services.windowRegistry.loadById(entry.windowId).catch((err) => {
+    log.warn("[desktop] activate restore window load failed", {
+      windowId: entry.windowId,
+      err,
+    });
   });
 }
 

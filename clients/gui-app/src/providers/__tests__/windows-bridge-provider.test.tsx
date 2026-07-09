@@ -384,6 +384,36 @@ describe("<WindowsBridgeProvider />", () => {
     });
   });
 
+  it("still marks hydration complete when the per-window snapshot fetch rejects", async () => {
+    const fake = createDesktopWindowsBridge();
+    const failingBridge = {
+      ...fake.bridge,
+      perWindowState: {
+        ...fake.bridge.perWindowState,
+        get: () => Promise.reject(new Error("perWindowState.get failed")),
+      },
+    } satisfies DesktopWindowsBridge;
+
+    render(
+      <RunnerHostProvider
+        runnerHost={createRunnerHostWithWindows(failingBridge)}
+      >
+        <WindowsBridgeProvider>
+          <HydrationProbe />
+        </WindowsBridgeProvider>
+      </RunnerHostProvider>,
+    );
+
+    expect(screen.getByTestId("hydration-state").textContent).toBe("pending");
+
+    await waitFor(() => {
+      expect(screen.getByTestId("hydration-state").textContent).toBe(
+        "hydrated",
+      );
+    });
+    expect(fake.perWindowUpdates).toEqual([]);
+  });
+
   it("does not write the restored per-window snapshot back during first hydration", async () => {
     vi.useFakeTimers();
     const fake = createDesktopWindowsBridge();

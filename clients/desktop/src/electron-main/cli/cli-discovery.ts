@@ -1,13 +1,17 @@
 import { execFile } from "node:child_process";
-import { constants } from "node:fs";
+import { createHash } from "node:crypto";
+import { constants, createReadStream } from "node:fs";
 import {
   access,
   chmod,
   copyFile,
   mkdir,
+  readdir,
   readFile,
   realpath,
+  rename,
   rm,
+  stat,
   symlink,
   writeFile,
 } from "node:fs/promises";
@@ -15,6 +19,7 @@ import { homedir, platform } from "node:os";
 import { delimiter, dirname, join, parse } from "node:path";
 import { config, isDevBuild } from "../../config";
 import { environmentSubdir } from "../host/host-paths";
+import { devDesktopSlotForEnvironment } from "../host/dev-desktop-slot";
 import { log } from "../app/logger";
 import devWrapperPaths from "./dev-wrapper-paths.json";
 
@@ -24,31 +29,58 @@ import devWrapperPaths from "./dev-wrapper-paths.json";
  *
  *   production → ~/.traycer/cli/         (no suffix)
  *   dev        → ~/.traycer/cli/dev/
+ *   dev run    → ~/.traycer/cli/dev-runs/<slot>/ when DEV_DESKTOP_SLOT is set
  *   staging    → ~/.traycer/cli/staging/
  *
  *   <slot>/manifest.json   - install record written by Desktop / CLI / package manager
  *   <slot>/bin/traycer     - stable per-user CLI binary the service manifest points at
  *
- * Both Desktop and the CLI install commands resolve the SAME slot paths, so
- * the Desktop's view of `~/.traycer/cli/` stays in lockstep with the CLI's
- * own and a dev Desktop never reads the prod slot's manifest. This is what
- * lets `discoverCli` resolve uniformly across slots - no dev-specific branch.
+ * Both Desktop and the CLI install commands resolve the SAME install paths, so
+ * the Desktop's view of `~/.traycer/cli/` stays in lockstep with the CLI's own
+ * and a dev Desktop never reads the prod slot's manifest. In multi-run dev,
+ * the env-propagated run slot selects the per-run install surface while shared
+ * CLI config/credentials remain in the normal dev home.
  */
 const TRAYCER_HOME = join(homedir(), ".traycer");
 const CLI_HOME = join(TRAYCER_HOME, "cli");
-const CLI_SLOT_HOME = environmentSubdir(CLI_HOME, config.environment);
-const CLI_BIN_DIR = join(CLI_SLOT_HOME, "bin");
+
+// Resolved on every call (not cached at module load) so a value read before
+// `DEV_DESKTOP_SLOT` is set in a test - or, in principle, before Electron's
+// startup sequence has fully populated `process.env` - can never linger
+// stale for the rest of the process. `config.environment` and
+// `DEV_DESKTOP_SLOT` are both fixed for the lifetime of a real process, so
+// this has no runtime behavior difference outside tests - it only removes
+// the load-order hazard.
+function resolveCliSlotHome(): string {
+  const devDesktopSlot = devDesktopSlotForEnvironment(
+    config.environment,
+    process.env,
+  );
+  return devDesktopSlot === null
+    ? environmentSubdir(CLI_HOME, config.environment)
+    : join(CLI_HOME, "dev-runs", devDesktopSlot);
+}
+
+function resolveCliBinDir(): string {
+  return join(resolveCliSlotHome(), "bin");
+}
+
 // The CLI upgrade temp/extract area (staged-binary swap), kept distinct from
 // the slot root. Named "upgrade-staging" for clarity.
-const CLI_STAGING_DIR = join(CLI_SLOT_HOME, "upgrade-staging");
-const CLI_MANIFEST_PATH = join(CLI_SLOT_HOME, "manifest.json");
-const DESKTOP_RECONCILE_STATE_PATH = join(
-  CLI_SLOT_HOME,
-  "desktop-reconcile.json",
-);
+function resolveCliStagingDir(): string {
+  return join(resolveCliSlotHome(), "upgrade-staging");
+}
+
+function resolveCliManifestPath(): string {
+  return join(resolveCliSlotHome(), "manifest.json");
+}
+
+function resolveDesktopReconcileStatePath(): string {
+  return join(resolveCliSlotHome(), "desktop-reconcile.json");
+}
 
 export function cliManifestPath(): string {
-  return CLI_MANIFEST_PATH;
+  return resolveCliManifestPath();
 }
 
 /**
@@ -58,19 +90,19 @@ export function cliManifestPath(): string {
  * an installer-owned manifest file.
  */
 export function desktopReconcileStatePath(): string {
-  return DESKTOP_RECONCILE_STATE_PATH;
+  return resolveDesktopReconcileStatePath();
 }
 
 export function cliBinDir(): string {
-  return CLI_BIN_DIR;
+  return resolveCliBinDir();
 }
 
 export function stableCliBinaryPath(): string {
-  return join(CLI_BIN_DIR, cliBinaryName());
+  return join(resolveCliBinDir(), cliBinaryName());
 }
 
 export function cliStagingDir(): string {
-  return CLI_STAGING_DIR;
+  return resolveCliStagingDir();
 }
 
 /**
@@ -85,7 +117,7 @@ export async function stageBundledCliForUpgrade(opts: {
   readonly bundledCliPath: string;
   readonly version: string;
 }): Promise<string> {
-  await mkdir(CLI_STAGING_DIR, { recursive: true, mode: 0o755 });
+  await mkdir(resolveCliStagingDir(), { recursive: true, mode: 0o755 });
   const base = cliBinaryName();
   const ext = platform() === "win32" ? ".exe" : "";
   const sanitized = opts.version.replace(/[^A-Za-z0-9._-]/g, "_");
@@ -94,7 +126,7 @@ export async function stageBundledCliForUpgrade(opts: {
   // upgrade rename target (`stableCliBinaryPath`) is platform-native, so
   // the staged copy must be too - `<name>-<version>-<platform>-<arch>[.exe]`.
   const fileName = `${parse(base).name}-${sanitized}-${process.platform}-${process.arch}${ext}`;
-  const stagedPath = join(CLI_STAGING_DIR, fileName);
+  const stagedPath = join(resolveCliStagingDir(), fileName);
   await copyFile(opts.bundledCliPath, stagedPath);
   if (platform() !== "win32") {
     await chmod(stagedPath, 0o755);
@@ -225,7 +257,7 @@ export type CliDiscoveryResult =
 export async function readCliManifest(): Promise<CliInstallManifest | null> {
   let raw: string;
   try {
-    raw = await readFile(CLI_MANIFEST_PATH, "utf8");
+    raw = await readFile(resolveCliManifestPath(), "utf8");
   } catch {
     return null;
   }
@@ -234,7 +266,7 @@ export async function readCliManifest(): Promise<CliInstallManifest | null> {
     parsed = JSON.parse(raw);
   } catch {
     log.warn("[cli] install manifest is not valid JSON", {
-      path: CLI_MANIFEST_PATH,
+      path: resolveCliManifestPath(),
     });
     return null;
   }
@@ -246,7 +278,7 @@ export async function readCliManifest(): Promise<CliInstallManifest | null> {
     typeof obj.installedAt !== "string"
   ) {
     log.warn("[cli] install manifest has invalid shape", {
-      path: CLI_MANIFEST_PATH,
+      path: resolveCliManifestPath(),
     });
     return null;
   }
@@ -303,8 +335,12 @@ export async function writeCliManifestPendingUpgrade(
   const existing = existingManifest ?? (await readCliManifest());
   if (existing === null) return null;
   const next: CliInstallManifest = { ...existing, pendingUpgrade: pending };
-  await mkdir(dirname(CLI_MANIFEST_PATH), { recursive: true });
-  await writeFile(CLI_MANIFEST_PATH, JSON.stringify(next, null, 2), "utf8");
+  await mkdir(dirname(resolveCliManifestPath()), { recursive: true });
+  await writeFile(
+    resolveCliManifestPath(),
+    JSON.stringify(next, null, 2),
+    "utf8",
+  );
   return next;
 }
 
@@ -330,7 +366,7 @@ export interface DesktopReconcileState {
 export async function readDesktopReconcileState(): Promise<DesktopReconcileState | null> {
   let raw: string;
   try {
-    raw = await readFile(DESKTOP_RECONCILE_STATE_PATH, "utf8");
+    raw = await readFile(resolveDesktopReconcileStatePath(), "utf8");
   } catch {
     return null;
   }
@@ -339,7 +375,7 @@ export async function readDesktopReconcileState(): Promise<DesktopReconcileState
     parsed = JSON.parse(raw);
   } catch {
     log.warn("[cli] desktop reconcile state is not valid JSON", {
-      path: DESKTOP_RECONCILE_STATE_PATH,
+      path: resolveDesktopReconcileStatePath(),
     });
     return null;
   }
@@ -383,9 +419,9 @@ export async function readDesktopReconcileState(): Promise<DesktopReconcileState
 export async function writeDesktopReconcileState(
   state: DesktopReconcileState,
 ): Promise<void> {
-  await mkdir(dirname(DESKTOP_RECONCILE_STATE_PATH), { recursive: true });
+  await mkdir(dirname(resolveDesktopReconcileStatePath()), { recursive: true });
   await writeFile(
-    DESKTOP_RECONCILE_STATE_PATH,
+    resolveDesktopReconcileStatePath(),
     JSON.stringify(state, null, 2),
     "utf8",
   );
@@ -457,8 +493,7 @@ export async function probeCliVersion(
  *
  * Resolution:
  *   - Dev (unpackaged): the `make dev-desktop` orchestrator stages a CLI
- *     wrapper at the shared layout in `cli/dev-wrapper-paths.json`
- *     (`~/.traycer/cli/dev/bin/traycer`).
+ *     wrapper under this run's computed CLI bin dir.
  *   - Packaged: `<resourcesPath>/cli/<platform>-<arch>/<cliBinaryName>`
  *     (NP-7 layout), then `<resourcesPath>/cli/<cliBinaryName>` (legacy flat).
  */
@@ -475,15 +510,13 @@ export async function resolveBundledCliPath(): Promise<string | null> {
   return (await isExecutable(flat)) ? flat : null;
 }
 
-// The dev CLI wrapper path, from the layout shared with
-// `scripts/dev-desktop.js` + `ipc/host-management-ipc.ts` via
-// `cli/dev-wrapper-paths.json` (segments joined under $HOME).
+// The dev CLI wrapper path in this run's CLI bin dir.
 function devCliWrapperPath(): string {
   const filename =
     process.platform === "win32"
       ? devWrapperPaths.filenameWin32
       : devWrapperPaths.filenamePosix;
-  return join(homedir(), ...devWrapperPaths.segments, filename);
+  return join(resolveCliBinDir(), filename);
 }
 
 /**
@@ -496,19 +529,19 @@ function devCliWrapperPath(): string {
  *   4. None - caller surfaces the first-launch / Doctor recovery path.
  *
  * Dev builds skip the PATH lookup. The dev orchestrator
- * (`scripts/dev-desktop.js`) deliberately stages a wrapper at
- * `~/.traycer/cli/dev/bin/traycer` that execs the source-tree CLI entry
- * through bun, and that wrapper is what every dev surface (OS service
- * registration, manual CLI invocations from the desktop) is expected to
- * call. A dev workspace inevitably has `node_modules/.bin/traycer` on PATH
- * (bun's bin hoisting), and falling through PATH first would pick the
- * package symlink ahead of the staged wrapper - not what `make
- * dev-desktop` set up, and not the path the service manifest registers.
- * Skipping PATH in dev keeps every CLI call in lockstep with the
- * orchestrator's staging.
+ * (`scripts/dev-desktop.js`) deliberately stages a wrapper in this run's CLI
+ * bin dir that execs the source-tree CLI entry through bun, and that wrapper
+ * is what every dev surface (OS service registration, manual CLI invocations
+ * from the desktop) is expected to call. A dev workspace inevitably has
+ * `node_modules/.bin/traycer` on PATH (bun's bin hoisting), and falling
+ * through PATH first would pick the package symlink ahead of the staged
+ * wrapper - not what `make dev-desktop` set up, and not the path the service
+ * manifest registers. Skipping PATH in dev keeps every CLI call in lockstep
+ * with the orchestrator's staging.
  *
- * The paths above are environment-scoped (`CLI_SLOT_HOME`), so the dev slot
- * reads its own `~/.traycer/cli/dev/...` (never the prod slot's).
+ * The paths above are install-surface scoped (`CLI_SLOT_HOME`), so a
+ * multi-run dev shell reads its own `~/.traycer/cli/dev-runs/<slot>/...`
+ * manifest while keeping shared dev credentials/config outside the run slot.
  *
  * "PATH CLI newer than bundled, trust it" is handled by the caller
  * after a version probe (packaged-build flow); this discovery layer simply
@@ -580,14 +613,25 @@ export async function installBundledCli(opts: {
   readonly version: string;
   readonly source: CliInstallManifest["source"];
 }): Promise<string> {
-  await mkdir(CLI_BIN_DIR, { recursive: true, mode: 0o755 });
+  await mkdir(resolveCliBinDir(), { recursive: true, mode: 0o755 });
   const stablePath = stableCliBinaryPath();
-  // Clear any prior staged binary/symlink so symlink() doesn't EEXIST and a
-  // stale copy never lingers next to a fresh symlink.
-  await rm(stablePath, { force: true });
   if (platform() === "win32") {
+    // The slot binary is essentially ALWAYS running on Windows - the host's
+    // Scheduled Task launcher (`traycer host start`) executes from this exact
+    // path and restarts at every logon, so `rm` would hit the running-image
+    // delete lock and permanently wedge the upgrade in the `pendingUpgrade
+    // (binary-locked)` loop. Windows does allow RENAMING a running image, so
+    // move it aside and copy the new binary into the now-free name; the live
+    // supervisor keeps executing the renamed image and the next host start
+    // picks up the new bytes. Renamed leftovers are swept once their process
+    // exits (same trash pattern as the host installer's `atomicSwap`).
+    await sweepAsideCliBinaries(stablePath);
+    await renameCliBinaryAside(stablePath);
     await copyFile(opts.bundledCliPath, stablePath);
   } else {
+    // Clear any prior staged binary/symlink so symlink() doesn't EEXIST and a
+    // stale copy never lingers next to a fresh symlink.
+    await rm(stablePath, { force: true });
     await symlink(opts.bundledCliPath, stablePath);
   }
   const manifest: CliInstallManifest = {
@@ -597,14 +641,60 @@ export async function installBundledCli(opts: {
     source: opts.source,
     pendingUpgrade: null,
   };
-  await mkdir(dirname(CLI_MANIFEST_PATH), { recursive: true });
-  await writeFile(CLI_MANIFEST_PATH, JSON.stringify(manifest, null, 2), "utf8");
+  await mkdir(dirname(resolveCliManifestPath()), { recursive: true });
+  await writeFile(
+    resolveCliManifestPath(),
+    JSON.stringify(manifest, null, 2),
+    "utf8",
+  );
   log.info("[cli] staged bundled CLI to stable per-user path", {
     stablePath,
     version: opts.version,
     source: opts.source,
   });
   return stablePath;
+}
+
+/**
+ * Move the (possibly running) slot binary out of the stable name so a new
+ * copy can take its place. A missing binary (fresh install, self-heal after
+ * deletion) is not an error. Anything else - e.g. an AV scanner holding the
+ * file without delete sharing, which blocks rename too - propagates to the
+ * caller, where the reconcile's existing `binary-locked` staging path takes
+ * over as the fallback.
+ */
+export async function renameCliBinaryAside(stablePath: string): Promise<void> {
+  try {
+    await rename(stablePath, `${stablePath}.old-${Date.now()}`);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw err;
+  }
+}
+
+/**
+ * Best-effort sweep of `<binary>.old-<ts>` leftovers from previous
+ * rename-aside installs. Deletion fails while a renamed image is still
+ * executing (the host supervisor from before the swap) - those unlock once
+ * the host restarts onto the new binary, so each install pass retries the
+ * whole set and the trash never outlives one host generation by much.
+ */
+export async function sweepAsideCliBinaries(stablePath: string): Promise<void> {
+  const dir = dirname(stablePath);
+  const prefix = `${parse(stablePath).base}.old-`;
+  let names: string[];
+  try {
+    names = await readdir(dir);
+  } catch {
+    return;
+  }
+  await Promise.all(
+    names
+      .filter((name) => name.startsWith(prefix))
+      .map((name) =>
+        rm(join(dir, name), { force: true }).catch(() => undefined),
+      ),
+  );
 }
 
 /**
@@ -658,6 +748,49 @@ export async function isExecutable(path: string): Promise<boolean> {
 }
 
 /**
+ * True for the `0.0.0*` local-dev placeholder family (see
+ * {@link readBundledCliVersion}): every dogfood/local build stamps it, so
+ * two different local builds are version-indistinguishable. Callers that
+ * need to order two sentinel builds must compare something else (the
+ * reconciler compares binary content - {@link cliBinariesDiffer}).
+ */
+export function isLocalSentinelVersion(version: string): boolean {
+  return version.startsWith("0.0.0");
+}
+
+/**
+ * Content comparison for two CLI binaries, for the one case version
+ * comparison cannot settle: both sides stamped with the local-dev
+ * sentinel. Size mismatch short-circuits; equal sizes fall through to a
+ * streamed sha256 so two ~100MB SEA binaries never load into memory.
+ */
+export async function cliBinariesDiffer(
+  installedPath: string,
+  bundledPath: string,
+): Promise<boolean> {
+  const [installedStat, bundledStat] = await Promise.all([
+    stat(installedPath),
+    stat(bundledPath),
+  ]);
+  if (installedStat.size !== bundledStat.size) return true;
+  const [installedDigest, bundledDigest] = await Promise.all([
+    sha256File(installedPath),
+    sha256File(bundledPath),
+  ]);
+  return installedDigest !== bundledDigest;
+}
+
+function sha256File(path: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const hash = createHash("sha256");
+    const stream = createReadStream(path);
+    stream.once("error", reject);
+    stream.on("data", (chunk) => hash.update(chunk));
+    stream.once("end", () => resolve(hash.digest("hex")));
+  });
+}
+
+/**
  * SemVer-ish comparison: returns 1 if `a` > `b`, -1 if `a` < `b`, 0 if
  * equal or unparseable. Used to decide "PATH CLI newer than bundled,
  * trust it". Pre-release suffixes are stripped - channel discrimination
@@ -674,9 +807,8 @@ export async function isExecutable(path: string): Promise<boolean> {
  * against a real semver but ties with another `0.0.0`-prefixed value.
  */
 export function compareSemver(a: string, b: string): number {
-  const isLocalSentinel = (v: string): boolean => v.startsWith("0.0.0");
-  const aLocal = isLocalSentinel(a);
-  const bLocal = isLocalSentinel(b);
+  const aLocal = isLocalSentinelVersion(a);
+  const bLocal = isLocalSentinelVersion(b);
   if (aLocal && bLocal) return 0;
   if (aLocal) return -1;
   if (bLocal) return 1;

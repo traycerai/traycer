@@ -42,10 +42,13 @@ export interface PersistentHistoryController {
   canGoBack(): boolean; // index > 0 over the live stack
   canGoForward(): boolean; // index < entries.length - 1
   /**
-   * Removes every NON-current entry for which `isDead(href)` is true, remaps the
-   * index to the surviving current entry, re-stamps `__TSR_index` contiguously,
-   * persists, and notifies CONTROLLER subscribers only. Returns whether the
-   * stack changed.
+   * Removes every NON-current entry for which `isDead(href)` is true, then
+   * collapses any adjacent byte-identical entries the removal left behind (or
+   * that were already present) so no two neighbouring entries ever share an
+   * href - two adjacent identical hrefs are always a dead back/forward step.
+   * Remaps the index to the surviving current entry, re-stamps `__TSR_index`
+   * contiguously, persists, and notifies CONTROLLER subscribers only. Returns
+   * whether the stack changed, including a collapse-only change.
    *
    * Critically load-free: it never calls `history.notify()` and so never drives
    * `router.load()`. The current entry is never pruned.
@@ -143,20 +146,27 @@ function buildConsumedInitialRouteKey(
   return `${CONSUMED_INITIAL_ROUTE_KEY_PREFIX}:${windowId ?? "unknown"}:${initialRoute}`;
 }
 
-function loadPersistedState(windowId: string | null): PersistedState {
-  if (typeof window === "undefined") return { entries: ["/"], index: 0 };
-  if (windowId === null) return { entries: ["/"], index: 0 };
+/**
+ * Loads this window's remembered stack, or `null` when nothing usable is
+ * stored (no key, rejected shape, or read failure). Returning `null` - rather
+ * than a `{ entries: ["/"], index: 0 }` default - lets the seed logic tell a
+ * genuinely empty window apart from one whose current entry happens to be `/`,
+ * which matters when merging a shell override into the remembered stack.
+ */
+function loadPersistedState(windowId: string | null): PersistedState | null {
+  if (typeof window === "undefined") return null;
+  if (windowId === null) return null;
   const storageKey = buildStorageKey(windowId);
   try {
     const raw = window.localStorage.getItem(storageKey);
-    if (raw === null) return { entries: ["/"], index: 0 };
+    if (raw === null) return null;
     const parsed: unknown = JSON.parse(raw);
     if (!isPersistedState(parsed)) {
       appLogger.warn("[history] persisted route state rejected", {
         windowId,
       });
       removePersistedState(storageKey);
-      return { entries: ["/"], index: 0 };
+      return null;
     }
     const safeIndex = Math.min(
       Math.max(parsed.index, 0),
@@ -169,7 +179,7 @@ function loadPersistedState(windowId: string | null): PersistedState {
       error: describeLogError(error),
     });
     removePersistedState(storageKey);
-    return { entries: ["/"], index: 0 };
+    return null;
   }
 }
 
@@ -356,11 +366,86 @@ function capStackInPlace(
   return index - start;
 }
 
+interface PruneSurvivor {
+  readonly href: string;
+  readonly state: LocationState;
+  readonly wasCurrent: boolean;
+}
+
 /**
- * Creates a router history seeded from the explicit `initialRoute` override,
- * or from this window's `localStorage` history when the shell provides no
- * route. Intended for the Electron renderer only - the browser web app should
- * use TanStack's default browser history.
+ * Collapses adjacent byte-identical entries in a `prune`-filtered survivor
+ * list. Two adjacent identical hrefs are always a dead back/forward step
+ * (`go(-1)`/`go(1)` moves the cursor but not the rendered location), so this
+ * runs unconditionally over the whole list - not just over runs the dead-entry
+ * filter just made adjacent. When the current entry is part of a collapsed
+ * run, the surviving slot inherits the current marker so the cursor keeps
+ * pointing at the same href (mirrors the current-preserving collapse in
+ * `replaceState`).
+ */
+function collapseAdjacentDuplicates(
+  survivors: ReadonlyArray<PruneSurvivor>,
+): PruneSurvivor[] {
+  return survivors.reduce<PruneSurvivor[]>((collapsed, entry) => {
+    if (collapsed.length === 0) return [entry];
+    const previous = collapsed[collapsed.length - 1];
+    if (previous.href !== entry.href) {
+      return [...collapsed, entry];
+    }
+    if (entry.wasCurrent) {
+      collapsed[collapsed.length - 1] = { ...previous, wasCurrent: true };
+    }
+    return collapsed;
+  }, []);
+}
+
+/**
+ * Resolves the seed stack (entries + cursor) from the remembered stack and the
+ * shell override. The override is MERGED into the remembered stack rather than
+ * replacing it, so a cold restore keeps the window's back/forward history:
+ *
+ * - No override → restore the remembered stack verbatim (or the bare landing
+ *   when nothing is stored).
+ * - Bare-`/` override → landing seed; the caller has already cleared any
+ *   remembered stack (see `createPersistentMemoryHistory`).
+ * - Override with nothing stored → seed the override alone (fresh window).
+ * - Override equals the remembered current entry → keep the full remembered
+ *   stack + cursor unchanged. This is the restored-launch common case: main
+ *   derives the initial route FROM the same snapshot the stack was persisted
+ *   under, so the two agree and the deep back-history survives. (Bug fix: the
+ *   old code reset to `[override], index 0`, collapsing the stack on every cold
+ *   restore because the sessionStorage consumed-marker never survives a quit.)
+ * - Override differs from the remembered current entry → treat it like a fresh
+ *   navigation: drop forward entries beyond the cursor, append the override,
+ *   and point the cursor at it. Back history up to the previous current entry
+ *   survives.
+ */
+function computeSeededStack(
+  persisted: PersistedState | null,
+  shellOverride: string | null,
+): { entries: string[]; index: number } {
+  if (shellOverride === null) {
+    if (persisted === null) return { entries: ["/"], index: 0 };
+    return { entries: [...persisted.entries], index: persisted.index };
+  }
+  if (shellOverride === "/") return { entries: ["/"], index: 0 };
+  if (persisted === null) return { entries: [shellOverride], index: 0 };
+  if (persisted.entries[persisted.index] === shellOverride) {
+    return { entries: [...persisted.entries], index: persisted.index };
+  }
+  return {
+    entries: [
+      ...persisted.entries.slice(0, persisted.index + 1),
+      shellOverride,
+    ],
+    index: persisted.index + 1,
+  };
+}
+
+/**
+ * Creates a router history seeded from the explicit `initialRoute` override
+ * merged into this window's `localStorage` history, or from that history alone
+ * when the shell provides no route. Intended for the Electron renderer only -
+ * the browser web app should use TanStack's default browser history.
  */
 export function createPersistentMemoryHistory(
   initialRoute: string | null,
@@ -369,15 +454,22 @@ export function createPersistentMemoryHistory(
   const persisted = loadPersistedState(windowId);
   const shellOverride = consumeShellOverride(initialRoute, windowId);
   if (shellOverride === "/") {
+    // A bare-`/` shell override is the deliberate "start at the landing" signal:
+    // the zero-restorable-windows cold start and the auth-fallback redirect both
+    // funnel through it. Discard the remembered stack rather than merging - the
+    // landing is meant to be a clean start, not the tail of a deep back-history
+    // to routes the snapshot no longer references. `persistState` already refuses
+    // to write a `/` current entry, so the immediate persist below leaves
+    // localStorage cleared.
     clearPersistedState(windowId);
   }
 
-  const entries: string[] =
-    shellOverride !== null ? [shellOverride] : [...persisted.entries];
+  const seed = computeSeededStack(persisted, shellOverride);
+  const entries: string[] = seed.entries;
   const states: LocationState[] = entries.map((_entry, i) =>
     makeInitialState(i),
   );
-  let index = shellOverride !== null ? 0 : persisted.index;
+  let index = seed.index;
   // Bound a legacy/oversized seed before anything reads the stack.
   index = capStackInPlace(entries, states, index);
 
@@ -407,6 +499,19 @@ export function createPersistentMemoryHistory(
         entries.splice(index + 1);
         states.splice(index + 1);
       }
+      // The pushed href can land byte-identical to the entry the cursor now
+      // sits on (e.g. a pane close's prepared fallback-focus push re-deriving
+      // the tab it came from). Two adjacent identical hrefs are always a dead
+      // back step, so treat this as landing on the existing entry instead of
+      // manufacturing a duplicate - general adjacent-duplicate guard, mirrors
+      // the collapse in `replaceState`.
+      if (entries[index] === path) {
+        states[index] = state;
+        restampIndices(states);
+        persistState(windowId, entries, index);
+        notifyController();
+        return;
+      }
       entries.push(path);
       states.push(state);
       index = entries.length - 1;
@@ -425,17 +530,36 @@ export function createPersistentMemoryHistory(
       entries[index] = path;
       states[index] = state;
       // Collapse an adjacent byte-identical entry created by an in-place
-      // replace. Two identical adjacent entries are always a dead back step
-      // (`go(-1)` moves the cursor but not the rendered href), so dropping the
-      // redundant current entry and stepping the cursor back onto its identical
+      // replace, on EITHER side of the current entry. Two identical adjacent
+      // entries are always a dead back/forward step (`go(-1)`/`go(1)` moves
+      // the cursor but not the rendered href), so dropping the redundant
       // neighbour is correct for ANY replace - this is a general
-      // adjacent-duplicate guard, not overlay-specific. (Its common producer is
-      // the settings/history overlay, whose entry is pushed onto the same path
-      // and differs only by a search-param flag that this `replace` then clears.)
+      // adjacent-duplicate guard, not overlay-specific. The BEHIND case's
+      // common producer is the settings/history overlay, whose entry is
+      // pushed onto the same path and differs only by a search-param flag
+      // that this `replace` then clears. The AHEAD case's producer is a
+      // cold-load redirect replacing a current overlay entry when the route
+      // it redirects to already sits one step ahead in a restored stack
+      // (`use-system-tab-modal.ts`'s focus-tab-first branches) - left
+      // uncollapsed, `canGoForward()` would stay true over a byte-identical
+      // dead forward step.
+      // Either collapse drops the NEIGHBOUR and keeps the just-replaced entry,
+      // so the state passed to THIS replace survives - the stack stays in
+      // agreement with the location TanStack caches after a replace, instead
+      // of diverging until the next real navigation.
+      let collapsedNeighbour = false;
       if (index > 0 && entries[index - 1] === path) {
-        entries.splice(index, 1);
-        states.splice(index, 1);
+        entries.splice(index - 1, 1);
+        states.splice(index - 1, 1);
         index -= 1;
+        collapsedNeighbour = true;
+      }
+      if (index < entries.length - 1 && entries[index + 1] === path) {
+        entries.splice(index + 1, 1);
+        states.splice(index + 1, 1);
+        collapsedNeighbour = true;
+      }
+      if (collapsedNeighbour) {
         restampIndices(states);
       }
       persistState(windowId, entries, index);
@@ -474,12 +598,25 @@ export function createPersistentMemoryHistory(
       // so the index can be remapped after filtering.
       const survivors = entries
         .map((href, i) => ({ href, state: states[i], wasCurrent: i === index }))
-        .filter((entry) => entry.wasCurrent || !isDead(entry.href));
+        .filter((entry) => {
+          if (entry.wasCurrent) {
+            return true;
+          }
+          return !isDead(entry.href);
+        });
 
-      // Current is never pruned, so a same-length result means nothing changed.
-      if (survivors.length === entries.length) return false;
+      // Collapse any adjacent byte-identical entries the dead-entry removal
+      // left behind (or that were already present), so the stack never ends
+      // up with two neighbouring entries that render the same location - a
+      // dead back/forward step.
+      const collapsed = collapseAdjacentDuplicates(survivors);
 
-      const nextIndex = survivors.findIndex((entry) => entry.wasCurrent);
+      // Current is never pruned, and a collapse never drops the sole
+      // surviving current marker, so an unchanged length means nothing
+      // changed at all (neither dead-entry removal nor collapse).
+      if (collapsed.length === entries.length) return false;
+
+      const nextIndex = collapsed.findIndex((entry) => entry.wasCurrent);
       // Mutate the closed-over arrays in place so `getLocation` keeps reading the
       // same references the history was created with, then re-stamp `__TSR_index`
       // contiguously so the next real `go(n)` lands on a location whose `state`
@@ -487,9 +624,9 @@ export function createPersistentMemoryHistory(
       entries.splice(
         0,
         entries.length,
-        ...survivors.map((entry) => entry.href),
+        ...collapsed.map((entry) => entry.href),
       );
-      states.splice(0, states.length, ...survivors.map((entry) => entry.state));
+      states.splice(0, states.length, ...collapsed.map((entry) => entry.state));
       restampIndices(states);
       index = nextIndex;
 

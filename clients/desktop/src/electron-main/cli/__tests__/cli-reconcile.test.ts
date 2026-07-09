@@ -40,6 +40,7 @@ function makeDeps(overrides: {
       recordedAt: string;
     } | null;
   }) => void;
+  cliBinariesDiffer?: (installedPath: string, bundledPath: string) => boolean;
   now?: () => Date;
 }) {
   const install = overrides.installBundledCli ?? vi.fn(() => "/stable/traycer");
@@ -83,6 +84,8 @@ function makeDeps(overrides: {
         version: string;
       }) => stage(opts)) as never,
       stagedFileExists: async (path: string) => stagedFileExists(path),
+      cliBinariesDiffer: async (installedPath: string, bundledPath: string) =>
+        overrides.cliBinariesDiffer?.(installedPath, bundledPath) ?? false,
       writeCliManifestPendingUpgrade: (async (
         pending: NonNullable<CliInstallManifest["pendingUpgrade"]>,
       ) => writePending(pending)) as never,
@@ -746,6 +749,90 @@ describe("reconcileCli - newest-wins", () => {
     await reconcileCli(deps);
     expect(writeState).toHaveBeenCalledWith({ packageManagerUpgrade: null });
   });
+
+  // Dogfood builds all stamp the `0.0.0-local` sentinel, so two different
+  // local builds tie on version. The reconciler must fall back to binary
+  // content for the desktop-owned slot - and ONLY there.
+  describe("local-sentinel dogfood refresh", () => {
+    const localDesktopManifest: CliInstallManifest = {
+      version: "0.0.0-local",
+      installedAt: "2026-04-01T00:00:00Z",
+      binaryPath: "/stable/traycer",
+      source: "desktop",
+      pendingUpgrade: null,
+    };
+
+    it("refreshes a desktop-owned slot when sentinel versions tie but binaries differ", async () => {
+      const { deps, install } = makeDeps({
+        manifest: localDesktopManifest,
+        bundledPath: "/bundled/traycer",
+        bundledVersion: "0.0.0-local",
+        probeCliVersion: () => "0.0.0-local",
+        cliBinariesDiffer: () => true,
+      });
+      const result = await reconcileCli(deps);
+      expect(result.kind).toBe("upgraded");
+      expect(install).toHaveBeenCalledWith({
+        bundledCliPath: "/bundled/traycer",
+        version: "0.0.0-local",
+        source: "desktop",
+      });
+    });
+
+    it("trusts the slot when sentinel versions tie and binaries are identical", async () => {
+      const { deps, install } = makeDeps({
+        manifest: localDesktopManifest,
+        bundledPath: "/bundled/traycer",
+        bundledVersion: "0.0.0-local",
+        probeCliVersion: () => "0.0.0-local",
+        cliBinariesDiffer: () => false,
+      });
+      const result = await reconcileCli(deps);
+      expect(result.kind).toBe("trusted-equal");
+      expect(install).not.toHaveBeenCalled();
+    });
+
+    it("never overwrites a package-manager-owned CLI on a sentinel tie", async () => {
+      const { deps, install } = makeDeps({
+        manifest: { ...localDesktopManifest, source: "npm" },
+        bundledPath: "/bundled/traycer",
+        bundledVersion: "0.0.0-local",
+        cliBinariesDiffer: () => true,
+      });
+      const result = await reconcileCli(deps);
+      expect(result.kind).toBe("trusted-equal");
+      expect(install).not.toHaveBeenCalled();
+    });
+
+    it("keeps trusting the slot when the binary comparison fails", async () => {
+      const { deps, install } = makeDeps({
+        manifest: localDesktopManifest,
+        bundledPath: "/bundled/traycer",
+        bundledVersion: "0.0.0-local",
+        probeCliVersion: () => "0.0.0-local",
+        cliBinariesDiffer: () => {
+          throw new Error("EACCES: unreadable");
+        },
+      });
+      const result = await reconcileCli(deps);
+      expect(result.kind).toBe("trusted-equal");
+      expect(install).not.toHaveBeenCalled();
+    });
+
+    it("does not fall back to binary comparison when a real release version is involved", async () => {
+      const differ = vi.fn(() => true);
+      const { deps } = makeDeps({
+        manifest: { ...localDesktopManifest, version: "1.5.0" },
+        bundledPath: "/bundled/traycer",
+        bundledVersion: "1.4.2",
+        probeCliVersion: () => "1.5.0",
+        cliBinariesDiffer: differ,
+      });
+      const result = await reconcileCli(deps);
+      expect(result.kind).toBe("trusted-equal");
+      expect(differ).not.toHaveBeenCalled();
+    });
+  });
 });
 
 // Launch-time gate around reconcileCli. Dev / unpackaged Desktop
@@ -795,6 +882,7 @@ describe("runLaunchTimeCliReconciliation - dev isolation", () => {
       stableCliBinaryPath: stableBin as never,
       stageBundledCliForUpgrade: stage as never,
       stagedFileExists: stagedFileExists as never,
+      cliBinariesDiffer: vi.fn() as never,
       writeCliManifestPendingUpgrade: writePending as never,
       writeDesktopReconcileState: writeState as never,
       now: () => new Date("2026-05-15T00:00:00Z"),
@@ -888,6 +976,7 @@ describe("runLaunchTimeCliReconciliation - dev isolation", () => {
       stableCliBinaryPath: vi.fn() as never,
       stageBundledCliForUpgrade: vi.fn() as never,
       stagedFileExists: vi.fn() as never,
+      cliBinariesDiffer: vi.fn() as never,
       writeCliManifestPendingUpgrade: vi.fn() as never,
       writeDesktopReconcileState: vi.fn() as never,
       now: () => new Date("2026-05-15T00:00:00Z"),

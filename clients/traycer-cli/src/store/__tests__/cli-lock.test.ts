@@ -13,7 +13,7 @@ const mocks = vi.hoisted(() => ({ lockPath: "" }));
 
 vi.mock("../paths", () => ({
   cliLockPath: () => mocks.lockPath,
-  ensureCliHomeDir: async () => {},
+  ensureCliInstallHomeDir: async () => {},
 }));
 
 import {

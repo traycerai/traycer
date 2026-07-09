@@ -170,6 +170,8 @@ function PhaseToEpicMigrationGateInner(props: {
           focusedAt={props.search.focusedAt}
           focusArtifactId={props.search.focusArtifactId}
           focusThreadId={props.search.focusThreadId}
+          focusPaneId={props.search.focusPaneId}
+          focusTileInstanceId={props.search.focusTileInstanceId}
         />
       </EpicSessionProvider>
     );

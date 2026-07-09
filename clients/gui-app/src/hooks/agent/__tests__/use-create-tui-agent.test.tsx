@@ -9,8 +9,12 @@ import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 const hookMocks = vi.hoisted(() => ({
   request: vi.fn<(method: string, payload: unknown) => Promise<unknown>>(),
   openTileInTab: vi.fn(),
+  openTileInPane: vi.fn(),
   markArtifactPendingCreate: vi.fn(),
   unmarkArtifactPendingCreate: vi.fn(),
+  navigateNested: vi.fn(
+    (_epicId: string, _tabId: string, prepare: () => unknown) => prepare(),
+  ),
 }));
 
 const fakeHostClient = {
@@ -29,13 +33,34 @@ vi.mock("@/lib/host/runtime", () => ({
   useHostBinding: () => ({ hostClient: fakeHostClient }),
 }));
 
+// The placeholder open is routed through the nested-focus navigation
+// boundary: `navigateNested` is mocked to synchronously invoke `prepare()`
+// (mirroring `bundle-open-button.test.tsx`), and the `prepare...FocusTarget`
+// store helpers forward to the same `openTileInTab` / `openTileInPane` spies
+// the pre-migration tests asserted on directly, so this proves the boundary
+// is exercised without rewriting every existing assertion.
 vi.mock("@/stores/epics/canvas/store", () => ({
   useEpicCanvasStore: <T,>(selector: (s: unknown) => T): T =>
     selector({
-      openTileInTab: hookMocks.openTileInTab,
+      prepareOpenTileInTabFocusTarget: (tabId: string, node: unknown) => {
+        hookMocks.openTileInTab(tabId, node);
+        return null;
+      },
+      prepareOpenTileInPaneFocusTarget: (
+        tabId: string,
+        paneId: string,
+        node: unknown,
+      ) => {
+        hookMocks.openTileInPane(tabId, paneId, node);
+        return null;
+      },
       markArtifactPendingCreate: hookMocks.markArtifactPendingCreate,
       unmarkArtifactPendingCreate: hookMocks.unmarkArtifactPendingCreate,
     }),
+}));
+
+vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
+  useEpicNestedFocusNavigation: () => hookMocks.navigateNested,
 }));
 
 vi.mock("sonner", () => ({
@@ -110,8 +135,10 @@ describe("useCreateTuiAgent", () => {
   beforeEach(() => {
     hookMocks.request.mockReset();
     hookMocks.openTileInTab.mockReset();
+    hookMocks.openTileInPane.mockReset();
     hookMocks.markArtifactPendingCreate.mockReset();
     hookMocks.unmarkArtifactPendingCreate.mockReset();
+    hookMocks.navigateNested.mockClear();
   });
 
   afterEach(() => {
@@ -1087,6 +1114,92 @@ describe("useCreateTuiAgent", () => {
       TAB_ID,
       expect.objectContaining({ id: ownerId, type: "terminal-agent" }),
     );
+
+    queryClient.clear();
+  });
+
+  it("routes the active-tile placeholder open through the nested-focus navigation boundary", async () => {
+    const { calls } = setupSequencedMock();
+    const queryClient = makeQueryClient();
+    const { result } = renderHook(() => useCreateTuiAgent(), {
+      wrapper: queryClientWrapper(queryClient),
+    });
+
+    await act(async () => {
+      await result.current.create({
+        epicId: EPIC_ID,
+        tabId: TAB_ID,
+        parentId: null,
+        title: "",
+        placement: { kind: "active-tile" },
+        harnessId: "claude",
+        model: null,
+        reasoningEffort: null,
+        agentMode: "regular",
+        forkSourceHarnessSessionId: null,
+        onStatusChange: null,
+        workspaceMode: "inherit",
+        worktreeIntent: null,
+        terminalAgentArgs: null,
+      });
+    });
+
+    expect(calls.length).toBeGreaterThan(0);
+    expect(hookMocks.navigateNested).toHaveBeenCalledTimes(1);
+    expect(hookMocks.navigateNested).toHaveBeenCalledWith(
+      EPIC_ID,
+      TAB_ID,
+      expect.any(Function),
+    );
+    // The boundary's prepared target actually reached the tab-targeted
+    // opener, not the pane-targeted one.
+    expect(hookMocks.openTileInTab).toHaveBeenCalledTimes(1);
+    expect(hookMocks.openTileInPane).not.toHaveBeenCalled();
+
+    queryClient.clear();
+  });
+
+  it("routes the target-group placeholder open through prepareOpenTileInPaneFocusTarget via the navigation boundary", async () => {
+    const { calls } = setupSequencedMock();
+    const queryClient = makeQueryClient();
+    const { result } = renderHook(() => useCreateTuiAgent(), {
+      wrapper: queryClientWrapper(queryClient),
+    });
+    const groupId = "group-1";
+
+    await act(async () => {
+      await result.current.create({
+        epicId: EPIC_ID,
+        tabId: TAB_ID,
+        parentId: null,
+        title: "",
+        placement: { kind: "target-group", groupId },
+        harnessId: "claude",
+        model: null,
+        reasoningEffort: null,
+        agentMode: "regular",
+        forkSourceHarnessSessionId: null,
+        onStatusChange: null,
+        workspaceMode: "inherit",
+        worktreeIntent: null,
+        terminalAgentArgs: null,
+      });
+    });
+
+    expect(calls.length).toBeGreaterThan(0);
+    expect(hookMocks.navigateNested).toHaveBeenCalledTimes(1);
+    expect(hookMocks.navigateNested).toHaveBeenCalledWith(
+      EPIC_ID,
+      TAB_ID,
+      expect.any(Function),
+    );
+    expect(hookMocks.openTileInPane).toHaveBeenCalledTimes(1);
+    expect(hookMocks.openTileInPane).toHaveBeenCalledWith(
+      TAB_ID,
+      groupId,
+      expect.objectContaining({ type: "terminal-agent" }),
+    );
+    expect(hookMocks.openTileInTab).not.toHaveBeenCalled();
 
     queryClient.clear();
   });

@@ -48,7 +48,6 @@ import {
   chatSubscribeV11,
   chatSubscribeV12,
   chatSubscribeV13,
-  chatSubscribeV14,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -56,6 +55,8 @@ import {
   agentTuiListHarnessesV10,
   agentTuiPrepareLaunchV10,
   agentTuiRecordActivityV10,
+  agentTuiRecordActivityV11,
+  agentTuiRecordActivityUpgradeV10ToV11,
 } from "@traycer/protocol/host/agent/tui/contracts";
 import {
   commentsListThreadsV10,
@@ -134,7 +135,10 @@ import {
   terminalSubscribeV13,
 } from "@traycer/protocol/host/terminal/contracts";
 import { notificationsSubscribeV10 } from "@traycer/protocol/host/notifications/contracts";
-import { resourcesSubscribeV10 } from "@traycer/protocol/host/resources/subscribe";
+import {
+  resourcesSubscribeV10,
+  resourcesSubscribeV11,
+} from "@traycer/protocol/host/resources/subscribe";
 import {
   speechEnsureModelV10,
   speechGetModelStatusV10,
@@ -445,13 +449,14 @@ export const worktreeListAllForHostV10 = defineRpcContract({
   responseSchema: worktreeListAllForHostResponseSchema,
 });
 
-// v1.1 adds the staleness signals (`includeActivity` request flag; per-entry
-// `lastActivityAt`, `owners`, `branchStatus`, `createdAt`) the housekeeping
-// skill and Settings ▸ Worktrees tab consume, plus the `activityPaths` request
-// field for per-viewport lazy enrichment (enrich only the requested rows, no
-// matter `includeActivity`). Folded onto this existing method - never a new
-// method name - so the wire method-set stays identical to v1.0.0; see
-// `worktreeListByWorkspacePathsV11` and the RPC backward-compat decision log.
+// v1.1 adds caller-bounded pagination (`cursor`, `limit`, `nextCursor`), the
+// staleness signals (`includeActivity` request flag; per-entry `lastActivityAt`,
+// `owners`, `branchStatus`, `createdAt`) the housekeeping skill and Settings ▸
+// Worktrees tab consume, plus the `activityPaths` request field for per-viewport
+// lazy enrichment (enrich only the requested rows, no matter `includeActivity`).
+// Folded onto this existing method - never a new method name - so the wire
+// method-set stays identical to v1.0.0; see `worktreeListByWorkspacePathsV11`
+// and the RPC backward-compat decision log.
 export const worktreeListAllForHostV11 = defineRpcContract({
   method: "worktree.listAllForHost",
   schemaVersion: { major: 1, minor: 1 } as const,
@@ -460,11 +465,13 @@ export const worktreeListAllForHostV11 = defineRpcContract({
 });
 
 // Additive upgrade from v1.0: an older peer neither asks for activity nor
-// carries the enriched fields, so the request defaults `includeActivity: false`
-// and `activityPaths: null` (whole-list mode, no per-viewport selection), and
-// each response entry defaults empty `owners` / `null` timestamps &
-// `branchStatus`, plus the merge-provenance fields (PR bundle and `submodules`)
-// default to their absent shape (`null` / `false` / `[]`). The
+// carries pagination posture or the enriched fields, so the request defaults
+// `includeActivity: false`, `activityPaths: null` (whole-list mode, no
+// per-viewport selection), `cursor: null`, and `limit: null`. Each response
+// entry defaults empty `owners` / `null` timestamps & `branchStatus`, plus the
+// merge-provenance fields (PR bundle and `submodules`) default to their absent
+// shape (`null` / `false` / `[]`), and `nextCursor: null` marks the upgraded
+// full-list response exhausted. The
 // newer side runs this when bridging a v1.0 peer up to canonical (host: inbound
 // v1.0 request; client: inbound v1.0 response).
 export const worktreeListAllForHostUpgradeV10ToV11 = defineUpgradePath<
@@ -476,6 +483,8 @@ export const worktreeListAllForHostUpgradeV10ToV11 = defineUpgradePath<
   upgradeRequest: () => ({
     includeActivity: false,
     activityPaths: null,
+    cursor: null,
+    limit: null,
   }),
   upgradeResponse: (response) => ({
     worktrees: response.worktrees.map((entry) => ({
@@ -491,6 +500,7 @@ export const worktreeListAllForHostUpgradeV10ToV11 = defineUpgradePath<
       submodules: [],
       atBaseCommit: false,
     })),
+    nextCursor: null,
   }),
 });
 
@@ -2156,11 +2166,15 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
   },
   "agent.tui.recordActivity": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: agentTuiRecordActivityV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: agentTuiRecordActivityV11,
+          upgradeFromPreviousVersion: agentTuiRecordActivityUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -3671,7 +3685,7 @@ export type HostRpcRegistry = typeof hostRpcRegistry;
  * Combined streaming-RPC registry for the `/stream` WS manifest.
  *
  * One manifest per `/stream` WS: `epic.subscribe@1.0`,
- * `chat.subscribe@1.2`, `notifications.subscribe@1.0`,
+ * `chat.subscribe@1.3`, `notifications.subscribe@1.0`,
  * `terminal.subscribe@1.0`, `git.subscribeStatus@1.0`,
  * `resources.subscribe@1.0`, `agent.inbox.subscribe@1.0`,
  * `speech.dictate@1.0`, and
@@ -3704,7 +3718,7 @@ export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
   },
   "chat.subscribe": {
     1: {
-      latestMinor: 4,
+      latestMinor: 3,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -3717,9 +3731,6 @@ export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
         },
         3: {
           contract: chatSubscribeV13,
-        },
-        4: {
-          contract: chatSubscribeV14,
         },
       },
     },
@@ -3765,10 +3776,13 @@ export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
   },
   "resources.subscribe": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: resourcesSubscribeV10,
+        },
+        1: {
+          contract: resourcesSubscribeV11,
         },
       },
     },

@@ -1,10 +1,12 @@
 import type { IHostDirectoryService } from "@traycer-clients/shared/host-client/host-runtime";
 import {
   openCreatedChatWhenProjected,
+  openCreatedChatWhenProjectedWithNavigation,
   openNewChatInActiveTile,
   type CancelFn,
   type CreateChatCommand,
 } from "@/lib/commands/actions/new-chat";
+import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
 
 /**
  * Clone-not-migrate flow for switching a chat tab's bound host: chat tabs
@@ -18,6 +20,7 @@ export interface CloneChatOnHostSwitchArgs {
   readonly targetHostId: string;
   readonly directory: IHostDirectoryService;
   readonly createChat: CreateChatCommand;
+  readonly navigateNestedFocus: NavigateNestedFocus | null;
 }
 
 export function cloneChatOnHostSwitch(
@@ -30,6 +33,12 @@ export function cloneChatOnHostSwitch(
     hostId: args.targetHostId,
     worktreeIntent: null,
     createChat: args.createChat,
-    openWhenProjected: openCreatedChatWhenProjected,
+    openWhenProjected: (intent) =>
+      args.navigateNestedFocus === null
+        ? openCreatedChatWhenProjected(intent)
+        : openCreatedChatWhenProjectedWithNavigation({
+            intent,
+            navigateNestedFocus: args.navigateNestedFocus,
+          }),
   });
 }

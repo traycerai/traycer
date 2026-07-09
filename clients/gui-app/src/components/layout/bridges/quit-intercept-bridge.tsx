@@ -14,6 +14,7 @@ import {
   type UnsyncedEditsEntry,
 } from "@/stores/epics/open-epic/session-registry";
 import { flushActiveDesktopPerWindowProjection } from "@/lib/windows/per-window-projection-debounce";
+import { appLogger } from "@/lib/logger";
 
 /**
  * Terminal decision returned by the renderer to the Electron main process
@@ -116,10 +117,19 @@ export function QuitInterceptBridge(): null | React.ReactElement {
 
   useDebouncedPushSnapshot(appLifecycle, liveUnsynced, cancelAmbientPushRef);
 
-  // Respond to main's fresh-snapshot query synchronously from the live
-  // registry. This is the authoritative source of truth during `before-quit`
-  // - cancel any in-flight ambient debounce so main does not observe a
-  // stale push right after our fresh reply.
+  // Respond to main's fresh-snapshot query from the live registry. This is the
+  // authoritative source of truth during `before-quit` - cancel any in-flight
+  // ambient debounce so main does not observe a stale push right after our fresh
+  // reply.
+  //
+  // Crucially, AWAIT the per-window projection flush before replying: the flush
+  // resolves only once its `perWindowState.update` IPC has been processed by
+  // main, so main's `PerWindowState` (and the `desktopStateStore.flush()` it
+  // runs right after this query resolves) already reflects the latest tabs /
+  // canvas / drafts. Because we await the projection IPC before sending the
+  // reply IPC, main processes them in order and the layout can't be lost to the
+  // quit. Reply even if the flush rejects - a failed projection write must not
+  // make main wait out its fresh-snapshot timeout and fall back to stale state.
   useEffect(() => {
     if (appLifecycle === null) return;
     const onGet = appLifecycle.onGetFreshUnsyncedSnapshot;
@@ -128,9 +138,20 @@ export function QuitInterceptBridge(): null | React.ReactElement {
     const subscription = onGet((request) => {
       cancelAmbientPushRef.current();
       const snapshot = registry.getUnsyncedEdits();
-      void flushActiveDesktopPerWindowProjection().then(() =>
-        respond({ requestId: request.requestId, snapshot }),
-      );
+      const reply = (): Promise<void> =>
+        respond({ requestId: request.requestId, snapshot });
+      void flushActiveDesktopPerWindowProjection()
+        .then(reply, reply)
+        .catch((error: unknown) => {
+          // `reply()` itself is an `ipcRenderer.invoke` that can reject (main
+          // handler removed / sender gone). Never rethrow - main's own
+          // fresh-snapshot timeout is the fallback.
+          appLogger.error(
+            "[quit-intercept] fresh-snapshot reply failed",
+            { requestId: request.requestId },
+            error,
+          );
+        });
     });
     return () => {
       subscription.dispose();

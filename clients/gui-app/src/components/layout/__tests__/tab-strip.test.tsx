@@ -441,6 +441,8 @@ describe("<TabStrip />", () => {
           focusArtifactId: undefined,
           focusThreadId: undefined,
           migrationSource: undefined,
+          focusPaneId: undefined,
+          focusTileInstanceId: undefined,
         },
       });
       await flushNav();
@@ -796,6 +798,8 @@ describe("<TabStrip />", () => {
         focusArtifactId: undefined,
         focusThreadId: undefined,
         migrationSource: undefined,
+        focusPaneId: undefined,
+        focusTileInstanceId: undefined,
       },
     });
     fireEvent.click(screen.getByTestId("tab-history-history"));
@@ -810,6 +814,8 @@ describe("<TabStrip />", () => {
         focusArtifactId: undefined,
         focusThreadId: undefined,
         migrationSource: undefined,
+        focusPaneId: undefined,
+        focusTileInstanceId: undefined,
       },
     });
     fireEvent.click(screen.getByTestId(`tab-draft-${draftId}`));

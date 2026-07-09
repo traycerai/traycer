@@ -1,16 +1,23 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cliBearerStore, resolveHostAuth } from "../host-auth";
+import { config } from "../../config";
+import { DEV_DESKTOP_SLOT_ENV } from "../../store/dev-desktop-slot";
 import {
   deleteCredentials,
   readCredentials,
   writeCredentials,
 } from "../../store/credentials";
 
-vi.mock("../../store/credentials", () => ({
-  readCredentials: vi.fn(),
-  writeCredentials: vi.fn(),
-  deleteCredentials: vi.fn(),
-}));
+vi.mock("../../store/credentials", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../store/credentials")>();
+  return {
+    ...actual,
+    readCredentials: vi.fn(),
+    writeCredentials: vi.fn(),
+    deleteCredentials: vi.fn(),
+  };
+});
 
 const readMock = vi.mocked(readCredentials);
 const writeMock = vi.mocked(writeCredentials);
@@ -24,20 +31,38 @@ const storedCreds = {
   user: { id: "u1", email: "a@b.c", name: "A" },
 };
 
+const ORIGINAL_SLOT = process.env[DEV_DESKTOP_SLOT_ENV];
+
 beforeEach(() => {
   vi.clearAllMocks();
+  process.env[DEV_DESKTOP_SLOT_ENV] = "test-slot";
 });
 
 afterEach(() => {
   vi.clearAllMocks();
+  if (ORIGINAL_SLOT === undefined) {
+    delete process.env[DEV_DESKTOP_SLOT_ENV];
+  } else {
+    process.env[DEV_DESKTOP_SLOT_ENV] = ORIGINAL_SLOT;
+  }
 });
 
 describe("resolveHostAuth", () => {
-  it("returns token, authnBaseUrl, and userId from the stored credentials", async () => {
+  it("returns token, effective authnBaseUrl, and userId from the stored credentials during a dev-desktop run", async () => {
     readMock.mockResolvedValue(storedCreds);
     expect(await resolveHostAuth()).toEqual({
       token: "stored-token",
-      authnBaseUrl: "https://authn.test",
+      authnBaseUrl: config.authnBaseUrl,
+      userId: "u1",
+    });
+  });
+
+  it("keeps the serialized authnBaseUrl when no dev-desktop run slot is active", async () => {
+    delete process.env[DEV_DESKTOP_SLOT_ENV];
+    readMock.mockResolvedValue(storedCreds);
+    expect(await resolveHostAuth()).toEqual({
+      token: "stored-token",
+      authnBaseUrl: storedCreds.authnBaseUrl,
       userId: "u1",
     });
   });
@@ -49,6 +74,12 @@ describe("resolveHostAuth", () => {
 
   it("returns null when the stored token is empty", async () => {
     readMock.mockResolvedValue({ ...storedCreds, token: "" });
+    expect(await resolveHostAuth()).toBeNull();
+  });
+
+  it("regression: returns null instead of throwing when DEV_DESKTOP_SLOT sanitizes to an unusable slot", async () => {
+    process.env[DEV_DESKTOP_SLOT_ENV] = "!!!";
+    readMock.mockResolvedValue(storedCreds);
     expect(await resolveHostAuth()).toBeNull();
   });
 });
@@ -91,6 +122,21 @@ describe("cliBearerStore", () => {
   it("clear deletes the credentials file", async () => {
     deleteMock.mockResolvedValue(true);
     await cliBearerStore.clear();
+    expect(deleteMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("regression: still deletes credentials when DEV_DESKTOP_SLOT sanitizes to an unusable slot", async () => {
+    // `devDesktopSlotForEnvironment` throws when DEV_DESKTOP_SLOT is set but
+    // sanitizes to empty - and `createCliLogger` hits that same throw via
+    // `cliLogPath`. Before the fix, both ran before deleting credentials, so
+    // this throw skipped the delete entirely - the one case a caller most
+    // wants `clear()` to succeed on: it never received a usable bearer to
+    // sign out from in the first place.
+    process.env[DEV_DESKTOP_SLOT_ENV] = "!!!";
+    deleteMock.mockResolvedValue(true);
+    await expect(cliBearerStore.clear()).rejects.toThrow(
+      "must contain a usable slot name",
+    );
     expect(deleteMock).toHaveBeenCalledTimes(1);
   });
 });

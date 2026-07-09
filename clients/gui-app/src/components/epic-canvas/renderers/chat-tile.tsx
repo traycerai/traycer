@@ -93,6 +93,7 @@ import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useHostClient, useHostBinding } from "@/lib/host";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { useEpicCreateChat } from "@/hooks/epic/use-epic-chat-mutations";
+import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { cloneChatOnHostSwitch } from "@/lib/commands/actions/clone-chat-on-host-switch";
 import { ChatDeadTileBanner } from "./dead-tile-banner";
 import { useHostQuery } from "@/hooks/host/use-host-query";
@@ -121,6 +122,7 @@ import {
   useWorktreeIntentStagingStore,
   worktreeStagingKeyString,
 } from "@/stores/worktree/worktree-intent-staging-store";
+import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import {
   agentModelKey,
   resolveAgentReasoningLabel,
@@ -382,6 +384,7 @@ function useChatCloneOnHostSwitch(args: UseChatCloneOnHostSwitchArgs): {
 } {
   const binding = useHostBinding();
   const createChat = useEpicCreateChat();
+  const navigateNestedFocus = useEpicNestedFocusNavigation();
   const cancelRef = useRef<(() => void) | null>(null);
   const [cloning, setCloning] = useState(false);
 
@@ -407,11 +410,19 @@ function useChatCloneOnHostSwitch(args: UseChatCloneOnHostSwitchArgs): {
       tabId: args.tabId,
       targetHostId: target.hostId,
       directory: binding.directory,
+      navigateNestedFocus,
       createChat: (request, callbacks) => {
         createChat.mutate(request, { onSuccess: callbacks.onSuccess });
       },
     });
-  }, [binding, createChat, args.epicId, args.tabId, args.sourceHostId]);
+  }, [
+    binding,
+    createChat,
+    navigateNestedFocus,
+    args.epicId,
+    args.tabId,
+    args.sourceHostId,
+  ]);
 
   return { clone, cloning };
 }
@@ -534,8 +545,7 @@ function ChatTileSessionView(props: ChatTileSessionViewProps) {
   const view = useChatTileSessionViewModel(props);
   const hostId = useTabHostId();
   const systemOverlayActive = useAnySystemOverlayActive();
-  const openPreview = useEpicCanvasStore((s) => s.openTilePreviewInTab);
-  const openPinned = useEpicCanvasStore((s) => s.openTileInTab);
+  const tileNavigation = useEpicTileNavigation();
   const [backgroundScrollRequest, setBackgroundScrollRequest] =
     useState<ChatMessageScrollRequest | null>(null);
   const backgroundScrollRequestIdRef = useRef(0);
@@ -588,8 +598,10 @@ function ChatTileSessionView(props: ChatTileSessionViewProps) {
           filePath: request.filePath,
         });
         return {
-          onClick: () => openPreview(view.viewTabId, tile),
-          onDoubleClick: () => openPinned(view.viewTabId, tile),
+          onClick: () =>
+            tileNavigation.openTilePreviewInTab(view.viewTabId, tile),
+          onDoubleClick: () =>
+            tileNavigation.openTileInTab(view.viewTabId, tile),
         };
       },
       cumulative: (filePath) => {
@@ -599,8 +611,10 @@ function ChatTileSessionView(props: ChatTileSessionViewProps) {
           filePath,
         });
         return {
-          onClick: () => openPreview(view.viewTabId, tile),
-          onDoubleClick: () => openPinned(view.viewTabId, tile),
+          onClick: () =>
+            tileNavigation.openTilePreviewInTab(view.viewTabId, tile),
+          onDoubleClick: () =>
+            tileNavigation.openTileInTab(view.viewTabId, tile),
         };
       },
       cumulativeBundle: (filePaths) => {
@@ -609,7 +623,7 @@ function ChatTileSessionView(props: ChatTileSessionViewProps) {
           chatId: view.node.id,
           filePaths,
         });
-        return () => openPinned(view.viewTabId, tile);
+        return () => tileNavigation.openTileInTab(view.viewTabId, tile);
       },
       hash: (request) => {
         const tile = makeSnapshotHashDiffTile({
@@ -621,12 +635,14 @@ function ChatTileSessionView(props: ChatTileSessionViewProps) {
           title: request.title,
         });
         return {
-          onClick: () => openPreview(view.viewTabId, tile),
-          onDoubleClick: () => openPinned(view.viewTabId, tile),
+          onClick: () =>
+            tileNavigation.openTilePreviewInTab(view.viewTabId, tile),
+          onDoubleClick: () =>
+            tileNavigation.openTileInTab(view.viewTabId, tile),
         };
       },
     }),
-    [hostId, openPinned, openPreview, view.node.id, view.viewTabId],
+    [hostId, tileNavigation, view.node.id, view.viewTabId],
   );
 
   return (

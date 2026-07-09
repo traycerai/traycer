@@ -154,6 +154,7 @@ function artifact(
     createdAt: 0,
     updatedAt: fields.updatedAt,
     status: fields.status,
+    createdManually: false,
   };
 }
 

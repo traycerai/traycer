@@ -43,6 +43,11 @@ interface UseCollabTileEditorParams {
    * differently.
    */
   readonly placeholderText: string;
+  /**
+   * Hint shown inside an empty leading level-1 heading (the Notion-style
+   * title line). Kind-agnostic.
+   */
+  readonly titlePlaceholderText: string;
 }
 
 /**
@@ -63,6 +68,7 @@ export function useCollabTileEditor(
     onCommentShortcut,
     anchorScope,
     placeholderText,
+    titlePlaceholderText,
   } = params;
 
   const setAnchorPositions = useAnchorPositionsStore((s) => s.setForArtifact);
@@ -77,6 +83,7 @@ export function useCollabTileEditor(
           user,
           onCommentShortcut,
           placeholderText,
+          titlePlaceholderText,
         }),
         ...(anchorScope === null
           ? []
@@ -111,6 +118,7 @@ export function useCollabTileEditor(
       anchorScope?.epicId,
       anchorScope?.artifactId,
       placeholderText,
+      titlePlaceholderText,
     ],
   );
 

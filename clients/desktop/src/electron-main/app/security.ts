@@ -2,6 +2,8 @@ import { URL } from "node:url";
 import { shell, session, type Session, type WebContents } from "electron";
 import { log } from "./logger";
 import { CONTENT_SECURITY_POLICY } from "../../shared/content-security-policy";
+import { isDevBuild } from "../../config";
+import { devRendererOriginFromEnv } from "../../ipc-contracts/dev-renderer-origin";
 
 const ALLOWED_EXTERNAL_SCHEMES: ReadonlySet<string> = new Set([
   "http:",
@@ -16,6 +18,19 @@ const ALLOWED_NAVIGATION_ORIGINS: ReadonlySet<string> = new Set([
   "http://localhost:5173",
   "http://127.0.0.1:5173",
 ]);
+
+function isAllowedNavigationOrigin(origin: string): boolean {
+  if (ALLOWED_NAVIGATION_ORIGINS.has(origin)) return true;
+  // `TRAYCER_DESKTOP_DEV_URL` is only meaningful (and only ever set) on a dev
+  // build. Gating on `isDevBuild` means a stray/attacker-set env var in a
+  // packaged production app can never widen the navigation allow-list.
+  if (!isDevBuild) return false;
+  try {
+    return origin === devRendererOriginFromEnv(process.env);
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Centralized gate for `shell.openExternal`. Rejects opaque/non-web schemes
@@ -73,7 +88,7 @@ export function installNavigationGuard(webContents: WebContents): void {
     if (target.origin === currentOrigin) {
       return;
     }
-    if (ALLOWED_NAVIGATION_ORIGINS.has(target.origin)) {
+    if (isAllowedNavigationOrigin(target.origin)) {
       return;
     }
     log.warn("[security] navigation blocked", {
