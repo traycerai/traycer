@@ -25,6 +25,12 @@ function main() {
     TRAYCER_DESKTOP_DEV: "1",
     TRAYCER_DESKTOP_DEV_URL: rendererUrl,
   };
+  // The renderer bundle has no `process.env`; expose the multi-run slot to it
+  // through Vite so `renderer-shell/sign-in-url.ts` derives the same
+  // slot-suffixed deep-link scheme the main process registers.
+  if (typeof process.env.DEV_DESKTOP_SLOT === "string") {
+    childEnv.VITE_DEV_DESKTOP_SLOT = process.env.DEV_DESKTOP_SLOT;
+  }
 
   const child = spawn(
     "bun",

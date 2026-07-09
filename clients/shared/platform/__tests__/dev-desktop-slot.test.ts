@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   DEV_DESKTOP_SLOT_ENV,
   devDesktopSlotForEnvironment,
+  devDesktopSlotProtocolScheme,
   sanitizeDevDesktopSlot,
 } from "../dev-desktop-slot";
 
@@ -55,5 +56,29 @@ describe("devDesktopSlotForEnvironment", () => {
     expect(() =>
       devDesktopSlotForEnvironment("dev", { [DEV_DESKTOP_SLOT_ENV]: "   " }),
     ).toThrow(/must contain a usable slot name/);
+  });
+});
+
+describe("devDesktopSlotProtocolScheme", () => {
+  it("keeps the base scheme when no slot is active", () => {
+    expect(devDesktopSlotProtocolScheme("traycer-dev", null)).toBe(
+      "traycer-dev",
+    );
+  });
+
+  it("suffixes the base scheme with the slot", () => {
+    expect(devDesktopSlotProtocolScheme("traycer-dev", "my-worktree")).toBe(
+      "traycer-dev-my-worktree",
+    );
+  });
+
+  it("produces a valid URI scheme for every sanitize vector", () => {
+    for (const [raw] of SLOT_SANITIZE_VECTORS) {
+      const scheme = devDesktopSlotProtocolScheme(
+        "traycer-dev",
+        sanitizeDevDesktopSlot(raw),
+      );
+      expect(scheme).toMatch(/^[a-z][a-z0-9+\-.]*$/);
+    }
   });
 });

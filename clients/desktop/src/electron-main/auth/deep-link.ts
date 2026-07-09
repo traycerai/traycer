@@ -1,10 +1,24 @@
 import { app } from "electron";
-import { DESKTOP_PROTOCOL_SCHEME } from "../../config";
+import { config, DESKTOP_PROTOCOL_SCHEME } from "../../config";
 import { log } from "../app/logger";
+import {
+  devDesktopSlotForEnvironment,
+  devDesktopSlotProtocolScheme,
+} from "../host/dev-desktop-slot";
 
 // Environment-specific so a dev build doesn't share `traycer://` with an
-// installed staging/prod app (see `DESKTOP_PROTOCOL_SCHEME`).
-const PROTOCOL_SCHEME = DESKTOP_PROTOCOL_SCHEME;
+// installed staging/prod app (see `DESKTOP_PROTOCOL_SCHEME`), and
+// slot-specific under multi-run dev so concurrent `make dev-desktop` runs
+// don't steal each other's auth-callback deep links (the OS routes a scheme
+// to exactly one app - last registration wins). Module-scope is safe:
+// `DEV_DESKTOP_SLOT` is fixed for the lifetime of a real process (same
+// contract as `cli-discovery.ts`). The renderer derives the matching
+// redirect URI in `renderer-shell/sign-in-url.ts`; the two MUST agree or the
+// cloud's redirect lands on a scheme nobody registered.
+const PROTOCOL_SCHEME = devDesktopSlotProtocolScheme(
+  DESKTOP_PROTOCOL_SCHEME,
+  devDesktopSlotForEnvironment(config.environment, process.env),
+);
 const AUTH_CALLBACK_PATH = "auth/callback";
 
 /**
