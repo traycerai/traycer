@@ -49,8 +49,7 @@ export interface HostHealthMonitorDeps {
   readonly intervalMs: number | undefined;
   readonly probe: ((websocketUrl: string) => Promise<boolean>) | undefined;
   readonly readMetadata:
-    | ((path: string) => Promise<DesktopLocalHostSnapshot | null>)
-    | undefined;
+    ((path: string) => Promise<DesktopLocalHostSnapshot | null>) | undefined;
   readonly respawn: (() => Promise<void>) | undefined;
 }
 

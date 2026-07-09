@@ -296,7 +296,9 @@ interface SlotProcessScanOptions {
 }
 
 function buildSlotProcessScanScript(options: SlotProcessScanOptions): string {
-  const hostPaths = powershellStringArray(slotHostProcessPaths(options.hostHome));
+  const hostPaths = powershellStringArray(
+    slotHostProcessPaths(options.hostHome),
+  );
   return [
     "$ErrorActionPreference = 'SilentlyContinue'",
     `$excluded = @(${options.currentPid}, $PID)`,
@@ -331,7 +333,10 @@ function slotHostProcessPaths(hostHome: string): readonly string[] {
 }
 
 function processPath(value: string): string {
-  return value.replace(/[\\/]+$/, "").toLowerCase().replace(/\//g, "\\");
+  return value
+    .replace(/[\\/]+$/, "")
+    .toLowerCase()
+    .replace(/\//g, "\\");
 }
 
 function processPathPrefix(value: string): string {
