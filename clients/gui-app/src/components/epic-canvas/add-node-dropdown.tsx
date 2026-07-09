@@ -335,6 +335,7 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
       reasoningEffort: reasoning.length > 0 ? reasoning : null,
       agentMode,
       terminalAgentArgs: argsTouched ? argsDraft : null,
+      profileId: selection.profileId,
       worktreeIntent,
       workspaceMode: deriveWorkspaceMode(
         workspaceSeed?.workspace.folders.length ?? 1,
@@ -349,6 +350,7 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
     onAddTerminalAgent,
     reasoning,
     selection.modelSlug,
+    selection.profileId,
     selectedHarnessId,
     stagingKey,
     workspaceSeed,

@@ -157,6 +157,7 @@ const QUEUED_SETTINGS: ChatRunSettings = {
   reasoningEffort: "medium",
   serviceTier: null,
   agentMode: "epic",
+  profileId: null,
 };
 const UPDATED_QUEUE_SETTINGS: ChatRunSettings = {
   harnessId: "claude",
@@ -165,6 +166,7 @@ const UPDATED_QUEUE_SETTINGS: ChatRunSettings = {
   reasoningEffort: "low",
   serviceTier: null,
   agentMode: "epic",
+  profileId: null,
 };
 const INITIAL_HANDOFF_CONTENT: JsonContent = {
   type: "doc",
@@ -182,6 +184,7 @@ const INITIAL_HANDOFF_SETTINGS: ChatRunSettings = {
   reasoningEffort: "high",
   serviceTier: null,
   agentMode: "epic",
+  profileId: null,
 };
 const SESSION_SETTINGS: ChatRunSettings = {
   harnessId: "claude",
@@ -190,6 +193,7 @@ const SESSION_SETTINGS: ChatRunSettings = {
   reasoningEffort: "low",
   serviceTier: null,
   agentMode: "epic",
+  profileId: null,
 };
 
 interface ChatHarness {
@@ -635,7 +639,11 @@ describe("<ChatTile />", () => {
     // host binding the catalog never resolves the empty default, so seed a
     // concrete default model so the composer reaches a sendable state.
     useSettingsStore.setState({
-      defaultSelection: { harnessId: "codex", modelSlug: "gpt-5-codex" },
+      defaultSelection: {
+        harnessId: "codex",
+        modelSlug: "gpt-5-codex",
+        profileId: null,
+      },
     });
     harness.install(seedDocWithChat, "editor");
     chatHarness.install("owner", []);

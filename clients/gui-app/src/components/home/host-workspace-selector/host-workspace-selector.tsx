@@ -103,6 +103,8 @@ import {
   workspaceRunBranchLabel,
 } from "./workspace-run-item";
 import { workspaceFolderName } from "@/lib/worktree/workspace-folder-name";
+import { useChatById } from "@/lib/epic-selectors";
+import { toast } from "sonner";
 
 /**
  * `home` swaps the bound directory; `chat` clones the chat on switch;
@@ -1362,6 +1364,9 @@ interface InEpicSurfaceProps {
 function InEpicSurface(props: InEpicSurfaceProps) {
   const { surface } = props;
   const binding = useHostBinding();
+  const sourceChatRecord = useChatById(
+    surface.kind === "chat" ? surface.ownerId : null,
+  );
   const [editor, dispatchEditor] = useReducer(folderEditorReducer, {
     dirtyPathsSinceResume: new Set<string>(),
   });
@@ -1667,8 +1672,16 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     cloneCancelRef.current = cloneChatOnHostSwitch({
       epicId: surface.epicId,
       tabId: surface.tabId,
+      sourceHostId: surface.hostId,
       targetHostId: pendingCloneHostId,
       directory: binding.directory,
+      sourceSettings: sourceChatRecord?.settings ?? null,
+      globalClient: binding.hostClient,
+      onProfileFallbackToAmbient: () => {
+        toast(
+          "Continuing on the Terminal account - your profile isn't available on this host.",
+        );
+      },
       createChat: (request, callbacks) => {
         createChat.mutate(request, {
           onSuccess: callbacks.onSuccess,

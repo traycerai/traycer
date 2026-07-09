@@ -36,15 +36,17 @@ function ProviderRateLimitSettingsCard({
   readonly providerId: RateLimitProviderId;
 }): ReactNode {
   const hostId = useReactiveActiveHostId();
-  const query = useHostProviderRateLimitsQuery(providerId);
+  const query = useHostProviderRateLimitsQuery(providerId, null);
   // Single source of truth for this provider's refresh action + spinner state
   // (fresh-on-open, queue routing, and the ephemeralProcess `draining` fold-in),
   // shared verbatim with the popover's per-provider block.
-  const { refresh, isRefreshing } = useProviderRateLimitRefresh(
+  const { refresh, isRefreshing } = useProviderRateLimitRefresh({
     providerId,
-    query.isFetching,
-    query.refetch,
-  );
+    profileId: null,
+    usageUpdatedAt: null,
+    isFetching: query.isFetching,
+    refetch: query.refetch,
+  });
   // Keep the bars live: a turn on this provider finishing while the card is
   // open re-fetches usage. Only mounted here, so it costs nothing elsewhere.
   useRefreshProviderRateLimitsOnTurn(providerId, hostId);

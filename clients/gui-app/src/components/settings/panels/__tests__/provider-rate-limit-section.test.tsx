@@ -7,6 +7,7 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { DEFAULT_ACCOUNT_CONTEXT } from "@traycer/protocol/common/schemas";
 import type { ProviderRateLimits } from "@traycer/protocol/host";
 import type { ProviderRateLimitEnvelope } from "@/lib/rate-limits/rate-limit-envelope";
 import { envelopeFromRateLimits } from "@/lib/rate-limits/__tests__/rate-limit-envelope-fixtures";
@@ -289,9 +290,14 @@ describe("ProviderRateLimitForProvider", () => {
       screen.getByRole("button", { name: "Refresh usage limits" }),
     );
 
-    expect(mocks.enqueue).toHaveBeenCalledWith("codex", expect.anything(), {
-      force: true,
-    });
+    expect(mocks.enqueue).toHaveBeenCalledWith(
+      "codex",
+      DEFAULT_ACCOUNT_CONTEXT,
+      {
+        force: true,
+        profileId: null,
+      },
+    );
     expect(mocks.refetch).not.toHaveBeenCalled();
   });
 

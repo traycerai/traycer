@@ -42,7 +42,8 @@ import { HarnessModelPickerPanel } from "@/components/home/pickers/harness-model
 import { useHarnessModelPickerState } from "@/components/home/pickers/harness-model-picker-state";
 import {
   railHarnessDegraded,
-  visibleRailHarnesses,
+  visibleRailEntries,
+  type RailEntry,
 } from "@/components/home/pickers/harness-rail-providers";
 import { usePickerLeaderScope } from "@/components/home/pickers/use-picker-leader-scope";
 import { handleHarnessModelPickerKeyDown } from "@/components/home/pickers/harness-model-picker-keyboard";
@@ -57,7 +58,10 @@ import { useBindingForAction } from "@/stores/settings/keybinding-store";
 import { formatChordForDisplay } from "@/lib/keybindings/chord";
 import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
-import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
+import type {
+  ProviderCliState,
+  ProviderProfile,
+} from "@traycer/protocol/host/provider-schemas";
 import {
   providerIdToGuiHarnessId,
   sortGuiHarnessesByProviderOrder,
@@ -67,6 +71,10 @@ export type { ReasoningFooterConfig, ServiceTierFooterConfig };
 
 const EMPTY_MODELS: ReadonlyArray<ModelOption> = [];
 const EMPTY_DEGRADED_HARNESS_IDS: ReadonlySet<GuiHarnessId> = new Set();
+const EMPTY_PROFILES_BY_HARNESS_ID: ReadonlyMap<
+  GuiHarnessId,
+  ReadonlyArray<ProviderProfile>
+> = new Map();
 
 interface HarnessModelPickerProps {
   /** Per-composer toolbar store; the picker subscribes to the selection /
@@ -148,17 +156,22 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   const {
     query,
     activeProviderId,
+    activeProfileId,
     activeRowId,
     hoveredRowId,
     openVersion,
     visibleOpen,
     handleOpenChange,
     handleQueryChange,
-    setActiveProviderId,
+    setActiveRailEntry,
     setActiveRowId,
     setHoveredRowId,
     closeOnly,
-  } = useHarnessModelPickerState(selection.harnessId, disabled);
+  } = useHarnessModelPickerState(
+    selection.harnessId,
+    selection.profileId,
+    disabled,
+  );
   const inputRef = useRef<HTMLInputElement | null>(null);
   const listRef = useRef<VirtuosoHandle | null>(null);
   const { openSettings } = useSystemTabModalActions();
@@ -188,6 +201,13 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
       providersQuery.data === undefined
         ? EMPTY_DEGRADED_HARNESS_IDS
         : degradedHarnessIdsFromProviderStates(providersQuery.data.providers),
+    [providersQuery.data],
+  );
+  const profilesByHarnessId = useMemo(
+    () =>
+      providersQuery.data === undefined
+        ? EMPTY_PROFILES_BY_HARNESS_ID
+        : profilesByHarnessIdFromProviderStates(providersQuery.data.providers),
     [providersQuery.data],
   );
   const harnesses = useMemo(
@@ -275,6 +295,48 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     catalogHarnesses.find(
       (harness) => harness.id === resolvedActiveProviderId,
     ) ?? null;
+  // Rail entries: harnesses split into one entry per (harness, profile) pair
+  // when a provider has 2+ profiles (see `visibleRailEntries`); 0/1-profile
+  // providers stay a single entry, byte-identical to the pre-profile rail.
+  const railEntries = useMemo(
+    () =>
+      visibleRailEntries(
+        catalogHarnesses,
+        harnesses,
+        degradedHarnessIds,
+        profilesByHarnessId,
+      ),
+    [catalogHarnesses, degradedHarnessIds, harnesses, profilesByHarnessId],
+  );
+  // The specific rail entry currently browsed: prefer the entry matching the
+  // reducer's `activeProfileId` (a rail click or ⌘-digit), else the one
+  // matching the committed selection's profile, else the harness's first
+  // entry - mirroring `resolveActiveProviderId`'s own fallback chain.
+  const resolvedActiveEntry = useMemo(
+    () =>
+      resolveActiveEntryForHarness(
+        railEntries,
+        resolvedActiveProviderId,
+        activeProfileId,
+        selection.profileId,
+      ),
+    [
+      activeProfileId,
+      railEntries,
+      resolvedActiveProviderId,
+      selection.profileId,
+    ],
+  );
+  // Falls back to the plain harness label while the entry list hasn't
+  // resolved yet (e.g. the catalog is still loading).
+  const activePanelLabel = useMemo(
+    () => resolvedActiveEntry?.label ?? activeProvider?.label ?? "",
+    [activeProvider, resolvedActiveEntry],
+  );
+  const activePanelProfileId = useMemo(
+    () => resolvedActiveEntry?.profileId ?? null,
+    [resolvedActiveEntry],
+  );
   const rows = useMemo(
     () =>
       buildAllHarnessModelRows(
@@ -329,41 +391,37 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         return;
       }
       // Commit the picked model through the memory-aware funnel (restores that
-      // (harness, model)'s remembered effort/tier, or the model's defaults).
-      // Selecting a model keeps the picker open; it only closes on an outside
-      // click / escape (handled by Popover's onOpenChange -> closeOnly).
-      commitSelection(store, row.harnessId, row.value);
+      // (harness, profile, model)'s remembered effort/tier, or the model's
+      // defaults). Selecting a model keeps the picker open; it only closes on
+      // an outside click / escape (handled by Popover's onOpenChange ->
+      // closeOnly).
+      commitSelection(
+        store,
+        row.harnessId,
+        row.value,
+        resolvedActiveEntry?.profileId ?? null,
+      );
     },
-    [closeOnly, disabled, store],
+    [closeOnly, disabled, resolvedActiveEntry, store],
   );
-  const handleProviderChange = useCallback(
-    (providerId: ProviderId) => {
+  const handleRailEntryChange = useCallback(
+    (providerId: ProviderId, profileId: string | null) => {
       // Locked fork (terminal): the harness is immovable - never switch off it.
       if (lockedHarnessId !== null && providerId !== lockedHarnessId) return;
-      // Only an AVAILABLE, non-degraded provider commits a switch (restoring its
-      // remembered model/effort/tier). A degraded / unavailable provider just
+      // Only an AVAILABLE, non-degraded entry commits a switch (restoring its
+      // remembered model/effort/tier). A degraded / unavailable entry just
       // browses the rail - the panel shows its reauth / setup CTA, no commit.
-      const harness =
-        catalogHarnesses.find((option) => option.id === providerId) ??
-        harnesses.find((option) => option.id === providerId) ??
-        null;
-      if (
-        harness !== null &&
-        harness.available &&
-        !railHarnessDegraded(harness, degradedHarnessIds)
-      ) {
-        commitSelection(store, providerId, null);
+      const entry = railEntries.find(
+        (candidate) =>
+          candidate.harness.id === providerId &&
+          candidate.profileId === profileId,
+      );
+      if (entry !== undefined && entry.harness.available && !entry.degraded) {
+        commitSelection(store, providerId, null, profileId);
       }
-      setActiveProviderId(providerId);
+      setActiveRailEntry(providerId, profileId);
     },
-    [
-      catalogHarnesses,
-      degradedHarnessIds,
-      harnesses,
-      lockedHarnessId,
-      setActiveProviderId,
-      store,
-    ],
+    [lockedHarnessId, railEntries, setActiveRailEntry, store],
   );
 
   const handleKeyDown = useCallback(
@@ -402,15 +460,11 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     };
   }, [visibleOpen]);
 
-  // Leader-key scope: while open, ⌘+digit switches the browsed provider rail
-  // (suppressing epic-tab switching) and ⌥+digit sets the thinking level. The
-  // ordered rail list mirrors what `ProviderRail` renders so digits line up with
+  // Leader-key scope: while open, ⌘+digit switches the browsed rail entry
+  // (suppressing epic-tab switching) and ⌥+digit sets the thinking level.
+  // `railEntries` mirrors what `ProviderRail` renders so digits line up with
   // the badges. Both handlers are pure state writes, so the search input keeps
   // focus and the user can keep typing after switching.
-  const railHarnesses = useMemo(
-    () => visibleRailHarnesses(catalogHarnesses, harnesses, degradedHarnessIds),
-    [catalogHarnesses, degradedHarnessIds, harnesses],
-  );
   // ⌥-reasoning is armed whenever the selected model exposes thinking levels.
   // The footer always reflects the selected model (not the browsed rail), so
   // ⌥+digit sets that model's level even while ⌘ browses a different provider.
@@ -418,8 +472,8 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     reasoningFooter.options.length > 0 && !reasoningFooter.disabled;
   usePickerLeaderScope({
     open: visibleOpen,
-    railHarnesses,
-    onProviderChange: handleProviderChange,
+    railEntries,
+    onEntryChange: handleRailEntryChange,
     reasoning: reasoningFooter,
     reasoningActionable,
   });
@@ -486,16 +540,18 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         inputRef={inputRef}
         query={query}
         onQueryChange={handleQueryChange}
-        activeProviderLabel={activeProvider?.label ?? ""}
+        activeProviderLabel={activePanelLabel}
         activeDescendant={modelRowActiveDescendant(idPrefix, activeRow)}
         onKeyDown={handleKeyDown}
         catalogHarnesses={catalogHarnesses}
         fallbackHarnesses={harnesses}
+        profilesByHarnessId={profilesByHarnessId}
         resolvedActiveProviderId={resolvedActiveProviderId}
+        activeProfileId={activePanelProfileId}
         lockedHarnessId={lockedHarnessId}
         degradedHarnessIds={degradedHarnessIds}
         catalogHarnessesLoading={catalog.harnessesLoading}
-        onProviderChange={handleProviderChange}
+        onEntryChange={handleRailEntryChange}
         onRefreshCatalog={refreshCatalog}
         onOpenProviderSettings={openProviderSettings}
         listRef={listRef}
@@ -577,6 +633,40 @@ function providerNeedsPickerReauth(provider: ProviderCliState): boolean {
     provider.enabled &&
     (provider.auth.status === "unauthenticated" ||
       (provider.apiKey.supported && !provider.apiKey.configured))
+  );
+}
+
+function profilesByHarnessIdFromProviderStates(
+  providers: ReadonlyArray<ProviderCliState>,
+): ReadonlyMap<GuiHarnessId, ReadonlyArray<ProviderProfile>> {
+  return new Map(
+    providers.map((provider) => [
+      providerIdToGuiHarnessId(provider.providerId),
+      provider.profiles,
+    ]),
+  );
+}
+
+// Resolve which SPECIFIC rail entry of `harnessId`'s entries is "active" for
+// browsing/commit purposes: prefer the entry matching the reducer's browsed
+// `activeProfileId`, else the one matching the already-committed selection's
+// profile, else the harness's first entry (its ambient one for a 0/1-profile
+// provider). Mirrors `resolveActiveProviderId`'s own fallback chain, one level
+// down (entry within a harness rather than harness within the catalog).
+function resolveActiveEntryForHarness(
+  entries: ReadonlyArray<RailEntry>,
+  harnessId: ProviderId,
+  activeProfileId: string | null,
+  selectedProfileId: string | null,
+): RailEntry | null {
+  const entriesForHarness = entries.filter(
+    (entry) => entry.harness.id === harnessId,
+  );
+  return (
+    entriesForHarness.find((entry) => entry.profileId === activeProfileId) ??
+    entriesForHarness.find((entry) => entry.profileId === selectedProfileId) ??
+    entriesForHarness.at(0) ??
+    null
   );
 }
 

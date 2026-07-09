@@ -61,6 +61,7 @@ const SETTINGS: ChatRunSettings = {
   reasoningEffort: "high",
   serviceTier: null,
   agentMode: "regular",
+  profileId: null,
 };
 
 // Chat-tile binding identity required by every `RenderedMessagesInput`. Stable
@@ -729,6 +730,9 @@ describe("useRenderedMessages", () => {
         reply: { expectsReply: true, responseId: "response-1" },
       },
       sessionAnchor: {
+        profileId: null,
+        labelSnapshot: null,
+        accountUuid: null,
         harnessId: "codex",
         hostId: "host-1",
         sessionId: "session-1",

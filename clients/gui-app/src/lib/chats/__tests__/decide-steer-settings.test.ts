@@ -12,6 +12,7 @@ const SETTINGS: ChatRunSettings = {
   reasoningEffort: "medium",
   serviceTier: "default",
   agentMode: "regular",
+  profileId: null,
 };
 
 const TURN: ChatActiveTurn = {

@@ -11,6 +11,9 @@ import { useChatMessageActions } from "./use-chat-message-actions";
 import { useChatQueueActions } from "./use-chat-queue-actions";
 import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
+import { toast } from "sonner";
+import { useTabProvidersList } from "@/hooks/providers/use-tab-providers-list-query";
+import { TombstonedProfileProvider } from "@/components/chat/tombstoned-profile-provider";
 import type {
   InterviewAnswer,
   Message,
@@ -246,6 +249,14 @@ export function ChatTile(props: ChatTileProps) {
   const tabHostId = useTabHostId();
   const handle = useChatSessionHandle(node.id, tabHostId, chatRecord !== null);
   const reachability = useHostReachability(tabHostId);
+  // Feeds `TombstonedProfileProvider` below - "ran on <label> (removed)" for
+  // a message anchored to a since-tombstoned profile. Shares the same
+  // tab-scoped query the reauth gate/rate-limit prompt already read, so this
+  // costs no extra host RPC.
+  const providersList = useTabProvidersList({
+    enabled: true,
+    subscribed: false,
+  });
   // The clone-offer hook runs `useEpicCreateChat`, which subscribes to
   // the host runtime. Mount it only when the banner is actually
   // shown so the live render path does not pay the subscription cost
@@ -255,6 +266,7 @@ export function ChatTile(props: ChatTileProps) {
       <ChatDeadTileBannerContainer
         epicId={epicId}
         tabId={viewTabId}
+        chatId={node.id}
         sourceHostId={tabHostId}
         hostLabel={reachability.hostLabel}
         testId={`chat-dead-tile-${node.id}`}
@@ -283,13 +295,17 @@ export function ChatTile(props: ChatTileProps) {
   return (
     <div className="flex h-full min-h-0 flex-col" data-node-id={node.id}>
       {deadTileBanner}
-      <ChatTileSessionView
-        handle={handle}
-        node={node}
-        viewTabId={viewTabId}
-        isActive={isActive}
-        currentEpicId={epicId}
-      />
+      <TombstonedProfileProvider
+        providers={providersList.data?.providers ?? []}
+      >
+        <ChatTileSessionView
+          handle={handle}
+          node={node}
+          viewTabId={viewTabId}
+          isActive={isActive}
+          currentEpicId={epicId}
+        />
+      </TombstonedProfileProvider>
     </div>
   );
 }
@@ -339,6 +355,7 @@ function ChatTileFallbackComposer(props: {
 interface ChatDeadTileBannerContainerProps {
   readonly epicId: string;
   readonly tabId: string;
+  readonly chatId: string;
   readonly sourceHostId: string;
   readonly hostLabel: string;
   readonly testId: string;
@@ -347,10 +364,12 @@ interface ChatDeadTileBannerContainerProps {
 function ChatDeadTileBannerContainer(
   props: ChatDeadTileBannerContainerProps,
 ): ReactNode {
+  const chatRecord = useChatById(props.chatId);
   const offer = useChatCloneOnHostSwitch({
     epicId: props.epicId,
     tabId: props.tabId,
     sourceHostId: props.sourceHostId,
+    sourceSettings: chatRecord?.settings ?? null,
   });
   return (
     <ChatDeadTileBanner
@@ -367,6 +386,7 @@ interface UseChatCloneOnHostSwitchArgs {
   readonly epicId: string;
   readonly tabId: string;
   readonly sourceHostId: string;
+  readonly sourceSettings: ChatRunSettings | null;
 }
 
 /**
@@ -405,13 +425,28 @@ function useChatCloneOnHostSwitch(args: UseChatCloneOnHostSwitchArgs): {
     cancelRef.current = cloneChatOnHostSwitch({
       epicId: args.epicId,
       tabId: args.tabId,
+      sourceHostId: args.sourceHostId,
       targetHostId: target.hostId,
       directory: binding.directory,
+      sourceSettings: args.sourceSettings,
+      globalClient: binding.hostClient,
+      onProfileFallbackToAmbient: () => {
+        toast(
+          "Continuing on the Terminal account - your profile isn't available on this host.",
+        );
+      },
       createChat: (request, callbacks) => {
         createChat.mutate(request, { onSuccess: callbacks.onSuccess });
       },
     });
-  }, [binding, createChat, args.epicId, args.tabId, args.sourceHostId]);
+  }, [
+    binding,
+    createChat,
+    args.epicId,
+    args.tabId,
+    args.sourceHostId,
+    args.sourceSettings,
+  ]);
 
   return { clone, cloning };
 }

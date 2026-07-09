@@ -72,6 +72,7 @@ const SETTINGS = {
   reasoningEffort: "high",
   serviceTier: null,
   agentMode: "epic" as const,
+  profileId: null,
 };
 
 const UPDATED_SETTINGS = {
@@ -81,6 +82,7 @@ const UPDATED_SETTINGS = {
   reasoningEffort: "low",
   serviceTier: null,
   agentMode: "epic" as const,
+  profileId: null,
 };
 
 const FILE_APPROVAL: ChatFileEditApprovalState = {

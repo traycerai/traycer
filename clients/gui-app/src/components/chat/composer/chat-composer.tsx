@@ -38,10 +38,13 @@ import { ChatComposerEditorSlot } from "./chat-composer-editor-slot";
 import { ChatComposerToolbarSlot } from "./chat-composer-toolbar-slot";
 import { createComposerPickerStore } from "./picker/composer-picker-store";
 import { ProviderReauthBanner } from "./provider-reauth-banner";
+import { ProfileRateLimitSwitchBanner } from "./profile-rate-limit-switch-banner";
 import { useChatComposerDraft } from "./use-chat-composer-draft";
 import { useChatComposerSubmit } from "./use-chat-composer-submit";
 import { useProviderReauthGate } from "./use-provider-reauth-gate";
+import { useProfileRateLimitSwitchPrompt } from "./use-profile-rate-limit-switch-prompt";
 import { useComposerPickerItems } from "./picker/use-composer-picker-items";
+import { commitSelection } from "@/stores/composer/commit-selection";
 
 interface ChatComposerProps {
   readonly taskId: string;
@@ -183,11 +186,26 @@ function ChatComposerImpl(props: ChatComposerProps) {
     false,
   );
   const harnessId = useStore(toolbarStore, (s) => s.selection.harnessId);
+  const profileId = useStore(toolbarStore, (s) => s.selection.profileId);
+  const modelSlug = useStore(toolbarStore, (s) => s.selection.modelSlug);
   // Connection-level auth gate for the selected provider, scoped to the tab's
   // host. When the provider CLI is signed out it blocks send and mounts the
   // re-auth banner above the composer; a doomed turn can't start.
-  const reauthGate = useProviderReauthGate(harnessId, isActive);
+  const reauthGate = useProviderReauthGate(harnessId, profileId, isActive);
   const sendBlocked = sendDisabled === true || reauthGate.signedOut;
+  // Rate-limit switch prompt: purely informational + user-confirmed, so it
+  // never blocks send the way the reauth gate does.
+  const rateLimitPrompt = useProfileRateLimitSwitchPrompt(
+    harnessId,
+    profileId,
+    isActive,
+  );
+  const onSwitchProfile = useCallback(
+    (nextProfileId: string | null) => {
+      commitSelection(toolbarStore, harnessId, modelSlug, nextProfileId);
+    },
+    [toolbarStore, harnessId, modelSlug],
+  );
   const selectedModel = useStore(toolbarStore, (s) => s.selectedModel);
   const imagesUnsupported = imageAttachmentsUnsupported(
     draftHasImages,
@@ -253,10 +271,26 @@ function ChatComposerImpl(props: ChatComposerProps) {
       )}
     >
       <div className="mx-auto w-full max-w-3xl">
-        {reauthGate.signedOut && reauthGate.providerId !== null ? (
+        {reauthGate.signedOut &&
+        reauthGate.providerId !== null &&
+        reauthGate.reason !== null ? (
           <ProviderReauthBanner
             providerId={reauthGate.providerId}
             state={reauthGate.state}
+            reason={reauthGate.reason}
+            profileLabel={reauthGate.profileLabel}
+            onContinueOnAmbient={
+              reauthGate.reason === "provider_unauthenticated"
+                ? null
+                : () => onSwitchProfile(null)
+            }
+          />
+        ) : null}
+        {!reauthGate.signedOut && rateLimitPrompt.limited ? (
+          <ProfileRateLimitSwitchBanner
+            hardLimited={rateLimitPrompt.hardLimited}
+            alternatives={rateLimitPrompt.alternatives}
+            onSwitchProfile={onSwitchProfile}
           />
         ) : null}
         {topSlot}

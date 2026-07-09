@@ -395,6 +395,34 @@ function providerCliState(input: {
     envOverrides: [],
     loginCapability: null,
     availabilityPending: false,
+    profiles: [],
+  };
+}
+
+function providerCliStateWithProfiles(input: {
+  readonly providerId: ProviderCliState["providerId"];
+  readonly profiles: ProviderCliState["profiles"];
+}): ProviderCliState {
+  return {
+    providerId: input.providerId,
+    enabled: true,
+    disabledBy: null,
+    selected: { kind: "bundled" },
+    candidates: [],
+    auth: {
+      status: "authenticated",
+      badgeText: null,
+      label: null,
+      detail: null,
+    },
+    authPending: false,
+    checkedAt: null,
+    apiKey: { supported: false, configured: false, source: null },
+    terminalAgentArgs: "",
+    envOverrides: [],
+    loginCapability: null,
+    availabilityPending: false,
+    profiles: input.profiles,
   };
 }
 
@@ -440,7 +468,7 @@ function longClaudeModels(): ReadonlyArray<ModelOption> {
 }
 
 function defaultSelection(): HarnessModelSelection {
-  return { harnessId: "codex", modelSlug: "" };
+  return { harnessId: "codex", modelSlug: "", profileId: null };
 }
 
 function installCatalog(): void {
@@ -627,6 +655,7 @@ describe("<HarnessModelPicker />", () => {
       reasoningEffort: input.reasoningEffort,
       serviceTier: input.serviceTier,
       agentMode: "regular",
+      profileId: null,
     });
   }
 
@@ -689,7 +718,11 @@ describe("<HarnessModelPicker />", () => {
       }),
     ]);
     renderPicker({
-      selection: { harnessId: "claude", modelSlug: "claude-sonnet-5" },
+      selection: {
+        harnessId: "claude",
+        modelSlug: "claude-sonnet-5",
+        profileId: null,
+      },
     });
 
     await openPickerByTriggerName("Claude Sonnet 5");
@@ -711,7 +744,11 @@ describe("<HarnessModelPicker />", () => {
   it("opens the virtualized provider list at a far-down selected model", async () => {
     installClaudeCatalog(longClaudeModels());
     renderPicker({
-      selection: { harnessId: "claude", modelSlug: "claude-model-32" },
+      selection: {
+        harnessId: "claude",
+        modelSlug: "claude-model-32",
+        profileId: null,
+      },
     });
 
     await waitFor(() => {
@@ -736,7 +773,11 @@ describe("<HarnessModelPicker />", () => {
       .spyOn(Element.prototype, "scrollIntoView")
       .mockImplementation(() => undefined);
     renderPicker({
-      selection: { harnessId: "claude", modelSlug: "claude-sonnet-4-6" },
+      selection: {
+        harnessId: "claude",
+        modelSlug: "claude-sonnet-4-6",
+        profileId: null,
+      },
     });
 
     await openPickerByTriggerName("Claude Sonnet 4.6");
@@ -775,7 +816,11 @@ describe("<HarnessModelPicker />", () => {
 
   it("keeps other rail providers visible but disabled when locked", async () => {
     const { selections } = renderPicker({
-      selection: { harnessId: "claude", modelSlug: "claude-opus-4-7" },
+      selection: {
+        harnessId: "claude",
+        modelSlug: "claude-opus-4-7",
+        profileId: null,
+      },
       lockedHarnessId: "claude",
     });
 
@@ -826,7 +871,9 @@ describe("<HarnessModelPicker />", () => {
     await openPicker();
     fireEvent.click(screen.getByRole("option", { name: /GPT-5\.5/ }));
 
-    expect(selections).toEqual([{ harnessId: "codex", modelSlug: "gpt-5.5" }]);
+    expect(selections).toEqual([
+      { harnessId: "codex", modelSlug: "gpt-5.5", profileId: null },
+    ]);
   });
 
   it("closes and blocks selection when disabled while already open", async () => {
@@ -994,6 +1041,116 @@ describe("<HarnessModelPicker />", () => {
     ).not.toBeNull();
   });
 
+  it("renders a single unlabeled rail entry when a provider has exactly one profile", async () => {
+    queryMock.providerStates = [
+      providerCliStateWithProfiles({
+        providerId: "claude-code",
+        profiles: [
+          {
+            profileId: "ambient",
+            kind: "ambient",
+            authType: "oauth",
+            label: "Terminal account",
+            auth: {
+              status: "authenticated",
+              badgeText: null,
+              label: null,
+              detail: null,
+            },
+            identity: null,
+            usageUpdatedAt: null,
+            rateLimitStatus: "unknown",
+            duplicateOfProfileId: null,
+            accentColor: null,
+            ambientDriftNotice: null,
+          },
+        ],
+      }),
+    ];
+
+    renderPicker(undefined);
+    await openPicker();
+
+    // Byte-identical to the pre-profile rail: exactly one "Claude" tab, no
+    // "Claude - <profile label>" split. OpenCode stays hidden (unavailable,
+    // non-degraded), matching every other rail test's default fixture.
+    expect(screen.getAllByRole("tab")).toEqual([
+      screen.getByRole("tab", { name: "Codex" }),
+      screen.getByRole("tab", { name: "Claude" }),
+      screen.getByRole("tab", { name: "OpenRouter" }),
+    ]);
+  });
+
+  it("splits a provider with 2+ profiles into one rail entry per profile", async () => {
+    queryMock.providerStates = [
+      providerCliStateWithProfiles({
+        providerId: "claude-code",
+        profiles: [
+          {
+            profileId: "ambient",
+            kind: "ambient",
+            authType: "oauth",
+            label: "Terminal account",
+            auth: {
+              status: "authenticated",
+              badgeText: null,
+              label: null,
+              detail: null,
+            },
+            identity: null,
+            usageUpdatedAt: null,
+            rateLimitStatus: "unknown",
+            duplicateOfProfileId: null,
+            accentColor: null,
+            ambientDriftNotice: null,
+          },
+          {
+            profileId: "work-profile",
+            kind: "managed",
+            authType: "oauth",
+            label: "Work",
+            auth: {
+              status: "authenticated",
+              badgeText: null,
+              label: null,
+              detail: null,
+            },
+            identity: null,
+            usageUpdatedAt: null,
+            rateLimitStatus: "unknown",
+            duplicateOfProfileId: null,
+            accentColor: null,
+            ambientDriftNotice: null,
+          },
+        ],
+      }),
+    ];
+    const { selections } = renderPicker(undefined);
+
+    await openPicker();
+
+    expect(screen.getAllByRole("tab")).toEqual([
+      screen.getByRole("tab", { name: "Codex" }),
+      screen.getByRole("tab", { name: "Claude - Terminal account" }),
+      screen.getByRole("tab", { name: "Claude - Work" }),
+      screen.getByRole("tab", { name: "OpenRouter" }),
+    ]);
+
+    fireEvent.click(screen.getByRole("tab", { name: "Claude - Work" }));
+
+    expect(selections.at(-1)?.harnessId).toBe("claude");
+    expect(selections.at(-1)?.profileId).toBe("work-profile");
+
+    // The ambient entry must commit `null` - the same value every other
+    // run/session-level profileId (and the composer's memory keying) use for
+    // ambient - not the wire array's literal "ambient" sentinel.
+    fireEvent.click(
+      screen.getByRole("tab", { name: "Claude - Terminal account" }),
+    );
+    expect(selections.at(-1)?.harnessId).toBe("claude");
+    expect(selections.at(-1)?.profileId).toBeNull();
+  });
+
   it("keeps unavailable API-key providers visible with a settings CTA", async () => {
     renderPicker(undefined);
 
@@ -1124,7 +1281,9 @@ describe("<HarnessModelPicker />", () => {
     fireEvent.keyDown(input, { key: "ArrowDown" });
     fireEvent.keyDown(input, { key: "Enter" });
 
-    expect(selections).toEqual([{ harnessId: "codex", modelSlug: "gpt-4.1" }]);
+    expect(selections).toEqual([
+      { harnessId: "codex", modelSlug: "gpt-4.1", profileId: null },
+    ]);
   });
 
   it("clears search with Escape before closing the picker", async () => {
@@ -1274,6 +1433,7 @@ describe("<HarnessModelPicker />", () => {
     expect(selections.at(-1)).toEqual({
       harnessId: "claude",
       modelSlug: "claude-opus-4-7",
+      profileId: null,
     });
     expect(reasoningChanges.at(-1)).toBe("high");
     expect(serviceTierChanges.at(-1)).toBe("fast");
@@ -1294,6 +1454,7 @@ describe("<HarnessModelPicker />", () => {
     expect(selections.at(-1)).toEqual({
       harnessId: "codex",
       modelSlug: "gpt-4.1",
+      profileId: null,
     });
     expect(reasoningChanges.at(-1)).toBe("high");
   });
@@ -1343,6 +1504,7 @@ describe("<HarnessModelPicker />", () => {
     expect(selections.at(-1)).toEqual({
       harnessId: "claude",
       modelSlug: "claude-delisted",
+      profileId: null,
     });
 
     pushStoreCatalog(store, "claude", [
@@ -1357,6 +1519,7 @@ describe("<HarnessModelPicker />", () => {
     expect(store.getState().selection).toEqual({
       harnessId: "claude",
       modelSlug: "claude-opus-4-7",
+      profileId: null,
     });
   });
 });

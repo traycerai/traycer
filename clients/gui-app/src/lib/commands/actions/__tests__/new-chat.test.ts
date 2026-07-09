@@ -172,6 +172,7 @@ describe("new chat command actions", () => {
       tabId: TAB_ID,
       hostId: "test-host",
       worktreeIntent: null,
+      settings: null,
       createChat: createChat.createChat,
       openWhenProjected: opened.openWhenProjected,
     });
@@ -208,6 +209,7 @@ describe("new chat command actions", () => {
       tabId: TAB_ID,
       hostId: "test-host",
       worktreeIntent: SEEDED_WORKTREE_INTENT,
+      settings: null,
       createChat: createChat.createChat,
       openWhenProjected: opened.openWhenProjected,
     });
@@ -312,6 +314,7 @@ describe("new chat command actions", () => {
         tabId: TAB_ID,
         hostId: "test-host",
         worktreeIntent: null,
+        settings: null,
         createChat: createChat.createChat,
         openWhenProjected: openCreatedChatWhenProjected,
       });
@@ -332,6 +335,7 @@ describe("new chat command actions", () => {
         tabId: TAB_ID,
         hostId: "test-host",
         worktreeIntent: null,
+        settings: null,
         createChat: createChat.createChat,
         openWhenProjected: openCreatedChatWhenProjected,
       });

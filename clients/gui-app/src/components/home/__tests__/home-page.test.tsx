@@ -109,7 +109,11 @@ vi.mock("@/components/home/composer/landing-composer", () => ({
       actions.submit({
         editor: editorHandleForPrompt("Plan the GUI migration"),
         toolbar: {
-          selection: { harnessId: "codex", modelSlug: "gpt-5-codex" },
+          selection: {
+            harnessId: "codex",
+            modelSlug: "gpt-5-codex",
+            profileId: null,
+          },
           reasoning: "high",
           serviceTier: "",
           permission: "supervised",

@@ -9,6 +9,7 @@ const TEST_SETTINGS = {
   reasoningEffort: null,
   serviceTier: null,
   agentMode: "epic" as const,
+  profileId: null,
 };
 
 const USER_SENDER = { type: "user" as const, userId: "owner-1" };

@@ -3,6 +3,7 @@ import type {
   ProviderAuth,
   ProviderCliCandidate,
   ProviderCliState,
+  ProviderProfile,
   ProviderSelection,
 } from "@traycer/protocol/host/provider-schemas";
 import {
@@ -10,9 +11,65 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+type StartLoginVariables = {
+  readonly providerId: ProviderCliState["providerId"];
+  readonly profileId: string | null;
+  readonly createProfile: {
+    readonly label: string;
+    readonly shareSkillsAndPlugins: boolean;
+  } | null;
+};
+type StartLoginData = {
+  readonly url: string;
+  readonly profileId: string | null;
+};
+type StartLoginOptions = {
+  readonly onSuccess: (data: StartLoginData) => void;
+};
+type StartLoginMutate = (
+  variables: StartLoginVariables,
+  options: StartLoginOptions,
+) => void;
+
+type AwaitLoginVariables = {
+  readonly providerId: ProviderCliState["providerId"];
+  readonly profileId: string | null;
+};
+type AwaitLoginOptions = {
+  readonly onSuccess: (data: unknown) => void;
+  readonly onSettled: () => void;
+};
+type AwaitLoginMutate = (
+  variables: AwaitLoginVariables,
+  options: AwaitLoginOptions,
+) => void;
+
+type RenameProfileVariables = {
+  readonly providerId: ProviderCliState["providerId"];
+  readonly profileId: string;
+  readonly label: string;
+};
+type MutationSuccessOptions = {
+  readonly onSuccess: () => void;
+};
+type RenameProfileMutate = (
+  variables: RenameProfileVariables,
+  options: MutationSuccessOptions,
+) => void;
+
+type RemoveProfileVariables = {
+  readonly providerId: ProviderCliState["providerId"];
+  readonly profileId: string;
+};
+type RemoveProfileMutate = (
+  variables: RemoveProfileVariables,
+  options: MutationSuccessOptions,
+) => void;
 
 const providerMocks = vi.hoisted(() => ({
   listResult: {
@@ -30,6 +87,11 @@ const providerMocks = vi.hoisted(() => ({
   setTerminalAgentArgsMutate: vi.fn(),
   setEnvOverrideMutate: vi.fn(),
   deleteEnvOverrideMutate: vi.fn(),
+  startLoginMutate: vi.fn<StartLoginMutate>(),
+  awaitLoginMutate: vi.fn<AwaitLoginMutate>(),
+  cancelLoginMutate: vi.fn(),
+  renameProfileMutate: vi.fn<RenameProfileMutate>(),
+  removeProfileMutate: vi.fn<RemoveProfileMutate>(),
   refreshProviders: vi.fn(() => Promise.resolve()),
   openExternalLink: vi.fn(),
 }));
@@ -101,6 +163,45 @@ vi.mock("@/hooks/providers/use-providers-delete-env-override-mutation", () => ({
   useProvidersDeleteEnvOverride: () => ({
     mutate: providerMocks.deleteEnvOverrideMutate,
     isPending: false,
+  }),
+}));
+
+vi.mock("@/hooks/providers/use-providers-start-login-mutation", () => ({
+  useProvidersStartLogin: () => ({
+    mutate: providerMocks.startLoginMutate,
+    isPending: false,
+    error: null,
+  }),
+}));
+
+vi.mock("@/hooks/providers/use-providers-await-login-mutation", () => ({
+  useHostScopedProvidersAwaitLogin: () => ({
+    mutate: providerMocks.awaitLoginMutate,
+    isPending: false,
+    error: null,
+  }),
+}));
+
+vi.mock("@/hooks/providers/use-providers-cancel-login-mutation", () => ({
+  useProvidersCancelLogin: () => ({
+    mutate: providerMocks.cancelLoginMutate,
+    isPending: false,
+  }),
+}));
+
+vi.mock("@/hooks/providers/use-rename-provider-profile-mutation", () => ({
+  useRenameProviderProfile: () => ({
+    mutate: providerMocks.renameProfileMutate,
+    isPending: false,
+    error: null,
+  }),
+}));
+
+vi.mock("@/hooks/providers/use-remove-provider-profile-mutation", () => ({
+  useRemoveProviderProfile: () => ({
+    mutate: providerMocks.removeProfileMutate,
+    isPending: false,
+    error: null,
   }),
 }));
 
@@ -182,6 +283,7 @@ vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
     data: [
       {
         hostId: "local",
+        kind: "local",
         label: "Local host",
         status: "available",
         websocketUrl: "ws://127.0.0.1:0",
@@ -219,6 +321,7 @@ function providerState(input: {
   readonly selected: ProviderSelection;
   readonly candidates: readonly ProviderCliCandidate[];
   readonly envOverrides: ProviderCliState["envOverrides"];
+  readonly profiles?: readonly ProviderProfile[];
 }): ProviderCliState {
   return {
     providerId: input.providerId,
@@ -239,6 +342,7 @@ function providerState(input: {
     envOverrides: [...input.envOverrides],
     loginCapability: null,
     availabilityPending: false,
+    profiles: [...(input.profiles ?? [])],
   };
 }
 
@@ -253,6 +357,79 @@ function providerStateWithAuth(
   authPending: boolean,
 ): ProviderCliState {
   return { ...providerState(input), auth, authPending };
+}
+
+function profile(input: {
+  readonly profileId: string;
+  readonly kind: ProviderProfile["kind"];
+  readonly label: string;
+  readonly email: string | null;
+  readonly tier: string | null;
+  readonly authStatus: ProviderProfile["auth"]["status"];
+  readonly duplicateOfProfileId: string | null;
+  readonly ambientDriftNotice: ProviderProfile["ambientDriftNotice"];
+}): ProviderProfile {
+  return {
+    profileId: input.profileId,
+    kind: input.kind,
+    authType: "oauth",
+    label: input.label,
+    auth: {
+      status: input.authStatus,
+      badgeText: null,
+      label: null,
+      detail: null,
+    },
+    identity:
+      input.email === null && input.tier === null
+        ? null
+        : {
+            email: input.email,
+            tier: input.tier,
+            accountUuid: null,
+          },
+    usageUpdatedAt: null,
+    rateLimitStatus: "unknown",
+    duplicateOfProfileId: input.duplicateOfProfileId,
+    ambientDriftNotice: input.ambientDriftNotice,
+    accentColor: null,
+  };
+}
+
+function firstStartLoginCall(): readonly [
+  StartLoginVariables,
+  StartLoginOptions,
+] {
+  const call = providerMocks.startLoginMutate.mock.calls.at(0);
+  if (call === undefined) throw new Error("Expected start login call.");
+  return call;
+}
+
+function firstAwaitLoginCall(): readonly [
+  AwaitLoginVariables,
+  AwaitLoginOptions,
+] {
+  const call = providerMocks.awaitLoginMutate.mock.calls.at(0);
+  if (call === undefined) throw new Error("Expected await login call.");
+  return call;
+}
+
+function firstRenameProfileCall(): readonly [
+  RenameProfileVariables,
+  MutationSuccessOptions,
+] {
+  const call = providerMocks.renameProfileMutate.mock.calls.at(0);
+  if (call === undefined) throw new Error("Expected rename profile call.");
+  return call;
+}
+
+function firstRemoveProfileCall(): readonly [
+  RemoveProfileVariables,
+  MutationSuccessOptions,
+] {
+  const call = providerMocks.removeProfileMutate.mock.calls.at(0);
+  if (call === undefined) throw new Error("Expected remove profile call.");
+  return call;
 }
 
 describe("<ProvidersSettingsPanel />", () => {
@@ -283,6 +460,11 @@ describe("<ProvidersSettingsPanel />", () => {
     providerMocks.setEnabledMutate.mockClear();
     providerMocks.setEnvOverrideMutate.mockClear();
     providerMocks.deleteEnvOverrideMutate.mockClear();
+    providerMocks.startLoginMutate.mockReset();
+    providerMocks.awaitLoginMutate.mockReset();
+    providerMocks.cancelLoginMutate.mockReset();
+    providerMocks.renameProfileMutate.mockReset();
+    providerMocks.removeProfileMutate.mockReset();
   });
 
   afterEach(() => {
@@ -616,5 +798,432 @@ describe("<ProvidersSettingsPanel />", () => {
     fireEvent.click(switchElement);
 
     expect(providerMocks.setEnabledMutate).not.toHaveBeenCalled();
+  });
+
+  it("does not render profile management when the host reports no profiles", () => {
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(screen.queryByText("Profiles")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Add profile" })).toBeNull();
+  });
+
+  it("renders profile rows with duplicate, drift, and unauthenticated states", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "codex",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+          profiles: [
+            profile({
+              profileId: "ambient",
+              kind: "ambient",
+              label: "Ambient",
+              email: "current@example.test",
+              tier: "Pro",
+              authStatus: "authenticated",
+              duplicateOfProfileId: null,
+              ambientDriftNotice: {
+                previousEmail: "previous@example.test",
+                changedAt: 100,
+              },
+            }),
+            profile({
+              profileId: "managed-1",
+              kind: "managed",
+              label: "Work",
+              email: "current@example.test",
+              tier: "Team",
+              authStatus: "authenticated",
+              duplicateOfProfileId: "ambient",
+              ambientDriftNotice: null,
+            }),
+            profile({
+              profileId: "managed-2",
+              kind: "managed",
+              label: "Signed out",
+              email: null,
+              tier: null,
+              authStatus: "unauthenticated",
+              duplicateOfProfileId: null,
+              ambientDriftNotice: null,
+            }),
+          ],
+        }),
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(screen.getByText("Profiles")).toBeDefined();
+    expect(screen.getAllByText("Terminal account").length).toBeGreaterThan(0);
+    // The identity line redacts the email by default (reveal toggle tested
+    // separately) - "current@example.test" -> "c•••@e…".
+    expect(screen.getAllByText("c•••@e…").length).toBeGreaterThan(0);
+    expect(screen.getByText("Pro")).toBeDefined();
+    expect(screen.getByText("Same account as Terminal account")).toBeDefined();
+    expect(
+      screen.getByText(
+        // Drift notice redacts both emails - "current@example.test" ->
+        // "c•••@e…", "previous@example.test" -> "p•••@e…".
+        "Terminal account is now c•••@e…; was p•••@e….",
+      ),
+    ).toBeDefined();
+    expect(screen.getByText("Not authenticated")).toBeDefined();
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Dismiss terminal account change notice",
+      }),
+    );
+
+    expect(
+      screen.queryByText(
+        // Drift notice redacts both emails - "current@example.test" ->
+        // "c•••@e…", "previous@example.test" -> "p•••@e…".
+        "Terminal account is now c•••@e…; was p•••@e….",
+      ),
+    ).toBeNull();
+  });
+
+  it("redacts a profile's email by default and reveals it on toggle", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "codex",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+          profiles: [
+            profile({
+              profileId: "ambient",
+              kind: "ambient",
+              label: "Ambient",
+              email: null,
+              tier: null,
+              authStatus: "authenticated",
+              duplicateOfProfileId: null,
+              ambientDriftNotice: null,
+            }),
+            profile({
+              profileId: "managed-1",
+              kind: "managed",
+              label: "Work",
+              email: "alice@domain.com",
+              tier: null,
+              authStatus: "authenticated",
+              duplicateOfProfileId: null,
+              ambientDriftNotice: null,
+            }),
+          ],
+        }),
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(screen.getByText("a•••@d…")).toBeDefined();
+    expect(screen.queryByText("alice@domain.com")).toBeNull();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Reveal email for Work" }),
+    );
+    expect(screen.getByText("alice@domain.com")).toBeDefined();
+    expect(screen.queryByText("a•••@d…")).toBeNull();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Hide email for Work" }),
+    );
+    expect(screen.getByText("a•••@d…")).toBeDefined();
+    expect(screen.queryByText("alice@domain.com")).toBeNull();
+  });
+
+  it("starts a managed-profile login then awaits the returned profile id", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        {
+          ...providerState({
+            providerId: "codex",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+            profiles: [
+              profile({
+                profileId: "ambient",
+                kind: "ambient",
+                label: "Ambient",
+                email: "ambient@example.test",
+                tier: null,
+                authStatus: "authenticated",
+                duplicateOfProfileId: null,
+                ambientDriftNotice: null,
+              }),
+            ],
+          }),
+          loginCapability: { oauthArgs: ["auth", "login"], token: null },
+        },
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start sign-in" }));
+
+    const [startVariables, startOptions] = firstStartLoginCall();
+    expect(startVariables).toEqual({
+      providerId: "codex",
+      profileId: null,
+      createProfile: { label: "Profile 2", shareSkillsAndPlugins: false },
+    });
+    expect(typeof startOptions.onSuccess).toBe("function");
+
+    startOptions.onSuccess({
+      url: "https://login.example.test",
+      profileId: "managed-1",
+    });
+
+    const [awaitVariables, awaitOptions] = firstAwaitLoginCall();
+    expect(awaitVariables).toEqual({
+      providerId: "codex",
+      profileId: "managed-1",
+    });
+    expect(typeof awaitOptions.onSuccess).toBe("function");
+    expect(typeof awaitOptions.onSettled).toBe("function");
+  });
+
+  it("does not offer the share-skills-and-plugins checkbox for a provider without the overlay mechanism (codex)", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        {
+          ...providerState({
+            providerId: "codex",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+            profiles: [
+              profile({
+                profileId: "ambient",
+                kind: "ambient",
+                label: "Ambient",
+                email: "ambient@example.test",
+                tier: null,
+                authStatus: "authenticated",
+                duplicateOfProfileId: null,
+                ambientDriftNotice: null,
+              }),
+            ],
+          }),
+          loginCapability: { oauthArgs: ["auth", "login"], token: null },
+        },
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
+    expect(screen.queryByText("Share skills and plugins")).toBeNull();
+  });
+
+  it("offers the share-skills-and-plugins checkbox for claude, off by default, and forwards it once checked", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        {
+          ...providerState({
+            providerId: "claude-code",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+            profiles: [
+              profile({
+                profileId: "ambient",
+                kind: "ambient",
+                label: "Ambient",
+                email: "ambient@example.test",
+                tier: null,
+                authStatus: "authenticated",
+                duplicateOfProfileId: null,
+                ambientDriftNotice: null,
+              }),
+            ],
+          }),
+          loginCapability: { oauthArgs: ["auth", "login"], token: null },
+        },
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
+    const checkbox = screen.getByRole("checkbox", {
+      name: "Share skills and plugins with the terminal account",
+    });
+    expect(checkbox.getAttribute("aria-checked")).toBe("false");
+
+    fireEvent.click(checkbox);
+    expect(checkbox.getAttribute("aria-checked")).toBe("true");
+
+    fireEvent.click(screen.getByRole("button", { name: "Start sign-in" }));
+
+    const [startVariables] = firstStartLoginCall();
+    expect(startVariables).toEqual({
+      providerId: "claude-code",
+      profileId: null,
+      createProfile: { label: "Profile 2", shareSkillsAndPlugins: true },
+    });
+  });
+
+  it("redacts the newly created profile's email in the sign-in success message", async () => {
+    providerMocks.listResult.data = {
+      providers: [
+        {
+          ...providerState({
+            providerId: "codex",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+            profiles: [
+              profile({
+                profileId: "ambient",
+                kind: "ambient",
+                label: "Ambient",
+                email: "ambient@example.test",
+                tier: null,
+                authStatus: "authenticated",
+                duplicateOfProfileId: null,
+                ambientDriftNotice: null,
+              }),
+            ],
+          }),
+          loginCapability: { oauthArgs: ["auth", "login"], token: null },
+        },
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start sign-in" }));
+
+    const [, startOptions] = firstStartLoginCall();
+    startOptions.onSuccess({
+      url: "https://login.example.test",
+      profileId: "managed-1",
+    });
+
+    const [, awaitOptions] = firstAwaitLoginCall();
+    awaitOptions.onSuccess({
+      state: {
+        profiles: [
+          {
+            profileId: "managed-1",
+            identity: {
+              email: "alice@domain.com",
+              tier: null,
+              accountUuid: null,
+            },
+          },
+        ],
+      },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("a•••@d…")).toBeDefined();
+    });
+    expect(screen.queryByText("alice@domain.com")).toBeNull();
+  });
+
+  it("renames and confirms removal through the profile row controls", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "codex",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+          profiles: [
+            profile({
+              profileId: "ambient",
+              kind: "ambient",
+              label: "Ambient",
+              email: "ambient@example.test",
+              tier: null,
+              authStatus: "authenticated",
+              duplicateOfProfileId: null,
+              ambientDriftNotice: null,
+            }),
+            profile({
+              profileId: "managed-1",
+              kind: "managed",
+              label: "Work",
+              email: "work@example.test",
+              tier: null,
+              authStatus: "authenticated",
+              duplicateOfProfileId: null,
+              ambientDriftNotice: null,
+            }),
+          ],
+        }),
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Rename Work" }));
+    fireEvent.change(screen.getByDisplayValue("Work"), {
+      target: { value: "Personal" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save profile name" }));
+
+    const [renameVariables, renameOptions] = firstRenameProfileCall();
+    expect(renameVariables).toEqual({
+      providerId: "codex",
+      profileId: "managed-1",
+      label: "Personal",
+    });
+    expect(typeof renameOptions.onSuccess).toBe("function");
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove Work" }));
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    const [removeVariables, removeOptions] = firstRemoveProfileCall();
+    expect(removeVariables).toEqual({
+      providerId: "codex",
+      profileId: "managed-1",
+    });
+    expect(typeof removeOptions.onSuccess).toBe("function");
   });
 });

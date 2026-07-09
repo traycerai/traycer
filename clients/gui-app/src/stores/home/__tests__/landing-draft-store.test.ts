@@ -73,6 +73,7 @@ const HAIKU_SETTINGS: ChatRunSettings = {
   reasoningEffort: null,
   serviceTier: null,
   agentMode: "regular",
+  profileId: null,
 };
 
 const SONNET_SETTINGS: ChatRunSettings = {
@@ -82,6 +83,7 @@ const SONNET_SETTINGS: ChatRunSettings = {
   reasoningEffort: null,
   serviceTier: null,
   agentMode: "epic",
+  profileId: null,
 };
 const WORKSPACE_A = {
   path: "/tmp/workspace-a",

@@ -120,6 +120,7 @@ function TerminalLaunchPanelImpl(props: TerminalLaunchPanelProps) {
       model: selection.modelSlug.length > 0 ? selection.modelSlug : null,
       reasoningEffort: reasoning.length > 0 ? reasoning : null,
       terminalAgentArgs: argsTouched ? argsDraft : null,
+      profileId: selection.profileId,
     });
   }, [
     agentMode,
@@ -129,6 +130,7 @@ function TerminalLaunchPanelImpl(props: TerminalLaunchPanelProps) {
     onStart,
     reasoning,
     selection.modelSlug,
+    selection.profileId,
     startDisabled,
   ]);
 

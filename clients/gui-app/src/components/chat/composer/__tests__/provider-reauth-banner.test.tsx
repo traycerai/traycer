@@ -26,7 +26,12 @@ const mocks = vi.hoisted(() => ({
   setApiKeyMutate: vi.fn(),
   refreshProviders: vi.fn(() => Promise.resolve()),
   openExternalLink: vi.fn(),
+  openSettings: vi.fn(),
   hostKind: "local",
+}));
+
+vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
+  useSystemTabModalActions: () => ({ openSettings: mocks.openSettings }),
 }));
 
 vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
@@ -129,6 +134,7 @@ function claudeState(
     envOverrides: [],
     loginCapability,
     availabilityPending: false,
+    profiles: [],
   };
 }
 
@@ -153,6 +159,7 @@ function cursorState(): ProviderCliState {
     // API-key-only provider: no OAuth session to reconnect → no banner capability.
     loginCapability: null,
     availabilityPending: false,
+    profiles: [],
   };
 }
 
@@ -176,6 +183,7 @@ function droidState(): ProviderCliState {
     envOverrides: [],
     loginCapability: DROID_CAP,
     availabilityPending: false,
+    profiles: [],
   };
 }
 
@@ -199,6 +207,9 @@ describe("<ProviderReauthBanner />", () => {
       <ProviderReauthBanner
         providerId="claude-code"
         state={claudeState(CLAUDE_CAP)}
+        reason="provider_unauthenticated"
+        profileLabel={null}
+        onContinueOnAmbient={null}
       />,
     );
 
@@ -206,7 +217,15 @@ describe("<ProviderReauthBanner />", () => {
   });
 
   it("offers only the token paste form (no Authenticate) for a CLI with no headless login (Droid)", () => {
-    render(<ProviderReauthBanner providerId="droid" state={droidState()} />);
+    render(
+      <ProviderReauthBanner
+        providerId="droid"
+        state={droidState()}
+        reason="provider_unauthenticated"
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
 
     // Droid has no spawnable OAuth login, so no Authenticate button is offered -
     // it would only hang on "Waiting for browser sign-in…".
@@ -220,7 +239,15 @@ describe("<ProviderReauthBanner />", () => {
   });
 
   it("stores a pasted Droid key as the encrypted API-key secret, not an env override", () => {
-    render(<ProviderReauthBanner providerId="droid" state={droidState()} />);
+    render(
+      <ProviderReauthBanner
+        providerId="droid"
+        state={droidState()}
+        reason="provider_unauthenticated"
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
 
     const input = screen.getByPlaceholderText("Paste your FACTORY_API_KEY");
     fireEvent.change(input, { target: { value: "  fk-droid-123  " } });
@@ -241,6 +268,9 @@ describe("<ProviderReauthBanner />", () => {
       <ProviderReauthBanner
         providerId="claude-code"
         state={claudeState(CLAUDE_CAP)}
+        reason="provider_unauthenticated"
+        profileLabel={null}
+        onContinueOnAmbient={null}
       />,
     );
 
@@ -263,6 +293,9 @@ describe("<ProviderReauthBanner />", () => {
       <ProviderReauthBanner
         providerId="claude-code"
         state={claudeState(CLAUDE_CAP)}
+        reason="provider_unauthenticated"
+        profileLabel={null}
+        onContinueOnAmbient={null}
       />,
     );
 
@@ -271,7 +304,7 @@ describe("<ProviderReauthBanner />", () => {
     // 2s `forceAuthRefresh` poll.
     expect(screen.getByText(/Waiting for browser sign-in/)).toBeDefined();
     expect(mocks.awaitLoginMutate).toHaveBeenCalledWith(
-      { providerId: "claude-code" },
+      { providerId: "claude-code", profileId: null },
       expect.anything(),
     );
   });
@@ -281,6 +314,9 @@ describe("<ProviderReauthBanner />", () => {
       <ProviderReauthBanner
         providerId="claude-code"
         state={claudeState(CLAUDE_CAP)}
+        reason="provider_unauthenticated"
+        profileLabel={null}
+        onContinueOnAmbient={null}
       />,
     );
 
@@ -317,6 +353,9 @@ describe("<ProviderReauthBanner />", () => {
       <ProviderReauthBanner
         providerId="claude-code"
         state={claudeState(CLAUDE_CAP)}
+        reason="provider_unauthenticated"
+        profileLabel={null}
+        onContinueOnAmbient={null}
       />,
     );
 
@@ -342,12 +381,16 @@ describe("<ProviderReauthBanner />", () => {
       <ProviderReauthBanner
         providerId="claude-code"
         state={claudeState(CLAUDE_CAP)}
+        reason="provider_unauthenticated"
+        profileLabel={null}
+        onContinueOnAmbient={null}
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: /Authenticate/ }));
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(mocks.cancelLoginMutate).toHaveBeenCalledWith({
       providerId: "claude-code",
+      profileId: null,
     });
   });
 
@@ -357,6 +400,9 @@ describe("<ProviderReauthBanner />", () => {
       <ProviderReauthBanner
         providerId="claude-code"
         state={claudeState({ oauthArgs: ["auth", "login"], token: null })}
+        reason="provider_unauthenticated"
+        profileLabel={null}
+        onContinueOnAmbient={null}
       />,
     );
 
@@ -372,6 +418,9 @@ describe("<ProviderReauthBanner />", () => {
       <ProviderReauthBanner
         providerId="claude-code"
         state={claudeState(CLAUDE_CAP)}
+        reason="provider_unauthenticated"
+        profileLabel={null}
+        onContinueOnAmbient={null}
       />,
     );
 
@@ -381,7 +430,15 @@ describe("<ProviderReauthBanner />", () => {
   });
 
   it("offers the paste form for an API-key-only provider (Cursor) with no OAuth", () => {
-    render(<ProviderReauthBanner providerId="cursor" state={cursorState()} />);
+    render(
+      <ProviderReauthBanner
+        providerId="cursor"
+        state={cursorState()}
+        reason="provider_unauthenticated"
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
 
     expect(screen.getByPlaceholderText("Paste your API key")).toBeDefined();
     expect(screen.getByRole("button", { name: "Save" })).toBeDefined();
@@ -395,5 +452,58 @@ describe("<ProviderReauthBanner />", () => {
       { providerId: "cursor", apiKey: "cursor-key" },
       expect.anything(),
     );
+  });
+
+  describe("profile-specific reasons", () => {
+    it("offers only the ambient fallback (no OAuth/token form) for a missing profile", () => {
+      const onContinueOnAmbient = vi.fn();
+      render(
+        <ProviderReauthBanner
+          providerId="claude-code"
+          state={claudeState(CLAUDE_CAP)}
+          reason="profile_missing"
+          profileLabel={null}
+          onContinueOnAmbient={onContinueOnAmbient}
+        />,
+      );
+
+      expect(
+        screen.getByText(
+          "This chat's Claude Code profile is no longer available.",
+        ),
+      ).toBeDefined();
+      expect(screen.queryByRole("button", { name: /Authenticate/ })).toBeNull();
+      fireEvent.click(
+        screen.getByRole("button", { name: "Continue on Terminal account" }),
+      );
+      expect(onContinueOnAmbient).toHaveBeenCalledTimes(1);
+
+      fireEvent.click(
+        screen.getByRole("button", { name: "Reconnect in Settings" }),
+      );
+      expect(mocks.openSettings).toHaveBeenCalledWith({
+        section: "providers",
+        resetToGeneral: false,
+      });
+    });
+
+    it("names the profile for profile_unauthenticated and still offers the ambient fallback", () => {
+      const onContinueOnAmbient = vi.fn();
+      render(
+        <ProviderReauthBanner
+          providerId="claude-code"
+          state={claudeState(CLAUDE_CAP)}
+          reason="profile_unauthenticated"
+          profileLabel="Work"
+          onContinueOnAmbient={onContinueOnAmbient}
+        />,
+      );
+
+      expect(screen.getByText('"Work" is signed out.')).toBeDefined();
+      fireEvent.click(
+        screen.getByRole("button", { name: "Continue on Terminal account" }),
+      );
+      expect(onContinueOnAmbient).toHaveBeenCalledTimes(1);
+    });
   });
 });

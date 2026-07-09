@@ -215,7 +215,7 @@ export function useHeaderRateLimitBars(): ReadonlyArray<HeaderRateLimitBar> {
   // `null` (TanStack's defaults) instead of silently borrowing an unrelated
   // provider's refetch behavior.
   const glyphOptions = glyphProviders.map(
-    (providerId) => providerRateLimitQueryOptions(providerId).options,
+    (providerId) => providerRateLimitQueryOptions(providerId, null).options,
   );
   const firstGlyphOptions: ProviderRateLimitTanstackOptions | null =
     glyphOptions.length > 0 ? glyphOptions[0] : null;
@@ -235,7 +235,10 @@ export function useHeaderRateLimitBars(): ReadonlyArray<HeaderRateLimitBar> {
   >({
     client,
     requests: glyphProviders.map((providerId) => {
-      const { method, params } = providerRateLimitQueryOptions(providerId);
+      const { method, params } = providerRateLimitQueryOptions(
+        providerId,
+        null,
+      );
       return { method, params };
     }),
     options: sharedGlyphOptions,

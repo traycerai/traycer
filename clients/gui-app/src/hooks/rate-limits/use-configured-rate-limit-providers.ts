@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
 import {
   isRateLimitCapableProvider,
@@ -11,6 +12,7 @@ import {
 export interface ConfiguredRateLimitProvider {
   readonly providerId: RateLimitProviderId;
   readonly lane: RateLimitFetchLane;
+  readonly profiles: ReadonlyArray<ProviderProfile>;
 }
 
 /**
@@ -38,7 +40,13 @@ export function useConfiguredRateLimitProviders(): ReadonlyArray<ConfiguredRateL
       const providerId = state.providerId;
       if (!isRateLimitCapableProvider(providerId)) return [];
       if (!isRateLimitProviderConfigured(state)) return [];
-      return [{ providerId, lane: rateLimitFetchLane(providerId) }];
+      return [
+        {
+          providerId,
+          lane: rateLimitFetchLane(providerId),
+          profiles: state.profiles,
+        },
+      ];
     });
   }, [providers]);
 }

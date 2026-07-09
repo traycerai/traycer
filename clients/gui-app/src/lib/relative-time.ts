@@ -91,6 +91,11 @@ export function useRelativeTimestamp(createdAt: number): string {
   return formatRelativeTimestamp(createdAt, sampledNow);
 }
 
+export function useSampledNow(): number {
+  useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  return sampledNow;
+}
+
 /**
  * Pure future-facing countdown formatter, the mirror of
  * `formatRelativeTimestamp` for a reset time instead of a creation time.

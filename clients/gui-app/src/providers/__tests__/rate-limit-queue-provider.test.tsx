@@ -114,6 +114,7 @@ describe("<RateLimitQueueProvider />", () => {
     expect(enqueueSpy).toHaveBeenCalledTimes(1);
     expect(enqueueSpy).toHaveBeenCalledWith("codex", DEFAULT_ACCOUNT_CONTEXT, {
       force: false,
+      profileId: null,
     });
   });
 
@@ -134,6 +135,7 @@ describe("<RateLimitQueueProvider />", () => {
     expect(enqueueSpy).toHaveBeenCalledTimes(1);
     expect(enqueueSpy).toHaveBeenCalledWith("codex", DEFAULT_ACCOUNT_CONTEXT, {
       force: false,
+      profileId: null,
     });
   });
 
@@ -200,6 +202,7 @@ describe("<RateLimitQueueProvider />", () => {
     expect(enqueueSpy).toHaveBeenCalledTimes(1);
     expect(enqueueSpy).toHaveBeenCalledWith("codex", DEFAULT_ACCOUNT_CONTEXT, {
       force: false,
+      profileId: null,
     });
     enqueueSpy.mockClear();
 
@@ -209,6 +212,7 @@ describe("<RateLimitQueueProvider />", () => {
     expect(enqueueSpy).toHaveBeenCalledTimes(1);
     expect(enqueueSpy).toHaveBeenCalledWith("codex", DEFAULT_ACCOUNT_CONTEXT, {
       force: false,
+      profileId: null,
     });
   });
 

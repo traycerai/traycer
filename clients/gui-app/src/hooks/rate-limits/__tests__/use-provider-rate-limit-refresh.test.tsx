@@ -48,7 +48,13 @@ describe("useProviderRateLimitRefresh refresh routing", () => {
   it("routes an ephemeralProcess provider's refresh through the serial queue with force:true, never a bare refetch", async () => {
     const refetch = vi.fn(() => Promise.resolve({}));
     const { result } = renderHook(() =>
-      useProviderRateLimitRefresh("codex", false, refetch),
+      useProviderRateLimitRefresh({
+        providerId: "codex",
+        profileId: null,
+        usageUpdatedAt: null,
+        isFetching: false,
+        refetch,
+      }),
     );
 
     await result.current.refresh();
@@ -58,6 +64,7 @@ describe("useProviderRateLimitRefresh refresh routing", () => {
       DEFAULT_ACCOUNT_CONTEXT,
       {
         force: true,
+        profileId: null,
       },
     );
     expect(refetch).not.toHaveBeenCalled();
@@ -66,7 +73,13 @@ describe("useProviderRateLimitRefresh refresh routing", () => {
   it("routes an httpFetch provider's refresh through its own refetch, never the queue", async () => {
     const refetch = vi.fn(() => Promise.resolve({}));
     const { result } = renderHook(() =>
-      useProviderRateLimitRefresh("openrouter", false, refetch),
+      useProviderRateLimitRefresh({
+        providerId: "openrouter",
+        profileId: null,
+        usageUpdatedAt: null,
+        isFetching: false,
+        refetch,
+      }),
     );
 
     await result.current.refresh();
@@ -81,12 +94,24 @@ describe("useProviderRateLimitRefresh isRefreshing", () => {
 
   it("reflects the provider's own isFetching on both lanes", () => {
     const codex = renderHook(() =>
-      useProviderRateLimitRefresh("codex", true, refetch),
+      useProviderRateLimitRefresh({
+        providerId: "codex",
+        profileId: null,
+        usageUpdatedAt: null,
+        isFetching: true,
+        refetch,
+      }),
     );
     expect(codex.result.current.isRefreshing).toBe(true);
 
     const openrouter = renderHook(() =>
-      useProviderRateLimitRefresh("openrouter", true, refetch),
+      useProviderRateLimitRefresh({
+        providerId: "openrouter",
+        profileId: null,
+        usageUpdatedAt: null,
+        isFetching: true,
+        refetch,
+      }),
     );
     expect(openrouter.result.current.isRefreshing).toBe(true);
   });
@@ -94,7 +119,13 @@ describe("useProviderRateLimitRefresh isRefreshing", () => {
   it("folds the queue's draining flag in for an ephemeralProcess provider whose own fetch has settled", () => {
     mocks.draining = true;
     const { result } = renderHook(() =>
-      useProviderRateLimitRefresh("codex", false, refetch),
+      useProviderRateLimitRefresh({
+        providerId: "codex",
+        profileId: null,
+        usageUpdatedAt: null,
+        isFetching: false,
+        refetch,
+      }),
     );
     expect(result.current.isRefreshing).toBe(true);
   });
@@ -102,14 +133,26 @@ describe("useProviderRateLimitRefresh isRefreshing", () => {
   it("ignores draining for an httpFetch provider - its own isFetching is the complete signal", () => {
     mocks.draining = true;
     const { result } = renderHook(() =>
-      useProviderRateLimitRefresh("openrouter", false, refetch),
+      useProviderRateLimitRefresh({
+        providerId: "openrouter",
+        profileId: null,
+        usageUpdatedAt: null,
+        isFetching: false,
+        refetch,
+      }),
     );
     expect(result.current.isRefreshing).toBe(false);
   });
 
   it("is false when nothing is fetching and the queue is idle", () => {
     const { result } = renderHook(() =>
-      useProviderRateLimitRefresh("codex", false, refetch),
+      useProviderRateLimitRefresh({
+        providerId: "codex",
+        profileId: null,
+        usageUpdatedAt: null,
+        isFetching: false,
+        refetch,
+      }),
     );
     expect(result.current.isRefreshing).toBe(false);
   });

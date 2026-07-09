@@ -73,6 +73,7 @@ describe("useRefreshProviderRateLimitsOnTurn", () => {
     expect(enqueueSpy).toHaveBeenCalledTimes(1);
     expect(enqueueSpy).toHaveBeenCalledWith("codex", DEFAULT_ACCOUNT_CONTEXT, {
       force: false,
+      profileId: null,
     });
     expect(invalidateSpy).not.toHaveBeenCalled();
   });
@@ -93,6 +94,7 @@ describe("useRefreshProviderRateLimitsOnTurn", () => {
     expect(enqueueSpy).toHaveBeenCalledTimes(1);
     expect(enqueueSpy).toHaveBeenCalledWith("codex", DEFAULT_ACCOUNT_CONTEXT, {
       force: false,
+      profileId: null,
     });
   });
 

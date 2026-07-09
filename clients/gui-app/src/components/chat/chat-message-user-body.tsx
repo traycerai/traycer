@@ -73,6 +73,8 @@ import { LivePulse } from "@/components/ui/live-pulse";
 import { AgentReferenceMarkdown } from "./segments/agent-reference-markdown";
 import { SegmentCard } from "./segments/segment-card";
 import { SegmentPanel } from "./segments/segment-panel";
+import { useTombstonedProfileLabel } from "./use-tombstoned-profile-label";
+import { ProfileAvatarBadge } from "@/components/providers/profile-avatar-badge";
 
 const NOOP: () => void = () => undefined;
 const NOOP_CLIPBOARD: ClipboardEventHandler<HTMLElement> = () => undefined;
@@ -348,6 +350,13 @@ function UserMessageDisplayView({
       />
     );
 
+  const tombstonedProfileLabel = useTombstonedProfileLabel(
+    message.sessionAnchor,
+  );
+  // Present whenever `tombstonedProfileLabel` is (the resolver only returns a
+  // label for an anchor with a non-null `profileId`) - re-derived separately
+  // since the hook's return doesn't narrow `sessionAnchor` for TypeScript.
+  const anchorProfileId = message.sessionAnchor?.profileId ?? null;
   const confirmingDelete = actions?.confirmingDelete ?? false;
   const visibleSteerBadge =
     message.steerBadge !== null && message.steerBadge.status !== "steered"
@@ -406,24 +415,73 @@ function UserMessageDisplayView({
             button is rendered independently of `actions` so it stays available
             on hover even while a turn is streaming (when edit/delete are gated
             off and `actions` is null). */}
-        <div
-          className={cn(
-            "absolute right-3 top-full z-10 flex -translate-y-1/2 items-center gap-0.5 rounded-md border border-border/60 bg-background p-0.5 shadow-sm transition-opacity",
-            confirmingDelete
-              ? "pointer-events-auto opacity-100"
-              : "pointer-events-none opacity-0 group-hover/user-message:pointer-events-auto group-hover/user-message:opacity-100 group-focus-within/user-message:pointer-events-auto group-focus-within/user-message:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100",
-          )}
-        >
-          {actions !== null ? <MessageActionBar actions={actions} /> : null}
-          {!confirmingDelete && copyText.trim().length > 0 ? (
-            <MessageCopyButton
-              text={copyText}
-              structuredContent={message.structuredContent}
-            />
-          ) : null}
-        </div>
+        <UserMessageActionOverlay
+          confirmingDelete={confirmingDelete}
+          actions={actions}
+          copyText={copyText}
+          structuredContent={message.structuredContent}
+        />
       </div>
+      {tombstonedProfileLabel !== null && anchorProfileId !== null ? (
+        <UserMessageTombstonedProfileFooter
+          profileId={anchorProfileId}
+          label={tombstonedProfileLabel}
+        />
+      ) : null}
     </div>
+  );
+}
+
+function UserMessageActionOverlay({
+  confirmingDelete,
+  actions,
+  copyText,
+  structuredContent,
+}: {
+  readonly confirmingDelete: boolean;
+  readonly actions: ChatMessageUserActions | null;
+  readonly copyText: string;
+  readonly structuredContent: JsonContent | null;
+}): ReactNode {
+  return (
+    <div
+      className={cn(
+        "absolute right-3 top-full z-10 flex -translate-y-1/2 items-center gap-0.5 rounded-md border border-border/60 bg-background p-0.5 shadow-sm transition-opacity",
+        confirmingDelete
+          ? "pointer-events-auto opacity-100"
+          : "pointer-events-none opacity-0 group-hover/user-message:pointer-events-auto group-hover/user-message:opacity-100 group-focus-within/user-message:pointer-events-auto group-focus-within/user-message:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100",
+      )}
+    >
+      {actions !== null ? <MessageActionBar actions={actions} /> : null}
+      {!confirmingDelete && copyText.trim().length > 0 ? (
+        <MessageCopyButton
+          text={copyText}
+          structuredContent={structuredContent}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function UserMessageTombstonedProfileFooter({
+  profileId,
+  label,
+}: {
+  readonly profileId: string;
+  readonly label: string;
+}): ReactNode {
+  return (
+    <span className="mt-1 flex items-center gap-1.5 text-ui-xs text-muted-foreground">
+      <ProfileAvatarBadge
+        profileId={profileId}
+        label={label}
+        email={null}
+        accentColor={null}
+        size="sm"
+        className={undefined}
+      />
+      Ran on {label} (removed)
+    </span>
   );
 }
 

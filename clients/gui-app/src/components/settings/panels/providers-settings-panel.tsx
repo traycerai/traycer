@@ -3,14 +3,26 @@ import {
   useEffect,
   useId,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
-import { ExternalLink, Plus, Trash2 } from "lucide-react";
+import {
+  AlertTriangle,
+  Check,
+  Eye,
+  EyeOff,
+  ExternalLink,
+  Pencil,
+  Plus,
+  Trash2,
+  X,
+} from "lucide-react";
 import {
   PROVIDER_DISPLAY_NAMES,
   type ProviderCliCandidate,
+  type ProviderProfile,
   type ProviderCliState,
   type ProviderSelection,
 } from "@traycer/protocol/host/provider-schemas";
@@ -22,7 +34,18 @@ import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/hos
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { RefreshIconButton } from "@/components/refresh-icon-button";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -48,6 +71,11 @@ import { useGuiHarnessesQuery } from "@/hooks/harnesses/use-gui-harness-catalog"
 import { useRefreshProviders } from "@/hooks/providers/use-refresh-providers";
 import { useProvidersSetEnvOverride } from "@/hooks/providers/use-providers-set-env-override-mutation";
 import { useProvidersDeleteEnvOverride } from "@/hooks/providers/use-providers-delete-env-override-mutation";
+import { useProvidersStartLogin } from "@/hooks/providers/use-providers-start-login-mutation";
+import { useHostScopedProvidersAwaitLogin } from "@/hooks/providers/use-providers-await-login-mutation";
+import { useProvidersCancelLogin } from "@/hooks/providers/use-providers-cancel-login-mutation";
+import { useRenameProviderProfile } from "@/hooks/providers/use-rename-provider-profile-mutation";
+import { useRemoveProviderProfile } from "@/hooks/providers/use-remove-provider-profile-mutation";
 import { useHostClientFor } from "@/hooks/host/use-host-client-for";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
@@ -58,6 +86,7 @@ import type { HostRpcRegistry } from "@/lib/host";
 import { HostRuntimeContext, useHostBinding } from "@/lib/host/runtime";
 import { useRelativeTimestamp } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
+import { redactEmail } from "@/lib/providers/redact-email";
 import {
   providerIdToGuiHarnessId,
   sortProviderStatesByProviderOrder,
@@ -248,6 +277,11 @@ export function ProvidersSettingsPanel() {
     if (effectiveId === null || effectiveId === activeHostId) return null;
     return hosts.find((entry) => entry.hostId === effectiveId) ?? null;
   }, [hosts, effectiveId, activeHostId]);
+  const selectedEntry = useMemo(() => {
+    if (effectiveId === null) return null;
+    return hosts.find((entry) => entry.hostId === effectiveId) ?? null;
+  }, [hosts, effectiveId]);
+  const isSelectedHostLocal = selectedEntry?.kind === "local";
   const transientClient = useHostClientFor(targetEntry);
   const realBinding = useHostBinding();
   // Scope the whole panel (list + refresh + every provider mutation) to the
@@ -267,7 +301,12 @@ export function ProvidersSettingsPanel() {
       />
     ) : null;
 
-  const inner = <ProvidersSettingsPanelInner hostPicker={hostPicker} />;
+  const inner = (
+    <ProvidersSettingsPanelInner
+      hostPicker={hostPicker}
+      isSelectedHostLocal={isSelectedHostLocal}
+    />
+  );
   if (scopedBinding === null) return inner;
   return (
     <HostRuntimeContext.Provider value={scopedBinding}>
@@ -308,8 +347,10 @@ function hostOptionLabel(host: HostDirectoryEntry): string {
 
 function ProvidersSettingsPanelInner({
   hostPicker,
+  isSelectedHostLocal,
 }: {
   readonly hostPicker: ReactNode;
+  readonly isSelectedHostLocal: boolean;
 }) {
   const query = useProvidersList({ enabled: true, subscribed: true });
   const providers = query.data?.providers ?? [];
@@ -338,15 +379,20 @@ function ProvidersSettingsPanelInner({
         </div>
       }
     >
-      <ProvidersPanelBody query={query} />
+      <ProvidersPanelBody
+        query={query}
+        isSelectedHostLocal={isSelectedHostLocal}
+      />
     </SettingsPanelShell>
   );
 }
 
 function ProvidersPanelBody({
   query,
+  isSelectedHostLocal,
 }: {
   readonly query: ProvidersListQuery;
+  readonly isSelectedHostLocal: boolean;
 }): ReactNode {
   if (query.isPending) {
     return (
@@ -369,13 +415,20 @@ function ProvidersPanelBody({
       </div>
     );
   }
-  return <ProvidersRailLayout providers={query.data.providers} />;
+  return (
+    <ProvidersRailLayout
+      providers={query.data.providers}
+      isSelectedHostLocal={isSelectedHostLocal}
+    />
+  );
 }
 
 function ProvidersRailLayout({
   providers,
+  isSelectedHostLocal,
 }: {
   readonly providers: readonly ProviderCliState[];
+  readonly isSelectedHostLocal: boolean;
 }) {
   const orderedProviders = useMemo(
     () => sortProviderStatesByProviderOrder(providers),
@@ -427,6 +480,7 @@ function ProvidersRailLayout({
           key={active.providerId}
           state={active}
           providers={orderedProviders}
+          isSelectedHostLocal={isSelectedHostLocal}
         />
       </div>
     </div>
@@ -490,9 +544,11 @@ function hidesCliCandidates(
 function ProviderDetail({
   state,
   providers,
+  isSelectedHostLocal,
 }: {
   readonly state: ProviderCliState;
   readonly providers: readonly ProviderCliState[];
+  readonly isSelectedHostLocal: boolean;
 }) {
   const providerId = state.providerId;
   // Traycer/OpenRouter share the OpenCode binary path set: their tables show
@@ -567,7 +623,13 @@ function ProviderDetail({
             isPending={setEnabled.isPending}
             enabledProviderCount={enabledProviderCount}
             onSetEnabled={(id, enabled) =>
-              setEnabled.mutate({ providerId: id, enabled })
+              // No profile management UI yet - this call never renames/removes
+              // a profile.
+              setEnabled.mutate({
+                providerId: id,
+                enabled,
+                profileAction: null,
+              })
             }
           />
         </div>
@@ -575,6 +637,10 @@ function ProviderDetail({
 
       <TraycerSubscriptionForProvider providerId={providerId} />
       <ProviderRateLimitForProvider providerId={providerId} />
+      <ProviderProfilesSection
+        state={state}
+        isSelectedHostLocal={isSelectedHostLocal}
+      />
 
       <div
         className={cn(
@@ -676,6 +742,805 @@ function ProviderDetail({
         />
       </div>
     </div>
+  );
+}
+
+function ProviderProfilesSection({
+  state,
+  isSelectedHostLocal,
+}: {
+  readonly state: ProviderCliState;
+  readonly isSelectedHostLocal: boolean;
+}): ReactNode {
+  const profiles = state.profiles;
+  const [addOpen, setAddOpen] = useState(false);
+  const [dismissedDriftKeys, setDismissedDriftKeys] = useState<
+    readonly string[]
+  >([]);
+  const dismissedDriftKeySet = new Set(dismissedDriftKeys);
+
+  if (profiles.length === 0) return null;
+
+  const orderedProfiles = [...profiles].sort((a, b) => {
+    if (a.kind === b.kind) return 0;
+    return a.kind === "ambient" ? -1 : 1;
+  });
+  const canAddProfile = providerCanStartProfileOauth(
+    state,
+    isSelectedHostLocal,
+  );
+
+  const dismissDrift = (profile: ProviderProfile): void => {
+    const key = profileDriftKey(state.providerId, profile);
+    if (key === null || dismissedDriftKeys.includes(key)) return;
+    setDismissedDriftKeys((current) => [...current, key]);
+  };
+
+  return (
+    <section className="flex flex-col gap-3 rounded-lg border border-border/60 p-3">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="text-ui-sm font-medium text-foreground">Profiles</div>
+          <p className="text-ui-xs text-muted-foreground">
+            Subscription logins available for{" "}
+            {PROVIDER_DISPLAY_NAMES[state.providerId]} on this host.
+          </p>
+        </div>
+        <Button
+          type="button"
+          size="sm"
+          variant="secondary"
+          onClick={() => setAddOpen(true)}
+          disabled={!canAddProfile}
+          title={
+            canAddProfile
+              ? undefined
+              : "Add profiles from a local host with browser sign-in available."
+          }
+        >
+          <Plus className="size-3.5" />
+          Add profile
+        </Button>
+      </div>
+      {canAddProfile ? null : (
+        <p className="text-ui-xs text-muted-foreground">
+          Adding profiles requires a local host with browser sign-in support.
+        </p>
+      )}
+      <div className="flex flex-col overflow-hidden rounded-md border border-border/50">
+        {orderedProfiles.map((profile) => {
+          const driftKey = profileDriftKey(state.providerId, profile);
+          const duplicate = duplicateProfileLabel(profile, profiles);
+          return (
+            <ProviderProfileRow
+              key={profile.profileId}
+              providerId={state.providerId}
+              profile={profile}
+              duplicateLabel={duplicate}
+              driftDismissed={
+                driftKey !== null && dismissedDriftKeySet.has(driftKey)
+              }
+              onDismissDrift={() => dismissDrift(profile)}
+            />
+          );
+        })}
+      </div>
+      <AddProviderProfileDialog
+        state={state}
+        open={addOpen}
+        onOpenChange={setAddOpen}
+      />
+    </section>
+  );
+}
+
+function providerCanStartProfileOauth(
+  state: ProviderCliState,
+  isSelectedHostLocal: boolean,
+): boolean {
+  const oauthArgs = state.loginCapability?.oauthArgs ?? null;
+  return isSelectedHostLocal && oauthArgs !== null && oauthArgs.length > 0;
+}
+
+function profileDisplayLabel(profile: ProviderProfile): string {
+  return profile.kind === "ambient" ? "Terminal account" : profile.label;
+}
+
+function duplicateProfileLabel(
+  profile: ProviderProfile,
+  profiles: readonly ProviderProfile[],
+): string | null {
+  if (profile.duplicateOfProfileId === null) return null;
+  const duplicate = profiles.find(
+    (candidate) => candidate.profileId === profile.duplicateOfProfileId,
+  );
+  if (duplicate === undefined) return "another profile";
+  return profileDisplayLabel(duplicate);
+}
+
+function profileDriftKey(
+  providerId: ProviderId,
+  profile: ProviderProfile,
+): string | null {
+  const notice = profile.ambientDriftNotice;
+  if (notice === null) return null;
+  return `${providerId}:${profile.profileId}:${notice.changedAt}`;
+}
+
+function ProviderProfileRow({
+  providerId,
+  profile,
+  duplicateLabel,
+  driftDismissed,
+  onDismissDrift,
+}: {
+  readonly providerId: ProviderId;
+  readonly profile: ProviderProfile;
+  readonly duplicateLabel: string | null;
+  readonly driftDismissed: boolean;
+  readonly onDismissDrift: () => void;
+}): ReactNode {
+  const renameProfile = useRenameProviderProfile();
+  const removeProfile = useRemoveProviderProfile();
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(profile.label);
+  const [confirmRemoveOpen, setConfirmRemoveOpen] = useState(false);
+  const editable = profile.kind === "managed";
+  const busy = renameProfile.isPending || removeProfile.isPending;
+
+  const saveRename = (): void => {
+    const label = draft.trim();
+    if (
+      label.length === 0 ||
+      label === profile.label ||
+      renameProfile.isPending
+    ) {
+      setDraft(profile.label);
+      setEditing(false);
+      return;
+    }
+    renameProfile.mutate(
+      { providerId, profileId: profile.profileId, label },
+      {
+        onSuccess: () => {
+          setEditing(false);
+        },
+      },
+    );
+  };
+
+  return (
+    <div className="flex flex-col gap-2 border-b border-border/40 p-3 last:border-b-0">
+      {profile.kind === "ambient" &&
+      profile.ambientDriftNotice !== null &&
+      !driftDismissed ? (
+        <AmbientDriftNotice profile={profile} onDismiss={onDismissDrift} />
+      ) : null}
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          {editing ? (
+            <div className="flex min-w-0 items-center gap-2">
+              <Input
+                value={draft}
+                onChange={(event) => setDraft(event.target.value)}
+                className="min-w-0 flex-1 text-ui-sm"
+                disabled={busy}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") saveRename();
+                  if (event.key === "Escape") {
+                    setDraft(profile.label);
+                    setEditing(false);
+                  }
+                }}
+              />
+              <Button
+                type="button"
+                size="icon-sm"
+                variant="secondary"
+                aria-label="Save profile name"
+                disabled={busy}
+                onClick={saveRename}
+              >
+                {renameProfile.isPending ? <MutedAgentSpinner /> : <Check />}
+              </Button>
+              <Button
+                type="button"
+                size="icon-sm"
+                variant="ghost"
+                aria-label="Cancel profile rename"
+                disabled={busy}
+                onClick={() => {
+                  setDraft(profile.label);
+                  setEditing(false);
+                }}
+              >
+                <X />
+              </Button>
+            </div>
+          ) : (
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              <div className="min-w-0 truncate text-ui-sm font-medium text-foreground">
+                {profileDisplayLabel(profile)}
+              </div>
+              {profile.kind === "ambient" ? (
+                <Badge
+                  variant="outline"
+                  className="h-4 rounded-sm border-border/60 bg-muted/20 px-1.5 text-[10px] font-normal leading-none text-muted-foreground"
+                >
+                  Terminal account
+                </Badge>
+              ) : null}
+            </div>
+          )}
+          <ProfileIdentityLine profile={profile} />
+        </div>
+        {editable ? (
+          <div className="flex shrink-0 items-center gap-1">
+            <Button
+              type="button"
+              size="icon-sm"
+              variant="ghost"
+              aria-label={`Rename ${profile.label}`}
+              disabled={busy}
+              onClick={() => {
+                setDraft(profile.label);
+                setEditing(true);
+              }}
+            >
+              <Pencil />
+            </Button>
+            <Button
+              type="button"
+              size="icon-sm"
+              variant="ghost"
+              aria-label={`Remove ${profile.label}`}
+              disabled={busy}
+              onClick={() => setConfirmRemoveOpen(true)}
+            >
+              <Trash2 />
+            </Button>
+          </div>
+        ) : null}
+      </div>
+      {duplicateLabel !== null ? (
+        <ProfileWarning>Same account as {duplicateLabel}</ProfileWarning>
+      ) : null}
+      {removeProfile.error !== null ? (
+        <p className="text-ui-xs text-destructive">
+          {removeProfile.error.message}
+        </p>
+      ) : null}
+      {editable ? (
+        <ConfirmDestructiveDialog
+          open={confirmRemoveOpen}
+          onOpenChange={setConfirmRemoveOpen}
+          title={`Remove ${profile.label}?`}
+          description="This removes the managed profile from this host. Running sessions on this profile must be stopped first."
+          cascadeSummary={null}
+          actionLabel="Remove"
+          isPending={removeProfile.isPending}
+          onConfirm={() =>
+            removeProfile.mutate(
+              { providerId, profileId: profile.profileId },
+              { onSuccess: () => setConfirmRemoveOpen(false) },
+            )
+          }
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function AmbientDriftNotice({
+  profile,
+  onDismiss,
+}: {
+  readonly profile: ProviderProfile;
+  readonly onDismiss: () => void;
+}): ReactNode {
+  const currentEmail = profile.identity?.email ?? null;
+  const current =
+    currentEmail !== null ? redactEmail(currentEmail) : "an unknown account";
+  const previousEmail = profile.ambientDriftNotice?.previousEmail ?? null;
+  const previous =
+    previousEmail !== null ? redactEmail(previousEmail) : "an unknown account";
+  return (
+    <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-2.5 py-2 text-ui-xs text-amber-900 dark:text-amber-200">
+      <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+      <span className="min-w-0 flex-1">
+        Terminal account is now {current}; was {previous}.
+      </span>
+      <button
+        type="button"
+        aria-label="Dismiss terminal account change notice"
+        className="rounded p-0.5 text-current opacity-70 transition-opacity hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+        onClick={onDismiss}
+      >
+        <X className="size-3.5" />
+      </button>
+    </div>
+  );
+}
+
+function ProfileIdentityLine({
+  profile,
+}: {
+  readonly profile: ProviderProfile;
+}): ReactNode {
+  const [emailRevealed, setEmailRevealed] = useState(false);
+  const email = profile.identity?.email ?? null;
+  const displayLabel = resolveProfileIdentityLabel(
+    profile,
+    email,
+    emailRevealed,
+  );
+  const tier = profile.identity?.tier;
+  return (
+    <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1.5 text-ui-xs text-muted-foreground">
+      <span className="min-w-0 truncate">{displayLabel}</span>
+      {email !== null ? (
+        <button
+          type="button"
+          aria-label={
+            emailRevealed
+              ? `Hide email for ${profileDisplayLabel(profile)}`
+              : `Reveal email for ${profileDisplayLabel(profile)}`
+          }
+          aria-pressed={emailRevealed}
+          className="rounded p-0.5 text-current opacity-70 transition-opacity hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+          onClick={() => setEmailRevealed((current) => !current)}
+        >
+          {emailRevealed ? (
+            <EyeOff className="size-3" />
+          ) : (
+            <Eye className="size-3" />
+          )}
+        </button>
+      ) : null}
+      {tier !== null && tier !== undefined && tier.length > 0 ? (
+        <Badge
+          variant="outline"
+          className="h-4 rounded-sm border-border/60 bg-muted/20 px-1.5 text-[10px] font-normal leading-none text-muted-foreground"
+        >
+          {tier}
+        </Badge>
+      ) : null}
+      <ProfileAuthBadge profile={profile} />
+    </div>
+  );
+}
+
+function resolveProfileIdentityLabel(
+  profile: ProviderProfile,
+  email: string | null,
+  emailRevealed: boolean,
+): string {
+  if (email === null) return authFallbackLabel(profile);
+  return emailRevealed ? email : redactEmail(email);
+}
+
+function authFallbackLabel(profile: ProviderProfile): string {
+  if (profile.auth.status === "authenticated") {
+    return profile.auth.label ?? "Authenticated";
+  }
+  if (profile.auth.status === "configured") return "Configured, not verified";
+  if (profile.auth.status === "unauthenticated") return "Not authenticated";
+  if (profile.auth.status === "unavailable")
+    return "Could not check account status";
+  return "Account status unavailable";
+}
+
+function ProfileAuthBadge({
+  profile,
+}: {
+  readonly profile: ProviderProfile;
+}): ReactNode {
+  const text = profile.auth.badgeText ?? authStatusBadgeText(profile);
+  if (text === null) return null;
+  return (
+    <Badge
+      variant="outline"
+      className="h-4 max-w-full rounded-sm border-border/60 bg-muted/20 px-1.5 text-[10px] font-normal leading-none text-muted-foreground"
+    >
+      <span className="truncate">{text}</span>
+    </Badge>
+  );
+}
+
+function authStatusBadgeText(profile: ProviderProfile): string | null {
+  if (profile.auth.status === "authenticated") return "OAuth";
+  if (profile.auth.status === "configured") return "Configured";
+  if (profile.auth.status === "unauthenticated") return "Signed out";
+  if (profile.auth.status === "unavailable") return "Unavailable";
+  return null;
+}
+
+function ProfileWarning({
+  children,
+}: {
+  readonly children: ReactNode;
+}): ReactNode {
+  return (
+    <div className="flex items-start gap-1.5 rounded-md bg-destructive/10 px-2.5 py-2 text-ui-xs text-destructive">
+      <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+      <span className="min-w-0">{children}</span>
+    </div>
+  );
+}
+
+function useAddProviderProfileFlow(
+  state: ProviderCliState,
+  onOpenChange: (open: boolean) => void,
+): {
+  readonly defaultLabel: string;
+  readonly label: string;
+  readonly setLabel: (label: string) => void;
+  readonly shareSkillsAndPlugins: boolean;
+  readonly setShareSkillsAndPlugins: (value: boolean) => void;
+  readonly supportsShareSkillsAndPlugins: boolean;
+  readonly awaiting: boolean;
+  readonly loginUrl: string | null;
+  readonly createdProfile: ProviderProfile | null;
+  readonly createdProfileEmail: string | null;
+  readonly busy: boolean;
+  readonly startLoginPending: boolean;
+  readonly renameProfilePending: boolean;
+  readonly startLoginErrorMessage: string | null;
+  readonly awaitLoginErrorMessage: string | null;
+  readonly renameProfileErrorMessage: string | null;
+  readonly close: (nextOpen: boolean) => void;
+  readonly onCancelLogin: () => void;
+  readonly onCreate: () => void;
+  readonly onSaveName: () => void;
+} {
+  const defaultLabel = `Profile ${state.profiles.length + 1}`;
+  const [label, setLabel] = useState(defaultLabel);
+  const [shareSkillsAndPlugins, setShareSkillsAndPlugins] = useState(false);
+  const [awaiting, setAwaiting] = useState(false);
+  const [loginUrl, setLoginUrl] = useState<string | null>(null);
+  const loginProfileIdRef = useRef<string | null>(null);
+  const [createdProfile, setCreatedProfile] = useState<ProviderProfile | null>(
+    null,
+  );
+  const startLogin = useProvidersStartLogin();
+  const awaitLogin = useHostScopedProvidersAwaitLogin();
+  const cancelLogin = useProvidersCancelLogin();
+  const renameProfile = useRenameProviderProfile();
+  const busy = startLogin.isPending || awaiting || renameProfile.isPending;
+  // Opt-in skills/plugins overlay (shadow-home plan §6) is a Claude-only
+  // mechanism - other providers either have no such split (codex shares
+  // everything but auth/config unconditionally) or no managed-profile
+  // overlay at all.
+  const supportsShareSkillsAndPlugins = state.providerId === "claude-code";
+
+  const reset = (): void => {
+    setLabel(defaultLabel);
+    setShareSkillsAndPlugins(false);
+    setAwaiting(false);
+    setLoginUrl(null);
+    loginProfileIdRef.current = null;
+    setCreatedProfile(null);
+  };
+
+  const close = (nextOpen: boolean): void => {
+    if (busy && !nextOpen) return;
+    onOpenChange(nextOpen);
+    if (!nextOpen) reset();
+  };
+
+  const onCancelLogin = (): void => {
+    const loginProfileId = loginProfileIdRef.current;
+    if (loginProfileId !== null) {
+      cancelLogin.mutate({
+        providerId: state.providerId,
+        profileId: loginProfileId,
+      });
+    }
+    setAwaiting(false);
+  };
+
+  const onCreate = (): void => {
+    const trimmedLabel = label.trim();
+    if (trimmedLabel.length === 0 || busy) return;
+    startLogin.mutate(
+      {
+        providerId: state.providerId,
+        profileId: null,
+        createProfile: {
+          label: trimmedLabel,
+          shareSkillsAndPlugins:
+            supportsShareSkillsAndPlugins && shareSkillsAndPlugins,
+        },
+      },
+      {
+        onSuccess: (data) => {
+          setLoginUrl(data.url);
+          loginProfileIdRef.current = data.profileId;
+          setAwaiting(true);
+          if (data.profileId === null) {
+            setAwaiting(false);
+            return;
+          }
+          awaitLogin.mutate(
+            { providerId: state.providerId, profileId: data.profileId },
+            {
+              onSuccess: (result) => {
+                const profile =
+                  result.state?.profiles.find(
+                    (candidate) => candidate.profileId === data.profileId,
+                  ) ?? null;
+                setCreatedProfile(profile);
+              },
+              onSettled: () => setAwaiting(false),
+            },
+          );
+        },
+      },
+    );
+  };
+
+  const createdProfileEmail = createdProfile?.identity?.email ?? null;
+
+  const onSaveName = (): void => {
+    const profile = createdProfile;
+    const trimmedLabel = label.trim();
+    if (
+      profile === null ||
+      trimmedLabel.length === 0 ||
+      renameProfile.isPending
+    ) {
+      return;
+    }
+    renameProfile.mutate(
+      {
+        providerId: state.providerId,
+        profileId: profile.profileId,
+        label: trimmedLabel,
+      },
+      {
+        onSuccess: () => close(false),
+      },
+    );
+  };
+
+  return {
+    defaultLabel,
+    label,
+    setLabel,
+    shareSkillsAndPlugins,
+    setShareSkillsAndPlugins,
+    supportsShareSkillsAndPlugins,
+    awaiting,
+    loginUrl,
+    createdProfile,
+    createdProfileEmail,
+    busy,
+    startLoginPending: startLogin.isPending,
+    renameProfilePending: renameProfile.isPending,
+    startLoginErrorMessage: startLogin.error?.message ?? null,
+    awaitLoginErrorMessage: awaitLogin.error?.message ?? null,
+    renameProfileErrorMessage: renameProfile.error?.message ?? null,
+    close,
+    onCancelLogin,
+    onCreate,
+    onSaveName,
+  };
+}
+
+function AddProviderProfileDialog({
+  state,
+  open,
+  onOpenChange,
+}: {
+  readonly state: ProviderCliState;
+  readonly open: boolean;
+  readonly onOpenChange: (open: boolean) => void;
+}): ReactNode {
+  const labelInputId = useId();
+  const shareSkillsAndPluginsId = useId();
+  const runnerHost = useRunnerHost();
+  const {
+    label,
+    setLabel,
+    shareSkillsAndPlugins,
+    setShareSkillsAndPlugins,
+    supportsShareSkillsAndPlugins,
+    awaiting,
+    loginUrl,
+    createdProfile,
+    createdProfileEmail,
+    busy,
+    startLoginPending,
+    renameProfilePending,
+    startLoginErrorMessage,
+    awaitLoginErrorMessage,
+    renameProfileErrorMessage,
+    close,
+    onCancelLogin,
+    onCreate,
+    onSaveName,
+  } = useAddProviderProfileFlow(state, onOpenChange);
+
+  return (
+    <Dialog open={open} onOpenChange={close}>
+      <DialogContent className="w-[min(92vw,28rem)]">
+        <DialogHeader>
+          <DialogTitle>
+            Add {PROVIDER_DISPLAY_NAMES[state.providerId]} profile
+          </DialogTitle>
+          <DialogDescription>
+            Choose a label, then complete the browser sign-in for this host.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex flex-col gap-3">
+          <label
+            htmlFor={labelInputId}
+            className="flex flex-col gap-1.5 text-ui-sm font-medium text-foreground"
+          >
+            Label
+            <Input
+              id={labelInputId}
+              value={label}
+              onChange={(event) => setLabel(event.target.value)}
+              disabled={busy}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && createdProfile === null)
+                  onCreate();
+                if (event.key === "Enter" && createdProfile !== null)
+                  onSaveName();
+              }}
+            />
+          </label>
+          {supportsShareSkillsAndPlugins && createdProfile === null ? (
+            <div className="flex items-start gap-2 text-ui-sm text-muted-foreground">
+              <Checkbox
+                id={shareSkillsAndPluginsId}
+                aria-label="Share skills and plugins with the terminal account"
+                checked={shareSkillsAndPlugins}
+                disabled={busy}
+                onCheckedChange={(value) =>
+                  setShareSkillsAndPlugins(value === true)
+                }
+              />
+              <label
+                htmlFor={shareSkillsAndPluginsId}
+                className="flex min-w-0 cursor-pointer flex-col gap-0.5 select-none"
+              >
+                <span className="text-foreground">
+                  Share skills and plugins
+                </span>
+                <span>
+                  Use the same skills and plugins as the terminal account
+                  instead of a separate copy.
+                </span>
+              </label>
+            </div>
+          ) : null}
+          {awaiting ? (
+            <AddProviderProfileAwaitingBanner
+              loginUrl={loginUrl}
+              onOpenExternalLink={(url) =>
+                void runnerHost.openExternalLink(url)
+              }
+              onCancel={onCancelLogin}
+            />
+          ) : null}
+          <AddProviderProfileStatusMessages
+            createdProfile={createdProfile}
+            createdProfileEmail={createdProfileEmail}
+            startLoginErrorMessage={startLoginErrorMessage}
+            awaitLoginErrorMessage={awaitLoginErrorMessage}
+            renameProfileErrorMessage={renameProfileErrorMessage}
+          />
+        </div>
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={() => close(false)}
+            disabled={busy}
+          >
+            Cancel
+          </Button>
+          {createdProfile === null ? (
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={onCreate}
+              disabled={busy || label.trim().length === 0}
+            >
+              {startLoginPending ? <MutedAgentSpinner /> : null}
+              Start sign-in
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={onSaveName}
+              disabled={busy || label.trim().length === 0}
+            >
+              {renameProfilePending ? <MutedAgentSpinner /> : null}
+              Save profile
+            </Button>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function AddProviderProfileAwaitingBanner({
+  loginUrl,
+  onOpenExternalLink,
+  onCancel,
+}: {
+  readonly loginUrl: string | null;
+  readonly onOpenExternalLink: (url: string) => void;
+  readonly onCancel: () => void;
+}): ReactNode {
+  return (
+    <div className="flex flex-col gap-2 rounded-md border border-border/60 bg-muted/20 p-3">
+      <div className="flex items-center gap-2 text-ui-sm text-foreground">
+        <MutedAgentSpinner />
+        <span>Waiting for browser sign-in…</span>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        {loginUrl !== null ? (
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            onClick={() => onOpenExternalLink(loginUrl)}
+          >
+            Open sign-in page
+          </Button>
+        ) : null}
+        <Button type="button" size="sm" variant="ghost" onClick={onCancel}>
+          Cancel
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function AddProviderProfileStatusMessages({
+  createdProfile,
+  createdProfileEmail,
+  startLoginErrorMessage,
+  awaitLoginErrorMessage,
+  renameProfileErrorMessage,
+}: {
+  readonly createdProfile: ProviderProfile | null;
+  readonly createdProfileEmail: string | null;
+  readonly startLoginErrorMessage: string | null;
+  readonly awaitLoginErrorMessage: string | null;
+  readonly renameProfileErrorMessage: string | null;
+}): ReactNode {
+  return (
+    <>
+      {createdProfile !== null ? (
+        <div className="rounded-md border border-border/60 bg-muted/20 p-3 text-ui-sm">
+          Logged in as{" "}
+          <span className="font-medium text-foreground">
+            {createdProfileEmail !== null
+              ? redactEmail(createdProfileEmail)
+              : "authenticated profile"}
+          </span>
+          .
+        </div>
+      ) : null}
+      {startLoginErrorMessage !== null ? (
+        <p className="text-ui-xs text-destructive">{startLoginErrorMessage}</p>
+      ) : null}
+      {awaitLoginErrorMessage !== null ? (
+        <p className="text-ui-xs text-destructive">{awaitLoginErrorMessage}</p>
+      ) : null}
+      {renameProfileErrorMessage !== null ? (
+        <p className="text-ui-xs text-destructive">
+          {renameProfileErrorMessage}
+        </p>
+      ) : null}
+    </>
   );
 }
 

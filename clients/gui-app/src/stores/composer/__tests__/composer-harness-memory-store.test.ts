@@ -21,6 +21,7 @@ const CLAUDE_SETTINGS: ChatRunSettings = {
   reasoningEffort: "high",
   serviceTier: "flex",
   agentMode: "epic",
+  profileId: null,
 };
 
 const CODEX_SETTINGS: ChatRunSettings = {
@@ -30,6 +31,7 @@ const CODEX_SETTINGS: ChatRunSettings = {
   reasoningEffort: null,
   serviceTier: null,
   agentMode: "regular",
+  profileId: null,
 };
 
 function resetStores(): void {
@@ -50,7 +52,9 @@ describe("composer harness memory store", () => {
     useComposerHarnessMemoryStore.getState().record(CLAUDE_SETTINGS);
 
     expect(
-      useComposerHarnessMemoryStore.getState().resolveHarnessSwitch("claude"),
+      useComposerHarnessMemoryStore
+        .getState()
+        .resolveHarnessSwitch("claude", null),
     ).toEqual({
       modelSlug: "sonnet-4.5",
       reasoningEffort: "high",
@@ -62,7 +66,7 @@ describe("composer harness memory store", () => {
     expect(
       useComposerHarnessMemoryStore
         .getState()
-        .resolveHarnessSwitch("unknown-harness"),
+        .resolveHarnessSwitch("unknown-harness", null),
     ).toEqual({
       modelSlug: "",
       reasoningEffort: null,
@@ -76,7 +80,9 @@ describe("composer harness memory store", () => {
       .setGlobalRunSettings(CLAUDE_SETTINGS, 1);
 
     expect(
-      useComposerHarnessMemoryStore.getState().resolveHarnessSwitch("claude"),
+      useComposerHarnessMemoryStore
+        .getState()
+        .resolveHarnessSwitch("claude", null),
     ).toEqual({
       modelSlug: "sonnet-4.5",
       reasoningEffort: "high",
@@ -90,7 +96,9 @@ describe("composer harness memory store", () => {
       .setGlobalRunSettings(CODEX_SETTINGS, 1);
 
     expect(
-      useComposerHarnessMemoryStore.getState().resolveHarnessSwitch("claude"),
+      useComposerHarnessMemoryStore
+        .getState()
+        .resolveHarnessSwitch("claude", null),
     ).toEqual({
       modelSlug: "",
       reasoningEffort: null,
@@ -110,7 +118,9 @@ describe("composer harness memory store", () => {
     });
 
     expect(
-      useComposerHarnessMemoryStore.getState().resolveHarnessSwitch("claude"),
+      useComposerHarnessMemoryStore
+        .getState()
+        .resolveHarnessSwitch("claude", null),
     ).toEqual({
       modelSlug: "opus-4.1",
       reasoningEffort: "low",
@@ -132,7 +142,9 @@ describe("composer harness memory store", () => {
     );
     // ...so it does not shadow the lazy globalLastRunSettings fallback.
     expect(
-      useComposerHarnessMemoryStore.getState().resolveHarnessSwitch("claude"),
+      useComposerHarnessMemoryStore
+        .getState()
+        .resolveHarnessSwitch("claude", null),
     ).toEqual({
       modelSlug: "sonnet-4.5",
       reasoningEffort: "high",
@@ -146,7 +158,7 @@ describe("composer harness memory store", () => {
     expect(
       useComposerHarnessMemoryStore
         .getState()
-        .resolveModelSelection("claude", "sonnet-4.5"),
+        .resolveModelSelection("claude", null, "sonnet-4.5"),
     ).toEqual({ reasoningEffort: "high", serviceTier: "flex" });
   });
 
@@ -156,7 +168,7 @@ describe("composer harness memory store", () => {
     expect(
       useComposerHarnessMemoryStore
         .getState()
-        .resolveModelSelection("claude", "opus-4.1"),
+        .resolveModelSelection("claude", null, "opus-4.1"),
     ).toEqual({ reasoningEffort: null, serviceTier: null });
   });
 
@@ -168,7 +180,9 @@ describe("composer harness memory store", () => {
     }));
 
     expect(
-      useComposerHarnessMemoryStore.getState().resolveHarnessSwitch("claude"),
+      useComposerHarnessMemoryStore
+        .getState()
+        .resolveHarnessSwitch("claude", null),
     ).toEqual({
       modelSlug: "sonnet-4.5",
       reasoningEffort: null,
@@ -242,5 +256,114 @@ describe("composer harness memory store", () => {
     expect(useComposerHarnessMemoryStore.getState().lastModelByHarness).toEqual(
       {},
     );
+  });
+
+  it("keeps two profiles of the same harness on independent last-model memory", () => {
+    useComposerHarnessMemoryStore
+      .getState()
+      .record({ ...CLAUDE_SETTINGS, model: "sonnet-4.5", profileId: "work" });
+    useComposerHarnessMemoryStore.getState().record({
+      ...CLAUDE_SETTINGS,
+      model: "opus-4.1",
+      profileId: "personal",
+    });
+
+    expect(
+      useComposerHarnessMemoryStore
+        .getState()
+        .resolveHarnessSwitch("claude", "work"),
+    ).toMatchObject({ modelSlug: "sonnet-4.5" });
+    expect(
+      useComposerHarnessMemoryStore
+        .getState()
+        .resolveHarnessSwitch("claude", "personal"),
+    ).toMatchObject({ modelSlug: "opus-4.1" });
+  });
+
+  it("falls back to the harness's ambient record for a managed profile with no record of its own", () => {
+    useComposerHarnessMemoryStore.getState().record(CLAUDE_SETTINGS);
+
+    expect(
+      useComposerHarnessMemoryStore
+        .getState()
+        .resolveHarnessSwitch("claude", "brand-new-profile"),
+    ).toEqual({
+      modelSlug: "sonnet-4.5",
+      reasoningEffort: "high",
+      serviceTier: "flex",
+    });
+  });
+
+  it("resolveModelSelection keeps a managed profile's effort/tier independent of ambient", () => {
+    useComposerHarnessMemoryStore
+      .getState()
+      .record({ ...CLAUDE_SETTINGS, profileId: null, reasoningEffort: "low" });
+    useComposerHarnessMemoryStore.getState().record({
+      ...CLAUDE_SETTINGS,
+      profileId: "work",
+      reasoningEffort: "high",
+    });
+
+    expect(
+      useComposerHarnessMemoryStore
+        .getState()
+        .resolveModelSelection("claude", null, "sonnet-4.5"),
+    ).toEqual({ reasoningEffort: "low", serviceTier: "flex" });
+    expect(
+      useComposerHarnessMemoryStore
+        .getState()
+        .resolveModelSelection("claude", "work", "sonnet-4.5"),
+    ).toEqual({ reasoningEffort: "high", serviceTier: "flex" });
+  });
+
+  it("loads a pre-profile localStorage blob without crashing and treats it as the ambient record", async () => {
+    // Simulates a user's real, already-serialized state from before profiles
+    // existed: `lastModelByHarness` keyed by bare harnessId,
+    // `effortByHarnessModel` keyed by the old space-joined `"harness model"`
+    // format. Ambient keeps this exact shape (see `harnessProfileKey` /
+    // `harnessModelKey`), so this must rehydrate with no migration and no
+    // thrown error - the persisted-store-shape-drift failure mode this ticket
+    // guards against.
+    window.localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        state: {
+          lastModelByHarness: { claude: "sonnet-4.5", codex: "gpt-5-codex" },
+          effortByHarnessModel: {
+            "claude sonnet-4.5": {
+              reasoningEffort: "high",
+              serviceTier: "flex",
+              updatedAt: 1,
+            },
+          },
+        },
+        version: 1,
+      }),
+    );
+
+    await expect(
+      useComposerHarnessMemoryStore.persist.rehydrate(),
+    ).resolves.not.toThrow();
+
+    expect(
+      useComposerHarnessMemoryStore
+        .getState()
+        .resolveHarnessSwitch("claude", null),
+    ).toEqual({
+      modelSlug: "sonnet-4.5",
+      reasoningEffort: "high",
+      serviceTier: "flex",
+    });
+    // A brand-new managed profile on the same harness inherits the old
+    // ambient data as its fallback rather than starting from nothing.
+    expect(
+      useComposerHarnessMemoryStore
+        .getState()
+        .resolveHarnessSwitch("claude", "new-profile"),
+    ).toEqual({
+      modelSlug: "sonnet-4.5",
+      reasoningEffort: "high",
+      serviceTier: "flex",
+    });
   });
 });

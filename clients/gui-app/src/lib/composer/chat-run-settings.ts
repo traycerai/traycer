@@ -42,6 +42,7 @@ export function buildChatRunSettings(input: {
     // ("   ", "\n", etc.) never reaches the host as a bogus tier id.
     serviceTier: trimmedServiceTier.length === 0 ? null : trimmedServiceTier,
     agentMode: agentMode,
+    profileId: selection.profileId,
   };
 }
 
@@ -51,6 +52,10 @@ export function selectionFromChatRunSettings(
   return {
     harnessId: settings.harnessId,
     modelSlug: settings.model,
+    // `??` guards a pre-profile persisted blob (the field is missing, not
+    // `null`, on an old serialized `ChatRunSettings`) so it resolves to
+    // ambient instead of leaking `undefined` into a `string | null` field.
+    profileId: settings.profileId ?? null,
   };
 }
 

@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useState,
+} from "react";
 import { useStore } from "zustand";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 
@@ -120,8 +126,15 @@ export function useComposerToolbarStore(
     store.getState().setOnSettingsChange(recordingOnSettingsChange);
   }, [store, recordingOnSettingsChange]);
   // Re-seed when the seed identity changes (applySeed no-ops on a matching
-  // key, so default-value churn never clobbers user edits).
-  useEffect(() => {
+  // key, so default-value churn never clobbers user edits). A LAYOUT effect,
+  // not a passive one: ticket 07 round 2's transition-window gap - a seed
+  // whose `profileId` flips (e.g. `resolveSeededProfileId` clearing a stale
+  // pin once `providers.list` settles) must land in the store before the
+  // browser paints, so a submit triggered by the very next user interaction
+  // can never read a stale committed `selection` through a passive-effect
+  // scheduling gap. `applySeed`'s no-op-on-matching-key guard keeps this
+  // synchronous timing side-effect-free for every other render.
+  useLayoutEffect(() => {
     store.getState().applySeed(seedKey, seededValues);
   }, [store, seedKey, seededValues]);
 
@@ -164,10 +177,14 @@ export function useComposerToolbarStore(
       setReasoning: actions.setReasoning,
       setServiceTier: actions.setServiceTier,
       setPermission: actions.setPermission,
+      // The command palette has no rail/profile context of its own - default
+      // to the ambient profile, mirroring "ambient is the implicit fallback"
+      // (the memory-store's own ambient-first resolution then restores that
+      // harness's last-used ambient model/effort/tier).
       switchHarness: (harnessId: ProviderId) =>
-        commitSelection(store, harnessId, null),
+        commitSelection(store, harnessId, null, null),
       selectModel: (harnessId: ProviderId, modelSlug: string) =>
-        commitSelection(store, harnessId, modelSlug),
+        commitSelection(store, harnessId, modelSlug, null),
     };
   }, [store]);
   useRegisterFocusedComposerControls(
@@ -195,6 +212,7 @@ function chatRunSettingsSeedKey(settingsSeed: ChatRunSettings | null): string {
     settingsSeed.reasoningEffort ?? "",
     settingsSeed.serviceTier ?? "",
     settingsSeed.agentMode,
+    settingsSeed.profileId ?? "",
   ].join("\u0000");
 }
 

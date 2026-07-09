@@ -145,8 +145,8 @@ function PickerReasoningScopeProbe(props: {
   };
   usePickerLeaderScope({
     open: true,
-    railHarnesses: [],
-    onProviderChange: () => undefined,
+    railEntries: [],
+    onEntryChange: () => undefined,
     reasoning,
     reasoningActionable: props.reasoningActionable,
   });
@@ -165,8 +165,8 @@ function PickerBadgeProbe(props: { readonly reasoningActionable: boolean }) {
   };
   usePickerLeaderScope({
     open: true,
-    railHarnesses: [],
-    onProviderChange: () => undefined,
+    railEntries: [],
+    onEntryChange: () => undefined,
     reasoning,
     reasoningActionable: props.reasoningActionable,
   });

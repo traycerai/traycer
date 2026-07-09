@@ -23,14 +23,18 @@ export function commitSelection(
   store: ComposerToolbarStore,
   harnessId: ProviderId,
   modelSlug: string | null,
+  profileId: string | null,
 ): void {
   const memory = useComposerHarnessMemoryStore.getState();
   const resolved =
     modelSlug === null
-      ? memory.resolveHarnessSwitch(harnessId)
-      : { modelSlug, ...memory.resolveModelSelection(harnessId, modelSlug) };
+      ? memory.resolveHarnessSwitch(harnessId, profileId)
+      : {
+          modelSlug,
+          ...memory.resolveModelSelection(harnessId, profileId, modelSlug),
+        };
   store.getState().applyComposerSelection({
-    selection: { harnessId, modelSlug: resolved.modelSlug },
+    selection: { harnessId, profileId, modelSlug: resolved.modelSlug },
     reasoning: resolved.reasoningEffort ?? "",
     serviceTier: resolved.serviceTier ?? "",
   });

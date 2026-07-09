@@ -8,10 +8,17 @@ import {
   vi,
   type Mock,
 } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { DEFAULT_ACCOUNT_CONTEXT } from "@traycer/protocol/common/schemas";
 import type { ProviderRateLimits } from "@traycer/protocol/host";
+import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import type {
   AuthenticatedUser,
   SubscriptionStatus,
@@ -44,7 +51,11 @@ type MockAuthUser = {
 };
 
 type MockState = {
-  configured: ReadonlyArray<{ providerId: string; lane: string }>;
+  configured: ReadonlyArray<{
+    providerId: string;
+    lane: string;
+    profiles?: ReadonlyArray<ProviderProfile>;
+  }>;
   results: Record<string, QueryResult>;
   draining: boolean;
   openSettings: Mock<(...args: unknown[]) => void>;
@@ -90,14 +101,20 @@ const mocks = vi.hoisted<MockState>(() => ({
 }));
 
 vi.mock("@/hooks/rate-limits/use-configured-rate-limit-providers", () => ({
-  useConfiguredRateLimitProviders: () => mocks.configured,
+  useConfiguredRateLimitProviders: () =>
+    mocks.configured.map((provider) => ({
+      ...provider,
+      profiles: provider.profiles ?? [],
+    })),
 }));
 vi.mock("@/hooks/rate-limits/use-is-rate-limit-queue-draining", () => ({
   useIsRateLimitQueueDraining: () => mocks.draining,
 }));
 vi.mock("@/hooks/host/use-host-provider-rate-limits-query", () => ({
-  useHostProviderRateLimitsQuery: (providerId: string) =>
-    mocks.results[providerId] ?? readyResult(null),
+  useHostProviderRateLimitsQuery: (
+    providerId: string,
+    profileId: string | null,
+  ) => mocks.results[resultKey(providerId, profileId)] ?? readyResult(null),
 }));
 // `RateLimitRefreshAllButton` reads each configured httpFetch provider's
 // query state directly (to fold its `isFetching` into the button's own
@@ -107,7 +124,9 @@ vi.mock("@/hooks/host/use-host-provider-rate-limits-query", () => ({
 // exports both names with equivalent behavior; the extra `mapResponse` field
 // production passes is irrelevant to this fixture-backed double.
 function mockUseHostQueriesImpl(args: {
-  requests: ReadonlyArray<{ params: { providerId: string } }>;
+  requests: ReadonlyArray<{
+    params: { providerId: string; profileId: string | null };
+  }>;
   options: { retry: boolean | undefined } | null;
 }) {
   mocks.lastUseHostQueriesOptions = args.options;
@@ -115,7 +134,10 @@ function mockUseHostQueriesImpl(args: {
     (request) => request.params.providerId,
   );
   return args.requests.map(
-    (request) => mocks.results[request.params.providerId] ?? readyResult(null),
+    (request) =>
+      mocks.results[
+        resultKey(request.params.providerId, request.params.profileId)
+      ] ?? readyResult(null),
   );
 }
 vi.mock("@/hooks/host/use-host-queries", () => ({
@@ -155,8 +177,13 @@ vi.mock("@/hooks/host/use-refresh-rate-limit-usage-on-traycer-turn", () => ({
 
 import { RateLimitPopover } from "@/components/layout/header/rate-limit-popover";
 import { useRateLimitPopoverStore } from "@/stores/rate-limits/rate-limit-popover-store";
+import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 
 const NOW = Date.now();
+
+function resultKey(providerId: string, profileId: string | null): string {
+  return profileId === null ? providerId : `${providerId}:${profileId}`;
+}
 
 function envelopeFor(
   providerRateLimits: ProviderRateLimits,
@@ -249,6 +276,37 @@ function codexReady(): AvailableProviderRateLimits {
     individualLimit: null,
     resetCredits: null,
     rateLimitReachedType: null,
+  };
+}
+
+function providerProfile(input: {
+  readonly profileId: string;
+  readonly kind: ProviderProfile["kind"];
+  readonly label: string;
+  readonly tier: string | null;
+  readonly usageUpdatedAt: number | null;
+}): ProviderProfile {
+  return {
+    profileId: input.profileId,
+    kind: input.kind,
+    authType: "oauth",
+    label: input.label,
+    auth: {
+      status: "authenticated",
+      badgeText: null,
+      label: null,
+      detail: null,
+    },
+    identity: {
+      email: `${input.label.toLowerCase()}@example.com`,
+      tier: input.tier,
+      accountUuid: `${input.profileId}-uuid`,
+    },
+    usageUpdatedAt: input.usageUpdatedAt,
+    rateLimitStatus: "unknown",
+    duplicateOfProfileId: null,
+    accentColor: null,
+    ambientDriftNotice: null,
   };
 }
 
@@ -386,6 +444,7 @@ beforeEach(() => {
   mocks.lastUseHostQueriesProviderIds = null;
   mocks.authUser = coldAuthUser();
   useAccountContextStore.setState({ accountContext: { type: "PERSONAL" } });
+  useComposerRunSettingsStore.getState().resetForTests();
   useRateLimitPopoverStore.setState({ activeTab: "overview" });
   useRateLimitPopoverStore.persist.clearStorage();
   onClose = vi.fn();
@@ -465,6 +524,144 @@ describe("<RateLimitPopover /> rail", () => {
     expect(screen.getByText("22% used")).toBeTruthy();
     // Overview is condensed: the plan/tier label ("Pro 5x") is detail-only.
     expect(screen.queryByText("Pro 5x")).toBeNull();
+  });
+
+  it("groups multi-profile providers and highlights the composer last-used profile", () => {
+    const codexProfiles = [
+      providerProfile({
+        profileId: "ambient",
+        kind: "ambient",
+        label: "Terminal",
+        tier: "Terminal",
+        usageUpdatedAt: NOW - 10_000,
+      }),
+      providerProfile({
+        profileId: "work-profile",
+        kind: "managed",
+        label: "Work",
+        tier: "Pro 5x",
+        usageUpdatedAt: NOW - 10_000,
+      }),
+    ];
+    const claudeProfiles = [
+      providerProfile({
+        profileId: "ambient",
+        kind: "ambient",
+        label: "Terminal",
+        tier: "Max",
+        usageUpdatedAt: NOW - 10_000,
+      }),
+      providerProfile({
+        profileId: "personal-profile",
+        kind: "managed",
+        label: "Personal",
+        tier: "Pro",
+        usageUpdatedAt: NOW - 10_000,
+      }),
+    ];
+    mocks.configured = [
+      {
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        profiles: codexProfiles,
+      },
+      {
+        providerId: "claude-code",
+        lane: "ephemeralProcess",
+        profiles: claudeProfiles,
+      },
+    ];
+    mocks.results = {
+      codex: readyResult(codexReady()),
+      [resultKey("codex", "work-profile")]: readyResult(codexReady()),
+      "claude-code": readyResult(claudeReady()),
+      [resultKey("claude-code", "personal-profile")]:
+        readyResult(claudeReady()),
+    };
+    useComposerRunSettingsStore.getState().setGlobalRunSettings(
+      {
+        harnessId: "codex",
+        model: "gpt-5-codex",
+        permissionMode: "supervised",
+        reasoningEffort: null,
+        serviceTier: null,
+        agentMode: "regular",
+        profileId: "work-profile",
+      },
+      NOW,
+    );
+
+    renderPopover();
+
+    expect(screen.getByText("Codex")).toBeTruthy();
+    expect(screen.getByText("Claude Code")).toBeTruthy();
+    expect(screen.getAllByText("Terminal account")).toHaveLength(2);
+    expect(screen.getByText("Work")).toBeTruthy();
+    expect(screen.getByText("Personal")).toBeTruthy();
+    expect(screen.getAllByText("Active")).toHaveLength(1);
+    expect(screen.getByText("Pro 5x")).toBeTruthy();
+  });
+
+  it("keeps the old single-provider layout when profiles has only one entry", () => {
+    mocks.configured = [
+      {
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        profiles: [
+          providerProfile({
+            profileId: "work-profile",
+            kind: "managed",
+            label: "Work",
+            tier: "Pro 5x",
+            usageUpdatedAt: NOW - 10_000,
+          }),
+        ],
+      },
+    ];
+    mocks.results = { codex: readyResult(codexReady()) };
+    renderPopover();
+
+    expect(screen.getByText("Codex")).toBeTruthy();
+    expect(screen.getByText("Current session")).toBeTruthy();
+    expect(screen.queryByText("Work")).toBeNull();
+  });
+
+  it("enqueues open-time refresh only for stale multi-profile rows", async () => {
+    mocks.configured = [
+      {
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        profiles: [
+          providerProfile({
+            profileId: "ambient",
+            kind: "ambient",
+            label: "Terminal",
+            tier: "Pro",
+            usageUpdatedAt: NOW - 1_000,
+          }),
+          providerProfile({
+            profileId: "work-profile",
+            kind: "managed",
+            label: "Work",
+            tier: "Pro 5x",
+            usageUpdatedAt: NOW - 60_000,
+          }),
+        ],
+      },
+    ];
+    mocks.results = {
+      codex: readyResult(codexReady()),
+      [resultKey("codex", "work-profile")]: readyResult(codexReady()),
+    };
+
+    renderPopover();
+
+    await waitFor(() => expect(mocks.enqueue).toHaveBeenCalledTimes(1));
+    expect(mocks.enqueue).toHaveBeenCalledWith(
+      "codex",
+      { type: "PERSONAL" },
+      { force: false, profileId: "work-profile" },
+    );
   });
 
   it("draws a divider only between consecutive condensed blocks (no header row)", () => {
@@ -563,6 +760,34 @@ describe("<RateLimitPopover /> rail", () => {
     expect(
       screen.getByText(/^Resets [A-Za-z]{3} \d{1,2}:\d{2}\s?[AP]M$/i),
     ).toBeTruthy();
+  });
+
+  it("omits reset text when a provider reports an implausible reset timestamp", () => {
+    mocks.configured = [{ providerId: "codex", lane: "ephemeralProcess" }];
+    mocks.results = {
+      codex: readyResult({
+        provider: "codex",
+        available: true,
+        planType: "pro_5x",
+        limitId: null,
+        limitName: null,
+        primary: {
+          usedPercent: 4,
+          resetsAt: NOW + 2 * 365 * 24 * 60 * 60 * 1000,
+          durationMinutes: 300,
+        },
+        secondary: null,
+        extraWindows: [],
+        credits: null,
+        individualLimit: null,
+        resetCredits: null,
+        rateLimitReachedType: null,
+      }),
+    };
+    renderPopover();
+
+    expect(screen.getByText("4% used")).toBeTruthy();
+    expect(screen.queryByText(/^Resets/)).toBeNull();
   });
 });
 
@@ -785,7 +1010,7 @@ describe("<RateLimitPopover /> per-provider states", () => {
     expect(mocks.enqueue).toHaveBeenCalledWith(
       "codex",
       { type: "PERSONAL" },
-      { force: true },
+      { force: true, profileId: null },
     );
   });
 
@@ -905,12 +1130,12 @@ describe("<RateLimitPopover /> Refresh all", () => {
     expect(mocks.enqueue).toHaveBeenCalledWith(
       "codex",
       { type: "PERSONAL" },
-      { force: true },
+      { force: true, profileId: null },
     );
     expect(mocks.enqueue).toHaveBeenCalledWith(
       "claude-code",
       { type: "PERSONAL" },
-      { force: true },
+      { force: true, profileId: null },
     );
   });
 

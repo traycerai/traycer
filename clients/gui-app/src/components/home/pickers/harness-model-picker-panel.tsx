@@ -9,6 +9,7 @@ import type {
   ProviderId,
 } from "@/components/home/data/landing-options";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
+import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import type { GuiHarnessCatalogEntry } from "@/hooks/harnesses/use-gui-harness-catalog";
 import type { HarnessModelRow } from "@/components/home/data/harness-model-search";
 import type { VirtuosoHandle } from "react-virtuoso";
@@ -32,11 +33,19 @@ interface HarnessModelPickerPanelProps {
   readonly onKeyDown: (event: KeyboardEvent<HTMLElement>) => void;
   readonly catalogHarnesses: ReadonlyArray<HarnessOption>;
   readonly fallbackHarnesses: ReadonlyArray<HarnessOption>;
+  readonly profilesByHarnessId: ReadonlyMap<
+    GuiHarnessId,
+    ReadonlyArray<ProviderProfile>
+  >;
   readonly resolvedActiveProviderId: ProviderId;
+  readonly activeProfileId: string | null;
   readonly lockedHarnessId: ProviderId | null;
   readonly degradedHarnessIds: ReadonlySet<GuiHarnessId>;
   readonly catalogHarnessesLoading: boolean;
-  readonly onProviderChange: (providerId: ProviderId) => void;
+  readonly onEntryChange: (
+    providerId: ProviderId,
+    profileId: string | null,
+  ) => void;
   readonly onRefreshCatalog: () => Promise<void>;
   readonly onOpenProviderSettings: () => void;
   readonly listRef: RefObject<VirtuosoHandle | null>;
@@ -73,11 +82,13 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
     onKeyDown,
     catalogHarnesses,
     fallbackHarnesses,
+    profilesByHarnessId,
     resolvedActiveProviderId,
+    activeProfileId,
     lockedHarnessId,
     degradedHarnessIds,
     catalogHarnessesLoading,
-    onProviderChange,
+    onEntryChange,
     onRefreshCatalog,
     onOpenProviderSettings,
     listRef,
@@ -138,11 +149,13 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
         <ProviderRail
           harnesses={catalogHarnesses}
           fallbackHarnesses={fallbackHarnesses}
+          profilesByHarnessId={profilesByHarnessId}
           activeProviderId={resolvedActiveProviderId}
+          activeProfileId={activeProfileId}
           lockedHarnessId={lockedHarnessId}
           degradedHarnessIds={degradedHarnessIds}
           pending={catalogHarnessesLoading}
-          onProviderChange={onProviderChange}
+          onEntryChange={onEntryChange}
           onRefresh={onRefreshCatalog}
           onOpenProviderSettings={onOpenProviderSettings}
         />

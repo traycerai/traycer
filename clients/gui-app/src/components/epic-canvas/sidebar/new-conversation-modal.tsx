@@ -756,6 +756,7 @@ function NewConversationModalBody(props: {
           worktreeIntent,
           workspaceMode,
           terminalAgentArgs: launch.terminalAgentArgs,
+          profileId: launch.profileId,
         })
         .catch(() => undefined);
     },
@@ -943,6 +944,7 @@ function useLatestConversationSettingsSeed(): {
             ? null
             : defaults.defaultServiceTier,
         agentMode: agent.agentMode,
+        profileId: agent.profileId,
         // TUI agents carry no billing context; seed Personal (the store
         // default). The composer lets the user switch before sending.
         accountContext: { type: "PERSONAL" },
