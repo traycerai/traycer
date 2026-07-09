@@ -10,25 +10,29 @@ import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import devWrapperPaths from "../dev-wrapper-paths.json";
+import { DEV_DESKTOP_SLOT_ENV } from "../../host/dev-desktop-slot";
 
 // The desktop's `~/.traycer/cli/` paths are environment-scoped (matching the
 // CLI package's store/paths.ts): the dev slot lives under
-// `~/.traycer/cli/dev/`. CLI discovery resolves: (1) dev-slot manifest, then
-// (2) the staged dev wrapper (`~/.traycer/cli/dev/bin/traycer`). The PATH
-// lookup step is intentionally SKIPPED in dev - a dev workspace inevitably
-// has `node_modules/.bin/traycer` on PATH (bun's bin hoisting), and falling
-// through PATH first would pick the package symlink ahead of the wrapper
-// `make dev-desktop` staged. These tests pin both halves plus the PATH
-// regression.
+// `~/.traycer/cli/dev/`, or `~/.traycer/cli/dev-runs/<slot>/` when a
+// multi-run dev slot is active. CLI discovery resolves: (1) dev-slot manifest,
+// then (2) the staged dev wrapper. The PATH lookup step is intentionally
+// SKIPPED in dev - a dev workspace inevitably has `node_modules/.bin/traycer`
+// on PATH (bun's bin hoisting), and falling through PATH first would pick the
+// package symlink ahead of the wrapper `make dev-desktop` staged. These tests
+// pin both halves plus the PATH regression.
 
 let work: string;
 let homeDir: string;
 
-function devWrapperPath(): string {
+function devWrapperPath(slot: string | null): string {
   const filename =
     process.platform === "win32"
       ? devWrapperPaths.filenameWin32
       : devWrapperPaths.filenamePosix;
+  if (slot !== null) {
+    return join(homeDir, ".traycer", "cli", "dev-runs", slot, "bin", filename);
+  }
   return join(homeDir, ...devWrapperPaths.segments, filename);
 }
 
@@ -53,22 +57,12 @@ function writeManifestAt(manifestPath: string, binaryPath: string): void {
   );
 }
 
-vi.mock("electron-log", () => ({
-  default: {
-    transports: {
-      file: { level: "info" },
-      console: { level: "info" },
-    },
+vi.mock("../../app/logger", () => ({
+  log: {
     info: vi.fn(),
     warn: vi.fn(),
     error: vi.fn(),
     debug: vi.fn(),
-  },
-}));
-
-vi.mock("electron", () => ({
-  app: {
-    getAppPath: (): string => "/tmp/desktop-app",
   },
 }));
 
@@ -90,6 +84,7 @@ vi.mock("../../../config", async (importActual) => {
 const ORIGINAL_PATH = process.env.PATH;
 const ORIGINAL_HOME = process.env.HOME;
 const ORIGINAL_USERPROFILE = process.env.USERPROFILE;
+const ORIGINAL_DEV_DESKTOP_SLOT = process.env[DEV_DESKTOP_SLOT_ENV];
 
 beforeEach(() => {
   work = mkdtempSync(join(tmpdir(), "traycer-cli-discovery-dev-"));
@@ -119,6 +114,11 @@ afterEach(() => {
   } else {
     process.env.USERPROFILE = ORIGINAL_USERPROFILE;
   }
+  if (ORIGINAL_DEV_DESKTOP_SLOT === undefined) {
+    delete process.env[DEV_DESKTOP_SLOT_ENV];
+  } else {
+    process.env[DEV_DESKTOP_SLOT_ENV] = ORIGINAL_DEV_DESKTOP_SLOT;
+  }
 });
 
 describe("resolveTraycerCliInvocation (dev slot) - env-scoped resolution", () => {
@@ -129,7 +129,7 @@ describe("resolveTraycerCliInvocation (dev slot) - env-scoped resolution", () =>
     writeExecutable(prodBin);
     writeManifestAt(join(homeDir, ".traycer", "cli", "manifest.json"), prodBin);
 
-    const devBin = devWrapperPath(); // ~/.traycer/cli/dev/bin/traycer
+    const devBin = devWrapperPath(null); // ~/.traycer/cli/dev/bin/traycer
     writeExecutable(devBin);
     writeManifestAt(
       join(homeDir, ".traycer", "cli", "dev", "manifest.json"),
@@ -148,7 +148,7 @@ describe("resolveTraycerCliInvocation (dev slot) - env-scoped resolution", () =>
     // workspace `node_modules/.bin/traycer` being absent - the staged
     // wrapper is the only candidate and resolves directly.
     process.env.PATH = "";
-    const wrapper = devWrapperPath();
+    const wrapper = devWrapperPath(null);
     writeExecutable(wrapper);
 
     const { resolveTraycerCliInvocation } = await import("../traycer-cli");
@@ -172,12 +172,53 @@ describe("resolveTraycerCliInvocation (dev slot) - env-scoped resolution", () =>
     writeExecutable(fakePathBin);
     process.env.PATH = fakePathBinDir;
 
-    const wrapper = devWrapperPath();
+    const wrapper = devWrapperPath(null);
     writeExecutable(wrapper);
 
     const { resolveTraycerCliInvocation } = await import("../traycer-cli");
     const inv = await resolveTraycerCliInvocation();
     expect(inv.command).toBe(wrapper);
     expect(inv.command).not.toBe(fakePathBin);
+  });
+
+  it("resolves the active dev-run slot manifest ahead of the shared dev manifest", async () => {
+    process.env[DEV_DESKTOP_SLOT_ENV] = "Worktree Slot";
+
+    const sharedDevBin = devWrapperPath(null);
+    writeExecutable(sharedDevBin);
+    writeManifestAt(
+      join(homeDir, ".traycer", "cli", "dev", "manifest.json"),
+      sharedDevBin,
+    );
+
+    const slotBin = devWrapperPath("worktree-slot");
+    writeExecutable(slotBin);
+    writeManifestAt(
+      join(
+        homeDir,
+        ".traycer",
+        "cli",
+        "dev-runs",
+        "worktree-slot",
+        "manifest.json",
+      ),
+      slotBin,
+    );
+
+    const { resolveTraycerCliInvocation } = await import("../traycer-cli");
+    const inv = await resolveTraycerCliInvocation();
+    expect(inv.command).toBe(slotBin);
+    expect(inv.command).not.toBe(sharedDevBin);
+  });
+
+  it("falls back to the active dev-run slot wrapper when the slot manifest is absent", async () => {
+    process.env[DEV_DESKTOP_SLOT_ENV] = "Worktree Slot";
+    process.env.PATH = "";
+    const wrapper = devWrapperPath("worktree-slot");
+    writeExecutable(wrapper);
+
+    const { resolveTraycerCliInvocation } = await import("../traycer-cli");
+    const inv = await resolveTraycerCliInvocation();
+    expect(inv.command).toBe(wrapper);
   });
 });

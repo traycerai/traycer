@@ -2,13 +2,14 @@ import { readFile, rename, writeFile } from "node:fs/promises";
 import { createCliLogger } from "../logger";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type { Environment } from "../runner/environment";
-import { cliManifestPath, ensureCliHomeDir } from "../store/paths";
+import { cliManifestPath, ensureCliInstallHomeDir } from "../store/paths";
 
-// CLI install manifest schema, per the Native Packaging tech plan.
-// Lives at ~/.traycer/cli/manifest.json (prod) and ~/.traycer/cli/dev/
-// manifest.json (dev). Read by the CLI itself on every install/update/
-// uninstall to know what state it's already in; written atomically via
-// rename so a crash mid-install can't leave a partially-written file.
+// CLI install manifest schema, per the Native Packaging tech plan. Lives at
+// ~/.traycer/cli/manifest.json for prod, ~/.traycer/cli/dev/manifest.json for
+// legacy/no-slot dev, and ~/.traycer/cli/dev-runs/<slot>/manifest.json for
+// multi-run dev. Read by the CLI itself on every install/update/uninstall to
+// know what state it's already in; written atomically via rename so a crash
+// mid-install can't leave a partially-written file.
 //
 // `pendingUpgrade` records that a newer CLI binary has been downloaded
 // and staged, but the live binary is still the old one. The next CLI
@@ -424,7 +425,7 @@ export async function writeCliManifest(
     source: manifest.source,
     hasPendingUpgrade: manifest.pendingUpgrade !== null,
   });
-  await ensureCliHomeDir(environment);
+  await ensureCliInstallHomeDir(environment);
   const target = cliManifestPath(environment);
   const tmp = `${target}.tmp`;
   await writeFile(tmp, `${JSON.stringify(manifest, null, 2)}\n`, {

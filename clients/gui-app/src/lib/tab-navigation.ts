@@ -8,6 +8,7 @@ import { settingsSectionFromPath } from "@/stores/tabs/kinds/settings";
 export {
   draftTabIntent,
   existingEpicTabIntent,
+  existingEpicTabIntentWithNestedFocus,
   historyTabIntent,
   openOrFocusEpicIntent,
   settingsTabIntent,

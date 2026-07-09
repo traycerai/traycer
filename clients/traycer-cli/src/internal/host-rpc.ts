@@ -314,6 +314,35 @@ export async function toAgentCliError<T>(call: Promise<T>): Promise<T> {
   });
 }
 
+// Prefix of the message the shared transport throws when the client is the
+// newer side and its request cannot be projected onto the host's older minor
+// request schema (`prepareRequestPayload` in `ws-rpc-client.ts`). This is a
+// client-side failure raised during request preparation, before anything is
+// sent to the host.
+const REQUEST_PROJECTION_FAILURE_PREFIX =
+  "Failed to project request params onto";
+
+/**
+ * True when `err` is the transport's client-side request-projection failure -
+ * i.e. this CLI negotiated a newer canonical version for the method than the
+ * host speaks, and the request carries a value the host's older minor request
+ * schema cannot represent (e.g. a newer enum value that isn't strippable like an
+ * additive field). The transport raises this as a `RPC_ERROR` locally during
+ * request preparation, so it never reached the host.
+ *
+ * Best-effort hook commands use this to degrade a version-skew miss to a quiet
+ * no-op instead of surfacing it: the call is meaningless against a host too old
+ * to understand it. Matched narrowly (the specific code + preparation message)
+ * so genuine host `RPC_ERROR`s and auth failures still surface.
+ */
+export function isRequestVersionProjectionError(err: unknown): boolean {
+  return (
+    err instanceof HostRpcError &&
+    err.code === "RPC_ERROR" &&
+    err.message.startsWith(REQUEST_PROJECTION_FAILURE_PREFIX)
+  );
+}
+
 /**
  * Validate user-supplied request input against its protocol schema, turning a
  * schema failure into a clean `E_INVALID_ARGUMENT` instead of an uncaught

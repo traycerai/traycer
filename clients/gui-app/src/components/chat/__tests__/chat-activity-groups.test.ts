@@ -95,6 +95,20 @@ describe("chat activity grouping", () => {
     ]);
   });
 
+  it("keeps provider notices out of activity groups", () => {
+    const timeline = buildCompleteTimeline([
+      commandSegment("command-1", "pwd", false),
+      providerNoticeSegment("notice-1"),
+      commandSegment("command-2", "ls", false),
+    ]);
+
+    expect(timeline.map((item) => item.kind)).toEqual([
+      "activity_group",
+      "segment",
+      "activity_group",
+    ]);
+  });
+
   it("promotes reasoning to its own segment before operational activity", () => {
     const timeline = buildCompleteTimeline([
       reasoningSegment("reasoning-1", false),
@@ -897,6 +911,21 @@ function reasoningSegment(id: string, isStreaming: boolean): MessageSegment {
     markdown: "Thinking",
     isStreaming,
     durationMs: null,
+  };
+}
+
+function providerNoticeSegment(
+  id: string,
+): Extract<MessageSegment, { kind: "provider_notice" }> {
+  return {
+    id,
+    kind: "provider_notice",
+    status: "completed",
+    tone: "info",
+    title: "Model verification active",
+    message: null,
+    details: [],
+    parentId: null,
   };
 }
 

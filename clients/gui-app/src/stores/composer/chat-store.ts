@@ -26,6 +26,8 @@ import type {
   PlanSource,
   PlanStatus,
   PlanStep,
+  ProviderNoticeDetail,
+  ProviderNoticeTone,
   ToolInputDetail,
   WorkflowMeta,
 } from "@traycer/protocol/persistence/epic/content-blocks";
@@ -136,8 +138,34 @@ export interface ToolSegment {
 
 // Recursive: a subagent's own children can themselves be nested subagent
 // cards (any spawn depth), not just their tool/file_change/command activity.
+// Unlike tool/file_change/command (which only ride along for spawn-tool-call
+// suppression bookkeeping), a nested `ProviderNoticeSegment` DOES render as a
+// visible row inside the owning card - see `SubagentChildProviderNotices` in
+// `subagent-segment.tsx`.
 export type SubagentChildSegment =
-  ToolSegment | FileChangeSegment | CommandSegment | SubagentSegment;
+  | ToolSegment
+  | FileChangeSegment
+  | CommandSegment
+  | SubagentSegment
+  | ProviderNoticeSegment;
+
+// A durable provider-generated notice (Codex model reroute / safety
+// verification / buffering, and future harness equivalents), projected from a
+// `text` content block whose `providerNotice` enrichment is set. Renders as a
+// compact row - see `ProviderNoticeSegment` in
+// `components/chat/segments/provider-notice-segment.tsx`.
+export interface ProviderNoticeSegment {
+  id: string;
+  kind: "provider_notice";
+  status: "streaming" | "completed" | "errored";
+  tone: ProviderNoticeTone;
+  title: string;
+  message: string | null;
+  details: ReadonlyArray<ProviderNoticeDetail>;
+  // Owning subagent block id when this notice arrived on a subagent's thread
+  // (nests under that subagent block). Null for a top-level notice.
+  parentId: string | null;
+}
 
 export interface ReasoningSegment {
   id: string;
@@ -307,6 +335,7 @@ export type MessageSegment =
   | ApprovalSegment
   | ArtifactOperationSegment
   | PlanSegmentModel
+  | ProviderNoticeSegment
   | {
       id: string;
       kind: "todo";

@@ -5,6 +5,7 @@ import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
 import type { CommandContext, CommandItem } from "@/lib/commands/types";
 import type { KeybindingRouter } from "@/lib/keybindings/dispatch";
 import type { OpenTileIntoTargetGroupArgs } from "@/lib/commands/actions/open-into-target";
+import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
 import {
   EMPTY_PROJECTED_SLICES,
   type ArtifactProjection,
@@ -103,6 +104,7 @@ function artifact(id: string, title: string): ArtifactProjection {
     createdAt: 0,
     updatedAt: 0,
     status: null,
+    createdManually: false,
   };
 }
 
@@ -187,6 +189,8 @@ import { useArtifactsOpenerItems } from "@/lib/commands/sources/open/artifacts-s
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
 
+const navigateNestedFocusSpy = vi.fn<NavigateNestedFocus>();
+
 function noopRouter(): KeybindingRouter {
   return {
     getPathname: () => "/",
@@ -202,6 +206,7 @@ function noopRouter(): KeybindingRouter {
     isHistoryNavAvailable: () => false,
     canGoBack: () => false,
     canGoForward: () => false,
+    navigateNestedFocus: navigateNestedFocusSpy,
   };
 }
 
@@ -275,6 +280,9 @@ describe("Chats opener sub-page", () => {
     expect(opened.tabId).toBe("tab-1");
     expect(opened.ref.id).toBe("c1");
     expect(opened.ref.type).toBe("chat");
+    // Proves the "existing" opener leaf threads the ctx.router navigation
+    // seam through instead of bypassing it.
+    expect(opened.navigateNestedFocus).toBe(navigateNestedFocusSpy);
   });
 });
 
@@ -296,10 +304,12 @@ describe("Terminals opener sub-page", () => {
     expect(created.ref.hostId).toBe("host-2");
     expect(created.ref.cwd).toBe("/work/traycer-wt/feature-x");
     expect(created.ref.name).toBe("New Terminal");
+    expect(created.navigateNestedFocus).toBe(navigateNestedFocusSpy);
     runById(items, "open:terminals:term-1");
     const existing = lastTileOpen();
     expect(existing.ref.id).toBe("term-1");
     expect(existing.ref.type).toBe("terminal");
+    expect(existing.navigateNestedFocus).toBe(navigateNestedFocusSpy);
   });
 });
 
@@ -312,6 +322,7 @@ describe("Artifacts opener sub-page", () => {
     expect(opened.groupId).toBe("group-1");
     expect(opened.ref.id).toBe("s1");
     expect(opened.ref.type).toBe("spec");
+    expect(opened.navigateNestedFocus).toBe(navigateNestedFocusSpy);
   });
 });
 
@@ -331,6 +342,7 @@ describe("TUI opener sub-page", () => {
     expect(opened.groupId).toBe("group-1");
     expect(opened.ref.id).toBe("a1");
     expect(opened.ref.type).toBe("terminal-agent");
+    expect(opened.navigateNestedFocus).toBe(navigateNestedFocusSpy);
   });
 
   it("Create new TUI agent opens the modal in terminal mode into the target", () => {

@@ -65,6 +65,7 @@ function changedFileLeaves(
             runningDir: workspacePath,
             file,
           }),
+          navigateNestedFocus: ctx.router.navigateNestedFocus,
         }),
     }),
   );

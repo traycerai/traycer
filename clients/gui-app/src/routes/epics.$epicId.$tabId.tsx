@@ -17,13 +17,21 @@ export const Route = createFileRoute("/epics/$epicId/$tabId")({
     requireSignedIn(context);
     const state = useEpicCanvasStore.getState();
     const tab = state.tabsById[params.tabId];
-    if (tab?.epicId === params.epicId) return;
+    if (tab?.epicId === params.epicId) {
+      return;
+    }
     const fallback = state.resolveTabIdForEpic(params.epicId);
-    if (fallback === null) return;
+    if (fallback === null) {
+      return;
+    }
     redirect({
       to: "/epics/$epicId/$tabId",
       params: { epicId: params.epicId, tabId: fallback },
-      search,
+      search: {
+        ...search,
+        focusPaneId: undefined,
+        focusTileInstanceId: undefined,
+      },
       throw: true,
     });
   },

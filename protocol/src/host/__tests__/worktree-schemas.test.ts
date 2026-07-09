@@ -1,6 +1,7 @@
 /**
- * Schema + version-negotiation tests for the `worktree.listAllForHost` staleness
- * signals added at v1.1. The critical invariant is that a v1.0 caller (the
+ * Schema + version-negotiation tests for the `worktree.listAllForHost`
+ * pagination and staleness signals added at v1.1. The critical invariant is
+ * that a v1.0 caller (the
  * current Settings tab, an older host) keeps negotiating against a v1.1 peer:
  * v1.1 rode a new minor of the EXISTING method, never a new method name, so the
  * frozen host-v1.0.0 method-name set (see released-surface-compat.test.ts) is
@@ -18,6 +19,7 @@ import {
   worktreeHostEntrySchema,
   worktreeHostEntrySchemaV11,
   worktreeListAllForHostRequestSchema,
+  worktreeListAllForHostResponseSchema,
   worktreeListAllForHostRequestSchemaV11,
   worktreeListAllForHostResponseSchemaV11,
   worktreeListBindingsForEpicResponseSchemaV11,
@@ -199,46 +201,156 @@ describe("worktreeBranchStatusSchema (upstream-independent reshape)", () => {
 });
 
 describe("worktreeListAllForHostRequestSchemaV11", () => {
-  it("requires both the includeActivity flag and activityPaths", () => {
+  it("requires includeActivity, activityPaths, cursor, and limit", () => {
     expect(
       worktreeListAllForHostRequestSchemaV11.parse({
         includeActivity: true,
         activityPaths: null,
+        cursor: null,
+        limit: 50,
       }),
-    ).toEqual({ includeActivity: true, activityPaths: null });
-    // activityPaths is nullable, never optional - a request missing it is
-    // rejected at the boundary (every caller states the mode explicitly).
+    ).toEqual({
+      includeActivity: true,
+      activityPaths: null,
+      cursor: null,
+      limit: 50,
+    });
+    // Nullable fields are never optional - every caller states the paging and
+    // enrichment posture explicitly.
     expect(() =>
       worktreeListAllForHostRequestSchemaV11.parse({ includeActivity: true }),
     ).toThrow();
     expect(worktreeListAllForHostRequestSchema.parse({})).toEqual({});
   });
 
-  it("accepts a per-viewport activityPaths selection (lazy-enrichment mode)", () => {
-    const parsed = worktreeListAllForHostRequestSchemaV11.parse({
+  it("rejects includeActivity=true with an unbounded paged listing", () => {
+    expect(() =>
+      worktreeListAllForHostRequestSchemaV11.parse({
+        includeActivity: true,
+        activityPaths: null,
+        cursor: null,
+        limit: null,
+      }),
+    ).toThrow();
+  });
+
+  it("allows the v1.0 bridge's unpaginated listing only without probes", () => {
+    expect(
+      worktreeListAllForHostRequestSchemaV11.parse({
+        includeActivity: false,
+        activityPaths: null,
+        cursor: null,
+        limit: null,
+      }),
+    ).toEqual({
       includeActivity: false,
+      activityPaths: null,
+      cursor: null,
+      limit: null,
+    });
+  });
+
+  it("accepts selection mode with includeActivity=true and null paging fields", () => {
+    const parsed = worktreeListAllForHostRequestSchemaV11.parse({
+      includeActivity: true,
       activityPaths: ["/Users/dev/.traycer/worktrees/acme__web/feature-x"],
+      cursor: null,
+      limit: null,
     });
     expect(parsed).toEqual({
-      includeActivity: false,
+      includeActivity: true,
       activityPaths: ["/Users/dev/.traycer/worktrees/acme__web/feature-x"],
+      cursor: null,
+      limit: null,
     });
+  });
+
+  it("rejects selection mode with cursor or limit set", () => {
+    expect(() =>
+      worktreeListAllForHostRequestSchemaV11.parse({
+        includeActivity: true,
+        activityPaths: ["/Users/dev/.traycer/worktrees/acme__web/feature-x"],
+        cursor: "/Users/dev/.traycer/worktrees/acme__api/feature-y",
+        limit: null,
+      }),
+    ).toThrow();
+
+    expect(() =>
+      worktreeListAllForHostRequestSchemaV11.parse({
+        includeActivity: true,
+        activityPaths: ["/Users/dev/.traycer/worktrees/acme__web/feature-x"],
+        cursor: null,
+        limit: 25,
+      }),
+    ).toThrow();
+  });
+});
+
+describe("worktreeListAllForHostResponseSchemaV11", () => {
+  it("requires nextCursor and round-trips a paged response", () => {
+    const response = {
+      worktrees: [
+        {
+          ...v10Entry,
+          lastActivityAt: null,
+          owners: [],
+          branchStatus: null,
+          createdAt: null,
+          ...mergeProvenanceAbsent,
+        },
+      ],
+      nextCursor: "/Users/dev/.traycer/worktrees/acme__web/feature-x",
+    };
+
+    const parsed1 = worktreeListAllForHostResponseSchemaV11.parse(response);
+    const parsed2 = worktreeListAllForHostResponseSchemaV11.parse(parsed1);
+    expect(parsed2).toEqual(parsed1);
+    expect(() =>
+      worktreeListAllForHostResponseSchemaV11.parse({
+        worktrees: response.worktrees,
+      }),
+    ).toThrow();
+  });
+
+  it("strips v1.1 pagination and enrichment fields when parsed as v1.0", () => {
+    expect(
+      worktreeListAllForHostResponseSchema.parse({
+        worktrees: [
+          {
+            ...v10Entry,
+            lastActivityAt: null,
+            owners: [],
+            branchStatus: null,
+            createdAt: null,
+            ...mergeProvenanceAbsent,
+          },
+        ],
+        nextCursor: "/Users/dev/.traycer/worktrees/acme__web/feature-x",
+      }),
+    ).toEqual({ worktrees: [v10Entry] });
   });
 });
 
 describe("worktree.listAllForHost v1.0 <-> v1.1 negotiation", () => {
-  it("upgrades a v1.0 request to v1.1 with includeActivity=false and activityPaths=null", () => {
+  it("upgrades a v1.0 request to v1.1 with explicit unpaginated no-probe defaults", () => {
     const upgraded = upgradeRequestToVersion(
       listAllForHostRegistry,
       V10,
       V11,
       {},
     );
-    expect(upgraded).toEqual({ includeActivity: false, activityPaths: null });
+    expect(upgraded).toEqual({
+      includeActivity: false,
+      activityPaths: null,
+      cursor: null,
+      limit: null,
+    });
     // And it validates against the v1.1 request schema.
     expect(worktreeListAllForHostRequestSchemaV11.parse(upgraded)).toEqual({
       includeActivity: false,
       activityPaths: null,
+      cursor: null,
+      limit: null,
     });
   });
 
@@ -260,6 +372,7 @@ describe("worktree.listAllForHost v1.0 <-> v1.1 negotiation", () => {
           ...mergeProvenanceAbsent,
         },
       ],
+      nextCursor: null,
     });
     // The upgraded payload is a valid v1.1 response.
     expect(worktreeListAllForHostResponseSchemaV11.parse(upgraded)).toEqual(

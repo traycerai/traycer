@@ -36,6 +36,13 @@ export interface ArtifactProjection {
   readonly updatedAt: number;
   /** Status numeric code (0=Todo, 1=InProgress, 2=Done). Null for spec/review. */
   readonly status: number | null;
+  /**
+   * True for artifacts the user created by hand (host `epic.createArtifact`
+   * RPC or a file authored directly on disk), false for agent-created ones.
+   * Gates hand-authoring affordances like the doc-title → artifact-title
+   * follow in the collab editor.
+   */
+  readonly createdManually: boolean;
 }
 
 export interface ArtifactsSlice {

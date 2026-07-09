@@ -10,11 +10,13 @@ export { duplicateEpicTab } from "./duplicate-tab";
 export { goBack, goForward, type HistoryNavRouter } from "./history-navigation";
 export {
   openCreatedChatWhenProjected,
+  openCreatedChatWhenProjectedWithNavigation,
   openNewChatInActiveTile,
   type CancelFn,
   type CreateChatCommandCallbacks,
   type CreateChatCommand,
   type CreatedChatOpenIntent,
+  type OpenCreatedChatWhenProjectedWithNavigationArgs,
   type NewChatSplitPosition,
 } from "./new-chat";
 export {

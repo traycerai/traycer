@@ -56,6 +56,16 @@ vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", () => ({
   useCloudEpicTasksQuery: () => ({ tasks: [] }),
 }));
 
+vi.mock("@/hooks/migration/use-phase-migrate-to-epic-mutation", () => ({
+  usePhaseMigrateToEpic: () => ({
+    data: undefined,
+    error: null,
+    isError: false,
+    isPending: true,
+    mutate: () => undefined,
+  }),
+}));
+
 vi.mock("@/components/onboarding/onboarding-page", () => ({
   OnboardingPage: () => <div data-testid="onboarding-page-stub" />,
 }));
@@ -87,6 +97,7 @@ vi.mock("@/components/epic-canvas/epic-route-session-body", () => ({
 
 const EPIC_ID = "epic-route-loop";
 const TAB_ID = "tab-route-existing";
+const STALE_TAB_ID = "tab-route-stale";
 
 function seedSignedInAuth(): void {
   useAuthStore.getState().setSignedIn(
@@ -163,6 +174,28 @@ describe("/epics/$epicId/$tabId route", () => {
     const state = useEpicCanvasStore.getState();
     expect(state.openTabOrder).toEqual([TAB_ID]);
     expect(Object.keys(state.tabsById)).toEqual([TAB_ID]);
+  });
+
+  it("repairs a stale tab route to a sibling tab without carrying nested focus params", async () => {
+    seedOpenEpicTab();
+
+    const router = renderAt(
+      `/epics/${EPIC_ID}/${STALE_TAB_ID}?focusPaneId=pane-stale&focusTileInstanceId=tile-stale&focusArtifactId=artifact-1&focusThreadId=thread-1&focusedAt=123&migrationSource=phase`,
+    );
+
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe(
+        `/epics/${EPIC_ID}/${TAB_ID}`,
+      );
+    });
+    expect(router.state.location.search).toEqual({
+      focusedAt: 123,
+      focusArtifactId: "artifact-1",
+      focusThreadId: "thread-1",
+      migrationSource: "phase",
+      focusPaneId: undefined,
+      focusTileInstanceId: undefined,
+    });
   });
 
   it("shows the onboarding tour (not the epic) for an un-onboarded user on a deep route", async () => {

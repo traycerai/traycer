@@ -79,6 +79,8 @@ export function EpicTabHost(props: EpicTabHostProps) {
                   focusedAt={activeSearch?.focusedAt}
                   focusArtifactId={activeSearch?.focusArtifactId}
                   focusThreadId={activeSearch?.focusThreadId}
+                  focusPaneId={activeSearch?.focusPaneId}
+                  focusTileInstanceId={activeSearch?.focusTileInstanceId}
                 />
               </EpicSessionProvider>
             </PaneVisibilityContext.Provider>

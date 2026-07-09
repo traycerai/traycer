@@ -75,6 +75,8 @@ function mountPhaseMigrationGate() {
           focusArtifactId: undefined,
           focusThreadId: undefined,
           migrationSource: "phase",
+          focusPaneId: undefined,
+          focusTileInstanceId: undefined,
         }}
       />
     ),
