@@ -125,7 +125,7 @@ describe("useProviderReauthGate", () => {
   it("flags signedOut on a definitive unauthenticated probe", () => {
     mocks.providers = [claudeState(UNAUTH)];
     const { result } = renderHook(() =>
-      useProviderReauthGate("claude", null, true),
+      useProviderReauthGate("claude", null, true, "authoritative"),
     );
     expect(result.current.signedOut).toBe(true);
     expect(result.current.providerId).toBe("claude-code");
@@ -134,7 +134,7 @@ describe("useProviderReauthGate", () => {
   it("maps OpenRouter to its API-key provider state", () => {
     mocks.providers = [providerState("openrouter", UNAUTH)];
     const { result } = renderHook(() =>
-      useProviderReauthGate("openrouter", null, true),
+      useProviderReauthGate("openrouter", null, true, "authoritative"),
     );
     expect(result.current.signedOut).toBe(true);
     expect(result.current.providerId).toBe("openrouter");
@@ -144,14 +144,16 @@ describe("useProviderReauthGate", () => {
   it("does NOT flag signedOut on a transient unknown probe", () => {
     mocks.providers = [claudeState(UNKNOWN)];
     const { result } = renderHook(() =>
-      useProviderReauthGate("claude", null, true),
+      useProviderReauthGate("claude", null, true, "authoritative"),
     );
     expect(result.current.signedOut).toBe(false);
   });
 
   it("does NOT auto force-refresh on activate (would flicker the banner)", () => {
     mocks.providers = [claudeState(AUTHED)];
-    renderHook(() => useProviderReauthGate("claude", null, true));
+    renderHook(() =>
+      useProviderReauthGate("claude", null, true, "authoritative"),
+    );
     // A bare force-refresh bypasses the host poison and re-runs the flaky
     // standalone probe, flipping a genuinely signed-out provider back to
     // `authenticated`. Re-checks are user-driven (the banner Refresh button) or
@@ -162,7 +164,7 @@ describe("useProviderReauthGate", () => {
   it("fires one sign-out toast on the entering edge, not per render", () => {
     mocks.providers = [claudeState(UNAUTH)];
     const { rerender } = renderHook(() =>
-      useProviderReauthGate("claude", null, true),
+      useProviderReauthGate("claude", null, true, "authoritative"),
     );
     expect(mocks.toastError).toHaveBeenCalledTimes(1);
     expect(mocks.toastError).toHaveBeenCalledWith("Claude Code is signed out");
@@ -174,7 +176,7 @@ describe("useProviderReauthGate", () => {
   it("clears signedOut and toasts once the probe confirms authenticated", () => {
     mocks.providers = [claudeState(UNAUTH)];
     const { result, rerender } = renderHook(() =>
-      useProviderReauthGate("claude", null, true),
+      useProviderReauthGate("claude", null, true, "authoritative"),
     );
     expect(result.current.signedOut).toBe(true);
     expect(mocks.toastError).toHaveBeenCalledTimes(1);
@@ -190,7 +192,7 @@ describe("useProviderReauthGate", () => {
   it("does not phantom-fire the success toast through a transient unknown", () => {
     mocks.providers = [claudeState(UNAUTH)];
     const { rerender } = renderHook(() =>
-      useProviderReauthGate("claude", null, true),
+      useProviderReauthGate("claude", null, true, "authoritative"),
     );
     expect(mocks.toastError).toHaveBeenCalledTimes(1);
     // A token paste makes the host re-probe, emitting a transient `unknown`
@@ -206,7 +208,7 @@ describe("useProviderReauthGate", () => {
   it("stays inert when the composer is inactive", () => {
     mocks.providers = [claudeState(UNAUTH)];
     const { result } = renderHook(() =>
-      useProviderReauthGate("claude", null, false),
+      useProviderReauthGate("claude", null, false, "authoritative"),
     );
     expect(result.current.signedOut).toBe(false);
   });
@@ -220,7 +222,12 @@ describe("useProviderReauthGate", () => {
         ]),
       ];
       const { result } = renderHook(() =>
-        useProviderReauthGate("claude", "removed-profile-uuid", true),
+        useProviderReauthGate(
+          "claude",
+          "removed-profile-uuid",
+          true,
+          "authoritative",
+        ),
       );
       expect(result.current.signedOut).toBe(true);
       expect(result.current.reason).toBe("profile_missing");
@@ -235,7 +242,7 @@ describe("useProviderReauthGate", () => {
         ]),
       ];
       const { result } = renderHook(() =>
-        useProviderReauthGate("claude", "work-uuid", true),
+        useProviderReauthGate("claude", "work-uuid", true, "authoritative"),
       );
       expect(result.current.signedOut).toBe(true);
       expect(result.current.reason).toBe("profile_unauthenticated");
@@ -261,7 +268,7 @@ describe("useProviderReauthGate", () => {
         },
       ];
       const { result } = renderHook(() =>
-        useProviderReauthGate("claude", "work-uuid", true),
+        useProviderReauthGate("claude", "work-uuid", true, "authoritative"),
       );
       expect(result.current.signedOut).toBe(false);
       expect(result.current.reason).toBeNull();
@@ -270,7 +277,12 @@ describe("useProviderReauthGate", () => {
     it("stays inert for a non-null profileId while providers.list hasn't settled yet (unsettled - never false-positives an undetermined profile)", () => {
       mocks.providers = undefined;
       const { result } = renderHook(() =>
-        useProviderReauthGate("claude", "some-profile-uuid", true),
+        useProviderReauthGate(
+          "claude",
+          "some-profile-uuid",
+          true,
+          "authoritative",
+        ),
       );
       expect(result.current.signedOut).toBe(false);
       expect(result.current.reason).toBeNull();
@@ -285,7 +297,12 @@ describe("useProviderReauthGate", () => {
       // confirm-first ambient fallback instead (never a silent switch).
       mocks.providers = [claudeState(AUTHED)];
       const { result } = renderHook(() =>
-        useProviderReauthGate("claude", "some-profile-uuid", true),
+        useProviderReauthGate(
+          "claude",
+          "some-profile-uuid",
+          true,
+          "authoritative",
+        ),
       );
       expect(result.current.signedOut).toBe(true);
       expect(result.current.reason).toBe("profile_missing");
@@ -299,8 +316,52 @@ describe("useProviderReauthGate", () => {
           profile("work-uuid", "managed", "Work", "unauthenticated"),
         ]),
       ];
-      renderHook(() => useProviderReauthGate("claude", "work-uuid", true));
+      renderHook(() =>
+        useProviderReauthGate("claude", "work-uuid", true, "authoritative"),
+      );
       expect(mocks.toastError).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("authoritative gates ONLY profile_missing, never profile_unauthenticated", () => {
+    it("a non-authoritative selection whose pin EXISTS but is itself unauthenticated still shows the banner and blocks send", () => {
+      // Prong 2 (`useComposerToolbarStore`'s seed validation) already nulls
+      // out a non-existent fallback pin before it ever reaches this gate, so
+      // a non-authoritative `profileId` that still resolves to a real row
+      // here is a CONFIRMED-EXISTING profile, not a guess. Suppressing this
+      // would silently let a turn dispatch on a signed-out profile and only
+      // surface the banner after it failed host-side mid-send.
+      mocks.providers = [
+        claudeStateWithProfiles([
+          profile("ambient", "ambient", "Terminal account", "authenticated"),
+          profile("work-uuid", "managed", "Work", "unauthenticated"),
+        ]),
+      ];
+      const { result } = renderHook(() =>
+        useProviderReauthGate("claude", "work-uuid", true, "fallback"),
+      );
+      expect(result.current.signedOut).toBe(true);
+      expect(result.current.reason).toBe("profile_unauthenticated");
+      expect(result.current.profileLabel).toBe("Work");
+    });
+
+    it("sibling control: a non-authoritative selection whose pin is settled-ABSENT stays silent (profile_missing is the one reason authoritative gates)", () => {
+      mocks.providers = [
+        claudeStateWithProfiles([
+          profile("ambient", "ambient", "Terminal account", "authenticated"),
+          profile("work-uuid", "managed", "Work", "authenticated"),
+        ]),
+      ];
+      const { result } = renderHook(() =>
+        useProviderReauthGate(
+          "claude",
+          "removed-profile-uuid",
+          true,
+          "fallback",
+        ),
+      );
+      expect(result.current.signedOut).toBe(false);
+      expect(result.current.reason).toBeNull();
     });
   });
 });

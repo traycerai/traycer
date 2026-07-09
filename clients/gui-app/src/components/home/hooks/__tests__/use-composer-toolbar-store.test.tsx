@@ -90,9 +90,19 @@ vi.mock("@/hooks/command-palette/use-register-composer-controls", () => ({
   },
 }));
 
+// None of this file's cases exercise the seeded-profile host-liveness check
+// (that's `profile-durability-*` coverage) - a plain pass-through here mirrors
+// exactly what the real hook does for `client: null` (every test below passes
+// `null`): hold the profileId verbatim, no `providers.list` query attempted.
+vi.mock("@/hooks/providers/use-resolved-seeded-profile-id", () => ({
+  useResolvedSeededProfileId: (_harnessId: string, profileId: string | null) =>
+    profileId,
+}));
+
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
+import { fallbackSeedSource } from "@/lib/composer/composer-seed-source";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useComposerHarnessMemoryStore } from "@/stores/composer/composer-harness-memory-store";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
@@ -148,7 +158,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     };
 
     const { result } = renderHook(() =>
-      useComposerToolbarStore(null, null, null, false),
+      useComposerToolbarStore(null, { kind: "none" }, null, false),
     );
 
     await waitFor(() =>
@@ -171,7 +181,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     };
 
     const { result } = renderHook(() =>
-      useComposerToolbarStore(null, null, null, false),
+      useComposerToolbarStore(null, { kind: "none" }, null, false),
     );
 
     // Give the catalog-sync effect a chance to (not) reroute.
@@ -188,7 +198,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     harnessesData.value = undefined;
 
     const { result } = renderHook(() =>
-      useComposerToolbarStore(null, null, null, false),
+      useComposerToolbarStore(null, { kind: "none" }, null, false),
     );
 
     await Promise.resolve();
@@ -210,7 +220,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     };
 
     const { result } = renderHook(() =>
-      useComposerToolbarStore(null, null, null, true),
+      useComposerToolbarStore(null, { kind: "none" }, null, true),
     );
 
     await waitFor(() =>
@@ -235,7 +245,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     };
 
     const { result } = renderHook(() =>
-      useComposerToolbarStore(null, null, null, true),
+      useComposerToolbarStore(null, { kind: "none" }, null, true),
     );
 
     await waitFor(() =>
@@ -253,7 +263,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     };
 
     const { result } = renderHook(() =>
-      useComposerToolbarStore(null, null, null, true),
+      useComposerToolbarStore(null, { kind: "none" }, null, true),
     );
 
     await Promise.resolve();
@@ -298,7 +308,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     };
     const onSettingsChange = vi.fn();
     const { result } = renderHook(() =>
-      useComposerToolbarStore(null, null, onSettingsChange, true),
+      useComposerToolbarStore(null, { kind: "none" }, onSettingsChange, true),
     );
 
     // Reroute settles on a TUI-capable harness with a concrete model slug, so a
@@ -324,7 +334,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     seedDefault("claude");
     const onSettingsChange = vi.fn();
     const { result } = renderHook(() =>
-      useComposerToolbarStore(null, null, onSettingsChange, false),
+      useComposerToolbarStore(null, { kind: "none" }, onSettingsChange, false),
     );
 
     act(() => {
@@ -344,7 +354,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     });
     const onSettingsChange = vi.fn();
     const { result, rerender } = renderHook(() =>
-      useComposerToolbarStore(null, null, onSettingsChange, false),
+      useComposerToolbarStore(null, { kind: "none" }, onSettingsChange, false),
     );
 
     act(() => {
@@ -412,7 +422,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     };
 
     const { result } = renderHook(() =>
-      useComposerToolbarStore(null, null, null, false),
+      useComposerToolbarStore(null, { kind: "none" }, null, false),
     );
 
     await waitFor(() =>
@@ -447,7 +457,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     };
     const onSettingsChange = vi.fn();
     const { result } = renderHook(() =>
-      useComposerToolbarStore(null, null, onSettingsChange, false),
+      useComposerToolbarStore(null, { kind: "none" }, onSettingsChange, false),
     );
 
     act(() => {
@@ -494,7 +504,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     };
     const onSettingsChange = vi.fn();
     const { result } = renderHook(() =>
-      useComposerToolbarStore(null, null, onSettingsChange, false),
+      useComposerToolbarStore(null, { kind: "none" }, onSettingsChange, false),
     );
 
     act(() => {
@@ -539,7 +549,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     };
     const onSettingsChange = vi.fn();
     const { result } = renderHook(() =>
-      useComposerToolbarStore(null, null, onSettingsChange, false),
+      useComposerToolbarStore(null, { kind: "none" }, onSettingsChange, false),
     );
 
     act(() => {
@@ -564,7 +574,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     useSettingsStore.setState({ defaultAgentMode: "regular" });
     const onSettingsChange = vi.fn();
     const { result } = renderHook(() =>
-      useComposerToolbarStore(null, null, onSettingsChange, false),
+      useComposerToolbarStore(null, { kind: "none" }, onSettingsChange, false),
     );
 
     act(() => {
@@ -615,7 +625,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     };
     const onSettingsChange = vi.fn();
     const { result } = renderHook(() =>
-      useComposerToolbarStore(null, null, onSettingsChange, false),
+      useComposerToolbarStore(null, { kind: "none" }, onSettingsChange, false),
     );
 
     // Let the catalog load so the commit resolves a concrete slug and emits
@@ -643,7 +653,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     seedDefault("codex");
     const trackSpy = vi.spyOn(Analytics.getInstance(), "track");
     const { result } = renderHook(() =>
-      useComposerToolbarStore(null, null, null, false),
+      useComposerToolbarStore(null, { kind: "none" }, null, false),
     );
     // The mount path (catalog sync / seed) never tracks; start from a clean count.
     trackSpy.mockClear();
@@ -726,7 +736,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     };
     const onSettingsChange = vi.fn();
     const { result } = renderHook(() =>
-      useComposerToolbarStore(null, null, onSettingsChange, false),
+      useComposerToolbarStore(null, { kind: "none" }, onSettingsChange, false),
     );
 
     // The model supports both sticky values, so they carry before the commit.
@@ -797,7 +807,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     };
     const onSettingsChange = vi.fn();
     const { result } = renderHook(() =>
-      useComposerToolbarStore(null, null, onSettingsChange, false),
+      useComposerToolbarStore(null, { kind: "none" }, onSettingsChange, false),
     );
 
     // The dead slug resolves to the first live model for display, with that
@@ -849,7 +859,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     modelsData.value = undefined;
     const onSettingsChange = vi.fn();
     const { result, rerender } = renderHook(() =>
-      useComposerToolbarStore(null, null, onSettingsChange, false),
+      useComposerToolbarStore(null, { kind: "none" }, onSettingsChange, false),
     );
 
     // Loading window: the remembered slug is held for display but unconfirmed.
@@ -920,7 +930,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     modelsData.value = undefined;
     const onSettingsChange = vi.fn();
     const { result, rerender } = renderHook(() =>
-      useComposerToolbarStore(null, null, onSettingsChange, false),
+      useComposerToolbarStore(null, { kind: "none" }, onSettingsChange, false),
     );
 
     await waitFor(() =>
@@ -990,7 +1000,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     modelsData.value = undefined;
     const onSettingsChange = vi.fn();
     const { result, rerender } = renderHook(() =>
-      useComposerToolbarStore(null, null, onSettingsChange, false),
+      useComposerToolbarStore(null, { kind: "none" }, onSettingsChange, false),
     );
 
     // Load WITHOUT the remembered slug -> self-heals to the first model, emits it.
@@ -1051,7 +1061,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     };
     modelsData.value = undefined;
     const { result, rerender } = renderHook(() =>
-      useComposerToolbarStore(null, null, null, false),
+      useComposerToolbarStore(null, { kind: "none" }, null, false),
     );
 
     await waitFor(() =>
@@ -1092,7 +1102,12 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     seedDefault("codex");
     const seeds: { current: ChatRunSettings | null } = { current: null };
     const { result, rerender } = renderHook(() =>
-      useComposerToolbarStore(null, seeds.current, null, false),
+      useComposerToolbarStore(
+        null,
+        fallbackSeedSource(seeds.current, null),
+        null,
+        false,
+      ),
     );
     expect(result.current.getState().selection.harnessId).toBe("codex");
 
@@ -1146,7 +1161,12 @@ describe("useComposerToolbarStore selection reconciliation", () => {
       },
     };
     const { result, rerender } = renderHook(() =>
-      useComposerToolbarStore(null, seeds.current, null, false),
+      useComposerToolbarStore(
+        null,
+        fallbackSeedSource(seeds.current, null),
+        null,
+        false,
+      ),
     );
     expect(result.current.getState().selection.profileId).toBe("work-uuid");
 
@@ -1184,7 +1204,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
       ],
     };
     const { result } = renderHook(() =>
-      useComposerToolbarStore(null, null, null, false),
+      useComposerToolbarStore(null, { kind: "none" }, null, false),
     );
 
     await waitFor(() =>
@@ -1235,7 +1255,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
       ],
     };
     const { result } = renderHook(() =>
-      useComposerToolbarStore(null, null, null, true),
+      useComposerToolbarStore(null, { kind: "none" }, null, true),
     );
 
     await waitFor(() => {
@@ -1255,9 +1275,12 @@ describe("useComposerToolbarStore selection reconciliation", () => {
 
   it("detaches harness queries and command registration when inactive", () => {
     seedDefault("codex");
-    renderHook(() => useComposerToolbarStore("landing", null, null, false), {
-      wrapper: inactiveWrapper,
-    });
+    renderHook(
+      () => useComposerToolbarStore("landing", { kind: "none" }, null, false),
+      {
+        wrapper: inactiveWrapper,
+      },
+    );
 
     expect(harnessQueryCalls.at(-1)).toEqual({
       enabled: false,

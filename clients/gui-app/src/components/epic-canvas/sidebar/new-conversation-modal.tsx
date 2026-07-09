@@ -89,6 +89,7 @@ import {
   type ComposerMode,
 } from "@/components/home/data/landing-options";
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
+import { fallbackSeedSource } from "@/lib/composer/composer-seed-source";
 import type { TerminalAgentLaunch } from "@/components/home/hooks/use-landing-composer-actions";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useAccountContextStore } from "@/stores/auth/account-context-store";
@@ -492,9 +493,17 @@ function NewConversationModalBody(props: {
     },
     [epicId, setSettings],
   );
+  // `draftSettings` can fall back to `runSettingsSeed`/`latestSettingsSeed`
+  // (see `useNewConversationModalSeed`), neither of which is host-scoped or
+  // kept in sync with live profile removals - validated against the active
+  // host (this modal always creates there, per its workspace controls below)
+  // via the same machinery `useComposerToolbarStore` runs for every composer
+  // surface. Never authoritative: this modal has no reauth gate of its own,
+  // so a genuinely-removed profile must be corrected to ambient here rather
+  // than silently submitted as the new chat/agent's initial settings.
   const toolbarStore = useComposerToolbarStore(
     null,
-    draftSettings,
+    fallbackSeedSource(draftSettings, hostClient),
     handleToolbarSettingsChange,
     draftComposerMode === "terminal",
   );

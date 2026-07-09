@@ -1,4 +1,5 @@
 import { useQueryClient, type UseMutationResult } from "@tanstack/react-query";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
   HostRpcError,
   RequestOfMethod,
@@ -20,13 +21,21 @@ export interface RenameProviderProfileRequest {
   readonly label: string;
 }
 
-export function useRenameProviderProfile(): UseMutationResult<
+type RenameProviderProfileMutationResult = UseMutationResult<
   ResponseOfMethod<HostRpcRegistry, "providers.setEnabled">,
   HostRpcError,
   RenameProviderProfileRequest,
   { readonly hostId: string | null }
-> {
-  const client = useHostClient();
+>;
+
+export function useRenameProviderProfile(): RenameProviderProfileMutationResult {
+  return useRenameProviderProfileForClient(useHostClient());
+}
+
+/** Client-scoped variant - see `useProvidersStartLoginForClient`. */
+export function useRenameProviderProfileForClient(
+  client: HostClient<HostRpcRegistry> | null,
+): RenameProviderProfileMutationResult {
   const queryClient = useQueryClient();
   return useHostMutation<
     HostRpcRegistry,
@@ -48,7 +57,7 @@ export function useRenameProviderProfile(): UseMutationResult<
       }) satisfies RequestOfMethod<HostRpcRegistry, "providers.setEnabled">,
     options: {
       mutationKey: providersMutationKeys.renameProfile(),
-      onMutate: () => ({ hostId: client.getActiveHostId() }),
+      onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
       onSuccess: (_data, _variables, context) => {
         if (context.hostId === null) return;
         for (const method of PROVIDER_INVALIDATIONS) {

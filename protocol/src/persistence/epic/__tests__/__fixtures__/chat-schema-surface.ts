@@ -545,6 +545,17 @@ export const chatSchemaSurfaceBaseline = {
                                   "type": "null"
                                 }
                               ]
+                            },
+                            "accentColor": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
                           "required": [
@@ -651,6 +662,17 @@ export const chatSchemaSurfaceBaseline = {
                                   "type": "null"
                                 }
                               ]
+                            },
+                            "accentColor": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
                           "required": [
@@ -739,6 +761,17 @@ export const chatSchemaSurfaceBaseline = {
                               ]
                             },
                             "accountUuid": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "accentColor": {
                               "default": null,
                               "anyOf": [
                                 {
@@ -851,6 +884,17 @@ export const chatSchemaSurfaceBaseline = {
                                   "type": "null"
                                 }
                               ]
+                            },
+                            "accentColor": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
                           "required": [
@@ -938,6 +982,17 @@ export const chatSchemaSurfaceBaseline = {
                               ]
                             },
                             "accountUuid": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "accentColor": {
                               "default": null,
                               "anyOf": [
                                 {
@@ -1043,6 +1098,17 @@ export const chatSchemaSurfaceBaseline = {
                                   "type": "null"
                                 }
                               ]
+                            },
+                            "accentColor": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
                           "required": [
@@ -1127,6 +1193,17 @@ export const chatSchemaSurfaceBaseline = {
                               ]
                             },
                             "accountUuid": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "accentColor": {
                               "default": null,
                               "anyOf": [
                                 {
@@ -1228,6 +1305,17 @@ export const chatSchemaSurfaceBaseline = {
                                   "type": "null"
                                 }
                               ]
+                            },
+                            "accentColor": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
                           "required": [
@@ -1311,6 +1399,17 @@ export const chatSchemaSurfaceBaseline = {
                               ]
                             },
                             "accountUuid": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "accentColor": {
                               "default": null,
                               "anyOf": [
                                 {
@@ -1412,6 +1511,17 @@ export const chatSchemaSurfaceBaseline = {
                                   "type": "null"
                                 }
                               ]
+                            },
+                            "accentColor": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
                           "required": [
@@ -1495,6 +1605,17 @@ export const chatSchemaSurfaceBaseline = {
                               ]
                             },
                             "accountUuid": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "accentColor": {
                               "default": null,
                               "anyOf": [
                                 {
@@ -1596,6 +1717,17 @@ export const chatSchemaSurfaceBaseline = {
                                   "type": "null"
                                 }
                               ]
+                            },
+                            "accentColor": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
                           "required": [
@@ -1688,6 +1820,17 @@ export const chatSchemaSurfaceBaseline = {
                                   "type": "null"
                                 }
                               ]
+                            },
+                            "accentColor": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
                           "required": [
@@ -1771,6 +1914,17 @@ export const chatSchemaSurfaceBaseline = {
                               ]
                             },
                             "accountUuid": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "accentColor": {
                               "default": null,
                               "anyOf": [
                                 {
@@ -5183,6 +5337,17 @@ export const chatSchemaSurfaceBaseline = {
                                   "type": "null"
                                 }
                               ]
+                            },
+                            "accentColor": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
                           "required": [
@@ -5195,7 +5360,8 @@ export const chatSchemaSurfaceBaseline = {
                             "coveredUntilMessageId",
                             "profileId",
                             "labelSnapshot",
-                            "accountUuid"
+                            "accountUuid",
+                            "accentColor"
                           ],
                           "additionalProperties": false
                         },
@@ -5296,6 +5462,17 @@ export const chatSchemaSurfaceBaseline = {
                                   "type": "null"
                                 }
                               ]
+                            },
+                            "accentColor": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
                           "required": [
@@ -5309,7 +5486,8 @@ export const chatSchemaSurfaceBaseline = {
                             "coveredUntilMessageId",
                             "profileId",
                             "labelSnapshot",
-                            "accountUuid"
+                            "accountUuid",
+                            "accentColor"
                           ],
                           "additionalProperties": false
                         },
@@ -5400,6 +5578,17 @@ export const chatSchemaSurfaceBaseline = {
                                   "type": "null"
                                 }
                               ]
+                            },
+                            "accentColor": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
                           "required": [
@@ -5412,7 +5601,8 @@ export const chatSchemaSurfaceBaseline = {
                             "coveredUntilMessageId",
                             "profileId",
                             "labelSnapshot",
-                            "accountUuid"
+                            "accountUuid",
+                            "accentColor"
                           ],
                           "additionalProperties": false
                         },
@@ -5510,6 +5700,17 @@ export const chatSchemaSurfaceBaseline = {
                                   "type": "null"
                                 }
                               ]
+                            },
+                            "accentColor": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
                           "required": [
@@ -5522,7 +5723,8 @@ export const chatSchemaSurfaceBaseline = {
                             "coveredUntilMessageId",
                             "profileId",
                             "labelSnapshot",
-                            "accountUuid"
+                            "accountUuid",
+                            "accentColor"
                           ],
                           "additionalProperties": false
                         },
@@ -5613,6 +5815,17 @@ export const chatSchemaSurfaceBaseline = {
                                   "type": "null"
                                 }
                               ]
+                            },
+                            "accentColor": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
                           "required": [
@@ -5625,7 +5838,8 @@ export const chatSchemaSurfaceBaseline = {
                             "coveredUntilMessageId",
                             "profileId",
                             "labelSnapshot",
-                            "accountUuid"
+                            "accountUuid",
+                            "accentColor"
                           ],
                           "additionalProperties": false
                         },
@@ -5716,6 +5930,17 @@ export const chatSchemaSurfaceBaseline = {
                                   "type": "null"
                                 }
                               ]
+                            },
+                            "accentColor": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
                           "required": [
@@ -5728,7 +5953,8 @@ export const chatSchemaSurfaceBaseline = {
                             "coveredUntilMessageId",
                             "profileId",
                             "labelSnapshot",
-                            "accountUuid"
+                            "accountUuid",
+                            "accentColor"
                           ],
                           "additionalProperties": false
                         },
@@ -5816,6 +6042,17 @@ export const chatSchemaSurfaceBaseline = {
                                   "type": "null"
                                 }
                               ]
+                            },
+                            "accentColor": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
                           "required": [
@@ -5827,7 +6064,8 @@ export const chatSchemaSurfaceBaseline = {
                             "coveredUntilMessageId",
                             "profileId",
                             "labelSnapshot",
-                            "accountUuid"
+                            "accountUuid",
+                            "accentColor"
                           ],
                           "additionalProperties": false
                         },
@@ -5915,6 +6153,17 @@ export const chatSchemaSurfaceBaseline = {
                                   "type": "null"
                                 }
                               ]
+                            },
+                            "accentColor": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
                           "required": [
@@ -5926,7 +6175,8 @@ export const chatSchemaSurfaceBaseline = {
                             "coveredUntilMessageId",
                             "profileId",
                             "labelSnapshot",
-                            "accountUuid"
+                            "accountUuid",
+                            "accentColor"
                           ],
                           "additionalProperties": false
                         },
@@ -6014,6 +6264,17 @@ export const chatSchemaSurfaceBaseline = {
                                   "type": "null"
                                 }
                               ]
+                            },
+                            "accentColor": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
                           "required": [
@@ -6025,7 +6286,8 @@ export const chatSchemaSurfaceBaseline = {
                             "coveredUntilMessageId",
                             "profileId",
                             "labelSnapshot",
-                            "accountUuid"
+                            "accountUuid",
+                            "accentColor"
                           ],
                           "additionalProperties": false
                         },
@@ -6113,6 +6375,17 @@ export const chatSchemaSurfaceBaseline = {
                                   "type": "null"
                                 }
                               ]
+                            },
+                            "accentColor": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
                           "required": [
@@ -6124,7 +6397,8 @@ export const chatSchemaSurfaceBaseline = {
                             "coveredUntilMessageId",
                             "profileId",
                             "labelSnapshot",
-                            "accountUuid"
+                            "accountUuid",
+                            "accentColor"
                           ],
                           "additionalProperties": false
                         },
@@ -6212,6 +6486,17 @@ export const chatSchemaSurfaceBaseline = {
                                   "type": "null"
                                 }
                               ]
+                            },
+                            "accentColor": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
                           "required": [
@@ -6223,7 +6508,8 @@ export const chatSchemaSurfaceBaseline = {
                             "coveredUntilMessageId",
                             "profileId",
                             "labelSnapshot",
-                            "accountUuid"
+                            "accountUuid",
+                            "accentColor"
                           ],
                           "additionalProperties": false
                         },
@@ -6311,6 +6597,17 @@ export const chatSchemaSurfaceBaseline = {
                                   "type": "null"
                                 }
                               ]
+                            },
+                            "accentColor": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
                           "required": [
@@ -6322,7 +6619,8 @@ export const chatSchemaSurfaceBaseline = {
                             "coveredUntilMessageId",
                             "profileId",
                             "labelSnapshot",
-                            "accountUuid"
+                            "accountUuid",
+                            "accentColor"
                           ],
                           "additionalProperties": false
                         },
@@ -6410,6 +6708,17 @@ export const chatSchemaSurfaceBaseline = {
                                   "type": "null"
                                 }
                               ]
+                            },
+                            "accentColor": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
                           "required": [
@@ -6421,7 +6730,8 @@ export const chatSchemaSurfaceBaseline = {
                             "coveredUntilMessageId",
                             "profileId",
                             "labelSnapshot",
-                            "accountUuid"
+                            "accountUuid",
+                            "accentColor"
                           ],
                           "additionalProperties": false
                         },
@@ -6509,6 +6819,17 @@ export const chatSchemaSurfaceBaseline = {
                                   "type": "null"
                                 }
                               ]
+                            },
+                            "accentColor": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
                           "required": [
@@ -6520,7 +6841,8 @@ export const chatSchemaSurfaceBaseline = {
                             "coveredUntilMessageId",
                             "profileId",
                             "labelSnapshot",
-                            "accountUuid"
+                            "accountUuid",
+                            "accentColor"
                           ],
                           "additionalProperties": false
                         }

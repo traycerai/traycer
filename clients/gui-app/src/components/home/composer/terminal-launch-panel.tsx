@@ -148,6 +148,10 @@ function TerminalLaunchPanelImpl(props: TerminalLaunchPanelProps) {
           lockedHarnessId={null}
           disabled={pending}
           registerActivation
+          // Launching from the landing composer has no existing tab to bind
+          // to yet - the app-wide default host is correct, same as this
+          // panel's own `useProvidersList()` read above.
+          createProfileHostId={null}
         />
         <Input
           aria-label="Terminal agent CLI arguments"

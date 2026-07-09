@@ -770,7 +770,7 @@ export function ProviderRateLimitBody(
   if (!data.available) {
     return (
       <p className="text-ui-xs text-muted-foreground">
-        Usage limits unavailable — {formatUnavailableReason(data.reason)}
+        Usage limits unavailable - {formatUnavailableReason(data.reason)}
       </p>
     );
   }

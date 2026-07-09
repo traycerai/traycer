@@ -63,6 +63,7 @@ vi.mock("sonner", () => ({
 import { useProviderReauthGate } from "../use-provider-reauth-gate";
 import { useProfileRateLimitSwitchPrompt } from "../use-profile-rate-limit-switch-prompt";
 import { ProfileRateLimitSwitchBanner } from "../profile-rate-limit-switch-banner";
+import { resolveComposerTopBannerKind } from "../chat-composer-top-banner";
 
 function profile(
   profileId: string,
@@ -102,6 +103,29 @@ function unauthenticated(candidate: ProviderProfile): ProviderProfile {
   };
 }
 
+function driftedAmbient(
+  rateLimitStatus: ProviderProfileRateLimitStatus,
+): ProviderProfile {
+  const ambient = profile(
+    "ambient",
+    "ambient",
+    "Terminal account",
+    rateLimitStatus,
+  );
+  return {
+    ...ambient,
+    identity: {
+      email: "new-terminal@example.test",
+      tier: null,
+      accountUuid: null,
+    },
+    ambientDriftNotice: {
+      previousEmail: "old-terminal@example.test",
+      changedAt: 1735689600000,
+    },
+  };
+}
+
 function claudeState(profiles: ProviderProfile[]): ProviderCliState {
   const providerId: ProviderId = "claude-code";
   return {
@@ -137,7 +161,15 @@ function claudeState(profiles: ProviderProfile[]): ProviderCliState {
  */
 function ComposerProfileSwitchHarness() {
   const [profileId, setProfileId] = useState<string | null>(null);
-  const reauthGate = useProviderReauthGate("claude", profileId, true);
+  // `authoritative: true` - this harness models a committed selection (a
+  // real user-driven switch), not a fallback seed, so the banner-flash gate
+  // (a different mechanism than what D2/D3 test) never suppresses it here.
+  const reauthGate = useProviderReauthGate(
+    "claude",
+    profileId,
+    true,
+    "authoritative",
+  );
   const rateLimitPrompt = useProfileRateLimitSwitchPrompt(
     "claude",
     profileId,
@@ -157,9 +189,81 @@ function ComposerProfileSwitchHarness() {
       </div>
       {!reauthGate.signedOut && rateLimitPrompt.limited ? (
         <ProfileRateLimitSwitchBanner
+          harnessId="claude"
           hardLimited={rateLimitPrompt.hardLimited}
+          current={rateLimitPrompt.current}
           alternatives={rateLimitPrompt.alternatives}
           onSwitchProfile={onSwitchProfile}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function ComposerBannerPrecedenceHarness({
+  onSubmit,
+}: {
+  readonly onSubmit: () => void;
+}) {
+  const [profileId, setProfileId] = useState<string | null>(null);
+  const [pendingAmbientDrift, setPendingAmbientDrift] = useState(false);
+  const [acknowledgedAmbientDrift, setAcknowledgedAmbientDrift] =
+    useState(false);
+  const reauthGate = useProviderReauthGate(
+    "claude",
+    profileId,
+    true,
+    "authoritative",
+  );
+  const rateLimitPrompt = useProfileRateLimitSwitchPrompt(
+    "claude",
+    profileId,
+    true,
+  );
+  const driftVisible = pendingAmbientDrift && !acknowledgedAmbientDrift;
+  const topBannerKind = resolveComposerTopBannerKind({
+    reauthVisible: reauthGate.signedOut,
+    ambientDriftVisible: driftVisible,
+    rateLimitVisible: !reauthGate.signedOut && rateLimitPrompt.limited,
+  });
+
+  const submit = (): void => {
+    if (!acknowledgedAmbientDrift) {
+      setPendingAmbientDrift(true);
+      return;
+    }
+    if (rateLimitPrompt.limited) return;
+    onSubmit();
+  };
+
+  const acknowledgeDrift = (): void => {
+    setAcknowledgedAmbientDrift(true);
+    setPendingAmbientDrift(false);
+    if (rateLimitPrompt.limited) return;
+    onSubmit();
+  };
+
+  return (
+    <div>
+      <button type="button" onClick={submit}>
+        Send
+      </button>
+      <div data-testid="top-banner-kind">{topBannerKind}</div>
+      {topBannerKind === "ambient-drift" ? (
+        <div role="alert">
+          <span>Terminal account changed</span>
+          <button type="button" onClick={acknowledgeDrift}>
+            Continue with Terminal account
+          </button>
+        </div>
+      ) : null}
+      {topBannerKind === "rate-limit" ? (
+        <ProfileRateLimitSwitchBanner
+          harnessId="claude"
+          hardLimited={rateLimitPrompt.hardLimited}
+          current={rateLimitPrompt.current}
+          alternatives={rateLimitPrompt.alternatives}
+          onSwitchProfile={setProfileId}
         />
       ) : null}
     </div>
@@ -172,6 +276,48 @@ describe("D2: rate-limit switch prompt race (stale click vs. live re-validation)
     mocks.refresh.mockClear();
     mocks.toastSuccess.mockClear();
     mocks.toastError.mockClear();
+  });
+
+  it("shows ambient drift before rate-limit and moves to rate-limit after acknowledging drift without submitting", () => {
+    const submit = vi.fn();
+    mocks.providers = [
+      claudeState([
+        driftedAmbient("hard_limit"),
+        profile("work-uuid", "managed", "Work", "ok"),
+      ]),
+    ];
+
+    render(<ComposerBannerPrecedenceHarness onSubmit={submit} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(screen.getByTestId("top-banner-kind").textContent).toBe(
+      "ambient-drift",
+    );
+    expect(screen.getByText("Terminal account changed")).toBeDefined();
+    expect(
+      screen.queryByRole("button", {
+        name: "Continue this session on Work",
+      }),
+    ).toBeNull();
+    expect(submit).not.toHaveBeenCalled();
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Continue with Terminal account",
+      }),
+    );
+
+    expect(screen.getByTestId("top-banner-kind").textContent).toBe(
+      "rate-limit",
+    );
+    expect(screen.queryByText("Terminal account changed")).toBeNull();
+    expect(
+      screen.getByRole("button", {
+        name: "Continue this session on Work",
+      }),
+    ).toBeDefined();
+    expect(submit).not.toHaveBeenCalled();
   });
   afterEach(() => {
     cleanup();

@@ -1,24 +1,17 @@
+import { PROVIDER_PROFILE_ACCENT_COLORS } from "@traycer/protocol/host/provider-schemas";
+
 /**
- * Deterministic accent palette for provider profile badges. Kept separate
- * from the collab caret palette (`editor-core/awareness/derive-collab-user.ts`)
- * since that one is deliberately biased away from the app's primary action
- * blue so a remote caret never masquerades as the local selection - profile
- * badges carry no such constraint and are an unrelated identity space.
+ * Deterministic accent palette for provider profile badges - the same
+ * selectable palette (`PROVIDER_PROFILE_ACCENT_COLORS`) the accent-color
+ * swatch grid offers, so a profile without a host-assigned color still lands
+ * on a color the user could have picked themselves. Kept separate from the
+ * collab caret palette (`editor-core/awareness/derive-collab-user.ts`) since
+ * that one is deliberately biased away from the app's primary action blue so
+ * a remote caret never masquerades as the local selection - profile badges
+ * carry no such constraint and are an unrelated identity space.
  */
-const PROFILE_ACCENT_PALETTE: readonly string[] = [
-  "#ef4444", // red-500
-  "#f97316", // orange-500
-  "#f59e0b", // amber-500
-  "#84cc16", // lime-500
-  "#10b981", // emerald-500
-  "#14b8a6", // teal-500
-  "#06b6d4", // cyan-500
-  "#3b82f6", // blue-500
-  "#8b5cf6", // violet-500
-  "#a855f7", // purple-500
-  "#d946ef", // fuchsia-500
-  "#ec4899", // pink-500
-] as const;
+const PROFILE_ACCENT_PALETTE: readonly string[] =
+  PROVIDER_PROFILE_ACCENT_COLORS;
 
 /**
  * FNV-1a 32-bit - the same idiom `hashUserIdToColorIndex` uses for collab

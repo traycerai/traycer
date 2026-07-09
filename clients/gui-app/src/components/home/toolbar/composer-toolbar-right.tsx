@@ -25,6 +25,9 @@ interface ComposerToolbarRightProps {
   dictation: ComposerDictationControl | null;
   /** Non-null while the on-device model is downloading; renders a status chip. */
   dictationPreparing: DictationPreparingStatus | null;
+  /** The host "Create new profile" creates on - see `HarnessModelPicker`'s
+   *  prop of the same name. */
+  createProfileHostId: string | null;
 }
 
 function ComposerToolbarRightImpl(props: ComposerToolbarRightProps) {
@@ -39,6 +42,7 @@ function ComposerToolbarRightImpl(props: ComposerToolbarRightProps) {
     settingsLocked,
     dictation,
     dictationPreparing,
+    createProfileHostId,
   } = props;
   // Block sending until the model slug resolves to a concrete value - an
   // empty slug is the transient "catalog still loading" marker and must never
@@ -60,6 +64,7 @@ function ComposerToolbarRightImpl(props: ComposerToolbarRightProps) {
         lockedHarnessId={null}
         disabled={settingsLocked}
         registerActivation
+        createProfileHostId={createProfileHostId}
       />
       {dictation !== null ? <ComposerMicButton control={dictation} /> : null}
       {dictation === null && dictationPreparing !== null ? (

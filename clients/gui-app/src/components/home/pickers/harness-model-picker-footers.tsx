@@ -7,8 +7,10 @@ import {
 } from "@/components/home/data/landing-options";
 import { cn } from "@/lib/utils";
 import { Zap } from "lucide-react";
-import { usePickerReasoningLeaderForIndex } from "@/providers/keybinding-context";
-import { leaderDigitFor } from "@/components/ui/leader-digit-shortcuts";
+import {
+  singleDigitLeaderDigitFor,
+  usePickerReasoningLeaderForIndex,
+} from "@/providers/keybinding-context";
 import { PickerLeaderBadge } from "@/components/home/pickers/harness-model-picker-leader-badge";
 
 export interface ReasoningFooterConfig {
@@ -155,7 +157,7 @@ function ReasoningLevelButton(props: ReasoningLevelButtonProps) {
           index={index}
           hintAction="to set"
           hintTarget={option.label}
-          testId={`model-reasoning-digit-${leaderDigitFor(index)}`}
+          testId={`model-reasoning-digit-${singleDigitLeaderDigitFor(index)}`}
           placement="trailing"
         />
       </span>

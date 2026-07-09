@@ -11,6 +11,7 @@ import {
   providerCliStateSchema,
   providerCliStateSchemaV10,
   providerCliStateSchemaV20,
+  providerProfileActionSchema,
 } from "@traycer/protocol/host/provider-schemas";
 // Importing from the registry runs `defineVersionedRpcRegistry` (full
 // structural + schema-compatibility validation) at module load, so this
@@ -213,6 +214,37 @@ describe("ProviderCliState.profiles[] downgrade to v1.0", () => {
     expect(state.profiles[0].duplicateOfProfileId).toBeNull();
     expect(state.profiles[0].ambientDriftNotice).toBeNull();
   });
+
+  it("degrades an out-of-palette reusedTombstone.accentColor to null without dropping the profile or the profiles array", () => {
+    const state = providerCliStateSchema.parse({
+      ...providerState("claude-code"),
+      profiles: [
+        {
+          profileId: "profile-1",
+          kind: "managed" as const,
+          authType: "oauth" as const,
+          label: "Work",
+          auth: {
+            status: "authenticated" as const,
+            badgeText: null,
+            label: null,
+            detail: null,
+          },
+          identity: null,
+          usageUpdatedAt: null,
+          // A newer host's palette grew a color this client's frozen enum
+          // doesn't know about - the array-level `.catch([])` on `profiles`
+          // would otherwise silently wipe every profile for this provider.
+          reusedTombstone: { label: "Old Work", accentColor: "#ffffff" },
+        },
+      ],
+    });
+    expect(state.profiles).toHaveLength(1);
+    expect(state.profiles[0].reusedTombstone).toEqual({
+      label: "Old Work",
+      accentColor: null,
+    });
+  });
 });
 
 describe("providers.list v3.0 -> v2.0 downgrade strips profiles[]", () => {
@@ -324,7 +356,7 @@ describe("providers.awaitLogin v2->v1 downgrade strips profileId", () => {
   });
 });
 
-describe("providers.setEnabled@2.1 (profile rename/remove)", () => {
+describe("providers.setEnabled@2.1 (profile rename/remove/recolor)", () => {
   it("upgrades a v2.0 request to v2.1 with profileAction defaulted to null", () => {
     const upgraded = upgradeRequestToVersion(
       hostRpcRegistry["providers.setEnabled"],
@@ -337,6 +369,23 @@ describe("providers.setEnabled@2.1 (profile rename/remove)", () => {
       enabled: true,
       profileAction: null,
     });
+  });
+
+  it("accepts recolor only with a palette accent color", () => {
+    expect(
+      providerProfileActionSchema.safeParse({
+        type: "recolor",
+        profileId: "profile-1",
+        accentColor: "#14b8a6",
+      }).success,
+    ).toBe(true);
+    expect(
+      providerProfileActionSchema.safeParse({
+        type: "recolor",
+        profileId: "profile-1",
+        accentColor: "#ffffff",
+      }).success,
+    ).toBe(false);
   });
 
   it("drops profileAction before the strict v1.0 request parse", () => {
@@ -356,6 +405,20 @@ describe("providers.setEnabled@2.1 (profile rename/remove)", () => {
       profileAction: { type: "remove", profileId: "profile-1" },
     });
     expect(remove).toEqual({
+      ok: true,
+      value: { providerId: "claude-code", enabled: true },
+    });
+
+    const recolor = providersSetEnabledDowngradeV2ToV1.downgradeRequest({
+      providerId: "claude-code",
+      enabled: true,
+      profileAction: {
+        type: "recolor",
+        profileId: "profile-1",
+        accentColor: "#14b8a6",
+      },
+    });
+    expect(recolor).toEqual({
       ok: true,
       value: { providerId: "claude-code", enabled: true },
     });

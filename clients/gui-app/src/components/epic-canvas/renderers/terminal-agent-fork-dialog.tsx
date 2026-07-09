@@ -19,13 +19,12 @@ import { HarnessModelPicker } from "@/components/home/pickers/harness-model-pick
 import { AgentModeToggle } from "@/components/home/pickers/agent-mode-toggle";
 import { ActiveHostWorkspaceControls } from "@/components/home/host-workspace-selector/host-workspace-selector";
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
-import { useSurfaceActivity } from "@/components/home/composer/surface-activity-hooks";
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
+import { fallbackSeedSource } from "@/lib/composer/composer-seed-source";
 import {
   type CreateTuiAgentStatus,
   useCreateTuiAgentForClient,
 } from "@/hooks/agent/use-create-tui-agent";
-import { useResolvedSeededProfileId } from "@/hooks/providers/use-resolved-seeded-profile-id";
 import { tuiAgentDisplayTitle } from "@/lib/display-title";
 import { readSeededLaunchWorktreeIntent } from "@/lib/worktree/seeded-launch-worktree-intent";
 import { deriveWorkspaceMode } from "@/lib/worktree/workspace-mode";
@@ -80,26 +79,27 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
     () => pendingForkTerminalAgentStagingKey(epicId),
     [epicId],
   );
-  // A fork dialog has no send-time reauth gate of its own (unlike the main
-  // composer), so a source agent's profileId that was tombstoned since it
-  // last ran must be caught HERE, at seed time, not silently carried
-  // through to `createAgent.create` - see `useResolvedSeededProfileId`. The
-  // fork's `createAgent` call runs on this dialog's explicit `hostClient`
-  // prop (not necessarily the app-wide active host), so the seeded-profile
-  // validation reads `providers.list` from that SAME client - mirroring how
-  // the workspace controls below already query this fixed host.
-  const activityEnabled = useSurfaceActivity();
-  const resolvedProfileId = useResolvedSeededProfileId(
-    target?.sourceAgent.harnessId ?? "traycer",
-    target?.sourceAgent.profileId ?? null,
-    activityEnabled,
-    hostClient,
-  );
   const settingsSeed = useMemo(() => {
     if (target === null) return null;
-    return terminalForkSettingsSeed(target.sourceAgent, resolvedProfileId);
-  }, [target, resolvedProfileId]);
-  const toolbarStore = useComposerToolbarStore(null, settingsSeed, null, true);
+    return terminalForkSettingsSeed(target.sourceAgent);
+  }, [target]);
+  // A fork dialog has no send-time reauth gate of its own (unlike the main
+  // composer), so a source agent's profileId that was tombstoned since it
+  // last ran must be caught before it reaches `createAgent.create`.
+  // `useComposerToolbarStore` now validates every seed it receives against
+  // the SAME host's live `providers.list` (passing `hostClient` here - this
+  // dialog's explicit prop, not necessarily the app-wide active host -
+  // mirroring how the workspace controls below already query this fixed
+  // host), so no separate resolution is needed at this call site. Never
+  // authoritative: this dialog has no reauth gate of its own, so a
+  // genuinely-tombstoned source profile must be corrected to ambient here
+  // rather than silently submitted to `createAgent.create`.
+  const toolbarStore = useComposerToolbarStore(
+    null,
+    fallbackSeedSource(settingsSeed, hostClient),
+    null,
+    true,
+  );
   const createAgent = useCreateTuiAgentForClient(hostClient, hostId);
   const [status, setStatus] = useState<TerminalAgentForkStatus>("idle");
   const modelResolved = useStore(
@@ -266,6 +266,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
                 lockedHarnessId={target?.sourceAgent.harnessId ?? null}
                 disabled={busy}
                 registerActivation={false}
+                createProfileHostId={hostId}
               />
               <div className="shrink-0">
                 <AgentModeToggle
@@ -365,10 +366,7 @@ function terminalForkButtonLabel(status: TerminalAgentForkStatus): string {
   }
 }
 
-function terminalForkSettingsSeed(
-  agent: TuiAgentProjection,
-  profileId: string | null,
-): ChatRunSettings {
+function terminalForkSettingsSeed(agent: TuiAgentProjection): ChatRunSettings {
   return {
     harnessId: agent.harnessId,
     model: agent.model ?? "",
@@ -376,12 +374,12 @@ function terminalForkSettingsSeed(
     reasoningEffort: agent.reasoningEffort,
     serviceTier: null,
     agentMode: agent.agentMode,
-    // Seed from the source agent's profile (already validated against live
-    // provider profiles by the caller - see `resolveSeededProfileId`); the
+    // Seed from the source agent's profile - `useComposerToolbarStore`
+    // validates it against the target host's live provider profiles; the
     // harness stays locked (see `lockedHarnessId` below) but the user can
     // still switch between that harness's OTHER profiles via the rail
     // before forking.
-    profileId,
+    profileId: agent.profileId,
   };
 }
 

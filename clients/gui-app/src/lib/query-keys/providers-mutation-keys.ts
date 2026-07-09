@@ -12,6 +12,7 @@ export const providersMutationKeys = {
   awaitLogin: () => ["providers.awaitLogin"] as const,
   cancelLogin: () => ["providers.cancelLogin"] as const,
   renameProfile: () => ["providers.renameProfile"] as const,
+  recolorProfile: () => ["providers.recolorProfile"] as const,
   removeProfile: () => ["providers.removeProfile"] as const,
   refresh: () => ["providers.refresh"] as const,
 };

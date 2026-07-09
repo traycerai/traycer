@@ -24,7 +24,7 @@ export function ProfileAvatarBadge(props: ProfileAvatarBadgeProps) {
     <Avatar size={size} className={className}>
       <AvatarFallback
         style={{ backgroundColor: color }}
-        className="font-semibold text-white"
+        className="font-semibold text-neutral-950"
       >
         {initials}
       </AvatarFallback>

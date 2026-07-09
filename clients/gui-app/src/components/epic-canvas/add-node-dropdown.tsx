@@ -281,7 +281,13 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
     tuiAgentPending,
     workspaceSeed,
   } = props;
-  const toolbarStore = useComposerToolbarStore(null, null, null, true);
+  // No seed here - nothing to validate.
+  const toolbarStore = useComposerToolbarStore(
+    null,
+    { kind: "none" },
+    null,
+    true,
+  );
   const selection = useStore(toolbarStore, (state) => state.selection);
   const selectedHarnessId = selection.harnessId;
   const reasoning = useStore(toolbarStore, (state) => state.reasoning);
@@ -389,6 +395,10 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
             lockedHarnessId={null}
             disabled={tuiAgentPending}
             registerActivation={false}
+            // Adding a brand-new node has no existing tab to bind to yet -
+            // the app-wide default host is the correct scope, same as this
+            // dropdown's own `useProvidersList()` read below.
+            createProfileHostId={null}
           />
           <div className="shrink-0">
             <AgentModeToggle

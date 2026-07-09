@@ -24,6 +24,7 @@ function claudeAnchor(
     profileId,
     labelSnapshot,
     accountUuid: null,
+    accentColor: null,
   };
 }
 

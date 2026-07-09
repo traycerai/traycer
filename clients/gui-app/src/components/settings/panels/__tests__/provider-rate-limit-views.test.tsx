@@ -7,6 +7,7 @@ import {
   CodexRateLimitView,
   KiloCodeRateLimitView,
   OpenRouterRateLimitView,
+  ProviderRateLimitBody,
   ProviderRateLimitDetail,
 } from "../provider-rate-limit-views";
 
@@ -465,5 +466,32 @@ describe("ProviderRateLimitDetail dispatch", () => {
     );
     expect(screen.getByText("Credit balance")).toBeTruthy();
     expect(screen.getByText("$7.00")).toBeTruthy();
+  });
+});
+
+describe("ProviderRateLimitBody (unavailable state)", () => {
+  it("prefixes the reason with 'Usage limits unavailable', not a bare dash", () => {
+    render(
+      <ProviderRateLimitBody
+        isPending={false}
+        isFetching={false}
+        isError={false}
+        envelope={{
+          latest: {
+            provider: "codex",
+            available: false,
+            reason: "rate_limits_not_available",
+          },
+          lastGood: null,
+          lastGoodAt: null,
+          lastFailureAt: NOW,
+        }}
+      />,
+    );
+    expect(
+      screen.getByText(
+        "Usage limits unavailable - not available for this account",
+      ),
+    ).toBeTruthy();
   });
 });

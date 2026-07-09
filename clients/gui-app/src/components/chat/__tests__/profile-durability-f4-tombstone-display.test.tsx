@@ -98,6 +98,7 @@ function anchorWithLabelSnapshot(labelSnapshot: string): ChatSessionAnchor {
     profileId: "removed-uuid",
     labelSnapshot,
     accountUuid: null,
+    accentColor: null,
   };
 }
 

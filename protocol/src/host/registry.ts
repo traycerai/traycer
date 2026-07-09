@@ -975,10 +975,10 @@ export const providersSetEnabledUpgradeV1ToV2 = defineUpgradePath<
   }),
 });
 
-// v2.1 adds `profileAction` (discriminated rename/remove of a profile) to
+// v2.1 adds `profileAction` (discriminated rename/remove/recolor of a profile) to
 // the request - folded onto this existing "administer this provider's
 // configuration" mutation instead of standalone `providers.renameProfile` /
-// `removeProfile` methods, because a new method name fatally fails the
+// `removeProfile` / `recolorProfile` methods, because a new method name fatally fails the
 // released-peer equal-set handshake (see `worktree.listBindingsForEpic@1.1`'s
 // note and `released-surface-compat.test.ts`). Chosen over the other
 // provider.* mutations because its response already returns the full
@@ -987,10 +987,10 @@ export const providersSetEnabledUpgradeV1ToV2 = defineUpgradePath<
 // the CLI-path (`setSelection`/`addCustomPath`), credential
 // (`setApiKey`/`clearApiKey`), and login-lifecycle (`startLogin`/
 // `awaitLogin`/`cancelLogin`) methods all have narrower, unrelated
-// semantics. Do not widen this further into a general profile-CRUD method -
-// resist adding more discriminants here. `profileAction: null` is
-// byte-identical to today's plain enable/disable request, so a v2.0 client
-// is unaffected.
+// semantics. `recolor` rides the same unreleased profile-management surface
+// because profile colors are host-owned profile metadata. `profileAction:
+// null` is byte-identical to today's plain enable/disable request, so a v2.0
+// client is unaffected.
 export const providersSetEnabledV21 = defineRpcContract({
   method: "providers.setEnabled",
   schemaVersion: { major: 2, minor: 1 } as const,

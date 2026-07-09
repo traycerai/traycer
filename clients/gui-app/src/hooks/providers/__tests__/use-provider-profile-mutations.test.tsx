@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { RequestOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { RenameProviderProfileRequest } from "@/hooks/providers/use-rename-provider-profile-mutation";
+import type { RecolorProviderProfileRequest } from "@/hooks/providers/use-recolor-provider-profile-mutation";
 import type { RemoveProviderProfileRequest } from "@/hooks/providers/use-remove-provider-profile-mutation";
 
 type SetEnabledRequest = RequestOfMethod<
@@ -21,6 +22,12 @@ interface CapturedRenameMutation {
 interface CapturedRemoveMutation {
   readonly mapVariables: (
     variables: RemoveProviderProfileRequest,
+  ) => SetEnabledRequest;
+}
+
+interface CapturedRecolorMutation {
+  readonly mapVariables: (
+    variables: RecolorProviderProfileRequest,
   ) => SetEnabledRequest;
 }
 
@@ -41,6 +48,7 @@ vi.mock("@/hooks/host/use-host-query", () => ({
 }));
 
 import { useRemoveProviderProfile } from "@/hooks/providers/use-remove-provider-profile-mutation";
+import { useRecolorProviderProfile } from "@/hooks/providers/use-recolor-provider-profile-mutation";
 import { useRenameProviderProfile } from "@/hooks/providers/use-rename-provider-profile-mutation";
 
 function wrapper({ children }: { readonly children: ReactNode }) {
@@ -106,6 +114,38 @@ describe("provider profile mutation wrappers", () => {
       profileAction: {
         type: "remove",
         profileId: "profile-1",
+      },
+    });
+  });
+
+  it("maps recolor to providers.setEnabled profileAction", () => {
+    let captured: CapturedRecolorMutation | null = null;
+    const getCaptured = (): CapturedRecolorMutation => {
+      if (captured === null) throw new Error("Mutation was not captured.");
+      return captured;
+    };
+    mocks.useHostMutation.mockImplementation(
+      (args: CapturedRecolorMutation) => {
+        captured = args;
+        return { mutate: vi.fn(), isPending: false, error: null };
+      },
+    );
+
+    renderHook(() => useRecolorProviderProfile(), { wrapper });
+
+    expect(
+      getCaptured().mapVariables({
+        providerId: "codex",
+        profileId: "profile-1",
+        accentColor: "#14b8a6",
+      }),
+    ).toEqual({
+      providerId: "codex",
+      enabled: true,
+      profileAction: {
+        type: "recolor",
+        profileId: "profile-1",
+        accentColor: "#14b8a6",
       },
     });
   });

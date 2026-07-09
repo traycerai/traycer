@@ -1,4 +1,5 @@
 import "../../../../../__tests__/test-browser-apis";
+import type { ReactNode } from "react";
 import type {
   ProviderCliState,
   ProviderProfile,
@@ -7,14 +8,53 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
- * F4 (durability audit), settings-row surface: `ProviderProfilesSection` /
- * `ProviderProfileRow` (providers-settings-panel.tsx) render a profile's
- * `label` and `identity.email` as plain JSX text (`profileDisplayLabel`,
- * `ProfileIdentityLine`) - no `dangerouslySetInnerHTML` anywhere in this
- * file (grepped). This proves the runtime half: a hostile label/email
- * renders as literal text with no injected elements, and the panel doesn't
- * crash.
+ * F4 (durability audit), settings surface: `ProviderProfileScopedSection` /
+ * `ProviderProfileCard` (provider-profile-scoped-section.tsx,
+ * provider-profile-card.tsx) render a profile's `label` and `identity.email`
+ * as plain JSX text (`profileDisplayLabel`, `ProfileCardIdentityLine`) - no
+ * `dangerouslySetInnerHTML` anywhere in either file (grepped). This proves
+ * the runtime half: a hostile label/email renders as literal text with no
+ * injected elements, and the panel doesn't crash.
  */
+
+// Render the profile dropdown inline + always-open so the test can select
+// the hostile-labeled row without fighting Radix's pointerdown-based open
+// gesture in jsdom (mirrors the established mock in
+// worktrees-settings-panel.test / folder-controls.test).
+vi.mock("@/components/ui/dropdown-menu", () => {
+  const passthrough = (props: { readonly children: ReactNode }): ReactNode =>
+    props.children;
+  return {
+    DropdownMenu: passthrough,
+    DropdownMenuTrigger: passthrough,
+    DropdownMenuContent: passthrough,
+    DropdownMenuItem: (props: {
+      readonly children: ReactNode;
+      readonly onSelect: (() => void) | undefined;
+      readonly "aria-label": string | undefined;
+      readonly "aria-current": "true" | undefined;
+      readonly className: string | undefined;
+    }): ReactNode => (
+      <button
+        type="button"
+        role="menuitem"
+        aria-label={props["aria-label"]}
+        aria-current={props["aria-current"]}
+        className={props.className}
+        onClick={props.onSelect}
+      >
+        {props.children}
+      </button>
+    ),
+    DropdownMenuSeparator: (): ReactNode => <div role="separator" />,
+    DropdownMenuShortcut: (props: {
+      readonly children: ReactNode;
+      readonly "data-testid": string | undefined;
+    }): ReactNode => (
+      <span data-testid={props["data-testid"]}>{props.children}</span>
+    ),
+  };
+});
 
 const providerMocks = vi.hoisted(() => ({
   listResult: {
@@ -61,37 +101,70 @@ vi.mock("@/hooks/providers/use-providers-set-env-override-mutation", () => ({
 vi.mock("@/hooks/providers/use-providers-delete-env-override-mutation", () => ({
   useProvidersDeleteEnvOverride: () => ({ mutate: vi.fn(), isPending: false }),
 }));
-vi.mock("@/hooks/providers/use-providers-start-login-mutation", () => ({
-  useProvidersStartLogin: () => ({
+// Both the plain and `*ForClient` names are exported - see the equivalent
+// comment in `providers-settings-panel.test.tsx`.
+vi.mock("@/hooks/providers/use-providers-start-login-mutation", () => {
+  const useProvidersStartLogin = () => ({
     mutate: vi.fn(),
     isPending: false,
     error: null,
-  }),
-}));
-vi.mock("@/hooks/providers/use-providers-await-login-mutation", () => ({
-  useHostScopedProvidersAwaitLogin: () => ({
+  });
+  return {
+    useProvidersStartLogin,
+    useProvidersStartLoginForClient: useProvidersStartLogin,
+  };
+});
+vi.mock("@/hooks/providers/use-providers-await-login-mutation", () => {
+  const useProvidersAwaitLogin = () => ({
     mutate: vi.fn(),
     isPending: false,
     error: null,
-  }),
-}));
-vi.mock("@/hooks/providers/use-providers-cancel-login-mutation", () => ({
-  useProvidersCancelLogin: () => ({ mutate: vi.fn(), isPending: false }),
-}));
-vi.mock("@/hooks/providers/use-rename-provider-profile-mutation", () => ({
-  useRenameProviderProfile: () => ({
+  });
+  return {
+    useHostScopedProvidersAwaitLogin: useProvidersAwaitLogin,
+    useProvidersAwaitLoginForClient: useProvidersAwaitLogin,
+  };
+});
+vi.mock("@/hooks/providers/use-providers-cancel-login-mutation", () => {
+  const useProvidersCancelLogin = () => ({ mutate: vi.fn(), isPending: false });
+  return {
+    useProvidersCancelLogin,
+    useProvidersCancelLoginForClient: useProvidersCancelLogin,
+  };
+});
+vi.mock("@/hooks/providers/use-rename-provider-profile-mutation", () => {
+  const useRenameProviderProfile = () => ({
     mutate: vi.fn(),
     isPending: false,
     error: null,
-  }),
-}));
-vi.mock("@/hooks/providers/use-remove-provider-profile-mutation", () => ({
-  useRemoveProviderProfile: () => ({
+  });
+  return {
+    useRenameProviderProfile,
+    useRenameProviderProfileForClient: useRenameProviderProfile,
+  };
+});
+vi.mock("@/hooks/providers/use-recolor-provider-profile-mutation", () => {
+  const useRecolorProviderProfile = () => ({
     mutate: vi.fn(),
     isPending: false,
     error: null,
-  }),
-}));
+  });
+  return {
+    useRecolorProviderProfile,
+    useRecolorProviderProfileForClient: useRecolorProviderProfile,
+  };
+});
+vi.mock("@/hooks/providers/use-remove-provider-profile-mutation", () => {
+  const useRemoveProviderProfile = () => ({
+    mutate: vi.fn(),
+    isPending: false,
+    error: null,
+  });
+  return {
+    useRemoveProviderProfile,
+    useRemoveProviderProfileForClient: useRemoveProviderProfile,
+  };
+});
 vi.mock("@/hooks/providers/use-providers-detect-version-query", () => ({
   useProvidersDetectVersion: () => ({ isFetching: false, data: undefined }),
 }));
@@ -153,6 +226,10 @@ vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
 vi.mock("@/hooks/host/use-host-client-for", () => ({
   useHostClientFor: () => null,
 }));
+vi.mock("@/lib/host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host")>();
+  return { ...actual, useHostClient: () => null };
+});
 
 import { ProvidersSettingsPanel } from "@/components/settings/panels/providers-settings-panel";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -260,7 +337,13 @@ describe("F4: hostile profile labels - settings Profiles section", () => {
       </TooltipProvider>,
     );
 
-    expect(screen.getByText(VERY_LONG_LABEL)).not.toBeNull();
+    // The section defaults to the ambient profile - select the hostile one to
+    // bring its details (and the raw label) into the DOM. It then also
+    // labels the (mocked, always-open) dropdown trigger, so more than one
+    // element carries the raw label - assert presence, not a single match.
+    fireEvent.click(screen.getByRole("menuitem", { name: VERY_LONG_LABEL }));
+
+    expect(screen.getAllByText(VERY_LONG_LABEL).length).toBeGreaterThan(0);
     expect(container.querySelector("img")).toBeNull();
   });
 
@@ -284,7 +367,13 @@ describe("F4: hostile profile labels - settings Profiles section", () => {
       </TooltipProvider>,
     );
 
-    expect(screen.getByText(HTML_LOOKING_LABEL)).not.toBeNull();
+    // The section defaults to the ambient profile - select the hostile one to
+    // bring its details (and the raw label) into the DOM. It then also
+    // labels the (mocked, always-open) dropdown trigger, so more than one
+    // element carries the raw label - assert presence, not a single match.
+    fireEvent.click(screen.getByRole("menuitem", { name: HTML_LOOKING_LABEL }));
+
+    expect(screen.getAllByText(HTML_LOOKING_LABEL).length).toBeGreaterThan(0);
     // The email is redacted by default (see the reveal toggle); click it to
     // exercise the hostile string in its fully-rendered form too.
     fireEvent.click(

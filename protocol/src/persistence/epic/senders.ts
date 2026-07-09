@@ -93,12 +93,17 @@ export type ActiveChain = z.infer<typeof activeSessionChainSchema>;
 // anchors persisted before profiles existed parse to. `accountUuid` is the
 // provider's identity id, deliberately NOT email - anchors are Y.Doc
 // artifacts that replicate cross-host/cross-collaborator, and email is kept
-// host-local (see the multi-profile decision log's PII scope). Spread into
-// every per-harness variant below instead of duplicated per schema.
+// host-local (see the multi-profile decision log's PII scope). `accentColor`
+// is the profile's accent hex at mint time, so a tombstoned profile's dot
+// keeps its color instead of falling back to the id-hash color; `null` for
+// anchors minted before this field existed (hash fallback applies) and for
+// profiles with no assigned color. Spread into every per-harness variant
+// below instead of duplicated per schema.
 const profileSnapshotFields = {
   profileId: z.string().nullable().default(null),
   labelSnapshot: z.string().nullable().default(null),
   accountUuid: z.string().nullable().default(null),
+  accentColor: z.string().nullable().default(null),
 } as const;
 
 export const claudeChatSessionAnchorSchema = z.object({

@@ -70,7 +70,14 @@ export function useHostScopedProvidersAwaitLogin(): UseMutationResult<
   });
 }
 
-function useProvidersAwaitLoginForClient(args: {
+/** Client-scoped variant, keyed by a caller-supplied cache host id - lets a
+ *  caller outside `HostRuntimeContext` (e.g. the picker's tab-scoped
+ *  "Create new profile" flow) target an explicit host instead of the
+ *  app-wide default. `getCacheHostId` is a separate parameter (not derived
+ *  from `client.getActiveHostId()`) so the cache write lands under the
+ *  caller's KNOWN host id even while `client` itself is still resolving
+ *  (mirrors `useProvidersAwaitLogin`'s tab-scoped `getCacheHostId`). */
+export function useProvidersAwaitLoginForClient(args: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly getCacheHostId: () => string | null;
 }): UseMutationResult<

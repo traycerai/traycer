@@ -1,4 +1,5 @@
 import { useQueryClient, type UseMutationResult } from "@tanstack/react-query";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
   HostRpcError,
   RequestOfMethod,
@@ -19,13 +20,21 @@ export interface RemoveProviderProfileRequest {
   readonly profileId: string;
 }
 
-export function useRemoveProviderProfile(): UseMutationResult<
+type RemoveProviderProfileMutationResult = UseMutationResult<
   ResponseOfMethod<HostRpcRegistry, "providers.setEnabled">,
   HostRpcError,
   RemoveProviderProfileRequest,
   { readonly hostId: string | null }
-> {
-  const client = useHostClient();
+>;
+
+export function useRemoveProviderProfile(): RemoveProviderProfileMutationResult {
+  return useRemoveProviderProfileForClient(useHostClient());
+}
+
+/** Client-scoped variant - see `useProvidersStartLoginForClient`. */
+export function useRemoveProviderProfileForClient(
+  client: HostClient<HostRpcRegistry> | null,
+): RemoveProviderProfileMutationResult {
   const queryClient = useQueryClient();
   return useHostMutation<
     HostRpcRegistry,
@@ -46,7 +55,7 @@ export function useRemoveProviderProfile(): UseMutationResult<
       }) satisfies RequestOfMethod<HostRpcRegistry, "providers.setEnabled">,
     options: {
       mutationKey: providersMutationKeys.removeProfile(),
-      onMutate: () => ({ hostId: client.getActiveHostId() }),
+      onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
       onSuccess: (_data, _variables, context) => {
         if (context.hostId === null) return;
         for (const method of PROVIDER_INVALIDATIONS) {

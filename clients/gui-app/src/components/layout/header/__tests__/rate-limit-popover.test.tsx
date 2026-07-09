@@ -966,7 +966,7 @@ describe("<RateLimitPopover /> per-provider states", () => {
     renderPopover();
     expect(
       screen.getByText(
-        "Usage limits unavailable — not available for this account",
+        "Usage limits unavailable - not available for this account",
       ),
     ).toBeTruthy();
     expect(screen.queryByText("4% used")).toBeNull();
@@ -1028,7 +1028,7 @@ describe("<RateLimitPopover /> per-provider states", () => {
     };
     renderPopover();
     expect(
-      screen.getByText("Usage limits unavailable — the CLI isn't installed"),
+      screen.getByText("Usage limits unavailable - the CLI isn't installed"),
     ).toBeTruthy();
   });
 });

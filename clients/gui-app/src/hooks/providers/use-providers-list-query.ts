@@ -1,4 +1,5 @@
 import type { UseQueryResult } from "@tanstack/react-query";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
   HostRpcError,
   ResponseOfMethod,
@@ -10,13 +11,25 @@ import type { QueryActivityOptions } from "@/hooks/harnesses/use-gui-harness-cat
 const PROVIDERS_LIST_REFRESH_MS = 15 * 60 * 1000;
 const PROVIDERS_LIST_PENDING_REFRESH_MS = 800;
 
-export function useProvidersList(
-  activity: QueryActivityOptions,
-): UseQueryResult<
+type ProvidersListQueryResult = UseQueryResult<
   ResponseOfMethod<HostRpcRegistry, "providers.list">,
   HostRpcError
-> {
-  const client = useHostClient();
+>;
+
+export function useProvidersList(
+  activity: QueryActivityOptions,
+): ProvidersListQueryResult {
+  return useProvidersListForClient(useHostClient(), activity);
+}
+
+/** Client-scoped variant - lets a caller outside `HostRuntimeContext` (e.g.
+ *  the picker's globally-mounted "Create new profile" flow host, resolving a
+ *  transient client for a captured tab host id) target an explicit host
+ *  instead of the app-wide default. */
+export function useProvidersListForClient(
+  client: HostClient<HostRpcRegistry> | null,
+  activity: QueryActivityOptions,
+): ProvidersListQueryResult {
   return useHostQuery<HostRpcRegistry, "providers.list">({
     cacheKeyIdentity: undefined,
     client,

@@ -11,8 +11,10 @@ import type {
   ProviderId,
 } from "@/components/home/data/landing-options";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
-import { usePickerProviderLeaderForIndex } from "@/providers/keybinding-context";
-import { leaderDigitFor } from "@/components/ui/leader-digit-shortcuts";
+import {
+  singleDigitLeaderDigitFor,
+  usePickerProviderLeaderForIndex,
+} from "@/providers/keybinding-context";
 import { PickerLeaderBadge } from "@/components/home/pickers/harness-model-picker-leader-badge";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import {
@@ -20,7 +22,7 @@ import {
   visibleRailEntries,
   type RailEntry,
 } from "@/components/home/pickers/harness-rail-providers";
-import { ProfileAvatarBadge } from "@/components/providers/profile-avatar-badge";
+import { AccentDot } from "@/components/providers/accent-dot";
 import { cn } from "@/lib/utils";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 
@@ -35,14 +37,11 @@ interface ProviderRailProps {
     ReadonlyArray<ProviderProfile>
   >;
   readonly activeProviderId: ProviderId;
-  readonly activeProfileId: string | null;
+  readonly activeProfileIdByHarnessId: ReadonlyMap<GuiHarnessId, string | null>;
   readonly lockedHarnessId: ProviderId | null;
   readonly degradedHarnessIds: ReadonlySet<GuiHarnessId>;
   readonly pending: boolean;
-  readonly onEntryChange: (
-    providerId: ProviderId,
-    profileId: string | null,
-  ) => void;
+  readonly onEntryChange: (providerId: ProviderId) => void;
   readonly onOpenProviderSettings: () => void;
   readonly onRefresh: () => Promise<void>;
 }
@@ -53,7 +52,7 @@ export function ProviderRail(props: ProviderRailProps) {
     fallbackHarnesses,
     profilesByHarnessId,
     activeProviderId,
-    activeProfileId,
+    activeProfileIdByHarnessId,
     lockedHarnessId,
     degradedHarnessIds,
     pending,
@@ -61,13 +60,14 @@ export function ProviderRail(props: ProviderRailProps) {
     onOpenProviderSettings,
     onRefresh,
   } = props;
-  const entries = visibleRailEntries(
+  const entries = visibleRailEntries({
     harnesses,
     fallbackHarnesses,
     degradedHarnessIds,
     profilesByHarnessId,
-  );
-  const activeEntryKey = railEntryKey(activeProviderId, activeProfileId);
+    activeProfileIdByHarnessId,
+  });
+  const activeEntryKey = railEntryKey(activeProviderId);
 
   return (
     // The settings gear is a sibling of the tablist, not a child - only tab
@@ -76,7 +76,7 @@ export function ProviderRail(props: ProviderRailProps) {
       <div
         role="tablist"
         aria-label="Model providers"
-        className="no-scrollbar flex min-h-0 flex-1 flex-col items-center gap-1 overflow-y-auto overscroll-contain px-1"
+        className="no-scrollbar flex min-h-0 flex-1 flex-col items-center gap-1 overflow-y-auto overscroll-contain px-1 pt-1"
       >
         {pending && entries.length === 0 ? (
           <span className="mt-1 flex size-8 items-center justify-center rounded-lg text-muted-foreground">
@@ -85,12 +85,10 @@ export function ProviderRail(props: ProviderRailProps) {
         ) : null}
         {entries.map((entry, index) => (
           <ProviderRailButton
-            key={railEntryKey(entry.harness.id, entry.profileId)}
+            key={railEntryKey(entry.harness.id)}
             entry={entry}
             index={index}
-            active={
-              railEntryKey(entry.harness.id, entry.profileId) === activeEntryKey
-            }
+            active={railEntryKey(entry.harness.id) === activeEntryKey}
             disabled={
               (lockedHarnessId !== null &&
                 entry.harness.id !== lockedHarnessId) ||
@@ -123,10 +121,7 @@ interface ProviderRailButtonProps {
   readonly index: number;
   readonly active: boolean;
   readonly disabled: boolean;
-  readonly onEntryChange: (
-    providerId: ProviderId,
-    profileId: string | null,
-  ) => void;
+  readonly onEntryChange: (providerId: ProviderId) => void;
 }
 
 // Hover/AT title for a rail tab: surfaces the probe-in-flight state, then the
@@ -134,10 +129,10 @@ interface ProviderRailButtonProps {
 // it stays lint-clean and the three states read top to bottom.
 function railButtonTitle(entry: RailEntry, disabled: boolean): string {
   if (entry.harness.availabilityPending) {
-    return `${entry.label} — checking availability…`;
+    return `${entry.harness.label} — checking availability…`;
   }
   if (disabled) return LOCKED_PROVIDER_TOOLTIP;
-  return entry.label;
+  return entry.harness.label;
 }
 
 // One rail tab. Split out so each can call the leader hook (hooks can't run in
@@ -166,8 +161,8 @@ function ProviderRailButton(props: ProviderRailButtonProps) {
         aria-disabled={disabled ? true : undefined}
         aria-label={
           harness.availabilityPending
-            ? `${entry.label} — loading…`
-            : entry.label
+            ? `${harness.label} — loading…`
+            : harness.label
         }
         aria-describedby={
           entry.degraded && !harness.availabilityPending
@@ -179,7 +174,10 @@ function ProviderRailButton(props: ProviderRailButtonProps) {
         data-active={active}
         data-degraded={entry.degraded ? true : undefined}
         className={cn(
-          "relative flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 data-[active=true]:bg-accent data-[active=true]:text-foreground",
+          "relative flex size-8 shrink-0 items-center justify-center rounded-lg outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/60",
+          active
+            ? "bg-primary/10 text-foreground shadow-sm ring-1 ring-primary/25 hover:bg-primary/15 hover:text-foreground"
+            : "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
           entry.degraded
             ? "opacity-60 hover:opacity-80 data-[active=true]:opacity-75"
             : "",
@@ -187,7 +185,7 @@ function ProviderRailButton(props: ProviderRailButtonProps) {
         )}
         onClick={() => {
           if (disabled) return;
-          onEntryChange(harness.id, entry.profileId);
+          onEntryChange(harness.id);
         }}
       >
         {harness.availabilityPending ? (
@@ -205,18 +203,17 @@ function ProviderRailButton(props: ProviderRailButtonProps) {
           </>
         ) : (
           <>
-            {entry.profileBadge !== null ? (
-              <ProfileAvatarBadge
-                profileId={entry.profileBadge.profileId}
-                label={entry.profileBadge.label}
-                email={entry.profileBadge.email}
-                accentColor={entry.profileBadge.accentColor}
-                size="sm"
+            <HarnessIcon harnessId={harness.id} />
+            {entry.accentDot !== null ? (
+              <AccentDot
+                profileId={entry.accentDot.profileId}
+                accentColor={entry.accentDot.accentColor}
+                label={entry.accentDot.label}
+                variant="corner"
+                size="default"
                 className={undefined}
               />
-            ) : (
-              <HarnessIcon harnessId={harness.id} />
-            )}
+            ) : null}
             {entry.degraded ? (
               <span id={degradedDescriptionId} className="sr-only">
                 Setup required
@@ -228,8 +225,8 @@ function ProviderRailButton(props: ProviderRailButtonProps) {
               // Degraded providers stay browse-only (the leader digit browses,
               // it does not commit), so the hint must not over-promise "switch".
               hintAction={entry.degraded ? "to browse" : "to switch"}
-              hintTarget={entry.label}
-              testId={`model-provider-digit-${leaderDigitFor(index)}`}
+              hintTarget={harness.label}
+              testId={`model-provider-digit-${singleDigitLeaderDigitFor(index)}`}
               placement="corner"
             />
           </>

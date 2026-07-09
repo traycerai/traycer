@@ -302,6 +302,28 @@ export type ProviderProfileRateLimitStatus = z.infer<
   typeof providerProfileRateLimitStatusSchema
 >;
 
+export const PROVIDER_PROFILE_ACCENT_COLORS = [
+  "#ef4444",
+  "#f97316",
+  "#f59e0b",
+  "#84cc16",
+  "#10b981",
+  "#14b8a6",
+  "#06b6d4",
+  "#3b82f6",
+  "#8b5cf6",
+  "#a855f7",
+  "#d946ef",
+  "#ec4899",
+] as const;
+
+export const providerProfileAccentColorSchema = z.enum(
+  PROVIDER_PROFILE_ACCENT_COLORS,
+);
+export type ProviderProfileAccentColor = z.infer<
+  typeof providerProfileAccentColorSchema
+>;
+
 export const providerProfileSchema = z.object({
   profileId: z.string(),
   kind: providerProfileKindSchema,
@@ -338,21 +360,33 @@ export const providerProfileSchema = z.object({
     })
     .nullable()
     .catch(null),
-  // Deterministic per-profile accent color (hex), assigned at profile
-  // creation from a small palette hashed from profileId - the GUI renders it
-  // as an initials badge on the picker rail and chat profile anchors (see
-  // the shadow-home tech plan's "Ride-along: small adopts" polish pair).
-  // `.catch(null)` tolerates old host builds that predate this field; the
-  // GUI falls back to its own deterministic palette hash of `profileId`.
-  accentColor: z.string().nullable().catch(null),
+  // Deterministic per-profile accent color (hex), assigned by the host from a
+  // fixed palette and optionally overridden by the user. `.catch(null)`
+  // tolerates old host builds that predate this field; the GUI falls back to
+  // its own deterministic palette hash of `profileId`.
+  accentColor: providerProfileAccentColorSchema.nullable().catch(null),
+  // Present when this active profile's accountUuid matches a removed profile.
+  // The add-profile naming step uses it to explain the preselected color
+  // suggestion without exposing tombstone rows in normal selection surfaces.
+  reusedTombstone: z
+    .object({
+      label: z.string(),
+      // Same forward-compat guard as the profile-level `accentColor` above:
+      // a single out-of-palette color here must degrade to null, not throw -
+      // otherwise the array-level `.catch([])` on `profiles` below would wipe
+      // every profile for this provider on an older client.
+      accentColor: providerProfileAccentColorSchema.nullable().catch(null),
+    })
+    .nullable()
+    .optional(),
 });
 export type ProviderProfile = z.infer<typeof providerProfileSchema>;
 
 /**
- * Fold-in for profile rename/remove, carried on `providers.setEnabled`'s
+ * Fold-in for profile rename/remove/recolor, carried on `providers.setEnabled`'s
  * request (see that method's `@2.1` contract in `registry.ts` for why it
  * lives here instead of standalone `providers.renameProfile` /
- * `removeProfile` methods).
+ * `removeProfile` / `recolorProfile` methods).
  */
 export const providerProfileActionSchema = z.discriminatedUnion("type", [
   z.object({
@@ -366,10 +400,13 @@ export const providerProfileActionSchema = z.discriminatedUnion("type", [
     type: z.literal("remove"),
     profileId: z.string(),
   }),
+  z.object({
+    type: z.literal("recolor"),
+    profileId: z.string(),
+    accentColor: providerProfileAccentColorSchema,
+  }),
 ]);
-export type ProviderProfileAction = z.infer<
-  typeof providerProfileActionSchema
->;
+export type ProviderProfileAction = z.infer<typeof providerProfileActionSchema>;
 
 const providerCliStateBaseShape = {
   enabled: z.boolean(),
@@ -590,13 +627,13 @@ export type ProvidersSetEnabledResponse = z.infer<
 >;
 
 /**
- * `providers.setEnabled@2.1` request - folds profile rename/remove onto this
+ * `providers.setEnabled@2.1` request - folds profile rename/remove/recolor onto this
  * existing method rather than new `providers.renameProfile` /
- * `removeProfile` methods (see that contract in `registry.ts` for the full
+ * `removeProfile` / `recolorProfile` methods (see that contract in `registry.ts` for the full
  * rationale). `profileAction: null` is today's plain enable/disable request,
  * byte-identical to `providersSetEnabledRequestSchema` - old clients are
  * unaffected. The response is unchanged (`providersSetEnabledResponseSchema`)
- * since the mutated `state.profiles[]` already reflects the rename/removal.
+ * since the mutated `state.profiles[]` already reflects the rename/removal/recolor.
  */
 export const providersSetEnabledRequestSchemaV21 =
   providersSetEnabledRequestSchema.extend({

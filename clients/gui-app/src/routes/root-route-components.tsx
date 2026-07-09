@@ -9,6 +9,7 @@ import { ChatTurnNotificationController } from "@/components/layout/bridges/chat
 import { NotificationFocusBridge } from "@/components/layout/bridges/notification-focus-bridge";
 import { SystemTabModalHost } from "@/components/layout/dialogs/system-tab-modal-host";
 import { TrayOpenEpicBridge } from "@/components/layout/bridges/tray-open-epic-bridge";
+import { ProviderProfileAddFlowHost } from "@/components/providers/provider-profile-add-flow-host";
 import { EpicAccessCoordinator } from "@/providers/epic-access-coordinator";
 import { OnboardingPage } from "@/components/onboarding/onboarding-page";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -53,6 +54,7 @@ export function RootComponent() {
         <NotificationFocusBridge />
         <DeepLinkTabSync />
         <EpicAccessCoordinator />
+        <ProviderProfileAddFlowHost />
         <RootSurface
           showOnboarding={showOnboarding}
           isStandalone={isStandalone}

@@ -23,14 +23,13 @@ import { HarnessModelPicker } from "@/components/home/pickers/harness-model-pick
 import { AgentModeToggle } from "@/components/home/pickers/agent-mode-toggle";
 import { ActiveHostWorkspaceControls } from "@/components/home/host-workspace-selector/host-workspace-selector";
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
-import { useSurfaceActivity } from "@/components/home/composer/surface-activity-hooks";
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { useEpicCreateChatForHost } from "@/hooks/epic/use-epic-chat-mutations";
-import { useResolvedSeededProfileId } from "@/hooks/providers/use-resolved-seeded-profile-id";
 import { buildChatRunSettings } from "@/lib/composer/chat-run-settings";
+import { fallbackSeedSource } from "@/lib/composer/composer-seed-source";
 import { openCreatedChatWhenProjectedWithNavigation } from "@/lib/commands/actions/new-chat";
 import {
   pendingForkChatStagingKey,
@@ -120,25 +119,18 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
 
   // A fork dialog has no send-time reauth gate of its own (unlike the main
   // composer), so a source chat's profileId that was tombstoned since the
-  // chat last ran must be caught HERE, at seed time, not silently carried
-  // through to `createChat` - see `useResolvedSeededProfileId`.
-  const activityEnabled = useSurfaceActivity();
-  const resolvedProfileId = useResolvedSeededProfileId(
-    target?.settingsSeed.harnessId ?? "traycer",
-    target?.settingsSeed.profileId ?? null,
-    activityEnabled,
-    tabHostClient,
-  );
-  const resolvedSettingsSeed = useMemo(() => {
-    if (target === null) return null;
-    return resolvedProfileId === target.settingsSeed.profileId
-      ? target.settingsSeed
-      : { ...target.settingsSeed, profileId: resolvedProfileId };
-  }, [target, resolvedProfileId]);
-
+  // chat last ran must be caught before it reaches `createChat`.
+  // `useComposerToolbarStore` now validates every seed it receives against
+  // the SAME host's live `providers.list` (passing `tabHostClient` here -
+  // this fork's `createChat` call runs on the tab's host, per
+  // `useEpicCreateChatForHost` -> `useTabHostClient`), so no separate
+  // resolution is needed at this call site. Never authoritative (`fallback`/
+  // `none`): this dialog has no reauth gate of its own, so a genuinely-
+  // tombstoned source profile must be corrected to ambient here rather than
+  // silently submitted to `createChat`.
   const toolbarStore = useComposerToolbarStore(
     null,
-    resolvedSettingsSeed,
+    fallbackSeedSource(target?.settingsSeed ?? null, tabHostClient),
     null,
     false,
   );
@@ -282,6 +274,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
                 lockedHarnessId={null}
                 disabled={createChat.isPending}
                 registerActivation={false}
+                createProfileHostId={tabHostId}
               />
               <div className="shrink-0">
                 <AgentModeToggle

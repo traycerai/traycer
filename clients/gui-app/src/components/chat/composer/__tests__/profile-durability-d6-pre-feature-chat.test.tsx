@@ -122,7 +122,14 @@ function PreFeatureComposerHarness({
 }) {
   const initialProfileId = selectionFromChatRunSettings(seed).profileId;
   const [profileId, setProfileId] = useState<string | null>(initialProfileId);
-  const reauthGate = useProviderReauthGate("claude", profileId, true);
+  // `authoritative: true` - this harness models the chat's OWN persisted
+  // settings (`chat.settings`), the authoritative seed, not a fallback.
+  const reauthGate = useProviderReauthGate(
+    "claude",
+    profileId,
+    true,
+    "authoritative",
+  );
   const rateLimitPrompt = useProfileRateLimitSwitchPrompt(
     "claude",
     profileId,
@@ -141,7 +148,9 @@ function PreFeatureComposerHarness({
       </div>
       {!reauthGate.signedOut && rateLimitPrompt.limited ? (
         <ProfileRateLimitSwitchBanner
+          harnessId="claude"
           hardLimited={rateLimitPrompt.hardLimited}
+          current={rateLimitPrompt.current}
           alternatives={rateLimitPrompt.alternatives}
           onSwitchProfile={onSwitchProfile}
         />

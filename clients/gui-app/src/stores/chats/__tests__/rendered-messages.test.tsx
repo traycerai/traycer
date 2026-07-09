@@ -807,6 +807,7 @@ describe("useRenderedMessages", () => {
         profileId: null,
         labelSnapshot: null,
         accountUuid: null,
+        accentColor: null,
         harnessId: "codex",
         hostId: "host-1",
         sessionId: "session-1",

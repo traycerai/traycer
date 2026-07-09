@@ -74,7 +74,9 @@ import { AgentReferenceMarkdown } from "./segments/agent-reference-markdown";
 import { SegmentCard } from "./segments/segment-card";
 import { SegmentPanel } from "./segments/segment-panel";
 import { useTombstonedProfileLabel } from "./use-tombstoned-profile-label";
-import { ProfileAvatarBadge } from "@/components/providers/profile-avatar-badge";
+import { AccentDot } from "@/components/providers/accent-dot";
+import { HarnessIcon } from "@/components/home/pickers/harness-icon";
+import type { ProviderId } from "@/components/home/data/landing-options";
 
 const NOOP: () => void = () => undefined;
 const NOOP_CLIPBOARD: ClipboardEventHandler<HTMLElement> = () => undefined;
@@ -355,7 +357,7 @@ function UserMessageDisplayView({
   // Present whenever `tombstonedProfileLabel` is (the resolver only returns a
   // label for an anchor with a non-null `profileId`) - re-derived separately
   // since the hook's return doesn't narrow `sessionAnchor` for TypeScript.
-  const anchorProfileId = message.sessionAnchor?.profileId ?? null;
+  const tombstoneIdentity = tombstoneFooterIdentity(message.sessionAnchor);
   const confirmingDelete = actions?.confirmingDelete ?? false;
   const visibleSteerBadge =
     message.steerBadge !== null && message.steerBadge.status !== "steered"
@@ -421,9 +423,11 @@ function UserMessageDisplayView({
           structuredContent={message.structuredContent}
         />
       </div>
-      {tombstonedProfileLabel !== null && anchorProfileId !== null ? (
+      {tombstonedProfileLabel !== null && tombstoneIdentity !== null ? (
         <UserMessageTombstonedProfileFooter
-          profileId={anchorProfileId}
+          profileId={tombstoneIdentity.profileId}
+          harnessId={tombstoneIdentity.harnessId}
+          accentColor={tombstoneIdentity.accentColor}
           label={tombstonedProfileLabel}
         />
       ) : null}
@@ -462,21 +466,46 @@ function UserMessageActionOverlay({
   );
 }
 
+// `message.sessionAnchor?.profileId ?? null` doesn't narrow the anchor's
+// discriminated-union type for TypeScript, so the footer's other identity
+// fields (harnessId, accentColor) need their own re-derivation - pulled into
+// one helper instead of three inline optional chains in the render body.
+function tombstoneFooterIdentity(
+  sessionAnchor: ChatMessageModel["sessionAnchor"],
+): {
+  readonly profileId: string;
+  readonly harnessId: ProviderId;
+  readonly accentColor: string | null;
+} | null {
+  if (sessionAnchor === null) return null;
+  if (sessionAnchor.profileId === null) return null;
+  return {
+    profileId: sessionAnchor.profileId,
+    harnessId: sessionAnchor.harnessId,
+    accentColor: sessionAnchor.accentColor,
+  };
+}
+
 function UserMessageTombstonedProfileFooter({
   profileId,
+  harnessId,
+  accentColor,
   label,
 }: {
   readonly profileId: string;
+  readonly harnessId: ProviderId;
+  readonly accentColor: string | null;
   readonly label: string;
 }): ReactNode {
   return (
     <span className="mt-1 flex items-center gap-1.5 text-ui-xs text-muted-foreground">
-      <ProfileAvatarBadge
+      <HarnessIcon harnessId={harnessId} />
+      <AccentDot
         profileId={profileId}
-        label={label}
-        email={null}
-        accentColor={null}
-        size="sm"
+        accentColor={accentColor}
+        label={null}
+        variant="inline"
+        size="default"
         className={undefined}
       />
       Ran on {label} (removed)

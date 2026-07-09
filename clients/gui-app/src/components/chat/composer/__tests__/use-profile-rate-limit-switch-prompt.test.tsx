@@ -114,8 +114,19 @@ describe("useProfileRateLimitSwitchPrompt", () => {
     );
     expect(result.current.limited).toBe(true);
     expect(result.current.hardLimited).toBe(false);
+    expect(result.current.current).toEqual({
+      profileId: null,
+      accentDotId: "ambient",
+      label: "Terminal account",
+      accentColor: null,
+    });
     expect(result.current.alternatives).toEqual([
-      { profileId: "work-uuid", label: "Work" },
+      {
+        profileId: "work-uuid",
+        accentDotId: "work-uuid",
+        label: "Work",
+        accentColor: null,
+      },
     ]);
   });
 

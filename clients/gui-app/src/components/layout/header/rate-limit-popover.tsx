@@ -18,6 +18,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { RefreshIconButton } from "@/components/refresh-icon-button";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
+import { AccentDot } from "@/components/providers/accent-dot";
 import {
   ProviderRateLimitDetail,
   type ProviderRateLimitQueryState,
@@ -271,15 +272,15 @@ function RateLimitPopoverBody({
     ? activeTab
     : "overview";
 
-  // A *fixed* height (not `max-h`), plus an explicit `minmax(0,1fr)` grid row,
-  // is what makes the popover a stable box across tabs and lets its panes
-  // scroll: a `max-h` on a single-`auto`-row grid lets the row size to content,
-  // so the detail pane grew unbounded (tall content clipped, no scrollbar) and
-  // the whole popover resized per tab. `minmax(0,1fr)` pins the row to the
-  // container height regardless of content, and both columns stretch into it
-  // with their own `min-h-0` + `overflow-y-auto`, so each scrolls internally.
+  // A *fixed target* height (not content-sized), plus an explicit
+  // `minmax(0,1fr)` grid row, is what makes the popover a stable box across
+  // tabs and lets its panes scroll. The target is at least half the viewport in
+  // normal header placement, while Radix's available-height guard keeps it
+  // inside short windows. `minmax(0,1fr)` pins the row to the used container
+  // height regardless of content, and both columns stretch into it with their
+  // own `min-h-0` + `overflow-y-auto`, so each scrolls internally.
   return (
-    <div className="grid h-[min(58vh,22rem)] grid-cols-[3rem_minmax(0,1fr)] grid-rows-[minmax(0,1fr)] overflow-hidden">
+    <div className="grid h-[max(50vh,22rem)] max-h-[var(--radix-popover-content-available-height)] grid-cols-[3rem_minmax(0,1fr)] grid-rows-[minmax(0,1fr)] overflow-hidden">
       <RateLimitRail
         railTabs={railTabs}
         providers={providers}
@@ -963,6 +964,14 @@ function RateLimitProviderProfileRow({
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+            <AccentDot
+              profileId={profile.profileId}
+              accentColor={profile.accentColor}
+              label={null}
+              variant="inline"
+              size="default"
+              className={undefined}
+            />
             <span className="min-w-0 truncate text-ui-sm font-medium text-foreground">
               {profileRateLimitLabel(profile)}
             </span>
@@ -1114,7 +1123,7 @@ function RateLimitProviderBody({
     case "unavailable":
       return (
         <RateLimitErrorMessage
-          message={`Usage limits unavailable — ${formatUnavailableReason(state.reason)}`}
+          message={`Usage limits unavailable - ${formatUnavailableReason(state.reason)}`}
         />
       );
     case "ready":

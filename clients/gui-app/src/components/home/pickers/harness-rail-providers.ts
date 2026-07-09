@@ -2,119 +2,132 @@ import type { HarnessOption } from "@/components/home/data/landing-options";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import { sortGuiHarnessesByProviderOrder } from "@/lib/provider-ordering";
+import {
+  profileAccentDotInput,
+  profileCommitId,
+  type ProfileAccentDotInput,
+} from "@/components/providers/provider-profile-model";
 
 /**
- * One rail entry: a harness, optionally split by a specific logged-in profile
- * (subscription). `profileId: null` is the single "just the harness" entry
- * every provider with 0/1 profiles renders - byte-identical to the pre-profile
- * rail. A provider with 2+ profiles renders one entry per profile instead
- * (see `splitRailEntriesForHarness`).
+ * One rail entry: a provider-level tab. The rail always renders exactly one
+ * entry per provider - the pre-multi-profile shape - regardless of how many
+ * profiles (subscriptions) that provider has. Profile switching lives in the
+ * picker's profile dropdown (`@/components/providers/profile-dropdown`),
+ * never the rail itself.
  */
 export interface RailEntry {
   readonly harness: HarnessOption;
-  readonly profileId: string | null;
-  /** "Claude" for a single/no-profile entry, "Claude - Work" for a split one. */
-  readonly label: string;
-  /** Per-entry degraded state: the harness-level degraded flag OR (for a
-   *  split entry) that specific profile's own auth status. */
+  /** Per-entry degraded state: the harness-level degraded flag (signed out /
+   *  missing an API key). Profile-level auth issues surface in the dropdown,
+   *  not here. */
   readonly degraded: boolean;
-  /** Badge data for a split (profile-specific) entry, rendered as an
-   *  initials/accent badge in place of the harness icon. `null` for the
-   *  single "just the harness" entry every 0/1-profile provider renders. */
-  readonly profileBadge: RailEntryProfileBadge | null;
-}
-
-export interface RailEntryProfileBadge {
-  readonly profileId: string;
-  readonly label: string;
-  readonly email: string | null;
-  readonly accentColor: string | null;
+  /** Bottom-right accent-dot data, present only when the provider has 2+
+   *  selectable profiles (progressive disclosure - see the multi-profile
+   *  decision log's "V1 surfaces" row). `null` renders no dot at all. */
+  readonly accentDot: ProfileAccentDotInput | null;
 }
 
 /** Stable identity for a rail entry - React key + ⌘-digit / active-entry match. */
-export function railEntryKey(
-  harnessId: GuiHarnessId,
-  profileId: string | null,
-): string {
-  return profileId === null ? harnessId : `${harnessId}::${profileId}`;
+export function railEntryKey(harnessId: GuiHarnessId): string {
+  return harnessId;
 }
 
 /**
- * Split a single harness into its rail entries. 0/1 profiles (flag off, or a
- * provider that hasn't opted into the multi-profile capability) renders
- * exactly one entry shaped identically to today's plain harness row - the
- * progressive-disclosure gate from the decision log's "V1 surfaces" row.
- * 2+ profiles renders one entry per profile, labeled "<harness> - <profile>".
+ * Resolves which profile is "active" for a harness with 2+ selectable
+ * profiles: the reducer's browsed `activeProfileId` if it belongs to this
+ * harness, else the composer's already-committed `selectedProfileId` if it
+ * belongs to this harness, else the harness's first selectable profile
+ * (typically its ambient row). Returns `null` outright under 2 profiles -
+ * profile identity has no meaning there (progressive disclosure).
  */
-function splitRailEntriesForHarness(
+export function resolveActiveProfileForHarness(
+  profiles: ReadonlyArray<ProviderProfile>,
+  browsedProfileId: string | null,
+  selectedProfileId: string | null,
+): string | null {
+  if (profiles.length < 2) return null;
+  const matchBrowsed = profiles.find(
+    (profile) => profileCommitId(profile) === browsedProfileId,
+  );
+  if (matchBrowsed !== undefined) return profileCommitId(matchBrowsed);
+  const matchSelected = profiles.find(
+    (profile) => profileCommitId(profile) === selectedProfileId,
+  );
+  if (matchSelected !== undefined) return profileCommitId(matchSelected);
+  const first = profiles.at(0);
+  return first === undefined ? null : profileCommitId(first);
+}
+
+function resolveAccentDot(
+  profiles: ReadonlyArray<ProviderProfile>,
+  activeProfileId: string | null,
+): ProfileAccentDotInput | null {
+  if (profiles.length < 2) return null;
+  const dotProfile =
+    profiles.find((profile) => profileCommitId(profile) === activeProfileId) ??
+    profiles.at(0);
+  if (dotProfile === undefined) return null;
+  return profileAccentDotInput(dotProfile);
+}
+
+function buildRailEntry(
   harness: HarnessOption,
   profiles: ReadonlyArray<ProviderProfile>,
   degradedHarnessIds: ReadonlySet<GuiHarnessId>,
-): ReadonlyArray<RailEntry> {
-  const harnessDegraded = railHarnessDegraded(harness, degradedHarnessIds);
-  if (profiles.length < 2) {
-    return [
-      {
-        harness,
-        profileId: null,
-        label: harness.label,
-        degraded: harnessDegraded,
-        profileBadge: null,
-      },
-    ];
-  }
-  return profiles.map((profile) => ({
+  activeProfileId: string | null,
+): RailEntry {
+  return {
     harness,
-    // The ambient row's wire `profileId` is the literal "ambient" sentinel
-    // (a stable array key for `profiles[]`), but every run/session-level
-    // `profileId` field - and this rail entry's own commit target - uses
-    // `null` for ambient (see `rate-limit-popover.tsx`'s identical mapping
-    // and `composer-harness-memory-store.ts`'s ambient key). Passing the
-    // sentinel through here would desync memory keying and the host's
-    // session-chain profile match from every other ambient representation.
-    profileId: profile.kind === "ambient" ? null : profile.profileId,
-    label: `${harness.label} - ${profile.label}`,
-    degraded: harnessDegraded || profile.auth.status !== "authenticated",
-    // Uses the wire `profileId` (the "ambient" sentinel included) - unlike
-    // the entry-level `profileId` above, the badge needs a stable per-row
-    // identity for its accent-color hash fallback, not the switch-target key.
-    profileBadge: {
-      profileId: profile.profileId,
-      label: profile.label,
-      email: profile.identity?.email ?? null,
-      accentColor: profile.accentColor,
-    },
-  }));
+    degraded: railHarnessDegraded(harness, degradedHarnessIds),
+    accentDot: resolveAccentDot(profiles, activeProfileId),
+  };
+}
+
+export interface VisibleRailEntriesInput {
+  readonly harnesses: ReadonlyArray<HarnessOption>;
+  readonly fallbackHarnesses: ReadonlyArray<HarnessOption>;
+  readonly degradedHarnessIds: ReadonlySet<GuiHarnessId>;
+  readonly profilesByHarnessId: ReadonlyMap<
+    GuiHarnessId,
+    ReadonlyArray<ProviderProfile>
+  >;
+  /**
+   * The profile whose accent color a harness's dot should reflect (the
+   * browsed harness's active profile, and the composer's currently
+   * *selected* harness's profile when browsing elsewhere); any other harness
+   * falls back to its first selectable profile (typically ambient).
+   */
+  readonly activeProfileIdByHarnessId: ReadonlyMap<GuiHarnessId, string | null>;
 }
 
 /**
- * The rail entries to render, in order. Disabled/unavailable providers that
- * are not recoverable from the picker stay hidden. Recoverable degraded
- * providers (signed out or missing an API key) stay visible, move below the
- * ready providers, and show the model-list CTA when selected. Shared by
- * `ProviderRail` and the picker's ⌘-digit shortcut so the digits line up with
- * the badges on the SAME ordered list. A harness's split entries (see
- * `splitRailEntriesForHarness`) stay adjacent - the ordering/degraded sort
- * below runs per-harness, then each harness expands in place.
+ * The rail entries to render, in order - one per visible provider. Disabled/
+ * unavailable providers that are not recoverable from the picker stay hidden.
+ * Recoverable degraded providers (signed out or missing an API key) stay
+ * visible, move below the ready providers, and show the model-list CTA when
+ * selected. Shared by `ProviderRail` and the picker's ⌘-digit shortcut so the
+ * digits line up with the badges on the SAME ordered list.
  */
 export function visibleRailEntries(
-  harnesses: ReadonlyArray<HarnessOption>,
-  fallbackHarnesses: ReadonlyArray<HarnessOption>,
-  degradedHarnessIds: ReadonlySet<GuiHarnessId>,
-  profilesByHarnessId: ReadonlyMap<
-    GuiHarnessId,
-    ReadonlyArray<ProviderProfile>
-  >,
+  input: VisibleRailEntriesInput,
 ): ReadonlyArray<RailEntry> {
+  const {
+    harnesses,
+    fallbackHarnesses,
+    degradedHarnessIds,
+    profilesByHarnessId,
+    activeProfileIdByHarnessId,
+  } = input;
   return visibleRailHarnesses(
     harnesses,
     fallbackHarnesses,
     degradedHarnessIds,
-  ).flatMap((harness) =>
-    splitRailEntriesForHarness(
+  ).map((harness) =>
+    buildRailEntry(
       harness,
       profilesByHarnessId.get(harness.id) ?? [],
       degradedHarnessIds,
+      activeProfileIdByHarnessId.get(harness.id) ?? null,
     ),
   );
 }

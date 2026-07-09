@@ -1,14 +1,11 @@
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import { useTabProvidersList } from "@/hooks/providers/use-tab-providers-list-query";
+import {
+  profileCommitId,
+  profileDisplayLabel,
+} from "@/components/providers/provider-profile-model";
 import { providerIdForHarness } from "./use-provider-reauth-gate";
-
-// The wire array's ambient row keys itself by the literal "ambient" sentinel;
-// every run/session-level profileId (composer selection included) uses `null`
-// for the same concept. Mirrors `rate-limit-popover.tsx`'s identical mapping.
-function normalizedProfileId(profile: ProviderProfile): string | null {
-  return profile.kind === "ambient" ? null : profile.profileId;
-}
 
 function isLimited(profile: ProviderProfile): boolean {
   return (
@@ -17,10 +14,18 @@ function isLimited(profile: ProviderProfile): boolean {
   );
 }
 
-export interface ProfileRateLimitAlternative {
+export interface ProfileRateLimitProfileChip {
+  /** Normalized for `onSwitchProfile`/composer-selection semantics - `null`
+   *  for the ambient profile. */
   readonly profileId: string | null;
+  /** The raw, always-present `ProviderProfile.profileId` (never `null` even
+   *  for ambient) - the stable key `AccentDot`'s hash fallback needs. */
+  readonly accentDotId: string;
   readonly label: string;
+  readonly accentColor: string | null;
 }
+
+export type ProfileRateLimitAlternative = ProfileRateLimitProfileChip;
 
 export interface ProfileRateLimitSwitchPrompt {
   /** True only when the composer's OWN committed profile is near/at its limit
@@ -29,6 +34,9 @@ export interface ProfileRateLimitSwitchPrompt {
    *  or a provider with no viable alternative, never shows this banner). */
   readonly limited: boolean;
   readonly hardLimited: boolean;
+  /** The limited profile the banner switches away from - `null` whenever
+   *  `limited` is false, since there is then nothing to render a chip for. */
+  readonly current: ProfileRateLimitProfileChip | null;
   readonly alternatives: ReadonlyArray<ProfileRateLimitAlternative>;
 }
 
@@ -60,36 +68,48 @@ export function useProfileRateLimitSwitchPrompt(
     return {
       limited: false,
       hardLimited: false,
+      current: null,
       alternatives: NO_ALTERNATIVES,
     };
   }
 
   const current = profiles.find(
-    (profile) => normalizedProfileId(profile) === profileId,
+    (profile) => profileCommitId(profile) === profileId,
   );
   if (current === undefined || !isLimited(current)) {
     return {
       limited: false,
       hardLimited: false,
+      current: null,
       alternatives: NO_ALTERNATIVES,
     };
   }
 
+  const currentChip: ProfileRateLimitProfileChip = {
+    profileId: profileCommitId(current),
+    accentDotId: current.profileId,
+    label: profileDisplayLabel(current),
+    accentColor: current.accentColor,
+  };
+
   const alternatives = profiles
     .filter(
       (profile) =>
-        normalizedProfileId(profile) !== profileId &&
+        profileCommitId(profile) !== profileId &&
         profile.auth.status === "authenticated" &&
         !isLimited(profile),
     )
     .map((profile) => ({
-      profileId: normalizedProfileId(profile),
-      label: profile.kind === "ambient" ? "Terminal account" : profile.label,
+      profileId: profileCommitId(profile),
+      accentDotId: profile.profileId,
+      label: profileDisplayLabel(profile),
+      accentColor: profile.accentColor,
     }));
 
   return {
     limited: alternatives.length > 0,
     hardLimited: current.rateLimitStatus === "hard_limit",
+    current: currentChip,
     alternatives,
   };
 }

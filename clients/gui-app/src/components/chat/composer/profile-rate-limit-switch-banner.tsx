@@ -1,9 +1,21 @@
 import { AlertTriangle } from "lucide-react";
+import type { ReactNode } from "react";
+import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import { Button } from "@/components/ui/button";
-import type { ProfileRateLimitAlternative } from "./use-profile-rate-limit-switch-prompt";
+import { HarnessIcon } from "@/components/home/pickers/harness-icon";
+import { AccentDot } from "@/components/providers/accent-dot";
+import type {
+  ProfileRateLimitAlternative,
+  ProfileRateLimitProfileChip,
+} from "./use-profile-rate-limit-switch-prompt";
 
 interface ProfileRateLimitSwitchBannerProps {
+  readonly harnessId: GuiHarnessId;
   readonly hardLimited: boolean;
+  /** The limited profile being switched away from - always non-null when the
+   *  banner mounts (`useProfileRateLimitSwitchPrompt` only sets `limited` once
+   *  `current` is resolved). */
+  readonly current: ProfileRateLimitProfileChip | null;
   readonly alternatives: ReadonlyArray<ProfileRateLimitAlternative>;
   /** User-confirmed only - never called automatically. Commits the picked
    *  profile to the composer for the NEXT turn (turn-boundary switch). */
@@ -16,10 +28,14 @@ interface ProfileRateLimitSwitchBannerProps {
  * confirm-first affordance - no automatic switching or rotation anywhere.
  * Mounted/unmounted by `useProfileRateLimitSwitchPrompt`, which already
  * gates on the current profile being limited AND a viable alternative
- * existing, so this component only ever renders with >=1 alternative.
+ * existing, so this component only ever renders with >=1 alternative. Source
+ * and destination both render as full icon + dot + label chips (Core Flows'
+ * cross-flow identity rule: color never stands alone).
  */
 export function ProfileRateLimitSwitchBanner({
+  harnessId,
   hardLimited,
+  current,
   alternatives,
   onSwitchProfile,
 }: ProfileRateLimitSwitchBannerProps) {
@@ -32,20 +48,30 @@ export function ProfileRateLimitSwitchBanner({
             aria-hidden
           />
           <div className="flex min-w-0 flex-1 flex-col gap-2">
-            <span className="text-foreground/90">
-              {hardLimited
-                ? "This profile has hit its rate limit."
-                : "This profile is close to its rate limit."}
-            </span>
+            <div className="flex flex-wrap items-center gap-1.5 text-foreground/90">
+              {current !== null ? (
+                <ProfileRateLimitChip harnessId={harnessId} profile={current} />
+              ) : null}
+              <span>
+                {hardLimited
+                  ? "has hit its rate limit."
+                  : "is close to its rate limit."}
+              </span>
+            </div>
             <div className="flex flex-wrap items-center gap-2">
               {alternatives.map((alternative) => (
                 <Button
-                  key={alternative.label}
+                  key={alternative.accentDotId}
                   size="sm"
                   variant="secondary"
+                  className="gap-1.5"
                   onClick={() => onSwitchProfile(alternative.profileId)}
                 >
-                  Continue this session on {alternative.label}
+                  Continue this session on{" "}
+                  <ProfileRateLimitChip
+                    harnessId={harnessId}
+                    profile={alternative}
+                  />
                 </Button>
               ))}
             </div>
@@ -53,5 +79,28 @@ export function ProfileRateLimitSwitchBanner({
         </div>
       </div>
     </div>
+  );
+}
+
+function ProfileRateLimitChip({
+  harnessId,
+  profile,
+}: {
+  readonly harnessId: GuiHarnessId;
+  readonly profile: ProfileRateLimitProfileChip;
+}): ReactNode {
+  return (
+    <span className="inline-flex min-w-0 items-center gap-1 rounded-full border border-border/60 bg-background/60 px-1.5 py-0.5 text-ui-xs font-medium text-foreground">
+      <HarnessIcon harnessId={harnessId} className="size-3" />
+      <AccentDot
+        profileId={profile.accentDotId}
+        accentColor={profile.accentColor}
+        label={null}
+        variant="inline"
+        size="default"
+        className={undefined}
+      />
+      <span className="min-w-0 truncate">{profile.label}</span>
+    </span>
   );
 }
