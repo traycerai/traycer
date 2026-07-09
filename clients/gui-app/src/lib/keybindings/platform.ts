@@ -1,8 +1,8 @@
 /**
- * Platform helpers for keybinding labels AND the dictation shortcut's
- * platform-primary modifier match. Most runtime matching uses
- * `event.metaKey || event.ctrlKey` via `chord.ts`, but the dictation hotkey and
- * all display strings need to know the real OS.
+ * Platform helpers for keybinding labels and platform-primary modifier
+ * matching. Runtime matching treats `mod` as Command on macOS and
+ * Command/Control elsewhere; Control-specific macOS shortcuts are represented
+ * with the separate `ctrl` token.
  */
 
 // UA Client Hints - the modern platform signal, not yet in TS's lib.dom (5.9).
