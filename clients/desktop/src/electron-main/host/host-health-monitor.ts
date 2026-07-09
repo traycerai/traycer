@@ -45,13 +45,13 @@ const MAX_AUTO_RESPAWNS_WITHOUT_RECOVERY = 3;
 
 export interface HostHealthMonitorDeps {
   readonly host: IpcHostLifecycle;
-  /** Test seams; production callers omit them. */
-  readonly intervalMs?: number;
-  readonly probe?: (websocketUrl: string) => Promise<boolean>;
-  readonly readMetadata?: (
-    path: string,
-  ) => Promise<DesktopLocalHostSnapshot | null>;
-  readonly respawn?: () => Promise<void>;
+  /** Test seams; production callers pass undefined. */
+  readonly intervalMs: number | undefined;
+  readonly probe: ((websocketUrl: string) => Promise<boolean>) | undefined;
+  readonly readMetadata:
+    | ((path: string) => Promise<DesktopLocalHostSnapshot | null>)
+    | undefined;
+  readonly respawn: (() => Promise<void>) | undefined;
 }
 
 export interface HostHealthMonitor {
@@ -86,10 +86,15 @@ export function startHostHealthMonitor(
         respawnsSinceRecovery = 0;
         return;
       }
+      // Re-check after every await: dispose() landing during a slow probe
+      // or metadata read (app quit) must not let this in-flight tick spawn
+      // a host the app is tearing down.
+      if (disposed || deps.host.isDisposed) return;
       consecutiveFailures += 1;
       if (consecutiveFailures < CONFIRMED_DOWN_AFTER_FAILURES) return;
       consecutiveFailures = 0;
       const metadata = await readMetadata(deps.host.pidMetadataFile);
+      if (disposed || deps.host.isDisposed) return;
       if (metadata === null) {
         log.info(
           "[host-health] endpoint down and pid metadata gone - treating as a deliberate stop",

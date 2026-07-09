@@ -89,7 +89,7 @@ describe("Windows service stale host cleanup", () => {
     ]);
   });
 
-  it("deduplicates pid metadata with slot-scanned processes", async () => {
+  it("kills exactly the scan-verified pids when the scan covers the recorded pid", async () => {
     mocks.readHostPidMetadata.mockResolvedValue({
       pid: 401,
       hostId: "host-test",
@@ -111,6 +111,67 @@ describe("Windows service stale host cleanup", () => {
         .filter((call) => call.command === "taskkill")
         .map((call) => call.args[3]),
     ).toEqual(["401", "402"]);
+  });
+
+  it("does not kill the recorded pid when the scan verifies it no longer matches the host", async () => {
+    // pid.json says 401, but the verified slot scan only finds 402 - the OS
+    // recycled 401 for an unrelated process, which must survive.
+    mocks.readHostPidMetadata.mockResolvedValue({
+      pid: 401,
+      hostId: "host-test",
+      version: "1.0.0",
+      websocketUrl: "ws://127.0.0.1:54321/rpc",
+      startedAt: "2026-01-01T00:00:00.000Z",
+    });
+    const calls: RecordedCall[] = [];
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      return command === "powershell.exe" ? success("[402]") : success("");
+    };
+    const controller = createWindowsController(runner);
+
+    await controller.stop(serviceLabelFor("staging"));
+
+    expect(
+      calls
+        .filter((call) => call.command === "taskkill")
+        .map((call) => call.args[3]),
+    ).toEqual(["402"]);
+  });
+
+  it("falls back to the recorded pid when the slot scan cannot run", async () => {
+    mocks.readHostPidMetadata.mockResolvedValue({
+      pid: 401,
+      hostId: "host-test",
+      version: "1.0.0",
+      websocketUrl: "ws://127.0.0.1:54321/rpc",
+      startedAt: "2026-01-01T00:00:00.000Z",
+    });
+    const calls: RecordedCall[] = [];
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (command === "powershell.exe") throw new Error("spawn failed");
+      return success("");
+    };
+    const controller = createWindowsController(runner);
+
+    await controller.stop(serviceLabelFor("staging"));
+
+    expect(
+      calls
+        .filter((call) => call.command === "taskkill")
+        .map((call) => call.args[3]),
+    ).toEqual(["401"]);
+  });
+
+  it("purges pid metadata on uninstall like it does on stop", async () => {
+    const runner: ProcessRunner = async (command) =>
+      command === "powershell.exe" ? success("[]") : success("");
+    const controller = createWindowsController(runner);
+
+    await controller.uninstall({ label: serviceLabelFor("staging") });
+
+    expect(mocks.removeHostPidMetadata).toHaveBeenCalledWith("staging");
   });
 
   it("purges pid metadata on stop so a deliberate stop never reads as a crash", async () => {
