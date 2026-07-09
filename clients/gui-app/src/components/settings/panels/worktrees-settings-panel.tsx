@@ -1,4 +1,5 @@
 import {
+  use,
   memo,
   useCallback,
   useDeferredValue,
@@ -8,10 +9,12 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  type MouseEvent,
   type ReactNode,
   type RefCallback,
 } from "react";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
+import { useNavigate } from "@tanstack/react-router";
 import { defaultRangeExtractor, useVirtualizer } from "@tanstack/react-virtual";
 import { toast } from "sonner";
 import {
@@ -23,6 +26,7 @@ import {
   Copy,
   CopyMinus,
   CopyPlus,
+  ExternalLink,
   FileSliders,
   FolderGit2,
   GitCommitHorizontal,
@@ -53,7 +57,11 @@ import {
   taskMergeRollupLabel,
   type TaskMergeRollup,
 } from "@/lib/worktree/task-merge-rollup";
-import type { WorktreeEntryScripts } from "@traycer/protocol/host/worktree-schemas";
+import type {
+  WorktreeEntryScripts,
+  WorktreePrState,
+  WorktreeSubmoduleMergeFact,
+} from "@traycer/protocol/host/worktree-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { cn } from "@/lib/utils";
@@ -97,7 +105,6 @@ import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-i
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { useHostClientFor } from "@/hooks/host/use-host-client-for";
-import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { useWorktreeDeleteStreamTransportFactory } from "@/lib/host/use-worktree-delete-stream-transport";
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
@@ -116,12 +123,15 @@ import {
   type WorktreeDeleteProgressSummary,
 } from "@/components/settings/panels/use-worktree-delete-run";
 import { WorktreeDeleteProgressModal } from "@/components/settings/panels/worktree-delete-progress-modal";
-import {
-  useWorktreeFirstPaintPerf,
-  useWorktreeListQueryPerf,
-} from "@/components/settings/panels/worktrees-settings-perf";
 import { WorktreeListRenderProfiler } from "@/components/settings/panels/worktree-list-render-profiler";
 import { useWorktreeActivityEnrichment } from "@/components/settings/panels/worktrees-enrichment";
+import { useWorktreeListing } from "@/components/settings/panels/worktrees-listing-query";
+import {
+  navigateToTabIntent,
+  openOrFocusEpicIntent,
+} from "@/lib/tab-navigation";
+import { RunnerHostContext } from "@/providers/runner-host-context";
+import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
 
 type WorktreeRowDeleteStatus = "deleting";
 // Per-row activity-enrichment state, driving ONLY the tier pill's presentation:
@@ -136,7 +146,6 @@ type WorktreeTierFilterSet = ReadonlySet<WorktreeTier>;
 const EMPTY_TIER_FILTER: WorktreeTierFilterSet = new Set();
 const WORKTREES_REFRESH_TIMEOUT_MS = 10_000;
 const EMPTY_REPO_KEY_SET: ReadonlySet<string> = new Set();
-const EMPTY_WORKTREES: readonly WorktreeHostEntryV11[] = [];
 const EMPTY_TASK_TITLES: ReadonlyMap<string, string> = new Map();
 
 // Virtualization tuning. Row/header heights are estimates only - each rendered
@@ -363,7 +372,7 @@ function worktreeTierFilterLabel(
  * Checking several tiers shows their union; composes with the search box (both
  * apply). Tier comes from the shared classifier, so the options match the row
  * pills exactly. Kept open across toggles (`onSelect` preventDefault) so the user
- * can pick e.g. Merged + At base commit in one visit.
+ * can pick e.g. Landed + At base commit in one visit.
  */
 function WorktreeFilterMenu(props: {
   readonly tierFilters: WorktreeTierFilterSet;
@@ -505,63 +514,6 @@ function HostSelect(props: {
   );
 }
 
-/**
- * Base worktree listing - the instant, viewport-independent leg. `includeActivity:
- * false, activityPaths: null` returns EVERY row with its cheap fields (repo,
- * branch, path, owning Task, uncommitted count) and none of the per-worktree gh PR
- * + git probes, so its cost does not scale with how much activity work the host
- * has to do. The heavy activity probes are fetched lazily, only for the rows
- * scrolled into view, by {@link useWorktreeActivityEnrichment} - so first paint is
- * instant in ANY environment, no matter the total worktree count.
- */
-function useWorktreeListing(
-  client: HostClient<HostRpcRegistry> | null,
-  reachable: boolean,
-): {
-  readonly worktrees: readonly WorktreeHostEntryV11[];
-  readonly isPending: boolean;
-  readonly isError: boolean;
-  readonly errorMessage: string | null;
-  readonly isEmpty: boolean;
-  readonly refresh: () => Promise<unknown>;
-  readonly refreshing: boolean;
-} {
-  const baseQuery = useHostQuery({
-    cacheKeyIdentity: undefined,
-    client,
-    method: "worktree.listAllForHost",
-    params: { includeActivity: false, activityPaths: null },
-    options: { enabled: reachable },
-  });
-  const worktrees = baseQuery.data?.worktrees ?? EMPTY_WORKTREES;
-  // Perf telemetry (gated + non-throwing). Both legs now track the BASE query -
-  // the real time-to-usable-list, which is what "snappy in any environment" means.
-  useWorktreeListQueryPerf({
-    includeActivity: false,
-    fetchStatus: baseQuery.fetchStatus,
-    status: baseQuery.status,
-    worktreeCount: worktrees.length,
-    submoduleCount: worktrees.reduce(
-      (sum, entry) => sum + entry.submodules.length,
-      0,
-    ),
-    hasData: baseQuery.data !== undefined,
-  });
-  useWorktreeFirstPaintPerf({
-    painted: baseQuery.isSuccess && worktrees.length > 0,
-    rowCount: worktrees.length,
-  });
-  return {
-    worktrees,
-    isPending: baseQuery.isPending,
-    isError: baseQuery.isError,
-    errorMessage: baseQuery.error?.message ?? null,
-    isEmpty: baseQuery.isSuccess && worktrees.length === 0,
-    refresh: () => baseQuery.refetch(),
-    refreshing: baseQuery.isFetching,
-  };
-}
-
 function WorktreesBody(props: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly openStreamTransport: (hostId: string) => DurableStreamTransport;
@@ -679,7 +631,47 @@ function WorktreesBody(props: {
           filterControls={null}
         />
       ) : null}
+      {listing.isPartial ? (
+        <WorktreesPartialListingBanner
+          message={listing.errorMessage}
+          onRetry={listing.retryPartial}
+        />
+      ) : null}
       {content}
+    </div>
+  );
+}
+
+/**
+ * A later listing page failed after earlier pages already landed - `worktrees`
+ * is real but an INCOMPLETE prefix of the host's full list. The list still
+ * renders below (partial data is useful), but this banner is the only signal
+ * that it is truncated, so it must never be dropped silently.
+ */
+function WorktreesPartialListingBanner(props: {
+  readonly message: string | null;
+  readonly onRetry: () => Promise<unknown>;
+}): ReactNode {
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className="flex items-center gap-2 border-b border-border/60 bg-amber-500/10 px-4 py-2 text-ui-sm text-amber-700 dark:text-amber-300"
+    >
+      <AlertTriangle className="size-4 shrink-0" aria-hidden />
+      <span className="min-w-0 flex-1 wrap-anywhere">
+        Some worktrees could not be loaded
+        {props.message !== null ? `: ${props.message}` : ""}. The list below is
+        incomplete.
+      </span>
+      <Button
+        variant="ghost"
+        size="sm"
+        className="h-7 shrink-0 px-2 text-amber-700 hover:text-amber-800 dark:text-amber-300 dark:hover:text-amber-200"
+        onClick={() => void props.onRetry()}
+      >
+        Retry
+      </Button>
     </div>
   );
 }
@@ -1965,6 +1957,16 @@ const WorktreeRow = memo(function WorktreeRow(props: {
   const deleting = deleteStatus !== null;
   const selectedForDelete = selected && canSelect;
   const classification = classifyWorktree(entry);
+  const navigate = useNavigate();
+  const openTask = useCallback(
+    (epicId: string): void => {
+      navigateToTabIntent(
+        navigate,
+        openOrFocusEpicIntent({ epicId, focus: undefined }),
+      );
+    },
+    [navigate],
+  );
   const toggleSelection = useCallback(() => {
     onToggleSelection(entry.worktreePath);
   }, [onToggleSelection, entry.worktreePath]);
@@ -2004,12 +2006,13 @@ const WorktreeRow = memo(function WorktreeRow(props: {
       <div className="min-w-0 flex-1 space-y-1 pr-10">
         <div className="flex flex-wrap items-center gap-2">
           <WorktreeTierPill tier={classification.tier} state={enrichment} />
+          <WorktreePrChips entry={entry} />
           <span className="truncate text-ui-sm font-medium text-foreground">
             {branchLabel(entry)}
           </span>
         </div>
         <WorktreeSecondaryFacts
-          facts={classification.facts}
+          facts={classification.nonPrFacts}
           lastActivityAt={entry.lastActivityAt}
         />
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -2017,6 +2020,7 @@ const WorktreeRow = memo(function WorktreeRow(props: {
             owners={entry.owners}
             taskTitlesByEpicId={taskTitlesByEpicId}
             taskRollupByEpicId={taskRollupByEpicId}
+            onOpenTask={openTask}
           />
         </div>
       </div>
@@ -2195,6 +2199,211 @@ function WorktreeSecondaryFacts(props: {
   );
 }
 
+interface WorktreePrChipModel {
+  readonly key: string;
+  readonly label: string;
+  readonly ariaLabel: string;
+  readonly prState: WorktreeDisplayedPrState;
+  readonly prUrl: string;
+}
+
+interface WorktreeMutedPrChipModel {
+  readonly key: string;
+  readonly label: string;
+}
+
+function WorktreePrChips(props: {
+  readonly entry: WorktreeHostEntryV11;
+}): ReactNode {
+  const chips = worktreePrChips(props.entry);
+  if (chips.length === 0) return null;
+  return chips.map((chip) =>
+    "prUrl" in chip ? (
+      <WorktreePrChip key={chip.key} chip={chip} />
+    ) : (
+      <WorktreeMutedPrChip key={chip.key} chip={chip} />
+    ),
+  );
+}
+
+function worktreePrChips(
+  entry: WorktreeHostEntryV11,
+): readonly (WorktreePrChipModel | WorktreeMutedPrChipModel)[] {
+  return [
+    ...superprojectPrChip(entry),
+    ...entry.submodules.flatMap((submodule) => [
+      ...submodulePrChip(submodule),
+      ...submoduleUnmergedChip(submodule),
+    ]),
+  ];
+}
+
+function superprojectPrChip(
+  entry: WorktreeHostEntryV11,
+): readonly WorktreePrChipModel[] {
+  const prState = displayedPrState(entry.prState);
+  if (prState === null || entry.prNumber === null || entry.prUrl === null) {
+    return [];
+  }
+  return [
+    {
+      key: `superproject:${entry.prNumber}:${entry.prUrl}`,
+      label: `#${entry.prNumber} ${WORKTREE_PR_STATE_LABEL[prState]}`,
+      ariaLabel: `Open PR #${entry.prNumber} ${WORKTREE_PR_STATE_LABEL[prState]}`,
+      prState,
+      prUrl: entry.prUrl,
+    },
+  ];
+}
+
+function submodulePrChip(
+  submodule: WorktreeSubmoduleMergeFact,
+): readonly WorktreePrChipModel[] {
+  const prState = displayedPrState(submodule.prState);
+  if (
+    prState === null ||
+    submodule.prNumber === null ||
+    submodule.prUrl === null
+  ) {
+    return [];
+  }
+  const repoName = submodule.repoIdentifier.repo;
+  return [
+    {
+      key: `submodule:${submodule.repoIdentifier.owner}/${repoName}:${submodule.branch}:${submodule.prNumber}:${submodule.prUrl}`,
+      label: `${repoName} #${submodule.prNumber} ${WORKTREE_PR_STATE_LABEL[prState]}`,
+      ariaLabel: `Open ${repoName} PR #${submodule.prNumber} ${WORKTREE_PR_STATE_LABEL[prState]}`,
+      prState,
+      prUrl: submodule.prUrl,
+    },
+  ];
+}
+
+function submoduleUnmergedChip(
+  submodule: WorktreeSubmoduleMergeFact,
+): readonly WorktreeMutedPrChipModel[] {
+  if (submodule.prState !== "none" || submodule.mergedIntoDefault) return [];
+  return [
+    {
+      key: `submodule-unmerged:${submodule.repoIdentifier.owner}/${submodule.repoIdentifier.repo}:${submodule.branch}`,
+      label: `${submodule.repoIdentifier.repo} · unmerged`,
+    },
+  ];
+}
+
+type WorktreeDisplayedPrState = "open" | "closed" | "merged";
+
+const WORKTREE_PR_STATE_LABEL: Record<WorktreeDisplayedPrState, string> = {
+  open: "Open",
+  closed: "Closed",
+  merged: "Merged",
+};
+
+function WorktreePrChip(props: {
+  readonly chip: WorktreePrChipModel;
+}): ReactNode {
+  const style = WORKTREE_PR_PILL_STYLE[props.chip.prState];
+  return (
+    <Badge
+      asChild
+      variant="outline"
+      className={cn("gap-1 font-medium", style.className)}
+    >
+      <WorktreePrAnchor
+        href={props.chip.prUrl}
+        ariaLabel={props.chip.ariaLabel}
+        className="max-w-[min(60vw,16rem)]"
+        testId="worktree-pr-chip"
+        prState={props.chip.prState}
+      >
+        <span className="truncate">{props.chip.label}</span>
+        <ExternalLink className="size-3" aria-hidden />
+      </WorktreePrAnchor>
+    </Badge>
+  );
+}
+
+function displayedPrState(
+  prState: WorktreePrState | null,
+): WorktreeDisplayedPrState | null {
+  if (prState === "open" || prState === "closed" || prState === "merged") {
+    return prState;
+  }
+  return null;
+}
+
+const WORKTREE_PR_PILL_STYLE: Record<
+  WorktreeDisplayedPrState,
+  { readonly className: string }
+> = {
+  open: {
+    className:
+      "border-green-600/30 bg-green-500/10 text-green-700 dark:border-green-400/30 dark:text-green-300",
+  },
+  closed: {
+    className:
+      "border-red-600/25 bg-red-500/10 text-red-700 dark:border-red-400/25 dark:text-red-300",
+  },
+  merged: {
+    className:
+      "border-purple-600/30 bg-purple-500/10 text-purple-700 dark:border-purple-400/30 dark:text-purple-300",
+  },
+};
+
+function WorktreeMutedPrChip(props: {
+  readonly chip: WorktreeMutedPrChipModel;
+}): ReactNode {
+  return (
+    <Badge
+      variant="outline"
+      className="gap-1 border-border/40 bg-muted/30 font-medium text-muted-foreground"
+      data-testid="worktree-pr-chip"
+      data-pr-state="unmerged"
+    >
+      <span className="max-w-[min(60vw,16rem)] truncate">
+        {props.chip.label}
+      </span>
+    </Badge>
+  );
+}
+
+function WorktreePrAnchor(props: {
+  readonly href: string;
+  readonly ariaLabel: string;
+  readonly className: string | undefined;
+  readonly testId: string | undefined;
+  readonly prState: WorktreeDisplayedPrState | undefined;
+  readonly children: ReactNode;
+}): ReactNode {
+  const runnerHost = use(RunnerHostContext);
+  const openExternalLink = useRunnerOpenExternalLink();
+  const openExternal = useCallback(
+    (event: MouseEvent<HTMLAnchorElement>): void => {
+      event.stopPropagation();
+      // No RunnerHost bound (e.g. web): let the browser handle the anchor
+      // natively, preserving modifier-click/middle-click tab semantics.
+      if (runnerHost === null) return;
+      event.preventDefault();
+      openExternalLink.mutate(props.href);
+    },
+    [props.href, runnerHost, openExternalLink],
+  );
+  return (
+    <a
+      href={props.href}
+      target="_blank"
+      rel="noreferrer"
+      aria-label={props.ariaLabel}
+      className={props.className}
+      data-testid={props.testId}
+      data-pr-state={props.prState}
+      onClick={openExternal}
+    >
+      {props.children}
+    </a>
+  );
+}
+
 /**
  * Task association resolved from `owners[].epicId`. Owners in the same epic
  * collapse to one entry. An epic with a resolved title renders a chip; an epic
@@ -2208,6 +2417,7 @@ function WorktreeTaskAssociation(props: {
   readonly owners: WorktreeHostEntryV11["owners"];
   readonly taskTitlesByEpicId: ReadonlyMap<string, string>;
   readonly taskRollupByEpicId: ReadonlyMap<string, TaskMergeRollup>;
+  readonly onOpenTask: (epicId: string) => void;
 }): ReactNode {
   const epicIds = [...new Set(props.owners.map((owner) => owner.epicId))];
   if (epicIds.length === 0) {
@@ -2230,11 +2440,21 @@ function WorktreeTaskAssociation(props: {
       {named.map((item) => (
         <span key={item.epicId} className="flex items-center gap-1">
           <Badge
+            asChild
             variant="outline"
-            className="max-w-[min(60vw,16rem)] font-normal"
-            title={item.title}
+            className="max-w-[min(60vw,16rem)] cursor-pointer font-normal hover:bg-muted hover:text-muted-foreground"
           >
-            <span className="truncate">{item.title}</span>
+            <button
+              type="button"
+              title={item.title}
+              aria-label={`Open Task ${item.title}`}
+              onClick={(event) => {
+                event.stopPropagation();
+                props.onOpenTask(item.epicId);
+              }}
+            >
+              <span className="truncate">{item.title}</span>
+            </button>
           </Badge>
           <TaskMergeRollupBadge
             rollup={props.taskRollupByEpicId.get(item.epicId) ?? null}

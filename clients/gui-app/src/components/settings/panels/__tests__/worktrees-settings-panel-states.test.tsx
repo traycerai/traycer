@@ -1,10 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import {
+  MockHostMessenger,
+  type MockHandlerMap,
+} from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { WorktreeHostEntryV11 } from "@traycer/protocol/host/index";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 
 // `WorktreesSettingsPanel` sits above `WorktreesList` (covered exhaustively by
 // `worktrees-settings-panel.test.tsx`) and owns the host-scoped states from
@@ -13,7 +22,10 @@ import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/hos
 // and empty. None of those states are reachable through `WorktreesList`
 // directly (it is only ever mounted once a host is reachable and signed in),
 // so this file mocks the host-scoped hooks `WorktreesSettingsPanel` composes
-// and drives each state independently.
+// and drives each state independently. The base listing itself
+// (`useWorktreeListing`) is exercised for real against a `HostClient` bound to
+// a `MockHostMessenger`, so pending/error/empty/success states go through the
+// real paginated `worktree.listAllForHost` query instead of a hook mock.
 const state = vi.hoisted(() => ({
   activeHostId: null as string | null,
   hosts: [] as HostDirectoryEntry[],
@@ -21,19 +33,7 @@ const state = vi.hoisted(() => ({
     status: "reachable",
     hostLabel: "Host A",
   },
-  client: null as object | null,
-  hostQuery: {
-    data: undefined as
-      { worktrees: readonly WorktreeHostEntryV11[] } | undefined,
-    fetchStatus: "idle",
-    status: "pending",
-    isPending: true,
-    isError: false,
-    isSuccess: false,
-    error: null as { message: string } | null,
-    isFetching: false,
-    refetch: vi.fn(() => Promise.resolve()),
-  },
+  client: null as HostClient<HostRpcRegistry> | null,
   enrichment: {
     enrichedByPath: new Map<string, WorktreeHostEntryV11>(),
     erroredPaths: new Set<string>(),
@@ -56,10 +56,6 @@ vi.mock("@/hooks/agent/use-host-reachability", () => ({
 
 vi.mock("@/hooks/host/use-host-client-for", () => ({
   useHostClientFor: () => state.client,
-}));
-
-vi.mock("@/hooks/host/use-host-query", () => ({
-  useHostQuery: () => state.hostQuery,
 }));
 
 vi.mock("@/components/settings/panels/worktrees-enrichment", () => ({
@@ -95,8 +91,35 @@ function host(
   };
 }
 
+/**
+ * Builds a real, bound `HostClient` around a single-method mock handler for
+ * `worktree.listAllForHost`, so `useWorktreeListing`'s real `useInfiniteQuery`
+ * + `useReactiveHostReadiness` machinery drives the panel's pending / error /
+ * empty / success states instead of a hook-level mock.
+ */
+function clientWithHandler(
+  handler: MockHandlerMap<HostRpcRegistry>["worktree.listAllForHost"],
+): HostClient<HostRpcRegistry> {
+  const client = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: { invalidateHostScope: () => undefined },
+    messenger: new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => `req-${Math.random()}`,
+      handlers: { "worktree.listAllForHost": handler },
+    }),
+  });
+  client.bind(mockLocalHostEntry);
+  client.setRequestContext(
+    createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+  );
+  return client;
+}
+
 function renderPanel(): void {
-  const queryClient = new QueryClient();
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
   const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>{props.children}</TooltipProvider>
@@ -115,17 +138,6 @@ beforeEach(() => {
   state.hosts = [];
   state.reachability = { status: "reachable", hostLabel: "Host A" };
   state.client = null;
-  state.hostQuery = {
-    data: undefined,
-    fetchStatus: "idle",
-    status: "pending",
-    isPending: true,
-    isError: false,
-    isSuccess: false,
-    error: null,
-    isFetching: false,
-    refetch: vi.fn(() => Promise.resolve()),
-  };
   state.enrichment = {
     enrichedByPath: new Map(),
     erroredPaths: new Set(),
@@ -190,61 +202,57 @@ describe("WorktreesSettingsPanel host-scoped states", () => {
   it("shows a loading state while the base listing is pending", () => {
     state.hosts = [host({ hostId: "host-a" })];
     state.activeHostId = "host-a";
-    state.client = {};
-    state.hostQuery = {
-      ...state.hostQuery,
-      isPending: true,
-      status: "pending",
-    };
+    // Never resolves - the base query stays pending indefinitely.
+    state.client = clientWithHandler(() => new Promise(() => {}));
 
     renderPanel();
 
     screen.getByText("Loading worktrees…");
   });
 
-  it("surfaces the query error message with a working refresh retry path", () => {
+  it("surfaces the query error message with a working refresh retry path", async () => {
     state.hosts = [host({ hostId: "host-a" })];
     state.activeHostId = "host-a";
-    state.client = {};
-    state.hostQuery = {
-      ...state.hostQuery,
-      isPending: false,
-      isError: true,
-      status: "error",
-      error: { message: "Could not reach the worktree service." },
-    };
+    state.client = clientWithHandler(() => {
+      throw new HostRpcError({
+        code: "RPC_ERROR",
+        message: "Could not reach the worktree service.",
+        requestId: "req-error",
+        method: "worktree.listAllForHost",
+        fatalDetails: null,
+      });
+    });
 
     renderPanel();
 
-    screen.getByText("Could not reach the worktree service.");
+    await waitFor(() => {
+      screen.getByText("Could not reach the worktree service.");
+    });
     const refresh = screen.getByRole("button", { name: "Refresh worktrees" });
     expect(refresh.hasAttribute("disabled")).toBe(false);
   });
 
-  it("says nothing was created when the host's list is empty", () => {
+  it("says nothing was created when the host's list is empty", async () => {
     state.hosts = [host({ hostId: "host-a" })];
     state.activeHostId = "host-a";
-    state.client = {};
-    state.hostQuery = {
-      ...state.hostQuery,
-      isPending: false,
-      isSuccess: true,
-      status: "success",
-      data: { worktrees: [] },
-    };
+    state.client = clientWithHandler(() => ({
+      worktrees: [],
+      nextCursor: null,
+    }));
 
     renderPanel();
 
-    screen.getByText("No worktrees created on this host.");
+    await waitFor(() => {
+      screen.getByText("No worktrees created on this host.");
+    });
   });
 
-  it("renders the host select alongside the full toolbar once the list is populated", () => {
+  it("renders the host select alongside the full toolbar once the list is populated", async () => {
     state.hosts = [
       host({ hostId: "host-a", label: "Host A" }),
       host({ hostId: "host-b", label: "Host B" }),
     ];
     state.activeHostId = "host-a";
-    state.client = {};
     const cleanWorktree = {
       repoLabel: "acme/app",
       repoIdentifier: { owner: "acme", repo: "app" },
@@ -265,13 +273,10 @@ describe("WorktreesSettingsPanel host-scoped states", () => {
       submodules: [],
       atBaseCommit: false,
     } satisfies WorktreeHostEntryV11;
-    state.hostQuery = {
-      ...state.hostQuery,
-      isPending: false,
-      isSuccess: true,
-      status: "success",
-      data: { worktrees: [cleanWorktree] },
-    };
+    state.client = clientWithHandler(() => ({
+      worktrees: [cleanWorktree],
+      nextCursor: null,
+    }));
     state.enrichment = {
       enrichedByPath: new Map([["/wt/clean", cleanWorktree]]),
       erroredPaths: new Set(),
@@ -281,11 +286,13 @@ describe("WorktreesSettingsPanel host-scoped states", () => {
 
     renderPanel();
 
+    await waitFor(() => {
+      screen.getByText("feat-clean");
+    });
     screen.getByTestId("worktrees-host-select");
     screen.getByPlaceholderText("Search repo, branch, path, or Task");
     screen.getByTestId("worktrees-filter-trigger");
     screen.getByTestId("worktrees-sort-trigger");
     screen.getByRole("button", { name: "Refresh worktrees" });
-    screen.getByText("feat-clean");
   });
 });

@@ -1,5 +1,5 @@
 import "../../../../__tests__/test-browser-apis";
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Mock } from "vitest";
 import {
@@ -213,6 +213,21 @@ function lastNavigateSearchPatch(): Readonly<Record<string, unknown>> {
   const result: unknown = search({});
   if (!isRecord(result)) throw new Error("expected search patch result");
   return result;
+}
+
+/**
+ * The applied-nested-target focus restore runs inside a `requestAnimationFrame`.
+ * Await two frames (wrapped in `act` so React state settles) to let that
+ * scheduled `.focus()` land before asserting.
+ */
+async function flushFocusRestore(): Promise<void> {
+  await act(async () => {
+    await new Promise<void>((resolve) => {
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => resolve());
+      });
+    });
+  });
 }
 
 describe("useEpicRouteSynchronization", () => {
@@ -673,5 +688,150 @@ describe("useEpicRouteSynchronization", () => {
       "group-1",
       "removed-chat",
     );
+  });
+
+  it("keeps editor focus when a canvas mutation re-runs an already-applied nested focus target", async () => {
+    testState.nestedFocusEnabled = true;
+    setSinglePaneCanvas(
+      "pane-current",
+      [specTile("artifact-current", "tile-current", "Current artifact")],
+      "tile-current",
+    );
+
+    // Mirror the canvas DOM the focus restore queries: the selected tab layer
+    // (an ancestor with `tabIndex=-1`) wraps the editable artifact body, just
+    // like pane → tab layer → ProseMirror surface in the app.
+    const paneEl = document.createElement("div");
+    paneEl.setAttribute("data-group-id", "pane-current");
+    paneEl.setAttribute("data-active", "true");
+    paneEl.tabIndex = -1;
+    const tileEl = document.createElement("div");
+    tileEl.setAttribute("data-tab-instance-id", "tile-current");
+    tileEl.setAttribute("data-selected", "true");
+    tileEl.tabIndex = -1;
+    const editorEl = document.createElement("textarea");
+    tileEl.appendChild(editorEl);
+    paneEl.appendChild(tileEl);
+    document.body.appendChild(paneEl);
+
+    try {
+      const hook = renderHook(
+        (intent: EpicRouteFocusIntent) => useEpicRouteSynchronization(intent),
+        {
+          initialProps: {
+            epicId: EPIC_ID,
+            tabId: TAB_ID,
+            focusedAt: undefined,
+            focusArtifactId: undefined,
+            focusThreadId: undefined,
+            focusPaneId: "pane-current",
+            focusTileInstanceId: "tile-current",
+          },
+        },
+      );
+
+      // First application of the target legitimately restores focus to the tab
+      // container - a genuine tab switch has no deeper focus to preserve.
+      await waitFor(() => {
+        expect(document.activeElement).toBe(tileEl);
+      });
+
+      // The user clicks into the body and starts typing.
+      editorEl.focus();
+      expect(document.activeElement).toBe(editorEl);
+
+      // A title rename (Notion-style doc-title-follow, or a tab rename) mutates
+      // the canvas, so `useEpicCanvas` hands back a new identity and the focus
+      // effect re-runs with the SAME, still-applied target. It must not yank
+      // focus back up to the tab container and eject the user from edit mode.
+      testState.canvasTiles = {
+        "tile-current": specTile("artifact-current", "tile-current", "Renamed"),
+      };
+      hook.rerender({
+        epicId: EPIC_ID,
+        tabId: TAB_ID,
+        focusedAt: undefined,
+        focusArtifactId: undefined,
+        focusThreadId: undefined,
+        focusPaneId: "pane-current",
+        focusTileInstanceId: "tile-current",
+      });
+      await flushFocusRestore();
+
+      expect(document.activeElement).toBe(editorEl);
+    } finally {
+      paneEl.remove();
+    }
+  });
+
+  it("does not re-focus the tile when a rename fires while focus sits outside it (tab-strip rename)", async () => {
+    testState.nestedFocusEnabled = true;
+    setSinglePaneCanvas(
+      "pane-current",
+      [specTile("artifact-current", "tile-current", "Current artifact")],
+      "tile-current",
+    );
+
+    // The tab-strip rename input lives in the pane but OUTSIDE the tile layer,
+    // mirroring the real DOM (strip is a sibling of the tab body).
+    const paneEl = document.createElement("div");
+    paneEl.setAttribute("data-group-id", "pane-current");
+    paneEl.setAttribute("data-active", "true");
+    paneEl.tabIndex = -1;
+    const renameInputEl = document.createElement("input");
+    const tileEl = document.createElement("div");
+    tileEl.setAttribute("data-tab-instance-id", "tile-current");
+    tileEl.setAttribute("data-selected", "true");
+    tileEl.tabIndex = -1;
+    paneEl.appendChild(renameInputEl);
+    paneEl.appendChild(tileEl);
+    document.body.appendChild(paneEl);
+
+    try {
+      const hook = renderHook(
+        (intent: EpicRouteFocusIntent) => useEpicRouteSynchronization(intent),
+        {
+          initialProps: {
+            epicId: EPIC_ID,
+            tabId: TAB_ID,
+            focusedAt: undefined,
+            focusArtifactId: undefined,
+            focusThreadId: undefined,
+            focusPaneId: "pane-current",
+            focusTileInstanceId: "tile-current",
+          },
+        },
+      );
+
+      // Tab was activated earlier: its focus restore has already run once.
+      await waitFor(() => {
+        expect(document.activeElement).toBe(tileEl);
+      });
+
+      // The user opens the tab's rename input and commits. Focus is in the
+      // strip input (not the tile) and the commit mutates the canvas.
+      renameInputEl.focus();
+      expect(document.activeElement).toBe(renameInputEl);
+
+      testState.canvasTiles = {
+        "tile-current": specTile("artifact-current", "tile-current", "Renamed"),
+      };
+      hook.rerender({
+        epicId: EPIC_ID,
+        tabId: TAB_ID,
+        focusedAt: undefined,
+        focusArtifactId: undefined,
+        focusThreadId: undefined,
+        focusPaneId: "pane-current",
+        focusTileInstanceId: "tile-current",
+      });
+      await flushFocusRestore();
+
+      // The rename did not change the focus target, so the restore must not
+      // fire and stamp the stray selection ring onto the tile.
+      expect(document.activeElement).toBe(renameInputEl);
+    } finally {
+      paneEl.remove();
+    }
   });
 });

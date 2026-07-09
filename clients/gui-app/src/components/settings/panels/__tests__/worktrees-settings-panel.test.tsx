@@ -4,11 +4,17 @@ import {
   cleanup,
   fireEvent,
   render,
+  renderHook,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import type { WorktreeDeleteStreamCallbacks } from "@traycer-clients/shared/host-transport/worktree-delete-stream-client";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -19,6 +25,8 @@ import {
   type HostStreamRpcRegistry,
 } from "@traycer/protocol/host/registry";
 import { WorktreesList } from "@/components/settings/panels/worktrees-settings-panel";
+import { useWorktreeListing } from "@/components/settings/panels/worktrees-listing-query";
+import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { __resetWorktreeDeleteRunForTests } from "@/components/settings/panels/use-worktree-delete-run";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { WORKTREE_BINDING_INVALIDATIONS } from "@/hooks/worktree/invalidations";
@@ -54,6 +62,29 @@ vi.mock("sonner", () => ({
       toastMock.messages.push(message);
     },
   },
+}));
+
+const routerMock = vi.hoisted(() => ({ navigate: vi.fn() }));
+vi.mock("@tanstack/react-router", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@tanstack/react-router")>()),
+  useNavigate: () => routerMock.navigate,
+}));
+
+const tabNavigationMock = vi.hoisted(() => ({
+  navigateToTabIntent: vi.fn(),
+  openOrFocusEpicIntent: vi.fn(
+    (input: { readonly epicId: string; readonly focus: unknown }) => ({
+      kind: "epic",
+      epicId: input.epicId,
+      tabId: `tab-${input.epicId}`,
+      focus: input.focus,
+    }),
+  ),
+}));
+vi.mock("@/lib/tab-navigation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/tab-navigation")>()),
+  navigateToTabIntent: tabNavigationMock.navigateToTabIntent,
+  openOrFocusEpicIntent: tabNavigationMock.openOrFocusEpicIntent,
 }));
 
 // Render the Radix dropdown menus inline + always-open so tests can assert /
@@ -346,6 +377,139 @@ function toolbarButtonLabels(): string[] {
       return button.getAttribute("aria-label") ?? button.textContent.trim();
     });
 }
+
+describe("useWorktreeListing", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("accumulates finite base-list pages", async () => {
+    const first = entry({ worktreePath: "/wt/a", branch: "feat-a" });
+    const second = entry({ worktreePath: "/wt/b", branch: "feat-b" });
+    const requests: Array<{
+      readonly cursor: string | null;
+      readonly limit: number | null;
+      readonly activityPaths: readonly string[] | null;
+      readonly includeActivity: boolean;
+    }> = [];
+    const client = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: { invalidateHostScope: () => undefined },
+      messenger: new MockHostMessenger<HostRpcRegistry>({
+        registry: hostRpcRegistry,
+        requestId: () => "req-1",
+        handlers: {
+          "worktree.listAllForHost": (params) => {
+            requests.push(params);
+            if (params.cursor === null) {
+              return { worktrees: [first], nextCursor: first.worktreePath };
+            }
+            return { worktrees: [second], nextCursor: null };
+          },
+        },
+      }),
+    });
+    client.bind(mockLocalHostEntry);
+    client.setRequestContext(
+      createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+    );
+    const queryClient = new QueryClient();
+    const wrapper = (props: { readonly children: ReactNode }): ReactNode => (
+      <QueryClientProvider client={queryClient}>
+        {props.children}
+      </QueryClientProvider>
+    );
+
+    const { result } = renderHook(() => useWorktreeListing(client, true), {
+      wrapper,
+    });
+
+    await waitFor(() => {
+      expect(result.current.worktrees.map((item) => item.worktreePath)).toEqual(
+        ["/wt/a", "/wt/b"],
+      );
+    });
+    expect(requests).toEqual([
+      {
+        includeActivity: false,
+        activityPaths: null,
+        cursor: null,
+        limit: 32,
+      },
+      {
+        includeActivity: false,
+        activityPaths: null,
+        cursor: first.worktreePath,
+        limit: 32,
+      },
+    ]);
+  });
+
+  it("flags a truncated list as partial instead of hiding the failed page", async () => {
+    const first = entry({ worktreePath: "/wt/a", branch: "feat-a" });
+    let firstPageCalls = 0;
+    let secondPageCalls = 0;
+    const client = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: { invalidateHostScope: () => undefined },
+      messenger: new MockHostMessenger<HostRpcRegistry>({
+        registry: hostRpcRegistry,
+        requestId: () => "req-1",
+        handlers: {
+          "worktree.listAllForHost": (params) => {
+            if (params.cursor === null) {
+              firstPageCalls += 1;
+              return { worktrees: [first], nextCursor: first.worktreePath };
+            }
+            secondPageCalls += 1;
+            throw new Error("host unreachable");
+          },
+        },
+      }),
+    });
+    client.bind(mockLocalHostEntry);
+    client.setRequestContext(
+      createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+    );
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const wrapper = (props: { readonly children: ReactNode }): ReactNode => (
+      <QueryClientProvider client={queryClient}>
+        {props.children}
+      </QueryClientProvider>
+    );
+
+    const { result } = renderHook(() => useWorktreeListing(client, true), {
+      wrapper,
+    });
+
+    await waitFor(() => {
+      expect(secondPageCalls).toBeGreaterThan(0);
+    });
+    await waitFor(() => {
+      expect(result.current.isPartial).toBe(true);
+    });
+    // The earlier page's data survives - a truncated list is still useful,
+    // and must never be reported as `isError`/`isEmpty` (both would hide it).
+    expect(result.current.worktrees.map((item) => item.worktreePath)).toEqual([
+      "/wt/a",
+    ]);
+    expect(result.current.isError).toBe(false);
+    expect(result.current.isEmpty).toBe(false);
+    expect(result.current.errorMessage).not.toBeNull();
+
+    const firstPageCallsBeforeRetry = firstPageCalls;
+    const secondPageCallsBeforeRetry = secondPageCalls;
+    await act(async () => {
+      await result.current.retryPartial();
+    });
+    // Retrying resumes only the failed page - the already-landed first page
+    // must not be re-requested.
+    expect(firstPageCalls).toBe(firstPageCallsBeforeRetry);
+    expect(secondPageCalls).toBe(secondPageCallsBeforeRetry + 1);
+  });
+});
 
 describe("WorktreesList delete flow", () => {
   afterEach(() => {
@@ -1469,7 +1633,7 @@ describe("WorktreesList confirm-time re-check", () => {
     expect(toastMock.messages.join("\n")).toContain("1 in use");
   });
 
-  it("filter → Merged then select-all picks only the Merged rows (fast path)", () => {
+  it("filter → Landed then select-all picks only the Landed rows (fast path)", () => {
     render(
       renderWith(new QueryClient(), [
         merged("/wt/merged", "feat-merged"),
@@ -1483,13 +1647,13 @@ describe("WorktreesList confirm-time re-check", () => {
 
     // Both rows visible initially; select-all would take both.
     screen.getByRole("button", { name: "Delete worktree feat-unref" });
-    // Narrow to the Merged tier via the standard status filter.
+    // Narrow to the Landed tier via the standard status filter.
     fireEvent.click(screen.getByTestId("worktrees-filter-merged"));
     expect(
       screen.queryByRole("button", { name: "Delete worktree feat-unref" }),
     ).toBeNull();
 
-    // Standard select-all now acts only on the visible (Merged) row.
+    // Standard select-all now acts only on the visible (Landed) row.
     fireEvent.click(screen.getByTestId("worktrees-select-all"));
     expect(screen.getByText("1 selected")).not.toBeNull();
     fireEvent.click(screen.getByTestId("worktrees-list-delete-selected"));
@@ -1501,7 +1665,7 @@ describe("WorktreesList confirm-time re-check", () => {
     return entry({ worktreePath: path, branch, atBaseCommit: true });
   }
 
-  it("status filter is multi-select: Merged + At base commit shows their union", () => {
+  it("status filter is multi-select: Landed + At base commit shows their union", () => {
     render(
       renderWith(new QueryClient(), [
         merged("/wt/merged", "feat-merged"),
@@ -1522,7 +1686,7 @@ describe("WorktreesList confirm-time re-check", () => {
     fireEvent.click(screen.getByTestId("worktrees-filter-merged"));
     fireEvent.click(screen.getByTestId("worktrees-filter-at-base-commit"));
 
-    // Union of Merged + At base commit: the review row is filtered out, the two
+    // Union of Landed + At base commit: the review row is filtered out, the two
     // green rows remain.
     expect(
       screen.queryByRole("button", { name: "Delete worktree feat-review" }),
@@ -1569,18 +1733,18 @@ describe("WorktreesList confirm-time re-check", () => {
       renderWith(queryClient, [merged("/wt/merged", "feat-merged"), reviewRow]),
     );
 
-    // Filter to Merged only - the review row hides and the toolbar reads Merged.
+    // Filter to Landed only - the review row hides and the toolbar reads Landed.
     fireEvent.click(screen.getByTestId("worktrees-filter-trigger"));
     fireEvent.click(screen.getByTestId("worktrees-filter-merged"));
     expect(
       screen.queryByRole("button", { name: "Delete worktree feat-review" }),
     ).toBeNull();
-    screen.getByRole("button", { name: "Filter: Merged" });
+    screen.getByRole("button", { name: "Filter: Landed" });
 
-    // The last Merged row is deleted out from under the filter (only review left).
+    // The last Landed row is deleted out from under the filter (only review left).
     rendered.rerender(renderWith(queryClient, [reviewRow]));
 
-    // The stale "Merged" selection is no longer available, so the effective
+    // The stale "Landed" selection is no longer available, so the effective
     // filter is empty and every row shows - matching the "All" the toolbar now
     // reads. The list must NOT dead-end to the empty state.
     screen.getByRole("button", { name: "Delete worktree feat-review" });
@@ -1766,6 +1930,9 @@ describe("WorktreesList v1.1 signals", () => {
   afterEach(() => {
     cleanup();
     __resetWorktreeDeleteRunForTests();
+    routerMock.navigate.mockClear();
+    tabNavigationMock.navigateToTabIntent.mockClear();
+    tabNavigationMock.openOrFocusEpicIntent.mockClear();
   });
 
   it("renders a Task chip per owning epic, resolving titles from the cache", () => {
@@ -1804,11 +1971,227 @@ describe("WorktreesList v1.1 signals", () => {
       onVisiblePathsChange: undefined,
     });
 
-    // The resolved epic-1 renders a chip (the duplicate epic-1 owner collapses).
-    screen.getByText("Ship the audit");
+    // The resolved epic-1 renders a button chip (the duplicate epic-1 owner collapses).
+    screen.getByRole("button", { name: "Open Task Ship the audit" });
     // epic-2 has no cached title -> demoted muted "Owner unresolved" text, not a
     // prominent chip.
     screen.getByText("Owner unresolved");
+  });
+
+  it("opens the owning Task epic when a resolved Task chip is clicked", () => {
+    renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees: [
+        entry({
+          worktreePath: "/wt/owned",
+          branch: "feat-owned",
+          owners: [
+            {
+              epicId: "epic-1",
+              ownerKind: "chat",
+              ownerId: "chat-1",
+              updatedAt: 10,
+            },
+          ],
+        }),
+      ],
+      taskTitlesByEpicId: new Map([["epic-1", "Ship the audit"]]),
+      enrichedByPath: undefined,
+      erroredPaths: undefined,
+      onVisiblePathsChange: undefined,
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open Task Ship the audit" }),
+    );
+
+    expect(tabNavigationMock.openOrFocusEpicIntent).toHaveBeenCalledTimes(1);
+    expect(tabNavigationMock.openOrFocusEpicIntent).toHaveBeenCalledWith({
+      epicId: "epic-1",
+      focus: undefined,
+    });
+    expect(tabNavigationMock.navigateToTabIntent).toHaveBeenCalledTimes(1);
+    expect(tabNavigationMock.navigateToTabIntent).toHaveBeenCalledWith(
+      routerMock.navigate,
+      {
+        kind: "epic",
+        epicId: "epic-1",
+        tabId: "tab-epic-1",
+        focus: undefined,
+      },
+    );
+  });
+
+  it("keeps unresolved owners non-interactive", () => {
+    renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees: [
+        entry({
+          worktreePath: "/wt/owned",
+          branch: "feat-owned",
+          owners: [
+            {
+              epicId: "epic-unknown",
+              ownerKind: "chat",
+              ownerId: "chat-1",
+              updatedAt: 10,
+            },
+          ],
+        }),
+      ],
+      taskTitlesByEpicId: new Map(),
+      enrichedByPath: undefined,
+      erroredPaths: undefined,
+      onVisiblePathsChange: undefined,
+    });
+
+    screen.getByText("Owner unresolved");
+    expect(screen.queryByRole("button", { name: /Open Task/i })).toBeNull();
+  });
+
+  it("renders linked PR chips for the superproject and every displayable submodule PR", () => {
+    renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees: [
+        entry({
+          worktreePath: "/wt/prs",
+          branch: "feat-prs",
+          prState: "merged",
+          prNumber: 10,
+          prUrl: "https://github.com/acme/app/pull/10",
+          mergedHeadShaMatches: true,
+          submodules: [
+            {
+              repoIdentifier: { owner: "acme", repo: "open-sub" },
+              branch: "feat-prs",
+              prState: "open",
+              prNumber: 11,
+              prUrl: "https://github.com/acme/open-sub/pull/11",
+              mergedHeadShaMatches: false,
+              mergedIntoDefault: false,
+            },
+            {
+              repoIdentifier: { owner: "acme", repo: "closed-sub" },
+              branch: "feat-prs",
+              prState: "closed",
+              prNumber: 12,
+              prUrl: "https://github.com/acme/closed-sub/pull/12",
+              mergedHeadShaMatches: false,
+              mergedIntoDefault: false,
+            },
+            {
+              repoIdentifier: { owner: "acme", repo: "merged-sub" },
+              branch: "feat-prs",
+              prState: "merged",
+              prNumber: 13,
+              prUrl: "https://github.com/acme/merged-sub/pull/13",
+              mergedHeadShaMatches: true,
+              mergedIntoDefault: true,
+            },
+            {
+              repoIdentifier: { owner: "acme", repo: "none-sub" },
+              branch: "feat-prs",
+              prState: "none",
+              prNumber: 14,
+              prUrl: "https://github.com/acme/none-sub/pull/14",
+              mergedHeadShaMatches: false,
+              mergedIntoDefault: false,
+            },
+            {
+              repoIdentifier: { owner: "acme", repo: "cold-sub" },
+              branch: "feat-prs",
+              prState: null,
+              prNumber: 15,
+              prUrl: "https://github.com/acme/cold-sub/pull/15",
+              mergedHeadShaMatches: false,
+              mergedIntoDefault: false,
+            },
+          ],
+        }),
+      ],
+      taskTitlesByEpicId: undefined,
+      enrichedByPath: undefined,
+      erroredPaths: undefined,
+      onVisiblePathsChange: undefined,
+    });
+
+    const prChips = screen.getAllByTestId("worktree-pr-chip");
+    expect(prChips.map((chip) => chip.getAttribute("data-pr-state"))).toEqual([
+      "merged",
+      "open",
+      "closed",
+      "merged",
+      "unmerged",
+    ]);
+    expect(prChips[0]?.className).toContain("text-purple-700");
+    expect(prChips[1]?.className).toContain("text-green-700");
+    expect(prChips[2]?.className).toContain("text-red-700");
+    expect(prChips[4]?.className).toContain("text-muted-foreground");
+    expect(
+      screen
+        .getByRole("link", { name: "Open PR #10 Merged" })
+        .getAttribute("href"),
+    ).toBe("https://github.com/acme/app/pull/10");
+    expect(
+      screen
+        .getByRole("link", { name: "Open open-sub PR #11 Open" })
+        .getAttribute("href"),
+    ).toBe("https://github.com/acme/open-sub/pull/11");
+    expect(
+      screen
+        .getByRole("link", { name: "Open closed-sub PR #12 Closed" })
+        .getAttribute("href"),
+    ).toBe("https://github.com/acme/closed-sub/pull/12");
+    expect(
+      screen
+        .getByRole("link", { name: "Open merged-sub PR #13 Merged" })
+        .getAttribute("href"),
+    ).toBe("https://github.com/acme/merged-sub/pull/13");
+    expect(
+      screen.queryByRole("link", { name: "Open none-sub PR #14" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("link", { name: "Open cold-sub PR #15" }),
+    ).toBeNull();
+    screen.getByText("none-sub · unmerged");
+  });
+
+  it("hides PR facts from the row facts line now that chips carry the links", () => {
+    renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees: [
+        entry({
+          worktreePath: "/wt/submodule-open",
+          branch: "feat-submodule-open",
+          submodules: [
+            {
+              repoIdentifier: { owner: "acme", repo: "sub" },
+              branch: "feat-submodule-open",
+              prState: "open",
+              prNumber: 22,
+              prUrl: "https://github.com/acme/sub/pull/22",
+              mergedHeadShaMatches: false,
+              mergedIntoDefault: false,
+            },
+          ],
+        }),
+      ],
+      taskTitlesByEpicId: undefined,
+      enrichedByPath: undefined,
+      erroredPaths: undefined,
+      onVisiblePathsChange: undefined,
+    });
+
+    expect(screen.queryByText("submodule acme/sub PR #22 open")).toBeNull();
+    expect(
+      screen
+        .getByRole("link", { name: "Open sub PR #22 Open" })
+        .getAttribute("href"),
+    ).toBe("https://github.com/acme/sub/pull/22");
   });
 
   it("labels a worktree with no owners as not used by any Task", () => {
@@ -1824,7 +2207,7 @@ describe("WorktreesList v1.1 signals", () => {
     screen.getByText("Not used by any Task");
   });
 
-  it("leads merged rows with a green Merged pill and shows ahead/behind facts", () => {
+  it("leads landed rows with a green Landed pill and shows ahead/behind facts", () => {
     renderList({
       hostId: "host-a",
       queryClient: new QueryClient(),
@@ -1845,13 +2228,18 @@ describe("WorktreesList v1.1 signals", () => {
       onVisiblePathsChange: undefined,
       taskTitlesByEpicId: undefined,
     });
-    // The merged row carries the proven-green "Merged" tier pill; the ahead/
+    // The merged row carries the proven-green "Landed" tier pill; the ahead/
     // unmerged row is amber Review, with the counts in its facts line.
     const tiers = screen
       .getAllByTestId("worktree-tier-pill")
       .map((pill) => pill.getAttribute("data-tier"));
     expect(tiers).toContain("merged");
     expect(tiers).toContain("review");
+    expect(
+      screen
+        .getAllByTestId("worktree-tier-pill")
+        .some((pill) => pill.textContent === "Landed"),
+    ).toBe(true);
     screen.getByText("2 ahead · 3 behind");
   });
 
@@ -2101,7 +2489,7 @@ describe("WorktreesList v1.1 signals", () => {
     ]);
   });
 
-  it("keeps distinct labels for all three green tiers: Merged, At base commit, Unreferenced", () => {
+  it("keeps distinct labels for all three green tiers: Landed, At base commit, Unreferenced", () => {
     renderList({
       hostId: "host-a",
       queryClient: new QueryClient(),
@@ -2136,7 +2524,7 @@ describe("WorktreesList v1.1 signals", () => {
     // Scoped to the pills themselves - the (always-open, per test mock) tier
     // filter menu also lists these same three labels as menu items.
     const labels = pills.map((pill) => pill.textContent);
-    expect(labels).toContain("Merged");
+    expect(labels).toContain("Landed");
     expect(labels).toContain("At base commit");
     expect(labels).toContain("Unreferenced");
   });
@@ -2462,7 +2850,7 @@ describe("WorktreesList virtualization + per-viewport enrichment", () => {
   });
 
   it("keeps a still-pending row under an active tier filter (no dead-end)", () => {
-    // One enriched Merged row + one still-pending row. Filtering to Merged must
+    // One enriched Landed row + one still-pending row. Filtering to Landed must
     // keep the pending row visible (its tier is unknown, so it can't be excluded
     // yet) so it can enrich, instead of dead-ending the filtered view to empty.
     const mergedRow = entry({
@@ -2485,10 +2873,10 @@ describe("WorktreesList virtualization + per-viewport enrichment", () => {
       }),
     );
 
-    // Merged is the only known tier, so it is the only filter option offered.
+    // Landed is the only known tier, so it is the only filter option offered.
     fireEvent.click(screen.getByTestId("worktrees-filter-merged"));
 
-    // The enriched Merged row stays; the still-pending row is KEPT (shown as
+    // The enriched Landed row stays; the still-pending row is KEPT (shown as
     // "Checking…"), not dropped - its delete affordance is disabled, not absent.
     screen.getByRole("button", { name: "Delete worktree feat-merged" });
     screen.getByRole("button", {

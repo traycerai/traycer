@@ -113,6 +113,7 @@ export interface PlatformBridgeSurface {
   };
   windowEx: {
     setOverlayIcon(image: string | null, description: string): Promise<void>;
+    setTitleBarOverlay(color: string, symbolColor: string): Promise<void>;
   };
 }
 
@@ -310,6 +311,12 @@ export function buildPlatformBridge(): PlatformBridgeSurface {
           RunnerHostInvoke.windowSetOverlayIcon,
           image,
           description,
+        ) as Promise<void>,
+      setTitleBarOverlay: (color, symbolColor) =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.windowSetTitleBarOverlay,
+          color,
+          symbolColor,
         ) as Promise<void>,
     },
   };

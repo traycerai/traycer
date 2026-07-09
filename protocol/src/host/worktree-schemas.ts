@@ -756,6 +756,16 @@ export type WorktreeHostEntryV11 = z.infer<typeof worktreeHostEntrySchemaV11>;
  * these git probes (`lastActivityAt`, `branchStatus`); `owners` and `createdAt`
  * are cheap and returned either way.
  *
+ * The request has two mutually-exclusive modes:
+ *  - Paged listing mode (`activityPaths: null`): `cursor` and `limit` apply.
+ *    The cursor is a `worktreePath`; the host returns entries strictly after it
+ *    in stable path-lexicographic order. `limit: null` preserves the v1.0
+ *    bridge's full-list posture, but only without activity probes: no request
+ *    can buy an unbounded probe pass.
+ *  - Selection mode (`activityPaths: [<worktreePath>, ...]`): probes are
+ *    bounded by the array itself, so `cursor` and `limit` must both be `null`
+ *    and the response's `nextCursor` is `null`.
+ *
  * `activityPaths` selects between two response modes, so the GUI can render the
  * base list instantly and then lazily enrich only the rows scrolled into view
  * instead of paying the whole-list probe cost up front:
@@ -768,22 +778,56 @@ export type WorktreeHostEntryV11 = z.infer<typeof worktreeHostEntrySchemaV11>;
  *    `[]` to enrich nothing (returns no worktrees).
  */
 export const worktreeListAllForHostRequestSchemaV11 =
-  worktreeListAllForHostRequestSchema.extend({
-    includeActivity: z.boolean(),
-    activityPaths: z.array(z.string()).nullable(),
-  });
+  worktreeListAllForHostRequestSchema
+    .extend({
+      includeActivity: z.boolean(),
+      activityPaths: z.array(z.string()).nullable(),
+      cursor: z.string().nullable(),
+      // A page size is a count: reject 0, negatives, and fractions. `null` still
+      // means "no limit" (the v1.0 full-list posture, allowed only without probes).
+      limit: z.number().int().positive().nullable(),
+    })
+    .superRefine((request, context) => {
+      if (request.activityPaths === null) {
+        if (request.includeActivity && request.limit === null) {
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            message:
+              "includeActivity requires a finite limit in paged listing mode",
+            path: ["limit"],
+          });
+        }
+        return;
+      }
+
+      if (request.cursor !== null) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "selection mode requires cursor to be null",
+          path: ["cursor"],
+        });
+      }
+
+      if (request.limit !== null) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "selection mode requires limit to be null",
+          path: ["limit"],
+        });
+      }
+    });
 export type WorktreeListAllForHostRequestV11 = z.infer<
   typeof worktreeListAllForHostRequestSchemaV11
 >;
 
 /**
  * `worktree.listAllForHost` v1.1 response. Same `worktrees` field, enriched
- * entry shape ({@link worktreeHostEntrySchemaV11}). Bridging down to a v1.0
- * host yields the v1.0 entries with the new fields defaulted (empty `owners`,
- * `null` timestamps / `branchStatus`).
+ * entry shape ({@link worktreeHostEntrySchemaV11}), plus `nextCursor` for the
+ * caller to continue when more entries remain.
  */
 export const worktreeListAllForHostResponseSchemaV11 = z.object({
   worktrees: z.array(worktreeHostEntrySchemaV11),
+  nextCursor: z.string().nullable(),
 });
 export type WorktreeListAllForHostResponseV11 = z.infer<
   typeof worktreeListAllForHostResponseSchemaV11
