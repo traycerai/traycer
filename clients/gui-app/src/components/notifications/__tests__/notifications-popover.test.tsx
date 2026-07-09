@@ -271,7 +271,7 @@ describe("NotificationsPopover click routing", () => {
     );
     const unreadRows =
       within(unreadContent).getAllByTestId("notification-entry");
-    expect(notificationIds(unreadRows)).toEqual(["unread-new"]);
+    expect(notificationIds(unreadRows)).toEqual(["global:unread-new"]);
     const unreadRow = unreadRows[0];
     const unreadMarker = within(unreadRow).getByTestId(
       "notification-unread-marker",
@@ -289,7 +289,10 @@ describe("NotificationsPopover click routing", () => {
     let allRows: ReadonlyArray<HTMLElement> = [];
     await waitFor(() => {
       allRows = within(allContent).getAllByTestId("notification-entry");
-      expect(notificationIds(allRows)).toEqual(["unread-new", "read-old"]);
+      expect(notificationIds(allRows)).toEqual([
+        "global:unread-new",
+        "global:read-old",
+      ]);
     });
     const readRow = allRows[1];
     expect(
@@ -345,7 +348,7 @@ describe("NotificationsPopover click routing", () => {
         notificationIds(
           within(allContent).getAllByTestId("notification-entry"),
         ),
-      ).toEqual(["read-only"]);
+      ).toEqual(["global:read-only"]);
     });
   });
 

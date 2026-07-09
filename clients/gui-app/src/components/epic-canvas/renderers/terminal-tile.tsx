@@ -24,6 +24,7 @@ import { TerminalDeadTileBanner } from "./dead-tile-banner";
 import { TerminalConnectionOverlay } from "./terminal-connection-overlay";
 import { resolveTerminalOverlayState } from "./terminal-connection-overlay-state";
 import { Button } from "@/components/ui/button";
+import { emitTerminalClosedNotification } from "@/stores/notifications/app-local-notifications-store";
 
 export interface TerminalTileProps {
   readonly node: EpicTerminalRef;
@@ -51,6 +52,13 @@ export function TerminalTile(props: TerminalTileProps) {
       kind: "shell",
     });
   }, [sessionId]);
+  useEffect(() => {
+    if (reachability.status !== "unreachable") return;
+    emitTerminalClosedNotification({
+      instanceId: props.node.instanceId,
+      hostLabel: reachability.hostLabel,
+    });
+  }, [reachability.status, reachability.hostLabel, props.node.instanceId]);
   if (reachability.status === "unreachable") {
     return (
       <TerminalDeadTileBanner

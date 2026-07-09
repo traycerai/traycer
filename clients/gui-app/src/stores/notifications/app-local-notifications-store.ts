@@ -1,0 +1,299 @@
+import { useMemo } from "react";
+import { create } from "zustand";
+import { createJSONStorage, persist } from "zustand/middleware";
+import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
+import type { NotificationPayload } from "@/lib/notifications";
+import { appLocalNotificationsKey, basePersistOptions } from "@/lib/persist";
+
+export const APP_LOCAL_NOTIFICATIONS_ROW_CAP = 200;
+
+export type AppLocalNotificationKind =
+  | "terminal.closed"
+  | "worktree.setup.failed"
+  | "stream.transport.error"
+  | "host.error";
+
+export interface AppLocalNotificationEntry {
+  readonly id: string;
+  readonly updatedAt: number;
+  readonly readAt: number | null;
+  readonly kind: AppLocalNotificationKind;
+  readonly sourceRef: string | null;
+  readonly payload: NotificationPayload | null;
+  readonly message: string;
+  readonly detail: string | null;
+}
+
+interface AppLocalNotificationsProjection {
+  readonly orderedIds: ReadonlyArray<string>;
+  readonly unreadCount: number;
+}
+
+export interface AppLocalNotificationsState {
+  readonly activeUserId: string | null;
+  readonly byId: Readonly<Record<string, AppLocalNotificationEntry>>;
+  readonly orderedIds: ReadonlyArray<string>;
+  readonly unreadCount: number;
+
+  activateIdentity: (userId: string) => void;
+  deactivateIdentity: () => void;
+  upsert: (entry: AppLocalNotificationEntry) => void;
+  markAsRead: (id: string, readAt: number) => void;
+  markAllAsRead: (readAt: number) => void;
+  clearAll: () => void;
+  resetForTests: () => void;
+}
+
+function appLocalInitialState(): Pick<
+  AppLocalNotificationsState,
+  "activeUserId" | "byId" | "orderedIds" | "unreadCount"
+> {
+  return {
+    activeUserId: null,
+    byId: {},
+    orderedIds: [],
+    unreadCount: 0,
+  };
+}
+
+function projectAppLocalNotifications(
+  byId: Readonly<Record<string, AppLocalNotificationEntry>>,
+): AppLocalNotificationsProjection {
+  const entries = Object.values(byId);
+  entries.sort(compareAppLocalNotificationEntries);
+  return {
+    orderedIds: entries.map((entry) => entry.id),
+    unreadCount: entries.filter((entry) => entry.readAt === null).length,
+  };
+}
+
+export function compareAppLocalNotificationEntries(
+  a: AppLocalNotificationEntry,
+  b: AppLocalNotificationEntry,
+): number {
+  const updatedAtDelta = b.updatedAt - a.updatedAt;
+  if (updatedAtDelta !== 0) return updatedAtDelta;
+  return b.id.localeCompare(a.id);
+}
+
+function cappedAppLocalEntries(
+  byId: Readonly<Record<string, AppLocalNotificationEntry>>,
+): Readonly<Record<string, AppLocalNotificationEntry>> {
+  const entries = Object.values(byId).sort(compareAppLocalNotificationEntries);
+  if (entries.length <= APP_LOCAL_NOTIFICATIONS_ROW_CAP) return byId;
+  return Object.fromEntries(
+    entries
+      .slice(0, APP_LOCAL_NOTIFICATIONS_ROW_CAP)
+      .map((entry) => [entry.id, entry]),
+  );
+}
+
+export function createAppLocalNotificationsStore(initialName: string) {
+  return create<AppLocalNotificationsState>()(
+    persist(
+      (set, get) => ({
+        ...appLocalInitialState(),
+
+        activateIdentity: (userId) => {
+          set({ activeUserId: userId });
+        },
+
+        deactivateIdentity: () => {
+          set(appLocalInitialState());
+        },
+
+        upsert: (entry) => {
+          if (get().activeUserId === null) return;
+          if (Object.hasOwn(get().byId, entry.id)) return;
+          set((state) => {
+            const byId = cappedAppLocalEntries({
+              ...state.byId,
+              [entry.id]: entry,
+            });
+            const projection = projectAppLocalNotifications(byId);
+            return {
+              byId,
+              orderedIds: projection.orderedIds,
+              unreadCount: projection.unreadCount,
+            };
+          });
+        },
+
+        markAsRead: (id, readAt) => {
+          if (get().activeUserId === null) return;
+          set((state) => {
+            if (!Object.hasOwn(state.byId, id)) return state;
+            const entry = state.byId[id];
+            if (entry.readAt !== null) return state;
+            const byId = { ...state.byId, [id]: { ...entry, readAt } };
+            const projection = projectAppLocalNotifications(byId);
+            return {
+              byId,
+              orderedIds: projection.orderedIds,
+              unreadCount: projection.unreadCount,
+            };
+          });
+        },
+
+        markAllAsRead: (readAt) => {
+          if (get().activeUserId === null) return;
+          set((state) => {
+            const unreadEntries = Object.values(state.byId).filter(
+              (entry) => entry.readAt === null,
+            );
+            if (unreadEntries.length === 0) return state;
+            const byId = { ...state.byId };
+            for (const entry of unreadEntries) {
+              byId[entry.id] = { ...entry, readAt };
+            }
+            const projection = projectAppLocalNotifications(byId);
+            return {
+              byId,
+              orderedIds: projection.orderedIds,
+              unreadCount: projection.unreadCount,
+            };
+          });
+        },
+
+        clearAll: () => {
+          if (get().activeUserId === null) return;
+          set({ byId: {}, orderedIds: [], unreadCount: 0 });
+        },
+
+        resetForTests: () => {
+          set(appLocalInitialState());
+        },
+      }),
+      {
+        ...basePersistOptions(initialName),
+        storage: createJSONStorage(() => window.localStorage),
+        partialize: (state) => ({
+          byId: state.byId,
+          orderedIds: state.orderedIds,
+          unreadCount: state.unreadCount,
+        }),
+      },
+    ),
+  );
+}
+
+export const useAppLocalNotificationsStore = createAppLocalNotificationsStore(
+  appLocalNotificationsKey(null),
+);
+
+export function emitTerminalClosedNotification(input: {
+  readonly instanceId: string;
+  readonly hostLabel: string;
+}): void {
+  const message = `Terminal closed: host "${input.hostLabel}" is unreachable.`;
+  useAppLocalNotificationsStore.getState().upsert({
+    id: `terminal.closed:${input.instanceId}`,
+    updatedAt: Date.now(),
+    readAt: null,
+    kind: "terminal.closed",
+    sourceRef: input.instanceId,
+    payload: null,
+    message,
+    detail: "The terminal is bound to that host and cannot migrate.",
+  });
+}
+
+export function emitWorktreeSetupFailedNotification(input: {
+  readonly eventId: string;
+  readonly epicId: string;
+  readonly chatId: string;
+}): void {
+  useAppLocalNotificationsStore.getState().upsert({
+    id: `worktree.setup.failed:${input.eventId}`,
+    updatedAt: Date.now(),
+    readAt: null,
+    kind: "worktree.setup.failed",
+    sourceRef: input.eventId,
+    payload: {
+      kind: "chat",
+      epicId: input.epicId,
+      chatId: input.chatId,
+    },
+    message: "Worktree setup failed before the first message could run.",
+    detail: null,
+  });
+}
+
+export function emitChatStreamErrorNotification(input: {
+  readonly epicId: string;
+  readonly chatId: string;
+  readonly details: FatalErrorDetails;
+}): void {
+  useAppLocalNotificationsStore.getState().upsert({
+    id: `stream.transport.error:${input.chatId}:${input.details.code}`,
+    updatedAt: Date.now(),
+    readAt: null,
+    kind: "stream.transport.error",
+    sourceRef: input.chatId,
+    payload: {
+      kind: "chat",
+      epicId: input.epicId,
+      chatId: input.chatId,
+    },
+    message: "Chat stream closed unexpectedly.",
+    detail: input.details.reason,
+  });
+}
+
+export function emitHostErrorNotification(input: {
+  readonly id: string;
+  readonly message: string;
+  readonly detail: string | null;
+  readonly payload: NotificationPayload | null;
+}): void {
+  useAppLocalNotificationsStore.getState().upsert({
+    id: `host.error:${input.id}`,
+    updatedAt: Date.now(),
+    readAt: null,
+    kind: "host.error",
+    sourceRef: input.id,
+    payload: input.payload,
+    message: input.message,
+    detail: input.detail,
+  });
+}
+
+export function selectAppLocalNotificationIds(
+  state: AppLocalNotificationsState,
+): ReadonlyArray<string> {
+  return state.orderedIds;
+}
+
+export function selectAppLocalNotificationUnreadCount(
+  state: AppLocalNotificationsState,
+): number {
+  return state.unreadCount;
+}
+
+export function makeSelectAppLocalNotificationById(id: string) {
+  return (
+    state: AppLocalNotificationsState,
+  ): AppLocalNotificationEntry | null => state.byId[id] ?? null;
+}
+
+export function useAppLocalNotificationIds(): ReadonlyArray<string> {
+  return useAppLocalNotificationsStore(selectAppLocalNotificationIds);
+}
+
+export function useAppLocalNotificationUnreadCount(): number {
+  return useAppLocalNotificationsStore(selectAppLocalNotificationUnreadCount);
+}
+
+export function useAppLocalNotificationById(
+  id: string,
+): AppLocalNotificationEntry | null {
+  const selector = useMemo(() => makeSelectAppLocalNotificationById(id), [id]);
+  return useAppLocalNotificationsStore(selector);
+}
+
+export function __resetAppLocalNotificationsStoreForTests(): void {
+  useAppLocalNotificationsStore.persist.setOptions({
+    name: appLocalNotificationsKey(null),
+  });
+  useAppLocalNotificationsStore.getState().resetForTests();
+}

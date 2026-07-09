@@ -4,6 +4,7 @@ import { useStore } from "zustand";
 import { selectRestorableSetupInterruption } from "@/stores/chats/chat-session-selectors";
 import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
+import { emitWorktreeSetupFailedNotification } from "@/stores/notifications/app-local-notifications-store";
 
 /**
  * Drives the "restore-to-composer" half of Flow 8 for chats.
@@ -96,7 +97,20 @@ export function useChatSetupFailureRestoreDriver(
       (interruption.workspacePath === null ||
         interruption.workspacePath.length === 0)
     ) {
+      emitWorktreeSetupFailedNotification({
+        eventId,
+        epicId: handle.epicId,
+        chatId: handle.chatId,
+      });
       toast.error("Setup failed before the first message could run.");
     }
-  }, [dedupe, interruption, handle.store, nodeId, replaceDraft]);
+  }, [
+    dedupe,
+    interruption,
+    handle.chatId,
+    handle.epicId,
+    handle.store,
+    nodeId,
+    replaceDraft,
+  ]);
 }

@@ -1,5 +1,6 @@
 import { toast } from "sonner";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { emitHostErrorNotification } from "@/stores/notifications/app-local-notifications-store";
 
 /**
  * Maps a HostRpcError to the appropriate toast copy mandated by the
@@ -12,14 +13,18 @@ export function toastFromHostError(
   error: HostRpcError,
   fallback: string,
 ): void {
-  toast.error(hostErrorToastMessage(error, fallback));
+  const message = hostErrorToastMessage(error, fallback);
+  emitHostFatalErrorNotification(error, message);
+  toast.error(message);
 }
 
 export function toastFromHostErrorWithDetail(
   error: HostRpcError,
   fallback: string,
 ): void {
-  toast.error(hostErrorToastMessageWithDetail(error, fallback));
+  const message = hostErrorToastMessageWithDetail(error, fallback);
+  emitHostFatalErrorNotification(error, message);
+  toast.error(message);
 }
 
 function hostErrorToastMessage(error: HostRpcError, fallback: string) {
@@ -77,4 +82,17 @@ function isLastOwnerRevokeError(message: string): boolean {
     normalized.includes("cannot revoke the only owner") ||
     normalized.includes("can't revoke the only owner")
   );
+}
+
+function emitHostFatalErrorNotification(
+  error: HostRpcError,
+  message: string,
+): void {
+  if (error.fatalDetails === null) return;
+  emitHostErrorNotification({
+    id: `${error.method}:${error.requestId}`,
+    message,
+    detail: error.fatalDetails.reason,
+    payload: null,
+  });
 }

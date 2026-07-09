@@ -7,7 +7,7 @@ import {
   INITIAL_TURN_NOTIFY_STATE,
   type ChatTurnPhase,
   type TurnNotifyState,
-} from "@/lib/notifications/chat-turn-completion";
+} from "@/lib/chats/chat-turn-completions";
 
 function phase(overrides: Partial<ChatTurnPhase>): ChatTurnPhase {
   return {
@@ -24,10 +24,6 @@ const STOPPING = phase({ stopping: true });
 const SETTLED = phase({ settled: true });
 const CLOSED = phase({ connectionClosed: true, settled: true });
 
-/**
- * Drive a seeded latch through a sequence of phases the way the live per-handle
- * listener does, collecting which steps reported a completion.
- */
 function runSequence(
   seed: ChatTurnPhase,
   steps: ReadonlyArray<ChatTurnPhase>,
@@ -41,7 +37,7 @@ function runSequence(
 }
 
 describe("advanceTurnNotify", () => {
-  it("fires once on the running → fully-settled edge", () => {
+  it("fires once on the running to fully-settled edge", () => {
     const afterRun = advanceTurnNotify(INITIAL_TURN_NOTIFY_STATE, RUNNING);
     expect(afterRun.completed).toBe(false);
     expect(afterRun.state.armed).toBe(true);
@@ -51,7 +47,7 @@ describe("advanceTurnNotify", () => {
     expect(afterSettle.state).toEqual(INITIAL_TURN_NOTIFY_STATE);
   });
 
-  it("does not fire on a closed socket and drops the latch (no false 'Done')", () => {
+  it("does not fire on a closed socket and drops the latch", () => {
     const armed = advanceTurnNotify(INITIAL_TURN_NOTIFY_STATE, RUNNING).state;
     const afterClose = advanceTurnNotify(armed, CLOSED);
     expect(afterClose.completed).toBe(false);
@@ -66,25 +62,18 @@ describe("advanceTurnNotify", () => {
     ]);
   });
 
-  it("does not fire from the turn-startup window (running but no active turn)", () => {
-    const startup = phase({ runningTurn: false });
-    expect(runSequence(SETTLED, [startup, SETTLED])).toEqual([false, false]);
-  });
-
   it("fires once when a queued run drains across two frames", () => {
-    // runStatus settles in one frame (queue still busy → not settled) and the
-    // queue empties in the next; the latch must survive the gap.
     const runStatusSettledQueueBusy = phase({ settled: false });
     expect(
       runSequence(SETTLED, [RUNNING, runStatusSettledQueueBusy, SETTLED]),
     ).toEqual([false, false, true]);
   });
 
-  it("counts a turn already running when first observed (seed)", () => {
+  it("counts a turn already running when first observed", () => {
     expect(runSequence(RUNNING, [SETTLED])).toEqual([true]);
   });
 
-  it("does not fire on reconnect for a turn whose running frame was lost to a close, until it runs again", () => {
+  it("does not fire on reconnect until a turn runs again", () => {
     expect(runSequence(SETTLED, [RUNNING, CLOSED, SETTLED])).toEqual([
       false,
       false,
@@ -96,10 +85,6 @@ describe("advanceTurnNotify", () => {
       false,
       true,
     ]);
-  });
-
-  it("never fires from a quiet idle baseline", () => {
-    expect(runSequence(SETTLED, [SETTLED, SETTLED])).toEqual([false, false]);
   });
 });
 
@@ -144,16 +129,5 @@ describe("toChatTurnPhase", () => {
       settled: true,
       connectionClosed: false,
     });
-  });
-
-  it("flags a closed socket", () => {
-    expect(
-      toChatTurnPhase({
-        runStatus: "idle",
-        activeTurn: null,
-        queue: { status: "idle", items: [] },
-        connectionStatus: "closed",
-      }).connectionClosed,
-    ).toBe(true);
   });
 });

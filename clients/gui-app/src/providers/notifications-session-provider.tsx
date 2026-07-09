@@ -5,6 +5,10 @@ import {
   openNotificationsStream,
   useNotificationsStore,
 } from "@/stores/notifications/notifications-store";
+import {
+  openHostNotificationsStream,
+  useHostNotificationsStore,
+} from "@/stores/notifications/host-notifications-store";
 import { getNotificationsStreamFactoryOverride } from "@/providers/notifications-stream-factory-override";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useAuthService } from "@/lib/host";
@@ -34,19 +38,25 @@ export function NotificationsSessionProvider(
   const status = useAuthStore((state) => state.status);
   const email = useAuthStore((state) => state.profile?.email ?? null);
   const disposerRef = useRef<(() => void) | null>(null);
+  const hostDisposerRef = useRef<(() => void) | null>(null);
   const previousHostIdRef = useRef<string | null>(activeHostId);
 
   const tearDown = useCallback((): void => {
-    if (disposerRef.current === null) {
-      return;
+    if (disposerRef.current !== null) {
+      const disposer = disposerRef.current;
+      disposerRef.current = null;
+      disposer();
     }
-    const disposer = disposerRef.current;
-    disposerRef.current = null;
-    disposer();
+    if (hostDisposerRef.current !== null) {
+      const disposer = hostDisposerRef.current;
+      hostDisposerRef.current = null;
+      disposer();
+    }
   }, []);
 
   const resetReplica = useCallback((): void => {
     useNotificationsStore.getState().reset();
+    useHostNotificationsStore.getState().reset();
   }, []);
 
   const openForCurrentUser = useCallback((): void => {
@@ -78,6 +88,16 @@ export function NotificationsSessionProvider(
         callbacks,
       });
     }, onAuthError);
+    if (
+      hostDisposerRef.current === null &&
+      getNotificationsStreamFactoryOverride() === null &&
+      wsStreamClient !== null
+    ) {
+      hostDisposerRef.current = openHostNotificationsStream(
+        wsStreamClient,
+        onAuthError,
+      );
+    }
   }, [wsStreamClient, authService]);
 
   // Auth identity transitions own the replica-reset responsibility: sign-out

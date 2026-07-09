@@ -11,7 +11,7 @@ import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
 const sub = vi.hoisted(() => ({
   handler: null as null | ((completion: { harnessId: GuiHarnessId }) => void),
 }));
-vi.mock("@/lib/notifications/chat-turn-completion", () => ({
+vi.mock("@/lib/chats/chat-turn-completions", () => ({
   subscribeChatTurnCompletions: (
     cb: (completion: { harnessId: GuiHarnessId }) => void,
   ) => {

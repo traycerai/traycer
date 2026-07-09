@@ -133,7 +133,13 @@ import {
   terminalSubscribeV12,
   terminalSubscribeV13,
 } from "@traycer/protocol/host/terminal/contracts";
-import { notificationsSubscribeV10 } from "@traycer/protocol/host/notifications/contracts";
+import {
+  hostNotificationsListV10,
+  hostNotificationsMarkAllReadV10,
+  hostNotificationsMarkReadV10,
+  hostNotificationsSubscribeV10,
+  notificationsSubscribeV10,
+} from "@traycer/protocol/host/notifications/contracts";
 import { resourcesSubscribeV10 } from "@traycer/protocol/host/resources/subscribe";
 import {
   speechEnsureModelV10,
@@ -1251,6 +1257,42 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
         },
       },
       downgradePathsFromLatest: { 1: hostGetRateLimitUsageDowngradeV2ToV1 },
+    },
+  },
+  "host.notifications.list": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostNotificationsListV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.notifications.markRead": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostNotificationsMarkReadV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.notifications.markAllRead": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostNotificationsMarkAllReadV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
     },
   },
   "comments.listThreads": {
@@ -2851,6 +2893,16 @@ export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
       versions: {
         0: {
           contract: notificationsSubscribeV10,
+        },
+      },
+    },
+  },
+  "host.notifications.subscribe": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostNotificationsSubscribeV10,
         },
       },
     },

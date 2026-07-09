@@ -48,6 +48,7 @@ import { TerminalLoadingSkeleton } from "./terminal-loading-skeleton";
 import { TerminalDeadTileBanner } from "./dead-tile-banner";
 import { TerminalConnectionOverlay } from "./terminal-connection-overlay";
 import { resolveTerminalOverlayState } from "./terminal-connection-overlay-state";
+import { emitTerminalClosedNotification } from "@/stores/notifications/app-local-notifications-store";
 import { Button } from "@/components/ui/button";
 import {
   Popover,
@@ -164,6 +165,13 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
       kind: "agent",
     });
   }, [sessionId]);
+  useEffect(() => {
+    if (reachability.status !== "unreachable") return;
+    emitTerminalClosedNotification({
+      instanceId: props.node.instanceId,
+      hostLabel: reachability.hostLabel,
+    });
+  }, [reachability.status, reachability.hostLabel, props.node.instanceId]);
   if (reachability.status === "unreachable") {
     return (
       <TerminalDeadTileBanner

@@ -1,9 +1,6 @@
 import { useEffect } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import {
-  parseNotificationPayload,
-  routeNotification,
-} from "@/lib/notifications";
+import { parseNotificationPayload } from "@/lib/notifications";
 import { useNotificationActivation } from "@/hooks/notifications/use-notification-activation";
 import { useNotificationEventsStore } from "@/stores/notifications/notification-events-store";
 import { useNotificationsPopoverStore } from "@/stores/notifications/notifications-popover-store";
@@ -22,10 +19,8 @@ import { useNotificationsPopoverStore } from "@/stores/notifications/notificatio
  *   - `artifact`→ then navigate to `/epics/$epicId/$tabId` with `focusArtifactId`
  *                 (and `focusThreadId` when present) when `payload.epicId`
  *                 is known
- *   - `session` / `approval` / artifact-without-epic → open only
- *
- * `chat` (local turn-completion toast) is not a feed entry, so it routes
- * straight to the chat's epic without opening the popover.
+ *   - `chat` / `approval` / `interview` → then navigate to the owning chat
+ *   - `session` / artifact-without-epic → open only
  *
  * `receivedAt` is forwarded as `focusedAt` so repeat clicks of the same
  * notification still produce a distinct navigation.
@@ -44,20 +39,18 @@ export function NotificationFocusBridge(): null {
 
     const parsed = parseNotificationPayload(notificationEvent.payload);
 
-    // Local turn-completion toasts route to the chat's epic and must not pop
-    // the in-app notifications feed (they are not feed entries).
-    if (parsed?.kind === "chat") {
-      routeNotification(navigate, parsed, notificationEvent.receivedAt);
-      return;
-    }
-
     useNotificationsPopoverStore.getState().setOpen(true);
 
     if (parsed === null) {
       return;
     }
 
-    if (parsed.kind === "epic") {
+    if (
+      parsed.kind === "epic" ||
+      parsed.kind === "chat" ||
+      parsed.kind === "approval" ||
+      parsed.kind === "interview"
+    ) {
       activate({
         payload: parsed,
         receivedAt: notificationEvent.receivedAt,
