@@ -7,7 +7,7 @@ import {
   providerRateLimitQueryOptions,
   type ProviderRateLimitTanstackOptions,
 } from "@/hooks/host/provider-rate-limit-query-options";
-import { useConfiguredRateLimitProviders } from "@/hooks/rate-limits/use-configured-rate-limit-providers";
+import { useVisibleRateLimitProviders } from "@/hooks/rate-limits/use-configured-rate-limit-providers";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
 import {
@@ -198,12 +198,12 @@ function selectGlyphBars(
  */
 export function useHeaderRateLimitBars(): ReadonlyArray<HeaderRateLimitBar> {
   const client = useHostClient();
-  const configured = useConfiguredRateLimitProviders();
-  const configuredIds = new Set(
-    configured.map((provider) => provider.providerId),
+  const displayProviders = useVisibleRateLimitProviders();
+  const displayProviderIds = new Set(
+    displayProviders.map((provider) => provider.providerId),
   );
   const glyphProviders = GLYPH_PROVIDER_IDS.filter((id) =>
-    configuredIds.has(id),
+    displayProviderIds.has(id),
   );
 
   // `useHostQueriesWithResponseMap` applies one shared `options` object to

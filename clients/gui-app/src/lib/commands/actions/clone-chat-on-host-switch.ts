@@ -5,11 +5,13 @@ import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { buildTransientHostClient } from "@/hooks/host/use-host-client-for";
 import {
   openCreatedChatWhenProjected,
+  openCreatedChatWhenProjectedWithNavigation,
   openNewChatInActiveTile,
   type CancelFn,
   type CreateChatCommand,
 } from "@/lib/commands/actions/new-chat";
 import { resolveClonedChatSettings } from "@/lib/commands/actions/resolve-cloned-chat-settings";
+import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
 
 /**
  * Clone-not-migrate flow for switching a chat tab's bound host: chat tabs
@@ -37,6 +39,7 @@ export interface CloneChatOnHostSwitchArgs {
    *  logged in there, or no matching `accountUuid`) - the clone still
    *  proceeds, landing on the ambient login instead of failing silently. */
   readonly onProfileFallbackToAmbient: () => void;
+  readonly navigateNestedFocus: NavigateNestedFocus | null;
 }
 
 export function cloneChatOnHostSwitch(
@@ -56,7 +59,13 @@ export function cloneChatOnHostSwitch(
       worktreeIntent: null,
       settings,
       createChat: args.createChat,
-      openWhenProjected: openCreatedChatWhenProjected,
+      openWhenProjected: (intent) =>
+        args.navigateNestedFocus === null
+          ? openCreatedChatWhenProjected(intent)
+          : openCreatedChatWhenProjectedWithNavigation({
+              intent,
+              navigateNestedFocus: args.navigateNestedFocus,
+            }),
     });
   });
 

@@ -51,6 +51,7 @@ import {
   type LeftPanelId,
 } from "@/stores/epics/left-panel-store";
 import { isEditableRole } from "@/lib/epic-permissions";
+import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 
 interface TabGroupViewProps {
   readonly epicId: string;
@@ -92,23 +93,38 @@ export const TabGroupView = memo(function TabGroupView(
 ) {
   const { epicId, tabId, pane } = props;
   const tabs = usePaneTabRefs(tabId, pane);
-  const setActiveTileTab = useEpicCanvasStore((s) => s.setActiveTileTab);
-  const setActiveTilePane = useEpicCanvasStore((s) => s.setActiveTilePane);
-  const closeCanvasTab = useEpicCanvasStore((s) => s.closeCanvasTab);
-  const closeCanvasPane = useEpicCanvasStore((s) => s.closeCanvasPane);
-  const closeOtherCanvasTabs = useEpicCanvasStore(
-    (s) => s.closeOtherCanvasTabs,
+  const navigateNested = useEpicNestedFocusNavigation();
+  const prepareSetActiveTileTabFocusTarget = useEpicCanvasStore(
+    (s) => s.prepareSetActiveTileTabFocusTarget,
   );
-  const closeRightCanvasTabs = useEpicCanvasStore(
-    (s) => s.closeRightCanvasTabs,
+  const prepareSetActiveTilePaneFocusTarget = useEpicCanvasStore(
+    (s) => s.prepareSetActiveTilePaneFocusTarget,
   );
-  const closeAllCanvasTabs = useEpicCanvasStore((s) => s.closeAllCanvasTabs);
+  const prepareCloseCanvasTabFocusTarget = useEpicCanvasStore(
+    (s) => s.prepareCloseCanvasTabFocusTarget,
+  );
+  const prepareCloseCanvasPaneFocusTarget = useEpicCanvasStore(
+    (s) => s.prepareCloseCanvasPaneFocusTarget,
+  );
+  const prepareCloseOtherCanvasTabsFocusTarget = useEpicCanvasStore(
+    (s) => s.prepareCloseOtherCanvasTabsFocusTarget,
+  );
+  const prepareCloseRightCanvasTabsFocusTarget = useEpicCanvasStore(
+    (s) => s.prepareCloseRightCanvasTabsFocusTarget,
+  );
+  const prepareCloseAllCanvasTabsFocusTarget = useEpicCanvasStore(
+    (s) => s.prepareCloseAllCanvasTabsFocusTarget,
+  );
   const promotePreviewInTab = useEpicCanvasStore((s) => s.promotePreviewInTab);
-  const splitPaneEmptyRightInTab = useEpicCanvasStore(
-    (s) => s.splitPaneEmptyRightInTab,
+  const prepareSplitPaneEmptyFocusTarget = useEpicCanvasStore(
+    (s) => s.prepareSplitPaneEmptyFocusTarget,
   );
-  const splitPaneWithTab = useEpicCanvasStore((s) => s.splitPaneWithTab);
-  const openBlankTabInPane = useEpicCanvasStore((s) => s.openBlankTabInPane);
+  const prepareSplitPaneWithTabFocusTarget = useEpicCanvasStore(
+    (s) => s.prepareSplitPaneWithTabFocusTarget,
+  );
+  const prepareOpenBlankTabInPaneFocusTarget = useEpicCanvasStore(
+    (s) => s.prepareOpenBlankTabInPaneFocusTarget,
+  );
   const setActivePanelIdAndExpand = useLeftPanelStore(
     (s) => s.setActivePanelIdAndExpand,
   );
@@ -131,16 +147,20 @@ export const TabGroupView = memo(function TabGroupView(
 
   const handleSelectTab = useCallback(
     (groupId: string, tileTabId: string) => {
-      setActiveTileTab(tabId, groupId, tileTabId);
+      navigateNested(epicId, tabId, () =>
+        prepareSetActiveTileTabFocusTarget(tabId, groupId, tileTabId),
+      );
     },
-    [setActiveTileTab, tabId],
+    [epicId, navigateNested, prepareSetActiveTileTabFocusTarget, tabId],
   );
 
   const handleCloseTab = useCallback(
     (groupId: string, tileTabId: string) => {
-      closeCanvasTab(tabId, groupId, tileTabId);
+      navigateNested(epicId, tabId, () =>
+        prepareCloseCanvasTabFocusTarget(tabId, groupId, tileTabId),
+      );
     },
-    [closeCanvasTab, tabId],
+    [epicId, navigateNested, prepareCloseCanvasTabFocusTarget, tabId],
   );
 
   const handlePromotePreview = useCallback(
@@ -154,28 +174,44 @@ export const TabGroupView = memo(function TabGroupView(
     (groupId: string) => {
       // The new empty pane self-renders the inline opener (PaneOpener); no
       // explicit trigger needed.
-      splitPaneEmptyRightInTab(tabId, groupId);
+      navigateNested(epicId, tabId, () =>
+        prepareSplitPaneEmptyFocusTarget(tabId, groupId, "horizontal"),
+      );
     },
-    [splitPaneEmptyRightInTab, tabId],
+    [epicId, navigateNested, prepareSplitPaneEmptyFocusTarget, tabId],
   );
 
   const handleCloseGroup = useCallback(
     (groupId: string) => {
-      closeCanvasPane(tabId, groupId);
+      navigateNested(epicId, tabId, () =>
+        prepareCloseCanvasPaneFocusTarget(tabId, groupId),
+      );
     },
-    [closeCanvasPane, tabId],
+    [epicId, navigateNested, prepareCloseCanvasPaneFocusTarget, tabId],
   );
 
   const handleOpenBlankTab = useCallback(
     (groupId: string) => {
-      openBlankTabInPane(tabId, groupId);
+      navigateNested(epicId, tabId, () =>
+        prepareOpenBlankTabInPaneFocusTarget(tabId, groupId),
+      );
     },
-    [openBlankTabInPane, tabId],
+    [epicId, navigateNested, prepareOpenBlankTabInPaneFocusTarget, tabId],
   );
 
   const activatePane = useCallback(() => {
-    if (!globallyActive) setActiveTilePane(tabId, pane.id);
-  }, [globallyActive, pane.id, setActiveTilePane, tabId]);
+    if (globallyActive) return;
+    navigateNested(epicId, tabId, () =>
+      prepareSetActiveTilePaneFocusTarget(tabId, pane.id),
+    );
+  }, [
+    epicId,
+    globallyActive,
+    navigateNested,
+    pane.id,
+    prepareSetActiveTilePaneFocusTarget,
+    tabId,
+  ]);
   const deferredPaneActivationRef = useRef(false);
   const paneRootRef = useRef<HTMLDivElement | null>(null);
 
@@ -225,14 +261,16 @@ export const TabGroupView = memo(function TabGroupView(
       const position = positionFor(axis, leading);
       const tab = tabs.find((t) => t.instanceId === tileTabId);
       if (tab === undefined) return;
-      splitPaneWithTab(tabId, {
-        sourcePaneId: groupId,
-        tabId: tileTabId,
-        targetPaneId: groupId,
-        position,
-      });
+      navigateNested(epicId, tabId, () =>
+        prepareSplitPaneWithTabFocusTarget(tabId, {
+          sourcePaneId: groupId,
+          tabId: tileTabId,
+          targetPaneId: groupId,
+          position,
+        }),
+      );
     },
-    [tabs, splitPaneWithTab, tabId],
+    [epicId, navigateNested, prepareSplitPaneWithTabFocusTarget, tabId, tabs],
   );
 
   const handleRevealInSidebar = useCallback(
@@ -282,6 +320,7 @@ export const TabGroupView = memo(function TabGroupView(
         data-testid="tab-group"
         data-group-id={pane.id}
         data-active={globallyActive ? "true" : "false"}
+        tabIndex={-1}
         className="relative flex h-full min-h-0 w-full flex-col overflow-hidden bg-canvas"
         onPointerDownCapture={handlePointerDownCapture}
         onPointerCancelCapture={handlePointerCancelCapture}
@@ -303,9 +342,17 @@ export const TabGroupView = memo(function TabGroupView(
             menuHandlers={{
               onClose: handleCloseTab,
               onCloseOthers: (gid, tid) =>
-                closeOtherCanvasTabs(tabId, gid, tid),
-              onCloseRight: (gid, tid) => closeRightCanvasTabs(tabId, gid, tid),
-              onCloseAll: (gid) => closeAllCanvasTabs(tabId, gid),
+                navigateNested(epicId, tabId, () =>
+                  prepareCloseOtherCanvasTabsFocusTarget(tabId, gid, tid),
+                ),
+              onCloseRight: (gid, tid) =>
+                navigateNested(epicId, tabId, () =>
+                  prepareCloseRightCanvasTabsFocusTarget(tabId, gid, tid),
+                ),
+              onCloseAll: (gid) =>
+                navigateNested(epicId, tabId, () =>
+                  prepareCloseAllCanvasTabsFocusTarget(tabId, gid),
+                ),
               onSplit: handleSplitFromMenu,
               onRevealInSidebar: handleRevealInSidebar,
               onRename: handleRename,
@@ -338,6 +385,7 @@ export const TabGroupView = memo(function TabGroupView(
                     data-testid="pane-tab-layer"
                     data-tab-instance-id={tab.instanceId}
                     data-selected={selected ? "true" : "false"}
+                    tabIndex={-1}
                     className={cn(
                       "absolute inset-0 min-h-0",
                       selected && "visible pointer-events-auto",
@@ -382,7 +430,10 @@ interface ActiveTabBodyProps {
 
 function ActiveTabBody(props: ActiveTabBodyProps) {
   const { activeTab, epicId, groupId, tabId } = props;
-  const closeCanvasTab = useEpicCanvasStore((s) => s.closeCanvasTab);
+  const navigateNested = useEpicNestedFocusNavigation();
+  const prepareCloseCanvasTabFocusTarget = useEpicCanvasStore(
+    (s) => s.prepareCloseCanvasTabFocusTarget,
+  );
   const role = useEpicPermissionRole();
   const snapshotLoaded = useEpicSnapshotLoaded();
   const liveArtifact = useEpicArtifact(activeTab.id);
@@ -417,7 +468,13 @@ function ActiveTabBody(props: ActiveTabBodyProps) {
     return (
       <DeletedArtifactBody
         onClose={() => {
-          closeCanvasTab(tabId, groupId, activeTab.instanceId);
+          navigateNested(epicId, tabId, () =>
+            prepareCloseCanvasTabFocusTarget(
+              tabId,
+              groupId,
+              activeTab.instanceId,
+            ),
+          );
         }}
       />
     );

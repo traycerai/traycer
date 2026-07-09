@@ -56,7 +56,12 @@ export function installPruneScheduler(
   const flush = () => {
     cancelScheduled = null;
     pending = false;
-    if (uninstalled || running) return;
+    if (uninstalled) {
+      return;
+    }
+    if (running) {
+      return;
+    }
     // A router load is mid-flight; re-try next frame rather than prune against a
     // half-applied navigation. Loads settle in a handful of frames, so this is
     // bounded (one callback per frame), never a tight loop.
@@ -65,7 +70,9 @@ export function installPruneScheduler(
       return;
     }
     const controller = getController();
-    if (controller === null) return;
+    if (controller === null) {
+      return;
+    }
     running = true;
     // `finally` (not `catch`) so a throw still re-arms the single-flight gate:
     // leaving `running` stuck `true` would silently disable pruning for the rest

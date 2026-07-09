@@ -106,6 +106,11 @@ vi.mock("@/hooks/rate-limits/use-configured-rate-limit-providers", () => ({
       ...provider,
       profiles: provider.profiles ?? [],
     })),
+  useVisibleRateLimitProviders: () =>
+    mocks.configured.map((provider) => ({
+      ...provider,
+      profiles: provider.profiles ?? [],
+    })),
 }));
 vi.mock("@/hooks/rate-limits/use-is-rate-limit-queue-draining", () => ({
   useIsRateLimitQueueDraining: () => mocks.draining,
@@ -924,9 +929,7 @@ describe("<RateLimitPopover /> per-provider states", () => {
       codex: degradedRetainedResult(codexReady(), "usage_fetch_failed"),
     };
     renderPopover();
-    expect(
-      screen.getByText(/· couldn't fetch usage — will retry/),
-    ).toBeTruthy();
+    expect(screen.getByText(/· failed to fetch usage/)).toBeTruthy();
     expect(screen.getByText(/^Updated \d+m ago ·/)).toBeTruthy();
     expect(screen.queryByText(/^Updated Just now ·/)).toBeNull();
     expect(screen.queryByText(/· refresh failed/)).toBeNull();

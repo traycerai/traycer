@@ -5,7 +5,7 @@ import type { FileHandle } from "node:fs/promises";
 import { hostname as osHostname } from "node:os";
 import type { Environment } from "../runner/environment";
 import { CLI_ERROR_CODES, cliError, isErrnoException } from "../runner/errors";
-import { cliLockPath, ensureCliHomeDir } from "./paths";
+import { cliLockPath, ensureCliInstallHomeDir } from "./paths";
 
 // Cross-platform process-liveness probe. POSIX uses `process.kill(pid, 0)`;
 // Windows uses `tasklist /FI "PID eq <pid>" /NH /FO CSV` and asserts the
@@ -263,7 +263,7 @@ function sleep(ms: number): Promise<void> {
 export async function acquireCliLock(
   opts: AcquireCliLockOptions,
 ): Promise<CliLockHandle> {
-  await ensureCliHomeDir(opts.environment);
+  await ensureCliInstallHomeDir(opts.environment);
   const path = cliLockPath(opts.environment);
   const meta: CliLockMetadata = {
     pid: process.pid,

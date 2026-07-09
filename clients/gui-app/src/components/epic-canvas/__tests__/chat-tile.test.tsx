@@ -421,6 +421,7 @@ function nextStepsAssistantMessage(): Message {
         ].join("\n"),
         status: "completed",
         timestamp: 2,
+        providerNotice: null,
       },
     ],
     timestamp: 2,

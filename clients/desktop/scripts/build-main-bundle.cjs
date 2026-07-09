@@ -19,8 +19,14 @@
  * `first-launch-setup.ts:resolveSplashPreloadPath`, and
  * `package.json:main` expect:
  *
- *   dist/main/index.js              - bundled main process (Electron entry)
- *   dist/preload/index.js           - bundled preload bridge (main window)
+ *   dist/main/index.js                          - bundled main process (Electron entry)
+ *   dist/preload/index.js                       - bundled preload bridge (main window)
+ *   dist/preload-dev-shared-storage/index.js    - standalone dev-only seed preload
+ *     (registered via session.registerPreloadScript, never wired into
+ *     webPreferences.preload; only ever loaded when a dev-desktop slot is
+ *     active - see electron-main/dev/dev-shared-local-storage.ts). Ships in
+ *     every build like the rest of dist/ (files:["dist/**\/*"]); harmless
+ *     dead weight outside a dev-desktop run since nothing registers it.
  *
  * Externals:
  *   - `electron`            (Electron runtime - provided at load time)
@@ -54,8 +60,20 @@ const preloadEntry = path.resolve(
   "electron-preload",
   "preload-bridge.ts",
 );
+const devSeedPreloadEntry = path.resolve(
+  workspaceRoot,
+  "src",
+  "electron-preload",
+  "dev",
+  "dev-shared-local-storage-seed-preload.ts",
+);
 const mainOutFile = path.resolve(distDir, "main", "index.js");
 const preloadOutFile = path.resolve(distDir, "preload", "index.js");
+const devSeedPreloadOutFile = path.resolve(
+  distDir,
+  "preload-dev-shared-storage",
+  "index.js",
+);
 const envDefines = {
   "process.env.VITE_TRAYCER_DESKTOP_UPDATE_REPO": JSON.stringify(
     process.env.VITE_TRAYCER_DESKTOP_UPDATE_REPO ?? "",
@@ -71,13 +89,21 @@ if (!existsSync(mainEntry)) {
 if (!existsSync(preloadEntry)) {
   throw new Error(`Preload entry not found: ${preloadEntry}`);
 }
+if (!existsSync(devSeedPreloadEntry)) {
+  throw new Error(`Dev-seed preload entry not found: ${devSeedPreloadEntry}`);
+}
 
 // Reset the bundle outputs so a stale file from a previous tsc-based build
 // can't shadow the new bundle.
-rmSync(path.dirname(mainOutFile), { recursive: true, force: true });
-rmSync(path.dirname(preloadOutFile), { recursive: true, force: true });
-mkdirSync(path.dirname(mainOutFile), { recursive: true });
-mkdirSync(path.dirname(preloadOutFile), { recursive: true });
+const outDirs = [mainOutFile, preloadOutFile, devSeedPreloadOutFile].map(
+  (outfile) => path.dirname(outfile),
+);
+for (const dir of outDirs) {
+  rmSync(dir, { recursive: true, force: true });
+}
+for (const dir of outDirs) {
+  mkdirSync(dir, { recursive: true });
+}
 
 const sharedConfig = {
   bundle: true,
@@ -127,6 +153,12 @@ async function build() {
       entry: preloadEntry,
       outfile: preloadOutFile,
       label: "electron-preload",
+      plugins: [],
+    },
+    {
+      entry: devSeedPreloadEntry,
+      outfile: devSeedPreloadOutFile,
+      label: "electron-dev-seed-preload",
       plugins: [],
     },
   ];

@@ -5,7 +5,10 @@ import { spawn, type SpawnOptions } from "node:child_process";
 import { clearPendingUpgrade, readCliManifest } from "../manifest/cli-manifest";
 import type { Environment } from "../runner/environment";
 import { isErrnoException } from "../runner/errors";
-import { cliPostFinalizeMarkerPath, ensureCliHomeDir } from "../store/paths";
+import {
+  cliPostFinalizeMarkerPath,
+  ensureCliInstallHomeDir,
+} from "../store/paths";
 import { windowsTaskName, type ServiceLabel } from "../service";
 
 // Pending CLI upgrade finalize - detached helper path.
@@ -123,7 +126,7 @@ export async function scheduleFinalizationHelper(
   } catch {
     // best-effort; absent file is fine
   }
-  await ensureCliHomeDir(opts.environment);
+  await ensureCliInstallHomeDir(opts.environment);
 
   if (platform !== "win32" && platform !== "linux" && platform !== "darwin") {
     return {

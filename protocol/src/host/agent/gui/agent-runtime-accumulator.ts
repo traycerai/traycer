@@ -12,6 +12,7 @@ import type {
   PlanAction,
   PlanBlock,
   PlanStep,
+  ProviderNoticeMetadata,
   ToolInputDetail,
   TodoItem,
   WorkflowActivityEntry,
@@ -626,12 +627,55 @@ export function accumulateEvent(
           status: "streaming",
           timestamp: event.timestamp,
           text: event.delta,
+          providerNotice: null,
         },
       ];
     }
 
     case "text.completed":
       return finalizeBlock(blocks, event.blockId, "text", event.timestamp);
+
+    case "provider_notice.upsert": {
+      // Upserts a compatibility-safe `text` block (see
+      // `persistence/epic/content-blocks.ts`'s `providerNotice` field) rather
+      // than a distinct block type. A repeat for the same `blockId` REPLACES
+      // the rendered fields and fallback text - not append-only like
+      // `text.delta` - so a later `showBufferingUi` update or terminal
+      // completion overwrites the prior rendering in place.
+      const providerNotice: ProviderNoticeMetadata = {
+        harnessId: event.harnessId,
+        noticeKind: event.noticeKind,
+        tone: event.tone,
+        title: event.title,
+        message: event.message,
+        details: event.details,
+        metadata: event.metadata,
+      };
+      const existing = findBlockOfType(blocks, event.blockId, "text");
+      if (existing) {
+        const updated = {
+          ...existing,
+          status: event.status,
+          timestamp: event.timestamp,
+          parentBlockId: resolveParentBlockId(event, existing),
+          text: event.fallbackText,
+          providerNotice,
+        };
+        return replaceBlock(blocks, event.blockId, updated);
+      }
+      return [
+        ...blocks,
+        {
+          type: "text",
+          blockId: event.blockId,
+          status: event.status,
+          timestamp: event.timestamp,
+          parentBlockId: resolveParentBlockId(event, undefined),
+          text: event.fallbackText,
+          providerNotice,
+        },
+      ];
+    }
 
     case "reasoning.delta": {
       const existing = findBlockOfType(blocks, event.blockId, "reasoning");

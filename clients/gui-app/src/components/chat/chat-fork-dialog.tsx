@@ -27,10 +27,11 @@ import { useSurfaceActivity } from "@/components/home/composer/surface-activity-
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
+import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { useEpicCreateChatForHost } from "@/hooks/epic/use-epic-chat-mutations";
 import { useResolvedSeededProfileId } from "@/hooks/providers/use-resolved-seeded-profile-id";
 import { buildChatRunSettings } from "@/lib/composer/chat-run-settings";
-import { openCreatedChatWhenProjected } from "@/lib/commands/actions/new-chat";
+import { openCreatedChatWhenProjectedWithNavigation } from "@/lib/commands/actions/new-chat";
 import {
   pendingForkChatStagingKey,
   useWorktreeIntentStagingStore,
@@ -90,6 +91,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
   // non-default host.
   const tabHostClient = useTabHostClient();
   const createChat = useEpicCreateChatForHost();
+  const navigateNestedFocus = useEpicNestedFocusNavigation();
   const openCancelsRef = useRef<Set<() => void> | null>(null);
 
   useEffect(() => {
@@ -211,12 +213,15 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
       },
       {
         onSuccess: (result) => {
-          const cancel = openCreatedChatWhenProjected({
-            kind: "active-tile",
-            epicId,
-            tabId,
-            chatId: result.chatId,
-            hostId,
+          const cancel = openCreatedChatWhenProjectedWithNavigation({
+            intent: {
+              kind: "active-tile",
+              epicId,
+              tabId,
+              chatId: result.chatId,
+              hostId,
+            },
+            navigateNestedFocus,
           });
           const openCancels = openCancelsRef.current;
           if (openCancels === null) {
@@ -232,6 +237,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     canSubmit,
     createChat,
     epicId,
+    navigateNestedFocus,
     onOpenChange,
     stagingKey,
     tabHostId,

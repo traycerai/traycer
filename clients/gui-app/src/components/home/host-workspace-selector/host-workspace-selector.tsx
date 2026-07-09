@@ -42,6 +42,7 @@ import {
 } from "@/hooks/workspace/use-workspace-binding-remove-entry-mutation";
 import { useWorkspaceBindingAddFolderForClient } from "@/hooks/workspace/use-workspace-binding-add-folder-mutation";
 import { useEpicCreateChat } from "@/hooks/epic/use-epic-chat-mutations";
+import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { useResolvedWorkspaceFolders } from "@/hooks/workspace/use-resolved-workspace-folders-query";
 import type { ResolvedFolder } from "@/lib/workspace/resolved-folder";
 import {
@@ -1367,6 +1368,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
   const sourceChatRecord = useChatById(
     surface.kind === "chat" ? surface.ownerId : null,
   );
+  const navigateNestedFocus = useEpicNestedFocusNavigation();
   const [editor, dispatchEditor] = useReducer(folderEditorReducer, {
     dirtyPathsSinceResume: new Set<string>(),
   });
@@ -1682,6 +1684,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
           "Continuing on the Terminal account - your profile isn't available on this host.",
         );
       },
+      navigateNestedFocus,
       createChat: (request, callbacks) => {
         createChat.mutate(request, {
           onSuccess: callbacks.onSuccess,

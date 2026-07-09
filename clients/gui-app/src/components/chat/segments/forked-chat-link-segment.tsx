@@ -1,6 +1,6 @@
 import { GitBranch } from "lucide-react";
 import { v4 as uuidv4 } from "uuid";
-import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 
 interface ForkedChatLinkSegmentProps {
   readonly viewTabId: string;
@@ -11,10 +11,10 @@ interface ForkedChatLinkSegmentProps {
 
 export function ForkedChatLinkSegment(props: ForkedChatLinkSegmentProps) {
   const { viewTabId, sourceChatId, sourceChatTitle, sourceHostId } = props;
-  const openTileInTab = useEpicCanvasStore((state) => state.openTileInTab);
+  const tileNavigation = useEpicTileNavigation();
 
   const openSourceConversation = (): void => {
-    openTileInTab(viewTabId, {
+    tileNavigation.openTileInTab(viewTabId, {
       id: sourceChatId,
       instanceId: uuidv4(),
       type: "chat",

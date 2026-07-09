@@ -538,6 +538,7 @@ describe("useRenderedMessages", () => {
                   blockId: "text-1",
                   status: "completed",
                   timestamp: 2010,
+                  providerNotice: null,
                   text: "Normal assistant text.",
                 },
                 {
@@ -594,6 +595,79 @@ describe("useRenderedMessages", () => {
       toolName: "Shell",
       decision: null,
     });
+  });
+
+  it("projects a text block with providerNotice into a provider_notice segment while an ordinary text block stays a text segment", () => {
+    const assistant = assistantMessage("turn-notice", 2000);
+    const { result } = renderHook(() =>
+      useRenderedMessages(
+        {
+          messages: [
+            {
+              ...assistant,
+              blocks: [
+                {
+                  type: "text",
+                  blockId: "text-1",
+                  status: "completed",
+                  timestamp: 2001,
+                  text: "Plain assistant reply.",
+                  providerNotice: null,
+                },
+                {
+                  type: "text",
+                  blockId: "text-2",
+                  status: "completed",
+                  timestamp: 2002,
+                  text: "Codex switched from gpt-5 to gpt-5-safe.",
+                  providerNotice: {
+                    harnessId: "codex",
+                    noticeKind: "model_rerouted",
+                    tone: "warning",
+                    title: "Model changed",
+                    message: "Codex switched from gpt-5 to gpt-5-safe.",
+                    details: [
+                      { label: "Reason", value: "highRiskCyberActivity" },
+                    ],
+                    metadata: {
+                      type: "model_rerouted",
+                      fromModel: "gpt-5",
+                      toModel: "gpt-5-safe",
+                      reason: "highRiskCyberActivity",
+                    },
+                  },
+                },
+              ],
+            },
+          ],
+          events: [],
+          pendingUserMessages: [],
+          liveAssistantMessage: null,
+          activeTurn: null,
+          runStatus: "idle",
+          ...BINDING,
+        },
+        displayContext,
+      ),
+    );
+
+    const segments = result.current[0]?.segments ?? [];
+    expect(segments.map((segment) => segment.kind)).toEqual([
+      "text",
+      "provider_notice",
+    ]);
+    const notice = segments[1];
+    if (notice.kind !== "provider_notice") {
+      throw new Error("expected a provider_notice segment");
+    }
+    expect(notice.status).toBe("completed");
+    expect(notice.tone).toBe("warning");
+    expect(notice.title).toBe("Model changed");
+    expect(notice.message).toBe("Codex switched from gpt-5 to gpt-5-safe.");
+    expect(notice.details).toEqual([
+      { label: "Reason", value: "highRiskCyberActivity" },
+    ]);
+    expect(notice.parentId).toBeNull();
   });
 
   it("caches user-message renders by Message reference identity", () => {
@@ -904,6 +978,7 @@ describe("useRenderedMessages", () => {
           text: "Before steer",
           status: "completed",
           timestamp: 2001,
+          providerNotice: null,
         },
         {
           type: "steer",
@@ -921,6 +996,7 @@ describe("useRenderedMessages", () => {
           text: "After steer",
           status: "completed",
           timestamp: 2003,
+          providerNotice: null,
         },
       ],
     };
@@ -987,6 +1063,7 @@ describe("useRenderedMessages", () => {
           text: "Before steer",
           status: "completed",
           timestamp: 2001,
+          providerNotice: null,
         },
       ],
     };
@@ -1017,6 +1094,7 @@ describe("useRenderedMessages", () => {
           text: "After steer",
           status: "completed",
           timestamp: 2003,
+          providerNotice: null,
         },
       ],
     };
@@ -1242,6 +1320,7 @@ describe("useRenderedMessages", () => {
           text: "Thinking aloud",
           status: "streaming",
           timestamp: 2001,
+          providerNotice: null,
         },
         {
           type: "command",
@@ -1263,6 +1342,7 @@ describe("useRenderedMessages", () => {
           text: "Thinking aloud",
           status: "completed",
           timestamp: 2003,
+          providerNotice: null,
         },
         streamingAssistant.blocks[1],
       ],
@@ -1314,6 +1394,7 @@ describe("useRenderedMessages", () => {
           text: "Hel",
           status: "streaming",
           timestamp: 2001,
+          providerNotice: null,
         },
       ],
     };
@@ -1326,6 +1407,7 @@ describe("useRenderedMessages", () => {
           text: "Hello",
           status: "streaming",
           timestamp: 2001,
+          providerNotice: null,
         },
       ],
     };
@@ -1360,6 +1442,66 @@ describe("useRenderedMessages", () => {
     expect(segment.markdown).toBe("Hello");
   });
 
+  it("invalidates the cached provider_notice segment when its title changes without a length or timestamp change", () => {
+    const providerNoticeBlock = (title: string) => ({
+      type: "text" as const,
+      blockId: "text-1",
+      // Fixed fallback text: only the enriched notice fields change below, so
+      // `block.text.length` alone (the ordinary text-block signature) would
+      // NOT catch this update.
+      text: "Notice.",
+      status: "completed" as const,
+      timestamp: 2001,
+      providerNotice: {
+        harnessId: "codex" as const,
+        noticeKind: "model_rerouted" as const,
+        tone: "warning" as const,
+        title,
+        message: null,
+        details: [],
+        metadata: null,
+      },
+    });
+    const before: Message = {
+      ...assistantMessage("turn-1", 2000),
+      blocks: [providerNoticeBlock("Model changed")],
+    };
+    const after: Message = {
+      ...assistantMessage("turn-1", 2000),
+      blocks: [providerNoticeBlock("Model re-verified")],
+    };
+    const input: RenderedMessagesInput = {
+      messages: [before],
+      events: [],
+      pendingUserMessages: [],
+      liveAssistantMessage: null,
+      activeTurn: null,
+      runStatus: "idle",
+      ...BINDING,
+    };
+
+    const { result, rerender } = renderHook(
+      ({ value }: { value: RenderedMessagesInput }) =>
+        useRenderedMessages(value, displayContext),
+      { initialProps: { value: input } },
+    );
+    const firstSegment = result.current[0]?.segments[0];
+    expect(firstSegment.kind).toBe("provider_notice");
+    if (firstSegment.kind !== "provider_notice") {
+      throw new Error("expected a provider_notice segment");
+    }
+    expect(firstSegment.title).toBe("Model changed");
+
+    rerender({ value: { ...input, messages: [after] } });
+
+    const secondSegment = result.current[0]?.segments[0];
+    expect(secondSegment.kind).toBe("provider_notice");
+    if (secondSegment.kind !== "provider_notice") {
+      throw new Error("expected a provider_notice segment");
+    }
+    expect(secondSegment.title).toBe("Model re-verified");
+  });
+
   it("uses host-supplied blocksVersion to invalidate assistant turn cache", () => {
     const assistant: Message = {
       ...assistantMessage("turn-1", 2000),
@@ -1371,6 +1513,7 @@ describe("useRenderedMessages", () => {
           text: "Hello",
           status: "completed",
           timestamp: 2001,
+          providerNotice: null,
         },
       ],
     };
@@ -1411,6 +1554,7 @@ describe("useRenderedMessages", () => {
           text: "Checking.",
           status: "completed",
           timestamp: 2001,
+          providerNotice: null,
         },
         {
           type: "tool_call",
@@ -1504,6 +1648,7 @@ describe("useRenderedMessages", () => {
           text: "Now let's type-check.",
           status: "completed",
           timestamp: 2004,
+          providerNotice: null,
         },
       ],
     };
@@ -1616,6 +1761,7 @@ describe("useRenderedMessages", () => {
           type: "text",
           blockId: "text-1",
           text: "Now let's also check this other thing.",
+          providerNotice: null,
           status: "completed",
           timestamp: 2003,
         },
@@ -2300,6 +2446,134 @@ describe("useRenderedMessages", () => {
     expect(root.children).toEqual([]);
   });
 
+  it("nests a subagent's provider notice under its block via parentBlockId", () => {
+    const assistant: Message = {
+      ...assistantMessage("turn-1", 2000),
+      blocks: [
+        {
+          type: "subagent",
+          agentType: null,
+          blockId: "agent-1",
+          name: "explorer",
+          task: "Investigate the bug.",
+          progressUpdates: [],
+          result: null,
+          status: "streaming",
+          timestamp: 2001,
+          startedAt: 2001,
+          spawnToolCallId: null,
+          stopped: false,
+          workflowMeta: null,
+        },
+        {
+          type: "text",
+          blockId: "notice-1",
+          text: "Codex switched from gpt-5 to gpt-5-safe.",
+          status: "completed",
+          timestamp: 2002,
+          parentBlockId: "agent-1",
+          providerNotice: {
+            harnessId: "codex",
+            noticeKind: "model_rerouted",
+            tone: "warning",
+            title: "Model changed",
+            message: "Codex switched from gpt-5 to gpt-5-safe.",
+            details: [{ label: "Reason", value: "highRiskCyberActivity" }],
+            metadata: {
+              type: "model_rerouted",
+              fromModel: "gpt-5",
+              toModel: "gpt-5-safe",
+              reason: "highRiskCyberActivity",
+            },
+          },
+        },
+      ],
+    };
+
+    const { result } = renderHook(() =>
+      useRenderedMessages(
+        {
+          messages: [assistant],
+          events: [],
+          pendingUserMessages: [],
+          liveAssistantMessage: null,
+          activeTurn: null,
+          runStatus: "idle",
+          ...BINDING,
+        },
+        displayContext,
+      ),
+    );
+
+    const top = result.current[0]?.segments ?? [];
+    // The notice nests under the subagent rather than appearing top-level.
+    expect(top.map((segment) => segment.kind)).toEqual(["subagent"]);
+    const subagent = top[0];
+    if (subagent.kind !== "subagent") {
+      throw new Error("expected a subagent segment");
+    }
+    expect(subagent.children.map((child) => child.kind)).toEqual([
+      "provider_notice",
+    ]);
+    const child = subagent.children[0];
+    if (child.kind !== "provider_notice") {
+      throw new Error("expected a provider_notice child");
+    }
+    expect(child.title).toBe("Model changed");
+    expect(child.parentId).toBe("agent-1");
+  });
+
+  it("keeps a provider notice top-level when its parentBlockId doesn't resolve to a known subagent", () => {
+    const assistant: Message = {
+      ...assistantMessage("turn-1", 2000),
+      blocks: [
+        {
+          type: "text",
+          blockId: "notice-orphan",
+          text: "Codex switched from gpt-5 to gpt-5-safe.",
+          status: "completed",
+          timestamp: 2001,
+          // References a parent id never present in this turn's blocks (the
+          // owning subagent.started was dropped/never arrived) - the fallback
+          // is honest top-level placement, never vanishing.
+          parentBlockId: "agent-missing",
+          providerNotice: {
+            harnessId: "codex",
+            noticeKind: "model_rerouted",
+            tone: "warning",
+            title: "Model changed",
+            message: "Codex switched from gpt-5 to gpt-5-safe.",
+            details: [],
+            metadata: null,
+          },
+        },
+      ],
+    };
+
+    const { result } = renderHook(() =>
+      useRenderedMessages(
+        {
+          messages: [assistant],
+          events: [],
+          pendingUserMessages: [],
+          liveAssistantMessage: null,
+          activeTurn: null,
+          runStatus: "idle",
+          ...BINDING,
+        },
+        displayContext,
+      ),
+    );
+
+    const top = result.current[0]?.segments ?? [];
+    expect(top.map((segment) => segment.kind)).toEqual(["provider_notice"]);
+    const notice = top[0];
+    if (notice.kind !== "provider_notice") {
+      throw new Error("expected a top-level provider_notice segment");
+    }
+    expect(notice.parentId).toBe("agent-missing");
+  });
+
   it("keeps a nested child attached across a parent name re-emit", () => {
     // `timestamp` must advance with the rename, exactly as a real host re-emit
     // always bumps it - otherwise the per-turn render cache (keyed on each
@@ -2565,6 +2839,7 @@ describe("useRenderedMessages", () => {
             text: "a",
             status: "streaming",
             timestamp: 10,
+            providerNotice: null,
           },
         ],
         startedAt: 2000,
@@ -2603,6 +2878,7 @@ describe("useRenderedMessages", () => {
               text: "ab",
               status: "streaming",
               timestamp: 11,
+              providerNotice: null,
             },
           ],
           startedAt: 2000,
@@ -2632,6 +2908,7 @@ describe("useRenderedMessages", () => {
           status: "completed" as const,
           timestamp: 40_000,
           text: "Done",
+          providerNotice: null,
         },
       ],
     };
@@ -2684,6 +2961,7 @@ describe("useRenderedMessages", () => {
           status: "completed" as const,
           timestamp: 42_000,
           text: "Done",
+          providerNotice: null,
         },
       ],
     };
@@ -4219,6 +4497,7 @@ describe("useRenderedMessages head/tail partition", () => {
       parentBlockId: null,
       type: "text",
       text,
+      providerNotice: null,
     };
   }
 

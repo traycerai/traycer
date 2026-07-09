@@ -209,6 +209,7 @@ function baseCloneArgs(
     sourceSettings: BASE_SETTINGS,
     globalClient: buildClient("global", () => ({ providers: [] })),
     onProfileFallbackToAmbient: vi.fn(),
+    navigateNestedFocus: null,
     ...overrides,
   };
 }

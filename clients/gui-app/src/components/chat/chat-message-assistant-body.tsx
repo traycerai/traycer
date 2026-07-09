@@ -31,6 +31,7 @@ import { FileChangeSegment } from "./segments/file-change-segment";
 import { InterviewSegment } from "./segments/interview-segment";
 import type { NextStepActionHandler } from "./segments/next-steps-action-group";
 import { PlanSegment } from "./segments/plan-segment";
+import { ProviderNoticeSegment } from "./segments/provider-notice-segment";
 import { ReasoningSegment } from "./segments/reasoning-segment";
 import { SubagentSegment } from "./segments/subagent-segment";
 import { TextSegment } from "./segments/text-segment";
@@ -764,6 +765,17 @@ function AssistantSegment({
           durationMs={segment.durationMs}
           summary={segment.summary}
           error={segment.error}
+          findUnitId={findUnitId}
+        />
+      );
+    case "provider_notice":
+      return (
+        <ProviderNoticeSegment
+          status={segment.status}
+          tone={segment.tone}
+          title={segment.title}
+          message={segment.message}
+          details={segment.details}
           findUnitId={findUnitId}
         />
       );

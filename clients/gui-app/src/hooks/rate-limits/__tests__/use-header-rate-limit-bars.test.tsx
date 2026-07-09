@@ -33,6 +33,7 @@ vi.mock("@/lib/host", () => ({
 }));
 vi.mock("@/hooks/rate-limits/use-configured-rate-limit-providers", () => ({
   useConfiguredRateLimitProviders: () => mocks.configured,
+  useVisibleRateLimitProviders: () => mocks.configured,
 }));
 // Production calls `useHostQueriesWithResponseMap` (not the plain
 // `useHostQueries`) - see that hook's own doc comment - so this mock exports

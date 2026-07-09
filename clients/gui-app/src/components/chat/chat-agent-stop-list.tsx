@@ -3,7 +3,7 @@ import { v4 as uuidv4 } from "uuid";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { AgentStopButton } from "@/components/chat/agent-stop-button";
 import type { AgentRow } from "@/hooks/agent/use-agent-stop-controls";
-import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 
 /**
  * A row's `surface` is UI copy ("gui"/"tui"); opening a tile needs the
@@ -73,13 +73,12 @@ export function AgentStopList(props: {
   readonly surface: "composer-panel" | "tui-popover";
 }) {
   const compact = props.surface === "composer-panel";
+  const tileNavigation = useEpicTileNavigation();
   // Opening a sub-agent reuses the same path as the agent-reference chip:
   // resolve the epic's target tab and open (or focus) the agent's tile there.
   const openAgent = useCallback(
     (agent: AgentRow) => {
-      const canvas = useEpicCanvasStore.getState();
-      const tabId = canvas.resolveTargetTabForEpic(props.epicId, undefined);
-      canvas.openTileInTab(tabId, {
+      tileNavigation.openTileInEpic(props.epicId, {
         id: agent.id,
         instanceId: uuidv4(),
         type: nodeKindForSurface(agent.surface),
@@ -87,7 +86,7 @@ export function AgentStopList(props: {
         hostId: agent.hostId,
       });
     },
-    [props.epicId],
+    [props.epicId, tileNavigation],
   );
   return (
     <ul className="m-0 flex list-none flex-col gap-0.5 p-1.5">
