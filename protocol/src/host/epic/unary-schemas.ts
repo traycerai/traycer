@@ -831,6 +831,15 @@ export type ReparentArtifactResponse = z.infer<
 export const createChatForkSourceSchema = z.object({
   sourceChatId: z.string(),
   assistantMessageId: z.string(),
+  // Disposition for interview (AskUserQuestion) blocks still pending at the
+  // fork boundary when forking mid-Q&A:
+  //  - "pending" - re-open each carried question in the fork as an answerable
+  //    detached pending (A/B fork: answer differently and proceed in parallel).
+  //  - "settled" - close each carried question as reference-only so the fork's
+  //    composer is immediately free (Cross Question fork: interrogate the
+  //    assistant instead of answering).
+  // null/absent defaults to "pending".
+  carriedInterviews: z.enum(["pending", "settled"]).nullish(),
 });
 export type CreateChatForkSource = z.infer<typeof createChatForkSourceSchema>;
 

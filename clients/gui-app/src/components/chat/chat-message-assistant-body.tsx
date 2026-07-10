@@ -155,6 +155,7 @@ export function AssistantMessageBody({
               questions={item.segment.questions}
               answers={item.segment.answers}
               error={item.segment.error}
+              forkedWithoutAnswer={item.segment.forkedWithoutAnswer}
             />
           );
         }
@@ -792,6 +793,7 @@ function AssistantSegment({
           questions={segment.questions}
           answers={segment.answers}
           error={segment.error}
+          forkedWithoutAnswer={segment.forkedWithoutAnswer}
         />
       );
     case "setup-card":

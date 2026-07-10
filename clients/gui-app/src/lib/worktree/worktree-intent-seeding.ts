@@ -53,6 +53,59 @@ export function defaultFolderIntent(
 }
 
 /**
+ * A per-folder transform applied on top of a seed intent (the source
+ * conversation's live binding) when a fork surface wants a specific workspace
+ * disposition instead of the binding verbatim.
+ *
+ * `worktree-carry` ("A/B Fork"): fork a fresh branch off each folder's
+ * current branch into a new worktree, carrying uncommitted + staged work
+ * (the "Working Tree" option), so the fork can proceed with different
+ * answers in parallel without touching the original checkout.
+ *
+ * (A Cross Question fork wants the SAME working copy as the source chat -
+ * local for a local binding, the existing worktree for a worktree binding -
+ * which is the verbatim seed, so it passes no override.)
+ */
+export type SeedIntentOverride = "worktree-carry";
+
+/**
+ * Applies a {@link SeedIntentOverride} to one folder's seed entry using the
+ * folder's disk truth. `null` override (or no seed entry for this folder)
+ * passes the seed through untouched.
+ *
+ * `worktree-carry` forks a new worktree off THIS FOLDER'S working tree (its
+ * current branch, carrying uncommitted + staged work). The A/B fork seed has
+ * already rebased each folder to the source chat's actual working-copy
+ * directory (`buildAbForkWorkspaceSeed`) — for a worktree-bound chat the
+ * folder IS the origin worktree — so the current branch here is the origin
+ * working copy's branch. When no valid fork source exists (non-git folder or
+ * detached HEAD) the seed entry passes through untouched: staying on the
+ * origin working copy beats silently forking the wrong one.
+ */
+export function applySeedIntentOverride(input: {
+  readonly override: SeedIntentOverride | null;
+  readonly seedEntry: WorktreeFolderIntent | null;
+  readonly folder: DefaultFolderInput;
+}): WorktreeFolderIntent | null {
+  const { override, seedEntry, folder } = input;
+  if (override === null || seedEntry === null) return seedEntry;
+  if (!folder.isGitRepo || folder.currentBranch === null) return seedEntry;
+  return {
+    kind: "worktree",
+    scripts: null,
+    workspacePath: folder.workspacePath,
+    repoIdentifier: folder.repoIdentifier,
+    isPrimary: seedEntry.isPrimary,
+    branch: {
+      type: "new",
+      name: folder.defaultNewBranchName,
+      source: folder.currentBranch,
+      carryUncommittedChanges: true,
+    },
+  };
+}
+
+/**
  * Whether validating `remembered` against disk truth needs the full branch list
  * (from `worktree.listBranches`), which the seeder fetches lazily. Only an
  * existing-branch checkout, or a new-branch fork from a source other than the

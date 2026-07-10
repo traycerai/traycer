@@ -9,6 +9,7 @@ import {
 } from "react";
 import { useChatMessageActions } from "./use-chat-message-actions";
 import { useChatQueueActions } from "./use-chat-queue-actions";
+import type { ChatForkMode } from "@/components/chat/chat-message";
 import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import type {
@@ -1239,27 +1240,28 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     [chatActions],
   );
 
-  const { messageActionsFor, revertOnEdit } = useChatMessageActions({
-    dispatchUi,
-    activeInlineEdit,
-    canModifyMessages,
-    canAct,
-    currentComposerSettings,
-    editSettings,
-    mentionRoots,
-    currentEpicId,
-    node,
-    chatTitle: projectedChatTitle ?? state.chat?.title ?? null,
-    chatParentId: state.chat?.parentId ?? null,
-    messages: state.messages,
-    events: state.events,
-    profile,
-    chatActions,
-    confirmingDeleteMessageId: uiState.confirmingDeleteMessageId,
-    setForkTarget,
-    worktreeBinding: state.worktreeBinding,
-    revertOnEditOpen: uiState.revertOnEditOpen,
-  });
+  const { messageActionsFor, forkAtAssistantMessage, revertOnEdit } =
+    useChatMessageActions({
+      dispatchUi,
+      activeInlineEdit,
+      canModifyMessages,
+      canAct,
+      currentComposerSettings,
+      editSettings,
+      mentionRoots,
+      currentEpicId,
+      node,
+      chatTitle: projectedChatTitle ?? state.chat?.title ?? null,
+      chatParentId: state.chat?.parentId ?? null,
+      messages: state.messages,
+      events: state.events,
+      profile,
+      chatActions,
+      confirmingDeleteMessageId: uiState.confirmingDeleteMessageId,
+      setForkTarget,
+      worktreeBinding: state.worktreeBinding,
+      revertOnEditOpen: uiState.revertOnEditOpen,
+    });
 
   const submitMessage = useCallback(
     (input: ChatComposerSubmitInput): boolean => {
@@ -1484,13 +1486,32 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     [composerActiveTurnStatus, stopDisabled, chatActions.stopTurn],
   );
 
+  const forkPendingInterviewAssistantMessageId =
+    pendingInterview?.assistantMessageId ?? null;
+  const forkFromPendingInterview = useMemo(
+    () =>
+      forkPendingInterviewAssistantMessageId === null
+        ? null
+        : (mode: ChatForkMode) =>
+            forkAtAssistantMessage(
+              forkPendingInterviewAssistantMessageId,
+              mode,
+            ),
+    [forkPendingInterviewAssistantMessageId, forkAtAssistantMessage],
+  );
   const lowerInterview = useMemo(
     () => ({
       pending: pendingInterview,
       onAnswer: handleInterviewAnswer,
       onError: handleInterviewError,
+      onFork: forkFromPendingInterview,
     }),
-    [pendingInterview, handleInterviewAnswer, handleInterviewError],
+    [
+      pendingInterview,
+      handleInterviewAnswer,
+      handleInterviewError,
+      forkFromPendingInterview,
+    ],
   );
 
   const lowerApprovals = useMemo(

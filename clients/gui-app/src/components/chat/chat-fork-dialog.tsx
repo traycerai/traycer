@@ -32,9 +32,12 @@ import { openCreatedChatWhenProjectedWithNavigation } from "@/lib/commands/actio
 import {
   pendingForkChatStagingKey,
   useWorktreeIntentStagingStore,
+  worktreeStagingKeyString,
 } from "@/stores/worktree/worktree-intent-staging-store";
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
+import type { ChatForkMode } from "@/components/chat/chat-message";
 import type { ForkWorkspaceSeed } from "@/lib/worktree/fork-workspace-seed";
+import type { SeedIntentOverride } from "@/lib/worktree/worktree-intent-seeding";
 import { readSeededLaunchWorktreeIntent } from "@/lib/worktree/seeded-launch-worktree-intent";
 import { deriveWorkspaceMode } from "@/lib/worktree/workspace-mode";
 
@@ -48,6 +51,27 @@ export interface ChatForkDialogTarget {
   // visible workspace. The dialog applies it through the same seedIntent ->
   // seedEntryForFolder path the terminal-agent launcher uses.
   readonly workspaceSeed: ForkWorkspaceSeed;
+  /**
+   * Pre-selection applied on top of the seed's folders: `"worktree-carry"`
+   * for an A/B fork (new worktrees off each folder's working tree, carrying
+   * uncommitted + staged changes). `null` seeds the source binding verbatim —
+   * a Cross Question fork uses this so the fork lands on the chat's own
+   * working copy (local folders stay local, an existing worktree is adopted).
+   */
+  readonly seedIntentOverride: SeedIntentOverride | null;
+  /**
+   * What the fork does with questions still pending at the boundary:
+   * `"settled"` (Cross Question) closes them as inline reference so the
+   * fork's composer is immediately free; `"pending"` (A/B Fork) re-opens them
+   * as an answerable card. Sent to the host in `forkSource`.
+   */
+  readonly carriedInterviews: "pending" | "settled";
+  /**
+   * The fork mode the user chose; drives presentation defaults (the "Cross
+   * Question - …" / "A/B Fork - …" title prefix). The workspace and
+   * carried-question behavior ride the dedicated fields above.
+   */
+  readonly forkMode: ChatForkMode;
 }
 
 interface ChatForkDialogProps {
@@ -90,7 +114,9 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
   }, []);
 
   const defaultTitle =
-    target === null ? "" : `Fork - ${displayChatTitle(target.sourceChatTitle)}`;
+    target === null
+      ? ""
+      : `${forkModeTitlePrefix(target.forkMode)} - ${displayChatTitle(target.sourceChatTitle)}`;
 
   if (open !== titleState.open) {
     setTitleState({
@@ -118,11 +144,16 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
   const modelPickerKey =
     target === null ? "fork-dialog-closed" : forkDialogModelPickerKey(target);
   const trimmedTitle = title.trim();
-  const canSubmit =
-    target !== null &&
-    trimmedTitle.length > 0 &&
-    modelResolved &&
-    !createChat.isPending;
+  const stagedIntentForKey = useWorktreeIntentStagingStore(
+    (state) => state.intentByKey[worktreeStagingKeyString(stagingKey)] ?? null,
+  );
+  const canSubmit = canSubmitFork({
+    target,
+    trimmedTitle,
+    modelResolved,
+    hasStagedPreselection: stagedIntentForKey !== null,
+    createPending: createChat.isPending,
+  });
 
   const close = useCallback(() => {
     if (createChat.isPending) return;
@@ -138,7 +169,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
   );
 
   const submit = useCallback(() => {
-    if (!canSubmit) return;
+    if (!canSubmit || target === null) return;
     const chatId = uuidv4();
     const hostId = tabHostId;
     const worktreeIntent = readSeededLaunchWorktreeIntent({
@@ -176,6 +207,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
         forkSource: {
           sourceChatId: target.sourceChatId,
           assistantMessageId: target.assistantMessageId,
+          carriedInterviews: target.carriedInterviews,
         },
       },
       {
@@ -265,6 +297,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
             layout="stacked"
             workspaceSeed={target?.workspaceSeed.workspace ?? null}
             seedIntent={target?.workspaceSeed.intent ?? null}
+            seedIntentOverride={target?.seedIntentOverride ?? null}
             hostScope={{ kind: "active" }}
           />
         </div>
@@ -296,6 +329,39 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
 function displayChatTitle(title: string): string {
   const trimmed = title.trim();
   return trimmed.length === 0 ? "Untitled chat" : trimmed;
+}
+
+// Whether the Fork dialog can submit. Extracted from the component to keep its
+// cyclomatic complexity down. An A/B fork's workspace pre-selection is staged
+// asynchronously by the picker (it needs the folder summaries round-trip);
+// submitting before it lands would fall back to the source binding verbatim —
+// silently adopting the origin worktree instead of creating a new one (wrong
+// working copy, no setup script). So an override fork waits for the staged
+// pre-selection; verbatim (plain / cross-question) forks need no gate.
+function canSubmitFork(input: {
+  readonly target: ChatForkDialogTarget | null;
+  readonly trimmedTitle: string;
+  readonly modelResolved: boolean;
+  readonly hasStagedPreselection: boolean;
+  readonly createPending: boolean;
+}): boolean {
+  if (input.target === null) return false;
+  if (input.trimmedTitle.length === 0) return false;
+  if (!input.modelResolved) return false;
+  if (input.createPending) return false;
+  if (
+    input.target.seedIntentOverride !== null &&
+    !input.hasStagedPreselection
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function forkModeTitlePrefix(mode: ChatForkMode): string {
+  if (mode === "cross-question") return "Cross Question";
+  if (mode === "ab-worktree") return "A/B Fork";
+  return "Fork";
 }
 
 function forkDialogModelPickerKey(target: ChatForkDialogTarget): string {
