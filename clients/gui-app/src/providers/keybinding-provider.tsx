@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
-  chordFromEvent,
-  chordFromEventCtrlAware,
+  hasPlatformModKey,
   isBareModifierEvent,
+  resolveMatchingChord,
 } from "@/lib/keybindings/chord";
 import {
   dispatchAction,
@@ -239,7 +239,7 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
     const cleanLeaderModifierFromEvent = (
       event: KeyboardEvent,
     ): LeaderModifier | null => {
-      const modKeyHeld = event.metaKey || event.ctrlKey;
+      const modKeyHeld = hasPlatformModKey(event);
       const cleanMod = modKeyHeld && !event.altKey && !event.shiftKey;
       const cleanAlt = event.altKey && !modKeyHeld && !event.shiftKey;
       const cleanModShift = modKeyHeld && event.shiftKey && !event.altKey;
@@ -429,21 +429,17 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
 
 /**
  * Resolve the chord to an action the provider should RESERVE (preventDefault +
- * dispatch). Prefers a Control-specific binding (macOS ⌃, distinct from ⌘),
- * falling back to the lenient `mod` chord so `ctrl+…` bindings match while every
- * existing `mod+…` chord keeps matching both ⌘ and Ctrl. Returns null for an
- * action handled OUTSIDE this dispatcher (e.g. dictation, owned by a
- * capture-phase hook) - reserving those would swallow the key when the owner is
- * inactive.
+ * dispatch). Uses `resolveMatchingChord` for the Control-specific precedence
+ * (macOS ⌃, distinct from ⌘): when the ctrl-aware chord differs, the event is
+ * reserved only by an explicit `ctrl+…` binding, so a bare macOS Control chord
+ * can't fall through to a plain key binding. Returns null for an action handled
+ * OUTSIDE this dispatcher (e.g. dictation, owned by a capture-phase hook) -
+ * reserving those would swallow the key when the owner is inactive.
  */
 function resolveReservedAction(event: KeyboardEvent): ActionId | null {
-  const chord = chordFromEvent(event);
+  const chord = resolveMatchingChord(event);
   if (chord === null) return null;
-  const ctrlChord = chordFromEventCtrlAware(event);
-  const actionId =
-    (ctrlChord !== null && ctrlChord !== chord
-      ? findActionForChord(ctrlChord)
-      : null) ?? findActionForChord(chord);
+  const actionId = findActionForChord(chord);
   if (actionId === null) return null;
   return isExternallyHandled(actionId) ? null : actionId;
 }

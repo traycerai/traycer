@@ -1,8 +1,15 @@
 import "../../../../../__tests__/test-browser-apis";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { HeaderRateLimitBar } from "@/hooks/rate-limits/use-header-rate-limit-bars";
+import { useTitleBarDragStore } from "@/stores/layout/title-bar-drag-store";
 
 let bars: ReadonlyArray<HeaderRateLimitBar> = [];
 
@@ -14,6 +21,12 @@ vi.mock("@/hooks/rate-limits/use-rate-limit-profile-selection", () => ({
     activeChatSettings: null,
     lastProfileByHarness: {},
   }),
+}));
+
+vi.mock("@/components/layout/header/rate-limit-popover", () => ({
+  RateLimitPopover: (_props: { readonly onClose: () => void }) => (
+    <div data-testid="rate-limit-popover" />
+  ),
 }));
 
 import { RateLimitIconButton } from "@/components/layout/header/rate-limit-icon";
@@ -36,6 +49,7 @@ function hasClass(element: Element, className: string): boolean {
 afterEach(() => {
   cleanup();
   bars = [];
+  useTitleBarDragStore.setState({ suppressors: new Set() });
 });
 
 describe("<RateLimitIconButton />", () => {
@@ -43,6 +57,22 @@ describe("<RateLimitIconButton />", () => {
     renderIcon();
     const button = screen.getByRole("button", { name: "Usage limits" });
     expect(button).toBeTruthy();
+  });
+
+  it("suppresses title-bar dragging only while the popover is open", () => {
+    renderIcon();
+
+    const isSuppressed = () =>
+      useTitleBarDragStore.getState().suppressors.has("rate-limits");
+    const button = screen.getByRole("button", { name: "Usage limits" });
+
+    expect(isSuppressed()).toBe(false);
+
+    fireEvent.click(button);
+    expect(isSuppressed()).toBe(true);
+
+    fireEvent.click(button);
+    expect(isSuppressed()).toBe(false);
   });
 
   it("renders zero providers configured as a muted, pre-filled placeholder glyph", () => {

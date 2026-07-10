@@ -1,5 +1,4 @@
 import {
-  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -52,7 +51,7 @@ import {
   useGlobalResourceProjection,
   type GlobalResourceEpicEntry,
 } from "@/stores/resources/resources-registry";
-import { useTitleBarDragStore } from "@/stores/layout/title-bar-drag-store";
+import { useTitleBarDragSuppression } from "@/stores/layout/title-bar-drag-store";
 import { GlobalResourcesStreamMount } from "@/providers/resources-stream-mount";
 import { useStreamMethodSchemaVersion } from "@/lib/host/stream-runtime-context";
 import type {
@@ -211,15 +210,9 @@ function noProcessToggle(): void {}
 
 export function ResourceMonitorPopover(props: ResourceMonitorPopoverProps) {
   const [open, setOpen] = useState(false);
-  const setTitleBarDragSuppressed = useTitleBarDragStore(
-    (state) => state.setSuppressed,
-  );
   // While the panel is open, let the header drop its title-bar drag regions so a
   // click on the (otherwise event-swallowing) drag area dismisses the popover.
-  useEffect(() => {
-    setTitleBarDragSuppressed("resource-monitor", open);
-    return () => setTitleBarDragSuppressed("resource-monitor", false);
-  }, [open, setTitleBarDragSuppressed]);
+  useTitleBarDragSuppression("resource-monitor", open);
 
   return (
     <>

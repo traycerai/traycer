@@ -1,6 +1,12 @@
 import "../../../__tests__/test-browser-apis";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createPlatformMock } from "@/__tests__/create-platform-mock";
+
+const platformMock = vi.hoisted(() => ({ mac: false }));
+
+vi.mock("@/lib/keybindings/platform", () => createPlatformMock(platformMock));
+
 import { createMemoryHistory } from "@tanstack/react-router";
 import { createAppRouter, type AppRouter } from "@/router";
 import { getDefaultBindings } from "@/lib/keybindings/actions";
@@ -290,6 +296,7 @@ function seedEpicTabs(): SeededTabs {
 
 describe("<KeybindingProvider /> visual leader hints", () => {
   beforeEach(() => {
+    platformMock.mac = false;
     vi.useFakeTimers();
     window.localStorage.clear();
     useKeybindingStore.setState({ bindings: getDefaultBindings() });
@@ -315,6 +322,51 @@ describe("<KeybindingProvider /> visual leader hints", () => {
     expectModHintVisible(false);
     advance(1);
     expectModHintVisible(true);
+  });
+
+  it("does not treat bare macOS Control as the primary leader", () => {
+    platformMock.mac = true;
+    renderProbe("/epics/e1");
+
+    act(() => {
+      keyDown({ code: "ControlLeft", key: "Control", ctrlKey: true });
+    });
+    advance(LEADER_HINT_DELAY_MS);
+    expectModHintVisible(false);
+
+    act(() => {
+      keyUp({ code: "ControlLeft", key: "Control" });
+      keyDown({ code: "MetaLeft", key: "Meta", metaKey: true });
+    });
+    advance(LEADER_HINT_DELAY_MS);
+    expectModHintVisible(true);
+  });
+
+  it("does not reserve macOS Control chords as plain key bindings", () => {
+    platformMock.mac = true;
+    useKeybindingStore.setState({
+      bindings: { ...getDefaultBindings(), "app.palette.open": "k" },
+    });
+    renderProbe("/epics/e1");
+
+    const event = keyDown({ code: "KeyK", key: "k", ctrlKey: true });
+
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("still reserves macOS Control-specific provider chords", () => {
+    platformMock.mac = true;
+    useKeybindingStore.setState({ bindings: getDefaultBindings() });
+    renderProbe("/epics/e1");
+
+    const event = keyDown({
+      code: "KeyM",
+      key: "m",
+      ctrlKey: true,
+      altKey: true,
+    });
+
+    expect(event.defaultPrevented).toBe(true);
   });
 
   it("shows both task-tab leader bindings when either leader is held", () => {

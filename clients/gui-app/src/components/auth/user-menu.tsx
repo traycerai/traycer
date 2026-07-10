@@ -12,6 +12,7 @@ import { computeInitials } from "@/lib/auth/compute-initials";
 import { resolveManageSubscriptionUrl } from "@/lib/auth/manage-subscription-url";
 import { useAuthService } from "@/lib/host";
 import { useRunnerHost } from "@/providers/use-runner-host";
+import { useTitleBarDragSuppression } from "@/stores/layout/title-bar-drag-store";
 import { getSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
 import { ExternalLink, LogOut, Settings } from "lucide-react";
 import { useState } from "react";
@@ -33,6 +34,7 @@ export function UserMenu(props: UserMenuProps) {
   const auth = useAuthService();
   const runnerHost = useRunnerHost();
   const [open, setOpen] = useState<boolean>(false);
+  useTitleBarDragSuppression("user-menu", open);
   const initials = computeInitials(props.userName, props.email);
   const manageSubscriptionUrl = resolveManageSubscriptionUrl(
     runnerHost.authnBaseUrl,
