@@ -112,12 +112,17 @@ function loadPdfMake(): Promise<typeof import("pdfmake")> {
     pdfMakePromise = Promise.all([
       import("pdfmake/build/pdfmake"),
       import("pdfmake/build/vfs_fonts"),
-    ]).then(([pdfMakeModule, vfsModule]) => {
-      pdfMakeModule.default.addVirtualFileSystem(
-        virtualFileSystemFromModule(vfsModule),
-      );
-      return pdfMakeModule.default;
-    });
+    ])
+      .then(([pdfMakeModule, vfsModule]) => {
+        pdfMakeModule.default.addVirtualFileSystem(
+          virtualFileSystemFromModule(vfsModule),
+        );
+        return pdfMakeModule.default;
+      })
+      .catch((error: unknown) => {
+        pdfMakePromise = null;
+        throw error;
+      });
   }
   return pdfMakePromise;
 }

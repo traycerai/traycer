@@ -41,9 +41,39 @@ function createFragment(markdown: string): Y.XmlFragment {
 
 describe("PDF artifact export", () => {
   beforeEach(() => {
+    vi.resetModules();
     pdfMake.addVirtualFileSystem.mockClear();
     pdfMake.createPdf.mockClear();
     pdfMake.state.definition = null;
+  });
+
+  it("retries PDF initialization after a transient font-loading failure", async () => {
+    pdfMake.addVirtualFileSystem
+      .mockImplementationOnce(() => {
+        throw new Error("temporary font-loading failure");
+      })
+      .mockImplementationOnce(() => undefined);
+    const { createArtifactExport } = await import("@/lib/artifacts");
+    const request = {
+      artifacts: [
+        {
+          id: "retry-pdf",
+          title: "Retry PDF",
+          fragment: createFragment("# Retry"),
+        },
+      ],
+      format: "pdf" as const,
+      archive: false,
+      archiveTitle: "ignored",
+    };
+
+    await expect(createArtifactExport(request)).rejects.toThrow(
+      "temporary font-loading failure",
+    );
+    await expect(createArtifactExport(request)).resolves.toMatchObject({
+      suggestedName: "Retry PDF.pdf",
+    });
+    expect(pdfMake.addVirtualFileSystem).toHaveBeenCalledTimes(2);
   });
 
   it("renders Markdown semantics as structured PDF content", async () => {
