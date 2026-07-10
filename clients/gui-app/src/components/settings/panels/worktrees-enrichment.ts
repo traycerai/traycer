@@ -284,8 +284,20 @@ export function useWorktreeActivityEnrichment(
         attempts: 0,
         timer: null,
       };
+      // `prState === null` = "not yet probed" (distinct from `"none"` =
+      // probed, no PR): the host served a stale/cold row and scheduled a
+      // background `gh` probe whose result never re-emits. Retry drives a
+      // refetch that picks the warmed fact up. A SUBMODULE leg counts too - a
+      // superproject can be proven `merged` while an owned submodule's PR fact
+      // is still warming (the detached-submodule shape), and one unproven
+      // submodule holds the whole row in Review. The per-path refetch re-probes
+      // every leg, so one retry budget per path covers both.
       const hasColdPrState =
-        result.data?.worktrees.some((entry) => entry.prState === null) ?? false;
+        result.data?.worktrees.some(
+          (entry) =>
+            entry.prState === null ||
+            entry.submodules.some((submodule) => submodule.prState === null),
+        ) ?? false;
       if (!hasColdPrState) {
         if (state.timer !== null) window.clearTimeout(state.timer);
         coldPrRefetchStateRef.current.delete(path);
