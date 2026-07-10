@@ -11,7 +11,7 @@ import {
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import type { WorktreeHostEntryV11 } from "@traycer/protocol/host/index";
+import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/index";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 
@@ -35,7 +35,7 @@ const state = vi.hoisted(() => ({
   },
   client: null as HostClient<HostRpcRegistry> | null,
   enrichment: {
-    enrichedByPath: new Map<string, WorktreeHostEntryV11>(),
+    enrichedByPath: new Map<string, WorktreeHostEntryV12>(),
     erroredPaths: new Set<string>(),
     reportVisiblePaths: vi.fn(),
     enriching: false,
@@ -272,7 +272,7 @@ describe("WorktreesSettingsPanel host-scoped states", () => {
       mergedHeadShaMatches: false,
       submodules: [],
       atBaseCommit: false,
-    } satisfies WorktreeHostEntryV11;
+    } satisfies WorktreeHostEntryV12;
     state.client = clientWithHandler(() => ({
       worktrees: [cleanWorktree],
       nextCursor: null,

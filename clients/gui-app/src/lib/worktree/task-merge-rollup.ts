@@ -1,7 +1,7 @@
 import type {
-  WorktreeHostEntryV11,
+  WorktreeHostEntryV12,
   WorktreePrState,
-  WorktreeSubmoduleMergeFact,
+  WorktreeSubmoduleMergeFactV12,
 } from "@traycer/protocol/host/index";
 
 /**
@@ -68,7 +68,7 @@ function branchHasPr(fact: BranchMergeFact): boolean {
   return fact.prState !== null && fact.prState !== "none";
 }
 
-function submoduleFact(fact: WorktreeSubmoduleMergeFact): BranchMergeFact {
+function submoduleFact(fact: WorktreeSubmoduleMergeFactV12): BranchMergeFact {
   return {
     prState: fact.prState,
     mergedHeadShaMatches: fact.mergedHeadShaMatches,
@@ -80,7 +80,7 @@ function submoduleFact(fact: WorktreeSubmoduleMergeFact): BranchMergeFact {
  * branch (the entry's own PR fields) followed by each owned submodule.
  */
 function entryBranchFacts(
-  entry: WorktreeHostEntryV11,
+  entry: WorktreeHostEntryV12,
 ): readonly BranchMergeFact[] {
   return [
     {
@@ -106,7 +106,7 @@ function entryBranchFacts(
  *    only ever claim merged progress once at least one branch has actually landed.
  */
 export function computeTaskMergeRollup(
-  entries: readonly WorktreeHostEntryV11[],
+  entries: readonly WorktreeHostEntryV12[],
 ): TaskMergeRollup {
   const facts = entries.flatMap(entryBranchFacts);
   const total = facts.length;
@@ -123,9 +123,9 @@ export function computeTaskMergeRollup(
  * merged progress simply resolves to `none` (or is absent) and shows no indicator.
  */
 export function buildTaskMergeRollups(
-  worktrees: readonly WorktreeHostEntryV11[],
+  worktrees: readonly WorktreeHostEntryV12[],
 ): ReadonlyMap<string, TaskMergeRollup> {
-  const entriesByEpicId = new Map<string, WorktreeHostEntryV11[]>();
+  const entriesByEpicId = new Map<string, WorktreeHostEntryV12[]>();
   for (const entry of worktrees) {
     for (const epicId of new Set(entry.owners.map((o) => o.epicId))) {
       const bucket = entriesByEpicId.get(epicId);

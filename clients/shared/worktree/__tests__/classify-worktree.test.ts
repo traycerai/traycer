@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type {
   WorktreeBranchStatus,
-  WorktreeHostEntryV11,
-  WorktreeSubmoduleMergeFact,
+  WorktreeHostEntryV12,
+  WorktreeSubmoduleMergeFactV12,
 } from "@traycer/protocol/host/index";
 import {
   WORKTREE_TIER_ORDER,
@@ -27,8 +27,8 @@ function owner(epicId: string) {
 }
 
 function subFact(
-  over: Partial<WorktreeSubmoduleMergeFact>,
-): WorktreeSubmoduleMergeFact {
+  over: Partial<WorktreeSubmoduleMergeFactV12>,
+): WorktreeSubmoduleMergeFactV12 {
   return {
     repoIdentifier: { owner: "acme", repo: "lib" },
     branch: "feat/x",
@@ -37,11 +37,12 @@ function subFact(
     prUrl: null,
     mergedHeadShaMatches: false,
     mergedIntoDefault: false,
+    atPinnedCommit: false,
     ...over,
   };
 }
 
-function entry(over: Partial<WorktreeHostEntryV11>): WorktreeHostEntryV11 {
+function entry(over: Partial<WorktreeHostEntryV12>): WorktreeHostEntryV12 {
   return {
     worktreePath: "/wt/x",
     repoLabel: "acme/app",
@@ -71,7 +72,7 @@ function entry(over: Partial<WorktreeHostEntryV11>): WorktreeHostEntryV11 {
 describe("classifyWorktreeTier - precedence truth table (first match wins)", () => {
   const cases: ReadonlyArray<{
     readonly name: string;
-    readonly entry: WorktreeHostEntryV11;
+    readonly entry: WorktreeHostEntryV12;
     readonly tier: WorktreeTier;
   }> = [
     {
@@ -330,6 +331,22 @@ describe("classifyWorktreeTier - precedence truth table (first match wins)", () 
         submodules: [subFact({ mergedIntoDefault: true })],
       }),
       tier: "at-base-commit",
+    },
+    {
+      name: "submodule proven at its pinned gitlink does not block → at-base-commit",
+      entry: entry({
+        atBaseCommit: true,
+        submodules: [subFact({ atPinnedCommit: true })],
+      }),
+      tier: "at-base-commit",
+    },
+    {
+      name: "submodule atPinnedCommit false proves nothing by itself → review",
+      entry: entry({
+        atBaseCommit: true,
+        submodules: [subFact({ atPinnedCommit: false })],
+      }),
+      tier: "review",
     },
     {
       name: "one proven + one unproven submodule → review (true AND across the owned set)",

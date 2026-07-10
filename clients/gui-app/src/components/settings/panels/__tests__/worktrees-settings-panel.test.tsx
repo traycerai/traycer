@@ -18,7 +18,7 @@ import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtur
 import { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import type { WorktreeDeleteStreamCallbacks } from "@traycer-clients/shared/host-transport/worktree-delete-stream-client";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import type { WorktreeHostEntryV11 } from "@traycer/protocol/host/index";
+import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/index";
 import type { WorktreeEntryScripts } from "@traycer/protocol/host/worktree-schemas";
 import {
   hostStreamRpcRegistry,
@@ -208,11 +208,11 @@ function stubOpenStreamTransport() {
 }
 
 function entry(
-  over: Partial<WorktreeHostEntryV11> & {
+  over: Partial<WorktreeHostEntryV12> & {
     worktreePath: string;
     branch: string;
   },
-): WorktreeHostEntryV11 {
+): WorktreeHostEntryV12 {
   return {
     repoLabel: "acme/app",
     repoIdentifier: { owner: "acme", repo: "app" },
@@ -220,7 +220,7 @@ function entry(
     uncommittedCount: 0,
     gitRemovable: true,
     scripts: null,
-    // v1.1 staleness + merge-provenance signals default to the "no signal /
+    // v1.2 staleness + merge-provenance signals default to the "no signal /
     // older host" shape so each test opts into only the fields it exercises.
     owners: [],
     lastActivityAt: null,
@@ -236,7 +236,7 @@ function entry(
   };
 }
 
-const WORKTREES: WorktreeHostEntryV11[] = [
+const WORKTREES: WorktreeHostEntryV12[] = [
   entry({
     worktreePath: "/wt/clean",
     branch: "feat-clean",
@@ -285,17 +285,17 @@ afterEach(() => {
 // entry) - the default the behavioural tests want, so tiers classify immediately.
 // Tests that exercise the pending/lazy path pass their own partial overlay.
 function fullyEnriched(
-  worktrees: readonly WorktreeHostEntryV11[],
-): ReadonlyMap<string, WorktreeHostEntryV11> {
+  worktrees: readonly WorktreeHostEntryV12[],
+): ReadonlyMap<string, WorktreeHostEntryV12> {
   return new Map(worktrees.map((entry) => [entry.worktreePath, entry]));
 }
 
 function renderList(args: {
   readonly hostId: string;
   readonly queryClient: QueryClient;
-  readonly worktrees: readonly WorktreeHostEntryV11[];
+  readonly worktrees: readonly WorktreeHostEntryV12[];
   readonly enrichedByPath:
-    ReadonlyMap<string, WorktreeHostEntryV11> | undefined;
+    ReadonlyMap<string, WorktreeHostEntryV12> | undefined;
   readonly erroredPaths: ReadonlySet<string> | undefined;
   readonly onVisiblePathsChange:
     ((paths: readonly string[]) => void) | undefined;
@@ -1563,7 +1563,7 @@ describe("WorktreesList confirm-time re-check", () => {
     toastMock.messages = [];
   });
 
-  function merged(path: string, branch: string): WorktreeHostEntryV11 {
+  function merged(path: string, branch: string): WorktreeHostEntryV12 {
     return entry({
       worktreePath: path,
       branch,
@@ -1573,7 +1573,7 @@ describe("WorktreesList confirm-time re-check", () => {
 
   function renderWith(
     queryClient: QueryClient,
-    worktrees: readonly WorktreeHostEntryV11[],
+    worktrees: readonly WorktreeHostEntryV12[],
   ) {
     return (
       <QueryClientProvider client={queryClient}>
@@ -1661,7 +1661,7 @@ describe("WorktreesList confirm-time re-check", () => {
     expect(streamMock.paths).toEqual(["/wt/merged"]);
   });
 
-  function atBase(path: string, branch: string): WorktreeHostEntryV11 {
+  function atBase(path: string, branch: string): WorktreeHostEntryV12 {
     return entry({ worktreePath: path, branch, atBaseCommit: true });
   }
 
@@ -1926,7 +1926,7 @@ describe("WorktreesList confirm-time re-check", () => {
   });
 });
 
-describe("WorktreesList v1.1 signals", () => {
+describe("WorktreesList v1.2 signals", () => {
   afterEach(() => {
     cleanup();
     __resetWorktreeDeleteRunForTests();
@@ -2072,6 +2072,7 @@ describe("WorktreesList v1.1 signals", () => {
               prUrl: "https://github.com/acme/open-sub/pull/11",
               mergedHeadShaMatches: false,
               mergedIntoDefault: false,
+              atPinnedCommit: false,
             },
             {
               repoIdentifier: { owner: "acme", repo: "closed-sub" },
@@ -2081,6 +2082,7 @@ describe("WorktreesList v1.1 signals", () => {
               prUrl: "https://github.com/acme/closed-sub/pull/12",
               mergedHeadShaMatches: false,
               mergedIntoDefault: false,
+              atPinnedCommit: false,
             },
             {
               repoIdentifier: { owner: "acme", repo: "merged-sub" },
@@ -2090,6 +2092,7 @@ describe("WorktreesList v1.1 signals", () => {
               prUrl: "https://github.com/acme/merged-sub/pull/13",
               mergedHeadShaMatches: true,
               mergedIntoDefault: true,
+              atPinnedCommit: false,
             },
             {
               repoIdentifier: { owner: "acme", repo: "none-sub" },
@@ -2099,6 +2102,7 @@ describe("WorktreesList v1.1 signals", () => {
               prUrl: "https://github.com/acme/none-sub/pull/14",
               mergedHeadShaMatches: false,
               mergedIntoDefault: false,
+              atPinnedCommit: false,
             },
             {
               repoIdentifier: { owner: "acme", repo: "cold-sub" },
@@ -2108,6 +2112,7 @@ describe("WorktreesList v1.1 signals", () => {
               prUrl: "https://github.com/acme/cold-sub/pull/15",
               mergedHeadShaMatches: false,
               mergedIntoDefault: false,
+              atPinnedCommit: false,
             },
           ],
         }),
@@ -2176,6 +2181,7 @@ describe("WorktreesList v1.1 signals", () => {
               prUrl: "https://github.com/acme/sub/pull/22",
               mergedHeadShaMatches: false,
               mergedIntoDefault: false,
+              atPinnedCommit: false,
             },
           ],
         }),
@@ -2192,6 +2198,38 @@ describe("WorktreesList v1.1 signals", () => {
         .getByRole("link", { name: "Open sub PR #22 Open" })
         .getAttribute("href"),
     ).toBe("https://github.com/acme/sub/pull/22");
+  });
+
+  it("does not render an unmerged chip for a submodule proven at its pinned gitlink", () => {
+    renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees: [
+        entry({
+          worktreePath: "/wt/submodule-at-pin",
+          branch: "feat-submodule-at-pin",
+          atBaseCommit: true,
+          submodules: [
+            {
+              repoIdentifier: { owner: "acme", repo: "sub" },
+              branch: "feat-submodule-at-pin",
+              prState: "none",
+              prNumber: null,
+              prUrl: null,
+              mergedHeadShaMatches: false,
+              mergedIntoDefault: false,
+              atPinnedCommit: true,
+            },
+          ],
+        }),
+      ],
+      taskTitlesByEpicId: undefined,
+      enrichedByPath: undefined,
+      erroredPaths: undefined,
+      onVisiblePathsChange: undefined,
+    });
+
+    expect(screen.queryByText("sub · unmerged")).toBeNull();
   });
 
   it("labels a worktree with no owners as not used by any Task", () => {
@@ -2351,6 +2389,7 @@ describe("WorktreesList v1.1 signals", () => {
               prUrl: null,
               mergedHeadShaMatches: true,
               mergedIntoDefault: true,
+              atPinnedCommit: false,
             },
           ],
         }),
@@ -2393,6 +2432,7 @@ describe("WorktreesList v1.1 signals", () => {
               prUrl: null,
               mergedHeadShaMatches: true,
               mergedIntoDefault: true,
+              atPinnedCommit: false,
             },
           ],
         }),
@@ -2688,8 +2728,8 @@ describe("WorktreesList virtualization + per-viewport enrichment", () => {
   });
 
   function listElement(args: {
-    readonly worktrees: readonly WorktreeHostEntryV11[];
-    readonly enrichedByPath: ReadonlyMap<string, WorktreeHostEntryV11>;
+    readonly worktrees: readonly WorktreeHostEntryV12[];
+    readonly enrichedByPath: ReadonlyMap<string, WorktreeHostEntryV12>;
     readonly erroredPaths: ReadonlySet<string> | undefined;
     readonly onVisiblePathsChange:
       ((paths: readonly string[]) => void) | undefined;
@@ -2712,7 +2752,7 @@ describe("WorktreesList virtualization + per-viewport enrichment", () => {
     );
   }
 
-  function manyWorktrees(count: number): WorktreeHostEntryV11[] {
+  function manyWorktrees(count: number): WorktreeHostEntryV12[] {
     return Array.from({ length: count }, (_unused, index) =>
       entry({
         worktreePath: `/wt/w${index}`,
@@ -3022,8 +3062,8 @@ describe("WorktreesList status-aware delete safety", () => {
   // `pendingDeleteTargets`) instead of remounting the whole subtree.
   function statusAwareElement(args: {
     readonly queryClient: QueryClient;
-    readonly worktrees: readonly WorktreeHostEntryV11[];
-    readonly enrichedByPath: ReadonlyMap<string, WorktreeHostEntryV11>;
+    readonly worktrees: readonly WorktreeHostEntryV12[];
+    readonly enrichedByPath: ReadonlyMap<string, WorktreeHostEntryV12>;
     readonly erroredPaths: ReadonlySet<string>;
   }): ReactNode {
     return (

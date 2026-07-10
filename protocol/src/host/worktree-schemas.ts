@@ -683,6 +683,19 @@ export type WorktreeSubmoduleMergeFact = z.infer<
 >;
 
 /**
+ * v1.2 adds the submodule equivalent of `atBaseCommit`: the owned branch's live
+ * checkout or resolved tip is exactly the superproject's pinned gitlink, so it
+ * carries no committed work beyond what the superproject already references.
+ */
+export const worktreeSubmoduleMergeFactSchemaV12 =
+  worktreeSubmoduleMergeFactSchema.extend({
+    atPinnedCommit: z.boolean(),
+  });
+export type WorktreeSubmoduleMergeFactV12 = z.infer<
+  typeof worktreeSubmoduleMergeFactSchemaV12
+>;
+
+/**
  * `worktree.listAllForHost` v1.1 entry. Adds the staleness signals the
  * housekeeping skill and the Settings ▸ Worktrees tab use, on top of every
  * v1.0 field.
@@ -746,6 +759,15 @@ export const worktreeHostEntrySchemaV11 = worktreeHostEntrySchema.extend({
   atBaseCommit: z.boolean(),
 });
 export type WorktreeHostEntryV11 = z.infer<typeof worktreeHostEntrySchemaV11>;
+
+/**
+ * `worktree.listAllForHost` v1.2 entry. The only wire-shape change from v1.1 is
+ * the additive `atPinnedCommit` proof on each owned-submodule fact.
+ */
+export const worktreeHostEntrySchemaV12 = worktreeHostEntrySchemaV11.extend({
+  submodules: z.array(worktreeSubmoduleMergeFactSchemaV12),
+});
+export type WorktreeHostEntryV12 = z.infer<typeof worktreeHostEntrySchemaV12>;
 
 /**
  * `worktree.listAllForHost` v1.1 request. Adds `includeActivity`: the git
@@ -821,6 +843,15 @@ export type WorktreeListAllForHostRequestV11 = z.infer<
 >;
 
 /**
+ * `worktree.listAllForHost` v1.2 request. Unchanged from v1.1; the minor bump is
+ * solely for the additive response fact field.
+ */
+export const worktreeListAllForHostRequestSchemaV12 =
+  worktreeListAllForHostRequestSchemaV11;
+export type WorktreeListAllForHostRequestV12 =
+  WorktreeListAllForHostRequestV11;
+
+/**
  * `worktree.listAllForHost` v1.1 response. Same `worktrees` field, enriched
  * entry shape ({@link worktreeHostEntrySchemaV11}), plus `nextCursor` for the
  * caller to continue when more entries remain.
@@ -831,6 +862,18 @@ export const worktreeListAllForHostResponseSchemaV11 = z.object({
 });
 export type WorktreeListAllForHostResponseV11 = z.infer<
   typeof worktreeListAllForHostResponseSchemaV11
+>;
+
+/**
+ * `worktree.listAllForHost` v1.2 response. Same pagination envelope as v1.1,
+ * with v1.2 entries carrying `submodules[].atPinnedCommit`.
+ */
+export const worktreeListAllForHostResponseSchemaV12 = z.object({
+  worktrees: z.array(worktreeHostEntrySchemaV12),
+  nextCursor: z.string().nullable(),
+});
+export type WorktreeListAllForHostResponseV12 = z.infer<
+  typeof worktreeListAllForHostResponseSchemaV12
 >;
 
 /**

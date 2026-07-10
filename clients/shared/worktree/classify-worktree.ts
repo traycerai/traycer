@@ -1,7 +1,7 @@
 import type {
   WorktreeBranchStatus,
-  WorktreeHostEntryV11,
-  WorktreeSubmoduleMergeFact,
+  WorktreeHostEntryV12,
+  WorktreeSubmoduleMergeFactV12,
 } from "@traycer/protocol/host/index";
 
 /**
@@ -116,7 +116,9 @@ export function worktreeTierRank(tier: WorktreeTier): number {
  *     case: submodule commits landed on the submodule branch but its PR hasn't
  *     merged, while the superproject gitlink was never bumped - the superproject
  *     looks clean/at-base). Proof per fact mirrors the superproject greens:
- *     a HEAD-validated merged PR, or local `mergedIntoDefault` ancestry.
+ *     a HEAD-validated merged PR, local `mergedIntoDefault` ancestry, or
+ *     `atPinnedCommit` (the branch/tip equals the superproject's pinned gitlink
+ *     and carries nothing beyond that pin).
  *     `submodules: []` (none owned, or `includeActivity: false`) gates nothing.
  *  6. `prState === "merged" && mergedHeadShaMatches` → **merged** (green, PR
  *     provenance). Highest green - the authoritative signal that the work landed.
@@ -147,7 +149,7 @@ export function worktreeTierRank(tier: WorktreeTier): number {
  * branch is only ever Landed (proven contained), At base commit, or Review.
  */
 export function classifyWorktreeTier(
-  entry: WorktreeHostEntryV11,
+  entry: WorktreeHostEntryV12,
 ): WorktreeTier {
   if (entry.inUse) return "in-use";
   if (!entry.gitRemovable) return "orphaned";
@@ -175,14 +177,15 @@ export function classifyWorktreeTier(
 
 /**
  * A single owned-submodule branch is proven merged the same two ways the
- * superproject greens: a HEAD-validated merged PR (`prState === "merged"` with
- * the host's live-HEAD match), or local `mergedIntoDefault` ancestry. `prState`
- * null (not probed) or `"none"` proves nothing on its own - the local ancestry
- * bit is then the only possible proof.
+ * superproject greens, plus the submodule-specific at-pin proof: a
+ * HEAD-validated merged PR (`prState === "merged"` with the host's live-HEAD
+ * match), local `mergedIntoDefault` ancestry, or `atPinnedCommit`. `prState`
+ * null (not probed) or `"none"` proves nothing on its own - the local proof bits
+ * are then the only possible proof.
  */
-function submoduleMergeProven(fact: WorktreeSubmoduleMergeFact): boolean {
+function submoduleMergeProven(fact: WorktreeSubmoduleMergeFactV12): boolean {
   if (fact.prState === "merged" && fact.mergedHeadShaMatches) return true;
-  return fact.mergedIntoDefault;
+  return fact.mergedIntoDefault || fact.atPinnedCommit;
 }
 
 /**
@@ -193,7 +196,7 @@ function submoduleMergeProven(fact: WorktreeSubmoduleMergeFact): boolean {
  * `unreferenced`. Deriving it from `classifyWorktreeTier` guarantees the pill the
  * user sees and the bulk cohort can never disagree.
  */
-export function provenRemovable(entry: WorktreeHostEntryV11): boolean {
+export function provenRemovable(entry: WorktreeHostEntryV12): boolean {
   const tier = classifyWorktreeTier(entry);
   return (
     tier === "merged" || tier === "at-base-commit" || tier === "unreferenced"
@@ -201,7 +204,7 @@ export function provenRemovable(entry: WorktreeHostEntryV11): boolean {
 }
 
 export function classifyWorktree(
-  entry: WorktreeHostEntryV11,
+  entry: WorktreeHostEntryV12,
 ): WorktreeClassification {
   const tier = classifyWorktreeTier(entry);
   const facts = worktreeFacts(entry, tier);
@@ -220,7 +223,7 @@ interface WorktreeFacts {
 }
 
 function worktreeFacts(
-  entry: WorktreeHostEntryV11,
+  entry: WorktreeHostEntryV12,
   tier: WorktreeTier,
 ): WorktreeFacts {
   // "clean" only reads as reassuring on the green-leaning tiers; elsewhere it is
@@ -257,7 +260,7 @@ function worktreeFacts(
  * classifier evaluates the PR row first.
  */
 function mergedProvenanceFacts(
-  entry: WorktreeHostEntryV11,
+  entry: WorktreeHostEntryV12,
   tier: WorktreeTier,
 ): string[] {
   if (tier !== "merged") return [];
@@ -282,7 +285,7 @@ function mergedProvenanceFacts(
  * covered by the tier itself.
  */
 function unprovenSubmoduleFacts(
-  submodules: readonly WorktreeSubmoduleMergeFact[],
+  submodules: readonly WorktreeSubmoduleMergeFactV12[],
 ): string[] {
   return submodules
     .filter((fact) => !submoduleMergeProven(fact))
