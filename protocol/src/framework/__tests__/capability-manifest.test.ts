@@ -14,21 +14,21 @@ import {
 import { releasedMethodNames } from "@traycer/protocol/host/__tests__/__fixtures__/released-method-names";
 import { hostRpcRegistry } from "@traycer/protocol/host/registry";
 
-const floorMethodV10 = defineRpcContract({
+const FLOOR_METHOD_V10 = defineRpcContract({
   method: "floor.method",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: z.object({ id: z.string() }),
   responseSchema: z.object({ name: z.string() }),
 });
 
-const optionalMethodV10 = defineRpcContract({
+const OPTIONAL_METHOD_V10 = defineRpcContract({
   method: "optional.method",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: z.object({ id: z.string(), includeDetails: z.boolean() }),
   responseSchema: z.object({ name: z.string(), details: z.string() }),
 });
 
-const registryWithUnsupportedOptional = defineFloorAwareVersionedRpcRegistry(
+const REGISTRY_WITH_UNSUPPORTED_OPTIONAL = defineFloorAwareVersionedRpcRegistry(
   ["floor.method"] as const,
   {
     "floor.method": {
@@ -36,7 +36,7 @@ const registryWithUnsupportedOptional = defineFloorAwareVersionedRpcRegistry(
         latestMinor: 0,
         versions: {
           0: {
-            contract: floorMethodV10,
+            contract: FLOOR_METHOD_V10,
             upgradeFromPreviousVersion: null,
           },
         },
@@ -49,7 +49,7 @@ const registryWithUnsupportedOptional = defineFloorAwareVersionedRpcRegistry(
         latestMinor: 0,
         versions: {
           0: {
-            contract: optionalMethodV10,
+            contract: OPTIONAL_METHOD_V10,
             upgradeFromPreviousVersion: null,
           },
         },
@@ -70,7 +70,7 @@ describe("capability manifest helpers", () => {
   });
 
   it("splits non-floor methods into the optional channel", () => {
-    const split = splitConnectionManifest(registryWithUnsupportedOptional, [
+    const split = splitConnectionManifest(REGISTRY_WITH_UNSUPPORTED_OPTIONAL, [
       "floor.method",
     ]);
 
@@ -85,13 +85,13 @@ describe("capability manifest helpers", () => {
   });
 
   it("keeps optional methods out of the fatal compatibility domain", () => {
-    const split = splitConnectionManifest(registryWithUnsupportedOptional, [
+    const split = splitConnectionManifest(REGISTRY_WITH_UNSUPPORTED_OPTIONAL, [
       "floor.method",
     ]);
 
     expect(
       checkCompatibility(
-        registryWithUnsupportedOptional,
+        REGISTRY_WITH_UNSUPPORTED_OPTIONAL,
         split.manifest,
         { "floor.method": { major: 1, minor: 0 } },
         "host",
@@ -119,8 +119,8 @@ describe("capability manifest helpers", () => {
 describe("floor-aware RPC registry validation", () => {
   it("accepts a fallback degrade targeting a floor method version", () => {
     const fallback = defineFallbackMethodDegrade<
-      typeof optionalMethodV10,
-      typeof floorMethodV10,
+      typeof OPTIONAL_METHOD_V10,
+      typeof FLOOR_METHOD_V10,
       "floor.method"
     >({
       kind: "fallback",
@@ -140,7 +140,7 @@ describe("floor-aware RPC registry validation", () => {
             latestMinor: 0,
             versions: {
               0: {
-                contract: floorMethodV10,
+                contract: FLOOR_METHOD_V10,
                 upgradeFromPreviousVersion: null,
               },
             },
@@ -153,7 +153,7 @@ describe("floor-aware RPC registry validation", () => {
             latestMinor: 0,
             versions: {
               0: {
-                contract: optionalMethodV10,
+                contract: OPTIONAL_METHOD_V10,
                 upgradeFromPreviousVersion: null,
               },
             },
@@ -180,7 +180,7 @@ describe("floor-aware RPC registry validation", () => {
           latestMinor: 0,
           versions: {
             0: {
-              contract: floorMethodV10,
+              contract: FLOOR_METHOD_V10,
               upgradeFromPreviousVersion: null,
             },
           },
@@ -192,7 +192,7 @@ describe("floor-aware RPC registry validation", () => {
           latestMinor: 0,
           versions: {
             0: {
-              contract: optionalMethodV10,
+              contract: OPTIONAL_METHOD_V10,
               upgradeFromPreviousVersion: null,
             },
           },
@@ -215,7 +215,7 @@ describe("floor-aware RPC registry validation", () => {
           latestMinor: 0,
           versions: {
             0: {
-              contract: floorMethodV10,
+              contract: FLOOR_METHOD_V10,
               upgradeFromPreviousVersion: null,
             },
           },
@@ -224,8 +224,8 @@ describe("floor-aware RPC registry validation", () => {
       },
       "optional.method": {
         degrade: defineFallbackMethodDegrade<
-          typeof optionalMethodV10,
-          typeof floorMethodV10,
+          typeof OPTIONAL_METHOD_V10,
+          typeof FLOOR_METHOD_V10,
           "optional.method"
         >({
           kind: "fallback",
@@ -240,7 +240,7 @@ describe("floor-aware RPC registry validation", () => {
           latestMinor: 0,
           versions: {
             0: {
-              contract: optionalMethodV10,
+              contract: OPTIONAL_METHOD_V10,
               upgradeFromPreviousVersion: null,
             },
           },

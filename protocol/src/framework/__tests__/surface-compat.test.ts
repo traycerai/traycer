@@ -18,7 +18,7 @@ import {
   hostRpcRegistry,
   hostStreamRpcRegistry,
 } from "@traycer/protocol/host/index";
-import { releasedFloorMethodNames } from "@traycer/protocol/host/released-floor";
+import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import { buildProtocolSurface } from "@traycer/protocol/framework/surface-build";
 import {
   checkSurfaceCompatibility,
@@ -120,7 +120,7 @@ describe("surface self-compatibility", () => {
   it("the live host registries are compatible with their own surface", () => {
     const surface = buildProtocolSurface({
       unary: hostRpcRegistry,
-      unaryFloorMethodNames: releasedFloorMethodNames,
+      unaryFloorMethodNames: RELEASED_FLOOR_METHOD_NAMES,
       stream: hostStreamRpcRegistry,
     });
     const result = checkSurfaceCompatibility({

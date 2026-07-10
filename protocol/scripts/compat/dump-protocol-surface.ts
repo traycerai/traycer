@@ -17,9 +17,27 @@ import { buildProtocolSurface } from "../../src/framework/surface-build";
 async function resolveUnaryFloorMethodNames(): Promise<readonly string[]> {
   try {
     const floorModule = await import("../../src/host/released-floor");
-    return floorModule.releasedFloorMethodNames;
+    return floorModule.RELEASED_FLOOR_METHOD_NAMES;
   } catch (error) {
-    if (!String(error).includes("Cannot find module")) {
+    const errorCode =
+      typeof error === "object" && error !== null && "code" in error
+        ? error.code
+        : null;
+    const errorMessage =
+      typeof error === "object" &&
+      error !== null &&
+      "message" in error &&
+      typeof error.message === "string"
+        ? error.message
+        : "";
+    const missingTarget =
+      /Cannot find module ['"]([^'"]+)['"]/.exec(errorMessage)?.[1] ?? null;
+    const isMissingReleasedFloorModule =
+      (errorCode === "ERR_MODULE_NOT_FOUND" ||
+        errorCode === "MODULE_NOT_FOUND") &&
+      missingTarget !== null &&
+      /(^|\/)released-floor(\.[cm]?[jt]s)?$/.test(missingTarget);
+    if (!isMissingReleasedFloorModule) {
       throw error;
     }
     // Backfill path: this script is copied into older released tags that do
@@ -29,13 +47,13 @@ async function resolveUnaryFloorMethodNames(): Promise<readonly string[]> {
   }
 }
 
-const unaryFloorMethodNames = await resolveUnaryFloorMethodNames();
+const UNARY_FLOOR_METHOD_NAMES = await resolveUnaryFloorMethodNames();
 
 process.stdout.write(
   `${JSON.stringify(
     buildProtocolSurface({
       unary: hostRpcRegistry,
-      unaryFloorMethodNames,
+      unaryFloorMethodNames: UNARY_FLOOR_METHOD_NAMES,
       stream: hostStreamRpcRegistry,
     }),
     null,

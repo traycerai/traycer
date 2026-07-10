@@ -219,13 +219,11 @@ function intersectManifests(
   hostManifest: Readonly<Record<string, { major: number; minor: number }>>,
   clientManifest: Readonly<Record<string, { major: number; minor: number }>>,
 ): Record<string, { major: number; minor: number }> {
-  const intersection: Record<string, { major: number; minor: number }> = {};
-  for (const [method, version] of Object.entries(hostManifest)) {
-    if (clientManifest[method] !== undefined) {
-      intersection[method] = version;
-    }
-  }
-  return intersection;
+  return Object.fromEntries(
+    Object.entries(hostManifest).filter(
+      ([method]) => clientManifest[method] !== undefined,
+    ),
+  );
 }
 
 describe.skipIf(baselines.length === 0)(

@@ -12,7 +12,7 @@ import {
   splitConnectionManifest,
   upgradeResponseToVersion,
 } from "@traycer/protocol/framework/index";
-import { releasedFloorMethodNames } from "@traycer/protocol/host/released-floor";
+import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import { CredentialLeaseReleasedError } from "@traycer/protocol/auth/request-context";
 import type {
   BearerSourceProvider,
@@ -302,7 +302,7 @@ export class WsRpcClient<
   }
 
   private buildManifest(): SplitConnectionManifest {
-    return splitConnectionManifest(this.registry, releasedFloorMethodNames);
+    return splitConnectionManifest(this.registry, RELEASED_FLOOR_METHOD_NAMES);
   }
 }
 

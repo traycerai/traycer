@@ -1,7 +1,7 @@
 // The host-v1.0.0 /rpc method-name set that defines the legacy/floor channel.
 // Keep this production list element-for-element identical to the guarded
 // __tests__ fixture; released-floor.test.ts pins the two together.
-export const releasedFloorMethodNames: readonly string[] = [
+export const RELEASED_FLOOR_METHOD_NAMES: readonly string[] = [
   "agent.create",
   "agent.getTranscript",
   "agent.gui.getPlan",
