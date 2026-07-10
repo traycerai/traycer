@@ -1357,7 +1357,8 @@ describe("WsRpcClient", () => {
 
       sockets[0].socket.fireMessage({
         kind: "openAck",
-        manifest: { "host.ping": { major: 1, minor: 0 } },
+        manifest: {},
+        optionalManifest: { "host.ping": { major: 1, minor: 0 } },
       });
 
       await expect(pending).rejects.toSatisfy((error: unknown) => {
