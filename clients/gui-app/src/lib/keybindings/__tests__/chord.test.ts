@@ -1,14 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createPlatformMock } from "@/__tests__/create-platform-mock";
 
 const platformMock = vi.hoisted(() => ({ mac: false }));
 
-vi.mock("@/lib/keybindings/platform", () => ({
-  isMac: () => platformMock.mac,
-  modLabel: () => (platformMock.mac ? "⌘" : "Ctrl"),
-  ctrlLabel: () => (platformMock.mac ? "⌃" : "Ctrl"),
-  altLabel: () => (platformMock.mac ? "⌥" : "Alt"),
-  shiftLabel: () => (platformMock.mac ? "⇧" : "Shift"),
-}));
+vi.mock("@/lib/keybindings/platform", () => createPlatformMock(platformMock));
 
 import {
   chordFromEvent,

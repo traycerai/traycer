@@ -1,20 +1,11 @@
 import "../../../__tests__/test-browser-apis";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createPlatformMock } from "@/__tests__/create-platform-mock";
 
 const platformMock = vi.hoisted(() => ({ mac: false }));
 
-vi.mock("@/lib/keybindings/platform", () => ({
-  isMac: () => platformMock.mac,
-  modLabel: () => (platformMock.mac ? "⌘" : "Ctrl"),
-  ctrlLabel: () => (platformMock.mac ? "⌃" : "Ctrl"),
-  altLabel: () => (platformMock.mac ? "⌥" : "Alt"),
-  shiftLabel: () => (platformMock.mac ? "⇧" : "Shift"),
-  leaderGlyph: (modifier: "mod" | "alt") => {
-    if (modifier === "alt") return "⌥";
-    return platformMock.mac ? "⌘" : "⌃";
-  },
-}));
+vi.mock("@/lib/keybindings/platform", () => createPlatformMock(platformMock));
 
 import { createMemoryHistory } from "@tanstack/react-router";
 import { createAppRouter, type AppRouter } from "@/router";
