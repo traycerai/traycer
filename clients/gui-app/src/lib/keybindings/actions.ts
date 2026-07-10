@@ -82,6 +82,13 @@ export interface ActionMeta {
   readonly kind: ActionKind;
   readonly defaultChord: ActionDefaultChord;
   readonly secondaryChord: ActionDefaultChord | undefined;
+  /**
+   * When a terminal is focused on Windows/Linux, only mark default Ctrl chords
+   * as "shell" if @xterm/xterm's evaluateKeyboardEvent Ctrl branch actually
+   * emits PTY bytes: Ctrl+A-Z, Ctrl+space, Ctrl+3-8, Ctrl+/, Ctrl+[, Ctrl+\, or
+   * Ctrl+]. Non-encodable Ctrl chords must stay app-owned or the key becomes a
+   * terminal no-op.
+   */
   readonly terminalPolicy: TerminalPolicy;
   readonly secondaryTerminalPolicy: TerminalPolicy | undefined;
 }
@@ -405,7 +412,7 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     kind: "chord",
     defaultChord: "mod+,",
     secondaryChord: undefined,
-    terminalPolicy: "shell",
+    terminalPolicy: "app",
     secondaryTerminalPolicy: undefined,
   },
   "app.settings.section.byDigit": {
@@ -440,7 +447,7 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     kind: "chord",
     defaultChord: "mod+=",
     secondaryChord: undefined,
-    terminalPolicy: "shell",
+    terminalPolicy: "app",
     secondaryTerminalPolicy: undefined,
   },
   "app.zoom.out": {
@@ -451,7 +458,7 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     kind: "chord",
     defaultChord: "mod+-",
     secondaryChord: undefined,
-    terminalPolicy: "shell",
+    terminalPolicy: "app",
     secondaryTerminalPolicy: undefined,
   },
   "app.zoom.reset": {
@@ -462,7 +469,7 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     kind: "chord",
     defaultChord: "mod+0",
     secondaryChord: undefined,
-    terminalPolicy: "shell",
+    terminalPolicy: "app",
     secondaryTerminalPolicy: undefined,
   },
   "composer.dictation.toggle": {

@@ -604,6 +604,25 @@ describe("<KeybindingProvider /> visual leader hints", () => {
     expect(event.defaultPrevented).toBe(true);
   });
 
+  it("reserves non-encodable non-mac Ctrl punctuation chords when a terminal is focused", () => {
+    platformMock.mac = false;
+    renderProbe("/epics/e1");
+
+    const settings = terminalKeyDown({
+      code: "Comma",
+      key: ",",
+      ctrlKey: true,
+    });
+    const zoomOut = terminalKeyDown({
+      code: "Minus",
+      key: "-",
+      ctrlKey: true,
+    });
+
+    expect(settings.defaultPrevented).toBe(true);
+    expect(zoomOut.defaultPrevented).toBe(true);
+  });
+
   it("reserves the palette secondary chord when a terminal is focused", () => {
     platformMock.mac = false;
     renderProbe("/epics/e1");
