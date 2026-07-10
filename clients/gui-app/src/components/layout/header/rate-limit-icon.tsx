@@ -4,6 +4,7 @@ import { Popover, PopoverTrigger } from "@/components/ui/popover";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { RateLimitPopover } from "@/components/layout/header/rate-limit-popover";
 import { useHeaderRateLimitBars } from "@/hooks/rate-limits/use-header-rate-limit-bars";
+import { useRateLimitProfileSelection } from "@/hooks/rate-limits/use-rate-limit-profile-selection";
 import {
   rateLimitWindowFillPercent,
   rateLimitWindowSeverityBarClassName,
@@ -32,7 +33,12 @@ const PLACEHOLDER_BAR_PERCENTAGES: ReadonlyArray<number> = [75, 60];
  */
 export function RateLimitIconButton(): ReactNode {
   const [open, setOpen] = useState(false);
-  const bars = useHeaderRateLimitBars();
+  // One subscription bridge owns active-chat + per-harness profile state for
+  // both the always-mounted glyph and the lazily-mounted popover. Passing the
+  // same snapshot down avoids N duplicate chat-store subscriptions when the
+  // Overview renders several multi-profile provider blocks.
+  const profileSelection = useRateLimitProfileSelection();
+  const bars = useHeaderRateLimitBars(profileSelection);
   const isEmpty = bars.length === 0;
   const isDegraded = !isEmpty && bars.some((bar) => bar.degraded);
 
@@ -97,7 +103,10 @@ export function RateLimitIconButton(): ReactNode {
           </Button>
         </PopoverTrigger>
       </TooltipWrapper>
-      <RateLimitPopover onClose={() => setOpen(false)} />
+      <RateLimitPopover
+        onClose={() => setOpen(false)}
+        profileSelection={profileSelection}
+      />
     </Popover>
   );
 }

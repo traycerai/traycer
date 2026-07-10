@@ -52,10 +52,7 @@ import {
 } from "@/components/epic-canvas/canvas/tab-strip-context-menu";
 import { EpicNodeTabIcon } from "@/components/epic-canvas/epic-node-tab-icon";
 import { useHorizontalWheelScroll } from "@/hooks/use-horizontal-wheel-scroll";
-import {
-  useCanvasTabLeaderModifierForIndex,
-  type LeaderModifier,
-} from "@/providers/keybinding-context";
+import { useCanvasTabLeaderModifierForIndex } from "@/providers/keybinding-context";
 import { LeaderDigitBadge } from "@/components/ui/leader-digit-badge";
 import {
   leaderDigitFor,
@@ -433,7 +430,7 @@ function TabItem(props: TabItemProps) {
       ? null
       : {
           modifier: leaderModifier,
-          hint: leaderHint(index, "to switch to", displayTitle),
+          hint: leaderHint(leaderDigitFor(index), "to switch to", displayTitle),
         };
 
   return (
@@ -503,7 +500,7 @@ function TabItem(props: TabItemProps) {
 }
 
 interface CanvasLeaderBadge {
-  readonly modifier: LeaderModifier;
+  readonly modifier: "mod";
   readonly hint: string;
 }
 
@@ -577,7 +574,7 @@ function TabItemLabelSlot(props: TabItemLabelSlotProps) {
         {leaderBadge !== null ? (
           <LeaderDigitBadge
             key={`${leaderBadge.modifier}:${tabInstanceId}`}
-            index={tabIndex}
+            digit={leaderDigitFor(tabIndex)}
             modifier={leaderBadge.modifier}
             ariaLabel={leaderBadge.hint}
             testId={`canvas-tab-digit-${leaderDigitFor(tabIndex)}`}

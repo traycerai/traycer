@@ -7,6 +7,7 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { DEFAULT_ACCOUNT_CONTEXT } from "@traycer/protocol/common/schemas";
 import type { ProviderRateLimits } from "@traycer/protocol/host";
 import type { ProviderRateLimitEnvelope } from "@/lib/rate-limits/rate-limit-envelope";
 import { envelopeFromRateLimits } from "@/lib/rate-limits/__tests__/rate-limit-envelope-fixtures";
@@ -136,7 +137,11 @@ describe("ProviderRateLimitForProvider", () => {
 
   it("renders nothing for a provider without native usage limits", () => {
     const { container } = render(
-      <ProviderRateLimitForProvider providerId="traycer" />,
+      <ProviderRateLimitForProvider
+        providerId="traycer"
+        profileId={null}
+        usageUpdatedAt={null}
+      />,
     );
     expect(container.firstChild).toBe(null);
   });
@@ -144,7 +149,13 @@ describe("ProviderRateLimitForProvider", () => {
   it("renders the card with a loading state before data arrives", () => {
     mocks.isPending = true;
     mocks.isFetching = true;
-    render(<ProviderRateLimitForProvider providerId="claude-code" />);
+    render(
+      <ProviderRateLimitForProvider
+        providerId="claude-code"
+        profileId={null}
+        usageUpdatedAt={null}
+      />,
+    );
     expect(screen.getByText("Usage limits")).toBeTruthy();
     expect(screen.getByText("Loading usage limits")).toBeTruthy();
   });
@@ -155,14 +166,26 @@ describe("ProviderRateLimitForProvider", () => {
     // show a permanent loading spinner for that state.
     mocks.isPending = true;
     mocks.isFetching = false;
-    render(<ProviderRateLimitForProvider providerId="claude-code" />);
+    render(
+      <ProviderRateLimitForProvider
+        providerId="claude-code"
+        profileId={null}
+        usageUpdatedAt={null}
+      />,
+    );
     expect(screen.getByText("Usage limits")).toBeTruthy();
     expect(screen.queryByText("Loading usage limits")).toBeNull();
   });
 
   it("renders the Claude Code rate-limit detail once loaded", () => {
     mocks.data = envelope(CLAUDE_RATE_LIMITS);
-    render(<ProviderRateLimitForProvider providerId="claude-code" />);
+    render(
+      <ProviderRateLimitForProvider
+        providerId="claude-code"
+        profileId={null}
+        usageUpdatedAt={null}
+      />,
+    );
 
     expect(screen.getByText("Current session")).toBeTruthy();
     expect(screen.getByText("12% used")).toBeTruthy();
@@ -172,13 +195,25 @@ describe("ProviderRateLimitForProvider", () => {
 
   it("does not show a subscription-plan badge (the provider auth badge above already shows it)", () => {
     mocks.data = envelope(CLAUDE_RATE_LIMITS);
-    render(<ProviderRateLimitForProvider providerId="claude-code" />);
+    render(
+      <ProviderRateLimitForProvider
+        providerId="claude-code"
+        profileId={null}
+        usageUpdatedAt={null}
+      />,
+    );
     expect(screen.queryByText("Max")).toBeNull();
   });
 
   it("shows an exact reset date/time for the weekly window, and a relative countdown for the 5-hour one", () => {
     mocks.data = envelope(CLAUDE_RATE_LIMITS);
-    render(<ProviderRateLimitForProvider providerId="claude-code" />);
+    render(
+      <ProviderRateLimitForProvider
+        providerId="claude-code"
+        profileId={null}
+        usageUpdatedAt={null}
+      />,
+    );
 
     expect(
       screen.getByText(
@@ -203,7 +238,11 @@ describe("ProviderRateLimitForProvider", () => {
       },
     });
     const { container } = render(
-      <ProviderRateLimitForProvider providerId="claude-code" />,
+      <ProviderRateLimitForProvider
+        providerId="claude-code"
+        profileId={null}
+        usageUpdatedAt={null}
+      />,
     );
 
     expect(container.querySelectorAll(".bg-yellow-500").length).toBe(0);
@@ -216,7 +255,11 @@ describe("ProviderRateLimitForProvider", () => {
   it("keeps the bar blue below the red threshold", () => {
     mocks.data = envelope(CLAUDE_RATE_LIMITS);
     const { container } = render(
-      <ProviderRateLimitForProvider providerId="claude-code" />,
+      <ProviderRateLimitForProvider
+        providerId="claude-code"
+        profileId={null}
+        usageUpdatedAt={null}
+      />,
     );
 
     expect(container.querySelectorAll(".bg-yellow-500").length).toBe(0);
@@ -228,7 +271,13 @@ describe("ProviderRateLimitForProvider", () => {
 
   it("renders the Codex rate-limit detail once loaded", () => {
     mocks.data = envelope(CODEX_RATE_LIMITS);
-    render(<ProviderRateLimitForProvider providerId="codex" />);
+    render(
+      <ProviderRateLimitForProvider
+        providerId="codex"
+        profileId={null}
+        usageUpdatedAt={null}
+      />,
+    );
 
     expect(screen.getByText("Current session")).toBeTruthy();
     expect(screen.getByText("42% used")).toBeTruthy();
@@ -238,21 +287,39 @@ describe("ProviderRateLimitForProvider", () => {
 
   it("maps a rateLimitReachedType token to a destructive badge", () => {
     mocks.data = envelope(CODEX_RATE_LIMITS);
-    render(<ProviderRateLimitForProvider providerId="codex" />);
+    render(
+      <ProviderRateLimitForProvider
+        providerId="codex"
+        profileId={null}
+        usageUpdatedAt={null}
+      />,
+    );
 
     expect(screen.getByText("Usage limit reached")).toBeTruthy();
   });
 
   it("does not show a plan badge (the provider auth badge above already shows it)", () => {
     mocks.data = envelope(CODEX_RATE_LIMITS);
-    render(<ProviderRateLimitForProvider providerId="codex" />);
+    render(
+      <ProviderRateLimitForProvider
+        providerId="codex"
+        profileId={null}
+        usageUpdatedAt={null}
+      />,
+    );
 
     expect(screen.queryByText("Plus")).toBeNull();
   });
 
   it("renders the credits row", () => {
     mocks.data = envelope(CODEX_RATE_LIMITS);
-    render(<ProviderRateLimitForProvider providerId="codex" />);
+    render(
+      <ProviderRateLimitForProvider
+        providerId="codex"
+        profileId={null}
+        usageUpdatedAt={null}
+      />,
+    );
 
     expect(screen.getByText("Credits")).toBeTruthy();
     expect(screen.getByText("$12.50")).toBeTruthy();
@@ -260,7 +327,13 @@ describe("ProviderRateLimitForProvider", () => {
 
   it("renders the spend-control row with used/limit and an absolute reset time", () => {
     mocks.data = envelope(CODEX_RATE_LIMITS);
-    render(<ProviderRateLimitForProvider providerId="codex" />);
+    render(
+      <ProviderRateLimitForProvider
+        providerId="codex"
+        profileId={null}
+        usageUpdatedAt={null}
+      />,
+    );
 
     // Scoped to the spend-limit row's own container: the current-session
     // window above it also renders a reset line, so an unscoped query would
@@ -283,15 +356,26 @@ describe("ProviderRateLimitForProvider", () => {
 
   it("routes a Codex (ephemeralProcess) manual refresh through the shared queue with force:true, not a bare query.refetch()", () => {
     mocks.data = envelope(CODEX_RATE_LIMITS);
-    render(<ProviderRateLimitForProvider providerId="codex" />);
+    render(
+      <ProviderRateLimitForProvider
+        providerId="codex"
+        profileId={null}
+        usageUpdatedAt={null}
+      />,
+    );
 
     fireEvent.click(
       screen.getByRole("button", { name: "Refresh usage limits" }),
     );
 
-    expect(mocks.enqueue).toHaveBeenCalledWith("codex", expect.anything(), {
-      force: true,
-    });
+    expect(mocks.enqueue).toHaveBeenCalledWith(
+      "codex",
+      DEFAULT_ACCOUNT_CONTEXT,
+      {
+        force: true,
+        profileId: null,
+      },
+    );
     expect(mocks.refetch).not.toHaveBeenCalled();
   });
 
@@ -299,7 +383,13 @@ describe("ProviderRateLimitForProvider", () => {
     mocks.data = envelope(CODEX_RATE_LIMITS);
     mocks.isFetching = false;
     mocks.draining = true;
-    render(<ProviderRateLimitForProvider providerId="codex" />);
+    render(
+      <ProviderRateLimitForProvider
+        providerId="codex"
+        profileId={null}
+        usageUpdatedAt={null}
+      />,
+    );
 
     expect(
       screen.getByRole("button", { name: "Refresh usage limits" }),

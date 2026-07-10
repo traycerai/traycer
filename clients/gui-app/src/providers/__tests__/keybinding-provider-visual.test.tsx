@@ -1,6 +1,12 @@
 import "../../../__tests__/test-browser-apis";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createPlatformMock } from "@/__tests__/create-platform-mock";
+
+const platformMock = vi.hoisted(() => ({ mac: false }));
+
+vi.mock("@/lib/keybindings/platform", () => createPlatformMock(platformMock));
+
 import { createMemoryHistory } from "@tanstack/react-router";
 import { createAppRouter, type AppRouter } from "@/router";
 import { getDefaultBindings } from "@/lib/keybindings/actions";
@@ -9,6 +15,7 @@ import { KeybindingProvider } from "@/providers/keybinding-provider";
 import {
   useCanvasTabLeaderModifierForIndex,
   useLeaderState,
+  usePickerProfileLeaderForIndex,
   usePickerProviderLeaderForIndex,
   usePickerReasoningLeaderForIndex,
   useTabLeaderModifierForIndex,
@@ -19,6 +26,8 @@ import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useTabsStore } from "@/stores/tabs/store";
 import type { ReactNode } from "react";
+import type { ProviderId } from "@/components/home/data/landing-options";
+import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 
 const LEADER_HINT_DELAY_MS = 300;
 
@@ -134,6 +143,29 @@ function expectTaskTabHintsVisible(visible: boolean): void {
   expect(probe().getAttribute("data-tab-leader")).toBe(visible ? "alt" : "");
 }
 
+function testProfile(profileId: string, label: string): ProviderProfile {
+  return {
+    profileId,
+    kind: "managed",
+    authType: "oauth",
+    label,
+    auth: {
+      status: "authenticated",
+      badgeText: null,
+      label: null,
+      detail: null,
+    },
+    identity: null,
+    usageUpdatedAt: null,
+    rateLimitStatus: "unknown",
+    duplicateOfProfileId: null,
+    ambientDriftNotice: null,
+    accentColor: null,
+  };
+}
+
+const NOOP_PROFILE_CHANGE = (): void => undefined;
+
 function PickerReasoningScopeProbe(props: {
   readonly reasoningActionable: boolean;
 }) {
@@ -145,18 +177,29 @@ function PickerReasoningScopeProbe(props: {
   };
   usePickerLeaderScope({
     open: true,
-    railHarnesses: [],
-    onProviderChange: () => undefined,
+    railEntries: [],
+    onEntryChange: () => undefined,
     reasoning,
     reasoningActionable: props.reasoningActionable,
+    activeProviderId: "codex",
+    activeProviderProfiles: [],
+    onProfileChange: NOOP_PROFILE_CHANGE,
   });
   return null;
 }
 
 // Registers the model-picker leader scope AND renders the real badge consumers
-// (`usePickerProviderLeaderForIndex` / `usePickerReasoningLeaderForIndex`) so a
-// test can assert exactly which rail lights up, not just the raw leader state.
-function PickerBadgeProbe(props: { readonly reasoningActionable: boolean }) {
+// (`usePickerProviderLeaderForIndex` / `usePickerReasoningLeaderForIndex` /
+// `usePickerProfileLeaderForIndex`) so a test can assert exactly which surface
+// lights up, not just the raw leader state.
+function PickerBadgeProbe(props: {
+  readonly reasoningActionable: boolean;
+  readonly profiles: ReadonlyArray<ProviderProfile>;
+  readonly onProfileChange: (
+    providerId: ProviderId,
+    profileId: string | null,
+  ) => void;
+}) {
   const reasoning: ReasoningFooterConfig = {
     value: "low",
     options: [{ id: "low", label: "Low", description: null }],
@@ -165,18 +208,23 @@ function PickerBadgeProbe(props: { readonly reasoningActionable: boolean }) {
   };
   usePickerLeaderScope({
     open: true,
-    railHarnesses: [],
-    onProviderChange: () => undefined,
+    railEntries: [],
+    onEntryChange: () => undefined,
     reasoning,
     reasoningActionable: props.reasoningActionable,
+    activeProviderId: "codex",
+    activeProviderProfiles: props.profiles,
+    onProfileChange: props.onProfileChange,
   });
   const providerLeader = usePickerProviderLeaderForIndex(0);
   const reasoningLeader = usePickerReasoningLeaderForIndex(0);
+  const profileLeader = usePickerProfileLeaderForIndex(0);
   return (
     <div
       data-testid="picker-badge-probe"
       data-provider-leader={providerLeader ?? ""}
       data-reasoning-leader={reasoningLeader ?? ""}
+      data-profile-leader={profileLeader ?? ""}
     />
   );
 }
@@ -248,6 +296,7 @@ function seedEpicTabs(): SeededTabs {
 
 describe("<KeybindingProvider /> visual leader hints", () => {
   beforeEach(() => {
+    platformMock.mac = false;
     vi.useFakeTimers();
     window.localStorage.clear();
     useKeybindingStore.setState({ bindings: getDefaultBindings() });
@@ -273,6 +322,51 @@ describe("<KeybindingProvider /> visual leader hints", () => {
     expectModHintVisible(false);
     advance(1);
     expectModHintVisible(true);
+  });
+
+  it("does not treat bare macOS Control as the primary leader", () => {
+    platformMock.mac = true;
+    renderProbe("/epics/e1");
+
+    act(() => {
+      keyDown({ code: "ControlLeft", key: "Control", ctrlKey: true });
+    });
+    advance(LEADER_HINT_DELAY_MS);
+    expectModHintVisible(false);
+
+    act(() => {
+      keyUp({ code: "ControlLeft", key: "Control" });
+      keyDown({ code: "MetaLeft", key: "Meta", metaKey: true });
+    });
+    advance(LEADER_HINT_DELAY_MS);
+    expectModHintVisible(true);
+  });
+
+  it("does not reserve macOS Control chords as plain key bindings", () => {
+    platformMock.mac = true;
+    useKeybindingStore.setState({
+      bindings: { ...getDefaultBindings(), "app.palette.open": "k" },
+    });
+    renderProbe("/epics/e1");
+
+    const event = keyDown({ code: "KeyK", key: "k", ctrlKey: true });
+
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("still reserves macOS Control-specific provider chords", () => {
+    platformMock.mac = true;
+    useKeybindingStore.setState({ bindings: getDefaultBindings() });
+    renderProbe("/epics/e1");
+
+    const event = keyDown({
+      code: "KeyM",
+      key: "m",
+      ctrlKey: true,
+      altKey: true,
+    });
+
+    expect(event.defaultPrevented).toBe(true);
   });
 
   it("shows both task-tab leader bindings when either leader is held", () => {
@@ -504,7 +598,11 @@ describe("<KeybindingProvider /> visual leader hints", () => {
     render(
       <KeybindingProvider router={router}>
         <LeaderProbe />
-        <PickerBadgeProbe reasoningActionable />
+        <PickerBadgeProbe
+          reasoningActionable
+          profiles={[]}
+          onProfileChange={NOOP_PROFILE_CHANGE}
+        />
       </KeybindingProvider>,
     );
 
@@ -513,10 +611,11 @@ describe("<KeybindingProvider /> visual leader hints", () => {
     });
     advance(LEADER_HINT_DELAY_MS);
 
-    // Rail (⌘) badges light up; reasoning (⌥) badges stay hidden even though the
-    // same picker scope owns both modifiers.
+    // Rail (⌘) badges light up; reasoning (⌥) and profile (⌘⇧) badges stay
+    // hidden even though the same picker scope owns all three dimensions.
     expect(pickerProbe().getAttribute("data-provider-leader")).toBe("mod");
     expect(pickerProbe().getAttribute("data-reasoning-leader")).toBe("");
+    expect(pickerProbe().getAttribute("data-profile-leader")).toBe("");
     expect(probe().getAttribute("data-mod-owner")).toBe("model-picker");
     expect(probe().getAttribute("data-alt-held")).toBe("false");
     expect(probe().getAttribute("data-alt-owner")).toBe("");
@@ -527,7 +626,11 @@ describe("<KeybindingProvider /> visual leader hints", () => {
     render(
       <KeybindingProvider router={router}>
         <LeaderProbe />
-        <PickerBadgeProbe reasoningActionable />
+        <PickerBadgeProbe
+          reasoningActionable
+          profiles={[]}
+          onProfileChange={NOOP_PROFILE_CHANGE}
+        />
       </KeybindingProvider>,
     );
 
@@ -536,12 +639,218 @@ describe("<KeybindingProvider /> visual leader hints", () => {
     });
     advance(LEADER_HINT_DELAY_MS);
 
-    // Reasoning (⌥) badges light up; rail (⌘) badges stay hidden.
+    // Reasoning (⌥) badges light up; rail (⌘) and profile (⌘⇧) badges stay
+    // hidden.
     expect(pickerProbe().getAttribute("data-reasoning-leader")).toBe("alt");
     expect(pickerProbe().getAttribute("data-provider-leader")).toBe("");
+    expect(pickerProbe().getAttribute("data-profile-leader")).toBe("");
     expect(probe().getAttribute("data-alt-owner")).toBe("model-picker");
     expect(probe().getAttribute("data-mod-held")).toBe("false");
     expect(probe().getAttribute("data-mod-owner")).toBe("");
+  });
+
+  it("lights only the profile dropdown while ⌘⇧ is held with 2+ profiles", () => {
+    const router = createAppRouter("/epics/e1", null);
+    const onProfileChange = vi.fn();
+    render(
+      <KeybindingProvider router={router}>
+        <LeaderProbe />
+        <PickerBadgeProbe
+          reasoningActionable
+          profiles={[testProfile("a-uuid", "A"), testProfile("b-uuid", "B")]}
+          onProfileChange={onProfileChange}
+        />
+      </KeybindingProvider>,
+    );
+
+    act(() => {
+      keyDown({
+        code: "MetaLeft",
+        key: "Meta",
+        metaKey: true,
+        shiftKey: true,
+      });
+      keyDown({
+        code: "ShiftLeft",
+        key: "Shift",
+        metaKey: true,
+        shiftKey: true,
+      });
+    });
+    advance(LEADER_HINT_DELAY_MS);
+
+    // Profile (⌘⇧) badges light up; rail (⌘) and reasoning (⌥) badges stay
+    // hidden even though the same picker scope owns all three dimensions -
+    // this is the shifted hint pass `resolveLeaderOwner` used to skip
+    // entirely.
+    expect(pickerProbe().getAttribute("data-profile-leader")).toBe("modShift");
+    expect(pickerProbe().getAttribute("data-provider-leader")).toBe("");
+    expect(pickerProbe().getAttribute("data-reasoning-leader")).toBe("");
+
+    act(() => {
+      keyDown({
+        code: "Digit2",
+        key: "2",
+        metaKey: true,
+        shiftKey: true,
+      });
+    });
+
+    expect(onProfileChange).toHaveBeenCalledWith("codex", "b-uuid");
+  });
+
+  it("shows no profile hint while ⌘⇧ is held under 2 profiles - progressive disclosure", () => {
+    const router = createAppRouter("/epics/e1", null);
+    render(
+      <KeybindingProvider router={router}>
+        <LeaderProbe />
+        <PickerBadgeProbe
+          reasoningActionable
+          profiles={[testProfile("a-uuid", "A")]}
+          onProfileChange={NOOP_PROFILE_CHANGE}
+        />
+      </KeybindingProvider>,
+    );
+
+    act(() => {
+      keyDown({
+        code: "MetaLeft",
+        key: "Meta",
+        metaKey: true,
+        shiftKey: true,
+      });
+      keyDown({
+        code: "ShiftLeft",
+        key: "Shift",
+        metaKey: true,
+        shiftKey: true,
+      });
+    });
+    advance(LEADER_HINT_DELAY_MS);
+
+    expect(pickerProbe().getAttribute("data-profile-leader")).toBe("");
+  });
+
+  it("transitions visible profile hints to rail hints when Shift is released while ⌘ stays held", () => {
+    const router = createAppRouter("/epics/e1", null);
+    render(
+      <KeybindingProvider router={router}>
+        <LeaderProbe />
+        <PickerBadgeProbe
+          reasoningActionable
+          profiles={[testProfile("a-uuid", "A"), testProfile("b-uuid", "B")]}
+          onProfileChange={NOOP_PROFILE_CHANGE}
+        />
+      </KeybindingProvider>,
+    );
+
+    act(() => {
+      keyDown({
+        code: "MetaLeft",
+        key: "Meta",
+        metaKey: true,
+        shiftKey: true,
+      });
+      keyDown({
+        code: "ShiftLeft",
+        key: "Shift",
+        metaKey: true,
+        shiftKey: true,
+      });
+    });
+    advance(LEADER_HINT_DELAY_MS);
+    expect(pickerProbe().getAttribute("data-profile-leader")).toBe("modShift");
+
+    // Shift released, Cmd stays down - the session was already VISIBLE, so
+    // this swaps to the rail's hints instantly (no re-wait for the hold delay).
+    act(() => {
+      keyUp({ code: "ShiftLeft", key: "Shift", metaKey: true });
+    });
+
+    expect(pickerProbe().getAttribute("data-profile-leader")).toBe("");
+    expect(pickerProbe().getAttribute("data-provider-leader")).toBe("mod");
+    expect(probe().getAttribute("data-mod-owner")).toBe("model-picker");
+  });
+
+  it("restarts the hold delay for a pending profile session when Shift is released before it reveals", () => {
+    const router = createAppRouter("/epics/e1", null);
+    render(
+      <KeybindingProvider router={router}>
+        <LeaderProbe />
+        <PickerBadgeProbe
+          reasoningActionable
+          profiles={[testProfile("a-uuid", "A"), testProfile("b-uuid", "B")]}
+          onProfileChange={NOOP_PROFILE_CHANGE}
+        />
+      </KeybindingProvider>,
+    );
+
+    act(() => {
+      keyDown({
+        code: "MetaLeft",
+        key: "Meta",
+        metaKey: true,
+        shiftKey: true,
+      });
+      keyDown({
+        code: "ShiftLeft",
+        key: "Shift",
+        metaKey: true,
+        shiftKey: true,
+      });
+    });
+    // Still pending - the 300ms delay hasn't elapsed, so nothing is visible yet.
+    expect(pickerProbe().getAttribute("data-profile-leader")).toBe("");
+    expect(pickerProbe().getAttribute("data-provider-leader")).toBe("");
+
+    act(() => {
+      keyUp({ code: "ShiftLeft", key: "Shift", metaKey: true });
+    });
+    // Transitioned to a NEW pending session for `mod` - still nothing visible
+    // immediately, and the OLD modShift timer must not fire late.
+    expect(pickerProbe().getAttribute("data-profile-leader")).toBe("");
+    expect(pickerProbe().getAttribute("data-provider-leader")).toBe("");
+
+    advance(LEADER_HINT_DELAY_MS);
+    // The new `mod` pending session reveals - rail hints, never the stale
+    // profile hints from the released combo.
+    expect(pickerProbe().getAttribute("data-provider-leader")).toBe("mod");
+    expect(pickerProbe().getAttribute("data-profile-leader")).toBe("");
+  });
+
+  it("transitions visible rail hints to profile hints instantly when Shift is added while ⌘ stays held", () => {
+    const router = createAppRouter("/epics/e1", null);
+    render(
+      <KeybindingProvider router={router}>
+        <LeaderProbe />
+        <PickerBadgeProbe
+          reasoningActionable
+          profiles={[testProfile("a-uuid", "A"), testProfile("b-uuid", "B")]}
+          onProfileChange={NOOP_PROFILE_CHANGE}
+        />
+      </KeybindingProvider>,
+    );
+
+    act(() => {
+      keyDown({ code: "MetaLeft", key: "Meta", metaKey: true });
+    });
+    advance(LEADER_HINT_DELAY_MS);
+    expect(pickerProbe().getAttribute("data-provider-leader")).toBe("mod");
+
+    // Shift added while Cmd stays down - the session was already VISIBLE, so
+    // this swaps to the profile dropdown's hints instantly, with no additional
+    // 300ms wait (the symmetric case of the release direction above).
+    act(() => {
+      keyDown({
+        code: "ShiftLeft",
+        key: "Shift",
+        metaKey: true,
+        shiftKey: true,
+      });
+    });
+
+    expect(pickerProbe().getAttribute("data-provider-leader")).toBe("");
+    expect(pickerProbe().getAttribute("data-profile-leader")).toBe("modShift");
   });
 
   it("falls back to header sub-leader hints when picker reasoning becomes inactive", () => {

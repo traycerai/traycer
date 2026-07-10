@@ -32,6 +32,7 @@ function makeHandoff(
       reasoningEffort: null,
       serviceTier: null,
       agentMode: "epic",
+      profileId: null,
     },
     worktreeIntent: null,
     placement: { kind: "active-tile" },

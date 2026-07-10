@@ -50,6 +50,6 @@ export const hostQueryKeys = {
     hostQueryKeys.method<HostRpcRegistry, "host.getRateLimitUsage">(
       hostId,
       "host.getRateLimitUsage",
-      { accountContext },
+      { accountContext, profileId: null },
     ),
 };

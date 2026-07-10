@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
-  chordFromEvent,
-  chordFromEventCtrlAware,
+  hasPlatformModKey,
   isBareModifierEvent,
+  resolveMatchingChord,
 } from "@/lib/keybindings/chord";
 import {
   dispatchAction,
@@ -35,8 +35,10 @@ interface KeybindingProviderProps {
 const INITIAL_LEADER: LeaderState = {
   modHeld: false,
   altHeld: false,
+  modShiftHeld: false,
   modOwnerScopeId: null,
   altOwnerScopeId: null,
+  modShiftOwnerScopeId: null,
   pathname: "/",
 };
 const LEADER_HINT_DELAY_MS = 300;
@@ -60,14 +62,14 @@ interface RefBox<T> {
 
 /**
  * Tracks clean leader-hold sessions and publishes leader owners relative to the
- * modifier actually held. Holding one leader always reveals that modifier's
- * owner, and also reveals the OTHER modifier's owner when a DIFFERENT scope owns
- * it - so two sibling app scopes (canvas tabs own `mod`, header tabs own `alt`)
- * still show `⌘` and `⌥` badges together. A lone overlay scope that binds both
- * modifiers (the model picker: `⌘` rail + `⌥` reasoning) only lights the rail
- * for the held modifier. The dispatcher's chord matching still owns route-aware
- * action selection and fires digit shortcuts from the actual key event
- * immediately.
+ * modifier combo actually held (`mod`, `alt`, or `modShift`). Holding one leader
+ * always reveals that modifier's owner, and also reveals the OTHER modifiers'
+ * owners when a DIFFERENT scope owns them - so two sibling app scopes (canvas
+ * tabs own `mod`, header tabs own `alt`) still show `⌘` and `⌥` badges together.
+ * A lone overlay scope that binds all three dimensions (the model picker: `⌘`
+ * rail, `⌥` reasoning, `⌘⇧` profile) only lights the one matching the held
+ * combo. The dispatcher's chord matching still owns route-aware action
+ * selection and fires digit shortcuts from the actual key event immediately.
  */
 export function KeybindingProvider(props: KeybindingProviderProps) {
   const { router, children } = props;
@@ -92,8 +94,10 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
       if (
         prev.modHeld === next.modHeld &&
         prev.altHeld === next.altHeld &&
+        prev.modShiftHeld === next.modShiftHeld &&
         prev.modOwnerScopeId === next.modOwnerScopeId &&
         prev.altOwnerScopeId === next.altOwnerScopeId &&
+        prev.modShiftOwnerScopeId === next.modShiftOwnerScopeId &&
         prev.pathname === next.pathname
       ) {
         return;
@@ -102,36 +106,53 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
       setLeaderState(next);
     };
 
-    // Publish the held modifier's owner always; publish the OTHER modifier's
-    // owner only when a DIFFERENT scope owns it. Two sibling app scopes (canvas
-    // tabs own `mod`, header tabs own `alt`) still light both badge sets on a
-    // single hold - the #3966 "show both task tabs" behavior. But a lone overlay
-    // scope binding BOTH modifiers (the model picker: ⌘ rail + ⌥ reasoning) owns
-    // each modifier under one scope id, so its two badge consumers can only be
-    // disambiguated by the held key: ⌘ lights the rail and ⌥ lights reasoning,
-    // never both at once.
+    // Publish the held modifier's owner always; publish the OTHER modifiers'
+    // owners only when a DIFFERENT scope owns them. Two sibling app scopes
+    // (canvas tabs own `mod`, header tabs own `alt`) still light both badge sets
+    // on a single hold - the #3966 "show both task tabs" behavior. But a lone
+    // overlay scope binding ALL THREE dimensions (the model picker: ⌘ rail, ⌥
+    // reasoning, ⌘⇧ profile) owns each dimension under one scope id, so its
+    // badge consumers can only be disambiguated by the held combo: ⌘ lights the
+    // rail, ⌥ lights reasoning, ⌘⇧ lights the profile dropdown, never more than
+    // one at once.
     const resolveVisibleLeaderState = (
       heldModifier: LeaderModifier,
       pathname: string,
     ): LeaderState => {
       const modOwner = resolveLeaderOwner("mod");
       const altOwner = resolveLeaderOwner("alt");
+      const modShiftOwner = resolveLeaderOwner("modShift");
       const showMod =
-        heldModifier === "mod" || (modOwner !== null && modOwner !== altOwner);
+        heldModifier === "mod" ||
+        (modOwner !== null &&
+          modOwner !== altOwner &&
+          modOwner !== modShiftOwner);
       const showAlt =
-        heldModifier === "alt" || (altOwner !== null && altOwner !== modOwner);
+        heldModifier === "alt" ||
+        (altOwner !== null &&
+          altOwner !== modOwner &&
+          altOwner !== modShiftOwner);
+      const showModShift =
+        heldModifier === "modShift" ||
+        (modShiftOwner !== null &&
+          modShiftOwner !== modOwner &&
+          modShiftOwner !== altOwner);
       return {
         modHeld: showMod && modOwner !== null,
         altHeld: showAlt && altOwner !== null,
+        modShiftHeld: showModShift && modShiftOwner !== null,
         modOwnerScopeId: showMod ? modOwner : null,
         altOwnerScopeId: showAlt ? altOwner : null,
+        modShiftOwnerScopeId: showModShift ? modShiftOwner : null,
         pathname,
       };
     };
 
     const hasVisibleLeaderOwners = (): boolean => {
       return (
-        resolveLeaderOwner("mod") !== null || resolveLeaderOwner("alt") !== null
+        resolveLeaderOwner("mod") !== null ||
+        resolveLeaderOwner("alt") !== null ||
+        resolveLeaderOwner("modShift") !== null
       );
     };
 
@@ -146,8 +167,10 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
       applyLeaderState({
         modHeld: false,
         altHeld: false,
+        modShiftHeld: false,
         modOwnerScopeId: null,
         altOwnerScopeId: null,
+        modShiftOwnerScopeId: null,
         pathname,
       });
     };
@@ -180,13 +203,24 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
       showLeaderHints(modifier, pathname);
     };
 
-    const startPendingSession = (
+    // Moves the hint session onto `modifier` - called both when a fresh bare
+    // modifier keydown starts a hold, AND when the physically-held combo
+    // changes while a leader is CONTINUOUSLY held (e.g. releasing Shift while
+    // Cmd stays down: modShift -> mod, or the reverse, pressing Shift while
+    // Cmd is already down). A VISIBLE session swaps to the new modifier
+    // instantly - the hold delay was already cleared once for this
+    // continuous hold, so re-imposing it on every combo change would make
+    // hints flicker off and back on for no reason. A PENDING (or idle/spent)
+    // session (re)starts the delay for the new modifier, same as a fresh hold.
+    const transitionLeaderSession = (
       modifier: LeaderModifier,
       pathname: string,
     ) => {
       const session = hintSessionRef.current;
       if (session.status === "spent") return;
-      if (session.status === "visible" && session.modifier === modifier) {
+      if (session.status === "visible") {
+        clearHintTimer();
+        hintSessionRef.current = { status: "visible", modifier };
         showLeaderHints(modifier, pathname);
         return;
       }
@@ -205,11 +239,13 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
     const cleanLeaderModifierFromEvent = (
       event: KeyboardEvent,
     ): LeaderModifier | null => {
-      if (event.shiftKey) return null;
-      const cleanMod = (event.metaKey || event.ctrlKey) && !event.altKey;
-      const cleanAlt = event.altKey && !event.metaKey && !event.ctrlKey;
+      const modKeyHeld = hasPlatformModKey(event);
+      const cleanMod = modKeyHeld && !event.altKey && !event.shiftKey;
+      const cleanAlt = event.altKey && !modKeyHeld && !event.shiftKey;
+      const cleanModShift = modKeyHeld && event.shiftKey && !event.altKey;
       if (cleanMod && hasVisibleLeaderOwners()) return "mod";
       if (cleanAlt && hasVisibleLeaderOwners()) return "alt";
+      if (cleanModShift && hasVisibleLeaderOwners()) return "modShift";
       return null;
     };
 
@@ -255,7 +291,7 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
           if (hasLeaderModifier(event)) spendHintSession(pathname);
           return;
         }
-        startPendingSession(cleanModifier, pathname);
+        transitionLeaderSession(cleanModifier, pathname);
         return;
       }
 
@@ -323,11 +359,23 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
         resetHintSession(pathname);
         return;
       }
+      const cleanModifier = cleanLeaderModifierFromEvent(event);
+      if (cleanModifier === null) {
+        if (hasLeaderModifier(event)) spendHintSession(pathname);
+        return;
+      }
+      // A modifier was released (e.g. Shift, while Cmd/Ctrl stays down) but
+      // what remains held is STILL a clean, tracked combo - just a different
+      // one (modShift -> mod). Without this, an active pending/visible
+      // session would keep pointing at the released combo: visible hints for
+      // the wrong tier stay lit, and a pending session's timer can reveal the
+      // wrong tier's hints after the user already let go of it.
+      const session = hintSessionRef.current;
       if (
-        hasLeaderModifier(event) &&
-        cleanLeaderModifierFromEvent(event) === null
+        (session.status === "pending" || session.status === "visible") &&
+        session.modifier !== cleanModifier
       ) {
-        spendHintSession(pathname);
+        transitionLeaderSession(cleanModifier, pathname);
       }
     };
 
@@ -381,21 +429,17 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
 
 /**
  * Resolve the chord to an action the provider should RESERVE (preventDefault +
- * dispatch). Prefers a Control-specific binding (macOS ⌃, distinct from ⌘),
- * falling back to the lenient `mod` chord so `ctrl+…` bindings match while every
- * existing `mod+…` chord keeps matching both ⌘ and Ctrl. Returns null for an
- * action handled OUTSIDE this dispatcher (e.g. dictation, owned by a
- * capture-phase hook) - reserving those would swallow the key when the owner is
- * inactive.
+ * dispatch). Uses `resolveMatchingChord` for the Control-specific precedence
+ * (macOS ⌃, distinct from ⌘): when the ctrl-aware chord differs, the event is
+ * reserved only by an explicit `ctrl+…` binding, so a bare macOS Control chord
+ * can't fall through to a plain key binding. Returns null for an action handled
+ * OUTSIDE this dispatcher (e.g. dictation, owned by a capture-phase hook) -
+ * reserving those would swallow the key when the owner is inactive.
  */
 function resolveReservedAction(event: KeyboardEvent): ActionId | null {
-  const chord = chordFromEvent(event);
+  const chord = resolveMatchingChord(event);
   if (chord === null) return null;
-  const ctrlChord = chordFromEventCtrlAware(event);
-  const actionId =
-    (ctrlChord !== null && ctrlChord !== chord
-      ? findActionForChord(ctrlChord)
-      : null) ?? findActionForChord(chord);
+  const actionId = findActionForChord(chord);
   if (actionId === null) return null;
   return isExternallyHandled(actionId) ? null : actionId;
 }

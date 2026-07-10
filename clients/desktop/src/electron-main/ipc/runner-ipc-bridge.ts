@@ -35,7 +35,7 @@ import {
   type PerWindowStateChange,
 } from "../windows/per-window-state";
 import {
-  isDialogHostedMenuCommand,
+  isMruFallbackMenuCommand,
   readEpicId,
   readSenderWebContentsId,
 } from "./ipc-parsers";
@@ -420,7 +420,7 @@ export class RunnerIpcBridge {
     if (target === null) {
       return false;
     }
-    if (isDialogHostedMenuCommand(command) && !target.window.isFocused()) {
+    if (isMruFallbackMenuCommand(command) && !target.window.isFocused()) {
       this.windowRegistry.focusById(target.windowId);
     }
     return this.safeSendToWindow(target.windowId, RunnerHostEvent.menuCommand, {
@@ -839,7 +839,7 @@ export class RunnerIpcBridge {
     if (focused !== undefined) {
       return focused;
     }
-    if (isDialogHostedMenuCommand(command)) {
+    if (isMruFallbackMenuCommand(command)) {
       return this.windowRegistry.getMruRecord();
     }
     return null;

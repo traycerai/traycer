@@ -21,7 +21,7 @@ import type { UncheckedVersionedStreamRpcRegistry } from "@traycer/protocol/fram
  * other framework modules at runtime.
  */
 
-export const SURFACE_FORMAT_VERSION = 1;
+export const SURFACE_FORMAT_VERSION = 2;
 
 /** Version key inside a surface: `"<major>.<minor>"`. */
 export function surfaceVersionKey(major: number, minor: number): string {
@@ -50,14 +50,31 @@ export type SurfaceMajorLine = {
 export type SurfaceMethod = {
   readonly canonical: SurfaceVersion;
   readonly majors: Readonly<Record<string, SurfaceMajorLine>>;
-  readonly schemas: Readonly<
-    Record<string, Readonly<Record<string, unknown>>>
-  >;
+  readonly schemas: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
+};
+
+export type SurfaceMethodDegrade =
+  | { readonly kind: "unsupported" }
+  | {
+      readonly kind: "fallback";
+      readonly to: {
+        readonly method: string;
+        readonly major: number;
+        readonly minor: number;
+      };
+    };
+
+export type SurfaceOptionalMethod = SurfaceMethod & {
+  readonly degrade: SurfaceMethodDegrade | null;
 };
 
 export type ProtocolSurface = {
   readonly formatVersion: number;
+  /** Unary floor/legacy channel. Missing method names here are fatal. */
   readonly unary: Readonly<Record<string, SurfaceMethod>>;
+  /** Unary optional channel. Missing method names here trigger degrade policy. */
+  readonly optionalUnary: Readonly<Record<string, SurfaceOptionalMethod>>;
+  /** Stream legacy channel. Stream feature detection remains intersection-based. */
   readonly stream: Readonly<Record<string, SurfaceMethod>>;
 };
 
@@ -105,6 +122,7 @@ function serializeSchema(schema: z.ZodType): unknown {
 function numberKeys(record: Readonly<Record<number, unknown>>): number[] {
   return Object.keys(record)
     .map(Number)
+    .filter((value) => Number.isInteger(value))
     .sort((a, b) => a - b);
 }
 
@@ -125,7 +143,9 @@ function buildMethodSurface(
       number,
       {
         readonly latestMinor: number;
-        readonly versions: Readonly<Record<number, { readonly contract: object }>>;
+        readonly versions: Readonly<
+          Record<number, { readonly contract: object }>
+        >;
         readonly downgradeTargets: readonly number[];
       }
     >
@@ -162,6 +182,48 @@ function buildMethodSurface(
   };
 }
 
+function asRecord(value: unknown): Readonly<Record<string, unknown>> | null {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  return value as Readonly<Record<string, unknown>>;
+}
+
+function buildDegradeSurface(
+  method: string,
+  methodRegistry: UncheckedVersionedRpcRegistry[string],
+): SurfaceMethodDegrade | null {
+  const degrade = methodRegistry.degrade;
+  if (degrade === undefined) {
+    return null;
+  }
+  if (degrade.kind === "unsupported") {
+    return { kind: "unsupported" };
+  }
+  if (degrade.kind !== "fallback") {
+    throw new Error(`Unknown degrade kind for method '${method}'`);
+  }
+  const target = asRecord(degrade.to);
+  if (
+    target === null ||
+    typeof target["method"] !== "string" ||
+    typeof target["major"] !== "number" ||
+    typeof target["minor"] !== "number"
+  ) {
+    throw new Error(
+      `Fallback degrade for method '${method}' has invalid target`,
+    );
+  }
+  return {
+    kind: "fallback",
+    to: {
+      method: target["method"],
+      major: target["major"],
+      minor: target["minor"],
+    },
+  };
+}
+
 /**
  * Reduces the live unary + stream registries to a plain-JSON protocol
  * surface. Accepts the unchecked structural registry shapes so both the
@@ -169,9 +231,12 @@ function buildMethodSurface(
  */
 export function buildProtocolSurface(args: {
   readonly unary: UncheckedVersionedRpcRegistry;
+  readonly unaryFloorMethodNames: readonly string[];
   readonly stream: UncheckedVersionedStreamRpcRegistry;
 }): ProtocolSurface {
+  const unaryFloorMethods = new Set(args.unaryFloorMethodNames);
   const unary: Record<string, SurfaceMethod> = {};
+  const optionalUnary: Record<string, SurfaceOptionalMethod> = {};
   for (const method of Object.keys(args.unary).sort()) {
     const methodRegistry = args.unary[method];
     const majors: Record<
@@ -190,13 +255,21 @@ export function buildProtocolSurface(args: {
         downgradeTargets: numberKeys(line.downgradePathsFromLatest),
       };
     }
-    unary[method] = buildMethodSurface(majors, (contract) => {
+    const surface = buildMethodSurface(majors, (contract) => {
       const carrier = contract as UnarySchemaCarrier;
       return {
         request: serializeSchema(carrier.requestSchema),
         response: serializeSchema(carrier.responseSchema),
       };
     });
+    if (unaryFloorMethods.has(method)) {
+      unary[method] = surface;
+    } else {
+      optionalUnary[method] = {
+        ...surface,
+        degrade: buildDegradeSurface(method, methodRegistry),
+      };
+    }
   }
 
   const stream: Record<string, SurfaceMethod> = {};
@@ -229,5 +302,10 @@ export function buildProtocolSurface(args: {
     });
   }
 
-  return { formatVersion: SURFACE_FORMAT_VERSION, unary, stream };
+  return {
+    formatVersion: SURFACE_FORMAT_VERSION,
+    unary,
+    optionalUnary,
+    stream,
+  };
 }

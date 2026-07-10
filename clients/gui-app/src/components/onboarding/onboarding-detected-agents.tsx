@@ -202,7 +202,8 @@ export function OnboardingDetectedAgents() {
     providers?.filter((provider) => provider.enabled).length ?? 0;
 
   const handleSetEnabled = (providerId: ProviderId, enabled: boolean): void => {
-    setEnabled.mutate({ providerId, enabled });
+    // No profile management UI yet - this call never renames/removes a profile.
+    setEnabled.mutate({ providerId, enabled, profileAction: null });
   };
   const rows = ORDERED_PROVIDERS.map(({ providerId }): ProviderListRow => {
     const state = providerStateFor(providers, providerId);

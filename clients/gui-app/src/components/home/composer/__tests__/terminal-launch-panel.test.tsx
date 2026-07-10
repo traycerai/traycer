@@ -39,7 +39,7 @@ function makeToolbarStore() {
     seedKey: "test",
     values: {
       permission: "supervised",
-      selection: { harnessId: "claude", modelSlug: "" },
+      selection: { harnessId: "claude", modelSlug: "", profileId: null },
       reasoning: "",
       serviceTier: "",
       agentMode: "regular",
@@ -82,7 +82,7 @@ function makeGuiOnlyToolbarStore() {
     seedKey: "test",
     values: {
       permission: "supervised",
-      selection: { harnessId: "cursor", modelSlug: "" },
+      selection: { harnessId: "cursor", modelSlug: "", profileId: null },
       reasoning: "",
       serviceTier: "",
       agentMode: "regular",

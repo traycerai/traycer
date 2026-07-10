@@ -42,6 +42,7 @@ function terminalAgent(
     model: null,
     reasoningEffort: null,
     agentMode: "regular",
+    profileId: null,
     harnessSessionId: null,
     terminalAgentArgs: null,
     terminalShellCommand: null,

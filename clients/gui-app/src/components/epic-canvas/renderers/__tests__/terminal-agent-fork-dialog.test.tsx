@@ -13,6 +13,10 @@ import type { ForkWorkspaceSeed } from "@/lib/worktree/fork-workspace-seed";
 
 const dialogMocks = vi.hoisted(() => ({
   create: vi.fn<(input: TerminalForkCreateInput) => Promise<string | null>>(),
+  // Keyed by the exact `client` reference `useHostQuery` was called with, so
+  // tests can assert the dialog reads `providers.list` from the RIGHT host
+  // client (its own `hostClient` prop) and never a decoy/other one.
+  providersByClient: new Map<unknown, unknown>(),
 }));
 
 vi.mock("@/hooks/agent/use-create-tui-agent", () => ({
@@ -20,6 +24,25 @@ vi.mock("@/hooks/agent/use-create-tui-agent", () => ({
     create: dialogMocks.create,
     isPending: false,
   }),
+}));
+
+// The dialog validates its seeded profileId against live `providers.list`
+// read from its OWN `hostClient` prop (see resolve-seeded-profile-id.ts /
+// use-resolved-seeded-profile-id.ts) via `useHostQuery` directly - not the
+// app-wide active host. Every case in this file passes `hostClient={null}`,
+// and `dialogMocks.providersByClient` has no entry for `null`, so
+// `useHostQuery` returns no data here and every seed holds its profileId
+// verbatim (no profiles to judge against) - exactly this file's existing
+// expectation for every case.
+vi.mock("@/hooks/host/use-host-query", () => ({
+  useHostQuery: (args: {
+    readonly client: unknown;
+    readonly options: { readonly enabled: boolean } | null;
+  }) => {
+    if (!(args.options?.enabled ?? false)) return { data: undefined };
+    const providers = dialogMocks.providersByClient.get(args.client);
+    return { data: providers === undefined ? undefined : { providers } };
+  },
 }));
 
 vi.mock("@/components/home/pickers/harness-model-picker", () => ({
@@ -89,6 +112,7 @@ import { TerminalAgentForkDialog } from "../terminal-agent-fork-dialog";
 describe("<TerminalAgentForkDialog />", () => {
   afterEach(() => {
     dialogMocks.create.mockReset();
+    dialogMocks.providersByClient.clear();
     cleanup();
   });
 
@@ -167,6 +191,58 @@ describe("<TerminalAgentForkDialog />", () => {
     });
   });
 
+  it("seeds the fork from the source agent's profile", async () => {
+    dialogMocks.create.mockResolvedValue("forked-agent");
+    render(
+      <TerminalAgentForkDialog
+        open
+        target={{
+          sourceAgent: sourceAgentWithProfile("work-profile"),
+          workspaceSeed: emptyWorkspaceSeed(),
+        }}
+        epicId="epic-test"
+        tabId="tab-test"
+        hostId="host-test"
+        hostClient={null}
+        onOpenChange={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Fork" }));
+
+    await waitFor(() => {
+      expect(dialogMocks.create).toHaveBeenCalledWith(
+        expect.objectContaining({ profileId: "work-profile" }),
+      );
+    });
+  });
+
+  it("seeds an ambient source agent's fork with a null profileId", async () => {
+    dialogMocks.create.mockResolvedValue("forked-agent");
+    render(
+      <TerminalAgentForkDialog
+        open
+        target={{
+          sourceAgent: sourceAgent(),
+          workspaceSeed: emptyWorkspaceSeed(),
+        }}
+        epicId="epic-test"
+        tabId="tab-test"
+        hostId="host-test"
+        hostClient={null}
+        onOpenChange={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Fork" }));
+
+    await waitFor(() => {
+      expect(dialogMocks.create).toHaveBeenCalledWith(
+        expect.objectContaining({ profileId: null }),
+      );
+    });
+  });
+
   it("prefills and forwards the source terminal-agent additional args", async () => {
     dialogMocks.create.mockResolvedValue("forked-agent");
     render(
@@ -212,6 +288,10 @@ function sourceAgent(): TuiAgentProjection {
   return sourceAgentWithTerminalArgs(null);
 }
 
+function sourceAgentWithProfile(profileId: string | null): TuiAgentProjection {
+  return { ...sourceAgentWithTerminalArgs(null), profileId };
+}
+
 function sourceAgentWithTerminalArgs(
   terminalAgentArgs: string | null,
 ): TuiAgentProjection {
@@ -229,6 +309,7 @@ function sourceAgentWithTerminalArgs(
     model: "claude-opus-4-7",
     reasoningEffort: "high",
     agentMode: "regular",
+    profileId: null,
     harnessSessionId: "source-session",
     terminalAgentArgs,
     terminalShellCommand: "claude",

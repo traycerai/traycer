@@ -143,6 +143,9 @@ export function ComposerBody({
                 dictation={dictationControl}
                 dictationPreparing={dictationPreparing}
                 settingsLocked={false}
+                // The landing composer has no tab yet - the app-wide default
+                // host applies.
+                createProfileHostId={null}
               />
             </SurfaceActivityProvider>
           </div>

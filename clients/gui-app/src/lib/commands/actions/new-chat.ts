@@ -17,6 +17,7 @@
  * resolves it at send time via the chat tile's create / import picker.
  */
 import type { CreateChatResponse } from "@traycer/protocol/host/epic/unary-schemas";
+import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
 import { v4 as uuidv4 } from "uuid";
 import { displayTitle } from "@/lib/display-title";
@@ -90,6 +91,10 @@ export interface OpenNewChatInActiveTileArgs {
   readonly tabId: string;
   readonly hostId: string;
   readonly worktreeIntent: WorktreeIntent | null;
+  /** Per-chat run settings to stamp on the new chat - `null` starts the chat
+   *  with host defaults (today's behavior for every caller but the clone
+   *  flow, which carries the source chat's own settings forward). */
+  readonly settings: ChatRunSettings | null;
   readonly createChat: CreateChatCommand;
   readonly openWhenProjected: OpenWhenProjected;
 }
@@ -101,18 +106,21 @@ export function openNewChatInActiveTile(
 ): CancelFn {
   let cancelled = false;
   let projectionCancel: CancelFn | null = null;
-  args.createChat(buildCreateChatRequest(args.epicId, args.worktreeIntent), {
-    onSuccess: (result) => {
-      if (cancelled) return;
-      projectionCancel = args.openWhenProjected({
-        kind: "active-tile",
-        epicId: args.epicId,
-        tabId: args.tabId,
-        chatId: result.chatId,
-        hostId: args.hostId,
-      });
+  args.createChat(
+    buildCreateChatRequest(args.epicId, args.worktreeIntent, args.settings),
+    {
+      onSuccess: (result) => {
+        if (cancelled) return;
+        projectionCancel = args.openWhenProjected({
+          kind: "active-tile",
+          epicId: args.epicId,
+          tabId: args.tabId,
+          chatId: result.chatId,
+          hostId: args.hostId,
+        });
+      },
     },
-  });
+  );
   return () => {
     if (cancelled) return;
     cancelled = true;
@@ -179,6 +187,7 @@ const rawNestedFocus: NavigateNestedFocus = (_epicId, _tabId, prepare) =>
 function buildCreateChatRequest(
   epicId: string,
   worktreeIntent: WorktreeIntent | null,
+  settings: ChatRunSettings | null,
 ): CreateChatMutationInput {
   return {
     epicId,
@@ -191,6 +200,7 @@ function buildCreateChatRequest(
     chatId: uuidv4(),
     workspaceMode: deriveWorkspaceMode(1, worktreeIntent),
     worktreeIntent,
+    settings,
   };
 }
 

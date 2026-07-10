@@ -531,14 +531,22 @@ export function isChatRunInProgress(runStatus: ChatRunStatus): boolean {
 const EMPTY_QUEUE: ChatQueueState = { status: "idle", items: [] };
 
 function chatRunSettingsEqual(a: ChatRunSettings, b: ChatRunSettings): boolean {
-  return (
-    a.harnessId === b.harnessId &&
-    a.model === b.model &&
-    a.permissionMode === b.permissionMode &&
-    a.reasoningEffort === b.reasoningEffort &&
-    a.serviceTier === b.serviceTier &&
-    a.agentMode === b.agentMode
-  );
+  // Keyed by every `ChatRunSettings` field via `satisfies`: adding a field to
+  // the type forces an entry here (compile error otherwise), so the
+  // comparison can't silently ignore a new field.
+  const fieldsEqual = {
+    harnessId: a.harnessId === b.harnessId,
+    model: a.model === b.model,
+    permissionMode: a.permissionMode === b.permissionMode,
+    reasoningEffort: a.reasoningEffort === b.reasoningEffort,
+    serviceTier: a.serviceTier === b.serviceTier,
+    agentMode: a.agentMode === b.agentMode,
+    // `??` guards a pre-profile queued item (the field is missing, not
+    // `null`, on an old serialized `ChatRunSettings`) so it still compares
+    // equal to a fresh ambient commit instead of spuriously restamping.
+    profileId: (a.profileId ?? null) === (b.profileId ?? null),
+  } satisfies Record<keyof ChatRunSettings, boolean>;
+  return Object.values(fieldsEqual).every((equal) => equal);
 }
 
 export const ACCEPTED_CHAT_ACTION_RETENTION_MS = 5 * 60 * 1_000;

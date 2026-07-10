@@ -186,6 +186,7 @@ describe("useCreateTuiAgent", () => {
         workspaceMode: "inherit",
         worktreeIntent: intent,
         terminalAgentArgs: null,
+        profileId: null,
       });
     });
 
@@ -259,6 +260,7 @@ describe("useCreateTuiAgent", () => {
         workspaceMode: "inherit",
         worktreeIntent: intent,
         terminalAgentArgs: "--dangerously-skip-permissions",
+        profileId: null,
       });
     });
 
@@ -332,6 +334,7 @@ describe("useCreateTuiAgent", () => {
         workspaceMode: "inherit",
         worktreeIntent: null,
         terminalAgentArgs: "--allowedTools Edit",
+        profileId: null,
       });
     });
 
@@ -487,6 +490,7 @@ describe("useCreateTuiAgent", () => {
         workspaceMode: "inherit",
         worktreeIntent: intent,
         terminalAgentArgs: null,
+        profileId: null,
       });
     });
 
@@ -569,6 +573,7 @@ describe("useCreateTuiAgent", () => {
         workspaceMode: "inherit",
         worktreeIntent: intent,
         terminalAgentArgs: null,
+        profileId: null,
       });
     });
 
@@ -648,6 +653,7 @@ describe("useCreateTuiAgent", () => {
           workspaceMode: "inherit",
           worktreeIntent: intent,
           terminalAgentArgs: null,
+          profileId: null,
         });
       } catch (error) {
         caught = error;
@@ -737,6 +743,7 @@ describe("useCreateTuiAgent", () => {
           workspaceMode: "inherit",
           worktreeIntent: intent,
           terminalAgentArgs: null,
+          profileId: null,
         });
       } catch {
         // expected
@@ -780,6 +787,7 @@ describe("useCreateTuiAgent", () => {
         workspaceMode: "inherit",
         worktreeIntent: null,
         terminalAgentArgs: null,
+        profileId: null,
       });
     });
 
@@ -792,6 +800,50 @@ describe("useCreateTuiAgent", () => {
       methodOrder.indexOf("epic.createTuiAgent"),
     );
     expect(hookMocks.openTileInTab).toHaveBeenCalledTimes(1);
+
+    queryClient.clear();
+  });
+
+  it("threads a non-ambient profileId onto both agent.tui.prepareLaunch and the persisted epic.createTuiAgent record", async () => {
+    const { calls } = setupSequencedMock();
+    const queryClient = makeQueryClient();
+    const { result } = renderHook(() => useCreateTuiAgent(), {
+      wrapper: queryClientWrapper(queryClient),
+    });
+
+    await act(async () => {
+      await result.current.create({
+        epicId: EPIC_ID,
+        tabId: TAB_ID,
+        parentId: null,
+        title: "",
+        placement: { kind: "active-tile" },
+        harnessId: "claude",
+        model: null,
+        reasoningEffort: null,
+        agentMode: "regular",
+        forkSourceHarnessSessionId: null,
+        onStatusChange: null,
+        workspaceMode: "inherit",
+        worktreeIntent: null,
+        terminalAgentArgs: null,
+        profileId: "work-profile",
+      });
+    });
+
+    const prepareLaunchCall = calls.find(
+      (call) => call.method === "agent.tui.prepareLaunch",
+    );
+    const createCall = calls.find(
+      (call) => call.method === "epic.createTuiAgent",
+    );
+    // A brand-new agent's first launch fires before `epic.createTuiAgent`
+    // persists the record, so the resolver has nothing to look up yet -
+    // the selected profile must ride on the prepareLaunch wire request itself.
+    expect(prepareLaunchCall?.payload).toMatchObject({
+      profileId: "work-profile",
+    });
+    expect(createCall?.payload).toMatchObject({ profileId: "work-profile" });
 
     queryClient.clear();
   });
@@ -827,6 +879,7 @@ describe("useCreateTuiAgent", () => {
         workspaceMode: "inherit",
         worktreeIntent: intent,
         terminalAgentArgs: null,
+        profileId: null,
       });
     });
 
@@ -874,6 +927,7 @@ describe("useCreateTuiAgent", () => {
         workspaceMode: "inherit",
         worktreeIntent: intent,
         terminalAgentArgs: null,
+        profileId: null,
       });
     });
 
@@ -950,6 +1004,7 @@ describe("useCreateTuiAgent", () => {
         workspaceMode: "inherit",
         worktreeIntent: intent,
         terminalAgentArgs: null,
+        profileId: null,
       });
     });
 
@@ -1039,6 +1094,7 @@ describe("useCreateTuiAgent", () => {
         workspaceMode: "inherit",
         worktreeIntent: intent,
         terminalAgentArgs: null,
+        profileId: null,
       });
     });
 
@@ -1097,6 +1153,7 @@ describe("useCreateTuiAgent", () => {
         workspaceMode: "inherit",
         worktreeIntent: intent,
         terminalAgentArgs: null,
+        profileId: null,
       });
     });
 
@@ -1141,6 +1198,7 @@ describe("useCreateTuiAgent", () => {
         workspaceMode: "inherit",
         worktreeIntent: null,
         terminalAgentArgs: null,
+        profileId: null,
       });
     });
 
@@ -1183,6 +1241,7 @@ describe("useCreateTuiAgent", () => {
         workspaceMode: "inherit",
         worktreeIntent: null,
         terminalAgentArgs: null,
+        profileId: null,
       });
     });
 

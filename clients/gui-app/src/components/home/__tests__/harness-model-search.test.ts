@@ -121,10 +121,12 @@ describe("harness model search", () => {
     const emptySelection: HarnessModelSelection = {
       harnessId: "codex",
       modelSlug: "",
+      profileId: null,
     };
     const concreteSelection: HarnessModelSelection = {
       harnessId: "codex",
       modelSlug: "gpt-5.3-codex",
+      profileId: null,
     };
 
     // Empty slug resolves to the first (preferred) model's row.
@@ -321,6 +323,7 @@ describe("harness model search", () => {
       findModelLabel(models, {
         harnessId: "opencode",
         modelSlug: "anthropic:claude",
+        profileId: null,
       }),
     ).toBe("Claude");
   });
@@ -435,12 +438,14 @@ describe("harness model search", () => {
       findModelLabel(models, {
         harnessId: "openrouter",
         modelSlug: "openrouter:z-ai/glm-4.6",
+        profileId: null,
       }),
     ).toBe("GLM 4.6");
     expect(
       findModelLabel(models, {
         harnessId: "openrouter",
         modelSlug: "openrouter:openrouter/owl-alpha",
+        profileId: null,
       }),
     ).toBe("Owl Alpha");
   });
@@ -493,6 +498,7 @@ describe("harness model search", () => {
       findModelLabel(models, {
         harnessId: "kilocode",
         modelSlug: "google-vertex/gemini-2.5-pro",
+        profileId: null,
       }),
     ).toBe("Gemini 2.5 Pro");
   });

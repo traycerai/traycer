@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import {
   defineDowngradePath,
+  defineFallbackMethodDegrade,
+  defineFloorAwareVersionedRpcRegistry,
   defineRpcContract,
   defineUpgradePath,
   defineVersionedRpcRegistry,
@@ -16,10 +18,12 @@ import {
   hostRpcRegistry,
   hostStreamRpcRegistry,
 } from "@traycer/protocol/host/index";
+import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import { buildProtocolSurface } from "@traycer/protocol/framework/surface-build";
 import {
   checkSurfaceCompatibility,
   manifestFromSurface,
+  protocolSurfaceSchema,
   type CompatException,
 } from "@traycer/protocol/framework/surface-compat";
 import type { UncheckedVersionedRpcRegistry } from "@traycer/protocol/framework/versioned-rpc-types";
@@ -28,7 +32,22 @@ import type { UncheckedVersionedStreamRpcRegistry } from "@traycer/protocol/fram
 const EMPTY_STREAM: UncheckedVersionedStreamRpcRegistry = {};
 
 function surfaceOfUnary(unary: UncheckedVersionedRpcRegistry) {
-  return buildProtocolSurface({ unary, stream: EMPTY_STREAM });
+  return buildProtocolSurface({
+    unary,
+    unaryFloorMethodNames: Object.keys(unary).sort(),
+    stream: EMPTY_STREAM,
+  });
+}
+
+function surfaceOfUnaryWithFloor(
+  unary: UncheckedVersionedRpcRegistry,
+  unaryFloorMethodNames: readonly string[],
+) {
+  return buildProtocolSurface({
+    unary,
+    unaryFloorMethodNames,
+    stream: EMPTY_STREAM,
+  });
 }
 
 function unaryV10(request: z.ZodType, response: z.ZodType) {
@@ -58,6 +77,33 @@ const baselineRegistry = defineVersionedRpcRegistry({
 });
 const baselineSurface = surfaceOfUnary(baselineRegistry);
 
+const optionalV10 = defineRpcContract({
+  method: "host.optional",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: z.object({ value: z.string() }),
+  responseSchema: z.object({ ok: z.boolean() }),
+});
+
+const hostEchoV10 = defineRpcContract({
+  method: "host.echo",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: baseRequest,
+  responseSchema: baseResponse,
+});
+
+const optionalEntry = {
+  1: {
+    latestMinor: 0,
+    versions: {
+      0: {
+        contract: optionalV10,
+        upgradeFromPreviousVersion: null,
+      },
+    },
+    downgradePathsFromLatest: {},
+  },
+} as const;
+
 function blockingOf(
   mine: UncheckedVersionedRpcRegistry,
   exceptions: readonly CompatException[],
@@ -74,6 +120,7 @@ describe("surface self-compatibility", () => {
   it("the live host registries are compatible with their own surface", () => {
     const surface = buildProtocolSurface({
       unary: hostRpcRegistry,
+      unaryFloorMethodNames: RELEASED_FLOOR_METHOD_NAMES,
       stream: hostStreamRpcRegistry,
     });
     const result = checkSurfaceCompatibility({
@@ -192,6 +239,165 @@ describe("handshake-fatal method-name drift (the #227 class)", () => {
       },
     ]);
     expect(blocking).toHaveLength(1);
+  });
+});
+
+describe("optional unary channel and degrade-story policy", () => {
+  it("dumps floor methods separately from optional unary methods with degrade data", () => {
+    const registry = defineFloorAwareVersionedRpcRegistry(["host.echo"], {
+      "host.echo": unaryV10(baseRequest, baseResponse),
+      "host.optional": {
+        degrade: defineFallbackMethodDegrade<
+          typeof optionalV10,
+          typeof hostEchoV10,
+          "host.echo"
+        >({
+          kind: "fallback",
+          to: { method: "host.echo", major: 1, minor: 0 },
+          adaptRequest: (request) => ({ a: request.value }),
+          adaptResponse: () => ({ ok: true }),
+        }),
+        ...optionalEntry,
+      },
+    });
+
+    const surface = surfaceOfUnaryWithFloor(registry, ["host.echo"]);
+
+    expect(surface.unary["host.echo"]).toBeDefined();
+    expect(surface.unary["host.optional"]).toBeUndefined();
+    expect(surface.optionalUnary["host.optional"]?.canonical).toEqual({
+      major: 1,
+      minor: 0,
+    });
+    expect(surface.optionalUnary["host.optional"]?.degrade).toEqual({
+      kind: "fallback",
+      to: { method: "host.echo", major: 1, minor: 0 },
+    });
+  });
+
+  it("parses old-format surfaces that have no optional channel", () => {
+    const parsed = protocolSurfaceSchema.parse({
+      formatVersion: 1,
+      unary: baselineSurface.unary,
+      stream: {},
+    });
+
+    expect(parsed.optionalUnary).toEqual({});
+  });
+
+  it("blocks an optional unary method that is absent from the baseline and has no story", () => {
+    const registry = defineVersionedRpcRegistry({
+      "host.echo": unaryV10(baseRequest, baseResponse),
+      "host.optional": optionalEntry,
+    });
+    const result = checkSurfaceCompatibility({
+      mine: surfaceOfUnaryWithFloor(registry, ["host.echo"]),
+      theirs: baselineSurface,
+      theirsLabel: "released",
+      exceptions: [
+        {
+          family: "unary",
+          method: "host.optional",
+          version: "1.0",
+          payload: "request",
+          path: "(root)",
+          reason: "attempted optional policy suppression",
+        },
+      ],
+    });
+
+    expect(result.blocking).toHaveLength(1);
+    expect(result.blocking[0]).toMatchObject({
+      method: "host.optional",
+      severity: "blocking",
+      excepted: false,
+    });
+  });
+
+  it("accepts an absent optional unary method when its fallback target is reachable on the baseline", () => {
+    const registry = defineFloorAwareVersionedRpcRegistry(["host.echo"], {
+      "host.echo": unaryV10(baseRequest, baseResponse),
+      "host.optional": {
+        degrade: defineFallbackMethodDegrade<
+          typeof optionalV10,
+          typeof hostEchoV10,
+          "host.echo"
+        >({
+          kind: "fallback",
+          to: { method: "host.echo", major: 1, minor: 0 },
+          adaptRequest: (request) => ({ a: request.value }),
+          adaptResponse: () => ({ ok: true }),
+        }),
+        ...optionalEntry,
+      },
+    });
+    const mine = surfaceOfUnaryWithFloor(registry, ["host.echo"]);
+    const result = checkSurfaceCompatibility({
+      mine,
+      theirs: baselineSurface,
+      theirsLabel: "released",
+      exceptions: [],
+    });
+
+    expect(result.blocking).toEqual([]);
+    const targetVerdict = check(
+      baselineRegistry,
+      manifestFromSurface(baselineSurface, "unary"),
+      { "host.echo": { major: 1, minor: 0 } },
+      "host",
+    );
+    expect(targetVerdict.ok).toBe(true);
+  });
+
+  it("blocks an absent optional unary method when its fallback target is unreachable", () => {
+    const registry = defineVersionedRpcRegistry({
+      "host.echo": unaryV10(baseRequest, baseResponse),
+      "host.optional": {
+        degrade: {
+          kind: "fallback",
+          to: { method: "host.missing", major: 1, minor: 0 },
+          adaptRequest: () => ({ a: "fallback" }),
+          adaptResponse: () => ({ ok: true }),
+        },
+        ...optionalEntry,
+      },
+    });
+    const result = checkSurfaceCompatibility({
+      mine: surfaceOfUnaryWithFloor(registry, ["host.echo"]),
+      theirs: baselineSurface,
+      theirsLabel: "released",
+      exceptions: [],
+    });
+
+    expect(result.blocking).toHaveLength(1);
+    expect(result.blocking[0]).toMatchObject({
+      method: "host.optional",
+      severity: "blocking",
+    });
+    expect(result.blocking[0].detail).toContain("fallback is unreachable");
+  });
+
+  it("treats an absent optional unary method with unsupported story as advisory", () => {
+    const registry = defineFloorAwareVersionedRpcRegistry(["host.echo"], {
+      "host.echo": unaryV10(baseRequest, baseResponse),
+      "host.optional": {
+        degrade: { kind: "unsupported" },
+        ...optionalEntry,
+      },
+    });
+    const result = checkSurfaceCompatibility({
+      mine: surfaceOfUnaryWithFloor(registry, ["host.echo"]),
+      theirs: baselineSurface,
+      theirsLabel: "released",
+      exceptions: [],
+    });
+
+    expect(result.blocking).toEqual([]);
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0]).toMatchObject({
+      method: "host.optional",
+      severity: "advisory",
+    });
   });
 });
 
@@ -315,10 +521,7 @@ describe("unary version bridging mirrors the shipped checker", () => {
             },
           },
           downgradePathsFromLatest: {
-            1: defineDowngradePath<
-              typeof breakingContract,
-              typeof upgraded
-            >({
+            1: defineDowngradePath<typeof breakingContract, typeof upgraded>({
               from: { major: 2, minor: 0 },
               to: { major: 1, minor: 1 },
               downgradeRequest: (request) => ({
@@ -383,8 +586,16 @@ describe("stream bridging mirrors the shipped stream checker", () => {
   it("treats a cross-major stream mismatch as breaking, mirroring checkStreamCompatibility's per-method verdict", () => {
     const mineRegistry = streamRegistryAt(2);
     const theirsRegistry = streamRegistryAt(1);
-    const mine = buildProtocolSurface({ unary: {}, stream: mineRegistry });
-    const theirs = buildProtocolSurface({ unary: {}, stream: theirsRegistry });
+    const mine = buildProtocolSurface({
+      unary: {},
+      unaryFloorMethodNames: [],
+      stream: mineRegistry,
+    });
+    const theirs = buildProtocolSurface({
+      unary: {},
+      unaryFloorMethodNames: [],
+      stream: theirsRegistry,
+    });
 
     const blocking = checkSurfaceCompatibility({
       mine,
@@ -409,9 +620,14 @@ describe("stream bridging mirrors the shipped stream checker", () => {
   it("treats a stream method the released peer never had as advisory (the resources.subscribe precedent)", () => {
     const mine = buildProtocolSurface({
       unary: {},
+      unaryFloorMethodNames: [],
       stream: streamRegistryAt(1),
     });
-    const theirs = buildProtocolSurface({ unary: {}, stream: {} });
+    const theirs = buildProtocolSurface({
+      unary: {},
+      unaryFloorMethodNames: [],
+      stream: {},
+    });
     const result = checkSurfaceCompatibility({
       mine,
       theirs,
@@ -424,9 +640,14 @@ describe("stream bridging mirrors the shipped stream checker", () => {
   });
 
   it("treats removing a stream method the released peer shipped with as breaking", () => {
-    const mine = buildProtocolSurface({ unary: {}, stream: {} });
+    const mine = buildProtocolSurface({
+      unary: {},
+      unaryFloorMethodNames: [],
+      stream: {},
+    });
     const theirs = buildProtocolSurface({
       unary: {},
+      unaryFloorMethodNames: [],
       stream: streamRegistryAt(1),
     });
     const blocking = checkSurfaceCompatibility({
@@ -476,7 +697,10 @@ describe("same-version wire-schema evolution rules", () => {
 
   it("rejects flipping a property between optional and required", () => {
     const demoted = defineVersionedRpcRegistry({
-      "host.echo": unaryV10(z.object({ a: z.string().optional() }), baseResponse),
+      "host.echo": unaryV10(
+        z.object({ a: z.string().optional() }),
+        baseResponse,
+      ),
     });
     expect(blockingOf(demoted, []).map((finding) => finding.path)).toEqual([
       "properties.a",

@@ -7,11 +7,13 @@ import {
   type ReactNode,
 } from "react";
 import { useStore } from "zustand";
+import { AlertTriangle } from "lucide-react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   ChatActiveTurn,
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
+import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 
 import { useComposerPaste } from "@/hooks/composer/use-composer-paste";
 import { useComposerDictation } from "@/hooks/composer/use-composer-dictation";
@@ -21,16 +23,20 @@ import { ComposerWorkspaceRow } from "@/components/home/composer/composer-worksp
 import type { ModelOption } from "@/components/home/data/landing-options";
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
 import { selectedModelRejectsImageAttachments } from "@/lib/composer/chat-run-settings";
+import { authoritativeOrFallbackSeedSource } from "@/lib/composer/composer-seed-source";
 import {
   workspaceComposerCanStart,
   type WorkspaceComposerAvailability,
 } from "@/lib/composer/workspace-composer-availability";
 import type { ChatLowerSurfaceTopSpacing } from "@/components/chat/chat-pinned-stack";
+import { resolveComposerTopBannerKind } from "./chat-composer-top-banner";
 import { useTabBodySelected } from "@/components/epic-canvas/canvas/tab-body-selected-context";
 import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
 import type { Attachment } from "@/lib/composer/types";
 import { cn } from "@/lib/utils";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
+import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
+import { redactEmail } from "@/lib/providers/redact-email";
 
 import type { ComposerPromptEditorHandle } from "./composer-prompt-editor";
 import { ChatComposerAttachmentsStrip } from "./chat-composer-attachments-strip";
@@ -38,10 +44,22 @@ import { ChatComposerEditorSlot } from "./chat-composer-editor-slot";
 import { ChatComposerToolbarSlot } from "./chat-composer-toolbar-slot";
 import { createComposerPickerStore } from "./picker/composer-picker-store";
 import { ProviderReauthBanner } from "./provider-reauth-banner";
+import { ProfileRateLimitSwitchBanner } from "./profile-rate-limit-switch-banner";
 import { useChatComposerDraft } from "./use-chat-composer-draft";
 import { useChatComposerSubmit } from "./use-chat-composer-submit";
-import { useProviderReauthGate } from "./use-provider-reauth-gate";
+import {
+  useProviderReauthGate,
+  type ProviderReauthGate,
+  type ProviderReauthReason,
+} from "./use-provider-reauth-gate";
+import { useProfileRateLimitSwitchPrompt } from "./use-profile-rate-limit-switch-prompt";
+import { useRefreshProvidersListOnTurn } from "@/hooks/providers/use-refresh-providers-list-on-turn";
+import {
+  useAmbientDriftGate,
+  type AmbientDriftSendNotice,
+} from "./use-ambient-drift-gate";
 import { useComposerPickerItems } from "./picker/use-composer-picker-items";
+import { commitSelection } from "@/stores/composer/commit-selection";
 
 interface ChatComposerProps {
   readonly taskId: string;
@@ -123,6 +141,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     fallbackToGlobalMentionRoots,
   );
   const hostClient = useTabHostClient();
+  const tabHostId = useTabHostId();
   const workspaceBlocked = !workspaceComposerCanStart(workspaceAvailability);
 
   const editorRef = useRef<ComposerPromptEditorHandle | null>(null);
@@ -169,6 +188,16 @@ function ChatComposerImpl(props: ChatComposerProps) {
     isActive,
   });
 
+  // S11: one seed source, computed once and consumed identically by both the
+  // toolbar store and the reauth gate below - `settingsSeed` (non-null) makes
+  // it `authoritative` (a real chat pin); otherwise it falls back to
+  // `fallbackSettingsSeed` (a picker default, not a commitment - see
+  // `deriveReauthReason`'s comment for why that distinction matters).
+  const seedSource = authoritativeOrFallbackSeedSource(
+    settingsSeed,
+    fallbackSettingsSeed,
+    hostClient,
+  );
   // Per-composer toolbar store: this component only subscribes to the two
   // slices it consumes (harness id for the picker/editor, selected model for
   // the image gate); everything else - permission, reasoning, tier, the
@@ -178,16 +207,41 @@ function ChatComposerImpl(props: ChatComposerProps) {
   // keep-alive chat panes is a follow-up at the tile level.
   const toolbarStore = useComposerToolbarStore(
     isActive ? "chat-tile" : null,
-    settingsSeed ?? fallbackSettingsSeed,
+    seedSource,
     onSettingsChange,
     false,
   );
   const harnessId = useStore(toolbarStore, (s) => s.selection.harnessId);
+  const profileId = useStore(toolbarStore, (s) => s.selection.profileId);
+  const modelSlug = useStore(toolbarStore, (s) => s.selection.modelSlug);
   // Connection-level auth gate for the selected provider, scoped to the tab's
   // host. When the provider CLI is signed out it blocks send and mounts the
   // re-auth banner above the composer; a doomed turn can't start.
-  const reauthGate = useProviderReauthGate(harnessId, isActive);
+  const reauthGate = useProviderReauthGate(
+    harnessId,
+    profileId,
+    isActive,
+    seedSource.kind,
+  );
   const sendBlocked = sendDisabled === true || reauthGate.signedOut;
+  // Rate-limit switch prompt: purely informational + user-confirmed, so it
+  // never blocks send the way the reauth gate does.
+  const rateLimitPrompt = useProfileRateLimitSwitchPrompt(
+    harnessId,
+    profileId,
+    isActive,
+  );
+  // Keeps the switch prompt's own `providers.list` read converging with a
+  // turn's passive rate-limit capture: without this, a turn that just pushed
+  // this harness's profile into near/hard limit wouldn't surface the banner
+  // until `providers.list`'s next unrelated 15-minute refetch.
+  useRefreshProvidersListOnTurn(harnessId, tabHostId);
+  const onSwitchProfile = useCallback(
+    (nextProfileId: string | null) => {
+      commitSelection(toolbarStore, harnessId, modelSlug, nextProfileId);
+    },
+    [toolbarStore, harnessId, modelSlug],
+  );
   const selectedModel = useStore(toolbarStore, (s) => s.selectedModel);
   const imagesUnsupported = imageAttachmentsUnsupported(
     draftHasImages,
@@ -216,6 +270,26 @@ function ChatComposerImpl(props: ChatComposerProps) {
     imagesUnsupported,
     onSubmitMessage,
   });
+  const ambientDrift = useAmbientDriftGate(
+    hostClient,
+    reauthGate.state,
+    profileId,
+  );
+  const handleSubmitDraft = useCallback((): void => {
+    ambientDrift.guardSubmit(submitDraft);
+  }, [ambientDrift, submitDraft]);
+  const reauthBanner = resolveReauthBannerProps(reauthGate);
+  const topBannerKind = resolveComposerTopBannerKind({
+    reauthVisible: reauthBanner !== null,
+    ambientDriftVisible: ambientDrift.pendingNotice !== null,
+    rateLimitVisible: !reauthGate.signedOut && rateLimitPrompt.limited,
+  });
+  const continueAfterAmbientDrift = (): void => {
+    ambientDrift.acknowledge(() => {
+      if (rateLimitPrompt.limited) return;
+      submitDraft();
+    });
+  };
 
   const {
     onPaste,
@@ -253,10 +327,34 @@ function ChatComposerImpl(props: ChatComposerProps) {
       )}
     >
       <div className="mx-auto w-full max-w-3xl">
-        {reauthGate.signedOut && reauthGate.providerId !== null ? (
+        {topBannerKind === "reauth" && reauthBanner !== null ? (
           <ProviderReauthBanner
-            providerId={reauthGate.providerId}
+            providerId={reauthBanner.providerId}
             state={reauthGate.state}
+            reason={reauthBanner.reason}
+            profileLabel={reauthGate.profileLabel}
+            onContinueOnAmbient={
+              reauthBanner.reason === "provider_unauthenticated"
+                ? null
+                : () => onSwitchProfile(null)
+            }
+          />
+        ) : null}
+        {topBannerKind === "rate-limit" ? (
+          <ProfileRateLimitSwitchBanner
+            harnessId={harnessId}
+            hardLimited={rateLimitPrompt.hardLimited}
+            current={rateLimitPrompt.current}
+            alternatives={rateLimitPrompt.alternatives}
+            onSwitchProfile={onSwitchProfile}
+          />
+        ) : null}
+        {topBannerKind === "ambient-drift" &&
+        ambientDrift.pendingNotice !== null ? (
+          <AmbientDriftSendBanner
+            notice={ambientDrift.pendingNotice}
+            onContinue={continueAfterAmbientDrift}
+            onDismiss={ambientDrift.dismiss}
           />
         ) : null}
         {topSlot}
@@ -285,7 +383,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
                 slashProviderId={harnessId}
                 isActive={isActive}
                 onSnapshot={handleSnapshot}
-                onSubmit={submitDraft}
+                onSubmit={handleSubmitDraft}
                 onPaste={onPaste}
                 onDragOver={onDragOver}
                 onDrop={onDrop}
@@ -297,7 +395,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
                 store={toolbarStore}
                 onAttachImages={attachImageFiles}
                 canSubmit={canSubmit}
-                onSubmit={submitDraft}
+                onSubmit={handleSubmitDraft}
                 activeTurnStatus={activeTurnStatus}
                 hasPendingApprovals={hasPendingApprovals}
                 stopDisabled={stopDisabled}
@@ -306,6 +404,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
                 dictation={dictationControl}
                 dictationPreparing={dictationPreparing}
                 settingsLocked={false}
+                createProfileHostId={tabHostId}
               />
             }
           />
@@ -329,6 +428,64 @@ function ChatComposerImpl(props: ChatComposerProps) {
 }
 
 export const ChatComposer = memo(ChatComposerImpl);
+
+// Narrowed props for `ProviderReauthBanner`, resolved once so neither the
+// `topBannerKind` derivation nor the JSX re-derives the same three-way
+// `signedOut && providerId !== null && reason !== null` check.
+function resolveReauthBannerProps(gate: ProviderReauthGate): {
+  readonly providerId: ProviderId;
+  readonly reason: ProviderReauthReason;
+} | null {
+  if (!gate.signedOut || gate.providerId === null || gate.reason === null) {
+    return null;
+  }
+  return { providerId: gate.providerId, reason: gate.reason };
+}
+
+function AmbientDriftSendBanner({
+  notice,
+  onContinue,
+  onDismiss,
+}: {
+  readonly notice: AmbientDriftSendNotice;
+  readonly onContinue: () => void;
+  readonly onDismiss: () => void;
+}): ReactNode {
+  return (
+    <div className="mb-2 flex flex-col gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-ui-sm text-amber-900 dark:text-amber-200">
+      <div className="flex items-start gap-2">
+        <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+        <div className="min-w-0">
+          <div className="font-medium">Terminal account changed</div>
+          <div className="text-ui-xs">
+            Terminal account is now {driftEmailCopy(notice.currentEmail)}; was{" "}
+            {driftEmailCopy(notice.previousEmail)}.
+          </div>
+        </div>
+      </div>
+      <div className="flex flex-wrap items-center gap-2 pl-6">
+        <button
+          type="button"
+          className="rounded-md bg-foreground/90 px-2.5 py-1 text-ui-xs font-medium text-background transition-colors hover:bg-foreground"
+          onClick={onContinue}
+        >
+          Continue with Terminal account
+        </button>
+        <button
+          type="button"
+          className="rounded-md px-2.5 py-1 text-ui-xs text-current opacity-80 transition-opacity hover:opacity-100"
+          onClick={onDismiss}
+        >
+          Dismiss
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function driftEmailCopy(email: string | null): string {
+  return email === null ? "an unknown account" : redactEmail(email);
+}
 
 function imageAttachmentsUnsupported(
   draftHasImages: boolean,

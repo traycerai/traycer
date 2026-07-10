@@ -15,9 +15,10 @@ import {
  *
  * Examples: `mod+1`, `mod+shift+h`, `mod+alt+arrowleft`, `mod+,`, `ctrl+shift+m`.
  *
- * Note: `chordFromEvent` never emits `ctrl` (events still collapse Meta/Control
- * into `mod` for the shared lenient matching). `ctrl` chords are matched by
- * consumers that need a Control-specific binding (e.g. the dictation hotkey).
+ * Note: `chordFromEvent` never emits `ctrl`. It treats `mod` as the
+ * platform-primary modifier: Command on macOS, Command/Control elsewhere.
+ * `ctrl` chords are matched by consumers that need a Control-specific binding
+ * (e.g. the dictation hotkey).
  */
 export type ChordString = string;
 
@@ -100,9 +101,9 @@ export function parseChordFromEvent(event: KeyboardEvent): ChordParts | null {
   if (isBareModifierEvent(event)) return null;
   const key = normalizeCode(event.code);
   if (key === null) return null;
-  // Events collapse Meta/Control into `mod` for the shared lenient matching;
-  // `ctrl` is never emitted from an event (only authored in stored chords).
-  const mod = event.metaKey || event.ctrlKey;
+  // `mod` follows the platform-primary modifier. On macOS that is Command only;
+  // Control-specific chords use the ctrl-aware path below.
+  const mod = hasPlatformModKey(event);
   const shift = event.shiftKey;
   const alt = event.altKey;
   return { mod, ctrl: false, shift, alt, key };
@@ -168,7 +169,7 @@ export function parseChordFromEventCtrlAware(
   const key = normalizeCode(event.code);
   if (key === null) return null;
   const mac = isMac();
-  const mod = mac ? event.metaKey : event.metaKey || event.ctrlKey;
+  const mod = hasPlatformModKey(event);
   const ctrl = mac && event.ctrlKey;
   const shift = event.shiftKey;
   const alt = event.altKey;
@@ -183,13 +184,30 @@ export function chordFromEventCtrlAware(
   return formatChord(parts);
 }
 
+/**
+ * The single chord an event should be matched against, applying the
+ * ctrl-aware-vs-platform-primary precedence: when the Control-specific chord
+ * (macOS ⌃, distinct from ⌘) differs from the platform-primary chord, the
+ * event matches ONLY that ctrl chord - so a bare macOS Control chord can't fall
+ * through to a plain key binding. Otherwise the platform-primary chord is used.
+ * Centralizes this security-relevant contract for every consumer (event→action
+ * matching in the provider, and `chordMatchesEvent`).
+ */
+export function resolveMatchingChord(event: KeyboardEvent): ChordString | null {
+  const eventChord = chordFromEvent(event);
+  const ctrlAwareChord = chordFromEventCtrlAware(event);
+  if (ctrlAwareChord !== null && ctrlAwareChord !== eventChord) {
+    return ctrlAwareChord;
+  }
+  return eventChord;
+}
+
 /** Does the event match the stored chord string exactly? */
 export function chordMatchesEvent(
   chord: ChordString,
   event: KeyboardEvent,
 ): boolean {
-  const eventChord = chordFromEvent(event);
-  return eventChord === chord;
+  return resolveMatchingChord(event) === chord;
 }
 
 /** Human-friendly display label e.g. `⌘⇧H` / `Ctrl+Shift+H`. */
@@ -226,10 +244,14 @@ export interface ModifierMask {
 
 export function modifierMaskFromEvent(event: KeyboardEvent): ModifierMask {
   return {
-    mod: event.metaKey || event.ctrlKey,
+    mod: hasPlatformModKey(event),
     shift: event.shiftKey,
     alt: event.altKey,
   };
+}
+
+export function hasPlatformModKey(event: KeyboardEvent): boolean {
+  return isMac() ? event.metaKey : event.metaKey || event.ctrlKey;
 }
 
 export function parseModifierChord(chord: ChordString): ModifierMask | null {

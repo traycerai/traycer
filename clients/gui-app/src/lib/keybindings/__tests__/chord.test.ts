@@ -1,9 +1,19 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createPlatformMock } from "@/__tests__/create-platform-mock";
+
+const platformMock = vi.hoisted(() => ({ mac: false }));
+
+vi.mock("@/lib/keybindings/platform", () => createPlatformMock(platformMock));
+
 import {
   chordFromEvent,
+  chordFromEventCtrlAware,
   chordMatchesEvent,
   formatChordForDisplay,
+  modifierMaskFromEvent,
+  modifierMaskMatches,
   parseChordString,
+  parseModifierChord,
 } from "@/lib/keybindings/chord";
 
 function keydown(
@@ -11,6 +21,10 @@ function keydown(
 ): KeyboardEvent {
   return new KeyboardEvent("keydown", { ...init, code: init.code });
 }
+
+beforeEach(() => {
+  platformMock.mac = false;
+});
 
 describe("chordFromEvent", () => {
   it("encodes Cmd+1 / Ctrl+1 as 'mod+1'", () => {
@@ -59,6 +73,74 @@ describe("chordMatchesEvent", () => {
   });
 });
 
+describe("macOS platform-primary modifier matching", () => {
+  beforeEach(() => {
+    platformMock.mac = true;
+  });
+
+  it("keeps Command chords matching mod bindings", () => {
+    expect(
+      chordMatchesEvent("mod+k", keydown({ code: "KeyK", metaKey: true })),
+    ).toBe(true);
+    expect(
+      chordMatchesEvent("mod+w", keydown({ code: "KeyW", metaKey: true })),
+    ).toBe(true);
+    expect(
+      chordMatchesEvent("mod+d", keydown({ code: "KeyD", metaKey: true })),
+    ).toBe(true);
+    expect(
+      modifierMaskMatches(
+        "mod",
+        modifierMaskFromEvent(keydown({ code: "Digit1", metaKey: true })),
+      ),
+    ).toBe(true);
+  });
+
+  it("does not let bare Control chords match mod bindings or digit masks", () => {
+    expect(
+      chordMatchesEvent("mod+k", keydown({ code: "KeyK", ctrlKey: true })),
+    ).toBe(false);
+    expect(
+      chordMatchesEvent("mod+w", keydown({ code: "KeyW", ctrlKey: true })),
+    ).toBe(false);
+    expect(
+      chordMatchesEvent("mod+d", keydown({ code: "KeyD", ctrlKey: true })),
+    ).toBe(false);
+    expect(
+      modifierMaskMatches(
+        "mod",
+        modifierMaskFromEvent(keydown({ code: "Digit1", ctrlKey: true })),
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps Control-specific chords matchable", () => {
+    const event = keydown({
+      code: "KeyM",
+      ctrlKey: true,
+      shiftKey: true,
+    });
+
+    expect(chordFromEventCtrlAware(event)).toBe("ctrl+shift+m");
+    expect(chordMatchesEvent("ctrl+shift+m", event)).toBe(true);
+    expect(chordMatchesEvent("shift+m", event)).toBe(false);
+  });
+});
+
+describe("non-mac platform-primary modifier matching", () => {
+  it("continues to treat Control as mod", () => {
+    expect(
+      chordMatchesEvent("mod+k", keydown({ code: "KeyK", ctrlKey: true })),
+    ).toBe(true);
+    expect(
+      modifierMaskMatches(
+        "mod",
+        modifierMaskFromEvent(keydown({ code: "Digit1", ctrlKey: true })),
+      ),
+    ).toBe(true);
+  });
+});
+
 describe("parseChordString", () => {
   it("round-trips mod+shift+h", () => {
     const parts = parseChordString("mod+shift+h");
@@ -94,6 +176,39 @@ describe("parseChordString", () => {
   it("rejects malformed input", () => {
     expect(parseChordString("")).toBeNull();
     expect(parseChordString("foo+bar+baz")).toBeNull();
+  });
+});
+
+describe("modifier-only chord matching (digit actions)", () => {
+  // T4 (profile shortcuts): confirms the debate's verified finding -
+  // `matchDigitAction`'s generic mask matching already handles a mod+shift
+  // chord like any other combination, so `model.profile.byDigit` needed no
+  // dispatch-layer changes, only a new bound action.
+  it("parses 'mod+shift' as a mod+shift-only modifier mask", () => {
+    expect(parseModifierChord("mod+shift")).toEqual({
+      mod: true,
+      shift: true,
+      alt: false,
+    });
+  });
+
+  it("matches a mod+shift chord against a ⌘⇧-held event, not a bare ⌘ or ⌘⌥ event", () => {
+    const modShiftMask = modifierMaskFromEvent(
+      keydown({ code: "Digit2", metaKey: true, shiftKey: true }),
+    );
+    const modOnlyMask = modifierMaskFromEvent(
+      keydown({ code: "Digit2", metaKey: true }),
+    );
+    const modAltMask = modifierMaskFromEvent(
+      keydown({ code: "Digit2", metaKey: true, altKey: true }),
+    );
+
+    expect(modifierMaskMatches("mod+shift", modShiftMask)).toBe(true);
+    expect(modifierMaskMatches("mod+shift", modOnlyMask)).toBe(false);
+    expect(modifierMaskMatches("mod+shift", modAltMask)).toBe(false);
+    // And the reverse - a plain "mod" binding must not match a ⌘⇧ event,
+    // otherwise the profile digit would collide with the provider digit.
+    expect(modifierMaskMatches("mod", modShiftMask)).toBe(false);
   });
 });
 

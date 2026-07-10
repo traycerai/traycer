@@ -5,6 +5,7 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { Kbd } from "@/components/ui/kbd";
 import { HarnessModelTrigger } from "@/components/home/pickers/harness-model-trigger";
 import {
+  findUpgradeServiceTierForModel,
   findReasoningOptionsForModel,
   type HarnessOption,
   type ModelOption,
@@ -37,13 +38,19 @@ import {
   useMemo,
   useRef,
   type KeyboardEvent,
+  type ReactNode,
 } from "react";
 import { HarnessModelPickerPanel } from "@/components/home/pickers/harness-model-picker-panel";
 import { useHarnessModelPickerState } from "@/components/home/pickers/harness-model-picker-state";
 import {
   railHarnessDegraded,
-  visibleRailHarnesses,
+  resolveActiveProfileForHarness,
+  visibleRailEntries,
 } from "@/components/home/pickers/harness-rail-providers";
+import {
+  profileCommitId,
+  profileDisplayLabel,
+} from "@/components/providers/provider-profile-model";
 import { usePickerLeaderScope } from "@/components/home/pickers/use-picker-leader-scope";
 import { handleHarnessModelPickerKeyDown } from "@/components/home/pickers/harness-model-picker-keyboard";
 import { deriveHarnessModelPickerPresentation } from "@/components/home/pickers/harness-model-picker-presentation";
@@ -55,9 +62,22 @@ import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 import { useRegisterActiveModelPicker } from "@/hooks/command-palette/use-register-active-model-picker";
 import { useBindingForAction } from "@/stores/settings/keybinding-store";
 import { formatChordForDisplay } from "@/lib/keybindings/chord";
-import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
+import {
+  useProvidersList,
+  useProvidersListForClient,
+} from "@/hooks/providers/use-providers-list-query";
+import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import {
+  EMPTY_LOGIN_CAPABILITY_BY_HARNESS_ID,
+  loginCapabilityByHarnessIdFromProviderStates,
+  resolveCreateProfileGate,
+  useCreateProfileHostIsLocal,
+} from "@/components/home/pickers/harness-model-picker-create-profile-gate";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
-import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
+import type {
+  ProviderCliState,
+  ProviderProfile,
+} from "@traycer/protocol/host/provider-schemas";
 import {
   providerIdToGuiHarnessId,
   sortGuiHarnessesByProviderOrder,
@@ -67,6 +87,10 @@ export type { ReasoningFooterConfig, ServiceTierFooterConfig };
 
 const EMPTY_MODELS: ReadonlyArray<ModelOption> = [];
 const EMPTY_DEGRADED_HARNESS_IDS: ReadonlySet<GuiHarnessId> = new Set();
+const EMPTY_PROFILES_BY_HARNESS_ID: ReadonlyMap<
+  GuiHarnessId,
+  ReadonlyArray<ProviderProfile>
+> = new Map();
 
 interface HarnessModelPickerProps {
   /** Per-composer toolbar store; the picker subscribes to the selection /
@@ -93,6 +117,17 @@ interface HarnessModelPickerProps {
    * dialog pickers pass `false` so the global shortcut never targets them.
    */
   registerActivation: boolean;
+  /**
+   * The host "Create new profile" creates on - the id of the picker's owning
+   * tab, or `null` when this picker isn't bound to any tab yet (landing
+   * composer, add-node dropdown), meaning the app-wide default host applies.
+   * A tab-bound surface (the chat composer, fork dialogs) MUST pass its own
+   * tab's host id here: the add-profile flow mounts globally, outside any
+   * `<TabHostProvider>`, so without this it would silently create the
+   * profile against the renderer-default host even when the composer itself
+   * runs turns on a different one (the tab-host-binding rule).
+   */
+  createProfileHostId: string | null;
 }
 
 function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
@@ -103,6 +138,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     lockedHarnessId,
     disabled,
     registerActivation,
+    createProfileHostId,
   } = props;
   const activityEnabled = useSurfaceActivity();
   const selection = useStore(store, (s) => s.selection);
@@ -148,17 +184,22 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   const {
     query,
     activeProviderId,
+    activeProfileId,
     activeRowId,
     hoveredRowId,
     openVersion,
     visibleOpen,
     handleOpenChange,
     handleQueryChange,
-    setActiveProviderId,
+    setActiveRailEntry,
     setActiveRowId,
     setHoveredRowId,
     closeOnly,
-  } = useHarnessModelPickerState(selection.harnessId, disabled);
+  } = useHarnessModelPickerState(
+    selection.harnessId,
+    selection.profileId,
+    disabled,
+  );
   const inputRef = useRef<HTMLInputElement | null>(null);
   const listRef = useRef<VirtuosoHandle | null>(null);
   const { openSettings } = useSystemTabModalActions();
@@ -190,6 +231,36 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         : degradedHarnessIdsFromProviderStates(providersQuery.data.providers),
     [providersQuery.data],
   );
+  const profilesByHarnessId = useMemo(
+    () =>
+      providersQuery.data === undefined
+        ? EMPTY_PROFILES_BY_HARNESS_ID
+        : profilesByHarnessIdFromProviderStates(providersQuery.data.providers),
+    [providersQuery.data],
+  );
+  // The create-profile gate's capability data must come from the SAME host
+  // the add-profile flow will target - `ProviderProfileAddFlowHost` resolves
+  // its client from this exact prop via `useHostClientForHostId`, not the
+  // app-wide default host `providersQuery` above serves the rail/dropdown/
+  // degraded state from. A tab bound to a different host would otherwise let
+  // the pre-click gate disagree with the host that receives
+  // `providers.startLogin`.
+  const createProfileClient = useHostClientForHostId(createProfileHostId);
+  const createProfileProvidersQuery = useProvidersListForClient(
+    createProfileClient,
+    { enabled: activityEnabled, subscribed: activityEnabled },
+  );
+  const loginCapabilityByHarnessId = useMemo(
+    () =>
+      createProfileProvidersQuery.data === undefined
+        ? EMPTY_LOGIN_CAPABILITY_BY_HARNESS_ID
+        : loginCapabilityByHarnessIdFromProviderStates(
+            createProfileProvidersQuery.data.providers,
+          ),
+    [createProfileProvidersQuery.data],
+  );
+  const createProfileHostIsLocal =
+    useCreateProfileHostIsLocal(createProfileHostId);
   const harnesses = useMemo(
     () =>
       activityEnabled && harnessesQuery.data !== undefined
@@ -240,9 +311,12 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         harnessesPending: harnessesQuery.isPending,
         modelsPending: selectedModelsQuery.isPending,
         selectedHarnessAvailable,
+        selectedHarnessProfiles:
+          profilesByHarnessId.get(selection.harnessId) ?? [],
       }),
     [
       harnessesQuery.isPending,
+      profilesByHarnessId,
       reasoningFooter,
       selectedHarnessAvailable,
       selectedModels,
@@ -271,10 +345,94 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
       selection.harnessId,
     ],
   );
+  // Mirrors Settings' `providerCanStartProfileOauth` gate: OAuth sign-in
+  // needs a local host that advertises login args for the browsed provider.
+  // A tab-bound composer gates on the TAB's host locality (`createProfileHostIsLocal`,
+  // resolved from `createProfileHostId`), never the renderer-default host.
+  const createProfileGate = resolveCreateProfileGate(
+    createProfileHostIsLocal,
+    loginCapabilityByHarnessId.get(resolvedActiveProviderId),
+  );
   const activeProvider =
     catalogHarnesses.find(
       (harness) => harness.id === resolvedActiveProviderId,
     ) ?? null;
+  // The profile browsed/selected within the active provider: prefer the
+  // reducer's `activeProfileId` (a strip click or ⌘-digit rail switch) if it
+  // belongs to this harness, else the committed selection's profile if it
+  // belongs to this harness, else the harness's first selectable profile.
+  // `null` (and no strip) under 2 profiles.
+  const activePanelProfileId = useMemo(
+    () =>
+      resolveActiveProfileForHarness(
+        profilesByHarnessId.get(resolvedActiveProviderId) ?? [],
+        activeProfileId,
+        selection.harnessId === resolvedActiveProviderId
+          ? selection.profileId
+          : null,
+      ),
+    [
+      activeProfileId,
+      profilesByHarnessId,
+      resolvedActiveProviderId,
+      selection.harnessId,
+      selection.profileId,
+    ],
+  );
+  // Falls back to the fallback harness list's label while the catalog hasn't
+  // resolved the active provider yet (e.g. still loading).
+  const activePanelLabel = useMemo(
+    () =>
+      activeProvider?.label ??
+      harnesses.find((harness) => harness.id === resolvedActiveProviderId)
+        ?.label ??
+      "",
+    [activeProvider, harnesses, resolvedActiveProviderId],
+  );
+  // Profiles the active provider's strip renders (provisional/mid-OAuth
+  // profiles filtered out) - under 2 means no strip and no rail dot.
+  const activeProviderProfiles = useMemo(
+    () => profilesByHarnessId.get(resolvedActiveProviderId) ?? [],
+    [profilesByHarnessId, resolvedActiveProviderId],
+  );
+  // Which profile each harness's rail dot reflects: the active provider's
+  // browsed profile, plus the composer's already-committed selection's
+  // profile when browsing a DIFFERENT provider (so its dot doesn't silently
+  // reset to the ambient default while it's off screen). Every other harness
+  // falls back to its own first selectable profile inside `visibleRailEntries`.
+  const activeProfileIdByHarnessId = useMemo(() => {
+    const map = new Map<GuiHarnessId, string | null>([
+      [resolvedActiveProviderId, activePanelProfileId],
+    ]);
+    if (selection.harnessId !== resolvedActiveProviderId) {
+      map.set(selection.harnessId, selection.profileId);
+    }
+    return map;
+  }, [
+    activePanelProfileId,
+    resolvedActiveProviderId,
+    selection.harnessId,
+    selection.profileId,
+  ]);
+  // Rail entries: one per visible provider (see `visibleRailEntries`); the
+  // rail no longer splits by profile - that lives in the profile dropdown.
+  const railEntries = useMemo(
+    () =>
+      visibleRailEntries({
+        harnesses: catalogHarnesses,
+        fallbackHarnesses: harnesses,
+        degradedHarnessIds,
+        profilesByHarnessId,
+        activeProfileIdByHarnessId,
+      }),
+    [
+      activeProfileIdByHarnessId,
+      catalogHarnesses,
+      degradedHarnessIds,
+      harnesses,
+      profilesByHarnessId,
+    ],
+  );
   const rows = useMemo(
     () =>
       buildAllHarnessModelRows(
@@ -329,41 +487,61 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         return;
       }
       // Commit the picked model through the memory-aware funnel (restores that
-      // (harness, model)'s remembered effort/tier, or the model's defaults).
-      // Selecting a model keeps the picker open; it only closes on an outside
-      // click / escape (handled by Popover's onOpenChange -> closeOnly).
-      commitSelection(store, row.harnessId, row.value);
+      // (harness, profile, model)'s remembered effort/tier, or the model's
+      // defaults). Selecting a model keeps the picker open; it only closes on
+      // an outside click / escape (handled by Popover's onOpenChange ->
+      // closeOnly).
+      commitSelection(store, row.harnessId, row.value, activePanelProfileId);
     },
-    [closeOnly, disabled, store],
+    [activePanelProfileId, closeOnly, disabled, store],
   );
-  const handleProviderChange = useCallback(
+  const handleRailEntryChange = useCallback(
     (providerId: ProviderId) => {
       // Locked fork (terminal): the harness is immovable - never switch off it.
       if (lockedHarnessId !== null && providerId !== lockedHarnessId) return;
-      // Only an AVAILABLE, non-degraded provider commits a switch (restoring its
-      // remembered model/effort/tier). A degraded / unavailable provider just
+      // The rail only ever targets a PROVIDER now (profile switching lives in
+      // the strip) - resolve which profile browsing this provider should
+      // land on: the reducer's already-browsed profile if it's still this
+      // provider's (a same-provider re-click / no-op), else the committed
+      // selection's profile if this provider is already selected, else the
+      // provider's first selectable profile.
+      const resolvedProfileId = resolveActiveProfileForHarness(
+        profilesByHarnessId.get(providerId) ?? [],
+        providerId === activeProviderId ? activeProfileId : null,
+        providerId === selection.harnessId ? selection.profileId : null,
+      );
+      // Only an AVAILABLE, non-degraded entry commits a switch (restoring its
+      // remembered model/effort/tier). A degraded / unavailable entry just
       // browses the rail - the panel shows its reauth / setup CTA, no commit.
-      const harness =
-        catalogHarnesses.find((option) => option.id === providerId) ??
-        harnesses.find((option) => option.id === providerId) ??
-        null;
-      if (
-        harness !== null &&
-        harness.available &&
-        !railHarnessDegraded(harness, degradedHarnessIds)
-      ) {
-        commitSelection(store, providerId, null);
+      const entry = railEntries.find(
+        (candidate) => candidate.harness.id === providerId,
+      );
+      if (entry !== undefined && entry.harness.available && !entry.degraded) {
+        commitSelection(store, providerId, null, resolvedProfileId);
       }
-      setActiveProviderId(providerId);
+      setActiveRailEntry(providerId, resolvedProfileId);
     },
     [
-      catalogHarnesses,
-      degradedHarnessIds,
-      harnesses,
+      activeProfileId,
+      activeProviderId,
       lockedHarnessId,
-      setActiveProviderId,
+      profilesByHarnessId,
+      railEntries,
+      selection.harnessId,
+      selection.profileId,
+      setActiveRailEntry,
       store,
     ],
+  );
+  const handleProfileChange = useCallback(
+    (providerId: ProviderId, profileId: string | null) => {
+      // Mirrors `handleRailEntryChange`'s lock rule: while a fork lock is
+      // active the strip stays interactive for the locked provider only.
+      if (lockedHarnessId !== null && providerId !== lockedHarnessId) return;
+      commitSelection(store, providerId, null, profileId);
+      setActiveRailEntry(providerId, profileId);
+    },
+    [lockedHarnessId, setActiveRailEntry, store],
   );
 
   const handleKeyDown = useCallback(
@@ -402,15 +580,11 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     };
   }, [visibleOpen]);
 
-  // Leader-key scope: while open, ⌘+digit switches the browsed provider rail
-  // (suppressing epic-tab switching) and ⌥+digit sets the thinking level. The
-  // ordered rail list mirrors what `ProviderRail` renders so digits line up with
+  // Leader-key scope: while open, ⌘+digit switches the browsed rail entry
+  // (suppressing epic-tab switching) and ⌥+digit sets the thinking level.
+  // `railEntries` mirrors what `ProviderRail` renders so digits line up with
   // the badges. Both handlers are pure state writes, so the search input keeps
   // focus and the user can keep typing after switching.
-  const railHarnesses = useMemo(
-    () => visibleRailHarnesses(catalogHarnesses, harnesses, degradedHarnessIds),
-    [catalogHarnesses, degradedHarnessIds, harnesses],
-  );
   // ⌥-reasoning is armed whenever the selected model exposes thinking levels.
   // The footer always reflects the selected model (not the browsed rail), so
   // ⌥+digit sets that model's level even while ⌘ browses a different provider.
@@ -418,10 +592,13 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     reasoningFooter.options.length > 0 && !reasoningFooter.disabled;
   usePickerLeaderScope({
     open: visibleOpen,
-    railHarnesses,
-    onProviderChange: handleProviderChange,
+    railEntries,
+    onEntryChange: handleRailEntryChange,
     reasoning: reasoningFooter,
     reasoningActionable,
+    activeProviderId: resolvedActiveProviderId,
+    activeProviderProfiles,
+    onProfileChange: handleProfileChange,
   });
 
   // Active-composer registration: while this picker's surface is active and it
@@ -447,37 +624,48 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     activationController,
   );
 
+  const selectedHarnessLabel = selectedHarness?.label ?? selection.harnessId;
   const tooltipLabel = (
-    <span className="flex items-center gap-2">
-      <span className="truncate">{presentation.label}</span>
-      {modelPickerChord !== null ? (
-        <Kbd className="text-code-xs">
-          {formatChordForDisplay(modelPickerChord)}
-        </Kbd>
-      ) : null}
-    </span>
+    <HarnessModelPickerTooltip
+      harnessLabel={selectedHarnessLabel}
+      modelLabel={presentation.label}
+      reasoningLabel={presentation.reasoningLabel}
+      fastModeLabel={fastModeTooltipLabel(serviceTierFooter, selectedModel)}
+      profileLabel={profileTooltipLabel(
+        profilesByHarnessId.get(selection.harnessId) ?? [],
+        selection.profileId,
+      )}
+      shortcutLabel={
+        modelPickerChord === null
+          ? null
+          : formatChordForDisplay(modelPickerChord)
+      }
+    />
   );
 
   return (
     <Popover open={visibleOpen} onOpenChange={handleOpenChange}>
-      <TooltipWrapper
-        label={tooltipLabel}
-        side="top"
-        sideOffset={undefined}
-        align={undefined}
-      >
-        <PopoverTrigger asChild>
+      <PopoverTrigger asChild>
+        <TooltipWrapper
+          label={tooltipLabel}
+          side="top"
+          sideOffset={undefined}
+          align={undefined}
+        >
           <HarnessModelTrigger
             selection={selection}
             label={presentation.label}
             reasoningLabel={presentation.reasoningLabel}
             serviceTierLabel={presentation.activeServiceTierLabel}
             serviceTierActive={presentation.serviceTierActive}
+            profileLabel={presentation.profileLabel}
+            hasMultipleProfiles={presentation.hasMultipleProfiles}
+            profileAccentDot={presentation.profileAccentDot}
             isLoading={presentation.isLoading}
             disabled={disabled}
           />
-        </PopoverTrigger>
-      </TooltipWrapper>
+        </TooltipWrapper>
+      </PopoverTrigger>
       <HarnessModelPickerPanel
         trimmedQuery={trimmedQuery}
         hasQuery={hasQuery}
@@ -486,18 +674,24 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         inputRef={inputRef}
         query={query}
         onQueryChange={handleQueryChange}
-        activeProviderLabel={activeProvider?.label ?? ""}
+        activeProviderLabel={activePanelLabel}
         activeDescendant={modelRowActiveDescendant(idPrefix, activeRow)}
         onKeyDown={handleKeyDown}
         catalogHarnesses={catalogHarnesses}
         fallbackHarnesses={harnesses}
+        profilesByHarnessId={profilesByHarnessId}
         resolvedActiveProviderId={resolvedActiveProviderId}
+        activeProfileId={activePanelProfileId}
+        activeProfileIdByHarnessId={activeProfileIdByHarnessId}
+        activeProviderProfiles={activeProviderProfiles}
         lockedHarnessId={lockedHarnessId}
         degradedHarnessIds={degradedHarnessIds}
         catalogHarnessesLoading={catalog.harnessesLoading}
-        onProviderChange={handleProviderChange}
+        onEntryChange={handleRailEntryChange}
+        onProfileChange={handleProfileChange}
         onRefreshCatalog={refreshCatalog}
         onOpenProviderSettings={openProviderSettings}
+        onClosePicker={closeOnly}
         listRef={listRef}
         listKey={listKey}
         visibleRows={visibleRows}
@@ -512,12 +706,92 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         onSelectRow={selectRow}
         reasoningFooter={reasoningFooter}
         serviceTierFooter={serviceTierFooter}
+        createProfileHostId={createProfileHostId}
+        createProfileDisabled={createProfileGate.disabled}
+        createProfileDisabledReason={createProfileGate.reason}
       />
     </Popover>
   );
 }
 
 export const HarnessModelPicker = memo(HarnessModelPickerImpl);
+
+function HarnessModelPickerTooltip({
+  harnessLabel,
+  modelLabel,
+  reasoningLabel,
+  fastModeLabel,
+  profileLabel,
+  shortcutLabel,
+}: {
+  readonly harnessLabel: string;
+  readonly modelLabel: string;
+  readonly reasoningLabel: string | null;
+  readonly fastModeLabel: string | null;
+  readonly profileLabel: string | null;
+  readonly shortcutLabel: string | null;
+}): ReactNode {
+  return (
+    <div className="flex min-w-0 flex-col gap-1 text-left">
+      <div className="truncate font-medium">{modelLabel}</div>
+      <TooltipSummaryRow label="Harness" value={harnessLabel} />
+      {reasoningLabel === null ? null : (
+        <TooltipSummaryRow label="Effort" value={reasoningLabel} />
+      )}
+      {fastModeLabel === null ? null : (
+        <TooltipSummaryRow label="Fast" value={fastModeLabel} />
+      )}
+      {profileLabel === null ? null : (
+        <TooltipSummaryRow label="Profile" value={profileLabel} />
+      )}
+      {shortcutLabel === null ? null : (
+        <div className="mt-0.5 flex min-w-0 items-center justify-between gap-3 border-t border-background/15 pt-1">
+          <span className="text-background/70">Shortcut</span>
+          <Kbd className="text-code-xs">{shortcutLabel}</Kbd>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TooltipSummaryRow({
+  label,
+  value,
+}: {
+  readonly label: string;
+  readonly value: string;
+}): ReactNode {
+  return (
+    <div className="flex min-w-0 items-center justify-between gap-3">
+      <span className="shrink-0 text-background/70">{label}</span>
+      <span className="min-w-0 truncate font-medium">{value}</span>
+    </div>
+  );
+}
+
+function fastModeTooltipLabel(
+  serviceTierFooter: ServiceTierFooterConfig | null,
+  selectedModel: ModelOption | null,
+): string | null {
+  if (serviceTierFooter === null) return null;
+  const upgrade = findUpgradeServiceTierForModel(selectedModel);
+  if (upgrade === null) return null;
+  const active = serviceTierFooter.value === upgrade.id;
+  return `${upgrade.label} ${active ? "on" : "off"}`;
+}
+
+function profileTooltipLabel(
+  profiles: ReadonlyArray<ProviderProfile>,
+  selectedProfileId: string | null,
+): string | null {
+  if (profiles.length < 2) return null;
+  const activeProfile =
+    profiles.find(
+      (profile) => profileCommitId(profile) === selectedProfileId,
+    ) ?? profiles.at(0);
+  if (activeProfile === undefined) return null;
+  return profileDisplayLabel(activeProfile);
+}
 
 // Short current-selection summary for the palette's "Change model…" subtitle.
 // Null while the model label is still resolving so the row shows no stale copy.
@@ -577,6 +851,17 @@ function providerNeedsPickerReauth(provider: ProviderCliState): boolean {
     provider.enabled &&
     (provider.auth.status === "unauthenticated" ||
       (provider.apiKey.supported && !provider.apiKey.configured))
+  );
+}
+
+function profilesByHarnessIdFromProviderStates(
+  providers: ReadonlyArray<ProviderCliState>,
+): ReadonlyMap<GuiHarnessId, ReadonlyArray<ProviderProfile>> {
+  return new Map(
+    providers.map((provider) => [
+      providerIdToGuiHarnessId(provider.providerId),
+      provider.profiles,
+    ]),
   );
 }
 

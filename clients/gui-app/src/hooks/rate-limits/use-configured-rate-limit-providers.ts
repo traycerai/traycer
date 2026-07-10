@@ -1,5 +1,8 @@
 import { useMemo } from "react";
-import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
+import type {
+  ProviderCliState,
+  ProviderProfile,
+} from "@traycer/protocol/host/provider-schemas";
 import { useHostQueriesWithResponseMap } from "@/hooks/host/use-host-queries";
 import {
   providerRateLimitQueryOptions,
@@ -23,6 +26,7 @@ import {
 export interface ConfiguredRateLimitProvider {
   readonly providerId: RateLimitProviderId;
   readonly lane: RateLimitFetchLane;
+  readonly profiles: ReadonlyArray<ProviderProfile>;
 }
 
 interface RateLimitProviderCandidate extends ConfiguredRateLimitProvider {
@@ -65,6 +69,7 @@ function rateLimitProviderCandidates(
       {
         providerId,
         lane: rateLimitFetchLane(providerId),
+        profiles: state.profiles,
         configured: isRateLimitProviderConfigured(state),
       },
     ];
@@ -94,7 +99,13 @@ export function useConfiguredRateLimitProviders(): ReadonlyArray<ConfiguredRateL
     if (providers === undefined) return [];
     return rateLimitProviderCandidates(providers).flatMap((provider) =>
       provider.configured
-        ? [{ providerId: provider.providerId, lane: provider.lane }]
+        ? [
+            {
+              providerId: provider.providerId,
+              lane: provider.lane,
+              profiles: provider.profiles,
+            },
+          ]
         : [],
     );
   }, [providers]);
@@ -134,6 +145,7 @@ export function useVisibleRateLimitProviders(): ReadonlyArray<ConfiguredRateLimi
     requests: candidates.map((provider) => {
       const { method, params } = providerRateLimitQueryOptions(
         provider.providerId,
+        null,
       );
       return { method, params };
     }),
@@ -146,7 +158,13 @@ export function useVisibleRateLimitProviders(): ReadonlyArray<ConfiguredRateLimi
       candidates.flatMap((provider, index) =>
         provider.configured ||
         hasProviderRateLimitCacheState(cacheQueries[index])
-          ? [{ providerId: provider.providerId, lane: provider.lane }]
+          ? [
+              {
+                providerId: provider.providerId,
+                lane: provider.lane,
+                profiles: provider.profiles,
+              },
+            ]
           : [],
       ),
     [cacheQueries, candidates],

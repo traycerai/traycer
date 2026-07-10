@@ -263,12 +263,25 @@ export async function runHostStart(
 
   const logFd = await deps.openLogFd(opts.environment);
 
+  // The `make dev-desktop` host runtime is a `.cmd` wrapper that execs
+  // `node <bundle>` (production is a real `.exe`). bun/Node launch a `.cmd`
+  // through cmd.exe but do NOT quote a wrapper path containing spaces (e.g.
+  // "C:\Users\Traycer Dev\..."), so cmd splits it and fails with
+  // "'C:\Users\Traycer' is not recognized". Invoke cmd.exe ourselves with a
+  // verbatim, fully-quoted command line on Windows; every other case spawns
+  // the executable directly.
+  const launch = resolveSpawnInvocation(target.executable, target.args);
+
   let child: ChildProcess;
   try {
-    child = deps.spawn(target.executable, target.args, {
+    child = deps.spawn(launch.command, launch.args, {
       cwd: target.cwd,
       env,
       stdio: ["ignore", logFd, logFd],
+      windowsHide: process.platform === "win32",
+      ...(launch.windowsVerbatimArguments
+        ? { windowsVerbatimArguments: true }
+        : {}),
     });
   } catch (cause) {
     const message = cause instanceof Error ? cause.message : String(cause);
@@ -375,4 +388,32 @@ function signalNumber(signal: NodeJS.Signals): number {
   if (signal === "SIGHUP") return 1;
   if (signal === "SIGKILL") return 9;
   return 15;
+}
+
+export interface SpawnInvocation {
+  readonly command: string;
+  readonly args: readonly string[];
+  readonly windowsVerbatimArguments: boolean;
+}
+
+// Wrap a Windows `.cmd`/`.bat` host wrapper (the dev-desktop runtime) in an
+// explicit, fully-quoted `cmd.exe /d /s /c "..."` invocation so a wrapper path
+// containing spaces survives - bun/Node otherwise hand the spaced path to
+// cmd.exe unquoted and it fails with "'C:\Users\Traycer' is not recognized".
+// `/s /c "<line>"` makes cmd strip only the OUTERMOST quote pair and run
+// `<line>` verbatim, so each token stays individually quoted. Non-Windows and
+// real `.exe` hosts (production SEA) spawn directly. Exported for unit tests.
+export function resolveSpawnInvocation(
+  executable: string,
+  args: readonly string[],
+): SpawnInvocation {
+  if (process.platform === "win32" && /\.(cmd|bat)$/i.test(executable)) {
+    const line = [executable, ...args].map((token) => `"${token}"`).join(" ");
+    return {
+      command: process.env.COMSPEC ?? "cmd.exe",
+      args: ["/d", "/s", "/c", `"${line}"`],
+      windowsVerbatimArguments: true,
+    };
+  }
+  return { command: executable, args, windowsVerbatimArguments: false };
 }

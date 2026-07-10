@@ -35,7 +35,10 @@ export function useRefreshRateLimitUsageOnTraycerTurn(): void {
         queryKey: queryKeys.hostMethod<
           HostRpcRegistry,
           "host.getRateLimitUsage"
-        >(hostId, "host.getRateLimitUsage", { accountContext }),
+        >(hostId, "host.getRateLimitUsage", {
+          accountContext,
+          profileId: null,
+        }),
       });
     });
   }, [queryClient, hostId, accountContext]);

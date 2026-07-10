@@ -4,15 +4,24 @@ import { LEADER_SCOPE_MODEL_PICKER } from "@/lib/keybindings/leader-scope";
 import { HarnessModelPickerSearch } from "@/components/home/pickers/harness-model-picker-search";
 import { HarnessModelPickerList } from "@/components/home/pickers/harness-model-picker-list";
 import { ProviderRail } from "@/components/home/pickers/harness-model-picker-group";
+import { ProfileDropdown } from "@/components/providers/profile-dropdown";
+import { useProviderProfileAddFlowStore } from "@/stores/settings/provider-profile-add-flow-store";
+import { pickerProfileShortcutHintForIndex } from "@/components/home/pickers/harness-model-picker-shortcut-hint";
 import type {
   HarnessOption,
   ProviderId,
 } from "@/components/home/data/landing-options";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
+import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import type { GuiHarnessCatalogEntry } from "@/hooks/harnesses/use-gui-harness-catalog";
 import type { HarnessModelRow } from "@/components/home/data/harness-model-search";
 import type { VirtuosoHandle } from "react-virtuoso";
-import type { KeyboardEvent, RefObject } from "react";
+import {
+  useCallback,
+  useState,
+  type KeyboardEvent,
+  type RefObject,
+} from "react";
 import {
   HarnessModelPickerModelSettingsFooter,
   type ReasoningFooterConfig,
@@ -32,13 +41,28 @@ interface HarnessModelPickerPanelProps {
   readonly onKeyDown: (event: KeyboardEvent<HTMLElement>) => void;
   readonly catalogHarnesses: ReadonlyArray<HarnessOption>;
   readonly fallbackHarnesses: ReadonlyArray<HarnessOption>;
+  readonly profilesByHarnessId: ReadonlyMap<
+    GuiHarnessId,
+    ReadonlyArray<ProviderProfile>
+  >;
   readonly resolvedActiveProviderId: ProviderId;
+  readonly activeProfileId: string | null;
+  readonly activeProfileIdByHarnessId: ReadonlyMap<GuiHarnessId, string | null>;
+  readonly activeProviderProfiles: ReadonlyArray<ProviderProfile>;
   readonly lockedHarnessId: ProviderId | null;
   readonly degradedHarnessIds: ReadonlySet<GuiHarnessId>;
   readonly catalogHarnessesLoading: boolean;
-  readonly onProviderChange: (providerId: ProviderId) => void;
+  readonly onEntryChange: (providerId: ProviderId) => void;
+  readonly onProfileChange: (
+    providerId: ProviderId,
+    profileId: string | null,
+  ) => void;
   readonly onRefreshCatalog: () => Promise<void>;
   readonly onOpenProviderSettings: () => void;
+  /** Closes the picker popover without opening Settings - used by the profile
+   *  dropdown's "Create new profile" row, which opens the add-profile flow in
+   *  its own global host, not Settings. */
+  readonly onClosePicker: () => void;
   readonly listRef: RefObject<VirtuosoHandle | null>;
   readonly listKey: string;
   readonly visibleRows: ReadonlyArray<HarnessModelRow>;
@@ -57,6 +81,11 @@ interface HarnessModelPickerPanelProps {
   readonly onSelectRow: (row: HarnessModelRow) => void;
   readonly reasoningFooter: ReasoningFooterConfig | null;
   readonly serviceTierFooter: ServiceTierFooterConfig | null;
+  /** The host "Create new profile" creates on - see `HarnessModelPicker`'s
+   *  prop of the same name. */
+  readonly createProfileHostId: string | null;
+  readonly createProfileDisabled: boolean;
+  readonly createProfileDisabledReason: string | undefined;
 }
 
 export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
@@ -73,13 +102,19 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
     onKeyDown,
     catalogHarnesses,
     fallbackHarnesses,
+    profilesByHarnessId,
     resolvedActiveProviderId,
+    activeProfileId,
+    activeProfileIdByHarnessId,
+    activeProviderProfiles,
     lockedHarnessId,
     degradedHarnessIds,
     catalogHarnessesLoading,
-    onProviderChange,
+    onEntryChange,
+    onProfileChange,
     onRefreshCatalog,
     onOpenProviderSettings,
+    onClosePicker,
     listRef,
     listKey,
     visibleRows,
@@ -94,7 +129,21 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
     onSelectRow,
     reasoningFooter,
     serviceTierFooter,
+    createProfileHostId,
+    createProfileDisabled,
+    createProfileDisabledReason,
   } = props;
+  const openAddProfile = useProviderProfileAddFlowStore(
+    (state) => state.openForHarness,
+  );
+  const [profileDropdownContainer, setProfileDropdownContainer] =
+    useState<HTMLDivElement | null>(null);
+  const bindProfileDropdownContainer = useCallback(
+    (node: HTMLDivElement | null) => {
+      setProfileDropdownContainer(node);
+    },
+    [],
+  );
 
   return (
     <PopoverContent
@@ -138,15 +187,50 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
         <ProviderRail
           harnesses={catalogHarnesses}
           fallbackHarnesses={fallbackHarnesses}
+          profilesByHarnessId={profilesByHarnessId}
           activeProviderId={resolvedActiveProviderId}
+          activeProfileIdByHarnessId={activeProfileIdByHarnessId}
           lockedHarnessId={lockedHarnessId}
           degradedHarnessIds={degradedHarnessIds}
           pending={catalogHarnessesLoading}
-          onProviderChange={onProviderChange}
+          onEntryChange={onEntryChange}
           onRefresh={onRefreshCatalog}
           onOpenProviderSettings={onOpenProviderSettings}
         />
-        <div className="flex min-h-0 min-w-0 flex-col overflow-hidden">
+        <div
+          ref={bindProfileDropdownContainer}
+          className="flex min-h-0 min-w-0 flex-col overflow-hidden"
+        >
+          {/* The dropdown is the picker's second interaction level: only when
+              the active provider has 2+ profiles, and it persists while
+              typing - search stays scoped to the active provider+profile
+              pair. */}
+          {activeProviderProfiles.length >= 2 ? (
+            <div className="shrink-0 border-b p-2">
+              <ProfileDropdown
+                providerLabel={activeProviderLabel}
+                profiles={activeProviderProfiles}
+                activeProfileId={activeProfileId}
+                onSelectProfile={(profileId) =>
+                  onProfileChange(resolvedActiveProviderId, profileId)
+                }
+                onCreateProfile={() => {
+                  onClosePicker();
+                  openAddProfile(
+                    resolvedActiveProviderId,
+                    createProfileHostId,
+                    (profileId) =>
+                      onProfileChange(resolvedActiveProviderId, profileId),
+                  );
+                }}
+                createProfileDisabled={createProfileDisabled}
+                createProfileDisabledReason={createProfileDisabledReason}
+                shortcutHintForIndex={pickerProfileShortcutHintForIndex}
+                contentContainer={profileDropdownContainer}
+                onCloseAutoFocus={() => inputRef.current?.focus()}
+              />
+            </div>
+          ) : null}
           <div className="min-h-0 flex-1 overflow-hidden">
             <HarnessModelPickerList
               idPrefix={idPrefix}

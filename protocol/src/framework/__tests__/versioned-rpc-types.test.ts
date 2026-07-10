@@ -2,6 +2,8 @@ import { describe, expectTypeOf, it } from "vitest";
 import { z } from "zod";
 import {
   defineDowngradePath,
+  defineFallbackMethodDegrade,
+  defineFloorAwareVersionedRpcRegistry,
   defineRpcContract,
   defineUpgradePath,
   defineVersionedRpcRegistry,
@@ -227,9 +229,9 @@ describe("Versioned RPC typing", () => {
     expectTypeOf(upgradePath.upgradeRequest).returns.toEqualTypeOf<
       RequestOf<typeof echoV21>
     >();
-    expectTypeOf<Parameters<typeof upgradePath.upgradeResponse>>().toEqualTypeOf<
-      [ResponseOf<typeof echoV11>]
-    >();
+    expectTypeOf<
+      Parameters<typeof upgradePath.upgradeResponse>
+    >().toEqualTypeOf<[ResponseOf<typeof echoV11>]>();
     expectTypeOf(upgradePath.upgradeResponse).returns.toEqualTypeOf<
       ResponseOf<typeof echoV21>
     >();
@@ -599,6 +601,105 @@ describe("Versioned RPC typing", () => {
         uncheckedRegistry;
 
       getLatestContract(validatedRegistry.echo, undefined);
+    };
+
+    expectTypeOf(assertCompileTime).toBeFunction();
+  });
+
+  it("requires degrade declarations for non-floor methods", () => {
+    const assertCompileTime = (): void => {
+      defineFloorAwareVersionedRpcRegistry(["echo"] as const, {
+        echo: {
+          1: {
+            latestMinor: 1,
+            versions: {
+              0: {
+                contract: echoV10,
+                upgradeFromPreviousVersion: null,
+              },
+              1: {
+                contract: echoV11,
+                upgradeFromPreviousVersion: upgradeV10ToV11,
+              },
+            },
+            downgradePathsFromLatest: {},
+          },
+        },
+        // @ts-expect-error Non-floor methods must declare a degrade strategy.
+        extra: {
+          1: {
+            latestMinor: 0,
+            versions: {
+              0: {
+                contract: defineRpcContract({
+                  method: "extra",
+                  schemaVersion: { major: 1, minor: 0 } as const,
+                  requestSchema: z.object({ text: z.string() }),
+                  responseSchema: z.object({ upper: z.string() }),
+                }),
+                upgradeFromPreviousVersion: null,
+              },
+            },
+            downgradePathsFromLatest: {},
+          },
+        },
+      });
+    };
+
+    expectTypeOf(assertCompileTime).toBeFunction();
+  });
+
+  it("types fallback degrade adapters and floor targets", () => {
+    const fallback = defineFallbackMethodDegrade<
+      typeof echoV21,
+      typeof echoV11,
+      "echo"
+    >({
+      kind: "fallback",
+      to: { method: "echo", major: 1, minor: 1 },
+      adaptRequest: (request) => ({
+        text: request.text,
+        trim: request.trim,
+      }),
+      adaptResponse: (response) => ({
+        upper: response.upper,
+        trimmed: response.trimmed,
+        localeApplied: false,
+      }),
+    });
+
+    expectTypeOf<Parameters<typeof fallback.adaptRequest>>().toEqualTypeOf<
+      [RequestOf<typeof echoV21>]
+    >();
+    expectTypeOf(fallback.adaptRequest).returns.toEqualTypeOf<
+      RequestOf<typeof echoV11>
+    >();
+    expectTypeOf<Parameters<typeof fallback.adaptResponse>>().toEqualTypeOf<
+      [ResponseOf<typeof echoV11>]
+    >();
+    expectTypeOf(fallback.adaptResponse).returns.toEqualTypeOf<
+      ResponseOf<typeof echoV21>
+    >();
+
+    const assertCompileTime = (): void => {
+      defineFallbackMethodDegrade<typeof echoV21, typeof echoV11, "echo">({
+        kind: "fallback",
+        to: {
+          // @ts-expect-error Fallback targets are constrained to floor methods.
+          method: "extra",
+          major: 1,
+          minor: 1,
+        },
+        adaptRequest: (request) => ({
+          text: request.text,
+          trim: request.trim,
+        }),
+        adaptResponse: (response) => ({
+          upper: response.upper,
+          trimmed: response.trimmed,
+          localeApplied: false,
+        }),
+      });
     };
 
     expectTypeOf(assertCompileTime).toBeFunction();

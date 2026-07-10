@@ -423,6 +423,8 @@ function hostRpcToCliError(err: unknown): unknown {
  *     the internal term "task" (epic), neither actionable for a CLI user.
  *   - `UNAUTHORIZED` → `AUTH_REJECTED`: bearer rejected even after the
  *     auth-aware wrapper's refresh-and-retry.
+ *   - `E_HOST_UNSUPPORTED` → `HOST_UNSUPPORTED`: per-feature unsupported on
+ *     this host, actionable by updating the host.
  *   - `INCOMPATIBLE` / `DOWNGRADE_UNSUPPORTED` → `HOST_INCOMPATIBLE`: host/CLI
  *     protocol skew, actionable via `host restart` / updating the CLI.
  *   - everything else, including `RPC_ERROR` → `UNEXPECTED`: `RPC_ERROR` is the
@@ -440,6 +442,17 @@ function mapHostRpcError(err: HostRpcError): CliError {
       message:
         "traycer: access denied for this epic - check --epic-id and that you're signed in to the account that owns it.",
       details: null,
+      exitCode: 1,
+    });
+  }
+  if (err.code === "E_HOST_UNSUPPORTED") {
+    return cliError({
+      code: CLI_ERROR_CODES.HOST_UNSUPPORTED,
+      message: `traycer: ${err.message}`,
+      details: {
+        hostShouldUpgrade: true,
+        method: err.method,
+      },
       exitCode: 1,
     });
   }

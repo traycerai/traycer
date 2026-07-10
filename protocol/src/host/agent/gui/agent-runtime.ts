@@ -207,6 +207,12 @@ export const runtimeAgentRunInputSchema = z.object({
   // OpenCode server so the inference call bills the right account; other
   // harnesses ignore it.
   accountContext: accountContextSchema.default(DEFAULT_ACCOUNT_CONTEXT),
+  // Which of the harness's logged-in profiles (subscriptions) to spawn this
+  // turn's adapter with (resolved to a config-dir env override by the host's
+  // ProfileResolver). `null` = the ambient/host login. Distinct from
+  // `accountContext`, which selects Traycer's own billing org, not a
+  // provider-CLI login. See the multi-profile decision log.
+  profileId: z.string().nullable().default(null),
 });
 export type RuntimeAgentRunInput = z.infer<typeof runtimeAgentRunInputSchema>;
 

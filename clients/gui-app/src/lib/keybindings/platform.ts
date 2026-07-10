@@ -1,8 +1,8 @@
 /**
- * Platform helpers for keybinding labels AND the dictation shortcut's
- * platform-primary modifier match. Most runtime matching uses
- * `event.metaKey || event.ctrlKey` via `chord.ts`, but the dictation hotkey and
- * all display strings need to know the real OS.
+ * Platform helpers for keybinding labels and platform-primary modifier
+ * matching. Runtime matching treats `mod` as Command on macOS and
+ * Command/Control elsewhere; Control-specific macOS shortcuts are represented
+ * with the separate `ctrl` token.
  */
 
 // UA Client Hints - the modern platform signal, not yet in TS's lib.dom (5.9).
@@ -36,6 +36,26 @@ const IS_MAC = detectMac();
 
 export function isMac(): boolean {
   return IS_MAC;
+}
+
+// Detect Windows via the same UA Client Hints signal as `detectMac`
+// (`navigator.userAgentData.platform` reports "Windows"), falling back to the UA
+// string ("Windows NT ...") for engines without UA-CH. Like the mac check it is
+// robust against the desktop app's custom User-Agent, which never sets UA-CH
+// metadata.
+function detectWindows(): boolean {
+  if (typeof navigator === "undefined") return false;
+  const uaPlatform = navigator.userAgentData?.platform;
+  if (uaPlatform !== undefined && uaPlatform !== "") {
+    return uaPlatform.toLowerCase().includes("win");
+  }
+  return navigator.userAgent.toLowerCase().includes("win");
+}
+
+const IS_WINDOWS = detectWindows();
+
+export function isWindows(): boolean {
+  return IS_WINDOWS;
 }
 
 export function modLabel(): string {

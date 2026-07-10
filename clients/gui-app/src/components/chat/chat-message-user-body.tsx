@@ -73,6 +73,10 @@ import { LivePulse } from "@/components/ui/live-pulse";
 import { AgentReferenceMarkdown } from "./segments/agent-reference-markdown";
 import { SegmentCard } from "./segments/segment-card";
 import { SegmentPanel } from "./segments/segment-panel";
+import { useTombstonedProfileLabel } from "./use-tombstoned-profile-label";
+import { AccentDot } from "@/components/providers/accent-dot";
+import { HarnessIcon } from "@/components/home/pickers/harness-icon";
+import type { ProviderId } from "@/components/home/data/landing-options";
 
 const NOOP: () => void = () => undefined;
 const NOOP_CLIPBOARD: ClipboardEventHandler<HTMLElement> = () => undefined;
@@ -347,6 +351,13 @@ function UserMessageDisplayView({
       />
     );
 
+  const tombstonedProfileLabel = useTombstonedProfileLabel(
+    message.sessionAnchor,
+  );
+  // Present whenever `tombstonedProfileLabel` is (the resolver only returns a
+  // label for an anchor with a non-null `profileId`) - re-derived separately
+  // since the hook's return doesn't narrow `sessionAnchor` for TypeScript.
+  const tombstoneIdentity = tombstoneFooterIdentity(message.sessionAnchor);
   const confirmingDelete = actions?.confirmingDelete ?? false;
   const visibleSteerBadge =
     message.steerBadge !== null && message.steerBadge.status !== "steered"
@@ -405,24 +416,100 @@ function UserMessageDisplayView({
             button is rendered independently of `actions` so it stays available
             on hover even while a turn is streaming (when edit/delete are gated
             off and `actions` is null). */}
-        <div
-          className={cn(
-            "absolute right-3 top-full z-10 flex -translate-y-1/2 items-center gap-0.5 rounded-md border border-border/60 bg-background p-0.5 shadow-sm transition-opacity",
-            confirmingDelete
-              ? "pointer-events-auto opacity-100"
-              : "pointer-events-none opacity-0 group-hover/user-message:pointer-events-auto group-hover/user-message:opacity-100 group-focus-within/user-message:pointer-events-auto group-focus-within/user-message:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100",
-          )}
-        >
-          {actions !== null ? <MessageActionBar actions={actions} /> : null}
-          {!confirmingDelete && copyText.trim().length > 0 ? (
-            <MessageCopyButton
-              text={copyText}
-              structuredContent={message.structuredContent}
-            />
-          ) : null}
-        </div>
+        <UserMessageActionOverlay
+          confirmingDelete={confirmingDelete}
+          actions={actions}
+          copyText={copyText}
+          structuredContent={message.structuredContent}
+        />
       </div>
+      {tombstonedProfileLabel !== null && tombstoneIdentity !== null ? (
+        <UserMessageTombstonedProfileFooter
+          profileId={tombstoneIdentity.profileId}
+          harnessId={tombstoneIdentity.harnessId}
+          accentColor={tombstoneIdentity.accentColor}
+          label={tombstonedProfileLabel}
+        />
+      ) : null}
     </div>
+  );
+}
+
+function UserMessageActionOverlay({
+  confirmingDelete,
+  actions,
+  copyText,
+  structuredContent,
+}: {
+  readonly confirmingDelete: boolean;
+  readonly actions: ChatMessageUserActions | null;
+  readonly copyText: string;
+  readonly structuredContent: JsonContent | null;
+}): ReactNode {
+  return (
+    <div
+      className={cn(
+        "absolute right-3 top-full z-10 flex -translate-y-1/2 items-center gap-0.5 rounded-md border border-border/60 bg-background p-0.5 shadow-sm transition-opacity",
+        confirmingDelete
+          ? "pointer-events-auto opacity-100"
+          : "pointer-events-none opacity-0 group-hover/user-message:pointer-events-auto group-hover/user-message:opacity-100 group-focus-within/user-message:pointer-events-auto group-focus-within/user-message:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100",
+      )}
+    >
+      {actions !== null ? <MessageActionBar actions={actions} /> : null}
+      {!confirmingDelete && copyText.trim().length > 0 ? (
+        <MessageCopyButton
+          text={copyText}
+          structuredContent={structuredContent}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+// `message.sessionAnchor?.profileId ?? null` doesn't narrow the anchor's
+// discriminated-union type for TypeScript, so the footer's other identity
+// fields (harnessId, accentColor) need their own re-derivation - pulled into
+// one helper instead of three inline optional chains in the render body.
+function tombstoneFooterIdentity(
+  sessionAnchor: ChatMessageModel["sessionAnchor"],
+): {
+  readonly profileId: string;
+  readonly harnessId: ProviderId;
+  readonly accentColor: string | null;
+} | null {
+  if (sessionAnchor === null) return null;
+  if (sessionAnchor.profileId === null) return null;
+  return {
+    profileId: sessionAnchor.profileId,
+    harnessId: sessionAnchor.harnessId,
+    accentColor: sessionAnchor.accentColor,
+  };
+}
+
+function UserMessageTombstonedProfileFooter({
+  profileId,
+  harnessId,
+  accentColor,
+  label,
+}: {
+  readonly profileId: string;
+  readonly harnessId: ProviderId;
+  readonly accentColor: string | null;
+  readonly label: string;
+}): ReactNode {
+  return (
+    <span className="mt-1 flex items-center gap-1.5 text-ui-xs text-muted-foreground">
+      <HarnessIcon harnessId={harnessId} />
+      <AccentDot
+        profileId={profileId}
+        accentColor={accentColor}
+        label={null}
+        variant="inline"
+        size="default"
+        className={undefined}
+      />
+      Ran on {label} (removed)
+    </span>
   );
 }
 

@@ -72,6 +72,15 @@ export function providerIdToGuiHarnessId(providerId: ProviderId): GuiHarnessId {
   return GUI_HARNESS_BY_PROVIDER_ID[providerId];
 }
 
+export function guiHarnessIdToProviderId(
+  harnessId: GuiHarnessId,
+): ProviderId | null {
+  return (
+    ORDERED_PROVIDERS.find((provider) => provider.harnessId === harnessId)
+      ?.providerId ?? null
+  );
+}
+
 export function providerDisplayName(providerId: ProviderId): string {
   if (providerId === "traycer") return "Traycer Inference";
   return PROVIDER_DISPLAY_NAMES[providerId];

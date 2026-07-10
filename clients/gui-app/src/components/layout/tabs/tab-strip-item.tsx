@@ -48,10 +48,7 @@ import { toastFromHostError } from "@/lib/host-error-toast";
 import { toast } from "sonner";
 import { useInlineRename } from "@/hooks/ui/use-inline-rename";
 import { updateEpicTitleInCloudTaskCaches } from "@/lib/cloud-epic-tasks-query/cache";
-import {
-  useTabLeaderModifierForIndex,
-  type LeaderModifier,
-} from "@/providers/keybinding-context";
+import { useTabLeaderModifierForIndex } from "@/providers/keybinding-context";
 import { LeaderDigitBadge } from "@/components/ui/leader-digit-badge";
 import {
   leaderDigitFor,
@@ -263,7 +260,7 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
       : {
           modifier,
           index,
-          hint: leaderHint(index, "to switch to", displayName),
+          hint: leaderHint(leaderDigitFor(index), "to switch to", displayName),
         };
   return (
     <ContextMenu>
@@ -488,7 +485,7 @@ function tabStateClass(isActive: boolean): string {
 }
 
 interface LeaderBadge {
-  modifier: LeaderModifier;
+  modifier: "alt";
   index: number;
   hint: string;
 }
@@ -527,7 +524,7 @@ function TabTrailingSlot(props: TabTrailingSlotProps) {
         {leaderBadge ? (
           <LeaderDigitBadge
             key={`${leaderBadge.modifier}:${leaderBadge.index}`}
-            index={leaderBadge.index}
+            digit={leaderDigitFor(leaderBadge.index)}
             modifier={leaderBadge.modifier}
             ariaLabel={leaderBadge.hint}
             testId={`tab-digit-${leaderDigitFor(leaderBadge.index)}`}

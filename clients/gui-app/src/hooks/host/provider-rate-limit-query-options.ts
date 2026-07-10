@@ -67,11 +67,12 @@ export interface ProviderRateLimitQueryOptions {
  */
 export function providerRateLimitQueryOptions(
   providerId: RateLimitProviderId,
+  profileId: string | null,
 ): ProviderRateLimitQueryOptions {
   const isHttpFetch = rateLimitFetchLane(providerId) === "httpFetch";
   return {
     method: "host.getRateLimitUsage",
-    params: { accountContext: DEFAULT_ACCOUNT_CONTEXT, providerId },
+    params: { accountContext: DEFAULT_ACCOUNT_CONTEXT, providerId, profileId },
     options: {
       enabled: isHttpFetch,
       retry: false,

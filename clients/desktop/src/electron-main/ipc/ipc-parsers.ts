@@ -303,21 +303,26 @@ export function readEpicId(payload: unknown): string | null {
   return typeof obj.epicId === "string" ? obj.epicId : null;
 }
 
-export function isDialogHostedMenuCommand(command: MenuCommandId): boolean {
+/**
+ * App-scoped commands that may fire with no focused renderer - tray-menu and
+ * Windows jump-list clicks happen while another app is foregrounded. The
+ * dispatcher falls back to the MRU window (focusing it) for these, so they
+ * never silently no-op. Window-scoped commands (close tab, find in page, ...)
+ * deliberately stay focused-window-only: delivering them to an arbitrary
+ * window would act on the wrong target.
+ */
+export function isMruFallbackMenuCommand(command: MenuCommandId): boolean {
   return (
     command === "epic.openInNewWindow" ||
     command === "app.aboutDetails" ||
     command === "app.openLogs" ||
-    // Tray-initiated "Update available: <ver> - Install" can fire with no
-    // focused renderer (tray click while another app is foregrounded). The
-    // dispatcher falls back to the MRU window for dialog-hosted commands,
-    // so route the install through the same fallback path. The renderer
-    // owns the actual CLI mutation; main only needs to make sure *some*
-    // renderer receives the command and is focused/visible to the user.
+    command === "app.openSettings" ||
+    command === "app.signIn" ||
+    command === "app.signOut" ||
+    // The renderer owns the CLI mutation behind host update/restart; main
+    // only needs to make sure *some* renderer receives the command and is
+    // focused/visible to the user (restart is renderer-confirmed).
     command === "host.installUpdate" ||
-    // Help -> Restart Host is destructive and renderer-confirmed. Use the
-    // same MRU fallback so menu activation without a focused renderer still
-    // presents the confirmation modal instead of no-oping.
     command === "host.restart"
   );
 }
