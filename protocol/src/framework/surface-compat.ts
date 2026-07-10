@@ -3,6 +3,8 @@ import {
   surfaceVersionKey,
   type ProtocolSurface,
   type SurfaceMethod,
+  type SurfaceMethodDegrade,
+  type SurfaceOptionalMethod,
   type SurfaceVersion,
 } from "@traycer/protocol/framework/surface-build";
 
@@ -58,10 +60,29 @@ const surfaceMethodSchema = z.object({
   schemas: z.record(z.string(), z.record(z.string(), z.unknown())),
 });
 
+const surfaceMethodDegradeSchema: z.ZodType<SurfaceMethodDegrade> =
+  z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("unsupported") }),
+    z.object({
+      kind: z.literal("fallback"),
+      to: z.object({
+        method: z.string().min(1),
+        major: z.number().int(),
+        minor: z.number().int(),
+      }),
+    }),
+  ]);
+
+const surfaceOptionalMethodSchema: z.ZodType<SurfaceOptionalMethod> =
+  surfaceMethodSchema.extend({
+    degrade: surfaceMethodDegradeSchema.nullable(),
+  });
+
 /** Boundary parser for surface JSON files produced by `dump-protocol-surface.ts`. */
 export const protocolSurfaceSchema = z.object({
   formatVersion: z.number().int(),
   unary: z.record(z.string(), surfaceMethodSchema),
+  optionalUnary: z.record(z.string(), surfaceOptionalMethodSchema).default({}),
   stream: z.record(z.string(), surfaceMethodSchema),
 });
 
@@ -84,7 +105,7 @@ export const compatExceptionsFileSchema = z.object({
   exceptions: z.array(compatExceptionSchema),
 });
 
-export type CompatSeverity = "fatal" | "breaking" | "advisory";
+export type CompatSeverity = "fatal" | "blocking" | "breaking" | "advisory";
 
 export type CompatFinding = {
   readonly family: SurfaceFamily;
@@ -494,7 +515,9 @@ function diffSchemasAtSameVersion(
       const { enum: _values, ...rest } = asRecord(value) ?? {};
       return rest;
     };
-    if (stableStringify(stripEnum(theirs)) !== stableStringify(stripEnum(mine))) {
+    if (
+      stableStringify(stripEnum(theirs)) !== stableStringify(stripEnum(mine))
+    ) {
       return [
         {
           path: path.length === 0 ? "(root)" : path,
@@ -552,8 +575,9 @@ function checkFamily(
   isExcepted: (finding: Omit<CompatFinding, "excepted">) => boolean,
 ): CompatFinding[] {
   const findings: CompatFinding[] = [];
-  const methods = [...new Set([...Object.keys(mine), ...Object.keys(theirs)])]
-    .sort();
+  const methods = [
+    ...new Set([...Object.keys(mine), ...Object.keys(theirs)]),
+  ].sort();
 
   const pushFinding = (finding: Omit<CompatFinding, "excepted">): void => {
     findings.push({ ...finding, excepted: isExcepted(finding) });
@@ -655,6 +679,197 @@ function checkFamily(
   return findings;
 }
 
+function targetVersionKey(degrade: SurfaceMethodDegrade): string {
+  if (degrade.kind !== "fallback") {
+    return "";
+  }
+  return surfaceVersionKey(degrade.to.major, degrade.to.minor);
+}
+
+function fallbackTargetProblem(
+  mineFloor: Readonly<Record<string, SurfaceMethod>>,
+  theirsFloor: Readonly<Record<string, SurfaceMethod>>,
+  degrade: SurfaceMethodDegrade,
+  theirsLabel: string,
+): string | null {
+  if (degrade.kind !== "fallback") {
+    return null;
+  }
+  const target = degrade.to;
+  const targetMine = mineFloor[target.method];
+  if (targetMine === undefined) {
+    return `fallback target ${target.method}@${target.major}.${target.minor} is not present in this tree's unary floor`;
+  }
+  if (targetMine.schemas[targetVersionKey(degrade)] === undefined) {
+    return `fallback target ${target.method}@${target.major}.${target.minor} is not installed in this tree`;
+  }
+  const targetTheirs = theirsFloor[target.method];
+  if (targetTheirs === undefined) {
+    return `fallback target ${target.method}@${target.major}.${target.minor} is not present in ${theirsLabel}'s unary floor`;
+  }
+  const targetVersion = { major: target.major, minor: target.minor };
+  if (
+    !canBridgeUnaryFromSurface(
+      targetMine,
+      targetVersion,
+      targetTheirs.canonical,
+    )
+  ) {
+    return `this tree cannot bridge fallback target ${target.method}@${target.major}.${target.minor} to ${theirsLabel}'s canonical ${formatVersionValue(targetTheirs.canonical)}`;
+  }
+  if (
+    !canBridgeUnaryFromSurface(
+      targetTheirs,
+      targetTheirs.canonical,
+      targetVersion,
+    )
+  ) {
+    return `${theirsLabel} cannot bridge its canonical ${formatVersionValue(targetTheirs.canonical)} to fallback target ${target.method}@${target.major}.${target.minor}`;
+  }
+  return null;
+}
+
+function checkOptionalUnary(
+  mine: Readonly<Record<string, SurfaceOptionalMethod>>,
+  theirs: Readonly<Record<string, SurfaceOptionalMethod>>,
+  mineFloor: Readonly<Record<string, SurfaceMethod>>,
+  theirsFloor: Readonly<Record<string, SurfaceMethod>>,
+  theirsLabel: string,
+  isExcepted: (finding: Omit<CompatFinding, "excepted">) => boolean,
+): CompatFinding[] {
+  const findings: CompatFinding[] = [];
+  const methods = [
+    ...new Set([...Object.keys(mine), ...Object.keys(theirs)]),
+  ].sort();
+
+  const pushFinding = (finding: Omit<CompatFinding, "excepted">): void => {
+    findings.push({ ...finding, excepted: isExcepted(finding) });
+  };
+
+  for (const method of methods) {
+    const mineMethod = mine[method];
+    const theirsMethod = theirs[method];
+
+    if (mineMethod === undefined) {
+      pushFinding({
+        family: "unary",
+        method,
+        severity: "advisory",
+        version: null,
+        payload: null,
+        path: null,
+        detail: `optional unary method is advertised by ${theirsLabel} but not by this tree - callers in this tree cannot use that optional capability`,
+      });
+      continue;
+    }
+
+    if (theirsMethod === undefined) {
+      const degrade = mineMethod.degrade;
+      if (degrade === null) {
+        pushFinding({
+          family: "unary",
+          method,
+          severity: "blocking",
+          version: null,
+          payload: null,
+          path: null,
+          detail: `optional unary method is absent from ${theirsLabel} and declares no degrade story`,
+        });
+        continue;
+      }
+      if (degrade.kind === "unsupported") {
+        pushFinding({
+          family: "unary",
+          method,
+          severity: "advisory",
+          version: null,
+          payload: null,
+          path: null,
+          detail: `optional unary method is absent from ${theirsLabel}; declared degrade story is unsupported, so calls fail per-call with upgrade guidance`,
+        });
+        continue;
+      }
+      const problem = fallbackTargetProblem(
+        mineFloor,
+        theirsFloor,
+        degrade,
+        theirsLabel,
+      );
+      if (problem !== null) {
+        pushFinding({
+          family: "unary",
+          method,
+          severity: "blocking",
+          version: null,
+          payload: null,
+          path: null,
+          detail: `optional unary method fallback is unreachable on ${theirsLabel}: ${problem}`,
+        });
+      }
+      continue;
+    }
+
+    const mineCanonical = mineMethod.canonical;
+    const theirsCanonical = theirsMethod.canonical;
+    if (
+      !canBridgeUnaryFromSurface(mineMethod, mineCanonical, theirsCanonical)
+    ) {
+      pushFinding({
+        family: "unary",
+        method,
+        severity: "breaking",
+        version: null,
+        payload: null,
+        path: null,
+        detail: `optional unary method in this tree (canonical ${formatVersionValue(mineCanonical)}) cannot bridge ${theirsLabel}'s canonical ${formatVersionValue(theirsCanonical)}`,
+      });
+    }
+    if (
+      !canBridgeUnaryFromSurface(theirsMethod, theirsCanonical, mineCanonical)
+    ) {
+      pushFinding({
+        family: "unary",
+        method,
+        severity: "breaking",
+        version: null,
+        payload: null,
+        path: null,
+        detail: `optional unary method in ${theirsLabel} (canonical ${formatVersionValue(theirsCanonical)}) cannot bridge this tree's canonical ${formatVersionValue(mineCanonical)}`,
+      });
+    }
+
+    for (const versionKey of Object.keys(theirsMethod.schemas).sort()) {
+      const mineSlots = mineMethod.schemas[versionKey];
+      if (mineSlots === undefined) {
+        continue;
+      }
+      const theirSlots = theirsMethod.schemas[versionKey];
+      for (const slot of Object.keys(theirSlots).sort()) {
+        if (!(slot in mineSlots)) {
+          continue;
+        }
+        for (const divergence of diffSchemasAtSameVersion(
+          theirSlots[slot],
+          mineSlots[slot],
+          "",
+        )) {
+          pushFinding({
+            family: "unary",
+            method,
+            severity: divergence.severity,
+            version: versionKey,
+            payload: slot,
+            path: divergence.path,
+            detail: `optional unary wire schema diverges from ${theirsLabel} at negotiated version ${versionKey}: ${divergence.detail}`,
+          });
+        }
+      }
+    }
+  }
+
+  return findings;
+}
+
 /**
  * Full two-sided compatibility verdict of this tree's surface against one
  * released baseline surface. `blocking` (findings with no reviewed exception)
@@ -684,6 +899,14 @@ export function checkSurfaceCompatibility(args: {
       args.theirs.unary,
       args.theirsLabel,
       canBridgeUnaryFromSurface,
+      isExcepted,
+    ),
+    ...checkOptionalUnary(
+      args.mine.optionalUnary,
+      args.theirs.optionalUnary,
+      args.mine.unary,
+      args.theirs.unary,
+      args.theirsLabel,
       isExcepted,
     ),
     ...checkFamily(

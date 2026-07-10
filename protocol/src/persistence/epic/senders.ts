@@ -68,6 +68,12 @@ export const activeSessionChainSchema = z.object({
   // later user-message anchor event — closing the crash window where a fresh
   // seeded session has a chain but no anchor yet.
   coveredUntilMessageId: z.string().nullable().default(null),
+  // Which profile (subscription) owns the live session this chain resumes.
+  // `null` means ambient/host login - also the value old chains parse to. A
+  // resume is only authorized when this matches the chat's current settings;
+  // a profile switch (like a harness switch) must fall through to fresh
+  // session routing instead of silently continuing on the new profile's env.
+  profileId: z.string().nullable().default(null),
 });
 export type ActiveChain = z.infer<typeof activeSessionChainSchema>;
 
@@ -78,6 +84,28 @@ export type ActiveChain = z.infer<typeof activeSessionChainSchema>;
 // session that started the chat (empty prefix, no prelude) and a legacy anchor
 // persisted before this field existed. The `.default(null)` lets those old
 // anchors parse (matching the legacy-field precedent above).
+//
+// Profile snapshot recorded when this session was minted: which logged-in
+// profile (subscription) owned it, captured at write time so history renders
+// correctly even after a profile is later renamed or removed (tombstoned) -
+// never re-read live. `profileId: null` means the session ran on the
+// ambient/host login, not a Traycer-managed profile - also the value old
+// anchors persisted before profiles existed parse to. `accountUuid` is the
+// provider's identity id, deliberately NOT email - anchors are Y.Doc
+// artifacts that replicate cross-host/cross-collaborator, and email is kept
+// host-local (see the multi-profile decision log's PII scope). `accentColor`
+// is the profile's accent hex at mint time, so a tombstoned profile's dot
+// keeps its color instead of falling back to the id-hash color; `null` for
+// anchors minted before this field existed (hash fallback applies) and for
+// profiles with no assigned color. Spread into every per-harness variant
+// below instead of duplicated per schema.
+const profileSnapshotFields = {
+  profileId: z.string().nullable().default(null),
+  labelSnapshot: z.string().nullable().default(null),
+  accountUuid: z.string().nullable().default(null),
+  accentColor: z.string().nullable().default(null),
+} as const;
+
 export const claudeChatSessionAnchorSchema = z.object({
   harnessId: z.literal("claude"),
   hostId: z.string(),
@@ -86,6 +114,7 @@ export const claudeChatSessionAnchorSchema = z.object({
   claudeMessageUuid: z.string(),
   createdAt: z.number(),
   coveredUntilMessageId: z.string().nullable().default(null),
+  ...profileSnapshotFields,
 });
 export type ClaudeChatSessionAnchor = z.infer<
   typeof claudeChatSessionAnchorSchema
@@ -100,6 +129,7 @@ export const codexChatSessionAnchorSchema = z.object({
   codexUserMessageId: z.string().nullable(),
   createdAt: z.number(),
   coveredUntilMessageId: z.string().nullable().default(null),
+  ...profileSnapshotFields,
 });
 export type CodexChatSessionAnchor = z.infer<
   typeof codexChatSessionAnchorSchema
@@ -113,6 +143,7 @@ export const openCodeChatSessionAnchorSchema = z.object({
   opencodeUserMessageId: z.string(),
   createdAt: z.number(),
   coveredUntilMessageId: z.string().nullable().default(null),
+  ...profileSnapshotFields,
 });
 export type OpenCodeChatSessionAnchor = z.infer<
   typeof openCodeChatSessionAnchorSchema
@@ -126,6 +157,7 @@ export const cursorChatSessionAnchorSchema = z.object({
   cursorRunId: z.string().nullable(),
   createdAt: z.number(),
   coveredUntilMessageId: z.string().nullable().default(null),
+  ...profileSnapshotFields,
 });
 export type CursorChatSessionAnchor = z.infer<
   typeof cursorChatSessionAnchorSchema
@@ -139,6 +171,7 @@ export const traycerChatSessionAnchorSchema = z.object({
   opencodeUserMessageId: z.string(),
   createdAt: z.number(),
   coveredUntilMessageId: z.string().nullable().default(null),
+  ...profileSnapshotFields,
 });
 export type TraycerChatSessionAnchor = z.infer<
   typeof traycerChatSessionAnchorSchema
@@ -152,6 +185,7 @@ export const openRouterChatSessionAnchorSchema = z.object({
   opencodeUserMessageId: z.string(),
   createdAt: z.number(),
   coveredUntilMessageId: z.string().nullable().default(null),
+  ...profileSnapshotFields,
 });
 export type OpenRouterChatSessionAnchor = z.infer<
   typeof openRouterChatSessionAnchorSchema
@@ -168,6 +202,7 @@ export const grokChatSessionAnchorSchema = z.object({
   sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
   createdAt: z.number(),
   coveredUntilMessageId: z.string().nullable().default(null),
+  ...profileSnapshotFields,
 });
 export type GrokChatSessionAnchor = z.infer<typeof grokChatSessionAnchorSchema>;
 
@@ -181,6 +216,7 @@ export const qwenChatSessionAnchorSchema = z.object({
   sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
   createdAt: z.number(),
   coveredUntilMessageId: z.string().nullable().default(null),
+  ...profileSnapshotFields,
 });
 export type QwenChatSessionAnchor = z.infer<typeof qwenChatSessionAnchorSchema>;
 // Kiro (ACP) resumes at session granularity only — `session/load` reloads the
@@ -192,6 +228,7 @@ export const kiroChatSessionAnchorSchema = z.object({
   sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
   createdAt: z.number(),
   coveredUntilMessageId: z.string().nullable().default(null),
+  ...profileSnapshotFields,
 });
 export type KiroChatSessionAnchor = z.infer<typeof kiroChatSessionAnchorSchema>;
 
@@ -202,6 +239,7 @@ export const droidChatSessionAnchorSchema = z.object({
   sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
   createdAt: z.number(),
   coveredUntilMessageId: z.string().nullable().default(null),
+  ...profileSnapshotFields,
 });
 export type DroidChatSessionAnchor = z.infer<
   typeof droidChatSessionAnchorSchema
@@ -217,6 +255,7 @@ export const kimiChatSessionAnchorSchema = z.object({
   sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
   createdAt: z.number(),
   coveredUntilMessageId: z.string().nullable().default(null),
+  ...profileSnapshotFields,
 });
 export type KimiChatSessionAnchor = z.infer<typeof kimiChatSessionAnchorSchema>;
 
@@ -230,6 +269,7 @@ export const copilotChatSessionAnchorSchema = z.object({
   sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
   createdAt: z.number(),
   coveredUntilMessageId: z.string().nullable().default(null),
+  ...profileSnapshotFields,
 });
 export type CopilotChatSessionAnchor = z.infer<
   typeof copilotChatSessionAnchorSchema
@@ -242,6 +282,7 @@ export const kilocodeChatSessionAnchorSchema = z.object({
   sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
   createdAt: z.number(),
   coveredUntilMessageId: z.string().nullable().default(null),
+  ...profileSnapshotFields,
 });
 export type KilocodeChatSessionAnchor = z.infer<
   typeof kilocodeChatSessionAnchorSchema
@@ -257,6 +298,7 @@ export const ampChatSessionAnchorSchema = z.object({
   sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
   createdAt: z.number(),
   coveredUntilMessageId: z.string().nullable().default(null),
+  ...profileSnapshotFields,
 });
 export type AmpChatSessionAnchor = z.infer<typeof ampChatSessionAnchorSchema>;
 

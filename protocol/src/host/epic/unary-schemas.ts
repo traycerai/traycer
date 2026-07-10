@@ -949,6 +949,11 @@ export const createTuiAgentRequestSchema = z.object({
   // same id BEFORE creating the record so `agent.tui.prepareLaunch`
   // reads the correct binding and gates harness launch on `awaitSetup`.
   tuiAgentId: z.string().nullable().optional(),
+  // Which of the harness's logged-in profiles (subscriptions) to launch
+  // this agent on. `null` = the ambient/host login, so older clients that
+  // predate profiles keep today's exact behavior. See the multi-profile
+  // decision log.
+  profileId: z.string().nullable().default(null),
 });
 export type CreateTuiAgentRequest = z.infer<typeof createTuiAgentRequestSchema>;
 

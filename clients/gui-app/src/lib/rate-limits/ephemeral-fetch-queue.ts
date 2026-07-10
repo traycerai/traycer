@@ -61,7 +61,7 @@ const drainingListeners = new Set<() => void>();
 /**
  * Post-`usage_fetch_failed` cool-down: how long *automatic* enqueues (the
  * interval tick, turn-completion triggers) are suppressed for the affected
- * provider after a fetch resolves with that reason. The tech plan's root
+ * provider profile after a fetch resolves with that reason. The tech plan's root
  * cause is a server-side 429 on Anthropic's usage endpoint with multi-minute
  * penalty windows; a retry-once (narrowed to the OTHER arm on the host side)
  * plus continued polling on this arm can keep re-tripping the same limit. This
@@ -81,13 +81,13 @@ const drainingListeners = new Set<() => void>();
  */
 const USAGE_FETCH_FAILURE_COOLDOWN_MS = EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS;
 
-// Per-provider cool-down expiry (epoch ms), set after a `usage_fetch_failed`
-// resolution and cleared once a later fetch resolves with anything else.
-// Keyed only by provider id (not host) because the queue itself only ever
-// serves one host at a time - `configureRateLimitQueue` clears this map
-// whenever the bound host actually changes, so a cool-down never survives a
-// swap to a different host's identically-named provider.
-const cooldownUntil = new Map<RateLimitProviderId, number>();
+// Per-provider-profile cool-down expiry (epoch ms), set after a
+// `usage_fetch_failed` resolution and cleared once a later fetch resolves with
+// anything else. Keyed only inside the currently-bound host because the queue
+// itself only ever serves one host at a time - `configureRateLimitQueue` clears
+// this map whenever the bound host actually changes, so a cool-down never
+// survives a swap to a different host's identically-named provider/profile.
+const cooldownUntil = new Map<string, number>();
 
 /**
  * Dev-only (Vite HMR) self-healing for this module's singleton state. An HMR
@@ -179,24 +179,40 @@ export function isRateLimitQueueDraining(): boolean {
  * exists for is no longer the one in effect, so automatic polling should
  * resume rather than keep suppressing on a stale cause).
  */
+function rateLimitQueueProfileKey(
+  providerId: RateLimitProviderId,
+  profileId: string | null,
+): string {
+  return profileId === null ? providerId : `${providerId}:profile:${profileId}`;
+}
+
 function applyCooldownPolicy(
   providerId: RateLimitProviderId,
+  profileId: string | null,
   envelope: ProviderRateLimitEnvelope,
 ): void {
+  const cooldownKey = rateLimitQueueProfileKey(providerId, profileId);
   const latest = envelope.latest;
   if (
     latest !== null &&
     !latest.available &&
     latest.reason === "usage_fetch_failed"
   ) {
-    cooldownUntil.set(providerId, Date.now() + USAGE_FETCH_FAILURE_COOLDOWN_MS);
+    cooldownUntil.set(
+      cooldownKey,
+      Date.now() + USAGE_FETCH_FAILURE_COOLDOWN_MS,
+    );
     return;
   }
-  cooldownUntil.delete(providerId);
+  cooldownUntil.delete(cooldownKey);
 }
 
-function isInCooldown(providerId: RateLimitProviderId): boolean {
-  const until = cooldownUntil.get(providerId) ?? 0;
+function isInCooldown(
+  providerId: RateLimitProviderId,
+  profileId: string | null,
+): boolean {
+  const until =
+    cooldownUntil.get(rateLimitQueueProfileKey(providerId, profileId)) ?? 0;
   return Date.now() < until;
 }
 
@@ -221,12 +237,16 @@ function isInCooldown(providerId: RateLimitProviderId): boolean {
 export function enqueueRateLimitFetch(
   providerId: RateLimitProviderId,
   accountContext: AccountContext,
-  opts: { readonly force: boolean },
+  opts: { readonly force: boolean; readonly profileId: string | null },
 ): Promise<unknown> {
   const current = deps;
   if (current === null) return chain;
   const { hostId, queryClient, request } = current;
-  const params: RateLimitUsageParams = { accountContext, providerId };
+  const params: RateLimitUsageParams = {
+    accountContext,
+    providerId,
+    profileId: opts.profileId,
+  };
   const queryKey = queryKeys.hostMethod<
     HostRpcRegistry,
     "host.getRateLimitUsage"
@@ -237,7 +257,7 @@ export function enqueueRateLimitFetch(
     return Date.now() - updatedAt < PROVIDER_RATE_LIMITS_STALE_TIME_MS;
   };
   const shouldSkipAutomatic = (): boolean =>
-    !opts.force && (isFresh() || isInCooldown(providerId));
+    !opts.force && (isFresh() || isInCooldown(providerId, opts.profileId));
   if (shouldSkipAutomatic()) return chain;
 
   // Named request fn (not an inline closure in `queryFn`) so the host-scoped
@@ -251,7 +271,7 @@ export function enqueueRateLimitFetch(
       queryClient,
       queryKey,
     });
-    applyCooldownPolicy(providerId, envelope);
+    applyCooldownPolicy(providerId, opts.profileId, envelope);
     return envelope;
   };
 

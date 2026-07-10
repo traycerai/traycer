@@ -8,6 +8,7 @@ import {
   type ProviderId,
 } from "@traycer/protocol/host/provider-schemas";
 import { providerSignedOutMessage } from "@traycer/protocol/host/provider-display";
+import type { ProviderReauthReason } from "./use-provider-reauth-gate";
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys";
@@ -33,6 +34,7 @@ import { useProvidersAwaitLogin } from "@/hooks/providers/use-providers-await-lo
 import { useTabRefreshProviders } from "@/hooks/providers/use-tab-refresh-providers";
 import { HostRuntimeContext, useHostBinding } from "@/lib/host/runtime";
 import { useRunnerHost } from "@/providers/use-runner-host";
+import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 
 // Static destructive icon shared by every banner state. Hoisted to module scope
 // so it isn't rebuilt on each render.
@@ -52,6 +54,62 @@ interface ProviderReauthBannerProps {
    * the instant the provider flips back to `authenticated`.
    */
   readonly state: ProviderCliState | null;
+  readonly reason: ProviderReauthReason;
+  /** The blocked profile's own label - only set for `profile_unauthenticated`. */
+  readonly profileLabel: string | null;
+  /**
+   * Confirm-first fallback to the ambient/host login for the two
+   * profile-specific reasons - `null` for `provider_unauthenticated` (already
+   * ambient, so there is no fallback to offer). Never called automatically.
+   */
+  readonly onContinueOnAmbient: (() => void) | null;
+}
+
+// A profile-specific block (missing/removed, or that profile's own auth is
+// signed out) has no provider-wide OAuth/token form to fall into - the
+// managed profile's config dir is what would need reconnecting, and that
+// flow already lives in Settings -> Providers (ticket 04/06), not duplicated
+// here. This banner only offers the confirm-first ambient fallback plus a
+// link to the existing per-profile reconnect UI.
+function ProfileUnavailableBanner({
+  providerId,
+  reason,
+  profileLabel,
+  onContinueOnAmbient,
+}: {
+  readonly providerId: ProviderId;
+  readonly reason: Extract<
+    ProviderReauthReason,
+    "profile_missing" | "profile_unauthenticated"
+  >;
+  readonly profileLabel: string | null;
+  readonly onContinueOnAmbient: () => void;
+}) {
+  const providerLabel = PROVIDER_DISPLAY_NAMES[providerId];
+  const message =
+    reason === "profile_missing"
+      ? `This chat's ${providerLabel} profile is no longer available.`
+      : `"${profileLabel ?? providerLabel}" is signed out.`;
+  const { openSettings } = useSystemTabModalActions();
+  return (
+    <ReauthBannerShell icon={BANNER_HEADER_ICON} action={null}>
+      <span className="text-foreground/90">{message}</span>
+      <div className="flex flex-wrap items-center gap-3">
+        <Button size="sm" variant="secondary" onClick={onContinueOnAmbient}>
+          Continue on Terminal account
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() =>
+            openSettings({ section: "providers", resetToGeneral: false })
+          }
+        >
+          Reconnect in Settings
+        </Button>
+      </div>
+    </ReauthBannerShell>
+  );
 }
 
 // Destructive chrome shared by every banner state, mirroring the inline
@@ -142,6 +200,9 @@ function deriveLoginOptions(
 export function ProviderReauthBanner({
   providerId,
   state,
+  reason,
+  profileLabel,
+  onContinueOnAmbient,
 }: ProviderReauthBannerProps) {
   const tabHostId = useTabHostId();
   const directory = useHostDirectoryList();
@@ -167,6 +228,26 @@ export function ProviderReauthBanner({
   );
 
   const message = providerSignedOutMessage(providerId);
+
+  // A profile-specific block has no host-scoped OAuth/token mutation to set
+  // up (see `ProfileUnavailableBanner`'s comment) - render it standalone,
+  // independent of the tab-host-reachability plumbing below that only the
+  // ambient `provider_unauthenticated` path needs.
+  if (reason !== "provider_unauthenticated") {
+    if (onContinueOnAmbient === null) {
+      throw new Error(
+        "ProviderReauthBanner: onContinueOnAmbient is required for a profile-specific reason.",
+      );
+    }
+    return (
+      <ProfileUnavailableBanner
+        providerId={providerId}
+        reason={reason}
+        profileLabel={profileLabel}
+        onContinueOnAmbient={onContinueOnAmbient}
+      />
+    );
+  }
 
   // The tab's host is momentarily unreachable (directory/client still
   // resolving, or genuinely offline): re-auth can't be driven from here.
@@ -277,14 +358,17 @@ function OAuthReauthForm({
   const { mutate: awaitLoginMutate } = awaitLogin;
 
   const onCancel = (): void => {
-    cancelLoginMutate({ providerId });
+    // No profile picker yet - re-auth always targets the ambient login.
+    cancelLoginMutate({ providerId, profileId: null });
     setAwaiting(false);
   };
 
   const onAuthenticate = (): void => {
     if (startLogin.isPending || awaiting) return;
     startLogin.mutate(
-      { providerId },
+      // No profile picker yet - re-auth always targets the ambient login,
+      // not a Traycer-managed profile.
+      { providerId, profileId: null, createProfile: null },
       {
         onSuccess: (data) => {
           setLoginUrl(data.url);
@@ -293,7 +377,7 @@ function OAuthReauthForm({
           // drops the spinner whether it resolved authenticated (gate unmounts
           // us) or still signed-out (back to the Authenticate button).
           awaitLoginMutate(
-            { providerId },
+            { providerId, profileId: null },
             { onSettled: () => setAwaiting(false) },
           );
         },

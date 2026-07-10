@@ -118,7 +118,7 @@ function RateLimitView({
 }: {
   readonly subscription: TraycerSubscription;
 }) {
-  const usageQuery = useHostRateLimitUsageQuery();
+  const usageQuery = useHostRateLimitUsageQuery(null);
   // Keep the bar live: a Traycer turn finishing while this is on screen
   // re-fetches usage. Only mounted here, so it costs nothing elsewhere.
   useRefreshRateLimitUsageOnTraycerTurn();

@@ -29,6 +29,7 @@ const SETTINGS: ChatRunSettings = {
   reasoningEffort: "medium",
   serviceTier: null,
   agentMode: "epic",
+  profileId: null,
 };
 
 const MESSAGE: ChatMessage = {
@@ -97,6 +98,7 @@ const ACTIVE_TURN: ChatActiveTurn = {
   reasoningEffort: null,
   serviceTier: null,
   agentMode: "epic",
+  profileId: null,
   userMessageId: "message-1",
   startedAt: 0,
   updatedAt: 0,

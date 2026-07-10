@@ -176,6 +176,12 @@ export interface CreateTuiAgentInput {
    * record, so a later reopen falls back to the current Settings default.
    */
   readonly terminalAgentArgs: string | null;
+  /**
+   * Which of the harness's logged-in profiles (subscriptions) to launch this
+   * agent on. `null` = the ambient/host login. See the multi-profile decision
+   * log.
+   */
+  readonly profileId: string | null;
 }
 
 export function useCreateTuiAgent(): {
@@ -317,6 +323,7 @@ export function useCreateTuiAgentForClient(
           forkSourceHarnessSessionId: input.forkSourceHarnessSessionId,
           terminalAgentArgs: input.terminalAgentArgs,
           workspaceMode: input.workspaceMode,
+          profileId: input.profileId,
         });
         if (
           opensAfterSessionPrepared &&
@@ -354,6 +361,7 @@ export function useCreateTuiAgentForClient(
           reasoningEffort: input.reasoningEffort,
           agentMode: input.agentMode,
           tuiAgentId,
+          profileId: input.profileId,
         });
         // Hold the pending-create mark until the record actually projects, so
         // the close-tile reconcile can't close the optimistic tab in the window

@@ -24,9 +24,11 @@ export type {
   ContractForInstalledVersion,
   DowngradePath,
   DowngradeResult,
+  FallbackMethodDegrade,
   InstalledSchemaVersion,
   LatestContract,
   MajorVersionLine,
+  MethodDegradeDeclaration,
   MethodVersionRegistry,
   RequestOf,
   ResponseOf,
@@ -41,6 +43,7 @@ export type {
   UncheckedMethodVersionRegistry,
   UncheckedVersionedRpcRegistry,
   UpgradePath,
+  UnsupportedMethodDegrade,
   VersionEntry,
   VersionedRpcRegistry,
 } from "./versioned-rpc-types";
@@ -59,6 +62,8 @@ export type {
 
 export {
   defineDowngradePath,
+  defineFallbackMethodDegrade,
+  defineFloorAwareVersionedRpcRegistry,
   defineRpcContract,
   defineUpgradePath,
   defineVersionedRpcRegistry,
@@ -68,6 +73,7 @@ export {
   toJsonSchemas,
   upgradeRequestToVersion,
   upgradeResponseToVersion,
+  validateVersionedRpcRegistryDegrades,
   validateVersionedRpcRegistry,
 } from "./versioned-rpc";
 
@@ -157,6 +163,17 @@ export {
   schemaVersionSchema,
   fatalErrorDetailsSchema,
 } from "./ws-protocol";
+
+export type {
+  ManifestRegistry,
+  SplitConnectionManifest,
+} from "./capability-manifest";
+
+export {
+  buildConnectionManifest,
+  mergeConnectionManifests,
+  splitConnectionManifest,
+} from "./capability-manifest";
 
 export type {
   CompatibilityCheckResult,

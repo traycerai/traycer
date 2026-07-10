@@ -9,14 +9,14 @@ import { useAccountContextStore } from "@/stores/auth/account-context-store";
  * completion. Mounted only inside `RateLimitView`, which is the implicit
  * tier-gate (rate-limit tiers only).
  */
-export function useHostRateLimitUsageQuery() {
+export function useHostRateLimitUsageQuery(profileId: string | null) {
   const client = useHostClient();
   const accountContext = useAccountContextStore((s) => s.accountContext);
   return useHostQuery<HostRpcRegistry, "host.getRateLimitUsage">({
     cacheKeyIdentity: undefined,
     client,
     method: "host.getRateLimitUsage",
-    params: { accountContext },
+    params: { accountContext, profileId },
     options: {
       retry: false,
     },

@@ -438,6 +438,7 @@ function markRunning(handle: ChatSessionStoreHandle): void {
       harnessId: "codex",
       model: "gpt-5-codex",
       agentMode: "regular",
+      profileId: null,
       userMessageId: "message-1",
       startedAt: 1,
       updatedAt: 1,

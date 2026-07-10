@@ -25,9 +25,11 @@ import { ActiveHostWorkspaceControls } from "@/components/home/host-workspace-se
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
+import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { useEpicCreateChatForHost } from "@/hooks/epic/use-epic-chat-mutations";
 import { buildChatRunSettings } from "@/lib/composer/chat-run-settings";
+import { fallbackSeedSource } from "@/lib/composer/composer-seed-source";
 import { openCreatedChatWhenProjectedWithNavigation } from "@/lib/commands/actions/new-chat";
 import {
   pendingForkChatStagingKey,
@@ -93,12 +95,24 @@ export function ChatForkDialog(props: ChatForkDialogProps) {
   );
 }
 
+// Coordinates dialog lifecycle, toolbar state, staged worktree state, seeded-
+// profile validation, and the fork mutation in one fixed hook order (mirrors
+// terminal-agent-fork-dialog.tsx's identical structure). Splitting this body
+// risks hiding the cross-field submit invariants without reducing user-facing
+// behavior.
+// eslint-disable-next-line complexity
 function ChatForkDialogBody(props: ChatForkDialogProps) {
   const { epicId, onOpenChange, open, tabId, target } = props;
   const stagingKey = useMemo(() => pendingForkChatStagingKey(epicId), [epicId]);
   const [titleState, setTitleState] = useState(() => ({ open, title: "" }));
   const titleInputId = useId();
   const tabHostId = useTabHostId();
+  // The fork's `createChat` call runs on the TAB's host (see
+  // `useEpicCreateChatForHost` -> `useTabHostClient`), so the seeded-profile
+  // validation below must read that SAME host's `providers.list`, not the
+  // app-wide active host - they can genuinely diverge for a tab bound to a
+  // non-default host.
+  const tabHostClient = useTabHostClient();
   const createChat = useEpicCreateChatForHost();
   const navigateNestedFocus = useEpicNestedFocusNavigation();
   const openCancelsRef = useRef<Set<() => void> | null>(null);
@@ -129,9 +143,20 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     setTitleState((current) => ({ ...current, title: nextTitle }));
   }, []);
 
+  // A fork dialog has no send-time reauth gate of its own (unlike the main
+  // composer), so a source chat's profileId that was tombstoned since the
+  // chat last ran must be caught before it reaches `createChat`.
+  // `useComposerToolbarStore` now validates every seed it receives against
+  // the SAME host's live `providers.list` (passing `tabHostClient` here -
+  // this fork's `createChat` call runs on the tab's host, per
+  // `useEpicCreateChatForHost` -> `useTabHostClient`), so no separate
+  // resolution is needed at this call site. Never authoritative (`fallback`/
+  // `none`): this dialog has no reauth gate of its own, so a genuinely-
+  // tombstoned source profile must be corrected to ambient here rather than
+  // silently submitted to `createChat`.
   const toolbarStore = useComposerToolbarStore(
     null,
-    target?.settingsSeed ?? null,
+    fallbackSeedSource(target?.settingsSeed ?? null, tabHostClient),
     null,
     false,
   );
@@ -281,6 +306,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
                 lockedHarnessId={null}
                 disabled={createChat.isPending}
                 registerActivation={false}
+                createProfileHostId={tabHostId}
               />
               <div className="shrink-0">
                 <AgentModeToggle
@@ -375,5 +401,6 @@ function forkDialogModelPickerKey(target: ChatForkDialogTarget): string {
     seed.reasoningEffort ?? "",
     seed.serviceTier ?? "",
     seed.agentMode,
+    seed.profileId ?? "",
   ].join("\u0000");
 }

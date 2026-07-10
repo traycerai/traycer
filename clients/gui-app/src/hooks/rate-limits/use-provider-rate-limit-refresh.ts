@@ -39,28 +39,42 @@ import {
  * `useHostProviderRateLimitsQuery` observer rather than opening a second one
  * here, so there is still exactly one query observer per mounted block.
  */
-export function useProviderRateLimitRefresh(
-  providerId: RateLimitProviderId,
-  isFetching: boolean,
-  refetch: () => Promise<unknown>,
-): { readonly refresh: () => Promise<void>; readonly isRefreshing: boolean } {
+export interface ProviderRateLimitRefreshInput {
+  readonly providerId: RateLimitProviderId;
+  readonly profileId: string | null;
+  readonly usageUpdatedAt: number | null;
+  readonly isFetching: boolean;
+  readonly refetch: () => Promise<unknown>;
+}
+
+export function useProviderRateLimitRefresh({
+  providerId,
+  profileId,
+  usageUpdatedAt,
+  isFetching,
+  refetch,
+}: ProviderRateLimitRefreshInput): {
+  readonly refresh: () => Promise<void>;
+  readonly isRefreshing: boolean;
+} {
   const draining = useIsRateLimitQueueDraining();
   const lane = rateLimitFetchLane(providerId);
   // Fresh-data-on-open for the ephemeralProcess lane, routed through the shared
   // serial queue rather than TanStack's own (deliberately disabled)
   // refetch-on-mount - see providerRateLimitQueryOptions' doc comment. No-ops
   // for the httpFetch lane, which keeps TanStack's refetch-on-mount instead.
-  useRefreshProviderRateLimitsOnMount(providerId);
+  useRefreshProviderRateLimitsOnMount(providerId, profileId, usageUpdatedAt);
 
   const refresh = useCallback(async (): Promise<void> => {
     if (lane === "ephemeralProcess") {
       await enqueueRateLimitFetch(providerId, DEFAULT_ACCOUNT_CONTEXT, {
         force: true,
+        profileId,
       });
       return;
     }
     await refetch();
-  }, [lane, providerId, refetch]);
+  }, [lane, profileId, providerId, refetch]);
 
   const isRefreshing = isFetching || (lane === "ephemeralProcess" && draining);
 

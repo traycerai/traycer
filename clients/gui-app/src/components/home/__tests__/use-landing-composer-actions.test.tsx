@@ -115,7 +115,7 @@ describe("useLandingComposerActions", () => {
       mostRecentTabIdByEpicId: {},
     });
     useSettingsStore.setState({
-      defaultSelection: { harnessId: "codex", modelSlug: "" },
+      defaultSelection: { harnessId: "codex", modelSlug: "", profileId: null },
       defaultPermission: "supervised",
       defaultReasoning: "high",
     });
@@ -173,6 +173,43 @@ describe("useLandingComposerActions", () => {
     queryClient.clear();
   });
 
+  it("threads a non-ambient profileId into the initial chat message's run settings", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const { result } = renderHook(() => useLandingComposerActions(), {
+      wrapper: queryClientWrapper(queryClient),
+    });
+
+    act(() => {
+      result.current.submit({
+        editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        toolbar: {
+          ...defaultToolbar(),
+          selection: {
+            ...defaultToolbar().selection,
+            profileId: "work-profile",
+          },
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(
+        landingMocks.request.mock.calls.some((c) => c[0] === "epic.create"),
+      ).toBe(true);
+    });
+
+    // `finalizeSubmission` writes the emitted settings to the sticky
+    // run-settings store unconditionally (independent of the initial-message
+    // path, which needs a signed-in profile this suite doesn't mock).
+    expect(
+      useComposerRunSettingsStore.getState().globalLastRunSettings?.profileId,
+    ).toBe("work-profile");
+
+    queryClient.clear();
+  });
+
   it("creates a folderless terminal-agent epic without a selected workspace folder", async () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
@@ -188,6 +225,7 @@ describe("useLandingComposerActions", () => {
         model: null,
         reasoningEffort: null,
         terminalAgentArgs: "",
+        profileId: null,
       });
     });
 
@@ -220,6 +258,35 @@ describe("useLandingComposerActions", () => {
     queryClient.clear();
   });
 
+  it("threads a non-ambient profileId into the terminal-agent create call", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const { result } = renderHook(() => useLandingComposerActions(), {
+      wrapper: queryClientWrapper(queryClient),
+    });
+
+    act(() => {
+      result.current.selectTerminalAgent({
+        harnessId: "claude",
+        agentMode: "regular",
+        model: null,
+        reasoningEffort: null,
+        terminalAgentArgs: "",
+        profileId: "work-profile",
+      });
+    });
+
+    await waitFor(() => {
+      expect(landingMocks.createTerminalAgent).toHaveBeenCalledTimes(1);
+    });
+    expect(landingMocks.createTerminalAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ profileId: "work-profile" }),
+    );
+
+    queryClient.clear();
+  });
+
   it("blocks epic creation while the model slug is unresolved", () => {
     useWorkspaceFoldersStore.setState({
       folders: [WORKSPACE_PATH],
@@ -243,7 +310,7 @@ describe("useLandingComposerActions", () => {
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
         toolbar: {
           ...defaultToolbar(),
-          selection: { harnessId: "codex", modelSlug: "" },
+          selection: { harnessId: "codex", modelSlug: "", profileId: null },
         },
       });
     });
@@ -325,6 +392,7 @@ describe("useLandingComposerActions", () => {
       reasoningEffort: "high",
       serviceTier: null,
       agentMode: "regular",
+      profileId: null,
     };
     expect(
       useComposerRunSettingsStore.getState().globalLastRunSettings,
@@ -620,6 +688,7 @@ describe("useLandingComposerActions", () => {
       reasoningEffort: "high",
       serviceTier: null,
       agentMode: "regular",
+      profileId: null,
     });
 
     queryClient.clear();
@@ -696,7 +765,11 @@ function queryClientWrapper(
 
 function defaultToolbar() {
   return {
-    selection: { harnessId: "codex" as const, modelSlug: "gpt-5-codex" },
+    selection: {
+      harnessId: "codex" as const,
+      modelSlug: "gpt-5-codex",
+      profileId: null,
+    },
     reasoning: "high" as const,
     serviceTier: "" as const,
     permission: "supervised" as const,

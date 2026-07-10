@@ -98,3 +98,36 @@ describe("registerDeepLinkHandling (demoted return-signal handler)", () => {
     expect(handler).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * Multi-run dev: each slot registers its own suffixed scheme so the OS never
+ * routes another run's auth callback here. Mirrors the renderer's redirect-URI
+ * derivation in `renderer-shell/sign-in-url.ts` - the two must agree.
+ */
+describe("registerDeepLinkHandling under a dev-desktop slot", () => {
+  beforeEach(() => {
+    appListeners.clear();
+    vi.clearAllMocks();
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+
+  it("registers the slot-suffixed scheme and matches only its own callbacks", async () => {
+    vi.stubEnv("DEV_DESKTOP_SLOT", "My Worktree!!");
+    const electron = await import("electron");
+    const mod = await import("../deep-link");
+    const handler = vi.fn();
+    mod.registerDeepLinkHandling(handler);
+
+    expect(electron.app.setAsDefaultProtocolClient).toHaveBeenCalledWith(
+      "traycer-dev-my-worktree",
+    );
+
+    fireOpenUrl("traycer-dev-my-worktree://auth/callback");
+    expect(handler).toHaveBeenCalledTimes(1);
+
+    // A sibling run's (or the bare dev) callback is not ours.
+    fireOpenUrl("traycer-dev://auth/callback");
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+});

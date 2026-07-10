@@ -6,4 +6,5 @@ export {
   DEV_DESKTOP_SLOT_ENV,
   sanitizeDevDesktopSlot,
   devDesktopSlotForEnvironment,
+  devDesktopSlotProtocolScheme,
 } from "@traycer-clients/shared/platform/dev-desktop-slot";

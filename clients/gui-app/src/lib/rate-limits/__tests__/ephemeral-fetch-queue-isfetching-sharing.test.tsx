@@ -46,7 +46,10 @@ describe("enqueueRateLimitFetch keeps a mounted useHostProviderRateLimitsQuery o
 
   it("populates a disabled Codex observer from the queue and reflects a later force:true enqueue's fetch state", async () => {
     const harness = createRateLimitSharingHarness();
-    const { method, params, options } = providerRateLimitQueryOptions("codex");
+    const { method, params, options } = providerRateLimitQueryOptions(
+      "codex",
+      null,
+    );
     const rendered = renderHook(
       () =>
         useHostQuery({
@@ -74,6 +77,7 @@ describe("enqueueRateLimitFetch keeps a mounted useHostProviderRateLimitsQuery o
 
     void enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
       force: false,
+      profileId: null,
     });
 
     await waitFor(() =>
@@ -86,6 +90,7 @@ describe("enqueueRateLimitFetch keeps a mounted useHostProviderRateLimitsQuery o
 
     void enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
       force: true,
+      profileId: null,
     });
 
     // The second call is the one the harness blocks. The disabled observer,

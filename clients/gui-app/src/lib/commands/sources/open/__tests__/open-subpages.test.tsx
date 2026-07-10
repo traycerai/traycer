@@ -88,6 +88,7 @@ function agent(id: string, title: string): TuiAgentProjection {
     model: null,
     reasoningEffort: null,
     agentMode: "regular",
+    profileId: null,
     harnessSessionId: null,
     terminalAgentArgs: null,
     terminalShellCommand: null,

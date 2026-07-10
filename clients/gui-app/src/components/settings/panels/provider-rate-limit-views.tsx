@@ -23,6 +23,7 @@ import {
   formatResetDateTime,
   useIsFarReset,
   useResetCountdown,
+  useSampledNow,
 } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
 
@@ -88,6 +89,7 @@ const MINUTES_PER_HOUR = 60;
 const MINUTES_PER_DAY = MINUTES_PER_HOUR * 24;
 const MINUTES_PER_WEEK = MINUTES_PER_DAY * 7;
 const MINUTES_PER_SESSION = MINUTES_PER_HOUR * 5;
+const RESET_TIMESTAMP_PLAUSIBLE_WINDOW_MS = 365 * 24 * 60 * 60 * 1000;
 
 /**
  * A window's label from its real duration, not a hardcoded "5-hour"/"Weekly"
@@ -166,12 +168,24 @@ function ResetLine({
   readonly resetsAt: number | null;
   readonly tone: string;
 }): ReactNode {
-  const isFar = useIsFarReset(resetsAt);
-  if (resetsAt === null) return null;
+  const now = useSampledNow();
+  const displayResetsAt =
+    resetsAt !== null && plausibleResetTimestamp(resetsAt, now)
+      ? resetsAt
+      : null;
+  const isFar = useIsFarReset(displayResetsAt);
+  if (displayResetsAt === null) return null;
   return isFar ? (
-    <ExactResetLine resetsAt={resetsAt} tone={tone} />
+    <ExactResetLine resetsAt={displayResetsAt} tone={tone} />
   ) : (
-    <RelativeResetLine resetsAt={resetsAt} tone={tone} />
+    <RelativeResetLine resetsAt={displayResetsAt} tone={tone} />
+  );
+}
+
+function plausibleResetTimestamp(resetsAt: number, now: number): boolean {
+  return (
+    resetsAt >= now - RESET_TIMESTAMP_PLAUSIBLE_WINDOW_MS &&
+    resetsAt <= now + RESET_TIMESTAMP_PLAUSIBLE_WINDOW_MS
   );
 }
 
@@ -756,7 +770,7 @@ export function ProviderRateLimitBody(
   if (!data.available) {
     return (
       <p className="text-ui-xs text-muted-foreground">
-        Usage limits unavailable — {formatUnavailableReason(data.reason)}
+        Usage limits unavailable - {formatUnavailableReason(data.reason)}
       </p>
     );
   }

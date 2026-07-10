@@ -27,6 +27,7 @@ import { useLandingComposerMentionRoots } from "@/hooks/composer/use-workspace-m
 import { useEpicCreate } from "@/hooks/epic/use-epic-create-mutation";
 import { useCreateTuiAgent } from "@/hooks/agent/use-create-tui-agent";
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
+import { fallbackSeedSource } from "@/lib/composer/composer-seed-source";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import {
@@ -123,9 +124,19 @@ export function LandingComposer(props: LandingComposerProps) {
       ),
     [globalLastRunSettings, draftId, props.initialSettings],
   );
+  // `settingsSeed` may carry a frozen `profileId` from an old landing draft
+  // (`landing-draft-store` persists a draft's settings snapshot indefinitely,
+  // independent of the current provider state) or the cross-session
+  // `globalLastRunSettings` fallback - validated against the active host
+  // (the one this draft will actually create the chat on) via the same
+  // machinery `useComposerToolbarStore` runs for every composer surface.
+  // Never authoritative: the landing composer has no reauth gate of its own
+  // to defend a dead pin with a banner, so a genuinely-removed profile must
+  // be corrected to ambient here rather than silently submitted as the new
+  // chat's initial settings.
   const toolbarStore = useComposerToolbarStore(
     "landing",
-    settingsSeed,
+    fallbackSeedSource(settingsSeed, hostClient),
     handleToolbarSettingsChange,
     composerMode === "terminal",
   );

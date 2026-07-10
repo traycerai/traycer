@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { callHostRpc } from "../host-rpc";
+import { callHostRpc, toAgentCliError } from "../host-rpc";
 import { cliBearerStore, resolveHostAuth } from "../host-auth";
 import { readHostPidMetadata } from "../../host/pid-metadata";
 import { HostRpcError } from "../../../../shared/host-transport/host-messenger";
@@ -206,5 +206,30 @@ describe("callHostRpc", () => {
     ).rejects.toBeInstanceOf(HostRpcError);
     expect(refreshMock).not.toHaveBeenCalled();
     expect(requestMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("maps per-feature host unsupported errors distinctly from incompatibility", async () => {
+    await expect(
+      toAgentCliError(
+        Promise.reject(
+          new HostRpcError({
+            code: "E_HOST_UNSUPPORTED",
+            message:
+              "This host does not support 'agent.future'. Upgrade the host to use this feature.",
+            requestId: "r1",
+            method: "agent.future",
+            fatalDetails: null,
+          }),
+        ),
+      ),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UNSUPPORTED,
+      message:
+        "traycer: This host does not support 'agent.future'. Upgrade the host to use this feature.",
+      details: {
+        hostShouldUpgrade: true,
+        method: "agent.future",
+      },
+    });
   });
 });

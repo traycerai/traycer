@@ -96,7 +96,10 @@ const registryEchoV11 = defineVersionedRpcRegistry({
       latestMinor: 1,
       versions: {
         0: { contract: echoV10, upgradeFromPreviousVersion: null },
-        1: { contract: echoV11, upgradeFromPreviousVersion: upgradeEchoV10ToV11 },
+        1: {
+          contract: echoV11,
+          upgradeFromPreviousVersion: upgradeEchoV10ToV11,
+        },
       },
       downgradePathsFromLatest: {},
     },
@@ -109,14 +112,20 @@ const registryEchoV20WithBridge = defineVersionedRpcRegistry({
       latestMinor: 1,
       versions: {
         0: { contract: echoV10, upgradeFromPreviousVersion: null },
-        1: { contract: echoV11, upgradeFromPreviousVersion: upgradeEchoV10ToV11 },
+        1: {
+          contract: echoV11,
+          upgradeFromPreviousVersion: upgradeEchoV10ToV11,
+        },
       },
       downgradePathsFromLatest: {},
     },
     2: {
       latestMinor: 0,
       versions: {
-        0: { contract: echoV20, upgradeFromPreviousVersion: upgradeEchoV11ToV20 },
+        0: {
+          contract: echoV20,
+          upgradeFromPreviousVersion: upgradeEchoV11ToV20,
+        },
       },
       downgradePathsFromLatest: { 1: downgradeEchoV20ToV11 },
     },
@@ -141,7 +150,10 @@ const registryWithPing = defineVersionedRpcRegistry({
       latestMinor: 1,
       versions: {
         0: { contract: echoV10, upgradeFromPreviousVersion: null },
-        1: { contract: echoV11, upgradeFromPreviousVersion: upgradeEchoV10ToV11 },
+        1: {
+          contract: echoV11,
+          upgradeFromPreviousVersion: upgradeEchoV10ToV11,
+        },
       },
       downgradePathsFromLatest: {},
     },
@@ -163,7 +175,10 @@ const registryWithStatus = defineVersionedRpcRegistry({
       latestMinor: 1,
       versions: {
         0: { contract: echoV10, upgradeFromPreviousVersion: null },
-        1: { contract: echoV11, upgradeFromPreviousVersion: upgradeEchoV10ToV11 },
+        1: {
+          contract: echoV11,
+          upgradeFromPreviousVersion: upgradeEchoV10ToV11,
+        },
       },
       downgradePathsFromLatest: {},
     },
@@ -311,6 +326,62 @@ describe("CompatibilityChecker.check", () => {
     expect(clientSees.details.upgradeGuidance).toEqual({
       clientShouldUpgrade: false,
       hostShouldUpgrade: true,
+    });
+  });
+
+  it("pins current full-manifest verdicts for added method names", () => {
+    const hostSeesClientMissingAddedMethod = check(
+      registryWithPing,
+      { echo: { major: 1, minor: 1 }, ping: { major: 1, minor: 0 } },
+      { echo: { major: 1, minor: 1 } },
+      "host",
+    );
+
+    expect(hostSeesClientMissingAddedMethod).toEqual({
+      ok: false,
+      details: {
+        code: "INCOMPATIBLE",
+        reason: "Incompatible methods: ping",
+        incompatibleMethods: [
+          {
+            method: "ping",
+            clientCanonical: null,
+            hostCanonical: { major: 1, minor: 0 },
+            blocking: "client-missing-method",
+          },
+        ],
+        upgradeGuidance: {
+          clientShouldUpgrade: true,
+          hostShouldUpgrade: false,
+        },
+      },
+    });
+
+    const clientSeesHostMissingAddedMethod = check(
+      registryWithStatus,
+      { echo: { major: 1, minor: 1 }, status: { major: 1, minor: 0 } },
+      { echo: { major: 1, minor: 1 } },
+      "client",
+    );
+
+    expect(clientSeesHostMissingAddedMethod).toEqual({
+      ok: false,
+      details: {
+        code: "INCOMPATIBLE",
+        reason: "Incompatible methods: status",
+        incompatibleMethods: [
+          {
+            method: "status",
+            clientCanonical: { major: 1, minor: 0 },
+            hostCanonical: null,
+            blocking: "host-missing-method",
+          },
+        ],
+        upgradeGuidance: {
+          clientShouldUpgrade: false,
+          hostShouldUpgrade: true,
+        },
+      },
     });
   });
 });

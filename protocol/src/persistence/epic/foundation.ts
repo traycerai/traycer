@@ -112,5 +112,9 @@ export const chatRunSettingsSchema = z.object({
   // chats persisted before this field was introduced still parse cleanly.
   serviceTier: z.string().nullable().default(null),
   agentMode: agentModeSchema,
+  // Which of the harness's logged-in profiles (subscriptions) this chat runs
+  // on. `null` = the ambient/host login, so chats persisted before profiles
+  // existed still parse cleanly. See the multi-profile decision log.
+  profileId: z.string().nullable().default(null),
 });
 export type ChatRunSettings = z.infer<typeof chatRunSettingsSchema>;
