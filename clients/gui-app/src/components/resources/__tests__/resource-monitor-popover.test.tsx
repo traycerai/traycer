@@ -459,13 +459,11 @@ describe("ResourceMonitorPopover", () => {
     renderPopover();
 
     act(() => {
-      stub
-        .emit()
-        .onSnapshot(
-          projection({
-            owners: [owner({ activeProcessName: "first-command" })],
-          }),
-        );
+      stub.emit().onSnapshot(
+        projection({
+          owners: [owner({ activeProcessName: "first-command" })],
+        }),
+      );
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Resources" }));
