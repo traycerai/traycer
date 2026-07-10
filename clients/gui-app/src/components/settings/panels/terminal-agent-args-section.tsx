@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import {
   PROVIDER_DISPLAY_NAMES,
   type ProviderCliState,
@@ -62,6 +62,14 @@ export function TerminalAgentArgsSection({
   const setArgs = useProvidersSetTerminalAgentArgs();
   const saved = state.terminalAgentArgs;
   const [draft, setDraft] = useState(saved);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  // True external sync: `saved` is the canonical host value, and it can
+  // change from outside this component's own `commit()` (another window's
+  // edit, a differently-normalized host value). Skipped while the input is
+  // focused so it never clobbers an in-progress edit.
+  useEffect(() => {
+    if (document.activeElement !== inputRef.current) setDraft(saved);
+  }, [saved]);
 
   const harnessId = providerIdToGuiHarnessId(providerId);
   const supportsTerminalAgent =
@@ -90,6 +98,7 @@ export function TerminalAgentArgsSection({
       </label>
       <div className="flex items-center gap-2">
         <Input
+          ref={inputRef}
           id={inputId}
           className="w-full font-mono text-ui-sm"
           placeholder={terminalAgentArgsPlaceholder(providerId)}

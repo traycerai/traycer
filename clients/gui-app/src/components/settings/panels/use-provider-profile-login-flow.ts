@@ -189,9 +189,11 @@ export function useProviderProfileLoginFlow(
                     profiles,
                   });
                 },
+                onError: () => fail(failureMessages.notFinished),
               },
             );
           },
+          onError: () => fail(failureMessages.notStarted),
         },
       );
     },

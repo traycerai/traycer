@@ -645,18 +645,16 @@ function RateLimitRefreshAllButton({
   // `() => Promise<void>` contract without gating the spinner on the fetches
   // themselves - `refreshing` (above) owns that.
   const refreshAll = (): Promise<void> => {
-    httpFetchProviders.forEach((provider) => {
-      refreshTargetsForProvider(provider).forEach((profileId) => {
-        void queryClient.invalidateQueries({
-          queryKey: queryKeys.hostMethod<
-            HostRpcRegistry,
-            "host.getRateLimitUsage"
-          >(hostId, "host.getRateLimitUsage", {
-            accountContext: DEFAULT_ACCOUNT_CONTEXT,
-            providerId: provider.providerId,
-            profileId,
-          }),
-        });
+    httpFetchRequests.forEach(({ providerId, profileId }) => {
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.hostMethod<
+          HostRpcRegistry,
+          "host.getRateLimitUsage"
+        >(hostId, "host.getRateLimitUsage", {
+          accountContext: DEFAULT_ACCOUNT_CONTEXT,
+          providerId,
+          profileId,
+        }),
       });
     });
     providers

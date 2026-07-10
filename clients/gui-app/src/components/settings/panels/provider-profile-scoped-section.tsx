@@ -201,6 +201,10 @@ export function ProviderProfileScopedSection(
           state={state}
           profile={selectedProfile}
           canOauth={canAddProfile}
+          remainingProfilesAfterRemoval={orderedProfiles.filter(
+            (candidate) => candidate.profileId !== selectedProfile.profileId,
+          )}
+          onSelectedProfileIdChange={onSelectedProfileIdChange}
         />
       ) : null}
     </section>
@@ -255,10 +259,18 @@ function ProfileActions({
   state,
   profile,
   canOauth,
+  remainingProfilesAfterRemoval,
+  onSelectedProfileIdChange,
 }: {
   readonly state: ProviderCliState;
   readonly profile: ProviderProfile;
   readonly canOauth: boolean;
+  /** The provider's other profiles, ordered - what stays once `profile` is
+   *  removed. Lets a successful removal land the section on a profile that
+   *  still exists instead of leaving `selectedProfileId` pointed at the one
+   *  just deleted. */
+  readonly remainingProfilesAfterRemoval: ReadonlyArray<ProviderProfile>;
+  readonly onSelectedProfileIdChange: (profileId: string | null) => void;
 }): ReactNode {
   const providerId = state.providerId;
   const removeProfile = useRemoveProviderProfile();
@@ -320,7 +332,17 @@ function ProfileActions({
         onConfirm={() =>
           removeProfile.mutate(
             { providerId, profileId: profile.profileId },
-            { onSuccess: () => setConfirmRemoveOpen(false) },
+            {
+              onSuccess: () => {
+                setConfirmRemoveOpen(false);
+                const nextProfile = remainingProfilesAfterRemoval.at(0);
+                onSelectedProfileIdChange(
+                  nextProfile === undefined
+                    ? null
+                    : profileCommitId(nextProfile),
+                );
+              },
+            },
           )
         }
       />

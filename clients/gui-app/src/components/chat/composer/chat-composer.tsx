@@ -2,6 +2,7 @@ import {
   memo,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -56,6 +57,7 @@ import {
   type ProviderReauthReason,
 } from "./use-provider-reauth-gate";
 import { useProfileRateLimitSwitchPrompt } from "./use-profile-rate-limit-switch-prompt";
+import { useRefreshProvidersListOnTurn } from "@/hooks/providers/use-refresh-providers-list-on-turn";
 import { useComposerPickerItems } from "./picker/use-composer-picker-items";
 import { commitSelection } from "@/stores/composer/commit-selection";
 
@@ -229,6 +231,11 @@ function ChatComposerImpl(props: ChatComposerProps) {
     profileId,
     isActive,
   );
+  // Keeps the switch prompt's own `providers.list` read converging with a
+  // turn's passive rate-limit capture: without this, a turn that just pushed
+  // this harness's profile into near/hard limit wouldn't surface the banner
+  // until `providers.list`'s next unrelated 15-minute refetch.
+  useRefreshProvidersListOnTurn(harnessId, tabHostId);
   const onSwitchProfile = useCallback(
     (nextProfileId: string | null) => {
       commitSelection(toolbarStore, harnessId, modelSlug, nextProfileId);
@@ -264,7 +271,9 @@ function ChatComposerImpl(props: ChatComposerProps) {
     onSubmitMessage,
   });
   const ambientDrift = useAmbientDriftGate(reauthGate.state, profileId);
-  const handleSubmitDraft = (): void => ambientDrift.guardSubmit(submitDraft);
+  const handleSubmitDraft = useCallback((): void => {
+    ambientDrift.guardSubmit(submitDraft);
+  }, [ambientDrift, submitDraft]);
   const reauthBanner = resolveReauthBannerProps(reauthGate);
   const topBannerKind = resolveComposerTopBannerKind({
     reauthVisible: reauthBanner !== null,
@@ -477,29 +486,39 @@ function useAmbientDriftGate(
   profileId: string | null,
 ): AmbientDriftGate {
   const notice = resolveAmbientDriftNotice(state, profileId);
+  const noticeKey = notice?.key ?? null;
   const [acknowledgedKey, setAcknowledgedKey] = useState<string | null>(null);
   const [pendingKey, setPendingKey] = useState<string | null>(null);
   const pendingNotice =
     notice !== null && pendingKey === notice.key ? notice : null;
 
-  const guardSubmit = (submit: () => void): void => {
-    if (notice !== null && acknowledgedKey !== notice.key) {
-      setPendingKey(notice.key);
-      return;
-    }
-    submit();
-  };
-  const acknowledge = (after: () => void): void => {
-    if (pendingNotice === null) return;
-    setAcknowledgedKey(pendingNotice.key);
-    setPendingKey(null);
-    after();
-  };
-  const dismiss = (): void => {
+  const guardSubmit = useCallback(
+    (submit: () => void): void => {
+      if (noticeKey !== null && acknowledgedKey !== noticeKey) {
+        setPendingKey(noticeKey);
+        return;
+      }
+      submit();
+    },
+    [noticeKey, acknowledgedKey],
+  );
+  const acknowledge = useCallback(
+    (after: () => void): void => {
+      if (pendingNotice === null) return;
+      setAcknowledgedKey(pendingNotice.key);
+      setPendingKey(null);
+      after();
+    },
+    [pendingNotice],
+  );
+  const dismiss = useCallback((): void => {
     acknowledge(() => {});
-  };
+  }, [acknowledge]);
 
-  return { pendingNotice, guardSubmit, acknowledge, dismiss };
+  return useMemo(
+    () => ({ pendingNotice, guardSubmit, acknowledge, dismiss }),
+    [pendingNotice, guardSubmit, acknowledge, dismiss],
+  );
 }
 
 function AmbientDriftSendBanner({

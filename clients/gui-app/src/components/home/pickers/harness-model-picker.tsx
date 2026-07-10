@@ -784,7 +784,7 @@ function profileTooltipLabel(
   profiles: ReadonlyArray<ProviderProfile>,
   selectedProfileId: string | null,
 ): string | null {
-  if (profiles.length === 0) return null;
+  if (profiles.length < 2) return null;
   const activeProfile =
     profiles.find(
       (profile) => profileCommitId(profile) === selectedProfileId,

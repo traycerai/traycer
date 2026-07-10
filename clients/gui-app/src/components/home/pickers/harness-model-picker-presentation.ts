@@ -10,6 +10,7 @@ import type {
   ServiceTierFooterConfig,
 } from "@/components/home/pickers/harness-model-picker-footers";
 import {
+  profileAccentDotInput,
   profileCommitId,
   profileDisplayLabel,
   type ProfileAccentDotInput,
@@ -87,13 +88,7 @@ export function deriveHarnessModelPickerPresentation(
   const profileLabel =
     activeProfile === null ? null : profileDisplayLabel(activeProfile);
   const profileAccentDot: ProfileAccentDotInput | null =
-    activeProfile === null
-      ? null
-      : {
-          profileId: activeProfile.profileId,
-          accentColor: activeProfile.accentColor,
-          label: profileDisplayLabel(activeProfile),
-        };
+    activeProfile === null ? null : profileAccentDotInput(activeProfile);
 
   return {
     label,

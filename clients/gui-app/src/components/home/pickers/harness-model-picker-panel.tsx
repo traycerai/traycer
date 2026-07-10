@@ -216,7 +216,12 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
                 }
                 onCreateProfile={() => {
                   onClosePicker();
-                  openAddProfile(resolvedActiveProviderId, createProfileHostId);
+                  openAddProfile(
+                    resolvedActiveProviderId,
+                    createProfileHostId,
+                    (profileId) =>
+                      onProfileChange(resolvedActiveProviderId, profileId),
+                  );
                 }}
                 createProfileDisabled={createProfileDisabled}
                 createProfileDisabledReason={createProfileDisabledReason}

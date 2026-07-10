@@ -54,7 +54,7 @@ type MockState = {
   configured: ReadonlyArray<{
     providerId: string;
     lane: string;
-    profiles?: ReadonlyArray<ProviderProfile>;
+    profiles: ReadonlyArray<ProviderProfile> | undefined;
   }>;
   results: Record<string, QueryResult>;
   draining: boolean;
@@ -487,8 +487,8 @@ describe("<RateLimitPopover /> rail", () => {
   it("pins Overview first, then one tab per provider in app order", () => {
     // Passed out of order; the rail must sort to codex, claude-code, ...
     mocks.configured = [
-      { providerId: "kilocode", lane: "httpFetch" },
-      { providerId: "codex", lane: "ephemeralProcess" },
+      { providerId: "kilocode", lane: "httpFetch", profiles: undefined },
+      { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
     ];
     mocks.results = {
       codex: readyResult(codexReady()),
@@ -510,8 +510,12 @@ describe("<RateLimitPopover /> rail", () => {
 
   it("lands on Overview, stacking every provider's condensed block", () => {
     mocks.configured = [
-      { providerId: "codex", lane: "ephemeralProcess" },
-      { providerId: "claude-code", lane: "ephemeralProcess" },
+      { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
+      {
+        providerId: "claude-code",
+        lane: "ephemeralProcess",
+        profiles: undefined,
+      },
     ];
     mocks.results = {
       codex: readyResult(codexReady()),
@@ -671,8 +675,12 @@ describe("<RateLimitPopover /> rail", () => {
 
   it("draws a divider only between consecutive condensed blocks (no header row)", () => {
     mocks.configured = [
-      { providerId: "codex", lane: "ephemeralProcess" },
-      { providerId: "claude-code", lane: "ephemeralProcess" },
+      { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
+      {
+        providerId: "claude-code",
+        lane: "ephemeralProcess",
+        profiles: undefined,
+      },
     ];
     mocks.results = {
       codex: readyResult(codexReady()),
@@ -686,7 +694,9 @@ describe("<RateLimitPopover /> rail", () => {
   });
 
   it("switches to a single provider detail (with plan label) on tab click", () => {
-    mocks.configured = [{ providerId: "codex", lane: "ephemeralProcess" }];
+    mocks.configured = [
+      { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
+    ];
     mocks.results = { codex: readyResult(codexReady()) };
     renderPopover();
     // Overview is condensed, so the plan label isn't shown there...
@@ -698,7 +708,9 @@ describe("<RateLimitPopover /> rail", () => {
   });
 
   it("reopens on the last selected provider tab", () => {
-    mocks.configured = [{ providerId: "codex", lane: "ephemeralProcess" }];
+    mocks.configured = [
+      { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
+    ];
     mocks.results = { codex: readyResult(codexReady()) };
     const first = renderPopover();
     expect(screen.queryByText("Pro 5x")).toBeNull();
@@ -716,7 +728,9 @@ describe("<RateLimitPopover /> rail", () => {
 
   it("falls back to Overview when the remembered provider is not available", () => {
     useRateLimitPopoverStore.setState({ activeTab: "claude-code" });
-    mocks.configured = [{ providerId: "codex", lane: "ephemeralProcess" }];
+    mocks.configured = [
+      { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
+    ];
     mocks.results = { codex: readyResult(codexReady()) };
 
     renderPopover();
@@ -733,7 +747,9 @@ describe("<RateLimitPopover /> rail", () => {
   });
 
   it("shows a relative countdown for a short window and an absolute date for a weekly one", () => {
-    mocks.configured = [{ providerId: "codex", lane: "ephemeralProcess" }];
+    mocks.configured = [
+      { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
+    ];
     mocks.results = {
       codex: readyResult({
         provider: "codex",
@@ -768,7 +784,9 @@ describe("<RateLimitPopover /> rail", () => {
   });
 
   it("omits reset text when a provider reports an implausible reset timestamp", () => {
-    mocks.configured = [{ providerId: "codex", lane: "ephemeralProcess" }];
+    mocks.configured = [
+      { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
+    ];
     mocks.results = {
       codex: readyResult({
         provider: "codex",
@@ -823,8 +841,12 @@ describe("<RateLimitPopover /> Overview progressive reveal", () => {
 
   it("shows one centered loading indicator, no per-provider sections, while nothing has resolved yet", () => {
     mocks.configured = [
-      { providerId: "codex", lane: "ephemeralProcess" },
-      { providerId: "claude-code", lane: "ephemeralProcess" },
+      { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
+      {
+        providerId: "claude-code",
+        lane: "ephemeralProcess",
+        profiles: undefined,
+      },
     ];
     mocks.results = { codex: coldResult(), "claude-code": coldResult() };
     renderPopover();
@@ -837,8 +859,12 @@ describe("<RateLimitPopover /> Overview progressive reveal", () => {
 
   it("reveals a provider in place as it resolves, hiding still-cold siblings, and drops the combined loader", () => {
     mocks.configured = [
-      { providerId: "codex", lane: "ephemeralProcess" },
-      { providerId: "claude-code", lane: "ephemeralProcess" },
+      { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
+      {
+        providerId: "claude-code",
+        lane: "ephemeralProcess",
+        profiles: undefined,
+      },
     ];
     mocks.results = { codex: coldResult(), "claude-code": coldResult() };
     const { rerender } = renderPopover();
@@ -878,7 +904,9 @@ describe("<RateLimitPopover /> Overview progressive reveal", () => {
 
 describe("<RateLimitPopover /> per-provider states", () => {
   it("shows skeleton bars (not a spinner) on cold load", () => {
-    mocks.configured = [{ providerId: "codex", lane: "ephemeralProcess" }];
+    mocks.configured = [
+      { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
+    ];
     mocks.results = {
       codex: {
         data: undefined,
@@ -905,7 +933,9 @@ describe("<RateLimitPopover /> per-provider states", () => {
   });
 
   it("dims stale content and notes a failed refresh when degraded", () => {
-    mocks.configured = [{ providerId: "codex", lane: "ephemeralProcess" }];
+    mocks.configured = [
+      { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
+    ];
     mocks.results = {
       codex: {
         ...readyResult(codexReady()),
@@ -924,7 +954,9 @@ describe("<RateLimitPopover /> per-provider states", () => {
     // `usage_fetch_failed`, with a `lastGood` retained from an earlier poll.
     // The dimmed treatment is the same, but the trailing note names the
     // specific transient reason instead of the generic "refresh failed".
-    mocks.configured = [{ providerId: "codex", lane: "ephemeralProcess" }];
+    mocks.configured = [
+      { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
+    ];
     mocks.results = {
       codex: degradedRetainedResult(codexReady(), "usage_fetch_failed"),
     };
@@ -943,7 +975,9 @@ describe("<RateLimitPopover /> per-provider states", () => {
     // `rate_limits_not_available` (and friends) are account-capability
     // reasons, not transient - they must never be shown alongside a stale
     // reading the way a transient failure is.
-    mocks.configured = [{ providerId: "codex", lane: "ephemeralProcess" }];
+    mocks.configured = [
+      { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
+    ];
     mocks.results = {
       codex: {
         data: {
@@ -974,7 +1008,9 @@ describe("<RateLimitPopover /> per-provider states", () => {
   });
 
   it("shows Refreshing instead of an updated timestamp while a refresh is in progress", () => {
-    mocks.configured = [{ providerId: "codex", lane: "ephemeralProcess" }];
+    mocks.configured = [
+      { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
+    ];
     mocks.results = { codex: readyResult(codexReady()) };
     mocks.draining = true;
     renderPopover();
@@ -987,7 +1023,9 @@ describe("<RateLimitPopover /> per-provider states", () => {
   });
 
   it("shows a plain error message with no inline retry control when a fetch never succeeded", () => {
-    mocks.configured = [{ providerId: "codex", lane: "ephemeralProcess" }];
+    mocks.configured = [
+      { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
+    ];
     mocks.results = {
       codex: {
         data: undefined,
@@ -1018,7 +1056,9 @@ describe("<RateLimitPopover /> per-provider states", () => {
   });
 
   it("maps an available:false reason to a plain-language message", () => {
-    mocks.configured = [{ providerId: "codex", lane: "ephemeralProcess" }];
+    mocks.configured = [
+      { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
+    ];
     mocks.results = {
       codex: readyResult({
         provider: "codex",
@@ -1035,7 +1075,9 @@ describe("<RateLimitPopover /> per-provider states", () => {
 
 describe("<RateLimitPopover /> Refresh all", () => {
   it("is disabled while the queue is draining", () => {
-    mocks.configured = [{ providerId: "codex", lane: "ephemeralProcess" }];
+    mocks.configured = [
+      { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
+    ];
     mocks.results = { codex: readyResult(codexReady()) };
     mocks.draining = true;
     renderPopover();
@@ -1048,7 +1090,9 @@ describe("<RateLimitPopover /> Refresh all", () => {
     // draining flag, so an all-httpFetch popover (or one mid-invalidation on
     // just its httpFetch providers) never visibly spun despite actively
     // refreshing.
-    mocks.configured = [{ providerId: "kilocode", lane: "httpFetch" }];
+    mocks.configured = [
+      { providerId: "kilocode", lane: "httpFetch", profiles: undefined },
+    ];
     mocks.results = {
       kilocode: {
         ...readyResult({
@@ -1078,8 +1122,8 @@ describe("<RateLimitPopover /> Refresh all", () => {
     // identical) and must still subscribe to EVERY provider's query state.
     // Passed in non-canonical order to exercise the sort in front of `[0]`.
     mocks.configured = [
-      { providerId: "kilocode", lane: "httpFetch" },
-      { providerId: "openrouter", lane: "httpFetch" },
+      { providerId: "kilocode", lane: "httpFetch", profiles: undefined },
+      { providerId: "openrouter", lane: "httpFetch", profiles: undefined },
     ];
     mocks.results = {
       kilocode: readyResult({
@@ -1110,7 +1154,9 @@ describe("<RateLimitPopover /> Refresh all", () => {
   });
 
   it("keeps a single ephemeralProcess provider's own refresh button disabled while the queue is draining, even though its own isFetching has already settled", () => {
-    mocks.configured = [{ providerId: "codex", lane: "ephemeralProcess" }];
+    mocks.configured = [
+      { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
+    ];
     mocks.results = { codex: readyResult(codexReady()) };
     mocks.draining = true;
     renderPopover();
@@ -1121,8 +1167,12 @@ describe("<RateLimitPopover /> Refresh all", () => {
 
   it("enqueues each ephemeralProcess provider with force:true", () => {
     mocks.configured = [
-      { providerId: "codex", lane: "ephemeralProcess" },
-      { providerId: "claude-code", lane: "ephemeralProcess" },
+      { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
+      {
+        providerId: "claude-code",
+        lane: "ephemeralProcess",
+        profiles: undefined,
+      },
     ];
     mocks.results = {
       codex: readyResult(codexReady()),
@@ -1194,7 +1244,9 @@ describe("<RateLimitPopover /> Refresh all", () => {
 
 describe("<RateLimitPopover /> rail settings", () => {
   it("opens provider settings and closes the popover from the rail settings icon", () => {
-    mocks.configured = [{ providerId: "codex", lane: "ephemeralProcess" }];
+    mocks.configured = [
+      { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
+    ];
     mocks.results = { codex: readyResult(codexReady()) };
     renderPopover();
     fireEvent.click(screen.getByRole("button", { name: "Provider settings" }));
@@ -1209,7 +1261,9 @@ describe("<RateLimitPopover /> rail settings", () => {
 describe("<RateLimitPopover /> per-provider refresh", () => {
   it("routes an httpFetch provider's refresh through refetch, not the queue", () => {
     const refetch = vi.fn(() => Promise.resolve({}));
-    mocks.configured = [{ providerId: "kilocode", lane: "httpFetch" }];
+    mocks.configured = [
+      { providerId: "kilocode", lane: "httpFetch", profiles: undefined },
+    ];
     mocks.results = {
       kilocode: {
         ...readyResult({
@@ -1237,8 +1291,12 @@ describe("<RateLimitPopover /> per-provider refresh", () => {
 describe("<RateLimitPopover /> Overview block scoping", () => {
   it("shows no per-provider refresh controls on Overview, only Refresh all", () => {
     mocks.configured = [
-      { providerId: "codex", lane: "ephemeralProcess" },
-      { providerId: "claude-code", lane: "ephemeralProcess" },
+      { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
+      {
+        providerId: "claude-code",
+        lane: "ephemeralProcess",
+        profiles: undefined,
+      },
     ];
     mocks.results = {
       codex: readyResult(codexReady()),
@@ -1256,7 +1314,9 @@ describe("<RateLimitPopover /> Overview block scoping", () => {
   });
 
   it("keeps the per-provider refresh control in the single-provider detail tab", () => {
-    mocks.configured = [{ providerId: "codex", lane: "ephemeralProcess" }];
+    mocks.configured = [
+      { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
+    ];
     mocks.results = { codex: readyResult(codexReady()) };
     renderPopover();
     fireEvent.click(screen.getByRole("tab", { name: "Codex" }));
@@ -1283,7 +1343,9 @@ describe("<RateLimitPopover /> Traycer tab", () => {
   });
 
   it("omits the Traycer tab for a free, unbundled account", () => {
-    mocks.configured = [{ providerId: "codex", lane: "ephemeralProcess" }];
+    mocks.configured = [
+      { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
+    ];
     mocks.results = { codex: readyResult(codexReady()) };
     mocks.authUser = readyAuthUser(
       authUserFixture({ status: "FREE", withTeam: false }),
@@ -1298,8 +1360,8 @@ describe("<RateLimitPopover /> Traycer tab", () => {
 
   it("orders the Traycer tab per PROVIDER_ID_ORDER (after Codex, before Kilo Code)", () => {
     mocks.configured = [
-      { providerId: "kilocode", lane: "httpFetch" },
-      { providerId: "codex", lane: "ephemeralProcess" },
+      { providerId: "kilocode", lane: "httpFetch", profiles: undefined },
+      { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
     ];
     mocks.results = {
       codex: readyResult(codexReady()),

@@ -5,7 +5,13 @@ import {
   type ProviderProfile,
   type ProviderProfileAccentColor,
 } from "@traycer/protocol/host/provider-schemas";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 type RenameProfileVariables = {
@@ -24,6 +30,11 @@ type MutationSuccessOptions = {
   readonly onSuccess: () => void;
 };
 
+type RecolorMutationOptions = {
+  readonly onSuccess: () => void;
+  readonly onError: () => void;
+};
+
 type RenameProfileMutate = (
   variables: RenameProfileVariables,
   options: MutationSuccessOptions,
@@ -31,7 +42,7 @@ type RenameProfileMutate = (
 
 type RecolorProfileMutate = (
   variables: RecolorProfileVariables,
-  options: MutationSuccessOptions,
+  options: RecolorMutationOptions,
 ) => void;
 
 const mutationMocks = vi.hoisted(() => ({
@@ -355,5 +366,40 @@ describe("<ProviderProfileCard />", () => {
       screen.getByRole("button", { name: "Edit name for Work" }),
     ).toBeDefined();
     expect(mutationMocks.renameProfileMutate).not.toHaveBeenCalled();
+  });
+
+  it("reverts the optimistic accent color when the recolor mutation fails", () => {
+    const ambient = ambientProfile(AMBIENT_COLOR);
+    const work = managedProfile("work-profile", "Work", MANAGED_COLOR);
+    const attemptedColor = PROVIDER_PROFILE_ACCENT_COLORS[4];
+
+    render(
+      <ProviderProfileCard
+        providerId="codex"
+        profile={work}
+        profiles={[ambient, work]}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: `Use color ${attemptedColor}` }),
+    );
+
+    expect(mutationMocks.recolorProfileMutate).toHaveBeenCalledTimes(1);
+    const [, options] = mutationMocks.recolorProfileMutate.mock.calls[0];
+    act(() => {
+      options.onError();
+    });
+
+    expect(
+      screen
+        .getByRole("button", { name: `Use color ${attemptedColor}` })
+        .getAttribute("aria-pressed"),
+    ).toBe("false");
+    expect(
+      screen
+        .getByRole("button", { name: `Use color ${MANAGED_COLOR}` })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
   });
 });

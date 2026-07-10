@@ -9,17 +9,25 @@ import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id
 export function ProviderProfileAddFlowHost(): ReactNode {
   const harnessId = useProviderProfileAddFlowStore((state) => state.harnessId);
   const hostId = useProviderProfileAddFlowStore((state) => state.hostId);
+  const onProfileCreated = useProviderProfileAddFlowStore(
+    (state) => state.onProfileCreated,
+  );
 
-  if (harnessId === null) return null;
+  if (harnessId === null || onProfileCreated === null) return null;
 
   return (
-    <ProviderProfileAddFlowSession harnessId={harnessId} hostId={hostId} />
+    <ProviderProfileAddFlowSession
+      harnessId={harnessId}
+      hostId={hostId}
+      onProfileCreated={onProfileCreated}
+    />
   );
 }
 
 function ProviderProfileAddFlowSession({
   harnessId,
   hostId,
+  onProfileCreated,
 }: {
   readonly harnessId: GuiHarnessId;
   /** The host scope captured when "Create new profile" was clicked - a tab's
@@ -28,6 +36,9 @@ function ProviderProfileAddFlowSession({
    *  non-null `hostId` is resolved into a transient client the same way
    *  `useTabHostClient()` does, rather than read from tab context. */
   readonly hostId: string | null;
+  /** The opening picker's own callback, captured alongside `harnessId`/
+   *  `hostId` at the same "Create new profile" click. */
+  readonly onProfileCreated: (profileId: string) => void;
 }): ReactNode {
   const close = useProviderProfileAddFlowStore((state) => state.close);
   const client = useHostClientForHostId(hostId);
@@ -55,7 +66,7 @@ function ProviderProfileAddFlowSession({
         if (!open) close();
       }}
       onFailedAttempt={() => {}}
-      onProfileCreated={() => {}}
+      onProfileCreated={onProfileCreated}
     />
   );
 }

@@ -128,7 +128,10 @@ function ProviderProfileCardEditor({
         profileId: profile.profileId,
         accentColor,
       },
-      { onSuccess: () => undefined },
+      {
+        onSuccess: () => undefined,
+        onError: () => setOptimisticColor(null),
+      },
     );
   };
 
