@@ -11,10 +11,7 @@
  * stay RELATIVE (package-alias subpaths may not exist in old trees) and the
  * runtime dependency set must stay { zod, this repo's host index }.
  */
-import {
-  hostRpcRegistry,
-  hostStreamRpcRegistry,
-} from "../../src/host/index";
+import { hostRpcRegistry, hostStreamRpcRegistry } from "../../src/host/index";
 import { buildProtocolSurface } from "../../src/framework/surface-build";
 
 async function resolveUnaryFloorMethodNames(): Promise<readonly string[]> {

@@ -96,7 +96,10 @@ const registryEchoV11 = defineVersionedRpcRegistry({
       latestMinor: 1,
       versions: {
         0: { contract: echoV10, upgradeFromPreviousVersion: null },
-        1: { contract: echoV11, upgradeFromPreviousVersion: upgradeEchoV10ToV11 },
+        1: {
+          contract: echoV11,
+          upgradeFromPreviousVersion: upgradeEchoV10ToV11,
+        },
       },
       downgradePathsFromLatest: {},
     },
@@ -109,14 +112,20 @@ const registryEchoV20WithBridge = defineVersionedRpcRegistry({
       latestMinor: 1,
       versions: {
         0: { contract: echoV10, upgradeFromPreviousVersion: null },
-        1: { contract: echoV11, upgradeFromPreviousVersion: upgradeEchoV10ToV11 },
+        1: {
+          contract: echoV11,
+          upgradeFromPreviousVersion: upgradeEchoV10ToV11,
+        },
       },
       downgradePathsFromLatest: {},
     },
     2: {
       latestMinor: 0,
       versions: {
-        0: { contract: echoV20, upgradeFromPreviousVersion: upgradeEchoV11ToV20 },
+        0: {
+          contract: echoV20,
+          upgradeFromPreviousVersion: upgradeEchoV11ToV20,
+        },
       },
       downgradePathsFromLatest: { 1: downgradeEchoV20ToV11 },
     },
@@ -141,7 +150,10 @@ const registryWithPing = defineVersionedRpcRegistry({
       latestMinor: 1,
       versions: {
         0: { contract: echoV10, upgradeFromPreviousVersion: null },
-        1: { contract: echoV11, upgradeFromPreviousVersion: upgradeEchoV10ToV11 },
+        1: {
+          contract: echoV11,
+          upgradeFromPreviousVersion: upgradeEchoV10ToV11,
+        },
       },
       downgradePathsFromLatest: {},
     },
@@ -163,7 +175,10 @@ const registryWithStatus = defineVersionedRpcRegistry({
       latestMinor: 1,
       versions: {
         0: { contract: echoV10, upgradeFromPreviousVersion: null },
-        1: { contract: echoV11, upgradeFromPreviousVersion: upgradeEchoV10ToV11 },
+        1: {
+          contract: echoV11,
+          upgradeFromPreviousVersion: upgradeEchoV10ToV11,
+        },
       },
       downgradePathsFromLatest: {},
     },

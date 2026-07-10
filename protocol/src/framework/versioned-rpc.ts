@@ -555,9 +555,10 @@ type LatestMajorContract<
  * Returns the latest installed contract for the entire method registry or for a
  * specific major line.
  */
-export function getLatestContract<
-  Registry extends MethodVersionRegistry,
->(registry: Registry, major: undefined): LatestContract<Registry>;
+export function getLatestContract<Registry extends MethodVersionRegistry>(
+  registry: Registry,
+  major: undefined,
+): LatestContract<Registry>;
 export function getLatestContract<
   Registry extends MethodVersionRegistry,
   Major extends keyof Registry & number,
@@ -595,14 +596,17 @@ export function upgradeRequestToVersion<
   assertUpgradeOrder(fromVersion, toVersion);
 
   if (isSameSchemaVersion(fromVersion, toVersion)) {
-    return request as RequestOf<ContractForInstalledVersion<Registry, ToVersion>>;
+    return request as RequestOf<
+      ContractForInstalledVersion<Registry, ToVersion>
+    >;
   }
 
   const installedVersions = listInstalledVersions(registry);
   const fromIndex = findVersionIndex(installedVersions, fromVersion);
   const toIndex = findVersionIndex(installedVersions, toVersion);
-  let currentRequest: Parameters<RuntimeUpgradePath<Registry>["upgradeRequest"]>[0] =
-    request;
+  let currentRequest: Parameters<
+    RuntimeUpgradePath<Registry>["upgradeRequest"]
+  >[0] = request;
 
   for (let index = fromIndex + 1; index <= toIndex; index += 1) {
     const nextVersion = installedVersions[index];
@@ -704,8 +708,7 @@ export function downgradeRequestAcrossMajors<
     // and target schemas resolve to the same instance, so the parse is
     // an identity check that produces the type the caller expects.
     const targetLine = getMajorLine(registry, toMajor);
-    const targetContract =
-      targetLine.versions[targetLine.latestMinor].contract;
+    const targetContract = targetLine.versions[targetLine.latestMinor].contract;
     type ToRequest = RequestOf<LatestMajorContract<Registry, ToMajor>>;
     const parsed: ToRequest = targetContract.requestSchema.parse(
       request,
@@ -753,8 +756,7 @@ export function downgradeResponseAcrossMajors<
     // Re-parse against the target major's response schema for runtime
     // narrowing in the same-major fast path (see request counterpart).
     const targetLine = getMajorLine(registry, toMajor);
-    const targetContract =
-      targetLine.versions[targetLine.latestMinor].contract;
+    const targetContract = targetLine.versions[targetLine.latestMinor].contract;
     type ToResponse = ResponseOf<LatestMajorContract<Registry, ToMajor>>;
     const parsed: ToResponse = targetContract.responseSchema.parse(
       response,

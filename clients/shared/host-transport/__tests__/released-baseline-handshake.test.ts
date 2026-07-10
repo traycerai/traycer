@@ -387,7 +387,9 @@ describe.skipIf(baselines.length === 0)(
         const open = stub.sentFrames[0];
         expect(open.kind).toBe("open");
         if (open.kind === "open") {
-          expect(open.manifest["synthetic.baselineUnsupported"]).toBeUndefined();
+          expect(
+            open.manifest["synthetic.baselineUnsupported"],
+          ).toBeUndefined();
           expect(
             open.optionalManifest?.["synthetic.baselineUnsupported"],
           ).toEqual({ major: 1, minor: 0 });
@@ -459,7 +461,9 @@ describe.skipIf(baselines.length === 0)(
           >;
         };
         expect(open.kind).toBe("open");
-        expect(open.manifest).toEqual(buildStreamManifest(hostStreamRpcRegistry));
+        expect(open.manifest).toEqual(
+          buildStreamManifest(hostStreamRpcRegistry),
+        );
         expect(open.optionalManifest).toBeUndefined();
 
         const ackManifest = intersectManifests(stream, open.manifest);

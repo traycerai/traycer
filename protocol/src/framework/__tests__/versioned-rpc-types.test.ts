@@ -229,9 +229,9 @@ describe("Versioned RPC typing", () => {
     expectTypeOf(upgradePath.upgradeRequest).returns.toEqualTypeOf<
       RequestOf<typeof echoV21>
     >();
-    expectTypeOf<Parameters<typeof upgradePath.upgradeResponse>>().toEqualTypeOf<
-      [ResponseOf<typeof echoV11>]
-    >();
+    expectTypeOf<
+      Parameters<typeof upgradePath.upgradeResponse>
+    >().toEqualTypeOf<[ResponseOf<typeof echoV11>]>();
     expectTypeOf(upgradePath.upgradeResponse).returns.toEqualTypeOf<
       ResponseOf<typeof echoV21>
     >();

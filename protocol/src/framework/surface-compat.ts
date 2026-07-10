@@ -82,9 +82,7 @@ const surfaceOptionalMethodSchema: z.ZodType<SurfaceOptionalMethod> =
 export const protocolSurfaceSchema = z.object({
   formatVersion: z.number().int(),
   unary: z.record(z.string(), surfaceMethodSchema),
-  optionalUnary: z
-    .record(z.string(), surfaceOptionalMethodSchema)
-    .default({}),
+  optionalUnary: z.record(z.string(), surfaceOptionalMethodSchema).default({}),
   stream: z.record(z.string(), surfaceMethodSchema),
 });
 
@@ -517,7 +515,9 @@ function diffSchemasAtSameVersion(
       const { enum: _values, ...rest } = asRecord(value) ?? {};
       return rest;
     };
-    if (stableStringify(stripEnum(theirs)) !== stableStringify(stripEnum(mine))) {
+    if (
+      stableStringify(stripEnum(theirs)) !== stableStringify(stripEnum(mine))
+    ) {
       return [
         {
           path: path.length === 0 ? "(root)" : path,
@@ -575,8 +575,9 @@ function checkFamily(
   isExcepted: (finding: Omit<CompatFinding, "excepted">) => boolean,
 ): CompatFinding[] {
   const findings: CompatFinding[] = [];
-  const methods = [...new Set([...Object.keys(mine), ...Object.keys(theirs)])]
-    .sort();
+  const methods = [
+    ...new Set([...Object.keys(mine), ...Object.keys(theirs)]),
+  ].sort();
 
   const pushFinding = (finding: Omit<CompatFinding, "excepted">): void => {
     findings.push({ ...finding, excepted: isExcepted(finding) });
@@ -707,10 +708,22 @@ function fallbackTargetProblem(
     return `fallback target ${target.method}@${target.major}.${target.minor} is not present in ${theirsLabel}'s unary floor`;
   }
   const targetVersion = { major: target.major, minor: target.minor };
-  if (!canBridgeUnaryFromSurface(targetMine, targetVersion, targetTheirs.canonical)) {
+  if (
+    !canBridgeUnaryFromSurface(
+      targetMine,
+      targetVersion,
+      targetTheirs.canonical,
+    )
+  ) {
     return `this tree cannot bridge fallback target ${target.method}@${target.major}.${target.minor} to ${theirsLabel}'s canonical ${formatVersionValue(targetTheirs.canonical)}`;
   }
-  if (!canBridgeUnaryFromSurface(targetTheirs, targetTheirs.canonical, targetVersion)) {
+  if (
+    !canBridgeUnaryFromSurface(
+      targetTheirs,
+      targetTheirs.canonical,
+      targetVersion,
+    )
+  ) {
     return `${theirsLabel} cannot bridge its canonical ${formatVersionValue(targetTheirs.canonical)} to fallback target ${target.method}@${target.major}.${target.minor}`;
   }
   return null;
@@ -725,8 +738,9 @@ function checkOptionalUnary(
   isExcepted: (finding: Omit<CompatFinding, "excepted">) => boolean,
 ): CompatFinding[] {
   const findings: CompatFinding[] = [];
-  const methods = [...new Set([...Object.keys(mine), ...Object.keys(theirs)])]
-    .sort();
+  const methods = [
+    ...new Set([...Object.keys(mine), ...Object.keys(theirs)]),
+  ].sort();
 
   const pushFinding = (finding: Omit<CompatFinding, "excepted">): void => {
     findings.push({ ...finding, excepted: isExcepted(finding) });
@@ -797,7 +811,9 @@ function checkOptionalUnary(
 
     const mineCanonical = mineMethod.canonical;
     const theirsCanonical = theirsMethod.canonical;
-    if (!canBridgeUnaryFromSurface(mineMethod, mineCanonical, theirsCanonical)) {
+    if (
+      !canBridgeUnaryFromSurface(mineMethod, mineCanonical, theirsCanonical)
+    ) {
       pushFinding({
         family: "unary",
         method,
@@ -808,7 +824,9 @@ function checkOptionalUnary(
         detail: `optional unary method in this tree (canonical ${formatVersionValue(mineCanonical)}) cannot bridge ${theirsLabel}'s canonical ${formatVersionValue(theirsCanonical)}`,
       });
     }
-    if (!canBridgeUnaryFromSurface(theirsMethod, theirsCanonical, mineCanonical)) {
+    if (
+      !canBridgeUnaryFromSurface(theirsMethod, theirsCanonical, mineCanonical)
+    ) {
       pushFinding({
         family: "unary",
         method,

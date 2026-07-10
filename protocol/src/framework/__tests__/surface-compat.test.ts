@@ -521,10 +521,7 @@ describe("unary version bridging mirrors the shipped checker", () => {
             },
           },
           downgradePathsFromLatest: {
-            1: defineDowngradePath<
-              typeof breakingContract,
-              typeof upgraded
-            >({
+            1: defineDowngradePath<typeof breakingContract, typeof upgraded>({
               from: { major: 2, minor: 0 },
               to: { major: 1, minor: 1 },
               downgradeRequest: (request) => ({
@@ -700,7 +697,10 @@ describe("same-version wire-schema evolution rules", () => {
 
   it("rejects flipping a property between optional and required", () => {
     const demoted = defineVersionedRpcRegistry({
-      "host.echo": unaryV10(z.object({ a: z.string().optional() }), baseResponse),
+      "host.echo": unaryV10(
+        z.object({ a: z.string().optional() }),
+        baseResponse,
+      ),
     });
     expect(blockingOf(demoted, []).map((finding) => finding.path)).toEqual([
       "properties.a",

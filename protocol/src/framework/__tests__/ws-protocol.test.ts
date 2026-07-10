@@ -147,9 +147,7 @@ describe("ws-protocol canonical Zod schemas", () => {
         },
       };
 
-      expect(clientFatalErrorFrameSchema.safeParse(frame).success).toBe(
-        true,
-      );
+      expect(clientFatalErrorFrameSchema.safeParse(frame).success).toBe(true);
       expect(clientFrameSchema.safeParse(frame).success).toBe(true);
     });
 
@@ -317,9 +315,7 @@ describe("ws-protocol canonical Zod schemas", () => {
         },
       };
 
-      expect(hostFatalErrorFrameSchema.safeParse(frame).success).toBe(
-        true,
-      );
+      expect(hostFatalErrorFrameSchema.safeParse(frame).success).toBe(true);
       expect(hostFrameSchema.safeParse(frame).success).toBe(true);
     });
 

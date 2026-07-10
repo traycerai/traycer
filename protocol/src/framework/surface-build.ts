@@ -50,9 +50,7 @@ export type SurfaceMajorLine = {
 export type SurfaceMethod = {
   readonly canonical: SurfaceVersion;
   readonly majors: Readonly<Record<string, SurfaceMajorLine>>;
-  readonly schemas: Readonly<
-    Record<string, Readonly<Record<string, unknown>>>
-  >;
+  readonly schemas: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
 };
 
 export type SurfaceMethodDegrade =
@@ -145,7 +143,9 @@ function buildMethodSurface(
       number,
       {
         readonly latestMinor: number;
-        readonly versions: Readonly<Record<number, { readonly contract: object }>>;
+        readonly versions: Readonly<
+          Record<number, { readonly contract: object }>
+        >;
         readonly downgradeTargets: readonly number[];
       }
     >
@@ -210,7 +210,9 @@ function buildDegradeSurface(
     typeof target["major"] !== "number" ||
     typeof target["minor"] !== "number"
   ) {
-    throw new Error(`Fallback degrade for method '${method}' has invalid target`);
+    throw new Error(
+      `Fallback degrade for method '${method}' has invalid target`,
+    );
   }
   return {
     kind: "fallback",
