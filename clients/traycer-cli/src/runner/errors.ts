@@ -40,6 +40,9 @@ export const CLI_ERROR_CODES = {
   // parse. Distinct from HOST_NOT_RUNNING - the host *answered*.
   // Actionable via `traycer host restart` or updating the CLI.
   HOST_INCOMPATIBLE: "E_HOST_INCOMPATIBLE",
+  // The host is reachable and compatible on the floor protocol, but it does
+  // not support the specific feature/method this CLI tried to use.
+  HOST_UNSUPPORTED: "E_HOST_UNSUPPORTED",
   HOST_BUNDLE_MISSING: "E_HOST_BUNDLE_MISSING",
   HOST_SHELL_MISSING: "E_HOST_SHELL_MISSING",
   HOST_SPAWN_FAILED: "E_HOST_SPAWN_FAILED",

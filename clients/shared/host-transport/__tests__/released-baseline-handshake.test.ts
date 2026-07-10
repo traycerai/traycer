@@ -1,10 +1,18 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 import {
   hostRpcRegistry,
   hostStreamRpcRegistry,
 } from "@traycer/protocol/host/index";
+import { hostStatusV10 } from "@traycer/protocol/host/status/contracts";
+import { releasedMethodNames } from "@traycer/protocol/host/__tests__/__fixtures__/released-method-names";
+import {
+  defineFallbackMethodDegrade,
+  defineFloorAwareVersionedRpcRegistry,
+  defineRpcContract,
+} from "@traycer/protocol/framework/index";
 import { buildStreamManifest } from "@traycer/protocol/framework/stream-compat";
 import {
   manifestFromSurface,
@@ -26,6 +34,7 @@ import type {
   WebSocketOpenEvent,
 } from "../ws-factory";
 import { WsRpcClient } from "../ws-rpc-client";
+import { HostRpcError } from "../host-messenger";
 import type {
   IStreamWebSocketFactory,
   StreamWebSocketLike,
@@ -65,6 +74,71 @@ function loadBaselines(): { label: string; surfacePath: string }[] {
 }
 
 const baselines = loadBaselines();
+
+const baselineFallbackV10 = defineRpcContract({
+  method: "synthetic.baselineFallback",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: z.object({ label: z.string() }),
+  responseSchema: z.object({ summary: z.string() }),
+});
+
+const baselineUnsupportedV10 = defineRpcContract({
+  method: "synthetic.baselineUnsupported",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: z.object({}),
+  responseSchema: z.object({ ok: z.boolean() }),
+});
+
+const baselineFallbackRegistry = defineFloorAwareVersionedRpcRegistry(
+  releasedMethodNames,
+  {
+    ...hostRpcRegistry,
+    "synthetic.baselineFallback": {
+      degrade: defineFallbackMethodDegrade<
+        typeof baselineFallbackV10,
+        typeof hostStatusV10,
+        "host.status"
+      >({
+        kind: "fallback",
+        to: { method: "host.status", major: 1, minor: 0 },
+        adaptRequest: () => ({}),
+        adaptResponse: (response) => ({
+          summary: response.ready ? "ready" : "not-ready",
+        }),
+      }),
+      1: {
+        latestMinor: 0,
+        versions: {
+          0: {
+            contract: baselineFallbackV10,
+            upgradeFromPreviousVersion: null,
+          },
+        },
+        downgradePathsFromLatest: {},
+      },
+    },
+  },
+);
+
+const baselineUnsupportedRegistry = defineFloorAwareVersionedRpcRegistry(
+  releasedMethodNames,
+  {
+    ...hostRpcRegistry,
+    "synthetic.baselineUnsupported": {
+      degrade: { kind: "unsupported" },
+      1: {
+        latestMinor: 0,
+        versions: {
+          0: {
+            contract: baselineUnsupportedV10,
+            upgradeFromPreviousVersion: null,
+          },
+        },
+        downgradePathsFromLatest: {},
+      },
+    },
+  },
+);
 
 function makeRequestContext(bearer: string): RequestContext {
   const fixture = createAuthenticatedUserFixture(undefined);
@@ -141,6 +215,17 @@ function readBaselineManifests(surfacePath: string): {
   };
 }
 
+function intersectManifests(
+  hostManifest: Readonly<Record<string, { major: number; minor: number }>>,
+  clientManifest: Readonly<Record<string, { major: number; minor: number }>>,
+): Record<string, { major: number; minor: number }> {
+  return Object.fromEntries(
+    Object.entries(hostManifest).filter(
+      ([method]) => clientManifest[method] !== undefined,
+    ),
+  );
+}
+
 describe.skipIf(baselines.length === 0)(
   "released-baseline handshake smoke (real transports vs released manifests)",
   () => {
@@ -202,6 +287,128 @@ describe.skipIf(baselines.length === 0)(
         }
       });
 
+      it(`WsRpcClient runs optional fallback against ${baseline.label}`, async () => {
+        const { unary } = readBaselineManifests(baseline.surfacePath);
+        const sockets: StubRpcWebSocket[] = [];
+        const factory: IWebSocketFactory = {
+          create(): WebSocketLike {
+            const socket = new StubRpcWebSocket();
+            sockets.push(socket);
+            return socket;
+          },
+        };
+        const ctx = makeRequestContext("token-smoke");
+        const client = new WsRpcClient<typeof baselineFallbackRegistry>({
+          registry: baselineFallbackRegistry,
+          endpoint: () => mockLocalHostEntry,
+          bearer: () => ctx.credentials,
+          requestId: () => "req-fallback-smoke",
+          webSocketFactory: factory,
+          dialTimeoutMs: 1000,
+          frameTimeoutMs: 1000,
+        });
+
+        const pending = client.request("synthetic.baselineFallback", {
+          label: "x",
+        });
+        await flush();
+        expect(sockets).toHaveLength(1);
+        const stub = sockets[0];
+        stub.fireOpen();
+        await flush();
+        expect(stub.sentFrames).toHaveLength(1);
+        const open = stub.sentFrames[0];
+        expect(open.kind).toBe("open");
+        if (open.kind === "open") {
+          expect(open.manifest["synthetic.baselineFallback"]).toBeUndefined();
+          expect(open.optionalManifest?.["synthetic.baselineFallback"]).toEqual(
+            { major: 1, minor: 0 },
+          );
+        }
+
+        // Released baselines predate the optional channel; omitted
+        // optionalManifest must be read as empty and drive the fallback path.
+        stub.fireMessage({ kind: "openAck", manifest: unary });
+        await flush();
+
+        expect(stub.sentFrames).toHaveLength(2);
+        const second = stub.sentFrames[1];
+        expect(second.kind).toBe("request");
+        if (second.kind !== "request") {
+          throw new Error("expected fallback request frame");
+        }
+        expect(second.method).toBe("host.status");
+
+        stub.fireMessage({
+          kind: "response",
+          requestId: second.requestId,
+          method: second.method,
+          schemaVersion: second.schemaVersion,
+          result: {
+            ready: true,
+            hostVersion: "0.0.0-smoke",
+            protocolVersion: { major: 1, minor: 0 },
+          },
+          error: null,
+        });
+        await expect(pending).resolves.toEqual({ summary: "ready" });
+      });
+
+      it(`WsRpcClient throws typed unsupported against ${baseline.label}`, async () => {
+        const { unary } = readBaselineManifests(baseline.surfacePath);
+        const sockets: StubRpcWebSocket[] = [];
+        const factory: IWebSocketFactory = {
+          create(): WebSocketLike {
+            const socket = new StubRpcWebSocket();
+            sockets.push(socket);
+            return socket;
+          },
+        };
+        const ctx = makeRequestContext("token-smoke");
+        const client = new WsRpcClient<typeof baselineUnsupportedRegistry>({
+          registry: baselineUnsupportedRegistry,
+          endpoint: () => mockLocalHostEntry,
+          bearer: () => ctx.credentials,
+          requestId: () => "req-unsupported-smoke",
+          webSocketFactory: factory,
+          dialTimeoutMs: 1000,
+          frameTimeoutMs: 1000,
+        });
+
+        const pending = client.request("synthetic.baselineUnsupported", {});
+        await flush();
+        expect(sockets).toHaveLength(1);
+        const stub = sockets[0];
+        stub.fireOpen();
+        await flush();
+        expect(stub.sentFrames).toHaveLength(1);
+        const open = stub.sentFrames[0];
+        expect(open.kind).toBe("open");
+        if (open.kind === "open") {
+          expect(
+            open.manifest["synthetic.baselineUnsupported"],
+          ).toBeUndefined();
+          expect(
+            open.optionalManifest?.["synthetic.baselineUnsupported"],
+          ).toEqual({ major: 1, minor: 0 });
+        }
+
+        // No optionalManifest on the old ack means the optional method is
+        // absent, not fatal to the connection.
+        stub.fireMessage({ kind: "openAck", manifest: unary });
+
+        await expect(pending).rejects.toSatisfy((error: unknown) => {
+          return (
+            error instanceof HostRpcError &&
+            error.code === "E_HOST_UNSUPPORTED" &&
+            error.fatalDetails?.upgradeGuidance?.hostShouldUpgrade === true
+          );
+        });
+        expect(stub.sentFrames.map((frame) => frame.kind)).not.toContain(
+          "request",
+        );
+      });
+
       it(`WsStreamClient reaches an open subscription against ${baseline.label}`, async () => {
         const { stream } = readBaselineManifests(baseline.surfacePath);
         // Subscribe to a method every released peer shipped with, so the test
@@ -243,8 +450,25 @@ describe.skipIf(baselines.length === 0)(
         const stub = sockets[0];
         stub.fireOpen();
         expect(stub.textSent).toHaveLength(1);
+        const open = JSON.parse(stub.textSent[0]) as {
+          readonly kind: string;
+          readonly manifest: Record<string, { major: number; minor: number }>;
+          readonly optionalManifest?: Record<
+            string,
+            { major: number; minor: number }
+          >;
+        };
+        expect(open.kind).toBe("open");
+        expect(open.manifest).toEqual(
+          buildStreamManifest(hostStreamRpcRegistry),
+        );
+        expect(open.optionalManifest).toBeUndefined();
 
-        stub.fireText({ kind: "openAck", manifest: stream });
+        const ackManifest = intersectManifests(stream, open.manifest);
+        stub.fireText({
+          kind: "openAck",
+          manifest: ackManifest,
+        });
 
         // A compatible released manifest yields a subscribe frame for the
         // shared method; incompatibility yields a fatalError frame instead.
