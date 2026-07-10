@@ -587,6 +587,7 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.certTrustDismissPending,
         RunnerHostInvoke.certTrustSystemDialog,
         RunnerHostInvoke.windowSetOverlayIcon,
+        RunnerHostInvoke.windowSetTitleBarOverlay,
         RunnerHostInvoke.displayList,
         RunnerHostInvoke.fileDropWriteTemporary,
         RunnerHostInvoke.fileDropCopyTemporary,
@@ -1398,6 +1399,23 @@ describe("RunnerIpcBridge", () => {
         },
       },
     ]);
+    windowB.sentMessages.length = 0;
+    // Tray "Settings…" / "Sign In" fire in the same no-focused-renderer
+    // situation and must reach the MRU renderer instead of no-oping.
+    expect(bridge.dispatchMenuCommand("app.openSettings")).toBe(true);
+    expect(
+      windowB.sentMessages.filter(
+        (message) => message.channel === RunnerHostEvent.menuCommand,
+      ),
+    ).toEqual([
+      {
+        channel: RunnerHostEvent.menuCommand,
+        payload: {
+          command: "app.openSettings",
+          windowId: "window-b",
+        },
+      },
+    ]);
     bridge.dispose();
   });
 
@@ -1426,7 +1444,6 @@ describe("RunnerIpcBridge", () => {
 
     expect(bridge.dispatchMenuCommand("epic.closeTab")).toBe(false);
     expect(bridge.dispatchMenuCommand("window.closeWindow")).toBe(false);
-    expect(bridge.dispatchMenuCommand("app.openSettings")).toBe(false);
     expect(windowA.sentMessages).toEqual([]);
     expect(windowB.sentMessages).toEqual([]);
 

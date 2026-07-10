@@ -128,6 +128,9 @@ export const RunnerHostInvoke = {
   certTrustDismissPending: "runnerHost:cert:dismissPending",
   certTrustSystemDialog: "runnerHost:cert:systemDialog",
   windowSetOverlayIcon: "runnerHost:window:setOverlayIcon",
+  // Windows-only: repaints the native min/max/close controls (Chromium's
+  // Window Controls Overlay) with the renderer's theme-derived colors.
+  windowSetTitleBarOverlay: "runnerHost:window:setTitleBarOverlay",
   displayList: "runnerHost:display:list",
   gpuAccelerationGet: "runnerHost:gpu:get",
   gpuAccelerationSet: "runnerHost:gpu:set",

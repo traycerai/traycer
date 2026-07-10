@@ -287,6 +287,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
             layout="stacked"
             workspaceSeed={target?.workspaceSeed.workspace ?? null}
             seedIntent={target?.workspaceSeed.intent ?? null}
+            seedIntentOverride={null}
             hostScope={{ kind: "fixed", hostId, hostClient }}
           />
           {status !== "idle" ? (

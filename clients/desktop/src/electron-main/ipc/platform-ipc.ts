@@ -7,6 +7,7 @@ import {
   handleSetOverlayIcon,
   handleSetProgressBar,
   handleSetRepresentedFilename,
+  handleSetTitleBarOverlay,
 } from "../app/window-effects";
 import {
   handleGetMetrics,
@@ -356,6 +357,13 @@ export function registerPlatformIpc(bridge: RunnerIpcBridge): void {
     RunnerHostInvoke.windowSetOverlayIcon,
     (event, image: unknown, description: unknown) => {
       handleSetOverlayIcon(event, image, description);
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.windowSetTitleBarOverlay,
+    (event, color: unknown, symbolColor: unknown) => {
+      handleSetTitleBarOverlay(event, color, symbolColor);
     },
   );
 

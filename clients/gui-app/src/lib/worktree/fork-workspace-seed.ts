@@ -25,6 +25,42 @@ export function buildForkWorkspaceSeed(input: {
   };
 }
 
+/**
+ * The A/B fork's workspace seed: each folder is REBASED to the source chat's
+ * actual working-copy directory, so the picker treats that directory as the
+ * base and the `worktree-carry` override forks a new worktree off ITS working
+ * tree. A worktree-bound folder's base becomes the origin WORKTREE PATH (not
+ * the root workspace folder — an A/B fork of a worktree-bound chat must not
+ * fork the root repo); a local folder's base stays the folder itself. Entries
+ * are emitted as `local` carriers: the base directory is the identity, and
+ * the picker's seeding override supplies the new-worktree branch selection
+ * from that base's disk truth (current branch, generated name).
+ */
+export function buildAbForkWorkspaceSeed(input: {
+  readonly binding: WorktreeBinding | null;
+  readonly stagedIntent: WorktreeIntent | null;
+}): ForkWorkspaceSeed {
+  const visible = visibleWorktreeIntent(input.binding, input.stagedIntent);
+  const intent =
+    visible === null
+      ? null
+      : {
+          entries: visible.entries.map((entry) => ({
+            kind: "local" as const,
+            workspacePath:
+              entry.kind === "import"
+                ? entry.worktreePath
+                : entry.workspacePath,
+            repoIdentifier: entry.repoIdentifier,
+            isPrimary: entry.isPrimary,
+          })),
+        };
+  return {
+    intent,
+    workspace: worktreeIntentToLandingWorkspaceSnapshot(intent),
+  };
+}
+
 export function buildForkWorkspaceSeedFromWorkspaceFolders(
   workspaceFolders: readonly string[],
 ): ForkWorkspaceSeed {

@@ -47,15 +47,19 @@ interface ExtraResourceEntry {
 
 interface ParsedDesktopPackage {
   readonly extraResources: ReadonlyArray<ExtraResourceEntry>;
+  readonly winIcon: string | undefined;
 }
 
 function readDesktopPackage(): ParsedDesktopPackage {
   const raw = readFileSync(DESKTOP_PACKAGE_JSON, "utf8");
   const parsed: {
-    build?: { extraResources?: ReadonlyArray<ExtraResourceEntry> };
+    build?: {
+      extraResources?: ReadonlyArray<ExtraResourceEntry>;
+      win?: { icon?: string };
+    };
   } = JSON.parse(raw);
   const extraResources = parsed.build?.extraResources ?? [];
-  return { extraResources };
+  return { extraResources, winIcon: parsed.build?.win?.icon };
 }
 
 describe("desktop package.json - extraResources shape", () => {
@@ -113,5 +117,9 @@ describe("desktop package.json - extraResources shape", () => {
     const cliEntry = pkg.extraResources.find((entry) => entry.to === "cli");
     expect(cliEntry).toBeTruthy();
     expect(cliEntry?.from).toBe("resources/cli");
+  });
+
+  it("embeds the Windows app icon for Start menu and desktop shortcuts", () => {
+    expect(pkg.winIcon).toBe("icon.ico");
   });
 });

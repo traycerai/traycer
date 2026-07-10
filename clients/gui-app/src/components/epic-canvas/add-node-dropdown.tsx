@@ -430,6 +430,7 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
         layout="stacked"
         workspaceSeed={workspaceSeed?.workspace ?? null}
         seedIntent={workspaceSeed?.intent ?? null}
+        seedIntentOverride={null}
         hostScope={hostScope}
       />
       <div className="flex justify-end border-t border-border/60 px-1 pt-3">
