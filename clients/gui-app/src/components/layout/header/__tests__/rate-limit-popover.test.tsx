@@ -18,6 +18,7 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { DEFAULT_ACCOUNT_CONTEXT } from "@traycer/protocol/common/schemas";
 import type { ProviderRateLimits } from "@traycer/protocol/host";
+import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import type {
   AuthenticatedUser,
@@ -69,6 +70,10 @@ type MockState = {
   // a test can assert the button subscribes to EVERY configured httpFetch
   // provider's query state, not just the first.
   lastUseHostQueriesProviderIds: ReadonlyArray<string> | null;
+  profileSelection: {
+    activeChatSettings: ChatRunSettings | null;
+    lastProfileByHarness: Readonly<Record<string, string | null>>;
+  };
 };
 
 function coldAuthUser(): MockAuthUser {
@@ -90,6 +95,10 @@ const mocks = vi.hoisted<MockState>(() => ({
   enqueue: vi.fn((..._args: unknown[]) => Promise.resolve()),
   lastUseHostQueriesOptions: null,
   lastUseHostQueriesProviderIds: null,
+  profileSelection: {
+    activeChatSettings: null,
+    lastProfileByHarness: {},
+  },
   authUser: {
     data: null,
     isPending: false,
@@ -182,7 +191,6 @@ vi.mock("@/hooks/host/use-refresh-rate-limit-usage-on-traycer-turn", () => ({
 
 import { RateLimitPopover } from "@/components/layout/header/rate-limit-popover";
 import { useRateLimitPopoverStore } from "@/stores/rate-limits/rate-limit-popover-store";
-import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 
 const NOW = Date.now();
 
@@ -431,7 +439,10 @@ function renderPopover() {
       <TooltipProvider>
         <Popover open>
           <PopoverTrigger>trigger</PopoverTrigger>
-          <RateLimitPopover onClose={onClose} />
+          <RateLimitPopover
+            onClose={onClose}
+            profileSelection={mocks.profileSelection}
+          />
         </Popover>
       </TooltipProvider>
     </QueryClientProvider>,
@@ -447,9 +458,12 @@ beforeEach(() => {
   mocks.enqueue = vi.fn((..._args: unknown[]) => Promise.resolve());
   mocks.lastUseHostQueriesOptions = null;
   mocks.lastUseHostQueriesProviderIds = null;
+  mocks.profileSelection = {
+    activeChatSettings: null,
+    lastProfileByHarness: {},
+  };
   mocks.authUser = coldAuthUser();
   useAccountContextStore.setState({ accountContext: { type: "PERSONAL" } });
-  useComposerRunSettingsStore.getState().resetForTests();
   useRateLimitPopoverStore.setState({ activeTab: "overview" });
   useRateLimitPopoverStore.persist.clearStorage();
   onClose = vi.fn();
@@ -535,7 +549,7 @@ describe("<RateLimitPopover /> rail", () => {
     expect(screen.queryByText("Pro 5x")).toBeNull();
   });
 
-  it("groups multi-profile providers and highlights the composer last-used profile", () => {
+  it("highlights the focused chat profile and the other harness's remembered profile", () => {
     const codexProfiles = [
       providerProfile({
         profileId: "ambient",
@@ -587,18 +601,21 @@ describe("<RateLimitPopover /> rail", () => {
       [resultKey("claude-code", "personal-profile")]:
         readyResult(claudeReady()),
     };
-    useComposerRunSettingsStore.getState().setGlobalRunSettings(
-      {
+    mocks.profileSelection = {
+      activeChatSettings: {
         harnessId: "codex",
         model: "gpt-5-codex",
         permissionMode: "supervised",
         reasoningEffort: null,
         serviceTier: null,
         agentMode: "regular",
-        profileId: "work-profile",
+        profileId: null,
       },
-      NOW,
-    );
+      lastProfileByHarness: {
+        codex: "work-profile",
+        claude: "personal-profile",
+      },
+    };
 
     renderPopover();
 
@@ -607,7 +624,12 @@ describe("<RateLimitPopover /> rail", () => {
     expect(screen.getAllByText("Terminal account")).toHaveLength(2);
     expect(screen.getByText("Work")).toBeTruthy();
     expect(screen.getByText("Personal")).toBeTruthy();
-    expect(screen.getAllByText("Active")).toHaveLength(1);
+    expect(screen.getAllByText("Active")).toHaveLength(2);
+    const activeRows = document.querySelectorAll('[aria-current="true"]');
+    expect(activeRows).toHaveLength(2);
+    expect(activeRows[0].textContent).toContain("Terminal account");
+    expect(activeRows[0].textContent).not.toContain("Work");
+    expect(activeRows[1].textContent).toContain("Personal");
     expect(screen.getByText("Pro 5x")).toBeTruthy();
   });
 
@@ -832,7 +854,10 @@ describe("<RateLimitPopover /> Overview progressive reveal", () => {
         <TooltipProvider>
           <Popover open>
             <PopoverTrigger>trigger</PopoverTrigger>
-            <RateLimitPopover onClose={onClose} />
+            <RateLimitPopover
+              onClose={onClose}
+              profileSelection={mocks.profileSelection}
+            />
           </Popover>
         </TooltipProvider>
       </QueryClientProvider>

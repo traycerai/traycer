@@ -26,6 +26,10 @@ export function commitSelection(
   profileId: string | null,
 ): void {
   const memory = useComposerHarnessMemoryStore.getState();
+  // Profile memory is independent of model memory. Record the explicit choice
+  // immediately so header usage previews can follow it even while the target
+  // harness's model catalog is still resolving (and before a settings emit).
+  memory.recordProfileSelection(harnessId, profileId);
   const resolved =
     modelSlug === null
       ? memory.resolveHarnessSwitch(harnessId, profileId)

@@ -56,6 +56,9 @@ describe("commitSelection - profile switch", () => {
       harnessId: "claude",
       profileId: "profile-b",
     });
+    expect(
+      useComposerHarnessMemoryStore.getState().resolveLastProfile("claude"),
+    ).toBe("profile-b");
   });
 
   it("restores the profile's own remembered model on a rail-entry profile switch", () => {

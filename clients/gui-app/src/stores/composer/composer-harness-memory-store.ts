@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
+import type { GuiHarnessId } from "@traycer/protocol/host";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import { cappedByUpdatedAt } from "@/lib/bounded-record";
 import { basePersistOptions, composerHarnessMemoryKey } from "@/lib/persist";
@@ -28,6 +29,10 @@ export interface ResolvedHarnessSwitch extends EffortTier {
 export type ResolvedModelSelection = EffortTier;
 
 interface ComposerHarnessMemoryStore {
+  // harnessId -> last explicitly selected profile. `null` is the ambient
+  // Terminal profile and is stored deliberately (rather than represented by
+  // a missing key) so it can replace an earlier managed-profile selection.
+  lastProfileByHarness: Partial<Record<GuiHarnessId, string | null>>;
   // (harnessId, profileId) -> last committed model slug, keyed via
   // `harnessProfileKey` below (bounded by harness x profile count).
   lastModelByHarness: Record<string, string>;
@@ -37,6 +42,13 @@ interface ComposerHarnessMemoryStore {
 
   // WRITE — settings.model is always resolved (onSettingsChange guarantees it).
   record: (settings: ChatRunSettings) => void;
+  // WRITE — selection commits call this immediately, before model resolution.
+  recordProfileSelection: (
+    harnessId: GuiHarnessId,
+    profileId: string | null,
+  ) => void;
+  // READ — missing memory falls back to the ambient Terminal profile.
+  resolveLastProfile: (harnessId: GuiHarnessId) => string | null;
   // READ — harness switch: last model + its record (or "" / null defaults).
   resolveHarnessSwitch: (
     harnessId: string,
@@ -89,17 +101,22 @@ export const useComposerHarnessMemoryStore =
   create<ComposerHarnessMemoryStore>()(
     persist(
       (set, get) => ({
+        lastProfileByHarness: {},
         lastModelByHarness: {},
         effortByHarnessModel: {},
         record: (settings) => {
+          // The settings callback is also a valid profile-selection signal
+          // (permission/reasoning edits can be the first committed edit on a
+          // seeded composer), so keep profile memory in the same funnel as the
+          // model/effort memory. `commitSelection` records earlier as well so a
+          // profile switch is remembered even while its model catalog loads.
+          const profileId = settings.profileId ?? null;
+          get().recordProfileSelection(settings.harnessId, profileId);
           // Mirror the sibling run-settings store: an unresolved model is not a
           // real selection. Writing an empty model would make
           // `resolveHarnessSwitch` treat it as a record and suppress the lazy
           // `globalLastRunSettings` fallback.
           if (settings.model.length === 0) return;
-          // `??` guards a pre-profile persisted `ChatRunSettings` blob (the
-          // field is missing, not `null`, on an old serialized object).
-          const profileId = settings.profileId ?? null;
           const profileKey = harnessProfileKey(settings.harnessId, profileId);
           const modelKey = harnessModelKey(
             settings.harnessId,
@@ -127,6 +144,28 @@ export const useComposerHarnessMemoryStore =
               COMPOSER_HARNESS_MEMORY_CAP,
             ),
           }));
+        },
+        recordProfileSelection: (harnessId, profileId) => {
+          const state = get();
+          // Return before `set`, not from inside its updater: the persist
+          // middleware serializes after every `set` call even when Zustand
+          // preserves state identity, so this guard also avoids a redundant
+          // localStorage write on the settings emit that follows a commit.
+          if (
+            Object.hasOwn(state.lastProfileByHarness, harnessId) &&
+            state.lastProfileByHarness[harnessId] === profileId
+          ) {
+            return;
+          }
+          set({
+            lastProfileByHarness: {
+              ...state.lastProfileByHarness,
+              [harnessId]: profileId,
+            },
+          });
+        },
+        resolveLastProfile: (harnessId) => {
+          return get().lastProfileByHarness[harnessId] ?? null;
         },
         resolveHarnessSwitch: (harnessId, profileId) => {
           const state = get();
@@ -186,6 +225,7 @@ export const useComposerHarnessMemoryStore =
         },
         resetForTests: () => {
           set({
+            lastProfileByHarness: {},
             lastModelByHarness: {},
             effortByHarnessModel: {},
           });
@@ -195,6 +235,7 @@ export const useComposerHarnessMemoryStore =
         ...basePersistOptions(composerHarnessMemoryKey(null)),
         storage: createJSONStorage(() => window.localStorage),
         partialize: (state) => ({
+          lastProfileByHarness: state.lastProfileByHarness,
           lastModelByHarness: state.lastModelByHarness,
           effortByHarnessModel: state.effortByHarnessModel,
         }),

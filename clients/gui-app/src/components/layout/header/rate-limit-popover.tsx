@@ -42,6 +42,10 @@ import {
 } from "@/hooks/rate-limits/use-configured-rate-limit-providers";
 import { useIsRateLimitQueueDraining } from "@/hooks/rate-limits/use-is-rate-limit-queue-draining";
 import { useProviderRateLimitRefresh } from "@/hooks/rate-limits/use-provider-rate-limit-refresh";
+import {
+  resolveRateLimitProfileId,
+  type RateLimitProfileSelection,
+} from "@/hooks/rate-limits/use-rate-limit-profile-selection";
 import { enqueueRateLimitFetch } from "@/lib/rate-limits/ephemeral-fetch-queue";
 import {
   formatUnavailableReason,
@@ -85,7 +89,6 @@ import {
   useRateLimitPopoverStore,
   type RateLimitPopoverTab,
 } from "@/stores/rate-limits/rate-limit-popover-store";
-import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import { cn } from "@/lib/utils";
 
 /**
@@ -179,19 +182,6 @@ function profileRateLimitLabel(profile: ProviderProfile): string {
   return profile.kind === "ambient" ? "Terminal account" : profile.label;
 }
 
-function useActiveHeaderProfileId(
-  providerId: RateLimitProviderId,
-): string | null | undefined {
-  const settings = useComposerRunSettingsStore(
-    (state) => state.globalLastRunSettings,
-  );
-  if (settings === null) return undefined;
-  if (settings.harnessId !== providerIdToGuiHarnessId(providerId)) {
-    return undefined;
-  }
-  return settings.profileId ?? null;
-}
-
 /**
  * The header rate-limit popover content: a left rail (Overview + one tab per
  * connected provider) and a detail pane, mirroring the composer's model-picker
@@ -202,8 +192,10 @@ function useActiveHeaderProfileId(
  */
 export function RateLimitPopover({
   onClose,
+  profileSelection,
 }: {
   readonly onClose: () => void;
+  readonly profileSelection: RateLimitProfileSelection;
 }): ReactNode {
   return (
     <PopoverContent
@@ -223,15 +215,20 @@ export function RateLimitPopover({
       // opting out of the initial focus is harmless and stops the stuck tooltip.
       onOpenAutoFocus={(event) => event.preventDefault()}
     >
-      <RateLimitPopoverBody onClose={onClose} />
+      <RateLimitPopoverBody
+        onClose={onClose}
+        profileSelection={profileSelection}
+      />
     </PopoverContent>
   );
 }
 
 function RateLimitPopoverBody({
   onClose,
+  profileSelection,
 }: {
   readonly onClose: () => void;
+  readonly profileSelection: RateLimitProfileSelection;
 }): ReactNode {
   const displayProviders = useVisibleRateLimitProviders();
   // Rail order matches the app's standard provider order everywhere else.
@@ -297,9 +294,17 @@ function RateLimitPopoverBody({
       />
       <div className="min-h-0 min-w-0 overflow-y-auto p-3">
         {resolvedTab === "overview" ? (
-          <RateLimitOverview railTabs={railTabs} providers={providers} />
+          <RateLimitOverview
+            railTabs={railTabs}
+            providers={providers}
+            profileSelection={profileSelection}
+          />
         ) : (
-          <RateLimitDetailPane tab={resolvedTab} providers={providers} />
+          <RateLimitDetailPane
+            tab={resolvedTab}
+            providers={providers}
+            profileSelection={profileSelection}
+          />
         )}
       </div>
     </div>
@@ -314,9 +319,11 @@ function RateLimitPopoverBody({
 function RateLimitDetailPane({
   tab,
   providers,
+  profileSelection,
 }: {
   readonly tab: Exclude<RateLimitPopoverTab, "overview">;
   readonly providers: ReadonlyArray<ConfiguredRateLimitProvider>;
+  readonly profileSelection: RateLimitProfileSelection;
 }): ReactNode {
   return tab === "traycer" ? (
     <TraycerRateLimitBlock variant="popover-detail" onReady={null} />
@@ -326,6 +333,7 @@ function RateLimitDetailPane({
       profiles={configuredProviderProfiles(providers, tab)}
       variant="popover-detail"
       onReady={null}
+      profileSelection={profileSelection}
     />
   );
 }
@@ -473,9 +481,11 @@ function RailTab({
 function RateLimitOverview({
   railTabs,
   providers,
+  profileSelection,
 }: {
   readonly railTabs: ReadonlyArray<RailTabDescriptor>;
   readonly providers: ReadonlyArray<ConfiguredRateLimitProvider>;
+  readonly profileSelection: RateLimitProfileSelection;
 }): ReactNode {
   const [readyKeys, setReadyKeys] = useState<ReadonlySet<string>>(new Set());
   const markReady = useCallback((key: string) => {
@@ -519,6 +529,7 @@ function RateLimitOverview({
                 profiles={configuredProviderProfiles(providers, tab.providerId)}
                 variant="popover-overview"
                 onReady={onReady}
+                profileSelection={profileSelection}
               />
             )}
           </div>
@@ -720,11 +731,13 @@ function RateLimitProviderBlock({
   profiles,
   variant,
   onReady,
+  profileSelection,
 }: {
   readonly providerId: RateLimitProviderId;
   readonly profiles: ReadonlyArray<ProviderProfile>;
   readonly variant: PopoverBlockVariant;
   readonly onReady: (() => void) | null;
+  readonly profileSelection: RateLimitProfileSelection;
 }): ReactNode {
   if (profiles.length > 1) {
     return (
@@ -733,6 +746,7 @@ function RateLimitProviderBlock({
         profiles={profiles}
         variant={variant}
         onReady={onReady}
+        profileSelection={profileSelection}
       />
     );
   }
@@ -846,13 +860,19 @@ function MultiProfileRateLimitProviderBlock({
   profiles,
   variant,
   onReady,
+  profileSelection,
 }: {
   readonly providerId: RateLimitProviderId;
   readonly profiles: ReadonlyArray<ProviderProfile>;
   readonly variant: PopoverBlockVariant;
   readonly onReady: (() => void) | null;
+  readonly profileSelection: RateLimitProfileSelection;
 }): ReactNode {
-  const activeProfileId = useActiveHeaderProfileId(providerId);
+  const activeProfileId = resolveRateLimitProfileId(
+    profileSelection,
+    providerId,
+    profiles,
+  );
   const rows = profiles.filter(profileLoggedInForUsage);
 
   useEffect(() => {
@@ -880,10 +900,7 @@ function MultiProfileRateLimitProviderBlock({
               providerId={providerId}
               profile={profile}
               profileId={rowProfileId}
-              active={
-                activeProfileId !== undefined &&
-                activeProfileId === rowProfileId
-              }
+              active={activeProfileId === rowProfileId}
               variant={variant}
             />
           );

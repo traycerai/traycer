@@ -62,6 +62,64 @@ describe("composer harness memory store", () => {
     });
   });
 
+  it("remembers the last selected profile independently per harness, including ambient", () => {
+    const memory = useComposerHarnessMemoryStore.getState();
+    memory.recordProfileSelection("codex", "work-profile");
+    memory.recordProfileSelection("claude", "personal-profile");
+
+    expect(memory.resolveLastProfile("codex")).toBe("work-profile");
+    expect(memory.resolveLastProfile("claude")).toBe("personal-profile");
+
+    memory.recordProfileSelection("codex", null);
+    expect(memory.resolveLastProfile("codex")).toBeNull();
+    expect(memory.resolveLastProfile("cursor")).toBeNull();
+    expect(
+      useComposerHarnessMemoryStore.getState().lastProfileByHarness,
+    ).toEqual({
+      codex: null,
+      claude: "personal-profile",
+    });
+  });
+
+  it("overwrites one bounded slot per harness instead of accumulating profile ids", () => {
+    const memory = useComposerHarnessMemoryStore.getState();
+    for (let index = 0; index < 100; index += 1) {
+      memory.recordProfileSelection("codex", `profile-${index}`);
+    }
+
+    expect(
+      Object.keys(
+        useComposerHarnessMemoryStore.getState().lastProfileByHarness,
+      ),
+    ).toEqual(["codex"]);
+    expect(memory.resolveLastProfile("codex")).toBe("profile-99");
+  });
+
+  it("does not publish an identical profile selection twice", () => {
+    let updates = 0;
+    const unsubscribe = useComposerHarnessMemoryStore.subscribe(() => {
+      updates += 1;
+    });
+    const memory = useComposerHarnessMemoryStore.getState();
+
+    memory.recordProfileSelection("codex", "work-profile");
+    memory.recordProfileSelection("codex", "work-profile");
+
+    unsubscribe();
+    expect(updates).toBe(1);
+  });
+
+  it("records a confirmed settings profile in the per-harness profile memory", () => {
+    useComposerHarnessMemoryStore.getState().record({
+      ...CLAUDE_SETTINGS,
+      profileId: "work-profile",
+    });
+
+    expect(
+      useComposerHarnessMemoryStore.getState().resolveLastProfile("claude"),
+    ).toBe("work-profile");
+  });
+
   it("returns empty defaults for a harness with no record", () => {
     expect(
       useComposerHarnessMemoryStore
@@ -136,7 +194,7 @@ describe("composer harness memory store", () => {
       .getState()
       .record({ ...CLAUDE_SETTINGS, model: "" });
 
-    // The empty-model write is a no-op: no record is stored...
+    // The empty model is not stored in model memory...
     expect(useComposerHarnessMemoryStore.getState().lastModelByHarness).toEqual(
       {},
     );
@@ -239,6 +297,11 @@ describe("composer harness memory store", () => {
     expect(useComposerHarnessMemoryStore.getState().lastModelByHarness).toEqual(
       { claude: "sonnet-4.5" },
     );
+    // Pre-profile persisted blobs have no profile-memory field; Zustand's
+    // merge preserves the store default instead of producing `undefined`.
+    expect(
+      useComposerHarnessMemoryStore.getState().lastProfileByHarness,
+    ).toEqual({});
 
     clearAndResetPersistedStore({
       store: useComposerHarnessMemoryStore,
@@ -256,6 +319,9 @@ describe("composer harness memory store", () => {
     expect(useComposerHarnessMemoryStore.getState().lastModelByHarness).toEqual(
       {},
     );
+    expect(
+      useComposerHarnessMemoryStore.getState().lastProfileByHarness,
+    ).toEqual({});
   });
 
   it("keeps two profiles of the same harness on independent last-model memory", () => {
