@@ -64,6 +64,7 @@ function renderCard(
         isActive
         onSubmit={onSubmit}
         onSkip={onSkip}
+        onFork={null}
       />
     </TooltipProvider>,
   );
@@ -429,6 +430,7 @@ describe("PendingInterviewCard keyboard navigation", () => {
           isActive={false}
           onSubmit={vi.fn()}
           onSkip={null}
+          onFork={null}
         />
       </TooltipProvider>,
     );
@@ -450,6 +452,7 @@ describe("PendingInterviewCard keyboard navigation", () => {
           isActive
           onSubmit={vi.fn()}
           onSkip={null}
+          onFork={null}
         />
       </TooltipProvider>,
     );

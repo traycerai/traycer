@@ -88,8 +88,11 @@ export function createServiceInstallLifecycle(
       // Only stop a host we actually saw running. A
       // registered-but-stopped service has no process to evict, and
       // `not-installed` means there's no service to talk to at all -
-      // we'll register it post-swap if bootstrap was requested.
-      if (status.state === "running") {
+      // we'll register it post-swap if bootstrap was requested. Windows is
+      // the exception: its stop also force-kills stray host processes whose
+      // open handles inside the install dir would fail the swap rename, so
+      // it runs even when the service wasn't observed running.
+      if (status.state === "running" || process.platform === "win32") {
         await controller.stop(label);
         state.stoppedBeforeSwap = true;
       }

@@ -17,6 +17,7 @@ export const RPC_ERROR_CODES = [
   "INCOMPATIBLE",
   "UNAUTHORIZED",
   "FORBIDDEN",
+  "E_HOST_UNSUPPORTED",
   "WORKTREE_BUSY",
   "WORKTREE_REBIND_BLOCKED",
   "WORKTREE_SETUP_FAILED",
@@ -135,6 +136,56 @@ export type DowngradePath<
       }
     : never;
 
+export type UnsupportedMethodDegrade = {
+  readonly kind: "unsupported";
+};
+
+export type FallbackMethodDegrade<
+  Canonical extends AnyRpcContract,
+  Fallback extends AnyRpcContract,
+  FloorMethod extends string,
+> = {
+  readonly kind: "fallback";
+  readonly to: {
+    readonly method: FloorMethod;
+    readonly major: Fallback["schemaVersion"]["major"];
+    readonly minor: Fallback["schemaVersion"]["minor"];
+  };
+  readonly adaptRequest: (request: RequestOf<Canonical>) => RequestOf<Fallback>;
+  readonly adaptResponse: (
+    response: ResponseOf<Fallback>,
+  ) => ResponseOf<Canonical>;
+};
+
+export type MethodDegradeDeclaration<
+  Canonical extends AnyRpcContract = AnyRpcContract,
+  Fallback extends AnyRpcContract = AnyRpcContract,
+  FloorMethod extends string = string,
+> =
+  | UnsupportedMethodDegrade
+  | FallbackMethodDegrade<Canonical, Fallback, FloorMethod>;
+
+type ErasedFallbackMethodDegrade<
+  Canonical extends AnyRpcContract,
+  FloorMethod extends string,
+> = {
+  readonly kind: "fallback";
+  readonly to: {
+    readonly method: FloorMethod;
+    readonly major: number;
+    readonly minor: number;
+  };
+  readonly adaptRequest: (request: RequestOf<Canonical>) => unknown;
+  readonly adaptResponse: (response: never) => ResponseOf<Canonical>;
+};
+
+type ErasedMethodDegradeDeclaration<
+  Canonical extends AnyRpcContract,
+  FloorMethod extends string,
+> =
+  | UnsupportedMethodDegrade
+  | ErasedFallbackMethodDegrade<Canonical, FloorMethod>;
+
 /**
  * Erased bridge shape used by registry storage and traversal internals.
  *
@@ -171,7 +222,10 @@ export type VersionEntry<
   readonly upgradeFromPreviousVersion: Upgrade;
 };
 
-export type AnyVersionEntry = VersionEntry<AnyRpcContract, AnyUpgradePath | null>;
+export type AnyVersionEntry = VersionEntry<
+  AnyRpcContract,
+  AnyUpgradePath | null
+>;
 
 type NumberKeys<RecordType> = keyof RecordType & number;
 
@@ -200,7 +254,9 @@ type AnyMajorVersionLine = MajorVersionLine<
  */
 export type UncheckedMethodVersionRegistry = Readonly<
   Record<number, AnyMajorVersionLine>
->;
+> & {
+  readonly degrade?: MethodDegradeDeclaration;
+};
 
 /**
  * Validated method registry required by the traversal helpers.
@@ -217,10 +273,9 @@ export type MethodVersionRegistry<
   Registry extends UncheckedMethodVersionRegistry =
     UncheckedMethodVersionRegistry,
   Latest = unknown,
-> = Registry &
-  {
-    readonly [validatedMethodVersionRegistryBrand]: Latest;
-  };
+> = Registry & {
+  readonly [validatedMethodVersionRegistryBrand]: Latest;
+};
 
 /**
  * Raw multi-method registry shape before validation.
@@ -268,14 +323,16 @@ type DigitsLessThan = {
   "9": "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8";
 };
 
-type DigitLessThan<Left extends string, Right extends string> =
-  Left extends keyof DigitsLessThan
-    ? Right extends keyof DigitsLessThan
-      ? Left extends DigitsLessThan[Right]
-        ? true
-        : false
+type DigitLessThan<
+  Left extends string,
+  Right extends string,
+> = Left extends keyof DigitsLessThan
+  ? Right extends keyof DigitsLessThan
+    ? Left extends DigitsLessThan[Right]
+      ? true
       : false
-    : false;
+    : false
+  : false;
 
 // Recursion depth is bounded by the number of decimal digits, not the value.
 type LengthTuple<
@@ -296,31 +353,32 @@ type TupleShorterThan<
     ? true
     : false;
 
-type SameLengthLessThan<Left extends string, Right extends string> =
-  Left extends `${infer LeftHead}${infer LeftTail}`
-    ? Right extends `${infer RightHead}${infer RightTail}`
-      ? LeftHead extends RightHead
-        ? SameLengthLessThan<LeftTail, RightTail>
-        : DigitLessThan<LeftHead, RightHead>
-      : false
-    : false;
+type SameLengthLessThan<
+  Left extends string,
+  Right extends string,
+> = Left extends `${infer LeftHead}${infer LeftTail}`
+  ? Right extends `${infer RightHead}${infer RightTail}`
+    ? LeftHead extends RightHead
+      ? SameLengthLessThan<LeftTail, RightTail>
+      : DigitLessThan<LeftHead, RightHead>
+    : false
+  : false;
 
-type IsLessThan<Left extends number, Right extends number> =
-  Left extends Right
-    ? false
-    : `${Left}` extends infer LeftString extends string
-      ? `${Right}` extends infer RightString extends string
-        ? LengthTuple<LeftString> extends infer LeftLength extends unknown[]
-          ? LengthTuple<RightString> extends infer RightLength extends unknown[]
-            ? TupleShorterThan<LeftLength, RightLength> extends true
-              ? true
-              : TupleShorterThan<RightLength, LeftLength> extends true
-                ? false
-                : SameLengthLessThan<LeftString, RightString>
-            : false
+type IsLessThan<Left extends number, Right extends number> = Left extends Right
+  ? false
+  : `${Left}` extends infer LeftString extends string
+    ? `${Right}` extends infer RightString extends string
+      ? LengthTuple<LeftString> extends infer LeftLength extends unknown[]
+        ? LengthTuple<RightString> extends infer RightLength extends unknown[]
+          ? TupleShorterThan<LeftLength, RightLength> extends true
+            ? true
+            : TupleShorterThan<RightLength, LeftLength> extends true
+              ? false
+              : SameLengthLessThan<LeftString, RightString>
           : false
         : false
-      : false;
+      : false
+    : false;
 
 type LowerNumbers<
   Values extends number,
@@ -342,10 +400,9 @@ type AllOtherNumbersAreLessThan<
   ? false
   : true;
 
-type HighestNumber<
-  Values extends number,
-  AllValues extends number = Values,
-> = [Values] extends [never]
+type HighestNumber<Values extends number, AllValues extends number = Values> = [
+  Values,
+] extends [never]
   ? never
   : Values extends infer Candidate extends number
     ? AllOtherNumbersAreLessThan<Candidate, AllValues> extends true
@@ -391,29 +448,39 @@ type PreviousInstalledContract<
   Registry extends UncheckedMethodVersionRegistry,
   Major extends NumberKeys<Registry>,
   Minor extends NumberKeys<Registry[Major]["versions"]>,
-> = PreviousInstalledMinor<Registry[Major]["versions"], Minor> extends infer PreviousMinor
-  ? [PreviousMinor] extends [never]
-    ? PreviousInstalledMajor<Registry, Major> extends infer PreviousMajor
-      ? [PreviousMajor] extends [never]
-        ? never
-        : PreviousMajor extends NumberKeys<Registry>
-          ? LatestContractForLine<Registry[PreviousMajor]>
-          : never
-      : never
-    : PreviousMinor extends NumberKeys<Registry[Major]["versions"]>
-      ? ContractAtVersion<Registry, Major, PreviousMinor>
-      : never
-  : never;
+> =
+  PreviousInstalledMinor<
+    Registry[Major]["versions"],
+    Minor
+  > extends infer PreviousMinor
+    ? [PreviousMinor] extends [never]
+      ? PreviousInstalledMajor<Registry, Major> extends infer PreviousMajor
+        ? [PreviousMajor] extends [never]
+          ? never
+          : PreviousMajor extends NumberKeys<Registry>
+            ? LatestContractForLine<Registry[PreviousMajor]>
+            : never
+        : never
+      : PreviousMinor extends NumberKeys<Registry[Major]["versions"]>
+        ? ContractAtVersion<Registry, Major, PreviousMinor>
+        : never
+    : never;
 
 type ValidateVersionEntry<
   Method extends string,
   Registry extends UncheckedMethodVersionRegistry,
   Major extends NumberKeys<Registry>,
   Minor extends NumberKeys<Registry[Major]["versions"]>,
-> = Registry[Major]["versions"][Minor] extends infer Entry extends AnyVersionEntry
+> = Registry[Major]["versions"][Minor] extends infer Entry extends
+  AnyVersionEntry
   ? Entry["contract"] extends infer Contract extends AnyRpcContract
     ? {
-        readonly contract: ContractForRegistrySlot<Method, Major, Minor, Contract>;
+        readonly contract: ContractForRegistrySlot<
+          Method,
+          Major,
+          Minor,
+          Contract
+        >;
         readonly upgradeFromPreviousVersion: PreviousInstalledContract<
           Registry,
           Major,
@@ -437,12 +504,9 @@ type ValidateLineVersions<
   Registry extends UncheckedMethodVersionRegistry,
   Major extends NumberKeys<Registry>,
 > = {
-  readonly [Minor in NumberKeys<Registry[Major]["versions"]>]: ValidateVersionEntry<
-    Method,
-    Registry,
-    Major,
-    Minor
-  >;
+  readonly [Minor in NumberKeys<
+    Registry[Major]["versions"]
+  >]: ValidateVersionEntry<Method, Registry, Major, Minor>;
 };
 
 type ValidateLineDowngrades<
@@ -465,21 +529,22 @@ type ValidateMajorVersionLine<
   Method extends string,
   Registry extends UncheckedMethodVersionRegistry,
   Major extends NumberKeys<Registry>,
-> = Registry[Major] extends MajorVersionLine<
-  infer Versions,
-  infer _LatestMinor,
-  infer Downgrades
->
-  ? {
-      readonly latestMinor: HighestNumber<NumberKeys<Versions>>;
-      readonly versions: ValidateLineVersions<Method, Registry, Major>;
-      readonly downgradePathsFromLatest: ValidateLineDowngrades<
-        Registry,
-        Major,
-        Downgrades
-      >;
-    }
-  : never;
+> =
+  Registry[Major] extends MajorVersionLine<
+    infer Versions,
+    infer _LatestMinor,
+    infer Downgrades
+  >
+    ? {
+        readonly latestMinor: HighestNumber<NumberKeys<Versions>>;
+        readonly versions: ValidateLineVersions<Method, Registry, Major>;
+        readonly downgradePathsFromLatest: ValidateLineDowngrades<
+          Registry,
+          Major,
+          Downgrades
+        >;
+      }
+    : never;
 
 type ValidateMethodVersionRegistry<
   Method extends string,
@@ -509,6 +574,20 @@ export type ValidateVersionedRpcRegistry<
     Method,
     Registry[Method]
   >;
+};
+
+export type ValidateVersionedRpcRegistryDegrades<
+  Registry extends UncheckedVersionedRpcRegistry,
+  FloorMethod extends string,
+> = {
+  readonly [Method in keyof Registry & string]: Method extends FloorMethod
+    ? unknown
+    : {
+        readonly degrade: ErasedMethodDegradeDeclaration<
+          LatestContractFromUncheckedRegistry<Registry[Method]>,
+          FloorMethod
+        >;
+      };
 };
 
 type RegistryContractValue<Registry extends MethodVersionRegistry> = {

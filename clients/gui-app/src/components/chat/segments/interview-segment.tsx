@@ -22,6 +22,10 @@ interface InterviewSegmentProps {
   questions: ReadonlyArray<InterviewQuestion>;
   answers: ReadonlyArray<InterviewAnswer>;
   error: string | null;
+  // The question was carried into a Cross Question fork without being
+  // answered. Render as inline reference — open by default with
+  // carried-from-the-original copy — rather than "Answered 0 of N".
+  forkedWithoutAnswer: boolean;
 }
 
 /**
@@ -30,16 +34,20 @@ interface InterviewSegmentProps {
  * the question doesn't appear twice.
  */
 export function InterviewSegment(props: InterviewSegmentProps) {
-  const { findUnitId, status, questions, answers, error } = props;
-  const [open, setOpen] = useState(false);
+  const { findUnitId, status, questions, answers, error, forkedWithoutAnswer } =
+    props;
+  const [open, setOpen] = useState(forkedWithoutAnswer);
   const measuredOpenChange = useChatMeasuredOpenChange(setOpen);
 
   if (status === "streaming") return null;
 
-  const summary =
+  const resolvedSummary =
     status === "completed"
       ? answeredQuestionsSummaryFromCounts(questions, answers)
       : "Question failed";
+  const summary = forkedWithoutAnswer
+    ? "Question carried from the original chat — not answered here"
+    : resolvedSummary;
 
   return (
     <Collapsible

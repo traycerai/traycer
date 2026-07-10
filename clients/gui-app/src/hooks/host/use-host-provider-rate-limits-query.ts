@@ -41,6 +41,7 @@ import {
  */
 export function useHostProviderRateLimitsQuery(
   providerId: RateLimitProviderId,
+  profileId: string | null,
 ) {
   const client = useHostClient();
   return useHostQueryWithResponseMap<
@@ -50,7 +51,7 @@ export function useHostProviderRateLimitsQuery(
   >({
     client,
     cacheKeyIdentity: undefined,
-    ...providerRateLimitQueryOptions(providerId),
+    ...providerRateLimitQueryOptions(providerId, profileId),
     mapResponse: mapResponseToProviderRateLimitEnvelope,
   });
 }

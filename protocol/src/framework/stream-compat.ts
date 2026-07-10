@@ -7,9 +7,9 @@ import {
   type IncompatibleMethodDetails,
   type FatalErrorDetails,
 } from "@traycer/protocol/framework/ws-protocol";
+import { buildConnectionManifest } from "@traycer/protocol/framework/capability-manifest";
 import {
   buildIncompatibleReason,
-  canonicalForMethodVersionLine,
   collectManifestMethods,
   deriveUpgradeGuidance,
   missingMethodDetail,
@@ -26,11 +26,7 @@ import {
 export function buildStreamManifest(
   registry: VersionedStreamRpcRegistry,
 ): ConnectionManifest {
-  const manifest: Record<string, SchemaVersion> = {};
-  for (const method of Object.keys(registry)) {
-    manifest[method] = canonicalForMethodVersionLine(registry[method], method);
-  }
-  return manifest;
+  return buildConnectionManifest(registry);
 }
 
 /**

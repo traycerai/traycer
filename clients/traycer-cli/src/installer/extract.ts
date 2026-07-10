@@ -178,36 +178,40 @@ function unsafeEntryReason(
 
 // Locate the host executable inside a staged install directory.
 // Strategy:
-//   1. Look for `traycer-host` (or `traycer-host.exe` on Windows)
-//      at the top level.
-//   2. Otherwise pick the first executable file at the top level.
-//   3. Otherwise descend one level - registry tarballs typically wrap
+//   1. Look for an expected executable name at the top level.
+//   2. Otherwise descend one level - registry tarballs typically wrap
 //      the binary in a versioned subdirectory.
 export async function resolveHostExecutable(
   installDir: string,
   platform: NodeJS.Platform,
 ): Promise<string> {
-  const expectedName =
-    platform === "win32" ? "traycer-host.exe" : "traycer-host";
-  const direct = join(installDir, expectedName);
-  if (await exists(direct)) return direct;
+  // Production ships a real `traycer-host.exe` SEA binary; the `make
+  // dev-desktop` orchestrator stages a `traycer-host.cmd` wrapper that execs
+  // `node <bundle>` (Windows has no shebang, so a script wrapper is a `.cmd`,
+  // not the extensionless file the POSIX dev wrapper uses). Accept both, exe
+  // first.
+  const expectedNames =
+    platform === "win32"
+      ? ["traycer-host.exe", "traycer-host.cmd", "traycer-host.bat"]
+      : ["traycer-host"];
+
+  for (const name of expectedNames) {
+    const direct = join(installDir, name);
+    if (await exists(direct)) return direct;
+  }
 
   const entries = await readdir(installDir, { withFileTypes: true });
   for (const entry of entries) {
-    if (entry.isFile() && entry.name === expectedName) {
-      return join(installDir, entry.name);
-    }
-  }
-  for (const entry of entries) {
-    if (entry.isDirectory()) {
-      const nested = join(installDir, entry.name, expectedName);
+    if (!entry.isDirectory()) continue;
+    for (const name of expectedNames) {
+      const nested = join(installDir, entry.name, name);
       if (await exists(nested)) return nested;
     }
   }
   throw cliError({
     code: CLI_ERROR_CODES.HOST_INSTALL_FAILED,
-    message: `host install: expected executable '${expectedName}' not found in staged install at ${installDir}`,
-    details: { installDir, expectedName },
+    message: `host install: expected executable '${expectedNames.join("' / '")}' not found in staged install at ${installDir}`,
+    details: { installDir, expectedNames },
     exitCode: 1,
   });
 }

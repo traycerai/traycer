@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, rm } from "node:fs/promises";
 import type { Environment } from "../runner/environment";
 import { config } from "../config";
 import { createCliLogger, errorFromUnknown } from "../logger";
@@ -83,6 +83,23 @@ export async function readHostPidMetadata(
     websocketUrl: obj.websocketUrl,
     startedAt: obj.startedAt,
   };
+}
+
+/**
+ * Purge the published pid metadata on the host's behalf.
+ *
+ * The writer contract says the HOST removes pid.json on graceful shutdown -
+ * but a Windows stop is a `taskkill /T /F`, which never lets the host's
+ * shutdown handler run, so the file survives every deliberate stop there.
+ * That matters because "pid.json present but endpoint dead" is the signal
+ * clients read as *the host died unexpectedly* (the desktop's health
+ * watchdog auto-respawns on it); a deliberately stopped host must leave no
+ * metadata behind or it gets resurrected against the user's intent.
+ */
+export async function removeHostPidMetadata(
+  environment: Environment | undefined,
+): Promise<void> {
+  await rm(hostPidMetadataPath(environment), { force: true });
 }
 
 export function isValidLocalHostWebsocketUrl(websocketUrl: string): boolean {

@@ -5,6 +5,9 @@ interface HarnessModelPickerState {
   readonly open: boolean;
   readonly query: string;
   readonly activeProviderId: ProviderId;
+  /** Browsed rail entry's profile within `activeProviderId` - `null` for a
+   *  single/no-profile harness or the ambient entry of a split one. */
+  readonly activeProfileId: string | null;
   readonly activeRowId: string;
   readonly hoveredRowId: string;
   readonly openVersion: number;
@@ -15,11 +18,16 @@ type HarnessModelPickerStateAction =
       readonly type: "setOpen";
       readonly open: boolean;
       readonly selectedProviderId: ProviderId;
+      readonly selectedProfileId: string | null;
     }
   | { readonly type: "closeOnly" }
   | { readonly type: "closeForDisabled" }
   | { readonly type: "setQuery"; readonly query: string }
-  | { readonly type: "setActiveProviderId"; readonly providerId: ProviderId }
+  | {
+      readonly type: "setActiveRailEntry";
+      readonly providerId: ProviderId;
+      readonly profileId: string | null;
+    }
   | { readonly type: "setActiveRowId"; readonly rowId: string }
   | { readonly type: "setHoveredRowId"; readonly rowId: string };
 
@@ -27,7 +35,10 @@ interface HarnessModelPickerStateController extends HarnessModelPickerState {
   readonly visibleOpen: boolean;
   readonly handleOpenChange: (next: boolean) => void;
   readonly handleQueryChange: (next: string) => void;
-  readonly setActiveProviderId: (providerId: ProviderId) => void;
+  readonly setActiveRailEntry: (
+    providerId: ProviderId,
+    profileId: string | null,
+  ) => void;
   readonly setActiveRowId: (rowId: string) => void;
   readonly setHoveredRowId: (rowId: string) => void;
   readonly closeOnly: () => void;
@@ -35,11 +46,12 @@ interface HarnessModelPickerStateController extends HarnessModelPickerState {
 
 export function useHarnessModelPickerState(
   selectedProviderId: ProviderId,
+  selectedProfileId: string | null,
   disabled: boolean,
 ): HarnessModelPickerStateController {
   const [state, dispatch] = useReducer(
     harnessModelPickerStateReducer,
-    selectedProviderId,
+    { selectedProviderId, selectedProfileId },
     initialHarnessModelPickerState,
   );
 
@@ -55,16 +67,24 @@ export function useHarnessModelPickerState(
         dispatch({ type: "closeForDisabled" });
         return;
       }
-      dispatch({ type: "setOpen", open: next, selectedProviderId });
+      dispatch({
+        type: "setOpen",
+        open: next,
+        selectedProviderId,
+        selectedProfileId,
+      });
     },
-    [disabled, selectedProviderId],
+    [disabled, selectedProviderId, selectedProfileId],
   );
   const handleQueryChange = useCallback((next: string) => {
     dispatch({ type: "setQuery", query: next });
   }, []);
-  const setActiveProviderId = useCallback((providerId: ProviderId) => {
-    dispatch({ type: "setActiveProviderId", providerId });
-  }, []);
+  const setActiveRailEntry = useCallback(
+    (providerId: ProviderId, profileId: string | null) => {
+      dispatch({ type: "setActiveRailEntry", providerId, profileId });
+    },
+    [],
+  );
   const setActiveRowId = useCallback((rowId: string) => {
     dispatch({ type: "setActiveRowId", rowId });
   }, []);
@@ -80,20 +100,22 @@ export function useHarnessModelPickerState(
     visibleOpen: state.open && !disabled,
     handleOpenChange,
     handleQueryChange,
-    setActiveProviderId,
+    setActiveRailEntry,
     setActiveRowId,
     setHoveredRowId,
     closeOnly,
   };
 }
 
-function initialHarnessModelPickerState(
-  selectedProviderId: ProviderId,
-): HarnessModelPickerState {
+function initialHarnessModelPickerState(seed: {
+  selectedProviderId: ProviderId;
+  selectedProfileId: string | null;
+}): HarnessModelPickerState {
   return {
     open: false,
     query: "",
-    activeProviderId: selectedProviderId,
+    activeProviderId: seed.selectedProviderId,
+    activeProfileId: seed.selectedProfileId,
     activeRowId: "",
     hoveredRowId: "",
     openVersion: 0,
@@ -113,6 +135,7 @@ function harnessModelPickerStateReducer(
           openVersion: state.openVersion + 1,
           query: "",
           activeProviderId: action.selectedProviderId,
+          activeProfileId: action.selectedProfileId,
           hoveredRowId: "",
           activeRowId: "",
         };
@@ -138,8 +161,12 @@ function harnessModelPickerStateReducer(
         query: action.query,
         activeRowId: "",
       };
-    case "setActiveProviderId":
-      return { ...state, activeProviderId: action.providerId };
+    case "setActiveRailEntry":
+      return {
+        ...state,
+        activeProviderId: action.providerId,
+        activeProfileId: action.profileId,
+      };
     case "setActiveRowId":
       return { ...state, activeRowId: action.rowId };
     case "setHoveredRowId":

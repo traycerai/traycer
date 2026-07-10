@@ -5,6 +5,7 @@ import type {
   WorktreeIntent,
 } from "@traycer/protocol/host/worktree-schemas";
 import {
+  buildAbForkWorkspaceSeed,
   buildForkWorkspaceSeed,
   buildForkWorkspaceSeedFromWorkspaceFolders,
   visibleWorktreeIntent,
@@ -95,6 +96,58 @@ describe("visibleWorktreeIntent", () => {
       "/repo-a",
       "/repo-c",
     ]);
+  });
+});
+
+describe("buildAbForkWorkspaceSeed", () => {
+  it("rebases a worktree-bound folder to the origin worktree path", () => {
+    const seed = buildAbForkWorkspaceSeed({
+      binding: {
+        entries: [
+          bindingEntry({
+            workspacePath: "/Users/me/traycer",
+            mode: "worktree",
+            worktreePath: "/wt/traycer-rugged-panda",
+            branch: "traycer-rugged-panda",
+          }),
+        ],
+      },
+      stagedIntent: null,
+    });
+
+    // The origin WORKTREE becomes the base folder: the A/B fork must fork off
+    // the working copy the source chat actually runs in, not the root repo.
+    expect(seed.intent).toEqual({
+      entries: [
+        {
+          kind: "local",
+          workspacePath: "/wt/traycer-rugged-panda",
+          repoIdentifier: { owner: "traycerai", repo: "traycer" },
+          isPrimary: true,
+        },
+      ],
+    });
+    expect(seed.workspace.folders).toEqual(["/wt/traycer-rugged-panda"]);
+  });
+
+  it("keeps a locally-bound folder as its own base", () => {
+    const seed = buildAbForkWorkspaceSeed({
+      binding: {
+        entries: [bindingEntry({ workspacePath: "/Users/me/traycer" })],
+      },
+      stagedIntent: null,
+    });
+
+    expect(seed.intent).toEqual({
+      entries: [
+        {
+          kind: "local",
+          workspacePath: "/Users/me/traycer",
+          repoIdentifier: { owner: "traycerai", repo: "traycer" },
+          isPrimary: true,
+        },
+      ],
+    });
   });
 });
 

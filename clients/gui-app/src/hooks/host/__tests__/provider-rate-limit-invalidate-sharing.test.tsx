@@ -28,8 +28,10 @@ describe("invalidateQueries keeps a mounted useHostProviderRateLimitsQuery obser
 
   it("flips isFetching true on the observer while the invalidation-triggered refetch is in flight", async () => {
     const harness = createRateLimitSharingHarness();
-    const { method, params, options } =
-      providerRateLimitQueryOptions("openrouter");
+    const { method, params, options } = providerRateLimitQueryOptions(
+      "openrouter",
+      null,
+    );
     const rendered = renderHook(
       () =>
         useHostQuery({
@@ -51,7 +53,11 @@ describe("invalidateQueries keeps a mounted useHostProviderRateLimitsQuery obser
       queryKey: queryKeys.hostMethod<HostRpcRegistry, "host.getRateLimitUsage">(
         mockLocalHostEntry.hostId,
         "host.getRateLimitUsage",
-        { accountContext: DEFAULT_ACCOUNT_CONTEXT, providerId: "openrouter" },
+        {
+          accountContext: DEFAULT_ACCOUNT_CONTEXT,
+          providerId: "openrouter",
+          profileId: null,
+        },
       ),
     });
 

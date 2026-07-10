@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
+import { constants } from "node:fs";
+import { access } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { log } from "../app/logger";
+import { resolveBundledCliPath } from "../cli/cli-discovery";
 import { RunnerHostInvoke } from "../../ipc-contracts/ipc-channels";
 import {
   getActiveEnvironment,
@@ -143,12 +147,22 @@ async function ensureHost(
   const hostOwnsLoginItem = await hostManagesHostLoginItem();
 
   // No `--environment` (the CLI resolves its slot from config.environment).
-  // Desktop does not pass a host source; the CLI owns host source resolution.
+  //
+  // Host source: on POSIX the per-user slot CLI is a symlink into the app
+  // bundle, so `process.execPath` resolves beside the bundled host archive and
+  // the CLI finds it itself - we pass nothing. On Windows symlinks need
+  // privilege, so the slot CLI is a COPY outside the bundle; the CLI's
+  // `resolveBundledHostArchive` can't see the sibling archive and would fall
+  // back to the registry (which publishes no win32 asset for dogfood builds).
+  // Point it at the bundled archive explicitly there.
+  const bundledHostFrom = await resolveWindowsBundledHostArchive();
+
   const args = [
     "host",
     "ensure",
     ...(force ? ["--force"] : []),
     ...(hostOwnsLoginItem ? ["--no-service-register"] : []),
+    ...(bundledHostFrom !== null ? ["--from", bundledHostFrom] : []),
   ];
 
   let payload: unknown;
@@ -297,6 +311,31 @@ async function ensureHost(
 // ours and leave `getSnapshot()` momentarily stale. Returns the `host-busy`
 // result when a reachable snapshot was surfaced, else `null` so the caller
 // routes to normal recovery / restart.
+// Resolve the host-runtime archive bundled beside the desktop's CLI binary
+// (`resources/cli/<platform>-<arch>/host-runtime-<platform>-<arch>.tar.gz`,
+// staged by scripts/desktop-install-cloud.js). Windows-only: on POSIX the slot
+// CLI is a symlink into the bundle, so the CLI resolves the sibling archive
+// itself and we must NOT override its source resolution. Returns null when
+// there is no packaged archive (dev builds, CLI-only installs).
+async function resolveWindowsBundledHostArchive(): Promise<string | null> {
+  if (process.platform !== "win32") return null;
+  const bundledCli = await resolveBundledCliPath();
+  if (bundledCli === null) return null;
+  // No native Windows arm64 host - arm64 runs the x64 runtime (mirrors
+  // resolveBundledHostArchive in the CLI).
+  const arch = process.arch === "arm64" ? "x64" : process.arch;
+  const archive = join(
+    dirname(bundledCli),
+    `host-runtime-win32-${arch}.tar.gz`,
+  );
+  try {
+    await access(archive, constants.R_OK);
+    return archive;
+  } catch {
+    return null;
+  }
+}
+
 async function surfaceBusyHostKeep(
   bridge: RunnerIpcBridge,
   version: string,

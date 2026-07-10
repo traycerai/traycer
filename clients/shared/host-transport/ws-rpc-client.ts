@@ -1,13 +1,18 @@
 import type {
+  MethodDegradeDeclaration,
   MethodVersionRegistry,
   SchemaVersion,
+  SplitConnectionManifest,
   VersionedRpcRegistry,
 } from "@traycer/protocol/framework/index";
 import {
   downgradeRequestAcrossMajors,
   isRpcErrorCode,
+  mergeConnectionManifests,
+  splitConnectionManifest,
   upgradeResponseToVersion,
 } from "@traycer/protocol/framework/index";
+import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import { CredentialLeaseReleasedError } from "@traycer/protocol/auth/request-context";
 import type {
   BearerSourceProvider,
@@ -38,7 +43,6 @@ import {
   type IncompatibleMethodDetails,
   type FatalErrorDetails,
 } from "@traycer/protocol/framework/index";
-import { canonicalForMethodVersionLine } from "@traycer/protocol/framework/compat-helpers";
 import type { TimerHandle } from "./timer-handle";
 
 /**
@@ -198,7 +202,12 @@ export class WsRpcClient<
     try {
       await session.dial();
 
-      session.send({ kind: "open", token, manifest: clientManifest });
+      session.send({
+        kind: "open",
+        token,
+        manifest: clientManifest.manifest,
+        optionalManifest: clientManifest.optionalManifest,
+      });
 
       const ackFrame = await session.next();
 
@@ -215,12 +224,20 @@ export class WsRpcClient<
         });
       }
 
-      const clientCanonical = clientManifest[method];
-      const hostCanonical = ackFrame.manifest[method];
+      const mergedClientManifest = mergeConnectionManifests(
+        clientManifest.manifest,
+        clientManifest.optionalManifest,
+      );
+      const mergedHostManifest = mergeConnectionManifests(
+        ackFrame.manifest,
+        ackFrame.optionalManifest,
+      );
+      const clientCanonical = mergedClientManifest[method];
+      const hostCanonical = mergedHostManifest[method];
 
       const compat = checkCompatibility(
         this.registry,
-        clientManifest,
+        clientManifest.manifest,
         ackFrame.manifest,
         "client",
       );
@@ -253,69 +270,234 @@ export class WsRpcClient<
       }
 
       const methodRegistry = this.registry[method] as MethodVersionRegistry;
-      const preparedRequest = prepareRequestPayload<
-        RequestOfMethod<Registry, Method>
+      if (hostCanonical === undefined) {
+        return await executeUnavailableMethodDegrade(
+          this.registry,
+          session,
+          method,
+          methodRegistry,
+          clientCanonical,
+          mergedClientManifest,
+          mergedHostManifest,
+          params,
+          requestId,
+        );
+      }
+
+      return await executeAvailableMethodRequest<
+        RequestOfMethod<Registry, Method>,
+        ResponseOfMethod<Registry, Method>
       >(
+        session,
         methodRegistry,
+        method,
         clientCanonical,
         hostCanonical,
         params,
         requestId,
-        method,
-      );
-
-      session.send({
-        kind: "request",
-        requestId,
-        method,
-        schemaVersion: preparedRequest.onWireVersion,
-        params: preparedRequest.onWirePayload,
-      });
-
-      const responseFrame = await session.next();
-
-      if (responseFrame.kind === "fatalError") {
-        throw hostFatalError(responseFrame, requestId, method);
-      }
-      if (responseFrame.kind !== "response") {
-        throw new HostRpcError({
-          code: "RPC_ERROR",
-          message: `Unexpected host frame '${responseFrame.kind}' awaiting response`,
-          requestId,
-          method,
-          fatalDetails: null,
-        });
-      }
-
-      const decodedResult = decodeResponseFrame(
-        responseFrame,
-        requestId,
-        method,
-      );
-
-      return decodeResponsePayload<ResponseOfMethod<Registry, Method>>(
-        methodRegistry,
-        clientCanonical,
-        hostCanonical,
-        decodedResult,
-        requestId,
-        method,
       );
     } finally {
       session.close(1000, "ok");
     }
   }
 
-  private buildManifest(): ConnectionManifest {
-    const manifest: Record<string, SchemaVersion> = {};
-    for (const method of Object.keys(this.registry)) {
-      manifest[method] = canonicalForMethodVersionLine(
-        this.registry[method],
-        method,
-      );
-    }
-    return manifest;
+  private buildManifest(): SplitConnectionManifest {
+    return splitConnectionManifest(this.registry, RELEASED_FLOOR_METHOD_NAMES);
   }
+}
+
+async function executeAvailableMethodRequest<Payload, Response>(
+  session: Session,
+  methodRegistry: MethodVersionRegistry,
+  method: string,
+  clientCanonical: SchemaVersion,
+  hostCanonical: SchemaVersion,
+  params: Payload,
+  requestId: string,
+): Promise<Response> {
+  const preparedRequest = prepareRequestPayload<Payload>(
+    methodRegistry,
+    clientCanonical,
+    hostCanonical,
+    params,
+    requestId,
+    method,
+  );
+
+  session.send({
+    kind: "request",
+    requestId,
+    method,
+    schemaVersion: preparedRequest.onWireVersion,
+    params: preparedRequest.onWirePayload,
+  });
+
+  const responseFrame = await session.next();
+
+  if (responseFrame.kind === "fatalError") {
+    throw hostFatalError(responseFrame, requestId, method);
+  }
+  if (responseFrame.kind !== "response") {
+    throw new HostRpcError({
+      code: "RPC_ERROR",
+      message: `Unexpected host frame '${responseFrame.kind}' awaiting response`,
+      requestId,
+      method,
+      fatalDetails: null,
+    });
+  }
+
+  const decodedResult = decodeResponseFrame(responseFrame, requestId, method);
+
+  return decodeResponsePayload<Response>(
+    methodRegistry,
+    clientCanonical,
+    hostCanonical,
+    decodedResult,
+    requestId,
+    method,
+  );
+}
+
+async function executeUnavailableMethodDegrade<
+  Registry extends VersionedRpcRegistry,
+  Method extends keyof Registry & string,
+>(
+  registry: Registry,
+  session: Session,
+  method: Method,
+  methodRegistry: MethodVersionRegistry,
+  clientCanonical: SchemaVersion | undefined,
+  clientManifest: ConnectionManifest,
+  hostManifest: ConnectionManifest,
+  params: RequestOfMethod<Registry, Method>,
+  requestId: string,
+): Promise<ResponseOfMethod<Registry, Method>> {
+  if (clientCanonical === undefined) {
+    throw new HostRpcError({
+      code: "RPC_ERROR",
+      message: `Client registry has no canonical manifest entry for method '${method}'`,
+      requestId,
+      method,
+      fatalDetails: null,
+    });
+  }
+
+  const degrade = methodRegistry.degrade;
+  if (degrade === undefined) {
+    throw new HostRpcError({
+      code: "RPC_ERROR",
+      message: `Host does not advertise method '${method}', and the client registry declares no degrade strategy`,
+      requestId,
+      method,
+      fatalDetails: null,
+    });
+  }
+
+  if (degrade.kind === "unsupported") {
+    throw unsupportedHostMethodError(method, requestId);
+  }
+
+  return executeFallbackMethodDegrade(
+    registry,
+    session,
+    method,
+    degrade,
+    clientManifest,
+    hostManifest,
+    params,
+    requestId,
+  );
+}
+
+async function executeFallbackMethodDegrade<
+  Registry extends VersionedRpcRegistry,
+  Method extends keyof Registry & string,
+>(
+  registry: Registry,
+  session: Session,
+  method: Method,
+  degrade: MethodDegradeDeclaration,
+  clientManifest: ConnectionManifest,
+  hostManifest: ConnectionManifest,
+  params: RequestOfMethod<Registry, Method>,
+  requestId: string,
+): Promise<ResponseOfMethod<Registry, Method>> {
+  if (degrade.kind !== "fallback") {
+    throw unsupportedHostMethodError(method, requestId);
+  }
+
+  const targetMethod = degrade.to.method;
+  if (!hasRegistryMethod(registry, targetMethod)) {
+    throw new HostRpcError({
+      code: "RPC_ERROR",
+      message: `Fallback for method '${method}' targets unknown method '${targetMethod}'`,
+      requestId,
+      method,
+      fatalDetails: null,
+    });
+  }
+
+  const targetClientCanonical = {
+    major: degrade.to.major,
+    minor: degrade.to.minor,
+  };
+  const targetHostCanonical = hostManifest[targetMethod];
+  if (
+    clientManifest[targetMethod] === undefined ||
+    targetHostCanonical === undefined
+  ) {
+    throw new HostRpcError({
+      code: "RPC_ERROR",
+      message: `Fallback for method '${method}' targets unavailable floor method '${targetMethod}'`,
+      requestId,
+      method,
+      fatalDetails: null,
+    });
+  }
+
+  const fallbackParams = degrade.adaptRequest(params);
+  const fallbackResult = await executeAvailableMethodRequest<unknown, unknown>(
+    session,
+    registry[targetMethod] as MethodVersionRegistry,
+    targetMethod,
+    targetClientCanonical,
+    targetHostCanonical,
+    fallbackParams,
+    requestId,
+  );
+  return degrade.adaptResponse(fallbackResult) as ResponseOfMethod<
+    Registry,
+    Method
+  >;
+}
+
+function unsupportedHostMethodError(
+  method: string,
+  requestId: string,
+): HostRpcError {
+  return new HostRpcError({
+    code: "E_HOST_UNSUPPORTED",
+    message: `This host does not support '${method}'. Upgrade the host to use this feature.`,
+    requestId,
+    method,
+    fatalDetails: {
+      code: "E_HOST_UNSUPPORTED",
+      reason: `This host does not support '${method}'. Upgrade the host to use this feature.`,
+      incompatibleMethods: null,
+      upgradeGuidance: {
+        clientShouldUpgrade: false,
+        hostShouldUpgrade: true,
+      },
+    },
+  });
+}
+
+function hasRegistryMethod<Registry extends VersionedRpcRegistry>(
+  registry: Registry,
+  method: string,
+): method is keyof Registry & string {
+  return Object.prototype.hasOwnProperty.call(registry, method);
 }
 
 interface PreparedRequest<Payload> {

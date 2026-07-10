@@ -397,6 +397,14 @@ export interface InterviewSegment {
   questions: ReadonlyArray<InterviewQuestion>;
   answers: ReadonlyArray<InterviewAnswer>;
   error: string | null;
+  /**
+   * True when this question was carried into a Cross Question fork without
+   * being answered (the host settles the copied block with a
+   * `forkedWithoutAnswer` marker). Rendered as inline reference — expanded,
+   * with carried-from-the-original copy — instead of a misleading
+   * "Answered 0 of N" summary.
+   */
+  forkedWithoutAnswer: boolean;
 }
 
 /**

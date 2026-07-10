@@ -310,6 +310,7 @@ export function projectTerminalAgent(
   const terminalShellCommand = entry.get("terminalShellCommand");
   const agentMode = readAgentMode(entry);
   if (agentMode === null) return null;
+  const profileId = entry.get("profileId");
   return {
     id,
     harnessId,
@@ -325,6 +326,7 @@ export function projectTerminalAgent(
     reasoningEffort:
       typeof reasoningEffort === "string" ? reasoningEffort : null,
     agentMode,
+    profileId: typeof profileId === "string" ? profileId : null,
     harnessSessionId:
       typeof harnessSessionId === "string" ? harnessSessionId : null,
     terminalAgentArgs:
@@ -413,6 +415,7 @@ function chatRunSettingsEq(
     reasoningEffort: a.reasoningEffort === b.reasoningEffort,
     serviceTier: a.serviceTier === b.serviceTier,
     agentMode: a.agentMode === b.agentMode,
+    profileId: a.profileId === b.profileId,
   } satisfies Record<keyof ChatRunSettings, boolean>;
   return Object.values(fieldsEqual).every((equal) => equal);
 }
@@ -431,6 +434,7 @@ export function terminalAgentProjectionsEq(
     a.userId === b.userId,
     a.hostId === b.hostId,
     a.workspaceMode === b.workspaceMode,
+    a.profileId === b.profileId,
     a.harnessSessionId === b.harnessSessionId,
     a.terminalAgentArgs === b.terminalAgentArgs,
     a.terminalShellCommand === b.terminalShellCommand,

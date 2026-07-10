@@ -57,7 +57,10 @@ export const hostGetRateLimitUsageV12 = defineRpcContract({
 });
 
 // A v1.1 request carries no `providerId`, so it upgrades as-is (still
-// optional in v1.2, so no default is needed). A v1.1 response carries no
+// optional in v1.2, so no default is needed). It also carries no
+// `profileId` (added later as a bare additive field on this same request
+// shape - see `rateLimitUsageRequestSchemaV12` in schemas.ts), so that
+// upgrades to `null` (ambient). A v1.1 response carries no
 // `providerRateLimits`, so it upgrades to `null` - the same "card hidden"
 // state a v1.2 client gets for an aperture-only call.
 export const hostGetRateLimitUsageUpgradeV11ToV12 = defineUpgradePath<
@@ -66,7 +69,7 @@ export const hostGetRateLimitUsageUpgradeV11ToV12 = defineUpgradePath<
 >({
   from: hostGetRateLimitUsageV11.schemaVersion,
   to: hostGetRateLimitUsageV12.schemaVersion,
-  upgradeRequest: (request) => request,
+  upgradeRequest: (request) => ({ ...request, profileId: null }),
   upgradeResponse: (response) => ({ ...response, providerRateLimits: null }),
 });
 

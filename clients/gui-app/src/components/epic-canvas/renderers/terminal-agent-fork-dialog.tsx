@@ -20,6 +20,7 @@ import { AgentModeToggle } from "@/components/home/pickers/agent-mode-toggle";
 import { ActiveHostWorkspaceControls } from "@/components/home/host-workspace-selector/host-workspace-selector";
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
+import { fallbackSeedSource } from "@/lib/composer/composer-seed-source";
 import {
   type CreateTuiAgentStatus,
   useCreateTuiAgentForClient,
@@ -78,12 +79,27 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
     () => pendingForkTerminalAgentStagingKey(epicId),
     [epicId],
   );
-  const settingsSeed = useMemo(
-    () =>
-      target === null ? null : terminalForkSettingsSeed(target.sourceAgent),
-    [target],
+  const settingsSeed = useMemo(() => {
+    if (target === null) return null;
+    return terminalForkSettingsSeed(target.sourceAgent);
+  }, [target]);
+  // A fork dialog has no send-time reauth gate of its own (unlike the main
+  // composer), so a source agent's profileId that was tombstoned since it
+  // last ran must be caught before it reaches `createAgent.create`.
+  // `useComposerToolbarStore` now validates every seed it receives against
+  // the SAME host's live `providers.list` (passing `hostClient` here - this
+  // dialog's explicit prop, not necessarily the app-wide active host -
+  // mirroring how the workspace controls below already query this fixed
+  // host), so no separate resolution is needed at this call site. Never
+  // authoritative: this dialog has no reauth gate of its own, so a
+  // genuinely-tombstoned source profile must be corrected to ambient here
+  // rather than silently submitted to `createAgent.create`.
+  const toolbarStore = useComposerToolbarStore(
+    null,
+    fallbackSeedSource(settingsSeed, hostClient),
+    null,
+    true,
   );
-  const toolbarStore = useComposerToolbarStore(null, settingsSeed, null, true);
   const createAgent = useCreateTuiAgentForClient(hostClient, hostId);
   const [status, setStatus] = useState<TerminalAgentForkStatus>("idle");
   const modelResolved = useStore(
@@ -180,6 +196,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
         reasoningEffort:
           toolbar.reasoning.length > 0 ? toolbar.reasoning : null,
         agentMode: toolbar.agentMode,
+        profileId: toolbar.selection.profileId,
         forkSourceHarnessSessionId: sourceSessionId,
         onStatusChange: setStatus,
         worktreeIntent,
@@ -249,6 +266,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
                 lockedHarnessId={target?.sourceAgent.harnessId ?? null}
                 disabled={busy}
                 registerActivation={false}
+                createProfileHostId={hostId}
               />
               <div className="shrink-0">
                 <AgentModeToggle
@@ -287,6 +305,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
             layout="stacked"
             workspaceSeed={target?.workspaceSeed.workspace ?? null}
             seedIntent={target?.workspaceSeed.intent ?? null}
+            seedIntentOverride={null}
             hostScope={{ kind: "fixed", hostId, hostClient }}
           />
           {status !== "idle" ? (
@@ -356,6 +375,12 @@ function terminalForkSettingsSeed(agent: TuiAgentProjection): ChatRunSettings {
     reasoningEffort: agent.reasoningEffort,
     serviceTier: null,
     agentMode: agent.agentMode,
+    // Seed from the source agent's profile - `useComposerToolbarStore`
+    // validates it against the target host's live provider profiles; the
+    // harness stays locked (see `lockedHarnessId` below) but the user can
+    // still switch between that harness's OTHER profiles via the rail
+    // before forking.
+    profileId: agent.profileId,
   };
 }
 
@@ -377,5 +402,6 @@ function terminalForkModelPickerKey(
     agent.model ?? "",
     agent.reasoningEffort ?? "",
     agent.agentMode,
+    agent.profileId ?? "",
   ].join("\u0000");
 }

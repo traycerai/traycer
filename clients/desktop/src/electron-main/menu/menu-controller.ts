@@ -120,6 +120,15 @@ export class MenuController {
     Menu.setApplicationMenu(null);
   }
 
+  /**
+   * Entry point for commands that originate outside any window or native
+   * menu - currently the Windows jump-list task flags delivered via
+   * second-instance argv (`--new-epic`, `--open-settings`).
+   */
+  dispatchShellCommand(command: MenuCommandId): void {
+    this.handleCommand(command, null);
+  }
+
   rebuild(): void {
     const state = this.buildState();
     const menu = buildApplicationMenu(state, {

@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useState,
+} from "react";
 import { useStore } from "zustand";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 
@@ -25,7 +31,9 @@ import {
   useGuiHarnessModelsQuery,
 } from "@/hooks/harnesses/use-gui-harness-catalog";
 import { useRegisterFocusedComposerControls } from "@/hooks/command-palette/use-register-composer-controls";
+import { useResolvedSeededProfileId } from "@/hooks/providers/use-resolved-seeded-profile-id";
 import type { FocusedComposerKind } from "@/lib/commands/types";
+import type { ComposerSeedSource } from "@/lib/composer/composer-seed-source";
 import {
   permissionFromChatRunSettings,
   agentModeFromChatRunSettings,
@@ -41,8 +49,8 @@ const EMPTY_MODELS: ReadonlyArray<ModelOption> = [];
  * `createComposerToolbarStore` for the state model) and keeps it synchronized
  * with its external inputs:
  *
- * - settings-store defaults / the persisted `settingsSeed` (re-seeds when the
- *   seed identity changes);
+ * - settings-store defaults / the seeded settings (re-seeds when the seed
+ *   identity changes);
  * - the harness + model catalog queries, gated on the surrounding
  *   `SurfaceActivityContext`;
  * - the latest `onSettingsChange` callback.
@@ -52,12 +60,32 @@ const EMPTY_MODELS: ReadonlyArray<ModelOption> = [];
  * palette's "Switch model" / "Switch provider" items dispatch against this
  * composer.
  *
+ * `seedSource` (S11: replaces the old positional `settingsSeed` +
+ * `client` + `seedIsAuthoritative` trio) decides both WHAT seeds the store
+ * and WHETHER a dead `profileId` may be silently corrected to ambient - the
+ * load-bearing distinction that keeps this validation from fighting the
+ * reauth gate's OWN missing-profile feature:
+ * - `none`: no seed - the store falls back to settings-store defaults.
+ * - `fallback` (fork dialogs, the landing composer, the new-conversation
+ *   modal, and a chat composer's fallback-seeded window before its own
+ *   settings hydrate): the seed is a picker default, not a commitment anyone
+ *   is relying on - its `profileId` is validated against `seedSource.client`
+ *   (the SAME host this composer will actually run turns on) and corrected
+ *   to ambient (`null`) if dead, so it can never reach a fork/new-chat
+ *   submission or falsely accuse itself of being "missing" in
+ *   `useProviderReauthGate`.
+ * - `authoritative` (a chat composer once its OWN `chat.settings` seed the
+ *   composer): the seed IS a real commitment - a dead `profileId` is passed
+ *   through UNVALIDATED so `useProviderReauthGate` (fed the identical
+ *   `seedSource.kind`) can detect and BLOCK it with a banner, never silently
+ *   swap to ambient behind the user's back.
+ *
  * Returns the store itself: toolbar leaves subscribe to slices, submit paths
  * read `store.getState()`.
  */
 export function useComposerToolbarStore(
   registerAs: FocusedComposerKind | null,
-  settingsSeed: ChatRunSettings | null,
+  seedSource: ComposerSeedSource,
   onSettingsChange: ((settings: ChatRunSettings) => void) | null,
   tuiOnly: boolean,
 ): ComposerToolbarStore {
@@ -67,10 +95,29 @@ export function useComposerToolbarStore(
   const defaultReasoning = useSettingsStore((s) => s.defaultReasoning);
   const defaultServiceTier = useSettingsStore((s) => s.defaultServiceTier);
   const defaultAgentMode = useSettingsStore((s) => s.defaultAgentMode);
-  const seedKey = chatRunSettingsSeedKey(settingsSeed);
+  const settingsSeed = seedSource.kind === "none" ? null : seedSource.settings;
+  const seedIsAuthoritative = seedSource.kind === "authoritative";
+  const seedClient = seedSource.kind === "fallback" ? seedSource.client : null;
+  const rawSeedProfileId = settingsSeed?.profileId ?? null;
+  const resolvedSeedProfileId = useResolvedSeededProfileId(
+    settingsSeed?.harnessId ?? "traycer",
+    rawSeedProfileId,
+    activityEnabled && !seedIsAuthoritative,
+    seedClient,
+  );
+  const effectiveSeedProfileId = seedIsAuthoritative
+    ? rawSeedProfileId
+    : resolvedSeedProfileId;
+  const resolvedSettingsSeed = useMemo(() => {
+    if (settingsSeed === null) return null;
+    return effectiveSeedProfileId === settingsSeed.profileId
+      ? settingsSeed
+      : { ...settingsSeed, profileId: effectiveSeedProfileId };
+  }, [settingsSeed, effectiveSeedProfileId]);
+  const seedKey = chatRunSettingsSeedKey(resolvedSettingsSeed);
   const seededValues = useMemo(
     () =>
-      valuesFromSettingsSeed(settingsSeed, {
+      valuesFromSettingsSeed(resolvedSettingsSeed, {
         permission: defaultPermission,
         selection: defaultSelection,
         reasoning: defaultReasoning,
@@ -83,7 +130,7 @@ export function useComposerToolbarStore(
       defaultReasoning,
       defaultServiceTier,
       defaultSelection,
-      settingsSeed,
+      resolvedSettingsSeed,
     ],
   );
   const [store] = useState(() =>
@@ -120,8 +167,15 @@ export function useComposerToolbarStore(
     store.getState().setOnSettingsChange(recordingOnSettingsChange);
   }, [store, recordingOnSettingsChange]);
   // Re-seed when the seed identity changes (applySeed no-ops on a matching
-  // key, so default-value churn never clobbers user edits).
-  useEffect(() => {
+  // key, so default-value churn never clobbers user edits). A LAYOUT effect,
+  // not a passive one: ticket 07 round 2's transition-window gap - a seed
+  // whose `profileId` flips (e.g. `resolveSeededProfileId` clearing a stale
+  // pin once `providers.list` settles) must land in the store before the
+  // browser paints, so a submit triggered by the very next user interaction
+  // can never read a stale committed `selection` through a passive-effect
+  // scheduling gap. `applySeed`'s no-op-on-matching-key guard keeps this
+  // synchronous timing side-effect-free for every other render.
+  useLayoutEffect(() => {
     store.getState().applySeed(seedKey, seededValues);
   }, [store, seedKey, seededValues]);
 
@@ -164,10 +218,14 @@ export function useComposerToolbarStore(
       setReasoning: actions.setReasoning,
       setServiceTier: actions.setServiceTier,
       setPermission: actions.setPermission,
+      // The command palette has no rail/profile context of its own - default
+      // to the ambient profile, mirroring "ambient is the implicit fallback"
+      // (the memory-store's own ambient-first resolution then restores that
+      // harness's last-used ambient model/effort/tier).
       switchHarness: (harnessId: ProviderId) =>
-        commitSelection(store, harnessId, null),
+        commitSelection(store, harnessId, null, null),
       selectModel: (harnessId: ProviderId, modelSlug: string) =>
-        commitSelection(store, harnessId, modelSlug),
+        commitSelection(store, harnessId, modelSlug, null),
     };
   }, [store]);
   useRegisterFocusedComposerControls(
@@ -195,6 +253,7 @@ function chatRunSettingsSeedKey(settingsSeed: ChatRunSettings | null): string {
     settingsSeed.reasoningEffort ?? "",
     settingsSeed.serviceTier ?? "",
     settingsSeed.agentMode,
+    settingsSeed.profileId ?? "",
   ].join("\u0000");
 }
 

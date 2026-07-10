@@ -1,8 +1,10 @@
 import { access } from "node:fs/promises";
 import {
+  cliBinariesDiffer,
   compareSemver,
   discoverCli,
   installBundledCli,
+  isLocalSentinelVersion,
   probeCliVersion,
   readBundledCliVersion,
   readCliManifest,
@@ -152,6 +154,10 @@ export interface ReconcileCliDeps {
     readonly version: string;
   }) => Promise<string>;
   readonly stagedFileExists: (path: string) => Promise<boolean>;
+  readonly cliBinariesDiffer: (
+    installedPath: string,
+    bundledPath: string,
+  ) => Promise<boolean>;
   readonly writeCliManifestPendingUpgrade: (
     pending: NonNullable<CliInstallManifest["pendingUpgrade"]>,
     existing: CliInstallManifest | null,
@@ -184,6 +190,7 @@ export function defaultReconcileCliDeps(): ReconcileCliDeps {
         () => true,
         () => false,
       ),
+    cliBinariesDiffer,
     writeCliManifestPendingUpgrade,
     writeDesktopReconcileState,
     now: () => new Date(),
@@ -327,14 +334,37 @@ export async function reconcileCli(
   // Case 2: manifest present. Compare versions.
   const cmp = compareSemver(installedVersion, bundledVersion);
   if (cmp >= 0) {
-    await clearPackageManagerHint(deps);
-    return {
-      kind: "trusted-equal",
-      source: "manifest",
-      installedVersion,
-      bundledVersion,
-      binaryPath: manifest.binaryPath,
-    };
+    // Version comparison is blind between two dogfood builds: every local
+    // build stamps the same `0.0.0-local` sentinel, so a stale slot CLI
+    // reads "equal" forever and keeps running host installs/stops with old
+    // code. When BOTH sides are the sentinel - a state release bundles
+    // cannot produce (they stamp real semvers) - and the slot is
+    // desktop-owned, settle it by comparing the binaries themselves and
+    // route a differing slot through the normal upgrade path below.
+    const dogfoodRefresh =
+      isLocalSentinelVersion(installedVersion) &&
+      isLocalSentinelVersion(bundledVersion) &&
+      manifest.source === "desktop" &&
+      bundledPath !== null &&
+      (await deps
+        .cliBinariesDiffer(manifest.binaryPath, bundledPath)
+        // An unreadable binary must not fail reconciliation - keep
+        // trusting the slot, exactly as before this dogfood path existed.
+        .catch(() => false));
+    if (!dogfoodRefresh) {
+      await clearPackageManagerHint(deps);
+      return {
+        kind: "trusted-equal",
+        source: "manifest",
+        installedVersion,
+        bundledVersion,
+        binaryPath: manifest.binaryPath,
+      };
+    }
+    deps.logger.info(
+      "[cli-reconcile] local-sentinel versions tie but slot binary differs from bundled - refreshing dogfood slot",
+      { binaryPath: manifest.binaryPath, bundledPath },
+    );
   }
 
   // Case 3: installed is older than bundled. Branch on source.

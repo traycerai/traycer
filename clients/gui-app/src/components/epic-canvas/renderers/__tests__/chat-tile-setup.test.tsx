@@ -224,6 +224,7 @@ describe("useChatSetupFailureRestoreDriver", () => {
           reasoningEffort: "medium",
           serviceTier: null,
           agentMode: "epic",
+          profileId: null,
         },
       );
     });
@@ -301,6 +302,7 @@ describe("useChatSetupFailureRestoreDriver", () => {
           reasoningEffort: "medium",
           serviceTier: null,
           agentMode: "epic",
+          profileId: null,
         },
       );
     });
@@ -415,6 +417,7 @@ describe("useChatSetupFailureRestoreDriver", () => {
           reasoningEffort: "medium",
           serviceTier: null,
           agentMode: "epic",
+          profileId: null,
         },
       );
     });
@@ -487,6 +490,7 @@ describe("useChatSetupFailureRestoreDriver", () => {
           reasoningEffort: "medium",
           serviceTier: null,
           agentMode: "epic",
+          profileId: null,
         },
       );
     });
@@ -546,6 +550,7 @@ describe("useChatSetupFailureRestoreDriver", () => {
           reasoningEffort: "medium",
           serviceTier: null,
           agentMode: "epic",
+          profileId: null,
         },
       );
     });
@@ -637,6 +642,7 @@ describe("useChatSetupFailureRestoreDriver", () => {
           reasoningEffort: "medium",
           serviceTier: null,
           agentMode: "epic",
+          profileId: null,
         },
       );
     });
@@ -691,6 +697,7 @@ describe("useChatSetupFailureRestoreDriver", () => {
           reasoningEffort: "medium",
           serviceTier: null,
           agentMode: "epic",
+          profileId: null,
         },
       );
     });
@@ -771,6 +778,7 @@ describe("useChatSetupFailureRestoreDriver", () => {
           reasoningEffort: "medium",
           serviceTier: null,
           agentMode: "epic",
+          profileId: null,
         },
       );
     });

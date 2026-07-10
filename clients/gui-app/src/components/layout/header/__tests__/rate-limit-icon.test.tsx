@@ -16,6 +16,12 @@ let bars: ReadonlyArray<HeaderRateLimitBar> = [];
 vi.mock("@/hooks/rate-limits/use-header-rate-limit-bars", () => ({
   useHeaderRateLimitBars: () => bars,
 }));
+vi.mock("@/hooks/rate-limits/use-rate-limit-profile-selection", () => ({
+  useRateLimitProfileSelection: () => ({
+    activeChatSettings: null,
+    lastProfileByHarness: {},
+  }),
+}));
 
 vi.mock("@/components/layout/header/rate-limit-popover", () => ({
   RateLimitPopover: (_props: { readonly onClose: () => void }) => (

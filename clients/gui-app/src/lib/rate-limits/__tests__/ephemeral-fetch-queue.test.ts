@@ -42,7 +42,7 @@ function keyFor(providerId: ProviderId) {
   return queryKeys.hostMethod<HostRpcRegistry, "host.getRateLimitUsage">(
     HOST_ID,
     "host.getRateLimitUsage",
-    { accountContext: DEFAULT_ACCOUNT_CONTEXT, providerId },
+    { accountContext: DEFAULT_ACCOUNT_CONTEXT, providerId, profileId: null },
   );
 }
 
@@ -92,9 +92,11 @@ describe("ephemeral-fetch-queue", () => {
     // across providers would. Force bypasses the freshness floor.
     void enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
       force: true,
+      profileId: null,
     });
     void enqueueRateLimitFetch("claude-code", DEFAULT_ACCOUNT_CONTEXT, {
       force: true,
+      profileId: null,
     });
 
     await flush();
@@ -121,6 +123,7 @@ describe("ephemeral-fetch-queue", () => {
     for (let i = 0; i < 4; i++) {
       void enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
         force: true,
+        profileId: null,
       });
     }
 
@@ -148,6 +151,7 @@ describe("ephemeral-fetch-queue", () => {
 
     void enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
       force: true,
+      profileId: null,
     });
     await flush();
     settlers[0].ok();
@@ -174,6 +178,7 @@ describe("ephemeral-fetch-queue", () => {
 
     void enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
       force: false,
+      profileId: null,
     });
     await flush();
     // Still fresh -> the automatic trigger must not spawn a subprocess.
@@ -181,6 +186,7 @@ describe("ephemeral-fetch-queue", () => {
 
     void enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
       force: true,
+      profileId: null,
     });
     await flush();
     // A user-initiated refresh bypasses the floor.
@@ -194,9 +200,11 @@ describe("ephemeral-fetch-queue", () => {
 
     void enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
       force: true,
+      profileId: null,
     });
     void enqueueRateLimitFetch("claude-code", DEFAULT_ACCOUNT_CONTEXT, {
       force: true,
+      profileId: null,
     });
 
     await flush();
@@ -218,6 +226,7 @@ describe("ephemeral-fetch-queue", () => {
 
     void enqueueRateLimitFetch("claude-code", DEFAULT_ACCOUNT_CONTEXT, {
       force: false,
+      profileId: null,
     });
     await flush();
     settlers[0].fail();
@@ -229,6 +238,7 @@ describe("ephemeral-fetch-queue", () => {
 
     void enqueueRateLimitFetch("claude-code", DEFAULT_ACCOUNT_CONTEXT, {
       force: false,
+      profileId: null,
     });
     await flush();
 
@@ -260,6 +270,7 @@ describe("ephemeral-fetch-queue", () => {
 
     void enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
       force: true,
+      profileId: null,
     });
     // Draining flips true synchronously at enqueue, before any await.
     expect(isRateLimitQueueDraining()).toBe(true);
@@ -297,6 +308,7 @@ describe("ephemeral-fetch-queue", () => {
 
     void enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
       force: true,
+      profileId: null,
     });
     expect(isRateLimitQueueDraining()).toBe(true);
     await flush();
@@ -320,9 +332,11 @@ describe("ephemeral-fetch-queue", () => {
     // No cached data yet: both pass their enqueue-time freshness check.
     void enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
       force: true,
+      profileId: null,
     });
     void enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
       force: false,
+      profileId: null,
     });
     await flush();
     expect(request).toHaveBeenCalledTimes(1);
@@ -340,6 +354,7 @@ describe("ephemeral-fetch-queue", () => {
     // No configureRateLimitQueue call.
     await enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
       force: true,
+      profileId: null,
     });
     await flush();
     expect(request).not.toHaveBeenCalled();
@@ -387,6 +402,7 @@ describe("post-usage_fetch_failed cool-down", () => {
 
     void enqueueRateLimitFetch("claude-code", DEFAULT_ACCOUNT_CONTEXT, {
       force: false,
+      profileId: null,
     });
     await flushFake(0);
     expect(request).toHaveBeenCalledTimes(1);
@@ -398,6 +414,7 @@ describe("post-usage_fetch_failed cool-down", () => {
     await flushFake(PROVIDER_RATE_LIMITS_STALE_TIME_MS + 1_000);
     void enqueueRateLimitFetch("claude-code", DEFAULT_ACCOUNT_CONTEXT, {
       force: false,
+      profileId: null,
     });
     await flushFake(0);
     expect(request).toHaveBeenCalledTimes(1);
@@ -405,6 +422,7 @@ describe("post-usage_fetch_failed cool-down", () => {
     // A manual, user-initiated refresh is never subject to the cool-down.
     void enqueueRateLimitFetch("claude-code", DEFAULT_ACCOUNT_CONTEXT, {
       force: true,
+      profileId: null,
     });
     await flushFake(0);
     expect(request).toHaveBeenCalledTimes(2);
@@ -419,6 +437,7 @@ describe("post-usage_fetch_failed cool-down", () => {
 
     void enqueueRateLimitFetch("claude-code", DEFAULT_ACCOUNT_CONTEXT, {
       force: false,
+      profileId: null,
     });
     await flushFake(0);
     expect(request).toHaveBeenCalledTimes(1);
@@ -427,6 +446,7 @@ describe("post-usage_fetch_failed cool-down", () => {
     await flushFake(5 * 60 * 1000 + 1_000);
     void enqueueRateLimitFetch("claude-code", DEFAULT_ACCOUNT_CONTEXT, {
       force: false,
+      profileId: null,
     });
     await flushFake(0);
     expect(request).toHaveBeenCalledTimes(2);
@@ -441,6 +461,7 @@ describe("post-usage_fetch_failed cool-down", () => {
 
     void enqueueRateLimitFetch("claude-code", DEFAULT_ACCOUNT_CONTEXT, {
       force: false,
+      profileId: null,
     });
     await flushFake(0);
     expect(request).toHaveBeenCalledTimes(1);
@@ -451,6 +472,7 @@ describe("post-usage_fetch_failed cool-down", () => {
     await flushFake(PROVIDER_RATE_LIMITS_STALE_TIME_MS + 1_000);
     void enqueueRateLimitFetch("claude-code", DEFAULT_ACCOUNT_CONTEXT, {
       force: false,
+      profileId: null,
     });
     await flushFake(0);
     expect(request).toHaveBeenCalledTimes(2);
@@ -469,6 +491,7 @@ describe("post-usage_fetch_failed cool-down", () => {
     // First automatic pull trips the cool-down.
     void enqueueRateLimitFetch("claude-code", DEFAULT_ACCOUNT_CONTEXT, {
       force: false,
+      profileId: null,
     });
     await flushFake(0);
     expect(request).toHaveBeenCalledTimes(1);
@@ -477,6 +500,7 @@ describe("post-usage_fetch_failed cool-down", () => {
     nextReason = null;
     void enqueueRateLimitFetch("claude-code", DEFAULT_ACCOUNT_CONTEXT, {
       force: true,
+      profileId: null,
     });
     await flushFake(0);
     expect(request).toHaveBeenCalledTimes(2);
@@ -487,6 +511,7 @@ describe("post-usage_fetch_failed cool-down", () => {
     await flushFake(PROVIDER_RATE_LIMITS_STALE_TIME_MS + 1_000);
     void enqueueRateLimitFetch("claude-code", DEFAULT_ACCOUNT_CONTEXT, {
       force: false,
+      profileId: null,
     });
     await flushFake(0);
     expect(request).toHaveBeenCalledTimes(3);

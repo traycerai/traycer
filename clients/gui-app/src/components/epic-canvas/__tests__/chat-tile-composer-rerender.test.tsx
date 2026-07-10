@@ -141,6 +141,7 @@ const INTERVIEW: ChatLowerInterviewState = {
   pending: null,
   onAnswer: () => null,
   onError: () => null,
+  onFork: null,
 };
 const APPROVALS: ChatLowerApprovalsState = {
   pendingFileEditApprovals: [],
