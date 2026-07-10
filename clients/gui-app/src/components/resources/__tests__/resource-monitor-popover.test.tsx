@@ -497,9 +497,10 @@ describe("ResourceMonitorPopover", () => {
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Resources" }));
-    // 3 + 5 + 9 single-counted, on both the task header and the owner row;
-    // the double-count bug would show 26% instead.
-    expect(screen.getAllByText("17%").length).toBeGreaterThan(0);
+    // 3 + 5 + 9 single-counted, shown by exactly two elements: the task
+    // header and the owner row. A double-count regression in either
+    // projection drops the count below 2 and surfaces 26% instead.
+    expect(screen.getAllByText("17%")).toHaveLength(2);
     expect(screen.queryByText("26%")).toBeNull();
   });
 
