@@ -1000,6 +1000,7 @@ function OwnerTreeRow(props: {
         {processRows.canExpand ? (
           <button
             type="button"
+            aria-expanded={props.expanded}
             onClick={props.onToggle}
             className="ml-3 flex size-6 shrink-0 items-center justify-center text-muted-foreground transition-colors hover:text-foreground"
             aria-label={
@@ -1692,14 +1693,15 @@ function buildProcessRows(
   const processByPid = new Map(
     processes.map((process) => [process.pid, process]),
   );
-  const childrenByParent = new Map<number, ResourceProcessSnapshotWire[]>();
-  for (const process of processes) {
-    if (process.parentPid === null || !processByPid.has(process.parentPid))
-      continue;
-    const siblings = childrenByParent.get(process.parentPid) ?? [];
+  const childrenByParent = processes.reduce((byParent, process) => {
+    if (process.parentPid === null || !processByPid.has(process.parentPid)) {
+      return byParent;
+    }
+    const siblings = byParent.get(process.parentPid) ?? [];
     siblings.push(process);
-    childrenByParent.set(process.parentPid, siblings);
-  }
+    byParent.set(process.parentPid, siblings);
+    return byParent;
+  }, new Map<number, ResourceProcessSnapshotWire[]>());
 
   const roots = processes.filter(
     (process) =>

@@ -326,30 +326,38 @@ function latestAppSnapshot(
   return latest;
 }
 
+// Both selectors compare the ENTRY-level `sampledAt`, not the nested
+// snapshot's: identity-stable merges intentionally keep the previous nested
+// object (with its old timestamp) when display values are unchanged, so the
+// nested `sampledAt` can lag the frame that actually delivered it.
 function latestHostTreeSnapshot(
   entries: readonly GlobalResourceEpicEntry[],
 ): HostTreeResourceUsage | null {
-  let latest: HostTreeResourceUsage | null = null;
-  for (const entry of entries) {
-    if (entry.hostTree === null) continue;
-    if (latest === null || entry.hostTree.sampledAt > latest.sampledAt) {
-      latest = entry.hostTree;
-    }
-  }
-  return latest;
+  const latest = entries
+    .filter((entry) => entry.hostTree !== null)
+    .reduce(
+      (best: GlobalResourceEpicEntry | null, entry) =>
+        best === null || (entry.sampledAt ?? 0) > (best.sampledAt ?? 0)
+          ? entry
+          : best,
+      null,
+    );
+  return latest?.hostTree ?? null;
 }
 
 function latestOtherSnapshot(
   entries: readonly GlobalResourceEpicEntry[],
 ): OtherResourceUsage | null {
-  let latest: OtherResourceUsage | null = null;
-  for (const entry of entries) {
-    if (entry.other === null) continue;
-    if (latest === null || entry.other.sampledAt > latest.sampledAt) {
-      latest = entry.other;
-    }
-  }
-  return latest;
+  const latest = entries
+    .filter((entry) => entry.other !== null)
+    .reduce(
+      (best: GlobalResourceEpicEntry | null, entry) =>
+        best === null || (entry.sampledAt ?? 0) > (best.sampledAt ?? 0)
+          ? entry
+          : best,
+      null,
+    );
+  return latest?.other ?? null;
 }
 
 export const resourcesRegistry = new ResourcesRegistry();
