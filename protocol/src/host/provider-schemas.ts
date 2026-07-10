@@ -383,17 +383,23 @@ export const providerProfileSchema = z.object({
 export type ProviderProfile = z.infer<typeof providerProfileSchema>;
 
 /**
- * Fold-in for profile rename/remove/recolor, carried on `providers.setEnabled`'s
- * request (see that method's `@2.1` contract in `registry.ts` for why it
- * lives here instead of standalone `providers.renameProfile` /
- * `removeProfile` / `recolorProfile` methods). Frozen as shipped at `@2.1` -
- * `providers.setEnabled@2.2` widens the live union below with
- * `acknowledgeAmbientDrift`; this narrower alias is what an old `@2.1` peer's
- * request schema actually validates against, so the wire-compat Zod-strip
- * (see `prepareRequestPayload` in `ws-rpc-client.ts`) genuinely rejects the
- * newer variant instead of silently widening along with the live schema.
+ * Fold-in for profile rename/remove/recolor/acknowledgeAmbientDrift, carried
+ * on `providers.setEnabled`'s request (see that method's `@2.1` contract in
+ * `registry.ts` for why these live here instead of standalone
+ * `providers.renameProfile` / `removeProfile` / `recolorProfile` /
+ * `acknowledgeAmbientDrift` methods - a new top-level method name is
+ * handshake-fatal against an already-released peer, see
+ * `released-surface-compat.test.ts`).
+ *
+ * `acknowledgeAmbientDrift` durably clears the ambient profile's pending
+ * `ambientDriftNotice` (see that field's comment below). No `profileId`:
+ * unlike the managed-profile actions, there is exactly one ambient identity
+ * per provider. It rides the same `@2.1` minor as the other actions because
+ * `@2.1` itself is unreleased (the released surface, host-v1.0.0, is `@2.0`)
+ * - versions exist to protect released peers, so an unreleased minor widens
+ * in place instead of minting `@2.2`.
  */
-export const providerProfileActionSchemaV21 = z.discriminatedUnion("type", [
+export const providerProfileActionSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("rename"),
     profileId: z.string(),
@@ -410,21 +416,6 @@ export const providerProfileActionSchemaV21 = z.discriminatedUnion("type", [
     profileId: z.string(),
     accentColor: providerProfileAccentColorSchema,
   }),
-]);
-
-/**
- * Live `providerProfileActionSchema` - adds `acknowledgeAmbientDrift` at
- * `providers.setEnabled@2.2`: durably clears the ambient profile's pending
- * `ambientDriftNotice` (see that field's comment below), carried here rather
- * than a standalone `providers.acknowledgeAmbientDrift` method because a new
- * top-level method name is handshake-fatal against an already-released peer
- * (see `released-surface-compat.test.ts`) - the same reasoning that put
- * rename/remove/recolor on this method instead of their own. No `profileId`:
- * unlike the managed-profile actions above, there is exactly one ambient
- * identity per provider.
- */
-export const providerProfileActionSchema = z.discriminatedUnion("type", [
-  ...providerProfileActionSchemaV21.options,
   z.object({
     type: z.literal("acknowledgeAmbientDrift"),
   }),
@@ -660,26 +651,10 @@ export type ProvidersSetEnabledResponse = z.infer<
  */
 export const providersSetEnabledRequestSchemaV21 =
   providersSetEnabledRequestSchema.extend({
-    profileAction: providerProfileActionSchemaV21.nullable().default(null),
+    profileAction: providerProfileActionSchema.nullable().default(null),
   });
 export type ProvidersSetEnabledRequestV21 = z.infer<
   typeof providersSetEnabledRequestSchemaV21
->;
-
-/**
- * `providers.setEnabled@2.2` request - widens `profileAction` to the live
- * `providerProfileActionSchema` (adds `acknowledgeAmbientDrift`; see that
- * schema's comment). The response is unchanged (`providersSetEnabledResponseSchema`)
- * for the same reason `@2.1` left it unchanged - the mutated `state` (here,
- * `state.profiles[].ambientDriftNotice` cleared) is already visible on the
- * existing response shape.
- */
-export const providersSetEnabledRequestSchemaV22 =
-  providersSetEnabledRequestSchemaV21.extend({
-    profileAction: providerProfileActionSchema.nullable().default(null),
-  });
-export type ProvidersSetEnabledRequestV22 = z.infer<
-  typeof providersSetEnabledRequestSchemaV22
 >;
 
 export const providersSetApiKeyRequestSchema = z.object({

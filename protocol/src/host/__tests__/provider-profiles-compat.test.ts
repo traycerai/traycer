@@ -439,53 +439,26 @@ describe("providers.setEnabled@2.1 (profile rename/remove/recolor)", () => {
   });
 });
 
-describe("providers.setEnabled@2.2 (acknowledgeAmbientDrift)", () => {
-  it("the frozen v2.1 request schema rejects the new acknowledgeAmbientDrift variant", () => {
+describe("acknowledgeAmbientDrift profileAction (rides the unreleased @2.1)", () => {
+  // No frozen-@2.1 rejection case and no @2.1->@2.2 upgrade case here on
+  // purpose: `acknowledgeAmbientDrift` widened the SAME unreleased `@2.1`
+  // union the other profileActions ride (the released surface, host-v1.0.0,
+  // negotiates `providers.setEnabled@2.0`), so there is no older @2.x peer
+  // schema to freeze against - the @2.0/@1.0 cases above already cover every
+  // released-peer path.
+  it("the @2.1 request schema accepts acknowledgeAmbientDrift with no profileId", () => {
     expect(
       providersSetEnabledRequestSchemaV21.safeParse({
         providerId: "claude-code",
         enabled: true,
         profileAction: { type: "acknowledgeAmbientDrift" },
       }).success,
-    ).toBe(false);
-  });
-
-  it("the live schema accepts acknowledgeAmbientDrift with no profileId", () => {
+    ).toBe(true);
     expect(
       providerProfileActionSchema.safeParse({
         type: "acknowledgeAmbientDrift",
       }).success,
     ).toBe(true);
-  });
-
-  it("upgrades a v2.1 request to v2.2 with a rename/remove/recolor profileAction passed through unchanged", () => {
-    const rename = upgradeRequestToVersion(
-      hostRpcRegistry["providers.setEnabled"],
-      { major: 2, minor: 1 },
-      { major: 2, minor: 2 },
-      {
-        providerId: "claude-code",
-        enabled: true,
-        profileAction: { type: "rename", profileId: "profile-1", label: "Work" },
-      },
-    );
-    expect(rename).toEqual({
-      providerId: "claude-code",
-      enabled: true,
-      profileAction: { type: "rename", profileId: "profile-1", label: "Work" },
-    });
-
-    const plain = upgradeRequestToVersion(
-      hostRpcRegistry["providers.setEnabled"],
-      { major: 2, minor: 1 },
-      { major: 2, minor: 2 },
-      { providerId: "codex", enabled: false, profileAction: null },
-    );
-    expect(plain).toEqual({
-      providerId: "codex",
-      enabled: false,
-      profileAction: null,
-    });
   });
 
   it("drops profileAction (acknowledgeAmbientDrift included) before the strict v1.0 request parse, same as rename/remove/recolor", () => {
