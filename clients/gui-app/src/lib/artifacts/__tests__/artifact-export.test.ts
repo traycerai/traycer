@@ -17,6 +17,39 @@ function createFragment(markdown: string): Y.XmlFragment {
 }
 
 describe("createArtifactExport", () => {
+  it("requires at least one artifact", async () => {
+    await expect(
+      createArtifactExport({
+        artifacts: [],
+        format: "markdown",
+        archive: true,
+        archiveTitle: "Empty",
+      }),
+    ).rejects.toThrow("Select at least one artifact to export.");
+  });
+
+  it("rejects multiple artifacts without an archive", async () => {
+    await expect(
+      createArtifactExport({
+        artifacts: [
+          {
+            id: "artifact-1",
+            title: "First",
+            fragment: createFragment("# First"),
+          },
+          {
+            id: "artifact-2",
+            title: "Second",
+            fragment: createFragment("# Second"),
+          },
+        ],
+        format: "markdown",
+        archive: false,
+        archiveTitle: "ignored",
+      }),
+    ).rejects.toThrow("Individual export requires exactly one artifact.");
+  });
+
   it("exports one artifact as canonical Markdown", async () => {
     const result = await createArtifactExport({
       artifacts: [
@@ -73,6 +106,23 @@ describe("createArtifactExport", () => {
       "# Child",
     );
     expect(new TextDecoder().decode(entries["_CON.md"])).toBe("# Reserved");
+  });
+
+  it("preserves complete Unicode code points in exported filenames", async () => {
+    const result = await createArtifactExport({
+      artifacts: [
+        {
+          id: "unicode",
+          title: `${"a".repeat(119)}🐇tail`,
+          fragment: createFragment("Unicode"),
+        },
+      ],
+      format: "markdown",
+      archive: false,
+      archiveTitle: "ignored",
+    });
+
+    expect(result.suggestedName).toBe(`${"a".repeat(119)}🐇.md`);
   });
 
   it("exports a PDF Blob with a valid PDF signature", async () => {

@@ -1,0 +1,104 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { prosemirrorJSONToYXmlFragment } from "@tiptap/y-tiptap";
+import * as Y from "yjs";
+import { artifactDocumentBundle } from "@/editor-core";
+import type { TDocumentDefinitions } from "pdfmake/interfaces";
+
+interface PdfMakeTestState {
+  definition: TDocumentDefinitions | null;
+}
+
+const pdfMake = vi.hoisted(() => {
+  const state: PdfMakeTestState = { definition: null };
+  return {
+    state,
+    addVirtualFileSystem: vi.fn(),
+    createPdf: vi.fn((definition: TDocumentDefinitions) => {
+      state.definition = definition;
+      return {
+        getBlob: () => Promise.resolve(new Blob(["%PDF-mocked"])),
+      };
+    }),
+  };
+});
+
+vi.mock("pdfmake/build/pdfmake", () => ({ default: pdfMake }));
+vi.mock("pdfmake/build/vfs_fonts", () => ({
+  "Roboto-Bold.ttf": "bold-font-data",
+  "Roboto-Regular.ttf": "regular-font-data",
+}));
+
+function createFragment(markdown: string): Y.XmlFragment {
+  const doc = new Y.Doc();
+  const fragment = doc.getXmlFragment("artifact-body");
+  prosemirrorJSONToYXmlFragment(
+    artifactDocumentBundle.schema,
+    artifactDocumentBundle.markdownManager.parse(markdown),
+    fragment,
+  );
+  return fragment;
+}
+
+describe("PDF artifact export", () => {
+  beforeEach(() => {
+    pdfMake.addVirtualFileSystem.mockClear();
+    pdfMake.createPdf.mockClear();
+    pdfMake.state.definition = null;
+  });
+
+  it("renders Markdown semantics as structured PDF content", async () => {
+    const { createArtifactExport } = await import("@/lib/artifacts");
+
+    await createArtifactExport({
+      artifacts: [
+        {
+          id: "structured-pdf",
+          title: "Structured PDF",
+          fragment: createFragment(
+            "# Design\n\nA **bold** and *italic* paragraph.\n\n- One\n- Two\n\n| A | B |\n| - | - |\n| 1 | 2 |",
+          ),
+        },
+      ],
+      format: "pdf",
+      archive: false,
+      archiveTitle: "ignored",
+    });
+
+    expect(pdfMake.addVirtualFileSystem).toHaveBeenCalledWith({
+      "Roboto-Bold.ttf": "bold-font-data",
+      "Roboto-Regular.ttf": "regular-font-data",
+    });
+    expect(pdfMake.state.definition).toMatchObject({
+      content: [
+        {
+          style: "heading1",
+          text: [{ text: "Design" }],
+        },
+        {
+          text: [
+            { text: "A " },
+            { text: "bold", bold: true },
+            { text: " and " },
+            { text: "italic", italics: true },
+            { text: " paragraph." },
+          ],
+        },
+        {
+          ul: [{}, {}],
+        },
+        {
+          table: {
+            headerRows: 1,
+            body: [
+              [
+                { bold: true, text: [{ text: "A" }] },
+                { bold: true, text: [{ text: "B" }] },
+              ],
+              [{ text: [{ text: "1" }] }, { text: [{ text: "2" }] }],
+            ],
+          },
+        },
+      ],
+    });
+  });
+});

@@ -1,4 +1,11 @@
 import type * as Y from "yjs";
+import type { JSONContent } from "@tiptap/core";
+import type {
+  Content,
+  ContentText,
+  TableCell,
+  TDocumentDefinitions,
+} from "pdfmake/interfaces";
 import { artifactDocumentBundle } from "@/editor-core";
 
 export type ArtifactExportFormat = "markdown" | "pdf";
@@ -36,9 +43,7 @@ const WINDOWS_RESERVED_FILENAME =
   /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i;
 
 function safeFileStem(title: string): string {
-  const normalized = title
-    .normalize("NFKC")
-    .split("")
+  const normalized = Array.from(title.normalize("NFKC"))
     .map((character) => {
       const codePoint = character.codePointAt(0);
       return codePoint === undefined ||
@@ -85,26 +90,234 @@ function requireAvailableFragment(
 
 let pdfMakePromise: Promise<typeof import("pdfmake")> | null = null;
 
+function isVirtualFileSystem(value: unknown): value is Record<string, string> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    Object.values(value).every((entry) => typeof entry === "string")
+  );
+}
+
+function virtualFileSystemFromModule(value: unknown): Record<string, string> {
+  if (isVirtualFileSystem(value)) return value;
+  if (typeof value === "object" && value !== null && "default" in value) {
+    const defaultExport: unknown = value.default;
+    if (isVirtualFileSystem(defaultExport)) return defaultExport;
+  }
+  throw new Error("PDF font bundle did not expose a virtual file system.");
+}
+
 function loadPdfMake(): Promise<typeof import("pdfmake")> {
   if (pdfMakePromise === null) {
     pdfMakePromise = Promise.all([
       import("pdfmake/build/pdfmake"),
       import("pdfmake/build/vfs_fonts"),
     ]).then(([pdfMakeModule, vfsModule]) => {
-      pdfMakeModule.default.addVirtualFileSystem(vfsModule.default);
+      pdfMakeModule.default.addVirtualFileSystem(
+        virtualFileSystemFromModule(vfsModule),
+      );
       return pdfMakeModule.default;
     });
   }
   return pdfMakePromise;
 }
 
+function markAttribute(
+  node: JSONContent,
+  markType: string,
+  attribute: string,
+): unknown {
+  return node.marks?.find((mark) => mark.type === markType)?.attrs?.[attribute];
+}
+
+function hasMark(node: JSONContent, markType: string): boolean {
+  return node.marks?.some((mark) => mark.type === markType) ?? false;
+}
+
+function textDecoration(
+  node: JSONContent,
+  isLink: boolean,
+): "lineThrough" | "underline" | undefined {
+  if (hasMark(node, "strike")) return "lineThrough";
+  if (isLink) return "underline";
+  return undefined;
+}
+
+function inlineNodePdfContent(node: JSONContent): Content[] {
+  if (node.type === "hardBreak") return ["\n"];
+  if (node.type !== "text") return inlinePdfContent(node.content);
+
+  const href = markAttribute(node, "link", "href");
+  const isLink = typeof href === "string";
+  const content: ContentText = {
+    text: node.text ?? "",
+    bold: hasMark(node, "bold") || undefined,
+    italics: hasMark(node, "italic") || undefined,
+    decoration: textDecoration(node, isLink),
+    link: isLink ? href : undefined,
+    color: isLink ? "#2563eb" : undefined,
+    background: hasMark(node, "code") ? "#f3f4f6" : undefined,
+  };
+  return [content];
+}
+
+function inlinePdfContent(nodes: JSONContent[] | undefined): Content[] {
+  return (nodes ?? []).flatMap(inlineNodePdfContent);
+}
+
+function listItemPdfContent(node: JSONContent): Content {
+  const blocks = blockPdfContent(node.content);
+  const checkedValue: unknown = node.attrs?.checked;
+  if (node.type !== "taskItem") return { stack: blocks };
+  const checkbox = checkedValue === true ? "☑ " : "☐ ";
+  return { stack: [{ text: checkbox }, ...blocks] };
+}
+
+function tableCellChildPdfContent(child: JSONContent): Content[] {
+  if (child.type === "paragraph") return inlinePdfContent(child.content);
+  return blockPdfContent([child]);
+}
+
+function tableCellPdfContent(node: JSONContent): TableCell {
+  const inline = (node.content ?? []).flatMap(tableCellChildPdfContent);
+  return {
+    text: inline,
+    bold: node.type === "tableHeader" || undefined,
+    fillColor: node.type === "tableHeader" ? "#f3f4f6" : undefined,
+  };
+}
+
+function headingPdfContent(node: JSONContent): Content[] {
+  const levelValue: unknown = node.attrs?.level;
+  const level =
+    typeof levelValue === "number" && levelValue >= 1 && levelValue <= 6
+      ? levelValue
+      : 1;
+  return [
+    {
+      text: inlinePdfContent(node.content),
+      style: `heading${level}`,
+      margin: [0, level === 1 ? 0 : 8, 0, 6],
+    },
+  ];
+}
+
+function orderedListPdfContent(node: JSONContent): Content[] {
+  const startValue: unknown = node.attrs?.start;
+  return [
+    {
+      ol: (node.content ?? []).map(listItemPdfContent),
+      start: typeof startValue === "number" ? startValue : undefined,
+      margin: [0, 0, 0, 8],
+    },
+  ];
+}
+
+function tablePdfContent(node: JSONContent): Content[] {
+  const rows = node.content ?? [];
+  const columnCount = rows[0]?.content?.length ?? 0;
+  const hasHeader =
+    rows[0]?.content?.some((cell) => cell.type === "tableHeader") ?? false;
+  return [
+    {
+      table: {
+        headerRows: hasHeader ? 1 : 0,
+        widths: Array.from({ length: columnCount }, () => "*"),
+        body: rows.map((row) =>
+          (row.content ?? []).map(tableCellPdfContent),
+        ),
+      },
+      layout: "lightHorizontalLines",
+      margin: [0, 4, 0, 8],
+    },
+  ];
+}
+
+function blockNodePdfContent(node: JSONContent): Content[] {
+  switch (node.type) {
+    case "doc":
+      return blockPdfContent(node.content);
+    case "heading":
+      return headingPdfContent(node);
+    case "paragraph":
+      return [{ text: inlinePdfContent(node.content), margin: [0, 0, 0, 8] }];
+    case "bulletList":
+    case "taskList":
+      return [
+        {
+          ul: (node.content ?? []).map(listItemPdfContent),
+          margin: [0, 0, 0, 8],
+        },
+      ];
+    case "orderedList":
+      return orderedListPdfContent(node);
+    case "blockquote":
+      return [
+        {
+          stack: blockPdfContent(node.content),
+          color: "#4b5563",
+          margin: [12, 0, 0, 8],
+        },
+      ];
+    case "codeBlock":
+      return [
+        {
+          text: node.content?.map((child) => child.text ?? "").join("") ?? "",
+          fontSize: 9,
+          background: "#f3f4f6",
+          preserveLeadingSpaces: true,
+          margin: [0, 4, 0, 8],
+        },
+      ];
+    case "horizontalRule":
+      return [
+        {
+          canvas: [
+            {
+              type: "line",
+              x1: 0,
+              y1: 0,
+              x2: 515,
+              y2: 0,
+              lineWidth: 1,
+              lineColor: "#d1d5db",
+            },
+          ],
+          margin: [0, 4, 0, 8],
+        },
+      ];
+    case "table":
+      return tablePdfContent(node);
+    default:
+      if (node.text !== undefined) return [{ text: node.text }];
+      return blockPdfContent(node.content);
+  }
+}
+
+function blockPdfContent(nodes: JSONContent[] | undefined): Content[] {
+  return (nodes ?? []).flatMap(blockNodePdfContent);
+}
+
+const PDF_HEADING_STYLES = {
+  heading1: { fontSize: 24, bold: true },
+  heading2: { fontSize: 20, bold: true },
+  heading3: { fontSize: 16, bold: true },
+  heading4: { fontSize: 14, bold: true },
+  heading5: { fontSize: 12, bold: true },
+  heading6: { fontSize: 11, bold: true },
+};
+
 async function pdfBytes(markdown: string): Promise<Uint8Array<ArrayBuffer>> {
   const pdfMake = await loadPdfMake();
+  const definition: TDocumentDefinitions = {
+    content: blockPdfContent(
+      artifactDocumentBundle.markdownManager.parse(markdown).content,
+    ),
+    defaultStyle: { font: "Roboto", fontSize: 11, lineHeight: 1.25 },
+    styles: PDF_HEADING_STYLES,
+  };
   const blob = await pdfMake
-    .createPdf({
-      content: [{ text: markdown, fontSize: 11, lineHeight: 1.25 }],
-      defaultStyle: { font: "Roboto" },
-    })
+    .createPdf(definition)
     .getBlob();
   return new Uint8Array(await blob.arrayBuffer());
 }
