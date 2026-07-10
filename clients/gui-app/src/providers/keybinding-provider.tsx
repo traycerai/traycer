@@ -1,9 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
-  chordFromEvent,
-  chordFromEventCtrlAware,
   hasPlatformModKey,
   isBareModifierEvent,
+  resolveMatchingChord,
 } from "@/lib/keybindings/chord";
 import {
   dispatchAction,
@@ -382,22 +381,15 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
 
 /**
  * Resolve the chord to an action the provider should RESERVE (preventDefault +
- * dispatch). Prefers a Control-specific binding (macOS ⌃, distinct from ⌘).
- * When the ctrl-aware chord differs from the platform-primary chord, the event
- * is reserved only by an explicit `ctrl+…` binding; otherwise a bare macOS
- * Control chord could fall through to a plain key binding. Returns null for an
- * action handled OUTSIDE this dispatcher (e.g. dictation, owned by a
- * capture-phase hook) - reserving those would swallow the key when the owner is
- * inactive.
+ * dispatch). Uses `resolveMatchingChord` for the Control-specific precedence
+ * (macOS ⌃, distinct from ⌘): when the ctrl-aware chord differs, the event is
+ * reserved only by an explicit `ctrl+…` binding, so a bare macOS Control chord
+ * can't fall through to a plain key binding. Returns null for an action handled
+ * OUTSIDE this dispatcher (e.g. dictation, owned by a capture-phase hook) -
+ * reserving those would swallow the key when the owner is inactive.
  */
 function resolveReservedAction(event: KeyboardEvent): ActionId | null {
-  const chord = chordFromEvent(event);
-  const ctrlChord = chordFromEventCtrlAware(event);
-  if (ctrlChord !== null && ctrlChord !== chord) {
-    const ctrlActionId = findActionForChord(ctrlChord);
-    if (ctrlActionId === null) return null;
-    return isExternallyHandled(ctrlActionId) ? null : ctrlActionId;
-  }
+  const chord = resolveMatchingChord(event);
   if (chord === null) return null;
   const actionId = findActionForChord(chord);
   if (actionId === null) return null;

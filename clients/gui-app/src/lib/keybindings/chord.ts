@@ -184,17 +184,30 @@ export function chordFromEventCtrlAware(
   return formatChord(parts);
 }
 
+/**
+ * The single chord an event should be matched against, applying the
+ * ctrl-aware-vs-platform-primary precedence: when the Control-specific chord
+ * (macOS ⌃, distinct from ⌘) differs from the platform-primary chord, the
+ * event matches ONLY that ctrl chord - so a bare macOS Control chord can't fall
+ * through to a plain key binding. Otherwise the platform-primary chord is used.
+ * Centralizes this security-relevant contract for every consumer (event→action
+ * matching in the provider, and `chordMatchesEvent`).
+ */
+export function resolveMatchingChord(event: KeyboardEvent): ChordString | null {
+  const eventChord = chordFromEvent(event);
+  const ctrlAwareChord = chordFromEventCtrlAware(event);
+  if (ctrlAwareChord !== null && ctrlAwareChord !== eventChord) {
+    return ctrlAwareChord;
+  }
+  return eventChord;
+}
+
 /** Does the event match the stored chord string exactly? */
 export function chordMatchesEvent(
   chord: ChordString,
   event: KeyboardEvent,
 ): boolean {
-  const eventChord = chordFromEvent(event);
-  const ctrlAwareChord = chordFromEventCtrlAware(event);
-  if (ctrlAwareChord !== null && ctrlAwareChord !== eventChord) {
-    return ctrlAwareChord === chord;
-  }
-  return eventChord === chord;
+  return resolveMatchingChord(event) === chord;
 }
 
 /** Human-friendly display label e.g. `⌘⇧H` / `Ctrl+Shift+H`. */
