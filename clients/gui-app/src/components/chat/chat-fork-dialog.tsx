@@ -349,7 +349,10 @@ function canSubmitFork(input: {
   if (input.trimmedTitle.length === 0) return false;
   if (!input.modelResolved) return false;
   if (input.createPending) return false;
-  if (input.target.seedIntentOverride !== null && !input.hasStagedPreselection) {
+  if (
+    input.target.seedIntentOverride !== null &&
+    !input.hasStagedPreselection
+  ) {
     return false;
   }
   return true;

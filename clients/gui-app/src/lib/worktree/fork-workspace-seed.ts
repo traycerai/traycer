@@ -48,7 +48,9 @@ export function buildAbForkWorkspaceSeed(input: {
           entries: visible.entries.map((entry) => ({
             kind: "local" as const,
             workspacePath:
-              entry.kind === "import" ? entry.worktreePath : entry.workspacePath,
+              entry.kind === "import"
+                ? entry.worktreePath
+                : entry.workspacePath,
             repoIdentifier: entry.repoIdentifier,
             isPrimary: entry.isPrimary,
           })),

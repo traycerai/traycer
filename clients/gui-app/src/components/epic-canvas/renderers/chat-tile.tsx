@@ -1242,26 +1242,26 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
 
   const { messageActionsFor, forkAtAssistantMessage, revertOnEdit } =
     useChatMessageActions({
-    dispatchUi,
-    activeInlineEdit,
-    canModifyMessages,
-    canAct,
-    currentComposerSettings,
-    editSettings,
-    mentionRoots,
-    currentEpicId,
-    node,
-    chatTitle: projectedChatTitle ?? state.chat?.title ?? null,
-    chatParentId: state.chat?.parentId ?? null,
-    messages: state.messages,
-    events: state.events,
-    profile,
-    chatActions,
-    confirmingDeleteMessageId: uiState.confirmingDeleteMessageId,
-    setForkTarget,
-    worktreeBinding: state.worktreeBinding,
-    revertOnEditOpen: uiState.revertOnEditOpen,
-  });
+      dispatchUi,
+      activeInlineEdit,
+      canModifyMessages,
+      canAct,
+      currentComposerSettings,
+      editSettings,
+      mentionRoots,
+      currentEpicId,
+      node,
+      chatTitle: projectedChatTitle ?? state.chat?.title ?? null,
+      chatParentId: state.chat?.parentId ?? null,
+      messages: state.messages,
+      events: state.events,
+      profile,
+      chatActions,
+      confirmingDeleteMessageId: uiState.confirmingDeleteMessageId,
+      setForkTarget,
+      worktreeBinding: state.worktreeBinding,
+      revertOnEditOpen: uiState.revertOnEditOpen,
+    });
 
   const submitMessage = useCallback(
     (input: ChatComposerSubmitInput): boolean => {

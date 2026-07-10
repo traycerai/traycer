@@ -274,8 +274,7 @@ export function useChatMessageActions(
         parentId: chatParentId,
         settingsSeed: currentComposerSettings,
         workspaceSeed,
-        seedIntentOverride:
-          mode === "ab-worktree" ? "worktree-carry" : null,
+        seedIntentOverride: mode === "ab-worktree" ? "worktree-carry" : null,
         // A/B forks re-open a carried question as an answerable card so the
         // user can answer differently and proceed; plain and Cross Question
         // forks leave it settled (inert reference, composer free). Moot for a
