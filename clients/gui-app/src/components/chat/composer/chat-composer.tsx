@@ -57,6 +57,7 @@ import {
   type ProviderReauthReason,
 } from "./use-provider-reauth-gate";
 import { useProfileRateLimitSwitchPrompt } from "./use-profile-rate-limit-switch-prompt";
+import { useRefreshProvidersListOnTurn } from "@/hooks/providers/use-refresh-providers-list-on-turn";
 import { useComposerPickerItems } from "./picker/use-composer-picker-items";
 import { commitSelection } from "@/stores/composer/commit-selection";
 
@@ -230,6 +231,11 @@ function ChatComposerImpl(props: ChatComposerProps) {
     profileId,
     isActive,
   );
+  // Keeps the switch prompt's own `providers.list` read converging with a
+  // turn's passive rate-limit capture: without this, a turn that just pushed
+  // this harness's profile into near/hard limit wouldn't surface the banner
+  // until `providers.list`'s next unrelated 15-minute refetch.
+  useRefreshProvidersListOnTurn(harnessId, tabHostId);
   const onSwitchProfile = useCallback(
     (nextProfileId: string | null) => {
       commitSelection(toolbarStore, harnessId, modelSlug, nextProfileId);

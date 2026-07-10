@@ -7,9 +7,10 @@ import { type HostRpcRegistry } from "@/lib/host";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import type { QueryActivityOptions } from "@/hooks/harnesses/use-gui-harness-catalog";
-
-const PROVIDERS_LIST_REFRESH_MS = 15 * 60 * 1000;
-const PROVIDERS_LIST_PENDING_REFRESH_MS = 800;
+import {
+  PROVIDERS_LIST_REFRESH_MS,
+  providersListRefetchInterval,
+} from "@/hooks/providers/providers-list-refetch-interval";
 
 /**
  * Tab-scoped `providers.list`: identical to `useProvidersList` but bound to the
@@ -35,19 +36,8 @@ export function useTabProvidersList(
       enabled: activity.enabled,
       subscribed: activity.subscribed,
       staleTime: PROVIDERS_LIST_REFRESH_MS,
-      refetchInterval: (query) => {
-        const data = query.state.data;
-        const pending =
-          data?.providers.some(
-            (p) =>
-              p.authPending ||
-              p.availabilityPending ||
-              p.candidates.some((c) => c.versionPending),
-          ) ?? false;
-        return pending
-          ? PROVIDERS_LIST_PENDING_REFRESH_MS
-          : PROVIDERS_LIST_REFRESH_MS;
-      },
+      refetchInterval: (query) =>
+        providersListRefetchInterval(query.state.data),
     },
   });
 }
