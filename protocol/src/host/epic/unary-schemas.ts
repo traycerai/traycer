@@ -831,6 +831,15 @@ export type ReparentArtifactResponse = z.infer<
 export const createChatForkSourceSchema = z.object({
   sourceChatId: z.string(),
   assistantMessageId: z.string(),
+  // Disposition for interview (AskUserQuestion) blocks still pending at the
+  // fork boundary when forking mid-Q&A:
+  //  - "pending" - re-open each carried question in the fork as an answerable
+  //    detached pending (A/B fork: answer differently and proceed in parallel).
+  //  - "settled" - close each carried question as reference-only so the fork's
+  //    composer is immediately free (Cross Question fork: interrogate the
+  //    assistant instead of answering).
+  // null/absent defaults to "pending".
+  carriedInterviews: z.enum(["pending", "settled"]).nullish(),
 });
 export type CreateChatForkSource = z.infer<typeof createChatForkSourceSchema>;
 
@@ -940,6 +949,11 @@ export const createTuiAgentRequestSchema = z.object({
   // same id BEFORE creating the record so `agent.tui.prepareLaunch`
   // reads the correct binding and gates harness launch on `awaitSetup`.
   tuiAgentId: z.string().nullable().optional(),
+  // Which of the harness's logged-in profiles (subscriptions) to launch
+  // this agent on. `null` = the ambient/host login, so older clients that
+  // predate profiles keep today's exact behavior. See the multi-profile
+  // decision log.
+  profileId: z.string().nullable().default(null),
 });
 export type CreateTuiAgentRequest = z.infer<typeof createTuiAgentRequestSchema>;
 

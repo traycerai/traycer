@@ -21,11 +21,18 @@ type MockState = {
     readonly lane: "httpFetch" | "ephemeralProcess";
   }>;
   results: Map<RateLimitProviderId, MockQueryResult>;
+  profileIds: Map<RateLimitProviderId, string | null>;
+  requests: ReadonlyArray<{
+    readonly providerId: RateLimitProviderId;
+    readonly profileId: string | null;
+  }>;
 };
 
 const mocks = vi.hoisted<MockState>(() => ({
   configured: [],
   results: new Map(),
+  profileIds: new Map(),
+  requests: [],
 }));
 
 vi.mock("@/lib/host", () => ({
@@ -35,15 +42,28 @@ vi.mock("@/hooks/rate-limits/use-configured-rate-limit-providers", () => ({
   useConfiguredRateLimitProviders: () => mocks.configured,
   useVisibleRateLimitProviders: () => mocks.configured,
 }));
+vi.mock("@/hooks/rate-limits/use-rate-limit-profile-selection", () => ({
+  resolveRateLimitProfileId: (
+    _selection: unknown,
+    providerId: RateLimitProviderId,
+  ) => mocks.profileIds.get(providerId) ?? null,
+}));
 // Production calls `useHostQueriesWithResponseMap` (not the plain
 // `useHostQueries`) - see that hook's own doc comment - so this mock exports
 // both names with equivalent behavior; the extra `mapResponse` field
 // production passes is irrelevant to this fixture-backed double.
 function mockUseHostQueriesImpl(args: {
   readonly requests: ReadonlyArray<{
-    readonly params: { readonly providerId: RateLimitProviderId };
+    readonly params: {
+      readonly providerId: RateLimitProviderId;
+      readonly profileId: string | null;
+    };
   }>;
 }) {
+  mocks.requests = args.requests.map((request) => ({
+    providerId: request.params.providerId,
+    profileId: request.params.profileId,
+  }));
   return args.requests.map(
     (request) =>
       mocks.results.get(request.params.providerId) ?? {
@@ -58,6 +78,15 @@ vi.mock("@/hooks/host/use-host-queries", () => ({
 }));
 
 import { useHeaderRateLimitBars } from "@/hooks/rate-limits/use-header-rate-limit-bars";
+
+const PROFILE_SELECTION = {
+  activeChatSettings: null,
+  lastProfileByHarness: {},
+};
+
+function renderHeaderRateLimitBars() {
+  return renderHook(() => useHeaderRateLimitBars(PROFILE_SELECTION));
+}
 
 function rlWindow(usedPercent: number): ProviderRateLimitWindow {
   return { usedPercent, resetsAt: null, durationMinutes: null };
@@ -168,6 +197,8 @@ function unavailableFixture(): ProviderRateLimits {
 beforeEach(() => {
   mocks.configured = [];
   mocks.results = new Map();
+  mocks.profileIds = new Map();
+  mocks.requests = [];
 });
 
 afterEach(() => {
@@ -177,7 +208,7 @@ afterEach(() => {
 
 describe("useHeaderRateLimitBars", () => {
   it("returns no bars when zero providers are configured", () => {
-    const { result } = renderHook(() => useHeaderRateLimitBars());
+    const { result } = renderHeaderRateLimitBars();
     expect(result.current).toEqual([]);
   });
 
@@ -186,7 +217,7 @@ describe("useHeaderRateLimitBars", () => {
       data: undefined,
       isError: false,
     });
-    const { result } = renderHook(() => useHeaderRateLimitBars());
+    const { result } = renderHeaderRateLimitBars();
     expect(result.current).toEqual([]);
   });
 
@@ -205,7 +236,7 @@ describe("useHeaderRateLimitBars", () => {
       ),
       isError: false,
     });
-    const { result } = renderHook(() => useHeaderRateLimitBars());
+    const { result } = renderHeaderRateLimitBars();
     expect(result.current).toEqual([
       {
         providerId: "codex",
@@ -224,6 +255,32 @@ describe("useHeaderRateLimitBars", () => {
     ]);
   });
 
+  it("queries each glyph provider with its resolved active or remembered profile", () => {
+    mocks.profileIds = new Map([
+      ["codex", "codex-work"],
+      ["claude-code", "claude-personal"],
+    ]);
+    setProvider("codex", "ephemeralProcess", {
+      data: response(
+        codexFixture({ primary: rlWindow(40), secondary: rlWindow(20) }),
+      ),
+      isError: false,
+    });
+    setProvider("claude-code", "ephemeralProcess", {
+      data: response(
+        claudeCodeFixture({ fiveHour: rlWindow(70), sevenDay: rlWindow(10) }),
+      ),
+      isError: false,
+    });
+
+    renderHeaderRateLimitBars();
+
+    expect(mocks.requests).toEqual([
+      { providerId: "codex", profileId: "codex-work" },
+      { providerId: "claude-code", profileId: "claude-personal" },
+    ]);
+  });
+
   it("fills both bars from Codex's 5h + Weekly windows when only Codex is configured", () => {
     setProvider("codex", "ephemeralProcess", {
       data: response(
@@ -231,7 +288,7 @@ describe("useHeaderRateLimitBars", () => {
       ),
       isError: false,
     });
-    const { result } = renderHook(() => useHeaderRateLimitBars());
+    const { result } = renderHeaderRateLimitBars();
     expect(result.current).toEqual([
       {
         providerId: "codex",
@@ -257,7 +314,7 @@ describe("useHeaderRateLimitBars", () => {
       ),
       isError: false,
     });
-    const { result } = renderHook(() => useHeaderRateLimitBars());
+    const { result } = renderHeaderRateLimitBars();
     expect(result.current).toEqual([
       {
         providerId: "claude-code",
@@ -286,7 +343,7 @@ describe("useHeaderRateLimitBars", () => {
       ),
       isError: false,
     });
-    const { result } = renderHook(() => useHeaderRateLimitBars());
+    const { result } = renderHeaderRateLimitBars();
     expect(result.current).toEqual([]);
   });
 
@@ -302,7 +359,7 @@ describe("useHeaderRateLimitBars", () => {
       data: undefined,
       isError: false,
     });
-    const { result } = renderHook(() => useHeaderRateLimitBars());
+    const { result } = renderHeaderRateLimitBars();
     expect(result.current).toEqual([]);
   });
 
@@ -315,7 +372,7 @@ describe("useHeaderRateLimitBars", () => {
       data: response(kiloCodeFixture()),
       isError: false,
     });
-    const { result } = renderHook(() => useHeaderRateLimitBars());
+    const { result } = renderHeaderRateLimitBars();
     expect(result.current).toEqual([]);
   });
 
@@ -324,7 +381,7 @@ describe("useHeaderRateLimitBars", () => {
       data: response(unavailableFixture()),
       isError: false,
     });
-    const { result } = renderHook(() => useHeaderRateLimitBars());
+    const { result } = renderHeaderRateLimitBars();
     expect(result.current).toEqual([]);
   });
 
@@ -335,7 +392,7 @@ describe("useHeaderRateLimitBars", () => {
       ),
       isError: true,
     });
-    const { result } = renderHook(() => useHeaderRateLimitBars());
+    const { result } = renderHeaderRateLimitBars();
     expect(result.current).toEqual([
       {
         providerId: "codex",
@@ -375,7 +432,7 @@ describe("useHeaderRateLimitBars", () => {
       },
       isError: false,
     });
-    const { result } = renderHook(() => useHeaderRateLimitBars());
+    const { result } = renderHeaderRateLimitBars();
     expect(result.current).toEqual([
       {
         providerId: "codex",

@@ -5,9 +5,15 @@
  * script (this module's scripts/set-deploy-target.cjs) rewrites the
  * `environment` field + the literal values in place for staging/production
  * builds, then reverts.
- * There is no runtime env-var lookup - packaged apps launched from
- * /Applications/ have no shell environment, so a stray `process.env` value
- * could only silently repoint the app at the wrong backend.
+ * There is ONE runtime env-var lookup, and it is dead code in shipped
+ * builds: when the baked `environment` is `"dev"`, the backend base URLs
+ * may be overridden to a loopback http origin (`TRAYCER_DEV_*_BASE_URL`,
+ * validated in `@traycer-clients/shared/platform/dev-backend-urls`) so the
+ * internal `make dev-desktop` orchestrator can point a source run at its
+ * per-slot local backend without mutating this file. Staging/production
+ * builds have a non-`"dev"` literal baked in, so a stray `process.env`
+ * value cannot repoint a packaged app at a different backend - and even a
+ * dev build can only be pointed at the local machine.
  *
  * Dev-vs-shipped wiring (renderer/tray/icon paths, dev URL, dev CLI wrapper,
  * updater, userData isolation, log verbosity) is derived from
@@ -21,9 +27,15 @@
  * whether or not the build happens to be packaged.
  */
 
+import {
+  DEV_AUTHN_BASE_URL_ENV,
+  DEV_CLOUD_UI_BASE_URL_ENV,
+  devBackendUrlFromEnv,
+} from "@traycer-clients/shared/platform/dev-backend-urls";
+
 export type Environment = string;
 
-export const config = {
+const bakedConfig = {
   environment: "dev" as Environment,
   // Concrete per-build identity, stamped at install time by the deploy
   // script (alongside `environment`). `0.0.0-dev` in source / after
@@ -49,6 +61,25 @@ export const config = {
   appName: "Traycer Dev",
   protocolScheme: "traycer-dev",
   appId: "ai.traycer.desktop",
+};
+
+// The dev-gated backend URL overrides resolve once, at module init, so every
+// consumer (main, preload, IPC-served desktop config) sees one consistent
+// value for the process's lifetime.
+export const config = {
+  ...bakedConfig,
+  authnBaseUrl: devBackendUrlFromEnv(
+    bakedConfig.environment,
+    DEV_AUTHN_BASE_URL_ENV,
+    bakedConfig.authnBaseUrl,
+    process.env,
+  ),
+  cloudUiBaseUrl: devBackendUrlFromEnv(
+    bakedConfig.environment,
+    DEV_CLOUD_UI_BASE_URL_ENV,
+    bakedConfig.cloudUiBaseUrl,
+    process.env,
+  ),
 };
 
 // Single derived discriminator for "development build vs shipped build",

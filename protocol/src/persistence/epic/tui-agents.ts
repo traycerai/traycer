@@ -58,6 +58,10 @@ const baseTuiAgentFields = {
   terminalAgentArgs: z.string().nullable().default(null).catch(null),
   terminalShellCommand: z.string().nullable().catch(null),
   terminalShellArgs: z.array(z.string()).nullable().catch(null),
+  // Which of the harness's logged-in profiles (subscriptions) this agent
+  // runs on. `null` = the ambient/host login, so records persisted before
+  // profiles existed still parse cleanly. See the multi-profile decision log.
+  profileId: z.string().nullable().default(null).catch(null),
 } as const;
 
 export const claudeTuiAgentSchema = z.object({

@@ -56,6 +56,19 @@ vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => MOCK_HOST_CLIENT,
 }));
 
+// HarnessModelPickerImpl (mounted inside the tile tree via the composer
+// toolbar) resolves the create-profile gate's client through
+// useHostClientForHostId, which unconditionally calls useHostClientFor,
+// which calls useHostClient from @/lib/host/runtime directly (same barrel
+// bypass as useTabHostClient above). Stub the hook directly, mirroring
+// harness-model-picker.test.tsx's convention for this exact hook - null is a
+// production-legitimate value (useProvidersListForClient/useHostQuery own the
+// client === null disabled gate) so no consumer downstream needs a real
+// client here.
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => null,
+}));
+
 // The chat registry now OWNS its transport (built in its factory) and drives
 // tests through the `__setChatStreamClientFactoryForTests` override, so it no
 // longer consumes these per-tile hooks. They're stubbed only so any other
@@ -157,6 +170,7 @@ const QUEUED_SETTINGS: ChatRunSettings = {
   reasoningEffort: "medium",
   serviceTier: null,
   agentMode: "epic",
+  profileId: null,
 };
 const UPDATED_QUEUE_SETTINGS: ChatRunSettings = {
   harnessId: "claude",
@@ -165,6 +179,7 @@ const UPDATED_QUEUE_SETTINGS: ChatRunSettings = {
   reasoningEffort: "low",
   serviceTier: null,
   agentMode: "epic",
+  profileId: null,
 };
 const INITIAL_HANDOFF_CONTENT: JsonContent = {
   type: "doc",
@@ -182,6 +197,7 @@ const INITIAL_HANDOFF_SETTINGS: ChatRunSettings = {
   reasoningEffort: "high",
   serviceTier: null,
   agentMode: "epic",
+  profileId: null,
 };
 const SESSION_SETTINGS: ChatRunSettings = {
   harnessId: "claude",
@@ -190,6 +206,7 @@ const SESSION_SETTINGS: ChatRunSettings = {
   reasoningEffort: "low",
   serviceTier: null,
   agentMode: "epic",
+  profileId: null,
 };
 
 interface ChatHarness {
@@ -481,6 +498,7 @@ function runningActiveTurn(): ChatActiveTurn {
     harnessId: "codex",
     model: "gpt-live",
     agentMode: "regular",
+    profileId: null,
     userMessageId: "message-1",
     startedAt: 3,
     updatedAt: 3,
@@ -636,7 +654,11 @@ describe("<ChatTile />", () => {
     // host binding the catalog never resolves the empty default, so seed a
     // concrete default model so the composer reaches a sendable state.
     useSettingsStore.setState({
-      defaultSelection: { harnessId: "codex", modelSlug: "gpt-5-codex" },
+      defaultSelection: {
+        harnessId: "codex",
+        modelSlug: "gpt-5-codex",
+        profileId: null,
+      },
     });
     harness.install(seedDocWithChat, "editor");
     chatHarness.install("owner", []);
@@ -742,6 +764,7 @@ describe("<ChatTile />", () => {
           harnessId: "claude",
           model: "haiku",
           agentMode: "regular",
+          profileId: null,
           userMessageId: "message-1",
           startedAt: 2,
           updatedAt: 2,
@@ -900,6 +923,7 @@ describe("<ChatTile />", () => {
           harnessId: "codex",
           model: "gpt-live",
           agentMode: "regular",
+          profileId: null,
           userMessageId: "message-1",
           startedAt: 2,
           updatedAt: 2,
@@ -1012,6 +1036,7 @@ describe("<ChatTile />", () => {
           harnessId: "codex",
           model: "gpt-live",
           agentMode: "regular",
+          profileId: null,
           userMessageId: "message-1",
           startedAt: 2,
           updatedAt: 2,
@@ -1864,6 +1889,7 @@ describe("<ChatTile />", () => {
           harnessId: QUEUED_SETTINGS.harnessId,
           model: QUEUED_SETTINGS.model,
           agentMode: QUEUED_SETTINGS.agentMode,
+          profileId: null,
           userMessageId: "message-active",
           startedAt: 4,
           updatedAt: 4,

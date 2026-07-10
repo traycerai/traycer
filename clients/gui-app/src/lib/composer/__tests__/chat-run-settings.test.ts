@@ -28,7 +28,11 @@ describe("chat run settings", () => {
   it("maps GUI permissions to runtime permissions", () => {
     expect(
       buildChatRunSettings({
-        selection: { harnessId: "codex", modelSlug: "gpt-test" },
+        selection: {
+          harnessId: "codex",
+          modelSlug: "gpt-test",
+          profileId: null,
+        },
         permission: "supervised",
         reasoning: "high",
         serviceTier: "",
@@ -41,11 +45,12 @@ describe("chat run settings", () => {
       reasoningEffort: "high",
       serviceTier: null,
       agentMode: "regular",
+      profileId: null,
     });
 
     expect(
       buildChatRunSettings({
-        selection: { harnessId: "codex", modelSlug: "" },
+        selection: { harnessId: "codex", modelSlug: "", profileId: null },
         permission: "full_access",
         reasoning: "",
         serviceTier: "",
@@ -58,11 +63,16 @@ describe("chat run settings", () => {
       reasoningEffort: null,
       serviceTier: null,
       agentMode: "epic",
+      profileId: null,
     });
 
     expect(
       buildChatRunSettings({
-        selection: { harnessId: "opencode", modelSlug: "opencode-live" },
+        selection: {
+          harnessId: "opencode",
+          modelSlug: "opencode-live",
+          profileId: null,
+        },
         permission: "auto_accept_edits",
         reasoning: "medium",
         serviceTier: "fast",
@@ -75,6 +85,7 @@ describe("chat run settings", () => {
       reasoningEffort: "medium",
       serviceTier: "fast",
       agentMode: "regular",
+      profileId: null,
     });
   });
 
@@ -87,6 +98,7 @@ describe("chat run settings", () => {
         reasoningEffort: null,
         serviceTier: null,
         agentMode: "regular",
+        profileId: null,
       }),
     ).toBe("supervised");
     expect(
@@ -97,6 +109,7 @@ describe("chat run settings", () => {
         reasoningEffort: null,
         serviceTier: null,
         agentMode: "regular",
+        profileId: null,
       }),
     ).toBe("auto_accept_edits");
     expect(
@@ -107,6 +120,7 @@ describe("chat run settings", () => {
         reasoningEffort: null,
         serviceTier: null,
         agentMode: "regular",
+        profileId: null,
       }),
     ).toBe("full_access");
   });

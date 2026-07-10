@@ -218,6 +218,12 @@ export type CreateAgentWorkspace = z.infer<typeof createAgentWorkspaceSchema>;
  *
  * The new agent's `parentId` is set to `senderAgentId` so the epic projection
  * can render the spawn lineage without a separate join.
+ *
+ * `profileId` is the explicit per-child profile override: `null` inherits
+ * the sender agent's profile (the default per the multi-profile decision
+ * log), a string pins the child to that specific logged-in profile
+ * (subscription). Defaulted so requests built before profiles existed still
+ * parse.
  */
 export const createAgentRequestSchema = z.object({
   senderAgentId: z.string(),
@@ -230,6 +236,7 @@ export const createAgentRequestSchema = z.object({
   reasoningEffort: z.string().nullable(),
   fastMode: z.boolean().nullable(),
   workspace: createAgentWorkspaceSchema,
+  profileId: z.string().nullable().default(null),
 });
 export type CreateAgentRequest = z.infer<typeof createAgentRequestSchema>;
 

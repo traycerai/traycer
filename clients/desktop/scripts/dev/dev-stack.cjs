@@ -15,16 +15,39 @@ function readRendererPort(env) {
   return port;
 }
 
-function main() {
-  const rendererPort = readRendererPort(process.env);
+// Build the env handed to the renderer + main dev processes.
+//
+// The renderer bundle has no `process.env`; the multi-run slot reaches it
+// through Vite (`VITE_DEV_DESKTOP_SLOT`) so `renderer-shell/sign-in-url.ts`
+// derives the same slot-suffixed deep-link scheme the main process registers.
+//
+// The result is spread from `env`, so an inherited `VITE_DEV_DESKTOP_SLOT` -
+// exported by hand, or left over from a prior slotted run - would survive into
+// a NO-slot run: the renderer would derive a slot-suffixed scheme while the
+// main process, which reads `DEV_DESKTOP_SLOT` directly, registers the bare
+// one, silently breaking the callback isolation this threading provides. Clear
+// it so both sides always derive from the same source.
+function buildChildEnv(env) {
+  const rendererPort = readRendererPort(env);
   const rendererUrl =
-    process.env.TRAYCER_DESKTOP_DEV_URL ?? `http://localhost:${rendererPort}`;
+    env.TRAYCER_DESKTOP_DEV_URL ?? `http://localhost:${rendererPort}`;
   const childEnv = {
-    ...process.env,
+    ...env,
     PORT: String(rendererPort),
     TRAYCER_DESKTOP_DEV: "1",
     TRAYCER_DESKTOP_DEV_URL: rendererUrl,
   };
+  if (typeof env.DEV_DESKTOP_SLOT === "string") {
+    childEnv.VITE_DEV_DESKTOP_SLOT = env.DEV_DESKTOP_SLOT;
+  } else {
+    delete childEnv.VITE_DEV_DESKTOP_SLOT;
+  }
+  return childEnv;
+}
+
+function main() {
+  const rendererPort = readRendererPort(process.env);
+  const childEnv = buildChildEnv(process.env);
 
   const child = spawn(
     "bun",
@@ -67,4 +90,5 @@ if (require.main === module) {
 module.exports = {
   main,
   readRendererPort,
+  buildChildEnv,
 };

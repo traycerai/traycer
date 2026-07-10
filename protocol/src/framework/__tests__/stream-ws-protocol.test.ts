@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import {
+  clientStreamOpenFrameSchema,
   hostStreamOpenAckFrameSchema,
   clientStreamCredentialUpdateFrameSchema,
   STREAM_CAPABILITY_CREDENTIAL_UPDATE,
@@ -19,6 +20,22 @@ import {
  */
 describe("stream-ws-protocol cross-version compatibility", () => {
   const manifest = { "epic.subscribe": { major: 1, minor: 0 } };
+
+  describe("clientStreamOpenFrame (client -> host)", () => {
+    it("strips unknown additive fields instead of rejecting", () => {
+      const parsed = clientStreamOpenFrameSchema.safeParse({
+        kind: "open",
+        token: "bearer",
+        manifest,
+        someFutureField: { nested: true },
+      });
+
+      expect(parsed.success).toBe(true);
+      if (parsed.success) {
+        expect("someFutureField" in parsed.data).toBe(false);
+      }
+    });
+  });
 
   describe("hostStreamOpenAckFrame (host -> client)", () => {
     it("strips unknown keys instead of rejecting (older client tolerates a newer host's additive fields)", () => {
@@ -77,6 +94,9 @@ describe("stream-ws-protocol cross-version compatibility", () => {
         capabilities: [STREAM_CAPABILITY_CREDENTIAL_UPDATE],
       });
       expect(parsed.success).toBe(true);
+      if (parsed.success) {
+        expect("capabilities" in parsed.data).toBe(false);
+      }
     });
   });
 

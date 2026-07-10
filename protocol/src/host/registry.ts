@@ -211,6 +211,7 @@ import {
   providersAwaitLoginResponseSchema,
   providersAwaitLoginResponseSchemaV10,
   providersCancelLoginRequestSchema,
+  providersCancelLoginRequestSchemaV11,
   providersCancelLoginResponseSchema,
   providersClearApiKeyRequestSchema,
   providersClearApiKeyRequestSchemaV10,
@@ -223,7 +224,9 @@ import {
   providersDetectVersionRequestSchema,
   providersDetectVersionResponseSchema,
   providersStartLoginRequestSchema,
+  providersStartLoginRequestSchemaV11,
   providersStartLoginResponseSchema,
+  providersStartLoginResponseSchemaV11,
   providersListRequestSchema,
   providersListResponseSchema,
   providersListResponseSchemaV10,
@@ -231,6 +234,7 @@ import {
   downgradeProviderCliStateToV10,
   downgradeProviderCliStateListToV20,
   upgradeProviderCliStateV10ToV20,
+  upgradeProviderCliStateV10ToLatest,
   providersRemoveCustomPathRequestSchema,
   providersRemoveCustomPathRequestSchemaV10,
   providersRemoveCustomPathResponseSchema,
@@ -241,6 +245,7 @@ import {
   providersSetApiKeyResponseSchemaV10,
   providersSetEnabledRequestSchema,
   providersSetEnabledRequestSchemaV10,
+  providersSetEnabledRequestSchemaV21,
   providersSetEnabledResponseSchema,
   providersSetEnabledResponseSchemaV10,
   providersSetEnvOverrideRequestSchema,
@@ -257,7 +262,6 @@ import {
   providersSetTerminalAgentArgsResponseSchemaV10,
   type ProviderCliState,
   type ProviderCliStateV10,
-  type ProviderCliStateV20,
 } from "@traycer/protocol/host/provider-schemas";
 
 export { hostGetRuntimeCapabilitiesV10 };
@@ -529,8 +533,14 @@ function unsupportedProviderStateDowngrade(
   };
 }
 
+// Accepts either the live (latest) state or the frozen v2.0 state - see
+// `downgradeProviderCliStateToV10`'s comment. `providersListDowngradeV2ToV1`
+// downgrades from v2.0 (already `profiles`-free); every other caller
+// downgrades from the live state.
 function downgradeProviderStateForV10(
-  state: ProviderCliState,
+  state: Omit<ProviderCliState, "profiles"> & {
+    profiles?: ProviderCliState["profiles"];
+  },
 ): DowngradeResult<ProviderCliStateV10> {
   const downgraded = downgradeProviderCliStateToV10(state);
   if (downgraded === null) {
@@ -540,7 +550,9 @@ function downgradeProviderStateForV10(
 }
 
 function downgradeProviderStateListForV10(
-  states: readonly ProviderCliState[],
+  states: readonly (Omit<ProviderCliState, "profiles"> & {
+    profiles?: ProviderCliState["profiles"];
+  })[],
 ): ProviderCliStateV10[] {
   return states.flatMap((state) => {
     const downgraded = downgradeProviderCliStateToV10(state);
@@ -548,16 +560,12 @@ function downgradeProviderStateListForV10(
   });
 }
 
-function upgradeProviderStateFromV10(
-  state: ProviderCliStateV10,
-): ProviderCliStateV20 {
-  return upgradeProviderCliStateV10ToV20(state);
-}
-
-function upgradeProviderStateListFromV10(
-  states: readonly ProviderCliStateV10[],
-): ProviderCliStateV20[] {
-  return states.map(upgradeProviderCliStateV10ToV20);
+// Upgrades a v1.0 state to the LIVE/latest shape - shared by every
+// provider.* mutation whose v2.0 contract reuses `providerCliStateSchema`
+// directly (all except `providers.list`, which freezes its own v2.0 shape
+// and upgrades via `upgradeProviderCliStateV10ToV20` inline below instead).
+function upgradeProviderStateFromV10(state: ProviderCliStateV10): ProviderCliState {
+  return upgradeProviderCliStateV10ToLatest(state);
 }
 
 function downgradeProviderRequestForV10<T>(
@@ -582,7 +590,7 @@ export const providersListUpgradeV1ToV2 = defineUpgradePath<
   to: { major: 2, minor: 0 },
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => ({
-    providers: upgradeProviderStateListFromV10(response.providers),
+    providers: response.providers.map(upgradeProviderCliStateV10ToV20),
   }),
 });
 
@@ -614,10 +622,18 @@ export const providersListUpgradeV2ToV3 = defineUpgradePath<
 >({
   from: { major: 2, minor: 0 },
   to: { major: 3, minor: 0 },
-  // A v2.0 response without Amp is a valid v3.0 response (purely additive),
-  // and the request shape is identical - both upgrades are identity.
+  // A v2.0 response without Amp is a valid v3.0 response modulo `profiles`,
+  // and the request shape is identical - the request upgrade is identity. A
+  // v2.0 host predates profiles entirely, so its response upgrades to
+  // `profiles: []` per provider (same "old host never had this feature"
+  // semantics as the v1.0 -> v2.0 upgrade above).
   upgradeRequest: (request) => request,
-  upgradeResponse: (response) => response,
+  upgradeResponse: (response) => ({
+    providers: response.providers.map((provider) => ({
+      ...provider,
+      profiles: [],
+    })),
+  }),
 });
 
 export const providersListDowngradeV3ToV2 = defineDowngradePath<
@@ -811,6 +827,35 @@ export const providersStartLoginV10 = defineRpcContract({
   responseSchema: providersStartLoginResponseSchema,
 });
 
+// v1.1 adds `profileId` / `createProfile` to the request and `profileId` to
+// the response - re-authenticate an existing managed profile, or mint a
+// brand-new one, instead of a standalone `providers.createProfile` method (a
+// new method name fatally fails the released-peer equal-set handshake, see
+// `worktree.listBindingsForEpic@1.1`'s note and the multi-profile decision
+// log). Shipped as a minor (not an in-place edit to v1.0): both new fields
+// default to `null`, which is byte-identical to today's request/response, so
+// a v1.0.0 host still negotiates and old clients are unaffected.
+export const providersStartLoginV11 = defineRpcContract({
+  method: "providers.startLogin",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: providersStartLoginRequestSchemaV11,
+  responseSchema: providersStartLoginResponseSchemaV11,
+});
+
+export const providersStartLoginUpgradeV10ToV11 = defineUpgradePath<
+  typeof providersStartLoginV10,
+  typeof providersStartLoginV11
+>({
+  from: { major: 1, minor: 0 },
+  to: { major: 1, minor: 1 },
+  upgradeRequest: (request) => ({
+    ...request,
+    profileId: null,
+    createProfile: null,
+  }),
+  upgradeResponse: (response) => ({ ...response, profileId: null }),
+});
+
 export const providersAwaitLoginV10 = defineRpcContract({
   method: "providers.awaitLogin",
   schemaVersion: { major: 1, minor: 0 } as const,
@@ -831,7 +876,9 @@ export const providersAwaitLoginUpgradeV1ToV2 = defineUpgradePath<
 >({
   from: { major: 1, minor: 0 },
   to: { major: 2, minor: 0 },
-  upgradeRequest: (request) => request,
+  // A v1.0 request carries no `profileId` (added later as a bare additive
+  // field on this request shape) - upgrades to `null` (ambient).
+  upgradeRequest: (request) => ({ ...request, profileId: null }),
   upgradeResponse: (response) => ({
     state:
       response.state === null
@@ -846,11 +893,16 @@ export const providersAwaitLoginDowngradeV2ToV1 = defineDowngradePath<
 >({
   from: { major: 2, minor: 0 },
   to: { major: 1, minor: 0 },
-  downgradeRequest: (request) =>
-    downgradeProviderRequestForV10(
+  // Drop `profileId` before the parse: `providersAwaitLoginRequestSchemaV10`
+  // is a strict object that never learned it, so passing the full request
+  // through would fail the strict parse and drop the whole downgrade.
+  downgradeRequest: (request) => {
+    const { profileId, ...legacyRequest } = request;
+    return downgradeProviderRequestForV10(
       providersAwaitLoginRequestSchemaV10,
-      request,
-    ),
+      legacyRequest,
+    );
+  },
   downgradeResponse: (response) => {
     if (response.state === null) {
       return {
@@ -874,6 +926,27 @@ export const providersCancelLoginV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: providersCancelLoginRequestSchema,
   responseSchema: providersCancelLoginResponseSchema,
+});
+
+// v1.1 adds `profileId`, mirroring `providers.startLogin@1.1` - cancel the
+// same profile-scoped login child that was started. Shipped as a minor (not
+// an in-place edit to v1.0): `profileId` defaults to `null`, so a v1.0.0
+// host still negotiates and old clients are unaffected.
+export const providersCancelLoginV11 = defineRpcContract({
+  method: "providers.cancelLogin",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: providersCancelLoginRequestSchemaV11,
+  responseSchema: providersCancelLoginResponseSchema,
+});
+
+export const providersCancelLoginUpgradeV10ToV11 = defineUpgradePath<
+  typeof providersCancelLoginV10,
+  typeof providersCancelLoginV11
+>({
+  from: { major: 1, minor: 0 },
+  to: { major: 1, minor: 1 },
+  upgradeRequest: (request) => ({ ...request, profileId: null }),
+  upgradeResponse: (response) => response,
 });
 
 export const providersSetEnabledV10 = defineRpcContract({
@@ -902,17 +975,58 @@ export const providersSetEnabledUpgradeV1ToV2 = defineUpgradePath<
   }),
 });
 
-export const providersSetEnabledDowngradeV2ToV1 = defineDowngradePath<
+// v2.1 adds `profileAction` (discriminated rename/remove/recolor of a profile) to
+// the request - folded onto this existing "administer this provider's
+// configuration" mutation instead of standalone `providers.renameProfile` /
+// `removeProfile` / `recolorProfile` methods, because a new method name fatally fails the
+// released-peer equal-set handshake (see `worktree.listBindingsForEpic@1.1`'s
+// note and `released-surface-compat.test.ts`). Chosen over the other
+// provider.* mutations because its response already returns the full
+// `ProviderCliState` (so the mutated `profiles[]` is visible for free) and
+// it is already the closest thing to a generic per-provider admin action -
+// the CLI-path (`setSelection`/`addCustomPath`), credential
+// (`setApiKey`/`clearApiKey`), and login-lifecycle (`startLogin`/
+// `awaitLogin`/`cancelLogin`) methods all have narrower, unrelated
+// semantics. `recolor` rides the same unreleased profile-management surface
+// because profile colors are host-owned profile metadata. `profileAction:
+// null` is byte-identical to today's plain enable/disable request, so a v2.0
+// client is unaffected.
+export const providersSetEnabledV21 = defineRpcContract({
+  method: "providers.setEnabled",
+  schemaVersion: { major: 2, minor: 1 } as const,
+  requestSchema: providersSetEnabledRequestSchemaV21,
+  responseSchema: providersSetEnabledResponseSchema,
+});
+
+export const providersSetEnabledUpgradeV20ToV21 = defineUpgradePath<
   typeof providersSetEnabledV20,
-  typeof providersSetEnabledV10
+  typeof providersSetEnabledV21
 >({
   from: { major: 2, minor: 0 },
+  to: { major: 2, minor: 1 },
+  upgradeRequest: (request) => ({ ...request, profileAction: null }),
+  upgradeResponse: (response) => response,
+});
+
+// Bridges from v2.1 (the latest installed version of major 2's line) down to
+// the frozen v1.0 - not from v2.0, since v2.1 supersedes it as major 2's
+// latest.
+export const providersSetEnabledDowngradeV2ToV1 = defineDowngradePath<
+  typeof providersSetEnabledV21,
+  typeof providersSetEnabledV10
+>({
+  from: { major: 2, minor: 1 },
   to: { major: 1, minor: 0 },
-  downgradeRequest: (request) =>
-    downgradeProviderRequestForV10(
+  // Drop `profileAction` before the parse: `providersSetEnabledRequestSchemaV10`
+  // is a strict object that never learned it, so passing the full request
+  // through would fail the strict parse and drop the whole downgrade.
+  downgradeRequest: (request) => {
+    const { profileAction, ...legacyRequest } = request;
+    return downgradeProviderRequestForV10(
       providersSetEnabledRequestSchemaV10,
-      request,
-    ),
+      legacyRequest,
+    );
+  },
   downgradeResponse: (response) => {
     const state = downgradeProviderStateForV10(response.state);
     if (!state.ok) return state;
@@ -2573,11 +2687,15 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
   },
   "providers.startLogin": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: providersStartLoginV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: providersStartLoginV11,
+          upgradeFromPreviousVersion: providersStartLoginUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -2607,11 +2725,15 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
   },
   "providers.cancelLogin": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: providersCancelLoginV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: providersCancelLoginV11,
+          upgradeFromPreviousVersion: providersCancelLoginUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -2744,11 +2866,15 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
       downgradePathsFromLatest: {},
     },
     2: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: providersSetEnabledV20,
           upgradeFromPreviousVersion: providersSetEnabledUpgradeV1ToV2,
+        },
+        1: {
+          contract: providersSetEnabledV21,
+          upgradeFromPreviousVersion: providersSetEnabledUpgradeV20ToV21,
         },
       },
       downgradePathsFromLatest: { 1: providersSetEnabledDowngradeV2ToV1 },

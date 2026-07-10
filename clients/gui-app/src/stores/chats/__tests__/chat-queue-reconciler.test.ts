@@ -32,6 +32,7 @@ const SETTINGS = {
   reasoningEffort: "high",
   serviceTier: null,
   agentMode: "epic" as const,
+  profileId: null,
 };
 
 function createPendingAction(

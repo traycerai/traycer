@@ -50,6 +50,7 @@ describe("useTerminalAgentWorktreeGate", () => {
         workspaceMode: "inherit",
         worktreeIntent: null,
         terminalAgentArgs: null,
+        profileId: null,
       });
     });
 
@@ -66,6 +67,7 @@ describe("useTerminalAgentWorktreeGate", () => {
       workspaceMode: "inherit",
       worktreeIntent: null,
       terminalAgentArgs: null,
+      profileId: null,
       forkSourceHarnessSessionId: null,
       onStatusChange: null,
       placement: { kind: "active-tile" },
@@ -106,6 +108,7 @@ describe("useTerminalAgentWorktreeGate", () => {
         workspaceMode: "inherit",
         worktreeIntent: intent,
         terminalAgentArgs: "--full-auto",
+        profileId: null,
       });
     });
 
@@ -148,6 +151,7 @@ describe("useTerminalAgentWorktreeGate", () => {
         workspaceMode: "folderless",
         worktreeIntent: { entries: [] },
         terminalAgentArgs: null,
+        profileId: null,
       });
     });
 

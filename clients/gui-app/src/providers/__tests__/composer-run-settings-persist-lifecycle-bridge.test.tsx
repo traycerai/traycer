@@ -14,6 +14,7 @@ const ALICE_SETTINGS: ChatRunSettings = {
   reasoningEffort: null,
   serviceTier: null,
   agentMode: "regular",
+  profileId: null,
 };
 
 const BOB_SETTINGS: ChatRunSettings = {
@@ -23,6 +24,7 @@ const BOB_SETTINGS: ChatRunSettings = {
   reasoningEffort: "high",
   serviceTier: "flex",
   agentMode: "epic",
+  profileId: null,
 };
 
 function resetAuth(

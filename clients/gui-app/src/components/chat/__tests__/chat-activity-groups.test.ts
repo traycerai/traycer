@@ -973,5 +973,6 @@ function interviewSegment(
       },
     ],
     error: null,
+    forkedWithoutAnswer: false,
   };
 }

@@ -25,6 +25,7 @@ function state(
     envOverrides: [],
     loginCapability: null,
     availabilityPending: false,
+    profiles: [],
     auth: {
       status: "authenticated",
       badgeText: null,

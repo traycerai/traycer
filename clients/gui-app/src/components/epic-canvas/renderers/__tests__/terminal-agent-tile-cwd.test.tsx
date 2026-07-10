@@ -424,6 +424,7 @@ describe("<TuiAgentTile /> bound-cwd handling", () => {
       harnessSessionId: null,
       forkSourceHarnessSessionId: null,
       terminalAgentArgs: "--permission-mode acceptEdits",
+      profileId: null,
     });
     const [request] = mockCreate.mutate.mock.calls[0] as [
       {
@@ -521,6 +522,7 @@ describe("<TuiAgentTile /> bound-cwd handling", () => {
       harnessSessionId: "claude-session-reopen",
       forkSourceHarnessSessionId: null,
       terminalAgentArgs: "",
+      profileId: null,
     });
     const [request] = mockCreate.mutate.mock.calls[0] as [
       {

@@ -334,6 +334,14 @@ export const chatActiveTurnSchema = z.object({
   // GUI can detect an epic<->regular change against the live toolbar. Defaults to
   // "regular" so turns persisted before this field was added still parse.
   agentMode: agentModeSchema.default("regular"),
+  // profileId the turn's provider process was spawned under, mirrored from its
+  // `ChatRunSettings` so the GUI can detect a mid-turn profile switch against the
+  // live toolbar (see `decideSteerSettings`) - steering a differently-profiled
+  // prompt into the running turn would deliver it under the wrong account.
+  // `null` for the ambient/default profile. Defaults to `null` so turns
+  // persisted (or received from a host) before this field was added still
+  // parse - see `decideSteerSettings` for how the renderer treats that case.
+  profileId: z.string().nullable().default(null),
   userMessageId: z.string().nullable(),
   startedAt: z.number(),
   updatedAt: z.number(),

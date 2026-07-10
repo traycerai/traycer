@@ -751,10 +751,11 @@ class StreamSession<
     );
 
     const myManifest = buildStreamManifest(this.config.registry);
+    const theirManifest = ackParse.data.manifest;
     const compat = checkStreamMethodCompatibility(
       this.config.registry,
       myManifest,
-      ackParse.data.manifest,
+      theirManifest,
       "client",
       this.config.method,
     );
@@ -787,7 +788,7 @@ class StreamSession<
       this.config.registry,
       this.config.method,
       myManifest[this.config.method],
-      ackParse.data.manifest[this.config.method],
+      theirManifest[this.config.method],
       this.config.params,
     );
     const subscribeFrame: ClientStreamSubscribeFrame = {

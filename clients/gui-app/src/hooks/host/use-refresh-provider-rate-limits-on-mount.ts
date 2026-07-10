@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { DEFAULT_ACCOUNT_CONTEXT } from "@traycer/protocol/common/schemas";
 import {
+  PROVIDER_RATE_LIMITS_STALE_TIME_MS,
   rateLimitFetchLane,
   type RateLimitProviderId,
 } from "@/lib/rate-limit-providers";
@@ -28,11 +29,18 @@ import { enqueueRateLimitFetch } from "@/lib/rate-limits/ephemeral-fetch-queue";
  */
 export function useRefreshProviderRateLimitsOnMount(
   providerId: RateLimitProviderId,
+  profileId: string | null,
+  usageUpdatedAt: number | null,
 ): void {
   useEffect(() => {
     if (rateLimitFetchLane(providerId) !== "ephemeralProcess") return;
+    const stale =
+      usageUpdatedAt === null ||
+      Date.now() - usageUpdatedAt >= PROVIDER_RATE_LIMITS_STALE_TIME_MS;
+    if (!stale) return;
     void enqueueRateLimitFetch(providerId, DEFAULT_ACCOUNT_CONTEXT, {
       force: false,
+      profileId,
     });
-  }, [providerId]);
+  }, [profileId, providerId, usageUpdatedAt]);
 }

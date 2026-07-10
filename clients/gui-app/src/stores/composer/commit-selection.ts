@@ -23,14 +23,22 @@ export function commitSelection(
   store: ComposerToolbarStore,
   harnessId: ProviderId,
   modelSlug: string | null,
+  profileId: string | null,
 ): void {
   const memory = useComposerHarnessMemoryStore.getState();
+  // Profile memory is independent of model memory. Record the explicit choice
+  // immediately so header usage previews can follow it even while the target
+  // harness's model catalog is still resolving (and before a settings emit).
+  memory.recordProfileSelection(harnessId, profileId);
   const resolved =
     modelSlug === null
-      ? memory.resolveHarnessSwitch(harnessId)
-      : { modelSlug, ...memory.resolveModelSelection(harnessId, modelSlug) };
+      ? memory.resolveHarnessSwitch(harnessId, profileId)
+      : {
+          modelSlug,
+          ...memory.resolveModelSelection(harnessId, profileId, modelSlug),
+        };
   store.getState().applyComposerSelection({
-    selection: { harnessId, modelSlug: resolved.modelSlug },
+    selection: { harnessId, profileId, modelSlug: resolved.modelSlug },
     reasoning: resolved.reasoningEffort ?? "",
     serviceTier: resolved.serviceTier ?? "",
   });

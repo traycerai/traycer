@@ -1,9 +1,7 @@
 import * as m from "motion/react-m";
 import { cn } from "@/lib/utils";
 import { leaderGlyph } from "@/lib/keybindings/platform";
-import type { LeaderModifier } from "@/providers/keybinding-context";
 import { Kbd } from "@/components/ui/kbd";
-import { leaderDigitFor } from "@/components/ui/leader-digit-shortcuts";
 
 const LEADER_BADGE_TRANSITION = {
   duration: 0.14,
@@ -11,9 +9,15 @@ const LEADER_BADGE_TRANSITION = {
 } as const;
 
 interface LeaderDigitBadgeProps {
-  /** Tab / section index (0-based). Displayed as a 1-based shortcut number. */
-  readonly index: number;
-  readonly modifier: LeaderModifier;
+  /** Pre-computed shortcut digit. Callers pick the convention (plain
+   *  `leaderDigitFor` or the wraparound `singleDigitLeaderDigitFor`) that
+   *  matches how their scope actually dispatches the chord, so this badge
+   *  never has to know which one applies. */
+  readonly digit: string;
+  /** Epic tabs and the settings sidebar only ever bind a bare `mod`/`alt`
+   *  leader - narrower than `LeaderModifier`, which also carries the model
+   *  picker's shifted `modShift` dimension this badge never renders. */
+  readonly modifier: "mod" | "alt";
   readonly ariaLabel: string;
   readonly testId: string;
   readonly className: string | undefined;
@@ -25,8 +29,7 @@ interface LeaderDigitBadgeProps {
  * settings section sidebar.
  */
 export function LeaderDigitBadge(props: LeaderDigitBadgeProps) {
-  const { index, modifier, ariaLabel, testId, className } = props;
-  const digit = leaderDigitFor(index);
+  const { digit, modifier, ariaLabel, testId, className } = props;
   const symbol = leaderGlyph(modifier);
   return (
     <m.span

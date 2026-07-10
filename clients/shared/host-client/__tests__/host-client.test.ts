@@ -132,9 +132,14 @@ class StubWebSocket implements WebSocketLike {
   }
 
   private respondToOpen(): void {
+    const openFrame = this.sentFrames.find((frame) => frame.kind === "open");
+    if (openFrame === undefined || openFrame.kind !== "open") {
+      throw new Error("Expected open frame before openAck");
+    }
     const frame: HostFrame = {
       kind: "openAck",
-      manifest: { "host.ping": { major: 1, minor: 0 } },
+      manifest: openFrame.manifest,
+      optionalManifest: openFrame.optionalManifest,
     };
     this.onmessage?.({ data: JSON.stringify(frame) });
   }

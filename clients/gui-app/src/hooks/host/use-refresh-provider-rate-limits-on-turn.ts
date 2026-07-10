@@ -84,6 +84,7 @@ export function useRefreshProviderRateLimitsOnTurn(
       if (rateLimitFetchLane(providerId) === "ephemeralProcess") {
         void enqueueRateLimitFetch(providerId, DEFAULT_ACCOUNT_CONTEXT, {
           force: false,
+          profileId: null,
         });
         return;
       }
@@ -96,6 +97,7 @@ export function useRefreshProviderRateLimitsOnTurn(
         >(hostId, "host.getRateLimitUsage", {
           accountContext: DEFAULT_ACCOUNT_CONTEXT,
           providerId,
+          profileId: null,
         }),
       });
     });

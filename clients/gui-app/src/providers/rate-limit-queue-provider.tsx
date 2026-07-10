@@ -97,6 +97,7 @@ export function RateLimitQueueProvider(): null {
     ephemeralProviderIds.forEach((providerId) => {
       void enqueueRateLimitFetch(providerId, DEFAULT_ACCOUNT_CONTEXT, {
         force: false,
+        profileId: null,
       });
     });
   }, [hostId, ephemeralProviderIds]);
@@ -116,6 +117,7 @@ export function RateLimitQueueProvider(): null {
       ephemeralProviderIdsRef.current.forEach((providerId) => {
         void enqueueRateLimitFetch(providerId, DEFAULT_ACCOUNT_CONTEXT, {
           force: false,
+          profileId: null,
         });
       });
     };

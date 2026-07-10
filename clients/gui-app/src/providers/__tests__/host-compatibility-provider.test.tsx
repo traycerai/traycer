@@ -45,6 +45,7 @@ const HANDOFF_SETTINGS = {
   reasoningEffort: "high",
   serviceTier: null,
   agentMode: "epic",
+  profileId: null,
 } satisfies ChatRunSettings;
 
 function registerActiveHandoff(epicId: string): void {

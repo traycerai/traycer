@@ -88,6 +88,9 @@ export interface TerminalAgentLaunch {
   readonly model: string | null;
   readonly reasoningEffort: string | null;
   readonly terminalAgentArgs: string | null;
+  // Which of the harness's logged-in profiles (subscriptions) to launch this
+  // agent on. `null` = the ambient/host login.
+  readonly profileId: string | null;
 }
 
 export interface LandingComposerActions {
@@ -461,6 +464,7 @@ export function useLandingComposerActions(): LandingComposerActions {
         model,
         reasoningEffort,
         terminalAgentArgs,
+        profileId,
       } = launch;
       const epicId = uuidv4();
       const now = Date.now();
@@ -530,6 +534,7 @@ export function useLandingComposerActions(): LandingComposerActions {
               worktreeIntent: workspaceContext.worktreeIntent,
               workspaceMode: workspaceContext.workspaceMode,
               terminalAgentArgs,
+              profileId,
             }),
           // Only `epic.create` rejection reaches this arm (a later tui-agent
           // failure goes to the trailing `.catch`). The epic never landed, so
