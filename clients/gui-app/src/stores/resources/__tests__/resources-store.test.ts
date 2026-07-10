@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import type {
   AppResourceSnapshotWire,
   EpicResourceSnapshotWire,
+  HostTreeResourceSnapshotWire,
+  OtherResourceSnapshotWire,
   OwnerResourceSnapshotWire,
   ResourceProcessSnapshotWire,
   ResourceOwnerKindWire,
@@ -86,6 +88,32 @@ function makeApp(
   };
 }
 
+function makeHostTree(
+  over: Partial<HostTreeResourceSnapshotWire>,
+): HostTreeResourceSnapshotWire {
+  return {
+    sampledAt: 1_000,
+    processCount: 4,
+    cpuPercent: 25,
+    rssBytes: 2_500,
+    ...over,
+  };
+}
+
+function makeOther(
+  over: Partial<OtherResourceSnapshotWire>,
+): OtherResourceSnapshotWire {
+  return {
+    sampledAt: 1_000,
+    rootPids: [20],
+    processCount: 1,
+    cpuPercent: 5,
+    rssBytes: 400,
+    processes: [makeProcess({ pid: 20, rootPid: 20 })],
+    ...over,
+  };
+}
+
 function projection(
   over: Partial<ResourcesProjectionPayload>,
 ): ResourcesProjectionPayload {
@@ -96,6 +124,8 @@ function projection(
     owners: [],
     epic: null,
     epics: [],
+    hostTree: undefined,
+    other: undefined,
     ...over,
   };
 }
@@ -274,6 +304,41 @@ describe("createResourcesStore", () => {
       );
 
     expect(handle.store.getState().epic?.cpuPercent).toBe(80);
+    handle.dispose();
+  });
+
+  it("merges 1.2 host-tree and Other snapshots without churning unchanged identities", () => {
+    const fake = makeFakeClient();
+    const handle = createResourcesStore({
+      scope: { kind: "global" },
+      streamClientFactory: fake.factory,
+    });
+    const hostTree = makeHostTree({});
+    const other = makeOther({});
+
+    fake.callbacks().onSnapshot(projection({ hostTree, other }));
+    expect(handle.store.getState().hostTree).toBe(hostTree);
+    expect(handle.store.getState().other).toBe(other);
+
+    fake.callbacks().onUpdate(
+      projection({
+        sampledAt: 2_000,
+        hostTree: makeHostTree({ sampledAt: 2_000 }),
+        other: makeOther({ sampledAt: 2_000 }),
+      }),
+    );
+    expect(handle.store.getState().hostTree).toBe(hostTree);
+    expect(handle.store.getState().other).toBe(other);
+
+    fake.callbacks().onUpdate(
+      projection({
+        sampledAt: 3_000,
+        hostTree: makeHostTree({ sampledAt: 3_000, cpuPercent: 30 }),
+        other: makeOther({ sampledAt: 3_000, rssBytes: 500 }),
+      }),
+    );
+    expect(handle.store.getState().hostTree?.cpuPercent).toBe(30);
+    expect(handle.store.getState().other?.rssBytes).toBe(500);
     handle.dispose();
   });
 

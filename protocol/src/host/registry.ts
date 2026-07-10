@@ -138,6 +138,7 @@ import { notificationsSubscribeV10 } from "@traycer/protocol/host/notifications/
 import {
   resourcesSubscribeV10,
   resourcesSubscribeV11,
+  resourcesSubscribeV12,
 } from "@traycer/protocol/host/resources/subscribe";
 import {
   speechEnsureModelV10,
@@ -564,7 +565,9 @@ function downgradeProviderStateListForV10(
 // provider.* mutation whose v2.0 contract reuses `providerCliStateSchema`
 // directly (all except `providers.list`, which freezes its own v2.0 shape
 // and upgrades via `upgradeProviderCliStateV10ToV20` inline below instead).
-function upgradeProviderStateFromV10(state: ProviderCliStateV10): ProviderCliState {
+function upgradeProviderStateFromV10(
+  state: ProviderCliStateV10,
+): ProviderCliState {
   return upgradeProviderCliStateV10ToLatest(state);
 }
 
@@ -2890,7 +2893,8 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
         },
         1: {
           contract: worktreeListBindingsForEpicV11,
-          upgradeFromPreviousVersion: worktreeListBindingsForEpicUpgradeV10ToV11,
+          upgradeFromPreviousVersion:
+            worktreeListBindingsForEpicUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -3023,13 +3027,16 @@ export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
   },
   "resources.subscribe": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: resourcesSubscribeV10,
         },
         1: {
           contract: resourcesSubscribeV11,
+        },
+        2: {
+          contract: resourcesSubscribeV12,
         },
       },
     },
