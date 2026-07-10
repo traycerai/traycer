@@ -1703,11 +1703,14 @@ function buildProcessRows(
     return byParent;
   }, new Map<number, ResourceProcessSnapshotWire[]>());
 
+  // Rootness is purely structural: parentless, or parent outside this list.
+  // `pid === rootPid` must NOT qualify — an owner can carry a second tracked
+  // root that is an OS descendant of its first (e.g. a harness child under the
+  // owner's PTY), and counting it as a root while `childrenByParent` also
+  // attaches it under its in-list parent would double-count its subtree.
   const roots = processes.filter(
     (process) =>
-      process.parentPid === null ||
-      process.pid === process.rootPid ||
-      !processByPid.has(process.parentPid),
+      process.parentPid === null || !processByPid.has(process.parentPid),
   );
   const completeRoots = roots.length === 0 ? processes : roots;
 

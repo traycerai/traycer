@@ -448,6 +448,61 @@ describe("ResourceMonitorPopover", () => {
     expect(screen.queryByText("Untitled chat")).toBeNull();
   });
 
+  it("counts a nested tracked root once in owner tree totals", () => {
+    const stub = installStubFactory();
+    renderPopover();
+
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [
+            owner({
+              processes: [
+                // PTY root: parent (the host) is outside this list.
+                resourceProcess({
+                  pid: 100,
+                  parentPid: 1,
+                  rootPid: 100,
+                  name: "zsh",
+                  command: "/bin/zsh",
+                  cpuPercent: 3,
+                  rssBytes: 10 * 1024 * 1024,
+                }),
+                resourceProcess({
+                  pid: 101,
+                  parentPid: 100,
+                  rootPid: 100,
+                  name: "node",
+                  command: "node agent.js",
+                  cpuPercent: 5,
+                  rssBytes: 20 * 1024 * 1024,
+                }),
+                // Second tracked root that is an OS descendant of the first
+                // tree: must be counted exactly once (as a child), never as
+                // an additional root.
+                resourceProcess({
+                  pid: 102,
+                  parentPid: 101,
+                  rootPid: 102,
+                  name: "claude",
+                  command: "claude --chat",
+                  cpuPercent: 9,
+                  rssBytes: 30 * 1024 * 1024,
+                }),
+              ],
+            }),
+          ],
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    // 3 + 5 + 9 single-counted, on both the task header and the owner row;
+    // the double-count bug would show 26% instead.
+    expect(screen.getAllByText("17%").length).toBeGreaterThan(0);
+    expect(screen.queryByText("26%")).toBeNull();
+  });
+
   it("updates an auto-titled terminal owner from each resource frame", () => {
     canvasMock.state.canvasByTabId["tab-1"].tilesByInstanceId["tile-term-1"] = {
       ...canvasMock.state.canvasByTabId["tab-1"].tilesByInstanceId[
