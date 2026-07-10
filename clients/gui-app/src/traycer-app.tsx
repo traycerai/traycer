@@ -41,6 +41,10 @@ import { createAppRouter, type AppRouter } from "@/router";
 // load (mirrors `theme-applier.ts`). The class drives the `wco:`
 // Tailwind variant so titlebar insets toggle on fullscreen.
 import "@/lib/window-controls-overlay";
+// Side-effect import: keeps the Windows native min/max/close controls in
+// sync with the active theme by pushing theme-derived overlay colors to the
+// desktop shell on every theme change (no-op on web / mac / Linux).
+import "@/lib/title-bar-overlay-theme";
 import { startMainThreadBlockProbe } from "@/lib/perf/main-thread-block-probe";
 
 // Surface renderer main-thread stalls (Long Tasks) so slow-feeling RPCs caused

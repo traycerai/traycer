@@ -258,7 +258,11 @@ function openInBrowser(url: string): void {
         ? { cmd: "rundll32", args: ["url.dll,FileProtocolHandler", url] }
         : { cmd: "xdg-open", args: [url] };
   try {
-    const child = spawn(cmd, args, { stdio: "ignore", detached: true });
+    const child = spawn(cmd, args, {
+      stdio: "ignore",
+      detached: true,
+      windowsHide: plat === "win32",
+    });
     child.on("error", () => {});
     child.unref();
   } catch {

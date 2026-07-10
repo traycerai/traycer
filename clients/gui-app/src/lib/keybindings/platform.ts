@@ -38,6 +38,26 @@ export function isMac(): boolean {
   return IS_MAC;
 }
 
+// Detect Windows via the same UA Client Hints signal as `detectMac`
+// (`navigator.userAgentData.platform` reports "Windows"), falling back to the UA
+// string ("Windows NT ...") for engines without UA-CH. Like the mac check it is
+// robust against the desktop app's custom User-Agent, which never sets UA-CH
+// metadata.
+function detectWindows(): boolean {
+  if (typeof navigator === "undefined") return false;
+  const uaPlatform = navigator.userAgentData?.platform;
+  if (uaPlatform !== undefined && uaPlatform !== "") {
+    return uaPlatform.toLowerCase().includes("win");
+  }
+  return navigator.userAgent.toLowerCase().includes("win");
+}
+
+const IS_WINDOWS = detectWindows();
+
+export function isWindows(): boolean {
+  return IS_WINDOWS;
+}
+
 export function modLabel(): string {
   return isMac() ? "⌘" : "Ctrl";
 }
