@@ -368,6 +368,75 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
     expect(requests).toHaveLength(2);
   });
 
+  it("refetches when a SUBMODULE leg is cold even though the superproject is proven", async () => {
+    vi.useFakeTimers();
+    // The noble-weasel shape: superproject fully proven merged, but an owned
+    // submodule's PR fact is still `null` (warming). One unproven submodule
+    // holds the row in Review, so the retry must fire off the submodule leg.
+    const coldSubmodule = {
+      repoIdentifier: { owner: "acme", repo: "lib" },
+      branch: "traycer/sub",
+      prState: null,
+      prNumber: null,
+      prUrl: null,
+      mergedHeadShaMatches: false,
+      mergedIntoDefault: false,
+    };
+    const coldEntry: WorktreeHostEntryV11 = {
+      ...enrichedEntry("/wt/a", "feat-a"),
+      prState: "merged",
+      prNumber: 7,
+      prUrl: "https://github.com/acme/app/pull/7",
+      mergedHeadShaMatches: true,
+      submodules: [coldSubmodule],
+    };
+    const resolvedEntry: WorktreeHostEntryV11 = {
+      ...coldEntry,
+      submodules: [
+        {
+          ...coldSubmodule,
+          prState: "merged",
+          prNumber: 9,
+          prUrl: "https://github.com/acme/lib/pull/9",
+          mergedHeadShaMatches: true,
+        },
+      ],
+    };
+    const entriesByPath = new Map<string, WorktreeHostEntryV11>([
+      ["/wt/a", coldEntry],
+    ]);
+    const requests: string[] = [];
+    const fixture = createFixture(entriesByPath, (path) => {
+      requests.push(path);
+      if (requests.length === 1) entriesByPath.set(path, resolvedEntry);
+    });
+    const { result } = renderHook(
+      () => useWorktreeActivityEnrichment(fixture.client, true, HOST_ID),
+      { wrapper: fixture.Wrapper },
+    );
+
+    await act(async () => {
+      result.current.reportVisiblePaths(["/wt/a"]);
+      await vi.advanceTimersByTimeAsync(WORKTREE_DEBOUNCE_SETTLE_MS);
+    });
+    expect(requests).toHaveLength(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    // The retry fired and the warmed submodule fact landed; no further retries
+    // once every leg is probed.
+    expect(requests).toHaveLength(2);
+    expect(
+      result.current.enrichedByPath.get("/wt/a")?.submodules[0].prState,
+    ).toBe("merged");
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(requests).toHaveLength(2);
+  });
+
   it("stops cold PR refetching after the bounded retry budget", async () => {
     vi.useFakeTimers();
     const entriesByPath = new Map<string, WorktreeHostEntryV11>([
