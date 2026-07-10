@@ -448,7 +448,7 @@ describe("ResourceMonitorPopover", () => {
     expect(screen.queryByText("Untitled chat")).toBeNull();
   });
 
-  it("updates an auto-titled terminal owner from each resource frame", async () => {
+  it("updates an auto-titled terminal owner from each resource frame", () => {
     canvasMock.state.canvasByTabId["tab-1"].tilesByInstanceId["tile-term-1"] = {
       ...canvasMock.state.canvasByTabId["tab-1"].tilesByInstanceId[
         "tile-term-1"
