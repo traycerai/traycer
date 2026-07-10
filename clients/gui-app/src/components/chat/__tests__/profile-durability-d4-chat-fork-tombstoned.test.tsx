@@ -232,6 +232,13 @@ function forkTarget(profileId: string | null): ChatForkDialogTarget {
       workspace: { folders: [], folderInfoByPath: {} },
       intent: null,
     },
+    // A plain fork, matching `forkAtAssistantMessage`'s non-"ab-worktree"
+    // branch: no worktree pre-selection override, no re-opened interviews.
+    // This file's tombstoned-profile scenarios are orthogonal to fork-mode
+    // presentation, so any mode would do here - "plain" is the simplest.
+    seedIntentOverride: null,
+    carriedInterviews: "settled",
+    forkMode: "plain",
   };
 }
 
