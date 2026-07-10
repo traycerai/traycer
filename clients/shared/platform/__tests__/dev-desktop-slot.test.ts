@@ -72,13 +72,14 @@ describe("devDesktopSlotProtocolScheme", () => {
     );
   });
 
-  it("produces a valid URI scheme for every sanitize vector", () => {
-    for (const [raw] of SLOT_SANITIZE_VECTORS) {
+  it.each(SLOT_SANITIZE_VECTORS)(
+    "produces a valid URI scheme for sanitize vector %j",
+    (raw) => {
       const scheme = devDesktopSlotProtocolScheme(
         "traycer-dev",
         sanitizeDevDesktopSlot(raw),
       );
       expect(scheme).toMatch(/^[a-z][a-z0-9+\-.]*$/);
-    }
-  });
+    },
+  );
 });

@@ -24,11 +24,12 @@ describe("dev-backend-urls", () => {
     ).toBe(BAKED);
   });
 
-  it("ignores the env var entirely for non-dev baked environments", () => {
-    // The gate that keeps shipped builds immune to a hostile/stray runtime
-    // environment: staging/production bake a non-"dev" literal, so the
-    // lookup never happens - not even to validate.
-    for (const environment of ["staging", "production"]) {
+  // The gate that keeps shipped builds immune to a hostile/stray runtime
+  // environment: staging/production bake a non-"dev" literal, so the lookup
+  // never happens - not even to validate.
+  it.each(["staging", "production"])(
+    "ignores the env var entirely for the %s baked environment",
+    (environment) => {
       expect(
         devBackendUrlFromEnv(environment, DEV_AUTHN_BASE_URL_ENV, BAKED, {
           [DEV_AUTHN_BASE_URL_ENV]: "http://localhost:21001",
@@ -40,8 +41,8 @@ describe("dev-backend-urls", () => {
           [DEV_AUTHN_BASE_URL_ENV]: "not a url",
         }),
       ).toBe(BAKED);
-    }
-  });
+    },
+  );
 
   it("accepts loopback http origins and normalizes to the origin", () => {
     expect(
