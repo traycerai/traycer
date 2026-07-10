@@ -41,11 +41,13 @@ export function InterviewSegment(props: InterviewSegmentProps) {
 
   if (status === "streaming") return null;
 
-  const summary = forkedWithoutAnswer
-    ? "Question carried from the original chat — not answered here"
-    : status === "completed"
+  const resolvedSummary =
+    status === "completed"
       ? answeredQuestionsSummaryFromCounts(questions, answers)
       : "Question failed";
+  const summary = forkedWithoutAnswer
+    ? "Question carried from the original chat — not answered here"
+    : resolvedSummary;
 
   return (
     <Collapsible

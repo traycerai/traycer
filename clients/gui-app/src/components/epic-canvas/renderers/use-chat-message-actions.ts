@@ -370,6 +370,7 @@ export function useChatMessageActions(
       canAct,
       canModifyMessages,
       confirmingDeleteMessageId,
+      currentEpicId,
       deleteMessageSuffix,
       dispatchUi,
       editSettings,

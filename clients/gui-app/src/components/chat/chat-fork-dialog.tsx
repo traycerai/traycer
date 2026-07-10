@@ -144,26 +144,16 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
   const modelPickerKey =
     target === null ? "fork-dialog-closed" : forkDialogModelPickerKey(target);
   const trimmedTitle = title.trim();
-  // An A/B fork's workspace pre-selection is staged asynchronously by the
-  // picker (it needs the folder summaries round-trip). Submitting before it
-  // lands would fall back to the source binding verbatim — silently adopting
-  // the origin worktree instead of creating a new one (wrong working copy, no
-  // setup script). Hold the Fork button until the staging slot reflects the
-  // pre-selection; verbatim (cross-question) forks need no gate, the fallback
-  // IS their intent.
   const stagedIntentForKey = useWorktreeIntentStagingStore(
     (state) => state.intentByKey[worktreeStagingKeyString(stagingKey)] ?? null,
   );
-  const workspacePreselectionReady =
-    target === null ||
-    target.seedIntentOverride === null ||
-    stagedIntentForKey !== null;
-  const canSubmit =
-    target !== null &&
-    trimmedTitle.length > 0 &&
-    modelResolved &&
-    workspacePreselectionReady &&
-    !createChat.isPending;
+  const canSubmit = canSubmitFork({
+    target,
+    trimmedTitle,
+    modelResolved,
+    hasStagedPreselection: stagedIntentForKey !== null,
+    createPending: createChat.isPending,
+  });
 
   const close = useCallback(() => {
     if (createChat.isPending) return;
@@ -179,7 +169,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
   );
 
   const submit = useCallback(() => {
-    if (!canSubmit) return;
+    if (!canSubmit || target === null) return;
     const chatId = uuidv4();
     const hostId = tabHostId;
     const worktreeIntent = readSeededLaunchWorktreeIntent({
@@ -339,6 +329,30 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
 function displayChatTitle(title: string): string {
   const trimmed = title.trim();
   return trimmed.length === 0 ? "Untitled chat" : trimmed;
+}
+
+// Whether the Fork dialog can submit. Extracted from the component to keep its
+// cyclomatic complexity down. An A/B fork's workspace pre-selection is staged
+// asynchronously by the picker (it needs the folder summaries round-trip);
+// submitting before it lands would fall back to the source binding verbatim —
+// silently adopting the origin worktree instead of creating a new one (wrong
+// working copy, no setup script). So an override fork waits for the staged
+// pre-selection; verbatim (plain / cross-question) forks need no gate.
+function canSubmitFork(input: {
+  readonly target: ChatForkDialogTarget | null;
+  readonly trimmedTitle: string;
+  readonly modelResolved: boolean;
+  readonly hasStagedPreselection: boolean;
+  readonly createPending: boolean;
+}): boolean {
+  if (input.target === null) return false;
+  if (input.trimmedTitle.length === 0) return false;
+  if (!input.modelResolved) return false;
+  if (input.createPending) return false;
+  if (input.target.seedIntentOverride !== null && !input.hasStagedPreselection) {
+    return false;
+  }
+  return true;
 }
 
 function forkModeTitlePrefix(mode: ChatForkMode): string {
