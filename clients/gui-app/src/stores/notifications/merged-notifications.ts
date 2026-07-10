@@ -17,6 +17,7 @@ import {
   type AppLocalNotificationEntry,
 } from "@/stores/notifications/app-local-notifications-store";
 import {
+  type HostNotificationFeedEntry,
   selectHostNotificationNextCursor,
   useHostNotificationById,
   useHostNotificationIds,
@@ -29,7 +30,10 @@ import {
   useNotificationUnreadCount,
   useNotificationsStore,
 } from "@/stores/notifications/notifications-store";
-import type { HostNotificationEntry } from "@traycer/protocol/host/notifications/contracts";
+import type {
+  HostNotificationOutcome,
+  HostNotificationSeverity,
+} from "@traycer/protocol/host/notifications/contracts";
 import type { NotificationEntry } from "@traycer/protocol/notifications/notification-entry";
 import { formatNotification } from "@traycer/protocol/notifications/notification-formatter";
 
@@ -43,9 +47,11 @@ export interface MergedNotificationRow {
   readonly readAt: number | null;
   readonly text: string;
   readonly payload: NotificationPayload | null;
-  readonly hostKind: HostNotificationEntry["kind"] | null;
+  readonly hostKind: HostNotificationFeedEntry["kind"] | null;
   readonly appLocalKind: AppLocalNotificationEntry["kind"] | null;
   readonly globalEntry: NotificationEntry | null;
+  readonly severity: HostNotificationSeverity;
+  readonly outcome: HostNotificationOutcome | null;
 }
 
 export interface MergedNotificationsActions {
@@ -85,7 +91,7 @@ export function appLocalFeedId(id: string): string {
 }
 
 export function mergeNotificationFeedIds(
-  hostEntries: ReadonlyArray<HostNotificationEntry>,
+  hostEntries: ReadonlyArray<HostNotificationFeedEntry>,
   appLocalEntries: ReadonlyArray<FeedCandidate>,
   globalEntries: ReadonlyArray<NotificationEntry>,
 ): ReadonlyArray<string> {
@@ -343,7 +349,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
 }
 
 export function rowFromHostEntry(
-  entry: HostNotificationEntry,
+  entry: HostNotificationFeedEntry,
 ): MergedNotificationRow {
   return {
     feedId: hostFeedId(entry.id),
@@ -356,6 +362,8 @@ export function rowFromHostEntry(
     hostKind: entry.kind,
     appLocalKind: null,
     globalEntry: null,
+    severity: entry.severity,
+    outcome: entry.outcome,
   };
 }
 
@@ -376,6 +384,8 @@ export function rowFromAppLocalEntry(
     hostKind: null,
     appLocalKind: entry.kind,
     globalEntry: null,
+    severity: "failure",
+    outcome: null,
   };
 }
 
@@ -393,6 +403,8 @@ export function rowFromGlobalEntry(
     hostKind: null,
     appLocalKind: null,
     globalEntry: entry,
+    severity: "info",
+    outcome: null,
   };
 }
 
@@ -431,7 +443,7 @@ function isCurrentHostNotificationMutation(
 }
 
 function payloadFromHostEntry(
-  entry: HostNotificationEntry,
+  entry: HostNotificationFeedEntry,
 ): NotificationPayload | null {
   const parsed = parseNotificationPayload(entry.payload);
   if (parsed !== null) return parsed;
@@ -460,12 +472,14 @@ function payloadFromHostEntry(
   return { kind: "chat", epicId, chatId };
 }
 
-function formatHostNotification(entry: HostNotificationEntry): string {
+function formatHostNotification(entry: HostNotificationFeedEntry): string {
   const agentName = readPayloadString(entry.payload, "agentName");
   const chatTitle = readPayloadString(entry.payload, "chatTitle");
   switch (entry.kind) {
     case "agent.stopped":
-      return agentName === null ? "Agent finished" : `${agentName} finished`;
+      return formatAgentStoppedNotification(agentName, entry.outcome);
+    case "agent.stalled":
+      return agentName === null ? "Agent stalled" : `${agentName} stalled`;
     case "approval.requested":
       return chatTitle === null
         ? "Approval requested"
@@ -477,8 +491,18 @@ function formatHostNotification(entry: HostNotificationEntry): string {
   }
 }
 
+function formatAgentStoppedNotification(
+  agentName: string | null,
+  outcome: HostNotificationOutcome,
+): string {
+  const name = agentName ?? "Agent";
+  if (outcome === "errored") return `${name} failed`;
+  if (outcome === "stopped") return `${name} stopped`;
+  return `${name} finished`;
+}
+
 function readPayloadString(
-  payload: HostNotificationEntry["payload"],
+  payload: HostNotificationFeedEntry["payload"],
   key: string,
 ): string | null {
   const value = payload[key];

@@ -3,4 +3,5 @@ export const notificationsMutationKeys = {
   markRead: () => ["notifications.markRead"] as const,
   markAllRead: () => ["notifications.markAllRead"] as const,
   loadMore: () => ["notifications.loadMore"] as const,
+  setConfig: () => ["host.notifications.setConfig"] as const,
 };

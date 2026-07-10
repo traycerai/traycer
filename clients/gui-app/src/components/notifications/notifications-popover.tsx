@@ -5,6 +5,7 @@ import {
   Check,
   CheckCheck,
   CheckCircle2,
+  CircleAlert,
   MessageCircle,
   MessageSquarePlus,
   MessageSquareX,
@@ -300,6 +301,8 @@ function NotificationRow(props: NotificationRowProps) {
       data-notification-id={row.feedId}
       data-notification-source={row.source}
       data-notification-read={isRead ? "true" : "false"}
+      data-notification-severity={row.severity}
+      data-notification-outcome={row.outcome ?? "none"}
     >
       {!isRead && (
         <span
@@ -409,7 +412,13 @@ function getRowMeta(row: MergedNotificationRow): EventMeta {
   }
   if (row.appLocalKind !== null) {
     return {
-      icon: Bell,
+      icon: CircleAlert,
+      tone: DANGER_TONE,
+    };
+  }
+  if (row.severity === "failure") {
+    return {
+      icon: CircleAlert,
       tone: DANGER_TONE,
     };
   }
@@ -418,6 +427,11 @@ function getRowMeta(row: MergedNotificationRow): EventMeta {
       return {
         icon: Bell,
         tone: SUCCESS_TONE,
+      };
+    case "agent.stalled":
+      return {
+        icon: CircleAlert,
+        tone: DANGER_TONE,
       };
     case "approval.requested":
       return {

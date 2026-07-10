@@ -1,5 +1,5 @@
 import "../../../../__tests__/test-browser-apis";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { NotificationEmissionController } from "@/components/layout/bridges/notification-emission-controller";
@@ -8,7 +8,8 @@ import {
   __resetHostNotificationsStoreForTests,
   useHostNotificationsStore,
 } from "@/stores/notifications/host-notifications-store";
-import type { HostNotificationEntry } from "@traycer/protocol/host/notifications/contracts";
+import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
+import type { HostNotificationEntryV11 } from "@traycer/protocol/host/notifications/contracts";
 
 function createRunnerHost(): MockRunnerHost {
   return new MockRunnerHost({
@@ -26,14 +27,68 @@ function hostEntry(input: {
   readonly id: string;
   readonly updatedAt: number;
   readonly readAt: number | null;
-  readonly kind: HostNotificationEntry["kind"];
-}): HostNotificationEntry {
+  readonly kind: HostNotificationEntryV11["kind"];
+}): HostNotificationEntryV11 {
+  if (input.kind === "agent.stopped") {
+    return {
+      id: input.id,
+      updatedAt: input.updatedAt,
+      readAt: input.readAt,
+      kind: "agent.stopped",
+      sourceRef: input.id,
+      severity: "done",
+      outcome: "completed",
+      payload: {
+        epicId: "epic-1",
+        chatId: "chat-1",
+        chatTitle: "Chat",
+        agentName: "Agent",
+        outcome: "completed",
+      },
+    };
+  }
+  if (input.kind === "agent.stalled") {
+    return {
+      id: input.id,
+      updatedAt: input.updatedAt,
+      readAt: input.readAt,
+      kind: "agent.stalled",
+      sourceRef: input.id,
+      severity: "failure",
+      outcome: null,
+      payload: {
+        epicId: "epic-1",
+        chatId: "chat-1",
+        chatTitle: "Chat",
+        agentName: "Agent",
+      },
+    };
+  }
+  if (input.kind === "approval.requested") {
+    return {
+      id: input.id,
+      updatedAt: input.updatedAt,
+      readAt: input.readAt,
+      kind: "approval.requested",
+      sourceRef: input.id,
+      severity: "needs_action",
+      outcome: null,
+      payload: {
+        epicId: "epic-1",
+        chatId: "chat-1",
+        chatTitle: "Chat",
+        agentName: "Agent",
+      },
+    };
+  }
   return {
     id: input.id,
     updatedAt: input.updatedAt,
     readAt: input.readAt,
-    kind: input.kind,
+    kind: "interview.requested",
     sourceRef: input.id,
+    severity: "needs_action",
+    outcome: null,
     payload: {
       epicId: "epic-1",
       chatId: "chat-1",
@@ -51,27 +106,20 @@ function renderController(runnerHost: MockRunnerHost): void {
   );
 }
 
-async function advanceHoldWindow(): Promise<void> {
-  await act(async () => {
-    vi.advanceTimersByTime(3_000);
-    await Promise.resolve();
-  });
-}
-
 describe("NotificationEmissionController", () => {
   beforeEach(() => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1_777_768_800_000);
     __resetHostNotificationsStoreForTests();
+    useAppLocalNotificationsStore.getState().resetForTests();
+    useAppLocalNotificationsStore.getState().activateIdentity("user-1");
   });
 
   afterEach(() => {
     cleanup();
     __resetHostNotificationsStoreForTests();
-    vi.useRealTimers();
+    useAppLocalNotificationsStore.getState().resetForTests();
   });
 
-  it("baselines host snapshots and emits only later live host upserts", async () => {
+  it("does not emit for host-source feed upserts", async () => {
     const runnerHost = createRunnerHost();
     renderController(runnerHost);
     await act(async () => {
@@ -79,72 +127,43 @@ describe("NotificationEmissionController", () => {
     });
 
     act(() => {
-      useHostNotificationsStore.getState().replaceFromSnapshot(
-        [
-          hostEntry({
-            id: "snapshot-1",
-            updatedAt: 10,
-            readAt: null,
-            kind: "agent.stopped",
-          }),
-          hostEntry({
-            id: "snapshot-2",
-            updatedAt: 20,
-            readAt: null,
-            kind: "approval.requested",
-          }),
-        ],
-        50,
-      );
-    });
-    await advanceHoldWindow();
-
-    expect(runnerHost.notificationsSent).toEqual([]);
-
-    act(() => {
       useHostNotificationsStore.getState().upsert(
         hostEntry({
           id: "live-1",
           updatedAt: 30,
           readAt: null,
-          kind: "interview.requested",
+          kind: "agent.stopped",
         }),
       );
     });
-    await advanceHoldWindow();
 
-    expect(runnerHost.notificationsSent).toHaveLength(1);
-    expect(runnerHost.notificationsSent[0]?.body).toBe(
-      "Question waiting in Chat",
-    );
+    expect(runnerHost.notificationsSent).toEqual([]);
+  });
+
+  it("keeps app-local notification display renderer-owned", async () => {
+    const runnerHost = createRunnerHost();
+    renderController(runnerHost);
+    await act(async () => {
+      await Promise.resolve();
+    });
 
     act(() => {
-      useHostNotificationsStore.getState().replaceFromSnapshot(
-        [
-          hostEntry({
-            id: "snapshot-1",
-            updatedAt: 10,
-            readAt: null,
-            kind: "agent.stopped",
-          }),
-          hostEntry({
-            id: "live-1",
-            updatedAt: 30,
-            readAt: null,
-            kind: "interview.requested",
-          }),
-          hostEntry({
-            id: "reconnect-1",
-            updatedAt: 40,
-            readAt: null,
-            kind: "approval.requested",
-          }),
-        ],
-        50,
-      );
+      useAppLocalNotificationsStore.getState().upsert({
+        id: "host.error:error-1",
+        updatedAt: 40,
+        readAt: null,
+        kind: "host.error",
+        sourceRef: "error-1",
+        payload: null,
+        message: "Host error",
+        detail: "Details",
+      });
     });
-    await advanceHoldWindow();
+    await act(async () => {
+      await Promise.resolve();
+    });
 
     expect(runnerHost.notificationsSent).toHaveLength(1);
+    expect(runnerHost.notificationsSent[0]?.body).toBe("Host error Details");
   });
 });

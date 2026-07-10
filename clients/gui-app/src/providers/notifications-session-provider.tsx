@@ -13,6 +13,12 @@ import { getNotificationsStreamFactoryOverride } from "@/providers/notifications
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useAuthService } from "@/lib/host";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useNotificationShow } from "@/hooks/notifications/use-notifications";
+import { useWindowsBridge } from "@/providers/windows-bridge-context";
+import {
+  displayHostChannelEmission,
+  playNotificationChime,
+} from "@/lib/notifications/notification-display";
 import {
   useAuthIdentityTransition,
   type AuthIdentityTransition,
@@ -35,11 +41,18 @@ export function NotificationsSessionProvider(
   const wsStreamClient = useWsStreamClient();
   const activeHostId = useReactiveActiveHostId();
   const authService = useAuthService();
+  const showNotification = useNotificationShow();
+  const windowsBridge = useWindowsBridge();
   const status = useAuthStore((state) => state.status);
   const email = useAuthStore((state) => state.profile?.email ?? null);
   const disposerRef = useRef<(() => void) | null>(null);
   const hostDisposerRef = useRef<(() => void) | null>(null);
   const previousHostIdRef = useRef<string | null>(activeHostId);
+  const fallbackWindowIdRef = useRef<string | null>(null);
+  if (fallbackWindowIdRef.current === null) {
+    fallbackWindowIdRef.current = createFallbackNotificationsWindowId();
+  }
+  const windowId = windowsBridge?.windowId ?? fallbackWindowIdRef.current;
 
   const tearDown = useCallback((): void => {
     if (disposerRef.current !== null) {
@@ -96,9 +109,19 @@ export function NotificationsSessionProvider(
       hostDisposerRef.current = openHostNotificationsStream(
         wsStreamClient,
         onAuthError,
+        {
+          windowId,
+          now: () => Date.now(),
+          displayChannelEmission: (entries) => {
+            displayHostChannelEmission(entries, {
+              showNotification,
+              playChime: playNotificationChime,
+            });
+          },
+        },
       );
     }
-  }, [wsStreamClient, authService]);
+  }, [wsStreamClient, authService, windowId, showNotification]);
 
   // Auth identity transitions own the replica-reset responsibility: sign-out
   // and user-switch both require wiping the prior-user Y.Doc before the next
@@ -161,4 +184,12 @@ export function NotificationsSessionProvider(
   }, [tearDown]);
 
   return <>{props.children}</>;
+}
+
+function createFallbackNotificationsWindowId(): string {
+  const cryptoApi = globalThis.crypto;
+  if (typeof cryptoApi.randomUUID === "function") {
+    return `browser:${cryptoApi.randomUUID()}`;
+  }
+  return `browser:${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }

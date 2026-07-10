@@ -135,10 +135,15 @@ import {
   terminalSubscribeV13,
 } from "@traycer/protocol/host/terminal/contracts";
 import {
+  hostNotificationsGetConfigV10,
   hostNotificationsListV10,
+  hostNotificationsListV11,
+  hostNotificationsListUpgradeV10ToV11,
   hostNotificationsMarkAllReadV10,
   hostNotificationsMarkReadV10,
+  hostNotificationsSetConfigV10,
   hostNotificationsSubscribeV10,
+  hostNotificationsSubscribeV11,
   notificationsSubscribeV10,
 } from "@traycer/protocol/host/notifications/contracts";
 import {
@@ -1271,10 +1276,38 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
   },
   "host.notifications.list": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: hostNotificationsListV10,
+          upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: hostNotificationsListV11,
+          upgradeFromPreviousVersion: hostNotificationsListUpgradeV10ToV11,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.notifications.getConfig": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostNotificationsGetConfigV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.notifications.setConfig": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostNotificationsSetConfigV10,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -2910,10 +2943,13 @@ export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
   },
   "host.notifications.subscribe": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: hostNotificationsSubscribeV10,
+        },
+        1: {
+          contract: hostNotificationsSubscribeV11,
         },
       },
     },

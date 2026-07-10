@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { HostNotificationEntry } from "@traycer/protocol/host/notifications/contracts";
+import type { HostNotificationEntryV11 } from "@traycer/protocol/host/notifications/contracts";
 import {
   type NotificationEntry,
   NOTIFICATION_EVENT_TYPES,
@@ -19,13 +19,15 @@ function hostEntry(
   id: string,
   updatedAt: number,
   readAt: number | null,
-): HostNotificationEntry {
+): HostNotificationEntryV11 {
   return {
     id,
     updatedAt,
     readAt,
     kind: "approval.requested",
     sourceRef: "approval-1",
+    severity: "needs_action",
+    outcome: null,
     payload: {
       epicId: "epic-1",
       chatId: "chat-1",
@@ -117,6 +119,8 @@ describe("merged notifications feed", () => {
       hostKind: null,
       appLocalKind: "worktree.setup.failed",
       globalEntry: null,
+      severity: "failure",
+      outcome: null,
     });
   });
 });
