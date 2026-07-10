@@ -12,6 +12,7 @@ import {
   providerCliStateSchemaV10,
   providerCliStateSchemaV20,
   providerProfileActionSchema,
+  providersSetEnabledRequestSchemaV21,
 } from "@traycer/protocol/host/provider-schemas";
 // Importing from the registry runs `defineVersionedRpcRegistry` (full
 // structural + schema-compatibility validation) at module load, so this
@@ -434,6 +435,85 @@ describe("providers.setEnabled@2.1 (profile rename/remove/recolor)", () => {
     expect(downgraded).toEqual({
       ok: true,
       value: { providerId: "codex", enabled: false },
+    });
+  });
+});
+
+describe("providers.setEnabled@2.2 (acknowledgeAmbientDrift)", () => {
+  it("the frozen v2.1 request schema rejects the new acknowledgeAmbientDrift variant", () => {
+    expect(
+      providersSetEnabledRequestSchemaV21.safeParse({
+        providerId: "claude-code",
+        enabled: true,
+        profileAction: { type: "acknowledgeAmbientDrift" },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("the live schema accepts acknowledgeAmbientDrift with no profileId", () => {
+    expect(
+      providerProfileActionSchema.safeParse({
+        type: "acknowledgeAmbientDrift",
+      }).success,
+    ).toBe(true);
+  });
+
+  it("upgrades a v2.1 request to v2.2 with a rename/remove/recolor profileAction passed through unchanged", () => {
+    const rename = upgradeRequestToVersion(
+      hostRpcRegistry["providers.setEnabled"],
+      { major: 2, minor: 1 },
+      { major: 2, minor: 2 },
+      {
+        providerId: "claude-code",
+        enabled: true,
+        profileAction: { type: "rename", profileId: "profile-1", label: "Work" },
+      },
+    );
+    expect(rename).toEqual({
+      providerId: "claude-code",
+      enabled: true,
+      profileAction: { type: "rename", profileId: "profile-1", label: "Work" },
+    });
+
+    const plain = upgradeRequestToVersion(
+      hostRpcRegistry["providers.setEnabled"],
+      { major: 2, minor: 1 },
+      { major: 2, minor: 2 },
+      { providerId: "codex", enabled: false, profileAction: null },
+    );
+    expect(plain).toEqual({
+      providerId: "codex",
+      enabled: false,
+      profileAction: null,
+    });
+  });
+
+  it("drops profileAction (acknowledgeAmbientDrift included) before the strict v1.0 request parse, same as rename/remove/recolor", () => {
+    const downgraded = providersSetEnabledDowngradeV2ToV1.downgradeRequest({
+      providerId: "claude-code",
+      enabled: true,
+      profileAction: { type: "acknowledgeAmbientDrift" },
+    });
+    expect(downgraded).toEqual({
+      ok: true,
+      value: { providerId: "claude-code", enabled: true },
+    });
+  });
+
+  it("round-trips an acknowledgeAmbientDrift request through the full major 2 -> major 1 downgrade", () => {
+    const downgraded = downgradeRequestAcrossMajors(
+      hostRpcRegistry["providers.setEnabled"],
+      2,
+      1,
+      {
+        providerId: "codex",
+        enabled: true,
+        profileAction: { type: "acknowledgeAmbientDrift" },
+      },
+    );
+    expect(downgraded).toEqual({
+      ok: true,
+      value: { providerId: "codex", enabled: true },
     });
   });
 });

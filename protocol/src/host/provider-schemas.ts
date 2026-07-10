@@ -386,9 +386,14 @@ export type ProviderProfile = z.infer<typeof providerProfileSchema>;
  * Fold-in for profile rename/remove/recolor, carried on `providers.setEnabled`'s
  * request (see that method's `@2.1` contract in `registry.ts` for why it
  * lives here instead of standalone `providers.renameProfile` /
- * `removeProfile` / `recolorProfile` methods).
+ * `removeProfile` / `recolorProfile` methods). Frozen as shipped at `@2.1` -
+ * `providers.setEnabled@2.2` widens the live union below with
+ * `acknowledgeAmbientDrift`; this narrower alias is what an old `@2.1` peer's
+ * request schema actually validates against, so the wire-compat Zod-strip
+ * (see `prepareRequestPayload` in `ws-rpc-client.ts`) genuinely rejects the
+ * newer variant instead of silently widening along with the live schema.
  */
-export const providerProfileActionSchema = z.discriminatedUnion("type", [
+export const providerProfileActionSchemaV21 = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("rename"),
     profileId: z.string(),
@@ -404,6 +409,24 @@ export const providerProfileActionSchema = z.discriminatedUnion("type", [
     type: z.literal("recolor"),
     profileId: z.string(),
     accentColor: providerProfileAccentColorSchema,
+  }),
+]);
+
+/**
+ * Live `providerProfileActionSchema` - adds `acknowledgeAmbientDrift` at
+ * `providers.setEnabled@2.2`: durably clears the ambient profile's pending
+ * `ambientDriftNotice` (see that field's comment below), carried here rather
+ * than a standalone `providers.acknowledgeAmbientDrift` method because a new
+ * top-level method name is handshake-fatal against an already-released peer
+ * (see `released-surface-compat.test.ts`) - the same reasoning that put
+ * rename/remove/recolor on this method instead of their own. No `profileId`:
+ * unlike the managed-profile actions above, there is exactly one ambient
+ * identity per provider.
+ */
+export const providerProfileActionSchema = z.discriminatedUnion("type", [
+  ...providerProfileActionSchemaV21.options,
+  z.object({
+    type: z.literal("acknowledgeAmbientDrift"),
   }),
 ]);
 export type ProviderProfileAction = z.infer<typeof providerProfileActionSchema>;
@@ -637,10 +660,26 @@ export type ProvidersSetEnabledResponse = z.infer<
  */
 export const providersSetEnabledRequestSchemaV21 =
   providersSetEnabledRequestSchema.extend({
-    profileAction: providerProfileActionSchema.nullable().default(null),
+    profileAction: providerProfileActionSchemaV21.nullable().default(null),
   });
 export type ProvidersSetEnabledRequestV21 = z.infer<
   typeof providersSetEnabledRequestSchemaV21
+>;
+
+/**
+ * `providers.setEnabled@2.2` request - widens `profileAction` to the live
+ * `providerProfileActionSchema` (adds `acknowledgeAmbientDrift`; see that
+ * schema's comment). The response is unchanged (`providersSetEnabledResponseSchema`)
+ * for the same reason `@2.1` left it unchanged - the mutated `state` (here,
+ * `state.profiles[].ambientDriftNotice` cleared) is already visible on the
+ * existing response shape.
+ */
+export const providersSetEnabledRequestSchemaV22 =
+  providersSetEnabledRequestSchemaV21.extend({
+    profileAction: providerProfileActionSchema.nullable().default(null),
+  });
+export type ProvidersSetEnabledRequestV22 = z.infer<
+  typeof providersSetEnabledRequestSchemaV22
 >;
 
 export const providersSetApiKeyRequestSchema = z.object({

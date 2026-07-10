@@ -2,7 +2,6 @@ import {
   memo,
   useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -14,10 +13,7 @@ import type {
   ChatActiveTurn,
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
-import type {
-  ProviderCliState,
-  ProviderId,
-} from "@traycer/protocol/host/provider-schemas";
+import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 
 import { useComposerPaste } from "@/hooks/composer/use-composer-paste";
 import { useComposerDictation } from "@/hooks/composer/use-composer-dictation";
@@ -58,6 +54,10 @@ import {
 } from "./use-provider-reauth-gate";
 import { useProfileRateLimitSwitchPrompt } from "./use-profile-rate-limit-switch-prompt";
 import { useRefreshProvidersListOnTurn } from "@/hooks/providers/use-refresh-providers-list-on-turn";
+import {
+  useAmbientDriftGate,
+  type AmbientDriftSendNotice,
+} from "./use-ambient-drift-gate";
 import { useComposerPickerItems } from "./picker/use-composer-picker-items";
 import { commitSelection } from "@/stores/composer/commit-selection";
 
@@ -270,7 +270,11 @@ function ChatComposerImpl(props: ChatComposerProps) {
     imagesUnsupported,
     onSubmitMessage,
   });
-  const ambientDrift = useAmbientDriftGate(reauthGate.state, profileId);
+  const ambientDrift = useAmbientDriftGate(
+    hostClient,
+    reauthGate.state,
+    profileId,
+  );
   const handleSubmitDraft = useCallback((): void => {
     ambientDrift.guardSubmit(submitDraft);
   }, [ambientDrift, submitDraft]);
@@ -425,12 +429,6 @@ function ChatComposerImpl(props: ChatComposerProps) {
 
 export const ChatComposer = memo(ChatComposerImpl);
 
-interface AmbientDriftSendNotice {
-  readonly key: string;
-  readonly currentEmail: string | null;
-  readonly previousEmail: string | null;
-}
-
 // Narrowed props for `ProviderReauthBanner`, resolved once so neither the
 // `topBannerKind` derivation nor the JSX re-derives the same three-way
 // `signedOut && providerId !== null && reason !== null` check.
@@ -442,83 +440,6 @@ function resolveReauthBannerProps(gate: ProviderReauthGate): {
     return null;
   }
   return { providerId: gate.providerId, reason: gate.reason };
-}
-
-function resolveAmbientDriftNotice(
-  state: ProviderCliState | null,
-  profileId: string | null,
-): AmbientDriftSendNotice | null {
-  if (profileId !== null || state === null) return null;
-  const ambient = state.profiles.find((profile) => profile.kind === "ambient");
-  if (ambient === undefined || ambient.ambientDriftNotice === null) {
-    return null;
-  }
-  return {
-    key: `${state.providerId}:${ambient.profileId}:${ambient.ambientDriftNotice.changedAt}`,
-    currentEmail: ambient.identity?.email ?? null,
-    previousEmail: ambient.ambientDriftNotice.previousEmail,
-  };
-}
-
-interface AmbientDriftGate {
-  /** Non-null exactly while the send-time confirm banner should show for the
-   *  CURRENT drift notice (the user hasn't acknowledged this specific key). */
-  readonly pendingNotice: AmbientDriftSendNotice | null;
-  /** Wraps a submit action: blocks it and surfaces the confirm banner on an
-   *  unacknowledged drift, otherwise submits immediately. */
-  readonly guardSubmit: (submit: () => void) => void;
-  /** Acknowledges the pending notice, then runs `after` (e.g. the caller's
-   *  own remaining gates + the actual submit). No-ops with nothing pending. */
-  readonly acknowledge: (after: () => void) => void;
-  /** Acknowledges the pending notice without submitting (the banner's
-   *  "Dismiss" action). No-ops with nothing pending. */
-  readonly dismiss: () => void;
-}
-
-/**
- * Owns the "Terminal account changed" send-time confirmation (multi-profile
- * ambient-drift feature): a profile-less (ambient) send whose terminal
- * account just changed identity is held back once per drift `key` until the
- * user explicitly continues or dismisses.
- */
-function useAmbientDriftGate(
-  state: ProviderCliState | null,
-  profileId: string | null,
-): AmbientDriftGate {
-  const notice = resolveAmbientDriftNotice(state, profileId);
-  const noticeKey = notice?.key ?? null;
-  const [acknowledgedKey, setAcknowledgedKey] = useState<string | null>(null);
-  const [pendingKey, setPendingKey] = useState<string | null>(null);
-  const pendingNotice =
-    notice !== null && pendingKey === notice.key ? notice : null;
-
-  const guardSubmit = useCallback(
-    (submit: () => void): void => {
-      if (noticeKey !== null && acknowledgedKey !== noticeKey) {
-        setPendingKey(noticeKey);
-        return;
-      }
-      submit();
-    },
-    [noticeKey, acknowledgedKey],
-  );
-  const acknowledge = useCallback(
-    (after: () => void): void => {
-      if (pendingNotice === null) return;
-      setAcknowledgedKey(pendingNotice.key);
-      setPendingKey(null);
-      after();
-    },
-    [pendingNotice],
-  );
-  const dismiss = useCallback((): void => {
-    acknowledge(() => {});
-  }, [acknowledge]);
-
-  return useMemo(
-    () => ({ pendingNotice, guardSubmit, acknowledge, dismiss }),
-    [pendingNotice, guardSubmit, acknowledge, dismiss],
-  );
 }
 
 function AmbientDriftSendBanner({

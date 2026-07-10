@@ -246,6 +246,7 @@ import {
   providersSetEnabledRequestSchema,
   providersSetEnabledRequestSchemaV10,
   providersSetEnabledRequestSchemaV21,
+  providersSetEnabledRequestSchemaV22,
   providersSetEnabledResponseSchema,
   providersSetEnabledResponseSchemaV10,
   providersSetEnvOverrideRequestSchema,
@@ -1008,14 +1009,37 @@ export const providersSetEnabledUpgradeV20ToV21 = defineUpgradePath<
   upgradeResponse: (response) => response,
 });
 
-// Bridges from v2.1 (the latest installed version of major 2's line) down to
-// the frozen v1.0 - not from v2.0, since v2.1 supersedes it as major 2's
-// latest.
-export const providersSetEnabledDowngradeV2ToV1 = defineDowngradePath<
+// v2.2 widens `profileAction` to include `acknowledgeAmbientDrift` (see that
+// schema's comment in `provider-schemas.ts`) - folded onto this existing
+// method for the same released-peer method-name-set reason `@2.1` was.
+export const providersSetEnabledV22 = defineRpcContract({
+  method: "providers.setEnabled",
+  schemaVersion: { major: 2, minor: 2 } as const,
+  requestSchema: providersSetEnabledRequestSchemaV22,
+  responseSchema: providersSetEnabledResponseSchema,
+});
+
+// Additive upgrade from v2.1: `profileAction`'s v2.1 union
+// (rename/remove/recolor/null) is already a valid value of v2.2's wider
+// union, so no field-level transform is needed.
+export const providersSetEnabledUpgradeV21ToV22 = defineUpgradePath<
   typeof providersSetEnabledV21,
-  typeof providersSetEnabledV10
+  typeof providersSetEnabledV22
 >({
   from: { major: 2, minor: 1 },
+  to: { major: 2, minor: 2 },
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+// Bridges from v2.2 (the latest installed version of major 2's line) down to
+// the frozen v1.0 - not from v2.1/v2.0, since v2.2 supersedes them as major
+// 2's latest.
+export const providersSetEnabledDowngradeV2ToV1 = defineDowngradePath<
+  typeof providersSetEnabledV22,
+  typeof providersSetEnabledV10
+>({
+  from: { major: 2, minor: 2 },
   to: { major: 1, minor: 0 },
   // Drop `profileAction` before the parse: `providersSetEnabledRequestSchemaV10`
   // is a strict object that never learned it, so passing the full request
@@ -2866,7 +2890,7 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
       downgradePathsFromLatest: {},
     },
     2: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: providersSetEnabledV20,
@@ -2875,6 +2899,10 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
         1: {
           contract: providersSetEnabledV21,
           upgradeFromPreviousVersion: providersSetEnabledUpgradeV20ToV21,
+        },
+        2: {
+          contract: providersSetEnabledV22,
+          upgradeFromPreviousVersion: providersSetEnabledUpgradeV21ToV22,
         },
       },
       downgradePathsFromLatest: { 1: providersSetEnabledDowngradeV2ToV1 },

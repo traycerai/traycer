@@ -15,4 +15,5 @@ export const providersMutationKeys = {
   recolorProfile: () => ["providers.recolorProfile"] as const,
   removeProfile: () => ["providers.removeProfile"] as const,
   refresh: () => ["providers.refresh"] as const,
+  acknowledgeAmbientDrift: () => ["providers.acknowledgeAmbientDrift"] as const,
 };
