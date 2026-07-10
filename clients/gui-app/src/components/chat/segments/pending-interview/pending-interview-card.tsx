@@ -1,4 +1,12 @@
-import { Check, ChevronLeft, ChevronRight } from "lucide-react";
+import {
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  MessageSquareQuote,
+  Split,
+} from "lucide-react";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import type { ChatForkMode } from "@/components/chat/chat-message";
 import { AnimatePresence, useReducedMotion } from "motion/react";
 import * as m from "motion/react-m";
 import type {
@@ -31,6 +39,17 @@ interface PendingInterviewCardProps {
       ) => string | null)
     | null;
   onSkip: ((blockId: string, reason: string) => string | null) | null;
+  /**
+   * Opens the fork dialog to branch the chat at this question:
+   * `"cross-question"` forks on this chat's own workspace with the question
+   * carried as reference (interrogate the assistant), `"ab-worktree"` forks
+   * into new worktrees carrying the working tree with the question re-opened
+   * (proceed with different answers in parallel). `null` hides both
+   * affordances (the chat cannot act, or the owning message is not a stable
+   * fork boundary). The original chat stays paused with this question still
+   * pending either way.
+   */
+  onFork: ((mode: ChatForkMode) => void) | null;
 }
 
 export function PendingInterviewCard(props: PendingInterviewCardProps) {
@@ -117,6 +136,9 @@ export function PendingInterviewCard(props: PendingInterviewCardProps) {
             onNext={goNext}
           />
           <InterviewProgress answeredCount={answeredCount} total={total} />
+          {props.onFork !== null ? (
+            <InterviewForkActions onFork={props.onFork} disabled={dispatched} />
+          ) : null}
         </div>
         <div className="ml-auto flex items-center gap-2">
           <Button
@@ -162,6 +184,57 @@ export function PendingInterviewCard(props: PendingInterviewCardProps) {
         </div>
       </div>
     </section>
+  );
+}
+
+/**
+ * The two fork-at-this-question entry points. Both open the fork dialog with
+ * the workspace disposition pre-selected; the question stays pending in this
+ * chat while the fork carries its own answerable copy.
+ */
+function InterviewForkActions(props: {
+  readonly onFork: (mode: ChatForkMode) => void;
+  readonly disabled: boolean;
+}) {
+  return (
+    <>
+      <TooltipWrapper
+        label="Fork on this chat's workspace to interrogate the assistant before answering"
+        side="top"
+        sideOffset={undefined}
+        align={undefined}
+      >
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          className="text-muted-foreground"
+          disabled={props.disabled}
+          onClick={() => props.onFork("cross-question")}
+        >
+          <MessageSquareQuote className="size-3.5" aria-hidden />
+          Cross Question
+        </Button>
+      </TooltipWrapper>
+      <TooltipWrapper
+        label="Fork into new worktrees carrying your working tree to proceed with different answers in parallel"
+        side="top"
+        sideOffset={undefined}
+        align={undefined}
+      >
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          className="text-muted-foreground"
+          disabled={props.disabled}
+          onClick={() => props.onFork("ab-worktree")}
+        >
+          <Split className="size-3.5 rotate-90" aria-hidden />
+          A/B Fork
+        </Button>
+      </TooltipWrapper>
+    </>
   );
 }
 

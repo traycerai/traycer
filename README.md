@@ -41,7 +41,7 @@ Switch models instantly within the same chat, orchestrate agent-to-agent communi
 | Linux (AppImage)        | [Download .AppImage](https://github.com/traycerai/traycer/releases/latest/download/traycer-desktop-linux-x86_64.AppImage)                              |
 | Linux (Debian/Ubuntu)   | [Download .deb](https://github.com/traycerai/traycer/releases/latest/download/traycer-desktop-linux-amd64.deb)                                         |
 | Linux (Fedora/RHEL)     | [Download .rpm](https://github.com/traycerai/traycer/releases/latest/download/traycer-desktop-linux-x86_64.rpm)                                        |
-| Windows                 | Coming soon                                                                                                                                            |
+| Windows (x64)           | [Download .exe](https://github.com/traycerai/traycer/releases/latest/download/traycer-desktop-windows-x64.exe)                                         |
 
 See the [latest release](https://github.com/traycerai/traycer/releases/latest) for all available builds.
 

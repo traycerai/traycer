@@ -17,6 +17,25 @@ interface ChatMessageProps {
   nextStepActions: NextStepActionHandler | null;
 }
 
+/**
+ * How a fork is seeded.
+ *
+ *  - `plain` - the ordinary per-message fork button: source binding verbatim,
+ *    no special question handling. Titled "Fork".
+ *  - `cross-question` - a fork FROM a pending question: same working copy (its
+ *    binding verbatim: local stays local, an existing worktree is adopted) to
+ *    interrogate the assistant, with the question carried as inline reference
+ *    and the composer immediately free. Titled "Cross Question".
+ *  - `ab-worktree` - a fork FROM a pending question into NEW worktrees off each
+ *    folder's current branch carrying uncommitted + staged changes, to proceed
+ *    down an alternate path in parallel, with the question re-opened as an
+ *    answerable card. Titled "A/B Fork".
+ *
+ * `cross-question` / `ab-worktree` are offered ONLY on the pending-interview
+ * card; the per-message footer button is always `plain`.
+ */
+export type ChatForkMode = "plain" | "cross-question" | "ab-worktree";
+
 export interface ChatMessageEditing {
   readonly initialContent: JsonContent;
   readonly currentContent: JsonContent;
@@ -36,6 +55,7 @@ export interface ChatMessageEditing {
 export interface ChatMessageForkAction {
   readonly enabled: boolean;
   readonly pending: boolean;
+  /** Opens the fork dialog for a plain per-message fork. */
   readonly onFork: () => void;
 }
 
