@@ -4,6 +4,7 @@ import { Popover, PopoverTrigger } from "@/components/ui/popover";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { RateLimitPopover } from "@/components/layout/header/rate-limit-popover";
 import { useHeaderRateLimitBars } from "@/hooks/rate-limits/use-header-rate-limit-bars";
+import { useTitleBarDragSuppression } from "@/stores/layout/title-bar-drag-store";
 import {
   rateLimitWindowFillPercent,
   rateLimitWindowSeverityBarClassName,
@@ -32,6 +33,7 @@ const PLACEHOLDER_BAR_PERCENTAGES: ReadonlyArray<number> = [75, 60];
  */
 export function RateLimitIconButton(): ReactNode {
   const [open, setOpen] = useState(false);
+  useTitleBarDragSuppression("rate-limits", open);
   const bars = useHeaderRateLimitBars();
   const isEmpty = bars.length === 0;
   const isDegraded = !isEmpty && bars.some((bar) => bar.degraded);
