@@ -271,7 +271,7 @@ export class WsRpcClient<
 
       const methodRegistry = this.registry[method] as MethodVersionRegistry;
       if (hostCanonical === undefined) {
-        return executeUnavailableMethodDegrade(
+        return await executeUnavailableMethodDegrade(
           this.registry,
           session,
           method,
@@ -284,7 +284,7 @@ export class WsRpcClient<
         );
       }
 
-      return executeAvailableMethodRequest<
+      return await executeAvailableMethodRequest<
         RequestOfMethod<Registry, Method>,
         ResponseOfMethod<Registry, Method>
       >(

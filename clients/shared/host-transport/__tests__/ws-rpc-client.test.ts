@@ -267,6 +267,7 @@ describe("WsRpcClient", () => {
       schemaVersion: { major: 1, minor: 0 },
       params: { message: "hi" },
     });
+    expect(stub.closed).toBeNull();
 
     stub.fireMessage({
       kind: "response",
@@ -834,6 +835,7 @@ describe("WsRpcClient", () => {
       schemaVersion: { major: 1, minor: 0 },
       params: {},
     });
+    expect(sockets[0].socket.closed).toBeNull();
 
     sockets[0].socket.fireMessage({
       kind: "response",
@@ -845,6 +847,7 @@ describe("WsRpcClient", () => {
     });
 
     await expect(pending).resolves.toEqual({ summary: "ready" });
+    expect(sockets[0].socket.closed).toEqual({ code: 1000, reason: "ok" });
   });
 
   it("throws E_HOST_UNSUPPORTED when an absent optional method declares unsupported", async () => {
