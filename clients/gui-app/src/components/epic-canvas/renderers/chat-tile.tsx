@@ -1259,7 +1259,6 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     chatActions,
     confirmingDeleteMessageId: uiState.confirmingDeleteMessageId,
     setForkTarget,
-    pendingInterview,
     worktreeBinding: state.worktreeBinding,
     revertOnEditOpen: uiState.revertOnEditOpen,
   });

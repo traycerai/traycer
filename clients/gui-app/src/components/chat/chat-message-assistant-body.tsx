@@ -11,14 +11,14 @@ import type {
   ChatMessageRunState,
   MessageSegment,
 } from "@/stores/composer/chat-store";
-import { Check, Copy, MessageSquareQuote, Sparkles, Split } from "lucide-react";
-import { use, useCallback, useMemo, type ReactElement } from "react";
+import { Check, Copy, GitBranch, Sparkles } from "lucide-react";
+import { use, useCallback, useMemo } from "react";
 import { toast } from "sonner";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { useElapsedSeconds } from "@/hooks/use-elapsed-seconds";
 import { formatClockDuration } from "@/lib/format-duration";
 import { cn } from "@/lib/utils";
-import type { ChatForkMode, ChatMessageForkAction } from "./chat-message";
+import type { ChatMessageForkAction } from "./chat-message";
 import { ActivityGroupSegment } from "./segments/activity-group-segment";
 import { ResolvedApprovalSegment } from "./segments/approval-segment";
 import { ArtifactCardSegment } from "./segments/artifact-card-segment";
@@ -343,39 +343,7 @@ function AssistantForkButton({
 }: {
   readonly action: ChatMessageForkAction;
 }) {
-  return (
-    <>
-      <AssistantForkVariantButton
-        action={action}
-        mode="cross-question"
-        label="Cross Question — fork on this chat's workspace"
-        testId="assistant-fork-chat"
-        icon={<MessageSquareQuote className="size-3.5" aria-hidden />}
-      />
-      <AssistantForkVariantButton
-        action={action}
-        mode="ab-worktree"
-        label="A/B Fork — new worktrees carrying your working tree"
-        testId="assistant-fork-ab"
-        icon={<Split className="size-3.5 rotate-90" aria-hidden />}
-      />
-    </>
-  );
-}
-
-function AssistantForkVariantButton({
-  action,
-  mode,
-  label,
-  testId,
-  icon,
-}: {
-  readonly action: ChatMessageForkAction;
-  readonly mode: ChatForkMode;
-  readonly label: string;
-  readonly testId: string;
-  readonly icon: ReactElement;
-}) {
+  const label = "Fork conversation";
   return (
     <TooltipWrapper
       label={label}
@@ -386,9 +354,9 @@ function AssistantForkVariantButton({
       <button
         type="button"
         aria-label={label}
-        data-testid={testId}
+        data-testid="assistant-fork-chat"
         disabled={!action.enabled || action.pending}
-        onClick={() => action.onFork(mode)}
+        onClick={action.onFork}
         className={cn(
           "inline-flex size-6 shrink-0 items-center justify-center rounded-md",
           "text-muted-foreground/60 transition-colors",
@@ -397,7 +365,7 @@ function AssistantForkVariantButton({
           "disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent disabled:hover:text-muted-foreground/60",
         )}
       >
-        {icon}
+        <GitBranch className="size-3.5" aria-hidden />
       </button>
     </TooltipWrapper>
   );

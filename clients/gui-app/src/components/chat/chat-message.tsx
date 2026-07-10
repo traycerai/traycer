@@ -18,19 +18,23 @@ interface ChatMessageProps {
 }
 
 /**
- * The two ways to branch a chat:
+ * How a fork is seeded.
  *
- *  - `cross-question` - fork on the SAME working copy as this chat (its
- *    binding verbatim: local folders stay local, worktree folders adopt the
- *    existing worktree - the same defaults "+ chat" seeds in a Task) to
- *    interrogate the assistant. Any question pending at the boundary is
- *    carried as inline reference and the fork's composer is immediately free.
- *  - `ab-worktree` - fork into NEW worktrees off each folder's current branch
- *    carrying uncommitted + staged changes, to proceed down an alternate path
- *    in parallel. A question pending at the boundary re-opens in the fork as
- *    an answerable card.
+ *  - `plain` - the ordinary per-message fork button: source binding verbatim,
+ *    no special question handling. Titled "Fork".
+ *  - `cross-question` - a fork FROM a pending question: same working copy (its
+ *    binding verbatim: local stays local, an existing worktree is adopted) to
+ *    interrogate the assistant, with the question carried as inline reference
+ *    and the composer immediately free. Titled "Cross Question".
+ *  - `ab-worktree` - a fork FROM a pending question into NEW worktrees off each
+ *    folder's current branch carrying uncommitted + staged changes, to proceed
+ *    down an alternate path in parallel, with the question re-opened as an
+ *    answerable card. Titled "A/B Fork".
+ *
+ * `cross-question` / `ab-worktree` are offered ONLY on the pending-interview
+ * card; the per-message footer button is always `plain`.
  */
-export type ChatForkMode = "cross-question" | "ab-worktree";
+export type ChatForkMode = "plain" | "cross-question" | "ab-worktree";
 
 export interface ChatMessageEditing {
   readonly initialContent: JsonContent;
@@ -51,8 +55,8 @@ export interface ChatMessageEditing {
 export interface ChatMessageForkAction {
   readonly enabled: boolean;
   readonly pending: boolean;
-  /** Opens the fork dialog pre-configured for the chosen {@link ChatForkMode}. */
-  readonly onFork: (mode: ChatForkMode) => void;
+  /** Opens the fork dialog for a plain per-message fork. */
+  readonly onFork: () => void;
 }
 
 export interface ChatMessageUserActions {

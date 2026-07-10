@@ -31,7 +31,6 @@ import {
   chatMessageEditingForInlineEdit,
   editablePersistentMessageId,
   forkableAssistantMessageId,
-  forkableDuringInterviewAssistantMessageId,
   inlineEditForPersistentMessage,
   inlineEditIsPending,
   inlineEditLocksMessageActions,
@@ -41,7 +40,6 @@ import type {
   ChatTileUiAction,
   InlineEditState,
 } from "./chat-tile-session-state";
-import type { PendingInterviewView } from "./chat-tile-types";
 
 export interface ChatMessageActionsInput {
   readonly dispatchUi: (action: ChatTileUiAction) => void;
@@ -61,11 +59,6 @@ export interface ChatMessageActionsInput {
   readonly chatActions: ChatActions;
   readonly confirmingDeleteMessageId: string | null;
   readonly setForkTarget: (target: ChatForkDialogTarget | null) => void;
-  // The chat's currently host-pending interview, if any. Enables forking during
-  // Q&A: while the assistant is asking a question, the fork affordance is
-  // offered on the interview-owning message (and the interview card) so the user
-  // can branch off and cross-question the assistant.
-  readonly pendingInterview: PendingInterviewView | null;
   // The source chat's live binding, used to seed the fork dialog's workspace
   // picker so a fork starts from the same folders / worktree modes.
   readonly worktreeBinding: WorktreeBinding | null;
@@ -125,7 +118,6 @@ export function useChatMessageActions(
     chatActions,
     confirmingDeleteMessageId,
     setForkTarget,
-    pendingInterview,
     worktreeBinding,
   } = input;
 
@@ -284,10 +276,11 @@ export function useChatMessageActions(
         workspaceSeed,
         seedIntentOverride:
           mode === "ab-worktree" ? "worktree-carry" : null,
-        // Cross Question forks want the carried question as inert reference
-        // with a free composer; A/B forks re-open it as an answerable card so
-        // the user can answer differently and proceed.
-        carriedInterviews: mode === "cross-question" ? "settled" : "pending",
+        // A/B forks re-open a carried question as an answerable card so the
+        // user can answer differently and proceed; plain and Cross Question
+        // forks leave it settled (inert reference, composer free). Moot for a
+        // plain fork of a completed message — no streaming interview to carry.
+        carriedInterviews: mode === "ab-worktree" ? "pending" : "settled",
         forkMode: mode,
       });
     },
@@ -305,12 +298,10 @@ export function useChatMessageActions(
 
   const messageActionsFor = useCallback(
     (message: ChatMessageModel): ChatMessageActions | null => {
-      // Ordinary fork (completed assistant message) OR fork during Q&A: while a
-      // pending interview is open, the in-flight message that owns it is also a
-      // valid fork boundary so the user can branch off to cross-question.
-      const assistantMessageId =
-        forkableAssistantMessageId(message) ??
-        forkableDuringInterviewAssistantMessageId(message, pendingInterview);
+      // The per-message footer fork button is the plain fork, on completed
+      // assistant messages only. The two fork flavors (Cross Question / A/B)
+      // live exclusively on the pending-interview card.
+      const assistantMessageId = forkableAssistantMessageId(message);
       if (assistantMessageId !== null) {
         if (!canAct) return null;
         return {
@@ -318,8 +309,7 @@ export function useChatMessageActions(
           fork: {
             enabled: true,
             pending: false,
-            onFork: (mode: ChatForkMode) =>
-              forkAtAssistantMessage(assistantMessageId, mode),
+            onFork: () => forkAtAssistantMessage(assistantMessageId, "plain"),
           },
         };
       }
@@ -385,7 +375,6 @@ export function useChatMessageActions(
       editSettings,
       forkAtAssistantMessage,
       mentionRoots,
-      pendingInterview,
       submitInlineEdit,
       updateInlineEdit,
     ],

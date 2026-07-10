@@ -425,28 +425,6 @@ function forkableInterviewAssistantMessageId(
   return message.persistentMessageId;
 }
 
-// The per-slice fork gate used by `messageActionsFor` while a pending interview
-// is open. An assistant turn renders as multiple slice rows sharing one
-// `persistentMessageId`; anchor the fork affordance to the exact slice that
-// carries the pending question so the button does not appear on every slice.
-export function forkableDuringInterviewAssistantMessageId(
-  message: ChatMessageModel,
-  pendingInterview: PendingInterviewView | null,
-): string | null {
-  if (pendingInterview === null) return null;
-  if (pendingInterview.assistantMessageId === null) return null;
-  if (message.role !== "assistant") return null;
-  if (message.persistentMessageId !== pendingInterview.assistantMessageId) {
-    return null;
-  }
-  const ownsPendingSegment = message.segments.some(
-    (segment) =>
-      segment.kind === "interview" && segment.id === pendingInterview.blockId,
-  );
-  if (!ownsPendingSegment) return null;
-  return pendingInterview.assistantMessageId;
-}
-
 export function inlineEditLocksMessageActions(
   inlineEdit: InlineEditState | null,
   persistentMessageId: string,

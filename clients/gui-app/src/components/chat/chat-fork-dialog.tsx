@@ -342,7 +342,9 @@ function displayChatTitle(title: string): string {
 }
 
 function forkModeTitlePrefix(mode: ChatForkMode): string {
-  return mode === "cross-question" ? "Cross Question" : "A/B Fork";
+  if (mode === "cross-question") return "Cross Question";
+  if (mode === "ab-worktree") return "A/B Fork";
+  return "Fork";
 }
 
 function forkDialogModelPickerKey(target: ChatForkDialogTarget): string {

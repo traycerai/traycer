@@ -991,7 +991,7 @@ describe("<ChatTile />", () => {
     if (!(titleInput instanceof HTMLInputElement)) {
       throw new Error("expected fork title input");
     }
-    expect(titleInput.value).toBe("Cross Question - Latest title");
+    expect(titleInput.value).toBe("Fork - Latest title");
   });
 
   it("keeps permission editable while approval is pending", async () => {
