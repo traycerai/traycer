@@ -1,7 +1,7 @@
-import { Check, Copy } from "lucide-react";
+import { Check, Copy, GitBranch } from "lucide-react";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
-import { StartTruncatedText } from "@/components/ui/start-truncated-text";
 import type { WorkspaceRunItem } from "./workspace-run-item";
+import { workspaceRunBranchSourceLabel } from "./workspace-run-item";
 import { WorkspaceModeIcon } from "./workspace-mode-icon";
 
 /**
@@ -23,23 +23,35 @@ export function WorkspaceFolderHoverList(props: {
         const runPath = workspaceRunPath(item);
         return (
           <div key={item.key} className="flex min-w-0 flex-col gap-0.5">
-            <span className="flex min-w-0 items-center gap-1.5 leading-5">
+            <div className="flex min-w-0 items-start gap-1.5">
               <WorkspaceModeIcon mode={item.mode} />
-              <span className="truncate font-medium">{item.displayName}</span>
-              <span className="text-background/50">·</span>
-              <span className="truncate text-background/70">
-                {item.branchLabel}
-              </span>
-            </span>
+              <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                <span
+                  className="break-words font-medium leading-5"
+                  data-testid="workspace-hover-folder-name"
+                >
+                  {item.displayName}
+                </span>
+                <span className="flex min-w-0 items-start gap-1 text-background/70">
+                  <GitBranch className="mt-0.5 size-3 shrink-0" aria-hidden />
+                  <span
+                    className="min-w-0 break-words leading-4"
+                    data-testid="workspace-hover-branch-name"
+                  >
+                    {item.branchLabel}
+                  </span>
+                </span>
+              </div>
+            </div>
             {runPath === null ? (
-              <span className="leading-5 text-background/50">
-                New worktree · created on send
+              <span className="break-words pl-5 leading-5 text-background/50">
+                {newWorktreeDetail(item)}
               </span>
             ) : (
-              <div className="flex min-w-0 items-center gap-1">
-                <StartTruncatedText className="min-w-0 leading-5 text-background/60">
+              <div className="flex min-w-0 items-start gap-1 pl-5">
+                <span className="min-w-0 flex-1 break-all leading-5 text-background/60">
                   {runPath}
-                </StartTruncatedText>
+                </span>
                 <CopyPathButton path={runPath} />
               </div>
             )}
@@ -48,6 +60,13 @@ export function WorkspaceFolderHoverList(props: {
       })}
     </div>
   );
+}
+
+function newWorktreeDetail(item: WorkspaceRunItem): string {
+  const source = workspaceRunBranchSourceLabel(item.currentIntent);
+  return source === null
+    ? "New worktree · created on send"
+    : `From ${source} · created on send`;
 }
 
 function workspaceRunPath(item: WorkspaceRunItem): string | null {

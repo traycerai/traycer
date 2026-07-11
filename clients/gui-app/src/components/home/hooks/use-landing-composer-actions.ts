@@ -31,7 +31,10 @@ import {
 } from "@/stores/worktree/worktree-intent-staging-store";
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
 import type { WorkspaceFolderInfo } from "@/stores/workspace/workspace-folders-store";
-import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import {
+  useLandingDraftStore,
+  type LandingDraftWorkspaceSnapshot,
+} from "@/stores/home/landing-draft-store";
 import { useLandingComposerStore } from "@/stores/composer/landing-composer-store";
 import { useInitialChatHandoffStore } from "@/stores/epics/initial-chat-handoff-store";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
@@ -61,6 +64,8 @@ import {
 import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
 import { buildChatRunSettings } from "@/lib/composer/chat-run-settings";
 import { useAccountContextStore } from "@/stores/auth/account-context-store";
+import { orderFoldersPrimaryFirst } from "@/lib/worktree/resolve-primary-path";
+import { effectiveWorktreeIntent } from "@/lib/worktree/effective-worktree-intent";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import type {
   PermissionMode,
@@ -596,30 +601,74 @@ function readLandingWorkspaceContext(): LandingWorkspaceContext {
           (draft) => draft.id === draftState.activeDraftId,
         ) ?? null);
   const activeDraftId = activeDraft?.id ?? null;
-  const worktreeIntent = readStagedWorktreeIntent({
+  const stagedWorktreeIntent = readStagedWorktreeIntent({
     surface: "landing",
     draftId: activeDraftId,
   });
   if (activeDraft !== null) {
     return {
-      workspaceFolders: activeDraft.workspace.folders,
+      ...canonicalLaunchWorkspace(activeDraft.workspace, stagedWorktreeIntent),
       workspaceFolderInfoByPath: activeDraft.workspace.folderInfoByPath,
-      worktreeIntent,
-      workspaceMode: deriveWorkspaceMode(
-        activeDraft.workspace.folders.length,
-        worktreeIntent,
-      ),
       activeDraftId,
     };
   }
-  const globalFolders = useWorkspaceFoldersStore.getState().folders;
+  const globalState = useWorkspaceFoldersStore.getState();
   return {
-    workspaceFolders: globalFolders,
-    workspaceFolderInfoByPath:
-      useWorkspaceFoldersStore.getState().folderInfoByPath,
-    worktreeIntent,
-    workspaceMode: deriveWorkspaceMode(globalFolders.length, worktreeIntent),
+    ...canonicalLaunchWorkspace(
+      {
+        folders: globalState.folders,
+        folderInfoByPath: globalState.folderInfoByPath,
+        primaryPath: globalState.primaryPath,
+      },
+      stagedWorktreeIntent,
+    ),
+    workspaceFolderInfoByPath: globalState.folderInfoByPath,
     activeDraftId: null,
+  };
+}
+
+// Launch-boundary canonicalization shared by the draft and global paths, and
+// the same `effectiveWorktreeIntent` the new-conversation modal and every
+// seeded launcher route through: give each folder exactly one entry -
+// synthesizing a `local` default for a folder that never reached the staging
+// store - drop entries whose folder left the workspace, and stamp `isPrimary`
+// from the resolved primary rather than the staged bit.
+//
+// The synthesis is what keeps a primary switch onto a NON-GIT folder honest.
+// Non-git folders are never auto-staged, so restamping alone would flip the
+// only staged (git) entry to `isPrimary: false` with nothing taking its
+// place, sending a zero-primary intent.
+//
+// A nothing-staged launch stays `null`: the primary-first folder list already
+// carries the binding, and synthesizing an all-`local` intent here would be
+// remembered as the epic's intent and suppress the per-folder worktree
+// defaults the next time the epic opens.
+function canonicalLaunchWorkspace(
+  workspace: LandingDraftWorkspaceSnapshot,
+  stagedWorktreeIntent: WorktreeIntent | null,
+): {
+  readonly workspaceFolders: ReadonlyArray<string>;
+  readonly worktreeIntent: WorktreeIntent | null;
+  readonly workspaceMode: WorktreeBindingWorkspaceMode;
+} {
+  const worktreeIntent =
+    stagedWorktreeIntent === null
+      ? null
+      : effectiveWorktreeIntent({
+          workspace,
+          seedIntent: null,
+          stagedIntent: stagedWorktreeIntent,
+        });
+  return {
+    workspaceFolders: orderFoldersPrimaryFirst(
+      workspace.folders,
+      workspace.primaryPath,
+    ),
+    worktreeIntent,
+    workspaceMode: deriveWorkspaceMode(
+      workspace.folders.length,
+      worktreeIntent,
+    ),
   };
 }
 

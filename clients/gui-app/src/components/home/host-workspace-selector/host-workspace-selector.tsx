@@ -7,7 +7,6 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { useShallow } from "zustand/react/shallow";
 import { useIsMutating } from "@tanstack/react-query";
 import { workspaceMutationKeys } from "@/lib/query-keys";
 import { DropdownMenuLabel } from "@/components/ui/dropdown-menu";
@@ -49,16 +48,8 @@ import {
   preparedWorkspaceFolderToWorkspaceFolderInfo,
   useWorkspaceFolderActionsForClient,
 } from "@/hooks/workspace/use-workspace-folder-actions";
-import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
-import type { WorkspaceFolderInfo } from "@/stores/workspace/workspace-folders-store";
-import {
-  emptyLandingDraftWorkspaceSnapshot,
-  mergeLandingDraftWorkspaceFolders,
-  removeLandingDraftWorkspaceFolder,
-  useLandingDraftStore,
-  type LandingDraftWorkspaceSnapshot,
-} from "@/stores/home/landing-draft-store";
-import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
+import type { LandingDraftWorkspaceSnapshot } from "@/stores/home/landing-draft-store";
+import { resolvePrimaryPath } from "@/lib/worktree/resolve-primary-path";
 import {
   readStagedWorktreeIntent,
   useWorktreeIntentStagingStore,
@@ -66,6 +57,12 @@ import {
   type WorktreeStagingKey,
 } from "@/stores/worktree/worktree-intent-staging-store";
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
+import {
+  useHomeWorkspaceSource,
+  type HomeWorkspaceSource,
+} from "./use-home-workspace-source";
+import { PrimaryChangeLiveRegion } from "./primary-change-live-region";
+import { usePrimaryChangeAnnouncement } from "./use-primary-change-announcement";
 import {
   applySeedIntentOverride,
   defaultFolderIntent,
@@ -110,6 +107,13 @@ import { useChatById } from "@/lib/epic-selectors";
 import { toast } from "sonner";
 
 /**
+ *
+ *
+ *
+ *
+ *
+ *
+ *
  * `home` swaps the bound directory; `chat` clones the chat on switch;
  * `terminal-agent` locks the host section because a PTY can't migrate, but
  * its folder binding can be edited; the owning tile restarts the PTY after a
@@ -336,10 +340,8 @@ export function ActiveHostWorkspaceControls(
   if (props.layout === "stacked") {
     // Host picker as a flat file-tree-style list (own header), with the
     // folder rows in their own "Workspaces" section below — no trailing chip.
-    // `--fc-text` + `--fc-opacity` render the folder controls as full-opacity
-    // foreground text (matching the panel's other sections) instead of the muted
-    // composer chip; the leading icons stay `text-muted-foreground` like the
-    // host rows above.
+    // `--fc-text` brightens location labels to match the panel's other sections;
+    // identity, branch values, icons, and actions retain their semantic hierarchy.
     return (
       <div className="flex min-w-0 flex-col gap-3 [--fc-opacity:1] [--fc-text:var(--color-foreground)]">
         <HostSection
@@ -442,6 +444,24 @@ function HomeWorkspaceRows(props: {
   const folderIntentByPath = useWorktreeIntentMemoryStore(
     (state) => state.folderIntentByPath,
   );
+  // The single resolved primary every row / the collapsed chip / the launch
+  // boundary agrees on - re-derived from the CURRENT resolved folder set so a
+  // stale/removed `primaryPath` always falls back to the first remaining
+  // folder without a separate write.
+  const resolvedPrimaryPath = useMemo(
+    () =>
+      resolvePrimaryPath(
+        resolvedFolders.map((entry) => entry.path),
+        workspaceSource.primaryPath,
+      ),
+    [resolvedFolders, workspaceSource.primaryPath],
+  );
+  // Polite live-region announcement for a primary change - either an
+  // explicit "Make primary" click or the deterministic reassignment when
+  // removing the current primary. Sequence-keyed so consecutive identical
+  // messages (duplicate folder basenames) both announce.
+  const { announcement: primaryAnnouncement, announcePrimaryChange } =
+    usePrimaryChangeAnnouncement();
   const addFolderPending =
     useIsMutating({ mutationKey: workspaceMutationKeys.prepareFolders() }) > 0;
   const pickAndAddFolders = useCallback(async (): Promise<boolean> => {
@@ -580,7 +600,7 @@ function HomeWorkspaceRows(props: {
   useEffect(() => {
     if (gitSummaries.length === 0) return;
     const staged = seedCapturedIntent;
-    gitSummaries.forEach((summary, index) => {
+    gitSummaries.forEach((summary) => {
       const alreadyStaged =
         staged?.entries.some(
           (entry) => entry.workspacePath === summary.workspacePath,
@@ -590,7 +610,12 @@ function HomeWorkspaceRows(props: {
       const folder: SeedFolderContext = {
         workspacePath: summary.workspacePath,
         repoIdentifier: summary.repoIdentifier,
-        isPrimary: staged === null && index === 0,
+        // Stamped from the explicit resolved primary - never from array/
+        // git-summary position. After a reload restores a draft whose
+        // explicit primary is NOT the first git summary (empty staging
+        // slot), an order-derived seed here would silently re-mark the first
+        // summary primary and contradict the badge.
+        isPrimary: summary.workspacePath === resolvedPrimaryPath,
         isGitRepo: summary.isGitRepo,
         currentBranch,
         defaultNewBranchName: defaultBranchByPath[summary.workspacePath] ?? "",
@@ -638,6 +663,7 @@ function HomeWorkspaceRows(props: {
     gitSummaries,
     defaultBranchByPath,
     rememberedFor,
+    resolvedPrimaryPath,
     branchesByValidationPath,
     seedIntent,
     seedIntentOverride,
@@ -649,23 +675,25 @@ function HomeWorkspaceRows(props: {
         workspaceRunItemForResolvedFolder({
           entry,
           activeHostClient,
+          announcePrimaryChange,
           defaultBranchByPath,
-          gitSummaries,
           isFetchingSummaries: summariesQuery.isFetching,
           onLocate: () => {
             void pickAndAddFolders();
           },
+          resolvedPrimaryPath,
           setFolderIntent,
           summariesByPath,
           workspaceSource,
         }),
       ),
     [
+      announcePrimaryChange,
       defaultBranchByPath,
-      gitSummaries,
       pickAndAddFolders,
       activeHostClient,
       resolvedFolders,
+      resolvedPrimaryPath,
       workspaceSource,
       setFolderIntent,
       summariesByPath,
@@ -704,6 +732,7 @@ function HomeWorkspaceRows(props: {
 
   return (
     <>
+      <PrimaryChangeLiveRegion announcement={primaryAnnouncement} />
       {props.restingMode === "summary" ? (
         <HomeWorkspaceSummaryControl
           items={items}
@@ -879,10 +908,11 @@ type UnresolvedWorkspaceFolder = Extract<
 function workspaceRunItemForResolvedFolder(input: {
   readonly entry: ResolvedFolder;
   readonly activeHostClient: HostClient<HostRpcRegistry> | null;
+  readonly announcePrimaryChange: (folderName: string) => void;
   readonly defaultBranchByPath: Readonly<Record<string, string>>;
-  readonly gitSummaries: ReadonlyArray<WorktreeWorkspaceSummary>;
   readonly isFetchingSummaries: boolean;
   readonly onLocate: () => void;
+  readonly resolvedPrimaryPath: string | null;
   readonly setFolderIntent: (
     intent: WorktreeFolderIntent,
     timestamp: number,
@@ -894,9 +924,11 @@ function workspaceRunItemForResolvedFolder(input: {
   if (input.entry.kind === "unresolved") {
     const unresolvedItem = workspaceRunItemForUnresolvedFolder({
       activeHostClient: input.activeHostClient,
+      announcePrimaryChange: input.announcePrimaryChange,
       entry: input.entry,
       isFetchingSummaries: input.isFetchingSummaries,
       onLocate: input.onLocate,
+      resolvedPrimaryPath: input.resolvedPrimaryPath,
       summary,
       workspaceSource: input.workspaceSource,
     });
@@ -922,9 +954,11 @@ function workspaceRunItemForResolvedFolder(input: {
     currentIntent: capturedEntry,
     diskWorktrees: summary?.worktrees.filter((w) => !w.isMain) ?? [],
   });
-  const isPrimary =
-    capturedEntry?.isPrimary ??
-    input.entry.path === input.gitSummaries[0]?.workspacePath;
+  // The resolver (backed by the explicit `primaryPath` field) is the single
+  // source of truth for which row is primary - NOT the captured intent's own
+  // `isPrimary` bit (which can go stale between an explicit switch and the
+  // next launch-boundary canonicalization) and NOT array/git-summary order.
+  const isPrimary = input.entry.path === input.resolvedPrimaryPath;
   const emit = (intent: WorktreeFolderIntent): void => {
     input.workspaceSource.stageEntry(intent);
     input.setFolderIntent(intent, Date.now());
@@ -940,18 +974,15 @@ function workspaceRunItemForResolvedFolder(input: {
     isGitRepo,
     mode,
     branchLabel,
-    hoverLabel: workspaceRunHoverLabel(
-      input.entry.name,
-      mode,
-      branchLabel,
-      capturedEntry,
-    ),
     summary,
     currentIntent: capturedEntry,
     defaultNewBranchName,
     repoIdentifier:
       summary?.repoIdentifier ?? repoIdentifierForResolvedFolder(input.entry),
     isPrimary,
+    canChangePrimary: true,
+    makePrimaryDisabled: false,
+    makePrimaryDisabledReason: null,
     hostClient: input.activeHostClient,
     modeDisabled: false,
     modeDisabledReason: null,
@@ -973,27 +1004,44 @@ function workspaceRunItemForResolvedFolder(input: {
       });
     },
     onLocate: null,
-    onRemove: () => input.workspaceSource.removeFolder(input.entry.path),
+    onMakePrimary: () => {
+      input.workspaceSource.setPrimaryFolder(input.entry.path);
+      input.announcePrimaryChange(input.entry.name);
+    },
+    onRemove: () => {
+      const transition = input.workspaceSource.removeFolder(input.entry.path);
+      if (transition.primaryChanged && transition.newPrimaryName !== null) {
+        input.announcePrimaryChange(transition.newPrimaryName);
+      }
+    },
   };
 }
 
 function workspaceRunItemForUnresolvedFolder(input: {
   readonly activeHostClient: HostClient<HostRpcRegistry> | null;
+  readonly announcePrimaryChange: (folderName: string) => void;
   readonly entry: UnresolvedWorkspaceFolder;
   readonly isFetchingSummaries: boolean;
   readonly onLocate: () => void;
+  readonly resolvedPrimaryPath: string | null;
   readonly summary: WorktreeWorkspaceSummary | null;
   readonly workspaceSource: HomeWorkspaceSource;
 }): WorkspaceRunItem | null {
   if (input.summary !== null) return null;
-  const onRemove = (): void =>
-    input.workspaceSource.removeFolder(input.entry.path);
+  const isPrimary = input.entry.path === input.resolvedPrimaryPath;
+  const onRemove = (): void => {
+    const transition = input.workspaceSource.removeFolder(input.entry.path);
+    if (transition.primaryChanged && transition.newPrimaryName !== null) {
+      input.announcePrimaryChange(transition.newPrimaryName);
+    }
+  };
   if (input.isFetchingSummaries) {
     return pendingWorkspaceRunItem({
       path: input.entry.path,
       name: input.entry.name,
       repoIdentifier: input.entry.repoIdentifier,
       hostClient: input.activeHostClient,
+      isPrimary,
       onRemove,
     });
   }
@@ -1001,7 +1049,12 @@ function workspaceRunItemForUnresolvedFolder(input: {
     path: input.entry.path,
     name: input.entry.name,
     repoIdentifier: input.entry.repoIdentifier,
+    isPrimary,
     onLocate: input.onLocate,
+    onMakePrimary: () => {
+      input.workspaceSource.setPrimaryFolder(input.entry.path);
+      input.announcePrimaryChange(input.entry.name);
+    },
     onRemove,
   });
 }
@@ -1081,7 +1134,9 @@ function unresolvedWorkspaceRunItem(input: {
   readonly path: string;
   readonly name: string;
   readonly repoIdentifier: WorktreeWorkspaceSummary["repoIdentifier"];
+  readonly isPrimary: boolean;
   readonly onLocate: () => void;
+  readonly onMakePrimary: () => void;
   readonly onRemove: () => void;
 }): WorkspaceRunItem {
   return {
@@ -1096,12 +1151,14 @@ function unresolvedWorkspaceRunItem(input: {
     isGitRepo: false,
     mode: "local",
     branchLabel: "Unavailable",
-    hoverLabel: `${input.name} · unavailable`,
     summary: null,
     currentIntent: null,
     defaultNewBranchName: "",
     repoIdentifier: input.repoIdentifier,
-    isPrimary: false,
+    isPrimary: input.isPrimary,
+    canChangePrimary: true,
+    makePrimaryDisabled: true,
+    makePrimaryDisabledReason: "Resolve this folder to make it primary",
     hostClient: null,
     modeDisabled: true,
     modeDisabledReason: "Folder not on this host",
@@ -1111,6 +1168,7 @@ function unresolvedWorkspaceRunItem(input: {
     onSelectMode: () => undefined,
     onEmit: () => undefined,
     onLocate: input.onLocate,
+    onMakePrimary: input.onMakePrimary,
     onRemove: input.onRemove,
   };
 }
@@ -1120,6 +1178,7 @@ function pendingWorkspaceRunItem(input: {
   readonly name: string;
   readonly repoIdentifier: WorktreeWorkspaceSummary["repoIdentifier"];
   readonly hostClient: HostClient<HostRpcRegistry> | null;
+  readonly isPrimary: boolean;
   readonly onRemove: () => void;
 }): WorkspaceRunItem {
   return {
@@ -1132,12 +1191,14 @@ function pendingWorkspaceRunItem(input: {
     isGitRepo: false,
     mode: "local",
     branchLabel: "Loading",
-    hoverLabel: `${input.name} · loading`,
     summary: null,
     currentIntent: null,
     defaultNewBranchName: "",
     repoIdentifier: input.repoIdentifier,
-    isPrimary: false,
+    isPrimary: input.isPrimary,
+    canChangePrimary: true,
+    makePrimaryDisabled: true,
+    makePrimaryDisabledReason: "Loading folder metadata",
     hostClient: input.hostClient,
     modeDisabled: true,
     modeDisabledReason: "Loading folder metadata",
@@ -1147,6 +1208,7 @@ function pendingWorkspaceRunItem(input: {
     onSelectMode: () => undefined,
     onEmit: () => undefined,
     onLocate: null,
+    onMakePrimary: () => undefined,
     onRemove: input.onRemove,
   };
 }
@@ -1174,173 +1236,6 @@ function branchForSummary(
   if (summary === null) return null;
   const mainEntry = summary.worktrees.find((w) => w.isMain) ?? null;
   return mainEntry?.branch ?? summary.mainBranch ?? null;
-}
-
-function workspaceRunHoverLabel(
-  repoName: string,
-  mode: WorkspaceRunMode,
-  branchLabel: string,
-  intent: WorktreeFolderIntent | null,
-): string {
-  const worktreePath =
-    intent?.kind === "import" ? ` · ${intent.worktreePath}` : "";
-  return `${repoName} · ${mode === "worktree" ? "worktree" : "local"} · ${branchLabel}${worktreePath}`;
-}
-
-interface HomeWorkspaceSource {
-  readonly source: LandingDraftWorkspaceSnapshot | null;
-  readonly capturedIntent: WorktreeIntent | null;
-  readonly addResolvedFolders: (
-    folders: ReadonlyArray<WorkspaceFolderInfo>,
-  ) => void;
-  readonly removeFolder: (folderPath: string) => void;
-  readonly stageEntry: (entry: WorktreeFolderIntent) => void;
-}
-
-function useHomeWorkspaceSource(
-  stagingKey: WorktreeStagingKey,
-  workspaceSeed: LandingDraftWorkspaceSnapshot | null,
-): HomeWorkspaceSource {
-  const draftId = stagingKey.surface === "landing" ? stagingKey.draftId : null;
-  const modalEpicId =
-    stagingKey.surface === "new-conversation" ? stagingKey.epicId : null;
-  const draftWorkspace = useLandingDraftStore(
-    useShallow((state) => {
-      if (draftId === null) return null;
-      return (
-        state.drafts.find((draft) => draft.id === draftId)?.workspace ?? null
-      );
-    }),
-  );
-  const modalWorkspace = useNewConversationModalStore(
-    useShallow((state) => {
-      if (modalEpicId === null) return null;
-      return state.draftPatchesByEpicId[modalEpicId]?.workspace ?? null;
-    }),
-  );
-  const stagingKeyId = worktreeStagingKeyString(stagingKey);
-  const capturedIntent = useWorktreeIntentStagingStore(
-    (state) => state.intentByKey[stagingKeyId] ?? null,
-  );
-  const stageStoreEntry = useWorktreeIntentStagingStore(
-    (state) => state.stageEntry,
-  );
-  const unstageStoreEntry = useWorktreeIntentStagingStore(
-    (state) => state.unstageEntry,
-  );
-  const addGlobalResolvedFolders = useWorkspaceFoldersStore(
-    (state) => state.addResolvedFolders,
-  );
-  const removeGlobalFolder = useWorkspaceFoldersStore(
-    (state) => state.removeFolder,
-  );
-  const { addDraftResolvedFolders, removeDraftFolder } = useLandingDraftStore(
-    useShallow((state) => ({
-      addDraftResolvedFolders: state.addDraftResolvedFolders,
-      removeDraftFolder: state.removeDraftFolder,
-    })),
-  );
-  const { addModalResolvedFolders, removeModalFolder } =
-    useNewConversationModalStore(
-      useShallow((state) => ({
-        addModalResolvedFolders: state.addResolvedFolders,
-        removeModalFolder: state.removeFolder,
-      })),
-    );
-  const [seededWorkspaceState, setSeededWorkspaceState] = useState<{
-    readonly seed: LandingDraftWorkspaceSnapshot | null;
-    readonly workspace: LandingDraftWorkspaceSnapshot | null;
-  }>(() => ({ seed: workspaceSeed, workspace: workspaceSeed }));
-  if (seededWorkspaceState.seed !== workspaceSeed) {
-    setSeededWorkspaceState({
-      seed: workspaceSeed,
-      workspace: workspaceSeed,
-    });
-  }
-  const seededWorkspace =
-    seededWorkspaceState.seed === workspaceSeed
-      ? seededWorkspaceState.workspace
-      : workspaceSeed;
-  const source = modalWorkspace ?? draftWorkspace ?? seededWorkspace;
-  const activeDraftId = draftWorkspace === null ? null : draftId;
-  const modalSeedWorkspace = useMemo(
-    () => workspaceSeed ?? emptyLandingDraftWorkspaceSnapshot(),
-    [workspaceSeed],
-  );
-  const usingSeededWorkspace =
-    modalEpicId === null && draftWorkspace === null && seededWorkspace !== null;
-  return useMemo(
-    () => ({
-      source,
-      capturedIntent,
-      addResolvedFolders: (folders) => {
-        if (modalEpicId !== null) {
-          addModalResolvedFolders(modalEpicId, modalSeedWorkspace, folders);
-          return;
-        }
-        if (!usingSeededWorkspace) {
-          addGlobalResolvedFolders(folders);
-        }
-        if (activeDraftId !== null) {
-          addDraftResolvedFolders(activeDraftId, folders);
-        }
-        if (usingSeededWorkspace) {
-          setSeededWorkspaceState((current) => ({
-            seed: current.seed,
-            workspace: mergeLandingDraftWorkspaceFolders(
-              current.workspace ?? emptyLandingDraftWorkspaceSnapshot(),
-              folders,
-            ),
-          }));
-        }
-      },
-      removeFolder: (folderPath) => {
-        unstageStoreEntry(stagingKey, folderPath);
-        if (modalEpicId !== null) {
-          removeModalFolder(modalEpicId, modalSeedWorkspace, folderPath);
-          return;
-        }
-        if (!usingSeededWorkspace) {
-          removeGlobalFolder(folderPath);
-        }
-        if (activeDraftId !== null) {
-          removeDraftFolder(activeDraftId, folderPath);
-        }
-        if (usingSeededWorkspace) {
-          setSeededWorkspaceState((current) => ({
-            seed: current.seed,
-            workspace:
-              current.workspace === null
-                ? null
-                : removeLandingDraftWorkspaceFolder(
-                    current.workspace,
-                    folderPath,
-                  ),
-          }));
-        }
-      },
-      stageEntry: (entry) => {
-        stageStoreEntry(stagingKey, entry);
-      },
-    }),
-    [
-      activeDraftId,
-      addDraftResolvedFolders,
-      addGlobalResolvedFolders,
-      addModalResolvedFolders,
-      capturedIntent,
-      modalEpicId,
-      modalSeedWorkspace,
-      removeDraftFolder,
-      removeGlobalFolder,
-      removeModalFolder,
-      usingSeededWorkspace,
-      source,
-      stageStoreEntry,
-      stagingKey,
-      unstageStoreEntry,
-    ],
-  );
 }
 
 // Terminal-agent add/remove can commit to the binding before the explicit
@@ -1894,17 +1789,18 @@ function InEpicSurface(props: InEpicSurfaceProps) {
             currentMode === "local"
               ? (currentBranch ?? modeLabel)
               : branchLabel,
-          hoverLabel: workspaceRunHoverLabel(
-            workspaceFolderName(ws.workspacePath),
-            currentMode,
-            branchLabel,
-            currentIntent,
-          ),
           summary: ws,
           currentIntent,
           defaultNewBranchName,
           repoIdentifier: ws.repoIdentifier,
           isPrimary,
+          // Bound owner rows (chat / terminal-agent) have no atomic
+          // set-primary RPC yet - the badge renders read-only here; switching
+          // stays scoped to not-yet-created pickers (landing, fork dialogs,
+          // the new-conversation modal, the terminal-agent launcher).
+          canChangePrimary: false,
+          makePrimaryDisabled: false,
+          makePrimaryDisabledReason: null,
           hostClient: props.hostClient,
           modeDisabled: activeRunLocksBinding,
           modeDisabledReason: activeRunLocksBinding ? activeRunNotice : null,
@@ -1915,6 +1811,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
           ),
           removePending,
           onEmit: emit,
+          onMakePrimary: () => undefined,
           onSelectMode: (nextMode) => {
             if (!locationSelectionChanges(nextMode, currentIntent, currentMode))
               return;

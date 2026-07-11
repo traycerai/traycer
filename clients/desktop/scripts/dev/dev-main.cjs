@@ -42,7 +42,34 @@ const childEnv = {
 
 delete childEnv.ELECTRON_RUN_AS_NODE;
 
-const child = spawn(electronBin, [workspaceRoot], {
+// Expose a Chromium remote-debugging (CDP) endpoint on loopback so browser
+// automation (the Playwright MCP) can attach to the live app window. This is
+// the dev-only runner and the port stays bound to 127.0.0.1, so the open
+// endpoint is a local affordance. On by default so `make dev-desktop` is
+// drivable without remembering a flag; set the port to "off" (or "0") to
+// disable it, or to another value to avoid a clash when two desktop slots run
+// at once. Kept at a fixed default because the Playwright MCP's static
+// `--cdp-endpoint` can't chase a per-slot port.
+const remoteDebuggingSetting =
+  process.env.TRAYCER_DESKTOP_REMOTE_DEBUGGING_PORT ?? "9222";
+const remoteDebuggingPort =
+  remoteDebuggingSetting === "off" || remoteDebuggingSetting === "0"
+    ? null
+    : remoteDebuggingSetting;
+
+const electronArgs = [];
+if (remoteDebuggingPort !== null) {
+  electronArgs.push(`--remote-debugging-port=${remoteDebuggingPort}`);
+  // Chromium rejects DevTools WebSocket upgrades whose Origin header isn't
+  // allowlisted; Playwright's connectOverCDP sends one, so permit any origin.
+  electronArgs.push("--remote-allow-origins=*");
+  console.log(
+    `[dev-main] CDP endpoint at http://127.0.0.1:${remoteDebuggingPort} - Playwright can attach`,
+  );
+}
+electronArgs.push(workspaceRoot);
+
+const child = spawn(electronBin, electronArgs, {
   cwd: workspaceRoot,
   env: childEnv,
   stdio: "inherit",
