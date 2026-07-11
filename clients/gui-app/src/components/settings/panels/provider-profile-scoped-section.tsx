@@ -6,6 +6,7 @@ import {
   EyeOff,
   Plus,
   RefreshCw,
+  Settings2,
   Trash2,
   X,
 } from "lucide-react";
@@ -41,6 +42,7 @@ import {
   ProviderProfilesRefreshButton,
 } from "./provider-rate-limit-section";
 import { ProviderProfileReauthPanel } from "./provider-profile-reauth-panel";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import type { FailedProviderProfileAttempt } from "./add-provider-profile-dialog";
 import {
   duplicateProfileLabel,
@@ -152,9 +154,9 @@ export function ProviderProfileScopedSection(
           <div className="flex items-center gap-1">
             <Button
               type="button"
-              size="sm"
-              variant="ghost"
-              className="h-7 shrink-0 px-2 text-ui-xs"
+              size="xs"
+              variant="outline"
+              className="shrink-0"
               disabled={addProfileDisabled}
               title={addProfileDisabledReason}
               onClick={onAddProfile}
@@ -175,7 +177,6 @@ export function ProviderProfileScopedSection(
           activeProfileId={selectedProfileId}
           onSelectProfile={onSelectedProfileIdChange}
           onCreateProfile={onAddProfile}
-          onEditProfile={openProfileEditor}
           createProfileDisabled={addProfileDisabled}
           createProfileDisabledReason={addProfileDisabledReason}
           // ⌘⇧-digit isn't wired to Settings - no picker leader scope here.
@@ -183,10 +184,28 @@ export function ProviderProfileScopedSection(
           contentContainer={null}
           onCloseAutoFocus={null}
         />
-        <ProfileSummary
-          key={selectedProfile.profileId}
-          profile={selectedProfile}
-        />
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <ProfileSummary
+            key={selectedProfile.profileId}
+            profile={selectedProfile}
+          />
+          <TooltipWrapper
+            label="Change the profile name and accent color, sign in again, or remove this profile."
+            side="bottom"
+            sideOffset={6}
+            align="end"
+          >
+            <Button
+              type="button"
+              size="xs"
+              variant="outline"
+              onClick={openProfileEditor}
+            >
+              <Settings2 data-icon="inline-start" />
+              Manage profile
+            </Button>
+          </TooltipWrapper>
+        </div>
 
         {addProfileDisabled ? (
           <p className="text-ui-xs text-muted-foreground">
@@ -273,7 +292,7 @@ function ProfileSummary({
     tier === null || tier === undefined || tier.length === 0 ? "No plan" : tier;
 
   return (
-    <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2 text-ui-xs text-muted-foreground">
+    <div className="grid min-w-[75%] flex-1 grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2 text-ui-xs text-muted-foreground">
       <div className="flex min-w-0 items-center gap-1">
         <span className="min-w-0 truncate" title={email ?? undefined}>
           {emailText}

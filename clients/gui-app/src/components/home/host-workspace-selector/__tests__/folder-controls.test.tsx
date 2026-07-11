@@ -69,6 +69,24 @@ const NOOP = (): void => undefined;
 const NOOP_ADD = (): Promise<boolean> => Promise.resolve(false);
 const EMPTY_COUNTS: ReadonlyMap<string, number> = new Map();
 
+function tabForward(): void {
+  const focusable = Array.from(
+    document.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    ),
+  );
+  const currentIndex = focusable.findIndex(
+    (element) => element === document.activeElement,
+  );
+  const next = focusable[currentIndex + 1] ?? focusable[0];
+  fireEvent.keyDown(document.activeElement ?? document.body, {
+    key: "Tab",
+    code: "Tab",
+  });
+  next.focus();
+  fireEvent.keyUp(next, { key: "Tab", code: "Tab" });
+}
+
 const GIT_SUMMARY: WorktreeWorkspaceSummary = {
   workspacePath: "/repo",
   isGitRepo: true,
@@ -105,12 +123,14 @@ function item(over: Partial<WorkspaceRunItem>): WorkspaceRunItem {
     isGitRepo: true,
     mode: "worktree",
     branchLabel: "feat/x",
-    hoverLabel: "repo · worktree · feat/x",
     summary: GIT_SUMMARY,
     currentIntent: null,
     defaultNewBranchName: "traycer/swift-otter",
     repoIdentifier: { owner: "acme", repo: "app" },
     isPrimary: true,
+    canChangePrimary: true,
+    makePrimaryDisabled: false,
+    makePrimaryDisabledReason: null,
     hostClient: null,
     modeDisabled: false,
     modeDisabledReason: null,
@@ -120,6 +140,7 @@ function item(over: Partial<WorkspaceRunItem>): WorkspaceRunItem {
     onSelectMode: NOOP,
     onEmit: NOOP,
     onLocate: null,
+    onMakePrimary: NOOP,
     onRemove: null,
     ...over,
   };
@@ -303,6 +324,48 @@ describe("FolderRow", () => {
     expect(edited).toBe("/repo");
   });
 
+  it("keeps pin, identity, controls, and actions on one aligned row", () => {
+    renderRow({ displayName: "a-folder-name-that-needs-room" }, NOOP);
+
+    const row = screen.getByTestId("folder-row");
+    const pin = screen.getByTestId("folder-primary-pin");
+    const identity = screen.getByTestId("folder-chip");
+    const actions = screen.getByTestId("folder-row-actions");
+    const location = screen.getByTestId("folder-location-trigger");
+    const branch = screen.getByTestId("folder-branch-trigger");
+
+    expect(row.className).toContain("grid-cols-subgrid");
+    expect(row.contains(pin)).toBe(true);
+    expect(row.contains(identity)).toBe(true);
+    expect(row.contains(location)).toBe(true);
+    expect(row.contains(branch)).toBe(true);
+    expect(row.contains(actions)).toBe(true);
+    expect(screen.queryByTestId("folder-row-details")).toBeNull();
+    expect(location.className).toContain("w-max");
+    expect(branch.className).toContain("w-[clamp(8rem,25vw,16rem)]");
+    expect(identity.className).not.toContain("opacity-[var(--fc-opacity,0.7)]");
+    expect(identity.children[1].className).toContain("text-foreground/90");
+    expect(location.className).toContain("var(--color-muted-foreground)");
+    expect(branch.className).toContain("text-foreground/75");
+    expect(identity.getAttribute("title")).toBe("/repo");
+  });
+
+  it("reserves two stable trailing action slots", () => {
+    renderRow({ isPrimary: true, canChangePrimary: true }, NOOP);
+
+    const actions = screen.getByTestId("folder-row-actions");
+    expect(actions.children).toHaveLength(2);
+    expect(actions.className).toContain("justify-self-end");
+    expect(
+      actions.children[0].querySelector(
+        '[data-testid="folder-scripts-trigger"]',
+      ),
+    ).not.toBeNull();
+    expect(
+      actions.children[1].querySelector('[data-testid="folder-remove"]'),
+    ).not.toBeNull();
+  });
+
   it("renders a read-only branch label for Local mode (no branch popover)", async () => {
     renderRow(
       { mode: "local", branchLabel: "development", currentIntent: null },
@@ -310,6 +373,7 @@ describe("FolderRow", () => {
     );
     const readonly = screen.getByTestId("folder-branch-readonly");
     expect(readonly.textContent).toContain("development");
+    expect(readonly.className).toContain("text-foreground/75");
     expect(screen.queryByTestId("folder-branch-trigger")).toBeNull();
     // Full branch name surfaces in a tooltip on hover/focus (the label truncates).
     fireEvent.focus(readonly);
@@ -330,6 +394,43 @@ describe("FolderRow", () => {
     fireEvent.focus(screen.getByTestId("folder-branch-trigger"));
     expect((await screen.findByRole("tooltip")).textContent).toContain(
       "Working tree · some/very-long-branch-name",
+    );
+  });
+
+  it("shows a new worktree's target and lower-emphasis source without changing the branch track", async () => {
+    renderRow(
+      {
+        branchLabel: "traycer/new-feature",
+        currentIntent: {
+          kind: "worktree",
+          workspacePath: "/repo",
+          repoIdentifier: { owner: "acme", repo: "app" },
+          isPrimary: true,
+          scripts: null,
+          branch: {
+            type: "new",
+            name: "traycer/new-feature",
+            source: "development",
+            carryUncommittedChanges: false,
+          },
+        },
+      },
+      NOOP,
+    );
+
+    const trigger = screen.getByTestId("folder-branch-trigger");
+    expect(trigger.textContent).toContain("traycer/new-feature");
+    expect(trigger.textContent).toContain("from development");
+    expect(screen.getByTestId("folder-branch-target").className).toContain(
+      "truncate",
+    );
+    const source = screen.getByTestId("folder-branch-source");
+    expect(source.className).toContain("text-ui-xs");
+    expect(source.className).toContain("text-muted-foreground");
+    expect(trigger.className).toContain("w-[clamp(8rem,25vw,16rem)]");
+    fireEvent.focus(trigger);
+    expect((await screen.findByRole("tooltip")).textContent).toContain(
+      "traycer/new-feature · from development",
     );
   });
 
@@ -406,6 +507,128 @@ describe("FolderRow", () => {
     expect(screen.queryByTestId("folder-row-locate")).toBeNull();
     expect(screen.queryByTestId("folder-remove")).toBeNull();
   });
+
+  it("shows a filled Primary pin with an explanatory tooltip", async () => {
+    renderRow({ isPrimary: true }, NOOP);
+    const pin = screen.getByTestId("folder-primary-pin");
+    expect(pin.tagName).toBe("BUTTON");
+    expect(pin.getAttribute("aria-disabled")).toBe("true");
+    expect(pin.getAttribute("aria-label")).toBe("Primary folder information");
+    expect(pin.querySelector("svg")?.getAttribute("fill")).toBe("currentColor");
+    tabForward();
+    expect(document.activeElement).toBe(pin);
+    expect((await screen.findByRole("tooltip")).textContent).toContain(
+      "New agent commands and terminals start here",
+    );
+  });
+
+  it("shows an outline locked pin with a disabled cursor and explanation", async () => {
+    renderRow({ isPrimary: false, canChangePrimary: false }, NOOP);
+    const pin = screen.getByTestId("folder-secondary-pin");
+    expect(pin.querySelector("svg")?.getAttribute("fill")).toBe("none");
+    expect(pin.getAttribute("aria-disabled")).toBe("true");
+    expect(pin.className).toContain("cursor-not-allowed");
+    fireEvent.focus(pin);
+    expect((await screen.findByRole("tooltip")).textContent).toContain(
+      "cannot be changed after the chat starts",
+    );
+  });
+
+  it("explains the post-start lock on the filled Primary pin", async () => {
+    renderRow({ isPrimary: true, canChangePrimary: false }, NOOP);
+    const pin = screen.getByTestId("folder-primary-pin");
+    expect(pin.getAttribute("aria-disabled")).toBe("true");
+    expect(pin.className).toContain("cursor-not-allowed");
+    tabForward();
+    expect(document.activeElement).toBe(pin);
+    expect((await screen.findByRole("tooltip")).textContent).toContain(
+      "cannot be changed after the chat starts",
+    );
+  });
+
+  it("hides the Make primary action on the primary row itself", () => {
+    renderRow({ isPrimary: true, canChangePrimary: true }, NOOP);
+    expect(screen.queryByTestId("folder-make-primary")).toBeNull();
+    expect(screen.getByTestId("folder-primary-pin")).toBeTruthy();
+  });
+
+  it("offers a keyboard-operable Make primary action on a non-primary row, wired to onMakePrimary", () => {
+    const onMakePrimary = vi.fn();
+    renderRow(
+      { isPrimary: false, canChangePrimary: true, onMakePrimary },
+      NOOP,
+    );
+    const button = screen.getByRole("button", { name: "Set as primary" });
+    expect(button).toBeTruthy();
+    expect(button.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(button);
+    expect(onMakePrimary).toHaveBeenCalledTimes(1);
+  });
+
+  it("replaces Make primary with a passive outline pin when the surface can't change primary", () => {
+    renderRow({ isPrimary: false, canChangePrimary: false }, NOOP);
+    expect(screen.queryByTestId("folder-make-primary")).toBeNull();
+    expect(screen.getByTestId("folder-secondary-pin")).toBeTruthy();
+  });
+
+  it("keeps the disabled pin keyboard-reachable while metadata is pending", async () => {
+    const onRemove = vi.fn();
+    renderRow(
+      {
+        metadataPending: true,
+        isPrimary: false,
+        canChangePrimary: true,
+        makePrimaryDisabled: true,
+        makePrimaryDisabledReason: "Loading folder metadata",
+        summary: null,
+        onRemove,
+      },
+      NOOP,
+    );
+    expect(screen.getByTestId("folder-row-loading")).toBeTruthy();
+    // aria-disabled keeps the explanation in normal keyboard traversal while
+    // guarding activation during the fetch.
+    const pin = screen.getByTestId("folder-make-primary");
+    expect(pin.hasAttribute("disabled")).toBe(false);
+    expect(pin.getAttribute("aria-disabled")).toBe("true");
+    tabForward();
+    expect(document.activeElement).toBe(pin);
+    const tooltip = await screen.findByRole("tooltip");
+    expect(pin.getAttribute("aria-describedby")).toBe(tooltip.id);
+    expect(tooltip.textContent).toContain("Loading folder metadata");
+    // Remove stays live - a pending row is still removable.
+    fireEvent.click(screen.getByTestId("folder-remove"));
+    expect(onRemove).toHaveBeenCalledTimes(1);
+  });
+
+  it("tabs to the disabled Make primary explanation for an unresolved row", async () => {
+    const onMakePrimary = vi.fn();
+    renderRow(
+      {
+        unresolved: true,
+        isPrimary: false,
+        canChangePrimary: true,
+        makePrimaryDisabled: true,
+        makePrimaryDisabledReason: "Resolve this folder to make it primary",
+        onLocate: NOOP,
+        onMakePrimary,
+        onRemove: NOOP,
+      },
+      NOOP,
+    );
+    const button = screen.getByTestId("folder-make-primary");
+    expect(button.hasAttribute("disabled")).toBe(false);
+    expect(button.getAttribute("aria-disabled")).toBe("true");
+    tabForward();
+    expect(document.activeElement).toBe(button);
+    const tooltip = await screen.findByRole("tooltip");
+    expect(button.getAttribute("aria-describedby")).toBe(tooltip.id);
+    expect(tooltip.textContent).toContain(
+      "Resolve this folder to make it primary",
+    );
+    fireEvent.click(button);
+    expect(onMakePrimary).not.toHaveBeenCalled();
+  });
 });
 
 describe("WorkspaceFolderRows", () => {
@@ -432,6 +655,40 @@ describe("WorkspaceFolderRows", () => {
     expect(screen.getByTestId("device-slot")).toBeTruthy();
     expect(screen.getByTestId("folder-row")).toBeTruthy();
     expect(screen.getByTestId("folder-add")).toBeTruthy();
+  });
+
+  it("keeps a stable branch width and truncates labels independently of content", () => {
+    render(
+      <TooltipProvider>
+        <WorkspaceFolderRows
+          items={[
+            item({ key: "/repo", branchLabel: "development" }),
+            item({ key: "/repo/infra", branchLabel: "main" }),
+          ]}
+          trailingSlot={null}
+          onAddFolder={NOOP_ADD}
+          addFolderPending={false}
+          addFolderDisabled={false}
+          addFolderDisabledReason={null}
+          onUpdate={null}
+          updateEnabled={false}
+          updatePending={false}
+          onEditEnvironment={NOOP}
+          nestedInPopover={false}
+          readOnly={false}
+          bindingResolved
+        />
+      </TooltipProvider>,
+    );
+
+    const triggers = screen.getAllByTestId("folder-branch-trigger");
+    expect(triggers).toHaveLength(2);
+    for (const trigger of triggers) {
+      expect(trigger.className).toContain("w-[clamp(8rem,25vw,16rem)]");
+      expect(
+        trigger.querySelector('[data-testid="folder-branch-label"]')?.className,
+      ).toContain("truncate");
+    }
   });
 
   it("opens the OS folder picker from Add folder when empty and resolved", () => {
@@ -610,6 +867,7 @@ describe("WorkspaceSummaryTrigger", () => {
           items={[item({}), item({ key: "/repo2", displayName: "repo2" })]}
           readOnly={false}
           bindingResolved
+          tooltipEnabled={false}
         />
       </TooltipProvider>,
     );
@@ -619,10 +877,76 @@ describe("WorkspaceSummaryTrigger", () => {
     expect(trigger.textContent).toContain("+1");
   });
 
+  it("shows the new target and its source in the collapsed workspace trigger", () => {
+    render(
+      <TooltipProvider>
+        <WorkspaceSummaryTrigger
+          items={[
+            item({
+              branchLabel: "traycer/new-feature",
+              currentIntent: {
+                kind: "worktree",
+                workspacePath: "/repo",
+                repoIdentifier: { owner: "acme", repo: "app" },
+                isPrimary: true,
+                scripts: null,
+                branch: {
+                  type: "new",
+                  name: "traycer/new-feature",
+                  source: "development",
+                  carryUncommittedChanges: false,
+                },
+              },
+            }),
+          ]}
+          readOnly={false}
+          bindingResolved
+          tooltipEnabled={false}
+        />
+      </TooltipProvider>,
+    );
+
+    const trigger = screen.getByTestId("workspace-summary-trigger");
+    expect(trigger.textContent).toContain("traycer/new-feature");
+    expect(trigger.textContent).toContain("from development");
+    expect(screen.getByTestId("folder-branch-source").className).toContain(
+      "text-muted-foreground",
+    );
+  });
+
+  it("resolves the collapsed summary by the marked isPrimary row, not array position", () => {
+    render(
+      <TooltipProvider>
+        <WorkspaceSummaryTrigger
+          items={[
+            item({ key: "/repo", displayName: "repo", isPrimary: false }),
+            item({
+              key: "/repo2",
+              displayName: "repo2",
+              branchLabel: "main",
+              isPrimary: true,
+            }),
+          ]}
+          readOnly={false}
+          bindingResolved
+          tooltipEnabled={false}
+        />
+      </TooltipProvider>,
+    );
+    const trigger = screen.getByTestId("workspace-summary-trigger");
+    expect(trigger.textContent).toContain("repo2");
+    expect(trigger.textContent).not.toContain("feat/x");
+  });
+
   it("expands to a read-only folder list when read-only", async () => {
     render(
       <TooltipProvider>
-        <WorkspaceSummaryTrigger items={[item({})]} readOnly bindingResolved />
+        <WorkspaceSummaryTrigger
+          items={[item({})]}
+          readOnly
+          bindingResolved
+          tooltipEnabled={false}
+        />
       </TooltipProvider>,
     );
     const trigger = screen.getByTestId("workspace-summary-trigger");
@@ -650,6 +974,120 @@ describe("WorkspaceSummaryTrigger", () => {
 });
 
 describe("WorkspaceFolderSummaryControl", () => {
+  it("uses the rich hover preview instead of a competing native title", () => {
+    render(
+      <TooltipProvider>
+        <WorkspaceFolderSummaryControl
+          items={[item({})]}
+          readOnly={false}
+          bindingResolved
+          addFolderPending={false}
+          addFolderDisabled={false}
+          addFolderDisabledReason={null}
+          onAddFolder={NOOP_ADD}
+          onUpdate={null}
+          updateEnabled={false}
+          updatePending={false}
+          onDiscardStaged={null}
+          onEditEnvironment={NOOP}
+          hoverPreviewEnabled
+          popoverTestId="workspace-rows-popover"
+          popoverSide="top"
+        />
+      </TooltipProvider>,
+    );
+
+    expect(
+      screen.getByTestId("workspace-summary-trigger").getAttribute("title"),
+    ).toBeNull();
+  });
+
+  it("shows full landing-page folder and branch provenance in an app tooltip", async () => {
+    render(
+      <TooltipProvider delayDuration={0}>
+        <WorkspaceFolderSummaryControl
+          items={[
+            item({
+              displayName: "a-very-long-repository-name-that-is-truncated",
+              branchLabel: "traycer/a-very-long-target-branch",
+              currentIntent: {
+                kind: "worktree",
+                workspacePath: "/repo",
+                repoIdentifier: { owner: "acme", repo: "app" },
+                isPrimary: true,
+                scripts: null,
+                branch: {
+                  type: "new",
+                  name: "traycer/a-very-long-target-branch",
+                  source: "release/a-very-long-base-branch",
+                  carryUncommittedChanges: false,
+                },
+              },
+            }),
+          ]}
+          readOnly={false}
+          bindingResolved
+          addFolderPending={false}
+          addFolderDisabled={false}
+          addFolderDisabledReason={null}
+          onAddFolder={NOOP_ADD}
+          onUpdate={null}
+          updateEnabled={false}
+          updatePending={false}
+          onDiscardStaged={null}
+          onEditEnvironment={NOOP}
+          hoverPreviewEnabled={false}
+          popoverTestId="workspace-rows-popover"
+          popoverSide="top"
+        />
+      </TooltipProvider>,
+    );
+
+    const trigger = screen.getByTestId("workspace-summary-trigger");
+    expect(trigger.getAttribute("title")).toBeNull();
+    fireEvent.focus(trigger);
+    const tooltip = await screen.findByRole("tooltip");
+    expect(tooltip.textContent).toContain(
+      "a-very-long-repository-name-that-is-truncated",
+    );
+    expect(tooltip.textContent).toContain("traycer/a-very-long-target-branch");
+    expect(tooltip.textContent).toContain(
+      "From release/a-very-long-base-branch",
+    );
+  });
+
+  it("opens quietly without auto-focusing the Primary pin tooltip", async () => {
+    render(
+      <TooltipProvider>
+        <WorkspaceFolderSummaryControl
+          items={[item({ isPrimary: true })]}
+          readOnly={false}
+          bindingResolved
+          addFolderPending={false}
+          addFolderDisabled={false}
+          addFolderDisabledReason={null}
+          onAddFolder={NOOP_ADD}
+          onUpdate={null}
+          updateEnabled={false}
+          updatePending={false}
+          onDiscardStaged={null}
+          onEditEnvironment={NOOP}
+          hoverPreviewEnabled={false}
+          popoverTestId="workspace-rows-popover"
+          popoverSide="top"
+        />
+      </TooltipProvider>,
+    );
+
+    const trigger = screen.getByTestId("workspace-summary-trigger");
+    trigger.focus();
+    fireEvent.click(trigger);
+
+    await screen.findByTestId("workspace-rows-popover");
+    expect(document.activeElement).toBe(trigger);
+    expect(screen.queryByRole("tooltip")).toBeNull();
+  });
+
   it("renders Add folder directly when the folder list is empty and resolved", () => {
     let added = 0;
     render(
@@ -763,6 +1201,9 @@ describe("WorkspaceFolderSummaryControl", () => {
     await waitFor(() => {
       expect(screen.getByTestId("workspace-rows-popover")).toBeTruthy();
     });
+    expect(screen.getByTestId("workspace-rows-popover").className).toContain(
+      "w-[min(92vw,42rem)]",
+    );
     expect(screen.queryByTestId("folder-update")).toBeNull();
   });
 

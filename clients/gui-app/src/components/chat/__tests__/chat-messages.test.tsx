@@ -35,6 +35,7 @@ import {
 import {
   chatFindA2AReceivedBodyUnitId,
   chatFindActivityGroupChildHeaderUnitId,
+  chatFindMessageContentUnitId,
   chatFindSegmentUnitId,
   chatFindSubagentBodyUnitId,
   chatFindSubagentHeaderUnitId,
@@ -460,6 +461,45 @@ describe("ChatMessages Virtuoso renderer", () => {
     const activeRow =
       activeRange?.startContainer.parentElement?.closest(MESSAGE_ROW_SELECTOR);
     expect(activeRow?.getAttribute("data-message-id")).toBe("message-0");
+  });
+
+  it("counts a user message with a mirrored text segment once, matching its single rendered anchor", async () => {
+    const registry = installMockHighlights();
+    // Real user messages carry a `text` segment mirroring their content, but the
+    // user body renders the whole content as ONE anchor (message:{id}:content)
+    // with no per-segment anchors. The end-to-end find pipeline must therefore
+    // report exactly one match and paint it - not a phantom N+1 from the
+    // never-rendered text-segment unit.
+    const message: ChatMessageModel = {
+      ...makeMessage(0, "user"),
+      content: "confirm the needle is working",
+      segments: [
+        {
+          id: "user-text-0",
+          kind: "text",
+          markdown: "confirm the needle is working",
+          isStreaming: false,
+        },
+      ],
+    };
+    renderChatMessagesWithTileFind(
+      [message],
+      makeDefaultOpts({ minimapItems: minimapItemsFor([message]) }),
+    );
+
+    await waitForChatFindAdapter();
+    searchChat("needle");
+
+    await waitFor(() => {
+      expect(lastChatFindSnapshot()?.exactHighlight).toBe("painted");
+    });
+
+    expect(lastChatFindSnapshot()?.total).toBe(1);
+    expect(lastChatFindSnapshot()?.activeUnitId).toBe(
+      chatFindMessageContentUnitId(message.id),
+    );
+    // Count matches paint: the single rendered occurrence is the only highlight.
+    expect(totalPaintedRanges(registry)).toBe(1);
   });
 
   it("paints activity-group header matches inside content-bearing trigger buttons", async () => {

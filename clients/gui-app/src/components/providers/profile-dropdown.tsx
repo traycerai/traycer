@@ -1,4 +1,4 @@
-import { CheckIcon, ChevronDown, Pencil, Plus } from "lucide-react";
+import { CheckIcon, ChevronDown, Plus } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -7,6 +7,7 @@ import {
   DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Kbd } from "@/components/ui/kbd";
 import { AccentDot } from "@/components/providers/accent-dot";
 import {
   profileCommitId,
@@ -33,10 +34,6 @@ interface ProfileDropdownProps {
   readonly activeProfileId: string | null;
   readonly onSelectProfile: (profileId: string | null) => void;
   readonly onCreateProfile: () => void;
-  /** Settings-only edit action. When present, it is visually inset into the
-   *  trigger immediately before the caret without nesting one button inside
-   *  another. Picker surfaces pass null. */
-  readonly onEditProfile: (() => void) | null;
   readonly createProfileDisabled: boolean;
   readonly createProfileDisabledReason: string | undefined;
   /** Per-row shortcut hint, or a function that always returns `null` to opt
@@ -72,7 +69,6 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
     activeProfileId,
     onSelectProfile,
     onCreateProfile,
-    onEditProfile,
     createProfileDisabled,
     createProfileDisabledReason,
     shortcutHintForIndex,
@@ -85,71 +81,26 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
 
   return (
     <DropdownMenu modal={false}>
-      {onEditProfile === null ? (
-        <DropdownMenuTrigger asChild>
-          <button
-            type="button"
-            aria-label={`${providerLabel} profile: ${profileDisplayLabel(activeProfile)}`}
-            className="flex h-8 w-full min-w-0 items-center justify-between gap-2 rounded-md border border-input bg-transparent px-2.5 text-ui-sm text-foreground outline-none transition-colors hover:bg-input/30 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 data-open:bg-input/30 dark:bg-input/30 dark:hover:bg-input/50"
-          >
-            <AccentDot
-              profileId={activeProfile.profileId}
-              accentColor={activeProfile.accentColor}
-              label={null}
-              variant="inline"
-              size="default"
-              className={undefined}
-            />
-            <span className="min-w-0 flex-1 truncate text-left font-medium">
-              {profileDisplayLabel(activeProfile)}
-            </span>
-            <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
-          </button>
-        </DropdownMenuTrigger>
-      ) : (
-        <div className="relative h-8 min-w-0">
-          <DropdownMenuTrigger asChild>
-            <button
-              type="button"
-              aria-label={`${providerLabel} profile: ${profileDisplayLabel(activeProfile)}`}
-              className="absolute inset-0 rounded-md border border-input bg-transparent text-foreground outline-none transition-colors hover:bg-input/30 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 data-open:bg-input/30 dark:bg-input/30 dark:hover:bg-input/50"
-            >
-              <span className="sr-only">
-                Select {profileDisplayLabel(activeProfile)} profile
-              </span>
-            </button>
-          </DropdownMenuTrigger>
-          <div className="pointer-events-none relative flex h-full min-w-0 items-center gap-2 px-2.5 text-ui-sm text-foreground">
-            <AccentDot
-              profileId={activeProfile.profileId}
-              accentColor={activeProfile.accentColor}
-              label={null}
-              variant="inline"
-              size="default"
-              className={undefined}
-            />
-            <span
-              aria-hidden="true"
-              className="min-w-0 truncate text-left font-medium"
-            >
-              {profileDisplayLabel(activeProfile)}
-            </span>
-            <button
-              type="button"
-              aria-label={`Edit ${profileDisplayLabel(activeProfile)} profile`}
-              className="pointer-events-auto flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-              onClick={onEditProfile}
-            >
-              <Pencil className="size-3.5" />
-            </button>
-            <span className="min-w-0 flex-1" />
-            <ChevronDown
-              aria-hidden="true"
-              className="size-4 shrink-0 text-muted-foreground"
-            />
-          </div>
-        </div>
-      )}
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          aria-label={`${providerLabel} profile: ${profileDisplayLabel(activeProfile)}`}
+          className="flex h-8 w-full min-w-0 items-center justify-between gap-2 rounded-md border border-input bg-transparent px-2.5 text-ui-sm text-foreground outline-none transition-colors hover:bg-input/30 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 data-open:bg-input/30 dark:bg-input/30 dark:hover:bg-input/50"
+        >
+          <AccentDot
+            profileId={activeProfile.profileId}
+            accentColor={activeProfile.accentColor}
+            label={null}
+            variant="inline"
+            size="default"
+            className={undefined}
+          />
+          <span className="min-w-0 flex-1 truncate text-left font-medium">
+            {profileDisplayLabel(activeProfile)}
+          </span>
+          <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
+        </button>
+      </DropdownMenuTrigger>
       <DropdownMenuContent
         align="start"
         sideOffset={4}
@@ -194,7 +145,9 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
                 <DropdownMenuShortcut
                   data-testid={`model-profile-digit-${shortcutHint.digit}`}
                 >
-                  {shortcutHint.label}
+                  <Kbd className="font-mono tabular-nums">
+                    {shortcutHint.label}
+                  </Kbd>
                 </DropdownMenuShortcut>
               ) : null}
               <span className="pointer-events-none flex size-4 shrink-0 items-center justify-center">

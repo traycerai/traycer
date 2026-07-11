@@ -1,4 +1,149 @@
 {
-  "$comment": "Reviewed tolerances for same-version wire-schema divergences reported by the released-peer compatibility gate. Each entry names the exact finding it suppresses (family, method, version, payload, path) plus the reason it is safe. Handshake-fatal findings can never be excepted. Adding an entry requires the 'protocol-compat-override' label and protocol-owner review.",
-  "exceptions": []
+  "$comment": "Static policy encoding which host→client payload paths are catalog-gated (id-agnostic — future harnesses never touch this file). Not a per-change review mechanism. Method/path support globs (* one segment, ** any depth; method * is non-dot). Catalog methods agent.gui.listHarnesses / agent.list / providers.list must never appear here for host→client payloads — growth on those requires freezing the shipped line and opening a new major with downgrade bridges (amp 003d7586 / devin 407d110 template).",
+  "exceptions": [
+    {
+      "family": "unary",
+      "method": "agent.gui.getPlan",
+      "version": "*",
+      "payload": "response",
+      "path": "**.harnessId.enum",
+      "reason": "Plan source harnessId is gated by which harnesses the host actually lists; old clients only open getPlan for harnesses they already know."
+    },
+    {
+      "family": "unary",
+      "method": "agent.gui.listCommands",
+      "version": "*",
+      "payload": "response",
+      "path": "**.harnessId.enum",
+      "reason": "Commands are scoped to a harness the client already selected from a negotiated catalog; additive harness ids on this echo field stay behind that gate."
+    },
+    {
+      "family": "unary",
+      "method": "agent.gui.listModels",
+      "version": "*",
+      "payload": "response",
+      "path": "**.harnessId.enum",
+      "reason": "Models are scoped to a harness the client already selected from a negotiated catalog; additive harness ids on this echo field stay behind that gate."
+    },
+    {
+      "family": "unary",
+      "method": "agent.listHarnessModels",
+      "version": "*",
+      "payload": "response",
+      "path": "**.harnessId.enum",
+      "reason": "Models are scoped to a harness the client already selected; additive harness ids on this echo field stay behind that gate."
+    },
+    {
+      "family": "unary",
+      "method": "host.getRateLimitUsage",
+      "version": "*",
+      "payload": "response",
+      "path": "**.provider.enum",
+      "reason": "Rate-limit rows are only returned for providers the client has already configured; additive provider ids stay behind that gate."
+    },
+    {
+      "family": "unary",
+      "method": "providers.set*",
+      "version": "*",
+      "payload": "response",
+      "path": "**.providerId.enum",
+      "reason": "Provider mutation responses echo a single providerId the client just named in the request; additive enum values on the echo stay behind the request gate."
+    },
+    {
+      "family": "unary",
+      "method": "providers.add*",
+      "version": "*",
+      "payload": "response",
+      "path": "**.providerId.enum",
+      "reason": "Provider mutation responses echo a single providerId the client just named in the request; additive enum values on the echo stay behind the request gate."
+    },
+    {
+      "family": "unary",
+      "method": "providers.clear*",
+      "version": "*",
+      "payload": "response",
+      "path": "**.providerId.enum",
+      "reason": "Provider mutation responses echo a single providerId the client just named in the request; additive enum values on the echo stay behind the request gate."
+    },
+    {
+      "family": "unary",
+      "method": "providers.delete*",
+      "version": "*",
+      "payload": "response",
+      "path": "**.providerId.enum",
+      "reason": "Provider mutation responses echo a single providerId the client just named in the request; additive enum values on the echo stay behind the request gate."
+    },
+    {
+      "family": "unary",
+      "method": "providers.remove*",
+      "version": "*",
+      "payload": "response",
+      "path": "**.providerId.enum",
+      "reason": "Provider mutation responses echo a single providerId the client just named in the request; additive enum values on the echo stay behind the request gate."
+    },
+    {
+      "family": "unary",
+      "method": "providers.awaitLogin",
+      "version": "*",
+      "payload": "response",
+      "path": "**.providerId.enum",
+      "reason": "awaitLogin echoes the single providerId the client named in the request; additive enum values on the echo stay behind the request gate."
+    },
+    {
+      "family": "stream",
+      "method": "chat.subscribe",
+      "version": "*",
+      "payload": "serverFrame",
+      "path": "**.harnessId.enum",
+      "reason": "Chat stream frames only carry harness ids for chats the client already opened against a negotiated harness catalog; additive ids stay behind that gate."
+    },
+    {
+      "family": "stream",
+      "method": "chat.subscribe",
+      "version": "*",
+      "payload": "serverFrame",
+      "path": "**.action.enum",
+      "reason": "Action-ack kinds grow with gated client actions; old clients only observe acks for actions they can issue."
+    },
+    {
+      "family": "stream",
+      "method": "chat.subscribe",
+      "version": "*",
+      "payload": "serverFrame",
+      "path": "**.triggers.items.properties.kind.enum",
+      "reason": "Trigger kinds grow with gated product surfaces; old clients only observe kinds their client version can raise."
+    },
+    {
+      "family": "stream",
+      "method": "chat.subscribe",
+      "version": "*",
+      "payload": "serverFrame",
+      "path": "**.event.anyOf[*]",
+      "reason": "Runtime event union grows with gated harness/event features; old clients only subscribe to chats whose harnesses they can open."
+    },
+    {
+      "family": "stream",
+      "method": "chat.subscribe",
+      "version": "*",
+      "payload": "serverFrame",
+      "path": "**.anchor.anyOf[*]",
+      "reason": "Per-harness message anchor variants grow with gated harnesses; old clients only open those harnesses from a negotiated catalog."
+    },
+    {
+      "family": "stream",
+      "method": "chat.subscribe",
+      "version": "*",
+      "payload": "serverFrame",
+      "path": "**.sessionAnchor.anyOf[*].anyOf[*]",
+      "reason": "Per-harness session-anchor variants grow with gated harnesses; old clients only open those harnesses from a negotiated catalog."
+    },
+    {
+      "family": "stream",
+      "method": "chat.subscribe",
+      "version": "*",
+      "payload": "serverFrame",
+      "path": "**.blocks.items.anyOf[*]",
+      "reason": "Content-block union variants grow with gated product surfaces; old clients only render blocks their version knows for chats they can open."
+    }
+  ]
 }

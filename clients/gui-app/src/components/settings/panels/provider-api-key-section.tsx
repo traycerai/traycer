@@ -19,6 +19,8 @@ const API_KEY_DASHBOARD_URL: Partial<Record<ProviderId, string>> = {
   droid: "https://app.factory.ai/settings/api-keys",
   openrouter: "https://openrouter.ai/settings/keys",
   amp: "https://ampcode.com/settings",
+  // Devin uses Windsurf API keys (WINDSURF_API_KEY / credentials.toml).
+  devin: "https://app.devin.ai/",
 };
 
 function apiKeyStatusLabel(apiKey: ProviderCliState["apiKey"]): string {

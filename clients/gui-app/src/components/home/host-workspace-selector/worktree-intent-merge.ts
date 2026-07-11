@@ -69,3 +69,34 @@ export function mergeWorktreeIntentEntry(
     : otherEntries;
   return { entries: [...normalizedOthers, next] };
 }
+
+/**
+ * Re-marks every staged entry's `isPrimary` bit to match `primaryPath` -
+ * the target entry (if staged) flips true, every other staged entry flips
+ * false. Entries are otherwise untouched (never removed, reordered, or
+ * recreated - scripts and branch selections survive intact), and a call that
+ * changes nothing returns the SAME reference so callers can skip a write.
+ * Used when the explicit primary switches, so a staged intent set from
+ * BEFORE the switch never sends a stale `isPrimary` to another consumer.
+ *
+ * This is a STAGING-time fixup, not the launch boundary: it can only restamp
+ * entries that already exist, so promoting a folder with no staged entry (a
+ * non-git folder is never auto-staged) leaves the intent with zero primaries
+ * until `effectiveWorktreeIntent` canonicalizes it at launch.
+ */
+export function restampWorktreeIntentPrimary(
+  intent: WorktreeIntent | null,
+  primaryPath: string,
+): WorktreeIntent | null {
+  if (intent === null) return null;
+  const entries = intent.entries.map((entry) => {
+    const shouldBePrimary = entry.workspacePath === primaryPath;
+    return entry.isPrimary === shouldBePrimary
+      ? entry
+      : { ...entry, isPrimary: shouldBePrimary };
+  });
+  const changed = entries.some(
+    (entry, index) => entry !== intent.entries[index],
+  );
+  return changed ? { entries } : intent;
+}
