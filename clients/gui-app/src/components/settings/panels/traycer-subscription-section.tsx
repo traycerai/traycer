@@ -13,6 +13,7 @@
 import { ExternalLink } from "lucide-react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
+import type { AccountContext } from "@traycer/protocol/common/schemas";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { RefreshIconButton } from "@/components/refresh-icon-button";
 import {
@@ -86,7 +87,11 @@ export function TraycerSubscriptionSection() {
         }
       />
 
-      <SubscriptionBody query={query} subscription={subscription} />
+      <SubscriptionBody
+        query={query}
+        subscription={subscription}
+        accountContext={resolved}
+      />
     </div>
   );
 }
@@ -94,9 +99,11 @@ export function TraycerSubscriptionSection() {
 function SubscriptionBody({
   query,
   subscription,
+  accountContext,
 }: {
   readonly query: UseQueryResult<AuthenticatedUser | null>;
   readonly subscription: TraycerSubscription | null;
+  readonly accountContext: AccountContext;
 }) {
   if (query.isPending) {
     return (
@@ -119,5 +126,10 @@ function SubscriptionBody({
       </div>
     );
   }
-  return <TraycerSubscriptionView subscription={subscription} />;
+  return (
+    <TraycerSubscriptionView
+      subscription={subscription}
+      accountContext={accountContext}
+    />
+  );
 }

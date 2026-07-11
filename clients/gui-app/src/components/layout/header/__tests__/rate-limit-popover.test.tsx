@@ -1581,37 +1581,56 @@ describe("<RateLimitPopover /> Traycer tab", () => {
     ]);
   });
 
-  it("shows the subscription detail with an account picker on the Traycer tab", () => {
+  it("shows one subscription card per Traycer account and marks the active one", () => {
     mocks.configured = [];
     mocks.authUser = readyAuthUser(
       authUserFixture({ status: "PRO_V3", withTeam: true }),
     );
     renderPopover();
     fireEvent.click(screen.getByRole("tab", { name: "Traycer Inference" }));
-    // Shared subscription view: plan credit breakdown (30 of 100).
+    // Shared subscription view: personal plan credit breakdown (30 of 100).
     expect(screen.getByText("$30.00 / $100.00")).toBeTruthy();
-    // Detail tab surfaces the same Personal/Team picker as the Settings card.
-    expect(screen.getByRole("combobox", { name: "Account" })).toBeTruthy();
-    // Plan/tier chip next to the name - the trailing "_V3" pricing-generation
-    // tag is stripped (matching Cloud UI's own Settings pages), so "PRO_V3"
-    // reads as "Pro", not "Pro V3".
+    expect(
+      screen.getByRole("button", { name: "Use Personal account" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Use acme account" }),
+    ).toBeTruthy();
+    expect(screen.queryByRole("combobox", { name: "Account" })).toBeNull();
+    const activeCards = document.querySelectorAll('[aria-current="true"]');
+    expect(activeCards).toHaveLength(1);
+    expect(activeCards[0].textContent).toContain("Personal");
+    expect(screen.getByText("Active")).toBeTruthy();
+    // Plan chips live on their matching cards. The trailing "_V3"
+    // pricing-generation tag remains hidden.
     expect(screen.getByText("Pro")).toBeTruthy();
+    expect(screen.getByText("Ultra")).toBeTruthy();
   });
 
-  it("renders a condensed Traycer block with no picker or plan chip on Overview", () => {
+  it("renders Traycer account cards with active state on Overview", () => {
     mocks.configured = [];
     mocks.authUser = readyAuthUser(
       authUserFixture({ status: "PRO_V3", withTeam: true }),
     );
     renderPopover();
-    // Overview reflects the selected account's numbers, but exposes no controls.
+    // Overview now uses the same account-card structure as the Traycer detail tab.
     expect(screen.getByText("$30.00 / $100.00")).toBeTruthy();
     expect(screen.queryByRole("combobox", { name: "Account" })).toBeNull();
-    // Overview is condensed, same as the host-RPC providers' plan chip.
-    expect(screen.queryByText("Pro")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Use Personal account" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Use acme account" }),
+    ).toBeTruthy();
+    expect(screen.getByText("Pro")).toBeTruthy();
+    expect(screen.getByText("Ultra")).toBeTruthy();
+    expect(screen.getByText("Active")).toBeTruthy();
+    const activeCards = document.querySelectorAll('[aria-current="true"]');
+    expect(activeCards).toHaveLength(1);
+    expect(activeCards[0].textContent).toContain("Personal");
   });
 
-  it("reflects the selected account's own plan in the chip, not the personal account's", () => {
+  it("marks the selected team card active while retaining every account's plan", () => {
     mocks.configured = [];
     mocks.authUser = readyAuthUser(
       authUserFixture({ status: "PRO_V3", withTeam: true }),
@@ -1623,11 +1642,30 @@ describe("<RateLimitPopover /> Traycer tab", () => {
     });
     renderPopover();
     fireEvent.click(screen.getByRole("tab", { name: "Traycer Inference" }));
-    // "ULTRA_1X_V3" reads as the bare "Ultra" tier name (matching
-    // `subscriptionPlanLabel`'s own tier-name mapping), not the personal
-    // account's "Pro".
+    const activeCards = document.querySelectorAll('[aria-current="true"]');
+    expect(activeCards).toHaveLength(1);
+    expect(activeCards[0].textContent).toContain("acme");
     expect(screen.getByText("Ultra")).toBeTruthy();
-    expect(screen.queryByText("Pro")).toBeNull();
+    expect(screen.getByText("Pro")).toBeTruthy();
+  });
+
+  it("switches the active Traycer account from its profile card", () => {
+    mocks.configured = [];
+    mocks.authUser = readyAuthUser(
+      authUserFixture({ status: "PRO_V3", withTeam: true }),
+    );
+    renderPopover();
+    fireEvent.click(screen.getByRole("tab", { name: "Traycer Inference" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Use acme account" }));
+
+    expect(useAccountContextStore.getState().accountContext).toEqual({
+      type: "TEAM",
+      teamId: "team-1",
+    });
+    const activeCards = document.querySelectorAll('[aria-current="true"]');
+    expect(activeCards).toHaveLength(1);
+    expect(activeCards[0].textContent).toContain("acme");
   });
 
   it("refetches the subscription from the Traycer tab's refresh button", () => {

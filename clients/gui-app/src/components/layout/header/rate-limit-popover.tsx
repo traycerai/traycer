@@ -34,6 +34,7 @@ import {
 } from "@/lib/rate-limits/rate-limit-envelope";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import type { RateLimitUnavailableReason } from "@traycer/protocol/host";
+import type { TraycerTeamSubscription } from "@traycer/protocol/auth";
 import type {
   ProviderId,
   ProviderProfile,
@@ -78,16 +79,13 @@ import {
   accountContextValue,
   isCreditBasedPricing,
   isTraycerEligible,
-  parseAccountContextValue,
   resolveTraycerSubscriptionState,
   selectSubscription,
   subscriptionPlanLabel,
+  type TraycerSubscription,
   type TraycerSubscriptionState,
 } from "@/lib/auth/traycer-subscription-content";
-import {
-  TraycerAccountSelect,
-  TraycerSubscriptionView,
-} from "@/components/settings/panels/traycer-subscription-views";
+import { TraycerSubscriptionView } from "@/components/settings/panels/traycer-subscription-views";
 import {
   useRateLimitPopoverStore,
   type RateLimitPopoverTab,
@@ -103,6 +101,8 @@ import { cn } from "@/lib/utils";
 type RailTabDescriptor =
   | { readonly kind: "provider"; readonly providerId: RateLimitProviderId }
   | { readonly kind: "traycer" };
+
+const PERSONAL_ACCOUNT_CONTEXT: AccountContext = { type: "PERSONAL" };
 
 function railTabProviderId(tab: RailTabDescriptor): ProviderId {
   return tab.kind === "traycer" ? "traycer" : tab.providerId;
@@ -128,6 +128,7 @@ function useTraycerSubscription() {
     storedAccountContext,
     resolvedAccountContext,
     teams,
+    personalSubscription: user?.userSubscription ?? null,
     subscription,
     eligible,
     rateLimitBased,
@@ -1235,12 +1236,11 @@ function RateLimitProviderBody({
  * NOT a `host.getRateLimitUsage` provider pull. Header mirrors the provider
  * blocks (name + plan/tier chip + "Updated Xm ago" + refresh) - the chip
  * (`subscriptionPlanLabel`) reflects whichever account is currently selected
- * and is single-provider-tab only, same scoping
- * `RateLimitProviderBlock` applies to its own plan chip; the detail variant
- * adds the same Personal/Team picker the Settings card uses, so switching
- * accounts here updates the global selection (and therefore Overview, the
- * Settings card, and what a Traycer run bills). Both variants render through
- * the shared `TraycerSubscriptionView`. `onReady` mirrors
+ * and is shown on each account card in the single-provider tab. The detail
+ * variant and Overview both render Personal/Team cards like the Codex and
+ * Claude profile cards; selecting a card updates the global account selection
+ * (and therefore Overview, the Settings card, and what a Traycer run bills).
+ * Both variants render through the shared `TraycerSubscriptionView`. `onReady` mirrors
  * `RateLimitProviderBlock`'s own - fires once `state.kind` moves past `cold`,
  * `null` on the single-provider detail tab.
  */
@@ -1276,17 +1276,6 @@ function TraycerRateLimitBlock({
   const isRefreshing =
     traycerSubscription.query.isFetching ||
     (traycerSubscription.rateLimitBased && rateLimitUsageFetching);
-  // Chip next to the name, single-provider tab only - same scoping
-  // `resolveProviderPlanLabel` uses for the host-RPC providers' plan chip.
-  // Reflects whichever account (personal/team) is currently selected, since
-  // `subscription` is already resolved against that selection.
-  const planLabel =
-    !overview && traycerSubscription.subscription !== null
-      ? subscriptionPlanLabel(
-          traycerSubscription.subscription.subscriptionStatus,
-        )
-      : null;
-
   // Refetch the subscription, and - only for rate-limit-based plans, whose
   // aperture bar is live host data - invalidate that exact query so the mounted
   // `RateLimitView` refetches it too. `exact: true` targets only the aperture
@@ -1315,22 +1304,8 @@ function TraycerRateLimitBlock({
           <span className="text-ui-sm font-medium text-foreground">
             {providerDisplayName("traycer")}
           </span>
-          {planLabel !== null ? (
-            <Badge variant="secondary" className="font-normal">
-              {planLabel}
-            </Badge>
-          ) : null}
         </div>
         <div className="flex items-center gap-1.5">
-          <UsageLimitUpdatedLabel
-            ready={state.kind === "ready"}
-            updatedAt={traycerSubscription.query.dataUpdatedAt}
-            refreshing={isRefreshing}
-            degraded={state.kind === "ready" && state.degraded}
-            // The Traycer aperture block's state (`resolveTraycerSubscriptionState`)
-            // has no transient-reason concept of its own - always the generic note.
-            degradedReason={null}
-          />
           {/* Overview has its own "Refresh all" on the rail (item 2 feedback);
               only the single-provider detail tab keeps this one. */}
           {!overview ? (
@@ -1342,29 +1317,123 @@ function TraycerRateLimitBlock({
           ) : null}
         </div>
       </div>
-      {/* Detail tab only: the account picker, matching the Settings card. Renders
-          nothing when the user has no teams. Overview just reflects the global
-          selection with no controls, like every other Overview block. */}
-      {!overview ? (
-        <TraycerAccountSelect
-          teams={traycerSubscription.teams}
-          value={accountContextValue(
-            traycerSubscription.resolvedAccountContext,
-          )}
-          onValueChange={(value) =>
-            setAccountContext(parseAccountContextValue(value))
-          }
-        />
-      ) : null}
-      <TraycerRateLimitBody state={state} />
+      <TraycerAccountCards
+        state={state}
+        teams={traycerSubscription.teams}
+        personalSubscription={traycerSubscription.personalSubscription}
+        activeAccountContext={traycerSubscription.resolvedAccountContext}
+        updatedAt={traycerSubscription.query.dataUpdatedAt}
+        refreshing={traycerSubscription.query.isFetching}
+        onSelect={setAccountContext}
+      />
+    </div>
+  );
+}
+
+function TraycerAccountCards({
+  state,
+  teams,
+  personalSubscription,
+  activeAccountContext,
+  updatedAt,
+  refreshing,
+  onSelect,
+}: {
+  readonly state: TraycerSubscriptionState;
+  readonly teams: readonly TraycerTeamSubscription[];
+  readonly personalSubscription: TraycerSubscription | null;
+  readonly activeAccountContext: AccountContext;
+  readonly updatedAt: number;
+  readonly refreshing: boolean;
+  readonly onSelect: (accountContext: AccountContext) => void;
+}): ReactNode {
+  if (state.kind !== "ready") {
+    return (
+      <TraycerRateLimitBody
+        state={state}
+        accountContext={activeAccountContext}
+      />
+    );
+  }
+
+  const accounts = [
+    {
+      key: accountContextValue(PERSONAL_ACCOUNT_CONTEXT),
+      label: "Personal",
+      accountContext: PERSONAL_ACCOUNT_CONTEXT,
+      subscription: personalSubscription,
+    },
+    ...teams.map((team) => ({
+      key: accountContextValue({ type: "TEAM", teamId: team.team.id }),
+      label: team.team.slug,
+      accountContext: { type: "TEAM" as const, teamId: team.team.id },
+      subscription: team,
+    })),
+  ];
+  return (
+    <div className="flex flex-col gap-2">
+      {accounts.map((account) => {
+        if (account.subscription === null) return null;
+        const active =
+          accountContextValue(activeAccountContext) === account.key;
+        return (
+          <button
+            key={account.key}
+            type="button"
+            onClick={() => onSelect(account.accountContext)}
+            aria-current={active ? "true" : undefined}
+            aria-label={`Use ${account.label} account`}
+            className={cn(
+              "flex w-full flex-col gap-2 rounded-lg border border-border/60 bg-background/40 p-2 text-left transition-colors hover:border-border hover:bg-accent/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+              active && "border-primary/60 bg-primary/5",
+            )}
+          >
+            <div className="min-w-0">
+              <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                <AccentDot
+                  profileId={account.key}
+                  accentColor={null}
+                  label={null}
+                  variant="inline"
+                  size="default"
+                  className={undefined}
+                />
+                <span className="min-w-0 truncate text-ui-sm font-medium text-foreground">
+                  {account.label}
+                </span>
+                <Badge variant="secondary" className="font-normal">
+                  {subscriptionPlanLabel(
+                    account.subscription.subscriptionStatus,
+                  )}
+                </Badge>
+                {active ? (
+                  <Badge variant="outline" className="font-normal">
+                    Active
+                  </Badge>
+                ) : null}
+              </div>
+              <ProfileUsageUpdatedLabel
+                updatedAt={updatedAt}
+                refreshing={refreshing}
+              />
+            </div>
+            <TraycerSubscriptionView
+              subscription={account.subscription}
+              accountContext={account.accountContext}
+            />
+          </button>
+        );
+      })}
     </div>
   );
 }
 
 function TraycerRateLimitBody({
   state,
+  accountContext,
 }: {
   readonly state: TraycerSubscriptionState;
+  readonly accountContext: AccountContext;
 }): ReactNode {
   switch (state.kind) {
     case "cold":
@@ -1382,7 +1451,10 @@ function TraycerRateLimitBody({
     case "ready":
       return (
         <div className={cn(state.degraded && "opacity-60")}>
-          <TraycerSubscriptionView subscription={state.subscription} />
+          <TraycerSubscriptionView
+            subscription={state.subscription}
+            accountContext={accountContext}
+          />
         </div>
       );
   }
